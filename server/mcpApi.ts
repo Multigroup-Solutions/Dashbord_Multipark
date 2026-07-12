@@ -115,16 +115,46 @@ export function createMcpApiRouter(): Router {
           "GET /complaints", "GET /complaints/stats", "GET /complaints/:id",
           "GET /reviews", "GET /vehicles", "GET /employees", "GET /dashboard/summary",
           "GET /campaigns", "GET /campaigns/:type/:id/daily", "GET /projects",
+          "GET /availability-form/context?token=",
         ],
         write: [
           "POST /complaints", "PATCH /complaints/:id", "POST /complaints/:id/messages",
           "POST /reviews", "POST /sync/recent", "POST /sync/future", "POST /sync/day",
           "POST /campaigns/daily",
+          "POST /availability-form/submit",
         ],
         admin: ["DELETE /complaints/:id", "POST /admin/cleanup-duplicates", "POST /projects"],
       },
     });
   });
+
+  // ── FORMULÁRIO EXTERNO DE DISPONIBILIDADES (Fase 4) ─────────────────────────
+  // Consumido por uma app externa de formulário. Além do X-API-Key (auth da
+  // app), cada pedido traz um token JWT single-use por extra (auth do utilizador).
+  //
+  // GET /context NÃO consome o token (o extra pode abrir, fechar e voltar).
+  r.get("/availability-form/context", requireScope("read"), h(async (req, res) => {
+    const token = String(req.query.token ?? "");
+    if (!token) return res.status(400).json({ success: false, error: "Missing token", code: "token_missing" });
+    const { getFormContext } = await import("./availabilityForm");
+    const result = await getFormContext(token);
+    if (!result.ok) return res.status(result.status).json({ success: false, error: result.message, code: result.code });
+    return res.json({ success: true, ...result.data });
+  }));
+
+  // POST /submit CONSOME o token (single-use) e escreve a disponibilidade.
+  r.post("/availability-form/submit", requireScope("write"), h(async (req, res) => {
+    const token = String(req.body?.token ?? "");
+    if (!token) return res.status(400).json({ success: false, error: "Missing token", code: "token_missing" });
+    const { submitDaysSchema, submitForm } = await import("./availabilityForm");
+    const parsed = submitDaysSchema.safeParse(req.body?.days);
+    if (!parsed.success) {
+      return res.status(400).json({ success: false, error: "Invalid days", code: "invalid_input", details: parsed.error.flatten() });
+    }
+    const result = await submitForm(token, parsed.data);
+    if (!result.ok) return res.status(result.status).json({ success: false, error: result.message, code: result.code });
+    return res.json({ success: true, saved: result.data.saved });
+  }));
 
   // ── PARQUES / CIDADES ───────────────────────────────────────────────────────
   r.get("/parks", requireScope("read"), h(async (_req, res) => {

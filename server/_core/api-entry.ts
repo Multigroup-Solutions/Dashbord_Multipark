@@ -4,12 +4,16 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { createExternalApiRouter } from "../externalApi";
 import { createMcpApiRouter } from "../mcpApi";
+import { createWhatsappWebhookRouter } from "../whatsappWebhook";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { sdk } from "./sdk";
 import { getBookingTryAllParks } from "../multipark";
 
 const app = express();
 app.set("trust proxy", 1);
+// WhatsApp webhook (Meta) — MONTADO ANTES do express.json global: a validação
+// da assinatura HMAC precisa do raw body intacto (usa express.raw internamente).
+app.use("/api/whatsapp/webhook", createWhatsappWebhookRouter());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
@@ -235,6 +239,11 @@ app.get("/api/health", (_req, res) => {
       GOOGLE_CLIENT_SECRET: !!process.env.GOOGLE_CLIENT_SECRET,
       VITE_APP_ID: !!process.env.VITE_APP_ID,
       NODE_ENV: process.env.NODE_ENV ?? null,
+      WHATSAPP_TOKEN: !!process.env.WHATSAPP_TOKEN,
+      WHATSAPP_PHONE_NUMBER_ID: !!process.env.WHATSAPP_PHONE_NUMBER_ID,
+      WHATSAPP_VERIFY_TOKEN: !!process.env.WHATSAPP_VERIFY_TOKEN,
+      WHATSAPP_APP_SECRET: !!process.env.WHATSAPP_APP_SECRET,
+      AVAILABILITY_FORM_TOKEN_SECRET: !!process.env.AVAILABILITY_FORM_TOKEN_SECRET,
     },
   });
 });

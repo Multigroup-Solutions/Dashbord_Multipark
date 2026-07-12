@@ -1,0 +1,6 @@
+# dashboard-jorge — Memory Index
+
+Flat index of every memory file. Read this first on every task.
+
+- `sync-runners-topology.md` — where the booking sync actually runs: Railway long-lived `setInterval` (15min) vs GitHub Actions cron hitting the Vercel HTTP endpoints. Dual-runner analysis + evidence.
+- `whatsapp-integration.md` — WhatsApp Cloud API + external availability form integration. Full phased plan, Jorge's 5 adjustments + 2 closed semantic decisions, changelogs Fase 0+1 (envs, webhook stub w/ HMAC, mcpApi on Railway, normalizePhoneE164, 3 Drizzle tables + SQL 0045, Graph API client), Fase 2 (listActiveExtras phone, shared runConcurrent, whatsappBroadcast + tRPC whatsapp.sendBroadcast, ExtrasDiaPage WhatsApp dialog — dev mode) Fase 3 (webhook process-then-ack + whatsappInbound parse, whatsappInbox conversations/messages/markRead/reply w/ server-side 24h-window gate, WhatsAppInboxPage w/ 3 window states, invalidEmployeeIds decision) and Fase 4 (single-use JWT form tokens availabilityFormToken/availabilityForm, /api/v1/availability-form/{context,submit} on mcpApi, template URL-button token in broadcast, migration 0047). **INTEGRATION COMPLETE.** Includes migration-immutability rule, WhatsApp Manager template setup, and a deploy runbook (migrations 0045+0047, WhatsApp+availability envs). DB engine = MySQL/InnoDB.

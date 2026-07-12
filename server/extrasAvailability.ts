@@ -77,6 +77,7 @@ export interface ActiveExtra {
   id: number;
   fullName: string;
   email: string | null;
+  phone: string | null;
   projectId: number | null;
 }
 
@@ -90,6 +91,7 @@ export async function listActiveExtras(projectId?: number | null): Promise<Activ
       id: employees.id,
       fullName: employees.fullName,
       email: employees.email,
+      phone: employees.phone,
       projectId: employees.projectId,
     })
     .from(employees)
@@ -199,6 +201,7 @@ export async function setMyAvailability(
 export interface OverviewExtra {
   employeeId: number;
   fullName: string;
+  phone: string | null;
   responded: boolean;
   availableDays: number;
   days: { day: string; morning: boolean; night: boolean; fromHour: number | null; toHour: number | null; note: string | null }[];
@@ -251,7 +254,7 @@ export async function getWeekOverview(weekStart: string, projectId?: number | nu
       if (night) perDay[perDayIdx.get(h.day)!].night++;
       return { day: h.day, morning, night, fromHour: r?.fromHour ?? null, toHour: r?.toHour ?? null, note: r?.note ?? null };
     });
-    return { employeeId: e.id, fullName: e.fullName, responded: empRows.length > 0, availableDays, days };
+    return { employeeId: e.id, fullName: e.fullName, phone: e.phone, responded: empRows.length > 0, availableDays, days };
   });
 
   return {

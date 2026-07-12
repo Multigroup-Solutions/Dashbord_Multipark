@@ -8,6 +8,8 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { createExternalApiRouter } from "../externalApi";
+import { createMcpApiRouter } from "../mcpApi";
+import { createWhatsappWebhookRouter } from "../whatsappWebhook";
 import { startDailyCollectionScheduler } from "../jobs/dailyDriverCollection";
 import { startBookingSyncScheduler } from "../jobs/multiparkBookingSync";
 import { seedProjectHierarchy } from "../db";
@@ -39,6 +41,10 @@ async function startServer() {
   // Trust proxy headers (Railway, Render, etc.)
   app.set("trust proxy", 1);
   const server = createServer(app);
+  // WhatsApp webhook (Meta) — MONTADO ANTES do express.json global: a validação
+  // da assinatura HMAC precisa do raw body intacto (usa o seu próprio
+  // express.raw internamente).
+  app.use("/api/whatsapp/webhook", createWhatsappWebhookRouter());
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
@@ -48,6 +54,8 @@ async function startServer() {
   registerOAuthRoutes(app);
   // External REST API (device integrations)
   app.use("/api/external", createExternalApiRouter());
+  // MCP Control API (X-API-Key) — paridade com o api-entry.ts (Vercel)
+  app.use("/api/v1", createMcpApiRouter());
 
   // File upload endpoint (multer)
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024 } });

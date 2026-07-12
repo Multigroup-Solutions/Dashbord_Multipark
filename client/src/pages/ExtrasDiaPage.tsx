@@ -12,8 +12,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useState, useMemo } from "react";
 import { toast } from "sonner";
+import { normalizePhoneE164 } from "@shared/phone";
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
@@ -32,6 +41,9 @@ import {
   CheckCircle2,
   Sun,
   Moon,
+  MessageCircle,
+  XCircle,
+  AlertTriangle,
 } from "lucide-react";
 
 // Defaults para o preview do UI — devem coincidir com a tabela `extra_rates`
@@ -1235,6 +1247,65 @@ function AvailabilitySection() {
   // vê-se na página de disponibilidade do próprio funcionário.
   const shownExtras = o ? o.extras.filter(e => e.availableDays > 0) : [];
 
+  // ── WhatsApp broadcast (Fase 2 — modo desenvolvimento) ────────────────────
+  const [waOpen, setWaOpen] = useState(false);
+  const [waTemplate, setWaTemplate] = useState("");
+  const [waLanguage, setWaLanguage] = useState("pt_PT");
+  const [waParams, setWaParams] = useState(""); // parâmetros do body, separados por "|"
+  const [waTestPhone, setWaTestPhone] = useState("");
+  type WaRecipient = {
+    employeeId: number | null;
+    name: string | null;
+    phone: string;
+    phoneE164: string | null;
+    status: "sent" | "failed" | "invalid_phone";
+    error?: string;
+  };
+  const [waResult, setWaResult] = useState<
+    null | { total: number; sent: number; failed: number; invalidPhone: number; recipients: WaRecipient[] }
+  >(null);
+
+  const broadcast = trpc.whatsapp.sendBroadcast.useMutation({
+    onSuccess: (r) => {
+      setWaResult(r);
+      toast.success(
+        `WhatsApp: ${r.sent} enviados${r.failed ? `, ${r.failed} falhas` : ""}${r.invalidPhone ? `, ${r.invalidPhone} sem número` : ""}`,
+      );
+      overview.refetch();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  // Alvo do broadcast = selecionados (se houver) ou todos os mostrados.
+  const waTargets = selectedIds.size > 0 ? shownExtras.filter(e => selectedIds.has(e.employeeId)) : shownExtras;
+  const waValidCount = waTargets.filter(e => !!(e.phone && normalizePhoneE164(e.phone))).length;
+  const waInvalidCount = waTargets.length - waValidCount;
+  const waParamList = waParams.split("|").map(p => p.trim()).filter(Boolean);
+
+  function submitBroadcast(testPhone?: string) {
+    const templateName = waTemplate.trim();
+    if (!templateName) {
+      toast.error("Indica o nome do template.");
+      return;
+    }
+    setWaResult(null);
+    // Sem seleção explícita, o alvo é o conjunto MOSTRADO (extras com
+    // disponibilidade) — não todos os extras ativos — para bater certo com a
+    // tabela e com o resumo válidos/inválidos. Envio de teste ignora o alvo.
+    const targetIds = selectedIds.size > 0
+      ? Array.from(selectedIds)
+      : shownExtras.map(e => e.employeeId);
+    broadcast.mutate({
+      templateName,
+      languageCode: waLanguage.trim() || undefined,
+      templateParams: waParamList.length ? waParamList : undefined,
+      employeeIds: testPhone ? undefined : targetIds,
+      weekStart: effectiveWeek || null,
+      note: note.trim() || null,
+      testPhone: testPhone ? testPhone.trim() : undefined,
+    });
+  }
+
   return (
     <Card className="border-blue-200">
       <CardHeader>
@@ -1302,23 +1373,35 @@ function AvailabilitySection() {
         </div>
 
         {/* Envio real: a todos OU só aos selecionados na tabela abaixo */}
-        <Button
-          disabled={!effectiveWeek || send.isPending}
-          onClick={() => {
-            const ids = Array.from(selectedIds);
-            const alvo = ids.length > 0 ? `aos ${ids.length} extras selecionados` : "a TODOS os extras ativos";
-            if (!confirm(`Enviar pedido de disponibilidade ${alvo} para a semana de ${effectiveWeek}?`)) return;
-            send.mutate({
-              weekStart: effectiveWeek,
-              origin: window.location.origin,
-              note: note.trim() || null,
-              employeeIds: ids.length > 0 ? ids : null,
-            });
-          }}
-        >
-          {send.isPending ? <Clock className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
-          {selectedIds.size > 0 ? `Enviar aos ${selectedIds.size} selecionados` : "Enviar a todos"}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            disabled={!effectiveWeek || send.isPending}
+            onClick={() => {
+              const ids = Array.from(selectedIds);
+              const alvo = ids.length > 0 ? `aos ${ids.length} extras selecionados` : "a TODOS os extras ativos";
+              if (!confirm(`Enviar pedido de disponibilidade ${alvo} para a semana de ${effectiveWeek}?`)) return;
+              send.mutate({
+                weekStart: effectiveWeek,
+                origin: window.location.origin,
+                note: note.trim() || null,
+                employeeIds: ids.length > 0 ? ids : null,
+              });
+            }}
+          >
+            {send.isPending ? <Clock className="h-4 w-4 mr-2 animate-spin" /> : <Mail className="h-4 w-4 mr-2" />}
+            {selectedIds.size > 0 ? `Email aos ${selectedIds.size} selecionados` : "Email a todos"}
+          </Button>
+
+          {/* WhatsApp: abre um dialog dedicado (template + teste + resultado) */}
+          <Button
+            variant="outline"
+            className="border-green-600 text-green-700 hover:bg-green-50 dark:hover:bg-green-950"
+            onClick={() => { setWaResult(null); setWaOpen(true); }}
+          >
+            <MessageCircle className="h-4 w-4 mr-2" />
+            {selectedIds.size > 0 ? `WhatsApp aos ${selectedIds.size} selecionados` : "WhatsApp a todos"}
+          </Button>
+        </div>
 
         {o && (
           <div className="space-y-3 pt-2">
@@ -1342,6 +1425,7 @@ function AvailabilitySection() {
                       />
                     </th>
                     <th className="py-1 pr-2">Extra</th>
+                    <th className="py-1 pr-2">Telefone</th>
                     {o.dayHeaders.map((h) => (
                       <th key={h.day} className="px-1 text-center whitespace-nowrap">{h.label}</th>
                     ))}
@@ -1372,6 +1456,15 @@ function AvailabilitySection() {
                           {ex.fullName}
                         </span>
                       </td>
+                      <td className="py-1 pr-2 whitespace-nowrap text-xs">
+                        {ex.phone && normalizePhoneE164(ex.phone) ? (
+                          <span className="text-muted-foreground">{ex.phone}</span>
+                        ) : (
+                          <Badge variant="outline" className="border-amber-400 text-amber-600 gap-1 font-normal">
+                            <AlertTriangle className="h-3 w-3" /> sem número válido
+                          </Badge>
+                        )}
+                      </td>
                       {ex.days.map((d) => (
                         <td key={d.day} className="px-1 text-center">
                           {(d.morning || d.night) ? (
@@ -1387,12 +1480,13 @@ function AvailabilitySection() {
                     </tr>
                   ))}
                   {shownExtras.length === 0 && (
-                    <tr><td colSpan={o.dayHeaders.length + 2} className="py-3 text-center text-muted-foreground">Ainda ninguém com disponibilidade para esta semana.</td></tr>
+                    <tr><td colSpan={o.dayHeaders.length + 3} className="py-3 text-center text-muted-foreground">Ainda ninguém com disponibilidade para esta semana.</td></tr>
                   )}
                   {/* Totais por dia */}
                   <tr className="font-medium border-t-2">
                     <td className="py-1 pr-1" />
                     <td className="py-1 pr-2">Disponíveis</td>
+                    <td className="py-1 pr-2" />
                     {o.perDay.map((p) => (
                       <td key={p.day} className="px-1 text-center text-xs">
                         <span className="text-amber-600">{p.morning}</span>
@@ -1409,6 +1503,135 @@ function AvailabilitySection() {
             </div>
           </div>
         )}
+
+        {/* ── Dialog do broadcast WhatsApp ─────────────────────────────────── */}
+        <Dialog open={waOpen} onOpenChange={(open) => { if (!broadcast.isPending) setWaOpen(open); }}>
+          <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <MessageCircle className="h-5 w-5 text-green-600" />
+                Enviar template WhatsApp
+              </DialogTitle>
+              <DialogDescription>
+                {selectedIds.size > 0
+                  ? `${selectedIds.size} extra(s) selecionado(s).`
+                  : "Sem seleção — envia a todos os extras com disponibilidade mostrados."}
+              </DialogDescription>
+            </DialogHeader>
+
+            {/* Aviso de modo desenvolvimento */}
+            <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 p-3 text-xs text-amber-800 dark:text-amber-300 flex gap-2">
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+              <span>
+                <strong>Modo desenvolvimento.</strong> Com o número de teste da Meta, só há entrega a
+                números <strong>verificados</strong> e a ~250 destinatários únicos/24h. Não uses isto para
+                validar envio em escala — usa o "número de teste" abaixo para confirmar ponta-a-ponta.
+              </span>
+            </div>
+
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <Label className="text-xs">Nome do template (WhatsApp Manager)</Label>
+                <Input
+                  placeholder="ex: disponibilidade_semanal (nome APPROVED da Meta)"
+                  value={waTemplate}
+                  onChange={(e) => setWaTemplate(e.target.value)}
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Placeholder até o template estar aprovado no WhatsApp Manager. Tem de ser o nome exato do template APPROVED.
+                </p>
+              </div>
+
+              <div className="flex gap-3 flex-wrap">
+                <div className="space-y-1">
+                  <Label className="text-xs">Língua</Label>
+                  <Input className="w-32" value={waLanguage} onChange={(e) => setWaLanguage(e.target.value)} placeholder="pt_PT" />
+                </div>
+                <div className="space-y-1 flex-1 min-w-[12rem]">
+                  <Label className="text-xs">Parâmetros do body (opcional, separa com "|")</Label>
+                  <Input
+                    placeholder="ex: {{1}} | {{2}}  →  João | próxima semana"
+                    value={waParams}
+                    onChange={(e) => setWaParams(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {/* Resumo válidos/inválidos entre os alvos */}
+              {!waResult && (
+                <div className="rounded-md border p-3 text-sm">
+                  <div className="font-medium mb-1">Alvos: {waTargets.length}</div>
+                  <div className="flex gap-4 text-xs">
+                    <span className="text-green-600 flex items-center gap-1">
+                      <CheckCircle2 className="h-3.5 w-3.5" /> {waValidCount} com número válido
+                    </span>
+                    <span className="text-amber-600 flex items-center gap-1">
+                      <AlertTriangle className="h-3.5 w-3.5" /> {waInvalidCount} sem número válido
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Modo teste: 1 número */}
+              <div className="rounded-md border border-dashed p-3 space-y-2">
+                <Label className="text-xs font-medium">Testar primeiro (envia só a 1 número)</Label>
+                <div className="flex gap-2 flex-wrap">
+                  <Input
+                    className="w-56"
+                    placeholder="+351912345678"
+                    value={waTestPhone}
+                    onChange={(e) => setWaTestPhone(e.target.value)}
+                  />
+                  <Button
+                    variant="outline"
+                    disabled={!waTemplate.trim() || !waTestPhone.trim() || broadcast.isPending}
+                    onClick={() => submitBroadcast(waTestPhone)}
+                  >
+                    {broadcast.isPending ? <Clock className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
+                    Enviar teste
+                  </Button>
+                </div>
+              </div>
+
+              {/* Resultado por destinatário */}
+              {waResult && (
+                <div className="rounded-md border p-3 space-y-2">
+                  <div className="text-sm font-medium">
+                    Resultado: {waResult.sent} enviados · {waResult.failed} falhas · {waResult.invalidPhone} sem número
+                  </div>
+                  <div className="max-h-48 overflow-y-auto text-xs divide-y">
+                    {waResult.recipients.map((r, i) => (
+                      <div key={i} className="flex items-center gap-2 py-1">
+                        {r.status === "sent" && <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />}
+                        {r.status === "failed" && <XCircle className="h-3.5 w-3.5 text-red-500 shrink-0" />}
+                        {r.status === "invalid_phone" && <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />}
+                        <span className="flex-1 truncate">
+                          {r.name || r.phone}
+                          {r.phoneE164 ? <span className="text-muted-foreground"> · {r.phoneE164}</span> : null}
+                        </span>
+                        {r.error && <span className="text-red-500 truncate max-w-[45%]">{r.error}</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => setWaOpen(false)} disabled={broadcast.isPending}>
+                Fechar
+              </Button>
+              <Button
+                className="bg-green-600 hover:bg-green-700 text-white"
+                disabled={!waTemplate.trim() || broadcast.isPending || waValidCount === 0}
+                onClick={() => submitBroadcast()}
+              >
+                {broadcast.isPending ? <Clock className="h-4 w-4 mr-2 animate-spin" /> : <MessageCircle className="h-4 w-4 mr-2" />}
+                Enviar a {waValidCount} válido(s)
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </CardContent>
     </Card>
   );

@@ -1,0 +1,105 @@
+import { describe, expect, it } from "vitest";
+import crypto from "crypto";
+import { normalizePhoneE164 } from "../shared/phone";
+import { verifyMetaSignature, isValidWebhookVerification } from "./whatsappWebhook";
+
+describe("normalizePhoneE164", () => {
+  it("mantém números já em +E.164", () => {
+    expect(normalizePhoneE164("+351912345678")).toBe("+351912345678");
+    expect(normalizePhoneE164("+447911123456")).toBe("+447911123456");
+  });
+
+  it("converte prefixo internacional 00 em +", () => {
+    expect(normalizePhoneE164("00351912345678")).toBe("+351912345678");
+    expect(normalizePhoneE164("0044 7911 123456")).toBe("+447911123456");
+  });
+
+  it("assume +351 para números nacionais PT de 9 dígitos", () => {
+    expect(normalizePhoneE164("912345678")).toBe("+351912345678");
+    expect(normalizePhoneE164("211234567")).toBe("+351211234567");
+  });
+
+  it("aceita 351 + 9 dígitos sem o +", () => {
+    expect(normalizePhoneE164("351912345678")).toBe("+351912345678");
+  });
+
+  it("remove espaços, hífens, parêntesis e pontos", () => {
+    expect(normalizePhoneE164("912 345 678")).toBe("+351912345678");
+    expect(normalizePhoneE164("912-345-678")).toBe("+351912345678");
+    expect(normalizePhoneE164("(912) 345.678")).toBe("+351912345678");
+    expect(normalizePhoneE164("+351 912 345 678")).toBe("+351912345678");
+  });
+
+  it("devolve null para lixo / formatos não inferíveis", () => {
+    expect(normalizePhoneE164("")).toBeNull();
+    expect(normalizePhoneE164("   ")).toBeNull();
+    expect(normalizePhoneE164("abc")).toBeNull();
+    expect(normalizePhoneE164("12345")).toBeNull(); // 5 dígitos, sem indicativo
+    expect(normalizePhoneE164("+351abc")).toBeNull();
+    expect(normalizePhoneE164("91234567")).toBeNull(); // 8 dígitos: não é PT válido nem tem indicativo
+    // @ts-expect-error — garante robustez a input não-string
+    expect(normalizePhoneE164(null)).toBeNull();
+  });
+});
+
+// Helper: assina um corpo como a Meta faria.
+function sign(body: string, secret: string): string {
+  return "sha256=" + crypto.createHmac("sha256", secret).update(Buffer.from(body)).digest("hex");
+}
+
+describe("verifyMetaSignature", () => {
+  const secret = "test-app-secret";
+  const body = JSON.stringify({ object: "whatsapp_business_account", entry: [] });
+
+  it("aceita uma assinatura válida", () => {
+    const sig = sign(body, secret);
+    expect(verifyMetaSignature(Buffer.from(body), sig, secret)).toBe(true);
+  });
+
+  it("rejeita assinatura com secret errado", () => {
+    const sig = sign(body, "outro-secret");
+    expect(verifyMetaSignature(Buffer.from(body), sig, secret)).toBe(false);
+  });
+
+  it("rejeita assinatura de um corpo diferente (tamper)", () => {
+    const sig = sign(body, secret);
+    const tampered = body.replace("entry", "ENTRY");
+    expect(verifyMetaSignature(Buffer.from(tampered), sig, secret)).toBe(false);
+  });
+
+  it("rejeita assinatura ausente", () => {
+    expect(verifyMetaSignature(Buffer.from(body), undefined, secret)).toBe(false);
+  });
+
+  it("rejeita quando não há app secret configurado", () => {
+    const sig = sign(body, secret);
+    expect(verifyMetaSignature(Buffer.from(body), sig, undefined)).toBe(false);
+  });
+
+  it("rejeita esquema/formato de header inválido", () => {
+    expect(verifyMetaSignature(Buffer.from(body), "sha1=abcd", secret)).toBe(false);
+    expect(verifyMetaSignature(Buffer.from(body), "semequals", secret)).toBe(false);
+    expect(verifyMetaSignature(Buffer.from(body), "sha256=", secret)).toBe(false);
+    expect(verifyMetaSignature(Buffer.from(body), "sha256=nothex!!", secret)).toBe(false);
+  });
+});
+
+describe("isValidWebhookVerification", () => {
+  const verifyToken = "my-verify-token";
+
+  it("aceita mode=subscribe com o token certo", () => {
+    expect(isValidWebhookVerification("subscribe", "my-verify-token", verifyToken)).toBe(true);
+  });
+
+  it("rejeita token errado", () => {
+    expect(isValidWebhookVerification("subscribe", "wrong-token", verifyToken)).toBe(false);
+  });
+
+  it("rejeita mode diferente de subscribe", () => {
+    expect(isValidWebhookVerification("unsubscribe", "my-verify-token", verifyToken)).toBe(false);
+  });
+
+  it("rejeita quando não há verify token configurado", () => {
+    expect(isValidWebhookVerification("subscribe", "my-verify-token", undefined)).toBe(false);
+  });
+});

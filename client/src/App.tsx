@@ -36,6 +36,7 @@ import AvaliacaoOperacionalPage from "./pages/AvaliacaoOperacionalPage";
 import MultiparkInspectPage from "./pages/MultiparkInspectPage";
 import InvitePage from "./pages/InvitePage";
 import DisponibilidadePage from "./pages/DisponibilidadePage";
+import WhatsAppInboxPage from "./pages/WhatsAppInboxPage";
 import ProjectCostsDashboard from "./pages/ProjectCostsDashboard";
 import DashboardPage from "./pages/DashboardPage";
 import DashboardsPage from "./pages/DashboardsPage";
@@ -195,6 +196,9 @@ function Router() {
       </Route>
       <Route path="/disponibilidade">
         {() => (<DashboardLayout><DisponibilidadePage /></DashboardLayout>)}
+      </Route>
+      <Route path="/whatsapp">
+        {() => (<DashboardLayout><WhatsAppInboxPage /></DashboardLayout>)}
       </Route>
       <Route path="/avaliacao-operacional">
         {() => (<DashboardLayout><AvaliacaoOperacionalPage /></DashboardLayout>)}

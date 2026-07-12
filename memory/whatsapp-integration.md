@@ -1,0 +1,148 @@
+# WhatsApp Integration + External Availability Form
+
+## Summary
+Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashboard-jorge) para: (1) seleção múltipla de extras com contactos, (2) envio em massa de templates WhatsApp, (3) inbox de respostas via webhook Meta, (4) API segura para uma app externa de formulário de disponibilidades. Plano aprovado pelo Jorge em 2026-07-09. Implementação faseada — cada fase é revista antes da seguinte. Este ficheiro tem o plano completo, os 5 ajustes do Jorge, e o changelog por fase.
+
+## Related
+- `sync-runners-topology.md` — topologia de execução (Railway `setInterval` vs Vercel/GitHub Actions cron). Relevante porque o webhook e o broadcast correm no processo Railway; o `runConcurrent` reutilizado vem do `multiparkBookingSync.ts`.
+
+## Terreno (mapa da investigação inicial)
+- **"extras" = trabalhadores casuais** = `employees` com `position='extra'`. Contactos = `employees.email` + `employees.phone` (varchar 32, **texto livre, sem formato** — daí o `normalizePhoneE164`).
+- **Disponibilidade já existe**: `server/extrasAvailability.ts` (`listActiveExtras` — só traz email, NÃO phone; `getMyWeek`/`setMyAvailability`; `getWeekOverview`; `getAvailabilityForDay`; `sendWeeklyAvailabilityRequest` = bulk-send SEQUENCIAL por email, molde do broadcast). Router tRPC `extrasAvailability` em `server/routers.ts:6117`. UI de multi-seleção já existente em `client/src/pages/ExtrasDiaPage.tsx` (`AvailabilitySection`, ~L1210-1365: `selectedIds: Set<number>`, checkbox "todos"+linha, "Enviar aos N selecionados").
+- **Auth externa já existe**: tabela `api_keys` (X-API-Key). Dois routers Express: `server/externalApi.ts` (`/api/external`, sem scopes) e `server/mcpApi.ts` (`/api/v1`, COM scopes read/write/admin via `scopesFor`/`requireScope`). Router tRPC `apiKeys` (`routers.ts:3782`, super_admin). `mcpApi` só estava montado no `api-entry.ts` (Vercel), NÃO no `index.ts` (Railway) — corrigido na Fase 0.
+- **Auth interna**: tRPC `protectedProcedure`/`adminProcedure` + `requireRole(role, minRole)` contra `ROLE_HIERARCHY` (`routers.ts:354`: super_admin7…user0). Sessão = cookie JWT HS256 (`_core/sdk.ts`).
+- **Sem webhooks entrantes hoje** (nem Stripe nem Meta). Body parser `express.json({limit:50mb})` GLOBAL nos dois entrypoints → consome raw body → HMAC exige montar raw ANTES do json.
+- **Concorrência**: `runConcurrent<T>(items, limit, fn, deadlineAt?)` em `server/jobs/multiparkBookingSync.ts:373` (worker-pool manual + budget de tempo). Sem fila persistente, sem rate-limiter.
+- **Motor de BD: MySQL / InnoDB** (confirmado 2026-07-09 pelo coordenador: `drizzle.config.ts` dialect `mysql`, `drizzle-orm/mysql2` em `db.ts`, `mysql2` no package.json). A `0045_whatsapp_integration.sql` foi **revalidada** como sintaticamente correta para MySQL (`UNIQUE INDEX` nullable = múltiplos NULL permitidos, `ENUM`, `ON UPDATE CURRENT_TIMESTAMP`, `DATE`) — não precisa de alterações.
+- **Migrações**: o journal do drizzle-kit está **congelado no idx 24**; os ficheiros 0025-0044 são SQL escritos à mão (CREATE TABLE / ALTER) que NÃO tocam o journal/meta. Runners one-shot em `server/migrations/migration_0044.ts` / `migration_0046.ts`. Convenção: tabela snake_case, colunas camelCase, `int autoincrement PK`, timestamps mode string.
+- **Testes**: vitest, `server/**/*.test.ts`, sem supertest — usam `appRouter.createCaller(ctx)` ou funções puras. tsc exclui `**/*.test.ts`.
+
+## Plano faseado (aprovado)
+- **Fase 0 — Fundações** (FEITA): envs + health check; stub do webhook montável (GET verify + POST HMAC, responde 200 sem processar); montar `mcpApi` no Railway; `normalizePhoneE164`.
+- **Fase 1 — Schema + cliente Graph API** (FEITA): 3 tabelas Drizzle + SQL 0045; `server/whatsapp.ts` (sendTemplateMessage/sendTextMessage); testes.
+- **Fase 2 — UI seleção + broadcast** (FEITA): telefone na tabela + badge inválido; procedure `whatsapp.sendBroadcast` (modo teste + normal); Dialog shadcn com template configurável, teste 1-número, resumo válido/inválido e resultado por destinatário. Ver ajuste #1 e #5.
+- **Fase 3 — Webhook processing + inbox** (FEITA): webhook process-then-ack (`whatsappInbound.ts`), routers inbox (`whatsappInbox.ts`: conversations/messages/markRead/reply com validação de janela server-side), página `WhatsAppInboxPage.tsx` com 3 estados de janela distintos. Ver ajustes #2 e #3.
+- **Fase 4 — API app externa de disponibilidades** (FEITA): token JWT single-use por extra (`availabilityFormToken.ts`), endpoints `/api/v1/availability-form/{context,submit}` (`availabilityForm.ts` + `mcpApi.ts`), token injetado no botão URL do template no broadcast, migração 0047. Ver ajuste #4. **INTEGRAÇÃO COMPLETA.**
+
+## Decisões semânticas FECHADAS (Jorge, 2026-07-09)
+- **Decisão 1** — "a todos" no broadcast = **conjunto visível na tabela** (extras com disponibilidade), NÃO todos os ativos. FICA COMO ESTÁ; divergência intencional face ao email ("o que envio é o que vejo").
+- **Decisão 2** — inválidos NÃO geram linha em `whatsapp_messages` (confirmado), MAS guarda-se em `whatsapp_broadcasts.invalidEmployeeIds` (TEXT/JSON nullable) a lista de employeeId que falharam por número inválido → para depois "mostrar extras com número inválido" e corrigir na origem. Implementado na Fase 3 (schema + 0045 emendada + persistência no broadcast).
+
+## REGRA DE MIGRAÇÕES (Jorge, 2026-07-09) — VÁLIDA DAQUI PARA A FRENTE
+- **Migrações já aplicadas nalgum sítio são IMUTÁVEIS.** Coluna/tabela nova = **migração numerada NOVA**, NUNCA emendar um ficheiro SQL existente in-place.
+- A emenda in-place da `0045` (Fase 3, `invalidEmployeeIds`) só foi aceite porque foi VERIFICADO que a 0045 NUNCA foi aplicada a nenhuma BD (nenhum comando de migração corrido nas sessões; testes são funções puras sem BD; index.ts NÃO auto-migra no boot; `db:push` é manual; a 0045 está fora do journal do drizzle-kit). O ALTER avulso foi por isso desnecessário.
+- **Fase 4 segue a regra à letra**: nova tabela → ficheiro NOVO. Numeração escolhida **0047** (`drizzle/0047_availability_form_tokens.sql`): 0046 evitado porque `server/migrations/migration_0046.ts` (runner one-shot `0046_multipark_report_extra_fields`) já ocupa semanticamente o "0046"; 0047 é inequívoco e livre em `drizzle/`.
+
+## AJUSTES DO JORGE (2026-07-09) — aplicar em todas as fases
+1. **Fase 2 em modo dev até haver número de produção Meta**: construir UI de seleção + `whatsapp.sendBroadcast` COMPLETAS, mas sem validar envio em escala (número de teste ≈250/24h, só destinos verificados). TEM de existir **"modo teste com 1 número"** para validação ponta-a-ponta (espelha o `testEmail` do `sendWeeklyAvailabilityRequest`).
+2. **Webhook (Fase 3) = process-then-ack**: PROCESSAR e ESCREVER na BD ANTES de responder 200 à Meta. Decisão explícita (volume baixo, latência irrelevante; prefere o retry da Meta a perder mensagens em silêncio). NÃO responder-primeiro-processar-depois. Ponto de extensão já marcado em `whatsappWebhook.ts`.
+3. **Inbox (Fase 3)**: o estado "template enviado, a aguardar 1ª resposta" tem de ser **visualmente distinto** de "janela aberta". Com template disparado mas sem resposta (`lastInboundAt` null/antigo = janela FECHADA), a UI **NÃO deixa escrever texto livre** e mostra claramente que se aguarda a 1ª resposta. Fonte da verdade da janela 24h = `whatsapp_conversations.lastInboundAt`.
+4. **Token do formulário externo (Fase 4)**: invalidar após o **PRIMEIRO submit**, além da expiração de 14 dias (proteção contra reencaminhamento do link).
+5. **Confirmados**: default **+351** na normalização; **nome de template configurável no dialog** (desenvolver com placeholder até os templates estarem APPROVED); **sem fila persistente** → `runConcurrent(4)` + **1 retry**, MAS deixar comentário no código do broadcast a assinalar que um restart do Railway a meio **perde os envios em curso**.
+
+## Changelog
+
+### 2026-07-09 — Fase 0 + Fase 1
+**Type**: feature
+**Scope**: `.env.example`, `server/_core/api-entry.ts`, `server/_core/index.ts`, `server/whatsappWebhook.ts` (novo), `server/whatsapp.ts` (novo), `shared/phone.ts` (novo), `drizzle/schema.ts`, `drizzle/0045_whatsapp_integration.sql` (novo), `server/whatsapp.test.ts` (novo)
+**What**:
+- **Envs**: secção `WHATSAPP_*` no `.env.example` (`WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_APP_SECRET`, `WHATSAPP_API_VERSION` default v21.0). 4 booleanos de presença acrescentados ao `/api/health` (`api-entry.ts`, padrão existente sem expor valores).
+- **Webhook stub** `server/whatsappWebhook.ts`: `createWhatsappWebhookRouter()` com GET verify (echo `hub.challenge` se `isValidWebhookVerification`) e POST com `express.raw({type:'application/json'})` próprio + `verifyMetaSignature` (HMAC-SHA256 do raw body, `crypto.timingSafeEqual`, 401 se inválida/ausente) → responde 200 sem processar (ponto de extensão Fase 3 marcado com a decisão process-then-ack). `verifyMetaSignature` e `isValidWebhookVerification` exportadas como funções puras testáveis.
+- **Montagem**: webhook em `/api/whatsapp/webhook` ANTES do `express.json` global nos DOIS entrypoints (`index.ts` Railway + `api-entry.ts` Vercel). `createMcpApiRouter()` agora também montado em `/api/v1` no `index.ts` (antes só no Vercel) — sem conflito de paths (livre no Railway).
+- **Normalização** `shared/phone.ts`: `normalizePhoneE164(raw): string|null` — `+...` mantém; `00...`→`+`; PT 9 dígitos→`+351`; `351`+9díg sem `+`→`+`; resto→null. Remove espaços/hífens/parêntesis/pontos. NÃO altera `employees.phone`.
+- **Schema** `drizzle/schema.ts`: import `date` adicionado; 3 tabelas + 6 type aliases: `whatsapp_conversations` (phoneE164 unique, employeeId, lastInboundAt/lastMessageAt, unreadCount), `whatsapp_messages` (conversationId, direction in/out, waMessageId unique nullable=dedup+correlação status, type text/template, body, templateName, status pending/sent/delivered/read/failed, errorDetail, sentById, broadcastId, waTimestamp), `whatsapp_broadcasts` (templateName, note, createdById, weekStart date, total/sent/failedCount).
+- **Cliente Graph API** `server/whatsapp.ts`: `sendTemplateMessage(toE164, templateName, languageCode, components?)` e `sendTextMessage(toE164, text)` → `{ok:true,waMessageId}|{ok:false,error,code?}`. POST `graph.facebook.com/{ver}/{phoneNumberId}/messages` Bearer. Mapa de erros Meta (131026/131047/132000/132001/130429/190). 1 retry com backoff só em 429/5xx/rede. Sem deps novas (fetch nativo).
+- **Testes** `server/whatsapp.test.ts`: 16 casos — `normalizePhoneE164` (PT/+/00/lixo) + `verifyMetaSignature` (válida/errada/tamper/ausente/sem-secret/formato) + `isValidWebhookVerification` (token certo/errado/mode/sem-token).
+**Why**: fundações reutilizáveis e o webhook já apontável na config Meta antes de haver processamento/UI.
+**Notes / decisões / gotchas**:
+- **Migração 0045 escrita À MÃO** (não `drizzle-kit generate`): o journal do drizzle-kit está congelado no idx 24 e o `schema.ts` está ~20 migrações manuais à frente → `generate` diffaria contra o snapshot 0024 obsoleto e emitiria um ficheiro gigante/errado (recriaria 0025-0044) + colisão de numeração. Seguido o padrão real da casa (SQL manual numerado, sem tocar journal/meta). **A migração NÃO foi executada contra nenhuma BD** — aplicar pelo runbook habitual antes do deploy.
+- `whatsapp_broadcasts.weekStart` usa tipo `DATE` (pedido explícito), ao passo que `extras_availability.weekStart` é `varchar(10)` — pequena inconsistência aceite.
+- **tsc**: LIMPO (`pnpm run check`, exit 0). **Testes novos**: 16/16 verdes.
+- **Falha PRÉ-EXISTENTE não relacionada**: `server/auth.logout.test.ts` falha (`sameSite` recebido `"lax"` vs esperado `"none"`) — drift na config do cookie de logout, código NÃO tocado por este trabalho. Import do schema/router OK (o teste executou até à asserção). Flag para o Jorge; fora de escopo.
+- **Env de dev**: o `node_modules` estava vazio (só `tsbuildinfo` stale) — corrido `pnpm install` (offline-preferred) para obter toolchain real. Build scripts ignorados (@tailwindcss/oxide, esbuild) — irrelevante para tsc/testes de servidor.
+- **Sem commits git** (por instrução).
+
+### 2026-07-09 — Fase 2 (seleção + envio em massa, MODO DESENVOLVIMENTO)
+**Type**: feature
+**Scope**: `server/extrasAvailability.ts`, `server/whatsappBroadcast.ts` (novo), `server/_core/concurrency.ts` (novo), `server/routers.ts`, `client/src/pages/ExtrasDiaPage.tsx`, `server/whatsappBroadcast.test.ts` (novo)
+**What**:
+- **`listActiveExtras`** agora devolve `phone` (novo campo em `ActiveExtra`); `OverviewExtra` + `getWeekOverview` também passam `phone` → chega ao cliente via `extrasAvailability.overview`.
+- **`server/_core/concurrency.ts`**: `runConcurrent<T>(items, limit, fn, deadlineAt?)` extraído para módulo partilhado (réplica do que estava acoplado ao `multiparkBookingSync.ts` — o sync ficou intacto com a sua cópia).
+- **`server/whatsappBroadcast.ts`**: `resolveRecipients(extras, employeeIds?)` (PURO, testável — subset + `normalizePhoneE164`) e `sendBroadcast(opts)` (orquestração). Falha CEDO se faltarem envs WHATSAPP_* ou BD. Modo teste (`testPhone`) envia só a 1 número, regista `whatsapp_broadcasts`+`whatsapp_messages` com note `[TESTE]`. Modo normal: cria 1 broadcast, por destinatário upsert de `whatsapp_conversations` (NUNCA toca `lastInboundAt` em outbound — mantém "aguarda 1ª resposta") + `whatsapp_messages` (out/template/sent|failed/waMessageId/errorDetail); inválidos/sem-número → falha SEM chamar API e SEM criar conversa/mensagem (não há phoneE164 chave). Envio via `runConcurrent(4)`. Devolve `{broadcastId,total,sent,failed,invalidPhone,recipients[]}`.
+- **Router tRPC** `whatsapp.sendBroadcast` (`routers.ts`): `protectedProcedure`+`requireRole(...,"backoffice")`+`logActivity` (action `whatsapp_broadcast`), espelho de `extrasAvailability.sendRequest`. A mutation devolve o summary completo → SEM query separada (opção mais simples, pedido do ponto 3).
+- **UI** `ExtrasDiaPage.tsx` `AvailabilitySection`: coluna Telefone com badge âmbar "sem número válido" (validação via `@shared/phone`); botão "WhatsApp aos selecionados / a todos" (verde) ao lado do email; **Dialog shadcn** com nome de template configurável (placeholder até APPROVED), língua (default pt_PT), parâmetros do body (separados por "|"), campo teste 1-número, resumo válidos/inválidos entre alvos, resultado por destinatário (enviado/falhou/inválido + erro), aviso de modo-dev (número de teste ≈250/24h, só verificados). Toasts sonner. Multi-seleção nativa existente mantida (não refatorizada).
+**Why**: Fase 2 do plano — seleção + broadcast em modo dev, pronta para o Jorge validar ponta-a-ponta com o número de teste da Meta assim que existir.
+**Notes / decisões / gotchas**:
+- **Ajuste #5 (Jorge) aplicado**: comentário OBRIGATÓRIO no topo de `sendBroadcast` a assinalar que, sem fila persistente, um restart do Railway a meio de um broadcast PERDE os envios pendentes (decisão consciente; revisitar se a escala crescer). `runConcurrent(4)` + retry único (que já vive em `whatsapp.ts`).
+- **Semântica "a todos" na UI**: sem seleção explícita, o alvo é o conjunto MOSTRADO (extras com disponibilidade), não todos os ativos — para bater certo com a tabela e o resumo válido/inválido (o backend aceita a lista concreta de ids). Difere do email ("a todos" = todos os ativos), intencionalmente.
+- **invalidPhone** conta em `whatsapp_broadcasts.failedCount` (failedCount = falhas API + inválidos) mas é reportado à parte no summary. Inválidos NÃO geram linha em `whatsapp_messages` (análogo ao `noEmail`).
+- **Testabilidade**: só `resolveRecipients` é unit-testada (pura). O loop de envio (`sendBroadcast`) precisa de BD+Graph reais → integração, não coberto por unit test (sem BD de teste). Motor confirmado **MySQL/InnoDB**; `0045` revalidada.
+- **Gates**: `pnpm run check` (tsc) LIMPO exit 0. Testes: `whatsapp.test.ts` 16 + `whatsappBroadcast.test.ts` 5 = **21/21 verdes**. Falha pré-existente de `auth.logout.test.ts` persiste (não relacionada).
+- **Sem commits git** (por instrução).
+
+### 2026-07-09 — Fase 3 (Webhook + Inbox)
+**Type**: feature
+**Scope**: `drizzle/schema.ts` + `drizzle/0045_whatsapp_integration.sql` (Decisão 2: `invalidEmployeeIds`), `server/whatsappBroadcast.ts` (persistência), `server/whatsappWebhook.ts` (processamento), `server/whatsappInbound.ts` (novo), `server/whatsappInbox.ts` (novo), `server/routers.ts` (router inbox), `client/src/pages/WhatsAppInboxPage.tsx` (novo), `client/src/App.tsx` + `client/src/components/DashboardLayout.tsx` (rota+menu), `server/whatsappInbound.test.ts` + `server/whatsappInbox.test.ts` (novos)
+**What**:
+- **Decisão 2**: coluna `whatsapp_broadcasts.invalidEmployeeIds TEXT NULL` (schema + 0045 emendada). `sendBroadcast` persiste JSON dos employeeId com número inválido/ausente. **ALTER isolado** (caso a 0045 já tenha sido aplicada): `ALTER TABLE \`whatsapp_broadcasts\` ADD COLUMN \`invalidEmployeeIds\` TEXT NULL AFTER \`failedCount\`;`
+- **Webhook** (`whatsappWebhook.ts` POST): valida HMAC → `JSON.parse` (malformado→400) → **process-then-ack** via `processInboundWebhook` (import dinâmico); sucesso→200, erro→500 (Meta faz retry). Log no erro.
+- **`whatsappInbound.ts`** (parse PURO + orquestração): `parseWebhookPayload` (entry/changes/value/messages+statuses, defensivo), `parseMetaTimestamp` (epoch→UTC str), `messageBody` (texto ou marcador `[imagem]`/caption — **media NÃO descarregada nesta fase**, decisão registada), `metaFromToE164` (normalizePhoneE164 c/ fallback `+dígitos` p/ não-PT). Orquestração: dedup por `waMessageId` (no-op se existe), upsert conversa por phoneE164 (**set `lastInboundAt`+`lastMessageAt`, `unreadCount+1`**, associa employeeId por match de telefone via mapa normalizado), insere mensagem `in`/`text` (enum só tem text|template → media entra como text; status `delivered`=recebida). Statuses: correlação por `waMessageId` em mensagens `out`, atualiza status por rank (sent<delivered<read, failed sempre + errorDetail); desconhecida→no-op.
+- **`whatsappInbox.ts`**: `deriveWindowState(lastInboundAt, now?)` PURO (awaiting_first_reply=null / open=<24h / expired), timestamps da BD tratadas como UTC. `listConversations` (join employees→nome ou número, preview da última msg via 1 query IN, windowState derivado), `getConversationThread` (thread cronológica limitada), `markConversationRead` (unread=0), `replyToConversation` (**valida janela NO SERVIDOR**: só envia se `open`, senão erro claro; `sendTextMessage` + insere out/text + atualiza lastMessageAt).
+- **Router tRPC** (`whatsapp` estendido, tudo backoffice+): `conversations.list`, `messages.byConversation`, `markRead`, `reply` (+`logActivity` action `whatsapp_reply`).
+- **`WhatsAppInboxPage.tsx`**: 2 colunas (lista c/ badge não-lidas + preview ordenado por lastMessageAt; thread c/ bolhas in/out, status ✓/✓✓/lido/falhou nas out, timestamps). Polling `refetchInterval` 10s; markRead ao abrir; responsivo via `useIsMobile` (lista OU thread no telemóvel). **3 estados de janela distintos** (ajuste #3): `awaiting_first_reply` (banner + composer OFF), `open` (countdown "fecha em Xh" + composer ON), `expired` (banner + composer OFF + botão "Enviar template" que reusa `sendBroadcast` com `testPhone`=número da conversa). Rota `/whatsapp` + item de menu em "Operações" (backoffice+, ícone MessageCircle).
+**Why**: Fase 3 do plano — receber respostas e responder 1-a-1 dentro das regras da Meta.
+**Notes / decisões / gotchas**:
+- **Media não descarregada** (Fase 3): guardamos `[imagem]`/`[áudio]`/caption no body; download de media fica para depois (precisa de fetch autenticado à Graph + storage).
+- **Status de mensagens inbound**: guardado como `delivered` (o enum não tem "received"); a UI só mostra status nas mensagens OUT. Não-regressão de status por rank.
+- **Timezone**: writes são UTC wall-clock ('YYYY-MM-DD HH:MM:SS'); `deriveWindowState`/`fmtTime` reinterpretam como UTC (sufixo Z) para a matemática das 24h bater certo. Testado na fronteira.
+- **Testabilidade**: parse do webhook + `deriveWindowState` + gate do reply são puros e testados. Escrita na BD (dedup real, upsert, reply IO) é integração, não coberta por unit test (sem BD de teste) — mas a lógica de decisão (dedup=existência, gate=deriveWindowState) está isolada e testada.
+- **Gates**: `pnpm run check` (tsc) LIMPO exit 0. Testes: whatsapp 16 + whatsappBroadcast 5 + whatsappInbound 15 + whatsappInbox 9 = **45/45 verdes**. Falha pré-existente `auth.logout.test.ts` persiste (não relacionada).
+- **Migração**: `0045` continua NÃO aplicada (tanto quanto se sabe); a emenda in-place é segura. ALTER isolado acima para o caso de já ter sido aplicada. Não colidir com `server/migrations/migration_0046.ts` (runner existente) — não criei ficheiro 0046.
+- **Sem commits git** (por instrução).
+
+### 2026-07-09 — Fase 4 (API app externa de disponibilidades) — FINAL
+**Type**: feature
+**Scope**: `drizzle/schema.ts` + `drizzle/0047_availability_form_tokens.sql` (novo), `server/availabilityFormToken.ts` (novo), `server/availabilityForm.ts` (novo), `server/whatsappBroadcast.ts` (token no template), `server/mcpApi.ts` (2 endpoints), `.env.example` + `server/_core/api-entry.ts` (envs), `server/availabilityForm.test.ts` (novo)
+**What**:
+- **Migração NOVA `0047`** (regra de imutabilidade): tabela `availability_form_tokens` (id, jti unique, employeeId, weekStart, expiresAt, usedAt nullable, createdAt). NÃO aplicada a nenhuma BD (deploy manual).
+- **`availabilityFormToken.ts`** — token JWT HS256 via `jose`, secret DEDICADO `AVAILABILITY_FORM_TOKEN_SECRET` (≠ JWT_SECRET). Payload `{employeeId, weekStart}` + `jti` (nanoid) + exp 14 dias. Puros/testáveis: `signFormToken`, `verifyFormTokenSignature` (expired vs invalid via `ERR_JWT_EXPIRED`), `evaluateTokenRow` (ok/used/unknown), `extractAffectedRows`. I/O: `issueAvailabilityFormToken` (assina + persiste jti; devolve token+link), `verifyAvailabilityFormToken` (assinatura + estado jti, SEM consumir), `consumeAvailabilityFormToken` (**single-use atómico**: UPDATE ... WHERE usedAt IS NULL, true só se affectedRows===1).
+- **`availabilityForm.ts`** — `submitDaysSchema` (zod, mirror do setMyWeek, weekStart vem do TOKEN não do body), `buildFormContext` (shape mínimo: firstName+semana, SEM email/telefone/id), `tokenErrorResponse` (expired→410 token_expired, used→410 token_already_used, invalid→401 token_invalid), `getFormContext` (valida SEM consumir), `submitForm` (valida→**consome**→`setMyAvailability`→logActivity `availability_form_submit` userId 0). **Reutiliza `getMyWeek`/`setMyAvailability` diretamente** — já keyed por employeeId, sem ctx de sessão; nenhuma extração precisou de ser feita.
+- **Endpoints `mcpApi.ts`** (`/api/v1/availability-form/`): `GET /context?token=` (scope read, não consome), `POST /submit` {token, days} (scope write, consome). Ambos atrás de X-API-Key (`validateApiKey`) + `requireScope`. Erros com `code` distinguível para a app mostrar mensagem certa.
+- **Token no broadcast** (`whatsappBroadcast.ts`): quando há `weekStart` e o destinatário é extra registado, emite token e injeta-o como parâmetro do **botão URL** do template (`buildComponents(params, buttonToken)` → `{type:"button",sub_type:"url",index:"0",parameters:[{type:"text",text:token}]}`). Falha a emitir token → destinatário marcado failed sem enviar. Modo teste NÃO gera token (sem employeeId).
+- **Envs**: `AVAILABILITY_FORM_TOKEN_SECRET` (+ presença no /api/health), `AVAILABILITY_FORM_URL` (opcional) — documentadas no `.env.example`.
+**Why**: fecha a integração — app externa recebe contexto (que extra/datas) e devolve a disponibilidade preenchida, em segurança.
+**Notes / decisões / gotchas**:
+- **Numeração 0047** (não 0046): `server/migrations/migration_0046.ts` já ocupa o "0046" semanticamente. Regra de imutabilidade seguida à letra.
+- **Ordem consome→escreve** (ajuste #4): o consume atómico é a barreira de duplo-submit; o raro caso "consumiu mas setMyAvailability falhou" deixa a semana por gravar (recuperável reemitindo token) — aceite. GET /context NÃO consome (extra pode reabrir).
+- **Token used bloqueia também o /context** (410 token_already_used) — a app distingue "expirado" de "já submetido" pelo `code`.
+- **weekStart autoritativo do token**, não do body (o body só traz `days`) — a app externa é não-confiável.
+- **Tokens expirados/nunca-usados** acumulam na tabela até expiry; limpeza é um cron futuro (não crítico, volume baixo).
+- **Gates**: `pnpm run check` (tsc) LIMPO exit 0. Testes: whatsapp 16 + whatsappBroadcast 5 + whatsappInbound 15 + whatsappInbox 9 + **availabilityForm 18** = **63/63 verdes**. Falha pré-existente `auth.logout.test.ts` persiste (não relacionada).
+- **Sem commits git** (por instrução).
+
+## Como configurar o template no WhatsApp Manager (para o link do formulário)
+1. Cria um template (categoria Utility/Marketing) com o texto do pedido de disponibilidade.
+2. Adiciona um **botão "Visit website" com URL DINÂMICO**: URL = `{AVAILABILITY_FORM_URL}?token={{1}}` (o `{{1}}` TEM de ficar no fim). Ex.: `https://disponibilidade.multipark.pt?token={{1}}`.
+3. Submete para aprovação. Quando APPROVED, mete o nome exato no dialog do broadcast (ExtrasDiaPage) e envia com um `weekStart` selecionado.
+4. O backend injeta o token JWT single-use como valor de `{{1}}` (um por extra). A app externa lê `?token=` e chama `GET /api/v1/availability-form/context?token=` (X-API-Key + scope read) → mostra o formulário; no submit chama `POST /api/v1/availability-form/submit` (scope write). O token é consumido no 1º submit.
+- Alternativa (sem botão URL): meter o link no corpo via um parâmetro de body — nesse caso configurar `{{N}}` no texto e passar o link completo como `templateParams`. O código atual usa o botão URL por defeito.
+
+## RUNBOOK DE DEPLOY (migrações + envs por aplicar)
+**Migrações (por ordem, NENHUMA aplicada ainda tanto quanto se sabe — todas manuais, fora do journal do drizzle-kit):**
+- `drizzle/0045_whatsapp_integration.sql` — 3 tabelas WhatsApp (já inclui `whatsapp_broadcasts.invalidEmployeeIds`, emenda in-place da Fase 3 aceite por a 0045 nunca ter sido aplicada).
+- `drizzle/0047_availability_form_tokens.sql` — tabela dos tokens do formulário.
+- (Aplicar via o mecanismo manual da casa — `mysql < ficheiro` ou runbook equivalente; NÃO há auto-migração no boot.)
+
+**Envs novas a definir no Railway/Vercel:**
+- `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_APP_SECRET` (obrigatórias p/ envio+webhook), `WHATSAPP_API_VERSION` (opcional, default v21.0).
+- `AVAILABILITY_FORM_TOKEN_SECRET` (obrigatória p/ Fase 4, ≥32 chars, distinta de JWT_SECRET), `AVAILABILITY_FORM_URL` (opcional).
+- Config na Meta: webhook apontado a `POST/GET /api/whatsapp/webhook` com o `WHATSAPP_VERIFY_TOKEN`; criar templates APPROVED (incl. o do link, ver secção acima).
+- Verificar tudo via `GET /api/health` (booleanos de presença).
+
+## PENDENTES CONSOLIDADOS (pós-Fase 4)
+- **Número de produção Meta**: enquanto for número de teste, entrega só a ~250 destinos verificados/24h; broadcast em escala fica por validar (Fase 2 em modo dev).
+- **Media no inbox** (Fase 3 adiado): mensagens não-texto guardam `[imagem]`/caption; falta download/preview (fetch autenticado à Graph + storage).
+- **UI "extras com número inválido"**: `whatsapp_broadcasts.invalidEmployeeIds` já guarda os dados (Decisão 2); falta a UI para os corrigir de uma vez.
+- **Migrações por aplicar**: 0045 + 0047 (ver runbook).
+- **Cron de limpeza** de `availability_form_tokens` expirados (não crítico).
+- **API keys em plaintext** e `UPDATE lastUsedAt` por request (dívida pré-existente do mcpApi/externalApi, não introduzida aqui).

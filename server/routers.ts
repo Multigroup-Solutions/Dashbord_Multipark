@@ -28,6 +28,13 @@ import {
   nextMonday,
   mondayOf,
 } from "./extrasAvailability";
+import { sendBroadcast } from "./whatsappBroadcast";
+import {
+  listConversations,
+  getConversationThread,
+  markConversationRead,
+  replyToConversation,
+} from "./whatsappInbox";
 import {
   upsertUser,
   getUserByOpenId,
@@ -6198,6 +6205,100 @@ export const appRouter = router({
           details: input.testEmail
             ? `Pedido disponibilidade TESTE → ${input.testEmail} (semana ${input.weekStart})`
             : `Pedido disponibilidade semana ${input.weekStart}: ${result.sent} enviados, ${result.failed} falhas, ${result.noEmail} sem email`,
+        });
+        return result;
+      }),
+  }),
+
+  // ── WHATSAPP (envio em massa de templates aos extras) ──────────────────────
+  whatsapp: router({
+    // Envia um template WhatsApp em massa (ou a 1 número, em modo teste).
+    // Espelha o padrão de extrasAvailability.sendRequest. A mutation devolve o
+    // summary completo (incl. resultado por destinatário), por isso a UI não
+    // precisa de uma query separada nesta fase.
+    sendBroadcast: protectedProcedure
+      .input(
+        z.object({
+          templateName: z.string().min(1).max(128),
+          languageCode: z.string().min(2).max(12).optional(),
+          templateParams: z.array(z.string().max(1024)).max(20).optional(),
+          employeeIds: z.array(z.number()).nullable().optional(),
+          weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+          note: z.string().max(500).nullable().optional(),
+          testPhone: z.string().min(3).max(30).nullable().optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        let summary;
+        try {
+          summary = await sendBroadcast({
+            templateName: input.templateName,
+            languageCode: input.languageCode,
+            templateParams: input.templateParams,
+            employeeIds: input.employeeIds ?? null,
+            weekStart: input.weekStart ?? null,
+            note: input.note ?? null,
+            testPhone: input.testPhone ?? null,
+            createdById: ctx.user.id,
+          });
+        } catch (err: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro no envio WhatsApp" });
+        }
+        await logActivity({
+          userId: ctx.user.id,
+          action: "whatsapp_broadcast",
+          entity: "whatsapp_broadcast",
+          entityId: summary.broadcastId ?? undefined,
+          details: input.testPhone
+            ? `WhatsApp TESTE → ${input.testPhone} (template ${input.templateName})`
+            : `WhatsApp broadcast template ${input.templateName}: ${summary.sent} enviados, ${summary.failed} falhas, ${summary.invalidPhone} sem número`,
+        });
+        return summary;
+      }),
+
+    // ── INBOX ──────────────────────────────────────────────────────────────
+    conversations: router({
+      list: protectedProcedure.query(async ({ ctx }) => {
+        requireRole(ctx.user.role, "backoffice");
+        return listConversations();
+      }),
+    }),
+
+    messages: router({
+      byConversation: protectedProcedure
+        .input(z.object({ conversationId: z.number(), limit: z.number().min(1).max(300).optional() }))
+        .query(async ({ ctx, input }) => {
+          requireRole(ctx.user.role, "backoffice");
+          const thread = await getConversationThread(input.conversationId, input.limit ?? 100);
+          if (!thread) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+          return thread;
+        }),
+    }),
+
+    markRead: protectedProcedure
+      .input(z.object({ conversationId: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        await markConversationRead(input.conversationId);
+        return { success: true };
+      }),
+
+    // Resposta em texto livre — a validação da janela de 24h é feita no servidor.
+    reply: protectedProcedure
+      .input(z.object({ conversationId: z.number(), text: z.string().min(1).max(4000) }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const result = await replyToConversation(input.conversationId, input.text, ctx.user.id);
+        if (!result.ok) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: result.error || "Falha ao responder" });
+        }
+        await logActivity({
+          userId: ctx.user.id,
+          action: "whatsapp_reply",
+          entity: "whatsapp_conversation",
+          entityId: input.conversationId,
+          details: `Resposta WhatsApp (conversa ${input.conversationId})`,
         });
         return result;
       }),

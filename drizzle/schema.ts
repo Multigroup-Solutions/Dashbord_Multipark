@@ -1,4 +1,4 @@
-import { mysqlTable, mysqlSchema, AnyMySqlColumn, bigint, int, varchar, text, timestamp, index, uniqueIndex, decimal, mysqlEnum, tinyint, boolean } from "drizzle-orm/mysql-core"
+import { mysqlTable, mysqlSchema, AnyMySqlColumn, bigint, int, varchar, text, timestamp, index, uniqueIndex, decimal, mysqlEnum, tinyint, boolean, date } from "drizzle-orm/mysql-core"
 import { sql } from "drizzle-orm"
 
 export const activityLogs = mysqlTable("activity_logs", {
@@ -1249,6 +1249,88 @@ export const inboundEmails = mysqlTable("inbound_emails", {
 	index("inbound_emails_gm_thread_idx").on(table.gmThreadId),
 ]);
 
+// ─── WhatsApp (integração Cloud API) ────────────────────────────────────────
+// Conversa 1-a-1 com um contacto (chave = número E.164). lastInboundAt é a
+// fonte de verdade da janela de 24h da Meta: se null ou > 24h atrás, a janela
+// está fechada e só se pode enviar TEMPLATE (não texto livre).
+export const whatsappConversations = mysqlTable("whatsapp_conversations", {
+	id: int().autoincrement().primaryKey(),
+	phoneE164: varchar({ length: 20 }).notNull(),
+	employeeId: int(),
+	lastInboundAt: timestamp({ mode: 'string' }),
+	lastMessageAt: timestamp({ mode: 'string' }),
+	unreadCount: int().default(0).notNull(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("whatsapp_conversations_phone_unique").on(table.phoneE164),
+	index("idx_whatsapp_conversations_employee").on(table.employeeId),
+	index("idx_whatsapp_conversations_last_message").on(table.lastMessageAt),
+]);
+
+// Mensagem individual (entrada ou saída). waMessageId (id da Meta) é único
+// quando presente → serve de dedup do webhook e de correlação dos updates de
+// status (sent/delivered/read/failed). MySQL permite múltiplos NULL num UNIQUE,
+// por isso mensagens ainda-sem-id não colidem.
+export const whatsappMessages = mysqlTable("whatsapp_messages", {
+	id: int().autoincrement().primaryKey(),
+	conversationId: int().notNull(),
+	direction: mysqlEnum(['in', 'out']).notNull(),
+	waMessageId: varchar({ length: 128 }),
+	type: mysqlEnum(['text', 'template']).notNull(),
+	body: text(),
+	templateName: varchar({ length: 128 }),
+	status: mysqlEnum(['pending', 'sent', 'delivered', 'read', 'failed']).default('pending').notNull(),
+	errorDetail: text(),
+	sentById: int(),
+	broadcastId: int(),
+	waTimestamp: timestamp({ mode: 'string' }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("whatsapp_messages_wa_message_id_unique").on(table.waMessageId),
+	index("idx_whatsapp_messages_conversation").on(table.conversationId),
+	index("idx_whatsapp_messages_broadcast").on(table.broadcastId),
+	index("idx_whatsapp_messages_status").on(table.status),
+]);
+
+// Envio em massa de um template a N destinatários (agrupa as whatsapp_messages
+// resultantes via broadcastId). Contadores para o resumo no backoffice.
+export const whatsappBroadcasts = mysqlTable("whatsapp_broadcasts", {
+	id: int().autoincrement().primaryKey(),
+	templateName: varchar({ length: 128 }).notNull(),
+	note: text(),
+	createdById: int(),
+	weekStart: date({ mode: 'string' }),
+	totalCount: int().default(0).notNull(),
+	sentCount: int().default(0).notNull(),
+	failedCount: int().default(0).notNull(),
+	// JSON array dos employeeId que falharam por número inválido/ausente — para
+	// depois listar "extras com número inválido" e corrigir na origem.
+	invalidEmployeeIds: text(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+});
+
+// ─── Tokens do formulário externo de disponibilidades (Fase 4) ──────────────
+// Single-use: cada token é assinado (JWT) com um `jti` que também vive aqui.
+// A submissão consome-o (usedAt) via UPDATE ... WHERE usedAt IS NULL.
+export const availabilityFormTokens = mysqlTable("availability_form_tokens", {
+	id: int().autoincrement().primaryKey(),
+	jti: varchar({ length: 64 }).notNull(),
+	employeeId: int().notNull(),
+	weekStart: varchar({ length: 10 }).notNull(),
+	expiresAt: timestamp({ mode: 'string' }).notNull(),
+	usedAt: timestamp({ mode: 'string' }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("availability_form_tokens_jti_unique").on(table.jti),
+	index("idx_availability_form_tokens_employee").on(table.employeeId),
+]);
+
 // ─── Select & Insert type aliases ───────────────────────────────────────────
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
@@ -1290,3 +1372,11 @@ export type LostFoundPhoto = typeof lostFoundPhotos.$inferSelect;
 export type LostFoundMessage = typeof lostFoundMessages.$inferSelect;
 export type InboundEmail = typeof inboundEmails.$inferSelect;
 export type InsertInboundEmail = typeof inboundEmails.$inferInsert;
+export type WhatsappConversation = typeof whatsappConversations.$inferSelect;
+export type InsertWhatsappConversation = typeof whatsappConversations.$inferInsert;
+export type WhatsappMessage = typeof whatsappMessages.$inferSelect;
+export type InsertWhatsappMessage = typeof whatsappMessages.$inferInsert;
+export type WhatsappBroadcast = typeof whatsappBroadcasts.$inferSelect;
+export type InsertWhatsappBroadcast = typeof whatsappBroadcasts.$inferInsert;
+export type AvailabilityFormToken = typeof availabilityFormTokens.$inferSelect;
+export type InsertAvailabilityFormToken = typeof availabilityFormTokens.$inferInsert;
