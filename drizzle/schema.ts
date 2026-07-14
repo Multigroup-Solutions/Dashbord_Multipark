@@ -1,4 +1,4 @@
-import { mysqlTable, mysqlSchema, AnyMySqlColumn, bigint, int, varchar, text, timestamp, index, uniqueIndex, decimal, mysqlEnum, tinyint, boolean, date } from "drizzle-orm/mysql-core"
+import { mysqlTable, mysqlSchema, AnyMySqlColumn, bigint, int, varchar, text, timestamp, index, uniqueIndex, decimal, mysqlEnum, tinyint, boolean, date, json } from "drizzle-orm/mysql-core"
 import { sql } from "drizzle-orm"
 
 export const activityLogs = mysqlTable("activity_logs", {
@@ -318,6 +318,36 @@ export const employees = mysqlTable("employees", {
 	loginBlocked: tinyint().default(0).notNull(),
 	loginBlockedReason: varchar({ length: 255 }),
 });
+
+// Candidaturas de condutores vindas do website multidriver ("Be a Driver").
+// Email normalizado (lowercase/trim) e UNIQUE — re-submissões actualizam em vez
+// de duplicar. `payload` guarda a candidatura completa em bruto.
+export const driverApplications = mysqlTable("driver_applications", {
+	id: int().autoincrement().primaryKey(),
+	email: varchar({ length: 320 }).notNull(),
+	fullName: varchar({ length: 256 }).notNull(),
+	phone: varchar({ length: 32 }),
+	city: varchar({ length: 128 }),
+	country: varchar({ length: 64 }),
+	nif: varchar({ length: 20 }),
+	drivingExperience: varchar({ length: 64 }),
+	expectedHourlyRate: varchar({ length: 32 }),
+	howDidYouKnow: varchar({ length: 64 }),
+	status: mysqlEnum(['new','reviewed','approved','rejected']).default('new').notNull(),
+	employeeId: int(),
+	payload: json(),
+	submissionCount: int().default(1).notNull(),
+	lastSubmittedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	reviewedById: int(),
+	reviewedAt: timestamp({ mode: 'string' }),
+	notes: varchar({ length: 512 }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("driver_applications_email_unique").on(table.email),
+	index("idx_driver_applications_status").on(table.status),
+]);
 
 export const employeeLeaves = mysqlTable("employee_leaves", {
 	id: int().autoincrement().primaryKey(),

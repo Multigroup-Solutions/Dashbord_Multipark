@@ -6210,6 +6210,45 @@ export const appRouter = router({
       }),
   }),
 
+  // ── CANDIDATURAS DE CONDUTORES (website multidriver → Extras Dia) ──────────
+  driverApplications: router({
+    list: protectedProcedure
+      .input(z.object({ status: z.enum(["new", "reviewed", "approved", "rejected"]).nullable().optional() }).optional())
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { listDriverApplications } = await import("./webIntake");
+        return listDriverApplications(input?.status ?? null);
+      }),
+
+    setStatus: protectedProcedure
+      .input(
+        z.object({
+          id: z.number(),
+          status: z.enum(["new", "reviewed", "rejected"]),
+          notes: z.string().max(512).nullable().optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { setApplicationStatus } = await import("./webIntake");
+        await setApplicationStatus(input.id, input.status, ctx.user.id, input.notes);
+        return { success: true };
+      }),
+
+    // Aprovar = criar (ou ligar a) um employee extra com o mesmo email.
+    approve: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { approveApplication } = await import("./webIntake");
+        try {
+          return await approveApplication(input.id, ctx.user.id);
+        } catch (err: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao aprovar" });
+        }
+      }),
+  }),
+
   // ── WHATSAPP (envio em massa de templates aos extras) ──────────────────────
   whatsapp: router({
     // Envia um template WhatsApp em massa (ou a 1 número, em modo teste).

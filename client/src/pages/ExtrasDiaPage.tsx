@@ -20,7 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useState, useMemo } from "react";
+import { Fragment, useState, useMemo } from "react";
 import { toast } from "sonner";
 import { normalizePhoneE164 } from "@shared/phone";
 import {
@@ -157,6 +157,8 @@ export default function ExtrasDiaPage() {
           />
         </div>
       </div>
+
+      <CandidaturasSection />
 
       <AvailabilitySection />
 
@@ -1219,6 +1221,189 @@ function WashTile({
 }
 
 // ─── Disponibilidade semanal dos extras (backoffice) ─────────────────────────
+// ─── Candidaturas de condutores vindas do website multidriver ────────────────
+// Novas candidaturas do formulário "Be a Driver" chegam via /api/v1 e ficam
+// aqui para revisão. Aprovar cria (ou liga a) um employee extra com o mesmo
+// email — a partir daí o extra aparece nos candidatos e na disponibilidade.
+
+const APP_STATUS: Record<string, { label: string; className: string }> = {
+  new: { label: "Nova", className: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300" },
+  reviewed: { label: "Revista", className: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300" },
+  approved: { label: "Aprovada", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300" },
+  rejected: { label: "Rejeitada", className: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300" },
+};
+
+function CandidaturasSection() {
+  const [statusFilter, setStatusFilter] = useState<string>("new");
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+
+  const list = trpc.driverApplications.list.useQuery({
+    status: statusFilter === "all" ? null : (statusFilter as any),
+  });
+  const newCount = trpc.driverApplications.list.useQuery({ status: "new" });
+
+  const approve = trpc.driverApplications.approve.useMutation({
+    onSuccess: (r) => {
+      toast.success(r.employeeCreated ? "Candidatura aprovada — extra criado" : "Candidatura aprovada — ligada a extra existente");
+      list.refetch();
+      newCount.refetch();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const setStatus = trpc.driverApplications.setStatus.useMutation({
+    onSuccess: () => {
+      list.refetch();
+      newCount.refetch();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const apps = list.data ?? [];
+  const pending = newCount.data?.length ?? 0;
+
+  const fmtWhen = (s: string) => {
+    const d = new Date(s.includes("T") ? s : s.replace(" ", "T"));
+    return isNaN(d.getTime()) ? s : d.toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit", year: "numeric" });
+  };
+
+  return (
+    <Card className="border-emerald-200">
+      <CardHeader>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Users className="h-4 w-4 text-emerald-600" />
+            Candidaturas do site (Be a Driver)
+            {pending > 0 && (
+              <Badge className="bg-blue-600 text-white hover:bg-blue-600">{pending} nova{pending > 1 ? "s" : ""}</Badge>
+            )}
+          </CardTitle>
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="w-40 h-8 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="new">Novas</SelectItem>
+              <SelectItem value="reviewed">Revistas</SelectItem>
+              <SelectItem value="approved">Aprovadas</SelectItem>
+              <SelectItem value="rejected">Rejeitadas</SelectItem>
+              <SelectItem value="all">Todas</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {list.isLoading && <div className="text-sm text-muted-foreground">A carregar candidaturas...</div>}
+        {!list.isLoading && apps.length === 0 && (
+          <div className="text-sm text-muted-foreground py-2">
+            Sem candidaturas {statusFilter !== "all" ? `com estado "${APP_STATUS[statusFilter]?.label ?? statusFilter}"` : ""}.
+          </div>
+        )}
+        {apps.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-xs uppercase text-muted-foreground">
+                  <th className="text-left py-2 px-2 w-6"></th>
+                  <th className="text-left py-2 px-2">Nome</th>
+                  <th className="text-left py-2 px-2">Email</th>
+                  <th className="text-left py-2 px-2">Telefone</th>
+                  <th className="text-left py-2 px-2">Cidade</th>
+                  <th className="text-left py-2 px-2">Recebida</th>
+                  <th className="text-left py-2 px-2">Estado</th>
+                  <th className="text-right py-2 px-2">Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                {apps.map((a: any) => {
+                  const st = APP_STATUS[a.status] ?? APP_STATUS.new;
+                  const expanded = expandedId === a.id;
+                  const payload = (a.payload ?? {}) as Record<string, unknown>;
+                  return (
+                    <Fragment key={a.id}>
+                      <tr className="border-b hover:bg-muted/40">
+                        <td className="py-2 px-2">
+                          <button
+                            className="text-muted-foreground"
+                            onClick={() => setExpandedId(expanded ? null : a.id)}
+                            title={expanded ? "Fechar detalhes" : "Ver detalhes"}
+                          >
+                            {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                          </button>
+                        </td>
+                        <td className="py-2 px-2 font-medium">
+                          {a.fullName}
+                          {a.submissionCount > 1 && (
+                            <span className="ml-1 text-xs text-muted-foreground">({a.submissionCount}× submetida)</span>
+                          )}
+                        </td>
+                        <td className="py-2 px-2">{a.email}</td>
+                        <td className="py-2 px-2">{a.phone ?? "—"}</td>
+                        <td className="py-2 px-2">{a.city ?? "—"}</td>
+                        <td className="py-2 px-2 whitespace-nowrap">{fmtWhen(a.lastSubmittedAt)}</td>
+                        <td className="py-2 px-2">
+                          <Badge variant="outline" className={st.className}>{st.label}</Badge>
+                        </td>
+                        <td className="py-2 px-2 text-right whitespace-nowrap">
+                          {a.status !== "approved" && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="border-emerald-600 text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950 mr-1"
+                              disabled={approve.isPending}
+                              onClick={() => {
+                                if (confirm(`Aprovar ${a.fullName} e criar/ligar o extra?`)) approve.mutate({ id: a.id });
+                              }}
+                            >
+                              <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Aprovar
+                            </Button>
+                          )}
+                          {a.status !== "rejected" && a.status !== "approved" && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="border-red-300 text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
+                              disabled={setStatus.isPending}
+                              onClick={() => setStatus.mutate({ id: a.id, status: "rejected" })}
+                            >
+                              <XCircle className="h-3.5 w-3.5 mr-1" /> Rejeitar
+                            </Button>
+                          )}
+                        </td>
+                      </tr>
+                      {expanded && (
+                        <tr className="border-b bg-muted/20">
+                          <td colSpan={8} className="py-3 px-4">
+                            <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-1 text-xs">
+                              {a.nif && <div><span className="text-muted-foreground">NIF:</span> {a.nif}</div>}
+                              {a.country && <div><span className="text-muted-foreground">País:</span> {a.country}</div>}
+                              {a.drivingExperience && <div><span className="text-muted-foreground">Experiência:</span> {a.drivingExperience}</div>}
+                              {a.expectedHourlyRate && <div><span className="text-muted-foreground">€/h esperado:</span> {a.expectedHourlyRate}</div>}
+                              {a.howDidYouKnow && <div><span className="text-muted-foreground">Como conheceu:</span> {a.howDidYouKnow}</div>}
+                              {a.employeeId && <div><span className="text-muted-foreground">Employee:</span> #{a.employeeId}</div>}
+                              {Object.entries(payload)
+                                .filter(([, v]) => v != null && v !== "" && (typeof v !== "object" || Array.isArray(v)))
+                                .map(([k, v]) => (
+                                  <div key={k}>
+                                    <span className="text-muted-foreground">{k}:</span>{" "}
+                                    {Array.isArray(v) ? v.join(", ") : typeof v === "boolean" ? (v ? "Sim" : "Não") : String(v)}
+                                  </div>
+                                ))}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function AvailabilitySection() {
   const hints = trpc.extrasAvailability.weekHints.useQuery();
   const [weekStart, setWeekStart] = useState<string>("");

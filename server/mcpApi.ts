@@ -122,6 +122,8 @@ export function createMcpApiRouter(): Router {
           "POST /reviews", "POST /sync/recent", "POST /sync/future", "POST /sync/day",
           "POST /campaigns/daily",
           "POST /availability-form/submit",
+          "POST /driver-applications",
+          "POST /extras-availability/submit-by-email",
         ],
         admin: ["DELETE /complaints/:id", "POST /admin/cleanup-duplicates", "POST /projects"],
       },
@@ -154,6 +156,30 @@ export function createMcpApiRouter(): Router {
     const result = await submitForm(token, parsed.data);
     if (!result.ok) return res.status(result.status).json({ success: false, error: result.message, code: result.code });
     return res.json({ success: true, saved: result.data.saved });
+  }));
+
+  // ── WEBSITE MULTIDRIVER (intake por email) ──────────────────────────────────
+  // Candidatura "Be a Driver": upsert por email (UNIQUE) — nunca duplica.
+  r.post("/driver-applications", requireScope("write"), h(async (req, res) => {
+    const { driverApplicationSchema, upsertDriverApplication } = await import("./webIntake");
+    const parsed = driverApplicationSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ success: false, error: "Invalid application", code: "invalid_input", details: parsed.error.flatten() });
+    }
+    const result = await upsertDriverApplication(parsed.data);
+    return res.json({ success: true, ...result });
+  }));
+
+  // Disponibilidade semanal submetida no site (email verificado por Google
+  // sign-in no site). Auto-cria um extra pendente se o email for desconhecido.
+  r.post("/extras-availability/submit-by-email", requireScope("write"), h(async (req, res) => {
+    const { availabilityByEmailSchema, submitAvailabilityByEmail } = await import("./webIntake");
+    const parsed = availabilityByEmailSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ success: false, error: "Invalid availability", code: "invalid_input", details: parsed.error.flatten() });
+    }
+    const result = await submitAvailabilityByEmail(parsed.data);
+    return res.json({ success: true, ...result });
   }));
 
   // ── PARQUES / CIDADES ───────────────────────────────────────────────────────
