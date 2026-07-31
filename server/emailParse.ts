@@ -157,3 +157,73 @@ export function parseInboundBody(rawBody: string): ParsedClient {
     isReservation,
   };
 }
+
+// ─── Notificações de críticas do Google Business Profile ─────────────────────
+
+export type ParsedGoogleReview = {
+  /** 1–5, ou 0 se o email não trouxer a classificação. */
+  rating: number;
+  /** Nome do avaliador (linha "X deixou uma crítica sobre Y" ± nome completo). */
+  reviewerName?: string;
+  /** Estabelecimento avaliado (o "Y" da linha acima). */
+  parkName?: string;
+  /** Corpo limpo: sem URLs de tracking, rodapé e boilerplate do Google. */
+  cleanText: string;
+};
+
+/**
+ * Extrai a informação útil de um email de notificação do Google Business
+ * Profile ("X deixou uma crítica sobre Y" / "crítica de N estrela(s)").
+ * Robusto a variações: tudo é best-effort, rating 0 quando não deteta.
+ */
+export function parseGoogleReviewNotification(rawBody: string): ParsedGoogleReview {
+  const text = (rawBody || "").replace(/\r/g, "");
+
+  // "recebeu uma nova crítica de 5 estrela(s)"
+  const ratingMatch = text.match(/cr[íi]tica de\s+([1-5])\s+estrela/i);
+  const rating = ratingMatch ? Number(ratingMatch[1]) : 0;
+
+  // "Cantinho deixou uma crítica sobre Airpark - Estacionamento ..."
+  const whoMatch = text.match(/^\s*(.{2,80}?)\s+deixou uma cr[íi]tica sobre\s+(.{2,120}?)\s*$/im);
+  let reviewerName = whoMatch?.[1]?.trim();
+  const parkName = whoMatch?.[2]?.trim();
+
+  // O nome COMPLETO costuma aparecer numa linha isolada mais abaixo
+  // (ex.: "Cantinho Feliz") — usa-o se começar pelo primeiro nome detetado.
+  if (reviewerName) {
+    const first = reviewerName.split(/\s+/)[0];
+    const candidates = [...text.matchAll(new RegExp(`^\\s*(${escapeRe(first)}[^\\n<>]{0,60}?)\\s*$`, "gm"))]
+      .map((m) => m[1].trim())
+      .filter((l) => !/deixou uma cr[íi]tica/i.test(l));
+    const full = candidates.find((l) => l.length > reviewerName!.length);
+    if (full) reviewerName = full;
+  }
+
+  // Limpeza: remove linhas de tracking/boilerplate — fica só o que interessa.
+  const NOISE = [
+    /<https?:\/\//i,
+    /^https?:\/\//i,
+    /responder às cr[íi]ticas mostra/i,
+    /vamos informar/i,
+    /ver todas as cr[íi]ticas/i,
+    /ler cr[íi]tica/i,
+    /responder à cr[íi]tica/i,
+    /visite o centro de ajuda/i,
+    /recebeu este email porque/i,
+    /anule a subscri[çc][ãa]o/i,
+    /^\(c\)\s*20\d\d google/i,
+    /este utilizador deixou apenas/i,
+  ];
+  const cleanText = text
+    .split("\n")
+    .filter((l) => !NOISE.some((re) => re.test(l)))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return { rating, reviewerName, parkName, cleanText };
+}
+
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}

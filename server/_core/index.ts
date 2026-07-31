@@ -13,6 +13,7 @@ import { createWhatsappWebhookRouter } from "../whatsappWebhook";
 import { createMultiparkWebhookRouter } from "../multiparkWebhook";
 import { startDailyCollectionScheduler } from "../jobs/dailyDriverCollection";
 import { startBookingSyncScheduler } from "../jobs/multiparkBookingSync";
+import { startEmailInboundScheduler } from "../jobs/emailInboundSync";
 import { seedProjectHierarchy } from "../db";
 import multer from "multer";
 import { storagePut } from "../storage";
@@ -102,7 +103,9 @@ async function startServer() {
     seedProjectHierarchy().catch(e => console.error("[Seed] Project hierarchy error:", e));
     startDailyCollectionScheduler();
     startBookingSyncScheduler();
-    // Gmail sync handled externally via Make scheduled tasks
+    // Emails (criticas@/reclamacoes@/perdidos@/recursos-humanos@) — o cron do
+    // GitHub Actions foi removido a 14/jul; passa a correr aqui, in-process.
+    startEmailInboundScheduler();
   });
 }
 

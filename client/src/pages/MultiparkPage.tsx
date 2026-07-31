@@ -758,6 +758,11 @@ function BookingsTab({ statusFilter: statusFilterProp }: { statusFilter?: string
     status: statusFilter !== "all" ? statusFilter : undefined,
     search: searchTerm || undefined,
     limit: 1000,
+  }, {
+    // Com o webhook das Conexões, as reservas entram na BD em segundos —
+    // refresca sozinho para não parecer que só chegam com o botão de sync.
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
   });
 
   // Filter by section status (from sidebar nav)

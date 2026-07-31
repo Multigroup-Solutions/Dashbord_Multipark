@@ -160,17 +160,24 @@ function ManualsTab({ isAdmin }: { isAdmin: boolean }) {
     if (!file) return;
     if (file.size > 10 * 1024 * 1024) { toast.error("Ficheiro demasiado grande (máx 10MB)"); return; }
     setUploading(true);
-    try {
-      const reader = new FileReader();
-      reader.onload = async () => {
+    // O try/catch tem de envolver o await DENTRO do onload — um erro do upload
+    // (rede, permissões, S3) deixava o spinner preso para sempre e o manual
+    // gravava-se sem ficheiro, sem qualquer mensagem.
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
         const base64 = (reader.result as string).split(",")[1];
         const result = await uploadFile.mutateAsync({ fileName: file.name, fileBase64: base64, mimeType: file.type });
         setUploadedFile(result);
         toast.success("Ficheiro carregado");
+      } catch (err: any) {
+        toast.error(`Erro no upload: ${err?.message ?? "falha desconhecida"}`);
+      } finally {
         setUploading(false);
-      };
-      reader.readAsDataURL(file);
-    } catch { toast.error("Erro no upload"); setUploading(false); }
+      }
+    };
+    reader.onerror = () => { toast.error("Não foi possível ler o ficheiro"); setUploading(false); };
+    reader.readAsDataURL(file);
   };
 
   const handleCreate = () => {

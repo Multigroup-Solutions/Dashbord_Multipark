@@ -33,7 +33,7 @@ const RATING_COLORS: Record<number, string> = {
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   pending_response: { label: "Pendente", color: "bg-yellow-100 text-yellow-800" },
-  ai_responded: { label: "IA Respondeu", color: "bg-blue-100 text-blue-800" },
+  ai_responded: { label: "Rascunho IA (por enviar)", color: "bg-blue-100 text-blue-800" },
   manually_responded: { label: "Respondido", color: "bg-green-100 text-green-800" },
   converted_complaint: { label: "Reclamação", color: "bg-red-100 text-red-800" },
   dismissed: { label: "Dispensado", color: "bg-gray-100 text-gray-800" },
@@ -127,7 +127,7 @@ function ReviewsDashboard() {
   return (
     <div className="space-y-6">
       {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <Card className="p-4">
           <div className="flex items-center gap-2 text-muted-foreground text-sm"><Star className="w-4 h-4" /> Média</div>
           <p className="text-3xl font-bold mt-1">{stats.avg}<span className="text-lg text-muted-foreground">/5</span></p>
@@ -136,12 +136,17 @@ function ReviewsDashboard() {
         <Card className="p-4">
           <div className="flex items-center gap-2 text-muted-foreground text-sm"><MessageSquare className="w-4 h-4" /> Total</div>
           <p className="text-3xl font-bold mt-1">{stats.total}</p>
-          <p className="text-xs text-muted-foreground">avaliações</p>
+          <p className="text-xs text-muted-foreground">avaliações{(stats as any).unrated ? ` · ${(stats as any).unrated} sem estrelas` : ""}</p>
         </Card>
         <Card className="p-4">
-          <div className="flex items-center gap-2 text-muted-foreground text-sm"><Clock className="w-4 h-4" /> Pendentes</div>
+          <div className="flex items-center gap-2 text-muted-foreground text-sm"><CheckCircle2 className="w-4 h-4" /> Respondidas</div>
+          <p className="text-3xl font-bold mt-1 text-green-600">{stats.responded}</p>
+          <p className="text-xs text-muted-foreground">resposta enviada</p>
+        </Card>
+        <Card className="p-4">
+          <div className="flex items-center gap-2 text-muted-foreground text-sm"><Clock className="w-4 h-4" /> Por responder</div>
           <p className="text-3xl font-bold mt-1 text-yellow-600">{stats.pending}</p>
-          <p className="text-xs text-muted-foreground">sem resposta</p>
+          <p className="text-xs text-muted-foreground">inclui rascunhos IA por enviar</p>
         </Card>
         <Card className="p-4">
           <div className="flex items-center gap-2 text-muted-foreground text-sm"><AlertTriangle className="w-4 h-4" /> Reclamações</div>

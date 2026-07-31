@@ -82,11 +82,19 @@ async function routeToModule(
   const desc = `${ctx.subject}\n\n${ctx.bodyText}`.trim().slice(0, 5000);
 
   if (alias === "criticas") {
+    // Notificação do Google Business Profile: extrai estrelas + nome real do
+    // avaliador + texto limpo (sem links de tracking/rodapé).
+    const { parseGoogleReviewNotification } = await import("../emailParse");
+    const g = parseGoogleReviewNotification(ctx.bodyText);
+    const reviewer = g.reviewerName || clientName;
+    const text = g.rating > 0 || g.reviewerName
+      ? `${ctx.subject}\n\n${g.cleanText}`.trim().slice(0, 5000)
+      : desc;
     const id = await createGoogleReview({
-      reviewerName: clientName,
+      reviewerName: reviewer,
       reviewerEmail: parsed.clientEmail,
-      rating: 0, // sem classificação (veio por email, não do Google)
-      reviewText: desc,
+      rating: g.rating,
+      reviewText: text,
       vehiclePlate: parsed.vehiclePlate,
       status: "pending_response",
       sourceEmailId: ctx.messageId,
@@ -99,7 +107,7 @@ async function routeToModule(
         const resp = await invokeLLM({
           messages: [
             { role: "system", content: "És o gestor de atendimento de um parque de estacionamento premium. Responde a críticas de clientes de forma calorosa e profissional, em português. Máximo 3 frases." },
-            { role: "user", content: `Crítica de ${clientName}: "${desc.slice(0, 800)}". Gera uma resposta.` },
+            { role: "user", content: `Crítica de ${reviewer}${g.rating ? ` (${g.rating} estrelas)` : ""}: "${text.slice(0, 800)}". Gera uma resposta.` },
           ],
         });
         const aiText = typeof resp?.choices?.[0]?.message?.content === "string" ? resp.choices[0].message.content : "";
@@ -295,4 +303,29 @@ export async function runEmailInboundSync(opts?: { sinceDays?: number }): Promis
 
 function now(): string {
   return new Date().toISOString().slice(0, 19).replace("T", " ");
+}
+
+/**
+ * Scheduler in-process para o servidor Railway: corre o sync de emails a cada
+ * 15 minutos. Substitui o cron do GitHub Actions (workflow removido a 14/jul,
+ * que deixou o email-inbound só com botões manuais). Self-skip quando o IMAP
+ * não está configurado — seguro arrancar em qualquer ambiente.
+ */
+export function startEmailInboundScheduler() {
+  const INTERVAL_MS = 15 * 60 * 1000;
+  const run = async () => {
+    try {
+      const r = await runEmailInboundSync();
+      if (r.errors.length && r.errors[0].includes("IMAP não configurado")) {
+        console.log("[EmailInbound] Skipped — IMAP não configurado");
+        return;
+      }
+      console.log(`[EmailInbound] scanned=${r.scanned} created=${r.created} skipped=${r.skipped} errors=${r.errors.length}`);
+    } catch (err: any) {
+      console.error("[EmailInbound] erro:", err?.message ?? err);
+    }
+  };
+  setTimeout(run, 30_000); // arranque suave, depois de o servidor estabilizar
+  setInterval(run, INTERVAL_MS);
+  console.log("[EmailInbound] Scheduler started — runs every 15 minutes");
 }

@@ -2140,19 +2140,28 @@ export async function updateGoogleReview(id: number, data: Partial<InsertGoogleR
 }
 
 export async function getGoogleReviewStats() {
-  const db = await getDb(); if (!db) return { total: 0, avg: 0, star1: 0, star2: 0, star3: 0, star4: 0, star5: 0, pending: 0, responded: 0, complaints: 0 };
+  const db = await getDb(); if (!db) return { total: 0, avg: 0, star1: 0, star2: 0, star3: 0, star4: 0, star5: 0, unrated: 0, pending: 0, responded: 0, complaints: 0 };
   const all = await db.select().from(googleReviews);
   const total = all.length;
-  const avg = total > 0 ? all.reduce((s, r) => s + r.rating, 0) / total : 0;
+  // Média só sobre críticas COM estrelas (rating 0 = classificação desconhecida,
+  // ex. importadas por email antes do parser — não pode puxar a média para baixo).
+  const rated = all.filter(r => r.rating >= 1);
+  const avg = rated.length > 0 ? rated.reduce((s, r) => s + r.rating, 0) / rated.length : 0;
   const star1 = all.filter(r => r.rating === 1).length;
   const star2 = all.filter(r => r.rating === 2).length;
   const star3 = all.filter(r => r.rating === 3).length;
   const star4 = all.filter(r => r.rating === 4).length;
   const star5 = all.filter(r => r.rating === 5).length;
-  const pending = all.filter(r => r.status === "pending_response").length;
-  const responded = all.filter(r => r.status === "ai_responded" || r.status === "manually_responded").length;
+  const unrated = total - rated.length;
+  // Respondida DE FACTO = resposta enviada (respondedAt) ou marcada como
+  // respondida manualmente. Rascunho da IA (ai_responded) NÃO conta — era isso
+  // que fazia o painel dizer que estava tudo respondido.
+  const isAnswered = (r: typeof all[number]) => r.respondedAt != null || r.status === "manually_responded";
+  const isClosed = (r: typeof all[number]) => r.status === "dismissed" || r.status === "converted_complaint";
+  const responded = all.filter(isAnswered).length;
+  const pending = all.filter(r => !isAnswered(r) && !isClosed(r)).length;
   const complaints = all.filter(r => r.status === "converted_complaint").length;
-  return { total, avg: Math.round(avg * 10) / 10, star1, star2, star3, star4, star5, pending, responded, complaints };
+  return { total, avg: Math.round(avg * 10) / 10, star1, star2, star3, star4, star5, unrated, pending, responded, complaints };
 }
 
 export async function searchClientHistory(name?: string, email?: string, plate?: string) {
