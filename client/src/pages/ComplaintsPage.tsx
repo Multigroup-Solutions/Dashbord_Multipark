@@ -24,7 +24,7 @@ import {
   AlertTriangle, Plus, MessageSquare, Camera, Clock, User, Car,
   ChevronRight, ChevronLeft, Send, Eye, Trash2, Upload, Shield,
   BarChart3, AlertCircle, CheckCircle2, Hourglass, XCircle, Pencil,
-  Mail, UserPlus, LinkIcon, X as XIcon, Download,
+  Mail, UserPlus, LinkIcon, X as XIcon, Download, RefreshCw,
 } from "lucide-react";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
@@ -170,6 +170,7 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
           >
             <Download className="w-4 h-4 mr-2" /> CSV
           </Button>
+          <SyncEmailsButton />
           <Button onClick={onNew}><Plus className="w-4 h-4 mr-2" /> Nova Reclamação</Button>
         </div>
       </div>
@@ -467,6 +468,11 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
             <Badge className={STATUS_CONFIG[c.complaintStatus]?.color}>{STATUS_CONFIG[c.complaintStatus]?.label}</Badge>
             <Badge className={PRIORITY_CONFIG[c.complaintPriority]?.color}>{PRIORITY_CONFIG[c.complaintPriority]?.label}</Badge>
             {isOverdue && <Badge className="bg-red-100 text-red-800">SLA Ultrapassado</Badge>}
+            {(() => {
+              // Nº de contactos do cliente = mensagens vindas de email (📧).
+              const n = data.messages.filter((m: any) => typeof m.message === "string" && m.message.startsWith("📧")).length;
+              return n > 1 ? <Badge className="bg-amber-100 text-amber-800">Cliente já contactou {n}×</Badge> : null;
+            })()}
           </div>
           <p className="text-sm text-muted-foreground">
             Ticket #{c.id} — Criado em {fmtPTDate(c.createdAt)}
@@ -765,6 +771,16 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                     <div><Label>Matrícula</Label><Input value={editForm.vehiclePlate} onChange={e => setEditForm((f: any) => ({ ...f, vehiclePlate: e.target.value }))} /></div>
                     <div><Label>Ref. Reserva</Label><Input value={editForm.reservationRef} onChange={e => setEditForm((f: any) => ({ ...f, reservationRef: e.target.value }))} /></div>
                   </div>
+                  <EditBookingPicker
+                    onPick={(b: any) => setEditForm((f: any) => ({
+                      ...f,
+                      reservationRef: b.externalId || b.bookingNumber || f.reservationRef,
+                      vehiclePlate: b.licensePlate || f.vehiclePlate,
+                      clientName: f.clientName || [b.clientFirstName, b.clientLastName].filter(Boolean).join(" "),
+                      clientEmail: f.clientEmail || b.clientEmail || "",
+                      clientPhone: f.clientPhone || b.clientPhone || "",
+                    }))}
+                  />
                   <div><Label>Notas / dados adicionais do cliente</Label><Textarea value={editForm.clientNotes} onChange={e => setEditForm((f: any) => ({ ...f, clientNotes: e.target.value }))} rows={3} placeholder="Ex: 2º contacto, NIF, morada, indicações do cliente…" /></div>
                 </div>
               )}
@@ -1433,5 +1449,65 @@ function SendClientEmailButton({
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+// ─── SYNC EMAILS (manual) ─────────────────────────────────────────────────────
+// Corre o leitor IMAP on-demand — o cron horário continua, isto é o "já".
+function SyncEmailsButton() {
+  const { user } = useAuth();
+  const utils = trpc.useUtils();
+  const syncMut = trpc.admin.runEmailInbound.useMutation({
+    onSuccess: (r: any) => {
+      utils.complaints.invalidate();
+      toast.success(`Emails sincronizados: ${r.created} novos, ${r.skipped} ignorados${r.errors?.length ? `, ${r.errors.length} erros` : ""}`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const role = (user as any)?.role ?? "user";
+  if (!["backoffice", "team_leader", "supervisor", "admin", "super_admin"].includes(role)) return null;
+  return (
+    <Button variant="outline" onClick={() => syncMut.mutate()} disabled={syncMut.isPending}>
+      <RefreshCw className={`w-4 h-4 mr-2 ${syncMut.isPending ? "animate-spin" : ""}`} />
+      {syncMut.isPending ? "A sincronizar…" : "Sincronizar emails"}
+    </Button>
+  );
+}
+
+// ─── PICKER DE RESERVA (diálogo Editar) ──────────────────────────────────────
+// Procura na NOSSA BD por matrícula / email / telefone / nome / nº de reserva
+// e preenche a ref (externalId) — liga logo o histórico e os condutores.
+function EditBookingPicker({ onPick }: { onPick: (b: any) => void }) {
+  const [q, setQ] = useState("");
+  const { data: results = [], isFetching } = trpc.complaints.searchBooking.useQuery(
+    { search: q },
+    { enabled: q.trim().length >= 2 },
+  );
+  return (
+    <div className="space-y-2 rounded-md border p-3 bg-muted/30">
+      <Label className="text-xs">Associar reserva (procura por matrícula, email, telefone, nome ou nº)</Label>
+      <Input value={q} onChange={e => setQ(e.target.value)} placeholder="Ex: BF21SA, joao@mail.com, 912…, Celia" />
+      {isFetching && <p className="text-xs text-muted-foreground animate-pulse">A procurar…</p>}
+      {q.trim().length >= 2 && !isFetching && results.length === 0 && (
+        <p className="text-xs text-muted-foreground">Nenhuma reserva encontrada na nossa base de dados.</p>
+      )}
+      {results.length > 0 && (
+        <div className="max-h-40 overflow-y-auto space-y-1">
+          {results.map((b: any) => (
+            <button
+              key={b.externalId}
+              type="button"
+              className="w-full text-left text-xs rounded border bg-background px-2 py-1.5 hover:bg-accent"
+              onClick={() => { onPick(b); setQ(""); }}
+            >
+              <span className="font-medium">{[b.clientFirstName, b.clientLastName].filter(Boolean).join(" ") || "(sem nome)"}</span>
+              {" · "}{b.licensePlate || "—"}{" · "}{b.parkName || "—"}
+              {" · "}{b.checkIn ? String(b.checkIn).slice(0, 10) : "—"}
+              {" · "}<span className="uppercase text-muted-foreground">{b.status}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

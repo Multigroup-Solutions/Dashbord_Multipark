@@ -5575,6 +5575,7 @@ export async function searchBookingByRef(search: string) {
       like(multiparkBookings.licensePlate, s),
       like(multiparkBookings.clientFirstName, s),
       like(multiparkBookings.clientLastName, s),
+      like(multiparkBookings.clientPhone, s),
     ))
     .orderBy(desc(multiparkBookings.bookingCreatedAt))
     .limit(10);
@@ -7641,6 +7642,65 @@ export async function assignTaskToEmployee(taskId: number, employeeId: number) {
 
 // Procura uma reclamação ABERTA do mesmo cliente (email ou matrícula), para
 // agrupar emails repetidos/respostas em vez de criar reclamações novas.
+/**
+ * Agrupamento AGRESSIVO de reclamações por cliente: email OU matrícula OU nome
+ * (nome exato, ≥6 chars, para evitar falsos positivos). Ao contrário do
+ * findOpenComplaintByClient, também devolve reclamações resolvidas/fechadas —
+ * o caller reabre-as. Preferência: aberta > mais recente. Objetivo: 10 emails
+ * do mesmo cliente = 1 reclamação com 10 mensagens, nunca 10 reclamações.
+ */
+export async function findComplaintByClientSignals(
+  clientEmail?: string | null,
+  vehiclePlate?: string | null,
+  clientName?: string | null,
+) {
+  const db = await getDb();
+  if (!db) return null;
+  const conds: any[] = [];
+  if (clientEmail) conds.push(eq(complaints.clientEmail, clientEmail));
+  if (vehiclePlate) conds.push(eq(complaints.vehiclePlate, vehiclePlate));
+  const name = clientName?.trim();
+  if (name && name.length >= 6 && name.toLowerCase() !== "desconhecido") {
+    conds.push(eq(complaints.clientName, name));
+  }
+  if (!conds.length) return null;
+  const rows = await db.select().from(complaints)
+    .where(or(...conds))
+    .orderBy(desc(complaints.createdAt))
+    .limit(5);
+  if (!rows.length) return null;
+  const open = rows.find(r => r.complaintStatus !== "resolved" && r.complaintStatus !== "closed");
+  return open ?? rows[0];
+}
+
+/**
+ * Reserva mais recente do cliente em multipark_bookings, por matrícula OU
+ * email OU nome completo. Para auto-anexar a reserva a uma reclamação criada
+ * por email (reservationRef = externalId → liga logo o histórico/condutores).
+ */
+export async function findRecentBookingByClientSignals(
+  clientEmail?: string | null,
+  vehiclePlate?: string | null,
+  clientName?: string | null,
+) {
+  const db = await getDb();
+  if (!db) return null;
+  const conds: any[] = [];
+  const plate = vehiclePlate?.replace(/[\s-]/g, "").toUpperCase();
+  if (plate) conds.push(eq(multiparkBookings.licensePlate, plate));
+  if (clientEmail) conds.push(eq(multiparkBookings.clientEmail, clientEmail));
+  const name = clientName?.trim();
+  if (name && name.length >= 6) {
+    conds.push(sql`CONCAT_WS(' ', ${multiparkBookings.clientFirstName}, ${multiparkBookings.clientLastName}) = ${name}`);
+  }
+  if (!conds.length) return null;
+  const rows = await db.select().from(multiparkBookings)
+    .where(or(...conds))
+    .orderBy(desc(multiparkBookings.checkIn))
+    .limit(1);
+  return rows[0] || null;
+}
+
 export async function findOpenComplaintByClient(clientEmail?: string | null, vehiclePlate?: string | null) {
   const db = await getDb();
   if (!db) return null;

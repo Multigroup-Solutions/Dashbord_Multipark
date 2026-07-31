@@ -673,8 +673,9 @@ export const appRouter = router({
     }),
 
     // Sincroniza os emails inbound (reclamações/perdidos/críticas/RH) on-demand.
+    // backoffice+ (a equipa de suporte usa o botão nas Reclamações/Recrutamento).
     runEmailInbound: protectedProcedure.mutation(async ({ ctx }) => {
-      requireRole(ctx.user.role, "admin");
+      requireRole(ctx.user.role, "backoffice");
       const { runEmailInboundSync } = await import("./jobs/emailInboundSync");
       const result = await runEmailInboundSync();
       await logActivity({

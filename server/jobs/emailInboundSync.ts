@@ -30,7 +30,8 @@ import {
   findEmployeeByEmailOrName,
   getSystemUserId,
   assignTaskToEmployee,
-  findOpenComplaintByClient,
+  findComplaintByClientSignals,
+  findRecentBookingByClientSignals,
   findOpenLostFoundByClient,
   findComplaintByThread,
   findOpenComplaintBySubject,
@@ -139,7 +140,7 @@ async function routeToModule(
     //  3) assunto normalizado (resposta reencaminhada que perdeu o thread)
     const existing =
       (await findComplaintByThread({ gmThreadId: ctx.gmThreadId, refs: ctx.refs })) ||
-      (await findOpenComplaintByClient(parsed.clientEmail || ctx.fromEmail, parsed.vehiclePlate)) ||
+      (await findComplaintByClientSignals(parsed.clientEmail || ctx.fromEmail, parsed.vehiclePlate, clientName)) ||
       (await findOpenComplaintBySubject(ctx.subject));
     if (existing) {
       await addComplaintMessage({
@@ -154,6 +155,12 @@ async function routeToModule(
       }
       return { targetModule: "complaint", targetId: existing.id };
     }
+    // Auto-anexa a reserva: com matrícula/email/nome vai à nossa BD buscar a
+    // reserva mais recente do cliente — reservationRef=externalId liga logo o
+    // histórico da reserva e os condutores no detalhe.
+    const booking = await findRecentBookingByClientSignals(
+      parsed.clientEmail || ctx.fromEmail, parsed.vehiclePlate, clientName,
+    );
     const id = await createComplaint({
       title: (ctx.subject || "Reclamação por email").slice(0, 255),
       description: desc,
@@ -161,10 +168,12 @@ async function routeToModule(
       complaintStatus: "new",
       complaintPriority: "medium",
       clientName,
-      clientEmail: parsed.clientEmail,
-      clientPhone: parsed.clientPhone,
-      vehiclePlate: parsed.vehiclePlate,
-      reservationRef: parsed.bookingRef,
+      clientEmail: parsed.clientEmail ?? (booking?.clientEmail || undefined),
+      clientPhone: parsed.clientPhone ?? (booking?.clientPhone || undefined),
+      vehiclePlate: parsed.vehiclePlate ?? (booking?.licensePlate || undefined),
+      reservationRef: parsed.bookingRef ?? (booking?.externalId || undefined),
+      reservationStart: booking?.checkIn ?? undefined,
+      reservationEnd: booking?.checkOut ?? undefined,
     } as any);
     return { targetModule: "complaint", targetId: id };
   }
