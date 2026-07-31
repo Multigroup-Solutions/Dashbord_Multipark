@@ -86,6 +86,21 @@ async function routeToModule(
     // avaliador + texto limpo (sem links de tracking/rodapé).
     const { parseGoogleReviewNotification } = await import("../emailParse");
     const g = parseGoogleReviewNotification(ctx.bodyText);
+    // O GBP manda também notificações ADMINISTRATIVAS (recursos recusados,
+    // mudanças de proprietário do perfil, verificações…) — não são críticas e
+    // poluíam a lista com rating 0. Sem padrão de crítica + com padrão admin
+    // → fica só em inbound_emails, sem criar avaliação.
+    const haystack = `${ctx.subject}\n${ctx.bodyText}`;
+    const isAdminNotice = g.rating === 0 && !g.reviewerName && (
+      /recurso n[ãa]o foi aprovado/i.test(haystack) ||
+      /(propriet[áa]ri[oa]s?|owner) do Perfil/i.test(haystack) ||
+      /j[áa] pode gerir o Perfil/i.test(haystack) ||
+      /perfil da empresa/i.test(haystack) ||
+      /valide|verifica[çc][ãa]o do perfil/i.test(haystack)
+    );
+    if (isAdminNotice) {
+      return { targetModule: "ignored" };
+    }
     const reviewer = g.reviewerName || clientName;
     const text = g.rating > 0 || g.reviewerName
       ? `${ctx.subject}\n\n${g.cleanText}`.trim().slice(0, 5000)
