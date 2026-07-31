@@ -3462,6 +3462,23 @@ export const appRouter = router({
         requireRole(ctx.user.role, "backoffice");
         return getZelloUsers();
       }),
+      // Anexa (ou desanexa) um utilizador Zello a um colaborador — PERSISTENTE,
+      // como o mapping de agentes Multipark. Único: limpa o username de quem o
+      // tivesse. O GPS passa a mostrar o colaborador em vez de "extra600".
+      mapUserToEmployee: protectedProcedure
+        .input(z.object({ zelloUsername: z.string().min(1), employeeId: z.number().nullable() }))
+        .mutation(async ({ ctx, input }) => {
+          requireRole(ctx.user.role, "backoffice");
+          const { getDb } = await import("./db");
+          const { sql } = await import("drizzle-orm");
+          const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
+          await db.execute(sql`UPDATE employees SET zelloUsername = NULL WHERE zelloUsername = ${input.zelloUsername}`);
+          if (input.employeeId != null) {
+            await db.execute(sql`UPDATE employees SET zelloUsername = ${input.zelloUsername} WHERE id = ${input.employeeId}`);
+          }
+          await logActivity({ userId: ctx.user.id, action: "map_zello", entity: "employees", entityId: input.employeeId ?? undefined, details: `zello=${input.zelloUsername}` });
+          return { success: true };
+        }),
       channels: protectedProcedure.query(async ({ ctx }) => {
         requireRole(ctx.user.role, "backoffice");
         return getZelloChannels();

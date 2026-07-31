@@ -314,6 +314,9 @@ export const employees = mysqlTable("employees", {
 	mealAllowancePerDay: decimal({ precision: 6, scale: 2 }),
 	multiparkAgentName: varchar({ length: 256 }),
 	multiparkAgentUserId: varchar({ length: 128 }),
+	// Utilizador Zello ANEXADO ao colaborador (persistente, como o agente
+	// Multipark) — o GPS mostra sempre o colaborador, nunca o nome Zello.
+	zelloUsername: varchar({ length: 128 }),
 	docsWarningAt: timestamp({ mode: 'string' }),
 	loginBlocked: tinyint().default(0).notNull(),
 	loginBlockedReason: varchar({ length: 255 }),

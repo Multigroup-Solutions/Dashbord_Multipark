@@ -387,12 +387,17 @@ function ZelloGPSTab() {
   const zelloToEmployee = useMemo(() => {
     const empName = new Map((empsForGps as any[]).map((e: any) => [e.employee.id, e.employee.fullName]));
     const m = new Map<string, string>();
+    // 2º prioridade: check-in ativo de PDA (dimensão temporal)
     for (const c of activeCheckins as any[]) {
       const name = c.employeeId ? empName.get(c.employeeId) : null;
       if (!name) continue;
       if (c.zelloUsername) m.set(String(c.zelloUsername).toLowerCase(), name);
       const pda = (pdaListForGps as any[]).find((p: any) => p.id === c.pdaId);
       if (pda?.zelloUsername) m.set(String(pda.zelloUsername).toLowerCase(), name);
+    }
+    // 1ª prioridade (sobrepõe): anexo PERSISTENTE zello→colaborador
+    for (const e of empsForGps as any[]) {
+      if (e.employee.zelloUsername) m.set(String(e.employee.zelloUsername).toLowerCase(), e.employee.fullName);
     }
     return m;
   }, [activeCheckins, pdaListForGps, empsForGps]);
@@ -485,7 +490,19 @@ function ZelloGPSTab() {
                     const lastUpdate = loc.lastReport ? fmtPTDateTime(loc.lastReport * 1000) : "-";
                     return (
                       <tr key={loc.username} className={`border-b ${isSpeeding ? "bg-red-50 dark:bg-red-950/20" : ""}`}>
-                        <td className="p-2 font-medium">{loc.displayName || loc.username}</td>
+                        <td className="p-2 font-medium">
+                          {zelloToEmployee.has(String(loc.username ?? "").toLowerCase()) ? (
+                            <div>
+                              {loc.displayName}
+                              <span className="block text-[10px] text-muted-foreground font-normal">zello: {loc.username}</span>
+                            </div>
+                          ) : (
+                            <ZelloLinkCell
+                              zelloUsername={String(loc.username ?? "")}
+                              employees={empsForGps as any[]}
+                            />
+                          )}
+                        </td>
                         <td className="p-2">
                           <span className={`font-bold ${isSpeeding ? "text-red-600" : "text-green-600"}`}>
                             {loc.speed.toFixed(1)} km/h
@@ -1931,4 +1948,30 @@ async function resizeImageFile(file: File, maxPx: number, quality: number): Prom
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+// ─── ANEXAR ZELLO → COLABORADOR (inline na tabela GPS) ───────────────────────
+// Aparece quando o utilizador Zello ainda não está anexado a ninguém: escolhe
+// o colaborador e fica PERSISTENTE (employees.zelloUsername).
+function ZelloLinkCell({ zelloUsername, employees }: { zelloUsername: string; employees: any[] }) {
+  const utils = trpc.useUtils();
+  const mapMut = trpc.operational.zello.mapUserToEmployee.useMutation({
+    onSuccess: () => { utils.rh.list.invalidate(); toast.success(`${zelloUsername} anexado`); },
+    onError: (e) => toast.error(e.message),
+  });
+  return (
+    <div className="space-y-1">
+      <span className="text-amber-700 dark:text-amber-400">{zelloUsername}</span>
+      <Select onValueChange={(v) => mapMut.mutate({ zelloUsername, employeeId: Number(v) })}>
+        <SelectTrigger className="h-7 w-44 text-xs">
+          <SelectValue placeholder="Anexar colaborador…" />
+        </SelectTrigger>
+        <SelectContent>
+          {employees.map((e: any) => (
+            <SelectItem key={e.employee.id} value={String(e.employee.id)}>{e.employee.fullName}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
 }
