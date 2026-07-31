@@ -15,6 +15,7 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { employees, extrasAvailability } from "../drizzle/schema";
+import { normalizePhoneE164 } from "../shared/phone";
 
 // ─── Helpers de datas ──────────────────────────────────────────────────────────
 
@@ -98,6 +99,31 @@ export async function listActiveExtras(projectId?: number | null): Promise<Activ
     .where(and(...conds))
     .orderBy(asc(employees.fullName));
   return rows;
+}
+
+/**
+ * Colaboradores ATIVOS por id, no mesmo shape de `listActiveExtras`.
+ *
+ * Necessário porque a tabela do backoffice pode mostrar (e o backoffice pode
+ * selecionar) quem respondeu ao formulário sem ter função "extra". Sem isto o
+ * broadcast descartava-os em silêncio — "o que envio" deixava de ser "o que
+ * vejo". Filtra por `isActive` de propósito: nunca contactar fichas inativas.
+ */
+export async function listActiveEmployeesByIds(ids: number[]): Promise<ActiveExtra[]> {
+  if (ids.length === 0) return [];
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      id: employees.id,
+      fullName: employees.fullName,
+      email: employees.email,
+      phone: employees.phone,
+      projectId: employees.projectId,
+    })
+    .from(employees)
+    .where(and(eq(employees.isActive, 1), inArray(employees.id, ids)))
+    .orderBy(asc(employees.fullName));
 }
 
 // ─── Disponibilidade de um extra (a própria página dele) ───────────────────────
@@ -201,7 +227,15 @@ export async function setMyAvailability(
 export interface OverviewExtra {
   employeeId: number;
   fullName: string;
+  email: string | null;
   phone: string | null;
+  /**
+   * Telefone normalizado E.164, calculado no SERVIDOR — é esta a fonte de
+   * verdade do "tem número válido?" tanto para a UI como para o envio. Ter as
+   * duas pontas a calcular o mesmo já deu divergências (a tabela dizia
+   * inválido, o broadcast dizia válido).
+   */
+  phoneE164: string | null;
   responded: boolean;
   availableDays: number;
   days: { day: string; morning: boolean; night: boolean; fromHour: number | null; toHour: number | null; note: string | null }[];
@@ -213,15 +247,54 @@ export interface WeekOverview {
   dayHeaders: DayInfo[];
   totalExtras: number;
   responded: number;
+  /** Quantos extras ATIVOS têm número contactável por WhatsApp. */
+  withValidPhone: number;
   perDay: { day: string; morning: number; night: number }[];
+  /**
+   * TODOS os extras ativos — não só os que responderam. A página precisa da
+   * lista completa para contactar quem ainda não respondeu (era exactamente
+   * esse o caso de uso que ficou por servir quando a tabela só mostrava quem
+   * já tinha disponibilidade marcada).
+   */
   extras: OverviewExtra[];
 }
 
 export async function getWeekOverview(weekStart: string, projectId?: number | null): Promise<WeekOverview> {
   const headers = weekDays(weekStart);
   const weekEnd = headers.length ? headers[headers.length - 1].day : weekStart;
-  const extras = await listActiveExtras(projectId);
   const db = await getDb();
+
+  const extras = [...(await listActiveExtras(projectId))];
+  const extraIds = new Set(extras.map(e => e.id));
+
+  // Quem SUBMETEU disponibilidade tem de aparecer, mesmo que a ficha não tenha
+  // função "extra" (ex.: um `driver` que preencheu o formulário do site). Sem
+  // isto a disponibilidade entrava na BD e ficava invisível no backoffice.
+  if (db) {
+    const responders = await db
+      .selectDistinct({ employeeId: extrasAvailability.employeeId })
+      .from(extrasAvailability)
+      .where(eq(extrasAvailability.weekStart, weekStart));
+    const missing = responders.map(r => r.employeeId).filter(id => !extraIds.has(id));
+    if (missing.length > 0) {
+      const rows = await db
+        .select({
+          id: employees.id,
+          fullName: employees.fullName,
+          email: employees.email,
+          phone: employees.phone,
+          projectId: employees.projectId,
+        })
+        .from(employees)
+        .where(and(eq(employees.isActive, 1), inArray(employees.id, missing)))
+        .orderBy(asc(employees.fullName));
+      for (const row of rows) {
+        if (projectId != null && row.projectId !== projectId) continue;
+        extras.push(row);
+        extraIds.add(row.id);
+      }
+    }
+  }
 
   const ids = extras.map(e => e.id);
   const rows = db && ids.length
@@ -254,7 +327,16 @@ export async function getWeekOverview(weekStart: string, projectId?: number | nu
       if (night) perDay[perDayIdx.get(h.day)!].night++;
       return { day: h.day, morning, night, fromHour: r?.fromHour ?? null, toHour: r?.toHour ?? null, note: r?.note ?? null };
     });
-    return { employeeId: e.id, fullName: e.fullName, phone: e.phone, responded: empRows.length > 0, availableDays, days };
+    return {
+      employeeId: e.id,
+      fullName: e.fullName,
+      email: e.email,
+      phone: e.phone,
+      phoneE164: e.phone ? normalizePhoneE164(e.phone) : null,
+      responded: empRows.length > 0,
+      availableDays,
+      days,
+    };
   });
 
   return {
@@ -263,6 +345,7 @@ export async function getWeekOverview(weekStart: string, projectId?: number | nu
     dayHeaders: headers,
     totalExtras: extras.length,
     responded: overviewExtras.filter(e => e.responded).length,
+    withValidPhone: overviewExtras.filter(e => e.phoneE164 !== null).length,
     perDay,
     extras: overviewExtras,
   };

@@ -1,5 +1,6 @@
-import { and, desc, eq, gte, lte, like, or, sql, aliasedTable, isNotNull, isNull, inArray, notInArray, getTableColumns } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lte, like, or, sql, aliasedTable, isNotNull, isNull, inArray, notInArray, getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
+import { normalizeEmail } from "../shared/email";
 import {
   users,
   expenses,
@@ -166,8 +167,10 @@ export async function upsertUser(user: InsertUser): Promise<void> {
   for (const field of textFields) {
     const value = user[field];
     if (value !== undefined) {
-      values[field] = value ?? null;
-      updateSet[field] = value ?? null;
+      // Email normalizado à entrada: é a chave de identidade do sistema.
+      const stored = field === "email" && typeof value === "string" ? normalizeEmail(value) || null : value ?? null;
+      values[field] = stored;
+      updateSet[field] = stored;
     }
   }
 
@@ -210,21 +213,43 @@ export async function updateUserRole(userId: number, role: string) {
   await db.update(users).set({ role: role as any }).where(eq(users.id, userId));
 }
 
+/**
+ * Procura por EMAIL — sempre case/space-insensitive dos DOIS lados: a
+ * identidade do sistema é o email e a collation da coluna não é garantia.
+ */
 export async function getUserByEmail(email: string) {
   const db = await getDb();
   if (!db) return undefined;
-  const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  const needle = normalizeEmail(email);
+  if (!needle) return undefined;
+  const result = await db
+    .select()
+    .from(users)
+    .where(sql`LOWER(TRIM(${users.email})) = ${needle}`)
+    .orderBy(desc(users.isActive), asc(users.id))
+    .limit(1);
   return result[0];
 }
 
+/**
+ * Conta criada à mão pelo backoffice. Fica com um `openId` placeholder
+ * (`manual_...`) até a pessoa entrar pela primeira vez com a Google — nessa
+ * altura o callback OAuth ADOTA esta linha pelo email (ver server/identity.ts),
+ * preservando role/departamento. Por isso o email é gravado normalizado.
+ */
 export async function createManualUser(data: { name: string; email: string; role: string; department?: string }) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
+  const email = normalizeEmail(data.email);
+  const existing = await getUserByEmail(email);
+  if (existing) {
+    throw new Error(`Já existe um utilizador com o email ${email}`);
+  }
   const openId = `manual_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   await db.insert(users).values({
     openId,
     name: data.name,
-    email: data.email,
+    email,
     role: data.role as any,
     department: data.department ?? null,
     loginMethod: "manual",
@@ -239,7 +264,8 @@ export async function updateUser(userId: number, data: { name?: string; email?: 
   if (!db) return;
   const updates: Record<string, any> = {};
   if (data.name !== undefined) updates.name = data.name;
-  if (data.email !== undefined) updates.email = data.email;
+  // Email é a chave de identidade → gravado sempre na forma canónica.
+  if (data.email !== undefined) updates.email = normalizeEmail(data.email);
   if (data.role !== undefined) updates.role = data.role;
   if (data.department !== undefined) updates.department = data.department;
   if (data.isActive !== undefined) updates.isActive = data.isActive ? 1 : 0;
@@ -6017,13 +6043,48 @@ export async function getInvitesByEmail(email: string) {
   return db.select().from(inviteTokens).where(eq(inviteTokens.email, email)).orderBy(desc(inviteTokens.createdAt));
 }
 
+/**
+ * Liga o convite à conta OAuth de quem o abriu.
+ *
+ * Dois cenários:
+ *   a) A conta manual ainda tem o `openId` placeholder → assume o openId do
+ *      Google (caminho normal).
+ *   b) O login Google JÁ tem linha própria em `users` (o convite é aberto
+ *      depois de entrar, e o callback cria/adota a linha) → não podemos
+ *      duplicar o `openId` (índice UNIQUE). Nesse caso transferimos o
+ *      role/departamento da conta manual para a conta OAuth e desativamos a
+ *      manual (nunca apagada: os `activity_logs` referenciam-na por id).
+ */
 export async function linkInviteToOAuthUser(manualUserId: number, oauthOpenId: string, oauthName?: string | null, oauthEmail?: string | null) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
+
+  const [manual] = await db.select().from(users).where(eq(users.id, manualUserId)).limit(1);
+  if (!manual) throw new Error("Conta do convite não encontrada");
+
+  const [oauthRow] = await db.select().from(users).where(eq(users.openId, oauthOpenId)).limit(1);
+
+  if (oauthRow && oauthRow.id !== manualUserId) {
+    await db
+      .update(users)
+      .set({
+        role: manual.role,
+        department: manual.department ?? oauthRow.department,
+        isActive: manual.isActive,
+        ...(oauthEmail ? { email: normalizeEmail(oauthEmail) } : {}),
+      })
+      .where(eq(users.id, oauthRow.id));
+    await db
+      .update(users)
+      .set({ isActive: 0, loginMethod: `merged_into_${oauthRow.id}`.slice(0, 64) })
+      .where(eq(users.id, manualUserId));
+    return;
+  }
+
   // Update the manual user's openId to the OAuth user's openId so they can log in
   const updates: Record<string, any> = { openId: oauthOpenId, loginMethod: "oauth" };
   if (oauthName) updates.name = oauthName;
-  if (oauthEmail) updates.email = oauthEmail;
+  if (oauthEmail) updates.email = normalizeEmail(oauthEmail);
   await db.update(users).set(updates).where(eq(users.id, manualUserId));
 }
 

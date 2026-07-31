@@ -14,7 +14,7 @@ import { eq, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { whatsappBroadcasts, whatsappConversations, whatsappMessages } from "../drizzle/schema";
 import { normalizePhoneE164 } from "../shared/phone";
-import { listActiveExtras, type ActiveExtra } from "./extrasAvailability";
+import { listActiveEmployeesByIds, listActiveExtras, type ActiveExtra } from "./extrasAvailability";
 import { sendTemplateMessage } from "./whatsapp";
 import { runConcurrent } from "./_core/concurrency";
 import { issueAvailabilityFormToken } from "./availabilityFormToken";
@@ -281,7 +281,16 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
 
   // ── MODO NORMAL ────────────────────────────────────────────────────────────
   const extras = await listActiveExtras();
-  const resolved = resolveRecipients(extras, opts.employeeIds ?? null);
+  // A tabela do backoffice também mostra quem respondeu ao formulário sem ter
+  // função "extra"; se o alvo explícito incluir algum, vai buscá-lo à ficha
+  // (só ATIVOS) para não desaparecer do envio sem aviso.
+  let pool = extras;
+  if (opts.employeeIds && opts.employeeIds.length) {
+    const known = new Set(extras.map((e) => e.id));
+    const missing = opts.employeeIds.filter((id) => !known.has(id));
+    if (missing.length > 0) pool = [...extras, ...(await listActiveEmployeesByIds(missing))];
+  }
+  const resolved = resolveRecipients(pool, opts.employeeIds ?? null);
 
   const broadcastId = await insertBroadcast(db, {
     templateName,

@@ -1,4 +1,4 @@
-import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
+import { ACCESS_DENIED_MSG, COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { ForbiddenError } from "@shared/_core/errors";
 import { parse as parseCookieHeader } from "cookie";
 import type { Request } from "express";
@@ -168,7 +168,14 @@ class SDKServer {
     let user = await db.getUserByOpenId(session.openId);
 
     if (!user) {
-      throw ForbiddenError("User not found");
+      throw ForbiddenError(ACCESS_DENIED_MSG);
+    }
+
+    // Conta desativada perde o acesso IMEDIATAMENTE, mesmo com cookie válido —
+    // a sessão dura 30 dias e não pode sobreviver a uma desativação. Mesma
+    // mensagem do login recusado (ver ACCESS_DENIED_MSG).
+    if (user.isActive !== 1) {
+      throw ForbiddenError(ACCESS_DENIED_MSG);
     }
 
     await db.upsertUser({

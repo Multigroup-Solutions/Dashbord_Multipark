@@ -4,9 +4,10 @@
  * Dois fluxos, ambos keyed por EMAIL (fonte de verdade da identidade):
  *   1. Candidaturas "Be a Driver"  → upsert em `driver_applications`
  *      (UNIQUE(email) — re-submissão actualiza, nunca duplica).
- *   2. Disponibilidade semanal     → resolve o employee pelo email; se não
- *      existir, auto-cria um extra pendente. Escreve via setMyAvailability
- *      (mesma tabela/lógica da página Disponibilidade interna).
+ *   2. Disponibilidade semanal     → resolve a pessoa pelo email através de
+ *      `server/identity.ts` (procura na ficha de colaborador E na conta de
+ *      login); só cria um extra pendente quando o email é MESMO desconhecido.
+ *      Escreve via setMyAvailability (mesma tabela/lógica da página interna).
  *
  * O website é NÃO-confiável mesmo com API key → validação zod à entrada e
  * o email de disponibilidade vem verificado pelo Google sign-in do site,
@@ -15,14 +16,15 @@
 import { z } from "zod";
 import { asc, desc, eq, sql } from "drizzle-orm";
 import { getDb, logActivity } from "./db";
-import { driverApplications, employees } from "../drizzle/schema";
+import { driverApplications } from "../drizzle/schema";
 import { setMyAvailability, weekDays, type SetDayInput } from "./extrasAvailability";
+import { findOrCreateExtraByEmail } from "./identity";
+import { normalizeEmail } from "../shared/email";
+import { normalizePhoneForStorage } from "../shared/phone";
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
-
-export function normalizeEmail(email: string): string {
-  return email.trim().toLowerCase();
-}
+// Re-exportado por compatibilidade: a implementação canónica vive em
+// `shared/email.ts` (usada também pelo login e pelo matching de contas).
+export { normalizeEmail };
 
 // ─── 1. Candidaturas "Be a Driver" ──────────────────────────────────────────
 
@@ -57,7 +59,9 @@ export async function upsertDriverApplication(input: DriverApplicationInput): Pr
   const fullName = `${input.firstName} ${input.lastName ?? ""}`.trim().slice(0, 256);
   const fields = {
     fullName,
-    phone: input.phone?.slice(0, 32) ?? null,
+    // Normalizado à ENTRADA: o formulário é texto livre e este telefone é
+    // copiado para a ficha do extra (e daí para o envio WhatsApp).
+    phone: normalizePhoneForStorage(input.phone ?? null),
     city: input.city?.slice(0, 128) ?? null,
     country: input.country?.slice(0, 64) ?? null,
     nif: input.nif?.slice(0, 20) ?? null,
@@ -67,10 +71,13 @@ export async function upsertDriverApplication(input: DriverApplicationInput): Pr
     payload: input.payload ?? null,
   };
 
+  // Case-insensitive: linhas antigas podem ter ficado com maiúsculas antes de
+  // a normalização existir — sem isto, "Joao@x.pt" criaria uma 2ª candidatura.
   const existing = await db
     .select({ id: driverApplications.id, submissionCount: driverApplications.submissionCount })
     .from(driverApplications)
-    .where(eq(driverApplications.email, email))
+    .where(sql`LOWER(TRIM(${driverApplications.email})) = ${email}`)
+    .orderBy(asc(driverApplications.id))
     .limit(1);
 
   const now = new Date().toISOString().slice(0, 19).replace("T", " ");
@@ -145,7 +152,11 @@ export async function approveApplication(id: number, reviewedById: number): Prom
   if (rows.length === 0) throw new Error("Candidatura não encontrada");
   const app = rows[0];
 
-  const { id: employeeId, created } = await findOrCreateExtraByEmail(db, normalizeEmail(app.email));
+  const { id: employeeId, created } = await findOrCreateExtraByEmail(db, app.email, {
+    fullName: app.fullName,
+    phone: app.phone,
+    nif: app.nif,
+  });
   const now = new Date().toISOString().slice(0, 19).replace("T", " ");
   await db
     .update(driverApplications)
@@ -256,59 +267,8 @@ export interface AvailabilityByEmailResult {
   saved: number;
   employeeId: number;
   employeeCreated: boolean;
-}
-
-/**
- * Resolve (ou auto-cria) o employee pelo email. Preferência: extra ativo >
- * ativo > qualquer. Auto-criação usa o nome da candidatura se existir.
- */
-async function findOrCreateExtraByEmail(
-  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
-  email: string,
-): Promise<{ id: number; created: boolean }> {
-  const matches = await db
-    .select({ id: employees.id, position: employees.position, isActive: employees.isActive })
-    .from(employees)
-    .where(sql`LOWER(TRIM(${employees.email})) = ${email}`)
-    .orderBy(
-      desc(sql`(${employees.position} = 'extra')`),
-      desc(employees.isActive),
-      asc(employees.id),
-    )
-    .limit(1);
-  if (matches.length > 0) return { id: matches[0].id, created: false };
-
-  // Sem employee → auto-cria um extra pendente. Nome/contactos vêm da
-  // candidatura do site se existir; senão, o prefixo do email.
-  const app = await db
-    .select({
-      fullName: driverApplications.fullName,
-      phone: driverApplications.phone,
-      nif: driverApplications.nif,
-    })
-    .from(driverApplications)
-    .where(eq(driverApplications.email, email))
-    .limit(1);
-
-  const fullName = app[0]?.fullName || email.split("@")[0];
-  const result = await db.insert(employees).values({
-    fullName,
-    email,
-    phone: app[0]?.phone ?? null,
-    nif: app[0]?.nif ?? null,
-    position: "extra",
-    contractType: "extra",
-    isActive: 1,
-  });
-  const id = Number((result as any)[0]?.insertId ?? (result as any).insertId);
-  await logActivity({
-    userId: 0,
-    action: "employee_autocreate",
-    entity: "employees",
-    entityId: id,
-    details: `[Website] Extra pendente auto-criado por submissão de disponibilidade: ${fullName} <${email}>`,
-  });
-  return { id, created: true };
+  /** Como a pessoa foi identificada — útil para depurar do lado do site. */
+  matchedBy: "employee_email" | "linked_user" | "created";
 }
 
 export async function submitAvailabilityByEmail(input: AvailabilityByEmailInput): Promise<AvailabilityByEmailResult> {
@@ -319,7 +279,9 @@ export async function submitAvailabilityByEmail(input: AvailabilityByEmailInput)
   const days = weekDays(input.weekStart);
   if (days.length !== 7) throw new Error("weekStart inválido (esperado YYYY-MM-DD, segunda-feira)");
 
-  const { id: employeeId, created } = await findOrCreateExtraByEmail(db, email);
+  // Identidade por EMAIL: procura na ficha de colaborador E na conta de login
+  // (ver server/identity.ts). Só cria quando o email é mesmo desconhecido.
+  const { id: employeeId, created, matchedBy } = await findOrCreateExtraByEmail(db, email);
 
   const inputDays: SetDayInput[] = [];
   WEBSITE_WEEKDAYS.forEach((key, i) => {
@@ -335,8 +297,8 @@ export async function submitAvailabilityByEmail(input: AvailabilityByEmailInput)
     action: "availability_web_submit",
     entity: "extras_availability",
     entityId: employeeId,
-    details: `[Website] Disponibilidade via site (extra ${employeeId} <${email}>, semana ${input.weekStart}): ${result.saved} dias${created ? " — extra auto-criado" : ""}`,
+    details: `[Website] Disponibilidade via site (extra ${employeeId} <${email}>, semana ${input.weekStart}): ${result.saved} dias — ${created ? "extra auto-criado" : `ligado por ${matchedBy}`}`,
   });
 
-  return { saved: result.saved, employeeId, employeeCreated: created };
+  return { saved: result.saved, employeeId, employeeCreated: created, matchedBy };
 }

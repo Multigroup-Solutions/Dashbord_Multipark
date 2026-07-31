@@ -125,7 +125,10 @@ export function createMcpApiRouter(): Router {
           "POST /driver-applications",
           "POST /extras-availability/submit-by-email",
         ],
-        admin: ["DELETE /complaints/:id", "POST /admin/cleanup-duplicates", "POST /projects"],
+        admin: [
+          "DELETE /complaints/:id", "POST /admin/cleanup-duplicates", "POST /projects",
+          "POST /admin/merge-duplicate-extras",
+        ],
       },
     });
   });
@@ -576,6 +579,15 @@ export function createMcpApiRouter(): Router {
       unmatchedTop: Array.from(unmatchedNames.entries()).sort((a, b) => b[1] - a[1]).slice(0, 15).map(([name, n]) => ({ name, bookings: n })),
       updated,
     });
+  }));
+
+  // Funde extras duplicados por email (duplicados auto-criados pelo site antes
+  // da correção de identidade). DRY-RUN por defeito: body `{ "apply": true }`
+  // para escrever. Ver server/mergeDuplicateExtras.ts.
+  r.post("/admin/merge-duplicate-extras", requireScope("admin"), h(async (req, res) => {
+    const { mergeDuplicateExtras } = await import("./mergeDuplicateExtras");
+    const report = await mergeDuplicateExtras({ apply: req.body?.apply === true });
+    res.json({ success: true, ...report });
   }));
 
   r.post("/admin/cleanup-duplicates", requireScope("admin"), h(async (_req, res) => {

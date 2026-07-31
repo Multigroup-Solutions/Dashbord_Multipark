@@ -1,13 +1,23 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { getLoginUrl } from "@/const";
-import { Building2, BarChart3, Receipt, Shield, Loader2 } from "lucide-react";
+import { ACCESS_DENIED_MSG, AUTH_DENIED_PARAM, AUTH_DENIED_VALUE } from "@shared/const";
+import { Building2, BarChart3, Receipt, Shield, Loader2, ShieldAlert } from "lucide-react";
 import { useEffect } from "react";
 import { useLocation } from "wouter";
 
 export default function Home() {
-  const { user, loading } = useAuth();
+  const { user, loading, error } = useAuth();
   const [, setLocation] = useLocation();
+
+  // Acesso recusado — MESMA mensagem em todos os casos (conta desativada,
+  // desconhecida, ou registada sem acesso). Duas origens possíveis:
+  //   1. redirect do callback OAuth  → ?auth=denied
+  //   2. cookie válida de conta entretanto desativada → auth.me devolve 403
+  const deniedByRedirect =
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get(AUTH_DENIED_PARAM) === AUTH_DENIED_VALUE;
+  const accessDenied = deniedByRedirect || error?.message === ACCESS_DENIED_MSG;
 
   useEffect(() => {
     if (!loading && user) {
@@ -45,6 +55,19 @@ export default function Home() {
           </Button>
         </div>
       </header>
+
+      {/* Acesso recusado — mensagem única, ver ACCESS_DENIED_MSG */}
+      {accessDenied && (
+        <div className="container pt-6">
+          <div
+            role="alert"
+            className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 p-4 text-sm text-amber-900 dark:text-amber-200"
+          >
+            <ShieldAlert className="h-5 w-5 shrink-0 mt-0.5" />
+            <span>{ACCESS_DENIED_MSG}</span>
+          </div>
+        </div>
+      )}
 
       {/* Hero */}
       <main className="flex-1 flex items-center">

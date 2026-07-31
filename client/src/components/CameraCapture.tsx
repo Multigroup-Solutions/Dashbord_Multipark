@@ -112,9 +112,6 @@ export default function CameraCapture({ onCapture, onCancel }: { onCapture: (bas
             {!cameraFailed && (
               <Button onClick={takePhoto} className="flex-1"><Camera className="w-4 h-4 mr-2" /> Tirar Foto</Button>
             )}
-            <Button onClick={() => fileRef.current?.click()} variant={cameraFailed ? "default" : "outline"} className={cameraFailed ? "flex-1" : ""}>
-              <Upload className="w-4 h-4 mr-2" /> Escolher foto
-            </Button>
             <Button onClick={onCancel} variant="outline">Cancelar</Button>
           </div>
         </>

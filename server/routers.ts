@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import * as XLSX from "xlsx";
-import { COOKIE_NAME } from "@shared/const";
+import { ACCESS_DENIED_MSG, COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
@@ -877,6 +877,14 @@ export const appRouter = router({
   auth: router({
     me: publicProcedure.query(async (opts) => {
       const u = opts.ctx.user;
+      // Sessão válida mas conta sem acesso: limpa a cookie morta (senão a
+      // pessoa fica a bater no 403 em cada pedido) e devolve SEMPRE a mesma
+      // mensagem — a UI mostra-a tal e qual (ver ACCESS_DENIED_MSG).
+      if (!u && opts.ctx.accessDenied) {
+        const cookieOptions = getSessionCookieOptions(opts.ctx.req);
+        opts.ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
+        throw new TRPCError({ code: "FORBIDDEN", message: ACCESS_DENIED_MSG });
+      }
       if (!u) return u;
       // Se houver ficha de colaborador, devolve também o estado dos docs
       // e bloqueio. Lazy check para extras: actualiza flags se passou tempo.
@@ -931,7 +939,14 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "super_admin");
-        const newUser = await createManualUser(input);
+        // Um email = uma identidade: recusa cedo em vez de criar uma 2ª conta
+        // que depois compete com a primeira no login (ver server/identity.ts).
+        let newUser: Awaited<ReturnType<typeof createManualUser>>;
+        try {
+          newUser = await createManualUser(input);
+        } catch (err: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err?.message || "Não foi possível criar o utilizador" });
+        }
         await logActivity({
           userId: ctx.user.id,
           action: "create",
@@ -6296,6 +6311,28 @@ export const appRouter = router({
         const { setApplicationStatus } = await import("./webIntake");
         await setApplicationStatus(input.id, input.status, ctx.user.id, input.notes);
         return { success: true };
+      }),
+
+    /**
+     * Cura de duplicados: funde fichas de extra auto-criadas pelo site que
+     * partilham o email com uma ficha já existente. DRY-RUN por defeito —
+     * `apply: true` escreve. Ver server/mergeDuplicateExtras.ts.
+     */
+    mergeDuplicates: protectedProcedure
+      .input(z.object({ apply: z.boolean().default(false) }).optional())
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "super_admin");
+        const { mergeDuplicateExtras } = await import("./mergeDuplicateExtras");
+        const report = await mergeDuplicateExtras({ apply: input?.apply === true });
+        if (report.apply && report.merged > 0) {
+          await logActivity({
+            userId: ctx.user.id,
+            action: "employee_merge",
+            entity: "employees",
+            details: `Fusão de extras duplicados: ${report.merged} fichas fundidas, ${report.blocked} bloqueadas, ${report.movedAvailabilityDays} dias de disponibilidade movidos`,
+          });
+        }
+        return report;
       }),
 
     // Aprovar = criar (ou ligar a) um employee extra com o mesmo email.

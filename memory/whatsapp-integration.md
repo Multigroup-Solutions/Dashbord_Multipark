@@ -5,6 +5,7 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 
 ## Related
 - `sync-runners-topology.md` — topologia de execução (Railway `setInterval` vs Vercel/GitHub Actions cron). Relevante porque o webhook e o broadcast correm no processo Railway; o `runConcurrent` reutilizado vem do `multiparkBookingSync.ts`.
+- `identity-by-email.md` — **2026-07-31, altera partes desta integração**: (1) `normalizePhoneE164` passou a tolerar texto livre (anotações, dois números, invisíveis) — os casos que marcavam números válidos como inválidos; (2) o "tem número válido?" passou a vir do SERVIDOR (`getWeekOverview.phoneE164`), a UI já não recalcula; (3) a tabela do `AvailabilitySection` mostra TODOS os extras ativos (o filtro `availableDays > 0` deixava a página vazia) + quem respondeu sem ter função "extra", e o `sendBroadcast` vai buscar esses à ficha para não os descartar em silêncio. A Decisão 1 ("a todos" = conjunto visível) mantém-se — mudou o conjunto visível.
 
 ## Terreno (mapa da investigação inicial)
 - **"extras" = trabalhadores casuais** = `employees` com `position='extra'`. Contactos = `employees.email` + `employees.phone` (varchar 32, **texto livre, sem formato** — daí o `normalizePhoneE164`).
@@ -140,6 +141,7 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 - Verificar tudo via `GET /api/health` (booleanos de presença).
 
 ## PENDENTES CONSOLIDADOS (pós-Fase 4)
+- **UI "extras com número inválido"**: parcialmente resolvido em 2026-07-31 — a tabela distingue "sem número" de "número não reconhecido" e mostra o valor em bruto no tooltip (ver `identity-by-email.md`). Falta a correção em massa a partir de `whatsapp_broadcasts.invalidEmployeeIds`.
 - **Número de produção Meta**: enquanto for número de teste, entrega só a ~250 destinos verificados/24h; broadcast em escala fica por validar (Fase 2 em modo dev).
 - **Media no inbox** (Fase 3 adiado): mensagens não-texto guardam `[imagem]`/caption; falta download/preview (fetch autenticado à Graph + storage).
 - **UI "extras com número inválido"**: `whatsapp_broadcasts.invalidEmployeeIds` já guarda os dados (Decisão 2); falta a UI para os corrigir de uma vez.

@@ -35,6 +35,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { getLoginUrl } from "@/const";
+import { ACCESS_DENIED_MSG } from "@shared/const";
 import ProfilePhotoPrompt from "@/components/ProfilePhotoPrompt";
 import CameraCapture from "@/components/CameraCapture";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -210,7 +211,10 @@ export default function DashboardLayout({
     const saved = localStorage.getItem(SIDEBAR_WIDTH_KEY);
     return saved ? parseInt(saved, 10) : DEFAULT_WIDTH;
   });
-  const { loading, user } = useAuth();
+  const { loading, user, error } = useAuth();
+  // Conta sem acesso (desativada/desconhecida): a MESMA mensagem que a página
+  // de entrada mostra — nunca "inicia sessão", que levaria a tentar em ciclo.
+  const accessDenied = error?.message === ACCESS_DENIED_MSG;
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_WIDTH_KEY, sidebarWidth.toString());
@@ -226,21 +230,25 @@ export default function DashboardLayout({
         <div className="flex flex-col items-center gap-8 p-8 max-w-md w-full">
           <div className="flex flex-col items-center gap-6">
             <h1 className="text-2xl font-semibold tracking-tight text-center">
-              Iniciar sessão
+              {accessDenied ? "Sem acesso" : "Iniciar sessão"}
             </h1>
             <p className="text-sm text-muted-foreground text-center max-w-sm">
-              É necessário autenticação para aceder ao painel. Clique para continuar.
+              {accessDenied
+                ? ACCESS_DENIED_MSG
+                : "É necessário autenticação para aceder ao painel. Clique para continuar."}
             </p>
           </div>
-          <Button
-            onClick={() => {
-              window.location.href = getLoginUrl();
-            }}
-            size="lg"
-            className="w-full shadow-lg hover:shadow-xl transition-all"
-          >
-            Entrar com Google
-          </Button>
+          {!accessDenied && (
+            <Button
+              onClick={() => {
+                window.location.href = getLoginUrl();
+              }}
+              size="lg"
+              className="w-full shadow-lg hover:shadow-xl transition-all"
+            >
+              Entrar com Google
+            </Button>
+          )}
         </div>
       </div>
     );

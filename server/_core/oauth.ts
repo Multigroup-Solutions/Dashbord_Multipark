@@ -1,7 +1,9 @@
-import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
+import { AUTH_DENIED_PARAM, AUTH_DENIED_VALUE, COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
+import { normalizeEmail } from "@shared/email";
 import type { Express, Request, Response, CookieOptions } from "express";
 import crypto from "node:crypto";
 import * as db from "../db";
+import { adoptPlaceholderAccountByEmail } from "../identity";
 import { getSessionCookieOptions } from "./cookies";
 import { sdk } from "./sdk";
 
@@ -14,6 +16,26 @@ const SESSION_MAX_MS = (() => {
 
 const OAUTH_STATE_COOKIE = "app_oauth_state";
 const OAUTH_STATE_MAX_MS = 10 * 60 * 1000; // 10 minutos para concluir o login
+
+/**
+ * Modo fechado: recusa quem não tenha sido registado pelo backoffice, em vez
+ * de criar automaticamente um utilizador com role `user`. Desligado por
+ * defeito para não mudar o comportamento em produção sem decisão explícita.
+ */
+const LOGIN_RESTRICTED_TO_REGISTERED = /^(1|true|yes|on)$/i.test(
+  process.env.RESTRICT_LOGIN_TO_REGISTERED ?? "",
+);
+
+/**
+ * Recusa de acesso — ponto ÚNICO: limpa a sessão e devolve a pessoa à página
+ * de entrada com o sinal que faz aparecer `ACCESS_DENIED_MSG`. Todos os
+ * motivos (desconhecido, desativado, modo fechado) passam por aqui, para a
+ * mensagem ser sempre a mesma.
+ */
+function denyAccess(req: Request, res: Response): void {
+  res.clearCookie(COOKIE_NAME, { ...getSessionCookieOptions(req), maxAge: -1 });
+  res.redirect(302, `/?${AUTH_DENIED_PARAM}=${AUTH_DENIED_VALUE}`);
+}
 
 function getStateCookieOptions(req: Request): CookieOptions {
   const base = getSessionCookieOptions(req);
@@ -233,14 +255,47 @@ export function registerOAuthRoutes(app: Express) {
 
       // Use Google sub as openId
       const openId = `google_${userInfo.sub}`;
+      const email = normalizeEmail(userInfo.email ?? "");
+
+      // Modo fechado (opcional): só entra quem o backoffice já registou. Sem a
+      // env, mantém-se o comportamento histórico — qualquer conta Google cria
+      // um utilizador com role `user` (sem permissões relevantes).
+      if (LOGIN_RESTRICTED_TO_REGISTERED) {
+        const known = (await db.getUserByOpenId(openId)) ?? (email ? await db.getUserByEmail(email) : undefined);
+        if (!known) {
+          console.warn(`[OAuth] Acesso recusado <${email || "sem email"}> — conta não registada (modo fechado)`);
+          denyAccess(req, res);
+          return;
+        }
+      }
+
+      // A identidade é o EMAIL: se o backoffice já registou esta pessoa à mão,
+      // o primeiro login Google ADOTA essa conta (role/permissões incluídos)
+      // em vez de criar uma segunda linha em `users` com role default.
+      const database = await db.getDb();
+      if (database && email) {
+        await adoptPlaceholderAccountByEmail(database, email, openId, userInfo.name || null);
+      }
 
       await db.upsertUser({
         openId,
         name: userInfo.name || null,
-        email: userInfo.email ?? null,
+        email: email || null,
         loginMethod: "google",
         lastSignedIn: new Date().toISOString().slice(0, 19).replace("T", " "),
       });
+
+      // Porta de acesso ÚNICA: conta desativada (ou sem linha em `users`, se a
+      // BD estiver indisponível) → sem sessão e com a MESMA mensagem para
+      // todos os casos. Nunca distinguir "desconhecido" de "desativado".
+      const account = await db.getUserByOpenId(openId);
+      if (!account || account.isActive !== 1) {
+        console.warn(
+          `[OAuth] Acesso recusado <${email || "sem email"}> — ${account ? "conta desativada" : "conta não encontrada"}`,
+        );
+        denyAccess(req, res);
+        return;
+      }
 
       const sessionToken = await sdk.createSessionToken(openId, {
         name: userInfo.name || "",

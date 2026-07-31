@@ -22,7 +22,6 @@ import {
 } from "@/components/ui/dialog";
 import { Fragment, useState, useMemo } from "react";
 import { toast } from "sonner";
-import { normalizePhoneE164 } from "@shared/phone";
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
@@ -1410,6 +1409,10 @@ function AvailabilitySection() {
   const [note, setNote] = useState("");
   const [testEmail, setTestEmail] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  // A tabela lista TODOS os extras ativos por defeito — é a lista de contactos
+  // da operação, e o caso de uso principal é falar com quem AINDA NÃO
+  // respondeu. Este filtro reduz a quem já marcou disponibilidade.
+  const [onlyWithAvailability, setOnlyWithAvailability] = useState(false);
 
   // assim que chegam as sugestões, default = próxima segunda
   const effectiveWeek = weekStart || hints.data?.next || "";
@@ -1428,9 +1431,9 @@ function AvailabilitySection() {
   });
 
   const o = overview.data;
-  // "Cá de cima": só quem declarou disponibilidade nesse período. O resto
-  // vê-se na página de disponibilidade do próprio funcionário.
-  const shownExtras = o ? o.extras.filter(e => e.availableDays > 0) : [];
+  const shownExtras = o
+    ? (onlyWithAvailability ? o.extras.filter(e => e.availableDays > 0) : o.extras)
+    : [];
 
   // ── WhatsApp broadcast (Fase 2 — modo desenvolvimento) ────────────────────
   const [waOpen, setWaOpen] = useState(false);
@@ -1462,8 +1465,10 @@ function AvailabilitySection() {
   });
 
   // Alvo do broadcast = selecionados (se houver) ou todos os mostrados.
+  // `phoneE164` vem calculado do servidor — a MESMA normalização que o envio
+  // usa, para o resumo "válidos/inválidos" nunca divergir do resultado real.
   const waTargets = selectedIds.size > 0 ? shownExtras.filter(e => selectedIds.has(e.employeeId)) : shownExtras;
-  const waValidCount = waTargets.filter(e => !!(e.phone && normalizePhoneE164(e.phone))).length;
+  const waValidCount = waTargets.filter(e => !!e.phoneE164).length;
   const waInvalidCount = waTargets.length - waValidCount;
   const waParamList = waParams.split("|").map(p => p.trim()).filter(Boolean);
 
@@ -1474,9 +1479,10 @@ function AvailabilitySection() {
       return;
     }
     setWaResult(null);
-    // Sem seleção explícita, o alvo é o conjunto MOSTRADO (extras com
-    // disponibilidade) — não todos os extras ativos — para bater certo com a
-    // tabela e com o resumo válidos/inválidos. Envio de teste ignora o alvo.
+    // Invariante mantida (Decisão 1 do Jorge): "a todos" = o conjunto MOSTRADO
+    // na tabela — o que envio é o que vejo. Como a tabela passou a listar
+    // todos os extras ativos, "a todos" volta a significar todos os ativos,
+    // que é o caso de uso pedido. Envio de teste ignora o alvo.
     const targetIds = selectedIds.size > 0
       ? Array.from(selectedIds)
       : shownExtras.map(e => e.employeeId);
@@ -1590,8 +1596,24 @@ function AvailabilitySection() {
 
         {o && (
           <div className="space-y-3 pt-2">
-            <div className="text-sm text-muted-foreground">
-              {o.responded}/{o.totalExtras} extras responderam para {o.weekStart} – {o.weekEnd}
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="text-sm text-muted-foreground">
+                {o.totalExtras} extras ativos · {o.responded} responderam para {o.weekStart} – {o.weekEnd} ·{" "}
+                <span className={o.withValidPhone === 0 ? "text-amber-600" : undefined}>
+                  {o.withValidPhone} com número válido
+                </span>
+              </div>
+              <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={onlyWithAvailability}
+                  onChange={(e) => {
+                    setOnlyWithAvailability(e.target.checked);
+                    setSelectedIds(new Set()); // o alvo mudou — não enviar a quem já não se vê
+                  }}
+                />
+                Mostrar só quem marcou disponibilidade
+              </label>
             </div>
 
             {/* Contagem por dia */}
@@ -1642,11 +1664,15 @@ function AvailabilitySection() {
                         </span>
                       </td>
                       <td className="py-1 pr-2 whitespace-nowrap text-xs">
-                        {ex.phone && normalizePhoneE164(ex.phone) ? (
-                          <span className="text-muted-foreground">{ex.phone}</span>
+                        {ex.phoneE164 ? (
+                          <span className="text-muted-foreground" title={ex.phone ?? undefined}>{ex.phoneE164}</span>
                         ) : (
-                          <Badge variant="outline" className="border-amber-400 text-amber-600 gap-1 font-normal">
-                            <AlertTriangle className="h-3 w-3" /> sem número válido
+                          <Badge
+                            variant="outline"
+                            className="border-amber-400 text-amber-600 gap-1 font-normal"
+                            title={ex.phone ? `Número não reconhecido: ${ex.phone}` : "Ficha sem telefone"}
+                          >
+                            <AlertTriangle className="h-3 w-3" /> {ex.phone ? "número não reconhecido" : "sem número"}
                           </Badge>
                         )}
                       </td>
@@ -1665,7 +1691,13 @@ function AvailabilitySection() {
                     </tr>
                   ))}
                   {shownExtras.length === 0 && (
-                    <tr><td colSpan={o.dayHeaders.length + 3} className="py-3 text-center text-muted-foreground">Ainda ninguém com disponibilidade para esta semana.</td></tr>
+                    <tr>
+                      <td colSpan={o.dayHeaders.length + 3} className="py-3 text-center text-muted-foreground">
+                        {onlyWithAvailability
+                          ? "Ainda ninguém marcou disponibilidade para esta semana."
+                          : "Não há extras ativos (RH → colaboradores com função “extra”)."}
+                      </td>
+                    </tr>
                   )}
                   {/* Totais por dia */}
                   <tr className="font-medium border-t-2">
@@ -1700,7 +1732,7 @@ function AvailabilitySection() {
               <DialogDescription>
                 {selectedIds.size > 0
                   ? `${selectedIds.size} extra(s) selecionado(s).`
-                  : "Sem seleção — envia a todos os extras com disponibilidade mostrados."}
+                  : `Sem seleção — envia aos ${shownExtras.length} extras mostrados na tabela.`}
               </DialogDescription>
             </DialogHeader>
 
