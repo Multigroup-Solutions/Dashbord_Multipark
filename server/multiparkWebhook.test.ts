@@ -5,6 +5,7 @@ import {
   parseMultiparkWebhook,
   isoToMysql,
   cityToSyncForm,
+  isDuplicateKeyError,
 } from "./multiparkWebhook";
 
 const SECRET = "test-secret-key-for-multipark-webhook";
@@ -108,6 +109,22 @@ describe("isoToMysql", () => {
     expect(isoToMysql(null)).toBeUndefined();
     expect(isoToMysql(undefined)).toBeUndefined();
     expect(isoToMysql("not-a-date")).toBeUndefined();
+  });
+});
+
+describe("isDuplicateKeyError", () => {
+  it("deteta code/errno diretos", () => {
+    expect(isDuplicateKeyError({ code: "ER_DUP_ENTRY" })).toBe(true);
+    expect(isDuplicateKeyError({ errno: 1062 })).toBe(true);
+  });
+  it("deteta o erro embrulhado pelo Drizzle em cause", () => {
+    expect(isDuplicateKeyError({ message: "query falhou", cause: { code: "ER_DUP_ENTRY", errno: 1062 } })).toBe(true);
+    expect(isDuplicateKeyError({ cause: { message: "Duplicate entry 'x' for key 'y'" } })).toBe(true);
+  });
+  it("não dispara em erros normais", () => {
+    expect(isDuplicateKeyError({ code: "ECONNREFUSED" })).toBe(false);
+    expect(isDuplicateKeyError(new Error("timeout"))).toBe(false);
+    expect(isDuplicateKeyError(null)).toBe(false);
   });
 });
 

@@ -156,9 +156,23 @@ async function registerDelivery(ev: MultiparkWebhookEvent): Promise<boolean> {
       VALUES (${ev.deliveryId}, ${ev.event}, ${ev.bookingId})`);
     return true;
   } catch (err: any) {
-    if (err?.code === "ER_DUP_ENTRY") return false;
+    if (isDuplicateKeyError(err)) return false;
     throw err;
   }
+}
+
+/**
+ * O mysql2 marca duplicados com code ER_DUP_ENTRY/errno 1062, mas o Drizzle
+ * embrulha o erro original em `cause` — verificamos os dois níveis (e a
+ * mensagem, como última rede).
+ */
+export function isDuplicateKeyError(err: unknown): boolean {
+  const candidates: any[] = [err, (err as any)?.cause];
+  for (const e of candidates) {
+    if (!e) continue;
+    if (e.code === "ER_DUP_ENTRY" || e.errno === 1062) return true;
+  }
+  return /duplicate entry/i.test(String((err as any)?.message ?? "") + String((err as any)?.cause?.message ?? ""));
 }
 
 /**
