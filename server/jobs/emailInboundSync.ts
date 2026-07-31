@@ -97,7 +97,13 @@ async function routeToModule(
       /(propriet[áa]ri[oa]s?|owner) do Perfil/i.test(haystack) ||
       /j[áa] pode gerir o Perfil/i.test(haystack) ||
       /perfil da empresa/i.test(haystack) ||
-      /valide|verifica[çc][ãa]o do perfil/i.test(haystack)
+      /valide|verifica[çc][ãa]o do perfil/i.test(haystack) ||
+      /adicione fotos/i.test(haystack) ||
+      /relat[óo]rio de desempenho/i.test(haystack) ||
+      /convite para gerir/i.test(haystack) ||
+      /pedido de propriedade/i.test(haystack) ||
+      /ficha de empresa.*publicada/i.test(haystack) ||
+      /est[áa] a receber aten[çc][ãa]o/i.test(haystack)
     );
     if (isAdminNotice) {
       return { targetModule: "ignored" };
