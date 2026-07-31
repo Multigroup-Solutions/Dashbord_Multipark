@@ -1,0 +1,239 @@
+name: Multipark Sync Cron
+
+# Substituto gratuito dos Vercel Cron Jobs (Hobby limita a 1/dia).
+# Chama os endpoints HTTP /api/cron/* com Authorization: Bearer ${CRON_SECRET}.
+#
+# Pré-requisitos (Settings → Secrets and variables → Actions):
+#   1. APP_URL      — URL base de produção (ex: https://dashbord-multipark.vercel.app)
+#   2. CRON_SECRET  — mesma string que a env var CRON_SECRET no Vercel
+#
+# Se APP_URL não estiver definido, ou o endpoint devolver erro / {"ok":false},
+# o job FALHA (vermelho) E abre/comenta uma issue no repo (notificação por email
+# do GitHub — não depende de SMTP nosso).
+#
+# Granularidade mínima do GitHub cron: 5 min, e pode atrasar até alguns minutos
+# (na prática, em horas de pico, MUITO mais — por isso os minutos desfasados e a
+# janela auto-recuperável no servidor, que cobre gaps até 3 dias).
+
+on:
+  schedule:
+    # Sync recente: a cada 15 minutos. Minutos desfasados (4,19,34,49) — os
+    # minutos "redondos" (0,15,30,45) são os mais congestionados no GitHub e
+    # os runs são descartados/atrasados com mais frequência.
+    - cron: "4,19,34,49 * * * *"
+    # Janela futura: minuto 17 a cada 2 horas
+    - cron: "17 */2 * * *"
+    # Cleanup: 03:00 UTC (=04:00 PT verão)
+    - cron: "0 3 * * *"
+    # Recolha diária de operações (driver history + alertas GPS): 03:30 UTC
+    - cron: "30 3 * * *"
+  workflow_dispatch: {} # trigger manual da UI (corre todos os jobs)
+
+permissions:
+  contents: read
+  issues: write # para o passo de alerta abrir/comentar issues em falha
+
+jobs:
+  sync-recent:
+    if: github.event.schedule == '4,19,34,49 * * * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger /api/cron/multipark-sync
+        env:
+          # URL público de produção; secrets.APP_URL sobrepõe-se se for definido.
+          APP_URL: ${{ secrets.APP_URL || 'https://dashbord-multipark.vercel.app' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_URL:-}" ]; then
+            echo "::error::APP_URL secret não está definido — sync não corre."
+            exit 1
+          fi
+          code=$(curl -sS -m 90 -w '%{http_code}' -o /tmp/body.txt \
+            -H "Authorization: Bearer ${CRON_SECRET:-}" \
+            "$APP_URL/api/cron/multipark-sync") \
+            || { echo "::error::curl falhou ao contactar o endpoint"; cat /tmp/body.txt || true; exit 1; }
+          echo "HTTP $code"; head -c 1000 /tmp/body.txt; echo
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            echo "::error::endpoint devolveu HTTP $code"; exit 1
+          fi
+          if grep -q '"ok":false' /tmp/body.txt; then
+            echo "::error::endpoint reportou ok:false"; exit 1
+          fi
+      - name: Alerta — abrir/comentar issue em caso de falha
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="🔴 Cron multipark falhou: sync-recent"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body="Run falhado: $run_url — $(date -u +'%Y-%m-%d %H:%M UTC')"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number' || true)
+          if [ -n "${existing:-}" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
+
+  email-inbound:
+    if: github.event.schedule == '4,19,34,49 * * * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger /api/cron/email-inbound
+        env:
+          APP_URL: ${{ secrets.APP_URL || 'https://dashbord-multipark.vercel.app' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_URL:-}" ]; then
+            echo "::error::APP_URL secret não está definido — email-inbound não corre."
+            exit 1
+          fi
+          code=$(curl -sS -m 90 -w '%{http_code}' -o /tmp/body.txt \
+            -H "Authorization: Bearer ${CRON_SECRET:-}" \
+            "$APP_URL/api/cron/email-inbound") \
+            || { echo "::error::curl falhou ao contactar o endpoint"; cat /tmp/body.txt || true; exit 1; }
+          echo "HTTP $code"; head -c 1000 /tmp/body.txt; echo
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            echo "::error::endpoint devolveu HTTP $code"; exit 1
+          fi
+          if grep -q '"ok":false' /tmp/body.txt; then
+            echo "::error::endpoint reportou ok:false (IMAP_USER/IMAP_PASS configurados no Vercel?)"; exit 1
+          fi
+      - name: Alerta — abrir/comentar issue em caso de falha
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="🔴 Cron multipark falhou: email-inbound"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body="Run falhado: $run_url — $(date -u +'%Y-%m-%d %H:%M UTC')"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number' || true)
+          if [ -n "${existing:-}" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
+
+  sync-future:
+    if: github.event.schedule == '17 */2 * * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger /api/cron/multipark-future
+        env:
+          # URL público de produção; secrets.APP_URL sobrepõe-se se for definido.
+          APP_URL: ${{ secrets.APP_URL || 'https://dashbord-multipark.vercel.app' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_URL:-}" ]; then
+            echo "::error::APP_URL secret não está definido — sync não corre."
+            exit 1
+          fi
+          code=$(curl -sS -m 90 -w '%{http_code}' -o /tmp/body.txt \
+            -H "Authorization: Bearer ${CRON_SECRET:-}" \
+            "$APP_URL/api/cron/multipark-future") \
+            || { echo "::error::curl falhou ao contactar o endpoint"; cat /tmp/body.txt || true; exit 1; }
+          echo "HTTP $code"; head -c 1000 /tmp/body.txt; echo
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            echo "::error::endpoint devolveu HTTP $code"; exit 1
+          fi
+          if grep -q '"ok":false' /tmp/body.txt; then
+            echo "::error::endpoint reportou ok:false"; exit 1
+          fi
+      - name: Alerta — abrir/comentar issue em caso de falha
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="🔴 Cron multipark falhou: sync-future"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body="Run falhado: $run_url — $(date -u +'%Y-%m-%d %H:%M UTC')"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number' || true)
+          if [ -n "${existing:-}" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
+
+  cleanup:
+    if: github.event.schedule == '0 3 * * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger /api/cron/multipark-cleanup
+        env:
+          # URL público de produção; secrets.APP_URL sobrepõe-se se for definido.
+          APP_URL: ${{ secrets.APP_URL || 'https://dashbord-multipark.vercel.app' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_URL:-}" ]; then
+            echo "::error::APP_URL secret não está definido — cleanup não corre."
+            exit 1
+          fi
+          code=$(curl -sS -m 90 -w '%{http_code}' -o /tmp/body.txt \
+            -H "Authorization: Bearer ${CRON_SECRET:-}" \
+            "$APP_URL/api/cron/multipark-cleanup") \
+            || { echo "::error::curl falhou ao contactar o endpoint"; cat /tmp/body.txt || true; exit 1; }
+          echo "HTTP $code"; head -c 1000 /tmp/body.txt; echo
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            echo "::error::endpoint devolveu HTTP $code"; exit 1
+          fi
+          if grep -q '"ok":false' /tmp/body.txt; then
+            echo "::error::endpoint reportou ok:false"; exit 1
+          fi
+      - name: Alerta — abrir/comentar issue em caso de falha
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="🔴 Cron multipark falhou: cleanup"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body="Run falhado: $run_url — $(date -u +'%Y-%m-%d %H:%M UTC')"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number' || true)
+          if [ -n "${existing:-}" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
+
+  daily-ops:
+    if: github.event.schedule == '30 3 * * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger /api/cron/daily-ops
+        env:
+          # URL público de produção; secrets.APP_URL sobrepõe-se se for definido.
+          APP_URL: ${{ secrets.APP_URL || 'https://dashbord-multipark.vercel.app' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_URL:-}" ]; then
+            echo "::error::APP_URL secret não está definido — daily-ops não corre."
+            exit 1
+          fi
+          code=$(curl -sS -m 90 -w '%{http_code}' -o /tmp/body.txt \
+            -H "Authorization: Bearer ${CRON_SECRET:-}" \
+            "$APP_URL/api/cron/daily-ops") \
+            || { echo "::error::curl falhou ao contactar o endpoint"; cat /tmp/body.txt || true; exit 1; }
+          echo "HTTP $code"; head -c 1000 /tmp/body.txt; echo
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            echo "::error::endpoint devolveu HTTP $code"; exit 1
+          fi
+          if grep -q '"ok":false' /tmp/body.txt; then
+            echo "::error::endpoint reportou ok:false"; exit 1
+          fi
+      - name: Alerta — abrir/comentar issue em caso de falha
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="🔴 Cron multipark falhou: daily-ops"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body="Run falhado: $run_url — $(date -u +'%Y-%m-%d %H:%M UTC')"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number' || true)
+          if [ -n "${existing:-}" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
