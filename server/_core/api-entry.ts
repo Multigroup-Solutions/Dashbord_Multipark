@@ -5,6 +5,7 @@ import { createContext } from "./context";
 import { createExternalApiRouter } from "../externalApi";
 import { createMcpApiRouter } from "../mcpApi";
 import { createWhatsappWebhookRouter } from "../whatsappWebhook";
+import { createMultiparkWebhookRouter } from "../multiparkWebhook";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { sdk } from "./sdk";
 import { getBookingTryAllParks } from "../multipark";
@@ -14,6 +15,9 @@ app.set("trust proxy", 1);
 // WhatsApp webhook (Meta) — MONTADO ANTES do express.json global: a validação
 // da assinatura HMAC precisa do raw body intacto (usa express.raw internamente).
 app.use("/api/whatsapp/webhook", createWhatsappWebhookRouter());
+// Webhook das Conexões Multipark (reservas em tempo real) — também precisa do
+// raw body para o HMAC, por isso monta antes do express.json.
+app.use("/api/multipark/webhook", createMultiparkWebhookRouter());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
@@ -244,6 +248,7 @@ app.get("/api/health", (_req, res) => {
       WHATSAPP_VERIFY_TOKEN: !!process.env.WHATSAPP_VERIFY_TOKEN,
       WHATSAPP_APP_SECRET: !!process.env.WHATSAPP_APP_SECRET,
       AVAILABILITY_FORM_TOKEN_SECRET: !!process.env.AVAILABILITY_FORM_TOKEN_SECRET,
+      MULTIPARK_WEBHOOK_SECRET: !!process.env.MULTIPARK_WEBHOOK_SECRET,
     },
   });
 });

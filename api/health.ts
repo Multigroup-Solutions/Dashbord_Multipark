@@ -21,5 +21,6 @@ export default function handler(req: any, res: any) {
       tokenSecret: !!process.env.AVAILABILITY_FORM_TOKEN_SECRET,
       url: !!process.env.AVAILABILITY_FORM_URL,
     },
+    multiparkWebhook: !!process.env.MULTIPARK_WEBHOOK_SECRET,
   });
 }

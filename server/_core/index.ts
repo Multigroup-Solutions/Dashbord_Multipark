@@ -10,6 +10,7 @@ import { serveStatic, setupVite } from "./vite";
 import { createExternalApiRouter } from "../externalApi";
 import { createMcpApiRouter } from "../mcpApi";
 import { createWhatsappWebhookRouter } from "../whatsappWebhook";
+import { createMultiparkWebhookRouter } from "../multiparkWebhook";
 import { startDailyCollectionScheduler } from "../jobs/dailyDriverCollection";
 import { startBookingSyncScheduler } from "../jobs/multiparkBookingSync";
 import { seedProjectHierarchy } from "../db";
@@ -45,6 +46,8 @@ async function startServer() {
   // da assinatura HMAC precisa do raw body intacto (usa o seu próprio
   // express.raw internamente).
   app.use("/api/whatsapp/webhook", createWhatsappWebhookRouter());
+  // Webhook das Conexões Multipark (reservas em tempo real) — idem raw body.
+  app.use("/api/multipark/webhook", createMultiparkWebhookRouter());
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
