@@ -2343,6 +2343,20 @@ export const appRouter = router({
 
     // ── TIME RECORDS ────────────────────────────────────────────────────────────────────────────────
     timeRecords: router({
+      // Estado do ponto do PRÓPRIO utilizador (para o atalho no menu do avatar):
+      // qualquer role pode consultar o seu — não expõe registos de terceiros.
+      myStatus: protectedProcedure.query(async ({ ctx }) => {
+        const me = await getEmployeeByUserId(ctx.user.id);
+        if (!me) return { employeeId: null as number | null, status: null as "in" | "out" | null, since: null as string | null };
+        const records = await getTimeRecords(me.employee.id);
+        const last = records[0];
+        return {
+          employeeId: me.employee.id as number | null,
+          status: (last?.type === "check_in" ? "in" : "out") as "in" | "out" | null,
+          since: (last?.recordedAt ?? null) as string | null,
+        };
+      }),
+
       list: protectedProcedure
         .input(z.object({ employeeId: z.number(), startDate: z.string().optional(), endDate: z.string().optional() }))
         .query(async ({ ctx, input }) => {

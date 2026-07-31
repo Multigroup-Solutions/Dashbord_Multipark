@@ -36,6 +36,10 @@ import {
 } from "@/components/ui/select";
 import { getLoginUrl } from "@/const";
 import ProfilePhotoPrompt from "@/components/ProfilePhotoPrompt";
+import CameraCapture from "@/components/CameraCapture";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { toast } from "sonner";
+import { fmtPTTime } from "@/lib/lisbonTime";
 import { useIsMobile } from "@/hooks/useMobile";
 import {
   BarChart3,
@@ -301,6 +305,54 @@ function DashboardLayoutContent({
   useEffect(() => {
     if (employee && !photoUrl) setPhotoOpen(true);
   }, [employee, photoUrl]);
+
+  // Ponto rápido a partir do avatar: estado atual + entrada/saída com selfie+GPS
+  // (mesmas regras do ponto na ficha de RH).
+  const utils = trpc.useUtils();
+  const pontoQ = trpc.rh.timeRecords.myStatus.useQuery(undefined, {
+    enabled: !!employee,
+    refetchInterval: 120_000,
+  });
+  const [pontoMode, setPontoMode] = useState<"check_in" | "check_out" | null>(null);
+  const pontoDone = () => {
+    utils.rh.timeRecords.myStatus.invalidate();
+    utils.rh.timeRecords.list.invalidate();
+    setPontoMode(null);
+  };
+  const quickCheckIn = trpc.rh.timeRecords.checkIn.useMutation({
+    onSuccess: () => { toast.success("Entrada registada!"); pontoDone(); },
+    onError: (e) => { toast.error(e.message); setPontoMode(null); },
+  });
+  const quickCheckOut = trpc.rh.timeRecords.checkOut.useMutation({
+    onSuccess: (d) => { toast.success(`Saída registada! ${d.hoursWorked}h trabalhadas`); pontoDone(); },
+    onError: (e) => { toast.error(e.message); setPontoMode(null); },
+  });
+  const submitPonto = (base64: string, mimeType: string) => {
+    const employeeId = pontoQ.data?.employeeId;
+    if (!employeeId || !pontoMode) return;
+    const doSubmit = (lat?: number, lng?: number) => {
+      const payload = {
+        employeeId,
+        photoBase64: base64,
+        mimeType,
+        latitude: lat ? String(lat) : undefined,
+        longitude: lng ? String(lng) : undefined,
+        locationName: lat ? `${lat.toFixed(6)}, ${lng!.toFixed(6)}` : undefined,
+      };
+      if (pontoMode === "check_in") quickCheckIn.mutate(payload);
+      else quickCheckOut.mutate(payload);
+    };
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => doSubmit(pos.coords.latitude, pos.coords.longitude),
+        () => doSubmit(),
+        { enableHighAccuracy: true, timeout: 10000 },
+      );
+    } else {
+      doSubmit();
+    }
+  };
+  const pontoStatus = pontoQ.data?.employeeId ? pontoQ.data.status : null;
   const filteredGroups = getFilteredMenuGroups(userRole);
   const filteredItems = filteredGroups.flatMap(g => g.items);
   const activeMenuItem = allMenuItems.find(item => item.path === location);
@@ -573,12 +625,38 @@ function DashboardLayoutContent({
                   </Avatar>
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuContent align="end" className="w-60">
                 <div className="px-2 py-2">
-                  <p className="text-sm font-medium">{user?.name || "-"}</p>
+                  <p className="text-sm font-medium">{employee?.fullName || user?.name || "-"}</p>
                   <p className="text-xs text-muted-foreground">{user?.email || "-"}</p>
+                  {pontoStatus && (
+                    <p className="text-xs mt-1 flex items-center gap-1.5">
+                      <span className={`inline-block h-2 w-2 rounded-full ${pontoStatus === "in" ? "bg-green-500" : "bg-gray-400"}`} />
+                      {pontoStatus === "in"
+                        ? `Em serviço desde ${fmtPTTime(pontoQ.data?.since)}`
+                        : "Fora de serviço"}
+                    </p>
+                  )}
                 </div>
                 <DropdownMenuSeparator />
+                {pontoStatus === "out" && (
+                  <DropdownMenuItem
+                    onClick={() => setPontoMode("check_in")}
+                    className="cursor-pointer text-green-700 focus:text-green-700"
+                  >
+                    <ArrowDownToLine className="mr-2 h-4 w-4" />
+                    <span>Dar entrada (check-in)</span>
+                  </DropdownMenuItem>
+                )}
+                {pontoStatus === "in" && (
+                  <DropdownMenuItem
+                    onClick={() => setPontoMode("check_out")}
+                    className="cursor-pointer text-red-600 focus:text-red-600"
+                  >
+                    <ArrowUpFromLine className="mr-2 h-4 w-4" />
+                    <span>Dar saída (check-out)</span>
+                  </DropdownMenuItem>
+                )}
                 {employee && (
                   <DropdownMenuItem onClick={() => setPhotoOpen(true)} className="cursor-pointer">
                     <Camera className="mr-2 h-4 w-4" />
@@ -595,6 +673,24 @@ function DashboardLayoutContent({
               </DropdownMenuContent>
             </DropdownMenu>
             {employee && <ProfilePhotoPrompt open={photoOpen} onOpenChange={setPhotoOpen} />}
+            <Dialog open={!!pontoMode} onOpenChange={(o) => { if (!o) setPontoMode(null); }}>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                    <Camera className="h-4 w-4" />
+                    {pontoMode === "check_in" ? "Entrada — Foto + GPS" : "Saída — Foto + GPS"}
+                  </DialogTitle>
+                </DialogHeader>
+                {pontoMode && (
+                  <CameraCapture onCapture={submitPonto} onCancel={() => setPontoMode(null)} />
+                )}
+                {(quickCheckIn.isPending || quickCheckOut.isPending) && (
+                  <p className="text-sm text-muted-foreground text-center animate-pulse">
+                    A registar ponto com foto e GPS...
+                  </p>
+                )}
+              </DialogContent>
+            </Dialog>
           </div>
         </div>
 
