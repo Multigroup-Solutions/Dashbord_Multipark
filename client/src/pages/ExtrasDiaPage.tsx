@@ -1679,11 +1679,22 @@ function AvailabilitySection() {
                         )}
                       </td>
                       {ex.days.map((d) => (
-                        <td key={d.day} className="px-1 text-center">
-                          {(d.morning || d.night) ? (
-                            <span className="inline-flex gap-0.5 justify-center">
-                              {d.morning && <Sun className="h-3.5 w-3.5 text-amber-500" />}
-                              {d.night && <Moon className="h-3.5 w-3.5 text-indigo-500" />}
+                        <td key={d.day} className="px-1 text-center align-top">
+                          {(d.morning || d.night || d.fromHour != null) ? (
+                            <span
+                              className="inline-flex flex-col items-center leading-tight"
+                              title={d.note ?? undefined}
+                            >
+                              <span className="inline-flex gap-0.5 justify-center items-center">
+                                {d.morning && <Sun className="h-3.5 w-3.5 text-amber-500" />}
+                                {d.night && <Moon className="h-3.5 w-3.5 text-indigo-500" />}
+                                {d.note && <span className="text-muted-foreground text-xs" aria-label="tem nota">✱</span>}
+                              </span>
+                              {(d.fromHour != null || d.toHour != null) && (
+                                <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                                  {d.fromHour ?? "?"}h–{d.toHour ?? "?"}h
+                                </span>
+                              )}
                             </span>
                           ) : (
                             <span className="text-muted-foreground/30">·</span>
@@ -1717,7 +1728,7 @@ function AvailabilitySection() {
                 </tbody>
               </table>
               <div className="text-xs text-muted-foreground mt-1">
-                <Sun className="h-3 w-3 inline text-amber-500" /> manhã · <Moon className="h-3 w-3 inline text-indigo-500" /> noite · totais = nº disponíveis por turno
+                <Sun className="h-3 w-3 inline text-amber-500" /> manhã · <Moon className="h-3 w-3 inline text-indigo-500" /> noite · horas = janela indicada pela pessoa · ✱ tem nota (passa o rato por cima) · totais = nº disponíveis por turno
               </div>
             </div>
           </div>
