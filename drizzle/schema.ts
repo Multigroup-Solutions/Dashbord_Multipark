@@ -1267,12 +1267,13 @@ export const inboundEmails = mysqlTable("inbound_emails", {
 	bookingRef: varchar({ length: 100 }),
 	subject: varchar({ length: 500 }),
 	bodyText: text(),
-	attachmentsJson: text(),                               // [{filename, contentType, size, s3Key}]
+	attachmentsJson: text(),                               // [{filename, contentType, size, url?}] — url presente desde que a ingestão guarda os ficheiros no storage (migration 0061)
 	targetModule: varchar({ length: 40 }),                 // review | complaint | lostfound | rh
 	targetId: int(),                                       // id do registo criado
 	taskId: int(),                                         // tarefa criada (ex: RH → Kamila)
 	gmThreadId: varchar({ length: 64 }),                   // X-GM-THRID (thread do Gmail) p/ agrupar respostas
 	headerRefs: text(),                                    // In-Reply-To + References (message-ids) p/ threading
+	notes: text(),                                         // notas internas do backoffice sobre o candidato/email (migration 0061)
 	status: mysqlEnum(['processed', 'skipped', 'error']).default('processed').notNull(),
 	errorMsg: varchar({ length: 500 }),
 	receivedAt: timestamp({ mode: 'string' }),

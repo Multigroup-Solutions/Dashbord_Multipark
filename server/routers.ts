@@ -1913,6 +1913,20 @@ export const appRouter = router({
       return listInboundEmailsByAlias("recursos-humanos", 200);
     }),
 
+    // Notas internas do backoffice sobre um email/candidato de recrutamento.
+    setRecruitmentNotes: protectedProcedure
+      .input(z.object({ id: z.number(), notes: z.string().max(10000) }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { getDb } = await import("./db");
+        const { eq } = await import("drizzle-orm");
+        const database = await getDb();
+        if (!database) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
+        const { inboundEmails } = await import("../drizzle/schema");
+        await database.update(inboundEmails).set({ notes: input.notes.trim() || null }).where(eq(inboundEmails.id, input.id));
+        return { ok: true };
+      }),
+
     replyRecruitment: protectedProcedure
       .input(z.object({
         to: z.string().email(),
@@ -1923,10 +1937,25 @@ export const appRouter = router({
         includeRegisterLink: z.boolean().optional(),
         candidateName: z.string().optional(),
         origin: z.string().url().optional(),
+        // Ficheiros já enviados para /api/upload (Vercel Blob público) —
+        // o servidor descarrega-os e envia como anexos do email.
+        attachments: z.array(z.object({
+          filename: z.string().min(1).max(255),
+          url: z.string().url().startsWith("https://"),
+        })).max(5).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
         const { sendEmail } = await import("./_core/notification");
+
+        const emailAttachments: Array<{ filename: string; content: Buffer }> = [];
+        for (const a of input.attachments ?? []) {
+          const resp = await fetch(a.url);
+          if (!resp.ok) throw new TRPCError({ code: "BAD_REQUEST", message: `Anexo "${a.filename}" inacessível (HTTP ${resp.status})` });
+          const buf = Buffer.from(await resp.arrayBuffer());
+          if (buf.length > 10 * 1024 * 1024) throw new TRPCError({ code: "BAD_REQUEST", message: `Anexo "${a.filename}" excede 10 MB` });
+          emailAttachments.push({ filename: a.filename, content: buf });
+        }
         const from = input.fromAlias ? `${input.fromAlias}@multipark.pt` : undefined;
         const fromName = input.fromAlias === "recursos-humanos" ? "Multipark Recrutamento" : "Multipark";
 
@@ -1947,12 +1976,15 @@ export const appRouter = router({
           body = `${input.body}\n\n— — —\nPara te registares na plataforma Multipark, abre este link e entra com a tua conta Google:\n${inviteLink}`;
         }
 
-        const ok = await sendEmail({ to: input.to, subject: input.subject, text: body, from, fromName });
+        const ok = await sendEmail({
+          to: input.to, subject: input.subject, text: body, from, fromName,
+          ...(emailAttachments.length ? { attachments: emailAttachments } : {}),
+        });
         await logActivity({
           userId: ctx.user.id,
           action: "email_reply",
           entity: "recruitment",
-          details: `Resposta a ${input.to}: ${input.subject.slice(0, 80)}${inviteLink ? " (+link registo)" : ""}`,
+          details: `Resposta a ${input.to}: ${input.subject.slice(0, 80)}${inviteLink ? " (+link registo)" : ""}${emailAttachments.length ? ` (+${emailAttachments.length} anexo${emailAttachments.length > 1 ? "s" : ""})` : ""}`,
         });
         if (!ok) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "SMTP não configurado ou falhou o envio" });
         return { ok, inviteLink };

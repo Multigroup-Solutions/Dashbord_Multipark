@@ -294,9 +294,26 @@ export async function runEmailInboundSync(opts?: { sinceDays?: number }): Promis
           const htmlText = typeof mail.html === "string" ? mail.html.replace(/<[^>]+>/g, " ") : "";
           const bodyText = (mail.text || htmlText || "").slice(0, 20000);
           const parsed = parseInboundBody(bodyText);
-          const attachments = (mail.attachments || []).map((a) => ({
-            filename: a.filename, contentType: a.contentType, size: a.size,
-          }));
+          // Guarda os ficheiros no storage (antes só se registavam os nomes e o
+          // conteúdo era deitado fora — impossível abrir um CV no backoffice).
+          // Best-effort por anexo: falha de upload não perde o email.
+          const attachments: Array<{ filename?: string; contentType?: string; size?: number; url?: string }> = [];
+          for (const a of mail.attachments || []) {
+            const meta: { filename?: string; contentType?: string; size?: number; url?: string } = {
+              filename: a.filename, contentType: a.contentType, size: a.size,
+            };
+            if (a.content && a.size && a.size <= 15 * 1024 * 1024) {
+              try {
+                const { storagePut } = await import("../storage");
+                const safe = (a.filename || "anexo").replace(/[^\w.\-]+/g, "_").slice(0, 120);
+                const { url } = await storagePut(`inbound/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safe}`, a.content, a.contentType || "application/octet-stream");
+                meta.url = url;
+              } catch (err: any) {
+                console.warn("[EmailInbound] upload de anexo falhou:", String(err?.message ?? err).slice(0, 160));
+              }
+            }
+            attachments.push(meta);
+          }
 
           const routed = await routeToModule(alias, parsed, {
             subject, bodyText, fromName, fromEmail, messageId, gmThreadId, refs,

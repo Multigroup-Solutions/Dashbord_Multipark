@@ -51,6 +51,22 @@ try {
     });
   });
 
+  // Resolve um ficheiro do storage pela KEY (ex.: training/manuals/...).
+  // Necessário porque URLs relativas "/uploads/..." gravadas na BD não são
+  // servidas no Vercel (o rewrite manda tudo o que não é /api p/ o index.html).
+  app.get(/^\/api\/file\/(.+)/, async (req, res) => {
+    try {
+      const key = decodeURIComponent((req.params as any)[0] ?? "");
+      if (!key || key.includes("..")) return res.status(400).json({ error: "Key inválida" });
+      const { storageGet } = await import("../storage");
+      const { url } = await storageGet(key);
+      if (url && /^https?:\/\//.test(url)) return res.redirect(302, url);
+      return res.status(404).json({ error: "Ficheiro não encontrado no storage" });
+    } catch (e: any) {
+      return res.status(500).json({ error: e?.message || "Falha a resolver ficheiro" });
+    }
+  });
+
   app.use(
     "/api/trpc",
     createExpressMiddleware({

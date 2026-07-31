@@ -157,10 +157,6 @@ export default function ExtrasDiaPage() {
         </div>
       </div>
 
-      <CandidaturasSection />
-
-      <AvailabilitySection />
-
       {isLoading && (
         <div className="text-sm text-muted-foreground">A carregar previsão...</div>
       )}
@@ -1232,7 +1228,9 @@ const APP_STATUS: Record<string, { label: string; className: string }> = {
   rejected: { label: "Rejeitada", className: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300" },
 };
 
-function CandidaturasSection() {
+// Exportada: rende agora na página Disponibilidade (hub de gestão), não aqui —
+// a Extras Dia ficou só com previsão + equipa do dia (pedido do Jorge, jul 2026).
+export function CandidaturasSection() {
   const [statusFilter, setStatusFilter] = useState<string>("new");
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
@@ -1405,7 +1403,9 @@ function CandidaturasSection() {
   );
 }
 
-function AvailabilitySection() {
+// Exportada: rende agora na página Disponibilidade (hub de gestão) — ver nota
+// na CandidaturasSection.
+export function AvailabilitySection() {
   const hints = trpc.extrasAvailability.weekHints.useQuery();
   const [weekStart, setWeekStart] = useState<string>("");
   const [note, setNote] = useState("");

@@ -75,6 +75,20 @@ async function startServer() {
       return res.status(500).json({ error: err.message || "Upload failed" });
     }
   });
+  // Resolve ficheiro do storage pela KEY (paridade com o api-entry.ts do
+  // Vercel): Blob → redirect para a URL pública; local → redirect p/ /uploads.
+  app.get(/^\/api\/file\/(.+)/, async (req: any, res: any) => {
+    try {
+      const key = decodeURIComponent(req.params[0] ?? "");
+      if (!key || key.includes("..")) return res.status(400).json({ error: "Key inválida" });
+      const { storageGet } = await import("../storage");
+      const { url } = await storageGet(key);
+      if (url) return res.redirect(302, url);
+      return res.status(404).json({ error: "Ficheiro não encontrado no storage" });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || "Falha a resolver ficheiro" });
+    }
+  });
   // tRPC API
   app.use(
     "/api/trpc",

@@ -7,6 +7,10 @@ import { Label } from "@/components/ui/label";
 import { Loader2, CalendarCheck, Sun, Moon, CheckCircle2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { AvailabilitySection, CandidaturasSection } from "@/pages/ExtrasDiaPage";
+import { RecruitmentSection } from "@/components/RecruitmentSection";
+import { Mail } from "lucide-react";
 
 type DayState = {
   day: string;
@@ -25,7 +29,53 @@ function useWeekParam(fallback: string): string {
   }, [fallback]);
 }
 
+// Dois modos na mesma rota (pedido do Jorge, jul 2026):
+//   - extra (e restantes não-gestão): marca a PRÓPRIA disponibilidade;
+//   - backoffice e acima: hub de gestão — matriz de disponibilidades +
+//     envio email/WhatsApp + candidaturas do site (saíram da Extras Dia,
+//     que estava demasiado cheia). Quem é gestão não marca disponibilidade.
+const MANAGEMENT_ROLES = new Set(["backoffice", "team_leader", "supervisor", "admin", "super_admin"]);
+
 export default function DisponibilidadePage() {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (MANAGEMENT_ROLES.has(user?.role ?? "")) {
+    return (
+      <div className="space-y-6 p-6">
+        <div>
+          <h1 className="text-2xl font-bold flex items-center gap-2">
+            <CalendarCheck className="h-6 w-6 text-primary" />
+            Disponibilidades
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Quem está disponível, pedidos por email/WhatsApp e candidaturas do site.
+          </p>
+        </div>
+        <AvailabilitySection />
+        <CandidaturasSection />
+        <div>
+          <h2 className="text-lg font-semibold flex items-center gap-2 mb-3">
+            <Mail className="h-5 w-5 text-primary" />
+            Recrutamento (recursos-humanos@)
+          </h2>
+          <RecruitmentSection />
+        </div>
+      </div>
+    );
+  }
+
+  return <MyAvailability />;
+}
+
+function MyAvailability() {
   const hints = trpc.extrasAvailability.weekHints.useQuery();
   const fallbackWeek = hints.data?.next ?? "";
   const weekStart = useWeekParam(fallbackWeek);

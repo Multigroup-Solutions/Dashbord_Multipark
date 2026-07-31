@@ -138,6 +138,19 @@ function VideosTab({ isAdmin }: { isAdmin: boolean }) {
 }
 
 // ─── MANUALS TAB ────────────────────────────────────────────────────────────
+
+/**
+ * URL abrível do anexo de um manual. `fileUrl` antigo pode ser RELATIVO
+ * ("/uploads/...") — o Vercel não serve esse caminho (rewrite manda tudo para
+ * o index.html) e o PDF "não abre". Nesses casos resolve-se pela fileKey
+ * através do endpoint /api/file/<key>, que redireciona para o storage.
+ */
+function manualFileHref(m: { fileUrl?: string | null; fileKey?: string | null }): string | null {
+  if (m.fileUrl && /^https?:\/\//.test(m.fileUrl)) return m.fileUrl;
+  if (m.fileKey) return `/api/file/${encodeURI(m.fileKey)}`;
+  return m.fileUrl || null;
+}
+
 function ManualsTab({ isAdmin }: { isAdmin: boolean }) {
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [showCreate, setShowCreate] = useState(false);
@@ -200,7 +213,7 @@ function ManualsTab({ isAdmin }: { isAdmin: boolean }) {
             <p className="text-sm text-muted-foreground">{fmtPTDate(selectedManual.createdAt)}</p>
           </CardHeader>
           <CardContent className="space-y-4">
-            {selectedManual.fileUrl && (
+            {(selectedManual.fileUrl || selectedManual.fileKey) && (
               <div className="border rounded-lg p-4 bg-muted/30">
                 <div className="flex items-center gap-3">
                   <FileText className="w-8 h-8 text-primary" />
@@ -208,10 +221,10 @@ function ManualsTab({ isAdmin }: { isAdmin: boolean }) {
                     <p className="font-medium">{selectedManual.fileName || "Ficheiro anexo"}</p>
                     <p className="text-sm text-muted-foreground">{selectedManual.fileMimeType}</p>
                   </div>
-                  <Button variant="outline" size="sm" onClick={() => window.open(selectedManual.fileUrl, "_blank")}>Abrir</Button>
+                  <Button variant="outline" size="sm" onClick={() => window.open(manualFileHref(selectedManual) ?? undefined, "_blank")}>Abrir</Button>
                 </div>
                 {selectedManual.fileMimeType === "application/pdf" && (
-                  <iframe src={selectedManual.fileUrl} className="w-full h-[500px] mt-3 rounded border" />
+                  <iframe src={manualFileHref(selectedManual) ?? undefined} className="w-full h-[500px] mt-3 rounded border" />
                 )}
               </div>
             )}
@@ -256,7 +269,16 @@ function ManualsTab({ isAdmin }: { isAdmin: boolean }) {
                       <div className="flex items-center gap-2 text-sm text-muted-foreground">
                         <span>{fmtPTDate(m.createdAt)}</span>
                         <Badge variant="outline" className="text-xs">{typeLabels[m.type] || m.type}</Badge>
-                        {m.fileUrl && <Badge variant="secondary" className="text-xs">📎 Ficheiro</Badge>}
+                        {(m.fileUrl || m.fileKey) && (
+                          <Badge
+                            variant="secondary"
+                            className="text-xs cursor-pointer hover:bg-secondary/80"
+                            title={m.fileName || "Abrir ficheiro"}
+                            onClick={(e) => { e.stopPropagation(); const href = manualFileHref(m); if (href) window.open(href, "_blank"); }}
+                          >
+                            📎 {m.fileName ? m.fileName.slice(0, 30) : "Ficheiro"}
+                          </Badge>
+                        )}
                       </div>
                     </div>
                   </div>

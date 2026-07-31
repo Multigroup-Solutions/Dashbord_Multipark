@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { RecruitmentSection } from "@/components/RecruitmentSection";
 import { trpc } from "@/lib/trpc";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
 import { Button } from "@/components/ui/button";
@@ -2176,123 +2177,8 @@ function PayrollPage({ onBack }: { onBack: () => void }) {
   );
 }
 
-// ── Aba RECRUTAMENTO: emails recebidos em recursos-humanos@ ────────────────────
-function RecruitmentTab() {
-  const { data: emails = [], isLoading, refetch } = trpc.rh.recruitmentEmails.useQuery();
-  const [selected, setSelected] = useState<any | null>(null);
-  const [replyTo, setReplyTo] = useState("");
-  const [replySubject, setReplySubject] = useState("");
-  const [replyBody, setReplyBody] = useState("");
-  const [includeLink, setIncludeLink] = useState(true);
-
-  const reply = trpc.rh.replyRecruitment.useMutation({
-    onSuccess: (r: any) => {
-      toast.success(r?.inviteLink ? "Resposta enviada com link de registo" : "Resposta enviada");
-      setSelected(null); setReplyBody("");
-    },
-    onError: (e) => toast.error(e.message || "Falha ao enviar"),
-  });
-
-  const sync = trpc.admin.runEmailInbound.useMutation({
-    onSuccess: (r: any) => {
-      if (!r.configured) toast.error("IMAP não configurado no servidor");
-      else toast.success(`Sincronização: ${r.created} criados, ${r.skipped} ignorados`);
-      refetch();
-    },
-    onError: (e) => toast.error(e.message || "Falha na sincronização"),
-  });
-
-  const openReply = (e: any) => {
-    setSelected(e);
-    setReplyTo(e.clientEmail || e.fromEmail || "");
-    setReplySubject(`Re: ${e.subject || "Candidatura"}`);
-    setReplyBody("");
-    setIncludeLink(true);
-  };
-
-  if (isLoading) return <div className="text-center py-12 text-muted-foreground">A carregar emails de recrutamento...</div>;
-  if (!emails.length) return (
-    <div className="text-center py-12 text-muted-foreground">
-      <Mail className="w-12 h-12 mx-auto mb-3 opacity-30" />
-      <p>Sem emails de recrutamento.</p>
-      <p className="text-xs mt-1">Reencaminha um email para <b>recursos-humanos@multipark.pt</b> e aparece aqui.</p>
-      <Button className="mt-4" size="sm" disabled={sync.isPending} onClick={() => sync.mutate()}>
-        <Mail className="w-4 h-4 mr-2" />{sync.isPending ? "A sincronizar…" : "Sincronizar emails agora"}
-      </Button>
-    </div>
-  );
-
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">{emails.length} email(s) recebido(s)</p>
-        <Button variant="outline" size="sm" disabled={sync.isPending} onClick={() => sync.mutate()}>
-          <Mail className="w-4 h-4 mr-2" />{sync.isPending ? "A sincronizar…" : "Sincronizar emails"}
-        </Button>
-      </div>
-      <div className="grid grid-cols-1 gap-3">
-        {emails.map((e: any) => (
-          <Card key={e.id}>
-            <CardContent className="p-4">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-medium truncate">{e.subject || "(sem assunto)"}</span>
-                    {e.taskId ? <Badge variant="secondary">Tarefa #{e.taskId}</Badge> : null}
-                  </div>
-                  <div className="text-sm text-muted-foreground mt-1 flex items-center gap-3 flex-wrap">
-                    <span className="flex items-center gap-1"><Users className="w-3 h-3" />{e.clientName || e.fromName || "Desconhecido"}</span>
-                    {(e.clientEmail || e.fromEmail) && <span className="flex items-center gap-1"><Mail className="w-3 h-3" />{e.clientEmail || e.fromEmail}</span>}
-                    {e.clientPhone && <span className="flex items-center gap-1"><Phone className="w-3 h-3" />{e.clientPhone}</span>}
-                    {e.receivedAt && <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />{String(e.receivedAt).slice(0, 16)}</span>}
-                  </div>
-                  {e.bodyText && <p className="text-sm mt-2 line-clamp-2 text-muted-foreground whitespace-pre-wrap">{e.bodyText.slice(0, 300)}</p>}
-                </div>
-                <Button size="sm" onClick={() => openReply(e)} disabled={!(e.clientEmail || e.fromEmail)}>
-                  <Mail className="w-4 h-4 mr-2" />Responder
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      <Dialog open={!!selected} onOpenChange={(o) => !o && setSelected(null)}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader><DialogTitle>Responder candidatura</DialogTitle></DialogHeader>
-          <div className="space-y-3">
-            <div><Label>Para</Label><Input value={replyTo} onChange={(ev) => setReplyTo(ev.target.value)} /></div>
-            <div><Label>Assunto</Label><Input value={replySubject} onChange={(ev) => setReplySubject(ev.target.value)} /></div>
-            <div>
-              <Label>Mensagem</Label>
-              <textarea className="w-full min-h-[160px] rounded-md border p-2 text-sm" value={replyBody}
-                onChange={(ev) => setReplyBody(ev.target.value)} placeholder="Escreve a resposta…" />
-            </div>
-            <label className="flex items-start gap-2 text-sm cursor-pointer">
-              <input type="checkbox" className="mt-0.5" checked={includeLink} onChange={(ev) => setIncludeLink(ev.target.checked)} />
-              <span>
-                Incluir <strong>link de registo</strong> — cria a conta do candidato e adiciona o link à mensagem
-                (ele entra com o Google e fica utilizador).
-              </span>
-            </label>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setSelected(null)}>Cancelar</Button>
-            <Button onClick={() => reply.mutate({
-                to: replyTo, subject: replySubject, body: replyBody, fromAlias: selected?.alias,
-                includeRegisterLink: includeLink,
-                candidateName: selected?.clientName || selected?.fromName || undefined,
-                origin: window.location.origin,
-              })}
-              disabled={reply.isPending || !replyTo || !replyBody}>
-              <Mail className="w-4 h-4 mr-2" />{reply.isPending ? "A enviar…" : "Enviar"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
-}
+// Aba RECRUTAMENTO: extraída para components/RecruitmentSection (partilhada
+// com o hub da página Disponibilidade) — com email completo, anexos e notas.
 
 export default function HRPage() {
   const { user } = useAuth();
@@ -2567,7 +2453,7 @@ export default function HRPage() {
             )}
           </TabsContent>
           <TabsContent value="recrutamento" className="mt-4">
-            <RecruitmentTab />
+            <RecruitmentSection />
           </TabsContent>
         </Tabs>
       )}
