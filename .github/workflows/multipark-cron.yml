@@ -17,10 +17,10 @@ name: Multipark Sync Cron
 
 on:
   schedule:
-    # Sync recente: a cada 15 minutos. Minutos desfasados (4,19,34,49) — os
-    # minutos "redondos" (0,15,30,45) são os mais congestionados no GitHub e
-    # os runs são descartados/atrasados com mais frequência.
-    - cron: "4,19,34,49 * * * *"
+    # Sync recente: DE HORA A HORA (min 7, desfasado). Com o webhook das Conexões
+    # a entregar reservas em tempo real, isto é só rede de segurança (check-ins/
+    # check-outs/condutores/enrichment + email-inbound).
+    - cron: "7 * * * *"
     # Janela futura: minuto 17 a cada 2 horas
     - cron: "17 */2 * * *"
     # Cleanup: 03:00 UTC (=04:00 PT verão)
@@ -35,7 +35,7 @@ permissions:
 
 jobs:
   sync-recent:
-    if: github.event.schedule == '4,19,34,49 * * * *' || github.event_name == 'workflow_dispatch'
+    if: github.event.schedule == '7 * * * *' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger /api/cron/multipark-sync
@@ -76,7 +76,7 @@ jobs:
           fi
 
   email-inbound:
-    if: github.event.schedule == '4,19,34,49 * * * *' || github.event_name == 'workflow_dispatch'
+    if: github.event.schedule == '7 * * * *' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger /api/cron/email-inbound
