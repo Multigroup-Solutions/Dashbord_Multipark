@@ -925,8 +925,9 @@ function DriverHistoryTab() {
           disabled={!history || history.length === 0}
           onClick={() => {
             if (!history) return;
-            const headers = ["Motorista","Km","Horas Trab.","Horas Parado","Vel. Méd.","Vel. Máx.","Infrações","Bateria","Pontos GPS"];
+            const headers = ["Motorista","Zello","Km","Horas Trab.","Horas Parado","Vel. Méd.","Vel. Máx.","Infrações","Bateria","Pontos GPS"];
             const rows = history.map((h: any) => [
+              (h.employeeName || h.displayName || h.zelloUsername).replace(/;/g, ","),
               (h.displayName || h.zelloUsername).replace(/;/g, ","),
               parseFloat(h.totalKm || "0").toFixed(1),
               parseFloat(h.hoursWorked || "0").toFixed(1),
@@ -1037,9 +1038,14 @@ function DriverHistoryTab() {
                   {history.map((h: any) => (
                     <React.Fragment key={h.id}>
                       <tr key={h.id} className="border-b hover:bg-muted/50 cursor-pointer" onClick={() => setExpandedUser(expandedUser === h.zelloUsername ? null : h.zelloUsername)}>
-                        <td className="p-2 font-medium flex items-center gap-1">
-                          {expandedUser === h.zelloUsername ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                          {h.displayName || h.zelloUsername}
+                        <td className="p-2 font-medium">
+                          <div className="flex items-center gap-1">
+                            {expandedUser === h.zelloUsername ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                            {h.employeeName || h.displayName || h.zelloUsername}
+                          </div>
+                          {h.employeeName && (
+                            <p className="text-xs text-muted-foreground font-normal pl-4">{h.displayName || h.zelloUsername}</p>
+                          )}
                         </td>
                         <td className="p-2 text-right font-mono">{parseFloat(h.totalKm || "0").toFixed(1)}</td>
                         <td className="p-2 text-right font-mono">{parseFloat(h.hoursWorked || "0").toFixed(1)}h</td>
@@ -1076,7 +1082,7 @@ function DriverHistoryTab() {
                         <tr key={`${h.id}-history`}>
                           <td colSpan={10} className="p-0">
                             <div className="bg-muted/30 p-3 border-b">
-                              <p className="text-xs font-medium mb-2">Últimos 14 dias — {h.displayName || h.zelloUsername}</p>
+                              <p className="text-xs font-medium mb-2">Últimos 14 dias — {h.employeeName || h.displayName || h.zelloUsername}</p>
                               <div className="grid grid-cols-7 gap-1">
                                 {userHistory.map((uh: any) => (
                                   <div key={uh.id} className="text-center text-xs border rounded p-1 bg-background">
@@ -1203,6 +1209,7 @@ function PdasTab() {
                       <p className="font-medium text-blue-700 dark:text-blue-300 flex items-center gap-1">
                         <Users className="w-3 h-3" /> Em uso
                       </p>
+                      {checkin.employeeName && <p className="text-xs font-medium">{checkin.employeeName}</p>}
                       {checkin.zelloUsername && <p className="text-xs">Zello: {checkin.zelloUsername}</p>}
                       <p className="text-xs text-muted-foreground">
                         Desde {fmtPTDateTime(checkin.checkinAt)}
@@ -1432,16 +1439,16 @@ function CheckinDialog({ pdaId, onClose }: { pdaId: number; onClose: () => void 
             </Select>
           </div>
           <div>
-            <Label>Funcionário (opcional)</Label>
+            <Label>Funcionário *</Label>
             <Select value={employeeId} onValueChange={setEmployeeId}>
-              <SelectTrigger><SelectValue placeholder="Associar funcionário..." /></SelectTrigger>
+              <SelectTrigger><SelectValue placeholder="Escolher funcionário..." /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="none">Nenhum</SelectItem>
                 {(employees || []).map((e: any) => (
                   <SelectItem key={e.employee.id} value={String(e.employee.id)}>{e.employee.fullName}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            {!employeeId && <p className="text-xs text-muted-foreground mt-1">Obrigatório — o histórico de atividade fica associado a esta pessoa.</p>}
           </div>
           <div>
             <Label>Dados Móveis (MB no início)</Label>
@@ -1464,10 +1471,10 @@ function CheckinDialog({ pdaId, onClose }: { pdaId: number; onClose: () => void 
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button disabled={checkinMut.isPending || uploading} onClick={() => checkinMut.mutate({
+          <Button disabled={checkinMut.isPending || uploading || !employeeId || employeeId === "none"} onClick={() => checkinMut.mutate({
             pdaId,
             zelloUsername: zelloUsername || undefined,
-            employeeId: employeeId && employeeId !== "none" ? Number(employeeId) : undefined,
+            employeeId: Number(employeeId),
             photoEntryUrl: photoEntryUrl || undefined,
             mobileDataMbStart: mobileDataMbStart ? Number(mobileDataMbStart) : undefined,
             notes: notes || undefined,
@@ -1504,7 +1511,12 @@ function PdaHistoryDialog({ pdaId, onClose }: { pdaId: number; onClose: () => vo
               <tbody>
                 {checkins.map((c: any) => (
                   <tr key={c.id} className="border-b">
-                    <td className="p-2 font-medium">{c.zelloUsername || `Emp #${c.employeeId}`}</td>
+                    <td className="p-2 font-medium">
+                      {c.employeeName || c.zelloUsername || `Emp #${c.employeeId}`}
+                      {c.employeeName && c.zelloUsername && (
+                        <p className="text-xs text-muted-foreground font-normal">{c.zelloUsername}</p>
+                      )}
+                    </td>
                     <td className="p-2 text-muted-foreground">{fmtPTDateTime(c.checkinAt)}</td>
                     <td className="p-2 text-muted-foreground">{c.checkoutAt ? fmtPTDateTime(c.checkoutAt) : "-"}</td>
                     <td className="p-2 text-xs">

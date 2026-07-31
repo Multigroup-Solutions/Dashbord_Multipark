@@ -6693,6 +6693,56 @@ export async function createDailyDriverHistory(data: InsertDailyDriverHistory) {
   return result.insertId;
 }
 
+/**
+ * Resolve o NOME do funcionário para cada linha de histórico Zello.
+ *
+ * O histórico diário é recolhido do Zello e só traz o utilizador Zello
+ * ("Faro 411"). Quem interessa à operação é a PESSOA. Prioridade:
+ *   1. check-in de PDA do PRÓPRIO dia com esse Zello (dimensão temporal —
+ *      quem levou o aparelho naquele dia manda, mesmo que o anexo persistente
+ *      aponte para outra pessoa);
+ *   2. anexo persistente `employees.zelloUsername`.
+ * Sem match, `employeeName` fica null e a UI cai no nome Zello.
+ */
+async function withEmployeeNames<T extends { zelloUsername: string; date: string | Date }>(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  rows: T[],
+): Promise<(T & { employeeName: string | null; resolvedEmployeeId: number | null })[]> {
+  if (rows.length === 0) return [];
+  const zellos = [...new Set(rows.map(r => r.zelloUsername).filter(Boolean))];
+  if (zellos.length === 0) return rows.map(r => ({ ...r, employeeName: null, resolvedEmployeeId: null }));
+
+  const persistent = await db
+    .select({ id: employees.id, fullName: employees.fullName, zello: employees.zelloUsername })
+    .from(employees)
+    .where(inArray(employees.zelloUsername, zellos));
+  const byZello = new Map(persistent.map(e => [e.zello!, e]));
+
+  // Check-ins com esses Zellos dentro do intervalo de datas das linhas (+1 dia
+  // de margem) — chave `${zello}|${YYYY-MM-DD}` para o match ser por DIA.
+  const dayOf = (d: string | Date) => toMysqlDateTime(typeof d === "string" ? d : d).slice(0, 10);
+  const dates = rows.map(r => dayOf(r.date)).sort();
+  const from = `${dates[0]} 00:00:00`;
+  const to = `${dates[dates.length - 1]} 23:59:59`;
+  const checkins = await db
+    .select({ zello: pdaCheckins.zelloUsername, employeeId: pdaCheckins.employeeId, at: pdaCheckins.checkinAt })
+    .from(pdaCheckins)
+    .where(and(inArray(pdaCheckins.zelloUsername, zellos), isNotNull(pdaCheckins.employeeId), gte(pdaCheckins.checkinAt, from), lte(pdaCheckins.checkinAt, to)));
+  const empIds = [...new Set(checkins.map(c => c.employeeId!).filter(id => !persistent.some(p => p.id === id)))];
+  const extraEmps = empIds.length
+    ? await db.select({ id: employees.id, fullName: employees.fullName }).from(employees).where(inArray(employees.id, empIds))
+    : [];
+  const empById = new Map([...persistent, ...extraEmps].map(e => [e.id, e.fullName]));
+  const byZelloDay = new Map(checkins.map(c => [`${c.zello}|${dayOf(c.at as any)}`, c.employeeId!]));
+
+  return rows.map(r => {
+    const dayHit = byZelloDay.get(`${r.zelloUsername}|${dayOf(r.date)}`);
+    const persistentHit = byZello.get(r.zelloUsername);
+    const id = dayHit ?? persistentHit?.id ?? null;
+    return { ...r, resolvedEmployeeId: id, employeeName: (id != null ? empById.get(id) : null) ?? null };
+  });
+}
+
 export async function getDailyDriverHistoryByDate(dateStr: string) {
   const db = await getDb();
   if (!db) return [];
@@ -6700,29 +6750,32 @@ export async function getDailyDriverHistoryByDate(dateStr: string) {
   startOfDay.setHours(0, 0, 0, 0);
   const endOfDay = new Date(dateStr);
   endOfDay.setHours(23, 59, 59, 999);
-  return db.select().from(dailyDriverHistory)
+  const rows = await db.select().from(dailyDriverHistory)
     .where(and(gte(dailyDriverHistory.date, toMysqlDateTime(startOfDay)), lte(dailyDriverHistory.date, toMysqlDateTime(endOfDay))))
     .orderBy(desc(dailyDriverHistory.totalKm));
+  return withEmployeeNames(db, rows);
 }
 
 export async function getDailyDriverHistoryByUser(username: string, limit = 30) {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(dailyDriverHistory)
+  const rows = await db.select().from(dailyDriverHistory)
     .where(eq(dailyDriverHistory.zelloUsername, username))
     .orderBy(desc(dailyDriverHistory.date))
     .limit(limit);
+  return withEmployeeNames(db, rows);
 }
 
 export async function getDailyDriverHistoryRange(startDate: string, endDate: string) {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(dailyDriverHistory)
+  const rows = await db.select().from(dailyDriverHistory)
     .where(and(
       gte(dailyDriverHistory.date, toMysqlDateTime(new Date(startDate))),
       lte(dailyDriverHistory.date, toMysqlDateTime(new Date(endDate)))
     ))
     .orderBy(desc(dailyDriverHistory.date));
+  return withEmployeeNames(db, rows);
 }
 
 export async function getDailyDriverStats(dateStr: string) {
@@ -6789,6 +6842,24 @@ export async function createPdaCheckin(data: InsertPdaCheckin) {
   return result.insertId;
 }
 
+/**
+ * Anexa o utilizador Zello ao funcionário no ato do check-in — mas só a
+ * PREENCHER lacuna: nunca substitui um anexo existente do próprio nem rouba
+ * um Zello já anexado a outro colaborador (para esses casos existe o
+ * `mapUserToEmployee` explícito). O check-in em si guarda sempre o par
+ * temporal (quem levou que Zello naquele dia), que tem prioridade na exibição.
+ */
+export async function attachZelloToEmployeeIfUnset(employeeId: number, zelloUsername: string): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const [emp] = await db.select({ zello: employees.zelloUsername }).from(employees).where(eq(employees.id, employeeId)).limit(1);
+  if (!emp || emp.zello) return false;
+  const holder = await db.select({ id: employees.id }).from(employees).where(eq(employees.zelloUsername, zelloUsername)).limit(1);
+  if (holder.length > 0) return false;
+  await db.update(employees).set({ zelloUsername }).where(eq(employees.id, employeeId));
+  return true;
+}
+
 export async function checkoutPda(id: number, data: { photoExitUrl?: string; mobileDataMbEnd?: number; notes?: string }) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
@@ -6799,10 +6870,15 @@ export async function checkoutPda(id: number, data: { photoExitUrl?: string; mob
   }).where(eq(pdaCheckins.id, id));
 }
 
+// Check-ins sempre com o NOME do funcionário (left join): a operação fala de
+// pessoas, não de ids nem de nomes Zello.
+const checkinWithEmployee = { ...getTableColumns(pdaCheckins), employeeName: employees.fullName };
+
 export async function getActiveCheckins() {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(pdaCheckins)
+  return db.select(checkinWithEmployee).from(pdaCheckins)
+    .leftJoin(employees, eq(pdaCheckins.employeeId, employees.id))
     .where(eq(pdaCheckins.checkinStatus, "checked_in"))
     .orderBy(desc(pdaCheckins.checkinAt));
 }
@@ -6814,7 +6890,8 @@ export async function getCheckinsByDate(dateStr: string) {
   startOfDay.setHours(0, 0, 0, 0);
   const endOfDay = new Date(dateStr);
   endOfDay.setHours(23, 59, 59, 999);
-  return db.select().from(pdaCheckins)
+  return db.select(checkinWithEmployee).from(pdaCheckins)
+    .leftJoin(employees, eq(pdaCheckins.employeeId, employees.id))
     .where(and(gte(pdaCheckins.checkinAt, toMysqlDateTime(startOfDay)), lte(pdaCheckins.checkinAt, toMysqlDateTime(endOfDay))))
     .orderBy(desc(pdaCheckins.checkinAt));
 }
@@ -6822,7 +6899,8 @@ export async function getCheckinsByDate(dateStr: string) {
 export async function getCheckinsByPda(pdaId: number, limit = 30) {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(pdaCheckins)
+  return db.select(checkinWithEmployee).from(pdaCheckins)
+    .leftJoin(employees, eq(pdaCheckins.employeeId, employees.id))
     .where(eq(pdaCheckins.pdaId, pdaId))
     .orderBy(desc(pdaCheckins.checkinAt))
     .limit(limit);

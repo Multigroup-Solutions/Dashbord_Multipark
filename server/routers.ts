@@ -320,6 +320,7 @@ import {
   getPdaById,
   // PDA Check-ins
   createPdaCheckin,
+  attachZelloToEmployeeIfUnset,
   checkoutPda,
   getActiveCheckins,
   getCheckinsByDate,
@@ -3729,7 +3730,10 @@ export const appRouter = router({
         }),
         checkin: protectedProcedure.input(z.object({
           pdaId: z.number(),
-          employeeId: z.number().optional(),
+          // Funcionário OBRIGATÓRIO: sem pessoa não há check-in — é o que
+          // permite ao histórico de atividade mostrar QUEM usou o Zello/PDA
+          // naquele dia em vez do nome cru do Zello ("Faro 411").
+          employeeId: z.number({ error: "Escolhe o funcionário — o check-in tem de ficar associado a uma pessoa" }),
           zelloUsername: z.string().optional(),
           photoEntryUrl: z.string().optional(),
           mobileDataMbStart: z.number().optional(),
@@ -3738,13 +3742,20 @@ export const appRouter = router({
           requireRole(ctx.user.role, "backoffice");
           const id = await createPdaCheckin({
             pdaId: input.pdaId,
-            employeeId: input.employeeId ?? null,
+            employeeId: input.employeeId,
             zelloUsername: input.zelloUsername ?? null,
             teamLeaderId: ctx.user.id,
             photoEntryUrl: input.photoEntryUrl ?? null,
             mobileDataMbStart: input.mobileDataMbStart ?? null,
             notes: input.notes ?? null,
           });
+          // Preenche o anexo persistente Zello↔colaborador se ainda não existir.
+          if (input.zelloUsername) {
+            const attached = await attachZelloToEmployeeIfUnset(input.employeeId, input.zelloUsername);
+            if (attached) {
+              await logActivity({ userId: ctx.user.id, action: "map_zello", entity: "employees", entityId: input.employeeId, details: `Zello "${input.zelloUsername}" anexado automaticamente no check-in do PDA #${input.pdaId}` });
+            }
+          }
           await logActivity({ userId: ctx.user.id, action: "create", entity: "pda_checkin", entityId: id, details: `Check-in PDA #${input.pdaId}` });
           return { id };
         }),
