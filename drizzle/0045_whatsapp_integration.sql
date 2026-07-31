@@ -10,6 +10,10 @@
 -- Escrita à mão no padrão dos ficheiros manuais 0025–0044 (o journal do
 -- drizzle-kit está congelado no idx 24). NÃO executar automaticamente — aplicar
 -- pelo runbook habitual da casa.
+--
+-- ⚠️ SUPERSEDIDO: este ficheiro nunca foi executado por nada. O DDL real vive
+-- em server/migrations/migration_0060.ts (IF NOT EXISTS, aplicado no boot via
+-- ensureRecentSchema). Mantido só como referência histórica.
 
 -- ── 1. Conversas ────────────────────────────────────────────────────────────
 CREATE TABLE `whatsapp_conversations` (

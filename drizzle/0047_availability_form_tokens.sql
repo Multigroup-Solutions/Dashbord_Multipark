@@ -7,6 +7,11 @@
 -- Numeração 0047 (não 0046): `server/migrations/migration_0046.ts` já ocupa
 -- semanticamente o "0046" (runner one-shot). Ficheiro NOVO por regra: migrações
 -- existentes são imutáveis.
+--
+-- ⚠️ SUPERSEDIDO: este ficheiro nunca foi executado por nada (e o número 0047
+-- colide com server/migrations/migration_0047.ts). O DDL real vive em
+-- server/migrations/migration_0060.ts (IF NOT EXISTS, aplicado no boot via
+-- ensureRecentSchema). Mantido só como referência histórica.
 
 CREATE TABLE `availability_form_tokens` (
   `id` INT NOT NULL AUTO_INCREMENT,
