@@ -107,6 +107,30 @@ export async function upsertDriverApplication(input: DriverApplicationInput): Pr
     entityId: id,
     details: `[Website] Nova candidatura de condutor: ${fullName} <${email}>`,
   });
+  // Sino in-app para as chefias — sem isto a candidatura só se via se alguém
+  // abrisse a página Extras Dia por acaso. Só na CRIAÇÃO (re-submissões não
+  // fazem spam). Mesmo padrão das reclamações (notifyComplaintCreated).
+  try {
+    const { users } = await import("../drizzle/schema");
+    const { createNotification } = await import("./complaintsExtended");
+    const recipients = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(sql`${users.role} IN ('admin','super_admin','supervisor','team_leader','backoffice') AND ${users.isActive} = 1`);
+    for (const r of recipients) {
+      try {
+        await createNotification({
+          userId: r.id,
+          title: `Nova candidatura Be a Driver: ${fullName}`,
+          body: `${email}${fields.city ? ` · ${fields.city}` : ""}${fields.drivingExperience ? ` · ${fields.drivingExperience}` : ""}`,
+          kind: "driver_application",
+          link: "/extras-dia",
+        });
+      } catch {}
+    }
+  } catch (err) {
+    console.warn("[WebIntake] Falha ao notificar candidatura nova:", String(err).slice(0, 160));
+  }
   return { id, created: true, submissionCount: 1 };
 }
 

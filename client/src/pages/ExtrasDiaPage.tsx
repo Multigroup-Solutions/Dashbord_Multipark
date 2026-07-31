@@ -1236,10 +1236,12 @@ function CandidaturasSection() {
   const [statusFilter, setStatusFilter] = useState<string>("new");
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
+  // refetchInterval: candidaturas chegam do site a qualquer hora — o badge
+  // "N novas" tem de atualizar com a página aberta, sem reload.
   const list = trpc.driverApplications.list.useQuery({
     status: statusFilter === "all" ? null : (statusFilter as any),
-  });
-  const newCount = trpc.driverApplications.list.useQuery({ status: "new" });
+  }, { refetchInterval: 60_000 });
+  const newCount = trpc.driverApplications.list.useQuery({ status: "new" }, { refetchInterval: 60_000 });
 
   const approve = trpc.driverApplications.approve.useMutation({
     onSuccess: (r) => {
