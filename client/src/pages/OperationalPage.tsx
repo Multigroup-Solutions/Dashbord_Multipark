@@ -19,7 +19,7 @@ import {
   Car, AlertTriangle, Radio, Activity, Plus, Trash2, Eye, Check,
   MapPin, Gauge, ArrowUpDown, Clock, Wrench, XCircle, Satellite, Shield, Users, Settings,
   History, Smartphone, Bell, Battery, Upload, Camera, LogOut, ChevronDown, ChevronUp,
-  CalendarDays, Route, Zap,
+  CalendarDays, Route, Zap, Link as LinkIcon,
 } from "lucide-react";
 
 const STATUS_LABELS: Record<string, string> = { active: "Ativa", maintenance: "Manutenção", inactive: "Inativa" };
@@ -378,7 +378,31 @@ function ZelloGPSTab() {
   }, [speedLimits]);
   const speedThreshold = defaultLimit.maxSpeed * (1 + defaultLimit.tolerancePercent / 100);
 
-  const onlineUsers = useMemo(() => (locations || []).filter((l: any) => l.latitude !== 0 && l.longitude !== 0), [locations]);
+  // Resolve utilizador Zello → FUNCIONÁRIO com check-in ativo no PDA:
+  // via zelloUsername do próprio check-in OU do registo do PDA. O nome que a
+  // operação vê é sempre o do funcionário; o Zello fica só no registo de PDAs.
+  const { data: activeCheckins = [] } = trpc.operational.pdas.checkins.active.useQuery();
+  const { data: pdaListForGps = [] } = trpc.operational.pdas.list.useQuery();
+  const { data: empsForGps = [] } = trpc.rh.list.useQuery();
+  const zelloToEmployee = useMemo(() => {
+    const empName = new Map((empsForGps as any[]).map((e: any) => [e.employee.id, e.employee.fullName]));
+    const m = new Map<string, string>();
+    for (const c of activeCheckins as any[]) {
+      const name = c.employeeId ? empName.get(c.employeeId) : null;
+      if (!name) continue;
+      if (c.zelloUsername) m.set(String(c.zelloUsername).toLowerCase(), name);
+      const pda = (pdaListForGps as any[]).find((p: any) => p.id === c.pdaId);
+      if (pda?.zelloUsername) m.set(String(pda.zelloUsername).toLowerCase(), name);
+    }
+    return m;
+  }, [activeCheckins, pdaListForGps, empsForGps]);
+
+  const onlineUsers = useMemo(() => (locations || [])
+    .filter((l: any) => l.latitude !== 0 && l.longitude !== 0)
+    .map((l: any) => {
+      const emp = zelloToEmployee.get(String(l.username ?? "").toLowerCase());
+      return emp ? { ...l, displayName: emp } : l;
+    }), [locations, zelloToEmployee]);
   const speedingUsers = useMemo(() => onlineUsers.filter((l: any) => l.speed > speedThreshold), [onlineUsers, speedThreshold]);
 
   return (
@@ -1228,6 +1252,7 @@ function CreatePdaDialog({ onClose }: { onClose: () => void }) {
   const [phoneNumber, setPhoneNumber] = useState("");
   const [imei, setImei] = useState("");
   const [model, setModel] = useState("");
+  const [zelloUsername, setZelloUsername] = useState("");
   const [simDataPlan, setSimDataPlan] = useState("");
   const [notes, setNotes] = useState("");
   const utils = trpc.useUtils();
@@ -1248,6 +1273,11 @@ function CreatePdaDialog({ onClose }: { onClose: () => void }) {
             <div><Label>Nº Telemóvel</Label><Input value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)} placeholder="Ex: 912345678" /></div>
             <div><Label>IMEI</Label><Input value={imei} onChange={e => setImei(e.target.value)} placeholder="IMEI do dispositivo" /></div>
           </div>
+          <div>
+            <Label>Utilizador Zello (instalado neste PDA)</Label>
+            <Input value={zelloUsername} onChange={e => setZelloUsername(e.target.value)} placeholder="Ex: pda01" />
+            <p className="text-xs text-muted-foreground mt-1">Só aparece aqui — na atividade/GPS mostra-se o funcionário com check-in no PDA.</p>
+          </div>
           <div><Label>Plano de Dados</Label><Input value={simDataPlan} onChange={e => setSimDataPlan(e.target.value)} placeholder="Ex: 5GB NOS" /></div>
           <div><Label>Notas</Label><Textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Observações..." /></div>
         </div>
@@ -1255,7 +1285,8 @@ function CreatePdaDialog({ onClose }: { onClose: () => void }) {
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
           <Button disabled={!name || createMut.isPending} onClick={() => createMut.mutate({
             name, phoneNumber: phoneNumber || undefined, imei: imei || undefined,
-            model: model || undefined, simDataPlan: simDataPlan || undefined, notes: notes || undefined,
+            model: model || undefined, zelloUsername: zelloUsername || undefined,
+            simDataPlan: simDataPlan || undefined, notes: notes || undefined,
           })}>{createMut.isPending ? "A criar..." : "Criar PDA"}</Button>
         </DialogFooter>
       </DialogContent>
@@ -1268,6 +1299,7 @@ function EditPdaDialog({ pda, onClose }: { pda: any; onClose: () => void }) {
   const [phoneNumber, setPhoneNumber] = useState(pda.phoneNumber || "");
   const [imei, setImei] = useState(pda.imei || "");
   const [model, setModel] = useState(pda.model || "");
+  const [zelloUsername, setZelloUsername] = useState(pda.zelloUsername || "");
   const [simDataPlan, setSimDataPlan] = useState(pda.simDataPlan || "");
   const [status, setStatus] = useState(pda.status);
   const [notes, setNotes] = useState(pda.notes || "");
@@ -1289,6 +1321,7 @@ function EditPdaDialog({ pda, onClose }: { pda: any; onClose: () => void }) {
             <div><Label>Nº Telemóvel</Label><Input value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)} /></div>
             <div><Label>IMEI</Label><Input value={imei} onChange={e => setImei(e.target.value)} /></div>
           </div>
+          <div><Label>Utilizador Zello (instalado neste PDA)</Label><Input value={zelloUsername} onChange={e => setZelloUsername(e.target.value)} placeholder="Ex: pda01" /></div>
           <div><Label>Plano de Dados</Label><Input value={simDataPlan} onChange={e => setSimDataPlan(e.target.value)} /></div>
           <div>
             <Label>Estado</Label>
@@ -1308,7 +1341,7 @@ function EditPdaDialog({ pda, onClose }: { pda: any; onClose: () => void }) {
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
           <Button disabled={updateMut.isPending} onClick={() => updateMut.mutate({
             id: pda.id,
-            data: { name, phoneNumber: phoneNumber || null, imei: imei || null, model: model || null, simDataPlan: simDataPlan || null, status: status as any, notes: notes || null },
+            data: { name, phoneNumber: phoneNumber || null, imei: imei || null, model: model || null, zelloUsername: zelloUsername || null, simDataPlan: simDataPlan || null, status: status as any, notes: notes || null },
           })}>{updateMut.isPending ? "A guardar..." : "Guardar"}</Button>
         </DialogFooter>
       </DialogContent>
@@ -1327,6 +1360,11 @@ function CheckinDialog({ pdaId, onClose }: { pdaId: number; onClose: () => void 
   const { data: zelloUsers } = trpc.operational.zello.users.useQuery();
   const { data: employees } = trpc.rh.list.useQuery();
   const [employeeId, setEmployeeId] = useState("");
+  // Pré-preenche com o utilizador Zello registado no próprio PDA.
+  const { data: pdaRecord } = trpc.operational.pdas.get.useQuery({ id: pdaId });
+  useEffect(() => {
+    if (pdaRecord?.zelloUsername && !zelloUsername) setZelloUsername(pdaRecord.zelloUsername);
+  }, [pdaRecord]);
 
   const checkinMut = trpc.operational.pdas.checkins.checkin.useMutation({
     onSuccess: () => {
@@ -1342,14 +1380,19 @@ function CheckinDialog({ pdaId, onClose }: { pdaId: number; onClose: () => void 
     if (!file) return;
     setUploading(true);
     try {
+      // Fotos de PDA vêm com 8-12MB e o Vercel limita o body a ~4.5MB —
+      // redimensiona para 1600px/JPEG antes de enviar (também acelera no 4G).
+      const resized = await resizeImageFile(file, 1600, 0.85);
       const formData = new FormData();
-      formData.append("file", file);
+      formData.append("file", resized, "checkin.jpg");
       const resp = await fetch("/api/upload", { method: "POST", body: formData });
-      const { url } = await resp.json();
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const { url, error } = await resp.json();
+      if (!url) throw new Error(error || "sem URL");
       setPhotoEntryUrl(url);
       toast.success("Foto carregada!");
-    } catch {
-      toast.error("Erro ao carregar foto");
+    } catch (err: any) {
+      toast.error(`Erro ao carregar foto: ${err?.message ?? "falha"}`);
     } finally {
       setUploading(false);
     }
@@ -1704,7 +1747,9 @@ function TranscribeDialog({ employees, vehicles, onClose }: { employees: any[]; 
       const formData = new FormData();
       formData.append("file", audioFile);
       const resp = await fetch("/api/upload", { method: "POST", body: formData });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const { url } = await resp.json();
+      if (!url) throw new Error("upload sem URL");
       transcribeMut.mutate({
         audioUrl: url,
         employeeId: employeeId && employeeId !== "none" ? Number(employeeId) : undefined,
@@ -1785,6 +1830,7 @@ function AgentActivityTab() {
           <label className="flex items-center gap-1.5 text-sm cursor-pointer self-center select-none">
             <input type="checkbox" checked={onlyUnmapped} onChange={(e) => setOnlyUnmapped(e.target.checked)} className="h-4 w-4" /> só por ligar
           </label>
+          <AutoLinkAgentsButton />
           <div className="ml-auto text-xs text-muted-foreground self-center">
             {(agents as any[]).length} agentes · {mappedCount} ligados · {totalActions} ações
           </div>
@@ -1837,4 +1883,52 @@ function AgentActivityTab() {
       </Card>
     </div>
   );
+}
+
+// ─── AUTO-LIGAÇÃO DE AGENTES ─────────────────────────────────────────────────
+// Liga por nome (normalizado) os agentes Multipark aos colaboradores; só faz
+// matches ÚNICOS — os ambíguos/sem match continuam na fila manual.
+function AutoLinkAgentsButton() {
+  const utils = trpc.useUtils();
+  const mut = trpc.multipark.autoLinkAgents.useMutation({
+    onSuccess: (r) => {
+      utils.multipark.agentActivity.invalidate();
+      utils.multipark.employeesForMapping.invalidate();
+      const parts = [`${r.linked.length} ligados automaticamente`];
+      if (r.ambiguous.length) parts.push(`${r.ambiguous.length} ambíguos (ligar à mão)`);
+      if (r.unmatched.length) parts.push(`${r.unmatched.length} sem colaborador correspondente`);
+      toast.success(parts.join(" · "));
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  return (
+    <Button variant="outline" size="sm" className="self-center" onClick={() => mut.mutate()} disabled={mut.isPending}>
+      <LinkIcon className="w-4 h-4 mr-1" />
+      {mut.isPending ? "A ligar…" : "Ligar automáticos"}
+    </Button>
+  );
+}
+
+// Redimensiona uma imagem no browser (máx `maxPx` no lado maior, JPEG).
+// Necessário porque o Vercel limita o corpo do pedido a ~4.5MB.
+async function resizeImageFile(file: File, maxPx: number, quality: number): Promise<Blob> {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = reject;
+      i.src = url;
+    });
+    const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(img.width * scale);
+    canvas.height = Math.round(img.height * scale);
+    canvas.getContext("2d")?.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+    if (!blob) throw new Error("resize falhou");
+    return blob;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }

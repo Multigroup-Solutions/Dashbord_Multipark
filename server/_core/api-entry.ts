@@ -28,6 +28,29 @@ try {
   app.use("/api/external", createExternalApiRouter());
   app.use("/api/v1", createMcpApiRouter());
 
+  // Upload multipart (paridade com o index.ts do Railway — os PDAs usam isto
+  // p/ a foto de entrada/saída do check-in; sem isto o Vercel dava 404).
+  // NOTA: o Vercel limita o body a ~4.5MB — o cliente redimensiona antes.
+  app.post("/api/upload", async (req, res, next) => {
+    const multer = (await import("multer")).default;
+    const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 4 * 1024 * 1024 } });
+    upload.single("file")(req as any, res as any, async (err: any) => {
+      if (err) return res.status(400).json({ error: err.message || "Upload inválido" });
+      try {
+        const file = (req as any).file;
+        if (!file) return res.status(400).json({ error: "No file" });
+        const { storagePut } = await import("../storage");
+        const ext = file.originalname?.split(".").pop() || "bin";
+        const key = `uploads/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+        const { url } = await storagePut(key, file.buffer, file.mimetype);
+        return res.json({ url, key });
+      } catch (e: any) {
+        console.error("[Upload] Error:", e);
+        return res.status(500).json({ error: e.message || "Upload failed" });
+      }
+    });
+  });
+
   app.use(
     "/api/trpc",
     createExpressMiddleware({

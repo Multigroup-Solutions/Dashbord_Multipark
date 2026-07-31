@@ -961,6 +961,9 @@ export const pdas = mysqlTable("pdas", {
 	phoneNumber: varchar({ length: 50 }),
 	imei: varchar({ length: 50 }),
 	model: varchar({ length: 255 }),
+	// Utilizador Zello instalado neste PDA — GPS/velocidades vêm daqui, mas a
+	// atividade mostra sempre o FUNCIONÁRIO com check-in ativo no PDA.
+	zelloUsername: varchar({ length: 128 }),
 	status: mysqlEnum(['active','inactive','maintenance','lost']).default('active').notNull(),
 	photoUrl: text(),
 	simDataPlan: varchar({ length: 255 }),

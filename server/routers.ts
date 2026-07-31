@@ -3635,6 +3635,7 @@ export const appRouter = router({
         phoneNumber: z.string().optional(),
         imei: z.string().optional(),
         model: z.string().optional(),
+        zelloUsername: z.string().optional(),
         status: z.enum(["active", "inactive", "maintenance", "lost"]).optional(),
         photoUrl: z.string().optional(),
         simDataPlan: z.string().optional(),
@@ -3646,6 +3647,7 @@ export const appRouter = router({
           phoneNumber: input.phoneNumber ?? null,
           imei: input.imei ?? null,
           model: input.model ?? null,
+          zelloUsername: input.zelloUsername ?? null,
           status: input.status ?? "active",
           photoUrl: input.photoUrl ?? null,
           simDataPlan: input.simDataPlan ?? null,
@@ -3661,6 +3663,7 @@ export const appRouter = router({
           phoneNumber: z.string().nullable().optional(),
           imei: z.string().nullable().optional(),
           model: z.string().nullable().optional(),
+          zelloUsername: z.string().nullable().optional(),
           status: z.enum(["active", "inactive", "maintenance", "lost"]).optional(),
           photoUrl: z.string().nullable().optional(),
           simDataPlan: z.string().nullable().optional(),
@@ -5934,6 +5937,51 @@ export const appRouter = router({
         }
         return { success: true };
       }),
+
+    // Auto-liga agentes Multipark a colaboradores por NOME (normalizado, sem
+    // acentos, case-insensitive). Só liga quando o match é ÚNICO e o colaborador
+    // ainda não tem agente — os restantes ficam na fila para ligação manual.
+    // Depois de ligado (auto ou manual) fica persistente em employees.multiparkAgentName.
+    autoLinkAgents: protectedProcedure.mutation(async ({ ctx }) => {
+      requireRole(ctx.user.role, "admin");
+      const { getDb } = await import("./db");
+      const { sql } = await import("drizzle-orm");
+      const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
+      const rows = (r: any) => (Array.isArray(r[0]) ? r[0] : r) as any[];
+      const norm = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+
+      const agents = rows(await db.execute(sql`
+        SELECT DISTINCT agentName FROM multipark_booking_history
+        WHERE agentName IS NOT NULL AND agentName <> ''
+          AND agentName NOT IN (SELECT multiparkAgentName FROM employees WHERE multiparkAgentName IS NOT NULL)`));
+      const emps = rows(await db.execute(sql`SELECT id, fullName, email, multiparkAgentName FROM employees WHERE isActive = 1`));
+
+      const byName = new Map<string, any[]>();
+      for (const e of emps) {
+        const k = norm(e.fullName ?? "");
+        if (!k) continue;
+        byName.set(k, [...(byName.get(k) ?? []), e]);
+      }
+
+      const linked: Array<{ agentName: string; employeeName: string }> = [];
+      const ambiguous: string[] = [];
+      const unmatched: string[] = [];
+      for (const a of agents) {
+        const candidates = byName.get(norm(a.agentName)) ?? [];
+        const free = candidates.filter((e) => !e.multiparkAgentName);
+        if (free.length === 1) {
+          await db.execute(sql`UPDATE employees SET multiparkAgentName = ${a.agentName} WHERE id = ${free[0].id} AND multiparkAgentName IS NULL`);
+          free[0].multiparkAgentName = a.agentName; // não voltar a usar este colaborador
+          linked.push({ agentName: a.agentName, employeeName: free[0].fullName });
+        } else if (candidates.length > 1) {
+          ambiguous.push(a.agentName);
+        } else {
+          unmatched.push(a.agentName);
+        }
+      }
+      await logActivity({ userId: ctx.user.id, action: "auto_link_agents", entity: "employees", details: `ligados=${linked.length} ambiguos=${ambiguous.length} sem_match=${unmatched.length}` });
+      return { linked, ambiguous, unmatched };
+    }),
 
     // Lista leve de colaboradores ativos para o dropdown de mapeamento.
     employeesForMapping: protectedProcedure.query(async ({ ctx }) => {
