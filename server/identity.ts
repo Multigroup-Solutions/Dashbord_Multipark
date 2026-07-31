@@ -45,6 +45,11 @@ export interface ResolvedEmployee {
 
 /** Uma conta de login criada à mão pelo admin ainda não usada para entrar. */
 export function isPlaceholderLogin(user: Pick<ResolvedUser, "openId" | "loginMethod">): boolean {
+  // Uma conta já fundida noutra mantém o openId `manual_...` (nunca é apagada,
+  // os activity_logs referenciam-na), mas NÃO é placeholder: se voltasse a
+  // sê-lo, cada login repetiria o merge e copiaria o seu isActive=0 para a
+  // conta real, desativando-a a cada entrada.
+  if ((user.loginMethod ?? "").startsWith("merged_into_")) return false;
   return user.openId.startsWith("manual_") || user.loginMethod === "manual";
 }
 

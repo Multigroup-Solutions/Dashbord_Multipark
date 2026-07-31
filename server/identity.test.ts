@@ -105,6 +105,12 @@ describe("isPlaceholderLogin", () => {
     expect(isPlaceholderLogin({ openId: "google_123", loginMethod: "google" })).toBe(false);
     expect(isPlaceholderLogin({ openId: "google_123", loginMethod: "merged_into_7" })).toBe(false);
   });
+
+  it("conta manual JÁ FUNDIDA nunca volta a ser placeholder (senão cada login re-desativa a conta real)", () => {
+    // Após o merge a linha mantém o openId `manual_...` mas ganha
+    // loginMethod `merged_into_<id>` — não pode voltar a entrar no merge.
+    expect(isPlaceholderLogin({ openId: "manual_123_abc", loginMethod: "merged_into_45" })).toBe(false);
+  });
 });
 
 // ─── Plano de fusão de extras duplicados ────────────────────────────────────
