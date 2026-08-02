@@ -7685,7 +7685,26 @@ export async function syncIncidentsFromMultiparkHistory(opts: {
 export async function createInboundEmail(data: InsertInboundEmail): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  const [result] = await db.insert(inboundEmails).values(data);
+  // Campos extraídos de emails são texto livre e podem exceder as colunas
+  // (ex.: parseInboundBody a apanhar um "nome" gigante → "Data too long for
+  // column 'clientName'" e o email fica preso em erro para sempre). Clamp aos
+  // tamanhos reais do schema.
+  const clamp = (v: unknown, n: number) => (typeof v === "string" ? v.slice(0, n) : v);
+  const safe: InsertInboundEmail = {
+    ...data,
+    messageId: clamp(data.messageId, 255) as string,
+    alias: clamp(data.alias, 40) as string,
+    fromName: clamp(data.fromName, 255) as any,
+    fromEmail: clamp(data.fromEmail, 320) as any,
+    clientName: clamp(data.clientName, 255) as any,
+    clientEmail: clamp(data.clientEmail, 320) as any,
+    clientPhone: clamp(data.clientPhone, 50) as any,
+    vehiclePlate: clamp(data.vehiclePlate, 20) as any,
+    bookingRef: clamp(data.bookingRef, 100) as any,
+    subject: clamp(data.subject, 500) as any,
+    errorMsg: clamp((data as any).errorMsg, 500) as any,
+  };
+  const [result] = await db.insert(inboundEmails).values(safe);
   return (result as any).insertId as number;
 }
 
