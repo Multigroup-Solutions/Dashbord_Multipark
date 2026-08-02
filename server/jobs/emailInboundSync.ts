@@ -156,7 +156,7 @@ async function routeToModule(
         complaintId: existing.id,
         message: `📧 ${ctx.subject}\n\n${ctx.bodyText}`.trim().slice(0, 5000),
         isInternal: 0,
-        authorName: clientName,
+        authorName: (clientName || "").slice(0, 200) || null,
       } as any);
       // Uma nova mensagem do cliente reabre uma reclamação resolvida/fechada.
       if (existing.complaintStatus === "resolved" || existing.complaintStatus === "closed") {
@@ -366,7 +366,10 @@ export async function runEmailInboundSync(opts?: { sinceDays?: number; deadlineA
           result.created++;
           result.byAlias[alias] = (result.byAlias[alias] || 0) + 1;
         } catch (e: any) {
-          result.errors.push(`${alias} uid ${uid}: ${String(e?.message ?? e).slice(0, 160)}`);
+          // O DrizzleQueryError só traz a SQL na message; a razão real do MySQL
+          // (ex.: "Data too long", "Incorrect string value") vive em e.cause.
+          const cause = (e as any)?.cause?.message ? ` — ${(e as any).cause.message}` : "";
+          result.errors.push(`${alias} uid ${uid}: ${String(e?.message ?? e).slice(0, 160)}${String(cause).slice(0, 200)}`);
         }
       }
     }
