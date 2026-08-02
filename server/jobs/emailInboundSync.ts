@@ -27,6 +27,7 @@ import {
   createTask,
   createInboundEmail,
   getInboundEmailByMessageId,
+  listExistingInboundMessageIds,
   findEmployeeByEmailOrName,
   getSystemUserId,
   assignTaskToEmployee,
@@ -260,8 +261,29 @@ export async function runEmailInboundSync(opts?: { sinceDays?: number; deadlineA
         result.errors.push(`search ${alias}: ${e?.message ?? e}`);
         continue;
       }
+      // Pré-triagem BARATA: só envelopes (messageId) + dedup em lote na BD,
+      // antes de descarregar qualquer corpo. Sem isto, cada corrida gastava o
+      // orçamento de 45s a re-descarregar as mesmas dezenas de emails já
+      // processados e nunca progredia para os aliases seguintes.
+      const uidToMessageId = new Map<number, string>();
+      let known = new Set<string>();
+      try {
+        if (uids.length > 0) {
+          const envs = await client.fetchAll(uids.join(","), { envelope: true }, { uid: true });
+          for (const e of envs as any[]) {
+            uidToMessageId.set(e.uid, e.envelope?.messageId || `uid:${alias}:${e.uid}`);
+          }
+          known = await listExistingInboundMessageIds([...uidToMessageId.values()]);
+        }
+      } catch (e: any) {
+        // Sem pré-triagem o dedup por-uid (abaixo) continua correto — só lento.
+        console.warn(`[EmailInbound] pré-triagem ${alias} falhou:`, String(e?.message ?? e).slice(0, 120));
+      }
+
       for (const uid of uids) {
         if (Date.now() > deadlineAt) { result.partial = true; break; }
+        const preId = uidToMessageId.get(uid);
+        if (preId && known.has(preId)) { result.skipped++; continue; }
         result.scanned++;
         try {
           const msg = await client.fetchOne(uid, { source: true, threadId: true }, { uid: true });

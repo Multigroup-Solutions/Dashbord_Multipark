@@ -7689,6 +7689,17 @@ export async function createInboundEmail(data: InsertInboundEmail): Promise<numb
   return (result as any).insertId as number;
 }
 
+/** Batch do dedup do email-inbound: quais destes messageIds já existem. */
+export async function listExistingInboundMessageIds(messageIds: string[]): Promise<Set<string>> {
+  const db = await getDb();
+  if (!db || messageIds.length === 0) return new Set();
+  const rows = await db
+    .select({ m: inboundEmails.messageId })
+    .from(inboundEmails)
+    .where(inArray(inboundEmails.messageId, messageIds));
+  return new Set(rows.map(r => r.m));
+}
+
 export async function getInboundEmailByMessageId(messageId: string) {
   const db = await getDb();
   if (!db) return null;
