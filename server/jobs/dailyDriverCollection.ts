@@ -171,27 +171,41 @@ function processGeoJsonHistory(data: any): {
   };
 }
 
-/** Run the daily collection for a specific date */
-export async function collectDailyDriverData(targetDate: Date): Promise<{
+/**
+ * Run the daily collection for a specific date.
+ *
+ * RETOMÁVEL: processa só os condutores ainda SEM registo nesse dia e para no
+ * `deadlineAt` (Vercel guilhotina aos 60s → antes disto, uma corrida parcial
+ * deixava registos a meio e a seguinte via "already exists" e nunca acabava).
+ * Devolve `done:false` quando ficou trabalho por fazer — o chamador (workflow)
+ * volta a chamar até `done:true`.
+ */
+export async function collectDailyDriverData(targetDate: Date, opts?: { deadlineAt?: number }): Promise<{
   success: boolean;
   driversProcessed: number;
   errors: string[];
+  done: boolean;
 }> {
   const errors: string[] = [];
   let driversProcessed = 0;
+  const deadlineAt = opts?.deadlineAt ?? Number.POSITIVE_INFINITY;
 
   try {
-    // Check if data already exists for this date
     const dateStr = targetDate.toISOString().split("T")[0];
     const existing = await getDailyDriverHistoryByDate(dateStr);
-    if (existing.length > 0) {
-      console.log(`[DailyCollection] Data already exists for ${dateStr} (${existing.length} records). Skipping.`);
-      return { success: true, driversProcessed: existing.length, errors: [] };
-    }
+    const alreadyDone = new Set(existing.map((r: any) => r.zelloUsername));
 
     // Get all Zello users
     const users = await getZelloUsers();
-    const nonAdminUsers = users.filter(u => !u.admin);
+    let nonAdminUsers = users.filter(u => !u.admin);
+    if (nonAdminUsers.length > 0 && alreadyDone.size > 0) {
+      nonAdminUsers = nonAdminUsers.filter(u => !alreadyDone.has(u.name));
+      if (nonAdminUsers.length === 0) {
+        console.log(`[DailyCollection] ${dateStr} já completo (${alreadyDone.size} registos).`);
+        return { success: true, driversProcessed: alreadyDone.size, errors: [], done: true };
+      }
+      console.log(`[DailyCollection] ${dateStr}: a retomar — faltam ${nonAdminUsers.length} de ${users.filter(u => !u.admin).length}.`);
+    }
 
     // Define the time range for the target date (midnight to midnight UTC)
     const startOfDay = new Date(targetDate);
@@ -209,7 +223,9 @@ export async function collectDailyDriverData(targetDate: Date): Promise<{
 
     console.log(`[DailyCollection] Processing ${nonAdminUsers.length} users for ${dateStr}`);
 
+    let stoppedAtDeadline = false;
     for (const user of nonAdminUsers) {
+      if (Date.now() > deadlineAt) { stoppedAtDeadline = true; break; }
       try {
         // Fetch history from Zello
         const historyData = await getZelloUserHistory(user.name, startTs, endTs);
@@ -279,21 +295,22 @@ export async function collectDailyDriverData(targetDate: Date): Promise<{
       }
     }
 
-    console.log(`[DailyCollection] Completed: ${driversProcessed}/${nonAdminUsers.length} users processed for ${dateStr}`);
+    const done = !stoppedAtDeadline;
+    console.log(`[DailyCollection] ${done ? "Completed" : "Partial (deadline)"}: ${driversProcessed}/${nonAdminUsers.length} users processed for ${dateStr}`);
 
-    // Send summary notification
-    if (driversProcessed > 0) {
+    // Send summary notification (só quando termina, para não duplicar em corridas parciais)
+    if (done && driversProcessed > 0) {
       await notifyOwner({
         title: "Relatório Diário de Motoristas",
-        content: `Recolha automática para ${dateStr}: ${driversProcessed} motoristas processados${errors.length > 0 ? `, ${errors.length} erros` : ""}`,
+        content: `Recolha automática para ${dateStr}: ${driversProcessed + alreadyDone.size} motoristas processados${errors.length > 0 ? `, ${errors.length} erros` : ""}`,
       });
     }
 
-    return { success: true, driversProcessed, errors };
+    return { success: true, driversProcessed, errors, done };
   } catch (error: any) {
     console.error("[DailyCollection] Fatal error:", error);
     errors.push(`Fatal: ${error.message}`);
-    return { success: false, driversProcessed, errors };
+    return { success: false, driversProcessed, errors, done: false };
   }
 }
 

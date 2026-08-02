@@ -219,8 +219,16 @@ app.get("/api/cron/daily-ops", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
   try {
     const { collectDailyDriverData } = await import("../jobs/dailyDriverCollection");
-    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000); // dia anterior
-    const result = await collectDailyDriverData(yesterday);
+    // ?date=YYYY-MM-DD permite recolher um dia específico (backfill de dias
+    // falhados); por omissão, o dia anterior.
+    const qDate = typeof req.query?.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
+      ? new Date(`${req.query.date}T12:00:00Z`)
+      : null;
+    const yesterday = qDate ?? new Date(Date.now() - 24 * 60 * 60 * 1000); // dia anterior
+    // Prazo < maxDuration (60s): sem isto a recolha morria com 504 a meio e a
+    // corrida seguinte via registos parciais e desistia. done:false → o
+    // workflow chama outra vez até done:true (a recolha é retomável).
+    const result = await collectDailyDriverData(yesterday, { deadlineAt: Date.now() + 45_000 });
     res.json({ ok: true, ranAt: new Date().toISOString(), date: yesterday.toISOString().slice(0, 10), ...result });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: String(err?.message ?? err) });
@@ -234,8 +242,11 @@ app.get("/api/cron/email-inbound", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
   try {
     const { runEmailInboundSync } = await import("../jobs/emailInboundSync");
-    const result = await runEmailInboundSync();
-    res.json({ ok: result.configured, ranAt: new Date().toISOString(), ...result });
+    // Prazo < maxDuration (60s): o scan IMAP dos 4 aliases × 30d passava dos
+    // 60s e morria SEMPRE com 504. partial:true → o workflow repete a chamada
+    // (dedup por messageId torna cada corrida incremental).
+    const result = await runEmailInboundSync({ deadlineAt: Date.now() + 45_000 });
+    res.json({ ok: result.configured, done: !result.partial, ranAt: new Date().toISOString(), ...result });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: String(err?.message ?? err) });
   }

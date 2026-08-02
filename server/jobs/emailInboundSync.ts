@@ -50,6 +50,8 @@ export type EmailSyncResult = {
   skipped: number;
   errors: string[];
   byAlias: Record<string, number>;
+  /** true = parou no orçamento de tempo (Vercel 60s); o resto fica p/ a próxima corrida (dedup por messageId). */
+  partial: boolean;
 };
 
 function imapConfig() {
@@ -228,8 +230,8 @@ async function routeToModule(
   return { targetModule: "rh", taskId };
 }
 
-export async function runEmailInboundSync(opts?: { sinceDays?: number }): Promise<EmailSyncResult> {
-  const result: EmailSyncResult = { configured: false, scanned: 0, created: 0, skipped: 0, errors: [], byAlias: {} };
+export async function runEmailInboundSync(opts?: { sinceDays?: number; deadlineAt?: number }): Promise<EmailSyncResult> {
+  const result: EmailSyncResult = { configured: false, scanned: 0, created: 0, skipped: 0, errors: [], byAlias: {}, partial: false };
   const cfg = imapConfig();
   if (!cfg) {
     result.errors.push("IMAP não configurado (faltam IMAP_USER/IMAP_PASS)");
@@ -237,12 +239,16 @@ export async function runEmailInboundSync(opts?: { sinceDays?: number }): Promis
   }
   result.configured = true;
   const sinceDays = opts?.sinceDays ?? Number(process.env.IMAP_SINCE_DAYS || 30);
+  // Sem deadline (Railway/manual) corre até ao fim; no Vercel o endpoint passa
+  // um prazo < maxDuration para nunca morrer com 504 a meio de um email.
+  const deadlineAt = opts?.deadlineAt ?? Number.POSITIVE_INFINITY;
 
   const client = new ImapFlow(cfg);
   await client.connect();
   const lock = await client.getMailboxLock("INBOX");
   try {
     for (const alias of ALIASES) {
+      if (Date.now() > deadlineAt) { result.partial = true; break; }
       // Gmail raw search: só emails entregues a este alias, dentro da janela.
       let uids: number[] = [];
       try {
@@ -255,6 +261,7 @@ export async function runEmailInboundSync(opts?: { sinceDays?: number }): Promis
         continue;
       }
       for (const uid of uids) {
+        if (Date.now() > deadlineAt) { result.partial = true; break; }
         result.scanned++;
         try {
           const msg = await client.fetchOne(uid, { source: true, threadId: true }, { uid: true });
