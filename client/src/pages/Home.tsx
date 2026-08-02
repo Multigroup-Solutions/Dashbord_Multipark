@@ -71,17 +71,17 @@ export default function Home() {
 
       {/* Hero */}
       <main className="flex-1 flex items-center">
-        <div className="container py-24">
+        <div className="container py-12 sm:py-24">
           <div className="max-w-3xl">
             <div className="inline-flex items-center gap-2 bg-accent/20 text-accent-foreground border border-accent/30 rounded-full px-4 py-1.5 text-sm font-medium mb-6">
               <Shield className="h-3.5 w-3.5" />
               Plataforma de Gestão Empresarial
             </div>
-            <h1 className="text-5xl font-bold tracking-tight text-foreground mb-6 leading-tight">
-              Gestão inteligente<br />
+            <h1 className="text-3xl sm:text-5xl font-bold tracking-tight text-foreground mb-6 leading-tight">
+              Gestão inteligente{" "}
               <span className="text-primary">para o Grupo Multipark</span>
             </h1>
-            <p className="text-xl text-muted-foreground mb-10 leading-relaxed max-w-2xl">
+            <p className="text-base sm:text-xl text-muted-foreground mb-10 leading-relaxed max-w-2xl">
               Controla despesas, recursos humanos, projetos e muito mais numa única plataforma.
               Com extração automática de faturas por IA e relatórios em tempo real.
             </p>

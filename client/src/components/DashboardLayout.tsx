@@ -513,11 +513,11 @@ function DashboardLayoutContent({
       <SidebarInset>
         {/* Topbar */}
         <div className="flex border-b h-[76px] items-center justify-between bg-card px-4 lg:px-6 sticky top-0 z-40">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 min-w-0">
             {isMobile && (
               <SidebarTrigger className="h-9 w-9 rounded-lg bg-background" />
             )}
-            <h1 className="text-xl lg:text-2xl font-bold text-foreground">
+            <h1 className="text-xl lg:text-2xl font-bold text-foreground truncate">
               {activeMenuItem?.label ?? "Dashboard"}
             </h1>
           </div>
@@ -702,7 +702,7 @@ function DashboardLayoutContent({
           </div>
         </div>
 
-        <main className="flex-1 p-4 lg:p-6" style={{ backgroundColor: '#F0F4FF' }}>{children}</main>
+        <main className="flex-1 p-4 lg:p-6 min-w-0 overflow-x-hidden" style={{ backgroundColor: '#F0F4FF' }}>{children}</main>
       </SidebarInset>
     </>
   );
@@ -759,7 +759,7 @@ function NotificationsBell() {
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-96" align="end">
+      <PopoverContent className="w-[min(24rem,calc(100vw-2rem))]" align="end">
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <h4 className="font-medium text-sm">Notificações</h4>
@@ -788,7 +788,7 @@ function NotificationsBell() {
                   <div className={`h-2 w-2 rounded-full mt-2 shrink-0 ${n.isRead ? "bg-muted-foreground" : "bg-blue-500"}`} />
                   <div className="min-w-0 flex-1">
                     <p className="text-sm truncate">{n.title}</p>
-                    {n.body && <p className="text-xs text-muted-foreground line-clamp-2">{n.body}</p>}
+                    {n.body && <p className="text-xs text-muted-foreground line-clamp-2 break-words">{n.body}</p>}
                     <p className="text-[10px] text-muted-foreground mt-0.5">{fmtTime(n.createdAt)}</p>
                   </div>
                 </button>

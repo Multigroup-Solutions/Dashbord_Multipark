@@ -200,7 +200,7 @@ export default function WhatsAppInboxPage() {
     }
     // expired
     return (
-      <div className="flex items-center gap-2 px-3 py-2 text-xs bg-muted text-muted-foreground border-t">
+      <div className="flex flex-wrap items-center gap-2 px-3 py-2 text-xs bg-muted text-muted-foreground border-t">
         <Lock className="h-4 w-4 shrink-0" />
         <span>
           <strong>Janela de 24h fechada</strong> — só é possível reiniciar com um template.

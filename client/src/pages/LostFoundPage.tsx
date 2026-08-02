@@ -156,6 +156,10 @@ function KanbanView({ user, filterType, setFilterType, searchTerm, setSearchTerm
     } catch { toast.error("Erro ao mover"); }
   };
 
+  // Drag & drop nativo: arrastar um cartão para QUALQUER coluna (as setas nos
+  // cartões ficam como alternativa para touch, onde o drag nativo não existe).
+  const [dragOverCol, setDragOverCol] = useState<string | null>(null);
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -163,7 +167,7 @@ function KanbanView({ user, filterType, setFilterType, searchTerm, setSearchTerm
         <div>
           <p className="text-muted-foreground">Gestão de objetos perdidos e achados nos veículos</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button
             variant="outline"
             disabled={items.length === 0}
@@ -205,7 +209,7 @@ function KanbanView({ user, filterType, setFilterType, searchTerm, setSearchTerm
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-7 gap-3">
         {[
           { label: "Total", value: stats.total, icon: BarChart3, color: "text-foreground" },
           { label: "Novos", value: stats.new, icon: AlertCircle, color: "text-blue-600" },
@@ -258,7 +262,18 @@ function KanbanView({ user, filterType, setFilterType, searchTerm, setSearchTerm
             const cfg = STATUS_CONFIG[status];
             const colItems = grouped[status] || [];
             return (
-              <div key={status} className="space-y-3">
+              <div
+                key={status}
+                className={`space-y-3 rounded-lg transition-colors ${dragOverCol === status ? "ring-2 ring-primary/60 bg-primary/5" : ""}`}
+                onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (dragOverCol !== status) setDragOverCol(status); }}
+                onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverCol(null); }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOverCol(null);
+                  const id = Number(e.dataTransfer.getData("text/plain"));
+                  if (id) moveCard(id, status);
+                }}
+              >
                 <div className={`flex items-center gap-2 p-2 rounded-lg ${cfg.color} border`}>
                   <cfg.icon className="w-4 h-4" />
                   <span className="font-medium text-sm">{cfg.label}</span>
@@ -301,10 +316,18 @@ function ItemCard({ item, onSelect, onMove, currentStatus }: any) {
   const stale = ageDays >= 7;
 
   return (
-    <Card className={`cursor-pointer hover:shadow-md transition-shadow ${stale ? "border-red-400 border-2" : ""}`}>
+    <Card
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData("text/plain", String(item.id));
+        e.dataTransfer.effectAllowed = "move";
+      }}
+      onClick={onSelect}
+      className={`cursor-grab active:cursor-grabbing hover:shadow-md transition-shadow ${stale ? "border-red-400 border-2" : ""}`}
+    >
       <CardContent className="p-3 space-y-2">
         <div className="flex items-start justify-between">
-          <div className="flex items-center gap-1.5" onClick={onSelect}>
+          <div className="flex items-center gap-1.5 min-w-0" onClick={onSelect}>
             <TypeIcon className="w-4 h-4 text-amber-600" />
             <span className="font-medium text-sm line-clamp-1">{item.description}</span>
           </div>
@@ -325,7 +348,7 @@ function ItemCard({ item, onSelect, onMove, currentStatus }: any) {
         )}
 
         <div className="flex items-center gap-1 text-xs text-muted-foreground">
-          <User className="w-3 h-3" /> {item.clientName}
+          <User className="w-3 h-3" /> <span className="truncate">{item.clientName}</span>
         </div>
 
         {item.estimatedValue && (
@@ -489,7 +512,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
         <div className="flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <TypeIcon className="w-5 h-5 text-amber-600" />
-            <h1 className="text-xl font-bold">{item.description}</h1>
+            <h1 className="text-xl font-bold line-clamp-2 break-words">{item.description}</h1>
             <Badge className={STATUS_CONFIG[item.status]?.color}>{STATUS_CONFIG[item.status]?.label}</Badge>
             <Badge className={PRIORITY_CONFIG[item.priority]?.color}>{PRIORITY_CONFIG[item.priority]?.label}</Badge>
             {(() => {
@@ -520,7 +543,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
         {/* Left: Details */}
         <div className="lg:col-span-2 space-y-4">
           <Tabs defaultValue="details">
-            <TabsList>
+            <TabsList className="flex-wrap">
               <TabsTrigger value="details">Detalhes</TabsTrigger>
               <TabsTrigger value="messages">Mensagens ({messages.length})</TabsTrigger>
               <TabsTrigger value="photos">Fotos ({photos.length})</TabsTrigger>
@@ -532,7 +555,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
               <Card>
                 <CardHeader><CardTitle className="text-base">Informação do Item</CardTitle></CardHeader>
                 <CardContent className="space-y-3">
-                  <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
                     <div>
                       <span className="text-muted-foreground">Tipo:</span>
                       <p className="font-medium flex items-center gap-1"><TypeIcon className="w-4 h-4" /> {TYPE_CONFIG[item.itemType]?.label}</p>
@@ -541,7 +564,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                       <span className="text-muted-foreground">Valor Estimado:</span>
                       <p className="font-medium">{item.estimatedValue ? `${item.estimatedValue}€` : "N/A"}</p>
                     </div>
-                    <div className="col-span-2">
+                    <div className="sm:col-span-2">
                       <span className="text-muted-foreground">Descrição:</span>
                       <p className="font-medium">{item.description}</p>
                     </div>
@@ -552,14 +575,14 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
               <Card>
                 <CardHeader><CardTitle className="text-base">Dados do Cliente</CardTitle></CardHeader>
                 <CardContent className="space-y-2 text-sm">
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <span className="text-muted-foreground">Nome:</span>
                       <p className="font-medium">{item.clientName}</p>
                     </div>
                     <div>
                       <span className="text-muted-foreground">Email:</span>
-                      <p className="font-medium">{item.clientEmail || "N/A"}</p>
+                      <p className="font-medium break-all">{item.clientEmail || "N/A"}</p>
                     </div>
                     <div>
                       <span className="text-muted-foreground">Telefone:</span>
@@ -871,20 +894,20 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
       </div>
       {/* Edit Dialog */}
       <Dialog open={isEditing} onOpenChange={setIsEditing}>
-        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Editar Perdido/Achado</DialogTitle></DialogHeader>
           {editForm && (
             <div className="space-y-4">
               <div><Label>Nome do Cliente</Label><Input value={editForm.clientName} onChange={e => setEditForm((f: any) => ({ ...f, clientName: e.target.value }))} /></div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><Label>Email</Label><Input value={editForm.clientEmail} onChange={e => setEditForm((f: any) => ({ ...f, clientEmail: e.target.value }))} /></div>
                 <div><Label>Telefone</Label><Input value={editForm.clientPhone} onChange={e => setEditForm((f: any) => ({ ...f, clientPhone: e.target.value }))} /></div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><Label>Ref. Reserva</Label><Input value={editForm.bookingRef} onChange={e => setEditForm((f: any) => ({ ...f, bookingRef: e.target.value }))} /></div>
                 <div><Label>Matrícula</Label><Input value={editForm.vehiclePlate} onChange={e => setEditForm((f: any) => ({ ...f, vehiclePlate: e.target.value.toUpperCase() }))} /></div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <Label>Tipo de Item</Label>
                   <Select value={editForm.itemType} onValueChange={v => setEditForm((f: any) => ({ ...f, itemType: v }))}>
@@ -965,7 +988,7 @@ function DriverRankingView({ onBack }: { onBack: () => void }) {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[560px] text-sm">
                 <thead>
                   <tr className="bg-muted/50 text-left">
                     <th className="p-2 w-10">#</th>
@@ -1098,15 +1121,15 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
 
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Package className="w-5 h-5 text-amber-500" /> Novo Perdido/Achado
           </DialogTitle>
         </DialogHeader>
-        <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="col-span-2">
+        <div className="space-y-4 pr-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="sm:col-span-2">
               <Label>Nome do Cliente *</Label>
               <Input value={form.clientName} onChange={e => setForm(f => ({ ...f, clientName: e.target.value }))} placeholder="Nome completo" />
             </div>
@@ -1118,7 +1141,7 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
               <Label>Telefone</Label>
               <Input value={form.clientPhone} onChange={e => setForm(f => ({ ...f, clientPhone: e.target.value }))} placeholder="+351 ..." />
             </div>
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <BookingSearchField
                 accent="emerald"
                 label="Buscar reserva (nº reserva, matrícula, email, nome) *"
@@ -1150,7 +1173,7 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
             </div>
           </div>
           <Separator />
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label>Tipo de Item *</Label>
               <Select value={form.itemType} onValueChange={(v: any) => setForm(f => ({ ...f, itemType: v }))}>
@@ -1276,7 +1299,7 @@ function BookingHistoryView({ onBack }: { onBack: () => void }) {
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[560px] text-sm">
                 <thead>
                   <tr className="bg-muted/50 text-left">
                     <th className="p-2">Condutor</th>
@@ -1339,7 +1362,7 @@ function BookingHistoryView({ onBack }: { onBack: () => void }) {
               </p>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="w-full min-w-[560px] text-sm">
                   <thead>
                     <tr className="bg-muted/50 text-left">
                       <th className="p-2">Data</th>
@@ -1489,7 +1512,7 @@ function ReturnEmailDialog({ item, onClose }: { item: any; onClose: () => void }
   });
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader><DialogTitle>Avisar cliente — {item.clientEmail}</DialogTitle></DialogHeader>
         <div className="space-y-3">
           <div><Label>Assunto</Label><Input value={subject} onChange={e => setSubject(e.target.value)} /></div>

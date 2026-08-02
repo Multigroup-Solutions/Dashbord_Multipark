@@ -134,7 +134,7 @@ export default function ExtrasDiaPage() {
   }, [data]);
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
+    <div className="space-y-6 max-w-7xl mx-auto">
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -503,7 +503,7 @@ function TeamSection({
               Atribui pessoas, edita horários e "manda para casa" quando não há trabalho.
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <div className="text-right">
               <div className="text-xs text-muted-foreground">Custo escalado</div>
               <div className="text-lg font-bold">{fmtEur(totalCost)}</div>
@@ -518,16 +518,16 @@ function TeamSection({
       <CardContent className="space-y-3">
         {/* TL banner */}
         <div className="rounded-md border border-amber-300 bg-amber-50/60 p-3">
-          <div className="flex items-center justify-between gap-2">
-            <div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0">
               <div className="text-xs uppercase tracking-wide text-amber-900">Team Leader (obrigatório)</div>
               {tl ? (
-                <div className="font-semibold flex items-center gap-2">
+                <div className="font-semibold flex items-center gap-2 min-w-0">
                   <Avatar className="h-6 w-6">
                     <AvatarImage src={(tl as any).photoUrl ?? undefined} className="object-cover" />
                     <AvatarFallback className="text-[10px]">{tl.personName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()}</AvatarFallback>
                   </Avatar>
-                  {tl.personName}{" "}
+                  <span className="truncate">{tl.personName}</span>{" "}
                   <span className="font-normal text-sm text-muted-foreground">
                     · {fmtHour(tl.startHour)}–{fmtHour(tl.sentHomeHour ?? tl.endHour)} · {fmtEur(tl.cost)}/dia
                   </span>
@@ -1335,7 +1335,7 @@ export function CandidaturasSection() {
                             <span className="ml-1 text-xs text-muted-foreground">({a.submissionCount}× submetida)</span>
                           )}
                         </td>
-                        <td className="py-2 px-2">{a.email}</td>
+                        <td className="py-2 px-2 break-all">{a.email}</td>
                         <td className="py-2 px-2">{a.phone ?? "—"}</td>
                         <td className="py-2 px-2">{a.city ?? "—"}</td>
                         <td className="py-2 px-2 whitespace-nowrap">{fmtWhen(a.lastSubmittedAt)}</td>

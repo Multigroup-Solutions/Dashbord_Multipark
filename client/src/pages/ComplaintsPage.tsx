@@ -131,14 +131,18 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
     } catch { toast.error("Erro ao mover"); }
   };
 
+  // Drag & drop nativo: arrastar um cartão para QUALQUER coluna (as setas nos
+  // cartões ficam como alternativa para touch, onde o drag nativo não existe).
+  const [dragOverCol, setDragOverCol] = useState<string | null>(null);
+
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap gap-2 items-center justify-between">
         <div>
           <p className="text-muted-foreground">Gestão de tickets e reclamações de clientes</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button
             variant="outline"
             disabled={complaints.length === 0}
@@ -177,7 +181,7 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
 
       {/* Stats */}
       {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-7 gap-3">
           {[
             { label: "Total", value: stats.total, icon: BarChart3, color: "text-foreground" },
             { label: "Novos", value: stats.new, icon: AlertCircle, color: "text-blue-600" },
@@ -228,7 +232,18 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
             const cfg = STATUS_CONFIG[status];
             const items = grouped[status] || [];
             return (
-              <div key={status} className="space-y-3">
+              <div
+                key={status}
+                className={`space-y-3 rounded-lg transition-colors ${dragOverCol === status ? "ring-2 ring-primary/60 bg-primary/5" : ""}`}
+                onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (dragOverCol !== status) setDragOverCol(status); }}
+                onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverCol(null); }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOverCol(null);
+                  const id = Number(e.dataTransfer.getData("text/plain"));
+                  if (id) moveCard(id, status);
+                }}
+              >
                 <div className={`flex items-center gap-2 p-2 rounded-lg ${cfg.color} border`}>
                   <cfg.icon className="w-4 h-4" />
                   <span className="font-medium text-sm">{cfg.label}</span>
@@ -266,10 +281,18 @@ function ComplaintCard({ complaint: c, onSelect, onMove, currentStatus }: any) {
   const canMoveRight = colIdx < KANBAN_COLUMNS.length - 1;
 
   return (
-    <Card className={`cursor-pointer hover:shadow-md transition-shadow ${isOverdue ? "border-red-400 border-2" : ""}`}>
+    <Card
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData("text/plain", String(c.id));
+        e.dataTransfer.effectAllowed = "move";
+      }}
+      onClick={onSelect}
+      className={`cursor-grab active:cursor-grabbing hover:shadow-md transition-shadow ${isOverdue ? "border-red-400 border-2" : ""}`}
+    >
       <CardContent className="p-3 space-y-2">
         <div className="flex items-start justify-between">
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 min-w-0">
             <span className="text-sm">{TYPE_CONFIG[c.complaintType]?.emoji}</span>
             <span className="font-medium text-sm line-clamp-1" onClick={onSelect}>{c.title}</span>
           </div>
@@ -285,14 +308,14 @@ function ComplaintCard({ complaint: c, onSelect, onMove, currentStatus }: any) {
         )}
 
         {c.clientName && (
-          <div className="flex items-center gap-1 text-xs text-muted-foreground">
-            <User className="w-3 h-3" /> {c.clientName}
+          <div className="flex items-center gap-1 text-xs text-muted-foreground min-w-0">
+            <User className="w-3 h-3 shrink-0" /> <span className="truncate">{c.clientName}</span>
           </div>
         )}
 
         {c.assignedToName && (
-          <div className="flex items-center gap-1 text-xs text-muted-foreground">
-            <UserPlus className="w-3 h-3" /> {c.assignedToName}
+          <div className="flex items-center gap-1 text-xs text-muted-foreground min-w-0">
+            <UserPlus className="w-3 h-3 shrink-0" /> <span className="truncate">{c.assignedToName}</span>
           </div>
         )}
 
@@ -459,12 +482,12 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <Button variant="outline" onClick={onBack}><ChevronLeft className="w-4 h-4 mr-1" /> Voltar</Button>
         <div className="flex-1">
           <div className="flex items-center gap-2">
             <span className="text-lg">{TYPE_CONFIG[c.complaintType]?.emoji}</span>
-            <h1 className="text-xl font-bold">{c.title}</h1>
+            <h1 className="text-xl font-bold break-words">{c.title}</h1>
             <Badge className={STATUS_CONFIG[c.complaintStatus]?.color}>{STATUS_CONFIG[c.complaintStatus]?.label}</Badge>
             <Badge className={PRIORITY_CONFIG[c.complaintPriority]?.color}>{PRIORITY_CONFIG[c.complaintPriority]?.label}</Badge>
             {isOverdue && <Badge className="bg-red-100 text-red-800">SLA Ultrapassado</Badge>}
@@ -494,7 +517,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
         {/* Left: Details */}
         <div className="lg:col-span-2 space-y-4">
           <Tabs defaultValue="details">
-            <TabsList>
+            <TabsList className="flex-wrap">
               <TabsTrigger value="details">Detalhes</TabsTrigger>
               <TabsTrigger value="messages">Mensagens ({data.messages.length})</TabsTrigger>
               <TabsTrigger value="photos">Fotos ({data.photos.length})</TabsTrigger>
@@ -512,8 +535,8 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
               )}
               <Card>
                 <CardHeader><CardTitle className="text-sm">Dados da Reserva</CardTitle></CardHeader>
-                <CardContent className="grid grid-cols-2 gap-3 text-sm">
-                  <div><span className="text-muted-foreground">Ref. Reserva:</span> <span className="font-medium">{c.reservationRef || "—"}</span></div>
+                <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                  <div><span className="text-muted-foreground">Ref. Reserva:</span> <span className="font-medium break-all">{c.reservationRef || "—"}</span></div>
                   <div><span className="text-muted-foreground">Início:</span> <span className="font-medium">{c.reservationStart ? fmtPTDate(c.reservationStart) : "—"}</span></div>
                   <div><span className="text-muted-foreground">Fim:</span> <span className="font-medium">{c.reservationEnd ? fmtPTDate(c.reservationEnd) : "—"}</span></div>
                   <div><span className="text-muted-foreground">Matrícula:</span> <span className="font-medium">{c.vehiclePlate || "—"}</span></div>
@@ -687,9 +710,9 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
           <Card>
             <CardHeader><CardTitle className="text-sm">Cliente</CardTitle></CardHeader>
             <CardContent className="space-y-2 text-sm">
-              <div><span className="text-muted-foreground">Nome:</span> <span className="font-medium">{c.clientName || "—"}</span></div>
-              <div><span className="text-muted-foreground">Email:</span> <span className="font-medium">{c.clientEmail || "—"}</span></div>
-              <div><span className="text-muted-foreground">Telefone:</span> <span className="font-medium">{c.clientPhone || "—"}</span></div>
+              <div className="break-words"><span className="text-muted-foreground">Nome:</span> <span className="font-medium">{c.clientName || "—"}</span></div>
+              <div className="break-all"><span className="text-muted-foreground">Email:</span> <span className="font-medium">{c.clientEmail || "—"}</span></div>
+              <div className="break-words"><span className="text-muted-foreground">Telefone:</span> <span className="font-medium">{c.clientPhone || "—"}</span></div>
               {c.clientNotes && (
                 <div className="text-xs bg-muted/50 rounded p-2 whitespace-pre-wrap"><span className="text-muted-foreground">Notas: </span>{c.clientNotes}</div>
               )}
@@ -731,12 +754,12 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
 
           {/* Edit Dialog */}
           <Dialog open={isEditing} onOpenChange={setIsEditing}>
-            <DialogContent className="max-w-lg">
+            <DialogContent className="sm:max-w-lg">
               <DialogHeader><DialogTitle>Editar Reclamação</DialogTitle></DialogHeader>
               {editForm && (
                 <div className="space-y-4">
                   <div><Label>Título</Label><Input value={editForm.title} onChange={e => setEditForm((f: any) => ({ ...f, title: e.target.value }))} /></div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <Label>Tipo</Label>
                       <Select value={editForm.type} onValueChange={v => setEditForm((f: any) => ({ ...f, type: v }))}>
@@ -763,11 +786,11 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                   <div><Label>Descrição</Label><Textarea value={editForm.description} onChange={e => setEditForm((f: any) => ({ ...f, description: e.target.value }))} rows={3} /></div>
                   <Separator />
                   <div><Label>Nome do Cliente</Label><Input value={editForm.clientName} onChange={e => setEditForm((f: any) => ({ ...f, clientName: e.target.value }))} /></div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div><Label>Email</Label><Input value={editForm.clientEmail} onChange={e => setEditForm((f: any) => ({ ...f, clientEmail: e.target.value }))} /></div>
                     <div><Label>Telefone</Label><Input value={editForm.clientPhone} onChange={e => setEditForm((f: any) => ({ ...f, clientPhone: e.target.value }))} /></div>
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div><Label>Matrícula</Label><Input value={editForm.vehiclePlate} onChange={e => setEditForm((f: any) => ({ ...f, vehiclePlate: e.target.value }))} /></div>
                     <div><Label>Ref. Reserva</Label><Input value={editForm.reservationRef} onChange={e => setEditForm((f: any) => ({ ...f, reservationRef: e.target.value }))} /></div>
                   </div>
@@ -1017,9 +1040,9 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
 
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>Nova Reclamação</DialogTitle></DialogHeader>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {/* Email import */}
           <div className="col-span-2 p-3 bg-amber-50 dark:bg-amber-950/30 rounded-lg border border-amber-200">
             <div className="flex items-center justify-between">
@@ -1275,9 +1298,9 @@ function DutyDriversPanel({
           ) : (
             <div className="space-y-2">
               {attachedQ.data!.map((d: any) => (
-                <div key={d.id} className="flex items-center gap-2 text-sm p-2 bg-muted rounded">
-                  <User className="w-4 h-4" />
-                  <span className="font-medium">{d.employeeName}</span>
+                <div key={d.id} className="flex items-center gap-2 text-sm p-2 bg-muted rounded min-w-0">
+                  <User className="w-4 h-4 shrink-0" />
+                  <span className="font-medium truncate">{d.employeeName}</span>
                   {d.roleAtTime && <Badge variant="outline" className="text-[10px]">{d.roleAtTime}</Badge>}
                   <Badge variant="outline" className="text-[10px]">{d.source}</Badge>
                   {d.notes && <span className="text-xs text-muted-foreground">— {d.notes}</span>}
@@ -1405,7 +1428,7 @@ function SendClientEmailButton({
         </p>
       )}
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Enviar email ao cliente</DialogTitle>
           </DialogHeader>

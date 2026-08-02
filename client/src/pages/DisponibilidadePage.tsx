@@ -41,7 +41,7 @@ export default function DisponibilidadePage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="py-24 flex items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
       </div>
     );
@@ -49,7 +49,7 @@ export default function DisponibilidadePage() {
 
   if (MANAGEMENT_ROLES.has(user?.role ?? "")) {
     return (
-      <div className="space-y-6 p-6">
+      <div className="space-y-6">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <CalendarCheck className="h-6 w-6 text-primary" />
@@ -107,7 +107,7 @@ function MyAvailability() {
 
   if (!weekStart || hints.isLoading || myWeek.isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="py-24 flex items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
       </div>
     );
@@ -153,7 +153,7 @@ function MyAvailability() {
                   <span className="font-semibold">{d.label}</span>
                   {savedOnce && active && <CheckCircle2 className="h-4 w-4 text-green-500" />}
                 </div>
-                <div className="flex gap-6">
+                <div className="flex flex-wrap gap-x-6 gap-y-2">
                   <label className="flex items-center gap-2 cursor-pointer">
                     <Switch
                       checked={d.morning}

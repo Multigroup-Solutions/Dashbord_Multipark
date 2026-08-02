@@ -150,7 +150,7 @@ function DashboardTab() {
       {data && (
         <>
           {/* KPIs */}
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
             <Card>
               <CardContent className="p-4">
                 <div className="text-xs text-muted-foreground">Custo total</div>
@@ -578,7 +578,7 @@ function ZelloGPSTab() {
                     <td className="p-2 text-muted-foreground">{u.job || "-"}</td>
                     <td className="p-2">{u.admin ? <Badge>Admin</Badge> : "-"}</td>
                     <td className="p-2">{u.geotrackingOff ? <Badge variant="destructive">Desligado</Badge> : <Badge variant="outline">Ativo</Badge>}</td>
-                    <td className="p-2 text-xs text-muted-foreground">{u.channels?.join(", ") || "-"}</td>
+                    <td className="p-2 text-xs text-muted-foreground"><span className="line-clamp-1 max-w-[240px]">{u.channels?.join(", ") || "-"}</span></td>
                   </tr>
                 ))}
               </tbody>
@@ -669,7 +669,7 @@ function SpeedMonitoringTab() {
       </div>
 
       {/* Check Now button */}
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <Button
           onClick={() => {
             if (!confirm("Verificar todos os condutores com GPS ativo e registar infrações automaticamente?")) return;
@@ -684,7 +684,7 @@ function SpeedMonitoringTab() {
       </div>
 
       {/* Sub-tabs */}
-      <div className="flex gap-2 border-b pb-2">
+      <div className="flex flex-wrap gap-2 border-b pb-2">
         <Button variant={subTab === "violations" ? "default" : "ghost"} size="sm" onClick={() => setSubTab("violations")}>Infrações</Button>
         <Button variant={subTab === "limits" ? "default" : "ghost"} size="sm" onClick={() => setSubTab("limits")}>Limites de Velocidade</Button>
       </div>
@@ -721,7 +721,7 @@ function SpeedMonitoringTab() {
 
           {/* Violations table */}
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[640px] text-sm">
               <thead>
                 <tr className="border-b text-left">
                   <th className="p-2">Data</th><th className="p-2">Condutor</th>
@@ -790,7 +790,7 @@ function SpeedMonitoringTab() {
               </Card>
             ))}
             {(!limits || limits.length === 0) && (
-              <div className="col-span-3 text-center py-8 text-muted-foreground">
+              <div className="md:col-span-3 text-center py-8 text-muted-foreground">
                 <Shield className="w-12 h-12 mx-auto text-muted-foreground/40 mb-3" />
                 <p>Nenhum limite de velocidade configurado.</p>
                 <p className="text-sm mt-1">Cria um limite padrão para começar a monitorizar.</p>
@@ -810,7 +810,7 @@ function SpeedMonitoringTab() {
                 <Label>Nome</Label>
                 <Input value={newLimit.name} onChange={e => setNewLimit(p => ({ ...p, name: e.target.value }))} placeholder="Ex: Cidade, Autoestrada, Parque" />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <Label>Velocidade Máxima (km/h)</Label>
                   <Input type="number" value={newLimit.maxSpeed} onChange={e => setNewLimit(p => ({ ...p, maxSpeed: Number(e.target.value) }))} />
@@ -954,7 +954,7 @@ function DriverHistoryTab() {
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-7 gap-3">
         <Card>
           <CardContent className="pt-3 pb-2">
             <p className="text-xs text-muted-foreground">Motoristas</p>
@@ -1019,7 +1019,7 @@ function DriverHistoryTab() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[760px] text-sm">
                 <thead>
                   <tr className="border-b text-left">
                     <th className="p-2">Motorista</th>
@@ -1083,7 +1083,7 @@ function DriverHistoryTab() {
                           <td colSpan={10} className="p-0">
                             <div className="bg-muted/30 p-3 border-b">
                               <p className="text-xs font-medium mb-2">Últimos 14 dias — {h.employeeName || h.displayName || h.zelloUsername}</p>
-                              <div className="grid grid-cols-7 gap-1">
+                              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-7 gap-1">
                                 {userHistory.map((uh: any) => (
                                   <div key={uh.id} className="text-center text-xs border rounded p-1 bg-background">
                                     <p className="font-medium">{new Date(uh.date).toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit" })}</p>
@@ -1188,9 +1188,9 @@ function PdasTab() {
               <Card key={pda.id} className={checkin ? "border-blue-300 dark:border-blue-700" : ""}>
                 <CardContent className="p-4 space-y-3">
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
                       <Smartphone className="w-5 h-5 text-primary" />
-                      <span className="font-bold">{pda.name}</span>
+                      <span className="font-bold truncate">{pda.name}</span>
                     </div>
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${PDA_STATUS_COLORS[pda.status]}`}>
                       {PDA_STATUS_LABELS[pda.status]}
@@ -1293,7 +1293,7 @@ function CreatePdaDialog({ onClose }: { onClose: () => void }) {
         <div className="space-y-3">
           <div><Label>Nome *</Label><Input value={name} onChange={e => setName(e.target.value)} placeholder="Ex: PDA-001" /></div>
           <div><Label>Modelo</Label><Input value={model} onChange={e => setModel(e.target.value)} placeholder="Ex: Samsung Galaxy XCover" /></div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div><Label>Nº Telemóvel</Label><Input value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)} placeholder="Ex: 912345678" /></div>
             <div><Label>IMEI</Label><Input value={imei} onChange={e => setImei(e.target.value)} placeholder="IMEI do dispositivo" /></div>
           </div>
@@ -1341,7 +1341,7 @@ function EditPdaDialog({ pda, onClose }: { pda: any; onClose: () => void }) {
         <div className="space-y-3">
           <div><Label>Nome</Label><Input value={name} onChange={e => setName(e.target.value)} /></div>
           <div><Label>Modelo</Label><Input value={model} onChange={e => setModel(e.target.value)} /></div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div><Label>Nº Telemóvel</Label><Input value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)} /></div>
             <div><Label>IMEI</Label><Input value={imei} onChange={e => setImei(e.target.value)} /></div>
           </div>
@@ -1490,15 +1490,15 @@ function PdaHistoryDialog({ pdaId, onClose }: { pdaId: number; onClose: () => vo
 
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader><DialogTitle>Histórico PDA #{pdaId}</DialogTitle></DialogHeader>
         {isLoading ? (
           <p className="text-center py-4 text-muted-foreground">A carregar...</p>
         ) : !checkins || checkins.length === 0 ? (
           <p className="text-center py-4 text-muted-foreground">Sem registos de check-in.</p>
         ) : (
-          <div className="max-h-[400px] overflow-y-auto">
-            <table className="w-full text-sm">
+          <div className="max-h-[400px] overflow-y-auto overflow-x-auto">
+            <table className="w-full min-w-[520px] text-sm">
               <thead>
                 <tr className="border-b text-left">
                   <th className="p-2">Utilizador</th>
@@ -1662,13 +1662,13 @@ function GpsAlertsTab() {
               {alerts.map((alert: any) => (
                 <div
                   key={alert.id}
-                  className={`flex items-center justify-between p-3 rounded-lg border ${
+                  className={`flex flex-wrap items-center justify-between gap-2 p-3 rounded-lg border ${
                     !alert.acknowledged ? "bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-800" : "border-border"
                   }`}
                 >
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
                     {ALERT_TYPE_ICONS[alert.alertType] || <AlertTriangle className="w-4 h-4" />}
-                    <div>
+                    <div className="min-w-0">
                       <p className="font-medium text-sm">{alert.displayName || alert.zelloUsername}</p>
                       <p className="text-xs text-muted-foreground">{alert.message}</p>
                       <p className="text-xs text-muted-foreground mt-0.5">
@@ -1736,8 +1736,8 @@ function RadioTab() {
         ) : transcriptions.map((t: any) => (
           <Card key={t.id}>
             <CardContent className="p-4 space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <Radio className="w-4 h-4 text-primary" />
                   <span className="text-sm text-muted-foreground">{fmtPTDateTime(t.createdAt)}</span>
                   {t.employeeId && <Badge variant="outline">{empMap.get(t.employeeId) || `#${t.employeeId}`}</Badge>}
@@ -1888,7 +1888,7 @@ function AgentActivityTab() {
               <tbody>
                 {rows.map((a) => (
                   <tr key={a.agentName} className={`border-b ${!a.employeeId ? "bg-amber-50/40" : ""}`}>
-                    <td className="p-2 font-medium">{a.agentName}</td>
+                    <td className="p-2 font-medium max-w-[200px] truncate">{a.agentName}</td>
                     <td className="p-2 font-semibold">{a.total}</td>
                     <td className="p-2 text-emerald-700">{a.checkin}</td>
                     <td className="p-2 text-blue-700">{a.checkout}</td>

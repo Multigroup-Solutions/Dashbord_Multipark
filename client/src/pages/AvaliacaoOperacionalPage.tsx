@@ -38,7 +38,7 @@ export default function AvaliacaoOperacionalPage() {
   const evaluation = evaluationQ.data;
 
   return (
-    <div className="p-6 space-y-4 max-w-7xl mx-auto">
+    <div className="space-y-4 max-w-7xl mx-auto">
       <div className="flex items-end justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -49,7 +49,7 @@ export default function AvaliacaoOperacionalPage() {
             Cruza extras escalados em /extras-dia com actividade real registada na API Multipark.
           </p>
         </div>
-        <div className="flex items-end gap-2">
+        <div className="flex flex-wrap items-end gap-2">
           <div className="space-y-1">
             <Label htmlFor="date" className="text-xs">Dia</Label>
             <Input
@@ -135,7 +135,7 @@ export default function AvaliacaoOperacionalPage() {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               <div>
                 <div className="text-xs text-muted-foreground">Acções totais</div>
-                <div className="text-2xl font-bold">{evaluation.totals.totalActions}</div>
+                <div className="text-xl md:text-2xl font-bold truncate">{evaluation.totals.totalActions}</div>
                 <div className="text-[10px] text-muted-foreground mt-0.5 flex flex-wrap gap-1">
                   {Object.entries(evaluation.totals.byType).map(([k, v]) => (
                     <span key={k}>{k}: {v}</span>
@@ -144,17 +144,17 @@ export default function AvaliacaoOperacionalPage() {
               </div>
               <div>
                 <div className="text-xs text-muted-foreground">Custo total</div>
-                <div className="text-2xl font-bold">{fmtEur(evaluation.totals.totalCost)}</div>
+                <div className="text-xl md:text-2xl font-bold truncate">{fmtEur(evaluation.totals.totalCost)}</div>
               </div>
               <div>
                 <div className="text-xs text-muted-foreground">€/acção</div>
-                <div className="text-2xl font-bold">
+                <div className="text-xl md:text-2xl font-bold truncate">
                   {evaluation.totals.totalActions > 0 ? fmtEur(evaluation.totals.costPerAction) : "—"}
                 </div>
               </div>
               <div>
                 <div className="text-xs text-muted-foreground">Acções média/pessoa</div>
-                <div className="text-2xl font-bold">
+                <div className="text-xl md:text-2xl font-bold truncate">
                   {evaluation.totals.people > 0
                     ? (evaluation.totals.totalActions / evaluation.totals.people).toFixed(1)
                     : "—"}
@@ -265,8 +265,8 @@ function BulkActions({ date, agents }: { date: string; agents: string[] }) {
 
   return (
     <Card className="bg-purple-50/40 border-purple-200">
-      <CardContent className="flex items-center justify-between p-4">
-        <div>
+      <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
+        <div className="min-w-0">
           <div className="font-medium">Buscar histórico de TODOS</div>
           <p className="text-xs text-muted-foreground">
             Chama /agent/history na Multipark para cada nome, em todos os parques configurados.
@@ -342,7 +342,7 @@ function AgentCard({ assignment, date, metrics }: { assignment: any; date: strin
   return (
     <Card className={assignment.isTeamLeader ? "border-amber-200 bg-amber-50/30" : ""}>
       <CardContent className="p-4 space-y-2">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3 flex-1 min-w-0">
             <Button
               size="sm"
@@ -353,8 +353,8 @@ function AgentCard({ assignment, date, metrics }: { assignment: any; date: strin
               {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
             </Button>
             <div className="min-w-0">
-              <div className="font-semibold flex items-center gap-2">
-                {assignment.personName}
+              <div className="font-semibold flex flex-wrap items-center gap-2">
+                <span className="truncate">{assignment.personName}</span>
                 {assignment.isTeamLeader && (
                   <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-[10px]">TL</Badge>
                 )}
@@ -372,7 +372,7 @@ function AgentCard({ assignment, date, metrics }: { assignment: any; date: strin
                 {" · "}{assignment.hoursBilled}h pagas
                 {" · "}€{assignment.cost.toFixed(2)}
               </p>
-              <div className="mt-1 flex items-center gap-1 text-xs">
+              <div className="mt-1 flex flex-wrap items-center gap-1 text-xs">
                 <span className="text-muted-foreground">API:</span>
                 {editingName ? (
                   <>
@@ -519,7 +519,7 @@ function AgentCard({ assignment, date, metrics }: { assignment: any; date: strin
                               {it.bookingExternalId.slice(0, 16)}…
                             </td>
                             <td className="py-1 px-2 text-muted-foreground">
-                              {it.remarks ?? "—"}
+                              <span className="line-clamp-2 max-w-[320px] block">{it.remarks ?? "—"}</span>
                             </td>
                           </tr>
                         ))}

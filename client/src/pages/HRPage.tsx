@@ -210,7 +210,7 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) setConfirmStep(false); onClose(); }}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
             {confirmStep ? "Confirmar nome Multipark" : "Novo Colaborador"}
@@ -266,8 +266,8 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
           </div>
         ) : (
         <>
-        <div className="grid grid-cols-2 gap-4">
-          <div className="col-span-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="sm:col-span-2">
             <Label>Nome Completo *</Label>
             <Input value={form.fullName} onChange={e => set("fullName", e.target.value)} placeholder="Nome completo" />
           </div>
@@ -295,7 +295,7 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
             <Label>Nacionalidade</Label>
             <Input value={form.nationality} onChange={e => set("nationality", e.target.value)} />
           </div>
-          <div className="col-span-2">
+          <div className="sm:col-span-2">
             <Label>Morada</Label>
             <Input value={form.address} onChange={e => set("address", e.target.value)} placeholder="Rua, nº, cidade" />
           </div>
@@ -324,7 +324,7 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
               </Select>
             </div>
           )}
-          <div className="col-span-2">
+          <div className="sm:col-span-2">
             <Label>Centro de Custos *</Label>
             <Select
               value={form.projectId ? String(form.projectId) : ""}
@@ -384,7 +384,7 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
               </div>
             </>
           )}
-          <div className="col-span-2">
+          <div className="sm:col-span-2">
             <Label>Utilizador Associado</Label>
             <Select value={form.userId ? String(form.userId) : "none"} onValueChange={v => setForm(f => ({ ...f, userId: v === "none" ? null : parseInt(v) }))}>
               <SelectTrigger><SelectValue placeholder="Nenhum" /></SelectTrigger>
@@ -621,7 +621,7 @@ function DocumentsTab({ employeeId }: { employeeId: number }) {
       {/* Image preview dialog */}
       {previewUrl && (
         <Dialog open onOpenChange={() => setPreviewUrl(null)}>
-          <DialogContent className="max-w-3xl p-2">
+          <DialogContent className="sm:max-w-3xl p-2">
             <img src={previewUrl} alt="Preview" className="w-full h-auto rounded" />
           </DialogContent>
         </Dialog>
@@ -717,7 +717,7 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
 
       {/* Buttons */}
       {!cameraMode && (
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
           <Button
             onClick={() => setCameraMode("check_in")}
             disabled={checkIn.isPending}
@@ -788,7 +788,7 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
               {/* Expanded details */}
               {isExpanded && (
                 <div className="px-3 pb-3 space-y-3 border-t bg-muted/10">
-                  <div className="grid grid-cols-2 gap-3 pt-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-3">
                     {/* Photo */}
                     {r.photoUrl && (
                       <div>
@@ -879,7 +879,7 @@ function SchedulesTab({ employeeId }: { employeeId: number }) {
       {DAYS.map((day, idx) => {
         const d = drafts[idx] ?? { startTime: "09:00", endTime: "18:00", isWorkDay: true };
         return (
-          <div key={idx} className={`flex items-center gap-3 p-3 border rounded-lg ${d.isWorkDay ? "" : "bg-muted/30"}`}>
+          <div key={idx} className={`flex items-center gap-3 flex-wrap p-3 border rounded-lg ${d.isWorkDay ? "" : "bg-muted/30"}`}>
             <div className="w-10 text-sm font-medium text-muted-foreground">{day}</div>
             <Button
               size="sm"
@@ -1217,9 +1217,9 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
         <Button variant="ghost" onClick={onBack}><ChevronLeft className="w-4 h-4 mr-1" /> Voltar</Button>
-        <h2 className="text-xl font-semibold">{emp.fullName}</h2>
+        <h2 className="text-xl font-semibold truncate min-w-0">{emp.fullName}</h2>
         <Badge className={POSITION_COLORS[emp.position as Position]}>{POSITION_LABELS[emp.position as Position]}</Badge>
         <Badge variant={emp.isActive ? "default" : "secondary"} className={emp.isActive ? "bg-green-600" : "bg-muted text-muted-foreground"}>
           {emp.isActive ? "Ativo" : "Inativo"}
@@ -1285,11 +1285,11 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                 </Button>
                 <input ref={photoRef} type="file" className="hidden" accept="image/*" onChange={handlePhoto} />
               </div>
-              <div className="grid grid-cols-2 gap-x-8 gap-y-2 flex-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-2 flex-1">
                 {emp.email && (
                   <div className="flex items-center gap-2 text-sm">
                     <Mail className="w-4 h-4 text-muted-foreground" />
-                    <span>{emp.email}</span>
+                    <span className="break-all">{emp.email}</span>
                   </div>
                 )}
                 {emp.phone && (
@@ -1307,13 +1307,13 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                 {emp.nib && (
                   <div className="flex items-center gap-2 text-sm">
                     <Euro className="w-4 h-4 text-muted-foreground" />
-                    <span>NIB: {emp.nib}</span>
+                    <span className="break-all">NIB: {emp.nib}</span>
                   </div>
                 )}
                 {emp.address && (
-                  <div className="flex items-center gap-2 text-sm col-span-2">
+                  <div className="flex items-center gap-2 text-sm sm:col-span-2">
                     <MapPin className="w-4 h-4 text-muted-foreground" />
-                    <span>{emp.address}</span>
+                    <span className="break-words">{emp.address}</span>
                   </div>
                 )}
                 {emp.nationality && (
@@ -1401,8 +1401,8 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                 </Button>
                 <input ref={photoRef} type="file" className="hidden" accept="image/*" onChange={handlePhoto} />
               </div>
-              <div className="flex-1 grid grid-cols-2 gap-4">
-                <div className="col-span-2">
+              <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="sm:col-span-2">
                   <Label>Nome Completo *</Label>
                   <Input value={editForm.fullName} onChange={e => ef("fullName", e.target.value)} />
                 </div>
@@ -1416,7 +1416,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                 </div>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <Label>NIF</Label>
                 <Input value={editForm.nif} onChange={e => ef("nif", e.target.value)} placeholder="123456789" />
@@ -1425,7 +1425,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                 <Label>NIB / IBAN</Label>
                 <Input value={editForm.nib} onChange={e => ef("nib", e.target.value)} placeholder="PT50..." />
               </div>
-              <div className="col-span-2">
+              <div className="sm:col-span-2">
                 <Label>Morada</Label>
                 <Input value={editForm.address} onChange={e => ef("address", e.target.value)} placeholder="Rua, nº, cidade" />
               </div>
@@ -1463,7 +1463,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                 <Label>Departamento</Label>
                 <Input value={editForm.department} onChange={e => ef("department", e.target.value)} placeholder="Ex: Lisboa" />
               </div>
-              <div className="col-span-2">
+              <div className="sm:col-span-2">
                 <Label>Centro de Custos *</Label>
                 <Select
                   value={editForm.projectId ? String(editForm.projectId) : ""}
@@ -1524,7 +1524,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                   </div>
                 </>
               )}
-              <div className="col-span-2">
+              <div className="sm:col-span-2">
                 <Label>Utilizador Associado</Label>
                 <Select value={editForm.userId ? String(editForm.userId) : "none"} onValueChange={v => ef("userId", v === "none" ? null : parseInt(v))}>
                   <SelectTrigger><SelectValue placeholder="Nenhum" /></SelectTrigger>
@@ -1748,11 +1748,11 @@ function ExtraRatesDialog({ open, onClose }: { open: boolean; onClose: () => voi
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-sm">
+      <DialogContent className="sm:max-w-sm">
         <DialogHeader><DialogTitle>Taxas Horárias — Extras</DialogTitle></DialogHeader>
         <div className="space-y-3">
           {rates.map((r) => (
-            <div key={r.level} className="flex items-center gap-3">
+            <div key={r.level} className="flex items-center gap-3 flex-wrap">
               <Badge variant="outline" className="w-20 justify-center">Nível {r.level}</Badge>
               <Input
                 type="number"
@@ -1882,7 +1882,7 @@ function PayrollPage({ onBack }: { onBack: () => void }) {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
         <Button variant="ghost" onClick={onBack}><ChevronLeft className="w-4 h-4 mr-1" /> Voltar</Button>
         <Wallet className="w-5 h-5 text-primary" />
         <h2 className="text-xl font-semibold">Folha de Ordenados</h2>
@@ -2003,7 +2003,7 @@ function PayrollPage({ onBack }: { onBack: () => void }) {
               <p className="text-sm text-muted-foreground">{payslipResults.length} recibos gerados com sucesso</p>
               {payslipResults.map((ps, i) => (
                 <div key={i} className="flex items-center justify-between p-2 rounded-lg border hover:bg-muted/30">
-                  <span className="text-sm font-medium">{ps.fullName}</span>
+                  <span className="text-sm font-medium truncate min-w-0">{ps.fullName}</span>
                   <Button variant="outline" size="sm" onClick={() => window.open(ps.url, "_blank")}>
                     <Download className="w-3 h-3 mr-1" /> PDF
                   </Button>
@@ -2537,7 +2537,7 @@ function ImportExtrasDialog({ open, onClose }: { open: boolean; onClose: () => v
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Importar Extras de CSV</DialogTitle>
         </DialogHeader>

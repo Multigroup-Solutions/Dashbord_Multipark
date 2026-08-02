@@ -24,12 +24,12 @@ export default function TrainingPage() {
 
   return (
     <>
-      <div className="p-6 space-y-6">
+      <div className="space-y-6">
         <div>
           <p className="text-muted-foreground">Vídeos, manuais, FAQs, quiz interativo e exames de carreira</p>
         </div>
         <Tabs defaultValue="videos" className="space-y-4">
-          <TabsList className="grid grid-cols-5 w-full max-w-2xl">
+          <TabsList className="grid grid-cols-2 sm:grid-cols-5 w-full max-w-2xl h-auto">
             <TabsTrigger value="videos"><Play className="w-4 h-4 mr-1" />Vídeos</TabsTrigger>
             <TabsTrigger value="manuals"><BookOpen className="w-4 h-4 mr-1" />Manuais</TabsTrigger>
             <TabsTrigger value="faqs"><HelpCircle className="w-4 h-4 mr-1" />FAQs</TabsTrigger>
@@ -65,8 +65,8 @@ function VideosTab({ isAdmin }: { isAdmin: boolean }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-wrap gap-2 items-center justify-between">
+        <div className="flex flex-wrap gap-2 items-center">
           <Select value={selectedCat} onValueChange={setSelectedCat}>
             <SelectTrigger className="w-[200px]"><SelectValue placeholder="Categoria" /></SelectTrigger>
             <SelectContent>
@@ -239,7 +239,7 @@ function ManualsTab({ isAdmin }: { isAdmin: boolean }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap gap-2 items-center justify-between">
         <Select value={typeFilter} onValueChange={setTypeFilter}>
           <SelectTrigger className="w-[200px]"><SelectValue /></SelectTrigger>
           <SelectContent>
@@ -261,12 +261,12 @@ function ManualsTab({ isAdmin }: { isAdmin: boolean }) {
             const Icon = typeIcons[m.type] || FileText;
             return (
               <Card key={m.id} className="cursor-pointer hover:bg-accent/50 transition-colors" onClick={() => setSelectedManual(m)}>
-                <CardContent className="p-4 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
+                <CardContent className="p-4 flex flex-wrap items-center justify-between">
+                  <div className="flex items-center gap-3 min-w-0">
                     <Icon className="w-5 h-5 text-primary" />
-                    <div>
-                      <h3 className="font-semibold">{m.title}</h3>
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <div className="min-w-0">
+                      <h3 className="font-semibold truncate">{m.title}</h3>
+                      <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                         <span>{fmtPTDate(m.createdAt)}</span>
                         <Badge variant="outline" className="text-xs">{typeLabels[m.type] || m.type}</Badge>
                         {(m.fileUrl || m.fileKey) && (
@@ -294,7 +294,7 @@ function ManualsTab({ isAdmin }: { isAdmin: boolean }) {
       )}
 
       <Dialog open={showCreate} onOpenChange={(o) => { setShowCreate(o); if (!o) { setForm({ title: "", content: "", type: "manual" }); setUploadedFile(null); } }}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="sm:max-w-2xl">
           <DialogHeader><DialogTitle>Novo Conteúdo</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <div><Label>Tipo</Label>
@@ -356,7 +356,7 @@ function FAQsTab({ isAdmin }: { isAdmin: boolean }) {
             <Card key={f.id} className="overflow-hidden">
               <CardContent className="p-0">
                 <button className="w-full p-4 text-left flex items-center justify-between hover:bg-accent/50 transition-colors" onClick={() => setExpandedId(expandedId === f.id ? null : f.id)}>
-                  <span className="font-medium flex items-center gap-2"><HelpCircle className="w-4 h-4 text-primary" />{f.question}</span>
+                  <span className="font-medium flex items-center gap-2 min-w-0 truncate"><HelpCircle className="w-4 h-4 text-primary" />{f.question}</span>
                   <ChevronRight className={`w-4 h-4 transition-transform ${expandedId === f.id ? "rotate-90" : ""}`} />
                 </button>
                 {expandedId === f.id && (
@@ -468,7 +468,7 @@ function QuizTab() {
             <h3 className="text-lg font-semibold">{q.question}</h3>
             <div className="grid grid-cols-1 gap-3">
               {options.map(o => (
-                <Button key={o.key} variant="outline" className="justify-start text-left h-auto py-3 px-4" onClick={() => {
+                <Button key={o.key} variant="outline" className="justify-start text-left h-auto whitespace-normal break-words py-3 px-4" onClick={() => {
                   const newAnswers = [...answers, { questionId: q.id, answer: o.key }];
                   setAnswers(newAnswers);
                   if (currentQ + 1 < shuffledQuestions.length) {
@@ -534,8 +534,8 @@ function QuizTab() {
             <div className="space-y-2 max-h-96 overflow-y-auto">
               {questions.map((q: any) => (
                 <div key={q.id} className="flex items-center justify-between p-3 border rounded-lg">
-                  <div>
-                    <p className="font-medium text-sm">{q.question}</p>
+                  <div className="min-w-0">
+                    <p className="font-medium text-sm truncate">{q.question}</p>
                     <div className="flex gap-2 mt-1">
                       <Badge variant="outline">{q.difficulty === "easy" ? "Fácil" : q.difficulty === "medium" ? "Médio" : "Difícil"}</Badge>
                       <Badge variant="secondary">{q.points} pts</Badge>
@@ -551,17 +551,17 @@ function QuizTab() {
       )}
 
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="sm:max-w-2xl">
           <DialogHeader><DialogTitle>Nova Pergunta</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <div><Label>Pergunta</Label><Input value={qForm.question} onChange={e => setQForm(p => ({ ...p, question: e.target.value }))} /></div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div><Label>Opção A</Label><Input value={qForm.optionA} onChange={e => setQForm(p => ({ ...p, optionA: e.target.value }))} /></div>
               <div><Label>Opção B</Label><Input value={qForm.optionB} onChange={e => setQForm(p => ({ ...p, optionB: e.target.value }))} /></div>
               <div><Label>Opção C</Label><Input value={qForm.optionC} onChange={e => setQForm(p => ({ ...p, optionC: e.target.value }))} /></div>
               <div><Label>Opção D</Label><Input value={qForm.optionD} onChange={e => setQForm(p => ({ ...p, optionD: e.target.value }))} /></div>
             </div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div><Label>Resposta Correta</Label>
                 <Select value={qForm.correctOption} onValueChange={v => setQForm(p => ({ ...p, correctOption: v as any }))}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
@@ -714,7 +714,7 @@ function CareerTab({ isAdmin }: { isAdmin: boolean }) {
             <h3 className="text-lg font-semibold">{q.question}</h3>
             <div className="grid grid-cols-1 gap-3">
               {options.map(o => (
-                <Button key={o.key} variant="outline" className="justify-start text-left h-auto py-3 px-4" onClick={() => {
+                <Button key={o.key} variant="outline" className="justify-start text-left h-auto whitespace-normal break-words py-3 px-4" onClick={() => {
                   const newAnswers = [...answers, { questionId: q.id, answer: o.key }];
                   setAnswers(newAnswers);
                   if (currentQ + 1 < examQuestionsSnapshot.length) {
@@ -739,12 +739,12 @@ function CareerTab({ isAdmin }: { isAdmin: boolean }) {
         <Button variant="ghost" onClick={() => setSelectedExam(null)}>← Voltar</Button>
         <Card>
           <CardHeader>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center justify-between">
+              <div className="flex flex-wrap items-center gap-3">
                 <Badge className={levelColors[selectedExam.level] || ""}>{levelLabels[selectedExam.level] || selectedExam.level}</Badge>
                 <CardTitle>{selectedExam.title}</CardTitle>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Badge variant="outline">Mínimo: {selectedExam.passingScore}%</Badge>
                 {selectedExam.timeLimitMinutes && <Badge variant="outline"><Clock className="w-3 h-3 mr-1" />{selectedExam.timeLimitMinutes} min</Badge>}
               </div>
@@ -783,7 +783,7 @@ function CareerTab({ isAdmin }: { isAdmin: boolean }) {
                 {examQuestions.map((q: any, i: number) => (
                   <div key={q.id} className="p-3 border rounded-lg text-sm">
                     <span className="font-medium">{i + 1}. {q.question}</span>
-                    <div className="flex gap-2 mt-1">
+                    <div className="flex flex-wrap gap-2 mt-1">
                       <Badge variant="outline" className="text-xs">A: {q.optionA}</Badge>
                       <Badge variant="outline" className="text-xs">B: {q.optionB}</Badge>
                       <Badge variant="outline" className="text-xs">C: {q.optionC}</Badge>
@@ -798,11 +798,11 @@ function CareerTab({ isAdmin }: { isAdmin: boolean }) {
         </Card>
 
         <Dialog open={showAddQ} onOpenChange={setShowAddQ}>
-          <DialogContent className="max-w-2xl">
+          <DialogContent className="sm:max-w-2xl">
             <DialogHeader><DialogTitle>Nova Pergunta do Exame</DialogTitle></DialogHeader>
             <div className="space-y-3">
               <div><Label>Pergunta</Label><Input value={qForm.question} onChange={e => setQForm(p => ({ ...p, question: e.target.value }))} /></div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><Label>Opção A</Label><Input value={qForm.optionA} onChange={e => setQForm(p => ({ ...p, optionA: e.target.value }))} /></div>
                 <div><Label>Opção B</Label><Input value={qForm.optionB} onChange={e => setQForm(p => ({ ...p, optionB: e.target.value }))} /></div>
                 <div><Label>Opção C</Label><Input value={qForm.optionC} onChange={e => setQForm(p => ({ ...p, optionC: e.target.value }))} /></div>
@@ -877,7 +877,7 @@ function CareerTab({ isAdmin }: { isAdmin: boolean }) {
             </div>
             <div><Label>Título</Label><Input value={examForm.title} onChange={e => setExamForm(p => ({ ...p, title: e.target.value }))} /></div>
             <div><Label>Descrição</Label><Textarea value={examForm.description} onChange={e => setExamForm(p => ({ ...p, description: e.target.value }))} /></div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div><Label>Nota Mínima (%)</Label><Input type="number" value={examForm.passingScore} onChange={e => setExamForm(p => ({ ...p, passingScore: e.target.value }))} /></div>
               <div><Label>Tempo Limite (min)</Label><Input type="number" value={examForm.timeLimitMinutes} onChange={e => setExamForm(p => ({ ...p, timeLimitMinutes: e.target.value }))} /></div>
             </div>

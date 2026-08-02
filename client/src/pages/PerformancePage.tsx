@@ -157,7 +157,7 @@ export default function PerformancePage() {
           <CardHeader><CardTitle className="text-base">Ranking — Semana {week}/{year}</CardTitle></CardHeader>
           <CardContent>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[900px] text-sm">
                 <thead>
                   <tr className="border-b text-left">
                     <th className="p-2 w-12">#</th>
@@ -203,7 +203,7 @@ export default function PerformancePage() {
                             <span className="text-muted-foreground text-xs inline-flex items-center"><Minus className="w-3 h-3" /></span>
                           )}
                         </td>
-                        <td className="p-2 font-medium">{name}</td>
+                        <td className="p-2 font-medium whitespace-nowrap">{name}</td>
                         <td className="p-2 text-center tabular-nums">{Number(ev.hoursWorked || 0).toFixed(1)}h</td>
                         <td className="p-2 text-center tabular-nums">{ev.movementsCount || 0}</td>
                         <td className="p-2 text-center tabular-nums">{Number(ev.movementsPerHour || 0).toFixed(1)}</td>
@@ -282,7 +282,7 @@ export default function PerformancePage() {
               <DialogTitle>Ajustar pontuação — {employeeMap.get(editing.employeeId) ?? "—"}</DialogTitle>
             </DialogHeader>
             <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <Label className="text-xs">Pts positivos</Label>
                   <Input
