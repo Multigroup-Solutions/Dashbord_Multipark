@@ -37,6 +37,7 @@ import {
 import { getLoginUrl } from "@/const";
 import { ACCESS_DENIED_MSG } from "@shared/const";
 import ProfilePhotoPrompt from "@/components/ProfilePhotoPrompt";
+import PermissionsGate from "@/components/PermissionsGate";
 import CameraCapture from "@/components/CameraCapture";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
@@ -444,6 +445,9 @@ function DashboardLayoutContent({
 
   return (
     <>
+      {/* Segurança: sem localização precisa + permissão de câmara, a app não
+          funciona (overlay bloqueante). */}
+      <PermissionsGate role={userRole} />
       <div className="relative" ref={sidebarRef}>
         <Sidebar
           collapsible="icon"
