@@ -8,9 +8,10 @@
  */
 
 import { and, desc, eq, or, sql } from "drizzle-orm";
-import { getDb, updateComplaint } from "./db";
+import { getDb, updateComplaint, updateLostFoundItem } from "./db";
 import {
   complaints,
+  lostFoundItems,
   multiparkBookingExtras,
   multiparkBookingHistory,
   multiparkBookings,
@@ -196,6 +197,73 @@ export async function autoLinkComplaintBooking(complaintId: number): Promise<{
   if (!c.reservationEnd && b.checkOut) patch.reservationEnd = b.checkOut;
   if (!c.projectId && b.projectId) patch.projectId = b.projectId;
   if (Object.keys(patch).length) await updateComplaint(complaintId, patch as any);
+
+  return {
+    linked: true,
+    alreadyLinked,
+    matchedBy,
+    booking: { externalId: b.externalId, bookingNumber: b.bookingNumber, parkName: b.parkName },
+  };
+}
+
+/**
+ * O mesmo auto-link para os Perdidos & Achados: liga a reserva ao caso e
+ * completa campos em falta a partir dela.
+ */
+export async function autoLinkLostFoundBooking(itemId: number): Promise<{
+  linked: boolean;
+  alreadyLinked: boolean;
+  matchedBy: string[];
+  booking: { externalId: string; bookingNumber: string | null; parkName: string | null } | null;
+}> {
+  const db = await getDb();
+  if (!db) return { linked: false, alreadyLinked: false, matchedBy: [], booking: null };
+
+  const rows = await db.select().from(lostFoundItems).where(eq(lostFoundItems.id, itemId)).limit(1);
+  const item = rows[0];
+  if (!item) return { linked: false, alreadyLinked: false, matchedBy: [], booking: null };
+
+  let booking: typeof multiparkBookings.$inferSelect | null = null;
+  let matchedBy: string[] = [];
+  let alreadyLinked = false;
+  if (item.bookingRef) {
+    const existing = await db
+      .select()
+      .from(multiparkBookings)
+      .where(or(eq(multiparkBookings.externalId, item.bookingRef), eq(multiparkBookings.bookingNumber, item.bookingRef)))
+      .limit(1);
+    if (existing[0]) {
+      booking = existing[0];
+      matchedBy = ["ref"];
+      alreadyLinked = true;
+    }
+  }
+
+  if (!booking) {
+    const match = await matchBookingForComplaint({
+      reservationRef: item.bookingRef,
+      vehiclePlate: item.vehiclePlate,
+      clientEmail: item.clientEmail,
+      clientPhone: item.clientPhone,
+      clientName: item.clientName,
+      anchorDate: item.createdAt,
+    });
+    if (!match) return { linked: false, alreadyLinked: false, matchedBy: [], booking: null };
+    booking = match.booking;
+    matchedBy = match.matchedBy;
+  }
+
+  const b = booking;
+  const patch: Record<string, unknown> = {};
+  if (!alreadyLinked) patch.bookingRef = b.externalId;
+  if (!item.vehiclePlate && b.licensePlate) patch.vehiclePlate = b.licensePlate;
+  if (!item.clientEmail && b.clientEmail) patch.clientEmail = b.clientEmail;
+  if (!item.clientPhone && b.clientPhone) patch.clientPhone = b.clientPhone;
+  if ((!item.clientName || /desconhecido/i.test(item.clientName)) && (b.clientFirstName || b.clientLastName)) {
+    patch.clientName = `${b.clientFirstName ?? ""} ${b.clientLastName ?? ""}`.trim();
+  }
+  if (!item.projectId && b.projectId) patch.projectId = b.projectId;
+  if (Object.keys(patch).length) await updateLostFoundItem(itemId, patch as any);
 
   return {
     linked: true,

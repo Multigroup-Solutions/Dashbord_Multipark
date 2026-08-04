@@ -20,7 +20,7 @@ import {
   parseInboundBody,
   type InboundAlias,
 } from "../emailParse";
-import { matchBookingForComplaint, autoLinkComplaintBooking } from "../complaintDossier";
+import { matchBookingForComplaint, autoLinkComplaintBooking, autoLinkLostFoundBooking } from "../complaintDossier";
 import {
   createGoogleReview,
   updateGoogleReview,
@@ -218,14 +218,29 @@ async function routeToModule(
         message: `📧 ${ctx.subject}\n\n${ctx.bodyText}`.trim().slice(0, 5000),
         isInternal: 0,
       } as any);
+      // Sem reserva ligada? O email novo pode trazer sinais suficientes.
+      if (!existing.bookingRef) {
+        try { await autoLinkLostFoundBooking(existing.id); } catch { /* best-effort */ }
+      }
       return { targetModule: "lostfound", targetId: existing.id };
     }
+    // Auto-anexa a reserva de que o cliente fala (ref explícita ganha; senão
+    // matrícula/email/telefone/nome ancorados na data de hoje).
+    const lfMatch = await matchBookingForComplaint({
+      reservationRef: parsed.bookingRef,
+      vehiclePlate: parsed.vehiclePlate,
+      clientEmail: parsed.clientEmail || ctx.fromEmail,
+      clientPhone: parsed.clientPhone,
+      clientName,
+    });
+    const lfBooking = lfMatch?.booking ?? null;
     const id = await createLostFoundItem({
       clientName,
-      clientEmail: parsed.clientEmail,
-      clientPhone: parsed.clientPhone,
-      vehiclePlate: parsed.vehiclePlate,
-      bookingRef: parsed.bookingRef,
+      clientEmail: parsed.clientEmail ?? (lfBooking?.clientEmail || undefined),
+      clientPhone: parsed.clientPhone ?? (lfBooking?.clientPhone || undefined),
+      vehiclePlate: parsed.vehiclePlate ?? (lfBooking?.licensePlate || undefined),
+      bookingRef: parsed.bookingRef ?? (lfBooking?.externalId || undefined),
+      projectId: lfBooking?.projectId ?? undefined,
       itemType: "other",
       description: desc || "(sem descrição)",
       status: "new",

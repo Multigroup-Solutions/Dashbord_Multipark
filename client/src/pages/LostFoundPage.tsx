@@ -416,6 +416,23 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
     { bookingId: item?.bookingRef || "" },
     { enabled: !!item?.bookingRef }
   );
+  // Dossier completo da reserva ligada — automático, sem passos manuais.
+  const { data: dossier } = trpc.lostFound.bookingDossier.useQuery(
+    { reservationRef: item?.bookingRef || "" },
+    { enabled: !!item?.bookingRef }
+  );
+  const autoLinkMut = trpc.lostFound.autoLink.useMutation({
+    onSuccess: (r) => {
+      if (r.linked) {
+        toast.success(r.alreadyLinked ? "Dados completados a partir da reserva" : `Reserva ligada (${r.matchedBy.join(", ")})`);
+        utils.lostFound.getById.invalidate({ id });
+      } else {
+        toast.info("Nenhuma reserva encontrada com os dados do cliente");
+      }
+    },
+    onError: () => toast.error("Erro ao procurar a reserva"),
+  });
+  const [showAllHist, setShowAllHist] = useState(false);
   const timelineHist = useMemo(() => {
     const mapped = (apiTimeline?.history || []).map((h: any) => ({
       id: h.id,
@@ -427,9 +444,10 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
       remarks: h.remarks || h.modifiedFields || "",
     }));
     // Roubos: mantém quem mexeu no carro; esconde só recolha-pendente/caixa.
-    return filterBookingHistory(mapped, "theft")
+    const filtered = showAllHist ? mapped : filterBookingHistory(mapped, "theft");
+    return filtered
       .sort((a: any, b: any) => new Date(b.actionDate || 0).getTime() - new Date(a.actionDate || 0).getTime());
-  }, [apiTimeline]);
+  }, [apiTimeline, showAllHist]);
   const { data: lfProjects = [] } = trpc.projects.list.useQuery();
   const { data: lfEmployees = [] } = trpc.rh.list.useQuery();
   const updateMut = trpc.lostFound.update.useMutation();
@@ -617,11 +635,59 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                 </CardContent>
               </Card>
 
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between">
+                  <CardTitle className="text-base">Dados da Reserva</CardTitle>
+                  {!item.bookingRef && (
+                    <Button
+                      size="sm" variant="outline"
+                      disabled={autoLinkMut.isPending}
+                      onClick={() => autoLinkMut.mutate({ id: item.id })}
+                    >
+                      {autoLinkMut.isPending ? "A procurar…" : "Ligar reserva automaticamente"}
+                    </Button>
+                  )}
+                </CardHeader>
+                <CardContent className="space-y-3 text-sm">
+                  {!item.bookingRef ? (
+                    <p className="text-xs text-muted-foreground">Sem reserva ligada — usa o botão para procurar pela matrícula/contactos do cliente.</p>
+                  ) : dossier?.booking ? (() => {
+                    const b: any = dossier.booking;
+                    const eur = (v: any) => v != null ? Number(v).toLocaleString("pt-PT", { style: "currency", currency: b.currency || "EUR" }) : "—";
+                    return (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div><span className="text-muted-foreground">Nº Reserva:</span> <span className="font-medium">#{b.bookingNumber || "—"}</span></div>
+                        <div><span className="text-muted-foreground">Estado:</span> <span className="font-medium">{b.status || "—"}</span></div>
+                        <div><span className="text-muted-foreground">Reservada em:</span> <span className="font-medium">{b.bookingCreatedAt ? fmtPTDateTime(b.bookingCreatedAt) : "—"}</span></div>
+                        <div><span className="text-muted-foreground">Canal:</span> <span className="font-medium">{[b.origin, b.partnerName && b.partnerName !== "Unknown User" ? b.partnerName : null, b.campaignName].filter(Boolean).join(" · ") || "—"}</span></div>
+                        <div><span className="text-muted-foreground">Parque:</span> <span className="font-medium">{b.parkName || "—"}{b.city ? ` (${b.city})` : ""}</span></div>
+                        <div><span className="text-muted-foreground">Lugar:</span> <span className="font-medium">{[b.currentGarage, b.currentSpot].filter(Boolean).join(" / ") || "—"}</span></div>
+                        <div><span className="text-muted-foreground">Entrada:</span> <span className="font-medium">{b.checkIn ? fmtPTDate(b.checkIn) : "—"}{b.checkInTime ? ` ${b.checkInTime}` : ""}{b.checkinAgentName ? ` · ${b.checkinAgentName}` : ""}</span></div>
+                        <div><span className="text-muted-foreground">Saída:</span> <span className="font-medium">{b.checkOut ? fmtPTDate(b.checkOut) : "—"}{b.checkOutTime ? ` ${b.checkOutTime}` : ""}{b.checkoutAgentName ? ` · ${b.checkoutAgentName}` : ""}</span></div>
+                        <div><span className="text-muted-foreground">Pagamento:</span> <span className="font-medium">{b.paymentMethod || "—"} · {eur(b.totalPrice)}</span></div>
+                        {(b.vehicleBrand || b.vehicleModel) && (
+                          <div><span className="text-muted-foreground">Veículo:</span> <span className="font-medium">{[b.vehicleBrand, b.vehicleModel, b.vehicleColor].filter(Boolean).join(" ")}</span></div>
+                        )}
+                        {(b.deliveryType || b.deliveryAddress) && (
+                          <div className="sm:col-span-2"><span className="text-muted-foreground">Entrega:</span> <span className="font-medium">{[b.deliveryType, b.deliveryAddress].filter(Boolean).join(" · ")}</span></div>
+                        )}
+                        {b.remarks && (
+                          <div className="sm:col-span-2 text-xs bg-muted/50 rounded p-2 whitespace-pre-wrap"><span className="text-muted-foreground">Observações: </span>{b.remarks}</div>
+                        )}
+                      </div>
+                    );
+                  })() : (
+                    <p className="text-xs text-muted-foreground">A ref. "{item.bookingRef}" não corresponde a nenhuma reserva na base de dados.</p>
+                  )}
+                </CardContent>
+              </Card>
+
               <ClientHistoryCard
                 email={item.clientEmail}
                 phone={item.clientPhone}
                 plate={item.vehiclePlate}
                 name={item.clientName}
+                highlightRef={item.bookingRef}
               />
 
               <LinkInboundEmailButton
@@ -802,16 +868,19 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
             {item.bookingRef && (
               <TabsContent value="booking-history" className="space-y-4">
                 <Card>
-                  <CardHeader>
+                  <CardHeader className="flex flex-row items-center justify-between">
                     <CardTitle className="text-base flex items-center gap-2">
                       <Clock className="w-5 h-5" /> Histórico da Reserva — {item.bookingRef.slice(-12)}
                     </CardTitle>
+                    <Button size="sm" variant={showAllHist ? "default" : "outline"} onClick={() => setShowAllHist(v => !v)}>
+                      {showAllHist ? "A mostrar tudo" : "Mostrar tudo"}
+                    </Button>
                   </CardHeader>
                   <CardContent>
                     {timelineLoading ? (
                       <div className="flex justify-center py-6"><div className="animate-spin w-6 h-6 border-2 border-primary border-t-transparent rounded-full" /></div>
                     ) : timelineHist.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">Sem histórico encontrado na API para esta reserva.</p>
+                      <p className="text-sm text-muted-foreground">Sem histórico para esta reserva{showAllHist ? "" : " (experimenta \"Mostrar tudo\")"}.</p>
                     ) : (
                       <div className="relative pl-6 space-y-0">
                         {timelineHist.map((h: any, i: number) => {

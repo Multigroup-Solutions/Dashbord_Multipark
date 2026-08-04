@@ -4722,6 +4722,15 @@ export const appRouter = router({
     })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
       const id = await createLostFoundItem({ ...input, createdBy: ctx.user.id, status: "new", priority: input.priority || "medium" } as any);
+      // Auto-liga a reserva a partir dos sinais (matrícula/email/telefone/nome).
+      if (id) {
+        try {
+          const { autoLinkLostFoundBooking } = await import("./complaintDossier");
+          await autoLinkLostFoundBooking(id);
+        } catch (err) {
+          console.warn("[lostfound create] autolink failed:", err);
+        }
+      }
       await logActivity({ userId: ctx.user.id, action: "create", entity: "lost_found", entityId: id || 0, details: `Perdido/Achado: ${input.description}` });
       // Notify super admin
       const admins = await getSuperAdmins();
@@ -4770,6 +4779,15 @@ export const appRouter = router({
         }
       }
       await updateLostFoundItem(id, data as any);
+      // Se a ref de reserva mudou, repopula os campos em falta a partir dela.
+      if (input.bookingRef) {
+        try {
+          const { autoLinkLostFoundBooking } = await import("./complaintDossier");
+          await autoLinkLostFoundBooking(id);
+        } catch (err) {
+          console.warn("[lostfound update] autolink failed:", err);
+        }
+      }
       await logActivity({ userId: ctx.user.id, action: "update", entity: "lost_found", entityId: id, details: `Atualizado: ${JSON.stringify(data)}` });
       return { success: true };
     }),
@@ -4966,11 +4984,52 @@ export const appRouter = router({
         const { getAgentMovements } = await import("./db");
         return getAgentMovements(input);
       }),
-    // Booking timeline directo da API Multipark (para o caso aberto)
+    // Booking timeline — BD local primeiro (o fetch live usava a chave GLOBAL
+    // e falhava em parques com chave própria); on-demand fetch na 1ª abertura.
     bookingTimeline: protectedProcedure.input(z.object({
       bookingId: z.string(),
     })).query(async ({ input }) => {
-      return getBookingHistory(input.bookingId);
+      const { getComplaintBookingDossier } = await import("./complaintDossier");
+      const d = await getComplaintBookingDossier(input.bookingId);
+      if (d.history.length) {
+        return {
+          bookingId: input.bookingId,
+          total: d.history.length,
+          history: d.history.map((h) => ({
+            id: h.historyId,
+            changeType: h.changeType,
+            actionTime: h.actionTime,
+            remarks: h.remarks,
+            agentName: h.agentName,
+            userId: h.agentUserId,
+            modifiedFields: h.modifiedFields,
+            platform: h.platform,
+          })),
+        };
+      }
+      try {
+        return await getBookingHistory(input.bookingId);
+      } catch {
+        return { bookingId: input.bookingId, total: 0, history: [] };
+      }
+    }),
+
+    // Dossier completo da reserva ligada (mesma peça das Reclamações).
+    bookingDossier: protectedProcedure.input(z.object({
+      reservationRef: z.string().min(1),
+    })).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "frontoffice");
+      const { getComplaintBookingDossier } = await import("./complaintDossier");
+      return getComplaintBookingDossier(input.reservationRef);
+    }),
+
+    // Liga automaticamente a reserva ao caso e completa campos em falta.
+    autoLink: protectedProcedure.input(z.object({
+      id: z.number(),
+    })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "frontoffice");
+      const { autoLinkLostFoundBooking } = await import("./complaintDossier");
+      return autoLinkLostFoundBooking(input.id);
     }),
   }),
 
