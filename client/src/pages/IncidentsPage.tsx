@@ -44,6 +44,25 @@ const TYPE_CONFIG: Record<string, string> = {
   outro: "Outro",
 };
 
+/**
+ * Categoria de triagem: pelo TEXTO, deteta ocorrências que são na verdade
+ * ACIDENTES (a aba mais grave) ou RECLAMAÇÕES de cliente ("cliente reclamou
+ * no terminal…") — essas ficam em abas próprias para análise/conversão.
+ */
+function categoryOf(inc: any): string {
+  const txt = `${inc.description ?? ""} ${inc.aiClassification ?? ""}`;
+  if (/acidente|sinistro|colis[aã]o|colidiu|embat|bateu|choque|capot/i.test(txt)) return "acidente";
+  if (/reclam|queixa|queixou/i.test(txt)) return "reclamacao";
+  return inc.incidentType || "outro";
+}
+
+const CATEGORY_TABS: Array<{ id: string; label: string; className?: string }> = [
+  { id: "all", label: "Todas" },
+  { id: "acidente", label: "⚠ Acidentes", className: "data-[state=active]:bg-red-600 data-[state=active]:text-white" },
+  { id: "reclamacao", label: "Reclamações" },
+  ...Object.entries(TYPE_CONFIG).map(([id, label]) => ({ id, label })),
+];
+
 export default function IncidentsPage() {
   const { user } = useAuth();
   const [showCreate, setShowCreate] = useState(false);
@@ -51,6 +70,7 @@ export default function IncidentsPage() {
   const [editInc, setEditInc] = useState<any>(null);
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterSeverity, setFilterSeverity] = useState("all");
+  const [activeTab, setActiveTab] = useState("all");
 
   const queryInput = useMemo(() => {
     const input: any = {};
@@ -63,7 +83,29 @@ export default function IncidentsPage() {
   const { data: stats } = trpc.incidents.stats.useQuery(undefined);
   const updateMut = trpc.incidents.update.useMutation();
   const deleteMut = trpc.incidents.delete.useMutation();
+  const toComplaintMut = trpc.incidents.convertToComplaint.useMutation({
+    onSuccess: (r) => { toast.success(`Movida para as Reclamações (#${r.newId}) — reserva e cliente ligados automaticamente se a matrícula bater`); utils.incidents.list.invalidate(); utils.incidents.stats.invalidate(); utils.complaints.list.invalidate(); },
+    onError: (e) => toast.error(e.message || "Erro ao mover"),
+  });
+  const toLostFoundMut = trpc.incidents.convertToLostFound.useMutation({
+    onSuccess: (r) => { toast.success(`Movida para os Perdidos & Achados (#${r.newId})`); utils.incidents.list.invalidate(); utils.incidents.stats.invalidate(); utils.lostFound.list.invalidate(); },
+    onError: (e) => toast.error(e.message || "Erro ao mover"),
+  });
   const utils = trpc.useUtils();
+
+  // Contagens por categoria de triagem + lista filtrada pela aba ativa.
+  const tabCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: incidents.length };
+    for (const inc of incidents as any[]) {
+      const cat = categoryOf(inc);
+      counts[cat] = (counts[cat] ?? 0) + 1;
+    }
+    return counts;
+  }, [incidents]);
+  const visibleIncidents = useMemo(
+    () => activeTab === "all" ? incidents : (incidents as any[]).filter(inc => categoryOf(inc) === activeTab),
+    [incidents, activeTab],
+  );
   const { data: employees = [] } = trpc.rh.list.useQuery();
 
   const employeeMap = useMemo(() => {
@@ -221,17 +263,33 @@ export default function IncidentsPage() {
           </div>
         </div>
 
+        {/* Abas por tipo (Acidentes e Reclamações detetadas pelo texto) */}
+        <div className="flex flex-wrap gap-1.5">
+          {CATEGORY_TABS.map(t => (
+            <Button
+              key={t.id}
+              size="sm"
+              variant={activeTab === t.id ? "default" : "outline"}
+              className={`text-xs ${t.id === "acidente" && activeTab === t.id ? "bg-red-600 hover:bg-red-700" : t.id === "acidente" ? "text-red-700 border-red-300" : ""}`}
+              onClick={() => setActiveTab(t.id)}
+            >
+              {t.label}
+              <Badge variant="secondary" className="ml-1.5 text-[10px] px-1">{tabCounts[t.id] ?? 0}</Badge>
+            </Button>
+          ))}
+        </div>
+
         {/* List */}
         {isLoading ? (
           <div className="flex justify-center py-20"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>
-        ) : incidents.length === 0 ? (
+        ) : visibleIncidents.length === 0 ? (
           <Card className="p-10 text-center">
             <AlertTriangle className="w-12 h-12 mx-auto text-muted-foreground mb-3" />
-            <p className="text-muted-foreground">Sem ocorrências registadas</p>
+            <p className="text-muted-foreground">Sem ocorrências {activeTab === "all" ? "registadas" : "nesta categoria"}</p>
           </Card>
         ) : (
           <div className="space-y-2">
-            {incidents.map((inc: any) => {
+            {visibleIncidents.map((inc: any) => {
               const overdue = is48hOverdue(inc.createdAt, inc.status);
               return (
                 <Card key={inc.id} className={`${overdue ? "border-red-400 border-2" : ""}`}>
@@ -240,6 +298,8 @@ export default function IncidentsPage() {
                       <div className="flex-1 space-y-1">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="font-medium">{TYPE_CONFIG[inc.incidentType] || inc.incidentType}</span>
+                          {categoryOf(inc) === "acidente" && <Badge className="bg-red-600 text-white">⚠ Acidente</Badge>}
+                          {categoryOf(inc) === "reclamacao" && <Badge className="bg-amber-100 text-amber-800">Cliente reclamou</Badge>}
                           <Badge className={STATUS_CONFIG[inc.status]?.color}>{STATUS_CONFIG[inc.status]?.label}</Badge>
                           <Badge className={SEVERITY_CONFIG[inc.severity]?.color}>{SEVERITY_CONFIG[inc.severity]?.label}</Badge>
                           {overdue && <Badge className="bg-red-500 text-white">+48h sem resolução</Badge>}
@@ -261,7 +321,7 @@ export default function IncidentsPage() {
                         </div>
                         {inc.resolution && <p className="text-xs text-green-700 mt-1">Resolução: {inc.resolution}</p>}
                       </div>
-                      <div className="flex gap-1">
+                      <div className="flex gap-1 flex-wrap justify-end">
                         <Button size="sm" variant="ghost" onClick={() => setEditInc(inc)}>
                           <Pencil className="w-4 h-4" />
                         </Button>
@@ -269,6 +329,32 @@ export default function IncidentsPage() {
                           <Button size="sm" variant="outline" onClick={() => setSelectedId(inc.id)}>
                             Resolver
                           </Button>
+                        )}
+                        {["admin", "super_admin"].includes(user?.role ?? "") && (
+                          <>
+                            <Button
+                              size="sm" variant="outline" className="text-xs"
+                              disabled={toComplaintMut.isPending}
+                              title="Converte em Reclamação — vai buscar a reserva e os dados do cliente pela matrícula"
+                              onClick={() => {
+                                if (!confirm("Mover esta ocorrência para as Reclamações? A reserva/cliente serão ligados automaticamente pela matrícula.")) return;
+                                toComplaintMut.mutate({ id: inc.id });
+                              }}
+                            >
+                              → Reclamações
+                            </Button>
+                            <Button
+                              size="sm" variant="outline" className="text-xs"
+                              disabled={toLostFoundMut.isPending}
+                              title="Converte em caso de Perdidos & Achados"
+                              onClick={() => {
+                                if (!confirm("Mover esta ocorrência para os Perdidos & Achados?")) return;
+                                toLostFoundMut.mutate({ id: inc.id });
+                              }}
+                            >
+                              → Perdidos
+                            </Button>
+                          </>
                         )}
                         {user?.role === "super_admin" && (
                           <Button size="sm" variant="ghost" onClick={() => handleDelete(inc.id)}>
