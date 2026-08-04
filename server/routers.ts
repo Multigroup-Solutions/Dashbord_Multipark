@@ -6964,7 +6964,10 @@ export const appRouter = router({
         z.object({
           templateName: z.string().min(1).max(128),
           languageCode: z.string().min(2).max(12).optional(),
-          templateParams: z.array(z.string().max(1024)).max(20).optional(),
+          // {{1}} é SEMPRE o nome do destinatário (resolvido no servidor, por
+          // destinatário); só o {{2}} vem da UI e é igual para todos.
+          bodyParam2: z.string().max(512).nullable().optional(),
+          includeFormLink: z.boolean().optional(),
           employeeIds: z.array(z.number()).nullable().optional(),
           weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
           note: z.string().max(500).nullable().optional(),
@@ -6978,7 +6981,8 @@ export const appRouter = router({
           summary = await sendBroadcast({
             templateName: input.templateName,
             languageCode: input.languageCode,
-            templateParams: input.templateParams,
+            bodyParam2: input.bodyParam2 ?? null,
+            includeFormLink: input.includeFormLink === true,
             employeeIds: input.employeeIds ?? null,
             weekStart: input.weekStart ?? null,
             note: input.note ?? null,

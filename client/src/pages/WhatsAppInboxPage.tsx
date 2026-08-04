@@ -28,6 +28,10 @@ import {
   Lock,
   AlertTriangle,
 } from "lucide-react";
+import {
+  AVAILABILITY_TEMPLATE_NAME,
+  DEFAULT_TEMPLATE_LANGUAGE,
+} from "@shared/whatsappTemplate";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -77,8 +81,10 @@ export default function WhatsAppInboxPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [text, setText] = useState("");
   const [tplOpen, setTplOpen] = useState(false);
-  const [tplName, setTplName] = useState("");
-  const [tplLang, setTplLang] = useState("pt_PT");
+  const [tplName, setTplName] = useState(AVAILABILITY_TEMPLATE_NAME);
+  const [tplLang, setTplLang] = useState(DEFAULT_TEMPLATE_LANGUAGE);
+  // {{2}} do body (o {{1}} e sempre o nome de quem recebe, resolvido no servidor).
+  const [tplParam2, setTplParam2] = useState("");
   const [now, setNow] = useState(() => Date.now());
 
   // Tick para o countdown da janela (a cada 30s).
@@ -360,14 +366,27 @@ export default function WhatsAppInboxPage() {
             <div className="space-y-1">
               <Label className="text-xs">Nome do template (WhatsApp Manager)</Label>
               <Input
-                placeholder="ex: disponibilidade_semanal (nome APPROVED)"
+                placeholder={AVAILABILITY_TEMPLATE_NAME}
                 value={tplName}
                 onChange={(e) => setTplName(e.target.value)}
               />
             </div>
-            <div className="space-y-1 w-32">
-              <Label className="text-xs">Língua</Label>
-              <Input value={tplLang} onChange={(e) => setTplLang(e.target.value)} placeholder="pt_PT" />
+            <div className="flex gap-3 flex-wrap">
+              <div className="space-y-1 w-32">
+                <Label className="text-xs">Língua</Label>
+                <Input value={tplLang} onChange={(e) => setTplLang(e.target.value)} placeholder={DEFAULT_TEMPLATE_LANGUAGE} />
+              </div>
+              <div className="space-y-1 flex-1 min-w-[12rem]">
+                <Label className="text-xs">Semana/dia (parâmetro 2)</Label>
+                <Input
+                  value={tplParam2}
+                  onChange={(e) => setTplParam2(e.target.value)}
+                  placeholder="ex: semana de 11 a 17 de agosto"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  O {"{{1}}"} é preenchido com o nome do contacto.
+                </p>
+              </div>
             </div>
           </div>
 
@@ -383,6 +402,7 @@ export default function WhatsAppInboxPage() {
                 broadcast.mutate({
                   templateName: tplName.trim(),
                   languageCode: tplLang.trim() || undefined,
+                  bodyParam2: tplParam2.trim() || null,
                   testPhone: t.phoneE164,
                 })
               }

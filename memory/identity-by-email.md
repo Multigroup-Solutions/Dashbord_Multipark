@@ -13,6 +13,11 @@ página de extras vazia + telefones "inválidos").
 - `whatsapp-integration.md` — `normalizePhoneE164` nasceu aí (Fase 0) e é aqui
   que ganha tolerância a texto livre; o broadcast e a tabela de extras da
   `ExtrasDiaPage` são os consumidores. Migrações 0045/0047 continuam por aplicar.
+- `employee-city-derivation.md` — **2026-08-04**: a mesma tabela do
+  `AvailabilitySection` ganhou filtro por cidade; a cidade é DERIVADA
+  (projeto → candidatura do site → morada) porque `employees` não tem coluna de
+  cidade. A Decisão 1 ("a todos" = conjunto visível) continua a valer e agora o
+  envio por EMAIL também manda a lista explícita do que está visível.
 - `sync-runners-topology.md` — os dois entrypoints (Railway `index.ts` e Vercel
   `api-entry.ts`) montam ambos o OAuth e o `/api/v1`; qualquer alteração ao
   login vale para os dois.

@@ -16,6 +16,7 @@ import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { employees, extrasAvailability } from "../drizzle/schema";
 import { normalizePhoneE164 } from "../shared/phone";
+import { resolveCitiesForEmployeeIds, type CityKey, type CitySource } from "./employeeCity";
 
 // ─── Helpers de datas ──────────────────────────────────────────────────────────
 
@@ -124,6 +125,32 @@ export async function listActiveEmployeesByIds(ids: number[]): Promise<ActiveExt
     .from(employees)
     .where(and(eq(employees.isActive, 1), inArray(employees.id, ids)))
     .orderBy(asc(employees.fullName));
+}
+
+/**
+ * Colaborador ATIVO cujo telefone normaliza para `phoneE164`, ou null.
+ *
+ * Usado pelo envio de TESTE do WhatsApp para dar um nome real ao {{1}} quando o
+ * número de teste pertence a alguém conhecido (e para a conversa do inbox nascer
+ * já associada à ficha). O match tem de ser feito em memória: `employees.phone`
+ * é texto livre ("912 345 678 (pessoal)"), não é comparável em SQL.
+ */
+export async function findActiveEmployeeByPhoneE164(
+  phoneE164: string,
+): Promise<{ id: number; fullName: string } | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select({ id: employees.id, fullName: employees.fullName, phone: employees.phone })
+    .from(employees)
+    .where(and(eq(employees.isActive, 1), sql`${employees.phone} IS NOT NULL`))
+    .orderBy(asc(employees.id));
+  for (const r of rows) {
+    if (r.phone && normalizePhoneE164(r.phone) === phoneE164) {
+      return { id: r.id, fullName: r.fullName };
+    }
+  }
+  return null;
 }
 
 // ─── Disponibilidade de um extra (a própria página dele) ───────────────────────
@@ -236,6 +263,13 @@ export interface OverviewExtra {
    * inválido, o broadcast dizia válido).
    */
   phoneE164: string | null;
+  /**
+   * Cidade derivada (lisboa/porto/faro) ou null quando nenhuma fonte a
+   * identifica — ver `server/employeeCity.ts` para a ordem das fontes.
+   * `employees` NÃO tem coluna de cidade; isto é derivado, não inventado.
+   */
+  city: CityKey | null;
+  citySource: CitySource | null;
   responded: boolean;
   availableDays: number;
   days: { day: string; morning: boolean; night: boolean; fromHour: number | null; toHour: number | null; note: string | null }[];
@@ -314,6 +348,10 @@ export async function getWeekOverview(weekStart: string, projectId?: number | nu
   const perDay = headers.map(h => ({ day: h.day, morning: 0, night: 0 }));
   const perDayIdx = new Map(perDay.map((p, i) => [p.day, i]));
 
+  // Cidade por extra (derivada — ver employeeCity.ts). Uma resolução para toda
+  // a lista, não uma por linha.
+  const cities = await resolveCitiesForEmployeeIds(ids);
+
   const overviewExtras: OverviewExtra[] = extras.map(e => {
     const empRows = byEmp.get(e.id) ?? [];
     const dayMap = new Map(empRows.map(r => [r.day, r]));
@@ -333,6 +371,8 @@ export async function getWeekOverview(weekStart: string, projectId?: number | nu
       email: e.email,
       phone: e.phone,
       phoneE164: e.phone ? normalizePhoneE164(e.phone) : null,
+      city: cities.get(e.id)?.city ?? null,
+      citySource: cities.get(e.id)?.source ?? null,
       responded: empRows.length > 0,
       availableDays,
       days,
