@@ -249,6 +249,38 @@ async function backfillEmployeeContacts(
  *
  * Devolve a conta adotada, ou `null` se não havia nada para adotar.
  */
+/**
+ * Re-aponta as referências de um userId para outro antes de apagar a conta
+ * duplicada — lista curada das colunas que apontam inequivocamente para
+ * users.id (colunas de employees NÃO entram aqui). Cada UPDATE é best-effort:
+ * uma tabela/coluna em falta não pode partir o login.
+ */
+const USER_REF_COLUMNS: Array<[table: string, column: string]> = [
+  ["activity_logs", "userId"],
+  ["app_notifications", "userId"],
+  ["complaint_messages", "authorId"],
+  ["complaint_photos", "uploadedById"],
+  ["complaints", "createdById"],
+  ["complaints", "closedById"],
+  ["lost_found_items", "createdBy"],
+  ["lost_found_items", "closedById"],
+  ["lost_found_messages", "userId"],
+  ["lost_found_attached_drivers", "attachedById"],
+  ["tasks", "createdById"],
+  ["google_reviews", "respondedBy"],
+  ["google_reviews", "createdById"],
+  ["expenses", "insertedById"],
+  ["multipark_sync_logs", "triggeredById"],
+];
+
+export async function reassignUserReferences(db: Db, fromId: number, toId: number): Promise<void> {
+  for (const [table, column] of USER_REF_COLUMNS) {
+    try {
+      await db.execute(sql.raw(`UPDATE \`${table}\` SET \`${column}\` = ${Number(toId)} WHERE \`${column}\` = ${Number(fromId)}`));
+    } catch { /* tabela/coluna pode não existir nesta BD — segue */ }
+  }
+}
+
 export async function adoptPlaceholderAccountByEmail(
   db: Db,
   rawEmail: string,
@@ -302,17 +334,14 @@ export async function adoptPlaceholderAccountByEmail(
 
   // Estado partido herdado: existem AS DUAS linhas (a do backoffice e a criada
   // pelo login). Não se pode duplicar o openId (índice UNIQUE) → transfere o
-  // role/departamento/estado para a linha OAuth e desativa a do backoffice.
-  // Nunca apagar: os `activity_logs` referenciam o userId.
+  // role/departamento/estado + TODAS as referências para a linha OAuth e
+  // APAGA a do backoffice — decisão do Jorge (2026-08-04): não podem existir
+  // dois utilizadores com o mesmo email.
   if (oauthRow && placeholder) {
     await db
       .update(users)
       .set({ role: placeholder.role as any, isActive: placeholder.isActive, email })
       .where(eq(users.id, oauthRow.id));
-    await db
-      .update(users)
-      .set({ isActive: 0, loginMethod: `merged_into_${oauthRow.id}`.slice(0, 64) })
-      .where(eq(users.id, placeholder.id));
     // A FICHA DE FUNCIONÁRIO tem de seguir a fusão — sem isto o ponto-no-
     // avatar (e tudo o que depende de employees.userId) desaparecia para a
     // conta Google ativa (caso Carlos/César/Márcia/Maxwell, ago-2026).
@@ -322,6 +351,18 @@ export async function adoptPlaceholderAccountByEmail(
         .set({ userId: oauthRow.id })
         .where(eq(employees.userId, placeholder.id));
     } catch { /* best-effort — não pode partir o login */ }
+    // Histórico re-apontado antes do delete (colunas que referenciam users.id).
+    await reassignUserReferences(db, placeholder.id, oauthRow.id);
+    try {
+      await db.execute(sql`DELETE FROM users WHERE id = ${placeholder.id}`);
+    } catch {
+      // Se o delete falhar, cai no comportamento antigo (desativada e marcada)
+      // para nunca partir o login.
+      await db
+        .update(users)
+        .set({ isActive: 0, loginMethod: `merged_into_${oauthRow.id}`.slice(0, 64) })
+        .where(eq(users.id, placeholder.id));
+    }
     await logActivity({
       userId: oauthRow.id,
       action: "account_merge",
