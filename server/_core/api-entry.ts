@@ -235,6 +235,17 @@ app.get("/api/cron/multipark-future", async (req, res) => {
 app.get("/api/cron/daily-ops", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
   try {
+    // Despesas: marca vencidas como "overdue" (antes só existia um botão
+    // manual super_admin que ninguém carregava — os KPIs de "Em Atraso"
+    // nunca mexiam) e lança as despesas recorrentes do mês em nome do
+    // utilizador de sistema (antes era quem abrisse a página primeiro).
+    try {
+      const { markOverdueExpenses } = await import("../db");
+      await markOverdueExpenses();
+    } catch (err) {
+      console.warn("[daily-ops] markOverdueExpenses:", err);
+    }
+
     const { collectDailyDriverData } = await import("../jobs/dailyDriverCollection");
     // ?date=YYYY-MM-DD permite recolher um dia específico (backfill de dias
     // falhados); por omissão, o dia anterior.
