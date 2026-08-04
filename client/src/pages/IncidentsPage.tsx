@@ -71,6 +71,7 @@ export default function IncidentsPage() {
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterSeverity, setFilterSeverity] = useState("all");
   const [activeTab, setActiveTab] = useState("all");
+  const [detailId, setDetailId] = useState<number | null>(null);
 
   const queryInput = useMemo(() => {
     const input: any = {};
@@ -292,7 +293,11 @@ export default function IncidentsPage() {
             {visibleIncidents.map((inc: any) => {
               const overdue = is48hOverdue(inc.createdAt, inc.status);
               return (
-                <Card key={inc.id} className={`${overdue ? "border-red-400 border-2" : ""}`}>
+                <Card
+                  key={inc.id}
+                  className={`cursor-pointer hover:shadow-md transition-shadow ${overdue ? "border-red-400 border-2" : ""}`}
+                  onClick={() => setDetailId(inc.id)}
+                >
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between gap-4">
                       <div className="flex-1 space-y-1">
@@ -321,7 +326,7 @@ export default function IncidentsPage() {
                         </div>
                         {inc.resolution && <p className="text-xs text-green-700 mt-1">Resolução: {inc.resolution}</p>}
                       </div>
-                      <div className="flex gap-1 flex-wrap justify-end">
+                      <div className="flex gap-1 flex-wrap justify-end" onClick={(e) => e.stopPropagation()}>
                         <Button size="sm" variant="ghost" onClick={() => setEditInc(inc)}>
                           <Pencil className="w-4 h-4" />
                         </Button>
@@ -374,7 +379,147 @@ export default function IncidentsPage() {
       {showCreate && <CreateIncidentDialog employees={employees} onClose={() => setShowCreate(false)} />}
       {selectedId && <ResolveDialog id={selectedId} onResolve={handleResolve} onClose={() => setSelectedId(null)} />}
       {editInc && <EditIncidentDialog incident={editInc} employees={employees} onClose={() => setEditInc(null)} />}
+      {detailId && (
+        <IncidentDetailDialog
+          id={detailId}
+          user={user}
+          employeeMap={employeeMap}
+          onClose={() => setDetailId(null)}
+          onEdit={(inc) => { setDetailId(null); setEditInc(inc); }}
+        />
+      )}
     </>
+  );
+}
+
+/**
+ * Detalhe da ocorrência — a "pré-reclamação": conteúdo completo, reserva
+ * relacionada pela matrícula, notas datadas, aceitar/resolver num clique e
+ * conversão para Reclamações/Perdidos.
+ */
+function IncidentDetailDialog({ id, user, employeeMap, onClose, onEdit }: {
+  id: number; user: any; employeeMap: Map<number, string>; onClose: () => void; onEdit: (inc: any) => void;
+}) {
+  const { data: inc, isLoading } = trpc.incidents.getById.useQuery({ id });
+  const { data: peek } = trpc.incidents.bookingPeek.useQuery({ id });
+  const utils = trpc.useUtils();
+  const [note, setNote] = useState("");
+
+  const invalidate = () => {
+    utils.incidents.getById.invalidate({ id });
+    utils.incidents.list.invalidate();
+    utils.incidents.stats.invalidate();
+  };
+  const updateMut = trpc.incidents.update.useMutation({ onSuccess: invalidate });
+  const addNoteMut = trpc.incidents.addNote.useMutation({
+    onSuccess: () => { setNote(""); toast.success("Nota adicionada"); invalidate(); },
+    onError: (e) => toast.error(e.message || "Erro ao adicionar nota"),
+  });
+  const toComplaintMut = trpc.incidents.convertToComplaint.useMutation({
+    onSuccess: (r) => { toast.success(`Movida para as Reclamações (#${r.newId})`); invalidate(); utils.complaints.list.invalidate(); onClose(); },
+    onError: (e) => toast.error(e.message || "Erro ao mover"),
+  });
+  const toLostFoundMut = trpc.incidents.convertToLostFound.useMutation({
+    onSuccess: (r) => { toast.success(`Movida para os Perdidos & Achados (#${r.newId})`); invalidate(); utils.lostFound.list.invalidate(); onClose(); },
+    onError: (e) => toast.error(e.message || "Erro ao mover"),
+  });
+
+  if (isLoading || !inc) return null;
+  const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
+  const openStates = inc.status === "open" || inc.status === "investigating";
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 flex-wrap">
+            Ocorrência #{inc.id} — {TYPE_CONFIG[inc.incidentType] || inc.incidentType}
+            {categoryOf(inc) === "acidente" && <Badge className="bg-red-600 text-white">⚠ Acidente</Badge>}
+            {categoryOf(inc) === "reclamacao" && <Badge className="bg-amber-100 text-amber-800">Cliente reclamou</Badge>}
+            <Badge className={STATUS_CONFIG[inc.status]?.color}>{STATUS_CONFIG[inc.status]?.label}</Badge>
+            <Badge className={SEVERITY_CONFIG[inc.severity]?.color}>{SEVERITY_CONFIG[inc.severity]?.label}</Badge>
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div>
+            <p className="text-xs font-medium text-muted-foreground mb-1">Descrição completa</p>
+            <div className="max-h-[30vh] overflow-y-auto rounded bg-muted p-3 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">
+              {inc.description || "(sem descrição)"}
+            </div>
+            {(inc as any).aiClassification && (
+              <p className="text-xs text-blue-600 mt-1 flex items-center gap-1"><Bot className="w-3 h-3" /> IA: {(inc as any).aiClassification}</p>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+            {inc.vehiclePlate && <div><Car className="w-3 h-3 inline mr-1" />Matrícula: <span className="font-medium text-foreground">{inc.vehiclePlate}</span></div>}
+            {inc.employeeId && <div><User className="w-3 h-3 inline mr-1" />Colaborador: <span className="font-medium text-foreground">{employeeMap.get(inc.employeeId) || `#${inc.employeeId}`}</span></div>}
+            <div><Clock className="w-3 h-3 inline mr-1" />Criada: <span className="font-medium text-foreground">{fmtPTDateTime(inc.createdAt)}</span></div>
+            {(inc as any).sourceEmailDate && <div>Email original: <span className="font-medium text-foreground">{fmtPTDateTime((inc as any).sourceEmailDate)}</span></div>}
+            {(inc as any).gpsLatitude && (inc as any).gpsLongitude && (
+              <a href={`https://www.google.com/maps?q=${(inc as any).gpsLatitude},${(inc as any).gpsLongitude}`} target="_blank" rel="noopener" className="text-blue-500 hover:underline"><MapPin className="w-3 h-3 inline mr-1" />Ver no mapa</a>
+            )}
+          </div>
+
+          {peek && (
+            <div className="rounded-lg border p-3 text-sm space-y-1 bg-blue-50/50">
+              <p className="text-xs font-medium text-muted-foreground">Reserva relacionada (pela matrícula, à data da ocorrência)</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+                <div>Reserva: <span className="font-medium">#{peek.bookingNumber || peek.externalId.slice(-8)}</span> · {peek.status}</div>
+                <div>Parque: <span className="font-medium">{peek.parkName}{peek.city ? ` (${peek.city})` : ""}</span></div>
+                <div>Cliente: <span className="font-medium">{peek.clientName || "—"}</span></div>
+                <div>Estadia: <span className="font-medium">{peek.checkIn ? fmtPTDate(peek.checkIn) : "—"} → {peek.checkOut ? fmtPTDate(peek.checkOut) : "—"}</span></div>
+              </div>
+              <p className="text-[10px] text-muted-foreground">Ao mover para Reclamações/Perdidos, esta reserva e o cliente são ligados automaticamente.</p>
+            </div>
+          )}
+
+          <div>
+            <p className="text-xs font-medium text-muted-foreground mb-1">Notas / Resolução</p>
+            {inc.resolution ? (
+              <div className="max-h-[20vh] overflow-y-auto rounded bg-green-50 border border-green-200 p-3 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">{inc.resolution}</div>
+            ) : (
+              <p className="text-xs text-muted-foreground">Sem notas.</p>
+            )}
+            <div className="flex gap-2 mt-2">
+              <Input placeholder="Adicionar nota…" value={note} onChange={(e) => setNote(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && note.trim()) addNoteMut.mutate({ id, note }); }} />
+              <Button size="sm" disabled={!note.trim() || addNoteMut.isPending} onClick={() => addNoteMut.mutate({ id, note })}>Adicionar</Button>
+            </div>
+          </div>
+        </div>
+
+        <DialogFooter className="flex-wrap gap-2">
+          <Button variant="outline" size="sm" onClick={() => onEdit(inc)}><Pencil className="w-4 h-4 mr-1" /> Editar</Button>
+          {openStates && (
+            <Button
+              size="sm" className="bg-green-600 hover:bg-green-700 text-white"
+              disabled={updateMut.isPending}
+              title="Ocorrência vista e aceite — fica resolvida"
+              onClick={() => updateMut.mutate({ id, status: "resolved", resolution: inc.resolution ? undefined : "Aceite" }, { onSuccess: () => { toast.success("Ocorrência aceite e resolvida"); onClose(); } })}
+            >
+              <CheckCircle2 className="w-4 h-4 mr-1" /> Aceitar e resolver
+            </Button>
+          )}
+          {openStates && inc.status !== "investigating" && (
+            <Button size="sm" variant="outline" disabled={updateMut.isPending} onClick={() => updateMut.mutate({ id, status: "investigating" })}>
+              Investigar
+            </Button>
+          )}
+          {isAdmin && (
+            <>
+              <Button size="sm" variant="outline" disabled={toComplaintMut.isPending} onClick={() => { if (confirm("Mover para as Reclamações?")) toComplaintMut.mutate({ id }); }}>
+                → Reclamações
+              </Button>
+              <Button size="sm" variant="outline" disabled={toLostFoundMut.isPending} onClick={() => { if (confirm("Mover para os Perdidos & Achados?")) toLostFoundMut.mutate({ id }); }}>
+                → Perdidos
+              </Button>
+            </>
+          )}
+          <Button variant="outline" size="sm" onClick={onClose}>Fechar</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

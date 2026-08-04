@@ -262,7 +262,8 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
                   <span className="font-medium text-sm">{cfg.label}</span>
                   <Badge variant="secondary" className="ml-auto text-xs">{items.length}</Badge>
                 </div>
-                <ScrollArea className="max-h-[60vh]">
+                {/* div nativo: o ScrollArea (Radix) com max-h corta em vez de scrollar */}
+                <div className="max-h-[60vh] overflow-y-auto">
                   <div className="space-y-2 pr-2">
                     {items.map((c: any) => (
                       <ComplaintCard
@@ -277,7 +278,7 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
                       <p className="text-xs text-muted-foreground text-center py-8">Sem tickets</p>
                     )}
                   </div>
-                </ScrollArea>
+                </div>
               </div>
             );
           })}

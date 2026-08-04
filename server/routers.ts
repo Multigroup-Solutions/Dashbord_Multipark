@@ -5282,6 +5282,51 @@ export const appRouter = router({
       return getIncidentsByEmployee(input.employeeId);
     }),
 
+    // Nota rápida no tratamento da ocorrência (as ocorrências não têm tabela
+    // de mensagens — as notas empilham-se no campo resolution, datadas).
+    addNote: protectedProcedure.input(z.object({
+      id: z.number(),
+      note: z.string().min(1).max(2000),
+    })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "frontoffice");
+      const inc = await getIncidentById(input.id);
+      if (!inc) throw new TRPCError({ code: "NOT_FOUND" });
+      const stamp = new Date().toLocaleString("pt-PT", { timeZone: "Europe/Lisbon", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+      const line = `[${stamp} — ${ctx.user.name ?? "—"}] ${input.note.trim()}`;
+      const resolution = inc.resolution ? `${inc.resolution}\n${line}` : line;
+      await updateIncident(input.id, { resolution } as any);
+      return { success: true };
+    }),
+
+    // Reserva relacionada com a ocorrência (pela matrícula, ancorada na data
+    // da ocorrência) — o contexto que faltava para tratar/triar.
+    bookingPeek: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "frontoffice");
+      const inc = await getIncidentById(input.id);
+      if (!inc?.vehiclePlate) return null;
+      const { matchBookingForComplaint } = await import("./complaintDossier");
+      const match = await matchBookingForComplaint({
+        vehiclePlate: inc.vehiclePlate,
+        anchorDate: (inc as any).sourceEmailDate ?? inc.createdAt,
+      });
+      if (!match) return null;
+      const b = match.booking;
+      return {
+        matchedBy: match.matchedBy,
+        externalId: b.externalId,
+        bookingNumber: b.bookingNumber,
+        status: b.status,
+        parkName: b.parkName,
+        city: b.city,
+        checkIn: b.checkIn,
+        checkOut: b.checkOut,
+        clientName: `${b.clientFirstName ?? ""} ${b.clientLastName ?? ""}`.trim() || null,
+        clientEmail: b.clientEmail,
+        clientPhone: b.clientPhone,
+        totalPrice: b.totalPrice,
+      };
+    }),
+
     // Sincroniza ocorrências a partir do multipark_booking_history (remarks
     // dos agentes nos check-in/out/movements). Dedup por sourceEmailId.
     syncFromMultipark: protectedProcedure
