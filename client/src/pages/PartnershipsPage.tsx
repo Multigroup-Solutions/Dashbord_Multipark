@@ -13,7 +13,7 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { useState, useMemo } from "react";
+import { Fragment, useState, useMemo } from "react";
 import {
   Handshake, Euro, Building2, Crown, ArrowRightLeft,
   Plus, Pencil, Trash2, FileText, Settings, Link2, AlertTriangle, Wallet,
@@ -928,7 +928,25 @@ function InvoicingSummaryTab({
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((r) => {
+                  {PARTNER_CATEGORIES.map((cat) => {
+                    const catRows = rows.filter((r: any) => partnerCategoryOf(r.partnerType) === cat.id);
+                    if (catRows.length === 0) return null;
+                    const sub = catRows.reduce((a: any, r: any) => ({
+                      n: a.n + r.bookingsCount, rev: a.rev + r.revenueGross,
+                      af: a.af + r.aFaturar, f: a.f + r.faturado, p: a.p + r.pendente, ea: a.ea + r.emAtraso,
+                    }), { n: 0, rev: 0, af: 0, f: 0, p: 0, ea: 0 });
+                    return (
+                      <Fragment key={cat.id}>
+                        <tr className="bg-muted/70 border-b">
+                          <td colSpan={2} className="p-2 font-semibold text-xs uppercase">{cat.label} · {catRows.length}</td>
+                          <td className="p-2 text-right tabular-nums text-xs font-medium">{sub.n}</td>
+                          <td className="p-2 text-right tabular-nums text-xs font-medium">{fmt(sub.rev)}</td>
+                          <td className="p-2 text-right tabular-nums text-xs font-medium text-blue-700">{fmt(sub.af)}</td>
+                          <td className="p-2 text-right tabular-nums text-xs font-medium text-emerald-700">{fmt(sub.f)}</td>
+                          <td className="p-2 text-right tabular-nums text-xs font-medium text-orange-700">{fmt(sub.p)}</td>
+                          <td className="p-2 text-right tabular-nums text-xs font-medium text-red-700">{sub.ea > 0 ? fmt(sub.ea) : "—"}</td>
+                        </tr>
+                        {catRows.map((r: any) => {
                     const t = getPartnerType(r.partnerType);
                     return (
                       <tr
@@ -958,6 +976,9 @@ function InvoicingSummaryTab({
                           )}
                         </td>
                       </tr>
+                    );
+                  })}
+                      </Fragment>
                     );
                   })}
                 </tbody>
