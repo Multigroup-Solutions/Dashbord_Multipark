@@ -185,6 +185,11 @@ function Router() {
       <Route path="/operacoes">
         {() => (<DashboardLayout><OperacoesPage /></DashboardLayout>)}
       </Route>
+      {/* Rotas exatas ANTES de /multipark/:section? — o Switch do wouter é
+          first-match-wins e o param opcional engoliria /multipark/inspect. */}
+      <Route path="/multipark/inspect">
+        {() => (<DashboardLayout><MultiparkInspectPage /></DashboardLayout>)}
+      </Route>
       <Route path="/multipark/:section?">
         {() => (<DashboardLayout><MultiparkPage /></DashboardLayout>)}
       </Route>
@@ -202,9 +207,6 @@ function Router() {
       </Route>
       <Route path="/avaliacao-operacional">
         {() => (<DashboardLayout><AvaliacaoOperacionalPage /></DashboardLayout>)}
-      </Route>
-      <Route path="/multipark/inspect">
-        {() => (<DashboardLayout><MultiparkInspectPage /></DashboardLayout>)}
       </Route>
       <Route path="/api-keys">
         {() => (<DashboardLayout><ApiKeysPage /></DashboardLayout>)}

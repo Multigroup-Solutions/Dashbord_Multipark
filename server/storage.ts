@@ -23,6 +23,14 @@ export async function storagePut(
   const body = typeof data === "string" ? Buffer.from(data) : data;
 
   if (!isBlobConfigured()) {
+    // No Vercel o filesystem é efémero/read-only e as URLs "/uploads/..."
+    // nunca são servidas (rewrite → index.html) — gravar aqui seria lixo na
+    // BD com links mortos. Falhar alto para o erro chegar ao utilizador.
+    if (process.env.VERCEL) {
+      throw new Error(
+        "Storage não configurado (BLOB_READ_WRITE_TOKEN em falta no Vercel) — upload indisponível",
+      );
+    }
     ensureUploadsDir();
     const filePath = path.join(UPLOADS_DIR, key.replace(/\//g, path.sep));
     const dir = path.dirname(filePath);

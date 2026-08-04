@@ -79,7 +79,8 @@ async function startServer() {
   // Vercel): Blob → redirect para a URL pública; local → redirect p/ /uploads.
   app.get(/^\/api\/file\/(.+)/, async (req: any, res: any) => {
     try {
-      const key = decodeURIComponent(req.params[0] ?? "");
+      // O Express já decodifica os grupos capturados — sem 2º decode.
+      const key = String(req.params[0] ?? "");
       if (!key || key.includes("..")) return res.status(400).json({ error: "Key inválida" });
       const { storageGet } = await import("../storage");
       const { url } = await storageGet(key);

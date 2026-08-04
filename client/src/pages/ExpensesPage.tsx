@@ -70,6 +70,7 @@ import {
 import { toast } from "sonner";
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth } from "date-fns";
 import { pt } from "date-fns/locale";
+import { fileHref } from "@/lib/fileHref";
 
 const STATUS_CONFIG: Record<string, { label: string; icon: any; className: string }> = {
   pending: { label: "Pendente", icon: Clock, className: "bg-yellow-100 text-yellow-800 border-yellow-200" },
@@ -77,6 +78,23 @@ const STATUS_CONFIG: Record<string, { label: string; icon: any; className: strin
   overdue: { label: "Em atraso", icon: AlertCircle, className: "bg-red-100 text-red-800 border-red-200" },
   cancelled: { label: "Cancelado", icon: XCircle, className: "bg-gray-100 text-gray-700 border-gray-200" },
 };
+
+function quickRangeDates(range: string): { start: string; end: string } {
+  const now = new Date();
+  if (range === "week") {
+    return {
+      start: format(startOfWeek(now, { weekStartsOn: 1 }), "yyyy-MM-dd"),
+      end: format(endOfWeek(now, { weekStartsOn: 1 }), "yyyy-MM-dd"),
+    };
+  }
+  if (range === "month") {
+    return {
+      start: format(startOfMonth(now), "yyyy-MM-dd"),
+      end: format(endOfMonth(now), "yyyy-MM-dd"),
+    };
+  }
+  return { start: "", end: "" };
+}
 
 const PAYMENT_LABELS: Record<string, string> = {
   cash: "Numerário",
@@ -164,9 +182,11 @@ export default function ExpensesPage() {
       setFilterProject("");
     }
   }, [filters.projectId]);
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
-  const [quickRange, setQuickRange] = useState<string>("");
+  // Por omissão mostra só a semana atual — o histórico completo vem por
+  // pesquisa, pelo botão "Tudo" ou por datas manuais.
+  const [startDate, setStartDate] = useState(() => quickRangeDates("week").start);
+  const [endDate, setEndDate] = useState(() => quickRangeDates("week").end);
+  const [quickRange, setQuickRange] = useState<string>("week");
 
   // Modals
   const [showForm, setShowForm] = useState(false);
@@ -176,18 +196,16 @@ export default function ExpensesPage() {
   // Quick date range helpers
   const applyQuickRange = (range: string) => {
     setQuickRange(range);
-    const now = new Date();
-    if (range === "week") {
-      setStartDate(format(startOfWeek(now, { weekStartsOn: 1 }), "yyyy-MM-dd"));
-      setEndDate(format(endOfWeek(now, { weekStartsOn: 1 }), "yyyy-MM-dd"));
-    } else if (range === "month") {
-      setStartDate(format(startOfMonth(now), "yyyy-MM-dd"));
-      setEndDate(format(endOfMonth(now), "yyyy-MM-dd"));
-    } else {
-      setStartDate("");
-      setEndDate("");
-    }
+    const { start, end } = quickRangeDates(range);
+    setStartDate(start);
+    setEndDate(end);
   };
+
+  // Pesquisa com ≥3 caracteres alarga automaticamente a todo o histórico —
+  // senão o default "semana atual" esconderia resultados antigos.
+  const searchAllHistory = search.trim().length >= 3;
+  const effectiveStartDate = searchAllHistory ? "" : startDate;
+  const effectiveEndDate = searchAllHistory ? "" : endDate;
 
   // Queries
   const { data: expensesList, isLoading } = trpc.expenses.list.useQuery({
@@ -196,8 +214,8 @@ export default function ExpensesPage() {
     categoryId: (filterCategory && filterCategory !== "all") ? parseInt(filterCategory) : undefined,
     projectId: (filterProject && filterProject !== "all") ? parseInt(filterProject) : undefined,
     userId: (filterUser && filterUser !== "all") ? parseInt(filterUser) : undefined,
-    startDate: startDate || undefined,
-    endDate: endDate || undefined,
+    startDate: effectiveStartDate || undefined,
+    endDate: effectiveEndDate || undefined,
   });
   const { data: categories } = trpc.categories.list.useQuery();
   const { data: projectsList } = trpc.projects.list.useQuery();
@@ -263,23 +281,27 @@ export default function ExpensesPage() {
       categoryId: (filterCategory && filterCategory !== "all") ? parseInt(filterCategory) : undefined,
       projectId: (filterProject && filterProject !== "all") ? parseInt(filterProject) : undefined,
       userId: (filterUser && filterUser !== "all") ? parseInt(filterUser) : undefined,
-      startDate: startDate || undefined,
-      endDate: endDate || undefined,
+      startDate: effectiveStartDate || undefined,
+      endDate: effectiveEndDate || undefined,
     });
   };
 
+  // Limpar volta ao default (semana atual), não ao histórico completo —
+  // esse pede-se explicitamente com o botão "Tudo".
   const clearFilters = () => {
     setSearch("");
     setFilterStatus("");
     setFilterCategory("");
     setFilterProject("");
     setFilterUser("");
-    setStartDate("");
-    setEndDate("");
-    setQuickRange("");
+    applyQuickRange("week");
   };
 
-  const hasFilters = search || filterStatus || filterCategory || filterProject || filterUser || startDate || endDate;
+  const defaultWeek = quickRangeDates("week");
+  const hasFilters = Boolean(
+    search || filterStatus || filterCategory || filterProject || filterUser ||
+    startDate !== defaultWeek.start || endDate !== defaultWeek.end
+  );
 
   const [showRecurring, setShowRecurring] = useState(false);
   const [showCompare, setShowCompare] = useState(false);
@@ -299,7 +321,12 @@ export default function ExpensesPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <p className="text-sm text-muted-foreground">
-            {kpis.count} despesa(s) filtrada(s)
+            {kpis.count} despesa(s)
+            {searchAllHistory
+              ? " — a pesquisar em todo o histórico"
+              : effectiveStartDate || effectiveEndDate
+                ? ` — ${effectiveStartDate ? format(new Date(`${effectiveStartDate}T00:00:00`), "dd MMM", { locale: pt }) : "…"} a ${effectiveEndDate ? format(new Date(`${effectiveEndDate}T00:00:00`), "dd MMM", { locale: pt }) : "…"}`
+                : " — todo o histórico"}
             {selectedUserName && <> de <strong>{selectedUserName}</strong></>}
           </p>
         </div>
@@ -477,6 +504,14 @@ export default function ExpensesPage() {
                   <CalendarDays className="h-3 w-3" />
                   Mês
                 </Button>
+                <Button
+                  variant={!quickRange && !startDate && !endDate ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => applyQuickRange("")}
+                  className="gap-1 text-xs"
+                >
+                  Tudo
+                </Button>
               </div>
               <Input
                 type="date"
@@ -511,7 +546,13 @@ export default function ExpensesPage() {
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <Receipt className="h-12 w-12 text-muted-foreground/30 mb-4" />
               <p className="text-muted-foreground font-medium">Nenhuma despesa encontrada</p>
-              <p className="text-sm text-muted-foreground mt-1">Cria a primeira despesa com o botão acima</p>
+              {effectiveStartDate || effectiveEndDate ? (
+                <Button variant="link" size="sm" className="mt-1" onClick={() => applyQuickRange("")}>
+                  Procurar em todo o histórico
+                </Button>
+              ) : (
+                <p className="text-sm text-muted-foreground mt-1">Cria a primeira despesa com o botão acima</p>
+              )}
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -572,8 +613,8 @@ export default function ExpensesPage() {
                         <TableCell className="text-sm text-muted-foreground">{insertedBy?.name ?? "—"}</TableCell>
                         <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
-                            {expense.invoiceImageUrl && (
-                              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => window.open(expense.invoiceImageUrl!, "_blank")}>
+                            {(expense.invoiceImageUrl || expense.invoiceImageKey) && (
+                              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => window.open(fileHref(expense.invoiceImageUrl, expense.invoiceImageKey) ?? undefined, "_blank")}>
                                 <Eye className="h-3.5 w-3.5" />
                               </Button>
                             )}
@@ -680,13 +721,13 @@ function ExpenseDetailSheet({
           </div>
 
           {/* Invoice Image */}
-          {expense.invoiceImageUrl && (
+          {(expense.invoiceImageUrl || expense.invoiceImageKey) && (
             <div>
               <img
-                src={expense.invoiceImageUrl}
+                src={fileHref(expense.invoiceImageUrl, expense.invoiceImageKey) ?? undefined}
                 alt="Fatura"
                 className="w-full max-h-48 object-contain rounded-lg border cursor-pointer"
-                onClick={() => window.open(expense.invoiceImageUrl, "_blank")}
+                onClick={() => window.open(fileHref(expense.invoiceImageUrl, expense.invoiceImageKey) ?? undefined, "_blank")}
               />
             </div>
           )}

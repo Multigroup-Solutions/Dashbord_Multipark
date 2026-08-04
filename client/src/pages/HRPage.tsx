@@ -3,6 +3,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { RecruitmentSection } from "@/components/RecruitmentSection";
 import { trpc } from "@/lib/trpc";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
+import { fileHref } from "@/lib/fileHref";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -582,13 +583,13 @@ function DocumentsTab({ employeeId }: { employeeId: number }) {
                           {isImage(doc.mimeType) ? (
                             <div
                               className="aspect-[4/3] bg-cover bg-center cursor-pointer"
-                              style={{ backgroundImage: `url(${doc.fileUrl})` }}
-                              onClick={() => setPreviewUrl(doc.fileUrl)}
+                              style={{ backgroundImage: `url(${fileHref(doc.fileUrl, doc.fileKey)})` }}
+                              onClick={() => setPreviewUrl(fileHref(doc.fileUrl, doc.fileKey))}
                             />
                           ) : (
                             <div
                               className="aspect-[4/3] flex items-center justify-center cursor-pointer"
-                              onClick={() => window.open(doc.fileUrl, "_blank")}
+                              onClick={() => window.open(fileHref(doc.fileUrl, doc.fileKey) ?? undefined, "_blank")}
                             >
                               <FileText className="w-10 h-10 text-muted-foreground" />
                             </div>
@@ -600,7 +601,7 @@ function DocumentsTab({ employeeId }: { employeeId: number }) {
                           </div>
                           {/* Actions overlay */}
                           <div className="absolute top-1 right-1 flex gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
-                            <Button size="icon" variant="secondary" className="w-6 h-6" onClick={() => isImage(doc.mimeType) ? setPreviewUrl(doc.fileUrl) : window.open(doc.fileUrl, "_blank")}>
+                            <Button size="icon" variant="secondary" className="w-6 h-6" onClick={() => isImage(doc.mimeType) ? setPreviewUrl(fileHref(doc.fileUrl, doc.fileKey)) : window.open(fileHref(doc.fileUrl, doc.fileKey) ?? undefined, "_blank")}>
                               <Eye className="w-3 h-3" />
                             </Button>
                             <Button size="icon" variant="secondary" className="w-6 h-6 text-destructive" onClick={() => del.mutate({ id: doc.id })}>
