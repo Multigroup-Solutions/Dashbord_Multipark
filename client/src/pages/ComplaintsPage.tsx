@@ -394,6 +394,28 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
     { bookingId: data?.complaint?.reservationRef || "" },
     { enabled: !!data?.complaint?.reservationRef }
   );
+  // Dossier completo da reserva ligada (detalhe + extras) — automático, sem
+  // passos manuais.
+  const { data: dossier } = trpc.complaints.bookingDossier.useQuery(
+    { reservationRef: data?.complaint?.reservationRef || "" },
+    { enabled: !!data?.complaint?.reservationRef }
+  );
+  const { data: vehicleAgents } = trpc.complaints.vehicleAgents.useQuery(
+    { plate: data?.complaint?.vehiclePlate || "", currentBookingRef: data?.complaint?.reservationRef || undefined },
+    { enabled: !!data?.complaint?.vehiclePlate && (data?.complaint?.vehiclePlate?.length ?? 0) >= 2 }
+  );
+  const autoLinkMut = trpc.complaints.autoLink.useMutation({
+    onSuccess: (r) => {
+      if (r.linked) {
+        toast.success(r.alreadyLinked ? "Dados completados a partir da reserva" : `Reserva ligada (${r.matchedBy.join(", ")})`);
+        utils.complaints.getById.invalidate({ id });
+      } else {
+        toast.info("Nenhuma reserva encontrada com os dados do cliente");
+      }
+    },
+    onError: () => toast.error("Erro ao procurar a reserva"),
+  });
+  const [showAllHist, setShowAllHist] = useState(false);
   const timelineHist = useMemo(() => {
     const mapped = (apiTimeline?.history || []).map((h: any) => ({
       id: h.id,
@@ -404,10 +426,12 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
       parkName: h.booking?.parkName || "",
       remarks: h.remarks || h.modifiedFields || "",
     }));
-    // Reclamações: esconde ações administrativas, mostra só movimentos relevantes.
-    return filterBookingHistory(mapped, "complaint")
+    // Reclamações: por omissão esconde ações administrativas; "mostrar tudo"
+    // revela também alterações de reserva/validações.
+    const filtered = showAllHist ? mapped : filterBookingHistory(mapped, "complaint");
+    return filtered
       .sort((a: any, b: any) => new Date(b.actionDate || 0).getTime() - new Date(a.actionDate || 0).getTime());
-  }, [apiTimeline]);
+  }, [apiTimeline, showAllHist]);
   const { data: vehicles = [] } = trpc.operational.vehicles.list.useQuery();
   const { data: employees = [] } = trpc.rh.list.useQuery();
   const { data: projectsList = [] } = trpc.projects.list.useQuery();
@@ -538,7 +562,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
               <TabsTrigger value="details">Detalhes</TabsTrigger>
               <TabsTrigger value="messages">Mensagens ({data.messages.length})</TabsTrigger>
               <TabsTrigger value="photos">Fotos ({data.photos.length})</TabsTrigger>
-              {c.vehicleId && <TabsTrigger value="vehicle">Viatura</TabsTrigger>}
+              {(c.vehiclePlate || c.vehicleId) && <TabsTrigger value="vehicle">Viatura</TabsTrigger>}
               <TabsTrigger value="duty">Em serviço</TabsTrigger>
               <TabsTrigger value="booking-history">Histórico ({timelineHist.length})</TabsTrigger>
             </TabsList>
@@ -551,12 +575,68 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                 </Card>
               )}
               <Card>
-                <CardHeader><CardTitle className="text-sm">Dados da Reserva</CardTitle></CardHeader>
-                <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                  <div><span className="text-muted-foreground">Ref. Reserva:</span> <span className="font-medium break-all">{c.reservationRef || "—"}</span></div>
-                  <div><span className="text-muted-foreground">Início:</span> <span className="font-medium">{c.reservationStart ? fmtPTDate(c.reservationStart) : "—"}</span></div>
-                  <div><span className="text-muted-foreground">Fim:</span> <span className="font-medium">{c.reservationEnd ? fmtPTDate(c.reservationEnd) : "—"}</span></div>
-                  <div><span className="text-muted-foreground">Matrícula:</span> <span className="font-medium">{c.vehiclePlate || "—"}</span></div>
+                <CardHeader className="flex flex-row items-center justify-between">
+                  <CardTitle className="text-sm">Dados da Reserva</CardTitle>
+                  {!c.reservationRef && (
+                    <Button
+                      size="sm" variant="outline"
+                      disabled={autoLinkMut.isPending}
+                      onClick={() => autoLinkMut.mutate({ id })}
+                    >
+                      <LinkIcon className="w-3.5 h-3.5 mr-1" />
+                      {autoLinkMut.isPending ? "A procurar…" : "Ligar reserva automaticamente"}
+                    </Button>
+                  )}
+                </CardHeader>
+                <CardContent className="space-y-3 text-sm">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div><span className="text-muted-foreground">Ref. Reserva:</span> <span className="font-medium break-all">{c.reservationRef || "—"}</span></div>
+                    <div><span className="text-muted-foreground">Matrícula:</span> <span className="font-medium">{c.vehiclePlate || "—"}</span></div>
+                    <div><span className="text-muted-foreground">Início:</span> <span className="font-medium">{c.reservationStart ? fmtPTDate(c.reservationStart) : "—"}</span></div>
+                    <div><span className="text-muted-foreground">Fim:</span> <span className="font-medium">{c.reservationEnd ? fmtPTDate(c.reservationEnd) : "—"}</span></div>
+                  </div>
+                  {dossier?.booking && (() => {
+                    const b: any = dossier.booking;
+                    const eur = (v: any) => v != null ? Number(v).toLocaleString("pt-PT", { style: "currency", currency: b.currency || "EUR" }) : "—";
+                    return (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 border-t pt-3">
+                        <div><span className="text-muted-foreground">Nº Reserva:</span> <span className="font-medium">#{b.bookingNumber || "—"}</span></div>
+                        <div><span className="text-muted-foreground">Estado:</span> <span className="font-medium">{b.status || "—"}</span></div>
+                        <div><span className="text-muted-foreground">Reservada em:</span> <span className="font-medium">{b.bookingCreatedAt ? fmtPTDateTime(b.bookingCreatedAt) : "—"}</span></div>
+                        <div><span className="text-muted-foreground">Canal:</span> <span className="font-medium">{[b.origin, b.partnerName && b.partnerName !== "Unknown User" ? b.partnerName : null, b.campaignName].filter(Boolean).join(" · ") || "—"}</span></div>
+                        <div><span className="text-muted-foreground">Parque:</span> <span className="font-medium">{b.parkName || "—"}{b.city ? ` (${b.city})` : ""}</span></div>
+                        <div><span className="text-muted-foreground">Lugar:</span> <span className="font-medium">{[b.currentGarage, b.currentSpot].filter(Boolean).join(" / ") || "—"}</span></div>
+                        <div><span className="text-muted-foreground">Entrada:</span> <span className="font-medium">{b.checkIn ? fmtPTDate(b.checkIn) : "—"}{b.checkInTime ? ` ${b.checkInTime}` : ""}{b.checkinAgentName ? ` · ${b.checkinAgentName}` : ""}</span></div>
+                        <div><span className="text-muted-foreground">Saída:</span> <span className="font-medium">{b.checkOut ? fmtPTDate(b.checkOut) : "—"}{b.checkOutTime ? ` ${b.checkOutTime}` : ""}{b.checkoutAgentName ? ` · ${b.checkoutAgentName}` : ""}</span></div>
+                        <div><span className="text-muted-foreground">Pagamento:</span> <span className="font-medium">{b.paymentMethod || "—"} · {eur(b.totalPrice)}{b.totalPaid != null ? ` (pago ${eur(b.totalPaid)})` : ""}</span></div>
+                        <div><span className="text-muted-foreground">Por pagar:</span> <span className="font-medium">{b.remainingToPay != null && Number(b.remainingToPay) > 0 ? eur(b.remainingToPay) : "—"}</span></div>
+                        {(b.deliveryType || b.deliveryAddress) && (
+                          <div className="sm:col-span-2"><span className="text-muted-foreground">Entrega:</span> <span className="font-medium">{[b.deliveryType, b.deliveryAddress].filter(Boolean).join(" · ")}</span></div>
+                        )}
+                        {(b.arrivalFlight || b.departureFlight || b.returnFlight) && (
+                          <div className="sm:col-span-2"><span className="text-muted-foreground">Voos:</span> <span className="font-medium">{[b.arrivalFlight, b.departureFlight, b.returnFlight].filter(Boolean).join(" · ")}</span></div>
+                        )}
+                        {(b.vehicleBrand || b.vehicleModel) && (
+                          <div><span className="text-muted-foreground">Veículo:</span> <span className="font-medium">{[b.vehicleBrand, b.vehicleModel, b.vehicleColor].filter(Boolean).join(" ")}</span></div>
+                        )}
+                        {b.cancelledAt && (
+                          <div className="sm:col-span-2 text-red-600"><span>Cancelada em {fmtPTDateTime(b.cancelledAt)}</span>{b.cancelReason ? ` — ${b.cancelReason}` : ""}</div>
+                        )}
+                        {b.remarks && (
+                          <div className="sm:col-span-2 text-xs bg-muted/50 rounded p-2 whitespace-pre-wrap"><span className="text-muted-foreground">Observações: </span>{b.remarks}</div>
+                        )}
+                        {dossier.extras.length > 0 && (
+                          <div className="sm:col-span-2">
+                            <span className="text-muted-foreground">Extras:</span>{" "}
+                            <span className="font-medium">{dossier.extras.map((e: any) => `${e.name}${e.price != null ? ` (${eur(e.price)})` : ""}`).join(", ")}</span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                  {c.reservationRef && dossier && !dossier.booking && (
+                    <p className="text-xs text-muted-foreground border-t pt-3">A ref. "{c.reservationRef}" não corresponde a nenhuma reserva na base de dados.</p>
+                  )}
                 </CardContent>
               </Card>
               {drivers.length > 0 && (
@@ -640,10 +720,53 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
               </Card>
             </TabsContent>
 
-            {c.vehicleId && (
-              <TabsContent value="vehicle" className="mt-4">
+            {(c.vehiclePlate || c.vehicleId) && (
+              <TabsContent value="vehicle" className="mt-4 space-y-4">
+                {c.vehiclePlate && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-sm">Quem mexeu no carro — {c.vehiclePlate}</CardTitle>
+                      <p className="text-xs text-muted-foreground">Agentes Multipark com ações em reservas desta matrícula. Destacados os que tocaram na reserva desta reclamação.</p>
+                    </CardHeader>
+                    <CardContent>
+                      {!vehicleAgents ? (
+                        <div className="flex justify-center py-4"><div className="animate-spin w-5 h-5 border-2 border-primary border-t-transparent rounded-full" /></div>
+                      ) : vehicleAgents.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">Sem histórico de agentes para esta matrícula na BD local.</p>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="w-full min-w-[520px] text-sm">
+                            <thead>
+                              <tr className="bg-muted/50 text-left">
+                                <th className="p-2">Agente</th>
+                                <th className="p-2 text-right">Ações</th>
+                                <th className="p-2 text-right">Check-ins</th>
+                                <th className="p-2 text-right">Check-outs</th>
+                                <th className="p-2 text-right">Movimentos</th>
+                                <th className="p-2">Última ação</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {vehicleAgents.map((a: any) => (
+                                <tr key={a.agentName} className={`border-t ${a.flagged ? "bg-red-50 font-medium" : ""}`}>
+                                  <td className="p-2">{a.agentName}{a.flagged ? " ⚑" : ""}</td>
+                                  <td className="p-2 text-right">{a.actions}</td>
+                                  <td className="p-2 text-right text-green-600">{a.checkins}</td>
+                                  <td className="p-2 text-right text-violet-600">{a.checkouts}</td>
+                                  <td className="p-2 text-right text-amber-600">{a.movements}</td>
+                                  <td className="p-2 text-xs text-muted-foreground">{a.lastActionAt ? fmtPTDateTime(a.lastActionAt) : "—"}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+                {c.vehicleId ? (
                 <Card>
-                  <CardHeader><CardTitle className="text-sm">Histórico da Viatura — {c.vehiclePlate}</CardTitle></CardHeader>
+                  <CardHeader><CardTitle className="text-sm">Histórico da Viatura (frota interna)</CardTitle></CardHeader>
                   <CardContent>
                     {vehicleHistory && vehicleHistory.length > 0 ? (
                       <div className="space-y-2">
@@ -664,6 +787,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                     )}
                   </CardContent>
                 </Card>
+                ) : null}
               </TabsContent>
             )}
 
@@ -676,10 +800,13 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
 
             <TabsContent value="booking-history" className="mt-4">
                 <Card>
-                  <CardHeader>
+                  <CardHeader className="flex flex-row items-center justify-between">
                     <CardTitle className="text-sm flex items-center gap-2">
                       <Clock className="w-4 h-4" /> Histórico da Reserva {c.reservationRef ? `— ${c.reservationRef}` : ""}
                     </CardTitle>
+                    <Button size="sm" variant={showAllHist ? "default" : "outline"} onClick={() => setShowAllHist(v => !v)}>
+                      {showAllHist ? "A mostrar tudo" : "Mostrar tudo"}
+                    </Button>
                   </CardHeader>
                   <CardContent>
                     {!c.reservationRef ? (
@@ -687,7 +814,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                     ) : timelineLoading ? (
                       <div className="flex justify-center py-6"><div className="animate-spin w-6 h-6 border-2 border-primary border-t-transparent rounded-full" /></div>
                     ) : timelineHist.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">Sem histórico encontrado na API para esta reserva.</p>
+                      <p className="text-sm text-muted-foreground">Sem histórico para esta reserva{showAllHist ? "" : " (experimenta \"Mostrar tudo\")"}.</p>
                     ) : (
                       <div className="relative pl-6 space-y-0">
                         {timelineHist.map((h: any, i: number) => {
@@ -767,6 +894,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
             phone={c.clientPhone}
             plate={c.vehiclePlate}
             name={c.clientName}
+            highlightRef={c.reservationRef}
           />
 
           {/* Edit Dialog */}
@@ -1029,7 +1157,12 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
 
   const handleSubmit = async () => {
     if (!form.title) { toast.error("Título obrigatório"); return; }
-    if (!form.reservationRef) { toast.error("ID da reserva é obrigatório"); return; }
+    // ID da reserva deixou de ser obrigatório: com matrícula/email/telefone/
+    // nome o servidor liga a reserva automaticamente ao criar.
+    if (!form.reservationRef && !form.vehiclePlate && !form.clientEmail && !form.clientPhone && !form.clientName) {
+      toast.error("Indica pelo menos um dado do cliente (reserva, matrícula, email, telefone ou nome)");
+      return;
+    }
     try {
       await createMut.mutateAsync({
         title: form.title,

@@ -7997,7 +7997,10 @@ export interface ClientHistoryQuery {
 
 export async function getClientHistory(q: ClientHistoryQuery) {
   const db = await getDb();
-  const empty = { bookings: [] as any[], complaints: [] as any[], lostFound: [] as any[], reviews: [] as any[] };
+  const empty = {
+    bookings: [] as any[], complaints: [] as any[], lostFound: [] as any[], reviews: [] as any[],
+    bookingStats: { total: 0, firstCheckIn: null as string | null, lastCheckIn: null as string | null, totalSpent: 0, avgSpend: 0, cancelled: 0 },
+  };
   if (!db) return empty;
 
   const email = q.email?.trim() || null;
@@ -8032,7 +8035,7 @@ export async function getClientHistory(q: ClientHistoryQuery) {
   if (plate) reviewConds.push(eq(googleReviews.vehiclePlate, plate));
   if (namePat) reviewConds.push(like(googleReviews.reviewerName, namePat));
 
-  const [bookings, complaintRows, lostFound, reviews] = await Promise.all([
+  const [bookings, bookingStatsRows, complaintRows, lostFound, reviews] = await Promise.all([
     bookingConds.length
       ? db.select({
           id: multiparkBookings.id, externalId: multiparkBookings.externalId,
@@ -8043,6 +8046,18 @@ export async function getClientHistory(q: ClientHistoryQuery) {
           clientFirstName: multiparkBookings.clientFirstName, clientLastName: multiparkBookings.clientLastName,
         }).from(multiparkBookings).where(or(...bookingConds)).orderBy(desc(multiparkBookings.checkIn)).limit(30)
       : Promise.resolve([]),
+    // Agregados sobre TODAS as reservas do cliente (a lista acima é limitada
+    // a 30): quantas, desde quando, total gasto, média — o retrato para quem
+    // vai decidir a reclamação.
+    bookingConds.length
+      ? db.select({
+          total: sql<number>`COUNT(*)`,
+          firstCheckIn: sql<string | null>`MIN(${multiparkBookings.checkIn})`,
+          lastCheckIn: sql<string | null>`MAX(${multiparkBookings.checkIn})`,
+          totalSpent: sql<string | null>`SUM(${multiparkBookings.totalPrice})`,
+          cancelled: sql<number>`SUM(UPPER(COALESCE(${multiparkBookings.status}, '')) LIKE '%CANCEL%')`,
+        }).from(multiparkBookings).where(or(...bookingConds))
+      : Promise.resolve([] as any[]),
     complaintConds.length
       ? db.select({
           id: complaints.id, title: complaints.title, status: complaints.complaintStatus,
@@ -8063,7 +8078,19 @@ export async function getClientHistory(q: ClientHistoryQuery) {
       : Promise.resolve([]),
   ]);
 
-  return { bookings, complaints: complaintRows, lostFound, reviews };
+  const s = bookingStatsRows[0] as any;
+  const total = Number(s?.total ?? 0);
+  const totalSpent = s?.totalSpent != null ? Number(s.totalSpent) : 0;
+  const bookingStats = {
+    total,
+    firstCheckIn: (s?.firstCheckIn as string | null) ?? null,
+    lastCheckIn: (s?.lastCheckIn as string | null) ?? null,
+    totalSpent,
+    avgSpend: total > 0 ? totalSpent / total : 0,
+    cancelled: Number(s?.cancelled ?? 0),
+  };
+
+  return { bookings, bookingStats, complaints: complaintRows, lostFound, reviews };
 }
 
 // ── Threading: agrupar RESPOSTAS na mesma reclamação/perdido ──────────────────
