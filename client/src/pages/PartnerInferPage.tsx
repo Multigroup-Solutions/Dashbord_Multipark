@@ -208,7 +208,7 @@ function LinkDialog({
       if (mode === "new") {
         const r = await create.mutateAsync({
           name: name.trim(),
-          partnerType: "agency",
+          partnerType: "agencia_viagem",
         });
         partnershipId = (r as any).id;
       } else {

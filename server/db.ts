@@ -4412,6 +4412,7 @@ export async function getPartnerInvoicingSummary(filters: {
       partnerType: partnerships.partnerType,
       commissionRate: partnerships.commissionRate,
       monthlyFee: partnerships.monthlyFee,
+      campaignKey: partnerships.campaignKey,
       notes: partnerships.notes,
     })
     .from(partnerships)
@@ -4445,7 +4446,9 @@ export async function getPartnerInvoicingSummary(filters: {
     )
     .groupBy(multiparkBookings.campaign);
 
-  // 4) Map campaign-key (lowercased) → partnershipId
+  // 4) Map campaign-key (lowercased) → partnershipId — regista campaignKey +
+  // name + aliases (unificado com getBillingData; antes faltava o campaignKey
+  // e um parceiro configurado só por key ficava a zeros nesta vista)
   const keyToPartner = new Map<string, number>();
   function reg(rawKey: string | null | undefined, partnerId: number) {
     if (!rawKey) return;
@@ -4453,6 +4456,7 @@ export async function getPartnerInvoicingSummary(filters: {
     if (k && !keyToPartner.has(k)) keyToPartner.set(k, partnerId);
   }
   for (const p of partnerRows) {
+    reg(p.campaignKey, p.id);
     reg(p.name, p.id);
   }
   for (const a of aliasRows) {
@@ -4690,6 +4694,7 @@ export async function getPartnerInvoicingDetailByType(filters: {
       partnerType: partnerships.partnerType,
       commissionRate: partnerships.commissionRate,
       monthlyFee: partnerships.monthlyFee,
+      campaignKey: partnerships.campaignKey,
       notes: partnerships.notes,
     })
     .from(partnerships)
@@ -4703,12 +4708,13 @@ export async function getPartnerInvoicingDetailByType(filters: {
     aliasValue: partnerAliases.aliasValue,
   }).from(partnerAliases);
 
+  // campaignKey + name + aliases — unificado com getBillingData/summary
   const keyToPartner = new Map<string, number>();
   function reg(k: string | null | undefined, pid: number) {
     if (!k) return; const x = k.trim().toLowerCase();
     if (x && !keyToPartner.has(x)) keyToPartner.set(x, pid);
   }
-  for (const p of partnerRows) reg(p.name, p.id);
+  for (const p of partnerRows) { reg(p.campaignKey, p.id); reg(p.name, p.id); }
   for (const a of aliasRows) reg(a.aliasValue, a.partnershipId);
 
   // Bookings agrupados por campaign (campanha → parceiro). Só CHECKED_OUT.
