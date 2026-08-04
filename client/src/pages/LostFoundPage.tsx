@@ -293,7 +293,8 @@ function KanbanView({ user, filterType, setFilterType, searchTerm, setSearchTerm
                   <span className="font-medium text-sm">{cfg.label}</span>
                   <Badge variant="secondary" className="ml-auto text-xs">{colItems.length}</Badge>
                 </div>
-                <ScrollArea className="max-h-[60vh]">
+                {/* div nativo: o ScrollArea (Radix) com max-h corta em vez de scrollar */}
+                <div className="max-h-[60vh] overflow-y-auto">
                   <div className="space-y-2 pr-2">
                     {colItems.map((item: any) => (
                       <ItemCard
@@ -308,7 +309,7 @@ function KanbanView({ user, filterType, setFilterType, searchTerm, setSearchTerm
                       <p className="text-xs text-muted-foreground text-center py-8">Sem registos</p>
                     )}
                   </div>
-                </ScrollArea>
+                </div>
               </div>
             );
           })}

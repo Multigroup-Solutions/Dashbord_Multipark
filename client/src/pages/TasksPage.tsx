@@ -500,7 +500,8 @@ export default function TasksPage() {
                 <span className="font-medium text-sm">{col.label}</span>
                 <Badge variant="secondary" className="ml-auto text-xs">{grouped[col.id]?.length ?? 0}</Badge>
               </div>
-              <ScrollArea className="max-h-[60vh]">
+              {/* div nativo: o ScrollArea (Radix) com max-h corta em vez de scrollar */}
+              <div className="max-h-[60vh] overflow-y-auto">
                 <div className="space-y-2 pr-2">
                   {(grouped[col.id] ?? []).map(task => (
                     <TaskCard key={task.id} task={task} />
@@ -509,7 +510,7 @@ export default function TasksPage() {
                     <p className="text-xs text-muted-foreground text-center py-8">Sem tarefas</p>
                   )}
                 </div>
-              </ScrollArea>
+              </div>
             </div>
           ))}
         </div>
