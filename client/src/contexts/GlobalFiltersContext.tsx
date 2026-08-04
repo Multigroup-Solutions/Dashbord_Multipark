@@ -43,14 +43,28 @@ export function GlobalFiltersProvider({ children }: { children: ReactNode }) {
 
   const brands = useMemo(() => {
     if (!allProjects) return [];
-    return allProjects
-      .filter((p: any) => {
-        if (p.level !== "brand") return false;
-        if (cityId === null) return true;
-        return p.parentId === cityId;
-      })
-      .map((p: any) => ({ id: p.id, name: p.name }))
-      .sort((a: any, b: any) => a.name.localeCompare(b.name));
+    if (cityId !== null) {
+      // Com cidade escolhida: marcas dessa cidade (comportamento normal)
+      return allProjects
+        .filter((p: any) => p.level === "brand" && p.parentId === cityId)
+        .map((p: any) => ({ id: p.id, name: p.name }))
+        .sort((a: any, b: any) => a.name.localeCompare(b.name));
+    }
+    // SEM cidade: MARCAS GLOBAIS — a mesma marca existe nas várias cidades
+    // com o mesmo nome; agrupamos e usamos um ID NEGATIVO (−id do primeiro nó)
+    // que o servidor (resolveProjectIds) expande para a marca em TODAS as
+    // cidades. Pedido do Jorge: "medir o que uma marca fez nas diferentes cidades".
+    const byName = new Map<string, { id: number; name: string; count: number }>();
+    for (const p of allProjects as any[]) {
+      if (p.level !== "brand") continue;
+      const key = p.name.trim().toLowerCase();
+      const ex = byName.get(key);
+      if (ex) ex.count += 1;
+      else byName.set(key, { id: -p.id, name: p.name, count: 1 });
+    }
+    return Array.from(byName.values())
+      .map((b) => ({ id: b.id, name: b.count > 1 ? `${b.name} (todas as cidades)` : b.name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }, [allProjects, cityId]);
 
   // When city changes and selected brand is no longer valid, reset brand
@@ -78,7 +92,18 @@ export function GlobalFiltersProvider({ children }: { children: ReactNode }) {
       }
     };
 
-    if (brandId !== null) {
+    if (brandId !== null && brandId < 0) {
+      // Marca global: todos os nós brand com o mesmo nome + descendentes
+      const anchor = (allProjects as any[]).find((p) => p.id === -brandId);
+      if (anchor) {
+        for (const p of allProjects as any[]) {
+          if (p.level === "brand" && p.name.trim().toLowerCase() === anchor.name.trim().toLowerCase()) {
+            ids.push(p.id);
+            collectDescendants(p.id);
+          }
+        }
+      }
+    } else if (brandId !== null) {
       // Specific brand selected: get brand + its descendants
       ids.push(brandId);
       collectDescendants(brandId);

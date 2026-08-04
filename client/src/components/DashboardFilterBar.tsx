@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { trpc } from "@/lib/trpc";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -75,6 +76,31 @@ export function DashboardFilterBar({
   onPeriodChange,
 }: DashboardFilterBarProps) {
   const globalFilters = useGlobalFilters();
+  // Lista de marcas coerente com a CIDADE ESCOLHIDA NESTA BARRA (o contexto
+  // global segue a cidade do header, que pode ser outra). Sem cidade →
+  // marcas globais (ID negativo = a marca em todas as cidades, resolvido
+  // no servidor por resolveProjectIds).
+  const { data: allProjects } = trpc.projects.list.useQuery();
+  const brandOptions = useMemo(() => {
+    if (!allProjects) return [];
+    if (cityId !== null) {
+      return (allProjects as any[])
+        .filter((p) => p.level === "brand" && p.parentId === cityId)
+        .map((p) => ({ id: p.id, name: p.name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    }
+    const byName = new Map<string, { id: number; name: string; count: number }>();
+    for (const p of allProjects as any[]) {
+      if (p.level !== "brand") continue;
+      const key = p.name.trim().toLowerCase();
+      const ex = byName.get(key);
+      if (ex) ex.count += 1;
+      else byName.set(key, { id: -p.id, name: p.name, count: 1 });
+    }
+    return Array.from(byName.values())
+      .map((b) => ({ id: b.id, name: b.count > 1 ? `${b.name} (todas as cidades)` : b.name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [allProjects, cityId]);
 
   return (
     <div className="flex flex-wrap items-end gap-3">
@@ -129,7 +155,7 @@ export function DashboardFilterBar({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Todas</SelectItem>
-            {globalFilters.brands.map((b) => (
+            {brandOptions.map((b) => (
               <SelectItem key={b.id} value={String(b.id)}>
                 {b.name}
               </SelectItem>

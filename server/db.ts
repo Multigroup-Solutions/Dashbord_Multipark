@@ -1598,17 +1598,9 @@ export async function getCampaigns(filters: { platform?: string; projectId?: num
   const conditions: any[] = [];
   if (filters.platform) conditions.push(eq(campaigns.platform, filters.platform as any));
   if (filters.projectId) {
-    // Include campaigns from child projects
-    const allProjects = await db.select().from(projects);
-    const ids = new Set<number>();
-    const addChildren = (parentId: number) => {
-      ids.add(parentId);
-      for (const p of allProjects) {
-        if (p.parentId === parentId) addChildren(p.id);
-      }
-    };
-    addChildren(filters.projectId);
-    conditions.push(sql`${campaigns.projectId} IN (${sql.raw(Array.from(ids).join(",") || "0")})`);
+    // Include campaigns from child projects (e marcas globais via ID negativo)
+    const ids = await resolveProjectIds(filters.projectId);
+    conditions.push(sql`${campaigns.projectId} IN (${sql.raw(ids.join(",") || "0")})`);
   }
   if (filters.status) conditions.push(eq(campaigns.campaignStatus, filters.status as any));
   const q = db.select({ campaign: campaigns, project: projects }).from(campaigns)
@@ -1661,11 +1653,8 @@ export async function getAllDailyStats(filters: { from?: Date; to?: Date; projec
   if (filters.from) conditions.push(gte(campaignDailyStats.date, toMysqlDateTime(filters.from)));
   if (filters.to) conditions.push(lte(campaignDailyStats.date, toMysqlDateTime(filters.to)));
   if (filters.projectId) {
-    const allProjects = await db.select().from(projects);
-    const ids = new Set<number>();
-    const addChildren = (parentId: number) => { ids.add(parentId); for (const p of allProjects) { if (p.parentId === parentId) addChildren(p.id); } };
-    addChildren(filters.projectId);
-    conditions.push(sql`${campaigns.projectId} IN (${sql.raw(Array.from(ids).join(","))})`);
+    const ids = await resolveProjectIds(filters.projectId);
+    conditions.push(sql`${campaigns.projectId} IN (${sql.raw(ids.join(",") || "0")})`);
   }
   const q = db.select({ stat: campaignDailyStats, campaign: campaigns, project: projects })
     .from(campaignDailyStats)
@@ -1729,13 +1718,10 @@ export async function getMarketingDashboardStats(filters: { from?: Date; to?: Da
   const db = await getDb();
   if (!db) return { totalSpend: 0, totalReservations: 0, costPerReservation: 0, avgConversionValue: 0, totalMktExpenses: 0, campaignCount: 0 };
 
-  // Resolve project hierarchy if filtering
+  // Resolve project hierarchy if filtering (marcas globais incluídas)
   let projectIds: Set<number> | null = null;
   if (filters.projectId) {
-    const allProjects = await db.select().from(projects);
-    projectIds = new Set<number>();
-    const addChildren = (parentId: number) => { projectIds!.add(parentId); for (const p of allProjects) { if (p.parentId === parentId) addChildren(p.id); } };
-    addChildren(filters.projectId);
+    projectIds = new Set<number>(await resolveProjectIds(filters.projectId));
   }
 
   // Stats from campaign daily stats (join campaigns to filter by projectId)
@@ -1830,17 +1816,9 @@ export async function getBookingRevenueByProject(filters: { from?: string; to?: 
   if (filters.from) conditions.push(gte(multiparkBookings.bookingCreatedAt, filters.from));
   if (filters.to) conditions.push(lte(multiparkBookings.bookingCreatedAt, filters.to + " 23:59:59"));
   if (filters.projectId) {
-    // Also match children: get all project IDs under this parent
-    const allProjects = await db.select().from(projects);
-    const ids = new Set<number>();
-    const addChildren = (parentId: number) => {
-      ids.add(parentId);
-      for (const p of allProjects) {
-        if (p.parentId === parentId) addChildren(p.id);
-      }
-    };
-    addChildren(filters.projectId);
-    conditions.push(sql`${multiparkBookings.projectId} IN (${sql.raw(Array.from(ids).join(","))})`);
+    // Also match children (e marcas globais via ID negativo)
+    const ids = await resolveProjectIds(filters.projectId);
+    conditions.push(sql`${multiparkBookings.projectId} IN (${sql.raw(ids.join(",") || "0")})`);
   }
 
   const rows = await db.select({
@@ -3051,9 +3029,15 @@ export async function getInvoiceStats(month?: number, year?: number) {
 }
 
 // ─── BILLING / FATURAÇÃO ────────────────────────────────────────────────────
+// Resolve um centro de custos para o conjunto de projetos (ele + descendentes).
+// MARCA GLOBAL (pedido do Jorge 2026-08-04): um ID NEGATIVO significa "esta
+// marca em TODAS as cidades" — ex.: -52 (Airpark Lisboa) expande para todos
+// os nós level='brand' com o MESMO nome (Airpark Lisboa/Porto/Faro) e os seus
+// descendentes. Funciona porque as marcas têm nome igual entre cidades e
+// porque TODOS os endpoints filtram via esta função — nada mais muda.
 async function resolveProjectIds(projectId: number): Promise<number[]> {
   const db = await getDb();
-  if (!db) return [projectId];
+  if (!db) return [Math.abs(projectId)];
   const allProjects = await db.select().from(projects);
   const ids = new Set<number>();
   const addChildren = (pid: number) => {
@@ -3062,6 +3046,15 @@ async function resolveProjectIds(projectId: number): Promise<number[]> {
       if (p.parentId === pid) addChildren(p.id);
     }
   };
+  if (projectId < 0) {
+    const anchor = allProjects.find((p) => p.id === -projectId);
+    if (!anchor) return [];
+    const sameName = allProjects.filter(
+      (p) => p.level === anchor.level && p.name.trim().toLowerCase() === anchor.name.trim().toLowerCase(),
+    );
+    for (const b of sameName) addChildren(b.id);
+    return Array.from(ids);
+  }
   addChildren(projectId);
   return Array.from(ids);
 }
@@ -5659,18 +5652,10 @@ export async function getLocalBookingsByAction(filters: {
       break;
   }
 
-  // Filter by project hierarchy (include all children)
+  // Filter by project hierarchy (include all children; marcas globais idem)
   if (filters.projectId) {
-    const allProjects = await db.select().from(projects);
-    const ids = new Set<number>();
-    const addChildren = (parentId: number) => {
-      ids.add(parentId);
-      for (const p of allProjects) {
-        if (p.parentId === parentId) addChildren(p.id);
-      }
-    };
-    addChildren(filters.projectId);
-    conditions.push(sql`${multiparkBookings.projectId} IN (${sql.raw(Array.from(ids).join(","))})`);
+    const ids = await resolveProjectIds(filters.projectId);
+    conditions.push(sql`${multiparkBookings.projectId} IN (${sql.raw(ids.join(",") || "0")})`);
   }
 
   return db
@@ -5808,19 +5793,12 @@ export async function getMultiparkBookingStats(filters?: { from?: string; to?: s
   const empty = { total: 0, reservasHoje: 0, checkinHoje: 0, checkoutHoje: 0, canceladosHoje: 0, reservasMes: 0, checkinMes: 0, checkoutMes: 0, canceladosMes: 0, receitaHoje: 0, receitaMes: 0, receitaPeriodo: 0, byCity: [] as { name: string; bookings: number; revenue: number }[], byDay: [] as { date: string; reservas: number; checkins: number; checkouts: number; cancelados: number; revenue: number }[], byBrand: [] as { name: string; bookings: number; revenue: number }[] };
   if (!db) return empty;
 
-  // Resolve project hierarchy for filtering
+  // Resolve project hierarchy for filtering (via resolveProjectIds para
+  // suportar também marcas globais = IDs negativos)
   let projectFilter: any = undefined;
   if (filters?.projectId) {
-    const allProjects = await db.select().from(projects);
-    const ids = new Set<number>();
-    const addChildren = (parentId: number) => {
-      ids.add(parentId);
-      for (const p of allProjects) {
-        if (p.parentId === parentId) addChildren(p.id);
-      }
-    };
-    addChildren(filters.projectId);
-    projectFilter = sql`${multiparkBookings.projectId} IN (${sql.raw(Array.from(ids).join(",") || "0")})`;
+    const ids = await resolveProjectIds(filters.projectId);
+    projectFilter = sql`${multiparkBookings.projectId} IN (${sql.raw(ids.join(",") || "0")})`;
   }
 
   const now = new Date();
