@@ -4033,7 +4033,9 @@ export async function getPartnershipAnalytics(filters: { from: string; to: strin
     .where(and(...baseConds))
     .groupBy(sql`CASE WHEN ${multiparkBookings.campaign} IS NOT NULL AND ${multiparkBookings.campaign} != '' THEN 1 ELSE 0 END`);
 
-  // 3. Pro bookings (extract from rawJson where park.isPro = true)
+  // 3. Reservas Pro — usa a coluna `pro` explícita da API (o antigo
+  // JSON_EXTRACT de park.isPro media "o PARQUE aceita Pro", não "a reserva
+  // é Pro" — inflacionava os números).
   const proRows = await db
     .select({
       parkName: multiparkBookings.parkName,
@@ -4044,7 +4046,7 @@ export async function getPartnershipAnalytics(filters: { from: string; to: strin
     .from(multiparkBookings)
     .where(and(
       ...baseConds,
-      sql`JSON_EXTRACT(${multiparkBookings.rawJson}, '$.park.isPro') = true`,
+      eq(multiparkBookings.pro, 1),
     ))
     .groupBy(multiparkBookings.parkName, multiparkBookings.city);
 
