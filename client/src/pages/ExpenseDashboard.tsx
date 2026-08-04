@@ -79,8 +79,10 @@ export default function ExpenseDashboard() {
   const { user } = useAuth();
   const utils = trpc.useUtils();
 
-  const { data: stats, isLoading: statsLoading } = trpc.expenses.stats.useQuery();
-  const { data: upcoming, isLoading: upcomingLoading } = trpc.expenses.upcomingPayments.useQuery();
+  // stats/upcomingPayments são admin-only no servidor — não chamar sem permissão
+  const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
+  const { data: stats, isLoading: statsLoading } = trpc.expenses.stats.useQuery(undefined, { enabled: isAdmin });
+  const { data: upcoming, isLoading: upcomingLoading } = trpc.expenses.upcomingPayments.useQuery(undefined, { enabled: isAdmin });
 
   const checkOverdueMutation = trpc.expenses.checkOverdue.useMutation({
     onSuccess: (data) => {
@@ -91,6 +93,14 @@ export default function ExpenseDashboard() {
   });
 
   const isSuperAdmin = user?.role === "super_admin";
+
+  if (!isAdmin) {
+    return (
+      <div className="flex items-center justify-center py-24 text-center text-muted-foreground text-sm">
+        A visão financeira das despesas está reservada à administração.
+      </div>
+    );
+  }
 
   if (statsLoading) {
     return (

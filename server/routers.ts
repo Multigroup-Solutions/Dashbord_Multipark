@@ -1437,31 +1437,53 @@ export const appRouter = router({
         }).optional()
       )
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        // Matriz do Jorge (2026-08-04): backoffice/team_leader só INSEREM
+        // (não veem nada); supervisor vê as suas + as do seu centro de
+        // custos; admin+ vê tudo.
+        requireRole(ctx.user.role, "backoffice");
+        const role = ctx.user.role;
+        if (["backoffice", "team_leader"].includes(role)) return [];
+
         const filters: Record<string, any> = {};
         if (input?.startDate) filters.startDate = new Date(input.startDate);
-        if (input?.endDate) filters.endDate = new Date(input.endDate);
+        if (input?.endDate) filters.endDate = new Date(input.endDate + "T23:59:59");
         if (input?.projectId) filters.projectId = input.projectId;
         if (input?.categoryId) filters.categoryId = input.categoryId;
         if (input?.status) filters.status = input.status;
         if (input?.search) filters.search = input.search;
 
-        // Non-admins only see their own expenses
-        const role = ctx.user.role;
-        if (!["super_admin", "admin", "supervisor"].includes(role)) {
-          filters.userId = ctx.user.id;
-        } else if (input?.userId) {
-          filters.userId = input.userId;
+        if (role === "supervisor") {
+          // As próprias + as do centro de custos da sua ficha de RH.
+          const emp = await getEmployeeByUserId(ctx.user.id);
+          const rows = await getExpenses(filters);
+          const myProject = emp?.employee?.projectId ?? null;
+          return rows.filter((r: any) =>
+            r.expense.insertedById === ctx.user.id ||
+            (myProject != null && r.expense.projectId === myProject),
+          );
         }
-
+        if (input?.userId) filters.userId = input.userId;
         return getExpenses(filters);
       }),
 
     byId: protectedProcedure
       .input(z.object({ id: z.number() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
-        return getExpenseById(input.id);
+        requireRole(ctx.user.role, "backoffice");
+        const row = await getExpenseById(input.id);
+        if (!row) return row;
+        const role = ctx.user.role;
+        if (["super_admin", "admin"].includes(role)) return row;
+        const mine = (row as any).expense?.insertedById === ctx.user.id;
+        if (["backoffice", "team_leader"].includes(role)) {
+          if (!mine) throw new TRPCError({ code: "FORBIDDEN" });
+          return row;
+        }
+        // supervisor: sua ou do seu centro de custos
+        const emp = await getEmployeeByUserId(ctx.user.id);
+        const myProject = emp?.employee?.projectId ?? null;
+        if (mine || (myProject != null && (row as any).expense?.projectId === myProject)) return row;
+        throw new TRPCError({ code: "FORBIDDEN" });
       }),
 
     create: protectedProcedure
@@ -1487,11 +1509,16 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        // Matriz do Jorge: input de despesas a partir de backoffice.
+        requireRole(ctx.user.role, "backoffice");
+        const amountNorm = String(input.amount).trim().replace(",", ".").replace(/[€\s]/g, "");
+        if (!/^\d+(\.\d{1,2})?$/.test(amountNorm) || parseFloat(amountNorm) <= 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Valor inválido — usa um número positivo (ex.: 45.90)" });
+        }
         const expense = await createExpense({
           supplier: input.supplier ?? null,
           description: input.description ?? null,
-          amount: input.amount,
+          amount: amountNorm,
           currency: input.currency,
           paymentMethod: input.paymentMethod ?? null,
           expenseDate: new Date(input.expenseDate).toISOString().slice(0, 19).replace("T", " "),
@@ -1515,15 +1542,13 @@ export const appRouter = router({
           details: `Despesa criada: ${input.supplier ?? "Sem fornecedor"} - ${input.amount}€`,
         });
 
-        // Notify super admins if there's a payment due date
+        // Notifica UMA vez (o notifyOwner envia sempre p/ OWNER_EMAIL — o
+        // loop antigo mandava N emails idênticos).
         if (input.paymentDueDate && input.paymentDueDate !== 'null') {
-          const admins = await getSuperAdmins();
-          for (const admin of admins) {
-            await notifyOwner({
-              title: "Nova despesa com data de pagamento",
-              content: `Despesa de ${input.amount}€ (${input.supplier ?? "Sem fornecedor"}) com vencimento em ${new Date(input.paymentDueDate).toLocaleDateString("pt-PT")}.`,
-            });
-          }
+          await notifyOwner({
+            title: "Nova despesa com data de pagamento",
+            content: `Despesa de ${input.amount}€ (${input.supplier ?? "Sem fornecedor"}) com vencimento em ${new Date(input.paymentDueDate).toLocaleDateString("pt-PT")}.`,
+          });
         }
 
         return { success: true };
@@ -1549,11 +1574,27 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        // Matriz do Jorge: editar despesas (valores, datas, estados) é
+        // admin+; DESMARCAR um pagamento (paid → outro estado) é só
+        // super_admin. (Antes não havia verificação NENHUMA — qualquer
+        // utilizador autenticado podia alterar qualquer despesa.)
+        requireRole(ctx.user.role, "admin");
         const { id, expenseDate, paymentDueDate, ...rest } = input;
+        if (rest.status && rest.status !== "paid") {
+          const current = await getExpenseById(id);
+          if (current?.expense?.status === "paid" && ctx.user.role !== "super_admin") {
+            throw new TRPCError({ code: "FORBIDDEN", message: "Só o super admin pode retirar um pagamento já registado" });
+          }
+        }
         const updateData: Record<string, any> = { ...rest };
         if (expenseDate) updateData.expenseDate = new Date(expenseDate);
         if (paymentDueDate) updateData.paymentDueDate = new Date(paymentDueDate);
         if (rest.status === "paid") updateData.paidAt = new Date();
+        if (rest.status && rest.status !== "paid") updateData.paidAt = null;
+        if (rest.amount !== undefined && !/^\d+([.,]\d{1,2})?$/.test(rest.amount.trim())) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Valor inválido" });
+        }
+        if (rest.amount !== undefined) updateData.amount = rest.amount.trim().replace(",", ".");
 
         // Se foi enviada uma fatura nova, apaga o ficheiro antigo (senão fica órfão).
         if (input.invoiceImageKey !== undefined || input.invoiceImageUrl !== undefined) {
@@ -1581,7 +1622,17 @@ export const appRouter = router({
     delete: protectedProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        // Matriz do Jorge: apagar faturas é SÓ super_admin.
+        requireRole(ctx.user.role, "super_admin");
+        // Apaga também a fatura do storage (antes ficava órfã no Blob).
+        try {
+          const current = await getExpenseById(input.id);
+          const k = current?.expense?.invoiceImageKey || current?.expense?.invoiceImageUrl;
+          if (k) {
+            const { storageDelete } = await import("./storage");
+            await storageDelete(k);
+          }
+        } catch { /* best-effort */ }
         await deleteExpense(input.id);
         await logActivity({
           userId: ctx.user.id,
@@ -1603,9 +1654,11 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
         const buffer = Buffer.from(input.fileBase64, "base64");
         const suffix = Date.now() + "-" + Math.random().toString(36).slice(2, 8);
-        const key = `invoices/${ctx.user.id}/${suffix}-${input.fileName}`;
+        const safeName = input.fileName.replace(/[^\w.\-]+/g, "_").slice(0, 120);
+        const key = `invoices/${ctx.user.id}/${suffix}-${safeName}`;
         const { url } = await storagePut(key, buffer, input.mimeType);
         return { url, key };
       }),
@@ -1613,19 +1666,26 @@ export const appRouter = router({
     // ── EXTRACT WITH LLM ─────────────────────────────────────────────────────
     extractFromImage: protectedProcedure
       .input(z.object({ imageBase64: z.string(), mimeType: z.string().default("image/jpeg") }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
         const imageUrl = `data:${input.mimeType};base64,${input.imageBase64}`;
+        // Lista de categorias para a IA sugerir uma (mapeada por nome no cliente).
+        let categoryNames: string[] = [];
+        try {
+          const cats = await getAllCategories();
+          categoryNames = (cats as any[]).map((c) => c.name).filter(Boolean);
+        } catch { /* opcional */ }
 
         const llmMessages: import("./_core/llm").Message[] = [
           {
             role: "system",
-            content: "És um assistente especializado em extrair dados de faturas. Analisa a imagem e extrai os dados estruturados. Responde APENAS em JSON válido, sem markdown.",
+            content: "És um assistente especializado em extrair dados de faturas para registo de DESPESAS da empresa Multipark (marcas: Multipark, Airpark, Skypark, Redpark, Top Parking). Responde APENAS em JSON válido, sem markdown.",
           },
           {
             role: "user",
             content: [
               { type: "image_url", image_url: { url: imageUrl, detail: "high" } } as import("./_core/llm").ImageContent,
-              { type: "text", text: 'Extrai os dados desta fatura e devolve em JSON com os campos: supplier (nome do fornecedor), description (descrição dos produtos/serviços), amount (valor total como string numérica, ex: "45.90"), currency (moeda, ex: "EUR"), paymentMethod (cash/card/transfer/check/other), expenseDate (data da fatura em formato ISO YYYY-MM-DD), paymentDueDate (data de vencimento em formato ISO YYYY-MM-DD, ou null se não existir). Se não conseguires extrair um campo, usa null.' } as import("./_core/llm").TextContent,
+              { type: "text", text: 'Extrai os dados desta fatura em JSON com os campos: supplier (o EMITENTE da fatura — quem VENDE/presta o serviço, normalmente no cabeçalho com o logótipo; NUNCA o cliente/destinatário), customerName (a quem a fatura é passada, ou null), selfInvoice (true se o EMITENTE for uma empresa do grupo Multipark/Airpark/Skypark/Redpark/Top Parking — nesse caso é uma fatura NOSSA a um cliente, não uma despesa), description (descrição dos produtos/serviços), amount (valor total como string numérica com PONTO decimal e sem símbolos, ex: "45.90"), currency (ex: "EUR"), paymentMethod (cash/card/transfer/check/other), expenseDate (data da fatura, YYYY-MM-DD), paymentDueDate (data de vencimento, YYYY-MM-DD ou null), nif (NIF do emitente, ou null), invoiceNumber (nº da fatura, ou null)' + (categoryNames.length ? `, suggestedCategory (a mais adequada desta lista, ou null: ${categoryNames.join(", ")})` : "") + '. Se não conseguires extrair um campo, usa null.' } as import("./_core/llm").TextContent,
             ],
           },
         ];
@@ -1645,23 +1705,35 @@ export const appRouter = router({
           const parsed = JSON.parse(content);
           // Sanitize "null" strings returned by LLM
           const sanitize = (v: any) => (v === 'null' || v === 'undefined' || v === '' ? null : v);
+          // Normaliza o valor: "1.234,56 €" → "1234.56"
+          let amount = sanitize(parsed.amount);
+          if (typeof amount === "string") {
+            amount = amount.replace(/[€$£\s]/g, "").replace(/\.(?=\d{3}(\D|$))/g, "").replace(",", ".");
+            if (!/^\d+(\.\d{1,2})?$/.test(amount)) amount = null;
+          }
           return {
             supplier: sanitize(parsed.supplier),
+            customerName: sanitize(parsed.customerName),
+            selfInvoice: parsed.selfInvoice === true,
             description: sanitize(parsed.description),
-            amount: sanitize(parsed.amount),
+            amount,
             currency: sanitize(parsed.currency) ?? 'EUR',
             paymentMethod: sanitize(parsed.paymentMethod),
             expenseDate: sanitize(parsed.expenseDate),
             paymentDueDate: sanitize(parsed.paymentDueDate),
+            nif: sanitize(parsed.nif),
+            invoiceNumber: sanitize(parsed.invoiceNumber),
+            suggestedCategory: sanitize(parsed.suggestedCategory),
           };
         } catch {
-          return { supplier: null, description: null, amount: null, currency: "EUR", paymentMethod: null, expenseDate: null, paymentDueDate: null };
+          return { supplier: null, customerName: null, selfInvoice: false, description: null, amount: null, currency: "EUR", paymentMethod: null, expenseDate: null, paymentDueDate: null, nif: null, invoiceNumber: null, suggestedCategory: null };
         }
       }),
 
     // ── DASHBOARD STATS ──────────────────────────────────────────────────────
     stats: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      // Totais da empresa inteira — só admin+ (matriz do Jorge).
+      requireRole(ctx.user.role, "admin");
       return getExpenseStats();
     }),
 
@@ -1766,8 +1838,11 @@ export const appRouter = router({
     // ── CHECK OVERDUE ────────────────────────────────────────────────────────
     checkOverdue: protectedProcedure.mutation(async ({ ctx }) => {
       requireRole(ctx.user.role, "super_admin");
-      await markOverdueExpenses();
+      // A lista tem de ser lida ANTES do mark (getOverdueExpenses procura
+      // status='pending' — depois do mark já estão 'overdue' e devolvia
+      // sempre 0, pelo que o alerta nunca era enviado).
       const overdue = await getOverdueExpenses();
+      await markOverdueExpenses();
 
       if (overdue.length > 0) {
         await notifyOwner({
@@ -1850,7 +1925,10 @@ export const appRouter = router({
       generateMonth: protectedProcedure
         .input(z.object({ year: z.number(), month: z.number() }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "frontoffice");
+          // Antes qualquer frontoffice a abrir a página lançava as despesas
+          // fixas do mês em nome dele — agora só admins (o cron diário também
+          // as lança, ver /api/cron/daily-ops).
+          requireRole(ctx.user.role, "admin");
           const { getDb, createExpense } = await import("./db");
           const { recurringExpenses, expenses } = await import("../drizzle/schema");
           const { eq, and, gte, lte } = await import("drizzle-orm");

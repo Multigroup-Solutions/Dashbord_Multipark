@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -112,6 +113,9 @@ function SkeletonChart({ height = 240 }: { height?: number }) {
 
 export default function FinanceiroDashboard() {
   const filters = useDashboardFilters();
+  const { user } = useAuth();
+  // expenses.stats/upcomingPayments são admin-only no servidor
+  const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
 
   // Booking stats (entregas / receita)
   const { data: bookingStats, isLoading: bookingLoading } =
@@ -123,13 +127,13 @@ export default function FinanceiroDashboard() {
 
   // Expense stats
   const { data: expenseStats, isLoading: expenseLoading } =
-    trpc.expenses.stats.useQuery();
+    trpc.expenses.stats.useQuery(undefined, { enabled: isAdmin });
 
   // Upcoming payments
   const { data: upcoming, isLoading: upcomingLoading } =
-    trpc.expenses.upcomingPayments.useQuery();
+    trpc.expenses.upcomingPayments.useQuery(undefined, { enabled: isAdmin });
 
-  const isLoading = bookingLoading || expenseLoading;
+  const isLoading = bookingLoading || (isAdmin && expenseLoading);
 
   // KPI values
   const receitaPeriodo = bookingStats?.receitaPeriodo ?? 0;
@@ -671,7 +675,7 @@ export default function FinanceiroDashboard() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {upcomingLoading ? (
+          {isAdmin && upcomingLoading ? (
             <div className="space-y-3">
               {[1, 2, 3].map((i) => (
                 <div

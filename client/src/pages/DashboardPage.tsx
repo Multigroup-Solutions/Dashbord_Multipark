@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { ModuleCard } from "@/components/ModuleCard";
 import { Card } from "@/components/ui/card";
 import {
@@ -105,8 +106,11 @@ const dashboardModules = [
 ];
 
 export default function DashboardPage() {
+  const { user } = useAuth();
+  // expenses.stats é admin-only no servidor — não chamar sem permissão
+  const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
   // ── Queries (dados reais da BD) ──
-  const { data: expStats, isLoading: expLoading } = trpc.expenses.stats.useQuery();
+  const { data: expStats, isLoading: expLoading } = trpc.expenses.stats.useQuery(undefined, { enabled: isAdmin });
   const { data: bookingStats, isLoading: bkLoading } = trpc.multipark.bookingStats.useQuery();
   const { data: complaintStats, isLoading: compLoading } = trpc.complaints.stats.useQuery();
   const { data: reviewStats, isLoading: revLoading } = trpc.reviews.stats.useQuery();
@@ -171,7 +175,7 @@ export default function DashboardPage() {
           label="Despesas Mês"
           value={fmtCurrency(expStats?.monthly?.total ?? 0)}
           subtitle={`${expStats?.monthly?.count ?? 0} registos`}
-          loading={expLoading}
+          loading={isAdmin && expLoading}
         />
         <KPI
           icon={Clock}
@@ -180,7 +184,7 @@ export default function DashboardPage() {
           label="Pendente"
           value={fmtCurrency(expStats?.pending?.total ?? 0)}
           subtitle={`${expStats?.pending?.count ?? 0} por pagar`}
-          loading={expLoading}
+          loading={isAdmin && expLoading}
         />
         <KPI
           icon={MessageSquareWarning}

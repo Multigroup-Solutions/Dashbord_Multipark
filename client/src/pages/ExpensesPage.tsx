@@ -55,7 +55,6 @@ import {
   Pencil,
   Upload,
   FileDown,
-  CalendarDays,
   User,
   Euro,
   CreditCard,
@@ -71,6 +70,7 @@ import { toast } from "sonner";
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth } from "date-fns";
 import { pt } from "date-fns/locale";
 import { fileHref } from "@/lib/fileHref";
+import DateRangeNav from "@/components/DateRangeNav";
 
 const STATUS_CONFIG: Record<string, { label: string; icon: any; className: string }> = {
   pending: { label: "Pendente", icon: Clock, className: "bg-yellow-100 text-yellow-800 border-yellow-200" },
@@ -207,6 +207,14 @@ export default function ExpensesPage() {
   const effectiveStartDate = searchAllHistory ? "" : startDate;
   const effectiveEndDate = searchAllHistory ? "" : endDate;
 
+  // Matriz de permissões (Jorge, 2026-08-04): backoffice/team_leader só
+  // INSEREM (modo input, sem lista/totais); supervisor vê as suas + as do
+  // seu centro de custos (filtrado no servidor); admin+ vê tudo.
+  const role = user?.role ?? "";
+  const isInputOnly = ["backoffice", "team_leader"].includes(role);
+  const canManage = ["admin", "super_admin"].includes(role);
+  const canDelete = role === "super_admin";
+
   // Queries
   const { data: expensesList, isLoading } = trpc.expenses.list.useQuery({
     search: search || undefined,
@@ -216,7 +224,7 @@ export default function ExpensesPage() {
     userId: (filterUser && filterUser !== "all") ? parseInt(filterUser) : undefined,
     startDate: effectiveStartDate || undefined,
     endDate: effectiveEndDate || undefined,
-  });
+  }, { enabled: !isInputOnly });
   const { data: categories } = trpc.categories.list.useQuery();
   const { data: projectsList } = trpc.projects.list.useQuery();
   const { data: employeesList } = trpc.rh.list.useQuery({});
@@ -239,7 +247,7 @@ export default function ExpensesPage() {
     },
   });
 
-  const isAdmin = ["super_admin", "admin", "supervisor"].includes(user?.role ?? "");
+  const isAdmin = canManage;
 
   // KPI calculations
   const kpis = useMemo(() => {
@@ -310,6 +318,9 @@ export default function ExpensesPage() {
     onSuccess: (r) => { if (r.created > 0) { utils.expenses.list.invalidate(); utils.expenses.stats.invalidate(); toast.success(`${r.created} despesa(s) recorrente(s) lançada(s) este mês`); } },
   });
   useEffect(() => {
+    // Só admins disparam a geração das recorrentes (o cron diário também o
+    // faz — antes qualquer utilizador lançava as fixas em nome dele).
+    if (!canManage) return;
     const now = new Date();
     genRecurring.mutate({ year: now.getFullYear(), month: now.getMonth() + 1 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -320,33 +331,41 @@ export default function ExpensesPage() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <p className="text-sm text-muted-foreground">
-            {kpis.count} despesa(s)
-            {searchAllHistory
-              ? " — a pesquisar em todo o histórico"
-              : effectiveStartDate || effectiveEndDate
-                ? ` — ${effectiveStartDate ? format(new Date(`${effectiveStartDate}T00:00:00`), "dd MMM", { locale: pt }) : "…"} a ${effectiveEndDate ? format(new Date(`${effectiveEndDate}T00:00:00`), "dd MMM", { locale: pt }) : "…"}`
-                : " — todo o histórico"}
-            {selectedUserName && <> de <strong>{selectedUserName}</strong></>}
-          </p>
+          {!isInputOnly ? (
+            <p className="text-sm text-muted-foreground">
+              {kpis.count} despesa(s)
+              {searchAllHistory
+                ? " — a pesquisar em todo o histórico"
+                : effectiveStartDate || effectiveEndDate
+                  ? ` — ${effectiveStartDate ? format(new Date(`${effectiveStartDate}T00:00:00`), "dd MMM", { locale: pt }) : "…"} a ${effectiveEndDate ? format(new Date(`${effectiveEndDate}T00:00:00`), "dd MMM", { locale: pt }) : "…"}`
+                  : " — todo o histórico"}
+              {selectedUserName && <> de <strong>{selectedUserName}</strong></>}
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground">Registo de despesas</p>
+          )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <Button
-            variant="outline"
-            onClick={handleExport}
-            disabled={exportMutation.isPending}
-            className="gap-2"
-          >
-            {exportMutation.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <FileDown className="h-4 w-4" />
-            )}
-            Exportar Excel
-          </Button>
-          <Button variant="outline" onClick={() => setShowCompare(true)} className="gap-2">
-            <ArrowLeftRight className="h-4 w-4" /> Comparar
-          </Button>
+          {canManage && (
+            <Button
+              variant="outline"
+              onClick={handleExport}
+              disabled={exportMutation.isPending}
+              className="gap-2"
+            >
+              {exportMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <FileDown className="h-4 w-4" />
+              )}
+              Exportar Excel
+            </Button>
+          )}
+          {!isInputOnly && (
+            <Button variant="outline" onClick={() => setShowCompare(true)} className="gap-2">
+              <ArrowLeftRight className="h-4 w-4" /> Comparar
+            </Button>
+          )}
           {isAdmin && (
             <Button variant="outline" onClick={() => setShowRecurring(true)} className="gap-2">
               <Repeat className="h-4 w-4" /> Recorrentes
@@ -359,10 +378,20 @@ export default function ExpensesPage() {
         </div>
       </div>
 
+      {/* Modo "só input" (backoffice/team_leader): regista mas não vê nada */}
+      {isInputOnly && (
+        <Card className="p-8 text-center space-y-2">
+          <Receipt className="h-10 w-10 mx-auto text-muted-foreground/40" />
+          <p className="font-medium">Regista aqui as despesas com o botão "Nova Despesa"</p>
+          <p className="text-sm text-muted-foreground">O teu perfil permite inserir despesas (com foto e extração automática); a consulta de listas e totais é reservada a supervisores e administração.</p>
+        </Card>
+      )}
+
       <RecurringExpensesDialog open={showRecurring} onClose={() => setShowRecurring(false)} categories={categories ?? []} projects={projectsList ?? []} />
       <CompareExpensesDialog open={showCompare} onClose={() => setShowCompare(false)} categories={categories ?? []} projectId={(filterProject && filterProject !== "all") ? parseInt(filterProject) : undefined} />
 
       {/* KPI Cards */}
+      {!isInputOnly && (
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <Card>
           <CardContent className="pt-4 pb-3 px-4">
@@ -417,8 +446,10 @@ export default function ExpensesPage() {
           </CardContent>
         </Card>
       </div>
+      )}
 
       {/* Filters */}
+      {!isInputOnly && (
       <Card>
         <CardContent className="pt-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -483,50 +514,20 @@ export default function ExpensesPage() {
                 ))}
               </SelectContent>
             </Select>
-            {/* Quick date range + manual dates */}
-            <div className="flex gap-2 sm:col-span-2 lg:col-span-3">
-              <div className="flex gap-1">
-                <Button
-                  variant={quickRange === "week" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => applyQuickRange(quickRange === "week" ? "" : "week")}
-                  className="gap-1 text-xs"
-                >
-                  <CalendarDays className="h-3 w-3" />
-                  Semana
-                </Button>
-                <Button
-                  variant={quickRange === "month" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => applyQuickRange(quickRange === "month" ? "" : "month")}
-                  className="gap-1 text-xs"
-                >
-                  <CalendarDays className="h-3 w-3" />
-                  Mês
-                </Button>
-                <Button
-                  variant={!quickRange && !startDate && !endDate ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => applyQuickRange("")}
-                  className="gap-1 text-xs"
-                >
-                  Tudo
-                </Button>
-              </div>
-              <Input
-                type="date"
-                value={startDate}
-                onChange={(e) => { setStartDate(e.target.value); setQuickRange(""); }}
-                className="flex-1"
-              />
-              <Input
-                type="date"
-                value={endDate}
-                onChange={(e) => { setEndDate(e.target.value); setQuickRange(""); }}
-                className="flex-1"
+            {/* Navegador de datas: granularidade + setas ◀ ▶ (componente transversal) */}
+            <div className="flex gap-2 items-center sm:col-span-2 lg:col-span-3 flex-wrap">
+              <DateRangeNav
+                start={startDate}
+                end={endDate}
+                gran={(quickRange || "custom") as any}
+                onChange={(s, e, g) => {
+                  setStartDate(s);
+                  setEndDate(e);
+                  setQuickRange(!s && !e ? "" : g);
+                }}
               />
               {hasFilters && (
-                <Button variant="ghost" size="icon" onClick={clearFilters}>
+                <Button variant="ghost" size="icon" onClick={clearFilters} title="Limpar filtros (volta à semana atual)">
                   <XCircle className="h-4 w-4" />
                 </Button>
               )}
@@ -534,8 +535,10 @@ export default function ExpensesPage() {
           </div>
         </CardContent>
       </Card>
+      )}
 
       {/* Table */}
+      {!isInputOnly && (
       <Card>
         <CardContent className="p-0">
           {isLoading ? (
@@ -618,25 +621,28 @@ export default function ExpensesPage() {
                                 <Eye className="h-3.5 w-3.5" />
                               </Button>
                             )}
-                            {expense.status === "pending" && (
+                            {canManage && expense.status !== "paid" && expense.status !== "cancelled" && (
                               <Button
                                 variant="ghost"
                                 size="icon"
                                 className="h-8 w-8 text-green-600 hover:text-green-700"
+                                title="Marcar como paga"
                                 onClick={() => updateMutation.mutate({ id: expense.id, status: "paid" })}
                               >
                                 <CheckCircle2 className="h-3.5 w-3.5" />
                               </Button>
                             )}
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8"
-                              onClick={() => { setEditId(expense.id); setShowForm(true); }}
-                            >
-                              <Pencil className="h-3.5 w-3.5" />
-                            </Button>
-                            {isAdmin && (
+                            {canManage && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                onClick={() => { setEditId(expense.id); setShowForm(true); }}
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
+                            {canDelete && (
                               <Button
                                 variant="ghost"
                                 size="icon"
@@ -661,6 +667,7 @@ export default function ExpensesPage() {
           )}
         </CardContent>
       </Card>
+      )}
 
       {/* Detail Sheet */}
       <ExpenseDetailSheet
@@ -906,7 +913,21 @@ function ExpenseFormModal({
 
     setUploading(true);
     try {
-      const base64 = await fileToBase64(file);
+      // Fotos de telemóvel (8-12MB) rebentavam no limite de ~4.5MB do Vercel
+      // (base64 em JSON ainda infla 33%) — comprimir imagens para 1600px/q0.85
+      // antes de enviar. PDFs seguem como estão, mas com aviso se enormes.
+      let uploadFile = file;
+      if (!isPdf && file.type.startsWith("image/") && file.size > 1_500_000) {
+        uploadFile = await compressImage(file, 1600, 0.85);
+      }
+      if (uploadFile.size > 3_200_000) {
+        toast.error("Ficheiro demasiado grande (máx ~3MB depois de comprimido)", {
+          description: isPdf ? "Tenta um PDF mais pequeno ou fotografa a fatura." : undefined,
+        });
+        setUploading(false);
+        return;
+      }
+      const base64 = await fileToBase64(uploadFile);
 
       if (isPdf) {
         // Converte para imagem (preview + OCR); o PDF original é o que fica guardado.
@@ -917,15 +938,15 @@ function ExpenseFormModal({
       } else {
         const reader = new FileReader();
         reader.onload = (ev) => setPreviewUrl(ev.target?.result as string);
-        reader.readAsDataURL(file);
+        reader.readAsDataURL(uploadFile);
         setLastFileBase64(base64);
-        setLastFileMime(file.type);
+        setLastFileMime(uploadFile.type);
       }
 
       const result = await uploadMutation.mutateAsync({
         fileName: file.name,
         fileBase64: base64,
-        mimeType: file.type || (isPdf ? "application/pdf" : "application/octet-stream"),
+        mimeType: uploadFile.type || (isPdf ? "application/pdf" : "application/octet-stream"),
       });
       set("invoiceImageUrl", result.url);
       set("invoiceImageKey", result.key);
@@ -942,6 +963,14 @@ function ExpenseFormModal({
     setScanning(true);
     try {
       const data = await extractMutation.mutateAsync({ imageBase64: lastFileBase64, mimeType: lastFileMime || "image/jpeg" });
+      // Fatura emitida pela PRÓPRIA Multipark (venda a cliente) — não é uma
+      // despesa; avisa antes que alguém a registe como tal.
+      if ((data as any).selfInvoice) {
+        toast.warning("Atenção: esta fatura parece EMITIDA pela Multipark a um cliente", {
+          description: `Emitente: ${data.supplier ?? "?"} · Cliente: ${(data as any).customerName ?? "?"} — isto é uma venda, não uma despesa. Confirma antes de gravar.`,
+          duration: 10000,
+        });
+      }
       if (data.supplier) set("supplier", data.supplier);
       if (data.description) set("description", data.description);
       if (data.amount) set("amount", data.amount);
@@ -951,6 +980,19 @@ function ExpenseFormModal({
       }
       if (data.expenseDate) set("expenseDate", data.expenseDate);
       if (data.paymentDueDate) set("paymentDueDate", data.paymentDueDate);
+      // Categoria sugerida pela IA — mapeia por nome (case-insensitive).
+      const suggested = (data as any).suggestedCategory;
+      if (suggested && !form.categoryId) {
+        const cat = categories.find((c: any) => c.name?.toLowerCase() === String(suggested).toLowerCase());
+        if (cat) set("categoryId", String(cat.id));
+      }
+      // NIF / nº de fatura vão para as notas (não há colunas próprias ainda).
+      const extras: string[] = [];
+      if ((data as any).nif) extras.push(`NIF: ${(data as any).nif}`);
+      if ((data as any).invoiceNumber) extras.push(`Fatura nº: ${(data as any).invoiceNumber}`);
+      if (extras.length && !form.notes?.includes("NIF:")) {
+        set("notes", [form.notes, extras.join(" · ")].filter(Boolean).join("\n"));
+      }
       set("extractedByAi", true);
       toast.success("Dados extraídos com IA!", { description: "Verifica e corrige se necessário." });
     } catch (e: any) {
@@ -1030,7 +1072,8 @@ function ExpenseFormModal({
 
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      {/* flex-col + corpo com overflow próprio: o footer fica sempre visível e nada sai do ecrã */}
+      <DialogContent className="max-w-3xl w-[calc(100vw-2rem)] max-h-[92vh] flex flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Receipt className="h-5 w-5 text-primary" />
@@ -1038,7 +1081,7 @@ function ExpenseFormModal({
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-5">
+        <div className="space-y-5 flex-1 min-h-0 overflow-y-auto pr-1">
           {/* Invoice Upload */}
           <div className="border-2 border-dashed border-border rounded-xl p-4 bg-muted/30">
             <div className="flex flex-col sm:flex-row gap-4 items-start">
@@ -1140,8 +1183,10 @@ function ExpenseFormModal({
             />
           </div>
 
-          {/* Form fields */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* Secção 1: dados que vêm da fatura */}
+          <div className="space-y-3">
+            <p className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Dados da fatura</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label>Fornecedor</Label>
               <Input
@@ -1200,6 +1245,13 @@ function ExpenseFormModal({
                 </SelectContent>
               </Select>
             </div>
+            </div>
+          </div>
+
+          {/* Secção 2: classificação interna */}
+          <div className="space-y-3">
+            <p className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Classificação</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label>Categoria</Label>
               <Select value={form.categoryId} onValueChange={(v) => set("categoryId", v)}>
@@ -1279,15 +1331,17 @@ function ExpenseFormModal({
                 </Select>
               </div>
             )}
-            <div className="space-y-1.5 sm:col-span-2">
-              <Label>Notas</Label>
-              <Textarea
-                placeholder="Notas adicionais..."
-                value={form.notes}
-                onChange={(e) => set("notes", e.target.value)}
-                rows={2}
-              />
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Notas</Label>
+            <Textarea
+              placeholder="Notas adicionais..."
+              value={form.notes}
+              onChange={(e) => set("notes", e.target.value)}
+              rows={2}
+            />
           </div>
         </div>
 
@@ -1317,6 +1371,40 @@ function fileToBase64(file: File): Promise<string> {
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+}
+
+// Reduz fotos grandes antes do upload: o limite de body da Vercel (~4.5MB)
+// rebenta com fotos de telemóvel em base64 (+33%). Redimensiona para maxDim
+// e re-encoda em JPEG; se falhar (formato exótico), devolve o original.
+async function compressImage(file: File, maxDim = 1600, quality = 0.85): Promise<File> {
+  try {
+    const dataUrl: string = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = reject;
+      el.src = dataUrl;
+    });
+    const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(img.width * scale);
+    canvas.height = Math.round(img.height * scale);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return file;
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", quality)
+    );
+    if (!blob || blob.size >= file.size) return file;
+    return new File([blob], file.name.replace(/\.\w+$/, "") + ".jpg", { type: "image/jpeg" });
+  } catch {
+    return file;
+  }
 }
 
 // Converte as primeiras páginas de um PDF numa única imagem PNG (empilhadas
