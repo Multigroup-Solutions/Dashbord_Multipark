@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { trpc } from "@/lib/trpc";
+import { fileHref } from "@/lib/fileHref";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { toast } from "sonner";
 import { useState, useMemo, useEffect, useRef } from "react";
@@ -146,9 +147,7 @@ function VideosTab({ isAdmin }: { isAdmin: boolean }) {
  * através do endpoint /api/file/<key>, que redireciona para o storage.
  */
 function manualFileHref(m: { fileUrl?: string | null; fileKey?: string | null }): string | null {
-  if (m.fileUrl && /^https?:\/\//.test(m.fileUrl)) return m.fileUrl;
-  if (m.fileKey) return `/api/file/${encodeURI(m.fileKey)}`;
-  return m.fileUrl || null;
+  return fileHref(m.fileUrl, m.fileKey);
 }
 
 function ManualsTab({ isAdmin }: { isAdmin: boolean }) {
@@ -162,7 +161,6 @@ function ManualsTab({ isAdmin }: { isAdmin: boolean }) {
   const { data: manuals = [], refetch } = trpc.training.manuals.useQuery({ type: typeFilter !== "all" ? typeFilter : undefined });
   const createManual = trpc.training.createManual.useMutation({ onSuccess: () => { refetch(); setShowCreate(false); setForm({ title: "", content: "", type: "manual" }); setUploadedFile(null); toast.success("Conteúdo criado"); } });
   const deleteManual = trpc.training.deleteManual.useMutation({ onSuccess: () => { refetch(); toast.success("Eliminado"); } });
-  const uploadFile = trpc.training.uploadManualFile.useMutation();
 
   const typeLabels: Record<string, string> = { manual: "Manual", update: "Atualização", news: "Notícia", procedure: "Procedimento" };
   const typeIcons: Record<string, any> = { manual: BookOpen, update: RefreshCw, news: Newspaper, procedure: FileText };
@@ -171,26 +169,24 @@ function ManualsTab({ isAdmin }: { isAdmin: boolean }) {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 10 * 1024 * 1024) { toast.error("Ficheiro demasiado grande (máx 10MB)"); return; }
+    // O body das functions do Vercel está limitado a ~4.5MB e o /api/upload
+    // corta a 4MB — antes o cap era 10MB e o upload morria com 413 sem
+    // mensagem útil. Multipart evita ainda a inflação de 33% do base64.
+    if (file.size > 4 * 1024 * 1024) { toast.error("Ficheiro demasiado grande (máx 4MB)"); return; }
     setUploading(true);
-    // O try/catch tem de envolver o await DENTRO do onload — um erro do upload
-    // (rede, permissões, S3) deixava o spinner preso para sempre e o manual
-    // gravava-se sem ficheiro, sem qualquer mensagem.
-    const reader = new FileReader();
-    reader.onload = async () => {
-      try {
-        const base64 = (reader.result as string).split(",")[1];
-        const result = await uploadFile.mutateAsync({ fileName: file.name, fileBase64: base64, mimeType: file.type });
-        setUploadedFile(result);
-        toast.success("Ficheiro carregado");
-      } catch (err: any) {
-        toast.error(`Erro no upload: ${err?.message ?? "falha desconhecida"}`);
-      } finally {
-        setUploading(false);
-      }
-    };
-    reader.onerror = () => { toast.error("Não foi possível ler o ficheiro"); setUploading(false); };
-    reader.readAsDataURL(file);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const resp = await fetch("/api/upload", { method: "POST", body: fd, credentials: "include" });
+      const data = await resp.json().catch(() => ({} as any));
+      if (!resp.ok || !data?.url) throw new Error(data?.error || `HTTP ${resp.status}`);
+      setUploadedFile({ url: data.url, key: data.key, fileName: file.name, mimeType: file.type || "application/octet-stream" });
+      toast.success("Ficheiro carregado");
+    } catch (err: any) {
+      toast.error(`Erro no upload: ${err?.message ?? "falha desconhecida"}`);
+    } finally {
+      setUploading(false);
+    }
   };
 
   const handleCreate = () => {

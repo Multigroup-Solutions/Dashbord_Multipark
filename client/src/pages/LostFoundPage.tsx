@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { fileHref } from "@/lib/fileHref";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { filterBookingHistory } from "@/lib/bookingHistory";
 import { REPLY_TEMPLATES } from "@/lib/replyTemplates";
@@ -27,8 +28,9 @@ import {
   ChevronRight, ChevronLeft, Send, Eye, Trash2, Upload, Pencil,
   BarChart3, AlertCircle, CheckCircle2, Hourglass, XCircle,
   Package, DollarSign, Smartphone, Shirt, FileText, Glasses,
-  HelpCircle, TrendingUp, ShieldAlert, Flag, Mail, Download,
+  HelpCircle, TrendingUp, ShieldAlert, Flag, Mail, Download, Truck, GripVertical,
 } from "lucide-react";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
   new: { label: "Novo", color: "bg-blue-100 text-blue-800 border-blue-200", icon: AlertCircle },
@@ -148,12 +150,23 @@ function KanbanView({ user, filterType, setFilterType, searchTerm, setSearchTerm
     return s;
   }, [items]);
 
+  // Optimistic: o cartão muda de coluna imediatamente; rollback se o servidor
+  // recusar (mesmo padrão do kanban das Tarefas).
   const moveCard = async (id: number, newStatus: string) => {
+    await utils.lostFound.list.cancel(queryInput);
+    const prev = utils.lostFound.list.getData(queryInput);
+    utils.lostFound.list.setData(queryInput, (old: any) =>
+      old?.map((i: any) => (i.id === id ? { ...i, status: newStatus } : i)),
+    );
     try {
       await updateMut.mutateAsync({ id, status: newStatus });
-      utils.lostFound.list.invalidate();
       toast.success("Estado atualizado");
-    } catch { toast.error("Erro ao mover"); }
+    } catch {
+      utils.lostFound.list.setData(queryInput, prev);
+      toast.error("Erro ao mover");
+    } finally {
+      utils.lostFound.list.invalidate();
+    }
   };
 
   // Drag & drop nativo: arrastar um cartão para QUALQUER coluna (as setas nos
@@ -257,7 +270,7 @@ function KanbanView({ user, filterType, setFilterType, searchTerm, setSearchTerm
       {isLoading ? (
         <div className="flex justify-center py-20"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
           {KANBAN_COLUMNS.map(status => {
             const cfg = STATUS_CONFIG[status];
             const colItems = grouped[status] || [];
@@ -321,6 +334,10 @@ function ItemCard({ item, onSelect, onMove, currentStatus }: any) {
       onDragStart={(e) => {
         e.dataTransfer.setData("text/plain", String(item.id));
         e.dataTransfer.effectAllowed = "move";
+        if (e.currentTarget instanceof HTMLElement) e.currentTarget.style.opacity = "0.5";
+      }}
+      onDragEnd={(e) => {
+        if (e.currentTarget instanceof HTMLElement) e.currentTarget.style.opacity = "1";
       }}
       onClick={onSelect}
       className={`cursor-grab active:cursor-grabbing hover:shadow-md transition-shadow ${stale ? "border-red-400 border-2" : ""}`}
@@ -328,6 +345,7 @@ function ItemCard({ item, onSelect, onMove, currentStatus }: any) {
       <CardContent className="p-3 space-y-2">
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-1.5 min-w-0" onClick={onSelect}>
+            <GripVertical className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />
             <TypeIcon className="w-4 h-4 text-amber-600" />
             <span className="font-medium text-sm line-clamp-1">{item.description}</span>
           </div>
@@ -714,7 +732,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                       {photos.map((p: any) => (
                         <div key={p.id} className="relative group">
-                          <img src={p.url} alt={p.caption || "Foto"} className="rounded-lg w-full h-32 object-cover" />
+                          <img src={fileHref(p.url, p.key) ?? undefined} alt={p.caption || "Foto"} className="rounded-lg w-full h-32 object-cover" />
                           {p.caption && <p className="text-xs text-muted-foreground mt-1">{p.caption}</p>}
                         </div>
                       ))}
@@ -951,6 +969,19 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
 function DriverRankingView({ onBack }: { onBack: () => void }) {
   const { data: crossRef = [], isLoading } = trpc.lostFound.bookingHistoryCrossRef.useQuery();
 
+  // "Movimentos por Condutor": escolher um condutor + período e ver tudo o que
+  // ele mexeu (fonte: histórico Multipark sincronizado na BD local).
+  const fmtDay = (d: Date) => d.toISOString().slice(0, 10);
+  const [agent, setAgent] = useState("");
+  const [from, setFrom] = useState(() => fmtDay(new Date(Date.now() - 30 * 86_400_000)));
+  const [to, setTo] = useState(() => fmtDay(new Date()));
+  const { data: drivers = [] } = trpc.lostFound.driversForPeriod.useQuery({ from, to });
+  const movQ = trpc.lostFound.agentMovements.useQuery(
+    { agentName: agent, from, to },
+    { enabled: !!agent },
+  );
+  const mov = movQ.data;
+
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-3">
@@ -1011,7 +1042,14 @@ function DriverRankingView({ onBack }: { onBack: () => void }) {
                       </td>
                       <td className="p-2 font-medium">
                         <div className="flex items-center gap-2">
-                          <span>{r.userName}</span>
+                          <button
+                            type="button"
+                            className="underline-offset-2 hover:underline text-left"
+                            title="Ver movimentos deste condutor"
+                            onClick={() => setAgent(r.userName)}
+                          >
+                            {r.userName}
+                          </button>
                           <Badge className="bg-red-500 text-white text-[10px]">
                             <Flag className="w-3 h-3 mr-1" /> Envolvido
                           </Badge>
@@ -1032,6 +1070,96 @@ function DriverRankingView({ onBack }: { onBack: () => void }) {
                 </tbody>
               </table>
             </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Truck className="w-5 h-5" /> Movimentos por Condutor
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Escolhe um condutor e um período para ver todos os carros em que mexeu.
+            Linhas a vermelho = reserva/matrícula com caso aberto nos Perdidos &amp; Achados.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground">De</p>
+              <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="w-auto" />
+            </div>
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground">Até</p>
+              <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="w-auto" />
+            </div>
+            <div className="space-y-1 min-w-[240px] flex-1 max-w-sm">
+              <p className="text-xs text-muted-foreground">Condutor ({drivers.length} com atividade no período)</p>
+              <SearchableSelect
+                value={agent}
+                onChange={setAgent}
+                options={drivers.map((d: any) => ({ value: d.agentName, label: `${d.agentName} (${d.total})` }))}
+                placeholder="Escolher condutor…"
+              />
+            </div>
+          </div>
+
+          {!agent ? (
+            <p className="text-sm text-muted-foreground py-6 text-center">Escolhe um condutor para ver os movimentos.</p>
+          ) : movQ.isLoading ? (
+            <div className="flex justify-center py-10"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>
+          ) : !mov || mov.movements.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-6 text-center">Sem movimentos deste condutor no período (a BD local só tem o histórico já sincronizado pelo cron).</p>
+          ) : (
+            <>
+              <div className="flex flex-wrap gap-2 text-sm">
+                <Badge variant="outline">{mov.totals.actions} ações</Badge>
+                <Badge variant="outline" className="text-green-600">{mov.totals.checkins} check-ins</Badge>
+                <Badge variant="outline" className="text-violet-600">{mov.totals.checkouts} check-outs</Badge>
+                <Badge variant="outline" className="text-amber-600">{mov.totals.movements} movimentos</Badge>
+                <Badge variant="outline">{mov.totals.plates} matrículas</Badge>
+                {mov.totals.flaggedPlates > 0 && (
+                  <Badge variant="destructive">{mov.totals.flaggedPlates} com caso aberto</Badge>
+                )}
+              </div>
+              {mov.plates.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {mov.plates.slice(0, 30).map((p: any) => (
+                    <Badge key={p.plate} variant={p.isCaseVehicle ? "destructive" : "secondary"} className="font-mono text-[11px]" title={`${p.actions} ações`}>
+                      {p.plate}{p.isCaseVehicle ? " ⚠" : ""}
+                    </Badge>
+                  ))}
+                  {mov.plates.length > 30 && <span className="text-xs text-muted-foreground">+{mov.plates.length - 30}</span>}
+                </div>
+              )}
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[640px] text-sm">
+                  <thead>
+                    <tr className="bg-muted/50 text-left">
+                      <th className="p-2">Data/hora</th>
+                      <th className="p-2">Ação</th>
+                      <th className="p-2">Matrícula</th>
+                      <th className="p-2">Parque</th>
+                      <th className="p-2">Reserva</th>
+                      <th className="p-2">Notas</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {mov.movements.map((m: any, i: number) => (
+                      <tr key={i} className={`border-t ${m.flagged ? "bg-red-50 text-red-900" : "hover:bg-muted/30"}`}>
+                        <td className="p-2 whitespace-nowrap">{m.actionTime ? fmtPTDateTime(m.actionTime) : "—"}</td>
+                        <td className="p-2">{m.changeType ?? "—"}</td>
+                        <td className="p-2 font-mono">{m.licensePlate ?? "—"}{m.flagged ? " ⚠" : ""}</td>
+                        <td className="p-2">{m.parkName ?? "—"}{m.city ? ` · ${m.city}` : ""}</td>
+                        <td className="p-2 font-mono text-xs">{m.bookingExternalId}</td>
+                        <td className="p-2 text-xs text-muted-foreground max-w-[240px] truncate" title={m.remarks ?? undefined}>{m.remarks ?? ""}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </CardContent>
       </Card>
@@ -1483,7 +1611,7 @@ function ReturnPanel({ item }: { item: any }) {
             <Upload className="w-3 h-3" /> Foto/assinatura da entrega
             <input type="file" accept="image/*" className="hidden" onChange={onPhoto} />
           </label>
-          {item.returnPhotoUrl && <a href={item.returnPhotoUrl} target="_blank" rel="noreferrer" className="text-xs underline">ver foto</a>}
+          {(item.returnPhotoUrl || item.returnPhotoKey) && <a href={fileHref(item.returnPhotoUrl, item.returnPhotoKey) ?? undefined} target="_blank" rel="noreferrer" className="text-xs underline">ver foto</a>}
         </div>
         {item.clientEmailSentAt && (
           <p className="text-xs text-muted-foreground">Cliente avisado por email em {fmtPTDateTime(item.clientEmailSentAt)}</p>

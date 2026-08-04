@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { fileHref } from "@/lib/fileHref";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { filterBookingHistory } from "@/lib/bookingHistory";
 import { REPLY_TEMPLATES } from "@/lib/replyTemplates";
@@ -24,7 +25,7 @@ import {
   AlertTriangle, Plus, MessageSquare, Camera, Clock, User, Car,
   ChevronRight, ChevronLeft, Send, Eye, Trash2, Upload, Shield,
   BarChart3, AlertCircle, CheckCircle2, Hourglass, XCircle, Pencil,
-  Mail, UserPlus, LinkIcon, X as XIcon, Download, RefreshCw,
+  Mail, UserPlus, LinkIcon, X as XIcon, Download, RefreshCw, GripVertical,
 } from "lucide-react";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
@@ -122,13 +123,24 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
     return map;
   }, [complaints]);
 
+  // Optimistic: o cartão muda de coluna imediatamente; rollback se o servidor
+  // recusar (mesmo padrão do kanban das Tarefas).
   const moveCard = async (id: number, newStatus: string) => {
+    await utils.complaints.list.cancel(complaintsQueryInput);
+    const prev = utils.complaints.list.getData(complaintsQueryInput);
+    utils.complaints.list.setData(complaintsQueryInput, (old: any) =>
+      old?.map((c: any) => (c.id === id ? { ...c, complaintStatus: newStatus } : c)),
+    );
     try {
       await updateMut.mutateAsync({ id, status: newStatus as any });
+      toast.success("Estado atualizado");
+    } catch {
+      utils.complaints.list.setData(complaintsQueryInput, prev);
+      toast.error("Erro ao mover");
+    } finally {
       utils.complaints.list.invalidate();
       utils.complaints.stats.invalidate();
-      toast.success("Estado atualizado");
-    } catch { toast.error("Erro ao mover"); }
+    }
   };
 
   // Drag & drop nativo: arrastar um cartão para QUALQUER coluna (as setas nos
@@ -227,7 +239,7 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
       {isLoading ? (
         <div className="flex justify-center py-20"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
           {KANBAN_COLUMNS.map(status => {
             const cfg = STATUS_CONFIG[status];
             const items = grouped[status] || [];
@@ -286,6 +298,10 @@ function ComplaintCard({ complaint: c, onSelect, onMove, currentStatus }: any) {
       onDragStart={(e) => {
         e.dataTransfer.setData("text/plain", String(c.id));
         e.dataTransfer.effectAllowed = "move";
+        if (e.currentTarget instanceof HTMLElement) e.currentTarget.style.opacity = "0.5";
+      }}
+      onDragEnd={(e) => {
+        if (e.currentTarget instanceof HTMLElement) e.currentTarget.style.opacity = "1";
       }}
       onClick={onSelect}
       className={`cursor-grab active:cursor-grabbing hover:shadow-md transition-shadow ${isOverdue ? "border-red-400 border-2" : ""}`}
@@ -293,6 +309,7 @@ function ComplaintCard({ complaint: c, onSelect, onMove, currentStatus }: any) {
       <CardContent className="p-3 space-y-2">
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-1.5 min-w-0">
+            <GripVertical className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />
             <span className="text-sm">{TYPE_CONFIG[c.complaintType]?.emoji}</span>
             <span className="font-medium text-sm line-clamp-1" onClick={onSelect}>{c.title}</span>
           </div>
@@ -601,7 +618,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                     {data.photos.map((p: any) => (
                       <div key={p.id} className="relative group">
-                        <img src={p.url} alt={p.label || "Foto"} className="w-full h-40 object-cover rounded-lg" />
+                        <img src={fileHref(p.url, p.key) ?? undefined} alt={p.label || "Foto"} className="w-full h-40 object-cover rounded-lg" />
                         {p.label && <span className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-2 py-0.5 rounded">{p.label}</span>}
                         <Button
                           variant="destructive" size="icon"

@@ -4863,6 +4863,36 @@ export const appRouter = router({
       requireRole(ctx.user.role, "frontoffice");
       return getBookingHistoryCrossReference();
     }),
+
+    // Condutores com atividade no período (alimenta o dropdown da vista
+    // "Movimentos por Condutor" do Cruzamento).
+    driversForPeriod: protectedProcedure
+      .input(z.object({ from: z.string(), to: z.string() }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "frontoffice");
+        const { getDb } = await import("./db");
+        const { sql } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) return [];
+        const rows = (r: any) => (Array.isArray(r[0]) ? r[0] : r) as any[];
+        const acts = rows(await db.execute(sql`
+          SELECT agentName, COUNT(*) AS total
+          FROM multipark_booking_history
+          WHERE agentName IS NOT NULL AND agentName <> ''
+            AND actionTime >= ${input.from + " 00:00:00"} AND actionTime <= ${input.to + " 23:59:59"}
+          GROUP BY agentName ORDER BY total DESC`));
+        return acts.map((a: any) => ({ agentName: a.agentName as string, total: Number(a.total) }));
+      }),
+
+    // Movimentos de UM condutor no período escolhido — que carros mexeu,
+    // com matrícula/parque e sinalização dos que têm caso aberto.
+    agentMovements: protectedProcedure
+      .input(z.object({ agentName: z.string().min(1), from: z.string(), to: z.string() }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "frontoffice");
+        const { getAgentMovements } = await import("./db");
+        return getAgentMovements(input);
+      }),
     // Booking timeline directo da API Multipark (para o caso aberto)
     bookingTimeline: protectedProcedure.input(z.object({
       bookingId: z.string(),

@@ -89,22 +89,22 @@ export function CompareExpensesDialog({ open, onClose, categories, projectId }: 
           <Button size="sm" variant="outline" onClick={() => { setA(ym(today)); setB(ym(new Date(today.getFullYear(), today.getMonth() - 1, 1))); }}>Este mes vs anterior</Button>
           <Button size="sm" variant="outline" onClick={() => { setA(ym(today)); setB(ym(new Date(today.getFullYear() - 1, today.getMonth(), 1))); }}>Mes homologo (ano anterior)</Button>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="border rounded p-2">
             <div className="text-xs font-medium mb-1">Periodo A</div>
-            <div className="flex gap-1"><Input type="date" className="h-8" value={a.from} onChange={(e) => setA({ ...a, from: e.target.value })} /><Input type="date" className="h-8" value={a.to} onChange={(e) => setA({ ...a, to: e.target.value })} /></div>
+            <div className="flex flex-wrap gap-1"><Input type="date" className="h-8" value={a.from} onChange={(e) => setA({ ...a, from: e.target.value })} /><Input type="date" className="h-8" value={a.to} onChange={(e) => setA({ ...a, to: e.target.value })} /></div>
             <div className="text-2xl font-bold mt-2">{fmtEur(totalA)}</div><div className="text-[11px] text-muted-foreground">{sumA.data?.count ?? 0} despesas</div>
           </div>
           <div className="border rounded p-2">
             <div className="text-xs font-medium mb-1">Periodo B</div>
-            <div className="flex gap-1"><Input type="date" className="h-8" value={b.from} onChange={(e) => setB({ ...b, from: e.target.value })} /><Input type="date" className="h-8" value={b.to} onChange={(e) => setB({ ...b, to: e.target.value })} /></div>
+            <div className="flex flex-wrap gap-1"><Input type="date" className="h-8" value={b.from} onChange={(e) => setB({ ...b, from: e.target.value })} /><Input type="date" className="h-8" value={b.to} onChange={(e) => setB({ ...b, to: e.target.value })} /></div>
             <div className="text-2xl font-bold mt-2">{fmtEur(totalB)}</div><div className="text-[11px] text-muted-foreground">{sumB.data?.count ?? 0} despesas</div>
           </div>
         </div>
         <div className={"text-center rounded p-2 " + (delta > 0 ? "bg-red-50 text-red-700" : delta < 0 ? "bg-emerald-50 text-emerald-700" : "bg-muted")}>
           Variacao: <strong>{delta >= 0 ? "+" : ""}{fmtEur(delta)}</strong> {pct != null && <>({delta >= 0 ? "+" : ""}{pct.toFixed(1)}%)</>}
         </div>
-        <div className="max-h-64 overflow-y-auto">
+        <div className="max-h-64 overflow-auto">
           <table className="w-full text-sm">
             <thead><tr className="text-left text-xs text-muted-foreground border-b"><th className="p-1">Categoria</th><th className="p-1 text-right">A</th><th className="p-1 text-right">B</th><th className="p-1 text-right">Delta</th></tr></thead>
             <tbody>{cats.map((c) => (<tr key={String(c.id)} className="border-b"><td className="p-1">{catName(c.id)}</td><td className="p-1 text-right">{fmtEur(c.a)}</td><td className="p-1 text-right">{fmtEur(c.b)}</td><td className={"p-1 text-right " + (c.a - c.b > 0 ? "text-red-600" : c.a - c.b < 0 ? "text-emerald-600" : "")}>{c.a - c.b >= 0 ? "+" : ""}{fmtEur(c.a - c.b)}</td></tr>))}</tbody>

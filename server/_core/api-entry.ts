@@ -56,11 +56,22 @@ try {
   // servidas no Vercel (o rewrite manda tudo o que não é /api p/ o index.html).
   app.get(/^\/api\/file\/(.+)/, async (req, res) => {
     try {
-      const key = decodeURIComponent((req.params as any)[0] ?? "");
+      // O Express já decodifica os grupos capturados — um 2º decodeURIComponent
+      // lançava URIError (500) com nomes que contêm "%".
+      const key = String((req.params as any)[0] ?? "");
       if (!key || key.includes("..")) return res.status(400).json({ error: "Key inválida" });
       const { storageGet } = await import("../storage");
       const { url } = await storageGet(key);
       if (url && /^https?:\/\//.test(url)) return res.redirect(302, url);
+      // Modo local (sem BLOB_READ_WRITE_TOKEN): serve do disco com o
+      // content-type inferido da extensão, em vez de 404.
+      const fs = await import("fs");
+      const path = await import("path");
+      const uploadsRoot = path.resolve(process.cwd(), "uploads");
+      const localPath = path.resolve(uploadsRoot, key);
+      if (localPath.startsWith(uploadsRoot) && fs.existsSync(localPath)) {
+        return res.sendFile(localPath);
+      }
       return res.status(404).json({ error: "Ficheiro não encontrado no storage" });
     } catch (e: any) {
       return res.status(500).json({ error: e?.message || "Falha a resolver ficheiro" });

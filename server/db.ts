@@ -7392,6 +7392,100 @@ export async function getVehicleAgentsByPlate(
     .sort((a, b) => (b.flagged - a.flagged) || (b.actions - a.actions));
 }
 
+/**
+ * Movimentos de UM condutor num período (investigação de roubos): tudo o que
+ * o agente fez em multipark_booking_history, com matrícula/parque via JOIN às
+ * reservas. `flagged` marca movimentos em reservas/matrículas com caso aberto
+ * nos Perdidos & Achados.
+ */
+export async function getAgentMovements(opts: {
+  agentName: string;
+  from: string; // YYYY-MM-DD
+  to: string; // YYYY-MM-DD
+}): Promise<{
+  movements: Array<{
+    actionTime: string | null;
+    changeType: string | null;
+    bookingExternalId: string;
+    licensePlate: string | null;
+    parkName: string | null;
+    city: string | null;
+    remarks: string | null;
+    flagged: 0 | 1;
+  }>;
+  plates: Array<{ plate: string; actions: number; first: string | null; last: string | null; isCaseVehicle: 0 | 1 }>;
+  totals: { actions: number; checkins: number; checkouts: number; movements: number; plates: number; flaggedPlates: number };
+}> {
+  const db = await getDb();
+  const empty = { movements: [], plates: [], totals: { actions: 0, checkins: 0, checkouts: 0, movements: 0, plates: 0, flaggedPlates: 0 } };
+  if (!db) return empty;
+
+  const rows = await db
+    .select({
+      actionTime: multiparkBookingHistory.actionTime,
+      changeType: multiparkBookingHistory.changeType,
+      bookingExternalId: multiparkBookingHistory.bookingExternalId,
+      remarks: multiparkBookingHistory.remarks,
+      licensePlate: multiparkBookings.licensePlate,
+      parkName: multiparkBookings.parkName,
+      city: multiparkBookings.city,
+    })
+    .from(multiparkBookingHistory)
+    .leftJoin(multiparkBookings, eq(multiparkBookings.externalId, multiparkBookingHistory.bookingExternalId))
+    .where(
+      and(
+        eq(multiparkBookingHistory.agentName, opts.agentName),
+        gte(multiparkBookingHistory.actionTime, `${opts.from} 00:00:00`),
+        lte(multiparkBookingHistory.actionTime, `${opts.to} 23:59:59`),
+      ),
+    )
+    .orderBy(desc(multiparkBookingHistory.actionTime))
+    .limit(2000);
+
+  const caseRefs = await getLostFoundBookingRefSet();
+  const normPlate = (p: string) => p.replace(/[\s-]/g, "").toUpperCase();
+  const caseItems = await db.select({ vehiclePlate: lostFoundItems.vehiclePlate }).from(lostFoundItems);
+  const casePlates = new Set(caseItems.map((i) => i.vehiclePlate?.trim()).filter(Boolean).map((p) => normPlate(p as string)));
+
+  const totals = { actions: 0, checkins: 0, checkouts: 0, movements: 0, plates: 0, flaggedPlates: 0 };
+  const plateMap = new Map<string, { plate: string; actions: number; first: string | null; last: string | null; isCaseVehicle: 0 | 1 }>();
+
+  const movements = rows.map((r) => {
+    totals.actions++;
+    const ct = (r.changeType ?? "").toUpperCase();
+    if (ct === "CHECK_IN") totals.checkins++;
+    else if (ct === "CHECK_OUT") totals.checkouts++;
+    else if (ct === "MOVEMENT") totals.movements++;
+    const plateFlag = r.licensePlate ? casePlates.has(normPlate(r.licensePlate)) : false;
+    const flagged: 0 | 1 = caseRefs.has(r.bookingExternalId) || plateFlag ? 1 : 0;
+    if (r.licensePlate) {
+      const key = normPlate(r.licensePlate);
+      const p = plateMap.get(key) ?? { plate: r.licensePlate, actions: 0, first: null as string | null, last: null as string | null, isCaseVehicle: (plateFlag ? 1 : 0) as 0 | 1 };
+      p.actions++;
+      if (r.actionTime && (!p.first || r.actionTime < p.first)) p.first = r.actionTime;
+      if (r.actionTime && (!p.last || r.actionTime > p.last)) p.last = r.actionTime;
+      if (plateFlag) p.isCaseVehicle = 1;
+      plateMap.set(key, p);
+    }
+    return {
+      actionTime: r.actionTime,
+      changeType: r.changeType,
+      bookingExternalId: r.bookingExternalId,
+      licensePlate: r.licensePlate,
+      parkName: r.parkName,
+      city: r.city,
+      remarks: r.remarks,
+      flagged,
+    };
+  });
+
+  const plates = Array.from(plateMap.values()).sort((a, b) => (b.isCaseVehicle - a.isCaseVehicle) || (b.actions - a.actions));
+  totals.plates = plates.length;
+  totals.flaggedPlates = plates.filter((p) => p.isCaseVehicle).length;
+
+  return { movements, plates, totals };
+}
+
 // ─── MULTIPARK BOOKING HISTORY (local DB instead of remote API) ─────────────
 
 /**

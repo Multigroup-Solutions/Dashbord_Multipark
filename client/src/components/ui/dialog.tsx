@@ -126,7 +126,11 @@ function DialogContent({
         className={cn(
           // max-h + overflow: nenhum diálogo pode sair do ecrã — conteúdo alto
           // ganha scroll interno (aplica-se a TODOS os Dialog da app).
-          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] max-h-[90vh] overflow-y-auto translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border p-6 shadow-lg duration-200 sm:max-w-lg",
+          // Sem largura default aqui: "sm:max-w-lg" na base vencia o max-w-*
+          // das páginas via twMerge e encolhia diálogos largos para 512px —
+          // o default de 32rem vive agora no index.css (@layer components) e
+          // o clamp ao viewport na guarda global [data-slot="dialog-content"].
+          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-50 grid w-full max-h-[90vh] overflow-y-auto translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border p-6 shadow-lg duration-200",
           className
         )}
         onEscapeKeyDown={handleEscapeKeyDown}

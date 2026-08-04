@@ -191,3 +191,48 @@
     }
   }
 }
+
+/* Largura default dos diálogos (substitui o antigo "sm:max-w-lg" da base do
+ * DialogContent). Em @layer components para que qualquer max-w-* passado
+ * pelas páginas ganhe sem truques. */
+@layer components {
+  [data-slot="dialog-content"],
+  [data-slot="alert-dialog-content"] {
+    max-width: 32rem;
+  }
+}
+
+/* ── Guarda de viewport para TODOS os overlays ──────────────────────────────
+ * Fora de @layer de propósito: ganha a qualquer utility do Tailwind e não
+ * pode ser removida pelo twMerge. Nada do que abre sai dos limites do ecrã —
+ * cresce para baixo com scroll interno, nunca para os lados. */
+[data-slot="dialog-content"],
+[data-slot="alert-dialog-content"] {
+  width: min(100%, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+/* O DialogContent é grid: filhos com min-width:auto transbordam com tabelas/
+ * texto longo. */
+[data-slot="dialog-content"] > *,
+[data-slot="alert-dialog-content"] > * {
+  min-width: 0;
+}
+
+/* O Radix expõe estas custom properties no conteúdo posicionado (popper). */
+[data-slot="popover-content"],
+[data-slot="dropdown-menu-content"],
+[data-slot="dropdown-menu-sub-content"],
+[data-slot="select-content"],
+[data-slot="context-menu-content"],
+[data-slot="context-menu-sub-content"],
+[data-slot="menubar-content"],
+[data-slot="menubar-sub-content"],
+[data-slot="hover-card-content"],
+[data-slot="tooltip-content"] {
+  max-width: min(var(--radix-popper-available-width, 100vw), calc(100vw - 1rem));
+  max-height: var(--radix-popper-available-height, none);
+  overflow-y: auto;
+  overflow-x: hidden;
+}

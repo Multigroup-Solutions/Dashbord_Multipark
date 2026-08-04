@@ -128,24 +128,23 @@ function getFilteredMenuGroups(userRole: string): MenuGroup[] {
     .filter(g => g.items.length > 0);
 }
 
+// Itens fixos no topo, fora dos grupos — o mais usado nunca fica escondido
+// pelo acordeão.
+const topLevelItems: MenuItem[] = [
+  // dashboards iniciais não aparecem ao frontoffice
+  { icon: BarChart3, label: "Dashboards", path: "/dashboards", minRole: "backoffice" },
+];
+
 const menuGroups: MenuGroup[] = [
-  {
-    label: "Geral",
-    // dashboards iniciais não aparecem ao frontoffice
-    minRole: "backoffice",
-    items: [
-      { icon: BarChart3, label: "Dashboards", path: "/dashboards" },
-    ],
-  },
   {
     label: "Financeiro",
     minRole: "frontoffice",
     items: [
       { icon: Receipt, label: "Despesas", path: "/despesas" },
-      // Projetos / Faturação / Marketing escondidos do frontoffice
-      { icon: FolderTree, label: "Projetos", path: "/projetos", minRole: "backoffice" },
+      // Faturação / Projetos / Marketing escondidos do frontoffice
       { icon: FileText, label: "Faturação", path: "/faturacao", minRole: "backoffice" },
       { icon: Handshake, label: "Parcerias", path: "/parcerias" },
+      { icon: FolderTree, label: "Projetos", path: "/projetos", minRole: "backoffice" },
       { icon: Megaphone, label: "Marketing", path: "/marketing", minRole: "backoffice" },
     ],
   },
@@ -154,23 +153,24 @@ const menuGroups: MenuGroup[] = [
     items: [
       // RH visível a todos os roles (user/extra veem só o próprio perfil)
       { icon: UserCheck, label: "Recursos Humanos", path: "/rh" },
-      // extra vê a própria avaliação (última semana) — filtrado no servidor
-      { icon: Trophy, label: "Avaliação", path: "/avaliacao", minRole: "extra" },
       { icon: GraduationCap, label: "Formação", path: "/formacao", minRole: "extra" },
+      // extra vê a própria avaliação (última semana) — filtrado no servidor
+      { icon: Trophy, label: "Avaliação Individual", path: "/avaliacao", minRole: "extra" },
+      { icon: Trophy, label: "Avaliação Operacional", path: "/avaliacao-operacional", minRole: "backoffice" },
     ],
   },
   {
     label: "Operações",
-    // Operações escondidas do frontoffice (backoffice+); Tarefas é a exceção
-    // — extra+ vê (extra só as suas)
+    // Operações escondidas do frontoffice (backoffice+); Tarefas/Disponibilidade
+    // são a exceção — extra+ vê (extra só as suas)
     items: [
-      { icon: Truck, label: "Actividade", path: "/operacional", minRole: "backoffice" },
-      { icon: LayoutDashboard, label: "Operações", path: "/operacoes", minRole: "backoffice" },
+      { icon: LayoutDashboard, label: "Reservas & Operações", path: "/operacoes", minRole: "backoffice" },
+      { icon: Wrench, label: "Serviços", path: "/servicos", minRole: "backoffice" },
+      { icon: Truck, label: "Actividade Diária", path: "/operacional", minRole: "backoffice" },
       { icon: ListTodo, label: "Tarefas", path: "/tarefas", minRole: "extra" },
       { icon: CalendarDays, label: "Extras Dia", path: "/extras-dia", minRole: "backoffice" },
       { icon: CalendarCheck, label: "Disponibilidade", path: "/disponibilidade", minRole: "extra" },
       { icon: MessageCircle, label: "WhatsApp", path: "/whatsapp", minRole: "backoffice" },
-      { icon: Trophy, label: "Avaliação Operacional", path: "/avaliacao-operacional", minRole: "backoffice" },
     ],
   },
   {
@@ -187,6 +187,7 @@ const menuGroups: MenuGroup[] = [
     label: "Sistema",
     minRole: "admin",
     items: [
+      { icon: Users, label: "Utilizadores", path: "/utilizadores" },
       { icon: RefreshCw, label: "Sincronização", path: "/multipark/sync" },
       { icon: Key, label: "API Keys", path: "/api-keys" },
       { icon: ScrollText, label: "Logs", path: "/logs" },
@@ -194,7 +195,7 @@ const menuGroups: MenuGroup[] = [
   },
 ];
 
-const allMenuItems = menuGroups.flatMap(g => g.items);
+const allMenuItems = [...topLevelItems, ...menuGroups.flatMap(g => g.items)];
 const allMenuPaths = new Set(allMenuItems.map(i => i.path));
 
 const SIDEBAR_WIDTH_KEY = "sidebar-width";
@@ -299,7 +300,7 @@ function DashboardLayoutContent({
 }: DashboardLayoutContentProps) {
   const { user, logout } = useAuth();
   const [location, setLocation] = useLocation();
-  const { state, toggleSidebar } = useSidebar();
+  const { state, toggleSidebar, setOpenMobile } = useSidebar();
   const isCollapsed = state === "collapsed";
   const [isResizing, setIsResizing] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
@@ -362,9 +363,28 @@ function DashboardLayoutContent({
   };
   const pontoStatus = pontoQ.data?.employeeId ? pontoQ.data.status : null;
   const filteredGroups = getFilteredMenuGroups(userRole);
-  const filteredItems = filteredGroups.flatMap(g => g.items);
+  const filteredTopItems = topLevelItems.filter(i => !i.minRole || hasRole(userRole, i.minRole));
+  const filteredItems = [...filteredTopItems, ...filteredGroups.flatMap(g => g.items)];
   const activeMenuItem = allMenuItems.find(item => item.path === location);
   const isMobile = useIsMobile();
+
+  // Acordeão: um grupo aberto de cada vez. Segue a rota ativa (também quando a
+  // navegação vem de fora da sidebar, ex.: notificações/links internos).
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
+  useEffect(() => {
+    const g = filteredGroups.find(gr =>
+      gr.items.some(i => location === i.path || location.startsWith(i.path + "/")),
+    );
+    if (g) setOpenGroup(g.label);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location, userRole]);
+
+  const navigate = (path: string) => {
+    setLocation(path);
+    // Em mobile a sidebar é um drawer — fechar ao navegar, senão fica por
+    // cima da página.
+    if (isMobile) setOpenMobile(false);
+  };
 
   // Redirect para página permitida quando a rota é restrita ao role
   useEffect(() => {
@@ -457,10 +477,42 @@ function DashboardLayoutContent({
           </SidebarHeader>
 
           <SidebarContent className="gap-0">
+            {filteredTopItems.length > 0 && (
+              <SidebarGroup>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    {filteredTopItems.map(item => {
+                      const isActive = location === item.path || location.startsWith(item.path + "/");
+                      return (
+                        <SidebarMenuItem key={item.path}>
+                          <SidebarMenuButton
+                            isActive={isActive}
+                            onClick={() => navigate(item.path)}
+                            tooltip={item.label}
+                            className="h-9 transition-all font-normal"
+                          >
+                            <item.icon
+                              className={`h-4 w-4 ${isActive ? "text-primary" : ""}`}
+                            />
+                            <span>{item.label}</span>
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      );
+                    })}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            )}
             {filteredGroups.map(group => {
-              const hasActiveItem = group.items.some(item => item.path === location);
               return (
-                <Collapsible key={group.label} defaultOpen={hasActiveItem || group.label === "Geral" || group.label === "Financeiro"} className="group/collapsible">
+                <Collapsible
+                  key={group.label}
+                  // No modo colapsado (só ícones) o trigger do grupo fica
+                  // invisível — forçar tudo aberto para os ícones aparecerem.
+                  open={isCollapsed || openGroup === group.label}
+                  onOpenChange={(o) => setOpenGroup(o ? group.label : null)}
+                  className="group/collapsible"
+                >
                   <SidebarGroup>
                     <SidebarGroupLabel asChild>
                       <CollapsibleTrigger className="flex w-full items-center justify-between [&[data-state=open]>svg]:rotate-180">
@@ -479,7 +531,7 @@ function DashboardLayoutContent({
                               <SidebarMenuItem key={item.path}>
                                 <SidebarMenuButton
                                   isActive={isActive}
-                                  onClick={() => setLocation(item.path)}
+                                  onClick={() => navigate(item.path)}
                                   tooltip={item.label}
                                   className="h-9 transition-all font-normal"
                                 >

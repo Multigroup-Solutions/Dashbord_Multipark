@@ -18,7 +18,9 @@ import { toast } from "sonner";
 import {
   ListTodo, Plus, Clock, AlertTriangle, CheckCircle2, Circle,
   ArrowUpCircle, Pencil, Trash2, CalendarDays, Users, LayoutGrid, List, GripVertical, Bell, Search,
+  ChevronLeft, ChevronRight,
 } from "lucide-react";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 const LEVEL_LABEL: Record<string, string> = {
   group: "Grupo", city: "Cidade", brand: "Marca", project: "Projeto",
@@ -57,11 +59,11 @@ function sortProjectsHierarchical<T extends { id: number; name: string; parentId
 }
 
 const COLUMNS = [
-  { id: "backlog", label: "Backlog", icon: Circle, color: "border-t-slate-400", bg: "bg-slate-50" },
-  { id: "todo", label: "A Fazer", icon: ListTodo, color: "border-t-blue-500", bg: "bg-blue-50" },
-  { id: "in_progress", label: "Em Curso", icon: Clock, color: "border-t-amber-500", bg: "bg-amber-50" },
-  { id: "review", label: "Revisão", icon: ArrowUpCircle, color: "border-t-purple-500", bg: "bg-purple-50" },
-  { id: "done", label: "Concluído", icon: CheckCircle2, color: "border-t-emerald-500", bg: "bg-emerald-50" },
+  { id: "backlog", label: "Backlog", icon: Circle, pill: "bg-slate-100 text-slate-800" },
+  { id: "todo", label: "A Fazer", icon: ListTodo, pill: "bg-blue-100 text-blue-800" },
+  { id: "in_progress", label: "Em Curso", icon: Clock, pill: "bg-amber-100 text-amber-800" },
+  { id: "review", label: "Revisão", icon: ArrowUpCircle, pill: "bg-purple-100 text-purple-800" },
+  { id: "done", label: "Concluído", icon: CheckCircle2, pill: "bg-emerald-100 text-emerald-800" },
 ];
 
 const PRIORITY_COLORS: Record<string, string> = {
@@ -266,8 +268,10 @@ export default function TasksPage() {
     setDragOverCol(colId);
   }, []);
 
-  const handleDragLeave = useCallback(() => {
-    setDragOverCol(null);
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    // Só limpa quando sai mesmo da coluna — sair para um FILHO da coluna
+    // disparava isto e o highlight piscava.
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverCol(null);
   }, []);
 
   const handleDrop = useCallback((e: React.DragEvent, colId: string) => {
@@ -313,47 +317,77 @@ export default function TasksPage() {
 
   // ─── TASK CARD (Kanban) ───────────────────────────────────────────────────
   function TaskCard({ task }: { task: Task }) {
+    const colIdx = COLUMNS.findIndex(c => c.id === task.status);
+    const canMoveLeft = colIdx > 0;
+    const canMoveRight = colIdx >= 0 && colIdx < COLUMNS.length - 1;
+    const move = (dir: -1 | 1) => {
+      const target = COLUMNS[colIdx + dir]?.id;
+      if (!target) return;
+      moveMut.mutate({ id: task.id, status: target as any });
+      toast.success(`Tarefa movida para ${STATUS_LABELS[target]}`);
+    };
     return (
-      <div
+      <Card
         draggable
         onDragStart={(e) => handleDragStart(e, task.id)}
         onDragEnd={handleDragEnd}
-        className={`bg-white rounded-lg border shadow-sm p-3 space-y-2 cursor-grab active:cursor-grabbing hover:shadow-md transition-all ${
+        onClick={() => { if (canEdit) openEdit(task); }}
+        className={`cursor-grab active:cursor-grabbing hover:shadow-md transition-all ${
           draggedTaskId === task.id ? "opacity-50 ring-2 ring-primary" : ""
-        } ${isOverdue(task) ? "ring-2 ring-red-300" : ""}`}
+        } ${isOverdue(task) ? "border-red-400 border-2" : ""}`}
       >
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex items-center gap-1.5 flex-1 min-w-0">
-            <GripVertical className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />
-            <p className="text-sm font-medium leading-tight truncate">{task.title}</p>
+        <CardContent className="p-3 space-y-2">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-center gap-1.5 flex-1 min-w-0">
+              <GripVertical className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />
+              <p className="text-sm font-medium leading-tight truncate">{task.title}</p>
+            </div>
+            {canEdit && (
+              <div className="flex gap-0.5 shrink-0">
+                <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); openEdit(task); }}>
+                  <Pencil className="h-3 w-3" />
+                </Button>
+                <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" onClick={(e) => { e.stopPropagation(); if (confirm("Eliminar tarefa?")) deleteMut.mutate({ id: task.id }); }}>
+                  <Trash2 className="h-3 w-3" />
+                </Button>
+              </div>
+            )}
           </div>
-          <div className="flex gap-0.5 shrink-0">
-            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => openEdit(task)}>
-              <Pencil className="h-3 w-3" />
-            </Button>
-            <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" onClick={() => { if (confirm("Eliminar tarefa?")) deleteMut.mutate({ id: task.id }); }}>
-              <Trash2 className="h-3 w-3" />
-            </Button>
+          {task.description && <p className="text-xs text-muted-foreground line-clamp-2">{task.description}</p>}
+          <div className="flex flex-wrap gap-1.5">
+            <Badge variant="outline" className={`text-xs ${PRIORITY_COLORS[task.priority]}`}>
+              {PRIORITY_LABELS[task.priority]}
+            </Badge>
+            {task.projectName && <Badge variant="outline" className="text-xs">{task.projectName}</Badge>}
           </div>
-        </div>
-        {task.description && <p className="text-xs text-muted-foreground line-clamp-2">{task.description}</p>}
-        <div className="flex flex-wrap gap-1.5">
-          <Badge variant="outline" className={`text-xs ${PRIORITY_COLORS[task.priority]}`}>
-            {PRIORITY_LABELS[task.priority]}
-          </Badge>
-          {task.projectName && <Badge variant="outline" className="text-xs">{task.projectName}</Badge>}
-        </div>
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
-          {renderAssignees(task)}
-          {task.dueDate && (
-            <span className={`flex items-center gap-1 ${isOverdue(task) ? "text-red-600 font-medium" : ""}`}>
-              <CalendarDays className="h-3 w-3" />
-              {fmtPTDate(task.dueDate)}
-              {isOverdue(task) && <AlertTriangle className="h-3 w-3" />}
-            </span>
-          )}
-        </div>
-      </div>
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            {renderAssignees(task)}
+            {task.dueDate && (
+              <span className={`flex items-center gap-1 ${isOverdue(task) ? "text-red-600 font-medium" : ""}`}>
+                <CalendarDays className="h-3 w-3" />
+                {fmtPTDate(task.dueDate)}
+                {isOverdue(task) && <AlertTriangle className="h-3 w-3" />}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center justify-between pt-1">
+            <span className="text-[10px] text-muted-foreground">#{task.id}</span>
+            {/* Setas = alternativa ao drag em ecrãs táteis (o drag HTML5 não existe em touch) */}
+            <div className="flex gap-1">
+              {canMoveLeft && (
+                <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); move(-1); }}>
+                  <ChevronLeft className="w-3 h-3" />
+                </Button>
+              )}
+              {canMoveRight && (
+                <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); move(1); }}>
+                  <ChevronRight className="w-3 h-3" />
+                </Button>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     );
   }
 
@@ -447,37 +481,39 @@ export default function TasksPage() {
       )}
 
       {/* Kanban Board */}
-      {viewMode === "kanban" && (
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+      {viewMode === "kanban" && (isLoading ? (
+        <div className="flex justify-center py-20"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
           {COLUMNS.map(col => (
             <div
               key={col.id}
-              className={`rounded-lg border-t-4 ${col.color} min-h-[300px] transition-colors ${
-                dragOverCol === col.id ? "bg-primary/10 ring-2 ring-primary/30" : "bg-muted/30"
+              className={`space-y-3 rounded-lg transition-colors ${
+                dragOverCol === col.id ? "ring-2 ring-primary/60 bg-primary/5" : ""
               }`}
               onDragOver={(e) => handleDragOver(e, col.id)}
               onDragLeave={handleDragLeave}
               onDrop={(e) => handleDrop(e, col.id)}
             >
-              <div className="p-3 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <col.icon className="h-4 w-4 text-muted-foreground" />
-                  <span className="text-sm font-semibold">{col.label}</span>
+              <div className={`flex items-center gap-2 p-2 rounded-lg ${col.pill} border`}>
+                <col.icon className="w-4 h-4" />
+                <span className="font-medium text-sm">{col.label}</span>
+                <Badge variant="secondary" className="ml-auto text-xs">{grouped[col.id]?.length ?? 0}</Badge>
+              </div>
+              <ScrollArea className="max-h-[60vh]">
+                <div className="space-y-2 pr-2">
+                  {(grouped[col.id] ?? []).map(task => (
+                    <TaskCard key={task.id} task={task} />
+                  ))}
+                  {(grouped[col.id]?.length ?? 0) === 0 && (
+                    <p className="text-xs text-muted-foreground text-center py-8">Sem tarefas</p>
+                  )}
                 </div>
-                <Badge variant="secondary" className="text-xs">{grouped[col.id]?.length ?? 0}</Badge>
-              </div>
-              <div className="px-2 pb-2 space-y-2">
-                {(grouped[col.id] ?? []).map(task => (
-                  <TaskCard key={task.id} task={task} />
-                ))}
-                {(grouped[col.id]?.length ?? 0) === 0 && (
-                  <p className="text-xs text-muted-foreground text-center py-6">Sem tarefas</p>
-                )}
-              </div>
+              </ScrollArea>
             </div>
           ))}
         </div>
-      )}
+      ))}
 
       {/* List View */}
       {viewMode === "list" && (
@@ -514,7 +550,7 @@ export default function TasksPage() {
                             )}
                           </TableCell>
                           <TableCell>
-                            <Badge variant="outline" className={`text-xs ${col?.bg ?? ""}`}>
+                            <Badge variant="outline" className={`text-xs ${col?.pill ?? ""}`}>
                               {col?.label ?? task.status}
                             </Badge>
                           </TableCell>
