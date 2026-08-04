@@ -5635,9 +5635,12 @@ export async function upsertMultiparkBooking(data: InsertMultiparkBooking) {
   const existed = before.length > 0;
   // Se o estado mudou (ex: BOOKED→CHECKED_IN→CHECKED_OUT), reabre o enrichment
   // (enrichedAt=null) para o /bookings/:id ser re-buscado e refrescar os campos
-  // que só vêm do detalhe (parceiro real, origem, pagamento, etc.).
+  // que só vêm do detalhe (parceiro real, origem, pagamento, etc.) — e reabre
+  // também a história (historyFetchedAt=null): sem isto os CHECK_IN/CHECK_OUT/
+  // MOVEMENT dos condutores feitos DEPOIS da primeira busca nunca entravam em
+  // multipark_booking_history automaticamente (só via botões manuais).
   const statusChanged = existed && (before[0].status ?? null) !== (data.status ?? null);
-  const setOnDup: any = statusChanged ? { ...rest, enrichedAt: null } : rest;
+  const setOnDup: any = statusChanged ? { ...rest, enrichedAt: null, historyFetchedAt: null } : rest;
   await db
     .insert(multiparkBookings)
     .values(data as any)
