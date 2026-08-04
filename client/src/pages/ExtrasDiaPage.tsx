@@ -43,7 +43,18 @@ import {
   MessageCircle,
   XCircle,
   AlertTriangle,
+  MapPin,
 } from "lucide-react";
+import {
+  CITY_KEYS,
+  CITY_LABELS,
+  CITY_SOURCE_LABELS,
+  type CityKey,
+} from "@shared/city";
+import {
+  AVAILABILITY_TEMPLATE_NAME,
+  DEFAULT_TEMPLATE_LANGUAGE,
+} from "@shared/whatsappTemplate";
 
 // Defaults para o preview do UI — devem coincidir com a tabela `extra_rates`
 // na BD (migration 0044). O custo real é sempre calculado no backend a partir
@@ -1415,6 +1426,9 @@ export function AvailabilitySection() {
   // da operação, e o caso de uso principal é falar com quem AINDA NÃO
   // respondeu. Este filtro reduz a quem já marcou disponibilidade.
   const [onlyWithAvailability, setOnlyWithAvailability] = useState(false);
+  // Filtro de cidade. "all" = sem filtro; "none" = fichas sem cidade
+  // identificada (ver server/employeeCity.ts — a cidade é DERIVADA).
+  const [cityFilter, setCityFilter] = useState<CityKey | "all" | "none">("all");
 
   // assim que chegam as sugestões, default = próxima segunda
   const effectiveWeek = weekStart || hints.data?.next || "";
@@ -1433,15 +1447,63 @@ export function AvailabilitySection() {
   });
 
   const o = overview.data;
-  const shownExtras = o
-    ? (onlyWithAvailability ? o.extras.filter(e => e.availableDays > 0) : o.extras)
-    : [];
+  // Os dois filtros COMPÕEM-SE: cidade primeiro, disponibilidade depois. O
+  // conjunto resultante é o que a tabela mostra E o alvo de "a todos" (email e
+  // WhatsApp) — invariante "o que envio é o que vejo".
+  const shownExtras = useMemo(() => {
+    if (!o) return [];
+    let list = o.extras;
+    if (cityFilter === "none") list = list.filter(e => e.city === null);
+    else if (cityFilter !== "all") list = list.filter(e => e.city === cityFilter);
+    if (onlyWithAvailability) list = list.filter(e => e.availableDays > 0);
+    return list;
+  }, [o, cityFilter, onlyWithAvailability]);
+
+  // Contagens do cabeçalho seguem o conjunto FILTRADO (as do servidor são
+  // sempre o universo completo e mentiriam com um filtro aplicado).
+  const shownResponded = shownExtras.filter(e => e.responded).length;
+  const shownWithPhone = shownExtras.filter(e => !!e.phoneE164).length;
+  // Totais por dia recalculados sobre o conjunto visível — os do servidor
+  // contam o universo todo e deixariam de bater certo com a tabela filtrada.
+  const shownPerDay = useMemo(
+    () =>
+      (o?.dayHeaders ?? []).map(h => {
+        let morning = 0;
+        let night = 0;
+        for (const e of shownExtras) {
+          const d = e.days.find(x => x.day === h.day);
+          if (d?.morning) morning++;
+          if (d?.night) night++;
+        }
+        return { day: h.day, morning, night };
+      }),
+    [o, shownExtras],
+  );
+  const cityCounts = useMemo(() => {
+    const counts = { all: o?.extras.length ?? 0, none: 0 } as Record<string, number>;
+    for (const key of CITY_KEYS) counts[key] = 0;
+    for (const e of o?.extras ?? []) counts[e.city ?? "none"]++;
+    return counts;
+  }, [o]);
+
+  /** Mudar de alvo limpa a seleção — nunca enviar a quem já não se vê. */
+  function changeCityFilter(next: CityKey | "all" | "none") {
+    setCityFilter(next);
+    setSelectedIds(new Set());
+  }
 
   // ── WhatsApp broadcast (Fase 2 — modo desenvolvimento) ────────────────────
   const [waOpen, setWaOpen] = useState(false);
-  const [waTemplate, setWaTemplate] = useState("");
-  const [waLanguage, setWaLanguage] = useState("pt_PT");
-  const [waParams, setWaParams] = useState(""); // parâmetros do body, separados por "|"
+  // Template e língua já vêm preenchidos com o que está aprovado na Meta —
+  // continuam editáveis para testar outros templates.
+  const [waTemplate, setWaTemplate] = useState(AVAILABILITY_TEMPLATE_NAME);
+  const [waLanguage, setWaLanguage] = useState(DEFAULT_TEMPLATE_LANGUAGE);
+  // {{1}} = nome do extra (automático, por destinatário, no servidor).
+  // {{2}} = este campo, igual para todos os destinatários.
+  const [waParam2, setWaParam2] = useState("");
+  // Só ligar quando o template TIVER botão "Visit website" com URL dinâmico
+  // (Fase 4). Ligado num template sem botão, a Meta rejeita o envio.
+  const [waFormLink, setWaFormLink] = useState(false);
   const [waTestPhone, setWaTestPhone] = useState("");
   type WaRecipient = {
     employeeId: number | null;
@@ -1472,12 +1534,15 @@ export function AvailabilitySection() {
   const waTargets = selectedIds.size > 0 ? shownExtras.filter(e => selectedIds.has(e.employeeId)) : shownExtras;
   const waValidCount = waTargets.filter(e => !!e.phoneE164).length;
   const waInvalidCount = waTargets.length - waValidCount;
-  const waParamList = waParams.split("|").map(p => p.trim()).filter(Boolean);
 
   function submitBroadcast(testPhone?: string) {
     const templateName = waTemplate.trim();
     if (!templateName) {
       toast.error("Indica o nome do template.");
+      return;
+    }
+    if (waFormLink && !effectiveWeek) {
+      toast.error("Escolhe a semana antes de enviar com link do formulário.");
       return;
     }
     setWaResult(null);
@@ -1491,7 +1556,8 @@ export function AvailabilitySection() {
     broadcast.mutate({
       templateName,
       languageCode: waLanguage.trim() || undefined,
-      templateParams: waParamList.length ? waParamList : undefined,
+      bodyParam2: waParam2.trim() || null,
+      includeFormLink: waFormLink,
       employeeIds: testPhone ? undefined : targetIds,
       weekStart: effectiveWeek || null,
       note: note.trim() || null,
@@ -1568,21 +1634,27 @@ export function AvailabilitySection() {
         {/* Envio real: a todos OU só aos selecionados na tabela abaixo */}
         <div className="flex flex-wrap gap-2">
           <Button
-            disabled={!effectiveWeek || send.isPending}
+            disabled={!effectiveWeek || send.isPending || shownExtras.length === 0}
             onClick={() => {
-              const ids = Array.from(selectedIds);
-              const alvo = ids.length > 0 ? `aos ${ids.length} extras selecionados` : "a TODOS os extras ativos";
+              // "A todos" = o conjunto VISÍVEL (mesma invariante do WhatsApp).
+              // Manda-se sempre a lista explícita: com um filtro de cidade
+              // aplicado, deixar o servidor decidir "todos" enviaria a gente
+              // que não está na tabela.
+              const ids = selectedIds.size > 0 ? Array.from(selectedIds) : shownExtras.map(e => e.employeeId);
+              const alvo = selectedIds.size > 0
+                ? `aos ${ids.length} extras selecionados`
+                : `aos ${ids.length} extras mostrados na tabela`;
               if (!confirm(`Enviar pedido de disponibilidade ${alvo} para a semana de ${effectiveWeek}?`)) return;
               send.mutate({
                 weekStart: effectiveWeek,
                 origin: window.location.origin,
                 note: note.trim() || null,
-                employeeIds: ids.length > 0 ? ids : null,
+                employeeIds: ids,
               });
             }}
           >
             {send.isPending ? <Clock className="h-4 w-4 mr-2 animate-spin" /> : <Mail className="h-4 w-4 mr-2" />}
-            {selectedIds.size > 0 ? `Email aos ${selectedIds.size} selecionados` : "Email a todos"}
+            {selectedIds.size > 0 ? `Email aos ${selectedIds.size} selecionados` : `Email aos ${shownExtras.length} mostrados`}
           </Button>
 
           {/* WhatsApp: abre um dialog dedicado (template + teste + resultado) */}
@@ -1592,7 +1664,7 @@ export function AvailabilitySection() {
             onClick={() => { setWaResult(null); setWaOpen(true); }}
           >
             <MessageCircle className="h-4 w-4 mr-2" />
-            {selectedIds.size > 0 ? `WhatsApp aos ${selectedIds.size} selecionados` : "WhatsApp a todos"}
+            {selectedIds.size > 0 ? `WhatsApp aos ${selectedIds.size} selecionados` : `WhatsApp aos ${shownExtras.length} mostrados`}
           </Button>
         </div>
 
@@ -1600,9 +1672,11 @@ export function AvailabilitySection() {
           <div className="space-y-3 pt-2">
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <div className="text-sm text-muted-foreground">
-                {o.totalExtras} extras ativos · {o.responded} responderam para {o.weekStart} – {o.weekEnd} ·{" "}
-                <span className={o.withValidPhone === 0 ? "text-amber-600" : undefined}>
-                  {o.withValidPhone} com número válido
+                {shownExtras.length}
+                {shownExtras.length !== o.totalExtras ? ` de ${o.totalExtras}` : ""} extras ativos ·{" "}
+                {shownResponded} responderam para {o.weekStart} – {o.weekEnd} ·{" "}
+                <span className={shownWithPhone === 0 ? "text-amber-600" : undefined}>
+                  {shownWithPhone} com número válido
                 </span>
               </div>
               <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
@@ -1616,6 +1690,28 @@ export function AvailabilitySection() {
                 />
                 Mostrar só quem marcou disponibilidade
               </label>
+            </div>
+
+            {/* Filtro por cidade. A cidade é DERIVADA (projeto → candidatura →
+                morada); "sem cidade" é um estado real e filtrável, não um erro. */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <MapPin className="h-3.5 w-3.5 text-muted-foreground" />
+              {([
+                { key: "all" as const, label: "Todas" },
+                ...CITY_KEYS.map(k => ({ key: k, label: CITY_LABELS[k] })),
+                { key: "none" as const, label: "Sem cidade" },
+              ]).map(({ key, label }) => (
+                <Button
+                  key={key}
+                  size="sm"
+                  variant={cityFilter === key ? "default" : "outline"}
+                  className="h-7 text-xs"
+                  onClick={() => changeCityFilter(key)}
+                >
+                  {label}
+                  <span className="ml-1 opacity-70">{cityCounts[key] ?? 0}</span>
+                </Button>
+              ))}
             </div>
 
             {/* Contagem por dia */}
@@ -1634,6 +1730,7 @@ export function AvailabilitySection() {
                       />
                     </th>
                     <th className="py-1 pr-2">Extra</th>
+                    <th className="py-1 pr-2">Cidade</th>
                     <th className="py-1 pr-2">Telefone</th>
                     {o.dayHeaders.map((h) => (
                       <th key={h.day} className="px-1 text-center whitespace-nowrap">{h.label}</th>
@@ -1664,6 +1761,20 @@ export function AvailabilitySection() {
                             : <span className="h-3.5 w-3.5 inline-block rounded-full border border-muted-foreground/30" />}
                           {ex.fullName}
                         </span>
+                      </td>
+                      <td className="py-1 pr-2 whitespace-nowrap text-xs">
+                        {ex.city ? (
+                          <span
+                            className="text-muted-foreground"
+                            title={ex.citySource ? `Cidade obtida da ${CITY_SOURCE_LABELS[ex.citySource]}` : undefined}
+                          >
+                            {CITY_LABELS[ex.city]}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground/40" title="Sem projeto, candidatura ou morada que identifique a cidade">
+                            —
+                          </span>
+                        )}
                       </td>
                       <td className="py-1 pr-2 whitespace-nowrap text-xs">
                         {ex.phoneE164 ? (
@@ -1705,10 +1816,12 @@ export function AvailabilitySection() {
                   ))}
                   {shownExtras.length === 0 && (
                     <tr>
-                      <td colSpan={o.dayHeaders.length + 3} className="py-3 text-center text-muted-foreground">
-                        {onlyWithAvailability
-                          ? "Ainda ninguém marcou disponibilidade para esta semana."
-                          : "Não há extras ativos (RH → colaboradores com função “extra”)."}
+                      <td colSpan={o.dayHeaders.length + 4} className="py-3 text-center text-muted-foreground">
+                        {cityFilter !== "all"
+                          ? "Nenhum extra neste filtro de cidade."
+                          : onlyWithAvailability
+                            ? "Ainda ninguém marcou disponibilidade para esta semana."
+                            : "Não há extras ativos (RH → colaboradores com função “extra”)."}
                       </td>
                     </tr>
                   )}
@@ -1717,7 +1830,8 @@ export function AvailabilitySection() {
                     <td className="py-1 pr-1" />
                     <td className="py-1 pr-2">Disponíveis</td>
                     <td className="py-1 pr-2" />
-                    {o.perDay.map((p) => (
+                    <td className="py-1 pr-2" />
+                    {shownPerDay.map((p) => (
                       <td key={p.day} className="px-1 text-center text-xs">
                         <span className="text-amber-600">{p.morning}</span>
                         {" / "}
@@ -1763,29 +1877,50 @@ export function AvailabilitySection() {
               <div className="space-y-1">
                 <Label className="text-xs">Nome do template (WhatsApp Manager)</Label>
                 <Input
-                  placeholder="ex: disponibilidade_semanal (nome APPROVED da Meta)"
+                  placeholder={AVAILABILITY_TEMPLATE_NAME}
                   value={waTemplate}
                   onChange={(e) => setWaTemplate(e.target.value)}
                 />
                 <p className="text-[11px] text-muted-foreground">
-                  Placeholder até o template estar aprovado no WhatsApp Manager. Tem de ser o nome exato do template APPROVED.
+                  Tem de ser o nome EXATO do template APPROVED e a língua tem de ser a da tradução aprovada
+                  (pt_PT, pt_BR e pt são diferentes para a Meta).
                 </p>
               </div>
 
               <div className="flex gap-3 flex-wrap">
                 <div className="space-y-1">
                   <Label className="text-xs">Língua</Label>
-                  <Input className="w-32" value={waLanguage} onChange={(e) => setWaLanguage(e.target.value)} placeholder="pt_PT" />
+                  <Input className="w-32" value={waLanguage} onChange={(e) => setWaLanguage(e.target.value)} placeholder={DEFAULT_TEMPLATE_LANGUAGE} />
                 </div>
                 <div className="space-y-1 flex-1 min-w-[12rem]">
-                  <Label className="text-xs">Parâmetros do body (opcional, separa com "|")</Label>
+                  <Label className="text-xs">Semana/dia (parâmetro 2)</Label>
                   <Input
-                    placeholder="ex: {{1}} | {{2}}  →  João | próxima semana"
-                    value={waParams}
-                    onChange={(e) => setWaParams(e.target.value)}
+                    placeholder="ex: semana de 11 a 17 de agosto"
+                    value={waParam2}
+                    onChange={(e) => setWaParam2(e.target.value)}
                   />
+                  <p className="text-[11px] text-muted-foreground">
+                    O <strong>{"{{1}}"}</strong> é preenchido automaticamente com o nome de cada extra.
+                    Este campo é o <strong>{"{{2}}"}</strong> e vai igual para todos.
+                  </p>
                 </div>
               </div>
+
+              <label className="flex items-start gap-2 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={waFormLink}
+                  onChange={(e) => setWaFormLink(e.target.checked)}
+                />
+                <span>
+                  O template tem <strong>botão com link</strong> do formulário de disponibilidade
+                  <span className="block text-muted-foreground">
+                    Liga só se o template tiver um botão "Visit website" com URL dinâmico — cada extra recebe
+                    um link pessoal de uso único. Ligado num template SEM botão, a Meta rejeita o envio.
+                  </span>
+                </span>
+              </label>
 
               {/* Resumo válidos/inválidos entre os alvos */}
               {!waResult && (

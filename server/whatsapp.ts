@@ -15,18 +15,98 @@ export type WhatsappSendResult =
   | { ok: true; waMessageId: string }
   | { ok: false; error: string; code?: number };
 
+/**
+ * Contexto do envio, usado só para tornar o erro AUTO-DIAGNOSTICÁVEL: sem isto
+ * o utilizador lê "template inexistente" e não sabe QUAL template nem em que
+ * língua foi tentado (foi exactamente o que aconteceu no broadcast 8).
+ */
+export interface MetaErrorContext {
+  to?: string;
+  templateName?: string;
+  languageCode?: string;
+  paramCount?: number;
+}
+
 const GRAPH_BASE = "https://graph.facebook.com";
 const MAX_ATTEMPTS = 2; // 1 tentativa + 1 retry
 
-/** Mensagens legíveis para os códigos de erro Meta mais frequentes. */
+/** Mensagens legíveis para os códigos de erro Meta sem contexto adicional. */
 const META_ERROR_HINTS: Record<number, string> = {
-  131026: "O número não tem WhatsApp ou não pode receber mensagens.",
   131047: "Janela de 24h fechada — é preciso um template para reabrir a conversa.",
-  132000: "Template inválido: o número de parâmetros não corresponde ao aprovado.",
-  132001: "Template inexistente ou ainda não aprovado.",
   130429: "Limite de envio (rate limit) atingido — demasiadas mensagens em pouco tempo.",
+  131031: "Conta WhatsApp Business suspensa ou restringida pela Meta.",
+  133010: "Número do remetente não registado na Cloud API (WHATSAPP_PHONE_NUMBER_ID errado?).",
   190: "Token de acesso expirado ou inválido.",
+  368: "Envio bloqueado temporariamente pela Meta (violação de políticas).",
 };
+
+function quoted(value: string | undefined, fallback: string): string {
+  return value ? `"${value}"` : fallback;
+}
+
+/**
+ * Traduz um erro da Graph API para PT, com o contexto do envio embutido.
+ *
+ * PURA (sem I/O) — é o núcleo testável do mapeamento de erros. Devolve já a
+ * mensagem final que vai para a UI e para `whatsapp_messages.errorDetail`,
+ * incluindo o código Meta e, quando existe, o `error_data.details` (o campo
+ * onde a Meta explica de facto o que falhou).
+ */
+export function describeMetaError(
+  code: number | undefined,
+  metaErr: any,
+  ctx?: MetaErrorContext,
+): string {
+  const templateRef = quoted(ctx?.templateName, "o template");
+  const langRef = quoted(ctx?.languageCode, "a língua indicada");
+  const toRef = ctx?.to ? ` ${ctx.to}` : "";
+
+  let base: string | undefined;
+  switch (code) {
+    case 131030:
+      // WABA em modo de desenvolvimento: só entrega a números da lista de teste.
+      base =
+        `O número${toRef} não está na lista de destinatários permitidos da app Meta ` +
+        `(a conta WhatsApp ainda está em modo de desenvolvimento). ` +
+        `Adiciona o número em Meta for Developers → WhatsApp → API Setup → "To" (allowed recipients), ` +
+        `ou passa a conta para produção com um número verificado.`;
+      break;
+    case 132001:
+      base =
+        `Template ${templateRef} não existe ou não está aprovado na língua ${langRef}. ` +
+        `Confirma no WhatsApp Manager o nome EXATO e a língua da tradução ` +
+        `(pt_PT, pt_BR e pt são traduções diferentes para a Meta).`;
+      break;
+    case 132000:
+      base =
+        `Template ${templateRef} (${ctx?.languageCode ?? "?"}): o número de parâmetros enviados ` +
+        `(${ctx?.paramCount ?? "?"}) não corresponde ao aprovado. ` +
+        `Confirma quantos {{n}} tem o corpo do template e se ele tem (ou não) botão com link.`;
+      break;
+    case 132005:
+      base = `Template ${templateRef}: um dos parâmetros é demasiado longo para o aprovado.`;
+      break;
+    case 132012:
+      base = `Template ${templateRef}: formato de parâmetro inválido (quebras de linha, tabs ou espaços a mais).`;
+      break;
+    case 131026:
+      base = `O número${toRef} não tem WhatsApp ou não pode receber mensagens.`;
+      break;
+    case 131009:
+      base = `Parâmetro inválido no envio para${toRef || " o destinatário"} (número mal formado?).`;
+      break;
+    default:
+      base = code != null ? META_ERROR_HINTS[code] : undefined;
+  }
+
+  const parts: string[] = [base || metaErr?.message || "Falha no envio."];
+  const details: string | undefined = metaErr?.error_data?.details;
+  // Só acrescenta o detalhe da Meta se trouxer informação nova (evita repetir
+  // a mesma frase duas vezes quando não temos hint próprio).
+  if (details && !parts[0].includes(details)) parts.push(`Detalhe Meta: ${details}`);
+  const suffix = Number.isFinite(code) ? ` (código ${code})` : "";
+  return parts.join(" — ") + suffix;
+}
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -42,7 +122,10 @@ function toRecipient(toE164: string): string {
 /**
  * POST genérico com retry. Interno — os exports públicos montam o payload.
  */
-async function postMessage(payload: Record<string, unknown>): Promise<WhatsappSendResult> {
+async function postMessage(
+  payload: Record<string, unknown>,
+  ctx?: MetaErrorContext,
+): Promise<WhatsappSendResult> {
   const token = process.env.WHATSAPP_TOKEN;
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
   if (!token || !phoneNumberId) {
@@ -76,10 +159,11 @@ async function postMessage(payload: Record<string, unknown>): Promise<WhatsappSe
       // Erro HTTP — extrai o erro estruturado da Meta.
       const errBody = (await resp.json().catch(() => ({}))) as any;
       const metaErr = errBody?.error;
-      const code = Number(metaErr?.code);
-      const hint = Number.isFinite(code) ? META_ERROR_HINTS[code] : undefined;
-      const base = hint || metaErr?.message || `HTTP ${resp.status}`;
-      const detail = Number.isFinite(code) ? `${base} (código ${code})` : base;
+      const rawCode = Number(metaErr?.code);
+      const code = Number.isFinite(rawCode) ? rawCode : undefined;
+      const detail = metaErr
+        ? describeMetaError(code, metaErr, ctx)
+        : `HTTP ${resp.status}`;
 
       // Retry só em rate limit / erro do servidor.
       if ((resp.status === 429 || resp.status >= 500) && attempt < MAX_ATTEMPTS) {
@@ -92,7 +176,7 @@ async function postMessage(payload: Record<string, unknown>): Promise<WhatsappSe
       }
 
       console.warn(`[WhatsApp] Envio falhou (HTTP ${resp.status}): ${detail}`);
-      return { ok: false, error: detail, code: Number.isFinite(code) ? code : undefined };
+      return { ok: false, error: detail, code };
     } catch (err: any) {
       lastError = err?.message || String(err);
       if (attempt < MAX_ATTEMPTS) {
@@ -128,7 +212,21 @@ export async function sendTemplateMessage(
       ...(components && components.length ? { components } : {}),
     },
   };
-  return postMessage(payload);
+  return postMessage(payload, {
+    to: toE164,
+    templateName,
+    languageCode,
+    paramCount: countBodyParams(components),
+  });
+}
+
+/** Quantos parâmetros de body vão no envio (para a mensagem de erro do 132000). */
+function countBodyParams(components?: unknown[]): number {
+  if (!components) return 0;
+  for (const c of components as any[]) {
+    if (c?.type === "body") return Array.isArray(c.parameters) ? c.parameters.length : 0;
+  }
+  return 0;
 }
 
 /**

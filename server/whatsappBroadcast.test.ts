@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveRecipients } from "./whatsappBroadcast";
+import { buildBodyParams, resolveRecipients } from "./whatsappBroadcast";
 import type { ActiveExtra } from "./extrasAvailability";
 
 function extra(id: number, fullName: string, phone: string | null): ActiveExtra {
@@ -46,5 +46,32 @@ describe("resolveRecipients", () => {
   it("um subset sem números válidos resolve para 0 válidos", () => {
     const out = resolveRecipients(EXTRAS, [3, 4]);
     expect(out.filter(r => r.phoneE164 !== null)).toHaveLength(0);
+  });
+});
+
+describe("buildBodyParams", () => {
+  it("{{1}} é o PRIMEIRO nome do destinatário e {{2}} o texto partilhado", () => {
+    expect(buildBodyParams("Ana Maria Silva", "semana de 11/08")).toEqual(["Ana", "semana de 11/08"]);
+  });
+
+  it("sem {{2}} envia só um parâmetro (template de 1 param não pode receber 2)", () => {
+    expect(buildBodyParams("Bruno Costa", null)).toEqual(["Bruno"]);
+    expect(buildBodyParams("Bruno Costa", "   ")).toEqual(["Bruno"]);
+  });
+
+  it("cai em 'Teste' quando não há nome utilizável", () => {
+    expect(buildBodyParams(null, "sexta à noite")).toEqual(["Teste", "sexta à noite"]);
+    expect(buildBodyParams("   ", null)).toEqual(["Teste"]);
+  });
+
+  it("limpa quebras de linha, tabs e espaços a mais (a Meta rejeita-os)", () => {
+    expect(buildBodyParams("  João\tPedro ", "semana\nde 11 a   17")).toEqual([
+      "João",
+      "semana de 11 a 17",
+    ]);
+  });
+
+  it("nunca devolve mais do que 2 parâmetros", () => {
+    expect(buildBodyParams("Ana", "x")).toHaveLength(2);
   });
 });

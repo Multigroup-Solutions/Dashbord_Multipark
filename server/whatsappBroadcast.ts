@@ -14,13 +14,23 @@ import { eq, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { whatsappBroadcasts, whatsappConversations, whatsappMessages } from "../drizzle/schema";
 import { normalizePhoneE164 } from "../shared/phone";
-import { listActiveEmployeesByIds, listActiveExtras, type ActiveExtra } from "./extrasAvailability";
+import {
+  findActiveEmployeeByPhoneE164,
+  listActiveEmployeesByIds,
+  listActiveExtras,
+  type ActiveExtra,
+} from "./extrasAvailability";
 import { sendTemplateMessage } from "./whatsapp";
 import { runConcurrent } from "./_core/concurrency";
 import { issueAvailabilityFormToken } from "./availabilityFormToken";
+import {
+  DEFAULT_TEMPLATE_LANGUAGE,
+  UNKNOWN_RECIPIENT_NAME,
+  firstNameOf,
+  sanitizeTemplateParam,
+} from "../shared/whatsappTemplate";
 
 const BROADCAST_CONCURRENCY = 4;
-const DEFAULT_LANGUAGE = "pt_PT";
 
 export type RecipientStatus = "sent" | "failed" | "invalid_phone";
 
@@ -51,9 +61,21 @@ export interface BroadcastSummary {
 export interface SendBroadcastOptions {
   templateName: string;
   languageCode?: string;
-  templateParams?: string[];
+  /**
+   * Valor partilhado do {{2}} do body (ex.: "semana de 11/08" ou "sexta à
+   * noite"). O {{1}} NUNCA vem daqui — é sempre o nome do destinatário,
+   * resolvido por destinatário no servidor.
+   */
+  bodyParam2?: string | null;
+  /**
+   * Só quando o template TEM um botão "Visit website" com URL dinâmico: injeta
+   * o token single-use do formulário externo como {{1}} do botão (Fase 4).
+   * Default OFF — mandar um componente de botão para um template sem botão faz
+   * a Meta rejeitar o envio inteiro (132000/100).
+   */
+  includeFormLink?: boolean;
   employeeIds?: number[] | null; // subset; se vazio/null → todos os extras ativos
-  weekStart?: string | null; // YYYY-MM-DD (contexto, opcional)
+  weekStart?: string | null; // YYYY-MM-DD (contexto; obrigatório p/ includeFormLink)
   note?: string | null;
   testPhone?: string | null; // modo teste: envia SÓ a este número
   createdById?: number | null;
@@ -83,7 +105,24 @@ export function resolveRecipients(
   });
 }
 
-/** Componentes do template WhatsApp a partir de parâmetros de texto do body. */
+/**
+ * Parâmetros do body para UM destinatário (PURA — núcleo testável).
+ *
+ *   {{1}} = nome do destinatário (primeiro nome; fallback "Teste" quando é um
+ *           número solto que não bate com nenhuma ficha)
+ *   {{2}} = texto partilhado escrito no dialog (semana/dia)
+ *
+ * O {{2}} só entra quando foi preenchido: um template com um único {{1}} tem de
+ * receber exactamente 1 parâmetro, senão a Meta devolve 132000.
+ */
+export function buildBodyParams(recipientName: string | null, bodyParam2?: string | null): string[] {
+  const name = firstNameOf(recipientName) ?? UNKNOWN_RECIPIENT_NAME;
+  const params = [name];
+  const second = bodyParam2 ? sanitizeTemplateParam(bodyParam2) : "";
+  if (second) params.push(second);
+  return params;
+}
+
 /**
  * Componentes do template: parâmetros do body (opcional) + botão URL dinâmico
  * (opcional) que injeta o token do formulário. Para o botão URL funcionar, o
@@ -197,6 +236,61 @@ async function sendOne(
     : { ...r, status: "failed", error: res.error };
 }
 
+/** Config de envio partilhada pelos dois modos (teste e normal). */
+interface DispatchConfig {
+  templateName: string;
+  languageCode: string;
+  bodyParam2: string | null;
+  includeFormLink: boolean;
+  weekStart: string | null;
+  broadcastId: number;
+  sentById: number | null;
+}
+
+/**
+ * Prepara e envia a UM destinatário: monta o {{1}} com o nome DESTE
+ * destinatário, junta o {{2}} partilhado e, quando pedido, emite o token
+ * single-use do formulário para o botão URL.
+ *
+ * Único ponto de envio dos dois modos — o modo teste deixou de ter um caminho
+ * próprio para não voltar a divergir do envio real (era assim que um envio de
+ * teste podia passar e o real falhar).
+ */
+async function dispatchOne(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  r: ResolvedRecipient,
+  cfg: DispatchConfig,
+): Promise<BroadcastRecipient> {
+  const params = buildBodyParams(r.name, cfg.bodyParam2);
+  let buttonToken: string | undefined;
+
+  if (cfg.includeFormLink && cfg.weekStart && r.employeeId != null) {
+    try {
+      const issued = await issueAvailabilityFormToken(db, r.employeeId, cfg.weekStart);
+      buttonToken = issued.token;
+    } catch (err: any) {
+      // Falha a emitir token → regista como falha do destinatário SEM enviar
+      // (o link seria inútil e o template tem o botão obrigatório).
+      return { ...r, status: "failed", error: `Falha ao gerar link do formulário: ${err?.message || err}` };
+    }
+  } else if (cfg.includeFormLink && cfg.weekStart && r.employeeId == null) {
+    // Número solto (ex.: teste) sem ficha: sem employeeId não há token possível.
+    return {
+      ...r,
+      status: "failed",
+      error: "Link do formulário pedido mas o número não corresponde a nenhum colaborador — sem token para o botão.",
+    };
+  }
+
+  return sendOne(db, r, {
+    templateName: cfg.templateName,
+    languageCode: cfg.languageCode,
+    components: buildComponents(params, buttonToken),
+    broadcastId: cfg.broadcastId,
+    sentById: cfg.sentById,
+  });
+}
+
 async function updateBroadcastCounts(
   db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
   broadcastId: number,
@@ -236,8 +330,13 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
 
   const templateName = opts.templateName.trim();
   if (!templateName) throw new Error("Nome do template em falta.");
-  const languageCode = (opts.languageCode || DEFAULT_LANGUAGE).trim();
-  const components = buildComponents(opts.templateParams);
+  const languageCode = (opts.languageCode || DEFAULT_TEMPLATE_LANGUAGE).trim();
+  const bodyParam2 = opts.bodyParam2?.trim() || null;
+  const includeFormLink = opts.includeFormLink === true;
+  const weekStart = opts.weekStart ?? null;
+  if (includeFormLink && !weekStart) {
+    throw new Error("Link do formulário pedido sem semana selecionada — escolhe a semana antes de enviar.");
+  }
 
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível.");
@@ -251,7 +350,7 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
       templateName,
       note,
       createdById: opts.createdById ?? null,
-      weekStart: opts.weekStart ?? null,
+      weekStart,
       totalCount: 1,
     });
 
@@ -264,15 +363,24 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
         failed: 0,
         invalidPhone: 1,
         recipients: [
-          { employeeId: null, name: "Teste", phone: rawTest, phoneE164: null, status: "invalid_phone", error: "Número de teste inválido" },
+          { employeeId: null, name: UNKNOWN_RECIPIENT_NAME, phone: rawTest, phoneE164: null, status: "invalid_phone", error: "Número de teste inválido" },
         ],
       };
     }
 
-    const recipient = await sendOne(
+    // Se o número de teste for de um colaborador ativo, o {{1}} leva o nome
+    // REAL dele (e a conversa do inbox nasce associada à ficha) — assim o teste
+    // é mesmo representativo do envio real.
+    const match = await findActiveEmployeeByPhoneE164(phoneE164);
+    const recipient = await dispatchOne(
       db,
-      { employeeId: null, name: "Teste", phone: rawTest, phoneE164 },
-      { templateName, languageCode, components, broadcastId, sentById: opts.createdById ?? null },
+      {
+        employeeId: match?.id ?? null,
+        name: match?.fullName ?? UNKNOWN_RECIPIENT_NAME,
+        phone: rawTest,
+        phoneE164,
+      },
+      { templateName, languageCode, bodyParam2, includeFormLink, weekStart, broadcastId, sentById: opts.createdById ?? null },
     );
     const sent = recipient.status === "sent" ? 1 : 0;
     await updateBroadcastCounts(db, broadcastId, { sentCount: sent, failedCount: 1 - sent });
@@ -296,7 +404,7 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
     templateName,
     note: opts.note ?? null,
     createdById: opts.createdById ?? null,
-    weekStart: opts.weekStart ?? null,
+    weekStart,
     totalCount: resolved.length,
   });
 
@@ -315,25 +423,12 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
       };
       return;
     }
-    // Token single-use do formulário externo, por destinatário, quando há
-    // weekStart e o destinatário é um extra registado. Injetado no botão URL
-    // do template ({{1}}). Sem weekStart → template sem link (só notificação).
-    let recipientComponents = components;
-    if (opts.weekStart && r.employeeId != null) {
-      try {
-        const issued = await issueAvailabilityFormToken(db, r.employeeId, opts.weekStart);
-        recipientComponents = buildComponents(opts.templateParams, issued.token);
-      } catch (err: any) {
-        // Falha a emitir token (ex.: secret em falta) → regista como falha do
-        // destinatário SEM enviar (o link seria inútil).
-        recipients[i] = { ...r, status: "failed", error: `Falha ao gerar link do formulário: ${err?.message || err}` };
-        return;
-      }
-    }
-    recipients[i] = await sendOne(db, r, {
+    recipients[i] = await dispatchOne(db, r, {
       templateName,
       languageCode,
-      components: recipientComponents,
+      bodyParam2,
+      includeFormLink,
+      weekStart,
       broadcastId,
       sentById: opts.createdById ?? null,
     });

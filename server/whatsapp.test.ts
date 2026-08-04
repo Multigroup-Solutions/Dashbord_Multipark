@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import crypto from "crypto";
 import { normalizePhoneE164 } from "../shared/phone";
 import { verifyMetaSignature, isValidWebhookVerification } from "./whatsappWebhook";
+import { describeMetaError } from "./whatsapp";
 
 describe("normalizePhoneE164", () => {
   it("mantém números já em +E.164", () => {
@@ -101,5 +102,57 @@ describe("isValidWebhookVerification", () => {
 
   it("rejeita quando não há verify token configurado", () => {
     expect(isValidWebhookVerification("subscribe", "my-verify-token", undefined)).toBe(false);
+  });
+});
+
+// Os dois erros reais do broadcast 8 (envio de 2 destinatários) — a mensagem
+// tem de dizer o que fazer E qual template/língua foi tentado, senão o
+// utilizador não consegue diagnosticar sozinho.
+describe("describeMetaError", () => {
+  const ctx = {
+    to: "+351935625800",
+    templateName: "disponibilidade_extras",
+    languageCode: "pt_PT",
+    paramCount: 2,
+  };
+
+  it("131030: explica a lista de destinatários permitidos e como resolver", () => {
+    const msg = describeMetaError(131030, { code: 131030, message: "Recipient phone number not in allowed list" }, ctx);
+    expect(msg).toContain("+351935625800");
+    expect(msg).toContain("destinatários permitidos");
+    expect(msg).toContain("API Setup");
+    expect(msg).toContain("(código 131030)");
+  });
+
+  it("132001: nomeia o template E a língua tentados", () => {
+    const msg = describeMetaError(132001, { code: 132001, message: "Template name does not exist" }, ctx);
+    expect(msg).toContain('"disponibilidade_extras"');
+    expect(msg).toContain('"pt_PT"');
+    expect(msg).toContain("pt_BR");
+    expect(msg).toContain("(código 132001)");
+  });
+
+  it("132000: diz quantos parâmetros foram enviados", () => {
+    const msg = describeMetaError(132000, { code: 132000 }, ctx);
+    expect(msg).toContain("(2)");
+    expect(msg).toContain('"disponibilidade_extras"');
+  });
+
+  it("acrescenta o error_data.details da Meta quando existe", () => {
+    const msg = describeMetaError(132001, {
+      code: 132001,
+      message: "Template name does not exist",
+      error_data: { details: "template name (disponibilidade_extras) does not exist in pt_PT" },
+    }, ctx);
+    expect(msg).toContain("Detalhe Meta: template name (disponibilidade_extras) does not exist in pt_PT");
+  });
+
+  it("códigos desconhecidos caem na mensagem da própria Meta", () => {
+    const msg = describeMetaError(999999, { code: 999999, message: "Something odd" }, ctx);
+    expect(msg).toBe("Something odd (código 999999)");
+  });
+
+  it("sem código nem mensagem devolve um fallback legível e sem sufixo", () => {
+    expect(describeMetaError(undefined, {})).toBe("Falha no envio.");
   });
 });

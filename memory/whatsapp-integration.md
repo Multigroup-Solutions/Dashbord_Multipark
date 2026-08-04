@@ -5,6 +5,10 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 
 ## Related
 - `sync-runners-topology.md` — topologia de execução (Railway `setInterval` vs Vercel/GitHub Actions cron). Relevante porque o webhook e o broadcast correm no processo Railway; o `runConcurrent` reutilizado vem do `multiparkBookingSync.ts`.
+- `employee-city-derivation.md` — **2026-08-04**: a tabela de extras ganhou filtro
+  por cidade (Lisboa/Porto/Faro, cidade DERIVADA, sem coluna nova). O alvo do
+  broadcast ("a todos") passou a ser o conjunto visível JÁ FILTRADO — a Decisão 1
+  mantém-se, mudou outra vez o conjunto visível.
 - `identity-by-email.md` — **2026-07-31, altera partes desta integração**: (1) `normalizePhoneE164` passou a tolerar texto livre (anotações, dois números, invisíveis) — os casos que marcavam números válidos como inválidos; (2) o "tem número válido?" passou a vir do SERVIDOR (`getWeekOverview.phoneE164`), a UI já não recalcula; (3) a tabela do `AvailabilitySection` mostra TODOS os extras ativos (o filtro `availableDays > 0` deixava a página vazia) + quem respondeu sem ter função "extra", e o `sendBroadcast` vai buscar esses à ficha para não os descartar em silêncio. A Decisão 1 ("a todos" = conjunto visível) mantém-se — mudou o conjunto visível.
 
 ## Terreno (mapa da investigação inicial)
@@ -42,6 +46,60 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 5. **Confirmados**: default **+351** na normalização; **nome de template configurável no dialog** (desenvolver com placeholder até os templates estarem APPROVED); **sem fila persistente** → `runConcurrent(4)` + **1 retry**, MAS deixar comentário no código do broadcast a assinalar que um restart do Railway a meio **perde os envios em curso**.
 
 ## Changelog
+
+### 2026-08-04 — Pós-teste real do Jorge: diagnóstico de erros Meta, template por defeito, {{1}} automático
+**Type**: fix + feature
+**Scope**: `shared/whatsappTemplate.ts` (novo), `server/whatsapp.ts`, `server/whatsappBroadcast.ts`,
+`server/extrasAvailability.ts`, `server/routers.ts`, `client/src/pages/ExtrasDiaPage.tsx`,
+`client/src/pages/WhatsAppInboxPage.tsx`, `server/whatsapp.test.ts`, `server/whatsappBroadcast.test.ts`
+**Trigger**: primeiro envio real (broadcast 8, 2 destinatários) falhou nos dois:
+`131030` (Jorge) e `132001` (Rafael). Diagnóstico: **nenhum dos dois é bug nosso**, mas a mensagem
+de erro não dizia o que fazer nem QUAL template/língua tinham sido tentados.
+**What**:
+1. **Erros Meta auto-diagnosticáveis** — NOVA `describeMetaError(code, metaErr, ctx)` (PURA, exportada,
+   6 testes) substitui o mapa cego `META_ERROR_HINTS`. `postMessage` passou a receber um
+   `MetaErrorContext {to, templateName, languageCode, paramCount}` montado por `sendTemplateMessage`.
+   - `131030` → diz o NÚMERO e manda adicioná-lo em *Meta for Developers → WhatsApp → API Setup → "To"*
+     (ou passar a conta a produção). Antes: mensagem crua da Meta em inglês.
+   - `132001` → diz o NOME do template e a LÍNGUA tentados + avisa que `pt_PT ≠ pt_BR ≠ pt`.
+   - `132000` → diz quantos parâmetros foram enviados (era o suspeito nº 1 do botão URL).
+   - Novos: 132005, 132012, 131009, 131031, 133010, 368. O `error_data.details` da Meta (onde ela
+     explica mesmo o que falhou) passou a ser anexado — antes era deitado fora.
+   - O resultado por destinatário na UI não mudou de forma (não regrediu); só o texto ficou útil.
+2. **Template por defeito** — `shared/whatsappTemplate.ts` (novo, partilhado cliente+servidor):
+   `AVAILABILITY_TEMPLATE_NAME = "disponibilidade_extras"`, `DEFAULT_TEMPLATE_LANGUAGE = "pt_PT"`,
+   `UNKNOWN_RECIPIENT_NAME`, `sanitizeTemplateParam`, `firstNameOf`. Os dois dialogs (ExtrasDia e
+   Inbox) abrem já preenchidos, continuam editáveis. O servidor usa a MESMA constante de língua
+   (antes tinha um `DEFAULT_LANGUAGE` local — duas fontes de verdade).
+3. **{{1}} automático por destinatário, {{2}} manual** — **CONTRATO MUDOU**: `templateParams: string[]`
+   SAIU; entrou `bodyParam2: string | null`. NOVA `buildBodyParams(name, param2)` (PURA, 5 testes):
+   `{{1}}` = PRIMEIRO nome do destinatário (mesmo critério do email "Olá João"), `{{2}}` = texto do
+   dialog, igual para todos. Sem `{{2}}` envia-se só 1 parâmetro (template de 1 param não pode
+   receber 2). Parâmetros são sanitizados (a Meta rejeita `\n`, tabs e 5+ espaços).
+   - **Modo teste**: NOVA `findActiveEmployeeByPhoneE164` (match em memória — `employees.phone` é
+     texto livre, não é comparável em SQL) dá o nome REAL ao `{{1}}` quando o número de teste é de um
+     colaborador ativo (e a conversa do inbox nasce associada à ficha); senão `"Teste"`.
+   - NOVA `dispatchOne` é agora o ÚNICO ponto de envio dos dois modos — o modo teste já não tem
+     caminho próprio (era assim que um teste podia passar e o envio real falhar).
+4. **Botão do formulário passou a OPT-IN** (`includeFormLink`, default **false**) — antes, com
+   `weekStart` preenchido (que a página põe SEMPRE), o broadcast injetava um componente de botão URL
+   em TODOS os envios. Num template SEM botão "Visit website" — que é o caso do `disponibilidade_extras`
+   do Jorge — isso faz a Meta rejeitar o envio. Checkbox no dialog explica quando ligar. Ligado sem
+   semana → erro claro; ligado num número sem ficha → falha explicada (não há employeeId para o token).
+**Why**: depois de o Jorge aprovar o template e pôr os números na allowed list, não pode sobrar
+nenhum obstáculo de código; e quando sobrar algum, a mensagem tem de identificar a causa sozinha.
+**Notes / decisões / gotchas**:
+- ⚠️ **Mudança de comportamento**: agora vai SEMPRE pelo menos 1 parâmetro de body ({{1}}). Um template
+  com ZERO parâmetros passa a falhar com 132000 (mensagem já diz a contagem). Aceite — o requisito é o
+  {{1}} automático. Solução definitiva seria ler os metadados do template (`GET /{waba}/message_templates`)
+  e validar a contagem ANTES de enviar: **follow-up registado**.
+- ⚠️ **`includeFormLink` default OFF desliga o fluxo da Fase 4** enquanto o template não tiver botão URL.
+  É deliberado: o template que existe hoje não tem botão. Ligar a checkbox restaura a Fase 4 tal e qual.
+- Os dois erros do broadcast 8 são de CONFIGURAÇÃO na Meta, não de código (ver "PASSOS MANUAIS NA META").
+- **Gates**: `pnpm run check` (tsc) LIMPO exit 0. Testes **264 passam** (eram 243) — +21 novos
+  (6 `describeMetaError`, 5 `buildBodyParams`, 10 de cidade). As **7 falhas continuam as MESMAS
+  pré-existentes de ambiente** (users.create sem DATABASE_URL, zello ×2, multipark ×3, auth.logout).
+- Sem migração. Sem commits git (por instrução).
 
 ### 2026-07-09 — Fase 0 + Fase 1
 **Type**: feature
@@ -121,6 +179,24 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 - **Gates**: `pnpm run check` (tsc) LIMPO exit 0. Testes: whatsapp 16 + whatsappBroadcast 5 + whatsappInbound 15 + whatsappInbox 9 + **availabilityForm 18** = **63/63 verdes**. Falha pré-existente `auth.logout.test.ts` persiste (não relacionada).
 - **Sem commits git** (por instrução).
 
+## PASSOS MANUAIS NA META (o que o código NÃO pode resolver) — 2026-08-04
+Os dois erros do broadcast 8 resolvem-se do lado da Meta, não no código:
+- **`131030` "Recipient phone number not in allowed list"** — a app/WABA está em **modo de
+  desenvolvimento**: só entrega a números explicitamente autorizados. Meta for Developers → a app →
+  **WhatsApp → API Setup → campo "To" → Manage phone number list** → adicionar `+351935625800` (e
+  qualquer outro número de teste; cada um confirma por SMS/chamada). Alternativa definitiva: concluir
+  a verificação do negócio e usar um número de **produção** (aí entrega a qualquer número).
+- **`132001` "Template inexistente ou ainda não aprovado"** — WhatsApp Manager → **Modelos de
+  mensagem**: confirmar que existe um template com o nome EXATO `disponibilidade_extras`, com estado
+  **APPROVED** (não "Em análise"/"Rejeitado") e com a tradução em **Português (Portugal) = pt_PT**.
+  Se a tradução aprovada for `pt_BR` ou `pt`, ou se mudar o nome, basta corrigir o campo Língua /
+  Nome do template no dialog — ambos continuam editáveis. A mensagem de erro passa a dizer o nome e a
+  língua tentados.
+- **Corpo do template**: tem de ter exactamente `{{1}}` (nome) e `{{2}}` (semana/dia). Se tiver só
+  `{{1}}`, deixar o campo "Semana/dia" vazio.
+- **Botão com link**: só ligar a checkbox "O template tem botão com link" se o template tiver mesmo um
+  botão "Visit website" com URL dinâmico (ver secção abaixo). Caso contrário a Meta rejeita o envio.
+
 ## Como configurar o template no WhatsApp Manager (para o link do formulário)
 1. Cria um template (categoria Utility/Marketing) com o texto do pedido de disponibilidade.
 2. Adiciona um **botão "Visit website" com URL DINÂMICO**: URL = `{AVAILABILITY_FORM_URL}?token={{1}}` (o `{{1}}` TEM de ficar no fim). Ex.: `https://disponibilidade.multipark.pt?token={{1}}`.
@@ -141,6 +217,12 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 - Verificar tudo via `GET /api/health` (booleanos de presença).
 
 ## PENDENTES CONSOLIDADOS (pós-Fase 4)
+- **Validar a contagem de parâmetros ANTES de enviar** (2026-08-04): ler `GET /{wabaId}/message_templates`
+  e comparar com os parâmetros montados — evitava o 132000 e permitia detetar automaticamente se o
+  template tem botão URL (tornando a checkbox `includeFormLink` desnecessária). Precisa da env
+  `WHATSAPP_WABA_ID`, que ainda não existe.
+- **Template sem parâmetros deixou de ser suportado** (2026-08-04): vai sempre {{1}}. Só relevante se
+  alguém criar um template estático.
 - **UI "extras com número inválido"**: parcialmente resolvido em 2026-07-31 — a tabela distingue "sem número" de "número não reconhecido" e mostra o valor em bruto no tooltip (ver `identity-by-email.md`). Falta a correção em massa a partir de `whatsapp_broadcasts.invalidEmployeeIds`.
 - **Número de produção Meta**: enquanto for número de teste, entrega só a ~250 destinos verificados/24h; broadcast em escala fica por validar (Fase 2 em modo dev).
 - **Media no inbox** (Fase 3 adiado): mensagens não-texto guardam `[imagem]`/caption; falta download/preview (fetch autenticado à Graph + storage).
