@@ -1,5 +1,6 @@
 import { trpc } from "@/lib/trpc";
 import { fileHref } from "@/lib/fileHref";
+import CaseMessageList from "@/components/CaseMessageList";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { filterBookingHistory } from "@/lib/bookingHistory";
 import { REPLY_TEMPLATES } from "@/lib/replyTemplates";
@@ -784,25 +785,12 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
             <TabsContent value="messages" className="space-y-4">
               <Card>
                 <CardContent className="p-4 space-y-4">
-                  <ScrollArea className="max-h-[50vh]">
-                    <div className="space-y-3">
-                      {messages.length === 0 && (
-                        <p className="text-sm text-muted-foreground text-center py-8">Sem mensagens</p>
-                      )}
-                      {messages.map((m: any) => (
-                        <div key={m.id} className={`p-3 rounded-lg text-sm ${m.isInternal ? "bg-amber-50 border border-amber-200" : "bg-muted"}`}>
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="font-medium">{m.userName}</span>
-                            <div className="flex items-center gap-2">
-                              {m.isInternal && <Badge variant="outline" className="text-[10px]">Interna</Badge>}
-                              <span className="text-[10px] text-muted-foreground">{fmtPTDateTime(m.createdAt)}</span>
-                            </div>
-                          </div>
-                          <p>{m.message}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </ScrollArea>
+                  <CaseMessageList
+                    messages={(messages as any[]).map((m: any) => ({
+                      id: m.id, author: m.userName, createdAt: m.createdAt,
+                      message: m.message, isInternal: m.isInternal,
+                    }))}
+                  />
                   <Separator />
                   <div className="flex gap-2">
                     <Input
