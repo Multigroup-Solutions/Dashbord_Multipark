@@ -155,4 +155,23 @@ describe("describeMetaError", () => {
   it("sem código nem mensagem devolve um fallback legível e sem sufixo", () => {
     expect(describeMetaError(undefined, {})).toBe("Falha no envio.");
   });
+
+  // Erro real do 2º teste do Jorge: template pt_BR criado com parâmetros
+  // NOMEADOS ({{nome}}/{{semana}}) e envio a mandar posicionais.
+  it("100 com detalhe 'Parameter name is missing' explica os parâmetros nomeados", () => {
+    const msg = describeMetaError(100, {
+      code: 100,
+      message: "Invalid parameter",
+      error_data: { details: "Parameter name is missing or empty" },
+    }, { ...ctx, languageCode: "pt_BR" });
+    expect(msg).toContain("parâmetros NOMEADOS");
+    expect(msg).toContain('"disponibilidade_extras"');
+    expect(msg).toContain("WHATSAPP_WABA_ID");
+    expect(msg).toContain("(código 100)");
+  });
+
+  it("100 sem esse detalhe mantém a mensagem genérica da Meta", () => {
+    const msg = describeMetaError(100, { code: 100, message: "Invalid parameter" }, ctx);
+    expect(msg).toBe("Invalid parameter (código 100)");
+  });
 });

@@ -47,6 +47,63 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 
 ## Changelog
 
+### 2026-08-04 (b) — Envio guiado pelos METADADOS do template (fim do erro 100 / parâmetros nomeados)
+**Type**: fix + feature
+**Scope**: `server/whatsappTemplateMeta.ts` (novo), `server/whatsappTemplateMeta.test.ts` (novo),
+`server/whatsappBroadcast.ts`, `server/whatsapp.ts`, `server/whatsapp.test.ts`,
+`server/_core/api-entry.ts`, `.env.example`, `client/src/pages/ExtrasDiaPage.tsx`
+**Trigger**: 2º teste real — `+351963687459` (employeeId 374) falhou com
+`(#100) Invalid parameter — Parameter name is missing or empty`. Causa: o
+`disponibilidade_extras` (aprovado em **pt_BR**, ver commit `aadf91f`) foi criado no WhatsApp Manager
+com parâmetros **NOMEADOS** (`{{nome}}`, `{{semana}}`) e a Cloud API exige `parameter_name` em cada
+parâmetro do body; nós mandávamos posicionais. Pedido do Jorge: "que nunca mais falhe".
+**What** — o envio deixou de ASSUMIR o formato e passou a LER o template:
+1. **NOVO `server/whatsappTemplateMeta.ts`** — `GET /{wabaId}/message_templates?name=…`, **uma
+   chamada por broadcast**, cache em memória 5 min por `wabaId|nome` (a resposta traz todas as
+   línguas do mesmo nome). Núcleo 100% PURO e testado; o I/O **nunca lança**.
+   - **WABA id**: env NOVA `WHATSAPP_WABA_ID` (determinística, preferida); sem ela, tenta
+     `/debug_token` → `granular_scopes` (prefere `whatsapp_business_management`, senão
+     `…_messaging`). **0 ou >1 ids = ambíguo → não adivinha**, desliga a inspeção e diz para definir
+     a env. Resultado da resolução também cacheado 5 min (inclui as falhas, para não martelar).
+2. **Payload adaptado ao template** — `analyzeTemplateEntry` extrai `parameter_format`
+   (com inferência pelo texto do body quando a Meta não o declara), os **nomes dos parâmetros por
+   ordem de aparição no texto do BODY** (`example.body_text_named_params` só como recurso), a
+   contagem e a existência de **botão URL dinâmico** (+ o seu **índice real** dentro do bloco
+   BUTTONS — antes assumíamos `index: "0"`, o que estaria errado com um botão de telefone à frente).
+   `buildBodyComponent`: NAMED → `{type:"text", parameter_name, text}`; POSITIONAL → como antes;
+   **0 parâmetros → nenhum componente de body** (regressão da batch anterior corrigida);
+   1 parâmetro → só o nome; 2 → nome + "Semana/dia". O mapeamento continua semântico-por-posição.
+3. **Validação PRÉ-ENVIO** (só quando há metadados) — falha ANTES de criar o broadcast e antes de
+   gastar uma chamada: nome inexistente; língua inexistente → **lista as línguas que EXISTEM**
+   ("está aprovado em: pt_BR" — é isto que mata o 132001 cego); estado ≠ APPROVED → diz o estado;
+   >2 parâmetros → recusa e lista-os; 2 parâmetros com "Semana/dia" vazio → diz quais são; botão
+   dinâmico sem semana escolhida → pede a semana.
+4. **Metadados MANDAM sobre a checkbox `includeFormLink`** — o token do formulário passa a ser
+   injetado se (e só se) o template tiver mesmo botão URL dinâmico. A checkbox fica como
+   **fallback** para quando a inspeção não está disponível; texto de ajuda atualizado
+   ("normalmente não é preciso mexer").
+5. **Fallback gracioso** — inspeção indisponível (sem permissão `whatsapp_business_management`,
+   rede, WABA ambíguo, sem token) → `console.warn` + envio com o comportamento anterior; se o envio
+   falhar, o motivo é **anexado ao erro** (`withMetaHint`) e persistido em
+   `whatsapp_messages.errorDetail` — a linha da BD e a UI contam a mesma história.
+6. **Erro 100 mapeado** — detalhe com "parameter name" → explica os parâmetros nomeados e aponta
+   para `WHATSAPP_WABA_ID`. Sem esse detalhe, mantém a mensagem genérica da Meta.
+**Why**: o formato do template é decidido no WhatsApp Manager, fora do nosso controlo — só deixa de
+falhar se o envio se adaptar ao que lá está em vez de assumir.
+**Notes / decisões / gotchas**:
+- **Ordem dos parâmetros vem do TEXTO do body**, não da lista de exemplo da Meta (é a ordem que o
+  utilizador vê; a lista de exemplo pode vir incompleta — no template do Jorge só trazia `nome`).
+- **Nome repetido no texto** (`{{nome}} … {{nome}}`) conta UMA vez — a Meta quer um valor por nome.
+- A inspeção **não é obrigatória**: sem `WHATSAPP_WABA_ID` e com um token só de messaging, tudo
+  continua a funcionar como antes (com a nota no erro). **Definir a env é o passo recomendado.**
+- `/api/health` passou a expor `WHATSAPP_WABA_ID` (booleano de presença, padrão da casa).
+- **Gates**: `tsc --noEmit` LIMPO. **+34 testes** (32 `whatsappTemplateMeta` + 2 do erro 100);
+  os 7 ficheiros WhatsApp/extras dão **118/118**. Suite total **299 passam / 306**, com as **mesmas
+  7 falhas pré-existentes de ambiente** (users.create sem DATABASE_URL, zello ×2, multipark ×3,
+  auth.logout) — uma delas (zello auth, chamada de rede real) é intermitente e chegou a dar 8 num
+  dos runs. Nada nos ficheiros tocados.
+- Sem migração. **Sem commits git** (o Jorge revê e faz push).
+
 ### 2026-08-04 — Pós-teste real do Jorge: diagnóstico de erros Meta, template por defeito, {{1}} automático
 **Type**: fix + feature
 **Scope**: `shared/whatsappTemplate.ts` (novo), `server/whatsapp.ts`, `server/whatsappBroadcast.ts`,
@@ -187,15 +244,22 @@ Os dois erros do broadcast 8 resolvem-se do lado da Meta, não no código:
   qualquer outro número de teste; cada um confirma por SMS/chamada). Alternativa definitiva: concluir
   a verificação do negócio e usar um número de **produção** (aí entrega a qualquer número).
 - **`132001` "Template inexistente ou ainda não aprovado"** — WhatsApp Manager → **Modelos de
-  mensagem**: confirmar que existe um template com o nome EXATO `disponibilidade_extras`, com estado
-  **APPROVED** (não "Em análise"/"Rejeitado") e com a tradução em **Português (Portugal) = pt_PT**.
-  Se a tradução aprovada for `pt_BR` ou `pt`, ou se mudar o nome, basta corrigir o campo Língua /
-  Nome do template no dialog — ambos continuam editáveis. A mensagem de erro passa a dizer o nome e a
-  língua tentados.
-- **Corpo do template**: tem de ter exactamente `{{1}}` (nome) e `{{2}}` (semana/dia). Se tiver só
-  `{{1}}`, deixar o campo "Semana/dia" vazio.
-- **Botão com link**: só ligar a checkbox "O template tem botão com link" se o template tiver mesmo um
-  botão "Visit website" com URL dinâmico (ver secção abaixo). Caso contrário a Meta rejeita o envio.
+  mensagem**: confirmar o nome EXATO `disponibilidade_extras` e o estado **APPROVED**. A língua
+  default do código é **`pt_BR`** (é essa a tradução aprovada — confirmado 2026-08-04, commit
+  `aadf91f`). Desde 2026-08-04(b), com a inspeção ativa, o erro passa a dizer **em que línguas o
+  template EXISTE** ("está aprovado em: pt_BR").
+- **Corpo do template**: 1 ou 2 parâmetros. Podem ser **posicionais** (`{{1}}`, `{{2}}`) ou
+  **nomeados** (`{{nome}}`, `{{semana}}`) — desde 2026-08-04(b) o envio deteta o formato e adapta-se
+  sozinho. Com 2 parâmetros, o campo "Semana/dia" tem de estar preenchido (validado antes de enviar).
+- **Botão com link**: se o template tiver botão "Visit website" com URL dinâmico, o token pessoal é
+  injetado automaticamente (basta ter a semana escolhida). A checkbox no diálogo só conta quando a
+  inspeção do template não está disponível.
+- **RECOMENDADO — definir `WHATSAPP_WABA_ID`** no Railway/Vercel com o id da conta WhatsApp Business
+  (WhatsApp Manager → Definições da conta, ou Meta for Developers → WhatsApp → API Setup). É o que
+  liga a inspeção automática de forma determinística. Sem ela o código tenta descobrir o id pelo
+  token (`/debug_token`); se o token vir mais do que uma conta, a inspeção desliga-se e o envio segue
+  às cegas (com a nota anexada a qualquer erro). O token precisa também da permissão
+  **`whatsapp_business_management`** para poder LER templates.
 
 ## Como configurar o template no WhatsApp Manager (para o link do formulário)
 1. Cria um template (categoria Utility/Marketing) com o texto do pedido de disponibilidade.
@@ -217,12 +281,16 @@ Os dois erros do broadcast 8 resolvem-se do lado da Meta, não no código:
 - Verificar tudo via `GET /api/health` (booleanos de presença).
 
 ## PENDENTES CONSOLIDADOS (pós-Fase 4)
-- **Validar a contagem de parâmetros ANTES de enviar** (2026-08-04): ler `GET /{wabaId}/message_templates`
-  e comparar com os parâmetros montados — evitava o 132000 e permitia detetar automaticamente se o
-  template tem botão URL (tornando a checkbox `includeFormLink` desnecessária). Precisa da env
-  `WHATSAPP_WABA_ID`, que ainda não existe.
-- **Template sem parâmetros deixou de ser suportado** (2026-08-04): vai sempre {{1}}. Só relevante se
-  alguém criar um template estático.
+- ~~**Validar a contagem de parâmetros ANTES de enviar**~~ — **FEITO em 2026-08-04(b)**
+  (`server/whatsappTemplateMeta.ts`): lê o template, valida contagem/língua/estado e deteta o botão
+  URL. Falta só definir `WHATSAPP_WABA_ID` em produção para ser determinístico.
+- ~~**Template sem parâmetros deixou de ser suportado**~~ — **RESOLVIDO em 2026-08-04(b)**: com
+  metadados, um template de 0 parâmetros já não leva componente de body.
+- **Paginação dos templates** (2026-08-04b): o `GET …/message_templates?name=` pede `limit=50` e
+  ignora `paging.next`. Com 50+ traduções do MESMO nome (irrealista) alguma escaparia.
+- **Cache de 5 min**: alterar o template no WhatsApp Manager só é visto pelo envio até 5 min depois
+  (por processo). Aceitável; se incomodar, expor um botão "recarregar template" que limpe a cache
+  (`__clearTemplateMetaCache`).
 - **UI "extras com número inválido"**: parcialmente resolvido em 2026-07-31 — a tabela distingue "sem número" de "número não reconhecido" e mostra o valor em bruto no tooltip (ver `identity-by-email.md`). Falta a correção em massa a partir de `whatsapp_broadcasts.invalidEmployeeIds`.
 - **Número de produção Meta**: enquanto for número de teste, entrega só a ~250 destinos verificados/24h; broadcast em escala fica por validar (Fase 2 em modo dev).
 - **Media no inbox** (Fase 3 adiado): mensagens não-texto guardam `[imagem]`/caption; falta download/preview (fetch autenticado à Graph + storage).

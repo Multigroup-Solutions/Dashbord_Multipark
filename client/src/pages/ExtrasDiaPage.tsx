@@ -1916,8 +1916,9 @@ export function AvailabilitySection() {
                 <span>
                   O template tem <strong>botão com link</strong> do formulário de disponibilidade
                   <span className="block text-muted-foreground">
-                    Liga só se o template tiver um botão "Visit website" com URL dinâmico — cada extra recebe
-                    um link pessoal de uso único. Ligado num template SEM botão, a Meta rejeita o envio.
+                    Normalmente <strong>não é preciso mexer</strong>: o envio lê o template na Meta e deteta
+                    sozinho se há botão com link (e se os parâmetros são nomeados ou numerados). Esta opção
+                    só conta quando essa leitura não é possível.
                   </span>
                 </span>
               </label>

@@ -29,6 +29,13 @@ import {
   firstNameOf,
   sanitizeTemplateParam,
 } from "../shared/whatsappTemplate";
+import {
+  buildBodyComponent,
+  describeLookupFailure,
+  getTemplateMeta,
+  validateTemplateUsage,
+  type TemplateAnalysis,
+} from "./whatsappTemplateMeta";
 
 const BROADCAST_CONCURRENCY = 4;
 
@@ -124,19 +131,41 @@ export function buildBodyParams(recipientName: string | null, bodyParam2?: strin
 }
 
 /**
- * Componentes do template: parâmetros do body (opcional) + botão URL dinâmico
- * (opcional) que injeta o token do formulário. Para o botão URL funcionar, o
- * template no WhatsApp Manager tem de ter um botão do tipo "Visit website" com
- * URL dinâmico terminado em `{{1}}` (ex.: `https://form.app/disp?token={{1}}`);
- * enviamos o token como valor de `{{1}}`.
+ * Componentes do template. PURA.
+ *
+ * Com metadados do template (`analysis`), o body é montado à medida dele:
+ * parâmetros NOMEADOS levam `parameter_name` (sem isso a Meta devolve
+ * `(#100) Parameter name is missing or empty`), posicionais vão simples, e um
+ * template sem parâmetros não leva componente de body nenhum.
+ *
+ * Sem metadados (inspeção indisponível), mantém-se o comportamento antigo:
+ * body posicional com os valores que temos.
+ *
+ * O botão só é preenchido quando há token — e o token só é pedido quando o
+ * template TEM mesmo um botão com URL dinâmico.
  */
-function buildComponents(params?: string[], buttonToken?: string): unknown[] | undefined {
+export function buildComponents(opts: {
+  analysis?: TemplateAnalysis | null;
+  values: string[];
+  buttonToken?: string;
+}): unknown[] | undefined {
   const comps: unknown[] = [];
-  if (params && params.length) {
-    comps.push({ type: "body", parameters: params.map((p) => ({ type: "text", text: String(p) })) });
+  const { analysis, values, buttonToken } = opts;
+
+  if (analysis) {
+    const body = buildBodyComponent(analysis, values);
+    if (body) comps.push(body);
+  } else if (values.length) {
+    comps.push({ type: "body", parameters: values.map((p) => ({ type: "text", text: String(p) })) });
   }
+
   if (buttonToken) {
-    comps.push({ type: "button", sub_type: "url", index: "0", parameters: [{ type: "text", text: buttonToken }] });
+    comps.push({
+      type: "button",
+      sub_type: "url",
+      index: String(analysis?.dynamicUrlButtonIndex ?? 0),
+      parameters: [{ type: "text", text: buttonToken }],
+    });
   }
   return comps.length ? comps : undefined;
 }
@@ -212,11 +241,16 @@ async function sendOne(
     components?: unknown[];
     broadcastId: number;
     sentById: number | null;
+    /** Motivo de a inspeção do template não estar disponível (anexado ao erro). */
+    metaUnavailableReason?: string | null;
   },
 ): Promise<BroadcastRecipient> {
   const phoneE164 = r.phoneE164!; // garantido pelo chamador
   const conversationId = await upsertConversation(db, phoneE164, r.employeeId);
   const res = await sendTemplateMessage(phoneE164, cfg.templateName, cfg.languageCode, cfg.components);
+  // A nota da inspeção entra ANTES de persistir, para a linha da BD e a UI
+  // contarem exactamente a mesma história.
+  const error = res.ok ? null : withMetaHint(res.error, cfg.metaUnavailableReason ?? null);
 
   await db.insert(whatsappMessages).values({
     conversationId,
@@ -226,14 +260,14 @@ async function sendOne(
     body: null,
     templateName: cfg.templateName,
     status: res.ok ? "sent" : "failed",
-    errorDetail: res.ok ? null : res.error,
+    errorDetail: error,
     sentById: cfg.sentById,
     broadcastId: cfg.broadcastId,
   });
 
   return res.ok
     ? { ...r, status: "sent", waMessageId: res.waMessageId }
-    : { ...r, status: "failed", error: res.error };
+    : { ...r, status: "failed", error: error! };
 }
 
 /** Config de envio partilhada pelos dois modos (teste e normal). */
@@ -241,10 +275,27 @@ interface DispatchConfig {
   templateName: string;
   languageCode: string;
   bodyParam2: string | null;
+  /** Metadados do template quando a inspeção correu bem; null = modo antigo. */
+  analysis: TemplateAnalysis | null;
+  /** Porque é que a inspeção falhou (anexado aos erros, para diagnóstico). */
+  metaUnavailableReason: string | null;
   includeFormLink: boolean;
   weekStart: string | null;
   broadcastId: number;
   sentById: number | null;
+}
+
+/**
+ * Acrescenta ao erro de um envio a nota de que a inspeção automática do template
+ * não estava disponível — sem isto, um erro de formato de template parece um
+ * mistério quando na verdade sabíamos que estávamos a enviar às cegas.
+ */
+function withMetaHint(error: string, reason: string | null): string {
+  if (!reason) return error;
+  return (
+    `${error} — Nota: não foi possível inspecionar o template automaticamente (${reason}), ` +
+    `por isso o envio foi feito com o formato assumido. Definir WHATSAPP_WABA_ID resolve a inspeção.`
+  );
 }
 
 /**
@@ -285,9 +336,10 @@ async function dispatchOne(
   return sendOne(db, r, {
     templateName: cfg.templateName,
     languageCode: cfg.languageCode,
-    components: buildComponents(params, buttonToken),
+    components: buildComponents({ analysis: cfg.analysis, values: params, buttonToken }),
     broadcastId: cfg.broadcastId,
     sentById: cfg.sentById,
+    metaUnavailableReason: cfg.metaUnavailableReason,
   });
 }
 
@@ -332,10 +384,39 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
   if (!templateName) throw new Error("Nome do template em falta.");
   const languageCode = (opts.languageCode || DEFAULT_TEMPLATE_LANGUAGE).trim();
   const bodyParam2 = opts.bodyParam2?.trim() || null;
-  const includeFormLink = opts.includeFormLink === true;
   const weekStart = opts.weekStart ?? null;
-  if (includeFormLink && !weekStart) {
-    throw new Error("Link do formulário pedido sem semana selecionada — escolhe a semana antes de enviar.");
+
+  // ── Inspeção do template (uma vez por broadcast) ───────────────────────────
+  // O envio ADAPTA-SE ao template: parâmetros nomeados vs posicionais, quantos
+  // são, e se há mesmo botão com link. Quando a inspeção corre bem, os erros de
+  // configuração são apanhados AQUI — antes de gastar uma única chamada de envio
+  // e antes de criar a linha do broadcast.
+  const meta = await getTemplateMeta(templateName, languageCode);
+  let analysis: TemplateAnalysis | null = null;
+  let metaUnavailableReason: string | null = null;
+  let includeFormLink = opts.includeFormLink === true;
+
+  if (meta.available) {
+    if (!meta.lookup.ok) throw new Error(describeLookupFailure(meta.lookup, templateName, languageCode));
+    analysis = meta.lookup.analysis;
+    // Os metadados MANDAM sobre a checkbox: o template ou tem botão dinâmico
+    // (e então precisa mesmo do token) ou não tem (e mandá-lo rebentava o envio).
+    includeFormLink = analysis.hasDynamicUrlButton;
+    const problem = validateTemplateUsage(analysis, {
+      hasBodyParam2: !!bodyParam2,
+      hasWeekStart: !!weekStart,
+    });
+    if (problem) throw new Error(problem);
+  } else {
+    metaUnavailableReason = meta.reason;
+    console.warn(
+      `[WhatsApp] Inspeção do template "${templateName}" (${languageCode}) indisponível: ${meta.reason}. ` +
+        `A enviar com o formato assumido.`,
+    );
+    // Sem metadados vale a checkbox — e a regra antiga de precisar de semana.
+    if (includeFormLink && !weekStart) {
+      throw new Error("Link do formulário pedido sem semana selecionada — escolhe a semana antes de enviar.");
+    }
   }
 
   const db = await getDb();
@@ -380,7 +461,17 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
         phone: rawTest,
         phoneE164,
       },
-      { templateName, languageCode, bodyParam2, includeFormLink, weekStart, broadcastId, sentById: opts.createdById ?? null },
+      {
+        templateName,
+        languageCode,
+        bodyParam2,
+        analysis,
+        metaUnavailableReason,
+        includeFormLink,
+        weekStart,
+        broadcastId,
+        sentById: opts.createdById ?? null,
+      },
     );
     const sent = recipient.status === "sent" ? 1 : 0;
     await updateBroadcastCounts(db, broadcastId, { sentCount: sent, failedCount: 1 - sent });
@@ -427,6 +518,8 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
       templateName,
       languageCode,
       bodyParam2,
+      analysis,
+      metaUnavailableReason,
       includeFormLink,
       weekStart,
       broadcastId,

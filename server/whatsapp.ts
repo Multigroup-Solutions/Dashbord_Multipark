@@ -95,6 +95,22 @@ export function describeMetaError(
     case 131009:
       base = `Parâmetro inválido no envio para${toRef || " o destinatário"} (número mal formado?).`;
       break;
+    case 100: {
+      // O 100 é genérico, mas o detalhe "Parameter name is missing or empty"
+      // tem uma causa única e concreta: o template foi criado com parâmetros
+      // NOMEADOS ({{nome}}) e a Cloud API exige `parameter_name` em cada um.
+      // Normalmente o envio deteta isto sozinho ao inspecionar o template; se
+      // chegou aqui é porque a inspeção não estava disponível.
+      const details = String(metaErr?.error_data?.details ?? metaErr?.message ?? "");
+      if (/parameter[_ ]name/i.test(details)) {
+        base =
+          `O template ${templateRef} usa parâmetros NOMEADOS (ex.: {{nome}}, {{semana}}) e a Meta exige ` +
+          `o nome de cada parâmetro no envio. Isto normalmente é detetado automaticamente ao inspecionar ` +
+          `o template — se está a acontecer, a inspeção não foi possível (ver a nota no fim) e a ` +
+          `env WHATSAPP_WABA_ID resolve-a.`;
+      }
+      break;
+    }
     default:
       base = code != null ? META_ERROR_HINTS[code] : undefined;
   }
