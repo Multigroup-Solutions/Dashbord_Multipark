@@ -404,6 +404,20 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
     { plate: data?.complaint?.vehiclePlate || "", currentBookingRef: data?.complaint?.reservationRef || undefined },
     { enabled: !!data?.complaint?.vehiclePlate && (data?.complaint?.vehiclePlate?.length ?? 0) >= 2 }
   );
+  const refreshBookingMut = trpc.complaints.refreshBookingData.useMutation({
+    onSuccess: (r) => {
+      if (r.ok) {
+        toast.success(r.detail);
+        utils.complaints.bookingDossier.invalidate();
+        utils.complaints.bookingTimeline.invalidate();
+        utils.complaints.vehicleAgents.invalidate();
+        utils.complaints.getById.invalidate({ id });
+      } else {
+        toast.error(r.detail);
+      }
+    },
+    onError: () => toast.error("Erro ao contactar a API Multipark"),
+  });
   const autoLinkMut = trpc.complaints.autoLink.useMutation({
     onSuccess: (r) => {
       if (r.linked) {
@@ -610,7 +624,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
               <Card>
                 <CardHeader className="flex flex-row items-center justify-between">
                   <CardTitle className="text-sm">Dados da Reserva</CardTitle>
-                  {!c.reservationRef && (
+                  {!c.reservationRef ? (
                     <Button
                       size="sm" variant="outline"
                       disabled={autoLinkMut.isPending}
@@ -618,6 +632,16 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                     >
                       <LinkIcon className="w-3.5 h-3.5 mr-1" />
                       {autoLinkMut.isPending ? "A procurar…" : "Ligar reserva automaticamente"}
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm" variant="outline"
+                      disabled={refreshBookingMut.isPending}
+                      title="Vai buscar à API Multipark a reserva completa e o histórico de condutores desta reserva"
+                      onClick={() => refreshBookingMut.mutate({ reservationRef: c.reservationRef! })}
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 mr-1 ${refreshBookingMut.isPending ? "animate-spin" : ""}`} />
+                      {refreshBookingMut.isPending ? "A atualizar…" : "Atualizar da API"}
                     </Button>
                   )}
                 </CardHeader>

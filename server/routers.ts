@@ -4321,6 +4321,17 @@ export const appRouter = router({
       return autoLinkComplaintBooking(input.id);
     }),
 
+    // Botão "Atualizar da API": puxa a reserva completa + histórico direto da
+    // API Multipark e grava na BD local (para reservas antigas/histórico só
+    // com a criação).
+    refreshBookingData: protectedProcedure.input(z.object({
+      reservationRef: z.string().min(1),
+    })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "frontoffice");
+      const { refreshBookingFromApi } = await import("./complaintDossier");
+      return refreshBookingFromApi(input.reservationRef);
+    }),
+
     // Agentes Multipark que mexeram na matrícula (mesma peça dos Perdidos).
     vehicleAgents: protectedProcedure.input(z.object({
       plate: z.string().min(2),
@@ -5180,6 +5191,16 @@ export const appRouter = router({
       requireRole(ctx.user.role, "frontoffice");
       const { autoLinkLostFoundBooking } = await import("./complaintDossier");
       return autoLinkLostFoundBooking(input.id);
+    }),
+
+    // Botão "Atualizar da API": puxa a reserva completa + histórico direto da
+    // API Multipark e grava na BD local.
+    refreshBookingData: protectedProcedure.input(z.object({
+      reservationRef: z.string().min(1),
+    })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "frontoffice");
+      const { refreshBookingFromApi } = await import("./complaintDossier");
+      return refreshBookingFromApi(input.reservationRef);
     }),
   }),
 
