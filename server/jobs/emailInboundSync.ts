@@ -143,6 +143,16 @@ async function routeToModule(
     return { targetModule: "review", targetId: id };
   }
 
+  // Faturação automática de parceiros (ex.: "Auto-fatura" mensal do
+  // Parkimeter) não é reclamação nem perdido — fica só em inbound_emails.
+  // (Já criou 4 falsos casos de Perdidos por mês.)
+  if (
+    (alias === "reclamacoes" || alias === "perdidos") &&
+    /^\s*((re|fwd?|enc):\s*)*auto-?fatura/i.test(ctx.subject || "")
+  ) {
+    return { targetModule: "ignored" };
+  }
+
   if (alias === "reclamacoes") {
     // Notificações automáticas "Nova Reserva" enviadas DIRETAMENTE pelo
     // sistema (info@) não são reclamações — um forward humano (Fwd: de outra
