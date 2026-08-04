@@ -5641,6 +5641,23 @@ export async function upsertMultiparkBooking(data: InsertMultiparkBooking) {
   // multipark_booking_history automaticamente (só via botões manuais).
   const statusChanged = existed && (before[0].status ?? null) !== (data.status ?? null);
   const setOnDup: any = statusChanged ? { ...rest, enrichedAt: null, historyFetchedAt: null } : rest;
+  // NUNCA sobrepor um valor real com vazio nos campos que só vêm do
+  // enrichment (/bookings/:id): o /report não traz cliente/veículo/voos/
+  // parceiro-real, e cada re-varredura da janela apagava o que o enrichment
+  // tinha preenchido (a perda ficava PERMANENTE quando não havia mudança de
+  // estado para reabrir o enrichment). Era por isto que só ~20% das reservas
+  // tinham dados de cliente/matrícula.
+  const ENRICH_PROTECTED = [
+    "partnerName",
+    "clientFirstName", "clientLastName", "clientEmail", "clientPhone", "clientNif",
+    "licensePlate", "vehicleBrand", "vehicleModel", "vehicleColor", "vehicleType",
+    "arrivalFlight", "departureFlight",
+    "deliveryAddress", "pickupAddress",
+    "checkInTime", "checkOutTime", "parkingType", "notes",
+  ] as const;
+  for (const k of ENRICH_PROTECTED) {
+    if (setOnDup[k] === null || setOnDup[k] === undefined) delete setOnDup[k];
+  }
   await db
     .insert(multiparkBookings)
     .values(data as any)
