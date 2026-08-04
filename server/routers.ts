@@ -2831,6 +2831,22 @@ export const appRouter = router({
 
   // ─── MARKETING ────────────────────────────────────────────────────────────
   marketing: router({
+    // Import manual de CSV de campanhas (histórico 2024→ ou correções).
+    // Mesmo motor da ingestão do email diário campanhas@multipark.pt.
+    importCampaignCsv: protectedProcedure
+      .input(z.object({ csv: z.string().min(10).max(5_000_000) }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        const { parseCampaignCsv, ingestCampaignDaily } = await import("./campaignReportIngest");
+        const { rows, errors } = parseCampaignCsv(input.csv);
+        if (rows.length === 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: errors.join("; ") || "CSV sem linhas válidas" });
+        }
+        const res = await ingestCampaignDaily(rows, ctx.user.id);
+        await logActivity({ userId: ctx.user.id, action: "import", entity: "campaign_daily_stats", details: `${res.imported} registos, ${res.totalSpend}€` });
+        return { ...res, parseErrors: errors };
+      }),
+
     dashboard: protectedProcedure
       .input(z.object({ from: z.string().optional(), to: z.string().optional(), projectId: z.number().optional() }).optional())
       .query(async ({ ctx, input }) => {

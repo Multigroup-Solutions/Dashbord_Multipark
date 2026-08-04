@@ -8,9 +8,12 @@
 // (criticas@/reclamacoes@/perdidos@/recursos-humanos@). O remetente real do
 // cliente vem mascarado no cabeçalho (info@multipark.pt) mas está sempre no CORPO.
 
-export type InboundAlias = "criticas" | "reclamacoes" | "perdidos" | "recursos-humanos";
+export type InboundAlias = "criticas" | "reclamacoes" | "perdidos" | "recursos-humanos" | "campanhas";
 
-const ALIASES: InboundAlias[] = ["criticas", "reclamacoes", "perdidos", "recursos-humanos"];
+// "campanhas" = relatório diário de campanhas (Google Ads/Supermetrics) com CSV
+// anexo, agendado pelo Jorge para campanhas@multipark.pt — ingerido em
+// campaign_daily_stats (ver server/campaignReportIngest.ts).
+const ALIASES: InboundAlias[] = ["criticas", "reclamacoes", "perdidos", "recursos-humanos", "campanhas"];
 
 // ── ROTEAMENTO ──────────────────────────────────────────────────────────────
 // Determina o alias temático a partir dos headers de entrega. O Delivered-To é
