@@ -17,9 +17,10 @@ export const AVAILABILITY_TEMPLATE_NAME = "disponibilidade_extras";
 /**
  * Código de língua Meta. `pt_PT` (português europeu) ≠ `pt_BR` ≠ `pt` — a Meta
  * trata-os como traduções DISTINTAS e devolve 132001 se o template não estiver
- * aprovado exatamente nesta.
+ * aprovado exatamente nesta. O template `disponibilidade_extras` está aprovado
+ * em `pt_BR` no WhatsApp Manager (confirmado 2026-08-04).
  */
-export const DEFAULT_TEMPLATE_LANGUAGE = "pt_PT";
+export const DEFAULT_TEMPLATE_LANGUAGE = "pt_BR";
 
 /** Nome usado no {{1}} quando o destinatário não é um colaborador conhecido. */
 export const UNKNOWN_RECIPIENT_NAME = "Teste";
