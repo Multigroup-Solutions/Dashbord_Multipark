@@ -1,5 +1,6 @@
 import { trpc } from "@/lib/trpc";
 import { fileHref } from "@/lib/fileHref";
+import CaseMessageList from "@/components/CaseMessageList";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { filterBookingHistory } from "@/lib/bookingHistory";
 import { REPLY_TEMPLATES } from "@/lib/replyTemplates";
@@ -717,21 +718,12 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
             <TabsContent value="messages" className="mt-4">
               <Card>
                 <CardContent className="p-4 space-y-4">
-                  <ScrollArea className="max-h-[400px]">
-                    <div className="space-y-3">
-                      {data.messages.map((m: any) => (
-                        <div key={m.id} className={`p-3 rounded-lg text-sm ${m.isInternal ? "bg-amber-50 border border-amber-200" : "bg-muted"}`}>
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="font-medium">{m.authorName}</span>
-                            {m.isInternal && <Badge variant="outline" className="text-[10px] text-amber-700">Nota Interna</Badge>}
-                            <span className="text-xs text-muted-foreground ml-auto">{fmtPTDateTime(m.createdAt)}</span>
-                          </div>
-                          <p className="whitespace-pre-wrap">{m.message}</p>
-                        </div>
-                      ))}
-                      {data.messages.length === 0 && <p className="text-center text-muted-foreground py-8">Sem mensagens</p>}
-                    </div>
-                  </ScrollArea>
+                  <CaseMessageList
+                    messages={data.messages.map((m: any) => ({
+                      id: m.id, author: m.authorName, createdAt: m.createdAt,
+                      message: m.message, isInternal: m.isInternal,
+                    }))}
+                  />
                   <Separator />
                   <div className="space-y-2">
                     <Textarea placeholder="Escrever mensagem..." value={newMsg} onChange={e => setNewMsg(e.target.value)} rows={3} />
