@@ -5279,6 +5279,79 @@ export const appRouter = router({
         });
         return r;
       }),
+
+    // "Isto é uma Reclamação de cliente" — converte a ocorrência numa
+    // Reclamação (o auto-link vai buscar a reserva pela matrícula e preenche
+    // os dados do cliente) e apaga a ocorrência. Admin+.
+    convertToComplaint: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "admin");
+      const inc = await getIncidentById(input.id);
+      if (!inc) throw new TRPCError({ code: "NOT_FOUND" });
+      const TYPE_LABEL: Record<string, string> = {
+        vidro_aberto: "Vidro Aberto", mal_estacionado: "Mal Estacionado", dano: "Dano",
+        chave_errada: "Chave Errada", combustivel: "Combustível", limpeza: "Limpeza",
+        documentos: "Documentos", outro: "Ocorrência",
+      };
+      const prio = inc.severity === "critical" ? "urgent" : inc.severity === "high" ? "high" : inc.severity === "low" ? "low" : "medium";
+      const newId = await createComplaint({
+        title: `${TYPE_LABEL[inc.incidentType] ?? "Ocorrência"}${inc.vehiclePlate ? ` — ${inc.vehiclePlate}` : ""}: ${(inc.description ?? "").split("\n")[0]}`.slice(0, 255),
+        description: inc.description ?? null,
+        complaintType: inc.incidentType === "dano" ? "damage" : inc.incidentType === "limpeza" ? "dirt" : "other",
+        complaintStatus: "new",
+        complaintPriority: prio,
+        vehiclePlate: inc.vehiclePlate ?? null,
+        projectId: inc.projectId ?? null,
+        createdById: ctx.user.id,
+      });
+      await addComplaintMessage({
+        complaintId: newId,
+        message: `🚨 Movida das Ocorrências (#${input.id}, ${TYPE_LABEL[inc.incidentType] ?? inc.incidentType}, gravidade ${inc.severity}) por ${ctx.user.name ?? "—"}.${inc.resolution ? `\n\nResolução registada na ocorrência:\n${inc.resolution}` : ""}${(inc as any).aiClassification ? `\n\nClassificação IA: ${(inc as any).aiClassification}` : ""}`,
+        isInternal: 1,
+        authorId: ctx.user.id,
+        authorName: ctx.user.name ?? null,
+      });
+      try {
+        const { autoLinkComplaintBooking } = await import("./complaintDossier");
+        await autoLinkComplaintBooking(newId);
+      } catch { /* best-effort */ }
+      await deleteIncident(input.id);
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "complaint", entityId: newId, details: `Movida da ocorrência #${input.id}` });
+      return { newId };
+    }),
+
+    // "Isto é um Perdido/roubo" — converte a ocorrência num caso de Perdidos
+    // & Achados e apaga a ocorrência. Admin+.
+    convertToLostFound: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "admin");
+      const inc = await getIncidentById(input.id);
+      if (!inc) throw new TRPCError({ code: "NOT_FOUND" });
+      const { createLostFoundItem, addLostFoundMessage } = await import("./db");
+      const newId = await createLostFoundItem({
+        clientName: "Desconhecido",
+        vehiclePlate: inc.vehiclePlate ?? undefined,
+        projectId: inc.projectId ?? undefined,
+        itemType: "other",
+        description: inc.description || `Ocorrência #${input.id}`,
+        status: "new",
+        priority: inc.severity === "critical" || inc.severity === "high" ? "high" : inc.severity === "low" ? "low" : "medium",
+        createdBy: ctx.user.id,
+      } as any);
+      if (!newId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Falha a criar o registo nos Perdidos" });
+      await addLostFoundMessage({
+        itemId: newId,
+        userId: ctx.user.id,
+        userName: ctx.user.name ?? "—",
+        message: `🚨 Movida das Ocorrências (#${input.id}, gravidade ${inc.severity}) por ${ctx.user.name ?? "—"}.`,
+        isInternal: 1,
+      } as any);
+      try {
+        const { autoLinkLostFoundBooking } = await import("./complaintDossier");
+        await autoLinkLostFoundBooking(newId);
+      } catch { /* best-effort */ }
+      await deleteIncident(input.id);
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "lost_found", entityId: newId, details: `Movida da ocorrência #${input.id}` });
+      return { newId };
+    }),
   }),
 
   // ─── AVALIAÇÃO DE DESEMPENHO ─────────────────────────────────────────────
