@@ -1000,19 +1000,57 @@ export async function runRecentCronSync(windowMinutes = 30): Promise<{
 }
 
 /** Sync de janela futura (próximas 4 semanas) para Extras Dia planear.
- *  Mais leve — só checkin/checkout, sem enrich/history. */
-export async function runFutureCronSync(weeksAhead = 4): Promise<{
+ *  Mais leve — só checkin/checkout, sem enrich/history.
+ *
+ *  A janela completa (4 semanas × 10 parques × 2 actionTypes) não cabe nos
+ *  60s do Vercel, por isso é RETOMÁVEL: processa fatias de FUTURE_CHUNK_DAYS
+ *  a partir de offsetDays enquanto houver orçamento, e devolve done:false +
+ *  nextOffset quando faltarem fatias — o chamador repete com esse offset. */
+const FUTURE_CHUNK_DAYS = 7;
+
+export async function runFutureCronSync(
+  weeksAhead = 4,
+  opts: { offsetDays?: number; deadlineAt?: number } = {},
+): Promise<{
   report: { processed: number; created: number; updated: number; errors: string[] };
   durationMs: number;
+  done: boolean;
+  nextOffset?: number;
 }> {
   const t0 = Date.now();
+  const deadlineAt = opts.deadlineAt ?? t0 + CRON_BUDGET_MS;
+  const totalDays = weeksAhead * 7;
+  const startOffset = Math.min(Math.max(0, Math.trunc(opts.offsetDays ?? 0)), totalDays);
   const now = new Date();
-  const end = new Date(now.getTime() + weeksAhead * 7 * 86_400_000);
   const fmt = (d: Date) => d.toISOString().slice(0, 10);
-  const report = await syncBookings({
-    startDate: fmt(now),
-    endDate: fmt(end),
-    actionTypes: ["checkin", "checkout"],
-  });
-  return { report, durationMs: Date.now() - t0 };
+
+  const agg = { processed: 0, created: 0, updated: 0, errors: [] as string[] };
+  let offset = startOffset;
+  while (offset < totalDays) {
+    // A 1ª fatia corre sempre (progresso garantido); as seguintes só se ainda
+    // sobrar margem para uma fatia inteira antes do deadline.
+    if (offset > startOffset && Date.now() >= deadlineAt - 20_000) break;
+    const chunkStart = new Date(now.getTime() + offset * 86_400_000);
+    const chunkEnd = new Date(
+      now.getTime() + Math.min(offset + FUTURE_CHUNK_DAYS, totalDays) * 86_400_000,
+    );
+    const report = await syncBookings({
+      startDate: fmt(chunkStart),
+      endDate: fmt(chunkEnd),
+      actionTypes: ["checkin", "checkout"],
+    });
+    agg.processed += report.processed;
+    agg.created += report.created;
+    agg.updated += report.updated;
+    agg.errors.push(...report.errors);
+    offset += FUTURE_CHUNK_DAYS;
+  }
+
+  const done = offset >= totalDays;
+  return {
+    report: agg,
+    durationMs: Date.now() - t0,
+    done,
+    ...(done ? {} : { nextOffset: offset }),
+  };
 }
