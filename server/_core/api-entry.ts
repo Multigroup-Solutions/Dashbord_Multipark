@@ -205,7 +205,13 @@ app.get("/api/cron/multipark-future", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
   try {
     const { runFutureCronSync } = await import("../jobs/multiparkBookingSync");
-    const result = await runFutureCronSync(4);
+    // ?offsetDays=N retoma a varredura a partir desse dia da janela — a janela
+    // completa não cabe nos 60s do Vercel; a resposta traz done/nextOffset e o
+    // workflow repete até done:true.
+    const offsetDays = typeof req.query?.offsetDays === "string" && /^\d+$/.test(req.query.offsetDays)
+      ? Number(req.query.offsetDays)
+      : 0;
+    const result = await runFutureCronSync(4, { offsetDays });
     res.json({ ok: true, ranAt: new Date().toISOString(), ...result });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: String(err?.message ?? err) });
