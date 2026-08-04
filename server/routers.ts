@@ -5738,7 +5738,8 @@ export const appRouter = router({
       to: z.string(),
       projectId: z.number().optional(),
     })).query(({ ctx, input }) => {
-      requireRole(ctx.user.role, "backoffice");
+      // Margens, salários (com detalhe por pessoa) e comissões — admin+
+      requireRole(ctx.user.role, "admin");
       return getBillingData(input);
     }),
   }),
@@ -6021,8 +6022,44 @@ export const appRouter = router({
       year: z.number(),
       projectId: z.number().optional(),
     })).query(({ ctx, input }) => {
-      requireRole(ctx.user.role, "backoffice");
+      // Lucros, salários e IVA — reservado à administração
+      requireRole(ctx.user.role, "admin");
       return getAnnualBreakdown(input.year, input.projectId);
+    }),
+
+    // ── Histórico financeiro importado (Excel/CSV, 2016→) ──────────────────
+    importHistory: protectedProcedure.input(z.object({
+      rows: z.array(z.object({
+        year: z.number().min(2000).max(2100),
+        month: z.number().min(1).max(12),
+        revenueWithVat: z.number(),
+        expensesWithVat: z.number().optional(),
+        salaries: z.number().optional(),
+        notes: z.string().optional(),
+      })).min(1).max(600),
+    })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "admin");
+      const { importFinancialHistory } = await import("./db");
+      const res = await importFinancialHistory(input.rows);
+      await logActivity({ userId: ctx.user.id, action: "import", entity: "financial_history", details: `${res.imported} meses importados` });
+      return res;
+    }),
+
+    historyList: protectedProcedure.input(z.object({
+      year: z.number().optional(),
+    }).optional()).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "admin");
+      const { getFinancialHistory } = await import("./db");
+      return getFinancialHistory(input?.year);
+    }),
+
+    historyDeleteYear: protectedProcedure.input(z.object({
+      year: z.number(),
+    })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "super_admin");
+      const { deleteFinancialHistoryYear } = await import("./db");
+      await logActivity({ userId: ctx.user.id, action: "delete", entity: "financial_history", details: `Ano ${input.year}` });
+      return deleteFinancialHistoryYear(input.year);
     }),
 
     generate: protectedProcedure.input(z.object({

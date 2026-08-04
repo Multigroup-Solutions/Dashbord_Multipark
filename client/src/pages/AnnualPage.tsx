@@ -6,11 +6,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { toast } from "sonner";
 import { useState, useMemo, useEffect } from "react";
 import {
   Euro, TrendingUp, TrendingDown,
   BarChart3, ArrowUpRight, ArrowDownRight, Receipt, Users, Landmark,
-  Megaphone, HandCoins, Calendar,
+  Megaphone, HandCoins, Calendar, Upload, Loader2,
 } from "lucide-react";
 
 const MONTHS = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
@@ -138,8 +143,92 @@ function DeltaBadge({ curr, prev, invert = false }: { curr: number; prev: number
   return <span className={`text-[10px] px-1 rounded ${color}`}>{arrow} {Math.abs(pct).toFixed(1)}%</span>;
 }
 
+// Parse de CSV/Excel colado: colunas ano;mês;receita[;despesas][;ordenados][;notas]
+// Aceita ; , ou TAB como separador e números PT ("1.234,56") ou EN ("1234.56").
+function parseHistoryCsv(text: string): Array<{ year: number; month: number; revenueWithVat: number; expensesWithVat?: number; salaries?: number; notes?: string }> {
+  const parseNum = (s: string): number => {
+    const t = (s ?? "").trim().replace(/[€\s]/g, "");
+    if (!t) return 0;
+    // "1.234,56" → PT; "1234.56" → EN
+    const norm = /,\d{1,2}$/.test(t) ? t.replace(/\./g, "").replace(",", ".") : t.replace(/,/g, "");
+    const n = parseFloat(norm);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const rows: ReturnType<typeof parseHistoryCsv> = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const cols = line.split(/[;\t]|,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map((c) => c.replace(/^"|"$/g, "").trim());
+    const year = parseInt(cols[0]);
+    const month = parseInt(cols[1]);
+    if (!Number.isFinite(year) || year < 2000 || year > 2100) continue; // salta cabeçalhos
+    if (!Number.isFinite(month) || month < 1 || month > 12) continue;
+    rows.push({
+      year, month,
+      revenueWithVat: parseNum(cols[2]),
+      expensesWithVat: cols[3] != null ? parseNum(cols[3]) : undefined,
+      salaries: cols[4] != null ? parseNum(cols[4]) : undefined,
+      notes: cols[5] || undefined,
+    });
+  }
+  return rows;
+}
+
+function ImportHistoryDialog({ open, onClose, onImported }: { open: boolean; onClose: () => void; onImported: () => void }) {
+  const [text, setText] = useState("");
+  const importMutation = trpc.annual.importHistory.useMutation({
+    onSuccess: (r) => { toast.success(`${r.imported} meses importados`); setText(""); onImported(); onClose(); },
+    onError: (e) => toast.error(e.message || "Erro ao importar"),
+  });
+  const parsed = useMemo(() => parseHistoryCsv(text), [text]);
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Upload className="h-5 w-5 text-primary" /> Importar histórico financeiro</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 flex-1 min-h-0 overflow-y-auto">
+          <p className="text-sm text-muted-foreground">
+            Cola aqui as linhas do Excel/CSV com os totais mensais de anos antigos (2016→). Formato por linha:
+          </p>
+          <pre className="text-xs bg-muted/50 rounded p-2">ano;mês;receita c/IVA;despesas c/IVA;ordenados;notas{"\n"}2019;1;85000;42000;15000;importado do excel</pre>
+          <p className="text-xs text-muted-foreground">
+            Despesas, ordenados e notas são opcionais. Estes valores só são usados nos meses em que a app
+            não tem dados reais (reservas/despesas/payroll) — os anos com dados reais nunca são substituídos.
+            Reimportar o mesmo ano/mês substitui o valor anterior.
+          </p>
+          <Textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={10}
+            placeholder={"2019;1;85000;42000;15000\n2019;2;79000;40000;15000\n…"}
+            className="font-mono text-xs"
+          />
+          <p className="text-sm">
+            {parsed.length > 0
+              ? <span className="text-emerald-700 font-medium">{parsed.length} linhas válidas ({Array.from(new Set(parsed.map(r => r.year))).sort().join(", ")})</span>
+              : <span className="text-muted-foreground">Sem linhas válidas ainda</span>}
+          </p>
+        </div>
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={onClose}>Cancelar</Button>
+          <Button onClick={() => importMutation.mutate({ rows: parsed })} disabled={parsed.length === 0 || importMutation.isPending} className="gap-2">
+            {importMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+            Importar {parsed.length > 0 ? `${parsed.length} meses` : ""}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function AnnualPage() {
   const filters = useGlobalFilters();
+  const { user } = useAuth();
+  const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
+  const [showImport, setShowImport] = useState(false);
+  const utils = trpc.useUtils();
   const currentYear = new Date().getFullYear();
   const [year, setYear] = useState(currentYear);
   const [selectedProject, setSelectedProject] = useState<string>("all");
@@ -182,6 +271,11 @@ export default function AnnualPage() {
 
   return (
     <div className="space-y-6">
+      <ImportHistoryDialog
+        open={showImport}
+        onClose={() => setShowImport(false)}
+        onImported={() => utils.annual.breakdown.invalidate()}
+      />
       {/* Header com filtros */}
       <Card className="p-3">
         <div className="flex items-end gap-3 flex-wrap">
@@ -191,6 +285,11 @@ export default function AnnualPage() {
             </Link>
             <p className="text-sm text-muted-foreground">Visão anual de gestão: lucros, gastos, IVA, ordenados e comissões</p>
           </div>
+          {isAdmin && (
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setShowImport(true)}>
+              <Upload className="h-3.5 w-3.5" /> Importar histórico
+            </Button>
+          )}
           <div>
             <Label className="text-xs mb-1 block">Ano</Label>
             <Input type="number" value={year} onChange={e => setYear(parseInt(e.target.value) || currentYear)} className="w-24 h-9" />
@@ -425,7 +524,12 @@ export default function AnnualPage() {
                       const commissions = (m.salesCommissions ?? 0) + (m.operationalCommissions ?? 0);
                       return (
                         <tr key={m.month} className="border-b hover:bg-muted/50">
-                          <td className="p-2 font-medium">{MONTHS[m.month - 1]}</td>
+                          <td className="p-2 font-medium">
+                            {MONTHS[m.month - 1]}
+                            {(m as any).fromHistory && (
+                              <span className="ml-1 text-[9px] px-1 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200" title="Valores importados do Excel (sem detalhe na app)">hist.</span>
+                            )}
+                          </td>
                           <td className="p-2 text-right tabular-nums text-muted-foreground">{fmt(m.revenueGrossWithVat ?? m.revenueWithVat)}</td>
                           <td className="p-2 text-right tabular-nums text-amber-700">−{fmt(commissions)}</td>
                           <td className="p-2 text-right tabular-nums text-green-600">{fmt(m.revenueWithVat)}</td>

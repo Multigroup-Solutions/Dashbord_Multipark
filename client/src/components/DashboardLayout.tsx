@@ -143,7 +143,7 @@ const menuGroups: MenuGroup[] = [
     items: [
       { icon: Receipt, label: "Despesas", path: "/despesas" },
       // Faturação / Projetos / Marketing escondidos do frontoffice
-      { icon: FileText, label: "Faturação", path: "/faturacao", minRole: "backoffice" },
+      { icon: FileText, label: "Faturação", path: "/faturacao", minRole: "admin" },
       { icon: Handshake, label: "Parcerias", path: "/parcerias" },
       { icon: FolderTree, label: "Projetos", path: "/projetos", minRole: "backoffice" },
       { icon: Megaphone, label: "Marketing", path: "/marketing", minRole: "backoffice" },

@@ -3,7 +3,6 @@ import { trpc } from "@/lib/trpc";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -11,8 +10,9 @@ import {
 import { useState, useMemo } from "react";
 import {
   Euro, TrendingUp, TrendingDown, Receipt, Truck, CalendarClock,
-  Building2, FolderTree, FileText, Users as UsersIcon, Megaphone, Handshake,
+  Building2, FolderTree, Users as UsersIcon, Handshake, LogIn,
 } from "lucide-react";
+import DateRangeNav, { type DateGran, rangeFor } from "@/components/DateRangeNav";
 import {
   ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend,
@@ -32,52 +32,13 @@ const compact = (v: number) => {
 
 type Granularity = "day" | "week" | "month" | "year";
 
-const QUICK_RANGES: Array<{ id: string; label: string; gran: Granularity; calc: () => [string, string] }> = [
-  {
-    id: "today", label: "Hoje", gran: "day", calc: () => {
-      const d = new Date().toISOString().slice(0, 10);
-      return [d, d];
-    },
-  },
-  {
-    id: "week", label: "Semana", gran: "day", calc: () => {
-      const d = new Date();
-      const day = (d.getDay() + 6) % 7; // segunda = 0
-      const start = new Date(d); start.setDate(d.getDate() - day);
-      const end = new Date(start); end.setDate(start.getDate() + 6);
-      return [start.toISOString().slice(0, 10), end.toISOString().slice(0, 10)];
-    },
-  },
-  {
-    id: "month", label: "Mês", gran: "day", calc: () => {
-      const d = new Date();
-      const start = new Date(d.getFullYear(), d.getMonth(), 1);
-      const end = new Date(d.getFullYear(), d.getMonth() + 1, 0);
-      return [start.toISOString().slice(0, 10), end.toISOString().slice(0, 10)];
-    },
-  },
-  {
-    id: "ytd", label: "Ano (YTD)", gran: "month", calc: () => {
-      const d = new Date();
-      return [`${d.getFullYear()}-01-01`, d.toISOString().slice(0, 10)];
-    },
-  },
-  {
-    id: "year", label: "Ano completo", gran: "month", calc: () => {
-      const d = new Date();
-      return [`${d.getFullYear()}-01-01`, `${d.getFullYear()}-12-31`];
-    },
-  },
-];
-
 export default function InvoicesPage() {
   const filters = useGlobalFilters();
-  const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
-  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
+  const initialMonth = rangeFor("month", new Date());
 
-  const [from, setFrom] = useState(monthStart);
-  const [to, setTo] = useState(monthEnd);
+  const [from, setFrom] = useState(initialMonth.start);
+  const [to, setTo] = useState(initialMonth.end);
+  const [navGran, setNavGran] = useState<DateGran>("month");
   const [granularity, setGranularity] = useState<Granularity>("day");
 
   const projectId = useMemo(() => {
@@ -88,15 +49,14 @@ export default function InvoicesPage() {
 
   const { data, isLoading } = trpc.invoices.billing.useQuery({ from, to, projectId, granularity });
 
-  const summary = data?.summary;
+  const summary = data?.summary as any;
   const timeseries = data?.timeseries ?? [];
   const deliveries = data?.deliveries ?? [];
+  const collectedRows: Array<{ projectName: string | null; count: number; totalRevenue: number }> = (data as any)?.collected ?? [];
   const expensesPaid = data?.expensesPaid ?? [];
   const expensesPending = data?.expensesPending ?? [];
   const forecast = data?.forecast ?? [];
-  const invoiced = (data as any)?.invoices ?? [];
   const extrasDia = (data as any)?.extrasDia ?? [];
-  const marketing = (data as any)?.marketing ?? { expenses: [], ads: [] };
   const salesCommissions: Array<{ partnerName: string | null; projectName: string | null; bookingsCount: number; revenueGross: number; commissionRate: number; commission: number }> = (data as any)?.salesCommissions ?? [];
   const operationalPartners: Array<{ partnerName: string | null; projectNames: string[]; bookingsCount: number; revenueGross: number; commissionRate: number; commission: number }> = (data as any)?.operationalPartners ?? [];
   const salaries: { byProject: Array<{ projectName: string | null; cost: number }>; total: number } = (data as any)?.salaries ?? { byProject: [], total: 0 };
@@ -104,9 +64,8 @@ export default function InvoicesPage() {
   const chartData = useMemo(() => timeseries.map((p: any) => ({
     bucket: p.bucket,
     produced: Number(p.produced ?? 0),
-    invoiced: Number(p.invoiced ?? 0),
+    collected: Number(p.collected ?? 0),
     expenses: Number(p.expenses ?? p.expensesPaid ?? 0),
-    marketingCost: Number(p.marketingCost ?? 0),
     salaries: Number(p.salaries ?? 0),
     partners: Number(p.partners ?? 0),
     extrasCost: Number(p.extrasCost ?? 0),
@@ -141,18 +100,13 @@ export default function InvoicesPage() {
     return Array.from(map.values()).sort((a, b) => b.total - a.total);
   }, [expensesPending]);
 
-  function applyRange(r: typeof QUICK_RANGES[0]) {
-    const [f, t] = r.calc();
-    setFrom(f); setTo(t); setGranularity(r.gran);
-  }
-
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
           <p className="text-muted-foreground text-sm">
-            Receita produzida (operacional) vs faturada (administrativo) e todos os custos do período — pagos e por pagar.
+            Recolhidos (carro entrou) vs entregues (carro saiu — valor realizado) e todos os custos do período. Fonte única: valor das reservas.
           </p>
         </div>
         <div className="flex items-end gap-2 flex-wrap">
@@ -161,27 +115,23 @@ export default function InvoicesPage() {
               <CalendarClock className="w-3.5 h-3.5" /> Anual
             </a>
           </Link>
-          {QUICK_RANGES.map((r) => (
-            <button
-              key={r.id}
-              onClick={() => applyRange(r)}
-              className="text-xs px-2.5 py-1.5 rounded border bg-muted/40 hover:bg-muted transition-colors"
-            >
-              {r.label}
-            </button>
-          ))}
+          <DateRangeNav
+            start={from}
+            end={to}
+            gran={navGran}
+            showAll={false}
+            onChange={(s, e, g) => {
+              setFrom(s); setTo(e); setNavGran(g);
+              // Granularidade do gráfico acompanha o período escolhido
+              if (g === "year") setGranularity("month");
+              else if (g === "month" || g === "week") setGranularity("day");
+              else if (g === "day") setGranularity("day");
+            }}
+          />
           <div>
-            <Label className="text-xs mb-1 block">De</Label>
-            <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="w-[140px] h-9" />
-          </div>
-          <div>
-            <Label className="text-xs mb-1 block">Até</Label>
-            <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="w-[140px] h-9" />
-          </div>
-          <div>
-            <Label className="text-xs mb-1 block">Granularidade</Label>
+            <Label className="text-xs mb-1 block">Gráfico por</Label>
             <Select value={granularity} onValueChange={(v) => setGranularity(v as Granularity)}>
-              <SelectTrigger className="w-[120px] h-9"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-[110px] h-9"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="day">Dia</SelectItem>
                 <SelectItem value="week">Semana</SelectItem>
@@ -202,43 +152,42 @@ export default function InvoicesPage() {
           {/* KPI Cards principais */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <KpiCard
-              icon={<Truck className="w-4 h-4 text-emerald-600" />}
-              label="Produzido"
-              value={fmt(summary.produced)}
-              hint="Reservas com check-out no período"
-              color="text-emerald-700"
+              icon={<LogIn className="w-4 h-4 text-sky-600" />}
+              label="Recolhidos"
+              value={fmt(summary.collected ?? 0)}
+              hint={`${summary.collectedCount ?? 0} carros entrados no período`}
+              color="text-sky-700"
             />
             <KpiCard
-              icon={<FileText className="w-4 h-4 text-indigo-600" />}
-              label="Faturado"
-              value={fmt(summary.invoiced)}
-              hint="Faturas emitidas no período"
-              color="text-indigo-700"
+              icon={<Truck className="w-4 h-4 text-emerald-600" />}
+              label="Entregues"
+              value={fmt(summary.produced)}
+              hint={`${summary.producedCount ?? 0} carros saídos · s/ IVA: ${fmt(summary.producedNoVat ?? summary.produced / 1.23)}`}
+              color="text-emerald-700"
             />
             <KpiCard
               icon={<Receipt className="w-4 h-4 text-red-600" />}
               label="Custos totais"
               value={fmt(summary.totalCostsAll)}
-              hint={`Pagos: ${fmt(summary.totalCostsPaid)} · Pendentes: ${fmt(summary.totalCostsAll - summary.totalCostsPaid)}`}
+              hint={`Inclui salários+TSU · Despesas por pagar: ${fmt(summary.expensesPending ?? 0)}`}
               color="text-red-700"
             />
             <KpiCard
-              icon={summary.marginRealized >= 0 ? <TrendingUp className="w-4 h-4 text-emerald-600" /> : <TrendingDown className="w-4 h-4 text-red-600" />}
-              label="Margem"
-              value={fmt(summary.marginRealized)}
-              hint={`Produzido − custos pagos · ${summary.produced > 0 ? ((summary.marginRealized / summary.produced) * 100).toFixed(1) : "0"}%`}
-              color={summary.marginRealized >= 0 ? "text-emerald-700" : "text-red-700"}
+              icon={(summary.marginNet ?? summary.marginRealized) >= 0 ? <TrendingUp className="w-4 h-4 text-emerald-600" /> : <TrendingDown className="w-4 h-4 text-red-600" />}
+              label="Margem (s/ IVA)"
+              value={fmt(summary.marginNet ?? summary.marginRealized)}
+              hint={`Entregues s/ IVA − custos · ${(summary.producedNoVat ?? 0) > 0 ? (((summary.marginNet ?? 0) / summary.producedNoVat) * 100).toFixed(1) : "0"}%`}
+              color={(summary.marginNet ?? summary.marginRealized) >= 0 ? "text-emerald-700" : "text-red-700"}
             />
           </div>
 
           {/* KPI secundários: detalhe dos custos */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
             <KpiSmall icon={<Receipt className="w-3.5 h-3.5 text-red-500" />} label="Despesas inseridas" value={fmt(summary.expensesPaid)} />
             <KpiSmall icon={<UsersIcon className="w-3.5 h-3.5 text-amber-500" />} label="Equipa do dia" value={fmt(summary.extrasDiaCost)} />
-            <KpiSmall icon={<UsersIcon className="w-3.5 h-3.5 text-blue-500" />} label="Salários" value={fmt((summary as any).salariesCost ?? 0)} />
-            <KpiSmall icon={<Megaphone className="w-3.5 h-3.5 text-violet-500" />} label="Marketing" value={fmt(summary.marketingCost)} />
-            <KpiSmall icon={<Handshake className="w-3.5 h-3.5 text-rose-500" />} label="Comissão venda" value={fmt((summary as any).salesCommissions ?? 0)} />
-            <KpiSmall icon={<Handshake className="w-3.5 h-3.5 text-cyan-500" />} label="Parceiros op." value={fmt((summary as any).operationalPartnersPaid ?? summary.partnerCommissionsPaid)} />
+            <KpiSmall icon={<UsersIcon className="w-3.5 h-3.5 text-blue-500" />} label="Salários + TSU" value={fmt((summary.salariesCost ?? 0) + (summary.employerTax ?? 0))} />
+            <KpiSmall icon={<Handshake className="w-3.5 h-3.5 text-rose-500" />} label="Comissão venda" value={fmt(summary.salesCommissions ?? 0)} />
+            <KpiSmall icon={<Handshake className="w-3.5 h-3.5 text-cyan-500" />} label="Parceiros op." value={fmt(summary.operationalPartnersPaid ?? summary.partnerCommissionsPaid)} />
           </div>
 
           {/* Gráfico timeseries */}
@@ -263,13 +212,12 @@ export default function InvoicesPage() {
                       contentStyle={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, fontSize: 12 }}
                     />
                     <Legend wrapperStyle={{ fontSize: 12 }} />
-                    <Bar dataKey="produced" name="Produzido" fill="#10b981" radius={[3, 3, 0, 0]} />
+                    <Bar dataKey="produced" name="Entregues" fill="#10b981" radius={[3, 3, 0, 0]} />
                     <Bar dataKey="expenses" name="Despesas" stackId="cost" fill="#f59e0b" />
                     <Bar dataKey="salaries" name="Salários" stackId="cost" fill="#3b82f6" />
                     <Bar dataKey="partners" name="Parceiros" stackId="cost" fill="#f43f5e" />
-                    <Bar dataKey="marketingCost" name="Marketing" stackId="cost" fill="#a78bfa" />
                     <Bar dataKey="extrasCost" name="Equipa-dia" stackId="cost" fill="#eab308" radius={[3, 3, 0, 0]} />
-                    <Line dataKey="invoiced" name="Faturado" stroke="#6366f1" strokeWidth={2} dot={false} />
+                    <Line dataKey="collected" name="Recolhidos" stroke="#0284c7" strokeWidth={2} dot={false} />
                     <Line dataKey="revenueForecast" name="Receita prevista" stroke="#0ea5e9" strokeDasharray="4 4" strokeWidth={2} dot={false} />
                     <Line dataKey="margin" name="Margem" stroke="#111827" strokeWidth={2} dot={false} />
                   </ComposedChart>
@@ -287,11 +235,11 @@ export default function InvoicesPage() {
             </TabsList>
 
             <TabsContent value="real" className="space-y-4">
-              {/* Produzido por projeto */}
+              {/* Entregues por projeto */}
               <Card>
                 <CardHeader>
                   <CardTitle className="text-base flex items-center gap-2">
-                    <Truck className="w-4 h-4" /> Produzido por projeto
+                    <Truck className="w-4 h-4" /> Entregues por projeto (receita realizada)
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
@@ -322,33 +270,31 @@ export default function InvoicesPage() {
                 </CardContent>
               </Card>
 
-              {/* Faturado por projeto */}
+              {/* Recolhidos por projeto */}
               <Card>
                 <CardHeader>
                   <CardTitle className="text-base flex items-center gap-2">
-                    <FileText className="w-4 h-4" /> Faturado por projeto
+                    <LogIn className="w-4 h-4" /> Recolhidos por projeto (carros entrados)
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  {invoiced.length === 0 ? (
-                    <p className="text-muted-foreground text-sm text-center py-6">Sem faturas emitidas no período</p>
+                  {collectedRows.length === 0 ? (
+                    <p className="text-muted-foreground text-sm text-center py-6">Sem recolhas no período</p>
                   ) : (
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="border-b text-left">
                           <th className="p-2">Projeto</th>
-                          <th className="p-2 text-right">Nº faturas</th>
-                          <th className="p-2 text-right">Pago</th>
-                          <th className="p-2 text-right font-bold">Total</th>
+                          <th className="p-2 text-right">Recolhas</th>
+                          <th className="p-2 text-right font-bold">Valor das reservas</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {invoiced.map((inv: any, i: number) => (
+                        {collectedRows.map((c, i) => (
                           <tr key={i} className="border-b hover:bg-muted/50">
-                            <td className="p-2">{inv.projectName ?? "Sem projeto"}</td>
-                            <td className="p-2 text-right tabular-nums">{inv.count}</td>
-                            <td className="p-2 text-right tabular-nums text-emerald-700">{fmt(Number(inv.paidAmount))}</td>
-                            <td className="p-2 text-right tabular-nums font-bold">{fmt(Number(inv.totalAmount))}</td>
+                            <td className="p-2">{c.projectName ?? "Sem projeto"}</td>
+                            <td className="p-2 text-right tabular-nums">{c.count}</td>
+                            <td className="p-2 text-right tabular-nums font-bold text-sky-700">{fmt(Number(c.totalRevenue))}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -427,70 +373,8 @@ export default function InvoicesPage() {
                 </CardContent>
               </Card>
 
-              {/* Marketing */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <Megaphone className="w-4 h-4" /> Marketing (despesas + ads)
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {marketing.expenses.length === 0 && marketing.ads.length === 0 ? (
-                    <p className="text-muted-foreground text-sm text-center py-6">Sem gastos de marketing no período</p>
-                  ) : (
-                    <>
-                      {marketing.expenses.length > 0 && (
-                        <div>
-                          <p className="text-xs font-medium text-muted-foreground mb-1">Despesas marketing</p>
-                          <table className="w-full text-sm">
-                            <thead>
-                              <tr className="border-b text-left">
-                                <th className="p-2">Projeto</th>
-                                <th className="p-2">Categoria</th>
-                                <th className="p-2 text-right">Registos</th>
-                                <th className="p-2 text-right font-bold">Total</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {marketing.expenses.map((m: any, i: number) => (
-                                <tr key={i} className="border-b hover:bg-muted/50">
-                                  <td className="p-2">{m.projectName ?? "Sem projeto"}</td>
-                                  <td className="p-2 capitalize">{m.category}</td>
-                                  <td className="p-2 text-right tabular-nums">{m.count}</td>
-                                  <td className="p-2 text-right tabular-nums font-bold text-violet-700">{fmt(Number(m.totalAmount))}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                      {marketing.ads.length > 0 && (
-                        <div>
-                          <p className="text-xs font-medium text-muted-foreground mb-1">Ad spend (Google/Meta)</p>
-                          <table className="w-full text-sm">
-                            <thead>
-                              <tr className="border-b text-left">
-                                <th className="p-2">Projeto</th>
-                                <th className="p-2 text-right">Conversões</th>
-                                <th className="p-2 text-right font-bold">Spend</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {marketing.ads.map((a: any, i: number) => (
-                                <tr key={i} className="border-b hover:bg-muted/50">
-                                  <td className="p-2">{a.projectName ?? "Sem projeto"}</td>
-                                  <td className="p-2 text-right tabular-nums">{a.conversions}</td>
-                                  <td className="p-2 text-right tabular-nums font-bold text-violet-700">{fmt(Number(a.totalSpend))}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                    </>
-                  )}
-                </CardContent>
-              </Card>
+              {/* (Marketing saiu da Faturação: as faturas do Google entram pelas
+                  Despesas normais — o detalhe vê-se no módulo Marketing.) */}
 
               {/* Salários por projeto (rateados ao dia) */}
               <Card>
@@ -499,8 +383,9 @@ export default function InvoicesPage() {
                     <UsersIcon className="w-4 h-4" /> Salários por centro de custos
                   </CardTitle>
                   <p className="text-xs text-muted-foreground">
-                    Salário mensal × dias do período ({(summary as any).periodDays} dias). Quem está num nível superior
+                    Salário mensal × dias do período ({summary.periodDays} dias). Quem está num nível superior
                     (Grupo / Cidade / Marca) tem o custo distribuído equitativamente pelas marcas folhas.
+                    Aos custos totais soma ainda a TSU patronal (23,75%): {fmt(summary.employerTax ?? 0)}.
                   </p>
                 </CardHeader>
                 <CardContent>

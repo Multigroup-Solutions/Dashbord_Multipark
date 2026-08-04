@@ -3326,16 +3326,21 @@ export async function getBillingData(filters: {
   let projectIds: number[] | undefined;
   if (filters.projectId) projectIds = await resolveProjectIds(filters.projectId);
 
-  // ─── 1. PRODUZIDO (reservas com checkout EFECTIVO no período) ────────────
-  // Filtra por status != 'CANCELLED'. Inclui BOOKED, CHECKING_IN,
-  // CHECKED_IN, CHECKED_OUT — todas as reservas vivas com checkout
-  // previsto no período. Bate com o número da Multipark. O cancelledAt
-  // não é fiável (o sync nem sempre o popula), por isso o filtro é
-  // pelo status que é a fonte de verdade.
+  // ─── 1. ENTREGUES + RECOLHIDOS (modelo do Jorge, 2026-08-04) ─────────────
+  // FONTE ÚNICA de receita = multipark_bookings.totalPrice (valor da reserva).
+  // ENTREGUES = carro JÁ SAIU no período (checkOut no período + status
+  //   CHECKED_OUT) — o valor "já cá está", é a receita realizada e a base
+  //   da margem. (No modelo antigo chamava-se "faturado".)
+  // RECOLHIDOS = carro ENTROU no período (checkIn no período + status de
+  //   recolha em diante) — angariação em curso.
+  // O cancelledAt não é fiável (4.6k canceladas sem ele) → filtros por status.
+  const DELIVERED_STATUSES = ["CHECKED_OUT"];
+  const COLLECTED_STATUSES = ["CHECKED_IN", "CHECKING_OUT", "PENDING_CHECKOUT", "CHECKED_OUT"];
+
   const deliveryConds: any[] = [
     gte(multiparkBookings.checkOut, fromStr),
     lte(multiparkBookings.checkOut, toStr),
-    sql`${multiparkBookings.status} != 'CANCELLED'`,
+    inArray(multiparkBookings.status, DELIVERED_STATUSES),
   ];
   if (projectIds) deliveryConds.push(inArray(multiparkBookings.projectId, projectIds));
 
@@ -3354,6 +3359,25 @@ export async function getBillingData(filters: {
     .where(and(...deliveryConds))
     .groupBy(multiparkBookings.projectId, projects.name);
 
+  const collectedConds: any[] = [
+    gte(multiparkBookings.checkIn, fromStr),
+    lte(multiparkBookings.checkIn, toStr),
+    inArray(multiparkBookings.status, COLLECTED_STATUSES),
+  ];
+  if (projectIds) collectedConds.push(inArray(multiparkBookings.projectId, projectIds));
+
+  const collectedRows = await db
+    .select({
+      projectId: multiparkBookings.projectId,
+      projectName: projects.name,
+      count: sql<number>`COUNT(*)`,
+      totalRevenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
+    })
+    .from(multiparkBookings)
+    .leftJoin(projects, eq(multiparkBookings.projectId, projects.id))
+    .where(and(...collectedConds))
+    .groupBy(multiparkBookings.projectId, projects.name);
+
   // Receita produzida por projeto (folha) no período — usada para calcular
   // a comissão dos parceiros operacionais (secção 7b).
   const revenueByProjectId = new Map<number, number>();
@@ -3361,26 +3385,9 @@ export async function getBillingData(filters: {
     if (r.projectId != null) revenueByProjectId.set(r.projectId, Number(r.totalRevenue ?? 0));
   }
 
-  // ─── 2. FATURADO (invoices emitidas no período) ──────────────────────────
-  const invConds: any[] = [
-    gte(invoices.issueDate, fromStr),
-    lte(invoices.issueDate, toStr),
-    sql`${invoices.status} != 'cancelled'`,
-  ];
-  if (projectIds) invConds.push(inArray(invoices.projectId, projectIds));
-
-  const invoicedRows = await db
-    .select({
-      projectId: invoices.projectId,
-      projectName: projects.name,
-      count: sql<number>`COUNT(*)`,
-      totalAmount: sql<number>`COALESCE(SUM(${invoices.totalAmount}), 0)`,
-      paidAmount: sql<number>`COALESCE(SUM(CASE WHEN ${invoices.status} = 'paid' THEN ${invoices.totalAmount} ELSE 0 END), 0)`,
-    })
-    .from(invoices)
-    .leftJoin(projects, eq(invoices.projectId, projects.id))
-    .where(and(...invConds))
-    .groupBy(invoices.projectId, projects.name);
+  // (O antigo "Faturado" — tabela invoices manual — saiu: a faturação real
+  //  vive no programa da Multipark e a tabela esteve sempre vazia. A receita
+  //  vem só das reservas.)
 
   // ─── 3. DESPESAS INSERIDAS (expenseDate no período) ──────────────────────
   // Contabiliza as despesas LANÇADAS no período (data da despesa),
@@ -3457,45 +3464,10 @@ export async function getBillingData(filters: {
     };
   });
 
-  // ─── 6. MARKETING (despesas marketing + spend de campanhas) ──────────────
-  const mktExpConds: any[] = [
-    gte(marketingExpenses.date, fromStr),
-    lte(marketingExpenses.date, toStr),
-  ];
-  if (projectIds) mktExpConds.push(inArray(marketingExpenses.projectId, projectIds));
-
-  const mktExpRows = await db
-    .select({
-      projectId: marketingExpenses.projectId,
-      projectName: projects.name,
-      category: marketingExpenses.mktCategory,
-      totalAmount: sql<number>`COALESCE(SUM(${marketingExpenses.amount}), 0)`,
-      count: sql<number>`COUNT(*)`,
-    })
-    .from(marketingExpenses)
-    .leftJoin(projects, eq(marketingExpenses.projectId, projects.id))
-    .where(and(...mktExpConds))
-    .groupBy(marketingExpenses.projectId, projects.name, marketingExpenses.mktCategory);
-
-  const mktAdsConds: any[] = [
-    gte(campaignDailyStats.date, fromStr),
-    lte(campaignDailyStats.date, toStr),
-  ];
-  if (projectIds) {
-    mktAdsConds.push(inArray(campaigns.projectId, projectIds));
-  }
-  const mktAdsRows = await db
-    .select({
-      projectId: campaigns.projectId,
-      projectName: projects.name,
-      totalSpend: sql<number>`COALESCE(SUM(${campaignDailyStats.spend}), 0)`,
-      conversions: sql<number>`COALESCE(SUM(${campaignDailyStats.conversions}), 0)`,
-    })
-    .from(campaignDailyStats)
-    .innerJoin(campaigns, eq(campaignDailyStats.campaignId, campaigns.id))
-    .leftJoin(projects, eq(campaigns.projectId, projects.id))
-    .where(and(...mktAdsConds))
-    .groupBy(campaigns.projectId, projects.name);
+  // (Marketing saiu da Faturação por decisão do Jorge 2026-08-04: as faturas
+  //  do Google/fornecedores entram pelas Despesas normais — contá-las aqui
+  //  outra vez seria dupla contagem. O detalhe de marketing vê-se no módulo
+  //  de Marketing.)
 
   // ─── 7a. PARCEIROS DE VENDA (comissões calculadas via campaign matching) ──
   // IMPORTANTE: NÃO fazemos INNER JOIN entre bookings e partnerships porque,
@@ -3781,11 +3753,13 @@ export async function getBillingData(filters: {
   }
   const forecastFrom = toMysqlDateTime(forecastFromDate);
   const forecastToStr = toMysqlDateTime(forecastToDate);
+  // BUG antigo: exigia checkOut IS NULL, mas o checkOut é a data PREVISTA
+  // (vem sempre preenchida da API) → a previsão dava sempre 0. E cancelledAt
+  // não é fiável → filtra pelo status.
   const forecastConds: any[] = [
     gte(multiparkBookings.checkIn, forecastFrom),
     lte(multiparkBookings.checkIn, forecastToStr),
-    isNull(multiparkBookings.checkOut),
-    isNull(multiparkBookings.cancelledAt),
+    notInArray(multiparkBookings.status, ["CANCELLED", ...COLLECTED_STATUSES]),
   ];
   if (projectIds) forecastConds.push(inArray(multiparkBookings.projectId, projectIds));
 
@@ -3803,11 +3777,8 @@ export async function getBillingData(filters: {
 
   // ─── 9. TIMESERIES (granularity: day/week/month/year) ────────────────────
   const checkOutBucket = bucketSqlExpr(multiparkBookings.checkOut, granularity);
-  const issueBucket = bucketSqlExpr(invoices.issueDate, granularity);
   const expenseDateBucket = bucketSqlExpr(expenses.expenseDate, granularity);
   const checkInBucket = bucketSqlExpr(multiparkBookings.checkIn, granularity);
-  const mktDateBucket = bucketSqlExpr(marketingExpenses.date, granularity);
-  const adsDateBucket = bucketSqlExpr(campaignDailyStats.date, granularity);
 
   const tsProduced = await db
     .select({ bucket: checkOutBucket, total: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`, count: sql<number>`COUNT(*)` })
@@ -3815,11 +3786,11 @@ export async function getBillingData(filters: {
     .where(and(...deliveryConds))
     .groupBy(checkOutBucket);
 
-  const tsInvoiced = await db
-    .select({ bucket: issueBucket, total: sql<number>`COALESCE(SUM(${invoices.totalAmount}), 0)` })
-    .from(invoices)
-    .where(and(...invConds))
-    .groupBy(issueBucket);
+  const tsCollected = await db
+    .select({ bucket: checkInBucket, total: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`, count: sql<number>`COUNT(*)` })
+    .from(multiparkBookings)
+    .where(and(...collectedConds))
+    .groupBy(checkInBucket);
 
   const tsExpensesPaid = await db
     .select({ bucket: expenseDateBucket, total: sql<number>`COALESCE(SUM(${expenses.amount}), 0)` })
@@ -3833,25 +3804,19 @@ export async function getBillingData(filters: {
     .where(and(...forecastConds))
     .groupBy(checkInBucket);
 
-  const tsMktExpenses = await db
-    .select({ bucket: mktDateBucket, total: sql<number>`COALESCE(SUM(${marketingExpenses.amount}), 0)` })
-    .from(marketingExpenses)
-    .where(and(...mktExpConds))
-    .groupBy(mktDateBucket);
-
-  const tsMktAds = await db
-    .select({ bucket: adsDateBucket, total: sql<number>`COALESCE(SUM(${campaignDailyStats.spend}), 0)` })
-    .from(campaignDailyStats)
-    .innerJoin(campaigns, eq(campaignDailyStats.campaignId, campaigns.id))
-    .where(and(...mktAdsConds))
-    .groupBy(adsDateBucket);
-
   // Totais de custos que não estão naturalmente distribuídos no tempo
   // (salários mensais, comissões de parceiros, equipa-dia). Distribuem-se
   // pelos buckets proporcionalmente ao produzido (ou em partes iguais se
   // não houver produção) para que o gráfico mostre TUDO como despesa e o
   // total bata certo com os KPIs.
-  const tsSalariesTotal = Array.from(salaryPerProject.values()).reduce((s, v) => s + v, 0);
+  // FIX 2026-08-04: os salários agora respeitam o filtro de projeto
+  // (antes somavam a empresa toda mesmo filtrando uma cidade). Sem filtro,
+  // inclui também quem não tem projeto atribuído.
+  const salariesUnallocated = salaryDetailRows
+    .filter((r) => r.ratedTo.length === 0)
+    .reduce((s, r) => s + r.cost, 0);
+  const tsSalariesTotal =
+    salariesByProject.reduce((s, r) => s + r.cost, 0) + (projectIds ? 0 : salariesUnallocated);
   const tsSalesTotal = salesCommissions.reduce((s, c) => s + c.commission, 0);
   const tsPartnersTotal = operationalPartnersTotal + tsSalesTotal;
   const tsExtrasTotal = extrasDiaSummary.reduce((s, r) => s + r.cost, 0);
@@ -3859,10 +3824,9 @@ export async function getBillingData(filters: {
   // Merge timeseries em um único array (chave = bucket)
   type TimeseriesPoint = {
     bucket: string;
-    produced: number;
-    invoiced: number;
+    produced: number;        // entregues (carro saiu — receita realizada)
+    collected: number;       // recolhidos (carro entrou)
     expenses: number;        // despesas inseridas no período
-    marketingCost: number;
     salaries: number;        // ordenados (rateados)
     partners: number;        // parceiros operacionais + de venda
     extrasCost: number;      // equipa do dia (extras-dia)
@@ -3873,7 +3837,7 @@ export async function getBillingData(filters: {
     expensesPaid: number;
   };
   function emptyPoint(bk: string): TimeseriesPoint {
-    return { bucket: bk, produced: 0, invoiced: 0, expenses: 0, marketingCost: 0, salaries: 0, partners: 0, extrasCost: 0, revenueForecast: 0, totalCost: 0, margin: 0, expensesPaid: 0 };
+    return { bucket: bk, produced: 0, collected: 0, expenses: 0, salaries: 0, partners: 0, extrasCost: 0, revenueForecast: 0, totalCost: 0, margin: 0, expensesPaid: 0 };
   }
   const tsMap = new Map<string, TimeseriesPoint>();
   function bump(arr: any[], key: keyof Omit<TimeseriesPoint, "bucket">) {
@@ -3886,11 +3850,9 @@ export async function getBillingData(filters: {
     }
   }
   bump(tsProduced, "produced");
-  bump(tsInvoiced, "invoiced");
+  bump(tsCollected, "collected");
   bump(tsExpensesPaid, "expenses");
   bump(tsForecast, "revenueForecast");
-  bump(tsMktExpenses, "marketingCost");
-  bump(tsMktAds, "marketingCost");
 
   // Distribui os custos não-temporais pelos buckets do produzido.
   const producedBuckets = tsProduced
@@ -3918,7 +3880,7 @@ export async function getBillingData(filters: {
 
   // Custo total e margem por bucket (back-compat: expensesPaid = expenses)
   for (const p of tsMap.values()) {
-    p.totalCost = p.expenses + p.marketingCost + p.salaries + p.partners + p.extrasCost;
+    p.totalCost = p.expenses + p.salaries + p.partners + p.extrasCost;
     p.margin = p.produced - p.totalCost;
     p.expensesPaid = p.expenses;
   }
@@ -3926,14 +3888,18 @@ export async function getBillingData(filters: {
   const timeseries = Array.from(tsMap.values()).sort((a, b) => a.bucket.localeCompare(b.bucket));
 
   // ─── 10. SUMMARY ─────────────────────────────────────────────────────────
+  // IVA e TSU alinhados com a página Anual: receita e despesas gravadas
+  // COM IVA (23%); a margem verdadeira é calculada sobre valores líquidos.
+  const VAT_RATE = 0.23;
+  const TSU_EMPLOYER = 0.2375;
+
   const produced = deliveryRows.reduce((s, r) => s + Number(r.totalRevenue ?? 0), 0);
-  const invoiced = invoicedRows.reduce((s, r) => s + Number(r.totalAmount ?? 0), 0);
+  const producedCount = deliveryRows.reduce((s, r) => s + Number(r.count ?? 0), 0);
+  const collected = collectedRows.reduce((s, r) => s + Number(r.totalRevenue ?? 0), 0);
+  const collectedCount = collectedRows.reduce((s, r) => s + Number(r.count ?? 0), 0);
   const expensesPaidTotal = expPaidRows.reduce((s, r) => s + Number(r.totalAmount ?? 0), 0);
   const expensesPendingTotal = expPendRows.reduce((s, r) => s + Number(r.totalAmount ?? 0), 0);
   const extrasDiaCost = extrasDiaSummary.reduce((s, r) => s + r.cost, 0);
-  const mktExpensesTotal = mktExpRows.reduce((s, r) => s + Number(r.totalAmount ?? 0), 0);
-  const mktAdsSpend = mktAdsRows.reduce((s, r) => s + Number(r.totalSpend ?? 0), 0);
-  const marketingCost = mktExpensesTotal + mktAdsSpend;
   // Parceiros operacionais: comissão calculada sobre as reservas dos
   // projetos que operam (secção 7b). É um custo "sempre devido".
   const operationalPartnersPaid = operationalPartnersTotal;
@@ -3941,28 +3907,46 @@ export async function getBillingData(filters: {
   // Comissões a parceiros de venda — calculadas a partir das reservas.
   // Custo "sempre devido" assim que o checkout aconteceu.
   const salesCommissionsTotal = salesCommissions.reduce((s, r) => s + r.commission, 0);
-  const totalSalaries = Array.from(salaryPerProject.values()).reduce((s, v) => s + v, 0);
+  // Salários FILTRADOS pelo projeto (fix 2026-08-04) + TSU entidade patronal
+  const totalSalaries = tsSalariesTotal;
+  const employerTax = totalSalaries * TSU_EMPLOYER;
 
-  const totalCostsPaid = expensesPaidTotal + extrasDiaCost + marketingCost + operationalPartnersPaid + salesCommissionsTotal + totalSalaries;
+  // Líquidos de IVA (reservas e despesas incluem IVA; salários/TSU/extras/comissões não têm)
+  const producedNoVat = produced / (1 + VAT_RATE);
+  const collectedNoVat = collected / (1 + VAT_RATE);
+  const expensesPaidNoVat = expensesPaidTotal / (1 + VAT_RATE);
+
+  const totalCostsPaid = expensesPaidTotal + extrasDiaCost + operationalPartnersPaid + salesCommissionsTotal + totalSalaries + employerTax;
   const totalCostsAll = totalCostsPaid + expensesPendingTotal + operationalPartnersPending;
+  // Custos líquidos: despesas sem IVA, resto tal-qual
+  const totalCostsNoVat = expensesPaidNoVat + extrasDiaCost + operationalPartnersPaid + salesCommissionsTotal + totalSalaries + employerTax;
 
   const summary = {
-    produced, invoiced,
+    produced, producedCount,
+    collected, collectedCount,
+    producedNoVat, collectedNoVat,
     expensesPaid: expensesPaidTotal,
+    expensesPaidNoVat,
     expensesPending: expensesPendingTotal,
     extrasDiaCost,
-    marketingCost,
     salariesCost: totalSalaries,
+    employerTax,
     salesCommissions: salesCommissionsTotal,
     // back-compat
+    invoiced: 0,
+    marketingCost: 0,
     partnerCommissionsPaid: operationalPartnersPaid,
     partnerCommissionsPending: operationalPartnersPending,
     operationalPartnersPaid,
     operationalPartnersPending,
     totalCostsPaid,
     totalCostsAll,
+    totalCostsNoVat,
     marginRealized: produced - totalCostsPaid,
     marginAll: produced - totalCostsAll,
+    // Margem verdadeira: receita entregue s/ IVA − custos (despesas s/ IVA)
+    marginNet: producedNoVat - totalCostsNoVat,
+    vatRate: VAT_RATE,
     periodDays,
   };
 
@@ -3973,13 +3957,11 @@ export async function getBillingData(filters: {
     range: { from: filters.from, to: filters.to },
     // Mantém os blocos antigos para back-compat / drilldown
     deliveries: deliveryRows,
+    collected: collectedRows,
     expensesPaid: expPaidRows,
     expensesPending: expPendRows,
     forecast: forecastRows,
-    // Novos blocos para drilldown
-    invoices: invoicedRows,
     extrasDia: extrasDiaSummary,
-    marketing: { expenses: mktExpRows, ads: mktAdsRows },
     partnerCommissions: [], // back-compat (deixou de vir de partnership_invoices)
     salesCommissions, // comissões parceiros de venda por projeto
     operationalPartners, // parceiros operacionais: comissão s/ reservas dos projetos operados
@@ -5391,10 +5373,125 @@ export async function getAnnualBreakdown(year: number, projectId?: number) {
       employerTax,
       totalCosts: Math.round(totalCosts * 100) / 100,
       profit,
+      fromHistory: false,
     });
   }
 
+  // ─── 9. Fusão com o histórico importado (anos sem dados na app) ──────────
+  // Se um mês não tem NADA real (nem reservas, nem despesas, nem payroll)
+  // e existe registo importado do Excel, usa esse. Só sem filtro de projeto
+  // (o histórico é global). Permite ver 2016→hoje na mesma página.
+  if (!projectIds) {
+    try {
+      const history = await getFinancialHistory(year);
+      const histByMonth = new Map(history.map((h) => [h.month, h]));
+      for (const mo of months) {
+        const h = histByMonth.get(mo.month);
+        if (!h) continue;
+        const hasReal = mo.revenueGrossWithVat > 0 || mo.expensesWithVat > 0 || mo.salaries > 0;
+        if (hasReal) continue;
+        const revenueWithVat = h.revenueWithVat;
+        const expensesWithVat = h.expensesWithVat;
+        const salaries = h.salaries;
+        const vatRevenue = Math.round(revenueWithVat * 0.23 / 1.23 * 100) / 100;
+        const vatExpenses = Math.round(expensesWithVat * 0.23 / 1.23 * 100) / 100;
+        const revenueNoVat = Math.round((revenueWithVat - vatRevenue) * 100) / 100;
+        const expensesNoVat = Math.round((expensesWithVat - vatExpenses) * 100) / 100;
+        const employerTax = Math.round(salaries * 0.2375 * 100) / 100;
+        const totalCosts = Math.round((expensesNoVat + salaries + employerTax) * 100) / 100;
+        Object.assign(mo, {
+          revenueGrossWithVat: revenueWithVat,
+          revenueWithVat,
+          revenueNoVat,
+          vatRevenue,
+          expensesWithVat,
+          expensesNoVat,
+          vatExpenses,
+          vatToPay: Math.round((vatRevenue - vatExpenses) * 100) / 100,
+          salaries,
+          employerTax,
+          totalCosts,
+          profit: Math.round((revenueNoVat - totalCosts) * 100) / 100,
+          fromHistory: true,
+        });
+      }
+    } catch (err) {
+      console.warn("[annual] fusão histórico falhou:", err);
+    }
+  }
+
   return months;
+}
+
+// ─── HISTÓRICO FINANCEIRO MENSAL (importado de Excel/CSV, 2016→) ─────────────
+// Anos anteriores à app não têm reservas na BD; o Jorge importa os totais
+// mensais (receita c/ IVA, despesas c/ IVA, ordenados) e o breakdown Anual
+// usa estes valores quando não há dados reais no mês. Tabela criada on-demand.
+let financialHistoryEnsured = false;
+async function ensureFinancialHistoryTable() {
+  if (financialHistoryEnsured) return;
+  const db = await getDb();
+  if (!db) return;
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS \`financial_history_monthly\` (
+    \`year\` INT NOT NULL,
+    \`month\` INT NOT NULL,
+    \`revenueWithVat\` DECIMAL(14,2) NOT NULL DEFAULT 0,
+    \`expensesWithVat\` DECIMAL(14,2) NOT NULL DEFAULT 0,
+    \`salaries\` DECIMAL(14,2) NOT NULL DEFAULT 0,
+    \`notes\` VARCHAR(512) NULL,
+    \`updatedAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (\`year\`, \`month\`)
+  )`);
+  financialHistoryEnsured = true;
+}
+
+export async function importFinancialHistory(rows: Array<{
+  year: number; month: number; revenueWithVat: number; expensesWithVat?: number; salaries?: number; notes?: string | null;
+}>) {
+  const db = await getDb();
+  if (!db) return { imported: 0 };
+  await ensureFinancialHistoryTable();
+  let imported = 0;
+  for (const r of rows) {
+    if (!r.year || r.year < 2000 || r.year > 2100 || !r.month || r.month < 1 || r.month > 12) continue;
+    await db.execute(sql`INSERT INTO \`financial_history_monthly\`
+      (\`year\`, \`month\`, \`revenueWithVat\`, \`expensesWithVat\`, \`salaries\`, \`notes\`)
+      VALUES (${r.year}, ${r.month}, ${r.revenueWithVat ?? 0}, ${r.expensesWithVat ?? 0}, ${r.salaries ?? 0}, ${r.notes ?? null})
+      ON DUPLICATE KEY UPDATE
+        \`revenueWithVat\` = VALUES(\`revenueWithVat\`),
+        \`expensesWithVat\` = VALUES(\`expensesWithVat\`),
+        \`salaries\` = VALUES(\`salaries\`),
+        \`notes\` = VALUES(\`notes\`)`);
+    imported++;
+  }
+  return { imported };
+}
+
+export async function getFinancialHistory(year?: number) {
+  const db = await getDb();
+  if (!db) return [];
+  await ensureFinancialHistoryTable();
+  const [rows] = await db.execute(
+    year != null
+      ? sql`SELECT * FROM \`financial_history_monthly\` WHERE \`year\` = ${year} ORDER BY \`year\`, \`month\``
+      : sql`SELECT * FROM \`financial_history_monthly\` ORDER BY \`year\`, \`month\``,
+  ) as any;
+  return (rows as any[]).map((r) => ({
+    year: Number(r.year),
+    month: Number(r.month),
+    revenueWithVat: Number(r.revenueWithVat ?? 0),
+    expensesWithVat: Number(r.expensesWithVat ?? 0),
+    salaries: Number(r.salaries ?? 0),
+    notes: r.notes ?? null,
+  }));
+}
+
+export async function deleteFinancialHistoryYear(year: number) {
+  const db = await getDb();
+  if (!db) return { deleted: 0 };
+  await ensureFinancialHistoryTable();
+  await db.execute(sql`DELETE FROM \`financial_history_monthly\` WHERE \`year\` = ${year}`);
+  return { deleted: 1 };
 }
 
 export async function generateAnnualSummary(year: number, projectId?: number, splitPartner: number = 60) {
