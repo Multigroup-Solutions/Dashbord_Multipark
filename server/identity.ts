@@ -313,6 +313,15 @@ export async function adoptPlaceholderAccountByEmail(
       .update(users)
       .set({ isActive: 0, loginMethod: `merged_into_${oauthRow.id}`.slice(0, 64) })
       .where(eq(users.id, placeholder.id));
+    // A FICHA DE FUNCIONÁRIO tem de seguir a fusão — sem isto o ponto-no-
+    // avatar (e tudo o que depende de employees.userId) desaparecia para a
+    // conta Google ativa (caso Carlos/César/Márcia/Maxwell, ago-2026).
+    try {
+      await db
+        .update(employees)
+        .set({ userId: oauthRow.id })
+        .where(eq(employees.userId, placeholder.id));
+    } catch { /* best-effort — não pode partir o login */ }
     await logActivity({
       userId: oauthRow.id,
       action: "account_merge",
