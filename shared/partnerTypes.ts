@@ -128,9 +128,68 @@ export const PARTNER_TYPE_BY_ID: Record<string, PartnerTypeDef> = Object.fromEnt
   PARTNER_TYPES.map((t) => [t.id, t]),
 );
 
+/**
+ * Valores legados do ENUM antigo (antes do catálogo em português) que ainda
+ * podem existir em linhas antigas da BD. Normalizados na leitura.
+ */
+export const LEGACY_TYPE_MAP: Record<string, string> = {
+  aggregator: "agregador",
+  agency: "agencia_viagem",
+  pro_client: "cliente_pro",
+  corporate: "enterprise",
+  retainer: "avenca_mensal",
+  other: "outro",
+};
+
+export function normalizePartnerTypeId(id: string | null | undefined): string {
+  if (!id) return "outro";
+  return PARTNER_TYPE_BY_ID[id] ? id : (LEGACY_TYPE_MAP[id] ?? "outro");
+}
+
 export function getPartnerType(id: string | null | undefined): PartnerTypeDef {
-  if (!id) return PARTNER_TYPE_BY_ID["outro"];
-  return PARTNER_TYPE_BY_ID[id] ?? PARTNER_TYPE_BY_ID["outro"];
+  return PARTNER_TYPE_BY_ID[normalizePartnerTypeId(id)];
+}
+
+// ─── Categorias macro (organização pedida pelo Jorge, 2026-08-04) ────────────
+// 4 categorias de venda + uma secção à parte para o que é custo/interno.
+
+export type PartnerCategoryId = "pros" | "agencias" | "empresas" | "agregadores" | "interno";
+
+export type PartnerCategoryDef = {
+  id: PartnerCategoryId;
+  label: string;
+  description: string;
+};
+
+export const PARTNER_CATEGORIES: PartnerCategoryDef[] = [
+  { id: "pros", label: "Prós", description: "Empresas com plano Pro (faturação mensal com desconto)." },
+  { id: "agencias", label: "Agências de viagens", description: "Agências que vendem o estacionamento em pacote." },
+  { id: "empresas", label: "Empresas parceiras", description: "ACP, corporates, hotéis, companhias aéreas, avenças e afiliados." },
+  { id: "agregadores", label: "Agregadores", description: "Sites de venda (Parkos, Parclick, Parkvia, …) à comissão." },
+  { id: "interno", label: "Operacional / Campanhas", description: "Parceiros operacionais e campanhas próprias — custo, não venda." },
+];
+
+const TYPE_TO_CATEGORY: Record<string, PartnerCategoryId> = {
+  cliente_pro: "pros",
+  agencia_viagem: "agencias",
+  agregador: "agregadores",
+  enterprise: "empresas",
+  hotel: "empresas",
+  companhia_aerea: "empresas",
+  afiliado: "empresas",
+  avenca_mensal: "empresas",
+  avenca_anual: "empresas",
+  outro: "empresas",
+  operacional: "interno",
+  campanha_propria: "interno",
+};
+
+export function partnerCategoryOf(typeId: string | null | undefined): PartnerCategoryId {
+  return TYPE_TO_CATEGORY[normalizePartnerTypeId(typeId)] ?? "empresas";
+}
+
+export function typesInCategory(categoryId: PartnerCategoryId): PartnerTypeDef[] {
+  return PARTNER_TYPES.filter((t) => partnerCategoryOf(t.id) === categoryId);
 }
 
 /**

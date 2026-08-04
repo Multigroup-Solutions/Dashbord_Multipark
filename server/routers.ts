@@ -5822,6 +5822,21 @@ export const appRouter = router({
         return { success: true };
       }),
 
+    // Sincroniza parceiros a partir dos dados EXPLÍCITOS da API: resolve os
+    // partnerIds mascarados (nome real via detalhe), cria empresas Pro das
+    // campanhas "Pro <empresa>" e normaliza tipos legados. Substitui a
+    // inferência por heurísticas. Idempotente.
+    syncFromApi: protectedProcedure.mutation(async ({ ctx }) => {
+      requireRole(ctx.user.role, "admin");
+      const { syncPartnersFromApi } = await import("./partnerSync");
+      const r = await syncPartnersFromApi();
+      await logActivity({
+        userId: ctx.user.id, action: "sync", entity: "partnership", entityId: 0,
+        details: `Parceiros da API: ${r.created} criados, ${r.linkedToExisting} ligados, ${r.proCreated} Pro criados, ${r.unresolved.length} por resolver`,
+      });
+      return r;
+    }),
+
     // Transactions
     getTransactions: protectedProcedure.input(z.object({ partnershipId: z.number() })).query(({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");

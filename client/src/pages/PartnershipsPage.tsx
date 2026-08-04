@@ -19,7 +19,8 @@ import {
   Plus, Pencil, Trash2, FileText, Settings, Link2, AlertTriangle, Wallet,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
-import { PARTNER_TYPES, getPartnerType, parsePartnerConfig, serializePartnerConfig, partnerFormFields } from "@shared/partnerTypes";
+import { PARTNER_TYPES, PARTNER_CATEGORIES, getPartnerType, partnerCategoryOf, parsePartnerConfig, serializePartnerConfig, partnerFormFields } from "@shared/partnerTypes";
+import { toast } from "sonner";
 
 const fmt = (v: number) => new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR" }).format(v);
 
@@ -296,6 +297,19 @@ export default function PartnershipsPage() {
   const { data: partnerList = [] } = trpc.partnerships.list.useQuery({});
   const utils = trpc.useUtils();
   const deleteMut = trpc.partnerships.delete.useMutation({ onSuccess: () => utils.partnerships.list.invalidate() });
+  const syncApiMut = trpc.partnerships.syncFromApi.useMutation({
+    onSuccess: (r) => {
+      toast.success(
+        `Parceiros sincronizados: ${r.created} criados, ${r.linkedToExisting} ligados a existentes, ` +
+        `${r.proCreated} empresas Pro criadas, ${r.legacyTypesFixed} tipos corrigidos` +
+        (r.unresolved.length ? ` — ${r.unresolved.length} por resolver` : ""),
+      );
+      utils.partnerships.list.invalidate();
+      utils.partnerships.analytics.invalidate();
+      utils.partnerships.invoicingSummary.invalidate();
+    },
+    onError: (e) => toast.error(e.message || "Erro na sincronização de parceiros"),
+  });
 
   // Billing query: bookings for selected partner
   const selectedPartnerObj = partnerList.find((p: any) => String(p.id) === selectedBillingPartner);
@@ -556,12 +570,21 @@ export default function PartnershipsPage() {
 
         {/* ── TAB: GESTÃO ──────────────────────────────────────────────────── */}
         <TabsContent value="management" className="space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-2">
             <p className="text-sm text-muted-foreground">Configurar parceiros: campaign key, comissão, NIF e dados de contacto</p>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
+              <Button
+                size="sm" variant="outline"
+                disabled={syncApiMut.isPending}
+                title="Resolve os parceiros mascarados da API (nome real via detalhe), cria as empresas Pro das campanhas 'Pro X' e normaliza tipos antigos"
+                onClick={() => syncApiMut.mutate()}
+              >
+                <Link2 className={`w-4 h-4 mr-1 ${syncApiMut.isPending ? "animate-pulse" : ""}`} />
+                {syncApiMut.isPending ? "A sincronizar…" : "Sincronizar parceiros da API"}
+              </Button>
               <Link href="/parcerias/inferir">
-                <Button size="sm" variant="outline">
-                  <Link2 className="w-4 h-4 mr-1" /> Inferir da API
+                <Button size="sm" variant="ghost" title="Inferência antiga por método de pagamento (histórico)">
+                  Inferência antiga
                 </Button>
               </Link>
               <Button size="sm" onClick={() => { setEditPartner(null); setDialogOpen(true); }}>
@@ -570,11 +593,13 @@ export default function PartnershipsPage() {
             </div>
           </div>
 
-          {/* Segmentação por tipo de parceiro */}
+          {/* Segmentação por CATEGORIA (Prós | Agências | Empresas | Agregadores | Operacional) */}
           {partnerList.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
-              {[{ id: "all", label: "Todos" }, ...PARTNER_TYPES.map(t => ({ id: t.id, label: t.label }))].map(t => {
-                const count = t.id === "all" ? partnerList.length : (partnerList as any[]).filter((p: any) => p.partnerType === t.id).length;
+              {[{ id: "all", label: "Todos" }, ...PARTNER_CATEGORIES.map(c => ({ id: c.id, label: c.label }))].map(t => {
+                const count = t.id === "all"
+                  ? partnerList.length
+                  : (partnerList as any[]).filter((p: any) => partnerCategoryOf(p.partnerType) === t.id).length;
                 if (t.id !== "all" && count === 0) return null;
                 return (
                   <button
@@ -591,11 +616,11 @@ export default function PartnershipsPage() {
 
           {partnerList.length === 0 ? (
             <Card className="p-8 text-center text-muted-foreground">
-              Nenhum parceiro configurado. Cria um novo ou vai à tab Análise e clica "Configurar" num parceiro detectado.
+              Nenhum parceiro configurado. Usa "Sincronizar parceiros da API" ou cria um novo.
             </Card>
           ) : (
             <div className="grid gap-3">
-              {(partnerList as any[]).filter((p: any) => mgmtType === "all" || p.partnerType === mgmtType).map((p: any) => (
+              {(partnerList as any[]).filter((p: any) => mgmtType === "all" || partnerCategoryOf(p.partnerType) === mgmtType).map((p: any) => (
                 <Card key={p.id} className="p-4">
                   <div className="flex items-start justify-between">
                     <div className="flex-1">
