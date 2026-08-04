@@ -28,7 +28,7 @@ import {
   ChevronRight, ChevronLeft, Send, Eye, Trash2, Upload, Pencil,
   BarChart3, AlertCircle, CheckCircle2, Hourglass, XCircle,
   Package, DollarSign, Smartphone, Shirt, FileText, Glasses,
-  HelpCircle, TrendingUp, ShieldAlert, Flag, Mail, Download, Truck, GripVertical, MessageSquareWarning,
+  HelpCircle, TrendingUp, ShieldAlert, Flag, Mail, Download, Truck, GripVertical, MessageSquareWarning, RefreshCw,
 } from "lucide-react";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 
@@ -421,6 +421,20 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
     { reservationRef: item?.bookingRef || "" },
     { enabled: !!item?.bookingRef }
   );
+  const refreshBookingMut = trpc.lostFound.refreshBookingData.useMutation({
+    onSuccess: (r) => {
+      if (r.ok) {
+        toast.success(r.detail);
+        utils.lostFound.bookingDossier.invalidate();
+        utils.lostFound.bookingTimeline.invalidate();
+        utils.lostFound.vehicleAgents.invalidate();
+        utils.lostFound.getById.invalidate({ id });
+      } else {
+        toast.error(r.detail);
+      }
+    },
+    onError: () => toast.error("Erro ao contactar a API Multipark"),
+  });
   const autoLinkMut = trpc.lostFound.autoLink.useMutation({
     onSuccess: (r) => {
       if (r.linked) {
@@ -655,13 +669,23 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
               <Card>
                 <CardHeader className="flex flex-row items-center justify-between">
                   <CardTitle className="text-base">Dados da Reserva</CardTitle>
-                  {!item.bookingRef && (
+                  {!item.bookingRef ? (
                     <Button
                       size="sm" variant="outline"
                       disabled={autoLinkMut.isPending}
                       onClick={() => autoLinkMut.mutate({ id: item.id })}
                     >
                       {autoLinkMut.isPending ? "A procurar…" : "Ligar reserva automaticamente"}
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm" variant="outline"
+                      disabled={refreshBookingMut.isPending}
+                      title="Vai buscar à API Multipark a reserva completa e o histórico de condutores desta reserva"
+                      onClick={() => refreshBookingMut.mutate({ reservationRef: item.bookingRef! })}
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 mr-1 ${refreshBookingMut.isPending ? "animate-spin" : ""}`} />
+                      {refreshBookingMut.isPending ? "A atualizar…" : "Atualizar da API"}
                     </Button>
                   )}
                 </CardHeader>
