@@ -25,7 +25,7 @@ import {
   AlertTriangle, Plus, MessageSquare, Camera, Clock, User, Car,
   ChevronRight, ChevronLeft, Send, Eye, Trash2, Upload, Shield,
   BarChart3, AlertCircle, CheckCircle2, Hourglass, XCircle, Pencil,
-  Mail, UserPlus, LinkIcon, X as XIcon, Download, RefreshCw, GripVertical,
+  Mail, UserPlus, LinkIcon, X as XIcon, Download, RefreshCw, GripVertical, Package,
 } from "lucide-react";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
@@ -439,6 +439,14 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
   const addMsgMut = trpc.complaints.addMessage.useMutation();
   const uploadPhotoMut = trpc.complaints.uploadPhoto.useMutation();
   const deletePhotoMut = trpc.complaints.deletePhoto.useMutation();
+  const deleteMut = trpc.complaints.delete.useMutation({
+    onSuccess: () => { toast.success("Reclamação eliminada"); utils.complaints.list.invalidate(); utils.complaints.stats.invalidate(); onBack(); },
+    onError: (e) => toast.error(e.message || "Erro ao eliminar"),
+  });
+  const convertMut = trpc.complaints.convertToLostFound.useMutation({
+    onSuccess: (r) => { toast.success(`Movida para os Perdidos & Achados (caso #${r.newId})`); utils.complaints.list.invalidate(); utils.lostFound.list.invalidate(); onBack(); },
+    onError: (e) => toast.error(e.message || "Erro ao mover"),
+  });
   const utils = trpc.useUtils();
 
   const [newMsg, setNewMsg] = useState("");
@@ -552,6 +560,31 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
             ))}
           </SelectContent>
         </Select>
+        {["admin", "super_admin"].includes(user?.role) && (
+          <>
+            <Button
+              variant="outline" size="sm"
+              disabled={convertMut.isPending}
+              title="Isto afinal é um Perdido/Achado — move o caso inteiro"
+              onClick={() => {
+                if (!confirm("Mover esta reclamação (com mensagens e fotos) para os Perdidos & Achados?")) return;
+                convertMut.mutate({ id });
+              }}
+            >
+              <Package className="w-4 h-4 mr-1" /> {convertMut.isPending ? "A mover…" : "Mover p/ Perdidos"}
+            </Button>
+            <Button
+              variant="destructive" size="sm"
+              disabled={deleteMut.isPending}
+              onClick={() => {
+                if (!confirm("Eliminar esta reclamação definitivamente?")) return;
+                deleteMut.mutate({ id });
+              }}
+            >
+              <Trash2 className="w-4 h-4 mr-1" /> Eliminar
+            </Button>
+          </>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

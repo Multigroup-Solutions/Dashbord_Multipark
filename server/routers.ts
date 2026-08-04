@@ -4165,6 +4165,60 @@ export const appRouter = router({
       await logActivity({ userId: ctx.user.id, action: "delete", entity: "complaint", entityId: input.id, details: "Reclamação eliminada" });
       return { success: true };
     }),
+    // "Isto afinal é um Perdido" — move o caso inteiro (dados + mensagens +
+    // fotos) para os Perdidos & Achados e apaga a reclamação. Admin+.
+    convertToLostFound: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "admin");
+      const c = await getComplaintById(input.id);
+      if (!c) throw new TRPCError({ code: "NOT_FOUND" });
+      const [messages, photos] = await Promise.all([
+        getComplaintMessages(input.id),
+        getComplaintPhotos(input.id),
+      ]);
+      const { createLostFoundItem, addLostFoundMessage, addLostFoundPhoto } = await import("./db");
+      const newId = await createLostFoundItem({
+        clientName: c.clientName || "Desconhecido",
+        clientEmail: c.clientEmail ?? undefined,
+        clientPhone: c.clientPhone ?? undefined,
+        vehiclePlate: c.vehiclePlate ?? undefined,
+        bookingRef: c.reservationRef ?? undefined,
+        projectId: c.projectId ?? undefined,
+        itemType: "other",
+        description: `${c.title}${c.description ? `\n\n${c.description}` : ""}`.trim(),
+        status: "new",
+        priority: c.complaintPriority === "urgent" || c.complaintPriority === "high" ? "high" : c.complaintPriority === "low" ? "low" : "medium",
+        clientNotes: c.clientNotes ?? undefined,
+        assignedTo: c.assignedToId ?? undefined,
+        createdBy: ctx.user.id,
+      } as any);
+      if (!newId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Falha a criar o registo nos Perdidos" });
+      for (const m of messages) {
+        try {
+          await addLostFoundMessage({
+            itemId: newId,
+            userId: (m as any).authorId ?? ctx.user.id,
+            userName: (m as any).authorName ?? "—",
+            message: m.message,
+            isInternal: m.isInternal,
+          } as any);
+        } catch { /* best-effort */ }
+      }
+      for (const p of photos) {
+        try {
+          await addLostFoundPhoto({ itemId: newId, url: p.url, fileKey: p.fileKey, caption: p.label ?? null } as any);
+        } catch { /* best-effort */ }
+      }
+      await addLostFoundMessage({
+        itemId: newId,
+        userId: ctx.user.id,
+        userName: ctx.user.name ?? "—",
+        message: `📦 Movido das Reclamações (#${input.id}) por ${ctx.user.name ?? "—"}.`,
+        isInternal: 1,
+      } as any);
+      await deleteComplaint(input.id);
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "lost_found", entityId: newId, details: `Movido da reclamação #${input.id}` });
+      return { newId };
+    }),
     addMessage: protectedProcedure.input(z.object({
       complaintId: z.number(),
       message: z.string().min(1),
@@ -4321,6 +4375,43 @@ export const appRouter = router({
     stats: protectedProcedure.query(async ({ ctx }) => {
       requireRole(ctx.user.role, "frontoffice");
       return getGoogleReviewStats();
+    }),
+    // Transforma uma crítica (tipicamente 1-2★) numa Reclamação para ser
+    // tratada com SLA/atribuição/dossier. A crítica fica marcada como
+    // convertida e ligada à reclamação (o schema já previa isto).
+    convertToComplaint: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "backoffice");
+      const review = await getGoogleReviewById(input.id);
+      if (!review) throw new TRPCError({ code: "NOT_FOUND" });
+      if (review.status === "converted_complaint" && review.complaintId) {
+        return { complaintId: review.complaintId, alreadyConverted: true };
+      }
+      const complaintId = await createComplaint({
+        title: `Crítica Google ${review.rating}★ — ${review.reviewerName}`.slice(0, 255),
+        description: review.reviewText ?? null,
+        complaintType: "other",
+        complaintStatus: "new",
+        complaintPriority: review.rating <= 1 ? "high" : "medium",
+        clientName: review.reviewerName,
+        clientEmail: review.reviewerEmail ?? null,
+        vehiclePlate: review.vehiclePlate ?? null,
+        projectId: review.projectId ?? null,
+        createdById: ctx.user.id,
+      });
+      await addComplaintMessage({
+        complaintId,
+        message: `⭐ Convertida da crítica Google #${review.id} (${review.rating}★) por ${ctx.user.name ?? "—"}.${review.aiResponse ? `\n\nResposta preparada na crítica:\n${review.aiResponse}` : ""}`,
+        isInternal: 1,
+        authorId: ctx.user.id,
+        authorName: ctx.user.name ?? null,
+      });
+      try {
+        const { autoLinkComplaintBooking } = await import("./complaintDossier");
+        await autoLinkComplaintBooking(complaintId);
+      } catch { /* best-effort */ }
+      await updateGoogleReview(review.id, { status: "converted_complaint", complaintId } as any);
+      await logActivity({ userId: ctx.user.id, action: "create", entity: "complaint", entityId: complaintId, details: `Convertida da crítica Google #${review.id}` });
+      return { complaintId, alreadyConverted: false };
     }),
     create: protectedProcedure.input(z.object({
       reviewerName: z.string().min(1),
@@ -5021,6 +5112,65 @@ export const appRouter = router({
       requireRole(ctx.user.role, "frontoffice");
       const { getComplaintBookingDossier } = await import("./complaintDossier");
       return getComplaintBookingDossier(input.reservationRef);
+    }),
+
+    // "Isto afinal é uma Reclamação" — move o caso inteiro (dados + mensagens
+    // + fotos) para as Reclamações e apaga o registo dos Perdidos. Admin+.
+    convertToComplaint: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "admin");
+      const item = await getLostFoundItemById(input.id);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND" });
+      const { getLostFoundMessages, getLostFoundPhotos } = await import("./db");
+      const [messages, photos] = await Promise.all([
+        getLostFoundMessages(input.id),
+        getLostFoundPhotos(input.id),
+      ]);
+      const newId = await createComplaint({
+        title: (item.description || `Perdido #${input.id}`).split("\n")[0].slice(0, 255),
+        description: item.description ?? null,
+        complaintType: "other",
+        complaintStatus: "new",
+        complaintPriority: item.priority === "high" ? "high" : item.priority === "low" ? "low" : "medium",
+        clientName: item.clientName ?? null,
+        clientEmail: item.clientEmail ?? null,
+        clientPhone: item.clientPhone ?? null,
+        vehiclePlate: item.vehiclePlate ?? null,
+        reservationRef: item.bookingRef ?? null,
+        projectId: item.projectId ?? null,
+        assignedToId: item.assignedTo ?? null,
+        clientNotes: item.clientNotes ?? null,
+        createdById: ctx.user.id,
+      });
+      for (const m of messages as any[]) {
+        try {
+          await addComplaintMessage({
+            complaintId: newId,
+            message: m.message,
+            isInternal: m.isInternal,
+            authorId: m.userId ?? ctx.user.id,
+            authorName: m.userName ?? null,
+          });
+        } catch { /* best-effort */ }
+      }
+      for (const p of photos as any[]) {
+        try {
+          await addComplaintPhoto({ complaintId: newId, url: p.url, fileKey: p.fileKey, label: p.caption ?? null, uploadedById: ctx.user.id });
+        } catch { /* best-effort */ }
+      }
+      await addComplaintMessage({
+        complaintId: newId,
+        message: `📦 Movido dos Perdidos & Achados (#${input.id}) por ${ctx.user.name ?? "—"}.`,
+        isInternal: 1,
+        authorId: ctx.user.id,
+        authorName: ctx.user.name ?? null,
+      });
+      try {
+        const { autoLinkComplaintBooking } = await import("./complaintDossier");
+        await autoLinkComplaintBooking(newId);
+      } catch { /* best-effort */ }
+      await deleteLostFoundItem(input.id);
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "complaint", entityId: newId, details: `Movido do perdido #${input.id}` });
+      return { newId };
     }),
 
     // Liga automaticamente a reserva ao caso e completa campos em falta.

@@ -462,6 +462,15 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
   const generateMut = trpc.reviews.generateResponse.useMutation();
   const approveMut = trpc.reviews.approveResponse.useMutation();
   const updateMut = trpc.reviews.update.useMutation();
+  const convertMut = trpc.reviews.convertToComplaint.useMutation({
+    onSuccess: (r) => {
+      toast.success(r.alreadyConverted ? `Já estava convertida (reclamação #${r.complaintId})` : `Reclamação #${r.complaintId} criada`);
+      utils.reviews.getById.invalidate({ id });
+      utils.reviews.list.invalidate();
+      utils.complaints.list.invalidate();
+    },
+    onError: (e) => toast.error(e.message || "Erro ao converter"),
+  });
   const utils = trpc.useUtils();
 
   const [editingResponse, setEditingResponse] = useState(false);
@@ -652,6 +661,20 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
           {review.status !== "dismissed" && review.status !== "converted_complaint" && (
             <Button variant="ghost" onClick={handleDismiss} className="text-muted-foreground">
               <XCircle className="w-4 h-4 mr-1" /> Dispensar
+            </Button>
+          )}
+          {review.rating <= 2 && review.status !== "converted_complaint" && (
+            <Button
+              variant="outline"
+              className="text-red-700 border-red-300"
+              disabled={convertMut.isPending}
+              title="Cria uma Reclamação a partir desta crítica para ser tratada com prazo e responsável"
+              onClick={() => {
+                if (!confirm(`Transformar esta crítica de ${review.rating}★ numa Reclamação?`)) return;
+                convertMut.mutate({ id });
+              }}
+            >
+              {convertMut.isPending ? "A converter…" : "→ Criar Reclamação"}
             </Button>
           )}
           <Button variant="outline" onClick={onClose}>Fechar</Button>

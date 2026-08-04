@@ -28,7 +28,7 @@ import {
   ChevronRight, ChevronLeft, Send, Eye, Trash2, Upload, Pencil,
   BarChart3, AlertCircle, CheckCircle2, Hourglass, XCircle,
   Package, DollarSign, Smartphone, Shirt, FileText, Glasses,
-  HelpCircle, TrendingUp, ShieldAlert, Flag, Mail, Download, Truck, GripVertical,
+  HelpCircle, TrendingUp, ShieldAlert, Flag, Mail, Download, Truck, GripVertical, MessageSquareWarning,
 } from "lucide-react";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 
@@ -454,6 +454,10 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
   const uploadPhotoMut = trpc.lostFound.uploadPhoto.useMutation();
   const addMsgMut = trpc.lostFound.addMessage.useMutation();
   const deleteMut = trpc.lostFound.delete.useMutation();
+  const convertMut = trpc.lostFound.convertToComplaint.useMutation({
+    onSuccess: (r) => { toast.success(`Movido para as Reclamações (#${r.newId})`); utils.lostFound.list.invalidate(); utils.complaints.list.invalidate(); onBack(); },
+    onError: (e) => toast.error(e.message || "Erro ao mover"),
+  });
   const utils = trpc.useUtils();
 
   const [newMsg, setNewMsg] = useState("");
@@ -571,7 +575,20 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
           </SelectContent>
         </Select>
         {(user?.role === "super_admin" || user?.role === "admin") && (
-          <Button variant="destructive" size="sm" onClick={handleDelete}><Trash2 className="w-4 h-4" /></Button>
+          <>
+            <Button
+              variant="outline" size="sm"
+              disabled={convertMut.isPending}
+              title="Isto afinal é uma Reclamação — move o caso inteiro"
+              onClick={() => {
+                if (!confirm("Mover este caso (com mensagens e fotos) para as Reclamações?")) return;
+                convertMut.mutate({ id });
+              }}
+            >
+              <MessageSquareWarning className="w-4 h-4 mr-1" /> {convertMut.isPending ? "A mover…" : "Mover p/ Reclamações"}
+            </Button>
+            <Button variant="destructive" size="sm" onClick={handleDelete}><Trash2 className="w-4 h-4" /></Button>
+          </>
         )}
       </div>
 
