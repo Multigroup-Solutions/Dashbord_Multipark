@@ -16,9 +16,11 @@ import { simpleParser } from "mailparser";
 import {
   routeAlias,
   isSystemEmail,
+  isReservationNotification,
   parseInboundBody,
   type InboundAlias,
 } from "../emailParse";
+import { matchBookingForComplaint, autoLinkComplaintBooking } from "../complaintDossier";
 import {
   createGoogleReview,
   updateGoogleReview,
@@ -32,7 +34,6 @@ import {
   getSystemUserId,
   assignTaskToEmployee,
   findComplaintByClientSignals,
-  findRecentBookingByClientSignals,
   findOpenLostFoundByClient,
   findComplaintByThread,
   findOpenComplaintBySubject,
@@ -143,6 +144,15 @@ async function routeToModule(
   }
 
   if (alias === "reclamacoes") {
+    // Notificações automáticas "Nova Reserva" enviadas DIRETAMENTE pelo
+    // sistema (info@) não são reclamações — um forward humano (Fwd: de outra
+    // pessoa) passa, porque pode trazer contexto de uma queixa.
+    if (
+      isReservationNotification(ctx.subject) &&
+      /@(multipark|skypark)\.(pt|app)$/i.test(ctx.fromEmail ?? "")
+    ) {
+      return { targetModule: "ignored" };
+    }
     // Agrupa respostas/emails repetidos na MESMA reclamação. Ordem de sinais:
     //  1) thread do Gmail / referências (resposta ao mesmo email — o mais fiável)
     //  2) email do cliente (corpo) ou remetente / matrícula
@@ -162,14 +172,24 @@ async function routeToModule(
       if (existing.complaintStatus === "resolved" || existing.complaintStatus === "closed") {
         try { await updateComplaint(existing.id, { complaintStatus: "analyzing", resolvedAt: null } as any); } catch { /* best-effort */ }
       }
+      // Se ainda não tem reserva ligada, o email novo pode trazer sinais
+      // suficientes — tenta ligar agora.
+      if (!existing.reservationRef) {
+        try { await autoLinkComplaintBooking(existing.id); } catch { /* best-effort */ }
+      }
       return { targetModule: "complaint", targetId: existing.id };
     }
-    // Auto-anexa a reserva: com matrícula/email/nome vai à nossa BD buscar a
-    // reserva mais recente do cliente — reservationRef=externalId liga logo o
-    // histórico da reserva e os condutores no detalhe.
-    const booking = await findRecentBookingByClientSignals(
-      parsed.clientEmail || ctx.fromEmail, parsed.vehiclePlate, clientName,
-    );
+    // Auto-anexa a reserva DE QUE O CLIENTE SE QUEIXA: ref explícita do email
+    // ganha; senão matrícula/email/telefone/nome ancorados na data de hoje
+    // (evita apanhar uma reserva futura já marcada).
+    const match = await matchBookingForComplaint({
+      reservationRef: parsed.bookingRef,
+      vehiclePlate: parsed.vehiclePlate,
+      clientEmail: parsed.clientEmail || ctx.fromEmail,
+      clientPhone: parsed.clientPhone,
+      clientName,
+    });
+    const booking = match?.booking ?? null;
     const id = await createComplaint({
       title: (ctx.subject || "Reclamação por email").slice(0, 255),
       description: desc,
@@ -183,6 +203,7 @@ async function routeToModule(
       reservationRef: parsed.bookingRef ?? (booking?.externalId || undefined),
       reservationStart: booking?.checkIn ?? undefined,
       reservationEnd: booking?.checkOut ?? undefined,
+      projectId: booking?.projectId ?? undefined,
     } as any);
     return { targetModule: "complaint", targetId: id };
   }

@@ -3996,6 +3996,14 @@ export const appRouter = router({
         createdById: ctx.user.id,
       });
       await logActivity({ userId: ctx.user.id, action: "create", entity: "complaint", entityId: id, details: `Reclamação: ${input.title}` });
+      // Auto-liga a reserva a partir dos sinais (matrícula/email/telefone/
+      // nome) — deixa de ser preciso procurar o ID da reserva à mão.
+      try {
+        const { autoLinkComplaintBooking } = await import("./complaintDossier");
+        await autoLinkComplaintBooking(id);
+      } catch (err) {
+        console.warn("[complaint create] autolink failed:", err);
+      }
       // Notifica admins/supervisores/TL via app
       try {
         const { notifyComplaintCreated } = await import("./complaintsExtended");
@@ -4138,6 +4146,16 @@ export const appRouter = router({
         }
       }
       await updateComplaint(id, updateData);
+      // Se a ref de reserva mudou, repopula os campos em falta a partir dela
+      // (datas, matrícula, contactos, projeto).
+      if (input.reservationRef) {
+        try {
+          const { autoLinkComplaintBooking } = await import("./complaintDossier");
+          await autoLinkComplaintBooking(id);
+        } catch (err) {
+          console.warn("[complaint update] autolink failed:", err);
+        }
+      }
       await logActivity({ userId: ctx.user.id, action: "update", entity: "complaint", entityId: id, details: `Reclamação atualizada` });
       return { success: true };
     }),
@@ -4196,12 +4214,67 @@ export const appRouter = router({
       requireRole(ctx.user.role, "frontoffice");
       return getVehicleDriverHistory(input.vehicleId);
     }),
-    // Booking timeline from Multipark API
+    // Booking timeline — BD local primeiro (o fetch live usava a chave GLOBAL
+    // e falhava em parques com chave própria); on-demand fetch na 1ª abertura.
     bookingTimeline: protectedProcedure.input(z.object({
       bookingId: z.string(),
     })).query(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
-      return getBookingHistory(input.bookingId);
+      const { getComplaintBookingDossier } = await import("./complaintDossier");
+      const d = await getComplaintBookingDossier(input.bookingId);
+      if (d.history.length) {
+        return {
+          bookingId: input.bookingId,
+          total: d.history.length,
+          history: d.history.map((h) => ({
+            id: h.historyId,
+            changeType: h.changeType,
+            actionTime: h.actionTime,
+            remarks: h.remarks,
+            agentName: h.agentName,
+            userId: h.agentUserId,
+            modifiedFields: h.modifiedFields,
+            platform: h.platform,
+          })),
+        };
+      }
+      // Fallback: API live (reserva ainda não sincronizada localmente)
+      try {
+        return await getBookingHistory(input.bookingId);
+      } catch {
+        return { bookingId: input.bookingId, total: 0, history: [] };
+      }
+    }),
+
+    // Dossier completo da reserva ligada: detalhe + extras + histórico de
+    // condutores (BD local, fetch on-demand). Alimenta o card "Reserva" do
+    // detalhe da reclamação sem passos manuais.
+    bookingDossier: protectedProcedure.input(z.object({
+      reservationRef: z.string().min(1),
+    })).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "frontoffice");
+      const { getComplaintBookingDossier } = await import("./complaintDossier");
+      return getComplaintBookingDossier(input.reservationRef);
+    }),
+
+    // Liga automaticamente a reserva à reclamação (ref → matrícula → email →
+    // telefone → nome, ancorado na data da reclamação) e completa campos.
+    autoLink: protectedProcedure.input(z.object({
+      id: z.number(),
+    })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "frontoffice");
+      const { autoLinkComplaintBooking } = await import("./complaintDossier");
+      return autoLinkComplaintBooking(input.id);
+    }),
+
+    // Agentes Multipark que mexeram na matrícula (mesma peça dos Perdidos).
+    vehicleAgents: protectedProcedure.input(z.object({
+      plate: z.string().min(2),
+      currentBookingRef: z.string().optional(),
+    })).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "frontoffice");
+      const { getVehicleAgentsByPlate } = await import("./db");
+      return getVehicleAgentsByPlate(input.plate, input.currentBookingRef);
     }),
   }),
 
