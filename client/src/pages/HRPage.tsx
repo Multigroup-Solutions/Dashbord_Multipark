@@ -2216,6 +2216,9 @@ export default function HRPage() {
   const [filterAccount, setFilterAccount] = usePersistedState<string>("hr.account", "all");
   const [filterActive, setFilterActive] = usePersistedState<string>("hr.active", "active");
   const [filterProject, setFilterProject] = usePersistedState<string>("hr.project", "all");
+  // Separador Colaboradores/Extras/Recrutamento também persiste — voltar de
+  // uma ficha de extra mantém-nos nos Extras (bug reportado pelo Jorge)
+  const [activeTab, setActiveTab] = usePersistedState<string>("hr.tab", "employees");
   const [showPayroll, setShowPayroll] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
@@ -2515,7 +2518,7 @@ export default function HRPage() {
           </Button>
         </div>
       ) : (
-        <Tabs defaultValue="employees">
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="w-full sm:w-auto">
             <TabsTrigger value="employees">
               Colaboradores <Badge variant="secondary" className="ml-2">{employeesList.length}</Badge>
