@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { QuickRangeBar, thisMonthRange } from "@/components/QuickRangeBar";
+import DateRangeNav from "@/components/DateRangeNav";
 import { toast } from "sonner";
 import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { useParams } from "wouter";
@@ -130,15 +131,17 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
   const [endDate, setEndDate] = usePersistedState(`mpk.${actionType}.end`, defTo);
   const [activeRange, setActiveRange] = usePersistedState<string>(`mpk.${actionType}.range`, "thisMonth");
   const [searchTerm, setSearchTerm] = usePersistedState(`mpk.${actionType}.search`, "");
-  const [projectId, setProjectId] = useState<string>("");
+  const [projectId, setProjectId] = usePersistedState<string>(`mpk.${actionType}.project`, "");
+  const [originFilter, setOriginFilter] = usePersistedState<string>(`mpk.${actionType}.origin`, "all");
+  const [detailBooking, setDetailBooking] = useState<any>(null);
 
-  // Sync global filter to local project filter
+  // Sync global filter to local project filter — só quando o header TEM filtro
+  // ativo (antes esmagava o filtro persistido com "" a cada montagem)
   useEffect(() => {
     if (globalFilters.projectId !== undefined) {
       setProjectId(String(globalFilters.projectId));
-    } else {
-      setProjectId("");
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [globalFilters.projectId]);
   const { data: allProjects = [] } = trpc.projects.list.useQuery();
 
@@ -169,38 +172,46 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
     { enabled: showExtrasDiaCost, refetchOnWindowFocus: false },
   );
 
+  // Origens distintas no resultado (para o filtro "de onde vem a reserva")
+  const ORIGIN_LABELS: Record<string, string> = {
+    GENERAL_FORM: "Site (formulário)",
+    API: "API / Agregador",
+    BACKOFFICE: "Backoffice",
+    PHONE: "Telefone",
+  };
+  const originOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const b of (data?.bookings ?? []) as any[]) {
+      if (b.origin) set.add(b.origin);
+    }
+    return Array.from(set).sort();
+  }, [data]);
+
   const bookings = useMemo(() => {
-    if (!data?.bookings) return [];
-    if (!searchTerm) return data.bookings;
+    let list: any[] = data?.bookings ?? [];
+    if (originFilter === "partner") list = list.filter((b) => b.salesPartnerName);
+    else if (originFilter === "none") list = list.filter((b) => !b.origin);
+    else if (originFilter !== "all") list = list.filter((b) => b.origin === originFilter);
+    if (!searchTerm) return list;
     const s = searchTerm.toLowerCase();
-    return data.bookings.filter((b: any) =>
+    return list.filter((b: any) =>
       (b.clientFirstName || "").toLowerCase().includes(s) ||
       (b.clientLastName || "").toLowerCase().includes(s) ||
       (b.licensePlate || "").toLowerCase().includes(s) ||
       (b.bookingNumber || "").toLowerCase().includes(s) ||
       (b.clientEmail || "").toLowerCase().includes(s)
     );
-  }, [data, searchTerm]);
+  }, [data, searchTerm, originFilter]);
 
-  // Build partner lookup from projects (normalize hyphens for matching)
-  const partnerByPark = useMemo(() => {
-    const norm = (s: string) => s.toLowerCase().replace(/\s*-\s*/g, " ").trim();
-    const map: Record<string, { name: string; percent: number }> = {};
-    for (const p of allProjects as any[]) {
-      if (p.partnerName && p.partnerPercent && p.level === "project") {
-        map[norm(p.name)] = { name: p.partnerName, percent: parseFloat(p.partnerPercent) };
-      }
-    }
-    return map;
-  }, [allProjects]);
-
-  // Aggregate totals
+  // Aggregate totals (comissões de parceiros vêm do servidor — partnerships
+  // novas por campanha, coerente com Faturação/Parcerias)
   const totals = useMemo(() => {
     let revenue = 0;
     let delivery = 0;
     let extras = 0;
     let discount = 0;
     let partnerTotal = 0;
+    let toCollect = 0;
     const byPark: Record<string, { count: number; revenue: number; partnerShare: number; partnerName: string | null }> = {};
 
     for (const b of bookings as any[]) {
@@ -209,6 +220,7 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
       delivery += parseFloat(b.deliveryCharges) || 0;
       extras += parseFloat(b.extrasTotal) || 0;
       discount += parseFloat(b.discount) || 0;
+      toCollect += parseFloat(b.remainingToPay) || 0;
 
       const park = b.parkName || "Desconhecido";
       const city = b.city || "";
@@ -217,20 +229,16 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
       byPark[displayName].count++;
       byPark[displayName].revenue += priceNum;
 
-      // Find partner for this park
-      const fullKey = `${park} ${city}`.toLowerCase().replace(/\s*-\s*/g, " ");
-      const parkLower = park.toLowerCase().replace(/\s*-\s*/g, " ");
-      const partner = partnerByPark[fullKey] || partnerByPark[parkLower];
-      if (partner) {
-        const share = priceNum * (partner.percent / 100);
-        byPark[displayName].partnerShare += share;
-        byPark[displayName].partnerName = partner.name;
-        partnerTotal += share;
+      const commission = Number(b.salesPartnerCommission ?? 0);
+      if (commission > 0) {
+        byPark[displayName].partnerShare += commission;
+        byPark[displayName].partnerName = b.salesPartnerName ?? byPark[displayName].partnerName;
+        partnerTotal += commission;
       }
     }
 
-    return { revenue, delivery, extras, discount, byPark, partnerTotal };
-  }, [bookings, partnerByPark]);
+    return { revenue, delivery, extras, discount, byPark, partnerTotal, toCollect };
+  }, [bookings]);
 
   return (
     <div className="space-y-4">
@@ -242,13 +250,28 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
 
       {/* Filters */}
       <div className="flex flex-wrap items-end gap-3">
-        <div>
-          <Label className="text-xs mb-1 block">De</Label>
-          <Input type="date" value={startDate} onChange={(e) => { setStartDate(e.target.value); setActiveRange(""); }} className="w-40" />
+        <div className="mb-0.5">
+          <DateRangeNav
+            start={startDate}
+            end={endDate}
+            gran={(activeRange === "thisWeek" || activeRange === "lastWeek" ? "week" : activeRange === "thisMonth" || activeRange === "lastMonth" ? "month" : "custom") as any}
+            showAll={false}
+            onChange={(s, e) => { setStartDate(s); setEndDate(e); setActiveRange(""); }}
+          />
         </div>
         <div>
-          <Label className="text-xs mb-1 block">Até</Label>
-          <Input type="date" value={endDate} onChange={(e) => { setEndDate(e.target.value); setActiveRange(""); }} className="w-40" />
+          <Label className="text-xs mb-1 block">Origem</Label>
+          <Select value={originFilter} onValueChange={setOriginFilter}>
+            <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todas as origens</SelectItem>
+              <SelectItem value="partner">Com parceiro/campanha</SelectItem>
+              {originOptions.map((o) => (
+                <SelectItem key={o} value={o}>{ORIGIN_LABELS[o] ?? o}</SelectItem>
+              ))}
+              <SelectItem value="none">Sem origem registada</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <div>
           <Label className="text-xs mb-1 block">Grupo / Projeto</Label>
@@ -378,7 +401,22 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
             <p className="text-xl font-bold text-red-600">{fmtEur(totals.discount)}</p>
           </CardContent>
         </Card>
+        {totals.toCollect > 0 && (
+          <Card className="border-amber-300 bg-amber-50/60">
+            <CardContent className="p-3">
+              <p className="text-xs text-muted-foreground">Por cobrar</p>
+              <p className="text-xl font-bold text-amber-700">{fmtEur(totals.toCollect)}</p>
+            </CardContent>
+          </Card>
+        )}
       </div>
+
+      {/* Aviso do corte de 5.000 linhas (períodos grandes) */}
+      {(data?.bookings?.length ?? 0) >= 5000 && (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+          ⚠ A mostrar as primeiras 5.000 reservas — o período escolhido tem mais. Encurta o período para ver tudo.
+        </p>
+      )}
 
       {/* Per-park breakdown */}
       {Object.keys(totals.byPark).length > 1 && (
@@ -423,10 +461,12 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
                 <thead>
                   <tr className="bg-muted/50 text-left">
                     <th className="p-2">Reserva</th>
+                    <th className="p-2">Cliente</th>
+                    <th className="p-2">Matrícula</th>
                     <th className="p-2">Parque</th>
                     <th className="p-2">Recolha</th>
                     <th className="p-2">Entrega</th>
-                    <th className="p-2">Tipo Recolha/Entrega</th>
+                    <th className="p-2">Origem</th>
                     <th className="p-2">Estado</th>
                     <th className="p-2 text-right">Preço</th>
                     <th className="p-2">Tipo</th>
@@ -439,24 +479,36 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
                     const parkName = b.parkName || "—";
                     const parkCity = b.city || "";
                     const isNonValet = (b.parkingType ?? "").toUpperCase() !== "VALET";
+                    const clientName = `${b.clientFirstName || ""} ${b.clientLastName || ""}`.trim();
+                    const toPay = parseFloat(b.remainingToPay) || 0;
 
                     return (
                       <tr
                         key={b.id || i}
-                        className={`border-t ${isNonValet ? "bg-red-50 hover:bg-red-100/70" : "hover:bg-muted/30"}`}
+                        className={`border-t cursor-pointer ${isNonValet ? "bg-red-50 hover:bg-red-100/70" : "hover:bg-muted/30"}`}
+                        onClick={() => setDetailBooking(b)}
                       >
                         <td className="p-2 font-mono text-xs">{b.bookingNumber || b.externalId}</td>
+                        <td className="p-2 text-xs max-w-[140px]">
+                          <span className="truncate block">{clientName || <span className="text-muted-foreground">—</span>}</span>
+                        </td>
+                        <td className="p-2 font-mono text-xs">{b.licensePlate || "—"}</td>
                         <td className="p-2">
                           <span className="font-medium">{parkName}</span>
                           {parkCity && !parkName.includes(parkCity) && <span className="text-xs text-muted-foreground ml-1">{parkCity}</span>}
                         </td>
                         <td className="p-2 text-xs">{fmtBookingDateTime(b.checkIn)}</td>
                         <td className="p-2 text-xs">{fmtBookingDateTime(b.checkOut)}</td>
-                        <td className="p-2 text-xs">
-                          {b.deliveryType ? (
-                            <Badge variant="outline" className="text-[10px]">{b.deliveryType}</Badge>
+                        <td className="p-2 text-xs max-w-[130px]">
+                          {b.salesPartnerName ? (
+                            <Badge variant="outline" className="text-[10px] border-rose-200 text-rose-700">{b.salesPartnerName}</Badge>
+                          ) : b.origin ? (
+                            <Badge variant="outline" className="text-[10px]">{ORIGIN_LABELS[b.origin] ?? b.origin}</Badge>
                           ) : (
                             <span className="text-muted-foreground">—</span>
+                          )}
+                          {b.campaign && !b.salesPartnerName && (
+                            <span className="block text-[10px] text-muted-foreground truncate" title={b.campaign}>{b.campaign}</span>
                           )}
                         </td>
                         <td className="p-2">
@@ -464,7 +516,10 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
                             {statusCfg?.label || status}
                           </Badge>
                         </td>
-                        <td className="p-2 text-right font-medium">{fmtEur(b.totalPrice)}</td>
+                        <td className="p-2 text-right font-medium">
+                          {fmtEur(b.totalPrice)}
+                          {toPay > 0 && <span className="block text-[10px] text-amber-700">falta {fmtEur(toPay)}</span>}
+                        </td>
                         <td className="p-2 text-xs">
                           {b.parkingType || "—"}
                           {isNonValet && <span className="ml-1 text-red-600 font-semibold">⚠ não-valet</span>}
@@ -478,6 +533,89 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
           </CardContent>
         </Card>
       )}
+
+      {detailBooking && <BookingDetailDialog booking={detailBooking} onClose={() => setDetailBooking(null)} />}
+    </div>
+  );
+}
+
+// ─── Detalhe da reserva (clique na linha da folha) ───────────────────────────
+// Mostra tudo o que a BD já tem sobre a reserva — cliente, carro, voos,
+// pagamento, origem, agentes — sem ir à API.
+function BookingDetailDialog({ booking: b, onClose }: { booking: any; onClose: () => void }) {
+  const Row = ({ label, value, mono }: { label: string; value?: any; mono?: boolean }) => {
+    if (value == null || value === "" || value === "—") return null;
+    return (
+      <div className="flex justify-between items-start gap-3 text-sm">
+        <span className="text-muted-foreground shrink-0">{label}</span>
+        <span className={`font-medium text-right min-w-0 break-words ${mono ? "font-mono text-xs" : ""}`}>{String(value)}</span>
+      </div>
+    );
+  };
+  const statusCfg = STATUS_MAP[b.status ?? ""];
+  const toPay = parseFloat(b.remainingToPay) || 0;
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
+      <Card className="w-full max-w-xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center justify-between gap-2 flex-wrap">
+            <span className="font-mono">{b.bookingNumber || b.externalId}</span>
+            <Badge className={statusCfg?.color || "bg-gray-100 text-gray-800"}>{statusCfg?.label || b.status}</Badge>
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">{b.parkName} {b.city} · {b.parkingType ?? ""} {b.vehicleType ? `· ${VEHICLE_LABELS[b.vehicleType] ?? b.vehicleType}` : ""}</p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-1">
+            <p className="text-xs font-semibold text-muted-foreground uppercase">Cliente</p>
+            <Row label="Nome" value={`${b.clientFirstName ?? ""} ${b.clientLastName ?? ""}`.trim()} />
+            <Row label="Email" value={b.clientEmail} />
+            <Row label="Telefone" value={b.clientPhone} />
+            <Row label="NIF" value={b.clientNif} />
+          </div>
+          <div className="space-y-1">
+            <p className="text-xs font-semibold text-muted-foreground uppercase">Viatura</p>
+            <Row label="Matrícula" value={b.licensePlate} mono />
+            <Row label="Marca/Modelo" value={[b.vehicleBrand, b.vehicleModel].filter(Boolean).join(" ")} />
+            <Row label="Cor" value={b.vehicleColor} />
+            <Row label="Localização atual" value={[b.currentGarage, b.currentSpot].filter(Boolean).join(" · ")} />
+          </div>
+          <div className="space-y-1">
+            <p className="text-xs font-semibold text-muted-foreground uppercase">Datas & voos</p>
+            <Row label="Recolha" value={fmtBookingDateTime(b.checkIn)} />
+            <Row label="Entrega" value={fmtBookingDateTime(b.checkOut)} />
+            <Row label="Voo chegada" value={b.arrivalFlight ?? b.returnFlight} mono />
+            <Row label="Voo partida" value={b.departureFlight ?? b.departingFlight} mono />
+            <Row label="Tipo entrega" value={b.deliveryType} />
+          </div>
+          <div className="space-y-1">
+            <p className="text-xs font-semibold text-muted-foreground uppercase">Pagamento</p>
+            <Row label="Preço total" value={fmtEur(b.totalPrice)} />
+            <Row label="Estacionamento" value={b.parkingPrice != null ? fmtEur(b.parkingPrice) : null} />
+            <Row label="Delivery" value={parseFloat(b.deliveryCharges) > 0 ? fmtEur(b.deliveryCharges) : null} />
+            <Row label="Extras" value={parseFloat(b.extrasTotal) > 0 ? fmtEur(b.extrasTotal) : null} />
+            <Row label="Desconto" value={parseFloat(b.discount) > 0 ? `−${fmtEur(b.discount)}` : null} />
+            <Row label="Pago" value={b.totalPaid != null ? fmtEur(b.totalPaid) : null} />
+            {toPay > 0 && <Row label="⚠ Por cobrar" value={fmtEur(toPay)} />}
+            <Row label="Método" value={b.paymentMethod} />
+          </div>
+          <div className="space-y-1">
+            <p className="text-xs font-semibold text-muted-foreground uppercase">Origem & operação</p>
+            <Row label="Origem" value={b.origin} />
+            <Row label="Campanha" value={b.campaignName ?? b.campaign} />
+            <Row label="Parceiro" value={b.salesPartnerName ?? b.partnerName} />
+            {Number(b.salesPartnerCommission ?? 0) > 0 && (
+              <Row label="Comissão parceiro" value={`${fmtEur(b.salesPartnerCommission)} (${b.salesPartnerRate}%)`} />
+            )}
+            <Row label="Check-in por" value={b.checkinAgentName} />
+            <Row label="Check-out por" value={b.checkoutAgentName} />
+            <Row label="Criada em" value={fmtBookingDateTime(b.bookingCreatedAt)} />
+            <Row label="Observações" value={b.remarks} />
+          </div>
+          <div className="flex justify-end">
+            <Button variant="outline" size="sm" onClick={onClose}>Fechar</Button>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

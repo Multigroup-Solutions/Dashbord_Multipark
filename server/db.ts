@@ -5804,8 +5804,13 @@ export async function getLocalBookingsByAction(filters: {
       conditions.push(sql`${multiparkBookings.status} != 'CANCELLED'`);
       break;
     case "cancelation":
-      conditions.push(gte(multiparkBookings.cancelledAt, filters.startDate));
-      conditions.push(lte(multiparkBookings.cancelledAt, endWithTime));
+      // FIX 2026-08-05: cancelledAt está NULL em ~4.6k canceladas (o sync nem
+      // sempre o traz) — filtrar por ele escondia a maioria. A fonte de verdade
+      // é o STATUS; a data usa cancelledAt quando existe, senão updatedAt
+      // (última mudança de estado — aproximação razoável do cancelamento).
+      conditions.push(sql`${multiparkBookings.status} = 'CANCELLED'`);
+      conditions.push(sql`COALESCE(${multiparkBookings.cancelledAt}, ${multiparkBookings.updatedAt}) >= ${filters.startDate}`);
+      conditions.push(sql`COALESCE(${multiparkBookings.cancelledAt}, ${multiparkBookings.updatedAt}) <= ${endWithTime}`);
       break;
   }
 
@@ -5815,12 +5820,108 @@ export async function getLocalBookingsByAction(filters: {
     conditions.push(sql`${multiparkBookings.projectId} IN (${sql.raw(ids.join(",") || "0")})`);
   }
 
-  return db
+  const rows = await db
     .select()
     .from(multiparkBookings)
     .where(and(...conditions))
     .orderBy(desc(multiparkBookings.bookingCreatedAt))
     .limit(5000);
+
+  // Comissões de parceiros de venda por reserva (partnerships NOVAS via
+  // campaign match — substitui o legado partnerName/percent da ficha do
+  // projeto, para bater certo com a Faturação/Parcerias).
+  const partnerMap = await buildPartnerByCampaignMap();
+  return rows.map((b) => {
+    const key = (b.campaign ?? "").trim().toLowerCase();
+    const p = key ? partnerMap.get(key) : undefined;
+    const price = parseFloat(String(b.totalPrice ?? 0)) || 0;
+    return {
+      ...b,
+      salesPartnerName: p?.name ?? null,
+      salesPartnerRate: p?.commissionRate ?? null,
+      salesPartnerCommission: p ? Math.round(price * (p.commissionRate / 100) * 100) / 100 : 0,
+    };
+  });
+}
+
+// Mapa central campanha→parceiro (campaignKey + nome + aliases), igual ao da
+// Faturação. Cacheado 60s para não pesar nas folhas operacionais.
+let partnerMapCache: { at: number; map: Map<string, { id: number; name: string; commissionRate: number; updatedAt: string }> } | null = null;
+async function buildPartnerByCampaignMap() {
+  if (partnerMapCache && Date.now() - partnerMapCache.at < 60_000) return partnerMapCache.map;
+  const map = new Map<string, { id: number; name: string; commissionRate: number; updatedAt: string }>();
+  const db = await getDb();
+  if (!db) return map;
+  const allPartners = await db.select({
+    id: partnerships.id, name: partnerships.name, campaignKey: partnerships.campaignKey,
+    commissionRate: partnerships.commissionRate, updatedAt: partnerships.updatedAt,
+  }).from(partnerships);
+  const allAliases = await db.select({ partnershipId: partnerAliases.partnershipId, aliasValue: partnerAliases.aliasValue }).from(partnerAliases);
+  const byId = new Map(allPartners.map((p) => [p.id, p]));
+  const reg = (raw: string | null, pid: number) => {
+    if (!raw) return;
+    const key = raw.trim().toLowerCase();
+    if (!key) return;
+    const p = byId.get(pid);
+    if (!p) return;
+    const ex = map.get(key);
+    const cand = { id: p.id, name: p.name, commissionRate: Number(p.commissionRate ?? 0), updatedAt: p.updatedAt ?? "" };
+    if (!ex || cand.updatedAt > ex.updatedAt) map.set(key, cand);
+  };
+  for (const p of allPartners) { reg(p.campaignKey, p.id); reg(p.name, p.id); }
+  for (const a of allAliases) reg(a.aliasValue, a.partnershipId);
+  partnerMapCache = { at: Date.now(), map };
+  return map;
+}
+
+/** Resumo agregado das operações (dashboard): contagens/somas por ação e
+ *  distribuição por cidade/parque, calculado no SQL — substitui puxar até
+ *  4×5.000 reservas completas só para contar. */
+export async function getOperationsSummary(filters: { startDate: string; endDate: string; projectId?: number }) {
+  const db = await getDb();
+  const empty = { actions: {} as Record<string, { count: number; revenue: number; byCity: Array<{ name: string; count: number; revenue: number }>; byPark: Array<{ name: string; count: number; revenue: number }> }> };
+  if (!db) return empty;
+  const endWithTime = filters.endDate + " 23:59:59";
+  let projectCond = "";
+  if (filters.projectId) {
+    const ids = await resolveProjectIds(filters.projectId);
+    projectCond = ` AND projectId IN (${ids.join(",") || "0"})`;
+  }
+  const DATE_COND: Record<string, string> = {
+    creation: `bookingCreatedAt >= ? AND bookingCreatedAt <= ? AND status != 'CANCELLED'`,
+    checkin: `checkIn >= ? AND checkIn <= ? AND status != 'CANCELLED'`,
+    checkout: `checkOut >= ? AND checkOut <= ? AND status != 'CANCELLED'`,
+    cancelation: `status = 'CANCELLED' AND COALESCE(cancelledAt, updatedAt) >= ? AND COALESCE(cancelledAt, updatedAt) <= ?`,
+  };
+  const out: (typeof empty)["actions"] = {};
+  for (const [action, cond] of Object.entries(DATE_COND)) {
+    // Substitui os dois ? por datas (validadas pelo zod: YYYY-MM-DD)
+    const parts = cond.split("?");
+    const q = parts[0] + `'${filters.startDate}'` + parts[1] + `'${endWithTime}'` + (parts[2] ?? "");
+    const [rows] = await db.execute(sql.raw(
+      `SELECT COALESCE(city,'—') AS city, COALESCE(parkName,'—') AS parkName, COUNT(*) AS n, COALESCE(SUM(totalPrice),0) AS revenue
+       FROM multipark_bookings WHERE ${q}${projectCond}
+       GROUP BY city, parkName`,
+    )) as any;
+    const byCity = new Map<string, { count: number; revenue: number }>();
+    const byPark = new Map<string, { count: number; revenue: number }>();
+    let count = 0, revenue = 0;
+    for (const r of rows as any[]) {
+      const n = Number(r.n), v = Number(r.revenue);
+      count += n; revenue += v;
+      const c = byCity.get(r.city) ?? { count: 0, revenue: 0 };
+      c.count += n; c.revenue += v; byCity.set(r.city, c);
+      const parkKey = r.city && !String(r.parkName).includes(r.city) ? `${r.parkName} ${r.city}` : r.parkName;
+      const pk = byPark.get(parkKey) ?? { count: 0, revenue: 0 };
+      pk.count += n; pk.revenue += v; byPark.set(parkKey, pk);
+    }
+    out[action] = {
+      count, revenue,
+      byCity: Array.from(byCity, ([name, v]) => ({ name, ...v })).sort((a, b) => b.count - a.count),
+      byPark: Array.from(byPark, ([name, v]) => ({ name, ...v })).sort((a, b) => b.count - a.count),
+    };
+  }
+  return { actions: out };
 }
 
 export async function searchBookingByRef(search: string) {

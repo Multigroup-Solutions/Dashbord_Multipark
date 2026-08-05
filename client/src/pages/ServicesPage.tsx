@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useState, useMemo } from "react";
+import { usePersistedState } from "@/hooks/usePersistedState";
 import { Button } from "@/components/ui/button";
 import { QuickRangeBar, thisMonthRange } from "@/components/QuickRangeBar";
 import {
@@ -28,9 +29,9 @@ function getServiceIcon(name: string) {
 
 export default function ServicesPage() {
   const [defFrom, defTo] = thisMonthRange();
-  const [startDate, setStartDate] = useState(defFrom);
-  const [endDate, setEndDate] = useState(defTo);
-  const [activeRange, setActiveRange] = useState<string>("thisMonth");
+  const [startDate, setStartDate] = usePersistedState("servicos.from", defFrom);
+  const [endDate, setEndDate] = usePersistedState("servicos.to", defTo);
+  const [activeRange, setActiveRange] = usePersistedState<string>("servicos.range", "thisMonth");
 
   const { data, isLoading } = trpc.services.multiparkExtras.useQuery({ startDate, endDate });
 

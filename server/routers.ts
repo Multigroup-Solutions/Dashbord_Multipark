@@ -6818,6 +6818,20 @@ export const appRouter = router({
         };
       }),
 
+    // Resumo agregado (dashboard Operações): contagens/somas no SQL em vez de
+    // puxar milhares de reservas completas para o browser
+    operationsSummary: protectedProcedure
+      .input(z.object({
+        startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        projectId: z.number().optional(),
+      }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { getOperationsSummary } = await import("./db");
+        return getOperationsSummary(input);
+      }),
+
     // Query API directly by actionType + date range (all parks)
     reportByAction: protectedProcedure
       .input(z.object({
