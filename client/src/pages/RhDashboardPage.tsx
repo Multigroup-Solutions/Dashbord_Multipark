@@ -11,6 +11,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import {
   Users, Clock, AlertTriangle, BarChart3, ShieldAlert, ChevronLeft,
 } from "lucide-react";
+import { useTableSort, Th } from "@/components/SortableTable";
 import { toast } from "sonner";
 
 const MONTH_NAMES = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
@@ -186,6 +187,7 @@ function KpiRow({ t }: { t: ReturnType<any> }) {
 }
 
 function DashboardTable({ rows, extra = false }: { rows: any[]; extra?: boolean }) {
+  const { sorted, sortKey, sortDir, toggle } = useTableSort(rows);
   return (
     <Card>
       <CardHeader className="pb-2">
@@ -196,19 +198,19 @@ function DashboardTable({ rows, extra = false }: { rows: any[]; extra?: boolean 
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b text-left text-xs">
-                <th className="p-2">Nome</th>
-                <th className="p-2">Centro</th>
-                <th className="p-2 text-right">Horas mês</th>
-                <th className="p-2 text-right">Dias</th>
-                <th className="p-2 text-right">Bruto mês</th>
-                <th className="p-2 text-right">Líq. est.</th>
-                <th className="p-2 text-right">Recebido lookback</th>
-                <th className="p-2 text-right">€/h méd.</th>
-                <th className="p-2 text-center">Estado</th>
+                <Th k="fullName" label="Nome" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                <Th k="projectName" label="Centro" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                <Th k="currentMonth.totalHours" label="Horas mês" align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                <Th k="currentMonth.daysWorked" label="Dias" align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                <Th k="currentMonth.totalPayment" label="Bruto mês" align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                <Th k="currentMonth.netEstimate" label="Líq. est." align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                <Th k="lookbackTotal" label="Recebido lookback" align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                <Th k="avgHourly" label="€/h méd." align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                <Th k="severity" label="Estado" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
               </tr>
             </thead>
             <tbody>
-              {rows.map(r => {
+              {(sorted as any[]).map(r => {
                 const bg = r.severity === "red" ? "bg-red-50/50" : r.severity === "yellow" ? "bg-yellow-50/40" : "";
                 return (
                   <tr key={r.employeeId} className={`border-b hover:bg-muted/30 ${bg}`}>

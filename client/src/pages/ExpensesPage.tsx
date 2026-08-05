@@ -71,6 +71,7 @@ import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth } from "date-f
 import { pt } from "date-fns/locale";
 import { fileHref } from "@/lib/fileHref";
 import DateRangeNav from "@/components/DateRangeNav";
+import { useTableSort, Th } from "@/components/SortableTable";
 
 const STATUS_CONFIG: Record<string, { label: string; icon: any; className: string }> = {
   pending: { label: "Pendente", icon: Clock, className: "bg-yellow-100 text-yellow-800 border-yellow-200" },
@@ -258,6 +259,9 @@ export default function ExpensesPage() {
     const overdue = items.filter(e => e.expense.status === "overdue").reduce((s, e) => s + parseFloat(String(e.expense.amount ?? 0)), 0);
     return { total, pending, paid, overdue, count: items.length };
   }, [expensesList]);
+
+  // Ordenação por coluna na tabela (setas nos cabeçalhos)
+  const { sorted: sortedExpenses, sortKey: expSortKey, sortDir: expSortDir, toggle: expToggle } = useTableSort((expensesList ?? []) as any[]);
 
   // Selected user name for KPI label
   const selectedUserName = useMemo(() => {
@@ -562,20 +566,20 @@ export default function ExpensesPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Fornecedor</TableHead>
-                    <TableHead>Categoria</TableHead>
-                    <TableHead>Projeto</TableHead>
-                    <TableHead>Data</TableHead>
-                    <TableHead>Pagamento</TableHead>
-                    <TableHead>Comprador</TableHead>
-                    <TableHead className="text-right">Valor</TableHead>
-                    <TableHead>Estado</TableHead>
-                    <TableHead>Inserido por</TableHead>
+                    <Th k="expense.supplier" label="Fornecedor" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
+                    <Th k="category.name" label="Categoria" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
+                    <Th k="project.name" label="Projeto" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
+                    <Th k="expense.expenseDate" label="Data" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
+                    <Th k="expense.paymentDueDate" label="Pagamento" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
+                    <Th k="buyer.fullName" label="Comprador" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
+                    <Th k="expense.amount" label="Valor" align="right" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
+                    <Th k="expense.status" label="Estado" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
+                    <Th k="insertedBy.name" label="Inserido por" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
                     <TableHead className="text-right">Ações</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {expensesList?.map((row) => {
+                  {sortedExpenses.map((row: any) => {
                     const { expense, category, project, insertedBy, buyer } = row;
                     return (
                       <TableRow

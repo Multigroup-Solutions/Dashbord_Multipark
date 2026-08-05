@@ -13,6 +13,7 @@ import {
   Building2, FolderTree, Users as UsersIcon, Handshake, LogIn,
 } from "lucide-react";
 import DateRangeNav, { type DateGran, rangeFor } from "@/components/DateRangeNav";
+import { useTableSort, Th } from "@/components/SortableTable";
 import {
   ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend,
@@ -60,6 +61,11 @@ export default function InvoicesPage() {
   const salesCommissions: Array<{ partnerName: string | null; projectName: string | null; bookingsCount: number; revenueGross: number; commissionRate: number; commission: number }> = (data as any)?.salesCommissions ?? [];
   const operationalPartners: Array<{ partnerName: string | null; projectNames: string[]; bookingsCount: number; revenueGross: number; commissionRate: number; commission: number }> = (data as any)?.operationalPartners ?? [];
   const salaries: { byProject: Array<{ projectName: string | null; cost: number }>; total: number } = (data as any)?.salaries ?? { byProject: [], total: 0 };
+
+  // Ordenação por coluna nas tabelas principais
+  const delSort = useTableSort(deliveries as any[]);
+  const colSort = useTableSort(collectedRows as any[]);
+  const comSort = useTableSort(salesCommissions as any[]);
 
   const chartData = useMemo(() => timeseries.map((p: any) => ({
     bucket: p.bucket,
@@ -249,14 +255,14 @@ export default function InvoicesPage() {
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="border-b text-left">
-                          <th className="p-2">Projeto</th>
-                          <th className="p-2 text-right">Entregas</th>
-                          <th className="p-2 text-right">Serviços extras</th>
-                          <th className="p-2 text-right font-bold">Total</th>
+                          <Th k="projectName" label="Projeto" sortKey={delSort.sortKey} sortDir={delSort.sortDir} onToggle={delSort.toggle} />
+                          <Th k="count" label="Entregas" align="right" sortKey={delSort.sortKey} sortDir={delSort.sortDir} onToggle={delSort.toggle} />
+                          <Th k="extrasRevenue" label="Serviços extras" align="right" sortKey={delSort.sortKey} sortDir={delSort.sortDir} onToggle={delSort.toggle} />
+                          <Th k="totalRevenue" label="Total" align="right" className="font-bold" sortKey={delSort.sortKey} sortDir={delSort.sortDir} onToggle={delSort.toggle} />
                         </tr>
                       </thead>
                       <tbody>
-                        {deliveries.map((d, i) => (
+                        {(delSort.sorted as any[]).map((d, i) => (
                           <tr key={i} className="border-b hover:bg-muted/50">
                             <td className="p-2 flex items-center gap-2"><FolderTree className="w-3 h-3 text-muted-foreground" />{d.projectName ?? "Sem projeto"}</td>
                             <td className="p-2 text-right tabular-nums">{d.count}</td>
@@ -284,13 +290,13 @@ export default function InvoicesPage() {
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="border-b text-left">
-                          <th className="p-2">Projeto</th>
-                          <th className="p-2 text-right">Recolhas</th>
-                          <th className="p-2 text-right font-bold">Valor das reservas</th>
+                          <Th k="projectName" label="Projeto" sortKey={colSort.sortKey} sortDir={colSort.sortDir} onToggle={colSort.toggle} />
+                          <Th k="count" label="Recolhas" align="right" sortKey={colSort.sortKey} sortDir={colSort.sortDir} onToggle={colSort.toggle} />
+                          <Th k="totalRevenue" label="Valor das reservas" align="right" className="font-bold" sortKey={colSort.sortKey} sortDir={colSort.sortDir} onToggle={colSort.toggle} />
                         </tr>
                       </thead>
                       <tbody>
-                        {collectedRows.map((c, i) => (
+                        {(colSort.sorted as any[]).map((c, i) => (
                           <tr key={i} className="border-b hover:bg-muted/50">
                             <td className="p-2">{c.projectName ?? "Sem projeto"}</td>
                             <td className="p-2 text-right tabular-nums">{c.count}</td>
@@ -433,16 +439,16 @@ export default function InvoicesPage() {
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="border-b text-left">
-                          <th className="p-2">Parceiro</th>
-                          <th className="p-2">Marca / Projeto</th>
-                          <th className="p-2 text-right">Reservas</th>
-                          <th className="p-2 text-right">Receita</th>
-                          <th className="p-2 text-right">%</th>
-                          <th className="p-2 text-right font-bold">Comissão</th>
+                          <Th k="partnerName" label="Parceiro" sortKey={comSort.sortKey} sortDir={comSort.sortDir} onToggle={comSort.toggle} />
+                          <Th k="projectName" label="Marca / Projeto" sortKey={comSort.sortKey} sortDir={comSort.sortDir} onToggle={comSort.toggle} />
+                          <Th k="bookingsCount" label="Reservas" align="right" sortKey={comSort.sortKey} sortDir={comSort.sortDir} onToggle={comSort.toggle} />
+                          <Th k="revenueGross" label="Receita" align="right" sortKey={comSort.sortKey} sortDir={comSort.sortDir} onToggle={comSort.toggle} />
+                          <Th k="commissionRate" label="%" align="right" sortKey={comSort.sortKey} sortDir={comSort.sortDir} onToggle={comSort.toggle} />
+                          <Th k="commission" label="Comissão" align="right" className="font-bold" sortKey={comSort.sortKey} sortDir={comSort.sortDir} onToggle={comSort.toggle} />
                         </tr>
                       </thead>
                       <tbody>
-                        {salesCommissions.map((c, i) => (
+                        {(comSort.sorted as any[]).map((c, i) => (
                           <tr key={i} className="border-b hover:bg-muted/50">
                             <td className="p-2">{c.partnerName ?? "—"}</td>
                             <td className="p-2 flex items-center gap-2"><FolderTree className="w-3 h-3 text-muted-foreground" />{c.projectName ?? "Sem projeto"}</td>

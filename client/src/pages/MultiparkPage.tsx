@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { QuickRangeBar, thisMonthRange } from "@/components/QuickRangeBar";
 import DateRangeNav from "@/components/DateRangeNav";
+import { useTableSort, Th } from "@/components/SortableTable";
 import { toast } from "sonner";
 import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { useParams } from "wouter";
@@ -202,6 +203,9 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
       (b.clientEmail || "").toLowerCase().includes(s)
     );
   }, [data, searchTerm, originFilter]);
+
+  // Ordenação por coluna (setas nos cabeçalhos)
+  const { sorted: sortedBookings, sortKey, sortDir, toggle } = useTableSort(bookings as any[]);
 
   // Aggregate totals (comissões de parceiros vêm do servidor — partnerships
   // novas por campanha, coerente com Faturação/Parcerias)
@@ -460,20 +464,20 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-muted/50 text-left">
-                    <th className="p-2">Reserva</th>
-                    <th className="p-2">Cliente</th>
-                    <th className="p-2">Matrícula</th>
-                    <th className="p-2">Parque</th>
-                    <th className="p-2">Recolha</th>
-                    <th className="p-2">Entrega</th>
-                    <th className="p-2">Origem</th>
-                    <th className="p-2">Estado</th>
-                    <th className="p-2 text-right">Preço</th>
-                    <th className="p-2">Tipo</th>
+                    <Th k="bookingNumber" label="Reserva" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="clientFirstName" label="Cliente" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="licensePlate" label="Matrícula" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="parkName" label="Parque" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="checkIn" label="Recolha" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="checkOut" label="Entrega" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="origin" label="Origem" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="status" label="Estado" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="totalPrice" label="Preço" align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="parkingType" label="Tipo" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                   </tr>
                 </thead>
                 <tbody>
-                  {bookings.map((b: any, i: number) => {
+                  {sortedBookings.map((b: any, i: number) => {
                     const status = b.status || "—";
                     const statusCfg = STATUS_MAP[status];
                     const parkName = b.parkName || "—";

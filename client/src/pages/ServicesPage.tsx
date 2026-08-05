@@ -9,6 +9,7 @@ import { useState, useMemo } from "react";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { Button } from "@/components/ui/button";
 import { QuickRangeBar, thisMonthRange } from "@/components/QuickRangeBar";
+import { useTableSort, Th } from "@/components/SortableTable";
 import {
   Sparkles, Euro, TrendingUp, CheckCircle2, Clock, Droplets, Zap, Car, Package, Download,
 } from "lucide-react";
@@ -84,6 +85,9 @@ export default function ServicesPage() {
     if (filterStatus === "pending") list = list.filter((s: any) => !s.done);
     return list;
   }, [services, filterType, filterStatus]);
+
+  // Ordenação por coluna
+  const { sorted: sortedServices, sortKey, sortDir, toggle } = useTableSort(filtered as any[]);
 
   const typeOptions = useMemo(() => {
     return Object.keys(stats.byType).sort();
@@ -244,16 +248,16 @@ export default function ServicesPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-left">
-                  <th className="p-2">Serviço</th>
-                  <th className="p-2">Matrícula</th>
-                  <th className="p-2">Parque</th>
-                  <th className="p-2 text-right">Preço</th>
-                  <th className="p-2">Check-out</th>
-                  <th className="p-2">Estado</th>
+                  <Th k="serviceName" label="Serviço" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                  <Th k="licensePlate" label="Matrícula" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                  <Th k="parkName" label="Parque" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                  <Th k="price" label="Preço" align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                  <Th k="checkOut" label="Check-out" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                  <Th k="done" label="Estado" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((s: any, i: number) => (
+                {sortedServices.map((s: any, i: number) => (
                   <tr key={`${s.bookingId}-${i}`} className="border-b hover:bg-muted/50">
                     <td className="p-2 font-medium">{s.serviceName}</td>
                     <td className="p-2">{s.licensePlate || "—"}</td>

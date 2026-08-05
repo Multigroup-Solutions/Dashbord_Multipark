@@ -14,6 +14,7 @@ import {
   Trophy, RefreshCw, TrendingUp, TrendingDown, Minus, Clock,
   Zap, AlertTriangle, Award, Download, Pencil,
 } from "lucide-react";
+import { useTableSort, Th } from "@/components/SortableTable";
 
 function getWeekNumber(d: Date): number {
   const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
@@ -56,6 +57,16 @@ export default function PerformancePage() {
   }, [prevEvaluations]);
 
   const isSupervisor = user?.role && ["supervisor", "admin", "super_admin"].includes(user.role);
+
+  // Ordenação por coluna; a POSIÇÃO do ranking (medalhas) é sempre pela
+  // pontuação, independentemente da coluna ordenada.
+  const { sorted: sortedEvals, sortKey, sortDir, toggle } = useTableSort(evaluations as any[]);
+  const rankByEmployee = useMemo(() => {
+    const byPoints = [...evaluations].sort((a: any, b: any) => (b.totalPoints ?? 0) - (a.totalPoints ?? 0));
+    const m = new Map<number, number>();
+    byPoints.forEach((ev: any, i: number) => m.set(ev.employeeId, i + 1));
+    return m;
+  }, [evaluations]);
 
   const handleGenerate = async () => {
     if (evaluations.length > 0 && !confirm(`Já existem ${evaluations.length} avaliações para esta semana. Recalcular vai actualizar os valores automáticos (mantém notas guardadas). Continuar?`)) {
@@ -162,31 +173,31 @@ export default function PerformancePage() {
                   <tr className="border-b text-left">
                     <th className="p-2 w-12">#</th>
                     <th className="p-2 w-12 text-center">Δ</th>
-                    <th className="p-2">Condutor</th>
-                    <th className="p-2 text-center">Horas</th>
-                    <th className="p-2 text-center">Movs</th>
-                    <th className="p-2 text-center">Mov/h</th>
-                    <th className="p-2 text-center">Alertas</th>
-                    <th className="p-2 text-center">Inc+</th>
-                    <th className="p-2 text-center">Inc−</th>
-                    <th className="p-2 text-center">Pts+</th>
-                    <th className="p-2 text-center">Pts−</th>
-                    <th className="p-2 text-center font-bold">Total</th>
+                    <Th k="employeeName" label="Condutor" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="hoursWorked" label="Horas" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="movementsCount" label="Movs" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="movementsPerHour" label="Mov/h" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="speedAlerts" label="Alertas" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="incidentsPositive" label="Inc+" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="incidentsNegative" label="Inc−" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="positivePoints" label="Pts+" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="negativePoints" label="Pts−" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="totalPoints" label="Total" align="center" className="font-bold" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                     <th className="p-2">Notas</th>
                     {isSupervisor && <th className="p-2 w-10"></th>}
                   </tr>
                 </thead>
                 <tbody>
-                  {evaluations.map((ev: any, idx: number) => {
+                  {sortedEvals.map((ev: any) => {
                     const name = employeeMap.get(ev.employeeId) ?? ev.employeeName ?? `#${ev.employeeId}`;
-                    const isTop3 = idx < 3;
-                    const currentPos = idx + 1;
+                    const currentPos = rankByEmployee.get(ev.employeeId) ?? 0;
+                    const isTop3 = currentPos <= 3;
                     const prevPos = prevPositionMap.get(ev.employeeId);
                     const delta = prevPos != null ? prevPos - currentPos : null; // +ve = subiu
                     return (
                       <tr key={ev.id} className={`border-b hover:bg-muted/50 ${isTop3 ? "bg-yellow-50/30" : ""}`}>
                         <td className="p-2 font-bold text-center">
-                          {idx === 0 ? "🥇" : idx === 1 ? "🥈" : idx === 2 ? "🥉" : currentPos}
+                          {currentPos === 1 ? "🥇" : currentPos === 2 ? "🥈" : currentPos === 3 ? "🥉" : currentPos}
                         </td>
                         <td className="p-2 text-center">
                           {delta == null ? (
