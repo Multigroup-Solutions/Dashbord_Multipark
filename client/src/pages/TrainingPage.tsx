@@ -115,8 +115,17 @@ function VideosTab({ isAdmin }: { isAdmin: boolean }) {
   const { data: videos = [], refetch } = trpc.training.videos.useQuery({ categoryId: selectedCat !== "all" ? Number(selectedCat) : undefined });
   const createVideo = trpc.training.createVideo.useMutation({ onSuccess: () => { refetch(); setShowCreate(false); toast.success("Vídeo adicionado"); } });
   const deleteVideo = trpc.training.deleteVideo.useMutation({ onSuccess: () => { refetch(); toast.success("Vídeo eliminado"); } });
-  const createCat = trpc.training.createCategory.useMutation({ onSuccess: () => { trpc.useUtils().training.categories.invalidate(); setShowCreateCat(false); toast.success("Categoria criada"); } });
   const utils = trpc.useUtils();
+  // BUG antigo: usava trpc.useUtils() DENTRO do onSuccess (hook fora do render
+  // → nunca invalidava) e não limpava o form — daí as 10 categorias "saca".
+  const createCat = trpc.training.createCategory.useMutation({
+    onSuccess: () => { utils.training.categories.invalidate(); setShowCreateCat(false); setCatForm({ name: "", description: "", icon: "" }); toast.success("Categoria criada"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const deleteCat = trpc.training.deleteCategory.useMutation({
+    onSuccess: () => { utils.training.categories.invalidate(); setSelectedCat("all"); toast.success("Categoria eliminada"); },
+    onError: (e) => toast.error(e.message),
+  });
 
   return (
     <div className="space-y-4">
@@ -130,6 +139,21 @@ function VideosTab({ isAdmin }: { isAdmin: boolean }) {
             </SelectContent>
           </Select>
           {isAdmin && <Button variant="outline" size="sm" onClick={() => setShowCreateCat(true)}><Plus className="w-4 h-4 mr-1" />Categoria</Button>}
+          {isAdmin && selectedCat !== "all" && (
+            <Button
+              variant="outline" size="sm" className="text-destructive"
+              disabled={deleteCat.isPending}
+              onClick={() => {
+                const cat = categories.find((c: any) => String(c.id) === selectedCat);
+                const nVideos = videos.length;
+                if (confirm(`Eliminar a categoria "${cat?.name}"?${nVideos > 0 ? ` Os ${nVideos} vídeo(s) dela ficam sem categoria.` : ""}`)) {
+                  deleteCat.mutate({ id: Number(selectedCat) });
+                }
+              }}
+            >
+              <Trash2 className="w-4 h-4 mr-1" />Eliminar categoria
+            </Button>
+          )}
         </div>
         {isAdmin && <Button onClick={() => setShowCreate(true)}><Plus className="w-4 h-4 mr-1" />Novo Vídeo</Button>}
       </div>
