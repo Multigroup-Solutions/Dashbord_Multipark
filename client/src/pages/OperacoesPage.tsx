@@ -96,10 +96,11 @@ export default function OperacoesPage() {
 
 function OperacoesDashboard({ onJump }: { onJump: (tab: string) => void }) {
   const [defFrom, defTo] = thisMonthRange();
-  // Filtros persistem à navegação (padrão da app)
-  const [from, setFrom] = usePersistedState("operacoes.dash.from", defFrom);
-  const [to, setTo] = usePersistedState("operacoes.dash.to", defTo);
-  const [activeRange, setActiveRange] = usePersistedState<string>("operacoes.dash.range", "thisMonth");
+  // Datas PARTILHADAS com as folhas (mesmas keys) — mudar o período aqui ou
+  // numa folha mantém-no em todas as abas das Operações
+  const [from, setFrom] = usePersistedState("mpk.shared.start", defFrom);
+  const [to, setTo] = usePersistedState("mpk.shared.end", defTo);
+  const [activeRange, setActiveRange] = usePersistedState<string>("mpk.shared.range", "thisMonth");
   const [compare, setCompare] = usePersistedState<boolean>("operacoes.dash.compare", false);
   const [dim, setDim] = usePersistedState<"city" | "parkName">("operacoes.dash.dim", "city");
 

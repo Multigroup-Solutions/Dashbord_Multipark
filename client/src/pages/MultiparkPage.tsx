@@ -127,13 +127,15 @@ export default function MultiparkPage({ sectionProp }: { sectionProp?: string } 
 function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "checkout" | "cancelation" }) {
   const globalFilters = useGlobalFilters();
   const [defFrom, defTo] = thisMonthRange();
-  // Filtros persistem à navegação (por tipo de ação: recolhas/entregas/…)
-  const [startDate, setStartDate] = usePersistedState(`mpk.${actionType}.start`, defFrom);
-  const [endDate, setEndDate] = usePersistedState(`mpk.${actionType}.end`, defTo);
-  const [activeRange, setActiveRange] = usePersistedState<string>(`mpk.${actionType}.range`, "thisMonth");
-  const [searchTerm, setSearchTerm] = usePersistedState(`mpk.${actionType}.search`, "");
-  const [projectId, setProjectId] = usePersistedState<string>(`mpk.${actionType}.project`, "");
-  const [originFilter, setOriginFilter] = usePersistedState<string>(`mpk.${actionType}.origin`, "all");
+  // Filtros PARTILHADOS entre as abas das Operações (pedido do Jorge:
+  // "ponho um filtro nas Reservas e mudo para Recolhas — ele fica"):
+  // datas, projeto, pesquisa e origem seguem contigo de aba para aba.
+  const [startDate, setStartDate] = usePersistedState("mpk.shared.start", defFrom);
+  const [endDate, setEndDate] = usePersistedState("mpk.shared.end", defTo);
+  const [activeRange, setActiveRange] = usePersistedState<string>("mpk.shared.range", "thisMonth");
+  const [searchTerm, setSearchTerm] = usePersistedState("mpk.shared.search", "");
+  const [projectId, setProjectId] = usePersistedState<string>("mpk.shared.project", "");
+  const [originFilter, setOriginFilter] = usePersistedState<string>("mpk.shared.origin", "all");
   const [detailBooking, setDetailBooking] = useState<any>(null);
 
   // Sync global filter to local project filter — só quando o header TEM filtro
