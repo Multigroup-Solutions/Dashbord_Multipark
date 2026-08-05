@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { useTableSort, Th } from "@/components/SortableTable";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -359,6 +360,7 @@ export default function PartnershipsPage() {
       }))
       .sort((a, b) => b.revenue - a.revenue);
   }, [partners, linkedCampaigns]);
+  const psSort = useTableSort(partnerSummary);
 
   // Billing calculations
   const billingTotals = useMemo(() => {
@@ -467,18 +469,18 @@ export default function PartnershipsPage() {
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="border-b text-left">
-                          <th className="p-2">Parceiro</th>
-                          <th className="p-2">Cidades</th>
-                          <th className="p-2 text-right">Reservas</th>
-                          <th className="p-2 text-right">Receita</th>
-                          <th className="p-2 text-right">Preço Médio</th>
-                          <th className="p-2 text-right">Descontos</th>
-                          <th className="p-2 text-right">% Receita</th>
+                          <Th k="name" label="Parceiro" sortKey={psSort.sortKey} sortDir={psSort.sortDir} onToggle={psSort.toggle} />
+                          <Th k="cities" label="Cidades" sortKey={psSort.sortKey} sortDir={psSort.sortDir} onToggle={psSort.toggle} />
+                          <Th k="count" label="Reservas" align="right" sortKey={psSort.sortKey} sortDir={psSort.sortDir} onToggle={psSort.toggle} />
+                          <Th k="revenue" label="Receita" align="right" sortKey={psSort.sortKey} sortDir={psSort.sortDir} onToggle={psSort.toggle} />
+                          <Th k="avgPrice" label="Preço Médio" align="right" sortKey={psSort.sortKey} sortDir={psSort.sortDir} onToggle={psSort.toggle} />
+                          <Th k="discount" label="Descontos" align="right" sortKey={psSort.sortKey} sortDir={psSort.sortDir} onToggle={psSort.toggle} />
+                          <Th k="revenueShare" label="% Receita" align="right" sortKey={psSort.sortKey} sortDir={psSort.sortDir} onToggle={psSort.toggle} />
                           <th className="p-2 text-center">Config</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {partnerSummary.map(p => (
+                        {psSort.sorted.map(p => (
                           <tr key={p.name} className="border-b hover:bg-muted/50">
                             <td className="p-2 font-medium">
                               {p.name}

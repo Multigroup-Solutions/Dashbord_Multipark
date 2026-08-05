@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { useTableSort, Th } from "@/components/SortableTable";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -1458,6 +1459,7 @@ export function AvailabilitySection() {
     if (onlyWithAvailability) list = list.filter(e => e.availableDays > 0);
     return list;
   }, [o, cityFilter, onlyWithAvailability]);
+  const availSort = useTableSort(shownExtras);
 
   // Contagens do cabeçalho seguem o conjunto FILTRADO (as do servidor são
   // sempre o universo completo e mentiriam com um filtro aplicado).
@@ -1729,16 +1731,16 @@ export function AvailabilitySection() {
                         }}
                       />
                     </th>
-                    <th className="py-1 pr-2">Extra</th>
-                    <th className="py-1 pr-2">Cidade</th>
-                    <th className="py-1 pr-2">Telefone</th>
+                    <Th k="fullName" label="Extra" sortKey={availSort.sortKey} sortDir={availSort.sortDir} onToggle={availSort.toggle} />
+                    <Th k="city" label="Cidade" sortKey={availSort.sortKey} sortDir={availSort.sortDir} onToggle={availSort.toggle} />
+                    <Th k="phoneE164" label="Telefone" sortKey={availSort.sortKey} sortDir={availSort.sortDir} onToggle={availSort.toggle} />
                     {o.dayHeaders.map((h) => (
                       <th key={h.day} className="px-1 text-center whitespace-nowrap">{h.label}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {shownExtras.map((ex) => (
+                  {availSort.sorted.map((ex) => (
                     <tr key={ex.employeeId} className="border-b last:border-0">
                       <td className="py-1 pr-1">
                         <input

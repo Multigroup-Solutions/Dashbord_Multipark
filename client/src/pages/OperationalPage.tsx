@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
+import { useTableSort, Th } from "@/components/SortableTable";
 import {
   Car, AlertTriangle, Radio, Activity, Plus, Trash2, Eye, Check,
   MapPin, Gauge, ArrowUpDown, Clock, Wrench, XCircle, Satellite, Shield, Users, Settings,
@@ -92,6 +93,8 @@ function DashboardTab() {
     { startDate, endDate },
     { enabled: !!startDate && !!endDate },
   );
+  const dailySort = useTableSort(((data?.daily ?? []) as any[]));
+  const personSort = useTableSort(((data?.byPerson ?? []) as any[]));
 
   const fmtEur = (n: number) => n.toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
 
@@ -214,16 +217,16 @@ function DashboardTab() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b text-xs uppercase text-muted-foreground">
-                        <th className="text-left py-2 px-2">Dia</th>
-                        <th className="text-right py-2 px-2">Pessoas</th>
-                        <th className="text-right py-2 px-2">Custo</th>
-                        <th className="text-right py-2 px-2">Acções</th>
-                        <th className="text-right py-2 px-2 text-emerald-700">No horário</th>
-                        <th className="text-right py-2 px-2 text-amber-700">Fora horário</th>
+                        <Th k="date" label="Dia" sortKey={dailySort.sortKey} sortDir={dailySort.sortDir} onToggle={dailySort.toggle} />
+                        <Th k="drivers" label="Pessoas" align="right" sortKey={dailySort.sortKey} sortDir={dailySort.sortDir} onToggle={dailySort.toggle} />
+                        <Th k="totalCost" label="Custo" align="right" sortKey={dailySort.sortKey} sortDir={dailySort.sortDir} onToggle={dailySort.toggle} />
+                        <Th k="totalActions" label="Acções" align="right" sortKey={dailySort.sortKey} sortDir={dailySort.sortDir} onToggle={dailySort.toggle} />
+                        <Th k="inShift" label="No horário" align="right" className="text-emerald-700" sortKey={dailySort.sortKey} sortDir={dailySort.sortDir} onToggle={dailySort.toggle} />
+                        <Th k="outOfShift" label="Fora horário" align="right" className="text-amber-700" sortKey={dailySort.sortKey} sortDir={dailySort.sortDir} onToggle={dailySort.toggle} />
                       </tr>
                     </thead>
                     <tbody>
-                      {data.daily.map((d) => (
+                      {(dailySort.sorted as any[]).map((d) => (
                         <tr key={d.date} className="border-b hover:bg-muted/30">
                           <td className="py-1.5 px-2 font-mono">{d.date}</td>
                           <td className="py-1.5 px-2 text-right">{d.drivers}</td>
@@ -252,18 +255,18 @@ function DashboardTab() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b text-xs uppercase text-muted-foreground">
-                        <th className="text-left py-2 px-2">Pessoa</th>
-                        <th className="text-right py-2 px-2">Dias</th>
-                        <th className="text-right py-2 px-2">Horas</th>
-                        <th className="text-right py-2 px-2">Custo</th>
-                        <th className="text-right py-2 px-2">Acções</th>
-                        <th className="text-right py-2 px-2 text-emerald-700">No horário</th>
-                        <th className="text-right py-2 px-2 text-amber-700">Fora horário</th>
-                        <th className="text-right py-2 px-2">€/acção</th>
+                        <Th k="personName" label="Pessoa" sortKey={personSort.sortKey} sortDir={personSort.sortDir} onToggle={personSort.toggle} />
+                        <Th k="daysWorked" label="Dias" align="right" sortKey={personSort.sortKey} sortDir={personSort.sortDir} onToggle={personSort.toggle} />
+                        <Th k="hoursPaid" label="Horas" align="right" sortKey={personSort.sortKey} sortDir={personSort.sortDir} onToggle={personSort.toggle} />
+                        <Th k="cost" label="Custo" align="right" sortKey={personSort.sortKey} sortDir={personSort.sortDir} onToggle={personSort.toggle} />
+                        <Th k="totalActions" label="Acções" align="right" sortKey={personSort.sortKey} sortDir={personSort.sortDir} onToggle={personSort.toggle} />
+                        <Th k="inShift" label="No horário" align="right" className="text-emerald-700" sortKey={personSort.sortKey} sortDir={personSort.sortDir} onToggle={personSort.toggle} />
+                        <Th k="outOfShift" label="Fora horário" align="right" className="text-amber-700" sortKey={personSort.sortKey} sortDir={personSort.sortDir} onToggle={personSort.toggle} />
+                        <Th k="costPerAction" label="€/acção" align="right" sortKey={personSort.sortKey} sortDir={personSort.sortDir} onToggle={personSort.toggle} />
                       </tr>
                     </thead>
                     <tbody>
-                      {data.byPerson.map((p) => (
+                      {(personSort.sorted as any[]).map((p) => (
                         <tr key={p.personName} className="border-b hover:bg-muted/30">
                           <td className="py-1.5 px-2">
                             <div className="flex items-center gap-1.5">
@@ -408,6 +411,7 @@ function ZelloGPSTab() {
       const emp = zelloToEmployee.get(String(l.username ?? "").toLowerCase());
       return emp ? { ...l, displayName: emp } : l;
     }), [locations, zelloToEmployee]);
+  const gpsSort = useTableSort(onlineUsers as any[]);
   const speedingUsers = useMemo(() => onlineUsers.filter((l: any) => l.speed > speedThreshold), [onlineUsers, speedThreshold]);
 
   return (
@@ -476,16 +480,16 @@ function ZelloGPSTab() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b text-left">
-                    <th className="p-2">Utilizador</th>
-                    <th className="p-2">Velocidade</th>
-                    <th className="p-2">Bateria</th>
-                    <th className="p-2">Estado</th>
-                    <th className="p-2">Última Atualização</th>
+                    <Th k="displayName" label="Utilizador" sortKey={gpsSort.sortKey} sortDir={gpsSort.sortDir} onToggle={gpsSort.toggle} />
+                    <Th k="speed" label="Velocidade" sortKey={gpsSort.sortKey} sortDir={gpsSort.sortDir} onToggle={gpsSort.toggle} />
+                    <Th k="battery" label="Bateria" sortKey={gpsSort.sortKey} sortDir={gpsSort.sortDir} onToggle={gpsSort.toggle} />
+                    <Th k="status" label="Estado" sortKey={gpsSort.sortKey} sortDir={gpsSort.sortDir} onToggle={gpsSort.toggle} />
+                    <Th k="lastReport" label="Última Atualização" sortKey={gpsSort.sortKey} sortDir={gpsSort.sortDir} onToggle={gpsSort.toggle} />
                     <th className="p-2">Ações</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {onlineUsers.map((loc: any) => {
+                  {(gpsSort.sorted as any[]).map((loc: any) => {
                     const isSpeeding = loc.speed > speedThreshold;
                     const lastUpdate = loc.lastReport ? fmtPTDateTime(loc.lastReport * 1000) : "-";
                     return (
@@ -871,6 +875,7 @@ function DriverHistoryTab() {
   const utils = trpc.useUtils();
 
   const { data: history, isLoading } = trpc.operational.driverHistory.byDate.useQuery({ date: selectedDate });
+  const histSort = useTableSort(((history ?? []) as any[]));
   const { data: stats } = trpc.operational.driverHistory.stats.useQuery({ date: selectedDate });
   const { data: speedLimits = [] } = trpc.operational.speedMonitoring.limits.list.useQuery();
   const defaultLimit = useMemo(() => {
@@ -1022,20 +1027,20 @@ function DriverHistoryTab() {
               <table className="w-full min-w-[760px] text-sm">
                 <thead>
                   <tr className="border-b text-left">
-                    <th className="p-2">Motorista</th>
-                    <th className="p-2 text-right">Km</th>
-                    <th className="p-2 text-right">Horas Trab.</th>
-                    <th className="p-2 text-right">Horas Parado</th>
-                    <th className="p-2 text-right">Vel. Média</th>
-                    <th className="p-2 text-right">Vel. Máx</th>
-                    <th className="p-2 text-right">Infrações</th>
-                    <th className="p-2 text-right">Bateria</th>
-                    <th className="p-2 text-right">Pontos GPS</th>
+                    <Th k="employeeName" label="Motorista" sortKey={histSort.sortKey} sortDir={histSort.sortDir} onToggle={histSort.toggle} />
+                    <Th k="totalKm" label="Km" align="right" sortKey={histSort.sortKey} sortDir={histSort.sortDir} onToggle={histSort.toggle} />
+                    <Th k="hoursWorked" label="Horas Trab." align="right" sortKey={histSort.sortKey} sortDir={histSort.sortDir} onToggle={histSort.toggle} />
+                    <Th k="hoursIdle" label="Horas Parado" align="right" sortKey={histSort.sortKey} sortDir={histSort.sortDir} onToggle={histSort.toggle} />
+                    <Th k="avgSpeed" label="Vel. Média" align="right" sortKey={histSort.sortKey} sortDir={histSort.sortDir} onToggle={histSort.toggle} />
+                    <Th k="maxSpeed" label="Vel. Máx" align="right" sortKey={histSort.sortKey} sortDir={histSort.sortDir} onToggle={histSort.toggle} />
+                    <Th k="violations" label="Infrações" align="right" sortKey={histSort.sortKey} sortDir={histSort.sortDir} onToggle={histSort.toggle} />
+                    <Th k="batteryLevel" label="Bateria" align="right" sortKey={histSort.sortKey} sortDir={histSort.sortDir} onToggle={histSort.toggle} />
+                    <Th k="gpsPoints" label="Pontos GPS" align="right" sortKey={histSort.sortKey} sortDir={histSort.sortDir} onToggle={histSort.toggle} />
                     <th className="p-2">Ações</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {history.map((h: any) => (
+                  {(histSort.sorted as any[]).map((h: any) => (
                     <React.Fragment key={h.id}>
                       <tr key={h.id} className="border-b hover:bg-muted/50 cursor-pointer" onClick={() => setExpandedUser(expandedUser === h.zelloUsername ? null : h.zelloUsername)}>
                         <td className="p-2 font-medium">
@@ -1846,7 +1851,9 @@ function AgentActivityTab() {
     onError: (e) => toast.error(e.message),
   });
 
-  const rows = (agents as any[]).filter((a) => !onlyUnmapped || !a.employeeId);
+  const rowsUnsorted = (agents as any[]).filter((a) => !onlyUnmapped || !a.employeeId);
+  const agentSort = useTableSort(rowsUnsorted);
+  const rows = agentSort.sorted as any[];
   const mappedCount = (agents as any[]).filter((a) => a.employeeId).length;
   const totalActions = (agents as any[]).reduce((s, a) => s + a.total, 0);
 
@@ -1877,11 +1884,11 @@ function AgentActivityTab() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-xs text-muted-foreground border-b">
-                  <th className="p-2">Agente (Multipark)</th>
-                  <th className="p-2">Ações</th>
-                  <th className="p-2">In</th>
-                  <th className="p-2">Out</th>
-                  <th className="p-2">Mov.</th>
+                  <Th k="agentName" label="Agente (Multipark)" sortKey={agentSort.sortKey} sortDir={agentSort.sortDir} onToggle={agentSort.toggle} />
+                  <Th k="total" label="Ações" sortKey={agentSort.sortKey} sortDir={agentSort.sortDir} onToggle={agentSort.toggle} />
+                  <Th k="checkin" label="In" sortKey={agentSort.sortKey} sortDir={agentSort.sortDir} onToggle={agentSort.toggle} />
+                  <Th k="checkout" label="Out" sortKey={agentSort.sortKey} sortDir={agentSort.sortDir} onToggle={agentSort.toggle} />
+                  <Th k="movement" label="Mov." sortKey={agentSort.sortKey} sortDir={agentSort.sortDir} onToggle={agentSort.toggle} />
                   <th className="p-2">Colaborador</th>
                 </tr>
               </thead>
