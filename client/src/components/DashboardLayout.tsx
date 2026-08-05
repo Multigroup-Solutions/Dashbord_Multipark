@@ -37,7 +37,6 @@ import {
 import { getLoginUrl } from "@/const";
 import { ACCESS_DENIED_MSG } from "@shared/const";
 import ProfilePhotoPrompt from "@/components/ProfilePhotoPrompt";
-import PermissionsGate from "@/components/PermissionsGate";
 import CameraCapture from "@/components/CameraCapture";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
@@ -340,27 +339,37 @@ function DashboardLayoutContent({
   const submitPonto = (base64: string, mimeType: string) => {
     const employeeId = pontoQ.data?.employeeId;
     if (!employeeId || !pontoMode) return;
-    const doSubmit = (lat?: number, lng?: number) => {
+    const doSubmit = (lat: number, lng: number) => {
       const payload = {
         employeeId,
         photoBase64: base64,
         mimeType,
-        latitude: lat ? String(lat) : undefined,
-        longitude: lng ? String(lng) : undefined,
-        locationName: lat ? `${lat.toFixed(6)}, ${lng!.toFixed(6)}` : undefined,
+        latitude: String(lat),
+        longitude: String(lng),
+        locationName: `${lat.toFixed(6)}, ${lng.toFixed(6)}`,
       };
       if (pontoMode === "check_in") quickCheckIn.mutate(payload);
       else quickCheckOut.mutate(payload);
     };
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => doSubmit(pos.coords.latitude, pos.coords.longitude),
-        () => doSubmit(),
-        { enableHighAccuracy: true, timeout: 10000 },
-      );
-    } else {
-      doSubmit();
+    // O ponto exige localização EXATA (o bloqueio global da app foi removido —
+    // a exigência vive aqui, só no check-in/check-out).
+    if (!navigator.geolocation) {
+      toast.error("Este dispositivo não tem GPS — o ponto exige localização exata.");
+      setPontoMode(null);
+      return;
     }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        if (pos.coords.accuracy > 2000) {
+          toast.error("A localização está aproximada (Wi-Fi/IP). Liga a localização EXATA e tenta outra vez.");
+          setPontoMode(null);
+          return;
+        }
+        doSubmit(pos.coords.latitude, pos.coords.longitude);
+      },
+      () => { toast.error("Sem acesso à localização. Autoriza a localização exata para picar o ponto."); setPontoMode(null); },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+    );
   };
   const pontoStatus = pontoQ.data?.employeeId ? pontoQ.data.status : null;
   const filteredGroups = getFilteredMenuGroups(userRole);
@@ -447,7 +456,6 @@ function DashboardLayoutContent({
     <>
       {/* Segurança: sem localização precisa + permissão de câmara, a app não
           funciona (overlay bloqueante). */}
-      <PermissionsGate role={userRole} />
       <div className="relative" ref={sidebarRef}>
         <Sidebar
           collapsible="icon"

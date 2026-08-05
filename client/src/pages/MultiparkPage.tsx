@@ -12,6 +12,7 @@ import { QuickRangeBar, thisMonthRange } from "@/components/QuickRangeBar";
 import { toast } from "sonner";
 import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { useParams } from "wouter";
+import { usePersistedState } from "@/hooks/usePersistedState";
 import { fmtBookingDateTime, fmtBookingDate, fmtBookingHHmm } from "@/lib/lisbonTime";
 import {
   ParkingCircle, Wifi, WifiOff, RefreshCw, Calendar, Car, Truck, Bike,
@@ -124,10 +125,11 @@ export default function MultiparkPage({ sectionProp }: { sectionProp?: string } 
 function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "checkout" | "cancelation" }) {
   const globalFilters = useGlobalFilters();
   const [defFrom, defTo] = thisMonthRange();
-  const [startDate, setStartDate] = useState(defFrom);
-  const [endDate, setEndDate] = useState(defTo);
-  const [activeRange, setActiveRange] = useState<string>("thisMonth");
-  const [searchTerm, setSearchTerm] = useState("");
+  // Filtros persistem à navegação (por tipo de ação: recolhas/entregas/…)
+  const [startDate, setStartDate] = usePersistedState(`mpk.${actionType}.start`, defFrom);
+  const [endDate, setEndDate] = usePersistedState(`mpk.${actionType}.end`, defTo);
+  const [activeRange, setActiveRange] = usePersistedState<string>(`mpk.${actionType}.range`, "thisMonth");
+  const [searchTerm, setSearchTerm] = usePersistedState(`mpk.${actionType}.search`, "");
   const [projectId, setProjectId] = useState<string>("");
 
   // Sync global filter to local project filter
@@ -729,11 +731,12 @@ function DashboardTab() {
 // ─── Bookings Tab (synced from API) ──────────────────────────────────────────
 function BookingsTab({ statusFilter: statusFilterProp }: { statusFilter?: string[] }) {
   const today = new Date();
-  const [from, setFrom] = useState(today.toISOString().slice(0, 10));
-  const [to, setTo] = useState(today.toISOString().slice(0, 10));
-  const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [searchTerm, setSearchTerm] = useState("");
-  const [viewMode, setViewMode] = useState<"today" | "range" | "month">("today");
+  // Filtros persistem à navegação (pedido do Jorge)
+  const [from, setFrom] = usePersistedState("mpk.bookings.from", today.toISOString().slice(0, 10));
+  const [to, setTo] = usePersistedState("mpk.bookings.to", today.toISOString().slice(0, 10));
+  const [statusFilter, setStatusFilter] = usePersistedState<string>("mpk.bookings.status", "all");
+  const [searchTerm, setSearchTerm] = usePersistedState("mpk.bookings.search", "");
+  const [viewMode, setViewMode] = usePersistedState<"today" | "range" | "month">("mpk.bookings.view", "today");
 
   // Month selector
   const [selectedMonth, setSelectedMonth] = useState(`${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`);

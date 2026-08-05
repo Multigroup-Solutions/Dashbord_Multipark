@@ -103,6 +103,10 @@ import {
   deleteSchedule,
   getTimeRecords,
   createTimeRecord,
+  checkGeofenceNote,
+  setProjectGeofence,
+  deleteProjectGeofence,
+  listProjectGeofences,
   getMonthlyHours,
   getExtraRates,
   seedExtraRates,
@@ -2185,7 +2189,7 @@ export const appRouter = router({
         position: z.enum(["director","supervisor","team_leader","backoffice","frontoffice","senior_driver","driver","extra"]),
         extraLevel: z.number().min(1).max(4).optional(),
         department: z.string().optional(),
-        projectId: z.number({ message: "Centro de custos obrigatório" }),
+        projectId: z.number().optional(),
         contractType: z.enum(["permanent","fixed_term","extra"]).optional(),
         contractStart: z.string().optional(),
         contractEnd: z.string().optional(),
@@ -2195,6 +2199,47 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "admin");
+
+        // ── ANTI-DUPLICAÇÃO (regra do Jorge): mesmo nome/email/NIF ativo = 1 só ficha
+        const { getDb: getDbDup } = await import("./db");
+        const { employees } = await import("../drizzle/schema");
+        const { eq, and } = await import("drizzle-orm");
+        const dbDup = await getDbDup();
+        if (dbDup) {
+          const norm = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+          const all = await dbDup.select({ id: employees.id, fullName: employees.fullName, email: employees.email, nif: employees.nif })
+            .from(employees).where(eq(employees.isActive, 1));
+          const dup = all.find((e) =>
+            norm(e.fullName) === norm(input.fullName) ||
+            (input.email && e.email && e.email.toLowerCase() === input.email.toLowerCase()) ||
+            (input.nif && e.nif && e.nif.trim() === input.nif.trim()),
+          );
+          if (dup) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: `Já existe um colaborador ativo com estes dados: ${dup.fullName} (#${dup.id}). Usa a ficha existente em vez de criar outra.` });
+          }
+        }
+
+        // ── LIGAÇÃO ÚNICA: um utilizador/agente não pode pertencer a 2 fichas
+        if (input.userId != null && dbDup) {
+          const taken = await dbDup.select({ id: employees.id, fullName: employees.fullName })
+            .from(employees).where(and(eq(employees.userId, input.userId), eq(employees.isActive, 1))).limit(1);
+          if (taken[0]) throw new TRPCError({ code: "BAD_REQUEST", message: `Esse utilizador já está ligado a ${taken[0].fullName} (#${taken[0].id}).` });
+        }
+        if (dbDup) {
+          const agentTaken = await dbDup.select({ id: employees.id, fullName: employees.fullName })
+            .from(employees).where(and(eq(employees.multiparkAgentName, input.multiparkAgentName), eq(employees.isActive, 1))).limit(1);
+          if (agentTaken[0]) throw new TRPCError({ code: "BAD_REQUEST", message: `Esse agente Multipark já está ligado a ${agentTaken[0].fullName} (#${agentTaken[0].id}).` });
+        }
+
+        // ── Centro de custos: se não indicado, infere pela morada (Algarve→Faro…)
+        let projectId = input.projectId ?? null;
+        if (projectId == null) {
+          const { inferCityProjectIdFromAddress } = await import("./db");
+          projectId = await inferCityProjectIdFromAddress(input.address);
+        }
+        if (projectId == null) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Centro de custos obrigatório — escolhe um, ou preenche a morada para o sistema inferir a cidade." });
+        }
 
         // NÃO cria utilizador automaticamente. Um colaborador pode existir sem
         // utilizador; nesse caso não consegue dar entrada no ponto até que lhe
@@ -2215,7 +2260,7 @@ export const appRouter = router({
           position: input.position,
           extraLevel: input.extraLevel ?? null,
           department: input.department ?? null,
-          projectId: input.projectId,
+          projectId,
           contractType: input.contractType ?? "permanent",
           contractStart: input.contractStart ? new Date(input.contractStart).toISOString().slice(0, 19).replace("T", " ") : null,
           contractEnd: input.contractEnd ? new Date(input.contractEnd).toISOString().slice(0, 19).replace("T", " ") : null,
@@ -2531,6 +2576,13 @@ export const appRouter = router({
               message: "Já tens uma entrada em aberto. Faz check-out primeiro.",
             });
           }
+          // Aviso da ligação tripla (funcionário↔utilizador↔agente Multipark):
+          // sem agente ligado o check-in passa, mas devolve o aviso para a UI.
+          const missingAgentWarning = !empForPonto.employee.multiparkAgentName
+            ? "Falta ligar o agente Multipark a este colaborador — pede à administração para o associar na ficha."
+            : null;
+          // Geofence do centro de custos (se configurado): fora do raio fica marcado.
+          const geoNoteIn = await checkGeofenceNote(input.employeeId, input.latitude, input.longitude);
           let photoUrl: string | null = null;
           let photoKey: string | null = null;
           if (input.photoBase64 && input.mimeType) {
@@ -2551,10 +2603,10 @@ export const appRouter = router({
             latitude: input.latitude ?? null,
             longitude: input.longitude ?? null,
             locationName: input.locationName ?? null,
-            notes: input.notes ?? null,
+            notes: [geoNoteIn, input.notes].filter(Boolean).join(" · ") || null,
           });
           await logActivity({ userId: ctx.user.id, action: "check_in", entity: "time_record", entityId: input.employeeId, details: `Check-in: ${input.locationName ?? ""}` });
-          return { success: true };
+          return { success: true, warning: missingAgentWarning, outsideGeofence: !!geoNoteIn };
         }),
 
       checkOut: protectedProcedure
@@ -2595,21 +2647,58 @@ export const appRouter = router({
             photoKey = key;
           }
           const diff = (new Date().getTime() - new Date(last.recordedAt).getTime()) / 3600000;
-          const hoursWorked = diff.toFixed(2);
+          // Regra do Jorge (turnos máx. 12h): entrada aberta há >16h = esquecimento
+          // de check-out. Corta às 12h (sem extraordinárias) e marca a VERMELHO
+          // para revisão — não paga dias inteiros de horas fantasma.
+          let hoursWorked: string;
+          let autoNote: string | null = null;
+          let outAt = new Date();
+          if (diff > 16) {
+            hoursWorked = "12.00";
+            outAt = new Date(new Date(last.recordedAt).getTime() + 12 * 3600000);
+            autoNote = "[SUSPEITO] check-out esquecido — cortado a 12h";
+          } else {
+            hoursWorked = diff.toFixed(2);
+          }
+          // Geofence: se o centro de custos do colaborador tem raio definido e o
+          // check-out veio com GPS fora dele, fica marcado (permitido, mas visível).
+          const geoNote = await checkGeofenceNote(input.employeeId, input.latitude, input.longitude);
+          const finalNotes = [autoNote, geoNote, input.notes].filter(Boolean).join(" · ") || null;
           await createTimeRecord({
             employeeId: input.employeeId,
             type: "check_out",
-            recordedAt: new Date().toISOString().slice(0, 19).replace("T", " "),
+            recordedAt: outAt.toISOString().slice(0, 19).replace("T", " "),
             photoUrl,
             photoKey,
             latitude: input.latitude ?? null,
             longitude: input.longitude ?? null,
             locationName: input.locationName ?? null,
             hoursWorked,
-            notes: input.notes ?? null,
+            notes: finalNotes,
           });
           await logActivity({ userId: ctx.user.id, action: "check_out", entity: "time_record", entityId: input.employeeId, details: `Check-out: ${hoursWorked}h` });
           return { success: true, hoursWorked };
+        }),
+
+      // ── Geofence por centro de custos (raio de picagem) ───────────────────
+      geofences: protectedProcedure.query(async ({ ctx }) => {
+        requireRole(ctx.user.role, "admin");
+        return listProjectGeofences();
+      }),
+      setGeofence: protectedProcedure
+        .input(z.object({ projectId: z.number(), lat: z.number(), lng: z.number(), radiusM: z.number().min(50).max(50000) }))
+        .mutation(async ({ ctx, input }) => {
+          requireRole(ctx.user.role, "admin");
+          await setProjectGeofence(input.projectId, input.lat, input.lng, input.radiusM);
+          await logActivity({ userId: ctx.user.id, action: "update", entity: "project_geofence", entityId: input.projectId });
+          return { success: true };
+        }),
+      deleteGeofence: protectedProcedure
+        .input(z.object({ projectId: z.number() }))
+        .mutation(async ({ ctx, input }) => {
+          requireRole(ctx.user.role, "admin");
+          await deleteProjectGeofence(input.projectId);
+          return { success: true };
         }),
 
       monthlyHours: protectedProcedure

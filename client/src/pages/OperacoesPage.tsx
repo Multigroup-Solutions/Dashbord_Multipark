@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { usePersistedState } from "@/hooks/usePersistedState";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -62,7 +63,8 @@ const fmtEur = (v: number | string | null | undefined) => {
 };
 
 export default function OperacoesPage() {
-  const [tab, setTab] = useState("dashboard");
+  // A aba ativa persiste à navegação — voltar às Operações mantém onde estavas
+  const [tab, setTab] = usePersistedState("operacoes.tab", "dashboard");
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-[1400px] mx-auto">
       <div>

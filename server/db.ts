@@ -5487,6 +5487,163 @@ export async function deleteFinancialHistoryYear(year: number) {
   return { deleted: 1 };
 }
 
+// ─── INFERÊNCIA DO CENTRO DE CUSTOS PELA MORADA (extras) ─────────────────────
+// Regra do Jorge: se não indicarem centro de custos ao criar um extra, o
+// sistema infere a CIDADE pela morada (Algarve→Faro, Grande Porto→Porto,
+// Grande Lisboa/Setúbal→Lisboa) e aloca ao nó-cidade da árvore de projetos.
+const CITY_ADDRESS_KEYWORDS: Record<string, string[]> = {
+  Faro: ["faro", "algarve", "albufeira", "portimao", "olhao", "loule", "quarteira", "vilamoura", "tavira", "lagos", "silves", "almancil", "sao bras", "vila real de santo antonio", "monchique", "aljezur", "castro marim", "alcoutim", "vila do bispo", "montenegro", "quelfes", "armacao de pera", "ferreiras", "guia", "paderne", "boliqueime", "estoi", "moncarapacho"],
+  Porto: ["porto", "vila nova de gaia", "gaia", "matosinhos", "maia", "gondomar", "valongo", "povoa de varzim", "vila do conde", "santo tirso", "trofa", "penafiel", "paredes", "ermesinde", "rio tinto", "espinho", "senhora da hora", "aguas santas", "sao mamede de infesta", "leca"],
+  Lisboa: ["lisboa", "amadora", "sintra", "cascais", "oeiras", "loures", "odivelas", "almada", "seixal", "barreiro", "montijo", "setubal", "alcochete", "moita", "sesimbra", "palmela", "mafra", "torres vedras", "vila franca de xira", "alverca", "sacavem", "queluz", "agualva", "cacem", "rio de mouro", "massama", "corroios", "feijo", "laranjeiro", "camarate", "povoa de santa iria", "odivelas", "carnaxide", "algés", "alges", "damaia", "benfica", "chelas", "marvila", "monte abraao", "monte abraão"],
+};
+
+function normAddress(s: string): string {
+  return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+}
+
+/** Devolve a cidade inferida pela morada ("Faro"/"Porto"/"Lisboa") ou null. */
+export function inferCityFromAddress(address?: string | null): string | null {
+  if (!address) return null;
+  const a = ` ${normAddress(address)} `;
+  // Faro e Porto primeiro (mais específicos); Lisboa por fim (apanha resto da AML)
+  for (const city of ["Faro", "Porto", "Lisboa"]) {
+    for (const kw of CITY_ADDRESS_KEYWORDS[city]) {
+      if (a.includes(` ${kw} `) || a.includes(` ${kw},`) || a.includes(`,${kw} `) || a.includes(` ${kw}\n`) || a.includes(`-${kw} `) || a.includes(` ${kw}-`)) return city;
+    }
+  }
+  return null;
+}
+
+/** ID do nó-cidade na árvore de projetos para a morada dada, ou null. */
+export async function inferCityProjectIdFromAddress(address?: string | null): Promise<number | null> {
+  const city = inferCityFromAddress(address);
+  if (!city) return null;
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select({ id: projects.id }).from(projects)
+    .where(and(eq(projects.level, "city"), eq(projects.name, city))).limit(1);
+  return rows[0]?.id ?? null;
+}
+
+/** Auto-checkout de esquecimentos (regra do Jorge): quem tem check-in aberto há
+ *  mais de 16h leva check-out automático 12h depois da entrada (turno máx.),
+ *  sem horas extraordinárias, marcado [SUSPEITO] a vermelho para revisão.
+ *  Corre no cron daily-ops. */
+export async function autoCloseStaleCheckIns(): Promise<{ closed: number }> {
+  const db = await getDb();
+  if (!db) return { closed: 0 };
+  // Último registo de cada colaborador; se for check_in com >16h, fecha.
+  const [rows] = await db.execute(sql`
+    SELECT t.id, t.employeeId, t.recordedAt
+    FROM time_records t
+    JOIN (
+      SELECT employeeId, MAX(recordedAt) AS lastAt
+      FROM time_records GROUP BY employeeId
+    ) last ON last.employeeId = t.employeeId AND last.lastAt = t.recordedAt
+    WHERE t.type = 'check_in' AND t.recordedAt < DATE_SUB(NOW(), INTERVAL 16 HOUR)
+  `) as any;
+  let closed = 0;
+  for (const r of rows as any[]) {
+    const outAt = new Date(new Date(r.recordedAt).getTime() + 12 * 3600000);
+    await db.insert(timeRecords).values({
+      employeeId: Number(r.employeeId),
+      type: "check_out",
+      recordedAt: outAt.toISOString().slice(0, 19).replace("T", " "),
+      hoursWorked: "12.00",
+      notes: "[SUSPEITO] check-out automático — entrada aberta há mais de 16h, cortado a 12h",
+    } as any);
+    closed++;
+  }
+  return { closed };
+}
+
+// ─── GEOFENCE POR CENTRO DE CUSTOS (raio de check-in/out do ponto) ───────────
+// O Jorge define, por centro de custos, o ponto e o raio onde o pessoal pode
+// picar. Fora do raio o ponto é PERMITIDO mas fica marcado a vermelho.
+let geofenceEnsured = false;
+async function ensureGeofenceTable() {
+  if (geofenceEnsured) return;
+  const db = await getDb();
+  if (!db) return;
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS \`project_geofence\` (
+    \`projectId\` INT NOT NULL,
+    \`lat\` DECIMAL(10,7) NOT NULL,
+    \`lng\` DECIMAL(10,7) NOT NULL,
+    \`radiusM\` INT NOT NULL DEFAULT 500,
+    \`updatedAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (\`projectId\`)
+  )`);
+  geofenceEnsured = true;
+}
+
+export async function setProjectGeofence(projectId: number, lat: number, lng: number, radiusM: number) {
+  const db = await getDb();
+  if (!db) return;
+  await ensureGeofenceTable();
+  await db.execute(sql`INSERT INTO \`project_geofence\` (\`projectId\`, \`lat\`, \`lng\`, \`radiusM\`)
+    VALUES (${projectId}, ${lat}, ${lng}, ${radiusM})
+    ON DUPLICATE KEY UPDATE \`lat\` = VALUES(\`lat\`), \`lng\` = VALUES(\`lng\`), \`radiusM\` = VALUES(\`radiusM\`)`);
+}
+
+export async function deleteProjectGeofence(projectId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await ensureGeofenceTable();
+  await db.execute(sql`DELETE FROM \`project_geofence\` WHERE \`projectId\` = ${projectId}`);
+}
+
+export async function listProjectGeofences(): Promise<Array<{ projectId: number; lat: number; lng: number; radiusM: number }>> {
+  const db = await getDb();
+  if (!db) return [];
+  await ensureGeofenceTable();
+  const [rows] = await db.execute(sql`SELECT * FROM \`project_geofence\``) as any;
+  return (rows as any[]).map((r) => ({ projectId: Number(r.projectId), lat: Number(r.lat), lng: Number(r.lng), radiusM: Number(r.radiusM) }));
+}
+
+function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+/** Se o centro de custos do colaborador (ou um ancestral) tem raio definido e as
+ *  coordenadas vêm fora dele, devolve a nota "[FORA DO RAIO] a Xm" — senão null. */
+export async function checkGeofenceNote(employeeId: number, latitude?: string | null, longitude?: string | null): Promise<string | null> {
+  try {
+    if (!latitude || !longitude) return null;
+    const lat = parseFloat(latitude), lng = parseFloat(longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    const db = await getDb();
+    if (!db) return null;
+    const emp = await db.select({ projectId: employees.projectId }).from(employees).where(eq(employees.id, employeeId)).limit(1);
+    let pid = emp[0]?.projectId ?? null;
+    if (pid == null) return null;
+    const fences = await listProjectGeofences();
+    if (fences.length === 0) return null;
+    const byProject = new Map(fences.map((f) => [f.projectId, f]));
+    const allProjs = await db.select({ id: projects.id, parentId: projects.parentId }).from(projects);
+    const parentOf = new Map(allProjs.map((p) => [p.id, p.parentId]));
+    // Sobe na árvore até encontrar um geofence configurado
+    let hops = 0;
+    while (pid != null && hops < 10) {
+      const fence = byProject.get(pid);
+      if (fence) {
+        const dist = haversineMeters(lat, lng, fence.lat, fence.lng);
+        if (dist > fence.radiusM) return `[FORA DO RAIO] a ${Math.round(dist)}m do local (raio ${fence.radiusM}m)`;
+        return null;
+      }
+      pid = parentOf.get(pid) ?? null;
+      hops++;
+    }
+    return null;
+  } catch {
+    return null; // geofence nunca pode partir o ponto
+  }
+}
+
 export async function generateAnnualSummary(year: number, projectId?: number, splitPartner: number = 60) {
   const db = await getDb(); if (!db) return [];
   // Get all invoices for the year (Faturação)
@@ -6328,13 +6485,17 @@ export async function getPayrollData(year: number, month: number) {
       // contar a mesma hora duas vezes (uma hora noturna num sábado contava
       // como "noite" E "FDS"). Hierarquia: FDS > Noite > Normal.
       let normalHours = 0;
+      // Hora/dia-da-semana em Europe/Lisbon (o servidor está em UTC — sem isto
+      // as noturnas ficavam desviadas 1h no verão).
+      const lisbonFmt = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Lisbon", hour: "numeric", weekday: "short", hour12: false });
       for (const rec of empHours.records) {
         const recDate = new Date(rec.recordedAt);
         const hours = parseFloat(String(rec.hoursWorked ?? 0));
         if (hours <= 0) continue;
-        const dayOfWeek = recDate.getDay(); // 0=Sun, 6=Sat
-        const hour = recDate.getHours();
-        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+        const parts = lisbonFmt.formatToParts(recDate);
+        const hour = Number(parts.find((p) => p.type === "hour")?.value ?? recDate.getHours());
+        const weekday = parts.find((p) => p.type === "weekday")?.value ?? "";
+        const isWeekend = weekday === "Sat" || weekday === "Sun";
         const isNight = hour >= 22 || hour < 7;
         if (isWeekend) weekendHours += hours;
         else if (isNight) nightHours += hours;

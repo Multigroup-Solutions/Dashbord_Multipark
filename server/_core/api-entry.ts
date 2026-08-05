@@ -246,6 +246,15 @@ app.get("/api/cron/daily-ops", async (req, res) => {
       console.warn("[daily-ops] markOverdueExpenses:", err);
     }
 
+    // Fecha check-ins esquecidos (>16h abertos → check-out a +12h, [SUSPEITO])
+    try {
+      const { autoCloseStaleCheckIns } = await import("../db");
+      const r = await autoCloseStaleCheckIns();
+      if (r.closed > 0) console.log(`[daily-ops] auto-checkout de ${r.closed} ponto(s) esquecido(s)`);
+    } catch (err) {
+      console.warn("[daily-ops] autoCloseStaleCheckIns:", err);
+    }
+
     const { collectDailyDriverData } = await import("../jobs/dailyDriverCollection");
     // ?date=YYYY-MM-DD permite recolher um dia específico (backfill de dias
     // falhados); por omissão, o dia anterior.

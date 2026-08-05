@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from "react";
+import { usePersistedState } from "@/hooks/usePersistedState";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { RecruitmentSection } from "@/components/RecruitmentSection";
 import { trpc } from "@/lib/trpc";
@@ -646,10 +647,12 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
   const [expandedRecord, setExpandedRecord] = useState<number | null>(null);
 
   const checkIn = trpc.rh.timeRecords.checkIn.useMutation({
-    onSuccess: () => {
+    onSuccess: (data: any) => {
       utils.rh.timeRecords.list.invalidate();
       utils.rh.timeRecords.monthlyHours.invalidate();
       toast.success("Check-in registado com foto e GPS!");
+      if (data?.warning) toast.warning(data.warning, { duration: 10000 });
+      if (data?.outsideGeofence) toast.warning("Atenção: check-in dado FORA do raio do local de trabalho — ficou marcado.", { duration: 10000 });
       setCameraMode(null);
     },
     onError: (e) => toast.error(e.message),
@@ -665,28 +668,36 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
   });
 
   const submitWithPhoto = (base64: string, mimeType: string) => {
-    const doSubmit = (lat?: number, lng?: number) => {
+    const doSubmit = (lat: number, lng: number) => {
       const payload: any = {
         employeeId,
         photoBase64: base64,
         mimeType,
-        latitude: lat ? String(lat) : undefined,
-        longitude: lng ? String(lng) : undefined,
-        locationName: lat ? `${lat.toFixed(6)}, ${lng!.toFixed(6)}` : undefined,
+        latitude: String(lat),
+        longitude: String(lng),
+        locationName: `${lat.toFixed(6)}, ${lng.toFixed(6)}`,
       };
       if (cameraMode === "check_in") checkIn.mutate(payload);
       else checkOut.mutate(payload);
     };
 
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => doSubmit(pos.coords.latitude, pos.coords.longitude),
-        () => doSubmit(),
-        { enableHighAccuracy: true, timeout: 10000 }
-      );
-    } else {
-      doSubmit();
+    // Regra do Jorge: o ponto EXIGE localização exata (a app já não bloqueia
+    // globalmente — a exigência vive aqui, no check-in/check-out).
+    if (!navigator.geolocation) {
+      toast.error("Este dispositivo não tem GPS — o ponto exige localização exata.");
+      return;
     }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        if (pos.coords.accuracy > 2000) {
+          toast.error("A localização está aproximada (Wi-Fi/IP). Liga a localização EXATA do dispositivo e tenta outra vez.");
+          return;
+        }
+        doSubmit(pos.coords.latitude, pos.coords.longitude);
+      },
+      () => toast.error("Sem acesso à localização. Autoriza a localização exata nas permissões do browser para picar o ponto."),
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
   };
 
   const openGoogleMaps = (lat: string, lng: string) => {
@@ -754,10 +765,12 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
         {records.slice(0, 30).map((r) => {
           const isExpanded = expandedRecord === r.id;
           const hasCoords = r.latitude && r.longitude;
+          // Ponto suspeito (check-out esquecido cortado a 12h) ou fora do raio → VERMELHO
+          const isFlagged = /\[(SUSPEITO|FORA DO RAIO)\]/.test(r.notes ?? "");
           return (
             <div
               key={r.id}
-              className="border rounded-lg overflow-hidden cursor-pointer hover:bg-muted/30 transition-colors"
+              className={`border rounded-lg overflow-hidden cursor-pointer transition-colors ${isFlagged ? "border-red-400 bg-red-50/60 hover:bg-red-50" : "hover:bg-muted/30"}`}
               onClick={() => setExpandedRecord(isExpanded ? null : r.id)}
             >
               <div className="flex items-center justify-between p-3">
@@ -767,8 +780,12 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
                     <img src={r.photoUrl} alt="" className="w-8 h-8 rounded-full object-cover border" />
                   )}
                   <div>
-                    <p className="text-sm font-medium">{r.type === "check_in" ? "Entrada" : "Saída"}</p>
+                    <p className="text-sm font-medium">
+                      {r.type === "check_in" ? "Entrada" : "Saída"}
+                      {isFlagged && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">⚠ rever</span>}
+                    </p>
                     <p className="text-xs text-muted-foreground">{fmtPTDateTime(r.recordedAt)}</p>
+                    {isFlagged && r.notes && <p className="text-[11px] text-red-700 mt-0.5">{r.notes}</p>}
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
@@ -2189,22 +2206,41 @@ export default function HRPage() {
   // Extra users: show only their own profile
   const { data: myEmployee } = trpc.rh.me.useQuery(undefined, { enabled: isExtra });
 
-  const [search, setSearch] = useState("");
+  // Filtros persistem à navegação (sessionStorage) — voltar de uma ficha ou de
+  // outra página mantém pesquisa, posto, conta, ativo/inativo e projeto.
+  const [search, setSearch] = usePersistedState("hr.search", "");
   const [showCreate, setShowCreate] = useState(false);
   const [showRates, setShowRates] = useState(false);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [filterPosition, setFilterPosition] = useState<string>("all");
-  const [filterAccount, setFilterAccount] = useState<string>("all");
+  const [selectedId, setSelectedId] = usePersistedState<number | null>("hr.selectedId", null);
+  const [filterPosition, setFilterPosition] = usePersistedState<string>("hr.position", "all");
+  const [filterAccount, setFilterAccount] = usePersistedState<string>("hr.account", "all");
+  const [filterActive, setFilterActive] = usePersistedState<string>("hr.active", "active");
+  const [filterProject, setFilterProject] = usePersistedState<string>("hr.project", "all");
   const [showPayroll, setShowPayroll] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
   const [showUsers, setShowUsers] = useState(false);
 
   const { data: employees = [], isLoading } = trpc.rh.list.useQuery({
-    isActive: true,
+    isActive: filterActive === "inactive" ? false : true,
     position: filterPosition !== "all" ? filterPosition : undefined,
   }, { enabled: !isExtra });
   const { data: docStatus = {} } = trpc.rh.documents.allStatus.useQuery(undefined, { enabled: !isExtra });
+  const { data: allProjects = [] } = trpc.projects.list.useQuery(undefined, { enabled: !isExtra });
+
+  // Descendentes do projeto filtrado (cidade/marca/projeto), para filtrar por centro de custos
+  const projectFilterIds = useMemo(() => {
+    if (filterProject === "all") return null;
+    const root = Number(filterProject);
+    const ids = new Set<number>([root]);
+    const walk = (pid: number) => {
+      for (const p of allProjects as any[]) {
+        if (p.parentId === pid) { ids.add(p.id); walk(p.id); }
+      }
+    };
+    walk(root);
+    return ids;
+  }, [filterProject, allProjects]);
 
   // Extra users go directly to their profile
   if (isExtra) {
@@ -2229,7 +2265,8 @@ export default function HRPage() {
     const matchesAccount = filterAccount === "all" ? true
       : filterAccount === "with" ? !!e.userId
       : !e.userId;
-    return matchesSearch && matchesAccount;
+    const matchesProject = !projectFilterIds || (e.projectId != null && projectFilterIds.has(e.projectId));
+    return matchesSearch && matchesAccount && matchesProject;
   });
 
   if (showPayroll) {
@@ -2340,10 +2377,6 @@ export default function HRPage() {
         <p className="text-muted-foreground text-sm">Gestão de colaboradores, ponto e documentação</p>
         <div className="flex items-center gap-2 flex-wrap">
           {userRole === "super_admin" && <BackfillEmployeeProjectButton />}
-          {userRole === "super_admin" && <RunMigration0046Button />}
-          {userRole === "super_admin" && <RunMigration0049Button />}
-          {userRole === "super_admin" && <RunMigration0050Button />}
-          {userRole === "super_admin" && <RunMigration0051Button />}
           {userRole === "super_admin" && (
             <Button variant="outline" size="sm" onClick={() => setShowDashboard(true)}>
               <BarChart3 className="w-4 h-4 mr-2" /> Dashboard
@@ -2381,6 +2414,35 @@ export default function HRPage() {
 
       <HRStatsBar />
 
+      {/* Aviso de dados em falta nos FIXOS (o que trava a folha de ordenados) */}
+      {(() => {
+        if (filterActive === "inactive") return null;
+        const fixosIncompletos = employees
+          .filter(({ employee: e }: any) => e.position !== "extra")
+          .map(({ employee: e }: any) => {
+            const faltas: string[] = [];
+            if (!e.monthlySalary || parseFloat(String(e.monthlySalary)) === 0) faltas.push("salário");
+            if (!e.nif) faltas.push("NIF");
+            if (!e.nib) faltas.push("NIB");
+            return { nome: e.fullName, id: e.id, faltas };
+          })
+          .filter((x) => x.faltas.length > 0);
+        if (fixosIncompletos.length === 0) return null;
+        return (
+          <Card className="border-amber-300 bg-amber-50/60">
+            <CardContent className="p-3 text-sm">
+              <p className="font-medium text-amber-800 flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4" /> {fixosIncompletos.length} colaborador(es) fixo(s) com dados em falta para a folha de ordenados:
+              </p>
+              <p className="text-xs text-amber-700 mt-1">
+                {fixosIncompletos.slice(0, 8).map((x) => `${x.nome} (${x.faltas.join(", ")})`).join(" · ")}
+                {fixosIncompletos.length > 8 ? ` · +${fixosIncompletos.length - 8}` : ""}
+              </p>
+            </CardContent>
+          </Card>
+        );
+      })()}
+
       {/* Filters */}
       <div className="flex gap-3 flex-wrap">
         <div className="relative flex-1 min-w-[200px]">
@@ -2402,11 +2464,41 @@ export default function HRPage() {
           </SelectContent>
         </Select>
         <Select value={filterAccount} onValueChange={setFilterAccount}>
-          <SelectTrigger className="w-full sm:w-44"><SelectValue placeholder="Conta" /></SelectTrigger>
+          <SelectTrigger className="w-full sm:w-40"><SelectValue placeholder="Conta" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Todas as contas</SelectItem>
             <SelectItem value="with">Com conta</SelectItem>
             <SelectItem value="without">Sem conta</SelectItem>
+          </SelectContent>
+        </Select>
+        {/* Cidade / centro de custos / projeto */}
+        <Select value={filterProject} onValueChange={setFilterProject}>
+          <SelectTrigger className="w-full sm:w-52"><SelectValue placeholder="Centro de custos" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Todos os centros</SelectItem>
+            {(() => {
+              const result: any[] = [];
+              const walk = (parentId: number | null, depth: number) => {
+                (allProjects as any[]).filter((p) => p.parentId === parentId).forEach((p) => {
+                  result.push({ ...p, depth });
+                  walk(p.id, depth + 1);
+                });
+              };
+              walk(null, 0);
+              return result.map((p) => (
+                <SelectItem key={p.id} value={String(p.id)}>
+                  {" ".repeat(p.depth * 2)}{p.level === "city" ? "📍" : p.level === "brand" ? "🏷" : p.level === "group" ? "🏢" : "📁"} {p.name}
+                </SelectItem>
+              ));
+            })()}
+          </SelectContent>
+        </Select>
+        {/* Ativos / desativados — os desativados mantêm histórico e podem ser reativados */}
+        <Select value={filterActive} onValueChange={setFilterActive}>
+          <SelectTrigger className="w-full sm:w-40"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="active">Ativos</SelectItem>
+            <SelectItem value="inactive">Desativados</SelectItem>
           </SelectContent>
         </Select>
       </div>
