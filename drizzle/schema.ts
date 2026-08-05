@@ -149,7 +149,7 @@ export const careerExamQuestions = mysqlTable("career_exam_questions", {
 
 export const careerExams = mysqlTable("career_exams", {
 	id: int().autoincrement().primaryKey(),
-	level: mysqlEnum(['extra','condutor','senior','team_leader','supervisor']).notNull(),
+	level: varchar({ length: 32 }).notNull(), // condutor_1..4, terminal_1..4, front_1..4, team_leader, supervisor
 	title: varchar({ length: 255 }).notNull(),
 	description: text(),
 	passingScore: int().notNull(),
@@ -1182,7 +1182,7 @@ export const trainingManuals = mysqlTable("training_manuals", {
 	categoryId: int(),
 	title: varchar({ length: 255 }).notNull(),
 	content: text().notNull(),
-	type: mysqlEnum(['manual','update','news','procedure']).default('manual').notNull(),
+	type: varchar({ length: 32 }).default('manual').notNull(), // manual|update|news|procedure|link
 	published: tinyint().default(1),
 	createdBy: int(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
@@ -1191,6 +1191,7 @@ export const trainingManuals = mysqlTable("training_manuals", {
 	fileKey: text(),
 	fileName: varchar({ length: 255 }),
 	fileMimeType: varchar({ length: 100 }),
+	careerLevel: varchar({ length: 32 }), // módulo de um nível de carreira (opcional)
 });
 
 export const trainingVideos = mysqlTable("training_videos", {
@@ -1201,6 +1202,7 @@ export const trainingVideos = mysqlTable("training_videos", {
 	videoUrl: text().notNull(),
 	thumbnailUrl: text(),
 	durationMinutes: int(),
+	careerLevel: varchar({ length: 32 }), // módulo de um nível de carreira (opcional)
 	sortOrder: int().default(0),
 	createdBy: int(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),

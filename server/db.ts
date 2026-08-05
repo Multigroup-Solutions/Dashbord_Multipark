@@ -2233,7 +2233,7 @@ export async function getTrainingVideos(categoryId?: number) {
   return db.select().from(trainingVideos).where(conditions.length ? and(...conditions) : undefined).orderBy(trainingVideos.sortOrder);
 }
 
-export async function createTrainingVideo(data: { categoryId: number; title: string; description?: string; videoUrl: string; thumbnailUrl?: string; durationMinutes?: number; sortOrder?: number; createdBy?: number }) {
+export async function createTrainingVideo(data: { categoryId: number; title: string; description?: string; videoUrl: string; thumbnailUrl?: string; durationMinutes?: number; sortOrder?: number; createdBy?: number; careerLevel?: string }) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   const [result] = await db.insert(trainingVideos).values(data).$returningId();
@@ -2255,7 +2255,7 @@ export async function getTrainingManuals(categoryId?: number, type?: string) {
   return db.select().from(trainingManuals).where(and(...conditions)).orderBy(desc(trainingManuals.createdAt));
 }
 
-export async function createTrainingManual(data: { categoryId?: number; title: string; content: string; type?: "manual" | "update" | "news" | "procedure"; createdBy?: number; fileUrl?: string; fileKey?: string; fileName?: string; fileMimeType?: string }) {
+export async function createTrainingManual(data: { categoryId?: number; title: string; content: string; type?: "manual" | "update" | "news" | "procedure" | "link"; createdBy?: number; fileUrl?: string; fileKey?: string; fileName?: string; fileMimeType?: string; careerLevel?: string }) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   const [result] = await db.insert(trainingManuals).values(data).$returningId();
@@ -2370,7 +2370,7 @@ export async function getCareerExams() {
   return db.select().from(careerExams).orderBy(careerExams.level);
 }
 
-export async function createCareerExam(data: { level: "extra" | "condutor" | "senior" | "team_leader" | "supervisor"; title: string; description?: string; passingScore: number; timeLimitMinutes?: number }) {
+export async function createCareerExam(data: { level: string; title: string; description?: string; passingScore: number; timeLimitMinutes?: number }) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   const [result] = await db.insert(careerExams).values(data).$returningId();

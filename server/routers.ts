@@ -4794,7 +4794,7 @@ export const appRouter = router({
       requireRole(ctx.user.role, "extra");
       return getTrainingVideos(input.categoryId);
     }),
-    createVideo: protectedProcedure.input(z.object({ categoryId: z.number(), title: z.string(), description: z.string().optional(), videoUrl: z.string(), thumbnailUrl: z.string().optional(), durationMinutes: z.number().optional() })).mutation(async ({ ctx, input }) => {
+    createVideo: protectedProcedure.input(z.object({ categoryId: z.number(), title: z.string(), description: z.string().optional(), videoUrl: z.string(), thumbnailUrl: z.string().optional(), durationMinutes: z.number().optional(), careerLevel: z.string().max(32).optional() })).mutation(async ({ ctx, input }) => {
       if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
       const result = await createTrainingVideo({ ...input, createdBy: ctx.user.id });
       await logActivity({ userId: ctx.user.id, action: "create", entity: "training_video", entityId: result.id, details: input.title });
@@ -4812,7 +4812,7 @@ export const appRouter = router({
       requireRole(ctx.user.role, "extra");
       return getTrainingManuals(input.categoryId, input.type);
     }),
-    createManual: protectedProcedure.input(z.object({ categoryId: z.number().optional(), title: z.string(), content: z.string(), type: z.enum(["manual", "update", "news", "procedure"]).optional(), fileUrl: z.string().optional(), fileKey: z.string().optional(), fileName: z.string().optional(), fileMimeType: z.string().optional() })).mutation(async ({ ctx, input }) => {
+    createManual: protectedProcedure.input(z.object({ categoryId: z.number().optional(), title: z.string(), content: z.string(), type: z.enum(["manual", "update", "news", "procedure", "link"]).optional(), fileUrl: z.string().optional(), fileKey: z.string().optional(), fileName: z.string().optional(), fileMimeType: z.string().optional(), careerLevel: z.string().max(32).optional() })).mutation(async ({ ctx, input }) => {
       if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
       const result = await createTrainingManual({ ...input, createdBy: ctx.user.id });
       await logActivity({ userId: ctx.user.id, action: "create", entity: "training_manual", entityId: result.id, details: input.title });
@@ -4913,7 +4913,15 @@ export const appRouter = router({
       requireRole(ctx.user.role, "extra");
       return getCareerExams();
     }),
-    createCareerExam: protectedProcedure.input(z.object({ level: z.enum(["extra", "condutor", "senior", "team_leader", "supervisor"]), title: z.string(), description: z.string().optional(), passingScore: z.number(), timeLimitMinutes: z.number().optional() })).mutation(async ({ ctx, input }) => {
+    createCareerExam: protectedProcedure.input(z.object({
+      // Trilhas do Jorge (2026-08-05): condutor/terminal/front níveis 1-4 + chefias
+      level: z.enum([
+        "condutor_1", "condutor_2", "condutor_3", "condutor_4",
+        "terminal_1", "terminal_2", "terminal_3", "terminal_4",
+        "front_1", "front_2", "front_3", "front_4",
+        "team_leader", "supervisor",
+      ]),
+      title: z.string(), description: z.string().optional(), passingScore: z.number(), timeLimitMinutes: z.number().optional() })).mutation(async ({ ctx, input }) => {
       if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
       const result = await createCareerExam(input);
       await logActivity({ userId: ctx.user.id, action: "create", entity: "career_exam", entityId: result.id, details: input.title });
