@@ -235,10 +235,11 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
       const paid = parseFloat(b.totalPaid) || 0;
       if (paid > 0) {
         const pm = String(b.paymentMethod ?? "").toLowerCase();
-        if (pm === "online") paidOnline += paid;
+        // Viva Wallet e transferências contam como Online (decisão Jorge 2026-08-06)
+        if (pm === "online" || pm.includes("viva wallet") || pm.includes("transferencia") || pm.includes("transferência")) paidOnline += paid;
         else if (pm === "multibanco") paidMB += paid;
         else if (pm === "dinheiro") paidCash += paid;
-        else paidOther += paid; // agregadores, agências, prós, Viva Wallet, transferências…
+        else paidOther += paid; // agregadores, agências, prós…
       }
 
       const park = b.parkName || "Desconhecido";
