@@ -136,6 +136,11 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
   const [searchTerm, setSearchTerm] = usePersistedState("mpk.shared.search", "");
   const [projectId, setProjectId] = usePersistedState<string>("mpk.shared.project", "");
   const [originFilter, setOriginFilter] = usePersistedState<string>("mpk.shared.origin", "all");
+  // Estado real vs previsto (passo 2 do Jorge): as CONTAS de topo são sempre a
+  // previsão do período; este seletor filtra a lista para ver o que já foi
+  // recolhido/entregue vs o que falta. Por aba (não partilhado — "recolhidas"
+  // não faz sentido nas entregas).
+  const [stateFilter, setStateFilter] = usePersistedState<string>(`mpk.${actionType}.state`, "all");
   const [detailBooking, setDetailBooking] = useState<any>(null);
 
   // Sync global filter to local project filter — só quando o header TEM filtro
@@ -168,12 +173,14 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
     { refetchOnWindowFocus: false }
   );
 
-  // Custo extras-dia para o intervalo (apenas Recolhas/Entregas)
-  const showExtrasDiaCost = actionType === "checkin" || actionType === "checkout";
-  const { data: extrasDiaCost } = trpc.extrasDia.costForRange.useQuery(
-    { startDate, endDate },
-    { enabled: showExtrasDiaCost, refetchOnWindowFocus: false },
-  );
+
+
+  // Estados que contam como "já recolhida" / "já entregue"
+  const COLLECTED_SET = new Set(["CHECKED_IN", "MOVING", "CHECKING_OUT", "PENDING_CHECKOUT", "CHECKED_OUT"]);
+  const DELIVERED_SET = new Set(["CHECKED_OUT"]);
+  const isDone = (b: any) =>
+    actionType === "checkin" ? COLLECTED_SET.has(b.status) :
+    actionType === "checkout" ? DELIVERED_SET.has(b.status) : true;
 
   // Origens distintas no resultado (para o filtro "de onde vem a reserva")
   const ORIGIN_LABELS: Record<string, string> = {
@@ -195,6 +202,8 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
     if (originFilter === "partner") list = list.filter((b) => b.salesPartnerName);
     else if (originFilter === "none") list = list.filter((b) => !b.origin);
     else if (originFilter !== "all") list = list.filter((b) => b.origin === originFilter);
+    if (stateFilter === "done") list = list.filter((b) => isDone(b));
+    else if (stateFilter === "pending") list = list.filter((b) => !isDone(b));
     if (!searchTerm) return list;
     const s = searchTerm.toLowerCase();
     return list.filter((b: any) =>
@@ -204,7 +213,7 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
       (b.bookingNumber || "").toLowerCase().includes(s) ||
       (b.clientEmail || "").toLowerCase().includes(s)
     );
-  }, [data, searchTerm, originFilter]);
+  }, [data, searchTerm, originFilter, stateFilter, actionType]);
 
   // Ordenação por coluna (setas nos cabeçalhos)
   const { sorted: sortedBookings, sortKey, sortDir, toggle } = useTableSort(bookings as any[]);
@@ -213,20 +222,24 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
   // novas por campanha, coerente com Faturação/Parcerias)
   const totals = useMemo(() => {
     let revenue = 0;
-    let delivery = 0;
-    let extras = 0;
-    let discount = 0;
     let partnerTotal = 0;
     let toCollect = 0;
+    let paidOnline = 0, paidMB = 0, paidCash = 0, paidOther = 0;
     const byPark: Record<string, { count: number; revenue: number; partnerShare: number; partnerName: string | null }> = {};
 
     for (const b of bookings as any[]) {
       const priceNum = parseFloat(b.totalPrice) || 0;
       revenue += priceNum;
-      delivery += parseFloat(b.deliveryCharges) || 0;
-      extras += parseFloat(b.extrasTotal) || 0;
-      discount += parseFloat(b.discount) || 0;
       toCollect += parseFloat(b.remainingToPay) || 0;
+      // Caixa: o que já está pago, por método (Online/Multibanco/Dinheiro/Outros)
+      const paid = parseFloat(b.totalPaid) || 0;
+      if (paid > 0) {
+        const pm = String(b.paymentMethod ?? "").toLowerCase();
+        if (pm === "online") paidOnline += paid;
+        else if (pm === "multibanco") paidMB += paid;
+        else if (pm === "dinheiro") paidCash += paid;
+        else paidOther += paid; // agregadores, agências, prós, Viva Wallet, transferências…
+      }
 
       const park = b.parkName || "Desconhecido";
       const city = b.city || "";
@@ -243,7 +256,7 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
       }
     }
 
-    return { revenue, delivery, extras, discount, byPark, partnerTotal, toCollect };
+    return { revenue, byPark, partnerTotal, toCollect, paidOnline, paidMB, paidCash, paidOther };
   }, [bookings]);
 
   return (
@@ -265,6 +278,19 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
             onChange={(s, e) => { setStartDate(s); setEndDate(e); setActiveRange(""); }}
           />
         </div>
+        {(actionType === "checkin" || actionType === "checkout") && (
+          <div>
+            <Label className="text-xs mb-1 block">Estado</Label>
+            <Select value={stateFilter} onValueChange={setStateFilter}>
+              <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todas</SelectItem>
+                <SelectItem value="done">{actionType === "checkin" ? "Recolhidas" : "Entregues"}</SelectItem>
+                <SelectItem value="pending">{actionType === "checkin" ? "Por recolher" : "Por entregar"}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
         <div>
           <Label className="text-xs mb-1 block">Origem</Label>
           <Select value={originFilter} onValueChange={setOriginFilter}>
@@ -346,11 +372,22 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
         <Card>
           <CardContent className="p-3">
             <p className="text-xs text-muted-foreground">Total</p>
             <p className="text-xl font-bold">{bookings.length}</p>
+            {(actionType === "checkin" || actionType === "checkout") && stateFilter === "all" && (() => {
+              const done = (bookings as any[]).filter((b) => isDone(b)).length;
+              const pending = bookings.length - done;
+              return (
+                <p className="text-[10px] text-muted-foreground mt-0.5">
+                  <span className="text-emerald-700">{done} {actionType === "checkin" ? "recolhidas" : "entregues"}</span>
+                  {" · "}
+                  <span className="text-amber-700">{pending} {actionType === "checkin" ? "por recolher" : "por entregar"}</span>
+                </p>
+              );
+            })()}
           </CardContent>
         </Card>
         <Card>
@@ -377,45 +414,63 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
         )}
         <Card>
           <CardContent className="p-3">
-            <p className="text-xs text-muted-foreground">Delivery</p>
-            <p className="text-xl font-bold">{fmtEur(totals.delivery)}</p>
+            <p className="text-xs text-muted-foreground">Pago Online</p>
+            <p className="text-xl font-bold text-sky-700">{fmtEur(totals.paidOnline)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-3">
-            <p className="text-xs text-muted-foreground">
-              Extras{showExtrasDiaCost ? " (extras-dia)" : ""}
-            </p>
-            {showExtrasDiaCost ? (
-              <>
-                <p className="text-xl font-bold">{fmtEur(extrasDiaCost?.total ?? 0)}</p>
-                {extrasDiaCost && (extrasDiaCost.real > 0 || extrasDiaCost.estimate > 0) && (
-                  <p className="text-[10px] text-muted-foreground mt-0.5">
-                    real {fmtEur(extrasDiaCost.real)} ({(extrasDiaCost as any).daysWithReal ?? 0}d)
-                    · estim. {fmtEur(extrasDiaCost.estimate)} ({(extrasDiaCost as any).daysWithEstimate ?? 0}d)
-                  </p>
-                )}
-              </>
-            ) : (
-              <p className="text-xl font-bold">{fmtEur(totals.extras)}</p>
-            )}
+            <p className="text-xs text-muted-foreground">Pago Multibanco</p>
+            <p className="text-xl font-bold text-indigo-700">{fmtEur(totals.paidMB)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-3">
-            <p className="text-xs text-muted-foreground">Descontos</p>
-            <p className="text-xl font-bold text-red-600">{fmtEur(totals.discount)}</p>
+            <p className="text-xs text-muted-foreground">Pago Dinheiro</p>
+            <p className="text-xl font-bold text-emerald-700">{fmtEur(totals.paidCash)}</p>
           </CardContent>
         </Card>
-        {totals.toCollect > 0 && (
-          <Card className="border-amber-300 bg-amber-50/60">
-            <CardContent className="p-3">
-              <p className="text-xs text-muted-foreground">Por cobrar</p>
-              <p className="text-xl font-bold text-amber-700">{fmtEur(totals.toCollect)}</p>
-            </CardContent>
-          </Card>
-        )}
+        <Card>
+          <CardContent className="p-3">
+            <p className="text-xs text-muted-foreground">Outros meios</p>
+            <p className="text-xl font-bold text-slate-700">{fmtEur(totals.paidOther)}</p>
+            <p className="text-[10px] text-muted-foreground">agregadores, agências, prós…</p>
+          </CardContent>
+        </Card>
+        <Card className="border-amber-300 bg-amber-50/60">
+          <CardContent className="p-3">
+            <p className="text-xs text-muted-foreground">Falta pagar</p>
+            <p className="text-xl font-bold text-amber-700">{fmtEur(totals.toCollect)}</p>
+            <p className="text-[10px] text-muted-foreground">caixa prevista do período</p>
+          </CardContent>
+        </Card>
       </div>
+
+      {/* Origens das reservas (só na aba Reservas) — detalhe a afinar com o Jorge */}
+      {actionType === "creation" && bookings.length > 0 && (
+        <Card>
+          <CardContent className="p-3">
+            <p className="text-xs text-muted-foreground mb-1.5">Origens das reservas</p>
+            <div className="flex flex-wrap gap-2">
+              {(() => {
+                const counts = new Map<string, number>();
+                for (const b of bookings as any[]) {
+                  const key = b.salesPartnerName ? `🤝 ${b.salesPartnerName}` : (ORIGIN_LABELS[b.origin] ?? b.origin ?? "Sem origem");
+                  counts.set(key, (counts.get(key) ?? 0) + 1);
+                }
+                return Array.from(counts.entries())
+                  .sort((a, b) => b[1] - a[1])
+                  .slice(0, 12)
+                  .map(([name, n]) => (
+                    <Badge key={name} variant="outline" className="text-xs py-1 px-2">
+                      {name}: <span className="font-bold ml-1">{n}</span>
+                    </Badge>
+                  ));
+              })()}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Aviso do corte de 5.000 linhas (períodos grandes) */}
       {(data?.bookings?.length ?? 0) >= 5000 && (
