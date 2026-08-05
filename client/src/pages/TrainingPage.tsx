@@ -14,6 +14,7 @@ import { fileHref } from "@/lib/fileHref";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { toast } from "sonner";
 import { useState, useMemo, useEffect, useRef } from "react";
+import { usePersistedState } from "@/hooks/usePersistedState";
 import { Play, BookOpen, HelpCircle, Gamepad2, GraduationCap, Plus, Trash2, Trophy, CheckCircle, XCircle, Clock, Star, ChevronRight, FileText, Newspaper, RefreshCw } from "lucide-react";
 import { Streamdown } from "streamdown";
 
@@ -22,6 +23,8 @@ const ROLE_HIERARCHY: Record<string, number> = { user: 0, extra: 1, frontoffice:
 export default function TrainingPage() {
   const { user } = useAuth();
   const isAdmin = user && ROLE_HIERARCHY[user.role] >= ROLE_HIERARCHY["admin"];
+  // Separador persiste à navegação (padrão da app)
+  const [tab, setTab] = usePersistedState("training.tab", "videos");
 
   return (
     <>
@@ -29,7 +32,7 @@ export default function TrainingPage() {
         <div>
           <p className="text-muted-foreground">Vídeos, manuais, FAQs, quiz interativo e exames de carreira</p>
         </div>
-        <Tabs defaultValue="videos" className="space-y-4">
+        <Tabs value={tab} onValueChange={setTab} className="space-y-4">
           <TabsList className="grid grid-cols-2 sm:grid-cols-5 w-full max-w-2xl h-auto">
             <TabsTrigger value="videos"><Play className="w-4 h-4 mr-1" />Vídeos</TabsTrigger>
             <TabsTrigger value="manuals"><BookOpen className="w-4 h-4 mr-1" />Manuais</TabsTrigger>
@@ -50,10 +53,39 @@ export default function TrainingPage() {
 }
 
 // ─── VIDEOS TAB ─────────────────────────────────────────────────────────────
+
+// Converte URLs de YouTube/Vimeo em URL de embed — o vídeo abre DENTRO da app
+// num player, em vez de saltar para outra aba. URLs desconhecidas devolvem
+// null e mantêm o comportamento antigo (abrir noutra aba).
+function videoEmbedUrl(url: string): string | null {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, "");
+    if (host === "youtube.com" || host === "m.youtube.com") {
+      const id = u.searchParams.get("v");
+      if (id) return `https://www.youtube-nocookie.com/embed/${id}`;
+      const shorts = u.pathname.match(/^\/shorts\/([\w-]+)/);
+      if (shorts) return `https://www.youtube-nocookie.com/embed/${shorts[1]}`;
+    }
+    if (host === "youtu.be") {
+      const id = u.pathname.slice(1).split("/")[0];
+      if (id) return `https://www.youtube-nocookie.com/embed/${id}`;
+    }
+    if (host === "vimeo.com") {
+      const id = u.pathname.match(/\/(\d+)/)?.[1];
+      if (id) return `https://player.vimeo.com/video/${id}`;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function VideosTab({ isAdmin }: { isAdmin: boolean }) {
   const [selectedCat, setSelectedCat] = useState<string>("all");
   const [showCreate, setShowCreate] = useState(false);
   const [showCreateCat, setShowCreateCat] = useState(false);
+  const [playingVideo, setPlayingVideo] = useState<any>(null);
   const [form, setForm] = useState({ categoryId: "", title: "", description: "", videoUrl: "", durationMinutes: "" });
   const [catForm, setCatForm] = useState({ name: "", description: "", icon: "" });
 
@@ -86,7 +118,10 @@ function VideosTab({ isAdmin }: { isAdmin: boolean }) {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {videos.map((v: any) => (
             <Card key={v.id} className="overflow-hidden">
-              <div className="aspect-video bg-muted flex items-center justify-center relative cursor-pointer" onClick={() => window.open(v.videoUrl, "_blank")}>
+              <div
+                className="aspect-video bg-muted flex items-center justify-center relative cursor-pointer"
+                onClick={() => videoEmbedUrl(v.videoUrl) ? setPlayingVideo(v) : window.open(v.videoUrl, "_blank")}
+              >
                 {v.thumbnailUrl ? <img src={v.thumbnailUrl} alt={v.title} className="w-full h-full object-cover" /> : <Play className="w-12 h-12 text-muted-foreground" />}
                 <div className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity">
                   <Play className="w-16 h-16 text-white" />
@@ -104,6 +139,27 @@ function VideosTab({ isAdmin }: { isAdmin: boolean }) {
           ))}
         </div>
       )}
+
+      {/* Player embutido: o vídeo toca dentro da app */}
+      <Dialog open={!!playingVideo} onOpenChange={(o) => !o && setPlayingVideo(null)}>
+        <DialogContent className="max-w-4xl w-[calc(100vw-2rem)] p-0 overflow-hidden">
+          <DialogHeader className="px-4 pt-4 pb-2">
+            <DialogTitle className="flex items-center gap-2"><Play className="w-4 h-4 text-primary" />{playingVideo?.title}</DialogTitle>
+          </DialogHeader>
+          {playingVideo && (
+            <div className="aspect-video w-full">
+              <iframe
+                src={videoEmbedUrl(playingVideo.videoUrl) ?? undefined}
+                className="w-full h-full"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+                allowFullScreen
+                title={playingVideo.title}
+              />
+            </div>
+          )}
+          {playingVideo?.description && <p className="px-4 pb-4 text-sm text-muted-foreground">{playingVideo.description}</p>}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
         <DialogContent>
