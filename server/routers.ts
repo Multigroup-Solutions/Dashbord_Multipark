@@ -229,11 +229,6 @@ import {
   deletePerformanceEvaluation,
   generateWeeklyEvaluation,
   // Services
-  createService,
-  getServices,
-  updateService,
-  deleteService,
-  getServiceStats,
   // Invoices
   createInvoice,
   getInvoices,
@@ -5670,62 +5665,25 @@ export const appRouter = router({
 
   // ─── SERVIÇOS ────────────────────────────────────────────────────────────
   services: router({
-    list: protectedProcedure.input(z.object({
-      serviceType: z.string().optional(),
-      employeeId: z.number().optional(),
-      projectId: z.number().optional(),
-      month: z.number().optional(),
-      year: z.number().optional(),
-    }).optional()).query(({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
-      return getServices(input);
-    }),
+    // (O antigo CRUD de serviços internos — list/create/update/delete/stats
+    //  sobre a tabela `services` — foi removido a 2026-08-06: nunca teve UI.
+    //  Os serviços reais vêm das reservas Multipark, abaixo.)
 
-    create: protectedProcedure.input(z.object({
-      projectId: z.number().optional(),
-      employeeId: z.number().optional(),
-      serviceType: z.enum(["lavagem", "carregamento_eletrico", "valet_flex", "outro"]),
-      clientName: z.string().optional(),
-      vehiclePlate: z.string().optional(),
-      bookingRef: z.string().optional(),
-      revenue: z.number().optional(),
-      cost: z.number().optional(),
-      commission: z.number().optional(),
-      notes: z.string().optional(),
-      serviceDate: z.string().optional(),
-    })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "admin");
-      const data = { ...input, serviceDate: input.serviceDate ? new Date(input.serviceDate) : new Date() };
-      const id = await createService(data);
-      await logActivity({ userId: ctx.user.id, action: "create", entity: "service", entityId: id || 0, details: `Serviço: ${input.serviceType}` });
-      return { id };
-    }),
-
-    update: protectedProcedure.input(z.object({
+    // Dá baixa / reabre um serviço na app. O sync preserva o done local
+    // (upsertBookingExtras faz OR com o que a API mandar).
+    setExtraDone: protectedProcedure.input(z.object({
       id: z.number(),
-      revenue: z.number().optional(),
-      cost: z.number().optional(),
-      commission: z.number().optional(),
-      notes: z.string().optional(),
+      done: z.boolean(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "admin");
-      const { id, ...data } = input;
-      await updateService(id, data);
+      requireRole(ctx.user.role, "backoffice");
+      const { getDb } = await import("./db");
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
+      const { multiparkBookingExtras } = await import("../drizzle/schema");
+      const { eq } = await import("drizzle-orm");
+      await db.update(multiparkBookingExtras).set({ done: input.done ? 1 : 0 }).where(eq(multiparkBookingExtras.id, input.id));
+      await logActivity({ userId: ctx.user.id, action: input.done ? "complete" : "reopen", entity: "booking_extra", entityId: input.id });
       return { success: true };
-    }),
-
-    delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "super_admin");
-      await deleteService(input.id);
-      return { success: true };
-    }),
-
-    stats: protectedProcedure.input(z.object({
-      month: z.number().optional(),
-      year: z.number().optional(),
-    }).optional()).query(({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
-      return getServiceStats(input?.month, input?.year);
     }),
 
     // Serviços extra das reservas — FONTE: BD local (multipark_booking_extras,
@@ -5745,6 +5703,7 @@ export const appRouter = router({
       const { and, gte, lte, eq, sql } = await import("drizzle-orm");
       const rows = await db
         .select({
+          id: multiparkBookingExtras.id,
           bookingId: multiparkBookingExtras.bookingExternalId,
           bookingNumber: multiparkBookings.bookingNumber,
           licensePlate: multiparkBookings.licensePlate,
@@ -5767,6 +5726,7 @@ export const appRouter = router({
         ))
         .limit(5000);
       const services = rows.map((r) => ({
+        id: r.id,
         bookingId: r.bookingId,
         bookingNumber: r.bookingNumber,
         licensePlate: r.licensePlate ?? "",
@@ -6835,6 +6795,20 @@ export const appRouter = router({
           period: { startDate: input.startDate, endDate: input.endDate },
           bookings,
         };
+      }),
+
+    // Reserva completa por externalId (detalhe ao clicar num serviço)
+    bookingByExternalId: protectedProcedure
+      .input(z.object({ externalId: z.string().min(1).max(128) }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "frontoffice");
+        const { getDb } = await import("./db");
+        const db = await getDb();
+        if (!db) return null;
+        const { multiparkBookings } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        const rows = await db.select().from(multiparkBookings).where(eq(multiparkBookings.externalId, input.externalId)).limit(1);
+        return rows[0] ?? null;
       }),
 
     // Resumo agregado (dashboard Operações): contagens/somas no SQL em vez de

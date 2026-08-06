@@ -188,7 +188,8 @@ export default function InvoicesPage() {
           </div>
 
           {/* KPI secundários: detalhe dos custos */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+            <KpiSmall icon={<Truck className="w-3.5 h-3.5 text-teal-600" />} label="Serviços extra (nas entregas)" value={fmt(deliveries.reduce((s2: number, d: any) => s2 + Number(d.extrasRevenue ?? 0), 0))} />
             <KpiSmall icon={<Receipt className="w-3.5 h-3.5 text-red-500" />} label="Despesas inseridas" value={fmt(summary.expensesPaid)} />
             <KpiSmall icon={<UsersIcon className="w-3.5 h-3.5 text-amber-500" />} label="Equipa do dia" value={fmt(summary.extrasDiaCost)} />
             <KpiSmall icon={<UsersIcon className="w-3.5 h-3.5 text-blue-500" />} label="Salários + TSU" value={fmt((summary.salariesCost ?? 0) + (summary.employerTax ?? 0))} />

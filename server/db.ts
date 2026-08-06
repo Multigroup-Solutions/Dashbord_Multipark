@@ -6033,6 +6033,15 @@ export async function upsertBookingExtras(
   const db = await getDb();
   if (!db) return;
   if (!Array.isArray(extras) || extras.length === 0) return;
+  // Preserva "feito" marcado NA APP: o delete+insert do re-sync não pode
+  // desmarcar serviços dados como feitos localmente (a API pode vir done=0).
+  const existing = await db
+    .select({ extraId: multiparkBookingExtras.extraId, name: multiparkBookingExtras.name, done: multiparkBookingExtras.done })
+    .from(multiparkBookingExtras)
+    .where(eq(multiparkBookingExtras.bookingExternalId, bookingExternalId));
+  const doneLocally = new Set(
+    existing.filter((e) => e.done === 1).map((e) => `${e.extraId ?? ""}|${e.name ?? ""}`),
+  );
   await db.delete(multiparkBookingExtras).where(eq(multiparkBookingExtras.bookingExternalId, bookingExternalId));
   await db.insert(multiparkBookingExtras).values(
     extras.map((e) => ({
@@ -6041,7 +6050,7 @@ export async function upsertBookingExtras(
       name: typeof e.name === "string" ? e.name.slice(0, 256) : null,
       description: typeof e.description === "string" ? e.description.slice(0, 512) : null,
       price: e.price != null ? String(e.price) : null,
-      done: e.done ? 1 : 0,
+      done: (e.done || doneLocally.has(`${e.id ? String(e.id).slice(0, 128) : ""}|${typeof e.name === "string" ? e.name.slice(0, 256) : ""}`)) ? 1 : 0,
     })),
   );
 }
