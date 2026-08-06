@@ -42,7 +42,7 @@ import {
   addLostFoundMessage,
 } from "../db";
 
-const ALIASES: InboundAlias[] = ["criticas", "reclamacoes", "perdidos", "recursos-humanos", "campanhas"];
+const ALIASES: InboundAlias[] = ["criticas", "reclamacoes", "perdidos", "recursos-humanos", "campanhas", "ocorrencias"];
 const RH_TASK_OWNER = "kamilafagundes@multipark.pt"; // tarefa de recrutamento atribuída a (Kamila Fagundes)
 
 export type EmailSyncResult = {
@@ -290,6 +290,37 @@ async function routeToModule(
     console.warn("[inbound] verificação de resposta de disponibilidade falhou:", err);
   }
 
+  // ocorrencias → OCORRÊNCIA a partir do email do painel Multipark (o Jorge
+  // reencaminha; futuramente alias + regra automática). O corpo completo fica
+  // em inbound_emails para afinar o parser ao formato real.
+  if (alias === "ocorrencias") {
+    const body = `${ctx.subject}
+
+${ctx.bodyText}`;
+    const low = body.toLowerCase();
+    let incidentType: any = "outro"; let severity: any = "medium";
+    if (/dano|amassad|risc|batid|embat|colis|raspad|partid/.test(low)) { incidentType = "dano"; severity = "high"; }
+    else if (/vidro|janela/.test(low)) incidentType = "vidro_aberto";
+    else if (/mal\s*estacion/.test(low)) incidentType = "mal_estacionado";
+    else if (/chav/.test(low)) incidentType = "chave_errada";
+    else if (/combust|gasolina|gas[oó]leo/.test(low)) incidentType = "combustivel";
+    else if (/suj|limpez|nodoa|mancha/.test(low)) { incidentType = "limpeza"; severity = "low"; }
+    else if (/document|livrete|seguro/.test(low)) { incidentType = "documentos"; severity = "low"; }
+    const plateM = body.toUpperCase().match(/([A-Z]{2}[-\s]?\d{2}[-\s]?[A-Z0-9]{2}|\d{2}[-\s]?[A-Z]{2}[-\s]?\d{2}|\d{2}[-\s]?\d{2}[-\s]?[A-Z]{2})/);
+    const cuidM = body.match(/c[a-z0-9]{20,30}/);
+    const { createIncident } = await import("../db");
+    const id = await createIncident({
+      incidentType, severity,
+      description: desc,
+      vehiclePlate: plateM ? plateM[1].replace(/\s/g, "-") : undefined,
+      reservationLink: cuidM ? cuidM[0] : undefined,
+      status: "open",
+      reportedBy: await getSystemUserId(),
+      sourceEmailId: ctx.messageId?.slice(0, 100),
+    } as any);
+    return { targetModule: "incident", targetId: id ?? undefined };
+  }
+
   // recursos-humanos → tarefa de recrutamento para a Kamila (o email fica
   // guardado em inbound_emails para a aba "Recrutamento" do RH).
   const systemUser = await getSystemUserId();
@@ -329,8 +360,14 @@ export async function runEmailInboundSync(opts?: { sinceDays?: number; deadlineA
       // Gmail raw search: só emails entregues a este alias, dentro da janela.
       let uids: number[] = [];
       try {
+        // "ocorrencias": além do alias próprio, apanha REENCAMINHADOS para a
+        // caixa principal com "ocorrência" no assunto (o Jorge reencaminha o
+        // email do painel Multipark até o alias existir / a regra automática)
+        const gmQuery = alias === "ocorrencias"
+          ? `newer_than:${sinceDays}d {deliveredto:ocorrencias@multipark.pt subject:ocorrencia subject:ocorrência subject:ocorrencias subject:ocorrências}`
+          : `deliveredto:${alias}@multipark.pt newer_than:${sinceDays}d`;
         uids = (await client.search(
-          { gmraw: `deliveredto:${alias}@multipark.pt newer_than:${sinceDays}d` },
+          { gmraw: gmQuery },
           { uid: true },
         )) || [];
       } catch (e: any) {

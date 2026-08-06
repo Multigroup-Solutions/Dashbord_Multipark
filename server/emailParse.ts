@@ -8,7 +8,7 @@
 // (criticas@/reclamacoes@/perdidos@/recursos-humanos@). O remetente real do
 // cliente vem mascarado no cabeçalho (info@multipark.pt) mas está sempre no CORPO.
 
-export type InboundAlias = "criticas" | "reclamacoes" | "perdidos" | "recursos-humanos" | "campanhas";
+export type InboundAlias = "criticas" | "reclamacoes" | "perdidos" | "recursos-humanos" | "campanhas" | "ocorrencias";
 
 // "campanhas" = relatório diário de campanhas (Google Ads/Supermetrics) com CSV
 // anexo, agendado pelo Jorge para campanhas@multipark.pt — ingerido em
