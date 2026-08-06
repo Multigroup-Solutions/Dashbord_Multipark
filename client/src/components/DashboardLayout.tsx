@@ -169,6 +169,7 @@ const menuGroups: MenuGroup[] = [
       { icon: Truck, label: "Actividade Diária", path: "/operacional", minRole: "backoffice" },
       { icon: ListTodo, label: "Tarefas", path: "/tarefas", minRole: "extra" },
       { icon: CalendarDays, label: "Extras Dia", path: "/extras-dia", minRole: "backoffice" },
+      { icon: CalendarCheck, label: "Passagem de Turno", path: "/passagem-turno", minRole: "team_leader" },
       { icon: CalendarCheck, label: "Disponibilidade", path: "/disponibilidade", minRole: "extra" },
       { icon: MessageCircle, label: "WhatsApp", path: "/whatsapp", minRole: "backoffice" },
     ],

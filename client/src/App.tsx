@@ -14,6 +14,7 @@ import HRPage from "./pages/HRPage";
 import ProjectsPage from "./pages/ProjectsPage";
 import TasksPage from "./pages/TasksPage";
 import MarketingPage from "./pages/MarketingPage";
+import ShiftHandoverPage from "./pages/ShiftHandoverPage";
 import OperationalPage from "./pages/OperationalPage";
 import ApiKeysPage from "./pages/ApiKeysPage";
 import ComplaintsPage from "./pages/ComplaintsPage";
@@ -204,6 +205,9 @@ function Router() {
       </Route>
       <Route path="/whatsapp">
         {() => (<DashboardLayout><WhatsAppInboxPage /></DashboardLayout>)}
+      </Route>
+      <Route path="/passagem-turno">
+        {() => (<DashboardLayout><ShiftHandoverPage /></DashboardLayout>)}
       </Route>
       <Route path="/avaliacao-operacional">
         {() => (<DashboardLayout><AvaliacaoOperacionalPage /></DashboardLayout>)}

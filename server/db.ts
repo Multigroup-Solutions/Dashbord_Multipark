@@ -5599,6 +5599,158 @@ export async function autoCloseStaleCheckIns(): Promise<{ closed: number }> {
   return { closed };
 }
 
+// ─── PASSAGEM DE TURNO (formulário dos team leaders, 2026-08-06) ─────────────
+// Checklist de fim de turno: carros p/ coberto, caixas, bolsas, rolos MB,
+// canetas, bateria, PDAs, fardas + notas. 1 registo por (dia, turno, cidade).
+let shiftHandoverEnsured = false;
+async function ensureShiftHandoverTable() {
+  if (shiftHandoverEnsured) return;
+  const db = await getDb();
+  if (!db) return;
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS \`shift_handovers\` (
+    \`id\` INT NOT NULL AUTO_INCREMENT,
+    \`handoverDate\` VARCHAR(10) NOT NULL,
+    \`shift\` VARCHAR(10) NOT NULL,
+    \`city\` VARCHAR(16) NOT NULL DEFAULT 'lisbon',
+    \`carsForCovered\` INT NULL,
+    \`chargedUntilDate\` VARCHAR(10) NULL,
+    \`cashClosedInSafe\` TINYINT NULL,
+    \`checkoutCashDone\` TINYINT NULL,
+    \`frontPouchValue\` DECIMAL(10,2) NULL,
+    \`terminalPouchValue\` DECIMAL(10,2) NULL,
+    \`ticketsExpensesPaid\` DECIMAL(10,2) NULL,
+    \`mbRolls\` INT NULL,
+    \`mbRollsInPouch\` INT NULL,
+    \`pensInPouch\` INT NULL,
+    \`mbBattery\` INT NULL,
+    \`pdasCharged\` TINYINT NULL,
+    \`uniformsCount\` INT NULL,
+    \`notes\` TEXT NULL,
+    \`filledById\` INT NULL,
+    \`filledByName\` VARCHAR(255) NULL,
+    \`createdAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    \`updatedAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (\`id\`),
+    UNIQUE INDEX \`shift_handover_unique\` (\`handoverDate\`, \`shift\`, \`city\`)
+  )`);
+  shiftHandoverEnsured = true;
+}
+
+export async function saveShiftHandover(data: Record<string, any>) {
+  const db = await getDb();
+  if (!db) throw new Error("BD indisponível");
+  await ensureShiftHandoverTable();
+  const esc = (v: any) => v == null ? "NULL" : typeof v === "number" ? String(v) : `'${String(v).replace(/'/g, "''").slice(0, 2000)}'`;
+  const cols: Array<[string, any]> = [
+    ["handoverDate", data.handoverDate], ["shift", data.shift], ["city", data.city ?? "lisbon"],
+    ["carsForCovered", data.carsForCovered], ["chargedUntilDate", data.chargedUntilDate],
+    ["cashClosedInSafe", data.cashClosedInSafe == null ? null : (data.cashClosedInSafe ? 1 : 0)],
+    ["checkoutCashDone", data.checkoutCashDone == null ? null : (data.checkoutCashDone ? 1 : 0)],
+    ["frontPouchValue", data.frontPouchValue], ["terminalPouchValue", data.terminalPouchValue],
+    ["ticketsExpensesPaid", data.ticketsExpensesPaid], ["mbRolls", data.mbRolls],
+    ["mbRollsInPouch", data.mbRollsInPouch], ["pensInPouch", data.pensInPouch],
+    ["mbBattery", data.mbBattery],
+    ["pdasCharged", data.pdasCharged == null ? null : (data.pdasCharged ? 1 : 0)],
+    ["uniformsCount", data.uniformsCount], ["notes", data.notes],
+    ["filledById", data.filledById], ["filledByName", data.filledByName],
+  ];
+  const updates = cols.filter(([c]) => !["handoverDate", "shift", "city"].includes(c))
+    .map(([c, v]) => `\`${c}\` = ${esc(v)}`).join(", ");
+  await db.execute(sql.raw(
+    `INSERT INTO \`shift_handovers\` (${cols.map(([c]) => `\`${c}\``).join(",")})
+     VALUES (${cols.map(([, v]) => esc(v)).join(",")})
+     ON DUPLICATE KEY UPDATE ${updates}`,
+  ));
+}
+
+export async function listShiftHandovers(opts: { from?: string; to?: string; city?: string } = {}) {
+  const db = await getDb();
+  if (!db) return [];
+  await ensureShiftHandoverTable();
+  const conds: string[] = [];
+  if (opts.from) conds.push(`handoverDate >= '${opts.from.slice(0, 10)}'`);
+  if (opts.to) conds.push(`handoverDate <= '${opts.to.slice(0, 10)}'`);
+  if (opts.city) conds.push(`city = '${opts.city.replace(/[^a-z]/g, "")}'`);
+  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+  const [rows] = await db.execute(sql.raw(
+    `SELECT * FROM \`shift_handovers\` ${where} ORDER BY handoverDate DESC, shift, city LIMIT 200`,
+  )) as any;
+  return rows as any[];
+}
+
+/** Dashboard do supervisor (por dia): condutores por turno, carros
+ *  recolhidos/entregues, TEMPOS pendente→entrega e atraso na recolha
+ *  (previsto vs real), e reclamações do dia. */
+export async function getSupervisorDayDashboard(date: string) {
+  const db = await getDb();
+  if (!db) return null;
+  const start = `${date} 00:00:00`;
+  const end = `${date} 23:59:59`;
+  const nextEnd = `${date} 23:59:59`;
+
+  // Tempos pendente→entrega (PENDING_CHECKOUT → CHECK_OUT, mesmo booking)
+  const [deliveryRows] = await db.execute(sql`
+    SELECT h1.bookingExternalId, TIMESTAMPDIFF(MINUTE, h1.t, h2.t) AS mins, h2.agentName
+    FROM (SELECT bookingExternalId, MIN(actionTime) t FROM multipark_booking_history
+          WHERE changeType='PENDING_CHECKOUT' AND actionTime >= ${start} AND actionTime <= ${end}
+          GROUP BY bookingExternalId) h1
+    JOIN (SELECT bookingExternalId, MIN(actionTime) t, MAX(agentName) agentName FROM multipark_booking_history
+          WHERE changeType='CHECK_OUT' AND actionTime >= ${start}
+          GROUP BY bookingExternalId) h2 USING (bookingExternalId)
+    WHERE h2.t >= h1.t AND TIMESTAMPDIFF(MINUTE, h1.t, h2.t) < 600`) as any;
+  const deliveryTimes = (deliveryRows as any[]).map((r) => ({ booking: r.bookingExternalId, mins: Number(r.mins), agent: r.agentName ?? null }));
+  deliveryTimes.sort((a, b) => b.mins - a.mins);
+  const dAvg = deliveryTimes.length ? Math.round(deliveryTimes.reduce((s, r) => s + r.mins, 0) / deliveryTimes.length) : 0;
+
+  // Atraso na recolha: checkIn PREVISTO da reserva vs CHECK_IN real
+  const [pickupRows] = await db.execute(sql`
+    SELECT h.bookingExternalId, TIMESTAMPDIFF(MINUTE, b.checkIn, h.t) AS mins
+    FROM (SELECT bookingExternalId, MIN(actionTime) t FROM multipark_booking_history
+          WHERE changeType='CHECK_IN' AND actionTime >= ${start} AND actionTime <= ${nextEnd}
+          GROUP BY bookingExternalId) h
+    JOIN multipark_bookings b ON b.externalId = h.bookingExternalId
+    WHERE b.checkIn IS NOT NULL AND ABS(TIMESTAMPDIFF(MINUTE, b.checkIn, h.t)) < 600`) as any;
+  const pickupDelays = (pickupRows as any[]).map((r) => Number(r.mins)).filter((m) => Number.isFinite(m));
+  const late = pickupDelays.filter((m) => m > 15).length;
+  const pAvg = pickupDelays.length ? Math.round(pickupDelays.reduce((s, m) => s + m, 0) / pickupDelays.length) : 0;
+
+  // Reclamações criadas no dia
+  const [[compl]] = await db.execute(sql`SELECT COUNT(*) n FROM complaints WHERE createdAt >= ${start} AND createdAt <= ${end}`) as any;
+
+  // Condutores por turno (escala extras-dia do dia + ações)
+  const dayActivity = await getDayActivity(date);
+  const assignments = await db.select({
+    personName: extrasDiaAssignments.personName,
+    shift: extrasDiaAssignments.shift,
+    city: extrasDiaAssignments.city,
+    employeeId: extrasDiaAssignments.employeeId,
+    startHour: extrasDiaAssignments.startHour,
+    endHour: extrasDiaAssignments.endHour,
+    isTeamLeader: extrasDiaAssignments.isTeamLeader,
+  }).from(extrasDiaAssignments).where(eq(extrasDiaAssignments.assignmentDate, date));
+
+  return {
+    date,
+    totals: dayActivity.totals,
+    people: dayActivity.people,
+    shifts: assignments,
+    delivery: {
+      count: deliveryTimes.length,
+      avgMins: dAvg,
+      maxMins: deliveryTimes[0]?.mins ?? 0,
+      over15: deliveryTimes.filter((r) => r.mins > 15).length,
+      over30: deliveryTimes.filter((r) => r.mins > 30).length,
+      worst: deliveryTimes.slice(0, 8),
+    },
+    pickup: {
+      count: pickupDelays.length,
+      avgDelayMins: pAvg,
+      over15: late,
+    },
+    complaintsToday: Number((compl as any)?.n ?? 0),
+  };
+}
+
 // ─── LIGAÇÃO AGENTE→PARCEIRO (agências que marcam pelo portal de agentes) ────
 // Alguns "agentes" Multipark são agências de viagens/parceiros, não
 // colaboradores. Este mapa liga o agentName ao partnership. Tabela on-demand.

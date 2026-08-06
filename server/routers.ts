@@ -5836,6 +5836,54 @@ export const appRouter = router({
     }),
   }),
 
+  // ─── PASSAGEM DE TURNO ───────────────────────────────────────────────────
+  shiftHandover: router({
+    // Team leaders preenchem; supervisor+ consulta o histórico e o dashboard
+    save: protectedProcedure.input(z.object({
+      handoverDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      shift: z.enum(["morning", "night"]),
+      city: z.enum(["lisbon", "porto", "faro"]).default("lisbon"),
+      carsForCovered: z.number().int().min(0).nullable().optional(),
+      chargedUntilDate: z.string().max(10).nullable().optional(),
+      cashClosedInSafe: z.boolean().nullable().optional(),
+      checkoutCashDone: z.boolean().nullable().optional(),
+      frontPouchValue: z.number().min(0).nullable().optional(),
+      terminalPouchValue: z.number().min(0).nullable().optional(),
+      ticketsExpensesPaid: z.number().min(0).nullable().optional(),
+      mbRolls: z.number().int().min(0).nullable().optional(),
+      mbRollsInPouch: z.number().int().min(0).nullable().optional(),
+      pensInPouch: z.number().int().min(0).nullable().optional(),
+      mbBattery: z.number().int().min(0).max(100).nullable().optional(),
+      pdasCharged: z.boolean().nullable().optional(),
+      uniformsCount: z.number().int().min(0).nullable().optional(),
+      notes: z.string().max(2000).nullable().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "team_leader");
+      const { saveShiftHandover } = await import("./db");
+      await saveShiftHandover({ ...input, filledById: ctx.user.id, filledByName: ctx.user.name ?? null });
+      await logActivity({ userId: ctx.user.id, action: "save", entity: "shift_handover", details: `${input.handoverDate} ${input.shift} ${input.city}` });
+      return { success: true };
+    }),
+
+    list: protectedProcedure.input(z.object({
+      from: z.string().optional(),
+      to: z.string().optional(),
+      city: z.enum(["lisbon", "porto", "faro"]).optional(),
+    }).optional()).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "team_leader");
+      const { listShiftHandovers } = await import("./db");
+      return listShiftHandovers(input ?? {});
+    }),
+
+    supervisorDashboard: protectedProcedure.input(z.object({
+      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    })).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "supervisor");
+      const { getSupervisorDayDashboard } = await import("./db");
+      return getSupervisorDayDashboard(input.date);
+    }),
+  }),
+
   // ─── PARCERIAS ───────────────────────────────────────────────────────────
   partnerships: router({
     analytics: protectedProcedure.input(z.object({
