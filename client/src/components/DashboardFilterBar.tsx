@@ -11,7 +11,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-/** Hook to manage dashboard filter state */
+/** Hook to manage dashboard filter state.
+ *  Cidade/Marca são o ESTADO GLOBAL do topo (pedido Jorge: "as cidades e os
+ *  parques cá em cima em todo o lado") — mudar em cima muda a página e
+ *  vice-versa. Só as datas são locais a cada página. */
 export function useDashboardFilters(defaults?: { from?: string; to?: string }) {
   const globalFilters = useGlobalFilters();
 
@@ -23,9 +26,10 @@ export function useDashboardFilters(defaults?: { from?: string; to?: string }) {
 
   const [from, setFrom] = useState(defaultFrom);
   const [to, setTo] = useState(defaultTo);
-  const [cityId, setCityId] = useState<number | null>(null);
-  const [brandId, setBrandId] = useState<number | null>(null);
   const [period, setPeriod] = useState("monthly");
+
+  const cityId = globalFilters.cityId;
+  const brandId = globalFilters.brandId;
 
   const projectId = useMemo(() => {
     if (brandId !== null) return brandId;
@@ -39,9 +43,9 @@ export function useDashboardFilters(defaults?: { from?: string; to?: string }) {
     setFrom,
     setTo,
     cityId,
-    setCityId,
+    setCityId: globalFilters.setCityId,
     brandId,
-    setBrandId,
+    setBrandId: globalFilters.setBrandId,
     projectId,
     period,
     setPeriod,

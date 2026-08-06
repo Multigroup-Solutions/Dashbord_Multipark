@@ -13,6 +13,7 @@ import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip, Legend } from "recha
 import { QuickRangeBar, thisMonthRange, previousPeriod } from "@/components/QuickRangeBar";
 import DateRangeNav from "@/components/DateRangeNav";
 import MultiparkPage from "./MultiparkPage";
+import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import ServicesPage from "./ServicesPage";
 
 const PIE_COLORS = ["#6366f1", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899", "#84cc16", "#f97316", "#14b8a6"];
@@ -105,15 +106,16 @@ function OperacoesDashboard({ onJump }: { onJump: (tab: string) => void }) {
   const [dim, setDim] = usePersistedState<"city" | "parkName">("operacoes.dash.dim", "city");
 
   // Resumo AGREGADO no servidor (1 query em vez de 4×5.000 reservas completas)
+  const globalFilters = useGlobalFilters();
   const summaryQ = trpc.multipark.operationsSummary.useQuery(
-    { startDate: from, endDate: to },
+    { startDate: from, endDate: to, projectId: globalFilters.projectId },
     { refetchOnWindowFocus: false },
   );
 
   // Período anterior (mesma duração) — só corre quando "comparar" está ligado
   const [pf, pt] = previousPeriod(from, to);
   const prevQ = trpc.multipark.operationsSummary.useQuery(
-    { startDate: pf, endDate: pt },
+    { startDate: pf, endDate: pt, projectId: globalFilters.projectId },
     { refetchOnWindowFocus: false, enabled: compare },
   );
 

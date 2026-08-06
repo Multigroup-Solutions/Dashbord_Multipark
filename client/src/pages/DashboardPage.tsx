@@ -1,5 +1,6 @@
 import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
+import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Card } from "@/components/ui/card";
 import {
@@ -108,11 +109,12 @@ const dashboardModules = [
 export default function DashboardPage() {
   const { user } = useAuth();
   const [, navigate] = useLocation();
+  const globalFilters = useGlobalFilters();
   // expenses.stats é admin-only no servidor — não chamar sem permissão
   const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
   // ── Queries (dados reais da BD) ──
   const { data: expStats, isLoading: expLoading } = trpc.expenses.stats.useQuery(undefined, { enabled: isAdmin });
-  const { data: bookingStats, isLoading: bkLoading } = trpc.multipark.bookingStats.useQuery();
+  const { data: bookingStats, isLoading: bkLoading } = trpc.multipark.bookingStats.useQuery({ projectId: globalFilters.projectId });
   const { data: complaintStats, isLoading: compLoading } = trpc.complaints.stats.useQuery();
   const { data: reviewStats, isLoading: revLoading } = trpc.reviews.stats.useQuery();
   const { data: hrStats, isLoading: hrLoading } = trpc.rh.stats.useQuery();

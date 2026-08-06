@@ -636,67 +636,44 @@ function DashboardLayoutContent({
           </div>
 
           <div className="flex items-center gap-3">
-            {/* Filtros de cidade/parques REMOVIDOS do topo (pedido Jorge:
-                não filtravam a maioria das páginas — cada página tem o seu
-                seletor de cidade, já limitado às permissões da pessoa) */}
-            {/* Date filter popover */}
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button
-                  variant={hasDateFilter ? "default" : "outline"}
-                  size="sm"
-                  className="hidden sm:flex items-center gap-2 h-9"
-                >
-                  <Calendar className="h-4 w-4" />
-                  <span className="hidden lg:inline">
-                    {hasDateFilter ? "Datas ativas" : "Datas"}
-                  </span>
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-72" align="end">
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h4 className="font-medium text-sm">Filtrar por datas</h4>
-                    {hasDateFilter && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 px-2 text-xs"
-                        onClick={() => filters.setDateRange({ from: null, to: null })}
-                      >
-                        <X className="h-3 w-3 mr-1" />
-                        Limpar
-                      </Button>
-                    )}
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-xs">De</Label>
-                    <Input
-                      type="date"
-                      value={filters.dateRange.from?.toISOString().split('T')[0] ?? ""}
-                      onChange={(e) => filters.setDateRange({
-                        ...filters.dateRange,
-                        from: e.target.value ? new Date(e.target.value) : null,
-                      })}
-                      className="h-9"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-xs">Até</Label>
-                    <Input
-                      type="date"
-                      value={filters.dateRange.to?.toISOString().split('T')[0] ?? ""}
-                      onChange={(e) => filters.setDateRange({
-                        ...filters.dateRange,
-                        to: e.target.value ? new Date(e.target.value) : null,
-                      })}
-                      className="h-9"
-                    />
-                  </div>
-                </div>
-              </PopoverContent>
-            </Popover>
+            {/* City filter */}
+            <Select
+              value={filters.cityId === null ? "all" : String(filters.cityId)}
+              onValueChange={(v) => filters.setCityId(v === "all" ? null : Number(v))}
+            >
+              <SelectTrigger className="hidden md:flex h-9 w-[130px]">
+                <SelectValue placeholder="Cidade" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todas as cidades</SelectItem>
+                {filters.cities.map((city) => (
+                  <SelectItem key={city.id} value={String(city.id)}>
+                    {city.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
 
+            {/* Brand/Park filter */}
+            <Select
+              value={filters.brandId === null ? "all" : String(filters.brandId)}
+              onValueChange={(v) => filters.setBrandId(v === "all" ? null : Number(v))}
+            >
+              <SelectTrigger className="hidden md:flex h-9 w-[140px]">
+                <SelectValue placeholder="Parque" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos os parques</SelectItem>
+                {filters.brands.map((brand) => (
+                  <SelectItem key={brand.id} value={String(brand.id)}>
+                    {brand.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            {/* Botão "Datas" global REMOVIDO (pedido Jorge: não filtrava nada
+                — as datas escolhem-se dentro de cada página, no seletor azul) */}
             {/* Notifications */}
             <NotificationsBell />
             {/* Notifications */}
