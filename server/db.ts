@@ -5842,6 +5842,74 @@ export async function listAgentPartners(): Promise<Array<{ agentName: string; pa
   return (rows as any[]).map((r) => ({ agentName: r.agentName, partnershipId: Number(r.partnershipId), partnerName: r.partnerName ?? null }));
 }
 
+// ─── PERMISSÕES POR UTILIZADOR (grant/deny além do role) ─────────────────────
+// Pedido Jorge 2026-08-06: "mais permissões ou menos permissões por utilizador".
+// Tabela on-demand; o catálogo vive em shared/permissions.ts.
+let userPermsEnsured = false;
+async function ensureUserPermissionsTable() {
+  if (userPermsEnsured) return;
+  const db = await getDb();
+  if (!db) return;
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS \`user_permissions\` (
+    \`userId\` INT NOT NULL,
+    \`permission\` VARCHAR(64) NOT NULL,
+    \`mode\` ENUM('grant','deny') NOT NULL,
+    \`grantedBy\` INT NULL,
+    \`updatedAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (\`userId\`, \`permission\`)
+  )`);
+  userPermsEnsured = true;
+}
+
+export async function setUserPermission(userId: number, permission: string, mode: "grant" | "deny" | null, grantedBy?: number) {
+  const db = await getDb();
+  if (!db) return;
+  await ensureUserPermissionsTable();
+  if (mode == null) {
+    await db.execute(sql`DELETE FROM \`user_permissions\` WHERE userId = ${userId} AND permission = ${permission}`);
+  } else {
+    await db.execute(sql`INSERT INTO \`user_permissions\` (userId, permission, mode, grantedBy)
+      VALUES (${userId}, ${permission}, ${mode}, ${grantedBy ?? null})
+      ON DUPLICATE KEY UPDATE mode = VALUES(mode), grantedBy = VALUES(grantedBy)`);
+  }
+}
+
+export async function getUserPermissionOverrides(userId: number): Promise<Record<string, "grant" | "deny">> {
+  const db = await getDb();
+  if (!db) return {};
+  await ensureUserPermissionsTable();
+  const [rows] = await db.execute(sql`SELECT permission, mode FROM \`user_permissions\` WHERE userId = ${userId}`) as any;
+  const out: Record<string, "grant" | "deny"> = {};
+  for (const r of (rows as any[]) ?? []) out[String(r.permission)] = r.mode === "deny" ? "deny" : "grant";
+  return out;
+}
+
+export async function listPermissionAssignments(): Promise<Array<{ userId: number; permission: string; mode: "grant" | "deny"; userName: string | null; userEmail: string | null }>> {
+  const db = await getDb();
+  if (!db) return [];
+  await ensureUserPermissionsTable();
+  const [rows] = await db.execute(sql`
+    SELECT p.userId, p.permission, p.mode, u.name AS userName, u.email AS userEmail
+    FROM \`user_permissions\` p LEFT JOIN users u ON u.id = p.userId
+    ORDER BY p.permission, u.name`) as any;
+  return ((rows as any[]) ?? []).map((r) => ({
+    userId: Number(r.userId),
+    permission: String(r.permission),
+    mode: r.mode === "deny" ? "deny" as const : "grant" as const,
+    userName: r.userName ? String(r.userName) : null,
+    userEmail: r.userEmail ? String(r.userEmail) : null,
+  }));
+}
+
+/** userIds com grant de uma permissão (para filtros, ex.: TL elegíveis). */
+export async function listUserIdsWithGrant(permission: string): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  await ensureUserPermissionsTable();
+  const [rows] = await db.execute(sql`SELECT userId FROM \`user_permissions\` WHERE permission = ${permission} AND mode = 'grant'`) as any;
+  return ((rows as any[]) ?? []).map((r) => Number(r.userId));
+}
+
 // ─── AGENTES IGNORADOS ("não é funcionário") ─────────────────────────────────
 // Alguns "agentes" do histórico não são pessoas nem parceiros: testes,
 // integrações, reservas de sistema. O Jorge marca-os como "não é funcionário"

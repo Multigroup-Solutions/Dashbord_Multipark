@@ -876,10 +876,13 @@ function suggestLevel(position: string | null | undefined, extraLevel: number | 
   return POSITION_TO_LEVEL[(position ?? "").toLowerCase()] ?? "junior";
 }
 
-export async function listDriverCandidates(date?: string): Promise<DriverCandidate[]> {
+// Posições que podem ser TL sem permissão especial
+const TL_POSITIONS = new Set(["team_leader", "supervisor", "director"]);
+
+export async function listDriverCandidates(date?: string, opts?: { forTeamLeader?: boolean }): Promise<DriverCandidate[]> {
   const db = await getDb();
   if (!db) return [];
-  const rows = await db
+  let rows = await db
     .select({
       id: employees.id,
       fullName: employees.fullName,
@@ -887,10 +890,23 @@ export async function listDriverCandidates(date?: string): Promise<DriverCandida
       extraLevel: employees.extraLevel,
       isActive: employees.isActive,
       photoUrl: employees.photoUrl,
+      userId: employees.userId,
     })
     .from(employees)
     .where(eq(employees.isActive, 1))
     .orderBy(asc(employees.fullName));
+
+  // TL (pedido Jorge): só aparecem posições de chefia OU quem tiver a
+  // permissão explícita extras_dia.team_leader — os extras normais saem da
+  // lista (antes apareciam todos).
+  if (opts?.forTeamLeader) {
+    const { listUserIdsWithGrant } = await import("./db");
+    const granted = new Set(await listUserIdsWithGrant("extras_dia.team_leader"));
+    rows = rows.filter(r =>
+      TL_POSITIONS.has((r.position ?? "").toLowerCase()) ||
+      (r.userId != null && granted.has(r.userId)),
+    );
+  }
 
   // Disponibilidade declarada para o dia, se uma data foi pedida.
   let availMap: Map<number, import("./extrasAvailability").DayAvailability> | null = null;

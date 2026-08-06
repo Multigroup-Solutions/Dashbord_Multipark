@@ -487,6 +487,9 @@ function TeamSection({
   const city = useContext(ExtrasCityContext);
   const assignmentsQuery = trpc.extrasDia.assignments.useQuery({ date: targetDate, city });
   const candidatesQuery = trpc.extrasDia.candidates.useQuery({ date: targetDate });
+  // TL: só chefias + quem tem a permissão extras_dia.team_leader (regra Jorge:
+  // "só devia aparecer aqueles que têm permissão de ser team leader")
+  const tlCandidatesQuery = trpc.extrasDia.candidates.useQuery({ date: targetDate, forTeamLeader: true });
 
   const upsert = trpc.extrasDia.upsertAssignment.useMutation({
     onSuccess: () => {
@@ -505,17 +508,20 @@ function TeamSection({
 
   const allAssignments = assignmentsQuery.data ?? [];
   const allCandidates = candidatesQuery.data ?? [];
+  const allTlCandidates = tlCandidatesQuery.data ?? [];
   // Mostra TODOS os extras ativos para podermos tentar/insistir com mais gente:
   // disponíveis primeiro, depois sem-resposta, depois quem disse que não pode.
-  const candidates = useMemo(() => {
+  const sortCandidates = (list: typeof allCandidates) => {
     const rank = (s?: string | null) => (s === "available" ? 0 : s === "no_response" ? 1 : 2);
-    return allCandidates
+    return list
       .slice()
       .sort((a, b) => {
         const r = rank(a.availability?.status) - rank(b.availability?.status);
         return r !== 0 ? r : a.fullName.localeCompare(b.fullName);
       });
-  }, [allCandidates]);
+  };
+  const candidates = useMemo(() => sortCandidates(allCandidates), [allCandidates]);
+  const tlCandidates = useMemo(() => sortCandidates(allTlCandidates), [allTlCandidates]);
 
   const assignments = allAssignments.filter(a => a.shift === shift);
   const tl = assignments.find(a => a.isTeamLeader);
@@ -591,7 +597,7 @@ function TeamSection({
             <div className="mt-3">
               <AssignmentForm
                 targetDate={targetDate}
-                candidates={candidates}
+                candidates={tlCandidates}
                 asTeamLeader
                 shift={shift}
                 defaultStart={defaultStart}

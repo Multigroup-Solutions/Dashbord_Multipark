@@ -43,6 +43,7 @@ import {
   Mail,
   Building2,
   Send,
+  KeyRound,
   ChevronLeft,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -152,6 +153,8 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
 
   const [showInviteDialog, setShowInviteDialog] = useState(false);
   const [inviteLink, setInviteLink] = useState("");
+  // Permissões por utilizador (dialog)
+  const [permUser, setPermUser] = useState<{ id: number; name: string } | null>(null);
 
   // Filtered users
   const filteredUsers = useMemo(() => {
@@ -503,6 +506,15 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                                 {sendInviteMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
                               </Button>
                             )}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setPermUser({ id: u.id, name: u.name ?? u.email ?? `#${u.id}` })}
+                              className="h-7 w-7 p-0"
+                              title="Permissões deste utilizador"
+                            >
+                              <KeyRound className="h-3.5 w-3.5" />
+                            </Button>
                           </div>
                         </TableCell>
                       )}
@@ -540,6 +552,9 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
           </div>
         </CardContent>
       </Card>
+
+      {/* Permissões do utilizador */}
+      {permUser && <UserPermissionsDialog user={permUser} onClose={() => setPermUser(null)} />}
 
       {/* Create/Edit Modal */}
       <Dialog open={showModal} onOpenChange={setShowModal}>
@@ -685,5 +700,68 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+// ─── PERMISSÕES POR UTILIZADOR (dialog) ──────────────────────────────────────
+// Pedido Jorge: "na página dos utilizadores, quais são as permissões que eles
+// têm, poder adicionar ou não". 3 estados por permissão: — (default do role),
+// ✓ dar, ✕ negar.
+function UserPermissionsDialog({ user, onClose }: { user: { id: number; name: string }; onClose: () => void }) {
+  const utils = trpc.useUtils();
+  const { data: catalog = [] } = trpc.permissions.catalog.useQuery();
+  const { data: overrides = {}, isLoading } = trpc.permissions.forUser.useQuery({ userId: user.id });
+  const setMut = trpc.permissions.setForUser.useMutation({
+    onSuccess: () => {
+      utils.permissions.forUser.invalidate({ userId: user.id });
+      utils.permissions.assignments.invalidate();
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  return (
+    <Dialog open onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <KeyRound className="h-4 w-4" /> Permissões — {user.name}
+          </DialogTitle>
+        </DialogHeader>
+        {isLoading ? (
+          <div className="py-8 text-center"><Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" /></div>
+        ) : (
+          <div className="space-y-2">
+            {(catalog as any[]).map((p) => {
+              const mode = (overrides as any)[p.id] ?? "default";
+              return (
+                <div key={p.id} className="flex items-center justify-between gap-3 p-2.5 rounded-lg border">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium">{p.label}</p>
+                    <p className="text-[11px] text-muted-foreground">{p.description}</p>
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    {([["default", "—"], ["grant", "✓ Dar"], ["deny", "✕ Negar"]] as const).map(([m, label]) => (
+                      <Button
+                        key={m}
+                        size="sm"
+                        variant={mode === m ? (m === "grant" ? "default" : m === "deny" ? "destructive" : "secondary") : "outline"}
+                        className="h-7 text-xs px-2"
+                        disabled={setMut.isPending}
+                        onClick={() => setMut.mutate({ userId: user.id, permission: p.id, mode: m === "default" ? null : m })}
+                      >
+                        {label}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Fechar</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

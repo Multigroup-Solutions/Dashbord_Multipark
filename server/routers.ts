@@ -374,6 +374,22 @@ function requireRole(userRole: string, minRole: string) {
   }
 }
 
+/** Deny explícito de uma permissão por utilizador (regra Jorge: "menos
+ * permissões por utilizador" — ex.: backoffice de despesas sem ver totais). */
+async function isPermissionDenied(userId: number, permission: string): Promise<boolean> {
+  const { getUserPermissionOverrides } = await import("./db");
+  const ov = await getUserPermissionOverrides(userId);
+  return ov[permission] === "deny";
+}
+
+/** Role mínimo + respeita o deny de finance.view_totals. */
+async function requireFinanceTotals(user: { id: number; role: string }, minRole = "backoffice") {
+  requireRole(user.role, minRole);
+  if (await isPermissionDenied(user.id, "finance.view_totals")) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para ver totais financeiros." });
+  }
+}
+
 // ─── APP ROUTER ───────────────────────────────────────────────────────────────
 
 // Migration runner one-shot (importado dentro do mutation para não puxar
@@ -1461,6 +1477,12 @@ export const appRouter = router({
           );
         }
         if (input?.userId) filters.userId = input.userId;
+        // Deny de finance.view_totals: mesmo admin só vê as PRÓPRIAS despesas
+        // (regra Jorge: "vê as despesas que ele meteu, mas não vê o total")
+        if (await isPermissionDenied(ctx.user.id, "finance.view_totals")) {
+          const rows = await getExpenses(filters);
+          return rows.filter((r: any) => r.expense.insertedById === ctx.user.id);
+        }
         return getExpenses(filters);
       }),
 
@@ -1730,8 +1752,9 @@ export const appRouter = router({
 
     // ── DASHBOARD STATS ──────────────────────────────────────────────────────
     stats: protectedProcedure.query(async ({ ctx }) => {
-      // Totais da empresa inteira — só admin+ (matriz do Jorge).
-      requireRole(ctx.user.role, "admin");
+      // Totais da empresa inteira — só admin+ (matriz do Jorge), e respeita o
+      // deny de finance.view_totals por utilizador.
+      await requireFinanceTotals(ctx.user, "admin");
       return getExpenseStats();
     }),
 
@@ -1976,6 +1999,87 @@ export const appRouter = router({
   }),
 
   // ── RH ───────────────────────────────────────────────────────────────────────────────────────
+  // ─── PERMISSÕES POR UTILIZADOR ─────────────────────────────────────────────
+  permissions: router({
+    // Catálogo (shared/permissions.ts) — qualquer utilizador autenticado
+    catalog: protectedProcedure.query(async () => {
+      const { PERMISSIONS } = await import("../shared/permissions");
+      return PERMISSIONS;
+    }),
+
+    // Overrides do próprio (para a UI esconder o que não deve mostrar)
+    mine: protectedProcedure.query(async ({ ctx }) => {
+      const { getUserPermissionOverrides } = await import("./db");
+      return getUserPermissionOverrides(ctx.user.id);
+    }),
+
+    // Todas as atribuições (página Sistema → Permissões)
+    assignments: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx.user.role, "admin");
+      const { listPermissionAssignments } = await import("./db");
+      return listPermissionAssignments();
+    }),
+
+    forUser: protectedProcedure
+      .input(z.object({ userId: z.number() }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        const { getUserPermissionOverrides } = await import("./db");
+        return getUserPermissionOverrides(input.userId);
+      }),
+
+    setForUser: protectedProcedure
+      .input(z.object({
+        userId: z.number(),
+        permission: z.string().min(1).max(64),
+        mode: z.enum(["grant", "deny"]).nullable(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        const { PERMISSION_IDS } = await import("../shared/permissions");
+        if (!PERMISSION_IDS.includes(input.permission as any)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Permissão desconhecida." });
+        }
+        const { setUserPermission } = await import("./db");
+        await setUserPermission(input.userId, input.permission, input.mode, ctx.user.id);
+        await logActivity({ userId: ctx.user.id, action: "set_permission", entity: "user", entityId: input.userId, details: `${input.permission} = ${input.mode ?? "(limpo)"}` });
+        return { success: true };
+      }),
+
+    // Cidades a que o utilizador tem acesso: a do centro de custos + extras
+    // por permissão. Admin+ (ou centro de custos de grupo) = todas.
+    myCityAccess: protectedProcedure.query(async ({ ctx }) => {
+      const all = { all: true as const, defaultCityId: null as number | null, cityIds: [] as number[] };
+      if (["admin", "super_admin"].includes(ctx.user.role)) return all;
+      const { getEmployeeByUserId, getUserPermissionOverrides, getDb } = await import("./db");
+      const ov = await getUserPermissionOverrides(ctx.user.id);
+      if (ov["city.all"] === "grant") return all;
+      const me = await getEmployeeByUserId(ctx.user.id);
+      if (!me?.employee?.projectId) return all; // sem ficha/centro de custos → não restringe
+      const db = await getDb();
+      if (!db) return all;
+      const { projects } = await import("../drizzle/schema");
+      const rows = await db.select({ id: projects.id, name: projects.name, level: projects.level, parentId: projects.parentId }).from(projects);
+      const byId = new Map(rows.map((p) => [p.id, p]));
+      // sobe a árvore até encontrar a cidade; grupo = vê tudo
+      let node = byId.get(me.employee.projectId) ?? null;
+      while (node && node.level !== "city") {
+        if (node.level === "group") return all;
+        node = node.parentId != null ? byId.get(node.parentId) ?? null : null;
+      }
+      if (!node) return all;
+      const cityIds = new Set<number>([node.id]);
+      const CITY_PERM_NAMES: Record<string, string> = { "city.extra.lisbon": "lisboa", "city.extra.porto": "porto", "city.extra.faro": "faro" };
+      for (const [perm, cityName] of Object.entries(CITY_PERM_NAMES)) {
+        if (ov[perm] === "grant") {
+          const c = rows.find((p) => p.level === "city" && p.name.trim().toLowerCase() === cityName);
+          if (c) cityIds.add(c.id);
+        }
+      }
+      return { all: false as const, defaultCityId: node.id, cityIds: Array.from(cityIds) };
+    }),
+  }),
+
   rh: router({
     // ── MY PROFILE (for extra/low-role users) ──────────────────────────────────────────────────
     me: protectedProcedure.query(async ({ ctx }) => {
@@ -5911,9 +6015,10 @@ export const appRouter = router({
       from: z.string(),
       to: z.string(),
       projectId: z.number().optional(),
-    })).query(({ ctx, input }) => {
-      // Margens, salários (com detalhe por pessoa) e comissões — admin+
-      requireRole(ctx.user.role, "admin");
+    })).query(async ({ ctx, input }) => {
+      // Margens, salários (com detalhe por pessoa) e comissões — admin+, e
+      // respeita o deny de finance.view_totals por utilizador
+      await requireFinanceTotals(ctx.user, "admin");
       return getBillingData(input);
     }),
   }),
@@ -6904,7 +7009,8 @@ export const appRouter = router({
         projectId: z.number().optional(),
       }).optional())
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        // Receitas — respeita o deny de finance.view_totals por utilizador
+        await requireFinanceTotals(ctx.user, "backoffice");
         return getMultiparkBookingStats(input ?? undefined);
       }),
 
@@ -7127,10 +7233,14 @@ export const appRouter = router({
       }),
 
     candidates: protectedProcedure
-      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }).optional())
+      .input(z.object({
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        // true = só elegíveis a Team Leader (chefias + permissão explícita)
+        forTeamLeader: z.boolean().optional(),
+      }).optional())
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
-        return listDriverCandidates(input?.date);
+        return listDriverCandidates(input?.date, { forTeamLeader: input?.forTeamLeader });
       }),
 
     assignments: protectedProcedure

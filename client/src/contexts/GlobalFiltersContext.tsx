@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useMemo, type ReactNode } from "react";
+import { createContext, useContext, useState, useMemo, useEffect, useRef, type ReactNode } from "react";
 import { trpc } from "@/lib/trpc";
 
 interface DateRange {
@@ -32,14 +32,34 @@ export function GlobalFiltersProvider({ children }: { children: ReactNode }) {
   const [dateRange, setDateRange] = useState<DateRange>({ from: null, to: null });
 
   const { data: allProjects, isLoading } = trpc.projects.list.useQuery();
+  // Acesso por cidade (pedido Jorge): cada um vê a cidade do seu centro de
+  // custos (+ extras por permissão); admin/grupo vê todas. O seletor global só
+  // mostra as permitidas e entra por defeito na cidade da pessoa.
+  const { data: cityAccess } = trpc.permissions.myCityAccess.useQuery();
 
   const cities = useMemo(() => {
     if (!allProjects) return [];
-    return allProjects
+    let list = allProjects
       .filter((p: any) => p.level === "city")
-      .map((p: any) => ({ id: p.id, name: p.name }))
-      .sort((a: any, b: any) => a.name.localeCompare(b.name));
-  }, [allProjects]);
+      .map((p: any) => ({ id: p.id, name: p.name }));
+    if (cityAccess && !cityAccess.all) {
+      const allowed = new Set(cityAccess.cityIds);
+      list = list.filter((c: any) => allowed.has(c.id));
+    }
+    return list.sort((a: any, b: any) => a.name.localeCompare(b.name));
+  }, [allProjects, cityAccess]);
+
+  // Entrada por defeito: a cidade do centro de custos (uma vez por sessão)
+  const appliedDefaultCity = useRef(false);
+  useEffect(() => {
+    if (appliedDefaultCity.current || !cityAccess) return;
+    if (!cityAccess.all && cityAccess.defaultCityId != null) {
+      appliedDefaultCity.current = true;
+      setCityId((prev) => prev ?? cityAccess.defaultCityId);
+    } else {
+      appliedDefaultCity.current = true;
+    }
+  }, [cityAccess]);
 
   const brands = useMemo(() => {
     if (!allProjects) return [];

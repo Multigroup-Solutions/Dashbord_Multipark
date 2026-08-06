@@ -74,6 +74,7 @@ import {
   ArrowUpFromLine,
   XCircle,
   RefreshCw,
+  ShieldCheck,
   CalendarCheck,
   SlidersHorizontal,
   Bell,
@@ -189,6 +190,7 @@ const menuGroups: MenuGroup[] = [
     minRole: "admin",
     items: [
       { icon: Users, label: "Utilizadores", path: "/utilizadores" },
+      { icon: ShieldCheck, label: "Permissões", path: "/permissoes" },
       { icon: RefreshCw, label: "Sincronização", path: "/multipark/sync" },
       { icon: Key, label: "API Keys", path: "/api-keys" },
       { icon: ScrollText, label: "Logs", path: "/logs" },

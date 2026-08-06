@@ -17,6 +17,7 @@ import MarketingPage from "./pages/MarketingPage";
 import ShiftHandoverPage from "./pages/ShiftHandoverPage";
 import OperationalPage from "./pages/OperationalPage";
 import ApiKeysPage from "./pages/ApiKeysPage";
+import PermissionsPage from "./pages/PermissionsPage";
 import ComplaintsPage from "./pages/ComplaintsPage";
 import GoogleReviewsPage from "./pages/GoogleReviewsPage";
 import TrainingPage from "./pages/TrainingPage";
@@ -214,6 +215,9 @@ function Router() {
       </Route>
       <Route path="/api-keys">
         {() => (<DashboardLayout><ApiKeysPage /></DashboardLayout>)}
+      </Route>
+      <Route path="/permissoes">
+        {() => (<DashboardLayout><PermissionsPage /></DashboardLayout>)}
       </Route>
       <Route path="/financeiro">
         {() => (<DashboardLayout><FinanceiroDashboard /></DashboardLayout>)}
