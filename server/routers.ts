@@ -5728,36 +5728,55 @@ export const appRouter = router({
       return getServiceStats(input?.month, input?.year);
     }),
 
-    // Extra services from Multipark bookings
+    // Serviços extra das reservas — FONTE: BD local (multipark_booking_extras,
+    // sincronizada do /report a cada 15min). FIX 2026-08-06: antes chamava a
+    // API ao vivo com UMA chave (= só um parque, lento, incompleto) e mostrava
+    // a ALOCAÇÃO como matrícula. Agora: todos os parques, instantâneo,
+    // matrícula/cliente reais via join à reserva.
     multiparkExtras: protectedProcedure.input(z.object({
       startDate: z.string(),
       endDate: z.string(),
     })).query(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
-      const report = await getBookingsReport(input.startDate, input.endDate, "checkout");
-      const services: Array<{
-        bookingId: string;
-        licensePlate: string;
-        parkName: string;
-        checkOut: string;
-        serviceName: string;
-        price: number;
-        done: boolean;
-      }> = [];
-      for (const b of report.bookings || []) {
-        const extras: any[] = b.extraServices || [];
-        for (const s of extras) {
-          services.push({
-            bookingId: b.id,
-            licensePlate: b.allocation || "",
-            parkName: b.park?.name || "",
-            checkOut: b.checkOutDate || "",
-            serviceName: s.name,
-            price: s.price || 0,
-            done: s.done ?? true,
-          });
-        }
-      }
+      const { getDb } = await import("./db");
+      const db = await getDb();
+      if (!db) return { total: 0, services: [] };
+      const { multiparkBookingExtras, multiparkBookings } = await import("../drizzle/schema");
+      const { and, gte, lte, eq, sql } = await import("drizzle-orm");
+      const rows = await db
+        .select({
+          bookingId: multiparkBookingExtras.bookingExternalId,
+          bookingNumber: multiparkBookings.bookingNumber,
+          licensePlate: multiparkBookings.licensePlate,
+          clientFirstName: multiparkBookings.clientFirstName,
+          clientLastName: multiparkBookings.clientLastName,
+          parkName: multiparkBookings.parkName,
+          city: multiparkBookings.city,
+          checkOut: multiparkBookings.checkOut,
+          bookingStatus: multiparkBookings.status,
+          serviceName: multiparkBookingExtras.name,
+          price: multiparkBookingExtras.price,
+          done: multiparkBookingExtras.done,
+        })
+        .from(multiparkBookingExtras)
+        .innerJoin(multiparkBookings, eq(multiparkBookings.externalId, multiparkBookingExtras.bookingExternalId))
+        .where(and(
+          gte(multiparkBookings.checkOut, input.startDate),
+          lte(multiparkBookings.checkOut, input.endDate + " 23:59:59"),
+          sql`${multiparkBookings.status} != 'CANCELLED'`,
+        ))
+        .limit(5000);
+      const services = rows.map((r) => ({
+        bookingId: r.bookingId,
+        bookingNumber: r.bookingNumber,
+        licensePlate: r.licensePlate ?? "",
+        clientName: `${r.clientFirstName ?? ""} ${r.clientLastName ?? ""}`.trim(),
+        parkName: r.city && r.parkName && !r.parkName.includes(r.city) ? `${r.parkName} ${r.city}` : (r.parkName ?? ""),
+        checkOut: r.checkOut ?? "",
+        serviceName: r.serviceName ?? "?",
+        price: Number(r.price ?? 0),
+        done: Boolean(r.done),
+      }));
       return { total: services.length, services };
     }),
   }),

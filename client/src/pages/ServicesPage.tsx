@@ -222,9 +222,10 @@ export default function ServicesPage() {
               size="sm"
               disabled={filtered.length === 0}
               onClick={() => {
-                const headers = ["Serviço","Matrícula","Parque","Preço","Check-out","Estado"];
+                const headers = ["Serviço","Cliente","Matrícula","Parque","Preço","Check-out","Estado"];
                 const rows = filtered.map((s: any) => [
                   (s.serviceName || "").replace(/;/g, ","),
+                  (s.clientName || "").replace(/;/g, ","),
                   s.licensePlate || "",
                   (s.parkName || "").replace(/;/g, ","),
                   (s.price || 0).toFixed(2),
@@ -249,6 +250,7 @@ export default function ServicesPage() {
               <thead>
                 <tr className="border-b text-left">
                   <Th k="serviceName" label="Serviço" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                  <Th k="clientName" label="Cliente" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                   <Th k="licensePlate" label="Matrícula" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                   <Th k="parkName" label="Parque" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                   <Th k="price" label="Preço" align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
@@ -260,7 +262,8 @@ export default function ServicesPage() {
                 {sortedServices.map((s: any, i: number) => (
                   <tr key={`${s.bookingId}-${i}`} className="border-b hover:bg-muted/50">
                     <td className="p-2 font-medium">{s.serviceName}</td>
-                    <td className="p-2">{s.licensePlate || "—"}</td>
+                    <td className="p-2 text-xs">{(s as any).clientName || "—"}</td>
+                    <td className="p-2 font-mono text-xs">{s.licensePlate || "—"}</td>
                     <td className="p-2">{s.parkName || "—"}</td>
                     <td className="p-2 text-right">{(s.price || 0).toFixed(2)} €</td>
                     <td className="p-2 text-xs">{s.checkOut ? fmtPTDate(s.checkOut) : "—"}</td>
