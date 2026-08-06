@@ -12,9 +12,10 @@ import { toast } from "sonner";
 import { useState, useMemo } from "react";
 import {
   Trophy, RefreshCw, TrendingUp, TrendingDown, Minus, Clock,
-  Zap, AlertTriangle, Award, Download, Pencil, ChevronLeft, ChevronRight,
+  Zap, AlertTriangle, Award, Download, Pencil,
 } from "lucide-react";
 import { useTableSort, Th } from "@/components/SortableTable";
+import DateRangeNav, { rangeFor, type DateGran } from "@/components/DateRangeNav";
 import { useOpenEmployee } from "@/hooks/useOpenEmployee";
 import { fmtPTDate } from "@/lib/lisbonTime";
 
@@ -29,14 +30,37 @@ function getWeekNumber(d: Date): number {
 export default function PerformancePage() {
   const { user } = useAuth();
   const now = new Date();
-  const [week, setWeek] = useState(getWeekNumber(now));
-  const [year, setYear] = useState(now.getFullYear());
   const [editing, setEditing] = useState<any>(null);
+
+  // Filtro de datas TRANSVERSAL (igual ao do Operacional): Dia/Semana/Mês/Ano
+  // com setinhas. Semana única = modo normal (editável, tendência); qualquer
+  // outro período = ranking AGREGADO (soma das semanas que o período apanha).
+  const [range, setRange] = useState(() => {
+    const r = rangeFor("week", now);
+    return { start: r.start, end: r.end, gran: "week" as DateGran };
+  });
+  const singleWeek = range.gran === "week" || range.gran === "day";
+  const anchor = new Date(`${range.start || rangeFor("week", now).start}T00:00:00`);
+  const week = getWeekNumber(anchor);
+  const year = anchor.getFullYear();
 
   const prevWeek = week > 1 ? week - 1 : 53;
   const prevYear = week > 1 ? year : year - 1;
 
-  const { data: evaluations = [], isLoading } = trpc.performance.list.useQuery({ weekNumber: week, yearNumber: year });
+  const { data: weekEvaluations = [], isLoading } = trpc.performance.list.useQuery({ weekNumber: week, yearNumber: year });
+  const { data: rangeRows = [] } = trpc.performance.range.useQuery(
+    { from: range.start, to: range.end },
+    { enabled: !singleWeek && !!range.start && !!range.end },
+  );
+  // No modo agregado, mapeia para a mesma forma da tabela (sem edição)
+  const evaluations = useMemo(() => {
+    if (singleWeek) return weekEvaluations;
+    return (rangeRows as any[]).map((r) => ({
+      ...r,
+      id: r.employeeId,
+      notes: `${r.weeks} semana(s)`,
+    }));
+  }, [singleWeek, weekEvaluations, rangeRows]);
   const lastWorkedMap = trpc.rh.lastWorkedMap.useQuery();
   const openEmployee = useOpenEmployee();
   const { data: prevEvaluations = [] } = trpc.performance.list.useQuery({ weekNumber: prevWeek, yearNumber: prevYear });
@@ -116,29 +140,19 @@ export default function PerformancePage() {
           <p className="text-muted-foreground">Ranking semanal dos condutores</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Setinhas de semana (padrão transversal): ◀ S32/2026 ▶ + Esta semana */}
-          <div className="flex items-center gap-1.5">
-            <Button variant="outline" size="icon" className="h-9 w-8" title="Semana anterior"
-              onClick={() => { if (week > 1) setWeek(week - 1); else { setWeek(53); setYear(year - 1); } }}>
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-            <span className="text-sm font-medium tabular-nums min-w-[86px] text-center">S{week}/{year}</span>
-            <Button variant="outline" size="icon" className="h-9 w-8" title="Semana seguinte"
-              onClick={() => { if (week < 53) setWeek(week + 1); else { setWeek(1); setYear(year + 1); } }}>
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-            <Button
-              variant={week === getWeekNumber(now) && year === now.getFullYear() ? "secondary" : "outline"}
-              size="sm" className="h-9"
-              onClick={() => { setWeek(getWeekNumber(now)); setYear(now.getFullYear()); }}
-            >
-              Esta semana
-            </Button>
-          </div>
+          {/* Filtro transversal (igual ao Operacional): Dia/Semana/Mês/Ano + ◀ ▶ */}
+          <DateRangeNav
+            start={range.start}
+            end={range.end}
+            gran={range.gran}
+            showAll={false}
+            onChange={(s, e, g) => setRange({ start: s, end: e, gran: g })}
+          />
+          {singleWeek && <Badge variant="secondary" className="tabular-nums">S{week}/{year}</Badge>}
           <Button variant="outline" size="sm" onClick={exportCSV} disabled={evaluations.length === 0}>
             <Download className="w-4 h-4 mr-2" /> CSV
           </Button>
-          {isSupervisor && (
+          {isSupervisor && singleWeek && (
             <Button onClick={handleGenerate} disabled={generateMut.isPending} size="sm">
               <RefreshCw className={`w-4 h-4 mr-2 ${generateMut.isPending ? "animate-spin" : ""}`} />
               {generateMut.isPending ? "A gerar..." : evaluations.length > 0 ? "Recalcular" : "Gerar Avaliação"}
@@ -180,7 +194,7 @@ export default function PerformancePage() {
         </Card>
       ) : (
         <Card>
-          <CardHeader><CardTitle className="text-base">Ranking — Semana {week}/{year}</CardTitle></CardHeader>
+          <CardHeader><CardTitle className="text-base">Ranking — {singleWeek ? `Semana ${week}/${year}` : `${range.start} a ${range.end} (agregado)`}</CardTitle></CardHeader>
           <CardContent>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[900px] text-sm">
@@ -199,7 +213,7 @@ export default function PerformancePage() {
                     <Th k="totalPoints" label="Total" align="center" className="font-bold" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                     <Th k="weeklyCost" label="Custo" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                     <th className="p-2">Notas</th>
-                    {isSupervisor && <th className="p-2 w-10"></th>}
+                    {isSupervisor && singleWeek && <th className="p-2 w-10"></th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -207,7 +221,7 @@ export default function PerformancePage() {
                     const name = employeeMap.get(ev.employeeId) ?? ev.employeeName ?? `#${ev.employeeId}`;
                     const currentPos = rankByEmployee.get(ev.employeeId) ?? 0;
                     const isTop3 = currentPos <= 3;
-                    const prevPos = prevPositionMap.get(ev.employeeId);
+                    const prevPos = singleWeek ? prevPositionMap.get(ev.employeeId) : undefined;
                     const delta = prevPos != null ? prevPos - currentPos : null; // +ve = subiu
                     return (
                       <tr key={ev.id} className={`border-b hover:bg-muted/50 ${isTop3 ? "bg-yellow-50/30" : ""}`}>
@@ -216,7 +230,7 @@ export default function PerformancePage() {
                         </td>
                         <td className="p-2 text-center">
                           {delta == null ? (
-                            <Badge variant="outline" className="text-[10px]">novo</Badge>
+                            singleWeek ? <Badge variant="outline" className="text-[10px]">novo</Badge> : <span className="text-muted-foreground text-xs">—</span>
                           ) : delta > 0 ? (
                             <span className="text-green-700 text-xs inline-flex items-center gap-0.5">
                               <TrendingUp className="w-3 h-3" /> {delta}
@@ -260,7 +274,7 @@ export default function PerformancePage() {
                         <td className="p-2 text-xs text-muted-foreground max-w-[150px] truncate" title={ev.notes ?? ""}>
                           {ev.notes ?? <span className="text-muted-foreground/50">—</span>}
                         </td>
-                        {isSupervisor && (
+                        {isSupervisor && singleWeek && (
                           <td className="p-2">
                             <Button variant="ghost" size="icon" className="w-7 h-7" onClick={() => setEditing(ev)}>
                               <Pencil className="w-3 h-3" />

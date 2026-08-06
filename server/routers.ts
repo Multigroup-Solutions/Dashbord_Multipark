@@ -5798,6 +5798,58 @@ export const appRouter = router({
 
   // ─── AVALIAÇÃO DE DESEMPENHO ─────────────────────────────────────────────
   performance: router({
+    // Agregado por período (Dia/Semana/Mês/Ano — padrão de datas do Jorge):
+    // soma as semanas ISO que intersectam [from,to] por colaborador.
+    range: protectedProcedure.input(z.object({
+      from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    })).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "frontoffice");
+      // semanas ISO que intersectam o período
+      const weeks: Array<{ week: number; year: number }> = [];
+      const d = new Date(`${input.from}T00:00:00`);
+      const dow = (d.getDay() + 6) % 7;
+      d.setDate(d.getDate() - dow); // segunda da 1ª semana
+      const end = new Date(`${input.to}T00:00:00`);
+      const isoWeek = (x: Date) => {
+        const t = new Date(Date.UTC(x.getFullYear(), x.getMonth(), x.getDate()));
+        const dn = t.getUTCDay() || 7;
+        t.setUTCDate(t.getUTCDate() + 4 - dn);
+        const ys = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+        return { week: Math.ceil((((t.getTime() - ys.getTime()) / 86400000) + 1) / 7), year: t.getUTCFullYear() };
+      };
+      while (d <= end && weeks.length < 60) {
+        weeks.push(isoWeek(d));
+        d.setDate(d.getDate() + 7);
+      }
+      const rows: any[] = [];
+      for (const w of weeks) {
+        rows.push(...await getPerformanceEvaluations({ weekNumber: w.week, yearNumber: w.year }));
+      }
+      // agrega por colaborador
+      const byEmp = new Map<number, any>();
+      for (const r of rows) {
+        const a = byEmp.get(r.employeeId) ?? {
+          employeeId: r.employeeId, hoursWorked: 0, movementsCount: 0,
+          incidentsPositive: 0, incidentsNegative: 0, positivePoints: 0,
+          negativePoints: 0, totalPoints: 0, weeklyCost: 0, weeks: 0,
+        };
+        a.hoursWorked += Number(r.hoursWorked || 0);
+        a.movementsCount += Number(r.movementsCount || 0);
+        a.incidentsPositive += Number(r.incidentsPositive || 0);
+        a.incidentsNegative += Number(r.incidentsNegative || 0);
+        a.positivePoints += Number(r.positivePoints || 0);
+        a.negativePoints += Number(r.negativePoints || 0);
+        a.totalPoints += Number(r.totalPoints || 0);
+        a.weeklyCost += Number(r.weeklyCost || 0);
+        a.weeks += 1;
+        byEmp.set(r.employeeId, a);
+      }
+      return Array.from(byEmp.values())
+        .map((a) => ({ ...a, movementsPerHour: a.hoursWorked > 0 ? Math.round((a.movementsCount / a.hoursWorked) * 10) / 10 : 0 }))
+        .sort((a, b) => b.totalPoints - a.totalPoints);
+    }),
+
     list: protectedProcedure.input(z.object({
       weekNumber: z.number().optional(),
       yearNumber: z.number().optional(),

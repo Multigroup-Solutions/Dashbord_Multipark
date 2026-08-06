@@ -5,7 +5,7 @@ import { useOpenEmployee } from "@/hooks/useOpenEmployee";
 import { fmtPTDate } from "@/lib/lisbonTime";
 import { buildAvailabilityMessage, AVAILABILITY_KINDS, type AvailabilityMessageKind } from "@shared/availabilityMessages";
 import { useTableSort, Th } from "@/components/SortableTable";
-import { DayNav, WeekNav } from "@/components/DateRangeNav";
+import { UniDateNav, mondayOf } from "@/components/DateRangeNav";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -177,7 +177,7 @@ export default function ExtrasDiaPage() {
         </div>
         <div className="space-y-1">
           <Label htmlFor="baseDate" className="text-xs">Data base</Label>
-          <DayNav date={baseDate} onChange={setBaseDate} />
+          <UniDateNav date={baseDate} onChange={setBaseDate} />
           <Select value={city} onValueChange={(v) => setCity(v as ExtraCityId)}>
             <SelectTrigger className="w-32 h-9"><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -1639,7 +1639,7 @@ export function AvailabilitySection() {
         <div className="flex items-end gap-3 flex-wrap">
           <div className="space-y-1">
             <Label className="text-xs">Semana</Label>
-            <WeekNav weekStart={effectiveWeek} onChange={setWeekStart} />
+            <UniDateNav date={effectiveWeek} defaultGran="week" onChange={(d) => setWeekStart(mondayOf(new Date(d + "T00:00:00")))} />
           </div>
           {hints.data && (
             <div className="flex gap-2">

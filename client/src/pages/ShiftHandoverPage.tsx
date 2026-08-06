@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
-import { DayNav } from "@/components/DateRangeNav";
+import { UniDateNav } from "@/components/DateRangeNav";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -115,7 +115,7 @@ function HandoverForm() {
     <Card>
       <CardHeader className="pb-3">
         <div className="flex flex-wrap items-end gap-3">
-          <div><Label className="text-xs mb-1 block">Dia</Label><DayNav date={date} onChange={setDate} /></div>
+          <div><Label className="text-xs mb-1 block">Dia</Label><UniDateNav date={date} onChange={setDate} /></div>
           <div>
             <Label className="text-xs mb-1 block">Turno</Label>
             <div className="flex gap-1">
@@ -285,7 +285,7 @@ function SupervisorDashboard() {
   return (
     <div className="space-y-4">
       <div className="flex items-end gap-2">
-        <div><Label className="text-xs mb-1 block">Dia</Label><DayNav date={date} onChange={setDate} /></div>
+        <div><Label className="text-xs mb-1 block">Dia</Label><UniDateNav date={date} onChange={setDate} /></div>
       </div>
       {isLoading || !data ? <p className="text-sm text-muted-foreground">A carregar…</p> : (
         <>

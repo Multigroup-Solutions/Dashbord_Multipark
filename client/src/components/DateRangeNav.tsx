@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -53,33 +54,6 @@ const GRAN_LABEL: Record<Exclude<DateGran, "custom">, string> = {
   day: "Dia", week: "Semana", month: "Mês", year: "Ano",
 };
 
-/**
- * Navegador de UM dia (padrão transversal do Jorge): ◀ data ▶ + botão Hoje.
- * Para páginas por dia: Extras-Dia, Passagem de Turno, Atividade do Dia.
- */
-export function DayNav({ date, onChange }: { date: string; onChange: (date: string) => void }) {
-  const step = (dir: -1 | 1) => {
-    const d = new Date(`${date || iso(new Date())}T00:00:00`);
-    d.setDate(d.getDate() + dir);
-    onChange(iso(d));
-  };
-  const today = iso(new Date());
-  return (
-    <div className="flex items-center gap-1.5">
-      <Button variant="outline" size="icon" className="h-9 w-8 shrink-0" onClick={() => step(-1)} title="Dia anterior">
-        <ChevronLeft className="h-4 w-4" />
-      </Button>
-      <Input type="date" value={date} className="w-[150px] h-9" onChange={(e) => e.target.value && onChange(e.target.value)} />
-      <Button variant="outline" size="icon" className="h-9 w-8 shrink-0" onClick={() => step(1)} title="Dia seguinte">
-        <ChevronRight className="h-4 w-4" />
-      </Button>
-      <Button variant={date === today ? "secondary" : "outline"} size="sm" className="h-9" onClick={() => onChange(today)}>
-        Hoje
-      </Button>
-    </div>
-  );
-}
-
 /** Segunda-feira da semana que contém a data. */
 export function mondayOf(d: Date): string {
   const a = new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -89,36 +63,32 @@ export function mondayOf(d: Date): string {
 }
 
 /**
- * Navegador de UMA semana: ◀ 11/08–17/08 ▶ + "Esta semana". Para páginas
- * semanais: Disponibilidade, Avaliação Individual.
+ * O MESMO filtro completo (Dia/Semana/Mês/Ano + ◀ ▶ + datas) para páginas que
+ * trabalham com UM dia-âncora (regra Jorge: "os filtros todos iguais aos do
+ * operacional"). Gere o período internamente e devolve o início do range —
+ * escolher "Mês" e andar com as setas salta mês a mês; a página usa o 1º dia.
  */
-export function WeekNav({ weekStart, onChange }: { weekStart: string; onChange: (weekStart: string) => void }) {
-  const step = (dir: -1 | 1) => {
-    const d = new Date(`${weekStart || mondayOf(new Date())}T00:00:00`);
-    d.setDate(d.getDate() + 7 * dir);
-    onChange(iso(d));
-  };
-  const thisMonday = mondayOf(new Date());
-  const label = (() => {
-    if (!weekStart) return "—";
-    const s = new Date(`${weekStart}T00:00:00`);
-    const e = new Date(s); e.setDate(s.getDate() + 6);
-    const f = (d: Date) => `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`;
-    return `${f(s)}–${f(e)}`;
-  })();
+export function UniDateNav({
+  date, onChange, defaultGran = "day",
+}: {
+  date: string;
+  onChange: (date: string) => void;
+  defaultGran?: DateGran;
+}) {
+  const [gran, setGran] = useState<DateGran>(defaultGran);
+  const [end, setEnd] = useState<string>(() => rangeFor(defaultGran, date ? new Date(`${date}T00:00:00`) : new Date()).end);
   return (
-    <div className="flex items-center gap-1.5">
-      <Button variant="outline" size="icon" className="h-9 w-8 shrink-0" onClick={() => step(-1)} title="Semana anterior">
-        <ChevronLeft className="h-4 w-4" />
-      </Button>
-      <span className="text-sm font-medium tabular-nums min-w-[100px] text-center">{label}</span>
-      <Button variant="outline" size="icon" className="h-9 w-8 shrink-0" onClick={() => step(1)} title="Semana seguinte">
-        <ChevronRight className="h-4 w-4" />
-      </Button>
-      <Button variant={weekStart === thisMonday ? "secondary" : "outline"} size="sm" className="h-9" onClick={() => onChange(thisMonday)}>
-        Esta semana
-      </Button>
-    </div>
+    <DateRangeNav
+      start={date}
+      end={end || date}
+      gran={gran}
+      showAll={false}
+      onChange={(s, e, g) => {
+        setGran(g);
+        setEnd(e);
+        onChange(s || e);
+      }}
+    />
   );
 }
 
