@@ -1,32 +1,37 @@
-// Página "Módulos" (design Multipark Mobile 2a): pesquisa + grupos com todas
-// as entradas da app, com as MESMAS permissões da sidebar (é a mesma fonte).
+// Hub "Menu" (modelo "Dashboard Multipark v2" do Claude Design): secções com
+// barrinha azul + grelha de cartões-atalho (ícone em quadrado azul sólido,
+// label uppercase, hover eleva). ?g=<grupo> mostra só esse grupo; sem g mostra
+// tudo. Igual em desktop e telemóvel.
 import { useMemo, useState } from "react";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { Search, ChevronRight } from "lucide-react";
-import { getFilteredMenuGroups, topLevelItems, hasRole } from "@/components/DashboardLayout";
+import { Search } from "lucide-react";
+import { getFilteredHubGroups } from "@/components/DashboardLayout";
 
 export default function ModulesPage() {
   const { user } = useAuth();
   const [, navigate] = useLocation();
+  const search = useSearch();
+  const activeGroup = new URLSearchParams(search).get("g");
   const [q, setQ] = useState("");
   const role = user?.role ?? "user";
 
   const groups = useMemo(() => {
-    const base = getFilteredMenuGroups(role);
-    const tops = topLevelItems.filter((i) => !i.minRole || hasRole(role, i.minRole));
-    const all = tops.length ? [{ label: "Geral", items: tops }, ...base] : base;
+    let all = getFilteredHubGroups(role);
+    if (activeGroup) all = all.filter((g) => g.id === activeGroup);
     const needle = q.trim().toLowerCase();
-    if (!needle) return all;
-    return all
-      .map((g) => ({ ...g, items: g.items.filter((i) => i.label.toLowerCase().includes(needle)) }))
-      .filter((g) => g.items.length > 0);
-  }, [role, q]);
+    if (needle) {
+      all = all
+        .map((g) => ({ ...g, items: g.items.filter((i) => i.label.toLowerCase().includes(needle)) }))
+        .filter((g) => g.items.length > 0);
+    }
+    return all;
+  }, [role, activeGroup, q]);
 
   return (
-    <div className="p-4 space-y-4 max-w-lg mx-auto">
-      {/* Pesquisa (pílula, como no design) */}
-      <div className="flex items-center gap-2.5 bg-white border border-slate-200 rounded-full px-4 h-11 shadow-sm">
+    <div className="space-y-6 max-w-[1240px]">
+      {/* Pesquisa */}
+      <div className="flex items-center gap-2.5 bg-white border border-slate-200 rounded-full px-4 h-11 shadow-sm max-w-md">
         <Search className="w-4 h-4 text-slate-400 shrink-0" />
         <input
           value={q}
@@ -37,27 +42,33 @@ export default function ModulesPage() {
       </div>
 
       {groups.map((g) => (
-        <div key={g.label} className="space-y-2">
-          <span className="block text-[11px] font-bold tracking-[.12em] uppercase text-slate-400 px-0.5">
-            {g.label}
-          </span>
-          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-            {g.items.map((m, i) => (
+        <section key={g.id}>
+          {/* Cabeçalho de secção: barrinha azul + título uppercase + contagem */}
+          <div className="flex items-center gap-2.5 mb-3">
+            <span className="w-1 h-4 rounded-sm bg-primary inline-block" />
+            <h2 className="m-0 font-display text-xs font-bold tracking-[.12em] text-[#0c1f3f] uppercase">
+              {g.label}
+            </h2>
+            <span className="text-xs text-slate-400">· {g.items.length} atalhos</span>
+          </div>
+          <div className="grid gap-3 md:gap-3.5 grid-cols-2 md:[grid-template-columns:repeat(auto-fill,minmax(190px,1fr))]">
+            {g.items.map((m) => (
               <button
-                key={m.path}
+                key={m.path + m.label}
                 type="button"
                 onClick={() => navigate(m.path)}
-                className={`w-full flex items-center gap-3 px-3.5 min-h-[50px] text-left hover:bg-slate-50 transition-colors ${i > 0 ? "border-t border-slate-100" : ""}`}
+                className="group flex flex-col items-start gap-3 bg-white border border-slate-200 rounded-[14px] p-4 md:p-[18px] text-left shadow-[0_1px_2px_rgba(12,31,63,0.05)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_8px_20px_rgba(12,31,63,0.10)] hover:border-primary cursor-pointer"
               >
-                <span className="w-8 h-8 rounded-[9px] bg-[#f0f4ff] text-[#0055d2] flex items-center justify-center shrink-0">
-                  <m.icon className="w-4 h-4" />
+                <span className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">
+                  <m.icon className="w-5 h-5" />
                 </span>
-                <span className="flex-1 text-[13.5px] font-semibold text-slate-700">{m.label}</span>
-                <ChevronRight className="w-4 h-4 text-slate-300" />
+                <span className="font-display text-[13px] font-semibold text-[#0c1f3f] uppercase tracking-[.02em]">
+                  {m.label}
+                </span>
               </button>
             ))}
           </div>
-        </div>
+        </section>
       ))}
       {groups.length === 0 && (
         <p className="text-center text-slate-400 text-sm py-8">Nenhum módulo encontrado.</p>

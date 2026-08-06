@@ -205,6 +205,38 @@ export const menuGroups: MenuGroup[] = [
   },
 ];
 
+
+// ─── Grupos do HUB (modelo "Dashboard Multipark v2" do Claude Design) ────────
+// Sidebar/tab bar mostram Menu + estes grupos; o conteúdo é o launcher de
+// cartões em /modulos. "Dashboards" é um grupo como os outros no v2.
+export type HubGroup = MenuGroup & { id: string };
+export const hubGroups: HubGroup[] = [
+  {
+    id: "dashboards",
+    label: "Dashboards",
+    icon: BarChart3,
+    minRole: "backoffice",
+    items: [
+      { icon: BarChart3, label: "Geral", path: "/dashboards" },
+      { icon: Receipt, label: "Financeiro", path: "/financeiro" },
+      { icon: Truck, label: "Operações", path: "/operacoes-dashboard" },
+      { icon: Users, label: "Pessoas", path: "/pessoas-dashboard" },
+      { icon: MessageSquareWarning, label: "Suporte", path: "/suporte-dashboard" },
+      { icon: Megaphone, label: "Marketing", path: "/marketing-dashboard" },
+    ],
+  },
+  ...menuGroups.map(g => ({
+    ...g,
+    id: g.label.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase(),
+  })),
+];
+export function getFilteredHubGroups(userRole: string): HubGroup[] {
+  return hubGroups
+    .filter(g => !g.minRole || hasRole(userRole, g.minRole))
+    .map(g => ({ ...g, items: g.items.filter(i => !i.minRole || hasRole(userRole, i.minRole)) }))
+    .filter(g => g.items.length > 0);
+}
+
 const allMenuItems = [...topLevelItems, ...menuGroups.flatMap(g => g.items)];
 const allMenuPaths = new Set(allMenuItems.map(i => i.path));
 
@@ -382,9 +414,8 @@ function DashboardLayoutContent({
     );
   };
   const pontoStatus = pontoQ.data?.employeeId ? pontoQ.data.status : null;
-  const filteredGroups = getFilteredMenuGroups(userRole);
-  const filteredTopItems = topLevelItems.filter(i => !i.minRole || hasRole(userRole, i.minRole));
-  const filteredItems = [...filteredTopItems, ...filteredGroups.flatMap(g => g.items)];
+  const filteredGroups = getFilteredHubGroups(userRole);
+  const filteredItems = filteredGroups.flatMap(g => g.items);
   const activeMenuItem = allMenuItems.find(item => item.path === location);
   const isMobile = useIsMobile();
 
@@ -498,64 +529,60 @@ function DashboardLayoutContent({
             </div>
           </SidebarHeader>
 
-          <SidebarContent className="gap-0">
-            {filteredTopItems.length > 0 && (
-              <SidebarGroup>
-                <SidebarGroupContent>
-                  <SidebarMenu>
-                    {filteredTopItems.map(item => {
-                      const isActive = location === item.path || location.startsWith(item.path + "/");
-                      return (
-                        <SidebarMenuItem key={item.path}>
-                          <SidebarMenuButton
-                            isActive={isActive}
-                            onClick={() => navigate(item.path)}
-                            tooltip={item.label}
-                            className="h-9 rounded-lg transition-all font-normal data-[active=true]:!bg-primary data-[active=true]:!text-primary-foreground data-[active=true]:font-semibold hover:data-[active=true]:!bg-primary"
-                          >
-                            <item.icon className="h-4 w-4" />
-                            <span>{item.label}</span>
-                          </SidebarMenuButton>
-                        </SidebarMenuItem>
-                      );
-                    })}
-                  </SidebarMenu>
-                </SidebarGroupContent>
-              </SidebarGroup>
-            )}
+          <SidebarContent className="gap-0 px-1">
+            {/* Placa "Menu" (modelo v2): hub com todos os atalhos */}
+            <SidebarGroup className="py-0.5">
+              <button
+                type="button"
+                onClick={() => { setOpenGroup(null); navigate("/modulos"); }}
+                className={`flex w-full items-center gap-3 rounded-xl px-3.5 h-12 text-[15px] font-semibold transition-all ${
+                  location === "/modulos"
+                    ? "bg-primary text-white shadow-[0_4px_10px_rgba(0,85,210,0.28)]"
+                    : "text-slate-600 hover:bg-primary/10 hover:text-primary"
+                }`}
+              >
+                <LayoutDashboard className="h-5 w-5 shrink-0" />
+                {!isCollapsed && <span className="flex-1 text-left truncate">Menu</span>}
+              </button>
+            </SidebarGroup>
             {filteredGroups.map(group => {
+              const groupActive = group.items.some(i => location === i.path || location.startsWith(i.path + "/"));
+              const isOpen = isCollapsed || openGroup === group.label;
+              const GIcon = group.icon ?? LayoutDashboard;
               return (
                 <Collapsible
                   key={group.label}
-                  // No modo colapsado (só ícones) o trigger do grupo fica
-                  // invisível — forçar tudo aberto para os ícones aparecerem.
-                  open={isCollapsed || openGroup === group.label}
+                  open={isOpen}
                   onOpenChange={(o) => setOpenGroup(o ? group.label : null)}
                   className="group/collapsible"
                 >
                   <SidebarGroup className="py-0.5">
                     <CollapsibleTrigger asChild>
-                      {(() => {
-                        const groupActive = group.items.some(i => location === i.path || location.startsWith(i.path + "/"));
-                        const GIcon = group.icon;
-                        return (
-                          <button
-                            type="button"
-                            className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 h-10 text-[13.5px] transition-colors hover:bg-sidebar-accent [&[data-state=open]>svg.mpk-chev]:rotate-180 ${groupActive ? "text-primary font-semibold" : "text-[#0e2957] font-semibold"}`}
-                          >
-                            {GIcon && <GIcon className={`h-[17px] w-[17px] shrink-0 ${groupActive ? "text-primary" : "text-slate-500"}`} />}
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/modulos?g=${group.id}`)}
+                        className={`flex w-full items-center gap-3 rounded-xl px-3.5 h-12 text-[15px] font-semibold transition-all [&[data-state=open]>svg.mpk-chev]:rotate-180 ${
+                          groupActive || isOpen
+                            ? "bg-primary text-white shadow-[0_4px_10px_rgba(0,85,210,0.28)]"
+                            : "text-slate-600 hover:bg-primary/10 hover:text-primary"
+                        }`}
+                      >
+                        <GIcon className="h-5 w-5 shrink-0" />
+                        {!isCollapsed && (
+                          <>
                             <span className="flex-1 text-left truncate">{group.label}</span>
-                            <ChevronDown className="mpk-chev h-4 w-4 text-slate-400 transition-transform duration-200" />
-                          </button>
-                        );
-                      })()}
+                            <span className={`text-[11px] font-bold rounded-full px-2 py-0.5 ${
+                              groupActive || isOpen ? "bg-white/[.22] text-white" : "bg-slate-100 text-slate-500"
+                            }`}>{group.items.length}</span>
+                            <ChevronDown className={`mpk-chev h-4 w-4 transition-transform duration-200 ${groupActive || isOpen ? "text-white/80" : "text-slate-400"}`} />
+                          </>
+                        )}
+                      </button>
                     </CollapsibleTrigger>
                     <CollapsibleContent>
-                      <SidebarGroupContent className="ml-[13px] mt-0.5 border-l border-slate-200 pl-2">
+                      <SidebarGroupContent className="ml-[18px] mt-1 border-l border-slate-200 pl-2">
                         <SidebarMenu>
                           {group.items.map(item => {
-                            // Match exato ou sub-rotas (ex.: /perdidos-achados/historico
-                            // continua a iluminar "Perdidos e Achados").
                             const isActive = location === item.path || location.startsWith(item.path + "/");
                             return (
                               <SidebarMenuItem key={item.path}>
@@ -592,13 +619,13 @@ function DashboardLayoutContent({
 
       <SidebarInset>
         {/* Topbar */}
-        <div className="flex border-b h-[72px] items-center justify-between bg-white px-4 lg:px-6 sticky top-0 z-40">
+        <div className="flex border-b h-16 items-center justify-between bg-white px-4 lg:px-6 sticky top-0 z-40">
           <div className="flex items-center gap-3 min-w-0">
             {isMobile && (
               <SidebarTrigger className="h-9 w-9 rounded-lg bg-background" />
             )}
             <h1 className="text-xl lg:text-[22px] font-bold text-[#0c1f3f] truncate">
-              {activeMenuItem?.label ?? "Dashboard"}
+              {activeMenuItem?.label ?? (location === "/modulos" ? "Menu" : location === "/perfil" ? "Perfil" : "Dashboard")}
             </h1>
           </div>
 
