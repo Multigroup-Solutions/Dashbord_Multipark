@@ -253,7 +253,7 @@ export default function InvoicesPage() {
                   {deliveries.length === 0 ? (
                     <p className="text-muted-foreground text-sm text-center py-6">Sem produção no período</p>
                   ) : (
-                    <table className="w-full text-sm">
+                    <div className="overflow-x-auto"><table className="w-full text-sm">
                       <thead>
                         <tr className="border-b text-left">
                           <Th k="projectName" label="Projeto" sortKey={delSort.sortKey} sortDir={delSort.sortDir} onToggle={delSort.toggle} />
@@ -272,7 +272,7 @@ export default function InvoicesPage() {
                           </tr>
                         ))}
                       </tbody>
-                    </table>
+                    </table></div>
                   )}
                 </CardContent>
               </Card>
@@ -288,7 +288,7 @@ export default function InvoicesPage() {
                   {collectedRows.length === 0 ? (
                     <p className="text-muted-foreground text-sm text-center py-6">Sem recolhas no período</p>
                   ) : (
-                    <table className="w-full text-sm">
+                    <div className="overflow-x-auto"><table className="w-full text-sm">
                       <thead>
                         <tr className="border-b text-left">
                           <Th k="projectName" label="Projeto" sortKey={colSort.sortKey} sortDir={colSort.sortDir} onToggle={colSort.toggle} />
@@ -305,7 +305,7 @@ export default function InvoicesPage() {
                           </tr>
                         ))}
                       </tbody>
-                    </table>
+                    </table></div>
                   )}
                 </CardContent>
               </Card>
@@ -356,7 +356,7 @@ export default function InvoicesPage() {
                   {extrasDia.length === 0 ? (
                     <p className="text-muted-foreground text-sm text-center py-6">Sem escalas extras-dia no período</p>
                   ) : (
-                    <table className="w-full text-sm">
+                    <div className="overflow-x-auto"><table className="w-full text-sm">
                       <thead>
                         <tr className="border-b text-left">
                           <th className="p-2">Nível</th>
@@ -375,7 +375,7 @@ export default function InvoicesPage() {
                           </tr>
                         ))}
                       </tbody>
-                    </table>
+                    </table></div>
                   )}
                 </CardContent>
               </Card>
@@ -399,7 +399,7 @@ export default function InvoicesPage() {
                   {salaries.byProject.length === 0 ? (
                     <p className="text-muted-foreground text-sm text-center py-6">Sem salários no período</p>
                   ) : (
-                    <table className="w-full text-sm">
+                    <div className="overflow-x-auto"><table className="w-full text-sm">
                       <thead>
                         <tr className="border-b text-left">
                           <th className="p-2">Centro de custos</th>
@@ -418,7 +418,7 @@ export default function InvoicesPage() {
                           <td className="p-2 text-right">{fmt(salaries.total)}</td>
                         </tr>
                       </tbody>
-                    </table>
+                    </table></div>
                   )}
                 </CardContent>
               </Card>
@@ -437,7 +437,7 @@ export default function InvoicesPage() {
                   {salesCommissions.length === 0 ? (
                     <p className="text-muted-foreground text-sm text-center py-6">Sem comissões de venda no período</p>
                   ) : (
-                    <table className="w-full text-sm">
+                    <div className="overflow-x-auto"><table className="w-full text-sm">
                       <thead>
                         <tr className="border-b text-left">
                           <Th k="partnerName" label="Parceiro" sortKey={comSort.sortKey} sortDir={comSort.sortDir} onToggle={comSort.toggle} />
@@ -464,7 +464,7 @@ export default function InvoicesPage() {
                           <td className="p-2 text-right">{fmt(salesCommissions.reduce((s, c) => s + c.commission, 0))}</td>
                         </tr>
                       </tbody>
-                    </table>
+                    </table></div>
                   )}
                 </CardContent>
               </Card>
@@ -484,7 +484,7 @@ export default function InvoicesPage() {
                   {operationalPartners.length === 0 ? (
                     <p className="text-muted-foreground text-sm text-center py-6">Sem parceiros operacionais com projetos configurados no período</p>
                   ) : (
-                    <table className="w-full text-sm">
+                    <div className="overflow-x-auto"><table className="w-full text-sm">
                       <thead>
                         <tr className="border-b text-left">
                           <th className="p-2">Parceiro</th>
@@ -511,7 +511,7 @@ export default function InvoicesPage() {
                           <td className="p-2 text-right">{fmt(operationalPartners.reduce((s, p) => s + p.commission, 0))}</td>
                         </tr>
                       </tbody>
-                    </table>
+                    </table></div>
                   )}
                 </CardContent>
               </Card>
@@ -554,7 +554,7 @@ export default function InvoicesPage() {
                   {forecast.length === 0 ? (
                     <p className="text-muted-foreground text-sm text-center py-6">Sem reservas pendentes no período</p>
                   ) : (
-                    <table className="w-full text-sm">
+                    <div className="overflow-x-auto"><table className="w-full text-sm">
                       <thead>
                         <tr className="border-b text-left">
                           <th className="p-2">Projeto</th>
@@ -571,7 +571,7 @@ export default function InvoicesPage() {
                           </tr>
                         ))}
                       </tbody>
-                    </table>
+                    </table></div>
                   )}
                 </CardContent>
               </Card>

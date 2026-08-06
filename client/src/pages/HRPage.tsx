@@ -1604,7 +1604,14 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
       )}
 
       {/* Tabs */}
-      <Tabs defaultValue="documents">
+      <Tabs defaultValue={(() => {
+        // Atalhos do Perfil ("O meu ponto") pedem uma aba específica
+        try {
+          const t = sessionStorage.getItem("mp.hr.detailTab");
+          if (t) { sessionStorage.removeItem("mp.hr.detailTab"); return t; }
+        } catch { /* sem sessionStorage */ }
+        return "documents";
+      })()}>
         <TabsList className="grid grid-cols-3 w-full">
           <TabsTrigger value="documents"><FileText className="w-4 h-4 mr-2" />Documentos</TabsTrigger>
           <TabsTrigger value="timerecords"><Clock className="w-4 h-4 mr-2" />Ponto</TabsTrigger>

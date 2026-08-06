@@ -466,7 +466,7 @@ export default function PartnershipsPage() {
                   {partnerSummary.length === 0 ? (
                     <p className="text-muted-foreground text-sm text-center py-6">Sem reservas de parceiros no período</p>
                   ) : (
-                    <table className="w-full text-sm">
+                    <div className="overflow-x-auto"><table className="w-full text-sm">
                       <thead>
                         <tr className="border-b text-left">
                           <Th k="name" label="Parceiro" sortKey={psSort.sortKey} sortDir={psSort.sortDir} onToggle={psSort.toggle} />
@@ -523,7 +523,7 @@ export default function PartnershipsPage() {
                           <td className="p-2"></td>
                         </tr>
                       </tbody>
-                    </table>
+                    </table></div>
                   )}
                 </CardContent>
               </Card>
@@ -537,7 +537,7 @@ export default function PartnershipsPage() {
                     </CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <table className="w-full text-sm">
+                    <div className="overflow-x-auto"><table className="w-full text-sm">
                       <thead>
                         <tr className="border-b text-left">
                           <th className="p-2">Parque</th>
@@ -562,7 +562,7 @@ export default function PartnershipsPage() {
                           <td className="p-2 text-right">{fmt(totals.proRevenue)}</td>
                         </tr>
                       </tbody>
-                    </table>
+                    </table></div>
                   </CardContent>
                 </Card>
               )}

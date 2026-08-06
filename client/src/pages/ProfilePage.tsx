@@ -18,9 +18,24 @@ export default function ProfilePage() {
   const initials = (user?.name ?? "?")
     .split(/\s+/).filter(Boolean).map((p: string) => p[0]).slice(0, 2).join("").toUpperCase();
 
+  // Abre a PRÓPRIA ficha nos RH (não a lista): escreve o id no estado
+  // persistido do HRPage; "tab" escolhe a aba do detalhe (ex.: ponto).
+  const openMyEmployee = (tab?: string) => {
+    const myId = myStatus?.employeeId;
+    if (!myId) {
+      navigate("/rh");
+      return;
+    }
+    try {
+      sessionStorage.setItem("mp.filters.hr.selectedId", JSON.stringify(myId));
+      if (tab) sessionStorage.setItem("mp.hr.detailTab", tab);
+    } catch { /* sem sessionStorage — cai na lista */ }
+    navigate("/rh");
+  };
+
   const rows = [
-    { icon: Clock, label: "O meu ponto", note: myStatus?.status === "in" ? "entrada aberta" : "picar entrada", action: () => navigate("/rh") },
-    { icon: UserCheck, label: "A minha ficha", note: "RH", action: () => navigate("/rh") },
+    { icon: Clock, label: "O meu ponto", note: myStatus?.status === "in" ? "entrada aberta" : "picar entrada", action: () => openMyEmployee("timerecords") },
+    { icon: UserCheck, label: "A minha ficha", note: "RH", action: () => openMyEmployee() },
     ...(user?.role && ["admin", "super_admin"].includes(user.role)
       ? [{ icon: Shield, label: "Roles e permissões", note: "granular", action: () => navigate("/permissoes") }]
       : []),
