@@ -90,15 +90,16 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { trpc } from "@/lib/trpc";
+import { MobileTabBar } from "@/components/MobileTabBar";
 
-type MenuItem = {
+export type MenuItem = {
   icon: React.ElementType;
   label: string;
   path: string;
   minRole?: string;
 };
 
-type MenuGroup = {
+export type MenuGroup = {
   label: string;
   items: MenuItem[];
   minRole?: string;
@@ -115,11 +116,11 @@ const ROLE_HIERARCHY: Record<string, number> = {
   super_admin: 7,
 };
 
-function hasRole(userRole: string, minRole: string): boolean {
+export function hasRole(userRole: string, minRole: string): boolean {
   return (ROLE_HIERARCHY[userRole] ?? 0) >= (ROLE_HIERARCHY[minRole] ?? 0);
 }
 
-function getFilteredMenuGroups(userRole: string): MenuGroup[] {
+export function getFilteredMenuGroups(userRole: string): MenuGroup[] {
   return menuGroups
     .filter(g => !g.minRole || hasRole(userRole, g.minRole))
     .map(g => ({
@@ -131,12 +132,12 @@ function getFilteredMenuGroups(userRole: string): MenuGroup[] {
 
 // Itens fixos no topo, fora dos grupos — o mais usado nunca fica escondido
 // pelo acordeão.
-const topLevelItems: MenuItem[] = [
+export const topLevelItems: MenuItem[] = [
   // dashboards iniciais não aparecem ao frontoffice
   { icon: BarChart3, label: "Dashboards", path: "/dashboards", minRole: "backoffice" },
 ];
 
-const menuGroups: MenuGroup[] = [
+export const menuGroups: MenuGroup[] = [
   {
     label: "Financeiro",
     minRole: "frontoffice",
@@ -769,7 +770,9 @@ function DashboardLayoutContent({
           </div>
         </div>
 
-        <main className="flex-1 p-4 lg:p-6 min-w-0 overflow-x-hidden" style={{ backgroundColor: '#F0F4FF' }}>{children}</main>
+        <main className="flex-1 p-4 lg:p-6 min-w-0 overflow-x-hidden pb-20 md:pb-6" style={{ backgroundColor: '#F0F4FF' }}>{children}</main>
+        {/* Tab bar mobile (design Multipark Mobile) — só em ecrãs pequenos */}
+        <MobileTabBar />
       </SidebarInset>
     </>
   );
