@@ -901,17 +901,21 @@ export const appRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: ACCESS_DENIED_MSG });
       }
       if (!u) return u;
+      // Elevação por permissão (grant extras_dia.team_leader → vê como TL);
+      // o menu/UI seguem o role devolvido aqui.
+      const { applyPermissionElevation } = await import("./_core/trpc");
+      const uElev = await applyPermissionElevation(u);
       // Se houver ficha de colaborador, devolve também o estado dos docs
       // e bloqueio. Lazy check para extras: actualiza flags se passou tempo.
       try {
-        const emp = await getEmployeeByUserId(u.id);
-        if (!emp) return { ...u, employee: null, docsStatus: null };
+        const emp = await getEmployeeByUserId(uElev.id);
+        if (!emp) return { ...uElev, employee: null, docsStatus: null };
         let docsStatus: { blocked: boolean; warning: boolean; missingDocs: string[]; daysSinceStart: number } | null = null;
         if (emp.employee.position === "extra") {
           docsStatus = await checkExtraDocsCompliance(emp.employee.id);
         }
         return {
-          ...u,
+          ...uElev,
           employee: {
             id: emp.employee.id,
             fullName: emp.employee.fullName,
@@ -923,7 +927,7 @@ export const appRouter = router({
           docsStatus,
         };
       } catch {
-        return u;
+        return uElev;
       }
     }),
     logout: publicProcedure.mutation(({ ctx }) => {
