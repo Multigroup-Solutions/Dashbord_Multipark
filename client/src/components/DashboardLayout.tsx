@@ -535,7 +535,9 @@ function DashboardLayoutContent({
               <button
                 type="button"
                 onClick={() => { setOpenGroup(null); navigate("/modulos"); }}
-                className={`flex w-full items-center gap-3 rounded-xl px-3.5 h-12 text-[15px] font-semibold transition-all ${
+                className={`flex w-full items-center rounded-xl h-12 text-[15px] font-semibold transition-all ${
+                  isCollapsed ? "justify-center px-0" : "gap-3 px-3.5"
+                } ${
                   location === "/modulos"
                     ? "bg-primary text-white shadow-[0_4px_10px_rgba(0,85,210,0.28)]"
                     : "text-slate-600 hover:bg-primary/10 hover:text-primary"
@@ -561,8 +563,10 @@ function DashboardLayoutContent({
                       <button
                         type="button"
                         onClick={() => navigate(`/modulos?g=${group.id}`)}
-                        className={`flex w-full items-center gap-3 rounded-xl px-3.5 h-12 text-[15px] font-semibold transition-all [&[data-state=open]>svg.mpk-chev]:rotate-180 ${
-                          groupActive || isOpen
+                        className={`flex w-full items-center rounded-xl h-12 text-[15px] font-semibold transition-all [&[data-state=open]>svg.mpk-chev]:rotate-180 ${
+                          isCollapsed ? "justify-center px-0" : "gap-3 px-3.5"
+                        } ${
+                          groupActive || (!isCollapsed && isOpen)
                             ? "bg-primary text-white shadow-[0_4px_10px_rgba(0,85,210,0.28)]"
                             : "text-slate-600 hover:bg-primary/10 hover:text-primary"
                         }`}
@@ -574,13 +578,15 @@ function DashboardLayoutContent({
                             <span className={`text-[11px] font-bold rounded-full px-2 py-0.5 ${
                               groupActive || isOpen ? "bg-white/[.22] text-white" : "bg-slate-100 text-slate-500"
                             }`}>{group.items.length}</span>
-                            <ChevronDown className={`mpk-chev h-4 w-4 transition-transform duration-200 ${groupActive || isOpen ? "text-white/80" : "text-slate-400"}`} />
+                            <ChevronDown className={`mpk-chev h-4 w-4 transition-transform duration-200 ${
+                              groupActive || isOpen ? "text-white/80" : "text-slate-400"
+                            }`} />
                           </>
                         )}
                       </button>
                     </CollapsibleTrigger>
                     <CollapsibleContent>
-                      <SidebarGroupContent className="ml-[18px] mt-1 border-l border-slate-200 pl-2">
+                      <SidebarGroupContent className={isCollapsed ? "mt-1" : "ml-[18px] mt-1 border-l border-slate-200 pl-2"}>
                         <SidebarMenu>
                           {group.items.map(item => {
                             const isActive = location === item.path || location.startsWith(item.path + "/");
