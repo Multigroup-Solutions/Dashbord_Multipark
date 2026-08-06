@@ -75,6 +75,7 @@ import {
   XCircle,
   RefreshCw,
   ShieldCheck,
+  MapPin,
   CalendarCheck,
   SlidersHorizontal,
   Bell,
@@ -674,6 +675,54 @@ function DashboardLayoutContent({
 
             {/* Botão "Datas" global REMOVIDO (pedido Jorge: não filtrava nada
                 — as datas escolhem-se dentro de cada página, no seletor azul) */}
+            {/* Cidade/Parques em MOBILE (pedido Jorge): os selects de cima
+                escondem-se em ecrãs pequenos — este botão abre-os num popover,
+                ligado ao MESMO estado global */}
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  variant={filters.cityId !== null || filters.brandId !== null ? "default" : "outline"}
+                  size="icon"
+                  className="md:hidden h-9 w-9"
+                  title="Cidade e parques"
+                >
+                  <MapPin className="h-4 w-4" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-64 space-y-3" align="end">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Cidade</Label>
+                  <Select
+                    value={filters.cityId === null ? "all" : String(filters.cityId)}
+                    onValueChange={(v) => filters.setCityId(v === "all" ? null : Number(v))}
+                  >
+                    <SelectTrigger className="w-full h-9"><SelectValue placeholder="Cidade" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Todas as cidades</SelectItem>
+                      {filters.cities.map((city) => (
+                        <SelectItem key={city.id} value={String(city.id)}>{city.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Parque</Label>
+                  <Select
+                    value={filters.brandId === null ? "all" : String(filters.brandId)}
+                    onValueChange={(v) => filters.setBrandId(v === "all" ? null : Number(v))}
+                  >
+                    <SelectTrigger className="w-full h-9"><SelectValue placeholder="Parque" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Todos os parques</SelectItem>
+                      {filters.brands.map((brand) => (
+                        <SelectItem key={brand.id} value={String(brand.id)}>{brand.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </PopoverContent>
+            </Popover>
+
             {/* Notifications */}
             <NotificationsBell />
             {/* Notifications */}
