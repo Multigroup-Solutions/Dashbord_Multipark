@@ -319,7 +319,6 @@ import {
   getPdaById,
   // PDA Check-ins
   createPdaCheckin,
-  attachZelloToEmployeeIfUnset,
   checkoutPda,
   getActiveCheckins,
   getCheckinsByDate,
@@ -2664,7 +2663,11 @@ export const appRouter = router({
           // velocidades e tempo com o Zello desligado. Melhor esforço: nunca
           // pode impedir o registo do ponto.
           let zello: import("./zello").ZelloShiftSummary | null = null;
-          const empZello = (await getEmployeeById(input.employeeId))?.employee?.zelloUsername ?? null;
+          // Descobre o utilizador Zello DESTE turno: primeiro o PDA em que a
+          // pessoa fez check-in nesse dia (cada dia é um PDA diferente),
+          // depois a ligação fixa da ficha (telemóveis pessoais).
+          const { resolveZelloUsernameForShift } = await import("./db");
+          const empZello = await resolveZelloUsernameForShift(input.employeeId, new Date(last.recordedAt), outAt);
           if (empZello) {
             try {
               const { summarizeZelloShift } = await import("./zello");
@@ -3694,16 +3697,13 @@ export const appRouter = router({
         requireRole(ctx.user.role, "backoffice");
         return getZelloUsers();
       }),
-      // Ligações Zello↔funcionário existentes (para o mapa ao vivo mostrar
-      // nomes reais e para o ecrã de ligação em massa)
+      // Resolução Zello→pessoa para o mapa ao vivo: check-ins de PDA ativos
+      // primeiro (os "Extra NNN" vivem nos PDAs e cada dia é uma pessoa
+      // diferente), ligações fixas da ficha como fallback.
       mappings: protectedProcedure.query(async ({ ctx }) => {
         requireRole(ctx.user.role, "backoffice");
-        const { getDb } = await import("./db");
-        const db = await getDb(); if (!db) return [];
-        const { employees } = await import("../drizzle/schema");
-        const { isNotNull } = await import("drizzle-orm");
-        return db.select({ employeeId: employees.id, fullName: employees.fullName, zelloUsername: employees.zelloUsername })
-          .from(employees).where(isNotNull(employees.zelloUsername));
+        const { getZelloLiveMappings } = await import("./db");
+        return getZelloLiveMappings();
       }),
       // Anexa (ou desanexa) um utilizador Zello a um colaborador — PERSISTENTE,
       // como o mapping de agentes Multipark. Único: limpa o username de quem o
@@ -3991,13 +3991,11 @@ export const appRouter = router({
             mobileDataMbStart: input.mobileDataMbStart ?? null,
             notes: input.notes ?? null,
           });
-          // Preenche o anexo persistente Zello↔colaborador se ainda não existir.
-          if (input.zelloUsername) {
-            const attached = await attachZelloToEmployeeIfUnset(input.employeeId, input.zelloUsername);
-            if (attached) {
-              await logActivity({ userId: ctx.user.id, action: "map_zello", entity: "employees", entityId: input.employeeId, details: `Zello "${input.zelloUsername}" anexado automaticamente no check-in do PDA #${input.pdaId}` });
-            }
-          }
+          // NOTA (regra do Jorge 2026-08-06): já NÃO se anexa o Zello à ficha
+          // aqui — os utilizadores Zello dos PDAs mudam de mãos todos os dias,
+          // e a resolução Zello→pessoa passou a ser dinâmica pelo check-in do
+          // PDA (getZelloLiveMappings / resolveZelloUsernameForShift). A
+          // ligação fixa na ficha fica só para telemóveis pessoais.
           await logActivity({ userId: ctx.user.id, action: "create", entity: "pda_checkin", entityId: id, details: `Check-in PDA #${input.pdaId}` });
           return { id };
         }),

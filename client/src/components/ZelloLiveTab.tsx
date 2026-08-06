@@ -38,16 +38,30 @@ export function ZelloLiveTab() {
   const { data: locations = [], isFetching, refetch, dataUpdatedAt } =
     trpc.operational.zello.locations.useQuery(undefined, { refetchInterval: 30_000 });
   const { data: zelloUsers = [] } = trpc.operational.zello.users.useQuery();
-  const { data: mappings = [] } = trpc.operational.zello.mappings.useQuery();
+  const { data: mappings = [] } = trpc.operational.zello.mappings.useQuery(undefined, { refetchInterval: 60_000 });
+  const { data: pdas = [] } = trpc.operational.pdas.list.useQuery();
   const { data: employees = [] } = trpc.rh.list.useQuery({ isActive: true });
 
+  // Resolução Zello→pessoa: o check-in de PDA do DIA ganha à ligação fixa
+  // (os "Extra NNN" vivem nos PDAs e cada dia é uma pessoa diferente)
   const mapByZello = useMemo(() => {
-    const m = new Map<string, { employeeId: number; fullName: string }>();
-    for (const r of mappings as any[]) {
-      if (r.zelloUsername) m.set(String(r.zelloUsername).toLowerCase(), { employeeId: r.employeeId, fullName: r.fullName });
+    const m = new Map<string, { employeeId: number; fullName: string; source: "pda" | "fixed"; pdaName: string | null }>();
+    const sorted = [...(mappings as any[])].sort((a, b) => (a.source === "pda" ? 1 : 0) - (b.source === "pda" ? 1 : 0));
+    for (const r of sorted) {
+      if (r.zelloUsername) m.set(String(r.zelloUsername).toLowerCase(), { employeeId: r.employeeId, fullName: r.fullName, source: r.source, pdaName: r.pdaName ?? null });
     }
     return m;
   }, [mappings]);
+
+  // Utilizadores Zello que pertencem a PDAs (ligação é o check-in diário do
+  // PDA, não a ficha)
+  const pdaByZello = useMemo(() => {
+    const m = new Map<string, { pdaName: string }>();
+    for (const p of pdas as any[]) {
+      if (p.zelloUsername) m.set(String(p.zelloUsername).toLowerCase(), { pdaName: p.name });
+    }
+    return m;
+  }, [pdas]);
 
   const realName = (l: { username: string; displayName: string }) =>
     mapByZello.get(l.username.toLowerCase())?.fullName || l.displayName || l.username;
@@ -94,9 +108,11 @@ export function ZelloLiveTab() {
       const m = L.circleMarker([l.latitude, l.longitude], {
         radius: 9, weight: 2, color: "#ffffff", fillColor: markerColor(l), fillOpacity: 0.95,
       });
+      const resolved = mapByZello.get(l.username.toLowerCase());
       m.bindTooltip(name, { permanent: true, direction: "top", offset: [0, -8], className: "zello-tooltip" });
       m.bindPopup(
         `<b>${name}</b><br/>` +
+        `${resolved?.source === "pda" ? `via check-in de hoje no PDA ${resolved.pdaName ?? ""}<br/>` : ""}` +
         `${l.displayName !== name ? `Zello: ${l.displayName}<br/>` : ""}` +
         `Velocidade: ${Math.round(l.speed)} km/h<br/>` +
         `${l.batteryLevel > 0 ? `Bateria: ${l.batteryLevel}%<br/>` : ""}` +
@@ -128,7 +144,7 @@ export function ZelloLiveTab() {
   );
 
   const unmappedCount = (zelloUsers as any[]).filter(
-    (u: any) => !u.admin && !mapByZello.has(String(u.name).toLowerCase())
+    (u: any) => !u.admin && !mapByZello.has(String(u.name).toLowerCase()) && !pdaByZello.has(String(u.name).toLowerCase())
   ).length;
 
   return (
@@ -171,11 +187,12 @@ export function ZelloLiveTab() {
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <LinkIcon className="w-4 h-4" />
-            Utilizadores Zello ↔ Funcionários
+            Utilizadores Zello ↔ Pessoas
             {unmappedCount > 0 && <Badge variant="secondary">{unmappedCount} por ligar</Badge>}
           </CardTitle>
           <p className="text-xs text-muted-foreground">
-            Liga cada utilizador Zello à ficha do funcionário — o mapa e o ponto passam a mostrar o nome real.
+            Os utilizadores instalados em <b>PDAs</b> mudam de mãos todos os dias — a ligação vem do
+            check-in do PDA (aba PDAs) e é automática. O seletor fixo é só para telemóveis pessoais.
           </p>
         </CardHeader>
         <CardContent>
@@ -183,28 +200,51 @@ export function ZelloLiveTab() {
             {(zelloUsers as any[])
               .filter((u: any) => !u.admin)
               .sort((a: any, b: any) => {
-                const am = mapByZello.has(String(a.name).toLowerCase()) ? 1 : 0;
-                const bm = mapByZello.has(String(b.name).toLowerCase()) ? 1 : 0;
-                return am - bm || String(a.name).localeCompare(String(b.name));
+                const rank = (u: any) => {
+                  const k = String(u.name).toLowerCase();
+                  if (pdaByZello.has(k)) return mapByZello.get(k)?.source === "pda" ? 2 : 1; // PDA sem check-in primeiro
+                  return mapByZello.has(k) ? 3 : 0; // por ligar mesmo primeiro
+                };
+                return rank(a) - rank(b) || String(a.name).localeCompare(String(b.name));
               })
               .map((u: any) => {
-                const linked = mapByZello.get(String(u.name).toLowerCase());
+                const key = String(u.name).toLowerCase();
+                const linked = mapByZello.get(key);
+                const pda = pdaByZello.get(key);
+                const isPda = !!pda;
+                const hasToday = linked?.source === "pda";
                 return (
-                  <div key={u.name} className={`flex items-center gap-2 p-2 rounded-lg border ${linked ? "bg-muted/30" : "bg-amber-50/50 border-amber-200"}`}>
+                  <div key={u.name} className={`flex items-center gap-2 p-2 rounded-lg border ${isPda ? (hasToday ? "bg-muted/30" : "bg-blue-50/40 border-blue-200") : linked ? "bg-muted/30" : "bg-amber-50/50 border-amber-200"}`}>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">{u.fullName || u.name}</p>
-                      <p className="text-[11px] text-muted-foreground truncate">Zello: {u.name}</p>
+                      <p className="text-[11px] text-muted-foreground truncate">
+                        Zello: {u.name}{isPda ? ` · PDA: ${pda.pdaName}` : ""}
+                      </p>
                     </div>
-                    <div className="w-52 shrink-0">
-                      <SearchableSelect
-                        options={employeeOptions}
-                        value={linked ? String(linked.employeeId) : ""}
-                        onChange={(v: string) =>
-                          mapMutation.mutate({ zelloUsername: u.name, employeeId: v ? Number(v) : null })
-                        }
-                        placeholder="— ligar a funcionário —"
-                      />
-                    </div>
+                    {isPda ? (
+                      <div className="shrink-0 text-right">
+                        {hasToday ? (
+                          <Badge variant="outline" className="gap-1 border-green-300 bg-green-50 text-green-800">
+                            hoje: {linked!.fullName}
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="gap-1 border-blue-300 bg-blue-50 text-blue-700">
+                            sem check-in de PDA hoje
+                          </Badge>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="w-52 shrink-0">
+                        <SearchableSelect
+                          options={employeeOptions}
+                          value={linked ? String(linked.employeeId) : ""}
+                          onChange={(v: string) =>
+                            mapMutation.mutate({ zelloUsername: u.name, employeeId: v ? Number(v) : null })
+                          }
+                          placeholder="— ligar a pessoa (fixo) —"
+                        />
+                      </div>
+                    )}
                   </div>
                 );
               })}

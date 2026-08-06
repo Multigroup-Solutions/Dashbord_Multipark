@@ -654,6 +654,58 @@ export async function getAllEmployees(filters: { isActive?: boolean; position?: 
   return conditions.length > 0 ? q.where(and(...conditions)) : q;
 }
 
+/**
+ * Descobre o utilizador Zello que um funcionário usou num turno.
+ * Regra do Jorge: os "Extra NNN" do Zello vivem nos PDAs e CADA DIA o PDA anda
+ * com uma pessoa diferente — a fonte da verdade é o check-in do PDA desse dia,
+ * não uma ligação fixa na ficha. Fallback: employees.zelloUsername (telemóveis
+ * pessoais, ex. team leaders).
+ */
+export async function resolveZelloUsernameForShift(employeeId: number, start: Date, end: Date): Promise<string | null> {
+  const db = await getDb(); if (!db) return null;
+  const startS = toMysqlDateTime(start);
+  const endS = toMysqlDateTime(end);
+  const [rows] = await db.execute(sql`
+    SELECT COALESCE(p.zelloUsername, c.zelloUsername) AS zu
+    FROM pda_checkins c
+    LEFT JOIN pdas p ON p.id = c.pdaId
+    WHERE c.employeeId = ${employeeId}
+      AND c.checkinAt <= ${endS}
+      AND (c.checkoutAt IS NULL OR c.checkoutAt >= ${startS})
+      AND COALESCE(p.zelloUsername, c.zelloUsername) IS NOT NULL
+    ORDER BY c.checkinAt DESC LIMIT 1`) as any;
+  if (rows?.[0]?.zu) return String(rows[0].zu);
+  const emp = await getEmployeeById(employeeId);
+  return emp?.employee?.zelloUsername ?? null;
+}
+
+/**
+ * Resolução Zello→pessoa para o mapa ao vivo: primeiro os check-ins de PDA
+ * ATIVOS (dinâmico, muda todos os dias), depois as ligações fixas da ficha.
+ */
+export async function getZelloLiveMappings(): Promise<Array<{ zelloUsername: string; employeeId: number; fullName: string; source: "pda" | "fixed"; pdaName: string | null }>> {
+  const db = await getDb(); if (!db) return [];
+  const [fixed] = await db.execute(sql`
+    SELECT zelloUsername, id AS employeeId, fullName FROM employees
+    WHERE zelloUsername IS NOT NULL AND zelloUsername != ''`) as any;
+  const [pda] = await db.execute(sql`
+    SELECT COALESCE(p.zelloUsername, c.zelloUsername) AS zelloUsername,
+           e.id AS employeeId, e.fullName, p.name AS pdaName
+    FROM pda_checkins c
+    JOIN employees e ON e.id = c.employeeId
+    LEFT JOIN pdas p ON p.id = c.pdaId
+    WHERE c.checkinStatus = 'checked_in'
+      AND COALESCE(p.zelloUsername, c.zelloUsername) IS NOT NULL`) as any;
+  const out: Array<{ zelloUsername: string; employeeId: number; fullName: string; source: "pda" | "fixed"; pdaName: string | null }> = [];
+  for (const r of (fixed as any[]) ?? []) {
+    out.push({ zelloUsername: String(r.zelloUsername), employeeId: Number(r.employeeId), fullName: String(r.fullName), source: "fixed", pdaName: null });
+  }
+  for (const r of (pda as any[]) ?? []) {
+    out.push({ zelloUsername: String(r.zelloUsername), employeeId: Number(r.employeeId), fullName: String(r.fullName), source: "pda", pdaName: r.pdaName ? String(r.pdaName) : null });
+  }
+  return out;
+}
+
 export async function getEmployeeById(id: number) {
   const db = await getDb();
   if (!db) return undefined;
