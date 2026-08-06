@@ -7621,6 +7621,73 @@ export async function attachZelloToEmployeeIfUnset(employeeId: number, zelloUser
   return true;
 }
 
+/**
+ * Ponto→PDA automático (pedido Jorge): o browser do PDA tem um deviceToken no
+ * localStorage; quando alguém faz check-in do PONTO nesse aparelho, liga-se
+ * logo a pessoa ao PDA (e ao Zello do PDA). Se estava lá outra pessoa com
+ * check-in aberto, a app fecha-o e troca — "a própria aplicação mudava quem é
+ * que estava".
+ */
+export async function attachPdaByDeviceToken(deviceToken: string, employeeId: number): Promise<{ pdaId: number; pdaName: string; zelloUsername: string | null; replacedName: string | null } | null> {
+  const db = await getDb(); if (!db) return null;
+  const [pdaRows] = await db.execute(sql`SELECT id, name, zelloUsername FROM pdas WHERE deviceToken = ${deviceToken} AND status = 'active' LIMIT 1`) as any;
+  const pda = (pdaRows as any[])?.[0];
+  if (!pda) return null;
+  const now = toMysqlDateTime(new Date());
+  // Quem está agora com este PDA?
+  const [activeRows] = await db.execute(sql`
+    SELECT c.id, c.employeeId, e.fullName FROM pda_checkins c
+    LEFT JOIN employees e ON e.id = c.employeeId
+    WHERE c.pdaId = ${pda.id} AND c.checkinStatus = 'checked_in'`) as any;
+  let replacedName: string | null = null;
+  let alreadyMine = false;
+  for (const a of (activeRows as any[]) ?? []) {
+    if (Number(a.employeeId) === employeeId) { alreadyMine = true; continue; }
+    await db.execute(sql`UPDATE pda_checkins SET checkoutAt = ${now}, checkinStatus = 'checked_out', notes = CONCAT(COALESCE(notes,''), ' · fechado automaticamente: outro colaborador fez check-in neste PDA') WHERE id = ${a.id}`);
+    replacedName = a.fullName ? String(a.fullName) : replacedName;
+  }
+  // A pessoa só pode estar num PDA de cada vez — fecha check-ins dela noutros
+  await db.execute(sql`UPDATE pda_checkins SET checkoutAt = ${now}, checkinStatus = 'checked_out' WHERE employeeId = ${employeeId} AND checkinStatus = 'checked_in' AND pdaId != ${pda.id}`);
+  if (!alreadyMine) {
+    await db.insert(pdaCheckins).values({
+      pdaId: Number(pda.id),
+      employeeId,
+      zelloUsername: pda.zelloUsername ?? null,
+      checkinAt: now,
+    } as any);
+  }
+  return { pdaId: Number(pda.id), pdaName: String(pda.name), zelloUsername: pda.zelloUsername ? String(pda.zelloUsername) : null, replacedName };
+}
+
+/** Fecha os check-ins de PDA abertos de um funcionário (no check-out do ponto). */
+export async function closePdaCheckinsForEmployee(employeeId: number, at: Date): Promise<number> {
+  const db = await getDb(); if (!db) return 0;
+  const [res] = await db.execute(sql`
+    UPDATE pda_checkins SET checkoutAt = ${toMysqlDateTime(at)}, checkinStatus = 'checked_out'
+    WHERE employeeId = ${employeeId} AND checkinStatus = 'checked_in'`) as any;
+  return Number((res as any)?.affectedRows ?? 0);
+}
+
+/** Regista o browser atual como sendo um PDA (token novo, invalida o anterior). */
+export async function setPdaDeviceToken(pdaId: number): Promise<string | null> {
+  const db = await getDb(); if (!db) return null;
+  const token = crypto.randomUUID().replace(/-/g, "");
+  await db.execute(sql`UPDATE pdas SET deviceToken = ${token} WHERE id = ${pdaId}`);
+  return token;
+}
+
+/** Info do aparelho a partir do deviceToken (para o cartão "Este aparelho"). */
+export async function getPdaByDeviceToken(deviceToken: string) {
+  const db = await getDb(); if (!db) return null;
+  const [rows] = await db.execute(sql`
+    SELECT p.id, p.name, p.zelloUsername,
+           (SELECT e.fullName FROM pda_checkins c LEFT JOIN employees e ON e.id = c.employeeId
+            WHERE c.pdaId = p.id AND c.checkinStatus = 'checked_in' ORDER BY c.checkinAt DESC LIMIT 1) AS currentHolder
+    FROM pdas p WHERE p.deviceToken = ${deviceToken} LIMIT 1`) as any;
+  const r = (rows as any[])?.[0];
+  return r ? { pdaId: Number(r.id), name: String(r.name), zelloUsername: r.zelloUsername ? String(r.zelloUsername) : null, currentHolder: r.currentHolder ? String(r.currentHolder) : null } : null;
+}
+
 export async function checkoutPda(id: number, data: { photoExitUrl?: string; mobileDataMbEnd?: number; notes?: string }) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");

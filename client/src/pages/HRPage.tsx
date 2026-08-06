@@ -652,6 +652,14 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
       utils.rh.timeRecords.list.invalidate();
       utils.rh.timeRecords.monthlyHours.invalidate();
       toast.success("Check-in registado com foto e GPS!");
+      if (data?.pdaAttached) {
+        toast.info(
+          `📟 Ficaste com o ${data.pdaAttached.pdaName}` +
+          (data.pdaAttached.zelloUsername ? ` (Zello: ${data.pdaAttached.zelloUsername})` : "") +
+          (data.pdaAttached.replacedName ? ` — substituíste ${data.pdaAttached.replacedName}` : ""),
+          { duration: 10000 }
+        );
+      }
       if (data?.warning) toast.warning(data.warning, { duration: 10000 });
       if (data?.outsideGeofence) toast.warning("Atenção: check-in dado FORA do raio do local de trabalho — ficou marcado.", { duration: 10000 });
       setCameraMode(null);
@@ -685,6 +693,9 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
         latitude: String(lat),
         longitude: String(lng),
         locationName: `${lat.toFixed(6)}, ${lng.toFixed(6)}`,
+        // Se este browser é um PDA registado, o servidor liga a pessoa ao
+        // PDA/Zello automaticamente no check-in
+        pdaDeviceToken: localStorage.getItem("mp.pda.deviceToken") || undefined,
       };
       if (cameraMode === "check_in") checkIn.mutate(payload);
       else checkOut.mutate(payload);

@@ -650,6 +650,80 @@ function DriverHistoryTab() {
 
 // ─── PDAs TAB ───────────────────────────────────────────────────────────────
 
+// "Este aparelho": regista o browser do próprio PDA — a partir daí, quem picar
+// o ponto neste aparelho fica automaticamente ligado ao PDA/Zello (e a app
+// troca sozinha quando entra outro). Pedido do Jorge 2026-08-06.
+function ThisDeviceCard({ pdaList }: { pdaList: any[] }) {
+  const [token, setToken] = useState<string | null>(() => localStorage.getItem("mp.pda.deviceToken"));
+  const [selPda, setSelPda] = useState("");
+  const { data: deviceInfo, isLoading } = trpc.operational.pdas.deviceInfo.useQuery(
+    { token: token ?? "" },
+    { enabled: !!token }
+  );
+  const register = trpc.operational.pdas.registerDevice.useMutation({
+    onSuccess: (d) => {
+      localStorage.setItem("mp.pda.deviceToken", d.token);
+      setToken(d.token);
+      toast.success("Este aparelho ficou registado! A partir de agora, quem picar o ponto aqui fica logo com este PDA/Zello.");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  return (
+    <Card className={token && deviceInfo ? "border-green-300" : "border-dashed"}>
+      <CardContent className="p-4">
+        {token && deviceInfo ? (
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              <Smartphone className="w-5 h-5 text-green-600" />
+              <div>
+                <p className="text-sm font-semibold">Este aparelho é o {deviceInfo.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  {deviceInfo.zelloUsername ? `Zello: ${deviceInfo.zelloUsername} · ` : ""}
+                  {deviceInfo.currentHolder ? `agora com: ${deviceInfo.currentHolder}` : "livre — o próximo check-in do ponto fica com ele"}
+                </p>
+              </div>
+            </div>
+            <Button size="sm" variant="outline" onClick={() => { localStorage.removeItem("mp.pda.deviceToken"); setToken(null); toast.info("Aparelho desregistado neste browser."); }}>
+              Desregistar
+            </Button>
+          </div>
+        ) : token && !isLoading && !deviceInfo ? (
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <p className="text-sm text-amber-700">O registo deste aparelho já não é válido (o PDA foi re-registado noutro browser?).</p>
+            <Button size="sm" variant="outline" onClick={() => { localStorage.removeItem("mp.pda.deviceToken"); setToken(null); }}>Limpar</Button>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-2">
+              <Smartphone className="w-5 h-5 text-muted-foreground" />
+              <div>
+                <p className="text-sm font-medium">Registar ESTE aparelho como um PDA</p>
+                <p className="text-xs text-muted-foreground">
+                  Faz isto uma vez no browser de cada PDA — depois, quem picar o ponto nele fica automaticamente com o PDA/Zello.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Select value={selPda} onValueChange={setSelPda}>
+                <SelectTrigger className="w-44"><SelectValue placeholder="Escolher PDA" /></SelectTrigger>
+                <SelectContent>
+                  {pdaList.filter((p: any) => p.status === "active").map((p: any) => (
+                    <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button size="sm" disabled={!selPda || register.isPending} onClick={() => register.mutate({ pdaId: Number(selPda) })}>
+                Registar
+              </Button>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function PdasTab() {
   const [showCreate, setShowCreate] = useState(false);
   const [showCheckin, setShowCheckin] = useState<number | null>(null);
@@ -708,6 +782,9 @@ function PdasTab() {
       <div className="flex items-center gap-3">
         <Button onClick={() => setShowCreate(true)}><Plus className="w-4 h-4 mr-1" />Novo PDA</Button>
       </div>
+
+      {/* Este aparelho: ponto→PDA automático */}
+      <ThisDeviceCard pdaList={pdaList || []} />
 
       {/* PDA Cards */}
       {isLoading ? (

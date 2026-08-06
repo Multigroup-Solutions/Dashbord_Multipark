@@ -2543,6 +2543,9 @@ export const appRouter = router({
           longitude: z.string().optional(),
           locationName: z.string().optional(),
           notes: z.string().optional(),
+          // Token do aparelho (localStorage do browser do PDA) — liga a pessoa
+          // ao PDA/Zello automaticamente no check-in do ponto
+          pdaDeviceToken: z.string().optional(),
         }))
         .mutation(async ({ ctx, input }) => {
           // admin pode picar a qualquer um; outros só ao próprio
@@ -2600,7 +2603,22 @@ export const appRouter = router({
             notes: [geoNoteIn, input.notes].filter(Boolean).join(" · ") || null,
           });
           await logActivity({ userId: ctx.user.id, action: "check_in", entity: "time_record", entityId: input.employeeId, details: `Check-in: ${input.locationName ?? ""}` });
-          return { success: true, warning: missingAgentWarning, outsideGeofence: !!geoNoteIn };
+          // Ponto→PDA automático: se o check-in veio do browser de um PDA
+          // registado, liga já a pessoa ao PDA/Zello (e troca quem lá estava).
+          let pdaAttached: { pdaName: string; zelloUsername: string | null; replacedName: string | null } | null = null;
+          if (input.pdaDeviceToken) {
+            try {
+              const { attachPdaByDeviceToken } = await import("./db");
+              const att = await attachPdaByDeviceToken(input.pdaDeviceToken, input.employeeId);
+              if (att) {
+                pdaAttached = { pdaName: att.pdaName, zelloUsername: att.zelloUsername, replacedName: att.replacedName };
+                await logActivity({ userId: ctx.user.id, action: "create", entity: "pda_checkin", entityId: att.pdaId, details: `Auto: ponto→PDA ${att.pdaName}${att.replacedName ? ` (substituiu ${att.replacedName})` : ""}` });
+              }
+            } catch (err) {
+              console.warn("[checkIn] ponto→PDA automático falhou:", err);
+            }
+          }
+          return { success: true, warning: missingAgentWarning, outsideGeofence: !!geoNoteIn, pdaAttached };
         }),
 
       checkOut: protectedProcedure
@@ -2695,6 +2713,14 @@ export const appRouter = router({
               zelloOnlineMinutes: zello.onlineMinutes,
             } : {}),
           });
+          // Fecha o check-in de PDA da pessoa (o aparelho fica livre para o
+          // próximo turno — quando outro picar o ponto, a app troca sozinha)
+          try {
+            const { closePdaCheckinsForEmployee } = await import("./db");
+            await closePdaCheckinsForEmployee(input.employeeId, outAt);
+          } catch (err) {
+            console.warn("[checkOut] fecho de PDA falhou:", err);
+          }
           await logActivity({ userId: ctx.user.id, action: "check_out", entity: "time_record", entityId: input.employeeId, details: `Check-out: ${hoursWorked}h${zello ? ` · ${zello.km}km GPS · ${zello.offlineMinutes}min offline` : ""}` });
           return { success: true, hoursWorked, zello };
         }),
@@ -3900,6 +3926,24 @@ export const appRouter = router({
       list: protectedProcedure.query(async ({ ctx }) => {
         requireRole(ctx.user.role, "backoffice");
         return listPdas();
+      }),
+      // "Este browser É o PDA X" — regista o aparelho e devolve o token que o
+      // cliente guarda no localStorage. A partir daí, qualquer check-in do
+      // PONTO feito neste aparelho liga a pessoa ao PDA/Zello automaticamente.
+      registerDevice: protectedProcedure.input(z.object({ pdaId: z.number() })).mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "team_leader");
+        const { setPdaDeviceToken } = await import("./db");
+        const token = await setPdaDeviceToken(input.pdaId);
+        if (!token) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
+        await logActivity({ userId: ctx.user.id, action: "register_device", entity: "pda", entityId: input.pdaId, details: "Browser registado como este PDA" });
+        return { token };
+      }),
+      // Info do aparelho atual (cartão "Este aparelho" na aba PDAs) — qualquer
+      // role autenticada pode consultar: os condutores precisam de ver em que
+      // PDA estão a picar o ponto.
+      deviceInfo: protectedProcedure.input(z.object({ token: z.string().min(8) })).query(async ({ ctx, input }) => {
+        const { getPdaByDeviceToken } = await import("./db");
+        return getPdaByDeviceToken(input.token);
       }),
       get: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
