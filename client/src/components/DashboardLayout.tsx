@@ -529,7 +529,7 @@ function DashboardLayoutContent({
             </div>
           </SidebarHeader>
 
-          <SidebarContent className="gap-0 px-1">
+          <SidebarContent className="gap-0 px-1 overflow-x-hidden">
             {/* Placa "Menu" (modelo v2): hub com todos os atalhos */}
             <SidebarGroup className="py-0.5">
               <button
