@@ -1,10 +1,10 @@
-// Link para abrir uma reserva NO backoffice da Multipark (pedido Jorge:
-// botão "Ver na Multipark" nos detalhes). O formato do URL vive SÓ aqui —
-// se o backoffice deles usar outro caminho, muda-se esta linha.
-export const multiparkBookingUrl = (externalId: string) =>
-  `https://multipark.web.app/reservations/${encodeURIComponent(externalId)}`;
+// Link para abrir uma reserva NO painel da Multipark (pedido Jorge:
+// botão "Ver na Multipark" nos detalhes). O formato do URL vive SÓ aqui.
+// Painel: www.multipark.app/admin — a reserva abre pelo NÚMERO (ex.: 27060).
+export const multiparkBookingUrl = (bookingNumber: string | number) =>
+  `https://www.multipark.app/admin/reservations/${encodeURIComponent(String(bookingNumber))}`;
 
-export function openInMultipark(externalId: string | null | undefined) {
-  if (!externalId) return;
-  window.open(multiparkBookingUrl(externalId), "_blank", "noopener");
+export function openInMultipark(bookingNumber: string | number | null | undefined) {
+  if (bookingNumber == null || bookingNumber === "") return;
+  window.open(multiparkBookingUrl(bookingNumber), "_blank", "noopener");
 }
