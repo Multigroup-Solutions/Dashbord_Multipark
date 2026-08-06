@@ -8693,7 +8693,7 @@ export async function syncIncidentsFromMultiparkHistory(opts: {
   // enchiam as ocorrências de lixo (auditoria 6 ago: 1.190 de 1.219 eram isto
   // — "Invoice emitted", "Pricing reduced…" — e ainda contavam como Inc− nas
   // avaliações dos condutores). Só comentários HUMANOS passam.
-  const AUTO_REMARKS = /^(invoice emitted|booking (updated|created)|pricing (updated|reduced|increased)|check-?in signature|check-?out signature|signature saved|payment\b|attachment added|client information updated|arrived at (delivery|pickup) location|left (delivery|pickup) location|driver assigned|status changed)/i;
+  const AUTO_REMARKS = /^(invoice emitted|booking (updated|created)|pricing (updated|reduced|increased)|check-?in signature|check-?out signature|signature saved|payment\b|attachment added|client information updated|arrived at (delivery|pickup) location|left (delivery|pickup) location|driver assigned|status changed|booking cancelled|pro booking created|baggage waiting|attachment removed)/i;
 
   const result = { ...empty };
   for (const row of rows) {
