@@ -2659,6 +2659,20 @@ export const appRouter = router({
           // check-out veio com GPS fora dele, fica marcado (permitido, mas visível).
           const geoNote = await checkGeofenceNote(input.employeeId, input.latitude, input.longitude);
           const finalNotes = [autoNote, geoNote, input.notes].filter(Boolean).join(" · ") || null;
+          // Snapshot Zello do turno (pedido Jorge): no check-out, vai buscar ao
+          // Zello o que o condutor fez entre a entrada e a saída — km,
+          // velocidades e tempo com o Zello desligado. Melhor esforço: nunca
+          // pode impedir o registo do ponto.
+          let zello: import("./zello").ZelloShiftSummary | null = null;
+          const empZello = (await getEmployeeById(input.employeeId))?.employee?.zelloUsername ?? null;
+          if (empZello) {
+            try {
+              const { summarizeZelloShift } = await import("./zello");
+              zello = await summarizeZelloShift(empZello, new Date(last.recordedAt), outAt);
+            } catch (err) {
+              console.warn("[checkOut] snapshot Zello falhou:", err);
+            }
+          }
           await createTimeRecord({
             employeeId: input.employeeId,
             type: "check_out",
@@ -2670,9 +2684,16 @@ export const appRouter = router({
             locationName: input.locationName ?? null,
             hoursWorked,
             notes: finalNotes,
+            ...(zello ? {
+              zelloKm: String(zello.km),
+              zelloAvgSpeed: String(zello.avgSpeed),
+              zelloMaxSpeed: String(zello.maxSpeed),
+              zelloOfflineMinutes: zello.offlineMinutes,
+              zelloOnlineMinutes: zello.onlineMinutes,
+            } : {}),
           });
-          await logActivity({ userId: ctx.user.id, action: "check_out", entity: "time_record", entityId: input.employeeId, details: `Check-out: ${hoursWorked}h` });
-          return { success: true, hoursWorked };
+          await logActivity({ userId: ctx.user.id, action: "check_out", entity: "time_record", entityId: input.employeeId, details: `Check-out: ${hoursWorked}h${zello ? ` · ${zello.km}km GPS · ${zello.offlineMinutes}min offline` : ""}` });
+          return { success: true, hoursWorked, zello };
         }),
 
       // ── Geofence por centro de custos (raio de picagem) ───────────────────
@@ -3672,6 +3693,17 @@ export const appRouter = router({
       users: protectedProcedure.query(async ({ ctx }) => {
         requireRole(ctx.user.role, "backoffice");
         return getZelloUsers();
+      }),
+      // Ligações Zello↔funcionário existentes (para o mapa ao vivo mostrar
+      // nomes reais e para o ecrã de ligação em massa)
+      mappings: protectedProcedure.query(async ({ ctx }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { getDb } = await import("./db");
+        const db = await getDb(); if (!db) return [];
+        const { employees } = await import("../drizzle/schema");
+        const { isNotNull } = await import("drizzle-orm");
+        return db.select({ employeeId: employees.id, fullName: employees.fullName, zelloUsername: employees.zelloUsername })
+          .from(employees).where(isNotNull(employees.zelloUsername));
       }),
       // Anexa (ou desanexa) um utilizador Zello a um colaborador — PERSISTENTE,
       // como o mapping de agentes Multipark. Único: limpa o username de quem o

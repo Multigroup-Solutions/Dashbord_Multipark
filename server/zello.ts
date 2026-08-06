@@ -191,3 +191,109 @@ export async function getZelloUserLocation(username: string): Promise<any> {
   const data = await zelloGet(`location/getuser/${encodeURIComponent(username)}`);
   return data;
 }
+
+export interface ZelloShiftSummary {
+  km: number;
+  avgSpeed: number;
+  maxSpeed: number;
+  /** minutos SEM reports do Zello dentro do turno (gaps > 10 min + pontas) */
+  offlineMinutes: number;
+  /** minutos com o Zello a reportar */
+  onlineMinutes: number;
+  points: number;
+}
+
+/**
+ * Resumo do turno de um condutor a partir do histórico GPS do Zello:
+ * km percorridos, velocidades e tempo com o Zello desligado (sem reports).
+ * Usado no check-out do ponto — melhor esforço, nunca deve rebentar o ponto.
+ */
+export async function summarizeZelloShift(
+  username: string,
+  start: Date,
+  end: Date
+): Promise<ZelloShiftSummary | null> {
+  if (!isZelloConfigured()) return null;
+  const startTs = Math.floor(start.getTime() / 1000);
+  const endTs = Math.floor(end.getTime() / 1000);
+  if (endTs <= startTs) return null;
+  const shiftMinutes = Math.round((endTs - startTs) / 60);
+
+  const data = await getZelloUserHistory(username, startTs, endTs);
+  const features: any[] = Array.isArray(data?.features) ? data.features : [];
+
+  // Extrai pontos (ts, speed, lat/lon) — mesmo parsing do job diário
+  const pts: { ts: number; speed: number; lat: number | null; lon: number | null }[] = [];
+  for (const f of features) {
+    const p = f.properties || {};
+    const ts = parseInt(p.timestamp || p.time || p.lastReport) || 0;
+    if (ts <= 0) continue;
+    const speed = (parseFloat(p.speed) || 0) * 3.6; // m/s → km/h
+    let lat: number | null = null, lon: number | null = null;
+    if (f.geometry?.type === "Point" && Array.isArray(f.geometry.coordinates)) {
+      const [gLon, gLat] = f.geometry.coordinates;
+      if (Number.isFinite(gLat) && Number.isFinite(gLon) && (gLat !== 0 || gLon !== 0)) {
+        lat = gLat; lon = gLon;
+      }
+    }
+    pts.push({ ts, speed, lat, lon });
+  }
+  pts.sort((a, b) => a.ts - b.ts);
+
+  // Sem um único report durante o turno = Zello desligado o turno inteiro
+  if (pts.length === 0) {
+    return { km: 0, avgSpeed: 0, maxSpeed: 0, offlineMinutes: shiftMinutes, onlineMinutes: 0, points: 0 };
+  }
+
+  const haversine = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+    const R = 6371, dLat = ((lat2 - lat1) * Math.PI) / 180, dLon = ((lon2 - lon1) * Math.PI) / 180;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  };
+
+  // km e velocidades (mesmos filtros de ruído do job diário: gap < 1h,
+  // salto < 2 km entre reports, velocidade implícita ≤ 150 km/h)
+  let km = 0, maxSpeed = 0, speedSum = 0, speedCount = 0;
+  const implicit: number[] = [];
+  let lastFix: { ts: number; lat: number; lon: number } | null = null;
+  for (const cur of pts) {
+    if (cur.speed > 0 && cur.speed <= 150) { speedSum += cur.speed; speedCount++; if (cur.speed > maxSpeed) maxSpeed = cur.speed; }
+    if (cur.lat != null && cur.lon != null) {
+      if (lastFix) {
+        const gapS = cur.ts - lastFix.ts;
+        const segKm = haversine(lastFix.lat, lastFix.lon, cur.lat, cur.lon);
+        if (gapS > 0 && gapS < 3600 && segKm < 2) {
+          const implKmh = (segKm / gapS) * 3600;
+          if (implKmh <= 150) { km += segKm; if (implKmh > 3) implicit.push(implKmh); }
+        }
+      }
+      lastFix = { ts: cur.ts, lat: cur.lat, lon: cur.lon };
+    }
+  }
+  if (speedCount === 0 && implicit.length > 0) {
+    speedSum = implicit.reduce((s, v) => s + v, 0);
+    speedCount = implicit.length;
+    maxSpeed = Math.max(...implicit);
+  }
+
+  // Offline: gaps > 10 min entre reports consecutivos, mais as pontas
+  // (entrada→1º report e último report→saída)
+  const GAP_S = 10 * 60;
+  let offlineS = 0;
+  if (pts[0].ts - startTs > GAP_S) offlineS += pts[0].ts - startTs;
+  for (let i = 1; i < pts.length; i++) {
+    const dt = pts[i].ts - pts[i - 1].ts;
+    if (dt > GAP_S) offlineS += dt;
+  }
+  if (endTs - pts[pts.length - 1].ts > GAP_S) offlineS += endTs - pts[pts.length - 1].ts;
+  const offlineMinutes = Math.min(shiftMinutes, Math.round(offlineS / 60));
+
+  return {
+    km: Math.round(km * 100) / 100,
+    avgSpeed: speedCount > 0 ? Math.round((speedSum / speedCount) * 100) / 100 : 0,
+    maxSpeed: Math.round(maxSpeed * 100) / 100,
+    offlineMinutes,
+    onlineMinutes: Math.max(0, shiftMinutes - offlineMinutes),
+    points: pts.length,
+  };
+}

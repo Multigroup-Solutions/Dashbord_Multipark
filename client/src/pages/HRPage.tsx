@@ -659,10 +659,18 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
     onError: (e) => toast.error(e.message),
   });
   const checkOut = trpc.rh.timeRecords.checkOut.useMutation({
-    onSuccess: (data) => {
+    onSuccess: (data: any) => {
       utils.rh.timeRecords.list.invalidate();
       utils.rh.timeRecords.monthlyHours.invalidate();
       toast.success(`Check-out registado! ${data.hoursWorked}h trabalhadas`);
+      if (data?.zello) {
+        const z = data.zello;
+        toast.info(
+          `Turno no Zello: ${Number(z.km).toFixed(1)} km · vel. máx ${Math.round(z.maxSpeed)} km/h` +
+          (z.offlineMinutes > 10 ? ` · ⚠ ${z.offlineMinutes} min com Zello desligado` : ""),
+          { duration: 10000 }
+        );
+      }
       setCameraMode(null);
     },
     onError: (e) => toast.error(e.message),
@@ -800,6 +808,16 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
                       <Camera className="w-3 h-3" /> Foto
                     </Badge>
                   )}
+                  {(r as any).zelloKm != null && (
+                    <Badge variant="outline" className="text-xs gap-1">
+                      🚗 {parseFloat(String((r as any).zelloKm)).toFixed(1)} km
+                    </Badge>
+                  )}
+                  {((r as any).zelloOfflineMinutes ?? 0) > 10 && (
+                    <Badge variant="outline" className="text-xs gap-1 border-amber-300 text-amber-700 bg-amber-50">
+                      ⚠ {(r as any).zelloOfflineMinutes} min s/ Zello
+                    </Badge>
+                  )}
                   {r.hoursWorked && <p className="text-sm font-semibold">{parseFloat(String(r.hoursWorked)).toFixed(1)}h</p>}
                 </div>
               </div>
@@ -845,6 +863,20 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
                   {r.hoursWorked && (
                     <div className="text-xs text-muted-foreground">
                       Horas trabalhadas: <span className="font-semibold text-foreground">{parseFloat(String(r.hoursWorked)).toFixed(2)}h</span>
+                    </div>
+                  )}
+                  {(r as any).zelloKm != null && (
+                    <div className="text-xs text-muted-foreground space-y-0.5">
+                      <p className="font-medium text-foreground">Turno no Zello (automático)</p>
+                      <p>Percorreu <span className="font-semibold text-foreground">{parseFloat(String((r as any).zelloKm)).toFixed(1)} km</span>
+                        {" · "}vel. média {Math.round(parseFloat(String((r as any).zelloAvgSpeed ?? 0)))} km/h
+                        {" · "}vel. máxima {Math.round(parseFloat(String((r as any).zelloMaxSpeed ?? 0)))} km/h</p>
+                      <p>
+                        Zello ligado {Math.floor(((r as any).zelloOnlineMinutes ?? 0) / 60)}h{String(((r as any).zelloOnlineMinutes ?? 0) % 60).padStart(2, "0")}
+                        {((r as any).zelloOfflineMinutes ?? 0) > 10 && (
+                          <span className="text-amber-700 font-medium"> · desligado {Math.floor(((r as any).zelloOfflineMinutes ?? 0) / 60)}h{String(((r as any).zelloOfflineMinutes ?? 0) % 60).padStart(2, "0")}</span>
+                        )}
+                      </p>
                     </div>
                   )}
                 </div>

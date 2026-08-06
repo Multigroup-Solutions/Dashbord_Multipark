@@ -1167,6 +1167,13 @@ export const timeRecords = mysqlTable("time_records", {
 	locationName: varchar({ length: 256 }),
 	hoursWorked: decimal({ precision: 6, scale: 2 }),
 	notes: text(),
+	// Snapshot do Zello preenchido automaticamente no check-out (km/velocidades
+	// do turno + tempo com o Zello desligado durante o turno)
+	zelloKm: decimal({ precision: 10, scale: 2 }),
+	zelloAvgSpeed: decimal({ precision: 6, scale: 2 }),
+	zelloMaxSpeed: decimal({ precision: 6, scale: 2 }),
+	zelloOfflineMinutes: int(),
+	zelloOnlineMinutes: int(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 });
 

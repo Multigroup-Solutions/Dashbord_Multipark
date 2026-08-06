@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { useTableSort, Th } from "@/components/SortableTable";
+import { ZelloLiveTab } from "@/components/ZelloLiveTab";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import {
   Car, AlertTriangle, Radio, Activity, Plus, Trash2, Eye, Check,
@@ -38,6 +39,7 @@ export default function OperationalPage() {
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList className="flex-wrap">
             <TabsTrigger value="dashboard"><Activity className="w-4 h-4 mr-1" />Dashboard</TabsTrigger>
+            <TabsTrigger value="live"><Satellite className="w-4 h-4 mr-1" />Ao Vivo</TabsTrigger>
             <TabsTrigger value="dia"><History className="w-4 h-4 mr-1" />Atividade do Dia</TabsTrigger>
             <TabsTrigger value="agents"><Users className="w-4 h-4 mr-1" />Por Colaborador</TabsTrigger>
             <TabsTrigger value="history"><History className="w-4 h-4 mr-1" />Histórico Diário</TabsTrigger>
@@ -45,6 +47,7 @@ export default function OperationalPage() {
             <TabsTrigger value="radio"><Radio className="w-4 h-4 mr-1" />Rádio</TabsTrigger>
           </TabsList>
           <TabsContent value="dashboard"><DashboardTab /></TabsContent>
+          <TabsContent value="live">{tab === "live" && <ZelloLiveTab />}</TabsContent>
           <TabsContent value="dia"><DayActivityTab /></TabsContent>
           <TabsContent value="agents"><AgentActivityTab /></TabsContent>
           <TabsContent value="history"><DriverHistoryTab /></TabsContent>
