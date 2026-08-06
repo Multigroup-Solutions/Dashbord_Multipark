@@ -991,16 +991,16 @@ export async function checkExtraDocsCompliance(employeeId: number): Promise<{
   }
 
   // +21 dias → bloqueia
+  // SUSPENSO (Jorge 6 ago 2026: "até estar tudo operacional, retira o bloqueio
+  // dos documentos") — o AVISO mantém-se; o bloqueio de login não é aplicado.
+  // Para reativar: repor este bloco (git log) e limpar loginBlocked=0 antes.
   if (daysSinceStart >= 21) {
-    if (!emp.loginBlocked) {
+    if (emp.loginBlocked) {
       await db.update(employees)
-        .set({
-          loginBlocked: 1,
-          loginBlockedReason: `Documentos obrigatórios em falta há ${daysSinceStart} dias: ${missingDocs.join(", ")}`,
-        })
+        .set({ loginBlocked: 0, loginBlockedReason: null })
         .where(eq(employees.id, employeeId));
     }
-    return { blocked: true, warning: true, missingDocs, daysSinceStart };
+    return { blocked: false, warning: true, missingDocs, daysSinceStart };
   }
 
   // +14 dias → avisa (apenas se ainda não foi avisado)
