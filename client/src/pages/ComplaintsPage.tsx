@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { openInMultipark } from "@/lib/multiparkLinks";
 import { fileHref } from "@/lib/fileHref";
 import CaseMessageList from "@/components/CaseMessageList";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
@@ -27,6 +28,7 @@ import {
   ChevronRight, ChevronLeft, Send, Eye, Trash2, Upload, Shield,
   BarChart3, AlertCircle, CheckCircle2, Hourglass, XCircle, Pencil,
   Mail, UserPlus, LinkIcon, X as XIcon, Download, RefreshCw, GripVertical, Package,
+  ExternalLink,
 } from "lucide-react";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
@@ -659,6 +661,13 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                     const eur = (v: any) => v != null ? Number(v).toLocaleString("pt-PT", { style: "currency", currency: b.currency || "EUR" }) : "—";
                     return (
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 border-t pt-3">
+                        {b.externalId && (
+                          <div className="sm:col-span-2">
+                            <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => openInMultipark(b.externalId)}>
+                              Ver na Multipark <ExternalLink className="w-3 h-3" />
+                            </Button>
+                          </div>
+                        )}
                         <div><span className="text-muted-foreground">Nº Reserva:</span> <span className="font-medium">#{b.bookingNumber || "—"}</span></div>
                         <div><span className="text-muted-foreground">Estado:</span> <span className="font-medium">{b.status || "—"}</span></div>
                         <div><span className="text-muted-foreground">Reservada em:</span> <span className="font-medium">{b.bookingCreatedAt ? fmtPTDateTime(b.bookingCreatedAt) : "—"}</span></div>

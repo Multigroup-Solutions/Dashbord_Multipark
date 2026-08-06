@@ -2,6 +2,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { fmtBookingDateTime } from "@/lib/lisbonTime";
+import { openInMultipark } from "@/lib/multiparkLinks";
+import { ExternalLink } from "lucide-react";
 
 // Detalhe completo de uma reserva (partilhado: folhas de Operações, Serviços…).
 // Mostra tudo o que a BD já tem — cliente, carro, voos, pagamento, origem,
@@ -47,7 +49,19 @@ export default function BookingDetailDialog({ booking: b, onClose }: { booking: 
         <CardHeader className="pb-2">
           <CardTitle className="text-base flex items-center justify-between gap-2 flex-wrap">
             <span className="font-mono">{b.bookingNumber || b.externalId}</span>
-            <Badge className={statusCfg?.color || "bg-gray-100 text-gray-800"}>{statusCfg?.label || b.status}</Badge>
+            <span className="flex items-center gap-2">
+              {b.externalId && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs gap-1"
+                  onClick={() => openInMultipark(b.externalId)}
+                >
+                  Ver na Multipark <ExternalLink className="w-3 h-3" />
+                </Button>
+              )}
+              <Badge className={statusCfg?.color || "bg-gray-100 text-gray-800"}>{statusCfg?.label || b.status}</Badge>
+            </span>
           </CardTitle>
           <p className="text-xs text-muted-foreground">{b.parkName} {b.city} · {b.parkingType ?? ""} {b.vehicleType ? `· ${VEHICLE_LABELS[b.vehicleType] ?? b.vehicleType}` : ""}</p>
         </CardHeader>
