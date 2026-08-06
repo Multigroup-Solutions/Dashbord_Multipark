@@ -1,8 +1,11 @@
+// Login novo (Multipark Design System · ui_kits/dashboard/LoginScreen):
+// painel dividido — formulário à esquerda com o logo real, painel navy com
+// gradiente e números do grupo à direita. Lógica de auth intacta.
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { getLoginUrl } from "@/const";
 import { ACCESS_DENIED_MSG, AUTH_DENIED_PARAM, AUTH_DENIED_VALUE } from "@shared/const";
-import { Building2, BarChart3, Receipt, Shield, Loader2, ShieldAlert } from "lucide-react";
+import { Loader2, ShieldAlert } from "lucide-react";
 import { useEffect } from "react";
 import { useLocation } from "wouter";
 
@@ -40,101 +43,83 @@ export default function Home() {
   if (user) return null;
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
-      {/* Header */}
-      <header className="border-b bg-card/80 backdrop-blur sticky top-0 z-50">
-        <div className="container flex items-center justify-between h-16">
-          <div className="flex items-center gap-2">
-            <div className="h-8 w-8 rounded-lg bg-primary flex items-center justify-center">
-              <Building2 className="h-5 w-5 text-primary-foreground" />
-            </div>
-            <span className="font-bold text-xl tracking-tight">Dashboard Multipark</span>
-          </div>
-          <Button onClick={() => { window.location.href = getLoginUrl(); }}>
-            Entrar
-          </Button>
-        </div>
-      </header>
+    <div className="min-h-screen flex bg-white">
+      {/* ── Formulário ── */}
+      <div className="flex-1 flex items-center justify-center p-8">
+        <div className="w-full max-w-[380px]">
+          <img src="/multipark-logo.png" alt="Multipark" className="h-8 mb-9" />
 
-      {/* Acesso recusado — mensagem única, ver ACCESS_DENIED_MSG */}
-      {accessDenied && (
-        <div className="container pt-6">
-          <div
-            role="alert"
-            className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 p-4 text-sm text-amber-900 dark:text-amber-200"
+          <h1 className="font-display font-bold text-3xl text-[#0c1f3f] mb-2">Bem-vindo de volta</h1>
+          <p className="text-[15px] text-slate-500 leading-snug mb-7">
+            Entra com a tua conta Google do grupo para acederes ao backoffice.
+          </p>
+
+          {accessDenied && (
+            <div
+              role="alert"
+              className="flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 mb-5"
+            >
+              <ShieldAlert className="h-5 w-5 shrink-0 mt-0.5" />
+              <span>{ACCESS_DENIED_MSG}</span>
+            </div>
+          )}
+
+          <Button
+            size="lg"
+            className="w-full h-11 text-[15px] font-semibold shadow-sm"
+            onClick={() => { window.location.href = getLoginUrl(); }}
           >
-            <ShieldAlert className="h-5 w-5 shrink-0 mt-0.5" />
-            <span>{ACCESS_DENIED_MSG}</span>
+            <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24" aria-hidden>
+              <path fill="currentColor" d="M21.35 11.1H12v3.2h5.3c-.5 2.5-2.6 3.9-5.3 3.9a5.9 5.9 0 1 1 0-11.8c1.5 0 2.8.5 3.8 1.5l2.4-2.4A9.4 9.4 0 0 0 12 2.6a9.4 9.4 0 1 0 0 18.8c5.4 0 9-3.8 9-9.2 0-.7-.1-1.4-.25-2.1Z"/>
+            </svg>
+            Entrar com Google
+          </Button>
+
+          <div className="flex items-center text-center text-slate-400 text-xs my-6 before:content-[''] before:flex-1 before:h-px before:bg-slate-200 after:content-[''] after:flex-1 after:h-px after:bg-slate-200">
+            <span className="px-3.5">acesso reservado à equipa</span>
           </div>
+
+          <p className="text-[13px] text-slate-400 leading-relaxed">
+            Sem acesso? Fala com a administração para te associarem à tua ficha de colaborador.
+          </p>
         </div>
-      )}
+      </div>
 
-      {/* Hero */}
-      <main className="flex-1 flex items-center">
-        <div className="container py-12 sm:py-24">
-          <div className="max-w-3xl">
-            <div className="inline-flex items-center gap-2 bg-accent/20 text-accent-foreground border border-accent/30 rounded-full px-4 py-1.5 text-sm font-medium mb-6">
-              <Shield className="h-3.5 w-3.5" />
-              Plataforma de Gestão Empresarial
-            </div>
-            <h1 className="text-3xl sm:text-5xl font-bold tracking-tight text-foreground mb-6 leading-tight">
-              Gestão inteligente{" "}
-              <span className="text-primary">para o Grupo Multipark</span>
-            </h1>
-            <p className="text-base sm:text-xl text-muted-foreground mb-10 leading-relaxed max-w-2xl">
-              Controla despesas, recursos humanos, projetos e muito mais numa única plataforma.
-              Com extração automática de faturas por IA e relatórios em tempo real.
-            </p>
-            <div className="flex flex-wrap gap-4">
-              <Button
-                size="lg"
-                onClick={() => { window.location.href = getLoginUrl(); }}
-                className="shadow-lg"
-              >
-                Aceder à plataforma
-              </Button>
-            </div>
+      {/* ── Painel de marca (navy) ── */}
+      <div className="hidden lg:flex flex-1 relative overflow-hidden flex-col justify-center p-14 text-white bg-gradient-to-br from-[#0e2957] to-[#081226]">
+        <div
+          className="absolute -right-28 -top-28 w-[380px] h-[380px] rounded-full pointer-events-none"
+          style={{ background: "radial-gradient(circle, rgba(0,85,210,.45), transparent 70%)" }}
+        />
+        <img src="/multipark-logo-white.png" alt="" className="h-[26px] w-auto self-start mb-10 relative" />
+        <div className="relative">
+          <div className="font-display font-bold text-xs tracking-[.18em] uppercase text-[#8fb3f5]">
+            Plataforma interna
           </div>
-
-          {/* Feature cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 mt-20">
+          <h2 className="font-display font-extrabold text-[34px] leading-[1.15] mt-3 mb-4 max-w-[13ch]">
+            Toda a operação num só lugar
+          </h2>
+          <p className="text-[15px] leading-relaxed text-white/[.78] max-w-[38ch] m-0">
+            Reservas, condutores, ponto com GPS, extras, faturação e parcerias —
+            em tempo real, nas 3 cidades.
+          </p>
+          <div className="flex gap-9 mt-11">
             {[
-              {
-                icon: Receipt,
-                title: "Gestão de Despesas",
-                desc: "Digitaliza faturas com a câmara e extrai dados automaticamente com IA.",
-              },
-              {
-                icon: BarChart3,
-                title: "Dashboards em Tempo Real",
-                desc: "Visualiza gastos por dia, semana e mês, por projeto e por utilizador.",
-              },
-              {
-                icon: Shield,
-                title: "Controlo de Acessos",
-                desc: "Permissões granulares por role: Super Admin, Admin, Team Leader e mais.",
-              },
-            ].map((f) => (
-              <div
-                key={f.title}
-                className="bg-card border rounded-xl p-6 shadow-sm hover:shadow-md transition-shadow"
-              >
-                <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center mb-4">
-                  <f.icon className="h-5 w-5 text-primary" />
-                </div>
-                <h3 className="font-semibold text-foreground mb-2">{f.title}</h3>
-                <p className="text-sm text-muted-foreground leading-relaxed">{f.desc}</p>
+              ["3", "Cidades"],
+              ["70+", "Parceiros"],
+              ["350+", "Condutores"],
+            ].map(([n, l]) => (
+              <div key={l}>
+                <b className="font-display font-extrabold text-[28px] block">{n}</b>
+                <span className="text-xs text-white/70 uppercase tracking-[.08em]">{l}</span>
               </div>
             ))}
           </div>
         </div>
-      </main>
-
-      <footer className="border-t py-6">
-        <div className="container text-center text-sm text-muted-foreground">
-          © {new Date().getFullYear()} Dashboard Multipark — Grupo Multipark
+        <div className="absolute bottom-6 left-14 text-xs text-white/50 font-normal">
+          © {new Date().getFullYear()} Grupo Multipark
         </div>
-      </footer>
+      </div>
     </div>
   );
 }
