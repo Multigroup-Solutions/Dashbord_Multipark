@@ -182,26 +182,43 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
     actionType === "checkin" ? COLLECTED_SET.has(b.status) :
     actionType === "checkout" ? DELIVERED_SET.has(b.status) : true;
 
-  // Origens distintas no resultado (para o filtro "de onde vem a reserva")
-  const ORIGIN_LABELS: Record<string, string> = {
-    GENERAL_FORM: "Site (formulário)",
-    API: "API / Agregador",
-    BACKOFFICE: "Backoffice",
-    PHONE: "Telefone",
-  };
-  const originOptions = useMemo(() => {
-    const set = new Set<string>();
-    for (const b of (data?.bookings ?? []) as any[]) {
-      if (b.origin) set.add(b.origin);
+  // ── Classificação de ORIGENS (lógica do Jorge, 2026-08-06) ────────────────
+  // 1) Parceiro identificado (campanha→partnership) manda SEMPRE, venha de
+  //    onde vier (MANUAL/GENERAL_FORM/PARTNER_DASHBOARD incluídos);
+  // 2) Campanha sem parceiro = campanha INTERNA nossa (10º Aniversário, etc.);
+  // 3) Senão, o canal: MANUAL=Telefone; GENERAL_FORM=site multipark.app;
+  //    API=site da própria marca (redpark.pt/skypark.pt/airparking.pt);
+  //    MARKETPLACE=páginas de parque do marketplace.
+  const classifyOrigin = (b: any): { group: string; label: string } => {
+    if (b.salesPartnerName) return { group: "parceiro", label: `🤝 ${b.salesPartnerName}` };
+    if (b.campaign) return { group: "campanha", label: `📣 ${b.campaign}` };
+    const origin = String(b.origin ?? "");
+    if (origin === "MANUAL") return { group: "telefone", label: "📞 Telefone" };
+    if (origin === "PARTNER_DASHBOARD") return { group: "parceiro", label: "🤝 Parceiro (por identificar)" };
+    if (origin === "GENERAL_FORM") return { group: "site", label: "🌐 Site multipark.app" };
+    if (origin === "MARKETPLACE") return { group: "marketplace", label: "🏬 Marketplace" };
+    if (origin === "API") {
+      try {
+        const host = new URL(b.originUrl).hostname.replace(/^www\./, "");
+        return { group: "site", label: `🌐 Site ${host}` };
+      } catch {
+        return { group: "outros", label: "API (sem link)" };
+      }
     }
-    return Array.from(set).sort();
-  }, [data]);
+    return { group: "outros", label: "Sem origem" };
+  };
+  const ORIGIN_GROUPS: Array<{ id: string; label: string }> = [
+    { id: "site", label: "Sites próprios" },
+    { id: "telefone", label: "Telefone" },
+    { id: "parceiro", label: "Parceiros" },
+    { id: "campanha", label: "Campanhas internas" },
+    { id: "marketplace", label: "Marketplace" },
+    { id: "outros", label: "Sem origem / por identificar" },
+  ];
 
   const bookings = useMemo(() => {
     let list: any[] = data?.bookings ?? [];
-    if (originFilter === "partner") list = list.filter((b) => b.salesPartnerName);
-    else if (originFilter === "none") list = list.filter((b) => !b.origin);
-    else if (originFilter !== "all") list = list.filter((b) => b.origin === originFilter);
+    if (originFilter !== "all") list = list.filter((b) => classifyOrigin(b).group === originFilter);
     if (stateFilter === "done") list = list.filter((b) => isDone(b));
     else if (stateFilter === "pending") list = list.filter((b) => !isDone(b));
     if (!searchTerm) return list;
@@ -298,11 +315,9 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
             <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Todas as origens</SelectItem>
-              <SelectItem value="partner">Com parceiro/campanha</SelectItem>
-              {originOptions.map((o) => (
-                <SelectItem key={o} value={o}>{ORIGIN_LABELS[o] ?? o}</SelectItem>
+              {ORIGIN_GROUPS.map((g) => (
+                <SelectItem key={g.id} value={g.id}>{g.label}</SelectItem>
               ))}
-              <SelectItem value="none">Sem origem registada</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -456,7 +471,7 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
               {(() => {
                 const counts = new Map<string, number>();
                 for (const b of bookings as any[]) {
-                  const key = b.salesPartnerName ? `🤝 ${b.salesPartnerName}` : (ORIGIN_LABELS[b.origin] ?? b.origin ?? "Sem origem");
+                  const key = classifyOrigin(b).label;
                   counts.set(key, (counts.get(key) ?? 0) + 1);
                 }
                 return Array.from(counts.entries())
@@ -561,17 +576,15 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
                         </td>
                         <td className="p-2 text-xs">{fmtBookingDateTime(b.checkIn)}</td>
                         <td className="p-2 text-xs">{fmtBookingDateTime(b.checkOut)}</td>
-                        <td className="p-2 text-xs max-w-[130px]">
-                          {b.salesPartnerName ? (
-                            <Badge variant="outline" className="text-[10px] border-rose-200 text-rose-700">{b.salesPartnerName}</Badge>
-                          ) : b.origin ? (
-                            <Badge variant="outline" className="text-[10px]">{ORIGIN_LABELS[b.origin] ?? b.origin}</Badge>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                          {b.campaign && !b.salesPartnerName && (
-                            <span className="block text-[10px] text-muted-foreground truncate" title={b.campaign}>{b.campaign}</span>
-                          )}
+                        <td className="p-2 text-xs max-w-[150px]">
+                          {(() => {
+                            const o = classifyOrigin(b);
+                            const color = o.group === "parceiro" ? "border-rose-200 text-rose-700"
+                              : o.group === "campanha" ? "border-violet-200 text-violet-700"
+                              : o.group === "telefone" ? "border-amber-200 text-amber-700"
+                              : "";
+                            return <Badge variant="outline" className={`text-[10px] ${color}`} title={b.originUrl ?? undefined}>{o.label}</Badge>;
+                          })()}
                         </td>
                         <td className="p-2">
                           <Badge className={statusCfg?.color || "bg-gray-100 text-gray-800"}>
