@@ -6995,6 +6995,20 @@ export const appRouter = router({
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
         const { employees, projects } = await import("../drizzle/schema");
         const { eq, and } = await import("drizzle-orm");
+        // ── ANTI-DUPLICAÇÃO (regra do Jorge: uma pessoa é só uma pessoa) —
+        // mesma verificação do rh.create: nome normalizado ou email já ativos
+        {
+          const norm = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+          const all = await db.select({ id: employees.id, fullName: employees.fullName, email: employees.email })
+            .from(employees).where(eq(employees.isActive, 1));
+          const dup = all.find((e) =>
+            norm(e.fullName) === norm(input.agentName) ||
+            (input.email && e.email && e.email.toLowerCase() === input.email.toLowerCase()),
+          );
+          if (dup) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: `Já existe um colaborador ativo com estes dados: ${dup.fullName} (#${dup.id}). Liga o agente à ficha existente em vez de criar outra.` });
+          }
+        }
         // centro de custos default = cidade Lisboa (o Jorge corrige depois se for de outra)
         const lisboa = await db.select({ id: projects.id }).from(projects)
           .where(and(eq(projects.level, "city"), eq(projects.name, "Lisboa"))).limit(1);
