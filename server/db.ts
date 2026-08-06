@@ -5842,6 +5842,80 @@ export async function listAgentPartners(): Promise<Array<{ agentName: string; pa
   return (rows as any[]).map((r) => ({ agentName: r.agentName, partnershipId: Number(r.partnershipId), partnerName: r.partnerName ?? null }));
 }
 
+// ─── AGENTES IGNORADOS ("não é funcionário") ─────────────────────────────────
+// Alguns "agentes" do histórico não são pessoas nem parceiros: testes,
+// integrações, reservas de sistema. O Jorge marca-os como "não é funcionário"
+// e saem da lista de agentes por ligar. Tabela on-demand.
+let agentIgnoreEnsured = false;
+async function ensureAgentIgnoreTable() {
+  if (agentIgnoreEnsured) return;
+  const db = await getDb();
+  if (!db) return;
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS \`agent_ignore_list\` (
+    \`agentName\` VARCHAR(256) NOT NULL,
+    \`createdAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (\`agentName\`)
+  )`);
+  agentIgnoreEnsured = true;
+}
+
+export async function setAgentIgnored(agentName: string, ignored: boolean) {
+  const db = await getDb();
+  if (!db) return;
+  await ensureAgentIgnoreTable();
+  if (ignored) {
+    await db.execute(sql`INSERT IGNORE INTO \`agent_ignore_list\` (\`agentName\`) VALUES (${agentName})`);
+  } else {
+    await db.execute(sql`DELETE FROM \`agent_ignore_list\` WHERE \`agentName\` = ${agentName}`);
+  }
+}
+
+export async function listIgnoredAgents(): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  await ensureAgentIgnoreTable();
+  const [rows] = await db.execute(sql`SELECT agentName FROM \`agent_ignore_list\``) as any;
+  return (rows as any[]).map((r) => String(r.agentName));
+}
+
+/**
+ * Última vez que cada colaborador trabalhou (pedido Jorge: mostrar nos cartões
+ * dos extras). Máximo entre: ações reais no histórico Multipark (via agente
+ * ligado), picagens de ponto e atribuições de extras-dia. Devolve
+ * { employeeId: "YYYY-MM-DD" }.
+ */
+export async function getLastWorkedMap(): Promise<Record<number, string>> {
+  const db = await getDb();
+  if (!db) return {};
+  const out: Record<number, string> = {};
+  const day = (d: any): string | null => {
+    if (!d) return null;
+    if (d instanceof Date) return d.toISOString().slice(0, 10);
+    const s = String(d);
+    return s.length >= 10 ? s.slice(0, 10) : null;
+  };
+  const take = (id: any, d: any) => {
+    const k = Number(id);
+    const s = day(d);
+    if (!k || !s) return;
+    if (!out[k] || s > out[k]) out[k] = s;
+  };
+  const [hist] = await db.execute(sql`
+    SELECT e.id, MAX(h.actionTime) d
+    FROM employees e JOIN multipark_booking_history h ON h.agentName = e.multiparkAgentName
+    WHERE e.multiparkAgentName IS NOT NULL AND e.multiparkAgentName != ''
+    GROUP BY e.id`) as any;
+  for (const r of (hist as any[]) ?? []) take(r.id, r.d);
+  const [ponto] = await db.execute(sql`
+    SELECT employeeId id, MAX(recordedAt) d FROM time_records GROUP BY employeeId`) as any;
+  for (const r of (ponto as any[]) ?? []) take(r.id, r.d);
+  const [extras] = await db.execute(sql`
+    SELECT employeeId id, MAX(assignmentDate) d FROM extras_dia_assignments
+    WHERE employeeId IS NOT NULL GROUP BY employeeId`) as any;
+  for (const r of (extras as any[]) ?? []) take(r.id, r.d);
+  return out;
+}
+
 /** Atividade consolidada de UM dia (visão do Jorge): por pessoa/agente —
  *  ações nas reservas (recolhas/entregas/movimentos/cancelamentos) + km e
  *  horas do GPS (daily_driver_history, recolhido às 2h para o dia anterior). */

@@ -2787,6 +2787,15 @@ function UnlinkedAgentsSection() {
     onSuccess: () => { refresh(); utils.rh.list.invalidate(); toast.success("Funcionário criado a partir do agente — completa a ficha (email, morada, nível)"); },
     onError: (e) => toast.error(e.message),
   });
+  const { data: ignoredList = [] } = trpc.multipark.ignoredAgents.useQuery();
+  const [showIgnored, setShowIgnored] = useState(false);
+  const ignoreMut = trpc.multipark.ignoreAgent.useMutation({
+    onSuccess: (_d, vars) => {
+      refresh(); utils.multipark.ignoredAgents.invalidate();
+      toast.success(vars.ignored ? "Marcado como \"não é funcionário\" — saiu da lista" : "Reposto na lista de agentes por ligar");
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   return (
     <div className="space-y-3">
@@ -2794,7 +2803,7 @@ function UnlinkedAgentsSection() {
         <CardContent className="p-3 text-sm text-amber-900">
           Estes agentes têm atividade na Multipark mas não estão ligados a ninguém.
           Liga cada um a um <strong>colaborador</strong>, a um <strong>parceiro</strong> (agências que marcam pelo portal),
-          ou cria o funcionário. Nomes de teste/scripts podem simplesmente ficar aqui.
+          cria o funcionário — ou marca <strong>"não é funcionário"</strong> (testes, integrações, reservas de sistema) para o tirar da lista.
         </CardContent>
       </Card>
       {isLoading ? (
@@ -2846,6 +2855,14 @@ function UnlinkedAgentsSection() {
                         >
                           + Criar funcionário
                         </Button>
+                        <Button
+                          size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground hover:text-red-600"
+                          disabled={ignoreMut.isPending}
+                          title="Teste, integração ou reserva de sistema — não é uma pessoa"
+                          onClick={() => { if (confirm(`"${a.agentName}" não é funcionário nem parceiro? Sai da lista (reversível).`)) ignoreMut.mutate({ agentName: a.agentName, ignored: true }); }}
+                        >
+                          🚫 Não é funcionário
+                        </Button>
                       </div>
                     </div>
                   </td>
@@ -2853,6 +2870,36 @@ function UnlinkedAgentsSection() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Ignorados ("não é funcionário") — reversível */}
+      {ignoredList.length > 0 && (
+        <div className="space-y-2">
+          <button
+            type="button"
+            className="text-xs text-muted-foreground hover:underline"
+            onClick={() => setShowIgnored((v) => !v)}
+          >
+            {showIgnored ? "▾" : "▸"} {ignoredList.length} marcado(s) como "não é funcionário"
+          </button>
+          {showIgnored && (
+            <div className="flex flex-wrap gap-2">
+              {(ignoredList as string[]).map((name) => (
+                <Badge key={name} variant="outline" className="gap-2 text-xs">
+                  {name}
+                  <button
+                    type="button"
+                    className="text-muted-foreground hover:text-foreground"
+                    title="Repor na lista"
+                    onClick={() => ignoreMut.mutate({ agentName: name, ignored: false })}
+                  >
+                    ↩
+                  </button>
+                </Badge>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

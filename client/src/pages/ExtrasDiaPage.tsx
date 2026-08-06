@@ -1,6 +1,8 @@
 import { trpc } from "@/lib/trpc";
 import { createContext, useContext } from "react";
 import { usePersistedState } from "@/hooks/usePersistedState";
+import { useOpenEmployee } from "@/hooks/useOpenEmployee";
+import { fmtPTDate } from "@/lib/lisbonTime";
 import { buildAvailabilityMessage, AVAILABILITY_KINDS, type AvailabilityMessageKind } from "@shared/availabilityMessages";
 import { useTableSort, Th } from "@/components/SortableTable";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -896,6 +898,7 @@ function AssignmentRow({
 }) {
   const a = assignment;
   const levels = useLiveLevels();
+  const openEmployeeRow = useOpenEmployee();
   const [editing, setEditing] = useState(false);
   const [level, setLevel] = useState<LevelId>((a.level ?? "junior") as LevelId);
   const [startHour, setStartHour] = useState(a.startHour);
@@ -915,7 +918,11 @@ function AssignmentRow({
               <AvatarImage src={(a as any).photoUrl ?? undefined} className="object-cover" />
               <AvatarFallback className="text-[10px]">{a.personName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()}</AvatarFallback>
             </Avatar>
-            {a.personName}
+            {a.employeeId ? (
+              <button type="button" className="hover:underline" title="Abrir ficha do funcionário" onClick={() => openEmployeeRow(a.employeeId!)}>
+                {a.personName}
+              </button>
+            ) : a.personName}
           </span>
         </td>
         <td className="py-2 px-2">
@@ -1497,6 +1504,8 @@ export function AvailabilitySection() {
   });
 
   const o = overview.data;
+  // Última vez que cada extra trabalhou (histórico Multipark/ponto/extras-dia)
+  const lastWorked = trpc.rh.lastWorkedMap.useQuery();
   // Os dois filtros COMPÕEM-SE: cidade primeiro, disponibilidade depois. O
   // conjunto resultante é o que a tabela mostra E o alvo de "a todos" (email e
   // WhatsApp) — invariante "o que envio é o que vejo".
@@ -1506,9 +1515,10 @@ export function AvailabilitySection() {
     if (cityFilter === "none") list = list.filter(e => e.city === null);
     else if (cityFilter !== "all") list = list.filter(e => e.city === cityFilter);
     if (onlyWithAvailability) list = list.filter(e => e.availableDays > 0);
-    return list;
-  }, [o, cityFilter, onlyWithAvailability]);
+    return list.map(e => ({ ...e, lastWorked: lastWorked.data?.[e.employeeId] ?? "" }));
+  }, [o, cityFilter, onlyWithAvailability, lastWorked.data]);
   const availSort = useTableSort(shownExtras);
+  const openEmployee = useOpenEmployee();
 
   // Contagens do cabeçalho seguem o conjunto FILTRADO (as do servidor são
   // sempre o universo completo e mentiriam com um filtro aplicado).
@@ -1834,6 +1844,7 @@ export function AvailabilitySection() {
                       />
                     </th>
                     <Th k="fullName" label="Extra" sortKey={availSort.sortKey} sortDir={availSort.sortDir} onToggle={availSort.toggle} />
+                    <Th k="lastWorked" label="Últ. trabalho" sortKey={availSort.sortKey} sortDir={availSort.sortDir} onToggle={availSort.toggle} />
                     <Th k="city" label="Cidade" sortKey={availSort.sortKey} sortDir={availSort.sortDir} onToggle={availSort.toggle} />
                     <Th k="phoneE164" label="Telefone" sortKey={availSort.sortKey} sortDir={availSort.sortDir} onToggle={availSort.toggle} />
                     {o.dayHeaders.map((h) => (
@@ -1863,8 +1874,18 @@ export function AvailabilitySection() {
                           {ex.responded
                             ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
                             : <span className="h-3.5 w-3.5 inline-block rounded-full border border-muted-foreground/30" />}
-                          {ex.fullName}
+                          <button
+                            type="button"
+                            className="hover:underline text-left"
+                            title="Abrir ficha do funcionário"
+                            onClick={() => openEmployee(ex.employeeId)}
+                          >
+                            {ex.fullName}
+                          </button>
                         </span>
+                      </td>
+                      <td className="py-1 pr-2 whitespace-nowrap text-xs text-muted-foreground">
+                        {(ex as any).lastWorked ? fmtPTDate((ex as any).lastWorked) : "nunca"}
                       </td>
                       <td className="py-1 pr-2 whitespace-nowrap text-xs">
                         {ex.city ? (
@@ -1920,7 +1941,7 @@ export function AvailabilitySection() {
                   ))}
                   {shownExtras.length === 0 && (
                     <tr>
-                      <td colSpan={o.dayHeaders.length + 4} className="py-3 text-center text-muted-foreground">
+                      <td colSpan={o.dayHeaders.length + 5} className="py-3 text-center text-muted-foreground">
                         {cityFilter !== "all"
                           ? "Nenhum extra neste filtro de cidade."
                           : onlyWithAvailability

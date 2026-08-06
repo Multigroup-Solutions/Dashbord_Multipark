@@ -15,6 +15,8 @@ import {
   Zap, AlertTriangle, Award, Download, Pencil,
 } from "lucide-react";
 import { useTableSort, Th } from "@/components/SortableTable";
+import { useOpenEmployee } from "@/hooks/useOpenEmployee";
+import { fmtPTDate } from "@/lib/lisbonTime";
 
 function getWeekNumber(d: Date): number {
   const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
@@ -35,6 +37,8 @@ export default function PerformancePage() {
   const prevYear = week > 1 ? year : year - 1;
 
   const { data: evaluations = [], isLoading } = trpc.performance.list.useQuery({ weekNumber: week, yearNumber: year });
+  const lastWorkedMap = trpc.rh.lastWorkedMap.useQuery();
+  const openEmployee = useOpenEmployee();
   const { data: prevEvaluations = [] } = trpc.performance.list.useQuery({ weekNumber: prevWeek, yearNumber: prevYear });
   const generateMut = trpc.performance.generate.useMutation();
   const updateMut = trpc.performance.update.useMutation();
@@ -214,7 +218,14 @@ export default function PerformancePage() {
                             <span className="text-muted-foreground text-xs inline-flex items-center"><Minus className="w-3 h-3" /></span>
                           )}
                         </td>
-                        <td className="p-2 font-medium whitespace-nowrap">{name}</td>
+                        <td className="p-2 font-medium whitespace-nowrap">
+                          <button type="button" className="hover:underline text-left" title="Abrir ficha do funcionário" onClick={() => openEmployee(ev.employeeId)}>
+                            {name}
+                          </button>
+                          {lastWorkedMap.data?.[ev.employeeId] && (
+                            <span className="block text-[10px] text-muted-foreground font-normal">últ. trabalho: {fmtPTDate(lastWorkedMap.data[ev.employeeId])}</span>
+                          )}
+                        </td>
                         <td className="p-2 text-center tabular-nums">{Number(ev.hoursWorked || 0).toFixed(1)}h</td>
                         <td className="p-2 text-center tabular-nums">{ev.movementsCount || 0}</td>
                         <td className="p-2 text-center tabular-nums">{Number(ev.movementsPerHour || 0).toFixed(1)}</td>

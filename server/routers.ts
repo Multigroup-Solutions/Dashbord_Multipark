@@ -2134,6 +2134,14 @@ export const appRouter = router({
       return getHRStats();
     }),
 
+    // Última vez que cada colaborador trabalhou (cartões dos extras:
+    // disponibilidade, extras-dia, avaliações)
+    lastWorkedMap: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx.user.role, "frontoffice");
+      const { getLastWorkedMap } = await import("./db");
+      return getLastWorkedMap();
+    }),
+
     // ── EMPLOYEES ─────────────────────────────────────────────────────────────────────────────────
     list: protectedProcedure
       .input(z.object({ isActive: z.boolean().optional(), position: z.string().optional() }).optional())
@@ -6945,6 +6953,24 @@ export const appRouter = router({
       return listAgentPartners();
     }),
 
+    // "Não é funcionário": marca um agente como teste/integração — sai da
+    // lista de agentes por ligar (reversível)
+    ignoreAgent: protectedProcedure
+      .input(z.object({ agentName: z.string().min(1).max(256), ignored: z.boolean() }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        const { setAgentIgnored } = await import("./db");
+        await setAgentIgnored(input.agentName, input.ignored);
+        await logActivity({ userId: ctx.user.id, action: input.ignored ? "ignore" : "unignore", entity: "agent", details: input.agentName });
+        return { success: true };
+      }),
+
+    ignoredAgents: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx.user.role, "backoffice");
+      const { listIgnoredAgents } = await import("./db");
+      return listIgnoredAgents();
+    }),
+
     // Agentes do histórico SEM funcionário nem parceiro (aba RH "Agentes")
     unlinkedAgents: protectedProcedure.query(async ({ ctx }) => {
       requireRole(ctx.user.role, "backoffice");
@@ -6968,10 +6994,12 @@ export const appRouter = router({
       const linkedEmps = await db.select({ n: employees.multiparkAgentName }).from(employees).where(isNotNull(employees.multiparkAgentName));
       const linked = new Set(linkedEmps.map((e) => (e.n ?? "").trim().toLowerCase()));
       const partners = new Set((await listAgentPartners()).map((p) => p.agentName.trim().toLowerCase()));
+      const { listIgnoredAgents } = await import("./db");
+      const ignored = new Set((await listIgnoredAgents()).map((n) => n.trim().toLowerCase()));
       return (rows as any[])
         .filter((r) => {
           const key = String(r.agentName).trim().toLowerCase();
-          return !linked.has(key) && !partners.has(key);
+          return !linked.has(key) && !partners.has(key) && !ignored.has(key);
         })
         .map((r) => ({
           agentName: r.agentName,
