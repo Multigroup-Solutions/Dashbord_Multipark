@@ -636,42 +636,9 @@ function DashboardLayoutContent({
           </div>
 
           <div className="flex items-center gap-3">
-            {/* City filter */}
-            <Select
-              value={filters.cityId === null ? "all" : String(filters.cityId)}
-              onValueChange={(v) => filters.setCityId(v === "all" ? null : Number(v))}
-            >
-              <SelectTrigger className="hidden md:flex h-9 w-[130px]">
-                <SelectValue placeholder="Cidade" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todas as cidades</SelectItem>
-                {filters.cities.map((city) => (
-                  <SelectItem key={city.id} value={String(city.id)}>
-                    {city.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            {/* Brand/Park filter */}
-            <Select
-              value={filters.brandId === null ? "all" : String(filters.brandId)}
-              onValueChange={(v) => filters.setBrandId(v === "all" ? null : Number(v))}
-            >
-              <SelectTrigger className="hidden md:flex h-9 w-[140px]">
-                <SelectValue placeholder="Parque" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todos os parques</SelectItem>
-                {filters.brands.map((brand) => (
-                  <SelectItem key={brand.id} value={String(brand.id)}>
-                    {brand.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
+            {/* Filtros de cidade/parques REMOVIDOS do topo (pedido Jorge:
+                não filtravam a maioria das páginas — cada página tem o seu
+                seletor de cidade, já limitado às permissões da pessoa) */}
             {/* Date filter popover */}
             <Popover>
               <PopoverTrigger asChild>
