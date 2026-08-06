@@ -54,6 +54,75 @@ const GRAN_LABEL: Record<Exclude<DateGran, "custom">, string> = {
 };
 
 /**
+ * Navegador de UM dia (padrão transversal do Jorge): ◀ data ▶ + botão Hoje.
+ * Para páginas por dia: Extras-Dia, Passagem de Turno, Atividade do Dia.
+ */
+export function DayNav({ date, onChange }: { date: string; onChange: (date: string) => void }) {
+  const step = (dir: -1 | 1) => {
+    const d = new Date(`${date || iso(new Date())}T00:00:00`);
+    d.setDate(d.getDate() + dir);
+    onChange(iso(d));
+  };
+  const today = iso(new Date());
+  return (
+    <div className="flex items-center gap-1.5">
+      <Button variant="outline" size="icon" className="h-9 w-8 shrink-0" onClick={() => step(-1)} title="Dia anterior">
+        <ChevronLeft className="h-4 w-4" />
+      </Button>
+      <Input type="date" value={date} className="w-[150px] h-9" onChange={(e) => e.target.value && onChange(e.target.value)} />
+      <Button variant="outline" size="icon" className="h-9 w-8 shrink-0" onClick={() => step(1)} title="Dia seguinte">
+        <ChevronRight className="h-4 w-4" />
+      </Button>
+      <Button variant={date === today ? "secondary" : "outline"} size="sm" className="h-9" onClick={() => onChange(today)}>
+        Hoje
+      </Button>
+    </div>
+  );
+}
+
+/** Segunda-feira da semana que contém a data. */
+export function mondayOf(d: Date): string {
+  const a = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const dow = (a.getDay() + 6) % 7;
+  a.setDate(a.getDate() - dow);
+  return iso(a);
+}
+
+/**
+ * Navegador de UMA semana: ◀ 11/08–17/08 ▶ + "Esta semana". Para páginas
+ * semanais: Disponibilidade, Avaliação Individual.
+ */
+export function WeekNav({ weekStart, onChange }: { weekStart: string; onChange: (weekStart: string) => void }) {
+  const step = (dir: -1 | 1) => {
+    const d = new Date(`${weekStart || mondayOf(new Date())}T00:00:00`);
+    d.setDate(d.getDate() + 7 * dir);
+    onChange(iso(d));
+  };
+  const thisMonday = mondayOf(new Date());
+  const label = (() => {
+    if (!weekStart) return "—";
+    const s = new Date(`${weekStart}T00:00:00`);
+    const e = new Date(s); e.setDate(s.getDate() + 6);
+    const f = (d: Date) => `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`;
+    return `${f(s)}–${f(e)}`;
+  })();
+  return (
+    <div className="flex items-center gap-1.5">
+      <Button variant="outline" size="icon" className="h-9 w-8 shrink-0" onClick={() => step(-1)} title="Semana anterior">
+        <ChevronLeft className="h-4 w-4" />
+      </Button>
+      <span className="text-sm font-medium tabular-nums min-w-[100px] text-center">{label}</span>
+      <Button variant="outline" size="icon" className="h-9 w-8 shrink-0" onClick={() => step(1)} title="Semana seguinte">
+        <ChevronRight className="h-4 w-4" />
+      </Button>
+      <Button variant={weekStart === thisMonday ? "secondary" : "outline"} size="sm" className="h-9" onClick={() => onChange(thisMonday)}>
+        Esta semana
+      </Button>
+    </div>
+  );
+}
+
+/**
  * Navegador de datas transversal (pedido do Jorge): escolhe a granularidade
  * (Dia/Semana/Mês/Ano) e as setas ◀ ▶ saltam pelo período; datas manuais
  * passam para "custom" (as setas saltam pela duração escolhida). "Tudo"

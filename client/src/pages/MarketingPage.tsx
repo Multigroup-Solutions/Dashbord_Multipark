@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
+import DateRangeNav from "@/components/DateRangeNav";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
@@ -248,12 +249,8 @@ function DashboardTab() {
       {/* Filters */}
       <div className="flex flex-wrap items-end gap-3">
         <div>
-          <Label className="text-xs mb-1 block">De</Label>
-          <Input type="date" value={from} onChange={e => setFrom(e.target.value)} className="w-40" />
-        </div>
-        <div>
-          <Label className="text-xs mb-1 block">Até</Label>
-          <Input type="date" value={to} onChange={e => setTo(e.target.value)} className="w-40" />
+          <Label className="text-xs mb-1 block">Período</Label>
+          <DateRangeNav start={from} end={to} gran="month" showAll={false} onChange={(s2, e2) => { setFrom(s2); setTo(e2); }} />
         </div>
         <div>
           <Label className="text-xs mb-1 block">Grupo / Projeto</Label>
@@ -694,8 +691,7 @@ function InternalCampaignsTab() {
       {/* Período + nova campanha */}
       <Card>
         <CardContent className="p-4 flex flex-wrap items-end gap-3">
-          <div><Label className="text-xs">De</Label><Input type="date" className="w-40" value={from} onChange={e => setFrom(e.target.value)} /></div>
-          <div><Label className="text-xs">Até</Label><Input type="date" className="w-40" value={to} onChange={e => setTo(e.target.value)} /></div>
+          <div><Label className="text-xs mb-1 block">Período</Label><DateRangeNav start={from} end={to} gran="month" showAll={false} onChange={(s2, e2) => { setFrom(s2); setTo(e2); }} /></div>
           <div className="text-[11px] text-muted-foreground self-center">↑ período do gasto e das reservas</div>
           <div className="ml-auto">
             <Button onClick={() => { setUpdDate(todayStr); setUpdOpen(true); }}>

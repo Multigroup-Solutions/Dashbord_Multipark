@@ -17,6 +17,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { useTableSort, Th } from "@/components/SortableTable";
 import { ZelloLiveTab } from "@/components/ZelloLiveTab";
+import { DayNav } from "@/components/DateRangeNav";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import {
   Car, AlertTriangle, Radio, Activity, Plus, Trash2, Eye, Check,
@@ -326,7 +327,7 @@ function DayActivityTab() {
       <div className="flex flex-wrap items-end gap-3">
         <div>
           <Label className="text-xs mb-1 block">Dia</Label>
-          <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-44" />
+          <DayNav date={date} onChange={setDate} />
         </div>
         {date === todayStr && (
           <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-0.5">
@@ -442,12 +443,7 @@ function DriverHistoryTab() {
       <div className="flex items-center gap-3 flex-wrap">
         <div className="flex items-center gap-2">
           <CalendarDays className="w-4 h-4 text-muted-foreground" />
-          <Input
-            type="date"
-            value={selectedDate}
-            onChange={e => setSelectedDate(e.target.value)}
-            className="w-[180px]"
-          />
+          <DayNav date={selectedDate} onChange={setSelectedDate} />
         </div>
         <Button
           variant="outline"

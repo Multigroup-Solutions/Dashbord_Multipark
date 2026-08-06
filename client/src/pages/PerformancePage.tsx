@@ -12,7 +12,7 @@ import { toast } from "sonner";
 import { useState, useMemo } from "react";
 import {
   Trophy, RefreshCw, TrendingUp, TrendingDown, Minus, Clock,
-  Zap, AlertTriangle, Award, Download, Pencil,
+  Zap, AlertTriangle, Award, Download, Pencil, ChevronLeft, ChevronRight,
 } from "lucide-react";
 import { useTableSort, Th } from "@/components/SortableTable";
 import { useOpenEmployee } from "@/hooks/useOpenEmployee";
@@ -116,13 +116,24 @@ export default function PerformancePage() {
           <p className="text-muted-foreground">Ranking semanal dos condutores</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <div className="flex items-center gap-2">
-            <Label className="text-xs">Semana</Label>
-            <Input type="number" value={week} onChange={e => setWeek(parseInt(e.target.value) || 1)} min={1} max={53} className="w-20 h-9" />
-          </div>
-          <div className="flex items-center gap-2">
-            <Label className="text-xs">Ano</Label>
-            <Input type="number" value={year} onChange={e => setYear(parseInt(e.target.value) || now.getFullYear())} className="w-24 h-9" />
+          {/* Setinhas de semana (padrão transversal): ◀ S32/2026 ▶ + Esta semana */}
+          <div className="flex items-center gap-1.5">
+            <Button variant="outline" size="icon" className="h-9 w-8" title="Semana anterior"
+              onClick={() => { if (week > 1) setWeek(week - 1); else { setWeek(53); setYear(year - 1); } }}>
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <span className="text-sm font-medium tabular-nums min-w-[86px] text-center">S{week}/{year}</span>
+            <Button variant="outline" size="icon" className="h-9 w-8" title="Semana seguinte"
+              onClick={() => { if (week < 53) setWeek(week + 1); else { setWeek(1); setYear(year + 1); } }}>
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+            <Button
+              variant={week === getWeekNumber(now) && year === now.getFullYear() ? "secondary" : "outline"}
+              size="sm" className="h-9"
+              onClick={() => { setWeek(getWeekNumber(now)); setYear(now.getFullYear()); }}
+            >
+              Esta semana
+            </Button>
           </div>
           <Button variant="outline" size="sm" onClick={exportCSV} disabled={evaluations.length === 0}>
             <Download className="w-4 h-4 mr-2" /> CSV

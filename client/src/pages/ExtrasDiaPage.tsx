@@ -5,6 +5,7 @@ import { useOpenEmployee } from "@/hooks/useOpenEmployee";
 import { fmtPTDate } from "@/lib/lisbonTime";
 import { buildAvailabilityMessage, AVAILABILITY_KINDS, type AvailabilityMessageKind } from "@shared/availabilityMessages";
 import { useTableSort, Th } from "@/components/SortableTable";
+import { DayNav, WeekNav } from "@/components/DateRangeNav";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -176,13 +177,7 @@ export default function ExtrasDiaPage() {
         </div>
         <div className="space-y-1">
           <Label htmlFor="baseDate" className="text-xs">Data base</Label>
-          <Input
-            id="baseDate"
-            type="date"
-            value={baseDate}
-            onChange={(e) => setBaseDate(e.target.value)}
-            className="w-44"
-          />
+          <DayNav date={baseDate} onChange={setBaseDate} />
           <Select value={city} onValueChange={(v) => setCity(v as ExtraCityId)}>
             <SelectTrigger className="w-32 h-9"><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -1643,19 +1638,11 @@ export function AvailabilitySection() {
       <CardContent className="space-y-4">
         <div className="flex items-end gap-3 flex-wrap">
           <div className="space-y-1">
-            <Label className="text-xs">Semana (começa em)</Label>
-            <Input
-              type="date"
-              className="w-44"
-              value={effectiveWeek}
-              onChange={(e) => setWeekStart(e.target.value)}
-            />
+            <Label className="text-xs">Semana</Label>
+            <WeekNav weekStart={effectiveWeek} onChange={setWeekStart} />
           </div>
           {hints.data && (
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={() => setWeekStart(hints.data!.current)}>
-                Esta semana
-              </Button>
               <Button variant="outline" size="sm" onClick={() => setWeekStart(hints.data!.next)}>
                 Próxima semana
               </Button>

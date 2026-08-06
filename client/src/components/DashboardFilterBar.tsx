@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
-import { Input } from "@/components/ui/input";
+import DateRangeNav, { type DateGran } from "@/components/DateRangeNav";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -76,6 +76,9 @@ export function DashboardFilterBar({
   onPeriodChange,
 }: DashboardFilterBarProps) {
   const globalFilters = useGlobalFilters();
+  // Granularidade das setinhas (padrão transversal do Jorge: ◀ mês/semana/… ▶).
+  // Default "month" — os dashboards abrem no mês corrente.
+  const [gran, setGran] = useState<DateGran>("month");
   // Lista de marcas coerente com a CIDADE ESCOLHIDA NESTA BARRA (o contexto
   // global segue a cidade do header, que pode ser outra). Sem cidade →
   // marcas globais (ID negativo = a marca em todas as cidades, resolvido
@@ -105,21 +108,17 @@ export function DashboardFilterBar({
   return (
     <div className="flex flex-wrap items-end gap-3">
       <div>
-        <Label className="text-xs mb-1 block">De</Label>
-        <Input
-          type="date"
-          value={from}
-          onChange={(e) => onFromChange(e.target.value)}
-          className="w-[140px]"
-        />
-      </div>
-      <div>
-        <Label className="text-xs mb-1 block">Até</Label>
-        <Input
-          type="date"
-          value={to}
-          onChange={(e) => onToChange(e.target.value)}
-          className="w-[140px]"
+        <Label className="text-xs mb-1 block">Período</Label>
+        <DateRangeNav
+          start={from}
+          end={to}
+          gran={gran}
+          showAll={false}
+          onChange={(s, e, g) => {
+            onFromChange(s);
+            onToChange(e);
+            setGran(g);
+          }}
         />
       </div>
       <div>

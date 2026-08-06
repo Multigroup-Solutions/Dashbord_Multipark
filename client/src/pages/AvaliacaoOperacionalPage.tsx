@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { DayNav } from "@/components/DateRangeNav";
 import { fmtPTTime } from "@/lib/lisbonTime";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -52,17 +53,7 @@ export default function AvaliacaoOperacionalPage() {
         <div className="flex flex-wrap items-end gap-2">
           <div className="space-y-1">
             <Label htmlFor="date" className="text-xs">Dia</Label>
-            <div className="flex items-center gap-1">
-              <Button variant="outline" size="icon" className="h-9 w-8" title="Dia anterior" onClick={() => { const d = new Date(date + "T00:00:00"); d.setDate(d.getDate() - 1); const pad = (n: number) => String(n).padStart(2, "0"); setDate(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`); }}>◀</Button>
-              <Input
-                id="date"
-                type="date"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="w-40"
-              />
-              <Button variant="outline" size="icon" className="h-9 w-8" title="Dia seguinte" onClick={() => { const d = new Date(date + "T00:00:00"); d.setDate(d.getDate() + 1); const pad = (n: number) => String(n).padStart(2, "0"); setDate(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`); }}>▶</Button>
-            </div>
+            <DayNav date={date} onChange={setDate} />
           </div>
           {evaluation && evaluation.totals.people > 0 && (
             <Button
