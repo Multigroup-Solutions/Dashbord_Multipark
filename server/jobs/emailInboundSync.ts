@@ -154,6 +154,15 @@ async function routeToModule(
   }
 
   if (alias === "reclamacoes") {
+    // Ecos INTERNOS (acknowledgments da própria Multipark: "agradecemos o
+    // vosso email… foi encaminhado…") não são reclamações — auditoria 6 ago
+    if (
+      /@(multipark|skypark)\.(pt|app)$/i.test(ctx.fromEmail ?? "") &&
+      /agradecer o vosso (e-?mail|contacto)|foi encaminhad[oa]|ser[áa] analisad[oa] pelos servi[çc]os/i.test(ctx.bodyText)
+    ) {
+      return { targetModule: "ignored" };
+    }
+
     // Notificações automáticas "Nova Reserva" enviadas DIRETAMENTE pelo
     // sistema (info@) não são reclamações — um forward humano (Fwd: de outra
     // pessoa) passa, porque pode trazer contexto de uma queixa.
@@ -200,6 +209,10 @@ async function routeToModule(
       clientName,
     });
     const booking = match?.booking ?? null;
+    // Livro de Reclamações oficial (nº ROR…): prazo legal de resposta —
+    // entra logo como URGENTE
+    const isLivro = /livro de reclama|ROR\d{6,}/i.test(`${ctx.subject}
+${ctx.bodyText}`);
     const id = await createComplaint({
       title: (ctx.subject || "Reclamação por email").slice(0, 255),
       description: desc,
@@ -214,7 +227,8 @@ async function routeToModule(
       reservationStart: booking?.checkIn ?? undefined,
       reservationEnd: booking?.checkOut ?? undefined,
       projectId: booking?.projectId ?? undefined,
-    } as any);
+          priority: isLivro ? "urgent" : undefined,
+} as any);
     return { targetModule: "complaint", targetId: id };
   }
 
