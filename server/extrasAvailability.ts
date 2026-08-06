@@ -453,18 +453,21 @@ export interface SendResult {
   recipients: { name: string; email: string | null; ok: boolean }[];
 }
 
-function emailHtml(name: string, weekLabel: string, link: string, note?: string | null): string {
+// Templates-tipo (semana / dia+turno / que-horas / das-X-às-Y) — builder
+// partilhado com o WhatsApp em shared/availabilityMessages.ts
+import { buildAvailabilityMessage, type AvailabilityMessageParams } from "../shared/availabilityMessages";
+
+function emailHtml(name: string, msg: { subject: string; lines: string[] }, link: string): string {
   const firstName = name.trim().split(/\s+/)[0] || name;
-  const noteHtml = note ? `<p style="background:#f3f4f6;padding:12px;border-radius:6px">${note}</p>` : "";
+  const paragraphs = msg.lines.map((l) => `<p>${l}</p>`).join("");
   return `
   <div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#1f2937">
-    <h2 style="color:#111827">Disponibilidade — semana de ${weekLabel}</h2>
+    <h2 style="color:#111827">${msg.subject}</h2>
     <p>Olá ${firstName},</p>
-    <p>Indica a tua disponibilidade para a próxima semana (dias e horas). É rápido: abre o link abaixo no telemóvel — já entras com o teu login.</p>
-    ${noteHtml}
+    ${paragraphs}
     <p style="text-align:center;margin:28px 0">
       <a href="${link}" style="background:#2563eb;color:#fff;text-decoration:none;padding:14px 28px;border-radius:8px;font-weight:bold;display:inline-block">
-        Marcar a minha disponibilidade
+        Inscreve-te 👉
       </a>
     </p>
     <p style="font-size:13px;color:#6b7280">Se o botão não funcionar, copia este link:<br>${link}</p>
@@ -479,6 +482,8 @@ export async function sendWeeklyAvailabilityRequest(opts: {
   note?: string | null;
   employeeIds?: number[] | null; // se vier, envia SÓ a estes extras
   testEmail?: string | null;     // se vier, envia SÓ a este endereço (teste)
+  // Mensagem-tipo (default: semana clássica)
+  message?: Omit<AvailabilityMessageParams, "note" | "weekLabel"> | null;
 }): Promise<SendResult> {
   if (!parseIsoDate(opts.weekStart)) {
     throw new Error("weekStart inválido (esperado YYYY-MM-DD)");
@@ -490,13 +495,22 @@ export async function sendWeeklyAvailabilityRequest(opts: {
     : opts.weekStart;
   const origin = opts.origin.replace(/\/+$/, "");
   const link = `${origin}/disponibilidade?week=${encodeURIComponent(opts.weekStart)}`;
+  const msg = buildAvailabilityMessage({
+    kind: opts.message?.kind ?? "week",
+    dateLabel: opts.message?.dateLabel,
+    shift: opts.message?.shift,
+    fromHour: opts.message?.fromHour,
+    toHour: opts.message?.toHour,
+    weekLabel,
+    note: opts.note ?? null,
+  });
 
   // Modo TESTE: envia uma única mensagem para o endereço indicado.
   if (opts.testEmail) {
-    const html = emailHtml("Teste", weekLabel, link, opts.note);
+    const html = emailHtml("Teste", msg, link);
     const ok = await sendEmail({
       to: opts.testEmail,
-      subject: `[TESTE] Disponibilidade — semana de ${weekLabel}`,
+      subject: `[TESTE] ${msg.subject}`,
       html,
       from: "recursos-humanos@multipark.pt",
       fromName: "Multipark Operações",
@@ -523,10 +537,10 @@ export async function sendWeeklyAvailabilityRequest(opts: {
       result.recipients.push({ name: e.fullName, email: null, ok: false });
       continue;
     }
-    const html = emailHtml(e.fullName, weekLabel, link, opts.note);
+    const html = emailHtml(e.fullName, msg, link);
     const ok = await sendEmail({
       to: e.email,
-      subject: `Disponibilidade — semana de ${weekLabel}`,
+      subject: msg.subject,
       html,
       from: "recursos-humanos@multipark.pt",
       fromName: "Multipark Operações",

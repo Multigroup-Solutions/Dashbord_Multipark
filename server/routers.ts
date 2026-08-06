@@ -7167,6 +7167,13 @@ export const appRouter = router({
           note: z.string().max(500).nullable().optional(),
           employeeIds: z.array(z.number()).nullable().optional(),
           testEmail: z.string().email().nullable().optional(),
+          message: z.object({
+            kind: z.enum(["week", "day_shift", "day_hours", "day_range"]),
+            dateLabel: z.string().max(60).optional(),
+            shift: z.enum(["morning", "afternoon", "night"]).optional(),
+            fromHour: z.number().int().min(0).max(23).optional(),
+            toHour: z.number().int().min(0).max(27).optional(),
+          }).nullable().optional(),
         }),
       )
       .mutation(async ({ ctx, input }) => {
@@ -7178,6 +7185,7 @@ export const appRouter = router({
           note: input.note ?? null,
           employeeIds: input.employeeIds ?? null,
           testEmail: input.testEmail ?? null,
+          message: input.message ?? null,
         });
         await logActivity({
           userId: ctx.user.id,

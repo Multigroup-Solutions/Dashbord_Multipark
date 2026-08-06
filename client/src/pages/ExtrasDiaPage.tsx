@@ -1,6 +1,7 @@
 import { trpc } from "@/lib/trpc";
 import { createContext, useContext } from "react";
 import { usePersistedState } from "@/hooks/usePersistedState";
+import { buildAvailabilityMessage, AVAILABILITY_KINDS, type AvailabilityMessageKind } from "@shared/availabilityMessages";
 import { useTableSort, Th } from "@/components/SortableTable";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -1444,6 +1445,31 @@ export function AvailabilitySection() {
   const hints = trpc.extrasAvailability.weekHints.useQuery();
   const [weekStart, setWeekStart] = useState<string>("");
   const [note, setNote] = useState("");
+  // Tipo de pedido (templates do Jorge): semana / dia+turno / que-horas / das X às Y
+  const [msgKind, setMsgKind] = useState<AvailabilityMessageKind>("week");
+  const [msgDate, setMsgDate] = useState(() => { const d = new Date(); d.setDate(d.getDate() + 1); const pad = (n: number) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; });
+  const [msgShift, setMsgShift] = useState<"morning" | "afternoon" | "night">("morning");
+  const [msgFrom, setMsgFrom] = useState(8);
+  const [msgTo, setMsgTo] = useState(20);
+  const msgDateLabel = useMemo(() => {
+    const today = new Date(); const pad = (n: number) => String(n).padStart(2, "0");
+    const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
+    const iso = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const dm = msgDate.slice(8, 10) + "/" + msgDate.slice(5, 7);
+    if (msgDate === iso(today)) return `hoje (${dm})`;
+    if (msgDate === iso(tomorrow)) return `amanhã (${dm})`;
+    return `dia ${dm}`;
+  }, [msgDate]);
+  const msgParams = useMemo(() => ({
+    kind: msgKind, dateLabel: msgDateLabel, shift: msgShift,
+    fromHour: msgFrom, toHour: msgTo, note: note.trim() || null,
+  }), [msgKind, msgDateLabel, msgShift, msgFrom, msgTo, note]);
+  const msgPreview = useMemo(() => buildAvailabilityMessage(msgParams), [msgParams]);
+  const msgInput = useMemo(() => msgKind === "week" ? null : ({
+    kind: msgKind, dateLabel: msgDateLabel,
+    ...(msgKind === "day_shift" ? { shift: msgShift } : {}),
+    ...(msgKind === "day_range" ? { fromHour: msgFrom, toHour: msgTo } : {}),
+  }), [msgKind, msgDateLabel, msgShift, msgFrom, msgTo]);
   const [testEmail, setTestEmail] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   // A tabela lista TODOS os extras ativos por defeito — é a lista de contactos
@@ -1628,6 +1654,57 @@ export function AvailabilitySection() {
             value={note}
             onChange={(e) => setNote(e.target.value)}
           />
+
+          {/* Tipo de pedido (templates) + pré-visualização */}
+          <div className="w-full space-y-2 border rounded-lg p-3 bg-muted/20">
+            <div className="flex flex-wrap items-end gap-2">
+              <div>
+                <Label className="text-xs mb-1 block">Tipo de pedido</Label>
+                <Select value={msgKind} onValueChange={(v) => setMsgKind(v as AvailabilityMessageKind)}>
+                  <SelectTrigger className="w-72 h-9"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {AVAILABILITY_KINDS.map((k) => <SelectItem key={k.id} value={k.id}>{k.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              {msgKind !== "week" && (
+                <div>
+                  <Label className="text-xs mb-1 block">Dia</Label>
+                  <Input type="date" value={msgDate} onChange={(e) => setMsgDate(e.target.value)} className="w-40 h-9" />
+                </div>
+              )}
+              {msgKind === "day_shift" && (
+                <div>
+                  <Label className="text-xs mb-1 block">Turno</Label>
+                  <Select value={msgShift} onValueChange={(v) => setMsgShift(v as any)}>
+                    <SelectTrigger className="w-32 h-9"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="morning">Manhã</SelectItem>
+                      <SelectItem value="afternoon">Tarde</SelectItem>
+                      <SelectItem value="night">Noite</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              {msgKind === "day_range" && (
+                <>
+                  <div><Label className="text-xs mb-1 block">Das</Label><Input type="number" min={0} max={23} value={msgFrom} onChange={(e) => setMsgFrom(parseInt(e.target.value) || 0)} className="w-20 h-9" /></div>
+                  <div><Label className="text-xs mb-1 block">Às</Label><Input type="number" min={0} max={27} value={msgTo} onChange={(e) => setMsgTo(parseInt(e.target.value) || 0)} className="w-20 h-9" /></div>
+                </>
+              )}
+            </div>
+            <div className="text-xs bg-background border rounded p-2">
+              <p className="font-semibold">{msgPreview.subject}</p>
+              <p className="text-muted-foreground mt-0.5">{msgPreview.lines.join(" ")} <span className="text-primary font-medium">{msgPreview.cta} [link]</span></p>
+              <button
+                type="button"
+                className="text-[11px] text-blue-600 hover:underline mt-1"
+                onClick={() => setWaParam2(msgPreview.text)}
+              >
+                Usar este texto no WhatsApp ({"{"}{"{"}2{"}"}{"}"})
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Teste: enviar só para um endereço (não toca nos extras) */}
@@ -1649,6 +1726,7 @@ export function AvailabilitySection() {
                 origin: window.location.origin,
                 note: note.trim() || null,
                 testEmail: testEmail.trim(),
+                message: msgInput,
               })}
             >
               <Send className="h-4 w-4 mr-2" /> Enviar teste
@@ -1675,6 +1753,7 @@ export function AvailabilitySection() {
                 origin: window.location.origin,
                 note: note.trim() || null,
                 employeeIds: ids,
+                message: msgInput,
               });
             }}
           >
