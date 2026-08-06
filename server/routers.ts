@@ -6823,6 +6823,72 @@ export const appRouter = router({
       return listAgentPartners();
     }),
 
+    // Agentes do histórico SEM funcionário nem parceiro (aba RH "Agentes")
+    unlinkedAgents: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx.user.role, "backoffice");
+      const { getDb, listAgentPartners } = await import("./db");
+      const db = await getDb();
+      if (!db) return [];
+      const { sql } = await import("drizzle-orm");
+      const [rows] = await db.execute(sql`
+        SELECT agentName,
+          COUNT(*) AS total,
+          SUM(changeType IN ('CHECK_IN','CHECKIN')) AS checkins,
+          SUM(changeType IN ('CHECK_OUT','CHECKOUT')) AS checkouts,
+          SUM(changeType IN ('MOVEMENT','MOVE')) AS movements,
+          MIN(actionTime) AS firstSeen,
+          MAX(actionTime) AS lastSeen
+        FROM multipark_booking_history
+        WHERE agentName IS NOT NULL AND agentName != ''
+        GROUP BY agentName`) as any;
+      const { employees } = await import("../drizzle/schema");
+      const { isNotNull } = await import("drizzle-orm");
+      const linkedEmps = await db.select({ n: employees.multiparkAgentName }).from(employees).where(isNotNull(employees.multiparkAgentName));
+      const linked = new Set(linkedEmps.map((e) => (e.n ?? "").trim().toLowerCase()));
+      const partners = new Set((await listAgentPartners()).map((p) => p.agentName.trim().toLowerCase()));
+      return (rows as any[])
+        .filter((r) => {
+          const key = String(r.agentName).trim().toLowerCase();
+          return !linked.has(key) && !partners.has(key);
+        })
+        .map((r) => ({
+          agentName: r.agentName,
+          total: Number(r.total),
+          checkins: Number(r.checkins ?? 0),
+          checkouts: Number(r.checkouts ?? 0),
+          movements: Number(r.movements ?? 0),
+          firstSeen: r.firstSeen,
+          lastSeen: r.lastSeen,
+        }))
+        .sort((a, b) => b.total - a.total);
+    }),
+
+    // Cria um funcionário-extra a partir de um agente órfão (aba RH)
+    createEmployeeFromAgent: protectedProcedure
+      .input(z.object({ agentName: z.string().min(1).max(256), email: z.string().email().optional() }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        const { getDb } = await import("./db");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
+        const { employees, projects } = await import("../drizzle/schema");
+        const { eq, and } = await import("drizzle-orm");
+        // centro de custos default = cidade Lisboa (o Jorge corrige depois se for de outra)
+        const lisboa = await db.select({ id: projects.id }).from(projects)
+          .where(and(eq(projects.level, "city"), eq(projects.name, "Lisboa"))).limit(1);
+        const [ins] = await db.insert(employees).values({
+          fullName: input.agentName,
+          email: input.email ?? null,
+          multiparkAgentName: input.agentName,
+          position: "extra",
+          contractType: "extra",
+          projectId: lisboa[0]?.id ?? null,
+          isActive: 1,
+        } as any).$returningId();
+        await logActivity({ userId: ctx.user.id, action: "create", entity: "employee", entityId: (ins as any)?.id ?? 0, details: `Criado a partir do agente: ${input.agentName}` });
+        return { id: (ins as any)?.id };
+      }),
+
     // Reserva completa por externalId (detalhe ao clicar num serviço)
     bookingByExternalId: protectedProcedure
       .input(z.object({ externalId: z.string().min(1).max(128) }))

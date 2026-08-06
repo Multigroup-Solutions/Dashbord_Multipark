@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { usePersistedState } from "@/hooks/usePersistedState";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { RecruitmentSection } from "@/components/RecruitmentSection";
 import { trpc } from "@/lib/trpc";
-import { fmtPTDateTime } from "@/lib/lisbonTime";
+import { fmtPTDateTime, fmtPTDate } from "@/lib/lisbonTime";
 import { fileHref } from "@/lib/fileHref";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -2526,6 +2527,9 @@ export default function HRPage() {
             <TabsTrigger value="extras">
               Extras <Badge variant="secondary" className="ml-2">{extrasList.length}</Badge>
             </TabsTrigger>
+            <TabsTrigger value="agentes">
+              Agentes s/ funcionário <UnlinkedAgentsBadge />
+            </TabsTrigger>
             <TabsTrigger value="recrutamento">
               <Mail className="w-4 h-4 mr-2" />Recrutamento
             </TabsTrigger>
@@ -2547,6 +2551,9 @@ export default function HRPage() {
                 {extrasList.map(renderCard)}
               </div>
             )}
+          </TabsContent>
+          <TabsContent value="agentes" className="mt-4">
+            <UnlinkedAgentsSection />
           </TabsContent>
           <TabsContent value="recrutamento" className="mt-4">
             <RecruitmentSection />
@@ -2706,5 +2713,105 @@ function ImportExtrasDialog({ open, onClose }: { open: boolean; onClose: () => v
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ─── AGENTES MULTIPARK SEM FUNCIONÁRIO (pedido Jorge 2026-08-06) ─────────────
+// Agentes com atividade no histórico que não estão ligados a nenhum
+// colaborador nem parceiro. Daqui liga-se a um colaborador existente, a um
+// parceiro (agências que marcam pelo portal), ou cria-se o funcionário.
+function UnlinkedAgentsBadge() {
+  const { data = [] } = trpc.multipark.unlinkedAgents.useQuery();
+  if (data.length === 0) return null;
+  return <Badge variant="secondary" className="ml-2">{data.length}</Badge>;
+}
+
+function UnlinkedAgentsSection() {
+  const utils = trpc.useUtils();
+  const { data: agents = [], isLoading } = trpc.multipark.unlinkedAgents.useQuery();
+  const { data: employees = [] } = trpc.multipark.employeesForMapping.useQuery();
+  const { data: partnershipsList = [] } = trpc.partnerships.list.useQuery({} as any);
+  const refresh = () => { utils.multipark.unlinkedAgents.invalidate(); utils.multipark.employeesForMapping.invalidate(); };
+  const mapMut = trpc.multipark.mapAgentToEmployee.useMutation({
+    onSuccess: () => { refresh(); toast.success("Agente ligado ao colaborador"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const partnerMut = trpc.multipark.setAgentPartner.useMutation({
+    onSuccess: () => { refresh(); toast.success("Agente ligado ao parceiro"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const createMut = trpc.multipark.createEmployeeFromAgent.useMutation({
+    onSuccess: () => { refresh(); utils.rh.list.invalidate(); toast.success("Funcionário criado a partir do agente — completa a ficha (email, morada, nível)"); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  return (
+    <div className="space-y-3">
+      <Card className="border-amber-200 bg-amber-50/40">
+        <CardContent className="p-3 text-sm text-amber-900">
+          Estes agentes têm atividade na Multipark mas não estão ligados a ninguém.
+          Liga cada um a um <strong>colaborador</strong>, a um <strong>parceiro</strong> (agências que marcam pelo portal),
+          ou cria o funcionário. Nomes de teste/scripts podem simplesmente ficar aqui.
+        </CardContent>
+      </Card>
+      {isLoading ? (
+        <p className="text-sm text-muted-foreground">A carregar…</p>
+      ) : agents.length === 0 ? (
+        <Card><CardContent className="p-8 text-center text-muted-foreground">Todos os agentes estão ligados ✓</CardContent></Card>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b text-left text-xs text-muted-foreground">
+                <th className="p-2">Agente</th>
+                <th className="p-2 text-right">Ações</th>
+                <th className="p-2 text-right">In / Out / Mov</th>
+                <th className="p-2">Última atividade</th>
+                <th className="p-2">Ligar a</th>
+              </tr>
+            </thead>
+            <tbody>
+              {agents.map((a: any) => (
+                <tr key={a.agentName} className="border-b hover:bg-muted/30 align-top">
+                  <td className="p-2 font-medium max-w-[200px]">{a.agentName}</td>
+                  <td className="p-2 text-right font-semibold tabular-nums">{a.total}</td>
+                  <td className="p-2 text-right text-xs tabular-nums">
+                    <span className="text-emerald-700">{a.checkins}</span> / <span className="text-blue-700">{a.checkouts}</span> / {a.movements}
+                  </td>
+                  <td className="p-2 text-xs text-muted-foreground">{a.lastSeen ? fmtPTDate(a.lastSeen) : "—"}</td>
+                  <td className="p-2">
+                    <div className="flex flex-col gap-1">
+                      <SearchableSelect
+                        className="h-8 w-64"
+                        value=""
+                        onChange={(v: string) => v && mapMut.mutate({ agentName: a.agentName, employeeId: Number(v) })}
+                        placeholder="— colaborador existente —"
+                        options={(employees as any[]).map((e) => ({ value: String(e.id), label: e.fullName }))}
+                      />
+                      <div className="flex items-center gap-1.5">
+                        <SearchableSelect
+                          className="h-7 w-44 text-xs"
+                          value=""
+                          onChange={(v: string) => v && partnerMut.mutate({ agentName: a.agentName, partnershipId: Number(v) })}
+                          placeholder="— parceiro —"
+                          options={((partnershipsList as any[]) ?? []).map((pp: any) => ({ value: String(pp.id ?? pp.partnership?.id), label: pp.name ?? pp.partnership?.name ?? `#${pp.id}` }))}
+                        />
+                        <Button
+                          size="sm" variant="outline" className="h-7 text-xs"
+                          disabled={createMut.isPending}
+                          onClick={() => { if (confirm(`Criar funcionário extra "${a.agentName}" (cidade Lisboa por defeito)?`)) createMut.mutate({ agentName: a.agentName }); }}
+                        >
+                          + Criar funcionário
+                        </Button>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
