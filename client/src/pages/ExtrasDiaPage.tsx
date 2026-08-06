@@ -1,4 +1,6 @@
 import { trpc } from "@/lib/trpc";
+import { createContext, useContext } from "react";
+import { usePersistedState } from "@/hooks/usePersistedState";
 import { useTableSort, Th } from "@/components/SortableTable";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -114,13 +116,24 @@ function todayISO(): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+// Cidade ativa do Extras-Dia (Lisboa/Porto/Faro) — contexto para não arrastar
+// a prop por 4 níveis até aos slots.
+type ExtraCityId = "lisbon" | "porto" | "faro";
+const CITY_OPTIONS: Array<{ id: ExtraCityId; label: string }> = [
+  { id: "lisbon", label: "Lisboa" },
+  { id: "porto", label: "Porto" },
+  { id: "faro", label: "Faro" },
+];
+const ExtrasCityContext = createContext<ExtraCityId>("lisbon");
+
 export default function ExtrasDiaPage() {
+  const [city, setCity] = usePersistedState<ExtraCityId>("extrasdia.city", "lisbon");
   const [baseDate, setBaseDate] = useState(todayISO());
 
-  const { data, isLoading, error } = trpc.extrasDia.forecast.useQuery({ baseDate });
+  const { data, isLoading, error } = trpc.extrasDia.forecast.useQuery({ baseDate, city });
   const targetDate = data?.targetDate ?? "";
   const assignmentsQ = trpc.extrasDia.assignments.useQuery(
-    { date: targetDate },
+    { date: targetDate, city },
     { enabled: !!targetDate },
   );
   const assignments = assignmentsQ.data ?? [];
@@ -146,6 +159,7 @@ export default function ExtrasDiaPage() {
   }, [data]);
 
   return (
+    <ExtrasCityContext.Provider value={city}>
     <div className="space-y-6 max-w-7xl mx-auto">
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div>
@@ -166,6 +180,12 @@ export default function ExtrasDiaPage() {
             onChange={(e) => setBaseDate(e.target.value)}
             className="w-44"
           />
+          <Select value={city} onValueChange={(v) => setCity(v as ExtraCityId)}>
+            <SelectTrigger className="w-32 h-9"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {CITY_OPTIONS.map((c) => <SelectItem key={c.id} value={c.id}>{c.id === "lisbon" ? "📍 Lisboa" : c.id === "porto" ? "📍 Porto" : "📍 Faro"}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
@@ -441,6 +461,7 @@ export default function ExtrasDiaPage() {
         </>
       )}
     </div>
+  </ExtrasCityContext.Provider>
   );
 }
 
@@ -460,19 +481,20 @@ function TeamSection({
   defaultEnd: number;
 }) {
   const utils = trpc.useUtils();
-  const assignmentsQuery = trpc.extrasDia.assignments.useQuery({ date: targetDate });
+  const city = useContext(ExtrasCityContext);
+  const assignmentsQuery = trpc.extrasDia.assignments.useQuery({ date: targetDate, city });
   const candidatesQuery = trpc.extrasDia.candidates.useQuery({ date: targetDate });
 
   const upsert = trpc.extrasDia.upsertAssignment.useMutation({
     onSuccess: () => {
-      utils.extrasDia.assignments.invalidate({ date: targetDate });
+      utils.extrasDia.assignments.invalidate();
       toast.success("Turno guardado");
     },
     onError: (e) => toast.error(e.message),
   });
   const del = trpc.extrasDia.deleteAssignment.useMutation({
     onSuccess: () => {
-      utils.extrasDia.assignments.invalidate({ date: targetDate });
+      utils.extrasDia.assignments.invalidate();
       toast.success("Turno removido");
     },
     onError: (e) => toast.error(e.message),
@@ -572,7 +594,7 @@ function TeamSection({
                 defaultStart={defaultStart}
                 defaultEnd={defaultEnd}
                 onSubmit={async (values) => {
-                  await upsert.mutateAsync(values);
+                  await upsert.mutateAsync({ ...values, city });
                   setAddingTL(false);
                 }}
                 onCancel={() => setAddingTL(false)}
@@ -590,7 +612,7 @@ function TeamSection({
             defaultStart={defaultStart}
             defaultEnd={defaultEnd}
             onSubmit={async (values) => {
-              await upsert.mutateAsync(values);
+              await upsert.mutateAsync({ ...values, city });
               setAdding(false);
             }}
             onCancel={() => setAdding(false)}
@@ -628,7 +650,7 @@ function TeamSection({
                   <AssignmentRow
                     key={a.id}
                     assignment={a}
-                    onSave={(payload) => upsert.mutate({ ...payload, id: a.id })}
+                    onSave={(payload) => upsert.mutate({ ...payload, id: a.id, city })}
                     onDelete={() => del.mutate({ id: a.id })}
                     busy={upsert.isPending || del.isPending}
                   />
@@ -1142,11 +1164,12 @@ function SlotBookings({
   hour: number;
   slot: number;
 }) {
+  const cityCtx = useContext(ExtrasCityContext);
   const checkinsQ = trpc.extrasDia.bookingsInSlot.useQuery(
-    { date: targetDate, hour, slot, type: "checkin" },
+    { date: targetDate, hour, slot, type: "checkin", city: cityCtx },
   );
   const checkoutsQ = trpc.extrasDia.bookingsInSlot.useQuery(
-    { date: targetDate, hour, slot, type: "checkout" },
+    { date: targetDate, hour, slot, type: "checkout", city: cityCtx },
   );
 
   const checkins = checkinsQ.data ?? [];

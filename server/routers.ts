@@ -6956,10 +6956,10 @@ export const appRouter = router({
   // ── EXTRAS DIA — Daily forecast & driver allocation (Lisboa) ────────────────
   extrasDia: router({
     forecast: protectedProcedure
-      .input(z.object({ baseDate: z.string().optional() }).optional())
+      .input(z.object({ baseDate: z.string().optional(), city: z.enum(["lisbon", "porto", "faro"]).optional() }).optional())
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
-        return getExtrasDiaForecast(input?.baseDate);
+        return getExtrasDiaForecast(input?.baseDate, input?.city ?? "lisbon");
       }),
 
     candidates: protectedProcedure
@@ -6970,10 +6970,10 @@ export const appRouter = router({
       }),
 
     assignments: protectedProcedure
-      .input(z.object({ date: z.string() }))
+      .input(z.object({ date: z.string(), city: z.enum(["lisbon", "porto", "faro"]).optional() }))
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
-        return listAssignments(input.date);
+        return listAssignments(input.date, input.city);
       }),
 
     upsertAssignment: protectedProcedure
@@ -6986,6 +6986,7 @@ export const appRouter = router({
           level: z.enum(["junior", "senior", "terminal", "master"]).nullable().optional(),
           isTeamLeader: z.boolean().optional(),
           shift: z.enum(["morning", "night"]),
+          city: z.enum(["lisbon", "porto", "faro"]).optional(),
           startHour: z.number().int().min(0).max(27),
           endHour: z.number().int().min(1).max(27),
           sentHomeHour: z.number().int().min(0).max(27).nullable().optional(),
@@ -7039,6 +7040,7 @@ export const appRouter = router({
     bookingsInSlot: protectedProcedure
       .input(
         z.object({
+          city: z.enum(["lisbon", "porto", "faro"]).optional(),
           date: z.string(),
           hour: z.number().int().min(3).max(26),
           slot: z.number().int().min(0).max(2),
@@ -7047,7 +7049,7 @@ export const appRouter = router({
       )
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
-        return getBookingsInSlot(input.date, input.hour, input.slot, input.type);
+        return getBookingsInSlot(input.date, input.hour, input.slot, input.type, input.city ?? "lisbon");
       }),
   }),
 

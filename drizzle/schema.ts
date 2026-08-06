@@ -471,6 +471,7 @@ export const extrasDiaAssignments = mysqlTable("extras_dia_assignments", {
 	level: mysqlEnum(['junior','senior','terminal','master']),
 	isTeamLeader: tinyint().default(0).notNull(),
 	shift: mysqlEnum(['morning','night']).default('morning').notNull(),
+	city: varchar({ length: 16 }).default('lisbon').notNull(), // lisbon|porto|faro
 	startHour: int().notNull(),
 	endHour: int().notNull(),
 	sentHomeHour: int(),
