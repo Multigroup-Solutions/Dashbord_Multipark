@@ -55,7 +55,7 @@ export default function BookingDetailDialog({ booking: b, onClose }: { booking: 
                   size="sm"
                   variant="outline"
                   className="h-7 text-xs gap-1"
-                  onClick={() => openInMultipark(b.bookingNumber || b.externalId)}
+                  onClick={() => openInMultipark(b.externalId)}
                 >
                   Ver na Multipark <ExternalLink className="w-3 h-3" />
                 </Button>

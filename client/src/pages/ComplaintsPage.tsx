@@ -664,7 +664,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 border-t pt-3">
                         {b.externalId && (
                           <div className="sm:col-span-2">
-                            <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => openInMultipark(b.bookingNumber || b.externalId)}>
+                            <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => openInMultipark(b.externalId)}>
                               Ver na Multipark <ExternalLink className="w-3 h-3" />
                             </Button>
                           </div>
