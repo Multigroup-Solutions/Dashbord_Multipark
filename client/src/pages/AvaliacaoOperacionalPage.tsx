@@ -52,13 +52,17 @@ export default function AvaliacaoOperacionalPage() {
         <div className="flex flex-wrap items-end gap-2">
           <div className="space-y-1">
             <Label htmlFor="date" className="text-xs">Dia</Label>
-            <Input
-              id="date"
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="w-44"
-            />
+            <div className="flex items-center gap-1">
+              <Button variant="outline" size="icon" className="h-9 w-8" title="Dia anterior" onClick={() => { const d = new Date(date + "T00:00:00"); d.setDate(d.getDate() - 1); const pad = (n: number) => String(n).padStart(2, "0"); setDate(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`); }}>◀</Button>
+              <Input
+                id="date"
+                type="date"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+                className="w-40"
+              />
+              <Button variant="outline" size="icon" className="h-9 w-8" title="Dia seguinte" onClick={() => { const d = new Date(date + "T00:00:00"); d.setDate(d.getDate() + 1); const pad = (n: number) => String(n).padStart(2, "0"); setDate(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`); }}>▶</Button>
+            </div>
           </div>
           {evaluation && evaluation.totals.people > 0 && (
             <Button

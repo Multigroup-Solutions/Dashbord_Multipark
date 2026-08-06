@@ -980,9 +980,10 @@ export const performanceEvaluations = mysqlTable("performance_evaluations", {
 	employeeId: int().notNull(),
 	weekNumber: int().notNull(),
 	yearNumber: int().notNull(),
-	hoursWorked: int().default(0),
+	hoursWorked: decimal({ precision: 8, scale: 2 }).default('0'),
 	movementsCount: int().default(0),
-	movementsPerHour: int().default(0),
+	movementsPerHour: decimal({ precision: 8, scale: 2 }).default('0'),
+	weeklyCost: decimal({ precision: 10, scale: 2 }), // custo da escala extras-dia na semana
 	speedAlerts: int().default(0),
 	incidentsPositive: int().default(0),
 	incidentsNegative: int().default(0),

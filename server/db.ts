@@ -2724,7 +2724,9 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
   if (drivers.length === 0) return [];
   const driverIds = drivers.map(d => d.id);
 
-  // ── 1. Horas trabalhadas: soma de time_records.hoursWorked (decimal)
+  // ── 1. Horas trabalhadas: fixos = ponto (time_records); EXTRAS = horas da
+  // ESCALA do extras-dia (fix 2026-08-06 — extras não picam ponto e o Mov/h
+  // ficava vazio). Soma também o CUSTO semanal da escala (horas × tarifa).
   const hoursRows = await db
     .select({
       employeeId: timeRecords.employeeId,
@@ -2739,6 +2741,38 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
     ))
     .groupBy(timeRecords.employeeId);
   const hoursMap = new Map(hoursRows.map(r => [r.employeeId, Number(r.hours)]));
+
+  const weekStartDay = startStr.slice(0, 10);
+  const weekEndDay = endStr.slice(0, 10);
+  const scheduleRows = await db
+    .select({
+      employeeId: extrasDiaAssignments.employeeId,
+      level: extrasDiaAssignments.level,
+      hours: sql<string>`COALESCE(SUM(GREATEST(COALESCE(${extrasDiaAssignments.sentHomeHour}, ${extrasDiaAssignments.endHour}) - ${extrasDiaAssignments.startHour}, 0)), 0)`,
+    })
+    .from(extrasDiaAssignments)
+    .where(and(
+      isNotNull(extrasDiaAssignments.employeeId),
+      gte(extrasDiaAssignments.assignmentDate, weekStartDay),
+      lte(extrasDiaAssignments.assignmentDate, weekEndDay),
+    ))
+    .groupBy(extrasDiaAssignments.employeeId, extrasDiaAssignments.level);
+  const scheduleHoursMap = new Map<number, number>();
+  const scheduleCostMap = new Map<number, number>();
+  for (const r of scheduleRows) {
+    const empId = Number(r.employeeId);
+    const hrs = Number(r.hours ?? 0);
+    const rate = EXTRAS_DIA_RATES[String(r.level ?? "junior")] ?? 4.5;
+    scheduleHoursMap.set(empId, (scheduleHoursMap.get(empId) ?? 0) + hrs);
+    scheduleCostMap.set(empId, (scheduleCostMap.get(empId) ?? 0) + hrs * rate);
+  }
+
+  // reportedBy nos incidents é USER id — mapa user→employee para o Inc+
+  // (fix 2026-08-06: comparava userId com employeeId, numerações diferentes)
+  const userToEmployee = new Map<number, number>();
+  for (const d of await db.select({ id: employees.id, userId: employees.userId }).from(employees).where(isNotNull(employees.userId))) {
+    if (d.userId != null) userToEmployee.set(Number(d.userId), d.id);
+  }
 
   // ── 2. Movimentações REAIS: ações no multipark_booking_history, ligadas ao
   // colaborador via employees.multiparkAgentName. (A tabela vehicle_movements
@@ -2791,16 +2825,17 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
     })
     .from(incidents)
     .where(and(
-      gte(incidents.createdAt, startStr),
-      lte(incidents.createdAt, endStr),
+      sql`COALESCE(${incidents.sourceEmailDate}, ${incidents.createdAt}) >= ${startStr}`,
+      sql`COALESCE(${incidents.sourceEmailDate}, ${incidents.createdAt}) <= ${endStr}`,
     ));
   const posIncidents = new Map<number, number>();
   const negIncidents = new Map<number, { count: number; points: number }>();
   for (const i of incidentRows) {
-    const reporterId = Number(i.reportedBy ?? 0);
+    // reportedBy é USER id → resolve para employee (antes comparava numerações diferentes)
+    const reporterEmpId = userToEmployee.get(Number(i.reportedBy ?? 0)) ?? 0;
     const targetId = Number(i.employeeId ?? 0);
-    if (reporterId && driverIds.includes(reporterId)) {
-      posIncidents.set(reporterId, (posIncidents.get(reporterId) ?? 0) + 1);
+    if (reporterEmpId && driverIds.includes(reporterEmpId)) {
+      posIncidents.set(reporterEmpId, (posIncidents.get(reporterEmpId) ?? 0) + 1);
     }
     if (targetId && driverIds.includes(targetId)) {
       const sev = String(i.severity ?? "medium");
@@ -2846,7 +2881,12 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
   const results: any[] = [];
 
   for (const emp of drivers) {
-    const hoursWorked = Math.round((hoursMap.get(emp.id) ?? 0) * 100) / 100;
+    // Extras: horas da ESCALA (não picam ponto); fixos: ponto
+    const rawHours = emp.position === "extra"
+      ? (scheduleHoursMap.get(emp.id) ?? hoursMap.get(emp.id) ?? 0)
+      : (hoursMap.get(emp.id) ?? 0);
+    const hoursWorked = Math.round(rawHours * 100) / 100;
+    const weeklyCost = Math.round((scheduleCostMap.get(emp.id) ?? 0) * 100) / 100;
     const movementsCount = movMap.get(emp.id) ?? 0;
     const movementsPerHour = hoursWorked > 0
       ? Math.round((movementsCount / hoursWorked) * 100) / 100
@@ -2865,9 +2905,11 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
       employeeId: emp.id,
       weekNumber,
       yearNumber,
-      hoursWorked: Math.round(hoursWorked),
+      // Decimais (colunas convertidas para DECIMAL(8,2) a 2026-08-06)
+      hoursWorked: String(hoursWorked),
       movementsCount,
-      movementsPerHour: Math.round(movementsPerHour),
+      movementsPerHour: String(movementsPerHour),
+      weeklyCost: String(weeklyCost),
       speedAlerts: alertCount,
       incidentsPositive: positiveIncidentsCount,
       incidentsNegative: negStats.count,
@@ -8266,6 +8308,20 @@ export async function syncIncidentsFromMultiparkHistory(opts: {
       vehiclePlate = booking?.plate ?? undefined;
     } catch {}
 
+    // Resolve o AGENTE da ação para o colaborador (quem fez / contra quem) —
+    // alimenta o Inc− da Avaliação Individual (pedido Jorge 2026-08-06)
+    let incidentEmployeeId: number | null = null;
+    if (row.agentName) {
+      try {
+        const [emp] = await db
+          .select({ id: employees.id })
+          .from(employees)
+          .where(eq(employees.multiparkAgentName, row.agentName))
+          .limit(1);
+        incidentEmployeeId = emp?.id ?? null;
+      } catch {}
+    }
+
     const importedAtStr = new Date().toISOString().slice(0, 19).replace("T", " ");
     try {
       const id = await createIncident({
@@ -8274,8 +8330,10 @@ export async function syncIncidentsFromMultiparkHistory(opts: {
         status: "open",
         description: remarks.slice(0, 1000),
         vehiclePlate,
+        employeeId: incidentEmployeeId,
         reportedBy: opts.reportedById ?? null,
         sourceEmailId: sourceKey, // reaproveita para dedup (Multipark history id)
+        sourceEmailDate: row.actionTime, // data REAL da ação (não a do sync)
         reservationLink: row.bookingExternalId,
         aiClassification: `Multipark · ${row.changeType ?? ""} · ${row.agentName ?? ""}`.trim(),
         importedAt: importedAtStr,

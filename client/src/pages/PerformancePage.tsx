@@ -82,13 +82,13 @@ export default function PerformancePage() {
   };
 
   const exportCSV = () => {
-    const headers = ["Pos","Condutor","Horas","Movs","Mov/h","Alertas","Inc+","Inc-","Pts+","Pts-","Total","Notas"];
+    const headers = ["Pos","Condutor","Horas","Movs","Mov/h","Inc+","Inc-","Pts+","Pts-","Total","Custo","Notas"];
     const rows = evaluations.map((ev: any, idx: number) => [
       idx + 1,
       employeeMap.get(ev.employeeId) ?? `#${ev.employeeId}`,
       ev.hoursWorked, ev.movementsCount, ev.movementsPerHour,
-      ev.speedAlerts, ev.incidentsPositive, ev.incidentsNegative,
-      ev.positivePoints, ev.negativePoints, ev.totalPoints,
+      ev.incidentsPositive, ev.incidentsNegative,
+      ev.positivePoints, ev.negativePoints, ev.totalPoints, ev.weeklyCost ?? "",
       (ev.notes ?? "").replace(/;/g, ","),
     ]);
     const csv = [headers.join(";"), ...rows.map(r => r.join(";"))].join("\n");
@@ -102,7 +102,7 @@ export default function PerformancePage() {
   const topPerformer = evaluations.length > 0 ? evaluations[0] : null;
   const totalHours = evaluations.reduce((s: number, e: any) => s + (e.hoursWorked || 0), 0);
   const totalMovements = evaluations.reduce((s: number, e: any) => s + (e.movementsCount || 0), 0);
-  const totalAlerts = evaluations.reduce((s: number, e: any) => s + (e.speedAlerts || 0), 0);
+  const totalCost = evaluations.reduce((s: number, e: any) => s + Number(e.weeklyCost || 0), 0);
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto w-full">
@@ -143,8 +143,8 @@ export default function PerformancePage() {
           <p className="text-xl font-bold mt-1">{totalMovements}</p>
         </Card>
         <Card className="p-3">
-          <div className="flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-red-500" /><span className="text-xs text-muted-foreground">Alertas Velocidade</span></div>
-          <p className="text-xl font-bold mt-1 text-red-600">{totalAlerts}</p>
+          <div className="flex items-center gap-2"><Zap className="w-4 h-4 text-amber-500" /><span className="text-xs text-muted-foreground">Custo Escalas</span></div>
+          <p className="text-xl font-bold mt-1">{totalCost.toFixed(0)}€</p>
         </Card>
         <Card className="p-3">
           <div className="flex items-center gap-2"><Award className="w-4 h-4 text-yellow-500" /><span className="text-xs text-muted-foreground">Melhor Condutor</span></div>
@@ -177,12 +177,12 @@ export default function PerformancePage() {
                     <Th k="hoursWorked" label="Horas" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                     <Th k="movementsCount" label="Movs" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                     <Th k="movementsPerHour" label="Mov/h" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
-                    <Th k="speedAlerts" label="Alertas" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                     <Th k="incidentsPositive" label="Inc+" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                     <Th k="incidentsNegative" label="Inc−" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                     <Th k="positivePoints" label="Pts+" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                     <Th k="negativePoints" label="Pts−" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                     <Th k="totalPoints" label="Total" align="center" className="font-bold" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="weeklyCost" label="Custo" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                     <th className="p-2">Notas</th>
                     {isSupervisor && <th className="p-2 w-10"></th>}
                   </tr>
@@ -218,13 +218,6 @@ export default function PerformancePage() {
                         <td className="p-2 text-center tabular-nums">{Number(ev.hoursWorked || 0).toFixed(1)}h</td>
                         <td className="p-2 text-center tabular-nums">{ev.movementsCount || 0}</td>
                         <td className="p-2 text-center tabular-nums">{Number(ev.movementsPerHour || 0).toFixed(1)}</td>
-                        <td className="p-2 text-center">
-                          {ev.speedAlerts > 0 ? (
-                            <Badge className="bg-red-100 text-red-700 text-xs">{ev.speedAlerts}</Badge>
-                          ) : (
-                            <span className="text-green-600 text-xs">0</span>
-                          )}
-                        </td>
                         <td className="p-2 text-center text-green-600">{ev.incidentsPositive || 0}</td>
                         <td className="p-2 text-center text-red-600">{ev.incidentsNegative || 0}</td>
                         <td className="p-2 text-center"><span className="text-green-600 font-medium">+{ev.positivePoints || 0}</span></td>
@@ -233,6 +226,14 @@ export default function PerformancePage() {
                           <span className={`font-bold text-base ${(ev.totalPoints || 0) >= 0 ? "text-green-600" : "text-red-600"}`}>
                             {ev.totalPoints || 0}
                           </span>
+                        </td>
+                        <td className="p-2 text-center text-xs tabular-nums">
+                          {Number(ev.weeklyCost || 0) > 0 ? (
+                            <>
+                              {Number(ev.weeklyCost).toFixed(0)}€
+                              {ev.movementsCount > 0 && <span className="block text-[10px] text-muted-foreground">{(Number(ev.weeklyCost) / ev.movementsCount).toFixed(2)}€/mov</span>}
+                            </>
+                          ) : "—"}
                         </td>
                         <td className="p-2 text-xs text-muted-foreground max-w-[150px] truncate" title={ev.notes ?? ""}>
                           {ev.notes ?? <span className="text-muted-foreground/50">—</span>}
@@ -269,15 +270,7 @@ export default function PerformancePage() {
             <div>
               <h4 className="font-medium text-red-600 mb-2">Pontos Negativos</h4>
               <ul className="space-y-1 text-muted-foreground">
-                <li>Alertas de velocidade (ignora reconhecidos):
-                  <ul className="ml-4 text-xs">
-                    <li>+10% acima do limite: −2</li>
-                    <li>+10–25%: −5</li>
-                    <li>+25–50%: −10</li>
-                    <li>+50%: −15</li>
-                  </ul>
-                </li>
-                <li>Ocorrências atribuídas (por severidade): low −2, medium −5, high −10, critical −20</li>
+                <li>Ocorrências atribuídas ao colaborador (por severidade): low −2, medium −5, high −10, critical −20</li>
                 <li>Penalizações abertas (no-show extras-dia, etc): −5 pts por ponto aberto</li>
               </ul>
             </div>
