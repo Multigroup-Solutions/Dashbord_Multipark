@@ -7455,6 +7455,8 @@ export const appRouter = router({
             shift: z.enum(["morning", "afternoon", "night"]).optional(),
             fromHour: z.number().int().min(0).max(23).optional(),
             toHour: z.number().int().min(0).max(27).optional(),
+            // dia ISO do pedido — permite ao "sim" automático marcar o dia certo
+            targetDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
           }).nullable().optional(),
         }),
       )

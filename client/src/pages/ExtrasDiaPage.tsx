@@ -1474,10 +1474,10 @@ export function AvailabilitySection() {
   }), [msgKind, msgDateLabel, msgShift, msgFrom, msgTo, note]);
   const msgPreview = useMemo(() => buildAvailabilityMessage(msgParams), [msgParams]);
   const msgInput = useMemo(() => msgKind === "week" ? null : ({
-    kind: msgKind, dateLabel: msgDateLabel,
+    kind: msgKind, dateLabel: msgDateLabel, targetDate: msgDate || null,
     ...(msgKind === "day_shift" ? { shift: msgShift } : {}),
     ...(msgKind === "day_range" ? { fromHour: msgFrom, toHour: msgTo } : {}),
-  }), [msgKind, msgDateLabel, msgShift, msgFrom, msgTo]);
+  }), [msgKind, msgDateLabel, msgDate, msgShift, msgFrom, msgTo]);
   const [testEmail, setTestEmail] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   // A tabela lista TODOS os extras ativos por defeito — é a lista de contactos

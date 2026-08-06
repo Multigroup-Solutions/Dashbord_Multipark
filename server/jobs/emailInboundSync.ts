@@ -260,6 +260,36 @@ async function routeToModule(
     return { targetModule: "lostfound", targetId: id ?? undefined };
   }
 
+  // ── "SIM" automático (pedido Jorge): resposta de um extra ao pedido de
+  // disponibilidade marca-o logo disponível naquela data/turno/horas. As
+  // respostas chegam aqui porque o pedido sai de recursos-humanos@. Só depois
+  // é que o resto vira tarefa de recrutamento.
+  try {
+    const { matchPendingAvailabilityReply, markDayAvailability } = await import("../extrasAvailability");
+    const pending = ctx.fromEmail ? await matchPendingAvailabilityReply(ctx.fromEmail) : null;
+    const bodyStart = (desc || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().slice(0, 200);
+    const saidYes = /\b(sim|yes|posso|ok|claro|disponivel)\b/.test(bodyStart);
+    if (pending && saidYes) {
+      const shiftNote = pending.shift === "morning" ? "manhã" : pending.shift === "afternoon" ? "tarde" : pending.shift === "night" ? "noite" : null;
+      if (pending.targetDate) {
+        await markDayAvailability(pending.employeeId, pending.targetDate, {
+          // Turnos do extras-dia são manhã/noite; a tarde conta como manhã e
+          // fica anotada. "que horas podes?" com só "sim" fica manhã + nota.
+          morning: pending.shift !== "night",
+          night: pending.shift === "night",
+          fromHour: pending.fromHour,
+          toHour: pending.toHour,
+          note: `respondeu SIM por email${shiftNote ? ` (turno da ${shiftNote})` : ""}${pending.kind === "day_hours" ? " — horas por confirmar" : ""}`,
+        });
+        return { targetModule: "availability", targetId: pending.employeeId };
+      }
+      // pedido da semana inteira: o "sim" não diz que dias — fica em tarefa
+      // normal para alguém confirmar (não dá para adivinhar os dias).
+    }
+  } catch (err) {
+    console.warn("[inbound] verificação de resposta de disponibilidade falhou:", err);
+  }
+
   // recursos-humanos → tarefa de recrutamento para a Kamila (o email fica
   // guardado em inbound_emails para a aba "Recrutamento" do RH).
   const systemUser = await getSystemUserId();

@@ -475,6 +475,97 @@ function emailHtml(name: string, msg: { subject: string; lines: string[] }, link
   </div>`;
 }
 
+// ─── Registo dos pedidos enviados (para o "SIM" automático) ──────────────────
+// Pedido Jorge: se o extra responder apenas "sim" ao email do pedido, fica
+// logo marcado como disponível naquela data/turno/horas no Extras-Dia. Para
+// isso guardamos O QUE foi pedido a cada um. Tabela on-demand.
+let reqLogEnsured = false;
+async function ensureAvailabilityRequestLog() {
+  if (reqLogEnsured) return;
+  const db = await getDb();
+  if (!db) return;
+  const { sql } = await import("drizzle-orm");
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS \`availability_request_log\` (
+    \`id\` INT NOT NULL AUTO_INCREMENT,
+    \`employeeId\` INT NOT NULL,
+    \`email\` VARCHAR(320) NOT NULL,
+    \`kind\` VARCHAR(20) NOT NULL,
+    \`targetDate\` VARCHAR(10) NULL,
+    \`shift\` VARCHAR(12) NULL,
+    \`fromHour\` INT NULL,
+    \`toHour\` INT NULL,
+    \`weekStart\` VARCHAR(10) NULL,
+    \`sentAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (\`id\`),
+    KEY \`arl_email_idx\` (\`email\`),
+    KEY \`arl_sent_idx\` (\`sentAt\`)
+  )`);
+  reqLogEnsured = true;
+}
+
+export type PendingAvailabilityRequest = {
+  id: number;
+  employeeId: number;
+  kind: string;
+  targetDate: string | null;
+  shift: string | null;
+  fromHour: number | null;
+  toHour: number | null;
+  weekStart: string | null;
+};
+
+/** Último pedido enviado a este email nos últimos 10 dias (para casar o "sim"). */
+export async function matchPendingAvailabilityReply(fromEmail: string): Promise<PendingAvailabilityRequest | null> {
+  const db = await getDb();
+  if (!db) return null;
+  await ensureAvailabilityRequestLog();
+  const { sql } = await import("drizzle-orm");
+  const [rows] = await db.execute(sql`
+    SELECT id, employeeId, kind, targetDate, shift, fromHour, toHour, weekStart
+    FROM \`availability_request_log\`
+    WHERE LOWER(email) = ${fromEmail.trim().toLowerCase()}
+      AND sentAt >= DATE_SUB(NOW(), INTERVAL 10 DAY)
+    ORDER BY sentAt DESC LIMIT 1`) as any;
+  const r = (rows as any[])?.[0];
+  if (!r) return null;
+  return {
+    id: Number(r.id),
+    employeeId: Number(r.employeeId),
+    kind: String(r.kind),
+    targetDate: r.targetDate ? String(r.targetDate) : null,
+    shift: r.shift ? String(r.shift) : null,
+    fromHour: r.fromHour != null ? Number(r.fromHour) : null,
+    toHour: r.toHour != null ? Number(r.toHour) : null,
+    weekStart: r.weekStart ? String(r.weekStart) : null,
+  };
+}
+
+/** Marca UM dia de disponibilidade sem tocar no resto da semana (o "sim"). */
+export async function markDayAvailability(
+  employeeId: number,
+  day: string,
+  patch: { morning?: boolean; night?: boolean; fromHour?: number | null; toHour?: number | null; note?: string | null },
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const d = new Date(`${day}T00:00:00`);
+  const dow = (d.getDay() + 6) % 7;
+  const mon = new Date(d); mon.setDate(d.getDate() - dow);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const weekStart = `${mon.getFullYear()}-${pad(mon.getMonth() + 1)}-${pad(mon.getDate())}`;
+  const { sql } = await import("drizzle-orm");
+  await db.execute(sql`
+    INSERT INTO extras_availability (employeeId, weekStart, day, morning, night, fromHour, toHour, note)
+    VALUES (${employeeId}, ${weekStart}, ${day}, ${patch.morning ? 1 : 0}, ${patch.night ? 1 : 0},
+            ${patch.fromHour ?? null}, ${patch.toHour ?? null}, ${patch.note ?? null})
+    ON DUPLICATE KEY UPDATE
+      morning = GREATEST(morning, VALUES(morning)),
+      night = GREATEST(night, VALUES(night)),
+      fromHour = COALESCE(VALUES(fromHour), fromHour),
+      toHour = COALESCE(VALUES(toHour), toHour),
+      note = COALESCE(VALUES(note), note)`);
+}
+
 export async function sendWeeklyAvailabilityRequest(opts: {
   weekStart: string;
   origin: string;
@@ -482,8 +573,8 @@ export async function sendWeeklyAvailabilityRequest(opts: {
   note?: string | null;
   employeeIds?: number[] | null; // se vier, envia SÓ a estes extras
   testEmail?: string | null;     // se vier, envia SÓ a este endereço (teste)
-  // Mensagem-tipo (default: semana clássica)
-  message?: Omit<AvailabilityMessageParams, "note" | "weekLabel"> | null;
+  // Mensagem-tipo (default: semana clássica); targetDate = dia ISO do pedido
+  message?: (Omit<AvailabilityMessageParams, "note" | "weekLabel"> & { targetDate?: string | null }) | null;
 }): Promise<SendResult> {
   if (!parseIsoDate(opts.weekStart)) {
     throw new Error("weekStart inválido (esperado YYYY-MM-DD)");
@@ -548,6 +639,20 @@ export async function sendWeeklyAvailabilityRequest(opts: {
     if (ok) result.sent++;
     else result.failed++;
     result.recipients.push({ name: e.fullName, email: e.email, ok });
+    // Regista o pedido para o "sim" automático poder casar a resposta
+    if (ok) {
+      try {
+        await ensureAvailabilityRequestLog();
+        const db = await getDb();
+        const { sql } = await import("drizzle-orm");
+        if (db) await db.execute(sql`
+          INSERT INTO \`availability_request_log\` (employeeId, email, kind, targetDate, shift, fromHour, toHour, weekStart)
+          VALUES (${e.id}, ${e.email}, ${opts.message?.kind ?? "week"}, ${opts.message?.targetDate ?? null},
+                  ${opts.message?.shift ?? null}, ${opts.message?.fromHour ?? null}, ${opts.message?.toHour ?? null}, ${opts.weekStart})`);
+      } catch (err) {
+        console.warn("[availability] log do pedido falhou:", err);
+      }
+    }
   }
 
   return result;
