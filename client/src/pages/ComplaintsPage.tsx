@@ -1,5 +1,6 @@
 import { trpc } from "@/lib/trpc";
 import { openInMultipark } from "@/lib/multiparkLinks";
+import { formatBookingHistoryDetails } from "@/lib/bookingHistoryFormat";
 import { fileHref } from "@/lib/fileHref";
 import CaseMessageList from "@/components/CaseMessageList";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
@@ -891,7 +892,15 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                                     <span className="font-medium text-sm">{h.userName ? `${h.userName} ${h.userLastName || ""}`.trim() : "Sistema"}</span>
                                   </div>
                                   {h.parkName && <p className="text-xs text-muted-foreground mt-1">Parque: {h.parkName}</p>}
-                                  {h.remarks && <p className="text-xs text-muted-foreground">{h.remarks}</p>}
+                                  {(() => {
+                                    const lines = formatBookingHistoryDetails(h.remarks);
+                                    if (!lines.length) return null;
+                                    return (
+                                      <ul className="text-xs text-muted-foreground mt-0.5 space-y-0.5">
+                                        {lines.map((l: string, li: number) => <li key={li}>{l}</li>)}
+                                      </ul>
+                                    );
+                                  })()}
                                 </div>
                                 <span className="text-xs text-muted-foreground whitespace-nowrap">
                                   {h.actionDate ? fmtPTDateTime(h.actionDate) : "—"}

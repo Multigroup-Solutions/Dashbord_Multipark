@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { formatBookingHistoryDetails } from "@/lib/bookingHistoryFormat";
 import { fileHref } from "@/lib/fileHref";
 import CaseMessageList from "@/components/CaseMessageList";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
@@ -927,7 +928,15 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                                     <Badge className={cfg.color}>{cfg.label}</Badge>
                                     <span className="font-medium text-sm">{h.userName ? `${h.userName} ${h.userLastName || ""}`.trim() : "Sistema"}</span>
                                   </div>
-                                  {h.remarks && <p className="text-xs text-muted-foreground mt-1">{h.remarks}</p>}
+                                  {(() => {
+                                    const lines = formatBookingHistoryDetails(h.remarks);
+                                    if (!lines.length) return null;
+                                    return (
+                                      <ul className="text-xs text-muted-foreground mt-1 space-y-0.5">
+                                        {lines.map((l: string, li: number) => <li key={li}>{l}</li>)}
+                                      </ul>
+                                    );
+                                  })()}
                                   {h.parkName && <p className="text-xs text-muted-foreground">Parque: {h.parkName}</p>}
                                 </div>
                                 <span className="text-xs text-muted-foreground whitespace-nowrap">
@@ -1622,7 +1631,10 @@ function BookingHistoryView({ onBack }: { onBack: () => void }) {
                           </td>
                           <td className="p-2 font-mono text-xs">{h.bookingId?.slice(-12)}</td>
                           <td className="p-2 font-mono">{h.licensePlate || "—"}</td>
-                          <td className="p-2 text-xs text-muted-foreground">{h.remarks || "—"}</td>
+                          <td className="p-2 text-xs text-muted-foreground">{(() => {
+                            const lines = formatBookingHistoryDetails(h.remarks);
+                            return lines.length ? lines.join(" · ") : "—";
+                          })()}</td>
                         </tr>
                       );
                     })}
