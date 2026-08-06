@@ -346,7 +346,21 @@ async function routeToModule(
       parkM ? `Parque: ${parkM[1].trim()}` : null,
       rawType && !TYPE_MAP[rawType] ? `Tipo (Multipark): ${typeM![1].trim()}` : null,
     ].filter(Boolean);
-    const { createIncident } = await import("../db");
+    const { createIncident, getDb: getDbOcc } = await import("../db");
+    // Dedup por CONTEÚDO: o mesmo email reencaminhado 2x tem messageId novo,
+    // mas a ocorrência é a mesma (matrícula + data original)
+    if (plateM && srcDate) {
+      const dbOcc = await getDbOcc();
+      if (dbOcc) {
+        const { sql: sqlOcc } = await import("drizzle-orm");
+        const [dupRows] = await dbOcc.execute(sqlOcc`
+          SELECT id FROM incidents WHERE vehiclePlate = ${plateM[1].toUpperCase()}
+            AND sourceEmailDate = ${srcDate} LIMIT 1`) as any;
+        if ((dupRows as any[])?.length) {
+          return { targetModule: "incident_dup", targetId: (dupRows as any[])[0].id };
+        }
+      }
+    }
     const id = await createIncident({
       incidentType: (mapped?.t ?? "outro") as any,
       severity: (mapped?.s ?? "medium") as any,
