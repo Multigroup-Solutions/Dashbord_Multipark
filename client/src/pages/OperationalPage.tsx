@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { useTableSort, Th } from "@/components/SortableTable";
+import { usePersistedState } from "@/hooks/usePersistedState";
 import {
   Car, AlertTriangle, Radio, Activity, Plus, Trash2, Eye, Check,
   MapPin, Gauge, ArrowUpDown, Clock, Wrench, XCircle, Satellite, Shield, Users, Settings,
@@ -37,12 +38,14 @@ export default function OperationalPage() {
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList className="flex-wrap">
             <TabsTrigger value="dashboard"><Activity className="w-4 h-4 mr-1" />Dashboard</TabsTrigger>
+            <TabsTrigger value="dia"><History className="w-4 h-4 mr-1" />Atividade do Dia</TabsTrigger>
             <TabsTrigger value="agents"><Users className="w-4 h-4 mr-1" />Por Colaborador</TabsTrigger>
             <TabsTrigger value="history"><History className="w-4 h-4 mr-1" />Histórico Diário</TabsTrigger>
             <TabsTrigger value="pdas"><Smartphone className="w-4 h-4 mr-1" />PDAs</TabsTrigger>
             <TabsTrigger value="radio"><Radio className="w-4 h-4 mr-1" />Rádio</TabsTrigger>
           </TabsList>
           <TabsContent value="dashboard"><DashboardTab /></TabsContent>
+          <TabsContent value="dia"><DayActivityTab /></TabsContent>
           <TabsContent value="agents"><AgentActivityTab /></TabsContent>
           <TabsContent value="history"><DriverHistoryTab /></TabsContent>
           <TabsContent value="pdas"><PdasTab /></TabsContent>
@@ -301,567 +304,95 @@ function DashboardTab() {
 }
 
 
-// ─── ZELLO GPS TAB ──────────────────────────────────────────────────────────
 
-function ZelloLiveMap({ onlineUsers, speedThreshold }: { onlineUsers: any[]; speedThreshold: number }) {
-  const mapRef = useRef<google.maps.Map | null>(null);
-  const markersRef = useRef<google.maps.Marker[]>([]);
-
-  // Centra inicialmente em Lisboa-Aeroporto (epicentro do parque); ajusta com bounds depois.
-  const initialCenter = { lat: 38.7813, lng: -9.1359 };
-
-  useEffect(() => {
-    if (!mapRef.current) return;
-    // Limpar markers antigos
-    markersRef.current.forEach(m => m.setMap(null));
-    markersRef.current = [];
-    if (onlineUsers.length === 0) return;
-
-    const bounds = new window.google.maps.LatLngBounds();
-    for (const u of onlineUsers) {
-      const pos = { lat: Number(u.latitude), lng: Number(u.longitude) };
-      const speeding = u.speed > speedThreshold;
-      const marker = new window.google.maps.Marker({
-        position: pos,
-        map: mapRef.current,
-        title: `${u.displayName || u.username} — ${u.speed.toFixed(0)} km/h`,
-        label: {
-          text: String(Math.round(u.speed)),
-          color: "white",
-          fontSize: "11px",
-          fontWeight: "bold",
-        },
-        icon: {
-          path: window.google.maps.SymbolPath.CIRCLE,
-          scale: 14,
-          fillColor: speeding ? "#dc2626" : "#10b981",
-          fillOpacity: 0.9,
-          strokeColor: "white",
-          strokeWeight: 2,
-        },
-      });
-      markersRef.current.push(marker);
-      bounds.extend(pos);
-    }
-    if (onlineUsers.length === 1) {
-      mapRef.current.setCenter(bounds.getCenter());
-      mapRef.current.setZoom(14);
-    } else {
-      mapRef.current.fitBounds(bounds, 40);
-    }
-  }, [onlineUsers, speedThreshold]);
-
-  return (
-    <MapView
-      initialCenter={initialCenter}
-      initialZoom={11}
-      onMapReady={(m) => { mapRef.current = m; }}
-      className="h-[400px] rounded-lg overflow-hidden"
-    />
-  );
-}
-
-function ZelloGPSTab() {
-  // Pausa o refetch automático se a tab do browser não está em foco — evita
-  // queimar a API enquanto o utilizador tem a página em background.
-  const { data: locations, isLoading: loadingLocs, refetch: refetchLocs } = trpc.operational.zello.locations.useQuery(undefined, {
-    refetchInterval: 30000,
-    refetchIntervalInBackground: false,
-  });
-  const { data: users } = trpc.operational.zello.users.useQuery();
-  const { data: channels } = trpc.operational.zello.channels.useQuery();
-  const { data: speedLimits = [] } = trpc.operational.speedMonitoring.limits.list.useQuery();
-  const [selectedUser, setSelectedUser] = useState<string | null>(null);
-
-  // Limite padrão (com fallback a 50). Aplicar tolerância também.
-  const defaultLimit = useMemo(() => {
-    const d = (speedLimits as any[]).find(l => l.isDefault) ?? (speedLimits as any[])[0];
-    if (!d) return { maxSpeed: 50, tolerancePercent: 0 };
-    return { maxSpeed: Number(d.maxSpeed), tolerancePercent: Number(d.tolerancePercent ?? 0) };
-  }, [speedLimits]);
-  const speedThreshold = defaultLimit.maxSpeed * (1 + defaultLimit.tolerancePercent / 100);
-
-  // Resolve utilizador Zello → FUNCIONÁRIO com check-in ativo no PDA:
-  // via zelloUsername do próprio check-in OU do registo do PDA. O nome que a
-  // operação vê é sempre o do funcionário; o Zello fica só no registo de PDAs.
-  const { data: activeCheckins = [] } = trpc.operational.pdas.checkins.active.useQuery();
-  const { data: pdaListForGps = [] } = trpc.operational.pdas.list.useQuery();
-  const { data: empsForGps = [] } = trpc.rh.list.useQuery();
-  const zelloToEmployee = useMemo(() => {
-    const empName = new Map((empsForGps as any[]).map((e: any) => [e.employee.id, e.employee.fullName]));
-    const m = new Map<string, string>();
-    // 2º prioridade: check-in ativo de PDA (dimensão temporal)
-    for (const c of activeCheckins as any[]) {
-      const name = c.employeeId ? empName.get(c.employeeId) : null;
-      if (!name) continue;
-      if (c.zelloUsername) m.set(String(c.zelloUsername).toLowerCase(), name);
-      const pda = (pdaListForGps as any[]).find((p: any) => p.id === c.pdaId);
-      if (pda?.zelloUsername) m.set(String(pda.zelloUsername).toLowerCase(), name);
-    }
-    // 1ª prioridade (sobrepõe): anexo PERSISTENTE zello→colaborador
-    for (const e of empsForGps as any[]) {
-      if (e.employee.zelloUsername) m.set(String(e.employee.zelloUsername).toLowerCase(), e.employee.fullName);
-    }
-    return m;
-  }, [activeCheckins, pdaListForGps, empsForGps]);
-
-  const onlineUsers = useMemo(() => (locations || [])
-    .filter((l: any) => l.latitude !== 0 && l.longitude !== 0)
-    .map((l: any) => {
-      const emp = zelloToEmployee.get(String(l.username ?? "").toLowerCase());
-      return emp ? { ...l, displayName: emp } : l;
-    }), [locations, zelloToEmployee]);
-  const gpsSort = useTableSort(onlineUsers as any[]);
-  const speedingUsers = useMemo(() => onlineUsers.filter((l: any) => l.speed > speedThreshold), [onlineUsers, speedThreshold]);
+// ─── ATIVIDADE DO DIA (visão do Jorge: tudo do dia num sítio) ────────────────
+// Por pessoa: recolhas/entregas/movimentos/cancelamentos (ações Multipark) +
+// km e horas do GPS Zello. O GPS de um dia é recolhido às 2h da manhã
+// SEGUINTE — para "hoje" só há ações; os km chegam amanhã.
+function DayActivityTab() {
+  const yesterday = (() => { const d = new Date(); d.setDate(d.getDate() - 1); const pad = (n: number) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; })();
+  const [date, setDate] = usePersistedState("operacional.dia.date", yesterday);
+  const { data, isLoading } = trpc.multipark.dayActivity.useQuery({ date }, { refetchOnWindowFocus: false });
+  const totals = data?.totals;
+  const people = data?.people ?? [];
+  const daySort = useTableSort(people as any[]);
+  const todayStr = (() => { const d = new Date(); const pad = (n: number) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; })();
 
   return (
     <div className="space-y-4 mt-4">
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="pt-4 pb-3">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground"><Users className="w-4 h-4" />Utilizadores Zello</div>
-            <p className="text-2xl font-bold mt-1">{users?.length || 0}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-4 pb-3">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground"><Satellite className="w-4 h-4" />Com GPS Ativo</div>
-            <p className="text-2xl font-bold mt-1 text-green-600">{onlineUsers.length}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-4 pb-3">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground"><Gauge className="w-4 h-4" />Em Excesso</div>
-            <p className="text-2xl font-bold mt-1 text-red-600">{speedingUsers.length}</p>
-            <p className="text-[10px] text-muted-foreground">limite {speedThreshold.toFixed(0)} km/h</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-4 pb-3">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground"><Radio className="w-4 h-4" />Canais</div>
-            <p className="text-2xl font-bold mt-1">{channels?.length || 0}</p>
-          </CardContent>
-        </Card>
+      <div className="flex flex-wrap items-end gap-3">
+        <div>
+          <Label className="text-xs mb-1 block">Dia</Label>
+          <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-44" />
+        </div>
+        {date === todayStr && (
+          <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-0.5">
+            Hoje ainda sem km — o GPS do dia é recolhido às 2h da manhã seguinte. As ações estão em tempo quase-real.
+          </p>
+        )}
       </div>
 
-      {/* Auto-refresh indicator */}
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">Atualização automática a cada 30s (pausada quando a página está em background)</p>
-        <Button variant="outline" size="sm" onClick={() => refetchLocs()}>
-          <Satellite className="w-4 h-4 mr-1" />Atualizar Agora
-        </Button>
-      </div>
-
-      {/* Mapa em tempo real com os condutores online */}
-      {onlineUsers.length > 0 && (
-        <Card>
-          <CardHeader><CardTitle className="text-lg flex items-center gap-2"><MapPin className="w-5 h-5" /> Mapa em Tempo Real</CardTitle></CardHeader>
-          <CardContent>
-            <ZelloLiveMap onlineUsers={onlineUsers} speedThreshold={speedThreshold} />
-          </CardContent>
-        </Card>
+      {totals && (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          <Card className="p-3"><p className="text-xs text-muted-foreground">Recolhas</p><p className="text-xl font-bold text-emerald-700">{totals.checkins}</p></Card>
+          <Card className="p-3"><p className="text-xs text-muted-foreground">Entregas</p><p className="text-xl font-bold text-blue-700">{totals.checkouts}</p></Card>
+          <Card className="p-3"><p className="text-xs text-muted-foreground">Movimentações</p><p className="text-xl font-bold">{totals.movements}</p></Card>
+          <Card className="p-3"><p className="text-xs text-muted-foreground">Cancelamentos</p><p className="text-xl font-bold text-red-700">{totals.cancels}</p></Card>
+          <Card className="p-3"><p className="text-xs text-muted-foreground">Km GPS</p><p className="text-xl font-bold text-purple-700">{totals.totalKm} km</p></Card>
+          <Card className="p-3"><p className="text-xs text-muted-foreground">Pessoas ativas</p><p className="text-xl font-bold">{totals.activePeople}</p></Card>
+        </div>
       )}
 
-      {/* Locations table */}
       <Card>
-        <CardHeader><CardTitle className="text-lg">Localizações em Tempo Real</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle className="text-base">Quem fez o quê — {date}</CardTitle>
+          <p className="text-xs text-muted-foreground">Ações das reservas + GPS por pessoa. 🤝 = agente que é um parceiro/agência; ⚠ = agente por ligar (aba Por Colaborador).</p>
+        </CardHeader>
         <CardContent>
-          {loadingLocs ? (
-            <p className="text-center text-muted-foreground py-8">A carregar localizações...</p>
-          ) : onlineUsers.length === 0 ? (
-            <div className="text-center py-8">
-              <Satellite className="w-12 h-12 mx-auto text-muted-foreground/40 mb-3" />
-              <p className="text-muted-foreground">Nenhum utilizador com GPS ativo neste momento.</p>
-              <p className="text-sm text-muted-foreground mt-1">Os condutores aparecem aqui quando a app Zello está aberta e com localização ativa.</p>
-            </div>
-          ) : (
+          {isLoading ? <p className="text-sm text-muted-foreground">A carregar…</p> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b text-left">
-                    <Th k="displayName" label="Utilizador" sortKey={gpsSort.sortKey} sortDir={gpsSort.sortDir} onToggle={gpsSort.toggle} />
-                    <Th k="speed" label="Velocidade" sortKey={gpsSort.sortKey} sortDir={gpsSort.sortDir} onToggle={gpsSort.toggle} />
-                    <Th k="battery" label="Bateria" sortKey={gpsSort.sortKey} sortDir={gpsSort.sortDir} onToggle={gpsSort.toggle} />
-                    <Th k="status" label="Estado" sortKey={gpsSort.sortKey} sortDir={gpsSort.sortDir} onToggle={gpsSort.toggle} />
-                    <Th k="lastReport" label="Última Atualização" sortKey={gpsSort.sortKey} sortDir={gpsSort.sortDir} onToggle={gpsSort.toggle} />
-                    <th className="p-2">Ações</th>
+                    <Th k="name" label="Pessoa / Agente" sortKey={daySort.sortKey} sortDir={daySort.sortDir} onToggle={daySort.toggle} />
+                    <Th k="checkins" label="Recolhas" align="right" sortKey={daySort.sortKey} sortDir={daySort.sortDir} onToggle={daySort.toggle} />
+                    <Th k="checkouts" label="Entregas" align="right" sortKey={daySort.sortKey} sortDir={daySort.sortDir} onToggle={daySort.toggle} />
+                    <Th k="movements" label="Movs" align="right" sortKey={daySort.sortKey} sortDir={daySort.sortDir} onToggle={daySort.toggle} />
+                    <Th k="cancels" label="Canc." align="right" sortKey={daySort.sortKey} sortDir={daySort.sortDir} onToggle={daySort.toggle} />
+                    <Th k="totalActions" label="Total" align="right" className="font-bold" sortKey={daySort.sortKey} sortDir={daySort.sortDir} onToggle={daySort.toggle} />
+                    <Th k="totalKm" label="Km" align="right" sortKey={daySort.sortKey} sortDir={daySort.sortDir} onToggle={daySort.toggle} />
+                    <Th k="hoursWorked" label="H. movimento" align="right" sortKey={daySort.sortKey} sortDir={daySort.sortDir} onToggle={daySort.toggle} />
+                    <Th k="hoursOnline" label="H. online" align="right" sortKey={daySort.sortKey} sortDir={daySort.sortDir} onToggle={daySort.toggle} />
                   </tr>
                 </thead>
                 <tbody>
-                  {(gpsSort.sorted as any[]).map((loc: any) => {
-                    const isSpeeding = loc.speed > speedThreshold;
-                    const lastUpdate = loc.lastReport ? fmtPTDateTime(loc.lastReport * 1000) : "-";
-                    return (
-                      <tr key={loc.username} className={`border-b ${isSpeeding ? "bg-red-50 dark:bg-red-950/20" : ""}`}>
-                        <td className="p-2 font-medium">
-                          {zelloToEmployee.has(String(loc.username ?? "").toLowerCase()) ? (
-                            <div>
-                              {loc.displayName}
-                              <span className="block text-[10px] text-muted-foreground font-normal">zello: {loc.username}</span>
-                            </div>
-                          ) : (
-                            <ZelloLinkCell
-                              zelloUsername={String(loc.username ?? "")}
-                              employees={empsForGps as any[]}
-                            />
-                          )}
-                        </td>
-                        <td className="p-2">
-                          <span className={`font-bold ${isSpeeding ? "text-red-600" : "text-green-600"}`}>
-                            {loc.speed.toFixed(1)} km/h
-                          </span>
-                        </td>
-                        <td className="p-2">
-                          <div className="flex items-center gap-1">
-                            <div className={`w-2 h-2 rounded-full ${loc.batteryLevel > 50 ? "bg-green-500" : loc.batteryLevel > 20 ? "bg-amber-500" : "bg-red-500"}`} />
-                            {loc.batteryLevel}%
-                          </div>
-                        </td>
-                        <td className="p-2">
-                          <Badge variant={loc.status === "available" ? "default" : "secondary"}>
-                            {loc.status === "available" ? "Online" : loc.status === "standby" ? "Standby" : loc.status}
-                          </Badge>
-                        </td>
-                        <td className="p-2 text-muted-foreground">{lastUpdate}</td>
-                        <td className="p-2 flex gap-1">
-                          <Button size="sm" variant="outline" asChild>
-                            <a href={`https://www.google.com/maps?q=${loc.latitude},${loc.longitude}`} target="_blank" rel="noopener">
-                              <MapPin className="w-4 h-4" />
-                            </a>
-                          </Button>
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  {(daySort.sorted as any[]).map((pers) => (
+                    <tr key={pers.key} className={`border-b hover:bg-muted/40 ${pers.kind === "por_ligar" ? "bg-amber-50/40" : ""}`}>
+                      <td className="p-2 font-medium">
+                        {pers.kind === "parceiro" && "🤝 "}
+                        {pers.kind === "por_ligar" && "⚠ "}
+                        {pers.name}
+                      </td>
+                      <td className="p-2 text-right text-emerald-700 tabular-nums">{pers.checkins || ""}</td>
+                      <td className="p-2 text-right text-blue-700 tabular-nums">{pers.checkouts || ""}</td>
+                      <td className="p-2 text-right tabular-nums">{pers.movements || ""}</td>
+                      <td className="p-2 text-right text-red-700 tabular-nums">{pers.cancels || ""}</td>
+                      <td className="p-2 text-right font-bold tabular-nums">{pers.totalActions || ""}</td>
+                      <td className="p-2 text-right tabular-nums">{pers.totalKm != null && pers.totalKm > 0 ? `${pers.totalKm} km` : "—"}</td>
+                      <td className="p-2 text-right tabular-nums">{pers.hoursWorked != null && pers.hoursWorked > 0 ? `${pers.hoursWorked}h` : "—"}</td>
+                      <td className="p-2 text-right tabular-nums">{pers.hoursOnline != null && pers.hoursOnline > 0 ? `${pers.hoursOnline}h` : "—"}</td>
+                    </tr>
+                  ))}
+                  {people.length === 0 && <tr><td colSpan={9} className="p-6 text-center text-muted-foreground">Sem atividade registada neste dia.</td></tr>}
                 </tbody>
               </table>
             </div>
           )}
         </CardContent>
       </Card>
-
-      {/* Channels */}
-      <Card>
-        <CardHeader><CardTitle className="text-lg">Canais Zello</CardTitle></CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {(channels || []).map((ch: any) => (
-              <div key={ch.name} className="border rounded-lg p-3">
-                <p className="font-medium text-sm">{ch.name}</p>
-                <p className="text-xs text-muted-foreground">{ch.count} membros</p>
-                <div className="flex gap-1 mt-1">
-                  {ch.isDispatch && <Badge variant="outline" className="text-xs">Dispatch</Badge>}
-                  {ch.isShared && <Badge variant="secondary" className="text-xs">Partilhado</Badge>}
-                </div>
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* All Zello Users */}
-      <Card>
-        <CardHeader><CardTitle className="text-lg">Todos os Utilizadores Zello ({users?.length || 0})</CardTitle></CardHeader>
-        <CardContent>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b text-left">
-                  <th className="p-2">Nome</th>
-                  <th className="p-2">Cargo</th>
-                  <th className="p-2">Admin</th>
-                  <th className="p-2">GPS</th>
-                  <th className="p-2">Canais</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(users || []).map((u: any) => (
-                  <tr key={u.name} className="border-b">
-                    <td className="p-2 font-medium">{u.fullName || u.name}</td>
-                    <td className="p-2 text-muted-foreground">{u.job || "-"}</td>
-                    <td className="p-2">{u.admin ? <Badge>Admin</Badge> : "-"}</td>
-                    <td className="p-2">{u.geotrackingOff ? <Badge variant="destructive">Desligado</Badge> : <Badge variant="outline">Ativo</Badge>}</td>
-                    <td className="p-2 text-xs text-muted-foreground"><span className="line-clamp-1 max-w-[240px]">{u.channels?.join(", ") || "-"}</span></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 }
-
-// ─── SPEED MONITORING TAB ───────────────────────────────────────────────────
-
-function SpeedMonitoringTab() {
-  const [subTab, setSubTab] = useState<"violations" | "limits" | "check">("violations");
-  const utils = trpc.useUtils();
-
-  // Speed limits
-  const { data: limits } = trpc.operational.speedMonitoring.limits.list.useQuery();
-  const createLimitMut = trpc.operational.speedMonitoring.limits.create.useMutation({
-    onSuccess: () => { utils.operational.speedMonitoring.limits.list.invalidate(); toast.success("Limite criado"); setShowCreateLimit(false); },
-    onError: (e) => toast.error(e.message),
-  });
-  const deleteLimitMut = trpc.operational.speedMonitoring.limits.delete.useMutation({
-    onSuccess: () => { utils.operational.speedMonitoring.limits.list.invalidate(); toast.success("Limite eliminado"); },
-    onError: (e) => toast.error(e.message),
-  });
-
-  // Violations
-  const [filterAck, setFilterAck] = useState<string>("");
-  const { data: violations } = trpc.operational.speedMonitoring.violations.list.useQuery(
-    filterAck !== "" ? { acknowledged: filterAck === "true" } : undefined
-  );
-  const { data: stats } = trpc.operational.speedMonitoring.violations.stats.useQuery();
-  const ackMut = trpc.operational.speedMonitoring.violations.acknowledge.useMutation({
-    onSuccess: () => { utils.operational.speedMonitoring.violations.list.invalidate(); utils.operational.speedMonitoring.violations.stats.invalidate(); toast.success("Infração reconhecida"); },
-    onError: (e) => toast.error(e.message),
-  });
-
-  // Check now
-  const checkMut = trpc.operational.speedMonitoring.checkNow.useMutation({
-    onSuccess: (data) => {
-      utils.operational.speedMonitoring.violations.list.invalidate();
-      utils.operational.speedMonitoring.violations.stats.invalidate();
-      if (data.violations > 0) {
-        toast.warning(`${data.violations} infração(ões) detetada(s) em ${data.checked} condutores!`);
-      } else {
-        toast.success(`${data.checked} condutores verificados, sem infrações.`);
-      }
-    },
-    onError: (e) => toast.error(e.message),
-  });
-
-  const [showCreateLimit, setShowCreateLimit] = useState(false);
-  const [newLimit, setNewLimit] = useState({ name: "", maxSpeed: 50, tolerancePercent: 10, isDefault: false });
-  const [ackNotes, setAckNotes] = useState("");
-  const [ackId, setAckId] = useState<number | null>(null);
-
-  return (
-    <div className="space-y-4 mt-4">
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="pt-4 pb-3">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground"><AlertTriangle className="w-4 h-4" />Total Infrações</div>
-            <p className="text-2xl font-bold mt-1">{stats?.total || 0}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-4 pb-3">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground"><XCircle className="w-4 h-4" />Pendentes</div>
-            <p className="text-2xl font-bold mt-1 text-red-600">{stats?.unacknowledged || 0}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-4 pb-3">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground"><Settings className="w-4 h-4" />Limites Ativos</div>
-            <p className="text-2xl font-bold mt-1">{limits?.length || 0}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-4 pb-3">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground"><Shield className="w-4 h-4" />Top Infrator</div>
-            <p className="text-lg font-bold mt-1 truncate">{stats?.topOffenders?.[0]?.displayName || "-"}</p>
-            {stats?.topOffenders?.[0] && <p className="text-xs text-muted-foreground">{stats.topOffenders[0].count} infrações, +{stats.topOffenders[0].avgExcess}% média</p>}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Check Now button */}
-      <div className="flex flex-wrap items-center gap-3">
-        <Button
-          onClick={() => {
-            if (!confirm("Verificar todos os condutores com GPS ativo e registar infrações automaticamente?")) return;
-            checkMut.mutate();
-          }}
-          disabled={checkMut.isPending}
-          className="bg-red-600 hover:bg-red-700"
-        >
-          <Gauge className="w-4 h-4 mr-1" />{checkMut.isPending ? "A verificar..." : "Verificar Velocidades Agora"}
-        </Button>
-        <p className="text-sm text-muted-foreground">Verifica todos os condutores com GPS ativo e regista infrações automaticamente.</p>
-      </div>
-
-      {/* Sub-tabs */}
-      <div className="flex flex-wrap gap-2 border-b pb-2">
-        <Button variant={subTab === "violations" ? "default" : "ghost"} size="sm" onClick={() => setSubTab("violations")}>Infrações</Button>
-        <Button variant={subTab === "limits" ? "default" : "ghost"} size="sm" onClick={() => setSubTab("limits")}>Limites de Velocidade</Button>
-      </div>
-
-      {subTab === "violations" && (
-        <div className="space-y-4">
-          <div className="flex items-center gap-3">
-            <Select value={filterAck} onValueChange={v => setFilterAck(v === "all" ? "" : v)}>
-              <SelectTrigger className="w-[180px]"><SelectValue placeholder="Estado" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todos</SelectItem>
-                <SelectItem value="false">Pendentes</SelectItem>
-                <SelectItem value="true">Reconhecidos</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Top Offenders */}
-          {stats?.topOffenders && stats.topOffenders.length > 0 && (
-            <Card>
-              <CardHeader><CardTitle className="text-sm">Top Infratores</CardTitle></CardHeader>
-              <CardContent>
-                <div className="flex flex-wrap gap-3">
-                  {stats.topOffenders.map((o: any) => (
-                    <div key={o.username} className="border rounded-lg p-2 text-sm">
-                      <p className="font-medium">{o.displayName}</p>
-                      <p className="text-xs text-muted-foreground">{o.count} infrações · +{o.avgExcess}% média</p>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Violations table */}
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] text-sm">
-              <thead>
-                <tr className="border-b text-left">
-                  <th className="p-2">Data</th><th className="p-2">Condutor</th>
-                  <th className="p-2">Velocidade</th><th className="p-2">Limite</th><th className="p-2">Excesso</th>
-                  <th className="p-2">GPS</th><th className="p-2">Estado</th><th className="p-2">Ações</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(!violations || violations.length === 0) ? (
-                  <tr><td colSpan={8} className="p-8 text-center text-muted-foreground">Sem infrações de velocidade registadas.</td></tr>
-                ) : violations.map((v: any) => (
-                  <tr key={v.id} className={`border-b ${!v.acknowledged ? "bg-red-50 dark:bg-red-950/20" : ""}`}>
-                    <td className="p-2 text-xs">{fmtPTDateTime(v.occurredAt)}</td>
-                    <td className="p-2 font-medium">{v.displayName || v.zelloUsername}</td>
-                    <td className="p-2 font-bold text-red-600">{parseFloat(v.speed).toFixed(1)} km/h</td>
-                    <td className="p-2">{v.speedLimit} km/h</td>
-                    <td className="p-2 font-bold text-red-600">+{parseFloat(v.excessPercent).toFixed(0)}%</td>
-                    <td className="p-2">
-                      {v.latitude && v.longitude ? (
-                        <a href={`https://www.google.com/maps?q=${v.latitude},${v.longitude}`} target="_blank" rel="noopener" className="text-blue-600 hover:underline flex items-center gap-1">
-                          <MapPin className="w-3 h-3" />Ver
-                        </a>
-                      ) : "-"}
-                    </td>
-                    <td className="p-2">
-                      {v.acknowledged ? <Badge variant="outline">Reconhecido</Badge> : <Badge variant="destructive">Pendente</Badge>}
-                    </td>
-                    <td className="p-2">
-                      {!v.acknowledged && (
-                        <Button size="sm" variant="outline" onClick={() => setAckId(v.id)} title="Reconhecer">
-                          <Check className="w-4 h-4" />
-                        </Button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {subTab === "limits" && (
-        <div className="space-y-4">
-          <div className="flex justify-end">
-            <Button onClick={() => setShowCreateLimit(true)}><Plus className="w-4 h-4 mr-1" />Novo Limite</Button>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {(limits || []).map((l: any) => (
-              <Card key={l.id}>
-                <CardContent className="pt-4 pb-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="font-medium">{l.name}</p>
-                      <p className="text-2xl font-bold text-blue-600">{l.maxSpeed} km/h</p>
-                      <p className="text-xs text-muted-foreground">Tolerância: {l.tolerancePercent}% (alerta a {Math.round(l.maxSpeed * (1 + l.tolerancePercent / 100))} km/h)</p>
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      {l.isDefault && <Badge>Padrão</Badge>}
-                      <Button size="sm" variant="ghost" className="text-red-600" onClick={() => deleteLimitMut.mutate({ id: l.id })}>
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-            {(!limits || limits.length === 0) && (
-              <div className="md:col-span-3 text-center py-8 text-muted-foreground">
-                <Shield className="w-12 h-12 mx-auto text-muted-foreground/40 mb-3" />
-                <p>Nenhum limite de velocidade configurado.</p>
-                <p className="text-sm mt-1">Cria um limite padrão para começar a monitorizar.</p>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Create Limit Dialog */}
-      {showCreateLimit && (
-        <Dialog open onOpenChange={() => setShowCreateLimit(false)}>
-          <DialogContent>
-            <DialogHeader><DialogTitle>Novo Limite de Velocidade</DialogTitle></DialogHeader>
-            <div className="space-y-4">
-              <div>
-                <Label>Nome</Label>
-                <Input value={newLimit.name} onChange={e => setNewLimit(p => ({ ...p, name: e.target.value }))} placeholder="Ex: Cidade, Autoestrada, Parque" />
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <Label>Velocidade Máxima (km/h)</Label>
-                  <Input type="number" value={newLimit.maxSpeed} onChange={e => setNewLimit(p => ({ ...p, maxSpeed: Number(e.target.value) }))} />
-                </div>
-                <div>
-                  <Label>Tolerância (%)</Label>
-                  <Input type="number" value={newLimit.tolerancePercent} onChange={e => setNewLimit(p => ({ ...p, tolerancePercent: Number(e.target.value) }))} />
-                </div>
-              </div>
-              <p className="text-sm text-muted-foreground">Alerta dispara a: <strong>{Math.round(newLimit.maxSpeed * (1 + newLimit.tolerancePercent / 100))} km/h</strong></p>
-              <div className="flex items-center gap-2">
-                <input type="checkbox" id="isDefault" checked={newLimit.isDefault} onChange={e => setNewLimit(p => ({ ...p, isDefault: e.target.checked }))} />
-                <Label htmlFor="isDefault">Limite padrão (usado na verificação automática)</Label>
-              </div>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setShowCreateLimit(false)}>Cancelar</Button>
-              <Button onClick={() => createLimitMut.mutate(newLimit)} disabled={!newLimit.name || createLimitMut.isPending}>
-                {createLimitMut.isPending ? "A criar..." : "Criar Limite"}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      )}
-
-      {/* Acknowledge Dialog */}
-      {ackId !== null && (
-        <Dialog open onOpenChange={() => { setAckId(null); setAckNotes(""); }}>
-          <DialogContent>
-            <DialogHeader><DialogTitle>Reconhecer Infração</DialogTitle></DialogHeader>
-            <div>
-              <Label>Notas (opcional)</Label>
-              <Textarea value={ackNotes} onChange={e => setAckNotes(e.target.value)} placeholder="Observações sobre esta infração..." />
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => { setAckId(null); setAckNotes(""); }}>Cancelar</Button>
-              <Button onClick={() => { ackMut.mutate({ id: ackId, notes: ackNotes || undefined }); setAckId(null); setAckNotes(""); }}>
-                Reconhecer
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      )}
-    </div>
-  );
-}
-
 
 // ─── DRIVER HISTORY TAB ─────────────────────────────────────────────────────
 
@@ -1548,169 +1079,6 @@ function PdaHistoryDialog({ pdaId, onClose }: { pdaId: number; onClose: () => vo
   );
 }
 
-// ─── GPS ALERTS TAB ─────────────────────────────────────────────────────────
-
-function GpsAlertsTab() {
-  const [showUnackOnly, setShowUnackOnly] = useState(false);
-  const utils = trpc.useUtils();
-
-  const { data: alerts, isLoading } = trpc.operational.gpsAlerts.list.useQuery(
-    showUnackOnly ? { unacknowledgedOnly: true } : undefined
-  );
-  const { data: alertStats } = trpc.operational.gpsAlerts.stats.useQuery();
-  const ackMut = trpc.operational.gpsAlerts.acknowledge.useMutation({
-    onSuccess: () => {
-      utils.operational.gpsAlerts.list.invalidate();
-      utils.operational.gpsAlerts.stats.invalidate();
-      toast.success("Alerta reconhecido");
-    },
-    onError: (e) => toast.error(e.message),
-  });
-  const checkMut = trpc.operational.gpsAlerts.checkNow.useMutation({
-    onSuccess: (data) => {
-      utils.operational.gpsAlerts.list.invalidate();
-      utils.operational.gpsAlerts.stats.invalidate();
-      if (data.alertsCreated > 0) {
-        toast.warning(`${data.alertsCreated} alerta(s) criado(s)!`);
-      } else {
-        toast.success("Verificação concluída, sem alertas.");
-      }
-    },
-    onError: (e) => toast.error(e.message),
-  });
-
-  const ALERT_TYPE_LABELS: Record<string, string> = {
-    gps_off: "GPS Desligado",
-    zello_off: "Zello Desligado",
-    battery_low: "Bateria Baixa",
-    no_signal: "Sem Sinal",
-  };
-  const ALERT_TYPE_ICONS: Record<string, React.ReactNode> = {
-    gps_off: <Satellite className="w-4 h-4 text-red-500" />,
-    zello_off: <XCircle className="w-4 h-4 text-red-500" />,
-    battery_low: <Battery className="w-4 h-4 text-amber-500" />,
-    no_signal: <Zap className="w-4 h-4 text-gray-500" />,
-  };
-
-  return (
-    <div className="space-y-4 mt-4">
-      {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="pt-3 pb-2">
-            <p className="text-xs text-muted-foreground">Total Alertas</p>
-            <p className="text-xl font-bold">{alertStats?.total ?? 0}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-3 pb-2">
-            <p className="text-xs text-muted-foreground">Não Reconhecidos</p>
-            <p className="text-xl font-bold text-red-600">{alertStats?.unacknowledged ?? 0}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-3 pb-2">
-            <p className="text-xs text-muted-foreground">Hoje</p>
-            <p className="text-xl font-bold text-amber-600">{alertStats?.todayAlerts ?? 0}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-3 pb-2">
-            <p className="text-xs text-muted-foreground">GPS Desligado</p>
-            <p className="text-xl font-bold">{alertStats?.byType?.gps_off ?? 0}</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Controls */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <Button
-          variant="default"
-          onClick={() => {
-            if (!confirm("Verificar estado do GPS/Zello de todos os condutores e criar alertas se necessário?")) return;
-            checkMut.mutate();
-          }}
-          disabled={checkMut.isPending}
-        >
-          <Satellite className="w-4 h-4 mr-1" />
-          {checkMut.isPending ? "A verificar..." : "Verificar Agora"}
-        </Button>
-        <Button
-          variant={showUnackOnly ? "secondary" : "outline"}
-          onClick={() => setShowUnackOnly(!showUnackOnly)}
-        >
-          <Bell className="w-4 h-4 mr-1" />
-          {showUnackOnly ? "Mostrar Todos" : "Só Pendentes"}
-        </Button>
-      </div>
-
-      {/* Alerts list */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg flex items-center gap-2">
-            <Bell className="w-5 h-5" />
-            Alertas GPS
-            {alerts && <Badge variant="outline">{alerts.length}</Badge>}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <p className="text-center text-muted-foreground py-8">A carregar...</p>
-          ) : !alerts || alerts.length === 0 ? (
-            <div className="text-center py-8">
-              <Bell className="w-12 h-12 mx-auto text-muted-foreground/40 mb-3" />
-              <p className="text-muted-foreground">Sem alertas GPS.</p>
-              <p className="text-sm text-muted-foreground mt-1">Usa "Verificar Agora" para verificar o estado do GPS de todos os condutores.</p>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {alerts.map((alert: any) => (
-                <div
-                  key={alert.id}
-                  className={`flex flex-wrap items-center justify-between gap-2 p-3 rounded-lg border ${
-                    !alert.acknowledged ? "bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-800" : "border-border"
-                  }`}
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    {ALERT_TYPE_ICONS[alert.alertType] || <AlertTriangle className="w-4 h-4" />}
-                    <div className="min-w-0">
-                      <p className="font-medium text-sm">{alert.displayName || alert.zelloUsername}</p>
-                      <p className="text-xs text-muted-foreground">{alert.message}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        {fmtPTDateTime(alert.occurredAt)}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Badge variant={alert.acknowledged ? "secondary" : "destructive"}>
-                      {ALERT_TYPE_LABELS[alert.alertType] || alert.alertType}
-                    </Badge>
-                    {alert.batteryLevel != null && (
-                      <span className="text-xs text-muted-foreground">{alert.batteryLevel}%</span>
-                    )}
-                    {!alert.acknowledged && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => ackMut.mutate({ id: alert.id })}
-                        disabled={ackMut.isPending}
-                      >
-                        <Check className="w-3 h-3 mr-1" />OK
-                      </Button>
-                    )}
-                    {alert.acknowledged && (
-                      <Badge variant="outline" className="text-green-600 text-xs">Reconhecido</Badge>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
 function RadioTab() {
   const [showTranscribe, setShowTranscribe] = useState(false);
   const { data: transcriptions } = trpc.operational.radio.list.useQuery();
@@ -1846,12 +1214,19 @@ function AgentActivityTab() {
   const [onlyUnmapped, setOnlyUnmapped] = useState(false);
   const { data: agents = [], isLoading } = trpc.multipark.agentActivity.useQuery({ from, to });
   const { data: employees = [] } = trpc.multipark.employeesForMapping.useQuery();
+  const { data: agentPartners = [] } = trpc.multipark.agentPartners.useQuery();
+  const { data: partnershipsList = [] } = trpc.partnerships.list.useQuery({} as any);
+  const partnerByAgent = useMemo(() => new Map((agentPartners as any[]).map((x) => [x.agentName.trim().toLowerCase(), x])), [agentPartners]);
+  const setPartnerMut = trpc.multipark.setAgentPartner.useMutation({
+    onSuccess: () => { utils.multipark.agentPartners.invalidate(); toast.success("Agente ligado ao parceiro"); },
+    onError: (e) => toast.error(e.message),
+  });
   const mapMut = trpc.multipark.mapAgentToEmployee.useMutation({
     onSuccess: () => { utils.multipark.agentActivity.invalidate(); utils.multipark.employeesForMapping.invalidate(); toast.success("Ligação guardada"); },
     onError: (e) => toast.error(e.message),
   });
 
-  const rowsUnsorted = (agents as any[]).filter((a) => !onlyUnmapped || !a.employeeId);
+  const rowsUnsorted = (agents as any[]).filter((a) => !onlyUnmapped || (!a.employeeId && !partnerByAgent.has(String(a.agentName ?? "").trim().toLowerCase())));
   const agentSort = useTableSort(rowsUnsorted);
   const rows = agentSort.sorted as any[];
   const mappedCount = (agents as any[]).filter((a) => a.employeeId).length;
@@ -1908,6 +1283,23 @@ function AgentActivityTab() {
                         placeholder="— ligar a colaborador —"
                         options={[{ value: "", label: "— sem ligação —" }, ...(employees as any[]).map((e) => ({ value: String(e.id), label: e.fullName }))]}
                       />
+                      {/* Ou é uma AGÊNCIA/parceiro que marca pelo portal de agentes */}
+                      {(() => {
+                        const link = partnerByAgent.get(String(a.agentName ?? "").trim().toLowerCase());
+                        return (
+                          <div className="mt-1 flex items-center gap-1.5">
+                            <span className="text-[10px] text-muted-foreground">ou parceiro:</span>
+                            <SearchableSelect
+                              className="h-7 w-56 text-xs"
+                              value={link ? String(link.partnershipId) : ""}
+                              onChange={(v) => setPartnerMut.mutate({ agentName: a.agentName, partnershipId: v ? Number(v) : null })}
+                              placeholder="— agência/agregador —"
+                              options={[{ value: "", label: "— sem parceiro —" }, ...((partnershipsList as any[]) ?? []).map((pp: any) => ({ value: String(pp.id ?? pp.partnership?.id), label: pp.name ?? pp.partnership?.name ?? `#${pp.id}` }))]}
+                            />
+                            {link && <Badge variant="outline" className="text-[9px] border-rose-200 text-rose-700">🤝 {link.partnerName}</Badge>}
+                          </div>
+                        );
+                      })()}
                     </td>
                   </tr>
                 ))}
@@ -1969,28 +1361,3 @@ async function resizeImageFile(file: File, maxPx: number, quality: number): Prom
   }
 }
 
-// ─── ANEXAR ZELLO → COLABORADOR (inline na tabela GPS) ───────────────────────
-// Aparece quando o utilizador Zello ainda não está anexado a ninguém: escolhe
-// o colaborador e fica PERSISTENTE (employees.zelloUsername).
-function ZelloLinkCell({ zelloUsername, employees }: { zelloUsername: string; employees: any[] }) {
-  const utils = trpc.useUtils();
-  const mapMut = trpc.operational.zello.mapUserToEmployee.useMutation({
-    onSuccess: () => { utils.rh.list.invalidate(); toast.success(`${zelloUsername} anexado`); },
-    onError: (e) => toast.error(e.message),
-  });
-  return (
-    <div className="space-y-1">
-      <span className="text-amber-700 dark:text-amber-400">{zelloUsername}</span>
-      <Select onValueChange={(v) => mapMut.mutate({ zelloUsername, employeeId: Number(v) })}>
-        <SelectTrigger className="h-7 w-44 text-xs">
-          <SelectValue placeholder="Anexar colaborador…" />
-        </SelectTrigger>
-        <SelectContent>
-          {employees.map((e: any) => (
-            <SelectItem key={e.employee.id} value={String(e.employee.id)}>{e.employee.fullName}</SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  );
-}

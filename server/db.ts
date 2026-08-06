@@ -5557,6 +5557,146 @@ export async function autoCloseStaleCheckIns(): Promise<{ closed: number }> {
   return { closed };
 }
 
+// ─── LIGAÇÃO AGENTE→PARCEIRO (agências que marcam pelo portal de agentes) ────
+// Alguns "agentes" Multipark são agências de viagens/parceiros, não
+// colaboradores. Este mapa liga o agentName ao partnership. Tabela on-demand.
+let agentPartnerEnsured = false;
+async function ensureAgentPartnerTable() {
+  if (agentPartnerEnsured) return;
+  const db = await getDb();
+  if (!db) return;
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS \`agent_partner_map\` (
+    \`agentName\` VARCHAR(256) NOT NULL,
+    \`partnershipId\` INT NOT NULL,
+    \`updatedAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (\`agentName\`)
+  )`);
+  agentPartnerEnsured = true;
+}
+
+export async function setAgentPartner(agentName: string, partnershipId: number | null) {
+  const db = await getDb();
+  if (!db) return;
+  await ensureAgentPartnerTable();
+  if (partnershipId == null) {
+    await db.execute(sql`DELETE FROM \`agent_partner_map\` WHERE \`agentName\` = ${agentName}`);
+  } else {
+    await db.execute(sql`INSERT INTO \`agent_partner_map\` (\`agentName\`, \`partnershipId\`) VALUES (${agentName}, ${partnershipId})
+      ON DUPLICATE KEY UPDATE \`partnershipId\` = VALUES(\`partnershipId\`)`);
+  }
+}
+
+export async function listAgentPartners(): Promise<Array<{ agentName: string; partnershipId: number; partnerName: string | null }>> {
+  const db = await getDb();
+  if (!db) return [];
+  await ensureAgentPartnerTable();
+  const [rows] = await db.execute(sql`
+    SELECT m.agentName, m.partnershipId, p.name AS partnerName
+    FROM \`agent_partner_map\` m LEFT JOIN partnerships p ON p.id = m.partnershipId`) as any;
+  return (rows as any[]).map((r) => ({ agentName: r.agentName, partnershipId: Number(r.partnershipId), partnerName: r.partnerName ?? null }));
+}
+
+/** Atividade consolidada de UM dia (visão do Jorge): por pessoa/agente —
+ *  ações nas reservas (recolhas/entregas/movimentos/cancelamentos) + km e
+ *  horas do GPS (daily_driver_history, recolhido às 2h para o dia anterior). */
+export async function getDayActivity(date: string) {
+  const db = await getDb();
+  if (!db) return { people: [], totals: { checkins: 0, checkouts: 0, movements: 0, cancels: 0, other: 0, totalKm: 0, activePeople: 0 } };
+  const start = `${date} 00:00:00`;
+  const end = `${date} 23:59:59`;
+
+  // Ações por agente no dia
+  const [actionRows] = await db.execute(sql`
+    SELECT agentName, changeType, COUNT(*) AS n
+    FROM multipark_booking_history
+    WHERE actionTime >= ${start} AND actionTime <= ${end} AND agentName IS NOT NULL AND agentName != ''
+    GROUP BY agentName, changeType`) as any;
+
+  // Ligações agente→colaborador e agente→parceiro
+  const emps = await db.select({ id: employees.id, fullName: employees.fullName, multiparkAgentName: employees.multiparkAgentName })
+    .from(employees).where(isNotNull(employees.multiparkAgentName));
+  const empByAgent = new Map(emps.map((e) => [(e.multiparkAgentName ?? "").trim().toLowerCase(), e]));
+  const partners = await listAgentPartners();
+  const partnerByAgent = new Map(partners.map((p) => [p.agentName.trim().toLowerCase(), p]));
+
+  // GPS do dia (por employeeId quando ligado)
+  const [gpsRows] = await db.execute(sql`
+    SELECT employeeId, zelloUsername, displayName, totalKm, hoursWorked, hoursStopped, totalHoursOnline, avgSpeed, maxSpeed, gpsPointsCount
+    FROM daily_driver_history WHERE DATE(date) = ${date}`) as any;
+  const gpsByEmp = new Map<number, any>();
+  const gpsUnlinked: any[] = [];
+  for (const g of gpsRows as any[]) {
+    if (g.employeeId != null) gpsByEmp.set(Number(g.employeeId), g);
+    else gpsUnlinked.push(g);
+  }
+
+  type Person = {
+    key: string; name: string; kind: "colaborador" | "parceiro" | "por_ligar";
+    employeeId: number | null; partnerName: string | null;
+    checkins: number; checkouts: number; movements: number; cancels: number; other: number; totalActions: number;
+    totalKm: number | null; hoursWorked: number | null; hoursOnline: number | null; maxSpeed: number | null;
+  };
+  const people = new Map<string, Person>();
+  const CT: Record<string, keyof Pick<Person, "checkins" | "checkouts" | "movements" | "cancels">> = {
+    CHECK_IN: "checkins", CHECKIN: "checkins",
+    CHECK_OUT: "checkouts", CHECKOUT: "checkouts",
+    MOVEMENT: "movements", MOVE: "movements",
+    CANCELLATION: "cancels", CANCEL: "cancels", CANCELLED: "cancels",
+  };
+  for (const r of actionRows as any[]) {
+    const key = String(r.agentName).trim().toLowerCase();
+    let p = people.get(key);
+    if (!p) {
+      const emp = empByAgent.get(key);
+      const par = partnerByAgent.get(key);
+      p = {
+        key, name: emp?.fullName ?? par?.partnerName ?? r.agentName,
+        kind: emp ? "colaborador" : par ? "parceiro" : "por_ligar",
+        employeeId: emp?.id ?? null, partnerName: par?.partnerName ?? null,
+        checkins: 0, checkouts: 0, movements: 0, cancels: 0, other: 0, totalActions: 0,
+        totalKm: null, hoursWorked: null, hoursOnline: null, maxSpeed: null,
+      };
+      if (emp) {
+        const g = gpsByEmp.get(emp.id);
+        if (g) { p.totalKm = Number(g.totalKm ?? 0); p.hoursWorked = Number(g.hoursWorked ?? 0); p.hoursOnline = Number(g.totalHoursOnline ?? 0); p.maxSpeed = Number(g.maxSpeed ?? 0); gpsByEmp.delete(emp.id); }
+      }
+      people.set(key, p);
+    }
+    const bucket = CT[String(r.changeType ?? "").toUpperCase()] ?? "other";
+    (p as any)[bucket] += Number(r.n);
+    p.totalActions += Number(r.n);
+  }
+  // Pessoas com GPS mas sem ações (estiveram online sem mexer em reservas)
+  for (const [empId, g] of gpsByEmp) {
+    const emp = emps.find((e) => e.id === empId);
+    const name = emp?.fullName ?? g.displayName ?? g.zelloUsername;
+    people.set(`gps:${empId}`, {
+      key: `gps:${empId}`, name, kind: "colaborador", employeeId: empId, partnerName: null,
+      checkins: 0, checkouts: 0, movements: 0, cancels: 0, other: 0, totalActions: 0,
+      totalKm: Number(g.totalKm ?? 0), hoursWorked: Number(g.hoursWorked ?? 0), hoursOnline: Number(g.totalHoursOnline ?? 0), maxSpeed: Number(g.maxSpeed ?? 0),
+    });
+  }
+  for (const g of gpsUnlinked) {
+    people.set(`gpsu:${g.zelloUsername}`, {
+      key: `gpsu:${g.zelloUsername}`, name: g.displayName ?? g.zelloUsername, kind: "por_ligar", employeeId: null, partnerName: null,
+      checkins: 0, checkouts: 0, movements: 0, cancels: 0, other: 0, totalActions: 0,
+      totalKm: Number(g.totalKm ?? 0), hoursWorked: Number(g.hoursWorked ?? 0), hoursOnline: Number(g.totalHoursOnline ?? 0), maxSpeed: Number(g.maxSpeed ?? 0),
+    });
+  }
+
+  const list = Array.from(people.values()).sort((a, b) => b.totalActions - a.totalActions || (b.totalKm ?? 0) - (a.totalKm ?? 0));
+  const totals = {
+    checkins: list.reduce((s, p) => s + p.checkins, 0),
+    checkouts: list.reduce((s, p) => s + p.checkouts, 0),
+    movements: list.reduce((s, p) => s + p.movements, 0),
+    cancels: list.reduce((s, p) => s + p.cancels, 0),
+    other: list.reduce((s, p) => s + p.other, 0),
+    totalKm: Math.round(list.reduce((s, p) => s + (p.totalKm ?? 0), 0) * 10) / 10,
+    activePeople: list.length,
+  };
+  return { people: list, totals };
+}
+
 // ─── GEOFENCE POR CENTRO DE CUSTOS (raio de check-in/out do ponto) ───────────
 // O Jorge define, por centro de custos, o ponto e o raio onde o pessoal pode
 // picar. Fora do raio o ponto é PERMITIDO mas fica marcado a vermelho.

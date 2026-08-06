@@ -6797,6 +6797,32 @@ export const appRouter = router({
         };
       }),
 
+    // Atividade consolidada de um dia: ações + km/GPS por pessoa (visão Jorge)
+    dayActivity: protectedProcedure
+      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { getDayActivity } = await import("./db");
+        return getDayActivity(input.date);
+      }),
+
+    // Liga um agente Multipark a um PARCEIRO (agências que marcam pelo portal)
+    setAgentPartner: protectedProcedure
+      .input(z.object({ agentName: z.string().min(1).max(256), partnershipId: z.number().nullable() }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        const { setAgentPartner } = await import("./db");
+        await setAgentPartner(input.agentName, input.partnershipId);
+        await logActivity({ userId: ctx.user.id, action: "map", entity: "agent_partner", details: `${input.agentName} → partnership ${input.partnershipId ?? "—"}` });
+        return { success: true };
+      }),
+
+    agentPartners: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx.user.role, "backoffice");
+      const { listAgentPartners } = await import("./db");
+      return listAgentPartners();
+    }),
+
     // Reserva completa por externalId (detalhe ao clicar num serviço)
     bookingByExternalId: protectedProcedure
       .input(z.object({ externalId: z.string().min(1).max(128) }))
