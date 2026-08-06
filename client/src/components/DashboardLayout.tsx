@@ -103,6 +103,7 @@ export type MenuGroup = {
   label: string;
   items: MenuItem[];
   minRole?: string;
+  icon?: React.ElementType;
 };
 
 const ROLE_HIERARCHY: Record<string, number> = {
@@ -140,6 +141,7 @@ export const topLevelItems: MenuItem[] = [
 export const menuGroups: MenuGroup[] = [
   {
     label: "Financeiro",
+    icon: Receipt,
     minRole: "frontoffice",
     items: [
       { icon: Receipt, label: "Despesas", path: "/despesas" },
@@ -152,6 +154,7 @@ export const menuGroups: MenuGroup[] = [
   },
   {
     label: "Pessoas",
+    icon: Users,
     items: [
       // RH visível a todos os roles (user/extra veem só o próprio perfil)
       { icon: UserCheck, label: "Recursos Humanos", path: "/rh" },
@@ -163,6 +166,7 @@ export const menuGroups: MenuGroup[] = [
   },
   {
     label: "Operações",
+    icon: Truck,
     // Operações escondidas do frontoffice (backoffice+); Tarefas/Disponibilidade
     // são a exceção — extra+ vê (extra só as suas)
     items: [
@@ -178,6 +182,7 @@ export const menuGroups: MenuGroup[] = [
   },
   {
     label: "Suporte",
+    icon: MessageSquareWarning,
     minRole: "frontoffice",
     items: [
       { icon: MessageSquareWarning, label: "Reclamações", path: "/reclamacoes" },
@@ -188,6 +193,7 @@ export const menuGroups: MenuGroup[] = [
   },
   {
     label: "Sistema",
+    icon: SlidersHorizontal,
     minRole: "admin",
     items: [
       { icon: Users, label: "Utilizadores", path: "/utilizadores" },
@@ -505,11 +511,9 @@ function DashboardLayoutContent({
                             isActive={isActive}
                             onClick={() => navigate(item.path)}
                             tooltip={item.label}
-                            className="h-9 transition-all font-normal"
+                            className="h-9 rounded-lg transition-all font-normal data-[active=true]:!bg-primary data-[active=true]:!text-primary-foreground data-[active=true]:font-semibold hover:data-[active=true]:!bg-primary"
                           >
-                            <item.icon
-                              className={`h-4 w-4 ${isActive ? "text-primary" : ""}`}
-                            />
+                            <item.icon className="h-4 w-4" />
                             <span>{item.label}</span>
                           </SidebarMenuButton>
                         </SidebarMenuItem>
@@ -529,15 +533,25 @@ function DashboardLayoutContent({
                   onOpenChange={(o) => setOpenGroup(o ? group.label : null)}
                   className="group/collapsible"
                 >
-                  <SidebarGroup>
-                    <SidebarGroupLabel asChild>
-                      <CollapsibleTrigger className="flex w-full items-center justify-between [&[data-state=open]>svg]:rotate-180">
-                        {group.label}
-                        <ChevronDown className="h-4 w-4 transition-transform duration-200" />
-                      </CollapsibleTrigger>
-                    </SidebarGroupLabel>
+                  <SidebarGroup className="py-0.5">
+                    <CollapsibleTrigger asChild>
+                      {(() => {
+                        const groupActive = group.items.some(i => location === i.path || location.startsWith(i.path + "/"));
+                        const GIcon = group.icon;
+                        return (
+                          <button
+                            type="button"
+                            className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 h-10 text-[13.5px] transition-colors hover:bg-sidebar-accent [&[data-state=open]>svg.mpk-chev]:rotate-180 ${groupActive ? "text-primary font-semibold" : "text-[#0e2957] font-semibold"}`}
+                          >
+                            {GIcon && <GIcon className={`h-[17px] w-[17px] shrink-0 ${groupActive ? "text-primary" : "text-slate-500"}`} />}
+                            <span className="flex-1 text-left truncate">{group.label}</span>
+                            <ChevronDown className="mpk-chev h-4 w-4 text-slate-400 transition-transform duration-200" />
+                          </button>
+                        );
+                      })()}
+                    </CollapsibleTrigger>
                     <CollapsibleContent>
-                      <SidebarGroupContent>
+                      <SidebarGroupContent className="ml-[13px] mt-0.5 border-l border-slate-200 pl-2">
                         <SidebarMenu>
                           {group.items.map(item => {
                             // Match exato ou sub-rotas (ex.: /perdidos-achados/historico
@@ -549,11 +563,9 @@ function DashboardLayoutContent({
                                   isActive={isActive}
                                   onClick={() => navigate(item.path)}
                                   tooltip={item.label}
-                                  className="h-9 transition-all font-normal"
+                                  className="h-9 rounded-lg transition-all font-normal data-[active=true]:!bg-primary data-[active=true]:!text-primary-foreground data-[active=true]:font-semibold hover:data-[active=true]:!bg-primary"
                                 >
-                                  <item.icon
-                                    className={`h-4 w-4 ${isActive ? "text-primary" : ""}`}
-                                  />
+                                  <item.icon className="h-4 w-4" />
                                   <span>{item.label}</span>
                                 </SidebarMenuButton>
                               </SidebarMenuItem>
@@ -580,12 +592,12 @@ function DashboardLayoutContent({
 
       <SidebarInset>
         {/* Topbar */}
-        <div className="flex border-b h-[76px] items-center justify-between bg-card px-4 lg:px-6 sticky top-0 z-40">
+        <div className="flex border-b h-[72px] items-center justify-between bg-white px-4 lg:px-6 sticky top-0 z-40">
           <div className="flex items-center gap-3 min-w-0">
             {isMobile && (
               <SidebarTrigger className="h-9 w-9 rounded-lg bg-background" />
             )}
-            <h1 className="text-xl lg:text-2xl font-bold text-foreground truncate">
+            <h1 className="text-xl lg:text-[22px] font-bold text-[#0c1f3f] truncate">
               {activeMenuItem?.label ?? "Dashboard"}
             </h1>
           </div>
