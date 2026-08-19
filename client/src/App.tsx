@@ -14,8 +14,12 @@ import HRPage from "./pages/HRPage";
 import ProjectsPage from "./pages/ProjectsPage";
 import TasksPage from "./pages/TasksPage";
 import MarketingPage from "./pages/MarketingPage";
+import ShiftHandoverPage from "./pages/ShiftHandoverPage";
 import OperationalPage from "./pages/OperationalPage";
 import ApiKeysPage from "./pages/ApiKeysPage";
+import PermissionsPage from "./pages/PermissionsPage";
+import ModulesPage from "./pages/ModulesPage";
+import ProfilePage from "./pages/ProfilePage";
 import ComplaintsPage from "./pages/ComplaintsPage";
 import GoogleReviewsPage from "./pages/GoogleReviewsPage";
 import TrainingPage from "./pages/TrainingPage";
@@ -205,11 +209,23 @@ function Router() {
       <Route path="/whatsapp">
         {() => (<DashboardLayout><WhatsAppInboxPage /></DashboardLayout>)}
       </Route>
+      <Route path="/passagem-turno">
+        {() => (<DashboardLayout><ShiftHandoverPage /></DashboardLayout>)}
+      </Route>
       <Route path="/avaliacao-operacional">
         {() => (<DashboardLayout><AvaliacaoOperacionalPage /></DashboardLayout>)}
       </Route>
       <Route path="/api-keys">
         {() => (<DashboardLayout><ApiKeysPage /></DashboardLayout>)}
+      </Route>
+      <Route path="/permissoes">
+        {() => (<DashboardLayout><PermissionsPage /></DashboardLayout>)}
+      </Route>
+      <Route path="/modulos">
+        {() => (<DashboardLayout><ModulesPage /></DashboardLayout>)}
+      </Route>
+      <Route path="/perfil">
+        {() => (<DashboardLayout><ProfilePage /></DashboardLayout>)}
       </Route>
       <Route path="/financeiro">
         {() => (<DashboardLayout><FinanceiroDashboard /></DashboardLayout>)}

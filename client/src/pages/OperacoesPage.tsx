@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { usePersistedState } from "@/hooks/usePersistedState";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -10,25 +11,12 @@ import {
 } from "lucide-react";
 import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip, Legend } from "recharts";
 import { QuickRangeBar, thisMonthRange, previousPeriod } from "@/components/QuickRangeBar";
+import DateRangeNav from "@/components/DateRangeNav";
 import MultiparkPage from "./MultiparkPage";
+import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import ServicesPage from "./ServicesPage";
 
 const PIE_COLORS = ["#6366f1", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899", "#84cc16", "#f97316", "#14b8a6"];
-
-function aggBy(bookings: any[], key: "city" | "parkName", topN = 8): Array<{ name: string; value: number }> {
-  const m = new Map<string, number>();
-  for (const b of bookings) {
-    const raw = (b?.[key] ?? "").toString().trim();
-    const name = raw || "Desconhecido";
-    m.set(name, (m.get(name) ?? 0) + 1);
-  }
-  const arr = [...m.entries()].map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
-  if (arr.length <= topN) return arr;
-  const top = arr.slice(0, topN);
-  const rest = arr.slice(topN).reduce((s, x) => s + x.value, 0);
-  if (rest > 0) top.push({ name: "Outros", value: rest });
-  return top;
-}
 
 function MiniPie({ title, icon, data }: { title: string; icon?: React.ReactNode; data: Array<{ name: string; value: number }> }) {
   const total = data.reduce((s, d) => s + d.value, 0);
@@ -62,7 +50,8 @@ const fmtEur = (v: number | string | null | undefined) => {
 };
 
 export default function OperacoesPage() {
-  const [tab, setTab] = useState("dashboard");
+  // A aba ativa persiste à navegação — voltar às Operações mantém onde estavas
+  const [tab, setTab] = usePersistedState("operacoes.tab", "dashboard");
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-[1400px] mx-auto">
       <div>
@@ -108,59 +97,59 @@ export default function OperacoesPage() {
 
 function OperacoesDashboard({ onJump }: { onJump: (tab: string) => void }) {
   const [defFrom, defTo] = thisMonthRange();
-  const [from, setFrom] = useState(defFrom);
-  const [to, setTo] = useState(defTo);
-  const [activeRange, setActiveRange] = useState<string>("thisMonth");
-  const [compare, setCompare] = useState(false);
-  const [dim, setDim] = useState<"city" | "parkName">("city");
+  // Datas PARTILHADAS com as folhas (mesmas keys) — mudar o período aqui ou
+  // numa folha mantém-no em todas as abas das Operações
+  const [from, setFrom] = usePersistedState("mpk.shared.start", defFrom);
+  const [to, setTo] = usePersistedState("mpk.shared.end", defTo);
+  const [activeRange, setActiveRange] = usePersistedState<string>("mpk.shared.range", "thisMonth");
+  const [compare, setCompare] = usePersistedState<boolean>("operacoes.dash.compare", false);
+  const [dim, setDim] = usePersistedState<"city" | "parkName">("operacoes.dash.dim", "city");
 
-  const opts = { refetchOnWindowFocus: false } as const;
-  const queries = {
-    creation: trpc.multipark.localBookingsByAction.useQuery({ startDate: from, endDate: to, actionType: "creation" as const }, opts),
-    checkin: trpc.multipark.localBookingsByAction.useQuery({ startDate: from, endDate: to, actionType: "checkin" as const }, opts),
-    checkout: trpc.multipark.localBookingsByAction.useQuery({ startDate: from, endDate: to, actionType: "checkout" as const }, opts),
-    cancelation: trpc.multipark.localBookingsByAction.useQuery({ startDate: from, endDate: to, actionType: "cancelation" as const }, opts),
-  };
+  // Resumo AGREGADO no servidor (1 query em vez de 4×5.000 reservas completas)
+  const globalFilters = useGlobalFilters();
+  const summaryQ = trpc.multipark.operationsSummary.useQuery(
+    { startDate: from, endDate: to, projectId: globalFilters.projectId },
+    { refetchOnWindowFocus: false },
+  );
 
   // Período anterior (mesma duração) — só corre quando "comparar" está ligado
   const [pf, pt] = previousPeriod(from, to);
-  const prevOpts = { refetchOnWindowFocus: false, enabled: compare } as const;
-  const prev = {
-    creation: trpc.multipark.localBookingsByAction.useQuery({ startDate: pf, endDate: pt, actionType: "creation" as const }, prevOpts),
-    checkin: trpc.multipark.localBookingsByAction.useQuery({ startDate: pf, endDate: pt, actionType: "checkin" as const }, prevOpts),
-    checkout: trpc.multipark.localBookingsByAction.useQuery({ startDate: pf, endDate: pt, actionType: "checkout" as const }, prevOpts),
-    cancelation: trpc.multipark.localBookingsByAction.useQuery({ startDate: pf, endDate: pt, actionType: "cancelation" as const }, prevOpts),
-  };
+  const prevQ = trpc.multipark.operationsSummary.useQuery(
+    { startDate: pf, endDate: pt, projectId: globalFilters.projectId },
+    { refetchOnWindowFocus: false, enabled: compare },
+  );
 
-  const reservas = queries.creation.data?.bookings ?? [];
-  const recolhas = queries.checkin.data?.bookings ?? [];
-  const entregas = queries.checkout.data?.bookings ?? [];
-  const cancelados = queries.cancelation.data?.bookings ?? [];
+  const actions = summaryQ.data?.actions;
+  const stats = useMemo(() => ({
+    reservas: actions?.creation?.count ?? 0, reservasReceita: actions?.creation?.revenue ?? 0,
+    recolhas: actions?.checkin?.count ?? 0,
+    entregas: actions?.checkout?.count ?? 0, entregasReceita: actions?.checkout?.revenue ?? 0,
+    cancelados: actions?.cancelation?.count ?? 0, canceladosReceita: actions?.cancelation?.revenue ?? 0,
+  }), [actions]);
 
-  const stats = useMemo(() => {
-    const sum = (b: any[]) => b.reduce((s, x) => s + (parseFloat(x.totalPrice) || 0), 0);
-    return {
-      reservas: reservas.length, reservasReceita: sum(reservas),
-      recolhas: recolhas.length,
-      entregas: entregas.length, entregasReceita: sum(entregas),
-      cancelados: cancelados.length, canceladosReceita: sum(cancelados),
-    };
-  }, [reservas, recolhas, entregas, cancelados]);
-
+  const prevActions = prevQ.data?.actions;
   const prevStats = useMemo(() => ({
-    reservas: prev.creation.data?.bookings?.length ?? 0,
-    recolhas: prev.checkin.data?.bookings?.length ?? 0,
-    entregas: prev.checkout.data?.bookings?.length ?? 0,
-    cancelados: prev.cancelation.data?.bookings?.length ?? 0,
-  }), [prev.creation.data, prev.checkin.data, prev.checkout.data, prev.cancelation.data]);
+    reservas: prevActions?.creation?.count ?? 0,
+    recolhas: prevActions?.checkin?.count ?? 0,
+    entregas: prevActions?.checkout?.count ?? 0,
+    cancelados: prevActions?.cancelation?.count ?? 0,
+  }), [prevActions]);
 
+  const toPie = (rows: Array<{ name: string; count: number }> | undefined, topN = 8) => {
+    const arr = (rows ?? []).map((r) => ({ name: r.name, value: r.count }));
+    if (arr.length <= topN) return arr;
+    const top = arr.slice(0, topN);
+    const rest = arr.slice(topN).reduce((s, x) => s + x.value, 0);
+    if (rest > 0) top.push({ name: "Outros", value: rest });
+    return top;
+  };
   const pies = useMemo(() => ({
-    reservas: aggBy(reservas, dim),
-    recolhas: aggBy(recolhas, dim),
-    entregas: aggBy(entregas, dim),
-  }), [reservas, recolhas, entregas, dim]);
+    reservas: toPie(dim === "city" ? actions?.creation?.byCity : actions?.creation?.byPark),
+    recolhas: toPie(dim === "city" ? actions?.checkin?.byCity : actions?.checkin?.byPark),
+    entregas: toPie(dim === "city" ? actions?.checkout?.byCity : actions?.checkout?.byPark),
+  }), [actions, dim]);
 
-  const isLoading = queries.creation.isLoading || queries.checkin.isLoading || queries.checkout.isLoading || queries.cancelation.isLoading;
+  const isLoading = summaryQ.isLoading;
   const dimLabel = dim === "city" ? "cidade" : "parque";
 
   return (
@@ -173,14 +162,13 @@ function OperacoesDashboard({ onJump }: { onJump: (tab: string) => void }) {
             onPick={(f, t, id) => { setFrom(f); setTo(t); setActiveRange(id); }}
           />
           <div className="flex flex-wrap items-end gap-3">
-            <div>
-              <Label className="text-xs mb-1 block">De</Label>
-              <Input type="date" value={from} onChange={e => { setFrom(e.target.value); setActiveRange(""); }} className="w-40" />
-            </div>
-            <div>
-              <Label className="text-xs mb-1 block">Até</Label>
-              <Input type="date" value={to} onChange={e => { setTo(e.target.value); setActiveRange(""); }} className="w-40" />
-            </div>
+            <DateRangeNav
+              start={from}
+              end={to}
+              gran={(activeRange === "thisWeek" || activeRange === "lastWeek" ? "week" : activeRange === "thisMonth" || activeRange === "lastMonth" ? "month" : "custom") as any}
+              showAll={false}
+              onChange={(s, e) => { setFrom(s); setTo(e); setActiveRange(""); }}
+            />
             <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none ml-1 mb-2">
               <input type="checkbox" checked={compare} onChange={e => setCompare(e.target.checked)} />
               Comparar com período anterior

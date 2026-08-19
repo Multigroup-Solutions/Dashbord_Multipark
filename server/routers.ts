@@ -103,6 +103,10 @@ import {
   deleteSchedule,
   getTimeRecords,
   createTimeRecord,
+  checkGeofenceNote,
+  setProjectGeofence,
+  deleteProjectGeofence,
+  listProjectGeofences,
   getMonthlyHours,
   getExtraRates,
   seedExtraRates,
@@ -225,11 +229,6 @@ import {
   deletePerformanceEvaluation,
   generateWeeklyEvaluation,
   // Services
-  createService,
-  getServices,
-  updateService,
-  deleteService,
-  getServiceStats,
   // Invoices
   createInvoice,
   getInvoices,
@@ -320,7 +319,6 @@ import {
   getPdaById,
   // PDA Check-ins
   createPdaCheckin,
-  attachZelloToEmployeeIfUnset,
   checkoutPda,
   getActiveCheckins,
   getCheckinsByDate,
@@ -373,6 +371,22 @@ const ROLE_HIERARCHY: Record<string, number> = {
 function requireRole(userRole: string, minRole: string) {
   if ((ROLE_HIERARCHY[userRole] ?? -1) < (ROLE_HIERARCHY[minRole] ?? 0)) {
     throw new TRPCError({ code: "FORBIDDEN", message: "Acesso não autorizado." });
+  }
+}
+
+/** Deny explícito de uma permissão por utilizador (regra Jorge: "menos
+ * permissões por utilizador" — ex.: backoffice de despesas sem ver totais). */
+async function isPermissionDenied(userId: number, permission: string): Promise<boolean> {
+  const { getUserPermissionOverrides } = await import("./db");
+  const ov = await getUserPermissionOverrides(userId);
+  return ov[permission] === "deny";
+}
+
+/** Role mínimo + respeita o deny de finance.view_totals. */
+async function requireFinanceTotals(user: { id: number; role: string }, minRole = "backoffice") {
+  requireRole(user.role, minRole);
+  if (await isPermissionDenied(user.id, "finance.view_totals")) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para ver totais financeiros." });
   }
 }
 
@@ -887,17 +901,21 @@ export const appRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: ACCESS_DENIED_MSG });
       }
       if (!u) return u;
+      // Elevação por permissão (grant extras_dia.team_leader → vê como TL);
+      // o menu/UI seguem o role devolvido aqui.
+      const { applyPermissionElevation } = await import("./_core/trpc");
+      const uElev = await applyPermissionElevation(u);
       // Se houver ficha de colaborador, devolve também o estado dos docs
       // e bloqueio. Lazy check para extras: actualiza flags se passou tempo.
       try {
-        const emp = await getEmployeeByUserId(u.id);
-        if (!emp) return { ...u, employee: null, docsStatus: null };
+        const emp = await getEmployeeByUserId(uElev.id);
+        if (!emp) return { ...uElev, employee: null, docsStatus: null };
         let docsStatus: { blocked: boolean; warning: boolean; missingDocs: string[]; daysSinceStart: number } | null = null;
         if (emp.employee.position === "extra") {
           docsStatus = await checkExtraDocsCompliance(emp.employee.id);
         }
         return {
-          ...u,
+          ...uElev,
           employee: {
             id: emp.employee.id,
             fullName: emp.employee.fullName,
@@ -909,7 +927,7 @@ export const appRouter = router({
           docsStatus,
         };
       } catch {
-        return u;
+        return uElev;
       }
     }),
     logout: publicProcedure.mutation(({ ctx }) => {
@@ -1463,6 +1481,12 @@ export const appRouter = router({
           );
         }
         if (input?.userId) filters.userId = input.userId;
+        // Deny de finance.view_totals: mesmo admin só vê as PRÓPRIAS despesas
+        // (regra Jorge: "vê as despesas que ele meteu, mas não vê o total")
+        if (await isPermissionDenied(ctx.user.id, "finance.view_totals")) {
+          const rows = await getExpenses(filters);
+          return rows.filter((r: any) => r.expense.insertedById === ctx.user.id);
+        }
         return getExpenses(filters);
       }),
 
@@ -1732,8 +1756,9 @@ export const appRouter = router({
 
     // ── DASHBOARD STATS ──────────────────────────────────────────────────────
     stats: protectedProcedure.query(async ({ ctx }) => {
-      // Totais da empresa inteira — só admin+ (matriz do Jorge).
-      requireRole(ctx.user.role, "admin");
+      // Totais da empresa inteira — só admin+ (matriz do Jorge), e respeita o
+      // deny de finance.view_totals por utilizador.
+      await requireFinanceTotals(ctx.user, "admin");
       return getExpenseStats();
     }),
 
@@ -1978,6 +2003,87 @@ export const appRouter = router({
   }),
 
   // ── RH ───────────────────────────────────────────────────────────────────────────────────────
+  // ─── PERMISSÕES POR UTILIZADOR ─────────────────────────────────────────────
+  permissions: router({
+    // Catálogo (shared/permissions.ts) — qualquer utilizador autenticado
+    catalog: protectedProcedure.query(async () => {
+      const { PERMISSIONS } = await import("../shared/permissions");
+      return PERMISSIONS;
+    }),
+
+    // Overrides do próprio (para a UI esconder o que não deve mostrar)
+    mine: protectedProcedure.query(async ({ ctx }) => {
+      const { getUserPermissionOverrides } = await import("./db");
+      return getUserPermissionOverrides(ctx.user.id);
+    }),
+
+    // Todas as atribuições (página Sistema → Permissões)
+    assignments: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx.user.role, "admin");
+      const { listPermissionAssignments } = await import("./db");
+      return listPermissionAssignments();
+    }),
+
+    forUser: protectedProcedure
+      .input(z.object({ userId: z.number() }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        const { getUserPermissionOverrides } = await import("./db");
+        return getUserPermissionOverrides(input.userId);
+      }),
+
+    setForUser: protectedProcedure
+      .input(z.object({
+        userId: z.number(),
+        permission: z.string().min(1).max(64),
+        mode: z.enum(["grant", "deny"]).nullable(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        const { PERMISSION_IDS } = await import("../shared/permissions");
+        if (!PERMISSION_IDS.includes(input.permission as any)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Permissão desconhecida." });
+        }
+        const { setUserPermission } = await import("./db");
+        await setUserPermission(input.userId, input.permission, input.mode, ctx.user.id);
+        await logActivity({ userId: ctx.user.id, action: "set_permission", entity: "user", entityId: input.userId, details: `${input.permission} = ${input.mode ?? "(limpo)"}` });
+        return { success: true };
+      }),
+
+    // Cidades a que o utilizador tem acesso: a do centro de custos + extras
+    // por permissão. Admin+ (ou centro de custos de grupo) = todas.
+    myCityAccess: protectedProcedure.query(async ({ ctx }) => {
+      const all = { all: true as const, defaultCityId: null as number | null, cityIds: [] as number[] };
+      if (["admin", "super_admin"].includes(ctx.user.role)) return all;
+      const { getEmployeeByUserId, getUserPermissionOverrides, getDb } = await import("./db");
+      const ov = await getUserPermissionOverrides(ctx.user.id);
+      if (ov["city.all"] === "grant") return all;
+      const me = await getEmployeeByUserId(ctx.user.id);
+      if (!me?.employee?.projectId) return all; // sem ficha/centro de custos → não restringe
+      const db = await getDb();
+      if (!db) return all;
+      const { projects } = await import("../drizzle/schema");
+      const rows = await db.select({ id: projects.id, name: projects.name, level: projects.level, parentId: projects.parentId }).from(projects);
+      const byId = new Map(rows.map((p) => [p.id, p]));
+      // sobe a árvore até encontrar a cidade; grupo = vê tudo
+      let node = byId.get(me.employee.projectId) ?? null;
+      while (node && node.level !== "city") {
+        if (node.level === "group") return all;
+        node = node.parentId != null ? byId.get(node.parentId) ?? null : null;
+      }
+      if (!node) return all;
+      const cityIds = new Set<number>([node.id]);
+      const CITY_PERM_NAMES: Record<string, string> = { "city.extra.lisbon": "lisboa", "city.extra.porto": "porto", "city.extra.faro": "faro" };
+      for (const [perm, cityName] of Object.entries(CITY_PERM_NAMES)) {
+        if (ov[perm] === "grant") {
+          const c = rows.find((p) => p.level === "city" && p.name.trim().toLowerCase() === cityName);
+          if (c) cityIds.add(c.id);
+        }
+      }
+      return { all: false as const, defaultCityId: node.id, cityIds: Array.from(cityIds) };
+    }),
+  }),
+
   rh: router({
     // ── MY PROFILE (for extra/low-role users) ──────────────────────────────────────────────────
     me: protectedProcedure.query(async ({ ctx }) => {
@@ -2136,6 +2242,14 @@ export const appRouter = router({
       return getHRStats();
     }),
 
+    // Última vez que cada colaborador trabalhou (cartões dos extras:
+    // disponibilidade, extras-dia, avaliações)
+    lastWorkedMap: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx.user.role, "frontoffice");
+      const { getLastWorkedMap } = await import("./db");
+      return getLastWorkedMap();
+    }),
+
     // ── EMPLOYEES ─────────────────────────────────────────────────────────────────────────────────
     list: protectedProcedure
       .input(z.object({ isActive: z.boolean().optional(), position: z.string().optional() }).optional())
@@ -2185,7 +2299,7 @@ export const appRouter = router({
         position: z.enum(["director","supervisor","team_leader","backoffice","frontoffice","senior_driver","driver","extra"]),
         extraLevel: z.number().min(1).max(4).optional(),
         department: z.string().optional(),
-        projectId: z.number({ message: "Centro de custos obrigatório" }),
+        projectId: z.number().optional(),
         contractType: z.enum(["permanent","fixed_term","extra"]).optional(),
         contractStart: z.string().optional(),
         contractEnd: z.string().optional(),
@@ -2195,6 +2309,47 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "admin");
+
+        // ── ANTI-DUPLICAÇÃO (regra do Jorge): mesmo nome/email/NIF ativo = 1 só ficha
+        const { getDb: getDbDup } = await import("./db");
+        const { employees } = await import("../drizzle/schema");
+        const { eq, and } = await import("drizzle-orm");
+        const dbDup = await getDbDup();
+        if (dbDup) {
+          const norm = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+          const all = await dbDup.select({ id: employees.id, fullName: employees.fullName, email: employees.email, nif: employees.nif })
+            .from(employees).where(eq(employees.isActive, 1));
+          const dup = all.find((e) =>
+            norm(e.fullName) === norm(input.fullName) ||
+            (input.email && e.email && e.email.toLowerCase() === input.email.toLowerCase()) ||
+            (input.nif && e.nif && e.nif.trim() === input.nif.trim()),
+          );
+          if (dup) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: `Já existe um colaborador ativo com estes dados: ${dup.fullName} (#${dup.id}). Usa a ficha existente em vez de criar outra.` });
+          }
+        }
+
+        // ── LIGAÇÃO ÚNICA: um utilizador/agente não pode pertencer a 2 fichas
+        if (input.userId != null && dbDup) {
+          const taken = await dbDup.select({ id: employees.id, fullName: employees.fullName })
+            .from(employees).where(and(eq(employees.userId, input.userId), eq(employees.isActive, 1))).limit(1);
+          if (taken[0]) throw new TRPCError({ code: "BAD_REQUEST", message: `Esse utilizador já está ligado a ${taken[0].fullName} (#${taken[0].id}).` });
+        }
+        if (dbDup) {
+          const agentTaken = await dbDup.select({ id: employees.id, fullName: employees.fullName })
+            .from(employees).where(and(eq(employees.multiparkAgentName, input.multiparkAgentName), eq(employees.isActive, 1))).limit(1);
+          if (agentTaken[0]) throw new TRPCError({ code: "BAD_REQUEST", message: `Esse agente Multipark já está ligado a ${agentTaken[0].fullName} (#${agentTaken[0].id}).` });
+        }
+
+        // ── Centro de custos: se não indicado, infere pela morada (Algarve→Faro…)
+        let projectId = input.projectId ?? null;
+        if (projectId == null) {
+          const { inferCityProjectIdFromAddress } = await import("./db");
+          projectId = await inferCityProjectIdFromAddress(input.address);
+        }
+        if (projectId == null) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Centro de custos obrigatório — escolhe um, ou preenche a morada para o sistema inferir a cidade." });
+        }
 
         // NÃO cria utilizador automaticamente. Um colaborador pode existir sem
         // utilizador; nesse caso não consegue dar entrada no ponto até que lhe
@@ -2215,7 +2370,7 @@ export const appRouter = router({
           position: input.position,
           extraLevel: input.extraLevel ?? null,
           department: input.department ?? null,
-          projectId: input.projectId,
+          projectId,
           contractType: input.contractType ?? "permanent",
           contractStart: input.contractStart ? new Date(input.contractStart).toISOString().slice(0, 19).replace("T", " ") : null,
           contractEnd: input.contractEnd ? new Date(input.contractEnd).toISOString().slice(0, 19).replace("T", " ") : null,
@@ -2504,6 +2659,9 @@ export const appRouter = router({
           longitude: z.string().optional(),
           locationName: z.string().optional(),
           notes: z.string().optional(),
+          // Token do aparelho (localStorage do browser do PDA) — liga a pessoa
+          // ao PDA/Zello automaticamente no check-in do ponto
+          pdaDeviceToken: z.string().optional(),
         }))
         .mutation(async ({ ctx, input }) => {
           // admin pode picar a qualquer um; outros só ao próprio
@@ -2531,6 +2689,13 @@ export const appRouter = router({
               message: "Já tens uma entrada em aberto. Faz check-out primeiro.",
             });
           }
+          // Aviso da ligação tripla (funcionário↔utilizador↔agente Multipark):
+          // sem agente ligado o check-in passa, mas devolve o aviso para a UI.
+          const missingAgentWarning = !empForPonto.employee.multiparkAgentName
+            ? "Falta ligar o agente Multipark a este colaborador — pede à administração para o associar na ficha."
+            : null;
+          // Geofence do centro de custos (se configurado): fora do raio fica marcado.
+          const geoNoteIn = await checkGeofenceNote(input.employeeId, input.latitude, input.longitude);
           let photoUrl: string | null = null;
           let photoKey: string | null = null;
           if (input.photoBase64 && input.mimeType) {
@@ -2551,10 +2716,25 @@ export const appRouter = router({
             latitude: input.latitude ?? null,
             longitude: input.longitude ?? null,
             locationName: input.locationName ?? null,
-            notes: input.notes ?? null,
+            notes: [geoNoteIn, input.notes].filter(Boolean).join(" · ") || null,
           });
           await logActivity({ userId: ctx.user.id, action: "check_in", entity: "time_record", entityId: input.employeeId, details: `Check-in: ${input.locationName ?? ""}` });
-          return { success: true };
+          // Ponto→PDA automático: se o check-in veio do browser de um PDA
+          // registado, liga já a pessoa ao PDA/Zello (e troca quem lá estava).
+          let pdaAttached: { pdaName: string; zelloUsername: string | null; replacedName: string | null } | null = null;
+          if (input.pdaDeviceToken) {
+            try {
+              const { attachPdaByDeviceToken } = await import("./db");
+              const att = await attachPdaByDeviceToken(input.pdaDeviceToken, input.employeeId);
+              if (att) {
+                pdaAttached = { pdaName: att.pdaName, zelloUsername: att.zelloUsername, replacedName: att.replacedName };
+                await logActivity({ userId: ctx.user.id, action: "create", entity: "pda_checkin", entityId: att.pdaId, details: `Auto: ponto→PDA ${att.pdaName}${att.replacedName ? ` (substituiu ${att.replacedName})` : ""}` });
+              }
+            } catch (err) {
+              console.warn("[checkIn] ponto→PDA automático falhou:", err);
+            }
+          }
+          return { success: true, warning: missingAgentWarning, outsideGeofence: !!geoNoteIn, pdaAttached };
         }),
 
       checkOut: protectedProcedure
@@ -2595,21 +2775,91 @@ export const appRouter = router({
             photoKey = key;
           }
           const diff = (new Date().getTime() - new Date(last.recordedAt).getTime()) / 3600000;
-          const hoursWorked = diff.toFixed(2);
+          // Regra do Jorge (turnos máx. 12h): entrada aberta há >16h = esquecimento
+          // de check-out. Corta às 12h (sem extraordinárias) e marca a VERMELHO
+          // para revisão — não paga dias inteiros de horas fantasma.
+          let hoursWorked: string;
+          let autoNote: string | null = null;
+          let outAt = new Date();
+          if (diff > 16) {
+            hoursWorked = "12.00";
+            outAt = new Date(new Date(last.recordedAt).getTime() + 12 * 3600000);
+            autoNote = "[SUSPEITO] check-out esquecido — cortado a 12h";
+          } else {
+            hoursWorked = diff.toFixed(2);
+          }
+          // Geofence: se o centro de custos do colaborador tem raio definido e o
+          // check-out veio com GPS fora dele, fica marcado (permitido, mas visível).
+          const geoNote = await checkGeofenceNote(input.employeeId, input.latitude, input.longitude);
+          const finalNotes = [autoNote, geoNote, input.notes].filter(Boolean).join(" · ") || null;
+          // Snapshot Zello do turno (pedido Jorge): no check-out, vai buscar ao
+          // Zello o que o condutor fez entre a entrada e a saída — km,
+          // velocidades e tempo com o Zello desligado. Melhor esforço: nunca
+          // pode impedir o registo do ponto.
+          let zello: import("./zello").ZelloShiftSummary | null = null;
+          // Descobre o utilizador Zello DESTE turno: primeiro o PDA em que a
+          // pessoa fez check-in nesse dia (cada dia é um PDA diferente),
+          // depois a ligação fixa da ficha (telemóveis pessoais).
+          const { resolveZelloUsernameForShift } = await import("./db");
+          const empZello = await resolveZelloUsernameForShift(input.employeeId, new Date(last.recordedAt), outAt);
+          if (empZello) {
+            try {
+              const { summarizeZelloShift } = await import("./zello");
+              zello = await summarizeZelloShift(empZello, new Date(last.recordedAt), outAt);
+            } catch (err) {
+              console.warn("[checkOut] snapshot Zello falhou:", err);
+            }
+          }
           await createTimeRecord({
             employeeId: input.employeeId,
             type: "check_out",
-            recordedAt: new Date().toISOString().slice(0, 19).replace("T", " "),
+            recordedAt: outAt.toISOString().slice(0, 19).replace("T", " "),
             photoUrl,
             photoKey,
             latitude: input.latitude ?? null,
             longitude: input.longitude ?? null,
             locationName: input.locationName ?? null,
             hoursWorked,
-            notes: input.notes ?? null,
+            notes: finalNotes,
+            ...(zello ? {
+              zelloKm: String(zello.km),
+              zelloAvgSpeed: String(zello.avgSpeed),
+              zelloMaxSpeed: String(zello.maxSpeed),
+              zelloOfflineMinutes: zello.offlineMinutes,
+              zelloOnlineMinutes: zello.onlineMinutes,
+            } : {}),
           });
-          await logActivity({ userId: ctx.user.id, action: "check_out", entity: "time_record", entityId: input.employeeId, details: `Check-out: ${hoursWorked}h` });
-          return { success: true, hoursWorked };
+          // Fecha o check-in de PDA da pessoa (o aparelho fica livre para o
+          // próximo turno — quando outro picar o ponto, a app troca sozinha)
+          try {
+            const { closePdaCheckinsForEmployee } = await import("./db");
+            await closePdaCheckinsForEmployee(input.employeeId, outAt);
+          } catch (err) {
+            console.warn("[checkOut] fecho de PDA falhou:", err);
+          }
+          await logActivity({ userId: ctx.user.id, action: "check_out", entity: "time_record", entityId: input.employeeId, details: `Check-out: ${hoursWorked}h${zello ? ` · ${zello.km}km GPS · ${zello.offlineMinutes}min offline` : ""}` });
+          return { success: true, hoursWorked, zello };
+        }),
+
+      // ── Geofence por centro de custos (raio de picagem) ───────────────────
+      geofences: protectedProcedure.query(async ({ ctx }) => {
+        requireRole(ctx.user.role, "admin");
+        return listProjectGeofences();
+      }),
+      setGeofence: protectedProcedure
+        .input(z.object({ projectId: z.number(), lat: z.number(), lng: z.number(), radiusM: z.number().min(50).max(50000) }))
+        .mutation(async ({ ctx, input }) => {
+          requireRole(ctx.user.role, "admin");
+          await setProjectGeofence(input.projectId, input.lat, input.lng, input.radiusM);
+          await logActivity({ userId: ctx.user.id, action: "update", entity: "project_geofence", entityId: input.projectId });
+          return { success: true };
+        }),
+      deleteGeofence: protectedProcedure
+        .input(z.object({ projectId: z.number() }))
+        .mutation(async ({ ctx, input }) => {
+          requireRole(ctx.user.role, "admin");
+          await deleteProjectGeofence(input.projectId);
+          return { success: true };
         }),
 
       monthlyHours: protectedProcedure
@@ -2831,6 +3081,22 @@ export const appRouter = router({
 
   // ─── MARKETING ────────────────────────────────────────────────────────────
   marketing: router({
+    // Import manual de CSV de campanhas (histórico 2024→ ou correções).
+    // Mesmo motor da ingestão do email diário campanhas@multipark.pt.
+    importCampaignCsv: protectedProcedure
+      .input(z.object({ csv: z.string().min(10).max(5_000_000) }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        const { parseCampaignCsv, ingestCampaignDaily } = await import("./campaignReportIngest");
+        const { rows, errors } = parseCampaignCsv(input.csv);
+        if (rows.length === 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: errors.join("; ") || "CSV sem linhas válidas" });
+        }
+        const res = await ingestCampaignDaily(rows, ctx.user.id);
+        await logActivity({ userId: ctx.user.id, action: "import", entity: "campaign_daily_stats", details: `${res.imported} registos, ${res.totalSpend}€` });
+        return { ...res, parseErrors: errors };
+      }),
+
     dashboard: protectedProcedure
       .input(z.object({ from: z.string().optional(), to: z.string().optional(), projectId: z.number().optional() }).optional())
       .query(async ({ ctx, input }) => {
@@ -3573,6 +3839,14 @@ export const appRouter = router({
         requireRole(ctx.user.role, "backoffice");
         return getZelloUsers();
       }),
+      // Resolução Zello→pessoa para o mapa ao vivo: check-ins de PDA ativos
+      // primeiro (os "Extra NNN" vivem nos PDAs e cada dia é uma pessoa
+      // diferente), ligações fixas da ficha como fallback.
+      mappings: protectedProcedure.query(async ({ ctx }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { getZelloLiveMappings } = await import("./db");
+        return getZelloLiveMappings();
+      }),
       // Anexa (ou desanexa) um utilizador Zello a um colaborador — PERSISTENTE,
       // como o mapping de agentes Multipark. Único: limpa o username de quem o
       // tivesse. O GPS passa a mostrar o colaborador em vez de "extra600".
@@ -3769,6 +4043,24 @@ export const appRouter = router({
         requireRole(ctx.user.role, "backoffice");
         return listPdas();
       }),
+      // "Este browser É o PDA X" — regista o aparelho e devolve o token que o
+      // cliente guarda no localStorage. A partir daí, qualquer check-in do
+      // PONTO feito neste aparelho liga a pessoa ao PDA/Zello automaticamente.
+      registerDevice: protectedProcedure.input(z.object({ pdaId: z.number() })).mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "team_leader");
+        const { setPdaDeviceToken } = await import("./db");
+        const token = await setPdaDeviceToken(input.pdaId);
+        if (!token) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
+        await logActivity({ userId: ctx.user.id, action: "register_device", entity: "pda", entityId: input.pdaId, details: "Browser registado como este PDA" });
+        return { token };
+      }),
+      // Info do aparelho atual (cartão "Este aparelho" na aba PDAs) — qualquer
+      // role autenticada pode consultar: os condutores precisam de ver em que
+      // PDA estão a picar o ponto.
+      deviceInfo: protectedProcedure.input(z.object({ token: z.string().min(8) })).query(async ({ ctx, input }) => {
+        const { getPdaByDeviceToken } = await import("./db");
+        return getPdaByDeviceToken(input.token);
+      }),
       get: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
         return getPdaById(input.id);
@@ -3859,13 +4151,11 @@ export const appRouter = router({
             mobileDataMbStart: input.mobileDataMbStart ?? null,
             notes: input.notes ?? null,
           });
-          // Preenche o anexo persistente Zello↔colaborador se ainda não existir.
-          if (input.zelloUsername) {
-            const attached = await attachZelloToEmployeeIfUnset(input.employeeId, input.zelloUsername);
-            if (attached) {
-              await logActivity({ userId: ctx.user.id, action: "map_zello", entity: "employees", entityId: input.employeeId, details: `Zello "${input.zelloUsername}" anexado automaticamente no check-in do PDA #${input.pdaId}` });
-            }
-          }
+          // NOTA (regra do Jorge 2026-08-06): já NÃO se anexa o Zello à ficha
+          // aqui — os utilizadores Zello dos PDAs mudam de mãos todos os dias,
+          // e a resolução Zello→pessoa passou a ser dinâmica pelo check-in do
+          // PDA (getZelloLiveMappings / resolveZelloUsernameForShift). A
+          // ligação fixa na ficha fica só para telemóveis pessoais.
           await logActivity({ userId: ctx.user.id, action: "create", entity: "pda_checkin", entityId: id, details: `Check-in PDA #${input.pdaId}` });
           return { id };
         }),
@@ -4689,7 +4979,7 @@ export const appRouter = router({
       requireRole(ctx.user.role, "extra");
       return getTrainingVideos(input.categoryId);
     }),
-    createVideo: protectedProcedure.input(z.object({ categoryId: z.number(), title: z.string(), description: z.string().optional(), videoUrl: z.string(), thumbnailUrl: z.string().optional(), durationMinutes: z.number().optional() })).mutation(async ({ ctx, input }) => {
+    createVideo: protectedProcedure.input(z.object({ categoryId: z.number(), title: z.string(), description: z.string().optional(), videoUrl: z.string(), thumbnailUrl: z.string().optional(), durationMinutes: z.number().optional(), careerLevel: z.string().max(32).optional() })).mutation(async ({ ctx, input }) => {
       if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
       const result = await createTrainingVideo({ ...input, createdBy: ctx.user.id });
       await logActivity({ userId: ctx.user.id, action: "create", entity: "training_video", entityId: result.id, details: input.title });
@@ -4707,7 +4997,7 @@ export const appRouter = router({
       requireRole(ctx.user.role, "extra");
       return getTrainingManuals(input.categoryId, input.type);
     }),
-    createManual: protectedProcedure.input(z.object({ categoryId: z.number().optional(), title: z.string(), content: z.string(), type: z.enum(["manual", "update", "news", "procedure"]).optional(), fileUrl: z.string().optional(), fileKey: z.string().optional(), fileName: z.string().optional(), fileMimeType: z.string().optional() })).mutation(async ({ ctx, input }) => {
+    createManual: protectedProcedure.input(z.object({ categoryId: z.number().optional(), title: z.string(), content: z.string(), type: z.enum(["manual", "update", "news", "procedure", "link"]).optional(), fileUrl: z.string().optional(), fileKey: z.string().optional(), fileName: z.string().optional(), fileMimeType: z.string().optional(), careerLevel: z.string().max(32).optional() })).mutation(async ({ ctx, input }) => {
       if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
       const result = await createTrainingManual({ ...input, createdBy: ctx.user.id });
       await logActivity({ userId: ctx.user.id, action: "create", entity: "training_manual", entityId: result.id, details: input.title });
@@ -4808,7 +5098,15 @@ export const appRouter = router({
       requireRole(ctx.user.role, "extra");
       return getCareerExams();
     }),
-    createCareerExam: protectedProcedure.input(z.object({ level: z.enum(["extra", "condutor", "senior", "team_leader", "supervisor"]), title: z.string(), description: z.string().optional(), passingScore: z.number(), timeLimitMinutes: z.number().optional() })).mutation(async ({ ctx, input }) => {
+    createCareerExam: protectedProcedure.input(z.object({
+      // Trilhas do Jorge (2026-08-05): condutor/terminal/front níveis 1-4 + chefias
+      level: z.enum([
+        "condutor_1", "condutor_2", "condutor_3", "condutor_4",
+        "terminal_1", "terminal_2", "terminal_3", "terminal_4",
+        "front_1", "front_2", "front_3", "front_4",
+        "team_leader", "supervisor",
+      ]),
+      title: z.string(), description: z.string().optional(), passingScore: z.number(), timeLimitMinutes: z.number().optional() })).mutation(async ({ ctx, input }) => {
       if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
       const result = await createCareerExam(input);
       await logActivity({ userId: ctx.user.id, action: "create", entity: "career_exam", entityId: result.id, details: input.title });
@@ -5500,6 +5798,58 @@ export const appRouter = router({
 
   // ─── AVALIAÇÃO DE DESEMPENHO ─────────────────────────────────────────────
   performance: router({
+    // Agregado por período (Dia/Semana/Mês/Ano — padrão de datas do Jorge):
+    // soma as semanas ISO que intersectam [from,to] por colaborador.
+    range: protectedProcedure.input(z.object({
+      from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    })).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "frontoffice");
+      // semanas ISO que intersectam o período
+      const weeks: Array<{ week: number; year: number }> = [];
+      const d = new Date(`${input.from}T00:00:00`);
+      const dow = (d.getDay() + 6) % 7;
+      d.setDate(d.getDate() - dow); // segunda da 1ª semana
+      const end = new Date(`${input.to}T00:00:00`);
+      const isoWeek = (x: Date) => {
+        const t = new Date(Date.UTC(x.getFullYear(), x.getMonth(), x.getDate()));
+        const dn = t.getUTCDay() || 7;
+        t.setUTCDate(t.getUTCDate() + 4 - dn);
+        const ys = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+        return { week: Math.ceil((((t.getTime() - ys.getTime()) / 86400000) + 1) / 7), year: t.getUTCFullYear() };
+      };
+      while (d <= end && weeks.length < 60) {
+        weeks.push(isoWeek(d));
+        d.setDate(d.getDate() + 7);
+      }
+      const rows: any[] = [];
+      for (const w of weeks) {
+        rows.push(...await getPerformanceEvaluations({ weekNumber: w.week, yearNumber: w.year }));
+      }
+      // agrega por colaborador
+      const byEmp = new Map<number, any>();
+      for (const r of rows) {
+        const a = byEmp.get(r.employeeId) ?? {
+          employeeId: r.employeeId, hoursWorked: 0, movementsCount: 0,
+          incidentsPositive: 0, incidentsNegative: 0, positivePoints: 0,
+          negativePoints: 0, totalPoints: 0, weeklyCost: 0, weeks: 0,
+        };
+        a.hoursWorked += Number(r.hoursWorked || 0);
+        a.movementsCount += Number(r.movementsCount || 0);
+        a.incidentsPositive += Number(r.incidentsPositive || 0);
+        a.incidentsNegative += Number(r.incidentsNegative || 0);
+        a.positivePoints += Number(r.positivePoints || 0);
+        a.negativePoints += Number(r.negativePoints || 0);
+        a.totalPoints += Number(r.totalPoints || 0);
+        a.weeklyCost += Number(r.weeklyCost || 0);
+        a.weeks += 1;
+        byEmp.set(r.employeeId, a);
+      }
+      return Array.from(byEmp.values())
+        .map((a) => ({ ...a, movementsPerHour: a.hoursWorked > 0 ? Math.round((a.movementsCount / a.hoursWorked) * 10) / 10 : 0 }))
+        .sort((a, b) => b.totalPoints - a.totalPoints);
+    }),
+
     list: protectedProcedure.input(z.object({
       weekNumber: z.number().optional(),
       yearNumber: z.number().optional(),
@@ -5557,94 +5907,78 @@ export const appRouter = router({
 
   // ─── SERVIÇOS ────────────────────────────────────────────────────────────
   services: router({
-    list: protectedProcedure.input(z.object({
-      serviceType: z.string().optional(),
-      employeeId: z.number().optional(),
-      projectId: z.number().optional(),
-      month: z.number().optional(),
-      year: z.number().optional(),
-    }).optional()).query(({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
-      return getServices(input);
-    }),
+    // (O antigo CRUD de serviços internos — list/create/update/delete/stats
+    //  sobre a tabela `services` — foi removido a 2026-08-06: nunca teve UI.
+    //  Os serviços reais vêm das reservas Multipark, abaixo.)
 
-    create: protectedProcedure.input(z.object({
-      projectId: z.number().optional(),
-      employeeId: z.number().optional(),
-      serviceType: z.enum(["lavagem", "carregamento_eletrico", "valet_flex", "outro"]),
-      clientName: z.string().optional(),
-      vehiclePlate: z.string().optional(),
-      bookingRef: z.string().optional(),
-      revenue: z.number().optional(),
-      cost: z.number().optional(),
-      commission: z.number().optional(),
-      notes: z.string().optional(),
-      serviceDate: z.string().optional(),
-    })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "admin");
-      const data = { ...input, serviceDate: input.serviceDate ? new Date(input.serviceDate) : new Date() };
-      const id = await createService(data);
-      await logActivity({ userId: ctx.user.id, action: "create", entity: "service", entityId: id || 0, details: `Serviço: ${input.serviceType}` });
-      return { id };
-    }),
-
-    update: protectedProcedure.input(z.object({
+    // Dá baixa / reabre um serviço na app. O sync preserva o done local
+    // (upsertBookingExtras faz OR com o que a API mandar).
+    setExtraDone: protectedProcedure.input(z.object({
       id: z.number(),
-      revenue: z.number().optional(),
-      cost: z.number().optional(),
-      commission: z.number().optional(),
-      notes: z.string().optional(),
+      done: z.boolean(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "admin");
-      const { id, ...data } = input;
-      await updateService(id, data);
+      requireRole(ctx.user.role, "backoffice");
+      const { getDb } = await import("./db");
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
+      const { multiparkBookingExtras } = await import("../drizzle/schema");
+      const { eq } = await import("drizzle-orm");
+      await db.update(multiparkBookingExtras).set({ done: input.done ? 1 : 0 }).where(eq(multiparkBookingExtras.id, input.id));
+      await logActivity({ userId: ctx.user.id, action: input.done ? "complete" : "reopen", entity: "booking_extra", entityId: input.id });
       return { success: true };
     }),
 
-    delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "super_admin");
-      await deleteService(input.id);
-      return { success: true };
-    }),
-
-    stats: protectedProcedure.input(z.object({
-      month: z.number().optional(),
-      year: z.number().optional(),
-    }).optional()).query(({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
-      return getServiceStats(input?.month, input?.year);
-    }),
-
-    // Extra services from Multipark bookings
+    // Serviços extra das reservas — FONTE: BD local (multipark_booking_extras,
+    // sincronizada do /report a cada 15min). FIX 2026-08-06: antes chamava a
+    // API ao vivo com UMA chave (= só um parque, lento, incompleto) e mostrava
+    // a ALOCAÇÃO como matrícula. Agora: todos os parques, instantâneo,
+    // matrícula/cliente reais via join à reserva.
     multiparkExtras: protectedProcedure.input(z.object({
       startDate: z.string(),
       endDate: z.string(),
     })).query(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
-      const report = await getBookingsReport(input.startDate, input.endDate, "checkout");
-      const services: Array<{
-        bookingId: string;
-        licensePlate: string;
-        parkName: string;
-        checkOut: string;
-        serviceName: string;
-        price: number;
-        done: boolean;
-      }> = [];
-      for (const b of report.bookings || []) {
-        const extras: any[] = b.extraServices || [];
-        for (const s of extras) {
-          services.push({
-            bookingId: b.id,
-            licensePlate: b.allocation || "",
-            parkName: b.park?.name || "",
-            checkOut: b.checkOutDate || "",
-            serviceName: s.name,
-            price: s.price || 0,
-            done: s.done ?? true,
-          });
-        }
-      }
+      const { getDb } = await import("./db");
+      const db = await getDb();
+      if (!db) return { total: 0, services: [] };
+      const { multiparkBookingExtras, multiparkBookings } = await import("../drizzle/schema");
+      const { and, gte, lte, eq, sql } = await import("drizzle-orm");
+      const rows = await db
+        .select({
+          id: multiparkBookingExtras.id,
+          bookingId: multiparkBookingExtras.bookingExternalId,
+          bookingNumber: multiparkBookings.bookingNumber,
+          licensePlate: multiparkBookings.licensePlate,
+          clientFirstName: multiparkBookings.clientFirstName,
+          clientLastName: multiparkBookings.clientLastName,
+          parkName: multiparkBookings.parkName,
+          city: multiparkBookings.city,
+          checkOut: multiparkBookings.checkOut,
+          bookingStatus: multiparkBookings.status,
+          serviceName: multiparkBookingExtras.name,
+          price: multiparkBookingExtras.price,
+          done: multiparkBookingExtras.done,
+        })
+        .from(multiparkBookingExtras)
+        .innerJoin(multiparkBookings, eq(multiparkBookings.externalId, multiparkBookingExtras.bookingExternalId))
+        .where(and(
+          gte(multiparkBookings.checkOut, input.startDate),
+          lte(multiparkBookings.checkOut, input.endDate + " 23:59:59"),
+          sql`${multiparkBookings.status} != 'CANCELLED'`,
+        ))
+        .limit(5000);
+      const services = rows.map((r) => ({
+        id: r.id,
+        bookingId: r.bookingId,
+        bookingNumber: r.bookingNumber,
+        licensePlate: r.licensePlate ?? "",
+        clientName: `${r.clientFirstName ?? ""} ${r.clientLastName ?? ""}`.trim(),
+        parkName: r.city && r.parkName && !r.parkName.includes(r.city) ? `${r.parkName} ${r.city}` : (r.parkName ?? ""),
+        checkOut: r.checkOut ?? "",
+        serviceName: r.serviceName ?? "?",
+        price: Number(r.price ?? 0),
+        done: Boolean(r.done),
+      }));
       return { total: services.length, services };
     }),
   }),
@@ -5737,9 +6071,59 @@ export const appRouter = router({
       from: z.string(),
       to: z.string(),
       projectId: z.number().optional(),
-    })).query(({ ctx, input }) => {
-      requireRole(ctx.user.role, "backoffice");
+    })).query(async ({ ctx, input }) => {
+      // Margens, salários (com detalhe por pessoa) e comissões — admin+, e
+      // respeita o deny de finance.view_totals por utilizador
+      await requireFinanceTotals(ctx.user, "admin");
       return getBillingData(input);
+    }),
+  }),
+
+  // ─── PASSAGEM DE TURNO ───────────────────────────────────────────────────
+  shiftHandover: router({
+    // Team leaders preenchem; supervisor+ consulta o histórico e o dashboard
+    save: protectedProcedure.input(z.object({
+      handoverDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      shift: z.enum(["morning", "night"]),
+      city: z.enum(["lisbon", "porto", "faro"]).default("lisbon"),
+      carsForCovered: z.number().int().min(0).nullable().optional(),
+      chargedUntilDate: z.string().max(10).nullable().optional(),
+      cashClosedInSafe: z.boolean().nullable().optional(),
+      checkoutCashDone: z.boolean().nullable().optional(),
+      frontPouchValue: z.number().min(0).nullable().optional(),
+      terminalPouchValue: z.number().min(0).nullable().optional(),
+      ticketsExpensesPaid: z.number().min(0).nullable().optional(),
+      mbRolls: z.number().int().min(0).nullable().optional(),
+      mbRollsInPouch: z.number().int().min(0).nullable().optional(),
+      pensInPouch: z.number().int().min(0).nullable().optional(),
+      mbBattery: z.number().int().min(0).max(100).nullable().optional(),
+      pdasCharged: z.boolean().nullable().optional(),
+      uniformsCount: z.number().int().min(0).nullable().optional(),
+      notes: z.string().max(2000).nullable().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "team_leader");
+      const { saveShiftHandover } = await import("./db");
+      await saveShiftHandover({ ...input, filledById: ctx.user.id, filledByName: ctx.user.name ?? null });
+      await logActivity({ userId: ctx.user.id, action: "save", entity: "shift_handover", details: `${input.handoverDate} ${input.shift} ${input.city}` });
+      return { success: true };
+    }),
+
+    list: protectedProcedure.input(z.object({
+      from: z.string().optional(),
+      to: z.string().optional(),
+      city: z.enum(["lisbon", "porto", "faro"]).optional(),
+    }).optional()).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "team_leader");
+      const { listShiftHandovers } = await import("./db");
+      return listShiftHandovers(input ?? {});
+    }),
+
+    supervisorDashboard: protectedProcedure.input(z.object({
+      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    })).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "supervisor");
+      const { getSupervisorDayDashboard } = await import("./db");
+      return getSupervisorDayDashboard(input.date);
     }),
   }),
 
@@ -6021,8 +6405,44 @@ export const appRouter = router({
       year: z.number(),
       projectId: z.number().optional(),
     })).query(({ ctx, input }) => {
-      requireRole(ctx.user.role, "backoffice");
+      // Lucros, salários e IVA — reservado à administração
+      requireRole(ctx.user.role, "admin");
       return getAnnualBreakdown(input.year, input.projectId);
+    }),
+
+    // ── Histórico financeiro importado (Excel/CSV, 2016→) ──────────────────
+    importHistory: protectedProcedure.input(z.object({
+      rows: z.array(z.object({
+        year: z.number().min(2000).max(2100),
+        month: z.number().min(1).max(12),
+        revenueWithVat: z.number(),
+        expensesWithVat: z.number().optional(),
+        salaries: z.number().optional(),
+        notes: z.string().optional(),
+      })).min(1).max(600),
+    })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "admin");
+      const { importFinancialHistory } = await import("./db");
+      const res = await importFinancialHistory(input.rows);
+      await logActivity({ userId: ctx.user.id, action: "import", entity: "financial_history", details: `${res.imported} meses importados` });
+      return res;
+    }),
+
+    historyList: protectedProcedure.input(z.object({
+      year: z.number().optional(),
+    }).optional()).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "admin");
+      const { getFinancialHistory } = await import("./db");
+      return getFinancialHistory(input?.year);
+    }),
+
+    historyDeleteYear: protectedProcedure.input(z.object({
+      year: z.number(),
+    })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "super_admin");
+      const { deleteFinancialHistoryYear } = await import("./db");
+      await logActivity({ userId: ctx.user.id, action: "delete", entity: "financial_history", details: `Ano ${input.year}` });
+      return deleteFinancialHistoryYear(input.year);
     }),
 
     generate: protectedProcedure.input(z.object({
@@ -6645,7 +7065,8 @@ export const appRouter = router({
         projectId: z.number().optional(),
       }).optional())
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        // Receitas — respeita o deny de finance.view_totals por utilizador
+        await requireFinanceTotals(ctx.user, "backoffice");
         return getMultiparkBookingStats(input ?? undefined);
       }),
 
@@ -6666,6 +7087,160 @@ export const appRouter = router({
           period: { startDate: input.startDate, endDate: input.endDate },
           bookings,
         };
+      }),
+
+    // Atividade consolidada de um dia: ações + km/GPS por pessoa (visão Jorge)
+    dayActivity: protectedProcedure
+      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { getDayActivity } = await import("./db");
+        return getDayActivity(input.date);
+      }),
+
+    // Liga um agente Multipark a um PARCEIRO (agências que marcam pelo portal)
+    setAgentPartner: protectedProcedure
+      .input(z.object({ agentName: z.string().min(1).max(256), partnershipId: z.number().nullable() }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        const { setAgentPartner } = await import("./db");
+        await setAgentPartner(input.agentName, input.partnershipId);
+        await logActivity({ userId: ctx.user.id, action: "map", entity: "agent_partner", details: `${input.agentName} → partnership ${input.partnershipId ?? "—"}` });
+        return { success: true };
+      }),
+
+    agentPartners: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx.user.role, "backoffice");
+      const { listAgentPartners } = await import("./db");
+      return listAgentPartners();
+    }),
+
+    // "Não é funcionário": marca um agente como teste/integração — sai da
+    // lista de agentes por ligar (reversível)
+    ignoreAgent: protectedProcedure
+      .input(z.object({ agentName: z.string().min(1).max(256), ignored: z.boolean() }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        const { setAgentIgnored } = await import("./db");
+        await setAgentIgnored(input.agentName, input.ignored);
+        await logActivity({ userId: ctx.user.id, action: input.ignored ? "ignore" : "unignore", entity: "agent", details: input.agentName });
+        return { success: true };
+      }),
+
+    ignoredAgents: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx.user.role, "backoffice");
+      const { listIgnoredAgents } = await import("./db");
+      return listIgnoredAgents();
+    }),
+
+    // Agentes do histórico SEM funcionário nem parceiro (aba RH "Agentes")
+    unlinkedAgents: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx.user.role, "backoffice");
+      const { getDb, listAgentPartners } = await import("./db");
+      const db = await getDb();
+      if (!db) return [];
+      const { sql } = await import("drizzle-orm");
+      const [rows] = await db.execute(sql`
+        SELECT agentName,
+          COUNT(*) AS total,
+          SUM(changeType IN ('CHECK_IN','CHECKIN')) AS checkins,
+          SUM(changeType IN ('CHECK_OUT','CHECKOUT')) AS checkouts,
+          SUM(changeType IN ('MOVEMENT','MOVE')) AS movements,
+          MIN(actionTime) AS firstSeen,
+          MAX(actionTime) AS lastSeen
+        FROM multipark_booking_history
+        WHERE agentName IS NOT NULL AND agentName != ''
+        GROUP BY agentName`) as any;
+      const { employees } = await import("../drizzle/schema");
+      const { isNotNull } = await import("drizzle-orm");
+      const linkedEmps = await db.select({ n: employees.multiparkAgentName }).from(employees).where(isNotNull(employees.multiparkAgentName));
+      const linked = new Set(linkedEmps.map((e) => (e.n ?? "").trim().toLowerCase()));
+      const partners = new Set((await listAgentPartners()).map((p) => p.agentName.trim().toLowerCase()));
+      const { listIgnoredAgents } = await import("./db");
+      const ignored = new Set((await listIgnoredAgents()).map((n) => n.trim().toLowerCase()));
+      return (rows as any[])
+        .filter((r) => {
+          const key = String(r.agentName).trim().toLowerCase();
+          return !linked.has(key) && !partners.has(key) && !ignored.has(key);
+        })
+        .map((r) => ({
+          agentName: r.agentName,
+          total: Number(r.total),
+          checkins: Number(r.checkins ?? 0),
+          checkouts: Number(r.checkouts ?? 0),
+          movements: Number(r.movements ?? 0),
+          firstSeen: r.firstSeen,
+          lastSeen: r.lastSeen,
+        }))
+        .sort((a, b) => b.total - a.total);
+    }),
+
+    // Cria um funcionário-extra a partir de um agente órfão (aba RH)
+    createEmployeeFromAgent: protectedProcedure
+      .input(z.object({ agentName: z.string().min(1).max(256), email: z.string().email().optional() }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        const { getDb } = await import("./db");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
+        const { employees, projects } = await import("../drizzle/schema");
+        const { eq, and } = await import("drizzle-orm");
+        // ── ANTI-DUPLICAÇÃO (regra do Jorge: uma pessoa é só uma pessoa) —
+        // mesma verificação do rh.create: nome normalizado ou email já ativos
+        {
+          const norm = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+          const all = await db.select({ id: employees.id, fullName: employees.fullName, email: employees.email })
+            .from(employees).where(eq(employees.isActive, 1));
+          const dup = all.find((e) =>
+            norm(e.fullName) === norm(input.agentName) ||
+            (input.email && e.email && e.email.toLowerCase() === input.email.toLowerCase()),
+          );
+          if (dup) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: `Já existe um colaborador ativo com estes dados: ${dup.fullName} (#${dup.id}). Liga o agente à ficha existente em vez de criar outra.` });
+          }
+        }
+        // centro de custos default = cidade Lisboa (o Jorge corrige depois se for de outra)
+        const lisboa = await db.select({ id: projects.id }).from(projects)
+          .where(and(eq(projects.level, "city"), eq(projects.name, "Lisboa"))).limit(1);
+        const [ins] = await db.insert(employees).values({
+          fullName: input.agentName,
+          email: input.email ?? null,
+          multiparkAgentName: input.agentName,
+          position: "extra",
+          contractType: "extra",
+          projectId: lisboa[0]?.id ?? null,
+          isActive: 1,
+        } as any).$returningId();
+        await logActivity({ userId: ctx.user.id, action: "create", entity: "employee", entityId: (ins as any)?.id ?? 0, details: `Criado a partir do agente: ${input.agentName}` });
+        return { id: (ins as any)?.id };
+      }),
+
+    // Reserva completa por externalId (detalhe ao clicar num serviço)
+    bookingByExternalId: protectedProcedure
+      .input(z.object({ externalId: z.string().min(1).max(128) }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "frontoffice");
+        const { getDb } = await import("./db");
+        const db = await getDb();
+        if (!db) return null;
+        const { multiparkBookings } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        const rows = await db.select().from(multiparkBookings).where(eq(multiparkBookings.externalId, input.externalId)).limit(1);
+        return rows[0] ?? null;
+      }),
+
+    // Resumo agregado (dashboard Operações): contagens/somas no SQL em vez de
+    // puxar milhares de reservas completas para o browser
+    operationsSummary: protectedProcedure
+      .input(z.object({
+        startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        projectId: z.number().optional(),
+      }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { getOperationsSummary } = await import("./db");
+        return getOperationsSummary(input);
       }),
 
     // Query API directly by actionType + date range (all parks)
@@ -6707,24 +7282,28 @@ export const appRouter = router({
   // ── EXTRAS DIA — Daily forecast & driver allocation (Lisboa) ────────────────
   extrasDia: router({
     forecast: protectedProcedure
-      .input(z.object({ baseDate: z.string().optional() }).optional())
+      .input(z.object({ baseDate: z.string().optional(), city: z.enum(["lisbon", "porto", "faro"]).optional() }).optional())
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
-        return getExtrasDiaForecast(input?.baseDate);
+        return getExtrasDiaForecast(input?.baseDate, input?.city ?? "lisbon");
       }),
 
     candidates: protectedProcedure
-      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }).optional())
+      .input(z.object({
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        // true = só elegíveis a Team Leader (chefias + permissão explícita)
+        forTeamLeader: z.boolean().optional(),
+      }).optional())
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
-        return listDriverCandidates(input?.date);
+        return listDriverCandidates(input?.date, { forTeamLeader: input?.forTeamLeader });
       }),
 
     assignments: protectedProcedure
-      .input(z.object({ date: z.string() }))
+      .input(z.object({ date: z.string(), city: z.enum(["lisbon", "porto", "faro"]).optional() }))
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
-        return listAssignments(input.date);
+        return listAssignments(input.date, input.city);
       }),
 
     upsertAssignment: protectedProcedure
@@ -6737,6 +7316,7 @@ export const appRouter = router({
           level: z.enum(["junior", "senior", "terminal", "master"]).nullable().optional(),
           isTeamLeader: z.boolean().optional(),
           shift: z.enum(["morning", "night"]),
+          city: z.enum(["lisbon", "porto", "faro"]).optional(),
           startHour: z.number().int().min(0).max(27),
           endHour: z.number().int().min(1).max(27),
           sentHomeHour: z.number().int().min(0).max(27).nullable().optional(),
@@ -6790,6 +7370,7 @@ export const appRouter = router({
     bookingsInSlot: protectedProcedure
       .input(
         z.object({
+          city: z.enum(["lisbon", "porto", "faro"]).optional(),
           date: z.string(),
           hour: z.number().int().min(3).max(26),
           slot: z.number().int().min(0).max(2),
@@ -6798,7 +7379,7 @@ export const appRouter = router({
       )
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
-        return getBookingsInSlot(input.date, input.hour, input.slot, input.type);
+        return getBookingsInSlot(input.date, input.hour, input.slot, input.type, input.city ?? "lisbon");
       }),
   }),
 
@@ -6868,6 +7449,15 @@ export const appRouter = router({
           note: z.string().max(500).nullable().optional(),
           employeeIds: z.array(z.number()).nullable().optional(),
           testEmail: z.string().email().nullable().optional(),
+          message: z.object({
+            kind: z.enum(["week", "day_shift", "day_hours", "day_range"]),
+            dateLabel: z.string().max(60).optional(),
+            shift: z.enum(["morning", "afternoon", "night"]).optional(),
+            fromHour: z.number().int().min(0).max(23).optional(),
+            toHour: z.number().int().min(0).max(27).optional(),
+            // dia ISO do pedido — permite ao "sim" automático marcar o dia certo
+            targetDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+          }).nullable().optional(),
         }),
       )
       .mutation(async ({ ctx, input }) => {
@@ -6879,6 +7469,7 @@ export const appRouter = router({
           note: input.note ?? null,
           employeeIds: input.employeeIds ?? null,
           testEmail: input.testEmail ?? null,
+          message: input.message ?? null,
         });
         await logActivity({
           userId: ctx.user.id,

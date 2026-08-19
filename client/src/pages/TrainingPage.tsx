@@ -14,14 +14,39 @@ import { fileHref } from "@/lib/fileHref";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { toast } from "sonner";
 import { useState, useMemo, useEffect, useRef } from "react";
+import { usePersistedState } from "@/hooks/usePersistedState";
 import { Play, BookOpen, HelpCircle, Gamepad2, GraduationCap, Plus, Trash2, Trophy, CheckCircle, XCircle, Clock, Star, ChevronRight, FileText, Newspaper, RefreshCw } from "lucide-react";
 import { Streamdown } from "streamdown";
 
 const ROLE_HIERARCHY: Record<string, number> = { user: 0, extra: 1, frontoffice: 2, backoffice: 3, team_leader: 4, supervisor: 5, admin: 6, super_admin: 7 };
 
+// ─── Níveis de carreira (estrutura do Jorge, 2026-08-05) ─────────────────────
+// 3 trilhas com 4 níveis (Condutor, Terminal, Front) + chefias. Cada nível tem
+// os seus módulos (manuais/vídeos com careerLevel) e os seus testes (exames).
+const CAREER_TRACKS: Array<{ key: string; label: string; color: string; barColor: string; levels: string[] }> = [
+  { key: "condutor", label: "Condutor", color: "bg-blue-100 text-blue-800", barColor: "bg-blue-500", levels: ["condutor_1", "condutor_2", "condutor_3", "condutor_4"] },
+  { key: "terminal", label: "Terminal", color: "bg-emerald-100 text-emerald-800", barColor: "bg-emerald-500", levels: ["terminal_1", "terminal_2", "terminal_3", "terminal_4"] },
+  { key: "front", label: "Front", color: "bg-rose-100 text-rose-800", barColor: "bg-rose-500", levels: ["front_1", "front_2", "front_3", "front_4"] },
+  { key: "chefia", label: "Chefia", color: "bg-purple-100 text-purple-800", barColor: "bg-purple-500", levels: ["team_leader", "supervisor"] },
+];
+const CAREER_LEVEL_LABELS: Record<string, string> = {
+  condutor_1: "Condutor N1", condutor_2: "Condutor N2", condutor_3: "Condutor N3", condutor_4: "Condutor N4",
+  terminal_1: "Terminal N1", terminal_2: "Terminal N2", terminal_3: "Terminal N3", terminal_4: "Terminal N4",
+  front_1: "Front N1", front_2: "Front N2", front_3: "Front N3", front_4: "Front N4",
+  team_leader: "Team Leader", supervisor: "Supervisor",
+  // legacy (exames antigos ainda não migrados mostram na mesma)
+  extra: "Condutor N1", condutor: "Condutor N1", senior: "Condutor N3",
+};
+const CAREER_LEVEL_COLORS: Record<string, string> = Object.fromEntries(
+  CAREER_TRACKS.flatMap((t) => t.levels.map((l) => [l, t.color])),
+);
+const ALL_CAREER_LEVELS = CAREER_TRACKS.flatMap((t) => t.levels);
+
 export default function TrainingPage() {
   const { user } = useAuth();
   const isAdmin = user && ROLE_HIERARCHY[user.role] >= ROLE_HIERARCHY["admin"];
+  // Separador persiste à navegação (padrão da app)
+  const [tab, setTab] = usePersistedState("training.tab", "videos");
 
   return (
     <>
@@ -29,7 +54,7 @@ export default function TrainingPage() {
         <div>
           <p className="text-muted-foreground">Vídeos, manuais, FAQs, quiz interativo e exames de carreira</p>
         </div>
-        <Tabs defaultValue="videos" className="space-y-4">
+        <Tabs value={tab} onValueChange={setTab} className="space-y-4">
           <TabsList className="grid grid-cols-2 sm:grid-cols-5 w-full max-w-2xl h-auto">
             <TabsTrigger value="videos"><Play className="w-4 h-4 mr-1" />Vídeos</TabsTrigger>
             <TabsTrigger value="manuals"><BookOpen className="w-4 h-4 mr-1" />Manuais</TabsTrigger>
@@ -50,19 +75,57 @@ export default function TrainingPage() {
 }
 
 // ─── VIDEOS TAB ─────────────────────────────────────────────────────────────
+
+// Converte URLs de YouTube/Vimeo em URL de embed — o vídeo abre DENTRO da app
+// num player, em vez de saltar para outra aba. URLs desconhecidas devolvem
+// null e mantêm o comportamento antigo (abrir noutra aba).
+function videoEmbedUrl(url: string): string | null {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, "");
+    if (host === "youtube.com" || host === "m.youtube.com") {
+      const id = u.searchParams.get("v");
+      if (id) return `https://www.youtube-nocookie.com/embed/${id}`;
+      const shorts = u.pathname.match(/^\/shorts\/([\w-]+)/);
+      if (shorts) return `https://www.youtube-nocookie.com/embed/${shorts[1]}`;
+    }
+    if (host === "youtu.be") {
+      const id = u.pathname.slice(1).split("/")[0];
+      if (id) return `https://www.youtube-nocookie.com/embed/${id}`;
+    }
+    if (host === "vimeo.com") {
+      const id = u.pathname.match(/\/(\d+)/)?.[1];
+      if (id) return `https://player.vimeo.com/video/${id}`;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function VideosTab({ isAdmin }: { isAdmin: boolean }) {
   const [selectedCat, setSelectedCat] = useState<string>("all");
   const [showCreate, setShowCreate] = useState(false);
   const [showCreateCat, setShowCreateCat] = useState(false);
-  const [form, setForm] = useState({ categoryId: "", title: "", description: "", videoUrl: "", durationMinutes: "" });
+  const [playingVideo, setPlayingVideo] = useState<any>(null);
+  const [form, setForm] = useState({ categoryId: "", title: "", description: "", videoUrl: "", durationMinutes: "", careerLevel: "" });
   const [catForm, setCatForm] = useState({ name: "", description: "", icon: "" });
 
   const { data: categories = [] } = trpc.training.categories.useQuery();
   const { data: videos = [], refetch } = trpc.training.videos.useQuery({ categoryId: selectedCat !== "all" ? Number(selectedCat) : undefined });
   const createVideo = trpc.training.createVideo.useMutation({ onSuccess: () => { refetch(); setShowCreate(false); toast.success("Vídeo adicionado"); } });
   const deleteVideo = trpc.training.deleteVideo.useMutation({ onSuccess: () => { refetch(); toast.success("Vídeo eliminado"); } });
-  const createCat = trpc.training.createCategory.useMutation({ onSuccess: () => { trpc.useUtils().training.categories.invalidate(); setShowCreateCat(false); toast.success("Categoria criada"); } });
   const utils = trpc.useUtils();
+  // BUG antigo: usava trpc.useUtils() DENTRO do onSuccess (hook fora do render
+  // → nunca invalidava) e não limpava o form — daí as 10 categorias "saca".
+  const createCat = trpc.training.createCategory.useMutation({
+    onSuccess: () => { utils.training.categories.invalidate(); setShowCreateCat(false); setCatForm({ name: "", description: "", icon: "" }); toast.success("Categoria criada"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const deleteCat = trpc.training.deleteCategory.useMutation({
+    onSuccess: () => { utils.training.categories.invalidate(); setSelectedCat("all"); toast.success("Categoria eliminada"); },
+    onError: (e) => toast.error(e.message),
+  });
 
   return (
     <div className="space-y-4">
@@ -76,6 +139,21 @@ function VideosTab({ isAdmin }: { isAdmin: boolean }) {
             </SelectContent>
           </Select>
           {isAdmin && <Button variant="outline" size="sm" onClick={() => setShowCreateCat(true)}><Plus className="w-4 h-4 mr-1" />Categoria</Button>}
+          {isAdmin && selectedCat !== "all" && (
+            <Button
+              variant="outline" size="sm" className="text-destructive"
+              disabled={deleteCat.isPending}
+              onClick={() => {
+                const cat = categories.find((c: any) => String(c.id) === selectedCat);
+                const nVideos = videos.length;
+                if (confirm(`Eliminar a categoria "${cat?.name}"?${nVideos > 0 ? ` Os ${nVideos} vídeo(s) dela ficam sem categoria.` : ""}`)) {
+                  deleteCat.mutate({ id: Number(selectedCat) });
+                }
+              }}
+            >
+              <Trash2 className="w-4 h-4 mr-1" />Eliminar categoria
+            </Button>
+          )}
         </div>
         {isAdmin && <Button onClick={() => setShowCreate(true)}><Plus className="w-4 h-4 mr-1" />Novo Vídeo</Button>}
       </div>
@@ -86,7 +164,10 @@ function VideosTab({ isAdmin }: { isAdmin: boolean }) {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {videos.map((v: any) => (
             <Card key={v.id} className="overflow-hidden">
-              <div className="aspect-video bg-muted flex items-center justify-center relative cursor-pointer" onClick={() => window.open(v.videoUrl, "_blank")}>
+              <div
+                className="aspect-video bg-muted flex items-center justify-center relative cursor-pointer"
+                onClick={() => videoEmbedUrl(v.videoUrl) ? setPlayingVideo(v) : window.open(v.videoUrl, "_blank")}
+              >
                 {v.thumbnailUrl ? <img src={v.thumbnailUrl} alt={v.title} className="w-full h-full object-cover" /> : <Play className="w-12 h-12 text-muted-foreground" />}
                 <div className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity">
                   <Play className="w-16 h-16 text-white" />
@@ -105,6 +186,27 @@ function VideosTab({ isAdmin }: { isAdmin: boolean }) {
         </div>
       )}
 
+      {/* Player embutido: o vídeo toca dentro da app */}
+      <Dialog open={!!playingVideo} onOpenChange={(o) => !o && setPlayingVideo(null)}>
+        <DialogContent className="max-w-4xl w-[calc(100vw-2rem)] p-0 overflow-hidden">
+          <DialogHeader className="px-4 pt-4 pb-2">
+            <DialogTitle className="flex items-center gap-2"><Play className="w-4 h-4 text-primary" />{playingVideo?.title}</DialogTitle>
+          </DialogHeader>
+          {playingVideo && (
+            <div className="aspect-video w-full">
+              <iframe
+                src={videoEmbedUrl(playingVideo.videoUrl) ?? undefined}
+                className="w-full h-full"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+                allowFullScreen
+                title={playingVideo.title}
+              />
+            </div>
+          )}
+          {playingVideo?.description && <p className="px-4 pb-4 text-sm text-muted-foreground">{playingVideo.description}</p>}
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
         <DialogContent>
           <DialogHeader><DialogTitle>Novo Vídeo</DialogTitle></DialogHeader>
@@ -119,7 +221,16 @@ function VideosTab({ isAdmin }: { isAdmin: boolean }) {
             <div><Label>URL do Vídeo (YouTube, Vimeo, etc.)</Label><Input value={form.videoUrl} onChange={e => setForm(p => ({ ...p, videoUrl: e.target.value }))} placeholder="https://..." /></div>
             <div><Label>Descrição</Label><Textarea value={form.description} onChange={e => setForm(p => ({ ...p, description: e.target.value }))} /></div>
             <div><Label>Duração (min)</Label><Input type="number" value={form.durationMinutes} onChange={e => setForm(p => ({ ...p, durationMinutes: e.target.value }))} /></div>
-            <Button className="w-full" disabled={!form.categoryId || !form.title || !form.videoUrl} onClick={() => createVideo.mutate({ categoryId: Number(form.categoryId), title: form.title, description: form.description || undefined, videoUrl: form.videoUrl, durationMinutes: form.durationMinutes ? Number(form.durationMinutes) : undefined })}>Guardar</Button>
+            <div><Label>Nível de carreira (opcional — torna-o módulo desse nível)</Label>
+              <Select value={form.careerLevel || "none"} onValueChange={v => setForm(p => ({ ...p, careerLevel: v === "none" ? "" : v }))}>
+                <SelectTrigger><SelectValue placeholder="Nenhum" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Nenhum (vídeo geral)</SelectItem>
+                  {ALL_CAREER_LEVELS.map((l) => <SelectItem key={l} value={l}>{CAREER_LEVEL_LABELS[l]}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button className="w-full" disabled={!form.categoryId || !form.title || !form.videoUrl} onClick={() => createVideo.mutate({ categoryId: Number(form.categoryId), title: form.title, description: form.description || undefined, videoUrl: form.videoUrl, durationMinutes: form.durationMinutes ? Number(form.durationMinutes) : undefined, careerLevel: form.careerLevel || undefined })}>Guardar</Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -154,17 +265,17 @@ function ManualsTab({ isAdmin }: { isAdmin: boolean }) {
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [showCreate, setShowCreate] = useState(false);
   const [selectedManual, setSelectedManual] = useState<any>(null);
-  const [form, setForm] = useState({ title: "", content: "", type: "manual" as "manual" | "update" | "news" | "procedure" });
+  const [form, setForm] = useState({ title: "", content: "", type: "manual" as "manual" | "update" | "news" | "procedure" | "link", linkUrl: "", careerLevel: "" });
   const [uploadedFile, setUploadedFile] = useState<{ url: string; key: string; fileName: string; mimeType: string } | null>(null);
   const [uploading, setUploading] = useState(false);
 
   const { data: manuals = [], refetch } = trpc.training.manuals.useQuery({ type: typeFilter !== "all" ? typeFilter : undefined });
-  const createManual = trpc.training.createManual.useMutation({ onSuccess: () => { refetch(); setShowCreate(false); setForm({ title: "", content: "", type: "manual" }); setUploadedFile(null); toast.success("Conteúdo criado"); } });
+  const createManual = trpc.training.createManual.useMutation({ onSuccess: () => { refetch(); setShowCreate(false); setForm({ title: "", content: "", type: "manual", linkUrl: "", careerLevel: "" }); setUploadedFile(null); toast.success("Conteúdo criado"); } });
   const deleteManual = trpc.training.deleteManual.useMutation({ onSuccess: () => { refetch(); toast.success("Eliminado"); } });
 
-  const typeLabels: Record<string, string> = { manual: "Manual", update: "Atualização", news: "Notícia", procedure: "Procedimento" };
-  const typeIcons: Record<string, any> = { manual: BookOpen, update: RefreshCw, news: Newspaper, procedure: FileText };
-  const typeColors: Record<string, string> = { manual: "bg-blue-100 text-blue-800", update: "bg-amber-100 text-amber-800", news: "bg-purple-100 text-purple-800", procedure: "bg-emerald-100 text-emerald-800" };
+  const typeLabels: Record<string, string> = { manual: "Manual", update: "Atualização", news: "Notícia", procedure: "Procedimento", link: "Link interativo" };
+  const typeIcons: Record<string, any> = { manual: BookOpen, update: RefreshCw, news: Newspaper, procedure: FileText, link: Play };
+  const typeColors: Record<string, string> = { manual: "bg-blue-100 text-blue-800", update: "bg-amber-100 text-amber-800", news: "bg-purple-100 text-purple-800", procedure: "bg-emerald-100 text-emerald-800", link: "bg-cyan-100 text-cyan-800" };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -190,9 +301,16 @@ function ManualsTab({ isAdmin }: { isAdmin: boolean }) {
   };
 
   const handleCreate = () => {
+    const { linkUrl, careerLevel, ...rest } = form;
     createManual.mutate({
-      ...form,
-      ...(uploadedFile ? { fileUrl: uploadedFile.url, fileKey: uploadedFile.key, fileName: uploadedFile.fileName, fileMimeType: uploadedFile.mimeType } : {}),
+      ...rest,
+      content: form.content || (form.type === "link" ? form.linkUrl : ""),
+      careerLevel: careerLevel || undefined,
+      ...(form.type === "link" && linkUrl
+        ? { fileUrl: linkUrl, fileMimeType: "text/x-interactive-link", fileName: linkUrl.replace(/^https?:\/\//, "").slice(0, 80) }
+        : uploadedFile
+          ? { fileUrl: uploadedFile.url, fileKey: uploadedFile.key, fileName: uploadedFile.fileName, fileMimeType: uploadedFile.mimeType }
+          : {}),
     });
   };
 
@@ -209,7 +327,16 @@ function ManualsTab({ isAdmin }: { isAdmin: boolean }) {
             <p className="text-sm text-muted-foreground">{fmtPTDate(selectedManual.createdAt)}</p>
           </CardHeader>
           <CardContent className="space-y-4">
-            {(selectedManual.fileUrl || selectedManual.fileKey) && (
+            {selectedManual.type === "link" && selectedManual.fileUrl ? (
+              <div className="border rounded-lg overflow-hidden">
+                <div className="flex items-center justify-between p-2 bg-muted/40">
+                  <p className="text-xs text-muted-foreground truncate">{selectedManual.fileUrl}</p>
+                  <Button variant="outline" size="sm" onClick={() => window.open(selectedManual.fileUrl, "_blank")}>Abrir em nova aba</Button>
+                </div>
+                {/* Alguns sites bloqueiam embed (X-Frame-Options) — o botão acima é o recurso */}
+                <iframe src={selectedManual.fileUrl} className="w-full h-[70vh]" allow="fullscreen" title={selectedManual.title} />
+              </div>
+            ) : (selectedManual.fileUrl || selectedManual.fileKey) && (
               <div className="border rounded-lg p-4 bg-muted/30">
                 <div className="flex items-center gap-3">
                   <FileText className="w-8 h-8 text-primary" />
@@ -289,7 +416,7 @@ function ManualsTab({ isAdmin }: { isAdmin: boolean }) {
         </div>
       )}
 
-      <Dialog open={showCreate} onOpenChange={(o) => { setShowCreate(o); if (!o) { setForm({ title: "", content: "", type: "manual" }); setUploadedFile(null); } }}>
+      <Dialog open={showCreate} onOpenChange={(o) => { setShowCreate(o); if (!o) { setForm({ title: "", content: "", type: "manual", linkUrl: "", careerLevel: "" }); setUploadedFile(null); } }}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader><DialogTitle>Novo Conteúdo</DialogTitle></DialogHeader>
           <div className="space-y-3">
@@ -301,11 +428,28 @@ function ManualsTab({ isAdmin }: { isAdmin: boolean }) {
                   <SelectItem value="procedure">Procedimento</SelectItem>
                   <SelectItem value="update">Atualização</SelectItem>
                   <SelectItem value="news">Notícia</SelectItem>
+                  <SelectItem value="link">Link interativo (Genially, Slides, Forms…)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div><Label>Título</Label><Input value={form.title} onChange={e => setForm(p => ({ ...p, title: e.target.value }))} /></div>
             <div>
+              <Label>Nível de carreira (opcional — torna-o módulo desse nível)</Label>
+              <Select value={form.careerLevel || "none"} onValueChange={v => setForm(p => ({ ...p, careerLevel: v === "none" ? "" : v }))}>
+                <SelectTrigger><SelectValue placeholder="Nenhum" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Nenhum (conteúdo geral)</SelectItem>
+                  {ALL_CAREER_LEVELS.map((l) => <SelectItem key={l} value={l}>{CAREER_LEVEL_LABELS[l]}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            {form.type === "link" && (
+              <div>
+                <Label>URL da página interativa</Label>
+                <Input value={form.linkUrl} onChange={e => setForm(p => ({ ...p, linkUrl: e.target.value }))} placeholder="https://view.genially.com/…" />
+              </div>
+            )}
+            <div style={form.type === "link" ? { display: "none" } : undefined}>
               <Label>Ficheiro (PDF, PPT, DOC — opcional)</Label>
               <Input type="file" accept=".pdf,.ppt,.pptx,.doc,.docx,.xls,.xlsx" onChange={handleFileUpload} disabled={uploading} />
               {uploading && <p className="text-sm text-muted-foreground mt-1">A carregar...</p>}
@@ -318,7 +462,7 @@ function ManualsTab({ isAdmin }: { isAdmin: boolean }) {
               )}
             </div>
             <div><Label>Conteúdo / Descrição (Markdown)</Label><Textarea rows={8} value={form.content} onChange={e => setForm(p => ({ ...p, content: e.target.value }))} placeholder="Escreve em Markdown..." /></div>
-            <Button className="w-full" disabled={!form.title || (!form.content && !uploadedFile) || createManual.isPending} onClick={handleCreate}>
+            <Button className="w-full" disabled={!form.title || (form.type === "link" ? !form.linkUrl : (!form.content && !uploadedFile)) || createManual.isPending} onClick={handleCreate}>
               {createManual.isPending ? "A publicar..." : "Publicar"}
             </Button>
           </div>
@@ -591,7 +735,7 @@ function CareerTab({ isAdmin }: { isAdmin: boolean }) {
   const [showCreate, setShowCreate] = useState(false);
   const [showAddQ, setShowAddQ] = useState(false);
   const [startTime, setStartTime] = useState(Date.now());
-  const [examForm, setExamForm] = useState({ level: "extra" as any, title: "", description: "", passingScore: "70", timeLimitMinutes: "30" });
+  const [examForm, setExamForm] = useState({ level: "condutor_1" as any, title: "", description: "", passingScore: "70", timeLimitMinutes: "30" });
   const [qForm, setQForm] = useState({ question: "", optionA: "", optionB: "", optionC: "", optionD: "", correctOption: "A" as "A" | "B" | "C" | "D", explanation: "" });
   const { user } = useAuth();
   const isAdminLocal = user && ROLE_HIERARCHY[user.role] >= ROLE_HIERARCHY["admin"];
@@ -653,8 +797,19 @@ function CareerTab({ isAdmin }: { isAdmin: boolean }) {
     }
   };
 
-  const levelLabels: Record<string, string> = { extra: "Extra", condutor: "Condutor", senior: "Sénior", team_leader: "Team Leader", supervisor: "Supervisor" };
-  const levelColors: Record<string, string> = { extra: "bg-gray-100 text-gray-800", condutor: "bg-blue-100 text-blue-800", senior: "bg-green-100 text-green-800", team_leader: "bg-purple-100 text-purple-800", supervisor: "bg-amber-100 text-amber-800" };
+  const levelLabels = CAREER_LEVEL_LABELS;
+  const levelColors = CAREER_LEVEL_COLORS;
+
+  // Módulos do nível (manuais/vídeos etiquetados com o careerLevel do exame)
+  const { data: allManuals = [] } = trpc.training.manuals.useQuery({}, { enabled: !!selectedExam });
+  const { data: allVideos = [] } = trpc.training.videos.useQuery({}, { enabled: !!selectedExam });
+  const levelModules = useMemo(() => {
+    if (!selectedExam) return { manuals: [] as any[], videos: [] as any[] };
+    return {
+      manuals: (allManuals as any[]).filter((m) => m.careerLevel === selectedExam.level),
+      videos: (allVideos as any[]).filter((v) => v.careerLevel === selectedExam.level),
+    };
+  }, [selectedExam, allManuals, allVideos]);
 
   if (examResult) {
     return (
@@ -756,6 +911,27 @@ function CareerTab({ isAdmin }: { isAdmin: boolean }) {
               {isAdmin && <Button variant="destructive" size="sm" onClick={() => deleteExam.mutate({ id: selectedExam.id })}><Trash2 className="w-4 h-4 mr-1" />Eliminar Exame</Button>}
             </div>
 
+            {/* Módulos deste nível (manuais/vídeos etiquetados com o nível) */}
+            {(levelModules.manuals.length > 0 || levelModules.videos.length > 0) && (
+              <div className="border rounded-md p-3 bg-blue-50/40 border-blue-200">
+                <p className="text-xs font-semibold text-blue-800 mb-2 flex items-center gap-1.5">
+                  <BookOpen className="w-3.5 h-3.5" /> Módulos de estudo deste nível — lê antes do exame
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {levelModules.manuals.map((m: any) => (
+                    <Badge key={`m-${m.id}`} variant="outline" className="cursor-pointer hover:bg-blue-100 bg-white" onClick={() => { const href = fileHref(m.fileUrl, m.fileKey); if (m.type === "link" && m.fileUrl) window.open(m.fileUrl, "_blank"); else if (href) window.open(href, "_blank"); }}>
+                      📖 {m.title}
+                    </Badge>
+                  ))}
+                  {levelModules.videos.map((v: any) => (
+                    <Badge key={`v-${v.id}`} variant="outline" className="cursor-pointer hover:bg-blue-100 bg-white" onClick={() => window.open(v.videoUrl, "_blank")}>
+                      ▶ {v.title}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Histórico das minhas tentativas neste exame */}
             {(() => {
               const minhas = myAttempts.filter((a: any) => a.examId === selectedExam.id);
@@ -829,30 +1005,33 @@ function CareerTab({ isAdmin }: { isAdmin: boolean }) {
         {isAdmin && <Button onClick={() => setShowCreate(true)}><Plus className="w-4 h-4 mr-1" />Novo Exame</Button>}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {["extra", "condutor", "senior", "team_leader", "supervisor"].map(level => {
-          const levelExams = exams.filter((e: any) => e.level === level);
-          return (
-            <Card key={level} className="overflow-hidden">
-              <div className={`h-2 ${level === "extra" ? "bg-gray-400" : level === "condutor" ? "bg-blue-500" : level === "senior" ? "bg-green-500" : level === "team_leader" ? "bg-purple-500" : "bg-amber-500"}`} />
-              <CardContent className="p-5 space-y-3">
-                <div className="flex items-center justify-between">
-                  <h3 className="font-bold text-lg">{levelLabels[level]}</h3>
-                  <Badge variant="outline">{level === "extra" || level === "condutor" ? "≥70%" : level === "senior" ? "≥80%" : "≥90%"}</Badge>
-                </div>
-                {levelExams.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">Nenhum exame configurado</p>
-                ) : (
-                  levelExams.map((e: any) => (
-                    <Button key={e.id} variant="outline" className="w-full justify-start" onClick={() => setSelectedExam(e)}>
-                      <Star className="w-4 h-4 mr-2" />{e.title}
-                    </Button>
-                  ))
-                )}
-              </CardContent>
-            </Card>
-          );
-        })}
+      {/* Trilhas: Condutor / Terminal / Front (N1→N4) + Chefia */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        {CAREER_TRACKS.map((track) => (
+          <Card key={track.key} className="overflow-hidden">
+            <div className={`h-2 ${track.barColor}`} />
+            <CardContent className="p-5 space-y-3">
+              <h3 className="font-bold text-lg">{track.label}</h3>
+              {track.levels.map((level) => {
+                const levelExams = exams.filter((e: any) => e.level === level);
+                return (
+                  <div key={level} className="space-y-1.5">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{CAREER_LEVEL_LABELS[level]}</p>
+                    {levelExams.length === 0 ? (
+                      <p className="text-xs text-muted-foreground/60 pl-1">Sem exame configurado</p>
+                    ) : (
+                      levelExams.map((e: any) => (
+                        <Button key={e.id} variant="outline" size="sm" className="w-full justify-start" onClick={() => setSelectedExam(e)}>
+                          <Star className="w-3.5 h-3.5 mr-2" />{e.title}
+                        </Button>
+                      ))
+                    )}
+                  </div>
+                );
+              })}
+            </CardContent>
+          </Card>
+        ))}
       </div>
 
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
@@ -863,11 +1042,9 @@ function CareerTab({ isAdmin }: { isAdmin: boolean }) {
               <Select value={examForm.level} onValueChange={v => setExamForm(p => ({ ...p, level: v }))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="extra">Extra</SelectItem>
-                  <SelectItem value="condutor">Condutor</SelectItem>
-                  <SelectItem value="senior">Sénior</SelectItem>
-                  <SelectItem value="team_leader">Team Leader</SelectItem>
-                  <SelectItem value="supervisor">Supervisor</SelectItem>
+                  {ALL_CAREER_LEVELS.map((l) => (
+                    <SelectItem key={l} value={l}>{CAREER_LEVEL_LABELS[l]}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>

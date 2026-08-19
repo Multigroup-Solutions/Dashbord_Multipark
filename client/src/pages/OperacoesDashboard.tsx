@@ -135,12 +135,15 @@ export default function OperacoesDashboard() {
     projectId: filters.projectId,
   });
 
-  const { data: opStats, isLoading: opLoading } = trpc.operational.dashboard.useQuery();
-
-  const { data: violationStats, isLoading: violationsLoading } =
-    trpc.operational.speedMonitoring.violations.stats.useQuery();
-
-  const { data: vehicles } = trpc.operational.vehicles.list.useQuery();
+  // GPS de ontem (Zello): km, velocidades e condutores — substitui os antigos
+  // KPIs mortos (viaturas/violações manuais, tabelas sempre vazias)
+  const yesterdayStr = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().slice(0, 10);
+  }, []);
+  const { data: gpsYesterday = [], isLoading: gpsLoading } =
+    trpc.operational.driverHistory.byDate.useQuery({ date: yesterdayStr });
 
   const { data: syncLogs, isLoading: syncLoading } = trpc.multipark.syncLogs.useQuery();
 
@@ -164,22 +167,22 @@ export default function OperacoesDashboard() {
     }));
   }, [bookingStats]);
 
-  // Donut: fleet status
-  const fleetDonutData = useMemo(() => {
-    if (!vehicles?.length) return [];
-    const counts: Record<string, number> = { active: 0, maintenance: 0, inactive: 0 };
-    for (const v of vehicles) {
-      const status = (v as any).status || "active";
-      counts[status] = (counts[status] || 0) + 1;
-    }
-    return Object.entries(counts)
-      .filter(([, count]) => count > 0)
-      .map(([status, count]) => ({
-        name: FLEET_STATUS_LABELS[status] || status,
-        value: count,
-        color: FLEET_STATUS_COLORS[status] || "#94a3b8",
-      }));
-  }, [vehicles]);
+  // GPS ontem: agregados + km por condutor
+  const gpsAgg = useMemo(() => {
+    const rows = (gpsYesterday as any[]) ?? [];
+    const km = rows.reduce((s, r) => s + parseFloat(String(r.totalKm ?? 0)), 0);
+    const vmax = rows.reduce((m, r) => Math.max(m, parseFloat(String(r.maxSpeed ?? 0))), 0);
+    const drivers = rows.filter((r) => parseFloat(String(r.totalKm ?? 0)) > 0.5).length;
+    const perDriver = rows
+      .map((r) => ({
+        name: r.employeeName || r.displayName || r.zelloUsername,
+        km: Math.round(parseFloat(String(r.totalKm ?? 0)) * 10) / 10,
+      }))
+      .filter((r) => r.km > 0.5)
+      .sort((a, b) => b.km - a.km)
+      .slice(0, 12);
+    return { km, vmax, drivers, perDriver };
+  }, [gpsYesterday]);
 
   // Sync logs (last 8)
   const recentSyncLogs = useMemo(() => {
@@ -242,16 +245,16 @@ export default function OperacoesDashboard() {
         />
         <KPICard
           icon={Car}
-          label="Viaturas ativas"
-          value={fmtNum(opStats?.activeVehicles ?? 0)}
-          loading={opLoading}
+          label={`Km ontem (GPS · ${gpsAgg.drivers} condutores)`}
+          value={`${fmtNum(Math.round(gpsAgg.km))} km`}
+          loading={gpsLoading}
           color="text-emerald-600"
         />
         <KPICard
           icon={Shield}
-          label="Violações velocidade"
-          value={fmtNum(violationStats?.total ?? 0)}
-          loading={violationsLoading}
+          label="Vel. máxima ontem (GPS)"
+          value={`${fmtNum(Math.round(gpsAgg.vmax))} km/h`}
+          loading={gpsLoading}
           color="text-amber-600"
         />
       </div>
@@ -338,43 +341,39 @@ export default function OperacoesDashboard() {
 
       {/* Bottom row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Donut: estado da frota */}
+        {/* Km por condutor — ontem (GPS Zello) */}
         <Card>
           <CardHeader>
             <CardTitle className="text-base flex items-center gap-2">
               <Car className="w-4 h-4" />
-              Estado da frota
+              Km por condutor — ontem (GPS)
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {!vehicles ? (
+            {gpsLoading ? (
               <div className="flex items-center justify-center h-[240px]">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               </div>
-            ) : fleetDonutData.length === 0 ? (
-              <p className="text-muted-foreground text-center py-12">Sem viaturas registadas.</p>
+            ) : gpsAgg.perDriver.length === 0 ? (
+              <p className="text-muted-foreground text-center py-12">Sem dados GPS de ontem.</p>
             ) : (
-              <ResponsiveContainer width="100%" height={240}>
-                <PieChart>
-                  <Pie
-                    data={fleetDonutData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={55}
-                    outerRadius={90}
-                    paddingAngle={3}
-                    dataKey="value"
-                    nameKey="name"
-                    label={({ name, value }) => `${name}: ${value}`}
-                  >
-                    {fleetDonutData.map((entry, i) => (
-                      <Cell key={i} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip formatter={(v: number) => fmtNum(v)} />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
+              <div className="space-y-1.5">
+                {gpsAgg.perDriver.map((d, i) => {
+                  const maxKm = gpsAgg.perDriver[0]?.km || 1;
+                  return (
+                    <div key={`${d.name}-${i}`} className="flex items-center gap-2">
+                      <span className="text-xs w-36 truncate text-muted-foreground">{d.name}</span>
+                      <div className="flex-1 h-4 bg-muted rounded-full overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-emerald-500"
+                          style={{ width: `${(d.km / maxKm) * 100}%` }}
+                        />
+                      </div>
+                      <span className="text-xs font-medium w-16 text-right">{d.km} km</span>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </CardContent>
         </Card>

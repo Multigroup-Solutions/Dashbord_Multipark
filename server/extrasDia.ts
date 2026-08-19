@@ -97,16 +97,26 @@ function utcToLocal(s: string | null, tz: string = OPERATION_TZ): string | null 
   return `${p.year}-${p.month}-${p.day} ${hh}:${p.minute}:${p.second}`;
 }
 
-const CITY_PATTERN = "%lisb%"; // fallback se a árvore de projeto não resolver
-const PARK_ID_PREFIX = "LISBON_%"; // backup: when city was not set on the row
+// Multi-cidade (2026-08-06, pedido Jorge): o Extras-Dia existia so para
+// Lisboa; agora o MESMO modulo serve Lisboa/Porto/Faro por parametro.
+export type ExtraCity = "lisbon" | "porto" | "faro";
+export const EXTRA_CITIES: Array<{ id: ExtraCity; label: string }> = [
+  { id: "lisbon", label: "Lisboa" },
+  { id: "porto", label: "Porto" },
+  { id: "faro", label: "Faro" },
+];
+const CITY_CONFIG: Record<ExtraCity, { re: RegExp; pattern: string; prefix: string }> = {
+  lisbon: { re: /lisb/i, pattern: "%lisb%", prefix: "LISBON_%" },
+  porto: { re: /porto/i, pattern: "%porto%", prefix: "PORTO_%" },
+  faro: { re: /faro/i, pattern: "%faro%", prefix: "FARO_%" },
+};
 
-// Resolve os projectIds da árvore de Lisboa (nó cidade "Lisboa" + descendentes),
-// EXATAMENTE como a folha operacional (getLocalBookingsByAction → addChildren).
-// Assim o Extras-Dia conta a mesma coisa que a folha; a única diferença passa a
-// ser a janela do dia (03:00→03:00 vs dia de calendário). Cacheado por processo.
-let _lisbonProjectIds: number[] | null = null;
-async function getLisbonProjectIds(): Promise<number[]> {
-  if (_lisbonProjectIds) return _lisbonProjectIds;
+// Resolve os projectIds da arvore da cidade (no cidade + descendentes),
+// EXATAMENTE como a folha operacional. Cacheado por processo e por cidade.
+const _cityProjectIds = new Map<ExtraCity, number[]>();
+async function getCityProjectIds(city: ExtraCity): Promise<number[]> {
+  const cached = _cityProjectIds.get(city);
+  if (cached) return cached;
   const db = await getDb();
   if (!db) return [];
   const all = await db
@@ -117,10 +127,12 @@ async function getLisbonProjectIds(): Promise<number[]> {
     ids.add(parentId);
     for (const p of all) if (p.parentId === parentId) addChildren(p.id);
   };
-  for (const p of all) if (p.level === "city" && /lisb/i.test(p.name)) addChildren(p.id);
-  _lisbonProjectIds = Array.from(ids);
-  return _lisbonProjectIds;
+  for (const p of all) if (p.level === "city" && CITY_CONFIG[city].re.test(p.name)) addChildren(p.id);
+  const out = Array.from(ids);
+  _cityProjectIds.set(city, out);
+  return out;
 }
+
 const LAVAGEM_RE = /lavag|wash/i;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -367,6 +379,7 @@ async function fetchBookingsInRange(
   field: "checkIn" | "checkOut",
   startInclusive: Date,
   endExclusive: Date,
+  city: ExtraCity = "lisbon",
 ): Promise<BookingRow[]> {
   const db = await getDb();
   if (!db) return [];
@@ -377,10 +390,11 @@ async function fetchBookingsInRange(
 
   // Mesmo critério de "Lisboa" que a folha operacional: árvore de projeto.
   // Fallback ao texto da cidade só se a árvore não resolver (defensivo).
-  const lisbonIds = await getLisbonProjectIds();
-  const lisbonCond = lisbonIds.length
-    ? inArray(multiparkBookings.projectId, lisbonIds)
-    : sql`(LOWER(${multiparkBookings.city}) LIKE ${CITY_PATTERN} OR ${multiparkBookings.parkId} LIKE ${PARK_ID_PREFIX})`;
+  const cityIds = await getCityProjectIds(city);
+  const cfg = CITY_CONFIG[city];
+  const lisbonCond = cityIds.length
+    ? inArray(multiparkBookings.projectId, cityIds)
+    : sql`(LOWER(${multiparkBookings.city}) LIKE ${cfg.pattern} OR ${multiparkBookings.parkId} LIKE ${cfg.prefix})`;
 
   const rows = await db
     .select({
@@ -526,13 +540,15 @@ async function getEmployeeDailyCost(employeeId: number | null): Promise<number> 
   return monthly / TL_WORKING_DAYS_PER_MONTH;
 }
 
-export async function listAssignments(date: string): Promise<Assignment[]> {
+export async function listAssignments(date: string, city?: ExtraCity): Promise<Assignment[]> {
   const db = await getDb();
   if (!db) return [];
   const rows = await db
     .select()
     .from(extrasDiaAssignments)
-    .where(eq(extrasDiaAssignments.assignmentDate, date))
+    .where(city
+      ? and(eq(extrasDiaAssignments.assignmentDate, date), eq(extrasDiaAssignments.city, city))
+      : eq(extrasDiaAssignments.assignmentDate, date))
     .orderBy(asc(extrasDiaAssignments.startHour));
 
   // Pre-fetch dos empregados associados (mapeamento Multipark)
@@ -571,6 +587,7 @@ export async function listAssignments(date: string): Promise<Assignment[]> {
 }
 
 export interface UpsertAssignmentInput {
+  city?: ExtraCity;
   id?: number;
   assignmentDate: string;
   employeeId?: number | null;
@@ -600,6 +617,7 @@ export async function upsertAssignment(input: UpsertAssignmentInput): Promise<As
         and(
           eq(extrasDiaAssignments.assignmentDate, input.assignmentDate),
           eq(extrasDiaAssignments.shift, input.shift),
+          eq(extrasDiaAssignments.city, input.city ?? "lisbon"),
           eq(extrasDiaAssignments.isTeamLeader, 1),
         ),
       );
@@ -612,6 +630,7 @@ export async function upsertAssignment(input: UpsertAssignmentInput): Promise<As
 
   const payload = {
     assignmentDate: input.assignmentDate,
+    city: input.city ?? "lisbon",
     employeeId: input.employeeId ?? null,
     personName: input.personName,
     level: isTL ? null : (input.level ?? "junior"),
@@ -736,6 +755,7 @@ export async function getBookingsInSlot(
   hour: number,
   slot: number,
   type: "checkin" | "checkout",
+  city: ExtraCity = "lisbon",
 ): Promise<BookingSummary[]> {
   const day = new Date(targetDate + "T00:00:00");
   const targetStartLocal = startOfDay(day);
@@ -745,7 +765,7 @@ export async function getBookingsInSlot(
   const dayEnd = addDays(dayStart, 1);
   const hourLocal = hour % 24;
   const field = type === "checkin" ? "checkIn" : "checkOut";
-  const rows = await fetchBookingsInRange(field, dayStart, dayEnd);
+  const rows = await fetchBookingsInRange(field, dayStart, dayEnd, city);
 
   const slotStart = slot * SLOT_MINUTES;
   const slotEnd = slotStart + SLOT_MINUTES;
@@ -856,10 +876,13 @@ function suggestLevel(position: string | null | undefined, extraLevel: number | 
   return POSITION_TO_LEVEL[(position ?? "").toLowerCase()] ?? "junior";
 }
 
-export async function listDriverCandidates(date?: string): Promise<DriverCandidate[]> {
+// Posições que podem ser TL sem permissão especial
+const TL_POSITIONS = new Set(["team_leader", "supervisor", "director"]);
+
+export async function listDriverCandidates(date?: string, opts?: { forTeamLeader?: boolean }): Promise<DriverCandidate[]> {
   const db = await getDb();
   if (!db) return [];
-  const rows = await db
+  let rows = await db
     .select({
       id: employees.id,
       fullName: employees.fullName,
@@ -867,10 +890,23 @@ export async function listDriverCandidates(date?: string): Promise<DriverCandida
       extraLevel: employees.extraLevel,
       isActive: employees.isActive,
       photoUrl: employees.photoUrl,
+      userId: employees.userId,
     })
     .from(employees)
     .where(eq(employees.isActive, 1))
     .orderBy(asc(employees.fullName));
+
+  // TL (pedido Jorge): só aparecem posições de chefia OU quem tiver a
+  // permissão explícita extras_dia.team_leader — os extras normais saem da
+  // lista (antes apareciam todos).
+  if (opts?.forTeamLeader) {
+    const { listUserIdsWithGrant } = await import("./db");
+    const granted = new Set(await listUserIdsWithGrant("extras_dia.team_leader"));
+    rows = rows.filter(r =>
+      TL_POSITIONS.has((r.position ?? "").toLowerCase()) ||
+      (r.userId != null && granted.has(r.userId)),
+    );
+  }
 
   // Disponibilidade declarada para o dia, se uma data foi pedida.
   let availMap: Map<number, import("./extrasAvailability").DayAvailability> | null = null;
@@ -905,7 +941,7 @@ function distinctParks(rows: BookingRow[]): string[] {
   return Array.from(set).sort();
 }
 
-export async function getExtrasDiaForecast(baseDateInput?: string): Promise<ExtrasDiaForecast> {
+export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCity = "lisbon"): Promise<ExtrasDiaForecast> {
   const baseDate = baseDateInput ? new Date(baseDateInput) : new Date();
   const baseStart = startOfDay(baseDate);
   const targetStart = addDays(baseStart, 1);
@@ -916,10 +952,10 @@ export async function getExtrasDiaForecast(baseDateInput?: string): Promise<Extr
   const targetEndPlus3h = new Date(targetStart.getTime() + FORECAST_HOURS * 60 * 60 * 1000);
 
   const [targetCheckins, baseCheckouts, targetCheckouts, nextCheckouts] = await Promise.all([
-    fetchBookingsInRange("checkIn", targetStart, targetEndPlus3h),
-    fetchBookingsInRange("checkOut", baseStart, targetStart),
-    fetchBookingsInRange("checkOut", targetStart, targetEndPlus3h),
-    fetchBookingsInRange("checkOut", nextStart, nextEnd),
+    fetchBookingsInRange("checkIn", targetStart, targetEndPlus3h, city),
+    fetchBookingsInRange("checkOut", baseStart, targetStart, city),
+    fetchBookingsInRange("checkOut", targetStart, targetEndPlus3h, city),
+    fetchBookingsInRange("checkOut", nextStart, nextEnd, city),
   ]);
 
   const hourly: HourlyRow[] = Array.from({ length: FORECAST_HOURS }, (_, h) => ({

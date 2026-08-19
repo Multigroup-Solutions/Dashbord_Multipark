@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -43,6 +43,61 @@ function buildTree(projects: Project[], parentId: number | null = null): (Projec
   return projects
     .filter(p => p.parentId === parentId)
     .map(p => ({ ...p, children: buildTree(projects, p.id) }));
+}
+
+// Raio de picagem do ponto (geofence): check-in/out fora do raio é permitido
+// mas fica marcado a vermelho. Herda pelo pai se o nó não tiver raio próprio.
+function GeofenceSection({ projectId }: { projectId: number }) {
+  const utils = trpc.useUtils();
+  const { data: fences = [] } = trpc.rh.timeRecords.geofences.useQuery();
+  const mine = fences.find((f: any) => f.projectId === projectId);
+  const [lat, setLat] = useState("");
+  const [lng, setLng] = useState("");
+  const [radius, setRadius] = useState("500");
+  useEffect(() => {
+    if (mine) { setLat(String(mine.lat)); setLng(String(mine.lng)); setRadius(String(mine.radiusM)); }
+    else { setLat(""); setLng(""); setRadius("500"); }
+  }, [projectId, mine?.lat, mine?.lng, mine?.radiusM]);
+  const saveMut = trpc.rh.timeRecords.setGeofence.useMutation({
+    onSuccess: () => { utils.rh.timeRecords.geofences.invalidate(); toast.success("Raio de picagem guardado"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const delMut = trpc.rh.timeRecords.deleteGeofence.useMutation({
+    onSuccess: () => { utils.rh.timeRecords.geofences.invalidate(); toast.success("Raio removido"); },
+  });
+  const useMyLocation = () => {
+    if (!navigator.geolocation) { toast.error("Sem GPS neste dispositivo"); return; }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => { setLat(pos.coords.latitude.toFixed(6)); setLng(pos.coords.longitude.toFixed(6)); },
+      () => toast.error("Sem acesso à localização"),
+      { enableHighAccuracy: true, timeout: 15000 },
+    );
+  };
+  return (
+    <div className="border-t pt-3 space-y-2">
+      <Label className="flex items-center gap-1.5">
+        <MapPin className="w-3.5 h-3.5" /> Raio de picagem do ponto
+        {mine && <Badge variant="outline" className="text-[10px]">configurado</Badge>}
+      </Label>
+      <p className="text-xs text-muted-foreground">Check-in/out fora deste raio fica marcado a vermelho (mas é permitido). Sem raio, herda o do nível acima.</p>
+      <div className="flex gap-2 items-end flex-wrap">
+        <div className="w-32"><Label className="text-xs">Latitude</Label><Input value={lat} onChange={(e) => setLat(e.target.value)} placeholder="38.7756" /></div>
+        <div className="w-32"><Label className="text-xs">Longitude</Label><Input value={lng} onChange={(e) => setLng(e.target.value)} placeholder="-9.1354" /></div>
+        <div className="w-24"><Label className="text-xs">Raio (m)</Label><Input type="number" value={radius} onChange={(e) => setRadius(e.target.value)} /></div>
+        <Button type="button" variant="outline" size="sm" onClick={useMyLocation}>📍 Usar a minha localização</Button>
+        <Button
+          type="button" size="sm"
+          disabled={!lat || !lng || saveMut.isPending}
+          onClick={() => saveMut.mutate({ projectId, lat: parseFloat(lat), lng: parseFloat(lng), radiusM: parseInt(radius) || 500 })}
+        >
+          Guardar raio
+        </Button>
+        {mine && (
+          <Button type="button" variant="ghost" size="sm" className="text-red-600" onClick={() => delMut.mutate({ projectId })}>Remover</Button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export default function ProjectsPage() {
@@ -455,6 +510,7 @@ export default function ProjectsPage() {
                 <Input type="number" step="0.01" min="0" max="100" value={form.partnerPercent} onChange={e => setForm(f => ({ ...f, partnerPercent: e.target.value }))} placeholder="Ex: 30" />
               </div>
             </div>
+            {editProject && <GeofenceSection projectId={editProject.id} />}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditProject(null)}>Cancelar</Button>

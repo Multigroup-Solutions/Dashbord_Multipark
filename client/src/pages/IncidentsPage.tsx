@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { openInMultipark } from "@/lib/multiparkLinks";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -15,7 +16,7 @@ import { useState, useMemo } from "react";
 import {
   AlertTriangle, Plus, Clock, User, Car, Trash2, Pencil,
   BarChart3, AlertCircle, CheckCircle2, ShieldAlert,
-  RefreshCw, Loader2, Bot, MapPin, Download,
+  RefreshCw, Loader2, Bot, MapPin, Download, ExternalLink,
 } from "lucide-react";
 import BookingSearchField from "@/components/BookingSearchField";
 
@@ -457,6 +458,15 @@ function IncidentDetailDialog({ id, user, employeeMap, onClose, onEdit }: {
             {inc.employeeId && <div><User className="w-3 h-3 inline mr-1" />Colaborador: <span className="font-medium text-foreground">{employeeMap.get(inc.employeeId) || `#${inc.employeeId}`}</span></div>}
             <div><Clock className="w-3 h-3 inline mr-1" />Criada: <span className="font-medium text-foreground">{fmtPTDateTime(inc.createdAt)}</span></div>
             {(inc as any).sourceEmailDate && <div>Email original: <span className="font-medium text-foreground">{fmtPTDateTime((inc as any).sourceEmailDate)}</span></div>}
+            {(inc as any).reservationLink && (
+              <button
+                type="button"
+                onClick={() => openInMultipark((inc as any).reservationLink)}
+                className="text-blue-600 hover:underline text-left"
+              >
+                <ExternalLink className="w-3 h-3 inline mr-1" />Ver na Multipark
+              </button>
+            )}
             {(inc as any).gpsLatitude && (inc as any).gpsLongitude && (
               <a href={`https://www.google.com/maps?q=${(inc as any).gpsLatitude},${(inc as any).gpsLongitude}`} target="_blank" rel="noopener" className="text-blue-500 hover:underline"><MapPin className="w-3 h-3 inline mr-1" />Ver no mapa</a>
             )}

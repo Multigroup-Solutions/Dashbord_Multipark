@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -53,6 +54,44 @@ const GRAN_LABEL: Record<Exclude<DateGran, "custom">, string> = {
   day: "Dia", week: "Semana", month: "Mês", year: "Ano",
 };
 
+/** Segunda-feira da semana que contém a data. */
+export function mondayOf(d: Date): string {
+  const a = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const dow = (a.getDay() + 6) % 7;
+  a.setDate(a.getDate() - dow);
+  return iso(a);
+}
+
+/**
+ * O MESMO filtro completo (Dia/Semana/Mês/Ano + ◀ ▶ + datas) para páginas que
+ * trabalham com UM dia-âncora (regra Jorge: "os filtros todos iguais aos do
+ * operacional"). Gere o período internamente e devolve o início do range —
+ * escolher "Mês" e andar com as setas salta mês a mês; a página usa o 1º dia.
+ */
+export function UniDateNav({
+  date, onChange, defaultGran = "day",
+}: {
+  date: string;
+  onChange: (date: string) => void;
+  defaultGran?: DateGran;
+}) {
+  const [gran, setGran] = useState<DateGran>(defaultGran);
+  const [end, setEnd] = useState<string>(() => rangeFor(defaultGran, date ? new Date(`${date}T00:00:00`) : new Date()).end);
+  return (
+    <DateRangeNav
+      start={date}
+      end={end || date}
+      gran={gran}
+      showAll={false}
+      onChange={(s, e, g) => {
+        setGran(g);
+        setEnd(e);
+        onChange(s || e);
+      }}
+    />
+  );
+}
+
 /**
  * Navegador de datas transversal (pedido do Jorge): escolhe a granularidade
  * (Dia/Semana/Mês/Ano) e as setas ◀ ▶ saltam pelo período; datas manuais
@@ -81,13 +120,15 @@ export default function DateRangeNav({
     onChange(r.start, r.end, g as DateGran);
   };
 
+  // Design system (pedido Jorge): o seletor de datas vive numa faixa AZUL
+  // (mpk-period do kit), maior e uniforme em toda a app.
   return (
-    <div className="flex items-center gap-1.5 flex-wrap">
-      <Button variant="outline" size="icon" className="h-9 w-8 shrink-0" disabled={!hasRange} onClick={() => step(-1)} title="Período anterior">
-        <ChevronLeft className="h-4 w-4" />
+    <div className="inline-flex items-center gap-1.5 flex-wrap bg-[#e1ecff] border border-[#c2d6ff] rounded-xl p-1.5">
+      <Button variant="outline" size="icon" className="h-10 w-9 shrink-0 bg-white border-[#c2d6ff] text-[#0046ad] hover:bg-[#f0f4ff]" disabled={!hasRange} onClick={() => step(-1)} title="Período anterior">
+        <ChevronLeft className="h-4.5 w-4.5" />
       </Button>
       <Select value={hasRange ? gran : "all"} onValueChange={pickGran}>
-        <SelectTrigger className="w-[110px] h-9"><SelectValue /></SelectTrigger>
+        <SelectTrigger className="w-[118px] !h-10 bg-white border-[#c2d6ff] text-[#0046ad] font-semibold"><SelectValue /></SelectTrigger>
         <SelectContent>
           {(Object.keys(GRAN_LABEL) as Array<keyof typeof GRAN_LABEL>).map((g) => (
             <SelectItem key={g} value={g}>{GRAN_LABEL[g]}</SelectItem>
@@ -96,16 +137,16 @@ export default function DateRangeNav({
           {showAll && <SelectItem value="all">Tudo</SelectItem>}
         </SelectContent>
       </Select>
-      <Button variant="outline" size="icon" className="h-9 w-8 shrink-0" disabled={!hasRange} onClick={() => step(1)} title="Período seguinte">
-        <ChevronRight className="h-4 w-4" />
+      <Button variant="outline" size="icon" className="h-10 w-9 shrink-0 bg-white border-[#c2d6ff] text-[#0046ad] hover:bg-[#f0f4ff]" disabled={!hasRange} onClick={() => step(1)} title="Período seguinte">
+        <ChevronRight className="h-4.5 w-4.5" />
       </Button>
       <Input
-        type="date" value={start} className="w-[140px] h-9"
+        type="date" value={start} className="w-[150px] !h-10 bg-white border-[#c2d6ff] text-[#0046ad] font-semibold text-[14px]"
         onChange={(e) => onChange(e.target.value, end, "custom")}
       />
-      <span className="text-muted-foreground text-xs">a</span>
+      <span className="text-[#0046ad] text-xs font-semibold">a</span>
       <Input
-        type="date" value={end} className="w-[140px] h-9"
+        type="date" value={end} className="w-[150px] !h-10 bg-white border-[#c2d6ff] text-[#0046ad] font-semibold text-[14px]"
         onChange={(e) => onChange(start, e.target.value, "custom")}
       />
     </div>

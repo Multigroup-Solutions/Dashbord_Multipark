@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { UniDateNav } from "@/components/DateRangeNav";
 import { fmtPTTime } from "@/lib/lisbonTime";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -52,13 +53,7 @@ export default function AvaliacaoOperacionalPage() {
         <div className="flex flex-wrap items-end gap-2">
           <div className="space-y-1">
             <Label htmlFor="date" className="text-xs">Dia</Label>
-            <Input
-              id="date"
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="w-44"
-            />
+            <UniDateNav date={date} onChange={setDate} />
           </div>
           {evaluation && evaluation.totals.people > 0 && (
             <Button

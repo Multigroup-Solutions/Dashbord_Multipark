@@ -654,6 +654,58 @@ export async function getAllEmployees(filters: { isActive?: boolean; position?: 
   return conditions.length > 0 ? q.where(and(...conditions)) : q;
 }
 
+/**
+ * Descobre o utilizador Zello que um funcionário usou num turno.
+ * Regra do Jorge: os "Extra NNN" do Zello vivem nos PDAs e CADA DIA o PDA anda
+ * com uma pessoa diferente — a fonte da verdade é o check-in do PDA desse dia,
+ * não uma ligação fixa na ficha. Fallback: employees.zelloUsername (telemóveis
+ * pessoais, ex. team leaders).
+ */
+export async function resolveZelloUsernameForShift(employeeId: number, start: Date, end: Date): Promise<string | null> {
+  const db = await getDb(); if (!db) return null;
+  const startS = toMysqlDateTime(start);
+  const endS = toMysqlDateTime(end);
+  const [rows] = await db.execute(sql`
+    SELECT COALESCE(p.zelloUsername, c.zelloUsername) AS zu
+    FROM pda_checkins c
+    LEFT JOIN pdas p ON p.id = c.pdaId
+    WHERE c.employeeId = ${employeeId}
+      AND c.checkinAt <= ${endS}
+      AND (c.checkoutAt IS NULL OR c.checkoutAt >= ${startS})
+      AND COALESCE(p.zelloUsername, c.zelloUsername) IS NOT NULL
+    ORDER BY c.checkinAt DESC LIMIT 1`) as any;
+  if (rows?.[0]?.zu) return String(rows[0].zu);
+  const emp = await getEmployeeById(employeeId);
+  return emp?.employee?.zelloUsername ?? null;
+}
+
+/**
+ * Resolução Zello→pessoa para o mapa ao vivo: primeiro os check-ins de PDA
+ * ATIVOS (dinâmico, muda todos os dias), depois as ligações fixas da ficha.
+ */
+export async function getZelloLiveMappings(): Promise<Array<{ zelloUsername: string; employeeId: number; fullName: string; source: "pda" | "fixed"; pdaName: string | null }>> {
+  const db = await getDb(); if (!db) return [];
+  const [fixed] = await db.execute(sql`
+    SELECT zelloUsername, id AS employeeId, fullName FROM employees
+    WHERE zelloUsername IS NOT NULL AND zelloUsername != ''`) as any;
+  const [pda] = await db.execute(sql`
+    SELECT COALESCE(p.zelloUsername, c.zelloUsername) AS zelloUsername,
+           e.id AS employeeId, e.fullName, p.name AS pdaName
+    FROM pda_checkins c
+    JOIN employees e ON e.id = c.employeeId
+    LEFT JOIN pdas p ON p.id = c.pdaId
+    WHERE c.checkinStatus = 'checked_in'
+      AND COALESCE(p.zelloUsername, c.zelloUsername) IS NOT NULL`) as any;
+  const out: Array<{ zelloUsername: string; employeeId: number; fullName: string; source: "pda" | "fixed"; pdaName: string | null }> = [];
+  for (const r of (fixed as any[]) ?? []) {
+    out.push({ zelloUsername: String(r.zelloUsername), employeeId: Number(r.employeeId), fullName: String(r.fullName), source: "fixed", pdaName: null });
+  }
+  for (const r of (pda as any[]) ?? []) {
+    out.push({ zelloUsername: String(r.zelloUsername), employeeId: Number(r.employeeId), fullName: String(r.fullName), source: "pda", pdaName: r.pdaName ? String(r.pdaName) : null });
+  }
+  return out;
+}
+
 export async function getEmployeeById(id: number) {
   const db = await getDb();
   if (!db) return undefined;
@@ -939,16 +991,16 @@ export async function checkExtraDocsCompliance(employeeId: number): Promise<{
   }
 
   // +21 dias → bloqueia
+  // SUSPENSO (Jorge 6 ago 2026: "até estar tudo operacional, retira o bloqueio
+  // dos documentos") — o AVISO mantém-se; o bloqueio de login não é aplicado.
+  // Para reativar: repor este bloco (git log) e limpar loginBlocked=0 antes.
   if (daysSinceStart >= 21) {
-    if (!emp.loginBlocked) {
+    if (emp.loginBlocked) {
       await db.update(employees)
-        .set({
-          loginBlocked: 1,
-          loginBlockedReason: `Documentos obrigatórios em falta há ${daysSinceStart} dias: ${missingDocs.join(", ")}`,
-        })
+        .set({ loginBlocked: 0, loginBlockedReason: null })
         .where(eq(employees.id, employeeId));
     }
-    return { blocked: true, warning: true, missingDocs, daysSinceStart };
+    return { blocked: false, warning: true, missingDocs, daysSinceStart };
   }
 
   // +14 dias → avisa (apenas se ainda não foi avisado)
@@ -1598,17 +1650,9 @@ export async function getCampaigns(filters: { platform?: string; projectId?: num
   const conditions: any[] = [];
   if (filters.platform) conditions.push(eq(campaigns.platform, filters.platform as any));
   if (filters.projectId) {
-    // Include campaigns from child projects
-    const allProjects = await db.select().from(projects);
-    const ids = new Set<number>();
-    const addChildren = (parentId: number) => {
-      ids.add(parentId);
-      for (const p of allProjects) {
-        if (p.parentId === parentId) addChildren(p.id);
-      }
-    };
-    addChildren(filters.projectId);
-    conditions.push(sql`${campaigns.projectId} IN (${sql.raw(Array.from(ids).join(",") || "0")})`);
+    // Include campaigns from child projects (e marcas globais via ID negativo)
+    const ids = await resolveProjectIds(filters.projectId);
+    conditions.push(sql`${campaigns.projectId} IN (${sql.raw(ids.join(",") || "0")})`);
   }
   if (filters.status) conditions.push(eq(campaigns.campaignStatus, filters.status as any));
   const q = db.select({ campaign: campaigns, project: projects }).from(campaigns)
@@ -1661,11 +1705,8 @@ export async function getAllDailyStats(filters: { from?: Date; to?: Date; projec
   if (filters.from) conditions.push(gte(campaignDailyStats.date, toMysqlDateTime(filters.from)));
   if (filters.to) conditions.push(lte(campaignDailyStats.date, toMysqlDateTime(filters.to)));
   if (filters.projectId) {
-    const allProjects = await db.select().from(projects);
-    const ids = new Set<number>();
-    const addChildren = (parentId: number) => { ids.add(parentId); for (const p of allProjects) { if (p.parentId === parentId) addChildren(p.id); } };
-    addChildren(filters.projectId);
-    conditions.push(sql`${campaigns.projectId} IN (${sql.raw(Array.from(ids).join(","))})`);
+    const ids = await resolveProjectIds(filters.projectId);
+    conditions.push(sql`${campaigns.projectId} IN (${sql.raw(ids.join(",") || "0")})`);
   }
   const q = db.select({ stat: campaignDailyStats, campaign: campaigns, project: projects })
     .from(campaignDailyStats)
@@ -1729,13 +1770,10 @@ export async function getMarketingDashboardStats(filters: { from?: Date; to?: Da
   const db = await getDb();
   if (!db) return { totalSpend: 0, totalReservations: 0, costPerReservation: 0, avgConversionValue: 0, totalMktExpenses: 0, campaignCount: 0 };
 
-  // Resolve project hierarchy if filtering
+  // Resolve project hierarchy if filtering (marcas globais incluídas)
   let projectIds: Set<number> | null = null;
   if (filters.projectId) {
-    const allProjects = await db.select().from(projects);
-    projectIds = new Set<number>();
-    const addChildren = (parentId: number) => { projectIds!.add(parentId); for (const p of allProjects) { if (p.parentId === parentId) addChildren(p.id); } };
-    addChildren(filters.projectId);
+    projectIds = new Set<number>(await resolveProjectIds(filters.projectId));
   }
 
   // Stats from campaign daily stats (join campaigns to filter by projectId)
@@ -1830,17 +1868,9 @@ export async function getBookingRevenueByProject(filters: { from?: string; to?: 
   if (filters.from) conditions.push(gte(multiparkBookings.bookingCreatedAt, filters.from));
   if (filters.to) conditions.push(lte(multiparkBookings.bookingCreatedAt, filters.to + " 23:59:59"));
   if (filters.projectId) {
-    // Also match children: get all project IDs under this parent
-    const allProjects = await db.select().from(projects);
-    const ids = new Set<number>();
-    const addChildren = (parentId: number) => {
-      ids.add(parentId);
-      for (const p of allProjects) {
-        if (p.parentId === parentId) addChildren(p.id);
-      }
-    };
-    addChildren(filters.projectId);
-    conditions.push(sql`${multiparkBookings.projectId} IN (${sql.raw(Array.from(ids).join(","))})`);
+    // Also match children (e marcas globais via ID negativo)
+    const ids = await resolveProjectIds(filters.projectId);
+    conditions.push(sql`${multiparkBookings.projectId} IN (${sql.raw(ids.join(",") || "0")})`);
   }
 
   const rows = await db.select({
@@ -2255,7 +2285,7 @@ export async function getTrainingVideos(categoryId?: number) {
   return db.select().from(trainingVideos).where(conditions.length ? and(...conditions) : undefined).orderBy(trainingVideos.sortOrder);
 }
 
-export async function createTrainingVideo(data: { categoryId: number; title: string; description?: string; videoUrl: string; thumbnailUrl?: string; durationMinutes?: number; sortOrder?: number; createdBy?: number }) {
+export async function createTrainingVideo(data: { categoryId: number; title: string; description?: string; videoUrl: string; thumbnailUrl?: string; durationMinutes?: number; sortOrder?: number; createdBy?: number; careerLevel?: string }) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   const [result] = await db.insert(trainingVideos).values(data).$returningId();
@@ -2277,7 +2307,7 @@ export async function getTrainingManuals(categoryId?: number, type?: string) {
   return db.select().from(trainingManuals).where(and(...conditions)).orderBy(desc(trainingManuals.createdAt));
 }
 
-export async function createTrainingManual(data: { categoryId?: number; title: string; content: string; type?: "manual" | "update" | "news" | "procedure"; createdBy?: number; fileUrl?: string; fileKey?: string; fileName?: string; fileMimeType?: string }) {
+export async function createTrainingManual(data: { categoryId?: number; title: string; content: string; type?: "manual" | "update" | "news" | "procedure" | "link"; createdBy?: number; fileUrl?: string; fileKey?: string; fileName?: string; fileMimeType?: string; careerLevel?: string }) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   const [result] = await db.insert(trainingManuals).values(data).$returningId();
@@ -2392,7 +2422,7 @@ export async function getCareerExams() {
   return db.select().from(careerExams).orderBy(careerExams.level);
 }
 
-export async function createCareerExam(data: { level: "extra" | "condutor" | "senior" | "team_leader" | "supervisor"; title: string; description?: string; passingScore: number; timeLimitMinutes?: number }) {
+export async function createCareerExam(data: { level: string; title: string; description?: string; passingScore: number; timeLimitMinutes?: number }) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   const [result] = await db.insert(careerExams).values(data).$returningId();
@@ -2746,7 +2776,9 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
   if (drivers.length === 0) return [];
   const driverIds = drivers.map(d => d.id);
 
-  // ── 1. Horas trabalhadas: soma de time_records.hoursWorked (decimal)
+  // ── 1. Horas trabalhadas: fixos = ponto (time_records); EXTRAS = horas da
+  // ESCALA do extras-dia (fix 2026-08-06 — extras não picam ponto e o Mov/h
+  // ficava vazio). Soma também o CUSTO semanal da escala (horas × tarifa).
   const hoursRows = await db
     .select({
       employeeId: timeRecords.employeeId,
@@ -2761,6 +2793,38 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
     ))
     .groupBy(timeRecords.employeeId);
   const hoursMap = new Map(hoursRows.map(r => [r.employeeId, Number(r.hours)]));
+
+  const weekStartDay = startStr.slice(0, 10);
+  const weekEndDay = endStr.slice(0, 10);
+  const scheduleRows = await db
+    .select({
+      employeeId: extrasDiaAssignments.employeeId,
+      level: extrasDiaAssignments.level,
+      hours: sql<string>`COALESCE(SUM(GREATEST(COALESCE(${extrasDiaAssignments.sentHomeHour}, ${extrasDiaAssignments.endHour}) - ${extrasDiaAssignments.startHour}, 0)), 0)`,
+    })
+    .from(extrasDiaAssignments)
+    .where(and(
+      isNotNull(extrasDiaAssignments.employeeId),
+      gte(extrasDiaAssignments.assignmentDate, weekStartDay),
+      lte(extrasDiaAssignments.assignmentDate, weekEndDay),
+    ))
+    .groupBy(extrasDiaAssignments.employeeId, extrasDiaAssignments.level);
+  const scheduleHoursMap = new Map<number, number>();
+  const scheduleCostMap = new Map<number, number>();
+  for (const r of scheduleRows) {
+    const empId = Number(r.employeeId);
+    const hrs = Number(r.hours ?? 0);
+    const rate = EXTRAS_DIA_RATES[String(r.level ?? "junior")] ?? 4.5;
+    scheduleHoursMap.set(empId, (scheduleHoursMap.get(empId) ?? 0) + hrs);
+    scheduleCostMap.set(empId, (scheduleCostMap.get(empId) ?? 0) + hrs * rate);
+  }
+
+  // reportedBy nos incidents é USER id — mapa user→employee para o Inc+
+  // (fix 2026-08-06: comparava userId com employeeId, numerações diferentes)
+  const userToEmployee = new Map<number, number>();
+  for (const d of await db.select({ id: employees.id, userId: employees.userId }).from(employees).where(isNotNull(employees.userId))) {
+    if (d.userId != null) userToEmployee.set(Number(d.userId), d.id);
+  }
 
   // ── 2. Movimentações REAIS: ações no multipark_booking_history, ligadas ao
   // colaborador via employees.multiparkAgentName. (A tabela vehicle_movements
@@ -2813,16 +2877,17 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
     })
     .from(incidents)
     .where(and(
-      gte(incidents.createdAt, startStr),
-      lte(incidents.createdAt, endStr),
+      sql`COALESCE(${incidents.sourceEmailDate}, ${incidents.createdAt}) >= ${startStr}`,
+      sql`COALESCE(${incidents.sourceEmailDate}, ${incidents.createdAt}) <= ${endStr}`,
     ));
   const posIncidents = new Map<number, number>();
   const negIncidents = new Map<number, { count: number; points: number }>();
   for (const i of incidentRows) {
-    const reporterId = Number(i.reportedBy ?? 0);
+    // reportedBy é USER id → resolve para employee (antes comparava numerações diferentes)
+    const reporterEmpId = userToEmployee.get(Number(i.reportedBy ?? 0)) ?? 0;
     const targetId = Number(i.employeeId ?? 0);
-    if (reporterId && driverIds.includes(reporterId)) {
-      posIncidents.set(reporterId, (posIncidents.get(reporterId) ?? 0) + 1);
+    if (reporterEmpId && driverIds.includes(reporterEmpId)) {
+      posIncidents.set(reporterEmpId, (posIncidents.get(reporterEmpId) ?? 0) + 1);
     }
     if (targetId && driverIds.includes(targetId)) {
       const sev = String(i.severity ?? "medium");
@@ -2868,7 +2933,12 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
   const results: any[] = [];
 
   for (const emp of drivers) {
-    const hoursWorked = Math.round((hoursMap.get(emp.id) ?? 0) * 100) / 100;
+    // Extras: horas da ESCALA (não picam ponto); fixos: ponto
+    const rawHours = emp.position === "extra"
+      ? (scheduleHoursMap.get(emp.id) ?? hoursMap.get(emp.id) ?? 0)
+      : (hoursMap.get(emp.id) ?? 0);
+    const hoursWorked = Math.round(rawHours * 100) / 100;
+    const weeklyCost = Math.round((scheduleCostMap.get(emp.id) ?? 0) * 100) / 100;
     const movementsCount = movMap.get(emp.id) ?? 0;
     const movementsPerHour = hoursWorked > 0
       ? Math.round((movementsCount / hoursWorked) * 100) / 100
@@ -2887,9 +2957,11 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
       employeeId: emp.id,
       weekNumber,
       yearNumber,
-      hoursWorked: Math.round(hoursWorked),
+      // Decimais (colunas convertidas para DECIMAL(8,2) a 2026-08-06)
+      hoursWorked: String(hoursWorked),
       movementsCount,
-      movementsPerHour: Math.round(movementsPerHour),
+      movementsPerHour: String(movementsPerHour),
+      weeklyCost: String(weeklyCost),
       speedAlerts: alertCount,
       incidentsPositive: positiveIncidentsCount,
       incidentsNegative: negStats.count,
@@ -3051,9 +3123,15 @@ export async function getInvoiceStats(month?: number, year?: number) {
 }
 
 // ─── BILLING / FATURAÇÃO ────────────────────────────────────────────────────
+// Resolve um centro de custos para o conjunto de projetos (ele + descendentes).
+// MARCA GLOBAL (pedido do Jorge 2026-08-04): um ID NEGATIVO significa "esta
+// marca em TODAS as cidades" — ex.: -52 (Airpark Lisboa) expande para todos
+// os nós level='brand' com o MESMO nome (Airpark Lisboa/Porto/Faro) e os seus
+// descendentes. Funciona porque as marcas têm nome igual entre cidades e
+// porque TODOS os endpoints filtram via esta função — nada mais muda.
 async function resolveProjectIds(projectId: number): Promise<number[]> {
   const db = await getDb();
-  if (!db) return [projectId];
+  if (!db) return [Math.abs(projectId)];
   const allProjects = await db.select().from(projects);
   const ids = new Set<number>();
   const addChildren = (pid: number) => {
@@ -3062,6 +3140,15 @@ async function resolveProjectIds(projectId: number): Promise<number[]> {
       if (p.parentId === pid) addChildren(p.id);
     }
   };
+  if (projectId < 0) {
+    const anchor = allProjects.find((p) => p.id === -projectId);
+    if (!anchor) return [];
+    const sameName = allProjects.filter(
+      (p) => p.level === anchor.level && p.name.trim().toLowerCase() === anchor.name.trim().toLowerCase(),
+    );
+    for (const b of sameName) addChildren(b.id);
+    return Array.from(ids);
+  }
   addChildren(projectId);
   return Array.from(ids);
 }
@@ -3326,16 +3413,21 @@ export async function getBillingData(filters: {
   let projectIds: number[] | undefined;
   if (filters.projectId) projectIds = await resolveProjectIds(filters.projectId);
 
-  // ─── 1. PRODUZIDO (reservas com checkout EFECTIVO no período) ────────────
-  // Filtra por status != 'CANCELLED'. Inclui BOOKED, CHECKING_IN,
-  // CHECKED_IN, CHECKED_OUT — todas as reservas vivas com checkout
-  // previsto no período. Bate com o número da Multipark. O cancelledAt
-  // não é fiável (o sync nem sempre o popula), por isso o filtro é
-  // pelo status que é a fonte de verdade.
+  // ─── 1. ENTREGUES + RECOLHIDOS (modelo do Jorge, 2026-08-04) ─────────────
+  // FONTE ÚNICA de receita = multipark_bookings.totalPrice (valor da reserva).
+  // ENTREGUES = carro JÁ SAIU no período (checkOut no período + status
+  //   CHECKED_OUT) — o valor "já cá está", é a receita realizada e a base
+  //   da margem. (No modelo antigo chamava-se "faturado".)
+  // RECOLHIDOS = carro ENTROU no período (checkIn no período + status de
+  //   recolha em diante) — angariação em curso.
+  // O cancelledAt não é fiável (4.6k canceladas sem ele) → filtros por status.
+  const DELIVERED_STATUSES = ["CHECKED_OUT"];
+  const COLLECTED_STATUSES = ["CHECKED_IN", "CHECKING_OUT", "PENDING_CHECKOUT", "CHECKED_OUT"];
+
   const deliveryConds: any[] = [
     gte(multiparkBookings.checkOut, fromStr),
     lte(multiparkBookings.checkOut, toStr),
-    sql`${multiparkBookings.status} != 'CANCELLED'`,
+    inArray(multiparkBookings.status, DELIVERED_STATUSES),
   ];
   if (projectIds) deliveryConds.push(inArray(multiparkBookings.projectId, projectIds));
 
@@ -3354,6 +3446,25 @@ export async function getBillingData(filters: {
     .where(and(...deliveryConds))
     .groupBy(multiparkBookings.projectId, projects.name);
 
+  const collectedConds: any[] = [
+    gte(multiparkBookings.checkIn, fromStr),
+    lte(multiparkBookings.checkIn, toStr),
+    inArray(multiparkBookings.status, COLLECTED_STATUSES),
+  ];
+  if (projectIds) collectedConds.push(inArray(multiparkBookings.projectId, projectIds));
+
+  const collectedRows = await db
+    .select({
+      projectId: multiparkBookings.projectId,
+      projectName: projects.name,
+      count: sql<number>`COUNT(*)`,
+      totalRevenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
+    })
+    .from(multiparkBookings)
+    .leftJoin(projects, eq(multiparkBookings.projectId, projects.id))
+    .where(and(...collectedConds))
+    .groupBy(multiparkBookings.projectId, projects.name);
+
   // Receita produzida por projeto (folha) no período — usada para calcular
   // a comissão dos parceiros operacionais (secção 7b).
   const revenueByProjectId = new Map<number, number>();
@@ -3361,26 +3472,9 @@ export async function getBillingData(filters: {
     if (r.projectId != null) revenueByProjectId.set(r.projectId, Number(r.totalRevenue ?? 0));
   }
 
-  // ─── 2. FATURADO (invoices emitidas no período) ──────────────────────────
-  const invConds: any[] = [
-    gte(invoices.issueDate, fromStr),
-    lte(invoices.issueDate, toStr),
-    sql`${invoices.status} != 'cancelled'`,
-  ];
-  if (projectIds) invConds.push(inArray(invoices.projectId, projectIds));
-
-  const invoicedRows = await db
-    .select({
-      projectId: invoices.projectId,
-      projectName: projects.name,
-      count: sql<number>`COUNT(*)`,
-      totalAmount: sql<number>`COALESCE(SUM(${invoices.totalAmount}), 0)`,
-      paidAmount: sql<number>`COALESCE(SUM(CASE WHEN ${invoices.status} = 'paid' THEN ${invoices.totalAmount} ELSE 0 END), 0)`,
-    })
-    .from(invoices)
-    .leftJoin(projects, eq(invoices.projectId, projects.id))
-    .where(and(...invConds))
-    .groupBy(invoices.projectId, projects.name);
+  // (O antigo "Faturado" — tabela invoices manual — saiu: a faturação real
+  //  vive no programa da Multipark e a tabela esteve sempre vazia. A receita
+  //  vem só das reservas.)
 
   // ─── 3. DESPESAS INSERIDAS (expenseDate no período) ──────────────────────
   // Contabiliza as despesas LANÇADAS no período (data da despesa),
@@ -3457,45 +3551,10 @@ export async function getBillingData(filters: {
     };
   });
 
-  // ─── 6. MARKETING (despesas marketing + spend de campanhas) ──────────────
-  const mktExpConds: any[] = [
-    gte(marketingExpenses.date, fromStr),
-    lte(marketingExpenses.date, toStr),
-  ];
-  if (projectIds) mktExpConds.push(inArray(marketingExpenses.projectId, projectIds));
-
-  const mktExpRows = await db
-    .select({
-      projectId: marketingExpenses.projectId,
-      projectName: projects.name,
-      category: marketingExpenses.mktCategory,
-      totalAmount: sql<number>`COALESCE(SUM(${marketingExpenses.amount}), 0)`,
-      count: sql<number>`COUNT(*)`,
-    })
-    .from(marketingExpenses)
-    .leftJoin(projects, eq(marketingExpenses.projectId, projects.id))
-    .where(and(...mktExpConds))
-    .groupBy(marketingExpenses.projectId, projects.name, marketingExpenses.mktCategory);
-
-  const mktAdsConds: any[] = [
-    gte(campaignDailyStats.date, fromStr),
-    lte(campaignDailyStats.date, toStr),
-  ];
-  if (projectIds) {
-    mktAdsConds.push(inArray(campaigns.projectId, projectIds));
-  }
-  const mktAdsRows = await db
-    .select({
-      projectId: campaigns.projectId,
-      projectName: projects.name,
-      totalSpend: sql<number>`COALESCE(SUM(${campaignDailyStats.spend}), 0)`,
-      conversions: sql<number>`COALESCE(SUM(${campaignDailyStats.conversions}), 0)`,
-    })
-    .from(campaignDailyStats)
-    .innerJoin(campaigns, eq(campaignDailyStats.campaignId, campaigns.id))
-    .leftJoin(projects, eq(campaigns.projectId, projects.id))
-    .where(and(...mktAdsConds))
-    .groupBy(campaigns.projectId, projects.name);
+  // (Marketing saiu da Faturação por decisão do Jorge 2026-08-04: as faturas
+  //  do Google/fornecedores entram pelas Despesas normais — contá-las aqui
+  //  outra vez seria dupla contagem. O detalhe de marketing vê-se no módulo
+  //  de Marketing.)
 
   // ─── 7a. PARCEIROS DE VENDA (comissões calculadas via campaign matching) ──
   // IMPORTANTE: NÃO fazemos INNER JOIN entre bookings e partnerships porque,
@@ -3781,11 +3840,13 @@ export async function getBillingData(filters: {
   }
   const forecastFrom = toMysqlDateTime(forecastFromDate);
   const forecastToStr = toMysqlDateTime(forecastToDate);
+  // BUG antigo: exigia checkOut IS NULL, mas o checkOut é a data PREVISTA
+  // (vem sempre preenchida da API) → a previsão dava sempre 0. E cancelledAt
+  // não é fiável → filtra pelo status.
   const forecastConds: any[] = [
     gte(multiparkBookings.checkIn, forecastFrom),
     lte(multiparkBookings.checkIn, forecastToStr),
-    isNull(multiparkBookings.checkOut),
-    isNull(multiparkBookings.cancelledAt),
+    notInArray(multiparkBookings.status, ["CANCELLED", ...COLLECTED_STATUSES]),
   ];
   if (projectIds) forecastConds.push(inArray(multiparkBookings.projectId, projectIds));
 
@@ -3803,11 +3864,8 @@ export async function getBillingData(filters: {
 
   // ─── 9. TIMESERIES (granularity: day/week/month/year) ────────────────────
   const checkOutBucket = bucketSqlExpr(multiparkBookings.checkOut, granularity);
-  const issueBucket = bucketSqlExpr(invoices.issueDate, granularity);
   const expenseDateBucket = bucketSqlExpr(expenses.expenseDate, granularity);
   const checkInBucket = bucketSqlExpr(multiparkBookings.checkIn, granularity);
-  const mktDateBucket = bucketSqlExpr(marketingExpenses.date, granularity);
-  const adsDateBucket = bucketSqlExpr(campaignDailyStats.date, granularity);
 
   const tsProduced = await db
     .select({ bucket: checkOutBucket, total: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`, count: sql<number>`COUNT(*)` })
@@ -3815,11 +3873,11 @@ export async function getBillingData(filters: {
     .where(and(...deliveryConds))
     .groupBy(checkOutBucket);
 
-  const tsInvoiced = await db
-    .select({ bucket: issueBucket, total: sql<number>`COALESCE(SUM(${invoices.totalAmount}), 0)` })
-    .from(invoices)
-    .where(and(...invConds))
-    .groupBy(issueBucket);
+  const tsCollected = await db
+    .select({ bucket: checkInBucket, total: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`, count: sql<number>`COUNT(*)` })
+    .from(multiparkBookings)
+    .where(and(...collectedConds))
+    .groupBy(checkInBucket);
 
   const tsExpensesPaid = await db
     .select({ bucket: expenseDateBucket, total: sql<number>`COALESCE(SUM(${expenses.amount}), 0)` })
@@ -3833,25 +3891,19 @@ export async function getBillingData(filters: {
     .where(and(...forecastConds))
     .groupBy(checkInBucket);
 
-  const tsMktExpenses = await db
-    .select({ bucket: mktDateBucket, total: sql<number>`COALESCE(SUM(${marketingExpenses.amount}), 0)` })
-    .from(marketingExpenses)
-    .where(and(...mktExpConds))
-    .groupBy(mktDateBucket);
-
-  const tsMktAds = await db
-    .select({ bucket: adsDateBucket, total: sql<number>`COALESCE(SUM(${campaignDailyStats.spend}), 0)` })
-    .from(campaignDailyStats)
-    .innerJoin(campaigns, eq(campaignDailyStats.campaignId, campaigns.id))
-    .where(and(...mktAdsConds))
-    .groupBy(adsDateBucket);
-
   // Totais de custos que não estão naturalmente distribuídos no tempo
   // (salários mensais, comissões de parceiros, equipa-dia). Distribuem-se
   // pelos buckets proporcionalmente ao produzido (ou em partes iguais se
   // não houver produção) para que o gráfico mostre TUDO como despesa e o
   // total bata certo com os KPIs.
-  const tsSalariesTotal = Array.from(salaryPerProject.values()).reduce((s, v) => s + v, 0);
+  // FIX 2026-08-04: os salários agora respeitam o filtro de projeto
+  // (antes somavam a empresa toda mesmo filtrando uma cidade). Sem filtro,
+  // inclui também quem não tem projeto atribuído.
+  const salariesUnallocated = salaryDetailRows
+    .filter((r) => r.ratedTo.length === 0)
+    .reduce((s, r) => s + r.cost, 0);
+  const tsSalariesTotal =
+    salariesByProject.reduce((s, r) => s + r.cost, 0) + (projectIds ? 0 : salariesUnallocated);
   const tsSalesTotal = salesCommissions.reduce((s, c) => s + c.commission, 0);
   const tsPartnersTotal = operationalPartnersTotal + tsSalesTotal;
   const tsExtrasTotal = extrasDiaSummary.reduce((s, r) => s + r.cost, 0);
@@ -3859,10 +3911,9 @@ export async function getBillingData(filters: {
   // Merge timeseries em um único array (chave = bucket)
   type TimeseriesPoint = {
     bucket: string;
-    produced: number;
-    invoiced: number;
+    produced: number;        // entregues (carro saiu — receita realizada)
+    collected: number;       // recolhidos (carro entrou)
     expenses: number;        // despesas inseridas no período
-    marketingCost: number;
     salaries: number;        // ordenados (rateados)
     partners: number;        // parceiros operacionais + de venda
     extrasCost: number;      // equipa do dia (extras-dia)
@@ -3873,7 +3924,7 @@ export async function getBillingData(filters: {
     expensesPaid: number;
   };
   function emptyPoint(bk: string): TimeseriesPoint {
-    return { bucket: bk, produced: 0, invoiced: 0, expenses: 0, marketingCost: 0, salaries: 0, partners: 0, extrasCost: 0, revenueForecast: 0, totalCost: 0, margin: 0, expensesPaid: 0 };
+    return { bucket: bk, produced: 0, collected: 0, expenses: 0, salaries: 0, partners: 0, extrasCost: 0, revenueForecast: 0, totalCost: 0, margin: 0, expensesPaid: 0 };
   }
   const tsMap = new Map<string, TimeseriesPoint>();
   function bump(arr: any[], key: keyof Omit<TimeseriesPoint, "bucket">) {
@@ -3886,11 +3937,9 @@ export async function getBillingData(filters: {
     }
   }
   bump(tsProduced, "produced");
-  bump(tsInvoiced, "invoiced");
+  bump(tsCollected, "collected");
   bump(tsExpensesPaid, "expenses");
   bump(tsForecast, "revenueForecast");
-  bump(tsMktExpenses, "marketingCost");
-  bump(tsMktAds, "marketingCost");
 
   // Distribui os custos não-temporais pelos buckets do produzido.
   const producedBuckets = tsProduced
@@ -3918,7 +3967,7 @@ export async function getBillingData(filters: {
 
   // Custo total e margem por bucket (back-compat: expensesPaid = expenses)
   for (const p of tsMap.values()) {
-    p.totalCost = p.expenses + p.marketingCost + p.salaries + p.partners + p.extrasCost;
+    p.totalCost = p.expenses + p.salaries + p.partners + p.extrasCost;
     p.margin = p.produced - p.totalCost;
     p.expensesPaid = p.expenses;
   }
@@ -3926,14 +3975,18 @@ export async function getBillingData(filters: {
   const timeseries = Array.from(tsMap.values()).sort((a, b) => a.bucket.localeCompare(b.bucket));
 
   // ─── 10. SUMMARY ─────────────────────────────────────────────────────────
+  // IVA e TSU alinhados com a página Anual: receita e despesas gravadas
+  // COM IVA (23%); a margem verdadeira é calculada sobre valores líquidos.
+  const VAT_RATE = 0.23;
+  const TSU_EMPLOYER = 0.2375;
+
   const produced = deliveryRows.reduce((s, r) => s + Number(r.totalRevenue ?? 0), 0);
-  const invoiced = invoicedRows.reduce((s, r) => s + Number(r.totalAmount ?? 0), 0);
+  const producedCount = deliveryRows.reduce((s, r) => s + Number(r.count ?? 0), 0);
+  const collected = collectedRows.reduce((s, r) => s + Number(r.totalRevenue ?? 0), 0);
+  const collectedCount = collectedRows.reduce((s, r) => s + Number(r.count ?? 0), 0);
   const expensesPaidTotal = expPaidRows.reduce((s, r) => s + Number(r.totalAmount ?? 0), 0);
   const expensesPendingTotal = expPendRows.reduce((s, r) => s + Number(r.totalAmount ?? 0), 0);
   const extrasDiaCost = extrasDiaSummary.reduce((s, r) => s + r.cost, 0);
-  const mktExpensesTotal = mktExpRows.reduce((s, r) => s + Number(r.totalAmount ?? 0), 0);
-  const mktAdsSpend = mktAdsRows.reduce((s, r) => s + Number(r.totalSpend ?? 0), 0);
-  const marketingCost = mktExpensesTotal + mktAdsSpend;
   // Parceiros operacionais: comissão calculada sobre as reservas dos
   // projetos que operam (secção 7b). É um custo "sempre devido".
   const operationalPartnersPaid = operationalPartnersTotal;
@@ -3941,28 +3994,46 @@ export async function getBillingData(filters: {
   // Comissões a parceiros de venda — calculadas a partir das reservas.
   // Custo "sempre devido" assim que o checkout aconteceu.
   const salesCommissionsTotal = salesCommissions.reduce((s, r) => s + r.commission, 0);
-  const totalSalaries = Array.from(salaryPerProject.values()).reduce((s, v) => s + v, 0);
+  // Salários FILTRADOS pelo projeto (fix 2026-08-04) + TSU entidade patronal
+  const totalSalaries = tsSalariesTotal;
+  const employerTax = totalSalaries * TSU_EMPLOYER;
 
-  const totalCostsPaid = expensesPaidTotal + extrasDiaCost + marketingCost + operationalPartnersPaid + salesCommissionsTotal + totalSalaries;
+  // Líquidos de IVA (reservas e despesas incluem IVA; salários/TSU/extras/comissões não têm)
+  const producedNoVat = produced / (1 + VAT_RATE);
+  const collectedNoVat = collected / (1 + VAT_RATE);
+  const expensesPaidNoVat = expensesPaidTotal / (1 + VAT_RATE);
+
+  const totalCostsPaid = expensesPaidTotal + extrasDiaCost + operationalPartnersPaid + salesCommissionsTotal + totalSalaries + employerTax;
   const totalCostsAll = totalCostsPaid + expensesPendingTotal + operationalPartnersPending;
+  // Custos líquidos: despesas sem IVA, resto tal-qual
+  const totalCostsNoVat = expensesPaidNoVat + extrasDiaCost + operationalPartnersPaid + salesCommissionsTotal + totalSalaries + employerTax;
 
   const summary = {
-    produced, invoiced,
+    produced, producedCount,
+    collected, collectedCount,
+    producedNoVat, collectedNoVat,
     expensesPaid: expensesPaidTotal,
+    expensesPaidNoVat,
     expensesPending: expensesPendingTotal,
     extrasDiaCost,
-    marketingCost,
     salariesCost: totalSalaries,
+    employerTax,
     salesCommissions: salesCommissionsTotal,
     // back-compat
+    invoiced: 0,
+    marketingCost: 0,
     partnerCommissionsPaid: operationalPartnersPaid,
     partnerCommissionsPending: operationalPartnersPending,
     operationalPartnersPaid,
     operationalPartnersPending,
     totalCostsPaid,
     totalCostsAll,
+    totalCostsNoVat,
     marginRealized: produced - totalCostsPaid,
     marginAll: produced - totalCostsAll,
+    // Margem verdadeira: receita entregue s/ IVA − custos (despesas s/ IVA)
+    marginNet: producedNoVat - totalCostsNoVat,
+    vatRate: VAT_RATE,
     periodDays,
   };
 
@@ -3973,13 +4044,11 @@ export async function getBillingData(filters: {
     range: { from: filters.from, to: filters.to },
     // Mantém os blocos antigos para back-compat / drilldown
     deliveries: deliveryRows,
+    collected: collectedRows,
     expensesPaid: expPaidRows,
     expensesPending: expPendRows,
     forecast: forecastRows,
-    // Novos blocos para drilldown
-    invoices: invoicedRows,
     extrasDia: extrasDiaSummary,
-    marketing: { expenses: mktExpRows, ads: mktAdsRows },
     partnerCommissions: [], // back-compat (deixou de vir de partnership_invoices)
     salesCommissions, // comissões parceiros de venda por projeto
     operationalPartners, // parceiros operacionais: comissão s/ reservas dos projetos operados
@@ -5391,10 +5460,716 @@ export async function getAnnualBreakdown(year: number, projectId?: number) {
       employerTax,
       totalCosts: Math.round(totalCosts * 100) / 100,
       profit,
+      fromHistory: false,
     });
   }
 
+  // ─── 9. Fusão com o histórico importado (anos sem dados na app) ──────────
+  // Se um mês não tem NADA real (nem reservas, nem despesas, nem payroll)
+  // e existe registo importado do Excel, usa esse. Só sem filtro de projeto
+  // (o histórico é global). Permite ver 2016→hoje na mesma página.
+  if (!projectIds) {
+    try {
+      const history = await getFinancialHistory(year);
+      const histByMonth = new Map(history.map((h) => [h.month, h]));
+      for (const mo of months) {
+        const h = histByMonth.get(mo.month);
+        if (!h) continue;
+        const hasReal = mo.revenueGrossWithVat > 0 || mo.expensesWithVat > 0 || mo.salaries > 0;
+        if (hasReal) continue;
+        const revenueWithVat = h.revenueWithVat;
+        const expensesWithVat = h.expensesWithVat;
+        const salaries = h.salaries;
+        const vatRevenue = Math.round(revenueWithVat * 0.23 / 1.23 * 100) / 100;
+        const vatExpenses = Math.round(expensesWithVat * 0.23 / 1.23 * 100) / 100;
+        const revenueNoVat = Math.round((revenueWithVat - vatRevenue) * 100) / 100;
+        const expensesNoVat = Math.round((expensesWithVat - vatExpenses) * 100) / 100;
+        const employerTax = Math.round(salaries * 0.2375 * 100) / 100;
+        const totalCosts = Math.round((expensesNoVat + salaries + employerTax) * 100) / 100;
+        Object.assign(mo, {
+          revenueGrossWithVat: revenueWithVat,
+          revenueWithVat,
+          revenueNoVat,
+          vatRevenue,
+          expensesWithVat,
+          expensesNoVat,
+          vatExpenses,
+          vatToPay: Math.round((vatRevenue - vatExpenses) * 100) / 100,
+          salaries,
+          employerTax,
+          totalCosts,
+          profit: Math.round((revenueNoVat - totalCosts) * 100) / 100,
+          fromHistory: true,
+        });
+      }
+    } catch (err) {
+      console.warn("[annual] fusão histórico falhou:", err);
+    }
+  }
+
   return months;
+}
+
+// ─── HISTÓRICO FINANCEIRO MENSAL (importado de Excel/CSV, 2016→) ─────────────
+// Anos anteriores à app não têm reservas na BD; o Jorge importa os totais
+// mensais (receita c/ IVA, despesas c/ IVA, ordenados) e o breakdown Anual
+// usa estes valores quando não há dados reais no mês. Tabela criada on-demand.
+let financialHistoryEnsured = false;
+async function ensureFinancialHistoryTable() {
+  if (financialHistoryEnsured) return;
+  const db = await getDb();
+  if (!db) return;
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS \`financial_history_monthly\` (
+    \`year\` INT NOT NULL,
+    \`month\` INT NOT NULL,
+    \`revenueWithVat\` DECIMAL(14,2) NOT NULL DEFAULT 0,
+    \`expensesWithVat\` DECIMAL(14,2) NOT NULL DEFAULT 0,
+    \`salaries\` DECIMAL(14,2) NOT NULL DEFAULT 0,
+    \`notes\` VARCHAR(512) NULL,
+    \`updatedAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (\`year\`, \`month\`)
+  )`);
+  financialHistoryEnsured = true;
+}
+
+export async function importFinancialHistory(rows: Array<{
+  year: number; month: number; revenueWithVat: number; expensesWithVat?: number; salaries?: number; notes?: string | null;
+}>) {
+  const db = await getDb();
+  if (!db) return { imported: 0 };
+  await ensureFinancialHistoryTable();
+  let imported = 0;
+  for (const r of rows) {
+    if (!r.year || r.year < 2000 || r.year > 2100 || !r.month || r.month < 1 || r.month > 12) continue;
+    await db.execute(sql`INSERT INTO \`financial_history_monthly\`
+      (\`year\`, \`month\`, \`revenueWithVat\`, \`expensesWithVat\`, \`salaries\`, \`notes\`)
+      VALUES (${r.year}, ${r.month}, ${r.revenueWithVat ?? 0}, ${r.expensesWithVat ?? 0}, ${r.salaries ?? 0}, ${r.notes ?? null})
+      ON DUPLICATE KEY UPDATE
+        \`revenueWithVat\` = VALUES(\`revenueWithVat\`),
+        \`expensesWithVat\` = VALUES(\`expensesWithVat\`),
+        \`salaries\` = VALUES(\`salaries\`),
+        \`notes\` = VALUES(\`notes\`)`);
+    imported++;
+  }
+  return { imported };
+}
+
+export async function getFinancialHistory(year?: number) {
+  const db = await getDb();
+  if (!db) return [];
+  await ensureFinancialHistoryTable();
+  const [rows] = await db.execute(
+    year != null
+      ? sql`SELECT * FROM \`financial_history_monthly\` WHERE \`year\` = ${year} ORDER BY \`year\`, \`month\``
+      : sql`SELECT * FROM \`financial_history_monthly\` ORDER BY \`year\`, \`month\``,
+  ) as any;
+  return (rows as any[]).map((r) => ({
+    year: Number(r.year),
+    month: Number(r.month),
+    revenueWithVat: Number(r.revenueWithVat ?? 0),
+    expensesWithVat: Number(r.expensesWithVat ?? 0),
+    salaries: Number(r.salaries ?? 0),
+    notes: r.notes ?? null,
+  }));
+}
+
+export async function deleteFinancialHistoryYear(year: number) {
+  const db = await getDb();
+  if (!db) return { deleted: 0 };
+  await ensureFinancialHistoryTable();
+  await db.execute(sql`DELETE FROM \`financial_history_monthly\` WHERE \`year\` = ${year}`);
+  return { deleted: 1 };
+}
+
+// ─── INFERÊNCIA DO CENTRO DE CUSTOS PELA MORADA (extras) ─────────────────────
+// Regra do Jorge: se não indicarem centro de custos ao criar um extra, o
+// sistema infere a CIDADE pela morada (Algarve→Faro, Grande Porto→Porto,
+// Grande Lisboa/Setúbal→Lisboa) e aloca ao nó-cidade da árvore de projetos.
+const CITY_ADDRESS_KEYWORDS: Record<string, string[]> = {
+  Faro: ["faro", "algarve", "albufeira", "portimao", "olhao", "loule", "quarteira", "vilamoura", "tavira", "lagos", "silves", "almancil", "sao bras", "vila real de santo antonio", "monchique", "aljezur", "castro marim", "alcoutim", "vila do bispo", "montenegro", "quelfes", "armacao de pera", "ferreiras", "guia", "paderne", "boliqueime", "estoi", "moncarapacho"],
+  Porto: ["porto", "vila nova de gaia", "gaia", "matosinhos", "maia", "gondomar", "valongo", "povoa de varzim", "vila do conde", "santo tirso", "trofa", "penafiel", "paredes", "ermesinde", "rio tinto", "espinho", "senhora da hora", "aguas santas", "sao mamede de infesta", "leca"],
+  Lisboa: ["lisboa", "amadora", "sintra", "cascais", "oeiras", "loures", "odivelas", "almada", "seixal", "barreiro", "montijo", "setubal", "alcochete", "moita", "sesimbra", "palmela", "mafra", "torres vedras", "vila franca de xira", "alverca", "sacavem", "queluz", "agualva", "cacem", "rio de mouro", "massama", "corroios", "feijo", "laranjeiro", "camarate", "povoa de santa iria", "odivelas", "carnaxide", "algés", "alges", "damaia", "benfica", "chelas", "marvila", "monte abraao", "monte abraão"],
+};
+
+function normAddress(s: string): string {
+  return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+}
+
+/** Devolve a cidade inferida pela morada ("Faro"/"Porto"/"Lisboa") ou null. */
+export function inferCityFromAddress(address?: string | null): string | null {
+  if (!address) return null;
+  const a = ` ${normAddress(address)} `;
+  // Faro e Porto primeiro (mais específicos); Lisboa por fim (apanha resto da AML)
+  for (const city of ["Faro", "Porto", "Lisboa"]) {
+    for (const kw of CITY_ADDRESS_KEYWORDS[city]) {
+      if (a.includes(` ${kw} `) || a.includes(` ${kw},`) || a.includes(`,${kw} `) || a.includes(` ${kw}\n`) || a.includes(`-${kw} `) || a.includes(` ${kw}-`)) return city;
+    }
+  }
+  return null;
+}
+
+/** ID do nó-cidade na árvore de projetos para a morada dada, ou null. */
+export async function inferCityProjectIdFromAddress(address?: string | null): Promise<number | null> {
+  const city = inferCityFromAddress(address);
+  if (!city) return null;
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select({ id: projects.id }).from(projects)
+    .where(and(eq(projects.level, "city"), eq(projects.name, city))).limit(1);
+  return rows[0]?.id ?? null;
+}
+
+/** Auto-checkout de esquecimentos (regra do Jorge): quem tem check-in aberto há
+ *  mais de 16h leva check-out automático 12h depois da entrada (turno máx.),
+ *  sem horas extraordinárias, marcado [SUSPEITO] a vermelho para revisão.
+ *  Corre no cron daily-ops. */
+export async function autoCloseStaleCheckIns(): Promise<{ closed: number }> {
+  const db = await getDb();
+  if (!db) return { closed: 0 };
+  // Último registo de cada colaborador; se for check_in com >16h, fecha.
+  const [rows] = await db.execute(sql`
+    SELECT t.id, t.employeeId, t.recordedAt
+    FROM time_records t
+    JOIN (
+      SELECT employeeId, MAX(recordedAt) AS lastAt
+      FROM time_records GROUP BY employeeId
+    ) last ON last.employeeId = t.employeeId AND last.lastAt = t.recordedAt
+    WHERE t.type = 'check_in' AND t.recordedAt < DATE_SUB(NOW(), INTERVAL 16 HOUR)
+  `) as any;
+  let closed = 0;
+  for (const r of rows as any[]) {
+    const outAt = new Date(new Date(r.recordedAt).getTime() + 12 * 3600000);
+    await db.insert(timeRecords).values({
+      employeeId: Number(r.employeeId),
+      type: "check_out",
+      recordedAt: outAt.toISOString().slice(0, 19).replace("T", " "),
+      hoursWorked: "12.00",
+      notes: "[SUSPEITO] check-out automático — entrada aberta há mais de 16h, cortado a 12h",
+    } as any);
+    closed++;
+  }
+  return { closed };
+}
+
+// ─── PASSAGEM DE TURNO (formulário dos team leaders, 2026-08-06) ─────────────
+// Checklist de fim de turno: carros p/ coberto, caixas, bolsas, rolos MB,
+// canetas, bateria, PDAs, fardas + notas. 1 registo por (dia, turno, cidade).
+let shiftHandoverEnsured = false;
+async function ensureShiftHandoverTable() {
+  if (shiftHandoverEnsured) return;
+  const db = await getDb();
+  if (!db) return;
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS \`shift_handovers\` (
+    \`id\` INT NOT NULL AUTO_INCREMENT,
+    \`handoverDate\` VARCHAR(10) NOT NULL,
+    \`shift\` VARCHAR(10) NOT NULL,
+    \`city\` VARCHAR(16) NOT NULL DEFAULT 'lisbon',
+    \`carsForCovered\` INT NULL,
+    \`chargedUntilDate\` VARCHAR(10) NULL,
+    \`cashClosedInSafe\` TINYINT NULL,
+    \`checkoutCashDone\` TINYINT NULL,
+    \`frontPouchValue\` DECIMAL(10,2) NULL,
+    \`terminalPouchValue\` DECIMAL(10,2) NULL,
+    \`ticketsExpensesPaid\` DECIMAL(10,2) NULL,
+    \`mbRolls\` INT NULL,
+    \`mbRollsInPouch\` INT NULL,
+    \`pensInPouch\` INT NULL,
+    \`mbBattery\` INT NULL,
+    \`pdasCharged\` TINYINT NULL,
+    \`uniformsCount\` INT NULL,
+    \`notes\` TEXT NULL,
+    \`filledById\` INT NULL,
+    \`filledByName\` VARCHAR(255) NULL,
+    \`createdAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    \`updatedAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (\`id\`),
+    UNIQUE INDEX \`shift_handover_unique\` (\`handoverDate\`, \`shift\`, \`city\`)
+  )`);
+  shiftHandoverEnsured = true;
+}
+
+export async function saveShiftHandover(data: Record<string, any>) {
+  const db = await getDb();
+  if (!db) throw new Error("BD indisponível");
+  await ensureShiftHandoverTable();
+  const esc = (v: any) => v == null ? "NULL" : typeof v === "number" ? String(v) : `'${String(v).replace(/'/g, "''").slice(0, 2000)}'`;
+  const cols: Array<[string, any]> = [
+    ["handoverDate", data.handoverDate], ["shift", data.shift], ["city", data.city ?? "lisbon"],
+    ["carsForCovered", data.carsForCovered], ["chargedUntilDate", data.chargedUntilDate],
+    ["cashClosedInSafe", data.cashClosedInSafe == null ? null : (data.cashClosedInSafe ? 1 : 0)],
+    ["checkoutCashDone", data.checkoutCashDone == null ? null : (data.checkoutCashDone ? 1 : 0)],
+    ["frontPouchValue", data.frontPouchValue], ["terminalPouchValue", data.terminalPouchValue],
+    ["ticketsExpensesPaid", data.ticketsExpensesPaid], ["mbRolls", data.mbRolls],
+    ["mbRollsInPouch", data.mbRollsInPouch], ["pensInPouch", data.pensInPouch],
+    ["mbBattery", data.mbBattery],
+    ["pdasCharged", data.pdasCharged == null ? null : (data.pdasCharged ? 1 : 0)],
+    ["uniformsCount", data.uniformsCount], ["notes", data.notes],
+    ["filledById", data.filledById], ["filledByName", data.filledByName],
+  ];
+  const updates = cols.filter(([c]) => !["handoverDate", "shift", "city"].includes(c))
+    .map(([c, v]) => `\`${c}\` = ${esc(v)}`).join(", ");
+  await db.execute(sql.raw(
+    `INSERT INTO \`shift_handovers\` (${cols.map(([c]) => `\`${c}\``).join(",")})
+     VALUES (${cols.map(([, v]) => esc(v)).join(",")})
+     ON DUPLICATE KEY UPDATE ${updates}`,
+  ));
+}
+
+export async function listShiftHandovers(opts: { from?: string; to?: string; city?: string } = {}) {
+  const db = await getDb();
+  if (!db) return [];
+  await ensureShiftHandoverTable();
+  const conds: string[] = [];
+  if (opts.from) conds.push(`handoverDate >= '${opts.from.slice(0, 10)}'`);
+  if (opts.to) conds.push(`handoverDate <= '${opts.to.slice(0, 10)}'`);
+  if (opts.city) conds.push(`city = '${opts.city.replace(/[^a-z]/g, "")}'`);
+  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+  const [rows] = await db.execute(sql.raw(
+    `SELECT * FROM \`shift_handovers\` ${where} ORDER BY handoverDate DESC, shift, city LIMIT 200`,
+  )) as any;
+  return rows as any[];
+}
+
+/** Dashboard do supervisor (por dia): condutores por turno, carros
+ *  recolhidos/entregues, TEMPOS pendente→entrega e atraso na recolha
+ *  (previsto vs real), e reclamações do dia. */
+export async function getSupervisorDayDashboard(date: string) {
+  const db = await getDb();
+  if (!db) return null;
+  const start = `${date} 00:00:00`;
+  const end = `${date} 23:59:59`;
+  const nextEnd = `${date} 23:59:59`;
+
+  // Tempos pendente→entrega (PENDING_CHECKOUT → CHECK_OUT, mesmo booking)
+  const [deliveryRows] = await db.execute(sql`
+    SELECT h1.bookingExternalId, TIMESTAMPDIFF(MINUTE, h1.t, h2.t) AS mins, h2.agentName
+    FROM (SELECT bookingExternalId, MIN(actionTime) t FROM multipark_booking_history
+          WHERE changeType='PENDING_CHECKOUT' AND actionTime >= ${start} AND actionTime <= ${end}
+          GROUP BY bookingExternalId) h1
+    JOIN (SELECT bookingExternalId, MIN(actionTime) t, MAX(agentName) agentName FROM multipark_booking_history
+          WHERE changeType='CHECK_OUT' AND actionTime >= ${start}
+          GROUP BY bookingExternalId) h2 USING (bookingExternalId)
+    WHERE h2.t >= h1.t AND TIMESTAMPDIFF(MINUTE, h1.t, h2.t) < 600`) as any;
+  const deliveryTimes = (deliveryRows as any[]).map((r) => ({ booking: r.bookingExternalId, mins: Number(r.mins), agent: r.agentName ?? null }));
+  deliveryTimes.sort((a, b) => b.mins - a.mins);
+  const dAvg = deliveryTimes.length ? Math.round(deliveryTimes.reduce((s, r) => s + r.mins, 0) / deliveryTimes.length) : 0;
+
+  // Atraso na recolha: checkIn PREVISTO da reserva vs CHECK_IN real
+  const [pickupRows] = await db.execute(sql`
+    SELECT h.bookingExternalId, TIMESTAMPDIFF(MINUTE, b.checkIn, h.t) AS mins
+    FROM (SELECT bookingExternalId, MIN(actionTime) t FROM multipark_booking_history
+          WHERE changeType='CHECK_IN' AND actionTime >= ${start} AND actionTime <= ${nextEnd}
+          GROUP BY bookingExternalId) h
+    JOIN multipark_bookings b ON b.externalId = h.bookingExternalId
+    WHERE b.checkIn IS NOT NULL AND ABS(TIMESTAMPDIFF(MINUTE, b.checkIn, h.t)) < 600`) as any;
+  const pickupDelays = (pickupRows as any[]).map((r) => Number(r.mins)).filter((m) => Number.isFinite(m));
+  const late = pickupDelays.filter((m) => m > 15).length;
+  const pAvg = pickupDelays.length ? Math.round(pickupDelays.reduce((s, m) => s + m, 0) / pickupDelays.length) : 0;
+
+  // Reclamações criadas no dia
+  const [[compl]] = await db.execute(sql`SELECT COUNT(*) n FROM complaints WHERE createdAt >= ${start} AND createdAt <= ${end}`) as any;
+
+  // Condutores por turno (escala extras-dia do dia + ações)
+  const dayActivity = await getDayActivity(date);
+  const assignments = await db.select({
+    personName: extrasDiaAssignments.personName,
+    shift: extrasDiaAssignments.shift,
+    city: extrasDiaAssignments.city,
+    employeeId: extrasDiaAssignments.employeeId,
+    startHour: extrasDiaAssignments.startHour,
+    endHour: extrasDiaAssignments.endHour,
+    isTeamLeader: extrasDiaAssignments.isTeamLeader,
+  }).from(extrasDiaAssignments).where(eq(extrasDiaAssignments.assignmentDate, date));
+
+  return {
+    date,
+    totals: dayActivity.totals,
+    people: dayActivity.people,
+    shifts: assignments,
+    delivery: {
+      count: deliveryTimes.length,
+      avgMins: dAvg,
+      maxMins: deliveryTimes[0]?.mins ?? 0,
+      over15: deliveryTimes.filter((r) => r.mins > 15).length,
+      over30: deliveryTimes.filter((r) => r.mins > 30).length,
+      worst: deliveryTimes.slice(0, 8),
+    },
+    pickup: {
+      count: pickupDelays.length,
+      avgDelayMins: pAvg,
+      over15: late,
+    },
+    complaintsToday: Number((compl as any)?.n ?? 0),
+  };
+}
+
+// ─── LIGAÇÃO AGENTE→PARCEIRO (agências que marcam pelo portal de agentes) ────
+// Alguns "agentes" Multipark são agências de viagens/parceiros, não
+// colaboradores. Este mapa liga o agentName ao partnership. Tabela on-demand.
+let agentPartnerEnsured = false;
+async function ensureAgentPartnerTable() {
+  if (agentPartnerEnsured) return;
+  const db = await getDb();
+  if (!db) return;
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS \`agent_partner_map\` (
+    \`agentName\` VARCHAR(256) NOT NULL,
+    \`partnershipId\` INT NOT NULL,
+    \`updatedAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (\`agentName\`)
+  )`);
+  agentPartnerEnsured = true;
+}
+
+export async function setAgentPartner(agentName: string, partnershipId: number | null) {
+  const db = await getDb();
+  if (!db) return;
+  await ensureAgentPartnerTable();
+  if (partnershipId == null) {
+    await db.execute(sql`DELETE FROM \`agent_partner_map\` WHERE \`agentName\` = ${agentName}`);
+  } else {
+    await db.execute(sql`INSERT INTO \`agent_partner_map\` (\`agentName\`, \`partnershipId\`) VALUES (${agentName}, ${partnershipId})
+      ON DUPLICATE KEY UPDATE \`partnershipId\` = VALUES(\`partnershipId\`)`);
+  }
+}
+
+export async function listAgentPartners(): Promise<Array<{ agentName: string; partnershipId: number; partnerName: string | null }>> {
+  const db = await getDb();
+  if (!db) return [];
+  await ensureAgentPartnerTable();
+  const [rows] = await db.execute(sql`
+    SELECT m.agentName, m.partnershipId, p.name AS partnerName
+    FROM \`agent_partner_map\` m LEFT JOIN partnerships p ON p.id = m.partnershipId`) as any;
+  return (rows as any[]).map((r) => ({ agentName: r.agentName, partnershipId: Number(r.partnershipId), partnerName: r.partnerName ?? null }));
+}
+
+// ─── PERMISSÕES POR UTILIZADOR (grant/deny além do role) ─────────────────────
+// Pedido Jorge 2026-08-06: "mais permissões ou menos permissões por utilizador".
+// Tabela on-demand; o catálogo vive em shared/permissions.ts.
+let userPermsEnsured = false;
+async function ensureUserPermissionsTable() {
+  if (userPermsEnsured) return;
+  const db = await getDb();
+  if (!db) return;
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS \`user_permissions\` (
+    \`userId\` INT NOT NULL,
+    \`permission\` VARCHAR(64) NOT NULL,
+    \`mode\` ENUM('grant','deny') NOT NULL,
+    \`grantedBy\` INT NULL,
+    \`updatedAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (\`userId\`, \`permission\`)
+  )`);
+  userPermsEnsured = true;
+}
+
+export async function setUserPermission(userId: number, permission: string, mode: "grant" | "deny" | null, grantedBy?: number) {
+  const db = await getDb();
+  if (!db) return;
+  await ensureUserPermissionsTable();
+  if (mode == null) {
+    await db.execute(sql`DELETE FROM \`user_permissions\` WHERE userId = ${userId} AND permission = ${permission}`);
+  } else {
+    await db.execute(sql`INSERT INTO \`user_permissions\` (userId, permission, mode, grantedBy)
+      VALUES (${userId}, ${permission}, ${mode}, ${grantedBy ?? null})
+      ON DUPLICATE KEY UPDATE mode = VALUES(mode), grantedBy = VALUES(grantedBy)`);
+  }
+}
+
+export async function getUserPermissionOverrides(userId: number): Promise<Record<string, "grant" | "deny">> {
+  const db = await getDb();
+  if (!db) return {};
+  await ensureUserPermissionsTable();
+  const [rows] = await db.execute(sql`SELECT permission, mode FROM \`user_permissions\` WHERE userId = ${userId}`) as any;
+  const out: Record<string, "grant" | "deny"> = {};
+  for (const r of (rows as any[]) ?? []) out[String(r.permission)] = r.mode === "deny" ? "deny" : "grant";
+  return out;
+}
+
+export async function listPermissionAssignments(): Promise<Array<{ userId: number; permission: string; mode: "grant" | "deny"; userName: string | null; userEmail: string | null }>> {
+  const db = await getDb();
+  if (!db) return [];
+  await ensureUserPermissionsTable();
+  const [rows] = await db.execute(sql`
+    SELECT p.userId, p.permission, p.mode, u.name AS userName, u.email AS userEmail
+    FROM \`user_permissions\` p LEFT JOIN users u ON u.id = p.userId
+    ORDER BY p.permission, u.name`) as any;
+  return ((rows as any[]) ?? []).map((r) => ({
+    userId: Number(r.userId),
+    permission: String(r.permission),
+    mode: r.mode === "deny" ? "deny" as const : "grant" as const,
+    userName: r.userName ? String(r.userName) : null,
+    userEmail: r.userEmail ? String(r.userEmail) : null,
+  }));
+}
+
+/** userIds com grant de uma permissão (para filtros, ex.: TL elegíveis). */
+export async function listUserIdsWithGrant(permission: string): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  await ensureUserPermissionsTable();
+  const [rows] = await db.execute(sql`SELECT userId FROM \`user_permissions\` WHERE permission = ${permission} AND mode = 'grant'`) as any;
+  return ((rows as any[]) ?? []).map((r) => Number(r.userId));
+}
+
+// ─── AGENTES IGNORADOS ("não é funcionário") ─────────────────────────────────
+// Alguns "agentes" do histórico não são pessoas nem parceiros: testes,
+// integrações, reservas de sistema. O Jorge marca-os como "não é funcionário"
+// e saem da lista de agentes por ligar. Tabela on-demand.
+let agentIgnoreEnsured = false;
+async function ensureAgentIgnoreTable() {
+  if (agentIgnoreEnsured) return;
+  const db = await getDb();
+  if (!db) return;
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS \`agent_ignore_list\` (
+    \`agentName\` VARCHAR(256) NOT NULL,
+    \`createdAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (\`agentName\`)
+  )`);
+  agentIgnoreEnsured = true;
+}
+
+export async function setAgentIgnored(agentName: string, ignored: boolean) {
+  const db = await getDb();
+  if (!db) return;
+  await ensureAgentIgnoreTable();
+  if (ignored) {
+    await db.execute(sql`INSERT IGNORE INTO \`agent_ignore_list\` (\`agentName\`) VALUES (${agentName})`);
+  } else {
+    await db.execute(sql`DELETE FROM \`agent_ignore_list\` WHERE \`agentName\` = ${agentName}`);
+  }
+}
+
+export async function listIgnoredAgents(): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  await ensureAgentIgnoreTable();
+  const [rows] = await db.execute(sql`SELECT agentName FROM \`agent_ignore_list\``) as any;
+  return (rows as any[]).map((r) => String(r.agentName));
+}
+
+/**
+ * Última vez que cada colaborador trabalhou (pedido Jorge: mostrar nos cartões
+ * dos extras). Máximo entre: ações reais no histórico Multipark (via agente
+ * ligado), picagens de ponto e atribuições de extras-dia. Devolve
+ * { employeeId: "YYYY-MM-DD" }.
+ */
+export async function getLastWorkedMap(): Promise<Record<number, string>> {
+  const db = await getDb();
+  if (!db) return {};
+  const out: Record<number, string> = {};
+  const day = (d: any): string | null => {
+    if (!d) return null;
+    if (d instanceof Date) return d.toISOString().slice(0, 10);
+    const s = String(d);
+    return s.length >= 10 ? s.slice(0, 10) : null;
+  };
+  const take = (id: any, d: any) => {
+    const k = Number(id);
+    const s = day(d);
+    if (!k || !s) return;
+    if (!out[k] || s > out[k]) out[k] = s;
+  };
+  const [hist] = await db.execute(sql`
+    SELECT e.id, MAX(h.actionTime) d
+    FROM employees e JOIN multipark_booking_history h ON h.agentName = e.multiparkAgentName
+    WHERE e.multiparkAgentName IS NOT NULL AND e.multiparkAgentName != ''
+    GROUP BY e.id`) as any;
+  for (const r of (hist as any[]) ?? []) take(r.id, r.d);
+  const [ponto] = await db.execute(sql`
+    SELECT employeeId id, MAX(recordedAt) d FROM time_records GROUP BY employeeId`) as any;
+  for (const r of (ponto as any[]) ?? []) take(r.id, r.d);
+  const [extras] = await db.execute(sql`
+    SELECT employeeId id, MAX(assignmentDate) d FROM extras_dia_assignments
+    WHERE employeeId IS NOT NULL GROUP BY employeeId`) as any;
+  for (const r of (extras as any[]) ?? []) take(r.id, r.d);
+  return out;
+}
+
+/** Atividade consolidada de UM dia (visão do Jorge): por pessoa/agente —
+ *  ações nas reservas (recolhas/entregas/movimentos/cancelamentos) + km e
+ *  horas do GPS (daily_driver_history, recolhido às 2h para o dia anterior). */
+export async function getDayActivity(date: string) {
+  const db = await getDb();
+  if (!db) return { people: [], totals: { checkins: 0, checkouts: 0, movements: 0, cancels: 0, other: 0, totalKm: 0, activePeople: 0 } };
+  const start = `${date} 00:00:00`;
+  const end = `${date} 23:59:59`;
+
+  // Ações por agente no dia
+  const [actionRows] = await db.execute(sql`
+    SELECT agentName, changeType, COUNT(*) AS n
+    FROM multipark_booking_history
+    WHERE actionTime >= ${start} AND actionTime <= ${end} AND agentName IS NOT NULL AND agentName != ''
+    GROUP BY agentName, changeType`) as any;
+
+  // Ligações agente→colaborador e agente→parceiro
+  const emps = await db.select({ id: employees.id, fullName: employees.fullName, multiparkAgentName: employees.multiparkAgentName })
+    .from(employees).where(isNotNull(employees.multiparkAgentName));
+  const empByAgent = new Map(emps.map((e) => [(e.multiparkAgentName ?? "").trim().toLowerCase(), e]));
+  const partners = await listAgentPartners();
+  const partnerByAgent = new Map(partners.map((p) => [p.agentName.trim().toLowerCase(), p]));
+
+  // GPS do dia (por employeeId quando ligado)
+  const [gpsRows] = await db.execute(sql`
+    SELECT employeeId, zelloUsername, displayName, totalKm, hoursWorked, hoursStopped, totalHoursOnline, avgSpeed, maxSpeed, gpsPointsCount
+    FROM daily_driver_history WHERE DATE(date) = ${date}`) as any;
+  const gpsByEmp = new Map<number, any>();
+  const gpsUnlinked: any[] = [];
+  for (const g of gpsRows as any[]) {
+    if (g.employeeId != null) gpsByEmp.set(Number(g.employeeId), g);
+    else gpsUnlinked.push(g);
+  }
+
+  type Person = {
+    key: string; name: string; kind: "colaborador" | "parceiro" | "por_ligar";
+    employeeId: number | null; partnerName: string | null;
+    checkins: number; checkouts: number; movements: number; cancels: number; other: number; totalActions: number;
+    totalKm: number | null; hoursWorked: number | null; hoursOnline: number | null; maxSpeed: number | null;
+  };
+  const people = new Map<string, Person>();
+  const CT: Record<string, keyof Pick<Person, "checkins" | "checkouts" | "movements" | "cancels">> = {
+    CHECK_IN: "checkins", CHECKIN: "checkins",
+    CHECK_OUT: "checkouts", CHECKOUT: "checkouts",
+    MOVEMENT: "movements", MOVE: "movements",
+    CANCELLATION: "cancels", CANCEL: "cancels", CANCELLED: "cancels",
+  };
+  for (const r of actionRows as any[]) {
+    const key = String(r.agentName).trim().toLowerCase();
+    let p = people.get(key);
+    if (!p) {
+      const emp = empByAgent.get(key);
+      const par = partnerByAgent.get(key);
+      p = {
+        key, name: emp?.fullName ?? par?.partnerName ?? r.agentName,
+        kind: emp ? "colaborador" : par ? "parceiro" : "por_ligar",
+        employeeId: emp?.id ?? null, partnerName: par?.partnerName ?? null,
+        checkins: 0, checkouts: 0, movements: 0, cancels: 0, other: 0, totalActions: 0,
+        totalKm: null, hoursWorked: null, hoursOnline: null, maxSpeed: null,
+      };
+      if (emp) {
+        const g = gpsByEmp.get(emp.id);
+        if (g) { p.totalKm = Number(g.totalKm ?? 0); p.hoursWorked = Number(g.hoursWorked ?? 0); p.hoursOnline = Number(g.totalHoursOnline ?? 0); p.maxSpeed = Number(g.maxSpeed ?? 0); gpsByEmp.delete(emp.id); }
+      }
+      people.set(key, p);
+    }
+    const bucket = CT[String(r.changeType ?? "").toUpperCase()] ?? "other";
+    (p as any)[bucket] += Number(r.n);
+    p.totalActions += Number(r.n);
+  }
+  // Pessoas com GPS mas sem ações (estiveram online sem mexer em reservas)
+  for (const [empId, g] of gpsByEmp) {
+    const emp = emps.find((e) => e.id === empId);
+    const name = emp?.fullName ?? g.displayName ?? g.zelloUsername;
+    people.set(`gps:${empId}`, {
+      key: `gps:${empId}`, name, kind: "colaborador", employeeId: empId, partnerName: null,
+      checkins: 0, checkouts: 0, movements: 0, cancels: 0, other: 0, totalActions: 0,
+      totalKm: Number(g.totalKm ?? 0), hoursWorked: Number(g.hoursWorked ?? 0), hoursOnline: Number(g.totalHoursOnline ?? 0), maxSpeed: Number(g.maxSpeed ?? 0),
+    });
+  }
+  for (const g of gpsUnlinked) {
+    people.set(`gpsu:${g.zelloUsername}`, {
+      key: `gpsu:${g.zelloUsername}`, name: g.displayName ?? g.zelloUsername, kind: "por_ligar", employeeId: null, partnerName: null,
+      checkins: 0, checkouts: 0, movements: 0, cancels: 0, other: 0, totalActions: 0,
+      totalKm: Number(g.totalKm ?? 0), hoursWorked: Number(g.hoursWorked ?? 0), hoursOnline: Number(g.totalHoursOnline ?? 0), maxSpeed: Number(g.maxSpeed ?? 0),
+    });
+  }
+
+  const list = Array.from(people.values()).sort((a, b) => b.totalActions - a.totalActions || (b.totalKm ?? 0) - (a.totalKm ?? 0));
+  const totals = {
+    checkins: list.reduce((s, p) => s + p.checkins, 0),
+    checkouts: list.reduce((s, p) => s + p.checkouts, 0),
+    movements: list.reduce((s, p) => s + p.movements, 0),
+    cancels: list.reduce((s, p) => s + p.cancels, 0),
+    other: list.reduce((s, p) => s + p.other, 0),
+    totalKm: Math.round(list.reduce((s, p) => s + (p.totalKm ?? 0), 0) * 10) / 10,
+    activePeople: list.length,
+  };
+  return { people: list, totals };
+}
+
+// ─── GEOFENCE POR CENTRO DE CUSTOS (raio de check-in/out do ponto) ───────────
+// O Jorge define, por centro de custos, o ponto e o raio onde o pessoal pode
+// picar. Fora do raio o ponto é PERMITIDO mas fica marcado a vermelho.
+let geofenceEnsured = false;
+async function ensureGeofenceTable() {
+  if (geofenceEnsured) return;
+  const db = await getDb();
+  if (!db) return;
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS \`project_geofence\` (
+    \`projectId\` INT NOT NULL,
+    \`lat\` DECIMAL(10,7) NOT NULL,
+    \`lng\` DECIMAL(10,7) NOT NULL,
+    \`radiusM\` INT NOT NULL DEFAULT 500,
+    \`updatedAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (\`projectId\`)
+  )`);
+  geofenceEnsured = true;
+}
+
+export async function setProjectGeofence(projectId: number, lat: number, lng: number, radiusM: number) {
+  const db = await getDb();
+  if (!db) return;
+  await ensureGeofenceTable();
+  await db.execute(sql`INSERT INTO \`project_geofence\` (\`projectId\`, \`lat\`, \`lng\`, \`radiusM\`)
+    VALUES (${projectId}, ${lat}, ${lng}, ${radiusM})
+    ON DUPLICATE KEY UPDATE \`lat\` = VALUES(\`lat\`), \`lng\` = VALUES(\`lng\`), \`radiusM\` = VALUES(\`radiusM\`)`);
+}
+
+export async function deleteProjectGeofence(projectId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await ensureGeofenceTable();
+  await db.execute(sql`DELETE FROM \`project_geofence\` WHERE \`projectId\` = ${projectId}`);
+}
+
+export async function listProjectGeofences(): Promise<Array<{ projectId: number; lat: number; lng: number; radiusM: number }>> {
+  const db = await getDb();
+  if (!db) return [];
+  await ensureGeofenceTable();
+  const [rows] = await db.execute(sql`SELECT * FROM \`project_geofence\``) as any;
+  return (rows as any[]).map((r) => ({ projectId: Number(r.projectId), lat: Number(r.lat), lng: Number(r.lng), radiusM: Number(r.radiusM) }));
+}
+
+function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+/** Se o centro de custos do colaborador (ou um ancestral) tem raio definido e as
+ *  coordenadas vêm fora dele, devolve a nota "[FORA DO RAIO] a Xm" — senão null. */
+export async function checkGeofenceNote(employeeId: number, latitude?: string | null, longitude?: string | null): Promise<string | null> {
+  try {
+    if (!latitude || !longitude) return null;
+    const lat = parseFloat(latitude), lng = parseFloat(longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    const db = await getDb();
+    if (!db) return null;
+    const emp = await db.select({ projectId: employees.projectId }).from(employees).where(eq(employees.id, employeeId)).limit(1);
+    let pid = emp[0]?.projectId ?? null;
+    if (pid == null) return null;
+    const fences = await listProjectGeofences();
+    if (fences.length === 0) return null;
+    const byProject = new Map(fences.map((f) => [f.projectId, f]));
+    const allProjs = await db.select({ id: projects.id, parentId: projects.parentId }).from(projects);
+    const parentOf = new Map(allProjs.map((p) => [p.id, p.parentId]));
+    // Sobe na árvore até encontrar um geofence configurado
+    let hops = 0;
+    while (pid != null && hops < 10) {
+      const fence = byProject.get(pid);
+      if (fence) {
+        const dist = haversineMeters(lat, lng, fence.lat, fence.lng);
+        if (dist > fence.radiusM) return `[FORA DO RAIO] a ${Math.round(dist)}m do local (raio ${fence.radiusM}m)`;
+        return null;
+      }
+      pid = parentOf.get(pid) ?? null;
+      hops++;
+    }
+    return null;
+  } catch {
+    return null; // geofence nunca pode partir o ponto
+  }
 }
 
 export async function generateAnnualSummary(year: number, projectId?: number, splitPartner: number = 60) {
@@ -5557,31 +6332,124 @@ export async function getLocalBookingsByAction(filters: {
       conditions.push(sql`${multiparkBookings.status} != 'CANCELLED'`);
       break;
     case "cancelation":
-      conditions.push(gte(multiparkBookings.cancelledAt, filters.startDate));
-      conditions.push(lte(multiparkBookings.cancelledAt, endWithTime));
+      // FIX 2026-08-05: cancelledAt está NULL em ~4.6k canceladas (o sync nem
+      // sempre o traz) — filtrar por ele escondia a maioria. A fonte de verdade
+      // é o STATUS; a data usa cancelledAt quando existe, senão updatedAt
+      // (última mudança de estado — aproximação razoável do cancelamento).
+      conditions.push(sql`${multiparkBookings.status} = 'CANCELLED'`);
+      conditions.push(sql`COALESCE(${multiparkBookings.cancelledAt}, ${multiparkBookings.updatedAt}) >= ${filters.startDate}`);
+      conditions.push(sql`COALESCE(${multiparkBookings.cancelledAt}, ${multiparkBookings.updatedAt}) <= ${endWithTime}`);
       break;
   }
 
-  // Filter by project hierarchy (include all children)
+  // Filter by project hierarchy (include all children; marcas globais idem)
   if (filters.projectId) {
-    const allProjects = await db.select().from(projects);
-    const ids = new Set<number>();
-    const addChildren = (parentId: number) => {
-      ids.add(parentId);
-      for (const p of allProjects) {
-        if (p.parentId === parentId) addChildren(p.id);
-      }
-    };
-    addChildren(filters.projectId);
-    conditions.push(sql`${multiparkBookings.projectId} IN (${sql.raw(Array.from(ids).join(","))})`);
+    const ids = await resolveProjectIds(filters.projectId);
+    conditions.push(sql`${multiparkBookings.projectId} IN (${sql.raw(ids.join(",") || "0")})`);
   }
 
-  return db
+  const rows = await db
     .select()
     .from(multiparkBookings)
     .where(and(...conditions))
     .orderBy(desc(multiparkBookings.bookingCreatedAt))
     .limit(5000);
+
+  // Comissões de parceiros de venda por reserva (partnerships NOVAS via
+  // campaign match — substitui o legado partnerName/percent da ficha do
+  // projeto, para bater certo com a Faturação/Parcerias).
+  const partnerMap = await buildPartnerByCampaignMap();
+  return rows.map((b) => {
+    const key = (b.campaign ?? "").trim().toLowerCase();
+    const p = key ? partnerMap.get(key) : undefined;
+    const price = parseFloat(String(b.totalPrice ?? 0)) || 0;
+    return {
+      ...b,
+      salesPartnerName: p?.name ?? null,
+      salesPartnerRate: p?.commissionRate ?? null,
+      salesPartnerCommission: p ? Math.round(price * (p.commissionRate / 100) * 100) / 100 : 0,
+    };
+  });
+}
+
+// Mapa central campanha→parceiro (campaignKey + nome + aliases), igual ao da
+// Faturação. Cacheado 60s para não pesar nas folhas operacionais.
+let partnerMapCache: { at: number; map: Map<string, { id: number; name: string; commissionRate: number; updatedAt: string }> } | null = null;
+async function buildPartnerByCampaignMap() {
+  if (partnerMapCache && Date.now() - partnerMapCache.at < 60_000) return partnerMapCache.map;
+  const map = new Map<string, { id: number; name: string; commissionRate: number; updatedAt: string }>();
+  const db = await getDb();
+  if (!db) return map;
+  const allPartners = await db.select({
+    id: partnerships.id, name: partnerships.name, campaignKey: partnerships.campaignKey,
+    commissionRate: partnerships.commissionRate, updatedAt: partnerships.updatedAt,
+  }).from(partnerships);
+  const allAliases = await db.select({ partnershipId: partnerAliases.partnershipId, aliasValue: partnerAliases.aliasValue }).from(partnerAliases);
+  const byId = new Map(allPartners.map((p) => [p.id, p]));
+  const reg = (raw: string | null, pid: number) => {
+    if (!raw) return;
+    const key = raw.trim().toLowerCase();
+    if (!key) return;
+    const p = byId.get(pid);
+    if (!p) return;
+    const ex = map.get(key);
+    const cand = { id: p.id, name: p.name, commissionRate: Number(p.commissionRate ?? 0), updatedAt: p.updatedAt ?? "" };
+    if (!ex || cand.updatedAt > ex.updatedAt) map.set(key, cand);
+  };
+  for (const p of allPartners) { reg(p.campaignKey, p.id); reg(p.name, p.id); }
+  for (const a of allAliases) reg(a.aliasValue, a.partnershipId);
+  partnerMapCache = { at: Date.now(), map };
+  return map;
+}
+
+/** Resumo agregado das operações (dashboard): contagens/somas por ação e
+ *  distribuição por cidade/parque, calculado no SQL — substitui puxar até
+ *  4×5.000 reservas completas só para contar. */
+export async function getOperationsSummary(filters: { startDate: string; endDate: string; projectId?: number }) {
+  const db = await getDb();
+  const empty = { actions: {} as Record<string, { count: number; revenue: number; byCity: Array<{ name: string; count: number; revenue: number }>; byPark: Array<{ name: string; count: number; revenue: number }> }> };
+  if (!db) return empty;
+  const endWithTime = filters.endDate + " 23:59:59";
+  let projectCond = "";
+  if (filters.projectId) {
+    const ids = await resolveProjectIds(filters.projectId);
+    projectCond = ` AND projectId IN (${ids.join(",") || "0"})`;
+  }
+  const DATE_COND: Record<string, string> = {
+    creation: `bookingCreatedAt >= ? AND bookingCreatedAt <= ? AND status != 'CANCELLED'`,
+    checkin: `checkIn >= ? AND checkIn <= ? AND status != 'CANCELLED'`,
+    checkout: `checkOut >= ? AND checkOut <= ? AND status != 'CANCELLED'`,
+    cancelation: `status = 'CANCELLED' AND COALESCE(cancelledAt, updatedAt) >= ? AND COALESCE(cancelledAt, updatedAt) <= ?`,
+  };
+  const out: (typeof empty)["actions"] = {};
+  for (const [action, cond] of Object.entries(DATE_COND)) {
+    // Substitui os dois ? por datas (validadas pelo zod: YYYY-MM-DD)
+    const parts = cond.split("?");
+    const q = parts[0] + `'${filters.startDate}'` + parts[1] + `'${endWithTime}'` + (parts[2] ?? "");
+    const [rows] = await db.execute(sql.raw(
+      `SELECT COALESCE(city,'—') AS city, COALESCE(parkName,'—') AS parkName, COUNT(*) AS n, COALESCE(SUM(totalPrice),0) AS revenue
+       FROM multipark_bookings WHERE ${q}${projectCond}
+       GROUP BY city, parkName`,
+    )) as any;
+    const byCity = new Map<string, { count: number; revenue: number }>();
+    const byPark = new Map<string, { count: number; revenue: number }>();
+    let count = 0, revenue = 0;
+    for (const r of rows as any[]) {
+      const n = Number(r.n), v = Number(r.revenue);
+      count += n; revenue += v;
+      const c = byCity.get(r.city) ?? { count: 0, revenue: 0 };
+      c.count += n; c.revenue += v; byCity.set(r.city, c);
+      const parkKey = r.city && !String(r.parkName).includes(r.city) ? `${r.parkName} ${r.city}` : r.parkName;
+      const pk = byPark.get(parkKey) ?? { count: 0, revenue: 0 };
+      pk.count += n; pk.revenue += v; byPark.set(parkKey, pk);
+    }
+    out[action] = {
+      count, revenue,
+      byCity: Array.from(byCity, ([name, v]) => ({ name, ...v })).sort((a, b) => b.count - a.count),
+      byPark: Array.from(byPark, ([name, v]) => ({ name, ...v })).sort((a, b) => b.count - a.count),
+    };
+  }
+  return { actions: out };
 }
 
 export async function searchBookingByRef(search: string) {
@@ -5693,6 +6561,15 @@ export async function upsertBookingExtras(
   const db = await getDb();
   if (!db) return;
   if (!Array.isArray(extras) || extras.length === 0) return;
+  // Preserva "feito" marcado NA APP: o delete+insert do re-sync não pode
+  // desmarcar serviços dados como feitos localmente (a API pode vir done=0).
+  const existing = await db
+    .select({ extraId: multiparkBookingExtras.extraId, name: multiparkBookingExtras.name, done: multiparkBookingExtras.done })
+    .from(multiparkBookingExtras)
+    .where(eq(multiparkBookingExtras.bookingExternalId, bookingExternalId));
+  const doneLocally = new Set(
+    existing.filter((e) => e.done === 1).map((e) => `${e.extraId ?? ""}|${e.name ?? ""}`),
+  );
   await db.delete(multiparkBookingExtras).where(eq(multiparkBookingExtras.bookingExternalId, bookingExternalId));
   await db.insert(multiparkBookingExtras).values(
     extras.map((e) => ({
@@ -5701,7 +6578,7 @@ export async function upsertBookingExtras(
       name: typeof e.name === "string" ? e.name.slice(0, 256) : null,
       description: typeof e.description === "string" ? e.description.slice(0, 512) : null,
       price: e.price != null ? String(e.price) : null,
-      done: e.done ? 1 : 0,
+      done: (e.done || doneLocally.has(`${e.id ? String(e.id).slice(0, 128) : ""}|${typeof e.name === "string" ? e.name.slice(0, 256) : ""}`)) ? 1 : 0,
     })),
   );
 }
@@ -5711,19 +6588,12 @@ export async function getMultiparkBookingStats(filters?: { from?: string; to?: s
   const empty = { total: 0, reservasHoje: 0, checkinHoje: 0, checkoutHoje: 0, canceladosHoje: 0, reservasMes: 0, checkinMes: 0, checkoutMes: 0, canceladosMes: 0, receitaHoje: 0, receitaMes: 0, receitaPeriodo: 0, byCity: [] as { name: string; bookings: number; revenue: number }[], byDay: [] as { date: string; reservas: number; checkins: number; checkouts: number; cancelados: number; revenue: number }[], byBrand: [] as { name: string; bookings: number; revenue: number }[] };
   if (!db) return empty;
 
-  // Resolve project hierarchy for filtering
+  // Resolve project hierarchy for filtering (via resolveProjectIds para
+  // suportar também marcas globais = IDs negativos)
   let projectFilter: any = undefined;
   if (filters?.projectId) {
-    const allProjects = await db.select().from(projects);
-    const ids = new Set<number>();
-    const addChildren = (parentId: number) => {
-      ids.add(parentId);
-      for (const p of allProjects) {
-        if (p.parentId === parentId) addChildren(p.id);
-      }
-    };
-    addChildren(filters.projectId);
-    projectFilter = sql`${multiparkBookings.projectId} IN (${sql.raw(Array.from(ids).join(",") || "0")})`;
+    const ids = await resolveProjectIds(filters.projectId);
+    projectFilter = sql`${multiparkBookings.projectId} IN (${sql.raw(ids.join(",") || "0")})`;
   }
 
   const now = new Date();
@@ -6253,13 +7123,17 @@ export async function getPayrollData(year: number, month: number) {
       // contar a mesma hora duas vezes (uma hora noturna num sábado contava
       // como "noite" E "FDS"). Hierarquia: FDS > Noite > Normal.
       let normalHours = 0;
+      // Hora/dia-da-semana em Europe/Lisbon (o servidor está em UTC — sem isto
+      // as noturnas ficavam desviadas 1h no verão).
+      const lisbonFmt = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Lisbon", hour: "numeric", weekday: "short", hour12: false });
       for (const rec of empHours.records) {
         const recDate = new Date(rec.recordedAt);
         const hours = parseFloat(String(rec.hoursWorked ?? 0));
         if (hours <= 0) continue;
-        const dayOfWeek = recDate.getDay(); // 0=Sun, 6=Sat
-        const hour = recDate.getHours();
-        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+        const parts = lisbonFmt.formatToParts(recDate);
+        const hour = Number(parts.find((p) => p.type === "hour")?.value ?? recDate.getHours());
+        const weekday = parts.find((p) => p.type === "weekday")?.value ?? "";
+        const isWeekend = weekday === "Sat" || weekday === "Sun";
         const isNight = hour >= 22 || hour < 7;
         if (isWeekend) weekendHours += hours;
         else if (isNight) nightHours += hours;
@@ -6887,6 +7761,73 @@ export async function attachZelloToEmployeeIfUnset(employeeId: number, zelloUser
   if (holder.length > 0) return false;
   await db.update(employees).set({ zelloUsername }).where(eq(employees.id, employeeId));
   return true;
+}
+
+/**
+ * Ponto→PDA automático (pedido Jorge): o browser do PDA tem um deviceToken no
+ * localStorage; quando alguém faz check-in do PONTO nesse aparelho, liga-se
+ * logo a pessoa ao PDA (e ao Zello do PDA). Se estava lá outra pessoa com
+ * check-in aberto, a app fecha-o e troca — "a própria aplicação mudava quem é
+ * que estava".
+ */
+export async function attachPdaByDeviceToken(deviceToken: string, employeeId: number): Promise<{ pdaId: number; pdaName: string; zelloUsername: string | null; replacedName: string | null } | null> {
+  const db = await getDb(); if (!db) return null;
+  const [pdaRows] = await db.execute(sql`SELECT id, name, zelloUsername FROM pdas WHERE deviceToken = ${deviceToken} AND status = 'active' LIMIT 1`) as any;
+  const pda = (pdaRows as any[])?.[0];
+  if (!pda) return null;
+  const now = toMysqlDateTime(new Date());
+  // Quem está agora com este PDA?
+  const [activeRows] = await db.execute(sql`
+    SELECT c.id, c.employeeId, e.fullName FROM pda_checkins c
+    LEFT JOIN employees e ON e.id = c.employeeId
+    WHERE c.pdaId = ${pda.id} AND c.checkinStatus = 'checked_in'`) as any;
+  let replacedName: string | null = null;
+  let alreadyMine = false;
+  for (const a of (activeRows as any[]) ?? []) {
+    if (Number(a.employeeId) === employeeId) { alreadyMine = true; continue; }
+    await db.execute(sql`UPDATE pda_checkins SET checkoutAt = ${now}, checkinStatus = 'checked_out', notes = CONCAT(COALESCE(notes,''), ' · fechado automaticamente: outro colaborador fez check-in neste PDA') WHERE id = ${a.id}`);
+    replacedName = a.fullName ? String(a.fullName) : replacedName;
+  }
+  // A pessoa só pode estar num PDA de cada vez — fecha check-ins dela noutros
+  await db.execute(sql`UPDATE pda_checkins SET checkoutAt = ${now}, checkinStatus = 'checked_out' WHERE employeeId = ${employeeId} AND checkinStatus = 'checked_in' AND pdaId != ${pda.id}`);
+  if (!alreadyMine) {
+    await db.insert(pdaCheckins).values({
+      pdaId: Number(pda.id),
+      employeeId,
+      zelloUsername: pda.zelloUsername ?? null,
+      checkinAt: now,
+    } as any);
+  }
+  return { pdaId: Number(pda.id), pdaName: String(pda.name), zelloUsername: pda.zelloUsername ? String(pda.zelloUsername) : null, replacedName };
+}
+
+/** Fecha os check-ins de PDA abertos de um funcionário (no check-out do ponto). */
+export async function closePdaCheckinsForEmployee(employeeId: number, at: Date): Promise<number> {
+  const db = await getDb(); if (!db) return 0;
+  const [res] = await db.execute(sql`
+    UPDATE pda_checkins SET checkoutAt = ${toMysqlDateTime(at)}, checkinStatus = 'checked_out'
+    WHERE employeeId = ${employeeId} AND checkinStatus = 'checked_in'`) as any;
+  return Number((res as any)?.affectedRows ?? 0);
+}
+
+/** Regista o browser atual como sendo um PDA (token novo, invalida o anterior). */
+export async function setPdaDeviceToken(pdaId: number): Promise<string | null> {
+  const db = await getDb(); if (!db) return null;
+  const token = crypto.randomUUID().replace(/-/g, "");
+  await db.execute(sql`UPDATE pdas SET deviceToken = ${token} WHERE id = ${pdaId}`);
+  return token;
+}
+
+/** Info do aparelho a partir do deviceToken (para o cartão "Este aparelho"). */
+export async function getPdaByDeviceToken(deviceToken: string) {
+  const db = await getDb(); if (!db) return null;
+  const [rows] = await db.execute(sql`
+    SELECT p.id, p.name, p.zelloUsername,
+           (SELECT e.fullName FROM pda_checkins c LEFT JOIN employees e ON e.id = c.employeeId
+            WHERE c.pdaId = p.id AND c.checkinStatus = 'checked_in' ORDER BY c.checkinAt DESC LIMIT 1) AS currentHolder
+    FROM pdas p WHERE p.deviceToken = ${deviceToken} LIMIT 1`) as any;
+  const r = (rows as any[])?.[0];
+  return r ? { pdaId: Number(r.id), name: String(r.name), zelloUsername: r.zelloUsername ? String(r.zelloUsername) : null, currentHolder: r.currentHolder ? String(r.currentHolder) : null } : null;
 }
 
 export async function checkoutPda(id: number, data: { photoExitUrl?: string; mobileDataMbEnd?: number; notes?: string }) {
@@ -7748,10 +8689,17 @@ export async function syncIncidentsFromMultiparkHistory(opts: {
     .orderBy(desc(multiparkBookingHistory.actionTime))
     .limit(500);
 
+  // Mensagens AUTOMÁTICAS do sistema da Multipark que apareciam nos remarks e
+  // enchiam as ocorrências de lixo (auditoria 6 ago: 1.190 de 1.219 eram isto
+  // — "Invoice emitted", "Pricing reduced…" — e ainda contavam como Inc− nas
+  // avaliações dos condutores). Só comentários HUMANOS passam.
+  const AUTO_REMARKS = /^(invoice emitted|booking (updated|created)|pricing (updated|reduced|increased)|check-?in signature|check-?out signature|signature saved|payment\b|attachment added|client information updated|arrived at (delivery|pickup) location|left (delivery|pickup) location|driver assigned|status changed|booking cancelled|pro booking created|baggage waiting|attachment removed)/i;
+
   const result = { ...empty };
   for (const row of rows) {
     const remarks = (row.remarks ?? "").trim();
     if (!remarks || remarks.length < 3) continue; // ignora ruído
+    if (AUTO_REMARKS.test(remarks)) continue;     // ignora mensagens de sistema
     result.scanned++;
 
     const sourceKey = `mp:${row.historyId}`;
@@ -7780,6 +8728,20 @@ export async function syncIncidentsFromMultiparkHistory(opts: {
       vehiclePlate = booking?.plate ?? undefined;
     } catch {}
 
+    // Resolve o AGENTE da ação para o colaborador (quem fez / contra quem) —
+    // alimenta o Inc− da Avaliação Individual (pedido Jorge 2026-08-06)
+    let incidentEmployeeId: number | null = null;
+    if (row.agentName) {
+      try {
+        const [emp] = await db
+          .select({ id: employees.id })
+          .from(employees)
+          .where(eq(employees.multiparkAgentName, row.agentName))
+          .limit(1);
+        incidentEmployeeId = emp?.id ?? null;
+      } catch {}
+    }
+
     const importedAtStr = new Date().toISOString().slice(0, 19).replace("T", " ");
     try {
       const id = await createIncident({
@@ -7788,8 +8750,10 @@ export async function syncIncidentsFromMultiparkHistory(opts: {
         status: "open",
         description: remarks.slice(0, 1000),
         vehiclePlate,
+        employeeId: incidentEmployeeId,
         reportedBy: opts.reportedById ?? null,
         sourceEmailId: sourceKey, // reaproveita para dedup (Multipark history id)
+        sourceEmailDate: row.actionTime, // data REAL da ação (não a do sync)
         reservationLink: row.bookingExternalId,
         aiClassification: `Multipark · ${row.changeType ?? ""} · ${row.agentName ?? ""}`.trim(),
         importedAt: importedAtStr,

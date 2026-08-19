@@ -1,4 +1,11 @@
 import { trpc } from "@/lib/trpc";
+import { createContext, useContext } from "react";
+import { usePersistedState } from "@/hooks/usePersistedState";
+import { useOpenEmployee } from "@/hooks/useOpenEmployee";
+import { fmtPTDate } from "@/lib/lisbonTime";
+import { buildAvailabilityMessage, AVAILABILITY_KINDS, type AvailabilityMessageKind } from "@shared/availabilityMessages";
+import { useTableSort, Th } from "@/components/SortableTable";
+import { UniDateNav, mondayOf } from "@/components/DateRangeNav";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -113,13 +120,24 @@ function todayISO(): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+// Cidade ativa do Extras-Dia (Lisboa/Porto/Faro) — contexto para não arrastar
+// a prop por 4 níveis até aos slots.
+type ExtraCityId = "lisbon" | "porto" | "faro";
+const CITY_OPTIONS: Array<{ id: ExtraCityId; label: string }> = [
+  { id: "lisbon", label: "Lisboa" },
+  { id: "porto", label: "Porto" },
+  { id: "faro", label: "Faro" },
+];
+const ExtrasCityContext = createContext<ExtraCityId>("lisbon");
+
 export default function ExtrasDiaPage() {
+  const [city, setCity] = usePersistedState<ExtraCityId>("extrasdia.city", "lisbon");
   const [baseDate, setBaseDate] = useState(todayISO());
 
-  const { data, isLoading, error } = trpc.extrasDia.forecast.useQuery({ baseDate });
+  const { data, isLoading, error } = trpc.extrasDia.forecast.useQuery({ baseDate, city });
   const targetDate = data?.targetDate ?? "";
   const assignmentsQ = trpc.extrasDia.assignments.useQuery(
-    { date: targetDate },
+    { date: targetDate, city },
     { enabled: !!targetDate },
   );
   const assignments = assignmentsQ.data ?? [];
@@ -145,6 +163,7 @@ export default function ExtrasDiaPage() {
   }, [data]);
 
   return (
+    <ExtrasCityContext.Provider value={city}>
     <div className="space-y-6 max-w-7xl mx-auto">
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div>
@@ -158,13 +177,13 @@ export default function ExtrasDiaPage() {
         </div>
         <div className="space-y-1">
           <Label htmlFor="baseDate" className="text-xs">Data base</Label>
-          <Input
-            id="baseDate"
-            type="date"
-            value={baseDate}
-            onChange={(e) => setBaseDate(e.target.value)}
-            className="w-44"
-          />
+          <UniDateNav date={baseDate} onChange={setBaseDate} />
+          <Select value={city} onValueChange={(v) => setCity(v as ExtraCityId)}>
+            <SelectTrigger className="w-32 h-9"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {CITY_OPTIONS.map((c) => <SelectItem key={c.id} value={c.id}>{c.id === "lisbon" ? "📍 Lisboa" : c.id === "porto" ? "📍 Porto" : "📍 Faro"}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
@@ -440,6 +459,7 @@ export default function ExtrasDiaPage() {
         </>
       )}
     </div>
+  </ExtrasCityContext.Provider>
   );
 }
 
@@ -459,19 +479,23 @@ function TeamSection({
   defaultEnd: number;
 }) {
   const utils = trpc.useUtils();
-  const assignmentsQuery = trpc.extrasDia.assignments.useQuery({ date: targetDate });
+  const city = useContext(ExtrasCityContext);
+  const assignmentsQuery = trpc.extrasDia.assignments.useQuery({ date: targetDate, city });
   const candidatesQuery = trpc.extrasDia.candidates.useQuery({ date: targetDate });
+  // TL: só chefias + quem tem a permissão extras_dia.team_leader (regra Jorge:
+  // "só devia aparecer aqueles que têm permissão de ser team leader")
+  const tlCandidatesQuery = trpc.extrasDia.candidates.useQuery({ date: targetDate, forTeamLeader: true });
 
   const upsert = trpc.extrasDia.upsertAssignment.useMutation({
     onSuccess: () => {
-      utils.extrasDia.assignments.invalidate({ date: targetDate });
+      utils.extrasDia.assignments.invalidate();
       toast.success("Turno guardado");
     },
     onError: (e) => toast.error(e.message),
   });
   const del = trpc.extrasDia.deleteAssignment.useMutation({
     onSuccess: () => {
-      utils.extrasDia.assignments.invalidate({ date: targetDate });
+      utils.extrasDia.assignments.invalidate();
       toast.success("Turno removido");
     },
     onError: (e) => toast.error(e.message),
@@ -479,17 +503,20 @@ function TeamSection({
 
   const allAssignments = assignmentsQuery.data ?? [];
   const allCandidates = candidatesQuery.data ?? [];
+  const allTlCandidates = tlCandidatesQuery.data ?? [];
   // Mostra TODOS os extras ativos para podermos tentar/insistir com mais gente:
   // disponíveis primeiro, depois sem-resposta, depois quem disse que não pode.
-  const candidates = useMemo(() => {
+  const sortCandidates = (list: typeof allCandidates) => {
     const rank = (s?: string | null) => (s === "available" ? 0 : s === "no_response" ? 1 : 2);
-    return allCandidates
+    return list
       .slice()
       .sort((a, b) => {
         const r = rank(a.availability?.status) - rank(b.availability?.status);
         return r !== 0 ? r : a.fullName.localeCompare(b.fullName);
       });
-  }, [allCandidates]);
+  };
+  const candidates = useMemo(() => sortCandidates(allCandidates), [allCandidates]);
+  const tlCandidates = useMemo(() => sortCandidates(allTlCandidates), [allTlCandidates]);
 
   const assignments = allAssignments.filter(a => a.shift === shift);
   const tl = assignments.find(a => a.isTeamLeader);
@@ -565,13 +592,13 @@ function TeamSection({
             <div className="mt-3">
               <AssignmentForm
                 targetDate={targetDate}
-                candidates={candidates}
+                candidates={tlCandidates}
                 asTeamLeader
                 shift={shift}
                 defaultStart={defaultStart}
                 defaultEnd={defaultEnd}
                 onSubmit={async (values) => {
-                  await upsert.mutateAsync(values);
+                  await upsert.mutateAsync({ ...values, city });
                   setAddingTL(false);
                 }}
                 onCancel={() => setAddingTL(false)}
@@ -589,7 +616,7 @@ function TeamSection({
             defaultStart={defaultStart}
             defaultEnd={defaultEnd}
             onSubmit={async (values) => {
-              await upsert.mutateAsync(values);
+              await upsert.mutateAsync({ ...values, city });
               setAdding(false);
             }}
             onCancel={() => setAdding(false)}
@@ -627,7 +654,7 @@ function TeamSection({
                   <AssignmentRow
                     key={a.id}
                     assignment={a}
-                    onSave={(payload) => upsert.mutate({ ...payload, id: a.id })}
+                    onSave={(payload) => upsert.mutate({ ...payload, id: a.id, city })}
                     onDelete={() => del.mutate({ id: a.id })}
                     busy={upsert.isPending || del.isPending}
                   />
@@ -872,6 +899,7 @@ function AssignmentRow({
 }) {
   const a = assignment;
   const levels = useLiveLevels();
+  const openEmployeeRow = useOpenEmployee();
   const [editing, setEditing] = useState(false);
   const [level, setLevel] = useState<LevelId>((a.level ?? "junior") as LevelId);
   const [startHour, setStartHour] = useState(a.startHour);
@@ -891,7 +919,11 @@ function AssignmentRow({
               <AvatarImage src={(a as any).photoUrl ?? undefined} className="object-cover" />
               <AvatarFallback className="text-[10px]">{a.personName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()}</AvatarFallback>
             </Avatar>
-            {a.personName}
+            {a.employeeId ? (
+              <button type="button" className="hover:underline" title="Abrir ficha do funcionário" onClick={() => openEmployeeRow(a.employeeId!)}>
+                {a.personName}
+              </button>
+            ) : a.personName}
           </span>
         </td>
         <td className="py-2 px-2">
@@ -1141,11 +1173,12 @@ function SlotBookings({
   hour: number;
   slot: number;
 }) {
+  const cityCtx = useContext(ExtrasCityContext);
   const checkinsQ = trpc.extrasDia.bookingsInSlot.useQuery(
-    { date: targetDate, hour, slot, type: "checkin" },
+    { date: targetDate, hour, slot, type: "checkin", city: cityCtx },
   );
   const checkoutsQ = trpc.extrasDia.bookingsInSlot.useQuery(
-    { date: targetDate, hour, slot, type: "checkout" },
+    { date: targetDate, hour, slot, type: "checkout", city: cityCtx },
   );
 
   const checkins = checkinsQ.data ?? [];
@@ -1420,6 +1453,31 @@ export function AvailabilitySection() {
   const hints = trpc.extrasAvailability.weekHints.useQuery();
   const [weekStart, setWeekStart] = useState<string>("");
   const [note, setNote] = useState("");
+  // Tipo de pedido (templates do Jorge): semana / dia+turno / que-horas / das X às Y
+  const [msgKind, setMsgKind] = useState<AvailabilityMessageKind>("week");
+  const [msgDate, setMsgDate] = useState(() => { const d = new Date(); d.setDate(d.getDate() + 1); const pad = (n: number) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; });
+  const [msgShift, setMsgShift] = useState<"morning" | "afternoon" | "night">("morning");
+  const [msgFrom, setMsgFrom] = useState(8);
+  const [msgTo, setMsgTo] = useState(20);
+  const msgDateLabel = useMemo(() => {
+    const today = new Date(); const pad = (n: number) => String(n).padStart(2, "0");
+    const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
+    const iso = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const dm = msgDate.slice(8, 10) + "/" + msgDate.slice(5, 7);
+    if (msgDate === iso(today)) return `hoje (${dm})`;
+    if (msgDate === iso(tomorrow)) return `amanhã (${dm})`;
+    return `dia ${dm}`;
+  }, [msgDate]);
+  const msgParams = useMemo(() => ({
+    kind: msgKind, dateLabel: msgDateLabel, shift: msgShift,
+    fromHour: msgFrom, toHour: msgTo, note: note.trim() || null,
+  }), [msgKind, msgDateLabel, msgShift, msgFrom, msgTo, note]);
+  const msgPreview = useMemo(() => buildAvailabilityMessage(msgParams), [msgParams]);
+  const msgInput = useMemo(() => msgKind === "week" ? null : ({
+    kind: msgKind, dateLabel: msgDateLabel, targetDate: msgDate || null,
+    ...(msgKind === "day_shift" ? { shift: msgShift } : {}),
+    ...(msgKind === "day_range" ? { fromHour: msgFrom, toHour: msgTo } : {}),
+  }), [msgKind, msgDateLabel, msgDate, msgShift, msgFrom, msgTo]);
   const [testEmail, setTestEmail] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   // A tabela lista TODOS os extras ativos por defeito — é a lista de contactos
@@ -1447,6 +1505,8 @@ export function AvailabilitySection() {
   });
 
   const o = overview.data;
+  // Última vez que cada extra trabalhou (histórico Multipark/ponto/extras-dia)
+  const lastWorked = trpc.rh.lastWorkedMap.useQuery();
   // Os dois filtros COMPÕEM-SE: cidade primeiro, disponibilidade depois. O
   // conjunto resultante é o que a tabela mostra E o alvo de "a todos" (email e
   // WhatsApp) — invariante "o que envio é o que vejo".
@@ -1456,8 +1516,10 @@ export function AvailabilitySection() {
     if (cityFilter === "none") list = list.filter(e => e.city === null);
     else if (cityFilter !== "all") list = list.filter(e => e.city === cityFilter);
     if (onlyWithAvailability) list = list.filter(e => e.availableDays > 0);
-    return list;
-  }, [o, cityFilter, onlyWithAvailability]);
+    return list.map(e => ({ ...e, lastWorked: lastWorked.data?.[e.employeeId] ?? "" }));
+  }, [o, cityFilter, onlyWithAvailability, lastWorked.data]);
+  const availSort = useTableSort(shownExtras);
+  const openEmployee = useOpenEmployee();
 
   // Contagens do cabeçalho seguem o conjunto FILTRADO (as do servidor são
   // sempre o universo completo e mentiriam com um filtro aplicado).
@@ -1565,19 +1627,11 @@ export function AvailabilitySection() {
       <CardContent className="space-y-4">
         <div className="flex items-end gap-3 flex-wrap">
           <div className="space-y-1">
-            <Label className="text-xs">Semana (começa em)</Label>
-            <Input
-              type="date"
-              className="w-44"
-              value={effectiveWeek}
-              onChange={(e) => setWeekStart(e.target.value)}
-            />
+            <Label className="text-xs">Semana</Label>
+            <UniDateNav date={effectiveWeek} defaultGran="week" onChange={(d) => setWeekStart(mondayOf(new Date(d + "T00:00:00")))} />
           </div>
           {hints.data && (
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={() => setWeekStart(hints.data!.current)}>
-                Esta semana
-              </Button>
               <Button variant="outline" size="sm" onClick={() => setWeekStart(hints.data!.next)}>
                 Próxima semana
               </Button>
@@ -1592,6 +1646,57 @@ export function AvailabilitySection() {
             value={note}
             onChange={(e) => setNote(e.target.value)}
           />
+
+          {/* Tipo de pedido (templates) + pré-visualização */}
+          <div className="w-full space-y-2 border rounded-lg p-3 bg-muted/20">
+            <div className="flex flex-wrap items-end gap-2">
+              <div>
+                <Label className="text-xs mb-1 block">Tipo de pedido</Label>
+                <Select value={msgKind} onValueChange={(v) => setMsgKind(v as AvailabilityMessageKind)}>
+                  <SelectTrigger className="w-72 h-9"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {AVAILABILITY_KINDS.map((k) => <SelectItem key={k.id} value={k.id}>{k.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              {msgKind !== "week" && (
+                <div>
+                  <Label className="text-xs mb-1 block">Dia</Label>
+                  <Input type="date" value={msgDate} onChange={(e) => setMsgDate(e.target.value)} className="w-40 h-9" />
+                </div>
+              )}
+              {msgKind === "day_shift" && (
+                <div>
+                  <Label className="text-xs mb-1 block">Turno</Label>
+                  <Select value={msgShift} onValueChange={(v) => setMsgShift(v as any)}>
+                    <SelectTrigger className="w-32 h-9"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="morning">Manhã</SelectItem>
+                      <SelectItem value="afternoon">Tarde</SelectItem>
+                      <SelectItem value="night">Noite</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              {msgKind === "day_range" && (
+                <>
+                  <div><Label className="text-xs mb-1 block">Das</Label><Input type="number" min={0} max={23} value={msgFrom} onChange={(e) => setMsgFrom(parseInt(e.target.value) || 0)} className="w-20 h-9" /></div>
+                  <div><Label className="text-xs mb-1 block">Às</Label><Input type="number" min={0} max={27} value={msgTo} onChange={(e) => setMsgTo(parseInt(e.target.value) || 0)} className="w-20 h-9" /></div>
+                </>
+              )}
+            </div>
+            <div className="text-xs bg-background border rounded p-2">
+              <p className="font-semibold">{msgPreview.subject}</p>
+              <p className="text-muted-foreground mt-0.5">{msgPreview.lines.join(" ")} <span className="text-primary font-medium">{msgPreview.cta} [link]</span></p>
+              <button
+                type="button"
+                className="text-[11px] text-blue-600 hover:underline mt-1"
+                onClick={() => setWaParam2(msgPreview.text)}
+              >
+                Usar este texto no WhatsApp ({"{"}{"{"}2{"}"}{"}"})
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Teste: enviar só para um endereço (não toca nos extras) */}
@@ -1613,6 +1718,7 @@ export function AvailabilitySection() {
                 origin: window.location.origin,
                 note: note.trim() || null,
                 testEmail: testEmail.trim(),
+                message: msgInput,
               })}
             >
               <Send className="h-4 w-4 mr-2" /> Enviar teste
@@ -1639,6 +1745,7 @@ export function AvailabilitySection() {
                 origin: window.location.origin,
                 note: note.trim() || null,
                 employeeIds: ids,
+                message: msgInput,
               });
             }}
           >
@@ -1718,16 +1825,17 @@ export function AvailabilitySection() {
                         }}
                       />
                     </th>
-                    <th className="py-1 pr-2">Extra</th>
-                    <th className="py-1 pr-2">Cidade</th>
-                    <th className="py-1 pr-2">Telefone</th>
+                    <Th k="fullName" label="Extra" sortKey={availSort.sortKey} sortDir={availSort.sortDir} onToggle={availSort.toggle} />
+                    <Th k="lastWorked" label="Últ. trabalho" sortKey={availSort.sortKey} sortDir={availSort.sortDir} onToggle={availSort.toggle} />
+                    <Th k="city" label="Cidade" sortKey={availSort.sortKey} sortDir={availSort.sortDir} onToggle={availSort.toggle} />
+                    <Th k="phoneE164" label="Telefone" sortKey={availSort.sortKey} sortDir={availSort.sortDir} onToggle={availSort.toggle} />
                     {o.dayHeaders.map((h) => (
                       <th key={h.day} className="px-1 text-center whitespace-nowrap">{h.label}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {shownExtras.map((ex) => (
+                  {availSort.sorted.map((ex) => (
                     <tr key={ex.employeeId} className="border-b last:border-0">
                       <td className="py-1 pr-1">
                         <input
@@ -1748,8 +1856,18 @@ export function AvailabilitySection() {
                           {ex.responded
                             ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
                             : <span className="h-3.5 w-3.5 inline-block rounded-full border border-muted-foreground/30" />}
-                          {ex.fullName}
+                          <button
+                            type="button"
+                            className="hover:underline text-left"
+                            title="Abrir ficha do funcionário"
+                            onClick={() => openEmployee(ex.employeeId)}
+                          >
+                            {ex.fullName}
+                          </button>
                         </span>
+                      </td>
+                      <td className="py-1 pr-2 whitespace-nowrap text-xs text-muted-foreground">
+                        {(ex as any).lastWorked ? fmtPTDate((ex as any).lastWorked) : "nunca"}
                       </td>
                       <td className="py-1 pr-2 whitespace-nowrap text-xs">
                         {ex.city ? (
@@ -1805,7 +1923,7 @@ export function AvailabilitySection() {
                   ))}
                   {shownExtras.length === 0 && (
                     <tr>
-                      <td colSpan={o.dayHeaders.length + 4} className="py-3 text-center text-muted-foreground">
+                      <td colSpan={o.dayHeaders.length + 5} className="py-3 text-center text-muted-foreground">
                         {cityFilter !== "all"
                           ? "Nenhum extra neste filtro de cidade."
                           : onlyWithAvailability

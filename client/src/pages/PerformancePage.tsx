@@ -14,6 +14,10 @@ import {
   Trophy, RefreshCw, TrendingUp, TrendingDown, Minus, Clock,
   Zap, AlertTriangle, Award, Download, Pencil,
 } from "lucide-react";
+import { useTableSort, Th } from "@/components/SortableTable";
+import DateRangeNav, { rangeFor, type DateGran } from "@/components/DateRangeNav";
+import { useOpenEmployee } from "@/hooks/useOpenEmployee";
+import { fmtPTDate } from "@/lib/lisbonTime";
 
 function getWeekNumber(d: Date): number {
   const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
@@ -26,14 +30,39 @@ function getWeekNumber(d: Date): number {
 export default function PerformancePage() {
   const { user } = useAuth();
   const now = new Date();
-  const [week, setWeek] = useState(getWeekNumber(now));
-  const [year, setYear] = useState(now.getFullYear());
   const [editing, setEditing] = useState<any>(null);
+
+  // Filtro de datas TRANSVERSAL (igual ao do Operacional): Dia/Semana/Mês/Ano
+  // com setinhas. Semana única = modo normal (editável, tendência); qualquer
+  // outro período = ranking AGREGADO (soma das semanas que o período apanha).
+  const [range, setRange] = useState(() => {
+    const r = rangeFor("week", now);
+    return { start: r.start, end: r.end, gran: "week" as DateGran };
+  });
+  const singleWeek = range.gran === "week" || range.gran === "day";
+  const anchor = new Date(`${range.start || rangeFor("week", now).start}T00:00:00`);
+  const week = getWeekNumber(anchor);
+  const year = anchor.getFullYear();
 
   const prevWeek = week > 1 ? week - 1 : 53;
   const prevYear = week > 1 ? year : year - 1;
 
-  const { data: evaluations = [], isLoading } = trpc.performance.list.useQuery({ weekNumber: week, yearNumber: year });
+  const { data: weekEvaluations = [], isLoading } = trpc.performance.list.useQuery({ weekNumber: week, yearNumber: year });
+  const { data: rangeRows = [] } = trpc.performance.range.useQuery(
+    { from: range.start, to: range.end },
+    { enabled: !singleWeek && !!range.start && !!range.end },
+  );
+  // No modo agregado, mapeia para a mesma forma da tabela (sem edição)
+  const evaluations = useMemo(() => {
+    if (singleWeek) return weekEvaluations;
+    return (rangeRows as any[]).map((r) => ({
+      ...r,
+      id: r.employeeId,
+      notes: `${r.weeks} semana(s)`,
+    }));
+  }, [singleWeek, weekEvaluations, rangeRows]);
+  const lastWorkedMap = trpc.rh.lastWorkedMap.useQuery();
+  const openEmployee = useOpenEmployee();
   const { data: prevEvaluations = [] } = trpc.performance.list.useQuery({ weekNumber: prevWeek, yearNumber: prevYear });
   const generateMut = trpc.performance.generate.useMutation();
   const updateMut = trpc.performance.update.useMutation();
@@ -57,6 +86,16 @@ export default function PerformancePage() {
 
   const isSupervisor = user?.role && ["supervisor", "admin", "super_admin"].includes(user.role);
 
+  // Ordenação por coluna; a POSIÇÃO do ranking (medalhas) é sempre pela
+  // pontuação, independentemente da coluna ordenada.
+  const { sorted: sortedEvals, sortKey, sortDir, toggle } = useTableSort(evaluations as any[]);
+  const rankByEmployee = useMemo(() => {
+    const byPoints = [...evaluations].sort((a: any, b: any) => (b.totalPoints ?? 0) - (a.totalPoints ?? 0));
+    const m = new Map<number, number>();
+    byPoints.forEach((ev: any, i: number) => m.set(ev.employeeId, i + 1));
+    return m;
+  }, [evaluations]);
+
   const handleGenerate = async () => {
     if (evaluations.length > 0 && !confirm(`Já existem ${evaluations.length} avaliações para esta semana. Recalcular vai actualizar os valores automáticos (mantém notas guardadas). Continuar?`)) {
       return;
@@ -71,13 +110,13 @@ export default function PerformancePage() {
   };
 
   const exportCSV = () => {
-    const headers = ["Pos","Condutor","Horas","Movs","Mov/h","Alertas","Inc+","Inc-","Pts+","Pts-","Total","Notas"];
+    const headers = ["Pos","Condutor","Horas","Movs","Mov/h","Inc+","Inc-","Pts+","Pts-","Total","Custo","Notas"];
     const rows = evaluations.map((ev: any, idx: number) => [
       idx + 1,
       employeeMap.get(ev.employeeId) ?? `#${ev.employeeId}`,
       ev.hoursWorked, ev.movementsCount, ev.movementsPerHour,
-      ev.speedAlerts, ev.incidentsPositive, ev.incidentsNegative,
-      ev.positivePoints, ev.negativePoints, ev.totalPoints,
+      ev.incidentsPositive, ev.incidentsNegative,
+      ev.positivePoints, ev.negativePoints, ev.totalPoints, ev.weeklyCost ?? "",
       (ev.notes ?? "").replace(/;/g, ","),
     ]);
     const csv = [headers.join(";"), ...rows.map(r => r.join(";"))].join("\n");
@@ -91,7 +130,7 @@ export default function PerformancePage() {
   const topPerformer = evaluations.length > 0 ? evaluations[0] : null;
   const totalHours = evaluations.reduce((s: number, e: any) => s + (e.hoursWorked || 0), 0);
   const totalMovements = evaluations.reduce((s: number, e: any) => s + (e.movementsCount || 0), 0);
-  const totalAlerts = evaluations.reduce((s: number, e: any) => s + (e.speedAlerts || 0), 0);
+  const totalCost = evaluations.reduce((s: number, e: any) => s + Number(e.weeklyCost || 0), 0);
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto w-full">
@@ -101,18 +140,19 @@ export default function PerformancePage() {
           <p className="text-muted-foreground">Ranking semanal dos condutores</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <div className="flex items-center gap-2">
-            <Label className="text-xs">Semana</Label>
-            <Input type="number" value={week} onChange={e => setWeek(parseInt(e.target.value) || 1)} min={1} max={53} className="w-20 h-9" />
-          </div>
-          <div className="flex items-center gap-2">
-            <Label className="text-xs">Ano</Label>
-            <Input type="number" value={year} onChange={e => setYear(parseInt(e.target.value) || now.getFullYear())} className="w-24 h-9" />
-          </div>
+          {/* Filtro transversal (igual ao Operacional): Dia/Semana/Mês/Ano + ◀ ▶ */}
+          <DateRangeNav
+            start={range.start}
+            end={range.end}
+            gran={range.gran}
+            showAll={false}
+            onChange={(s, e, g) => setRange({ start: s, end: e, gran: g })}
+          />
+          {singleWeek && <Badge variant="secondary" className="tabular-nums">S{week}/{year}</Badge>}
           <Button variant="outline" size="sm" onClick={exportCSV} disabled={evaluations.length === 0}>
             <Download className="w-4 h-4 mr-2" /> CSV
           </Button>
-          {isSupervisor && (
+          {isSupervisor && singleWeek && (
             <Button onClick={handleGenerate} disabled={generateMut.isPending} size="sm">
               <RefreshCw className={`w-4 h-4 mr-2 ${generateMut.isPending ? "animate-spin" : ""}`} />
               {generateMut.isPending ? "A gerar..." : evaluations.length > 0 ? "Recalcular" : "Gerar Avaliação"}
@@ -132,8 +172,8 @@ export default function PerformancePage() {
           <p className="text-xl font-bold mt-1">{totalMovements}</p>
         </Card>
         <Card className="p-3">
-          <div className="flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-red-500" /><span className="text-xs text-muted-foreground">Alertas Velocidade</span></div>
-          <p className="text-xl font-bold mt-1 text-red-600">{totalAlerts}</p>
+          <div className="flex items-center gap-2"><Zap className="w-4 h-4 text-amber-500" /><span className="text-xs text-muted-foreground">Custo Escalas</span></div>
+          <p className="text-xl font-bold mt-1">{totalCost.toFixed(0)}€</p>
         </Card>
         <Card className="p-3">
           <div className="flex items-center gap-2"><Award className="w-4 h-4 text-yellow-500" /><span className="text-xs text-muted-foreground">Melhor Condutor</span></div>
@@ -154,7 +194,7 @@ export default function PerformancePage() {
         </Card>
       ) : (
         <Card>
-          <CardHeader><CardTitle className="text-base">Ranking — Semana {week}/{year}</CardTitle></CardHeader>
+          <CardHeader><CardTitle className="text-base">Ranking — {singleWeek ? `Semana ${week}/${year}` : `${range.start} a ${range.end} (agregado)`}</CardTitle></CardHeader>
           <CardContent>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[900px] text-sm">
@@ -162,35 +202,35 @@ export default function PerformancePage() {
                   <tr className="border-b text-left">
                     <th className="p-2 w-12">#</th>
                     <th className="p-2 w-12 text-center">Δ</th>
-                    <th className="p-2">Condutor</th>
-                    <th className="p-2 text-center">Horas</th>
-                    <th className="p-2 text-center">Movs</th>
-                    <th className="p-2 text-center">Mov/h</th>
-                    <th className="p-2 text-center">Alertas</th>
-                    <th className="p-2 text-center">Inc+</th>
-                    <th className="p-2 text-center">Inc−</th>
-                    <th className="p-2 text-center">Pts+</th>
-                    <th className="p-2 text-center">Pts−</th>
-                    <th className="p-2 text-center font-bold">Total</th>
+                    <Th k="employeeName" label="Condutor" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="hoursWorked" label="Horas" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="movementsCount" label="Movs" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="movementsPerHour" label="Mov/h" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="incidentsPositive" label="Inc+" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="incidentsNegative" label="Inc−" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="positivePoints" label="Pts+" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="negativePoints" label="Pts−" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="totalPoints" label="Total" align="center" className="font-bold" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="weeklyCost" label="Custo" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                     <th className="p-2">Notas</th>
-                    {isSupervisor && <th className="p-2 w-10"></th>}
+                    {isSupervisor && singleWeek && <th className="p-2 w-10"></th>}
                   </tr>
                 </thead>
                 <tbody>
-                  {evaluations.map((ev: any, idx: number) => {
+                  {sortedEvals.map((ev: any) => {
                     const name = employeeMap.get(ev.employeeId) ?? ev.employeeName ?? `#${ev.employeeId}`;
-                    const isTop3 = idx < 3;
-                    const currentPos = idx + 1;
-                    const prevPos = prevPositionMap.get(ev.employeeId);
+                    const currentPos = rankByEmployee.get(ev.employeeId) ?? 0;
+                    const isTop3 = currentPos <= 3;
+                    const prevPos = singleWeek ? prevPositionMap.get(ev.employeeId) : undefined;
                     const delta = prevPos != null ? prevPos - currentPos : null; // +ve = subiu
                     return (
                       <tr key={ev.id} className={`border-b hover:bg-muted/50 ${isTop3 ? "bg-yellow-50/30" : ""}`}>
                         <td className="p-2 font-bold text-center">
-                          {idx === 0 ? "🥇" : idx === 1 ? "🥈" : idx === 2 ? "🥉" : currentPos}
+                          {currentPos === 1 ? "🥇" : currentPos === 2 ? "🥈" : currentPos === 3 ? "🥉" : currentPos}
                         </td>
                         <td className="p-2 text-center">
                           {delta == null ? (
-                            <Badge variant="outline" className="text-[10px]">novo</Badge>
+                            singleWeek ? <Badge variant="outline" className="text-[10px]">novo</Badge> : <span className="text-muted-foreground text-xs">—</span>
                           ) : delta > 0 ? (
                             <span className="text-green-700 text-xs inline-flex items-center gap-0.5">
                               <TrendingUp className="w-3 h-3" /> {delta}
@@ -203,17 +243,17 @@ export default function PerformancePage() {
                             <span className="text-muted-foreground text-xs inline-flex items-center"><Minus className="w-3 h-3" /></span>
                           )}
                         </td>
-                        <td className="p-2 font-medium whitespace-nowrap">{name}</td>
+                        <td className="p-2 font-medium whitespace-nowrap">
+                          <button type="button" className="hover:underline text-left" title="Abrir ficha do funcionário" onClick={() => openEmployee(ev.employeeId)}>
+                            {name}
+                          </button>
+                          {lastWorkedMap.data?.[ev.employeeId] && (
+                            <span className="block text-[10px] text-muted-foreground font-normal">últ. trabalho: {fmtPTDate(lastWorkedMap.data[ev.employeeId])}</span>
+                          )}
+                        </td>
                         <td className="p-2 text-center tabular-nums">{Number(ev.hoursWorked || 0).toFixed(1)}h</td>
                         <td className="p-2 text-center tabular-nums">{ev.movementsCount || 0}</td>
                         <td className="p-2 text-center tabular-nums">{Number(ev.movementsPerHour || 0).toFixed(1)}</td>
-                        <td className="p-2 text-center">
-                          {ev.speedAlerts > 0 ? (
-                            <Badge className="bg-red-100 text-red-700 text-xs">{ev.speedAlerts}</Badge>
-                          ) : (
-                            <span className="text-green-600 text-xs">0</span>
-                          )}
-                        </td>
                         <td className="p-2 text-center text-green-600">{ev.incidentsPositive || 0}</td>
                         <td className="p-2 text-center text-red-600">{ev.incidentsNegative || 0}</td>
                         <td className="p-2 text-center"><span className="text-green-600 font-medium">+{ev.positivePoints || 0}</span></td>
@@ -223,10 +263,18 @@ export default function PerformancePage() {
                             {ev.totalPoints || 0}
                           </span>
                         </td>
+                        <td className="p-2 text-center text-xs tabular-nums">
+                          {Number(ev.weeklyCost || 0) > 0 ? (
+                            <>
+                              {Number(ev.weeklyCost).toFixed(0)}€
+                              {ev.movementsCount > 0 && <span className="block text-[10px] text-muted-foreground">{(Number(ev.weeklyCost) / ev.movementsCount).toFixed(2)}€/mov</span>}
+                            </>
+                          ) : "—"}
+                        </td>
                         <td className="p-2 text-xs text-muted-foreground max-w-[150px] truncate" title={ev.notes ?? ""}>
                           {ev.notes ?? <span className="text-muted-foreground/50">—</span>}
                         </td>
-                        {isSupervisor && (
+                        {isSupervisor && singleWeek && (
                           <td className="p-2">
                             <Button variant="ghost" size="icon" className="w-7 h-7" onClick={() => setEditing(ev)}>
                               <Pencil className="w-3 h-3" />
@@ -258,15 +306,7 @@ export default function PerformancePage() {
             <div>
               <h4 className="font-medium text-red-600 mb-2">Pontos Negativos</h4>
               <ul className="space-y-1 text-muted-foreground">
-                <li>Alertas de velocidade (ignora reconhecidos):
-                  <ul className="ml-4 text-xs">
-                    <li>+10% acima do limite: −2</li>
-                    <li>+10–25%: −5</li>
-                    <li>+25–50%: −10</li>
-                    <li>+50%: −15</li>
-                  </ul>
-                </li>
-                <li>Ocorrências atribuídas (por severidade): low −2, medium −5, high −10, critical −20</li>
+                <li>Ocorrências atribuídas ao colaborador (por severidade): low −2, medium −5, high −10, critical −20</li>
                 <li>Penalizações abertas (no-show extras-dia, etc): −5 pts por ponto aberto</li>
               </ul>
             </div>

@@ -6,8 +6,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useState, useMemo } from "react";
+import { usePersistedState } from "@/hooks/usePersistedState";
 import { Button } from "@/components/ui/button";
 import { QuickRangeBar, thisMonthRange } from "@/components/QuickRangeBar";
+import { useTableSort, Th } from "@/components/SortableTable";
+import DateRangeNav from "@/components/DateRangeNav";
+import BookingDetailDialog from "@/components/BookingDetailDialog";
+import { toast } from "sonner";
 import {
   Sparkles, Euro, TrendingUp, CheckCircle2, Clock, Droplets, Zap, Car, Package, Download,
 } from "lucide-react";
@@ -26,15 +31,56 @@ function getServiceIcon(name: string) {
   return Package;
 }
 
+// Normalização dos tipos vindos da API ("FLEX"/"Flexivel" são o mesmo) e
+// separação entre SERVIÇOS COM VALOR e FLAGS OPERACIONAIS (marcas a ~0€
+// tipo "No pay"/"After hour collections" que não são serviços vendidos).
+function normalizeServiceName(name: string): string {
+  const n = (name ?? "").trim();
+  const lower = n.toLowerCase();
+  if (lower === "flex" || lower === "flexivel" || lower === "flexível") return "Flexível";
+  if (lower.startsWith("carregamento")) return n.includes("El") || n.includes("el") ? "Carregamento Elétrico" : n;
+  return n;
+}
+const OPERATIONAL_FLAGS = new Set([
+  "no pay", "after hour collections", "aeroporto faro partidas", "aeroporto lisboa partidas", "aeroporto porto partidas",
+]);
+function isOperationalFlag(name: string, price: number): boolean {
+  const lower = (name ?? "").trim().toLowerCase();
+  return OPERATIONAL_FLAGS.has(lower) || (price === 0 && lower.includes("aeroporto"));
+}
+
 export default function ServicesPage() {
   const [defFrom, defTo] = thisMonthRange();
-  const [startDate, setStartDate] = useState(defFrom);
-  const [endDate, setEndDate] = useState(defTo);
-  const [activeRange, setActiveRange] = useState<string>("thisMonth");
+  const [startDate, setStartDate] = usePersistedState("servicos.from", defFrom);
+  const [endDate, setEndDate] = usePersistedState("servicos.to", defTo);
+  const [activeRange, setActiveRange] = usePersistedState<string>("servicos.range", "thisMonth");
 
   const { data, isLoading } = trpc.services.multiparkExtras.useQuery({ startDate, endDate });
+  const [showFlags, setShowFlags] = usePersistedState<boolean>("servicos.flags", false);
+  const [detailExternalId, setDetailExternalId] = useState<string | null>(null);
+  const detailQ = trpc.multipark.bookingByExternalId.useQuery(
+    { externalId: detailExternalId ?? "" },
+    { enabled: !!detailExternalId },
+  );
+  const utils = trpc.useUtils();
+  const setDoneMut = trpc.services.setExtraDone.useMutation({
+    onSuccess: () => { utils.services.multiparkExtras.invalidate(); },
+    onError: (e) => toast.error(e.message),
+  });
 
-  const services = data?.services || [];
+  // Normaliza nomes e separa flags operacionais (fora por defeito)
+  const services = useMemo(() => {
+    const all = (data?.services || []).map((s: any) => ({
+      ...s,
+      serviceName: normalizeServiceName(s.serviceName),
+      isFlag: isOperationalFlag(s.serviceName, s.price || 0),
+    }));
+    return showFlags ? all : all.filter((s: any) => !s.isFlag);
+  }, [data, showFlags]);
+  const flagCount = useMemo(
+    () => (data?.services || []).filter((s: any) => isOperationalFlag(s.serviceName, s.price || 0)).length,
+    [data],
+  );
 
   const stats = useMemo(() => {
     const done = services.filter((s: any) => s.done);
@@ -84,6 +130,9 @@ export default function ServicesPage() {
     return list;
   }, [services, filterType, filterStatus]);
 
+  // Ordenação por coluna
+  const { sorted: sortedServices, sortKey, sortDir, toggle } = useTableSort(filtered as any[]);
+
   const typeOptions = useMemo(() => {
     return Object.keys(stats.byType).sort();
   }, [stats.byType]);
@@ -98,14 +147,17 @@ export default function ServicesPage() {
           onPick={(f, t, id) => { setStartDate(f); setEndDate(t); setActiveRange(id); }}
         />
         <div className="flex flex-wrap items-end gap-3">
-          <div>
-            <Label className="text-xs mb-1 block">De</Label>
-            <Input type="date" value={startDate} onChange={e => { setStartDate(e.target.value); setActiveRange(""); }} className="w-40" />
-          </div>
-          <div>
-            <Label className="text-xs mb-1 block">Até</Label>
-            <Input type="date" value={endDate} onChange={e => { setEndDate(e.target.value); setActiveRange(""); }} className="w-40" />
-          </div>
+          <DateRangeNav
+            start={startDate}
+            end={endDate}
+            gran={(activeRange === "thisWeek" || activeRange === "lastWeek" ? "week" : activeRange === "thisMonth" || activeRange === "lastMonth" ? "month" : "custom") as any}
+            showAll={false}
+            onChange={(s2, e2) => { setStartDate(s2); setEndDate(e2); setActiveRange(""); }}
+          />
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none mb-2" title="Marcas operacionais a 0€ (No pay, After hour, Aeroporto…) — não são serviços vendidos">
+            <input type="checkbox" checked={showFlags} onChange={(e) => setShowFlags(e.target.checked)} />
+            Mostrar flags operacionais{flagCount > 0 ? ` (${flagCount})` : ""}
+          </label>
         </div>
       </div>
 
@@ -217,9 +269,10 @@ export default function ServicesPage() {
               size="sm"
               disabled={filtered.length === 0}
               onClick={() => {
-                const headers = ["Serviço","Matrícula","Parque","Preço","Check-out","Estado"];
+                const headers = ["Serviço","Cliente","Matrícula","Parque","Preço","Check-out","Estado"];
                 const rows = filtered.map((s: any) => [
                   (s.serviceName || "").replace(/;/g, ","),
+                  (s.clientName || "").replace(/;/g, ","),
                   s.licensePlate || "",
                   (s.parkName || "").replace(/;/g, ","),
                   (s.price || 0).toFixed(2),
@@ -243,24 +296,43 @@ export default function ServicesPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-left">
-                  <th className="p-2">Serviço</th>
-                  <th className="p-2">Matrícula</th>
-                  <th className="p-2">Parque</th>
-                  <th className="p-2 text-right">Preço</th>
-                  <th className="p-2">Check-out</th>
-                  <th className="p-2">Estado</th>
+                  <Th k="serviceName" label="Serviço" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                  <Th k="clientName" label="Cliente" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                  <Th k="licensePlate" label="Matrícula" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                  <Th k="parkName" label="Parque" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                  <Th k="price" label="Preço" align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                  <Th k="checkOut" label="Check-out" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                  <Th k="done" label="Estado" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((s: any, i: number) => (
-                  <tr key={`${s.bookingId}-${i}`} className="border-b hover:bg-muted/50">
-                    <td className="p-2 font-medium">{s.serviceName}</td>
-                    <td className="p-2">{s.licensePlate || "—"}</td>
+                {sortedServices.map((s: any, i: number) => (
+                  <tr
+                    key={`${s.bookingId}-${i}`}
+                    className="border-b hover:bg-muted/50 cursor-pointer"
+                    onClick={() => setDetailExternalId(s.bookingId)}
+                  >
+                    <td className="p-2 font-medium">
+                      {s.serviceName}
+                      {s.isFlag && <Badge variant="outline" className="ml-1 text-[9px] text-muted-foreground">flag</Badge>}
+                    </td>
+                    <td className="p-2 text-xs">{(s as any).clientName || "—"}</td>
+                    <td className="p-2 font-mono text-xs">{s.licensePlate || "—"}</td>
                     <td className="p-2">{s.parkName || "—"}</td>
                     <td className="p-2 text-right">{(s.price || 0).toFixed(2)} €</td>
                     <td className="p-2 text-xs">{s.checkOut ? fmtPTDate(s.checkOut) : "—"}</td>
                     <td className="p-2">
-                      <Badge variant={s.done ? "default" : "secondary"}>{s.done ? "Feito" : "Pendente"}</Badge>
+                      {/* Clicar dá baixa / reabre (guardado na app; o sync respeita) */}
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); if (s.id) setDoneMut.mutate({ id: s.id, done: !s.done }); }}
+                        title={s.done ? "Clique para reabrir" : "Clique para dar baixa (feito)"}
+                        disabled={setDoneMut.isPending}
+                      >
+                        <Badge variant={s.done ? "default" : "secondary"} className="cursor-pointer hover:opacity-80">
+                          {s.done ? "Feito ✓" : "Pendente"}
+                        </Badge>
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -270,6 +342,10 @@ export default function ServicesPage() {
               <p className="text-center text-sm text-muted-foreground py-6">Sem resultados com os filtros selecionados</p>
             )}
           </div>
+
+          {detailExternalId && detailQ.data && (
+            <BookingDetailDialog booking={detailQ.data} onClose={() => setDetailExternalId(null)} />
+          )}
         </>
       )}
     </div>

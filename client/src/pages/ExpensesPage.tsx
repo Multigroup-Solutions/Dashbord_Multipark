@@ -71,6 +71,7 @@ import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth } from "date-f
 import { pt } from "date-fns/locale";
 import { fileHref } from "@/lib/fileHref";
 import DateRangeNav from "@/components/DateRangeNav";
+import { useTableSort, Th } from "@/components/SortableTable";
 
 const STATUS_CONFIG: Record<string, { label: string; icon: any; className: string }> = {
   pending: { label: "Pendente", icon: Clock, className: "bg-yellow-100 text-yellow-800 border-yellow-200" },
@@ -259,6 +260,9 @@ export default function ExpensesPage() {
     return { total, pending, paid, overdue, count: items.length };
   }, [expensesList]);
 
+  // Ordenação por coluna na tabela (setas nos cabeçalhos)
+  const { sorted: sortedExpenses, sortKey: expSortKey, sortDir: expSortDir, toggle: expToggle } = useTableSort((expensesList ?? []) as any[]);
+
   // Selected user name for KPI label
   const selectedUserName = useMemo(() => {
     if (!filterUser || filterUser === "all") return null;
@@ -345,7 +349,7 @@ export default function ExpensesPage() {
             <p className="text-sm text-muted-foreground">Registo de despesas</p>
           )}
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-2 shrink-0 flex-wrap">
           {canManage && (
             <Button
               variant="outline"
@@ -562,20 +566,20 @@ export default function ExpensesPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Fornecedor</TableHead>
-                    <TableHead>Categoria</TableHead>
-                    <TableHead>Projeto</TableHead>
-                    <TableHead>Data</TableHead>
-                    <TableHead>Pagamento</TableHead>
-                    <TableHead>Comprador</TableHead>
-                    <TableHead className="text-right">Valor</TableHead>
-                    <TableHead>Estado</TableHead>
-                    <TableHead>Inserido por</TableHead>
+                    <Th k="expense.supplier" label="Fornecedor" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
+                    <Th k="category.name" label="Categoria" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
+                    <Th k="project.name" label="Projeto" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
+                    <Th k="expense.expenseDate" label="Data" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
+                    <Th k="expense.paymentDueDate" label="Pagamento" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
+                    <Th k="buyer.fullName" label="Comprador" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
+                    <Th k="expense.amount" label="Valor" align="right" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
+                    <Th k="expense.status" label="Estado" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
+                    <Th k="insertedBy.name" label="Inserido por" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
                     <TableHead className="text-right">Ações</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {expensesList?.map((row) => {
+                  {sortedExpenses.map((row: any) => {
                     const { expense, category, project, insertedBy, buyer } = row;
                     return (
                       <TableRow
@@ -712,7 +716,8 @@ function ExpenseDetailSheet({
 
   return (
     <Sheet open={!!data} onOpenChange={() => onClose()}>
-      <SheetContent className="sm:max-w-lg overflow-y-auto">
+      {/* w-full no telemóvel (ecrã inteiro), sm:max-w-xl no PC; corpo com padding próprio */}
+      <SheetContent className="w-full sm:w-[560px] sm:max-w-xl overflow-y-auto">
         <SheetHeader>
           <SheetTitle className="flex items-center gap-2">
             <Receipt className="h-5 w-5 text-primary" />
@@ -720,7 +725,7 @@ function ExpenseDetailSheet({
           </SheetTitle>
         </SheetHeader>
 
-        <div className="mt-6 space-y-6">
+        <div className="space-y-6 px-4 pb-6 sm:px-6">
           {/* Status + Amount */}
           <div className="flex items-center justify-between">
             <StatusBadge status={expense.status} />
@@ -733,7 +738,7 @@ function ExpenseDetailSheet({
               <img
                 src={fileHref(expense.invoiceImageUrl, expense.invoiceImageKey) ?? undefined}
                 alt="Fatura"
-                className="w-full max-h-48 object-contain rounded-lg border cursor-pointer"
+                className="w-full max-h-72 object-contain rounded-lg border cursor-pointer bg-muted/30"
                 onClick={() => window.open(fileHref(expense.invoiceImageUrl, expense.invoiceImageKey) ?? undefined, "_blank")}
               />
             </div>
@@ -781,8 +786,10 @@ function ExpenseDetailSheet({
 
 function DetailRow({ label, value, badge, badgeColor }: { label: string; value?: string | null; badge?: boolean; badgeColor?: string | null }) {
   if (!value) return null;
+  // Textos longos (descrição/notas) passam para baixo do label em vez de esmagar a linha
+  const isLong = value.length > 60;
   return (
-    <div className="flex justify-between items-start gap-4">
+    <div className={isLong ? "space-y-1" : "flex justify-between items-start gap-4"}>
       <span className="text-sm text-muted-foreground shrink-0">{label}</span>
       {badge ? (
         <span className="inline-flex items-center gap-1 text-sm font-medium">
@@ -790,7 +797,7 @@ function DetailRow({ label, value, badge, badgeColor }: { label: string; value?:
           {value}
         </span>
       ) : (
-        <span className="text-sm font-medium text-right">{value}</span>
+        <span className={`text-sm font-medium min-w-0 break-words [overflow-wrap:anywhere] ${isLong ? "block" : "text-right"}`}>{value}</span>
       )}
     </div>
   );

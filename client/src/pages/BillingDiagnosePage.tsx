@@ -75,7 +75,7 @@ export default function BillingDiagnosePage() {
               </p>
             </CardHeader>
             <CardContent>
-              <table className="w-full text-sm">
+              <div className="overflow-x-auto"><table className="w-full text-sm">
                 <thead>
                   <tr className="border-b text-left text-xs uppercase text-muted-foreground">
                     <th className="p-2">Filtro</th>
@@ -105,7 +105,7 @@ export default function BillingDiagnosePage() {
                     <td className="p-2 text-right tabular-nums">{fmt(data.sumWithProjectFilter.sum)}</td>
                   </tr>
                 </tbody>
-              </table>
+              </table></div>
               {data.projectIds && (
                 <p className="text-xs text-muted-foreground mt-2">
                   Projeto expandido para IDs: <code>{data.projectIds.join(", ")}</code>
@@ -165,7 +165,7 @@ export default function BillingDiagnosePage() {
               <CardTitle className="text-base">Receita por projeto (com filtros finais aplicados)</CardTitle>
             </CardHeader>
             <CardContent>
-              <table className="w-full text-sm">
+              <div className="overflow-x-auto"><table className="w-full text-sm">
                 <thead>
                   <tr className="border-b text-left text-xs uppercase text-muted-foreground">
                     <th className="p-2">Projeto</th>
@@ -185,7 +185,7 @@ export default function BillingDiagnosePage() {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </table></div>
             </CardContent>
           </Card>
 
@@ -195,7 +195,7 @@ export default function BillingDiagnosePage() {
               <CardTitle className="text-base">Receita por campaign</CardTitle>
             </CardHeader>
             <CardContent>
-              <table className="w-full text-sm">
+              <div className="overflow-x-auto"><table className="w-full text-sm">
                 <thead>
                   <tr className="border-b text-left text-xs uppercase text-muted-foreground">
                     <th className="p-2">Campaign</th>
@@ -214,7 +214,7 @@ export default function BillingDiagnosePage() {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </table></div>
             </CardContent>
           </Card>
 
@@ -224,7 +224,7 @@ export default function BillingDiagnosePage() {
               <CardTitle className="text-base">Por estado da reserva</CardTitle>
             </CardHeader>
             <CardContent>
-              <table className="w-full text-sm">
+              <div className="overflow-x-auto"><table className="w-full text-sm">
                 <thead>
                   <tr className="border-b text-left text-xs uppercase text-muted-foreground">
                     <th className="p-2">Status</th>
@@ -241,7 +241,7 @@ export default function BillingDiagnosePage() {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </table></div>
             </CardContent>
           </Card>
 

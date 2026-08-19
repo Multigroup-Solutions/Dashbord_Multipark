@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
+import { trpc } from "@/lib/trpc";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
-import { Input } from "@/components/ui/input";
+import DateRangeNav, { type DateGran } from "@/components/DateRangeNav";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -10,7 +11,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-/** Hook to manage dashboard filter state */
+/** Hook to manage dashboard filter state.
+ *  Cidade/Marca são o ESTADO GLOBAL do topo (pedido Jorge: "as cidades e os
+ *  parques cá em cima em todo o lado") — mudar em cima muda a página e
+ *  vice-versa. Só as datas são locais a cada página. */
 export function useDashboardFilters(defaults?: { from?: string; to?: string }) {
   const globalFilters = useGlobalFilters();
 
@@ -22,9 +26,10 @@ export function useDashboardFilters(defaults?: { from?: string; to?: string }) {
 
   const [from, setFrom] = useState(defaultFrom);
   const [to, setTo] = useState(defaultTo);
-  const [cityId, setCityId] = useState<number | null>(null);
-  const [brandId, setBrandId] = useState<number | null>(null);
   const [period, setPeriod] = useState("monthly");
+
+  const cityId = globalFilters.cityId;
+  const brandId = globalFilters.brandId;
 
   const projectId = useMemo(() => {
     if (brandId !== null) return brandId;
@@ -38,9 +43,9 @@ export function useDashboardFilters(defaults?: { from?: string; to?: string }) {
     setFrom,
     setTo,
     cityId,
-    setCityId,
+    setCityId: globalFilters.setCityId,
     brandId,
-    setBrandId,
+    setBrandId: globalFilters.setBrandId,
     projectId,
     period,
     setPeriod,
@@ -75,25 +80,49 @@ export function DashboardFilterBar({
   onPeriodChange,
 }: DashboardFilterBarProps) {
   const globalFilters = useGlobalFilters();
+  // Granularidade das setinhas (padrão transversal do Jorge: ◀ mês/semana/… ▶).
+  // Default "month" — os dashboards abrem no mês corrente.
+  const [gran, setGran] = useState<DateGran>("month");
+  // Lista de marcas coerente com a CIDADE ESCOLHIDA NESTA BARRA (o contexto
+  // global segue a cidade do header, que pode ser outra). Sem cidade →
+  // marcas globais (ID negativo = a marca em todas as cidades, resolvido
+  // no servidor por resolveProjectIds).
+  const { data: allProjects } = trpc.projects.list.useQuery();
+  const brandOptions = useMemo(() => {
+    if (!allProjects) return [];
+    if (cityId !== null) {
+      return (allProjects as any[])
+        .filter((p) => p.level === "brand" && p.parentId === cityId)
+        .map((p) => ({ id: p.id, name: p.name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    }
+    const byName = new Map<string, { id: number; name: string; count: number }>();
+    for (const p of allProjects as any[]) {
+      if (p.level !== "brand") continue;
+      const key = p.name.trim().toLowerCase();
+      const ex = byName.get(key);
+      if (ex) ex.count += 1;
+      else byName.set(key, { id: -p.id, name: p.name, count: 1 });
+    }
+    return Array.from(byName.values())
+      .map((b) => ({ id: b.id, name: b.count > 1 ? `${b.name} (todas as cidades)` : b.name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [allProjects, cityId]);
 
   return (
     <div className="flex flex-wrap items-end gap-3">
       <div>
-        <Label className="text-xs mb-1 block">De</Label>
-        <Input
-          type="date"
-          value={from}
-          onChange={(e) => onFromChange(e.target.value)}
-          className="w-[140px]"
-        />
-      </div>
-      <div>
-        <Label className="text-xs mb-1 block">Até</Label>
-        <Input
-          type="date"
-          value={to}
-          onChange={(e) => onToChange(e.target.value)}
-          className="w-[140px]"
+        <Label className="text-xs mb-1 block">Período</Label>
+        <DateRangeNav
+          start={from}
+          end={to}
+          gran={gran}
+          showAll={false}
+          onChange={(s, e, g) => {
+            onFromChange(s);
+            onToChange(e);
+            setGran(g);
+          }}
         />
       </div>
       <div>
@@ -129,7 +158,7 @@ export function DashboardFilterBar({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Todas</SelectItem>
-            {globalFilters.brands.map((b) => (
+            {brandOptions.map((b) => (
               <SelectItem key={b.id} value={String(b.id)}>
                 {b.name}
               </SelectItem>

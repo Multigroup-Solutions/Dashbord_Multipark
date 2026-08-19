@@ -9,9 +9,13 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { QuickRangeBar, thisMonthRange } from "@/components/QuickRangeBar";
+import DateRangeNav from "@/components/DateRangeNav";
+import { useTableSort, Th } from "@/components/SortableTable";
+import BookingDetailDialog from "@/components/BookingDetailDialog";
 import { toast } from "sonner";
 import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { useParams } from "wouter";
+import { usePersistedState } from "@/hooks/usePersistedState";
 import { fmtBookingDateTime, fmtBookingDate, fmtBookingHHmm } from "@/lib/lisbonTime";
 import {
   ParkingCircle, Wifi, WifiOff, RefreshCw, Calendar, Car, Truck, Bike,
@@ -124,19 +128,29 @@ export default function MultiparkPage({ sectionProp }: { sectionProp?: string } 
 function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "checkout" | "cancelation" }) {
   const globalFilters = useGlobalFilters();
   const [defFrom, defTo] = thisMonthRange();
-  const [startDate, setStartDate] = useState(defFrom);
-  const [endDate, setEndDate] = useState(defTo);
-  const [activeRange, setActiveRange] = useState<string>("thisMonth");
-  const [searchTerm, setSearchTerm] = useState("");
-  const [projectId, setProjectId] = useState<string>("");
+  // Filtros PARTILHADOS entre as abas das Operações (pedido do Jorge:
+  // "ponho um filtro nas Reservas e mudo para Recolhas — ele fica"):
+  // datas, projeto, pesquisa e origem seguem contigo de aba para aba.
+  const [startDate, setStartDate] = usePersistedState("mpk.shared.start", defFrom);
+  const [endDate, setEndDate] = usePersistedState("mpk.shared.end", defTo);
+  const [activeRange, setActiveRange] = usePersistedState<string>("mpk.shared.range", "thisMonth");
+  const [searchTerm, setSearchTerm] = usePersistedState("mpk.shared.search", "");
+  const [projectId, setProjectId] = usePersistedState<string>("mpk.shared.project", "");
+  const [originFilter, setOriginFilter] = usePersistedState<string>("mpk.shared.origin", "all");
+  // Estado real vs previsto (passo 2 do Jorge): as CONTAS de topo são sempre a
+  // previsão do período; este seletor filtra a lista para ver o que já foi
+  // recolhido/entregue vs o que falta. Por aba (não partilhado — "recolhidas"
+  // não faz sentido nas entregas).
+  const [stateFilter, setStateFilter] = usePersistedState<string>(`mpk.${actionType}.state`, "all");
+  const [detailBooking, setDetailBooking] = useState<any>(null);
 
-  // Sync global filter to local project filter
+  // Sync global filter to local project filter — só quando o header TEM filtro
+  // ativo (antes esmagava o filtro persistido com "" a cada montagem)
   useEffect(() => {
     if (globalFilters.projectId !== undefined) {
       setProjectId(String(globalFilters.projectId));
-    } else {
-      setProjectId("");
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [globalFilters.projectId]);
   const { data: allProjects = [] } = trpc.projects.list.useQuery();
 
@@ -160,53 +174,91 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
     { refetchOnWindowFocus: false }
   );
 
-  // Custo extras-dia para o intervalo (apenas Recolhas/Entregas)
-  const showExtrasDiaCost = actionType === "checkin" || actionType === "checkout";
-  const { data: extrasDiaCost } = trpc.extrasDia.costForRange.useQuery(
-    { startDate, endDate },
-    { enabled: showExtrasDiaCost, refetchOnWindowFocus: false },
-  );
+
+
+  // Estados que contam como "já recolhida" / "já entregue"
+  const COLLECTED_SET = new Set(["CHECKED_IN", "MOVING", "CHECKING_OUT", "PENDING_CHECKOUT", "CHECKED_OUT"]);
+  const DELIVERED_SET = new Set(["CHECKED_OUT"]);
+  const isDone = (b: any) =>
+    actionType === "checkin" ? COLLECTED_SET.has(b.status) :
+    actionType === "checkout" ? DELIVERED_SET.has(b.status) : true;
+
+  // ── Classificação de ORIGENS (lógica do Jorge, 2026-08-06) ────────────────
+  // 1) Parceiro identificado (campanha→partnership) manda SEMPRE, venha de
+  //    onde vier (MANUAL/GENERAL_FORM/PARTNER_DASHBOARD incluídos);
+  // 2) Campanha sem parceiro = campanha INTERNA nossa (10º Aniversário, etc.);
+  // 3) Senão, o canal: MANUAL=Telefone; GENERAL_FORM=site multipark.app;
+  //    API=site da própria marca (redpark.pt/skypark.pt/airparking.pt);
+  //    MARKETPLACE=páginas de parque do marketplace.
+  const classifyOrigin = (b: any): { group: string; label: string } => {
+    if (b.salesPartnerName) return { group: "parceiro", label: `🤝 ${b.salesPartnerName}` };
+    if (b.campaign) return { group: "campanha", label: `📣 ${b.campaign}` };
+    const origin = String(b.origin ?? "");
+    if (origin === "MANUAL") return { group: "telefone", label: "📞 Telefone" };
+    if (origin === "PARTNER_DASHBOARD") return { group: "parceiro", label: "🤝 Parceiro (por identificar)" };
+    if (origin === "GENERAL_FORM") return { group: "site", label: "🌐 Site multipark.app" };
+    if (origin === "MARKETPLACE") return { group: "marketplace", label: "🏬 Marketplace" };
+    if (origin === "API") {
+      try {
+        const host = new URL(b.originUrl).hostname.replace(/^www\./, "");
+        return { group: "site", label: `🌐 Site ${host}` };
+      } catch {
+        return { group: "outros", label: "API (sem link)" };
+      }
+    }
+    return { group: "outros", label: "Sem origem" };
+  };
+  const ORIGIN_GROUPS: Array<{ id: string; label: string }> = [
+    { id: "site", label: "Sites próprios" },
+    { id: "telefone", label: "Telefone" },
+    { id: "parceiro", label: "Parceiros" },
+    { id: "campanha", label: "Campanhas internas" },
+    { id: "marketplace", label: "Marketplace" },
+    { id: "outros", label: "Sem origem / por identificar" },
+  ];
 
   const bookings = useMemo(() => {
-    if (!data?.bookings) return [];
-    if (!searchTerm) return data.bookings;
+    let list: any[] = data?.bookings ?? [];
+    if (originFilter !== "all") list = list.filter((b) => classifyOrigin(b).group === originFilter);
+    if (stateFilter === "done") list = list.filter((b) => isDone(b));
+    else if (stateFilter === "pending") list = list.filter((b) => !isDone(b));
+    if (!searchTerm) return list;
     const s = searchTerm.toLowerCase();
-    return data.bookings.filter((b: any) =>
+    return list.filter((b: any) =>
       (b.clientFirstName || "").toLowerCase().includes(s) ||
       (b.clientLastName || "").toLowerCase().includes(s) ||
       (b.licensePlate || "").toLowerCase().includes(s) ||
       (b.bookingNumber || "").toLowerCase().includes(s) ||
       (b.clientEmail || "").toLowerCase().includes(s)
     );
-  }, [data, searchTerm]);
+  }, [data, searchTerm, originFilter, stateFilter, actionType]);
 
-  // Build partner lookup from projects (normalize hyphens for matching)
-  const partnerByPark = useMemo(() => {
-    const norm = (s: string) => s.toLowerCase().replace(/\s*-\s*/g, " ").trim();
-    const map: Record<string, { name: string; percent: number }> = {};
-    for (const p of allProjects as any[]) {
-      if (p.partnerName && p.partnerPercent && p.level === "project") {
-        map[norm(p.name)] = { name: p.partnerName, percent: parseFloat(p.partnerPercent) };
-      }
-    }
-    return map;
-  }, [allProjects]);
+  // Ordenação por coluna (setas nos cabeçalhos)
+  const { sorted: sortedBookings, sortKey, sortDir, toggle } = useTableSort(bookings as any[]);
 
-  // Aggregate totals
+  // Aggregate totals (comissões de parceiros vêm do servidor — partnerships
+  // novas por campanha, coerente com Faturação/Parcerias)
   const totals = useMemo(() => {
     let revenue = 0;
-    let delivery = 0;
-    let extras = 0;
-    let discount = 0;
     let partnerTotal = 0;
+    let toCollect = 0;
+    let paidOnline = 0, paidMB = 0, paidCash = 0, paidOther = 0;
     const byPark: Record<string, { count: number; revenue: number; partnerShare: number; partnerName: string | null }> = {};
 
     for (const b of bookings as any[]) {
       const priceNum = parseFloat(b.totalPrice) || 0;
       revenue += priceNum;
-      delivery += parseFloat(b.deliveryCharges) || 0;
-      extras += parseFloat(b.extrasTotal) || 0;
-      discount += parseFloat(b.discount) || 0;
+      toCollect += parseFloat(b.remainingToPay) || 0;
+      // Caixa: o que já está pago, por método (Online/Multibanco/Dinheiro/Outros)
+      const paid = parseFloat(b.totalPaid) || 0;
+      if (paid > 0) {
+        const pm = String(b.paymentMethod ?? "").toLowerCase();
+        // Viva Wallet e transferências contam como Online (decisão Jorge 2026-08-06)
+        if (pm === "online" || pm.includes("viva wallet") || pm.includes("transferencia") || pm.includes("transferência")) paidOnline += paid;
+        else if (pm === "multibanco") paidMB += paid;
+        else if (pm === "dinheiro") paidCash += paid;
+        else paidOther += paid; // agregadores, agências, prós…
+      }
 
       const park = b.parkName || "Desconhecido";
       const city = b.city || "";
@@ -215,20 +267,16 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
       byPark[displayName].count++;
       byPark[displayName].revenue += priceNum;
 
-      // Find partner for this park
-      const fullKey = `${park} ${city}`.toLowerCase().replace(/\s*-\s*/g, " ");
-      const parkLower = park.toLowerCase().replace(/\s*-\s*/g, " ");
-      const partner = partnerByPark[fullKey] || partnerByPark[parkLower];
-      if (partner) {
-        const share = priceNum * (partner.percent / 100);
-        byPark[displayName].partnerShare += share;
-        byPark[displayName].partnerName = partner.name;
-        partnerTotal += share;
+      const commission = Number(b.salesPartnerCommission ?? 0);
+      if (commission > 0) {
+        byPark[displayName].partnerShare += commission;
+        byPark[displayName].partnerName = b.salesPartnerName ?? byPark[displayName].partnerName;
+        partnerTotal += commission;
       }
     }
 
-    return { revenue, delivery, extras, discount, byPark, partnerTotal };
-  }, [bookings, partnerByPark]);
+    return { revenue, byPark, partnerTotal, toCollect, paidOnline, paidMB, paidCash, paidOther };
+  }, [bookings]);
 
   return (
     <div className="space-y-4">
@@ -240,13 +288,39 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
 
       {/* Filters */}
       <div className="flex flex-wrap items-end gap-3">
-        <div>
-          <Label className="text-xs mb-1 block">De</Label>
-          <Input type="date" value={startDate} onChange={(e) => { setStartDate(e.target.value); setActiveRange(""); }} className="w-40" />
+        <div className="mb-0.5">
+          <DateRangeNav
+            start={startDate}
+            end={endDate}
+            gran={(activeRange === "thisWeek" || activeRange === "lastWeek" ? "week" : activeRange === "thisMonth" || activeRange === "lastMonth" ? "month" : "custom") as any}
+            showAll={false}
+            onChange={(s, e) => { setStartDate(s); setEndDate(e); setActiveRange(""); }}
+          />
         </div>
+        {(actionType === "checkin" || actionType === "checkout") && (
+          <div>
+            <Label className="text-xs mb-1 block">Estado</Label>
+            <Select value={stateFilter} onValueChange={setStateFilter}>
+              <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todas</SelectItem>
+                <SelectItem value="done">{actionType === "checkin" ? "Recolhidas" : "Entregues"}</SelectItem>
+                <SelectItem value="pending">{actionType === "checkin" ? "Por recolher" : "Por entregar"}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
         <div>
-          <Label className="text-xs mb-1 block">Até</Label>
-          <Input type="date" value={endDate} onChange={(e) => { setEndDate(e.target.value); setActiveRange(""); }} className="w-40" />
+          <Label className="text-xs mb-1 block">Origem</Label>
+          <Select value={originFilter} onValueChange={setOriginFilter}>
+            <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todas as origens</SelectItem>
+              {ORIGIN_GROUPS.map((g) => (
+                <SelectItem key={g.id} value={g.id}>{g.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
         <div>
           <Label className="text-xs mb-1 block">Grupo / Projeto</Label>
@@ -315,11 +389,22 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
         <Card>
           <CardContent className="p-3">
             <p className="text-xs text-muted-foreground">Total</p>
             <p className="text-xl font-bold">{bookings.length}</p>
+            {(actionType === "checkin" || actionType === "checkout") && stateFilter === "all" && (() => {
+              const done = (bookings as any[]).filter((b) => isDone(b)).length;
+              const pending = bookings.length - done;
+              return (
+                <p className="text-[10px] text-muted-foreground mt-0.5">
+                  <span className="text-emerald-700">{done} {actionType === "checkin" ? "recolhidas" : "entregues"}</span>
+                  {" · "}
+                  <span className="text-amber-700">{pending} {actionType === "checkin" ? "por recolher" : "por entregar"}</span>
+                </p>
+              );
+            })()}
           </CardContent>
         </Card>
         <Card>
@@ -346,37 +431,70 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
         )}
         <Card>
           <CardContent className="p-3">
-            <p className="text-xs text-muted-foreground">Delivery</p>
-            <p className="text-xl font-bold">{fmtEur(totals.delivery)}</p>
+            <p className="text-xs text-muted-foreground">Pago Online</p>
+            <p className="text-xl font-bold text-sky-700">{fmtEur(totals.paidOnline)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-3">
-            <p className="text-xs text-muted-foreground">
-              Extras{showExtrasDiaCost ? " (extras-dia)" : ""}
-            </p>
-            {showExtrasDiaCost ? (
-              <>
-                <p className="text-xl font-bold">{fmtEur(extrasDiaCost?.total ?? 0)}</p>
-                {extrasDiaCost && (extrasDiaCost.real > 0 || extrasDiaCost.estimate > 0) && (
-                  <p className="text-[10px] text-muted-foreground mt-0.5">
-                    real {fmtEur(extrasDiaCost.real)} ({(extrasDiaCost as any).daysWithReal ?? 0}d)
-                    · estim. {fmtEur(extrasDiaCost.estimate)} ({(extrasDiaCost as any).daysWithEstimate ?? 0}d)
-                  </p>
-                )}
-              </>
-            ) : (
-              <p className="text-xl font-bold">{fmtEur(totals.extras)}</p>
-            )}
+            <p className="text-xs text-muted-foreground">Pago Multibanco</p>
+            <p className="text-xl font-bold text-indigo-700">{fmtEur(totals.paidMB)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-3">
-            <p className="text-xs text-muted-foreground">Descontos</p>
-            <p className="text-xl font-bold text-red-600">{fmtEur(totals.discount)}</p>
+            <p className="text-xs text-muted-foreground">Pago Dinheiro</p>
+            <p className="text-xl font-bold text-emerald-700">{fmtEur(totals.paidCash)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-3">
+            <p className="text-xs text-muted-foreground">Outros meios</p>
+            <p className="text-xl font-bold text-slate-700">{fmtEur(totals.paidOther)}</p>
+            <p className="text-[10px] text-muted-foreground">agregadores, agências, prós…</p>
+          </CardContent>
+        </Card>
+        <Card className="border-amber-300 bg-amber-50/60">
+          <CardContent className="p-3">
+            <p className="text-xs text-muted-foreground">Falta pagar</p>
+            <p className="text-xl font-bold text-amber-700">{fmtEur(totals.toCollect)}</p>
+            <p className="text-[10px] text-muted-foreground">caixa prevista do período</p>
           </CardContent>
         </Card>
       </div>
+
+      {/* Origens das reservas (só na aba Reservas) — detalhe a afinar com o Jorge */}
+      {actionType === "creation" && bookings.length > 0 && (
+        <Card>
+          <CardContent className="p-3">
+            <p className="text-xs text-muted-foreground mb-1.5">Origens das reservas</p>
+            <div className="flex flex-wrap gap-2">
+              {(() => {
+                const counts = new Map<string, number>();
+                for (const b of bookings as any[]) {
+                  const key = classifyOrigin(b).label;
+                  counts.set(key, (counts.get(key) ?? 0) + 1);
+                }
+                return Array.from(counts.entries())
+                  .sort((a, b) => b[1] - a[1])
+                  .slice(0, 12)
+                  .map(([name, n]) => (
+                    <Badge key={name} variant="outline" className="text-xs py-1 px-2">
+                      {name}: <span className="font-bold ml-1">{n}</span>
+                    </Badge>
+                  ));
+              })()}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Aviso do corte de 5.000 linhas (períodos grandes) */}
+      {(data?.bookings?.length ?? 0) >= 5000 && (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+          ⚠ A mostrar as primeiras 5.000 reservas — o período escolhido tem mais. Encurta o período para ver tudo.
+        </p>
+      )}
 
       {/* Per-park breakdown */}
       {Object.keys(totals.byPark).length > 1 && (
@@ -420,49 +538,64 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-muted/50 text-left">
-                    <th className="p-2">Reserva</th>
-                    <th className="p-2">Parque</th>
-                    <th className="p-2">Recolha</th>
-                    <th className="p-2">Entrega</th>
-                    <th className="p-2">Tipo Recolha/Entrega</th>
-                    <th className="p-2">Estado</th>
-                    <th className="p-2 text-right">Preço</th>
-                    <th className="p-2">Tipo</th>
+                    <Th k="bookingNumber" label="Reserva" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="clientFirstName" label="Cliente" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="licensePlate" label="Matrícula" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="parkName" label="Parque" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="checkIn" label="Recolha" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="checkOut" label="Entrega" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="origin" label="Origem" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="status" label="Estado" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="totalPrice" label="Preço" align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="parkingType" label="Tipo" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                   </tr>
                 </thead>
                 <tbody>
-                  {bookings.map((b: any, i: number) => {
+                  {sortedBookings.map((b: any, i: number) => {
                     const status = b.status || "—";
                     const statusCfg = STATUS_MAP[status];
                     const parkName = b.parkName || "—";
                     const parkCity = b.city || "";
                     const isNonValet = (b.parkingType ?? "").toUpperCase() !== "VALET";
+                    const clientName = `${b.clientFirstName || ""} ${b.clientLastName || ""}`.trim();
+                    const toPay = parseFloat(b.remainingToPay) || 0;
 
                     return (
                       <tr
                         key={b.id || i}
-                        className={`border-t ${isNonValet ? "bg-red-50 hover:bg-red-100/70" : "hover:bg-muted/30"}`}
+                        className={`border-t cursor-pointer ${isNonValet ? "bg-red-50 hover:bg-red-100/70" : "hover:bg-muted/30"}`}
+                        onClick={() => setDetailBooking(b)}
                       >
                         <td className="p-2 font-mono text-xs">{b.bookingNumber || b.externalId}</td>
+                        <td className="p-2 text-xs max-w-[140px]">
+                          <span className="truncate block">{clientName || <span className="text-muted-foreground">—</span>}</span>
+                        </td>
+                        <td className="p-2 font-mono text-xs">{b.licensePlate || "—"}</td>
                         <td className="p-2">
                           <span className="font-medium">{parkName}</span>
                           {parkCity && !parkName.includes(parkCity) && <span className="text-xs text-muted-foreground ml-1">{parkCity}</span>}
                         </td>
                         <td className="p-2 text-xs">{fmtBookingDateTime(b.checkIn)}</td>
                         <td className="p-2 text-xs">{fmtBookingDateTime(b.checkOut)}</td>
-                        <td className="p-2 text-xs">
-                          {b.deliveryType ? (
-                            <Badge variant="outline" className="text-[10px]">{b.deliveryType}</Badge>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
+                        <td className="p-2 text-xs max-w-[150px]">
+                          {(() => {
+                            const o = classifyOrigin(b);
+                            const color = o.group === "parceiro" ? "border-rose-200 text-rose-700"
+                              : o.group === "campanha" ? "border-violet-200 text-violet-700"
+                              : o.group === "telefone" ? "border-amber-200 text-amber-700"
+                              : "";
+                            return <Badge variant="outline" className={`text-[10px] ${color}`} title={b.originUrl ?? undefined}>{o.label}</Badge>;
+                          })()}
                         </td>
                         <td className="p-2">
                           <Badge className={statusCfg?.color || "bg-gray-100 text-gray-800"}>
                             {statusCfg?.label || status}
                           </Badge>
                         </td>
-                        <td className="p-2 text-right font-medium">{fmtEur(b.totalPrice)}</td>
+                        <td className="p-2 text-right font-medium">
+                          {fmtEur(b.totalPrice)}
+                          {toPay > 0 && <span className="block text-[10px] text-amber-700">falta {fmtEur(toPay)}</span>}
+                        </td>
                         <td className="p-2 text-xs">
                           {b.parkingType || "—"}
                           {isNonValet && <span className="ml-1 text-red-600 font-semibold">⚠ não-valet</span>}
@@ -476,6 +609,8 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
           </CardContent>
         </Card>
       )}
+
+      {detailBooking && <BookingDetailDialog booking={detailBooking} onClose={() => setDetailBooking(null)} />}
     </div>
   );
 }
@@ -729,11 +864,12 @@ function DashboardTab() {
 // ─── Bookings Tab (synced from API) ──────────────────────────────────────────
 function BookingsTab({ statusFilter: statusFilterProp }: { statusFilter?: string[] }) {
   const today = new Date();
-  const [from, setFrom] = useState(today.toISOString().slice(0, 10));
-  const [to, setTo] = useState(today.toISOString().slice(0, 10));
-  const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [searchTerm, setSearchTerm] = useState("");
-  const [viewMode, setViewMode] = useState<"today" | "range" | "month">("today");
+  // Filtros persistem à navegação (pedido do Jorge)
+  const [from, setFrom] = usePersistedState("mpk.bookings.from", today.toISOString().slice(0, 10));
+  const [to, setTo] = usePersistedState("mpk.bookings.to", today.toISOString().slice(0, 10));
+  const [statusFilter, setStatusFilter] = usePersistedState<string>("mpk.bookings.status", "all");
+  const [searchTerm, setSearchTerm] = usePersistedState("mpk.bookings.search", "");
+  const [viewMode, setViewMode] = usePersistedState<"today" | "range" | "month">("mpk.bookings.view", "today");
 
   // Month selector
   const [selectedMonth, setSelectedMonth] = useState(`${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`);

@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useMemo, type ReactNode } from "react";
+import { createContext, useContext, useState, useMemo, useEffect, useRef, type ReactNode } from "react";
 import { trpc } from "@/lib/trpc";
 
 interface DateRange {
@@ -32,25 +32,59 @@ export function GlobalFiltersProvider({ children }: { children: ReactNode }) {
   const [dateRange, setDateRange] = useState<DateRange>({ from: null, to: null });
 
   const { data: allProjects, isLoading } = trpc.projects.list.useQuery();
+  // Acesso por cidade (pedido Jorge): cada um vê a cidade do seu centro de
+  // custos (+ extras por permissão); admin/grupo vê todas. O seletor global só
+  // mostra as permitidas e entra por defeito na cidade da pessoa.
+  const { data: cityAccess } = trpc.permissions.myCityAccess.useQuery();
 
   const cities = useMemo(() => {
     if (!allProjects) return [];
-    return allProjects
+    let list = allProjects
       .filter((p: any) => p.level === "city")
-      .map((p: any) => ({ id: p.id, name: p.name }))
-      .sort((a: any, b: any) => a.name.localeCompare(b.name));
-  }, [allProjects]);
+      .map((p: any) => ({ id: p.id, name: p.name }));
+    if (cityAccess && !cityAccess.all) {
+      const allowed = new Set(cityAccess.cityIds);
+      list = list.filter((c: any) => allowed.has(c.id));
+    }
+    return list.sort((a: any, b: any) => a.name.localeCompare(b.name));
+  }, [allProjects, cityAccess]);
+
+  // Entrada por defeito: a cidade do centro de custos (uma vez por sessão)
+  const appliedDefaultCity = useRef(false);
+  useEffect(() => {
+    if (appliedDefaultCity.current || !cityAccess) return;
+    if (!cityAccess.all && cityAccess.defaultCityId != null) {
+      appliedDefaultCity.current = true;
+      setCityId((prev) => prev ?? cityAccess.defaultCityId);
+    } else {
+      appliedDefaultCity.current = true;
+    }
+  }, [cityAccess]);
 
   const brands = useMemo(() => {
     if (!allProjects) return [];
-    return allProjects
-      .filter((p: any) => {
-        if (p.level !== "brand") return false;
-        if (cityId === null) return true;
-        return p.parentId === cityId;
-      })
-      .map((p: any) => ({ id: p.id, name: p.name }))
-      .sort((a: any, b: any) => a.name.localeCompare(b.name));
+    if (cityId !== null) {
+      // Com cidade escolhida: marcas dessa cidade (comportamento normal)
+      return allProjects
+        .filter((p: any) => p.level === "brand" && p.parentId === cityId)
+        .map((p: any) => ({ id: p.id, name: p.name }))
+        .sort((a: any, b: any) => a.name.localeCompare(b.name));
+    }
+    // SEM cidade: MARCAS GLOBAIS — a mesma marca existe nas várias cidades
+    // com o mesmo nome; agrupamos e usamos um ID NEGATIVO (−id do primeiro nó)
+    // que o servidor (resolveProjectIds) expande para a marca em TODAS as
+    // cidades. Pedido do Jorge: "medir o que uma marca fez nas diferentes cidades".
+    const byName = new Map<string, { id: number; name: string; count: number }>();
+    for (const p of allProjects as any[]) {
+      if (p.level !== "brand") continue;
+      const key = p.name.trim().toLowerCase();
+      const ex = byName.get(key);
+      if (ex) ex.count += 1;
+      else byName.set(key, { id: -p.id, name: p.name, count: 1 });
+    }
+    return Array.from(byName.values())
+      .map((b) => ({ id: b.id, name: b.count > 1 ? `${b.name} (todas as cidades)` : b.name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }, [allProjects, cityId]);
 
   // When city changes and selected brand is no longer valid, reset brand
@@ -78,7 +112,18 @@ export function GlobalFiltersProvider({ children }: { children: ReactNode }) {
       }
     };
 
-    if (brandId !== null) {
+    if (brandId !== null && brandId < 0) {
+      // Marca global: todos os nós brand com o mesmo nome + descendentes
+      const anchor = (allProjects as any[]).find((p) => p.id === -brandId);
+      if (anchor) {
+        for (const p of allProjects as any[]) {
+          if (p.level === "brand" && p.name.trim().toLowerCase() === anchor.name.trim().toLowerCase()) {
+            ids.push(p.id);
+            collectDescendants(p.id);
+          }
+        }
+      }
+    } else if (brandId !== null) {
       // Specific brand selected: get brand + its descendants
       ids.push(brandId);
       collectDescendants(brandId);

@@ -246,6 +246,33 @@ app.get("/api/cron/daily-ops", async (req, res) => {
       console.warn("[daily-ops] markOverdueExpenses:", err);
     }
 
+    // Segunda-feira (Lisboa): gera automaticamente a avaliação da semana ANTERIOR
+    try {
+      const lisbonNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Lisbon" }));
+      if (lisbonNow.getDay() === 1) {
+        const prev = new Date(lisbonNow); prev.setDate(prev.getDate() - 7);
+        const d = new Date(Date.UTC(prev.getFullYear(), prev.getMonth(), prev.getDate()));
+        const dayNum = d.getUTCDay() || 7;
+        d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+        const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+        const week = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+        const { generateWeeklyEvaluation } = await import("../db");
+        const r = await generateWeeklyEvaluation(week, d.getUTCFullYear());
+        console.log(`[daily-ops] avaliação semanal S${week} gerada (${r.length} condutores)`);
+      }
+    } catch (err) {
+      console.warn("[daily-ops] avaliação semanal:", err);
+    }
+
+    // Fecha check-ins esquecidos (>16h abertos → check-out a +12h, [SUSPEITO])
+    try {
+      const { autoCloseStaleCheckIns } = await import("../db");
+      const r = await autoCloseStaleCheckIns();
+      if (r.closed > 0) console.log(`[daily-ops] auto-checkout de ${r.closed} ponto(s) esquecido(s)`);
+    } catch (err) {
+      console.warn("[daily-ops] autoCloseStaleCheckIns:", err);
+    }
+
     const { collectDailyDriverData } = await import("../jobs/dailyDriverCollection");
     // ?date=YYYY-MM-DD permite recolher um dia específico (backfill de dias
     // falhados); por omissão, o dia anterior.

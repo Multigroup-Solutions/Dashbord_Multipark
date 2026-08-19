@@ -1,6 +1,7 @@
 import { trpc } from "@/lib/trpc";
+import { useLocation } from "wouter";
+import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { ModuleCard } from "@/components/ModuleCard";
 import { Card } from "@/components/ui/card";
 import {
   Euro,
@@ -53,7 +54,7 @@ function KPI({
       {loading ? (
         <div className="h-8 w-20 bg-muted rounded animate-pulse" />
       ) : (
-        <div className="text-2xl font-bold text-foreground leading-none">{value}</div>
+        <div className="font-display text-2xl font-bold text-[#0c1f3f] leading-none tracking-[-0.01em]">{value}</div>
       )}
       {subtitle && !loading && (
         <div className="text-xs text-muted-foreground mt-1">{subtitle}</div>
@@ -107,11 +108,13 @@ const dashboardModules = [
 
 export default function DashboardPage() {
   const { user } = useAuth();
+  const [, navigate] = useLocation();
+  const globalFilters = useGlobalFilters();
   // expenses.stats é admin-only no servidor — não chamar sem permissão
   const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
   // ── Queries (dados reais da BD) ──
   const { data: expStats, isLoading: expLoading } = trpc.expenses.stats.useQuery(undefined, { enabled: isAdmin });
-  const { data: bookingStats, isLoading: bkLoading } = trpc.multipark.bookingStats.useQuery();
+  const { data: bookingStats, isLoading: bkLoading } = trpc.multipark.bookingStats.useQuery({ projectId: globalFilters.projectId });
   const { data: complaintStats, isLoading: compLoading } = trpc.complaints.stats.useQuery();
   const { data: reviewStats, isLoading: revLoading } = trpc.reviews.stats.useQuery();
   const { data: hrStats, isLoading: hrLoading } = trpc.rh.stats.useQuery();
@@ -215,22 +218,30 @@ export default function DashboardPage() {
         />
       </div>
 
-      {/* Dashboard Modules */}
+      {/* Dashboards — cartões estilo v2 (barrinha azul + ícone em quadrado azul) */}
       <div>
-        <h2 className="text-xs font-bold text-muted-foreground tracking-wider uppercase mb-4">
-          Dashboards
-        </h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+        <div className="flex items-center gap-2.5 mb-3">
+          <span className="w-1 h-4 rounded-sm bg-primary inline-block" />
+          <h2 className="m-0 font-display text-xs font-bold tracking-[.12em] text-[#0c1f3f] uppercase">
+            Dashboards
+          </h2>
+          <span className="text-xs text-slate-400">· {dashboardModules.length} atalhos</span>
+        </div>
+        <div className="grid grid-cols-2 md:[grid-template-columns:repeat(auto-fill,minmax(190px,1fr))] gap-3 md:gap-3.5">
           {dashboardModules.map((mod) => (
-            <ModuleCard
+            <button
               key={mod.path}
-              icon={mod.icon}
-              iconColor={mod.iconColor}
-              iconBg={mod.iconBg}
-              label={mod.label}
-              path={mod.path}
-              accentColor={mod.accentColor}
-            />
+              type="button"
+              onClick={() => navigate(mod.path)}
+              className="flex flex-col items-start gap-3 bg-white border border-slate-200 rounded-[14px] p-4 md:p-[18px] text-left shadow-[0_1px_2px_rgba(12,31,63,0.05)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_8px_20px_rgba(12,31,63,0.10)] hover:border-primary cursor-pointer"
+            >
+              <span className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">
+                <mod.icon className="w-5 h-5" />
+              </span>
+              <span className="font-display text-[13px] font-semibold text-[#0c1f3f] uppercase tracking-[.02em]">
+                {mod.label}
+              </span>
+            </button>
           ))}
         </div>
       </div>

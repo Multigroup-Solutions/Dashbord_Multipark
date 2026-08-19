@@ -37,7 +37,6 @@ import {
 import { getLoginUrl } from "@/const";
 import { ACCESS_DENIED_MSG } from "@shared/const";
 import ProfilePhotoPrompt from "@/components/ProfilePhotoPrompt";
-import PermissionsGate from "@/components/PermissionsGate";
 import CameraCapture from "@/components/CameraCapture";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
@@ -75,6 +74,8 @@ import {
   ArrowUpFromLine,
   XCircle,
   RefreshCw,
+  ShieldCheck,
+  MapPin,
   CalendarCheck,
   SlidersHorizontal,
   Bell,
@@ -90,18 +91,20 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { trpc } from "@/lib/trpc";
+import { MobileTabBar } from "@/components/MobileTabBar";
 
-type MenuItem = {
+export type MenuItem = {
   icon: React.ElementType;
   label: string;
   path: string;
   minRole?: string;
 };
 
-type MenuGroup = {
+export type MenuGroup = {
   label: string;
   items: MenuItem[];
   minRole?: string;
+  icon?: React.ElementType;
 };
 
 const ROLE_HIERARCHY: Record<string, number> = {
@@ -115,11 +118,11 @@ const ROLE_HIERARCHY: Record<string, number> = {
   super_admin: 7,
 };
 
-function hasRole(userRole: string, minRole: string): boolean {
+export function hasRole(userRole: string, minRole: string): boolean {
   return (ROLE_HIERARCHY[userRole] ?? 0) >= (ROLE_HIERARCHY[minRole] ?? 0);
 }
 
-function getFilteredMenuGroups(userRole: string): MenuGroup[] {
+export function getFilteredMenuGroups(userRole: string): MenuGroup[] {
   return menuGroups
     .filter(g => !g.minRole || hasRole(userRole, g.minRole))
     .map(g => ({
@@ -131,19 +134,20 @@ function getFilteredMenuGroups(userRole: string): MenuGroup[] {
 
 // Itens fixos no topo, fora dos grupos — o mais usado nunca fica escondido
 // pelo acordeão.
-const topLevelItems: MenuItem[] = [
+export const topLevelItems: MenuItem[] = [
   // dashboards iniciais não aparecem ao frontoffice
   { icon: BarChart3, label: "Dashboards", path: "/dashboards", minRole: "backoffice" },
 ];
 
-const menuGroups: MenuGroup[] = [
+export const menuGroups: MenuGroup[] = [
   {
     label: "Financeiro",
+    icon: Receipt,
     minRole: "frontoffice",
     items: [
       { icon: Receipt, label: "Despesas", path: "/despesas" },
       // Faturação / Projetos / Marketing escondidos do frontoffice
-      { icon: FileText, label: "Faturação", path: "/faturacao", minRole: "backoffice" },
+      { icon: FileText, label: "Faturação", path: "/faturacao", minRole: "admin" },
       { icon: Handshake, label: "Parcerias", path: "/parcerias" },
       { icon: FolderTree, label: "Projetos", path: "/projetos", minRole: "backoffice" },
       { icon: Megaphone, label: "Marketing", path: "/marketing", minRole: "backoffice" },
@@ -151,6 +155,7 @@ const menuGroups: MenuGroup[] = [
   },
   {
     label: "Pessoas",
+    icon: Users,
     items: [
       // RH visível a todos os roles (user/extra veem só o próprio perfil)
       { icon: UserCheck, label: "Recursos Humanos", path: "/rh" },
@@ -162,6 +167,7 @@ const menuGroups: MenuGroup[] = [
   },
   {
     label: "Operações",
+    icon: Truck,
     // Operações escondidas do frontoffice (backoffice+); Tarefas/Disponibilidade
     // são a exceção — extra+ vê (extra só as suas)
     items: [
@@ -170,12 +176,14 @@ const menuGroups: MenuGroup[] = [
       { icon: Truck, label: "Actividade Diária", path: "/operacional", minRole: "backoffice" },
       { icon: ListTodo, label: "Tarefas", path: "/tarefas", minRole: "extra" },
       { icon: CalendarDays, label: "Extras Dia", path: "/extras-dia", minRole: "backoffice" },
+      { icon: CalendarCheck, label: "Passagem de Turno", path: "/passagem-turno", minRole: "team_leader" },
       { icon: CalendarCheck, label: "Disponibilidade", path: "/disponibilidade", minRole: "extra" },
       { icon: MessageCircle, label: "WhatsApp", path: "/whatsapp", minRole: "backoffice" },
     ],
   },
   {
     label: "Suporte",
+    icon: MessageSquareWarning,
     minRole: "frontoffice",
     items: [
       { icon: MessageSquareWarning, label: "Reclamações", path: "/reclamacoes" },
@@ -186,15 +194,49 @@ const menuGroups: MenuGroup[] = [
   },
   {
     label: "Sistema",
+    icon: SlidersHorizontal,
     minRole: "admin",
     items: [
       { icon: Users, label: "Utilizadores", path: "/utilizadores" },
+      { icon: ShieldCheck, label: "Permissões", path: "/permissoes" },
       { icon: RefreshCw, label: "Sincronização", path: "/multipark/sync" },
       { icon: Key, label: "API Keys", path: "/api-keys" },
       { icon: ScrollText, label: "Logs", path: "/logs" },
     ],
   },
 ];
+
+
+// ─── Grupos do HUB (modelo "Dashboard Multipark v2" do Claude Design) ────────
+// Sidebar/tab bar mostram Menu + estes grupos; o conteúdo é o launcher de
+// cartões em /modulos. "Dashboards" é um grupo como os outros no v2.
+export type HubGroup = MenuGroup & { id: string };
+export const hubGroups: HubGroup[] = [
+  {
+    id: "dashboards",
+    label: "Dashboards",
+    icon: BarChart3,
+    minRole: "backoffice",
+    items: [
+      { icon: BarChart3, label: "Geral", path: "/dashboards" },
+      { icon: Receipt, label: "Financeiro", path: "/financeiro" },
+      { icon: Truck, label: "Operações", path: "/operacoes-dashboard" },
+      { icon: Users, label: "Pessoas", path: "/pessoas-dashboard" },
+      { icon: MessageSquareWarning, label: "Suporte", path: "/suporte-dashboard" },
+      { icon: Megaphone, label: "Marketing", path: "/marketing-dashboard" },
+    ],
+  },
+  ...menuGroups.map(g => ({
+    ...g,
+    id: g.label.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase(),
+  })),
+];
+export function getFilteredHubGroups(userRole: string): HubGroup[] {
+  return hubGroups
+    .filter(g => !g.minRole || hasRole(userRole, g.minRole))
+    .map(g => ({ ...g, items: g.items.filter(i => !i.minRole || hasRole(userRole, i.minRole)) }))
+    .filter(g => g.items.length > 0);
+}
 
 const allMenuItems = [...topLevelItems, ...menuGroups.flatMap(g => g.items)];
 const allMenuPaths = new Set(allMenuItems.map(i => i.path));
@@ -340,32 +382,41 @@ function DashboardLayoutContent({
   const submitPonto = (base64: string, mimeType: string) => {
     const employeeId = pontoQ.data?.employeeId;
     if (!employeeId || !pontoMode) return;
-    const doSubmit = (lat?: number, lng?: number) => {
+    const doSubmit = (lat: number, lng: number) => {
       const payload = {
         employeeId,
         photoBase64: base64,
         mimeType,
-        latitude: lat ? String(lat) : undefined,
-        longitude: lng ? String(lng) : undefined,
-        locationName: lat ? `${lat.toFixed(6)}, ${lng!.toFixed(6)}` : undefined,
+        latitude: String(lat),
+        longitude: String(lng),
+        locationName: `${lat.toFixed(6)}, ${lng.toFixed(6)}`,
       };
       if (pontoMode === "check_in") quickCheckIn.mutate(payload);
       else quickCheckOut.mutate(payload);
     };
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => doSubmit(pos.coords.latitude, pos.coords.longitude),
-        () => doSubmit(),
-        { enableHighAccuracy: true, timeout: 10000 },
-      );
-    } else {
-      doSubmit();
+    // O ponto exige localização EXATA (o bloqueio global da app foi removido —
+    // a exigência vive aqui, só no check-in/check-out).
+    if (!navigator.geolocation) {
+      toast.error("Este dispositivo não tem GPS — o ponto exige localização exata.");
+      setPontoMode(null);
+      return;
     }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        if (pos.coords.accuracy > 2000) {
+          toast.error("A localização está aproximada (Wi-Fi/IP). Liga a localização EXATA e tenta outra vez.");
+          setPontoMode(null);
+          return;
+        }
+        doSubmit(pos.coords.latitude, pos.coords.longitude);
+      },
+      () => { toast.error("Sem acesso à localização. Autoriza a localização exata para picar o ponto."); setPontoMode(null); },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+    );
   };
   const pontoStatus = pontoQ.data?.employeeId ? pontoQ.data.status : null;
-  const filteredGroups = getFilteredMenuGroups(userRole);
-  const filteredTopItems = topLevelItems.filter(i => !i.minRole || hasRole(userRole, i.minRole));
-  const filteredItems = [...filteredTopItems, ...filteredGroups.flatMap(g => g.items)];
+  const filteredGroups = getFilteredHubGroups(userRole);
+  const filteredItems = filteredGroups.flatMap(g => g.items);
   const activeMenuItem = allMenuItems.find(item => item.path === location);
   const isMobile = useIsMobile();
 
@@ -447,7 +498,6 @@ function DashboardLayoutContent({
     <>
       {/* Segurança: sem localização precisa + permissão de câmara, a app não
           funciona (overlay bloqueante). */}
-      <PermissionsGate role={userRole} />
       <div className="relative" ref={sidebarRef}>
         <Sidebar
           collapsible="icon"
@@ -480,56 +530,66 @@ function DashboardLayoutContent({
             </div>
           </SidebarHeader>
 
-          <SidebarContent className="gap-0">
-            {filteredTopItems.length > 0 && (
-              <SidebarGroup>
-                <SidebarGroupContent>
-                  <SidebarMenu>
-                    {filteredTopItems.map(item => {
-                      const isActive = location === item.path || location.startsWith(item.path + "/");
-                      return (
-                        <SidebarMenuItem key={item.path}>
-                          <SidebarMenuButton
-                            isActive={isActive}
-                            onClick={() => navigate(item.path)}
-                            tooltip={item.label}
-                            className="h-9 transition-all font-normal"
-                          >
-                            <item.icon
-                              className={`h-4 w-4 ${isActive ? "text-primary" : ""}`}
-                            />
-                            <span>{item.label}</span>
-                          </SidebarMenuButton>
-                        </SidebarMenuItem>
-                      );
-                    })}
-                  </SidebarMenu>
-                </SidebarGroupContent>
-              </SidebarGroup>
-            )}
+          <SidebarContent className="gap-0 px-1 overflow-x-hidden">
+            {/* Placa "Menu" (modelo v2): hub com todos os atalhos */}
+            <SidebarGroup className="py-0.5">
+              <button
+                type="button"
+                onClick={() => { setOpenGroup(null); navigate("/modulos"); }}
+                className={`flex w-full items-center rounded-xl h-12 text-[15px] font-semibold transition-all ${
+                  isCollapsed ? "justify-center px-0" : "gap-3 px-3.5"
+                } ${
+                  location === "/modulos"
+                    ? "bg-primary text-white shadow-[0_4px_10px_rgba(0,85,210,0.28)]"
+                    : "text-slate-600 hover:bg-primary/10 hover:text-primary"
+                }`}
+              >
+                <LayoutDashboard className="h-5 w-5 shrink-0" />
+                {!isCollapsed && <span className="flex-1 text-left truncate">Menu</span>}
+              </button>
+            </SidebarGroup>
             {filteredGroups.map(group => {
+              const groupActive = group.items.some(i => location === i.path || location.startsWith(i.path + "/"));
+              const isOpen = isCollapsed || openGroup === group.label;
+              const GIcon = group.icon ?? LayoutDashboard;
               return (
                 <Collapsible
                   key={group.label}
-                  // No modo colapsado (só ícones) o trigger do grupo fica
-                  // invisível — forçar tudo aberto para os ícones aparecerem.
-                  open={isCollapsed || openGroup === group.label}
+                  open={isOpen}
                   onOpenChange={(o) => setOpenGroup(o ? group.label : null)}
                   className="group/collapsible"
                 >
-                  <SidebarGroup>
-                    <SidebarGroupLabel asChild>
-                      <CollapsibleTrigger className="flex w-full items-center justify-between [&[data-state=open]>svg]:rotate-180">
-                        {group.label}
-                        <ChevronDown className="h-4 w-4 transition-transform duration-200" />
-                      </CollapsibleTrigger>
-                    </SidebarGroupLabel>
+                  <SidebarGroup className="py-0.5">
+                    <CollapsibleTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/modulos?g=${group.id}`)}
+                        className={`flex w-full items-center rounded-xl h-12 text-[15px] font-semibold transition-all [&[data-state=open]>svg.mpk-chev]:rotate-180 ${
+                          isCollapsed ? "justify-center px-0" : "gap-3 px-3.5"
+                        } ${
+                          groupActive || (!isCollapsed && isOpen)
+                            ? "bg-primary text-white shadow-[0_4px_10px_rgba(0,85,210,0.28)]"
+                            : "text-slate-600 hover:bg-primary/10 hover:text-primary"
+                        }`}
+                      >
+                        <GIcon className="h-5 w-5 shrink-0" />
+                        {!isCollapsed && (
+                          <>
+                            <span className="flex-1 text-left truncate">{group.label}</span>
+                            <span className={`text-[11px] font-bold rounded-full px-2 py-0.5 ${
+                              groupActive || isOpen ? "bg-white/[.22] text-white" : "bg-slate-100 text-slate-500"
+                            }`}>{group.items.length}</span>
+                            <ChevronDown className={`mpk-chev h-4 w-4 transition-transform duration-200 ${
+                              groupActive || isOpen ? "text-white/80" : "text-slate-400"
+                            }`} />
+                          </>
+                        )}
+                      </button>
+                    </CollapsibleTrigger>
                     <CollapsibleContent>
-                      <SidebarGroupContent>
+                      <SidebarGroupContent className={isCollapsed ? "mt-1" : "ml-[18px] mt-1 border-l border-slate-200 pl-2"}>
                         <SidebarMenu>
                           {group.items.map(item => {
-                            // Match exato ou sub-rotas (ex.: /perdidos-achados/historico
-                            // continua a iluminar "Perdidos e Achados").
                             const isActive = location === item.path || location.startsWith(item.path + "/");
                             return (
                               <SidebarMenuItem key={item.path}>
@@ -537,11 +597,9 @@ function DashboardLayoutContent({
                                   isActive={isActive}
                                   onClick={() => navigate(item.path)}
                                   tooltip={item.label}
-                                  className="h-9 transition-all font-normal"
+                                  className="h-9 rounded-lg transition-all font-normal data-[active=true]:!bg-primary data-[active=true]:!text-primary-foreground data-[active=true]:font-semibold hover:data-[active=true]:!bg-primary"
                                 >
-                                  <item.icon
-                                    className={`h-4 w-4 ${isActive ? "text-primary" : ""}`}
-                                  />
+                                  <item.icon className="h-4 w-4" />
                                   <span>{item.label}</span>
                                 </SidebarMenuButton>
                               </SidebarMenuItem>
@@ -568,13 +626,13 @@ function DashboardLayoutContent({
 
       <SidebarInset>
         {/* Topbar */}
-        <div className="flex border-b h-[76px] items-center justify-between bg-card px-4 lg:px-6 sticky top-0 z-40">
+        <div className="flex border-b h-16 items-center justify-between bg-white px-4 lg:px-6 sticky top-0 z-40">
           <div className="flex items-center gap-3 min-w-0">
             {isMobile && (
               <SidebarTrigger className="h-9 w-9 rounded-lg bg-background" />
             )}
-            <h1 className="text-xl lg:text-2xl font-bold text-foreground truncate">
-              {activeMenuItem?.label ?? "Dashboard"}
+            <h1 className="text-xl lg:text-[22px] font-bold text-[#0c1f3f] truncate">
+              {activeMenuItem?.label ?? (location === "/modulos" ? "Menu" : location === "/perfil" ? "Perfil" : "Dashboard")}
             </h1>
           </div>
 
@@ -615,60 +673,52 @@ function DashboardLayoutContent({
               </SelectContent>
             </Select>
 
-            {/* Date filter popover */}
+            {/* Botão "Datas" global REMOVIDO (pedido Jorge: não filtrava nada
+                — as datas escolhem-se dentro de cada página, no seletor azul) */}
+            {/* Cidade/Parques em MOBILE (pedido Jorge): os selects de cima
+                escondem-se em ecrãs pequenos — este botão abre-os num popover,
+                ligado ao MESMO estado global */}
             <Popover>
               <PopoverTrigger asChild>
                 <Button
-                  variant={hasDateFilter ? "default" : "outline"}
-                  size="sm"
-                  className="hidden sm:flex items-center gap-2 h-9"
+                  variant={filters.cityId !== null || filters.brandId !== null ? "default" : "outline"}
+                  size="icon"
+                  className="md:hidden h-9 w-9"
+                  title="Cidade e parques"
                 >
-                  <Calendar className="h-4 w-4" />
-                  <span className="hidden lg:inline">
-                    {hasDateFilter ? "Datas ativas" : "Datas"}
-                  </span>
+                  <MapPin className="h-4 w-4" />
                 </Button>
               </PopoverTrigger>
-              <PopoverContent className="w-72" align="end">
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h4 className="font-medium text-sm">Filtrar por datas</h4>
-                    {hasDateFilter && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 px-2 text-xs"
-                        onClick={() => filters.setDateRange({ from: null, to: null })}
-                      >
-                        <X className="h-3 w-3 mr-1" />
-                        Limpar
-                      </Button>
-                    )}
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-xs">De</Label>
-                    <Input
-                      type="date"
-                      value={filters.dateRange.from?.toISOString().split('T')[0] ?? ""}
-                      onChange={(e) => filters.setDateRange({
-                        ...filters.dateRange,
-                        from: e.target.value ? new Date(e.target.value) : null,
-                      })}
-                      className="h-9"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-xs">Até</Label>
-                    <Input
-                      type="date"
-                      value={filters.dateRange.to?.toISOString().split('T')[0] ?? ""}
-                      onChange={(e) => filters.setDateRange({
-                        ...filters.dateRange,
-                        to: e.target.value ? new Date(e.target.value) : null,
-                      })}
-                      className="h-9"
-                    />
-                  </div>
+              <PopoverContent className="w-64 space-y-3" align="end">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Cidade</Label>
+                  <Select
+                    value={filters.cityId === null ? "all" : String(filters.cityId)}
+                    onValueChange={(v) => filters.setCityId(v === "all" ? null : Number(v))}
+                  >
+                    <SelectTrigger className="w-full h-9"><SelectValue placeholder="Cidade" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Todas as cidades</SelectItem>
+                      {filters.cities.map((city) => (
+                        <SelectItem key={city.id} value={String(city.id)}>{city.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Parque</Label>
+                  <Select
+                    value={filters.brandId === null ? "all" : String(filters.brandId)}
+                    onValueChange={(v) => filters.setBrandId(v === "all" ? null : Number(v))}
+                  >
+                    <SelectTrigger className="w-full h-9"><SelectValue placeholder="Parque" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Todos os parques</SelectItem>
+                      {filters.brands.map((brand) => (
+                        <SelectItem key={brand.id} value={String(brand.id)}>{brand.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               </PopoverContent>
             </Popover>
@@ -758,7 +808,9 @@ function DashboardLayoutContent({
           </div>
         </div>
 
-        <main className="flex-1 p-4 lg:p-6 min-w-0 overflow-x-hidden" style={{ backgroundColor: '#F0F4FF' }}>{children}</main>
+        <main className="flex-1 p-4 lg:p-6 min-w-0 overflow-x-hidden pb-20 md:pb-6" style={{ backgroundColor: '#F0F4FF' }}>{children}</main>
+        {/* Tab bar mobile (design Multipark Mobile) — só em ecrãs pequenos */}
+        <MobileTabBar />
       </SidebarInset>
     </>
   );

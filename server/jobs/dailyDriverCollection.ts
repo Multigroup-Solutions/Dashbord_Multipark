@@ -131,18 +131,33 @@ function processGeoJsonHistory(data: any): {
   }
 
   // Also check for properties on features with timestamps to calculate moving vs stopped
-  const timestamps: { ts: number; speed: number }[] = [];
+  // FIX 2026-08-06 (bug dos km a zero desde março): o Zello devolve PONTOS
+  // soltos, não LineStrings — o cálculo de km acima nunca corria. Agora
+  // guardamos também lat/lon por timestamp e somamos a distância entre pontos
+  // consecutivos, com filtros de ruído: gap < 1h, salto < 2km entre reports,
+  // e velocidade implícita ≤ 150 km/h.
+  const timestamps: { ts: number; speed: number; lat: number | null; lon: number | null }[] = [];
   for (const feature of data.features) {
     const props = feature.properties || {};
     const ts = parseInt(props.timestamp || props.time || props.lastReport) || 0;
     const rawSpd = parseFloat(props.speed) || 0;
     const speed = rawSpd * 3.6; // m/s to km/h
+    let lat: number | null = null, lon: number | null = null;
+    if (feature.geometry?.type === "Point" && Array.isArray(feature.geometry.coordinates)) {
+      const [gLon, gLat] = feature.geometry.coordinates;
+      if (Number.isFinite(gLat) && Number.isFinite(gLon) && (gLat !== 0 || gLon !== 0)) {
+        lat = gLat; lon = gLon;
+      }
+    }
     if (ts > 0) {
-      timestamps.push({ ts, speed });
+      timestamps.push({ ts, speed, lat, lon });
     }
   }
   timestamps.sort((a, b) => a.ts - b.ts);
 
+  let pointsKm = 0;
+  const implicitSpeeds: number[] = [];
+  let lastFix: { ts: number; lat: number; lon: number } | null = null;
   for (let i = 1; i < timestamps.length; i++) {
     const dt = timestamps[i].ts - timestamps[i - 1].ts;
     if (dt > 0 && dt < 3600) {
@@ -153,6 +168,32 @@ function processGeoJsonHistory(data: any): {
         stoppedSeconds += dt;
       }
     }
+    const cur = timestamps[i];
+    if (cur.lat != null && cur.lon != null) {
+      if (lastFix) {
+        const gapS = cur.ts - lastFix.ts;
+        const segKm = haversineKm(lastFix.lat, lastFix.lon, cur.lat, cur.lon);
+        // filtros de ruído: gaps longos e saltos GPS não contam
+        if (gapS > 0 && gapS < 3600 && segKm < 2) {
+          const implKmh = (segKm / gapS) * 3600;
+          if (implKmh <= 150) {
+            pointsKm += segKm;
+            if (implKmh > 3) implicitSpeeds.push(implKmh); // parado não conta p/ velocidade
+          }
+        }
+      }
+      lastFix = { ts: cur.ts, lat: cur.lat, lon: cur.lon };
+    }
+  }
+  // LineStrings (se algum dia voltarem) têm prioridade; senão usa os pontos
+  if (totalKm === 0 && pointsKm > 0) totalKm = pointsKm;
+
+  // Velocidades: se os reports não trazem speed, usa a implícita dos segmentos
+  if (speedCount === 0 && implicitSpeeds.length > 0) {
+    speedSum = implicitSpeeds.reduce((s, v) => s + v, 0);
+    speedCount = implicitSpeeds.length;
+    const implMax = Math.max(...implicitSpeeds);
+    if (implMax > maxSpeed) maxSpeed = implMax;
   }
 
   const totalOnlineSeconds = firstTimestamp && lastTimestamp ? lastTimestamp - firstTimestamp : 0;
@@ -166,10 +207,13 @@ function processGeoJsonHistory(data: any): {
     maxSpeed: Math.round(maxSpeed * 100) / 100,
     avgBattery: batteryCount > 0 ? Math.round(batterySum / batteryCount) : 0,
     minBattery: batteryCount > 0 ? minBattery : 0,
-    gpsPointsCount,
+    gpsPointsCount: gpsPointsCount || timestamps.length,
     geojson: data,
   };
 }
+
+// Exportado para o backfill (recalcular dias antigos a partir dos GeoJSON no storage)
+export { processGeoJsonHistory };
 
 /**
  * Run the daily collection for a specific date.

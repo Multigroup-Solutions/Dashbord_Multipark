@@ -1,4 +1,6 @@
 import { trpc } from "@/lib/trpc";
+import { formatBookingHistoryDetails } from "@/lib/bookingHistoryFormat";
+import { openInMultipark } from "@/lib/multiparkLinks";
 import { fileHref } from "@/lib/fileHref";
 import CaseMessageList from "@/components/CaseMessageList";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
@@ -29,8 +31,7 @@ import {
   ChevronRight, ChevronLeft, Send, Eye, Trash2, Upload, Pencil,
   BarChart3, AlertCircle, CheckCircle2, Hourglass, XCircle,
   Package, DollarSign, Smartphone, Shirt, FileText, Glasses,
-  HelpCircle, TrendingUp, ShieldAlert, Flag, Mail, Download, Truck, GripVertical, MessageSquareWarning, RefreshCw,
-} from "lucide-react";
+  HelpCircle, TrendingUp, ShieldAlert, Flag, Mail, Download, Truck, GripVertical, MessageSquareWarning, RefreshCw, ExternalLink } from "lucide-react";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
@@ -901,6 +902,11 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                   <CardHeader className="flex flex-row items-center justify-between">
                     <CardTitle className="text-base flex items-center gap-2">
                       <Clock className="w-5 h-5" /> Histórico da Reserva — {item.bookingRef.slice(-12)}
+                      {item.bookingRef && item.bookingRef.length >= 20 && (
+                        <Button size="sm" variant="outline" className="h-7 text-xs gap-1 ml-2" onClick={() => openInMultipark(item.bookingRef)}>
+                          Ver na Multipark <ExternalLink className="w-3 h-3" />
+                        </Button>
+                      )}
                     </CardTitle>
                     <Button size="sm" variant={showAllHist ? "default" : "outline"} onClick={() => setShowAllHist(v => !v)}>
                       {showAllHist ? "A mostrar tudo" : "Mostrar tudo"}
@@ -927,7 +933,15 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                                     <Badge className={cfg.color}>{cfg.label}</Badge>
                                     <span className="font-medium text-sm">{h.userName ? `${h.userName} ${h.userLastName || ""}`.trim() : "Sistema"}</span>
                                   </div>
-                                  {h.remarks && <p className="text-xs text-muted-foreground mt-1">{h.remarks}</p>}
+                                  {(() => {
+                                    const lines = formatBookingHistoryDetails(h.remarks);
+                                    if (!lines.length) return null;
+                                    return (
+                                      <ul className="text-xs text-muted-foreground mt-1 space-y-0.5">
+                                        {lines.map((l: string, li: number) => <li key={li}>{l}</li>)}
+                                      </ul>
+                                    );
+                                  })()}
                                   {h.parkName && <p className="text-xs text-muted-foreground">Parque: {h.parkName}</p>}
                                 </div>
                                 <span className="text-xs text-muted-foreground whitespace-nowrap">
@@ -1622,7 +1636,10 @@ function BookingHistoryView({ onBack }: { onBack: () => void }) {
                           </td>
                           <td className="p-2 font-mono text-xs">{h.bookingId?.slice(-12)}</td>
                           <td className="p-2 font-mono">{h.licensePlate || "—"}</td>
-                          <td className="p-2 text-xs text-muted-foreground">{h.remarks || "—"}</td>
+                          <td className="p-2 text-xs text-muted-foreground">{(() => {
+                            const lines = formatBookingHistoryDetails(h.remarks);
+                            return lines.length ? lines.join(" · ") : "—";
+                          })()}</td>
                         </tr>
                       );
                     })}
