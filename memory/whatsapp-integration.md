@@ -47,6 +47,40 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 
 ## Changelog
 
+### 2026-08-19 (c) — Pesquisa de contactos no inbox WhatsApp
+**Type**: feature
+**Scope**: `shared/contactSearch.ts` (novo, puro), `server/contactSearch.test.ts` (novo, 7 testes), `client/src/pages/WhatsAppInboxPage.tsx` (caixa de pesquisa na coluna "Conversas")
+**What**:
+- `matchesContactQuery(query, {name, phone})`: sem acentos/maiúsculas no nome; número comparado só por dígitos (aceita "+351…", "00351…", "912 345"); várias palavras = TODAS têm de bater (cada uma no nome OU no número). Pesquisa vazia passa tudo. `normalizeSearchText` exportado para reutilizar.
+- Inbox: input "Pesquisar nome ou número…" (ícone + botão limpar) por baixo do cabeçalho da lista; filtro LOCAL sobre `conversations.list` (já devolve `name` + `phoneE164`, cap 300, refetch 10s) — sem mudança de servidor. Estado vazio distingue "Sem resultados para “x”" de "Ainda sem conversas". Seleção atual mantém-se mesmo que saia do filtro.
+**Why**: Jorge pediu forma de procurar contactos/pessoas na página WhatsApp.
+**Notes**: só filtra conversas EXISTENTES — não lista extras sem conversa (iniciar conversa nova por template a partir da pesquisa fica como possível follow-up). Se as conversas passarem de 300, o cap do `listConversations` passa a esconder resultados → mover o filtro para o servidor nessa altura. `tsc` limpo; 7/7 testes novos.
+
+### 2026-08-19 (b) — Dialog de broadcast limpo (só semana + teste + enviar)
+**Type**: refactor
+**Scope**: `client/src/pages/ExtrasDiaPage.tsx` (dialog WhatsApp + `submitBroadcast`), `client/src/pages/WhatsAppInboxPage.tsx` (só o banner)
+**What**:
+- Dialog "Enviar WhatsApp" passou a mostrar APENAS: descrição (N selecionados / todos · N sem número válido, só se >0), campo **Semana** (= `bodyParam2`, obrigatório — botões desativados até estar preenchido), **Número de teste** + "Enviar teste", e "Enviar a N extra(s)". O resultado por destinatário continua a aparecer só DEPOIS de enviar.
+- Removidos: banner "Modo desenvolvimento" (número já é o de produção "Multipark", GREEN), campos "Nome do template" e "Língua" (agora fixos em `AVAILABILITY_TEMPLATE_NAME`/`DEFAULT_TEMPLATE_LANGUAGE`), explicação {{1}}/{{2}}, caixa "Alvos: X válidos / Y inválidos" e a **checkbox `includeFormLink`** — o cliente deixa de enviar `includeFormLink` (opcional no schema); o botão com link é decidido pelos metadados do template (`whatsappTemplateMeta.ts`) e, se a inspeção falhar, vai sem botão (comportamento conservador; a Meta rejeita botão injetado num template sem botão).
+- Inbox: removido o mesmo banner "Modo desenvolvimento" do dialog "Reiniciar com template" (import `AlertTriangle` limpo). Template/língua editáveis nesse dialog ficaram como estavam.
+**Why**: Jorge pediu o modal limpo, sem aviso de desenvolvimento nem checkbox — só o essencial.
+**Notes**: `tsc --noEmit` limpo. Sem alteração de servidor nem de schema. Para testar OUTRO template deixa de haver UI aqui — mudar `shared/whatsappTemplate.ts` ou usar o dialog do inbox.
+
+### 2026-08-19 — Diagnóstico: respostas dos extras NÃO chegam ao inbox (webhook nunca subscrito na Meta)
+**Type**: review
+**Scope**: nenhum ficheiro alterado — diagnóstico só de leitura (curl ao deploy + GETs à Graph API com o token do `.env`)
+**What** (o que foi VERIFICADO, por ordem):
+- Código do caminho inbound está completo e deployado: `GET /api/whatsapp/webhook` responde 403 a token errado e **200 + echo do challenge com o `WHATSAPP_VERIFY_TOKEN` do `.env` local** (⇒ o valor local == o valor no Vercel); `POST` sem assinatura → 401 em ~0.2s (raw body funciona na serverless). Vale em `https://dashbord-multipark.vercel.app` e em `https://dashboard.multipark.pt` (Cloudflare → mesmo deploy Vercel; o 403 "Forbidden" vem do Express, não da Cloudflare). `/api/health` confirma as 4 envs WHATSAPP_* + WABA no deploy.
+- **Causa raiz — lado Meta, duas camadas vazias**: `GET /{APP_ID}/subscriptions` (app token `APP_ID|APP_SECRET`) → `{"data":[]}` = a app `dashboard.multipark.pt` (id 1642001116898221) **não tem callback URL nem campo `messages` subscrito**; `GET /{WABA_ID}/subscribed_apps` → `{"data":[]}` = a app **não está subscrita à WABA**. Sem as duas, a Meta nunca envia eventos ao nosso endpoint — o envio funciona (só precisa de token + phone_number_id), a receção não.
+- Token é SYSTEM_USER, sem expiração, com `whatsapp_business_messaging` + `whatsapp_business_management` + `business_management` (chega para ambos os POSTs de subscrição). Número +351 911 955 252 "Multipark", CLOUD_API, GREEN, **sem** `webhook_configuration` ao nível do número (não há override a atrapalhar).
+**Why**: Jorge reportou que tudo funciona menos "receber respostas na página WhatsApp". A secção "PASSOS MANUAIS NA META" já listava "webhook apontado a /api/whatsapp/webhook" como passo manual — nunca foi executado.
+**Notes** (como resolver — NÃO executado, aguarda luz verde):
+1. App-level (UI: Meta for Developers → app → WhatsApp → Configuration → Webhook → Edit: Callback URL `https://dashboard.multipark.pt/api/whatsapp/webhook`, Verify token = valor de `WHATSAPP_VERIFY_TOKEN` → Verify and save → Manage → subscrever `messages`). Equivalente API: `POST /{APP_ID}/subscriptions` `object=whatsapp_business_account&callback_url=…&verify_token=…&fields=messages` com `access_token=APP_ID|APP_SECRET` (a Meta faz o GET de verificação na hora).
+2. WABA-level: `POST /{WABA_ID}/subscribed_apps` com Bearer `WHATSAPP_TOKEN` (UI raramente faz isto para WABAs fora do Embedded Signup). Confirmar com `GET /{WABA_ID}/subscribed_apps` → deve listar a app.
+3. Teste: enviar um WhatsApp do telemóvel para +351 911 955 252 → em ≤10s aparece na `/whatsapp` (página faz `refetchInterval` 10s); logs Vercel mostram `[WhatsAppWebhook] processado: 1 inbound`. Se aparecer 500 nos logs → migração 0045 não está nessa BD (mas o broadcast 8 já escreveu em `whatsapp_broadcasts`, logo as tabelas existem).
+- Passos 1+2 podem ser feitos por curl com os valores do `.env` local (token/secret verificados válidos); são ações que ALTERAM a config Meta ⇒ só com autorização explícita do Jorge.
+- **2026-08-19 (mesmo dia) — Passo 2 EXECUTADO com autorização do Jorge**: `POST /{WABA_ID}/subscribed_apps` (Bearer system-user token) → `{"success":true}`; `GET` confirma a app `dashboard.multipark.pt` (1642001116898221) subscrita à WABA. **Passo 1 (callback URL + campo `messages` na UI da Meta) ficou a cargo do Jorge** — até o fazer, continua a não chegar nada; confirmar depois com `GET /{APP_ID}/subscriptions` (deve mostrar `callback_url` + `fields: [messages]`, `active: true`).
+
 ### 2026-08-04 (b) — Envio guiado pelos METADADOS do template (fim do erro 100 / parâmetros nomeados)
 **Type**: fix + feature
 **Scope**: `server/whatsappTemplateMeta.ts` (novo), `server/whatsappTemplateMeta.test.ts` (novo),

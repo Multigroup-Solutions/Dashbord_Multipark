@@ -26,12 +26,14 @@ import {
   ArrowLeft,
   Hourglass,
   Lock,
-  AlertTriangle,
+  Search,
+  X,
 } from "lucide-react";
 import {
   AVAILABILITY_TEMPLATE_NAME,
   DEFAULT_TEMPLATE_LANGUAGE,
 } from "@shared/whatsappTemplate";
+import { matchesContactQuery } from "@shared/contactSearch";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -86,6 +88,8 @@ export default function WhatsAppInboxPage() {
   // {{2}} do body (o {{1}} e sempre o nome de quem recebe, resolvido no servidor).
   const [tplParam2, setTplParam2] = useState("");
   const [now, setNow] = useState(() => Date.now());
+  // Pesquisa por nome ou número (filtro local — a lista já vem completa).
+  const [search, setSearch] = useState("");
 
   // Tick para o countdown da janela (a cada 30s).
   useEffect(() => {
@@ -127,7 +131,11 @@ export default function WhatsAppInboxPage() {
     markRead.mutate({ conversationId: id });
   }
 
-  const convList = conversations.data ?? [];
+  const allConversations = conversations.data ?? [];
+  const hasSearch = search.trim().length > 0;
+  const convList = hasSearch
+    ? allConversations.filter((c) => matchesContactQuery(search, { name: c.name, phone: c.phoneE164 }))
+    : allConversations;
   const t = thread.data;
   const windowState: WindowState | undefined = t?.windowState;
 
@@ -139,10 +147,37 @@ export default function WhatsAppInboxPage() {
         <span className="font-semibold">Conversas</span>
         {conversations.isFetching && <Clock className="h-3.5 w-3.5 animate-spin text-muted-foreground ml-auto" />}
       </div>
+      <div className="p-2 border-b shrink-0">
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+          <Input
+            type="text"
+            placeholder="Pesquisar nome ou número…"
+            aria-label="Pesquisar conversas por nome ou número"
+            className="h-9 pl-8 pr-8"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          {hasSearch && (
+            <button
+              type="button"
+              aria-label="Limpar pesquisa"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              onClick={() => setSearch("")}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      </div>
       <div className="flex-1 overflow-y-auto">
         {convList.length === 0 && (
           <div className="p-4 text-sm text-muted-foreground text-center">
-            {conversations.isLoading ? "A carregar…" : "Ainda sem conversas."}
+            {conversations.isLoading
+              ? "A carregar…"
+              : hasSearch
+                ? `Sem resultados para “${search.trim()}”.`
+                : "Ainda sem conversas."}
           </div>
         )}
         {convList.map((c) => (
@@ -356,11 +391,6 @@ export default function WhatsAppInboxPage() {
               A janela de 24h está fechada. Envia um template aprovado para {t?.phoneE164} para reabrir a conversa.
             </DialogDescription>
           </DialogHeader>
-
-          <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 p-2.5 text-xs text-amber-800 dark:text-amber-300 flex gap-2">
-            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-            <span>Modo desenvolvimento: com o número de teste da Meta só há entrega a números verificados.</span>
-          </div>
 
           <div className="space-y-3">
             <div className="space-y-1">
