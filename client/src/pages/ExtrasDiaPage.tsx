@@ -1492,18 +1492,12 @@ export function AvailabilitySection() {
     setSelectedIds(new Set());
   }
 
-  // ── WhatsApp broadcast (Fase 2 — modo desenvolvimento) ────────────────────
+  // ── WhatsApp broadcast ────────────────────────────────────────────────────
   const [waOpen, setWaOpen] = useState(false);
-  // Template e língua já vêm preenchidos com o que está aprovado na Meta —
-  // continuam editáveis para testar outros templates.
-  const [waTemplate, setWaTemplate] = useState(AVAILABILITY_TEMPLATE_NAME);
-  const [waLanguage, setWaLanguage] = useState(DEFAULT_TEMPLATE_LANGUAGE);
+  // Template e língua são os aprovados na Meta (shared/whatsappTemplate.ts).
   // {{1}} = nome do extra (automático, por destinatário, no servidor).
   // {{2}} = este campo, igual para todos os destinatários.
   const [waParam2, setWaParam2] = useState("");
-  // Só ligar quando o template TIVER botão "Visit website" com URL dinâmico
-  // (Fase 4). Ligado num template sem botão, a Meta rejeita o envio.
-  const [waFormLink, setWaFormLink] = useState(false);
   const [waTestPhone, setWaTestPhone] = useState("");
   type WaRecipient = {
     employeeId: number | null;
@@ -1536,28 +1530,23 @@ export function AvailabilitySection() {
   const waInvalidCount = waTargets.length - waValidCount;
 
   function submitBroadcast(testPhone?: string) {
-    const templateName = waTemplate.trim();
-    if (!templateName) {
-      toast.error("Indica o nome do template.");
-      return;
-    }
-    if (waFormLink && !effectiveWeek) {
-      toast.error("Escolhe a semana antes de enviar com link do formulário.");
+    const bodyParam2 = waParam2.trim();
+    if (!bodyParam2) {
+      toast.error("Indica a semana.");
       return;
     }
     setWaResult(null);
     // Invariante mantida (Decisão 1 do Jorge): "a todos" = o conjunto MOSTRADO
-    // na tabela — o que envio é o que vejo. Como a tabela passou a listar
-    // todos os extras ativos, "a todos" volta a significar todos os ativos,
-    // que é o caso de uso pedido. Envio de teste ignora o alvo.
+    // na tabela — o que envio é o que vejo. Envio de teste ignora o alvo.
     const targetIds = selectedIds.size > 0
       ? Array.from(selectedIds)
       : shownExtras.map(e => e.employeeId);
     broadcast.mutate({
-      templateName,
-      languageCode: waLanguage.trim() || undefined,
-      bodyParam2: waParam2.trim() || null,
-      includeFormLink: waFormLink,
+      templateName: AVAILABILITY_TEMPLATE_NAME,
+      languageCode: DEFAULT_TEMPLATE_LANGUAGE,
+      bodyParam2,
+      // O botão com link do formulário é detetado pelos metadados do template
+      // na Meta (server/whatsappTemplateMeta.ts) — sem override manual na UI.
       employeeIds: testPhone ? undefined : targetIds,
       weekStart: effectiveWeek || null,
       note: note.trim() || null,
@@ -1850,107 +1839,43 @@ export function AvailabilitySection() {
 
         {/* ── Dialog do broadcast WhatsApp ─────────────────────────────────── */}
         <Dialog open={waOpen} onOpenChange={(open) => { if (!broadcast.isPending) setWaOpen(open); }}>
-          <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
+          <DialogContent className="sm:max-w-md">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <MessageCircle className="h-5 w-5 text-green-600" />
-                Enviar template WhatsApp
+                Enviar WhatsApp
               </DialogTitle>
               <DialogDescription>
                 {selectedIds.size > 0
-                  ? `${selectedIds.size} extra(s) selecionado(s).`
-                  : `Sem seleção — envia aos ${shownExtras.length} extras mostrados na tabela.`}
+                  ? `${selectedIds.size} extra(s) selecionado(s)`
+                  : `Todos os ${shownExtras.length} extras da tabela`}
+                {waInvalidCount > 0 ? ` · ${waInvalidCount} sem número válido` : ""}
               </DialogDescription>
             </DialogHeader>
 
-            {/* Aviso de modo desenvolvimento */}
-            <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 p-3 text-xs text-amber-800 dark:text-amber-300 flex gap-2">
-              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-              <span>
-                <strong>Modo desenvolvimento.</strong> Com o número de teste da Meta, só há entrega a
-                números <strong>verificados</strong> e a ~250 destinatários únicos/24h. Não uses isto para
-                validar envio em escala — usa o "número de teste" abaixo para confirmar ponta-a-ponta.
-              </span>
-            </div>
-
-            <div className="space-y-3">
+            <div className="space-y-4">
               <div className="space-y-1">
-                <Label className="text-xs">Nome do template (WhatsApp Manager)</Label>
+                <Label className="text-xs">Semana</Label>
                 <Input
-                  placeholder={AVAILABILITY_TEMPLATE_NAME}
-                  value={waTemplate}
-                  onChange={(e) => setWaTemplate(e.target.value)}
+                  autoFocus
+                  placeholder="ex: semana de 12 a 19 de agosto"
+                  value={waParam2}
+                  onChange={(e) => setWaParam2(e.target.value)}
                 />
-                <p className="text-[11px] text-muted-foreground">
-                  Tem de ser o nome EXATO do template APPROVED e a língua tem de ser a da tradução aprovada
-                  (pt_PT, pt_BR e pt são diferentes para a Meta).
-                </p>
               </div>
 
-              <div className="flex gap-3 flex-wrap">
-                <div className="space-y-1">
-                  <Label className="text-xs">Língua</Label>
-                  <Input className="w-32" value={waLanguage} onChange={(e) => setWaLanguage(e.target.value)} placeholder={DEFAULT_TEMPLATE_LANGUAGE} />
-                </div>
-                <div className="space-y-1 flex-1 min-w-[12rem]">
-                  <Label className="text-xs">Semana/dia (parâmetro 2)</Label>
+              <div className="space-y-1">
+                <Label className="text-xs">Número de teste</Label>
+                <div className="flex gap-2">
                   <Input
-                    placeholder="ex: semana de 11 a 17 de agosto"
-                    value={waParam2}
-                    onChange={(e) => setWaParam2(e.target.value)}
-                  />
-                  <p className="text-[11px] text-muted-foreground">
-                    O <strong>{"{{1}}"}</strong> é preenchido automaticamente com o nome de cada extra.
-                    Este campo é o <strong>{"{{2}}"}</strong> e vai igual para todos.
-                  </p>
-                </div>
-              </div>
-
-              <label className="flex items-start gap-2 text-xs cursor-pointer">
-                <input
-                  type="checkbox"
-                  className="mt-0.5"
-                  checked={waFormLink}
-                  onChange={(e) => setWaFormLink(e.target.checked)}
-                />
-                <span>
-                  O template tem <strong>botão com link</strong> do formulário de disponibilidade
-                  <span className="block text-muted-foreground">
-                    Normalmente <strong>não é preciso mexer</strong>: o envio lê o template na Meta e deteta
-                    sozinho se há botão com link (e se os parâmetros são nomeados ou numerados). Esta opção
-                    só conta quando essa leitura não é possível.
-                  </span>
-                </span>
-              </label>
-
-              {/* Resumo válidos/inválidos entre os alvos */}
-              {!waResult && (
-                <div className="rounded-md border p-3 text-sm">
-                  <div className="font-medium mb-1">Alvos: {waTargets.length}</div>
-                  <div className="flex gap-4 text-xs">
-                    <span className="text-green-600 flex items-center gap-1">
-                      <CheckCircle2 className="h-3.5 w-3.5" /> {waValidCount} com número válido
-                    </span>
-                    <span className="text-amber-600 flex items-center gap-1">
-                      <AlertTriangle className="h-3.5 w-3.5" /> {waInvalidCount} sem número válido
-                    </span>
-                  </div>
-                </div>
-              )}
-
-              {/* Modo teste: 1 número */}
-              <div className="rounded-md border border-dashed p-3 space-y-2">
-                <Label className="text-xs font-medium">Testar primeiro (envia só a 1 número)</Label>
-                <div className="flex gap-2 flex-wrap">
-                  <Input
-                    className="w-56"
                     placeholder="+351912345678"
                     value={waTestPhone}
                     onChange={(e) => setWaTestPhone(e.target.value)}
                   />
                   <Button
                     variant="outline"
-                    disabled={!waTemplate.trim() || !waTestPhone.trim() || broadcast.isPending}
+                    className="shrink-0"
+                    disabled={!waParam2.trim() || !waTestPhone.trim() || broadcast.isPending}
                     onClick={() => submitBroadcast(waTestPhone)}
                   >
                     {broadcast.isPending ? <Clock className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
@@ -1959,11 +1884,11 @@ export function AvailabilitySection() {
                 </div>
               </div>
 
-              {/* Resultado por destinatário */}
+              {/* Resultado por destinatário (só depois de enviar) */}
               {waResult && (
                 <div className="rounded-md border p-3 space-y-2">
                   <div className="text-sm font-medium">
-                    Resultado: {waResult.sent} enviados · {waResult.failed} falhas · {waResult.invalidPhone} sem número
+                    {waResult.sent} enviados · {waResult.failed} falhas · {waResult.invalidPhone} sem número
                   </div>
                   <div className="max-h-48 overflow-y-auto text-xs divide-y">
                     {waResult.recipients.map((r, i) => (
@@ -1989,11 +1914,11 @@ export function AvailabilitySection() {
               </Button>
               <Button
                 className="bg-green-600 hover:bg-green-700 text-white"
-                disabled={!waTemplate.trim() || broadcast.isPending || waValidCount === 0}
+                disabled={!waParam2.trim() || broadcast.isPending || waValidCount === 0}
                 onClick={() => submitBroadcast()}
               >
                 {broadcast.isPending ? <Clock className="h-4 w-4 mr-2 animate-spin" /> : <MessageCircle className="h-4 w-4 mr-2" />}
-                Enviar a {waValidCount} válido(s)
+                Enviar a {waValidCount} extra(s)
               </Button>
             </DialogFooter>
           </DialogContent>
