@@ -11,6 +11,10 @@ por Faro / Porto / Lisboa").
 ## Related
 - `whatsapp-integration.md` — a tabela filtrada é o alvo do broadcast WhatsApp; o
   filtro tinha de compor-se com a Decisão 1 ("a todos" = conjunto visível).
+  **2026-08-20**: o mesmo diálogo passou a ter seletor de template
+  (`disponibilidade_extras` / `aviso_de_trabalho`) — ver o changelog desse ficheiro;
+  a pesquisa desta página é o 3º filtro que define o alvo desse envio, e o
+  `shared/contactSearch.ts` que ela reutiliza nasceu do inbox WhatsApp.
 - `identity-by-email.md` — define o conteúdo da tabela de extras (todos os ativos
   + quem respondeu sem ser extra) e a Decisão 1 que este filtro respeita.
 
@@ -53,10 +57,12 @@ por Faro / Porto / Lisboa").
 - `getWeekOverview` devolve `city` + `citySource` por extra (`OverviewExtra`).
 - UI: linha de botões `Todas | Lisboa | Porto | Faro | Sem cidade`, **cada um com
   a contagem**, + coluna "Cidade" na tabela (tooltip diz de que fonte veio).
-- **Composição de filtros**: cidade → depois "Mostrar só quem marcou
-  disponibilidade". O conjunto resultante (`shownExtras`) é o que a tabela mostra
-  E o alvo de "a todos" (email e WhatsApp) — invariante "o que envio é o que vejo".
-- Mudar o filtro **limpa a seleção** (nunca enviar a quem já não se vê).
+- **Composição de filtros (AND, por esta ordem)**: cidade → "Mostrar só quem
+  marcou disponibilidade" → **pesquisa livre por pessoa** (2026-08-20). O conjunto
+  resultante (`shownExtras`) é o que a tabela mostra E o alvo de "a todos" (email
+  e WhatsApp) — invariante "o que envio é o que vejo".
+- Mudar o filtro de cidade/disponibilidade **limpa a seleção** (nunca enviar a
+  quem já não se vê). **A pesquisa NÃO limpa** — ver o changelog de 2026-08-20.
 - Contagens do cabeçalho e a linha de totais "Disponíveis" passaram a ser
   calculadas sobre o conjunto VISÍVEL (as do servidor contam o universo todo e
   mentiriam com um filtro aplicado).
@@ -74,6 +80,41 @@ mostra logo quantos ficaram por resolver:
   no 24 — ver a regra em `whatsapp-integration.md`).
 
 ## Changelog
+
+### 2026-08-20 — Pesquisa livre por pessoa na tabela de extras
+**Type**: feature
+**Scope**: `client/src/pages/ExtrasDiaPage.tsx` (`AvailabilitySection` + helper
+`matchesExtraQuery` no topo do ficheiro)
+**What**:
+- Caixa "Pesquisar pessoa por nome ou número…" por cima da linha de cidades
+  (ícone de lupa + botão de limpar, `aria-label`), **mesmo padrão visual da
+  pesquisa do inbox WhatsApp**.
+- **Reutiliza `shared/contactSearch.ts`** (`matchesContactQuery`) — nada de
+  normalizador novo: sem acentos, sem maiúsculas, várias palavras em AND, número
+  comparado só por dígitos. O wrapper local `matchesExtraQuery` tenta o número nas
+  DUAS formas da ficha: `phoneE164` (normalizado pelo servidor) e `phone` em bruto
+  — senão quem tem o número escrito de forma não reconhecida ficava impossível de
+  encontrar pelo número.
+- Filtro **local** sobre a lista já carregada (`overview` traz todos os extras
+  ativos) → **sem debounce**, não há pedido nenhum a atrasar.
+- Estado vazio distingue `Sem resultados para “x”` dos casos antigos.
+- Cabeçalho de "selecionar todos" passou a operar **só sobre os mostrados**
+  (adiciona/remove os visíveis, não mexe no resto da seleção).
+**Why**: só se podia filtrar por cidade; o Jorge precisava de encontrar uma pessoa
+concreta numa lista de extras que já é grande.
+**Notes / decisões**:
+- ⚠️ **DIVERGÊNCIA deliberada face ao filtro de cidade: a pesquisa NÃO limpa a
+  seleção.** A pesquisa é ferramenta de PROCURA (procurar → marcar → procurar
+  outro → marcar); limpar a seleção tornava-a inútil. Em troca, a UI mostra em
+  âmbar `N selecionado(s) fora dos filtros atuais — continuam incluídos no envio`
+  e o alvo do WhatsApp (`waTargets`) passou a sair da lista COMPLETA quando há
+  seleção, para as contagens do diálogo dizerem o mesmo que o envio (antes
+  contava só os visíveis e mandava `Array.from(selectedIds)` — divergiam).
+- As contagens dos botões de cidade continuam a ser do universo (como já eram
+  face ao filtro de disponibilidade); a linha "N de M extras ativos" é que dá o
+  efeito dos filtros.
+- `tsc --noEmit` limpo, `vite build` OK; sem testes novos (a lógica pura vem do
+  `contactSearch.ts`, já com 7 testes). Sem migração, sem commits.
 
 ### 2026-08-04 — Filtro de cidade nos extras (sem schema novo)
 **Type**: feature

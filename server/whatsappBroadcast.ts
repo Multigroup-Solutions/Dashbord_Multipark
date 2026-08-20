@@ -26,8 +26,12 @@ import { issueAvailabilityFormToken } from "./availabilityFormToken";
 import {
   DEFAULT_TEMPLATE_LANGUAGE,
   UNKNOWN_RECIPIENT_NAME,
+  findWhatsAppTemplateByName,
   firstNameOf,
+  orderBodyValues,
+  resolveBodyParamRoles,
   sanitizeTemplateParam,
+  type TemplateBodyRoles,
 } from "../shared/whatsappTemplate";
 import {
   buildBodyComponent,
@@ -138,6 +142,12 @@ export function buildBodyParams(recipientName: string | null, bodyParam2?: strin
  * `(#100) Parameter name is missing or empty`), posicionais vão simples, e um
  * template sem parâmetros não leva componente de body nenhum.
  *
+ * `values` é semântico: [nome do destinatário, valor partilhado do dialog]. Com
+ * `roles` (catálogo em shared/whatsappTemplate.ts) os valores são REORDENADOS
+ * para a ordem real dos parâmetros do template — sem isso, um template que
+ * escreva o dia antes do nome receberia os dois trocados. Sem `roles` mantém-se
+ * o mapeamento por posição, que é o comportamento histórico.
+ *
  * Sem metadados (inspeção indisponível), mantém-se o comportamento antigo:
  * body posicional com os valores que temos.
  *
@@ -147,13 +157,16 @@ export function buildBodyParams(recipientName: string | null, bodyParam2?: strin
 export function buildComponents(opts: {
   analysis?: TemplateAnalysis | null;
   values: string[];
+  roles?: TemplateBodyRoles | null;
   buttonToken?: string;
 }): unknown[] | undefined {
   const comps: unknown[] = [];
-  const { analysis, values, buttonToken } = opts;
+  const { analysis, values, roles, buttonToken } = opts;
 
   if (analysis) {
-    const body = buildBodyComponent(analysis, values);
+    const slots = resolveBodyParamRoles(analysis.paramNames, analysis.paramCount, roles);
+    const ordered = orderBodyValues(slots, { recipient: values[0] ?? "", shared: values[1] ?? "" });
+    const body = buildBodyComponent(analysis, ordered);
     if (body) comps.push(body);
   } else if (values.length) {
     comps.push({ type: "body", parameters: values.map((p) => ({ type: "text", text: String(p) })) });
@@ -277,6 +290,8 @@ interface DispatchConfig {
   bodyParam2: string | null;
   /** Metadados do template quando a inspeção correu bem; null = modo antigo. */
   analysis: TemplateAnalysis | null;
+  /** Papéis dos parâmetros deste template (catálogo); null = mapeamento por posição. */
+  roles: TemplateBodyRoles | null;
   /** Porque é que a inspeção falhou (anexado aos erros, para diagnóstico). */
   metaUnavailableReason: string | null;
   includeFormLink: boolean;
@@ -336,7 +351,7 @@ async function dispatchOne(
   return sendOne(db, r, {
     templateName: cfg.templateName,
     languageCode: cfg.languageCode,
-    components: buildComponents({ analysis: cfg.analysis, values: params, buttonToken }),
+    components: buildComponents({ analysis: cfg.analysis, values: params, roles: cfg.roles, buttonToken }),
     broadcastId: cfg.broadcastId,
     sentById: cfg.sentById,
     metaUnavailableReason: cfg.metaUnavailableReason,
@@ -385,6 +400,10 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
   const languageCode = (opts.languageCode || DEFAULT_TEMPLATE_LANGUAGE).trim();
   const bodyParam2 = opts.bodyParam2?.trim() || null;
   const weekStart = opts.weekStart ?? null;
+  // Papéis dos parâmetros vêm do catálogo do SERVIDOR (pelo nome do template),
+  // nunca do cliente. Template fora do catálogo (ex.: nome escrito à mão no
+  // dialog do inbox) → null = mapeamento por posição, como sempre foi.
+  const roles = findWhatsAppTemplateByName(templateName, languageCode)?.roles ?? null;
 
   // ── Inspeção do template (uma vez por broadcast) ───────────────────────────
   // O envio ADAPTA-SE ao template: parâmetros nomeados vs posicionais, quantos
@@ -405,6 +424,7 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
     const problem = validateTemplateUsage(analysis, {
       hasBodyParam2: !!bodyParam2,
       hasWeekStart: !!weekStart,
+      roles,
     });
     if (problem) throw new Error(problem);
   } else {
@@ -466,6 +486,7 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
         languageCode,
         bodyParam2,
         analysis,
+        roles,
         metaUnavailableReason,
         includeFormLink,
         weekStart,
@@ -519,6 +540,7 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
       languageCode,
       bodyParam2,
       analysis,
+      roles,
       metaUnavailableReason,
       includeFormLink,
       weekStart,

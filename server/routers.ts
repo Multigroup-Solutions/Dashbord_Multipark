@@ -29,6 +29,7 @@ import {
   mondayOf,
 } from "./extrasAvailability";
 import { sendBroadcast } from "./whatsappBroadcast";
+import { describeLookupFailure, getTemplateMeta } from "./whatsappTemplateMeta";
 import {
   listConversations,
   getConversationThread,
@@ -7546,6 +7547,38 @@ export const appRouter = router({
 
   // ── WHATSAPP (envio em massa de templates aos extras) ──────────────────────
   whatsapp: router({
+    // Texto REAL do template aprovado na Meta, para a UI pré-visualizar a
+    // mensagem antes de enviar. Devolve o corpo com os `{{...}}` por substituir
+    // — quem os substitui é o cliente, com os MESMOS papéis que o envio usa
+    // (shared/whatsappTemplate.ts), para o preview não poder divergir do envio.
+    // Nunca lança por falta de metadados: `ok:false` + motivo legível.
+    templatePreview: protectedProcedure
+      .input(
+        z.object({
+          templateName: z.string().min(1).max(128),
+          languageCode: z.string().min(2).max(12),
+        }),
+      )
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const meta = await getTemplateMeta(input.templateName, input.languageCode);
+        if (!meta.available) return { ok: false as const, reason: meta.reason };
+        if (!meta.lookup.ok) {
+          return {
+            ok: false as const,
+            reason: describeLookupFailure(meta.lookup, input.templateName, input.languageCode),
+          };
+        }
+        const a = meta.lookup.analysis;
+        return {
+          ok: true as const,
+          bodyText: a.bodyText,
+          paramNames: a.paramNames,
+          paramCount: a.paramCount,
+          hasDynamicUrlButton: a.hasDynamicUrlButton,
+        };
+      }),
+
     // Envia um template WhatsApp em massa (ou a 1 número, em modo teste).
     // Espelha o padrão de extrasAvailability.sendRequest. A mutation devolve o
     // summary completo (incl. resultado por destinatário), por isso a UI não

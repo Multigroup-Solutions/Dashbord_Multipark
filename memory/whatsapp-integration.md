@@ -8,7 +8,9 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 - `employee-city-derivation.md` — **2026-08-04**: a tabela de extras ganhou filtro
   por cidade (Lisboa/Porto/Faro, cidade DERIVADA, sem coluna nova). O alvo do
   broadcast ("a todos") passou a ser o conjunto visível JÁ FILTRADO — a Decisão 1
-  mantém-se, mudou outra vez o conjunto visível.
+  mantém-se, mudou outra vez o conjunto visível. **2026-08-20**: junta-se-lhe a
+  pesquisa livre por pessoa (nome/número), que compõe em AND com a cidade e é o
+  3º filtro a definir o "a todos" do WhatsApp.
 - `identity-by-email.md` — **2026-07-31, altera partes desta integração**: (1) `normalizePhoneE164` passou a tolerar texto livre (anotações, dois números, invisíveis) — os casos que marcavam números válidos como inválidos; (2) o "tem número válido?" passou a vir do SERVIDOR (`getWeekOverview.phoneE164`), a UI já não recalcula; (3) a tabela do `AvailabilitySection` mostra TODOS os extras ativos (o filtro `availableDays > 0` deixava a página vazia) + quem respondeu sem ter função "extra", e o `sendBroadcast` vai buscar esses à ficha para não os descartar em silêncio. A Decisão 1 ("a todos" = conjunto visível) mantém-se — mudou o conjunto visível.
 
 ## Terreno (mapa da investigação inicial)
@@ -46,6 +48,83 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 5. **Confirmados**: default **+351** na normalização; **nome de template configurável no dialog** (desenvolver com placeholder até os templates estarem APPROVED); **sem fila persistente** → `runConcurrent(4)` + **1 retry**, MAS deixar comentário no código do broadcast a assinalar que um restart do Railway a meio **perde os envios em curso**.
 
 ## Changelog
+
+### 2026-08-20 — Seletor de templates na página de disponibilidade (+ `aviso_de_trabalho`, papéis por NOME, pré-visualização real)
+**Type**: feature
+**Scope**: `shared/whatsappTemplate.ts` (catálogo + helpers puros), `server/whatsappTemplateMeta.ts`
+(`bodyText` na análise, `validateTemplateUsage` com papéis), `server/whatsappBroadcast.ts`
+(papéis resolvidos no servidor + valores reordenados), `server/routers.ts`
+(`whatsapp.templatePreview`), `client/src/pages/ExtrasDiaPage.tsx` (diálogo),
+`server/whatsappTemplateCatalog.test.ts` (novo, 15 testes)
+**What**:
+- **CATÁLOGO `WHATSAPP_TEMPLATES`** em `shared/whatsappTemplate.ts` — cada entrada traz `id` interno,
+  `name`/`language` aprovados na Meta, etiqueta+descrição para o seletor, o rótulo/placeholder do
+  campo partilhado (`sharedParam.kind: "week" | "day"`) e os **papéis** dos parâmetros
+  (`roles: {recipient, shared}`). Duas entradas: `disponibilidade` (`disponibilidade_extras`/pt_BR,
+  `{{nome}}`+`{{semana}}`) e `aviso_trabalho` (**`aviso_de_trabalho`/pt_BR, `{{customer_name}}`+`{{day}}`**).
+  Acrescentar um 3º template é editar só este array.
+- **Papéis por NOME, não por posição** — `resolveBodyParamRoles(paramNames, paramCount, roles)` +
+  `orderBodyValues` (puros, partilhados). O envio continua a produzir `[nome do extra, campo do
+  diálogo]`, mas passa a REORDENAR para a ordem real dos parâmetros do template. Um template que
+  escreva `{{day}}` antes de `{{customer_name}}` deixa de receber os dois trocados. Nome desconhecido,
+  contagem diferente ou template fora do catálogo → **recurso posicional** = comportamento histórico.
+  Os papéis são resolvidos NO SERVIDOR (`findWhatsAppTemplateByName(templateName, languageCode)`),
+  nunca vindos do cliente.
+- **`validateTemplateUsage`** deixou de exigir o campo do diálogo só quando `paramCount === 2`: agora
+  exige-o sempre que ALGUM slot tenha o papel `shared` (cobre o template de 1 parâmetro que não é o nome).
+- **Pré-visualização REAL** — `whatsapp.templatePreview` (query tRPC, backoffice+) devolve o
+  `bodyText` aprovado na Meta (via `getTemplateMeta`, cache 5 min) e o cliente substitui com
+  `previewTemplateBody` usando **os mesmos papéis do envio** → o preview não pode divergir do que a
+  Meta recebe. Sem metadados (falta `WHATSAPP_WABA_ID`/permissão/rede) mostra o motivo em âmbar e o
+  envio continua a funcionar. NÃO há cópia local do texto do template (era a única forma de garantir
+  que não fica desatualizado).
+- **Diálogo "Enviar WhatsApp"**: `Select` "Mensagem" (só as duas entradas do catálogo) + descrição,
+  campo partilhado com rótulo/placeholder do template (**"Semana"** vs **"Dia"**), botões de
+  preenchimento rápido com os 7 dias da semana (`overview.dayHeaders`, ex. "Sexta 22/08") quando o
+  template pede um dia, e o bloco de pré-visualização. O valor escrito é guardado **por template**
+  (`Record<templateId, string>`), por isso trocar de template não apaga o que já estava escrito.
+**Why**: o Jorge aprovou na Meta um 2º template (`aviso_de_trabalho`) e precisa de escolher qual
+enviar a partir da mesma tabela de extras.
+**Notes / decisões / gotchas**:
+- **`{{day}}` = texto livre com atalhos para os dias da semana selecionada na página** (rótulo
+  "Sexta 22/08", exactamente o `dayHeaders[].label` que a tabela já usa). **Assunção**: o Jorge quer
+  avisar de um dia concreto dessa semana; se for outra coisa (data ISO, "amanhã", hora incluída) o
+  campo aceita texto livre à mesma — muda-se só o `sharedParam.placeholder`.
+- O `weekStart` continua a ser enviado no broadcast (contexto + token do formulário) em AMBOS os
+  templates; o `aviso_de_trabalho` não tem botão URL, e os metadados é que mandam nisso.
+- O diálogo "Reiniciar com template" do inbox **não** ganhou seletor (continua com nome/língua à
+  mão), mas escrever lá `aviso_de_trabalho` já apanha os papéis pelo catálogo.
+- **Gates**: `tsc --noEmit` LIMPO, `vite build` OK. **+15 testes novos**; os 9 ficheiros
+  WhatsApp/extras dão **140/140**. Suite total **321 passam / 328**, com as **mesmas 7 falhas
+  pré-existentes de ambiente** (users.create sem DATABASE_URL, zello ×2, multipark ×3, auth.logout).
+- Sem migração. Sem commits git (por instrução).
+- ⚠️ **Passo na Meta**: o `aviso_de_trabalho` tem de estar APPROVED em **pt_BR** e o número do
+  destinatário na allowed list enquanto a app estiver em modo de desenvolvimento (ver "PASSOS
+  MANUAIS NA META"). O preview diz logo se o nome/língua/estado não batem certo.
+- **Pós-rebase (mesmo dia, sobre `368c801`)** — o commit foi rebasado sobre um batch upstream de
+  ~60 commits (redesign, Extras-Dia multi-cidade, `useTableSort`, coluna "Últ. trabalho" via
+  `rh.lastWorkedMap`, e **`5be2c26` "templates de pedido (email + WhatsApp)"**). Conflitos só em
+  `ExtrasDiaPage.tsx` (3 regiões), resolvidos mantendo AMBOS os lados. Reconciliação semântica:
+  - **Sem colisão de contrato com `5be2c26`**: esse commit é do canal EMAIL
+    (`shared/availabilityMessages.ts` + `sendRequest.message{kind,dia,turno,horas}`) e NÃO tocou em
+    `shared/whatsappTemplate.ts` / `whatsappBroadcast.ts` / `whatsappTemplateMeta.ts`. O único ponto
+    de contacto é o botão "Usar este texto no WhatsApp", que escrevia no `{{2}}` do (então único)
+    template. Passou a chamar `applyMessageTextToWhatsApp`: **seleciona o template de
+    disponibilidade E escreve no campo dele** — senão, com "Aviso de trabalho" escolhido, a frase do
+    pedido ia parar ao campo "Dia".
+  - **Ordenação**: as linhas passaram a vir de `availSort.sorted`, mas `useTableSort` só REORDENA
+    (não filtra), por isso `shownExtras` continua a ser o conjunto certo para a seleção "todos os
+    mostrados", o `hiddenSelectedCount`, os totais e o alvo do envio. A pesquisa é aplicada ANTES do
+    `.map(lastWorked)` (o `lastWorked` é coluna, não filtro) e `matchesExtraQuery` continua a bater
+    com a forma da linha (nome/`phone`/`phoneE164` inalterados).
+  - **Colunas**: a tabela passou a ter 5 fixas (+ dias) → `colSpan` do estado vazio = `dayHeaders.length + 5`.
+    ⚠️ **Bug upstream corrigido de passagem**: a linha de totais "Disponíveis" ficou com 4 células
+    fixas quando a coluna "Últ. trabalho" foi adicionada, o que desalinhava os totais das colunas dos
+    dias — faltava um `<td>` (1 linha).
+  - Ambiente: o batch trouxe `leaflet`/`@types/leaflet` no `package.json` sem estarem instalados
+    (tsc falhava em `ZelloLiveTab.tsx`); resolvido com `pnpm install --prefer-offline`.
+  - **Gates pós-rebase**: `tsc --noEmit` LIMPO, `vite build` OK, 140/140 nos 9 ficheiros
+    WhatsApp/extras, suite total **321/328** com as MESMAS 7 falhas pré-existentes de ambiente.
 
 ### 2026-08-19 (c) — Pesquisa de contactos no inbox WhatsApp
 **Type**: feature

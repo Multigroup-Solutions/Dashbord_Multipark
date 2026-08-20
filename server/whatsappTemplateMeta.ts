@@ -18,6 +18,8 @@
  * segue com o comportamento anterior — e, se falhar, o motivo é anexado ao erro.
  */
 
+import { resolveBodyParamRoles, type TemplateBodyRoles } from "../shared/whatsappTemplate";
+
 const GRAPH_BASE = "https://graph.facebook.com";
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -34,6 +36,8 @@ export interface TemplateAnalysis {
   name: string;
   language: string;
   status: string;
+  /** Texto do BODY tal como aprovado (com os `{{...}}`) — base da pré-visualização. */
+  bodyText: string;
   parameterFormat: ParameterFormat;
   /** Nomes ordenados dos parâmetros do body (vazio se posicional). */
   paramNames: string[];
@@ -135,6 +139,7 @@ export function analyzeTemplateEntry(entry: any): TemplateAnalysis {
     name: String(entry?.name ?? ""),
     language: String(entry?.language ?? ""),
     status: String(entry?.status ?? "UNKNOWN"),
+    bodyText,
     parameterFormat,
     paramNames: parameterFormat === "NAMED" ? paramNames : [],
     paramCount,
@@ -205,7 +210,7 @@ export function describeLookupFailure(
  */
 export function validateTemplateUsage(
   analysis: TemplateAnalysis,
-  opts: { hasBodyParam2: boolean; hasWeekStart: boolean },
+  opts: { hasBodyParam2: boolean; hasWeekStart: boolean; roles?: TemplateBodyRoles | null },
 ): string | null {
   const paramsRef = analysis.paramNames.length
     ? ` (${analysis.paramNames.map((n) => `{{${n}}}`).join(", ")})`
@@ -218,10 +223,14 @@ export function validateTemplateUsage(
       `Simplifica o template ou pede o alargamento desta funcionalidade.`
     );
   }
-  if (analysis.paramCount === 2 && !opts.hasBodyParam2) {
+  // O campo do dialog é obrigatório sempre que ALGUM parâmetro do template o
+  // consome — inclui o caso de um template com um único parâmetro que não é o
+  // nome (aí o nome não entra e o campo é o único valor a enviar).
+  const slots = resolveBodyParamRoles(analysis.paramNames, analysis.paramCount, opts.roles);
+  if (slots.includes("shared") && !opts.hasBodyParam2) {
     return (
-      `O template "${analysis.name}" tem 2 parâmetros${paramsRef}: o 1º é preenchido com o nome do extra ` +
-      `e o 2º vem do campo "Semana/dia", que está vazio. Preenche-o antes de enviar.`
+      `O template "${analysis.name}" tem ${analysis.paramCount} parâmetro(s)${paramsRef} e um deles vem do ` +
+      `campo "Semana/dia" do diálogo, que está vazio. Preenche-o antes de enviar.`
     );
   }
   if (analysis.hasDynamicUrlButton && !opts.hasWeekStart) {
@@ -241,8 +250,8 @@ export function validateTemplateUsage(
  *  - POSITIONAL → parâmetros simples, pela ordem.
  *  - 0 params   → nenhum componente de body (enviar um dá 132000).
  *
- * `values` é sempre semântico-por-posição: [nome do extra, semana/dia]. O
- * template decide quantos são usados.
+ * `values` vem JÁ pela ordem dos parâmetros do template (ver `orderBodyValues` em
+ * shared/whatsappTemplate.ts). O template decide quantos são usados.
  */
 export function buildBodyComponent(analysis: TemplateAnalysis, values: string[]): unknown | null {
   if (analysis.paramCount === 0) return null;

@@ -51,6 +51,8 @@ import {
   XCircle,
   AlertTriangle,
   MapPin,
+  Search,
+  X,
 } from "lucide-react";
 import {
   CITY_KEYS,
@@ -59,9 +61,14 @@ import {
   type CityKey,
 } from "@shared/city";
 import {
-  AVAILABILITY_TEMPLATE_NAME,
-  DEFAULT_TEMPLATE_LANGUAGE,
+  DEFAULT_WHATSAPP_TEMPLATE_ID,
+  WHATSAPP_TEMPLATES,
+  findWhatsAppTemplate,
+  firstNameOf,
+  previewTemplateBody,
+  resolveBodyParamRoles,
 } from "@shared/whatsappTemplate";
+import { matchesContactQuery } from "@shared/contactSearch";
 
 // Defaults para o preview do UI — devem coincidir com a tabela `extra_rates`
 // na BD (migration 0044). O custo real é sempre calculado no backend a partir
@@ -1447,6 +1454,21 @@ export function CandidaturasSection() {
   );
 }
 
+/**
+ * Pesquisa livre por pessoa na tabela de extras — nome (sem acentos/maiúsculas)
+ * ou número. Reutiliza o `matchesContactQuery` do inbox WhatsApp; a única
+ * diferença é o número ser tentado nas DUAS formas que a ficha tem: o E.164
+ * normalizado pelo servidor e o texto em bruto (só assim se encontra quem tem o
+ * número escrito de forma que a normalização não reconhece).
+ */
+function matchesExtraQuery(
+  query: string,
+  ex: { fullName: string; phone: string | null; phoneE164: string | null },
+): boolean {
+  if (matchesContactQuery(query, { name: ex.fullName, phone: ex.phoneE164 })) return true;
+  return !!ex.phone && matchesContactQuery(query, { name: ex.fullName, phone: ex.phone });
+}
+
 // Exportada: rende agora na página Disponibilidade (hub de gestão) — ver nota
 // na CandidaturasSection.
 export function AvailabilitySection() {
@@ -1487,6 +1509,10 @@ export function AvailabilitySection() {
   // Filtro de cidade. "all" = sem filtro; "none" = fichas sem cidade
   // identificada (ver server/employeeCity.ts — a cidade é DERIVADA).
   const [cityFilter, setCityFilter] = useState<CityKey | "all" | "none">("all");
+  // Pesquisa por pessoa (nome ou número). Filtro LOCAL sobre a lista já
+  // carregada — a `overview` traz todos os extras ativos de uma vez, por isso
+  // não há pedido nenhum a debouncear.
+  const [search, setSearch] = useState("");
 
   // assim que chegam as sugestões, default = próxima segunda
   const effectiveWeek = weekStart || hints.data?.next || "";
@@ -1507,7 +1533,9 @@ export function AvailabilitySection() {
   const o = overview.data;
   // Última vez que cada extra trabalhou (histórico Multipark/ponto/extras-dia)
   const lastWorked = trpc.rh.lastWorkedMap.useQuery();
-  // Os dois filtros COMPÕEM-SE: cidade primeiro, disponibilidade depois. O
+  const trimmedSearch = search.trim();
+  // Os TRÊS filtros COMPÕEM-SE (AND): cidade → disponibilidade → pesquisa; só
+  // depois é que cada linha recebe o `lastWorked` (é coluna, não filtro). O
   // conjunto resultante é o que a tabela mostra E o alvo de "a todos" (email e
   // WhatsApp) — invariante "o que envio é o que vejo".
   const shownExtras = useMemo(() => {
@@ -1516,10 +1544,28 @@ export function AvailabilitySection() {
     if (cityFilter === "none") list = list.filter(e => e.city === null);
     else if (cityFilter !== "all") list = list.filter(e => e.city === cityFilter);
     if (onlyWithAvailability) list = list.filter(e => e.availableDays > 0);
+    if (trimmedSearch) list = list.filter(e => matchesExtraQuery(trimmedSearch, e));
     return list.map(e => ({ ...e, lastWorked: lastWorked.data?.[e.employeeId] ?? "" }));
-  }, [o, cityFilter, onlyWithAvailability, lastWorked.data]);
+  }, [o, cityFilter, onlyWithAvailability, trimmedSearch, lastWorked.data]);
+  // A ordenação da tabela só REORDENA `shownExtras` (não filtra), por isso o
+  // conjunto continua a ser o mesmo para a seleção, os totais e o alvo do envio.
   const availSort = useTableSort(shownExtras);
   const openEmployee = useOpenEmployee();
+
+  /**
+   * Selecionados que a pesquisa atual esconde. A pesquisa é uma ferramenta de
+   * PROCURA (procurar → marcar → procurar outro → marcar), por isso NÃO limpa a
+   * seleção como o filtro de cidade faz; em troca, quem está marcado fora da
+   * vista tem de estar à vista em número — senão o envio incluiria gente que a
+   * tabela não mostra sem o dizer.
+   */
+  const hiddenSelectedCount = useMemo(() => {
+    if (selectedIds.size === 0) return 0;
+    const visible = new Set(shownExtras.map(e => e.employeeId));
+    let count = 0;
+    for (const id of selectedIds) if (!visible.has(id)) count++;
+    return count;
+  }, [selectedIds, shownExtras]);
 
   // Contagens do cabeçalho seguem o conjunto FILTRADO (as do servidor são
   // sempre o universo completo e mentiriam com um filtro aplicado).
@@ -1556,10 +1602,26 @@ export function AvailabilitySection() {
 
   // ── WhatsApp broadcast ────────────────────────────────────────────────────
   const [waOpen, setWaOpen] = useState(false);
-  // Template e língua são os aprovados na Meta (shared/whatsappTemplate.ts).
-  // {{1}} = nome do extra (automático, por destinatário, no servidor).
-  // {{2}} = este campo, igual para todos os destinatários.
-  const [waParam2, setWaParam2] = useState("");
+  // Template escolhido no diálogo. Nome e língua são os aprovados na Meta —
+  // vêm do catálogo (shared/whatsappTemplate.ts), nunca escritos à mão aqui.
+  const [waTemplateId, setWaTemplateId] = useState<string>(DEFAULT_WHATSAPP_TEMPLATE_ID);
+  const waTemplate = findWhatsAppTemplate(waTemplateId) ?? WHATSAPP_TEMPLATES[0];
+  // Valor partilhado (semana ou dia, conforme o template) — guardado POR
+  // template para não se perder ao espreitar o outro e voltar.
+  const [waParams, setWaParams] = useState<Record<string, string>>({});
+  const waParam2 = waParams[waTemplate.id] ?? "";
+  const setWaParam2 = (value: string) =>
+    setWaParams(prev => ({ ...prev, [waTemplate.id]: value }));
+  /**
+   * "Usar este texto no WhatsApp" (seletor de tipo de pedido, acima): o texto
+   * composto é um PEDIDO DE DISPONIBILIDADE, por isso seleciona esse template e
+   * escreve no campo DELE — sem isto, com "Aviso de trabalho" escolhido, a frase
+   * ia parar ao campo do dia.
+   */
+  const applyMessageTextToWhatsApp = (text: string) => {
+    setWaTemplateId(DEFAULT_WHATSAPP_TEMPLATE_ID);
+    setWaParams(prev => ({ ...prev, [DEFAULT_WHATSAPP_TEMPLATE_ID]: text }));
+  };
   const [waTestPhone, setWaTestPhone] = useState("");
   type WaRecipient = {
     employeeId: number | null;
@@ -1585,16 +1647,39 @@ export function AvailabilitySection() {
   });
 
   // Alvo do broadcast = selecionados (se houver) ou todos os mostrados.
+  // Com seleção, o alvo sai da lista COMPLETA e não da filtrada: quem foi
+  // marcado e depois saiu da pesquisa continua a ser enviado (é o que
+  // `submitBroadcast` manda), e as contagens do diálogo têm de dizer o mesmo.
   // `phoneE164` vem calculado do servidor — a MESMA normalização que o envio
   // usa, para o resumo "válidos/inválidos" nunca divergir do resultado real.
-  const waTargets = selectedIds.size > 0 ? shownExtras.filter(e => selectedIds.has(e.employeeId)) : shownExtras;
+  const waTargets = selectedIds.size > 0
+    ? (o?.extras ?? []).filter(e => selectedIds.has(e.employeeId))
+    : shownExtras;
   const waValidCount = waTargets.filter(e => !!e.phoneE164).length;
   const waInvalidCount = waTargets.length - waValidCount;
+
+  // Pré-visualização: o texto REAL do template aprovado na Meta (não uma cópia
+  // local que possa divergir). Só é pedido com o diálogo aberto; o servidor tem
+  // cache de 5 min por template.
+  const templatePreview = trpc.whatsapp.templatePreview.useQuery(
+    { templateName: waTemplate.name, languageCode: waTemplate.language },
+    { enabled: waOpen, staleTime: 5 * 60_000, retry: false },
+  );
+
+  // Nome de exemplo = o do 1º destinatário do alvo (é mesmo o que ele vai ver).
+  const waPreviewName = firstNameOf(waTargets[0]?.fullName) ?? "Nome";
+  const waPreviewText = useMemo(() => {
+    const p = templatePreview.data;
+    if (!p?.ok) return null;
+    // MESMOS papéis que o envio usa — o preview não pode contar outra história.
+    const slots = resolveBodyParamRoles(p.paramNames, p.paramCount, waTemplate.roles);
+    return previewTemplateBody(p.bodyText, slots, { recipient: waPreviewName, shared: waParam2 });
+  }, [templatePreview.data, waTemplate, waPreviewName, waParam2]);
 
   function submitBroadcast(testPhone?: string) {
     const bodyParam2 = waParam2.trim();
     if (!bodyParam2) {
-      toast.error("Indica a semana.");
+      toast.error(`Preenche o campo “${waTemplate.sharedParam.label}”.`);
       return;
     }
     setWaResult(null);
@@ -1604,8 +1689,8 @@ export function AvailabilitySection() {
       ? Array.from(selectedIds)
       : shownExtras.map(e => e.employeeId);
     broadcast.mutate({
-      templateName: AVAILABILITY_TEMPLATE_NAME,
-      languageCode: DEFAULT_TEMPLATE_LANGUAGE,
+      templateName: waTemplate.name,
+      languageCode: waTemplate.language,
       bodyParam2,
       // O botão com link do formulário é detetado pelos metadados do template
       // na Meta (server/whatsappTemplateMeta.ts) — sem override manual na UI.
@@ -1691,7 +1776,7 @@ export function AvailabilitySection() {
               <button
                 type="button"
                 className="text-[11px] text-blue-600 hover:underline mt-1"
-                onClick={() => setWaParam2(msgPreview.text)}
+                onClick={() => applyMessageTextToWhatsApp(msgPreview.text)}
               >
                 Usar este texto no WhatsApp ({"{"}{"{"}2{"}"}{"}"})
               </button>
@@ -1788,6 +1873,37 @@ export function AvailabilitySection() {
               </label>
             </div>
 
+            {/* Pesquisa por pessoa — compõe-se (AND) com o filtro de cidade e
+                com o de disponibilidade. Filtro local, sem pedido ao servidor. */}
+            <div className="space-y-1">
+              <div className="relative max-w-sm">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                <Input
+                  type="text"
+                  placeholder="Pesquisar pessoa por nome ou número…"
+                  aria-label="Pesquisar extras por nome ou número"
+                  className="h-9 pl-8 pr-8"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+                {trimmedSearch.length > 0 && (
+                  <button
+                    type="button"
+                    aria-label="Limpar pesquisa"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    onClick={() => setSearch("")}
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+              {hiddenSelectedCount > 0 && (
+                <p className="text-xs text-amber-600">
+                  {hiddenSelectedCount} selecionado(s) fora dos filtros atuais — continuam incluídos no envio.
+                </p>
+              )}
+            </div>
+
             {/* Filtro por cidade. A cidade é DERIVADA (projeto → candidatura →
                 morada); "sem cidade" é um estado real e filtrável, não um erro. */}
             <div className="flex items-center gap-1.5 flex-wrap">
@@ -1816,12 +1932,22 @@ export function AvailabilitySection() {
                 <thead>
                   <tr className="text-left text-xs text-muted-foreground border-b">
                     <th className="py-1 pr-1 w-6">
+                      {/* "Todos" = todos os MOSTRADOS; com uma pesquisa ativa,
+                          quem já estava marcado fora dela não é mexido. */}
                       <input
                         type="checkbox"
-                        title="Selecionar todos"
-                        checked={selectedIds.size > 0 && selectedIds.size === shownExtras.length}
+                        title="Selecionar todos os mostrados"
+                        checked={shownExtras.length > 0 && shownExtras.every(x => selectedIds.has(x.employeeId))}
                         onChange={(e) => {
-                          setSelectedIds(e.target.checked ? new Set(shownExtras.map(x => x.employeeId)) : new Set());
+                          const checked = e.target.checked;
+                          setSelectedIds((prev) => {
+                            const next = new Set(prev);
+                            for (const x of shownExtras) {
+                              if (checked) next.add(x.employeeId);
+                              else next.delete(x.employeeId);
+                            }
+                            return next;
+                          });
                         }}
                       />
                     </th>
@@ -1923,19 +2049,26 @@ export function AvailabilitySection() {
                   ))}
                   {shownExtras.length === 0 && (
                     <tr>
+                      {/* 5 colunas fixas (seleção, Extra, Últ. trabalho, Cidade,
+                          Telefone) + uma por dia da semana. */}
                       <td colSpan={o.dayHeaders.length + 5} className="py-3 text-center text-muted-foreground">
-                        {cityFilter !== "all"
-                          ? "Nenhum extra neste filtro de cidade."
-                          : onlyWithAvailability
-                            ? "Ainda ninguém marcou disponibilidade para esta semana."
-                            : "Não há extras ativos (RH → colaboradores com função “extra”)."}
+                        {trimmedSearch
+                          ? `Sem resultados para “${trimmedSearch}”.`
+                          : cityFilter !== "all"
+                            ? "Nenhum extra neste filtro de cidade."
+                            : onlyWithAvailability
+                              ? "Ainda ninguém marcou disponibilidade para esta semana."
+                              : "Não há extras ativos (RH → colaboradores com função “extra”)."}
                       </td>
                     </tr>
                   )}
-                  {/* Totais por dia */}
+                  {/* Totais por dia — 5 células fixas antes dos dias (seleção,
+                      Extra, Últ. trabalho, Cidade, Telefone), senão os totais
+                      ficam desalinhados das colunas dos dias. */}
                   <tr className="font-medium border-t-2">
                     <td className="py-1 pr-1" />
                     <td className="py-1 pr-2">Disponíveis</td>
+                    <td className="py-1 pr-2" />
                     <td className="py-1 pr-2" />
                     <td className="py-1 pr-2" />
                     {shownPerDay.map((p) => (
@@ -1972,14 +2105,71 @@ export function AvailabilitySection() {
             </DialogHeader>
 
             <div className="space-y-4">
+              {/* Que mensagem enviar. Os templates vêm do catálogo partilhado;
+                  cada um traz o nome/língua aprovados e o rótulo do seu campo. */}
               <div className="space-y-1">
-                <Label className="text-xs">Semana</Label>
+                <Label className="text-xs">Mensagem</Label>
+                <Select
+                  value={waTemplate.id}
+                  onValueChange={(id) => { setWaTemplateId(id); setWaResult(null); }}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {WHATSAPP_TEMPLATES.map((t) => (
+                      <SelectItem key={t.id} value={t.id}>{t.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">{waTemplate.description}</p>
+              </div>
+
+              <div className="space-y-1">
+                <Label className="text-xs">{waTemplate.sharedParam.label}</Label>
                 <Input
                   autoFocus
-                  placeholder="ex: semana de 12 a 19 de agosto"
+                  placeholder={waTemplate.sharedParam.placeholder}
                   value={waParam2}
                   onChange={(e) => setWaParam2(e.target.value)}
                 />
+                {/* Preenchimento rápido pelos dias da semana visível na tabela
+                    (mesmo padrão dos botões "Esta semana"/"Próxima semana"). */}
+                {waTemplate.sharedParam.kind === "day" && !!o?.dayHeaders.length && (
+                  <div className="flex flex-wrap gap-1 pt-1">
+                    {o.dayHeaders.map((h) => (
+                      <Button
+                        key={h.day}
+                        type="button"
+                        size="sm"
+                        variant={waParam2 === h.label ? "default" : "outline"}
+                        className="h-7 text-xs"
+                        onClick={() => setWaParam2(h.label)}
+                      >
+                        {h.label}
+                      </Button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Pré-visualização do texto REAL aprovado na Meta, já com o nome
+                  do 1º destinatário e o campo acima substituídos. */}
+              <div className="space-y-1">
+                <Label className="text-xs">Pré-visualização</Label>
+                {templatePreview.isLoading ? (
+                  <p className="text-xs text-muted-foreground">A ler o template na Meta…</p>
+                ) : waPreviewText ? (
+                  <div className="rounded-md bg-green-50 dark:bg-green-950/40 border border-green-200 dark:border-green-900 p-3 text-sm whitespace-pre-wrap">
+                    {waPreviewText}
+                  </div>
+                ) : (
+                  <p className="text-xs text-amber-600">
+                    {templatePreview.data && !templatePreview.data.ok
+                      ? templatePreview.data.reason
+                      : "Pré-visualização indisponível — o envio continua a funcionar."}
+                  </p>
+                )}
               </div>
 
               <div className="space-y-1">
