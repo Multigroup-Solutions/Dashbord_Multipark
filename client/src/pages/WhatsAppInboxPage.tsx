@@ -32,6 +32,7 @@ import {
 import {
   AVAILABILITY_TEMPLATE_NAME,
   DEFAULT_TEMPLATE_LANGUAGE,
+  messageDisplayBody,
 } from "@shared/whatsappTemplate";
 import { matchesContactQuery } from "@shared/contactSearch";
 
@@ -328,7 +329,13 @@ export default function WhatsAppInboxPage() {
                       Template{m.templateName ? ` · ${m.templateName}` : ""}
                     </div>
                   )}
-                  <div className="whitespace-pre-wrap break-words">{m.body || "—"}</div>
+                  {/* Envios feitos antes de 2026-08-20 não gravaram o conteúdo:
+                      dizem-no em itálico em vez de aparecerem em branco. */}
+                  <div
+                    className={`whitespace-pre-wrap break-words${m.body?.trim() ? "" : " italic opacity-80"}`}
+                  >
+                    {messageDisplayBody(m) || "—"}
+                  </div>
                   <div
                     className={`flex items-center gap-1 justify-end mt-0.5 text-[10px] ${
                       m.direction === "out" ? "text-green-100" : "text-muted-foreground"

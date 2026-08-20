@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { buildBodyParams, resolveRecipients } from "./whatsappBroadcast";
+import { buildBodyParams, renderOutboundBody, resolveRecipients } from "./whatsappBroadcast";
+import { analyzeTemplateEntry } from "./whatsappTemplateMeta";
+import { findWhatsAppTemplate } from "../shared/whatsappTemplate";
 import type { ActiveExtra } from "./extrasAvailability";
 
 function extra(id: number, fullName: string, phone: string | null): ActiveExtra {
@@ -73,5 +75,75 @@ describe("buildBodyParams", () => {
 
   it("nunca devolve mais do que 2 parâmetros", () => {
     expect(buildBodyParams("Ana", "x")).toHaveLength(2);
+  });
+});
+
+describe("renderOutboundBody (conteúdo gravado na whatsapp_messages.body)", () => {
+  const workNoticeRoles = findWhatsAppTemplate("aviso_trabalho")!.roles;
+  const analysis = analyzeTemplateEntry({
+    name: "aviso_de_trabalho",
+    language: "pt_BR",
+    status: "APPROVED",
+    parameter_format: "NAMED",
+    components: [
+      { type: "BODY", text: "Olá {{customer_name}}, tens trabalho no dia {{day}}." },
+    ],
+  });
+
+  it("com metadados grava o texto REAL da Meta, já substituído", () => {
+    expect(
+      renderOutboundBody({
+        templateName: "aviso_de_trabalho",
+        analysis,
+        roles: workNoticeRoles,
+        values: ["Ana", "Sexta 22/08"],
+      }),
+    ).toBe("Olá Ana, tens trabalho no dia Sexta 22/08.");
+  });
+
+  it("respeita os papéis quando o template declara o dia primeiro", () => {
+    const reversed = analyzeTemplateEntry({
+      name: "aviso_de_trabalho",
+      language: "pt_BR",
+      status: "APPROVED",
+      parameter_format: "NAMED",
+      components: [{ type: "BODY", text: "No dia {{day}}: {{customer_name}}, contamos contigo." }],
+    });
+    expect(
+      renderOutboundBody({
+        templateName: "aviso_de_trabalho",
+        analysis: reversed,
+        roles: workNoticeRoles,
+        values: ["Ana", "Sexta 22/08"],
+      }),
+    ).toBe("No dia Sexta 22/08: Ana, contamos contigo.");
+  });
+
+  it("sem metadados grava template + valores (nunca bolha vazia)", () => {
+    expect(
+      renderOutboundBody({
+        templateName: "aviso_de_trabalho",
+        analysis: null,
+        roles: workNoticeRoles,
+        values: ["Ana", "Sexta 22/08"],
+      }),
+    ).toBe("Template aviso_de_trabalho · Ana · Sexta 22/08");
+  });
+
+  it("sem metadados e com um só parâmetro não deixa separadores pendurados", () => {
+    expect(
+      renderOutboundBody({
+        templateName: "disponibilidade_extras",
+        analysis: null,
+        roles: null,
+        values: ["Ana", "  "],
+      }),
+    ).toBe("Template disponibilidade_extras · Ana");
+  });
+
+  it("devolve sempre texto não vazio, mesmo sem valores nenhuns", () => {
+    expect(
+      renderOutboundBody({ templateName: "x", analysis: null, roles: null, values: [] }),
+    ).toBe("Template x");
   });
 });

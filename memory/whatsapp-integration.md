@@ -49,6 +49,42 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 
 ## Changelog
 
+### 2026-08-20 (b) — Inbox mostrava bolha VAZIA nos envios de template (conteúdo agora gravado)
+**Type**: fix
+**Scope**: `server/whatsappBroadcast.ts` (`renderOutboundBody` + `sendOne` grava `body`),
+`shared/whatsappTemplate.ts` (`messageDisplayBody`), `server/whatsappInbox.ts` (preview da lista),
+`client/src/pages/WhatsAppInboxPage.tsx` (bolha), `server/whatsappBroadcast.test.ts` (+5),
+`server/whatsappTemplateCatalog.test.ts` (+4)
+**Trigger**: Jorge — na página WhatsApp, as mensagens enviadas não mostravam conteúdo, por isso
+quando um extra responde não se percebe **ao que** está a responder.
+**Causa**: `sendOne` inseria a linha da `whatsapp_messages` com **`body: null`** (só ficava
+`templateName`) — o conteúdo do template nunca foi gravado desde a Fase 2. A UI faz
+`{m.body || "—"}` → bolha com um travessão; o preview da lista de conversas (`preview: body`) ficava
+igualmente vazio. Não era bug de leitura: **não havia o que ler**.
+**What**:
+- **NOVA `renderOutboundBody({templateName, analysis, roles, values})`** (PURA, exportada, 5 testes):
+  com metadados usa o `bodyText` REAL aprovado na Meta + a MESMA substituição por papéis da
+  pré-visualização (`resolveBodyParamRoles` + `previewTemplateBody`) → o que fica na BD é o que a
+  Meta entregou; sem metadados grava `Template <nome> · <valor1> · <valor2>` (valores vazios
+  cortados) — **nunca** uma bolha vazia.
+- `sendOne` passou a gravar esse texto em `whatsapp_messages.body`. Fica gravado mesmo quando o envio
+  FALHA (saber o que se tentou enviar é útil e a linha existe na mesma, com status `failed`).
+  **Os dois modos (teste e broadcast) partilham o `dispatchOne`, por isso ambos ficam cobertos** —
+  incluindo o "Reiniciar com template" do próprio inbox, que reusa o `sendBroadcast` com `testPhone`.
+- **NOVA `messageDisplayBody(msg)`** (PURA, partilhada, 4 testes) — regra ÚNICA de apresentação usada
+  pela bolha da thread e pelo preview da lista (não podiam contar histórias diferentes).
+- **SEM MIGRAÇÃO**: a coluna `whatsapp_messages.body` (`text` nullable) já existia desde a `0045` e
+  estava por usar nos templates. Nada de schema novo — foi só deixar de escrever `null` lá.
+**Linhas ANTIGAS (já na BD)**: não são reconstruíveis (o texto aprovado na Meta pode ter mudado e os
+valores por destinatário nunca foram guardados). Escolha: mostrar
+`Mensagem de template “<nome>” (conteúdo não registado)` em itálico esbatido — o `templateName` está
+gravado, por isso pelo menos diz-se QUAL template foi. Sem back-fill e sem inventar texto.
+**Notes**:
+- O token do botão URL (Fase 4) não entra no `body` — é componente de botão, não corpo.
+- **Gates**: `tsc --noEmit` LIMPO, `vite build` OK. **+9 testes**; suite total **330 passam / 337**
+  com as MESMAS 7 falhas pré-existentes de ambiente.
+- **Sem commits** (por instrução) — alterações ficam na working tree para revisão.
+
 ### 2026-08-20 — Seletor de templates na página de disponibilidade (+ `aviso_de_trabalho`, papéis por NOME, pré-visualização real)
 **Type**: feature
 **Scope**: `shared/whatsappTemplate.ts` (catálogo + helpers puros), `server/whatsappTemplateMeta.ts`

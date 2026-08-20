@@ -10,6 +10,7 @@ import { desc, eq, inArray } from "drizzle-orm";
 import { getDb } from "./db";
 import { employees, whatsappConversations, whatsappMessages } from "../drizzle/schema";
 import { sendTextMessage } from "./whatsapp";
+import { messageDisplayBody } from "../shared/whatsappTemplate";
 
 const WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -88,7 +89,7 @@ export async function listConversations(): Promise<ConversationRow[]> {
     .limit(300);
 
   const ids = convs.map((c) => c.id);
-  const previewByConv = new Map<number, { body: string | null; direction: "in" | "out" }>();
+  const previewByConv = new Map<number, { body: string; direction: "in" | "out" }>();
   if (ids.length) {
     // Mensagens das conversas por ordem decrescente de id → a 1ª por conversa é
     // a mais recente (preview).
@@ -96,6 +97,8 @@ export async function listConversations(): Promise<ConversationRow[]> {
       .select({
         conversationId: whatsappMessages.conversationId,
         body: whatsappMessages.body,
+        type: whatsappMessages.type,
+        templateName: whatsappMessages.templateName,
         direction: whatsappMessages.direction,
         id: whatsappMessages.id,
       })
@@ -104,7 +107,12 @@ export async function listConversations(): Promise<ConversationRow[]> {
       .orderBy(desc(whatsappMessages.id));
     for (const m of msgs) {
       if (!previewByConv.has(m.conversationId)) {
-        previewByConv.set(m.conversationId, { body: m.body ?? null, direction: m.direction as "in" | "out" });
+        // Mesma regra de apresentação da bolha da thread — a lista e a conversa
+        // nunca podem contar histórias diferentes.
+        previewByConv.set(m.conversationId, {
+          body: messageDisplayBody(m),
+          direction: m.direction as "in" | "out",
+        });
       }
     }
   }
@@ -120,7 +128,7 @@ export async function listConversations(): Promise<ConversationRow[]> {
       unreadCount: c.unreadCount,
       lastInboundAt: c.lastInboundAt,
       lastMessageAt: c.lastMessageAt,
-      preview: preview?.body ?? null,
+      preview: preview?.body || null,
       previewDirection: preview?.direction ?? null,
       windowState: w.windowState,
       windowExpiresAt: w.windowExpiresAt,

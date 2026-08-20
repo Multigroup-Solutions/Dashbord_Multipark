@@ -29,6 +29,7 @@ import {
   findWhatsAppTemplateByName,
   firstNameOf,
   orderBodyValues,
+  previewTemplateBody,
   resolveBodyParamRoles,
   sanitizeTemplateParam,
   type TemplateBodyRoles,
@@ -244,6 +245,37 @@ async function upsertConversation(
   return rows[0].id;
 }
 
+/**
+ * Texto da mensagem tal como o destinatário a recebeu, para ficar GRAVADO na
+ * `whatsapp_messages.body`. PURA.
+ *
+ * Sem isto o inbox mostrava uma bolha vazia nos envios de template (só o nome do
+ * template), e quem respondia deixava o backoffice sem saber ao que a pessoa
+ * estava a responder.
+ *
+ * Com metadados, usa o texto REAL aprovado na Meta e a MESMA substituição por
+ * papéis da pré-visualização — o que fica na BD é o que a Meta entregou.
+ * Sem metadados (inspeção indisponível), grava na mesma uma linha legível com o
+ * template e os valores enviados: nunca uma bolha vazia.
+ */
+export function renderOutboundBody(opts: {
+  templateName: string;
+  analysis: TemplateAnalysis | null;
+  roles: TemplateBodyRoles | null;
+  /** Semântico: [nome do destinatário, valor partilhado do diálogo]. */
+  values: string[];
+}): string {
+  const { templateName, analysis, roles, values } = opts;
+  const [recipient = "", shared = ""] = values;
+
+  if (analysis?.bodyText) {
+    const slots = resolveBodyParamRoles(analysis.paramNames, analysis.paramCount, roles);
+    return previewTemplateBody(analysis.bodyText, slots, { recipient, shared });
+  }
+
+  return [`Template ${templateName}`, ...values.filter((v) => v.trim())].join(" · ");
+}
+
 /** Envia o template a UM destinatário válido e persiste a whatsapp_messages. */
 async function sendOne(
   db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
@@ -252,6 +284,8 @@ async function sendOne(
     templateName: string;
     languageCode: string;
     components?: unknown[];
+    /** Texto enviado, já substituído (ver `renderOutboundBody`). */
+    body: string;
     broadcastId: number;
     sentById: number | null;
     /** Motivo de a inspeção do template não estar disponível (anexado ao erro). */
@@ -270,7 +304,9 @@ async function sendOne(
     direction: "out",
     waMessageId: res.ok ? res.waMessageId : null,
     type: "template",
-    body: null,
+    // Conteúdo REAL enviado a este destinatário — é o que o inbox mostra na
+    // bolha e no preview da lista de conversas.
+    body: cfg.body || null,
     templateName: cfg.templateName,
     status: res.ok ? "sent" : "failed",
     errorDetail: error,
@@ -352,6 +388,12 @@ async function dispatchOne(
     templateName: cfg.templateName,
     languageCode: cfg.languageCode,
     components: buildComponents({ analysis: cfg.analysis, values: params, roles: cfg.roles, buttonToken }),
+    body: renderOutboundBody({
+      templateName: cfg.templateName,
+      analysis: cfg.analysis,
+      roles: cfg.roles,
+      values: params,
+    }),
     broadcastId: cfg.broadcastId,
     sentById: cfg.sentById,
     metaUnavailableReason: cfg.metaUnavailableReason,

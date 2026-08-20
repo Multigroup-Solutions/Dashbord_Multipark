@@ -183,6 +183,30 @@ export function orderBodyValues(
 }
 
 /**
+ * Texto a mostrar no inbox para UMA mensagem. PURA.
+ *
+ * As mensagens de template enviadas ANTES de 2026-08-20 foram gravadas com
+ * `body` NULL (só ficava o nome do template), por isso apareciam como uma bolha
+ * vazia. Não há forma de as reconstruir — o texto aprovado na Meta pode ter
+ * mudado e os valores por destinatário não ficaram guardados — logo diz-se isso
+ * explicitamente em vez de fingir conteúdo. Os envios novos gravam o texto real.
+ *
+ * Devolve string vazia quando não há nada a dizer (a UI decide o placeholder).
+ */
+export function messageDisplayBody(msg: {
+  body?: string | null;
+  type?: string | null;
+  templateName?: string | null;
+}): string {
+  const body = msg.body?.trim();
+  if (body) return body;
+  if (msg.type !== "template") return "";
+  return msg.templateName
+    ? `Mensagem de template “${msg.templateName}” (conteúdo não registado)`
+    : "Mensagem de template (conteúdo não registado)";
+}
+
+/**
  * Texto do template com os parâmetros substituídos — para pré-visualizar o que
  * vai ser enviado. PURA.
  *

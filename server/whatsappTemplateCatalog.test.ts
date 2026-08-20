@@ -3,6 +3,7 @@ import {
   WHATSAPP_TEMPLATES,
   findWhatsAppTemplate,
   findWhatsAppTemplateByName,
+  messageDisplayBody,
   orderBodyValues,
   previewTemplateBody,
   resolveBodyParamRoles,
@@ -137,6 +138,30 @@ describe("previewTemplateBody", () => {
       shared: "Sábado",
     });
     expect(out).toBe("Ana, olá Ana — dia Sábado");
+  });
+});
+
+describe("messageDisplayBody (bolha do inbox)", () => {
+  it("mostra o body gravado quando existe", () => {
+    expect(messageDisplayBody({ body: "Olá Ana, tens trabalho no dia Sexta 22/08.", type: "template" })).toBe(
+      "Olá Ana, tens trabalho no dia Sexta 22/08.",
+    );
+  });
+
+  it("linha ANTIGA de template sem body → diz que o conteúdo não foi registado, com o nome", () => {
+    expect(messageDisplayBody({ body: null, type: "template", templateName: "disponibilidade_extras" })).toBe(
+      "Mensagem de template “disponibilidade_extras” (conteúdo não registado)",
+    );
+  });
+
+  it("linha antiga sem body nem nome de template", () => {
+    expect(messageDisplayBody({ body: "   ", type: "template", templateName: null })).toBe(
+      "Mensagem de template (conteúdo não registado)",
+    );
+  });
+
+  it("mensagem de texto sem body devolve vazio (a UI decide o placeholder)", () => {
+    expect(messageDisplayBody({ body: null, type: "text" })).toBe("");
   });
 });
 
