@@ -13,8 +13,9 @@ dialog only nudges.
 - `dashboard/client/src/components/CameraCapture.tsx` — selfie widget for ponto entrada/saída
 - `dashboard/server/routers.ts` — `rh.uploadPhoto` (~L2186, admin, any employee) and
   `rh.uploadMyPhoto` (~L2200, self-service)
-- `dashboard/server/storage.ts` — `storagePut`: Vercel Blob when `BLOB_READ_WRITE_TOKEN`
-  is set, otherwise local `uploads/`
+- `dashboard/server/storage.ts` — `storagePut`: S3 when the `AWS_*` envs are set,
+  else Vercel Blob when `BLOB_READ_WRITE_TOKEN` is set, else local `uploads/`
+  (see `memory/storage-backends-s3.md`)
 
 ## Upload contract / limits (measured, not guessed)
 - Input is `{ fileBase64: string, mimeType: string }` — **zod validates neither the
@@ -29,6 +30,9 @@ dialog only nudges.
   known mime and kept well under ~4 MB **base64** (≈3 MB raw).
 
 ## Related
+- `memory/storage-backends-s3.md` — the storage abstraction these mutations write
+  through (S3 → Vercel Blob → local), and the presigned-PUT groundwork that exists
+  precisely because of the ~4.5 MB body cap documented above
 - `memory/reference.md` — index
 
 ## Changelog

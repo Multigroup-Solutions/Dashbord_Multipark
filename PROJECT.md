@@ -429,7 +429,7 @@ backoffice (3) > frontoffice (2) > extra (1) > user (0)
 | **MultiPark API** | Sync reservas | `MULTIPARK_API_KEY`, `MULTIPARK_API_URL` |
 | **Zello Work** | GPS/Rádio frota | `ZELLO_API_KEY`, `ZELLO_USERNAME`, `ZELLO_PASSWORD` |
 | **OpenAI (compat.)** | IA respostas, OCR | `LLM_API_URL`, `LLM_API_KEY`, `LLM_MODEL` |
-| **AWS S3** | Storage ficheiros | `AWS_REGION`, `AWS_S3_BUCKET`, `AWS_ACCESS_KEY_ID` |
+| **AWS S3** | Storage ficheiros | `AWS_S3_REGION`, `AWS_S3_BUCKET_NAME`, `AWS_S3_ACCESS_KEY`, `AWS_S3_SECRET_ACCESS_KEY` |
 | **Nodemailer SMTP** | Emails/notificações | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` |
 | **Google Maps** | Mapas GPS | `VITE_GOOGLE_MAPS_API_KEY` |
 
@@ -456,11 +456,12 @@ OWNER_EMAIL=admin@multipark.pt
 VITE_APP_ID=barnie
 VITE_GOOGLE_MAPS_API_KEY=AIza...
 
-# AWS S3
-AWS_REGION=eu-west-1
-AWS_ACCESS_KEY_ID=AKIA...
-AWS_SECRET_ACCESS_KEY=xxx
-AWS_S3_BUCKET=barnie-storage
+# AWS S3 (credenciais com prefixo AWS_S3_ — o Vercel reserva AWS_ACCESS_KEY /
+# AWS_SECRET_ACCESS_KEY; ver server/storage.ts e .env.example)
+AWS_S3_REGION=eu-west-1
+AWS_S3_BUCKET_NAME=dashboard-multipark-bucket
+AWS_S3_ACCESS_KEY=AKIA...
+AWS_S3_SECRET_ACCESS_KEY=xxx
 
 # LLM (OpenAI-compatible)
 LLM_API_URL=https://api.openai.com/v1
