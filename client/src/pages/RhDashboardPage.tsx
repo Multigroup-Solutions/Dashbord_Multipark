@@ -29,8 +29,14 @@ export default function RhDashboardPage({ onBack }: { onBack?: () => void } = {}
 
   const { data = [], isLoading } = trpc.rh.dashboard.useQuery({ year, month, monthsLookback: lookback });
 
+  const utils = trpc.useUtils();
   const processNoShows = trpc.rh.penalties.processNoShows.useMutation({
-    onSuccess: (r) => toast.success(`${r.created} penalizações criadas, ${r.blocked.length} bloqueados`),
+    onSuccess: (r) => { utils.rh.penalties.pending.invalidate(); toast.success(`${r.created} possível(is) falta(s) registada(s) para validação (${r.alreadyPending} já existiam)`); },
+    onError: (e) => toast.error(e.message),
+  });
+  const { data: pendingPenalties = [] } = trpc.rh.penalties.pending.useQuery();
+  const reviewPenalty = trpc.rh.penalties.review.useMutation({
+    onSuccess: (r) => { utils.rh.penalties.pending.invalidate(); utils.rh.dashboard.invalidate(); toast.success(`Registado · ${r.points} ponto(s) confirmados${r.blocked ? " · acesso bloqueado" : ""}`); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -49,6 +55,7 @@ export default function RhDashboardPage({ onBack }: { onBack?: () => void } = {}
     bruto: rows.reduce((s, r) => s + r.currentMonth.totalPayment, 0),
     liquido: rows.reduce((s, r) => s + r.currentMonth.netEstimate, 0),
     redFlags: rows.filter(r => r.severity === "red").length,
+    blocked: rows.filter(r => r.loginBlocked).length,            // estado REAL de acesso, não pontos
     yellowFlags: rows.filter(r => r.severity === "yellow").length,
   });
 
@@ -123,6 +130,27 @@ export default function RhDashboardPage({ onBack }: { onBack?: () => void } = {}
         </div>
       </Card>
 
+      {/* Possíveis faltas por validar — só contam pontos depois de confirmadas */}
+      {pendingPenalties.length > 0 && (
+        <Card className="border-amber-200 bg-amber-50/40">
+          <CardHeader className="py-3">
+            <CardTitle className="text-sm">Possíveis faltas por validar ({pendingPenalties.length})</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0 space-y-1">
+            {pendingPenalties.map((row: any) => (
+              <div key={row.penalty.id} className="flex flex-wrap items-center gap-2 text-sm border-b last:border-0 py-1.5">
+                <span className="font-medium">{row.employee?.fullName ?? `#${row.penalty.employeeId}`}</span>
+                <span className="text-muted-foreground">{row.penalty.reason === "no_show_extra_dia" ? "Falta a extra" : row.penalty.reason}{row.penalty.notes ? ` · ${row.penalty.notes}` : ""}</span>
+                <span className="text-xs text-muted-foreground">{row.penalty.points} pt</span>
+                <div className="flex-1" />
+                <Button size="sm" variant="outline" disabled={reviewPenalty.isPending} onClick={() => reviewPenalty.mutate({ id: row.penalty.id, decision: "confirmed" })}>Confirmar falta</Button>
+                <Button size="sm" variant="ghost" disabled={reviewPenalty.isPending} onClick={() => reviewPenalty.mutate({ id: row.penalty.id, decision: "dismissed" })}>Justificada / não conta</Button>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       {isLoading ? (
         <div className="text-center py-12 text-muted-foreground">A carregar...</div>
       ) : (
@@ -179,8 +207,9 @@ function KpiRow({ t }: { t: ReturnType<any> }) {
         <p className="text-xl font-bold text-yellow-700">{t.yellowFlags}</p>
       </Card>
       <Card className="p-3 bg-red-50/30 border-red-200">
-        <p className="text-[10px] text-red-700 uppercase">Bloqueados</p>
-        <p className="text-xl font-bold text-red-700">{t.redFlags}</p>
+        <p className="text-[10px] text-red-700 uppercase">Bloqueados (acesso)</p>
+        <p className="text-xl font-bold text-red-700">{t.blocked}</p>
+        {t.redFlags > t.blocked && <p className="text-[10px] text-red-700">{t.redFlags - t.blocked} com 3+ pontos por rever</p>}
       </Card>
     </div>
   );
@@ -204,8 +233,9 @@ function DashboardTable({ rows, extra = false }: { rows: any[]; extra?: boolean 
                 <Th k="currentMonth.daysWorked" label="Dias" align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                 <Th k="currentMonth.totalPayment" label="Bruto mês" align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                 <Th k="currentMonth.netEstimate" label="Líq. est." align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
-                <Th k="lookbackTotal" label="Recebido lookback" align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
-                <Th k="avgHourly" label="€/h méd." align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                <Th k="totalReceivedLookback" label="Apurado lookback" align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                <Th k="totalPaidLookback" label="Pago (fechos)" align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                <Th k="avgPerHourLookback" label="€/h méd." align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                 <Th k="severity" label="Estado" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
               </tr>
             </thead>
@@ -221,6 +251,7 @@ function DashboardTable({ rows, extra = false }: { rows: any[]; extra?: boolean 
                     <td className="p-2 text-right tabular-nums">{fmt(r.currentMonth.totalPayment)}</td>
                     <td className="p-2 text-right tabular-nums text-amber-700">{fmt(r.currentMonth.netEstimate)}</td>
                     <td className="p-2 text-right tabular-nums">{fmt(r.totalReceivedLookback)}</td>
+                    <td className="p-2 text-right tabular-nums text-emerald-700">{r.totalPaidLookback ? fmt(r.totalPaidLookback) : "—"}</td>
                     <td className="p-2 text-right tabular-nums">{extra ? `${Number(r.avgPerHourLookback).toFixed(2)}€` : "—"}</td>
                     <td className="p-2 text-center">
                       {r.severity === "red" && (

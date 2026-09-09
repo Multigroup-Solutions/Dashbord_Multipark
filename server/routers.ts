@@ -13,6 +13,12 @@ import { parseExpenseAmount } from "../shared/expenseAmount";
 import { dayToMysql, lisbonToday } from "../shared/expensePeriods";
 import { expenseTotals } from "../shared/expenseTotals";
 import { getBillingData, getAnnualBreakdown } from "./finance/compat";
+import { canViewDocuments, canViewEmployee, canViewTimeAndSchedule, sanitizeEmployee, sanitizeEmployeeRows, type RhViewer, isRhAdmin } from "./rhAccess";
+import {
+  applyDocsCompliance, getExtraDocsStatus, detectExtraDiaNoShows, listPendingPenalties, reviewPenalty,
+  listSuspiciousTimeRecords, reviewTimeRecord, insertTimeRecordAtomic,
+  createPayrollRun, listPayrollRuns, getPayrollRun, transitionPayrollRun,
+} from "./rhService";
 import { transcribeAudio } from "./_core/voiceTranscription";
 import { getBookingHistory, getBookingsReport, getBookingTryAllParks } from "./multipark";
 import {
@@ -461,6 +467,21 @@ function cleanText(v: string | null | undefined): string | null | undefined {
 
 function dayOrBadRequest(day: string, label: string): string {
   try { return dayToMysql(day); } catch { throw new TRPCError({ code: "BAD_REQUEST", message: `${label} inválida (usa AAAA-MM-DD)` }); }
+}
+
+// ─── RH: quem está a ver (permissões por finalidade — server/rhAccess.ts) ────
+async function rhViewer(user: { id: number; role: string }): Promise<RhViewer> {
+  const me = await getEmployeeByUserId(user.id);
+  let scope: number[] | null = null;
+  if (user.role === "supervisor") {
+    const pid = me?.employee?.projectId ?? null;
+    scope = pid != null ? await resolveProjectIds(pid) : [];
+  }
+  return { id: user.id, role: user.role, employeeId: me?.employee?.id ?? null, scopeProjectIds: scope };
+}
+async function rhEmployeeRef(employeeId: number): Promise<{ id: number; projectId: number | null } | null> {
+  const e = await getEmployeeById(employeeId);
+  return e ? { id: e.employee.id, projectId: e.employee.projectId ?? null } : null;
 }
 
 // ─── APP ROUTER ───────────────────────────────────────────────────────────────
@@ -983,9 +1004,11 @@ export const appRouter = router({
       try {
         const emp = await getEmployeeByUserId(uElev.id);
         if (!emp) return { ...uElev, employee: null, docsStatus: null };
+        // LEITURA apenas (antes escrevia e desbloqueava quem estava bloqueado
+        // por faltas em cada refresh). A regra aplica-se no cron diário.
         let docsStatus: { blocked: boolean; warning: boolean; missingDocs: string[]; daysSinceStart: number } | null = null;
         if (emp.employee.position === "extra") {
-          docsStatus = await checkExtraDocsCompliance(emp.employee.id);
+          docsStatus = await getExtraDocsStatus(emp.employee.id);
         }
         return {
           ...uElev,
@@ -2416,38 +2439,33 @@ export const appRouter = router({
     }),
 
     // ── EMPLOYEES ─────────────────────────────────────────────────────────────────────────────────
+    // Permissões por FINALIDADE (server/rhAccess.ts): frontoffice/team_leader
+    // veem a lista operacional sem NIF/NIB/morada/nascimento/salário de
+    // terceiros; supervisor só o seu centro; extra só a própria ficha.
     list: protectedProcedure
-      .input(z.object({ isActive: z.boolean().optional(), position: z.string().optional() }).optional())
+      .input(z.object({ isActive: z.boolean().optional(), position: z.string().optional(), projectId: z.number().optional() }).optional())
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "frontoffice");
-        const rows = await getAllEmployees({ isActive: input?.isActive, position: input?.position });
-        // frontoffice vê as fichas mas não os salários (só admin+)
-        if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) {
-          return rows.map((r: any) => ({ ...r, employee: { ...r.employee, monthlySalary: null, mealAllowancePerDay: null } }));
+        const viewer = await rhViewer(ctx.user);
+        let rows = await getAllEmployees({ isActive: input?.isActive, position: input?.position });
+        // filtro global de cidade/centro (com descendentes)
+        if (input?.projectId) {
+          const ids = new Set(await resolveProjectIds(input.projectId));
+          rows = rows.filter((r: any) => r.employee.projectId != null && ids.has(r.employee.projectId));
         }
-        return rows;
+        return sanitizeEmployeeRows(viewer, rows as any[]);
       }),
 
     byId: protectedProcedure
       .input(z.object({ id: z.number() }))
       .query(async ({ ctx, input }) => {
-        // abaixo de frontoffice (user/extra) só pode ver o próprio perfil
-        if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["frontoffice"]) {
-          const myEmployee = await getEmployeeByUserId(ctx.user.id);
-          if (!myEmployee || myEmployee.employee.id !== input.id) {
-            throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
-          }
-        }
+        const viewer = await rhViewer(ctx.user);
         const result = await getEmployeeById(input.id);
-        // frontoffice não vê salários de outros (o próprio perfil mantém-nos)
-        if (result && ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) {
-          const me = await getEmployeeByUserId(ctx.user.id);
-          const isOwn = me && me.employee.id === input.id;
-          if (!isOwn) {
-            return { ...result, employee: { ...result.employee, monthlySalary: null, mealAllowancePerDay: null } };
-          }
+        if (!result) return result;
+        if (!canViewEmployee(viewer, { id: result.employee.id, projectId: result.employee.projectId ?? null })) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
         }
-        return result;
+        return { ...result, employee: sanitizeEmployee(viewer, result.employee as any) };
       }),
 
     create: protectedProcedure
@@ -2462,7 +2480,7 @@ export const appRouter = router({
         birthDate: z.string().optional(),
         nationality: z.string().optional(),
         position: z.enum(["director","supervisor","team_leader","backoffice","frontoffice","senior_driver","driver","extra"]),
-        extraLevel: z.number().min(1).max(4).optional(),
+        extraLevel: z.number().min(1).max(5).optional(),
         department: z.string().optional(),
         projectId: z.number().optional(),
         contractType: z.enum(["permanent","fixed_term","extra"]).optional(),
@@ -2659,11 +2677,35 @@ export const appRouter = router({
 
     // ── DOCUMENTS ─────────────────────────────────────────────────────────────────────────────────
     documents: router({
+      // Documentos pessoais: admin+, o PRÓPRIO, ou supervisor do centro.
       list: protectedProcedure
         .input(z.object({ employeeId: z.number() }))
         .query(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "frontoffice");
-          return getEmployeeDocuments(input.employeeId);
+          const viewer = await rhViewer(ctx.user);
+          const ref = await rhEmployeeRef(input.employeeId);
+          if (!isRhAdmin(viewer) && (!ref || !canViewDocuments(viewer, ref))) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para ver estes documentos" });
+          const docs = await getEmployeeDocuments(input.employeeId);
+          // a URL pública gravada deixa de ser exposta — abre-se pela rota `url` (assinada)
+          return docs.map((d: any) => ({ ...d, fileUrl: null }));
+        }),
+      // URL de leitura temporária (assinada no S3) com a MESMA permissão da lista.
+      url: protectedProcedure
+        .input(z.object({ id: z.number() }))
+        .query(async ({ ctx, input }) => {
+          const { getDb } = await import("./db");
+          const { employeeDocuments } = await import("../drizzle/schema");
+          const { eq } = await import("drizzle-orm");
+          const db = await getDb();
+          if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
+          const [doc] = await db.select().from(employeeDocuments).where(eq(employeeDocuments.id, input.id)).limit(1);
+          if (!doc) throw new TRPCError({ code: "NOT_FOUND" });
+          const viewer = await rhViewer(ctx.user);
+          const ref = await rhEmployeeRef(doc.employeeId);
+          if (!isRhAdmin(viewer) && (!ref || !canViewDocuments(viewer, ref))) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para abrir este documento" });
+          const { storagePresignGet } = await import("./storage");
+          const r = await storagePresignGet(doc.fileKey || doc.fileUrl);
+          await logActivity({ userId: ctx.user.id, action: "view", entity: "employee_document", entityId: doc.id, details: `${doc.docType} de #${doc.employeeId}` });
+          return { url: r.url, signed: r.signed, expiresIn: r.expiresIn, mimeType: doc.mimeType };
         }),
 
       upload: protectedProcedure
@@ -2730,7 +2772,9 @@ export const appRouter = router({
       checklist: protectedProcedure
         .input(z.object({ employeeId: z.number() }))
         .query(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "frontoffice");
+          const viewer = await rhViewer(ctx.user);
+          const ref = await rhEmployeeRef(input.employeeId);
+          if (!isRhAdmin(viewer) && (!ref || !canViewDocuments(viewer, ref))) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
           return getDocumentChecklistForEmployee(input.employeeId);
         }),
       allStatus: protectedProcedure
@@ -2761,7 +2805,9 @@ export const appRouter = router({
       list: protectedProcedure
         .input(z.object({ employeeId: z.number() }))
         .query(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "frontoffice");
+          const viewer = await rhViewer(ctx.user);
+          const ref = await rhEmployeeRef(input.employeeId);
+          if (!isRhAdmin(viewer) && (!ref || !canViewTimeAndSchedule(viewer, ref))) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
           return getEmployeeSchedules(input.employeeId);
         }),
 
@@ -2807,12 +2853,30 @@ export const appRouter = router({
       list: protectedProcedure
         .input(z.object({ employeeId: z.number(), startDate: z.string().optional(), endDate: z.string().optional() }))
         .query(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "frontoffice");
+          const viewer = await rhViewer(ctx.user);
+          const ref = await rhEmployeeRef(input.employeeId);
+          if (!isRhAdmin(viewer) && (!ref || !canViewTimeAndSchedule(viewer, ref))) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
           return getTimeRecords(
             input.employeeId,
             input.startDate ? new Date(input.startDate) : undefined,
             input.endDate ? new Date(input.endDate) : undefined,
           );
+        }),
+
+      // Registos suspeitos (check-out esquecido/cortado, fora do raio): não pagam até revisão.
+      suspicious: protectedProcedure
+        .input(z.object({ employeeId: z.number().optional(), limit: z.number().max(500).optional() }).optional())
+        .query(async ({ ctx, input }) => {
+          requireRole(ctx.user.role, "supervisor");
+          return listSuspiciousTimeRecords({ employeeId: input?.employeeId, limit: input?.limit });
+        }),
+      review: protectedProcedure
+        .input(z.object({ id: z.number(), decision: z.enum(["approved", "rejected"]), note: z.string().max(255).optional(), correctedHours: z.number().min(0).max(24).optional() }))
+        .mutation(async ({ ctx, input }) => {
+          requireRole(ctx.user.role, "admin");
+          await reviewTimeRecord(input.id, input.decision, ctx.user.id, input.note ?? null, input.correctedHours ?? null);
+          await logActivity({ userId: ctx.user.id, action: "review", entity: "time_record", entityId: input.id, details: `${input.decision}${input.correctedHours != null ? ` (${input.correctedHours}h)` : ""}${input.note ? ` — ${input.note}` : ""}` });
+          return { success: true };
         }),
 
       checkIn: protectedProcedure
@@ -2872,17 +2936,21 @@ export const appRouter = router({
             photoUrl = result.url;
             photoKey = key;
           }
-          await createTimeRecord({
-            employeeId: input.employeeId,
-            type: "check_in",
-            recordedAt: new Date().toISOString().slice(0, 19).replace("T", " "),
-            photoUrl,
-            photoKey,
-            latitude: input.latitude ?? null,
-            longitude: input.longitude ?? null,
-            locationName: input.locationName ?? null,
-            notes: [geoNoteIn, input.notes].filter(Boolean).join(" · ") || null,
-          });
+          // Inserção ATÓMICA (linha do colaborador bloqueada): dois toques
+          // simultâneos já não criam duas entradas.
+          try {
+            await insertTimeRecordAtomic(input.employeeId, "check_in", {
+              recordedAt: new Date().toISOString().slice(0, 19).replace("T", " "),
+              photoUrl,
+              photoKey,
+              latitude: input.latitude ?? null,
+              longitude: input.longitude ?? null,
+              locationName: input.locationName ?? null,
+              notes: [geoNoteIn, input.notes].filter(Boolean).join(" · ") || null,
+            });
+          } catch (e: any) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) });
+          }
           await logActivity({ userId: ctx.user.id, action: "check_in", entity: "time_record", entityId: input.employeeId, details: `Check-in: ${input.locationName ?? ""}` });
           // Ponto→PDA automático: se o check-in veio do browser de um PDA
           // registado, liga já a pessoa ao PDA/Zello (e troca quem lá estava).
@@ -2975,25 +3043,31 @@ export const appRouter = router({
               console.warn("[checkOut] snapshot Zello falhou:", err);
             }
           }
-          await createTimeRecord({
-            employeeId: input.employeeId,
-            type: "check_out",
-            recordedAt: outAt.toISOString().slice(0, 19).replace("T", " "),
-            photoUrl,
-            photoKey,
-            latitude: input.latitude ?? null,
-            longitude: input.longitude ?? null,
-            locationName: input.locationName ?? null,
-            hoursWorked,
-            notes: finalNotes,
-            ...(zello ? {
-              zelloKm: String(zello.km),
-              zelloAvgSpeed: String(zello.avgSpeed),
-              zelloMaxSpeed: String(zello.maxSpeed),
-              zelloOfflineMinutes: zello.offlineMinutes,
-              zelloOnlineMinutes: zello.onlineMinutes,
-            } : {}),
-          });
+          // Inserção ATÓMICA (linha do colaborador bloqueada) + estado de
+          // revisão: um check-out cortado a 12h nasce "suspicious" e não paga
+          // até ser aprovado.
+          try {
+            await insertTimeRecordAtomic(input.employeeId, "check_out", {
+              recordedAt: outAt.toISOString().slice(0, 19).replace("T", " "),
+              photoUrl,
+              photoKey,
+              latitude: input.latitude ?? null,
+              longitude: input.longitude ?? null,
+              locationName: input.locationName ?? null,
+              hoursWorked,
+              notes: finalNotes,
+              reviewStatus: autoNote ? "suspicious" : "ok",
+              ...(zello ? {
+                zelloKm: String(zello.km),
+                zelloAvgSpeed: String(zello.avgSpeed),
+                zelloMaxSpeed: String(zello.maxSpeed),
+                zelloOfflineMinutes: zello.offlineMinutes,
+                zelloOnlineMinutes: zello.onlineMinutes,
+              } : {}),
+            });
+          } catch (e: any) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) });
+          }
           // Fecha o check-in de PDA da pessoa (o aparelho fica livre para o
           // próximo turno — quando outro picar o ponto, a app troca sozinha)
           try {
@@ -3041,12 +3115,61 @@ export const appRouter = router({
     }),
 
     // ── PAYROLL ──────────────────────────────────────────────────────────────────────────────────
+    // Apuramento PROVISÓRIO do mês (cálculo ao vivo). O que foi aprovado/pago
+    // vive nos fechos (payrollRuns). Filtro por centro de custos opcional.
     payroll: protectedProcedure
-      .input(z.object({ year: z.number(), month: z.number().min(1).max(12) }))
+      .input(z.object({ year: z.number(), month: z.number().min(1).max(12), projectId: z.number().optional() }))
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "admin");
-        return getPayrollData(input.year, input.month);
+        return getPayrollData(input.year, input.month, { projectId: input.projectId ?? null });
       }),
+
+    // ── FECHO MENSAL: apuramento → aprovado → pago (versões imutáveis) ──────
+    payrollRuns: router({
+      list: protectedProcedure
+        .input(z.object({ year: z.number().optional(), month: z.number().min(1).max(12).optional() }).optional())
+        .query(async ({ ctx, input }) => {
+          requireRole(ctx.user.role, "admin");
+          return listPayrollRuns(input?.year, input?.month);
+        }),
+      get: protectedProcedure
+        .input(z.object({ id: z.number() }))
+        .query(async ({ ctx, input }) => {
+          requireRole(ctx.user.role, "admin");
+          return getPayrollRun(input.id);
+        }),
+      create: protectedProcedure
+        .input(z.object({ year: z.number(), month: z.number().min(1).max(12), notes: z.string().max(1000).optional() }))
+        .mutation(async ({ ctx, input }) => {
+          requireRole(ctx.user.role, "admin");
+          const r = await createPayrollRun(input.year, input.month, ctx.user.id, input.notes ?? null);
+          await logActivity({ userId: ctx.user.id, action: "payroll_close", entity: "payroll_run", entityId: r.runId, details: `${input.year}-${String(input.month).padStart(2, "0")} v${r.version}: ${r.employeesCount} pessoas, ${r.totalGross.toFixed(2)}€ bruto, ${r.warningsCount} com avisos` });
+          return r;
+        }),
+      approve: protectedProcedure
+        .input(z.object({ id: z.number() }))
+        .mutation(async ({ ctx, input }) => {
+          requireRole(ctx.user.role, "super_admin");
+          try { await transitionPayrollRun(input.id, "approved", ctx.user.id); } catch (e: any) { throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) }); }
+          await logActivity({ userId: ctx.user.id, action: "payroll_approve", entity: "payroll_run", entityId: input.id });
+          return { success: true };
+        }),
+      markPaid: protectedProcedure
+        .input(z.object({ id: z.number(), paymentRef: z.string().max(128).optional() }))
+        .mutation(async ({ ctx, input }) => {
+          requireRole(ctx.user.role, "super_admin");
+          try { await transitionPayrollRun(input.id, "paid", ctx.user.id, input.paymentRef ?? null); } catch (e: any) { throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) }); }
+          await logActivity({ userId: ctx.user.id, action: "payroll_paid", entity: "payroll_run", entityId: input.id, details: input.paymentRef ?? "" });
+          return { success: true };
+        }),
+      void: protectedProcedure
+        .input(z.object({ id: z.number() }))
+        .mutation(async ({ ctx, input }) => {
+          requireRole(ctx.user.role, "super_admin");
+          try { await transitionPayrollRun(input.id, "void", ctx.user.id); } catch (e: any) { throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) }); }
+          return { success: true };
+        }),
+    }),
 
     payrollPdf: protectedProcedure
       .input(z.object({ year: z.number(), month: z.number().min(1).max(12) }))
@@ -3180,13 +3303,26 @@ export const appRouter = router({
           await logActivity({ userId: ctx.user.id, action: "clear", entity: "employee_penalty", entityId: input.id });
           return { success: true };
         }),
+      // Gera "POSSÍVEIS faltas" (pendentes) — só contam pontos depois de confirmadas.
       processNoShows: protectedProcedure
         .input(z.object({ date: z.string() }))
         .mutation(async ({ ctx, input }) => {
           requireRole(ctx.user.role, "admin");
-          const report = await processExtraDiaNoShows(input.date);
-          await logActivity({ userId: ctx.user.id, action: "process_noshows", entity: "extras_dia", details: `${input.date}: ${report.created} penalties` });
+          const report = await detectExtraDiaNoShows(input.date);
+          await logActivity({ userId: ctx.user.id, action: "process_noshows", entity: "extras_dia", details: `${input.date}: ${report.created} possíveis faltas` });
           return report;
+        }),
+      pending: protectedProcedure.query(async ({ ctx }) => {
+        requireRole(ctx.user.role, "supervisor");
+        return listPendingPenalties();
+      }),
+      review: protectedProcedure
+        .input(z.object({ id: z.number(), decision: z.enum(["confirmed", "dismissed"]), note: z.string().max(200).optional() }))
+        .mutation(async ({ ctx, input }) => {
+          requireRole(ctx.user.role, "supervisor");
+          const r = await reviewPenalty(input.id, input.decision, ctx.user.id, input.note ?? null);
+          await logActivity({ userId: ctx.user.id, action: input.decision === "confirmed" ? "confirm_penalty" : "dismiss_penalty", entity: "employee_penalty", entityId: input.id, details: `${input.decision}${input.note ? ` — ${input.note}` : ""} · pontos ${r.points}${r.blocked ? " · BLOQUEADO" : ""}` });
+          return r;
         }),
     }),
 
@@ -3206,7 +3342,8 @@ export const appRouter = router({
           const me = await getEmployeeByUserId(ctx.user.id);
           if (!me || me.employee.id !== input.employeeId) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
         }
-        return checkExtraDocsCompliance(input.employeeId);
+        // ação explícita: aplica a regra documental (escreve só blockedByDocs/aviso)
+        return applyDocsCompliance(input.employeeId);
       }),
 
     // ── DASHBOARD RH (super_admin) ─────────────────────────────────────────
@@ -7344,7 +7481,7 @@ export const appRouter = router({
 
     // Cria um funcionário-extra a partir de um agente órfão (aba RH)
     createEmployeeFromAgent: protectedProcedure
-      .input(z.object({ agentName: z.string().min(1).max(256), email: z.string().email().optional() }))
+      .input(z.object({ agentName: z.string().min(1).max(256), email: z.string().email().optional(), projectId: z.number().optional() }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "admin");
         const { getDb } = await import("./db");
@@ -7366,16 +7503,16 @@ export const appRouter = router({
             throw new TRPCError({ code: "BAD_REQUEST", message: `Já existe um colaborador ativo com estes dados: ${dup.fullName} (#${dup.id}). Liga o agente à ficha existente em vez de criar outra.` });
           }
         }
-        // centro de custos default = cidade Lisboa (o Jorge corrige depois se for de outra)
-        const lisboa = await db.select({ id: projects.id }).from(projects)
-          .where(and(eq(projects.level, "city"), eq(projects.name, "Lisboa"))).limit(1);
+        // Centro de custos: o indicado, ou PENDENTE (null) — deixou de assumir
+        // Lisboa por nome literal; a ficha aparece na fila "sem centro".
+        void projects; void and;
         const [ins] = await db.insert(employees).values({
           fullName: input.agentName,
           email: input.email ?? null,
           multiparkAgentName: input.agentName,
           position: "extra",
           contractType: "extra",
-          projectId: lisboa[0]?.id ?? null,
+          projectId: input.projectId ?? null,
           isActive: 1,
         } as any).$returningId();
         await logActivity({ userId: ctx.user.id, action: "create", entity: "employee", entityId: (ins as any)?.id ?? 0, details: `Criado a partir do agente: ${input.agentName}` });

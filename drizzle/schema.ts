@@ -320,6 +320,11 @@ export const employees = mysqlTable("employees", {
 	docsWarningAt: timestamp({ mode: 'string' }),
 	loginBlocked: tinyint().default(0).notNull(),
 	loginBlockedReason: varchar({ length: 255 }),
+	// 0064 — motivos de bloqueio SEPARADOS (loginBlocked = OR dos três; um
+	// processo nunca apaga o estado criado por outro)
+	blockedByDocs: tinyint().default(0).notNull(),
+	blockedByPenalties: tinyint().default(0).notNull(),
+	blockedManually: tinyint().default(0).notNull(),
 });
 
 // Candidaturas de condutores vindas do website multidriver ("Be a Driver").
@@ -393,11 +398,17 @@ export const employeePenalties = mysqlTable("employee_penalties", {
 	notes: varchar({ length: 512 }),
 	clearedAt: timestamp({ mode: 'string' }),
 	clearedById: int(),
+	// 0064 — faltas automáticas nascem "pending" (possível falta) e só contam
+	// pontos depois de confirmadas por alguém da operação
+	status: mysqlEnum(['pending','confirmed','dismissed']).default('confirmed').notNull(),
+	reviewedById: int(),
+	reviewedAt: timestamp({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 },
 (table) => [
 	index("idx_employee_penalties_emp").on(table.employeeId),
 	index("idx_employee_penalties_open").on(table.employeeId, table.clearedAt),
+	uniqueIndex("uq_employee_penalties_related").on(table.employeeId, table.reason, table.relatedId),
 ]);
 
 export const expenseCategories = mysqlTable("expense_categories", {
@@ -1287,8 +1298,56 @@ export const timeRecords = mysqlTable("time_records", {
 	zelloMaxSpeed: decimal({ precision: 6, scale: 2 }),
 	zelloOfflineMinutes: int(),
 	zelloOnlineMinutes: int(),
+	// 0064 — revisão do ponto: suspeitos não pagam até serem aprovados
+	reviewStatus: mysqlEnum(['ok','suspicious','approved','rejected']).default('ok').notNull(),
+	reviewedById: int(),
+	reviewedAt: timestamp({ mode: 'string' }),
+	reviewNote: varchar({ length: 255 }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 });
+
+// ─── Fecho mensal de ordenados (0064): apuramento → aprovado → pago ───────────
+// Cada fecho é uma VERSÃO imutável do cálculo (linhas em JSON). O cálculo ao
+// vivo continua a existir como "apuramento provisório".
+export const payrollRuns = mysqlTable("payroll_runs", {
+	id: int().autoincrement().primaryKey(),
+	year: int().notNull(),
+	month: int().notNull(),
+	version: int().default(1).notNull(),
+	status: mysqlEnum(['draft','approved','paid','void']).default('draft').notNull(),
+	employeesCount: int().default(0).notNull(),
+	totalGross: decimal({ precision: 12, scale: 2 }).default('0').notNull(),
+	totalNetEstimate: decimal({ precision: 12, scale: 2 }).default('0').notNull(),
+	warningsCount: int().default(0).notNull(),
+	notes: text(),
+	createdById: int(),
+	approvedById: int(),
+	approvedAt: timestamp({ mode: 'string' }),
+	paidById: int(),
+	paidAt: timestamp({ mode: 'string' }),
+	paymentRef: varchar({ length: 128 }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_payroll_runs_month_version").on(table.year, table.month, table.version),
+]);
+
+export const payrollRunLines = mysqlTable("payroll_run_lines", {
+	id: int().autoincrement().primaryKey(),
+	runId: int().notNull(),
+	employeeId: int().notNull(),
+	fullName: varchar({ length: 256 }),
+	isExtra: tinyint().default(0).notNull(),
+	totalHours: decimal({ precision: 8, scale: 2 }).default('0').notNull(),
+	totalPayment: decimal({ precision: 12, scale: 2 }).default('0').notNull(),
+	netEstimate: decimal({ precision: 12, scale: 2 }).default('0').notNull(),
+	snapshot: text().notNull(),                       // JSON do cálculo completo
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	index("idx_payroll_run_lines_run").on(table.runId),
+	uniqueIndex("uq_payroll_run_lines_emp").on(table.runId, table.employeeId),
+]);
 
 export const trainingCategories = mysqlTable("training_categories", {
 	id: int().autoincrement().primaryKey(),

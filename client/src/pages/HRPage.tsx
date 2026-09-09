@@ -5,7 +5,34 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { RecruitmentSection } from "@/components/RecruitmentSection";
 import { trpc } from "@/lib/trpc";
 import { fmtPTDateTime, fmtPTDate } from "@/lib/lisbonTime";
-import { fileHref } from "@/lib/fileHref";
+import { toCsv } from "@shared/csv";
+import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
+
+/**
+ * Documentos pessoais deixaram de abrir pela URL pública: pede-se ao servidor
+ * uma URL assinada e temporária, com a permissão da ficha (rh.documents.url).
+ */
+function useOpenEmployeeDoc() {
+  const utils = trpc.useUtils();
+  return async (docId: number) => {
+    const w = window.open("", "_blank");
+    try {
+      const r = await utils.client.rh.documents.url.query({ id: docId });
+      if (r?.url) { if (w) w.location.href = r.url; else window.open(r.url, "_blank"); }
+      else { w?.close(); toast.error("Documento indisponível"); }
+    } catch (e: any) { w?.close(); toast.error("Sem permissão ou documento indisponível", { description: String(e?.message ?? "").slice(0, 160) }); }
+  };
+}
+function DocThumb({ docId, mimeType, label, onOpen }: { docId: number; mimeType: string | null; label: string; onOpen: () => void }) {
+  const isImg = !!mimeType && mimeType.startsWith("image/");
+  const { data } = trpc.rh.documents.url.useQuery({ id: docId }, { enabled: isImg, staleTime: 5 * 60_000 });
+  if (isImg && data?.url) return <div className="aspect-[4/3] bg-cover bg-center cursor-pointer" style={{ backgroundImage: `url(${data.url})` }} onClick={onOpen} role="img" aria-label={label} />;
+  return (
+    <div className="aspect-[4/3] flex items-center justify-center cursor-pointer" onClick={onOpen} role="button" aria-label={`Abrir ${label}`}>
+      <FileText className="w-10 h-10 text-muted-foreground" />
+    </div>
+  );
+}
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -419,6 +446,7 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
 // ─── DOCUMENT UPLOAD (MULTI-FILE + CHECKLIST) ───────────────────────────────
 function DocumentsTab({ employeeId }: { employeeId: number }) {
   const utils = trpc.useUtils();
+  const openDoc = useOpenEmployeeDoc();
   const { data: docs = [] } = trpc.rh.documents.list.useQuery({ employeeId });
   const { data: checklist = [] } = trpc.rh.documents.checklist.useQuery({ employeeId });
   const [uploading, setUploading] = useState(false);
@@ -581,21 +609,8 @@ function DocumentsTab({ employeeId }: { employeeId: number }) {
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 pt-3">
                       {typeDocs.map((doc) => (
                         <div key={doc.id} className="group relative border rounded-lg overflow-hidden bg-muted/30">
-                          {/* Preview */}
-                          {isImage(doc.mimeType) ? (
-                            <div
-                              className="aspect-[4/3] bg-cover bg-center cursor-pointer"
-                              style={{ backgroundImage: `url(${fileHref(doc.fileUrl, doc.fileKey)})` }}
-                              onClick={() => setPreviewUrl(fileHref(doc.fileUrl, doc.fileKey))}
-                            />
-                          ) : (
-                            <div
-                              className="aspect-[4/3] flex items-center justify-center cursor-pointer"
-                              onClick={() => window.open(fileHref(doc.fileUrl, doc.fileKey) ?? undefined, "_blank")}
-                            >
-                              <FileText className="w-10 h-10 text-muted-foreground" />
-                            </div>
-                          )}
+                          {/* Preview — via URL assinada (permissão da ficha) */}
+                          <DocThumb docId={doc.id} mimeType={doc.mimeType} label={doc.label || doc.fileKey?.split("/").pop() || "documento"} onOpen={() => openDoc(doc.id)} />
                           {/* Info */}
                           <div className="p-2">
                             <p className="text-xs font-medium truncate">{doc.label || doc.fileKey?.split("/").pop()}</p>
@@ -603,7 +618,7 @@ function DocumentsTab({ employeeId }: { employeeId: number }) {
                           </div>
                           {/* Actions overlay */}
                           <div className="absolute top-1 right-1 flex gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
-                            <Button size="icon" variant="secondary" className="w-6 h-6" onClick={() => isImage(doc.mimeType) ? setPreviewUrl(fileHref(doc.fileUrl, doc.fileKey)) : window.open(fileHref(doc.fileUrl, doc.fileKey) ?? undefined, "_blank")}>
+                            <Button size="icon" variant="secondary" className="w-6 h-6" aria-label="Abrir documento" onClick={() => openDoc(doc.id)}>
                               <Eye className="w-3 h-3" />
                             </Button>
                             <Button size="icon" variant="secondary" className="w-6 h-6 text-destructive" onClick={() => del.mutate({ id: doc.id })}>
@@ -646,6 +661,11 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
   const { data: monthly } = trpc.rh.timeRecords.monthlyHours.useQuery({ employeeId, year, month });
   const [cameraMode, setCameraMode] = useState<"check_in" | "check_out" | null>(null);
   const [expandedRecord, setExpandedRecord] = useState<number | null>(null);
+  const { user: recUser } = useAuth();
+  const reviewRecord = trpc.rh.timeRecords.review.useMutation({
+    onSuccess: () => { utils.rh.timeRecords.list.invalidate(); utils.rh.timeRecords.monthlyHours.invalidate(); toast.success("Registo revisto"); },
+    onError: (e) => toast.error(e.message),
+  });
 
   const checkIn = trpc.rh.timeRecords.checkIn.useMutation({
     onSuccess: (data: any) => {
@@ -786,7 +806,9 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
           const isExpanded = expandedRecord === r.id;
           const hasCoords = r.latitude && r.longitude;
           // Ponto suspeito (check-out esquecido cortado a 12h) ou fora do raio → VERMELHO
-          const isFlagged = /\[(SUSPEITO|FORA DO RAIO)\]/.test(r.notes ?? "");
+          const reviewStatus = (r as any).reviewStatus as string | undefined;
+          const isFlagged = reviewStatus === "suspicious" || reviewStatus === "rejected" || (!reviewStatus && /\[(SUSPEITO|FORA DO RAIO)\]/.test(r.notes ?? ""));
+          const canReview = reviewStatus === "suspicious" && (recUser?.role === "admin" || recUser?.role === "super_admin");
           return (
             <div
               key={r.id}
@@ -802,8 +824,17 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
                   <div>
                     <p className="text-sm font-medium">
                       {r.type === "check_in" ? "Entrada" : "Saída"}
-                      {isFlagged && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">⚠ rever</span>}
+                      {reviewStatus === "suspicious" && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">⚠ por rever — não paga</span>}
+                      {reviewStatus === "rejected" && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">rejeitado</span>}
+                      {reviewStatus === "approved" && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200">aprovado</span>}
+                      {!reviewStatus && isFlagged && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">⚠ rever</span>}
                     </p>
+                    {canReview && (
+                      <div className="flex gap-1 mt-1" onClick={(e) => e.stopPropagation()}>
+                        <Button size="sm" variant="outline" className="h-6 text-[11px]" disabled={reviewRecord.isPending} onClick={() => { const h = prompt("Horas corrigidas (deixa vazio para manter):"); const n = h && h.trim() ? Number(h.replace(",", ".")) : undefined; reviewRecord.mutate({ id: r.id, decision: "approved", correctedHours: Number.isFinite(n as number) ? n : undefined }); }}>Aprovar</Button>
+                        <Button size="sm" variant="ghost" className="h-6 text-[11px] text-red-700" disabled={reviewRecord.isPending} onClick={() => reviewRecord.mutate({ id: r.id, decision: "rejected" })}>Rejeitar</Button>
+                      </div>
+                    )}
                     <p className="text-xs text-muted-foreground">{fmtPTDateTime(r.recordedAt)}</p>
                     {isFlagged && r.notes && <p className="text-[11px] text-red-700 mt-0.5">{r.notes}</p>}
                   </div>
@@ -1334,7 +1365,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                 <Avatar className="w-24 h-24">
                   <AvatarImage src={emp.photoUrl ?? undefined} />
                   <AvatarFallback className="text-2xl bg-primary/10 text-primary">
-                    {emp.fullName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()}
+                    {emp.fullName.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase()}
                   </AvatarFallback>
                 </Avatar>
                 <Button
@@ -1873,7 +1904,16 @@ function PayrollPage({ onBack }: { onBack: () => void }) {
   const [payslipResults, setPayslipResults] = useState<Array<{ fullName: string; url: string }> | null>(null);
   const [generatingFor, setGeneratingFor] = useState<number | null>(null);
 
-  const { data: payroll = [], isLoading } = trpc.rh.payroll.useQuery({ year, month });
+  const payrollFilters = useGlobalFilters();
+  const { data: payroll = [], isLoading } = trpc.rh.payroll.useQuery({ year, month, projectId: payrollFilters.projectId ?? undefined });
+  const { user: payrollUser } = useAuth();
+  const { data: runs = [] } = trpc.rh.payrollRuns.list.useQuery({ year, month });
+  const runUtils = trpc.useUtils();
+  const closeRun = trpc.rh.payrollRuns.create.useMutation({ onSuccess: (r) => { runUtils.rh.payrollRuns.invalidate(); toast.success(`Apuramento fechado (v${r.version}): ${r.employeesCount} pessoas, ${r.totalGross.toFixed(2)} € bruto${r.warningsCount ? ` · ${r.warningsCount} com avisos` : ""}`); }, onError: (e) => toast.error(e.message) });
+  const approveRun = trpc.rh.payrollRuns.approve.useMutation({ onSuccess: () => { runUtils.rh.payrollRuns.invalidate(); toast.success("Fecho aprovado"); }, onError: (e) => toast.error(e.message) });
+  const paidRun = trpc.rh.payrollRuns.markPaid.useMutation({ onSuccess: () => { runUtils.rh.payrollRuns.invalidate(); toast.success("Marcado como pago"); }, onError: (e) => toast.error(e.message) });
+  const latestRun = runs.find((r: any) => r.status !== "void") ?? null;
+  const warningsRows = (payroll as any[]).filter((r) => (r.warnings?.length ?? 0) > 0);
 
   const sorted = useMemo(() => {
     return [...payroll].sort((a: any, b: any) => {
@@ -1929,7 +1969,7 @@ function PayrollPage({ onBack }: { onBack: () => void }) {
       fmt(r.thirteenthProvision), fmt(r.fourteenthProvision ?? 0),
       fmt(r.mealAllowance ?? 0), fmt(r.totalPayment)
     ]);
-    const csv = [headers.join(";"), ...rows.map(r => r.join(";"))].join("\n");
+    const csv = toCsv(headers, rows); // escape de ; " quebras e fórmulas (=,+,-,@)
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = `folha_ordenados_${year}_${String(month).padStart(2,"0")}.csv`; a.click();
@@ -1942,7 +1982,7 @@ function PayrollPage({ onBack }: { onBack: () => void }) {
       r.fullName, r.position, r.department ?? "",
       r.totalHours, r.daysWorked, r.overtimeHours, fmt(r.hourlyRate)
     ]);
-    const csv = [headers.join(";"), ...rows.map(r => r.join(";"))].join("\n");
+    const csv = toCsv(headers, rows); // escape de ; " quebras e fórmulas (=,+,-,@)
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = `folha_ponto_${year}_${String(month).padStart(2,"0")}.csv`; a.click();
@@ -1955,6 +1995,29 @@ function PayrollPage({ onBack }: { onBack: () => void }) {
         <Button variant="ghost" onClick={onBack}><ChevronLeft className="w-4 h-4 mr-1" /> Voltar</Button>
         <Wallet className="w-5 h-5 text-primary" />
         <h2 className="text-xl font-semibold">Folha de Ordenados</h2>
+      </div>
+
+      {/* Estado do mês: apuramento provisório → fecho → aprovado → pago */}
+      <div className={`rounded-md border px-3 py-2 text-sm flex flex-wrap items-center gap-3 ${latestRun?.status === "paid" ? "border-emerald-200 bg-emerald-50" : latestRun?.status === "approved" ? "border-sky-200 bg-sky-50" : latestRun ? "border-amber-200 bg-amber-50" : "border-muted bg-muted/40"}`} role="status">
+        <span className="font-medium">
+          {!latestRun ? "Apuramento provisório — sem fecho deste mês" : latestRun.status === "draft" ? `Fecho v${latestRun.version} por aprovar` : latestRun.status === "approved" ? `Fecho v${latestRun.version} aprovado` : `Fecho v${latestRun.version} pago${latestRun.paymentRef ? ` (${latestRun.paymentRef})` : ""}`}
+        </span>
+        {latestRun && <span className="text-xs text-muted-foreground">{latestRun.employeesCount} pessoas · {Number(latestRun.totalGross).toFixed(2)} € bruto{latestRun.warningsCount ? ` · ${latestRun.warningsCount} com avisos` : ""} · {fmtPTDateTime(latestRun.createdAt)}</span>}
+        {warningsRows.length > 0 && <span className="text-xs text-amber-800">{warningsRows.length} pessoa(s) com avisos no apuramento (turnos por rever, vínculos parciais, níveis sem taxa)</span>}
+        <span className="text-xs text-muted-foreground">Os valores ao vivo são uma ESTIMATIVA; só o fecho aprovado/pago conta como ordenado.</span>
+        <div className="flex-1" />
+        {(!latestRun || latestRun.status === "paid" || latestRun.status === "void") && (
+          <Button size="sm" variant="outline" disabled={closeRun.isPending || payroll.length === 0} onClick={() => { if (confirm(`Fechar o apuramento de ${MONTH_NAMES[month - 1]} ${year} (versão imutável)?`)) closeRun.mutate({ year, month }); }}>Fechar apuramento</Button>
+        )}
+        {latestRun?.status === "draft" && payrollUser?.role === "super_admin" && (
+          <Button size="sm" variant="outline" disabled={approveRun.isPending} onClick={() => approveRun.mutate({ id: latestRun.id })}>Aprovar</Button>
+        )}
+        {latestRun?.status === "draft" && (
+          <Button size="sm" variant="ghost" disabled={closeRun.isPending} onClick={() => { if (confirm("Refazer o fecho com o cálculo atual (nova versão)?")) closeRun.mutate({ year, month }); }}>Refazer (nova versão)</Button>
+        )}
+        {latestRun?.status === "approved" && payrollUser?.role === "super_admin" && (
+          <Button size="sm" variant="outline" disabled={paidRun.isPending} onClick={() => { const ref = prompt("Referência do pagamento (opcional):") ?? undefined; paidRun.mutate({ id: latestRun.id, paymentRef: ref || undefined }); }}>Marcar como pago</Button>
+        )}
       </div>
 
       {/* Month/Year selector + Export buttons */}
@@ -2275,9 +2338,12 @@ export default function HRPage() {
   const [showDashboard, setShowDashboard] = useState(false);
   const [showUsers, setShowUsers] = useState(false);
 
+  // Filtro GLOBAL de cidade/centro (topo da app) aplicado também ao RH
+  const globalFilters = useGlobalFilters();
   const { data: employees = [], isLoading } = trpc.rh.list.useQuery({
     isActive: filterActive === "inactive" ? false : true,
     position: filterPosition !== "all" ? filterPosition : undefined,
+    projectId: globalFilters.projectId ?? undefined,
   }, { enabled: !isExtra });
   const { data: docStatus = {} } = trpc.rh.documents.allStatus.useQuery(undefined, { enabled: !isExtra });
   const { data: allProjects = [] } = trpc.projects.list.useQuery(undefined, { enabled: !isExtra });
@@ -2348,7 +2414,7 @@ export default function HRPage() {
       e.monthlySalary ? parseFloat(String(e.monthlySalary)).toFixed(2) : "",
       e.userId ? "Sim" : "Não"
     ]);
-    const csv = [headers.join(";"), ...rows.map(r => r.join(";"))].join("\n");
+    const csv = toCsv(headers, rows); // escape de ; " quebras e fórmulas (=,+,-,@)
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = `lista_funcionarios_${new Date().toISOString().split("T")[0]}.csv`; a.click();
