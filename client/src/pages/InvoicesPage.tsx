@@ -67,18 +67,20 @@ export default function InvoicesPage() {
   const colSort = useTableSort(collectedRows as any[]);
   const comSort = useTableSort(salesCommissions as any[]);
 
+  // Gráfico na MESMA base dos cartões (s/ IVA, com TSU): a pilha de custos
+  // + a margem somam exatamente os Entregues s/ IVA de cada ponto.
   const chartData = useMemo(() => timeseries.map((p: any) => ({
     bucket: p.bucket,
-    produced: Number(p.produced ?? 0),
+    produced: Number(p.producedNet ?? p.produced ?? 0),
     collected: Number(p.collected ?? 0),
-    expenses: Number(p.expenses ?? p.expensesPaid ?? 0),
+    expenses: Number(p.expensesNet ?? p.expenses ?? p.expensesPaid ?? 0),
     salaries: Number(p.salaries ?? 0),
     partners: Number(p.partners ?? 0),
     extrasCost: Number(p.extrasCost ?? 0),
     revenueForecast: Number(p.revenueForecast ?? 0),
     margin: p.margin != null
       ? Number(p.margin)
-      : Number(p.produced ?? 0) - Number(p.totalCost ?? 0),
+      : Number(p.producedNet ?? p.produced ?? 0) - Number(p.totalCost ?? 0),
   })), [timeseries]);
 
   // Despesas pagas por projeto (agrupado)
@@ -173,9 +175,9 @@ export default function InvoicesPage() {
             />
             <KpiCard
               icon={<Receipt className="w-4 h-4 text-red-600" />}
-              label="Custos totais"
-              value={fmt(summary.totalCostsAll)}
-              hint={`Inclui salários+TSU · Despesas por pagar: ${fmt(summary.expensesPending ?? 0)}`}
+              label="Custos (s/ IVA)"
+              value={fmt(summary.totalCostsNoVat ?? summary.totalCostsAll)}
+              hint={`Despesas s/IVA + pessoal + TSU + equipa-dia + comissões · c/ IVA: ${fmt(summary.totalCostsAll)} · por pagar (não soma): ${fmt(summary.expensesPending ?? 0)}`}
               color="text-red-700"
             />
             <KpiCard
@@ -219,9 +221,9 @@ export default function InvoicesPage() {
                       contentStyle={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, fontSize: 12 }}
                     />
                     <Legend wrapperStyle={{ fontSize: 12 }} />
-                    <Bar dataKey="produced" name="Entregues" fill="#10b981" radius={[3, 3, 0, 0]} />
-                    <Bar dataKey="expenses" name="Despesas" stackId="cost" fill="#f59e0b" />
-                    <Bar dataKey="salaries" name="Salários" stackId="cost" fill="#3b82f6" />
+                    <Bar dataKey="produced" name="Entregues (s/ IVA)" fill="#10b981" radius={[3, 3, 0, 0]} />
+                    <Bar dataKey="expenses" name="Despesas (s/ IVA)" stackId="cost" fill="#f59e0b" />
+                    <Bar dataKey="salaries" name="Salários + TSU" stackId="cost" fill="#3b82f6" />
                     <Bar dataKey="partners" name="Parceiros" stackId="cost" fill="#f43f5e" />
                     <Bar dataKey="extrasCost" name="Equipa-dia" stackId="cost" fill="#eab308" radius={[3, 3, 0, 0]} />
                     <Line dataKey="collected" name="Recolhidos" stroke="#0284c7" strokeWidth={2} dot={false} />
@@ -390,9 +392,11 @@ export default function InvoicesPage() {
                     <UsersIcon className="w-4 h-4" /> Salários por centro de custos
                   </CardTitle>
                   <p className="text-xs text-muted-foreground">
-                    Salário mensal × dias do período ({summary.periodDays} dias). Quem está num nível superior
-                    (Grupo / Cidade / Marca) tem o custo distribuído equitativamente pelas marcas folhas.
-                    Aos custos totais soma ainda a TSU patronal (23,75%): {fmt(summary.employerTax ?? 0)}.
+                    Salário vigente em cada mês (histórico de RH): mês completo = salário mensal; parcial = proporcional aos dias
+                    do próprio mês, respeitando início e fim de contrato. Inclui provisões de subsídios ({fmt(summary.salariesProvisions ?? 0)})
+                    e variável do ponto — horas extra, noturnas, fim de semana e alimentação ({fmt(summary.salariesVariable ?? 0)}).
+                    Quem está num nível superior (Grupo / Cidade / Marca) é rateado pelas marcas folhas; sem centro fica "Por atribuir".
+                    TSU patronal ({((summary.tsuEmployerRate ?? 0.2375) * 100).toFixed(2)}%) sobre a base tributável: {fmt(summary.employerTax ?? 0)}.
                   </p>
                 </CardHeader>
                 <CardContent>
@@ -520,25 +524,27 @@ export default function InvoicesPage() {
             <TabsContent value="forecast" className="space-y-4">
               {/* KPIs Previsão */}
               <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                {/* Período já encerrado: a previsão é dos PRÓXIMOS 30 dias (fora do
+                    período) e NÃO se soma ao realizado desse mês. */}
                 <KpiCard
                   icon={<CalendarClock className="w-4 h-4 text-sky-600" />}
-                  label="Receita prevista"
+                  label={summary.forecastRange?.extended ? "Receita prevista (próximos 30 dias)" : "Receita prevista"}
                   value={fmt(forecast.reduce((s, f) => s + Number(f.totalRevenue ?? 0), 0))}
-                  hint={`${forecast.reduce((s, f) => s + Number(f.count ?? 0), 0)} reservas por entregar`}
+                  hint={`${forecast.reduce((s, f) => s + Number(f.count ?? 0), 0)} reservas por entregar${summary.forecastRange?.extended ? ` · ${summary.forecastRange.from} a ${summary.forecastRange.to}, fora do período escolhido` : ""}`}
                   color="text-sky-700"
                 />
                 <KpiCard
                   icon={<Receipt className="w-4 h-4 text-orange-600" />}
                   label="Despesas a pagar"
                   value={fmt(summary.expensesPending)}
-                  hint={`${expensesPending.length} grupos`}
+                  hint={`${expensesPending.length} grupos · não soma aos custos (já contadas pela data da despesa)`}
                   color="text-orange-700"
                 />
                 <KpiCard
                   icon={<Euro className="w-4 h-4 text-emerald-600" />}
-                  label="Total estimado"
-                  value={fmt(summary.produced + forecast.reduce((s, f) => s + Number(f.totalRevenue ?? 0), 0))}
-                  hint="Realizado + previsto"
+                  label={summary.forecastRange?.extended ? "Realizado (período encerrado)" : "Total estimado"}
+                  value={fmt(summary.produced + (summary.forecastRange?.extended ? 0 : forecast.reduce((s, f) => s + Number(f.totalRevenue ?? 0), 0)))}
+                  hint={summary.forecastRange?.extended ? "Sem previsão somada: o período já terminou" : "Realizado + previsto até ao fim do período"}
                   color="text-emerald-700"
                 />
               </div>

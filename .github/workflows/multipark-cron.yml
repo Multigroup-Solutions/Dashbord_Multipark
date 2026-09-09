@@ -27,6 +27,11 @@ on:
     - cron: "0 3 * * *"
     # Recolha diária de operações (driver history + alertas GPS): 03:30 UTC
     - cron: "30 3 * * *"
+    # Google Ads: horária (últimos 7 dias) ao minuto 22; noturna (90 dias) 04:45 UTC;
+    # mensal (resto do histórico) dia 1 às 05:10 UTC. Só correm com a ligação feita.
+    - cron: "22 * * * *"
+    - cron: "45 4 * * *"
+    - cron: "10 5 1 * *"
   workflow_dispatch: {} # trigger manual da UI (corre todos os jobs)
 
 permissions:
@@ -253,6 +258,55 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           title="🔴 Cron multipark falhou: daily-ops"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body="Run falhado: $run_url — $(date -u +'%Y-%m-%d %H:%M UTC')"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number' || true)
+          if [ -n "${existing:-}" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
+
+  # ── Google Ads: recolha horária / noturna / mensal (repete enquanto done:false) ──
+  google-ads:
+    if: github.event.schedule == '22 * * * *' || github.event.schedule == '45 4 * * *' || github.event.schedule == '10 5 1 * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger /api/cron/google-ads (repete até done)
+        env:
+          APP_URL: ${{ secrets.APP_URL || 'https://dashbord-multipark.vercel.app' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          case "${SCHEDULE:-}" in
+            "45 4 * * *") kind=nightly ;;
+            "10 5 1 * *") kind=monthly ;;
+            *) kind=hourly ;;
+          esac
+          echo "kind=$kind"
+          for i in $(seq 1 12); do
+            code=$(curl -sS -m 90 -w '%{http_code}' -o /tmp/body.txt \
+              -H "Authorization: Bearer ${CRON_SECRET:-}" \
+              "$APP_URL/api/cron/google-ads?kind=$kind") \
+              || { echo "::error::curl falhou ao contactar o endpoint"; cat /tmp/body.txt || true; exit 1; }
+            echo "HTTP $code (tentativa $i)"; head -c 800 /tmp/body.txt; echo
+            if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+              echo "::error::endpoint devolveu HTTP $code"; exit 1
+            fi
+            # "skipped" (não ligado / sem contas) não é falha
+            if grep -q '"status":"skipped"' /tmp/body.txt; then echo "saltado — Google Ads não está ligado"; exit 0; fi
+            if grep -q '"status":"failed"' /tmp/body.txt; then echo "::error::recolha falhou"; exit 1; fi
+            if grep -q '"done":true' /tmp/body.txt; then exit 0; fi
+            sleep 3
+          done
+          echo "::warning::recolha ainda parcial após 12 chamadas — continua no próximo ciclo"
+      - name: Alerta — abrir/comentar issue em caso de falha
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="🔴 Cron multipark falhou: google-ads"
           run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           body="Run falhado: $run_url — $(date -u +'%Y-%m-%d %H:%M UTC')"
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number' || true)

@@ -47,7 +47,8 @@ export const campaignDailyStats = mysqlTable("campaign_daily_stats", {
 	spend: decimal({ precision: 10, scale: 2 }).default('0').notNull(),
 	impressions: int().default(0),
 	clicks: int().default(0),
-	conversions: int().default(0),
+	// 0063: decimal — a Google atribui conversões fracionadas
+	conversions: decimal({ precision: 14, scale: 4 }).default('0'),
 	conversionValue: decimal({ precision: 10, scale: 2 }).default('0'),
 	cpc: decimal({ precision: 8, scale: 4 }),
 	ctr: decimal({ precision: 6, scale: 4 }),
@@ -55,6 +56,146 @@ export const campaignDailyStats = mysqlTable("campaign_daily_stats", {
 	importedById: int().notNull(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 });
+
+// ─── Integração Google Ads (0063) — fonte ÚNICA das métricas de anúncios ─────
+// Ligação OAuth (uma por fornecedor); o refresh token fica CIFRADO.
+export const integrationConnections = mysqlTable("integration_connections", {
+	id: int().autoincrement().primaryKey(),
+	provider: varchar({ length: 32 }).notNull(),
+	status: mysqlEnum(['disconnected','connected','reauth_required','error']).default('disconnected').notNull(),
+	refreshTokenEnc: text(),
+	scope: varchar({ length: 256 }),
+	accountEmail: varchar({ length: 320 }),
+	loginCustomerId: varchar({ length: 32 }),        // conta gestora (MCC) usada no acesso
+	connectedById: int(),
+	connectedAt: timestamp({ mode: 'string' }),
+	lastCheckedAt: timestamp({ mode: 'string' }),
+	lastError: text(),
+	syncLockAt: timestamp({ mode: 'string' }),          // mutex da recolha (linha, não GET_LOCK: sobrevive a pool/serverless)
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_integration_connections_provider").on(table.provider),
+]);
+
+// Estado anti-CSRF do fluxo OAuth (consumido uma vez).
+export const oauthStates = mysqlTable("oauth_states", {
+	state: varchar({ length: 96 }).primaryKey(),
+	provider: varchar({ length: 32 }).notNull(),
+	userId: int().notNull(),
+	redirectTo: varchar({ length: 512 }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	expiresAt: timestamp({ mode: 'string' }).notNull(),
+});
+
+// Contas publicitárias (customerId oficial, sem hífens). `projectId` = marca/cidade.
+export const adAccounts = mysqlTable("ad_accounts", {
+	id: int().autoincrement().primaryKey(),
+	provider: varchar({ length: 32 }).notNull(),
+	customerId: varchar({ length: 32 }).notNull(),
+	loginCustomerId: varchar({ length: 32 }),
+	name: varchar({ length: 256 }),
+	currency: varchar({ length: 8 }),
+	timezone: varchar({ length: 64 }),
+	isManager: tinyint().default(0).notNull(),
+	status: varchar({ length: 32 }),
+	selected: tinyint().default(0).notNull(),        // a dashboard consulta esta conta
+	projectId: int(),
+	lastSyncAt: timestamp({ mode: 'string' }),
+	lastError: text(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_ad_accounts_provider_customer").on(table.provider, table.customerId),
+]);
+
+// Campanhas por ID oficial (nomes iguais em contas diferentes são campanhas diferentes).
+export const adCampaigns = mysqlTable("ad_campaigns", {
+	id: int().autoincrement().primaryKey(),
+	provider: varchar({ length: 32 }).notNull(),
+	accountId: int().notNull(),
+	externalId: varchar({ length: 64 }).notNull(),
+	name: varchar({ length: 256 }),
+	status: varchar({ length: 32 }),
+	channelType: varchar({ length: 32 }),
+	budgetMicros: bigint({ mode: 'number' }),        // orçamento (indicador separado; NUNCA gasto)
+	projectId: int(),                                // sobrepõe-se ao da conta
+	legacyCampaignId: int(),                         // ligação à tabela `campaigns` antiga
+	firstSeenAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	lastSeenAt: timestamp({ mode: 'string' }),
+},
+(table) => [
+	uniqueIndex("uq_ad_campaigns_ext").on(table.provider, table.accountId, table.externalId),
+]);
+
+// UM registo por fornecedor + conta + campanha + dia + origem. Repetir a
+// recolha substitui o mesmo registo. Dinheiro em micros (exato).
+export const adDailyMetrics = mysqlTable("ad_daily_metrics", {
+	id: int().autoincrement().primaryKey(),
+	provider: varchar({ length: 32 }).notNull(),
+	accountId: int().notNull(),
+	campaignExternalId: varchar({ length: 64 }).notNull(),
+	date: date({ mode: 'string' }).notNull(),
+	costMicros: bigint({ mode: 'number' }).default(0).notNull(),
+	currency: varchar({ length: 8 }),
+	impressions: bigint({ mode: 'number' }).default(0).notNull(),
+	clicks: bigint({ mode: 'number' }).default(0).notNull(),
+	conversions: decimal({ precision: 14, scale: 4 }).default('0').notNull(),
+	conversionValueMicros: bigint({ mode: 'number' }).default(0).notNull(),
+	allConversions: decimal({ precision: 14, scale: 4 }).default('0').notNull(),
+	source: mysqlEnum(['api','csv','email','manual']).default('api').notNull(),
+	isProvisional: tinyint().default(0).notNull(),
+	syncRunId: int(),
+	collectedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_ad_daily_metrics").on(table.provider, table.accountId, table.campaignExternalId, table.date, table.source),
+	index("idx_ad_daily_metrics_date").on(table.date),
+]);
+
+// Conversões por ação (à parte: juntar várias ações NÃO pode multiplicar o gasto).
+export const adConversionActionMetrics = mysqlTable("ad_conversion_action_metrics", {
+	id: int().autoincrement().primaryKey(),
+	provider: varchar({ length: 32 }).notNull(),
+	accountId: int().notNull(),
+	campaignExternalId: varchar({ length: 64 }).notNull(),
+	date: date({ mode: 'string' }).notNull(),
+	actionResource: varchar({ length: 256 }).notNull(),
+	actionName: varchar({ length: 256 }),
+	category: varchar({ length: 64 }),
+	conversions: decimal({ precision: 14, scale: 4 }).default('0').notNull(),
+	valueMicros: bigint({ mode: 'number' }).default(0).notNull(),
+	syncRunId: int(),
+	collectedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_ad_conv_action").on(table.provider, table.accountId, table.campaignExternalId, table.date, table.actionResource),
+]);
+
+// Execuções da recolha: retomáveis (cursor), sem credenciais no registo.
+export const integrationSyncRuns = mysqlTable("integration_sync_runs", {
+	id: int().autoincrement().primaryKey(),
+	provider: varchar({ length: 32 }).notNull(),
+	kind: mysqlEnum(['initial','hourly','nightly','monthly','manual']).notNull(),
+	status: mysqlEnum(['running','partial','done','failed','skipped']).default('running').notNull(),
+	rangeFrom: date({ mode: 'string' }),
+	rangeTo: date({ mode: 'string' }),
+	accountsTotal: int().default(0).notNull(),
+	accountsDone: int().default(0).notNull(),
+	rowsWritten: int().default(0).notNull(),
+	cursor: varchar({ length: 256 }),                // JSON {accountIdx, chunkIdx}
+	error: text(),
+	warnings: text(),
+	triggeredById: int(),
+	startedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	finishedAt: timestamp({ mode: 'string' }),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	index("idx_integration_sync_runs_provider").on(table.provider, table.startedAt),
+]);
 
 export const campaigns = mysqlTable("campaigns", {
 	id: int().autoincrement().primaryKey(),
@@ -428,9 +569,118 @@ export const expenses = mysqlTable("expenses", {
 	extractedByAi: tinyint().default(0),
 	notes: text(),
 	recurringTemplateId: int(), // se gerada por um modelo recorrente
+	// 0062 — fornecedor estruturado + circuito financeiro (fase 2 em diante).
+	supplierNif: varchar({ length: 32 }),
+	documentNumber: varchar({ length: 64 }),
+	paidBy: mysqlEnum(['company','employee']),           // quem suportou a compra
+	approvalStatus: mysqlEnum(['legacy','draft','submitted','approved','returned']).default('legacy').notNull(),
+	submittedAt: timestamp({ mode: 'string' }),
+	approvedAt: timestamp({ mode: 'string' }),
+	approvedById: int(),
+	returnReason: text(),
+	recurringPeriod: varchar({ length: 7 }),             // "YYYY-MM" (único por modelo)
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	index("idx_expenses_date").on(table.expenseDate),
+	index("idx_expenses_project").on(table.projectId),
+	index("idx_expenses_status").on(table.status),
+	uniqueIndex("uq_expenses_recurring_period").on(table.recurringTemplateId, table.recurringPeriod),
+]);
+
+// ─── Circuito financeiro (0062) — estrutura preparada; a UI chega por fases. ───
+
+// Contas por onde se paga: banco / cartão / caixa. `externalRef` liga à conta
+// equivalente na app de caixa (a reconciliação vive lá; aqui só se importa).
+export const financeAccounts = mysqlTable("finance_accounts", {
+	id: int().autoincrement().primaryKey(),
+	name: varchar({ length: 128 }).notNull(),
+	type: mysqlEnum(['bank','card','cash']).notNull(),
+	iban: varchar({ length: 34 }),
+	externalRef: varchar({ length: 64 }),
+	active: tinyint().default(1).notNull(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 });
+
+// Liquidações: uma despesa pode receber vários pagamentos (parciais) e um
+// pagamento pode vir de importação. `source`+`externalRef` únicos = reimportar
+// nunca duplica. Estornos: `reversalOfId` aponta para o original (que fica).
+export const expensePayments = mysqlTable("expense_payments", {
+	id: int().autoincrement().primaryKey(),
+	expenseId: int().notNull(),
+	accountId: int(),
+	amount: decimal({ precision: 10, scale: 2 }).notNull(),
+	paidOn: date({ mode: 'string' }).notNull(),
+	method: mysqlEnum(['cash','card','transfer','check','other']),
+	reference: varchar({ length: 128 }),
+	proofUrl: text(),
+	proofKey: varchar({ length: 512 }),
+	note: text(),
+	source: mysqlEnum(['manual','legacy','caixa_import','bank_import']).default('manual').notNull(),
+	importBatchId: int(),
+	externalRef: varchar({ length: 128 }),
+	reversalOfId: int(),
+	reversedAt: timestamp({ mode: 'string' }),
+	createdById: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	index("idx_expense_payments_expense").on(table.expenseId),
+	index("idx_expense_payments_batch").on(table.importBatchId),
+	uniqueIndex("uq_expense_payments_external").on(table.source, table.externalRef),
+]);
+
+// Orçamento mensal por centro de custos e/ou categoria (alertas 80%/100%).
+export const expenseBudgets = mysqlTable("expense_budgets", {
+	id: int().autoincrement().primaryKey(),
+	projectId: int(),
+	categoryId: int(),
+	period: varchar({ length: 7 }).notNull(),           // "YYYY-MM"
+	amount: decimal({ precision: 12, scale: 2 }).notNull(),
+	createdById: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_expense_budgets_scope").on(table.projectId, table.categoryId, table.period),
+]);
+
+// Histórico de cada despesa: quem mudou o quê (valores anteriores em JSON).
+export const expenseEvents = mysqlTable("expense_events", {
+	id: int().autoincrement().primaryKey(),
+	expenseId: int().notNull(),
+	type: varchar({ length: 32 }).notNull(),             // created|updated|status|paid|document|deleted|approved|...
+	userId: int(),
+	before: text(),
+	after: text(),
+	note: text(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	index("idx_expense_events_expense").on(table.expenseId),
+]);
+
+// Lotes de importação (caixa da app externa / extratos): idempotentes por hash.
+export const financeImportBatches = mysqlTable("finance_import_batches", {
+	id: int().autoincrement().primaryKey(),
+	source: mysqlEnum(['caixa','bank_csv']).notNull(),
+	accountId: int(),
+	fileName: varchar({ length: 256 }),
+	fileHash: varchar({ length: 64 }),
+	periodFrom: date({ mode: 'string' }),
+	periodTo: date({ mode: 'string' }),
+	rowsTotal: int().default(0).notNull(),
+	rowsImported: int().default(0).notNull(),
+	rowsMatched: int().default(0).notNull(),
+	status: mysqlEnum(['pending','done','failed']).default('pending').notNull(),
+	error: text(),
+	importedById: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_finance_import_hash").on(table.source, table.fileHash),
+]);
 
 // Despesas recorrentes (fixas do mês): geram automaticamente uma expense/mês.
 export const recurringExpenses = mysqlTable("recurring_expenses", {
@@ -791,6 +1041,18 @@ export const multiparkBookings = mysqlTable("multipark_bookings", {
 	notes: text(),
 	rawJson: text(),
 	bookingCreatedAt: timestamp({ mode: 'string' }),
+	// 0063 — atribuição ao Google Ads a partir do originUrl (regra local; nunca inventada)
+	gclid: varchar({ length: 128 }),
+	gbraid: varchar({ length: 128 }),
+	wbraid: varchar({ length: 128 }),
+	utmSource: varchar({ length: 128 }),
+	utmMedium: varchar({ length: 128 }),
+	utmCampaign: varchar({ length: 256 }),
+	utmContent: varchar({ length: 256 }),
+	utmTerm: varchar({ length: 256 }),
+	adCampaignExternalId: varchar({ length: 64 }),
+	adAttribution: mysqlEnum(['google_paid','unknown']),
+	adAttributedAt: timestamp({ mode: 'string' }),
 	syncedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
@@ -1388,6 +1650,11 @@ export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 export type InsertExpense = typeof expenses.$inferInsert;
 export type InsertExpenseCategory = typeof expenseCategories.$inferInsert;
+export type InsertExpensePayment = typeof expensePayments.$inferInsert;
+export type InsertExpenseBudget = typeof expenseBudgets.$inferInsert;
+export type InsertExpenseEvent = typeof expenseEvents.$inferInsert;
+export type InsertFinanceAccount = typeof financeAccounts.$inferInsert;
+export type InsertFinanceImportBatch = typeof financeImportBatches.$inferInsert;
 export type InsertProject = typeof projects.$inferInsert;
 export type InsertProjectEmployee = typeof projectEmployees.$inferInsert;
 export type InsertTask = typeof tasks.$inferInsert;
