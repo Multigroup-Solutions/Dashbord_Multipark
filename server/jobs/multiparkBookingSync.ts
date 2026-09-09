@@ -347,7 +347,15 @@ async function enrichBookingIfNeeded(externalId: string, apiKey: string): Promis
     if (b.vehicle?.color) update.vehicleColor = b.vehicle.color;
     if (b.vehicle?.vehicleType) update.vehicleType = b.vehicle.vehicleType;
     if (typeof b.origin === "string" && b.origin) update.origin = b.origin.slice(0, 64);
-    if (typeof b.originUrl === "string" && b.originUrl) update.originUrl = b.originUrl.slice(0, 512);
+    if (typeof b.originUrl === "string" && b.originUrl) {
+      update.originUrl = b.originUrl.slice(0, 512);
+      // Atribuição ao Google Ads (gclid/gbraid/wbraid/utm_*) — regra local, ver
+      // server/integrations/googleAds/attribution.ts. Sem parâmetros = "unknown".
+      try {
+        const { attributionFromUrl, attributionColumns } = await import("../integrations/googleAds/attribution");
+        Object.assign(update, attributionColumns(attributionFromUrl(b.originUrl)), { adAttributedAt: nowMysql() });
+      } catch { /* atribuição é opcional */ }
+    }
     // Campanha só existe no detalhe (/bookings/:id), não no /report.
     if (typeof b.campaignId === "string" && b.campaignId) update.campaignId = b.campaignId.slice(0, 128);
     if (typeof b.campaignName === "string" && b.campaignName) update.campaignName = b.campaignName.slice(0, 256);

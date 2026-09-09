@@ -57,7 +57,8 @@ export default function MarketingDashboard() {
 
   const activeCampaigns = useMemo(() => {
     if (!campaignsList) return 0;
-    return campaignsList.filter((c: any) => c.campaign.status === "active").length;
+    // o campo é campaignStatus (antes lia `status` e dava sempre 0)
+    return campaignsList.filter((c: any) => (c.campaign?.campaignStatus ?? c.campaign?.status) === "active").length;
   }, [campaignsList]);
 
   const totalReservations = (bookingStats as any)?.reservasMes ?? (bookingStats as any)?.total ?? 0;

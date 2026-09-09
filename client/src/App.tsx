@@ -17,6 +17,7 @@ import MarketingPage from "./pages/MarketingPage";
 import ShiftHandoverPage from "./pages/ShiftHandoverPage";
 import OperationalPage from "./pages/OperationalPage";
 import ApiKeysPage from "./pages/ApiKeysPage";
+import IntegrationsGoogleAdsPage from "./pages/IntegrationsGoogleAdsPage";
 import PermissionsPage from "./pages/PermissionsPage";
 import ModulesPage from "./pages/ModulesPage";
 import ProfilePage from "./pages/ProfilePage";
@@ -241,6 +242,9 @@ function Router() {
       </Route>
       <Route path="/marketing-dashboard">
         {() => (<DashboardLayout><MarketingDashboard /></DashboardLayout>)}
+      </Route>
+      <Route path="/integracoes/google-ads">
+        {() => (<DashboardLayout><IntegrationsGoogleAdsPage /></DashboardLayout>)}
       </Route>
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
