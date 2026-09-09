@@ -69,4 +69,4 @@ quantidades e tamanhos".
 - Cirúrgico: nenhum outro campo/procedure foi tocado; check-out inalterado.
 - Gates: `tsc --noEmit` limpo, `vite build` OK, suite 7 falhas pré-existentes
   de ambiente (as mesmas de sempre).
-- Sem commits git (por instrução). Migração 0064 corre sozinha no boot.
+- **Commit `1198eee` em `origin/updates-rafael`** (2026-09-09). Migração 0064 **NÃO foi corrida à mão** (sem `DATABASE_URL` real na máquina) — corre sozinha no boot do próximo deploy; para aplicar antes: `DATABASE_URL=... ./node_modules/.bin/tsx scripts/run-migration.ts 0064` (runner novo, idempotente).

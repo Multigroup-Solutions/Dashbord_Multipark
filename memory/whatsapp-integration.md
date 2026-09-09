@@ -86,7 +86,7 @@ por ainda não respondeu e por ainda não foi enviada mensagem nas últimas 24h"
   `AWS_S3_*`/`BLOB_READ_WRITE_TOKEN` o `storagePut` lança e a media fica só com `mediaId`.
 - Follow-up possível: botão "tentar descarregar de novo" (usa `mediaId`); suportar vídeo/documento.
 - Gates: `tsc --noEmit` limpo, `vite build` OK, suite com as 7 falhas pré-existentes de ambiente.
-  Sem commits git (por instrução). Migração 0064 corre no boot (`ensureRecentSchema`).
+  **Commit `1198eee` em `origin/updates-rafael`.** Migração 0064 corre no boot (`ensureRecentSchema`); não foi corrida à mão (sem `DATABASE_URL` real aqui) — `scripts/run-migration.ts 0064` aplica-a antes do deploy se quiseres.
 
 
 ### 2026-08-20 (b) — Inbox mostrava bolha VAZIA nos envios de template (conteúdo agora gravado)
