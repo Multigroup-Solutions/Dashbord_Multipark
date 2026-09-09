@@ -12,6 +12,7 @@ import { resolveExpenseVisibility, expenseConditions, whereAll, canSeeExpense, c
 import { parseExpenseAmount } from "../shared/expenseAmount";
 import { dayToMysql, lisbonToday } from "../shared/expensePeriods";
 import { expenseTotals } from "../shared/expenseTotals";
+import { getBillingData, getAnnualBreakdown } from "./finance/compat";
 import { transcribeAudio } from "./_core/voiceTranscription";
 import { getBookingHistory, getBookingsReport, getBookingTryAllParks } from "./multipark";
 import {
@@ -248,7 +249,6 @@ import {
   updateInvoice,
   deleteInvoice,
   getInvoiceStats,
-  getBillingData,
   getPartnershipAnalytics,
   // Partnerships
   createPartnership,
@@ -276,7 +276,6 @@ import {
   updateAnnualReport,
   deleteAnnualReport,
   generateAnnualSummary,
-  getAnnualBreakdown,
   // MultiPark
   getMultiparkBookings,
   getMultiparkBookingByExternalId,
@@ -6227,7 +6226,8 @@ export const appRouter = router({
     diagnose: protectedProcedure
       .input(z.object({ from: z.string(), to: z.string(), projectId: z.number().optional() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        // Somas de receita — mesma restrição de totais que a Faturação
+        await requireFinanceTotals(ctx.user, "admin");
         const { diagnoseBilling } = await import("./db");
         return diagnoseBilling(input);
       }),
@@ -6570,9 +6570,10 @@ export const appRouter = router({
     breakdown: protectedProcedure.input(z.object({
       year: z.number(),
       projectId: z.number().optional(),
-    })).query(({ ctx, input }) => {
-      // Lucros, salários e IVA — reservado à administração
-      requireRole(ctx.user.role, "admin");
+    })).query(async ({ ctx, input }) => {
+      // Lucros, salários e IVA — reservado à administração e respeita o deny
+      // individual de totais (antes o Anual contornava a restrição da Faturação)
+      await requireFinanceTotals(ctx.user, "admin");
       return getAnnualBreakdown(input.year, input.projectId);
     }),
 
