@@ -66,7 +66,7 @@ export default function MarketingPage() {
           <div>
             <p className="text-muted-foreground">Campanhas, custos e performance</p>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Gasto diário atualiza-se sozinho via email agendado para <code className="bg-muted px-1 rounded">campanhas@multipark.pt</code> (CSV com Data + Campanha + Custo).
+              O gasto é o custo importado (Google Ads API quando ligada; senão CSV/email). O estado da recolha aparece no Dashboard; a ligação faz-se em <a href="/integracoes/google-ads" className="underline">Integrações → Google Ads</a>.
             </p>
           </div>
           {isAdmin && (
@@ -167,13 +167,19 @@ function ImportCampaignCsvDialog({ onClose }: { onClose: () => void }) {
 
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────
 
+// Dia de calendário em Lisboa (o toISOString() dava o último dia do mês anterior no verão).
+function lisbonDay(d = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(d);
+  const g = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${g("year")}-${g("month")}-${g("day")}`;
+}
+
 function DashboardTab() {
   const globalFilters = useGlobalFilters();
-  const thisMonth = new Date();
-  const firstDay = new Date(thisMonth.getFullYear(), thisMonth.getMonth(), 1).toISOString().slice(0, 10);
-  const lastDay = new Date(thisMonth.getFullYear(), thisMonth.getMonth() + 1, 0).toISOString().slice(0, 10);
-  const [from, setFrom] = useState(firstDay);
-  const [to, setTo] = useState(lastDay);
+  // Período inicial: mês atual ATÉ HOJE (não até ao fim do mês)
+  const today = lisbonDay();
+  const [from, setFrom] = useState(`${today.slice(0, 7)}-01`);
+  const [to, setTo] = useState(today);
   const [projectId, setProjectId] = useState<string>("");
 
   // Sync global filter to local project filter
@@ -237,15 +243,26 @@ function DashboardTab() {
     return Array.from(map.values()).map(d => ({ ...d, name: PLATFORM_LABELS[d.platform] || d.platform }));
   }, [allStats]);
 
-  const realBookings = bookingRevenue?.total ?? 0;
-  const realRevenue = bookingRevenue?.revenue ?? 0;
-  const totalAdSpend = (stats?.totalSpend ?? 0) + (stats?.totalMktExpenses ?? 0);
-  const costPerRealBooking = realBookings > 0 ? totalAdSpend / realBookings : 0;
-  // ROAS = receita / gasto. > 1 = lucro, < 1 = sangrento.
-  const roas = totalAdSpend > 0 ? realRevenue / totalAdSpend : 0;
+  const st: any = stats;
+  const eur = (v: number | null | undefined) => (v == null ? "—" : `${Number(v).toFixed(2)} €`);
+  const x = (v: number | null | undefined) => (v == null ? "—" : `${Number(v).toFixed(2)}×`);
+  const cov = st?.coverage;
+  const covLabel = !cov ? "" : cov.status === "none" ? "Sem dados de anúncios no período" : cov.status === "partial" ? `Dados incompletos: ${cov.missingDays} dia(s) sem custo importado` : cov.status === "stale" ? "Recolha atrasada" : "Cobertura completa";
+  const covCls = !cov || cov.status === "ok" ? "border-emerald-200 bg-emerald-50 text-emerald-900" : cov.status === "none" ? "border-muted bg-muted/40 text-muted-foreground" : "border-amber-300 bg-amber-50 text-amber-900";
 
   return (
     <div className="space-y-6 mt-4">
+      {/* Estado dos dados: última atualização, cobertura, origem */}
+      {st && (
+        <div className={`rounded-md border px-3 py-2 text-xs flex flex-wrap gap-x-4 gap-y-1 ${covCls}`} role="status">
+          <span className="font-medium">{covLabel}</span>
+          <span>Última recolha: {cov?.lastSuccessfulSyncAt ? fmtPTDateTime(cov.lastSuccessfulSyncAt) : "nunca"}</span>
+          <span>Último dia completo: {cov?.lastCompleteDay ?? "—"}</span>
+          <span>Origem: {st.spendSource === "api" ? "Google Ads API" : st.spendSource === "legacy" ? "importação CSV/email" : st.spendSource === "mixed" ? "API + importação antiga" : "—"}</span>
+          {st.unmappedCampaigns > 0 && <span>{st.unmappedCampaigns} campanha(s) sem marca/cidade (contam no total geral)</span>}
+          {st.connection !== "connected" && <a href="/integracoes/google-ads" className="underline">Ligar Google Ads</a>}
+        </div>
+      )}
       {/* Filters */}
       <div className="flex flex-wrap items-end gap-3">
         <div>
@@ -268,42 +285,49 @@ function DashboardTab() {
         </div>
       </div>
 
-      {/* KPIs - Campanhas */}
+      {/* KPIs - Gasto (custo importado) e orçamento como indicador separado */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <KPICard icon={<DollarSign />} label="Gasto Total Ads" value={`${(stats?.totalSpend ?? 0).toFixed(2)} €`} />
-        <KPICard icon={<Target />} label="Conversões (Campanhas)" value={String(stats?.totalReservations ?? 0)} />
-        <KPICard icon={<Receipt />} label="Despesas Marketing" value={`${(stats?.totalMktExpenses ?? 0).toFixed(2)} €`} />
-        <KPICard icon={<Megaphone />} label="Campanhas" value={String(stats?.campaignCount ?? 0)} />
+        <KPICard icon={<DollarSign />} label="Gasto Google Ads" value={st ? eur(st.spend) : "…"} />
+        <KPICard icon={<Target />} label="Orçamento diário × dias (indicador)" value={st ? eur(st.budgetEstimate) : "…"} />
+        <KPICard icon={<Receipt />} label="Despesas Marketing (faturas)" value={st ? eur(st.mktExpenses) : "…"} />
+        <KPICard icon={<Megaphone />} label="Campanhas com dados" value={String(st?.campaignCount ?? "…")} />
       </div>
 
-      {/* KPIs - Reservas Reais */}
+      {/* Reservas reais (referência) vs conversões Google (complemento) */}
       <Card className="border-green-200 bg-green-50/50">
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-medium text-green-800">Reservas Reais (MultiPark)</CardTitle>
+          <CardTitle className="text-sm font-medium text-green-800">Reservas reais Multipark · por data de criação · valor reservado (não receita realizada)</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
             <div>
-              <p className="text-xs text-muted-foreground">Total Reservas</p>
-              <p className="text-2xl font-bold text-green-700">{realBookings}</p>
+              <p className="text-xs text-muted-foreground">Reservas totais</p>
+              <p className="text-2xl font-bold text-green-700">{st?.bookingsTotal ?? "…"}</p>
+              <p className="text-[10px] text-muted-foreground">sem canceladas</p>
             </div>
             <div>
-              <p className="text-xs text-muted-foreground">Receita Total</p>
-              <p className="text-2xl font-bold text-green-700">{realRevenue.toFixed(2)} €</p>
+              <p className="text-xs text-muted-foreground">Atribuídas a Google Ads</p>
+              <p className="text-2xl font-bold text-green-700">{st?.bookingsAttributed ?? "…"}</p>
+              <p className="text-[10px] text-muted-foreground">gclid / utm pago no URL de origem</p>
             </div>
             <div>
-              <p className="text-xs text-muted-foreground">Custo Aquisição / Reserva</p>
-              <p className="text-2xl font-bold text-amber-600">{costPerRealBooking.toFixed(2)} €</p>
-              <p className="text-[10px] text-muted-foreground">inclui reservas orgânicas</p>
+              <p className="text-xs text-muted-foreground">Sem atribuição</p>
+              <p className="text-2xl font-bold text-muted-foreground">{st?.bookingsUnattributed ?? "…"}</p>
+              <p className="text-[10px] text-muted-foreground">origem não demonstrável</p>
             </div>
             <div>
-              <p className="text-xs text-muted-foreground">Receita Média / Reserva</p>
-              <p className="text-2xl font-bold text-green-700">{realBookings > 0 ? (realRevenue / realBookings).toFixed(2) : "0.00"} €</p>
+              <p className="text-xs text-muted-foreground">Custo / reserva atribuída</p>
+              <p className="text-2xl font-bold text-amber-600">{st ? eur(st.costPerAttributedBooking) : "…"}</p>
             </div>
             <div>
-              <p className="text-xs text-muted-foreground">ROAS</p>
-              <p className={`text-2xl font-bold ${roas >= 1 ? "text-green-700" : "text-red-600"}`}>{roas.toFixed(2)}×</p>
-              <p className="text-[10px] text-muted-foreground">receita / gasto total</p>
+              <p className="text-xs text-muted-foreground">ROAS reservas atribuídas</p>
+              <p className={`text-2xl font-bold ${(st?.roasAttributed ?? 0) >= 1 ? "text-green-700" : "text-red-600"}`}>{st ? x(st.roasAttributed) : "…"}</p>
+              <p className="text-[10px] text-muted-foreground">receita atribuída / gasto · não é lucro</p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Custo publicitário / reserva total</p>
+              <p className="text-2xl font-bold text-muted-foreground">{st ? eur(st.adCostPerBooking) : "…"}</p>
+              <p className="text-[10px] text-muted-foreground">indicador global, inclui orgânicas</p>
             </div>
           </div>
           {bookingRevenue && bookingRevenue.byProject.length > 0 && (
@@ -319,11 +343,12 @@ function DashboardTab() {
       </Card>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <KPICard icon={<Eye />} label="Impressões" value={(stats?.totalImpressions ?? 0).toLocaleString()} />
-        <KPICard icon={<MousePointerClick />} label="Cliques" value={(stats?.totalClicks ?? 0).toLocaleString()} />
-        <KPICard icon={<TrendingUp />} label="Custo / Conversão (Ads)" value={`${(stats?.costPerReservation ?? 0).toFixed(2)} €`} />
-        <KPICard icon={<ArrowUpRight />} label="Valor Médio Conversão" value={`${(stats?.avgConversionValue ?? 0).toFixed(2)} €`} />
+        <KPICard icon={<Eye />} label="Impressões" value={(st?.impressions ?? 0).toLocaleString("pt-PT")} />
+        <KPICard icon={<MousePointerClick />} label="Cliques · CTR" value={`${(st?.clicks ?? 0).toLocaleString("pt-PT")} · ${st?.ctr != null ? (st.ctr * 100).toFixed(2) + "%" : "—"}`} />
+        <KPICard icon={<TrendingUp />} label="Conversões Google · custo/conv." value={`${st ? Number(st.conversionsGoogle ?? 0).toFixed(2) : "…"} · ${st ? eur(st.costPerConversionGoogle) : ""}`} />
+        <KPICard icon={<ArrowUpRight />} label="ROAS reportado pela Google" value={st ? x(st.roasGoogle) : "…"} />
       </div>
+      <p className="text-[11px] text-muted-foreground -mt-3">As conversões Google seguem as regras de atribuição e de data da Google; não têm de coincidir com as reservas Multipark. ROAS não é lucro.</p>
 
       {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -571,7 +596,7 @@ function CreateMktExpenseDialog({ onClose }: { onClose: () => void }) {
 // ─── CAMPANHAS INTERNAS ───────────────────────────────────────────────────────
 function InternalCampaignsTab() {
   const utils = trpc.useUtils();
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = lisbonDay();
   const monthStartStr = todayStr.slice(0, 8) + "01";
   const [from, setFrom] = useState(monthStartStr);
   const [to, setTo] = useState(todayStr);

@@ -19,6 +19,7 @@ import {
   listSuspiciousTimeRecords, reviewTimeRecord, insertTimeRecordAtomic,
   createPayrollRun, listPayrollRuns, getPayrollRun, transitionPayrollRun,
 } from "./rhService";
+import { googleAdsRouter } from "./integrations/googleAds/router";
 import { transcribeAudio } from "./_core/voiceTranscription";
 import { getBookingHistory, getBookingsReport, getBookingTryAllParks } from "./multipark";
 import {
@@ -3399,13 +3400,23 @@ export const appRouter = router({
         return { ...res, parseErrors: errors };
       }),
 
+    // Fonte única (server/integrations/googleAds/marketingStats): gasto = custo
+    // importado (nunca orçamento×dias), reservas reais por data de criação,
+    // atribuídas vs sem atribuição, conversões Google à parte, cobertura.
     dashboard: protectedProcedure
       .input(z.object({ from: z.string().optional(), to: z.string().optional(), projectId: z.number().optional() }).optional())
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
-        const from = input?.from ? new Date(input.from) : undefined;
-        const to = input?.to ? new Date(input.to) : undefined;
-        return getMarketingDashboardStats({ from, to, projectId: input?.projectId });
+        const { getMarketingStats } = await import("./integrations/googleAds/marketingStats");
+        const { lisbonToday } = await import("../shared/expensePeriods");
+        const today = lisbonToday();
+        const from = input?.from || `${today.slice(0, 7)}-01`;
+        const to = input?.to || today;
+        try {
+          return await getMarketingStats({ from, to, projectId: input?.projectId });
+        } catch (e: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) });
+        }
       }),
 
     bookingRevenue: protectedProcedure
@@ -3755,7 +3766,7 @@ export const appRouter = router({
             spend: r.spend,
             impressions: r.impressions ?? 0,
             clicks: r.clicks ?? 0,
-            conversions: r.conversions ?? 0,
+            conversions: String(r.conversions ?? 0),
             conversionValue: r.conversionValue ?? "0",
             cpc: r.clicks && r.clicks > 0 ? (parseFloat(r.spend) / r.clicks).toFixed(4) : null,
             ctr: r.impressions && r.impressions > 0 ? ((r.clicks ?? 0) / r.impressions * 100).toFixed(4) : null,
@@ -4549,6 +4560,11 @@ export const appRouter = router({
   }),
 
   // ─── API KEYS MANAGEMENT ──────────────────────────────────────────────────
+  // ─── INTEGRAÇÕES (Google Ads) ─────────────────────────────────────────────
+  integrations: router({
+    googleAds: googleAdsRouter,
+  }),
+
   apiKeys: router({
     list: protectedProcedure.query(async ({ ctx }) => {
       requireRole(ctx.user.role, "super_admin");
