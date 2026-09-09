@@ -6,9 +6,9 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SearchableSelect } from "@/components/ui/searchable-select";
-import { Trash2 } from "lucide-react";
+import { Trash2, PlayCircle, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { format, startOfMonth, endOfMonth } from "date-fns";
+import { comparePeriods, lisbonToday } from "@shared/expensePeriods";
 
 const fmtEur = (v: any) => parseFloat(String(v || 0)).toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
 
@@ -22,12 +22,28 @@ export function RecurringExpensesDialog({ open, onClose, categories, projects }:
   const update = trpc.expenses.recurring.update.useMutation({ onSuccess: refresh, onError: (e) => toast.error(e.message) });
   const remove = trpc.expenses.recurring.remove.useMutation({ onSuccess: () => { refresh(); toast.success("Removido"); }, onError: (e) => toast.error(e.message) });
   const projOpts = [{ value: "", label: "sem projeto" }, ...projects.map((p: any) => ({ value: String(p.id), label: p.name }))];
+  // Lançamento manual do mês corrente (o cron diário faz o mesmo; é
+  // idempotente — nunca duplica).
+  const generate = trpc.expenses.recurring.generateMonth.useMutation({
+    onSuccess: (r) => {
+      utils.expenses.list.invalidate(); utils.expenses.stats.invalidate();
+      toast.success(r.created > 0 ? `${r.created} despesa(s) lançada(s) para ${r.period}` : `Nada a lançar: as de ${r.period} já existem`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const [ty, tm] = lisbonToday().split("-").map(Number);
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-2xl">
-        <DialogHeader><DialogTitle>Despesas recorrentes (fixas do mes)</DialogTitle></DialogHeader>
-        <p className="text-xs text-muted-foreground -mt-2">Cada modelo gera automaticamente uma despesa por mes (no dia indicado). Confirmas/pagas depois na lista normal.</p>
+        <DialogHeader><DialogTitle>Despesas recorrentes (fixas do mês)</DialogTitle></DialogHeader>
+        <div className="flex items-start justify-between gap-3 -mt-2">
+          <p className="text-xs text-muted-foreground">Cada modelo gera uma despesa por mês (no dia indicado), lançada automaticamente pelo processo diário. Confirmas/pagas depois na lista normal.</p>
+          <Button size="sm" variant="outline" className="shrink-0 gap-1.5" disabled={generate.isPending} onClick={() => generate.mutate({ year: ty, month: tm })}>
+            {generate.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PlayCircle className="h-3.5 w-3.5" />}
+            Lançar as deste mês
+          </Button>
+        </div>
         <div className="grid grid-cols-2 gap-2 border rounded p-3 bg-muted/30">
           <div className="col-span-2"><Label className="text-xs">Descricao</Label><Input value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder="ex: Renda escritorio" /></div>
           <div><Label className="text-xs">Fornecedor</Label><Input value={f.supplier} onChange={(e) => setF({ ...f, supplier: e.target.value })} /></div>
@@ -62,17 +78,27 @@ export function RecurringExpensesDialog({ open, onClose, categories, projects }:
   );
 }
 
-// ─── COMPARAR PERIODOS ────────────────────────────────────────────────────────
+// ─── COMPARAR PERÍODOS ────────────────────────────────────────────────────────
+// Por defeito compara períodos EQUIVALENTES: mês até hoje vs. os mesmos dias
+// do mês anterior (comparar setembro inteiro com agosto até ao dia 9 dava
+// sempre "gastaste menos"). Meses completos são uma opção. Os totais vêm do
+// servidor com a MESMA visibilidade e o MESMO centro de custos (com
+// descendentes) da lista; canceladas ficam fora.
 export function CompareExpensesDialog({ open, onClose, categories, projectId }: { open: boolean; onClose: () => void; categories: any[]; projectId?: number }) {
-  const today = new Date();
-  const ym = (d: Date) => ({ from: format(startOfMonth(d), "yyyy-MM-dd"), to: format(endOfMonth(d), "yyyy-MM-dd") });
-  const [a, setA] = useState(ym(today));
-  const [b, setB] = useState(ym(new Date(today.getFullYear(), today.getMonth() - 1, 1)));
+  const today = lisbonToday();
+  const [mode, setMode] = useState<"month_to_date" | "full_months">("month_to_date");
+  const [offset, setOffset] = useState<1 | 12>(1);
+  const preset = useMemo(() => comparePeriods(today, mode, offset), [today, mode, offset]);
+  const [custom, setCustom] = useState<{ a: { from: string; to: string }; b: { from: string; to: string } } | null>(null);
+  const a = custom?.a ?? preset.a;
+  const b = custom?.b ?? preset.b;
   const sumA = trpc.expenses.summary.useQuery({ from: a.from, to: a.to, projectId }, { enabled: open });
   const sumB = trpc.expenses.summary.useQuery({ from: b.from, to: b.to, projectId }, { enabled: open });
   const catName = (id: number | null) => id == null ? "Sem categoria" : (categories.find((c: any) => c.id === id)?.name ?? "#" + id);
+  const ready = sumA.data != null && sumB.data != null && !sumA.isError && !sumB.isError;
   const totalA = sumA.data?.total ?? 0, totalB = sumB.data?.total ?? 0;
   const delta = totalA - totalB; const pct = totalB > 0 ? (delta / totalB * 100) : null;
+  const err = sumA.error ?? sumB.error;
 
   const cats = useMemo(() => {
     const m = new Map<any, { a: number; b: number }>();
@@ -81,29 +107,51 @@ export function CompareExpensesDialog({ open, onClose, categories, projectId }: 
     return [...m.entries()].map(([id, v]) => ({ id, ...v })).sort((x, y) => (y.a + y.b) - (x.a + x.b));
   }, [sumA.data, sumB.data]);
 
+  const fmtDay = (d: string) => d.split("-").reverse().join("/");
+  const label = (p: { from: string; to: string }) => `${fmtDay(p.from)} – ${fmtDay(p.to)}`;
+  const choose = (m: typeof mode, o: typeof offset) => { setMode(m); setOffset(o); setCustom(null); };
+
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-2xl">
-        <DialogHeader><DialogTitle>Comparar periodos</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>Comparar períodos</DialogTitle></DialogHeader>
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" onClick={() => { setA(ym(today)); setB(ym(new Date(today.getFullYear(), today.getMonth() - 1, 1))); }}>Este mes vs anterior</Button>
-          <Button size="sm" variant="outline" onClick={() => { setA(ym(today)); setB(ym(new Date(today.getFullYear() - 1, today.getMonth(), 1))); }}>Mes homologo (ano anterior)</Button>
+          <Button size="sm" variant={!custom && mode === "month_to_date" && offset === 1 ? "default" : "outline"} onClick={() => choose("month_to_date", 1)}>Mês até hoje vs. mesmos dias do anterior</Button>
+          <Button size="sm" variant={!custom && mode === "full_months" && offset === 1 ? "default" : "outline"} onClick={() => choose("full_months", 1)}>Meses completos</Button>
+          <Button size="sm" variant={!custom && offset === 12 ? "default" : "outline"} onClick={() => choose(mode, 12)}>Homólogo (ano anterior)</Button>
         </div>
+        {!custom && mode === "month_to_date" && (
+          <p className="text-xs text-muted-foreground -mt-1">A comparar {label(a)} com {label(b)} — os mesmos dias, para a comparação ser justa.</p>
+        )}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="border rounded p-2">
-            <div className="text-xs font-medium mb-1">Periodo A</div>
-            <div className="flex flex-wrap gap-1"><Input type="date" className="h-8" value={a.from} onChange={(e) => setA({ ...a, from: e.target.value })} /><Input type="date" className="h-8" value={a.to} onChange={(e) => setA({ ...a, to: e.target.value })} /></div>
-            <div className="text-2xl font-bold mt-2">{fmtEur(totalA)}</div><div className="text-[11px] text-muted-foreground">{sumA.data?.count ?? 0} despesas</div>
+            <div className="text-xs font-medium mb-1">Período A</div>
+            <div className="flex flex-wrap gap-1">
+              <Input type="date" className="h-8" aria-label="Início do período A" value={a.from} onChange={(e) => setCustom({ a: { ...a, from: e.target.value }, b })} />
+              <Input type="date" className="h-8" aria-label="Fim do período A" value={a.to} onChange={(e) => setCustom({ a: { ...a, to: e.target.value }, b })} />
+            </div>
+            <div className="text-2xl font-bold mt-2">{sumA.isLoading ? "…" : sumA.isError ? "—" : fmtEur(totalA)}</div>
+            <div className="text-[11px] text-muted-foreground">{sumA.data ? `${sumA.data.count} despesas${sumA.data.cancelledCount ? ` · ${sumA.data.cancelledCount} cancelada(s) fora` : ""}` : ""}</div>
           </div>
           <div className="border rounded p-2">
-            <div className="text-xs font-medium mb-1">Periodo B</div>
-            <div className="flex flex-wrap gap-1"><Input type="date" className="h-8" value={b.from} onChange={(e) => setB({ ...b, from: e.target.value })} /><Input type="date" className="h-8" value={b.to} onChange={(e) => setB({ ...b, to: e.target.value })} /></div>
-            <div className="text-2xl font-bold mt-2">{fmtEur(totalB)}</div><div className="text-[11px] text-muted-foreground">{sumB.data?.count ?? 0} despesas</div>
+            <div className="text-xs font-medium mb-1">Período B</div>
+            <div className="flex flex-wrap gap-1">
+              <Input type="date" className="h-8" aria-label="Início do período B" value={b.from} onChange={(e) => setCustom({ a, b: { ...b, from: e.target.value } })} />
+              <Input type="date" className="h-8" aria-label="Fim do período B" value={b.to} onChange={(e) => setCustom({ a, b: { ...b, to: e.target.value } })} />
+            </div>
+            <div className="text-2xl font-bold mt-2">{sumB.isLoading ? "…" : sumB.isError ? "—" : fmtEur(totalB)}</div>
+            <div className="text-[11px] text-muted-foreground">{sumB.data ? `${sumB.data.count} despesas${sumB.data.cancelledCount ? ` · ${sumB.data.cancelledCount} cancelada(s) fora` : ""}` : ""}</div>
           </div>
         </div>
-        <div className={"text-center rounded p-2 " + (delta > 0 ? "bg-red-50 text-red-700" : delta < 0 ? "bg-emerald-50 text-emerald-700" : "bg-muted")}>
-          Variacao: <strong>{delta >= 0 ? "+" : ""}{fmtEur(delta)}</strong> {pct != null && <>({delta >= 0 ? "+" : ""}{pct.toFixed(1)}%)</>}
-        </div>
+        {err ? (
+          <div className="text-center rounded p-2 bg-red-50 text-red-700 text-sm" role="alert">{String(err.message).slice(0, 160)}</div>
+        ) : ready ? (
+          <div className={"text-center rounded p-2 " + (delta > 0 ? "bg-red-50 text-red-700" : delta < 0 ? "bg-emerald-50 text-emerald-700" : "bg-muted")}>
+            Variação: <strong>{delta >= 0 ? "+" : ""}{fmtEur(delta)}</strong> {pct != null && <>({delta >= 0 ? "+" : ""}{pct.toFixed(1)}%)</>}
+          </div>
+        ) : (
+          <div className="text-center rounded p-2 bg-muted text-sm text-muted-foreground">A calcular…</div>
+        )}
         <div className="max-h-64 overflow-auto">
           <table className="w-full text-sm">
             <thead><tr className="text-left text-xs text-muted-foreground border-b"><th className="p-1">Categoria</th><th className="p-1 text-right">A</th><th className="p-1 text-right">B</th><th className="p-1 text-right">Delta</th></tr></thead>

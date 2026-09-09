@@ -428,9 +428,118 @@ export const expenses = mysqlTable("expenses", {
 	extractedByAi: tinyint().default(0),
 	notes: text(),
 	recurringTemplateId: int(), // se gerada por um modelo recorrente
+	// 0062 — fornecedor estruturado + circuito financeiro (fase 2 em diante).
+	supplierNif: varchar({ length: 32 }),
+	documentNumber: varchar({ length: 64 }),
+	paidBy: mysqlEnum(['company','employee']),           // quem suportou a compra
+	approvalStatus: mysqlEnum(['legacy','draft','submitted','approved','returned']).default('legacy').notNull(),
+	submittedAt: timestamp({ mode: 'string' }),
+	approvedAt: timestamp({ mode: 'string' }),
+	approvedById: int(),
+	returnReason: text(),
+	recurringPeriod: varchar({ length: 7 }),             // "YYYY-MM" (único por modelo)
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	index("idx_expenses_date").on(table.expenseDate),
+	index("idx_expenses_project").on(table.projectId),
+	index("idx_expenses_status").on(table.status),
+	uniqueIndex("uq_expenses_recurring_period").on(table.recurringTemplateId, table.recurringPeriod),
+]);
+
+// ─── Circuito financeiro (0062) — estrutura preparada; a UI chega por fases. ───
+
+// Contas por onde se paga: banco / cartão / caixa. `externalRef` liga à conta
+// equivalente na app de caixa (a reconciliação vive lá; aqui só se importa).
+export const financeAccounts = mysqlTable("finance_accounts", {
+	id: int().autoincrement().primaryKey(),
+	name: varchar({ length: 128 }).notNull(),
+	type: mysqlEnum(['bank','card','cash']).notNull(),
+	iban: varchar({ length: 34 }),
+	externalRef: varchar({ length: 64 }),
+	active: tinyint().default(1).notNull(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 });
+
+// Liquidações: uma despesa pode receber vários pagamentos (parciais) e um
+// pagamento pode vir de importação. `source`+`externalRef` únicos = reimportar
+// nunca duplica. Estornos: `reversalOfId` aponta para o original (que fica).
+export const expensePayments = mysqlTable("expense_payments", {
+	id: int().autoincrement().primaryKey(),
+	expenseId: int().notNull(),
+	accountId: int(),
+	amount: decimal({ precision: 10, scale: 2 }).notNull(),
+	paidOn: date({ mode: 'string' }).notNull(),
+	method: mysqlEnum(['cash','card','transfer','check','other']),
+	reference: varchar({ length: 128 }),
+	proofUrl: text(),
+	proofKey: varchar({ length: 512 }),
+	note: text(),
+	source: mysqlEnum(['manual','legacy','caixa_import','bank_import']).default('manual').notNull(),
+	importBatchId: int(),
+	externalRef: varchar({ length: 128 }),
+	reversalOfId: int(),
+	reversedAt: timestamp({ mode: 'string' }),
+	createdById: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	index("idx_expense_payments_expense").on(table.expenseId),
+	index("idx_expense_payments_batch").on(table.importBatchId),
+	uniqueIndex("uq_expense_payments_external").on(table.source, table.externalRef),
+]);
+
+// Orçamento mensal por centro de custos e/ou categoria (alertas 80%/100%).
+export const expenseBudgets = mysqlTable("expense_budgets", {
+	id: int().autoincrement().primaryKey(),
+	projectId: int(),
+	categoryId: int(),
+	period: varchar({ length: 7 }).notNull(),           // "YYYY-MM"
+	amount: decimal({ precision: 12, scale: 2 }).notNull(),
+	createdById: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_expense_budgets_scope").on(table.projectId, table.categoryId, table.period),
+]);
+
+// Histórico de cada despesa: quem mudou o quê (valores anteriores em JSON).
+export const expenseEvents = mysqlTable("expense_events", {
+	id: int().autoincrement().primaryKey(),
+	expenseId: int().notNull(),
+	type: varchar({ length: 32 }).notNull(),             // created|updated|status|paid|document|deleted|approved|...
+	userId: int(),
+	before: text(),
+	after: text(),
+	note: text(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	index("idx_expense_events_expense").on(table.expenseId),
+]);
+
+// Lotes de importação (caixa da app externa / extratos): idempotentes por hash.
+export const financeImportBatches = mysqlTable("finance_import_batches", {
+	id: int().autoincrement().primaryKey(),
+	source: mysqlEnum(['caixa','bank_csv']).notNull(),
+	accountId: int(),
+	fileName: varchar({ length: 256 }),
+	fileHash: varchar({ length: 64 }),
+	periodFrom: date({ mode: 'string' }),
+	periodTo: date({ mode: 'string' }),
+	rowsTotal: int().default(0).notNull(),
+	rowsImported: int().default(0).notNull(),
+	rowsMatched: int().default(0).notNull(),
+	status: mysqlEnum(['pending','done','failed']).default('pending').notNull(),
+	error: text(),
+	importedById: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_finance_import_hash").on(table.source, table.fileHash),
+]);
 
 // Despesas recorrentes (fixas do mês): geram automaticamente uma expense/mês.
 export const recurringExpenses = mysqlTable("recurring_expenses", {
@@ -1388,6 +1497,11 @@ export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 export type InsertExpense = typeof expenses.$inferInsert;
 export type InsertExpenseCategory = typeof expenseCategories.$inferInsert;
+export type InsertExpensePayment = typeof expensePayments.$inferInsert;
+export type InsertExpenseBudget = typeof expenseBudgets.$inferInsert;
+export type InsertExpenseEvent = typeof expenseEvents.$inferInsert;
+export type InsertFinanceAccount = typeof financeAccounts.$inferInsert;
+export type InsertFinanceImportBatch = typeof financeImportBatches.$inferInsert;
 export type InsertProject = typeof projects.$inferInsert;
 export type InsertProjectEmployee = typeof projectEmployees.$inferInsert;
 export type InsertTask = typeof tasks.$inferInsert;

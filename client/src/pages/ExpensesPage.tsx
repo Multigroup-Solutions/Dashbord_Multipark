@@ -69,9 +69,33 @@ import {
 import { toast } from "sonner";
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth } from "date-fns";
 import { pt } from "date-fns/locale";
-import { fileHref } from "@/lib/fileHref";
 import DateRangeNav from "@/components/DateRangeNav";
 import { useTableSort, Th } from "@/components/SortableTable";
+import { Switch } from "@/components/ui/switch";
+import { expenseTotals } from "@shared/expenseTotals";
+import { parseExpenseAmount } from "@shared/expenseAmount";
+
+const PAID_BY_LABELS: Record<string, string> = { company: "Empresa", employee: "Colaborador" };
+
+/**
+ * Abre o comprovativo por uma URL pedida ao servidor (assinada no S3, com a
+ * permissão do detalhe) — a URL pública gravada deixa de ser usada.
+ * Abre a janela ANTES do pedido para o bloqueador de pop-ups não a travar.
+ */
+function useOpenExpenseDocument() {
+  const utils = trpc.useUtils();
+  return async (id: number) => {
+    const w = window.open("", "_blank");
+    try {
+      const r = await utils.client.expenses.documentUrl.query({ id });
+      if (r?.url) { if (w) w.location.href = r.url; else window.open(r.url, "_blank"); }
+      else { w?.close(); toast.error("Esta despesa não tem comprovativo"); }
+    } catch (e: any) {
+      w?.close();
+      toast.error("Não foi possível abrir o comprovativo", { description: String(e?.message ?? "").slice(0, 160) });
+    }
+  };
+}
 
 const STATUS_CONFIG: Record<string, { label: string; icon: any; className: string }> = {
   pending: { label: "Pendente", icon: Clock, className: "bg-yellow-100 text-yellow-800 border-yellow-200" },
@@ -202,11 +226,13 @@ export default function ExpensesPage() {
     setEndDate(end);
   };
 
-  // Pesquisa com ≥3 caracteres alarga automaticamente a todo o histórico —
-  // senão o default "semana atual" esconderia resultados antigos.
-  const searchAllHistory = search.trim().length >= 3;
-  const effectiveStartDate = searchAllHistory ? "" : startDate;
-  const effectiveEndDate = searchAllHistory ? "" : endDate;
+  // A pesquisa respeita o período escolhido; "todo o histórico" é uma opção
+  // EXPLÍCITA (antes ≥3 caracteres alargavam sozinhos e os totais mudavam sem
+  // aviso).
+  const [allHistory, setAllHistory] = useState(false);
+  const effectiveStartDate = allHistory ? "" : startDate;
+  const effectiveEndDate = allHistory ? "" : endDate;
+  const openDocument = useOpenExpenseDocument();
 
   // Matriz de permissões (Jorge, 2026-08-04): backoffice/team_leader só
   // INSEREM (modo input, sem lista/totais); supervisor vê as suas + as do
@@ -217,7 +243,7 @@ export default function ExpensesPage() {
   const canDelete = role === "super_admin";
 
   // Queries
-  const { data: expensesList, isLoading } = trpc.expenses.list.useQuery({
+  const { data: expensesList, isLoading, isError, error: listError, refetch: refetchList } = trpc.expenses.list.useQuery({
     search: search || undefined,
     status: (filterStatus && filterStatus !== "all") ? filterStatus : undefined,
     categoryId: (filterCategory && filterCategory !== "all") ? parseInt(filterCategory) : undefined,
@@ -250,15 +276,13 @@ export default function ExpensesPage() {
 
   const isAdmin = canManage;
 
-  // KPI calculations
-  const kpis = useMemo(() => {
-    const items = expensesList ?? [];
-    const total = items.reduce((s, e) => s + parseFloat(String(e.expense.amount ?? 0)), 0);
-    const pending = items.filter(e => e.expense.status === "pending").reduce((s, e) => s + parseFloat(String(e.expense.amount ?? 0)), 0);
-    const paid = items.filter(e => e.expense.status === "paid").reduce((s, e) => s + parseFloat(String(e.expense.amount ?? 0)), 0);
-    const overdue = items.filter(e => e.expense.status === "overdue").reduce((s, e) => s + parseFloat(String(e.expense.amount ?? 0)), 0);
-    return { total, pending, paid, overdue, count: items.length };
-  }, [expensesList]);
+  // KPIs: regra única partilhada com o Excel e a comparação (canceladas fora
+  // do total). Enquanto carrega ou em erro NÃO se mostra "0 €".
+  const kpis = useMemo(
+    () => expenseTotals((expensesList ?? []).map((e) => ({ amount: e.expense.amount, status: e.expense.status }))),
+    [expensesList],
+  );
+  const kpisReady = !isLoading && !isError && expensesList != null;
 
   // Ordenação por coluna na tabela (setas nos cabeçalhos)
   const { sorted: sortedExpenses, sortKey: expSortKey, sortDir: expSortDir, toggle: expToggle } = useTableSort((expensesList ?? []) as any[]);
@@ -306,29 +330,20 @@ export default function ExpensesPage() {
     setFilterCategory("");
     setFilterProject("");
     setFilterUser("");
+    setAllHistory(false);
     applyQuickRange("week");
   };
 
   const defaultWeek = quickRangeDates("week");
   const hasFilters = Boolean(
-    search || filterStatus || filterCategory || filterProject || filterUser ||
+    search || filterStatus || filterCategory || filterProject || filterUser || allHistory ||
     startDate !== defaultWeek.start || endDate !== defaultWeek.end
   );
 
   const [showRecurring, setShowRecurring] = useState(false);
   const [showCompare, setShowCompare] = useState(false);
-  // Auto-gera as despesas recorrentes do mês corrente (idempotente) ao abrir a página.
-  const genRecurring = trpc.expenses.recurring.generateMonth.useMutation({
-    onSuccess: (r) => { if (r.created > 0) { utils.expenses.list.invalidate(); utils.expenses.stats.invalidate(); toast.success(`${r.created} despesa(s) recorrente(s) lançada(s) este mês`); } },
-  });
-  useEffect(() => {
-    // Só admins disparam a geração das recorrentes (o cron diário também o
-    // faz — antes qualquer utilizador lançava as fixas em nome dele).
-    if (!canManage) return;
-    const now = new Date();
-    genRecurring.mutate({ year: now.getFullYear(), month: now.getMonth() + 1 });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // As recorrentes deixaram de ser lançadas ao abrir a página: corre no cron
+  // diário (/api/cron/daily-ops) e, à mão, no diálogo "Recorrentes".
 
   return (
     <div className="space-y-6">
@@ -337,9 +352,10 @@ export default function ExpensesPage() {
         <div>
           {!isInputOnly ? (
             <p className="text-sm text-muted-foreground">
-              {kpis.count} despesa(s)
-              {searchAllHistory
-                ? " — a pesquisar em todo o histórico"
+              {kpisReady ? `${kpis.count} despesa(s)` : isError ? "Erro a carregar" : "A carregar…"}
+              {kpisReady && kpis.cancelledCount > 0 && ` (+${kpis.cancelledCount} cancelada(s))`}
+              {allHistory
+                ? " — todo o histórico"
                 : effectiveStartDate || effectiveEndDate
                   ? ` — ${effectiveStartDate ? format(new Date(`${effectiveStartDate}T00:00:00`), "dd MMM", { locale: pt }) : "…"} a ${effectiveEndDate ? format(new Date(`${effectiveEndDate}T00:00:00`), "dd MMM", { locale: pt }) : "…"}`
                   : " — todo o histórico"}
@@ -394,61 +410,30 @@ export default function ExpensesPage() {
       <RecurringExpensesDialog open={showRecurring} onClose={() => setShowRecurring(false)} categories={categories ?? []} projects={projectsList ?? []} />
       <CompareExpensesDialog open={showCompare} onClose={() => setShowCompare(false)} categories={categories ?? []} projectId={(filterProject && filterProject !== "all") ? parseInt(filterProject) : undefined} />
 
-      {/* KPI Cards */}
+      {/* KPI Cards — "—" enquanto carrega ou em erro; nunca um 0 enganador */}
       {!isInputOnly && (
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="pt-4 pb-3 px-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-primary/10">
-                <Euro className="h-5 w-5 text-primary" />
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4" aria-busy={isLoading}>
+        {([
+          { label: "Total", value: kpis.total, icon: Euro, box: "bg-primary/10", ic: "text-primary", txt: "", hint: kpis.cancelledCount > 0 ? `sem ${kpis.cancelledCount} cancelada(s) · ${fmtEur(kpis.cancelled)}` : "" },
+          { label: "Pendente", value: kpis.pending, icon: Clock, box: "bg-yellow-100", ic: "text-yellow-700", txt: "text-yellow-700", hint: "" },
+          { label: "Pago", value: kpis.paid, icon: CheckCircle2, box: "bg-green-100", ic: "text-green-700", txt: "text-green-700", hint: "" },
+          { label: "Em Atraso", value: kpis.overdue, icon: AlertCircle, box: "bg-red-100", ic: "text-red-700", txt: "text-red-700", hint: "" },
+        ] as const).map((k) => (
+          <Card key={k.label}>
+            <CardContent className="pt-4 pb-3 px-4">
+              <div className="flex items-center gap-3">
+                <div className={`p-2 rounded-lg ${k.box}`}>
+                  <k.icon className={`h-5 w-5 ${k.ic}`} />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs text-muted-foreground font-medium">{k.label}</p>
+                  <p className={`text-lg font-bold ${k.txt}`}>{kpisReady ? fmtEur(k.value) : "—"}</p>
+                  {kpisReady && k.hint && <p className="text-[11px] text-muted-foreground truncate">{k.hint}</p>}
+                </div>
               </div>
-              <div>
-                <p className="text-xs text-muted-foreground font-medium">Total</p>
-                <p className="text-lg font-bold">{fmtEur(kpis.total)}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-4 pb-3 px-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-yellow-100">
-                <Clock className="h-5 w-5 text-yellow-700" />
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground font-medium">Pendente</p>
-                <p className="text-lg font-bold text-yellow-700">{fmtEur(kpis.pending)}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-4 pb-3 px-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-green-100">
-                <CheckCircle2 className="h-5 w-5 text-green-700" />
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground font-medium">Pago</p>
-                <p className="text-lg font-bold text-green-700">{fmtEur(kpis.paid)}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-4 pb-3 px-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-red-100">
-                <AlertCircle className="h-5 w-5 text-red-700" />
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground font-medium">Em Atraso</p>
-                <p className="text-lg font-bold text-red-700">{fmtEur(kpis.overdue)}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        ))}
       </div>
       )}
 
@@ -520,18 +505,24 @@ export default function ExpensesPage() {
             </Select>
             {/* Navegador de datas: granularidade + setas ◀ ▶ (componente transversal) */}
             <div className="flex gap-2 items-center sm:col-span-2 lg:col-span-3 flex-wrap">
-              <DateRangeNav
-                start={startDate}
-                end={endDate}
-                gran={(quickRange || "custom") as any}
-                onChange={(s, e, g) => {
-                  setStartDate(s);
-                  setEndDate(e);
-                  setQuickRange(!s && !e ? "" : g);
-                }}
-              />
+              <div className={allHistory ? "opacity-50 pointer-events-none" : ""}>
+                <DateRangeNav
+                  start={startDate}
+                  end={endDate}
+                  gran={(quickRange || "custom") as any}
+                  onChange={(s, e, g) => {
+                    setStartDate(s);
+                    setEndDate(e);
+                    setQuickRange(!s && !e ? "" : g);
+                  }}
+                />
+              </div>
+              <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
+                <Switch checked={allHistory} onCheckedChange={setAllHistory} aria-label="Pesquisar em todo o histórico" />
+                Todo o histórico
+              </label>
               {hasFilters && (
-                <Button variant="ghost" size="icon" onClick={clearFilters} title="Limpar filtros (volta à semana atual)">
+                <Button variant="ghost" size="icon" onClick={clearFilters} title="Limpar filtros (volta à semana atual)" aria-label="Limpar filtros">
                   <XCircle className="h-4 w-4" />
                 </Button>
               )}
@@ -546,15 +537,22 @@ export default function ExpensesPage() {
       <Card>
         <CardContent className="p-0">
           {isLoading ? (
-            <div className="flex items-center justify-center py-16">
+            <div className="flex items-center justify-center py-16" role="status" aria-label="A carregar despesas">
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            </div>
+          ) : isError ? (
+            <div className="flex flex-col items-center justify-center py-16 text-center" role="alert">
+              <AlertCircle className="h-12 w-12 text-destructive/60 mb-4" />
+              <p className="font-medium">Não foi possível carregar as despesas</p>
+              <p className="text-sm text-muted-foreground mt-1 max-w-md">{String(listError?.message ?? "").slice(0, 200)}</p>
+              <Button variant="outline" size="sm" className="mt-3" onClick={() => refetchList()}>Tentar de novo</Button>
             </div>
           ) : expensesList?.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <Receipt className="h-12 w-12 text-muted-foreground/30 mb-4" />
               <p className="text-muted-foreground font-medium">Nenhuma despesa encontrada</p>
               {effectiveStartDate || effectiveEndDate ? (
-                <Button variant="link" size="sm" className="mt-1" onClick={() => applyQuickRange("")}>
+                <Button variant="link" size="sm" className="mt-1" onClick={() => setAllHistory(true)}>
                   Procurar em todo o histórico
                 </Button>
               ) : (
@@ -570,7 +568,7 @@ export default function ExpensesPage() {
                     <Th k="category.name" label="Categoria" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
                     <Th k="project.name" label="Projeto" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
                     <Th k="expense.expenseDate" label="Data" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
-                    <Th k="expense.paymentDueDate" label="Pagamento" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
+                    <Th k="expense.paymentDueDate" label="Vencimento" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
                     <Th k="buyer.fullName" label="Comprador" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
                     <Th k="expense.amount" label="Valor" align="right" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
                     <Th k="expense.status" label="Estado" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
@@ -606,7 +604,11 @@ export default function ExpensesPage() {
                           {expense.expenseDate ? format(new Date(expense.expenseDate), "dd MMM yyyy", { locale: pt }) : "—"}
                         </TableCell>
                         <TableCell className="text-xs text-muted-foreground">
-                          {PAYMENT_LABELS[expense.paymentMethod ?? ""] ?? "—"}
+                          {/* A coluna ordena por vencimento; o método fica por baixo (antes o cabeçalho ordenava por data mas mostrava o método) */}
+                          <div className={expense.status === "overdue" ? "text-red-600 font-medium" : ""}>
+                            {expense.paymentDueDate ? format(new Date(expense.paymentDueDate), "dd MMM yyyy", { locale: pt }) : "—"}
+                          </div>
+                          <div className="text-[11px]">{PAYMENT_LABELS[expense.paymentMethod ?? ""] ?? ""}</div>
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">
                           {buyer?.fullName ?? "—"}
@@ -621,7 +623,7 @@ export default function ExpensesPage() {
                         <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
                             {(expense.invoiceImageUrl || expense.invoiceImageKey) && (
-                              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => window.open(fileHref(expense.invoiceImageUrl, expense.invoiceImageKey) ?? undefined, "_blank")}>
+                              <Button variant="ghost" size="icon" className="h-8 w-8" title="Ver comprovativo" aria-label="Ver comprovativo" onClick={() => openDocument(expense.id)}>
                                 <Eye className="h-3.5 w-3.5" />
                               </Button>
                             )}
@@ -630,7 +632,8 @@ export default function ExpensesPage() {
                                 variant="ghost"
                                 size="icon"
                                 className="h-8 w-8 text-green-600 hover:text-green-700"
-                                title="Marcar como paga"
+                                title="Marcar como paga (hoje)"
+                                aria-label="Marcar como paga"
                                 onClick={() => updateMutation.mutate({ id: expense.id, status: "paid" })}
                               >
                                 <CheckCircle2 className="h-3.5 w-3.5" />
@@ -641,6 +644,8 @@ export default function ExpensesPage() {
                                 variant="ghost"
                                 size="icon"
                                 className="h-8 w-8"
+                                title="Editar"
+                                aria-label="Editar despesa"
                                 onClick={() => { setEditId(expense.id); setShowForm(true); }}
                               >
                                 <Pencil className="h-3.5 w-3.5" />
@@ -651,6 +656,8 @@ export default function ExpensesPage() {
                                 variant="ghost"
                                 size="icon"
                                 className="h-8 w-8 text-destructive hover:text-destructive"
+                                title="Eliminar"
+                                aria-label="Eliminar despesa"
                                 onClick={() => {
                                   if (confirm("Eliminar esta despesa?")) {
                                     deleteMutation.mutate({ id: expense.id });
@@ -712,75 +719,139 @@ function ExpenseDetailSheet({
   onEdit: (id: number) => void;
 }) {
   if (!data) return null;
-  const { expense, category, project, insertedBy, buyer } = data;
-
   return (
     <Sheet open={!!data} onOpenChange={() => onClose()}>
       {/* w-full no telemóvel (ecrã inteiro), sm:max-w-xl no PC; corpo com padding próprio */}
       <SheetContent className="w-full sm:w-[560px] sm:max-w-xl overflow-y-auto">
-        <SheetHeader>
-          <SheetTitle className="flex items-center gap-2">
-            <Receipt className="h-5 w-5 text-primary" />
-            Despesa #{expense.id}
-          </SheetTitle>
-        </SheetHeader>
-
-        <div className="space-y-6 px-4 pb-6 sm:px-6">
-          {/* Status + Amount */}
-          <div className="flex items-center justify-between">
-            <StatusBadge status={expense.status} />
-            <span className="text-2xl font-bold">{fmtEur(expense.amount)}</span>
-          </div>
-
-          {/* Invoice Image */}
-          {(expense.invoiceImageUrl || expense.invoiceImageKey) && (
-            <div>
-              <img
-                src={fileHref(expense.invoiceImageUrl, expense.invoiceImageKey) ?? undefined}
-                alt="Fatura"
-                className="w-full max-h-72 object-contain rounded-lg border cursor-pointer bg-muted/30"
-                onClick={() => window.open(fileHref(expense.invoiceImageUrl, expense.invoiceImageKey) ?? undefined, "_blank")}
-              />
-            </div>
-          )}
-
-          <Separator />
-
-          {/* Details Grid */}
-          <div className="space-y-3">
-            <DetailRow label="Fornecedor" value={expense.supplier} />
-            <DetailRow label="Descrição" value={expense.description} />
-            <DetailRow label="Categoria" value={category?.name} badge badgeColor={category?.color} />
-            <DetailRow label="Projeto" value={project?.name} />
-            <DetailRow label="Data da Despesa" value={expense.expenseDate ? format(new Date(expense.expenseDate), "dd MMMM yyyy", { locale: pt }) : null} />
-            <DetailRow label="Data de Vencimento" value={expense.paymentDueDate ? format(new Date(expense.paymentDueDate), "dd MMMM yyyy", { locale: pt }) : null} />
-            <DetailRow label="Pago em" value={expense.paidAt ? format(new Date(expense.paidAt), "dd MMMM yyyy", { locale: pt }) : null} />
-            <DetailRow label="Método de Pagamento" value={PAYMENT_LABELS[expense.paymentMethod ?? ""] ?? null} />
-            <DetailRow label="Moeda" value={expense.currency} />
-            <DetailRow label="Comprador" value={buyer?.fullName} />
-            <DetailRow label="Inserido por" value={insertedBy?.name} />
-            {expense.notes && <DetailRow label="Notas" value={expense.notes} />}
-            {expense.extractedByAi && (
-              <div className="flex items-center gap-1 text-xs text-green-600">
-                <Sparkles className="h-3 w-3" />
-                Dados extraídos por IA
-              </div>
-            )}
-            <DetailRow label="Criado em" value={expense.createdAt ? format(new Date(expense.createdAt), "dd MMM yyyy, HH:mm", { locale: pt }) : null} />
-          </div>
-
-          <Separator />
-
-          <div className="flex gap-2">
-            <Button variant="outline" className="flex-1 gap-2" onClick={() => onEdit(expense.id)}>
-              <Pencil className="h-4 w-4" />
-              Editar
-            </Button>
-            <Button variant="outline" onClick={onClose}>Fechar</Button>
-          </div>
-        </div>
+        <ExpenseDetailBody data={data} onClose={onClose} onEdit={onEdit} />
       </SheetContent>
     </Sheet>
+  );
+}
+
+const EVENT_LABELS: Record<string, string> = {
+  created: "Criada", updated: "Editada", status: "Estado alterado", paid: "Marcada como paga",
+  document: "Comprovativo alterado", deleted: "Eliminada", approved: "Aprovada", returned: "Devolvida", submitted: "Submetida",
+};
+
+function ExpenseDetailBody({ data, onClose, onEdit }: { data: any; onClose: () => void; onEdit: (id: number) => void }) {
+  const { expense, category, project, insertedBy, buyer } = data;
+  const hasDoc = Boolean(expense.invoiceImageUrl || expense.invoiceImageKey);
+  // URL de leitura pedida ao servidor (assinada, com a permissão do detalhe).
+  const doc = trpc.expenses.documentUrl.useQuery({ id: expense.id }, { enabled: hasDoc, staleTime: 5 * 60_000 });
+  const events = trpc.expenses.events.useQuery({ id: expense.id }, { staleTime: 30_000 });
+  const openDocument = useOpenExpenseDocument();
+  const day = (v: string | null | undefined, fmt = "dd MMMM yyyy") => (v ? format(new Date(v), fmt, { locale: pt }) : null);
+
+  return (
+    <>
+      <SheetHeader>
+        <SheetTitle className="flex items-center gap-2">
+          <Receipt className="h-5 w-5 text-primary" />
+          Despesa #{expense.id}
+        </SheetTitle>
+      </SheetHeader>
+
+      <div className="space-y-6 px-4 pb-6 sm:px-6">
+        {/* Status + Amount */}
+        <div className="flex items-center justify-between">
+          <StatusBadge status={expense.status} />
+          <span className="text-2xl font-bold">{fmtEur(expense.amount)}</span>
+        </div>
+
+        {/* Comprovativo: imagem ou PDF (antes um PDF era metido num <img> e não abria) */}
+        {hasDoc && (
+          <div className="space-y-1">
+            {doc.isLoading ? (
+              <div className="h-40 rounded-lg border bg-muted/30 flex items-center justify-center" role="status" aria-label="A carregar comprovativo">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : doc.isError || !doc.data?.url ? (
+              <div className="h-24 rounded-lg border bg-muted/30 flex flex-col items-center justify-center text-sm text-muted-foreground gap-1" role="alert">
+                <AlertCircle className="h-4 w-4" /> Comprovativo indisponível
+              </div>
+            ) : doc.data.isPdf ? (
+              <>
+                <iframe src={doc.data.url} title="Comprovativo (PDF)" className="w-full h-80 rounded-lg border bg-white" />
+                <Button variant="link" size="sm" className="px-0 h-auto gap-1" onClick={() => openDocument(expense.id)}>
+                  <FileText className="h-3.5 w-3.5" /> Abrir PDF noutro separador
+                </Button>
+              </>
+            ) : (
+              <img
+                src={doc.data.url}
+                alt="Comprovativo da despesa"
+                className="w-full max-h-72 object-contain rounded-lg border cursor-pointer bg-muted/30"
+                onClick={() => openDocument(expense.id)}
+              />
+            )}
+          </div>
+        )}
+
+        <Separator />
+
+        {/* Details Grid */}
+        <div className="space-y-3">
+          <DetailRow label="Fornecedor" value={expense.supplier} />
+          <DetailRow label="NIF" value={expense.supplierNif} />
+          <DetailRow label="Nº do documento" value={expense.documentNumber} />
+          <DetailRow label="Descrição" value={expense.description} />
+          <DetailRow label="Categoria" value={category?.name} badge badgeColor={category?.color} />
+          <DetailRow label="Centro de custos" value={project?.name} />
+          <DetailRow label="Data da Despesa" value={day(expense.expenseDate)} />
+          <DetailRow label="Data de Vencimento" value={day(expense.paymentDueDate)} />
+          <DetailRow label="Pago em" value={day(expense.paidAt)} />
+          <DetailRow label="Método de Pagamento" value={PAYMENT_LABELS[expense.paymentMethod ?? ""] ?? null} />
+          <DetailRow label="Pago por" value={PAID_BY_LABELS[expense.paidBy ?? ""] ?? null} />
+          <DetailRow label="Moeda" value={expense.currency} />
+          <DetailRow label="Comprador" value={buyer?.fullName} />
+          <DetailRow label="Inserido por" value={insertedBy?.name} />
+          {expense.notes && <DetailRow label="Notas" value={expense.notes} />}
+          {expense.extractedByAi ? (
+            <div className="flex items-center gap-1 text-xs text-green-600">
+              <Sparkles className="h-3 w-3" />
+              Dados extraídos por IA
+            </div>
+          ) : null}
+          <DetailRow label="Criado em" value={day(expense.createdAt, "dd MMM yyyy, HH:mm")} />
+        </div>
+
+        {/* Histórico */}
+        {events.data && events.data.length > 0 && (
+          <>
+            <Separator />
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Histórico</p>
+              <ul className="space-y-1.5 text-xs">
+                {events.data.slice(0, 8).map((ev) => (
+                  <li key={ev.id} className="flex gap-2">
+                    <span className="text-muted-foreground shrink-0 w-28">{day(ev.at, "dd MMM yyyy HH:mm")}</span>
+                    <span className="min-w-0">
+                      <span className="font-medium">{EVENT_LABELS[ev.type] ?? ev.type}</span>
+                      {ev.user?.name ? ` · ${ev.user.name}` : ""}
+                      {ev.after && typeof ev.after === "object" && ev.type !== "created" && (
+                        <span className="text-muted-foreground"> · {Object.keys(ev.after).join(", ")}</span>
+                      )}
+                      {ev.note ? <span className="block text-amber-700">{ev.note}</span> : null}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </>
+        )}
+
+        <Separator />
+
+        <div className="flex gap-2">
+          <Button variant="outline" className="flex-1 gap-2" onClick={() => onEdit(expense.id)}>
+            <Pencil className="h-4 w-4" />
+            Editar
+          </Button>
+          <Button variant="outline" onClick={onClose}>Fechar</Button>
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -821,6 +892,10 @@ interface FormData {
   invoiceImageKey: string;
   extractedByAi: boolean;
   status: string;
+  supplierNif: string;
+  documentNumber: string;
+  paidBy: string;      // "" | company | employee
+  paidAt: string;      // AAAA-MM-DD (só com estado "paid")
 }
 
 function ExpenseFormModal({
@@ -845,6 +920,7 @@ function ExpenseFormModal({
   const [previewUrl, setPreviewUrl] = useState<string>("");
   const [lastFileBase64, setLastFileBase64] = useState<string>("");
   const [lastFileMime, setLastFileMime] = useState<string>("");
+  const openDocument = useOpenExpenseDocument();
 
   const [form, setForm] = useState<FormData>({
     supplier: "",
@@ -862,6 +938,10 @@ function ExpenseFormModal({
     invoiceImageKey: "",
     extractedByAi: false,
     status: "pending",
+    supplierNif: "",
+    documentNumber: "",
+    paidBy: "",
+    paidAt: "",
   });
 
   // Load existing data when editing
@@ -891,13 +971,31 @@ function ExpenseFormModal({
       invoiceImageKey: e.invoiceImageKey ?? "",
       extractedByAi: Boolean(e.extractedByAi),
       status: e.status ?? "pending",
+      supplierNif: (e as any).supplierNif ?? "",
+      documentNumber: (e as any).documentNumber ?? "",
+      paidBy: (e as any).paidBy ?? "",
+      paidAt: e.paidAt ? format(new Date(e.paidAt), "yyyy-MM-dd") : "",
     });
-    if (e.invoiceImageUrl) setPreviewUrl(e.invoiceImageUrl);
+    if (e.invoiceImageUrl || e.invoiceImageKey) setPreviewUrl(e.invoiceImageUrl || `key:${e.invoiceImageKey}`);
     setPrefilled(true);
   }, [editId, existingExpense, prefilled]);
 
   const set = (key: keyof FormData, value: string | boolean) =>
     setForm((f) => ({ ...f, [key]: value }));
+
+  // Aviso de possível duplicado (mesmo nº de documento do mesmo fornecedor,
+  // ou o mesmo ficheiro). Não bloqueia: a pessoa decide.
+  const dupEnabled = Boolean((form.documentNumber.trim() && (form.supplier.trim() || form.supplierNif.trim())) || form.invoiceImageKey);
+  const { data: possibleDup } = trpc.expenses.checkDuplicate.useQuery(
+    {
+      excludeId: editId ?? undefined,
+      supplier: form.supplier.trim() || undefined,
+      supplierNif: form.supplierNif.trim() || undefined,
+      documentNumber: form.documentNumber.trim() || undefined,
+      invoiceImageKey: form.invoiceImageKey || undefined,
+    },
+    { enabled: dupEnabled, staleTime: 10_000 },
+  );
 
   const createMutation = trpc.expenses.create.useMutation({
     onSuccess,
@@ -993,13 +1091,10 @@ function ExpenseFormModal({
         const cat = categories.find((c: any) => c.name?.toLowerCase() === String(suggested).toLowerCase());
         if (cat) set("categoryId", String(cat.id));
       }
-      // NIF / nº de fatura vão para as notas (não há colunas próprias ainda).
-      const extras: string[] = [];
-      if ((data as any).nif) extras.push(`NIF: ${(data as any).nif}`);
-      if ((data as any).invoiceNumber) extras.push(`Fatura nº: ${(data as any).invoiceNumber}`);
-      if (extras.length && !form.notes?.includes("NIF:")) {
-        set("notes", [form.notes, extras.join(" · ")].filter(Boolean).join("\n"));
-      }
+      // NIF / nº de documento têm colunas próprias (0062) — servem para o
+      // aviso de duplicados e para a contabilidade.
+      if ((data as any).nif) set("supplierNif", String((data as any).nif).replace(/\s+/g, ""));
+      if ((data as any).invoiceNumber) set("documentNumber", String((data as any).invoiceNumber).trim());
       set("extractedByAi", true);
       toast.success("Dados extraídos com IA!", { description: "Verifica e corrige se necessário." });
     } catch (e: any) {
@@ -1016,27 +1111,47 @@ function ExpenseFormModal({
       toast.error("Valor e data são obrigatórios");
       return;
     }
+    // Mesma regra do servidor (shared/expenseAmount): positivo, até 2 casas.
+    const amount = parseExpenseAmount(form.amount);
+    if (!amount) {
+      toast.error("Valor inválido", { description: "Usa um número positivo com até 2 casas decimais (ex.: 45,90)." });
+      return;
+    }
     if (!form.projectId) {
       toast.error("Tens de associar a despesa a um centro de custos (grupo / cidade / marca / projeto)");
       return;
     }
+    if (form.status === "paid" && form.paidAt && form.paidAt > format(new Date(), "yyyy-MM-dd")) {
+      toast.error("A data de pagamento não pode ser no futuro");
+      return;
+    }
     const sanitize = (v: string) => (!v || v === 'null' || v === 'undefined' ? undefined : v);
+    // Na edição, vazio = LIMPAR o campo (null); na criação, vazio = omitir.
+    const orNull = (v: string) => (sanitize(v) ?? null);
+    const method = (form.paymentMethod && ['cash','card','transfer','check','other'].includes(form.paymentMethod)) ? form.paymentMethod as any : undefined;
+    const paidBy = form.paidBy === "company" || form.paidBy === "employee" ? form.paidBy : undefined;
 
     if (editId) {
       updateMutation.mutate({
         id: editId,
-        supplier: sanitize(form.supplier),
-        description: sanitize(form.description),
-        amount: form.amount,
-        paymentMethod: (form.paymentMethod && ['cash','card','transfer','check','other'].includes(form.paymentMethod)) ? form.paymentMethod as any : undefined,
+        supplier: orNull(form.supplier),
+        description: orNull(form.description),
+        amount,
+        paymentMethod: method,
         expenseDate: form.expenseDate,
-        paymentDueDate: sanitize(form.paymentDueDate),
-        categoryId: form.categoryId ? parseInt(form.categoryId) : undefined,
+        paymentDueDate: orNull(form.paymentDueDate),
+        categoryId: form.categoryId ? parseInt(form.categoryId) : null,
         projectId: parseInt(form.projectId),
         buyerId: (form.buyerId && form.buyerId !== "none") ? parseInt(form.buyerId) : null,
         status: form.status as any,
-        notes: form.notes || undefined,
-        // Se trocou a fatura, envia a nova (o servidor apaga a antiga).
+        // Só enviada quando está paga: o servidor preserva a data existente
+        // se não vier nada e só a define ao PASSAR a paga.
+        paidAt: form.status === "paid" && form.paidAt ? form.paidAt : undefined,
+        notes: orNull(form.notes),
+        supplierNif: orNull(form.supplierNif),
+        documentNumber: orNull(form.documentNumber),
+        paidBy: paidBy ?? null,
+        // Se trocou a fatura, envia a nova (o servidor grava e SÓ DEPOIS apaga a antiga).
         invoiceImageUrl: form.invoiceImageUrl || null,
         invoiceImageKey: form.invoiceImageKey || null,
       });
@@ -1044,15 +1159,18 @@ function ExpenseFormModal({
       createMutation.mutate({
         supplier: sanitize(form.supplier),
         description: sanitize(form.description),
-        amount: form.amount,
+        amount,
         currency: form.currency || 'EUR',
-        paymentMethod: (form.paymentMethod && ['cash','card','transfer','check','other'].includes(form.paymentMethod)) ? form.paymentMethod as any : undefined,
+        paymentMethod: method,
         expenseDate: form.expenseDate,
         paymentDueDate: sanitize(form.paymentDueDate),
         categoryId: form.categoryId ? parseInt(form.categoryId) : undefined,
         projectId: parseInt(form.projectId),
         buyerId: (form.buyerId && form.buyerId !== "none") ? parseInt(form.buyerId) : undefined,
         notes: form.notes || undefined,
+        supplierNif: sanitize(form.supplierNif),
+        documentNumber: sanitize(form.documentNumber),
+        paidBy,
         invoiceImageUrl: form.invoiceImageUrl || undefined,
         invoiceImageKey: form.invoiceImageKey || undefined,
         extractedByAi: form.extractedByAi,
@@ -1094,19 +1212,20 @@ function ExpenseFormModal({
             <div className="flex flex-col sm:flex-row gap-4 items-start">
               {previewUrl ? (
                 <div className="relative shrink-0">
-                  {/\.pdf(\?|$)/i.test(previewUrl) ? (
-                    // PDF guardado (ao editar): não dá para mostrar em <img>, mostra link
-                    <a
-                      href={previewUrl}
-                      target="_blank"
-                      rel="noreferrer"
+                  {/\.pdf(\?|$)/i.test(previewUrl) || previewUrl.startsWith("key:") ? (
+                    // Documento já guardado (ao editar): abre pela URL assinada
+                    // do servidor — a URL pública gravada pode ser privada/antiga.
+                    <button
+                      type="button"
+                      onClick={() => { if (editId) openDocument(editId); }}
+                      aria-label="Ver comprovativo atual"
                       className="h-32 w-32 rounded-lg border shadow-sm flex flex-col items-center justify-center gap-2 bg-muted/50 hover:bg-muted transition-colors"
                     >
                       <FileText className="h-8 w-8 text-muted-foreground" />
-                      <span className="text-xs text-muted-foreground">Ver PDF</span>
-                    </a>
+                      <span className="text-xs text-muted-foreground">Ver comprovativo</span>
+                    </button>
                   ) : (
-                    <img src={previewUrl} alt="Fatura" className="h-32 w-32 object-cover rounded-lg border shadow-sm" />
+                    <img src={previewUrl} alt="Pré-visualização da fatura" className="h-32 w-32 object-cover rounded-lg border shadow-sm" />
                   )}
                   {uploading && (
                     <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center">
@@ -1212,6 +1331,35 @@ function ExpenseFormModal({
                 onChange={(e) => set("amount", e.target.value)}
               />
             </div>
+            <div className="space-y-1.5">
+              <Label>NIF do fornecedor</Label>
+              <Input
+                placeholder="Ex.: 500123456"
+                inputMode="numeric"
+                value={form.supplierNif}
+                onChange={(e) => set("supplierNif", e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Nº do documento</Label>
+              <Input
+                placeholder="Nº da fatura / recibo"
+                value={form.documentNumber}
+                onChange={(e) => set("documentNumber", e.target.value)}
+              />
+            </div>
+            {possibleDup && (
+              <div className="sm:col-span-2 rounded-md border border-amber-300 bg-amber-50 text-amber-900 text-xs px-3 py-2 flex gap-2" role="alert">
+                <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                <span>
+                  Possível duplicado: a despesa <strong>#{possibleDup.id}</strong>
+                  {possibleDup.supplier ? ` (${possibleDup.supplier})` : ""} de {fmtEur(possibleDup.amount)}
+                  {possibleDup.expenseDate ? ` em ${format(new Date(possibleDup.expenseDate), "dd/MM/yyyy")}` : ""}
+                  {possibleDup.documentNumber ? ` tem o mesmo nº de documento` : " usa o mesmo ficheiro"}.
+                  Confirma antes de guardar.
+                </span>
+              </div>
+            )}
             <div className="space-y-1.5 sm:col-span-2">
               <Label>Descrição</Label>
               <Textarea
@@ -1321,6 +1469,20 @@ function ExpenseFormModal({
                 </SelectContent>
               </Select>
             </div>
+            {/* Quem suportou a compra: empresa ou colaborador (dá origem a reembolso) */}
+            <div className="space-y-1.5">
+              <Label>Pago por</Label>
+              <Select value={form.paidBy || "auto"} onValueChange={(v) => set("paidBy", v === "auto" ? "" : v)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">{form.buyerId && form.buyerId !== "none" ? "Colaborador (pelo comprador)" : "Empresa (por omissão)"}</SelectItem>
+                  <SelectItem value="company">Empresa</SelectItem>
+                  <SelectItem value="employee">Colaborador (a reembolsar)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
             {/* Status (only on edit) */}
             {editId && (
               <div className="space-y-1.5">
@@ -1336,6 +1498,19 @@ function ExpenseFormModal({
                     <SelectItem value="cancelled">Cancelado</SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+            )}
+            {/* Data de pagamento: visível só quando paga; guardar sem mexer NÃO a altera */}
+            {editId && form.status === "paid" && (
+              <div className="space-y-1.5">
+                <Label>Pago em</Label>
+                <Input
+                  type="date"
+                  max={format(new Date(), "yyyy-MM-dd")}
+                  value={form.paidAt}
+                  onChange={(e) => set("paidAt", e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">Vazio = hoje (só quando a despesa passa a paga).</p>
               </div>
             )}
             </div>

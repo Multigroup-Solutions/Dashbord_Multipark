@@ -245,6 +245,17 @@ app.get("/api/cron/daily-ops", async (req, res) => {
     } catch (err) {
       console.warn("[daily-ops] markOverdueExpenses:", err);
     }
+    // Recorrentes do mês corrente (Lisboa): idempotente (lock + UNIQUE por
+    // modelo/mês). Deixou de correr ao abrir a página de despesas.
+    try {
+      const { generateRecurringExpensesForMonth } = await import("../expenseRecurring");
+      const { lisbonToday } = await import("../../shared/expensePeriods");
+      const [y, m] = lisbonToday().split("-").map(Number);
+      const r = await generateRecurringExpensesForMonth(y, m, null);
+      if (r.created > 0) console.log(`[daily-ops] recorrentes ${r.period}: ${r.created} lançada(s), ${r.skipped} já existiam`);
+    } catch (err) {
+      console.warn("[daily-ops] recorrentes:", err);
+    }
 
     // Segunda-feira (Lisboa): gera automaticamente a avaliação da semana ANTERIOR
     try {
