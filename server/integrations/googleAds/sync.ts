@@ -3,7 +3,7 @@
  *
  *  - hourly: últimos 7 dias (hoje provisório); nightly: 90 dias; monthly: o
  *    resto do histórico; initial/manual: tudo;
- *  - lock nomeado (sem execuções sobrepostas), uma conta de cada vez, uma
+ *  - mutex em linha `syncLockAt` (sem execuções sobrepostas; não GET_LOCK), uma conta de cada vez, uma
  *    falha numa conta não pára as outras;
  *  - RETOMÁVEL: cursor (conta, pedaço) gravado em integration_sync_runs; com
  *    `deadlineAt` (Vercel: 60 s) devolve done:false e a chamada seguinte continua;
@@ -13,7 +13,7 @@
  */
 import { and, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { getDb } from "../../db";
-import { adAccounts, adCampaigns, adConversionActionMetrics, adDailyMetrics, integrationSyncRuns } from "../../../drizzle/schema";
+import { adAccounts, adCampaigns, adConversionActionMetrics, adDailyMetrics, integrationConnections, integrationSyncRuns } from "../../../drizzle/schema";
 import { GOOGLE_ADS_PROVIDER, missingApiEnvs, readGoogleAdsConfig } from "./config";
 import { getConnection, saveConnection } from "./oauth";
 import { fetchCampaignDaily, fetchConversionActions, getCustomer, listAccessibleCustomers, listCustomerClients, GoogleAdsApiError } from "./client";
@@ -73,12 +73,38 @@ export async function refreshAccounts(): Promise<{ found: number; managers: numb
   return { found, managers };
 }
 
+/**
+ * Mutex da recolha = coluna `syncLockAt` na linha da ligação (UPDATE condicional
+ * atómico). Não usa GET_LOCK: esse é por LIGAÇÃO e, com pool/serverless, o
+ * RELEASE podia ir noutra ligação e o lock ficar preso para sempre.
+ * Lock com mais de LOCK_TTL_MIN minutos conta como abandonado (invocação morta).
+ */
+const LOCK_TTL_MIN = 20;
 async function acquireLock(db: NonNullable<Awaited<ReturnType<typeof getDb>>>): Promise<boolean> {
-  const r = (await db.execute(sql`SELECT GET_LOCK('google_ads_sync', 0) AS ok`)) as any;
-  return Number((Array.isArray(r[0]) ? r[0][0] : r[0])?.ok ?? 0) === 1;
+  const r = (await db.execute(sql`
+    UPDATE integration_connections SET syncLockAt = NOW()
+    WHERE provider = ${GOOGLE_ADS_PROVIDER}
+      AND (syncLockAt IS NULL OR syncLockAt < NOW() - INTERVAL ${sql.raw(String(LOCK_TTL_MIN))} MINUTE)
+  `)) as any;
+  const header = Array.isArray(r) ? r[0] : r;
+  const got = Number(header?.affectedRows ?? 0) === 1;
+  if (got) {
+    // corridas "running" órfãs (invocação morreu sem fechar) passam a failed,
+    // senão ficavam eternamente "a correr" na lista
+    await db.update(integrationSyncRuns)
+      .set({ status: "failed", error: "interrompida (sem conclusão)", finishedAt: nowMysql() })
+      .where(and(
+        eq(integrationSyncRuns.provider, GOOGLE_ADS_PROVIDER),
+        eq(integrationSyncRuns.status, "running"),
+        sql`${integrationSyncRuns.startedAt} < NOW() - INTERVAL ${sql.raw(String(LOCK_TTL_MIN))} MINUTE`,
+      ));
+  }
+  return got;
 }
 async function releaseLock(db: NonNullable<Awaited<ReturnType<typeof getDb>>>) {
-  try { await db.execute(sql`SELECT RELEASE_LOCK('google_ads_sync')`); } catch { /* ignore */ }
+  try {
+    await db.update(integrationConnections).set({ syncLockAt: null }).where(eq(integrationConnections.provider, GOOGLE_ADS_PROVIDER));
+  } catch { /* ignore */ }
 }
 
 /**

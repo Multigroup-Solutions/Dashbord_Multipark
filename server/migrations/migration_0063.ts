@@ -30,6 +30,7 @@ export const MIGRATION_0063_STATEMENTS: string[] = [
     \`connectedById\` INT NULL,
     \`connectedAt\` TIMESTAMP NULL,
     \`lastCheckedAt\` TIMESTAMP NULL,
+    \`syncLockAt\` TIMESTAMP NULL,
     \`lastError\` TEXT NULL,
     \`createdAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     \`updatedAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -137,6 +138,7 @@ export const MIGRATION_0063_STATEMENTS: string[] = [
     PRIMARY KEY (\`id\`),
     INDEX \`idx_integration_sync_runs_provider\` (\`provider\`, \`startedAt\`)
   )`,
+  "ALTER TABLE `integration_connections` ADD COLUMN `syncLockAt` TIMESTAMP NULL",
   // ── reservas: atribuição ao Google Ads ─────────────────────────────────────
   "ALTER TABLE `multipark_bookings` ADD COLUMN `gclid` VARCHAR(128) NULL",
   "ALTER TABLE `multipark_bookings` ADD COLUMN `gbraid` VARCHAR(128) NULL",

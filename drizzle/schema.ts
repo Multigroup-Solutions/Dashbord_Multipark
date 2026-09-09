@@ -71,6 +71,7 @@ export const integrationConnections = mysqlTable("integration_connections", {
 	connectedAt: timestamp({ mode: 'string' }),
 	lastCheckedAt: timestamp({ mode: 'string' }),
 	lastError: text(),
+	syncLockAt: timestamp({ mode: 'string' }),          // mutex da recolha (linha, não GET_LOCK: sobrevive a pool/serverless)
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
