@@ -221,6 +221,37 @@ export async function storageDelete(keyOrUrl: string | null | undefined): Promis
 }
 
 /**
+ * URL de LEITURA temporária de um documento privado (S3: GET pré-assinado,
+ * por omissão 10 min). Fora do S3 devolve a URL normal (Blob público / local)
+ * para o chamador não ter de distinguir backends.
+ *
+ * Nota: os objetos do bucket estão hoje PÚBLICOS por bucket policy (ver
+ * scripts/provision-s3-bucket.ps1); tornar as faturas privadas é uma mudança
+ * de infra (policy só para o prefixo `invoices/`). O código já não depende da
+ * URL pública para as faturas — só das keys — pelo que a mudança é segura.
+ */
+export async function storagePresignGet(
+  keyOrUrl: string,
+  expiresSeconds = 600,
+): Promise<{ url: string; expiresIn: number; signed: boolean }> {
+  const s3 = readS3Env();
+  if (s3) {
+    const key = s3NormalizeKey(keyOrUrl);
+    if (key) {
+      const client = await getS3Client(s3);
+      const { GetObjectCommand } = await import("@aws-sdk/client-s3");
+      const { getSignedUrl } = await import("@aws-sdk/s3-request-presigner");
+      const expiresIn = Math.max(30, Math.min(Math.trunc(expiresSeconds) || 600, 3600));
+      const url = await getSignedUrl(client, new GetObjectCommand({ Bucket: s3.bucket, Key: key }), { expiresIn });
+      return { url, expiresIn, signed: true };
+    }
+  }
+  if (/^https?:\/\//.test(keyOrUrl)) return { url: keyOrUrl, expiresIn: 0, signed: false };
+  const got = await storageGet(keyOrUrl);
+  return { url: got.url, expiresIn: 0, signed: false };
+}
+
+/**
  * True quando o upload direto do browser para o storage está disponível
  * (só o S3 o suporta).
  */
