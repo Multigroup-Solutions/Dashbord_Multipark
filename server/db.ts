@@ -1,9 +1,10 @@
-import { and, asc, desc, eq, gte, lte, like, or, sql, aliasedTable, isNotNull, isNull, inArray, notInArray, getTableColumns } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lte, like, or, sql, aliasedTable, isNotNull, isNull, inArray, notInArray, getTableColumns, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { normalizeEmail } from "../shared/email";
 import {
   users,
   expenses,
+  expenseEvents,
   expenseCategories,
   projects,
   projectEmployees,
@@ -118,6 +119,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0059").then(m => ({ s: m.MIGRATION_0059_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0059 })),
       import("./migrations/migration_0060").then(m => ({ s: m.MIGRATION_0060_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0060 })),
       import("./migrations/migration_0061").then(m => ({ s: m.MIGRATION_0061_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0061 })),
+      import("./migrations/migration_0062").then(m => ({ s: m.MIGRATION_0062_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0062 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -357,36 +359,16 @@ export async function seedDefaultCategories() {
 
 // ─── EXPENSES ─────────────────────────────────────────────────────────────────
 
-export interface ExpenseFilters {
-  startDate?: Date;
-  endDate?: Date;
-  projectId?: number;
-  categoryId?: number;
-  userId?: number;
-  status?: string;
-  search?: string;
-}
-
 const buyerEmployees = aliasedTable(employees, "buyer");
 
-export async function getExpenses(filters: ExpenseFilters = {}) {
+/**
+ * Lista de despesas com joins. O `where` vem SEMPRE de
+ * `expenseConditions()` (server/expenseScope.ts) — filtros + visibilidade do
+ * utilizador numa regra única partilhada por lista, Excel e comparação.
+ */
+export async function listExpenses(where?: SQL) {
   const db = await getDb();
   if (!db) return [];
-  const conditions = [];
-  if (filters.startDate) conditions.push(gte(expenses.expenseDate, toMysqlDateTime(filters.startDate)));
-  if (filters.endDate) conditions.push(lte(expenses.expenseDate, toMysqlDateTime(filters.endDate)));
-  if (filters.projectId) conditions.push(eq(expenses.projectId, filters.projectId));
-  if (filters.categoryId) conditions.push(eq(expenses.categoryId, filters.categoryId));
-  if (filters.userId) conditions.push(eq(expenses.insertedById, filters.userId));
-  if (filters.status) conditions.push(eq(expenses.status, filters.status as any));
-  if (filters.search) {
-    conditions.push(
-      or(
-        like(expenses.supplier, `%${filters.search}%`),
-        like(expenses.description, `%${filters.search}%`)
-      )
-    );
-  }
   const query = db
     .select({
       expense: expenses,
@@ -400,11 +382,106 @@ export async function getExpenses(filters: ExpenseFilters = {}) {
     .leftJoin(projects, eq(expenses.projectId, projects.id))
     .leftJoin(users, eq(expenses.insertedById, users.id))
     .leftJoin(buyerEmployees, eq(expenses.buyerId, buyerEmployees.id))
-    .orderBy(desc(expenses.expenseDate));
-  if (conditions.length > 0) {
-    return query.where(and(...conditions));
+    .orderBy(desc(expenses.expenseDate), desc(expenses.id));
+  return where ? query.where(where) : query;
+}
+
+/** Agregados de um conjunto de despesas (mesmo `where` da lista). */
+export async function summarizeExpenses(where?: SQL) {
+  const db = await getDb();
+  const empty = { total: 0, count: 0, cancelledTotal: 0, cancelledCount: 0, byCategory: [] as Array<{ categoryId: number | null; total: number; count: number }> };
+  if (!db) return empty;
+  const live = where ? and(where, sql`${expenses.status} <> 'cancelled'`) : sql`${expenses.status} <> 'cancelled'`;
+  const cancelled = where ? and(where, eq(expenses.status, "cancelled")) : eq(expenses.status, "cancelled");
+  const [tot] = await db
+    .select({ total: sql<string>`COALESCE(SUM(${expenses.amount}), 0)`, count: sql<number>`COUNT(*)` })
+    .from(expenses).where(live);
+  const [canc] = await db
+    .select({ total: sql<string>`COALESCE(SUM(${expenses.amount}), 0)`, count: sql<number>`COUNT(*)` })
+    .from(expenses).where(cancelled);
+  const byCat = await db
+    .select({ categoryId: expenses.categoryId, total: sql<string>`COALESCE(SUM(${expenses.amount}), 0)`, count: sql<number>`COUNT(*)` })
+    .from(expenses).where(live)
+    .groupBy(expenses.categoryId)
+    .orderBy(desc(sql`SUM(${expenses.amount})`));
+  return {
+    total: Number(tot?.total ?? 0), count: Number(tot?.count ?? 0),
+    cancelledTotal: Number(canc?.total ?? 0), cancelledCount: Number(canc?.count ?? 0),
+    byCategory: byCat.map((r) => ({ categoryId: r.categoryId ?? null, total: Number(r.total), count: Number(r.count) })),
+  };
+}
+
+/** Histórico (autor, data, antes/depois) de cada alteração relevante. */
+export async function recordExpenseEvent(ev: {
+  expenseId: number; type: string; userId?: number | null;
+  before?: unknown; after?: unknown; note?: string | null;
+}) {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db.insert(expenseEvents).values({
+      expenseId: ev.expenseId, type: ev.type, userId: ev.userId ?? null,
+      before: ev.before === undefined ? null : JSON.stringify(ev.before),
+      after: ev.after === undefined ? null : JSON.stringify(ev.after),
+      note: ev.note ?? null,
+    });
+  } catch (err: any) {
+    console.warn("[expenses] evento não gravado:", String(err?.message ?? err).slice(0, 120));
   }
-  return query;
+}
+
+export async function getExpenseEvents(expenseId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({ event: expenseEvents, user: { id: users.id, name: users.name } })
+    .from(expenseEvents)
+    .leftJoin(users, eq(expenseEvents.userId, users.id))
+    .where(eq(expenseEvents.expenseId, expenseId))
+    .orderBy(desc(expenseEvents.createdAt), desc(expenseEvents.id));
+}
+
+/**
+ * Possível duplicado: mesmo nº de documento do mesmo fornecedor (NIF ou nome),
+ * ou o MESMO ficheiro. Nunca por valor+data (compras legítimas repetem-se).
+ */
+export async function findPossibleDuplicateExpense(input: {
+  excludeId?: number | null;
+  supplierNif?: string | null; supplier?: string | null;
+  documentNumber?: string | null; invoiceImageKey?: string | null;
+}) {
+  const db = await getDb();
+  if (!db) return null;
+  const conds: SQL[] = [];
+  const doc = input.documentNumber?.trim();
+  if (doc) {
+    const bySupplier: SQL[] = [];
+    if (input.supplierNif?.trim()) bySupplier.push(eq(expenses.supplierNif, input.supplierNif.trim()));
+    if (input.supplier?.trim()) bySupplier.push(eq(expenses.supplier, input.supplier.trim()));
+    if (bySupplier.length) conds.push(and(eq(expenses.documentNumber, doc), or(...bySupplier) as SQL) as SQL);
+  }
+  if (input.invoiceImageKey) conds.push(eq(expenses.invoiceImageKey, input.invoiceImageKey));
+  if (!conds.length) return null;
+  let where: SQL = or(...conds) as SQL;
+  if (input.excludeId) where = and(where, sql`${expenses.id} <> ${input.excludeId}`) as SQL;
+  const rows = await db
+    .select({ id: expenses.id, supplier: expenses.supplier, amount: expenses.amount, expenseDate: expenses.expenseDate, documentNumber: expenses.documentNumber, status: expenses.status })
+    .from(expenses).where(where).orderBy(desc(expenses.id)).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function projectExists(id: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return true;
+  const r = await db.select({ id: projects.id }).from(projects).where(eq(projects.id, id)).limit(1);
+  return r.length > 0;
+}
+
+export async function categoryExists(id: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return true;
+  const r = await db.select({ id: expenseCategories.id }).from(expenseCategories).where(eq(expenseCategories.id, id)).limit(1);
+  return r.length > 0;
 }
 
 export async function getExpenseById(id: number) {
@@ -3129,7 +3206,7 @@ export async function getInvoiceStats(month?: number, year?: number) {
 // os nós level='brand' com o MESMO nome (Airpark Lisboa/Porto/Faro) e os seus
 // descendentes. Funciona porque as marcas têm nome igual entre cidades e
 // porque TODOS os endpoints filtram via esta função — nada mais muda.
-async function resolveProjectIds(projectId: number): Promise<number[]> {
+export async function resolveProjectIds(projectId: number): Promise<number[]> {
   const db = await getDb();
   if (!db) return [Math.abs(projectId)];
   const allProjects = await db.select().from(projects);
