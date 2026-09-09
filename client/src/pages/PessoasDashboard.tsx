@@ -52,8 +52,10 @@ const CONTRACT_LABELS: Record<ContractType, string> = {
   extra: "Extra",
 };
 
-const PIE_COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899", "#14b8a6"];
-const DONUT_COLORS = ["#3b82f6", "#f97316", "#a855f7"];
+import { CHART_PALETTE, CHART_PRIMARY } from "@/lib/chart-theme";
+
+const PIE_COLORS = CHART_PALETTE;
+const DONUT_COLORS = [CHART_PRIMARY, CHART_PALETTE[6], CHART_PALETTE[4]];
 
 function getWeekNumber(d: Date): number {
   const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
@@ -389,7 +391,7 @@ export default function PessoasDashboard() {
                   <XAxis type="number" />
                   <YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 12 }} />
                   <Tooltip formatter={(value: number) => [`${value} pts`, "Pontuacao"]} />
-                  <Bar dataKey="totalPoints" fill="#6366f1" radius={[0, 4, 4, 0]} />
+                  <Bar dataKey="totalPoints" fill={CHART_PRIMARY} radius={[0, 4, 4, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             )}

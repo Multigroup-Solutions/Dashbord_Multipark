@@ -30,19 +30,21 @@ import {
   Loader2,
 } from "lucide-react";
 
-const DONUT_COLORS = ["#3b82f6", "#f59e0b", "#10b981", "#a855f7", "#6b7280"];
+import { CHART_PALETTE, CHART_PRIMARY, CHART_SEMANTIC } from "@/lib/chart-theme";
+
+const DONUT_COLORS = CHART_PALETTE;
 const BAR_COLORS: Record<number, string> = {
-  1: "#ef4444",
-  2: "#f97316",
-  3: "#eab308",
-  4: "#84cc16",
-  5: "#22c55e",
+  1: CHART_SEMANTIC.danger,
+  2: "#F97316",
+  3: CHART_SEMANTIC.warning,
+  4: "#84CC16",
+  5: CHART_SEMANTIC.success,
 };
 const SEVERITY_COLORS: Record<string, string> = {
-  low: "#94a3b8",
-  medium: "#3b82f6",
-  high: "#f97316",
-  critical: "#ef4444",
+  low: CHART_SEMANTIC.muted,
+  medium: CHART_PRIMARY,
+  high: CHART_SEMANTIC.warning,
+  critical: CHART_SEMANTIC.danger,
 };
 const SEVERITY_LABELS: Record<string, string> = {
   low: "Baixa",
@@ -327,7 +329,7 @@ export default function SuporteDashboard() {
                   <XAxis type="number" allowDecimals={false} />
                   <YAxis type="category" dataKey="name" width={110} tick={{ fontSize: 12 }} />
                   <Tooltip formatter={(value: number) => [value, "Ocorrências"]} />
-                  <Bar dataKey="count" fill="#f97316" radius={[0, 6, 6, 0]} />
+                  <Bar dataKey="count" fill={CHART_SEMANTIC.warning} radius={[0, 6, 6, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             )}

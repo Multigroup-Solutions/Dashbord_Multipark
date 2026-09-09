@@ -55,7 +55,7 @@ export default function ProjectsPage() {
   const [createLevel, setCreateLevel] = useState("group");
   const [editProject, setEditProject] = useState<Project | null>(null);
   const [showAssign, setShowAssign] = useState<number | null>(null);
-  const [form, setForm] = useState({ name: "", description: "", color: "#6366f1", managerId: "", budget: "", partnerName: "", partnerPercent: "" });
+  const [form, setForm] = useState({ name: "", description: "", color: "#1E5BFF", managerId: "", budget: "", partnerName: "", partnerPercent: "" });
   const { data: usersList = [] } = trpc.users.list.useQuery();
 
   const createMut = trpc.projects.create.useMutation({
@@ -82,7 +82,7 @@ export default function ProjectsPage() {
   const tree = useMemo(() => buildTree(allProjects as Project[]), [allProjects]);
 
   function resetForm() {
-    setForm({ name: "", description: "", color: "#6366f1", managerId: "", budget: "", partnerName: "", partnerPercent: "" });
+    setForm({ name: "", description: "", color: "#1E5BFF", managerId: "", budget: "", partnerName: "", partnerPercent: "" });
   }
 
   function toggleExpand(id: number) {
@@ -102,7 +102,7 @@ export default function ProjectsPage() {
 
   function openEdit(p: Project) {
     setEditProject(p);
-    setForm({ name: p.name, description: p.description ?? "", color: p.color ?? "#6366f1", managerId: p.managerId?.toString() ?? "", budget: (p as any).budget ?? "", partnerName: (p as any).partnerName ?? "", partnerPercent: (p as any).partnerPercent ?? "" });
+    setForm({ name: p.name, description: p.description ?? "", color: p.color ?? "#1E5BFF", managerId: p.managerId?.toString() ?? "", budget: (p as any).budget ?? "", partnerName: (p as any).partnerName ?? "", partnerPercent: (p as any).partnerPercent ?? "" });
   }
 
   function getManagerName(managerId: number | null) {
@@ -131,7 +131,7 @@ export default function ProjectsPage() {
           ) : (
             <span className="w-4 shrink-0" />
           )}
-          <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: node.color ?? "#6366f1" }} />
+          <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: node.color ?? "#1E5BFF" }} />
           <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
           <span className="font-medium text-sm flex-1">{node.name}</span>
           {node.managerId && getManagerName(node.managerId) && (

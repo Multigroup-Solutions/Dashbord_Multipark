@@ -31,7 +31,16 @@ import { pt } from "date-fns/locale";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { toast } from "sonner";
 
-const COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#06b6d4"];
+import {
+  CHART_PALETTE,
+  CHART_PRIMARY,
+  CHART_SEMANTIC,
+  chartAxisTick,
+  chartGridStroke,
+  chartTooltipStyle,
+} from "@/lib/chart-theme";
+
+const COLORS = CHART_PALETTE;
 
 function StatCard({
   title,
@@ -186,14 +195,14 @@ export default function ExpenseDashboard() {
             ) : (
               <ResponsiveContainer width="100%" height={240}>
                 <BarChart data={monthlyData} margin={{ top: 4, right: 4, left: 0, bottom: 4 }} style={{ background: "transparent" }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="month" tick={{ fontSize: 12, fill: "#64748b" }} />
-                  <YAxis tick={{ fontSize: 12, fill: "#64748b" }} tickFormatter={(v) => `${v}€`} />
+                  <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} />
+                  <XAxis dataKey="month" tick={{ fontSize: 12, fill: "#64748B" }} />
+                  <YAxis tick={{ fontSize: 12, fill: "#64748B" }} tickFormatter={(v) => `${v}€`} />
                   <Tooltip
                     formatter={(v: any) => [parseFloat(v).toLocaleString("pt-PT", { style: "currency", currency: "EUR" }), "Total"]}
-                    contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "8px" }}
+                    contentStyle={chartTooltipStyle}
                   />
-                  <Bar dataKey="total" fill="#6366f1" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="total" fill={CHART_PRIMARY} radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             )}
@@ -247,14 +256,14 @@ export default function ExpenseDashboard() {
           <CardContent>
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={categoryData} layout="vertical" margin={{ top: 4, right: 16, left: 80, bottom: 4 }} style={{ background: "transparent" }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
-                <XAxis type="number" tick={{ fontSize: 12, fill: "#64748b" }} tickFormatter={(v) => `${v}€`} />
-                <YAxis type="category" dataKey="name" tick={{ fontSize: 12, fill: "#64748b" }} width={80} />
+                <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} horizontal={false} />
+                <XAxis type="number" tick={{ fontSize: 12, fill: "#64748B" }} tickFormatter={(v) => `${v}€`} />
+                <YAxis type="category" dataKey="name" tick={{ fontSize: 12, fill: "#64748B" }} width={80} />
                 <Tooltip
                   formatter={(v: any) => [parseFloat(v).toLocaleString("pt-PT", { style: "currency", currency: "EUR" }), "Total"]}
-                  contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "8px" }}
+                  contentStyle={chartTooltipStyle}
                 />
-                <Bar dataKey="total" fill="#f59e0b" radius={[0, 4, 4, 0]} />
+                <Bar dataKey="total" fill={CHART_SEMANTIC.warning} radius={[0, 4, 4, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </CardContent>

@@ -28,11 +28,17 @@ const PLATFORM_LABELS: Record<string, string> = {
   instagram: "Instagram",
   other: "Outro",
 };
+import {
+  PLATFORM_COLORS as PLATFORM_COLORS_SHARED,
+  CHART_PALETTE,
+  CHART_SEMANTIC,
+} from "@/lib/chart-theme";
+
 const PLATFORM_COLORS: Record<string, string> = {
-  google_ads: "#4285F4",
-  meta_ads: "#1877F2",
-  instagram: "#E4405F",
-  other: "#6B7280",
+  google_ads: PLATFORM_COLORS_SHARED.google_ads,
+  meta_ads: PLATFORM_COLORS_SHARED.meta_ads,
+  instagram: PLATFORM_COLORS_SHARED.instagram,
+  other: PLATFORM_COLORS_SHARED.other,
 };
 const MKT_CAT_LABELS: Record<string, string> = {
   google_ads: "Google Ads",
@@ -48,7 +54,12 @@ const STATUS_LABELS: Record<string, string> = {
   paused: "Pausada",
   completed: "Concluída",
 };
-const CHART_COLORS = ["#4285F4", "#1877F2", "#E4405F", "#F59E0B", "#10B981", "#8B5CF6", "#6B7280"];
+const CHART_COLORS = [
+  PLATFORM_COLORS.google_ads,
+  PLATFORM_COLORS.meta_ads,
+  PLATFORM_COLORS.instagram,
+  ...CHART_PALETTE.slice(1, 5),
+];
 
 export default function MarketingPage() {
   const { user } = useAuth();

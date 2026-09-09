@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Multipark Backoffice — Prévia do Redesign</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          mp: {
+            blue: "#1E5BFF",
+            blue600: "#1847CC",
+            blue100: "#E6EEFF",
+            bg: "#F6F8FE",
+            border: "#E2E8F5",
+            muted: "#64748B",
+            ink: "#0F172A",
+          },
+        },
+        borderRadius: { xl2: "14px" },
+      },
+    },
+  };
+</script>
+<style>
+  body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .tile { transition: transform .15s ease, box-shadow .15s ease; }
+  .tile:hover { transform: translateY(-2px); box-shadow: 0 12px 30px -10px rgba(30,91,255,.3); }
+  .nav-item:hover { background: #F1F5FB; }
+  .nav-item.active { background: #1E5BFF; color: white; }
+  .nav-item.active .ico { color: white; }
+  .scrollbar-none::-webkit-scrollbar { display: none; }
+</style>
+</head>
+<body class="bg-mp-bg text-mp-ink min-h-screen">
+
+<div class="flex min-h-screen">
+  <!-- SIDEBAR -->
+  <aside class="w-[240px] bg-white border-r border-[#EDF1F9] flex flex-col shrink-0">
+    <div class="h-20 border-b border-[#EDF1F9] px-4 flex items-center gap-3">
+      <button class="h-8 w-8 flex items-center justify-center hover:bg-slate-100 rounded-lg" aria-label="Toggle">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-slate-500"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
+      </button>
+      <div class="flex flex-col min-w-0">
+        <div class="flex items-center gap-2">
+          <div class="h-6 w-6 rounded-md bg-mp-blue flex items-center justify-center text-white">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 17V7h4a3 3 0 0 1 0 6H9"/></svg>
+          </div>
+          <span class="font-extrabold tracking-tight text-lg leading-none">MULTIPARK</span>
+        </div>
+        <span class="ml-8 mt-1 inline-flex w-fit rounded-md bg-mp-blue100 px-1.5 py-0.5 text-[10px] font-bold tracking-widest text-mp-blue">AGENTE</span>
+      </div>
+    </div>
+
+    <nav class="flex-1 overflow-y-auto px-3 py-3 space-y-1 scrollbar-none">
+      <div class="nav-item active flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium cursor-pointer">
+        <svg class="ico h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        Menu
+      </div>
+
+      <details open class="group">
+        <summary class="nav-item flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-slate-700 cursor-pointer list-none">
+          <svg class="ico h-4 w-4 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17h2l2-6h10l2 6h2"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></svg>
+          Operacional
+          <svg class="ml-auto h-3 w-3 text-slate-400 transition-transform group-open:rotate-180" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+        </summary>
+        <div class="ml-7 mt-1 space-y-0.5 text-sm text-slate-600">
+          <div class="nav-item px-3 py-1.5 rounded-md cursor-pointer">Recolhas</div>
+          <div class="nav-item px-3 py-1.5 rounded-md cursor-pointer">Entregas</div>
+          <div class="nav-item px-3 py-1.5 rounded-md cursor-pointer">Movimentar</div>
+          <div class="nav-item px-3 py-1.5 rounded-md cursor-pointer">Lugares</div>
+        </div>
+      </details>
+
+      <div class="nav-item flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-slate-700 cursor-pointer">
+        <svg class="ico h-4 w-4 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h18M3 12h18M3 17h18"/></svg>
+        Backoffice
+        <svg class="ml-auto h-3 w-3 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+
+      <div class="nav-item flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-slate-700 cursor-pointer">
+        <svg class="ico h-4 w-4 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><circle cx="17" cy="8" r="2.5"/></svg>
+        Pessoas
+      </div>
+
+      <div class="nav-item flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-slate-700 cursor-pointer">
+        <svg class="ico h-4 w-4 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19h16M6 17V9m5 8V5m5 12v-6m4 6v-9"/></svg>
+        Gestão
+      </div>
+    </nav>
+
+    <div class="border-t border-[#EDF1F9] px-3 py-3 flex items-center gap-2">
+      <div class="h-8 w-8 rounded-full bg-mp-blue text-white flex items-center justify-center text-xs font-bold">J</div>
+      <div class="flex flex-col text-xs leading-tight">
+        <span class="font-semibold">info</span>
+        <span class="text-slate-500">Mudar para Cliente</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="flex-1 min-w-0 flex flex-col">
+    <!-- TOPBAR -->
+    <header class="h-[76px] bg-white border-b border-[#EDF1F9] sticky top-0 z-40 flex items-center justify-between px-6">
+      <div class="flex items-center gap-4">
+        <button class="text-slate-500 text-sm font-medium flex items-center gap-1 hover:text-mp-ink">
+          <span>←</span> Voltar
+        </button>
+        <h1 class="text-2xl font-bold">Backoffice</h1>
+      </div>
+      <div class="flex items-center gap-2">
+        <button class="h-10 px-3 rounded-lg border border-mp-border bg-white text-sm flex items-center gap-2">
+          Lisboa
+          <svg class="h-3 w-3 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <button class="h-10 px-3 rounded-lg border border-mp-border bg-white text-sm flex items-center gap-2">
+          15 Estacionamentos
+          <svg class="h-3 w-3 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <button class="h-10 px-3 rounded-lg border border-[#B5D4F4] bg-white text-mp-blue text-sm font-bold flex items-center gap-2 hover:bg-mp-blue100">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="8" cy="6" r="2" fill="#fff"/><circle cx="16" cy="12" r="2" fill="#fff"/><circle cx="8" cy="18" r="2" fill="#fff"/></svg>
+          filtros
+        </button>
+        <button class="relative h-10 w-10 rounded-lg border border-mp-border bg-white flex items-center justify-center" aria-label="Notificações">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 16v-5a6 6 0 1 0-12 0v5l-2 2h16z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>
+          <span class="absolute -top-1 -right-1 min-w-[18px] h-[18px] rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1">29</span>
+        </button>
+        <button class="h-10 w-10 rounded-full bg-mp-blue text-white border-2 border-[#B5D4F4] font-bold flex items-center justify-center">M</button>
+      </div>
+    </header>
+
+    <!-- BODY -->
+    <div class="p-6 space-y-6">
+      <!-- TABS -->
+      <div class="flex gap-2">
+        <button class="px-4 py-2 rounded-lg bg-mp-blue text-white text-sm font-bold flex items-center gap-2">
+          <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          Menu
+        </button>
+        <button class="px-4 py-2 rounded-lg border border-mp-border bg-white text-sm font-medium flex items-center gap-2">
+          <svg class="h-4 w-4 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
+          Resumo
+        </button>
+        <button class="px-4 py-2 rounded-lg border border-mp-border bg-white text-sm font-medium flex items-center gap-2">
+          <svg class="h-4 w-4 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          Histórico
+        </button>
+      </div>
+
+      <!-- OPERACIONAL -->
+      <section>
+        <h2 class="text-xs font-bold uppercase tracking-[0.15em] text-slate-500 mb-3">Operacional</h2>
+        <div class="grid grid-cols-4 gap-4">
+          <button class="tile bg-white border-2 border-mp-blue rounded-xl2 p-6 flex flex-col items-center gap-2 text-mp-blue">
+            <svg class="h-10 w-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M3 13l2-5a2 2 0 0 1 2-1.4h10a2 2 0 0 1 2 1.4l2 5"/><rect x="3" y="13" width="18" height="5" rx="1.5"/><circle cx="7.5" cy="18" r="1.5"/><circle cx="16.5" cy="18" r="1.5"/></svg>
+            <div class="text-sm font-bold uppercase tracking-wide">Recolhas</div>
+            <div class="text-lg font-bold">(9)</div>
+          </button>
+          <button class="tile bg-white border-2 border-mp-blue rounded-xl2 p-6 flex flex-col items-center gap-2 text-mp-blue">
+            <svg class="h-10 w-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16"/></svg>
+            <div class="text-sm font-bold uppercase tracking-wide">Entregas</div>
+            <div class="text-lg font-bold">(28)</div>
+          </button>
+          <button class="tile bg-white border-2 border-mp-blue rounded-xl2 p-6 flex flex-col items-center gap-2 text-mp-blue">
+            <svg class="h-10 w-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M4 12h14m0 0l-4-4m4 4l-4 4"/><circle cx="20" cy="12" r="1.2" fill="currentColor"/></svg>
+            <div class="text-sm font-bold uppercase tracking-wide">Movimentar</div>
+            <div class="text-lg font-bold">(26)</div>
+          </button>
+          <button class="tile bg-white border-2 border-mp-blue rounded-xl2 p-6 flex flex-col items-center gap-2 text-mp-blue">
+            <svg class="h-10 w-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 17V7h4a3 3 0 0 1 0 6H9"/></svg>
+            <div class="text-sm font-bold uppercase tracking-wide">Lugares</div>
+          </button>
+        </div>
+      </section>
+
+      <!-- BACKOFFICE -->
+      <section>
+        <h2 class="text-xs font-bold uppercase tracking-[0.15em] text-slate-500 mb-3">Backoffice</h2>
+        <div class="grid grid-cols-4 gap-4">
+          <button class="tile bg-white border-2 border-mp-blue rounded-xl2 p-6 flex flex-col items-center gap-2 text-mp-blue">
+            <svg class="h-10 w-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 5v14M5 12h14"/></svg>
+            <div class="text-sm font-bold uppercase tracking-wide">Criar Reserva</div>
+          </button>
+          <button class="tile bg-white border-2 border-mp-blue rounded-xl2 p-6 flex flex-col items-center gap-2 text-mp-blue">
+            <svg class="h-10 w-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="13" cy="13" r="2"/></svg>
+            <div class="text-sm font-bold uppercase tracking-wide">Reservas</div>
+          </button>
+          <button class="tile bg-white border-2 border-mp-blue rounded-xl2 p-6 flex flex-col items-center gap-2 text-mp-blue">
+            <svg class="h-10 w-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="11" cy="11" r="6"/><path d="M15.5 15.5L20 20"/></svg>
+            <div class="text-sm font-bold uppercase tracking-wide">Pesquisa Global</div>
+          </button>
+          <button class="tile bg-white border-2 border-mp-blue rounded-xl2 p-6 flex flex-col items-center gap-2 text-mp-blue">
+            <svg class="h-10 w-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="8"/><path d="M12 8v8M9 10h3.5a1.5 1.5 0 0 1 0 3H9"/></svg>
+            <div class="text-sm font-bold uppercase tracking-wide">Caixa</div>
+            <div class="text-base font-semibold">(220,00 €)</div>
+          </button>
+        </div>
+      </section>
+
+      <!-- PESSOAS -->
+      <section>
+        <h2 class="text-xs font-bold uppercase tracking-[0.15em] text-slate-500 mb-3">Pessoas</h2>
+        <div class="grid grid-cols-4 gap-4">
+          <button class="tile bg-white border-2 border-mp-blue rounded-xl2 p-6 flex flex-col items-center gap-2 text-mp-blue">
+            <svg class="h-10 w-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-7 8-7s8 3 8 7"/></svg>
+            <div class="text-sm font-bold uppercase tracking-wide">Recursos Humanos</div>
+            <div class="text-lg font-bold">(42)</div>
+          </button>
+          <button class="tile bg-white border-2 border-mp-blue rounded-xl2 p-6 flex flex-col items-center gap-2 text-mp-blue">
+            <svg class="h-10 w-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><circle cx="17" cy="8" r="2.5"/></svg>
+            <div class="text-sm font-bold uppercase tracking-wide">Utilizadores</div>
+          </button>
+          <button class="tile bg-white border-2 border-mp-blue rounded-xl2 p-6 flex flex-col items-center gap-2 text-mp-blue">
+            <svg class="h-10 w-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 3l10 5-10 5L2 8z"/><path d="M6 10v5c0 2 3 4 6 4s6-2 6-4v-5"/></svg>
+            <div class="text-sm font-bold uppercase tracking-wide">Formação</div>
+          </button>
+          <button class="tile bg-white border-2 border-mp-blue rounded-xl2 p-6 flex flex-col items-center gap-2 text-mp-blue">
+            <svg class="h-10 w-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M6 9h12v4a6 6 0 0 1-12 0z"/><path d="M6 9V5h12v4M6 9H3v2a2 2 0 0 0 3 2M18 9h3v2a2 2 0 0 1-3 2"/><path d="M10 21h4M12 17v4"/></svg>
+            <div class="text-sm font-bold uppercase tracking-wide">Avaliação</div>
+          </button>
+        </div>
+      </section>
+
+      <!-- GESTAO -->
+      <section>
+        <h2 class="text-xs font-bold uppercase tracking-[0.15em] text-slate-500 mb-3">Gestão</h2>
+        <div class="grid grid-cols-4 gap-4">
+          <button class="tile bg-white border-2 border-mp-blue rounded-xl2 p-6 flex flex-col items-center gap-2 text-mp-blue">
+            <svg class="h-10 w-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
+            <div class="text-sm font-bold uppercase tracking-wide">Financeiro</div>
+          </button>
+          <button class="tile bg-white border-2 border-mp-blue rounded-xl2 p-6 flex flex-col items-center gap-2 text-mp-blue">
+            <svg class="h-10 w-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 3l-2 3-2-3H5l4 6-4 6h5l2-3 2 3h5l-4-6 4-6z"/></svg>
+            <div class="text-sm font-bold uppercase tracking-wide">Operações</div>
+          </button>
+          <button class="tile bg-white border-2 border-mp-blue rounded-xl2 p-6 flex flex-col items-center gap-2 text-mp-blue">
+            <svg class="h-10 w-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M3 11l14-7v16L3 13zM3 11v2M17 8v8"/></svg>
+            <div class="text-sm font-bold uppercase tracking-wide">Marketing</div>
+          </button>
+          <button class="tile relative bg-white border-2 border-mp-blue rounded-xl2 p-6 flex flex-col items-center gap-2 text-mp-blue">
+            <span class="absolute right-3 top-3 min-w-[22px] h-[18px] rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1.5">3</span>
+            <svg class="h-10 w-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 2l-9 4v6c0 5 4 9 9 10 5-1 9-5 9-10V6z"/><path d="M12 8v5M12 16h.01"/></svg>
+            <div class="text-sm font-bold uppercase tracking-wide">Suporte</div>
+          </button>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+</body>
+</html>

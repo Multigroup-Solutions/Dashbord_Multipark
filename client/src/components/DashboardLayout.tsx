@@ -204,13 +204,22 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const [sidebarWidth, setSidebarWidth] = useState(() => {
-    const saved = localStorage.getItem(SIDEBAR_WIDTH_KEY);
-    return saved ? parseInt(saved, 10) : DEFAULT_WIDTH;
+    try {
+      const saved = localStorage.getItem(SIDEBAR_WIDTH_KEY);
+      const parsed = saved ? parseInt(saved, 10) : NaN;
+      return Number.isFinite(parsed) ? parsed : DEFAULT_WIDTH;
+    } catch {
+      return DEFAULT_WIDTH;
+    }
   });
   const { loading, user } = useAuth();
 
   useEffect(() => {
-    localStorage.setItem(SIDEBAR_WIDTH_KEY, sidebarWidth.toString());
+    try {
+      localStorage.setItem(SIDEBAR_WIDTH_KEY, sidebarWidth.toString());
+    } catch {
+      /* storage indisponível (modo privado/disco cheio) — ignora */
+    }
   }, [sidebarWidth]);
 
   if (loading) {
@@ -335,20 +344,27 @@ function DashboardLayoutContent({
           className="border-r"
           disableTransition={isResizing}
         >
-          <SidebarHeader className="h-16 justify-center">
-            <div className="flex items-center gap-3 px-2 transition-all w-full">
+          <SidebarHeader className="h-20 justify-center border-b">
+            <div className="flex items-center gap-3 px-3 transition-all w-full">
               <button
                 onClick={toggleSidebar}
                 className="h-8 w-8 flex items-center justify-center hover:bg-accent rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring shrink-0"
-                aria-label="Toggle navigation"
+                aria-label="Expandir ou colapsar navegação"
               >
-                <PanelLeft className="h-4 w-4 text-gray-500" />
+                <PanelLeft className="h-4 w-4 text-muted-foreground" />
               </button>
               {!isCollapsed ? (
-                <div className="flex items-center gap-2 min-w-0">
-                  <Building2 className="h-5 w-5 shrink-0" style={{ color: '#6366F1' }} />
-                  <span className="font-bold tracking-tight truncate text-foreground text-xl">
-                    Multipark
+                <div className="flex flex-col gap-0.5 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <div className="h-6 w-6 rounded-md flex items-center justify-center" style={{ backgroundColor: '#1E5BFF' }}>
+                      <ParkingCircle className="h-4 w-4 text-white" />
+                    </div>
+                    <span className="font-extrabold tracking-tight truncate text-foreground text-lg leading-none">
+                      MULTIPARK
+                    </span>
+                  </div>
+                  <span className="ml-8 inline-flex w-fit items-center rounded-md bg-[#E6EEFF] px-1.5 py-0.5 text-[10px] font-bold tracking-widest text-[#1E5BFF]">
+                    {user?.role === "super_admin" || user?.role === "admin" ? "ADMIN" : "AGENTE"}
                   </span>
                 </div>
               ) : null}
@@ -410,22 +426,31 @@ function DashboardLayoutContent({
       <SidebarInset>
         {/* Topbar */}
         <div className="flex border-b h-[76px] items-center justify-between bg-card px-4 lg:px-6 sticky top-0 z-40">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 min-w-0">
             {isMobile && (
               <SidebarTrigger className="h-9 w-9 rounded-lg bg-background" />
             )}
-            <h1 className="text-xl lg:text-2xl font-bold text-foreground">
-              {activeMenuItem?.label ?? "Dashboard"}
+            {location !== "/dashboard" && (
+              <button
+                onClick={() => setLocation("/dashboard")}
+                className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+                aria-label="Voltar ao menu"
+              >
+                <span aria-hidden>←</span> Voltar
+              </button>
+            )}
+            <h1 className="text-xl lg:text-2xl font-bold text-foreground truncate">
+              {activeMenuItem?.label ?? "Backoffice"}
             </h1>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 lg:gap-3">
             {/* City filter */}
             <Select
               value={filters.cityId === null ? "all" : String(filters.cityId)}
               onValueChange={(v) => filters.setCityId(v === "all" ? null : Number(v))}
             >
-              <SelectTrigger className="hidden md:flex h-9 w-[130px]">
+              <SelectTrigger className="hidden md:flex h-10 w-[140px] rounded-lg">
                 <SelectValue placeholder="Cidade" />
               </SelectTrigger>
               <SelectContent>
@@ -443,11 +468,13 @@ function DashboardLayoutContent({
               value={filters.brandId === null ? "all" : String(filters.brandId)}
               onValueChange={(v) => filters.setBrandId(v === "all" ? null : Number(v))}
             >
-              <SelectTrigger className="hidden md:flex h-9 w-[140px]">
-                <SelectValue placeholder="Parque" />
+              <SelectTrigger className="hidden md:flex h-10 w-[170px] rounded-lg">
+                <SelectValue
+                  placeholder={`${filters.brands.length} Estacionamentos`}
+                />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">Todos os parques</SelectItem>
+                <SelectItem value="all">{filters.brands.length} Estacionamentos</SelectItem>
                 {filters.brands.map((brand) => (
                   <SelectItem key={brand.id} value={String(brand.id)}>
                     {brand.name}
@@ -462,11 +489,11 @@ function DashboardLayoutContent({
                 <Button
                   variant={hasDateFilter ? "default" : "outline"}
                   size="sm"
-                  className="hidden sm:flex items-center gap-2 h-9"
+                  className="hidden sm:flex items-center gap-2 h-10 rounded-lg font-semibold text-primary border-primary/30 hover:bg-primary/5 data-[state=open]:bg-primary data-[state=open]:text-primary-foreground"
                 >
-                  <Calendar className="h-4 w-4" />
+                  <SlidersHorizontal className="h-4 w-4" />
                   <span className="hidden lg:inline">
-                    {hasDateFilter ? "Datas ativas" : "Datas"}
+                    {hasDateFilter ? "filtros ativos" : "filtros"}
                   </span>
                 </Button>
               </PopoverTrigger>
@@ -517,9 +544,16 @@ function DashboardLayoutContent({
             {/* Notifications */}
             <Popover>
               <PopoverTrigger asChild>
-                <Button variant="outline" size="icon" className="relative h-9 w-9">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="relative h-10 w-10 rounded-lg"
+                  aria-label="Notificações"
+                >
                   <Bell className="h-4 w-4" />
-                  <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-destructive" />
+                  <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold flex items-center justify-center px-1">
+                    29
+                  </span>
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-80" align="end">
@@ -562,9 +596,12 @@ function DashboardLayoutContent({
             {/* User Avatar with dropdown */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-full">
-                  <Avatar className="h-9 w-9 border cursor-pointer">
-                    <AvatarFallback className="text-xs font-medium bg-primary text-primary-foreground">
+                <button
+                  className="focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-full"
+                  aria-label={`Menu do utilizador ${user?.name ?? ""}`}
+                >
+                  <Avatar className="h-10 w-10 border-2 border-primary/30 cursor-pointer">
+                    <AvatarFallback className="text-sm font-bold bg-primary text-primary-foreground">
                       {user?.name?.charAt(0).toUpperCase()}
                     </AvatarFallback>
                   </Avatar>
@@ -588,7 +625,7 @@ function DashboardLayoutContent({
           </div>
         </div>
 
-        <main className="flex-1 p-4 lg:p-6" style={{ backgroundColor: '#F0F4FF' }}>{children}</main>
+        <main className="flex-1 p-4 lg:p-6 bg-background">{children}</main>
       </SidebarInset>
     </>
   );

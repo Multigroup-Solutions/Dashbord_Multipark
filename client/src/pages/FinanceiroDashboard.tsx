@@ -33,16 +33,16 @@ import {
   DashboardFilterBar,
 } from "@/components/DashboardFilterBar";
 
-const COLORS = [
-  "#6366f1",
-  "#f59e0b",
-  "#10b981",
-  "#ef4444",
-  "#8b5cf6",
-  "#06b6d4",
-  "#ec4899",
-  "#84cc16",
-];
+import {
+  CHART_PALETTE,
+  CHART_SEMANTIC,
+  CHART_PRIMARY,
+  chartAxisTick,
+  chartGridStroke,
+  chartTooltipStyle,
+} from "@/lib/chart-theme";
+
+const COLORS = CHART_PALETTE;
 
 function fmt(v: number) {
   return v.toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
@@ -145,9 +145,9 @@ export default function FinanceiroDashboard() {
 
   // Expense status data for mini bar
   const statusData = [
-    { name: "Pago", value: Math.max(0, pagoDespesas), color: "#10b981" },
-    { name: "Pendente", value: pendente, color: "#f59e0b" },
-    { name: "Em Atraso", value: emAtraso, color: "#ef4444" },
+    { name: "Pago", value: Math.max(0, pagoDespesas), color: CHART_SEMANTIC.success },
+    { name: "Pendente", value: pendente, color: CHART_SEMANTIC.warning },
+    { name: "Em Atraso", value: emAtraso, color: CHART_SEMANTIC.danger },
   ].filter(s => s.value > 0);
 
   const totalStatusValue = statusData.reduce((s, d) => s + d.value, 0);
@@ -309,10 +309,10 @@ export default function FinanceiroDashboard() {
                     <p className="text-xs font-medium text-muted-foreground mb-2">Despesas Mensais</p>
                     <ResponsiveContainer width="100%" height={140}>
                       <BarChart data={(expenseStats?.monthlyTrend ?? []).map((m: any) => ({ month: m.month, total: m.total ?? 0 }))} margin={{ top: 4, right: 4, left: 0, bottom: 4 }}>
-                        <XAxis dataKey="month" tick={{ fontSize: 10, fill: "#64748b" }} />
-                        <YAxis tick={{ fontSize: 10, fill: "#64748b" }} tickFormatter={v => `${v}€`} width={50} />
-                        <Tooltip formatter={(v: any) => [fmt(parseFloat(String(v))), "Total"]} contentStyle={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: "8px", fontSize: "12px" }} />
-                        <Bar dataKey="total" fill="#6366f1" radius={[3, 3, 0, 0]} />
+                        <XAxis dataKey="month" tick={chartAxisTick} />
+                        <YAxis tick={chartAxisTick} tickFormatter={v => `${v}€`} width={50} />
+                        <Tooltip formatter={(v: any) => [fmt(parseFloat(String(v))), "Total"]} contentStyle={chartTooltipStyle} />
+                        <Bar dataKey="total" fill={CHART_PRIMARY} radius={[3, 3, 0, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
@@ -447,11 +447,7 @@ export default function FinanceiroDashboard() {
                       `${fmt(parseFloat(String(v)))} (${props.payload.bookings} reservas)`,
                       props.payload.name,
                     ]}
-                    contentStyle={{
-                      background: "#ffffff",
-                      border: "1px solid #e2e8f0",
-                      borderRadius: "8px",
-                    }}
+                    contentStyle={chartTooltipStyle}
                   />
                   <Legend iconSize={10} wrapperStyle={{ fontSize: "12px" }} />
                 </PieChart>
@@ -495,11 +491,7 @@ export default function FinanceiroDashboard() {
                       `${fmt(parseFloat(String(v)))} (${props.payload.bookings} reservas)`,
                       props.payload.name,
                     ]}
-                    contentStyle={{
-                      background: "#ffffff",
-                      border: "1px solid #e2e8f0",
-                      borderRadius: "8px",
-                    }}
+                    contentStyle={chartTooltipStyle}
                   />
                   <Legend iconSize={10} wrapperStyle={{ fontSize: "12px" }} />
                 </PieChart>
@@ -541,12 +533,12 @@ export default function FinanceiroDashboard() {
                     >
                       <stop
                         offset="5%"
-                        stopColor="#10b981"
+                        stopColor={CHART_SEMANTIC.success}
                         stopOpacity={0.3}
                       />
                       <stop
                         offset="95%"
-                        stopColor="#10b981"
+                        stopColor={CHART_SEMANTIC.success}
                         stopOpacity={0}
                       />
                     </linearGradient>
@@ -559,23 +551,23 @@ export default function FinanceiroDashboard() {
                     >
                       <stop
                         offset="5%"
-                        stopColor="#ef4444"
+                        stopColor={CHART_SEMANTIC.danger}
                         stopOpacity={0.3}
                       />
                       <stop
                         offset="95%"
-                        stopColor="#ef4444"
+                        stopColor={CHART_SEMANTIC.danger}
                         stopOpacity={0}
                       />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} />
                   <XAxis
                     dataKey="month"
-                    tick={{ fontSize: 12, fill: "#64748b" }}
+                    tick={{ fontSize: 12, fill: "#64748B" }}
                   />
                   <YAxis
-                    tick={{ fontSize: 12, fill: "#64748b" }}
+                    tick={{ fontSize: 12, fill: "#64748B" }}
                     tickFormatter={(v) => `${v}€`}
                   />
                   <Tooltip
@@ -583,11 +575,7 @@ export default function FinanceiroDashboard() {
                       fmt(parseFloat(String(v))),
                       name === "receita" ? "Receita" : "Despesas",
                     ]}
-                    contentStyle={{
-                      background: "#ffffff",
-                      border: "1px solid #e2e8f0",
-                      borderRadius: "8px",
-                    }}
+                    contentStyle={chartTooltipStyle}
                   />
                   <Legend
                     formatter={(value) =>
@@ -597,7 +585,7 @@ export default function FinanceiroDashboard() {
                   <Area
                     type="monotone"
                     dataKey="receita"
-                    stroke="#10b981"
+                    stroke={CHART_SEMANTIC.success}
                     strokeWidth={2}
                     fillOpacity={1}
                     fill="url(#colorReceita)"
@@ -605,7 +593,7 @@ export default function FinanceiroDashboard() {
                   <Area
                     type="monotone"
                     dataKey="despesas"
-                    stroke="#ef4444"
+                    stroke={CHART_SEMANTIC.danger}
                     strokeWidth={2}
                     fillOpacity={1}
                     fill="url(#colorDespesas)"
@@ -648,11 +636,7 @@ export default function FinanceiroDashboard() {
                   </Pie>
                   <Tooltip
                     formatter={(v: any) => [fmt(parseFloat(String(v)))]}
-                    contentStyle={{
-                      background: "#ffffff",
-                      border: "1px solid #e2e8f0",
-                      borderRadius: "8px",
-                    }}
+                    contentStyle={chartTooltipStyle}
                   />
                   <Legend iconSize={10} wrapperStyle={{ fontSize: "12px" }} />
                 </PieChart>

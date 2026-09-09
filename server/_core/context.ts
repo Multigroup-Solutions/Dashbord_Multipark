@@ -1,4 +1,5 @@
 import type { CreateExpressContextOptions } from "@trpc/server/adapters/express";
+import type { Request } from "express";
 import type { User } from "../../drizzle/schema";
 import { sdk } from "./sdk";
 
@@ -25,4 +26,16 @@ export async function createContext(
     res: opts.res,
     user,
   };
+}
+
+/**
+ * Obtém o utilizador autenticado a partir de um Request Express simples
+ * (usado para endpoints REST como /api/upload).
+ */
+export async function getUserFromRequest(req: Request): Promise<User | null> {
+  try {
+    return await sdk.authenticateRequest(req as any);
+  } catch {
+    return null;
+  }
 }

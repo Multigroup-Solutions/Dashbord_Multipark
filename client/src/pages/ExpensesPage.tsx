@@ -469,7 +469,7 @@ export default function ExpensesPage() {
                         <TableCell>
                           {category ? (
                             <span className="inline-flex items-center gap-1 text-xs">
-                              <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: category.color ?? "#6366f1" }} />
+                              <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: category.color ?? "#1E5BFF" }} />
                               {category.name}
                             </span>
                           ) : "—"}

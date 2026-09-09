@@ -18,10 +18,13 @@ export function getSessionCookieOptions(
 ): Pick<CookieOptions, "domain" | "httpOnly" | "path" | "sameSite" | "secure"> {
   const secure = isSecureRequest(req);
 
+  // Em HTTPS usamos SameSite=strict (proteção máxima contra CSRF).
+  // Em HTTP local usamos "lax" porque "strict" impede navegação cross-site
+  // após login OAuth (o callback vem da Google).
   return {
     httpOnly: true,
     path: "/",
-    sameSite: secure ? "lax" : "lax",
+    sameSite: secure ? "strict" : "lax",
     secure,
   };
 }

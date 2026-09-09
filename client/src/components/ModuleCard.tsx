@@ -1,62 +1,90 @@
 import type { LucideIcon } from "lucide-react";
-import { Card } from "@/components/ui/card";
 import { useLocation } from "wouter";
 
 interface ModuleCardProps {
   icon: LucideIcon;
-  iconColor: string;
-  iconBg: string;
   label: string;
   path: string;
+  count?: number | string;
+  /** Valor opcional em destaque (ex: "220,00 €") */
+  value?: string;
+  /** Cor base do tile. Default = azul Multipark. */
+  accentColor?: string;
   alertCount?: number;
-  accentColor: string;
 }
 
+/**
+ * Tile no estilo Multipark Agent:
+ * - Fundo branco
+ * - Borda azul
+ * - Ícone grande centrado
+ * - Label em caps azul + (contagem) por baixo
+ */
 export function ModuleCard({
   icon: Icon,
-  iconColor,
-  iconBg,
   label,
   path,
+  count,
+  value,
+  accentColor = "#1E5BFF",
   alertCount,
-  accentColor,
 }: ModuleCardProps) {
   const [, setLocation] = useLocation();
 
   return (
-    <Card
-      className="p-5 cursor-pointer hover:-translate-y-1 hover:shadow-lg transition-all"
-      style={{
-        ["--accent" as string]: accentColor,
-      }}
+    <button
+      type="button"
       onClick={() => setLocation(path)}
+      aria-label={label}
+      className="group relative flex flex-col items-center justify-center gap-3 rounded-2xl border-2 bg-card px-4 py-8 text-center transition-all hover:-translate-y-0.5 hover:shadow-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
+      style={{
+        borderColor: accentColor,
+        boxShadow: `0 0 0 0 ${accentColor}00`,
+      }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = accentColor;
-        e.currentTarget.style.boxShadow = `0 8px 20px ${accentColor}33`;
+        e.currentTarget.style.boxShadow = `0 10px 25px -5px ${accentColor}33`;
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = "";
-        e.currentTarget.style.boxShadow = "";
+        e.currentTarget.style.boxShadow = `0 0 0 0 ${accentColor}00`;
       }}
     >
-      <div className="flex items-center gap-4">
-        <div
-          className="h-14 w-14 rounded-xl flex items-center justify-center shrink-0"
-          style={{ backgroundColor: iconBg }}
+      {alertCount !== undefined && alertCount > 0 && (
+        <span className="absolute right-3 top-3 flex min-w-[22px] items-center justify-center rounded-full bg-destructive px-1.5 py-0.5 text-[10px] font-bold text-destructive-foreground">
+          {alertCount}
+        </span>
+      )}
+
+      <Icon
+        className="h-10 w-10 transition-transform group-hover:scale-110"
+        style={{ color: accentColor }}
+        strokeWidth={1.75}
+        aria-hidden="true"
+      />
+
+      <div className="flex flex-col items-center gap-0.5">
+        <span
+          className="text-sm font-bold uppercase tracking-wide"
+          style={{ color: accentColor }}
         >
-          <Icon className="h-7 w-7" style={{ color: iconColor }} />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="text-base font-semibold text-foreground truncate">
-            {label}
-          </div>
-        </div>
-        {alertCount !== undefined && alertCount > 0 && (
-          <div className="min-w-[24px] h-6 rounded-full bg-destructive text-destructive-foreground text-xs font-bold flex items-center justify-center px-2">
-            {alertCount}
-          </div>
+          {label}
+        </span>
+        {count !== undefined && (
+          <span
+            className="text-lg font-bold leading-none"
+            style={{ color: accentColor }}
+          >
+            ({count})
+          </span>
+        )}
+        {value && (
+          <span
+            className="text-base font-semibold leading-none"
+            style={{ color: accentColor }}
+          >
+            ({value})
+          </span>
         )}
       </div>
-    </Card>
+    </button>
   );
 }

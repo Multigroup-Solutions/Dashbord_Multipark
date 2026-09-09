@@ -1,5 +1,15 @@
 import { and, desc, eq, gte, lte, like, or, sql, aliasedTable, isNotNull, isNull, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
+
+/**
+ * Escapa wildcards SQL LIKE (%, _, \) para evitar que um utilizador
+ * possa alargar resultados injectando wildcards no input de pesquisa.
+ *
+ * Uso: `like(col, `%${sanitizeLike(input)}%`)`
+ */
+function sanitizeLike(input: string): string {
+  return input.replace(/[\\%_]/g, (m) => `\\${m}`);
+}
 import {
   users,
   expenses,
@@ -291,10 +301,11 @@ export async function getExpenses(filters: ExpenseFilters = {}) {
   if (filters.userId) conditions.push(eq(expenses.insertedById, filters.userId));
   if (filters.status) conditions.push(eq(expenses.status, filters.status as any));
   if (filters.search) {
+    const q = `%${sanitizeLike(filters.search)}%`;
     conditions.push(
       or(
-        like(expenses.supplier, `%${filters.search}%`),
-        like(expenses.description, `%${filters.search}%`)
+        like(expenses.supplier, q),
+        like(expenses.description, q)
       )
     );
   }
@@ -980,7 +991,8 @@ export async function getCampaigns(filters: { platform?: string; projectId?: num
       }
     };
     addChildren(filters.projectId);
-    conditions.push(sql`${campaigns.projectId} IN (${sql.raw(Array.from(ids).join(",") || "0")})`);
+    const idArr = Array.from(ids);
+    conditions.push(idArr.length > 0 ? inArray(campaigns.projectId, idArr) : sql`1 = 0`);
   }
   if (filters.status) conditions.push(eq(campaigns.status, filters.status as any));
   const q = db.select({ campaign: campaigns, project: projects }).from(campaigns)
@@ -1037,7 +1049,8 @@ export async function getAllDailyStats(filters: { from?: Date; to?: Date; projec
     const ids = new Set<number>();
     const addChildren = (parentId: number) => { ids.add(parentId); for (const p of allProjects) { if (p.parentId === parentId) addChildren(p.id); } };
     addChildren(filters.projectId);
-    conditions.push(sql`${campaigns.projectId} IN (${sql.raw(Array.from(ids).join(","))})`);
+    const idArr = Array.from(ids);
+    conditions.push(idArr.length > 0 ? inArray(campaigns.projectId, idArr) : sql`1 = 0`);
   }
   const q = db.select({ stat: campaignDailyStats, campaign: campaigns, project: projects })
     .from(campaignDailyStats)
@@ -1114,7 +1127,10 @@ export async function getMarketingDashboardStats(filters: { from?: Date; to?: Da
   const conditions: any[] = [];
   if (filters.from) conditions.push(gte(campaignDailyStats.date, filters.from));
   if (filters.to) conditions.push(lte(campaignDailyStats.date, filters.to));
-  if (projectIds) conditions.push(sql`${campaigns.projectId} IN (${sql.raw(Array.from(projectIds).join(","))})`);
+  if (projectIds) {
+    const idArr = Array.from(projectIds);
+    conditions.push(idArr.length > 0 ? inArray(campaigns.projectId, idArr) : sql`1 = 0`);
+  }
 
   const statsQ = db.select({
     totalSpend: sql<string>`COALESCE(SUM(${campaignDailyStats.spend}), 0)`,
@@ -1131,7 +1147,10 @@ export async function getMarketingDashboardStats(filters: { from?: Date; to?: Da
   const mktConditions: any[] = [];
   if (filters.from) mktConditions.push(gte(marketingExpenses.date, filters.from));
   if (filters.to) mktConditions.push(lte(marketingExpenses.date, filters.to));
-  if (projectIds) mktConditions.push(sql`${marketingExpenses.projectId} IN (${sql.raw(Array.from(projectIds).join(","))})`);
+  if (projectIds) {
+    const idArr = Array.from(projectIds);
+    mktConditions.push(idArr.length > 0 ? inArray(marketingExpenses.projectId, idArr) : sql`1 = 0`);
+  }
   const mktQ = db.select({
     total: sql<string>`COALESCE(SUM(${marketingExpenses.amount}), 0)`,
   }).from(marketingExpenses);
@@ -1139,7 +1158,10 @@ export async function getMarketingDashboardStats(filters: { from?: Date; to?: Da
 
   // Campaign count
   const campConditions: any[] = [];
-  if (projectIds) campConditions.push(sql`${campaigns.projectId} IN (${sql.raw(Array.from(projectIds).join(","))})`);
+  if (projectIds) {
+    const idArr = Array.from(projectIds);
+    campConditions.push(idArr.length > 0 ? inArray(campaigns.projectId, idArr) : sql`1 = 0`);
+  }
   const campQ = db.select({ count: sql<number>`COUNT(*)` }).from(campaigns);
   const campCount = campConditions.length > 0 ? await campQ.where(and(...campConditions)) : await campQ;
 
@@ -1179,7 +1201,8 @@ export async function getBookingRevenueByProject(filters: { from?: string; to?: 
       }
     };
     addChildren(filters.projectId);
-    conditions.push(sql`${multiparkBookings.projectId} IN (${sql.raw(Array.from(ids).join(","))})`);
+    const idArr = Array.from(ids);
+    conditions.push(idArr.length > 0 ? inArray(multiparkBookings.projectId, idArr) : sql`1 = 0`);
   }
 
   const rows = await db.select({
@@ -1517,15 +1540,15 @@ export async function searchClientHistory(name?: string, email?: string, plate?:
   // Search complaints by client name/email/plate
   if (name || email || plate) {
     const conds: any[] = [];
-    if (name) conds.push(sql`${complaints.clientName} LIKE ${'%' + name + '%'}`);
-    if (email) conds.push(sql`${complaints.clientEmail} LIKE ${'%' + email + '%'}`);
-    if (plate) conds.push(sql`${complaints.vehiclePlate} LIKE ${'%' + plate + '%'}`);
+    if (name) conds.push(like(complaints.clientName, `%${sanitizeLike(name)}%`));
+    if (email) conds.push(like(complaints.clientEmail, `%${sanitizeLike(email)}%`));
+    if (plate) conds.push(like(complaints.vehiclePlate, `%${sanitizeLike(plate)}%`));
     results.complaints = await db.select().from(complaints).where(or(...conds)).limit(20);
   }
 
   // Search vehicle movements by plate
   if (plate) {
-    const vehs = await db.select().from(vehicles).where(sql`${vehicles.plate} LIKE ${'%' + plate + '%'}`).limit(5);
+    const vehs = await db.select().from(vehicles).where(like(vehicles.plate, `%${sanitizeLike(plate)}%`)).limit(5);
     if (vehs.length > 0) {
       results.movements = await db.select().from(vehicleMovements).where(eq(vehicleMovements.vehicleId, vehs[0].id)).orderBy(desc(vehicleMovements.createdAt)).limit(20);
     }
@@ -1534,8 +1557,8 @@ export async function searchClientHistory(name?: string, email?: string, plate?:
   // Search previous reviews by name/email
   if (name || email) {
     const rConds: any[] = [];
-    if (name) rConds.push(sql`${googleReviews.reviewerName} LIKE ${'%' + name + '%'}`);
-    if (email) rConds.push(sql`${googleReviews.reviewerEmail} LIKE ${'%' + email + '%'}`);
+    if (name) rConds.push(like(googleReviews.reviewerName, `%${sanitizeLike(name)}%`));
+    if (email) rConds.push(like(googleReviews.reviewerEmail, `%${sanitizeLike(email)}%`));
     results.reviews = await db.select().from(googleReviews).where(or(...rConds)).limit(20);
   }
 
@@ -1739,11 +1762,14 @@ export async function getLostFoundItems(filters?: { status?: string; itemType?: 
   if (filters?.status) conditions.push(eq(lostFoundItems.status, filters.status as any));
   if (filters?.itemType) conditions.push(eq(lostFoundItems.itemType, filters.itemType as any));
   if (filters?.projectId) conditions.push(eq(lostFoundItems.projectId, filters.projectId));
-  if (filters?.search) conditions.push(or(
-    like(lostFoundItems.clientName, `%${filters.search}%`),
-    like(lostFoundItems.description, `%${filters.search}%`),
-    like(lostFoundItems.vehiclePlate, `%${filters.search}%`),
-  ));
+  if (filters?.search) {
+    const q = `%${sanitizeLike(filters.search)}%`;
+    conditions.push(or(
+      like(lostFoundItems.clientName, q),
+      like(lostFoundItems.description, q),
+      like(lostFoundItems.vehiclePlate, q),
+    ));
+  }
   const where = conditions.length > 0 ? and(...conditions) : undefined;
   return db.select().from(lostFoundItems).where(where).orderBy(desc(lostFoundItems.createdAt));
 }
@@ -2105,10 +2131,11 @@ export async function getInvoices(filters?: { status?: string; projectId?: numbe
   if (filters?.status) conditions.push(eq(invoices.status, filters.status as any));
   if (filters?.projectId) conditions.push(eq(invoices.projectId, filters.projectId));
   if (filters?.search) {
+    const q = `%${sanitizeLike(filters.search)}%`;
     conditions.push(or(
-      like(invoices.invoiceNumber, `%${filters.search}%`),
-      like(invoices.clientName, `%${filters.search}%`),
-      like(invoices.clientNif, `%${filters.search}%`)
+      like(invoices.invoiceNumber, q),
+      like(invoices.clientName, q),
+      like(invoices.clientNif, q)
     ));
   }
   const where = conditions.length > 0 ? and(...conditions) : undefined;
@@ -2806,7 +2833,7 @@ export async function getMultiparkBookings(filters?: {
   if (filters?.from) conditions.push(gte(multiparkBookings.checkIn, filters.from));
   if (filters?.to) conditions.push(lte(multiparkBookings.checkIn, filters.to));
   if (filters?.search) {
-    const s = `%${filters.search}%`;
+    const s = `%${sanitizeLike(filters.search)}%`;
     conditions.push(
       or(
         like(multiparkBookings.clientFirstName, s),
@@ -2873,7 +2900,8 @@ export async function getLocalBookingsByAction(filters: {
       }
     };
     addChildren(filters.projectId);
-    conditions.push(sql`${multiparkBookings.projectId} IN (${sql.raw(Array.from(ids).join(","))})`);
+    const idArr = Array.from(ids);
+    conditions.push(idArr.length > 0 ? inArray(multiparkBookings.projectId, idArr) : sql`1 = 0`);
   }
 
   return db
@@ -2887,7 +2915,7 @@ export async function getLocalBookingsByAction(filters: {
 export async function searchBookingByRef(search: string) {
   const db = await getDb();
   if (!db) return [];
-  const s = `%${search.trim()}%`;
+  const s = `%${sanitizeLike(search.trim())}%`;
   return db.select({
     id: multiparkBookings.id,
     externalId: multiparkBookings.externalId,
@@ -2956,7 +2984,8 @@ export async function getMultiparkBookingStats(filters?: { from?: string; to?: s
       }
     };
     addChildren(filters.projectId);
-    projectFilter = sql`${multiparkBookings.projectId} IN (${sql.raw(Array.from(ids).join(",") || "0")})`;
+    const idArr = Array.from(ids);
+    projectFilter = idArr.length > 0 ? inArray(multiparkBookings.projectId, idArr) : sql`1 = 0`;
   }
 
   const now = new Date();
@@ -4098,14 +4127,14 @@ export async function getBookingHistoryByPlate(plate: string) {
   const db = await getDb();
   if (!db) return [];
   return db.select().from(bookingHistory)
-    .where(like(bookingHistory.licensePlate, `%${plate}%`))
+    .where(like(bookingHistory.licensePlate, `%${sanitizeLike(plate)}%`))
     .orderBy(desc(bookingHistory.actionDate));
 }
 
 export async function searchBookingHistory(search: string) {
   const db = await getDb();
   if (!db) return [];
-  const s = `%${search}%`;
+  const s = `%${sanitizeLike(search)}%`;
   return db.select().from(bookingHistory)
     .where(or(
       like(bookingHistory.bookingId, s),

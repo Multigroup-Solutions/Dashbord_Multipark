@@ -21,14 +21,25 @@ const PLATFORM_LABELS: Record<string, string> = {
   other: "Outro",
 };
 
+import {
+  PLATFORM_COLORS as PLATFORM_COLORS_SHARED,
+  CHART_PALETTE,
+} from "@/lib/chart-theme";
+
+// Cores oficiais das plataformas — mantidas para reconhecimento visual.
 const PLATFORM_COLORS: Record<string, string> = {
-  google_ads: "#4285F4",
-  meta_ads: "#1877F2",
-  instagram: "#E4405F",
-  other: "#6B7280",
+  google_ads: PLATFORM_COLORS_SHARED.google_ads,
+  meta_ads: PLATFORM_COLORS_SHARED.meta_ads,
+  instagram: PLATFORM_COLORS_SHARED.instagram,
+  other: PLATFORM_COLORS_SHARED.other,
 };
 
-const CHART_COLORS = ["#4285F4", "#1877F2", "#E4405F", "#F59E0B", "#10B981", "#8B5CF6", "#6B7280"];
+const CHART_COLORS = [
+  PLATFORM_COLORS.google_ads,
+  PLATFORM_COLORS.meta_ads,
+  PLATFORM_COLORS.instagram,
+  ...CHART_PALETTE.slice(1, 5),
+];
 
 const formatEUR = (value: number) =>
   new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR" }).format(value);

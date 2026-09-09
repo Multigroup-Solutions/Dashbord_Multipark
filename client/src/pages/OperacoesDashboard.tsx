@@ -36,7 +36,13 @@ const fmtNum = (n: number) => n.toLocaleString("pt-PT");
 const fmtDateTime = (d: string | null | undefined) =>
   d ? new Date(d).toLocaleString("pt-PT") : "—";
 
-const DONUT_COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899"];
+import {
+  CHART_PALETTE,
+  CHART_PRIMARY,
+  CHART_SEMANTIC,
+} from "@/lib/chart-theme";
+
+const DONUT_COLORS = CHART_PALETTE;
 
 const SYNC_STATUS_MAP: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
   success: { label: "OK", variant: "default" },
@@ -54,9 +60,9 @@ const FLEET_STATUS_LABELS: Record<string, string> = {
 };
 
 const FLEET_STATUS_COLORS: Record<string, string> = {
-  active: "#10b981",
-  maintenance: "#f59e0b",
-  inactive: "#ef4444",
+  active: CHART_SEMANTIC.success,
+  maintenance: CHART_SEMANTIC.warning,
+  inactive: CHART_SEMANTIC.danger,
 };
 
 // ─── KPI Card ─────────────────────────────────────────────────────────────────
@@ -176,7 +182,7 @@ export default function OperacoesDashboard() {
       .map(([status, count]) => ({
         name: FLEET_STATUS_LABELS[status] || status,
         value: count,
-        color: FLEET_STATUS_COLORS[status] || "#94a3b8",
+        color: FLEET_STATUS_COLORS[status] || CHART_SEMANTIC.muted,
       }));
   }, [vehicles]);
 
@@ -274,8 +280,8 @@ export default function OperacoesDashboard() {
                 <AreaChart data={areaChartData}>
                   <defs>
                     <linearGradient id="colorReservas" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
+                      <stop offset="5%" stopColor={CHART_PRIMARY} stopOpacity={0.3} />
+                      <stop offset="95%" stopColor={CHART_PRIMARY} stopOpacity={0} />
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
@@ -286,7 +292,7 @@ export default function OperacoesDashboard() {
                     type="monotone"
                     dataKey="reservas"
                     name="Reservas"
-                    stroke="#6366f1"
+                    stroke={CHART_PRIMARY}
                     fill="url(#colorReservas)"
                     strokeWidth={2}
                   />

@@ -35,7 +35,16 @@ import {
 import { useState, useMemo, useRef } from "react";
 import { useLocation } from "wouter";
 
-const COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899", "#84cc16"];
+import {
+  CHART_PALETTE,
+  CHART_PRIMARY,
+  CHART_SEMANTIC,
+  chartAxisTick,
+  chartGridStroke,
+  chartTooltipStyle,
+} from "@/lib/chart-theme";
+
+const COLORS = CHART_PALETTE;
 
 function fmt(v: number) {
   return v.toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
@@ -326,7 +335,7 @@ export default function ProjectCostsDashboard() {
           <div className="flex items-center gap-2 min-w-0 flex-1">
             <div
               className="h-3 w-3 rounded-full shrink-0"
-              style={{ backgroundColor: item.color || "#6366f1" }}
+              style={{ backgroundColor: item.color || CHART_PRIMARY }}
             />
             <span className={`truncate ${depth === 0 ? "font-semibold" : "font-medium"} text-sm`}>
               {item.name}
@@ -570,15 +579,15 @@ export default function ProjectCostsDashboard() {
             ) : (
               <ResponsiveContainer width="100%" height={280}>
                 <BarChart data={topProjectsChart} margin={{ top: 4, right: 4, left: 0, bottom: 4 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="name" tick={{ fontSize: 11, fill: "#64748b" }} angle={-20} textAnchor="end" height={60} />
-                  <YAxis tick={{ fontSize: 11, fill: "#64748b" }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k€`} />
+                  <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} />
+                  <XAxis dataKey="name" tick={chartAxisTick} angle={-20} textAnchor="end" height={60} />
+                  <YAxis tick={chartAxisTick} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k€`} />
                   <Tooltip
                     formatter={(v: any, name: string) => [
                       fmt(parseFloat(v)),
                       name === "despesas" ? "Despesas" : name === "salarios" ? "Salários" : "Orçamento",
                     ]}
-                    contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "8px", fontSize: "12px" }}
+                    contentStyle={chartTooltipStyle}
                   />
                   <Legend
                     formatter={(value: string) =>
@@ -586,9 +595,9 @@ export default function ProjectCostsDashboard() {
                     }
                     wrapperStyle={{ fontSize: "12px" }}
                   />
-                  <Bar dataKey="despesas" stackId="cost" fill="#f59e0b" radius={[0, 0, 0, 0]} />
-                  <Bar dataKey="salarios" stackId="cost" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="orcamento" fill="#e2e8f0" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="despesas" stackId="cost" fill={CHART_SEMANTIC.warning} radius={[0, 0, 0, 0]} />
+                  <Bar dataKey="salarios" stackId="cost" fill={CHART_PALETTE[4]} radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="orcamento" fill={chartGridStroke} radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             )}
@@ -623,7 +632,7 @@ export default function ProjectCostsDashboard() {
                   </Pie>
                   <Tooltip
                     formatter={(v: any) => [fmt(parseFloat(String(v)))]}
-                    contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "8px", fontSize: "12px" }}
+                    contentStyle={chartTooltipStyle}
                   />
                   <Legend iconSize={10} wrapperStyle={{ fontSize: "11px" }} />
                 </PieChart>
@@ -711,7 +720,7 @@ export default function ProjectCostsDashboard() {
                   <div key={d.id} className="flex items-center gap-3 p-3 rounded-lg bg-white border">
                     <div
                       className="h-3 w-3 rounded-full shrink-0"
-                      style={{ backgroundColor: d.color || "#6366f1" }}
+                      style={{ backgroundColor: d.color || CHART_PRIMARY }}
                     />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">{d.name}</p>
