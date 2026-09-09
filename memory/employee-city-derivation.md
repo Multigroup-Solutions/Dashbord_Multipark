@@ -58,7 +58,9 @@ por Faro / Porto / Lisboa").
 - UI: linha de botões `Todas | Lisboa | Porto | Faro | Sem cidade`, **cada um com
   a contagem**, + coluna "Cidade" na tabela (tooltip diz de que fonte veio).
 - **Composição de filtros (AND, por esta ordem)**: cidade → "Mostrar só quem
-  marcou disponibilidade" → **pesquisa livre por pessoa** (2026-08-20). O conjunto
+  marcou disponibilidade" → **"Ainda não respondeu" / "Sem mensagem nas últimas
+  24h"** (2026-09-09, ver `whatsapp-integration.md`) → **pesquisa livre por
+  pessoa** (2026-08-20). O conjunto
   resultante (`shownExtras`) é o que a tabela mostra E o alvo de "a todos" (email
   e WhatsApp) — invariante "o que envio é o que vejo".
 - Mudar o filtro de cidade/disponibilidade **limpa a seleção** (nunca enviar a

@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, gte, lte, like, or, sql, aliasedTable, isNotNull, isNull, inArray, notInArray, getTableColumns, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { normalizeEmail } from "../shared/email";
+import { parseClothingItems } from "../shared/clothing";
 import {
   users,
   expenses,
@@ -121,6 +122,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0061").then(m => ({ s: m.MIGRATION_0061_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0061 })),
       import("./migrations/migration_0062").then(m => ({ s: m.MIGRATION_0062_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0062 })),
       import("./migrations/migration_0063").then(m => ({ s: m.MIGRATION_0063_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0063 })),
+      import("./migrations/migration_0064").then(m => ({ s: m.MIGRATION_0064_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0064 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -4684,7 +4686,9 @@ export async function autoCloseStaleCheckIns(): Promise<{ closed: number }> {
 
 // ─── PASSAGEM DE TURNO (formulário dos team leaders, 2026-08-06) ─────────────
 // Checklist de fim de turno: carros p/ coberto, caixas, bolsas, rolos MB,
-// canetas, bateria, PDAs, fardas + notas. 1 registo por (dia, turno, cidade).
+// canetas, bateria, PDAs, fardamento + notas. 1 registo por (dia, turno, cidade).
+// `clothingItems` (JSON, ver shared/clothing.ts) substitui `uniformsCount`
+// desde 2026-09-09; a coluna antiga fica para os registos anteriores.
 let shiftHandoverEnsured = false;
 async function ensureShiftHandoverTable() {
   if (shiftHandoverEnsured) return;
@@ -4708,6 +4712,7 @@ async function ensureShiftHandoverTable() {
     \`mbBattery\` INT NULL,
     \`pdasCharged\` TINYINT NULL,
     \`uniformsCount\` INT NULL,
+    \`clothingItems\` TEXT NULL,
     \`notes\` TEXT NULL,
     \`filledById\` INT NULL,
     \`filledByName\` VARCHAR(255) NULL,
@@ -4734,7 +4739,11 @@ export async function saveShiftHandover(data: Record<string, any>) {
     ["mbRollsInPouch", data.mbRollsInPouch], ["pensInPouch", data.pensInPouch],
     ["mbBattery", data.mbBattery],
     ["pdasCharged", data.pdasCharged == null ? null : (data.pdasCharged ? 1 : 0)],
-    ["uniformsCount", data.uniformsCount], ["notes", data.notes],
+    ["uniformsCount", data.uniformsCount],
+    // Lista de peças (já validada no router); `null` limpa. JSON compacto —
+    // o `esc` corta a 2000 chars, e 30 peças ficam muito abaixo disso.
+    ["clothingItems", Array.isArray(data.clothingItems) ? JSON.stringify(data.clothingItems) : data.clothingItems ?? null],
+    ["notes", data.notes],
     ["filledById", data.filledById], ["filledByName", data.filledByName],
   ];
   const updates = cols.filter(([c]) => !["handoverDate", "shift", "city"].includes(c))
@@ -4758,7 +4767,8 @@ export async function listShiftHandovers(opts: { from?: string; to?: string; cit
   const [rows] = await db.execute(sql.raw(
     `SELECT * FROM \`shift_handovers\` ${where} ORDER BY handoverDate DESC, shift, city LIMIT 200`,
   )) as any;
-  return rows as any[];
+  // `clothingItems` sai como JSON parseado e validado — o cliente nunca vê texto cru.
+  return (rows as any[]).map((r) => ({ ...r, clothingItems: parseClothingItems(r.clothingItems) }));
 }
 
 /** Dashboard do supervisor (por dia): condutores por turno, carros

@@ -271,6 +271,16 @@ export interface OverviewExtra {
   city: CityKey | null;
   citySource: CitySource | null;
   responded: boolean;
+  /**
+   * Último contacto NOSSO com o extra (WhatsApp enviado com sucesso ou email de
+   * pedido de disponibilidade), calculado no SERVIDOR a partir do que já fica
+   * registado em `whatsapp_messages` (direction='out') e
+   * `availability_request_log`. `contactedWithin24h` é comparado em SQL com
+   * NOW() para não depender do relógio nem do fuso do browser.
+   */
+  lastContactedAt: string | null;
+  lastContactChannel: "whatsapp" | "email" | null;
+  contactedWithin24h: boolean;
   availableDays: number;
   days: { day: string; morning: boolean; night: boolean; fromHour: number | null; toHour: number | null; note: string | null }[];
 }
@@ -291,6 +301,66 @@ export interface WeekOverview {
    * já tinha disponibilidade marcada).
    */
   extras: OverviewExtra[];
+}
+
+interface LastContact {
+  at: string;
+  channel: "whatsapp" | "email";
+  within24h: boolean;
+}
+
+/**
+ * Último contacto nosso por extra, a partir dos registos que os envios JÁ
+ * deixam: `whatsapp_messages` de saída (broadcast, teste a um colaborador,
+ * resposta do inbox — tudo o que não ficou `failed`) via a conversa ligada ao
+ * `employeeId`, e `availability_request_log` (emails de pedido). Ganha o mais
+ * recente dos dois. Tolerante a tabelas ainda não criadas (migração 0045 /
+ * log de emails preguiçoso): nesse caso devolve vazio em vez de partir a página.
+ */
+async function resolveLastContactForEmployeeIds(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  ids: number[],
+): Promise<Map<number, LastContact>> {
+  const map = new Map<number, LastContact>();
+  if (!ids.length) return map;
+  const { sql } = await import("drizzle-orm");
+  const consider = (employeeId: number, at: unknown, channel: LastContact["channel"], within: unknown) => {
+    if (at == null) return;
+    const atStr = at instanceof Date ? at.toISOString().slice(0, 19).replace("T", " ") : String(at);
+    const prev = map.get(employeeId);
+    if (prev && prev.at >= atStr) return;
+    map.set(employeeId, { at: atStr, channel, within24h: Number(within) > 0 });
+  };
+
+  try {
+    const [rows] = (await db.execute(sql`
+      SELECT c.employeeId AS employeeId,
+             MAX(m.createdAt) AS lastAt,
+             MAX(m.createdAt >= DATE_SUB(NOW(), INTERVAL 24 HOUR)) AS recent
+        FROM \`whatsapp_messages\` m
+        JOIN \`whatsapp_conversations\` c ON c.id = m.conversationId
+       WHERE m.direction = 'out' AND m.status <> 'failed'
+         AND c.employeeId IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+       GROUP BY c.employeeId`)) as any;
+    for (const r of rows as any[]) consider(Number(r.employeeId), r.lastAt, "whatsapp", r.recent);
+  } catch (err) {
+    console.warn("[availability] último contacto WhatsApp indisponível:", String((err as any)?.cause?.message ?? (err as any)?.message ?? err).slice(0, 120));
+  }
+
+  try {
+    const [rows] = (await db.execute(sql`
+      SELECT employeeId,
+             MAX(sentAt) AS lastAt,
+             MAX(sentAt >= DATE_SUB(NOW(), INTERVAL 24 HOUR)) AS recent
+        FROM \`availability_request_log\`
+       WHERE employeeId IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+       GROUP BY employeeId`)) as any;
+    for (const r of rows as any[]) consider(Number(r.employeeId), r.lastAt, "email", r.recent);
+  } catch (err) {
+    console.warn("[availability] último contacto email indisponível:", String((err as any)?.cause?.message ?? (err as any)?.message ?? err).slice(0, 120));
+  }
+
+  return map;
 }
 
 export async function getWeekOverview(weekStart: string, projectId?: number | null): Promise<WeekOverview> {
@@ -351,6 +421,9 @@ export async function getWeekOverview(weekStart: string, projectId?: number | nu
   // Cidade por extra (derivada — ver employeeCity.ts). Uma resolução para toda
   // a lista, não uma por linha.
   const cities = await resolveCitiesForEmployeeIds(ids);
+  // Último contacto por extra (WhatsApp/email) — duas queries agregadas, não
+  // uma por linha. Alimenta o filtro "sem mensagem nas últimas 24h".
+  const contacts = db ? await resolveLastContactForEmployeeIds(db, ids) : new Map<number, LastContact>();
 
   const overviewExtras: OverviewExtra[] = extras.map(e => {
     const empRows = byEmp.get(e.id) ?? [];
@@ -374,6 +447,9 @@ export async function getWeekOverview(weekStart: string, projectId?: number | nu
       city: cities.get(e.id)?.city ?? null,
       citySource: cities.get(e.id)?.source ?? null,
       responded: empRows.length > 0,
+      lastContactedAt: contacts.get(e.id)?.at ?? null,
+      lastContactChannel: contacts.get(e.id)?.channel ?? null,
+      contactedWithin24h: contacts.get(e.id)?.within24h ?? false,
       availableDays,
       days,
     };

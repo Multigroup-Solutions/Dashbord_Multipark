@@ -14,8 +14,24 @@ import { and, eq, isNotNull, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { employees, whatsappConversations, whatsappMessages } from "../drizzle/schema";
 import { normalizePhoneE164 } from "../shared/phone";
+import {
+  baseMime,
+  extensionForMime,
+  mediaKindForMessageType,
+  type WhatsAppMediaKind,
+} from "../shared/whatsappMedia";
+import { downloadMedia } from "./whatsapp";
+import { storagePut } from "./storage";
 
 export type MessageStatus = "sent" | "delivered" | "read" | "failed";
+
+/** Referência à media entrante tal como vem no webhook (ainda sem descarregar). */
+export interface ParsedInboundMedia {
+  kind: WhatsAppMediaKind;
+  /** id Meta — serve para descarregar (válido ~30 dias) */
+  id: string;
+  mime: string | null;
+}
 
 export interface ParsedInboundMessage {
   waMessageId: string;
@@ -23,6 +39,8 @@ export interface ParsedInboundMessage {
   timestamp: string | null; // 'YYYY-MM-DD HH:MM:SS' (UTC)
   type: string; // text | image | audio | ...
   body: string; // texto, ou representação mínima ("[imagem]", caption, ...)
+  /** imagem/áudio enviados pela pessoa; null nos restantes tipos */
+  media: ParsedInboundMedia | null;
 }
 
 export interface ParsedStatusUpdate {
@@ -88,6 +106,19 @@ export function messageBody(m: any): string {
   }
 }
 
+/**
+ * Extrai a referência à media (imagem/áudio/nota de voz) de uma mensagem
+ * Meta. O download é feito depois, em `handleInbound` — aqui é só parse. PURA.
+ */
+export function parseInboundMedia(m: any): ParsedInboundMedia | null {
+  const kind = mediaKindForMessageType(m?.type);
+  if (!kind) return null;
+  const node = m?.[String(m.type)];
+  const id = node?.id;
+  if (!id) return null;
+  return { kind, id: String(id), mime: node?.mime_type ? String(node.mime_type) : null };
+}
+
 /** Percorre entry[].changes[].value.{messages,statuses} de forma defensiva. */
 export function parseWebhookPayload(payload: any): ParsedWebhook {
   const messages: ParsedInboundMessage[] = [];
@@ -111,6 +142,7 @@ export function parseWebhookPayload(payload: any): ParsedWebhook {
           timestamp: parseMetaTimestamp(m?.timestamp),
           type: String(m?.type ?? "unknown"),
           body: messageBody(m),
+          media: parseInboundMedia(m),
         });
       }
 
@@ -214,19 +246,56 @@ async function handleInbound(db: Db, m: ParsedInboundMessage, empMap: Map<string
     .limit(1);
   const conversationId = conv[0].id;
 
+  const stored = m.media ? await storeInboundMedia(m.waMessageId, m.media) : null;
+
   await db.insert(whatsappMessages).values({
     conversationId,
     direction: "in",
     waMessageId: m.waMessageId,
-    // O enum só tem text|template; media entrante fica como 'text' com body "[imagem]".
+    // O enum só tem text|template; media entrante fica como 'text' com body
+    // "[imagem]"/caption e o ficheiro nas colunas media* (migração 0064).
     type: "text",
     body: m.body,
+    mediaType: m.media?.kind ?? null,
+    mediaId: m.media?.id ?? null,
+    mediaMime: stored?.mime ?? baseMime(m.media?.mime),
+    mediaUrl: stored?.url ?? null,
+    mediaKey: stored?.key ?? null,
     // Mensagens entrantes não têm ciclo de status de entrega nosso; 'delivered'
     // = "recebida por nós" (a UI só mostra status nas mensagens OUT).
     status: "delivered",
     waTimestamp: ts,
   });
   return true;
+}
+
+/**
+ * Descarrega a media da Meta e guarda-a no storage da app. Best-effort: se
+ * falhar (token, rede, storage), a mensagem é gravada na mesma só com o
+ * `mediaId` — a Meta mantém o ficheiro ~30 dias, por isso um re-download fica
+ * possível mais tarde. Nunca lança (senão o webhook respondia 5xx e a Meta
+ * repetia um evento que já tínhamos processado em tudo o resto).
+ */
+async function storeInboundMedia(
+  waMessageId: string,
+  media: ParsedInboundMedia,
+): Promise<{ url: string; key: string; mime: string | null } | null> {
+  const dl = await downloadMedia(media.id);
+  if (!dl.ok) {
+    console.warn(`[WhatsAppWebhook] media ${media.kind} ${media.id} não descarregada: ${dl.error}`);
+    return null;
+  }
+  const mime = baseMime(dl.mime ?? media.mime);
+  // Nome de ficheiro derivado do id da mensagem (único) — sem caracteres soltos.
+  const safeId = waMessageId.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120);
+  const key = `whatsapp/inbound/${media.kind}/${safeId}.${extensionForMime(mime)}`;
+  try {
+    const put = await storagePut(key, dl.data, mime ?? "application/octet-stream");
+    return { url: put.url, key: put.key, mime };
+  } catch (err: any) {
+    console.warn(`[WhatsAppWebhook] media ${media.id} não gravada no storage: ${err?.message ?? err}`);
+    return null;
+  }
 }
 
 async function handleStatus(db: Db, s: ParsedStatusUpdate): Promise<boolean> {

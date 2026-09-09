@@ -208,6 +208,54 @@ async function postMessage(
   return { ok: false, error: lastError };
 }
 
+/** Teto para media entrante (a Meta limita imagens a 5 MB e áudio a 16 MB). */
+const MEDIA_MAX_BYTES = 20 * 1024 * 1024;
+
+export type WhatsappMediaDownload =
+  | { ok: true; data: Buffer; mime: string | null; bytes: number }
+  | { ok: false; error: string };
+
+/**
+ * Descarrega um ficheiro de media recebido (imagem/áudio enviados por uma
+ * pessoa). Dois passos da Cloud API: `GET /{media-id}` devolve um URL
+ * temporário (≈5 min) + mime; `GET <url>` com o MESMO Bearer devolve os bytes.
+ * Nunca lança — devolve `{ ok: false, error }` para o chamador decidir (o
+ * webhook guarda a mensagem na mesma, só sem ficheiro).
+ */
+export async function downloadMedia(mediaId: string): Promise<WhatsappMediaDownload> {
+  const token = process.env.WHATSAPP_TOKEN;
+  if (!token) return { ok: false, error: "WhatsApp não configurado (falta WHATSAPP_TOKEN)." };
+  const id = String(mediaId ?? "").trim();
+  if (!id) return { ok: false, error: "Media sem id." };
+
+  try {
+    const metaResp = await fetch(`${GRAPH_BASE}/${apiVersion()}/${encodeURIComponent(id)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!metaResp.ok) {
+      const errBody = (await metaResp.json().catch(() => ({}))) as any;
+      const detail = errBody?.error ? describeMetaError(Number(errBody.error.code) || undefined, errBody.error) : `HTTP ${metaResp.status}`;
+      return { ok: false, error: `Metadados da media: ${detail}` };
+    }
+    const meta = (await metaResp.json().catch(() => ({}))) as { url?: string; mime_type?: string; file_size?: number };
+    if (!meta.url) return { ok: false, error: "Resposta da Meta sem URL de media." };
+    if (typeof meta.file_size === "number" && meta.file_size > MEDIA_MAX_BYTES) {
+      return { ok: false, error: `Ficheiro demasiado grande (${Math.round(meta.file_size / 1024 / 1024)} MB).` };
+    }
+
+    const fileResp = await fetch(meta.url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!fileResp.ok) return { ok: false, error: `Download da media: HTTP ${fileResp.status}` };
+    const buf = Buffer.from(await fileResp.arrayBuffer());
+    if (buf.byteLength > MEDIA_MAX_BYTES) {
+      return { ok: false, error: `Ficheiro demasiado grande (${Math.round(buf.byteLength / 1024 / 1024)} MB).` };
+    }
+    const mime = meta.mime_type || fileResp.headers.get("content-type") || null;
+    return { ok: true, data: buf, mime, bytes: buf.byteLength };
+  } catch (err: any) {
+    return { ok: false, error: `Erro de rede: ${err?.message || String(err)}` };
+  }
+}
+
 /**
  * Envia uma mensagem de TEMPLATE (o único tipo permitido fora da janela de 24h).
  * `components` opcional segue o formato da Graph API (body/header params etc.).

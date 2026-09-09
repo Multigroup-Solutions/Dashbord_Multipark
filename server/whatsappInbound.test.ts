@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseWebhookPayload,
   parseMetaTimestamp,
+  parseInboundMedia,
   messageBody,
   metaFromToE164,
 } from "./whatsappInbound";
@@ -56,13 +57,25 @@ describe("parseWebhookPayload — mensagens inbound", () => {
     expect(out.statuses).toHaveLength(0);
   });
 
-  it("media não-texto guarda representação mínima", () => {
+  it("media não-texto guarda representação mínima E a referência à media", () => {
     const p = inboundPayload([
-      { id: "wamid.IMG", from: "351911111111", timestamp: "1700000000", type: "image", image: { id: "m1" } },
+      { id: "wamid.IMG", from: "351911111111", timestamp: "1700000000", type: "image", image: { id: "m1", mime_type: "image/jpeg", sha256: "x" } },
     ]);
     const out = parseWebhookPayload(p);
     expect(out.messages[0].body).toBe("[imagem]");
     expect(out.messages[0].type).toBe("image");
+    expect(out.messages[0].media).toEqual({ kind: "image", id: "m1", mime: "image/jpeg" });
+  });
+
+  it("texto não tem media; tipos não suportados (vídeo) também não", () => {
+    const p = inboundPayload([
+      { id: "wamid.T", from: "351911111111", type: "text", text: { body: "olá" } },
+      { id: "wamid.V", from: "351911111111", type: "video", video: { id: "v1", mime_type: "video/mp4" } },
+    ]);
+    const out = parseWebhookPayload(p);
+    expect(out.messages[0].media).toBeNull();
+    expect(out.messages[1].media).toBeNull();
+    expect(out.messages[1].body).toBe("[vídeo]");
   });
 
   it("ignora mensagens sem id ou sem from", () => {
@@ -122,3 +135,19 @@ describe("metaFromToE164", () => {
     expect(metaFromToE164("447911123456")).toBe("+447911123456");
   });
 });
+
+describe("parseInboundMedia", () => {
+  it("imagem com caption mantém a referência (a caption vai no body)", () => {
+    expect(parseInboundMedia({ type: "image", image: { id: "i1", mime_type: "image/png", caption: "foto" } })).toEqual({ kind: "image", id: "i1", mime: "image/png" });
+  });
+  it("áudio e nota de voz → audio; sem mime → null no mime", () => {
+    expect(parseInboundMedia({ type: "audio", audio: { id: "a1", mime_type: "audio/ogg; codecs=opus", voice: true } })).toEqual({ kind: "audio", id: "a1", mime: "audio/ogg; codecs=opus" });
+    expect(parseInboundMedia({ type: "voice", voice: { id: "a2" } })).toEqual({ kind: "audio", id: "a2", mime: null });
+  });
+  it("sem id da media → null (nada para descarregar)", () => {
+    expect(parseInboundMedia({ type: "image", image: { caption: "só caption" } })).toBeNull();
+    expect(parseInboundMedia({ type: "sticker", sticker: { id: "s1" } })).toBeNull();
+    expect(parseInboundMedia(null)).toBeNull();
+  });
+});
+

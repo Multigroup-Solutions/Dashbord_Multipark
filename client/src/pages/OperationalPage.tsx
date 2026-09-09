@@ -996,6 +996,11 @@ function CheckinDialog({ pdaId, onClose }: { pdaId: number; onClose: () => void 
   const { data: zelloUsers } = trpc.operational.zello.users.useQuery();
   const { data: employees } = trpc.rh.list.useQuery();
   const [employeeId, setEmployeeId] = useState("");
+  // Lista longa → combobox com pesquisa (mesmo componente do RH/Zello).
+  const employeeOptions = useMemo(
+    () => (employees || []).map((e: any) => ({ value: String(e.employee.id), label: e.employee.fullName })),
+    [employees],
+  );
   // Pré-preenche com o utilizador Zello registado no próprio PDA.
   const { data: pdaRecord } = trpc.operational.pdas.get.useQuery({ id: pdaId });
   useEffect(() => {
@@ -1052,14 +1057,15 @@ function CheckinDialog({ pdaId, onClose }: { pdaId: number; onClose: () => void 
           </div>
           <div>
             <Label>Funcionário *</Label>
-            <Select value={employeeId} onValueChange={setEmployeeId}>
-              <SelectTrigger><SelectValue placeholder="Escolher funcionário..." /></SelectTrigger>
-              <SelectContent>
-                {(employees || []).map((e: any) => (
-                  <SelectItem key={e.employee.id} value={String(e.employee.id)}>{e.employee.fullName}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <SearchableSelect
+              className="w-full"
+              value={employeeId}
+              onChange={setEmployeeId}
+              options={employeeOptions}
+              placeholder="Escolher funcionário..."
+              searchPlaceholder="Pesquisar por nome…"
+              emptyText="Nenhum funcionário com esse nome"
+            />
             {!employeeId && <p className="text-xs text-muted-foreground mt-1">Obrigatório — o histórico de atividade fica associado a esta pessoa.</p>}
           </div>
           <div>
@@ -1067,14 +1073,16 @@ function CheckinDialog({ pdaId, onClose }: { pdaId: number; onClose: () => void 
             <Input type="number" value={mobileDataMbStart} onChange={e => setMobileDataMbStart(e.target.value)} placeholder="Ex: 2500" />
           </div>
           <div>
-            <Label>Foto de Entrada</Label>
+            <Label>Foto de Entrada *</Label>
             <div className="flex items-center gap-2">
               <label className="cursor-pointer">
                 <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhotoCapture} />
-                <Button variant="outline" asChild><span><Camera className="w-4 h-4 mr-1" />{uploading ? "A carregar..." : "Tirar Foto"}</span></Button>
+                <Button variant="outline" asChild><span><Camera className="w-4 h-4 mr-1" />{uploading ? "A carregar..." : photoEntryUrl ? "Repetir Foto" : "Tirar Foto"}</span></Button>
               </label>
               {photoEntryUrl && <Badge variant="outline" className="text-green-600">Foto OK</Badge>}
             </div>
+            {/* Obrigatória (Jorge, 2026-09-09) — o servidor também recusa sem foto. */}
+            {!photoEntryUrl && !uploading && <p className="text-xs text-muted-foreground mt-1">Obrigatório — fotografa o PDA para registar o estado à entrada.</p>}
           </div>
           <div>
             <Label>Notas</Label>
@@ -1083,11 +1091,11 @@ function CheckinDialog({ pdaId, onClose }: { pdaId: number; onClose: () => void 
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button disabled={checkinMut.isPending || uploading || !employeeId || employeeId === "none"} onClick={() => checkinMut.mutate({
+          <Button disabled={checkinMut.isPending || uploading || !employeeId || employeeId === "none" || !photoEntryUrl} onClick={() => checkinMut.mutate({
             pdaId,
             zelloUsername: zelloUsername || undefined,
             employeeId: Number(employeeId),
-            photoEntryUrl: photoEntryUrl || undefined,
+            photoEntryUrl,
             mobileDataMbStart: mobileDataMbStart ? Number(mobileDataMbStart) : undefined,
             notes: notes || undefined,
           })}>{checkinMut.isPending ? "A registar..." : "Registar Check-in"}</Button>

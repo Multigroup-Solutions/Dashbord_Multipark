@@ -35,6 +35,7 @@ import {
   messageDisplayBody,
 } from "@shared/whatsappTemplate";
 import { matchesContactQuery } from "@shared/contactSearch";
+import { isMediaPlaceholderBody } from "@shared/whatsappMedia";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -329,13 +330,19 @@ export default function WhatsAppInboxPage() {
                       Template{m.templateName ? ` · ${m.templateName}` : ""}
                     </div>
                   )}
+                  {/* Imagens e áudios enviados pela pessoa (2026-09-09). Com o
+                      ficheiro à vista, o marcador "[imagem]"/"[áudio]" é redundante;
+                      a caption (quando existe) continua a aparecer por baixo. */}
+                  <InboundMedia m={m} />
                   {/* Envios feitos antes de 2026-08-20 não gravaram o conteúdo:
                       dizem-no em itálico em vez de aparecerem em branco. */}
-                  <div
-                    className={`whitespace-pre-wrap break-words${m.body?.trim() ? "" : " italic opacity-80"}`}
-                  >
-                    {messageDisplayBody(m) || "—"}
-                  </div>
+                  {!(m.mediaUrl && isMediaPlaceholderBody(m.body)) && (
+                    <div
+                      className={`whitespace-pre-wrap break-words${m.body?.trim() ? "" : " italic opacity-80"}`}
+                    >
+                      {messageDisplayBody(m) || "—"}
+                    </div>
+                  )}
                   <div
                     className={`flex items-center gap-1 justify-end mt-0.5 text-[10px] ${
                       m.direction === "out" ? "text-green-100" : "text-muted-foreground"
@@ -453,3 +460,36 @@ export default function WhatsAppInboxPage() {
     </div>
   );
 }
+
+// ─── Media recebida (imagem / áudio) ────────────────────────────────────────
+function InboundMedia({ m }: { m: { mediaType: string | null; mediaUrl: string | null; mediaMime: string | null; body: string | null } }) {
+  if (!m.mediaType) return null;
+  if (!m.mediaUrl) {
+    // Download falhou no webhook (token/rede/storage) — dizemos porquê em vez
+    // de mostrar uma bolha vazia; o `mediaId` fica na BD para re-tentar.
+    return (
+      <div className="text-[11px] italic opacity-80 mb-1">
+        {m.mediaType === "image" ? "Imagem" : m.mediaType === "audio" ? "Áudio" : "Ficheiro"} recebido, mas não foi possível descarregar.
+      </div>
+    );
+  }
+  if (m.mediaType === "image") {
+    return (
+      <a href={m.mediaUrl} target="_blank" rel="noreferrer" className="block mb-1" title="Abrir imagem">
+        <img src={m.mediaUrl} alt={m.body && !isMediaPlaceholderBody(m.body) ? m.body : "Imagem recebida"} loading="lazy" className="max-h-64 max-w-full rounded-md object-contain bg-black/5" />
+      </a>
+    );
+  }
+  if (m.mediaType === "audio") {
+    return (
+      <audio controls preload="metadata" className="max-w-full mb-1 h-9">
+        <source src={m.mediaUrl} type={m.mediaMime ?? undefined} />
+        <a href={m.mediaUrl} target="_blank" rel="noreferrer">Ouvir áudio</a>
+      </audio>
+    );
+  }
+  return (
+    <a href={m.mediaUrl} target="_blank" rel="noreferrer" className="underline text-[12px] block mb-1">Abrir ficheiro</a>
+  );
+}
+

@@ -15,6 +15,18 @@ import { toast } from "sonner";
 import { ClipboardCheck, History, BarChart3, Loader2, Sun, Moon, CheckCircle2, XCircle, AlertTriangle, Clock } from "lucide-react";
 import { useTableSort, Th } from "@/components/SortableTable";
 import { fmtPTDate } from "@/lib/lisbonTime";
+import { Plus, Trash2 } from "lucide-react";
+import {
+  CLOTHING_LABELS,
+  CLOTHING_MAX_ITEMS,
+  CLOTHING_MAX_QTY,
+  CLOTHING_SIZES,
+  CLOTHING_TYPES,
+  summarizeClothingItems,
+  type ClothingItem,
+  type ClothingSize,
+  type ClothingType,
+} from "@shared/clothing";
 
 // ─── PASSAGEM DE TURNO (pedido do Jorge, 2026-08-06) ─────────────────────────
 // Os team leaders preenchem o checklist no fim do turno; o supervisor consulta
@@ -65,6 +77,10 @@ function HandoverForm() {
     mbBattery: "", pdasCharged: null as boolean | null, uniformsCount: "", notes: "",
   };
   const [f, setF] = useState(empty);
+  // Fardamento: linhas em rascunho (qty como texto enquanto se escreve). O
+  // "Número de fardas" antigo deixou de se pedir; `f.uniformsCount` fica só
+  // para devolver intacto o valor dos registos anteriores a 2026-09-09.
+  const [clothing, setClothing] = useState<ClothingDraftRow[]>([]);
 
   // Carrega o registo existente do (dia, turno, cidade) para editar
   const existingQ = trpc.shiftHandover.list.useQuery({ from: date, to: date, city });
@@ -87,8 +103,10 @@ function HandoverForm() {
         uniformsCount: existing.uniformsCount != null ? String(existing.uniformsCount) : "",
         notes: existing.notes ?? "",
       });
+      setClothing(((existing.clothingItems ?? []) as ClothingItem[]).map(toDraftRow));
     } else {
       setF(empty);
+      setClothing([]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [existing?.id, date, shift, city]);
@@ -164,9 +182,15 @@ function HandoverForm() {
           <div><Label className="text-xs">Rolos MB na bolsa do terminal</Label><Input type="number" min={0} value={f.mbRollsInPouch} onChange={(e) => setF({ ...f, mbRollsInPouch: e.target.value })} /></div>
           <div><Label className="text-xs">Canetas na bolsa do terminal</Label><Input type="number" min={0} value={f.pensInPouch} onChange={(e) => setF({ ...f, pensInPouch: e.target.value })} /></div>
           <div><Label className="text-xs">Bateria do MB (%)</Label><Input type="number" min={0} max={100} value={f.mbBattery} onChange={(e) => setF({ ...f, mbBattery: e.target.value })} /></div>
-          <div><Label className="text-xs">Número de fardas</Label><Input type="number" min={0} value={f.uniformsCount} onChange={(e) => setF({ ...f, uniformsCount: e.target.value })} /></div>
         </div>
         <YesNo label="PDAs carregados a 100%" value={f.pdasCharged} onChange={(v) => setF({ ...f, pdasCharged: v })} />
+
+        {/* Fardamento — peças com quantidade e tamanho (Jorge, 2026-09-09) */}
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Fardamento</p>
+        <ClothingEditor rows={clothing} onChange={setClothing} />
+        {existing?.uniformsCount != null && clothing.length === 0 && (
+          <p className="text-xs text-muted-foreground">Registo antigo: {existing.uniformsCount} farda(s) (sem tamanhos). Adiciona as peças acima para detalhar.</p>
+        )}
 
         {/* Notas */}
         <div>
@@ -176,7 +200,8 @@ function HandoverForm() {
 
         <Button
           className="w-full gap-2"
-          disabled={save.isPending}
+          disabled={save.isPending || hasIncompleteClothingRow(clothing)}
+          title={hasIncompleteClothingRow(clothing) ? "Há peças de fardamento sem quantidade válida" : undefined}
           onClick={() => save.mutate({
             handoverDate: date, shift, city,
             carsForCovered: intOrNull(f.carsForCovered),
@@ -192,6 +217,7 @@ function HandoverForm() {
             mbBattery: intOrNull(f.mbBattery),
             pdasCharged: f.pdasCharged,
             uniformsCount: intOrNull(f.uniformsCount),
+            clothingItems: draftRowsToItems(clothing),
             notes: f.notes || null,
           })}
         >
@@ -200,6 +226,75 @@ function HandoverForm() {
         </Button>
       </CardContent>
     </Card>
+  );
+}
+
+// ─── FARDAMENTO (peças + tamanhos) ──────────────────────────────────────────
+interface ClothingDraftRow { key: number; type: ClothingType; size: ClothingSize; qty: string }
+let clothingRowSeq = 0;
+const toDraftRow = (it: ClothingItem): ClothingDraftRow => ({ key: ++clothingRowSeq, type: it.type, size: it.size, qty: String(it.qty) });
+const newDraftRow = (): ClothingDraftRow => ({ key: ++clothingRowSeq, type: "casaco", size: "M", qty: "1" });
+const rowQty = (r: ClothingDraftRow) => parseInt(r.qty, 10);
+const isValidQty = (r: ClothingDraftRow) => rowQty(r) >= 1 && rowQty(r) <= CLOTHING_MAX_QTY;
+const hasIncompleteClothingRow = (rows: ClothingDraftRow[]) => rows.some((r) => !isValidQty(r));
+/** Linhas válidas → itens para gravar; sem linhas → `[]` (limpa o que estava). */
+const draftRowsToItems = (rows: ClothingDraftRow[]): ClothingItem[] =>
+  rows.filter(isValidQty).map((r) => ({ type: r.type, size: r.size, qty: rowQty(r) }));
+const typeLabel = (t: ClothingType) => CLOTHING_LABELS[t].one.charAt(0).toUpperCase() + CLOTHING_LABELS[t].one.slice(1);
+/** Histórico: resumo das peças; registos antigos só têm o número de fardas. */
+const clothingCell = (h: any): string => {
+  const items = (h.clothingItems ?? []) as ClothingItem[];
+  if (items.length) return summarizeClothingItems(items);
+  return h.uniformsCount != null ? `${h.uniformsCount} farda(s)` : "";
+};
+
+function ClothingEditor({ rows, onChange }: { rows: ClothingDraftRow[]; onChange: (rows: ClothingDraftRow[]) => void }) {
+  const update = (key: number, patch: Partial<ClothingDraftRow>) => onChange(rows.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  const remove = (key: number) => onChange(rows.filter((r) => r.key !== key));
+  return (
+    <div className="space-y-2">
+      {rows.length === 0 && <p className="text-xs text-muted-foreground">Sem peças registadas neste turno.</p>}
+      {rows.map((r) => {
+        const bad = !isValidQty(r);
+        return (
+          <div key={r.key} className="grid grid-cols-[1fr_1fr_5rem_auto] gap-2 items-end">
+            <div>
+              <Label className="text-xs">Peça</Label>
+              <Select value={r.type} onValueChange={(v) => update(r.key, { type: v as ClothingType })}>
+                <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {CLOTHING_TYPES.map((t) => <SelectItem key={t} value={t}>{typeLabel(t)}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs">Tamanho</Label>
+              <Select value={r.size} onValueChange={(v) => update(r.key, { size: v as ClothingSize })}>
+                <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {CLOTHING_SIZES.map((sz) => <SelectItem key={sz} value={sz}>{sz}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs">Qtd.</Label>
+              <Input type="number" min={1} max={CLOTHING_MAX_QTY} className={`h-9${bad ? " border-red-400" : ""}`} value={r.qty} onChange={(e) => update(r.key, { qty: e.target.value })} aria-invalid={bad} />
+            </div>
+            <Button type="button" variant="ghost" size="icon" className="h-9 w-9" aria-label="Remover peça" onClick={() => remove(r.key)}>
+              <Trash2 className="w-4 h-4 text-muted-foreground" />
+            </Button>
+          </div>
+        );
+      })}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <Button type="button" variant="outline" size="sm" disabled={rows.length >= CLOTHING_MAX_ITEMS} onClick={() => onChange([...rows, newDraftRow()])}>
+          <Plus className="w-4 h-4 mr-1" />Adicionar peça
+        </Button>
+        {rows.length > 0 && !hasIncompleteClothingRow(rows) && (
+          <span className="text-xs text-muted-foreground">{summarizeClothingItems(draftRowsToItems(rows))}</span>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -239,6 +334,7 @@ function HandoverHistory() {
                 <th className="p-2 text-right">Rolos</th>
                 <th className="p-2 text-right">Bat. MB</th>
                 <th className="p-2 text-center">PDAs 100%</th>
+                <th className="p-2">Fardamento</th>
                 <th className="p-2">Preenchido por</th>
                 <th className="p-2">Notas</th>
               </tr>
@@ -257,6 +353,7 @@ function HandoverHistory() {
                   <td className="p-2 text-right tabular-nums">{h.mbRolls ?? "—"}{h.mbRollsInPouch != null ? ` (+${h.mbRollsInPouch})` : ""}</td>
                   <td className="p-2 text-right tabular-nums">{h.mbBattery != null ? `${h.mbBattery}%` : "—"}</td>
                   <td className="p-2 text-center"><YN v={h.pdasCharged} /></td>
+                  <td className="p-2 text-xs max-w-[220px] truncate" title={clothingCell(h)}>{clothingCell(h) || "—"}</td>
                   <td className="p-2 text-xs">{h.filledByName ?? "—"}</td>
                   <td className="p-2 text-xs text-muted-foreground max-w-[200px] truncate" title={h.notes ?? ""}>{h.notes ?? "—"}</td>
                 </tr>
