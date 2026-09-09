@@ -1,5 +1,5 @@
 """
-Comparador de Pagamentos - Multipark v2
+Comparador de Pagamentos - Multipark v3
 Aplicação desktop para comparar ficheiros de caixa, extratos Viva Wallet,
 balance history Stripe e condutores validados.
 
@@ -12,6 +12,9 @@ Lógica de comparação:
 4. Agregadores: Parkos/Parclick/Parkvia/etc → marcar + procurar código reserva
 5. Pagamentos mistos: campo pricings com múltiplos métodos
 6. Última ação: se action ≠ "Fecho de Caixa" → alerta vermelho
+7. Condutores vs Caixa: cruzar matrículas, valores e métodos
+8. Por Receber: listar reservas com valores pendentes
+9. Matrículas em falta: o que está num ficheiro e não está noutro
 
 Autor: Manus AI para Jorge
 Data: 2026-06-12
@@ -42,7 +45,7 @@ class ComparadorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        self.title("Comparador de Pagamentos - Multipark v2")
+        self.title("Comparador de Pagamentos - Multipark v3")
         self.geometry("1500x900")
         self.minsize(1200, 700)
         
@@ -51,7 +54,7 @@ class ComparadorApp(ctk.CTk):
         self.dados_movimentos = None  # Viva Wallet
         self.dados_balance = None  # Stripe
         self.dados_condutores = {}  # Dict com nome -> df
-        self.dados_estatisticas_caixa = None
+        self.dados_estatisticas_caixa = {}  # Dict com nome -> {'estatisticas': df, 'reservas': df}
         
         # Resultados
         self.resultados = []
@@ -87,11 +90,11 @@ class ComparadorApp(ctk.CTk):
         btn_frame.pack(fill="x", padx=10, pady=5)
         
         botoes = [
-            ("📦 Caixa\n(caixa-*.xlsx)", self._carregar_caixa),
+            ("📦 Caixa Principal\n(caixa-*.xlsx)", self._carregar_caixa),
             ("💳 Movimentos\n(Viva Wallet)", self._carregar_movimentos),
             ("🏦 Balance\n(Stripe .csv)", self._carregar_balance),
             ("🚗 Condutores\n(múltiplos)", self._carregar_condutores),
-            ("📈 Estatísticas\n(fecho caixa)", self._carregar_estatisticas),
+            ("📈 Fecho Caixa\n(múltiplos)", self._carregar_estatisticas),
         ]
         
         for i, (text, cmd) in enumerate(botoes):
@@ -132,6 +135,7 @@ class ComparadorApp(ctk.CTk):
             ("cmp_action", "6️⃣  Última Ação: se action ≠ 'Fecho de Caixa' → ALERTA"),
             ("cmp_condutores", "7️⃣  Condutores vs Caixa: cruzar matrículas, valores e métodos"),
             ("cmp_por_receber", "8️⃣  Por Receber: listar reservas com valores pendentes"),
+            ("cmp_falta", "9️⃣  Matrículas em Falta: o que está num ficheiro e não está noutro"),
         ]
         
         for key, label in comparacoes:
@@ -162,7 +166,7 @@ class ComparadorApp(ctk.CTk):
         
         self.filtro_tipo = ctk.CTkComboBox(
             filtro_frame, 
-            values=["Todos", "🔴 Erros", "🟡 Avisos", "🟢 OK", "🔵 Agregador", "🟣 Misto"],
+            values=["Todos", "🔴 Erros", "🟡 Avisos", "🟢 OK", "🔵 Agregador", "🟣 Misto", "⚪ Em Falta"],
             command=self._filtrar_resultados, width=160
         )
         self.filtro_tipo.pack(side="left", padx=5)
@@ -226,6 +230,8 @@ class ComparadorApp(ctk.CTk):
         self.lbl_agregador.pack(side="left", padx=15)
         self.lbl_misto = ctk.CTkLabel(self.counter_frame, text="🟣 Misto: 0", font=("Segoe UI", 12))
         self.lbl_misto.pack(side="left", padx=15)
+        self.lbl_falta = ctk.CTkLabel(self.counter_frame, text="⚪ Falta: 0", font=("Segoe UI", 12))
+        self.lbl_falta.pack(side="left", padx=15)
     
     def _criar_tab_relatorio(self):
         """Tab para relatório"""
@@ -241,7 +247,7 @@ class ComparadorApp(ctk.CTk):
     
     def _carregar_caixa(self):
         filepath = filedialog.askopenfilename(
-            title="Selecionar ficheiro de Caixa",
+            title="Selecionar ficheiro de Caixa Principal",
             filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
         )
         if filepath:
@@ -250,6 +256,9 @@ class ComparadorApp(ctk.CTk):
     def _load_caixa(self, filepath):
         try:
             self.dados_caixa = pd.read_excel(filepath)
+            # Garantir que paymentMethod é string
+            if 'paymentMethod' in self.dados_caixa.columns:
+                self.dados_caixa['paymentMethod'] = self.dados_caixa['paymentMethod'].fillna('').astype(str)
             self._atualizar_status()
             return True
         except Exception as e:
@@ -297,14 +306,18 @@ class ComparadorApp(ctk.CTk):
             return False
     
     def _carregar_condutores(self):
+        """Carregar múltiplos ficheiros de condutores"""
         filepaths = filedialog.askopenfilenames(
-            title="Selecionar ficheiros de Condutores Validados",
+            title="Selecionar ficheiros de Condutores Validados (podes selecionar vários)",
             filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
         )
         if filepaths:
+            count = 0
             for fp in filepaths:
-                self._load_condutor(fp)
+                if self._load_condutor(fp):
+                    count += 1
             self._atualizar_status()
+            messagebox.showinfo("OK", f"Carregados {count} ficheiros de condutores.")
     
     def _load_condutor(self, filepath):
         try:
@@ -320,22 +333,36 @@ class ComparadorApp(ctk.CTk):
             return False
     
     def _carregar_estatisticas(self):
-        filepath = filedialog.askopenfilename(
-            title="Selecionar Estatísticas de Caixa",
+        """Carregar múltiplos ficheiros de fecho de caixa/estatísticas"""
+        filepaths = filedialog.askopenfilenames(
+            title="Selecionar ficheiros de Fecho de Caixa (podes selecionar vários)",
             filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
         )
-        if filepath:
-            self._load_estatisticas(filepath)
+        if filepaths:
+            count = 0
+            for fp in filepaths:
+                if self._load_estatisticas(fp):
+                    count += 1
+            self._atualizar_status()
+            messagebox.showinfo("OK", f"Carregados {count} ficheiros de fecho de caixa.")
     
     def _load_estatisticas(self, filepath):
         try:
-            stats = pd.read_excel(filepath, sheet_name='Estatísticas')
-            reservas = pd.read_excel(filepath, sheet_name='Reservas')
-            self.dados_estatisticas_caixa = {'estatisticas': stats, 'reservas': reservas}
-            self._atualizar_status()
-            return True
+            nome = os.path.basename(filepath)
+            try:
+                stats = pd.read_excel(filepath, sheet_name='Estatísticas')
+            except:
+                stats = None
+            try:
+                reservas = pd.read_excel(filepath, sheet_name='Reservas')
+            except:
+                reservas = None
+            
+            if stats is not None or reservas is not None:
+                self.dados_estatisticas_caixa[nome] = {'estatisticas': stats, 'reservas': reservas}
+                return True
+            return False
         except Exception as e:
-            messagebox.showerror("Erro", f"Erro ao carregar estatísticas: {e}")
             return False
     
     def _auto_carregar(self):
@@ -344,34 +371,84 @@ class ComparadorApp(ctk.CTk):
         if not folder:
             return
         
-        loaded = []
+        counts = {'caixa': 0, 'movimentos': 0, 'stripe': 0, 'condutores': 0, 'fecho': 0, 'erros': 0}
         
         for f in os.listdir(folder):
             filepath = os.path.join(folder, f)
+            if not os.path.isfile(filepath):
+                continue
             try:
-                if f.startswith('caixa-') and f.endswith('.xlsx'):
+                if f.startswith('caixa-') and f.endswith('.xlsx') and 'fechada' not in f:
                     if self._load_caixa(filepath):
-                        loaded.append(f"✅ Caixa: {f}")
+                        counts['caixa'] += 1
                 elif f.startswith('Movimentos') and f.endswith('.xlsx'):
                     if self._load_movimentos(filepath):
-                        loaded.append(f"✅ Movimentos: {f}")
-                elif 'balance' in f.lower() and f.endswith('.csv'):
+                        counts['movimentos'] += 1
+                elif f.endswith('.csv') and ('balance' in f.lower() or 'payment' in f.lower() or 'unified' in f.lower()):
                     if self._load_balance(filepath):
-                        loaded.append(f"✅ Balance Stripe: {f}")
+                        counts['stripe'] += 1
                 elif f.startswith('condutor-validado') and f.endswith('.xlsx'):
                     if self._load_condutor(filepath):
-                        loaded.append(f"✅ Condutor: {f}")
-                elif f.startswith('estatisticas-caixa') and f.endswith('.xlsx'):
+                        counts['condutores'] += 1
+                elif (f.startswith('estatisticas-caixa') or f.startswith('caixa-fechada')) and f.endswith('.xlsx'):
                     if self._load_estatisticas(filepath):
-                        loaded.append(f"✅ Estatísticas: {f}")
+                        counts['fecho'] += 1
             except:
-                pass
+                counts['erros'] += 1
         
         self._atualizar_status()
-        messagebox.showinfo("Auto-Carregamento", "\n".join(loaded) if loaded else "Nenhum ficheiro reconhecido.")
+        msg = f"""Auto-Carregamento concluído!
+
+✅ Caixa Principal: {counts['caixa']}
+✅ Movimentos Viva Wallet: {counts['movimentos']}
+✅ Stripe: {counts['stripe']}
+✅ Condutores: {counts['condutores']}
+✅ Fecho de Caixa: {counts['fecho']}
+
+{'⚠️ Erros: ' + str(counts['erros']) if counts['erros'] > 0 else ''}"""
+        messagebox.showinfo("Auto-Carregamento", msg)
     
     def _parse_stripe_csv(self, filepath):
-        """Parsear CSV do Stripe"""
+        """Parsear CSV do Stripe - suporta ambos os formatos (balance_history e unified_payments)"""
+        try:
+            # Tentar ler como CSV normal primeiro (unified_payments)
+            df = pd.read_csv(filepath, encoding='utf-8')
+            
+            # Detetar formato pelo nome das colunas
+            if 'PaymentIntent ID' in df.columns:
+                # Formato unified_payments com PI direto!
+                for col in ['Amount', 'Amount Refunded', 'Converted Amount', 'Fee', 'Taxes On Fee']:
+                    if col in df.columns:
+                        df[col] = df[col].astype(str).str.replace(',', '.').astype(float, errors='ignore')
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
+                df['_format'] = 'unified_pi'
+                df['Type'] = df['Status'].map({'Paid': 'charge', 'Failed': 'failed', 'Refunded': 'refund'})
+                return df
+            
+            elif 'Status' in df.columns and 'Created date (UTC)' in df.columns:
+                # Formato unified_payments sem PI
+                for col in ['Amount', 'Amount Refunded', 'Converted Amount', 'Fee', 'Taxes On Fee']:
+                    if col in df.columns:
+                        df[col] = df[col].astype(str).str.replace(',', '.').astype(float, errors='ignore')
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
+                df['_format'] = 'unified'
+                df['Type'] = df['Status'].map({'Paid': 'charge', 'Failed': 'failed', 'Refunded': 'refund'})
+                return df
+            
+            elif 'Type' in df.columns and 'Source' in df.columns:
+                # Formato balance_history.csv antigo
+                for col in ['Amount', 'Fee', 'Net']:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
+                df['_format'] = 'balance'
+                return df
+            
+            else:
+                pass
+        except:
+            pass
+        
+        # Fallback: parser manual para CSVs com formato estranho
         with open(filepath, 'r', encoding='utf-8') as f:
             lines = f.readlines()
         
@@ -399,6 +476,7 @@ class ComparadorApp(ctk.CTk):
         for col in ['Amount', 'Fee', 'Net']:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
+        df['_format'] = 'manual'
         return df
     
     def _atualizar_status(self):
@@ -410,21 +488,33 @@ class ComparadorApp(ctk.CTk):
         s += "═" * 55 + "\n\n"
         
         if self.dados_caixa is not None:
-            s += f"  ✅ CAIXA: {len(self.dados_caixa)} registos | 49 campos\n"
-            s += f"     Métodos: {', '.join(self.dados_caixa['paymentMethod'].dropna().unique()[:6])}...\n\n"
+            s += f"  ✅ CAIXA PRINCIPAL: {len(self.dados_caixa)} registos\n"
+            try:
+                metodos = self.dados_caixa['paymentMethod'].dropna().unique()[:6]
+                s += f"     Métodos: {', '.join(str(m) for m in metodos)}...\n\n"
+            except:
+                s += "\n"
         else:
-            s += "  ❌ CAIXA: Não carregada\n\n"
+            s += "  ❌ CAIXA PRINCIPAL: Não carregada\n\n"
         
         if self.dados_movimentos is not None:
             s += f"  ✅ VIVA WALLET: {len(self.dados_movimentos)} transações\n"
-            s += f"     Card Present: {len(self.dados_movimentos[self.dados_movimentos['Channel']=='Card Present (VivaPayments Host)'])}\n"
-            s += f"     Smart Checkout: {len(self.dados_movimentos[self.dados_movimentos['Channel']=='Smart Checkout'])}\n\n"
+            try:
+                card_present = len(self.dados_movimentos[self.dados_movimentos['Channel']=='Card Present (VivaPayments Host)'])
+                smart = len(self.dados_movimentos[self.dados_movimentos['Channel']=='Smart Checkout'])
+                s += f"     Card Present: {card_present} | Smart Checkout: {smart}\n\n"
+            except:
+                s += "\n"
         else:
             s += "  ❌ VIVA WALLET: Não carregado\n\n"
         
         if self.dados_balance is not None:
-            charges = self.dados_balance[self.dados_balance['Type'] == 'charge']
-            s += f"  ✅ STRIPE: {len(self.dados_balance)} transações ({len(charges)} charges)\n\n"
+            try:
+                charges = self.dados_balance[self.dados_balance['Type'] == 'charge']
+                fmt = self.dados_balance.get('_format', pd.Series(['?'])).iloc[0]
+                s += f"  ✅ STRIPE: {len(self.dados_balance)} transações ({len(charges)} charges) [formato: {fmt}]\n\n"
+            except:
+                s += f"  ✅ STRIPE: {len(self.dados_balance)} transações\n\n"
         else:
             s += "  ❌ STRIPE: Não carregado\n\n"
         
@@ -439,10 +529,19 @@ class ComparadorApp(ctk.CTk):
         else:
             s += "  ❌ CONDUTORES: Nenhum carregado\n\n"
         
-        if self.dados_estatisticas_caixa is not None:
-            s += f"  ✅ ESTATÍSTICAS CAIXA: {len(self.dados_estatisticas_caixa['reservas'])} reservas\n\n"
+        if self.dados_estatisticas_caixa:
+            total_reservas = sum(
+                len(d['reservas']) for d in self.dados_estatisticas_caixa.values() 
+                if d.get('reservas') is not None
+            )
+            s += f"  ✅ FECHO CAIXA: {len(self.dados_estatisticas_caixa)} ficheiros ({total_reservas} reservas)\n"
+            for nome in list(self.dados_estatisticas_caixa.keys())[:5]:
+                s += f"     → {nome}\n"
+            if len(self.dados_estatisticas_caixa) > 5:
+                s += f"     ... e mais {len(self.dados_estatisticas_caixa)-5}\n"
+            s += "\n"
         else:
-            s += "  ❌ ESTATÍSTICAS CAIXA: Não carregada\n\n"
+            s += "  ❌ FECHO CAIXA: Nenhum carregado\n\n"
         
         s += "═" * 55 + "\n"
         self.status_text.insert("1.0", s)
@@ -452,7 +551,7 @@ class ComparadorApp(ctk.CTk):
     def _executar_comparacoes(self):
         """Executar todas as comparações selecionadas"""
         if self.dados_caixa is None:
-            messagebox.showwarning("Aviso", "Carrega pelo menos o ficheiro de Caixa!")
+            messagebox.showwarning("Aviso", "Carrega pelo menos o ficheiro de Caixa Principal!")
             return
         
         self.resultados = []
@@ -471,6 +570,7 @@ class ComparadorApp(ctk.CTk):
             ("cmp_action", "Última Ação...", self._cmp_action),
             ("cmp_condutores", "Condutores vs Caixa...", self._cmp_condutores),
             ("cmp_por_receber", "Por Receber...", self._cmp_por_receber),
+            ("cmp_falta", "Matrículas em Falta...", self._cmp_falta),
         ]
         
         try:
@@ -490,7 +590,7 @@ class ComparadorApp(ctk.CTk):
             self.tabview.set("📊 Resultados")
             
         except Exception as e:
-            messagebox.showerror("Erro", f"Erro: {e}")
+            messagebox.showerror("Erro", f"Erro na comparação: {e}\n\nVerifica os ficheiros carregados.")
             import traceback
             traceback.print_exc()
     
@@ -500,70 +600,83 @@ class ComparadorApp(ctk.CTk):
         - hasOnlinePayment e paymentMethod='Online' devem coincidir
         - Se coincidem → verificar se tem paymentIntentId
         - Se tem PI → cruzar com Stripe
-        - Cruzar também com condutores
         """
         df = self.dados_caixa
         
         for idx, row in df.iterrows():
-            has_online = row.get('hasOnlinePayment', False)
-            metodo = str(row.get('paymentMethod', ''))
-            pi_id = row.get('paymentIntentId', None)
-            is_online_method = metodo in ['Online', 'Stripe, Online']
-            matricula = str(row.get('licensePlate', ''))
-            cliente = f"{row.get('name', '')} {row.get('lastname', '')}".strip()
-            valor = self._parse_valor(row.get('totalPaid', 0))
-            action = str(row.get('action', ''))
-            
-            # Caso 1: hasOnlinePayment=True E método=Online → devem ter PI
-            if has_online == True and is_online_method:
-                if pd.notna(pi_id) and str(pi_id).startswith('pi_'):
-                    # Tudo OK - verificar no Stripe
-                    stripe_ok = self._verificar_stripe(pi_id, valor)
-                    condutor_ok = self._verificar_condutor_metodo(matricula, 'Online')
-                    
-                    if stripe_ok:
+            try:
+                has_online = row.get('hasOnlinePayment', False)
+                metodo = str(row.get('paymentMethod', ''))
+                pi_id = row.get('paymentIntentId', None)
+                is_online_method = metodo in ['Online', 'Stripe, Online']
+                matricula = str(row.get('licensePlate', ''))
+                cliente = f"{row.get('name', '')} {row.get('lastname', '')}".strip()
+                valor = self._parse_valor(row.get('totalPaid', 0))
+                action = str(row.get('action', ''))
+                
+                # Caso 1: hasOnlinePayment=True E método=Online → devem ter PI
+                if has_online == True and is_online_method:
+                    if pd.notna(pi_id) and str(pi_id).startswith('pi_'):
+                        # Tudo OK - verificar no Stripe
+                        stripe_ok = self._verificar_stripe(pi_id, valor)
+                        
+                        if stripe_ok == True:
+                            self.resultados.append(self._resultado(
+                                '🟢', 'Online OK', matricula, cliente,
+                                f"PI confirmado no Stripe: {str(pi_id)[:25]}...",
+                                valor, valor, action
+                            ))
+                        elif stripe_ok == 'valor_diff':
+                            self.resultados.append(self._resultado(
+                                '🔴', 'Online - VALOR ≠ Stripe', matricula, cliente,
+                                f"PI encontrado no Stripe MAS valor diferente! PI={str(pi_id)[:25]}...",
+                                valor, '-', action
+                            ))
+                        elif stripe_ok is None:
+                            # Stripe não carregado
+                            self.resultados.append(self._resultado(
+                                '🟢', 'Online c/ PI', matricula, cliente,
+                                f"PI={str(pi_id)[:25]}... (Stripe não carregado p/ confirmar)",
+                                valor, '-', action
+                            ))
+                        else:
+                            self.resultados.append(self._resultado(
+                                '🟡', 'Online - PI não no Stripe', matricula, cliente,
+                                f"PI={str(pi_id)[:25]}... não encontrado no Stripe (pode ser de outro mês)",
+                                valor, '-', action
+                            ))
+                    else:
+                        # Tem online mas falta PI
                         self.resultados.append(self._resultado(
-                            '🟢', 'Online OK', matricula, cliente,
-                            f"PI confirmado no Stripe: {str(pi_id)[:25]}...",
+                            '🔴', 'Online SEM PI', matricula, cliente,
+                            f"hasOnlinePayment=True + Método=Online MAS sem paymentIntentId!",
+                            valor, '-', action
+                        ))
+                
+                # Caso 2: hasOnlinePayment=True MAS método NÃO é Online
+                elif has_online == True and not is_online_method and metodo not in ['', 'nan']:
+                    if pd.notna(pi_id) and str(pi_id).startswith('pi_'):
+                        self.resultados.append(self._resultado(
+                            '🟢', 'Online+Campanha', matricula, cliente,
+                            f"hasOnline=True, Método={metodo}, PI existe",
                             valor, valor, action
                         ))
                     else:
                         self.resultados.append(self._resultado(
-                            '🟡', 'Online - PI não no Stripe', matricula, cliente,
-                            f"PI={str(pi_id)[:25]}... não encontrado no Stripe",
+                            '🟡', 'Online sem PI', matricula, cliente,
+                            f"hasOnline=True, Método={metodo}, MAS sem PI",
                             valor, '-', action
                         ))
-                else:
-                    # Tem online mas falta PI
+                
+                # Caso 3: hasOnlinePayment=False MAS método=Online (incoerência)
+                elif has_online == False and is_online_method:
                     self.resultados.append(self._resultado(
-                        '🔴', 'Online SEM PI', matricula, cliente,
-                        f"hasOnlinePayment=True + Método=Online MAS sem paymentIntentId!",
+                        '🔴', 'Incoerência Online', matricula, cliente,
+                        f"Método='{metodo}' MAS hasOnlinePayment=False!",
                         valor, '-', action
                     ))
-            
-            # Caso 2: hasOnlinePayment=True MAS método NÃO é Online
-            elif has_online == True and not is_online_method and metodo not in ['', 'nan']:
-                # Pode ser campanha com pagamento online (10º Aniversário, etc)
-                if pd.notna(pi_id) and str(pi_id).startswith('pi_'):
-                    self.resultados.append(self._resultado(
-                        '🟢', 'Online+Campanha', matricula, cliente,
-                        f"hasOnline=True, Método={metodo}, PI existe",
-                        valor, valor, action
-                    ))
-                else:
-                    self.resultados.append(self._resultado(
-                        '🟡', 'Online sem PI', matricula, cliente,
-                        f"hasOnline=True, Método={metodo}, MAS sem PI",
-                        valor, '-', action
-                    ))
-            
-            # Caso 3: hasOnlinePayment=False MAS método=Online (incoerência)
-            elif has_online == False and is_online_method:
-                self.resultados.append(self._resultado(
-                    '🔴', 'Incoerência Online', matricula, cliente,
-                    f"Método='{metodo}' MAS hasOnlinePayment=False!",
-                    valor, '-', action
-                ))
+            except Exception:
+                continue
     
     def _cmp_multibanco(self):
         """
@@ -580,61 +693,67 @@ class ComparadorApp(ctk.CTk):
         
         df = self.dados_caixa
         viva = self.dados_movimentos
-        viva_card = viva[viva['Channel'] == 'Card Present (VivaPayments Host)'].copy()
+        
+        try:
+            viva_card = viva[viva['Channel'] == 'Card Present (VivaPayments Host)'].copy()
+        except:
+            viva_card = viva.copy()
         
         # Filtrar MB na caixa
-        mb_caixa = df[df['paymentMethod'] == 'Multibanco'].copy()
+        mb_caixa = df[df['paymentMethod'].str.contains('Multibanco', case=False, na=False)].copy()
         
         matched = 0
         not_matched = 0
         
         for idx, row in mb_caixa.iterrows():
-            valor = self._parse_valor(row.get('totalPaid', 0))
-            if valor <= 0:
-                continue
-            
-            checkout_str = str(row.get('checkOut', ''))
-            checkout_dt = self._parse_datetime(checkout_str)
-            matricula = str(row.get('licensePlate', ''))
-            cliente = f"{row.get('name', '')} {row.get('lastname', '')}".strip()
-            action = str(row.get('action', ''))
-            
-            if pd.isna(checkout_dt):
-                self.resultados.append(self._resultado(
-                    '🟡', 'MB - sem data saída', matricula, cliente,
-                    f"Sem data de checkOut para cruzar ({valor}€)",
-                    valor, '-', action
-                ))
-                continue
-            
-            # Procurar no Viva Wallet: mesmo dia + valor
-            found = False
-            same_day = viva_card[
-                (viva_card['datetime'].dt.date == checkout_dt.date()) &
-                (abs(viva_card['Amount'] - valor) < 0.01)
-            ]
-            
-            if len(same_day) > 0:
-                found = True
-            else:
-                # Tentar dia seguinte (pagamento pode ser após checkout)
-                next_day = viva_card[
-                    (viva_card['datetime'].dt.date == (checkout_dt + timedelta(days=1)).date()) &
+            try:
+                valor = self._parse_valor(row.get('totalPaid', 0))
+                if valor <= 0:
+                    continue
+                
+                checkout_str = str(row.get('checkOut', ''))
+                checkout_dt = self._parse_datetime(checkout_str)
+                matricula = str(row.get('licensePlate', ''))
+                cliente = f"{row.get('name', '')} {row.get('lastname', '')}".strip()
+                action = str(row.get('action', ''))
+                
+                if pd.isna(checkout_dt):
+                    self.resultados.append(self._resultado(
+                        '🟡', 'MB - sem data saída', matricula, cliente,
+                        f"Sem data de checkOut para cruzar ({valor}€)",
+                        valor, '-', action
+                    ))
+                    continue
+                
+                # Procurar no Viva Wallet: mesmo dia + valor
+                found = False
+                same_day = viva_card[
+                    (viva_card['datetime'].dt.date == checkout_dt.date()) &
                     (abs(viva_card['Amount'] - valor) < 0.01)
                 ]
-                if len(next_day) > 0:
+                
+                if len(same_day) > 0:
                     found = True
-            
-            if found:
-                matched += 1
-                # Não listar todos os OK para não poluir - só contar
-            else:
-                not_matched += 1
-                self.resultados.append(self._resultado(
-                    '🔴', 'MB não no Viva', matricula, cliente,
-                    f"MB {valor}€ em {checkout_str} NÃO encontrado no Viva Wallet!",
-                    valor, '-', action
-                ))
+                else:
+                    # Tentar dia seguinte (pagamento pode ser após checkout)
+                    next_day = viva_card[
+                        (viva_card['datetime'].dt.date == (checkout_dt + timedelta(days=1)).date()) &
+                        (abs(viva_card['Amount'] - valor) < 0.01)
+                    ]
+                    if len(next_day) > 0:
+                        found = True
+                
+                if found:
+                    matched += 1
+                else:
+                    not_matched += 1
+                    self.resultados.append(self._resultado(
+                        '🔴', 'MB não no Viva', matricula, cliente,
+                        f"MB {valor}€ em {checkout_str} NÃO encontrado no Viva Wallet!",
+                        valor, '-', action
+                    ))
+            except Exception:
+                continue
         
         # Resumo
         self.resultados.append(self._resultado(
@@ -646,59 +765,52 @@ class ComparadorApp(ctk.CTk):
     def _cmp_campaign(self):
         """
         Comparação 3: Campanhas
-        - campaignPay=TRUE → deve ter método de pagamento válido (Online+PI, MB, Dinheiro)
+        - campaignPay=TRUE → deve ter método de pagamento válido
         - campaignPay=FALSE → aviso para investigar
         """
         df = self.dados_caixa
         
         for idx, row in df.iterrows():
-            campaign_pay = row.get('campaignPay', None)
-            metodo = str(row.get('paymentMethod', ''))
-            pi_id = row.get('paymentIntentId', None)
-            has_online = row.get('hasOnlinePayment', False)
-            matricula = str(row.get('licensePlate', ''))
-            cliente = f"{row.get('name', '')} {row.get('lastname', '')}".strip()
-            valor = self._parse_valor(row.get('totalPaid', 0))
-            campaign = str(row.get('campaign', ''))
-            action = str(row.get('action', ''))
-            
-            if campaign_pay == False:
-                # campaignPay=FALSE → aviso
-                self.resultados.append(self._resultado(
-                    '🟡', 'Campaign FALSE', matricula, cliente,
-                    f"campaignPay=FALSE | campaign='{campaign}' | método='{metodo}' → INVESTIGAR",
-                    valor, '-', action
-                ))
-            
-            elif campaign_pay == True:
-                # campaignPay=TRUE → deve ter método válido
-                metodos_validos = ['Online', 'Stripe, Online', 'Multibanco', 'Dinheiro', 'Numerário',
-                                   'Transferencia Bancária', 'Transferencia Bancaria', 'Viva Wallet']
+            try:
+                campaign_pay = row.get('campaignPay', None)
+                metodo = str(row.get('paymentMethod', ''))
+                pi_id = row.get('paymentIntentId', None)
+                matricula = str(row.get('licensePlate', ''))
+                cliente = f"{row.get('name', '')} {row.get('lastname', '')}".strip()
+                valor = self._parse_valor(row.get('totalPaid', 0))
+                campaign = str(row.get('campaign', ''))
+                action = str(row.get('action', ''))
                 
-                # Incluir agregadores como válidos (têm o seu próprio check)
-                is_agregador = any(ag.lower() in metodo.lower() for ag in AGREGADORES)
-                
-                if metodo in metodos_validos or is_agregador:
-                    # Método válido
-                    if metodo in ['Online', 'Stripe, Online']:
-                        # Se é online, deve ter PI
-                        if not (pd.notna(pi_id) and str(pi_id).startswith('pi_')):
-                            self.resultados.append(self._resultado(
-                                '🔴', 'Campaign TRUE sem PI', matricula, cliente,
-                                f"campaignPay=TRUE, Método=Online MAS sem paymentIntentId!",
-                                valor, '-', action
-                            ))
-                elif metodo in ['-', '', 'nan', 'No pay', 'No Pay']:
-                    # Sem método de pagamento
+                if campaign_pay == False:
                     self.resultados.append(self._resultado(
-                        '🔴', 'Campaign TRUE sem método', matricula, cliente,
-                        f"campaignPay=TRUE MAS sem método de pagamento! ('{metodo}')",
+                        '🟡', 'Campaign FALSE', matricula, cliente,
+                        f"campaignPay=FALSE | campaign='{campaign}' | método='{metodo}' → INVESTIGAR",
                         valor, '-', action
                     ))
-                else:
-                    # Método desconhecido - pode ser campanha especial
-                    # Não marcar como erro, só info
-                    pass
+                
+                elif campaign_pay == True:
+                    metodos_validos = ['Online', 'Stripe, Online', 'Multibanco', 'Dinheiro', 'Numerário',
+                                       'Transferencia Bancária', 'Transferencia Bancaria', 'Viva Wallet',
+                                       '10º Aniversário', 'No pay', 'No Pay']
+                    
+                    is_agregador = any(ag.lower() in metodo.lower() for ag in AGREGADORES)
+                    
+                    if metodo in metodos_validos or is_agregador:
+                        if metodo in ['Online', 'Stripe, Online']:
+                            if not (pd.notna(pi_id) and str(pi_id).startswith('pi_')):
+                                self.resultados.append(self._resultado(
+                                    '🔴', 'Campaign TRUE sem PI', matricula, cliente,
+                                    f"campaignPay=TRUE, Método=Online MAS sem paymentIntentId!",
+                                    valor, '-', action
+                                ))
+                    elif metodo in ['-', '', 'nan']:
+                        self.resultados.append(self._resultado(
+                            '🔴', 'Campaign TRUE sem método', matricula, cliente,
+                            f"campaignPay=TRUE MAS sem método de pagamento! ('{metodo}')",
+                            valor, '-', action
+                        ))
+            except Exception:
+                continue
     
     def _cmp_agregador(self):
         """
@@ -708,55 +820,53 @@ class ComparadorApp(ctk.CTk):
         df = self.dados_caixa
         
         for idx, row in df.iterrows():
-            metodo = str(row.get('paymentMethod', ''))
-            campaign = str(row.get('campaign', ''))
-            matricula = str(row.get('licensePlate', ''))
-            cliente = f"{row.get('name', '')} {row.get('lastname', '')}".strip()
-            valor = self._parse_valor(row.get('totalPaid', 0))
-            action = str(row.get('action', ''))
-            remarks = str(row.get('bookingRemarks', ''))
-            remarks2 = str(row.get('remarks', ''))
-            credit = str(row.get('credit', ''))
-            
-            # Verificar se é agregador
-            agregador_nome = None
-            for ag in AGREGADORES:
-                if ag.lower() in metodo.lower() or ag.lower() in campaign.lower():
-                    agregador_nome = ag
-                    break
-            
-            if agregador_nome:
-                # Procurar código de reserva nos remarks
-                codigo_reserva = None
+            try:
+                metodo = str(row.get('paymentMethod', ''))
+                campaign = str(row.get('campaign', ''))
+                matricula = str(row.get('licensePlate', ''))
+                cliente = f"{row.get('name', '')} {row.get('lastname', '')}".strip()
+                valor = self._parse_valor(row.get('totalPaid', 0))
+                action = str(row.get('action', ''))
+                remarks = str(row.get('bookingRemarks', ''))
+                remarks2 = str(row.get('remarks', ''))
+                credit = str(row.get('credit', ''))
                 
-                # Procurar padrões: PSC..., TX..., números de reserva, códigos
-                all_text = f"{remarks} {remarks2} {credit}"
-                
-                # Padrões comuns de códigos
-                patterns = [
-                    r'PSC[\w-]+',
-                    r'TX[\w-]+', 
-                    r'[Cc]ódigo\s*(?:de\s*)?reserva[:\s]*(\S+)',
-                    r'reserva\s*(\d+)',
-                    r'\b\d{5,8}\b',  # Números de 5-8 dígitos
-                ]
-                
-                for pattern in patterns:
-                    match = re.search(pattern, all_text)
-                    if match:
-                        codigo_reserva = match.group(0)
+                agregador_nome = None
+                for ag in AGREGADORES:
+                    if ag.lower() in metodo.lower() or ag.lower() in campaign.lower():
+                        agregador_nome = ag
                         break
                 
-                detalhe = f"AGREGADOR: {agregador_nome}"
-                if codigo_reserva:
-                    detalhe += f" | Código: {codigo_reserva}"
-                else:
-                    detalhe += " | ⚠️ Sem código de reserva encontrado"
-                
-                self.resultados.append(self._resultado(
-                    '🔵', 'Agregador', matricula, cliente,
-                    detalhe, valor, '-', action
-                ))
+                if agregador_nome:
+                    codigo_reserva = None
+                    all_text = f"{remarks} {remarks2} {credit}"
+                    
+                    patterns = [
+                        r'PSC[\w-]+',
+                        r'TX[\w-]+', 
+                        r'[Cc]ódigo\s*(?:de\s*)?reserva[:\s]*(\S+)',
+                        r'reserva\s*(\d+)',
+                        r'\b\d{5,8}\b',
+                    ]
+                    
+                    for pattern in patterns:
+                        match = re.search(pattern, all_text)
+                        if match:
+                            codigo_reserva = match.group(0)
+                            break
+                    
+                    detalhe = f"AGREGADOR: {agregador_nome}"
+                    if codigo_reserva:
+                        detalhe += f" | Código: {codigo_reserva}"
+                    else:
+                        detalhe += " | Sem código de reserva"
+                    
+                    self.resultados.append(self._resultado(
+                        '🔵', 'Agregador', matricula, cliente,
+                        detalhe, valor, '-', action
+                    ))
+            except Exception:
+                continue
     
     def _cmp_misto(self):
         """
@@ -765,9 +875,12 @@ class ComparadorApp(ctk.CTk):
         """
         df = self.dados_caixa
         
+        if 'pricings' not in df.columns:
+            return
+        
         for idx, row in df[df['pricings'].notna()].iterrows():
             try:
-                pricings = json.loads(row['pricings'])
+                pricings = json.loads(str(row['pricings']))
                 metodos = set([item.get('paymentMethod', '') for item in pricings if item.get('paymentMethod', '')])
                 
                 if len(metodos) > 1:
@@ -776,7 +889,6 @@ class ComparadorApp(ctk.CTk):
                     valor = self._parse_valor(row.get('totalPaid', 0))
                     action = str(row.get('action', ''))
                     
-                    # Detalhar os valores por método
                     detalhes_metodo = {}
                     for item in pricings:
                         m = item.get('paymentMethod', '?')
@@ -790,8 +902,8 @@ class ComparadorApp(ctk.CTk):
                         f"MISTO: {' + '.join(partes)} (Total={valor}€)",
                         valor, '-', action
                     ))
-            except (json.JSONDecodeError, TypeError):
-                pass
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
     
     def _cmp_action(self):
         """
@@ -801,20 +913,23 @@ class ComparadorApp(ctk.CTk):
         df = self.dados_caixa
         
         for idx, row in df.iterrows():
-            action = str(row.get('action', ''))
-            
-            if action.lower() not in ['fecho de caixa', 'nan', '']:
-                matricula = str(row.get('licensePlate', ''))
-                cliente = f"{row.get('name', '')} {row.get('lastname', '')}".strip()
-                valor = self._parse_valor(row.get('totalPaid', 0))
-                action_user = str(row.get('actionUser', ''))
-                action_date = str(row.get('actionDate', ''))
+            try:
+                action = str(row.get('action', ''))
                 
-                self.resultados.append(self._resultado(
-                    '🔴', 'Ação ≠ Fecho', matricula, cliente,
-                    f"Última ação: '{action}' por {action_user} em {action_date}",
-                    valor, '-', action
-                ))
+                if action.lower() not in ['fecho de caixa', 'nan', '']:
+                    matricula = str(row.get('licensePlate', ''))
+                    cliente = f"{row.get('name', '')} {row.get('lastname', '')}".strip()
+                    valor = self._parse_valor(row.get('totalPaid', 0))
+                    action_user = str(row.get('actionUser', ''))
+                    action_date = str(row.get('actionDate', ''))
+                    
+                    self.resultados.append(self._resultado(
+                        '🔴', 'Ação ≠ Fecho', matricula, cliente,
+                        f"Última ação: '{action}' por {action_user} em {action_date}",
+                        valor, '-', action
+                    ))
+            except Exception:
+                continue
     
     def _cmp_condutores(self):
         """
@@ -830,47 +945,46 @@ class ComparadorApp(ctk.CTk):
             reservas = dados['reservas']
             
             for idx, row in reservas.iterrows():
-                matricula = str(row.get('Matrícula', '')).strip()
-                if not matricula or matricula == 'nan':
+                try:
+                    matricula = str(row.get('Matrícula', '')).strip()
+                    if not matricula or matricula == 'nan':
+                        continue
+                    
+                    valor_condutor = self._parse_valor(row.get('Total Pago', 0))
+                    metodo_condutor = str(row.get('Método Pagamento', ''))
+                    cliente = str(row.get('Cliente', ''))
+                    
+                    match_caixa = df[df['licensePlate'].astype(str).str.strip().str.upper() == matricula.upper()]
+                    
+                    if len(match_caixa) == 0:
+                        self.resultados.append(self._resultado(
+                            '🔴', 'Condutor - não na Caixa', matricula, cliente,
+                            f"Matrícula do condutor ({nome_ficheiro}) não encontrada na Caixa!",
+                            '-', valor_condutor, ''
+                        ))
+                    else:
+                        for _, caixa_row in match_caixa.iterrows():
+                            valor_caixa = self._parse_valor(caixa_row.get('totalPaid', 0))
+                            metodo_caixa = str(caixa_row.get('paymentMethod', ''))
+                            action = str(caixa_row.get('action', ''))
+                            
+                            if abs(valor_caixa - valor_condutor) > 0.01 and valor_condutor > 0:
+                                self.resultados.append(self._resultado(
+                                    '🔴', 'Condutor - valor ≠', matricula, cliente,
+                                    f"Condutor={valor_condutor}€ vs Caixa={valor_caixa}€ (diff={abs(valor_caixa-valor_condutor):.2f}€)",
+                                    valor_caixa, valor_condutor, action
+                                ))
+                            
+                            if metodo_condutor and metodo_condutor != '-' and metodo_condutor != 'nan':
+                                if metodo_condutor.lower() != metodo_caixa.lower():
+                                    if ',' not in metodo_caixa:
+                                        self.resultados.append(self._resultado(
+                                            '🟡', 'Condutor - método ≠', matricula, cliente,
+                                            f"Condutor='{metodo_condutor}' vs Caixa='{metodo_caixa}'",
+                                            valor_caixa, valor_condutor, action
+                                        ))
+                except Exception:
                     continue
-                
-                valor_condutor = self._parse_valor(row.get('Total Pago', 0))
-                metodo_condutor = str(row.get('Método Pagamento', ''))
-                cliente = str(row.get('Cliente', ''))
-                
-                # Procurar na caixa
-                match_caixa = df[df['licensePlate'].str.strip().str.upper() == matricula.upper()]
-                
-                if len(match_caixa) == 0:
-                    self.resultados.append(self._resultado(
-                        '🔴', 'Condutor - não na Caixa', matricula, cliente,
-                        f"Matrícula do condutor não encontrada na Caixa!",
-                        '-', valor_condutor, ''
-                    ))
-                else:
-                    for _, caixa_row in match_caixa.iterrows():
-                        valor_caixa = self._parse_valor(caixa_row.get('totalPaid', 0))
-                        metodo_caixa = str(caixa_row.get('paymentMethod', ''))
-                        action = str(caixa_row.get('action', ''))
-                        
-                        # Comparar valores
-                        if abs(valor_caixa - valor_condutor) > 0.01 and valor_condutor > 0:
-                            self.resultados.append(self._resultado(
-                                '🔴', 'Condutor - valor ≠', matricula, cliente,
-                                f"Condutor={valor_condutor}€ vs Caixa={valor_caixa}€ (diff={abs(valor_caixa-valor_condutor):.2f}€)",
-                                valor_caixa, valor_condutor, action
-                            ))
-                        
-                        # Comparar método
-                        if metodo_condutor and metodo_condutor != '-' and metodo_condutor != 'nan':
-                            if metodo_condutor.lower() != metodo_caixa.lower():
-                                # Verificar se é pagamento misto (condutor pode mostrar só um)
-                                if ',' not in metodo_caixa:
-                                    self.resultados.append(self._resultado(
-                                        '🟡', 'Condutor - método ≠', matricula, cliente,
-                                        f"Condutor='{metodo_condutor}' vs Caixa='{metodo_caixa}'",
-                                        valor_caixa, valor_condutor, action
-                                    ))
     
     def _cmp_por_receber(self):
         """
@@ -879,47 +993,134 @@ class ComparadorApp(ctk.CTk):
         """
         df = self.dados_caixa
         
-        por_receber = df[df['totalLeftToPay'] > 0]
+        if 'totalLeftToPay' not in df.columns:
+            return
+        
+        por_receber = df[pd.to_numeric(df['totalLeftToPay'], errors='coerce') > 0]
         
         for idx, row in por_receber.iterrows():
-            matricula = str(row.get('licensePlate', ''))
-            cliente = f"{row.get('name', '')} {row.get('lastname', '')}".strip()
-            valor = self._parse_valor(row.get('totalPaid', 0))
-            left = self._parse_valor(row.get('totalLeftToPay', 0))
-            total = self._parse_valor(row.get('totalGeral', 0))
-            action = str(row.get('action', ''))
+            try:
+                matricula = str(row.get('licensePlate', ''))
+                cliente = f"{row.get('name', '')} {row.get('lastname', '')}".strip()
+                valor = self._parse_valor(row.get('totalPaid', 0))
+                left = self._parse_valor(row.get('totalLeftToPay', 0))
+                total = self._parse_valor(row.get('totalGeral', 0))
+                action = str(row.get('action', ''))
+                
+                self.resultados.append(self._resultado(
+                    '🟡', 'Por Receber', matricula, cliente,
+                    f"Falta: {left}€ | Pago: {valor}€ | Total: {total}€",
+                    valor, left, action
+                ))
+            except Exception:
+                continue
+    
+    def _cmp_falta(self):
+        """
+        Comparação 9: Matrículas em Falta
+        - O que está nos condutores/fecho de caixa mas NÃO está no principal
+        - O que está no principal mas NÃO está nos condutores/fecho de caixa
+        """
+        df = self.dados_caixa
+        matriculas_principal = set(df['licensePlate'].astype(str).str.strip().str.upper())
+        
+        # Matrículas dos condutores
+        matriculas_condutores = set()
+        for nome_ficheiro, dados in self.dados_condutores.items():
+            reservas = dados['reservas']
+            for _, row in reservas.iterrows():
+                m = str(row.get('Matrícula', '')).strip().upper()
+                if m and m != 'NAN':
+                    matriculas_condutores.add(m)
+        
+        # Matrículas do fecho de caixa
+        matriculas_fecho = set()
+        for nome_ficheiro, dados in self.dados_estatisticas_caixa.items():
+            reservas = dados.get('reservas')
+            if reservas is not None and 'Matrícula' in reservas.columns:
+                for _, row in reservas.iterrows():
+                    m = str(row.get('Matrícula', '')).strip().upper()
+                    if m and m != 'NAN':
+                        matriculas_fecho.add(m)
+        
+        # Nos condutores mas NÃO no principal
+        if matriculas_condutores:
+            falta_no_principal_cond = matriculas_condutores - matriculas_principal
+            for m in sorted(falta_no_principal_cond):
+                self.resultados.append(self._resultado(
+                    '⚪', 'No Condutor, não na Caixa', m, '-',
+                    f"Matrícula está nos condutores MAS não está na Caixa Principal!",
+                    '-', '-', ''
+                ))
             
-            self.resultados.append(self._resultado(
-                '🟡', 'Por Receber', matricula, cliente,
-                f"Falta: {left}€ | Pago: {valor}€ | Total: {total}€",
-                valor, left, action
-            ))
+            # No principal mas NÃO nos condutores
+            falta_nos_condutores = matriculas_principal - matriculas_condutores
+            # Não listar todos (são muitos) - só contar
+            if falta_nos_condutores:
+                self.resultados.append(self._resultado(
+                    '📊', 'Caixa sem Condutor - RESUMO', '-', '-',
+                    f"{len(falta_nos_condutores)} matrículas na Caixa Principal sem ficheiro de condutor",
+                    '', '', ''
+                ))
+        
+        # No fecho de caixa mas NÃO no principal
+        if matriculas_fecho:
+            falta_no_principal_fecho = matriculas_fecho - matriculas_principal
+            for m in sorted(falta_no_principal_fecho):
+                self.resultados.append(self._resultado(
+                    '⚪', 'No Fecho, não na Caixa', m, '-',
+                    f"Matrícula está no Fecho de Caixa MAS não está na Caixa Principal!",
+                    '-', '-', ''
+                ))
+            
+            # No principal mas NÃO no fecho
+            falta_no_fecho = matriculas_principal - matriculas_fecho
+            if falta_no_fecho:
+                self.resultados.append(self._resultado(
+                    '📊', 'Caixa sem Fecho - RESUMO', '-', '-',
+                    f"{len(falta_no_fecho)} matrículas na Caixa Principal sem registo no Fecho de Caixa",
+                    '', '', ''
+                ))
     
     # ==================== AUXILIARES ====================
     
     def _verificar_stripe(self, pi_id, valor):
-        """Verificar se um paymentIntentId existe no Stripe"""
+        """Verificar se um pagamento existe no Stripe - cruzamento direto por PaymentIntent ID"""
         if self.dados_balance is None:
-            return None  # Não temos dados para verificar
+            return None
         
-        # No Stripe, o PI está relacionado com o charge
-        # O Source no balance tem o charge ID (ch_...)
-        # Vamos procurar por valor e email como proxy
-        charges = self.dados_balance[self.dados_balance['Type'] == 'charge']
-        
-        # Procurar por valor
-        match = charges[abs(charges['Amount'] - valor) < 0.01]
-        return len(match) > 0
-    
-    def _verificar_condutor_metodo(self, matricula, metodo_esperado):
-        """Verificar se o condutor tem o método correto"""
-        for dados in self.dados_condutores.values():
-            reservas = dados['reservas']
-            match = reservas[reservas['Matrícula'].str.strip().str.upper() == matricula.upper()]
-            if len(match) > 0:
-                metodo_condutor = str(match.iloc[0].get('Método Pagamento', ''))
-                return metodo_esperado.lower() in metodo_condutor.lower()
-        return None  # Não encontrado nos condutores
+        try:
+            fmt = self.dados_balance['_format'].iloc[0] if '_format' in self.dados_balance.columns else 'unknown'
+            
+            # Se temos PaymentIntent ID direto (formato novo) - cruzamento exato!
+            if fmt == 'unified_pi' and 'PaymentIntent ID' in self.dados_balance.columns:
+                pi_str = str(pi_id)
+                match = self.dados_balance[
+                    (self.dados_balance['PaymentIntent ID'] == pi_str) &
+                    (self.dados_balance['Type'] == 'charge')
+                ]
+                if len(match) > 0:
+                    # Verificar também se o valor bate
+                    stripe_valor = match.iloc[0]['Amount']
+                    if abs(stripe_valor - valor) < 0.01:
+                        return True  # Match perfeito: PI + valor
+                    else:
+                        return 'valor_diff'  # PI encontrado mas valor diferente
+                else:
+                    return False  # PI não encontrado no Stripe
+            
+            # Fallback: cruzamento por valor (formatos antigos)
+            charges = self.dados_balance[self.dados_balance['Type'] == 'charge'].copy()
+            if len(charges) == 0:
+                return None
+            
+            match = charges[abs(charges['Amount'] - valor) < 0.01]
+            if len(match) == 0:
+                return False
+            else:
+                return True
+        except:
+            return None
     
     def _parse_valor(self, valor):
         """Converter valor para float"""
@@ -961,7 +1162,7 @@ class ComparadorApp(ctk.CTk):
         for item in self.tree.get_children():
             self.tree.delete(item)
         
-        counts = {'🔴': 0, '🟡': 0, '🟢': 0, '🔵': 0, '🟣': 0}
+        counts = {'🔴': 0, '🟡': 0, '🟢': 0, '🔵': 0, '🟣': 0, '⚪': 0}
         
         for r in self.resultados:
             tags = ()
@@ -980,6 +1181,9 @@ class ComparadorApp(ctk.CTk):
             elif r['tipo'] == '🟣':
                 tags = ('misto',)
                 counts['🟣'] += 1
+            elif r['tipo'] == '⚪':
+                tags = ('falta',)
+                counts['⚪'] += 1
             
             self.tree.insert('', 'end', values=(
                 r['tipo'], r['comparacao'], r['matricula'],
@@ -992,6 +1196,7 @@ class ComparadorApp(ctk.CTk):
         self.tree.tag_configure('ok', background='#d4edda')
         self.tree.tag_configure('agregador', background='#cce5ff')
         self.tree.tag_configure('misto', background='#e8daef')
+        self.tree.tag_configure('falta', background='#f0f0f0')
         
         self.lbl_total.configure(text=f"Total: {len(self.resultados)}")
         self.lbl_erros.configure(text=f"🔴 Erros: {counts['🔴']}")
@@ -999,6 +1204,7 @@ class ComparadorApp(ctk.CTk):
         self.lbl_ok.configure(text=f"🟢 OK: {counts['🟢']}")
         self.lbl_agregador.configure(text=f"🔵 Agregador: {counts['🔵']}")
         self.lbl_misto.configure(text=f"🟣 Misto: {counts['🟣']}")
+        self.lbl_falta.configure(text=f"⚪ Falta: {counts['⚪']}")
     
     def _filtrar_resultados(self, choice):
         """Filtrar resultados"""
@@ -1012,6 +1218,7 @@ class ComparadorApp(ctk.CTk):
             '🟢 OK': '🟢',
             '🔵 Agregador': '🔵',
             '🟣 Misto': '🟣',
+            '⚪ Em Falta': '⚪',
         }
         filtro = filtro_map.get(choice)
         
@@ -1024,6 +1231,7 @@ class ComparadorApp(ctk.CTk):
             elif r['tipo'] == '🟢': tags = ('ok',)
             elif r['tipo'] == '🔵': tags = ('agregador',)
             elif r['tipo'] == '🟣': tags = ('misto',)
+            elif r['tipo'] == '⚪': tags = ('falta',)
             
             self.tree.insert('', 'end', values=(
                 r['tipo'], r['comparacao'], r['matricula'],
@@ -1040,7 +1248,7 @@ class ComparadorApp(ctk.CTk):
         r += f"  {datetime.now().strftime('%d/%m/%Y %H:%M')}\n"
         r += "═" * 65 + "\n\n"
         
-        counts = {'🔴': 0, '🟡': 0, '🟢': 0, '🔵': 0, '🟣': 0, '📊': 0}
+        counts = {}
         for res in self.resultados:
             counts[res['tipo']] = counts.get(res['tipo'], 0) + 1
         
@@ -1051,7 +1259,8 @@ class ComparadorApp(ctk.CTk):
         r += f"  🟡 Avisos (investigar): {counts.get('🟡', 0)}\n"
         r += f"  🟢 OK: {counts.get('🟢', 0)}\n"
         r += f"  🔵 Agregadores: {counts.get('🔵', 0)}\n"
-        r += f"  🟣 Pagamentos Mistos: {counts.get('🟣', 0)}\n\n"
+        r += f"  🟣 Pagamentos Mistos: {counts.get('🟣', 0)}\n"
+        r += f"  ⚪ Em Falta: {counts.get('⚪', 0)}\n\n"
         
         # Erros
         erros = [x for x in self.resultados if x['tipo'] == '🔴']
@@ -1065,6 +1274,16 @@ class ComparadorApp(ctk.CTk):
                 if e['action'] and e['action'] != 'nan':
                     r += f"    Última ação: {e['action']}\n"
                 r += "\n"
+        
+        # Em Falta
+        falta = [x for x in self.resultados if x['tipo'] == '⚪']
+        if falta:
+            r += "─" * 65 + "\n"
+            r += f"  ⚪ EM FALTA ({len(falta)}):\n"
+            r += "─" * 65 + "\n"
+            for e in falta:
+                r += f"  [{e['matricula']}] {e['detalhe']}\n"
+            r += "\n"
         
         # Avisos (primeiros 30)
         avisos = [x for x in self.resultados if x['tipo'] == '🟡']
@@ -1115,7 +1334,7 @@ class ComparadorApp(ctk.CTk):
             with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
                 df_all.to_excel(writer, sheet_name='Todos', index=False)
                 
-                for tipo, nome in [('🔴','Erros'), ('🟡','Avisos'), ('🔵','Agregadores'), ('🟣','Mistos')]:
+                for tipo, nome in [('🔴','Erros'), ('🟡','Avisos'), ('🔵','Agregadores'), ('🟣','Mistos'), ('⚪','Em Falta')]:
                     subset = df_all[df_all['tipo'] == tipo]
                     if len(subset) > 0:
                         subset.to_excel(writer, sheet_name=nome, index=False)
