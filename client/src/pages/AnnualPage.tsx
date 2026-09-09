@@ -389,10 +389,10 @@ export default function AnnualPage() {
             <Card className="p-3">
               <div className="flex items-center gap-1 mb-1">
                 <Megaphone className="w-4 h-4 text-pink-600" />
-                <span className="text-[10px] text-muted-foreground">Marketing</span>
+                <span className="text-[10px] text-muted-foreground" title="Despesas s/IVA + comissões + ordenados + TSU + equipa do dia. Marketing já está nas despesas (não se soma outra vez).">Custos s/IVA</span>
               </div>
-              <p className="text-lg font-bold text-pink-700">{fmt(totals.marketingCost)}</p>
-              {showCompare && <DeltaBadge curr={totals.marketingCost} prev={totalsCompare.marketingCost} invert />}
+              <p className="text-lg font-bold text-pink-700">{fmt(totals.totalCosts)}</p>
+              {showCompare && <DeltaBadge curr={totals.totalCosts} prev={totalsCompare.totalCosts} invert />}
             </Card>
             <Card className="p-3">
               <div className="flex items-center gap-1 mb-1">
@@ -505,15 +505,14 @@ export default function AnnualPage() {
                   <thead>
                     <tr className="border-b text-left">
                       <th className="p-2">Mês</th>
-                      <th className="p-2 text-right">Bruto c/IVA</th>
-                      <th className="p-2 text-right">Comissões</th>
-                      <th className="p-2 text-right">Líq. c/IVA</th>
+                      <th className="p-2 text-right">Receita c/IVA</th>
                       <th className="p-2 text-right">IVA Rec.</th>
                       <th className="p-2 text-right">Receita s/IVA</th>
                       <th className="p-2 text-right">Desp. s/IVA</th>
-                      <th className="p-2 text-right">Marketing</th>
+                      <th className="p-2 text-right" title="Comissões a parceiros de venda e operacionais — são um CUSTO, não uma dedução à receita">Comissões</th>
                       <th className="p-2 text-right">Ordenados</th>
                       <th className="p-2 text-right">TSU+Extras</th>
+                      <th className="p-2 text-right">Custos s/IVA</th>
                       <th className="p-2 text-right">IVA a Pagar</th>
                       <th className="p-2 text-right font-bold">Lucro</th>
                     </tr>
@@ -530,15 +529,14 @@ export default function AnnualPage() {
                               <span className="ml-1 text-[9px] px-1 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200" title="Valores importados do Excel (sem detalhe na app)">hist.</span>
                             )}
                           </td>
-                          <td className="p-2 text-right tabular-nums text-muted-foreground">{fmt(m.revenueGrossWithVat ?? m.revenueWithVat)}</td>
-                          <td className="p-2 text-right tabular-nums text-amber-700">−{fmt(commissions)}</td>
                           <td className="p-2 text-right tabular-nums text-green-600">{fmt(m.revenueWithVat)}</td>
                           <td className="p-2 text-right tabular-nums text-blue-600">{fmt(m.vatRevenue)}</td>
                           <td className="p-2 text-right tabular-nums text-green-700 font-medium">{fmt(m.revenueNoVat)}</td>
                           <td className="p-2 text-right tabular-nums text-red-700">{fmt(m.expensesNoVat)}</td>
-                          <td className="p-2 text-right tabular-nums text-pink-700">{fmt(m.marketingCost ?? 0)}</td>
+                          <td className="p-2 text-right tabular-nums text-amber-700">{fmt(commissions)}</td>
                           <td className="p-2 text-right tabular-nums text-orange-600">{fmt(m.salaries)}</td>
                           <td className="p-2 text-right tabular-nums text-purple-600">{fmt(m.employerTax + (m.extrasDiaCost ?? 0))}</td>
+                          <td className="p-2 text-right tabular-nums text-pink-700">{fmt(m.totalCosts)}</td>
                           <td className={`p-2 text-right tabular-nums ${m.vatToPay >= 0 ? "text-red-600" : "text-green-600"}`}>{fmt(m.vatToPay)}</td>
                           <td className="p-2 text-right tabular-nums font-bold">
                             <span className={m.profit >= 0 ? "text-green-700" : "text-red-700"}>
@@ -556,15 +554,14 @@ export default function AnnualPage() {
                     {/* Totais */}
                     <tr className="border-t-2 font-bold bg-muted/30">
                       <td className="p-2">TOTAL</td>
-                      <td className="p-2 text-right text-muted-foreground">{fmt(totals.revenueGrossWithVat)}</td>
-                      <td className="p-2 text-right text-amber-700">−{fmt(totals.salesCommissions + totals.operationalCommissions)}</td>
                       <td className="p-2 text-right text-green-600">{fmt(totals.revenueWithVat)}</td>
                       <td className="p-2 text-right text-blue-600">{fmt(totals.vatRevenue)}</td>
                       <td className="p-2 text-right text-green-700">{fmt(totals.revenueNoVat)}</td>
                       <td className="p-2 text-right text-red-700">{fmt(totals.expensesNoVat)}</td>
-                      <td className="p-2 text-right text-pink-700">{fmt(totals.marketingCost)}</td>
+                      <td className="p-2 text-right text-amber-700">{fmt(totals.salesCommissions + totals.operationalCommissions)}</td>
                       <td className="p-2 text-right text-orange-600">{fmt(totals.salaries)}</td>
                       <td className="p-2 text-right text-purple-600">{fmt(totals.employerTax + totals.extrasDiaCost)}</td>
+                      <td className="p-2 text-right text-pink-700">{fmt(totals.totalCosts)}</td>
                       <td className={`p-2 text-right ${totals.vatToPay >= 0 ? "text-red-600" : "text-green-600"}`}>{fmt(totals.vatToPay)}</td>
                       <td className="p-2 text-right">
                         <span className={totals.profit >= 0 ? "text-green-700" : "text-red-700"}>
