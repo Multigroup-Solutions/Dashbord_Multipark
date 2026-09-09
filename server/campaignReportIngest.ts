@@ -222,7 +222,8 @@ export async function ingestCampaignDaily(rows: CampaignCsvRow[], importedById: 
         spend: String(Math.round(r.spend * 100) / 100),
         impressions: r.impressions != null ? Math.round(r.impressions) : 0,
         clicks: r.clicks != null ? Math.round(r.clicks) : 0,
-        conversions: r.conversions != null ? Math.round(r.conversions) : 0,
+        // decimal (0063): a Google atribui conversões fracionadas — não arredondar
+        conversions: r.conversions != null ? String(Math.round(r.conversions * 10000) / 10000) : "0",
         conversionValue: r.conversionValue != null ? String(Math.round(r.conversionValue * 100) / 100) : "0",
         importedById,
       } as any);

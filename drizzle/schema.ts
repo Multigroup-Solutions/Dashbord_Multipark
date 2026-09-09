@@ -47,7 +47,8 @@ export const campaignDailyStats = mysqlTable("campaign_daily_stats", {
 	spend: decimal({ precision: 10, scale: 2 }).default('0').notNull(),
 	impressions: int().default(0),
 	clicks: int().default(0),
-	conversions: int().default(0),
+	// 0063: decimal — a Google atribui conversões fracionadas
+	conversions: decimal({ precision: 14, scale: 4 }).default('0'),
 	conversionValue: decimal({ precision: 10, scale: 2 }).default('0'),
 	cpc: decimal({ precision: 8, scale: 4 }),
 	ctr: decimal({ precision: 6, scale: 4 }),
@@ -55,6 +56,146 @@ export const campaignDailyStats = mysqlTable("campaign_daily_stats", {
 	importedById: int().notNull(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 });
+
+// ─── Integração Google Ads (0063) — fonte ÚNICA das métricas de anúncios ─────
+// Ligação OAuth (uma por fornecedor); o refresh token fica CIFRADO.
+export const integrationConnections = mysqlTable("integration_connections", {
+	id: int().autoincrement().primaryKey(),
+	provider: varchar({ length: 32 }).notNull(),
+	status: mysqlEnum(['disconnected','connected','reauth_required','error']).default('disconnected').notNull(),
+	refreshTokenEnc: text(),
+	scope: varchar({ length: 256 }),
+	accountEmail: varchar({ length: 320 }),
+	loginCustomerId: varchar({ length: 32 }),        // conta gestora (MCC) usada no acesso
+	connectedById: int(),
+	connectedAt: timestamp({ mode: 'string' }),
+	lastCheckedAt: timestamp({ mode: 'string' }),
+	lastError: text(),
+	syncLockAt: timestamp({ mode: 'string' }),          // mutex da recolha (linha, não GET_LOCK: sobrevive a pool/serverless)
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_integration_connections_provider").on(table.provider),
+]);
+
+// Estado anti-CSRF do fluxo OAuth (consumido uma vez).
+export const oauthStates = mysqlTable("oauth_states", {
+	state: varchar({ length: 96 }).primaryKey(),
+	provider: varchar({ length: 32 }).notNull(),
+	userId: int().notNull(),
+	redirectTo: varchar({ length: 512 }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	expiresAt: timestamp({ mode: 'string' }).notNull(),
+});
+
+// Contas publicitárias (customerId oficial, sem hífens). `projectId` = marca/cidade.
+export const adAccounts = mysqlTable("ad_accounts", {
+	id: int().autoincrement().primaryKey(),
+	provider: varchar({ length: 32 }).notNull(),
+	customerId: varchar({ length: 32 }).notNull(),
+	loginCustomerId: varchar({ length: 32 }),
+	name: varchar({ length: 256 }),
+	currency: varchar({ length: 8 }),
+	timezone: varchar({ length: 64 }),
+	isManager: tinyint().default(0).notNull(),
+	status: varchar({ length: 32 }),
+	selected: tinyint().default(0).notNull(),        // a dashboard consulta esta conta
+	projectId: int(),
+	lastSyncAt: timestamp({ mode: 'string' }),
+	lastError: text(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_ad_accounts_provider_customer").on(table.provider, table.customerId),
+]);
+
+// Campanhas por ID oficial (nomes iguais em contas diferentes são campanhas diferentes).
+export const adCampaigns = mysqlTable("ad_campaigns", {
+	id: int().autoincrement().primaryKey(),
+	provider: varchar({ length: 32 }).notNull(),
+	accountId: int().notNull(),
+	externalId: varchar({ length: 64 }).notNull(),
+	name: varchar({ length: 256 }),
+	status: varchar({ length: 32 }),
+	channelType: varchar({ length: 32 }),
+	budgetMicros: bigint({ mode: 'number' }),        // orçamento (indicador separado; NUNCA gasto)
+	projectId: int(),                                // sobrepõe-se ao da conta
+	legacyCampaignId: int(),                         // ligação à tabela `campaigns` antiga
+	firstSeenAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	lastSeenAt: timestamp({ mode: 'string' }),
+},
+(table) => [
+	uniqueIndex("uq_ad_campaigns_ext").on(table.provider, table.accountId, table.externalId),
+]);
+
+// UM registo por fornecedor + conta + campanha + dia + origem. Repetir a
+// recolha substitui o mesmo registo. Dinheiro em micros (exato).
+export const adDailyMetrics = mysqlTable("ad_daily_metrics", {
+	id: int().autoincrement().primaryKey(),
+	provider: varchar({ length: 32 }).notNull(),
+	accountId: int().notNull(),
+	campaignExternalId: varchar({ length: 64 }).notNull(),
+	date: date({ mode: 'string' }).notNull(),
+	costMicros: bigint({ mode: 'number' }).default(0).notNull(),
+	currency: varchar({ length: 8 }),
+	impressions: bigint({ mode: 'number' }).default(0).notNull(),
+	clicks: bigint({ mode: 'number' }).default(0).notNull(),
+	conversions: decimal({ precision: 14, scale: 4 }).default('0').notNull(),
+	conversionValueMicros: bigint({ mode: 'number' }).default(0).notNull(),
+	allConversions: decimal({ precision: 14, scale: 4 }).default('0').notNull(),
+	source: mysqlEnum(['api','csv','email','manual']).default('api').notNull(),
+	isProvisional: tinyint().default(0).notNull(),
+	syncRunId: int(),
+	collectedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_ad_daily_metrics").on(table.provider, table.accountId, table.campaignExternalId, table.date, table.source),
+	index("idx_ad_daily_metrics_date").on(table.date),
+]);
+
+// Conversões por ação (à parte: juntar várias ações NÃO pode multiplicar o gasto).
+export const adConversionActionMetrics = mysqlTable("ad_conversion_action_metrics", {
+	id: int().autoincrement().primaryKey(),
+	provider: varchar({ length: 32 }).notNull(),
+	accountId: int().notNull(),
+	campaignExternalId: varchar({ length: 64 }).notNull(),
+	date: date({ mode: 'string' }).notNull(),
+	actionResource: varchar({ length: 256 }).notNull(),
+	actionName: varchar({ length: 256 }),
+	category: varchar({ length: 64 }),
+	conversions: decimal({ precision: 14, scale: 4 }).default('0').notNull(),
+	valueMicros: bigint({ mode: 'number' }).default(0).notNull(),
+	syncRunId: int(),
+	collectedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_ad_conv_action").on(table.provider, table.accountId, table.campaignExternalId, table.date, table.actionResource),
+]);
+
+// Execuções da recolha: retomáveis (cursor), sem credenciais no registo.
+export const integrationSyncRuns = mysqlTable("integration_sync_runs", {
+	id: int().autoincrement().primaryKey(),
+	provider: varchar({ length: 32 }).notNull(),
+	kind: mysqlEnum(['initial','hourly','nightly','monthly','manual']).notNull(),
+	status: mysqlEnum(['running','partial','done','failed','skipped']).default('running').notNull(),
+	rangeFrom: date({ mode: 'string' }),
+	rangeTo: date({ mode: 'string' }),
+	accountsTotal: int().default(0).notNull(),
+	accountsDone: int().default(0).notNull(),
+	rowsWritten: int().default(0).notNull(),
+	cursor: varchar({ length: 256 }),                // JSON {accountIdx, chunkIdx}
+	error: text(),
+	warnings: text(),
+	triggeredById: int(),
+	startedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	finishedAt: timestamp({ mode: 'string' }),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	index("idx_integration_sync_runs_provider").on(table.provider, table.startedAt),
+]);
 
 export const campaigns = mysqlTable("campaigns", {
 	id: int().autoincrement().primaryKey(),
@@ -900,6 +1041,18 @@ export const multiparkBookings = mysqlTable("multipark_bookings", {
 	notes: text(),
 	rawJson: text(),
 	bookingCreatedAt: timestamp({ mode: 'string' }),
+	// 0063 — atribuição ao Google Ads a partir do originUrl (regra local; nunca inventada)
+	gclid: varchar({ length: 128 }),
+	gbraid: varchar({ length: 128 }),
+	wbraid: varchar({ length: 128 }),
+	utmSource: varchar({ length: 128 }),
+	utmMedium: varchar({ length: 128 }),
+	utmCampaign: varchar({ length: 256 }),
+	utmContent: varchar({ length: 256 }),
+	utmTerm: varchar({ length: 256 }),
+	adCampaignExternalId: varchar({ length: 64 }),
+	adAttribution: mysqlEnum(['google_paid','unknown']),
+	adAttributedAt: timestamp({ mode: 'string' }),
 	syncedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
