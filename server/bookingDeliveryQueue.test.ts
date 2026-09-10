@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { drainDeliveries, retryDelaySeconds, type DeliveryJob, type DeliveryStore } from './bookingDeliveryQueue';
+import { deliveryErrorCode, drainDeliveries, retryDelaySeconds, type DeliveryJob, type DeliveryStore } from './bookingDeliveryQueue';
 import { parseMultiparkWebhook } from './multiparkWebhook';
 
 const event = parseMultiparkWebhook({ id: 'delivery-1', event: 'BOOKING_UPDATED', data: { id: 'booking-1' } })!;
@@ -17,6 +17,10 @@ function storeFixture() {
 }
 
 describe('fila de notificações', () => {
+  it('distingue uma reserva ausente de erro de base de dados sem expor mensagens', () => {
+    expect(deliveryErrorCode({ status: 404, message: 'dados privados' })).toBe('API_HTTP_404');
+    expect(deliveryErrorCode({ cause: { code: 'ER_LOCK_DEADLOCK' } })).toBe('ER_LOCK_DEADLOCK');
+  });
   it('só conclui depois de a reserva ficar atualizada', async () => {
     const f = storeFixture();
     const process = vi.fn(async () => { expect(f.finished()).toBe(false); return { ok: true, detail: 'ok' }; });
