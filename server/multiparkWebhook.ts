@@ -147,7 +147,7 @@ export async function retryMultiparkDeliveries(deadlineAt = Date.now() + 40_000)
   return drainDeliveries(await createDeliveryStore(), processMultiparkWebhookEvent, { limit: 20, deadlineAt });
 }
 
-export function createMultiparkWebhookRouter(): Router {
+export function createMultiparkWebhookRouter(opts: { afterReceive?: () => void } = {}): Router {
   const router = express.Router();
 
   // GET simples para testar a montagem (não expõe nada).
@@ -191,9 +191,11 @@ export function createMultiparkWebhookRouter(): Router {
       }
 
       try {
-        // A resposta confirma apenas a receção durável. O cron trata a fila;
-        // nenhuma chamada demorada à origem põe em risco o ACK de 10 segundos.
+        // Guardar antes de iniciar trabalho em segundo plano. O cron é a
+        // recuperação; nenhuma chamada à origem atrasa a confirmação HTTP.
         await (await createDeliveryStore()).receive(ev);
+        try { opts.afterReceive?.(); }
+        catch (error) { console.error('[MultiparkWebhook] arranque adiado:', deliveryErrorCode(error)); }
         return res.status(202).json({ ok: true, accepted: true });
       } catch (err: any) {
         // Erro nosso → 500 para a plataforma re-tentar (retry com backoff).

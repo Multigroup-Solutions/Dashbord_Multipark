@@ -5404,7 +5404,8 @@ export async function getLocalBookingsByAction(filters: {
     case "creation":
       conditions.push(gte(multiparkBookings.bookingCreatedAt, filters.startDate));
       conditions.push(lte(multiparkBookings.bookingCreatedAt, endWithTime));
-      conditions.push(sql`${multiparkBookings.status} != 'CANCELLED'`);
+      // Todas as criações contam, incluindo as entretanto canceladas.
+      // O ecrã distingue estado e valor cancelado sem ocultar reservas da origem.
       break;
     case "checkin":
       conditions.push(gte(multiparkBookings.checkIn, filters.startDate));
