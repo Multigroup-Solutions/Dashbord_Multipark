@@ -193,7 +193,7 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
   const { data: projectsList = [] } = trpc.projects.list.useQuery();
   const [form, setForm] = useState({
     fullName: "", email: "", multiparkAgentName: "",
-    phone: "", nif: "", nib: "",
+    phone: "", personalEmail: "", personalPhone: "", nif: "", nib: "",
     address: "", birthDate: "", nationality: "Portuguesa",
     position: "driver" as Position,
     extraLevel: 1,
@@ -216,7 +216,7 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
       setConfirmStep(false);
       setForm({
         fullName: "", email: "", multiparkAgentName: "",
-        phone: "", nif: "", nib: "",
+        phone: "", personalEmail: "", personalPhone: "", nif: "", nib: "",
         address: "", birthDate: "", nationality: "Portuguesa",
         position: "driver", extraLevel: 1, department: "",
         projectId: null,
@@ -273,6 +273,8 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
                   email: form.email,
                   multiparkAgentName: form.multiparkAgentName,
                   phone: form.phone || undefined,
+                  personalEmail: form.position !== "extra" ? form.personalEmail || undefined : undefined,
+                  personalPhone: form.position !== "extra" ? form.personalPhone || undefined : undefined,
                   nif: form.nif || undefined,
                   nib: form.nib || undefined,
                   address: form.address || undefined,
@@ -302,13 +304,25 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
             <Input value={form.fullName} onChange={e => set("fullName", e.target.value)} placeholder="Nome completo" />
           </div>
           <div>
-            <Label>Email * <span className="text-xs text-muted-foreground">(login Google)</span></Label>
-            <Input type="email" value={form.email} onChange={e => set("email", e.target.value)} placeholder="email@empresa.pt" />
+            <Label>Email * <span className="text-xs text-muted-foreground">{form.position === "extra" ? "(login Google)" : "(trabalho — login e Multipark)"}</span></Label>
+            <Input type="email" value={form.email} onChange={e => set("email", e.target.value)} placeholder={form.position === "extra" ? "email@gmail.com" : "nome@multipark.pt"} />
           </div>
           <div>
-            <Label>Telefone</Label>
+            <Label>Telefone{form.position !== "extra" && <span className="text-xs text-muted-foreground"> (trabalho)</span>}</Label>
             <Input value={form.phone} onChange={e => set("phone", e.target.value)} placeholder="+351 9XX XXX XXX" />
           </div>
+          {form.position !== "extra" && (
+            <>
+              <div>
+                <Label>Email pessoal <span className="text-xs text-muted-foreground">(só para contacto)</span></Label>
+                <Input type="email" value={form.personalEmail} onChange={e => set("personalEmail", e.target.value)} placeholder="nome@gmail.com" />
+              </div>
+              <div>
+                <Label>Telefone pessoal <span className="text-xs text-muted-foreground">(só para contacto)</span></Label>
+                <Input value={form.personalPhone} onChange={e => set("personalPhone", e.target.value)} placeholder="+351 9XX XXX XXX" />
+              </div>
+            </>
+          )}
           <div>
             <Label>NIF</Label>
             <Input value={form.nif} onChange={e => set("nif", e.target.value)} placeholder="123456789" />
@@ -1258,6 +1272,8 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
       fullName: emp.fullName ?? "",
       email: emp.email ?? "",
       phone: emp.phone ?? "",
+      personalEmail: emp.personalEmail ?? "",
+      personalPhone: emp.personalPhone ?? "",
       nif: emp.nif ?? "",
       nib: emp.nib ?? "",
       address: emp.address ?? "",
@@ -1283,6 +1299,9 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
       fullName: editForm.fullName || undefined,
       email: editForm.email || undefined,
       phone: editForm.phone || undefined,
+      // null limpa o campo; extras não têm contactos pessoais à parte
+      personalEmail: editForm.position === "extra" ? null : (editForm.personalEmail?.trim() || null),
+      personalPhone: editForm.position === "extra" ? null : (editForm.personalPhone?.trim() || null),
       nif: editForm.nif || undefined,
       nib: editForm.nib || undefined,
       address: editForm.address || undefined,
@@ -1389,6 +1408,20 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                   <div className="flex items-center gap-2 text-sm">
                     <Phone className="w-4 h-4 text-muted-foreground" />
                     <span>{emp.phone}</span>
+                  </div>
+                )}
+                {emp.personalEmail && (
+                  <div className="flex items-center gap-2 text-sm">
+                    <Mail className="w-4 h-4 text-muted-foreground" />
+                    <span className="break-all">{emp.personalEmail}</span>
+                    <Badge variant="outline" className="text-[10px]">pessoal</Badge>
+                  </div>
+                )}
+                {emp.personalPhone && (
+                  <div className="flex items-center gap-2 text-sm">
+                    <Phone className="w-4 h-4 text-muted-foreground" />
+                    <span>{emp.personalPhone}</span>
+                    <Badge variant="outline" className="text-[10px]">pessoal</Badge>
                   </div>
                 )}
                 {emp.nif && (
@@ -1500,13 +1533,25 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                   <Input value={editForm.fullName} onChange={e => ef("fullName", e.target.value)} />
                 </div>
                 <div>
-                  <Label>Email</Label>
-                  <Input type="email" value={editForm.email} onChange={e => ef("email", e.target.value)} placeholder="email@empresa.pt" />
+                  <Label>Email <span className="text-xs text-muted-foreground">{editForm.position === "extra" ? "(login)" : "(trabalho — login e Multipark)"}</span></Label>
+                  <Input type="email" value={editForm.email} onChange={e => ef("email", e.target.value)} placeholder={editForm.position === "extra" ? "email@gmail.com" : "nome@multipark.pt"} />
                 </div>
                 <div>
-                  <Label>Telefone</Label>
+                  <Label>Telefone{editForm.position !== "extra" && <span className="text-xs text-muted-foreground"> (trabalho)</span>}</Label>
                   <Input value={editForm.phone} onChange={e => ef("phone", e.target.value)} placeholder="+351 9XX XXX XXX" />
                 </div>
+                {editForm.position !== "extra" && (
+                  <>
+                    <div>
+                      <Label>Email pessoal <span className="text-xs text-muted-foreground">(só para contacto)</span></Label>
+                      <Input type="email" value={editForm.personalEmail ?? ""} onChange={e => ef("personalEmail", e.target.value)} placeholder="nome@gmail.com" />
+                    </div>
+                    <div>
+                      <Label>Telefone pessoal <span className="text-xs text-muted-foreground">(só para contacto)</span></Label>
+                      <Input value={editForm.personalPhone ?? ""} onChange={e => ef("personalPhone", e.target.value)} placeholder="+351 9XX XXX XXX" />
+                    </div>
+                  </>
+                )}
               </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -2406,9 +2451,9 @@ export default function HRPage() {
   }
 
   const exportEmployeesCSV = () => {
-    const headers = ["Nome","Email","Telefone","NIF","NIB","Morada","Posto","Departamento","Contrato","Salário","Conta Ativa"];
+    const headers = ["Nome","Email","Telefone","Email pessoal","Telefone pessoal","NIF","NIB","Morada","Posto","Departamento","Contrato","Salário","Conta Ativa"];
     const rows = filtered.map(({ employee: e }) => [
-      e.fullName, e.email ?? "", e.phone ?? "", e.nif ?? "", e.nib ?? "",
+      e.fullName, e.email ?? "", e.phone ?? "", e.personalEmail ?? "", e.personalPhone ?? "", e.nif ?? "", e.nib ?? "",
       e.address ?? "", POSITION_LABELS[e.position as Position] ?? e.position,
       e.department ?? "", CONTRACT_LABELS[(e.contractType ?? "permanent") as ContractType] ?? e.contractType,
       e.monthlySalary ? parseFloat(String(e.monthlySalary)).toFixed(2) : "",

@@ -59,7 +59,7 @@ export function canViewTimeAndSchedule(v: RhViewer, e: EmployeeRef): boolean {
   return v.role === "team_leader";
 }
 
-const SENSITIVE_FIELDS = ["nif", "nib", "address", "birthDate", "nationality", "monthlySalary", "mealAllowancePerDay", "loginBlockedReason", "docsWarningAt"] as const;
+const SENSITIVE_FIELDS = ["nif", "nib", "address", "birthDate", "nationality", "monthlySalary", "mealAllowancePerDay", "loginBlockedReason", "docsWarningAt", "personalEmail", "personalPhone"] as const;
 
 /** Remove campos sensíveis quando o visualizador não os pode ver. */
 export function sanitizeEmployee<T extends Record<string, any>>(v: RhViewer, emp: T): T {

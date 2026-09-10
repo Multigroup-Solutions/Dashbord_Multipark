@@ -111,9 +111,30 @@ export async function findEmployeeByEmail(db: Db, rawEmail: string): Promise<Res
   if (direct.length > 0) return direct[0];
 
   const user = await findUserByEmail(db, email);
-  if (!user) return null;
+  if (user) {
+    const linked = await db
+      .select({
+        id: employees.id,
+        fullName: employees.fullName,
+        email: employees.email,
+        phone: employees.phone,
+        position: employees.position,
+        isActive: employees.isActive,
+        userId: employees.userId,
+      })
+      .from(employees)
+      .where(eq(employees.userId, user.id))
+      // ATIVO manda mais que a função: uma ficha desativada (ex.: duplicado já
+      // fundido) nunca pode ganhar a uma ficha ativa da mesma pessoa.
+      .orderBy(desc(employees.isActive), desc(sql`(${employees.position} = 'extra')`), asc(employees.id))
+      .limit(1);
+    if (linked[0]) return linked[0];
+  }
 
-  const linked = await db
+  // Último recurso: o email PESSOAL de um interno (2026-09-10). Um interno que
+  // responda a um formulário com o gmail continua a ser a mesma pessoa — não
+  // pode nascer um extra duplicado. (Só internos têm personalEmail.)
+  const personal = await db
     .select({
       id: employees.id,
       fullName: employees.fullName,
@@ -124,12 +145,10 @@ export async function findEmployeeByEmail(db: Db, rawEmail: string): Promise<Res
       userId: employees.userId,
     })
     .from(employees)
-    .where(eq(employees.userId, user.id))
-    // ATIVO manda mais que a função: uma ficha desativada (ex.: duplicado já
-    // fundido) nunca pode ganhar a uma ficha ativa da mesma pessoa.
-    .orderBy(desc(employees.isActive), desc(sql`(${employees.position} = 'extra')`), asc(employees.id))
+    .where(sql`LOWER(TRIM(${employees.personalEmail})) = ${email}`)
+    .orderBy(desc(employees.isActive), asc(employees.id))
     .limit(1);
-  return linked[0] ?? null;
+  return personal[0] ?? null;
 }
 
 export interface ExtraResolution {

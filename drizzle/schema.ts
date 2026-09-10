@@ -431,8 +431,13 @@ export const employeeDocuments = mysqlTable("employee_documents", {
 export const employees = mysqlTable("employees", {
 	id: int().autoincrement().primaryKey(),
 	fullName: varchar({ length: 256 }).notNull(),
+	// `email`/`phone` = contactos de TRABALHO (o email é a identidade: login
+	// Google e agente Multipark). Os pessoais são só para contacto e só fazem
+	// sentido nos internos (extras usam o pessoal como principal) — 0067.
 	email: varchar({ length: 320 }),
 	phone: varchar({ length: 32 }),
+	personalEmail: varchar({ length: 320 }),
+	personalPhone: varchar({ length: 32 }),
 	nif: varchar({ length: 20 }),
 	nib: varchar({ length: 30 }),
 	address: text(),

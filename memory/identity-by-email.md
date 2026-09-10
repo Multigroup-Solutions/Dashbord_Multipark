@@ -151,6 +151,16 @@ página de extras vazia + telefones "inválidos").
   completo: `OneDrive\Documentos\Claude\identidade-email-auditoria-2026-09-10.md`.
 - **Atenção**: a fase `merge-employees` reutiliza `mergeDuplicateExtras`, que
   usa `getDb()` → dispara `ensureRecentSchema` na BD alvo.
+- **Contactos pessoais dos INTERNOS (migração 0067)**: `employees.email`/`phone`
+  são os de TRABALHO (o email é a identidade: login + agente Multipark, para os
+  internos = @multipark.pt); `personalEmail`/`personalPhone` são só para
+  contacto. Extras NÃO usam (o pessoal é o principal) — o servidor limpa-os
+  quando `position = extra` e a UI (HRPage criar/editar) só os mostra a internos.
+  São campos SENSÍVEIS (`rhAccess.SENSITIVE_FIELDS`). `findEmployeeByEmail`
+  cai no `personalEmail` como ÚLTIMO recurso, para um interno que responda a
+  um formulário com o gmail não virar um extra duplicado. O Jorge preenche os
+  pessoais à mão e passa o `email` para @multipark.pt — assim desaparecem os 7
+  casos "email ficha ≠ login" e os 19 "agente com email ≠ ficha" da auditoria.
 
 ## Changelog
 

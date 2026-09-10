@@ -2476,6 +2476,9 @@ export const appRouter = router({
         email: z.string().email(),
         multiparkAgentName: z.string().min(1, "Nome Multipark é obrigatório"),
         phone: z.string().optional(),
+        // Contactos pessoais — só internos (extras usam o pessoal como principal)
+        personalEmail: z.string().email().optional(),
+        personalPhone: z.string().optional(),
         nif: z.string().optional(),
         nib: z.string().optional(),
         address: z.string().optional(),
@@ -2547,6 +2550,8 @@ export const appRouter = router({
           email: input.email,
           multiparkAgentName: input.multiparkAgentName,
           phone: input.phone ?? null,
+          personalEmail: input.position === "extra" ? null : (input.personalEmail?.trim().toLowerCase() || null),
+          personalPhone: input.position === "extra" ? null : (input.personalPhone?.trim() || null),
           nif: input.nif ?? null,
           nib: input.nib ?? null,
           address: input.address ?? null,
@@ -2608,6 +2613,9 @@ export const appRouter = router({
         fullName: z.string().min(1).optional(),
         email: z.string().email().optional(),
         phone: z.string().optional(),
+        // Contactos pessoais (null limpa). Só internos — ver abaixo.
+        personalEmail: z.string().email().nullable().optional(),
+        personalPhone: z.string().nullable().optional(),
         nif: z.string().optional(),
         nib: z.string().optional(),
         address: z.string().optional(),
@@ -2631,6 +2639,10 @@ export const appRouter = router({
         requireRole(ctx.user.role, "admin");
         const { id, birthDate, contractStart, contractEnd, ...rest } = input;
         const data: any = { ...rest };
+        if (typeof data.personalEmail === "string") data.personalEmail = data.personalEmail.trim().toLowerCase() || null;
+        if (typeof data.personalPhone === "string") data.personalPhone = data.personalPhone.trim() || null;
+        // Extras não têm contactos pessoais à parte (o pessoal é o principal).
+        if (input.position === "extra") { data.personalEmail = null; data.personalPhone = null; }
         if (birthDate) data.birthDate = new Date(birthDate);
         if (contractStart) data.contractStart = new Date(contractStart);
         if (contractEnd) data.contractEnd = new Date(contractEnd);
