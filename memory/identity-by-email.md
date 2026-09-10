@@ -116,7 +116,66 @@ página de extras vazia + telefones "inválidos").
   admin) com `{}` para simular e `{"apply": true}` para aplicar; ou tRPC
   `driverApplications.mergeDuplicates` (super_admin).
 
+## Reconciliação utilizadores × fichas × agentes Multipark (2026-09-10)
+- **Regra do Jorge**: quem tem ficha com email válido TEM utilizador com esse
+  email; agente Multipark com o email de uma ficha fica ANEXADO à ficha
+  (`employees.multiparkAgentUserId` + nome canónico em `multiparkAgentName`);
+  nunca dois utilizadores com o mesmo email. "Juntar" nunca é apagar fichas.
+- **Onde o bug estava**: o login Google (`oauth.ts`) e `createManualUser`
+  criavam a conta e NÃO ligavam `employees.userId` à ficha com o mesmo email;
+  `rh.create` recusava-se a criar utilizador. Agora: `linkEmployeesToUserByEmail`
+  corre depois de qualquer criação de conta; `ensureUserForEmployee` corre no
+  `rh.create` (liga ao existente ou cria `manual_...` com role por função:
+  `roleForPosition` — extras/condutores → `extra`, chefias → equivalente,
+  director → `supervisor`, NUNCA admin sozinho).
+- **Sync das reservas** (`multiparkBookingSync.ts`): `autoAttachAgentsByEmail`
+  anexa agentes novos à ficha ativa com o mesmo email (best-effort, idempotente).
+- **Joins agente↔colaborador** passaram a aceitar `agentUserId` OU nome
+  (`getEmployeePerformance`, `lastWorkedMap`, ocorrências dos remarks). O
+  `getDayActivity` continua por nome — os nomes canónicos vêm da anexação.
+- **Migração 0066**: `users.email` UNIQUE (tolera `ER_DUP_ENTRY` até
+  reconciliar) + índice `employees.multiparkAgentUserId`.
+- **Módulo**: `server/identityReconcile.ts` — `loadIdentitySnapshot` (só lê),
+  `buildIdentityAudit` + `planReconcile` (PUROS, 17 testes em
+  `identityReconcile.test.ts`), `applyReconcile` (escreve com `activity_logs`
+  userId=0). Scripts: `scripts/identity-audit.ts` (relatório) e
+  `scripts/identity-reconcile.ts` (dry-run por defeito; `--apply`; `--only
+  users|agents|merge-users|merge-employees`; `--include-inactive`).
+- **Estado em produção (10 set, dry-run)**: 318 fichas de extras com email e
+  sem utilizador (a criar), 4 a ligar, 9 agentes a anexar, 0 utilizadores
+  duplicados. Para decisão humana: 7 fichas com email diferente do login
+  (pessoal vs @multipark.pt), 3 grupos de fichas com o mesmo email (família
+  Tabuada em claudia30tabuada@; Jorge+Luis Lavagens em jorgetabuada@airpark.pt;
+  Hélio duplicado do site), 19 agentes anexados com email diferente da ficha,
+  122 agentes Multipark sem ficha (Porto, parceiros, sistema). Relatório
+  completo: `OneDrive\Documentos\Claude\identidade-email-auditoria-2026-09-10.md`.
+- **Atenção**: a fase `merge-employees` reutiliza `mergeDuplicateExtras`, que
+  usa `getDb()` → dispara `ensureRecentSchema` na BD alvo.
+- **Contactos pessoais dos INTERNOS (migração 0067)**: `employees.email`/`phone`
+  são os de TRABALHO (o email é a identidade: login + agente Multipark, para os
+  internos = @multipark.pt); `personalEmail`/`personalPhone` são só para
+  contacto. Extras NÃO usam (o pessoal é o principal) — o servidor limpa-os
+  quando `position = extra` e a UI (HRPage criar/editar) só os mostra a internos.
+  São campos SENSÍVEIS (`rhAccess.SENSITIVE_FIELDS`). `findEmployeeByEmail`
+  cai no `personalEmail` como ÚLTIMO recurso, para um interno que responda a
+  um formulário com o gmail não virar um extra duplicado. O Jorge preenche os
+  pessoais à mão e passa o `email` para @multipark.pt — assim desaparecem os 7
+  casos "email ficha ≠ login" e os 19 "agente com email ≠ ficha" da auditoria.
+
 ## Changelog
+
+### 2026-09-10 — Identidade: utilizador para cada ficha, agentes anexados por email
+**Type**: fix + tooling
+**Scope**: `server/identity.ts` (`linkEmployeesToUserByEmail`, `ensureUserForEmployee`),
+`server/_core/oauth.ts`, `server/db.ts` (`createManualUser`, joins, migração 0066),
+`server/routers.ts` (`rh.create`), `server/jobs/multiparkBookingSync.ts`,
+`server/identityReconcile.ts` (+ testes), `scripts/identity-audit.ts`,
+`scripts/identity-reconcile.ts`, `server/migrations/migration_0066.ts`
+**What/Why**: ver secção acima. Pedido do Jorge: "as pessoas respondem com o
+mesmo email que têm na ficha e aquilo cria um utilizador novo mas não o agrega".
+**Notes**: `rh.create` passou a criar/ligar utilizador (antes recusava-se de
+propósito) — decisão do Jorge 2026-09-10. Gates: tsc limpo, build OK, 449
+testes (7 falhas de ambiente de sempre).
 
 ### 2026-07-31 — Identidade por email: login, ingestão multidriver e extras
 **Type**: fix

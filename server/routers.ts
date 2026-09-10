@@ -2476,6 +2476,9 @@ export const appRouter = router({
         email: z.string().email(),
         multiparkAgentName: z.string().min(1, "Nome Multipark é obrigatório"),
         phone: z.string().optional(),
+        // Contactos pessoais — só internos (extras usam o pessoal como principal)
+        personalEmail: z.string().email().optional(),
+        personalPhone: z.string().optional(),
         nif: z.string().optional(),
         nib: z.string().optional(),
         address: z.string().optional(),
@@ -2536,17 +2539,19 @@ export const appRouter = router({
           throw new TRPCError({ code: "BAD_REQUEST", message: "Centro de custos obrigatório — escolhe um, ou preenche a morada para o sistema inferir a cidade." });
         }
 
-        // NÃO cria utilizador automaticamente. Um colaborador pode existir sem
-        // utilizador; nesse caso não consegue dar entrada no ponto até que lhe
-        // seja associado um utilizador (na edição do colaborador). Só liga a um
-        // utilizador se o userId for explicitamente indicado.
-        const userId = input.userId ?? null;
+        // Regra do Jorge (2026-09-10): quem tem email válido tem utilizador com
+        // ESSE email. Se o userId não vier explícito, depois de criar a ficha
+        // liga-se ao utilizador que já exista com o email, ou cria-se um
+        // (`manual_...`, adotado no 1º login Google) — ver ensureUserForEmployee.
+        let userId = input.userId ?? null;
 
-        await createEmployee({
+        const inserted = await createEmployee({
           fullName: input.fullName,
           email: input.email,
           multiparkAgentName: input.multiparkAgentName,
           phone: input.phone ?? null,
+          personalEmail: input.position === "extra" ? null : (input.personalEmail?.trim().toLowerCase() || null),
+          personalPhone: input.position === "extra" ? null : (input.personalPhone?.trim() || null),
           nif: input.nif ?? null,
           nib: input.nib ?? null,
           address: input.address ?? null,
@@ -2564,8 +2569,28 @@ export const appRouter = router({
           userId,
           isActive: 1,
         });
-        await logActivity({ userId: ctx.user.id, action: "create", entity: "employee", details: `Colaborador criado: ${input.fullName}` });
-        return { success: true, userId };
+        const employeeId = Number((inserted as any)?.[0]?.insertId ?? (inserted as any)?.insertId) || null;
+        let userCreated = false;
+        if (userId == null && employeeId && dbDup) {
+          const { ensureUserForEmployee } = await import("./identity");
+          const r = await ensureUserForEmployee(dbDup, {
+            id: employeeId,
+            fullName: input.fullName,
+            email: input.email,
+            position: input.position,
+            userId: null,
+          });
+          userId = r.userId;
+          userCreated = r.created;
+        }
+        await logActivity({
+          userId: ctx.user.id,
+          action: "create",
+          entity: "employee",
+          entityId: employeeId ?? undefined,
+          details: `Colaborador criado: ${input.fullName}${userId ? ` (utilizador #${userId}${userCreated ? " criado" : " ligado"})` : ""}`,
+        });
+        return { success: true, userId, userCreated };
       }),
 
     importExtras: protectedProcedure
@@ -2588,6 +2613,9 @@ export const appRouter = router({
         fullName: z.string().min(1).optional(),
         email: z.string().email().optional(),
         phone: z.string().optional(),
+        // Contactos pessoais (null limpa). Só internos — ver abaixo.
+        personalEmail: z.string().email().nullable().optional(),
+        personalPhone: z.string().nullable().optional(),
         nif: z.string().optional(),
         nib: z.string().optional(),
         address: z.string().optional(),
@@ -2611,6 +2639,10 @@ export const appRouter = router({
         requireRole(ctx.user.role, "admin");
         const { id, birthDate, contractStart, contractEnd, ...rest } = input;
         const data: any = { ...rest };
+        if (typeof data.personalEmail === "string") data.personalEmail = data.personalEmail.trim().toLowerCase() || null;
+        if (typeof data.personalPhone === "string") data.personalPhone = data.personalPhone.trim() || null;
+        // Extras não têm contactos pessoais à parte (o pessoal é o principal).
+        if (input.position === "extra") { data.personalEmail = null; data.personalPhone = null; }
         if (birthDate) data.birthDate = new Date(birthDate);
         if (contractStart) data.contractStart = new Date(contractStart);
         if (contractEnd) data.contractEnd = new Date(contractEnd);

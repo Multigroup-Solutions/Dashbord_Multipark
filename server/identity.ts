@@ -15,11 +15,12 @@
  * Comparação SEMPRE por `LOWER(TRIM(...))` dos dois lados: a collation da BD
  * não é garantia (varia por tabela/servidor) e os dados legados têm espaços.
  */
-import { asc, desc, eq, sql } from "drizzle-orm";
-import { normalizeEmail } from "../shared/email";
+import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { isPlausibleEmail, normalizeEmail } from "../shared/email";
 import { normalizePhoneForStorage } from "../shared/phone";
 import { getDb, logActivity } from "./db";
 import { driverApplications, employees, users } from "../drizzle/schema";
+import { roleForPosition } from "./identityReconcile";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -110,9 +111,30 @@ export async function findEmployeeByEmail(db: Db, rawEmail: string): Promise<Res
   if (direct.length > 0) return direct[0];
 
   const user = await findUserByEmail(db, email);
-  if (!user) return null;
+  if (user) {
+    const linked = await db
+      .select({
+        id: employees.id,
+        fullName: employees.fullName,
+        email: employees.email,
+        phone: employees.phone,
+        position: employees.position,
+        isActive: employees.isActive,
+        userId: employees.userId,
+      })
+      .from(employees)
+      .where(eq(employees.userId, user.id))
+      // ATIVO manda mais que a função: uma ficha desativada (ex.: duplicado já
+      // fundido) nunca pode ganhar a uma ficha ativa da mesma pessoa.
+      .orderBy(desc(employees.isActive), desc(sql`(${employees.position} = 'extra')`), asc(employees.id))
+      .limit(1);
+    if (linked[0]) return linked[0];
+  }
 
-  const linked = await db
+  // Último recurso: o email PESSOAL de um interno (2026-09-10). Um interno que
+  // responda a um formulário com o gmail continua a ser a mesma pessoa — não
+  // pode nascer um extra duplicado. (Só internos têm personalEmail.)
+  const personal = await db
     .select({
       id: employees.id,
       fullName: employees.fullName,
@@ -123,12 +145,10 @@ export async function findEmployeeByEmail(db: Db, rawEmail: string): Promise<Res
       userId: employees.userId,
     })
     .from(employees)
-    .where(eq(employees.userId, user.id))
-    // ATIVO manda mais que a função: uma ficha desativada (ex.: duplicado já
-    // fundido) nunca pode ganhar a uma ficha ativa da mesma pessoa.
-    .orderBy(desc(employees.isActive), desc(sql`(${employees.position} = 'extra')`), asc(employees.id))
+    .where(sql`LOWER(TRIM(${employees.personalEmail})) = ${email}`)
+    .orderBy(desc(employees.isActive), asc(employees.id))
     .limit(1);
-  return linked[0] ?? null;
+  return personal[0] ?? null;
 }
 
 export interface ExtraResolution {
@@ -374,4 +394,92 @@ export async function adoptPlaceholderAccountByEmail(
   }
 
   return oauthRow;
+}
+
+/**
+ * Liga à conta `userId` todas as fichas com este email que ainda não têm
+ * conta. Chamado depois de QUALQUER criação de utilizador (login Google,
+ * criação pelo backoffice) — regra do Jorge (2026-09-10): quem tem ficha com
+ * o email do utilizador é a mesma pessoa. Sem isto, o login criava a conta e
+ * a ficha ficava órfã (ponto, disponibilidade e avaliação não a viam).
+ *
+ * Devolve os ids das fichas ligadas. Nunca re-liga uma ficha que já tem conta.
+ */
+export async function linkEmployeesToUserByEmail(db: Db, userId: number, rawEmail: string): Promise<number[]> {
+  const email = normalizeEmail(rawEmail);
+  if (!email || !userId) return [];
+  const rows = await db
+    .select({ id: employees.id, fullName: employees.fullName })
+    .from(employees)
+    .where(and(sql`LOWER(TRIM(${employees.email})) = ${email}`, isNull(employees.userId)))
+    .orderBy(asc(employees.id));
+  const linked: number[] = [];
+  for (const r of rows) {
+    await db.update(employees).set({ userId }).where(and(eq(employees.id, r.id), isNull(employees.userId)));
+    linked.push(r.id);
+    await logActivity({
+      userId,
+      action: "account_link",
+      entity: "employee",
+      entityId: r.id,
+      details: `Ficha #${r.id} ${r.fullName} ligada ao utilizador #${userId} <${email}> (mesmo email)`,
+    });
+  }
+  return linked;
+}
+
+/**
+ * Garante que uma ficha com email válido tem utilizador com ESSE email:
+ * liga ao que já existe, ou cria uma conta `manual_...` (adotada no primeiro
+ * login Google por `adoptPlaceholderAccountByEmail`). Um utilizador só pode
+ * pertencer a UMA ficha ativa — se já pertence a outra, não liga e devolve
+ * `userId: null` (o reconciliador lista o caso para decisão humana).
+ */
+export async function ensureUserForEmployee(
+  db: Db,
+  employee: { id: number; fullName: string; email: string | null; position: string; userId: number | null },
+): Promise<{ userId: number | null; created: boolean }> {
+  if (employee.userId) return { userId: employee.userId, created: false };
+  const email = normalizeEmail(employee.email);
+  if (!email || !isPlausibleEmail(email)) return { userId: null, created: false };
+
+  const existing = await findUserByEmail(db, email);
+  if (existing) {
+    const taken = await db
+      .select({ id: employees.id })
+      .from(employees)
+      .where(and(eq(employees.userId, existing.id), eq(employees.isActive, 1), sql`${employees.id} <> ${employee.id}`))
+      .limit(1);
+    if (taken[0]) return { userId: null, created: false };
+    await db.update(employees).set({ userId: existing.id }).where(eq(employees.id, employee.id));
+    await logActivity({
+      userId: existing.id,
+      action: "account_link",
+      entity: "employee",
+      entityId: employee.id,
+      details: `Ficha #${employee.id} ${employee.fullName} ligada ao utilizador existente #${existing.id} <${email}>`,
+    });
+    return { userId: existing.id, created: false };
+  }
+
+  const openId = `manual_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  const role = roleForPosition(employee.position);
+  const res = await db.insert(users).values({
+    openId,
+    name: employee.fullName.slice(0, 255),
+    email,
+    role: role as any,
+    loginMethod: "manual",
+    isActive: 1,
+  });
+  const userId = Number((res as any)[0]?.insertId ?? (res as any).insertId);
+  await db.update(employees).set({ userId }).where(eq(employees.id, employee.id));
+  await logActivity({
+    userId,
+    action: "user_autocreate",
+    entity: "user",
+    entityId: userId,
+    details: `Utilizador criado automaticamente para a ficha #${employee.id} ${employee.fullName} <${email}> com role ${role}`,
+  });
+  return { userId, created: true };
 }

@@ -3,7 +3,7 @@ import { normalizeEmail } from "@shared/email";
 import type { Express, Request, Response, CookieOptions } from "express";
 import crypto from "node:crypto";
 import * as db from "../db";
-import { adoptPlaceholderAccountByEmail } from "../identity";
+import { adoptPlaceholderAccountByEmail, linkEmployeesToUserByEmail } from "../identity";
 import { getSessionCookieOptions } from "./cookies";
 import { sdk } from "./sdk";
 
@@ -295,6 +295,18 @@ export function registerOAuthRoutes(app: Express) {
         );
         denyAccess(req, res);
         return;
+      }
+
+      // A ficha de colaborador com o MESMO email é desta pessoa: fica ligada à
+      // conta (regra do Jorge, 2026-09-10). Sem isto o login criava a conta e a
+      // ficha ficava órfã. Best-effort — nunca pode partir o login.
+      if (database && email) {
+        try {
+          const linked = await linkEmployeesToUserByEmail(database, account.id, email);
+          if (linked.length) console.log(`[OAuth] <${email}> ligado à(s) ficha(s) #${linked.join(", #")}`);
+        } catch (err) {
+          console.warn("[OAuth] Falha a ligar ficha por email:", String((err as Error)?.message ?? err).slice(0, 160));
+        }
       }
 
       const sessionToken = await sdk.createSessionToken(openId, {
