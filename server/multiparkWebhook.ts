@@ -135,6 +135,8 @@ export async function processMultiparkWebhookEvent(ev: MultiparkWebhookEvent): P
   // preço ou matrícula do evento substitui dados mais recentes.
   await upsertMultiparkBooking({
     externalId: ev.bookingId,
+    historyFetchedAt: null,
+    historyRetryAt: null,
     parkName: `${found.parkConfig.name} - ${found.parkConfig.city}`,
     city: cityToSyncForm(found.parkConfig.city),
   });

@@ -70,3 +70,14 @@ O ficheiro de ambiente e os registos locais de execução estão excluídos do G
 - O primeiro horário automático da nova rotina ainda não foi observado: as execuções de validação foram iniciadas manualmente no GitHub Actions. O horário configurado não é uma garantia de execução a cada cinco minutos.
 - Cada notificação autenticada e persistida passa também a iniciar a recuperação em segundo plano no Vercel, sem esperar pela origem antes do HTTP 202. O agendamento mantém-se para falhas e detalhe periódico. Foi usado o mecanismo oficial [waitUntil](https://vercel.com/docs/functions/functions-api-reference/vercel-functions-package#waituntil), limitado pela duração da função; os trabalhos interrompidos continuam recuperáveis pela fila.
 - Validação final deste complemento: 50 testes passaram em oito ficheiros; TypeScript, compilação da aplicação e da API concluídos. Inclui criações/cancelamentos, separação dos valores e falha no arranque do processamento após receção durável.
+
+## Segundo bloco: histórico recuperável
+
+- Uma falha da origem, de acesso ou de gravação deixa de preencher `historyFetchedAt`. Mantém o último sucesso, regista um código e agenda outra tentativa com intervalo crescente.
+- Eventos e resumo são gravados numa transação. Repetir a importação atualiza os mesmos eventos sem duplicar movimentos.
+- Ordenação cronológica antes de calcular garagem, lugar, quilometragem e agentes; respostas incompletas, de outra reserva ou com eventos inválidos ficam sinalizadas.
+- Retirada a escolha antiga de chave por correspondência parcial de nome; histórico e detalhe usam a mesma identificação de parque/cidade.
+- As notificações tornam o histórico novamente pendente mesmo sem mudança de estado. O processo de recuperação inclui agora um lote limitado de históricos, além do detalhe, com tempo reservado para cada etapa.
+- O ecrã de sincronização apresenta separadamente as falhas do histórico. A migração 0069 apenas acrescenta campos de repetição e erro.
+- Validação: 59 testes em nove ficheiros, TypeScript e compilações da aplicação/API passaram. Numa reserva real, três movimentos importados e três após repetir, sem erros. A migração foi aplicada e o histórico atualizado em produção; a publicação do código é registada no relatório de acompanhamento.
+- Pendente: recuperação integral do histórico antigo, validação das datas reais/previstas, conciliação dos restantes períodos, paginação e serviços.

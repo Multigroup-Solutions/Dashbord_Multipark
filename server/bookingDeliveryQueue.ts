@@ -101,8 +101,11 @@ export async function getDeliveryHealth() {
     MAX(completedAt) AS lastCompletedAt
     FROM multipark_webhook_jobs`);
   const row = (result as any)[0]?.[0];
-  const detailResult = await db.execute(sql`SELECT COUNT(*) AS failures FROM multipark_bookings WHERE detailErrorCode IS NOT NULL`);
+  const detailResult = await db.execute(sql`SELECT
+    COALESCE(SUM(detailErrorCode IS NOT NULL), 0) AS failures,
+    COALESCE(SUM(historyErrorCode IS NOT NULL), 0) AS historyFailures FROM multipark_bookings`);
   return { pending: Number(row?.pending ?? 0), processing: Number(row?.processing ?? 0),
     failed: Number(row?.failed ?? 0), detailFailures: Number((detailResult as any)[0]?.[0]?.failures ?? 0),
+    historyFailures: Number((detailResult as any)[0]?.[0]?.historyFailures ?? 0),
     lastCompletedAt: row?.lastCompletedAt ? String(row.lastCompletedAt) : null };
 }
