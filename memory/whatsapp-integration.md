@@ -49,6 +49,46 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 
 ## Changelog
 
+### 2026-09-09 — Imagens e áudios recebidos no inbox + filtros "não respondeu" / "sem mensagem 24h"
+**Type**: feature
+**Scope**: `shared/whatsappMedia.ts` (novo, puro), `server/whatsapp.ts` (`downloadMedia`),
+`server/whatsappInbound.ts` (`parseInboundMedia` + `storeInboundMedia`), `server/whatsappInbox.ts`
+(`ThreadMessage.media*`), `drizzle/schema.ts` + `server/migrations/migration_0065.ts`
+(colunas `mediaType/mediaId/mediaMime/mediaUrl/mediaKey` em `whatsapp_messages`),
+`client/src/pages/WhatsAppInboxPage.tsx` (`InboundMedia`), `server/extrasAvailability.ts`
+(`lastContactedAt`/`lastContactChannel`/`contactedWithin24h` no `OverviewExtra`),
+`client/src/pages/ExtrasDiaPage.tsx` (2 checkboxes), testes: `server/whatsappMedia.test.ts` (novo, 6),
+`server/whatsappInbound.test.ts` (+4)
+**What**:
+- **Media entrante**: o webhook (process-then-ack, inalterado) passa a descarregar imagens e áudios
+  (`image`, `audio`, `voice`) da Meta — `GET /{media-id}` → URL temporário → bytes com o mesmo
+  Bearer — e a guardá-los no storage da app (`storagePut`, key
+  `whatsapp/inbound/<kind>/<waMessageId>.<ext>`). Teto 20 MB. **Best-effort**: se falhar
+  (token/rede/storage) a mensagem é gravada na mesma só com `mediaId` (a Meta guarda ~30 dias) e o
+  inbox diz "Imagem recebida, mas não foi possível descarregar" — o webhook NUNCA responde 5xx por
+  causa da media (senão a Meta repetia um evento já processado). `type` continua `'text'`; a media
+  vai nas colunas novas. Vídeo/documento/sticker ficam como estavam (marcador no body).
+- **Inbox**: bolha mostra `<img>` (clica → abre) ou `<audio controls>`; o marcador "[imagem]"/
+  "[áudio]" é escondido quando há ficheiro (`isMediaPlaceholderBody`), a caption continua a
+  aparecer. Lista de conversas inalterada (preview continua "[imagem]").
+- **Filtros na tabela de disponibilidade**: "Ainda não respondeu (N)" = `!responded`; "Sem mensagem
+  nas últimas 24h (N)" = `!contactedWithin24h`. O "último contacto" **NÃO é uma tabela nova**: é
+  derivado no servidor do que os envios JÁ registam — `whatsapp_messages` de saída (não `failed`)
+  via `whatsapp_conversations.employeeId` + `availability_request_log` (emails). A janela de 24h é
+  comparada em SQL com `NOW()` (sem fuso do browser). Duas queries agregadas por página, tolerantes
+  a tabela inexistente. Ambos os filtros compõem em AND com cidade/disponibilidade/pesquisa e
+  **limpam a seleção** (como o de disponibilidade) — o alvo do "a todos" continua a ser o visível.
+**Why**: pedidos do Jorge (2026-09-09): "ver imagens e áudios enviados pelas pessoas" e "filtrar
+por ainda não respondeu e por ainda não foi enviada mensagem nas últimas 24h".
+**Notes / gotchas**:
+- Envios de teste a um número SEM ficha (conversa com `employeeId` null) não contam como contacto.
+- URLs de media são públicas no bucket S3 (como as restantes fotos da app); no Vercel sem
+  `AWS_S3_*`/`BLOB_READ_WRITE_TOKEN` o `storagePut` lança e a media fica só com `mediaId`.
+- Follow-up possível: botão "tentar descarregar de novo" (usa `mediaId`); suportar vídeo/documento.
+- Gates: `tsc --noEmit` limpo, `vite build` OK, suite com as 7 falhas pré-existentes de ambiente.
+  **Commit `1198eee` em `origin/updates-rafael`.** Migração 0065 corre no boot (`ensureRecentSchema`); não foi corrida à mão (sem `DATABASE_URL` real aqui) — `scripts/run-migration.ts 0065` aplica-a antes do deploy se quiseres.
+
+
 ### 2026-08-20 (b) — Inbox mostrava bolha VAZIA nos envios de template (conteúdo agora gravado)
 **Type**: fix
 **Scope**: `server/whatsappBroadcast.ts` (`renderOutboundBody` + `sendOne` grava `body`),

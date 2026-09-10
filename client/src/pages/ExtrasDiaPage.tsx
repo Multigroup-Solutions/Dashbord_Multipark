@@ -1506,6 +1506,11 @@ export function AvailabilitySection() {
   // da operação, e o caso de uso principal é falar com quem AINDA NÃO
   // respondeu. Este filtro reduz a quem já marcou disponibilidade.
   const [onlyWithAvailability, setOnlyWithAvailability] = useState(false);
+  // Filtros de acompanhamento (Jorge, 2026-09-09): quem AINDA NÃO respondeu à
+  // disponibilidade desta semana, e a quem NÃO foi enviada mensagem nas
+  // últimas 24h (WhatsApp ou email — `contactedWithin24h` vem do servidor).
+  const [onlyNotResponded, setOnlyNotResponded] = useState(false);
+  const [onlyNotContacted24h, setOnlyNotContacted24h] = useState(false);
   // Filtro de cidade. "all" = sem filtro; "none" = fichas sem cidade
   // identificada (ver server/employeeCity.ts — a cidade é DERIVADA).
   const [cityFilter, setCityFilter] = useState<CityKey | "all" | "none">("all");
@@ -1544,9 +1549,14 @@ export function AvailabilitySection() {
     if (cityFilter === "none") list = list.filter(e => e.city === null);
     else if (cityFilter !== "all") list = list.filter(e => e.city === cityFilter);
     if (onlyWithAvailability) list = list.filter(e => e.availableDays > 0);
+    if (onlyNotResponded) list = list.filter(e => !e.responded);
+    if (onlyNotContacted24h) list = list.filter(e => !e.contactedWithin24h);
     if (trimmedSearch) list = list.filter(e => matchesExtraQuery(trimmedSearch, e));
     return list.map(e => ({ ...e, lastWorked: lastWorked.data?.[e.employeeId] ?? "" }));
-  }, [o, cityFilter, onlyWithAvailability, trimmedSearch, lastWorked.data]);
+  }, [o, cityFilter, onlyWithAvailability, onlyNotResponded, onlyNotContacted24h, trimmedSearch, lastWorked.data]);
+  // Contagens do universo para os rótulos dos filtros (como os botões de cidade).
+  const notRespondedCount = useMemo(() => (o?.extras ?? []).filter(e => !e.responded).length, [o]);
+  const notContacted24hCount = useMemo(() => (o?.extras ?? []).filter(e => !e.contactedWithin24h).length, [o]);
   // A ordenação da tabela só REORDENA `shownExtras` (não filtra), por isso o
   // conjunto continua a ser o mesmo para a seleção, os totais e o alvo do envio.
   const availSort = useTableSort(shownExtras);
@@ -1860,17 +1870,40 @@ export function AvailabilitySection() {
                   {shownWithPhone} com número válido
                 </span>
               </div>
-              <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={onlyWithAvailability}
-                  onChange={(e) => {
-                    setOnlyWithAvailability(e.target.checked);
-                    setSelectedIds(new Set()); // o alvo mudou — não enviar a quem já não se vê
-                  }}
-                />
-                Mostrar só quem marcou disponibilidade
-              </label>
+              <div className="flex items-center gap-4 flex-wrap">
+                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={onlyWithAvailability}
+                    onChange={(e) => {
+                      setOnlyWithAvailability(e.target.checked);
+                      setSelectedIds(new Set()); // o alvo mudou — não enviar a quem já não se vê
+                    }}
+                  />
+                  Mostrar só quem marcou disponibilidade
+                </label>
+                {/* Filtros de acompanhamento — compõem em AND com os restantes e,
+                    como o de disponibilidade, limpam a seleção (o alvo mudou). */}
+                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={onlyNotResponded}
+                    onChange={(e) => { setOnlyNotResponded(e.target.checked); setSelectedIds(new Set()); }}
+                  />
+                  Ainda não respondeu <span className="opacity-70">({notRespondedCount})</span>
+                </label>
+                <label
+                  className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer"
+                  title="Sem WhatsApp nem email enviados por nós nas últimas 24 horas"
+                >
+                  <input
+                    type="checkbox"
+                    checked={onlyNotContacted24h}
+                    onChange={(e) => { setOnlyNotContacted24h(e.target.checked); setSelectedIds(new Set()); }}
+                  />
+                  Sem mensagem nas últimas 24h <span className="opacity-70">({notContacted24hCount})</span>
+                </label>
+              </div>
             </div>
 
             {/* Pesquisa por pessoa — compõe-se (AND) com o filtro de cidade e

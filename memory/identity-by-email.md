@@ -18,6 +18,10 @@ página de extras vazia + telefones "inválidos").
   (projeto → candidatura do site → morada) porque `employees` não tem coluna de
   cidade. A Decisão 1 ("a todos" = conjunto visível) continua a valer e agora o
   envio por EMAIL também manda a lista explícita do que está visível.
+- `employee-contact-swap.md` — **2026-09-09**: script que troca `phone` ↔ `nif`
+  nas fichas onde foram escritos ao contrário; reutiliza `normalizePhoneE164`
+  daqui para classificar e copia o padrão da fusão de duplicados (plano puro
+  testado, dry-run por defeito, `activity_logs` com `userId = 0`).
 - `sync-runners-topology.md` — os dois entrypoints (Railway `index.ts` e Vercel
   `api-entry.ts`) montam ambos o OAuth e o `/api/v1`; qualquer alteração ao
   login vale para os dois.

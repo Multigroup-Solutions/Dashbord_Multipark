@@ -144,6 +144,10 @@ export interface ThreadMessage {
   type: "text" | "template";
   body: string | null;
   templateName: string | null;
+  /** Media recebida (imagem/áudio). `mediaUrl` null com `mediaType` preenchido = download falhou. */
+  mediaType: "image" | "audio" | "video" | "document" | "sticker" | null;
+  mediaUrl: string | null;
+  mediaMime: string | null;
   status: string;
   errorDetail: string | null;
   waTimestamp: string | null;
@@ -184,6 +188,9 @@ export async function getConversationThread(conversationId: number, limit = 100)
       type: whatsappMessages.type,
       body: whatsappMessages.body,
       templateName: whatsappMessages.templateName,
+      mediaType: whatsappMessages.mediaType,
+      mediaUrl: whatsappMessages.mediaUrl,
+      mediaMime: whatsappMessages.mediaMime,
       status: whatsappMessages.status,
       errorDetail: whatsappMessages.errorDetail,
       waTimestamp: whatsappMessages.waTimestamp,

@@ -10,6 +10,7 @@ import { notifyOwner } from "./_core/notification";
 import { storagePut } from "./storage";
 import { resolveExpenseVisibility, expenseConditions, whereAll, canSeeExpense, canSeeAggregates, type ExpenseListFilters, type ExpenseVisibility } from "./expenseScope";
 import { parseExpenseAmount } from "../shared/expenseAmount";
+import { CLOTHING_MAX_ITEMS, CLOTHING_MAX_QTY, CLOTHING_SIZES, CLOTHING_TYPES, normalizeClothingItems } from "../shared/clothing";
 import { dayToMysql, lisbonToday } from "../shared/expensePeriods";
 import { expenseTotals } from "../shared/expenseTotals";
 import { getBillingData, getAnnualBreakdown } from "./finance/compat";
@@ -4450,7 +4451,10 @@ export const appRouter = router({
           // naquele dia em vez do nome cru do Zello ("Faro 411").
           employeeId: z.number({ error: "Escolhe o funcionário — o check-in tem de ficar associado a uma pessoa" }),
           zelloUsername: z.string().optional(),
-          photoEntryUrl: z.string().optional(),
+          // Foto do PDA OBRIGATÓRIA (Jorge, 2026-09-09): é a prova do estado do
+          // aparelho à entrada. A UI só ativa o botão com foto carregada; isto é
+          // a garantia do lado do servidor.
+          photoEntryUrl: z.string().trim().min(1, { error: "Tira a foto do PDA — o check-in precisa da foto de entrada" }),
           mobileDataMbStart: z.number().optional(),
           notes: z.string().optional(),
         })).mutation(async ({ ctx, input }) => {
@@ -4460,7 +4464,7 @@ export const appRouter = router({
             employeeId: input.employeeId,
             zelloUsername: input.zelloUsername ?? null,
             teamLeaderId: ctx.user.id,
-            photoEntryUrl: input.photoEntryUrl ?? null,
+            photoEntryUrl: input.photoEntryUrl,
             mobileDataMbStart: input.mobileDataMbStart ?? null,
             notes: input.notes ?? null,
           });
@@ -6417,12 +6421,26 @@ export const appRouter = router({
       pensInPouch: z.number().int().min(0).nullable().optional(),
       mbBattery: z.number().int().min(0).max(100).nullable().optional(),
       pdasCharged: z.boolean().nullable().optional(),
+      // Legado: continua aceite para não apagar o valor dos registos antigos ao
+      // editar; o formulário novo já não o pede (ver `clothingItems`).
       uniformsCount: z.number().int().min(0).nullable().optional(),
+      // Fardamento entregue: peças com quantidade e tamanho (shared/clothing.ts).
+      clothingItems: z.array(z.object({
+        type: z.enum(CLOTHING_TYPES),
+        size: z.enum(CLOTHING_SIZES),
+        qty: z.number().int().min(1).max(CLOTHING_MAX_QTY),
+      })).max(CLOTHING_MAX_ITEMS).nullable().optional(),
       notes: z.string().max(2000).nullable().optional(),
     })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "team_leader");
       const { saveShiftHandover } = await import("./db");
-      await saveShiftHandover({ ...input, filledById: ctx.user.id, filledByName: ctx.user.name ?? null });
+      await saveShiftHandover({
+        ...input,
+        // Linhas repetidas (mesmo tipo+tamanho) somam-se antes de gravar.
+        clothingItems: input.clothingItems == null ? input.clothingItems : normalizeClothingItems(input.clothingItems),
+        filledById: ctx.user.id,
+        filledByName: ctx.user.name ?? null,
+      });
       await logActivity({ userId: ctx.user.id, action: "save", entity: "shift_handover", details: `${input.handoverDate} ${input.shift} ${input.city}` });
       return { success: true };
     }),

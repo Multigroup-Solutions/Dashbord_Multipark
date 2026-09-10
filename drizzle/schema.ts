@@ -1654,6 +1654,14 @@ export const whatsappMessages = mysqlTable("whatsapp_messages", {
 	type: mysqlEnum(['text', 'template']).notNull(),
 	body: text(),
 	templateName: varchar({ length: 128 }),
+	// Media recebida (imagem/áudio enviados pela pessoa) — migração 0065.
+	// `mediaId` é o id da Meta (permite re-tentar o download); `mediaUrl`/`mediaKey`
+	// apontam para o storage da app (server/storage.ts).
+	mediaType: mysqlEnum(['image', 'audio', 'video', 'document', 'sticker']),
+	mediaId: varchar({ length: 128 }),
+	mediaMime: varchar({ length: 128 }),
+	mediaUrl: text(),
+	mediaKey: varchar({ length: 512 }),
 	status: mysqlEnum(['pending', 'sent', 'delivered', 'read', 'failed']).default('pending').notNull(),
 	errorDetail: text(),
 	sentById: int(),
