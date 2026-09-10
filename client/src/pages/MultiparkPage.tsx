@@ -1401,6 +1401,7 @@ function SyncTab() {
             </p>)}
             <p>Notificações: {coverage.data.queue.pending} por processar · {coverage.data.queue.processing} em processamento · {coverage.data.queue.failed} a aguardar nova tentativa.</p>
             {coverage.data.queue.detailFailures > 0 && <p className="text-destructive">{coverage.data.queue.detailFailures} reservas com falha na atualização dos detalhes. A última informação válida é preservada e haverá nova tentativa.</p>}
+            {coverage.data.queue.historyFailures > 0 && <p className="text-destructive">{coverage.data.queue.historyFailures} reservas com falha na atualização do histórico. Os movimentos guardados são preservados e haverá nova tentativa.</p>}
             <p className="text-xs text-muted-foreground">As notificações e os detalhes são tratados automaticamente em ciclos de cinco minutos, sujeitos à disponibilidade da origem e ao agendamento.</p>
           </>}
         </CardContent>

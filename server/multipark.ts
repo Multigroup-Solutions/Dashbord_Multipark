@@ -496,11 +496,12 @@ export interface CheckoutDriver {
 /** Get booking history (timeline of all actions on a booking) */
 export async function getBookingHistory(
   bookingId: string,
-  apiKey?: string
+  apiKey?: string,
+  opts: { maxAttempts?: number; timeoutMs?: number } = {},
 ): Promise<{ bookingId: string; total: number; history: BookingHistoryEntry[] }> {
   return multiparkRequest({
-    path: `/bookings/${bookingId}/history`,
-    apiKey,
+    path: `/bookings/${encodeURIComponent(bookingId)}/history`,
+    apiKey, ...opts,
   });
 }
 

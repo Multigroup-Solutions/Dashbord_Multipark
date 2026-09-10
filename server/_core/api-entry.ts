@@ -214,12 +214,14 @@ app.get("/api/cron/multipark-deliveries", async (req, res) => {
   try {
     const startedAt = Date.now();
     const { retryMultiparkDeliveries } = await import("../multiparkWebhook");
-    const result = await retryMultiparkDeliveries(startedAt + 30_000);
-    const { enrichBookingsBatch } = await import("../jobs/multiparkBookingSync");
+    const result = await retryMultiparkDeliveries(startedAt + 20_000);
+    const { enrichBookingsBatch, syncBookingHistoryBatch } = await import("../jobs/multiparkBookingSync");
     // O detalhe tem um ciclo próprio: um report demorado não pode impedir
     // para sempre a atualização de matrículas, clientes e campanhas.
-    const details = await enrichBookingsBatch({ limit: 60, deadlineAt: startedAt + 45_000 });
-    return res.json({ ok: result.failed === 0 && result.lostLease === 0 && details.errors === 0 && details.noKey === 0, ...result, details });
+    const details = await enrichBookingsBatch({ limit: 40, deadlineAt: startedAt + 32_000 });
+    const history = await syncBookingHistoryBatch(20, startedAt + 45_000);
+    return res.json({ ok: result.failed === 0 && result.lostLease === 0 && details.errors === 0
+      && details.noKey === 0 && history.errors === 0 && history.noKey === 0, ...result, details, history });
   } catch {
     return res.status(503).json({ ok: false, error: "Fila de reservas indisponível" });
   }
