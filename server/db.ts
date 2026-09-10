@@ -124,6 +124,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0063").then(m => ({ s: m.MIGRATION_0063_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0063 })),
       import("./migrations/migration_0064").then(m => ({ s: m.MIGRATION_0064_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0064 })),
       import("./migrations/migration_0065").then(m => ({ s: m.MIGRATION_0065_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0065 })),
+      import("./migrations/migration_0066").then(m => ({ s: m.MIGRATION_0066_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0066 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -269,6 +270,16 @@ export async function createManualUser(data: { name: string; email: string; role
     isActive: 1,
   });
   const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
+  // A ficha com o mesmo email é desta pessoa → fica ligada (regra do Jorge,
+  // 2026-09-10). Import dinâmico: identity.ts importa este módulo.
+  if (result[0]) {
+    try {
+      const { linkEmployeesToUserByEmail } = await import("./identity");
+      await linkEmployeesToUserByEmail(db, result[0].id, email);
+    } catch (err) {
+      console.warn("[Users] Falha a ligar ficha por email:", String((err as Error)?.message ?? err).slice(0, 160));
+    }
+  }
   return result[0];
 }
 
@@ -2945,7 +2956,11 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
       count: sql<number>`COUNT(*)`,
     })
     .from(multiparkBookingHistory)
-    .innerJoin(employees, eq(employees.multiparkAgentName, multiparkBookingHistory.agentName))
+    // Agente ↔ colaborador pelo ID do agente (fiável) OU pelo nome (legado).
+    .innerJoin(employees, or(
+      eq(employees.multiparkAgentUserId, multiparkBookingHistory.agentUserId),
+      eq(employees.multiparkAgentName, multiparkBookingHistory.agentName),
+    ))
     .where(and(
       inArray(employees.id, driverIds),
       gte(multiparkBookingHistory.actionTime, startStr),
@@ -5037,8 +5052,9 @@ export async function getLastWorkedMap(): Promise<Record<number, string>> {
   };
   const [hist] = await db.execute(sql`
     SELECT e.id, MAX(h.actionTime) d
-    FROM employees e JOIN multipark_booking_history h ON h.agentName = e.multiparkAgentName
-    WHERE e.multiparkAgentName IS NOT NULL AND e.multiparkAgentName != ''
+    FROM employees e JOIN multipark_booking_history h
+      ON (e.multiparkAgentUserId IS NOT NULL AND e.multiparkAgentUserId != '' AND h.agentUserId = e.multiparkAgentUserId)
+      OR (e.multiparkAgentName IS NOT NULL AND e.multiparkAgentName != '' AND h.agentName = e.multiparkAgentName)
     GROUP BY e.id`) as any;
   for (const r of (hist as any[]) ?? []) take(r.id, r.d);
   const [ponto] = await db.execute(sql`
@@ -7511,6 +7527,7 @@ export async function syncIncidentsFromMultiparkHistory(opts: {
       remarks: multiparkBookingHistory.remarks,
       actionTime: multiparkBookingHistory.actionTime,
       agentName: multiparkBookingHistory.agentName,
+      agentUserId: multiparkBookingHistory.agentUserId,
       changeType: multiparkBookingHistory.changeType,
     })
     .from(multiparkBookingHistory)
@@ -7565,12 +7582,17 @@ export async function syncIncidentsFromMultiparkHistory(opts: {
     // Resolve o AGENTE da ação para o colaborador (quem fez / contra quem) —
     // alimenta o Inc− da Avaliação Individual (pedido Jorge 2026-08-06)
     let incidentEmployeeId: number | null = null;
-    if (row.agentName) {
+    if (row.agentName || row.agentUserId) {
       try {
+        // Pelo ID do agente (fiável) OU pelo nome (legado); ativa primeiro.
+        const conds = [];
+        if (row.agentUserId) conds.push(eq(employees.multiparkAgentUserId, row.agentUserId));
+        if (row.agentName) conds.push(eq(employees.multiparkAgentName, row.agentName));
         const [emp] = await db
           .select({ id: employees.id })
           .from(employees)
-          .where(eq(employees.multiparkAgentName, row.agentName))
+          .where(conds.length === 1 ? conds[0] : or(...conds))
+          .orderBy(desc(employees.isActive), asc(employees.id))
           .limit(1);
         incidentEmployeeId = emp?.id ?? null;
       } catch {}

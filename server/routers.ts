@@ -2536,13 +2536,13 @@ export const appRouter = router({
           throw new TRPCError({ code: "BAD_REQUEST", message: "Centro de custos obrigatório — escolhe um, ou preenche a morada para o sistema inferir a cidade." });
         }
 
-        // NÃO cria utilizador automaticamente. Um colaborador pode existir sem
-        // utilizador; nesse caso não consegue dar entrada no ponto até que lhe
-        // seja associado um utilizador (na edição do colaborador). Só liga a um
-        // utilizador se o userId for explicitamente indicado.
-        const userId = input.userId ?? null;
+        // Regra do Jorge (2026-09-10): quem tem email válido tem utilizador com
+        // ESSE email. Se o userId não vier explícito, depois de criar a ficha
+        // liga-se ao utilizador que já exista com o email, ou cria-se um
+        // (`manual_...`, adotado no 1º login Google) — ver ensureUserForEmployee.
+        let userId = input.userId ?? null;
 
-        await createEmployee({
+        const inserted = await createEmployee({
           fullName: input.fullName,
           email: input.email,
           multiparkAgentName: input.multiparkAgentName,
@@ -2564,8 +2564,28 @@ export const appRouter = router({
           userId,
           isActive: 1,
         });
-        await logActivity({ userId: ctx.user.id, action: "create", entity: "employee", details: `Colaborador criado: ${input.fullName}` });
-        return { success: true, userId };
+        const employeeId = Number((inserted as any)?.[0]?.insertId ?? (inserted as any)?.insertId) || null;
+        let userCreated = false;
+        if (userId == null && employeeId && dbDup) {
+          const { ensureUserForEmployee } = await import("./identity");
+          const r = await ensureUserForEmployee(dbDup, {
+            id: employeeId,
+            fullName: input.fullName,
+            email: input.email,
+            position: input.position,
+            userId: null,
+          });
+          userId = r.userId;
+          userCreated = r.created;
+        }
+        await logActivity({
+          userId: ctx.user.id,
+          action: "create",
+          entity: "employee",
+          entityId: employeeId ?? undefined,
+          details: `Colaborador criado: ${input.fullName}${userId ? ` (utilizador #${userId}${userCreated ? " criado" : " ligado"})` : ""}`,
+        });
+        return { success: true, userId, userCreated };
       }),
 
     importExtras: protectedProcedure

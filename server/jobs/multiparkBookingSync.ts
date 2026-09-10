@@ -34,6 +34,7 @@ import {
 import { eq } from "drizzle-orm";
 import { multiparkBookings, multiparkBookingHistory } from "../../drizzle/schema";
 import { classifyAllocation } from "../spotClassification";
+import { autoAttachAgentsByEmail, type SeenAgent } from "../identityReconcile";
 
 // ─── Map park name/city to projectId ─────────────────────────────────────────
 
@@ -425,6 +426,7 @@ export async function syncBookingHistory(externalId: string, apiKey: string): Pr
     let currentGarage: string | null = null;
     let currentSpot: string | null = null;
     let lastKnownMileage: number | null = null;
+    const seenAgents: SeenAgent[] = [];
 
     for (const item of items as any[]) {
       const historyId = item.id ?? null;
@@ -433,6 +435,7 @@ export async function syncBookingHistory(externalId: string, apiKey: string): Pr
       const agentName = item.agentName ?? null;
       const agentUserId = item.userId ?? item.user?.id ?? null;
       const agentEmail = item.user?.email ?? null;
+      if (agentUserId) seenAgents.push({ agentUserId: String(agentUserId), agentName, agentEmail });
       const modifiedFields = item.modifiedFields ? String(item.modifiedFields) : null;
       const changeType = item.changeType ?? null;
       const platform = item.platform ?? null;
@@ -475,6 +478,12 @@ export async function syncBookingHistory(externalId: string, apiKey: string): Pr
           }
         } catch {}
       }
+    }
+
+    // Agente novo com o email de uma ficha → anexa à ficha (regra do Jorge,
+    // 2026-09-10: mesmo email = mesma pessoa). Best-effort, idempotente.
+    if (seenAgents.length) {
+      try { await autoAttachAgentsByEmail(db, seenAgents); } catch {}
     }
 
     // Updade resumo na reserva
@@ -669,6 +678,15 @@ export async function fetchAgentHistoryByName(
           if (!String(err.message).includes("Duplicate")) throw err;
         }
       }
+      // Mesmo email = mesma pessoa → anexa o agente à ficha (best-effort).
+      try {
+        await autoAttachAgentsByEmail(
+          db,
+          items
+            .filter((it) => it.userId ?? it.user?.id)
+            .map((it) => ({ agentUserId: String(it.userId ?? it.user?.id), agentName: it.agentName ?? agentName, agentEmail: it.user?.email ?? null })),
+        );
+      } catch {}
     } catch {
       perPark.push({ park: `${park.name} ${park.city}`, entries: 0 });
     }
