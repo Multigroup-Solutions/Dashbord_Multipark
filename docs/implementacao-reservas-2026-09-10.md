@@ -58,5 +58,15 @@ O ficheiro de ambiente e os registos locais de execução estão excluídos do G
 - Primeiro bloco publicado pela PR #32, revisão `893ffcab3854a649f78f89d99dd5c00823bcd031`.
 - Uma reserva real desatualizada foi colocada duas vezes na fila: criou apenas um trabalho, concluído numa tentativa pelo GitHub Actions. A matrícula ficou igual à origem.
 - O primeiro ciclo atualizou 59 de 60 detalhes; a API devolveu 404 para uma reserva antiga do Airpark Lisboa. A falha fica registada e recuperável, sem apagar a reserva nem marcar o detalhe como atualizado.
-- A conferência visual detetou uma segunda causa: uma campanha fazia o filtro Marketplace excluir uma reserva já importada. A classificação passa a preservar explicitamente a origem Marketplace e mantém os dados de campanha/parceiro.
+- A PR #33 preserva a origem Marketplace quando existe campanha/parceiro. A hipótese inicial de esta sobreposição explicar a diferença de uma reserva não se confirmou: a conferência por identificador mostrou que a reserva em falta no ecrã estava cancelada.
 - O ecrã de sincronização passa também a apresentar as falhas de atualização dos detalhes, além das notificações pendentes. Os códigos distinguem HTTP 404 de erros de base de dados sem expor informação privada.
+
+## Conferência das criações, incluindo canceladas
+
+- A consulta de Reservas excluía silenciosamente todas as canceladas. Passa a devolver todas as criações do período, com filtro explícito Todas / Não canceladas / Canceladas.
+- O resumo conta todas as reservas visíveis, mas separa o valor cancelado e exclui-o dos valores financeiros das não canceladas. A lista e o CSV mantêm o estado de cada reserva.
+- Verificação direta do detalhe das 44 reservas Marketplace criadas entre 01 e 10/09: todos os preços coincidem entre a API e a base de dados, total de 2201,55 €. Inclui uma cancelada de 29,80 €; as 43 não canceladas somam 2171,75 €. A fotografia anterior de 2192,70 € não corresponde aos valores atuais da origem.
+- Dois estados estavam desatualizados nesta conferência. A fila corrigiu ambos para CHECKED_IN numa tentativa por reserva. A segunda execução registou também falhas em reservas antigas: a base apresenta oito detalhes pendentes, sete com código HTTP 404 explícito e um com código antigo genérico cujo 404 já foi confirmado diretamente.
+- O primeiro horário automático da nova rotina ainda não foi observado: as execuções de validação foram iniciadas manualmente no GitHub Actions. O horário configurado não é uma garantia de execução a cada cinco minutos.
+- Cada notificação autenticada e persistida passa também a iniciar a recuperação em segundo plano no Vercel, sem esperar pela origem antes do HTTP 202. O agendamento mantém-se para falhas e detalhe periódico. Foi usado o mecanismo oficial [waitUntil](https://vercel.com/docs/functions/functions-api-reference/vercel-functions-package#waituntil), limitado pela duração da função; os trabalhos interrompidos continuam recuperáveis pela fila.
+- Validação final deste complemento: 50 testes passaram em oito ficheiros; TypeScript, compilação da aplicação e da API concluídos. Inclui criações/cancelamentos, separação dos valores e falha no arranque do processamento após receção durável.

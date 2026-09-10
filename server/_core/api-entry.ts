@@ -6,7 +6,9 @@ import { createContext } from "./context";
 import { createExternalApiRouter } from "../externalApi";
 import { createMcpApiRouter } from "../mcpApi";
 import { createWhatsappWebhookRouter } from "../whatsappWebhook";
-import { createMultiparkWebhookRouter } from "../multiparkWebhook";
+import { createMultiparkWebhookRouter, retryMultiparkDeliveries } from "../multiparkWebhook";
+import { waitUntil } from "@vercel/functions";
+import { deliveryErrorCode } from "../bookingDeliveryQueue";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { sdk } from "./sdk";
 import { getBookingTryAllParks } from "../multipark";
@@ -18,7 +20,11 @@ app.set("trust proxy", 1);
 app.use("/api/whatsapp/webhook", createWhatsappWebhookRouter());
 // Webhook das Conexões Multipark (reservas em tempo real) — também precisa do
 // raw body para o HMAC, por isso monta antes do express.json.
-app.use("/api/multipark/webhook", createMultiparkWebhookRouter());
+app.use("/api/multipark/webhook", createMultiparkWebhookRouter({
+  afterReceive: () => waitUntil(retryMultiparkDeliveries(Date.now() + 35_000).catch(error => {
+    console.error('[MultiparkWebhook] recuperação adiada:', deliveryErrorCode(error));
+  })),
+}));
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 

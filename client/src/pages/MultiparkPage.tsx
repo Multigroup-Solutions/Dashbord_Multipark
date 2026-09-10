@@ -1,4 +1,5 @@
 import { classifyBookingOrigin as classifyOrigin } from "@shared/bookingOrigin";
+import { matchesOperationState, summarizeOperationBookings } from "@shared/operationBookings";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
@@ -179,12 +180,7 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
 
 
 
-  // Estados que contam como "já recolhida" / "já entregue"
-  const COLLECTED_SET = new Set(["CHECKED_IN", "MOVING", "CHECKING_OUT", "PENDING_CHECKOUT", "CHECKED_OUT"]);
-  const DELIVERED_SET = new Set(["CHECKED_OUT"]);
-  const isDone = (b: any) =>
-    actionType === "checkin" ? COLLECTED_SET.has(b.status) :
-    actionType === "checkout" ? DELIVERED_SET.has(b.status) : true;
+  const isDone = (b: any) => matchesOperationState(b.status, actionType, "done");
 
   const ORIGIN_GROUPS: Array<{ id: string; label: string }> = [
     { id: "site", label: "Sites próprios" },
@@ -198,8 +194,7 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
   const bookings = useMemo(() => {
     let list: any[] = data?.bookings ?? [];
     if (originFilter !== "all") list = list.filter((b) => classifyOrigin(b).group === originFilter);
-    if (stateFilter === "done") list = list.filter((b) => isDone(b));
-    else if (stateFilter === "pending") list = list.filter((b) => !isDone(b));
+    list = list.filter((b) => matchesOperationState(b.status, actionType, stateFilter));
     if (!searchTerm) return list;
     const s = searchTerm.toLowerCase();
     return list.filter((b: any) =>
@@ -214,47 +209,7 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
   // Ordenação por coluna (setas nos cabeçalhos)
   const { sorted: sortedBookings, sortKey, sortDir, toggle } = useTableSort(bookings as any[]);
 
-  // Aggregate totals (comissões de parceiros vêm do servidor — partnerships
-  // novas por campanha, coerente com Faturação/Parcerias)
-  const totals = useMemo(() => {
-    let revenue = 0;
-    let partnerTotal = 0;
-    let toCollect = 0;
-    let paidOnline = 0, paidMB = 0, paidCash = 0, paidOther = 0;
-    const byPark: Record<string, { count: number; revenue: number; partnerShare: number; partnerName: string | null }> = {};
-
-    for (const b of bookings as any[]) {
-      const priceNum = parseFloat(b.totalPrice) || 0;
-      revenue += priceNum;
-      toCollect += parseFloat(b.remainingToPay) || 0;
-      // Caixa: o que já está pago, por método (Online/Multibanco/Dinheiro/Outros)
-      const paid = parseFloat(b.totalPaid) || 0;
-      if (paid > 0) {
-        const pm = String(b.paymentMethod ?? "").toLowerCase();
-        // Viva Wallet e transferências contam como Online (decisão Jorge 2026-08-06)
-        if (pm === "online" || pm.includes("viva wallet") || pm.includes("transferencia") || pm.includes("transferência")) paidOnline += paid;
-        else if (pm === "multibanco") paidMB += paid;
-        else if (pm === "dinheiro") paidCash += paid;
-        else paidOther += paid; // agregadores, agências, prós…
-      }
-
-      const park = b.parkName || "Desconhecido";
-      const city = b.city || "";
-      const displayName = city && !park.includes(city) ? `${park} ${city}` : park;
-      if (!byPark[displayName]) byPark[displayName] = { count: 0, revenue: 0, partnerShare: 0, partnerName: null };
-      byPark[displayName].count++;
-      byPark[displayName].revenue += priceNum;
-
-      const commission = Number(b.salesPartnerCommission ?? 0);
-      if (commission > 0) {
-        byPark[displayName].partnerShare += commission;
-        byPark[displayName].partnerName = b.salesPartnerName ?? byPark[displayName].partnerName;
-        partnerTotal += commission;
-      }
-    }
-
-    return { revenue, byPark, partnerTotal, toCollect, paidOnline, paidMB, paidCash, paidOther };
-  }, [bookings]);
+  const totals = useMemo(() => summarizeOperationBookings(bookings, actionType), [bookings, actionType]);
 
   return (
     <div className="space-y-4">
@@ -275,15 +230,20 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
             onChange={(s, e) => { setStartDate(s); setEndDate(e); setActiveRange(""); }}
           />
         </div>
-        {(actionType === "checkin" || actionType === "checkout") && (
+        {actionType !== "cancelation" && (
           <div>
             <Label className="text-xs mb-1 block">Estado</Label>
             <Select value={stateFilter} onValueChange={setStateFilter}>
               <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todas</SelectItem>
-                <SelectItem value="done">{actionType === "checkin" ? "Recolhidas" : "Entregues"}</SelectItem>
-                <SelectItem value="pending">{actionType === "checkin" ? "Por recolher" : "Por entregar"}</SelectItem>
+                {actionType === "creation" ? <>
+                  <SelectItem value="active">Não canceladas</SelectItem>
+                  <SelectItem value="cancelled">Canceladas</SelectItem>
+                </> : <>
+                  <SelectItem value="done">{actionType === "checkin" ? "Recolhidas" : "Entregues"}</SelectItem>
+                  <SelectItem value="pending">{actionType === "checkin" ? "Por recolher" : "Por entregar"}</SelectItem>
+                </>}
               </SelectContent>
             </Select>
           </div>
@@ -366,6 +326,12 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
         </Button>
       </div>
 
+      {actionType === "creation" && (
+        <p className="text-sm text-muted-foreground">
+          {bookings.length} reservas criadas: {bookings.length - totals.cancelledCount} não canceladas e {totals.cancelledCount} canceladas.
+          {" "}Valor cancelado: {fmtEur(totals.cancelledValue)}. Os valores financeiros abaixo referem-se apenas às não canceladas.
+        </p>
+      )}
       {/* Summary cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
         <Card>
@@ -387,7 +353,7 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
         </Card>
         <Card>
           <CardContent className="p-3">
-            <p className="text-xs text-muted-foreground">Receita Bruta</p>
+            <p className="text-xs text-muted-foreground">{actionType === "creation" ? "Valor não cancelado" : "Receita Bruta"}</p>
             <p className="text-xl font-bold text-green-600">{fmtEur(totals.revenue)}</p>
           </CardContent>
         </Card>
