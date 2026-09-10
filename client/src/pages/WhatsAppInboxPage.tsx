@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { useIsMobile } from "@/hooks/useMobile";
+import { useOpenEmployee } from "@/hooks/useOpenEmployee";
 import {
   MessageCircle,
   Send,
@@ -39,14 +40,35 @@ import { isMediaPlaceholderBody } from "@shared/whatsappMedia";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-/** Timestamp da BD (UTC wall-clock 'YYYY-MM-DD HH:MM:SS') → hora local HH:MM. */
-function fmtTime(s: string | null): string {
-  if (!s) return "";
+/** Timestamp da BD (UTC wall-clock 'YYYY-MM-DD HH:MM:SS') → Date local, ou null. */
+function parseDbTime(s: string | null): Date | null {
+  if (!s) return null;
   const iso = s.includes("T") ? s : s.replace(" ", "T");
   const withZ = /[zZ]|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : iso + "Z";
   const d = new Date(withZ);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** Timestamp da BD → hora local HH:MM (bolhas da thread). */
+function fmtTime(s: string | null): string {
+  const d = parseDbTime(s);
+  return d ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+}
+
+/**
+ * Timestamp da BD → HH:MM se for hoje, senão DD/MM (lista de conversas). A lista
+ * está ordenada pela última mensagem e mostrar só a hora numa conversa de há
+ * uma semana fazia parecer que era de hoje.
+ */
+function fmtListTime(s: string | null, now: number): string {
+  const d = parseDbTime(s);
+  if (!d) return "";
+  const today = new Date(now);
+  const sameDay =
+    d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate();
+  return sameDay
+    ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit" });
 }
 
 /** Countdown legível até windowExpiresAt (ISO), relativo a `now` (ms). */
@@ -57,6 +79,12 @@ function windowCountdown(expiresAt: string | null, now: number): string {
   const h = Math.floor(ms / 3_600_000);
   const m = Math.floor((ms % 3_600_000) / 60_000);
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+/** Janela a fechar em menos de 2h — a linha ganha destaque na lista. */
+function windowClosingSoon(expiresAt: string | null, now: number): boolean {
+  if (!expiresAt) return false;
+  return new Date(expiresAt).getTime() - now < 2 * 3_600_000;
 }
 
 type WindowState = "awaiting_first_reply" | "open" | "expired";
@@ -82,6 +110,7 @@ function StatusIcon({ status }: { status: string }) {
 
 export default function WhatsAppInboxPage() {
   const isMobile = useIsMobile();
+  const openEmployee = useOpenEmployee();
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [text, setText] = useState("");
   const [tplOpen, setTplOpen] = useState(false);
@@ -138,8 +167,74 @@ export default function WhatsAppInboxPage() {
   const convList = hasSearch
     ? allConversations.filter((c) => matchesContactQuery(search, { name: c.name, phone: c.phoneE164 }))
     : allConversations;
+  // A ordem vem do servidor (`sortConversations`): janela aberta primeiro, da
+  // que fecha mais cedo para a que fecha mais tarde; depois as restantes pela
+  // última mensagem. Aqui só se AGRUPA para o cabeçalho de cada bloco — o
+  // filtro de pesquisa preserva a ordem, por isso a partição também.
+  const openList = convList.filter((c) => c.windowState === "open");
+  const closedList = convList.filter((c) => c.windowState !== "open");
   const t = thread.data;
   const windowState: WindowState | undefined = t?.windowState;
+
+  function conversationRow(c: (typeof convList)[number]) {
+    const isOpen = c.windowState === "open";
+    return (
+      <button
+        key={c.id}
+        onClick={() => openConversation(c.id)}
+        className={`w-full text-left px-3 py-2.5 border-b hover:bg-muted/50 transition-colors ${
+          selectedId === c.id ? "bg-muted" : ""
+        }`}
+      >
+        <div className="flex items-center gap-2">
+          <span className="font-medium truncate flex-1">{c.name}</span>
+          <span className="text-[11px] text-muted-foreground shrink-0">{fmtListTime(c.lastMessageAt, now)}</span>
+          {c.unreadCount > 0 && (
+            <Badge className="bg-green-600 text-white h-5 min-w-5 px-1.5 justify-center shrink-0">
+              {c.unreadCount}
+            </Badge>
+          )}
+        </div>
+        <div className="flex items-center gap-1 mt-0.5">
+          {c.windowState === "awaiting_first_reply" && (
+            <Hourglass className="h-3 w-3 text-amber-500 shrink-0" aria-label="A aguardar 1ª resposta" />
+          )}
+          {c.windowState === "expired" && (
+            <Lock className="h-3 w-3 text-muted-foreground shrink-0" aria-label="Janela fechada" />
+          )}
+          <span className="text-xs text-muted-foreground truncate flex-1">
+            {c.previewDirection === "out" ? "Tu: " : ""}
+            {c.preview ?? "—"}
+          </span>
+          {isOpen && (
+            // Critério de ordenação deste bloco, visível na própria linha.
+            <span
+              className={`text-[10px] shrink-0 tabular-nums ${
+                windowClosingSoon(c.windowExpiresAt, now) ? "text-amber-600 dark:text-amber-400 font-medium" : "text-green-700 dark:text-green-400"
+              }`}
+              title="Tempo que resta para responder em texto livre"
+            >
+              fecha em {windowCountdown(c.windowExpiresAt, now)}
+            </span>
+          )}
+        </div>
+      </button>
+    );
+  }
+
+  function groupHeader(label: string, count: number, tone: "open" | "closed") {
+    return (
+      <div
+        className={`sticky top-0 z-10 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide border-b ${
+          tone === "open"
+            ? "bg-green-50 dark:bg-green-950/40 text-green-800 dark:text-green-300"
+            : "bg-muted text-muted-foreground"
+        }`}
+      >
+        {label} · {count}
+      </div>
+    );
+  }
 
   // ── Coluna esquerda: lista de conversas ──
   const listColumn = (
@@ -182,37 +277,10 @@ export default function WhatsAppInboxPage() {
                 : "Ainda sem conversas."}
           </div>
         )}
-        {convList.map((c) => (
-          <button
-            key={c.id}
-            onClick={() => openConversation(c.id)}
-            className={`w-full text-left px-3 py-2.5 border-b hover:bg-muted/50 transition-colors ${
-              selectedId === c.id ? "bg-muted" : ""
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <span className="font-medium truncate flex-1">{c.name}</span>
-              <span className="text-[11px] text-muted-foreground shrink-0">{fmtTime(c.lastMessageAt)}</span>
-              {c.unreadCount > 0 && (
-                <Badge className="bg-green-600 text-white h-5 min-w-5 px-1.5 justify-center shrink-0">
-                  {c.unreadCount}
-                </Badge>
-              )}
-            </div>
-            <div className="flex items-center gap-1 mt-0.5">
-              {c.windowState === "awaiting_first_reply" && (
-                <Hourglass className="h-3 w-3 text-amber-500 shrink-0" aria-label="A aguardar 1ª resposta" />
-              )}
-              {c.windowState === "expired" && (
-                <Lock className="h-3 w-3 text-muted-foreground shrink-0" aria-label="Janela fechada" />
-              )}
-              <span className="text-xs text-muted-foreground truncate">
-                {c.previewDirection === "out" ? "Tu: " : ""}
-                {c.preview ?? "—"}
-              </span>
-            </div>
-          </button>
-        ))}
+        {openList.length > 0 && groupHeader("Janela aberta — a fechar primeiro", openList.length, "open")}
+        {openList.map(conversationRow)}
+        {closedList.length > 0 && groupHeader("Fora da janela — última mensagem", closedList.length, "closed")}
+        {closedList.map(conversationRow)}
       </div>
     </div>
   );
@@ -302,7 +370,22 @@ export default function WhatsAppInboxPage() {
               </Button>
             )}
             <div className="min-w-0">
-              <div className="font-semibold truncate">{t?.name ?? "…"}</div>
+              {t?.employeeId ? (
+                // Mesmo padrão das outras páginas (Extras-Dia, Avaliação): o nome
+                // abre a ficha do colaborador em /rh via useOpenEmployee.
+                <button
+                  type="button"
+                  className="block font-semibold truncate max-w-full text-left hover:underline"
+                  title="Abrir ficha do funcionário"
+                  onClick={() => openEmployee(t.employeeId)}
+                >
+                  {t.name}
+                </button>
+              ) : (
+                <div className="font-semibold truncate" title={t ? "Número sem ficha de colaborador associada" : undefined}>
+                  {t?.name ?? "…"}
+                </div>
+              )}
               {t && <div className="text-[11px] text-muted-foreground">{t.phoneE164}</div>}
             </div>
           </div>

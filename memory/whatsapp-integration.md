@@ -49,6 +49,17 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 
 ## Changelog
 
+### 2026-09-10 — Inbox ordenado pela janela + nome abre a ficha + semana selecionada preenche as mensagens
+**Type**: feature
+**Scope**: `server/whatsappInbox.ts` (`sortConversations` NOVA + `employeeId` no thread), `server/whatsappInbox.test.ts` (+7), `client/src/pages/WhatsAppInboxPage.tsx` (lista agrupada, countdown por linha, cabeçalho clicável), `client/src/pages/ExtrasDiaPage.tsx` (`AvailabilitySection`: `weekLabel`/`weekShortLabel`, default do campo "Semana")
+**What**:
+- **Ordem da lista do inbox** (pedido Jorge): regra ÚNICA e pura `sortConversations` no servidor — (1) conversas com janela `open` primeiro, da que fecha MAIS CEDO para a que fecha mais tarde (`windowExpiresAt` asc); (2) depois `expired` + `awaiting_first_reply` no MESMO grupo, pela última mensagem trocada (`lastMessageAt` desc, nulo no fim); empates → última msg desc, depois id desc. A query mantém `ORDER BY lastMessageAt DESC LIMIT 300` só para o cap apanhar as ativas; a ordem visível é sempre a de `sortConversations`. A UI **não reordena** — só parte a lista já ordenada em dois blocos com cabeçalho sticky ("Janela aberta — a fechar primeiro · N" / "Fora da janela — última mensagem · N") e mostra "fecha em Xh Ym" em cada linha aberta (âmbar a <2h). Pesquisa preserva a ordem.
+- **Timestamp da lista** passou a HH:MM se hoje, senão DD/MM (`fmtListTime`) — com a lista ordenada por última mensagem, só a hora numa conversa de há uma semana enganava.
+- **Nome no cabeçalho da thread abre a ficha** do colaborador: `getConversationThread` devolve agora `employeeId`; a UI usa o `useOpenEmployee` (mesmo padrão de Extras-Dia/Avaliação: sessionStorage `mp.filters.hr.selectedId` + navegar para `/rh`). Número sem ficha fica como texto simples com tooltip.
+- **Disponibilidade dos extras** — a semana selecionada em cima passa a alimentar as mensagens: pré-visualização do email leva `weekLabel` com a MESMA fórmula do servidor (`"Segunda 14/09 a Domingo 20/09"`, antes mostrava "semana de a próxima semana"); no diálogo WhatsApp o campo "Semana" nasce com `semana de 14/09 a 20/09` (`weekShortLabel`) e acompanha a seleção enquanto o utilizador não escrever nada (`waParams[id] === undefined` = seguir a seleção; string, mesmo vazia, = valor do utilizador). "Usar este texto no WhatsApp" continua a sobrepor. Template "Aviso de trabalho" (kind `day`) não ganhou default.
+**Why**: a lista por `lastMessageAt` escondia no meio as conversas prestes a fechar; abrir a ficha a partir da conversa era um pedido antigo ("cada vez que carregamos num utilizador, abrir o funcionário"); o parâmetro da semana era escrito à mão em todos os envios.
+**Notes**: sem migração, sem mudança de contrato (só campo ADICIONADO ao thread). `tsc` limpo excepto `@vercel/functions` em falta no `node_modules` local (está no package.json — `pnpm install`), pré-existente. Testes whatsappInbox 16/16 (+7 novos), whatsappBroadcast 15/15, availabilityForm 18/18. O `windowState` da lista vem do servidor no momento do fetch (10s) — uma conversa pode passar a `expired` até 10s antes de mudar de bloco; o countdown por linha usa o tick local de 30s. NÃO deployado.
+
 ### 2026-09-09 — Imagens e áudios recebidos no inbox + filtros "não respondeu" / "sem mensagem 24h"
 **Type**: feature
 **Scope**: `shared/whatsappMedia.ts` (novo, puro), `server/whatsapp.ts` (`downloadMedia`),

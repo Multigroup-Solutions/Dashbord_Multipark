@@ -120,6 +120,8 @@ const fmtDate = (s: string) => {
   const d = new Date(s + "T00:00:00");
   return d.toLocaleDateString("pt-PT", { weekday: "long", day: "2-digit", month: "long" });
 };
+/** 'YYYY-MM-DD' → 'DD/MM' (sem Date: a string ISO já traz o que precisamos). */
+const ddmm = (isoDay: string) => `${isoDay.slice(8, 10)}/${isoDay.slice(5, 7)}`;
 
 function todayISO(): string {
   const d = new Date();
@@ -1490,11 +1492,8 @@ export function AvailabilitySection() {
     if (msgDate === iso(tomorrow)) return `amanhã (${dm})`;
     return `dia ${dm}`;
   }, [msgDate]);
-  const msgParams = useMemo(() => ({
-    kind: msgKind, dateLabel: msgDateLabel, shift: msgShift,
-    fromHour: msgFrom, toHour: msgTo, note: note.trim() || null,
-  }), [msgKind, msgDateLabel, msgShift, msgFrom, msgTo, note]);
-  const msgPreview = useMemo(() => buildAvailabilityMessage(msgParams), [msgParams]);
+  // `msgParams`/`msgPreview` ficam mais abaixo: precisam do rótulo da semana,
+  // que vem da overview.
   const msgInput = useMemo(() => msgKind === "week" ? null : ({
     kind: msgKind, dateLabel: msgDateLabel, targetDate: msgDate || null,
     ...(msgKind === "day_shift" ? { shift: msgShift } : {}),
@@ -1536,6 +1535,28 @@ export function AvailabilitySection() {
   });
 
   const o = overview.data;
+
+  // Semana selecionada em cima, em texto (pedido Jorge 2026-09-10: a mensagem
+  // usa a semana escolhida, ninguém a escreve à mão).
+  //   - `weekLabel`: a MESMA fórmula do email no servidor
+  //     (`sendAvailabilityRequest`: "Segunda 14/09 a Domingo 20/09") — a
+  //     pré-visualização diz exatamente o que o email vai dizer.
+  //   - `weekShortLabel`: forma curta "14/09 a 20/09" para o {{semana}} do
+  //     template WhatsApp ("semana de 14/09 a 20/09").
+  // Sem overview ainda, cai no ISO da semana em vez de "a próxima semana".
+  const weekHeaders = o?.dayHeaders ?? [];
+  const weekLabel = weekHeaders.length
+    ? `${weekHeaders[0].label} a ${weekHeaders[weekHeaders.length - 1].label}`
+    : effectiveWeek;
+  const weekShortLabel = weekHeaders.length
+    ? `${ddmm(weekHeaders[0].day)} a ${ddmm(weekHeaders[weekHeaders.length - 1].day)}`
+    : effectiveWeek;
+  const msgParams = useMemo(() => ({
+    kind: msgKind, dateLabel: msgDateLabel, shift: msgShift,
+    fromHour: msgFrom, toHour: msgTo, note: note.trim() || null,
+    weekLabel: weekLabel || undefined,
+  }), [msgKind, msgDateLabel, msgShift, msgFrom, msgTo, note, weekLabel]);
+  const msgPreview = useMemo(() => buildAvailabilityMessage(msgParams), [msgParams]);
   // Última vez que cada extra trabalhou (histórico Multipark/ponto/extras-dia)
   const lastWorked = trpc.rh.lastWorkedMap.useQuery();
   const trimmedSearch = search.trim();
@@ -1619,7 +1640,13 @@ export function AvailabilitySection() {
   // Valor partilhado (semana ou dia, conforme o template) — guardado POR
   // template para não se perder ao espreitar o outro e voltar.
   const [waParams, setWaParams] = useState<Record<string, string>>({});
-  const waParam2 = waParams[waTemplate.id] ?? "";
+  // O campo "Semana" nasce preenchido com a semana selecionada em cima e
+  // acompanha-a enquanto o utilizador não escrever nada; o que ele escrever
+  // (ou colar via "Usar este texto no WhatsApp") manda. `undefined` = nunca
+  // tocado → segue a seleção; string (mesmo vazia) = valor do utilizador.
+  const waWeekDefault = waTemplate.sharedParam.kind === "week" && weekShortLabel ? `semana de ${weekShortLabel}` : "";
+  const waParam2IsDefault = waParams[waTemplate.id] === undefined && !!waWeekDefault;
+  const waParam2 = waParams[waTemplate.id] ?? waWeekDefault;
   const setWaParam2 = (value: string) =>
     setWaParams(prev => ({ ...prev, [waTemplate.id]: value }));
   /**
@@ -2166,6 +2193,11 @@ export function AvailabilitySection() {
                   value={waParam2}
                   onChange={(e) => setWaParam2(e.target.value)}
                 />
+                {waParam2IsDefault && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Preenchido com a semana selecionada em cima — podes editar.
+                  </p>
+                )}
                 {/* Preenchimento rápido pelos dias da semana visível na tabela
                     (mesmo padrão dos botões "Esta semana"/"Próxima semana"). */}
                 {waTemplate.sharedParam.kind === "day" && !!o?.dayHeaders.length && (

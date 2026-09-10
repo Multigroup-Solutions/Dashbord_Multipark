@@ -69,6 +69,39 @@ export interface ConversationRow {
   windowExpiresAt: string | null;
 }
 
+/**
+ * Ordem da lista do inbox (pedido Jorge 2026-09-10) — regra ÚNICA, pura e
+ * testável; a UI só agrupa, nunca reordena:
+ *   1. Conversas com a janela ABERTA primeiro, da que tem MENOS tempo para
+ *      responder para a que tem mais (`windowExpiresAt` ascendente) — quem está
+ *      prestes a fechar fica no topo.
+ *   2. Depois as que estão FORA da janela (`expired` e `awaiting_first_reply`),
+ *      pela última mensagem trocada: mais recente primeiro, mais antiga no fim.
+ * Empates: dentro do grupo aberto, última mensagem mais recente primeiro; no
+ * fim, id decrescente para a ordem ser determinística. `lastMessageAt` nulo
+ * (não deve acontecer — a conversa nasce com mensagem) vai para o fim.
+ */
+export function sortConversations<T extends Pick<ConversationRow, "id" | "windowState" | "windowExpiresAt" | "lastMessageAt">>(
+  rows: readonly T[],
+): T[] {
+  const NULL_LAST = Number.POSITIVE_INFINITY;
+  const expiresMs = (r: T) => (r.windowExpiresAt ? new Date(r.windowExpiresAt).getTime() : NULL_LAST);
+  const lastMsgMs = (r: T) => (r.lastMessageAt ? (parseDbUtc(r.lastMessageAt) ?? -1) : -1);
+
+  return [...rows].sort((a, b) => {
+    const aOpen = a.windowState === "open" ? 0 : 1;
+    const bOpen = b.windowState === "open" ? 0 : 1;
+    if (aOpen !== bOpen) return aOpen - bOpen;
+    if (aOpen === 0) {
+      const byExpiry = expiresMs(a) - expiresMs(b);
+      if (byExpiry !== 0) return byExpiry;
+    }
+    const byLastMsg = lastMsgMs(b) - lastMsgMs(a);
+    if (byLastMsg !== 0) return byLastMsg;
+    return b.id - a.id;
+  });
+}
+
 export async function listConversations(): Promise<ConversationRow[]> {
   const db = await getDb();
   if (!db) return [];
@@ -117,7 +150,9 @@ export async function listConversations(): Promise<ConversationRow[]> {
     }
   }
 
-  return convs.map((c) => {
+  // A query vem por `lastMessageAt` desc só para o cap de 300 apanhar as
+  // conversas ativas; a ordem que a UI mostra é a de `sortConversations`.
+  const rows: ConversationRow[] = convs.map((c) => {
     const w = deriveWindowState(c.lastInboundAt);
     const preview = previewByConv.get(c.id);
     return {
@@ -134,6 +169,7 @@ export async function listConversations(): Promise<ConversationRow[]> {
       windowExpiresAt: w.windowExpiresAt,
     };
   });
+  return sortConversations(rows);
 }
 
 // ─── Thread de uma conversa ─────────────────────────────────────────────────
@@ -157,6 +193,8 @@ export interface ThreadMessage {
 export interface ConversationThread {
   conversationId: number;
   phoneE164: string;
+  /** Ficha do colaborador associada (null = número sem ficha; o cabeçalho não fica clicável). */
+  employeeId: number | null;
   name: string;
   windowState: WindowState;
   windowExpiresAt: string | null;
@@ -171,6 +209,7 @@ export async function getConversationThread(conversationId: number, limit = 100)
     .select({
       id: whatsappConversations.id,
       phoneE164: whatsappConversations.phoneE164,
+      employeeId: whatsappConversations.employeeId,
       lastInboundAt: whatsappConversations.lastInboundAt,
       employeeName: employees.fullName,
     })
@@ -205,6 +244,7 @@ export async function getConversationThread(conversationId: number, limit = 100)
   return {
     conversationId: conv.id,
     phoneE164: conv.phoneE164,
+    employeeId: conv.employeeId,
     name: conv.employeeName ?? conv.phoneE164,
     windowState: w.windowState,
     windowExpiresAt: w.windowExpiresAt,
