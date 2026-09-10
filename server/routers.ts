@@ -6922,6 +6922,13 @@ export const appRouter = router({
     }),
 
     // Get sync logs
+    syncCoverage: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx.user.role, "backoffice");
+      const { parkCoverage } = await import("./multipark");
+      const { getDeliveryHealth } = await import("./bookingDeliveryQueue");
+      return { parks: parkCoverage(), queue: await getDeliveryHealth() };
+    }),
+
     syncLogs: protectedProcedure.query(async ({ ctx }) => {
       requireRole(ctx.user.role, "backoffice");
       return getSyncLogs(50);

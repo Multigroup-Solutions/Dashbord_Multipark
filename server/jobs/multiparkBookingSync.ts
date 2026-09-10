@@ -19,6 +19,7 @@ import {
   isMultiparkConfigured,
   getConfiguredParks,
   getParkApiKey,
+  matchParkConfig,
   type MultiparkBooking,
   type BookingActionType,
   type ParkConfig,
@@ -31,8 +32,10 @@ import {
   getDb,
   getLastSyncSuccessAt,
 } from "../db";
-import { eq } from "drizzle-orm";
+import { eq, and, or, sql, isNull, lte } from "drizzle-orm";
 import { multiparkBookings, multiparkBookingHistory } from "../../drizzle/schema";
+import { parseBookingDate, bookingDetailCore } from "../bookingRefresh";
+import { deliveryErrorCode, retryDelaySeconds } from "../bookingDeliveryQueue";
 import { classifyAllocation } from "../spotClassification";
 import { autoAttachAgentsByEmail, type SeenAgent } from "../identityReconcile";
 
@@ -190,20 +193,7 @@ function findProjectId(
 
 // ─── Parse date from MultiPark format "DD/MM/YYYY, HH:mm" ────────────────────
 
-function parseMultiparkDate(dateStr: string | undefined | null): string | null {
-  if (!dateStr) return null;
-  // Format: "07/03/2026, 14:15"
-  const match = dateStr.match(/(\d{2})\/(\d{2})\/(\d{4}),?\s*(\d{2}):(\d{2})/);
-  let d: Date | null = null;
-  if (match) {
-    const [, day, month, year, hours, minutes] = match;
-    d = new Date(parseInt(year), parseInt(month) - 1, parseInt(day), parseInt(hours), parseInt(minutes));
-  } else {
-    const parsed = new Date(dateStr);
-    if (!isNaN(parsed.getTime())) d = parsed;
-  }
-  return d ? d.toISOString().slice(0, 19).replace("T", " ") : null;
-}
+const parseMultiparkDate = parseBookingDate;
 
 // ─── Convert API booking to DB record ────────────────────────────────────────
 
@@ -305,39 +295,39 @@ function nowMysql(): string {
   return new Date().toISOString().slice(0, 19).replace("T", " ");
 }
 
-/**
- * Chama /bookings/:id para obter os campos que /bookings/report não devolve
- * (deliveryType, returnFlight, departingFlight, remarks) e persiste em DB.
- * Idempotente: se enrichedAt já estiver preenchido, salta.
- *
- * Marca SEMPRE enrichedAt (mesmo em erro 404 ou key errada) para não voltar
- * a tentar a mesma reserva ad infinitum — o batch ficaria preso a falhar
- * sempre nos mesmos IDs.
- */
-async function enrichBookingIfNeeded(externalId: string, apiKey: string): Promise<boolean> {
+/** O sucesso anterior não impede uma atualização. As falhas mantêm o último
+ * detalhe válido e voltam à fila com um intervalo crescente entre tentativas. */
+async function enrichBookingIfNeeded(externalId: string, apiKey: string, prefetched?: MultiparkBooking,
+  context?: { parkName: string | null; city: string | null }): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
-
-  const [current] = await db
-    .select({ enrichedAt: multiparkBookings.enrichedAt })
-    .from(multiparkBookings)
-    .where(eq(multiparkBookings.externalId, externalId))
-    .limit(1);
-  if (current?.enrichedAt) return false; // already enriched
-
   try {
-    const detailed = await getBooking(externalId, apiKey);
+    const detailed = prefetched ?? await getBooking(externalId, apiKey, { maxAttempts: 1, timeoutMs: 8000 });
+    if (detailed?.id !== externalId) throw Object.assign(new Error("Detalhe não corresponde à reserva"), { code: "BOOKING_ID_MISMATCH" });
     const b: any = detailed;
+    const projectMap = await getProjectMap();
+    const mapped = bookingToRecord(detailed, projectMap, await getAliasResolver());
 
     // Cliente + veículo só são preenchidos se vierem (o report mascara estes
     // campos para reservas de parceiros; o /bookings/:id devolve-os reais).
     const update: Record<string, any> = {
+      // MySQL avalia SET da esquerda para a direita: comparar antes de alterar status.
+      ...(typeof b.status === 'string' && b.status ? {
+        historyFetchedAt: sql`CASE WHEN status <> ${b.status} THEN NULL ELSE historyFetchedAt END`,
+      } : {}),
+      ...bookingDetailCore(b),
+      detailRetryAt: null, detailAttempts: 0, detailErrorCode: null,
       deliveryType: typeof b.deliveryType === "string" && b.deliveryType ? b.deliveryType : null,
       returnFlight: typeof b.returnFlight === "string" && b.returnFlight ? b.returnFlight : null,
       departingFlight: typeof b.departingFlight === "string" && b.departingFlight ? b.departingFlight : null,
       remarks: typeof b.remarks === "string" && b.remarks ? b.remarks.slice(0, 512) : null,
       enrichedAt: nowMysql(),
     };
+    for (const key of ['bookingNumber', 'parkId', 'parkName', 'city', 'projectId', 'campaign', 'parkingType', 'clientNif'] as const) {
+      if (mapped[key] != null && mapped[key] !== '') update[key] = mapped[key];
+    }
+    const projectId = findProjectId(context?.parkName ?? undefined, context?.city ?? undefined, projectMap);
+    if (projectId) update.projectId = projectId;
     if (b.client?.firstName) update.clientFirstName = b.client.firstName;
     if (b.client?.lastName) update.clientLastName = b.client.lastName;
     if (b.client?.email) update.clientEmail = b.client.email;
@@ -364,16 +354,28 @@ async function enrichBookingIfNeeded(externalId: string, apiKey: string): Promis
     if (typeof b.partnerId === "string" && b.partnerId) update.partnerId = b.partnerId.slice(0, 128);
     if (typeof b.partnerName === "string" && b.partnerName && !/unknown/i.test(b.partnerName)) update.partnerName = b.partnerName.slice(0, 256);
 
-    await db.update(multiparkBookings).set(update).where(eq(multiparkBookings.externalId, externalId));
+    // Uma resposta antiga não pode recuar uma atualização mais recente.
+    const version = update.sourceUpdatedAt as string | undefined;
+    await db.update(multiparkBookings).set(update).where(and(
+      eq(multiparkBookings.externalId, externalId),
+      version ? or(isNull(multiparkBookings.sourceUpdatedAt), lte(multiparkBookings.sourceUpdatedAt, version)) : undefined,
+    ));
     return true;
-  } catch {
-    // API falhou (404, key errada, etc.) — marca como tentado para sair da fila.
-    try {
-      await db.update(multiparkBookings).set({ enrichedAt: nowMysql() })
-        .where(eq(multiparkBookings.externalId, externalId));
-    } catch {}
+  } catch (error) {
+    await deferBookingDetail(externalId, deliveryErrorCode(error));
     return false;
   }
+}
+
+async function deferBookingDetail(externalId: string, code: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Base de dados indisponível");
+  const [row] = await db.select({ attempts: multiparkBookings.detailAttempts })
+    .from(multiparkBookings).where(eq(multiparkBookings.externalId, externalId)).limit(1);
+  const attempts = (row?.attempts ?? 0) + 1;
+  await db.update(multiparkBookings).set({ detailAttempts: attempts, detailErrorCode: code,
+    detailRetryAt: new Date(Date.now() + retryDelaySeconds(attempts) * 1000).toISOString().slice(0, 19).replace('T', ' '),
+  }).where(eq(multiparkBookings.externalId, externalId));
 }
 
 /** Corre N tarefas em paralelo com limite de concorrência.
@@ -518,7 +520,7 @@ export async function syncBookingHistory(externalId: string, apiKey: string): Pr
  * Limite default 30 para caber no timeout do Vercel.
  */
 export async function enrichBookingsBatch(
-  arg: number | { externalIds?: string[]; limit?: number; deadlineAt?: number } = 100,
+  arg: number | { externalIds?: string[]; limit?: number; deadlineAt?: number; force?: boolean; details?: Map<string, MultiparkBooking> } = 100,
 ): Promise<{
   scanned: number;
   enriched: number;
@@ -535,16 +537,16 @@ export async function enrichBookingsBatch(
   // Alvo explícito mas vazio → nada a enriquecer.
   if (targetIds && targetIds.length === 0) return { scanned: 0, enriched: 0, errors: 0, noKey: 0 };
 
-  // Mapa parkId (interno) → ParkConfig descobre-se sob procura, vamos tentar
-  // todos os parques para cada booking sem perder muito tempo.
-  const { isNull, and, inArray } = await import("drizzle-orm");
-
-  // Só reservas ainda não enriquecidas (enrichedAt IS NULL). Se vier uma lista
-  // de alvos (as que acabaram de entrar/mudar no ciclo), restringe a essas —
-  // enriquecimento imediato e direcionado em vez de varrer o backlog todo.
-  const whereCond = targetIds && targetIds.length
-    ? and(isNull(multiparkBookings.enrichedAt), inArray(multiparkBookings.externalId, targetIds))
-    : isNull(multiparkBookings.enrichedAt);
+  const { inArray } = await import("drizzle-orm");
+  const due = sql`(detailRetryAt IS NULL OR detailRetryAt <= UTC_TIMESTAMP())`;
+  // Detalhe novo, falhado ou desatualizado. A rotação cobre também alterações
+  // de matrícula/campanha sem mudança de estado; antigos concluídos rodam semanalmente.
+  const stale = sql`(enrichedAt IS NULL OR detailErrorCode IS NOT NULL
+    OR enrichedAt < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 7 DAY)
+    OR (COALESCE(checkOut, checkIn, bookingCreatedAt) >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 7 DAY)
+      AND enrichedAt < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 6 HOUR)))`;
+  const whereCond = and(targetIds ? inArray(multiparkBookings.externalId, targetIds) : undefined,
+    opts.force && targetIds ? undefined : due, opts.force && targetIds ? undefined : stale);
 
   const pending = await db
     .select({
@@ -554,66 +556,23 @@ export async function enrichBookingsBatch(
     })
     .from(multiparkBookings)
     .where(whereCond)
+    .orderBy(sql`COALESCE(detailRetryAt, enrichedAt, bookingCreatedAt) ASC`)
     .limit(limit);
 
   if (pending.length === 0) return { scanned: 0, enriched: 0, errors: 0, noKey: 0 };
-
-  const parks = getConfiguredParks();
-  // Normaliza nomes de cidade que vêm em variantes (EN vs PT).
-  const CITY_NORMALIZE: Record<string, string> = {
-    lisbon: "lisboa",
-    lisboa: "lisboa",
-    oporto: "porto",
-    porto: "porto",
-    faro: "faro",
-  };
-  // Cache: (parkName|city) lowercase → apiKey.
-  // Algumas reservas têm parkName="Airpark" e city="lisbon", outras têm
-  // parkName="Airpark - Lisboa" e city="Lisboa". Damos ambos os caminhos.
-  const keyCache = new Map<string, string | null>();
-  function pickApiKey(parkName: string | null, city: string | null): string | null {
-    if (!parkName) return null;
-    const cacheKey = `${parkName.toLowerCase()}|${(city ?? "").toLowerCase()}`;
-    if (keyCache.has(cacheKey)) return keyCache.get(cacheKey) ?? null;
-
-    const pl = parkName.toLowerCase();
-    const cityNorm = city ? (CITY_NORMALIZE[city.toLowerCase()] ?? city.toLowerCase()) : "";
-
-    // 1) parkName contém o nome do parque E a cidade
-    let match = parks.find(p =>
-      pl.includes(p.name.toLowerCase()) && pl.includes(p.city.toLowerCase()),
-    );
-    // 2) parkName tem só o nome; usa a coluna city para desempatar
-    if (!match && cityNorm) {
-      match = parks.find(p =>
-        pl.includes(p.name.toLowerCase()) && p.city.toLowerCase() === cityNorm,
-      );
-    }
-
-    const key = match ? getParkApiKey(match) ?? null : null;
-    keyCache.set(cacheKey, key);
-    return key;
-  }
 
   let enriched = 0;
   let errs = 0;
   let noKey = 0;
   await runConcurrent(pending, ENRICH_CONCURRENCY, async (p) => {
-    const apiKey = pickApiKey(p.parkName, p.city);
+    const park = matchParkConfig({ parkName: p.parkName, city: p.city });
+    const apiKey = park && !park.closed ? getParkApiKey(park) : undefined;
     if (!apiKey) {
       noKey++;
-      // marca como tentado para sair da fila e não voltar a aparecer
-      const db = await getDb();
-      if (db) {
-        try {
-          await db.update(multiparkBookings)
-            .set({ enrichedAt: nowMysql() })
-            .where(eq(multiparkBookings.externalId, p.externalId));
-        } catch {}
-      }
+      await deferBookingDetail(p.externalId, "PARK_ACCESS_MISSING");
       return;
     }
-    const ok = await enrichBookingIfNeeded(p.externalId, apiKey);
+    const ok = await enrichBookingIfNeeded(p.externalId, apiKey, opts.details?.get(p.externalId), p);
     if (ok) enriched++; else errs++;
   }, deadlineAt);
 
@@ -788,6 +747,7 @@ export async function syncBookings(opts: {
   endDate: string;
   actionTypes?: BookingActionType[];
   triggeredById?: number;
+  parkIds?: string[];
 }): Promise<{
   success: boolean;
   processed: number;
@@ -802,7 +762,11 @@ export async function syncBookings(opts: {
 
   const errors: string[] = [];
 
-  const parks = getConfiguredParks();
+  const configured = getConfiguredParks();
+  if (opts.parkIds && (!opts.parkIds.length || opts.parkIds.some(id => !configured.some(p => p.id === id)))) {
+    throw new Error("O parque pedido não tem acesso de sincronização configurado");
+  }
+  const parks = opts.parkIds ? configured.filter(p => opts.parkIds!.includes(p.id)) : configured;
   const parksToSync = parks.length > 0 ? parks : [null]; // null = use global key
 
   // Corre todas as combinações (parque × actionType) em paralelo. As chamadas
@@ -862,11 +826,11 @@ export async function syncBookings(opts: {
 
   // Log the sync operation
   await createSyncLog({
-    syncType: "api_sync",
+    syncType: opts.parkIds ? "api_sync_recovery" : "api_sync",
     status: errors.length === 0 ? "success" : "partial",
     recordsProcessed: totalProcessed,
     recordsCreated: totalCreated,
-    recordsUpdated: totalUpdated - totalCreated,
+    recordsUpdated: totalUpdated,
     errorMessage: errors.length > 0 ? errors.join("; ") : undefined,
     triggeredById: opts.triggeredById ?? undefined,
   });
@@ -875,7 +839,7 @@ export async function syncBookings(opts: {
     success: errors.length === 0,
     processed: totalProcessed,
     created: totalCreated,
-    updated: totalUpdated - totalCreated,
+    updated: totalUpdated,
     errors,
     enrichTargets: Array.from(enrichTargets),
   };
@@ -1069,6 +1033,8 @@ export async function runFutureCronSync(
     agg.created += report.created;
     agg.updated += report.updated;
     agg.errors.push(...report.errors);
+    // Uma fatia incompleta tem de ser repetida, sem avançar o marcador.
+    if (report.errors.length) break;
     offset += FUTURE_CHUNK_DAYS;
   }
 

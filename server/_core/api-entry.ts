@@ -196,12 +196,28 @@ app.get("/api/debug/probe-partner", async (req, res) => {
 
 // ─── Vercel Cron Jobs ────────────────────────────────────────────────────────
 // Vercel chama estes endpoints com Authorization: Bearer <CRON_SECRET>. Em
-// ausência da env var, qualquer chamada é permitida (útil em dev).
+// ausência da env var, nenhuma chamada é permitida.
 function cronAuthOk(req: any): boolean {
   const secret = process.env.CRON_SECRET;
-  if (!secret) return true;
+  if (!secret) return false;
   return req.headers["authorization"] === `Bearer ${secret}`;
 }
+
+app.get("/api/cron/multipark-deliveries", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const startedAt = Date.now();
+    const { retryMultiparkDeliveries } = await import("../multiparkWebhook");
+    const result = await retryMultiparkDeliveries(startedAt + 30_000);
+    const { enrichBookingsBatch } = await import("../jobs/multiparkBookingSync");
+    // O detalhe tem um ciclo próprio: um report demorado não pode impedir
+    // para sempre a atualização de matrículas, clientes e campanhas.
+    const details = await enrichBookingsBatch({ limit: 60, deadlineAt: startedAt + 45_000 });
+    return res.json({ ok: result.failed === 0 && result.lostLease === 0 && details.errors === 0 && details.noKey === 0, ...result, details });
+  } catch {
+    return res.status(503).json({ ok: false, error: "Fila de reservas indisponível" });
+  }
+});
 
 app.get("/api/cron/multipark-sync", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });

@@ -5,7 +5,6 @@ import {
   parseMultiparkWebhook,
   isoToMysql,
   cityToSyncForm,
-  isDuplicateKeyError,
 } from "./multiparkWebhook";
 
 const SECRET = "test-secret-key-for-multipark-webhook";
@@ -86,8 +85,9 @@ describe("parseMultiparkWebhook", () => {
 
   it("gera deliveryId de recurso quando o id da entrega falta", () => {
     const ev = parseMultiparkWebhook({ ...full, id: undefined })!;
-    expect(ev.deliveryId).toContain("cm123");
-    expect(ev.deliveryId).toContain("BOOKING_CREATED");
+    expect(ev.deliveryId).toMatch(/^fallback-[a-f0-9]{64}$/);
+    expect(parseMultiparkWebhook({ ...full, id: undefined })?.deliveryId).toBe(ev.deliveryId);
+    expect(parseMultiparkWebhook({ ...full, id: undefined, data: { ...full.data, licensePlate: "CC00DD" } })?.deliveryId).not.toBe(ev.deliveryId);
   });
 
   it("campos opcionais ausentes ficam null", () => {
@@ -109,22 +109,6 @@ describe("isoToMysql", () => {
     expect(isoToMysql(null)).toBeUndefined();
     expect(isoToMysql(undefined)).toBeUndefined();
     expect(isoToMysql("not-a-date")).toBeUndefined();
-  });
-});
-
-describe("isDuplicateKeyError", () => {
-  it("deteta code/errno diretos", () => {
-    expect(isDuplicateKeyError({ code: "ER_DUP_ENTRY" })).toBe(true);
-    expect(isDuplicateKeyError({ errno: 1062 })).toBe(true);
-  });
-  it("deteta o erro embrulhado pelo Drizzle em cause", () => {
-    expect(isDuplicateKeyError({ message: "query falhou", cause: { code: "ER_DUP_ENTRY", errno: 1062 } })).toBe(true);
-    expect(isDuplicateKeyError({ cause: { message: "Duplicate entry 'x' for key 'y'" } })).toBe(true);
-  });
-  it("não dispara em erros normais", () => {
-    expect(isDuplicateKeyError({ code: "ECONNREFUSED" })).toBe(false);
-    expect(isDuplicateKeyError(new Error("timeout"))).toBe(false);
-    expect(isDuplicateKeyError(null)).toBe(false);
   });
 });
 
