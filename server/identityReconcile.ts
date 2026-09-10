@@ -41,6 +41,8 @@ export interface EmployeeRow {
   id: number;
   fullName: string;
   email: string | null;
+  /** Email pessoal dos INTERNOS (0067) — só para contacto; conta para casar agentes. */
+  personalEmail: string | null;
   phone: string | null;
   position: string;
   isActive: number;
@@ -71,9 +73,17 @@ export async function loadIdentitySnapshot(db: Db): Promise<IdentitySnapshot> {
   const [u] = (await db.execute(sql`
     SELECT id, openId, name, email, role, isActive, loginMethod, lastSignedIn
     FROM users ORDER BY id`)) as any;
-  const [e] = (await db.execute(sql`
-    SELECT id, fullName, email, phone, position, isActive, userId, multiparkAgentName, multiparkAgentUserId
-    FROM employees ORDER BY id`)) as any;
+  // personalEmail só existe a partir da migração 0067 — tolerante a BD antiga.
+  let e: any;
+  try {
+    [e] = (await db.execute(sql`
+      SELECT id, fullName, email, personalEmail, phone, position, isActive, userId, multiparkAgentName, multiparkAgentUserId
+      FROM employees ORDER BY id`)) as any;
+  } catch {
+    [e] = (await db.execute(sql`
+      SELECT id, fullName, email, NULL AS personalEmail, phone, position, isActive, userId, multiparkAgentName, multiparkAgentUserId
+      FROM employees ORDER BY id`)) as any;
+  }
   const [a] = (await db.execute(sql`
     SELECT agentUserId,
            GROUP_CONCAT(DISTINCT agentEmail ORDER BY agentEmail SEPARATOR '\n') AS emails,
@@ -116,6 +126,7 @@ export async function loadIdentitySnapshot(db: Db): Promise<IdentitySnapshot> {
       id: Number(r.id),
       fullName: String(r.fullName),
       email: str(r.email),
+      personalEmail: str(r.personalEmail),
       phone: str(r.phone),
       position: String(r.position),
       isActive: Number(r.isActive),
@@ -245,12 +256,15 @@ export function buildIdentityAudit(snap: IdentitySnapshot): IdentityAudit {
     const u = e.userId != null ? usersById.get(e.userId) : undefined;
     return norm(u?.email);
   };
+  // Para casar AGENTES: o email de trabalho (ou do login) E o pessoal dos
+  // internos — um agente Multipark criado com o gmail da pessoa é a mesma pessoa.
   const employeesByEffectiveEmail = new Map<string, EmployeeRow[]>();
   for (const e of snap.employees) {
-    const k = effectiveEmail(e);
-    if (!k) continue;
-    employeesByEffectiveEmail.set(k, [...(employeesByEffectiveEmail.get(k) ?? []), e]);
+    const keys = new Set([effectiveEmail(e), norm(e.personalEmail)].filter(Boolean));
+    for (const k of keys) employeesByEffectiveEmail.set(k, [...(employeesByEffectiveEmail.get(k) ?? []), e]);
   }
+  /** Emails que identificam a pessoa para efeitos de agente: trabalho/login + pessoal. */
+  const agentEmailsOf = (e: EmployeeRow): string[] => [effectiveEmail(e), norm(e.personalEmail)].filter(Boolean);
   const employeesByUserId = new Map<number, EmployeeRow[]>();
   for (const e of snap.employees) {
     if (e.userId == null) continue;
@@ -376,11 +390,12 @@ export function buildIdentityAudit(snap: IdentitySnapshot): IdentityAudit {
       else agentsUnmatched.push(finding);
       continue;
     }
-    // Anexado: o email do agente tem de bater com o da ficha (ou do utilizador ligado).
+    // Anexado: o email do agente tem de bater com o da ficha (trabalho/login
+    // OU pessoal, nos internos).
     for (const e of linked.values()) {
-      const eff = effectiveEmail(e);
-      if (a.agentEmails.length && eff && !a.agentEmails.includes(eff)) {
-        agentsEmailMismatch.push({ ...finding, employeeEmail: e.email ?? eff });
+      const mine = agentEmailsOf(e);
+      if (a.agentEmails.length && mine.length && !a.agentEmails.some((em) => mine.includes(em))) {
+        agentsEmailMismatch.push({ ...finding, employeeEmail: e.email ?? mine[0] });
       }
     }
   }
@@ -585,6 +600,18 @@ export function planReconcile(snap: IdentitySnapshot, audit: IdentityAudit, opts
       plan.skipped.push({ what: "attach_agent", ref, reason: `ficha #${e.id} já está anexada ao agente ${currentAgent} (real) — uma ficha só tem um agente; decidir à mão` });
       continue;
     }
+    // Ligação LEGADA por nome: se o nome que está na ficha é o de OUTRO agente
+    // real do histórico, a ficha já tem o seu agente — nunca o substituir
+    // (caso Luís Tercitano, 2026-09-10: o email @multipark.pt batia com um
+    // agente de teste e o nome "Luis Tercitano", com 410 ações, ia-se embora).
+    const currentNameKey = nameKey(e.multiparkAgentName);
+    const ownerByName = currentNameKey
+      ? snap.agents.find((x) => x.agentUserId !== a.agentUserId && x.agentNames.some((n) => nameKey(n) === currentNameKey))
+      : undefined;
+    if (ownerByName) {
+      plan.skipped.push({ what: "attach_agent", ref, reason: `ficha #${e.id} já está ligada por nome ao agente ${ownerByName.agentUserId} ("${e.multiparkAgentName}", ${ownerByName.actions} ações) — decidir à mão` });
+      continue;
+    }
     const agent = agentsById.get(a.agentUserId);
     const names = agent?.agentNames ?? a.agentNames;
     const keepName = e.multiparkAgentName && names.some((n) => n.trim().toLowerCase() === e.multiparkAgentName!.trim().toLowerCase());
@@ -775,6 +802,10 @@ export async function autoAttachAgentsByEmail(db: Db, seen: SeenAgent[]): Promis
     if (matches.length !== 1) continue;
     const e = matches[0];
     if (e.agentUserId) continue; // já tem outro agente real
+    // Conservador: se a ficha já tem um nome de agente e não é o deste agente,
+    // pode ser uma ligação legada por nome a OUTRO agente — não tocar (o
+    // script de reconciliação, com o histórico completo, decide isso).
+    if (e.agentName && (!a.agentName || e.agentName.trim().toLowerCase() !== a.agentName.toLowerCase())) continue;
     const name = a.agentName ?? e.agentName ?? a.agentUserId;
     try {
       await db.execute(sql`UPDATE employees SET multiparkAgentUserId = ${a.agentUserId}, multiparkAgentName = ${name.slice(0, 256)} WHERE id = ${e.id} AND (multiparkAgentUserId IS NULL OR multiparkAgentUserId = '')`);

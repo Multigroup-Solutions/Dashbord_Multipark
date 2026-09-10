@@ -28,6 +28,7 @@ function emp(p: Partial<EmployeeRow> & { id: number }): EmployeeRow {
   return {
     fullName: `Pessoa ${p.id}`,
     email: null,
+    personalEmail: null,
     phone: null,
     position: "extra",
     isActive: 1,
@@ -151,6 +152,25 @@ describe("buildIdentityAudit", () => {
     expect(a.agentsSharingEmail).toEqual([{ email: "carlos@x.pt", agentUserIds: ["C", "E"] }]);
   });
 
+  it("email PESSOAL de um interno também casa agentes (anexar e sem mismatch)", () => {
+    const s = snap({
+      employees: [
+        emp({ id: 1, email: "ana@multipark.pt", personalEmail: "ana@gmail.com", position: "team_leader" }),
+        emp({ id: 2, email: "luis@multipark.pt", personalEmail: "luis@gmail.com", position: "backoffice", multiparkAgentName: "Luis" }),
+      ],
+      agents: [
+        agent({ agentUserId: "A", agentNames: ["Ana"], agentEmails: ["ana@gmail.com"] }),
+        agent({ agentUserId: "L", agentNames: ["Luis"], agentEmails: ["luis@gmail.com"] }),
+      ],
+    });
+    const a = buildIdentityAudit(s);
+    expect(a.agentsToAttach.map((x) => x.agentUserId)).toEqual(["A"]);
+    expect(a.agentsToAttach[0].emailMatchEmployeeIds).toEqual([1]);
+    expect(a.agentsEmailMismatch).toEqual([]);
+    // Só para agentes: a ficha↔utilizador continua a exigir o email de trabalho.
+    expect(a.employeesWithoutUser.map((e) => e.email)).toEqual(["ana@multipark.pt", "luis@multipark.pt"]);
+  });
+
   it("agente ligado por NOME (sem id) conta como anexado; nome de agente desconhecido na ficha é reportado", () => {
     const s = snap({
       employees: [emp({ id: 1, email: "ana@x.pt", multiparkAgentName: "ana" }), emp({ id: 2, email: "zed@x.pt", multiparkAgentName: "Zé Ninguém" })],
@@ -260,6 +280,23 @@ describe("planReconcile", () => {
     const reasons = plan.skipped.filter((x) => x.what === "attach_agent").map((x) => x.reason);
     expect(reasons[0]).toContain("só bate com utilizador(es) #10");
     expect(reasons[1]).toContain("2 fichas ativas");
+  });
+
+  it("não substitui uma ligação legada por NOME a outro agente real (caso Luís Tercitano)", () => {
+    const s = snap({
+      employees: [emp({ id: 2, email: "luis@multipark.pt", multiparkAgentName: "Luis Tercitano" })],
+      agents: [
+        agent({ agentUserId: "REAL", agentNames: ["Luis Tercitano", "luis@gmail.com"], agentEmails: ["luis@gmail.com"], actions: 410 }),
+        agent({ agentUserId: "TESTE", agentNames: ["agencia teste"], agentEmails: ["luis@multipark.pt"], actions: 4 }),
+      ],
+    });
+    const audit = buildIdentityAudit(s);
+    expect(audit.agentsToAttach.map((a) => a.agentUserId)).toEqual(["TESTE"]);
+    const plan = planReconcile(s, audit);
+    expect(plan.attachAgents).toEqual([]);
+    const skip = plan.skipped.find((x) => x.what === "attach_agent")!;
+    expect(skip.reason).toContain("ligada por nome ao agente REAL");
+    expect(skip.reason).toContain("410 ações");
   });
 
   it("não troca um agente real já anexado por outro", () => {
