@@ -1,0 +1,4 @@
+export const MIGRATION_0070_STATEMENTS = [
+  'ALTER TABLE career_exams ADD COLUMN archivedAt DATETIME NULL',
+];
+export const IDEMPOTENT_ERROR_CODES_0070 = new Set(['ER_DUP_FIELDNAME', 'ER_DUP_KEYNAME']);

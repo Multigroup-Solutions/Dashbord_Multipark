@@ -128,6 +128,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0067").then(m => ({ s: m.MIGRATION_0067_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0067 })),
       import("./migrations/migration_0068").then(m => ({ s: m.MIGRATION_0068_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0068 })),
       import("./migrations/migration_0069").then(m => ({ s: m.MIGRATION_0069_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0069 })),
+      import("./migrations/migration_0070").then(m => ({ s: m.MIGRATION_0070_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0070 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -2543,7 +2544,7 @@ export async function getQuizRanking() {
 export async function getCareerExams() {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(careerExams).orderBy(careerExams.level);
+  return db.select().from(careerExams).where(isNull(careerExams.archivedAt)).orderBy(careerExams.level);
 }
 
 export async function createCareerExam(data: { level: string; title: string; description?: string; passingScore: number; timeLimitMinutes?: number }) {
@@ -2593,21 +2594,30 @@ export async function saveCareerExamAttempt(data: { examId: number; employeeId: 
   return result;
 }
 
-export async function getCareerExamAttempts(employeeId?: number, examId?: number) {
+export async function getCareerExamAttempts(employeeId?: number, examId?: number,
+  scope?: { employeeId: number | null; projectIds: number[] }) {
   const db = await getDb();
   if (!db) return [];
   const conditions: any[] = [];
   if (employeeId) conditions.push(eq(careerExamAttempts.employeeId, employeeId));
   if (examId) conditions.push(eq(careerExamAttempts.examId, examId));
-  return db.select().from(careerExamAttempts).where(conditions.length ? and(...conditions) : undefined).orderBy(desc(careerExamAttempts.createdAt));
+  if (scope) conditions.push(or(
+    scope.employeeId != null ? eq(careerExamAttempts.employeeId, scope.employeeId) : sql`FALSE`,
+    scope.projectIds.length ? inArray(employees.projectId, scope.projectIds) : sql`FALSE`,
+  ));
+  return db.select({ ...getTableColumns(careerExamAttempts), examTitle: careerExams.title })
+    .from(careerExamAttempts)
+    .leftJoin(employees, eq(employees.id, careerExamAttempts.employeeId))
+    .leftJoin(careerExams, eq(careerExams.id, careerExamAttempts.examId))
+    .where(conditions.length ? and(...conditions) : undefined).orderBy(desc(careerExamAttempts.createdAt));
 }
 
 export async function deleteCareerExam(id: number) {
   const db = await getDb();
   if (!db) return;
-  await db.delete(careerExamQuestions).where(eq(careerExamQuestions.examId, id));
-  await db.delete(careerExamAttempts).where(eq(careerExamAttempts.examId, id));
-  await db.delete(careerExams).where(eq(careerExams.id, id));
+  // Compatibilidade do nome da operação; arquiva e preserva perguntas/resultados.
+  await db.update(careerExams).set({ archivedAt: sql`COALESCE(archivedAt, UTC_TIMESTAMP())` })
+    .where(eq(careerExams.id, id));
 }
 
 // ─── PERDIDOS E ACHADOS ───────────────────────────────────────────────────────
