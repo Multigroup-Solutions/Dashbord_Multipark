@@ -4,8 +4,8 @@
  * antes do deploy ou para confirmar que já está aplicada.
  *
  * Correr da raiz do dashboard:
- *   DATABASE_URL="mysql://..." ./node_modules/.bin/tsx scripts/run-migration.ts 0064
- *   ./node_modules/.bin/tsx scripts/run-migration.ts 0064 --db-url "mysql://..."
+ *   DATABASE_URL="mysql://..." ./node_modules/.bin/tsx scripts/run-migration.ts 0065
+ *   ./node_modules/.bin/tsx scripts/run-migration.ts 0065 --db-url "mysql://..."
  *
  * Idempotente: cada statement é executado por ordem; os códigos MySQL listados
  * em `IDEMPOTENT_ERROR_CODES_NNNN` (coluna/índice/tabela já existe, tabela
@@ -38,7 +38,7 @@ function parseArgs(argv: string[]): { id: string; dbUrl: string | null } {
       throw new Error(`Argumento desconhecido: ${a}`);
     }
   }
-  if (!id) throw new Error("Indica o número da migração, ex.: 0064");
+  if (!id) throw new Error("Indica o número da migração, ex.: 0065");
   return { id, dbUrl };
 }
 

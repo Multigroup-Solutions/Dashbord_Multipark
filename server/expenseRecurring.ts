@@ -40,14 +40,17 @@ export async function generateRecurringExpensesForMonth(
   const period = periodOf(year, month);
   if (!db) return { period, created: 0, skipped: 0, lockAcquired: false };
 
+  // ⚠️ GET_LOCK é por LIGAÇÃO: com pool, o RELEASE podia ir noutra ligação e
+  // o lock ficar preso. Por isso tudo corre numa transação (uma ligação).
   const LOCK = "expenses_recurring_generate";
-  const lockRow = (await db.execute(sql`SELECT GET_LOCK(${LOCK}, 10) AS ok`)) as any;
+  return db.transaction(async (tx) => {
+  const lockRow = (await tx.execute(sql`SELECT GET_LOCK(${LOCK}, 10) AS ok`)) as any;
   const lockOk = Number((Array.isArray(lockRow[0]) ? lockRow[0][0] : lockRow[0])?.ok ?? 0) === 1;
 
   let created = 0;
   let skipped = 0;
   try {
-    const templates = await db.select().from(recurringExpenses).where(eq(recurringExpenses.active, 1));
+    const templates = await tx.select().from(recurringExpenses).where(eq(recurringExpenses.active, 1));
     if (templates.length === 0) return { period, created, skipped, lockAcquired: lockOk };
 
     let fallbackUser: number | null = actorUserId ?? null;
@@ -58,7 +61,7 @@ export async function generateRecurringExpensesForMonth(
     const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
 
     for (const t of templates) {
-      const existing = await db
+      const existing = await tx
         .select({ id: expenses.id })
         .from(expenses)
         .where(and(eq(expenses.recurringTemplateId, t.id), eq(expenses.recurringPeriod, period)))
@@ -69,7 +72,7 @@ export async function generateRecurringExpensesForMonth(
       if (insertedById == null) { skipped++; continue; }
       const day = Math.min(t.dayOfMonth, lastDay);
       try {
-        const res = await db.insert(expenses).values({
+        const res = await tx.insert(expenses).values({
           supplier: t.supplier,
           description: t.description,
           amount: t.amount,
@@ -94,14 +97,15 @@ export async function generateRecurringExpensesForMonth(
         }
         created++;
       } catch (err: any) {
-        if (err?.code === "ER_DUP_ENTRY") { skipped++; continue; }
+        if (err?.code === "ER_DUP_ENTRY" || err?.cause?.code === "ER_DUP_ENTRY") { skipped++; continue; }
         throw err;
       }
     }
   } finally {
     if (lockOk) {
-      try { await db.execute(sql`SELECT RELEASE_LOCK(${LOCK})`); } catch { /* ignore */ }
+      try { await tx.execute(sql`SELECT RELEASE_LOCK(${LOCK})`); } catch { /* ignore */ }
     }
   }
   return { period, created, skipped, lockAcquired: lockOk };
+  });
 }

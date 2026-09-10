@@ -53,7 +53,7 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 **Type**: feature
 **Scope**: `shared/whatsappMedia.ts` (novo, puro), `server/whatsapp.ts` (`downloadMedia`),
 `server/whatsappInbound.ts` (`parseInboundMedia` + `storeInboundMedia`), `server/whatsappInbox.ts`
-(`ThreadMessage.media*`), `drizzle/schema.ts` + `server/migrations/migration_0064.ts`
+(`ThreadMessage.media*`), `drizzle/schema.ts` + `server/migrations/migration_0065.ts`
 (colunas `mediaType/mediaId/mediaMime/mediaUrl/mediaKey` em `whatsapp_messages`),
 `client/src/pages/WhatsAppInboxPage.tsx` (`InboundMedia`), `server/extrasAvailability.ts`
 (`lastContactedAt`/`lastContactChannel`/`contactedWithin24h` no `OverviewExtra`),
@@ -86,7 +86,7 @@ por ainda não respondeu e por ainda não foi enviada mensagem nas últimas 24h"
   `AWS_S3_*`/`BLOB_READ_WRITE_TOKEN` o `storagePut` lança e a media fica só com `mediaId`.
 - Follow-up possível: botão "tentar descarregar de novo" (usa `mediaId`); suportar vídeo/documento.
 - Gates: `tsc --noEmit` limpo, `vite build` OK, suite com as 7 falhas pré-existentes de ambiente.
-  **Commit `1198eee` em `origin/updates-rafael`.** Migração 0064 corre no boot (`ensureRecentSchema`); não foi corrida à mão (sem `DATABASE_URL` real aqui) — `scripts/run-migration.ts 0064` aplica-a antes do deploy se quiseres.
+  **Commit `1198eee` em `origin/updates-rafael`.** Migração 0065 corre no boot (`ensureRecentSchema`); não foi corrida à mão (sem `DATABASE_URL` real aqui) — `scripts/run-migration.ts 0065` aplica-a antes do deploy se quiseres.
 
 
 ### 2026-08-20 (b) — Inbox mostrava bolha VAZIA nos envios de template (conteúdo agora gravado)

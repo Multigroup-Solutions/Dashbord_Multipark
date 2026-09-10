@@ -69,7 +69,7 @@ export async function generatePayslipPdf(year: number, month: number, employeeId
     doc.fontSize(11).font("Helvetica-Bold").fillColor("#1a1a2e").text(emp.fullName, startX + 15, infoStartY + 12);
 
     doc.fontSize(8).font("Helvetica").fillColor("#888").text("CARGO / POSIÇÃO", startX + 15, infoStartY + 35);
-    const posLabel = POS_LABELS[emp.position] ?? emp.position;
+    const posLabel = POS_LABELS[emp.position ?? ""] ?? emp.position ?? "—";
     const posText = emp.isExtra && emp.extraLevel ? `${posLabel} — Nível ${emp.extraLevel}` : posLabel;
     doc.fontSize(10).font("Helvetica").fillColor("#333").text(posText, startX + 15, infoStartY + 47);
 
@@ -130,18 +130,40 @@ export async function generatePayslipPdf(year: number, month: number, employeeId
     // Table rows
     const rows: [string, string, boolean?][] = [];
 
+    // TODAS as componentes que o cálculo soma aparecem aqui — as linhas têm
+    // de reconciliar com o total (auditoria RH set 2026).
     if (emp.isExtra) {
       rows.push(["Pagamento por Horas (Extra)", `${fmt(emp.extraPayment)} €`]);
       rows.push([`  ${fmt(emp.totalHours)}h × ${fmt(emp.hourlyRate)}€/h`, "", false]);
     } else {
       rows.push(["Salário Base", `${fmt(emp.baseSalary)} €`]);
+      if ((emp as any).contractDays != null && (emp as any).daysInMonth != null && (emp as any).contractDays < (emp as any).daysInMonth) {
+        rows.push([`  vínculo parcial: ${(emp as any).contractDays}/${(emp as any).daysInMonth} dias`, "", false]);
+      }
+      if ((emp as any).unpaidDays > 0) rows.push([`  ${(emp as any).unpaidDays} dia(s) sem remuneração descontado(s)`, "", false]);
       if (emp.overtimeHours > 0) {
         rows.push(["Horas Extra", `${fmt(emp.overtimePayment)} €`]);
-        rows.push([`  ${fmt(emp.overtimeHours)}h × ${fmt(emp.hourlyRate * 1.25)}€/h (1.25×)`, "", false]);
+        rows.push([`  ${fmt(emp.overtimeHours)}h acima do horário esperado`, "", false]);
+      }
+      if ((emp.nightPayment ?? 0) > 0) {
+        rows.push(["Acréscimo Noturno (22h–07h, +25%)", `${fmt(emp.nightPayment)} €`]);
+        rows.push([`  ${fmt(emp.nightHours)}h`, "", false]);
+      }
+      if ((emp.weekendPayment ?? 0) > 0) {
+        rows.push(["Acréscimo Fim de Semana (+50%)", `${fmt(emp.weekendPayment)} €`]);
+        rows.push([`  ${fmt(emp.weekendHours)}h`, "", false]);
       }
       if (emp.thirteenthProvision > 0) {
-        rows.push(["Provisão 13º Mês (Sub. Natal)", `${fmt(emp.thirteenthProvision)} €`]);
+        rows.push(["Provisão Subsídio de Natal (13º)", `${fmt(emp.thirteenthProvision)} €`]);
         rows.push([`  1/12 do salário base`, "", false]);
+      }
+      if ((emp.fourteenthProvision ?? 0) > 0) {
+        rows.push(["Provisão Subsídio de Férias (14º)", `${fmt(emp.fourteenthProvision)} €`]);
+        rows.push([`  1/12 do salário base`, "", false]);
+      }
+      if ((emp.mealAllowance ?? 0) > 0) {
+        rows.push(["Subsídio de Alimentação", `${fmt(emp.mealAllowance)} €`]);
+        rows.push([`  ${fmt(emp.mealAllowancePerDay)}€/dia × ${emp.daysWorked} dia(s)`, "", false]);
       }
     }
 
@@ -168,16 +190,33 @@ export async function generatePayslipPdf(year: number, month: number, employeeId
       y += rowH;
     });
 
-    // Total row
+    // Total BRUTO (soma das linhas acima) + deduções ESTIMADAS + líquido estimado.
+    // Não é um recibo fiscal: o IRS por tabelas é do processamento salarial.
     y += 5;
     doc.save();
     doc.rect(startX, y, pageW, 30).fillColor("#1a1a2e").fill();
     doc.restore();
     doc.fontSize(11).font("Helvetica-Bold").fillColor("#ffffff")
-      .text("TOTAL A RECEBER", startX + 10, y + 9, { width: pageW * 0.55 });
+      .text("TOTAL BRUTO", startX + 10, y + 9, { width: pageW * 0.55 });
     doc.fontSize(14).font("Helvetica-Bold").fillColor("#ffffff")
       .text(`${fmt(emp.totalPayment)} €`, startX + pageW * 0.55, y + 8, { width: pageW * 0.4, align: "right" });
-    y += 45;
+    y += 36;
+    const ded: [string, string][] = [
+      ["Segurança Social (trabalhador, 11%) — estimativa", `− ${fmt(emp.tsuEmployee ?? 0)} €`],
+      ["IRS — estimativa simplificada (15%), não é retenção por tabela", `− ${fmt(emp.irsEstimate ?? 0)} €`],
+    ];
+    for (const [d, v] of ded) {
+      doc.fontSize(8).font("Helvetica").fillColor("#666").text(d, startX + 10, y + 4, { width: pageW * 0.7 });
+      doc.fontSize(9).font("Helvetica").fillColor("#666").text(v, startX + pageW * 0.55, y + 3, { width: pageW * 0.4, align: "right" });
+      y += 16;
+    }
+    doc.fontSize(10).font("Helvetica-Bold").fillColor("#1a1a2e").text("LÍQUIDO ESTIMADO (não fiscal)", startX + 10, y + 4, { width: pageW * 0.55 });
+    doc.fontSize(11).font("Helvetica-Bold").fillColor("#1a1a2e").text(`${fmt(emp.netEstimate ?? 0)} €`, startX + pageW * 0.55, y + 3, { width: pageW * 0.4, align: "right" });
+    y += 24;
+    if ((emp as any).suspiciousHours > 0 || (emp as any).openShifts > 0) {
+      doc.fontSize(8).font("Helvetica").fillColor("#b45309").text(`Atenção: ${fmt((emp as any).suspiciousHours ?? 0)}h em registos de ponto por rever e ${(emp as any).openShifts ?? 0} entrada(s) sem saída — não incluídas neste valor.`, startX + 10, y, { width: pageW - 20 });
+      y += 18;
+    }
 
     // ─── NIB / PAYMENT INFO ─────────────────────────────────────────────
     if (emp.nib) {

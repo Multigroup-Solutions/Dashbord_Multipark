@@ -253,7 +253,7 @@ async function handleInbound(db: Db, m: ParsedInboundMessage, empMap: Map<string
     direction: "in",
     waMessageId: m.waMessageId,
     // O enum só tem text|template; media entrante fica como 'text' com body
-    // "[imagem]"/caption e o ficheiro nas colunas media* (migração 0064).
+    // "[imagem]"/caption e o ficheiro nas colunas media* (migração 0065).
     type: "text",
     body: m.body,
     mediaType: m.media?.kind ?? null,

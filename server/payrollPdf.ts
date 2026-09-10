@@ -139,7 +139,7 @@ export async function generatePayrollPdf(year: number, month: number): Promise<B
 
       const rowData = [
         r.fullName,
-        (posLabels[r.position] ?? r.position) + (r.isExtra && r.extraLevel ? ` N${r.extraLevel}` : ""),
+        (posLabels[r.position ?? ""] ?? r.position ?? "—") + (r.isExtra && r.extraLevel ? ` N${r.extraLevel}` : ""),
         r.department ?? "—",
         r.nif ?? "—",
         `${fmt(r.totalHours)}h`,

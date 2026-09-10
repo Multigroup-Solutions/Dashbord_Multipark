@@ -285,6 +285,20 @@ app.get("/api/cron/daily-ops", async (req, res) => {
     } catch (err) {
       console.warn("[daily-ops] autoCloseStaleCheckIns:", err);
     }
+    // RH: regra documental (escrita SÓ aqui e na ação admin — nunca no auth.me)
+    // e "possíveis faltas" de ontem (pendentes de validação; não bloqueiam).
+    try {
+      const { applyDocsComplianceAll, detectExtraDiaNoShows } = await import("../rhService");
+      const d = await applyDocsComplianceAll();
+      const { lisbonToday } = await import("../../shared/expensePeriods");
+      const y = new Date(Date.now() - 86400000);
+      const yesterday = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit" }).format(y);
+      void lisbonToday;
+      const n = await detectExtraDiaNoShows(yesterday);
+      console.log(`[daily-ops] RH: docs verificados ${d.checked}; possíveis faltas ${yesterday}: ${n.created} novas (${n.alreadyPending} já registadas)`);
+    } catch (err) {
+      console.warn("[daily-ops] RH docs/faltas:", err);
+    }
 
     const { collectDailyDriverData } = await import("../jobs/dailyDriverCollection");
     // ?date=YYYY-MM-DD permite recolher um dia específico (backfill de dias

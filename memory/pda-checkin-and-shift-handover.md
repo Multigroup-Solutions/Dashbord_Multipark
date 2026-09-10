@@ -13,7 +13,7 @@ check-in; fardamento com tamanhos na passagem de turno).
 - `profile-photo-upload.md` — o outro caminho de fotos da app (`rh.uploadPhoto`);
   o check-in de PDA usa `POST /api/upload` com redimensionamento a 1600px, pelo
   mesmo motivo (teto ~4.5 MB do body no Vercel).
-- `whatsapp-integration.md` — a migração **0064** é partilhada (media WhatsApp +
+- `whatsapp-integration.md` — a migração **0065** é partilhada (media WhatsApp +
   `clothingItems`); ver a regra de migrações lá.
 - `storage-backends-s3.md` — onde as fotos de PDA ficam guardadas.
 
@@ -35,7 +35,7 @@ check-in; fardamento com tamanhos na passagem de turno).
   casacos L"). Tetos: 30 linhas, 999 por linha. Testes em
   `server/clothingItems.test.ts` (7).
 - **Persistência**: coluna nova `shift_handovers.clothingItems` (TEXT, JSON)
-  — migração 0064 (`ALTER … ADD COLUMN`, `ER_NO_SUCH_TABLE` idempotente porque
+  — migração 0065 (`ALTER … ADD COLUMN`, `ER_NO_SUCH_TABLE` idempotente porque
   a tabela nasce em `ensureShiftHandoverTable`, que também ganhou a coluna).
   `saveShiftHandover` grava `JSON.stringify` (o `esc` corta a 2000 chars; 30
   linhas ficam muito abaixo); `listShiftHandovers` devolve já parseado.
@@ -58,7 +58,7 @@ check-in; fardamento com tamanhos na passagem de turno).
 `client/src/pages/ShiftHandoverPage.tsx` (form + histórico + `ClothingEditor`),
 `server/routers.ts` (checkin zod; shiftHandover.save zod + normalização),
 `server/db.ts` (CREATE + save + list), `shared/clothing.ts` (novo),
-`server/clothingItems.test.ts` (novo), `server/migrations/migration_0064.ts`
+`server/clothingItems.test.ts` (novo), `server/migrations/migration_0065.ts`
 (partilhada com o WhatsApp)
 **What**: ver as secções acima.
 **Why**: pedido do Jorge (2026-09-09): "no check-in de PDAs deve dar para
@@ -69,4 +69,4 @@ quantidades e tamanhos".
 - Cirúrgico: nenhum outro campo/procedure foi tocado; check-out inalterado.
 - Gates: `tsc --noEmit` limpo, `vite build` OK, suite 7 falhas pré-existentes
   de ambiente (as mesmas de sempre).
-- **Commit `1198eee` em `origin/updates-rafael`** (2026-09-09). Migração 0064 **NÃO foi corrida à mão** (sem `DATABASE_URL` real na máquina) — corre sozinha no boot do próximo deploy; para aplicar antes: `DATABASE_URL=... ./node_modules/.bin/tsx scripts/run-migration.ts 0064` (runner novo, idempotente).
+- **Commit `1198eee` em `origin/updates-rafael`** (2026-09-09). Migração 0065 **NÃO foi corrida à mão** (sem `DATABASE_URL` real na máquina) — corre sozinha no boot do próximo deploy; para aplicar antes: `DATABASE_URL=... ./node_modules/.bin/tsx scripts/run-migration.ts 0065` (runner novo, idempotente).

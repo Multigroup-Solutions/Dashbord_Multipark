@@ -84,7 +84,7 @@ async function routeToModule(
   },
 ): Promise<{ targetModule: string; targetId?: number; taskId?: number }> {
   const clientName = parsed.clientName || ctx.fromName || "Desconhecido";
-  const desc = `${ctx.subject}\n\n${ctx.bodyText}`.trim().slice(0, 5000);
+  let desc = `${ctx.subject}\n\n${ctx.bodyText}`.trim().slice(0, 5000);
 
   if (alias === "criticas") {
     // Notificação do Google Business Profile: extrai estrelas + nome real do
@@ -281,8 +281,16 @@ ${ctx.bodyText}`);
   try {
     const { matchPendingAvailabilityReply, markDayAvailability } = await import("../extrasAvailability");
     const pending = ctx.fromEmail ? await matchPendingAvailabilityReply(ctx.fromEmail) : null;
-    const bodyStart = (desc || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().slice(0, 200);
-    const saidYes = /\b(sim|yes|posso|ok|claro|disponivel)\b/.test(bodyStart);
+    // Classificação com NEGAÇÃO (server/availabilityReply.ts): só um "sim"
+    // limpo marca; "não posso", condicionais e ambíguos ficam para revisão
+    // humana (tarefa de RH com o veredicto anotado). Usa só o CORPO, não o assunto.
+    const { classifyAvailabilityReply } = await import("../availabilityReply");
+    const verdict = pending ? classifyAvailabilityReply(ctx.bodyText || desc || "") : null;
+    if (pending && verdict && verdict.verdict !== "yes") {
+      // não marca disponibilidade; deixa a resposta na fila de RH com contexto
+      desc = `[DISPONIBILIDADE ${verdict.verdict === "no" ? "NÃO" : "A CONFIRMAR"} — ${verdict.reason}] ${pending.targetDate ?? pending.weekStart ?? ""} ${pending.shift ?? ""}: "${verdict.excerpt}"`.trim() + (desc ? `\n\n${desc}` : "");
+    }
+    const saidYes = verdict?.verdict === "yes";
     if (pending && saidYes) {
       const shiftNote = pending.shift === "morning" ? "manhã" : pending.shift === "afternoon" ? "tarde" : pending.shift === "night" ? "noite" : null;
       if (pending.targetDate) {
