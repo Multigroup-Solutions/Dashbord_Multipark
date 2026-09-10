@@ -1,26 +1,16 @@
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Loader2, CalendarCheck, Sun, Moon, CheckCircle2 } from "lucide-react";
+import { Loader2, CalendarCheck, CheckCircle2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { AvailabilitySection, CandidaturasSection } from "@/pages/ExtrasDiaPage";
 import { RecruitmentSection } from "@/components/RecruitmentSection";
 import { Mail } from "lucide-react";
-
-type DayState = {
-  day: string;
-  label: string;
-  morning: boolean;
-  night: boolean;
-  fromHour: number | null;
-  toHour: number | null;
-  note: string | null;
-};
+// Campos de cada dia partilhados com o diálogo do backoffice (ExtrasDiaPage →
+// AvailabilitySection): o extra e o backoffice marcam exatamente as mesmas coisas.
+import { AvailabilityDayFields, isDayMarked, type AvailabilityDayState as DayState } from "@/components/AvailabilityDayFields";
 
 function useWeekParam(fallback: string): string {
   return useMemo(() => {
@@ -126,7 +116,7 @@ function MyAvailability() {
     );
   }
 
-  const anyMarked = days.some((d) => d.morning || d.night || d.fromHour != null);
+  const anyMarked = days.some(isDayMarked);
 
   return (
     <div className="max-w-2xl mx-auto py-6 px-4 space-y-4">
@@ -145,7 +135,7 @@ function MyAvailability() {
 
       <div className="space-y-3">
         {days.map((d, idx) => {
-          const active = d.morning || d.night || d.fromHour != null;
+          const active = isDayMarked(d);
           return (
             <Card key={d.day} className={active ? "border-primary/50" : undefined}>
               <CardContent className="py-4 space-y-3">
@@ -153,56 +143,7 @@ function MyAvailability() {
                   <span className="font-semibold">{d.label}</span>
                   {savedOnce && active && <CheckCircle2 className="h-4 w-4 text-green-500" />}
                 </div>
-                <div className="flex flex-wrap gap-x-6 gap-y-2">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <Switch
-                      checked={d.morning}
-                      onCheckedChange={(v) => patch(idx, { morning: v })}
-                    />
-                    <Sun className="h-4 w-4 text-amber-500" />
-                    <span className="text-sm">Manhã (03h–15h)</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <Switch
-                      checked={d.night}
-                      onCheckedChange={(v) => patch(idx, { night: v })}
-                    />
-                    <Moon className="h-4 w-4 text-indigo-500" />
-                    <span className="text-sm">Noite (15h–03h)</span>
-                  </label>
-                </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <Label className="text-xs text-muted-foreground">Horas (opcional):</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={23}
-                    placeholder="das"
-                    className="w-20 h-8"
-                    value={d.fromHour ?? ""}
-                    onChange={(e) =>
-                      patch(idx, { fromHour: e.target.value === "" ? null : Number(e.target.value) })
-                    }
-                  />
-                  <span className="text-muted-foreground">→</span>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={23}
-                    placeholder="às"
-                    className="w-20 h-8"
-                    value={d.toHour ?? ""}
-                    onChange={(e) =>
-                      patch(idx, { toHour: e.target.value === "" ? null : Number(e.target.value) })
-                    }
-                  />
-                  <Input
-                    placeholder="Nota (opcional)"
-                    className="flex-1 min-w-[140px] h-8"
-                    value={d.note ?? ""}
-                    onChange={(e) => patch(idx, { note: e.target.value || null })}
-                  />
-                </div>
+                <AvailabilityDayFields day={d} onChange={(p) => patch(idx, p)} />
               </CardContent>
             </Card>
           );

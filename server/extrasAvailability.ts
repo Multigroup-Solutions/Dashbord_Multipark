@@ -249,6 +249,33 @@ export async function setMyAvailability(
   return { saved: rows.length };
 }
 
+/**
+ * Backoffice marca a disponibilidade POR um extra (pedido Jorge 2026-09-10:
+ * "manualmente podemos configurar a disponibilidade dos extras"). Mesma escrita
+ * que o extra faz por si (`setMyAvailability`: substitui a semana inteira) —
+ * a única diferença é o alvo, que aqui é escolhido pelo backoffice e por isso
+ * tem de EXISTIR na tabela de colaboradores. `createdById` fica com o
+ * utilizador do backoffice, o que distingue estas linhas das do próprio extra.
+ */
+export async function setEmployeeAvailability(
+  employeeId: number,
+  weekStart: string,
+  inputDays: SetDayInput[],
+  createdById: number,
+): Promise<{ saved: number; employeeName: string }> {
+  if (!parseIsoDate(weekStart)) throw new Error("weekStart inválido (esperado YYYY-MM-DD)");
+  const db = await getDb();
+  if (!db) throw new Error("Base de dados indisponível.");
+  const rows = await db
+    .select({ id: employees.id, fullName: employees.fullName })
+    .from(employees)
+    .where(eq(employees.id, employeeId))
+    .limit(1);
+  if (!rows.length) throw new Error("Colaborador não encontrado.");
+  const { saved } = await setMyAvailability(employeeId, weekStart, inputDays, createdById);
+  return { saved, employeeName: rows[0].fullName };
+}
+
 // ─── Resumo para o backoffice ──────────────────────────────────────────────────
 
 export interface OverviewExtra {

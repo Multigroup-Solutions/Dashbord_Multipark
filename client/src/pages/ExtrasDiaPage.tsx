@@ -53,7 +53,9 @@ import {
   MapPin,
   Search,
   X,
+  Pencil,
 } from "lucide-react";
+import { AvailabilityDayFields, isDayMarked, type AvailabilityDayState } from "@/components/AvailabilityDayFields";
 import {
   CITY_KEYS,
   CITY_LABELS,
@@ -1583,6 +1585,52 @@ export function AvailabilitySection() {
   const availSort = useTableSort(shownExtras);
   const openEmployee = useOpenEmployee();
 
+  // ── Marcar disponibilidade POR um extra (backoffice, pedido Jorge 2026-09-10) ──
+  // O diálogo edita a semana SELECIONADA em cima, com os mesmos campos que o
+  // extra tem na página dele (`AvailabilityDayFields`). Estado inicial = o que
+  // a overview já traz para essa pessoa; guardar substitui a semana inteira
+  // (mesma semântica de `setMyWeek`) e refresca a tabela.
+  type OverviewExtraRow = NonNullable<typeof o>["extras"][number];
+  const [availEdit, setAvailEdit] = useState<null | {
+    employeeId: number;
+    fullName: string;
+    days: AvailabilityDayState[];
+  }>(null);
+  const setForEmployee = trpc.extrasAvailability.setForEmployee.useMutation({
+    onSuccess: (r) => {
+      toast.success(
+        r.saved > 0
+          ? `Disponibilidade de ${r.employeeName} guardada (${r.saved} dia${r.saved === 1 ? "" : "s"}).`
+          : `Disponibilidade de ${r.employeeName} limpa para esta semana.`,
+      );
+      setAvailEdit(null);
+      overview.refetch();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  function openAvailabilityEditor(ex: OverviewExtraRow) {
+    // Sempre os 7 dias da semana visível, com o que a pessoa já tiver marcado.
+    const days: AvailabilityDayState[] = (o?.dayHeaders ?? []).map((h) => {
+      const d = ex.days.find((x) => x.day === h.day);
+      return {
+        day: h.day,
+        label: h.label,
+        morning: !!d?.morning,
+        night: !!d?.night,
+        fromHour: d?.fromHour ?? null,
+        toHour: d?.toHour ?? null,
+        note: d?.note ?? null,
+      };
+    });
+    setAvailEdit({ employeeId: ex.employeeId, fullName: ex.fullName, days });
+  }
+  function patchAvailDay(day: string, patch: Partial<AvailabilityDayState>) {
+    setAvailEdit((prev) =>
+      prev ? { ...prev, days: prev.days.map((d) => (d.day === day ? { ...d, ...patch } : d)) } : prev,
+    );
+  }
+  const availEditAnyMarked = !!availEdit?.days.some(isDayMarked);
+
   /**
    * Selecionados que a pesquisa atual esconde. A pesquisa é uma ferramenta de
    * PROCURA (procurar → marcar → procurar outro → marcar), por isso NÃO limpa a
@@ -2050,6 +2098,15 @@ export function AvailabilitySection() {
                           >
                             {ex.fullName}
                           </button>
+                          <button
+                            type="button"
+                            className="text-muted-foreground/60 hover:text-foreground"
+                            title="Marcar a disponibilidade desta semana por este extra"
+                            aria-label={`Marcar disponibilidade de ${ex.fullName}`}
+                            onClick={() => openAvailabilityEditor(ex)}
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </button>
                         </span>
                       </td>
                       <td className="py-1 pr-2 whitespace-nowrap text-xs text-muted-foreground">
@@ -2084,25 +2141,32 @@ export function AvailabilitySection() {
                       </td>
                       {ex.days.map((d) => (
                         <td key={d.day} className="px-1 text-center align-top">
-                          {(d.morning || d.night || d.fromHour != null) ? (
-                            <span
-                              className="inline-flex flex-col items-center leading-tight"
-                              title={d.note ?? undefined}
-                            >
-                              <span className="inline-flex gap-0.5 justify-center items-center">
-                                {d.morning && <Sun className="h-3.5 w-3.5 text-amber-500" />}
-                                {d.night && <Moon className="h-3.5 w-3.5 text-indigo-500" />}
-                                {d.note && <span className="text-muted-foreground text-xs" aria-label="tem nota">✱</span>}
-                              </span>
-                              {(d.fromHour != null || d.toHour != null) && (
-                                <span className="text-[10px] text-muted-foreground whitespace-nowrap">
-                                  {d.fromHour ?? "?"}h–{d.toHour ?? "?"}h
+                          {/* A célula é um botão: clicar num dia abre o editor
+                              da semana desta pessoa (o lápis ao lado do nome
+                              faz o mesmo). */}
+                          <button
+                            type="button"
+                            className="w-full min-h-6 rounded px-0.5 hover:bg-muted/60"
+                            title={d.note ? `${d.note} — clicar para editar` : "Editar disponibilidade"}
+                            onClick={() => openAvailabilityEditor(ex)}
+                          >
+                            {(d.morning || d.night || d.fromHour != null) ? (
+                              <span className="inline-flex flex-col items-center leading-tight">
+                                <span className="inline-flex gap-0.5 justify-center items-center">
+                                  {d.morning && <Sun className="h-3.5 w-3.5 text-amber-500" />}
+                                  {d.night && <Moon className="h-3.5 w-3.5 text-indigo-500" />}
+                                  {d.note && <span className="text-muted-foreground text-xs" aria-label="tem nota">✱</span>}
                                 </span>
-                              )}
-                            </span>
-                          ) : (
-                            <span className="text-muted-foreground/30">·</span>
-                          )}
+                                {(d.fromHour != null || d.toHour != null) && (
+                                  <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                                    {d.fromHour ?? "?"}h–{d.toHour ?? "?"}h
+                                  </span>
+                                )}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground/30">·</span>
+                            )}
+                          </button>
                         </td>
                       ))}
                     </tr>
@@ -2147,6 +2211,69 @@ export function AvailabilitySection() {
             </div>
           </div>
         )}
+
+        {/* ── Dialog: marcar disponibilidade POR um extra ─────────────────── */}
+        <Dialog
+          open={availEdit != null}
+          onOpenChange={(open) => { if (!open && !setForEmployee.isPending) setAvailEdit(null); }}
+        >
+          <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <CalendarDays className="h-5 w-5 text-primary" />
+                Disponibilidade de {availEdit?.fullName}
+              </DialogTitle>
+              <DialogDescription>
+                Semana de {weekShortLabel}. Substitui o que estiver marcado para esta semana e passa a contar
+                como resposta na tabela.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-2">
+              {availEdit?.days.map((d) => (
+                <div
+                  key={d.day}
+                  className={`rounded-md border p-2 space-y-1 ${isDayMarked(d) ? "border-primary/50 bg-primary/5" : ""}`}
+                >
+                  <div className="text-sm font-medium">{d.label}</div>
+                  <AvailabilityDayFields
+                    day={d}
+                    compact
+                    disabled={setForEmployee.isPending}
+                    onChange={(patch) => patchAvailDay(d.day, patch)}
+                  />
+                </div>
+              ))}
+            </div>
+
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => setAvailEdit(null)} disabled={setForEmployee.isPending}>
+                Cancelar
+              </Button>
+              <Button
+                disabled={!availEdit || !effectiveWeek || setForEmployee.isPending}
+                onClick={() =>
+                  availEdit &&
+                  setForEmployee.mutate({
+                    employeeId: availEdit.employeeId,
+                    weekStart: effectiveWeek,
+                    days: availEdit.days.map((d) => ({
+                      day: d.day,
+                      morning: d.morning,
+                      night: d.night,
+                      fromHour: d.fromHour,
+                      toHour: d.toHour,
+                      note: d.note,
+                    })),
+                  })
+                }
+              >
+                {setForEmployee.isPending ? <Clock className="h-4 w-4 mr-2 animate-spin" /> : <CheckCircle2 className="h-4 w-4 mr-2" />}
+                {availEditAnyMarked ? "Guardar disponibilidade" : "Guardar (sem disponibilidade)"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* ── Dialog do broadcast WhatsApp ─────────────────────────────────── */}
         <Dialog open={waOpen} onOpenChange={(open) => { if (!broadcast.isPending) setWaOpen(open); }}>

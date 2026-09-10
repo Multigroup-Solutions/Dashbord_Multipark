@@ -41,6 +41,7 @@ import {
   getWeekOverview,
   nextMonday,
   mondayOf,
+  setEmployeeAvailability,
 } from "./extrasAvailability";
 import { sendBroadcast } from "./whatsappBroadcast";
 import { describeLookupFailure, getTemplateMeta } from "./whatsappTemplateMeta";
@@ -7799,6 +7800,43 @@ export const appRouter = router({
           });
         }
         return setMyAvailability(emp.employee.id, input.weekStart, input.days, ctx.user.id);
+      }),
+
+    // Backoffice: marca a disponibilidade POR um extra (a semana inteira, como
+    // o próprio faria em setMyWeek). Fica no activity log com quem marcou.
+    setForEmployee: protectedProcedure
+      .input(
+        z.object({
+          employeeId: z.number().int().positive(),
+          weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+          days: z.array(
+            z.object({
+              day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+              morning: z.boolean().optional(),
+              night: z.boolean().optional(),
+              fromHour: z.number().int().min(0).max(23).nullable().optional(),
+              toHour: z.number().int().min(0).max(23).nullable().optional(),
+              note: z.string().max(300).nullable().optional(),
+            }),
+          ).max(7),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        let result: { saved: number; employeeName: string };
+        try {
+          result = await setEmployeeAvailability(input.employeeId, input.weekStart, input.days, ctx.user.id);
+        } catch (err) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: (err as Error).message || "Falha ao guardar a disponibilidade" });
+        }
+        await logActivity({
+          userId: ctx.user.id,
+          action: "availability_manual",
+          entity: "extras_availability",
+          entityId: input.employeeId,
+          details: `Disponibilidade marcada pelo backoffice para ${result.employeeName} (semana ${input.weekStart}): ${result.saved} dia(s)`,
+        });
+        return result;
       }),
 
     // Backoffice: resumo da semana (quem respondeu, disponíveis por dia/turno).

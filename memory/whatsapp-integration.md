@@ -49,6 +49,16 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 
 ## Changelog
 
+### 2026-09-10 (b) — Backoffice marca a disponibilidade POR um extra (semana selecionada)
+**Type**: feature
+**Scope**: `server/extrasAvailability.ts` (`setEmployeeAvailability`), `server/routers.ts` (`extrasAvailability.setForEmployee`), `client/src/components/AvailabilityDayFields.tsx` (NOVO, partilhado), `client/src/pages/ExtrasDiaPage.tsx` (`AvailabilitySection`: lápis ao lado do nome + células dos dias clicáveis + diálogo), `client/src/pages/DisponibilidadePage.tsx` (`MyAvailability` passa a usar o componente partilhado — sem mudança visual)
+**What**:
+- Na tabela "Disponibilidade dos extras", o lápis ao lado do nome e QUALQUER célula de dia abrem um diálogo com os 7 dias da semana selecionada em cima, pré-preenchido com o que a pessoa já tiver (vem da `overview`, sem query extra). Guardar chama `setForEmployee` → `setEmployeeAvailability` → `setMyAvailability` (a MESMA escrita do próprio extra: apaga a semana e regrava só os dias com algo marcado), `createdById` = utilizador do backoffice, `activity_logs` action `availability_manual` (entity `extras_availability`, entityId = employeeId). Depois `overview.refetch()`; a pessoa passa a contar como "respondeu".
+- `AvailabilityDayFields` = os campos de UM dia (manhã/noite, horas 0–23, nota ≤300) partilhados pela página do extra e pelo diálogo (`compact` para o diálogo) — as duas pontas oferecem exatamente as mesmas opções. `isDayMarked` é a regra única de "dia com algo marcado".
+- Autorização: `requireRole(backoffice)`; o alvo tem de existir em `employees` (senão BAD_REQUEST "Colaborador não encontrado."). Não restringe à função "extra" porque a tabela já lista quem respondeu sem ter essa função.
+**Why**: Jorge 2026-09-10 — "manualmente podemos configurar a disponibilidade dos extras" (quem responde por telefone/WhatsApp e não abre o link).
+**Notes**: sem migração (colunas já existiam). ⚠️ Bug apanhado na revisão: o script que inseriu a mutation perdeu os `\` dos regex (`/^d{4}-…/`) — teria recusado TODOS os guardares; corrigido para `/^\d{4}-\d{2}-\d{2}$/`. RULE: inserções de código com regex por `node -e`/shell → confirmar no `git diff`. Sem validação `fromHour <= toHour` (paridade com a página do extra — faixas noturnas 22→3 são legítimas). NÃO deployado.
+
 ### 2026-09-10 — Inbox ordenado pela janela + nome abre a ficha + semana selecionada preenche as mensagens
 **Type**: feature
 **Scope**: `server/whatsappInbox.ts` (`sortConversations` NOVA + `employeeId` no thread), `server/whatsappInbox.test.ts` (+7), `client/src/pages/WhatsAppInboxPage.tsx` (lista agrupada, countdown por linha, cabeçalho clicável), `client/src/pages/ExtrasDiaPage.tsx` (`AvailabilitySection`: `weekLabel`/`weekShortLabel`, default do campo "Semana")
