@@ -1,4 +1,5 @@
 import { TRPCError } from "@trpc/server";
+import { assessmentAnswers, gradeAssessment, trainingResultScope } from './trainingAssessments';
 import { z } from "zod";
 import * as XLSX from "xlsx";
 import { ACCESS_DENIED_MSG, COOKIE_NAME } from "@shared/const";
@@ -5415,7 +5416,7 @@ export const appRouter = router({
       requireRole(ctx.user.role, "extra");
       return getQuizQuestionsForPlayer(input.categoryId);
     }),
-    createQuizQuestion: protectedProcedure.input(z.object({ categoryId: z.number().optional(), question: z.string(), optionA: z.string(), optionB: z.string(), optionC: z.string(), optionD: z.string(), correctOption: z.enum(["A", "B", "C", "D"]), explanation: z.string().optional(), difficulty: z.enum(["easy", "medium", "hard"]).optional(), points: z.number().optional() })).mutation(async ({ ctx, input }) => {
+    createQuizQuestion: protectedProcedure.input(z.object({ categoryId: z.number().optional(), question: z.string(), optionA: z.string(), optionB: z.string(), optionC: z.string(), optionD: z.string(), correctOption: z.enum(["A", "B", "C", "D"]), explanation: z.string().optional(), difficulty: z.enum(["easy", "medium", "hard"]).optional(), points: z.number().int().min(1).max(10000).optional() })).mutation(async ({ ctx, input }) => {
       if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
       const result = await createQuizQuestion(input);
       await logActivity({ userId: ctx.user.id, action: "create", entity: "quiz_question", entityId: result.id, details: input.question });
@@ -5426,19 +5427,14 @@ export const appRouter = router({
       await deleteQuizQuestion(input.id);
       return { success: true };
     }),
-    submitQuiz: protectedProcedure.input(z.object({ answers: z.array(z.object({ questionId: z.number(), answer: z.enum(["A", "B", "C", "D"]) })), timeSpentSeconds: z.number().optional() })).mutation(async ({ ctx, input }) => {
+    submitQuiz: protectedProcedure.input(z.object({ answers: assessmentAnswers, timeSpentSeconds: z.number().int().min(0).max(86400).optional() })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "extra");
       // employeeId derivado de ctx.user.id (não confiável o do cliente)
       const me = await getEmployeeByUserId(ctx.user.id);
       if (!me) throw new TRPCError({ code: "NOT_FOUND", message: "Sem ficha de colaborador. Pede ao admin para te cadastrar primeiro." });
       const questions = await getQuizQuestions();
-      const questionMap = new Map(questions.map(q => [q.id, q]));
-      let correct = 0;
-      let score = 0;
-      for (const a of input.answers) {
-        const q = questionMap.get(a.questionId);
-        if (q && q.correctOption === a.answer) { correct++; score += q.points; }
-      }
+      if (!input.answers.length) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Responde a pelo menos uma pergunta.' });
+      const { correct, score } = gradeAssessment(questions, input.answers);
       const result = await saveQuizAttempt({ employeeId: me.employee.id, totalQuestions: input.answers.length, correctAnswers: correct, score, timeSpentSeconds: input.timeSpentSeconds });
       return { ...result, correct, score, total: input.answers.length };
     }),
@@ -5460,7 +5456,7 @@ export const appRouter = router({
         "front_1", "front_2", "front_3", "front_4",
         "team_leader", "supervisor",
       ]),
-      title: z.string(), description: z.string().optional(), passingScore: z.number(), timeLimitMinutes: z.number().optional() })).mutation(async ({ ctx, input }) => {
+      title: z.string(), description: z.string().optional(), passingScore: z.number().int().min(1).max(100), timeLimitMinutes: z.number().int().min(1).max(240).optional() })).mutation(async ({ ctx, input }) => {
       if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
       const result = await createCareerExam(input);
       await logActivity({ userId: ctx.user.id, action: "create", entity: "career_exam", entityId: result.id, details: input.title });
@@ -5469,6 +5465,7 @@ export const appRouter = router({
     deleteCareerExam: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
       if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["super_admin"]) throw new TRPCError({ code: "FORBIDDEN" });
       await deleteCareerExam(input.id);
+      await logActivity({ userId: ctx.user.id, action: 'update', entity: 'career_exam', entityId: input.id, details: 'Exame arquivado; resultados preservados' });
       return { success: true };
     }),
     careerExamQuestions: protectedProcedure.input(z.object({ examId: z.number() })).query(async ({ ctx, input }) => {
@@ -5479,14 +5476,16 @@ export const appRouter = router({
     }),
     careerExamQuestionsForPlayer: protectedProcedure.input(z.object({ examId: z.number() })).query(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "extra");
+      if (!(await getCareerExams()).some(exam => exam.id === input.examId)) throw new TRPCError({ code: 'NOT_FOUND', message: 'Exame não disponível.' });
       return getCareerExamQuestionsForPlayer(input.examId);
     }),
-    createCareerExamQuestion: protectedProcedure.input(z.object({ examId: z.number(), question: z.string(), optionA: z.string(), optionB: z.string(), optionC: z.string(), optionD: z.string(), correctOption: z.enum(["A", "B", "C", "D"]), explanation: z.string().optional(), points: z.number().optional() })).mutation(async ({ ctx, input }) => {
+    createCareerExamQuestion: protectedProcedure.input(z.object({ examId: z.number(), question: z.string(), optionA: z.string(), optionB: z.string(), optionC: z.string(), optionD: z.string(), correctOption: z.enum(["A", "B", "C", "D"]), explanation: z.string().optional(), points: z.number().int().min(1).max(10000).optional() })).mutation(async ({ ctx, input }) => {
       if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
+      if (!(await getCareerExams()).some(exam => exam.id === input.examId)) throw new TRPCError({ code: 'NOT_FOUND', message: 'Exame não disponível.' });
       const result = await createCareerExamQuestion(input);
       return result;
     }),
-    submitCareerExam: protectedProcedure.input(z.object({ examId: z.number(), answers: z.array(z.object({ questionId: z.number(), answer: z.enum(["A", "B", "C", "D"]) })), timeSpentSeconds: z.number().optional() })).mutation(async ({ ctx, input }) => {
+    submitCareerExam: protectedProcedure.input(z.object({ examId: z.number(), answers: assessmentAnswers, timeSpentSeconds: z.number().int().min(0).max(86400).optional() })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "extra");
       const me = await getEmployeeByUserId(ctx.user.id);
       if (!me) throw new TRPCError({ code: "NOT_FOUND", message: "Sem ficha de colaborador" });
@@ -5494,19 +5493,13 @@ export const appRouter = router({
       const exams = await getCareerExams();
       const exam = exams.find(e => e.id === input.examId);
       if (!exam) throw new TRPCError({ code: "NOT_FOUND", message: "Exame n\u00e3o encontrado" });
-      const questionMap = new Map(questions.map(q => [q.id, q]));
-      let correct = 0;
-      let score = 0;
-      const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
-      for (const a of input.answers) {
-        const q = questionMap.get(a.questionId);
-        if (q && q.correctOption === a.answer) { correct++; score += q.points; }
-      }
-      const percentage = totalPoints > 0 ? Math.round((score / totalPoints) * 100) : 0;
+      const { correct, percentage } = gradeAssessment(questions, input.answers);
       const passed = percentage >= exam.passingScore;
       const result = await saveCareerExamAttempt({ examId: input.examId, employeeId: me.employee.id, totalQuestions: questions.length, correctAnswers: correct, score: percentage, passed, timeSpentSeconds: input.timeSpentSeconds });
       if (passed) {
-        await notifyOwner({ title: `Exame aprovado: ${exam.title}`, content: `${me.employee.fullName} passou no exame "${exam.title}" com ${percentage}% (m\u00ednimo: ${exam.passingScore}%)` });
+        try {
+          await notifyOwner({ title: `Exame aprovado: ${exam.title}`, content: `${me.employee.fullName} passou no exame "${exam.title}" com ${percentage}% (m\u00ednimo: ${exam.passingScore}%)` });
+        } catch { console.warn('[Training] Resultado guardado; o envio do aviso ao responsável falhou.'); }
       }
       return { ...result, correct, score: percentage, total: questions.length, passed, passingScore: exam.passingScore };
     }),
@@ -5518,8 +5511,8 @@ export const appRouter = router({
       return getCareerExamAttempts(me.employee.id);
     }),
     careerExamAttempts: protectedProcedure.input(z.object({ employeeId: z.number().optional(), examId: z.number().optional() })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
-      return getCareerExamAttempts(input.employeeId, input.examId);
+      requireRole(ctx.user.role, "extra");
+      return getCareerExamAttempts(input.employeeId, input.examId, trainingResultScope(await rhViewer(ctx.user)));
     }),
   }),
 

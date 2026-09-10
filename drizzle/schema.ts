@@ -295,6 +295,7 @@ export const careerExams = mysqlTable("career_exams", {
 	description: text(),
 	passingScore: int().notNull(),
 	timeLimitMinutes: int().default(30),
+	archivedAt: timestamp({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 });
 

@@ -527,6 +527,7 @@ function FAQsTab({ isAdmin }: { isAdmin: boolean }) {
 
 // ─── QUIZ TAB ───────────────────────────────────────────────────────────────
 function QuizTab() {
+  const utils = trpc.useUtils();
   const { user } = useAuth();
   const isAdmin = user && ROLE_HIERARCHY[user.role] >= ROLE_HIERARCHY["admin"];
   const [playing, setPlaying] = useState(false);
@@ -542,11 +543,11 @@ function QuizTab() {
 
   // Admin precisa de ver correctOption; jogador usa o endpoint que omite a resposta.
   const { data: adminQuestions = [], refetch: refetchAdmin } = trpc.training.quizQuestions.useQuery({}, { enabled: !!isAdmin });
-  const { data: playerQuestions = [] } = trpc.training.quizQuestionsForPlayer.useQuery({});
+  const { data: playerQuestions = [], isLoading: questionsLoading, error: questionsError } = trpc.training.quizQuestionsForPlayer.useQuery({});
   const questions = isAdmin ? adminQuestions : playerQuestions;
   const { data: ranking = [] } = trpc.training.quizRanking.useQuery();
   const { data: employees = [] } = trpc.rh.list.useQuery();
-  const submitQuiz = trpc.training.submitQuiz.useMutation({ onSuccess: (data) => { setResult(data); setPlaying(false); } });
+  const submitQuiz = trpc.training.submitQuiz.useMutation({ onSuccess: (data) => { setResult(data); setPlaying(false); void utils.training.quizRanking.invalidate(); }, onError: error => toast.error(error.message) });
   const createQ = trpc.training.createQuizQuestion.useMutation({ onSuccess: () => { refetchAdmin(); setShowCreate(false); toast.success("Pergunta adicionada"); } });
   const deleteQ = trpc.training.deleteQuizQuestion.useMutation({ onSuccess: () => { refetchAdmin(); toast.success("Pergunta eliminada"); } });
 
@@ -608,8 +609,8 @@ function QuizTab() {
             <h3 className="text-lg font-semibold">{q.question}</h3>
             <div className="grid grid-cols-1 gap-3">
               {options.map(o => (
-                <Button key={o.key} variant="outline" className="justify-start text-left h-auto whitespace-normal break-words py-3 px-4" onClick={() => {
-                  const newAnswers = [...answers, { questionId: q.id, answer: o.key }];
+                <Button key={o.key} disabled={submitQuiz.isPending} variant="outline" className="justify-start text-left h-auto whitespace-normal break-words py-3 px-4" onClick={() => {
+                  const newAnswers = [...answers.filter(a => a.questionId !== q.id), { questionId: q.id, answer: o.key }];
                   setAnswers(newAnswers);
                   if (currentQ + 1 < shuffledQuestions.length) {
                     setCurrentQ(currentQ + 1);
@@ -635,7 +636,9 @@ function QuizTab() {
             <Gamepad2 className="w-16 h-16 mx-auto text-primary" />
             <h2 className="text-xl font-bold">Quiz Interativo</h2>
             <p className="text-muted-foreground">{playerQuestions.length} perguntas disponíveis. Responde a 10 perguntas aleatórias e ganha pontos!</p>
-            <Button size="lg" disabled={playerQuestions.length === 0} onClick={startQuiz}>
+            {questionsLoading && <p>A carregar perguntas…</p>}
+            {questionsError && <p className="text-destructive">Não foi possível carregar as perguntas. Tenta atualizar a página.</p>}
+            <Button size="lg" disabled={questionsLoading || !!questionsError || playerQuestions.length === 0} onClick={startQuiz}>
               <Play className="w-4 h-4 mr-2" />Jogar
             </Button>
           </CardContent>
@@ -727,6 +730,7 @@ function QuizTab() {
 
 // ─── CAREER TAB ─────────────────────────────────────────────────────────────
 function CareerTab({ isAdmin }: { isAdmin: boolean }) {
+  const utils = trpc.useUtils();
   const [selectedExam, setSelectedExam] = useState<any>(null);
   const [taking, setTaking] = useState(false);
   const [currentQ, setCurrentQ] = useState(0);
@@ -746,7 +750,7 @@ function CareerTab({ isAdmin }: { isAdmin: boolean }) {
   const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
   const timeoutFiredRef = useRef(false);
 
-  const { data: exams = [], refetch } = trpc.training.careerExams.useQuery();
+  const { data: exams = [], refetch, isLoading: examsLoading, error: examsError } = trpc.training.careerExams.useQuery();
   // Admin vê correctOption (para gerir); jogador usa endpoint que omite
   const { data: examQuestionsAdmin = [], refetch: refetchQ } = trpc.training.careerExamQuestions.useQuery(
     { examId: selectedExam?.id || 0 },
@@ -760,8 +764,8 @@ function CareerTab({ isAdmin }: { isAdmin: boolean }) {
   const { data: myAttempts = [] } = trpc.training.myCareerExamAttempts.useQuery();
   const createExam = trpc.training.createCareerExam.useMutation({ onSuccess: () => { refetch(); setShowCreate(false); toast.success("Exame criado"); } });
   const createExamQ = trpc.training.createCareerExamQuestion.useMutation({ onSuccess: () => { refetchQ(); setShowAddQ(false); toast.success("Pergunta adicionada"); } });
-  const submitExam = trpc.training.submitCareerExam.useMutation({ onSuccess: (data) => { setExamResult(data); setTaking(false); setRemainingSeconds(null); } });
-  const deleteExam = trpc.training.deleteCareerExam.useMutation({ onSuccess: () => { refetch(); setSelectedExam(null); toast.success("Exame eliminado"); } });
+  const submitExam = trpc.training.submitCareerExam.useMutation({ onSuccess: (data) => { setExamResult(data); setTaking(false); setRemainingSeconds(null); void utils.training.myCareerExamAttempts.invalidate(); }, onError: error => toast.error(error.message) });
+  const deleteExam = trpc.training.deleteCareerExam.useMutation({ onSuccess: () => { refetch(); setSelectedExam(null); toast.success("Exame arquivado; resultados preservados"); } });
 
   // Tick do countdown
   useEffect(() => {
@@ -811,6 +815,9 @@ function CareerTab({ isAdmin }: { isAdmin: boolean }) {
     };
   }, [selectedExam, allManuals, allVideos]);
 
+  if (examsLoading) return <p className="text-muted-foreground">A carregar avaliações…</p>;
+  if (examsError) return <div className="space-y-3"><p className="text-destructive">Não foi possível carregar as avaliações.</p><Button onClick={() => refetch()}>Tentar novamente</Button></div>;
+
   if (examResult) {
     return (
       <div className="max-w-lg mx-auto space-y-6">
@@ -821,7 +828,7 @@ function CareerTab({ isAdmin }: { isAdmin: boolean }) {
             <div className="text-4xl font-bold">{examResult.score}%</div>
             <p className="text-muted-foreground">{examResult.correct} de {examResult.total} corretas · Mínimo: {examResult.passingScore}%</p>
             <Progress value={examResult.score} className="h-3" />
-            {examResult.passed ? <p className="text-green-600 font-medium">Parabéns! Estás pronto para avançar na carreira.</p> : <p className="text-red-600">Não desistas! Estuda mais e tenta novamente.</p>}
+            {examResult.passed ? <p className="text-green-600 font-medium">Exame aprovado. A progressão profissional depende da validação dos responsáveis.</p> : <p className="text-red-600">Não desistas! Estuda mais e tenta novamente.</p>}
             <Button onClick={() => { setExamResult(null); setSelectedExam(null); }}>Voltar</Button>
           </CardContent>
         </Card>
@@ -847,6 +854,7 @@ function CareerTab({ isAdmin }: { isAdmin: boolean }) {
           : "bg-blue-100 text-blue-700";
     return (
       <div className="max-w-2xl mx-auto space-y-6">
+        {submitExam.isError && <Button disabled={submitExam.isPending} onClick={() => submitExam.mutate({ examId: selectedExam.id, answers, timeSpentSeconds: Math.round((Date.now() - startTime) / 1000) })}>Voltar a enviar respostas</Button>}
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2">
             <Badge className={levelColors[selectedExam?.level] || ""}>{levelLabels[selectedExam?.level] || ""}</Badge>
@@ -865,8 +873,8 @@ function CareerTab({ isAdmin }: { isAdmin: boolean }) {
             <h3 className="text-lg font-semibold">{q.question}</h3>
             <div className="grid grid-cols-1 gap-3">
               {options.map(o => (
-                <Button key={o.key} variant="outline" className="justify-start text-left h-auto whitespace-normal break-words py-3 px-4" onClick={() => {
-                  const newAnswers = [...answers, { questionId: q.id, answer: o.key }];
+                <Button key={o.key} disabled={submitExam.isPending || remainingSeconds === 0} variant="outline" className="justify-start text-left h-auto whitespace-normal break-words py-3 px-4" onClick={() => {
+                  const newAnswers = [...answers.filter(a => a.questionId !== q.id), { questionId: q.id, answer: o.key }];
                   setAnswers(newAnswers);
                   if (currentQ + 1 < examQuestionsSnapshot.length) {
                     setCurrentQ(currentQ + 1);
@@ -908,7 +916,7 @@ function CareerTab({ isAdmin }: { isAdmin: boolean }) {
                 <GraduationCap className="w-4 h-4 mr-2" />Iniciar Exame ({examQuestionsPlayer.length} perguntas)
               </Button>
               {isAdmin && <Button variant="outline" onClick={() => setShowAddQ(true)}><Plus className="w-4 h-4 mr-1" />Adicionar Pergunta</Button>}
-              {isAdmin && <Button variant="destructive" size="sm" onClick={() => deleteExam.mutate({ id: selectedExam.id })}><Trash2 className="w-4 h-4 mr-1" />Eliminar Exame</Button>}
+              {user?.role === "super_admin" && <Button variant="outline" size="sm" disabled={deleteExam.isPending} onClick={() => deleteExam.mutate({ id: selectedExam.id })}><Trash2 className="w-4 h-4 mr-1" />Arquivar Exame</Button>}
             </div>
 
             {/* Módulos deste nível (manuais/vídeos etiquetados com o nível) */}
