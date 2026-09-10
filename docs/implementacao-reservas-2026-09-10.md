@@ -52,3 +52,11 @@ pnpm exec tsx scripts/recover-booking-coverage.ts --from 2026-09-01 --to 2026-09
 ```
 
 O ficheiro de ambiente e os registos locais de execução estão excluídos do Git. A publicação e a verificação final são registadas no relatório de acompanhamento do projeto.
+
+## Verificação após publicação
+
+- Primeiro bloco publicado pela PR #32, revisão `893ffcab3854a649f78f89d99dd5c00823bcd031`.
+- Uma reserva real desatualizada foi colocada duas vezes na fila: criou apenas um trabalho, concluído numa tentativa pelo GitHub Actions. A matrícula ficou igual à origem.
+- O primeiro ciclo atualizou 59 de 60 detalhes; a API devolveu 404 para uma reserva antiga do Airpark Lisboa. A falha fica registada e recuperável, sem apagar a reserva nem marcar o detalhe como atualizado.
+- A conferência visual detetou uma segunda causa: uma campanha fazia o filtro Marketplace excluir uma reserva já importada. A classificação passa a preservar explicitamente a origem Marketplace e mantém os dados de campanha/parceiro.
+- O ecrã de sincronização passa também a apresentar as falhas de atualização dos detalhes, além das notificações pendentes. Os códigos distinguem HTTP 404 de erros de base de dados sem expor informação privada.

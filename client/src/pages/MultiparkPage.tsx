@@ -1,3 +1,4 @@
+import { classifyBookingOrigin as classifyOrigin } from "@shared/bookingOrigin";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
@@ -185,31 +186,6 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
     actionType === "checkin" ? COLLECTED_SET.has(b.status) :
     actionType === "checkout" ? DELIVERED_SET.has(b.status) : true;
 
-  // ── Classificação de ORIGENS (lógica do Jorge, 2026-08-06) ────────────────
-  // 1) Parceiro identificado (campanha→partnership) manda SEMPRE, venha de
-  //    onde vier (MANUAL/GENERAL_FORM/PARTNER_DASHBOARD incluídos);
-  // 2) Campanha sem parceiro = campanha INTERNA nossa (10º Aniversário, etc.);
-  // 3) Senão, o canal: MANUAL=Telefone; GENERAL_FORM=site multipark.app;
-  //    API=site da própria marca (redpark.pt/skypark.pt/airparking.pt);
-  //    MARKETPLACE=páginas de parque do marketplace.
-  const classifyOrigin = (b: any): { group: string; label: string } => {
-    if (b.salesPartnerName) return { group: "parceiro", label: `🤝 ${b.salesPartnerName}` };
-    if (b.campaign) return { group: "campanha", label: `📣 ${b.campaign}` };
-    const origin = String(b.origin ?? "");
-    if (origin === "MANUAL") return { group: "telefone", label: "📞 Telefone" };
-    if (origin === "PARTNER_DASHBOARD") return { group: "parceiro", label: "🤝 Parceiro (por identificar)" };
-    if (origin === "GENERAL_FORM") return { group: "site", label: "🌐 Site multipark.app" };
-    if (origin === "MARKETPLACE") return { group: "marketplace", label: "🏬 Marketplace" };
-    if (origin === "API") {
-      try {
-        const host = new URL(b.originUrl).hostname.replace(/^www\./, "");
-        return { group: "site", label: `🌐 Site ${host}` };
-      } catch {
-        return { group: "outros", label: "API (sem link)" };
-      }
-    }
-    return { group: "outros", label: "Sem origem" };
-  };
   const ORIGIN_GROUPS: Array<{ id: string; label: string }> = [
     { id: "site", label: "Sites próprios" },
     { id: "telefone", label: "Telefone" },
@@ -1458,6 +1434,7 @@ function SyncTab() {
               <strong>{p.name} — {p.city}:</strong> {p.state === "missing_key" ? "falta configurar o acesso; as reservas deste parque não estão cobertas." : "excluído da sincronização; requer revisão se tiver atividade."}
             </p>)}
             <p>Notificações: {coverage.data.queue.pending} por processar · {coverage.data.queue.processing} em processamento · {coverage.data.queue.failed} a aguardar nova tentativa.</p>
+            {coverage.data.queue.detailFailures > 0 && <p className="text-destructive">{coverage.data.queue.detailFailures} reservas com falha na atualização dos detalhes. A última informação válida é preservada e haverá nova tentativa.</p>}
             <p className="text-xs text-muted-foreground">As notificações e os detalhes são tratados automaticamente em ciclos de cinco minutos, sujeitos à disponibilidade da origem e ao agendamento.</p>
           </>}
         </CardContent>

@@ -15,7 +15,9 @@ export function retryDelaySeconds(attempts: number): number {
 
 // Apenas códigos; erros HTTP/SQL podem conter dados pessoais ou credenciais.
 export function deliveryErrorCode(error: unknown): string {
-  const code = (error as { code?: unknown })?.code;
+  const status = (error as { status?: unknown })?.status;
+  if (typeof status === 'number' && Number.isInteger(status) && status >= 400 && status <= 599) return `API_HTTP_${status}`;
+  const code = (error as { code?: unknown })?.code ?? (error as { cause?: { code?: unknown } })?.cause?.code;
   return typeof code === "string" && /^[A-Z0-9_]{1,64}$/.test(code) ? code : "PROCESSING_FAILED";
 }
 
@@ -99,6 +101,8 @@ export async function getDeliveryHealth() {
     MAX(completedAt) AS lastCompletedAt
     FROM multipark_webhook_jobs`);
   const row = (result as any)[0]?.[0];
+  const detailResult = await db.execute(sql`SELECT COUNT(*) AS failures FROM multipark_bookings WHERE detailErrorCode IS NOT NULL`);
   return { pending: Number(row?.pending ?? 0), processing: Number(row?.processing ?? 0),
-    failed: Number(row?.failed ?? 0), lastCompletedAt: row?.lastCompletedAt ? String(row.lastCompletedAt) : null };
+    failed: Number(row?.failed ?? 0), detailFailures: Number((detailResult as any)[0]?.[0]?.failures ?? 0),
+    lastCompletedAt: row?.lastCompletedAt ? String(row.lastCompletedAt) : null };
 }
