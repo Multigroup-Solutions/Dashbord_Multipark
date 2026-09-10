@@ -126,6 +126,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0065").then(m => ({ s: m.MIGRATION_0065_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0065 })),
       import("./migrations/migration_0066").then(m => ({ s: m.MIGRATION_0066_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0066 })),
       import("./migrations/migration_0067").then(m => ({ s: m.MIGRATION_0067_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0067 })),
+      import("./migrations/migration_0068").then(m => ({ s: m.MIGRATION_0068_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0068 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -5599,8 +5600,8 @@ export async function upsertMultiparkBooking(data: InsertMultiparkBooking) {
   // também a história (historyFetchedAt=null): sem isto os CHECK_IN/CHECK_OUT/
   // MOVEMENT dos condutores feitos DEPOIS da primeira busca nunca entravam em
   // multipark_booking_history automaticamente (só via botões manuais).
-  const statusChanged = existed && (before[0].status ?? null) !== (data.status ?? null);
-  const setOnDup: any = statusChanged ? { ...rest, enrichedAt: null, historyFetchedAt: null } : rest;
+  const statusChanged = existed && data.status != null && (before[0].status ?? null) !== data.status;
+  const setOnDup: any = statusChanged ? { ...rest, enrichedAt: null, detailRetryAt: null, historyFetchedAt: null } : rest;
   // NUNCA sobrepor um valor real com vazio nos campos que só vêm do
   // enrichment (/bookings/:id): o /report não traz cliente/veículo/voos/
   // parceiro-real, e cada re-varredura da janela apagava o que o enrichment
@@ -5842,7 +5843,7 @@ export async function getLastSyncSuccessAt(syncType = "api_sync"): Promise<strin
     .from(multiparkSyncLogs)
     .where(and(
       eq(multiparkSyncLogs.syncType, syncType),
-      inArray(multiparkSyncLogs.status, ["success", "partial"]),
+      eq(multiparkSyncLogs.status, "success"),
     ))
     .orderBy(desc(multiparkSyncLogs.startedAt))
     .limit(1);

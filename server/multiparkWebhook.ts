@@ -9,20 +9,15 @@
  * `X-Multipark-Delivery` (idempotência), `X-Multipark-Timestamp` e
  * `X-Multipark-Signature: t=<ts>,v1=<HMAC-SHA256(chave, "<ts>.<body>")>`.
  *
- * Desenho (payload-agnóstico): o webhook é só um GATILHO. Extraímos o id da
- * reserva, vamos buscar a versão completa ao /bookings/:id (getBookingTryAllParks)
- * e reutilizamos o upsert + enrichment do sync — a BD fica exatamente como
- * ficaria pelo polling, mas em segundos. Check-ins/check-outs e movimentações
- * de condutores NÃO disparam webhook (confirmado no código be-multipark), por
- * isso o sync de 15 min continua como rede de segurança e fonte desses eventos.
- *
- * Montado em `/api/multipark/webhook` ANTES do express.json global (raw body
- * para o HMAC), nos dois entrypoints. Process-then-ack (como o webhook Meta):
- * a plataforma tem timeout de 10s e retry com backoff — preferimos o retry
- * deles a perder eventos.
+ * A receção é persistida antes do ACK. O processamento usa o detalhe atual
+ * da API, nunca o estado antigo do payload, e é retomado após falhas/crashes.
+ * O cron da fila corre de cinco em cinco minutos; o polling periódico continua
+ * necessário para movimentos que não produzem notificações.
+ * Montado antes do express.json global, para verificar o corpo original.
  */
 import express, { Router, type Request, type Response } from "express";
 import crypto from "crypto";
+import { createDeliveryStore, drainDeliveries, deliveryErrorCode } from "./bookingDeliveryQueue";
 
 /**
  * Verifica a assinatura `X-Multipark-Signature` ("t=<ts>,v1=<hex>").
@@ -68,6 +63,7 @@ export interface MultiparkWebhookEvent {
   deliveryId: string;
   event: "BOOKING_CREATED" | "BOOKING_UPDATED" | "BOOKING_CANCELLED";
   bookingId: string;
+  parkId: string | null;
   status: string | null;
   licensePlate: string | null;
   checkIn: string | null;
@@ -84,11 +80,14 @@ export function parseMultiparkWebhook(body: unknown): MultiparkWebhookEvent | nu
   const event = String(b.event ?? "");
   if (!["BOOKING_CREATED", "BOOKING_UPDATED", "BOOKING_CANCELLED"].includes(event)) return null;
   const bookingId = typeof data.id === "string" ? data.id : null;
-  if (!bookingId) return null;
+  if (!bookingId || bookingId.length > 128) return null;
+  if (typeof b.id === "string" && (b.id.length > 128 || !b.id.trim())) return null;
   return {
-    deliveryId: typeof b.id === "string" ? b.id : `no-delivery-${bookingId}-${event}`,
+    // Atualizações diferentes da mesma reserva não podem partilhar o fallback.
+    deliveryId: typeof b.id === "string" ? b.id : `fallback-${crypto.createHash("sha256").update(JSON.stringify(body)).digest("hex")}`,
     event: event as MultiparkWebhookEvent["event"],
     bookingId,
+    parkId: typeof data.parkId === "string" ? data.parkId : null,
     status: typeof data.status === "string" ? data.status : null,
     licensePlate: typeof data.licensePlate === "string" ? data.licensePlate : null,
     checkIn: typeof data.checkIn === "string" ? data.checkIn : null,
@@ -115,66 +114,6 @@ export function isoToMysql(iso: string | null | undefined): string | undefined {
   return d.toISOString().slice(0, 19).replace("T", " ");
 }
 
-/** Remove chaves undefined — o upsert não deve tocar campos que não trazemos. */
-function clean<T extends Record<string, unknown>>(obj: T): T {
-  return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as T;
-}
-
-// ─── Dedup de entregas (idempotência) ────────────────────────────────────────
-// A plataforma faz retries; X-Multipark-Delivery identifica cada entrega.
-// Tabela criada on-demand (CREATE IF NOT EXISTS idempotente, cache por processo
-// — em serverless cada instância paga 1 vez).
-let deliveriesTableReady = false;
-async function ensureDeliveriesTable(): Promise<void> {
-  if (deliveriesTableReady) return;
-  const { getDb } = await import("./db");
-  const db = await getDb();
-  if (!db) return;
-  const { sql } = await import("drizzle-orm");
-  await db.execute(sql`CREATE TABLE IF NOT EXISTS \`multipark_webhook_deliveries\` (
-    \`id\` INT NOT NULL AUTO_INCREMENT,
-    \`deliveryId\` VARCHAR(128) NOT NULL,
-    \`event\` VARCHAR(32) NOT NULL,
-    \`bookingExternalId\` VARCHAR(128) NOT NULL,
-    \`receivedAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (\`id\`),
-    UNIQUE INDEX \`mp_webhook_deliveries_delivery_unique\` (\`deliveryId\`)
-  )`);
-  deliveriesTableReady = true;
-}
-
-/** true = entrega nova (registada); false = duplicado (já processada). */
-async function registerDelivery(ev: MultiparkWebhookEvent): Promise<boolean> {
-  const { getDb } = await import("./db");
-  const db = await getDb();
-  if (!db) return true; // sem BD não há como deduplicar; processa
-  await ensureDeliveriesTable();
-  const { sql } = await import("drizzle-orm");
-  try {
-    await db.execute(sql`INSERT INTO \`multipark_webhook_deliveries\`
-      (\`deliveryId\`, \`event\`, \`bookingExternalId\`)
-      VALUES (${ev.deliveryId}, ${ev.event}, ${ev.bookingId})`);
-    return true;
-  } catch (err: any) {
-    if (isDuplicateKeyError(err)) return false;
-    throw err;
-  }
-}
-
-/**
- * O mysql2 marca duplicados com code ER_DUP_ENTRY/errno 1062, mas o Drizzle
- * embrulha o erro original em `cause` — verificamos os dois níveis (e a
- * mensagem, como última rede).
- */
-export function isDuplicateKeyError(err: unknown): boolean {
-  const candidates: any[] = [err, (err as any)?.cause];
-  for (const e of candidates) {
-    if (!e) continue;
-    if (e.code === "ER_DUP_ENTRY" || e.errno === 1062) return true;
-  }
-  return /duplicate entry/i.test(String((err as any)?.message ?? "") + String((err as any)?.cause?.message ?? ""));
-}
-
 /**
  * Processa um evento: busca a reserva completa à API (tenta todas as chaves),
  * upsert na BD com parkName/city no formato do sync e enrichment imediato.
@@ -183,42 +122,29 @@ export async function processMultiparkWebhookEvent(ev: MultiparkWebhookEvent): P
   ok: boolean;
   detail: string;
 }> {
-  const { getBookingTryAllParks } = await import("./multipark");
+  const { getBookingTryAllParks, resolveParkForBooking, getParkApiKey, getBooking } = await import("./multipark");
   const { upsertMultiparkBooking } = await import("./db");
   const { enrichBookingsBatch } = await import("./jobs/multiparkBookingSync");
 
-  // Esqueleto a partir do payload (ISO→UTC MySQL). O detalhe/parsing fino fica
-  // para o enrichment oficial do sync — evitamos duplicar mapeamentos aqui.
-  const skeleton: Record<string, unknown> = clean({
+  const preferred = await resolveParkForBooking({ parkId: ev.parkId });
+  const found = preferred
+    ? { parkConfig: preferred, booking: await getBooking(ev.bookingId, getParkApiKey(preferred), { maxAttempts: 1, timeoutMs: 8000 }) }
+    : await getBookingTryAllParks(ev.bookingId, { deadlineAt: Date.now() + 12_000 });
+  if (!found) return { ok: false, detail: "Parque ainda não resolvido" };
+  // O payload pode ser antigo: só usamos o ID e o parque. Nenhum estado,
+  // preço ou matrícula do evento substitui dados mais recentes.
+  await upsertMultiparkBooking({
     externalId: ev.bookingId,
-    status: ev.status ?? undefined,
-    checkIn: isoToMysql(ev.checkIn),
-    checkOut: isoToMysql(ev.checkOut),
-    bookingPrice: ev.bookingPrice != null ? String(ev.bookingPrice) : undefined,
-    paymentMethod: ev.paymentMethod ?? undefined,
-    licensePlate: ev.licensePlate ?? undefined,
-    enrichedAt: null, // reabre o enrichment para captar o detalhe fresco
+    parkName: `${found.parkConfig.name} - ${found.parkConfig.city}`,
+    city: cityToSyncForm(found.parkConfig.city),
   });
+  const r = await enrichBookingsBatch({ externalIds: [ev.bookingId], limit: 1, force: true,
+    details: new Map([[ev.bookingId, found.booking]]) });
+  return { ok: r.enriched === 1 && r.errors === 0 && r.noKey === 0, detail: `enriched=${r.enriched} errors=${r.errors} noKey=${r.noKey}` };
+}
 
-  // Resolve o parque (dá-nos parkName/city no formato do sync — sem isso o
-  // enrichment não sabe que chave usar).
-  const found = await getBookingTryAllParks(ev.bookingId);
-  if (found) {
-    skeleton.parkName = `${found.parkConfig.name} - ${found.parkConfig.city}`;
-    skeleton.city = cityToSyncForm(found.parkConfig.city);
-  }
-  await upsertMultiparkBooking(skeleton as any);
-
-  if (!found) {
-    // Reserva ainda não visível na API (propagação) ou parque sem chave — o
-    // esqueleto fica e o sync de 15 min completa mais tarde.
-    return { ok: true, detail: "skeleton-only (parque não resolvido)" };
-  }
-
-  // Enrichment direcionado — preenche cliente/campanha/parceiro/voos/etc com o
-  // mapping oficial do sync (resolve a chave por parkName/city acabados de gravar).
-  const r = await enrichBookingsBatch({ externalIds: [ev.bookingId], limit: 1 });
-  return { ok: true, detail: `enriched=${r.enriched} errors=${r.errors} noKey=${r.noKey}` };
+export async function retryMultiparkDeliveries(deadlineAt = Date.now() + 40_000) {
+  return drainDeliveries(await createDeliveryStore(), processMultiparkWebhookEvent, { limit: 20, deadlineAt });
 }
 
 export function createMultiparkWebhookRouter(): Router {
@@ -265,15 +191,13 @@ export function createMultiparkWebhookRouter(): Router {
       }
 
       try {
-        const fresh = await registerDelivery(ev);
-        if (!fresh) return res.status(200).json({ ok: true, duplicate: true });
-
-        const result = await processMultiparkWebhookEvent(ev);
-        console.log(`[MultiparkWebhook] ${ev.event} ${ev.bookingId}: ${result.detail}`);
-        return res.status(200).json({ ok: true });
+        // A resposta confirma apenas a receção durável. O cron trata a fila;
+        // nenhuma chamada demorada à origem põe em risco o ACK de 10 segundos.
+        await (await createDeliveryStore()).receive(ev);
+        return res.status(202).json({ ok: true, accepted: true });
       } catch (err: any) {
         // Erro nosso → 500 para a plataforma re-tentar (retry com backoff).
-        console.error("[MultiparkWebhook] erro a processar:", err?.message ?? err);
+        console.error("[MultiparkWebhook] erro a processar:", deliveryErrorCode(err));
         return res.status(500).json({ error: "Erro interno ao processar o evento" });
       }
     },

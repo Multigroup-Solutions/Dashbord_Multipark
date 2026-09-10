@@ -136,6 +136,7 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
   const [activeRange, setActiveRange] = usePersistedState<string>("mpk.shared.range", "thisMonth");
   const [searchTerm, setSearchTerm] = usePersistedState("mpk.shared.search", "");
   const [projectId, setProjectId] = usePersistedState<string>("mpk.shared.project", "");
+  const [lastGlobalProject, setLastGlobalProject] = usePersistedState<string>("mpk.shared.globalProject", "__initial__");
   const [originFilter, setOriginFilter] = usePersistedState<string>("mpk.shared.origin", "all");
   // Estado real vs previsto (passo 2 do Jorge): as CONTAS de topo são sempre a
   // previsão do período; este seletor filtra a lista para ver o que já foi
@@ -144,14 +145,15 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
   const [stateFilter, setStateFilter] = usePersistedState<string>(`mpk.${actionType}.state`, "all");
   const [detailBooking, setDetailBooking] = useState<any>(null);
 
-  // Sync global filter to local project filter — só quando o header TEM filtro
-  // ativo (antes esmagava o filtro persistido com "" a cada montagem)
+  // Limpar o filtro global também limpa a seleção local da aba.
   useEffect(() => {
-    if (globalFilters.projectId !== undefined) {
-      setProjectId(String(globalFilters.projectId));
+    const next = globalFilters.projectId !== undefined ? String(globalFilters.projectId) : "";
+    if (next !== lastGlobalProject) {
+      setProjectId(next);
+      setLastGlobalProject(next);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [globalFilters.projectId]);
+  }, [globalFilters.projectId, lastGlobalProject]);
   const { data: allProjects = [] } = trpc.projects.list.useQuery();
 
   const sortedProjects = useMemo(() => {
@@ -1387,6 +1389,7 @@ function SyncTab() {
   const [lastSyncResult, setLastSyncResult] = useState<any>(null);
 
   const { data: logs = [], isLoading, refetch } = trpc.multipark.syncLogs.useQuery();
+  const coverage = trpc.multipark.syncCoverage.useQuery(undefined, { refetchInterval: 60_000 });
   const syncMut = trpc.multipark.triggerSync.useMutation();
   const enrichMut = trpc.multipark.enrichBatch.useMutation();
   const historyMut = trpc.multipark.syncHistoryBatch.useMutation();
@@ -1446,6 +1449,20 @@ function SyncTab() {
     <div className="space-y-4 mt-4">
       {/* Manual sync */}
       <Card>
+        <CardHeader><CardTitle className="text-sm">Cobertura da sincronização</CardTitle></CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          {coverage.isLoading ? <p>A verificar parques e notificações…</p> : coverage.error ?
+            <p className="text-destructive">Não foi possível verificar a sincronização. Os dados podem estar desatualizados.</p> : coverage.data && <>
+            <p>{coverage.data.parks.filter(p => p.state === "configured").length} parques com chave configurada. A existência da chave não confirma que o acesso esteja válido.</p>
+            {coverage.data.parks.filter(p => p.state !== "configured").map(p => <p key={p.id} className={p.state === "missing_key" ? "text-destructive" : "text-muted-foreground"}>
+              <strong>{p.name} — {p.city}:</strong> {p.state === "missing_key" ? "falta configurar o acesso; as reservas deste parque não estão cobertas." : "excluído da sincronização; requer revisão se tiver atividade."}
+            </p>)}
+            <p>Notificações: {coverage.data.queue.pending} por processar · {coverage.data.queue.processing} em processamento · {coverage.data.queue.failed} a aguardar nova tentativa.</p>
+            <p className="text-xs text-muted-foreground">As notificações e os detalhes são tratados automaticamente em ciclos de cinco minutos, sujeitos à disponibilidade da origem e ao agendamento.</p>
+          </>}
+        </CardContent>
+      </Card>
+      <Card>
         <CardHeader>
           <CardTitle className="text-sm font-medium flex items-center gap-2">
             <RefreshCw className="w-4 h-4" /> Sincronizar Reservas da API
@@ -1472,7 +1489,7 @@ function SyncTab() {
           </div>
 
           <div className="bg-muted/50 rounded-lg p-3 text-xs text-muted-foreground space-y-1">
-            <p>A sincronização automática corre a cada 15 minutos (últimos 2 dias).</p>
+            <p>A importação de reservas corre automaticamente; as notificações e os detalhes têm um ciclo próprio de cinco minutos.</p>
             <p>Usa este formulário para importar histórico mais antigo ou forçar uma atualização.</p>
           </div>
 
@@ -1482,7 +1499,7 @@ function SyncTab() {
               <p className="text-xs text-muted-foreground mt-0.5">
                 Vai à API individual de cada reserva e guarda <strong>deliveryType</strong>{" "}
                 (Terminal 1, Oriente, etc.), <strong>voos</strong> e <strong>notas do cliente</strong>.
-                Processa 200 reservas por execução. Corre várias vezes até não haver mais.
+                A atualização é automática. Este botão permite antecipar um lote de até 200 reservas.
               </p>
             </div>
             <Button onClick={handleEnrich} disabled={enrichMut.isPending} variant="outline" className="gap-2 shrink-0">

@@ -28,6 +28,7 @@ export interface ParkConfig {
   name: string;
   city: string;
   envKey: string;
+  externalId?: string;
   closed?: boolean; // se true, sync e enrichment ignoram
 }
 
@@ -42,6 +43,7 @@ export const PARK_CONFIGS: ParkConfig[] = [
   { id: "PORTO_AIRPARK", name: "Airpark", city: "Porto", envKey: "MULTIPARK_API_KEY_PORTO_AIRPARK" },
   { id: "PORTO_REDPARK", name: "Redpark", city: "Porto", envKey: "MULTIPARK_API_KEY_PORTO_REDPARK" },
   { id: "PORTO_SKYPARK", name: "Skypark", city: "Porto", envKey: "MULTIPARK_API_KEY_PORTO_SKYPARK" },
+  { id: "PORTO_TOP_PARKING", name: "Top Parking", city: "Porto", envKey: "MULTIPARK_API_KEY_PORTO_TOP_PARKING", externalId: "cmr2qq7tp05viql2zi4ah8dcl" },
   { id: "LISBON_BOARDINGPARK", name: "Boardingpark", city: "Lisboa", envKey: "MULTIPARK_API_KEY_LISBON_BOARDINGPARK" },
   { id: "LISBON_PARKDIRECT", name: "Parkdirect", city: "Lisboa", envKey: "MULTIPARK_API_KEY_LISBON_PARKDIRECT" },
   { id: "LISBON_PREMIUM_PARK", name: "Premium Park", city: "Lisboa", envKey: "MULTIPARK_API_KEY_LISBON_PREMIUM_PARK" },
@@ -49,8 +51,8 @@ export const PARK_CONFIGS: ParkConfig[] = [
   { id: "LISBON_STOP_FLY_PARK", name: "Stop & Fly Park", city: "Lisboa", envKey: "MULTIPARK_API_KEY_LISBON_STOP_FLY_PARK" },
   { id: "LISBON_TRAVELPARKING", name: "Travelparking", city: "Lisboa", envKey: "MULTIPARK_API_KEY_LISBON_TRAVELPARKING" },
   { id: "LISBON_VIAGENSPARKING", name: "Viagensparking", city: "Lisboa", envKey: "MULTIPARK_API_KEY_LISBON_VIAGENSPARKING" },
-  // closed até haver chave válida — a fornecida devolve 401 Invalid API key (2026-06-11)
-  { id: "FARO_BOARDINGPARK", name: "Boardingpark", city: "Faro", envKey: "MULTIPARK_API_KEY_FARO_BOARDINGPARK", closed: true },
+  // Chave substituída e validada com o report de setembro em 2026-09-10.
+  { id: "FARO_BOARDINGPARK", name: "Boardingpark", city: "Faro", envKey: "MULTIPARK_API_KEY_FARO_BOARDINGPARK" },
   { id: "FARO_PARKDIRECT", name: "Parkdirect", city: "Faro", envKey: "MULTIPARK_API_KEY_FARO_PARKDIRECT" },
   { id: "FARO_PREMIUM_PARK", name: "Premium Park", city: "Faro", envKey: "MULTIPARK_API_KEY_FARO_PREMIUM_PARK" },
   { id: "FARO_READYPARK", name: "Readypark", city: "Faro", envKey: "MULTIPARK_API_KEY_FARO_READYPARK" },
@@ -74,6 +76,51 @@ export function getConfiguredParks(): ParkConfig[] {
   return PARK_CONFIGS.filter(p => !p.closed && !!process.env[p.envKey]);
 }
 
+const normalizedName = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+const normalizedCity = (s: string) => (({ lisbon: "lisboa", oporto: "porto" } as Record<string, string>)[s.toLowerCase()] ?? s.toLowerCase());
+
+export function matchParkConfig(input: { parkId?: string | null; parkName?: string | null; city?: string | null }, configs = PARK_CONFIGS): ParkConfig | undefined {
+  if (input.parkId) {
+    const exact = configs.find(p => p.externalId === input.parkId || p.id === input.parkId);
+    if (exact) return exact;
+  }
+  if (!input.parkName) return undefined;
+  const name = normalizedName(input.parkName);
+  const matches = configs.filter(p => {
+    if (input.city && normalizedCity(input.city) !== normalizedCity(p.city)) return false;
+    return [p.name, `${p.name} ${p.city}`, `${p.name} ${normalizedCity(p.city) === "lisboa" ? "lisbon" : p.city}`].some(n => normalizedName(n) === name);
+  });
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+let publicParksCache: { at: number; parks: MultiparkPark[] } | null = null;
+export async function resolveParkForBooking(input: { parkId?: string | null; parkName?: string | null; city?: string | null }): Promise<ParkConfig | undefined> {
+  let config = matchParkConfig(input);
+  if (!config && input.parkId) {
+    if (!publicParksCache || Date.now() - publicParksCache.at > 300_000) {
+      const response = await fetch("https://api.multipark.pt/api/v1/parks", { signal: AbortSignal.timeout(5000) });
+      if (!response.ok) throw new Error("Catálogo de parques indisponível");
+      const body = await response.json();
+      const parks = Array.isArray(body) ? body : body.parks ?? body.data;
+      if (!Array.isArray(parks)) throw new Error("Formato do catálogo de parques inválido");
+      publicParksCache = { at: Date.now(), parks };
+    }
+    const source = publicParksCache.parks.find(p => p.id === input.parkId);
+    if (source) config = matchParkConfig({ parkName: source.name, city: source.city });
+    if (!config) throw Object.assign(new Error("Parque sem correspondência configurada"), { code: "PARK_NOT_MAPPED" });
+  }
+  if (config && (config.closed || !getParkApiKey(config))) {
+    // Conhecemos o parque: não testar chaves de outros parques indiscriminadamente.
+    throw Object.assign(new Error("Parque sem acesso de sincronização"), { code: "PARK_ACCESS_MISSING" });
+  }
+  return config;
+}
+
+export function parkCoverage() {
+  return PARK_CONFIGS.map(p => ({ id: p.id, name: p.name, city: p.city,
+    state: p.closed ? "excluded" : getParkApiKey(p) ? "configured" : "missing_key" }));
+}
+
 // ─── Core request helper with retry + rate-limit handling ───
 
 async function multiparkRequest<T = any>(opts: {
@@ -83,6 +130,8 @@ async function multiparkRequest<T = any>(opts: {
   params?: Record<string, string>;
   baseUrl?: string;
   apiKey?: string;
+  maxAttempts?: number;
+  timeoutMs?: number;
 }): Promise<T> {
   const { method = "GET", path, body, params, baseUrl } = opts;
   const base = baseUrl || ENV.multiparkApiUrl;
@@ -96,7 +145,8 @@ async function multiparkRequest<T = any>(opts: {
     url += `?${qs}`;
   }
 
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+  const maxAttempts = opts.maxAttempts ?? MAX_RETRIES;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const res = await fetch(url, {
         method,
@@ -105,11 +155,11 @@ async function multiparkRequest<T = any>(opts: {
           "Content-Type": "application/json",
         },
         body: body ? JSON.stringify(body) : undefined,
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        signal: AbortSignal.timeout(opts.timeoutMs ?? FETCH_TIMEOUT_MS),
       });
 
       // Rate limited — exponential backoff
-      if (res.status === 429 && attempt < MAX_RETRIES - 1) {
+      if (res.status === 429 && attempt < maxAttempts - 1) {
         const delay = Math.pow(2, attempt) * 1000;
         await new Promise((r) => setTimeout(r, delay));
         continue;
@@ -129,7 +179,7 @@ async function multiparkRequest<T = any>(opts: {
       return (await res.json()) as T;
     } catch (error: any) {
       if (error.status) throw error;
-      if (attempt === MAX_RETRIES - 1) throw error;
+      if (attempt === maxAttempts - 1) throw error;
     }
   }
   throw new Error("MultiPark API: max retries exceeded");
@@ -282,8 +332,8 @@ export async function updateBooking(id: string, data: Partial<MultiparkBookingIn
 }
 
 /** Get booking by ID (optionally with specific park's API key) */
-export async function getBooking(id: string, apiKey?: string): Promise<MultiparkBooking> {
-  return multiparkRequest({ path: `/bookings/${id}`, apiKey });
+export async function getBooking(id: string, apiKey?: string, opts: { maxAttempts?: number; timeoutMs?: number } = {}): Promise<MultiparkBooking> {
+  return multiparkRequest({ path: `/bookings/${encodeURIComponent(id)}`, apiKey, ...opts });
 }
 
 /**
@@ -291,18 +341,20 @@ export async function getBooking(id: string, apiKey?: string): Promise<Multipark
  * Returns the booking + the park that owned it. Useful when we don't know which
  * park a booking belongs to in advance.
  */
-export async function getBookingTryAllParks(id: string): Promise<{
+export async function getBookingTryAllParks(id: string, opts: { deadlineAt?: number } = {}): Promise<{
   booking: MultiparkBooking;
   parkConfig: ParkConfig;
 } | null> {
   const parks = getConfiguredParks();
   for (const park of parks) {
+    if (opts.deadlineAt && Date.now() >= opts.deadlineAt) break;
     try {
       const apiKey = getParkApiKey(park);
       if (!apiKey) continue;
       const booking = await multiparkRequest<MultiparkBooking>({
-        path: `/bookings/${id}`,
+        path: `/bookings/${encodeURIComponent(id)}`,
         apiKey,
+        ...(opts.deadlineAt ? { maxAttempts: 1, timeoutMs: Math.max(1, Math.min(4000, opts.deadlineAt - Date.now())) } : {}),
       });
       if (booking?.id) return { booking, parkConfig: park };
     } catch {
@@ -314,7 +366,7 @@ export async function getBookingTryAllParks(id: string): Promise<{
 
 /** Check if MultiPark API is configured */
 export function isMultiparkConfigured(): boolean {
-  return !!ENV.multiparkApiKey;
+  return !!ENV.multiparkApiKey || getConfiguredParks().length > 0;
 }
 
 /** List parks (public endpoint, no auth needed) */

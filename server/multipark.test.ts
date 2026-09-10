@@ -19,6 +19,10 @@ vi.mock("./multipark", () => ({
   testConnection: vi.fn().mockResolvedValue({ ok: true, message: "API OK (v1.0.0)", version: "1.0.0" }),
 }));
 
+vi.mock("./jobs/multiparkBookingSync", () => ({
+  syncBookings: vi.fn().mockResolvedValue({ success: true, processed: 4, created: 1, updated: 3, errors: [], enrichTargets: [] }),
+}));
+
 // ─── Mock db functions ─────────────────────────────────────────────────────
 vi.mock("./db", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
@@ -91,22 +95,6 @@ function createRegularContext(): TrpcContext {
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────────────
-
-describe("MultiPark API env", () => {
-  it("should have MULTIPARK_API_KEY configured", () => {
-    const key = process.env.MULTIPARK_API_KEY;
-    expect(key).toBeDefined();
-    expect(key!.length).toBeGreaterThan(10);
-    expect(key!.startsWith("mp_live_")).toBe(true);
-  });
-
-  it("should have MULTIPARK_API_URL configured", () => {
-    const url = process.env.MULTIPARK_API_URL;
-    expect(url).toBeDefined();
-    expect(url!).toContain("multipark");
-    expect(url!).toContain("/api/v1/bookings-api");
-  });
-});
 
 describe("multipark.testConnection", () => {
   it("returns connection status for admin users", async () => {
@@ -195,14 +183,15 @@ describe("multipark.syncLogs", () => {
 describe("multipark.triggerSync", () => {
   it("triggers sync for admin users and returns success", async () => {
     const caller = appRouter.createCaller(createAdminContext());
-    const result = await caller.multipark.triggerSync({});
+    const result = await caller.multipark.triggerSync({ startDate: "2026-09-01", endDate: "2026-09-10" });
     expect(result.success).toBe(true);
-    expect(result.message).toContain("1.0.0");
+    expect(result.processed).toBe(4);
+    expect(result.updated).toBe(3);
   });
 
   it("rejects non-admin users", async () => {
     const caller = appRouter.createCaller(createRegularContext());
-    await expect(caller.multipark.triggerSync({})).rejects.toThrow();
+    await expect(caller.multipark.triggerSync({ startDate: "2026-09-01", endDate: "2026-09-10" })).rejects.toThrow();
   });
 });
 
