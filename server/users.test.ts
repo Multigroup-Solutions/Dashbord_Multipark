@@ -106,6 +106,38 @@ describe("users", () => {
     ).rejects.toThrow();
   });
 
+  it("toggleActive accepts an optional reason + notes", async () => {
+    const caller = appRouter.createCaller(createCtx({ role: "super_admin" }));
+    const result = await caller.users.toggleActive({
+      userId: 2,
+      isActive: false,
+      reason: "roubou",
+      notes: "Faltou dinheiro na caixa",
+    });
+    expect(result).toEqual({ success: true });
+  });
+
+  it("toggleActive rejects a reason outside the vocabulary", async () => {
+    const caller = appRouter.createCaller(createCtx({ role: "super_admin" }));
+    await expect(
+      caller.users.toggleActive({ userId: 2, isActive: false, reason: "porque_sim" as any })
+    ).rejects.toThrow();
+  });
+
+  it("toggleActive requires the free text when the reason is \"outro\"", async () => {
+    const caller = appRouter.createCaller(createCtx({ role: "super_admin" }));
+    await expect(
+      caller.users.toggleActive({ userId: 2, isActive: false, reason: "outro" })
+    ).rejects.toThrow(/"Outro"/);
+  });
+
+  it("toggleActive rejects notes longer than the column", async () => {
+    const caller = appRouter.createCaller(createCtx({ role: "super_admin" }));
+    await expect(
+      caller.users.toggleActive({ userId: 2, isActive: false, notes: "x".repeat(2001) })
+    ).rejects.toThrow();
+  });
+
   it("updateRole is accessible to super_admin", async () => {
     const caller = appRouter.createCaller(createCtx({ role: "super_admin" }));
     const result = await caller.users.updateRole({ userId: 2, role: "team_leader" });

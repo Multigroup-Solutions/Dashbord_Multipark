@@ -472,6 +472,14 @@ export const employees = mysqlTable("employees", {
 	blockedByDocs: tinyint().default(0).notNull(),
 	blockedByPenalties: tinyint().default(0).notNull(),
 	blockedManually: tinyint().default(0).notNull(),
+	// 0071 — motivo da desativação da FICHA (mesmo vocabulário do utilizador;
+	// ver users.deactivationReason). Vive aqui também porque há fichas sem
+	// conta associada e a ficha tem de mostrar o motivo.
+	deactivationReason: varchar({ length: 48 }),
+	deactivationReasonOther: varchar({ length: 200 }),
+	deactivationNotes: text(),
+	deactivatedAt: timestamp({ mode: 'string' }),
+	deactivatedById: int(),
 });
 
 // Candidaturas de condutores vindas do website multidriver ("Be a Driver").
@@ -1568,6 +1576,15 @@ export const users = mysqlTable("users", {
 	lastSignedIn: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	department: varchar({ length: 128 }),
 	isActive: tinyint().default(1).notNull(),
+	// 0071 — POR QUE RAZÃO está desativado. `deactivationReason` guarda o CÓDIGO
+	// de shared/deactivationReasons.ts (nunca a etiqueta); o texto livre só
+	// existe quando o código é `outro`. Reativar põe tudo a NULL — o histórico
+	// completo fica em `activity_logs`.
+	deactivationReason: varchar({ length: 48 }),
+	deactivationReasonOther: varchar({ length: 200 }),
+	deactivationNotes: text(),
+	deactivatedAt: timestamp({ mode: 'string' }),
+	deactivatedById: int(),
 },
 (table) => [
 	uniqueIndex("users_openId_unique").on(table.openId),

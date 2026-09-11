@@ -49,6 +49,8 @@ import {
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { pt } from "date-fns/locale";
+import { DeactivationDialog, type DeactivationSubmitValues } from "@/components/DeactivationDialog";
+import { DEFAULT_DEACTIVATION_REASON, deactivationReasonLabel } from "@shared/deactivationReasons";
 
 const ROLES = [
   { value: "super_admin", label: "Super Admin", color: "bg-purple-100 text-purple-800 border-purple-200" },
@@ -126,13 +128,27 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
     onError: (e) => toast.error("Erro: " + e.message),
   });
 
+  // Desativar NUNCA é imediato: abre o pop-up que pede motivo + notas
+  // (`deactivating`). Ativar é directo — não há nada a perguntar.
+  const [deactivating, setDeactivating] = useState<{ id: number; name: string } | null>(null);
+
   const toggleActiveMutation = trpc.users.toggleActive.useMutation({
     onSuccess: (_, vars) => {
-      toast.success(vars.isActive ? "Utilizador ativado" : "Utilizador desativado");
+      toast.success(
+        vars.isActive
+          ? "Utilizador ativado"
+          : `Utilizador desativado — ${deactivationReasonLabel(vars.reason ?? DEFAULT_DEACTIVATION_REASON, vars.reasonOther)}`,
+      );
       utils.users.list.invalidate();
+      setDeactivating(null);
     },
     onError: (e) => toast.error("Erro: " + e.message),
   });
+
+  function confirmDeactivation(values: DeactivationSubmitValues) {
+    if (!deactivating) return;
+    toggleActiveMutation.mutate({ userId: deactivating.id, isActive: false, ...values });
+  }
 
   const updateRoleMutation = trpc.users.updateRole.useMutation({
     onSuccess: () => {
@@ -458,7 +474,14 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                             <Switch
                               checked={Boolean(u.isActive)}
                               onCheckedChange={(checked) => {
-                                toggleActiveMutation.mutate({ userId: u.id, isActive: checked });
+                                // Desativar passa pelo pop-up (motivo + notas);
+                                // o switch fica controlado por `u.isActive`, por
+                                // isso não se mexe enquanto o diálogo está aberto.
+                                if (checked) {
+                                  toggleActiveMutation.mutate({ userId: u.id, isActive: true });
+                                } else {
+                                  setDeactivating({ id: u.id, name: u.name ?? u.email ?? `#${u.id}` });
+                                }
                               }}
                               className="scale-75"
                             />
@@ -470,6 +493,19 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                           <Badge variant={u.isActive ? "default" : "destructive"} className="text-xs">
                             {u.isActive ? "Ativo" : "Inativo"}
                           </Badge>
+                        )}
+                        {/* Motivo da desativação actual (as notas ficam no tooltip) */}
+                        {!u.isActive && u.deactivationReason && (
+                          <p
+                            className="text-[11px] text-muted-foreground mt-1 max-w-[180px] truncate"
+                            title={[
+                              deactivationReasonLabel(u.deactivationReason, u.deactivationReasonOther),
+                              u.deactivationNotes ? `Notas: ${u.deactivationNotes}` : null,
+                              u.deactivatedAt ? `Desativado em ${format(new Date(u.deactivatedAt), "dd MMM yyyy HH:mm", { locale: pt })}` : null,
+                            ].filter(Boolean).join("\n")}
+                          >
+                            {deactivationReasonLabel(u.deactivationReason, u.deactivationReasonOther)}
+                          </p>
                         )}
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">
@@ -555,6 +591,18 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
 
       {/* Permissões do utilizador */}
       {permUser && <UserPermissionsDialog user={permUser} onClose={() => setPermUser(null)} />}
+
+      {/* Desativar: motivo + notas (opcionais) */}
+      <DeactivationDialog
+        open={!!deactivating}
+        subjectName={deactivating?.name ?? ""}
+        subjectKind="utilizador"
+        effectNote="O acesso à plataforma é bloqueado imediatamente."
+        pending={toggleActiveMutation.isPending}
+        onOpenChange={(v) => { if (!v) setDeactivating(null); }}
+        onConfirm={confirmDeactivation}
+      />
+
 
       {/* Create/Edit Modal */}
       <Dialog open={showModal} onOpenChange={setShowModal}>

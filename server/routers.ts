@@ -12,6 +12,14 @@ import { storagePut } from "./storage";
 import { resolveExpenseVisibility, expenseConditions, whereAll, canSeeExpense, canSeeAggregates, type ExpenseListFilters, type ExpenseVisibility } from "./expenseScope";
 import { parseExpenseAmount } from "../shared/expenseAmount";
 import { CLOTHING_MAX_ITEMS, CLOTHING_MAX_QTY, CLOTHING_SIZES, CLOTHING_TYPES, normalizeClothingItems } from "../shared/clothing";
+import {
+  DEACTIVATION_NOTES_MAX,
+  DEACTIVATION_REASON_CODES,
+  DEACTIVATION_REASON_OTHER_MAX,
+  resolveDeactivation,
+  type DeactivationInput,
+  type ResolvedDeactivation,
+} from "../shared/deactivationReasons";
 import { dayToMysql, lisbonToday } from "../shared/expensePeriods";
 import { expenseTotals } from "../shared/expenseTotals";
 import { getBillingData, getAnnualBreakdown } from "./finance/compat";
@@ -70,6 +78,7 @@ import {
   getRhDashboardSummary,
   updateUser,
   toggleUserActive,
+  deactivationColumns,
   getUserById,
   getSuperAdmins,
   getProjects,
@@ -471,6 +480,19 @@ function cleanText(v: string | null | undefined): string | null | undefined {
 
 function dayOrBadRequest(day: string, label: string): string {
   try { return dayToMysql(day); } catch { throw new TRPCError({ code: "BAD_REQUEST", message: `${label} inválida (usa AAAA-MM-DD)` }); }
+}
+
+/**
+ * Motivo/notas da desativação pela regra ÚNICA de shared/deactivationReasons.ts
+ * (usada pelos DOIS caminhos: `users.toggleActive` e `rh.setActive`). A mensagem
+ * em PT do validador é a que chega ao utilizador.
+ */
+function resolveDeactivationOrThrow(input: DeactivationInput): ResolvedDeactivation {
+  try {
+    return resolveDeactivation(input);
+  } catch (err: any) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: err?.message || "Motivo de desativação inválido" });
+  }
 }
 
 // ─── RH: quem está a ver (permissões por finalidade — server/rhAccess.ts) ────
@@ -1119,19 +1141,34 @@ export const appRouter = router({
         return { success: true };
       }),
     toggleActive: protectedProcedure
-      .input(z.object({ userId: z.number(), isActive: z.boolean() }))
+      .input(z.object({
+        userId: z.number(),
+        isActive: z.boolean(),
+        // Motivo + notas: OPCIONAIS e só lidos na desativação (sem motivo =
+        // `inatividade`). Vocabulário e regra em shared/deactivationReasons.ts.
+        reason: z.enum(DEACTIVATION_REASON_CODES).optional(),
+        reasonOther: z.string().max(DEACTIVATION_REASON_OTHER_MAX).optional(),
+        notes: z.string().max(DEACTIVATION_NOTES_MAX).optional(),
+      }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "super_admin");
         if (input.userId === ctx.user.id) {
           throw new Error("Não podes desativar a tua própria conta");
         }
-        await toggleUserActive(input.userId, input.isActive);
+        const deactivation = input.isActive ? null : resolveDeactivationOrThrow(input);
+        await toggleUserActive(
+          input.userId,
+          input.isActive,
+          deactivation ? { ...deactivation, byUserId: ctx.user.id } : null,
+        );
         await logActivity({
           userId: ctx.user.id,
           action: input.isActive ? "activate" : "deactivate",
           entity: "user",
           entityId: input.userId,
-          details: input.isActive ? "Utilizador ativado" : "Utilizador desativado",
+          details: deactivation
+            ? `Utilizador desativado — ${deactivation.summary}`
+            : "Utilizador ativado",
         });
          return { success: true };
       }),
@@ -2665,22 +2702,36 @@ export const appRouter = router({
     // Ativa/desativa o colaborador E, em cascata, o utilizador associado
     // (login + notificações por email param imediatamente). Útil p/ extras.
     setActive: protectedProcedure
-      .input(z.object({ id: z.number(), isActive: z.boolean() }))
+      .input(z.object({
+        id: z.number(),
+        isActive: z.boolean(),
+        // Mesmo contrato de `users.toggleActive`: motivo + notas opcionais, só
+        // lidos na desativação (ver shared/deactivationReasons.ts).
+        reason: z.enum(DEACTIVATION_REASON_CODES).optional(),
+        reasonOther: z.string().max(DEACTIVATION_REASON_OTHER_MAX).optional(),
+        notes: z.string().max(DEACTIVATION_NOTES_MAX).optional(),
+      }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "admin");
         const found = await getEmployeeById(input.id);
         if (!found) throw new TRPCError({ code: "NOT_FOUND", message: "Colaborador não encontrado" });
-        await updateEmployee(input.id, { isActive: input.isActive ? 1 : 0 } as any);
+        const deactivation = input.isActive ? null : resolveDeactivationOrThrow(input);
+        const meta = deactivation ? { ...deactivation, byUserId: ctx.user.id } : null;
+        await updateEmployee(input.id, {
+          isActive: input.isActive ? 1 : 0,
+          ...deactivationColumns(input.isActive, meta),
+        });
         const userId = found.employee.userId;
-        if (userId) await toggleUserActive(userId, input.isActive);
+        // O motivo segue para a conta: a ficha e o login contam a MESMA história.
+        if (userId) await toggleUserActive(userId, input.isActive, meta);
         await logActivity({
           userId: ctx.user.id,
           action: input.isActive ? "activate" : "deactivate",
           entity: "employee",
           entityId: input.id,
-          details: `${input.isActive ? "Ativado" : "Desativado"} colaborador ${found.employee.fullName}${userId ? " + utilizador" : ""}`,
+          details: `${input.isActive ? "Ativado" : "Desativado"} colaborador ${found.employee.fullName}${userId ? " + utilizador" : ""}${deactivation ? ` — ${deactivation.summary}` : ""}`,
         });
-        return { success: true, cascadedUser: !!userId };
+        return { success: true, cascadedUser: !!userId, reasonLabel: deactivation?.label ?? null };
       }),
 
     uploadPhoto: protectedProcedure

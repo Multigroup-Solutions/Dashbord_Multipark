@@ -22,6 +22,11 @@ página de extras vazia + telefones "inválidos").
   nas fichas onde foram escritos ao contrário; reutiliza `normalizePhoneE164`
   daqui para classificar e copia o padrão da fusão de duplicados (plano puro
   testado, dry-run por defeito, `activity_logs` com `userId = 0`).
+- `user-deactivation-reason.md` — **2026-09-11**: desativar passou a pedir
+  motivo + notas num pop-up. `users.isActive = 0` (a porta de acesso descrita
+  aqui) ganhou um POR QUÊ: `users.deactivationReason` e as suas irmãs (0071),
+  também em `employees`. `rh.setActive` continua a cascatear para a conta e
+  agora leva o motivo com ele.
 - `sync-runners-topology.md` — os dois entrypoints (Railway `index.ts` e Vercel
   `api-entry.ts`) montam ambos o OAuth e o `/api/v1`; qualquer alteração ao
   login vale para os dois.

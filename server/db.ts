@@ -129,6 +129,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0068").then(m => ({ s: m.MIGRATION_0068_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0068 })),
       import("./migrations/migration_0069").then(m => ({ s: m.MIGRATION_0069_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0069 })),
       import("./migrations/migration_0070").then(m => ({ s: m.MIGRATION_0070_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0070 })),
+      import("./migrations/migration_0071").then(m => ({ s: m.MIGRATION_0071_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0071 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -296,16 +297,57 @@ export async function updateUser(userId: number, data: { name?: string; email?: 
   if (data.email !== undefined) updates.email = normalizeEmail(data.email);
   if (data.role !== undefined) updates.role = data.role;
   if (data.department !== undefined) updates.department = data.department;
-  if (data.isActive !== undefined) updates.isActive = data.isActive ? 1 : 0;
+  if (data.isActive !== undefined) {
+    updates.isActive = data.isActive ? 1 : 0;
+    // Quem muda o estado por aqui segue a mesma regra do botão: reativar limpa
+    // o motivo, desativar sem motivo fica em branco (ver 0071).
+    Object.assign(updates, deactivationColumns(data.isActive));
+  }
   if (Object.keys(updates).length > 0) {
     await db.update(users).set(updates).where(eq(users.id, userId));
   }
 }
 
-export async function toggleUserActive(userId: number, isActive: boolean) {
+/**
+ * Motivo + notas da desativação, já validados por `resolveDeactivation`
+ * (shared/deactivationReasons.ts). `byUserId` = quem carregou no botão.
+ */
+export type DeactivationRecord = {
+  reason: string | null;
+  reasonOther: string | null;
+  notes: string | null;
+  byUserId?: number | null;
+};
+
+/** Colunas de desativação (partilhadas por `users` e `employees`, 0071). */
+export function deactivationColumns(isActive: boolean, meta?: DeactivationRecord | null) {
+  // Reativar LIMPA o motivo: as colunas descrevem a desativação ACTUAL. O que
+  // aconteceu antes continua em `activity_logs`.
+  if (isActive) {
+    return {
+      deactivationReason: null,
+      deactivationReasonOther: null,
+      deactivationNotes: null,
+      deactivatedAt: null,
+      deactivatedById: null,
+    };
+  }
+  return {
+    deactivationReason: meta?.reason ?? null,
+    deactivationReasonOther: meta?.reasonOther ?? null,
+    deactivationNotes: meta?.notes ?? null,
+    deactivatedAt: toMysqlDateTime(new Date()),
+    deactivatedById: meta?.byUserId ?? null,
+  };
+}
+
+export async function toggleUserActive(userId: number, isActive: boolean, meta?: DeactivationRecord | null) {
   const db = await getDb();
   if (!db) return;
-  await db.update(users).set({ isActive: isActive ? 1 : 0 }).where(eq(users.id, userId));
+  await db
+    .update(users)
+    .set({ isActive: isActive ? 1 : 0, ...deactivationColumns(isActive, meta) })
+    .where(eq(users.id, userId));
 }
 
 export async function getUserById(userId: number) {

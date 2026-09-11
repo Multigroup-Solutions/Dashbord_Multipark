@@ -59,7 +59,9 @@ export function canViewTimeAndSchedule(v: RhViewer, e: EmployeeRef): boolean {
   return v.role === "team_leader";
 }
 
-const SENSITIVE_FIELDS = ["nif", "nib", "address", "birthDate", "nationality", "monthlySalary", "mealAllowancePerDay", "loginBlockedReason", "docsWarningAt", "personalEmail", "personalPhone"] as const;
+// O MOTIVO/notas da desativação (0071) seguem a mesma regra do motivo de
+// bloqueio: quem só vê a lista operacional vê "Inativo", nunca o porquê.
+const SENSITIVE_FIELDS = ["nif", "nib", "address", "birthDate", "nationality", "monthlySalary", "mealAllowancePerDay", "loginBlockedReason", "docsWarningAt", "personalEmail", "personalPhone", "deactivationReason", "deactivationReasonOther", "deactivationNotes", "deactivatedById"] as const;
 
 /** Remove campos sensíveis quando o visualizador não os pode ver. */
 export function sanitizeEmployee<T extends Record<string, any>>(v: RhViewer, emp: T): T {

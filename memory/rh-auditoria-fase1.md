@@ -50,6 +50,13 @@ dados pessoais, faltas validadas por humanos, fecho mensal imutável.
   estimativa viva. Os valores ao vivo são ESTIMATIVA, não ordenado.
 
 ## Permissões e dados pessoais (`server/rhAccess.ts`)
+
+> **Relacionado — `user-deactivation-reason.md` (2026-09-11)**: o motivo e as
+> notas da desativação (colunas novas de 0071) entraram na lista
+> `SENSITIVE_FIELDS` deste módulo, a par de `loginBlockedReason` — quem só vê a
+> lista operacional vê "Inativo", nunca o porquê. Desativar ≠ bloquear: as
+> flags `blockedByDocs`/`blockedByPenalties`/`blockedManually` continuam a ser
+> outra coisa.
 - `RhViewer` (role, employeeId, scopeProjectIds). Colaborador vê só a própria
   ficha; supervisor vê a sua cidade; admin+ tudo. `sanitizeEmployee` retira
   NIF/NIB/morada/nascimento/nacionalidade/salário para quem não é admin+.

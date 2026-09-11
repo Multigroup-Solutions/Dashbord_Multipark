@@ -5,6 +5,8 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { RecruitmentSection } from "@/components/RecruitmentSection";
 import { trpc } from "@/lib/trpc";
 import { fmtPTDateTime, fmtPTDate } from "@/lib/lisbonTime";
+import { DeactivationDialog } from "@/components/DeactivationDialog";
+import { deactivationReasonLabel } from "@shared/deactivationReasons";
 import { toCsv } from "@shared/csv";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 
@@ -1240,11 +1242,16 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
     },
     onError: (e) => toast.error(e.message),
   });
+  // Desativar abre o pop-up que pede motivo + notas (opcionais); reativar é
+  // uma confirmação simples — não há nada a perguntar.
+  const [showDeactivate, setShowDeactivate] = useState(false);
   const setActive = trpc.rh.setActive.useMutation({
     onSuccess: (r) => {
       utils.rh.byId.invalidate({ id: employeeId });
       utils.rh.list.invalidate();
-      toast.success(r.cascadedUser ? "Estado alterado (colaborador + login)" : "Estado alterado");
+      const scope = r.cascadedUser ? " (colaborador + login)" : "";
+      toast.success(r.reasonLabel ? `Desativado${scope} — ${r.reasonLabel}` : `Estado alterado${scope}`);
+      setShowDeactivate(false);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -1336,23 +1343,45 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
         <Badge variant={emp.isActive ? "default" : "secondary"} className={emp.isActive ? "bg-green-600" : "bg-muted text-muted-foreground"}>
           {emp.isActive ? "Ativo" : "Inativo"}
         </Badge>
+        {/* Motivo da desativação actual — as notas e a data ficam no tooltip */}
+        {!emp.isActive && emp.deactivationReason && (
+          <span
+            className="text-xs text-muted-foreground"
+            title={[
+              emp.deactivationNotes ? `Notas: ${emp.deactivationNotes}` : null,
+              emp.deactivatedAt ? `Desativado em ${fmtPTDateTime(emp.deactivatedAt)}` : null,
+            ].filter(Boolean).join("\n") || undefined}
+          >
+            {deactivationReasonLabel(emp.deactivationReason, emp.deactivationReasonOther)}
+          </span>
+        )}
         <div className="flex-1" />
         {!editing && (
           <Button
             variant={emp.isActive ? "outline" : "default"}
             disabled={setActive.isPending}
             onClick={() => {
-              const turningOff = !!emp.isActive;
-              if (!confirm(turningOff
-                ? `Desativar ${emp.fullName}? O login e as notificações por email ficam imediatamente bloqueados.`
-                : `Reativar ${emp.fullName}? Volta a ter acesso e a receber emails.`)) return;
-              setActive.mutate({ id: employeeId, isActive: !emp.isActive });
+              if (emp.isActive) {
+                setShowDeactivate(true);
+                return;
+              }
+              if (!confirm(`Reativar ${emp.fullName}? Volta a ter acesso e a receber emails.`)) return;
+              setActive.mutate({ id: employeeId, isActive: true });
             }}
           >
             {emp.isActive ? <X className="w-4 h-4 mr-2" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
             {emp.isActive ? "Desativar" : "Reativar"}
           </Button>
         )}
+        <DeactivationDialog
+          open={showDeactivate}
+          subjectName={emp.fullName}
+          subjectKind="colaborador"
+          effectNote="O login e as notificações por email ficam imediatamente bloqueados."
+          pending={setActive.isPending}
+          onOpenChange={setShowDeactivate}
+          onConfirm={(values) => setActive.mutate({ id: employeeId, isActive: false, ...values })}
+        />
         {!editing ? (
           <Button variant="outline" onClick={startEditing}>
             <Pencil className="w-4 h-4 mr-2" /> Editar
