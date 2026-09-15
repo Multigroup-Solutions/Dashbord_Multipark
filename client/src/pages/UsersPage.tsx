@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
+import { UserEmployeeLinks } from '@/components/UserEmployeeLinks';
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -102,6 +103,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
   const [search, setSearch] = useState("");
   const [filterRole, setFilterRole] = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
+  const [filterEmployee, setFilterEmployee] = useState("all");
 
   // Create/Edit modal
   const [showModal, setShowModal] = useState(false);
@@ -197,9 +199,10 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
         filterStatus === "all" ||
         (filterStatus === "active" && u.isActive) ||
         (filterStatus === "inactive" && !u.isActive);
-      return matchSearch && matchRole && matchStatus;
+      const matchEmployee = filterEmployee === 'all' || (filterEmployee === 'with' ? u.employees.length > 0 : u.employees.length === 0);
+      return matchSearch && matchRole && matchStatus && matchEmployee;
     });
-  }, [users, search, filterRole, filterStatus]);
+  }, [users, search, filterRole, filterStatus, filterEmployee]);
 
   // Stats
   const stats = useMemo(() => {
@@ -341,7 +344,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
       {/* Filters */}
       <Card>
         <CardContent className="p-4">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
@@ -382,6 +385,14 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                 ))}
               </SelectContent>
             </Select>
+            <Select value={filterEmployee} onValueChange={setFilterEmployee}>
+              <SelectTrigger aria-label="Filtrar por ficha RH"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todas as ligações RH</SelectItem>
+                <SelectItem value="with">Com ficha RH</SelectItem>
+                <SelectItem value="without">Sem ficha RH</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </CardContent>
       </Card>
@@ -412,6 +423,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                     <TableHead className="w-12"></TableHead>
                     <TableHead>Nome</TableHead>
                     <TableHead>Email</TableHead>
+                    <TableHead>Ficha RH</TableHead>
                     <TableHead>Role</TableHead>
                     <TableHead>Departamento</TableHead>
                     <TableHead>Estado</TableHead>
@@ -447,6 +459,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                       <TableCell className="text-sm text-muted-foreground">
                         {u.email ?? "—"}
                       </TableCell>
+                      <TableCell><UserEmployeeLinks employees={u.employees} /></TableCell>
                       <TableCell>
                         {isSuperAdmin && u.id !== currentUser?.id ? (
                           <Select
@@ -635,6 +648,10 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
+            {editingUser && <div className="rounded-md border p-3 space-y-2">
+              <p className="text-sm font-medium">Ficha RH</p>
+              <UserEmployeeLinks employees={editingUser.employees ?? []} />
+            </div>}
             <div className="space-y-1.5">
               <Label htmlFor="name">Nome *</Label>
               <Input
