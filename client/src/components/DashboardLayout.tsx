@@ -641,6 +641,7 @@ function DashboardLayoutContent({
           <div className="flex items-center gap-3">
             {/* City filter */}
             <Select
+              disabled={filters.cities.length <= 1}
               value={filters.cityId === null ? "all" : String(filters.cityId)}
               onValueChange={(v) => filters.setCityId(v === "all" ? null : Number(v))}
             >
@@ -648,7 +649,7 @@ function DashboardLayoutContent({
                 <SelectValue placeholder="Cidade" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">Todas as cidades</SelectItem>
+                <SelectItem value="all">{filters.cities.length === 0 ? "Sem cidade atribuída" : "Todas as cidades"}</SelectItem>
                 {filters.cities.map((city) => (
                   <SelectItem key={city.id} value={String(city.id)}>
                     {city.name}
@@ -695,12 +696,13 @@ function DashboardLayoutContent({
                 <div className="space-y-1.5">
                   <Label className="text-xs">Cidade</Label>
                   <Select
-                    value={filters.cityId === null ? "all" : String(filters.cityId)}
+                    disabled={filters.cities.length <= 1}
+              value={filters.cityId === null ? "all" : String(filters.cityId)}
                     onValueChange={(v) => filters.setCityId(v === "all" ? null : Number(v))}
                   >
                     <SelectTrigger className="w-full h-9"><SelectValue placeholder="Cidade" /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="all">Todas as cidades</SelectItem>
+                      <SelectItem value="all">{filters.cities.length === 0 ? "Sem cidade atribuída" : "Todas as cidades"}</SelectItem>
                       {filters.cities.map((city) => (
                         <SelectItem key={city.id} value={String(city.id)}>{city.name}</SelectItem>
                       ))}
@@ -810,7 +812,14 @@ function DashboardLayoutContent({
           </div>
         </div>
 
-        <main className="flex-1 p-4 lg:p-6 min-w-0 overflow-x-hidden pb-20 md:pb-6" style={{ backgroundColor: '#F0F4FF' }}>{children}</main>
+        <main className="flex-1 p-4 lg:p-6 min-w-0 overflow-x-hidden pb-20 md:pb-6" style={{ backgroundColor: '#F0F4FF' }}>
+          {filters.isLoading ? <p>A verificar o acesso às cidades…</p> : filters.missingCostCenter && location !== '/perfil' ? (
+            <div role="status" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+              <strong>Sem centro de custos atribuído.</strong> O acesso às cidades fica indisponível até à atribuição.
+              <a href="/perfil" className="block mt-2 underline">Abrir o meu perfil</a>
+            </div>
+          ) : children}
+        </main>
         {/* Tab bar mobile (design Multipark Mobile) — só em ecrãs pequenos */}
         <MobileTabBar />
       </SidebarInset>

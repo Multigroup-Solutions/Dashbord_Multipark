@@ -47,7 +47,22 @@ const requireUser = t.middleware(async opts => {
 
   const user = await applyPermissionElevation(ctx.user);
 
+  const { loadCityAccess, isPersonalAccessPath, hasForeignCityFilter, scopeCityQuery, MISSING_COST_CENTRE_MESSAGE } = await import('../cityAccess');
+  let scopedInput: unknown;
+  let scopeInput = false;
+  if (!isPersonalAccessPath(opts.path)) {
+    const access = await loadCityAccess(user.id);
+    if (access.missingCostCenter) throw new TRPCError({ code: 'FORBIDDEN', message: MISSING_COST_CENTRE_MESSAGE });
+    const raw = await opts.getRawInput();
+    if (hasForeignCityFilter(access, raw)) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Este projeto não pertence à cidade do teu centro de custos.' });
+    }
+    scopedInput = scopeCityQuery(opts.path, access, raw);
+    scopeInput = scopedInput !== raw;
+  }
+
   return next({
+    ...(scopeInput ? { getRawInput: async () => scopedInput } : {}),
     ctx: {
       ...ctx,
       user,
