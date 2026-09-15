@@ -9,13 +9,15 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Trash2, PlayCircle, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { comparePeriods, lisbonToday } from "@shared/expensePeriods";
+import { useGlobalFilters } from '@/contexts/GlobalFiltersContext';
 
 const fmtEur = (v: any) => parseFloat(String(v || 0)).toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
 
 // ─── DESPESAS RECORRENTES (modelos) ───────────────────────────────────────────
 export function RecurringExpensesDialog({ open, onClose, categories, projects }: { open: boolean; onClose: () => void; categories: any[]; projects: any[] }) {
+  const { projectId } = useGlobalFilters();
   const utils = trpc.useUtils();
-  const { data: list = [] } = trpc.expenses.recurring.list.useQuery(undefined, { enabled: open });
+  const { data: list = [] } = trpc.expenses.recurring.list.useQuery({ projectId }, { enabled: open });
   const [f, setF] = useState<any>({ description: "", supplier: "", amount: "", dayOfMonth: "1", categoryId: "", projectId: "" });
   const refresh = () => utils.expenses.recurring.list.invalidate();
   const create = trpc.expenses.recurring.create.useMutation({ onSuccess: () => { setF({ description: "", supplier: "", amount: "", dayOfMonth: "1", categoryId: "", projectId: "" }); refresh(); toast.success("Modelo criado"); }, onError: (e) => toast.error(e.message) });
@@ -39,7 +41,7 @@ export function RecurringExpensesDialog({ open, onClose, categories, projects }:
         <DialogHeader><DialogTitle>Despesas recorrentes (fixas do mês)</DialogTitle></DialogHeader>
         <div className="flex items-start justify-between gap-3 -mt-2">
           <p className="text-xs text-muted-foreground">Cada modelo gera uma despesa por mês (no dia indicado), lançada automaticamente pelo processo diário. Confirmas/pagas depois na lista normal.</p>
-          <Button size="sm" variant="outline" className="shrink-0 gap-1.5" disabled={generate.isPending} onClick={() => generate.mutate({ year: ty, month: tm })}>
+          <Button size="sm" variant="outline" className="shrink-0 gap-1.5" disabled={generate.isPending} onClick={() => generate.mutate({ year: ty, month: tm, projectId })}>
             {generate.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PlayCircle className="h-3.5 w-3.5" />}
             Lançar as deste mês
           </Button>

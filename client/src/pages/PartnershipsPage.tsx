@@ -23,7 +23,7 @@ import { Link, useLocation } from "wouter";
 import { PARTNER_TYPES, PARTNER_CATEGORIES, getPartnerType, partnerCategoryOf, parsePartnerConfig, serializePartnerConfig, partnerFormFields } from "@shared/partnerTypes";
 import { toast } from "sonner";
 
-const fmt = (v: number) => new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR" }).format(v);
+const fmt = (v: number | null) => v == null ? "Indisponível" : new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR" }).format(v);
 
 // ── Partner Form Dialog ──────────────────────────────────────────────────────
 
@@ -295,7 +295,7 @@ export default function PartnershipsPage() {
 
   // Queries
   const { data: analyticsData, isLoading: analyticsLoading } = trpc.partnerships.analytics.useQuery({ from, to, projectId });
-  const { data: partnerList = [] } = trpc.partnerships.list.useQuery({});
+  const { data: partnerList = [] } = trpc.partnerships.list.useQuery({ projectId });
   const utils = trpc.useUtils();
   const deleteMut = trpc.partnerships.delete.useMutation({ onSuccess: () => utils.partnerships.list.invalidate() });
   const syncApiMut = trpc.partnerships.syncFromApi.useMutation({
@@ -832,18 +832,23 @@ function InvoicingSummaryTab({
 }) {
   const [, setLocation] = useLocation();
   const [typeFilter, setTypeFilter] = useState<string>("all");
+  const { projectId } = useGlobalFilters();
 
   const { data: rows = [], isLoading } = trpc.partnerships.invoicingSummary.useQuery({
-    from, to,
+    from, to, projectId,
     partnerType: typeFilter !== "all" ? typeFilter : undefined,
   });
 
+  const { data: cityAccess } = trpc.permissions.myCityAccess.useQuery();
+  const billingAvailable = !!cityAccess?.all && projectId == null;
+  const amountsAvailable = rows.every(row => row.aFaturar != null);
+
   const totals = useMemo(() => {
     return rows.reduce((acc, r) => {
-      acc.aFaturar += r.aFaturar;
-      acc.faturado += r.faturado;
-      acc.pendente += r.pendente;
-      acc.emAtraso += r.emAtraso;
+      acc.aFaturar += r.aFaturar ?? 0;
+      acc.faturado += r.faturado ?? 0;
+      acc.pendente += r.pendente ?? 0;
+      acc.emAtraso += r.emAtraso ?? 0;
       return acc;
     }, { aFaturar: 0, faturado: 0, pendente: 0, emAtraso: 0 });
   }, [rows]);
@@ -873,31 +878,32 @@ function InvoicingSummaryTab({
         </div>
       </div>
 
+      {!billingAvailable && <p role="status" className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">Reservas e receitas limitadas à cidade selecionada. Faturas globais, saldos e avenças sem cidade atribuída estão indisponíveis nesta vista.</p>}
       {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Card className="p-4">
           <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
             <Euro className="w-3 h-3" /> A faturar
           </p>
-          <p className="text-2xl font-bold text-blue-700">{fmt(totals.aFaturar)}</p>
+          <p className="text-2xl font-bold text-blue-700">{fmt(amountsAvailable ? totals.aFaturar : null)}</p>
         </Card>
         <Card className="p-4">
           <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
             <FileText className="w-3 h-3" /> Já faturado
           </p>
-          <p className="text-2xl font-bold text-emerald-700">{fmt(totals.faturado)}</p>
+          <p className="text-2xl font-bold text-emerald-700">{fmt(billingAvailable ? totals.faturado : null)}</p>
         </Card>
         <Card className="p-4">
           <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
             <Wallet className="w-3 h-3" /> Pendente
           </p>
-          <p className="text-2xl font-bold text-orange-700">{fmt(totals.pendente)}</p>
+          <p className="text-2xl font-bold text-orange-700">{fmt(billingAvailable ? totals.pendente : null)}</p>
         </Card>
         <Card className="p-4">
           <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
             <AlertTriangle className="w-3 h-3" /> Em atraso
           </p>
-          <p className="text-2xl font-bold text-red-700">{fmt(totals.emAtraso)}</p>
+          <p className="text-2xl font-bold text-red-700">{fmt(billingAvailable ? totals.emAtraso : null)}</p>
         </Card>
       </div>
 
@@ -943,10 +949,10 @@ function InvoicingSummaryTab({
                           <td colSpan={2} className="p-2 font-semibold text-xs uppercase">{cat.label} · {catRows.length}</td>
                           <td className="p-2 text-right tabular-nums text-xs font-medium">{sub.n}</td>
                           <td className="p-2 text-right tabular-nums text-xs font-medium">{fmt(sub.rev)}</td>
-                          <td className="p-2 text-right tabular-nums text-xs font-medium text-blue-700">{fmt(sub.af)}</td>
-                          <td className="p-2 text-right tabular-nums text-xs font-medium text-emerald-700">{fmt(sub.f)}</td>
-                          <td className="p-2 text-right tabular-nums text-xs font-medium text-orange-700">{fmt(sub.p)}</td>
-                          <td className="p-2 text-right tabular-nums text-xs font-medium text-red-700">{sub.ea > 0 ? fmt(sub.ea) : "—"}</td>
+                          <td className="p-2 text-right tabular-nums text-xs font-medium text-blue-700">{fmt(catRows.every(r => r.aFaturar != null) ? sub.af : null)}</td>
+                          <td className="p-2 text-right tabular-nums text-xs font-medium text-emerald-700">{fmt(billingAvailable ? sub.f : null)}</td>
+                          <td className="p-2 text-right tabular-nums text-xs font-medium text-orange-700">{fmt(billingAvailable ? sub.p : null)}</td>
+                          <td className="p-2 text-right tabular-nums text-xs font-medium text-red-700">{!billingAvailable ? 'Indisponível' : sub.ea > 0 ? fmt(sub.ea) : '—'}</td>
                         </tr>
                         {catRows.map((r: any) => {
                     const t = getPartnerType(r.partnerType);
@@ -967,7 +973,7 @@ function InvoicingSummaryTab({
                         <td className="p-2 text-right tabular-nums text-emerald-700">{fmt(r.faturado)}</td>
                         <td className="p-2 text-right tabular-nums text-orange-700 font-medium">{fmt(r.pendente)}</td>
                         <td className="p-2 text-right tabular-nums">
-                          {r.emAtraso > 0 ? (
+                          {r.emAtraso == null ? 'Indisponível' : r.emAtraso > 0 ? (
                             <span className="text-red-700 font-medium inline-flex items-center gap-1">
                               <AlertTriangle className="w-3 h-3" />
                               {fmt(r.emAtraso)}
@@ -987,10 +993,10 @@ function InvoicingSummaryTab({
                 <tfoot>
                   <tr className="bg-muted/50 font-bold border-t-2">
                     <td className="p-2" colSpan={4}>TOTAL</td>
-                    <td className="p-2 text-right tabular-nums text-blue-700">{fmt(totals.aFaturar)}</td>
-                    <td className="p-2 text-right tabular-nums text-emerald-700">{fmt(totals.faturado)}</td>
-                    <td className="p-2 text-right tabular-nums text-orange-700">{fmt(totals.pendente)}</td>
-                    <td className="p-2 text-right tabular-nums text-red-700">{fmt(totals.emAtraso)}</td>
+                    <td className="p-2 text-right tabular-nums text-blue-700">{fmt(amountsAvailable ? totals.aFaturar : null)}</td>
+                    <td className="p-2 text-right tabular-nums text-emerald-700">{fmt(billingAvailable ? totals.faturado : null)}</td>
+                    <td className="p-2 text-right tabular-nums text-orange-700">{fmt(billingAvailable ? totals.pendente : null)}</td>
+                    <td className="p-2 text-right tabular-nums text-red-700">{fmt(billingAvailable ? totals.emAtraso : null)}</td>
                   </tr>
                 </tfoot>
               </table>

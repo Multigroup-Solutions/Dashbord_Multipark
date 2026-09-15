@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useGlobalFilters } from '@/contexts/GlobalFiltersContext';
 import { trpc } from "@/lib/trpc";
 import { UniDateNav } from "@/components/DateRangeNav";
 import { fmtPTTime } from "@/lib/lisbonTime";
@@ -31,11 +32,12 @@ function deriveShortName(fullName: string): string {
 const fmtEur = (n: number) => n.toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
 
 export default function AvaliacaoOperacionalPage() {
+  const { projectId } = useGlobalFilters();
   const [date, setDate] = useState(todayISO());
 
-  const assignmentsQ = trpc.extrasDia.assignments.useQuery({ date });
+  const assignmentsQ = trpc.extrasDia.assignments.useQuery({ date, projectId });
   const assignments = assignmentsQ.data ?? [];
-  const evaluationQ = trpc.multipark.dayEvaluation.useQuery({ date });
+  const evaluationQ = trpc.multipark.dayEvaluation.useQuery({ date, projectId });
   const evaluation = evaluationQ.data;
 
   return (
@@ -282,6 +284,7 @@ function BulkActions({ date, agents }: { date: string; agents: string[] }) {
 }
 
 function AgentCard({ assignment, date, metrics }: { assignment: any; date: string; metrics?: any }) {
+  const { projectId } = useGlobalFilters();
   const utils = trpc.useUtils();
   const [expanded, setExpanded] = useState(false);
   const [editingName, setEditingName] = useState(false);
@@ -300,7 +303,7 @@ function AgentCard({ assignment, date, metrics }: { assignment: any; date: strin
     onError: (e) => toast.error(e.message),
   });
   const summaryQ = trpc.multipark.agentHistorySummary.useQuery(
-    { agentName: resolvedShortName, date },
+    { agentName: resolvedShortName, date, projectId },
     { enabled: expanded },
   );
 

@@ -12,6 +12,7 @@
  *    pela Google (valor de conversão / gasto). Sem denominador → null.
  *  - Datas de calendário (strings), sem conversão UTC.
  */
+import { scopedProjectIds } from '../../cityScope';
 import { and, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { getDb, resolveProjectIds } from "../../db";
 import { marketingExpenses, multiparkBookings } from "../../../drizzle/schema";
@@ -25,7 +26,9 @@ export interface MarketingStatsFilters { from: string; to: string; projectId?: n
 export async function getMarketingStats(f: MarketingStatsFilters) {
   if (!ISO.test(f.from) || !ISO.test(f.to)) throw new Error("Datas inválidas (AAAA-MM-DD)");
   const db = await getDb();
-  const projectIds = f.projectId ? await resolveProjectIds(f.projectId) : null;
+  const requestedIds = f.projectId ? await resolveProjectIds(f.projectId) : null;
+  const allowedIds = scopedProjectIds();
+  const projectIds = allowedIds ? (requestedIds ? requestedIds.filter(id => allowedIds.includes(id)) : allowedIds) : requestedIds;
   const ads = await getAdMetrics({ from: f.from, to: f.to, projectIds });
   const conn = await getConnection();
 

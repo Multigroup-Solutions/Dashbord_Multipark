@@ -43,7 +43,7 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
     totals: { ...emptyTotals(), ...derivedRatios(emptyTotals()) }, byDay: [], byCampaign: [],
     coverage: coverageFor(f.from, f.to, new Set(), new Set(), null, today), budgetEstimate: 0, unmappedCampaigns: 0, apiConnected: false,
   };
-  if (!db) return empty;
+  if (!db || f.projectIds?.length === 0) return empty;
   const projectFilter = f.projectIds && f.projectIds.length ? f.projectIds : null;
 
   // ── API (fonte oficial) ───────────────────────────────────────────────────

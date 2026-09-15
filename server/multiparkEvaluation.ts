@@ -1,3 +1,4 @@
+import { cityNameScope, bookingHistoryScope } from './cityScope';
 import { extrasDiaAssignments } from "../drizzle/schema";
 
 /**
@@ -87,6 +88,7 @@ export async function evaluateDay(date: string): Promise<DayEvaluation> {
     .from(multiparkBookingHistory)
     .where(
       and(
+        bookingHistoryScope(multiparkBookingHistory.bookingExternalId),
         gte(multiparkBookingHistory.actionTime, startStr),
         lt(multiparkBookingHistory.actionTime, endStr),
       ),
@@ -269,6 +271,7 @@ export async function getDashboardRange(
     .from(extrasDiaAssignments)
     .where(
       and(
+        cityNameScope(extrasDiaAssignments.city),
         gte(extrasDiaAssignments.assignmentDate, startDate),
         lte(extrasDiaAssignments.assignmentDate, endDate),
       ),
@@ -352,6 +355,7 @@ export async function getDashboardRange(
     .from(multiparkBookingHistory)
     .where(
       and(
+        bookingHistoryScope(multiparkBookingHistory.bookingExternalId),
         gte(multiparkBookingHistory.actionTime, startStr),
         lt(multiparkBookingHistory.actionTime, endStr),
       ),

@@ -11,6 +11,7 @@
  *     garante uma ocorrência por modelo/mês mesmo que o lock falhe (ER_DUP_ENTRY
  *     é tratado como "já existia").
  */
+import { projectScope } from './cityScope';
 import { and, eq, sql } from "drizzle-orm";
 import { expenses, recurringExpenses } from "../drizzle/schema";
 import { getDb, getSuperAdmins } from "./db";
@@ -50,7 +51,7 @@ export async function generateRecurringExpensesForMonth(
   let created = 0;
   let skipped = 0;
   try {
-    const templates = await tx.select().from(recurringExpenses).where(eq(recurringExpenses.active, 1));
+    const templates = await tx.select().from(recurringExpenses).where(and(eq(recurringExpenses.active, 1), projectScope(recurringExpenses.projectId)));
     if (templates.length === 0) return { period, created, skipped, lockAcquired: lockOk };
 
     let fallbackUser: number | null = actorUserId ?? null;

@@ -13,6 +13,7 @@
  * Restrições individuais (deny `finance.view_totals`) prevalecem sobre o
  * perfil; um filtro visual nunca alarga o acesso — só o restringe.
  */
+import { projectScope, scopedProjectIds } from './cityScope';
 import { and, eq, gte, inArray, like, lte, or, sql, type SQL } from "drizzle-orm";
 import { expenses } from "../drizzle/schema";
 import { dayBounds } from "../shared/expensePeriods";
@@ -65,6 +66,8 @@ export function canSeeExpense(
   vis: ExpenseVisibility,
   row: { insertedById: number; projectId: number | null },
 ): boolean {
+  const cityIds = scopedProjectIds();
+  if (cityIds && (row.projectId == null || !cityIds.includes(row.projectId))) return false;
   switch (vis.kind) {
     case "all": return true;
     case "none": return false;
@@ -101,7 +104,7 @@ export interface ExpenseListFilters {
 
 /** Traduz filtros + visibilidade em condições drizzle (AND). */
 export function expenseConditions(filters: ExpenseListFilters, vis: ExpenseVisibility): SQL[] {
-  const c: SQL[] = [];
+  const c: SQL[] = [projectScope(expenses.projectId)];
   const { start, end } = dayBounds(filters.startDate, filters.endDate);
   if (start) c.push(gte(expenses.expenseDate, start));
   if (end) c.push(lte(expenses.expenseDate, end));

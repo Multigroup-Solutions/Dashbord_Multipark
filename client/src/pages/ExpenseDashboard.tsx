@@ -1,3 +1,4 @@
+import { useGlobalFilters } from '@/contexts/GlobalFiltersContext';
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -76,13 +77,14 @@ function StatCard({
 }
 
 export default function ExpenseDashboard() {
+  const { projectId } = useGlobalFilters();
   const { user } = useAuth();
   const utils = trpc.useUtils();
 
   // stats/upcomingPayments são admin-only no servidor — não chamar sem permissão
   const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
-  const { data: stats, isLoading: statsLoading } = trpc.expenses.stats.useQuery(undefined, { enabled: isAdmin });
-  const { data: upcoming, isLoading: upcomingLoading } = trpc.expenses.upcomingPayments.useQuery(undefined, { enabled: isAdmin });
+  const { data: stats, isLoading: statsLoading } = trpc.expenses.stats.useQuery({ projectId }, { enabled: isAdmin });
+  const { data: upcoming, isLoading: upcomingLoading } = trpc.expenses.upcomingPayments.useQuery({ projectId }, { enabled: isAdmin });
 
   const checkOverdueMutation = trpc.expenses.checkOverdue.useMutation({
     onSuccess: (data) => {

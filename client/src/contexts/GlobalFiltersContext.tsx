@@ -50,9 +50,13 @@ export function GlobalFiltersProvider({ children }: { children: ReactNode }) {
     return list.sort((a: any, b: any) => a.name.localeCompare(b.name));
   }, [allProjects, cityAccess]);
 
-  const cityId = cityAccess?.all ? selectedCityId : cityAccess?.defaultCityId ?? null;
+  const allowedSelection = selectedCityId != null && cities.some(c => c.id === selectedCityId);
+  const cityId = allowedSelection ? selectedCityId : cityAccess?.all ? null : cityAccess?.defaultCityId ?? null;
   const setCityId = (id: number | null) => {
-    if (cityAccess?.all) setSelectedCityId(id);
+    if ((id === null && cityAccess?.all) || (id != null && cities.some(c => c.id === id))) {
+      setSelectedCityId(id);
+      setBrandId(null);
+    }
   };
   useEffect(() => {
     if (cityAccess && !cityAccess.all) setBrandId(null);
@@ -85,8 +89,8 @@ export function GlobalFiltersProvider({ children }: { children: ReactNode }) {
   }, [allProjects, cityId]);
 
   // When city changes and selected brand is no longer valid, reset brand
-  useMemo(() => {
-    if (brandId !== null && brands.length > 0) {
+  useEffect(() => {
+    if (brandId !== null) {
       const brandExists = brands.some((b) => b.id === brandId);
       if (!brandExists) {
         setBrandId(null);

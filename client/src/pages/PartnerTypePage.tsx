@@ -1,3 +1,4 @@
+import { useGlobalFilters } from '@/contexts/GlobalFiltersContext';
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -12,6 +13,7 @@ import { getPartnerType, PARTNER_TYPES } from "@shared/partnerTypes";
 const fmt = (v: number) => new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR" }).format(v);
 
 export default function PartnerTypePage() {
+  const { projectId } = useGlobalFilters();
   const [, params] = useRoute("/parcerias/tipo/:typeId");
   const [, setLocation] = useLocation();
   const typeId = params?.typeId ?? "outro";
@@ -23,7 +25,7 @@ export default function PartnerTypePage() {
   const [from, setFrom] = useState(monthStart);
   const [to, setTo] = useState(monthEnd);
 
-  const { data, isLoading } = trpc.partnerships.invoicingDetailByType.useQuery({ from, to, partnerType: typeId });
+  const { data, isLoading, error } = trpc.partnerships.invoicingDetailByType.useQuery({ from, to, partnerType: typeId, projectId });
   const partners = data?.partners ?? [];
 
   const totals = useMemo(() => {
@@ -44,6 +46,8 @@ export default function PartnerTypePage() {
   const showCashback = cm === "own_campaign";
   const showOperated = cm === "operational";
   const isProInvoice = cm === "monthly_invoice_discount";
+
+  if (error) return <p role="alert" className="p-4 text-sm text-destructive">{error.message}</p>;
 
   return (
     <div className="space-y-6">

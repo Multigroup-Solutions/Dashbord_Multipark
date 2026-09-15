@@ -61,9 +61,9 @@ export const PERMISSIONS: PermissionDef[] = [
   {
     id: "city.all",
     label: "Todas as cidades",
-    description: "Vê os parques de todas as cidades (equivalente a centro de custos de grupo).",
+    description: "Acrescenta acesso a todas as cidades. Exige sempre um centro de custos válido.",
     category: "Cidades",
-    defaultBehavior: "Admin e super_admin veem sempre todas; os restantes só a(s) sua(s).",
+    defaultBehavior: "O centro de custos de grupo concede todas. Os restantes precisam de autorização explícita e de centro de custos válido.",
   },
 ];
 
