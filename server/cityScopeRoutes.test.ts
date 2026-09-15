@@ -67,6 +67,8 @@ describe('consultas dos módulos respeitam a autorização sem filtros do client
     await expect(caller().marketing.importCampaignCsv({ csv: 'ficheiro de demonstração' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
   it('a ficha e a disponibilidade exigem que a pessoa pertença à cidade autorizada', async () => {
+    expect(await caller().rh.byId({ id: 7 })).toMatchObject({ employee: { id: 7, projectId: 50 } });
+    await expect(caller().rh.byId({ id: 8 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(await caller().rh.accountSummary({ employeeId: 7 })).toBeNull();
     expect(await caller().extrasAvailability.forEmployee({ employeeId: 7, weekStart: '2026-09-14' })).toMatchObject({ submitted: false });
     await expect(caller().rh.accountSummary({ employeeId: 8 })).rejects.toMatchObject({ code: 'FORBIDDEN' });

@@ -224,7 +224,20 @@ export async function getUserByOpenId(openId: string) {
 export async function getAllUsers() {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(users).where(userScope(users.id)).orderBy(desc(users.createdAt));
+  const accounts = await db.select().from(users).where(userScope(users.id)).orderBy(desc(users.createdAt));
+  if (!accounts.length) return [];
+  // Return only navigation data, and only employee records in the viewer's cities.
+  // Keep every linked record visible so duplicate links are never chosen silently.
+  const links = await db.select({ id: employees.id, userId: employees.userId,
+    fullName: employees.fullName, isActive: employees.isActive, projectName: projects.name })
+    .from(employees).leftJoin(projects, eq(projects.id, employees.projectId))
+    .where(and(inArray(employees.userId, accounts.map(u => u.id)), projectScope(employees.projectId)))
+    .orderBy(desc(employees.isActive), asc(employees.id));
+  const byUser = new Map<number, typeof links>();
+  for (const person of links) {
+    if (person.userId != null) byUser.set(person.userId, [...(byUser.get(person.userId) ?? []), person]);
+  }
+  return accounts.map(account => ({ ...account, employees: byUser.get(account.id) ?? [] }));
 }
 
 export async function updateUserRole(userId: number, role: string) {

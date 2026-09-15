@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from "react";
+import { useSearch, useLocation } from 'wouter';
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -1228,7 +1229,7 @@ function EmployeeAlertsCard({ employeeId }: { employeeId: number }) {
 // ─── EMPLOYEE DETAIL ──────────────────────────────────────────────────────────
 function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: () => void }) {
   const utils = trpc.useUtils();
-  const { data, isLoading } = trpc.rh.byId.useQuery({ id: employeeId });
+  const { data, isLoading, error } = trpc.rh.byId.useQuery({ id: employeeId });
   const { data: allUsers = [] } = trpc.users.list.useQuery();
   const { data: projectsList = [] } = trpc.projects.list.useQuery();
   const [editing, setEditing] = useState(false);
@@ -1331,7 +1332,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
   const ef = (k: string, v: any) => setEditForm(f => ({ ...f, [k]: v }));
 
   if (isLoading) return <div className="p-8 text-center text-muted-foreground">A carregar...</div>;
-  if (!data) return <div className="p-8 text-center text-muted-foreground">Colaborador não encontrado</div>;
+  if (!data) return <div className="p-8 text-center space-y-3"><p role="alert" className="text-muted-foreground">{error?.message ?? 'Colaborador não encontrado'}</p><Button variant="outline" onClick={onBack}>Voltar ao RH</Button></div>;
 
   const emp = data.employee;
 
@@ -2378,6 +2379,8 @@ function PayrollPage({ onBack }: { onBack: () => void }) {
 // com o hub da página Disponibilidade) — com email completo, anexos e notas.
 
 export default function HRPage() {
+  const queryString = useSearch();
+  const [, navigate] = useLocation();
   const { user } = useAuth();
   const userRole = user?.role ?? "user";
   const isExtra = userRole === "extra" || userRole === "user";
@@ -2402,6 +2405,16 @@ export default function HRPage() {
   const [showImport, setShowImport] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
   const [showUsers, setShowUsers] = useState(false);
+
+  useEffect(() => {
+    const raw = new URLSearchParams(queryString).get('employeeId');
+    const id = raw && /^\d+$/.test(raw) ? Number(raw) : null;
+    if (id == null || !Number.isSafeInteger(id) || id <= 0 || isExtra) return;
+    setSelectedId(id);
+    setShowUsers(false);
+    setShowPayroll(false);
+    setShowDashboard(false);
+  }, [queryString, isExtra, setSelectedId]);
 
   // Filtro GLOBAL de cidade/centro (topo da app) aplicado também ao RH
   const globalFilters = useGlobalFilters();
@@ -2467,7 +2480,7 @@ export default function HRPage() {
   }
 
   if (selectedId !== null) {
-    return <EmployeeDetail employeeId={selectedId} onBack={() => setSelectedId(null)} />;
+    return <EmployeeDetail key={selectedId} employeeId={selectedId} onBack={() => { setSelectedId(null); navigate('/rh', { replace: true }); }} />;
   }
 
   const exportEmployeesCSV = () => {
