@@ -60,7 +60,7 @@ export function registerGoogleAdsRoutes(app: Express) {
       const tokens = await exchangeCodeForTokens(code, getOrigin(req));
       const cfg = readGoogleAdsConfig();
       await storeRefreshToken(tokens, st.userId, cfg.loginCustomerId);
-      // descobre as contas (não bloqueia a ligação se falhar — o developer token pode ainda não estar aprovado)
+      // descobre as contas (não bloqueia a ligação se o acesso do projeto Cloud ainda não estiver aprovado)
       let discovered = "";
       try {
         const r = await refreshAccounts();
@@ -81,8 +81,8 @@ export function registerGoogleAdsRoutes(app: Express) {
 
   // ── 3. cron (GitHub Actions / Vercel) ─────────────────────────────────────
   app.get("/api/cron/google-ads", async (req: Request, res: Response) => {
-    const secret = process.env.CRON_SECRET;
-    if (secret && req.headers["authorization"] !== `Bearer ${secret}`) { res.status(401).json({ error: "Unauthorized" }); return; }
+    const secret = process.env.CRON_SECRET?.trim();
+    if (!secret || req.headers["authorization"] !== `Bearer ${secret}`) { res.status(401).json({ error: "Unauthorized" }); return; }
     const kindRaw = String(req.query.kind ?? "hourly");
     const kind = (["hourly", "nightly", "monthly", "initial"] as const).includes(kindRaw as any) ? (kindRaw as any) : "hourly";
     try {
