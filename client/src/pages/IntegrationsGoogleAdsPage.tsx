@@ -85,7 +85,7 @@ export default function IntegrationsGoogleAdsPage() {
               <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
               <div>
                 <p className="font-medium">Falta configurar o servidor antes de ligar.</p>
-                <p>Variáveis em falta: <code className="bg-white/60 px-1 rounded">{missingOAuth.join(", ")}</code>. Vê o bloco “Google Ads” do .env.example: projeto Google Cloud próprio, cliente OAuth “Web application” com o endereço de retorno abaixo, e o developer token do Centro da API.</p>
+                <p>Variáveis em falta: <code className="bg-white/60 px-1 rounded">{missingOAuth.join(", ")}</code>. Configura o cliente OAuth no servidor com o endereço de retorno abaixo. O projeto Google Cloud precisa de acesso Exploração ou superior para consultar contas reais.</p>
               </div>
             </div>
           )}
@@ -143,7 +143,7 @@ export default function IntegrationsGoogleAdsPage() {
         <CardContent>
           <p className="text-xs text-muted-foreground mb-3">Seleciona as contas que a dashboard deve consultar e associa cada uma a uma marca ou cidade. Campanhas sem associação entram no total geral e ficam assinaladas no Marketing.</p>
           {(accounts.data ?? []).length === 0 ? (
-            <p className="text-sm text-muted-foreground py-4 text-center">{s?.status === "connected" ? "Sem contas listadas. Carrega em “Atualizar lista” (precisa do developer token aprovado)." : "Liga o Google Ads para listar as contas."}</p>
+            <p className="text-sm text-muted-foreground py-4 text-center">{s?.status === "connected" ? "Sem contas listadas. Carrega em “Atualizar lista” e confirma o acesso do projeto Google Cloud à API." : "Liga o Google Ads para listar as contas."}</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

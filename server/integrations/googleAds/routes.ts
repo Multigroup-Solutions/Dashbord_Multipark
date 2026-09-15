@@ -60,7 +60,7 @@ export function registerGoogleAdsRoutes(app: Express) {
       const tokens = await exchangeCodeForTokens(code, getOrigin(req));
       const cfg = readGoogleAdsConfig();
       await storeRefreshToken(tokens, st.userId, cfg.loginCustomerId);
-      // descobre as contas (não bloqueia a ligação se falhar — o developer token pode ainda não estar aprovado)
+      // descobre as contas (não bloqueia a ligação se o acesso do projeto Cloud ainda não estiver aprovado)
       let discovered = "";
       try {
         const r = await refreshAccounts();
