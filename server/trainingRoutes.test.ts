@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+vi.mock('./cityAccess', async original => ({ ...await original<object>(), loadCityAccess: async () => ({ all: true, cityIds: [10], projectIds: [10, 11], missingCostCenter: false }) }));
 const f = vi.hoisted(() => ({ saveQuiz: vi.fn(), saveExam: vi.fn(), attempts: vi.fn(), notify: vi.fn(), archive: vi.fn() }));
 vi.mock('./db', async original => ({
   ...await original<object>(),

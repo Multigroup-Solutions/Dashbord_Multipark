@@ -128,6 +128,7 @@ export function DashboardFilterBar({
       <div>
         <Label className="text-xs mb-1 block">Cidade</Label>
         <Select
+          disabled={globalFilters.cities.length <= 1}
           value={cityId !== null ? String(cityId) : "all"}
           onValueChange={(v) => {
             onCityChange(v === "all" ? null : Number(v));

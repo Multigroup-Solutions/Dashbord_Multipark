@@ -28,7 +28,7 @@ export function CityMultiSelect({
   const { data: access } = trpc.permissions.myCityAccess.useQuery();
 
   const cities = useMemo(() => {
-    if (!allProjects) return [] as { id: number; name: string }[];
+    if (!allProjects || !access) return [] as { id: number; name: string }[];
     let list = (allProjects as any[])
       .filter((p) => p.level === "city")
       .map((p) => ({ id: p.id, name: p.name }));
@@ -59,7 +59,7 @@ export function CityMultiSelect({
   if (locked) {
     return (
       <Badge variant="outline" className={`gap-1.5 h-9 px-3 text-[13px] font-medium ${className ?? ""}`}>
-        <MapPin className="w-3.5 h-3.5" /> {cities[0]?.name ?? "—"}
+        <MapPin className="w-3.5 h-3.5" /> {cities[0]?.name ?? "Sem cidade atribuída"}
       </Badge>
     );
   }

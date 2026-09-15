@@ -1241,7 +1241,10 @@ export const appRouter = router({
   projects: router({
     list: protectedProcedure.query(async ({ ctx }) => {
       requireRole(ctx.user.role, "extra"); // extra precisa dos nomes (tarefas); user não acede
-      return getProjects();
+      const { loadCityAccess } = await import("./cityAccess");
+      const access = await loadCityAccess(ctx.user.id);
+      const rows = await getProjects();
+      return access.all ? rows : rows.filter(p => access.projectIds.includes(p.id));
     }),
     getById: protectedProcedure
       .input(z.object({ id: z.number() }))
@@ -2279,37 +2282,10 @@ export const appRouter = router({
         return { success: true };
       }),
 
-    // Cidades a que o utilizador tem acesso: a do centro de custos + extras
-    // por permissão. Admin+ (ou centro de custos de grupo) = todas.
+    // A cidade depende exclusivamente do centro de custos, incluindo administradores.
     myCityAccess: protectedProcedure.query(async ({ ctx }) => {
-      const all = { all: true as const, defaultCityId: null as number | null, cityIds: [] as number[] };
-      if (["admin", "super_admin"].includes(ctx.user.role)) return all;
-      const { getEmployeeByUserId, getUserPermissionOverrides, getDb } = await import("./db");
-      const ov = await getUserPermissionOverrides(ctx.user.id);
-      if (ov["city.all"] === "grant") return all;
-      const me = await getEmployeeByUserId(ctx.user.id);
-      if (!me?.employee?.projectId) return all; // sem ficha/centro de custos → não restringe
-      const db = await getDb();
-      if (!db) return all;
-      const { projects } = await import("../drizzle/schema");
-      const rows = await db.select({ id: projects.id, name: projects.name, level: projects.level, parentId: projects.parentId }).from(projects);
-      const byId = new Map(rows.map((p) => [p.id, p]));
-      // sobe a árvore até encontrar a cidade; grupo = vê tudo
-      let node = byId.get(me.employee.projectId) ?? null;
-      while (node && node.level !== "city") {
-        if (node.level === "group") return all;
-        node = node.parentId != null ? byId.get(node.parentId) ?? null : null;
-      }
-      if (!node) return all;
-      const cityIds = new Set<number>([node.id]);
-      const CITY_PERM_NAMES: Record<string, string> = { "city.extra.lisbon": "lisboa", "city.extra.porto": "porto", "city.extra.faro": "faro" };
-      for (const [perm, cityName] of Object.entries(CITY_PERM_NAMES)) {
-        if (ov[perm] === "grant") {
-          const c = rows.find((p) => p.level === "city" && p.name.trim().toLowerCase() === cityName);
-          if (c) cityIds.add(c.id);
-        }
-      }
-      return { all: false as const, defaultCityId: node.id, cityIds: Array.from(cityIds) };
+      const { loadCityAccess } = await import("./cityAccess");
+      return loadCityAccess(ctx.user.id);
     }),
   }),
 
@@ -7470,6 +7446,7 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
         return getMultiparkBookings({
+          city: input?.city,
           status: input?.status,
           parkingType: input?.parkingType,
           from: input?.from ? new Date(input.from) : undefined,

@@ -15,6 +15,8 @@ export default function ProfilePage() {
   const [, navigate] = useLocation();
   const { data: myStatus } = trpc.rh.timeRecords.myStatus.useQuery();
 
+  const { data: cityAccess } = trpc.permissions.myCityAccess.useQuery();
+
   const initials = (user?.name ?? "?")
     .split(/\s+/).filter(Boolean).map((p: string) => p[0]).slice(0, 2).join("").toUpperCase();
 
@@ -57,6 +59,11 @@ export default function ProfilePage() {
         </span>
       </div>
 
+      {cityAccess?.missingCostCenter && (
+        <div role="status" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+          <strong>Sem centro de custos atribuído.</strong> O acesso às cidades fica indisponível até à atribuição.
+        </div>
+      )}
       {/* Atalhos */}
       <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
         {rows.map((r, i) => (

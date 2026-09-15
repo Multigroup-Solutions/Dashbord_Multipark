@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useMemo, useEffect, useRef, type ReactNode } from "react";
+import { createContext, useContext, useState, useMemo, useEffect, type ReactNode } from "react";
 import { trpc } from "@/lib/trpc";
 
 interface DateRange {
@@ -19,6 +19,7 @@ interface GlobalFiltersState {
   brands: { id: number; name: string }[];
   /** Project IDs matching current city+brand filter */
   projectIds: number[] | undefined;
+  missingCostCenter: boolean;
   /** Single projectId for tRPC queries (undefined = no filter) */
   projectId: number | undefined;
   isLoading: boolean;
@@ -27,7 +28,7 @@ interface GlobalFiltersState {
 const GlobalFiltersContext = createContext<GlobalFiltersState | null>(null);
 
 export function GlobalFiltersProvider({ children }: { children: ReactNode }) {
-  const [cityId, setCityId] = useState<number | null>(null);
+  const [selectedCityId, setSelectedCityId] = useState<number | null>(null);
   const [brandId, setBrandId] = useState<number | null>(null);
   const [dateRange, setDateRange] = useState<DateRange>({ from: null, to: null });
 
@@ -35,10 +36,10 @@ export function GlobalFiltersProvider({ children }: { children: ReactNode }) {
   // Acesso por cidade (pedido Jorge): cada um vê a cidade do seu centro de
   // custos (+ extras por permissão); admin/grupo vê todas. O seletor global só
   // mostra as permitidas e entra por defeito na cidade da pessoa.
-  const { data: cityAccess } = trpc.permissions.myCityAccess.useQuery();
+  const { data: cityAccess, isLoading: accessLoading, error: accessError } = trpc.permissions.myCityAccess.useQuery();
 
   const cities = useMemo(() => {
-    if (!allProjects) return [];
+    if (!allProjects || !cityAccess) return [];
     let list = allProjects
       .filter((p: any) => p.level === "city")
       .map((p: any) => ({ id: p.id, name: p.name }));
@@ -49,17 +50,13 @@ export function GlobalFiltersProvider({ children }: { children: ReactNode }) {
     return list.sort((a: any, b: any) => a.name.localeCompare(b.name));
   }, [allProjects, cityAccess]);
 
-  // Entrada por defeito: a cidade do centro de custos (uma vez por sessão)
-  const appliedDefaultCity = useRef(false);
+  const cityId = cityAccess?.all ? selectedCityId : cityAccess?.defaultCityId ?? null;
+  const setCityId = (id: number | null) => {
+    if (cityAccess?.all) setSelectedCityId(id);
+  };
   useEffect(() => {
-    if (appliedDefaultCity.current || !cityAccess) return;
-    if (!cityAccess.all && cityAccess.defaultCityId != null) {
-      appliedDefaultCity.current = true;
-      setCityId((prev) => prev ?? cityAccess.defaultCityId);
-    } else {
-      appliedDefaultCity.current = true;
-    }
-  }, [cityAccess]);
+    if (cityAccess && !cityAccess.all) setBrandId(null);
+  }, [cityAccess?.all, cityAccess?.defaultCityId]);
 
   const brands = useMemo(() => {
     if (!allProjects) return [];
@@ -148,6 +145,7 @@ export function GlobalFiltersProvider({ children }: { children: ReactNode }) {
     <GlobalFiltersContext.Provider
       value={{
         cityId,
+        missingCostCenter: cityAccess?.missingCostCenter ?? !!accessError,
         brandId,
         dateRange,
         setCityId,
@@ -157,7 +155,7 @@ export function GlobalFiltersProvider({ children }: { children: ReactNode }) {
         brands,
         projectIds,
         projectId,
-        isLoading,
+        isLoading: isLoading || accessLoading,
       }}
     >
       {children}
