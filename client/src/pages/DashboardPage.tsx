@@ -113,7 +113,7 @@ export default function DashboardPage() {
   // expenses.stats é admin-only no servidor — não chamar sem permissão
   const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
   // ── Queries (dados reais da BD) ──
-  const { data: expStats, isLoading: expLoading } = trpc.expenses.stats.useQuery(undefined, { enabled: isAdmin });
+  const { data: expStats, isLoading: expLoading } = trpc.expenses.stats.useQuery({ projectId: globalFilters.projectId }, { enabled: isAdmin });
   const { data: bookingStats, isLoading: bkLoading } = trpc.multipark.bookingStats.useQuery({ projectId: globalFilters.projectId });
   const { data: complaintStats, isLoading: compLoading } = trpc.complaints.stats.useQuery();
   const { data: reviewStats, isLoading: revLoading } = trpc.reviews.stats.useQuery();

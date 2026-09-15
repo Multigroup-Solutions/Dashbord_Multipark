@@ -2,6 +2,7 @@ import { NOT_ADMIN_ERR_MSG, UNAUTHED_ERR_MSG } from '@shared/const';
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
+import { cityScope } from '../cityScope';
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
@@ -16,6 +17,7 @@ export const publicProcedure = t.procedure;
 // para não custar uma query em cada chamada.
 const ROLE_RANK: Record<string, number> = { super_admin: 7, admin: 6, supervisor: 5, team_leader: 4, backoffice: 3, frontoffice: 2, extra: 1, user: 0 };
 const tlGrantCache = new Map<number, { value: boolean; expiresAt: number }>();
+export function invalidatePermissionElevation(userId: number) { tlGrantCache.delete(userId); }
 async function hasTeamLeaderGrant(userId: number): Promise<boolean> {
   const hit = tlGrantCache.get(userId);
   if (hit && Date.now() < hit.expiresAt) return hit.value;
@@ -47,7 +49,8 @@ const requireUser = t.middleware(async opts => {
 
   const user = await applyPermissionElevation(ctx.user);
 
-  const { loadCityAccess, isPersonalAccessPath, hasForeignCityFilter, scopeCityQuery, MISSING_COST_CENTRE_MESSAGE } = await import('../cityAccess');
+  const { loadCityAccess, isPersonalAccessPath, hasForeignCityFilter, scopeCityQuery, selectedCityAccess, MISSING_COST_CENTRE_MESSAGE } = await import('../cityAccess');
+  let requestAccess: Awaited<ReturnType<typeof loadCityAccess>> | undefined;
   let scopedInput: unknown;
   let scopeInput = false;
   if (!isPersonalAccessPath(opts.path)) {
@@ -59,15 +62,19 @@ const requireUser = t.middleware(async opts => {
     }
     scopedInput = scopeCityQuery(opts.path, access, raw);
     scopeInput = scopedInput !== raw;
+    requestAccess = opts.type === 'query' || opts.path === 'expenses.recurring.generateMonth'
+      ? await selectedCityAccess(access, scopedInput) : access;
   }
 
-  return next({
-    ...(scopeInput ? { getRawInput: async () => scopedInput } : {}),
-    ctx: {
-      ...ctx,
-      user,
-    },
-  });
+  const proceed = async () => {
+    const { assertScopedOperation } = await import('../cityScopeGuards');
+    await assertScopedOperation(opts.path, opts.type, scopedInput);
+    return next({
+      ...(scopeInput ? { getRawInput: async () => scopedInput } : {}),
+      ctx: { ...ctx, user },
+    });
+  };
+  return requestAccess ? cityScope.run(requestAccess, proceed) : proceed();
 });
 
 export const protectedProcedure = t.procedure.use(requireUser);

@@ -67,6 +67,7 @@ const FIELD_POSITIONS = ["driver", "senior_driver", "extra", "frontoffice", "tea
 
 // Novo DashboardTab: range de datas + KPIs + per-driver in-shift vs out-of-shift
 function DashboardTab() {
+  const { projectId } = useGlobalFilters();
   const [preset, setPreset] = useState<"today" | "yesterday" | "last7" | "last30" | "month" | "custom">("today");
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
@@ -97,7 +98,7 @@ function DashboardTab() {
   }, [preset, customStart, customEnd]);
 
   const { data, isLoading } = trpc.multipark.dashboardRange.useQuery(
-    { startDate, endDate },
+    { startDate, endDate, projectId },
     { enabled: !!startDate && !!endDate },
   );
   const dailySort = useTableSort(((data?.daily ?? []) as any[]));
@@ -314,9 +315,10 @@ function DashboardTab() {
 // km e horas do GPS Zello. O GPS de um dia é recolhido às 2h da manhã
 // SEGUINTE — para "hoje" só há ações; os km chegam amanhã.
 function DayActivityTab() {
+  const { projectId } = useGlobalFilters();
   const yesterday = (() => { const d = new Date(); d.setDate(d.getDate() - 1); const pad = (n: number) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; })();
   const [date, setDate] = usePersistedState("operacional.dia.date", yesterday);
-  const { data, isLoading } = trpc.multipark.dayActivity.useQuery({ date }, { refetchOnWindowFocus: false });
+  const { data, isLoading } = trpc.multipark.dayActivity.useQuery({ date, projectId }, { refetchOnWindowFocus: false });
   const totals = data?.totals;
   const people = data?.people ?? [];
   const daySort = useTableSort(people as any[]);
@@ -401,6 +403,7 @@ function DayActivityTab() {
 // ─── DRIVER HISTORY TAB ─────────────────────────────────────────────────────
 
 function DriverHistoryTab() {
+  const { projectId } = useGlobalFilters();
   const [selectedDate, setSelectedDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() - 1); // default to yesterday
@@ -409,9 +412,9 @@ function DriverHistoryTab() {
   const [expandedUser, setExpandedUser] = useState<string | null>(null);
   const utils = trpc.useUtils();
 
-  const { data: history, isLoading } = trpc.operational.driverHistory.byDate.useQuery({ date: selectedDate });
+  const { data: history, isLoading } = trpc.operational.driverHistory.byDate.useQuery({ date: selectedDate, projectId });
   const histSort = useTableSort(((history ?? []) as any[]));
-  const { data: stats } = trpc.operational.driverHistory.stats.useQuery({ date: selectedDate });
+  const { data: stats } = trpc.operational.driverHistory.stats.useQuery({ date: selectedDate, projectId });
   const { data: speedLimits = [] } = trpc.operational.speedMonitoring.limits.list.useQuery();
   const defaultLimit = useMemo(() => {
     const d = (speedLimits as any[]).find(l => l.isDefault) ?? (speedLimits as any[])[0];
@@ -433,7 +436,7 @@ function DriverHistoryTab() {
   });
 
   const { data: userHistory } = trpc.operational.driverHistory.byUser.useQuery(
-    { username: expandedUser || "", limit: 14 },
+    { username: expandedUser || "", limit: 14, projectId },
     { enabled: !!expandedUser }
   );
 
@@ -1290,13 +1293,14 @@ function TranscribeDialog({ employees, vehicles, onClose }: { employees: any[]; 
 
 // ─── ATIVIDADE POR COLABORADOR (todos os agentes + mapeamento) ────────────────
 function AgentActivityTab() {
+  const { projectId } = useGlobalFilters();
   const utils = trpc.useUtils();
   const todayStr = new Date().toISOString().slice(0, 10);
   const monthStartStr = todayStr.slice(0, 8) + "01";
   const [from, setFrom] = useState(monthStartStr);
   const [to, setTo] = useState(todayStr);
   const [onlyUnmapped, setOnlyUnmapped] = useState(false);
-  const { data: agents = [], isLoading } = trpc.multipark.agentActivity.useQuery({ from, to });
+  const { data: agents = [], isLoading } = trpc.multipark.agentActivity.useQuery({ from, to, projectId });
   const { data: employees = [] } = trpc.multipark.employeesForMapping.useQuery();
   const { data: agentPartners = [] } = trpc.multipark.agentPartners.useQuery();
   const { data: partnershipsList = [] } = trpc.partnerships.list.useQuery({} as any);

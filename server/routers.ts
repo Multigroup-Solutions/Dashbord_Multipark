@@ -1,4 +1,5 @@
 import { TRPCError } from "@trpc/server";
+import { projectScope, campaignScope, bookingHistoryScope, scopedProjectIds, assertEmployeeAccess } from './cityScope';
 import { assessmentAnswers, gradeAssessment, trainingResultScope } from './trainingAssessments';
 import { z } from "zod";
 import * as XLSX from "xlsx";
@@ -501,7 +502,7 @@ async function rhViewer(user: { id: number; role: string }): Promise<RhViewer> {
   let scope: number[] | null = null;
   if (user.role === "supervisor") {
     const pid = me?.employee?.projectId ?? null;
-    scope = pid != null ? await resolveProjectIds(pid) : [];
+    scope = scopedProjectIds() ?? (pid != null ? await resolveProjectIds(pid) : []);
   }
   return { id: user.id, role: user.role, employeeId: me?.employee?.id ?? null, scopeProjectIds: scope };
 }
@@ -2019,7 +2020,7 @@ export const appRouter = router({
       }),
 
     // ── DASHBOARD STATS ──────────────────────────────────────────────────────
-    stats: protectedProcedure.query(async ({ ctx }) => {
+    stats: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx }) => {
       // Totais da empresa inteira — só admin+ (matriz do Jorge), e respeita o
       // deny de finance.view_totals por utilizador.
       await requireFinanceTotals(ctx.user, "admin");
@@ -2027,7 +2028,7 @@ export const appRouter = router({
     }),
 
     // ── UPCOMING PAYMENTS ────────────────────────────────────────────────────
-    upcomingPayments: protectedProcedure.query(async ({ ctx }) => {
+    upcomingPayments: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx }) => {
       requireRole(ctx.user.role, "admin");
       return getUpcomingPayments(7);
     }),
@@ -2159,13 +2160,13 @@ export const appRouter = router({
 
     // ── Despesas recorrentes (modelos) ──
     recurring: router({
-      list: protectedProcedure.query(async ({ ctx }) => {
+      list: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx }) => {
         requireRole(ctx.user.role, "frontoffice");
         const { getDb } = await import("./db");
         const { recurringExpenses } = await import("../drizzle/schema");
         const { desc } = await import("drizzle-orm");
         const db = await getDb(); if (!db) return [];
-        return db.select().from(recurringExpenses).orderBy(desc(recurringExpenses.active));
+        return db.select().from(recurringExpenses).where(projectScope(recurringExpenses.projectId)).orderBy(desc(recurringExpenses.active));
       }),
       create: protectedProcedure
         .input(z.object({ description: z.string().optional(), supplier: z.string().optional(), amount: z.number(), paymentMethod: z.enum(["cash", "card", "transfer", "check", "other"]).optional(), categoryId: z.number().optional(), projectId: z.number().optional(), dayOfMonth: z.number().min(1).max(28).optional(), notes: z.string().optional() }))
@@ -2205,7 +2206,7 @@ export const appRouter = router({
       // em concorrência (lock + UNIQUE modelo/mês — server/expenseRecurring.ts).
       // Corre no cron diário; aqui é só o disparo manual pelo admin.
       generateMonth: protectedProcedure
-        .input(z.object({ year: z.number().int().min(2000).max(2100), month: z.number().int().min(1).max(12) }))
+        .input(z.object({ year: z.number().int().min(2000).max(2100), month: z.number().int().min(1).max(12), projectId: z.number().optional() }))
         .mutation(async ({ ctx, input }) => {
           requireRole(ctx.user.role, "admin");
           const { generateRecurringExpensesForMonth } = await import("./expenseRecurring");
@@ -2278,6 +2279,8 @@ export const appRouter = router({
         }
         const { setUserPermission } = await import("./db");
         await setUserPermission(input.userId, input.permission, input.mode, ctx.user.id);
+        const { invalidatePermissionElevation } = await import('./_core/trpc');
+        invalidatePermissionElevation(input.userId);
         await logActivity({ userId: ctx.user.id, action: "set_permission", entity: "user", entityId: input.userId, details: `${input.permission} = ${input.mode ?? "(limpo)"}` });
         return { success: true };
       }),
@@ -2290,6 +2293,27 @@ export const appRouter = router({
   }),
 
   rh: router({
+    accountSummary: protectedProcedure
+      .input(z.object({ employeeId: z.number() }))
+      .query(async ({ ctx, input }) => {
+        const viewer = await rhViewer(ctx.user);
+        const person = await getEmployeeById(input.employeeId);
+        if (!person) throw new TRPCError({ code: 'NOT_FOUND' });
+        await assertEmployeeAccess(input.employeeId);
+        if (!canViewEmployee(viewer, person.employee)) throw new TRPCError({ code: 'FORBIDDEN' });
+        if (!person.employee.userId) return null;
+        const account = await getUserById(person.employee.userId);
+        if (!account) return null;
+        const { getUserPermissionOverrides } = await import('./db');
+        const { loadCityAccess } = await import('./cityAccess');
+        const { userAccessSummary } = await import('../shared/userAccessSummary');
+        const [overrides, cities] = await Promise.all([getUserPermissionOverrides(account.id), loadCityAccess(account.id)]);
+        const allowedIds = scopedProjectIds();
+        const canManage = ['admin', 'super_admin'].includes(ctx.user.role)
+          && (!allowedIds || (!cities.all && !cities.missingCostCenter && cities.projectIds.every(id => allowedIds.includes(id))));
+        return { id: account.id, name: account.name, email: account.email, isActive: account.isActive,
+          ...userAccessSummary(account.role, overrides, cities), cities, canManage };
+      }),
     // ── MY PROFILE (for extra/low-role users) ──────────────────────────────────────────────────
     me: protectedProcedure.query(async ({ ctx }) => {
       return getEmployeeByUserId(ctx.user.id);
@@ -2465,6 +2489,8 @@ export const appRouter = router({
         requireRole(ctx.user.role, "frontoffice");
         const viewer = await rhViewer(ctx.user);
         let rows = await getAllEmployees({ isActive: input?.isActive, position: input?.position });
+        const allowedIds = scopedProjectIds();
+        if (allowedIds) rows = rows.filter(r => r.employee.projectId != null && allowedIds.includes(r.employee.projectId));
         // filtro global de cidade/centro (com descendentes)
         if (input?.projectId) {
           const ids = new Set(await resolveProjectIds(input.projectId));
@@ -2477,6 +2503,7 @@ export const appRouter = router({
       .input(z.object({ id: z.number() }))
       .query(async ({ ctx, input }) => {
         const viewer = await rhViewer(ctx.user);
+        await assertEmployeeAccess(input.id);
         const result = await getEmployeeById(input.id);
         if (!result) return result;
         if (!canViewEmployee(viewer, { id: result.employee.id, projectId: result.employee.projectId ?? null })) {
@@ -3562,7 +3589,7 @@ export const appRouter = router({
     // de URL). Atribuição "uma vez": detecta chaves novas, utilizador atribui.
     internalCampaigns: router({
       // Chaves ainda NÃO atribuídas: campaignId (do originUrl) + campaignName não-parceiro.
-      detect: protectedProcedure.query(async ({ ctx }) => {
+      detect: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx }) => {
         requireRole(ctx.user.role, "backoffice");
         const { getDb } = await import("./db");
         const { sql } = await import("drizzle-orm");
@@ -3573,7 +3600,7 @@ export const appRouter = router({
         const linksRes: any = await db.execute(sql`
           SELECT originUrl AS value, COUNT(*) AS bookings, COALESCE(SUM(totalPrice),0) AS revenue
           FROM multipark_bookings
-          WHERE originUrl IS NOT NULL AND originUrl <> ''
+          WHERE ${projectScope(sql`multipark_bookings.projectId`)} AND originUrl IS NOT NULL AND originUrl <> ''
             AND NOT EXISTS (
               SELECT 1 FROM internal_campaign_keys k
               WHERE k.keyType = 'url_pattern' AND multipark_bookings.originUrl LIKE k.keyValue
@@ -3582,7 +3609,7 @@ export const appRouter = router({
         const namesRes: any = await db.execute(sql`
           SELECT campaignName AS value, COUNT(*) AS bookings, COALESCE(SUM(totalPrice),0) AS revenue
           FROM multipark_bookings
-          WHERE campaignName IS NOT NULL AND campaignName <> ''
+          WHERE ${projectScope(sql`multipark_bookings.projectId`)} AND campaignName IS NOT NULL AND campaignName <> ''
             AND campaignName NOT IN (SELECT name FROM partnerships)
             AND campaignName NOT IN (SELECT keyValue FROM internal_campaign_keys WHERE keyType='campaign_name')
           GROUP BY campaignName ORDER BY bookings DESC`);
@@ -3591,7 +3618,7 @@ export const appRouter = router({
 
       // Campanhas lógicas + chaves + custos + métricas (reservas/receita/gasto).
       list: protectedProcedure
-        .input(z.object({ from: z.string().optional(), to: z.string().optional() }).optional())
+        .input(z.object({ from: z.string().optional(), to: z.string().optional(), projectId: z.number().optional() }).optional())
         .query(async ({ ctx, input }) => {
           requireRole(ctx.user.role, "backoffice");
           const { getDb } = await import("./db");
@@ -3600,9 +3627,9 @@ export const appRouter = router({
           if (!db) return [];
           const rows = (r: any) => (Array.isArray(r[0]) ? r[0] : r) as any[];
           // Campanhas vêm de DUAS fontes: internal_campaigns + campaigns (ad).
-          const internal = rows(await db.execute(sql`SELECT id, name, projectId, dailyBudget, city, brand, campaignStatus FROM internal_campaigns ORDER BY name`))
+          const internal = rows(await db.execute(sql`SELECT id, name, projectId, dailyBudget, city, brand, campaignStatus FROM internal_campaigns WHERE ${projectScope(sql`internal_campaigns.projectId`)} ORDER BY name`))
             .map((c) => ({ ...c, campaignType: "internal" as const }));
-          const ad = rows(await db.execute(sql`SELECT id, name, projectId, budget AS dailyBudget, platform AS brand, campaignStatus FROM campaigns ORDER BY name`))
+          const ad = rows(await db.execute(sql`SELECT id, name, projectId, budget AS dailyBudget, platform AS brand, campaignStatus FROM campaigns WHERE ${projectScope(sql`campaigns.projectId`)} ORDER BY name`))
             .map((c) => ({ ...c, city: null, campaignType: "ad" as const }));
           // nº de dias do período (para estimar gasto via dailyBudget)
           const periodDays = input?.from && input?.to
@@ -3625,7 +3652,7 @@ export const appRouter = router({
             for (const k of keys.filter((k) => k.keyType === "url_pattern")) conds.push(sql`originUrl LIKE ${k.keyValue}`);
             let bookings = 0, revenue = 0;
             if (conds.length) {
-              const m = rows(await db.execute(sql`SELECT COUNT(*) AS c, COALESCE(SUM(totalPrice),0) AS rev FROM multipark_bookings WHERE (${sql.join(conds, sql` OR `)})${dateCond}`))[0];
+              const m = rows(await db.execute(sql`SELECT COUNT(*) AS c, COALESCE(SUM(totalPrice),0) AS rev FROM multipark_bookings WHERE ${projectScope(sql`multipark_bookings.projectId`)} AND (${sql.join(conds, sql` OR `)})${dateCond}`))[0];
               bookings = Number(m?.c ?? 0); revenue = Number(m?.rev ?? 0);
             }
             const costRow = rows(await db.execute(sql`SELECT COALESCE(SUM(amount),0) AS spend, SUM(impressions) AS impressions, SUM(clicks) AS clicks, SUM(conversions) AS conversions, SUM(conversionValue) AS conversionValue, AVG(ctr) AS avgCtr FROM internal_campaign_costs WHERE campaignType = ${c.campaignType} AND campaignId = ${c.id}${input?.from && input?.to ? sql` AND costDate >= ${input.from} AND costDate <= ${input.to}` : sql``}`))[0];
@@ -3672,7 +3699,7 @@ export const appRouter = router({
           requireRole(ctx.user.role, "admin");
           const { getDb } = await import("./db");
           const { internalCampaigns } = await import("../drizzle/schema");
-          const { eq } = await import("drizzle-orm");
+          const { eq, and } = await import("drizzle-orm");
           const db = await getDb();
           if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
           const { id, ...rest } = input;
@@ -3712,7 +3739,7 @@ export const appRouter = router({
         requireRole(ctx.user.role, "admin");
         const { getDb } = await import("./db");
         const { internalCampaignKeys } = await import("../drizzle/schema");
-        const { eq } = await import("drizzle-orm");
+        const { eq, and } = await import("drizzle-orm");
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
         await db.delete(internalCampaignKeys).where(eq(internalCampaignKeys.id, input.keyId));
@@ -3762,14 +3789,14 @@ export const appRouter = router({
         }),
 
       // Custos/métricas de TODAS as campanhas num dia — para o diálogo "Atualizar campanhas".
-      costsByDate: protectedProcedure.input(z.object({ costDate: z.string() })).query(async ({ ctx, input }) => {
+      costsByDate: protectedProcedure.input(z.object({ costDate: z.string(), projectId: z.number().optional() })).query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
         const { getDb } = await import("./db");
         const { internalCampaignCosts } = await import("../drizzle/schema");
-        const { eq } = await import("drizzle-orm");
+        const { eq, and } = await import("drizzle-orm");
         const db = await getDb();
         if (!db) return [];
-        return db.select().from(internalCampaignCosts).where(eq(internalCampaignCosts.costDate, input.costDate));
+        return db.select().from(internalCampaignCosts).where(and(eq(internalCampaignCosts.costDate, input.costDate), campaignScope(internalCampaignCosts.campaignType, internalCampaignCosts.campaignId)));
       }),
 
       costs: protectedProcedure.input(z.object({ campaignType: z.enum(["internal", "ad"]), campaignId: z.number() })).query(async ({ ctx, input }) => {
@@ -3786,7 +3813,7 @@ export const appRouter = router({
         requireRole(ctx.user.role, "admin");
         const { getDb } = await import("./db");
         const { internalCampaignCosts } = await import("../drizzle/schema");
-        const { eq } = await import("drizzle-orm");
+        const { eq, and } = await import("drizzle-orm");
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
         await db.delete(internalCampaignCosts).where(eq(internalCampaignCosts.id, input.id));
@@ -4385,11 +4412,11 @@ export const appRouter = router({
 
     // ─── DAILY DRIVER HISTORY ──────────────────────────────────────────
     driverHistory: router({
-      byDate: protectedProcedure.input(z.object({ date: z.string() })).query(async ({ ctx, input }) => {
+      byDate: protectedProcedure.input(z.object({ date: z.string(), projectId: z.number().optional() })).query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
         return getDailyDriverHistoryByDate(input.date);
       }),
-      byUser: protectedProcedure.input(z.object({ username: z.string(), limit: z.number().optional() })).query(async ({ ctx, input }) => {
+      byUser: protectedProcedure.input(z.object({ username: z.string(), projectId: z.number().optional(), limit: z.number().optional() })).query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
         return getDailyDriverHistoryByUser(input.username, input.limit);
       }),
@@ -4397,12 +4424,12 @@ export const appRouter = router({
         requireRole(ctx.user.role, "backoffice");
         return getDailyDriverHistoryRange(input.startDate, input.endDate);
       }),
-      stats: protectedProcedure.input(z.object({ date: z.string() })).query(async ({ ctx, input }) => {
+      stats: protectedProcedure.input(z.object({ date: z.string(), projectId: z.number().optional() })).query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
         return getDailyDriverStats(input.date);
       }),
       /** Manually trigger data collection for a specific date */
-      collectDay: protectedProcedure.input(z.object({ date: z.string() })).mutation(async ({ ctx, input }) => {
+      collectDay: protectedProcedure.input(z.object({ date: z.string(), projectId: z.number().optional() })).mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "admin");
         const targetDate = new Date(input.date);
         targetDate.setHours(0, 0, 0, 0);
@@ -6526,6 +6553,7 @@ export const appRouter = router({
     })).query(({ input }) => getPartnershipAnalytics(input)),
 
     list: protectedProcedure.input(z.object({
+      projectId: z.number().optional(),
       partnerType: z.string().optional(),
       status: z.string().optional(),
     }).optional()).query(({ ctx, input }) => {
@@ -6645,6 +6673,7 @@ export const appRouter = router({
       .input(z.object({
         from: z.string(),
         to: z.string(),
+        projectId: z.number().optional(),
         partnerType: z.string().optional(),
       }))
       .query(async ({ ctx, input }) => {
@@ -6658,6 +6687,7 @@ export const appRouter = router({
       .input(z.object({
         from: z.string(),
         to: z.string(),
+        projectId: z.number().optional(),
         partnerType: z.string(),
       }))
       .query(async ({ ctx, input }) => {
@@ -7252,7 +7282,7 @@ export const appRouter = router({
     // Avaliação operacional do dia: por extra (com métricas) + agregado
     // por turno + agregado total. TL recebe também score da equipa.
     dayEvaluation: protectedProcedure
-      .input(z.object({ date: z.string() }))
+      .input(z.object({ date: z.string(), projectId: z.number().optional() }))
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
         const { evaluateDay } = await import("./multiparkEvaluation");
@@ -7262,7 +7292,7 @@ export const appRouter = router({
     // Dashboard por intervalo: daily series + per-person summary com
     // in-shift vs out-of-shift actions
     dashboardRange: protectedProcedure
-      .input(z.object({ startDate: z.string(), endDate: z.string() }))
+      .input(z.object({ startDate: z.string(), endDate: z.string(), projectId: z.number().optional() }))
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
         const { getDashboardRange } = await import("./multiparkEvaluation");
@@ -7294,7 +7324,7 @@ export const appRouter = router({
     agentHistorySummary: protectedProcedure
       .input(z.object({
         agentName: z.string().min(1).max(256),
-        date: z.string(),
+        date: z.string(), projectId: z.number().optional(),
       }))
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
@@ -7312,6 +7342,7 @@ export const appRouter = router({
           .where(
             dand(
               deq(multiparkBookingHistory.agentName, input.agentName),
+              bookingHistoryScope(multiparkBookingHistory.bookingExternalId),
               dgte(multiparkBookingHistory.actionTime, start),
               dlt(multiparkBookingHistory.actionTime, endStr),
             ),
@@ -7329,7 +7360,7 @@ export const appRouter = router({
     // Lista os nomes de agente Multipark do histórico no período, com contagens
     // e o colaborador a que estão ligados (employees.multiparkAgentName).
     agentActivity: protectedProcedure
-      .input(z.object({ from: z.string(), to: z.string() }))
+      .input(z.object({ from: z.string(), to: z.string(), projectId: z.number().optional() }))
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
         const { getDb } = await import("./db");
@@ -7343,10 +7374,10 @@ export const appRouter = router({
             SUM(changeType = 'CHECK_OUT') AS checkout,
             SUM(changeType = 'MOVEMENT') AS movement
           FROM multipark_booking_history
-          WHERE agentName IS NOT NULL AND agentName <> ''
+          WHERE ${bookingHistoryScope(sql`multipark_booking_history.bookingExternalId`)} AND agentName IS NOT NULL AND agentName <> ''
             AND actionTime >= ${input.from + " 00:00:00"} AND actionTime <= ${input.to + " 23:59:59"}
           GROUP BY agentName ORDER BY total DESC`));
-        const emps = rows(await db.execute(sql`SELECT id, fullName, multiparkAgentName FROM employees WHERE multiparkAgentName IS NOT NULL AND multiparkAgentName <> ''`));
+        const emps = rows(await db.execute(sql`SELECT id, fullName, multiparkAgentName FROM employees WHERE ${projectScope(sql`employees.projectId`)} AND multiparkAgentName IS NOT NULL AND multiparkAgentName <> ''`));
         const byAgent = new Map(emps.map((e: any) => [e.multiparkAgentName, e]));
         return acts.map((a: any) => {
           const e = byAgent.get(a.agentName);
@@ -7490,7 +7521,7 @@ export const appRouter = router({
 
     // Atividade consolidada de um dia: ações + km/GPS por pessoa (visão Jorge)
     dayActivity: protectedProcedure
-      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
+      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), projectId: z.number().optional() }))
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
         const { getDayActivity } = await import("./db");
@@ -7699,7 +7730,7 @@ export const appRouter = router({
       }),
 
     assignments: protectedProcedure
-      .input(z.object({ date: z.string(), city: z.enum(["lisbon", "porto", "faro"]).optional() }))
+      .input(z.object({ date: z.string(), projectId: z.number().optional(), city: z.enum(["lisbon", "porto", "faro"]).optional() }))
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
         return listAssignments(input.date, input.city);
@@ -7784,6 +7815,16 @@ export const appRouter = router({
 
   // ── DISPONIBILIDADE SEMANAL DOS EXTRAS ────────────────────────────────────
   extrasAvailability: router({
+    forEmployee: protectedProcedure
+      .input(z.object({ employeeId: z.number(), weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
+      .query(async ({ ctx, input }) => {
+        const viewer = await rhViewer(ctx.user);
+        const person = await getEmployeeById(input.employeeId);
+        if (!person) throw new TRPCError({ code: 'NOT_FOUND' });
+        await assertEmployeeAccess(input.employeeId);
+        if (!canViewEmployee(viewer, person.employee)) throw new TRPCError({ code: 'FORBIDDEN' });
+        return getMyWeek(input.employeeId, input.weekStart);
+      }),
     // Sugestões de semanas (próxima e atual) para o picker.
     weekHints: protectedProcedure.query(() => {
       return { current: mondayOf(), next: nextMonday() };
@@ -7852,6 +7893,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
         let result: { saved: number; employeeName: string };
+        await assertEmployeeAccess(input.employeeId);
         try {
           result = await setEmployeeAvailability(input.employeeId, input.weekStart, input.days, ctx.user.id);
         } catch (err) {

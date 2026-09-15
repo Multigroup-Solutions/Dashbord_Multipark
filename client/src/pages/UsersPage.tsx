@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -170,6 +170,18 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
   const [showInviteDialog, setShowInviteDialog] = useState(false);
   const [inviteLink, setInviteLink] = useState("");
   // Permissões por utilizador (dialog)
+  const [requestedUserId, setRequestedUserId] = useState(() => Number(new URLSearchParams(window.location.search).get('userId')) || null);
+  useEffect(() => {
+    if (!users || requestedUserId == null) return;
+    const target = users.find(u => u.id === requestedUserId);
+    if (target) {
+      setSearch(target.email ?? target.name ?? '');
+      if (new URLSearchParams(window.location.search).get('view') === 'permissions') setPermUser({ id: target.id, name: target.name ?? target.email ?? 'Utilizador' });
+      else openEdit(target);
+    } else toast.error('O utilizador não está disponível nas tuas cidades autorizadas.');
+    setRequestedUserId(null);
+  }, [users, requestedUserId]);
+
   const [permUser, setPermUser] = useState<{ id: number; name: string } | null>(null);
 
   // Filtered users
@@ -763,6 +775,10 @@ function UserPermissionsDialog({ user, onClose }: { user: { id: number; name: st
     onSuccess: () => {
       utils.permissions.forUser.invalidate({ userId: user.id });
       utils.permissions.assignments.invalidate();
+      utils.permissions.myCityAccess.invalidate();
+      utils.permissions.mine.invalidate();
+      utils.rh.accountSummary.invalidate();
+      utils.auth.me.invalidate();
     },
     onError: (e: any) => toast.error(e.message),
   });

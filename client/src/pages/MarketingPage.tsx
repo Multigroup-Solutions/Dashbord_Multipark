@@ -595,13 +595,14 @@ function CreateMktExpenseDialog({ onClose }: { onClose: () => void }) {
 
 // ─── CAMPANHAS INTERNAS ───────────────────────────────────────────────────────
 function InternalCampaignsTab() {
+  const { projectId } = useGlobalFilters();
   const utils = trpc.useUtils();
   const todayStr = lisbonDay();
   const monthStartStr = todayStr.slice(0, 8) + "01";
   const [from, setFrom] = useState(monthStartStr);
   const [to, setTo] = useState(todayStr);
-  const { data: detected } = trpc.marketing.internalCampaigns.detect.useQuery();
-  const { data: campaigns = [] } = trpc.marketing.internalCampaigns.list.useQuery({ from, to });
+  const { data: detected } = trpc.marketing.internalCampaigns.detect.useQuery({ projectId });
+  const { data: campaigns = [] } = trpc.marketing.internalCampaigns.list.useQuery({ from, to, projectId });
   const { data: projects = [] } = trpc.projects.list.useQuery();
   const [newName, setNewName] = useState("");
   const [newProject, setNewProject] = useState<string>("");
@@ -617,7 +618,7 @@ function InternalCampaignsTab() {
   const [updRows, setUpdRows] = useState<Record<string, DailyRow>>({});
   const [updSaving, setUpdSaving] = useState(false);
   const { data: dayCosts } = trpc.marketing.internalCampaigns.costsByDate.useQuery(
-    { costDate: updDate },
+    { costDate: updDate, projectId },
     { enabled: updOpen },
   );
 

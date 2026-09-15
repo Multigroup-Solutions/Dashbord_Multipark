@@ -3,6 +3,7 @@ import { createContext, useContext } from "react";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { useOpenEmployee } from "@/hooks/useOpenEmployee";
 import { fmtPTDate } from "@/lib/lisbonTime";
+import { useGlobalFilters } from '@/contexts/GlobalFiltersContext';
 import { buildAvailabilityMessage, AVAILABILITY_KINDS, type AvailabilityMessageKind } from "@shared/availabilityMessages";
 import { useTableSort, Th } from "@/components/SortableTable";
 import { UniDateNav, mondayOf } from "@/components/DateRangeNav";
@@ -142,10 +143,20 @@ const CITY_OPTIONS: Array<{ id: ExtraCityId; label: string }> = [
 const ExtrasCityContext = createContext<ExtraCityId>("lisbon");
 
 export default function ExtrasDiaPage() {
-  const [city, setCity] = usePersistedState<ExtraCityId>("extrasdia.city", "lisbon");
+  const globalFilters = useGlobalFilters();
+  const [savedCity, setSavedCity] = usePersistedState<ExtraCityId>("extrasdia.city", "lisbon");
+  const allowedCities = CITY_OPTIONS.filter(c => globalFilters.cities.some(p => p.name.toLowerCase() === c.label.toLowerCase()));
+  const selectedName = globalFilters.cities.find(p => p.id === globalFilters.cityId)?.name;
+  const city = allowedCities.find(c => c.label === selectedName)?.id ?? allowedCities.find(c => c.id === savedCity)?.id ?? allowedCities[0]?.id ?? 'lisbon';
+  const setCity = (value: ExtraCityId) => {
+    const choice = allowedCities.find(c => c.id === value);
+    if (!choice) return;
+    setSavedCity(value);
+    globalFilters.setCityId(globalFilters.cities.find(p => p.name === choice.label)!.id);
+  };
   const [baseDate, setBaseDate] = useState(todayISO());
 
-  const { data, isLoading, error } = trpc.extrasDia.forecast.useQuery({ baseDate, city });
+  const { data, isLoading, error } = trpc.extrasDia.forecast.useQuery({ baseDate, city }, { enabled: !globalFilters.isLoading && allowedCities.length > 0 });
   const targetDate = data?.targetDate ?? "";
   const assignmentsQ = trpc.extrasDia.assignments.useQuery(
     { date: targetDate, city },
@@ -180,7 +191,7 @@ export default function ExtrasDiaPage() {
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <CalendarDays className="h-6 w-6 text-blue-600" />
-            Extras Dia — Previsão Lisboa
+            Extras Dia — {allowedCities.find(c => c.id === city)?.label ?? 'Sem cidade atribuída'}
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
             Planeamento de chegadas, saídas, lavagens e condutores para o dia seguinte.
@@ -189,10 +200,10 @@ export default function ExtrasDiaPage() {
         <div className="space-y-1">
           <Label htmlFor="baseDate" className="text-xs">Data base</Label>
           <UniDateNav date={baseDate} onChange={setBaseDate} />
-          <Select value={city} onValueChange={(v) => setCity(v as ExtraCityId)}>
+          <Select value={city} disabled={allowedCities.length <= 1} onValueChange={(v) => setCity(v as ExtraCityId)}>
             <SelectTrigger className="w-32 h-9"><SelectValue /></SelectTrigger>
             <SelectContent>
-              {CITY_OPTIONS.map((c) => <SelectItem key={c.id} value={c.id}>{c.id === "lisbon" ? "📍 Lisboa" : c.id === "porto" ? "📍 Porto" : "📍 Faro"}</SelectItem>)}
+              {allowedCities.map((c) => <SelectItem key={c.id} value={c.id}>📍 {c.label}</SelectItem>)}
             </SelectContent>
           </Select>
         </div>

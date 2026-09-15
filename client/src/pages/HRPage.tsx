@@ -3,6 +3,7 @@ import { usePersistedState } from "@/hooks/usePersistedState";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { RecruitmentSection } from "@/components/RecruitmentSection";
+import { EmployeeAccessAvailability } from '@/components/EmployeeAccessAvailability';
 import { trpc } from "@/lib/trpc";
 import { fmtPTDateTime, fmtPTDate } from "@/lib/lisbonTime";
 import { DeactivationDialog } from "@/components/DeactivationDialog";
@@ -1517,18 +1518,6 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                 )}
               </div>
             </div>
-            {/* Linked user */}
-            <div className="mt-4 pt-4 border-t">
-              <div className="flex items-center gap-3">
-                <Users className="w-4 h-4 text-muted-foreground" />
-                <span className="text-sm font-medium">Utilizador Associado:</span>
-                {emp.userId ? (
-                  <Badge variant="secondary">{allUsers.find((u: any) => u.id === emp.userId)?.name ?? "User #" + emp.userId}</Badge>
-                ) : (
-                  <span className="text-sm text-orange-500">Nenhum</span>
-                )}
-              </div>
-            </div>
           </CardContent>
         </Card>
       ) : (
@@ -1707,6 +1696,8 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
           </CardContent>
         </Card>
       )}
+
+      <EmployeeAccessAvailability employeeId={employeeId} />
 
       {/* Tabs */}
       <Tabs defaultValue={(() => {

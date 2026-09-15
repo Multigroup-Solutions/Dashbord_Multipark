@@ -12,6 +12,7 @@
  * Driver levels are flat — all do everything — so the cheapest tier wins.
  */
 
+import { cityNameScope, projectScope } from './cityScope';
 import { and, asc, eq, gte, lte, inArray, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { multiparkBookings, extrasDiaAssignments, employees, projects } from "../drizzle/schema";
@@ -546,9 +547,7 @@ export async function listAssignments(date: string, city?: ExtraCity): Promise<A
   const rows = await db
     .select()
     .from(extrasDiaAssignments)
-    .where(city
-      ? and(eq(extrasDiaAssignments.assignmentDate, date), eq(extrasDiaAssignments.city, city))
-      : eq(extrasDiaAssignments.assignmentDate, date))
+    .where(and(cityNameScope(extrasDiaAssignments.city), eq(extrasDiaAssignments.assignmentDate, date), city ? eq(extrasDiaAssignments.city, city) : undefined))
     .orderBy(asc(extrasDiaAssignments.startHour));
 
   // Pre-fetch dos empregados associados (mapeamento Multipark)
@@ -893,7 +892,7 @@ export async function listDriverCandidates(date?: string, opts?: { forTeamLeader
       userId: employees.userId,
     })
     .from(employees)
-    .where(eq(employees.isActive, 1))
+    .where(and(eq(employees.isActive, 1), projectScope(employees.projectId)))
     .orderBy(asc(employees.fullName));
 
   // TL (pedido Jorge): só aparecem posições de chefia OU quem tiver a

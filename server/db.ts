@@ -1,3 +1,4 @@
+import { projectScope, bookingHistoryScope, employeeScope, userScope, partnerScope, scopedProjectIds, requireGlobalCityAccess } from './cityScope';
 import { and, asc, desc, eq, gte, lte, like, or, sql, aliasedTable, isNotNull, isNull, inArray, notInArray, getTableColumns, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { normalizeEmail } from "../shared/email";
@@ -223,7 +224,7 @@ export async function getUserByOpenId(openId: string) {
 export async function getAllUsers() {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(users).orderBy(desc(users.createdAt));
+  return db.select().from(users).where(userScope(users.id)).orderBy(desc(users.createdAt));
 }
 
 export async function updateUserRole(userId: number, role: string) {
@@ -527,7 +528,7 @@ export async function findPossibleDuplicateExpense(input: {
   }
   if (input.invoiceImageKey) conds.push(eq(expenses.invoiceImageKey, input.invoiceImageKey));
   if (!conds.length) return null;
-  let where: SQL = or(...conds) as SQL;
+  let where: SQL = and(or(...conds), projectScope(expenses.projectId)) as SQL;
   if (input.excludeId) where = and(where, sql`${expenses.id} <> ${input.excludeId}`) as SQL;
   const rows = await db
     .select({ id: expenses.id, supplier: expenses.supplier, amount: expenses.amount, expenseDate: expenses.expenseDate, documentNumber: expenses.documentNumber, status: expenses.status })
@@ -565,7 +566,7 @@ export async function getExpenseById(id: number) {
     .leftJoin(projects, eq(expenses.projectId, projects.id))
     .leftJoin(users, eq(expenses.insertedById, users.id))
     .leftJoin(buyerEmployees, eq(expenses.buyerId, buyerEmployees.id))
-    .where(eq(expenses.id, id))
+    .where(and(eq(expenses.id, id), projectScope(expenses.projectId)))
     .limit(1);
   return result[0];
 }
@@ -607,19 +608,19 @@ export async function getExpenseStats() {
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(gte(expenses.expenseDate, toMysqlDateTime(startOfDay))),
+        .where(and(projectScope(expenses.projectId), gte(expenses.expenseDate, toMysqlDateTime(startOfDay)))),
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(gte(expenses.expenseDate, toMysqlDateTime(startOfWeek))),
+        .where(and(projectScope(expenses.projectId), gte(expenses.expenseDate, toMysqlDateTime(startOfWeek)))),
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(gte(expenses.expenseDate, toMysqlDateTime(startOfMonth))),
+        .where(and(projectScope(expenses.projectId), gte(expenses.expenseDate, toMysqlDateTime(startOfMonth)))),
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(gte(expenses.expenseDate, toMysqlDateTime(startOfYear))),
+        .where(and(projectScope(expenses.projectId), gte(expenses.expenseDate, toMysqlDateTime(startOfYear)))),
       db
         .select({
           categoryId: expenses.categoryId,
@@ -630,7 +631,7 @@ export async function getExpenseStats() {
         })
         .from(expenses)
         .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
-        .where(gte(expenses.expenseDate, toMysqlDateTime(startOfMonth)))
+        .where(and(projectScope(expenses.projectId), gte(expenses.expenseDate, toMysqlDateTime(startOfMonth))))
         .groupBy(expenses.categoryId, expenseCategories.name, expenseCategories.color)
         .orderBy(desc(sql`SUM(expenses.amount)`))
         .limit(8),
@@ -643,7 +644,7 @@ export async function getExpenseStats() {
         })
         .from(expenses)
         .leftJoin(projects, eq(expenses.projectId, projects.id))
-        .where(gte(expenses.expenseDate, toMysqlDateTime(startOfMonth)))
+        .where(and(projectScope(expenses.projectId), gte(expenses.expenseDate, toMysqlDateTime(startOfMonth))))
         .groupBy(expenses.projectId, projects.name)
         .orderBy(desc(sql`SUM(expenses.amount)`))
         .limit(5),
@@ -656,18 +657,18 @@ export async function getExpenseStats() {
         })
         .from(expenses)
         .leftJoin(users, eq(expenses.insertedById, users.id))
-        .where(gte(expenses.expenseDate, toMysqlDateTime(startOfMonth)))
+        .where(and(projectScope(expenses.projectId), gte(expenses.expenseDate, toMysqlDateTime(startOfMonth))))
         .groupBy(expenses.insertedById, users.name)
         .orderBy(desc(sql`SUM(expenses.amount)`))
         .limit(5),
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(eq(expenses.status, "pending")),
+        .where(and(projectScope(expenses.projectId), eq(expenses.status, "pending"))),
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(eq(expenses.status, "overdue")),
+        .where(and(projectScope(expenses.projectId), eq(expenses.status, "overdue"))),
     ]);
 
   // Monthly trend (last 6 months)
@@ -678,7 +679,7 @@ export async function getExpenseStats() {
       count: sql<number>`COUNT(*)`,
     })
     .from(expenses)
-    .where(gte(expenses.expenseDate, toMysqlDateTime(new Date(now.getFullYear(), now.getMonth() - 5, 1))))
+    .where(and(projectScope(expenses.projectId), gte(expenses.expenseDate, toMysqlDateTime(new Date(now.getFullYear(), now.getMonth() - 5, 1)))))
     .groupBy(sql`DATE_FORMAT(expenseDate, '%Y-%m')`)
     .orderBy(sql`DATE_FORMAT(expenseDate, '%Y-%m')`);
 
@@ -715,6 +716,7 @@ export async function getUpcomingPayments(daysAhead = 7) {
     .where(
       and(
         eq(expenses.status, "pending"),
+        projectScope(expenses.projectId),
         gte(expenses.paymentDueDate, toMysqlDateTime(now)),
         lte(expenses.paymentDueDate, toMysqlDateTime(future))
       )
@@ -730,7 +732,7 @@ export async function getOverdueExpenses() {
     .select({ expense: expenses, insertedBy: users })
     .from(expenses)
     .leftJoin(users, eq(expenses.insertedById, users.id))
-    .where(and(eq(expenses.status, "pending"), lte(expenses.paymentDueDate, toMysqlDateTime(now))));
+    .where(and(projectScope(expenses.projectId), eq(expenses.status, "pending"), lte(expenses.paymentDueDate, toMysqlDateTime(now))));
 }
 
 export async function markOverdueExpenses() {
@@ -740,7 +742,7 @@ export async function markOverdueExpenses() {
   await db
     .update(expenses)
     .set({ status: "overdue" })
-    .where(and(eq(expenses.status, "pending"), lte(expenses.paymentDueDate, toMysqlDateTime(now))));
+    .where(and(projectScope(expenses.projectId), eq(expenses.status, "pending"), lte(expenses.paymentDueDate, toMysqlDateTime(now))));
 }
 
 // ─── ACTIVITY LOGS ────────────────────────────────────────────────────────────
@@ -1814,7 +1816,7 @@ export async function getTaskStats() {
 export async function getCampaigns(filters: { platform?: string; projectId?: number; status?: string } = {}) {
   const db = await getDb();
   if (!db) return [];
-  const conditions: any[] = [];
+  const conditions: any[] = [projectScope(campaigns.projectId)];
   if (filters.platform) conditions.push(eq(campaigns.platform, filters.platform as any));
   if (filters.projectId) {
     // Include campaigns from child projects (e marcas globais via ID negativo)
@@ -1831,7 +1833,7 @@ export async function getCampaigns(filters: { platform?: string; projectId?: num
 export async function getCampaignById(id: number) {
   const db = await getDb();
   if (!db) return undefined;
-  const result = await db.select().from(campaigns).where(eq(campaigns.id, id)).limit(1);
+  const result = await db.select().from(campaigns).where(and(eq(campaigns.id, id), projectScope(campaigns.projectId))).limit(1);
   return result[0];
 }
 
@@ -1861,14 +1863,14 @@ export async function getCampaignStats(campaignId: number) {
   const db = await getDb();
   if (!db) return [];
   return db.select().from(campaignDailyStats)
-    .where(eq(campaignDailyStats.campaignId, campaignId))
+    .where(and(eq(campaignDailyStats.campaignId, campaignId), sql`EXISTS (SELECT 1 FROM campaigns WHERE campaigns.id = ${campaignDailyStats.campaignId} AND ${projectScope(campaigns.projectId)})`))
     .orderBy(desc(campaignDailyStats.date));
 }
 
 export async function getAllDailyStats(filters: { from?: Date; to?: Date; projectId?: number } = {}) {
   const db = await getDb();
   if (!db) return [];
-  const conditions: any[] = [];
+  const conditions: any[] = [projectScope(campaigns.projectId)];
   if (filters.from) conditions.push(gte(campaignDailyStats.date, toMysqlDateTime(filters.from)));
   if (filters.to) conditions.push(lte(campaignDailyStats.date, toMysqlDateTime(filters.to)));
   if (filters.projectId) {
@@ -1901,9 +1903,9 @@ export async function deleteDailyStat(id: number) {
 export async function getMarketingExpenses(filters: { category?: string; projectId?: number; from?: Date; to?: Date } = {}) {
   const db = await getDb();
   if (!db) return [];
-  const conditions: any[] = [];
+  const conditions: any[] = [projectScope(marketingExpenses.projectId)];
   if (filters.category) conditions.push(eq(marketingExpenses.mktCategory, filters.category as any));
-  if (filters.projectId) conditions.push(eq(marketingExpenses.projectId, filters.projectId));
+  if (filters.projectId) conditions.push(inArray(marketingExpenses.projectId, await resolveProjectIds(filters.projectId)));
   if (filters.from) conditions.push(gte(marketingExpenses.date, toMysqlDateTime(filters.from)));
   if (filters.to) conditions.push(lte(marketingExpenses.date, toMysqlDateTime(filters.to)));
   const q = db.select({ expense: marketingExpenses, project: projects }).from(marketingExpenses)
@@ -2029,7 +2031,7 @@ export async function getBookingRevenueByProject(filters: { from?: string; to?: 
   const db = await getDb();
   if (!db) return { total: 0, revenue: 0, byProject: [] as { projectId: number | null; parkName: string; count: number; revenue: number }[] };
 
-  const conditions: any[] = [
+  const conditions: any[] = [projectScope(multiparkBookings.projectId),
     sql`${multiparkBookings.status} != 'CANCELLED'`,
   ];
   if (filters.from) conditions.push(gte(multiparkBookings.bookingCreatedAt, filters.from));
@@ -3568,7 +3570,7 @@ export async function getPartnershipAnalytics(filters: { from: string; to: strin
   if (filters.projectId) projectIds = await resolveProjectIds(filters.projectId);
 
   // Base conditions: checkouts in period
-  const baseConds: any[] = [
+  const baseConds: any[] = [projectScope(multiparkBookings.projectId),
     isNotNull(multiparkBookings.checkOut),
     gte(multiparkBookings.checkOut, toMysqlDateTime(new Date(filters.from))),
     lte(multiparkBookings.checkOut, toMysqlDateTime(new Date(filters.to + "T23:59:59"))),
@@ -3666,7 +3668,7 @@ export async function getBookingsByCampaign(filters: { campaignKey: string; from
   let projectIds: number[] | undefined;
   if (filters.projectId) projectIds = await resolveProjectIds(filters.projectId);
 
-  const conds: any[] = [
+  const conds: any[] = [projectScope(multiparkBookings.projectId),
     eq(multiparkBookings.campaign, filters.campaignKey),
     isNotNull(multiparkBookings.checkOut),
     gte(multiparkBookings.checkOut, toMysqlDateTime(new Date(filters.from))),
@@ -3714,7 +3716,7 @@ export async function createPartnership(data: any) {
 
 export async function getPartnerships(filters?: { partnerType?: string; status?: string }) {
   const db = await getDb(); if (!db) return [];
-  const conditions: any[] = [];
+  const conditions: any[] = [partnerScope(partnerships.id)];
   if (filters?.partnerType) conditions.push(eq(partnerships.partnerType, filters.partnerType as any));
   if (filters?.status) conditions.push(eq(partnerships.partnerStatus, filters.status as any));
   const where = conditions.length > 0 ? and(...conditions) : undefined;
@@ -3753,7 +3755,7 @@ export async function inferPartnersFromBookings(): Promise<Array<{
       remarks,
       totalPrice
     FROM multipark_bookings
-    WHERE (rawJson LIKE '%partnerId%' AND JSON_EXTRACT(rawJson, '$.partnerId') IS NOT NULL)
+    WHERE ${projectScope(sql`multipark_bookings.projectId`)} AND (rawJson LIKE '%partnerId%' AND JSON_EXTRACT(rawJson, '$.partnerId') IS NOT NULL)
        OR paymentMethod IS NOT NULL
   `);
 
@@ -3950,15 +3952,17 @@ export async function getPartnerInvoicingSummary(filters: {
   monthlyFee: number;
   bookingsCount: number;
   revenueGross: number;
-  aFaturar: number;
-  faturado: number;
-  emAtraso: number;
-  pendente: number;
+  aFaturar: number | null;
+  billingAvailable: boolean;
+  faturado: number | null;
+  emAtraso: number | null;
+  pendente: number | null;
   faturasEmAtrasoCount: number;
 }>> {
   const db = await getDb();
   if (!db) return [];
 
+  const billingAvailable = scopedProjectIds() === undefined;
   const fromStr = toMysqlDateTime(new Date(filters.from));
   const toStr = toMysqlDateTime(new Date(filters.to + "T23:59:59"));
 
@@ -3984,7 +3988,7 @@ export async function getPartnerInvoicingSummary(filters: {
       notes: partnerships.notes,
     })
     .from(partnerships)
-    .where(filters.partnerType ? eq(partnerships.partnerType, filters.partnerType) : undefined);
+    .where(and(partnerScope(partnerships.id), filters.partnerType ? eq(partnerships.partnerType, filters.partnerType) : undefined));
 
   if (partnerRows.length === 0) return [];
 
@@ -4008,6 +4012,7 @@ export async function getPartnerInvoicingSummary(filters: {
       and(
         isNotNull(multiparkBookings.campaign),
         sql`${multiparkBookings.status} != 'CANCELLED'`,
+        projectScope(multiparkBookings.projectId),
         gte(multiparkBookings.checkOut, fromStr),
         lte(multiparkBookings.checkOut, toStr),
       ),
@@ -4054,6 +4059,7 @@ export async function getPartnerInvoicingSummary(filters: {
     .from(partnershipInvoices)
     .where(
       and(
+        billingAvailable ? sql`1 = 1` : sql`1 = 0`,
         gte(partnershipInvoices.sentAt, fromStr),
         lte(partnershipInvoices.sentAt, toStr),
         sql`${partnershipInvoices.invoiceStatus} != 'cancelled'`,
@@ -4111,7 +4117,8 @@ export async function getPartnerInvoicingSummary(filters: {
         .where(
           and(
             sql`${multiparkBookings.status} != 'CANCELLED'`,
-            gte(multiparkBookings.checkOut, fromStr),
+            projectScope(multiparkBookings.projectId),
+        gte(multiparkBookings.checkOut, fromStr),
             lte(multiparkBookings.checkOut, toStr),
             inArray(multiparkBookings.projectId, Array.from(expanded)),
           ),
@@ -4197,14 +4204,15 @@ export async function getPartnerInvoicingSummary(filters: {
       monthlyFee,
       bookingsCount: displayBookingsCount,
       revenueGross: displayRevenue,
-      aFaturar,
-      faturado: inv.faturado,
-      emAtraso: inv.emAtraso,
-      pendente,
+      aFaturar: !billingAvailable && ['avenca_mensal', 'avenca_anual'].includes(partnerType) ? null : aFaturar,
+      billingAvailable,
+      faturado: billingAvailable ? inv.faturado : null,
+      emAtraso: billingAvailable ? inv.emAtraso : null,
+      pendente: billingAvailable ? pendente : null,
       faturasEmAtrasoCount: inv.emAtrasoCount,
     };
   })
-    .sort((a, b) => b.aFaturar - a.aFaturar);
+    .sort((a, b) => (b.aFaturar ?? 0) - (a.aFaturar ?? 0));
 }
 
 /**
@@ -4240,6 +4248,7 @@ export async function getPartnerInvoicingDetailByType(filters: {
     notes: string | null;
   }>;
 }> {
+  if (scopedProjectIds() !== undefined && ['avenca_mensal', 'avenca_anual'].includes(filters.partnerType)) requireGlobalCityAccess();
   const db = await getDb();
   if (!db) return { partnerType: filters.partnerType, partners: [] };
 
@@ -4266,7 +4275,7 @@ export async function getPartnerInvoicingDetailByType(filters: {
       notes: partnerships.notes,
     })
     .from(partnerships)
-    .where(eq(partnerships.partnerType, filters.partnerType));
+    .where(and(eq(partnerships.partnerType, filters.partnerType), partnerScope(partnerships.id)));
 
   if (partnerRows.length === 0) return { partnerType: filters.partnerType, partners: [] };
 
@@ -4300,6 +4309,7 @@ export async function getPartnerInvoicingDetailByType(filters: {
       and(
         isNotNull(multiparkBookings.campaign),
         sql`${multiparkBookings.status} != 'CANCELLED'`,
+        projectScope(multiparkBookings.projectId),
         gte(multiparkBookings.checkOut, fromStr),
         lte(multiparkBookings.checkOut, toStr),
       ),
@@ -4341,7 +4351,8 @@ export async function getPartnerInvoicingDetailByType(filters: {
         .where(
           and(
             sql`${multiparkBookings.status} != 'CANCELLED'`,
-            gte(multiparkBookings.checkOut, fromStr),
+            projectScope(multiparkBookings.projectId),
+        gte(multiparkBookings.checkOut, fromStr),
             lte(multiparkBookings.checkOut, toStr),
             inArray(multiparkBookings.projectId, Array.from(expanded)),
           ),
@@ -4410,7 +4421,7 @@ export async function getPartnerInvoicingDetailByType(filters: {
 
 export async function listPartnerAliases(partnershipId: number) {
   const db = await getDb(); if (!db) return [];
-  return db.select().from(partnerAliases).where(eq(partnerAliases.partnershipId, partnershipId));
+  return db.select().from(partnerAliases).where(and(eq(partnerAliases.partnershipId, partnershipId), partnerScope(partnerAliases.partnershipId)));
 }
 
 /**
@@ -4435,7 +4446,7 @@ export async function aliasCountsByPartner(): Promise<Array<{
       partnershipName: partnerships.name,
     })
     .from(partnerAliases)
-    .leftJoin(partnerships, eq(partnerships.id, partnerAliases.partnershipId));
+    .leftJoin(partnerships, eq(partnerships.id, partnerAliases.partnershipId)).where(partnerScope(partnerAliases.partnershipId));
 
   const map = new Map<number, { partnershipName: string | null; partnerIds: string[]; paymentMethods: string[] }>();
   for (const r of rows) {
@@ -4492,7 +4503,7 @@ export async function linkMultiparkPartnerId(
 
 export async function getPartnershipById(id: number) {
   const db = await getDb(); if (!db) return null;
-  const rows = await db.select().from(partnerships).where(eq(partnerships.id, id)).limit(1);
+  const rows = await db.select().from(partnerships).where(and(eq(partnerships.id, id), partnerScope(partnerships.id))).limit(1);
   return rows[0] || null;
 }
 
@@ -4515,7 +4526,7 @@ export async function createPartnershipTransaction(data: any) {
 
 export async function getPartnershipTransactions(partnershipId: number) {
   const db = await getDb(); if (!db) return [];
-  return db.select().from(partnershipTransactions).where(eq(partnershipTransactions.partnershipId, partnershipId)).orderBy(desc(partnershipTransactions.transactionDate));
+  return db.select().from(partnershipTransactions).where(and(eq(partnershipTransactions.partnershipId, partnershipId), projectScope(partnershipTransactions.projectId))).orderBy(desc(partnershipTransactions.transactionDate));
 }
 
 // ─── PARTNERSHIP INVOICES ────────────────────────────────────────────────
@@ -5135,12 +5146,12 @@ export async function getDayActivity(date: string) {
   const [actionRows] = await db.execute(sql`
     SELECT agentName, changeType, COUNT(*) AS n
     FROM multipark_booking_history
-    WHERE actionTime >= ${start} AND actionTime <= ${end} AND agentName IS NOT NULL AND agentName != ''
+    WHERE actionTime >= ${start} AND actionTime <= ${end} AND agentName IS NOT NULL AND agentName != '' AND ${bookingHistoryScope(sql`multipark_booking_history.bookingExternalId`)}
     GROUP BY agentName, changeType`) as any;
 
   // Ligações agente→colaborador e agente→parceiro
   const emps = await db.select({ id: employees.id, fullName: employees.fullName, multiparkAgentName: employees.multiparkAgentName })
-    .from(employees).where(isNotNull(employees.multiparkAgentName));
+    .from(employees).where(and(isNotNull(employees.multiparkAgentName), projectScope(employees.projectId)));
   const empByAgent = new Map(emps.map((e) => [(e.multiparkAgentName ?? "").trim().toLowerCase(), e]));
   const partners = await listAgentPartners();
   const partnerByAgent = new Map(partners.map((p) => [p.agentName.trim().toLowerCase(), p]));
@@ -5148,7 +5159,7 @@ export async function getDayActivity(date: string) {
   // GPS do dia (por employeeId quando ligado)
   const [gpsRows] = await db.execute(sql`
     SELECT employeeId, zelloUsername, displayName, totalKm, hoursWorked, hoursStopped, totalHoursOnline, avgSpeed, maxSpeed, gpsPointsCount
-    FROM daily_driver_history WHERE DATE(date) = ${date}`) as any;
+    FROM daily_driver_history WHERE DATE(date) = ${date} AND ${employeeScope(sql`daily_driver_history.employeeId`)}`) as any;
   const gpsByEmp = new Map<number, any>();
   const gpsUnlinked: any[] = [];
   for (const g of gpsRows as any[]) {
@@ -6560,7 +6571,7 @@ export async function getDailyDriverHistoryByDate(dateStr: string) {
   const endOfDay = new Date(dateStr);
   endOfDay.setHours(23, 59, 59, 999);
   const rows = await db.select().from(dailyDriverHistory)
-    .where(and(gte(dailyDriverHistory.date, toMysqlDateTime(startOfDay)), lte(dailyDriverHistory.date, toMysqlDateTime(endOfDay))))
+    .where(and(employeeScope(dailyDriverHistory.employeeId), gte(dailyDriverHistory.date, toMysqlDateTime(startOfDay)), lte(dailyDriverHistory.date, toMysqlDateTime(endOfDay))))
     .orderBy(desc(dailyDriverHistory.totalKm));
   return withEmployeeNames(db, rows);
 }
@@ -6569,7 +6580,7 @@ export async function getDailyDriverHistoryByUser(username: string, limit = 30) 
   const db = await getDb();
   if (!db) return [];
   const rows = await db.select().from(dailyDriverHistory)
-    .where(eq(dailyDriverHistory.zelloUsername, username))
+    .where(and(employeeScope(dailyDriverHistory.employeeId), eq(dailyDriverHistory.zelloUsername, username)))
     .orderBy(desc(dailyDriverHistory.date))
     .limit(limit);
   return withEmployeeNames(db, rows);
@@ -6579,7 +6590,7 @@ export async function getDailyDriverHistoryRange(startDate: string, endDate: str
   const db = await getDb();
   if (!db) return [];
   const rows = await db.select().from(dailyDriverHistory)
-    .where(and(
+    .where(and(employeeScope(dailyDriverHistory.employeeId),
       gte(dailyDriverHistory.date, toMysqlDateTime(new Date(startDate))),
       lte(dailyDriverHistory.date, toMysqlDateTime(new Date(endDate)))
     ))
@@ -6595,7 +6606,7 @@ export async function getDailyDriverStats(dateStr: string) {
   const endOfDay = new Date(dateStr);
   endOfDay.setHours(23, 59, 59, 999);
   const rows = await db.select().from(dailyDriverHistory)
-    .where(and(gte(dailyDriverHistory.date, toMysqlDateTime(startOfDay)), lte(dailyDriverHistory.date, toMysqlDateTime(endOfDay))));
+    .where(and(employeeScope(dailyDriverHistory.employeeId), gte(dailyDriverHistory.date, toMysqlDateTime(startOfDay)), lte(dailyDriverHistory.date, toMysqlDateTime(endOfDay))));
   
   const totalDrivers = rows.length;
   const totalKm = rows.reduce((s, r) => s + parseFloat(String(r.totalKm || "0")), 0);

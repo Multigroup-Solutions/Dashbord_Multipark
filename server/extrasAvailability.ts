@@ -12,6 +12,7 @@
  * só pode ver/editar a própria disponibilidade (mapeado por employees.userId).
  */
 
+import { projectScope } from './cityScope';
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { employees, extrasAvailability } from "../drizzle/schema";
@@ -86,7 +87,7 @@ export interface ActiveExtra {
 export async function listActiveExtras(projectId?: number | null): Promise<ActiveExtra[]> {
   const db = await getDb();
   if (!db) return [];
-  const conds = [eq(employees.isActive, 1), eq(employees.position, "extra")];
+  const conds = [eq(employees.isActive, 1), eq(employees.position, "extra"), projectScope(employees.projectId)];
   if (projectId != null) conds.push(eq(employees.projectId, projectId));
   const rows = await db
     .select({
@@ -123,7 +124,7 @@ export async function listActiveEmployeesByIds(ids: number[]): Promise<ActiveExt
       projectId: employees.projectId,
     })
     .from(employees)
-    .where(and(eq(employees.isActive, 1), inArray(employees.id, ids)))
+    .where(and(eq(employees.isActive, 1), inArray(employees.id, ids), projectScope(employees.projectId)))
     .orderBy(asc(employees.fullName));
 }
 
@@ -156,6 +157,7 @@ export async function findActiveEmployeeByPhoneE164(
 // ─── Disponibilidade de um extra (a própria página dele) ───────────────────────
 
 export interface AvailabilityDay {
+  recorded?: boolean;
   day: string;
   label: string;
   morning: boolean;
@@ -192,6 +194,7 @@ export async function getMyWeek(employeeId: number, weekStart: string): Promise<
       return {
         day: d.day,
         label: d.label,
+        recorded: !!r,
         morning: r ? r.morning === 1 : false,
         night: r ? r.night === 1 : false,
         fromHour: r?.fromHour ?? null,
@@ -417,7 +420,7 @@ export async function getWeekOverview(weekStart: string, projectId?: number | nu
           projectId: employees.projectId,
         })
         .from(employees)
-        .where(and(eq(employees.isActive, 1), inArray(employees.id, missing)))
+        .where(and(eq(employees.isActive, 1), inArray(employees.id, missing), projectScope(employees.projectId)))
         .orderBy(asc(employees.fullName));
       for (const row of rows) {
         if (projectId != null && row.projectId !== projectId) continue;
