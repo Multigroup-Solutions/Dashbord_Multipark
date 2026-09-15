@@ -6,16 +6,16 @@ Google; o que precisa da autorização do Jorge fica a um clique.
 
 ## O que está feito (branch `feat/google-ads-fase1`)
 - **`server/integrations/googleAds/`**
-  - `config.ts` — envs `GOOGLE_ADS_CLIENT_ID/SECRET`, `GOOGLE_ADS_DEVELOPER_TOKEN`,
+  - `config.ts` — envs `GOOGLE_ADS_CLIENT_ID/SECRET`,
     `GOOGLE_ADS_LOGIN_CUSTOMER_ID` (MCC, opcional), `GOOGLE_ADS_REDIRECT_URI`
-    (opcional), `GOOGLE_ADS_API_VERSION` (default v21); `INTEGRATIONS_ENCRYPTION_KEY`.
+    (opcional), `GOOGLE_ADS_API_VERSION` (default v25); `INTEGRATIONS_ENCRYPTION_KEY`.
   - `oauth.ts` — consentimento (scope `adwords`, offline, prompt=consent),
     estado anti-CSRF de uso único em BD (`oauth_states`, 10 min), troca do
     código no servidor, refresh token **cifrado AES-256-GCM** em
     `integration_connections`, renovação automática, preservação do refresh
     token quando a Google não devolve outro, `invalid_grant` → `reauth_required`.
   - `client.ts` — REST `googleAds:searchStream` (só leitura), headers
-    developer-token + login-customer-id, retry 429/5xx com espera progressiva.
+    Authorization + login-customer-id opcional, retry 429/5xx com espera progressiva.
   - `gaql.ts` — consultas: contas (customer_client), métricas diárias por
     campanha (cost_micros, impressions, clicks, conversions, conversions_value,
     all_conversions, budget), conversões por ação.
@@ -59,18 +59,28 @@ Google; o que precisa da autorização do Jorge fica a um clique.
 - Testes: `googleAds.test.ts` (10).
 
 ## O que o Jorge tem de fazer (guia do plano, secção 5)
-1. Conta gestora + IDs das contas; developer token (Centro da API) com nível
-   Explorer/Basic (Test Account Access não lê contas reais).
+1. IDs das contas e conta gestora, se aplicável. No Google Cloud, pedir acesso
+   Explorer/Basic/Standard para o projeto (Test não lê contas reais).
 2. Projeto Google Cloud PRÓPRIO → ativar Google Ads API → consentimento
    (scope adwords; External → **In production**, senão o refresh token expira
    em 7 dias) → cliente OAuth Web com redirect URI EXATO:
    `https://dashboard.multipark.pt/api/integrations/google-ads/oauth/callback`.
 3. Envs no Vercel: `GOOGLE_ADS_CLIENT_ID`, `GOOGLE_ADS_CLIENT_SECRET`,
-   `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID` (se MCC),
+   `GOOGLE_ADS_LOGIN_CUSTOMER_ID` (se MCC),
    `INTEGRATIONS_ENCRYPTION_KEY` (`openssl rand -base64 32`), `CRON_SECRET`.
 4. Integrações → Google Ads → "Ligar" → escolher contas → marca/cidade →
    "Inicial (37 meses)" (repete enquanto disser parcial) → confirmar 2 ciclos
    horários no cron.
+
+## Atualização de 15/09/2026
+
+O Google retirou os developer tokens em 09/09/2026. O nível de acesso agora
+pertence ao projeto Cloud que contém o cliente OAuth. A integração já não exige
+nem envia `developer-token`. A API predefinida é v25; v21 foi desativada.
+O cron Google Ads recusa a recolha se `CRON_SECRET` estiver ausente ou vazio.
+
+Fontes: [migração do developer token](https://developers.google.com/google-ads/api/docs/api-policy/developer-token)
+e [níveis de acesso](https://developers.google.com/google-ads/api/docs/api-policy/access-levels).
 
 ## Fase E (depois de validar com dados reais) — NÃO feito
 - Desligar entrada por CSV/email e `importGoogleAdsReport` (distribui totais

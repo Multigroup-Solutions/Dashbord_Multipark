@@ -2,7 +2,7 @@
  * Cliente REST da Google Ads API — SÓ leitura (searchStream). Nada aqui
  * altera campanhas, orçamentos ou conversões.
  *
- * Cabeçalhos: Authorization (access token), developer-token e, quando o
+ * Cabeçalhos: Authorization (access token) e, quando o
  * acesso é feito através de uma conta gestora, login-customer-id.
  * Respeita limites: repete 429/5xx com espera progressiva; erros de
  * autorização sobem para o chamador marcar a ligação.
@@ -24,11 +24,9 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function apiFetch(path: string, init: RequestInit, loginCustomerId?: string | null): Promise<any> {
   const cfg = readGoogleAdsConfig();
-  if (!cfg.developerToken) throw new GoogleAdsApiError("GOOGLE_ADS_DEVELOPER_TOKEN em falta", 0, "config");
   const token = await getAccessToken();
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
-    "developer-token": cfg.developerToken,
     "Content-Type": "application/json",
   };
   const login = loginCustomerId ?? cfg.loginCustomerId;
