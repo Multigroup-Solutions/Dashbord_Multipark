@@ -21,11 +21,11 @@ export interface AdMetricsFilters { from: string; to: string; projectIds?: numbe
 export interface AdMetricsResult {
   totals: MetricTotals & ReturnType<typeof derivedRatios>;
   byDay: Array<{ date: string; source: "api" | "legacy"; cost: number; impressions: number; clicks: number; conversions: number; conversionValue: number }>;
-  byCampaign: Array<{ key: string; name: string; accountName: string | null; campaignId: number | null; accountId: number | null; source: "api" | "legacy"; projectId: number | null; cost: number; impressions: number; clicks: number; conversions: number; conversionValue: number; budgetPerDay: number | null }>;
+  byCampaign: Array<{ key: string; name: string; accountName: string | null; campaignId: number | null; accountId: number | null; source: "api" | "legacy"; projectId: number | null; national?: boolean; cost: number; impressions: number; clicks: number; conversions: number; conversionValue: number; budgetPerDay: number | null }>;
   coverage: Coverage;
   /** orçamento diário × dias (campanhas ativas) — INDICADOR, não gasto */
   budgetEstimate: number;
-  unmappedCampaigns: number;   // campanhas da API sem marca/cidade (só no total geral)
+  unmappedCampaigns: number;   // campanhas da API por associar (sem marca/cidade e não nacionais)
   apiConnected: boolean;
 }
 
@@ -48,12 +48,16 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
 
   // ── API (fonte oficial) ───────────────────────────────────────────────────
   const apiConds: any[] = [eq(adDailyMetrics.provider, GOOGLE_ADS_PROVIDER), eq(adDailyMetrics.source, "api"), gte(adDailyMetrics.date, f.from), lte(adDailyMetrics.date, f.to)];
-  const effProject = sql<number | null>`COALESCE(${adCampaigns.projectId}, ${adAccounts.projectId})`;
+  // Cidade de uma campanha = a marca/cidade ESCOLHIDA para a campanha. Sem
+  // escolha (por associar) ou nacional (da marca) → nenhuma cidade. Antes caía
+  // na cidade da conta ("Airpark - Brand" contava em Lisboa só porque a conta
+  // AirPark está associada a Airpark Lisboa) — Jorge, 16 set 2026.
+  const effProject = adCampaigns.projectId;
   if (projectFilter) apiConds.push(inArray(effProject, projectFilter));
   const apiRows = await db.select({
     date: adDailyMetrics.date, campaignExternalId: adDailyMetrics.campaignExternalId, accountId: adDailyMetrics.accountId,
     campaignDbId: adCampaigns.id, campaignName: adCampaigns.name, campaignStatus: adCampaigns.status, budgetMicros: adCampaigns.budgetMicros, accountName: adAccounts.name,
-    projectId: effProject,
+    projectId: effProject, scope: adCampaigns.scope,
     costMicros: adDailyMetrics.costMicros, impressions: adDailyMetrics.impressions, clicks: adDailyMetrics.clicks,
     conversions: adDailyMetrics.conversions, conversionValueMicros: adDailyMetrics.conversionValueMicros,
   }).from(adDailyMetrics)
@@ -88,7 +92,8 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
     const c = byCampaignMap.get(key) ?? { key, name: r.campaignName ?? r.campaignExternalId, accountName: r.accountName ?? null, campaignId: r.campaignDbId ?? null, accountId: r.accountId, source: "api" as const, projectId: r.projectId == null ? null : Number(r.projectId), cost: 0, impressions: 0, clicks: 0, conversions: 0, conversionValue: 0, budgetPerDay: r.budgetMicros != null ? microsToAmount(r.budgetMicros) : null };
     c.cost += microsToAmount(t.costMicros); c.impressions += t.impressions; c.clicks += t.clicks; c.conversions += t.conversions; c.conversionValue += microsToAmount(t.conversionValueMicros);
     byCampaignMap.set(key, c);
-    if (r.projectId == null && !unmappedSet.has(key)) { unmappedSet.add(key); unmapped++; }
+    if (r.scope === "national") c.national = true;
+    if (r.projectId == null && r.scope !== "national" && !unmappedSet.has(key)) { unmappedSet.add(key); unmapped++; }
   }
   for (const r of legacyRows) {
     const day = String(r.date).slice(0, 10);
@@ -110,7 +115,7 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
   const days = byDayMap.size ? Math.floor((Date.UTC(+f.to.slice(0, 4), +f.to.slice(5, 7) - 1, +f.to.slice(8, 10)) - Date.UTC(+f.from.slice(0, 4), +f.from.slice(5, 7) - 1, +f.from.slice(8, 10))) / 86400000) + 1 : 0;
   if (days > 0) {
     const activeConds: any[] = [eq(adCampaigns.provider, GOOGLE_ADS_PROVIDER), eq(adCampaigns.status, "ENABLED")];
-    if (projectFilter) activeConds.push(inArray(sql`COALESCE(${adCampaigns.projectId}, ${adAccounts.projectId})`, projectFilter));
+    if (projectFilter) activeConds.push(inArray(adCampaigns.projectId, projectFilter));
     const act = await db.select({ b: sql<string>`COALESCE(SUM(${adCampaigns.budgetMicros}), 0)` }).from(adCampaigns).leftJoin(adAccounts, eq(adAccounts.id, adCampaigns.accountId)).where(and(...activeConds));
     budgetEstimate = microsToAmount(Number(act[0]?.b ?? 0)) * days;
   }

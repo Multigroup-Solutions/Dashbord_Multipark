@@ -77,13 +77,16 @@ export const googleAdsRouter = router({
       if (input?.accountId) conds.push(eq(adCampaigns.accountId, input.accountId));
       return db.select().from(adCampaigns).where(and(...conds)).orderBy(adCampaigns.name);
     }),
+    // Marca/cidade de UMA campanha. scope 'national' = da marca, sem cidade
+    // (Brand, Pmax, Portugal) → projectId fica NULL de propósito.
     update: protectedProcedure
-      .input(z.object({ id: z.number(), projectId: z.number().nullable() }))
+      .input(z.object({ id: z.number(), projectId: z.number().nullable(), scope: z.enum(["city", "national"]).optional() }))
       .mutation(async ({ ctx, input }) => {
         requireAdmin(ctx.user.role);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
-        await db.update(adCampaigns).set({ projectId: input.projectId }).where(eq(adCampaigns.id, input.id));
+        const scope = input.scope ?? "city";
+        await db.update(adCampaigns).set({ projectId: scope === "national" ? null : input.projectId, scope }).where(eq(adCampaigns.id, input.id));
         return { success: true };
       }),
     // Sugestões marca/cidade pelo NOME da campanha ("Airpark - Faro - EN") e
@@ -95,7 +98,7 @@ export const googleAdsRouter = router({
       if (!db) return [];
       const { suggestCampaignProjects } = await import("../../../shared/adCampaignMapping");
       const { getProjects } = await import("../../db");
-      const rows = await db.select({ id: adCampaigns.id, name: adCampaigns.name, projectId: adCampaigns.projectId, accountProjectId: adAccounts.projectId })
+      const rows = await db.select({ id: adCampaigns.id, name: adCampaigns.name, projectId: adCampaigns.projectId, scope: adCampaigns.scope, accountProjectId: adAccounts.projectId })
         .from(adCampaigns).leftJoin(adAccounts, eq(adAccounts.id, adCampaigns.accountId)).where(eq(adCampaigns.provider, GOOGLE_ADS_PROVIDER));
       return suggestCampaignProjects(rows, await getProjects());
     }),
@@ -107,13 +110,16 @@ export const googleAdsRouter = router({
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
         const { suggestCampaignProjects } = await import("../../../shared/adCampaignMapping");
         const { getProjects, logActivity } = await import("../../db");
-        const rows = await db.select({ id: adCampaigns.id, name: adCampaigns.name, projectId: adCampaigns.projectId, accountProjectId: adAccounts.projectId })
+        const rows = await db.select({ id: adCampaigns.id, name: adCampaigns.name, projectId: adCampaigns.projectId, scope: adCampaigns.scope, accountProjectId: adAccounts.projectId })
           .from(adCampaigns).leftJoin(adAccounts, eq(adAccounts.id, adCampaigns.accountId)).where(eq(adCampaigns.provider, GOOGLE_ADS_PROVIDER));
         const wanted = input?.campaignIds ? new Set(input.campaignIds) : null;
         const suggestions = suggestCampaignProjects(rows, await getProjects()).filter((s) => !wanted || wanted.has(s.campaignId));
         for (const s of suggestions) {
-          // Nunca sobrepõe uma marca/cidade já escolhida à mão (só as NULL).
-          await db.update(adCampaigns).set({ projectId: s.projectId }).where(and(eq(adCampaigns.id, s.campaignId), sql`${adCampaigns.projectId} IS NULL`));
+          // Nunca sobrepõe uma marca/cidade já escolhida à mão (só as "por associar":
+          // projectId NULL e scope 'city').
+          const untouched = and(eq(adCampaigns.id, s.campaignId), sql`${adCampaigns.projectId} IS NULL`, eq(adCampaigns.scope, "city"));
+          if (s.kind === "national") await db.update(adCampaigns).set({ scope: "national", projectId: null }).where(untouched);
+          else await db.update(adCampaigns).set({ projectId: s.projectId, scope: "city" }).where(untouched);
         }
         await logActivity({ userId: ctx.user.id, action: "map", entity: "ad_campaigns", details: `Marca/cidade sugerida pelo nome aplicada a ${suggestions.length} campanha(s) Google Ads` });
         return { applied: suggestions.length, suggestions };

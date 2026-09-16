@@ -144,6 +144,10 @@ function Router() {
       <Route path="/marketing">
         {() => (<DashboardLayout><MarketingPage /></DashboardLayout>)}
       </Route>
+      {/* Google Ads é um separador da página de Marketing (deep link) */}
+      <Route path="/marketing/google-ads">
+        {() => (<DashboardLayout><MarketingPage /></DashboardLayout>)}
+      </Route>
       <Route path="/operacional">
         {() => (<DashboardLayout><OperationalPage /></DashboardLayout>)}
       </Route>
@@ -239,7 +243,7 @@ function Router() {
       <Route path="/suporte-dashboard">
         {() => (<DashboardLayout><SuporteDashboard /></DashboardLayout>)}
       </Route>
-      {/* A página duplicada de Marketing foi unificada com /marketing (fonte única = Google Ads API) */}
+      {/* URL antigo do dashboard de marketing → separador Dashboard do Marketing */}
       <Route path="/marketing-dashboard">
         {() => (<DashboardLayout><MarketingPage /></DashboardLayout>)}
       </Route>

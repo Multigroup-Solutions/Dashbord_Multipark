@@ -121,7 +121,10 @@ export const adCampaigns = mysqlTable("ad_campaigns", {
 	status: varchar({ length: 32 }),
 	channelType: varchar({ length: 32 }),
 	budgetMicros: bigint({ mode: 'number' }),        // orçamento (indicador separado; NUNCA gasto)
-	projectId: int(),                                // sobrepõe-se ao da conta
+	projectId: int(),                                // marca/cidade da campanha (nó marca debaixo da cidade)
+	// 0075 — 'national' = campanha da MARCA sem cidade (Brand, Pmax, Portugal):
+	// conta no total da marca e em nenhuma cidade. 'city' + projectId NULL = por associar.
+	scope: mysqlEnum(['city','national']).default('city').notNull(),
 	legacyCampaignId: int(),                         // ligação à tabela `campaigns` antiga
 	firstSeenAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	lastSeenAt: timestamp({ mode: 'string' }),

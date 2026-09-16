@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { brandNameForProject, cityInCampaignName, suggestCampaignProject, suggestCampaignProjects, type ProjectNode } from "../shared/adCampaignMapping";
+import { brandNameForProject, cityInCampaignName, isCampaignMapped, isNationalCampaignName, suggestCampaignProject, suggestCampaignProjects, type ProjectNode } from "../shared/adCampaignMapping";
 
 // Hierarquia real (set 2026): Grupo → Cidade → Marca → Parque
 const P: ProjectNode[] = [
@@ -41,10 +41,25 @@ describe("campanhas Google Ads → marca/cidade pelo nome", () => {
     expect(suggestCampaignProject({ id: 2, name: "Estacionamento - Aeroporto - Faro - EN", accountProjectId: 84, projectId: null }, P)?.projectId).toBe(92);
   });
 
-  it("sem marca na conta, sem cidade no nome, ou marca inexistente nessa cidade → nada", () => {
-    expect(suggestCampaignProject({ id: 3, name: "Airpark - Pmax", accountProjectId: 52, projectId: null }, P)).toBeNull();
+  it("sem marca na conta, sem cidade nem palavra nacional no nome, ou marca inexistente nessa cidade → nada", () => {
+    expect(suggestCampaignProject({ id: 3, name: "Espanha", accountProjectId: 52, projectId: null }, P)).toBeNull();
     expect(suggestCampaignProject({ id: 4, name: "Airpark - Faro - PT", accountProjectId: null, projectId: null }, P)).toBeNull();
     expect(suggestCampaignProject({ id: 5, name: "Redpark - Porto - PT", accountProjectId: 70, projectId: null }, P)).toBeNull(); // não há Redpark no Porto na lista
+    expect(suggestCampaignProject({ id: 6, name: "Airpark - Brand", accountProjectId: null, projectId: null }, P)).toBeNull(); // nacional mas sem marca na conta
+  });
+
+  it("nacional: Brand / Pmax / Portugal sem cidade → da marca, sem cidade (scope national)", () => {
+    expect(isNationalCampaignName("Airpark - Brand", P)).toBe(true);
+    expect(isNationalCampaignName("Skypark - Pmax - PT", P)).toBe(true);
+    expect(isNationalCampaignName("Multipark - Portugal", P)).toBe(true);
+    expect(isNationalCampaignName("PMax - Estacionamento - Aeroporto - Lisboa", P)).toBe(false); // tem cidade → é de Lisboa
+    expect(isNationalCampaignName("Rock in Rio", P)).toBe(false);
+    const s = suggestCampaignProject({ id: 7, name: "Airpark - Pmax", accountProjectId: 52, projectId: null }, P);
+    expect(s).toMatchObject({ campaignId: 7, kind: "national", projectId: null, projectName: "Nacional · Airpark", cityName: "Nacional", brandName: "Airpark" });
+    // já marcada nacional → não volta a sugerir
+    expect(suggestCampaignProjects([{ id: 7, name: "Airpark - Pmax", accountProjectId: 52, projectId: null, scope: "national" }], P)).toEqual([]);
+    expect(isCampaignMapped({ projectId: null, scope: "national" })).toBe(true);
+    expect(isCampaignMapped({ projectId: null, scope: "city" })).toBe(false);
   });
 
   it("em lote: só as sem marca/cidade por defeito, e nunca repete o que já está", () => {
@@ -55,5 +70,6 @@ describe("campanhas Google Ads → marca/cidade pelo nome", () => {
     ];
     expect(suggestCampaignProjects(list, P).map((s) => [s.campaignId, s.projectId])).toEqual([[1, 54]]);
     expect(suggestCampaignProjects(list, P, false).map((s) => [s.campaignId, s.projectId])).toEqual([[1, 54], [3, 53]]);
+    expect(suggestCampaignProjects(list, P).every((s) => s.kind === "city")).toBe(true);
   });
 });

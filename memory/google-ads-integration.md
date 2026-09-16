@@ -117,3 +117,23 @@ e [níveis de acesso](https://developers.google.com/google-ads/api/docs/api-poli
   Em prod (16 set) as 43 campanhas estavam TODAS sem marca/cidade.
 - Gráfico mensal passa a usar `byDay` da fonte única; o "Gasto por plataforma"
   (legado) foi retirado.
+
+## 16 set 2026 (tarde) — Marketing = Dashboard + Google Ads; campanhas NACIONAIS
+
+- **Menu Marketing abre um Dashboard** (`MarketingPage.tsx`, conteúdo por
+  definir pelo Jorge) com o Google Ads num separador próprio
+  (`MarketingGoogleAdsPage.tsx`, deep link `/marketing/google-ads`). "São
+  coisas diferentes." O separador Marketing dos Dashboards mostra só o
+  dashboard. `/marketing-dashboard` continua a funcionar.
+- **Nacional.** `ad_campaigns.scope` ENUM('city','national') (migração 0075).
+  'national' = campanha da MARCA sem cidade (Brand, Pmax, Portugal): conta no
+  total da marca e em nenhuma cidade; `projectId` fica NULL de propósito.
+  'city' + projectId NULL = "por associar". A lista por conta agrupa por
+  cidade → Nacional → Por associar; a escolha por linha tem "Nacional".
+  `suggestCampaignProject` devolve `kind: 'national'` para nomes com
+  brand/pmax/nacional/portugal e sem cidade.
+- **Cálculo por cidade corrigido** (`adMetrics.ts`): a cidade de uma campanha
+  é SÓ a escolhida para a campanha. Antes caía na cidade da conta
+  (`COALESCE(campanha, conta)`): "Airpark - Brand" contava em Lisboa porque a
+  conta AirPark está associada a Airpark Lisboa. Os totais por marca não
+  mudam (vêm da conta).
