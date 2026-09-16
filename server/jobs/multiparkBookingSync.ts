@@ -962,6 +962,16 @@ export async function runRecentCronSync(windowMinutes = 30): Promise<{
  *  nextOffset quando faltarem fatias — o chamador repete com esse offset. */
 const FUTURE_CHUNK_DAYS = 7;
 
+/**
+ * Uma fatia do sync futuro tem de ser repetida quando pelo menos um pedido
+ * de report falhou por inteiro (erro "<parque>/<ação>: …"). Erros de reservas
+ * individuais ("Booking <id>: …") são dados inválidos de UMA reserva —
+ * repetir a fatia não os cura e travava o avanço do marcador.
+ */
+export function chunkNeedsRetry(errors: string[]): boolean {
+  return errors.some((e) => !/^Booking\s/.test(e));
+}
+
 export async function runFutureCronSync(
   weeksAhead = 4,
   opts: { offsetDays?: number; deadlineAt?: number } = {},
@@ -997,8 +1007,11 @@ export async function runFutureCronSync(
     agg.created += report.created;
     agg.updated += report.updated;
     agg.errors.push(...report.errors);
-    // Uma fatia incompleta tem de ser repetida, sem avançar o marcador.
-    if (report.errors.length) break;
+    // Só uma fatia INCOMPLETA (um /bookings/report que falhou) é repetida sem
+    // avançar o marcador. Erros de reservas individuais ("Booking X: …") já
+    // ficaram registados e não podem prender o sync futuro para sempre na
+    // mesma fatia (revisão 16 set 2026).
+    if (chunkNeedsRetry(report.errors)) break;
     offset += FUTURE_CHUNK_DAYS;
   }
 

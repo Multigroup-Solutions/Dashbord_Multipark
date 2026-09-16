@@ -10,7 +10,7 @@ vi.mock('../db', () => ({
   getProjects: async () => [], getLastSyncSuccessAt: async () => null,
   getDb: async () => ({ select: () => ({ from: () => ({ leftJoin: async () => [] }) }) }),
 }));
-import { runFutureCronSync, syncBookings } from './multiparkBookingSync';
+import { chunkNeedsRetry, runFutureCronSync, syncBookings } from './multiparkBookingSync';
 
 beforeEach(() => { fakes.report.mockReset(); fakes.upsert.mockReset(); fakes.log.mockReset(); });
 
@@ -30,6 +30,21 @@ describe('recuperação e contagem da sincronização', () => {
     const retry = await runFutureCronSync(1, { offsetDays: failed.nextOffset });
     expect(retry.done).toBe(true);
     expect(retry.report.errors).toHaveLength(0);
+  });
+  it('avança a janela futura quando só falham reservas individuais (não trava o marcador)', async () => {
+    fakes.report.mockResolvedValue({ bookings: [{ id: 'bad' }, { id: 'ok' }] });
+    fakes.upsert.mockRejectedValueOnce(new Error('data inválida')).mockResolvedValue({ action: 'updated' });
+    const result = await runFutureCronSync(1, { offsetDays: 0 });
+    expect(result.done).toBe(true);
+    expect(result.nextOffset).toBeUndefined();
+    expect(result.report.errors).toEqual([expect.stringMatching(/^Booking bad: /)]);
+    expect(result.report.processed).toBeGreaterThan(0);
+  });
+  it('chunkNeedsRetry distingue falha do report de erro por reserva', () => {
+    expect(chunkNeedsRetry([])).toBe(false);
+    expect(chunkNeedsRetry(['Booking abc: data inválida'])).toBe(false);
+    expect(chunkNeedsRetry(['Parque teste Porto/checkin: origem indisponível'])).toBe(true);
+    expect(chunkNeedsRetry(['Booking abc: x', 'global/checkout: 429'])).toBe(true);
   });
   it('a recuperação de um parque não marca a importação global como concluída', async () => {
     fakes.report.mockResolvedValue({ bookings: [] });

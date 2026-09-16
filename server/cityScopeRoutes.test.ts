@@ -79,4 +79,13 @@ describe('consultas dos módulos respeitam a autorização sem filtros do client
     await expect(caller().rh.accountSummary({ employeeId: 8 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(caller().extrasAvailability.forEmployee({ employeeId: 8, weekStart: '2026-09-14' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
+  it('as ESCRITAS de RH também exigem que a pessoa pertença à cidade autorizada', async () => {
+    // Ficha 8 é de Lisboa; o admin só tem Porto. Nenhuma escrita pode passar.
+    await expect(caller().rh.update({ id: 8, fullName: 'Outro nome' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().rh.setActive({ id: 8, isActive: false, reason: 'inatividade' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().rh.uploadPhoto({ employeeId: 8, fileBase64: 'AAAA', mimeType: 'image/jpeg' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().rh.payslipPdf({ year: 2026, month: 9, employeeId: 8 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    const superAdmin = appRouter.createCaller({ user: { id: 124, role: 'super_admin' }, req: { headers: {} }, res: {} } as any);
+    await expect(superAdmin.rh.delete({ id: 8 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
 });
