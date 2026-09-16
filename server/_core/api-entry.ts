@@ -1,6 +1,8 @@
 import express from "express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerGoogleAdsRoutes } from "../integrations/googleAds/routes";
+import { registerGoogleBusinessRoutes } from "../integrations/googleBusiness/routes";
+import { syncReviews as syncGoogleBusinessReviews } from "../integrations/googleBusiness/service";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { createExternalApiRouter } from "../externalApi";
@@ -33,6 +35,9 @@ let initError: string | null = null;
 try {
   registerOAuthRoutes(app);
   registerGoogleAdsRoutes(app);
+  registerGoogleBusinessRoutes(app, () => waitUntil(syncGoogleBusinessReviews().catch(() => {
+    console.error('[Google Business] A recolha será retomada pelo cron.');
+  })));
   app.use("/api/external", createExternalApiRouter());
   app.use("/api/v1", createMcpApiRouter());
 

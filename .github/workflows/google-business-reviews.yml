@@ -1,0 +1,28 @@
+name: Google Business Profile reviews
+on:
+  schedule:
+    - cron: '3,13,23,33,43,53 * * * *'
+  workflow_dispatch: {}
+permissions:
+  contents: read
+concurrency:
+  group: google-business-reviews
+  cancel-in-progress: false
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Recolher avaliações e retomar páginas pendentes
+        env:
+          APP_URL: ${{ secrets.APP_URL || 'https://dashboard.multipark.pt' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          test -n "$CRON_SECRET"
+          for attempt in 1 2 3; do
+            status=$(curl --silent --show-error --max-time 55 --output /tmp/reviews.json --write-out '%{http_code}' \
+              -H "Authorization: Bearer $CRON_SECRET" "$APP_URL/api/cron/google-business")
+            test "$status" = 200
+            jq -e '.ok == true' /tmp/reviews.json >/dev/null
+            if jq -e '.done == true or .skipped == "busy"' /tmp/reviews.json >/dev/null; then break; fi
+          done

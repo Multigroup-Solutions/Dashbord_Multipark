@@ -790,6 +790,10 @@ export const faqs = mysqlTable("faqs", {
 });
 
 export const googleReviews = mysqlTable("google_reviews", {
+	googleReviewKey: varchar({ length: 64 }).unique('uq_google_review_key'),
+	googleLocationId: int(),
+	googleUpdatedAt: varchar({ length: 40 }),
+	googleReply: text(),
 	id: int().autoincrement().primaryKey(),
 	reviewerName: varchar({ length: 200 }).notNull(),
 	reviewerEmail: varchar({ length: 320 }),

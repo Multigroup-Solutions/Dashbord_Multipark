@@ -16,6 +16,11 @@ export async function assertScopedOperation(path: string, type: string, raw: unk
     assertProjectAccess(row?.projectId as number | null | undefined);
   };
   const campaign = (kind: string, id: number) => projectRecord(kind === 'ad' ? schema.campaigns : schema.internalCampaigns, id);
+  if (path.startsWith('reviews.')) {
+    if (input.id != null) await projectRecord(schema.googleReviews, input.id);
+    if (path === 'reviews.create') assertProjectAccess(input.projectId);
+    if (path === 'reviews.syncFromGmail') requireGlobalCityAccess();
+  }
   if (path.startsWith('expenses.')) {
     if (input.id != null) await projectRecord(path.startsWith('expenses.recurring.') ? schema.recurringExpenses : schema.expenses, input.id);
     if (type === 'mutation' && (path.endsWith('.create') || input.projectId !== undefined)) assertProjectAccess(input.projectId);

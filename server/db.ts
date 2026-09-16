@@ -131,6 +131,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0069").then(m => ({ s: m.MIGRATION_0069_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0069 })),
       import("./migrations/migration_0070").then(m => ({ s: m.MIGRATION_0070_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0070 })),
       import("./migrations/migration_0071").then(m => ({ s: m.MIGRATION_0071_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0071 })),
+      import("./migrations/migration_0072").then(m => ({ s: m.MIGRATION_0072_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0072 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -2362,28 +2363,30 @@ export async function createGoogleReview(data: InsertGoogleReview) {
 
 export async function getGoogleReviews(filters?: { rating?: number; status?: string; projectId?: number }) {
   const db = await getDb(); if (!db) return [];
-  const conditions: any[] = [];
+  const conditions: any[] = [projectScope(googleReviews.projectId)];
   if (filters?.rating) conditions.push(eq(googleReviews.rating, filters.rating));
   if (filters?.status) conditions.push(eq(googleReviews.status, filters.status as any));
-  if (filters?.projectId) conditions.push(eq(googleReviews.projectId, filters.projectId));
+  if (filters?.projectId) conditions.push(inArray(googleReviews.projectId, await resolveProjectIds(filters.projectId)));
   const where = conditions.length > 0 ? and(...conditions) : undefined;
   return db.select().from(googleReviews).where(where).orderBy(desc(googleReviews.createdAt));
 }
 
 export async function getGoogleReviewById(id: number) {
   const db = await getDb(); if (!db) return undefined;
-  const result = await db.select().from(googleReviews).where(eq(googleReviews.id, id)).limit(1);
+  const result = await db.select().from(googleReviews).where(and(eq(googleReviews.id, id), projectScope(googleReviews.projectId))).limit(1);
   return result[0];
 }
 
 export async function updateGoogleReview(id: number, data: Partial<InsertGoogleReview>) {
   const db = await getDb(); if (!db) return;
-  await db.update(googleReviews).set(data).where(eq(googleReviews.id, id));
+  await db.update(googleReviews).set(data).where(and(eq(googleReviews.id, id), projectScope(googleReviews.projectId)));
 }
 
-export async function getGoogleReviewStats() {
+export async function getGoogleReviewStats(filters?: { projectId?: number }) {
   const db = await getDb(); if (!db) return { total: 0, avg: 0, star1: 0, star2: 0, star3: 0, star4: 0, star5: 0, unrated: 0, pending: 0, responded: 0, complaints: 0 };
-  const all = await db.select().from(googleReviews);
+  const conditions = [projectScope(googleReviews.projectId)];
+  if (filters?.projectId) conditions.push(inArray(googleReviews.projectId, await resolveProjectIds(filters.projectId)));
+  const all = await db.select().from(googleReviews).where(and(...conditions));
   const total = all.length;
   // Média só sobre críticas COM estrelas (rating 0 = classificação desconhecida,
   // ex. importadas por email antes do parser — não pode puxar a média para baixo).
@@ -2432,7 +2435,7 @@ export async function searchClientHistory(name?: string, email?: string, plate?:
     const rConds: any[] = [];
     if (name) rConds.push(sql`${googleReviews.reviewerName} LIKE ${'%' + name + '%'}`);
     if (email) rConds.push(sql`${googleReviews.reviewerEmail} LIKE ${'%' + email + '%'}`);
-    results.reviews = await db.select().from(googleReviews).where(or(...rConds)).limit(20);
+    results.reviews = await db.select().from(googleReviews).where(and(or(...rConds), projectScope(googleReviews.projectId))).limit(20);
   }
 
   return results;
@@ -7999,7 +8002,7 @@ export async function getClientHistory(q: ClientHistoryQuery) {
       ? db.select({
           id: googleReviews.id, rating: googleReviews.rating, reviewText: googleReviews.reviewText,
           status: googleReviews.status, vehiclePlate: googleReviews.vehiclePlate, createdAt: googleReviews.createdAt,
-        }).from(googleReviews).where(or(...reviewConds)).orderBy(desc(googleReviews.createdAt)).limit(30)
+        }).from(googleReviews).where(and(or(...reviewConds), projectScope(googleReviews.projectId))).orderBy(desc(googleReviews.createdAt)).limit(30)
       : Promise.resolve([]),
   ]);
 
