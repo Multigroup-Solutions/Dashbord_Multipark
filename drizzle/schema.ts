@@ -794,6 +794,9 @@ export const googleReviews = mysqlTable("google_reviews", {
 	googleLocationId: int(),
 	googleUpdatedAt: varchar({ length: 40 }),
 	googleReply: text(),
+	// Nome do recurso na API (accounts/…/locations/…/reviews/…) — é o que
+	// permite PUBLICAR a resposta no Google a partir do dashboard (0073).
+	googleReviewName: varchar({ length: 255 }),
 	id: int().autoincrement().primaryKey(),
 	reviewerName: varchar({ length: 200 }).notNull(),
 	reviewerEmail: varchar({ length: 320 }),

@@ -465,6 +465,14 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
   const generateMut = trpc.reviews.generateResponse.useMutation();
   const approveMut = trpc.reviews.approveResponse.useMutation();
   const updateMut = trpc.reviews.update.useMutation();
+  const publishMut = trpc.reviews.publishReply.useMutation({
+    onSuccess: () => {
+      utils.reviews.getById.invalidate({ id });
+      utils.reviews.list.invalidate();
+      toast.success("Resposta publicada no Google!");
+    },
+    onError: (e) => toast.error(e.message || "Não foi possível publicar no Google"),
+  });
   const convertMut = trpc.reviews.convertToComplaint.useMutation({
     onSuccess: (r) => {
       toast.success(r.alreadyConverted ? `Já estava convertida (reclamação #${r.complaintId})` : `Reclamação #${r.complaintId} criada`);
@@ -544,12 +552,32 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
             name={review.reviewerName}
           />
 
+          {/* Resposta pública já no Google (vinda da API) */}
+          {review.googleReply && (
+            <Card className="border-green-200">
+              <CardHeader>
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-green-600" /> Publicada no Google
+                  {review.respondedAt && <span className="text-xs font-normal text-muted-foreground">{fmtPTDateTime(review.respondedAt)}</span>}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm bg-green-50 p-3 rounded-lg border border-green-100">{review.googleReply}</p>
+              </CardContent>
+            </Card>
+          )}
+
           {/* AI Response */}
           <Card>
             <CardHeader>
               <CardTitle className="text-sm flex items-center gap-2">
                 <Bot className="w-4 h-4 text-blue-500" /> Resposta
                 {review.aiResponseApproved && <Badge className="bg-green-100 text-green-700 text-[10px]">Aprovada</Badge>}
+                {!review.googleReviewName && (
+                  <span className="text-xs font-normal text-muted-foreground ml-auto flex items-center gap-1" title="Esta crítica veio por email e não está ligada ao Google. Para publicar a resposta, usa o perfil Google, ou espera que a importação pela API a associe.">
+                    <Mail className="w-3 h-3" /> só local (veio por email)
+                  </span>
+                )}
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -564,7 +592,12 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
               ) : review.aiResponse ? (
                 <>
                   <p className="text-sm bg-blue-50 p-3 rounded-lg border border-blue-100">{review.aiResponse}</p>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 flex-wrap">
+                    {review.googleReviewName && review.googleReply !== review.aiResponse && (
+                      <Button size="sm" onClick={() => publishMut.mutate({ id, comment: review.aiResponse || "" })} disabled={publishMut.isPending}>
+                        <ExternalLink className="w-4 h-4 mr-1" /> {publishMut.isPending ? "A publicar..." : review.googleReply ? "Substituir no Google" : "Publicar no Google"}
+                      </Button>
+                    )}
                     {!review.aiResponseApproved && (
                       <Button size="sm" onClick={handleApprove} disabled={approveMut.isPending}>
                         <CheckCircle2 className="w-4 h-4 mr-1" /> Aprovar
