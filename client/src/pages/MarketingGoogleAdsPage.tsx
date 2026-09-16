@@ -13,12 +13,15 @@ import { toast } from "sonner";
 import { Megaphone, BarChart3, CheckCircle2, Loader2 } from "lucide-react";
 
 /**
- * Marketing (Jorge, 16 set 2026):
- *  - página principal: quanto se gastou por MARCA (= conta Google; Multipark.pt
- *    e Multipark SA são a marca Marketplace) e quantas reservas houve dessa
- *    marca no período;
- *  - um separador por CONTA Google, com as campanhas dessa conta divididas
- *    por cidade (cada campanha pertence a uma marca/cidade).
+ * Marketing → Google Ads (Jorge, 16 set 2026). É UMA das páginas do Marketing
+ * (a outra é o Dashboard, em MarketingPage.tsx):
+ *  - "Por marca": gasto por MARCA (a escolhida em cada campanha; sem escolha,
+ *    a da conta — Multipark.pt e Multipark SA são a marca Marketplace),
+ *    reservas reais dessa marca, as que vieram pelos anúncios e o seu valor;
+ *  - um separador por CONTA Google, com as campanhas divididas por
+ *    marca/cidade (+ reservas dessa marca/cidade para comparar com as
+ *    conversões da Google). "Nacional" (Brand, Pmax, Portugal) mostra-se à
+ *    parte, mas o gasto é repartido pelas cidades da marca.
  * Tudo vem da Google Ads API (recolha diária); não há importações manuais.
  */
 
@@ -50,7 +53,7 @@ export default function MarketingGoogleAdsPage() {
   const covCls = !cov || cov.status === "ok" ? "border-emerald-200 bg-emerald-50 text-emerald-900" : cov.status === "none" ? "border-muted bg-muted/40 text-muted-foreground" : "border-amber-200 bg-amber-50 text-amber-900";
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <p className="text-muted-foreground">Gasto Google Ads por marca e por campanha, e reservas por marca</p>
@@ -87,7 +90,7 @@ export default function MarketingGoogleAdsPage() {
         </TabsContent>
         {accounts.map((a) => (
           <TabsContent key={a.id} value={`conta-${a.id}`} className="mt-4">
-            <AccountCampaigns account={a} rows={(st?.byCampaign ?? []).filter((r: any) => r.accountId === a.id)} projects={projects as any[]} />
+            <AccountCampaigns account={a} rows={(st?.byCampaign ?? []).filter((r: any) => r.accountId === a.id)} projects={projects as any[]} byBrandCity={byBrand?.byBrandCity ?? []} nationalShares={(st?.nationalShares ?? []).filter((s: any) => s.accountId === a.id)} />
           </TabsContent>
         ))}
       </Tabs>
@@ -107,14 +110,14 @@ function BrandSummary({ data }: { data: any }) {
       </Card>
     );
   }
-  const totals = rows.reduce((t, r) => ({ spend: t.spend + r.spend, bookings: t.bookings + r.bookings, revenue: t.revenue + r.revenue, attributed: t.attributed + r.attributed }), { spend: 0, bookings: 0, revenue: 0, attributed: 0 });
+  const totals = rows.reduce((t, r) => ({ spend: t.spend + r.spend, bookings: t.bookings + r.bookings, revenue: t.revenue + r.revenue, attributed: t.attributed + r.attributed, revenueAttributed: t.revenueAttributed + (r.revenueAttributed ?? 0) }), { spend: 0, bookings: 0, revenue: 0, attributed: 0, revenueAttributed: 0 });
   return (
     <div className="space-y-4">
       <Card>
         <CardHeader>
           <CardTitle>Gasto e reservas por marca</CardTitle>
           <p className="text-xs text-muted-foreground mt-1">
-            Marca = conta Google Ads (Multipark.pt e Multipark SA são a marca Marketplace). Reservas = reservas Multipark reais dessa marca, por data de criação, sem canceladas. "Atribuídas" são as que trazem gclid/utm pago no URL de origem.
+            Marca = a escolhida em cada campanha (uma campanha da conta Multipark.pt marcada como Airpark Faro conta na Airpark); sem escolha, a marca da conta (Multipark.pt e Multipark SA são a marca Marketplace). Reservas = reservas Multipark reais dessa marca, por data de criação, sem canceladas. "Atribuídas" são as que trazem gclid/utm pago no URL de origem.
           </p>
         </CardHeader>
         <CardContent className="p-0">
@@ -126,7 +129,8 @@ function BrandSummary({ data }: { data: any }) {
                   <th className="text-left px-4 py-2 font-medium">Conta(s) Google</th>
                   <th className="text-right px-4 py-2 font-medium">Gasto</th>
                   <th className="text-right px-4 py-2 font-medium">Reservas</th>
-                  <th className="text-right px-4 py-2 font-medium">Atribuídas a anúncios</th>
+                  <th className="text-right px-4 py-2 font-medium">Via anúncios</th>
+                  <th className="text-right px-4 py-2 font-medium">Valor via anúncios</th>
                   <th className="text-right px-4 py-2 font-medium">Valor reservado</th>
                   <th className="text-right px-4 py-2 font-medium">Gasto / reserva</th>
                 </tr>
@@ -138,8 +142,9 @@ function BrandSummary({ data }: { data: any }) {
                     <td className="px-4 py-2 text-muted-foreground">{r.accounts.map((a: any) => a.name).join(", ")}</td>
                     <td className="px-4 py-2 text-right">{eur(r.spend)}</td>
                     <td className="px-4 py-2 text-right font-semibold">{num(r.bookings)}</td>
-                    <td className="px-4 py-2 text-right text-muted-foreground">{num(r.attributed)}</td>
-                    <td className="px-4 py-2 text-right">{eur(r.revenue)}</td>
+                    <td className="px-4 py-2 text-right">{num(r.attributed)}</td>
+                    <td className="px-4 py-2 text-right">{eur(r.revenueAttributed)}</td>
+                    <td className="px-4 py-2 text-right text-muted-foreground">{eur(r.revenue)}</td>
                     <td className="px-4 py-2 text-right">{r.bookings > 0 ? eur(r.spend / r.bookings) : "—"}</td>
                   </tr>
                 ))}
@@ -148,7 +153,8 @@ function BrandSummary({ data }: { data: any }) {
                   <td className="px-4 py-2 text-right">{eur(totals.spend)}</td>
                   <td className="px-4 py-2 text-right">{num(totals.bookings)}</td>
                   <td className="px-4 py-2 text-right">{num(totals.attributed)}</td>
-                  <td className="px-4 py-2 text-right">{eur(totals.revenue)}</td>
+                  <td className="px-4 py-2 text-right">{eur(totals.revenueAttributed)}</td>
+                  <td className="px-4 py-2 text-right text-muted-foreground">{eur(totals.revenue)}</td>
                   <td className="px-4 py-2 text-right">{totals.bookings > 0 ? eur(totals.spend / totals.bookings) : "—"}</td>
                 </tr>
               </tbody>
@@ -164,7 +170,10 @@ function BrandSummary({ data }: { data: any }) {
 }
 
 // ─── UMA CONTA: campanhas divididas por cidade ───────────────────────────────
-function AccountCampaigns({ account, rows, projects }: { account: { id: number; name: string }; rows: any[]; projects: any[] }) {
+type BrandCityStats = { projectId: number; bookings: number; attributed: number; revenue: number; revenueAttributed: number };
+type NationalShare = { key: string; accountId: number; projectId: number; cost: number; clicks: number; conversions: number; conversionValue: number };
+
+function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares }: { account: { id: number; name: string }; rows: any[]; projects: any[]; byBrandCity: BrandCityStats[]; nationalShares: NationalShare[] }) {
   const { user } = useAuth();
   const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
   const utils = trpc.useUtils();
@@ -203,23 +212,40 @@ function AccountCampaigns({ account, rows, projects }: { account: { id: number; 
   }, [suggestions, rows]);
   const sugById = useMemo(() => new Map(mySuggestions.map((s) => [s.campaignId, s])), [mySuggestions]);
 
-  // Grupos: uma linha por cidade, depois "Nacional" (da marca, sem cidade) e por
-  // fim "Por associar" (ainda sem escolha) — Jorge, 16 set 2026.
-  const NATIONAL = "Nacional (marca, sem cidade)";
+  // Grupos: uma linha por MARCA/CIDADE (a marca escolhida para a campanha, que
+  // pode não ser a da conta — "Airpark Faro" dentro da conta Multipark.pt),
+  // depois "Nacional" (só para se ver: o gasto está repartido pelas cidades da
+  // marca) e por fim "Por associar" — Jorge, 16 set 2026.
+  const NATIONAL = "Nacional (repartido pelas cidades)";
   const UNMAPPED = "Por associar";
   const groupRank = (name: string) => (name === UNMAPPED ? 2 : name === NATIONAL ? 1 : 0);
-  type Group = { city: string; rows: any[]; cost: number; clicks: number; conversions: number; value: number };
+  type Group = { city: string; projectId: number | null; rows: any[]; cost: number; clicks: number; conversions: number; value: number; nationalCost: number; stats: BrandCityStats | null };
+  const cityStats = useMemo(() => new Map(byBrandCity.map((c) => [c.projectId, c])), [byBrandCity]);
+  const shareByProject = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const s of nationalShares) m.set(s.projectId, (m.get(s.projectId) ?? 0) + s.cost);
+    return m;
+  }, [nationalShares]);
   const groups = useMemo(() => {
     const map = new Map<string, Group>();
-    for (const r of rows) {
-      const city = r.national ? NATIONAL : (cityOf(r.projectId) || UNMAPPED);
-      const g: Group = map.get(city) ?? { city, rows: [], cost: 0, clicks: 0, conversions: 0, value: 0 };
-      g.rows.push(r); g.cost += r.cost; g.clicks += r.clicks; g.conversions += r.conversions; g.value += r.conversionValue;
+    const getGroup = (city: string, projectId: number | null): Group => {
+      const g = map.get(city) ?? { city, projectId, rows: [], cost: 0, clicks: 0, conversions: 0, value: 0, nationalCost: projectId != null ? (shareByProject.get(projectId) ?? 0) : 0, stats: projectId != null ? (cityStats.get(projectId) ?? null) : null };
       map.set(city, g);
+      return g;
+    };
+    for (const r of rows) {
+      const projectId = !r.national && r.projectId != null ? Number(r.projectId) : null;
+      const city = r.national ? NATIONAL : (projectId != null ? label(projectId) : UNMAPPED);
+      const g = getGroup(city, projectId);
+      g.rows.push(r); g.cost += r.cost; g.clicks += r.clicks; g.conversions += r.conversions; g.value += r.conversionValue;
     }
+    // cidades que só recebem gasto nacional repartido aparecem na mesma
+    for (const projectId of shareByProject.keys()) getGroup(label(projectId), projectId);
     for (const g of map.values()) g.rows.sort((a, b) => b.cost - a.cost);
-    return Array.from(map.values()).sort((a, b) => groupRank(a.city) - groupRank(b.city) || b.cost - a.cost);
-  }, [rows]); // eslint-disable-line react-hooks/exhaustive-deps
+    return Array.from(map.values()).sort((a, b) => groupRank(a.city) - groupRank(b.city) || (b.cost + b.nationalCost) - (a.cost + a.nationalCost));
+  }, [rows, shareByProject, cityStats]); // eslint-disable-line react-hooks/exhaustive-deps
+  const nationalSplitText = useMemo(() => Array.from(shareByProject.entries()).filter(([, c]) => c > 0).sort((a, b) => b[1] - a[1]).map(([id, c]) => `${label(id)} ${eur(c)}`).join(" · "), [shareByProject]); // eslint-disable-line react-hooks/exhaustive-deps
+  const bookingTotals = useMemo(() => groups.reduce((t, g) => g.stats ? { bookings: t.bookings + g.stats.bookings, attributed: t.attributed + g.stats.attributed, revenueAttributed: t.revenueAttributed + g.stats.revenueAttributed } : t, { bookings: 0, attributed: 0, revenueAttributed: 0 }), [groups]);
 
   const selectValue = (r: any) => (r.national ? "national" : r.projectId != null ? String(r.projectId) : "none");
   const choose = (campaignId: number, v: string) => {
@@ -244,7 +270,7 @@ function AccountCampaigns({ account, rows, projects }: { account: { id: number; 
         <div>
           <CardTitle>{account.name} · {eur(total.cost)} no período</CardTitle>
           <p className="text-xs text-muted-foreground mt-1">
-            Campanhas divididas por cidade. A marca/cidade de cada campanha decide onde o gasto conta. "Nacional" (Brand, Pmax, Portugal) é da marca: conta no total da marca e em nenhuma cidade.
+            Campanhas divididas por marca/cidade (a escolhida para a campanha, mesmo que seja outra marca). "Nacional" (Brand, Pmax, Portugal) mostra-se à parte, mas o gasto é repartido pelas cidades da marca na proporção do gasto de cidade. Reservas = reservas Multipark reais dessa marca/cidade, para comparar com as conversões da Google.
           </p>
         </div>
         {isAdmin && mySuggestions.length > 0 && (
@@ -267,20 +293,30 @@ function AccountCampaigns({ account, rows, projects }: { account: { id: number; 
                 <th className="text-right px-4 py-2 font-medium">Conv. Google</th>
                 <th className="text-right px-4 py-2 font-medium">Custo/conv.</th>
                 <th className="text-right px-4 py-2 font-medium">Valor conv.</th>
+                <th className="text-right px-4 py-2 font-medium border-l" title="Reservas Multipark reais da marca nessa cidade (todos os parques), por data de criação, sem canceladas">Reservas</th>
+                <th className="text-right px-4 py-2 font-medium" title="Reservas que vieram pelos anúncios (gclid / utm pago no URL de origem)">Via anúncios</th>
+                <th className="text-right px-4 py-2 font-medium" title="Valor reservado das reservas que vieram pelos anúncios">Valor via anúncios</th>
               </tr>
             </thead>
             <tbody>
               {groups.map((g) => (
                 <React.Fragment key={g.city}>
                   <tr className="bg-muted/40 border-b">
-                    <td className="px-4 py-2 font-semibold" colSpan={2}>{g.city} <span className="text-xs font-normal text-muted-foreground">{g.rows.length} campanha(s)</span></td>
-                    <td className="px-4 py-2 text-right font-semibold">{eur(g.cost)}</td>
+                    <td className="px-4 py-2 font-semibold" colSpan={2}>
+                      {g.city} <span className="text-xs font-normal text-muted-foreground">{g.rows.length} campanha(s)</span>
+                      {g.city === NATIONAL && nationalSplitText && <div className="text-xs font-normal text-muted-foreground">Repartido: {nationalSplitText}</div>}
+                      {g.nationalCost > 0 && <div className="text-xs font-normal text-muted-foreground">inclui {eur(g.nationalCost)} de nacional</div>}
+                    </td>
+                    <td className="px-4 py-2 text-right font-semibold">{g.city === NATIONAL ? <span className="text-muted-foreground" title="Já contado nas cidades">({eur(g.cost)})</span> : eur(g.cost + g.nationalCost)}</td>
                     <td className="px-4 py-2 text-right text-muted-foreground">—</td>
                     <td className="px-4 py-2 text-right font-semibold">{num(g.clicks)}</td>
                     <td className="px-4 py-2 text-right text-muted-foreground">{g.clicks > 0 ? eur(g.cost / g.clicks) : "—"}</td>
                     <td className="px-4 py-2 text-right font-semibold">{g.conversions.toFixed(1)}</td>
                     <td className="px-4 py-2 text-right text-muted-foreground">{g.conversions > 0 ? eur(g.cost / g.conversions) : "—"}</td>
                     <td className="px-4 py-2 text-right font-semibold">{eur(g.value)}</td>
+                    <td className="px-4 py-2 text-right font-semibold border-l">{g.stats ? num(g.stats.bookings) : "—"}</td>
+                    <td className="px-4 py-2 text-right font-semibold">{g.stats ? num(g.stats.attributed) : "—"}</td>
+                    <td className="px-4 py-2 text-right font-semibold">{g.stats ? eur(g.stats.revenueAttributed) : "—"}</td>
                   </tr>
                   {g.rows.map((r) => {
                     const sug = r.campaignId != null ? sugById.get(r.campaignId) : null;
@@ -315,6 +351,9 @@ function AccountCampaigns({ account, rows, projects }: { account: { id: number; 
                         <td className="px-4 py-1.5 text-right">{Number(r.conversions).toFixed(1)}</td>
                         <td className="px-4 py-1.5 text-right text-muted-foreground">{r.conversions > 0 ? eur(r.cost / r.conversions) : "—"}</td>
                         <td className="px-4 py-1.5 text-right">{eur(r.conversionValue)}</td>
+                        <td className="px-4 py-1.5 text-right text-muted-foreground border-l">—</td>
+                        <td className="px-4 py-1.5 text-right text-muted-foreground">—</td>
+                        <td className="px-4 py-1.5 text-right text-muted-foreground">—</td>
                       </tr>
                     );
                   })}
@@ -329,6 +368,9 @@ function AccountCampaigns({ account, rows, projects }: { account: { id: number; 
                 <td className="px-4 py-2 text-right">{total.conversions.toFixed(1)}</td>
                 <td className="px-4 py-2 text-right text-muted-foreground">{total.conversions > 0 ? eur(total.cost / total.conversions) : "—"}</td>
                 <td className="px-4 py-2 text-right">{eur(total.value)}</td>
+                <td className="px-4 py-2 text-right border-l">{num(bookingTotals.bookings)}</td>
+                <td className="px-4 py-2 text-right">{num(bookingTotals.attributed)}</td>
+                <td className="px-4 py-2 text-right">{eur(bookingTotals.revenueAttributed)}</td>
               </tr>
             </tbody>
           </table>

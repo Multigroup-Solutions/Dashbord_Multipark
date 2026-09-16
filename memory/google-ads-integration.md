@@ -137,3 +137,14 @@ e [níveis de acesso](https://developers.google.com/google-ads/api/docs/api-poli
   (`COALESCE(campanha, conta)`): "Airpark - Brand" contava em Lisboa porque a
   conta AirPark está associada a Airpark Lisboa. Os totais por marca não
   mudam (vêm da conta).
+- **Reservas por marca/cidade + nacional repartido (mesmo dia, mais tarde).**
+  `byBrand` devolve `revenueAttributed` por marca e `byBrandCity` (reservas,
+  via anúncios, valor via anúncios por nó marca-cidade). A lista por conta
+  agrupa por MARCA/CIDADE escolhida (uma campanha da conta Multipark.pt marcada
+  Airpark Faro aparece como "Airpark Faro" e conta na marca Airpark — o gasto
+  por marca passou a ser por CAMPANHA, não por conta). "Nacional" mostra-se à
+  parte mas o gasto é repartido pelas cidades da marca na proporção do gasto
+  de cidade (`nationalSharesForBrand`; sem gasto, partes iguais);
+  `adMetrics.nationalShares` traz a repartição e o filtro de cidade aplica-se
+  em JS depois da repartição (uma cidade filtrada inclui a sua fração do
+  nacional).

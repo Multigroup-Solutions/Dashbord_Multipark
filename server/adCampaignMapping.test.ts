@@ -1,5 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { brandNameForProject, cityInCampaignName, isCampaignMapped, isNationalCampaignName, suggestCampaignProject, suggestCampaignProjects, type ProjectNode } from "../shared/adCampaignMapping";
+import { brandNameForProject, cityInCampaignName, isCampaignMapped, isNationalCampaignName, nationalSharesForBrand, suggestCampaignProject, suggestCampaignProjects, type ProjectNode } from "../shared/adCampaignMapping";
+
+describe("nacional repartido pelas cidades da marca", () => {
+  it("proporcional ao gasto de cidade da marca; sem gasto, partes iguais; marca sem cidades → nada", () => {
+    const w = new Map<number, number>([[52, 300], [53, 100], [54, 0]]);
+    expect(nationalSharesForBrand("Airpark", P, w)).toEqual([
+      { projectId: 52, fraction: 0.75 }, { projectId: 53, fraction: 0.25 }, { projectId: 54, fraction: 0 },
+    ]);
+    const eq = nationalSharesForBrand("airpark", P, new Map());
+    expect(eq.map((s) => s.projectId)).toEqual([52, 53, 54]);
+    expect(eq.every((s) => Math.abs(s.fraction - 1 / 3) < 1e-9)).toBe(true);
+    expect(nationalSharesForBrand("Boardingpark", P, w)).toEqual([]);
+  });
+});
 
 // Hierarquia real (set 2026): Grupo → Cidade → Marca → Parque
 const P: ProjectNode[] = [

@@ -105,6 +105,23 @@ export function isCampaignMapped(c: Pick<CampaignForMapping, "projectId" | "scop
   return c.projectId != null || c.scope === "national";
 }
 
+/**
+ * Repartição do gasto NACIONAL de uma marca pelas cidades dessa marca (Jorge,
+ * 16 set 2026: "pões lá como é nacional, só para se ver, e depois divides
+ * aquilo na marca pelas cidades"). Peso de cada cidade = gasto das campanhas
+ * DE CIDADE dessa marca no período (`cityWeights`, por nó marca-cidade); sem
+ * pesos, partes iguais. Devolve frações que somam 1 (ou [] se a marca não
+ * existe em nenhuma cidade).
+ */
+export function nationalSharesForBrand(brand: string, projects: ProjectNode[], cityWeights: Map<number, number>): Array<{ projectId: number; fraction: number }> {
+  const nodes = projects.filter((p) => p.level === "brand" && strip(p.name) === strip(brand));
+  if (!nodes.length) return [];
+  const weights = nodes.map((n) => Math.max(0, cityWeights.get(n.id) ?? 0));
+  const total = weights.reduce((s, w) => s + w, 0);
+  if (total <= 0) return nodes.map((n) => ({ projectId: n.id, fraction: 1 / nodes.length }));
+  return nodes.map((n, i) => ({ projectId: n.id, fraction: weights[i] / total }));
+}
+
 /** Sugestões para todas as campanhas; `onlyUnmapped` ignora as que já têm marca/cidade ou são nacionais. */
 export function suggestCampaignProjects(campaigns: CampaignForMapping[], projects: ProjectNode[], onlyUnmapped = true): MappingSuggestion[] {
   const out: MappingSuggestion[] = [];
