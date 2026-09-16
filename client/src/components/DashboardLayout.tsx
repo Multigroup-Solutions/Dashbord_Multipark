@@ -225,7 +225,7 @@ export const hubGroups: HubGroup[] = [
       { icon: Truck, label: "Operações", path: "/operacoes-dashboard" },
       { icon: Users, label: "Pessoas", path: "/pessoas-dashboard" },
       { icon: MessageSquareWarning, label: "Suporte", path: "/suporte-dashboard" },
-      { icon: Megaphone, label: "Marketing", path: "/marketing-dashboard" },
+      { icon: Megaphone, label: "Marketing", path: "/marketing" },
     ],
   },
   ...menuGroups.map(g => ({

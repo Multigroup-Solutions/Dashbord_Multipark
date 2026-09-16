@@ -501,50 +501,19 @@ export async function runEmailInboundSync(opts?: { sinceDays?: number; deadlineA
           const fromEmail = fromAddr?.address || undefined;
           const subject = mail.subject || "";
 
-          // Relatório diário de campanhas (Google Ads/Supermetrics agendado
-          // para campanhas@multipark.pt): CSV anexo → campaign_daily_stats.
-          // Tratado ANTES do filtro de sistema (o remetente é automático).
+          // Relatório diário de campanhas por email: DESLIGADO (Jorge, 16 set
+          // 2026). A fonte única do gasto é a Google Ads API; o email fica só
+          // registado, sem tocar em campaign_daily_stats.
           if (alias === "campanhas") {
-            const { parseCampaignCsv, ingestCampaignDaily } = await import("../campaignReportIngest");
-            const systemUserId = (await getSystemUserId()) ?? 0;
-            let imported = 0, totalSpend = 0;
-            const createdCampaigns: string[] = [];
-            const errs: string[] = [];
-            const csvAtts = (mail.attachments || []).filter((a) =>
-              /\.csv$/i.test(a.filename || "") || /csv|text\/plain/i.test(a.contentType || ""));
-            const sources = csvAtts.length > 0
-              ? csvAtts.map((a) => a.content?.toString("utf8") ?? "")
-              : [mail.text || ""]; // fallback: relatório no corpo do email
-            for (const text of sources) {
-              if (!text.trim()) continue;
-              const { rows, errors } = parseCampaignCsv(text);
-              errs.push(...errors);
-              if (rows.length > 0) {
-                const r = await ingestCampaignDaily(rows, systemUserId);
-                imported += r.imported;
-                totalSpend += r.totalSpend;
-                createdCampaigns.push(...r.campaignsCreated);
-                errs.push(...r.errors);
-              }
-            }
             await createInboundEmail({
               messageId, alias, fromName, fromEmail, subject,
-              bodyText: [
-                `Relatório de campanhas: ${imported} registos dia×campanha importados (${totalSpend.toFixed(2)}€ de gasto)`,
-                createdCampaigns.length ? `Campanhas novas auto-criadas: ${createdCampaigns.join(", ")}` : "",
-                errs.length ? `Avisos: ${errs.join("; ")}` : "",
-              ].filter(Boolean).join("\n").slice(0, 5000),
+              bodyText: "Ingestão por email desligada — o gasto vem da Google Ads API.",
               targetModule: "campaigns",
-              status: imported > 0 ? "processed" : "skipped",
+              status: "skipped",
               receivedAt: mail.date ? new Date(mail.date).toISOString().slice(0, 19).replace("T", " ") : null,
               processedAt: now(),
             } as any);
-            if (imported > 0) {
-              result.created++;
-              result.byAlias[alias] = (result.byAlias[alias] || 0) + 1;
-            } else {
-              result.skipped++;
-            }
+            result.skipped++;
             continue;
           }
 

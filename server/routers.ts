@@ -3484,22 +3484,6 @@ export const appRouter = router({
 
   // ─── MARKETING ────────────────────────────────────────────────────────────
   marketing: router({
-    // Import manual de CSV de campanhas (histórico 2024→ ou correções).
-    // Mesmo motor da ingestão do email diário campanhas@multipark.pt.
-    importCampaignCsv: protectedProcedure
-      .input(z.object({ csv: z.string().min(10).max(5_000_000) }))
-      .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
-        const { parseCampaignCsv, ingestCampaignDaily } = await import("./campaignReportIngest");
-        const { rows, errors } = parseCampaignCsv(input.csv);
-        if (rows.length === 0) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: errors.join("; ") || "CSV sem linhas válidas" });
-        }
-        const res = await ingestCampaignDaily(rows, ctx.user.id);
-        await logActivity({ userId: ctx.user.id, action: "import", entity: "campaign_daily_stats", details: `${res.imported} registos, ${res.totalSpend}€` });
-        return { ...res, parseErrors: errors };
-      }),
-
     // Fonte única (server/integrations/googleAds/marketingStats): gasto = custo
     // importado (nunca orçamento×dias), reservas reais por data de criação,
     // atribuídas vs sem atribuição, conversões Google à parte, cobertura.
@@ -3514,6 +3498,24 @@ export const appRouter = router({
         const to = input?.to || today;
         try {
           return await getMarketingStats({ from, to, projectId: input?.projectId });
+        } catch (e: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) });
+        }
+      }),
+
+    // Página principal do Marketing (Jorge, 16 set 2026): gasto por marca
+    // (= conta Google; Multipark = Marketplace) e reservas dessa marca.
+    byBrand: protectedProcedure
+      .input(z.object({ from: z.string().optional(), to: z.string().optional() }).optional())
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { getSpendAndBookingsByBrand } = await import("./integrations/googleAds/marketingStats");
+        const { lisbonToday } = await import("../shared/expensePeriods");
+        const today = lisbonToday();
+        const from = input?.from || `${today.slice(0, 7)}-01`;
+        const to = input?.to || today;
+        try {
+          return await getSpendAndBookingsByBrand({ from, to });
         } catch (e: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) });
         }
@@ -3846,177 +3848,11 @@ export const appRouter = router({
           const to = input?.to ? new Date(input.to) : undefined;
           return getAllDailyStats({ from, to, projectId: input?.projectId });
         }),
-      import: protectedProcedure
-        .input(z.object({
-          campaignId: z.number(),
-          rows: z.array(z.object({
-            date: z.string(),
-            spend: z.string(),
-            impressions: z.number().optional(),
-            clicks: z.number().optional(),
-            conversions: z.number().optional(),
-            conversionValue: z.string().optional(),
-          })),
-        }))
-        .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
-          const rows = input.rows.map(r => ({
-            campaignId: input.campaignId,
-            date: new Date(r.date).toISOString().slice(0, 19).replace("T", " "),
-            spend: r.spend,
-            impressions: r.impressions ?? 0,
-            clicks: r.clicks ?? 0,
-            conversions: String(r.conversions ?? 0),
-            conversionValue: r.conversionValue ?? "0",
-            cpc: r.clicks && r.clicks > 0 ? (parseFloat(r.spend) / r.clicks).toFixed(4) : null,
-            ctr: r.impressions && r.impressions > 0 ? ((r.clicks ?? 0) / r.impressions * 100).toFixed(4) : null,
-            costPerConversion: r.conversions && r.conversions > 0 ? (parseFloat(r.spend) / r.conversions).toFixed(2) : null,
-            importedById: ctx.user.id,
-          }));
-          await importDailyStats(rows);
-          await logActivity({ userId: ctx.user.id, action: "import", entity: "campaign_stats", entityId: input.campaignId, details: `${rows.length} registos importados` });
-          return { count: rows.length };
-        }),
       delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "super_admin");
         await deleteDailyStat(input.id);
         return { success: true };
       }),
-
-      // ── IMPORTAÇÃO GOOGLE ADS CSV (com dedup) ──
-      importGoogleAdsReport: protectedProcedure
-        .input(z.object({
-          dateRange: z.object({ start: z.string(), end: z.string() }),
-          campaigns: z.array(z.object({
-            name: z.string(),
-            status: z.enum(["active", "paused", "completed"]),
-            budget: z.number(),
-            campaignType: z.string(),
-            impressions: z.number(),
-            interactions: z.number(),
-            cost: z.number(),
-            clicks: z.number(),
-            conversions: z.number(),
-            cpc: z.number(),
-            ctr: z.number(),
-            costPerConversion: z.number(),
-          })),
-        }))
-        .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
-          const startDate = new Date(input.dateRange.start);
-          const endDate = new Date(input.dateRange.end);
-          let created = 0;
-          let updated = 0;
-          let skipped = 0;
-          const details: string[] = [];
-
-          for (const c of input.campaigns) {
-            // Skip campaigns with no data at all
-            if (c.cost === 0 && c.clicks === 0 && c.impressions === 0) {
-              // Still create the campaign if it doesn't exist, but skip stats
-              let campaign = await getCampaignByNameAndPlatform(c.name, "google_ads");
-              if (!campaign) {
-                const id = await createCampaign({
-                  name: c.name,
-                  platform: "google_ads",
-                  campaignStatus: c.status,
-                  budget: c.budget > 0 ? String(c.budget) : null,
-                  notes: `Tipo: ${c.campaignType}`,
-                  createdById: ctx.user.id,
-                });
-                details.push(`✅ Campanha criada (sem dados): ${c.name}`);
-              }
-              skipped++;
-              continue;
-            }
-
-            // Find or create campaign
-            let campaign = await getCampaignByNameAndPlatform(c.name, "google_ads");
-            if (!campaign) {
-              const id = await createCampaign({
-                name: c.name,
-                platform: "google_ads",
-                campaignStatus: c.status,
-                startDate: startDate.toISOString().slice(0, 19).replace("T", " "),
-                endDate: endDate.toISOString().slice(0, 19).replace("T", " "),
-                budget: c.budget > 0 ? String(c.budget) : null,
-                notes: `Tipo: ${c.campaignType}`,
-                createdById: ctx.user.id,
-              });
-              campaign = await getCampaignById(id);
-              details.push(`✅ Campanha criada: ${c.name}`);
-            } else {
-              // Update campaign status and budget
-              await updateCampaign(campaign.id, {
-                campaignStatus: c.status,
-                budget: c.budget > 0 ? String(c.budget) : campaign.budget,
-              });
-            }
-
-            if (!campaign) { skipped++; continue; }
-
-            // Distribui o total do período por cada dia. Reduz a granularidade
-            // mas mantém os gráficos mensais corretos (em vez de carimbar tudo
-            // numa só data). Verificação de duplicados por (campaign, day):
-            // só insere os dias que ainda não existem.
-            const daysMs = 86_400_000;
-            const dayCount = Math.max(1, Math.floor((endDate.getTime() - startDate.getTime()) / daysMs) + 1);
-            const spendPerDay = c.cost / dayCount;
-            const impressionsPerDay = Math.floor(c.impressions / dayCount);
-            const clicksPerDay = Math.floor(c.clicks / dayCount);
-            const conversionsPerDay = c.conversions / dayCount;
-            // Valor da conversão = conversões × custo por conversão (proxy razoável
-            // quando o CSV não traz o valor explicitamente)
-            const valuePerDay = (c.conversions * c.costPerConversion) / dayCount;
-
-            const existing = await getExistingStatsForCampaignAndDateRange(campaign.id, startDate, endDate);
-            const existingDays = new Set(
-              existing.map((e: any) => new Date(e.date).toISOString().slice(0, 10)),
-            );
-
-            const newRows: any[] = [];
-            for (let i = 0; i < dayCount; i++) {
-              const d = new Date(startDate.getTime() + i * daysMs);
-              const dayKey = d.toISOString().slice(0, 10);
-              if (existingDays.has(dayKey)) continue;
-              newRows.push({
-                campaignId: campaign.id,
-                date: d.toISOString().slice(0, 19).replace("T", " "),
-                spend: spendPerDay.toFixed(2),
-                impressions: impressionsPerDay,
-                clicks: clicksPerDay,
-                conversions: Math.round(conversionsPerDay),
-                conversionValue: valuePerDay.toFixed(2),
-                cpc: c.cpc > 0 ? String(c.cpc) : null,
-                ctr: c.ctr > 0 ? String(c.ctr) : null,
-                costPerConversion: c.costPerConversion > 0 ? String(c.costPerConversion) : null,
-                importedById: ctx.user.id,
-              });
-            }
-
-            if (newRows.length === 0) {
-              details.push(`⚠️ ${c.name}: todos os dias do período já existiam — ignorado`);
-              skipped++;
-              continue;
-            }
-
-            await importDailyStats(newRows);
-            created++;
-            const skippedDays = dayCount - newRows.length;
-            details.push(`📊 ${c.name}: ${newRows.length}/${dayCount} dias importados (${c.cost.toFixed(2)}€ total, ${c.clicks} cliques)${skippedDays > 0 ? ` — ${skippedDays} dias já existiam` : ""}`);
-          }
-
-          await logActivity({
-            userId: ctx.user.id,
-            action: "import",
-            entity: "google_ads_report",
-            entityId: 0,
-            details: `Google Ads ${input.dateRange.start} a ${input.dateRange.end}: ${created} importados, ${skipped} ignorados`,
-          });
-
-          return { created, updated, skipped, details, total: input.campaigns.length };
-        }),
     }),
 
     // ── MARKETING EXPENSES ──

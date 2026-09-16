@@ -9,6 +9,7 @@ import { sdk } from "../../_core/sdk";
 import { OAUTH_CALLBACK_PATH, missingOAuthEnvs, readGoogleAdsConfig } from "./config";
 import { buildConsentUrl, consumeOAuthState, createOAuthState, exchangeCodeForTokens, saveConnection, storeRefreshToken } from "./oauth";
 import { refreshAccounts, runGoogleAdsSync } from "./sync";
+import { normalizeSyncKind } from "./metrics";
 
 const ROLE_RANK: Record<string, number> = { super_admin: 7, admin: 6 };
 const PAGE = "/integracoes/google-ads";
@@ -83,8 +84,8 @@ export function registerGoogleAdsRoutes(app: Express) {
   app.get("/api/cron/google-ads", async (req: Request, res: Response) => {
     const secret = process.env.CRON_SECRET?.trim();
     if (!secret || req.headers["authorization"] !== `Bearer ${secret}`) { res.status(401).json({ error: "Unauthorized" }); return; }
-    const kindRaw = String(req.query.kind ?? "hourly");
-    const kind = (["hourly", "nightly", "monthly", "initial"] as const).includes(kindRaw as any) ? (kindRaw as any) : "hourly";
+    // daily (última semana) | monthly (mês anterior) | initial; hourly/nightly = daily
+    const kind = normalizeSyncKind(String(req.query.kind ?? "daily"));
     try {
       const r = await runGoogleAdsSync({ kind, deadlineAt: Date.now() + 45_000, triggeredById: null });
       res.json({ ranAt: new Date().toISOString(), ...r });

@@ -45,9 +45,13 @@ describe("metrics", () => {
     expect(derivedRatios(emptyTotals()).cpc).toBeNull();
   });
   it("janelas de recolha e pedaços", () => {
+    // daily = última semana; monthly = mês anterior inteiro; hourly/nightly = daily (sinónimos antigos)
+    expect(syncWindow("daily", "2026-09-09")).toEqual({ from: "2026-09-03", to: "2026-09-09" });
     expect(syncWindow("hourly", "2026-09-09")).toEqual({ from: "2026-09-03", to: "2026-09-09" });
-    expect(syncWindow("nightly", "2026-09-09")).toEqual({ from: "2026-06-12", to: "2026-09-09" });
-    expect(syncWindow("monthly", "2026-09-09")).toEqual({ from: "2023-08-09", to: "2026-06-11" });
+    expect(syncWindow("nightly", "2026-09-09")).toEqual({ from: "2026-09-03", to: "2026-09-09" });
+    expect(syncWindow("monthly", "2026-09-09")).toEqual({ from: "2026-08-01", to: "2026-08-31" });
+    expect(syncWindow("monthly", "2026-01-02")).toEqual({ from: "2025-12-01", to: "2025-12-31" });
+    expect(syncWindow("initial", "2026-09-09")).toEqual({ from: "2023-08-09", to: "2026-09-09" });
     expect(chunkRange("2026-01-01", "2026-02-15", 31)).toEqual([{ from: "2026-01-01", to: "2026-01-31" }, { from: "2026-02-01", to: "2026-02-15" }]);
     expect(chunkRange("2026-03-01", "2026-03-01")).toEqual([{ from: "2026-03-01", to: "2026-03-01" }]);
   });

@@ -26,7 +26,6 @@ export async function assertScopedOperation(path: string, type: string, raw: unk
     if (type === 'mutation' && (path.endsWith('.create') || input.projectId !== undefined)) assertProjectAccess(input.projectId);
   }
   if (path.startsWith('marketing.')) {
-    if (['marketing.importCampaignCsv', 'marketing.stats.importGoogleAdsReport'].includes(path)) requireGlobalCityAccess();
     if (type === 'mutation' && (path.endsWith('.create') || input.projectId !== undefined)) assertProjectAccess(input.projectId);
     if (path.startsWith('marketing.campaigns.') && input.id != null) await projectRecord(schema.campaigns, input.id);
     if (path.startsWith('marketing.expenses.') && input.id != null) await projectRecord(schema.marketingExpenses, input.id);

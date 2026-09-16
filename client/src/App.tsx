@@ -50,7 +50,6 @@ import OperacoesDashboard from "./pages/OperacoesDashboard";
 import PessoasDashboard from "./pages/PessoasDashboard";
 import RhDashboardPage from "./pages/RhDashboardPage";
 import SuporteDashboard from "./pages/SuporteDashboard";
-import MarketingDashboard from "./pages/MarketingDashboard";
 import { GlobalFiltersProvider } from "./contexts/GlobalFiltersContext";
 
 function Router() {
@@ -240,8 +239,9 @@ function Router() {
       <Route path="/suporte-dashboard">
         {() => (<DashboardLayout><SuporteDashboard /></DashboardLayout>)}
       </Route>
+      {/* A página duplicada de Marketing foi unificada com /marketing (fonte única = Google Ads API) */}
       <Route path="/marketing-dashboard">
-        {() => (<DashboardLayout><MarketingDashboard /></DashboardLayout>)}
+        {() => (<DashboardLayout><MarketingPage /></DashboardLayout>)}
       </Route>
       <Route path="/integracoes/google-ads">
         {() => (<DashboardLayout><IntegrationsGoogleAdsPage /></DashboardLayout>)}

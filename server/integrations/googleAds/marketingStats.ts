@@ -12,10 +12,12 @@
  *    pela Google (valor de conversão / gasto). Sem denominador → null.
  *  - Datas de calendário (strings), sem conversão UTC.
  */
-import { scopedProjectIds } from '../../cityScope';
+import { projectScope, scopedProjectIds } from '../../cityScope';
 import { and, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { getDb, resolveProjectIds } from "../../db";
-import { marketingExpenses, multiparkBookings } from "../../../drizzle/schema";
+import { adAccounts, adDailyMetrics, marketingExpenses, multiparkBookings, projects } from "../../../drizzle/schema";
+import { brandNameForProject } from "../../../shared/adCampaignMapping";
+import { GOOGLE_ADS_PROVIDER } from "./config";
 import { getAdMetrics } from "./adMetrics";
 import { getConnection } from "./oauth";
 
@@ -100,6 +102,80 @@ export async function getMarketingStats(f: MarketingStatsFilters) {
     campaignCount: ads.byCampaign.length,
     totalImpressions: ads.totals.impressions,
     totalClicks: ads.totals.clicks,
+  };
+}
+
+export interface BrandRow {
+  brand: string;
+  /** false = conta Google sem marca/cidade associada (aparece pelo nome da conta) */
+  mapped: boolean;
+  accounts: Array<{ id: number; name: string }>;
+  spend: number;
+  bookings: number;
+  attributed: number;
+  revenue: number;
+}
+
+/**
+ * Página principal do Marketing (Jorge, 16 set 2026): quanto se gastou por
+ * MARCA (= conta Google Ads; Multipark.pt e Multipark SA são a marca
+ * Marketplace) e quantas reservas Multipark houve dessa marca no período.
+ *
+ * Marca de uma conta = nó `brand` a que a conta está associada (ou o nó marca
+ * acima do parque). Marca de uma reserva = nó marca acima do parque da
+ * reserva. Reservas por data de criação, sem canceladas, dentro do âmbito de
+ * cidade do utilizador.
+ */
+export async function getSpendAndBookingsByBrand(f: { from: string; to: string }) {
+  if (!ISO.test(f.from) || !ISO.test(f.to)) throw new Error("Datas inválidas (AAAA-MM-DD)");
+  const db = await getDb();
+  const empty = { range: f, accounts: [] as Array<{ id: number; name: string }>, brands: [] as BrandRow[], bookingsWithoutBrand: 0 };
+  if (!db) return empty;
+
+  const allProjects = await db.select({ id: projects.id, name: projects.name, level: projects.level, parentId: projects.parentId }).from(projects);
+  const accounts = await db.select({ id: adAccounts.id, name: adAccounts.name, projectId: adAccounts.projectId })
+    .from(adAccounts).where(and(eq(adAccounts.provider, GOOGLE_ADS_PROVIDER), eq(adAccounts.selected, 1))).orderBy(adAccounts.name);
+  const spendRows = await db.select({ accountId: adDailyMetrics.accountId, cost: sql<string>`COALESCE(SUM(${adDailyMetrics.costMicros}), 0)` })
+    .from(adDailyMetrics)
+    .where(and(eq(adDailyMetrics.provider, GOOGLE_ADS_PROVIDER), eq(adDailyMetrics.source, "api"), gte(adDailyMetrics.date, f.from), lte(adDailyMetrics.date, f.to)))
+    .groupBy(adDailyMetrics.accountId);
+  const spendByAccount = new Map(spendRows.map((r) => [Number(r.accountId), Number(r.cost) / 1_000_000]));
+  const bookingRows = await db.select({
+    projectId: multiparkBookings.projectId,
+    n: sql<number>`COUNT(*)`,
+    attributed: sql<number>`SUM(CASE WHEN ${multiparkBookings.adAttribution} = 'google_paid' THEN 1 ELSE 0 END)`,
+    rev: sql<string>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
+  }).from(multiparkBookings).where(and(
+    projectScope(multiparkBookings.projectId),
+    sql`${multiparkBookings.status} <> 'CANCELLED'`,
+    gte(multiparkBookings.bookingCreatedAt, `${f.from} 00:00:00`),
+    lte(multiparkBookings.bookingCreatedAt, `${f.to} 23:59:59`),
+  )).groupBy(multiparkBookings.projectId);
+
+  const key = (name: string) => name.trim().toLowerCase();
+  const brands = new Map<string, BrandRow>();
+  for (const a of accounts) {
+    const brand = brandNameForProject(a.projectId, allProjects);
+    const k = brand ? key(brand) : `conta:${a.id}`;
+    const row = brands.get(k) ?? { brand: brand ?? (a.name ?? `Conta ${a.id}`), mapped: !!brand, accounts: [], spend: 0, bookings: 0, attributed: 0, revenue: 0 };
+    row.accounts.push({ id: a.id, name: a.name ?? `Conta ${a.id}` });
+    row.spend += spendByAccount.get(a.id) ?? 0;
+    brands.set(k, row);
+  }
+  let bookingsWithoutBrand = 0;
+  for (const r of bookingRows) {
+    const brand = brandNameForProject(r.projectId ?? null, allProjects);
+    if (!brand) { bookingsWithoutBrand += Number(r.n); continue; }
+    const k = key(brand);
+    const row = brands.get(k) ?? { brand, mapped: true, accounts: [], spend: 0, bookings: 0, attributed: 0, revenue: 0 };
+    row.bookings += Number(r.n); row.attributed += Number(r.attributed ?? 0); row.revenue += Number(r.rev);
+    brands.set(k, row);
+  }
+  return {
+    range: f,
+    accounts: accounts.map((a) => ({ id: a.id, name: a.name ?? `Conta ${a.id}` })),
+    brands: Array.from(brands.values()).sort((a, b) => b.spend - a.spend || b.bookings - a.bookings),
+    bookingsWithoutBrand,
   };
 }
 

@@ -4,7 +4,7 @@
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { protectedProcedure, router } from "../../_core/trpc";
 import { getDb } from "../../db";
 import { adAccounts, adCampaigns } from "../../../drizzle/schema";
@@ -86,11 +86,43 @@ export const googleAdsRouter = router({
         await db.update(adCampaigns).set({ projectId: input.projectId }).where(eq(adCampaigns.id, input.id));
         return { success: true };
       }),
+    // Sugestões marca/cidade pelo NOME da campanha ("Airpark - Faro - EN") e
+    // pela marca da conta — regra pura em shared/adCampaignMapping.ts.
+    // Só campanhas ainda sem marca/cidade; o Jorge confirma antes de aplicar.
+    suggest: protectedProcedure.query(async ({ ctx }) => {
+      requireAdmin(ctx.user.role);
+      const db = await getDb();
+      if (!db) return [];
+      const { suggestCampaignProjects } = await import("../../../shared/adCampaignMapping");
+      const { getProjects } = await import("../../db");
+      const rows = await db.select({ id: adCampaigns.id, name: adCampaigns.name, projectId: adCampaigns.projectId, accountProjectId: adAccounts.projectId })
+        .from(adCampaigns).leftJoin(adAccounts, eq(adAccounts.id, adCampaigns.accountId)).where(eq(adCampaigns.provider, GOOGLE_ADS_PROVIDER));
+      return suggestCampaignProjects(rows, await getProjects());
+    }),
+    applySuggestions: protectedProcedure
+      .input(z.object({ campaignIds: z.array(z.number().int().positive()).max(500).optional() }).optional())
+      .mutation(async ({ ctx, input }) => {
+        requireAdmin(ctx.user.role);
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
+        const { suggestCampaignProjects } = await import("../../../shared/adCampaignMapping");
+        const { getProjects, logActivity } = await import("../../db");
+        const rows = await db.select({ id: adCampaigns.id, name: adCampaigns.name, projectId: adCampaigns.projectId, accountProjectId: adAccounts.projectId })
+          .from(adCampaigns).leftJoin(adAccounts, eq(adAccounts.id, adCampaigns.accountId)).where(eq(adCampaigns.provider, GOOGLE_ADS_PROVIDER));
+        const wanted = input?.campaignIds ? new Set(input.campaignIds) : null;
+        const suggestions = suggestCampaignProjects(rows, await getProjects()).filter((s) => !wanted || wanted.has(s.campaignId));
+        for (const s of suggestions) {
+          // Nunca sobrepõe uma marca/cidade já escolhida à mão (só as NULL).
+          await db.update(adCampaigns).set({ projectId: s.projectId }).where(and(eq(adCampaigns.id, s.campaignId), sql`${adCampaigns.projectId} IS NULL`));
+        }
+        await logActivity({ userId: ctx.user.id, action: "map", entity: "ad_campaigns", details: `Marca/cidade sugerida pelo nome aplicada a ${suggestions.length} campanha(s) Google Ads` });
+        return { applied: suggestions.length, suggestions };
+      }),
   }),
 
   sync: router({
     run: protectedProcedure
-      .input(z.object({ kind: z.enum(["initial", "hourly", "nightly", "monthly", "manual"]).default("manual") }))
+      .input(z.object({ kind: z.enum(["initial", "daily", "monthly", "manual", "hourly", "nightly"]).default("manual") }))
       .mutation(async ({ ctx, input }) => {
         requireAdmin(ctx.user.role);
         // prazo curto: no Vercel a função tem 60 s; o resultado diz se ficou parcial
