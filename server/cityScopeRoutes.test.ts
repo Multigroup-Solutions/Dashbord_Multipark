@@ -58,6 +58,11 @@ describe('consultas dos módulos respeitam a autorização sem filtros do client
     await expect(caller().expenses.byId({ id: 9 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(caller().expenses.update({ id: 9, projectId: 50 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
+  it('impede abrir críticas de outra cidade e administrar a ligação global', async () => {
+    await expect(caller().reviews.getById({ id: 9 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().integrations.googleBusiness.status()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().integrations.googleBusiness.sync()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
   it('bloqueia custos e métricas de campanhas de outra cidade por identificador', async () => {
     await expect(caller().marketing.stats.byCampaign({ campaignId: 9 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(caller().marketing.internalCampaigns.costs({ campaignType: 'internal', campaignId: 9 })).rejects.toMatchObject({ code: 'FORBIDDEN' });

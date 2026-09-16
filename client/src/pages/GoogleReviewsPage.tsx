@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import BookingSearchField from "@/components/BookingSearchField";
 import ClientHistoryCard from "@/components/ClientHistoryCard";
+import GoogleBusinessConnection from "@/components/GoogleBusinessConnection";
 
 const RATING_COLORS: Record<number, string> = {
   1: "text-red-500",
@@ -72,6 +73,7 @@ export default function GoogleReviewsPage() {
   return (
     <>
       <div className="space-y-6">
+        <GoogleBusinessConnection />
         <div className="flex items-center justify-between">
           <div>
             <p className="text-muted-foreground">Gestão de avaliações e respostas automáticas</p>
@@ -112,7 +114,8 @@ export default function GoogleReviewsPage() {
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
 
 function ReviewsDashboard() {
-  const { data: stats } = trpc.reviews.stats.useQuery();
+  const { projectId } = useGlobalFilters();
+  const { data: stats } = trpc.reviews.stats.useQuery({ projectId });
   if (!stats) return <div className="flex justify-center py-12"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>;
 
   const starData = [

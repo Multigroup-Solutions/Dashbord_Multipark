@@ -31,6 +31,7 @@ import {
   createPayrollRun, listPayrollRuns, getPayrollRun, transitionPayrollRun,
 } from "./rhService";
 import { googleAdsRouter } from "./integrations/googleAds/router";
+import { googleBusinessRouter } from "./integrations/googleBusiness/router";
 import { transcribeAudio } from "./_core/voiceTranscription";
 import { getBookingHistory, getBookingsReport, getBookingTryAllParks } from "./multipark";
 import {
@@ -4655,6 +4656,7 @@ export const appRouter = router({
   // ─── INTEGRAÇÕES (Google Ads) ─────────────────────────────────────────────
   integrations: router({
     googleAds: googleAdsRouter,
+    googleBusiness: googleBusinessRouter,
   }),
 
   apiKeys: router({
@@ -5161,9 +5163,9 @@ export const appRouter = router({
       requireRole(ctx.user.role, "frontoffice");
       return getGoogleReviewById(input.id);
     }),
-    stats: protectedProcedure.query(async ({ ctx }) => {
+    stats: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
-      return getGoogleReviewStats();
+      return getGoogleReviewStats(input);
     }),
     // Transforma uma crítica (tipicamente 1-2★) numa Reclamação para ser
     // tratada com SLA/atribuição/dossier. A crítica fica marcada como

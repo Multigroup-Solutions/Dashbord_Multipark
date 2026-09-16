@@ -4,6 +4,7 @@ import { createServer } from "http";
 import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
+import { registerGoogleBusinessRoutes } from "../integrations/googleBusiness/routes";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
@@ -56,6 +57,7 @@ async function startServer() {
   app.use("/uploads", express.static("uploads"));
   // OAuth callback under /api/oauth/callback
   registerOAuthRoutes(app);
+  registerGoogleBusinessRoutes(app);
   // External REST API (device integrations)
   app.use("/api/external", createExternalApiRouter());
   // MCP Control API (X-API-Key) — paridade com o api-entry.ts (Vercel)
