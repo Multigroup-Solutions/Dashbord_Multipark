@@ -2680,6 +2680,9 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "admin");
+        // Âmbito de cidade também nas ESCRITAS (revisão 16 set): sem isto um
+        // admin do Porto editava salário/NIF de uma ficha de Lisboa.
+        await assertEmployeeAccess(input.id);
         const { id, birthDate, contractStart, contractEnd, ...rest } = input;
         const data: any = { ...rest };
         if (typeof data.personalEmail === "string") data.personalEmail = data.personalEmail.trim().toLowerCase() || null;
@@ -2698,6 +2701,7 @@ export const appRouter = router({
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "super_admin");
+        await assertEmployeeAccess(input.id);
         await deleteEmployee(input.id);
         await logActivity({ userId: ctx.user.id, action: "delete", entity: "employee", entityId: input.id, details: `Colaborador desativado: ${input.id}` });
         return { success: true };
@@ -2717,6 +2721,9 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "admin");
+        // Âmbito de cidade: desativar cascateia para a conta e grava o motivo —
+        // nunca sobre uma pessoa de outra cidade.
+        await assertEmployeeAccess(input.id);
         const found = await getEmployeeById(input.id);
         if (!found) throw new TRPCError({ code: "NOT_FOUND", message: "Colaborador não encontrado" });
         const deactivation = input.isActive ? null : resolveDeactivationOrThrow(input);
@@ -2742,6 +2749,7 @@ export const appRouter = router({
       .input(z.object({ employeeId: z.number(), fileBase64: z.string(), mimeType: z.string() }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "admin");
+        await assertEmployeeAccess(input.employeeId);
         const { storagePut } = await import("./storage");
         const buffer = Buffer.from(input.fileBase64, "base64");
         const ext = input.mimeType.split("/")[1] ?? "jpg";
@@ -3279,6 +3287,8 @@ export const appRouter = router({
       .input(z.object({ year: z.number(), month: z.number().min(1).max(12), employeeId: z.number() }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "admin");
+        // O recibo de vencimento é da cidade da ficha, não de quem o pede.
+        await assertEmployeeAccess(input.employeeId);
         const pdfBuffer = await generatePayslipPdf(input.year, input.month, input.employeeId);
         const { storagePut } = await import("./storage");
         // Get employee name for history
