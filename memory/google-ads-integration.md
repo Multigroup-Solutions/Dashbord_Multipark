@@ -92,3 +92,28 @@ e [níveis de acesso](https://developers.google.com/google-ads/api/docs/api-poli
   exclui (`quality.marketingExcluded`). Confirmar que a fatura Google entra só
   pelas Despesas.
 - Testes de `campaignReportIngest.parseCampaignCsv`.
+
+
+## 16/09/2026 — Fase E feita + recolha diária + campanhas por marca/cidade (Jorge)
+- **Só API.** Removidos: importação CSV de campanhas (`marketing.importCampaignCsv`
+  + diálogo), `marketing.stats.import`, `marketing.stats.importGoogleAdsReport`,
+  `server/campaignReportIngest.ts`, a ingestão do alias de email `campanhas`
+  (o email fica registado como "skipped"), e a página duplicada
+  `MarketingDashboard.tsx` (`/marketing-dashboard` e o separador Marketing dos
+  Dashboards passam a mostrar `MarketingPage`). O legado `campaign_daily_stats`
+  continua a ser LIDO pela fonte única para os dias sem API (abr–jun 2026).
+- **Recolha: ir à API o menos possível.** `SyncKind` = `daily` (última semana,
+  uma vez por dia às 05:45) | `monthly` (mês ANTERIOR inteiro, dia 2 — os
+  números finais, os da fatura) | `initial`/`manual` (37 meses). `hourly`/
+  `nightly` são sinónimos de `daily` (`normalizeSyncKind`). Cron "22 * * * *"
+  removido. Migração 0074: enum `integration_sync_runs.kind` ganha `daily`.
+  Cobertura "stale" passa de 2 h para 26 h.
+- **Por campanha.** O Marketing ganhou a tabela "Por conta e por campanha"
+  (gasto, impressões, cliques, CPC, conversões, custo/conv., valor) com a
+  marca/cidade editável por linha (admin). `shared/adCampaignMapping.ts`
+  sugere marca/cidade pelo NOME ("Airpark - Faro - EN" → Airpark/Faro; a marca
+  vem do projeto da CONTA; sem cidade no nome = nacional, fica sem) —
+  `integrations.googleAds.campaigns.suggest` / `applySuggestions` (só NULL).
+  Em prod (16 set) as 43 campanhas estavam TODAS sem marca/cidade.
+- Gráfico mensal passa a usar `byDay` da fonte única; o "Gasto por plataforma"
+  (legado) foi retirado.

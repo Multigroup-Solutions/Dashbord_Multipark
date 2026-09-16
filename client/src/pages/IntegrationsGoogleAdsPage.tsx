@@ -15,7 +15,7 @@ const STATUS_LABEL: Record<string, { label: string; cls: string }> = {
   reauth_required: { label: "Reautorização necessária", cls: "bg-amber-100 text-amber-800 border-amber-200" },
   error: { label: "Erro", cls: "bg-red-100 text-red-800 border-red-200" },
 };
-const KIND_LABEL: Record<string, string> = { initial: "Inicial (37 meses)", hourly: "Horária (7 dias)", nightly: "Noturna (90 dias)", monthly: "Mensal (histórico)", manual: "Manual (tudo)" };
+const KIND_LABEL: Record<string, string> = { initial: "Inicial (37 meses)", daily: "Diária (última semana)", monthly: "Mensal (mês anterior)", manual: "Manual (tudo)", hourly: "Horária (antiga)", nightly: "Noturna (antiga)" };
 const RUN_STATUS: Record<string, string> = { running: "a correr", partial: "parcial (continua)", done: "concluída", failed: "falhou", skipped: "saltada" };
 
 export default function IntegrationsGoogleAdsPage() {
@@ -71,7 +71,7 @@ export default function IntegrationsGoogleAdsPage() {
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-semibold flex items-center gap-2"><Plug className="h-5 w-5" /> Integrações · Google Ads</h1>
-          <p className="text-sm text-muted-foreground max-w-2xl">Ligação de leitura à Google Ads API. Depois de ligada, o servidor recolhe custo, impressões, cliques e conversões de hora a hora, sem CSV, emails ou browser aberto. Nada aqui altera campanhas ou orçamentos.</p>
+          <p className="text-sm text-muted-foreground max-w-2xl">Ligação de leitura à Google Ads API. Depois de ligada, o servidor recolhe custo, impressões, cliques e conversões por campanha uma vez por dia (última semana) e no dia 2 de cada mês (mês anterior fechado), sem CSV, emails ou browser aberto. Nada aqui altera campanhas ou orçamentos.</p>
         </div>
         <Badge variant="outline" className={`text-sm px-3 py-1 ${st.cls}`}>{status.isLoading ? "…" : st.label}</Badge>
       </div>
@@ -180,9 +180,9 @@ export default function IntegrationsGoogleAdsPage() {
       <Card>
         <CardHeader><CardTitle className="text-base flex items-center gap-2"><PlayCircle className="h-4 w-4" /> Recolha</CardTitle></CardHeader>
         <CardContent className="space-y-3">
-          <p className="text-xs text-muted-foreground">Automática pelo cron: horária (últimos 7 dias, hoje provisório), noturna (90 dias, conversões tardias) e mensal (restante histórico). Aqui só se dispara à mão; uma recolha longa devolve “parcial” e continua na chamada seguinte.</p>
+          <p className="text-xs text-muted-foreground">Automática pelo cron: diária às 05:45 (última semana, hoje e os 2 dias anteriores provisórios) e mensal no dia 2 (o mês anterior inteiro, os números finais da fatura). A dashboard não volta a pedir o resto. Aqui só se dispara à mão.</p>
           <div className="flex flex-wrap gap-2">
-            {(["hourly", "nightly", "initial"] as const).map((k) => (
+            {(["daily", "monthly", "initial"] as const).map((k) => (
               <Button key={k} variant="outline" size="sm" disabled={s?.status !== "connected" || runSync.isPending} onClick={() => runSync.mutate({ kind: k })} className="gap-1.5">
                 {runSync.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PlayCircle className="h-3.5 w-3.5" />} {KIND_LABEL[k]}
               </Button>

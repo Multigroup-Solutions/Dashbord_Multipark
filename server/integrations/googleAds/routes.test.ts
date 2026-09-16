@@ -50,7 +50,8 @@ describe("Google Ads scheduled collection authentication", () => {
     expect(response.status).not.toHaveBeenCalled();
     expect(runGoogleAdsSync).toHaveBeenCalledTimes(1);
     expect(runGoogleAdsSync).toHaveBeenCalledWith({
-      kind: "nightly", deadlineAt: expect.any(Number), triggeredById: null,
+      // "nightly" é sinónimo antigo: normaliza para a recolha diária
+      kind: "daily", deadlineAt: expect.any(Number), triggeredById: null,
     });
     expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ status: "completed", done: true }));
   });

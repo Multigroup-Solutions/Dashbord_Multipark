@@ -99,7 +99,7 @@ const dashboardModules = [
   {
     icon: Megaphone,
     label: "Marketing",
-    path: "/marketing-dashboard",
+    path: "/marketing",
     iconColor: "#EC4899",
     iconBg: "#FCE7F3",
     accentColor: "#EC4899",

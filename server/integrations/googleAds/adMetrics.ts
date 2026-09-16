@@ -21,7 +21,7 @@ export interface AdMetricsFilters { from: string; to: string; projectIds?: numbe
 export interface AdMetricsResult {
   totals: MetricTotals & ReturnType<typeof derivedRatios>;
   byDay: Array<{ date: string; source: "api" | "legacy"; cost: number; impressions: number; clicks: number; conversions: number; conversionValue: number }>;
-  byCampaign: Array<{ key: string; name: string; accountName: string | null; source: "api" | "legacy"; projectId: number | null; cost: number; impressions: number; clicks: number; conversions: number; conversionValue: number; budgetPerDay: number | null }>;
+  byCampaign: Array<{ key: string; name: string; accountName: string | null; campaignId: number | null; accountId: number | null; source: "api" | "legacy"; projectId: number | null; cost: number; impressions: number; clicks: number; conversions: number; conversionValue: number; budgetPerDay: number | null }>;
   coverage: Coverage;
   /** orçamento diário × dias (campanhas ativas) — INDICADOR, não gasto */
   budgetEstimate: number;
@@ -52,7 +52,7 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
   if (projectFilter) apiConds.push(inArray(effProject, projectFilter));
   const apiRows = await db.select({
     date: adDailyMetrics.date, campaignExternalId: adDailyMetrics.campaignExternalId, accountId: adDailyMetrics.accountId,
-    campaignName: adCampaigns.name, campaignStatus: adCampaigns.status, budgetMicros: adCampaigns.budgetMicros, accountName: adAccounts.name,
+    campaignDbId: adCampaigns.id, campaignName: adCampaigns.name, campaignStatus: adCampaigns.status, budgetMicros: adCampaigns.budgetMicros, accountName: adAccounts.name,
     projectId: effProject,
     costMicros: adDailyMetrics.costMicros, impressions: adDailyMetrics.impressions, clicks: adDailyMetrics.clicks,
     conversions: adDailyMetrics.conversions, conversionValueMicros: adDailyMetrics.conversionValueMicros,
@@ -85,7 +85,7 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
     d.cost += microsToAmount(t.costMicros); d.impressions += t.impressions; d.clicks += t.clicks; d.conversions += t.conversions; d.conversionValue += microsToAmount(t.conversionValueMicros);
     byDayMap.set(day, d);
     const key = `api:${r.accountId}:${r.campaignExternalId}`;
-    const c = byCampaignMap.get(key) ?? { key, name: r.campaignName ?? r.campaignExternalId, accountName: r.accountName ?? null, source: "api" as const, projectId: r.projectId == null ? null : Number(r.projectId), cost: 0, impressions: 0, clicks: 0, conversions: 0, conversionValue: 0, budgetPerDay: r.budgetMicros != null ? microsToAmount(r.budgetMicros) : null };
+    const c = byCampaignMap.get(key) ?? { key, name: r.campaignName ?? r.campaignExternalId, accountName: r.accountName ?? null, campaignId: r.campaignDbId ?? null, accountId: r.accountId, source: "api" as const, projectId: r.projectId == null ? null : Number(r.projectId), cost: 0, impressions: 0, clicks: 0, conversions: 0, conversionValue: 0, budgetPerDay: r.budgetMicros != null ? microsToAmount(r.budgetMicros) : null };
     c.cost += microsToAmount(t.costMicros); c.impressions += t.impressions; c.clicks += t.clicks; c.conversions += t.conversions; c.conversionValue += microsToAmount(t.conversionValueMicros);
     byCampaignMap.set(key, c);
     if (r.projectId == null && !unmappedSet.has(key)) { unmappedSet.add(key); unmapped++; }
@@ -100,7 +100,7 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
     d.cost += Number(r.spend ?? 0); d.impressions += t.impressions; d.clicks += t.clicks; d.conversions += t.conversions; d.conversionValue += Number(r.conversionValue ?? 0);
     byDayMap.set(day, d);
     const key = `legacy:${r.campaignId}`;
-    const c = byCampaignMap.get(key) ?? { key, name: r.campaignName ?? `#${r.campaignId}`, accountName: null, source: "legacy" as const, projectId: r.projectId ?? null, cost: 0, impressions: 0, clicks: 0, conversions: 0, conversionValue: 0, budgetPerDay: null };
+    const c = byCampaignMap.get(key) ?? { key, name: r.campaignName ?? `#${r.campaignId}`, accountName: null, campaignId: null, accountId: null, source: "legacy" as const, projectId: r.projectId ?? null, cost: 0, impressions: 0, clicks: 0, conversions: 0, conversionValue: 0, budgetPerDay: null };
     c.cost += Number(r.spend ?? 0); c.impressions += t.impressions; c.clicks += t.clicks; c.conversions += t.conversions; c.conversionValue += Number(r.conversionValue ?? 0);
     byCampaignMap.set(key, c);
   }

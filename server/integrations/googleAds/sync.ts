@@ -17,7 +17,7 @@ import { adAccounts, adCampaigns, adConversionActionMetrics, adDailyMetrics, int
 import { GOOGLE_ADS_PROVIDER, missingApiEnvs, readGoogleAdsConfig } from "./config";
 import { getConnection, saveConnection } from "./oauth";
 import { fetchCampaignDaily, fetchConversionActions, getCustomer, listAccessibleCustomers, listCustomerClients, GoogleAdsApiError } from "./client";
-import { chunkRange, isProvisional, syncWindow, type SyncKind } from "./metrics";
+import { chunkRange, isProvisional, normalizeSyncKind, syncWindow, type SyncKind } from "./metrics";
 
 const nowMysql = () => new Date().toISOString().slice(0, 19).replace("T", " ");
 function lisbonToday(): string {
@@ -175,7 +175,7 @@ export async function runGoogleAdsSync(opts: { kind: SyncKind; deadlineAt?: numb
   if (!(await acquireLock(db))) return { ...base, reason: "já há uma recolha a correr" };
   const today = lisbonToday();
   const window = syncWindow(opts.kind, today);
-  const chunks = chunkRange(window.from, window.to, opts.kind === "hourly" ? 7 : 31);
+  const chunks = chunkRange(window.from, window.to, normalizeSyncKind(opts.kind) === "daily" ? 7 : 31);
   const warnings: string[] = [];
 
   // retoma uma execução parcial recente do mesmo tipo

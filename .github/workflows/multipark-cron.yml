@@ -29,9 +29,8 @@ on:
     - cron: "30 3 * * *"
     # Google Ads: horária (últimos 7 dias) ao minuto 22; noturna (90 dias) 04:45 UTC;
     # mensal (resto do histórico) dia 1 às 05:10 UTC. Só correm com a ligação feita.
-    - cron: "22 * * * *"
     - cron: "45 4 * * *"
-    - cron: "10 5 1 * *"
+    - cron: "10 5 2 * *"
   workflow_dispatch: {} # trigger manual da UI (corre todos os jobs)
 
 permissions:
@@ -269,7 +268,7 @@ jobs:
 
   # ── Google Ads: recolha horária / noturna / mensal (repete enquanto done:false) ──
   google-ads:
-    if: github.event.schedule == '22 * * * *' || github.event.schedule == '45 4 * * *' || github.event.schedule == '10 5 1 * *' || github.event_name == 'workflow_dispatch'
+    if: github.event.schedule == '45 4 * * *' || github.event.schedule == '10 5 2 * *' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger /api/cron/google-ads (repete até done)
@@ -279,10 +278,12 @@ jobs:
           SCHEDULE: ${{ github.event.schedule }}
         run: |
           set -euo pipefail
+          # Decisão do Jorge (16 set 2026): ir à API o menos possível.
+          # daily = última semana, uma vez por dia; monthly = mês anterior
+          # inteiro no dia 2 (os números finais, os da fatura).
           case "${SCHEDULE:-}" in
-            "45 4 * * *") kind=nightly ;;
-            "10 5 1 * *") kind=monthly ;;
-            *) kind=hourly ;;
+            "10 5 2 * *") kind=monthly ;;
+            *) kind=daily ;;
           esac
           echo "kind=$kind"
           for i in $(seq 1 12); do

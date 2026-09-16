@@ -58,20 +58,35 @@ export function daysInclusive(from: string, to: string): number {
   return Math.floor((Date.UTC(+to.slice(0, 4), +to.slice(5, 7) - 1, +to.slice(8, 10)) - Date.UTC(+from.slice(0, 4), +from.slice(5, 7) - 1, +from.slice(8, 10))) / 86400000) + 1;
 }
 
-export type SyncKind = "initial" | "hourly" | "nightly" | "monthly" | "manual";
-
 /**
- * Janela de cada tipo de recolha (plano, fase C):
- *  - hourly: últimos 7 dias incluindo hoje (provisório);
- *  - nightly: últimos 90 dias (conversões tardias e correções);
- *  - monthly: o resto do histórico acessível (37 meses) até ao dia 91;
- *  - initial/manual: tudo (37 meses).
+ * Tipos de recolha (decisão do Jorge, 16 set 2026: ir à API o MENOS possível):
+ *  - daily: uma vez por dia, a última semana (7 dias incluindo hoje) — os dias
+ *    novos entram, os provisórios são corrigidos, e não se volta a pedir o resto;
+ *  - monthly: no início de cada mês, o mês ANTERIOR inteiro — os números
+ *    finais, os que batem com a fatura da Google;
+ *  - initial/manual: tudo (37 meses), só a pedido.
+ * "hourly" e "nightly" ficam aceites como sinónimos de "daily" (execuções
+ * antigas na lista e chamadas de crons não atualizados).
  */
+export type SyncKind = "initial" | "daily" | "monthly" | "manual" | "hourly" | "nightly";
+
+export function normalizeSyncKind(raw: string | null | undefined): SyncKind {
+  const k = String(raw ?? "").trim().toLowerCase();
+  if (k === "initial" || k === "manual" || k === "monthly" || k === "daily") return k;
+  return "daily"; // hourly, nightly, vazio, desconhecido
+}
+
+/** Primeiro e último dia do mês anterior ao de `today`. */
+export function previousMonth(today: string): { from: string; to: string } {
+  const firstOfThis = `${today.slice(0, 7)}-01`;
+  const to = addDays(firstOfThis, -1);
+  return { from: `${to.slice(0, 7)}-01`, to };
+}
+
 export function syncWindow(kind: SyncKind, today: string, retentionMonths = 37): { from: string; to: string } {
-  switch (kind) {
-    case "hourly": return { from: addDays(today, -6), to: today };
-    case "nightly": return { from: addDays(today, -89), to: today };
-    case "monthly": return { from: addMonths(today, -retentionMonths), to: addDays(today, -90) };
+  switch (normalizeSyncKind(kind)) {
+    case "daily": return { from: addDays(today, -6), to: today };
+    case "monthly": return previousMonth(today);
     default: return { from: addMonths(today, -retentionMonths), to: today };
   }
 }
@@ -116,7 +131,8 @@ export function coverageFor(
     else if (legacyDays.has(d)) legacy++;
     else if (d <= today) missing++;
   }
-  const stale = lastSuccessfulSyncAt ? (Date.now() - new Date(lastSuccessfulSyncAt).getTime()) > 2 * 3600_000 : true;
+  // A recolha é DIÁRIA (16 set 2026): só conta como parada ao fim de 26 h.
+  const stale = lastSuccessfulSyncAt ? (Date.now() - new Date(lastSuccessfulSyncAt).getTime()) > 26 * 3600_000 : true;
   const status: Coverage["status"] = api + legacy === 0 ? "none" : missing > 0 ? "partial" : stale && api > 0 ? "stale" : "ok";
   return { from, to, daysInRange: total, apiDays: api, legacyDays: legacy, missingDays: missing, lastCompleteDay: lastComplete, lastSuccessfulSyncAt, status };
 }

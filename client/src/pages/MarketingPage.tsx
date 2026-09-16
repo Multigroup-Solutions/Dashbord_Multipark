@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import DateRangeNav from "@/components/DateRangeNav";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
@@ -16,7 +16,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend, LineChart, Line,
+  Legend, LineChart, Line,
 } from "recharts";
 import {
   Megaphone, TrendingUp, Target, DollarSign, Plus, Trash2, Pencil,
@@ -53,27 +53,18 @@ const STATUS_LABELS: Record<string, string> = {
 const CHART_COLORS = ["#4285F4", "#1877F2", "#E4405F", "#F59E0B", "#10B981", "#8B5CF6", "#6B7280"];
 
 export default function MarketingPage() {
-  const { user } = useAuth();
   const [tab, setTab] = useState("dashboard");
-  const [showCsvImport, setShowCsvImport] = useState(false);
-  const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
 
   return (
     <>
-      {showCsvImport && <ImportCampaignCsvDialog onClose={() => setShowCsvImport(false)} />}
       <div className="p-6 space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
             <p className="text-muted-foreground">Campanhas, custos e performance</p>
             <p className="text-xs text-muted-foreground mt-0.5">
-              O gasto é o custo importado (Google Ads API quando ligada; senão CSV/email). O estado da recolha aparece no Dashboard; a ligação faz-se em <a href="/integracoes/google-ads" className="underline">Integrações → Google Ads</a>.
+              O gasto vem da Google Ads API (recolha diária da última semana e mensal do mês anterior). A ligação e as contas gerem-se em <a href="/integracoes/google-ads" className="underline">Integrações → Google Ads</a>. A fatura da Google entra pelas Despesas.
             </p>
           </div>
-          {isAdmin && (
-            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setShowCsvImport(true)}>
-              <FileSpreadsheet className="w-3.5 h-3.5" /> Importar CSV (histórico)
-            </Button>
-          )}
         </div>
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList>
@@ -88,80 +79,6 @@ export default function MarketingPage() {
         </Tabs>
       </div>
     </>
-  );
-}
-
-// ─── IMPORT CSV DE CAMPANHAS (histórico + correções) ─────────────────────────
-// Mesmo motor da ingestão do email diário (server/campaignReportIngest.ts):
-// aceita exports do Google Ads/Supermetrics com Data + Campanha + Custo
-// (+ impressões/cliques/conversões/valor). Idempotente por (campanha, dia).
-function ImportCampaignCsvDialog({ onClose }: { onClose: () => void }) {
-  const [text, setText] = useState("");
-  const utils = trpc.useUtils();
-  const importMut = trpc.marketing.importCampaignCsv.useMutation({
-    onSuccess: (r) => {
-      toast.success(`${r.imported} registos importados (${r.totalSpend.toFixed(2)}€)`, {
-        description: r.campaignsCreated.length
-          ? `Campanhas novas auto-criadas (atribui-lhes projeto na aba Campanhas): ${r.campaignsCreated.join(", ")}`
-          : undefined,
-        duration: 10000,
-      });
-      utils.marketing.invalidate();
-      onClose();
-    },
-    onError: (e) => toast.error(e.message || "Erro ao importar"),
-  });
-
-  const handleFile = (f: File | null) => {
-    if (!f) return;
-    const reader = new FileReader();
-    reader.onload = () => setText(String(reader.result ?? ""));
-    reader.readAsText(f);
-  };
-
-  const lineCount = text.split(/\r?\n/).filter((l) => l.trim()).length;
-
-  return (
-    <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><FileSpreadsheet className="w-5 h-5 text-primary" /> Importar CSV de campanhas</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3 flex-1 min-h-0 overflow-y-auto">
-          <p className="text-sm text-muted-foreground">
-            Export do Google Ads ou Supermetrics com as colunas <strong>Data</strong>, <strong>Campanha</strong> e <strong>Custo</strong> (aceita também impressões, cliques, conversões e valor; PT ou EN; separador vírgula, ponto-e-vírgula ou TAB). Serve para carregar o histórico desde 2024 — reimportar o mesmo período substitui, não duplica.
-          </p>
-          <div className="flex items-center gap-2">
-            <input
-              type="file"
-              accept=".csv,.txt,text/csv"
-              onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
-              className="text-sm"
-            />
-            <span className="text-xs text-muted-foreground">ou cola abaixo</span>
-          </div>
-          <Textarea
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            rows={12}
-            placeholder={"Date,Campaign,Cost,Impressions,Clicks,Conversions\n2024-01-05,Airpark - Lisboa - PT,208.32,15000,420,18\n…"}
-            className="font-mono text-xs"
-          />
-          <p className="text-sm">
-            {lineCount > 1
-              ? <span className="text-emerald-700 font-medium">{lineCount} linhas coladas</span>
-              : <span className="text-muted-foreground">Sem conteúdo ainda</span>}
-          </p>
-        </div>
-        <DialogFooter className="gap-2">
-          <Button variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button onClick={() => importMut.mutate({ csv: text })} disabled={lineCount < 2 || importMut.isPending} className="gap-2">
-            {importMut.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
-            Importar
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }
 
@@ -195,7 +112,6 @@ function DashboardTab() {
   const queryFilters = { from: from || undefined, to: to || undefined, projectId: pid };
   const { data: projects = [] } = trpc.projects.list.useQuery();
   const { data: stats } = trpc.marketing.dashboard.useQuery(queryFilters);
-  const { data: allStats } = trpc.marketing.stats.all.useQuery(queryFilters);
   const { data: bookingRevenue } = trpc.marketing.bookingRevenue.useQuery(queryFilters);
 
   const projectOptions = (projects as any[]);
@@ -215,35 +131,21 @@ function DashboardTab() {
 
   const levelIcon = (level: string) => level === "group" ? "🏢" : level === "city" ? "📍" : level === "brand" ? "🏷" : "📁";
 
-  const monthlyData = useMemo(() => {
-    if (!allStats) return [];
-    const map = new Map<string, { month: string; spend: number; reservations: number; value: number }>();
-    allStats.forEach((s: any) => {
-      const d = new Date(s.stat.date);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-      const existing = map.get(key) || { month: key, spend: 0, reservations: 0, value: 0 };
-      existing.spend += parseFloat(s.stat.spend || "0");
-      existing.reservations += s.stat.conversions || 0;
-      existing.value += parseFloat(s.stat.conversionValue || "0");
-      map.set(key, existing);
-    });
-    return Array.from(map.values()).sort((a, b) => a.month.localeCompare(b.month));
-  }, [allStats]);
-
-  const platformData = useMemo(() => {
-    if (!allStats) return [];
-    const map = new Map<string, { platform: string; spend: number; reservations: number }>();
-    allStats.forEach((s: any) => {
-      const p = s.campaign?.platform || "other";
-      const existing = map.get(p) || { platform: p, spend: 0, reservations: 0 };
-      existing.spend += parseFloat(s.stat.spend || "0");
-      existing.reservations += s.stat.conversions || 0;
-      map.set(p, existing);
-    });
-    return Array.from(map.values()).map(d => ({ ...d, name: PLATFORM_LABELS[d.platform] || d.platform }));
-  }, [allStats]);
-
   const st: any = stats;
+  // Mensal a partir da FONTE ÚNICA (byDay: API por dia, legado só onde a API não chega).
+  const monthlyData = useMemo(() => {
+    const days: any[] = st?.byDay ?? [];
+    const map = new Map<string, { month: string; spend: number; reservations: number; value: number }>();
+    for (const d of days) {
+      const key = String(d.date).slice(0, 7);
+      const existing = map.get(key) || { month: key, spend: 0, reservations: 0, value: 0 };
+      existing.spend += Number(d.cost || 0);
+      existing.reservations += Number(d.conversions || 0);
+      existing.value += Number(d.conversionValue || 0);
+      map.set(key, existing);
+    }
+    return Array.from(map.values()).sort((a, b) => a.month.localeCompare(b.month));
+  }, [st?.byDay]);
   const eur = (v: number | null | undefined) => (v == null ? "—" : `${Number(v).toFixed(2)} €`);
   const x = (v: number | null | undefined) => (v == null ? "—" : `${Number(v).toFixed(2)}×`);
   const cov = st?.coverage;
@@ -374,44 +276,166 @@ function DashboardTab() {
           </CardContent>
         </Card>
 
+        {/* Custo por reserva (evolução) — ao lado do mensal */}
         <Card>
-          <CardHeader><CardTitle>Gasto por Plataforma</CardTitle></CardHeader>
+          <CardHeader><CardTitle>Custo por Reserva Google (Evolução)</CardTitle></CardHeader>
           <CardContent>
-            {platformData.length === 0 ? (
+            {monthlyData.length === 0 ? (
               <p className="text-muted-foreground text-center py-8">Sem dados.</p>
             ) : (
               <ResponsiveContainer width="100%" height={300}>
-                <PieChart>
-                  <Pie data={platformData} dataKey="spend" nameKey="name" cx="50%" cy="50%" outerRadius={100} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
-                    {platformData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
-                  </Pie>
+                <LineChart data={monthlyData.map(d => ({ ...d, cpr: d.reservations > 0 ? d.spend / d.reservations : 0 }))}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="month" />
+                  <YAxis />
                   <Tooltip formatter={(v: number) => `${v.toFixed(2)} €`} />
-                  <Legend />
-                </PieChart>
+                  <Line type="monotone" dataKey="cpr" name="Custo/Conversão Google (€)" stroke="#E4405F" strokeWidth={2} dot={{ r: 4 }} />
+                </LineChart>
               </ResponsiveContainer>
             )}
           </CardContent>
         </Card>
       </div>
 
-      {/* Cost per reservation trend */}
-      {monthlyData.length > 0 && (
-        <Card>
-          <CardHeader><CardTitle>Custo por Reserva (Evolução)</CardTitle></CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={250}>
-              <LineChart data={monthlyData.map(d => ({ ...d, cpr: d.reservations > 0 ? d.spend / d.reservations : 0 }))}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="month" />
-                <YAxis />
-                <Tooltip formatter={(v: number) => `${v.toFixed(2)} €`} />
-                <Line type="monotone" dataKey="cpr" name="Custo/Reserva (€)" stroke="#E4405F" strokeWidth={2} dot={{ r: 4 }} />
-              </LineChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      )}
+      {/* Por conta e por campanha — o que o Jorge pediu (16 set 2026): não só o total da conta */}
+      <ByCampaignTable rows={st?.byCampaign ?? []} projects={projectOptions} />
     </div>
+  );
+}
+
+// ─── POR CONTA E POR CAMPANHA ───────────────────────────────────────────────
+// A conta é o total; o que interessa é cada campanha e a sua marca/cidade.
+// A marca/cidade pode ser escolhida aqui (admin) ou sugerida pelo nome da
+// campanha ("Airpark - Faro - EN") e aplicada de uma vez.
+function ByCampaignTable({ rows, projects }: { rows: any[]; projects: any[] }) {
+  const { user } = useAuth();
+  const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
+  const utils = trpc.useUtils();
+  const refresh = () => { utils.marketing.dashboard.invalidate(); utils.integrations.googleAds.campaigns.suggest.invalidate(); };
+  const { data: suggestions = [] } = trpc.integrations.googleAds.campaigns.suggest.useQuery(undefined, { enabled: isAdmin, retry: false });
+  const update = trpc.integrations.googleAds.campaigns.update.useMutation({ onSuccess: () => { refresh(); toast.success("Marca/cidade atualizada"); }, onError: (e) => toast.error(e.message) });
+  const apply = trpc.integrations.googleAds.campaigns.applySuggestions.useMutation({
+    onSuccess: (r) => { refresh(); toast.success(`${r.applied} campanha(s) associada(s) pelo nome`); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const byId = useMemo(() => new Map((projects as any[]).map((p) => [p.id, p])), [projects]);
+  const label = (id: number | null | undefined): string => {
+    if (id == null) return "";
+    const p = byId.get(id); if (!p) return `#${id}`;
+    const parent = p.parentId != null ? byId.get(p.parentId) : null;
+    return p.level === "brand" && parent ? `${p.name} ${parent.name}` : p.name;
+  };
+  const brandOptions = useMemo(() => (projects as any[])
+    .filter((p) => p.level === "brand")
+    .map((p) => ({ id: p.id, name: label(p.id) }))
+    .sort((a, b) => a.name.localeCompare(b.name)), [projects]); // eslint-disable-line react-hooks/exhaustive-deps
+  const sugById = useMemo(() => new Map((suggestions as any[]).map((s) => [s.campaignId, s])), [suggestions]);
+
+  const groups = useMemo(() => {
+    type Group = { name: string; rows: any[]; cost: number; clicks: number; conversions: number; value: number };
+    const map = new Map<string, Group>();
+    for (const r of rows) {
+      const name = r.source === "legacy" ? "Importações antigas (CSV/email)" : (r.accountName ?? "Conta Google");
+      const g: Group = map.get(name) ?? { name, rows: [], cost: 0, clicks: 0, conversions: 0, value: 0 };
+      g.rows.push(r); g.cost += r.cost; g.clicks += r.clicks; g.conversions += r.conversions; g.value += r.conversionValue;
+      map.set(name, g);
+    }
+    for (const g of map.values()) g.rows.sort((a, b) => b.cost - a.cost);
+    return Array.from(map.values()).sort((a, b) => b.cost - a.cost);
+  }, [rows]);
+
+  if (!rows.length) return null;
+  const eur = (v: number) => `${v.toFixed(2)} €`;
+  const num = (v: number) => v.toLocaleString("pt-PT");
+  const unmappedApi = rows.filter((r) => r.source === "api" && r.projectId == null).length;
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between flex-wrap gap-2">
+        <div>
+          <CardTitle>Por conta e por campanha</CardTitle>
+          <p className="text-xs text-muted-foreground mt-1">
+            Gasto real por campanha no período. A marca/cidade decide em que cidade o gasto conta{unmappedApi > 0 ? ` — ${unmappedApi} campanha(s) ainda sem marca/cidade (contam só no total geral)` : ""}.
+          </p>
+        </div>
+        {isAdmin && suggestions.length > 0 && (
+          <Button size="sm" variant="outline" disabled={apply.isPending} onClick={() => apply.mutate({})} title={(suggestions as any[]).map((s) => `${s.campaignId}: ${s.projectName}`).join("\n")}>
+            {apply.isPending ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-1" />} Associar {suggestions.length} pelo nome
+          </Button>
+        )}
+      </CardHeader>
+      <CardContent className="p-0">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-xs text-muted-foreground border-b">
+              <tr>
+                <th className="text-left px-4 py-2 font-medium">Campanha</th>
+                <th className="text-left px-4 py-2 font-medium">Marca / cidade</th>
+                <th className="text-right px-4 py-2 font-medium">Gasto</th>
+                <th className="text-right px-4 py-2 font-medium">Impressões</th>
+                <th className="text-right px-4 py-2 font-medium">Cliques</th>
+                <th className="text-right px-4 py-2 font-medium">CPC</th>
+                <th className="text-right px-4 py-2 font-medium">Conv. Google</th>
+                <th className="text-right px-4 py-2 font-medium">Custo/conv.</th>
+                <th className="text-right px-4 py-2 font-medium">Valor conv.</th>
+              </tr>
+            </thead>
+            <tbody>
+              {groups.map((g) => (
+                <React.Fragment key={g.name}>
+                  <tr className="bg-muted/40 border-b">
+                    <td className="px-4 py-2 font-semibold" colSpan={2}>{g.name} <span className="text-xs font-normal text-muted-foreground">{g.rows.length} campanha(s)</span></td>
+                    <td className="px-4 py-2 text-right font-semibold">{eur(g.cost)}</td>
+                    <td className="px-4 py-2 text-right text-muted-foreground">—</td>
+                    <td className="px-4 py-2 text-right font-semibold">{num(g.clicks)}</td>
+                    <td className="px-4 py-2 text-right text-muted-foreground">{g.clicks > 0 ? eur(g.cost / g.clicks) : "—"}</td>
+                    <td className="px-4 py-2 text-right font-semibold">{g.conversions.toFixed(1)}</td>
+                    <td className="px-4 py-2 text-right text-muted-foreground">{g.conversions > 0 ? eur(g.cost / g.conversions) : "—"}</td>
+                    <td className="px-4 py-2 text-right font-semibold">{eur(g.value)}</td>
+                  </tr>
+                  {g.rows.map((r) => {
+                    const sug = r.campaignId != null ? sugById.get(r.campaignId) : null;
+                    return (
+                      <tr key={r.key} className="border-b last:border-0">
+                        <td className="px-4 py-1.5 pl-8">{r.name}</td>
+                        <td className="px-4 py-1.5">
+                          {isAdmin && r.source === "api" && r.campaignId != null ? (
+                            <div className="flex items-center gap-2">
+                              <Select value={r.projectId != null ? String(r.projectId) : "none"} onValueChange={(v) => update.mutate({ id: r.campaignId, projectId: v === "none" ? null : Number(v) })}>
+                                <SelectTrigger className="h-7 w-48 text-xs"><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="none">— sem marca/cidade —</SelectItem>
+                                  {brandOptions.map((o) => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
+                                </SelectContent>
+                              </Select>
+                              {r.projectId == null && sug && (
+                                <Badge variant="outline" className="text-[10px] cursor-pointer" title="Sugestão pelo nome — clica para aplicar" onClick={() => update.mutate({ id: r.campaignId, projectId: sug.projectId })}>
+                                  sugestão: {sug.projectName}
+                                </Badge>
+                              )}
+                            </div>
+                          ) : (
+                            <span className={r.projectId == null ? "text-amber-700 text-xs" : "text-xs"}>{r.projectId != null ? label(r.projectId) : "sem marca/cidade"}</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-1.5 text-right">{eur(r.cost)}</td>
+                        <td className="px-4 py-1.5 text-right">{num(r.impressions)}</td>
+                        <td className="px-4 py-1.5 text-right">{num(r.clicks)}</td>
+                        <td className="px-4 py-1.5 text-right text-muted-foreground">{r.clicks > 0 ? eur(r.cost / r.clicks) : "—"}</td>
+                        <td className="px-4 py-1.5 text-right">{Number(r.conversions).toFixed(1)}</td>
+                        <td className="px-4 py-1.5 text-right text-muted-foreground">{r.conversions > 0 ? eur(r.cost / r.conversions) : "—"}</td>
+                        <td className="px-4 py-1.5 text-right">{eur(r.conversionValue)}</td>
+                      </tr>
+                    );
+                  })}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
