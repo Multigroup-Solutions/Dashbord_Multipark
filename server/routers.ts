@@ -3503,6 +3503,24 @@ export const appRouter = router({
         }
       }),
 
+    // Página principal do Marketing (Jorge, 16 set 2026): gasto por marca
+    // (= conta Google; Multipark = Marketplace) e reservas dessa marca.
+    byBrand: protectedProcedure
+      .input(z.object({ from: z.string().optional(), to: z.string().optional() }).optional())
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { getSpendAndBookingsByBrand } = await import("./integrations/googleAds/marketingStats");
+        const { lisbonToday } = await import("../shared/expensePeriods");
+        const today = lisbonToday();
+        const from = input?.from || `${today.slice(0, 7)}-01`;
+        const to = input?.to || today;
+        try {
+          return await getSpendAndBookingsByBrand({ from, to });
+        } catch (e: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) });
+        }
+      }),
+
     bookingRevenue: protectedProcedure
       .input(z.object({ from: z.string().optional(), to: z.string().optional(), projectId: z.number().optional() }).optional())
       .query(async ({ ctx, input }) => {
