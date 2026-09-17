@@ -49,6 +49,37 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 
 ## Changelog
 
+### 2026-09-17 (c) — Templates sem parâmetros + página "Leads de Extras"
+**Type**: feature (**migração 0076** `extra_leads`, registada em `server/db.ts`; sem deploy)
+**Scope**: `shared/whatsappTemplate.ts`, `server/whatsappBroadcast.ts`, `server/extraLeads.ts` (+ test),
+`server/routers.ts` (`extraLeads.*`), `server/whatsappInbox.ts`, `drizzle/schema.ts`,
+`server/migrations/migration_0076.ts`, `client/src/pages/ExtraLeadsPage.tsx`, `App.tsx` (`/extras-leads`),
+`DashboardLayout.tsx` (Pessoas → "Leads de Extras", backoffice+), `ExtrasDiaPage.tsx`.
+**What**:
+- Catálogo: `WhatsAppTemplateDef.sharedParam` e `roles` passam a poder ser **`null` = template SEM
+  parâmetros de body**. Dois templates novos: `seja_motorista` (recrutamento de extras) e
+  `morada_e_regras` (para quem vem trabalhar), ambos `pt_BR`, sem campos. `templateHasBodyParams(def)`.
+  O diálogo da Disponibilidade esconde o campo quando `sharedParam` é null e envia `bodyParam2: null`.
+- Envio: `prepareSend()` (extraído de `sendBroadcast`) valida env, catálogo e metadados uma vez;
+  `DispatchConfig.noBodyParams` → `params = []` (sem isto o modo "sem inspeção" mandava o nome como
+  {{1}} e a Meta recusava). Guarda nova: catálogo diz "sem parâmetros" mas a Meta tem N → erro claro.
+  **`sendTemplateToContacts({templateName, contacts:[{name, phone}]})`**: mesmo `dispatchOne` dos extras
+  para números SEM ficha (conversa `employeeId=null`, `whatsapp_messages`, broadcast `[LEADS]`); recusa
+  templates com botão dinâmico ou com campo do diálogo. RULE: a ordem de `recipients` = ordem de `contacts`.
+- Leads: tabela `extra_leads` (nome; telemóvel e/ou email — **pelo menos um**; `phoneE164` = chave de
+  envio e de ligação à conversa; `status` new→contacted→converted|declined; `contactCount`,
+  `lastContactedAt`, `notes`). `normalizeLeadInput` (pura, testada): telemóvel escrito tem de ser E.164
+  válido, email tem de ser plausível. Duplicados (mesmo número/email noutro lead) e números de
+  colaboradores ATIVOS são recusados na criação. `contactExtraLeads(leadIds, templateId)`: só templates sem
+  parâmetros; por envio bem sucedido carimba `lastContactedAt`, `contactCount+1` e `new→contacted`
+  (nunca mexe em converted/declined). Leads sem telemóvel → `no_phone`, sem chamada.
+- Inbox: conversas sem ficha mostram o **nome do lead** (join por `phoneE164`) em vez do número.
+- Página `/extras-leads`: pesquisa local (nome/número/email), filtro por estado com contagens, seleção
+  em lote (só leads com telemóvel) → diálogo com pré-visualização REAL do template e resultado por lead;
+  criar/editar (validação igual à do servidor), estado inline, apagar com confirmação.
+**Deploy**: a migração 0076 corre no arranque (runner de `server/db.ts`); os dois templates têm de estar
+APROVADOS na Meta com estes nomes exatos e língua `pt_BR` — senão o envio falha com a lista de línguas existentes.
+
 ### 2026-09-17 — Inbox: filtro "Não lidas" · site multidriver: manhã às 03H
 **Type**: feature (sem migração, sem deploy)
 **Scope**: `client/src/pages/WhatsAppInboxPage.tsx`; `server/webIntake.ts` (`SLOT_RANGES`,

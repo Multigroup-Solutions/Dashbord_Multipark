@@ -1,5 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { buildBodyParams, renderOutboundBody, resolveRecipients } from "./whatsappBroadcast";
+import { buildBodyParams, buildComponents, renderOutboundBody, resolveRecipients } from "./whatsappBroadcast";
+
+describe("templates sem parâmetros (seja_motorista / morada_e_regras)", () => {
+  it("sem valores nem botão não emite componente nenhum — com ou sem metadados", () => {
+    expect(buildComponents({ analysis: null, values: [], roles: null })).toBeUndefined();
+    const analysis = analyzeTemplateEntry({
+      name: "seja_motorista",
+      language: "pt_BR",
+      status: "APPROVED",
+      components: [{ type: "BODY", text: "Olá! Queres ser motorista da Multipark?" }],
+    } as any);
+    expect(buildComponents({ analysis, values: [], roles: null })).toBeUndefined();
+    // Mesmo que alguém passe o nome por engano, um template de 0 parâmetros não leva body.
+    expect(buildComponents({ analysis, values: ["Ana"], roles: null })).toBeUndefined();
+  });
+
+  it("o corpo gravado no inbox é o texto aprovado tal-e-qual", () => {
+    const analysis = analyzeTemplateEntry({
+      name: "morada_e_regras",
+      language: "pt_BR",
+      status: "APPROVED",
+      components: [{ type: "BODY", text: "Morada: Rua X. Regras: chegar 10 min antes." }],
+    } as any);
+    expect(renderOutboundBody({ templateName: "morada_e_regras", analysis, roles: null, values: [] })).toBe(
+      "Morada: Rua X. Regras: chegar 10 min antes.",
+    );
+    expect(renderOutboundBody({ templateName: "morada_e_regras", analysis: null, roles: null, values: [] })).toBe(
+      "Template morada_e_regras",
+    );
+  });
+});
 import { analyzeTemplateEntry } from "./whatsappTemplateMeta";
 import { findWhatsAppTemplate } from "../shared/whatsappTemplate";
 import type { ActiveExtra } from "./extrasAvailability";

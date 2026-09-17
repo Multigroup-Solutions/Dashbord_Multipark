@@ -42,6 +42,7 @@ import MultiparkInspectPage from "./pages/MultiparkInspectPage";
 import InvitePage from "./pages/InvitePage";
 import DisponibilidadePage from "./pages/DisponibilidadePage";
 import WhatsAppInboxPage from "./pages/WhatsAppInboxPage";
+import ExtraLeadsPage from "./pages/ExtraLeadsPage";
 import ProjectCostsDashboard from "./pages/ProjectCostsDashboard";
 import DashboardPage from "./pages/DashboardPage";
 import DashboardsPage from "./pages/DashboardsPage";
@@ -156,6 +157,9 @@ function Router() {
       </Route>
       <Route path="/criticas">
         {() => (<DashboardLayout><GoogleReviewsPage /></DashboardLayout>)}
+      </Route>
+      <Route path="/extras-leads">
+        {() => (<DashboardLayout><ExtraLeadsPage /></DashboardLayout>)}
       </Route>
       <Route path="/formacao">
         {() => (<DashboardLayout><TrainingPage /></DashboardLayout>)}

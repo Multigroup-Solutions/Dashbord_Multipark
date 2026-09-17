@@ -50,7 +50,14 @@ describe("catálogo de templates", () => {
     for (const t of WHATSAPP_TEMPLATES) {
       expect(t.name.length).toBeGreaterThan(0);
       expect(t.language.length).toBeGreaterThan(0);
-      expect(t.roles.recipient).not.toBe(t.roles.shared);
+      // Templates SEM parâmetros (seja_motorista, morada_e_regras) têm roles e
+      // sharedParam a null — os dois juntos, nunca só um.
+      if (t.roles === null) {
+        expect(t.sharedParam).toBeNull();
+      } else {
+        expect(t.sharedParam).not.toBeNull();
+        expect(t.roles.recipient).not.toBe(t.roles.shared);
+      }
     }
   });
 

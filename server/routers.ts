@@ -7891,6 +7891,93 @@ export const appRouter = router({
       }),
   }),
 
+  // ── LEADS DE EXTRAS (contactos em recrutamento, ainda sem ficha) ──────────
+  extraLeads: router({
+    list: protectedProcedure
+      .input(
+        z
+          .object({
+            status: z.enum(["new", "contacted", "converted", "declined"]).nullable().optional(),
+            search: z.string().max(120).nullable().optional(),
+          })
+          .optional(),
+      )
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { listExtraLeads } = await import("./extraLeads");
+        return listExtraLeads({ status: input?.status ?? null, search: input?.search ?? null });
+      }),
+
+    create: protectedProcedure
+      .input(
+        z.object({
+          fullName: z.string().min(1).max(256),
+          phone: z.string().max(32).nullable().optional(),
+          email: z.string().max(320).nullable().optional(),
+          notes: z.string().max(512).nullable().optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { createExtraLead } = await import("./extraLeads");
+        try {
+          return await createExtraLead(input, ctx.user.id);
+        } catch (err: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao criar lead" });
+        }
+      }),
+
+    update: protectedProcedure
+      .input(
+        z.object({
+          id: z.number().int().positive(),
+          fullName: z.string().min(1).max(256).optional(),
+          phone: z.string().max(32).nullable().optional(),
+          email: z.string().max(320).nullable().optional(),
+          notes: z.string().max(512).nullable().optional(),
+          status: z.enum(["new", "contacted", "converted", "declined"]).nullable().optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { updateExtraLead } = await import("./extraLeads");
+        const { id, ...patch } = input;
+        try {
+          return await updateExtraLead(id, patch, ctx.user.id);
+        } catch (err: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao atualizar lead" });
+        }
+      }),
+
+    remove: protectedProcedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { deleteExtraLead } = await import("./extraLeads");
+        await deleteExtraLead(input.id, ctx.user.id);
+        return { success: true };
+      }),
+
+    // Envia um template SEM parâmetros (por defeito `seja_motorista`) aos leads
+    // escolhidos. Mesmo caminho de envio dos extras; ver server/extraLeads.ts.
+    contact: protectedProcedure
+      .input(
+        z.object({
+          leadIds: z.array(z.number().int().positive()).min(1).max(200),
+          templateId: z.string().min(1).max(64),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { contactExtraLeads } = await import("./extraLeads");
+        try {
+          return await contactExtraLeads({ leadIds: input.leadIds, templateId: input.templateId, createdById: ctx.user.id });
+        } catch (err: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao enviar WhatsApp aos leads" });
+        }
+      }),
+  }),
+
   // ── WHATSAPP (envio em massa de templates aos extras) ──────────────────────
   whatsapp: router({
     // Texto REAL do template aprovado na Meta, para a UI pré-visualizar a

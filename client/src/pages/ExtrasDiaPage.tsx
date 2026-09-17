@@ -1846,7 +1846,7 @@ export function AvailabilitySection() {
   // acompanha-a enquanto o utilizador não escrever nada; o que ele escrever
   // (ou colar via "Usar este texto no WhatsApp") manda. `undefined` = nunca
   // tocado → segue a seleção; string (mesmo vazia) = valor do utilizador.
-  const waWeekDefault = waTemplate.sharedParam.kind === "week" && weekShortLabel ? `semana de ${weekShortLabel}` : "";
+  const waWeekDefault = waTemplate.sharedParam?.kind === "week" && weekShortLabel ? `semana de ${weekShortLabel}` : "";
   const waParam2IsDefault = waParams[waTemplate.id] === undefined && !!waWeekDefault;
   const waParam2 = waParams[waTemplate.id] ?? waWeekDefault;
   const setWaParam2 = (value: string) =>
@@ -1916,8 +1916,9 @@ export function AvailabilitySection() {
   }, [templatePreview.data, waTemplate, waPreviewName, waParam2]);
 
   function submitBroadcast(testPhone?: string) {
-    const bodyParam2 = waParam2.trim();
-    if (!bodyParam2) {
+    // Templates sem parâmetros (ex.: "Morada e regras") não têm campo a preencher.
+    const bodyParam2 = waTemplate.sharedParam ? waParam2.trim() : "";
+    if (waTemplate.sharedParam && !bodyParam2) {
       toast.error(`Preenche o campo “${waTemplate.sharedParam.label}”.`);
       return;
     }
@@ -1930,7 +1931,7 @@ export function AvailabilitySection() {
     broadcast.mutate({
       templateName: waTemplate.name,
       languageCode: waTemplate.language,
-      bodyParam2,
+      bodyParam2: bodyParam2 || null,
       // O botão com link do formulário é detetado pelos metadados do template
       // na Meta (server/whatsappTemplateMeta.ts) — sem override manual na UI.
       employeeIds: testPhone ? undefined : targetIds,
@@ -2527,6 +2528,8 @@ export function AvailabilitySection() {
                 <p className="text-xs text-muted-foreground">{waTemplate.description}</p>
               </div>
 
+              {/* Templates sem parâmetros não têm campo — o texto é fixo na Meta. */}
+              {waTemplate.sharedParam && (
               <div className="space-y-1">
                 <Label className="text-xs">{waTemplate.sharedParam.label}</Label>
                 <Input
@@ -2559,6 +2562,7 @@ export function AvailabilitySection() {
                   </div>
                 )}
               </div>
+              )}
 
               {/* Pré-visualização do texto REAL aprovado na Meta, já com o nome
                   do 1º destinatário e o campo acima substituídos. */}

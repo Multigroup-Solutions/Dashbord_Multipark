@@ -1735,6 +1735,38 @@ export const whatsappBroadcasts = mysqlTable("whatsapp_broadcasts", {
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 });
 
+// ─── Leads de extras (2026-09-17) ───────────────────────────────────────────
+// Contactos que AINDA não são extras mas estão a ser recrutados. Vivem fora de
+// `employees` de propósito: uma ficha só nasce quando a pessoa aceita (aí o
+// lead passa a `converted` e aponta para o employeeId). O contacto por WhatsApp
+// usa o template `seja_motorista` (sem parâmetros) e fica no inbox como conversa
+// SEM ficha; `phoneE164` é a chave que liga o lead a essa conversa.
+export const extraLeads = mysqlTable("extra_leads", {
+	id: int().autoincrement().primaryKey(),
+	fullName: varchar({ length: 256 }).notNull(),
+	/** Como foi escrito (normalizado à entrada por normalizePhoneForStorage). */
+	phone: varchar({ length: 32 }),
+	/** E.164 — chave de envio e de ligação à conversa do inbox. */
+	phoneE164: varchar({ length: 20 }),
+	email: varchar({ length: 320 }),
+	status: mysqlEnum(['new','contacted','converted','declined']).default('new').notNull(),
+	notes: varchar({ length: 512 }),
+	source: varchar({ length: 64 }).default('manual').notNull(),
+	/** Nº de templates ENVIADOS com sucesso a este lead. */
+	contactCount: int().default(0).notNull(),
+	lastContactedAt: timestamp({ mode: 'string' }),
+	/** Preenchido quando o lead vira extra (ficha criada). */
+	employeeId: int(),
+	createdById: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	index("idx_extra_leads_status").on(table.status),
+	index("idx_extra_leads_phone").on(table.phoneE164),
+	index("idx_extra_leads_email").on(table.email),
+]);
+
 // ─── Tokens do formulário externo de disponibilidades (Fase 4) ──────────────
 // Single-use: cada token é assinado (JWT) com um `jti` que também vive aqui.
 // A submissão consome-o (usedAt) via UPDATE ... WHERE usedAt IS NULL.

@@ -67,8 +67,18 @@ export interface WhatsAppTemplateDef {
   label: string;
   /** O que a mensagem faz — mostrado por baixo do seletor. */
   description: string;
-  sharedParam: SharedParamSpec;
-  roles: TemplateBodyRoles;
+  /**
+   * Campo único do diálogo ({{2}}). `null` = template SEM parâmetros de body
+   * (nem nome, nem campo): o envio não manda componente `body` nenhum.
+   */
+  sharedParam: SharedParamSpec | null;
+  /** Papéis dos parâmetros; `null` = template sem parâmetros de body. */
+  roles: TemplateBodyRoles | null;
+}
+
+/** Templates sem parâmetros de body não levam `components.body` (a Meta responde 132000 se levarem). */
+export function templateHasBodyParams(def: Pick<WhatsAppTemplateDef, "roles">): boolean {
+  return def.roles !== null;
 }
 
 /**
@@ -106,7 +116,30 @@ export const WHATSAPP_TEMPLATES: readonly WhatsAppTemplateDef[] = [
     },
     roles: { recipient: "customer_name", shared: "day" },
   },
+  // Dois templates SEM parâmetros (Jorge, 2026-09-17): o texto é fixo na Meta,
+  // por isso não há nome nem campo do diálogo a preencher.
+  {
+    id: "seja_motorista",
+    name: "seja_motorista",
+    language: DEFAULT_TEMPLATE_LANGUAGE,
+    label: "Seja motorista (recrutamento)",
+    description: "Convida um contacto a tornar-se extra/motorista da Multipark. Sem campos a preencher.",
+    sharedParam: null,
+    roles: null,
+  },
+  {
+    id: "morada_regras",
+    name: "morada_e_regras",
+    language: DEFAULT_TEMPLATE_LANGUAGE,
+    label: "Morada e regras",
+    description: "Envia a morada e as regras a quem vem trabalhar. Sem campos a preencher.",
+    sharedParam: null,
+    roles: null,
+  },
 ] as const;
+
+/** Template usado na página de leads de extras (contactos que ainda não são extras). */
+export const LEAD_RECRUITMENT_TEMPLATE_ID = "seja_motorista";
 
 /** Template pré-selecionado no dialog (o fluxo original). */
 export const DEFAULT_WHATSAPP_TEMPLATE_ID = "disponibilidade";

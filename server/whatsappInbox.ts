@@ -8,7 +8,7 @@
  */
 import { desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { employees, whatsappConversations, whatsappMessages } from "../drizzle/schema";
+import { employees, extraLeads, whatsappConversations, whatsappMessages } from "../drizzle/schema";
 import { sendTextMessage } from "./whatsapp";
 import { messageDisplayBody } from "../shared/whatsappTemplate";
 
@@ -150,6 +150,18 @@ export async function listConversations(): Promise<ConversationRow[]> {
     }
   }
 
+  // Conversas SEM ficha podem ser leads de extras (recrutamento): o nome vem da
+  // tabela de leads pelo número, senão a lista mostrava só o +351….
+  const leadNameByPhone = new Map<string, string>();
+  const unnamedPhones = convs.filter((c) => !c.employeeName).map((c) => c.phoneE164);
+  if (unnamedPhones.length) {
+    const leads = await db
+      .select({ phoneE164: extraLeads.phoneE164, fullName: extraLeads.fullName })
+      .from(extraLeads)
+      .where(inArray(extraLeads.phoneE164, unnamedPhones));
+    for (const l of leads) if (l.phoneE164 && !leadNameByPhone.has(l.phoneE164)) leadNameByPhone.set(l.phoneE164, l.fullName);
+  }
+
   // A query vem por `lastMessageAt` desc só para o cap de 300 apanhar as
   // conversas ativas; a ordem que a UI mostra é a de `sortConversations`.
   const rows: ConversationRow[] = convs.map((c) => {
@@ -159,7 +171,7 @@ export async function listConversations(): Promise<ConversationRow[]> {
       id: c.id,
       phoneE164: c.phoneE164,
       employeeId: c.employeeId,
-      name: c.employeeName ?? c.phoneE164,
+      name: c.employeeName ?? leadNameByPhone.get(c.phoneE164) ?? c.phoneE164,
       unreadCount: c.unreadCount,
       lastInboundAt: c.lastInboundAt,
       lastMessageAt: c.lastMessageAt,

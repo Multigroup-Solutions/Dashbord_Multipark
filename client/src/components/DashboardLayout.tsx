@@ -52,6 +52,7 @@ import {
   Handshake,
   CalendarDays,
   UserCheck,
+  UserPlus,
   Users,
   Trophy,
   GraduationCap,
@@ -160,6 +161,7 @@ export const menuGroups: MenuGroup[] = [
     items: [
       // RH visível a todos os roles (user/extra veem só o próprio perfil)
       { icon: UserCheck, label: "Recursos Humanos", path: "/rh" },
+      { icon: UserPlus, label: "Leads de Extras", path: "/extras-leads", minRole: "backoffice" },
       { icon: GraduationCap, label: "Formação", path: "/formacao", minRole: "extra" },
       // extra vê a própria avaliação (última semana) — filtrado no servidor
       { icon: Trophy, label: "Avaliação Individual", path: "/avaliacao", minRole: "extra" },

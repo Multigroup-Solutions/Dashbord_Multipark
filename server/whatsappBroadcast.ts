@@ -27,6 +27,7 @@ import {
   DEFAULT_TEMPLATE_LANGUAGE,
   UNKNOWN_RECIPIENT_NAME,
   findWhatsAppTemplateByName,
+  templateHasBodyParams,
   firstNameOf,
   orderBodyValues,
   previewTemplateBody,
@@ -328,6 +329,8 @@ interface DispatchConfig {
   analysis: TemplateAnalysis | null;
   /** Papéis dos parâmetros deste template (catálogo); null = mapeamento por posição. */
   roles: TemplateBodyRoles | null;
+  /** Template declarado SEM parâmetros de body: não enviar nome nem campo. */
+  noBodyParams: boolean;
   /** Porque é que a inspeção falhou (anexado aos erros, para diagnóstico). */
   metaUnavailableReason: string | null;
   includeFormLink: boolean;
@@ -363,7 +366,9 @@ async function dispatchOne(
   r: ResolvedRecipient,
   cfg: DispatchConfig,
 ): Promise<BroadcastRecipient> {
-  const params = buildBodyParams(r.name, cfg.bodyParam2);
+  // Template sem parâmetros → nenhum valor de body (com ou sem metadados). Sem
+  // isto, o modo "sem inspeção" mandava o nome como {{1}} e a Meta recusava.
+  const params = cfg.noBodyParams ? [] : buildBodyParams(r.name, cfg.bodyParam2);
   let buttonToken: string | undefined;
 
   if (cfg.includeFormLink && cfg.weekStart && r.employeeId != null) {
@@ -429,7 +434,33 @@ async function updateBroadcastCounts(
  * rasto). Aceitável para esta escala (extras internos, dezenas de destinatários).
  * Revisitar (outbox/fila) se o volume crescer materialmente.
  */
-export async function sendBroadcast(opts: SendBroadcastOptions): Promise<BroadcastSummary> {
+/** Tudo o que um envio precisa de saber ANTES de tocar num destinatário. */
+interface PreparedSend {
+  templateName: string;
+  languageCode: string;
+  bodyParam2: string | null;
+  weekStart: string | null;
+  roles: TemplateBodyRoles | null;
+  /** Template do catálogo declarado SEM parâmetros de body → nunca enviar `components.body`. */
+  noBodyParams: boolean;
+  analysis: TemplateAnalysis | null;
+  metaUnavailableReason: string | null;
+  includeFormLink: boolean;
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>;
+}
+
+/**
+ * Validação de env, catálogo e metadados — partilhada pelo broadcast aos extras
+ * e pelo envio a contactos soltos (leads). Falha CEDO com mensagem clara, antes
+ * de gastar uma única chamada de envio e antes de criar a linha do broadcast.
+ */
+async function prepareSend(opts: {
+  templateName: string;
+  languageCode?: string | null;
+  bodyParam2?: string | null;
+  weekStart?: string | null;
+  includeFormLink?: boolean;
+}): Promise<PreparedSend> {
   // Guarda de env — falha cedo com mensagem clara.
   if (!process.env.WHATSAPP_TOKEN || !process.env.WHATSAPP_PHONE_NUMBER_ID) {
     throw new Error(
@@ -445,7 +476,10 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
   // Papéis dos parâmetros vêm do catálogo do SERVIDOR (pelo nome do template),
   // nunca do cliente. Template fora do catálogo (ex.: nome escrito à mão no
   // dialog do inbox) → null = mapeamento por posição, como sempre foi.
-  const roles = findWhatsAppTemplateByName(templateName, languageCode)?.roles ?? null;
+  // Template do catálogo com `roles: null` = SEM parâmetros de body.
+  const def = findWhatsAppTemplateByName(templateName, languageCode);
+  const roles = def?.roles ?? null;
+  const noBodyParams = !!def && !templateHasBodyParams(def);
 
   // ── Inspeção do template (uma vez por broadcast) ───────────────────────────
   // O envio ADAPTA-SE ao template: parâmetros nomeados vs posicionais, quantos
@@ -463,6 +497,12 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
     // Os metadados MANDAM sobre a checkbox: o template ou tem botão dinâmico
     // (e então precisa mesmo do token) ou não tem (e mandá-lo rebentava o envio).
     includeFormLink = analysis.hasDynamicUrlButton;
+    if (noBodyParams && analysis.paramCount > 0) {
+      throw new Error(
+        `O template "${templateName}" está declarado no catálogo como SEM parâmetros, mas na Meta tem ` +
+          `${analysis.paramCount}. Corrige o catálogo (shared/whatsappTemplate.ts) ou o template no WhatsApp Manager.`,
+      );
+    }
     const problem = validateTemplateUsage(analysis, {
       hasBodyParam2: !!bodyParam2,
       hasWeekStart: !!weekStart,
@@ -483,6 +523,92 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
 
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível.");
+
+  return { templateName, languageCode, bodyParam2, weekStart, roles, noBodyParams, analysis, metaUnavailableReason, includeFormLink, db };
+}
+
+/** Um contacto solto (sem ficha de colaborador) a quem enviar um template. */
+export interface ContactRecipient {
+  name: string;
+  phone: string;
+}
+
+/**
+ * Envia um template a contactos SEM ficha (leads de extras). Mesmo caminho de
+ * envio dos extras (`dispatchOne`) — inspeção do template, conversa no inbox
+ * (sem employeeId), linha em whatsapp_messages e broadcast auditável — mas sem
+ * campo do diálogo nem link do formulário: um contacto sem ficha não tem token.
+ * A ordem de `recipients` na resposta é a ordem de `contacts`, para o chamador
+ * associar cada resultado ao seu lead.
+ */
+export async function sendTemplateToContacts(opts: {
+  templateName: string;
+  languageCode?: string | null;
+  contacts: ContactRecipient[];
+  note?: string | null;
+  createdById?: number | null;
+}): Promise<BroadcastSummary> {
+  const prep = await prepareSend({ templateName: opts.templateName, languageCode: opts.languageCode });
+  if (prep.includeFormLink) {
+    throw new Error(
+      `O template "${prep.templateName}" tem um botão com link dinâmico, que precisa do token pessoal de um ` +
+        `colaborador — não pode ser enviado a contactos sem ficha.`,
+    );
+  }
+  if (prep.roles && !prep.noBodyParams && prep.analysis && resolveBodyParamRoles(prep.analysis.paramNames, prep.analysis.paramCount, prep.roles).includes("shared")) {
+    throw new Error(`O template "${prep.templateName}" precisa do campo do diálogo, que o envio a contactos não tem.`);
+  }
+  const { db } = prep;
+
+  const resolved: ResolvedRecipient[] = opts.contacts.map((c) => {
+    const raw = (c.phone ?? "").trim();
+    return {
+      employeeId: null,
+      name: c.name?.trim() || UNKNOWN_RECIPIENT_NAME,
+      phone: raw,
+      phoneE164: raw ? normalizePhoneE164(raw) : null,
+    };
+  });
+
+  const broadcastId = await insertBroadcast(db, {
+    templateName: prep.templateName,
+    note: `[LEADS] ${opts.note ?? ""}`.trim(),
+    createdById: opts.createdById ?? null,
+    weekStart: null,
+    totalCount: resolved.length,
+  });
+
+  const recipients: BroadcastRecipient[] = new Array(resolved.length);
+  await runConcurrent(resolved.map((r, i) => ({ r, i })), BROADCAST_CONCURRENCY, async ({ r, i }) => {
+    if (!r.phoneE164) {
+      recipients[i] = { ...r, status: "invalid_phone", error: r.phone ? "Número inválido" : "Sem número" };
+      return;
+    }
+    recipients[i] = await dispatchOne(db, r, {
+      templateName: prep.templateName,
+      languageCode: prep.languageCode,
+      bodyParam2: null,
+      analysis: prep.analysis,
+      roles: prep.roles,
+      noBodyParams: prep.noBodyParams,
+      metaUnavailableReason: prep.metaUnavailableReason,
+      includeFormLink: false,
+      weekStart: null,
+      broadcastId,
+      sentById: opts.createdById ?? null,
+    });
+  });
+
+  const sent = recipients.filter((r) => r.status === "sent").length;
+  const invalidPhone = recipients.filter((r) => r.status === "invalid_phone").length;
+  const failed = recipients.filter((r) => r.status === "failed").length;
+  await updateBroadcastCounts(db, broadcastId, { sentCount: sent, failedCount: failed + invalidPhone });
+  return { broadcastId, total: resolved.length, sent, failed, invalidPhone, recipients };
+}
+
+export async function sendBroadcast(opts: SendBroadcastOptions): Promise<BroadcastSummary> {
+  const prep = await prepareSend(opts);
+  const { templateName, languageCode, bodyParam2, weekStart, roles, noBodyParams, analysis, metaUnavailableReason, includeFormLink, db } = prep;
 
   // ── MODO TESTE: 1 número, não toca nos extras ──────────────────────────────
   if (opts.testPhone) {
@@ -529,6 +655,7 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
         bodyParam2,
         analysis,
         roles,
+        noBodyParams,
         metaUnavailableReason,
         includeFormLink,
         weekStart,
@@ -583,6 +710,7 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
       bodyParam2,
       analysis,
       roles,
+      noBodyParams,
       metaUnavailableReason,
       includeFormLink,
       weekStart,
