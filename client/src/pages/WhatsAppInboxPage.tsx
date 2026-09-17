@@ -121,6 +121,10 @@ export default function WhatsAppInboxPage() {
   const [now, setNow] = useState(() => Date.now());
   // Pesquisa por nome ou número (filtro local — a lista já vem completa).
   const [search, setSearch] = useState("");
+  // Só conversas com mensagens por ler (filtro local, compõe em AND com a
+  // pesquisa). A conversa ABERTA fica sempre à vista: abrir marca como lida e
+  // sem isto a linha desaparecia debaixo do clique.
+  const [onlyUnread, setOnlyUnread] = useState(false);
 
   // Tick para o countdown da janela (a cada 30s).
   useEffect(() => {
@@ -164,9 +168,12 @@ export default function WhatsAppInboxPage() {
 
   const allConversations = conversations.data ?? [];
   const hasSearch = search.trim().length > 0;
-  const convList = hasSearch
-    ? allConversations.filter((c) => matchesContactQuery(search, { name: c.name, phone: c.phoneE164 }))
-    : allConversations;
+  const unreadTotal = allConversations.filter((c) => c.unreadCount > 0).length;
+  const convList = allConversations.filter(
+    (c) =>
+      (!hasSearch || matchesContactQuery(search, { name: c.name, phone: c.phoneE164 })) &&
+      (!onlyUnread || c.unreadCount > 0 || c.id === selectedId),
+  );
   // A ordem vem do servidor (`sortConversations`): janela aberta primeiro, da
   // que fecha mais cedo para a que fecha mais tarde; depois as restantes pela
   // última mensagem. Aqui só se AGRUPA para o cabeçalho de cada bloco — o
@@ -244,7 +251,7 @@ export default function WhatsAppInboxPage() {
         <span className="font-semibold">Conversas</span>
         {conversations.isFetching && <Clock className="h-3.5 w-3.5 animate-spin text-muted-foreground ml-auto" />}
       </div>
-      <div className="p-2 border-b shrink-0">
+      <div className="p-2 border-b shrink-0 space-y-2">
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
           <Input
@@ -266,6 +273,26 @@ export default function WhatsAppInboxPage() {
             </button>
           )}
         </div>
+        <div className="flex items-center gap-1.5">
+          <Button
+            type="button"
+            size="sm"
+            variant={onlyUnread ? "default" : "outline"}
+            className="h-7 text-xs"
+            aria-pressed={onlyUnread}
+            title="Mostrar só conversas com mensagens por ler"
+            onClick={() => setOnlyUnread((v) => !v)}
+          >
+            <MessageCircle className="h-3.5 w-3.5 mr-1" />
+            Não lidas
+            <span className="ml-1 opacity-70 tabular-nums">{unreadTotal}</span>
+          </Button>
+          {onlyUnread && (
+            <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setOnlyUnread(false)}>
+              <X className="h-3.5 w-3.5 mr-1" /> Todas
+            </Button>
+          )}
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto">
         {convList.length === 0 && (
@@ -273,8 +300,10 @@ export default function WhatsAppInboxPage() {
             {conversations.isLoading
               ? "A carregar…"
               : hasSearch
-                ? `Sem resultados para “${search.trim()}”.`
-                : "Ainda sem conversas."}
+                ? `Sem resultados para “${search.trim()}”${onlyUnread ? " entre as não lidas" : ""}.`
+                : onlyUnread
+                  ? "Sem mensagens por ler."
+                  : "Ainda sem conversas."}
           </div>
         )}
         {openList.length > 0 && groupHeader("Janela aberta — a fechar primeiro", openList.length, "open")}
