@@ -28,7 +28,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Fragment, useState, useMemo } from "react";
+import { Fragment, useCallback, useState, useMemo } from "react";
 import { toast } from "sonner";
 import {
   ArrowDownToLine,
@@ -61,8 +61,15 @@ import {
   CITY_KEYS,
   CITY_LABELS,
   CITY_SOURCE_LABELS,
+  matchCityKey,
   type CityKey,
 } from "@shared/city";
+import {
+  HOUR_OPTIONS,
+  formatHourWindow,
+  isAvailableOnDay,
+  matchesAvailabilityWindow,
+} from "@shared/availabilityWindow";
 import {
   DEFAULT_WHATSAPP_TEMPLATE_ID,
   WHATSAPP_TEMPLATES,
@@ -1307,9 +1314,42 @@ export function CandidaturasSection() {
   }, { refetchInterval: 60_000 });
   const newCount = trpc.driverApplications.list.useQuery({ status: "new" }, { refetchInterval: 60_000 });
 
+  // ── Aprovar = escolher a cidade (centro de custos) onde o extra fica ──────
+  // `projects.list` já vem limitado às cidades a que quem aprova tem acesso
+  // (utilizador de Lisboa só vê Lisboa); aqui ficam só os nós `level='city'`,
+  // com o mesmo aspeto do "Centro de Custos" da ficha de RH. Sem centro de
+  // custos o extra só era visível a quem tem acesso a todas as cidades.
+  const projects = trpc.projects.list.useQuery();
+  const cityProjects = useMemo(
+    () =>
+      (projects.data ?? [])
+        .filter((p: any) => p.level === "city")
+        .sort((a: any, b: any) => String(a.name).localeCompare(String(b.name), "pt")),
+    [projects.data],
+  );
+  const [approveFor, setApproveFor] = useState<null | { id: number; fullName: string; email: string; city: string | null }>(null);
+  const [approveProjectId, setApproveProjectId] = useState<string>("");
+
+  /** Abre o diálogo com a cidade da candidatura pré-selecionada (quando se reconhece). */
+  function openApprove(a: { id: number; fullName: string; email: string; city: string | null }) {
+    const key = matchCityKey(a.city);
+    const match = key ? cityProjects.find((p: any) => matchCityKey(p.name) === key) : undefined;
+    setApproveProjectId(match ? String(match.id) : cityProjects.length === 1 ? String(cityProjects[0].id) : "");
+    setApproveFor(a);
+  }
+
   const approve = trpc.driverApplications.approve.useMutation({
     onSuccess: (r) => {
-      toast.success(r.employeeCreated ? "Candidatura aprovada — extra criado" : "Candidatura aprovada — ligada a extra existente");
+      const cc = r.costCenter;
+      const who = r.employeeCreated ? "extra criado" : "ligada a extra existente";
+      if (cc.outcome === "kept_existing") {
+        toast.warning(
+          `Candidatura aprovada — ${who}. A ficha já estava em ${cc.existingProjectName} e mantém-se lá (não foi movida para ${cc.projectName}).`,
+        );
+      } else {
+        toast.success(`Candidatura aprovada — ${who}, alocado a ${cc.projectName}.`);
+      }
+      setApproveFor(null);
       list.refetch();
       newCount.refetch();
     },
@@ -1415,9 +1455,7 @@ export function CandidaturasSection() {
                               variant="outline"
                               className="border-emerald-600 text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950 mr-1"
                               disabled={approve.isPending}
-                              onClick={() => {
-                                if (confirm(`Aprovar ${a.fullName} e criar/ligar o extra?`)) approve.mutate({ id: a.id });
-                              }}
+                              onClick={() => openApprove({ id: a.id, fullName: a.fullName, email: a.email, city: a.city ?? null })}
                             >
                               <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Aprovar
                             </Button>
@@ -1465,6 +1503,70 @@ export function CandidaturasSection() {
           </div>
         )}
       </CardContent>
+
+      {/* ── Dialog: aprovar candidatura + cidade (centro de custos) ─────────── */}
+      <Dialog open={approveFor != null} onOpenChange={(open) => { if (!open && !approve.isPending) setApproveFor(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+              Aprovar {approveFor?.fullName}
+            </DialogTitle>
+            <DialogDescription>
+              Cria (ou liga a) a ficha de extra com o email <span className="font-medium">{approveFor?.email}</span> e
+              aloca-a à cidade escolhida — é o mesmo "Centro de Custos" da ficha de RH.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            <Label>Centro de Custos (cidade) *</Label>
+            <Select value={approveProjectId} onValueChange={setApproveProjectId} disabled={approve.isPending}>
+              <SelectTrigger className={!approveProjectId ? "border-amber-400" : undefined}>
+                <SelectValue placeholder={projects.isLoading ? "A carregar cidades…" : "Escolher cidade..."} />
+              </SelectTrigger>
+              <SelectContent>
+                {cityProjects.map((p: any) => (
+                  <SelectItem key={p.id} value={String(p.id)}>
+                    <span className="inline-flex items-center gap-2">
+                      <Badge variant="outline" className="text-[10px] bg-blue-100 text-blue-700 border-blue-200">Cidade</Badge>
+                      {p.name}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {approveFor?.city && (
+              <p className="text-xs text-muted-foreground">
+                Na candidatura escreveu <span className="font-medium">“{approveFor.city}”</span>
+                {matchCityKey(approveFor.city) ? " — pré-selecionada, confirma ou muda." : " — não corresponde a nenhuma cidade operacional, escolhe tu."}
+              </p>
+            )}
+            {!projects.isLoading && cityProjects.length === 0 && (
+              <p className="text-xs text-amber-600">
+                Não tens nenhuma cidade disponível para alocar (verifica o teu centro de custos).
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Sem cidade, o extra só ficaria visível a quem tem acesso a todas as cidades. Uma ficha que já exista com
+              centro de custos não é movida — muda-se na ficha, se for preciso.
+            </p>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setApproveFor(null)} disabled={approve.isPending}>
+              Cancelar
+            </Button>
+            <Button
+              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+              disabled={!approveProjectId || approve.isPending || !approveFor}
+              onClick={() => approveFor && approve.mutate({ id: approveFor.id, projectId: Number(approveProjectId) })}
+            >
+              <CheckCircle2 className="h-4 w-4 mr-2" />
+              {approve.isPending ? "A aprovar…" : "Aprovar e alocar"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
@@ -1526,6 +1628,13 @@ export function AvailabilitySection() {
   // Filtro de cidade. "all" = sem filtro; "none" = fichas sem cidade
   // identificada (ver server/employeeCity.ts — a cidade é DERIVADA).
   const [cityFilter, setCityFilter] = useState<CityKey | "all" | "none">("all");
+  // Filtro "disponível das X às Y" (Jorge, 2026-09-17): dia opcional + horas.
+  // Com as duas horas → quem cobre esse horário (num dia certo ou em qualquer
+  // dia da semana); só com dia → quem marcou algo nesse dia. A regra vive em
+  // shared/availabilityWindow.ts (turnos 03–15 / 15–03, horas mandam).
+  const [windowDay, setWindowDay] = useState<string>("any");
+  const [windowFrom, setWindowFrom] = useState<number | null>(null);
+  const [windowTo, setWindowTo] = useState<number | null>(null);
   // Pesquisa por pessoa (nome ou número). Filtro LOCAL sobre a lista já
   // carregada — a `overview` traz todos os extras ativos de uma vez, por isso
   // não há pedido nenhum a debouncear.
@@ -1577,6 +1686,17 @@ export function AvailabilitySection() {
   // depois é que cada linha recebe o `lastWorked` (é coluna, não filtro). O
   // conjunto resultante é o que a tabela mostra E o alvo de "a todos" (email e
   // WhatsApp) — invariante "o que envio é o que vejo".
+  const windowHoursActive = windowFrom != null && windowTo != null;
+  const windowDayOnly = !windowHoursActive && windowDay !== "any";
+  const windowFilterActive = windowHoursActive || windowDayOnly;
+  const matchesWindow = useCallback(
+    (e: { days: NonNullable<typeof o>["extras"][number]["days"] }) => {
+      if (windowHoursActive) return matchesAvailabilityWindow(e.days, windowDay === "any" ? null : windowDay, windowFrom!, windowTo!);
+      if (windowDayOnly) return isAvailableOnDay(e.days, windowDay);
+      return true;
+    },
+    [windowHoursActive, windowDayOnly, windowDay, windowFrom, windowTo],
+  );
   const shownExtras = useMemo(() => {
     if (!o) return [];
     let list = o.extras;
@@ -1585,9 +1705,15 @@ export function AvailabilitySection() {
     if (onlyWithAvailability) list = list.filter(e => e.availableDays > 0);
     if (onlyNotResponded) list = list.filter(e => !e.responded);
     if (onlyNotContacted24h) list = list.filter(e => !e.contactedWithin24h);
+    if (windowFilterActive) list = list.filter(matchesWindow);
     if (trimmedSearch) list = list.filter(e => matchesExtraQuery(trimmedSearch, e));
     return list.map(e => ({ ...e, lastWorked: lastWorked.data?.[e.employeeId] ?? "" }));
-  }, [o, cityFilter, onlyWithAvailability, onlyNotResponded, onlyNotContacted24h, trimmedSearch, lastWorked.data]);
+  }, [o, cityFilter, onlyWithAvailability, onlyNotResponded, onlyNotContacted24h, windowFilterActive, matchesWindow, trimmedSearch, lastWorked.data]);
+  // Contagem do universo para o rótulo do filtro de horário (como os de cidade).
+  const windowMatchCount = useMemo(
+    () => (windowFilterActive ? (o?.extras ?? []).filter(matchesWindow).length : 0),
+    [o, windowFilterActive, matchesWindow],
+  );
   // Contagens do universo para os rótulos dos filtros (como os botões de cidade).
   const notRespondedCount = useMemo(() => (o?.extras ?? []).filter(e => !e.responded).length, [o]);
   const notContacted24hCount = useMemo(() => (o?.extras ?? []).filter(e => !e.contactedWithin24h).length, [o]);
@@ -1687,6 +1813,22 @@ export function AvailabilitySection() {
   /** Mudar de alvo limpa a seleção — nunca enviar a quem já não se vê. */
   function changeCityFilter(next: CityKey | "all" | "none") {
     setCityFilter(next);
+    setSelectedIds(new Set());
+  }
+  // O filtro de horário também muda o alvo → mesma regra do de cidade.
+  function changeWindowDay(next: string) {
+    setWindowDay(next);
+    setSelectedIds(new Set());
+  }
+  function changeWindowHour(which: "from" | "to", raw: string) {
+    const n = raw === "" ? null : Number(raw);
+    (which === "from" ? setWindowFrom : setWindowTo)(n);
+    setSelectedIds(new Set());
+  }
+  function clearWindowFilter() {
+    setWindowDay("any");
+    setWindowFrom(null);
+    setWindowTo(null);
     setSelectedIds(new Set());
   }
 
@@ -2045,6 +2187,62 @@ export function AvailabilitySection() {
               ))}
             </div>
 
+            {/* Filtro "disponível das X às Y" — dia opcional. Compõe em AND com
+                os restantes e limpa a seleção (o alvo mudou). A regra de quem
+                "cobre" o horário está em shared/availabilityWindow.ts. */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="text-xs text-muted-foreground">Disponível</span>
+              <Select value={windowDay} onValueChange={changeWindowDay}>
+                <SelectTrigger className="h-7 w-48 text-xs" aria-label="Dia da semana">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="any">Qualquer dia da semana</SelectItem>
+                  {o.dayHeaders.map((h) => (
+                    <SelectItem key={h.day} value={h.day}>{h.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <span className="text-xs text-muted-foreground">das</span>
+              <Select value={windowFrom == null ? "" : String(windowFrom)} onValueChange={(v) => changeWindowHour("from", v)}>
+                <SelectTrigger className="h-7 w-20 text-xs" aria-label="Hora de início">
+                  <SelectValue placeholder="—" />
+                </SelectTrigger>
+                <SelectContent>
+                  {HOUR_OPTIONS.map((h) => (
+                    <SelectItem key={h} value={String(h)}>{String(h).padStart(2, "0")}h</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <span className="text-xs text-muted-foreground">às</span>
+              <Select value={windowTo == null ? "" : String(windowTo)} onValueChange={(v) => changeWindowHour("to", v)}>
+                <SelectTrigger className="h-7 w-20 text-xs" aria-label="Hora de fim">
+                  <SelectValue placeholder="—" />
+                </SelectTrigger>
+                <SelectContent>
+                  {HOUR_OPTIONS.map((h) => (
+                    <SelectItem key={h} value={String(h)}>{String(h).padStart(2, "0")}h</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {windowFilterActive ? (
+                <span className="text-xs text-muted-foreground">
+                  {windowHoursActive ? formatHourWindow(windowFrom!, windowTo!) : "qualquer hora"} ·{" "}
+                  <span className={windowMatchCount === 0 ? "text-amber-600" : "text-foreground font-medium"}>
+                    {windowMatchCount} {windowMatchCount === 1 ? "disponível" : "disponíveis"}
+                  </span>
+                </span>
+              ) : (windowFrom != null || windowTo != null) ? (
+                <span className="text-xs text-muted-foreground">escolhe as duas horas para filtrar</span>
+              ) : null}
+              {(windowFilterActive || windowFrom != null || windowTo != null) && (
+                <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={clearWindowFilter}>
+                  <X className="h-3.5 w-3.5 mr-1" /> Limpar
+                </Button>
+              )}
+            </div>
+
             {/* Contagem por dia */}
             <div className="overflow-x-auto">
               <table className="w-full text-sm border-collapse">
@@ -2189,6 +2387,10 @@ export function AvailabilitySection() {
                       <td colSpan={o.dayHeaders.length + 5} className="py-3 text-center text-muted-foreground">
                         {trimmedSearch
                           ? `Sem resultados para “${trimmedSearch}”.`
+                          : windowFilterActive
+                            ? windowHoursActive
+                              ? `Ninguém disponível das ${formatHourWindow(windowFrom!, windowTo!)}${windowDay !== "any" ? " nesse dia" : " em nenhum dia da semana"}.`
+                              : "Ninguém marcou disponibilidade nesse dia."
                           : cityFilter !== "all"
                             ? "Nenhum extra neste filtro de cidade."
                             : onlyWithAvailability
