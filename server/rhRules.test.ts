@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { classifyAvailabilityReply, replyOnly } from "./availabilityReply";
-import { canViewDocuments, canViewEmployee, canViewSensitive, canViewTimeAndSchedule, sanitizeEmployee, sanitizeEmployeeRows, type RhViewer } from "./rhAccess";
+import { canDeleteDocument, canEditContract, canEditPersonal, canViewDocuments, canViewEmployee, canViewSensitive, canViewTimeAndSchedule, employeeAccess, isProtectedTarget, sanitizeEmployee, sanitizeEmployeeRows, type RhViewer } from "./rhAccess";
 import { csvCell, toCsv } from "../shared/csv";
 
 describe("classifyAvailabilityReply", () => {
@@ -60,7 +60,114 @@ describe("rhAccess — permissões por finalidade", () => {
     expect(sanitizeEmployee(admin, emp).nif).toBe("123");
     const rows = sanitizeEmployeeRows(sup, [{ employee: emp }, { employee: { ...emp, id: 98, projectId: 50 } }]);
     expect(rows).toHaveLength(1);
-    expect(rows[0].employee.nif).toBeNull();
+    // supervisor do centro mexe nos dados pessoais → vê NIF; salário continua escondido
+    expect(rows[0].employee.nif).toBe("123");
+    expect(rows[0].employee.monthlySalary).toBeNull();
+  });
+});
+
+// Pedido Jorge 17 set 2026: toda a gente mexe na PRÓPRIA ficha (dados
+// pessoais, documentos, foto), nunca no contratual; gestores por centro;
+// backoffice em todos; admin em tudo menos super_admin; super_admin em tudo.
+describe("rhAccess — dados pessoais vs contratuais", () => {
+  const superAdmin: RhViewer = { id: 1, role: "super_admin", employeeId: 10, scopeProjectIds: null };
+  const admin: RhViewer = { id: 2, role: "admin", employeeId: 20, scopeProjectIds: null };
+  const back: RhViewer = { id: 3, role: "backoffice", employeeId: 30, scopeProjectIds: null };
+  const tl: RhViewer = { id: 4, role: "team_leader", employeeId: 40, scopeProjectIds: [100, 101] };
+  const front: RhViewer = { id: 5, role: "frontoffice", employeeId: 50, scopeProjectIds: [100] };
+  const sup: RhViewer = { id: 6, role: "supervisor", employeeId: 60, scopeProjectIds: [100, 101] };
+  const extra: RhViewer = { id: 7, role: "extra", employeeId: 70, scopeProjectIds: null };
+  const plainUser: RhViewer = { id: 8, role: "user", employeeId: null, scopeProjectIds: null };
+
+  const driverInCenter = { id: 900, projectId: 101, role: "user" };
+  const driverOutside = { id: 901, projectId: 200, role: "extra" };
+  const noAccount = { id: 902, projectId: 100, role: null };
+  const adminFile = { id: 20, projectId: 100, role: "admin" };
+  const superFile = { id: 10, projectId: 100, role: "super_admin" };
+
+  it("toda a gente mexe na própria ficha, mas só no pessoal", () => {
+    expect(canEditPersonal(extra, { id: 70, projectId: null })).toBe(true);
+    expect(canEditContract(extra, { id: 70, projectId: null })).toBe(false);
+    expect(canViewDocuments(extra, { id: 70, projectId: null })).toBe(true);
+    expect(canEditPersonal(front, { id: 50, projectId: 300 })).toBe(true);   // fora do seu centro, mas é ele
+    expect(canEditPersonal(tl, { id: 40, projectId: null })).toBe(true);
+    // sem ficha associada não há "próprio"
+    expect(canEditPersonal(plainUser, driverInCenter)).toBe(false);
+    expect(canEditPersonal(extra, driverInCenter)).toBe(false);
+  });
+
+  it("team_leader, supervisor e frontoffice: só o seu centro de custos", () => {
+    for (const v of [tl, sup, front]) {
+      expect(canEditPersonal(v, driverInCenter)).toBe(v !== front);   // 101 só está no scope de tl/sup
+      expect(canEditPersonal(v, noAccount)).toBe(true);               // 100 está em todos
+      expect(canEditPersonal(v, driverOutside)).toBe(false);
+      expect(canEditContract(v, noAccount)).toBe(false);
+      expect(canViewDocuments(v, noAccount)).toBe(true);
+      expect(canViewDocuments(v, driverOutside)).toBe(false);
+    }
+  });
+
+  it("backoffice: todos os centros, nunca fichas de admin/super_admin", () => {
+    expect(canEditPersonal(back, driverInCenter)).toBe(true);
+    expect(canEditPersonal(back, driverOutside)).toBe(true);
+    expect(canEditPersonal(back, adminFile)).toBe(false);
+    expect(canEditPersonal(back, superFile)).toBe(false);
+    expect(canEditContract(back, driverInCenter)).toBe(false);
+    expect(canViewSensitive(back, driverInCenter)).toBe(false);   // salário continua fora
+  });
+
+  it("gestores de centro também não tocam em admin/super_admin do seu centro", () => {
+    expect(isProtectedTarget(tl, adminFile)).toBe(true);
+    expect(canEditPersonal(tl, adminFile)).toBe(false);
+    expect(canEditPersonal(sup, superFile)).toBe(false);
+    expect(canViewDocuments(front, adminFile)).toBe(false);
+  });
+
+  it("admin: tudo menos super_admin; super_admin: tudo", () => {
+    expect(canEditPersonal(admin, driverOutside)).toBe(true);
+    expect(canEditContract(admin, driverOutside)).toBe(true);
+    expect(canEditContract(admin, adminFile)).toBe(true);        // outro admin: pode (mesmo nível)
+    expect(canEditPersonal(admin, superFile)).toBe(false);
+    expect(canEditContract(admin, superFile)).toBe(false);
+    expect(canViewSensitive(admin, superFile)).toBe(false);
+    expect(canViewDocuments(admin, superFile)).toBe(false);
+    expect(canEditContract(superAdmin, superFile)).toBe(true);
+    expect(canEditContract(superAdmin, adminFile)).toBe(true);
+    expect(canEditPersonal(superAdmin, driverOutside)).toBe(true);
+  });
+
+  it("apagar documentos: admin+, ou quem carregou e ainda mexe na ficha", () => {
+    expect(canDeleteDocument(admin, driverInCenter, 99)).toBe(true);
+    expect(canDeleteDocument(back, driverInCenter, back.id)).toBe(true);
+    expect(canDeleteDocument(back, driverInCenter, 99)).toBe(false);
+    expect(canDeleteDocument(tl, driverOutside, tl.id)).toBe(false);   // fora do centro
+    expect(canDeleteDocument(extra, { id: 70, projectId: null }, extra.id)).toBe(true);
+    expect(canDeleteDocument(extra, { id: 70, projectId: null }, 2)).toBe(false);
+  });
+
+  it("sanitize: pessoal visível a quem o pode editar; salário só admin+/próprio; ficha protegida esconde tudo", () => {
+    const emp = { id: 900, projectId: 101, fullName: "X", nif: "123", nib: "PT50", address: "Rua", monthlySalary: "1000", deactivationReason: "other", phone: "9" };
+    const asBack = sanitizeEmployee(back, emp, "user");
+    expect(asBack.nif).toBe("123"); expect(asBack.address).toBe("Rua");
+    expect(asBack.monthlySalary).toBeNull(); expect(asBack.deactivationReason).toBeNull();
+    const asFrontOutside = sanitizeEmployee(front, emp, "user");
+    expect(asFrontOutside.nif).toBeNull(); expect(asFrontOutside.phone).toBe("9");
+    const adminEmp = { ...emp, id: 20, projectId: 100 };
+    expect(sanitizeEmployee(back, adminEmp, "admin").nif).toBeNull();
+    expect(sanitizeEmployee(admin, { ...emp, id: 10 }, "super_admin").nif).toBeNull();
+    expect(sanitizeEmployee(admin, { ...emp, id: 10 }, "super_admin").monthlySalary).toBeNull();
+    // o próprio vê tudo o que é seu
+    expect(sanitizeEmployee(extra, { ...emp, id: 70 }, "extra").monthlySalary).toBe("1000");
+    // lista: roleOf protege as fichas de admin no meio das outras
+    const rows = sanitizeEmployeeRows(back, [{ employee: emp }, { employee: adminEmp }], (e) => (e.id === 20 ? "admin" : "user"));
+    expect(rows[0].employee.nif).toBe("123");
+    expect(rows[1].employee.nif).toBeNull();
+  });
+
+  it("employeeAccess resume o que o cliente pode mostrar", () => {
+    expect(employeeAccess(extra, { id: 70, projectId: null })).toEqual({ isOwn: true, canEditPersonal: true, canEditContract: false, canViewSensitive: true, canViewDocuments: true });
+    expect(employeeAccess(tl, driverOutside)).toEqual({ isOwn: false, canEditPersonal: false, canEditContract: false, canViewSensitive: false, canViewDocuments: false });
+    expect(employeeAccess(admin, driverOutside)).toEqual({ isOwn: false, canEditPersonal: true, canEditContract: true, canViewSensitive: true, canViewDocuments: true });
   });
 });
 
