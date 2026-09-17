@@ -1,322 +1,60 @@
-import React, { useState, useMemo } from "react";
-import { trpc } from "@/lib/trpc";
-import DateRangeNav from "@/components/DateRangeNav";
-import { fmtPTDateTime } from "@/lib/lisbonTime";
-import { useAuth } from "@/_core/hooks/useAuth";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useEffect, useState } from "react";
+import { useLocation } from "wouter";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Badge } from "@/components/ui/badge";
-import { toast } from "sonner";
-import { Megaphone, BarChart3, CheckCircle2, Loader2 } from "lucide-react";
+import { Card } from "@/components/ui/card";
+import { BarChart3, Megaphone } from "lucide-react";
+import MarketingGoogleAdsPage from "./MarketingGoogleAdsPage";
 
 /**
- * Marketing (Jorge, 16 set 2026):
- *  - página principal: quanto se gastou por MARCA (= conta Google; Multipark.pt
- *    e Multipark SA são a marca Marketplace) e quantas reservas houve dessa
- *    marca no período;
- *  - um separador por CONTA Google, com as campanhas dessa conta divididas
- *    por cidade (cada campanha pertence a uma marca/cidade).
- * Tudo vem da Google Ads API (recolha diária); não há importações manuais.
+ * Marketing (Jorge, 16 set 2026): o menu "Marketing" abre o DASHBOARD de
+ * marketing; o Google Ads (gasto por marca e por conta/cidade) é outra
+ * página, num separador próprio — "são coisas diferentes".
+ *
+ *  - /marketing e /marketing-dashboard → separador Dashboard
+ *  - /marketing/google-ads → separador Google Ads
+ *
+ * O conteúdo do Dashboard ainda está por definir pelo Jorge; até lá fica
+ * o esqueleto (sem inventar indicadores).
  */
 
-// Dia de calendário em Lisboa (o toISOString() dava o último dia do mês anterior no verão).
-function lisbonDay(d = new Date()): string {
-  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(d);
-  const g = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
-  return `${g("year")}-${g("month")}-${g("day")}`;
+const ADS_PATH = "/marketing/google-ads";
+const DASH_PATH = "/marketing";
+
+export function MarketingDashboardPanel() {
+  return (
+    <Card className="p-12 text-center">
+      <BarChart3 className="w-12 h-12 mx-auto text-muted-foreground mb-3" />
+      <p className="font-medium">Dashboard de Marketing</p>
+      <p className="text-sm text-muted-foreground mt-1">Conteúdo por definir. O gasto do Google Ads por marca e por cidade está no separador Google Ads.</p>
+    </Card>
+  );
 }
 
-const eur = (v: number | null | undefined) => (v == null ? "—" : `${Number(v).toFixed(2)} €`);
-const num = (v: number | null | undefined) => (v == null ? "—" : Number(v).toLocaleString("pt-PT"));
-
 export default function MarketingPage() {
-  const today = lisbonDay();
-  const [from, setFrom] = useState(`${today.slice(0, 7)}-01`);
-  const [to, setTo] = useState(today);
-  const [tab, setTab] = useState("resumo");
-  const range = { from, to };
-
-  const { data: stats } = trpc.marketing.dashboard.useQuery(range);
-  const { data: byBrand } = trpc.marketing.byBrand.useQuery(range);
-  const { data: projects = [] } = trpc.projects.list.useQuery();
-  const st: any = stats;
-  const accounts: Array<{ id: number; name: string }> = byBrand?.accounts ?? [];
-
-  const cov = st?.coverage;
-  const covLabel = !cov ? "" : cov.status === "none" ? "Sem dados de anúncios no período" : cov.status === "partial" ? `Dados incompletos: ${cov.missingDays} dia(s) sem recolha` : cov.status === "stale" ? "Recolha parada há mais de um dia" : "Dados completos";
-  const covCls = !cov || cov.status === "ok" ? "border-emerald-200 bg-emerald-50 text-emerald-900" : cov.status === "none" ? "border-muted bg-muted/40 text-muted-foreground" : "border-amber-200 bg-amber-50 text-amber-900";
+  const [location, navigate] = useLocation();
+  const tabFromPath = (p: string) => (p.startsWith(ADS_PATH) ? "ads" : "dashboard");
+  const [tab, setTab] = useState(tabFromPath(location));
+  useEffect(() => { setTab(tabFromPath(location)); }, [location]);
+  const onTab = (v: string) => {
+    setTab(v);
+    // só muda o URL quando estamos numa rota de Marketing (nos Dashboards fica só o estado)
+    if (location.startsWith("/marketing")) navigate(v === "ads" ? ADS_PATH : DASH_PATH, { replace: true });
+  };
 
   return (
     <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div>
-          <p className="text-muted-foreground">Gasto Google Ads por marca e por campanha, e reservas por marca</p>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Dados da Google Ads API (recolha diária da última semana; no dia 2, o mês anterior fechado). Contas e ligação em <a href="/integracoes/google-ads" className="underline">Integrações → Google Ads</a>. A fatura da Google entra pelas Despesas.
-          </p>
-        </div>
-        <div>
-          <Label className="text-xs mb-1 block">Período</Label>
-          <DateRangeNav start={from} end={to} gran="month" showAll={false} onChange={(s2, e2) => { setFrom(s2); setTo(e2); }} />
-        </div>
+      <div>
+        <h1 className="text-2xl font-bold">Marketing</h1>
+        <p className="text-muted-foreground">Dashboard de marketing e Google Ads</p>
       </div>
-
-      {st && (
-        <div className={`rounded-md border px-3 py-2 text-xs flex flex-wrap gap-x-4 gap-y-1 ${covCls}`} role="status">
-          <span className="font-medium">{covLabel}</span>
-          <span>Última recolha: {cov?.lastSuccessfulSyncAt ? fmtPTDateTime(cov.lastSuccessfulSyncAt) : "nunca"}</span>
-          <span>Último dia completo: {cov?.lastCompleteDay ?? "—"}</span>
-          {st.unmappedCampaigns > 0 && <span>{st.unmappedCampaigns} campanha(s) sem marca/cidade (contam só no total da marca)</span>}
-          {st.connection !== "connected" && <a href="/integracoes/google-ads" className="underline">Ligar Google Ads</a>}
-        </div>
-      )}
-
-      <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="flex-wrap h-auto">
-          <TabsTrigger value="resumo"><BarChart3 className="w-4 h-4 mr-1" />Por marca</TabsTrigger>
-          {accounts.map((a) => (
-            <TabsTrigger key={a.id} value={`conta-${a.id}`}><Megaphone className="w-4 h-4 mr-1" />{a.name}</TabsTrigger>
-          ))}
+      <Tabs value={tab} onValueChange={onTab}>
+        <TabsList>
+          <TabsTrigger value="dashboard"><BarChart3 className="w-4 h-4 mr-1" />Dashboard</TabsTrigger>
+          <TabsTrigger value="ads"><Megaphone className="w-4 h-4 mr-1" />Google Ads</TabsTrigger>
         </TabsList>
-
-        <TabsContent value="resumo" className="mt-4">
-          <BrandSummary data={byBrand} />
-        </TabsContent>
-        {accounts.map((a) => (
-          <TabsContent key={a.id} value={`conta-${a.id}`} className="mt-4">
-            <AccountCampaigns account={a} rows={(st?.byCampaign ?? []).filter((r: any) => r.accountId === a.id)} projects={projects as any[]} />
-          </TabsContent>
-        ))}
+        <TabsContent value="dashboard" className="mt-4"><MarketingDashboardPanel /></TabsContent>
+        <TabsContent value="ads" className="mt-4"><MarketingGoogleAdsPage /></TabsContent>
       </Tabs>
     </div>
-  );
-}
-
-// ─── POR MARCA (= conta Google) ───────────────────────────────────────────────
-function BrandSummary({ data }: { data: any }) {
-  if (!data) return <div className="flex justify-center py-12"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>;
-  const rows: any[] = data.brands ?? [];
-  if (!rows.length) {
-    return (
-      <Card className="p-12 text-center">
-        <Megaphone className="w-12 h-12 mx-auto text-muted-foreground mb-3" />
-        <p className="text-muted-foreground">Sem contas Google Ads selecionadas. Liga e seleciona as contas em Integrações → Google Ads.</p>
-      </Card>
-    );
-  }
-  const totals = rows.reduce((t, r) => ({ spend: t.spend + r.spend, bookings: t.bookings + r.bookings, revenue: t.revenue + r.revenue, attributed: t.attributed + r.attributed }), { spend: 0, bookings: 0, revenue: 0, attributed: 0 });
-  return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle>Gasto e reservas por marca</CardTitle>
-          <p className="text-xs text-muted-foreground mt-1">
-            Marca = conta Google Ads (Multipark.pt e Multipark SA são a marca Marketplace). Reservas = reservas Multipark reais dessa marca, por data de criação, sem canceladas. "Atribuídas" são as que trazem gclid/utm pago no URL de origem.
-          </p>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="text-xs text-muted-foreground border-b">
-                <tr>
-                  <th className="text-left px-4 py-2 font-medium">Marca</th>
-                  <th className="text-left px-4 py-2 font-medium">Conta(s) Google</th>
-                  <th className="text-right px-4 py-2 font-medium">Gasto</th>
-                  <th className="text-right px-4 py-2 font-medium">Reservas</th>
-                  <th className="text-right px-4 py-2 font-medium">Atribuídas a anúncios</th>
-                  <th className="text-right px-4 py-2 font-medium">Valor reservado</th>
-                  <th className="text-right px-4 py-2 font-medium">Gasto / reserva</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => (
-                  <tr key={r.brand} className="border-b">
-                    <td className="px-4 py-2 font-semibold">{r.brand}{!r.mapped && <Badge variant="outline" className="ml-2 text-[10px] text-amber-700">conta sem marca</Badge>}</td>
-                    <td className="px-4 py-2 text-muted-foreground">{r.accounts.map((a: any) => a.name).join(", ")}</td>
-                    <td className="px-4 py-2 text-right">{eur(r.spend)}</td>
-                    <td className="px-4 py-2 text-right font-semibold">{num(r.bookings)}</td>
-                    <td className="px-4 py-2 text-right text-muted-foreground">{num(r.attributed)}</td>
-                    <td className="px-4 py-2 text-right">{eur(r.revenue)}</td>
-                    <td className="px-4 py-2 text-right">{r.bookings > 0 ? eur(r.spend / r.bookings) : "—"}</td>
-                  </tr>
-                ))}
-                <tr className="bg-muted/40 font-semibold">
-                  <td className="px-4 py-2" colSpan={2}>Total</td>
-                  <td className="px-4 py-2 text-right">{eur(totals.spend)}</td>
-                  <td className="px-4 py-2 text-right">{num(totals.bookings)}</td>
-                  <td className="px-4 py-2 text-right">{num(totals.attributed)}</td>
-                  <td className="px-4 py-2 text-right">{eur(totals.revenue)}</td>
-                  <td className="px-4 py-2 text-right">{totals.bookings > 0 ? eur(totals.spend / totals.bookings) : "—"}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
-      {data.bookingsWithoutBrand > 0 && (
-        <p className="text-xs text-muted-foreground">{num(data.bookingsWithoutBrand)} reserva(s) do período sem parque/marca atribuída — não entram em nenhuma linha.</p>
-      )}
-    </div>
-  );
-}
-
-// ─── UMA CONTA: campanhas divididas por cidade ───────────────────────────────
-function AccountCampaigns({ account, rows, projects }: { account: { id: number; name: string }; rows: any[]; projects: any[] }) {
-  const { user } = useAuth();
-  const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
-  const utils = trpc.useUtils();
-  const refresh = () => { utils.marketing.dashboard.invalidate(); utils.marketing.byBrand.invalidate(); utils.integrations.googleAds.campaigns.suggest.invalidate(); };
-  const { data: suggestions = [] } = trpc.integrations.googleAds.campaigns.suggest.useQuery(undefined, { enabled: isAdmin, retry: false });
-  const update = trpc.integrations.googleAds.campaigns.update.useMutation({ onSuccess: () => { refresh(); toast.success("Marca/cidade atualizada"); }, onError: (e) => toast.error(e.message) });
-  const apply = trpc.integrations.googleAds.campaigns.applySuggestions.useMutation({
-    onSuccess: (r) => { refresh(); toast.success(`${r.applied} campanha(s) associada(s) pelo nome`); },
-    onError: (e) => toast.error(e.message),
-  });
-
-  const byId = useMemo(() => new Map<number, any>(projects.map((p) => [p.id, p])), [projects]);
-  const cityOf = (projectId: number | null): string => {
-    if (projectId == null) return "";
-    let node = byId.get(projectId);
-    const seen = new Set<number>();
-    while (node && node.level !== "city") {
-      if (seen.has(node.id) || node.parentId == null) return "";
-      seen.add(node.id); node = byId.get(node.parentId);
-    }
-    return node?.name ?? "";
-  };
-  const label = (id: number | null): string => {
-    if (id == null) return "";
-    const p = byId.get(id); if (!p) return `#${id}`;
-    const parent = p.parentId != null ? byId.get(p.parentId) : null;
-    return p.level === "brand" && parent ? `${p.name} ${parent.name}` : p.name;
-  };
-  const brandOptions = useMemo(() => projects
-    .filter((p) => p.level === "brand")
-    .map((p) => ({ id: p.id, name: label(p.id) }))
-    .sort((a, b) => a.name.localeCompare(b.name)), [projects]); // eslint-disable-line react-hooks/exhaustive-deps
-  const mySuggestions = useMemo(() => {
-    const ids = new Set(rows.map((r) => r.campaignId).filter((x) => x != null));
-    return (suggestions as any[]).filter((s) => ids.has(s.campaignId));
-  }, [suggestions, rows]);
-  const sugById = useMemo(() => new Map(mySuggestions.map((s) => [s.campaignId, s])), [mySuggestions]);
-
-  type Group = { city: string; rows: any[]; cost: number; clicks: number; conversions: number; value: number };
-  const groups = useMemo(() => {
-    const map = new Map<string, Group>();
-    for (const r of rows) {
-      const city = cityOf(r.projectId) || "Sem cidade (nacional ou por associar)";
-      const g: Group = map.get(city) ?? { city, rows: [], cost: 0, clicks: 0, conversions: 0, value: 0 };
-      g.rows.push(r); g.cost += r.cost; g.clicks += r.clicks; g.conversions += r.conversions; g.value += r.conversionValue;
-      map.set(city, g);
-    }
-    for (const g of map.values()) g.rows.sort((a, b) => b.cost - a.cost);
-    return Array.from(map.values()).sort((a, b) => (a.city.startsWith("Sem cidade") ? 1 : 0) - (b.city.startsWith("Sem cidade") ? 1 : 0) || b.cost - a.cost);
-  }, [rows]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const total = rows.reduce((t, r) => ({ cost: t.cost + r.cost, clicks: t.clicks + r.clicks, conversions: t.conversions + r.conversions, value: t.value + r.conversionValue }), { cost: 0, clicks: 0, conversions: 0, value: 0 });
-
-  if (!rows.length) {
-    return <Card className="p-12 text-center"><p className="text-muted-foreground">Sem gasto desta conta no período.</p></Card>;
-  }
-
-  return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between flex-wrap gap-2">
-        <div>
-          <CardTitle>{account.name} · {eur(total.cost)} no período</CardTitle>
-          <p className="text-xs text-muted-foreground mt-1">
-            Campanhas divididas por cidade. A marca/cidade de cada campanha decide onde o gasto conta; sem cidade (Brand, Pmax, nacional) conta só no total da marca.
-          </p>
-        </div>
-        {isAdmin && mySuggestions.length > 0 && (
-          <Button size="sm" variant="outline" disabled={apply.isPending} onClick={() => apply.mutate({ campaignIds: mySuggestions.map((s) => s.campaignId) })} title={mySuggestions.map((s) => s.projectName).join(", ")}>
-            {apply.isPending ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-1" />} Associar {mySuggestions.length} pelo nome
-          </Button>
-        )}
-      </CardHeader>
-      <CardContent className="p-0">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="text-xs text-muted-foreground border-b">
-              <tr>
-                <th className="text-left px-4 py-2 font-medium">Campanha</th>
-                <th className="text-left px-4 py-2 font-medium">Marca / cidade</th>
-                <th className="text-right px-4 py-2 font-medium">Gasto</th>
-                <th className="text-right px-4 py-2 font-medium">Impressões</th>
-                <th className="text-right px-4 py-2 font-medium">Cliques</th>
-                <th className="text-right px-4 py-2 font-medium">CPC</th>
-                <th className="text-right px-4 py-2 font-medium">Conv. Google</th>
-                <th className="text-right px-4 py-2 font-medium">Custo/conv.</th>
-                <th className="text-right px-4 py-2 font-medium">Valor conv.</th>
-              </tr>
-            </thead>
-            <tbody>
-              {groups.map((g) => (
-                <React.Fragment key={g.city}>
-                  <tr className="bg-muted/40 border-b">
-                    <td className="px-4 py-2 font-semibold" colSpan={2}>{g.city} <span className="text-xs font-normal text-muted-foreground">{g.rows.length} campanha(s)</span></td>
-                    <td className="px-4 py-2 text-right font-semibold">{eur(g.cost)}</td>
-                    <td className="px-4 py-2 text-right text-muted-foreground">—</td>
-                    <td className="px-4 py-2 text-right font-semibold">{num(g.clicks)}</td>
-                    <td className="px-4 py-2 text-right text-muted-foreground">{g.clicks > 0 ? eur(g.cost / g.clicks) : "—"}</td>
-                    <td className="px-4 py-2 text-right font-semibold">{g.conversions.toFixed(1)}</td>
-                    <td className="px-4 py-2 text-right text-muted-foreground">{g.conversions > 0 ? eur(g.cost / g.conversions) : "—"}</td>
-                    <td className="px-4 py-2 text-right font-semibold">{eur(g.value)}</td>
-                  </tr>
-                  {g.rows.map((r) => {
-                    const sug = r.campaignId != null ? sugById.get(r.campaignId) : null;
-                    return (
-                      <tr key={r.key} className="border-b last:border-0">
-                        <td className="px-4 py-1.5 pl-8">{r.name}</td>
-                        <td className="px-4 py-1.5">
-                          {isAdmin && r.campaignId != null ? (
-                            <div className="flex items-center gap-2">
-                              <Select value={r.projectId != null ? String(r.projectId) : "none"} onValueChange={(v) => update.mutate({ id: r.campaignId, projectId: v === "none" ? null : Number(v) })}>
-                                <SelectTrigger className="h-7 w-48 text-xs"><SelectValue /></SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="none">— sem marca/cidade —</SelectItem>
-                                  {brandOptions.map((o) => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
-                                </SelectContent>
-                              </Select>
-                              {r.projectId == null && sug && (
-                                <Badge variant="outline" className="text-[10px] cursor-pointer" title="Sugestão pelo nome — clica para aplicar" onClick={() => update.mutate({ id: r.campaignId, projectId: sug.projectId })}>
-                                  sugestão: {sug.projectName}
-                                </Badge>
-                              )}
-                            </div>
-                          ) : (
-                            <span className={r.projectId == null ? "text-amber-700 text-xs" : "text-xs"}>{r.projectId != null ? label(r.projectId) : "sem marca/cidade"}</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-1.5 text-right">{eur(r.cost)}</td>
-                        <td className="px-4 py-1.5 text-right">{num(r.impressions)}</td>
-                        <td className="px-4 py-1.5 text-right">{num(r.clicks)}</td>
-                        <td className="px-4 py-1.5 text-right text-muted-foreground">{r.clicks > 0 ? eur(r.cost / r.clicks) : "—"}</td>
-                        <td className="px-4 py-1.5 text-right">{Number(r.conversions).toFixed(1)}</td>
-                        <td className="px-4 py-1.5 text-right text-muted-foreground">{r.conversions > 0 ? eur(r.cost / r.conversions) : "—"}</td>
-                        <td className="px-4 py-1.5 text-right">{eur(r.conversionValue)}</td>
-                      </tr>
-                    );
-                  })}
-                </React.Fragment>
-              ))}
-              <tr className="bg-muted/60 font-semibold">
-                <td className="px-4 py-2" colSpan={2}>Total da conta</td>
-                <td className="px-4 py-2 text-right">{eur(total.cost)}</td>
-                <td className="px-4 py-2 text-right text-muted-foreground">—</td>
-                <td className="px-4 py-2 text-right">{num(total.clicks)}</td>
-                <td className="px-4 py-2 text-right text-muted-foreground">{total.clicks > 0 ? eur(total.cost / total.clicks) : "—"}</td>
-                <td className="px-4 py-2 text-right">{total.conversions.toFixed(1)}</td>
-                <td className="px-4 py-2 text-right text-muted-foreground">{total.conversions > 0 ? eur(total.cost / total.conversions) : "—"}</td>
-                <td className="px-4 py-2 text-right">{eur(total.value)}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </CardContent>
-    </Card>
   );
 }

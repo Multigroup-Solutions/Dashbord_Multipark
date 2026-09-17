@@ -8,7 +8,7 @@ import FinanceiroDashboard from "./FinanceiroDashboard";
 import OperacoesDashboard from "./OperacoesDashboard";
 import PessoasDashboard from "./PessoasDashboard";
 import SuporteDashboard from "./SuporteDashboard";
-import MarketingPage from "./MarketingPage";
+import { MarketingDashboardPanel } from "./MarketingPage";
 
 export default function DashboardsPage() {
   const [tab, setTab] = useState("geral");
@@ -29,7 +29,7 @@ export default function DashboardsPage() {
         <TabsContent value="operacoes" className="mt-4"><OperacoesDashboard /></TabsContent>
         <TabsContent value="pessoas" className="mt-4"><PessoasDashboard /></TabsContent>
         <TabsContent value="suporte" className="mt-4"><SuporteDashboard /></TabsContent>
-        <TabsContent value="marketing" className="mt-4"><MarketingPage /></TabsContent>
+        <TabsContent value="marketing" className="mt-4"><MarketingDashboardPanel /></TabsContent>
       </Tabs>
     </div>
   );
