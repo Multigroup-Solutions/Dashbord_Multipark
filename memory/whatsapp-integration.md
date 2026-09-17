@@ -49,6 +49,24 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 
 ## Changelog
 
+### 2026-09-17 — Inbox: filtro "Não lidas" · site multidriver: manhã às 03H
+**Type**: feature (sem migração, sem deploy)
+**Scope**: `client/src/pages/WhatsAppInboxPage.tsx`; `server/webIntake.ts` (`SLOT_RANGES`,
+agora exportado) + `server/webIntake.test.ts`; repo **multidriver-website**
+(`lib/availability.ts`, `availability-form.tsx`) — clonado em `../multidriver`
+(o remoto chama-se `multidriver-website`; o repo `multidriver` da org é outro projeto antigo).
+**What**:
+- Inbox: botão-toggle "Não lidas · N" por baixo da pesquisa (filtro LOCAL sobre
+  `conversations.list`, que já traz `unreadCount`; compõe em AND com a pesquisa; os grupos
+  "janela aberta"/"fora da janela" mantêm-se). RULE: a conversa SELECIONADA fica sempre visível
+  mesmo depois de `markRead` — abrir marca como lida e sem isto a linha desaparecia debaixo do
+  clique. Estado vazio próprio ("Sem mensagens por ler.").
+- Site: `TIME_SLOTS` passou de `04H-08H`/`04H-15H` para `03H-08H`/`03H-15H` (turno "Manhã
+  03h–15h" da app); texto de ajuda idem. Dashboard: `SLOT_RANGES` ganhou as chaves `03H-*` e
+  **mantém as `04H-*` como legado** — o rótulo do slot é o formato de rede; remover a chave era
+  perder disponibilidades de formulários ainda abertos na versão anterior. Ordem de deploy:
+  dashboard primeiro, site depois.
+
 ### 2026-09-10 (b) — Backoffice marca a disponibilidade POR um extra (semana selecionada)
 **Type**: feature
 **Scope**: `server/extrasAvailability.ts` (`setEmployeeAvailability`), `server/routers.ts` (`extrasAvailability.setForEmployee`), `client/src/components/AvailabilityDayFields.tsx` (NOVO, partilhado), `client/src/pages/ExtrasDiaPage.tsx` (`AvailabilitySection`: lápis ao lado do nome + células dos dias clicáveis + diálogo), `client/src/pages/DisponibilidadePage.tsx` (`MyAvailability` passa a usar o componente partilhado — sem mudança visual)

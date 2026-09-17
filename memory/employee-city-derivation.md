@@ -83,6 +83,47 @@ mostra logo quantos ficaram por resolver:
 
 ## Changelog
 
+### 2026-09-17 — Aprovar candidatura = escolher a cidade (centro de custos)
+**Type**: feature
+**Scope**: `server/webIntake.ts` (`approveApplication`, `resolveApprovalCostCenter`,
+`planCostCenterAssignment`), `server/identity.ts` (hint `projectId` só no INSERT),
+`server/routers.ts` (`driverApplications.approve` exige `projectId` + `assertProjectAccess`),
+`client/src/pages/ExtrasDiaPage.tsx` (`CandidaturasSection`: diálogo em vez de `confirm()`),
+testes em `server/webIntake.test.ts`.
+**What**: o botão "Aprovar" abre um diálogo com um `<Select>` de nós `level='city'`
+(mesmo aspeto do "Centro de Custos" da ficha de RH), pré-selecionado por
+`matchCityKey(driver_applications.city)`; a aprovação grava `employees.projectId`.
+**Why**: o extra aprovado nascia com `projectId = NULL` e `projectScope(employees.projectId)`
+exclui NULL → um utilizador de Lisboa não via os extras que acabava de aprovar; só quem
+tinha acesso a todas as cidades. Agora a cidade é obrigatória na aprovação.
+**Regras**:
+- A lista de cidades vem de `projects.list`, que já está limitada às cidades do utilizador →
+  quem só vê Lisboa só pode alocar a Lisboa (e o middleware `hasForeignCityFilter` recusa
+  um `projectId` estranho mesmo sem UI).
+- `resolveApprovalCostCenter` recusa nós que não resolvam para uma cidade (grupo raiz,
+  "Marketing Geral") — aceita descendentes (marca/parque) para o caso de a UI vir a oferecê-los.
+- **Ficha existente com centro de custos NÃO é movida** (`kept_existing`, toast âmbar a dizer
+  onde ficou); sem centro → recebe o escolhido (`assigned`). A ficha continua a ser a fonte
+  de verdade; mudar de cidade faz-se lá.
+- Sem migração. Isto não substitui a derivação por 3 fontes acima — apenas garante que os
+  extras NOVOS já entram pela fonte 1 (projeto).
+
+### 2026-09-17 — Filtro "disponível das X às Y" (dia opcional) na tabela de extras
+**Type**: feature
+**Scope**: `shared/availabilityWindow.ts` (novo, puro), `server/availabilityWindow.test.ts`
+(18 testes), `client/src/pages/ExtrasDiaPage.tsx` (`AvailabilitySection`).
+**What**: linha de filtro `Disponível [Qualquer dia | Seg 14/09 …] das [HH] às [HH]` por baixo
+dos botões de cidade. Com as duas horas → só quem COBRE o pedido inteiro
+(`matchesAvailabilityWindow`); com dia sem horas → quem marcou algo nesse dia
+(`isAvailableOnDay`); sem dia → basta cobrir em qualquer dia da semana. Mostra a contagem do
+universo e limpa a seleção ao mudar (mesma regra do filtro de cidade). Compõe em AND:
+cidade → disponibilidade → acompanhamento → **horário** → pesquisa.
+**Regras de cobertura** (documentadas no topo do módulo): Manhã = 03–15, Noite = 15–03(+1),
+manhã+noite fundem-se numa janela contínua; **horas indicadas mandam** sobre os turnos; uma
+só hora não é janela (valem os turnos); `às <= das` atravessa a meia-noite (+24); a madrugada
+de um dia é coberta pela noite do dia ANTERIOR (segunda "noite" cobre terça 00h–02h).
+Sem migração, sem pedido novo ao servidor (filtro local sobre `overview.extras[].days`).
+
 ### 2026-08-20 — Pesquisa livre por pessoa na tabela de extras
 **Type**: feature
 **Scope**: `client/src/pages/ExtrasDiaPage.tsx` (`AvailabilitySection` + helper
