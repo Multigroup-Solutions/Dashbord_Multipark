@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
-  coversOnDay,
   dayWindows,
   formatHourWindow,
   isAvailableOnDay,
   matchesAvailabilityWindow,
   mergeWindows,
+  overlapsOnDay,
   toExtendedWindow,
+  windowCovers,
+  windowsOverlap,
   type AvailabilityDayLike,
 } from "../shared/availabilityWindow";
 
@@ -36,7 +38,7 @@ describe("dayWindows", () => {
     expect(dayWindows(day("x", { morning: true }))).toEqual([{ from: 3, to: 15 }]);
     expect(dayWindows(day("x", { night: true }))).toEqual([{ from: 15, to: 27 }]);
   });
-  it("manhã + noite fundem-se numa janela contínua (senão 10h–18h falhava)", () => {
+  it("manhã + noite fundem-se numa janela contínua", () => {
     expect(dayWindows(day("x", { morning: true, night: true }))).toEqual([{ from: 3, to: 27 }]);
   });
   it("horas indicadas mandam sobre os turnos (são a janela exata)", () => {
@@ -57,28 +59,43 @@ describe("mergeWindows", () => {
   });
 });
 
-describe("coversOnDay", () => {
+describe("windowsOverlap / windowCovers", () => {
+  it("sobreposição parcial conta, tocar nas pontas não", () => {
+    expect(windowsOverlap({ from: 5, to: 10 }, { from: 2, to: 10 })).toBe(true);
+    expect(windowsOverlap({ from: 3, to: 15 }, { from: 14, to: 20 })).toBe(true);
+    expect(windowsOverlap({ from: 3, to: 15 }, { from: 15, to: 20 })).toBe(false);
+    expect(windowsOverlap({ from: 3, to: 8 }, { from: 10, to: 12 })).toBe(false);
+  });
+  it("cobertura total continua disponível como regra à parte", () => {
+    expect(windowCovers({ from: 3, to: 15 }, { from: 5, to: 10 })).toBe(true);
+    expect(windowCovers({ from: 5, to: 10 }, { from: 2, to: 10 })).toBe(false);
+  });
+});
+
+describe("overlapsOnDay", () => {
   const days = [
     day(WEEK[0], { night: true }), // segunda: 15h → 03h de terça
     day(WEEK[1]), // terça: nada
     day(WEEK[2], { fromHour: 8, toHour: 20 }), // quarta: 08h–20h
   ];
-  it("cobre dentro da janela do próprio dia", () => {
-    expect(coversOnDay(days, 2, { from: 8, to: 18 })).toBe(true);
-    expect(coversOnDay(days, 2, { from: 8, to: 20 })).toBe(true);
-    expect(coversOnDay(days, 2, { from: 7, to: 18 })).toBe(false);
-    expect(coversOnDay(days, 2, { from: 12, to: 21 })).toBe(false);
+  it("conta quem pode em parte do pedido, não só quem o cobre todo", () => {
+    expect(overlapsOnDay(days, 2, { from: 8, to: 18 })).toBe(true);
+    expect(overlapsOnDay(days, 2, { from: 2, to: 10 })).toBe(true); // só pode a partir das 8h — conta
+    expect(overlapsOnDay(days, 2, { from: 12, to: 23 })).toBe(true); // só até às 20h — conta
+    expect(overlapsOnDay(days, 2, { from: 20, to: 23 })).toBe(false); // começa quando a pessoa acaba
+    expect(overlapsOnDay(days, 2, { from: 2, to: 8 })).toBe(false); // acaba quando a pessoa começa
   });
-  it("a madrugada é coberta pela noite do dia ANTERIOR", () => {
-    expect(coversOnDay(days, 1, { from: 0, to: 2 })).toBe(true); // terça 00h–02h ← noite de segunda
-    expect(coversOnDay(days, 1, { from: 0, to: 4 })).toBe(false); // termina depois das 03h
-    expect(coversOnDay(days, 1, { from: 8, to: 12 })).toBe(false); // terça de dia: nada
+  it("a madrugada é servida pela noite do dia ANTERIOR", () => {
+    expect(overlapsOnDay(days, 1, { from: 0, to: 2 })).toBe(true); // terça 00h–02h ← noite de segunda
+    expect(overlapsOnDay(days, 1, { from: 0, to: 6 })).toBe(true); // até às 03h ainda pode
+    expect(overlapsOnDay(days, 1, { from: 3, to: 6 })).toBe(false); // a noite acaba às 03h
+    expect(overlapsOnDay(days, 1, { from: 8, to: 12 })).toBe(false); // terça de dia: nada
   });
   it("no primeiro dia da semana não há dia anterior para consultar", () => {
-    expect(coversOnDay(days, 0, { from: 0, to: 2 })).toBe(false);
+    expect(overlapsOnDay(days, 0, { from: 0, to: 2 })).toBe(false);
   });
-  it("índice fora da semana nunca cobre", () => {
-    expect(coversOnDay(days, 7, { from: 8, to: 10 })).toBe(false);
+  it("índice fora da semana nunca conta", () => {
+    expect(overlapsOnDay(days, 7, { from: 8, to: 10 })).toBe(false);
   });
 });
 
@@ -90,14 +107,24 @@ describe("matchesAvailabilityWindow", () => {
   it("com dia escolhido só esse dia conta", () => {
     expect(matchesAvailabilityWindow(extra, WEEK[1], 8, 12)).toBe(true); // terça manhã
     expect(matchesAvailabilityWindow(extra, WEEK[2], 8, 12)).toBe(false); // quarta nada
-    expect(matchesAvailabilityWindow(extra, WEEK[1], 8, 18)).toBe(false); // manhã acaba às 15h
+    expect(matchesAvailabilityWindow(extra, WEEK[1], 8, 18)).toBe(true); // manhã até às 15h — sobrepõe
+    expect(matchesAvailabilityWindow(extra, WEEK[1], 15, 18)).toBe(false); // começa quando a manhã acaba
   });
 
-  it("sem dia, basta um dia qualquer da semana cobrir o pedido", () => {
+  it("alargar o pedido nunca faz desaparecer quem já contava (caso do Jorge: 5h–10h ⊂ 2h–10h)", () => {
+    const seg5as10 = WEEK.map((iso, i) => (i === 0 ? day(iso, { fromHour: 5, toHour: 10 }) : day(iso)));
+    const seg2as10 = WEEK.map((iso, i) => (i === 0 ? day(iso, { fromHour: 2, toHour: 10 }) : day(iso)));
+    for (const person of [seg5as10, seg2as10]) {
+      expect(matchesAvailabilityWindow(person, WEEK[0], 5, 10)).toBe(true);
+      expect(matchesAvailabilityWindow(person, WEEK[0], 2, 10)).toBe(true);
+    }
+  });
+
+  it("sem dia, basta um dia qualquer da semana ter sobreposição", () => {
     expect(matchesAvailabilityWindow(extra, null, 8, 12)).toBe(true);
-    expect(matchesAvailabilityWindow(extra, null, 19, 0)).toBe(true); // sexta 18h–01h cobre 19h–00h
-    expect(matchesAvailabilityWindow(extra, null, 19, 2)).toBe(false); // mas não até às 02h
-    expect(matchesAvailabilityWindow(extra, null, 16, 20)).toBe(false); // ninguém à tarde
+    expect(matchesAvailabilityWindow(extra, null, 19, 0)).toBe(true); // sexta 18h–01h
+    expect(matchesAvailabilityWindow(extra, null, 19, 2)).toBe(true); // sobrepõe até à 01h
+    expect(matchesAvailabilityWindow(extra, null, 16, 17)).toBe(false); // ninguém entre as 15h e as 18h
   });
 
   it("um dia fora da semana carregada nunca casa", () => {

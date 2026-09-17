@@ -13,9 +13,12 @@
  *   - Quando a pessoa indicou horas (das/às), essas horas são a janela EXATA
  *     — os interruptores manhã/noite são a versão grosseira e não alargam o
  *     que a pessoa disse. Sem horas, valem os turnos.
- *   - Um pedido cobre-se quando UMA janela contínua da pessoa contém o pedido
- *     inteiro. Duas janelas encostadas (manhã+noite sem horas) fundem-se
- *     antes de comparar, senão "10h–18h" falhava para quem marcou os dois.
+ *   - **Semântica do filtro = SOBREPOSIÇÃO, não cobertura total** (Jorge,
+ *     2026-09-17): "das 2h às 10h" mostra quem pode em ALGUM momento entre as
+ *     2h e as 10h — quem só pode das 5h às 10h conta. Alargar a janela pedida
+ *     nunca pode fazer desaparecer gente (era o que acontecia com a regra
+ *     "tem de cobrer o pedido inteiro": 5h–10h dava 5 pessoas, 2h–10h dava 2).
+ *     Tocar sem sobrepor não conta (manhã 03–15 vs pedido 15–20 → não).
  */
 
 export const SHIFT_MORNING = { from: 3, to: 15 } as const;
@@ -71,30 +74,36 @@ export function mergeWindows(windows: HourWindow[]): HourWindow[] {
   return out;
 }
 
-/** `outer` contém `inner` por inteiro. */
+/** `outer` contém `inner` por inteiro (mantido para quem precise de cobertura total). */
 export function windowCovers(outer: HourWindow, inner: HourWindow): boolean {
   return outer.from <= inner.from && outer.to >= inner.to;
 }
 
+/** As duas janelas partilham pelo menos uma hora (tocar nas pontas não conta). */
+export function windowsOverlap(a: HourWindow, b: HourWindow): boolean {
+  return a.from < b.to && b.from < a.to;
+}
+
 /**
- * A pessoa cobre o pedido `wanted` (horas estendidas do dia `index`)?
- * Considera também a janela do dia ANTERIOR quando esta atravessa a meia-noite
- * — quem marcou "noite" na segunda cobre um pedido "00h–02h" de terça.
+ * A pessoa pode em algum momento do pedido `wanted` (horas estendidas do dia
+ * `index`)? Considera também a janela do dia ANTERIOR quando esta atravessa a
+ * meia-noite — quem marcou "noite" na segunda conta para um pedido "00h–04h"
+ * de terça.
  */
-export function coversOnDay(days: AvailabilityDayLike[], index: number, wanted: HourWindow): boolean {
+export function overlapsOnDay(days: AvailabilityDayLike[], index: number, wanted: HourWindow): boolean {
   const today = days[index];
   if (!today) return false;
-  if (dayWindows(today).some((w) => windowCovers(w, wanted))) return true;
+  if (dayWindows(today).some((w) => windowsOverlap(w, wanted))) return true;
   const previous = days[index - 1];
   if (!previous) return false;
   return dayWindows(previous)
     .map((w) => ({ from: w.from - 24, to: w.to - 24 }))
-    .some((w) => windowCovers(w, wanted));
+    .some((w) => windowsOverlap(w, wanted));
 }
 
 /**
  * Filtro "disponível das X às Y": com `day` (YYYY-MM-DD) só esse dia conta;
- * com `day = null`, basta cobrir o pedido em QUALQUER dia da semana.
+ * com `day = null`, basta poder em QUALQUER dia da semana.
  * `days` tem de vir por ordem cronológica (é assim que a overview a devolve).
  */
 export function matchesAvailabilityWindow(
@@ -106,9 +115,9 @@ export function matchesAvailabilityWindow(
   const wanted = toExtendedWindow(fromHour, toHour);
   if (day) {
     const index = days.findIndex((d) => d.day === day);
-    return index >= 0 && coversOnDay(days, index, wanted);
+    return index >= 0 && overlapsOnDay(days, index, wanted);
   }
-  return days.some((_, i) => coversOnDay(days, i, wanted));
+  return days.some((_, i) => overlapsOnDay(days, i, wanted));
 }
 
 /**

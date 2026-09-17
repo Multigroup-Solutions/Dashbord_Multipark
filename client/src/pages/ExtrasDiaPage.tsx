@@ -1629,9 +1629,10 @@ export function AvailabilitySection() {
   // identificada (ver server/employeeCity.ts — a cidade é DERIVADA).
   const [cityFilter, setCityFilter] = useState<CityKey | "all" | "none">("all");
   // Filtro "disponível das X às Y" (Jorge, 2026-09-17): dia opcional + horas.
-  // Com as duas horas → quem cobre esse horário (num dia certo ou em qualquer
-  // dia da semana); só com dia → quem marcou algo nesse dia. A regra vive em
-  // shared/availabilityWindow.ts (turnos 03–15 / 15–03, horas mandam).
+  // Com as duas horas → quem pode em ALGUM momento desse horário (sobreposição,
+  // não cobertura total: alargar a janela nunca esconde ninguém), num dia certo
+  // ou em qualquer dia da semana; só com dia → quem marcou algo nesse dia. A
+  // regra vive em shared/availabilityWindow.ts (turnos 03–15 / 15–03, horas mandam).
   const [windowDay, setWindowDay] = useState<string>("any");
   const [windowFrom, setWindowFrom] = useState<number | null>(null);
   const [windowTo, setWindowTo] = useState<number | null>(null);
@@ -2188,8 +2189,9 @@ export function AvailabilitySection() {
             </div>
 
             {/* Filtro "disponível das X às Y" — dia opcional. Compõe em AND com
-                os restantes e limpa a seleção (o alvo mudou). A regra de quem
-                "cobre" o horário está em shared/availabilityWindow.ts. */}
+                os restantes e limpa a seleção (o alvo mudou). Conta quem tem
+                disponibilidade em algum momento da janela (regra em
+                shared/availabilityWindow.ts). */}
             <div className="flex items-center gap-2 flex-wrap">
               <Clock className="h-3.5 w-3.5 text-muted-foreground" />
               <span className="text-xs text-muted-foreground">Disponível</span>

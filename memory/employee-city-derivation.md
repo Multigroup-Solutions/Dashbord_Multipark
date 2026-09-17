@@ -118,10 +118,15 @@ dos botões de cidade. Com as duas horas → só quem COBRE o pedido inteiro
 (`isAvailableOnDay`); sem dia → basta cobrir em qualquer dia da semana. Mostra a contagem do
 universo e limpa a seleção ao mudar (mesma regra do filtro de cidade). Compõe em AND:
 cidade → disponibilidade → acompanhamento → **horário** → pesquisa.
-**Regras de cobertura** (documentadas no topo do módulo): Manhã = 03–15, Noite = 15–03(+1),
+**Regras** (documentadas no topo do módulo): Manhã = 03–15, Noite = 15–03(+1),
 manhã+noite fundem-se numa janela contínua; **horas indicadas mandam** sobre os turnos; uma
 só hora não é janela (valem os turnos); `às <= das` atravessa a meia-noite (+24); a madrugada
-de um dia é coberta pela noite do dia ANTERIOR (segunda "noite" cobre terça 00h–02h).
+de um dia é servida pela noite do dia ANTERIOR (segunda "noite" conta para terça 00h–02h).
+**⚠️ Semântica corrigida no mesmo dia (Jorge): SOBREPOSIÇÃO, não cobertura total.** A 1ª versão
+exigia que a pessoa cobrisse a janela inteira — "5h–10h" dava 5 pessoas e "2h–10h" dava 2, porque
+quem só podia das 5h saía. Agora conta quem pode em ALGUM momento da janela (`windowsOverlap`,
+tocar nas pontas não conta); alargar o pedido nunca esconde ninguém. `windowCovers` ficou
+exportado para quem precise mesmo de cobertura total.
 Sem migração, sem pedido novo ao servidor (filtro local sobre `overview.extras[].days`).
 
 ### 2026-08-20 — Pesquisa livre por pessoa na tabela de extras
