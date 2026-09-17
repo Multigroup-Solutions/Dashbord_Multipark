@@ -5165,6 +5165,23 @@ export const appRouter = router({
       requireRole(ctx.user.role, "frontoffice");
       return searchClientHistory(input.name, input.email, input.plate);
     }),
+    // Publica no Google a resposta escrita/gerada no dashboard (Jorge, 16 set
+    // 2026: "receber a crítica e responder pela dashboard"). Só críticas
+    // importadas pela API têm ligação ao Google; as de email ficam só locais.
+    publishReply: protectedProcedure.input(z.object({ id: z.number(), comment: z.string().min(1).max(4096) })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "frontoffice");
+      const review = await getGoogleReviewById(input.id); // já aplica o âmbito de cidade
+      if (!review) throw new TRPCError({ code: "NOT_FOUND", message: "Crítica não encontrada" });
+      const { publishReply } = await import("./integrations/googleBusiness/service");
+      const { safeError } = await import("./integrations/googleBusiness/domain");
+      try {
+        const result = await publishReply(input.id, input.comment, ctx.user.id);
+        await logActivity({ userId: ctx.user.id, action: "review_reply_published", entity: "google_review", entityId: input.id, details: "Resposta publicada no Google" });
+        return result;
+      } catch (error) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: safeError(error) });
+      }
+    }),
     approveResponse: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
       await updateGoogleReview(input.id, { aiResponseApproved: 1, respondedAt: new Date().toISOString().slice(0, 19).replace("T", " "), respondedBy: ctx.user.id, status: "manually_responded" });

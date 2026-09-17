@@ -14,7 +14,7 @@ beforeEach(() => {
   const tx: any = {
     execute: async (statement: any) => {
       const query = dialect.sqlToQuery(statement).sql;
-      if (query.startsWith('SELECT * FROM google_business_locations')) return [[{ id: 1, locationName: 'locations/123', selected, available: 1, projectId: 9 }]];
+      if (query.startsWith('SELECT * FROM google_business_locations')) return [[{ id: 1, accountName: 'accounts/77', locationName: 'locations/123', selected, available: 1, projectId: 9 }]];
       if (query.startsWith('INSERT INTO google_business_review_pending')) pending++;
       if (query.startsWith('DELETE FROM google_business_review_pending')) pending = 0;
       return [{ affectedRows: 1 }];
@@ -58,6 +58,8 @@ describe('durable review imports', () => {
     expect(await importReview(1, payload, 10)).toBe('unchanged');
     expect(reviewRows).toHaveLength(1); expect(complaintRows).toHaveLength(1);
     expect(reviewRows[0].complaintId).toBe(complaintRows[0].id);
+    // Nome do recurso guardado (0073) — é o que permite responder pela API.
+    expect(reviewRows[0].googleReviewName).toBe('accounts/77/locations/123/reviews/test-review');
   });
   it('a lower rating updates the review and opens one case without losing its identity', async () => {
     await importReview(1, { ...payload, starRating: 'FIVE' }, 10);
@@ -75,6 +77,13 @@ describe('durable review imports', () => {
     expect(reviewRows[0].googleReply).toBe('Obrigado pela avaliação.');
     expect(await importReview(1, replied, 10)).toBe('unchanged');
     expect(complaintRows).toHaveLength(0);
+  });
+  it('uma linha importada antes da 0073 (sem nome do recurso) é atualizada uma vez para o ganhar', async () => {
+    await importReview(1, { ...payload, starRating: 'FIVE' }, 10);
+    reviewRows[0].googleReviewName = null;
+    expect(await importReview(1, { ...payload, starRating: 'FIVE' }, 10)).toBe('updated');
+    expect(reviewRows[0].googleReviewName).toBe('accounts/77/locations/123/reviews/test-review');
+    expect(await importReview(1, { ...payload, starRating: 'FIVE' }, 10)).toBe('unchanged');
   });
   it('rolls the review back if complaint creation fails, allowing safe retry', async () => {
     failComplaint = true;

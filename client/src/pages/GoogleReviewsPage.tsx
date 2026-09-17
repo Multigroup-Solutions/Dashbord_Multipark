@@ -13,7 +13,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { groupReviewsByPark, isReviewPending, NO_PARK_KEY } from "@shared/reviewParks";
 import {
   Star, Plus, MessageSquare, Bot, CheckCircle2, AlertTriangle,
   Search, ExternalLink, Sparkles, ThumbsUp, ThumbsDown, Eye,
@@ -113,6 +114,48 @@ export default function GoogleReviewsPage() {
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
 
+// Quadro por parque: a empresa toda em cima (KPIs), cada parque em baixo.
+function ParkBreakdown({ onOpenPark }: { onOpenPark?: (key: string) => void }) {
+  const { projectId } = useGlobalFilters();
+  const { data: reviews = [] } = trpc.reviews.list.useQuery(projectId !== undefined ? { projectId } : undefined);
+  const { data: projs = [] } = trpc.projects.list.useQuery();
+  const groups = useMemo(() => groupReviewsByPark(reviews as any[], projs as any[]), [reviews, projs]);
+  if (groups.length === 0) return null;
+  return (
+    <Card>
+      <CardHeader><CardTitle className="text-sm">Por parque</CardTitle></CardHeader>
+      <CardContent className="p-0">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-xs text-muted-foreground border-b">
+              <tr>
+                <th className="text-left px-4 py-2 font-medium">Parque</th>
+                <th className="text-right px-4 py-2 font-medium">Avaliações</th>
+                <th className="text-right px-4 py-2 font-medium">Média</th>
+                <th className="text-right px-4 py-2 font-medium">Por responder</th>
+                <th className="text-right px-4 py-2 font-medium">Respondidas</th>
+                <th className="text-right px-4 py-2 font-medium">Reclamações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {groups.map(g => (
+                <tr key={g.key} className={`border-b last:border-0 ${onOpenPark ? "cursor-pointer hover:bg-muted/50" : ""}`} onClick={() => onOpenPark?.(g.key)}>
+                  <td className="px-4 py-2 font-medium">{g.name}</td>
+                  <td className="px-4 py-2 text-right">{g.total}</td>
+                  <td className="px-4 py-2 text-right">{g.avg != null ? g.avg : "—"}</td>
+                  <td className={`px-4 py-2 text-right font-semibold ${g.pending > 0 ? "text-yellow-700" : "text-muted-foreground"}`}>{g.pending}</td>
+                  <td className="px-4 py-2 text-right text-green-700">{g.responded}</td>
+                  <td className="px-4 py-2 text-right text-red-700">{g.complaints}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function ReviewsDashboard() {
   const { projectId } = useGlobalFilters();
   const { data: stats } = trpc.reviews.stats.useQuery({ projectId });
@@ -157,6 +200,9 @@ function ReviewsDashboard() {
           <p className="text-xs text-muted-foreground">convertidas</p>
         </Card>
       </div>
+
+      {/* Por parque (Jorge, 16 set 2026: empresa toda em cima, parques em baixo) */}
+      <ParkBreakdown />
 
       {/* Star Distribution */}
       <Card>
@@ -209,6 +255,9 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
   const globalFilters = useGlobalFilters();
   const [filterRating, setFilterRating] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
+  // Separação por PARQUE (Jorge, 16 set 2026): "Todas" mostra a empresa
+  // inteira agrupada por parque; um parque mostra só o dele.
+  const [park, setPark] = useState<string>("all");
 
   const queryInput: any = {
     ...(filterRating !== "all" ? { rating: Number(filterRating) } : {}),
@@ -218,9 +267,31 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
   const { data: reviews = [], isLoading } = trpc.reviews.list.useQuery(
     Object.keys(queryInput).length > 0 ? queryInput : undefined
   );
+  const { data: projs = [] } = trpc.projects.list.useQuery();
+  const groups = useMemo(() => groupReviewsByPark(reviews as any[], projs as any[]), [reviews, projs]);
+  const parkName = useMemo(() => new Map(groups.map(g => [g.key, g.name])), [groups]);
+  const visibleGroups = park === "all" ? groups : groups.filter(g => g.key === park);
+  const totalPending = groups.reduce((s, g) => s + g.pending, 0);
+  const visibleReviews = visibleGroups.flatMap(g => g.reviews);
 
   return (
     <div className="space-y-4">
+      {/* Parques: a empresa toda, e depois cada parque */}
+      {groups.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button size="sm" variant={park === "all" ? "default" : "outline"} onClick={() => setPark("all")}>
+            Todas <span className="ml-1 opacity-80">{reviews.length}</span>
+            {totalPending > 0 && <Badge className="ml-2 bg-yellow-100 text-yellow-800 text-[10px]">{totalPending} por responder</Badge>}
+          </Button>
+          {groups.map(g => (
+            <Button key={g.key} size="sm" variant={park === g.key ? "default" : "outline"} onClick={() => setPark(park === g.key ? "all" : g.key)}>
+              {g.name} <span className="ml-1 opacity-80">{g.total}</span>
+              {g.pending > 0 && <Badge className="ml-2 bg-yellow-100 text-yellow-800 text-[10px]">{g.pending}</Badge>}
+            </Button>
+          ))}
+        </div>
+      )}
+
       {/* Filters */}
       <div className="flex items-center gap-3 flex-wrap">
         <div className="flex items-center gap-2">
@@ -250,11 +321,12 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
         <Button
           variant="outline"
           size="sm"
-          disabled={reviews.length === 0}
+          disabled={visibleReviews.length === 0}
           onClick={() => {
-            const headers = ["ID","Data","Nome","Email","Estrelas","Estado","Texto","Resposta IA","Matrícula","Reclamação"];
-            const rows = (reviews as any[]).map(r => [
+            const headers = ["ID","Parque","Data","Nome","Email","Estrelas","Estado","Texto","Resposta IA","Matrícula","Reclamação"];
+            const rows = (visibleReviews as any[]).map(r => [
               r.id,
+              (parkName.get(r.projectId != null && projs.some((p: any) => p.id === r.projectId) ? String(r.projectId) : NO_PARK_KEY) || "").replace(/;/g, ","),
               r.reviewDate ? new Date(r.reviewDate).toISOString().slice(0, 10) : "",
               (r.reviewerName || "").replace(/[;\n\r]/g, " "),
               (r.reviewerEmail || "").replace(/;/g, ","),
@@ -285,35 +357,55 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
           <p className="text-muted-foreground">Sem avaliações. Importa a primeira!</p>
         </Card>
       ) : (
-        <div className="space-y-3">
-          {reviews.map((r: any) => (
-            <Card key={r.id} className="hover:shadow-md transition-shadow cursor-pointer" onClick={() => onSelect(r.id)}>
-              <CardContent className="p-4">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-3 mb-1">
-                      <span className="font-medium">{r.reviewerName}</span>
-                      <Stars rating={r.rating} size="w-3.5 h-3.5" />
-                      <Badge className={STATUS_LABELS[r.status]?.color || ""}>{STATUS_LABELS[r.status]?.label}</Badge>
-                      {r.complaintId && (
-                        <Badge variant="outline" className="text-red-600 border-red-200">
-                          <AlertTriangle className="w-3 h-3 mr-1" /> Reclamação #{r.complaintId}
-                        </Badge>
-                      )}
+        <div className="space-y-6">
+          {visibleGroups.map(g => (
+            <div key={g.key} className="space-y-3">
+              {/* Cabeçalho do parque: nome, total, média, por responder */}
+              <div className="flex items-center gap-3 flex-wrap border-b pb-2">
+                <h3 className="font-semibold">{g.name}</h3>
+                <span className="text-sm text-muted-foreground">{g.total} {g.total === 1 ? "avaliação" : "avaliações"}</span>
+                {g.avg != null && (
+                  <span className="flex items-center gap-1 text-sm text-muted-foreground">
+                    <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" /> {g.avg}
+                  </span>
+                )}
+                {g.pending > 0 ? (
+                  <Badge className="bg-yellow-100 text-yellow-800">{g.pending} por responder</Badge>
+                ) : (
+                  <Badge className="bg-green-100 text-green-800">tudo respondido</Badge>
+                )}
+              </div>
+              {g.reviews.map((r: any) => (
+                <Card key={r.id} className={`hover:shadow-md transition-shadow cursor-pointer ${isReviewPending(r) ? "border-yellow-200" : ""}`} onClick={() => onSelect(r.id)}>
+                  <CardContent className="p-4">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3 mb-1 flex-wrap">
+                          <span className="font-medium">{r.reviewerName}</span>
+                          <Stars rating={r.rating} size="w-3.5 h-3.5" />
+                          <Badge className={STATUS_LABELS[r.status]?.color || ""}>{STATUS_LABELS[r.status]?.label}</Badge>
+                          {r.googleReply && <Badge className="bg-green-100 text-green-700 text-[10px]">no Google</Badge>}
+                          {r.complaintId && (
+                            <Badge variant="outline" className="text-red-600 border-red-200">
+                              <AlertTriangle className="w-3 h-3 mr-1" /> Reclamação #{r.complaintId}
+                            </Badge>
+                          )}
+                        </div>
+                        {r.reviewText && <p className="text-sm text-muted-foreground line-clamp-2 mt-1">"{r.reviewText}"</p>}
+                        <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
+                          {r.reviewDate && <span>{fmtPTDate(r.reviewDate)}</span>}
+                          {r.vehiclePlate && <span>🚗 {r.vehiclePlate}</span>}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {r.aiResponse && <Bot className="w-4 h-4 text-blue-500" />}
+                        <Button variant="ghost" size="icon" className="h-8 w-8"><Eye className="w-4 h-4" /></Button>
+                      </div>
                     </div>
-                    {r.reviewText && <p className="text-sm text-muted-foreground line-clamp-2 mt-1">"{r.reviewText}"</p>}
-                    <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
-                      {r.reviewDate && <span>{fmtPTDate(r.reviewDate)}</span>}
-                      {r.vehiclePlate && <span>🚗 {r.vehiclePlate}</span>}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {r.aiResponse && <Bot className="w-4 h-4 text-blue-500" />}
-                    <Button variant="ghost" size="icon" className="h-8 w-8"><Eye className="w-4 h-4" /></Button>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
           ))}
         </div>
       )}
@@ -465,6 +557,14 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
   const generateMut = trpc.reviews.generateResponse.useMutation();
   const approveMut = trpc.reviews.approveResponse.useMutation();
   const updateMut = trpc.reviews.update.useMutation();
+  const publishMut = trpc.reviews.publishReply.useMutation({
+    onSuccess: () => {
+      utils.reviews.getById.invalidate({ id });
+      utils.reviews.list.invalidate();
+      toast.success("Resposta publicada no Google!");
+    },
+    onError: (e) => toast.error(e.message || "Não foi possível publicar no Google"),
+  });
   const convertMut = trpc.reviews.convertToComplaint.useMutation({
     onSuccess: (r) => {
       toast.success(r.alreadyConverted ? `Já estava convertida (reclamação #${r.complaintId})` : `Reclamação #${r.complaintId} criada`);
@@ -544,12 +644,32 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
             name={review.reviewerName}
           />
 
+          {/* Resposta pública já no Google (vinda da API) */}
+          {review.googleReply && (
+            <Card className="border-green-200">
+              <CardHeader>
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-green-600" /> Publicada no Google
+                  {review.respondedAt && <span className="text-xs font-normal text-muted-foreground">{fmtPTDateTime(review.respondedAt)}</span>}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm bg-green-50 p-3 rounded-lg border border-green-100">{review.googleReply}</p>
+              </CardContent>
+            </Card>
+          )}
+
           {/* AI Response */}
           <Card>
             <CardHeader>
               <CardTitle className="text-sm flex items-center gap-2">
                 <Bot className="w-4 h-4 text-blue-500" /> Resposta
                 {review.aiResponseApproved && <Badge className="bg-green-100 text-green-700 text-[10px]">Aprovada</Badge>}
+                {!review.googleReviewName && (
+                  <span className="text-xs font-normal text-muted-foreground ml-auto flex items-center gap-1" title="Esta crítica veio por email e não está ligada ao Google. Para publicar a resposta, usa o perfil Google, ou espera que a importação pela API a associe.">
+                    <Mail className="w-3 h-3" /> só local (veio por email)
+                  </span>
+                )}
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -564,7 +684,12 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
               ) : review.aiResponse ? (
                 <>
                   <p className="text-sm bg-blue-50 p-3 rounded-lg border border-blue-100">{review.aiResponse}</p>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 flex-wrap">
+                    {review.googleReviewName && review.googleReply !== review.aiResponse && (
+                      <Button size="sm" onClick={() => publishMut.mutate({ id, comment: review.aiResponse || "" })} disabled={publishMut.isPending}>
+                        <ExternalLink className="w-4 h-4 mr-1" /> {publishMut.isPending ? "A publicar..." : review.googleReply ? "Substituir no Google" : "Publicar no Google"}
+                      </Button>
+                    )}
                     {!review.aiResponseApproved && (
                       <Button size="sm" onClick={handleApprove} disabled={approveMut.isPending}>
                         <CheckCircle2 className="w-4 h-4 mr-1" /> Aprovar

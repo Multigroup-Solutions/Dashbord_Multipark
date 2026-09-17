@@ -1,7 +1,7 @@
 import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { complaints, googleReviews, projects } from '../../../drizzle/schema';
-import { BusinessClient } from './client';
-import { accountPattern, locationPattern, normalizeReview, safeError, type GoogleReview } from './domain';
+import { BusinessClient, REPLY_MAX_LENGTH } from './client';
+import { accountPattern, locationPattern, normalizeReview, reviewPattern, safeError, type GoogleReview } from './domain';
 import { accessToken, connection, database, saveConnection } from './oauth';
 import { PROVIDER } from './config';
 
@@ -82,8 +82,11 @@ export async function importReview(locationId: number, payload: GoogleReview, us
     const [location] = rows<Location>(await tx.execute(sql`SELECT * FROM google_business_locations WHERE id = ${locationId} FOR UPDATE`));
     if (!location?.selected || !location.available || !location.projectId) throw new Error('Perfil sem associação ativa a um parque.');
     const review = normalizeReview(location.locationName, payload);
+    // Nome do recurso — é o que permite responder pela API (0073).
+    const reviewName = `${location.accountName}/${location.locationName}/reviews/${payload.reviewId}`;
+    if (!reviewPattern.test(reviewName)) throw new Error('Identificador Google inválido.');
     let [existing] = await tx.select().from(googleReviews).where(eq(googleReviews.googleReviewKey, review.key)).limit(1).for('update');
-    if (existing?.googleUpdatedAt && (existing.googleUpdatedAt > review.updated ||
+    if (existing?.googleUpdatedAt && existing.googleReviewName && (existing.googleUpdatedAt > review.updated ||
       (existing.googleUpdatedAt === review.updated && existing.googleReply === review.reply && existing.respondedAt === review.replyAt))) return 'unchanged' as const;
     if (!existing) {
       if (resolution?.existingId) {
@@ -104,6 +107,7 @@ export async function importReview(locationId: number, payload: GoogleReview, us
     }
     const contentChanged = existing && (existing.rating !== review.rating || existing.reviewText !== review.reviewText);
     const data = { googleReviewKey: review.key, googleLocationId: locationId, googleUpdatedAt: review.updated,
+      googleReviewName: reviewName,
       googleReply: review.reply, reviewerName: review.reviewerName, rating: review.rating,
       reviewText: review.reviewText, reviewDate: review.reviewDate, projectId: location.projectId };
     let id: number;
@@ -130,6 +134,37 @@ export async function importReview(locationId: number, payload: GoogleReview, us
     await tx.execute(sql`DELETE FROM google_business_review_pending WHERE reviewKey = ${review.key}`);
     return existing ? 'updated' as const : 'created' as const;
   });
+}
+
+/**
+ * Publica no Google a resposta escrita no dashboard (pedido do Jorge,
+ * 2026-09-16: "receber a crítica e responder pela dashboard"). Só para
+ * críticas importadas pela API (têm `googleReviewName`); as que vieram por
+ * email não têm ligação ao Google e a resposta fica só local.
+ *
+ * Grava primeiro no Google e só depois na BD: se a Google recusar (quota 0,
+ * conta sem permissão no perfil), nada muda cá dentro.
+ */
+export async function publishReply(reviewId: number, comment: string, userId: number) {
+  const text = comment.trim();
+  if (!text) throw new Error('Escreve a resposta antes de publicar.');
+  if (text.length > REPLY_MAX_LENGTH) throw new Error(`A resposta tem de ter no máximo ${REPLY_MAX_LENGTH} caracteres.`);
+  const db = await database();
+  const [review] = await db.select({ id: googleReviews.id, name: googleReviews.googleReviewName, complaintId: googleReviews.complaintId })
+    .from(googleReviews).where(eq(googleReviews.id, reviewId)).limit(1);
+  if (!review) throw new Error('Crítica não encontrada.');
+  if (!review.name || !reviewPattern.test(review.name)) {
+    throw new Error('Esta crítica veio por email e não está ligada ao Google. Responde diretamente no perfil Google, ou espera que a importação pela API a associe.');
+  }
+  const client = new BusinessClient(await accessToken());
+  const published = await client.reply(review.name, text);
+  const at = published.updateTime && Number.isFinite(Date.parse(published.updateTime))
+    ? new Date(published.updateTime).toISOString().slice(0, 19).replace('T', ' ') : now();
+  await db.update(googleReviews).set({
+    googleReply: published.comment || text, aiResponse: text, aiResponseApproved: 1, respondedAt: at, respondedBy: userId,
+    status: review.complaintId ? 'converted_complaint' : 'manually_responded',
+  }).where(eq(googleReviews.id, reviewId));
+  return { publishedAt: at };
 }
 
 export async function pendingReviews() {
