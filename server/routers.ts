@@ -24,7 +24,7 @@ import {
 import { dayToMysql, lisbonToday } from "../shared/expensePeriods";
 import { expenseTotals } from "../shared/expenseTotals";
 import { getBillingData, getAnnualBreakdown } from "./finance/compat";
-import { canViewDocuments, canViewEmployee, canViewTimeAndSchedule, sanitizeEmployee, sanitizeEmployeeRows, type RhViewer, isRhAdmin } from "./rhAccess";
+import { canViewDocuments, canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, CENTER_SCOPED_ROLES, PERSONAL_FIELDS, CONTRACT_FIELDS, type RhViewer, type EmployeeRef, isRhAdmin } from "./rhAccess";
 import {
   applyDocsCompliance, getExtraDocsStatus, detectExtraDiaNoShows, listPendingPenalties, reviewPenalty,
   listSuspiciousTimeRecords, reviewTimeRecord, insertTimeRecordAtomic,
@@ -501,15 +501,48 @@ function resolveDeactivationOrThrow(input: DeactivationInput): ResolvedDeactivat
 async function rhViewer(user: { id: number; role: string }): Promise<RhViewer> {
   const me = await getEmployeeByUserId(user.id);
   let scope: number[] | null = null;
-  if (user.role === "supervisor") {
+  // supervisor, team_leader e frontoffice mexem nas fichas do SEU centro de
+  // custos (com descendentes) — o centro da ficha, não a cidade inteira.
+  if ((CENTER_SCOPED_ROLES as readonly string[]).includes(user.role)) {
     const pid = me?.employee?.projectId ?? null;
-    scope = scopedProjectIds() ?? (pid != null ? await resolveProjectIds(pid) : []);
+    scope = pid != null ? await resolveProjectIds(pid) : [];
   }
   return { id: user.id, role: user.role, employeeId: me?.employee?.id ?? null, scopeProjectIds: scope };
 }
-async function rhEmployeeRef(employeeId: number): Promise<{ id: number; projectId: number | null } | null> {
+/** Referência da ficha COM o role da conta associada (para proteger fichas de admin/super_admin). */
+async function rhEmployeeRef(employeeId: number): Promise<EmployeeRef | null> {
   const e = await getEmployeeById(employeeId);
-  return e ? { id: e.employee.id, projectId: e.employee.projectId ?? null } : null;
+  if (!e) return null;
+  return { id: e.employee.id, projectId: e.employee.projectId ?? null, role: await employeeAccountRole(e.employee.userId ?? null) };
+}
+async function employeeAccountRole(userId: number | null): Promise<string | null> {
+  if (userId == null) return null;
+  const u = await getUserById(userId);
+  return u?.role ?? null;
+}
+/** Ficha + o que o utilizador pode fazer nela; lança FORBIDDEN se não a pode ver. */
+async function rhEmployeeRefOrThrow(employeeId: number): Promise<EmployeeRef> {
+  const ref = await rhEmployeeRef(employeeId);
+  if (!ref) throw new TRPCError({ code: "NOT_FOUND", message: "Colaborador não encontrado" });
+  return ref;
+}
+/** Âmbito de cidade nas escritas — a própria ficha passa sempre (pode nem ter centro). */
+async function assertEmployeeWriteScope(viewer: RhViewer, ref: EmployeeRef): Promise<void> {
+  if (isOwn(viewer, ref.id)) return;
+  await assertEmployeeAccess(ref.id);
+}
+/** Documentos: quem mexe nos dados pessoais da ficha; sem ficha, só admin+ (checklists vazias). */
+async function assertCanViewDocuments(user: { id: number; role: string }, employeeId: number, message: string): Promise<void> {
+  const viewer = await rhViewer(user);
+  const ref = await rhEmployeeRef(employeeId);
+  const allowed = ref ? canViewDocuments(viewer, ref) : isRhAdmin(viewer);
+  if (!allowed) throw new TRPCError({ code: "FORBIDDEN", message });
+}
+async function assertCanUploadDocuments(user: { id: number; role: string }, employeeId: number): Promise<void> {
+  const viewer = await rhViewer(user);
+  const ref = await rhEmployeeRefOrThrow(employeeId);
+  if (!canEditPersonal(viewer, ref)) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para carregar documentos nesta ficha" });
+  await assertEmployeeWriteScope(viewer, ref);
 }
 
 // ─── APP ROUTER ───────────────────────────────────────────────────────────────
@@ -2497,20 +2530,26 @@ export const appRouter = router({
           const ids = new Set(await resolveProjectIds(input.projectId));
           rows = rows.filter((r: any) => r.employee.projectId != null && ids.has(r.employee.projectId));
         }
-        return sanitizeEmployeeRows(viewer, rows as any[]);
+        // role da conta de cada ficha: fichas de admin/super_admin ficam
+        // protegidas de quem está abaixo (dados pessoais escondidos).
+        const roleByUserId = new Map<number, string>();
+        if (!isRhAdmin(viewer)) for (const u of await getAllUsers()) roleByUserId.set(u.id, u.role);
+        return sanitizeEmployeeRows(viewer, rows as any[], (emp) => (emp.userId != null ? roleByUserId.get(emp.userId) : null));
       }),
 
     byId: protectedProcedure
       .input(z.object({ id: z.number() }))
       .query(async ({ ctx, input }) => {
         const viewer = await rhViewer(ctx.user);
-        await assertEmployeeAccess(input.id);
         const result = await getEmployeeById(input.id);
         if (!result) return result;
-        if (!canViewEmployee(viewer, { id: result.employee.id, projectId: result.employee.projectId ?? null })) {
+        const ref: EmployeeRef = { id: result.employee.id, projectId: result.employee.projectId ?? null, role: await employeeAccountRole(result.employee.userId ?? null) };
+        if (!isOwn(viewer, ref.id)) await assertEmployeeAccess(input.id);
+        if (!canViewEmployee(viewer, ref)) {
           throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
         }
-        return { ...result, employee: sanitizeEmployee(viewer, result.employee as any) };
+        // `access` diz ao cliente o que este utilizador pode fazer na ficha
+        return { ...result, employee: sanitizeEmployee(viewer, result.employee as any, ref.role), access: employeeAccess(viewer, ref) };
       }),
 
     create: protectedProcedure
@@ -2679,10 +2718,21 @@ export const appRouter = router({
         isActive: z.boolean().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        // Dois níveis (pedido Jorge 17 set): dados PESSOAIS (o próprio, ou
+        // quem gere o centro — ver rhAccess) e CONTRATUAIS (só admin+). Um
+        // pedido que traga campos dos dois exige as duas permissões.
+        const viewer = await rhViewer(ctx.user);
+        const ref = await rhEmployeeRefOrThrow(input.id);
+        const sent = (keys: readonly string[]) => keys.some((k) => (input as any)[k] !== undefined);
+        if (sent(CONTRACT_FIELDS) && !canEditContract(viewer, ref)) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Só admin pode alterar dados contratuais (posto, centro, contrato, salário, conta)." });
+        }
+        if (sent(PERSONAL_FIELDS) && !canEditPersonal(viewer, ref)) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para alterar os dados desta ficha." });
+        }
         // Âmbito de cidade também nas ESCRITAS (revisão 16 set): sem isto um
         // admin do Porto editava salário/NIF de uma ficha de Lisboa.
-        await assertEmployeeAccess(input.id);
+        await assertEmployeeWriteScope(viewer, ref);
         const { id, birthDate, contractStart, contractEnd, ...rest } = input;
         const data: any = { ...rest };
         if (typeof data.personalEmail === "string") data.personalEmail = data.personalEmail.trim().toLowerCase() || null;
@@ -2722,10 +2772,14 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "admin");
         // Âmbito de cidade: desativar cascateia para a conta e grava o motivo —
-        // nunca sobre uma pessoa de outra cidade.
+        // nunca sobre uma pessoa de outra cidade. E um admin nunca desativa
+        // um super_admin (ficha protegida).
         await assertEmployeeAccess(input.id);
         const found = await getEmployeeById(input.id);
         if (!found) throw new TRPCError({ code: "NOT_FOUND", message: "Colaborador não encontrado" });
+        if (!canEditContract(await rhViewer(ctx.user), await rhEmployeeRefOrThrow(input.id))) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para alterar o estado desta ficha." });
+        }
         const deactivation = input.isActive ? null : resolveDeactivationOrThrow(input);
         const meta = deactivation ? { ...deactivation, byUserId: ctx.user.id } : null;
         await updateEmployee(input.id, {
@@ -2748,8 +2802,11 @@ export const appRouter = router({
     uploadPhoto: protectedProcedure
       .input(z.object({ employeeId: z.number(), fileBase64: z.string(), mimeType: z.string() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
-        await assertEmployeeAccess(input.employeeId);
+        // A foto é dado pessoal: o próprio, ou quem gere o centro (rhAccess).
+        const viewer = await rhViewer(ctx.user);
+        const ref = await rhEmployeeRefOrThrow(input.employeeId);
+        if (!canEditPersonal(viewer, ref)) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para alterar a foto desta ficha." });
+        await assertEmployeeWriteScope(viewer, ref);
         const { storagePut } = await import("./storage");
         const buffer = Buffer.from(input.fileBase64, "base64");
         const ext = input.mimeType.split("/")[1] ?? "jpg";
@@ -2780,9 +2837,7 @@ export const appRouter = router({
       list: protectedProcedure
         .input(z.object({ employeeId: z.number() }))
         .query(async ({ ctx, input }) => {
-          const viewer = await rhViewer(ctx.user);
-          const ref = await rhEmployeeRef(input.employeeId);
-          if (!isRhAdmin(viewer) && (!ref || !canViewDocuments(viewer, ref))) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para ver estes documentos" });
+          await assertCanViewDocuments(ctx.user, input.employeeId, "Sem permissão para ver estes documentos");
           const docs = await getEmployeeDocuments(input.employeeId);
           // a URL pública gravada deixa de ser exposta — abre-se pela rota `url` (assinada)
           return docs.map((d: any) => ({ ...d, fileUrl: null }));
@@ -2798,9 +2853,7 @@ export const appRouter = router({
           if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
           const [doc] = await db.select().from(employeeDocuments).where(eq(employeeDocuments.id, input.id)).limit(1);
           if (!doc) throw new TRPCError({ code: "NOT_FOUND" });
-          const viewer = await rhViewer(ctx.user);
-          const ref = await rhEmployeeRef(doc.employeeId);
-          if (!isRhAdmin(viewer) && (!ref || !canViewDocuments(viewer, ref))) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para abrir este documento" });
+          await assertCanViewDocuments(ctx.user, doc.employeeId, "Sem permissão para abrir este documento");
           const { storagePresignGet } = await import("./storage");
           const r = await storagePresignGet(doc.fileKey || doc.fileUrl);
           await logActivity({ userId: ctx.user.id, action: "view", entity: "employee_document", entityId: doc.id, details: `${doc.docType} de #${doc.employeeId}` });
@@ -2817,7 +2870,7 @@ export const appRouter = router({
           fileName: z.string(),
         }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
+          await assertCanUploadDocuments(ctx.user, input.employeeId);
           const { storagePut } = await import("./storage");
           const buffer = Buffer.from(input.fileBase64, "base64");
           const key = `employees/${input.employeeId}/docs/${input.docType}-${Date.now()}-${input.fileName}`;
@@ -2847,7 +2900,7 @@ export const appRouter = router({
           })),
         }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
+          await assertCanUploadDocuments(ctx.user, input.employeeId);
           const { storagePut } = await import("./storage");
           const results: { url: string; key: string }[] = [];
           for (const file of input.files) {
@@ -2871,9 +2924,7 @@ export const appRouter = router({
       checklist: protectedProcedure
         .input(z.object({ employeeId: z.number() }))
         .query(async ({ ctx, input }) => {
-          const viewer = await rhViewer(ctx.user);
-          const ref = await rhEmployeeRef(input.employeeId);
-          if (!isRhAdmin(viewer) && (!ref || !canViewDocuments(viewer, ref))) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
+          await assertCanViewDocuments(ctx.user, input.employeeId, "Sem permissão");
           return getDocumentChecklistForEmployee(input.employeeId);
         }),
       allStatus: protectedProcedure
@@ -2893,8 +2944,21 @@ export const appRouter = router({
       delete: protectedProcedure
         .input(z.object({ id: z.number() }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
+          // admin+ (ficha não protegida), ou quem carregou o documento e ainda
+          // pode mexer na ficha (o próprio, gestor do centro, backoffice).
+          const { getDb } = await import("./db");
+          const { employeeDocuments } = await import("../drizzle/schema");
+          const { eq } = await import("drizzle-orm");
+          const db = await getDb();
+          if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
+          const [doc] = await db.select().from(employeeDocuments).where(eq(employeeDocuments.id, input.id)).limit(1);
+          if (!doc) throw new TRPCError({ code: "NOT_FOUND" });
+          const viewer = await rhViewer(ctx.user);
+          const ref = await rhEmployeeRef(doc.employeeId);
+          const allowed = ref ? canDeleteDocument(viewer, ref, doc.uploadedById) : isRhAdmin(viewer);
+          if (!allowed) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para eliminar este documento" });
           await deleteEmployeeDocument(input.id);
+          await logActivity({ userId: ctx.user.id, action: "delete", entity: "employee_document", entityId: doc.id, details: `${doc.docType} de #${doc.employeeId}` });
           return { success: true };
         }),
     }),

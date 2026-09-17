@@ -462,11 +462,19 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
 }
 
 // ─── DOCUMENT UPLOAD (MULTI-FILE + CHECKLIST) ───────────────────────────────
-function DocumentsTab({ employeeId }: { employeeId: number }) {
+// `access` vem de rh.byId: quem pode mexer nos dados pessoais carrega
+// documentos; apagar é admin (ficha não protegida) ou quem carregou o ficheiro.
+type EmployeeAccess = { isOwn: boolean; canEditPersonal: boolean; canEditContract: boolean; canViewSensitive: boolean; canViewDocuments: boolean };
+const NO_ACCESS: EmployeeAccess = { isOwn: false, canEditPersonal: false, canEditContract: false, canViewSensitive: false, canViewDocuments: false };
+
+function DocumentsTab({ employeeId, access }: { employeeId: number; access: EmployeeAccess }) {
   const utils = trpc.useUtils();
+  const { user } = useAuth();
+  const canUpload = access.canEditPersonal;
+  const canDeleteDoc = (uploadedById: number | null | undefined) => access.canEditContract || (access.canEditPersonal && uploadedById != null && uploadedById === user?.id);
   const openDoc = useOpenEmployeeDoc();
-  const { data: docs = [] } = trpc.rh.documents.list.useQuery({ employeeId });
-  const { data: checklist = [] } = trpc.rh.documents.checklist.useQuery({ employeeId });
+  const { data: docs = [] } = trpc.rh.documents.list.useQuery({ employeeId }, { enabled: access.canViewDocuments });
+  const { data: checklist = [] } = trpc.rh.documents.checklist.useQuery({ employeeId }, { enabled: access.canViewDocuments });
   const [uploading, setUploading] = useState(false);
   const [uploadingCategory, setUploadingCategory] = useState<DocType | null>(null);
   const [expandedCategory, setExpandedCategory] = useState<DocType | null>(null);
@@ -536,6 +544,10 @@ function DocumentsTab({ employeeId }: { employeeId: number }) {
 
   const isImage = (mime?: string | null) => mime?.startsWith("image/");
 
+  if (!access.canViewDocuments) {
+    return <p role="status" className="text-sm text-muted-foreground border rounded-md px-3 py-3 bg-muted/40">Sem permissão para ver os documentos desta ficha — só o próprio, quem gere o seu centro de custos, o backoffice e os RH.</p>;
+  }
+
   return (
     <div className="space-y-5">
       <input ref={fileRef} type="file" className="hidden" accept="image/*,.pdf" multiple onChange={handleMultiFile} />
@@ -570,7 +582,7 @@ function DocumentsTab({ employeeId }: { employeeId: number }) {
                   )}
                   <span className="text-sm">{DOC_LABELS[item.docType as DocType]}</span>
                 </div>
-                {!item.present && (
+                {!item.present && canUpload && (
                   <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => triggerUpload(item.docType as DocType)}>
                     <Plus className="w-3 h-3 mr-1" /> Carregar
                   </Button>
@@ -605,11 +617,11 @@ function DocumentsTab({ employeeId }: { employeeId: number }) {
                 <div className="flex items-center gap-2">
                   {uploading && uploadingCategory === type ? (
                     <div className="animate-spin w-4 h-4 border-2 border-primary border-t-transparent rounded-full" />
-                  ) : (
+                  ) : canUpload ? (
                     <Button size="sm" variant="ghost" className="h-7" onClick={(e) => { e.stopPropagation(); triggerUpload(type); }}>
                       <Upload className="w-3 h-3 mr-1" /> Carregar
                     </Button>
-                  )}
+                  ) : null}
                 </div>
               </div>
 
@@ -619,9 +631,11 @@ function DocumentsTab({ employeeId }: { employeeId: number }) {
                     <div className="text-center py-6 text-muted-foreground">
                       <FileText className="w-8 h-8 mx-auto mb-2 opacity-30" />
                       <p className="text-xs">Sem documentos nesta categoria</p>
-                      <Button size="sm" variant="outline" className="mt-2" onClick={() => triggerUpload(type)}>
-                        <Upload className="w-3 h-3 mr-1" /> Carregar ficheiros
-                      </Button>
+                      {canUpload && (
+                        <Button size="sm" variant="outline" className="mt-2" onClick={() => triggerUpload(type)}>
+                          <Upload className="w-3 h-3 mr-1" /> Carregar ficheiros
+                        </Button>
+                      )}
                     </div>
                   ) : (
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 pt-3">
@@ -639,9 +653,11 @@ function DocumentsTab({ employeeId }: { employeeId: number }) {
                             <Button size="icon" variant="secondary" className="w-6 h-6" aria-label="Abrir documento" onClick={() => openDoc(doc.id)}>
                               <Eye className="w-3 h-3" />
                             </Button>
-                            <Button size="icon" variant="secondary" className="w-6 h-6 text-destructive" onClick={() => del.mutate({ id: doc.id })}>
-                              <Trash2 className="w-3 h-3" />
-                            </Button>
+                            {canDeleteDoc(doc.uploadedById) && (
+                              <Button size="icon" variant="secondary" className="w-6 h-6 text-destructive" aria-label="Eliminar documento" onClick={() => del.mutate({ id: doc.id })}>
+                                <Trash2 className="w-3 h-3" />
+                              </Button>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -1230,7 +1246,10 @@ function EmployeeAlertsCard({ employeeId }: { employeeId: number }) {
 function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: () => void }) {
   const utils = trpc.useUtils();
   const { data, isLoading, error } = trpc.rh.byId.useQuery({ id: employeeId });
-  const { data: allUsers = [] } = trpc.users.list.useQuery();
+  // O servidor diz o que ESTE utilizador pode fazer nesta ficha (rhAccess):
+  // dados pessoais (o próprio, gestores do centro, backoffice) vs contratuais (admin+).
+  const access: EmployeeAccess = (data as any)?.access ?? NO_ACCESS;
+  const { data: allUsers = [] } = trpc.users.list.useQuery(undefined, { enabled: access.canEditContract });
   const { data: projectsList = [] } = trpc.projects.list.useQuery();
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState<Record<string, any>>({});
@@ -1303,10 +1322,10 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
   };
 
   const handleSave = () => {
-    updateEmployee.mutate({
-      id: employeeId,
+    // Só se envia o que se pode alterar: quem não é admin manda apenas os
+    // dados pessoais (o servidor recusa o resto de qualquer forma).
+    const personal = access.canEditPersonal ? {
       fullName: editForm.fullName || undefined,
-      email: editForm.email || undefined,
       phone: editForm.phone || undefined,
       // null limpa o campo; extras não têm contactos pessoais à parte
       personalEmail: editForm.position === "extra" ? null : (editForm.personalEmail?.trim() || null),
@@ -1316,6 +1335,9 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
       address: editForm.address || undefined,
       birthDate: editForm.birthDate || undefined,
       nationality: editForm.nationality || undefined,
+    } : {};
+    const contract = access.canEditContract ? {
+      email: editForm.email || undefined,
       position: editForm.position || undefined,
       extraLevel: editForm.position === "extra" ? editForm.extraLevel : undefined,
       department: editForm.department || undefined,
@@ -1326,8 +1348,10 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
       monthlySalary: editForm.monthlySalary || undefined,
       mealAllowancePerDay: editForm.mealAllowancePerDay || undefined,
       userId: editForm.userId,
-    });
+    } : {};
+    updateEmployee.mutate({ id: employeeId, ...personal, ...contract });
   };
+  const canEdit = access.canEditPersonal || access.canEditContract;
 
   const ef = (k: string, v: any) => setEditForm(f => ({ ...f, [k]: v }));
 
@@ -1358,7 +1382,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
           </span>
         )}
         <div className="flex-1" />
-        {!editing && (
+        {!editing && access.canEditContract && (
           <Button
             variant={emp.isActive ? "outline" : "default"}
             disabled={setActive.isPending}
@@ -1385,9 +1409,11 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
           onConfirm={(values) => setActive.mutate({ id: employeeId, isActive: false, ...values })}
         />
         {!editing ? (
-          <Button variant="outline" onClick={startEditing}>
-            <Pencil className="w-4 h-4 mr-2" /> Editar
-          </Button>
+          canEdit && (
+            <Button variant="outline" onClick={startEditing}>
+              <Pencil className="w-4 h-4 mr-2" /> {access.canEditContract ? "Editar" : access.isOwn ? "Editar os meus dados" : "Editar dados pessoais"}
+            </Button>
+          )
         ) : (
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => setEditing(false)}>
@@ -1418,14 +1444,17 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                     {emp.fullName.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase()}
                   </AvatarFallback>
                 </Avatar>
-                <Button
-                  size="icon"
-                  variant="outline"
-                  className="absolute -bottom-2 -right-2 w-7 h-7 rounded-full"
-                  onClick={() => photoRef.current?.click()}
-                >
-                  <Camera className="w-3 h-3" />
-                </Button>
+                {access.canEditPersonal && (
+                  <Button
+                    size="icon"
+                    variant="outline"
+                    className="absolute -bottom-2 -right-2 w-7 h-7 rounded-full"
+                    aria-label="Alterar fotografia"
+                    onClick={() => photoRef.current?.click()}
+                  >
+                    <Camera className="w-3 h-3" />
+                  </Button>
+                )}
                 <input ref={photoRef} type="file" className="hidden" accept="image/*" onChange={handlePhoto} />
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-2 flex-1">
@@ -1536,14 +1565,17 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                     {(editForm.fullName || emp.fullName).split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase()}
                   </AvatarFallback>
                 </Avatar>
-                <Button
-                  size="icon"
-                  variant="outline"
-                  className="absolute -bottom-2 -right-2 w-7 h-7 rounded-full"
-                  onClick={() => photoRef.current?.click()}
-                >
-                  <Camera className="w-3 h-3" />
-                </Button>
+                {access.canEditPersonal && (
+                  <Button
+                    size="icon"
+                    variant="outline"
+                    className="absolute -bottom-2 -right-2 w-7 h-7 rounded-full"
+                    aria-label="Alterar fotografia"
+                    onClick={() => photoRef.current?.click()}
+                  >
+                    <Camera className="w-3 h-3" />
+                  </Button>
+                )}
                 <input ref={photoRef} type="file" className="hidden" accept="image/*" onChange={handlePhoto} />
               </div>
               <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1551,10 +1583,12 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                   <Label>Nome Completo *</Label>
                   <Input value={editForm.fullName} onChange={e => ef("fullName", e.target.value)} />
                 </div>
-                <div>
-                  <Label>Email <span className="text-xs text-muted-foreground">{editForm.position === "extra" ? "(login)" : "(trabalho — login e Multipark)"}</span></Label>
-                  <Input type="email" value={editForm.email} onChange={e => ef("email", e.target.value)} placeholder={editForm.position === "extra" ? "email@gmail.com" : "nome@multipark.pt"} />
-                </div>
+                {access.canEditContract && (
+                  <div>
+                    <Label>Email <span className="text-xs text-muted-foreground">{editForm.position === "extra" ? "(login)" : "(trabalho — login e Multipark)"}</span></Label>
+                    <Input type="email" value={editForm.email} onChange={e => ef("email", e.target.value)} placeholder={editForm.position === "extra" ? "email@gmail.com" : "nome@multipark.pt"} />
+                  </div>
+                )}
                 <div>
                   <Label>Telefone{editForm.position !== "extra" && <span className="text-xs text-muted-foreground"> (trabalho)</span>}</Label>
                   <Input value={editForm.phone} onChange={e => ef("phone", e.target.value)} placeholder="+351 9XX XXX XXX" />
@@ -1594,6 +1628,12 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                 <Label>Nacionalidade</Label>
                 <Input value={editForm.nationality} onChange={e => ef("nationality", e.target.value)} />
               </div>
+              {!access.canEditContract && (
+                <p className="sm:col-span-2 text-xs text-muted-foreground border rounded-md px-3 py-2 bg-muted/40">
+                  Posto, centro de custos, contrato, salário e conta associada só podem ser alterados pelos RH (admin).
+                </p>
+              )}
+              {access.canEditContract && (<>
               <div>
                 <Label>Posto *</Label>
                 <Select value={editForm.position} onValueChange={v => ef("position", v)}>
@@ -1693,6 +1733,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                   </SelectContent>
                 </Select>
               </div>
+              </>)}
             </div>
           </CardContent>
         </Card>
@@ -1714,7 +1755,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
           <TabsTrigger value="timerecords"><Clock className="w-4 h-4 mr-2" />Ponto</TabsTrigger>
           <TabsTrigger value="schedules"><Calendar className="w-4 h-4 mr-2" />Horário</TabsTrigger>
         </TabsList>
-        <TabsContent value="documents" className="mt-4"><DocumentsTab employeeId={employeeId} /></TabsContent>
+        <TabsContent value="documents" className="mt-4"><DocumentsTab employeeId={employeeId} access={access} /></TabsContent>
         <TabsContent value="timerecords" className="mt-4"><TimeRecordsTab employeeId={employeeId} /></TabsContent>
         <TabsContent value="schedules" className="mt-4"><SchedulesTab employeeId={employeeId} /></TabsContent>
       </Tabs>
