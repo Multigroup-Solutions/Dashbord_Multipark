@@ -473,7 +473,7 @@ Os dois erros do broadcast 8 resolvem-se do lado da Meta, não no código:
 
 ## Como configurar o template no WhatsApp Manager (para o link do formulário)
 1. Cria um template (categoria Utility/Marketing) com o texto do pedido de disponibilidade.
-2. Adiciona um **botão "Visit website" com URL DINÂMICO**: URL = `{AVAILABILITY_FORM_URL}?token={{1}}` (o `{{1}}` TEM de ficar no fim). Ex.: `https://disponibilidade.multipark.pt?token={{1}}`.
+2. Adiciona um **botão "Visit website" com URL DINÂMICO**: URL = `{AVAILABILITY_FORM_URL}?token={{1}}` (o `{{1}}` TEM de ficar no fim). Ex.: `https://multidriver.pt/availability?token={{1}}`.
 3. Submete para aprovação. Quando APPROVED, mete o nome exato no dialog do broadcast (ExtrasDiaPage) e envia com um `weekStart` selecionado.
 4. O backend injeta o token JWT single-use como valor de `{{1}}` (um por extra). A app externa lê `?token=` e chama `GET /api/v1/availability-form/context?token=` (X-API-Key + scope read) → mostra o formulário; no submit chama `POST /api/v1/availability-form/submit` (scope write). O token é consumido no 1º submit.
 - Alternativa (sem botão URL): meter o link no corpo via um parâmetro de body — nesse caso configurar `{{N}}` no texto e passar o link completo como `templateParams`. O código atual usa o botão URL por defeito.
