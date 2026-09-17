@@ -1,9 +1,82 @@
 import { describe, expect, it } from "vitest";
-import { mapWebsiteDay, normalizeEmail, parseFreeTextRange } from "./webIntake";
+import {
+  SLOT_RANGES,
+  mapWebsiteDay,
+  normalizeEmail,
+  parseFreeTextRange,
+  planCostCenterAssignment,
+  resolveApprovalCostCenter,
+} from "./webIntake";
+import type { ProjectNode } from "./employeeCity";
 
 describe("normalizeEmail", () => {
   it("lowercases and trims", () => {
     expect(normalizeEmail("  Joao.Silva@Gmail.COM ")).toBe("joao.silva@gmail.com");
+  });
+});
+
+// ─── Aprovação: centro de custos (cidade) ───────────────────────────────────
+
+const HIERARCHY: ProjectNode[] = [
+  { id: 1, parentId: null, name: "Multipark", level: "group" },
+  { id: 10, parentId: 1, name: "Lisboa", level: "city" },
+  { id: 20, parentId: 1, name: "Porto", level: "city" },
+  { id: 30, parentId: 1, name: "Faro", level: "city" },
+  { id: 100, parentId: 10, name: "Airpark", level: "brand" },
+  { id: 101, parentId: 100, name: "Airpark Lisboa Parque 1", level: "project" },
+  { id: 900, parentId: null, name: "Marketing Geral", level: "project" },
+];
+
+describe("resolveApprovalCostCenter", () => {
+  it("aceita um nó de cidade (o caso normal da UI)", () => {
+    expect(resolveApprovalCostCenter(HIERARCHY, 20)).toEqual({ projectId: 20, projectName: "Porto", city: "porto" });
+  });
+  it("aceita um descendente da cidade e resolve a cidade pela árvore", () => {
+    expect(resolveApprovalCostCenter(HIERARCHY, 101)).toEqual({
+      projectId: 101,
+      projectName: "Airpark Lisboa Parque 1",
+      city: "lisboa",
+    });
+  });
+  it("recusa um centro de custos inexistente", () => {
+    expect(() => resolveApprovalCostCenter(HIERARCHY, 999)).toThrow(/inexistente/);
+  });
+  it("recusa um nó que não pertence a nenhuma cidade (ficaria invisível às cidades)", () => {
+    expect(() => resolveApprovalCostCenter(HIERARCHY, 900)).toThrow(/não pertence a nenhuma cidade/);
+    // o grupo raiz também não é uma cidade
+    expect(() => resolveApprovalCostCenter(HIERARCHY, 1)).toThrow(/não pertence a nenhuma cidade/);
+  });
+});
+
+describe("planCostCenterAssignment", () => {
+  it("ficha criada agora: já nasceu com o centro de custos, nada a atribuir", () => {
+    expect(planCostCenterAssignment(null, 10, true)).toEqual({ assign: false, outcome: "assigned_on_create" });
+  });
+  it("ficha existente sem centro de custos → atribui o escolhido", () => {
+    expect(planCostCenterAssignment(null, 10, false)).toEqual({ assign: true, outcome: "assigned" });
+    expect(planCostCenterAssignment(undefined, 10, false)).toEqual({ assign: true, outcome: "assigned" });
+  });
+  it("ficha existente já com o mesmo centro → nada a fazer", () => {
+    expect(planCostCenterAssignment(10, 10, false)).toEqual({ assign: false, outcome: "already_same" });
+  });
+  it("ficha existente com OUTRO centro → mantém (a ficha é a fonte de verdade)", () => {
+    expect(planCostCenterAssignment(20, 10, false)).toEqual({ assign: false, outcome: "kept_existing" });
+  });
+});
+
+// ─── Slots do formulário do site ────────────────────────────────────────────
+
+describe("SLOT_RANGES", () => {
+  it("a manhã começa às 03h (site multidriver desde 2026-09-17)", () => {
+    expect(SLOT_RANGES["03H-08H"]).toEqual({ from: 3, to: 8 });
+    expect(SLOT_RANGES["03H-15H"]).toEqual({ from: 3, to: 15 });
+  });
+  it("os slots antigos 04H-* continuam aceites (submissões da versão anterior)", () => {
+    expect(SLOT_RANGES["04H-08H"]).toEqual({ from: 4, to: 8 });
+    expect(SLOT_RANGES["04H-15H"]).toEqual({ from: 4, to: 15 });
+  });
+  it("mapWebsiteDay aceita o slot novo da manhã", () => {
+    expect(mapWebsiteDay(["03H-08H"], "")).toEqual({ morning: true, night: false, fromHour: 3, toHour: 8, note: null });
   });
 });
 

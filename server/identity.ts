@@ -175,7 +175,17 @@ export interface ExtraResolution {
 export async function findOrCreateExtraByEmail(
   db: Db,
   rawEmail: string,
-  hints?: { fullName?: string | null; phone?: string | null; nif?: string | null },
+  hints?: {
+    fullName?: string | null;
+    phone?: string | null;
+    nif?: string | null;
+    /**
+     * Centro de custos (projeto) a atribuir SÓ quando a ficha é criada aqui.
+     * Numa ficha existente nunca se mexe no centro de custos — quem decide
+     * isso é quem chama (ver `approveApplication`), com a regra à vista.
+     */
+    projectId?: number | null;
+  },
 ): Promise<ExtraResolution> {
   const email = normalizeEmail(rawEmail);
   if (!email) throw new Error("Email em falta");
@@ -218,6 +228,7 @@ export async function findOrCreateExtraByEmail(
     position: "extra",
     contractType: "extra",
     userId: user?.id ?? null,
+    projectId: hints?.projectId ?? null,
     isActive: 1,
   });
   const id = Number((result as any)[0]?.insertId ?? (result as any).insertId);
@@ -227,7 +238,7 @@ export async function findOrCreateExtraByEmail(
     action: "employee_autocreate",
     entity: "employees",
     entityId: id,
-    details: `[Website] Extra pendente auto-criado: ${fullName} <${email}>${user ? ` (ligado ao utilizador ${user.id})` : " (sem conta de login)"}`,
+    details: `[Website] Extra pendente auto-criado: ${fullName} <${email}>${user ? ` (ligado ao utilizador ${user.id})` : " (sem conta de login)"}${hints?.projectId ? ` (centro de custos ${hints.projectId})` : ""}`,
   });
 
   return { id, created: true, matchedBy: "created", userId: user?.id ?? null };

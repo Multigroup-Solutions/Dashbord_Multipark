@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { projectScope, campaignScope, bookingHistoryScope, scopedProjectIds, assertEmployeeAccess } from './cityScope';
+import { projectScope, campaignScope, bookingHistoryScope, scopedProjectIds, assertEmployeeAccess, assertProjectAccess } from './cityScope';
 import { assessmentAnswers, gradeAssessment, trainingResultScope } from './trainingAssessments';
 import { z } from "zod";
 import * as XLSX from "xlsx";
@@ -7873,14 +7873,18 @@ export const appRouter = router({
         return report;
       }),
 
-    // Aprovar = criar (ou ligar a) um employee extra com o mesmo email.
+    // Aprovar = criar (ou ligar a) um employee extra com o mesmo email e
+    // alocá-lo ao centro de custos (cidade) escolhido por quem aprova. O
+    // middleware já recusa um `projectId` fora das cidades do utilizador
+    // (`hasForeignCityFilter`); o `assertProjectAccess` aqui é a segunda linha.
     approve: protectedProcedure
-      .input(z.object({ id: z.number() }))
+      .input(z.object({ id: z.number(), projectId: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
+        assertProjectAccess(input.projectId);
         const { approveApplication } = await import("./webIntake");
         try {
-          return await approveApplication(input.id, ctx.user.id);
+          return await approveApplication(input.id, ctx.user.id, { projectId: input.projectId });
         } catch (err: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao aprovar" });
         }

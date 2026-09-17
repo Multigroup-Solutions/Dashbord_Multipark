@@ -15,10 +15,12 @@
  */
 import { z } from "zod";
 import { asc, desc, eq, sql } from "drizzle-orm";
-import { getDb, logActivity } from "./db";
-import { driverApplications } from "../drizzle/schema";
+import { getDb, getProjects, logActivity } from "./db";
+import { driverApplications, employees } from "../drizzle/schema";
 import { setMyAvailability, weekDays, type SetDayInput } from "./extrasAvailability";
 import { findOrCreateExtraByEmail } from "./identity";
+import { resolveCityFromProjects, type ProjectNode } from "./employeeCity";
+import { CITY_LABELS, type CityKey } from "../shared/city";
 import { normalizeEmail } from "../shared/email";
 import { normalizePhoneForStorage } from "../shared/phone";
 
@@ -163,12 +165,86 @@ export async function setApplicationStatus(
     .where(eq(driverApplications.id, id));
 }
 
+// ─── 1c. Aprovação: centro de custos (cidade) do extra ──────────────────────
+//
+// Quem aprova escolhe a cidade onde o extra fica alocado (Lisboa / Porto /
+// Faro) — o mesmo "Centro de Custos" da ficha de RH. Sem isto o extra nascia
+// com `projectId = NULL` e só quem tem acesso a TODAS as cidades o via
+// (`projectScope(employees.projectId)` exclui NULL): para um utilizador de
+// Lisboa, o extra recém-aprovado simplesmente não existia.
+
+export interface ApprovalCostCenter {
+  projectId: number;
+  projectName: string;
+  city: CityKey;
+}
+
+/**
+ * Valida o centro de custos escolhido na aprovação: tem de existir e de
+ * pertencer a uma cidade conhecida (o próprio nó `level='city'` ou um
+ * descendente — a UI oferece só cidades, mas a regra aceita qualquer nó que
+ * resolva para uma). PURA — testável sem BD.
+ */
+export function resolveApprovalCostCenter(projects: ProjectNode[], projectId: number): ApprovalCostCenter {
+  const byId = new Map(projects.map((p) => [p.id, p]));
+  const node = byId.get(projectId);
+  if (!node) throw new Error("Centro de custos inexistente");
+  const city = resolveCityFromProjects(byId, projectId);
+  if (!city) {
+    throw new Error(
+      `O centro de custos "${node.name}" não pertence a nenhuma cidade (Lisboa, Porto ou Faro). Escolhe a cidade onde o extra vai trabalhar.`,
+    );
+  }
+  return { projectId, projectName: node.name, city };
+}
+
+export type CostCenterOutcome =
+  /** Ficha criada agora, já com o centro de custos escolhido. */
+  | "assigned_on_create"
+  /** Ficha existente sem centro de custos → ficou com o escolhido. */
+  | "assigned"
+  /** Ficha existente já tinha exatamente este centro de custos. */
+  | "already_same"
+  /** Ficha existente tinha OUTRO centro de custos — mantido (a ficha é a fonte de verdade). */
+  | "kept_existing";
+
+/**
+ * Regra ÚNICA de atribuição do centro de custos na aprovação. Uma ficha que
+ * já tem centro de custos nunca é movida por uma candidatura do site — quem
+ * quiser mudar a cidade de alguém faz isso na ficha, de propósito.
+ */
+export function planCostCenterAssignment(
+  existingProjectId: number | null | undefined,
+  requestedProjectId: number,
+  created: boolean,
+): { assign: boolean; outcome: CostCenterOutcome } {
+  if (created) return { assign: false, outcome: "assigned_on_create" };
+  if (existingProjectId == null) return { assign: true, outcome: "assigned" };
+  if (existingProjectId === requestedProjectId) return { assign: false, outcome: "already_same" };
+  return { assign: false, outcome: "kept_existing" };
+}
+
+export interface ApproveApplicationResult {
+  employeeId: number;
+  employeeCreated: boolean;
+  costCenter: ApprovalCostCenter & {
+    outcome: CostCenterOutcome;
+    /** Só em `kept_existing`: o centro de custos que a ficha já tinha. */
+    existingProjectName: string | null;
+  };
+}
+
 /**
  * Aprova uma candidatura: cria (ou liga a) um employee extra com o mesmo
- * email e marca a candidatura como aprovada. Idempotente — re-aprovar liga
- * ao mesmo employee.
+ * email, aloca-o ao centro de custos escolhido (ver `planCostCenterAssignment`)
+ * e marca a candidatura como aprovada. Idempotente — re-aprovar liga ao mesmo
+ * employee e não move quem já tem centro de custos.
  */
-export async function approveApplication(id: number, reviewedById: number): Promise<{ employeeId: number; employeeCreated: boolean }> {
+export async function approveApplication(
+  id: number,
+  reviewedById: number,
+  opts: { projectId: number },
+): Promise<ApproveApplicationResult> {
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível");
 
@@ -176,26 +252,52 @@ export async function approveApplication(id: number, reviewedById: number): Prom
   if (rows.length === 0) throw new Error("Candidatura não encontrada");
   const app = rows[0];
 
+  const projects = (await getProjects()) as ProjectNode[];
+  const costCenter = resolveApprovalCostCenter(projects, opts.projectId);
+
   const { id: employeeId, created } = await findOrCreateExtraByEmail(db, app.email, {
     fullName: app.fullName,
     phone: app.phone,
     nif: app.nif,
+    projectId: costCenter.projectId,
   });
+
+  // Ficha existente: só se lhe mexe no centro de custos se não tiver nenhum.
+  let existingProjectId: number | null = null;
+  if (!created) {
+    const [emp] = await db.select({ projectId: employees.projectId }).from(employees).where(eq(employees.id, employeeId)).limit(1);
+    existingProjectId = emp?.projectId ?? null;
+  }
+  const plan = planCostCenterAssignment(existingProjectId, costCenter.projectId, created);
+  if (plan.assign) {
+    await db.update(employees).set({ projectId: costCenter.projectId }).where(eq(employees.id, employeeId));
+  }
+  const existingProjectName =
+    plan.outcome === "kept_existing" ? (projects.find((p) => p.id === existingProjectId)?.name ?? `#${existingProjectId}`) : null;
+
   const now = new Date().toISOString().slice(0, 19).replace("T", " ");
   await db
     .update(driverApplications)
     .set({ status: "approved", employeeId, reviewedById, reviewedAt: now })
     .where(eq(driverApplications.id, id));
 
+  const costCenterNote =
+    plan.outcome === "kept_existing"
+      ? `centro de custos mantido: ${existingProjectName} (pedido: ${costCenter.projectName})`
+      : `centro de custos: ${costCenter.projectName} (${CITY_LABELS[costCenter.city]})`;
   await logActivity({
     userId: reviewedById,
     action: "driver_application_approve",
     entity: "driver_applications",
     entityId: id,
-    details: `Candidatura aprovada: ${app.fullName} <${app.email}> → employee ${employeeId}${created ? " (criado)" : " (existente)"}`,
+    details: `Candidatura aprovada: ${app.fullName} <${app.email}> → employee ${employeeId}${created ? " (criado)" : " (existente)"} · ${costCenterNote}`,
   });
 
-  return { employeeId, employeeCreated: created };
+  return {
+    employeeId,
+    employeeCreated: created,
+    costCenter: { ...costCenter, outcome: plan.outcome, existingProjectName },
+  };
 }
 
 // ─── 2. Disponibilidade semanal por email ───────────────────────────────────
@@ -206,9 +308,15 @@ export async function approveApplication(id: number, reviewedById: number): Prom
 const WEBSITE_WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
 
 // Horas em formato "estendido": to > 24 = madrugada do dia seguinte.
-const SLOT_RANGES: Record<string, { from: number; to: number }> = {
-  "04H-08H": { from: 4, to: 8 },
-  "04H-15H": { from: 4, to: 15 },
+// A manhã começa às 03h (turno "Manhã 03h–15h" da app; pedido do Jorge
+// 2026-09-17 — o site multidriver passou de 04H para 03H). Os slots "04H-*"
+// ficam aceites para submissões antigas/páginas ainda abertas com a versão
+// anterior do formulário — remover uma chave aqui é perder disponibilidades.
+export const SLOT_RANGES: Record<string, { from: number; to: number }> = {
+  "03H-08H": { from: 3, to: 8 },
+  "03H-15H": { from: 3, to: 15 },
+  "04H-08H": { from: 4, to: 8 }, // legado (formulário até 2026-09-17)
+  "04H-15H": { from: 4, to: 15 }, // legado (formulário até 2026-09-17)
   "08H-15H": { from: 8, to: 15 },
   "15H-01H": { from: 15, to: 25 },
   "18H-01H": { from: 18, to: 25 },
