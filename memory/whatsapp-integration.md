@@ -61,6 +61,10 @@ agora exportado) + `server/webIntake.test.ts`; repo **multidriver-website**
   "janela aberta"/"fora da janela" mantêm-se). RULE: a conversa SELECIONADA fica sempre visível
   mesmo depois de `markRead` — abrir marca como lida e sem isto a linha desaparecia debaixo do
   clique. Estado vazio próprio ("Sem mensagens por ler.").
+- Inbox: botão **"Marcar como não lida"** no cabeçalho da thread → `whatsapp.markUnread` →
+  `markConversationUnread` faz `unreadCount = GREATEST(unreadCount, 1)` (o mesmo contador que o
+  webhook incrementa; nunca baixa um contador real). A UI fecha a thread ao marcar — abrir volta a
+  marcar como lida, como no WhatsApp — e a conversa reaparece no filtro "Não lidas" com o badge.
 - Site: `TIME_SLOTS` passou de `04H-08H`/`04H-15H` para `03H-08H`/`03H-15H` (turno "Manhã
   03h–15h" da app); texto de ajuda idem. Dashboard: `SLOT_RANGES` ganhou as chaves `03H-*` e
   **mantém as `04H-*` como legado** — o rótulo do slot é o formato de rede; remover a chave era

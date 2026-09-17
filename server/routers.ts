@@ -8001,6 +8001,18 @@ export const appRouter = router({
         return { success: true };
       }),
 
+    // Inverso do markRead: devolve a conversa ao filtro "Não lidas" (pelo menos
+    // 1 por ler, sem baixar um contador real). Ver markConversationUnread.
+    markUnread: protectedProcedure
+      .input(z.object({ conversationId: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { markConversationUnread } = await import("./whatsappInbox");
+        const ok = await markConversationUnread(input.conversationId);
+        if (!ok) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+        return { success: true };
+      }),
+
     // Resposta em texto livre — a validação da janela de 24h é feita no servidor.
     reply: protectedProcedure
       .input(z.object({ conversationId: z.number(), text: z.string().min(1).max(4000) }))

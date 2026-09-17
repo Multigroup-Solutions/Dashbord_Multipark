@@ -27,6 +27,7 @@ import {
   ArrowLeft,
   Hourglass,
   Lock,
+  MailOpen,
   Search,
   X,
 } from "lucide-react";
@@ -140,6 +141,17 @@ export default function WhatsAppInboxPage() {
 
   const markRead = trpc.whatsapp.markRead.useMutation({
     onSuccess: () => conversations.refetch(),
+  });
+  // "Marcar como não lida": fecha a thread (abrir volta a marcar como lida) e
+  // a conversa regressa ao filtro "Não lidas" com o badge verde.
+  const markUnread = trpc.whatsapp.markUnread.useMutation({
+    onSuccess: () => {
+      setSelectedId(null);
+      setText("");
+      conversations.refetch();
+      toast.success("Conversa marcada como não lida.");
+    },
+    onError: (e) => toast.error(e.message),
   });
   const reply = trpc.whatsapp.reply.useMutation({
     onSuccess: () => {
@@ -417,6 +429,19 @@ export default function WhatsAppInboxPage() {
               )}
               {t && <div className="text-[11px] text-muted-foreground">{t.phoneE164}</div>}
             </div>
+            {t && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="ml-auto h-8 shrink-0"
+                title="Volta a pôr esta conversa em “Não lidas” para retomar mais tarde"
+                disabled={markUnread.isPending}
+                onClick={() => markUnread.mutate({ conversationId: t.conversationId })}
+              >
+                <MailOpen className="h-3.5 w-3.5 mr-1" />
+                {isMobile ? "Não lida" : "Marcar como não lida"}
+              </Button>
+            )}
           </div>
 
           <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-muted/20">

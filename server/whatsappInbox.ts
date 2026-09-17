@@ -6,7 +6,7 @@
  * usada quer pela UI (para não duplicar lógica) quer pela validação server-side
  * do `reply`.
  */
-import { desc, eq, inArray } from "drizzle-orm";
+import { desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { employees, whatsappConversations, whatsappMessages } from "../drizzle/schema";
 import { sendTextMessage } from "./whatsapp";
@@ -261,6 +261,23 @@ export async function markConversationRead(conversationId: number): Promise<void
     .update(whatsappConversations)
     .set({ unreadCount: 0 })
     .where(eq(whatsappConversations.id, conversationId));
+}
+
+/**
+ * Marcar como NÃO lida (pedido do Jorge 2026-09-17): volta a pôr a conversa no
+ * filtro "Não lidas" para ser retomada mais tarde. `unreadCount` é o mesmo
+ * contador que o webhook incrementa; aqui garante-se pelo menos 1 sem nunca
+ * BAIXAR um contador real (se entretanto chegaram 3 mensagens, ficam 3).
+ * Devolve `false` quando a conversa não existe.
+ */
+export async function markConversationUnread(conversationId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const [result] = await db
+    .update(whatsappConversations)
+    .set({ unreadCount: sql`GREATEST(${whatsappConversations.unreadCount}, 1)` })
+    .where(eq(whatsappConversations.id, conversationId));
+  return Number((result as { affectedRows?: number }).affectedRows ?? 0) > 0;
 }
 
 // ─── Resposta 1-a-1 (texto livre, só janela aberta) ─────────────────────────
