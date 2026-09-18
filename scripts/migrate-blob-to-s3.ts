@@ -35,6 +35,18 @@
  *   ./node_modules/.bin/tsx scripts/migrate-blob-to-s3.ts --table expenses # só uma tabela
  *   ./node_modules/.bin/tsx scripts/migrate-blob-to-s3.ts --limit 20 --apply
  *   ./node_modules/.bin/tsx scripts/migrate-blob-to-s3.ts --report mig.json
+ *   ./node_modules/.bin/tsx scripts/migrate-blob-to-s3.ts --verify         # confirmar antes de esvaziar o Blob
+ *
+ * ── DEPOIS DA MIGRAÇÃO: ESVAZIAR A STORE ────────────────────────────────────
+ * No Hobby o bloqueio levanta-se sozinho ao fim de 30 dias, mas volta a cair
+ * se a store continuar acima do limite (1 GB). Migrar não baixa a utilização —
+ * os originais continuam lá. Por isso, depois de `--verify` dar 100%, esvaziar
+ * a store é o que impede isto de se repetir.
+ *
+ * O esvaziamento NÃO é feito aqui de propósito: apagar o único outro exemplar
+ * dos ficheiros é irreversível e merece um passo humano deliberado, depois de
+ * a verificação passar. Faz-se no dashboard do Vercel ou com
+ * `vercel blob empty-store <store-id>`. `del()` no Blob é gratuito.
  *
  * Lê `DATABASE_URL` e as quatro `AWS_S3_*` do `.env`. Abre a sua própria pool
  * (não passa por `getDb()`, para não disparar o `ensureRecentSchema`).
@@ -109,6 +121,7 @@ const TARGETS: readonly Target[] = [
 
 const args = process.argv.slice(2);
 const apply = args.includes("--apply");
+const verify = args.includes("--verify");
 const tableIdx = args.indexOf("--table");
 const onlyTable = tableIdx >= 0 ? args[tableIdx + 1] : null;
 const limitIdx = args.indexOf("--limit");
@@ -158,6 +171,63 @@ interface RowResult {
   error?: string;
 }
 
+/**
+ * Confirma que TODAS as linhas que já apontam para o S3 têm lá mesmo o ficheiro.
+ *
+ * É o passo que autoriza esvaziar a store do Blob: enquanto isto não der 100%,
+ * apagar os originais destrói o único exemplar de alguma coisa. Lê através do
+ * `storageGet`, cuja URL vazia significa "não existe" (usa `HeadObject`, que a
+ * permissão `s3:GetObject` já cobre).
+ */
+async function runVerify(pool: mysql.Pool, storageGet: (k: string) => Promise<{ url: string }>): Promise<number> {
+  const targets = onlyTable ? TARGETS.filter((t) => t.table === onlyTable) : TARGETS;
+  let checked = 0, missing = 0, stillOnBlob = 0;
+
+  for (const t of targets) {
+    let rows: any[];
+    try {
+      const [r] = await pool.query(
+        `SELECT \`${t.idColumn}\` AS id, \`${t.urlColumn}\` AS url FROM \`${t.table}\`
+         WHERE \`${t.urlColumn}\` IS NOT NULL AND \`${t.urlColumn}\` <> '' ORDER BY \`${t.idColumn}\``,
+      );
+      rows = r as any[];
+    } catch {
+      continue; // tabela inexistente neste ambiente
+    }
+
+    for (const row of rows) {
+      if (isVercelBlobUrl(row.url)) {
+        stillOnBlob++;
+        console.error(`  [por migrar] ${t.table}#${row.id}.${t.urlColumn}`);
+        continue;
+      }
+      // Só interessam as que apontam para o nosso storage.
+      if (!/^https?:\/\//i.test(row.url)) continue;
+      let key: string;
+      try {
+        key = decodeURIComponent(new URL(row.url).pathname.replace(/^\/+/, ""));
+      } catch {
+        continue;
+      }
+      checked++;
+      const got = await storageGet(key);
+      if (!got.url) {
+        missing++;
+        console.error(`  [EM FALTA]   ${t.table}#${row.id}.${t.urlColumn}  ${key}`);
+      }
+    }
+  }
+
+  console.log(`\n${"─".repeat(60)}`);
+  console.log(`Verificadas: ${checked}   Em falta no S3: ${missing}   Ainda no Blob: ${stillOnBlob}`);
+  if (missing === 0 && stillOnBlob === 0) {
+    console.log("✓ Tudo no S3. Podes esvaziar a store do Blob em segurança.");
+    return 0;
+  }
+  console.log("✗ NÃO esvazies a store do Blob — há ficheiros por migrar ou em falta.");
+  return 1;
+}
+
 async function main() {
   const targets = onlyTable ? TARGETS.filter((t) => t.table === onlyTable) : TARGETS;
   if (!targets.length) {
@@ -166,8 +236,17 @@ async function main() {
   }
 
   // O storage.ts é importado DEPOIS do dotenv, para ler as envs já carregadas.
-  const { storagePut } = await import("../server/storage");
+  const { storagePut, storageGet } = await import("../server/storage");
   const pool = mysql.createPool(process.env.DATABASE_URL!);
+
+  if (verify) {
+    console.log("VERIFICAÇÃO — confirma que o que a BD aponta está mesmo no S3\n");
+    try {
+      process.exit(await runVerify(pool, storageGet));
+    } finally {
+      await pool.end();
+    }
+  }
 
   console.log(apply ? "MODO REAL — escreve no S3 e na BD\n" : "SIMULAÇÃO — nada é escrito (usa --apply para migrar)\n");
 
