@@ -1660,7 +1660,10 @@ export const appRouter = router({
         const url = row.expense.invoiceImageUrl;
         if (!key && !url) return { url: null as string | null, isPdf: false, signed: false, expiresIn: 0 };
         const { storagePresignGet } = await import("./storage");
-        const r = await storagePresignGet((key || url) as string);
+        // A key é preferida (assinável no S3), mas as despesas anteriores ao S3
+        // guardam a key crua da era Blob — que no S3 não existe. A URL vai como
+        // fallback para esses ficheiros continuarem a abrir.
+        const r = await storagePresignGet((key || url) as string, { fallbackUrl: url });
         const isPdf = /\.pdf(\?|$)/i.test(key || url || "");
         return { url: r.url || null, isPdf, signed: r.signed, expiresIn: r.expiresIn };
       }),
@@ -2855,7 +2858,7 @@ export const appRouter = router({
           if (!doc) throw new TRPCError({ code: "NOT_FOUND" });
           await assertCanViewDocuments(ctx.user, doc.employeeId, "Sem permissão para abrir este documento");
           const { storagePresignGet } = await import("./storage");
-          const r = await storagePresignGet(doc.fileKey || doc.fileUrl);
+          const r = await storagePresignGet(doc.fileKey || doc.fileUrl, { fallbackUrl: doc.fileUrl });
           await logActivity({ userId: ctx.user.id, action: "view", entity: "employee_document", entityId: doc.id, details: `${doc.docType} de #${doc.employeeId}` });
           return { url: r.url, signed: r.signed, expiresIn: r.expiresIn, mimeType: doc.mimeType };
         }),

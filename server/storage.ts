@@ -100,6 +100,71 @@ function s3NormalizeKey(input: string): string {
   return input.replace(/^\/+/, "");
 }
 
+/** True para uma string que é uma URL absoluta (e não uma key crua). */
+function isAbsoluteUrl(value: string | null | undefined): value is string {
+  return !!value && /^https?:\/\//i.test(value);
+}
+
+/**
+ * A URL aponta para o NOSSO bucket?
+ *
+ * O `s3NormalizeKey` reduz qualquer URL ao seu pathname, o que é correto para
+ * uma URL deste bucket e ERRADO para a de outro backend: uma URL do Vercel
+ * Blob (era pré-S3) vira uma key que seria procurada no S3, onde nunca esteve.
+ * Sem esta distinção o ficheiro antigo é dado como inexistente — ou, pior, um
+ * `storageDelete` apontaria a uma key deste bucket que não é a dele.
+ *
+ * Confirma-se pelo HOST, não pelo backend configurado: o que decide onde um
+ * ficheiro está é a URL que ficou gravada na BD, não a env de hoje.
+ */
+function isS3OwnedUrl(env: S3Env, value: string): boolean {
+  if (!isAbsoluteUrl(value)) return false;
+
+  let host: string;
+  try {
+    host = new URL(value).host.toLowerCase();
+  } catch {
+    return false;
+  }
+
+  // A base pública configurada — o endpoint do bucket ou um CDN à frente dele.
+  try {
+    if (host === new URL(env.publicBaseUrl).host.toLowerCase()) return true;
+  } catch {
+    // `S3_PUBLIC_BASE_URL` malformada: cai no padrão virtual-hosted abaixo.
+  }
+
+  // Virtual-hosted: `<bucket>.s3.<region>.amazonaws.com` (a forma que o
+  // `s3PublicUrl` constrói) e a variante sem região.
+  const bucket = env.bucket.toLowerCase();
+  return host.startsWith(`${bucket}.s3.`) && host.endsWith(".amazonaws.com");
+}
+
+/**
+ * O objeto existe neste bucket?
+ *
+ * `HeadObject` é permitido por `s3:GetObject` — o utilizador IAM não pode
+ * listar o bucket (ver `scripts/provision-s3-bucket.ps1`).
+ *
+ * ⚠️ É JUSTAMENTE essa ausência de `s3:ListBucket` que faz a AWS responder
+ * **403 em vez de 404** a um objeto que não existe, pelo que os dois estados
+ * contam aqui como "não está cá". Qualquer outro erro (rede, 5xx, throttling)
+ * é ambíguo: assume-se que existe, porque um link que falha é melhor do que
+ * esconder um ficheiro que está lá.
+ */
+async function s3ObjectExists(env: S3Env, key: string): Promise<boolean> {
+  try {
+    const client = await getS3Client(env);
+    const { HeadObjectCommand } = await import("@aws-sdk/client-s3");
+    await client.send(new HeadObjectCommand({ Bucket: env.bucket, Key: key }));
+    return true;
+  } catch (err: any) {
+    const status = err?.$metadata?.httpStatusCode;
+    if (status === 404 || status === 403) return false;
+    return true;
+  }
+}
+
 function ensureUploadsDir() {
   if (!fs.existsSync(UPLOADS_DIR)) {
     fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -200,6 +265,14 @@ export async function storageDelete(keyOrUrl: string | null | undefined): Promis
   try {
     const s3 = readS3Env();
     if (s3) {
+      // URL de outro backend (Blob): reduzi-la a uma key e apagá-la NESTE
+      // bucket apagaria o objeto errado se a key existisse cá. O ficheiro do
+      // Blob fica por apagar — é o leak já documentado em
+      // `memory/storage-backends-s3.md`, preferível a uma remoção errada.
+      if (isAbsoluteUrl(keyOrUrl) && !isS3OwnedUrl(s3, keyOrUrl)) {
+        console.warn("[storage] delete ignorado: ficheiro noutro backend:", keyOrUrl.slice(0, 120));
+        return;
+      }
       const key = s3NormalizeKey(keyOrUrl);
       if (!key) return;
       const client = await getS3Client(s3);
@@ -232,12 +305,21 @@ export async function storageDelete(keyOrUrl: string | null | undefined): Promis
  */
 export async function storagePresignGet(
   keyOrUrl: string,
-  expiresSeconds = 600,
+  opts: { fallbackUrl?: string | null; expiresSeconds?: number } = {},
 ): Promise<{ url: string; expiresIn: number; signed: boolean }> {
+  const { fallbackUrl = null, expiresSeconds = 600 } = opts;
   const s3 = readS3Env();
+
   if (s3) {
+    // Ficheiro de OUTRO backend (Vercel Blob). A URL é dele, é pública e
+    // continua a funcionar — assiná-la contra este bucket daria um link para
+    // um objeto que nunca esteve cá.
+    if (isAbsoluteUrl(keyOrUrl) && !isS3OwnedUrl(s3, keyOrUrl)) {
+      return { url: keyOrUrl, expiresIn: 0, signed: false };
+    }
+
     const key = s3NormalizeKey(keyOrUrl);
-    if (key) {
+    if (key && (await s3ObjectExists(s3, key))) {
       const client = await getS3Client(s3);
       const { GetObjectCommand } = await import("@aws-sdk/client-s3");
       const { getSignedUrl } = await import("@aws-sdk/s3-request-presigner");
@@ -245,8 +327,22 @@ export async function storagePresignGet(
       const url = await getSignedUrl(client, new GetObjectCommand({ Bucket: s3.bucket, Key: key }), { expiresIn });
       return { url, expiresIn, signed: true };
     }
+
+    // A key não está no S3. É AQUI que o ficheiro antigo se recupera: as linhas
+    // da era Blob guardam a key CRUA em `*Key` e a URL do Blob em `*Url`, e os
+    // chamadores preferem a key — sem este fallback a key seria assinada contra
+    // o S3 e o utilizador receberia o XML de AccessDenied da AWS.
+    if (isAbsoluteUrl(fallbackUrl) && !isS3OwnedUrl(s3, fallbackUrl)) {
+      return { url: fallbackUrl, expiresIn: 0, signed: false };
+    }
+
+    // Sem fallback: o documento não existe mesmo. URL vazia mantém a semântica
+    // do `storageGet` e deixa o chamador responder "sem documento" em vez de
+    // reencaminhar o utilizador para uma página de erro da AWS.
+    return { url: "", expiresIn: 0, signed: false };
   }
-  if (/^https?:\/\//.test(keyOrUrl)) return { url: keyOrUrl, expiresIn: 0, signed: false };
+
+  if (isAbsoluteUrl(keyOrUrl)) return { url: keyOrUrl, expiresIn: 0, signed: false };
   const got = await storageGet(keyOrUrl);
   return { url: got.url, expiresIn: 0, signed: false };
 }

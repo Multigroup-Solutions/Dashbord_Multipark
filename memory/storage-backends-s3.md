@@ -35,6 +35,12 @@ never migrated).
   `[storage] delete falhou: …`.
 - `storagePresignPut(relKey, contentType, expiresSeconds = 60) → { key, uploadUrl, url, expiresIn }`
   — **S3-only, throws** when S3 isn't configured. No route wired to it yet.
+- `storagePresignGet(keyOrUrl, { fallbackUrl?, expiresSeconds = 600 }) → { url, expiresIn, signed }`
+  — URL de leitura. **Decide pelo HOST da URL, não pelo backend configurado**: uma URL
+  que não é deste bucket (Vercel Blob) volta tal e qual, sem assinatura. Uma key só é
+  assinada depois de um `HeadObject` confirmar que o objeto existe; se não existir cai no
+  `fallbackUrl` e, à falta dele, devolve `url: ""` (mesma semântica de "não existe" do
+  `storageGet`). Ver o changelog 2026-09-18.
 
 ## Backend precedence
 1. **S3** when all four of `AWS_S3_REGION`, `AWS_S3_BUCKET_NAME`, `AWS_S3_ACCESS_KEY`,
@@ -78,9 +84,10 @@ fallback):
 - L1606-1607 `expenses.update` — deletes the previous invoice when a new one is sent
 - L1632-1633 `expenses.delete` — deletes the invoice with the expense
 ⚠️ When the fallback fires on a row whose file lives in **Vercel Blob** while S3 is
-active, the delete resolves the blob URL's pathname into an S3 key and no-ops: the
-blob object leaks. Harmless but real — a cross-backend GC would have to key off the
-URL host, not the configured backend.
+active, the blob object leaks: since 2026-09-18 `storageDelete` detects the foreign host
+(`isS3OwnedUrl`) and skips with a warning instead of resolving the blob URL's pathname
+into a key of THIS bucket — which would have deleted the wrong object had that key
+existed. A real cross-backend GC still has to be written, keyed off the URL host.
 Everything else (documents, photos, PDFs, inbound e-mail attachments, generated
 images) only ever calls `storagePut` and leaves orphans behind on delete — that is
 pre-existing behaviour, not something this change introduced.
@@ -92,6 +99,44 @@ pre-existing behaviour, not something this change introduced.
 - `memory/reference.md` — index
 
 ## Changelog
+
+### 2026-09-18 — Comprovativos ANTIGOS davam AccessDenied da AWS ao abrir
+**Type**: fix (bug de produção)
+**Scope**: `server/storage.ts`, `server/routers.ts` (2 call sites), novo
+`server/storagePresignGet.test.ts` (sem migração, NÃO commitado/deployed)
+**Sintoma**: abrir o comprovativo de uma despesa antiga devolvia o XML de erro da AWS —
+`AccessDenied … not authorized to perform: s3:ListBucket on … dashboard-multipark-bucket`.
+**Causa** (nada a ver com IAM):
+- Os ficheiros anteriores ao S3 **nunca foram migrados** — continuam no Vercel Blob, com a
+  URL absoluta em `*Url` e a **key CRUA** em `*Key` (o ramo Blob do `storagePut` devolve a
+  mesma key relativa que o ramo S3).
+- `storagePresignGet` reduzia QUALQUER entrada a uma key via `s3NormalizeKey` e assinava-a
+  contra o bucket do S3. Os chamadores preferem a key (`key || url`), por isso uma linha da
+  era Blob era assinada contra um objeto que nunca esteve cá.
+- Como o utilizador IAM **não tem `s3:ListBucket`** (deliberado), a AWS responde a um objeto
+  inexistente com **403 AccessDenied em vez de 404** — e a mensagem nomeia `ListBucket`,
+  que é o que mandava a investigação para o lado errado.
+**Fix**: `isS3OwnedUrl()` (decide pelo host) + `s3ObjectExists()` (probe `HeadObject`; 403 e
+404 contam como ausente, erro ambíguo assume presente e assina na mesma). `storagePresignGet`
+passa a aceitar `fallbackUrl`, que os dois chamadores preenchem com a URL gravada.
+**Porque NÃO se dá `s3:ListBucket` ao utilizador**: não resolvia nada — o objeto continua a
+não existir, só mudaria o 403 para 404 e o ficheiro continuaria fechado. Além disso enfraquecia
+um controlo deliberado (`provision-s3-bucket.ps1` L123-126) e partia o
+`verify-s3-storage.ts` L60-61, que EXIGE 403 no LIST.
+**Bónus de segurança**: o XML da AWS expunha ao utilizador final o ID da conta (`505609702746`)
+e o ARN do utilizador IAM. Deixa de chegar ao browser.
+**`storageDelete`**: ganhou o mesmo guarda de host — deixa de reduzir uma URL do Blob a uma
+key DESTE bucket (apagaria o objeto errado se a key existisse cá). O leak do Blob mantém-se
+por resolver de propósito; ver a decisão em aberto abaixo.
+**Notes**:
+- `./node_modules/.bin/tsc --noEmit` → 0 erros.
+- `./node_modules/.bin/vitest run` → 652 passed / 27 failed, **exatamente** as 27 falhas
+  pré-existentes em 6 ficheiros (DB/Zello). Os 6 testes novos passam e **4 deles falham**
+  contra o código antigo (verificado com `git stash`).
+- ⚠️ Em aberto: os ficheiros do Blob nunca são apagados. Uma GC cross-backend teria de
+  decidir pelo host da URL (agora há `isS3OwnedUrl` para isso) e precisa do
+  `BLOB_READ_WRITE_TOKEN` — que **não deve ser removido do deploy**, senão os ficheiros
+  antigos deixam de abrir.
 
 ### 2026-08-20 (b) — Bucket live + rename `AWS_ACCESS_KEY` → `AWS_S3_ACCESS_KEY`
 **Type**: fix (env contract) + decision
