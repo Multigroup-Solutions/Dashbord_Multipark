@@ -1915,6 +1915,10 @@ export function AvailabilitySection() {
     return previewTemplateBody(p.bodyText, slots, { recipient: waPreviewName, shared: waParam2 });
   }, [templatePreview.data, waTemplate, waPreviewName, waParam2]);
 
+  // Só falta o campo quando o template TEM campo — os sem parâmetros (ex.:
+  // "Morada e regras") nunca preenchem `waParam2` e têm de poder ser enviados.
+  const waMissingParam = !!waTemplate.sharedParam && !waParam2.trim();
+
   function submitBroadcast(testPhone?: string) {
     // Templates sem parâmetros (ex.: "Morada e regras") não têm campo a preencher.
     const bodyParam2 = waTemplate.sharedParam ? waParam2.trim() : "";
@@ -2594,7 +2598,7 @@ export function AvailabilitySection() {
                   <Button
                     variant="outline"
                     className="shrink-0"
-                    disabled={!waParam2.trim() || !waTestPhone.trim() || broadcast.isPending}
+                    disabled={waMissingParam || !waTestPhone.trim() || broadcast.isPending}
                     onClick={() => submitBroadcast(waTestPhone)}
                   >
                     {broadcast.isPending ? <Clock className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
@@ -2633,7 +2637,7 @@ export function AvailabilitySection() {
               </Button>
               <Button
                 className="bg-green-600 hover:bg-green-700 text-white"
-                disabled={!waParam2.trim() || broadcast.isPending || waValidCount === 0}
+                disabled={waMissingParam || broadcast.isPending || waValidCount === 0}
                 onClick={() => submitBroadcast()}
               >
                 {broadcast.isPending ? <Clock className="h-4 w-4 mr-2 animate-spin" /> : <MessageCircle className="h-4 w-4 mr-2" />}
