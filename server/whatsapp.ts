@@ -9,7 +9,12 @@
  *
  * Config por env: WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_API_VERSION
  * (default v21.0).
+ *
+ * Privacidade: os logs e as mensagens de erro nunca levam o número completo —
+ * só os últimos 3 dígitos (`maskPhone`).
  */
+import { maskPhone, maskPhonesInText } from "../shared/maskPhone";
+import { INBOUND_MEDIA_MAX_BYTES } from "../shared/whatsappMedia";
 
 export type WhatsappSendResult =
   | { ok: true; waMessageId: string }
@@ -185,13 +190,13 @@ async function postMessage(
       if ((resp.status === 429 || resp.status >= 500) && attempt < MAX_ATTEMPTS) {
         lastError = detail;
         console.warn(
-          `[WhatsApp] Envio falhou (tentativa ${attempt}, HTTP ${resp.status}): ${detail} — a repetir…`,
+          `[WhatsApp] Envio falhou (tentativa ${attempt}, HTTP ${resp.status}): ${maskPhonesInText(detail)} — a repetir…`,
         );
         await sleep(500 * attempt);
         continue;
       }
 
-      console.warn(`[WhatsApp] Envio falhou (HTTP ${resp.status}): ${detail}`);
+      console.warn(`[WhatsApp] Envio falhou (HTTP ${resp.status}): ${maskPhonesInText(detail)}`);
       return { ok: false, error: detail, code };
     } catch (err: any) {
       lastError = err?.message || String(err);
@@ -208,8 +213,8 @@ async function postMessage(
   return { ok: false, error: lastError };
 }
 
-/** Teto para media entrante (a Meta limita imagens a 5 MB e áudio a 16 MB). */
-const MEDIA_MAX_BYTES = 20 * 1024 * 1024;
+/** Teto para media entrante (documentos/vídeos maiores ficam só com o mediaId). */
+const MEDIA_MAX_BYTES = INBOUND_MEDIA_MAX_BYTES;
 
 export type WhatsappMediaDownload =
   | { ok: true; data: Buffer; mime: string | null; bytes: number }
@@ -277,7 +282,7 @@ export async function sendTemplateMessage(
     },
   };
   return postMessage(payload, {
-    to: toE164,
+    to: maskPhone(toE164),
     templateName,
     languageCode,
     paramCount: countBodyParams(components),
@@ -305,5 +310,5 @@ export async function sendTextMessage(toE164: string, text: string): Promise<Wha
     type: "text",
     text: { body: text },
   };
-  return postMessage(payload);
+  return postMessage(payload, { to: maskPhone(toE164) });
 }

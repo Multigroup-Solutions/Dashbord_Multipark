@@ -12,7 +12,8 @@
  */
 import { eq, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { whatsappBroadcasts, whatsappConversations, whatsappMessages } from "../drizzle/schema";
+import { employees, whatsappBroadcasts, whatsappConversations } from "../drizzle/schema";
+import { OPTED_OUT_ERROR, optedOutPhones, recordOutboundMessage, sqlLaterTs } from "./whatsappStore";
 import { normalizePhoneE164 } from "../shared/phone";
 import {
   findActiveEmployeeByPhoneE164,
@@ -25,7 +26,9 @@ import { runConcurrent } from "./_core/concurrency";
 import { issueAvailabilityFormToken } from "./availabilityFormToken";
 import {
   DEFAULT_TEMPLATE_LANGUAGE,
+  NEUTRAL_RECIPIENT_NAME,
   UNKNOWN_RECIPIENT_NAME,
+  findWhatsAppTemplate,
   findWhatsAppTemplateByName,
   templateHasBodyParams,
   firstNameOf,
@@ -45,7 +48,11 @@ import {
 
 const BROADCAST_CONCURRENCY = 4;
 
-export type RecipientStatus = "sent" | "failed" | "invalid_phone";
+/**
+ * `opted_out` = o número pediu STOP (não se envia); `duplicate_phone` = o mesmo
+ * número já estava noutro destinatário deste envio (1 mensagem por número).
+ */
+export type RecipientStatus = "sent" | "failed" | "invalid_phone" | "opted_out" | "duplicate_phone";
 
 /** Destinatário resolvido, ANTES de qualquer envio (pure). */
 export interface ResolvedRecipient {
@@ -68,6 +75,8 @@ export interface BroadcastSummary {
   sent: number;
   failed: number;
   invalidPhone: number;
+  /** Não enviados porque o número pediu STOP. */
+  optedOut: number;
   recipients: BroadcastRecipient[];
 }
 
@@ -80,6 +89,11 @@ export interface SendBroadcastOptions {
    * resolvido por destinatário no servidor.
    */
   bodyParam2?: string | null;
+  /**
+   * {{2}} diferente por colaborador (ex.: aviso de escala com o dia/horas de
+   * cada um num só envio). Sobrepõe `bodyParam2` para os ids presentes.
+   */
+  bodyParam2ByEmployee?: Record<number, string> | null;
   /**
    * Só quando o template TEM um botão "Visit website" com URL dinâmico: injeta
    * o token single-use do formulário externo como {{1}} do botão (Fase 4).
@@ -121,15 +135,20 @@ export function resolveRecipients(
 /**
  * Parâmetros do body para UM destinatário (PURA — núcleo testável).
  *
- *   {{1}} = nome do destinatário (primeiro nome; fallback "Teste" quando é um
- *           número solto que não bate com nenhuma ficha)
+ *   {{1}} = nome do destinatário (primeiro nome; sem nome utilizável usa
+ *           `fallbackName` — "Teste" SÓ no envio de teste explícito, nos
+ *           envios reais um neutro)
  *   {{2}} = texto partilhado escrito no dialog (semana/dia)
  *
  * O {{2}} só entra quando foi preenchido: um template com um único {{1}} tem de
  * receber exactamente 1 parâmetro, senão a Meta devolve 132000.
  */
-export function buildBodyParams(recipientName: string | null, bodyParam2?: string | null): string[] {
-  const name = firstNameOf(recipientName) ?? UNKNOWN_RECIPIENT_NAME;
+export function buildBodyParams(
+  recipientName: string | null,
+  bodyParam2?: string | null,
+  fallbackName: string = NEUTRAL_RECIPIENT_NAME,
+): string[] {
+  const name = firstNameOf(recipientName) ?? fallbackName;
   const params = [name];
   const second = bodyParam2 ? sanitizeTemplateParam(bodyParam2) : "";
   if (second) params.push(second);
@@ -213,7 +232,7 @@ async function insertBroadcast(
 
 /**
  * Upsert da conversa por `phoneE164` (unique). Associa o employeeId na primeira
- * vez (mantém o já existente) e atualiza `lastMessageAt`. NUNCA toca em
+ * vez (mantém o já existente) e avança `lastMessageAt`. NUNCA toca em
  * `lastInboundAt` — em envios outbound a janela de 24h não abre; lastInboundAt
  * null continua a significar "aguarda primeira resposta" (a Fase 3 depende disto).
  * Devolve o id da conversa.
@@ -233,7 +252,7 @@ async function upsertConversation(
     })
     .onDuplicateKeyUpdate({
       set: {
-        lastMessageAt: now,
+        lastMessageAt: sqlLaterTs(whatsappConversations.lastMessageAt, now),
         // Só preenche o employeeId se ainda estiver vazio (primeira associação vence).
         employeeId: sql`COALESCE(${whatsappConversations.employeeId}, ${employeeId ?? null})`,
       },
@@ -300,9 +319,8 @@ async function sendOne(
   // contarem exactamente a mesma história.
   const error = res.ok ? null : withMetaHint(res.error, cfg.metaUnavailableReason ?? null);
 
-  await db.insert(whatsappMessages).values({
+  await recordOutboundMessage(db, {
     conversationId,
-    direction: "out",
     waMessageId: res.ok ? res.waMessageId : null,
     type: "template",
     // Conteúdo REAL enviado a este destinatário — é o que o inbox mostra na
@@ -337,6 +355,12 @@ interface DispatchConfig {
   weekStart: string | null;
   broadcastId: number;
   sentById: number | null;
+  /** Números com opt-out (STOP) — nunca recebem nada. */
+  optedOut: Set<string>;
+  /** {{1}} quando o destinatário não tem nome utilizável ("Teste" só no modo teste). */
+  fallbackName: string;
+  /** {{2}} específico deste destinatário (sobrepõe `bodyParam2`). */
+  bodyParam2Override?: string | null;
 }
 
 /**
@@ -366,9 +390,15 @@ async function dispatchOne(
   r: ResolvedRecipient,
   cfg: DispatchConfig,
 ): Promise<BroadcastRecipient> {
+  // Opt-out ganha a tudo: nem token, nem conversa nova, nem chamada à Meta.
+  if (r.phoneE164 && cfg.optedOut.has(r.phoneE164)) {
+    return { ...r, status: "opted_out", error: OPTED_OUT_ERROR };
+  }
   // Template sem parâmetros → nenhum valor de body (com ou sem metadados). Sem
   // isto, o modo "sem inspeção" mandava o nome como {{1}} e a Meta recusava.
-  const params = cfg.noBodyParams ? [] : buildBodyParams(r.name, cfg.bodyParam2);
+  const params = cfg.noBodyParams
+    ? []
+    : buildBodyParams(r.name, cfg.bodyParam2Override ?? cfg.bodyParam2, cfg.fallbackName);
   let buttonToken: string | undefined;
 
   if (cfg.includeFormLink && cfg.weekStart && r.employeeId != null) {
@@ -447,6 +477,8 @@ interface PreparedSend {
   metaUnavailableReason: string | null;
   includeFormLink: boolean;
   db: NonNullable<Awaited<ReturnType<typeof getDb>>>;
+  /** Números com opt-out, lidos 1× por envio. */
+  optedOut: Set<string>;
 }
 
 /**
@@ -460,6 +492,8 @@ async function prepareSend(opts: {
   bodyParam2?: string | null;
   weekStart?: string | null;
   includeFormLink?: boolean;
+  /** O {{2}} vem por destinatário (bodyParam2ByEmployee) — conta como preenchido. */
+  perRecipientParam2?: boolean;
 }): Promise<PreparedSend> {
   // Guarda de env — falha cedo com mensagem clara.
   if (!process.env.WHATSAPP_TOKEN || !process.env.WHATSAPP_PHONE_NUMBER_ID) {
@@ -504,7 +538,7 @@ async function prepareSend(opts: {
       );
     }
     const problem = validateTemplateUsage(analysis, {
-      hasBodyParam2: !!bodyParam2,
+      hasBodyParam2: !!bodyParam2 || opts.perRecipientParam2 === true,
       hasWeekStart: !!weekStart,
       roles,
     });
@@ -524,13 +558,93 @@ async function prepareSend(opts: {
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível.");
 
-  return { templateName, languageCode, bodyParam2, weekStart, roles, noBodyParams, analysis, metaUnavailableReason, includeFormLink, db };
+  const optedOut = await optedOutPhones(db);
+  return { templateName, languageCode, bodyParam2, weekStart, roles, noBodyParams, analysis, metaUnavailableReason, includeFormLink, db, optedOut };
+}
+
+/**
+ * Índice do PRIMEIRO destinatário com o mesmo número, para cada posição
+ * (-1 = é o primeiro / sem número). PURA — base da dedup: um número recebe
+ * no máximo uma mensagem por envio, mesmo que apareça em duas fichas.
+ */
+export function duplicatePhoneIndexes(list: readonly { phoneE164: string | null }[]): number[] {
+  const first = new Map<string, number>();
+  return list.map((r, i) => {
+    if (!r.phoneE164) return -1;
+    const seen = first.get(r.phoneE164);
+    if (seen !== undefined) return seen;
+    first.set(r.phoneE164, i);
+    return -1;
+  });
+}
+
+/** Contagens finais de um envio. PURA. Duplicados não são falha (a pessoa recebeu pelo outro). */
+export function summarize(recipients: readonly BroadcastRecipient[]): {
+  sent: number;
+  failed: number;
+  invalidPhone: number;
+  optedOut: number;
+  notSent: number;
+} {
+  const count = (st: RecipientStatus) => recipients.filter((r) => r.status === st).length;
+  const sent = count("sent");
+  const invalidPhone = count("invalid_phone");
+  const optedOut = count("opted_out");
+  const failed = count("failed");
+  return { sent, failed, invalidPhone, optedOut, notSent: failed + invalidPhone + optedOut };
+}
+
+/**
+ * Corre o envio a uma lista já resolvida: número inválido → `invalid_phone`,
+ * número repetido → `duplicate_phone`, resto → `dispatchOne` (que trata o
+ * opt-out). A ordem da resposta é a ordem de `resolved`.
+ */
+async function dispatchAll(
+  db: PreparedSend["db"],
+  resolved: ResolvedRecipient[],
+  cfgFor: (r: ResolvedRecipient) => DispatchConfig,
+): Promise<BroadcastRecipient[]> {
+  const dup = duplicatePhoneIndexes(resolved);
+  const recipients: BroadcastRecipient[] = new Array(resolved.length);
+  await runConcurrent(resolved.map((r, i) => ({ r, i })), BROADCAST_CONCURRENCY, async ({ r, i }) => {
+    if (!r.phoneE164) {
+      // Número inválido/ausente → regista falha SEM chamar a API. Não cria
+      // conversa/mensagem: não há phoneE164 válido para lhes servir de chave.
+      recipients[i] = { ...r, status: "invalid_phone", error: r.phone ? "Número inválido" : "Sem número" };
+      return;
+    }
+    if (dup[i] >= 0) {
+      const other = resolved[dup[i]];
+      recipients[i] = { ...r, status: "duplicate_phone", error: `Mesmo número de ${other.name ?? "outro destinatário"} — enviado só uma vez.` };
+      return;
+    }
+    recipients[i] = await dispatchOne(db, r, cfgFor(r));
+  });
+  return recipients;
 }
 
 /** Um contacto solto (sem ficha de colaborador) a quem enviar um template. */
 export interface ContactRecipient {
   name: string;
   phone: string;
+}
+
+function baseDispatch(prep: PreparedSend, broadcastId: number, sentById: number | null, fallbackName: string): DispatchConfig {
+  return {
+    templateName: prep.templateName,
+    languageCode: prep.languageCode,
+    bodyParam2: prep.bodyParam2,
+    analysis: prep.analysis,
+    roles: prep.roles,
+    noBodyParams: prep.noBodyParams,
+    metaUnavailableReason: prep.metaUnavailableReason,
+    includeFormLink: prep.includeFormLink,
+    weekStart: prep.weekStart,
+    broadcastId,
+    sentById,
+    optedOut: prep.optedOut,
+    fallbackName,
+  };
 }
 
 /**
@@ -564,7 +678,7 @@ export async function sendTemplateToContacts(opts: {
     const raw = (c.phone ?? "").trim();
     return {
       employeeId: null,
-      name: c.name?.trim() || UNKNOWN_RECIPIENT_NAME,
+      name: c.name?.trim() || null,
       phone: raw,
       phoneE164: raw ? normalizePhoneE164(raw) : null,
     };
@@ -578,37 +692,87 @@ export async function sendTemplateToContacts(opts: {
     totalCount: resolved.length,
   });
 
-  const recipients: BroadcastRecipient[] = new Array(resolved.length);
-  await runConcurrent(resolved.map((r, i) => ({ r, i })), BROADCAST_CONCURRENCY, async ({ r, i }) => {
-    if (!r.phoneE164) {
-      recipients[i] = { ...r, status: "invalid_phone", error: r.phone ? "Número inválido" : "Sem número" };
-      return;
-    }
-    recipients[i] = await dispatchOne(db, r, {
-      templateName: prep.templateName,
-      languageCode: prep.languageCode,
-      bodyParam2: null,
-      analysis: prep.analysis,
-      roles: prep.roles,
-      noBodyParams: prep.noBodyParams,
-      metaUnavailableReason: prep.metaUnavailableReason,
-      includeFormLink: false,
-      weekStart: null,
-      broadcastId,
-      sentById: opts.createdById ?? null,
-    });
-  });
+  const cfg: DispatchConfig = {
+    ...baseDispatch(prep, broadcastId, opts.createdById ?? null, NEUTRAL_RECIPIENT_NAME),
+    bodyParam2: null,
+    includeFormLink: false,
+    weekStart: null,
+  };
+  const recipients = await dispatchAll(db, resolved, () => cfg);
+  const sum = summarize(recipients);
+  await updateBroadcastCounts(db, broadcastId, { sentCount: sum.sent, failedCount: sum.notSent });
+  return { broadcastId, total: resolved.length, sent: sum.sent, failed: sum.failed, invalidPhone: sum.invalidPhone, optedOut: sum.optedOut, recipients };
+}
 
-  const sent = recipients.filter((r) => r.status === "sent").length;
-  const invalidPhone = recipients.filter((r) => r.status === "invalid_phone").length;
-  const failed = recipients.filter((r) => r.status === "failed").length;
-  await updateBroadcastCounts(db, broadcastId, { sentCount: sent, failedCount: failed + invalidPhone });
-  return { broadcastId, total: resolved.length, sent, failed, invalidPhone, recipients };
+/**
+ * Template a UMA conversa do inbox (janela fechada ou sem resposta ainda).
+ * Envio NORMAL (não é teste): o {{1}} é o nome real — ficha → lead → nome de
+ * perfil WhatsApp → neutro, nunca "Teste" — e fica registado como envio do
+ * inbox. Conversa em opt-out → recusa (lança).
+ */
+export async function sendTemplateToConversation(opts: {
+  conversationId: number;
+  templateId: string;
+  bodyParam2?: string | null;
+  weekStart?: string | null;
+  createdById: number | null;
+}): Promise<BroadcastSummary> {
+  const def = findWhatsAppTemplate(opts.templateId);
+  if (!def) throw new Error(`Template desconhecido: ${opts.templateId}`);
+  const db0 = await getDb();
+  if (!db0) throw new Error("Base de dados indisponível.");
+  const [conv] = await db0
+    .select({
+      id: whatsappConversations.id,
+      phoneE164: whatsappConversations.phoneE164,
+      employeeId: whatsappConversations.employeeId,
+      optedOutAt: whatsappConversations.optedOutAt,
+      profileName: whatsappConversations.profileName,
+      employeeName: employees.fullName,
+      leadName: sql<string | null>`(SELECT ln.fullName FROM extra_leads ln WHERE ln.phoneE164 = ${whatsappConversations.phoneE164} ORDER BY ln.id DESC LIMIT 1)`,
+    })
+    .from(whatsappConversations)
+    .leftJoin(employees, eq(whatsappConversations.employeeId, employees.id))
+    .where(eq(whatsappConversations.id, opts.conversationId))
+    .limit(1);
+  if (!conv) throw new Error("Conversa não encontrada.");
+  if (conv.optedOutAt) throw new Error("Este contacto pediu para não receber mensagens (STOP) — não é possível enviar templates.");
+
+  const prep = await prepareSend({
+    templateName: def.name,
+    languageCode: def.language,
+    bodyParam2: def.sharedParam ? (opts.bodyParam2 ?? null) : null,
+    weekStart: opts.weekStart ?? null,
+  });
+  if (prep.includeFormLink && conv.employeeId == null) {
+    throw new Error(`O template "${def.label}" leva o link pessoal do formulário — só pode ir para um colaborador com ficha.`);
+  }
+  const broadcastId = await insertBroadcast(prep.db, {
+    templateName: prep.templateName,
+    note: `[INBOX] conversa ${conv.id}`,
+    createdById: opts.createdById,
+    weekStart: prep.weekStart,
+    totalCount: 1,
+  });
+  const recipient: ResolvedRecipient = {
+    employeeId: conv.employeeId,
+    name: conv.employeeName || conv.leadName || conv.profileName || null,
+    phone: conv.phoneE164,
+    phoneE164: conv.phoneE164,
+  };
+  const [r] = await dispatchAll(prep.db, [recipient], () =>
+    baseDispatch(prep, broadcastId, opts.createdById, NEUTRAL_RECIPIENT_NAME),
+  );
+  const sum = summarize([r]);
+  await updateBroadcastCounts(prep.db, broadcastId, { sentCount: sum.sent, failedCount: sum.notSent });
+  return { broadcastId, total: 1, sent: sum.sent, failed: sum.failed, invalidPhone: sum.invalidPhone, optedOut: sum.optedOut, recipients: [r] };
 }
 
 export async function sendBroadcast(opts: SendBroadcastOptions): Promise<BroadcastSummary> {
-  const prep = await prepareSend(opts);
-  const { templateName, languageCode, bodyParam2, weekStart, roles, noBodyParams, analysis, metaUnavailableReason, includeFormLink, db } = prep;
+  const perRecipient = opts.bodyParam2ByEmployee ?? null;
+  const prep = await prepareSend({ ...opts, perRecipientParam2: !!perRecipient && Object.keys(perRecipient).length > 0 });
+  const { db } = prep;
+  const sentById = opts.createdById ?? null;
 
   // ── MODO TESTE: 1 número, não toca nos extras ──────────────────────────────
   if (opts.testPhone) {
@@ -616,10 +780,10 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
     const phoneE164 = normalizePhoneE164(rawTest);
     const note = `[TESTE] ${opts.note ?? ""}`.trim();
     const broadcastId = await insertBroadcast(db, {
-      templateName,
+      templateName: prep.templateName,
       note,
-      createdById: opts.createdById ?? null,
-      weekStart,
+      createdById: sentById,
+      weekStart: prep.weekStart,
       totalCount: 1,
     });
 
@@ -631,6 +795,7 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
         sent: 0,
         failed: 0,
         invalidPhone: 1,
+        optedOut: 0,
         recipients: [
           { employeeId: null, name: UNKNOWN_RECIPIENT_NAME, phone: rawTest, phoneE164: null, status: "invalid_phone", error: "Número de teste inválido" },
         ],
@@ -639,33 +804,16 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
 
     // Se o número de teste for de um colaborador ativo, o {{1}} leva o nome
     // REAL dele (e a conversa do inbox nasce associada à ficha) — assim o teste
-    // é mesmo representativo do envio real.
+    // é mesmo representativo do envio real. Só aqui é que o "Teste" é usado.
     const match = await findActiveEmployeeByPhoneE164(phoneE164);
     const recipient = await dispatchOne(
       db,
-      {
-        employeeId: match?.id ?? null,
-        name: match?.fullName ?? UNKNOWN_RECIPIENT_NAME,
-        phone: rawTest,
-        phoneE164,
-      },
-      {
-        templateName,
-        languageCode,
-        bodyParam2,
-        analysis,
-        roles,
-        noBodyParams,
-        metaUnavailableReason,
-        includeFormLink,
-        weekStart,
-        broadcastId,
-        sentById: opts.createdById ?? null,
-      },
+      { employeeId: match?.id ?? null, name: match?.fullName ?? null, phone: rawTest, phoneE164 },
+      baseDispatch(prep, broadcastId, sentById, UNKNOWN_RECIPIENT_NAME),
     );
-    const sent = recipient.status === "sent" ? 1 : 0;
-    await updateBroadcastCounts(db, broadcastId, { sentCount: sent, failedCount: 1 - sent });
-    return { broadcastId, total: 1, sent, failed: 1 - sent, invalidPhone: 0, recipients: [recipient] };
+    const sum = summarize([recipient]);
+    await updateBroadcastCounts(db, broadcastId, { sentCount: sum.sent, failedCount: sum.notSent });
+    return { broadcastId, total: 1, sent: sum.sent, failed: sum.failed, invalidPhone: sum.invalidPhone, optedOut: sum.optedOut, recipients: [recipient] };
   }
 
   // ── MODO NORMAL ────────────────────────────────────────────────────────────
@@ -682,46 +830,18 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
   const resolved = resolveRecipients(pool, opts.employeeIds ?? null);
 
   const broadcastId = await insertBroadcast(db, {
-    templateName,
+    templateName: prep.templateName,
     note: opts.note ?? null,
-    createdById: opts.createdById ?? null,
-    weekStart,
+    createdById: sentById,
+    weekStart: prep.weekStart,
     totalCount: resolved.length,
   });
 
-  const recipients: BroadcastRecipient[] = new Array(resolved.length);
-  const indexed = resolved.map((r, i) => ({ r, i }));
-
-  await runConcurrent(indexed, BROADCAST_CONCURRENCY, async ({ r, i }) => {
-    if (!r.phoneE164) {
-      // Número inválido/ausente → regista falha SEM chamar a API (análogo ao
-      // noEmail do envio por email). Não cria conversa/mensagem: não há
-      // phoneE164 válido para lhes servir de chave.
-      recipients[i] = {
-        ...r,
-        status: "invalid_phone",
-        error: r.phone ? "Número inválido" : "Sem número",
-      };
-      return;
-    }
-    recipients[i] = await dispatchOne(db, r, {
-      templateName,
-      languageCode,
-      bodyParam2,
-      analysis,
-      roles,
-      noBodyParams,
-      metaUnavailableReason,
-      includeFormLink,
-      weekStart,
-      broadcastId,
-      sentById: opts.createdById ?? null,
-    });
-  });
-
-  const sent = recipients.filter((r) => r.status === "sent").length;
-  const invalidPhone = recipients.filter((r) => r.status === "invalid_phone").length;
-  const failed = recipients.filter((r) => r.status === "failed").length;
+  const base = baseDispatch(prep, broadcastId, sentById, NEUTRAL_RECIPIENT_NAME);
+  const recipients = await dispatchAll(db, resolved, (r) =>
+    r.employeeId != null && perRecipient?.[r.employeeId] ? { ...base, bodyParam2Override: perRecipient[r.employeeId] } : base,
+  );
+  const sum = summarize(recipients);
 
   // Decisão 2 (Jorge): guarda a lista de extras (com employeeId) que falharam
   // por número inválido/ausente, para mais tarde "mostrar extras com número
@@ -730,12 +850,12 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
     .filter((r) => r.status === "invalid_phone" && r.employeeId != null)
     .map((r) => r.employeeId as number);
 
-  // failedCount na BD = tudo o que não foi enviado (falhas de API + inválidos).
+  // failedCount na BD = tudo o que não foi enviado (falhas de API + inválidos + STOP).
   await updateBroadcastCounts(db, broadcastId, {
-    sentCount: sent,
-    failedCount: failed + invalidPhone,
+    sentCount: sum.sent,
+    failedCount: sum.notSent,
     invalidEmployeeIds: invalidEmployeeIds.length ? invalidEmployeeIds : null,
   });
 
-  return { broadcastId, total: resolved.length, sent, failed, invalidPhone, recipients };
+  return { broadcastId, total: resolved.length, sent: sum.sent, failed: sum.failed, invalidPhone: sum.invalidPhone, optedOut: sum.optedOut, recipients };
 }

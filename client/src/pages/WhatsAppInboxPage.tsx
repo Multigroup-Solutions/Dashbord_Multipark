@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -6,6 +6,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -30,11 +31,15 @@ import {
   MailOpen,
   Search,
   X,
+  BellOff,
 } from "lucide-react";
 import {
-  AVAILABILITY_TEMPLATE_NAME,
-  DEFAULT_TEMPLATE_LANGUAGE,
+  DEFAULT_WHATSAPP_TEMPLATE_ID,
+  WHATSAPP_TEMPLATES,
+  findWhatsAppTemplate,
   messageDisplayBody,
+  previewTemplateBody,
+  resolveBodyParamRoles,
 } from "@shared/whatsappTemplate";
 import { matchesContactQuery } from "@shared/contactSearch";
 import { isMediaPlaceholderBody } from "@shared/whatsappMedia";
@@ -90,6 +95,32 @@ function windowClosingSoon(expiresAt: string | null, now: number): boolean {
 
 type WindowState = "awaiting_first_reply" | "open" | "expired";
 
+/**
+ * A página está visível? Com o separador escondido o polling pára (não há
+ * ninguém a ler e cada pedido custa uma query à BD).
+ */
+function usePageVisible(): boolean {
+  const [visible, setVisible] = useState(() => typeof document === "undefined" || document.visibilityState !== "hidden");
+  useEffect(() => {
+    const onChange = () => setVisible(document.visibilityState !== "hidden");
+    document.addEventListener("visibilitychange", onChange);
+    return () => document.removeEventListener("visibilitychange", onChange);
+  }, []);
+  return visible;
+}
+
+/** Intervalo de atualização da lista e da conversa aberta. */
+const POLL_MS = 20_000;
+
+/** Badge de opt-out (pediu STOP). */
+function OptedOutBadge() {
+  return (
+    <Badge variant="outline" className="h-5 px-1.5 text-[10px] gap-1 border-red-300 text-red-700 dark:border-red-800 dark:text-red-300 shrink-0">
+      <BellOff className="h-3 w-3" /> Não quer mensagens
+    </Badge>
+  );
+}
+
 // ─── Ícone de status (só mensagens OUT) ─────────────────────────────────────
 
 function StatusIcon({ status }: { status: string }) {
@@ -115,10 +146,13 @@ export default function WhatsAppInboxPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [text, setText] = useState("");
   const [tplOpen, setTplOpen] = useState(false);
-  const [tplName, setTplName] = useState(AVAILABILITY_TEMPLATE_NAME);
-  const [tplLang, setTplLang] = useState(DEFAULT_TEMPLATE_LANGUAGE);
-  // {{2}} do body (o {{1}} e sempre o nome de quem recebe, resolvido no servidor).
+  // Template escolhido do CATÁLOGO (shared/whatsappTemplate.ts) — nunca nome/língua à mão.
+  const [tplId, setTplId] = useState(DEFAULT_WHATSAPP_TEMPLATE_ID);
+  // {{2}} do body (o {{1}} é sempre o nome de quem recebe, resolvido no servidor).
   const [tplParam2, setTplParam2] = useState("");
+  // Semana do link do formulário (só templates de semana com botão de link).
+  const [tplWeekStart, setTplWeekStart] = useState("");
+  const pageVisible = usePageVisible();
   const [now, setNow] = useState(() => Date.now());
   // Pesquisa por nome ou número (filtro local — a lista já vem completa).
   const [search, setSearch] = useState("");
@@ -133,10 +167,12 @@ export default function WhatsAppInboxPage() {
     return () => clearInterval(t);
   }, []);
 
-  const conversations = trpc.whatsapp.conversations.list.useQuery(undefined, { refetchInterval: 10_000 });
+  const conversations = trpc.whatsapp.conversations.list.useQuery(undefined, {
+    refetchInterval: pageVisible ? POLL_MS : false,
+  });
   const thread = trpc.whatsapp.messages.byConversation.useQuery(
     { conversationId: selectedId ?? 0 },
-    { enabled: selectedId != null, refetchInterval: 10_000 },
+    { enabled: selectedId != null, refetchInterval: pageVisible ? POLL_MS : false },
   );
 
   const markRead = trpc.whatsapp.markRead.useMutation({
@@ -161,7 +197,7 @@ export default function WhatsAppInboxPage() {
     },
     onError: (e) => toast.error(e.message),
   });
-  const broadcast = trpc.whatsapp.sendBroadcast.useMutation({
+  const sendTemplate = trpc.whatsapp.sendTemplate.useMutation({
     onSuccess: (r) => {
       if (r.sent) toast.success("Template enviado.");
       else toast.error(r.recipients[0]?.error || "Falha ao enviar template.");
@@ -195,6 +231,44 @@ export default function WhatsAppInboxPage() {
   const t = thread.data;
   const windowState: WindowState | undefined = t?.windowState;
 
+  // ── Template: catálogo + pré-visualização com o nome REAL do contacto ──
+  const tplDef = findWhatsAppTemplate(tplId) ?? WHATSAPP_TEMPLATES[0];
+  const templatePreview = trpc.whatsapp.templatePreview.useQuery(
+    { templateName: tplDef.name, languageCode: tplDef.language },
+    { enabled: tplOpen, staleTime: 5 * 60_000, retry: false },
+  );
+  const tplRecipientName = t?.recipientFirstName ?? "colega";
+  const tplPreviewText = useMemo(() => {
+    const p = templatePreview.data;
+    if (!p?.ok) return null;
+    // MESMOS papéis que o envio usa — o preview não pode contar outra história.
+    const slots = resolveBodyParamRoles(p.paramNames, p.paramCount, tplDef.roles);
+    return previewTemplateBody(p.bodyText, slots, { recipient: tplRecipientName, shared: tplParam2 });
+  }, [templatePreview.data, tplDef, tplRecipientName, tplParam2]);
+  const tplNeedsWeek = !!(templatePreview.data?.ok && templatePreview.data.hasDynamicUrlButton);
+  const tplMissing =
+    (!!tplDef.sharedParam && !tplParam2.trim()) || (tplNeedsWeek && !/^\d{4}-\d{2}-\d{2}$/.test(tplWeekStart));
+
+  function openTemplateDialog() {
+    setTplParam2("");
+    setTplWeekStart("");
+    setTplOpen(true);
+  }
+
+  function submitReply() {
+    if (!text.trim() || selectedId == null) return;
+    // Contacto que pediu STOP: texto livre só depois de confirmar (ex.: responder a uma dúvida dele).
+    if (t?.optedOut) {
+      const ok = window.confirm(
+        "Este contacto pediu para não receber mensagens (STOP). Enviar mesmo assim esta resposta?",
+      );
+      if (!ok) return;
+      reply.mutate({ conversationId: selectedId, text: text.trim(), confirmOptedOut: true });
+      return;
+    }
+    reply.mutate({ conversationId: selectedId, text: text.trim() });
+  }
+
   function conversationRow(c: (typeof convList)[number]) {
     const isOpen = c.windowState === "open";
     return (
@@ -207,6 +281,7 @@ export default function WhatsAppInboxPage() {
       >
         <div className="flex items-center gap-2">
           <span className="font-medium truncate flex-1">{c.name}</span>
+          {c.optedOut && <BellOff className="h-3.5 w-3.5 text-red-500 shrink-0" aria-label="Não quer mensagens" />}
           <span className="text-[11px] text-muted-foreground shrink-0">{fmtListTime(c.lastMessageAt, now)}</span>
           {c.unreadCount > 0 && (
             <Badge className="bg-green-600 text-white h-5 min-w-5 px-1.5 justify-center shrink-0">
@@ -327,40 +402,73 @@ export default function WhatsAppInboxPage() {
   );
 
   // ── Banner + composer por estado de janela ──
+  function templateButton() {
+    if (!t) return null;
+    return (
+      <Button
+        size="sm"
+        variant="outline"
+        className="ml-auto h-7"
+        disabled={t.optedOut}
+        title={t.optedOut ? "Este contacto pediu para não receber mensagens" : "Enviar um template aprovado"}
+        onClick={openTemplateDialog}
+      >
+        <Send className="h-3.5 w-3.5 mr-1" /> Enviar template
+      </Button>
+    );
+  }
+
   function windowBanner() {
     if (!t) return null;
+    const optOutNote = t.optedOut ? (
+      <div className="flex items-center gap-2 px-3 py-2 text-xs bg-red-50 dark:bg-red-950/30 text-red-800 dark:text-red-300 border-t">
+        <BellOff className="h-4 w-4 shrink-0" />
+        <span>
+          <strong>Não quer mensagens</strong> — pediu para parar. Templates bloqueados; texto livre só com confirmação.
+          Volta a receber se responder INICIAR.
+        </span>
+      </div>
+    ) : null;
     if (windowState === "awaiting_first_reply") {
       return (
-        <div className="flex items-center gap-2 px-3 py-2 text-xs bg-amber-50 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300 border-t">
-          <Hourglass className="h-4 w-4 shrink-0" />
-          <span>
-            <strong>Template enviado — a aguardar a primeira resposta.</strong> Só podes escrever texto livre
-            depois de o contacto responder.
-          </span>
-        </div>
+        <>
+          {optOutNote}
+          <div className="flex flex-wrap items-center gap-2 px-3 py-2 text-xs bg-amber-50 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300 border-t">
+            <Hourglass className="h-4 w-4 shrink-0" />
+            <span>
+              <strong>A aguardar a primeira resposta.</strong> Só podes escrever texto livre depois de o contacto
+              responder — até lá, só templates.
+            </span>
+            {templateButton()}
+          </div>
+        </>
       );
     }
     if (windowState === "open") {
       return (
-        <div className="flex items-center gap-2 px-3 py-2 text-xs bg-green-50 dark:bg-green-950/30 text-green-800 dark:text-green-300 border-t">
-          <MessageCircle className="h-4 w-4 shrink-0" />
-          <span>
-            <strong>Janela aberta</strong> — fecha em {windowCountdown(t.windowExpiresAt, now)}.
-          </span>
-        </div>
+        <>
+          {optOutNote}
+          <div className="flex items-center gap-2 px-3 py-2 text-xs bg-green-50 dark:bg-green-950/30 text-green-800 dark:text-green-300 border-t">
+            <MessageCircle className="h-4 w-4 shrink-0" />
+            <span>
+              <strong>Janela aberta</strong> — fecha em {windowCountdown(t.windowExpiresAt, now)}.
+            </span>
+          </div>
+        </>
       );
     }
     // expired
     return (
-      <div className="flex flex-wrap items-center gap-2 px-3 py-2 text-xs bg-muted text-muted-foreground border-t">
-        <Lock className="h-4 w-4 shrink-0" />
-        <span>
-          <strong>Janela de 24h fechada</strong> — só é possível reiniciar com um template.
-        </span>
-        <Button size="sm" variant="outline" className="ml-auto h-7" onClick={() => { setTplName(""); setTplOpen(true); }}>
-          <Send className="h-3.5 w-3.5 mr-1" /> Enviar template
-        </Button>
-      </div>
+      <>
+        {optOutNote}
+        <div className="flex flex-wrap items-center gap-2 px-3 py-2 text-xs bg-muted text-muted-foreground border-t">
+          <Lock className="h-4 w-4 shrink-0" />
+          <span>
+            <strong>Janela de 24h fechada</strong> — só é possível reiniciar com um template.
+          </span>
+          {templateButton()}
+        </div>
+      </>
     );
   }
 
@@ -379,14 +487,14 @@ export default function WhatsAppInboxPage() {
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey && !disabled) {
                 e.preventDefault();
-                if (text.trim() && selectedId != null) reply.mutate({ conversationId: selectedId, text: text.trim() });
+                submitReply();
               }
             }}
           />
           <Button
             className="bg-green-600 hover:bg-green-700 text-white shrink-0"
             disabled={disabled || !text.trim() || reply.isPending || selectedId == null}
-            onClick={() => selectedId != null && reply.mutate({ conversationId: selectedId, text: text.trim() })}
+            onClick={submitReply}
           >
             {reply.isPending ? <Clock className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
           </Button>
@@ -427,7 +535,12 @@ export default function WhatsAppInboxPage() {
                   {t?.name ?? "…"}
                 </div>
               )}
-              {t && <div className="text-[11px] text-muted-foreground">{t.phoneE164}</div>}
+              {t && (
+                <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <span>{t.phoneE164}</span>
+                  {t.optedOut && <OptedOutBadge />}
+                </div>
+              )}
             </div>
             {t && (
               <Button
@@ -473,7 +586,7 @@ export default function WhatsAppInboxPage() {
                   <InboundMedia m={m} />
                   {/* Envios feitos antes de 2026-08-20 não gravaram o conteúdo:
                       dizem-no em itálico em vez de aparecerem em branco. */}
-                  {!(m.mediaUrl && isMediaPlaceholderBody(m.body)) && (
+                  {!(m.mediaAvailable && isMediaPlaceholderBody(m.body)) && (
                     <div
                       className={`whitespace-pre-wrap break-words${m.body?.trim() ? "" : " italic opacity-80"}`}
                     >
@@ -510,7 +623,7 @@ export default function WhatsAppInboxPage() {
           <MessageCircle className="h-6 w-6 text-green-600" /> WhatsApp — Inbox
         </h1>
         <p className="text-sm text-muted-foreground">
-          Respostas dos extras aos templates. Só é possível texto livre com a janela de 24h aberta.
+          Respostas de extras, leads e contactos. Só é possível texto livre com a janela de 24h aberta.
         </p>
       </div>
 
@@ -531,64 +644,86 @@ export default function WhatsAppInboxPage() {
         </div>
       </Card>
 
-      {/* Dialog para reiniciar com template (janela fechada) */}
-      <Dialog open={tplOpen} onOpenChange={(open) => { if (!broadcast.isPending) setTplOpen(open); }}>
+      {/* Dialog de template (janela fechada ou ainda sem resposta) */}
+      <Dialog open={tplOpen} onOpenChange={(open) => { if (!sendTemplate.isPending) setTplOpen(open); }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Send className="h-5 w-5 text-green-600" /> Reiniciar com template
+              <Send className="h-5 w-5 text-green-600" /> Enviar template
             </DialogTitle>
             <DialogDescription>
-              A janela de 24h está fechada. Envia um template aprovado para {t?.phoneE164} para reabrir a conversa.
+              {windowState === "awaiting_first_reply"
+                ? `Ainda sem resposta de ${t?.name ?? "este contacto"} — só é possível escrever com um template aprovado.`
+                : `A janela de 24h está fechada. Um template aprovado reabre a conversa com ${t?.name ?? "este contacto"}.`}
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-3">
             <div className="space-y-1">
-              <Label className="text-xs">Nome do template (WhatsApp Manager)</Label>
-              <Input
-                placeholder={AVAILABILITY_TEMPLATE_NAME}
-                value={tplName}
-                onChange={(e) => setTplName(e.target.value)}
-              />
+              <Label className="text-xs">Template</Label>
+              <Select value={tplDef.id} onValueChange={(v) => { setTplId(v); setTplParam2(""); }}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {WHATSAPP_TEMPLATES.map((d) => (
+                    <SelectItem key={d.id} value={d.id}>{d.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground">{tplDef.description}</p>
             </div>
-            <div className="flex gap-3 flex-wrap">
-              <div className="space-y-1 w-32">
-                <Label className="text-xs">Língua</Label>
-                <Input value={tplLang} onChange={(e) => setTplLang(e.target.value)} placeholder={DEFAULT_TEMPLATE_LANGUAGE} />
-              </div>
-              <div className="space-y-1 flex-1 min-w-[12rem]">
-                <Label className="text-xs">Semana/dia (parâmetro 2)</Label>
+            {tplDef.sharedParam && (
+              <div className="space-y-1">
+                <Label className="text-xs">{tplDef.sharedParam.label}</Label>
                 <Input
                   value={tplParam2}
                   onChange={(e) => setTplParam2(e.target.value)}
-                  placeholder="ex: semana de 11 a 17 de agosto"
+                  placeholder={tplDef.sharedParam.placeholder}
                 />
-                <p className="text-[11px] text-muted-foreground">
-                  O {"{{1}}"} é preenchido com o nome do contacto.
-                </p>
               </div>
+            )}
+            {tplNeedsWeek && (
+              <div className="space-y-1">
+                <Label className="text-xs">Semana do formulário (segunda-feira)</Label>
+                <Input type="date" value={tplWeekStart} onChange={(e) => setTplWeekStart(e.target.value)} />
+                <p className="text-[11px] text-muted-foreground">O botão do template leva o link pessoal do formulário desta semana.</p>
+              </div>
+            )}
+            <div className="space-y-1">
+              <Label className="text-xs">Pré-visualização (para {tplRecipientName})</Label>
+              {templatePreview.isLoading ? (
+                <p className="text-xs text-muted-foreground">A ler o template na Meta…</p>
+              ) : tplPreviewText ? (
+                <div className="rounded-md bg-green-50 dark:bg-green-950/40 border border-green-200 dark:border-green-900 p-3 text-sm whitespace-pre-wrap">
+                  {tplPreviewText}
+                </div>
+              ) : (
+                <p className="text-xs text-amber-600">
+                  {templatePreview.data && !templatePreview.data.ok
+                    ? templatePreview.data.reason
+                    : "Pré-visualização indisponível — o envio continua a funcionar."}
+                </p>
+              )}
             </div>
           </div>
 
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setTplOpen(false)} disabled={broadcast.isPending}>
+            <Button variant="ghost" onClick={() => setTplOpen(false)} disabled={sendTemplate.isPending}>
               Cancelar
             </Button>
             <Button
               className="bg-green-600 hover:bg-green-700 text-white"
-              disabled={!tplName.trim() || !t || broadcast.isPending}
+              disabled={!t || t.optedOut || tplMissing || sendTemplate.isPending}
               onClick={() =>
                 t &&
-                broadcast.mutate({
-                  templateName: tplName.trim(),
-                  languageCode: tplLang.trim() || undefined,
-                  bodyParam2: tplParam2.trim() || null,
-                  testPhone: t.phoneE164,
+                sendTemplate.mutate({
+                  conversationId: t.conversationId,
+                  templateId: tplDef.id,
+                  bodyParam2: tplDef.sharedParam ? tplParam2.trim() || null : null,
+                  weekStart: tplNeedsWeek ? tplWeekStart : null,
                 })
               }
             >
-              {broadcast.isPending ? <Clock className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
+              {sendTemplate.isPending ? <Clock className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
               Enviar template
             </Button>
           </DialogFooter>
@@ -598,35 +733,51 @@ export default function WhatsAppInboxPage() {
   );
 }
 
-// ─── Media recebida (imagem / áudio) ────────────────────────────────────────
-function InboundMedia({ m }: { m: { mediaType: string | null; mediaUrl: string | null; mediaMime: string | null; body: string | null } }) {
+// ─── Media recebida (imagem / áudio / vídeo / documento) ────────────────────
+// O ficheiro é privado: o URL assinado (10 min) é pedido só quando a bolha
+// aparece, e renovado antes de expirar.
+function InboundMedia({ m }: { m: { id: number; mediaType: string | null; mediaAvailable: boolean; mediaMime: string | null; body: string | null } }) {
+  const signed = trpc.whatsapp.mediaUrl.useQuery(
+    { messageId: m.id },
+    { enabled: !!m.mediaType && m.mediaAvailable, staleTime: 8 * 60_000, refetchInterval: 8 * 60_000, retry: 1 },
+  );
   if (!m.mediaType) return null;
-  if (!m.mediaUrl) {
-    // Download falhou no webhook (token/rede/storage) — dizemos porquê em vez
-    // de mostrar uma bolha vazia; o `mediaId` fica na BD para re-tentar.
-    return (
-      <div className="text-[11px] italic opacity-80 mb-1">
-        {m.mediaType === "image" ? "Imagem" : m.mediaType === "audio" ? "Áudio" : "Ficheiro"} recebido, mas não foi possível descarregar.
-      </div>
-    );
+  const label =
+    m.mediaType === "image" ? "Imagem" : m.mediaType === "audio" ? "Áudio" : m.mediaType === "video" ? "Vídeo" : m.mediaType === "document" ? "Documento" : "Ficheiro";
+  if (!m.mediaAvailable) {
+    // Download falhou (token/rede/storage/tamanho) — dizemos porquê em vez de
+    // mostrar uma bolha vazia; o cron horário re-tenta com o `mediaId`.
+    return <div className="text-[11px] italic opacity-80 mb-1">{label} recebido, mas ainda não foi possível descarregar.</div>;
+  }
+  const url = signed.data?.url;
+  if (!url) {
+    return <div className="text-[11px] italic opacity-80 mb-1">{signed.isError ? `${label} indisponível.` : `A carregar ${label.toLowerCase()}…`}</div>;
   }
   if (m.mediaType === "image") {
     return (
-      <a href={m.mediaUrl} target="_blank" rel="noreferrer" className="block mb-1" title="Abrir imagem">
-        <img src={m.mediaUrl} alt={m.body && !isMediaPlaceholderBody(m.body) ? m.body : "Imagem recebida"} loading="lazy" className="max-h-64 max-w-full rounded-md object-contain bg-black/5" />
+      <a href={url} target="_blank" rel="noreferrer" className="block mb-1" title="Abrir imagem">
+        <img src={url} alt={m.body && !isMediaPlaceholderBody(m.body) ? m.body : "Imagem recebida"} loading="lazy" className="max-h-64 max-w-full rounded-md object-contain bg-black/5" />
       </a>
     );
   }
   if (m.mediaType === "audio") {
     return (
       <audio controls preload="metadata" className="max-w-full mb-1 h-9">
-        <source src={m.mediaUrl} type={m.mediaMime ?? undefined} />
-        <a href={m.mediaUrl} target="_blank" rel="noreferrer">Ouvir áudio</a>
+        <source src={url} type={m.mediaMime ?? undefined} />
+        <a href={url} target="_blank" rel="noreferrer">Ouvir áudio</a>
       </audio>
     );
   }
+  if (m.mediaType === "video") {
+    return (
+      <video controls preload="metadata" className="max-h-64 max-w-full rounded-md mb-1">
+        <source src={url} type={m.mediaMime ?? undefined} />
+      </video>
+    );
+  }
   return (
-    <a href={m.mediaUrl} target="_blank" rel="noreferrer" className="underline text-[12px] block mb-1">Abrir ficheiro</a>
+    <a href={url} target="_blank" rel="noreferrer" className="underline text-[12px] block mb-1">
+      Abrir {label.toLowerCase()}
+    </a>
   );
 }
-

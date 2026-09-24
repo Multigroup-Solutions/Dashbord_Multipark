@@ -100,6 +100,8 @@ export interface ExtraLeadRow {
   lastInboundAt: string | null;
   convertedAt: string | null;
   autoRepliedAt: string | null;
+  /** Pediu STOP por WhatsApp (migração 0094). */
+  optedOutAt: string | null;
   employeeId: number | null;
   projectId: number | null;
   createdById: number | null;
@@ -332,6 +334,11 @@ export async function contactExtraLeads(opts: {
       results.push({ leadId: l.id, fullName: l.fullName, status: "skipped", error: l.status === "converted" ? "Já é extra" : "Sem interesse" });
       return false;
     }
+    // Pediu STOP por WhatsApp → nunca mais recebe templates (nem o lembrete automático).
+    if (l.optedOutAt) {
+      results.push({ leadId: l.id, fullName: l.fullName, status: "opted_out", error: "Não quer mensagens (STOP)" });
+      return false;
+    }
     if (l.phoneE164) return true;
     results.push({ leadId: l.id, fullName: l.fullName, status: "no_phone", error: "Sem telemóvel" });
     return false;
@@ -370,7 +377,7 @@ export async function contactExtraLeads(opts: {
 
   const sent = results.filter((r) => r.status === "sent").length;
   const noPhone = results.filter((r) => r.status === "no_phone").length;
-  const skipped = results.filter((r) => r.status === "skipped").length;
+  const skipped = results.filter((r) => r.status === "skipped" || r.status === "opted_out" || r.status === "duplicate_phone").length;
   const failed = results.length - sent - noPhone - skipped;
   await logActivity({
     userId: opts.createdById ?? 0,

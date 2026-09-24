@@ -1918,6 +1918,18 @@ export const whatsappConversations = mysqlTable("whatsapp_conversations", {
 	lastInboundAt: timestamp({ mode: 'string' }),
 	lastMessageAt: timestamp({ mode: 'string' }),
 	unreadCount: int().default(0).notNull(),
+	// Migração 0094 ─────────────────────────────────────────────────────────
+	/** Pediu para não receber mensagens (STOP/PARAR…); "INICIAR" limpa. */
+	optedOutAt: timestamp({ mode: 'string' }),
+	/** Nome de perfil WhatsApp (contacts[].profile.name do webhook). */
+	profileName: varchar({ length: 128 }),
+	/** Resumo da última mensagem (lista do inbox sem ler as mensagens). */
+	lastPreview: varchar({ length: 160 }),
+	lastDirection: mysqlEnum(['in', 'out']),
+	lastType: varchar({ length: 16 }),
+	/** Cidade inferida pelo telefone de uma reserva (números sem ficha nem lead). */
+	bookingProjectId: int(),
+	bookingCheckedAt: timestamp({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
@@ -1936,7 +1948,9 @@ export const whatsappMessages = mysqlTable("whatsapp_messages", {
 	conversationId: int().notNull(),
 	direction: mysqlEnum(['in', 'out']).notNull(),
 	waMessageId: varchar({ length: 128 }),
-	type: mysqlEnum(['text', 'template']).notNull(),
+	// image/audio/document/video acrescentados na 0094; linhas antigas de media
+	// continuam 'text' com `mediaType` preenchido (a leitura aceita as duas).
+	type: mysqlEnum(['text', 'template', 'image', 'audio', 'document', 'video']).notNull(),
 	body: text(),
 	templateName: varchar({ length: 128 }),
 	// Media recebida (imagem/áudio enviados pela pessoa) — migração 0065.
@@ -1947,6 +1961,10 @@ export const whatsappMessages = mysqlTable("whatsapp_messages", {
 	mediaMime: varchar({ length: 128 }),
 	mediaUrl: text(),
 	mediaKey: varchar({ length: 512 }),
+	/** Tentativas de download da media falhadas (retry no cron horário, 0094). */
+	mediaAttempts: int().default(0).notNull(),
+	/** phone_number_id da Meta que recebeu a mensagem (metadata do webhook, 0094). */
+	phoneNumberId: varchar({ length: 32 }),
 	status: mysqlEnum(['pending', 'sent', 'delivered', 'read', 'failed']).default('pending').notNull(),
 	errorDetail: text(),
 	sentById: int(),
@@ -1961,6 +1979,16 @@ export const whatsappMessages = mysqlTable("whatsapp_messages", {
 	index("idx_whatsapp_messages_broadcast").on(table.broadcastId),
 	index("idx_whatsapp_messages_status").on(table.status),
 ]);
+
+// Status de entrega que chegou ANTES de a linha outbound existir (a Meta pode
+// mandar o 'failed' antes de o envio gravar a mensagem). Reconciliado quando o
+// envio grava a linha com esse waMessageId; limpo pelo cron ao fim de 7 dias.
+export const whatsappPendingStatuses = mysqlTable("whatsapp_pending_statuses", {
+	waMessageId: varchar({ length: 128 }).notNull().primaryKey(),
+	status: mysqlEnum(['sent', 'delivered', 'read', 'failed']).notNull(),
+	errorDetail: text(),
+	receivedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+});
 
 // Envio em massa de um template a N destinatários (agrupa as whatsapp_messages
 // resultantes via broadcastId). Contadores para o resumo no backoffice.
@@ -2008,6 +2036,8 @@ export const extraLeads = mysqlTable("extra_leads", {
 	convertedAt: datetime({ mode: 'string' }),
 	/** Resposta automática com o link da candidatura já enviada (no máximo 1×). */
 	autoRepliedAt: datetime({ mode: 'string' }),
+	/** Pediu para não receber WhatsApp (STOP/PARAR…) — migração 0094. */
+	optedOutAt: datetime({ mode: 'string' }),
 	/** Nº de templates ENVIADOS com sucesso a este lead. */
 	contactCount: int().default(0).notNull(),
 	lastContactedAt: timestamp({ mode: 'string' }),

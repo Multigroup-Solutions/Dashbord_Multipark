@@ -8337,7 +8337,7 @@ export const appRouter = router({
           entity: "whatsapp_broadcast",
           entityId: summary.broadcastId ?? undefined,
           details: input.testPhone
-            ? `WhatsApp TESTE → ${input.testPhone} (template ${input.templateName})`
+            ? `WhatsApp TESTE → ${(await import("../shared/maskPhone")).maskPhone(input.testPhone)} (template ${input.templateName})`
             : `WhatsApp broadcast template ${input.templateName}: ${summary.sent} enviados, ${summary.failed} falhas, ${summary.invalidPhone} sem número`,
         });
         return summary;
@@ -8364,10 +8364,63 @@ export const appRouter = router({
         }),
     }),
 
+    // Ficheiro de uma mensagem recebida (imagem/áudio/vídeo/documento): URL
+    // ASSINADO de curta duração — o storage deixou de servir links públicos.
+    mediaUrl: protectedProcedure
+      .input(z.object({ messageId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { getInboundMediaUrl } = await import("./whatsappInbox");
+        const out = await getInboundMediaUrl(input.messageId);
+        if (!out) throw new TRPCError({ code: "NOT_FOUND", message: "Ficheiro não encontrado" });
+        return out;
+      }),
+
+    // Template a uma conversa do inbox (janela fechada / ainda sem resposta):
+    // escolhido do catálogo, {{1}} = nome REAL do contacto, envio normal (não
+    // é o modo teste). Recusa contactos que pediram STOP.
+    sendTemplate: protectedProcedure
+      .input(
+        z.object({
+          conversationId: z.number().int().positive(),
+          templateId: z.string().min(1).max(64),
+          bodyParam2: z.string().max(512).nullable().optional(),
+          weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { conversationVisible } = await import("./whatsappInbox");
+        if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+        const { sendTemplateToConversation } = await import("./whatsappBroadcast");
+        let summary;
+        try {
+          summary = await sendTemplateToConversation({
+            conversationId: input.conversationId,
+            templateId: input.templateId,
+            bodyParam2: input.bodyParam2 ?? null,
+            weekStart: input.weekStart ?? null,
+            createdById: ctx.user.id,
+          });
+        } catch (err: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro no envio do template" });
+        }
+        await logActivity({
+          userId: ctx.user.id,
+          action: "whatsapp_template",
+          entity: "whatsapp_conversation",
+          entityId: input.conversationId,
+          details: `Template WhatsApp ${input.templateId} (conversa ${input.conversationId}): ${summary.sent ? "enviado" : "falhou"}`,
+        });
+        return summary;
+      }),
+
     markRead: protectedProcedure
       .input(z.object({ conversationId: z.number() }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
+        const { conversationVisible } = await import("./whatsappInbox");
+        if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         await markConversationRead(input.conversationId);
         return { success: true };
       }),
@@ -8378,20 +8431,24 @@ export const appRouter = router({
       .input(z.object({ conversationId: z.number() }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
-        const { markConversationUnread } = await import("./whatsappInbox");
+        const { markConversationUnread, conversationVisible } = await import("./whatsappInbox");
+        if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const ok = await markConversationUnread(input.conversationId);
         if (!ok) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         return { success: true };
       }),
 
     // Resposta em texto livre — a validação da janela de 24h é feita no servidor.
+    // Contacto em opt-out (STOP): só com `confirmOptedOut` (a UI pede confirmação).
     reply: protectedProcedure
-      .input(z.object({ conversationId: z.number(), text: z.string().min(1).max(4000) }))
+      .input(z.object({ conversationId: z.number(), text: z.string().min(1).max(4000), confirmOptedOut: z.boolean().optional() }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
         const { conversationVisible } = await import("./whatsappInbox");
         if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
-        const result = await replyToConversation(input.conversationId, input.text, ctx.user.id);
+        const result = await replyToConversation(input.conversationId, input.text, ctx.user.id, {
+          allowOptedOut: input.confirmOptedOut === true,
+        });
         if (!result.ok) {
           throw new TRPCError({ code: "BAD_REQUEST", message: result.error || "Falha ao responder" });
         }

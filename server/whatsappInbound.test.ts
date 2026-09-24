@@ -34,7 +34,9 @@ describe("messageBody", () => {
   it("áudio/localização/tipo desconhecido → marcador", () => {
     expect(messageBody({ type: "audio", audio: {} })).toBe("[áudio]");
     expect(messageBody({ type: "location" })).toBe("[localização]");
-    expect(messageBody({ type: "reaction" })).toBe("[reaction]");
+    expect(messageBody({ type: "reaction" })).toBe("[reação removida]");
+    expect(messageBody({ type: "reaction", reaction: { emoji: "👍" } })).toBe("[reação 👍]");
+    expect(messageBody({ type: "order" })).toBe("[order]");
   });
   it("interactive → título da resposta", () => {
     expect(messageBody({ type: "interactive", interactive: { button_reply: { title: "Sim" } } })).toBe("Sim");
@@ -67,15 +69,17 @@ describe("parseWebhookPayload — mensagens inbound", () => {
     expect(out.messages[0].media).toEqual({ kind: "image", id: "m1", mime: "image/jpeg" });
   });
 
-  it("texto não tem media; tipos não suportados (vídeo) também não", () => {
+  it("texto não tem media; vídeo e documento passam a ter referência; sticker não", () => {
     const p = inboundPayload([
       { id: "wamid.T", from: "351911111111", type: "text", text: { body: "olá" } },
       { id: "wamid.V", from: "351911111111", type: "video", video: { id: "v1", mime_type: "video/mp4" } },
+      { id: "wamid.S", from: "351911111111", type: "sticker", sticker: { id: "s1", mime_type: "image/webp" } },
     ]);
     const out = parseWebhookPayload(p);
     expect(out.messages[0].media).toBeNull();
-    expect(out.messages[1].media).toBeNull();
+    expect(out.messages[1].media).toEqual({ kind: "video", id: "v1", mime: "video/mp4" });
     expect(out.messages[1].body).toBe("[vídeo]");
+    expect(out.messages[2].media).toBeNull();
   });
 
   it("ignora mensagens sem id ou sem from", () => {
@@ -120,10 +124,10 @@ describe("parseWebhookPayload — statuses", () => {
 
 describe("parseWebhookPayload — payloads malformados/vazios", () => {
   it("objeto vazio / null / estrutura errada → sem mensagens nem statuses", () => {
-    expect(parseWebhookPayload({})).toEqual({ messages: [], statuses: [] });
-    expect(parseWebhookPayload(null)).toEqual({ messages: [], statuses: [] });
-    expect(parseWebhookPayload({ entry: "nope" })).toEqual({ messages: [], statuses: [] });
-    expect(parseWebhookPayload({ entry: [{ changes: [{}] }] })).toEqual({ messages: [], statuses: [] });
+    expect(parseWebhookPayload({})).toEqual({ messages: [], statuses: [], ignored: 0 });
+    expect(parseWebhookPayload(null)).toEqual({ messages: [], statuses: [], ignored: 0 });
+    expect(parseWebhookPayload({ entry: "nope" })).toEqual({ messages: [], statuses: [], ignored: 0 });
+    expect(parseWebhookPayload({ entry: [{ changes: [{}] }] })).toEqual({ messages: [], statuses: [], ignored: 0 });
   });
 });
 
