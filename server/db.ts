@@ -1,4 +1,7 @@
-import { projectScope, bookingHistoryScope, employeeScope, userScope, partnerScope, scopedProjectIds, requireGlobalCityAccess, gpsRowScope, pdaScope } from './cityScope';
+import { projectScope, bookingHistoryScope, employeeScope, userScope, partnerScope, scopedProjectIds, requireGlobalCityAccess, gpsRowScope, pdaScope, cityNameScope } from './cityScope';
+import { TRPCError } from '@trpc/server';
+import { buildHandoverCurrent, buildHandoverInsert, buildHandoverList, buildHandoverUpdate, handoverBoundValues, type HandoverInput, type HandoverKey } from './shiftHandoverSql';
+import { decideHandoverWrite, diffHandoverFields, HANDOVER_CONFLICT_MESSAGE, HANDOVER_EXISTS_MESSAGE, operationalDayWindowUtc } from '../shared/shiftHandover';
 import { and, asc, desc, eq, gte, lte, lt, ne, like, or, sql, aliasedTable, isNotNull, isNull, inArray, notInArray, getTableColumns, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { normalizeEmail } from "../shared/email";
@@ -148,6 +151,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0084").then(m => ({ s: m.MIGRATION_0084_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0084 })),
       import("./migrations/migration_0085").then(m => ({ s: m.MIGRATION_0085_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0085 })),
       import("./migrations/migration_0086").then(m => ({ s: m.MIGRATION_0086_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0086 })),
+      import("./migrations/migration_0087").then(m => ({ s: m.MIGRATION_0087_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0087 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -4658,108 +4662,76 @@ export async function autoCloseStaleCheckIns(): Promise<{ closed: number }> {
 // canetas, bateria, PDAs, fardamento + notas. 1 registo por (dia, turno, cidade).
 // `clothingItems` (JSON, ver shared/clothing.ts) substitui `uniformsCount`
 // desde 2026-09-09; a coluna antiga fica para os registos anteriores.
-let shiftHandoverEnsured = false;
-async function ensureShiftHandoverTable() {
-  if (shiftHandoverEnsured) return;
-  const db = await getDb();
-  if (!db) return;
-  await db.execute(sql`CREATE TABLE IF NOT EXISTS \`shift_handovers\` (
-    \`id\` INT NOT NULL AUTO_INCREMENT,
-    \`handoverDate\` VARCHAR(10) NOT NULL,
-    \`shift\` VARCHAR(10) NOT NULL,
-    \`city\` VARCHAR(16) NOT NULL DEFAULT 'lisbon',
-    \`carsForCovered\` INT NULL,
-    \`chargedUntilDate\` VARCHAR(10) NULL,
-    \`cashClosedInSafe\` TINYINT NULL,
-    \`checkoutCashDone\` TINYINT NULL,
-    \`frontPouchValue\` DECIMAL(10,2) NULL,
-    \`terminalPouchValue\` DECIMAL(10,2) NULL,
-    \`ticketsExpensesPaid\` DECIMAL(10,2) NULL,
-    \`mbRolls\` INT NULL,
-    \`mbRollsInPouch\` INT NULL,
-    \`pensInPouch\` INT NULL,
-    \`mbBattery\` INT NULL,
-    \`pdasCharged\` TINYINT NULL,
-    \`uniformsCount\` INT NULL,
-    \`clothingItems\` TEXT NULL,
-    \`notes\` TEXT NULL,
-    \`filledById\` INT NULL,
-    \`filledByName\` VARCHAR(255) NULL,
-    \`createdAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    \`updatedAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    PRIMARY KEY (\`id\`),
-    UNIQUE INDEX \`shift_handover_unique\` (\`handoverDate\`, \`shift\`, \`city\`)
-  )`);
-  shiftHandoverEnsured = true;
-}
+// A tabela é criada pela migration 0087 (drizzle/schema.ts `shiftHandovers`);
+// todo o SQL está em server/shiftHandoverSql.ts, sempre parametrizado.
 
-export async function saveShiftHandover(data: Record<string, any>) {
+export async function saveShiftHandover(
+  key: HandoverKey,
+  data: HandoverInput,
+  opts: { expectedVersion: number | null | undefined; userId: number; userName: string | null; canEditOld: boolean },
+): Promise<{ mode: "insert" | "update"; changed: string[] }> {
   const db = await getDb();
   if (!db) throw new Error("BD indisponível");
-  await ensureShiftHandoverTable();
-  const esc = (v: any) => v == null ? "NULL" : typeof v === "number" ? String(v) : `'${String(v).replace(/'/g, "''").slice(0, 2000)}'`;
-  const cols: Array<[string, any]> = [
-    ["handoverDate", data.handoverDate], ["shift", data.shift], ["city", data.city ?? "lisbon"],
-    ["carsForCovered", data.carsForCovered], ["chargedUntilDate", data.chargedUntilDate],
-    ["cashClosedInSafe", data.cashClosedInSafe == null ? null : (data.cashClosedInSafe ? 1 : 0)],
-    ["checkoutCashDone", data.checkoutCashDone == null ? null : (data.checkoutCashDone ? 1 : 0)],
-    ["frontPouchValue", data.frontPouchValue], ["terminalPouchValue", data.terminalPouchValue],
-    ["ticketsExpensesPaid", data.ticketsExpensesPaid], ["mbRolls", data.mbRolls],
-    ["mbRollsInPouch", data.mbRollsInPouch], ["pensInPouch", data.pensInPouch],
-    ["mbBattery", data.mbBattery],
-    ["pdasCharged", data.pdasCharged == null ? null : (data.pdasCharged ? 1 : 0)],
-    ["uniformsCount", data.uniformsCount],
-    // Lista de peças (já validada no router); `null` limpa. JSON compacto —
-    // o `esc` corta a 2000 chars, e 30 peças ficam muito abaixo disso.
-    ["clothingItems", Array.isArray(data.clothingItems) ? JSON.stringify(data.clothingItems) : data.clothingItems ?? null],
-    ["notes", data.notes],
-    ["filledById", data.filledById], ["filledByName", data.filledByName],
-  ];
-  const updates = cols.filter(([c]) => !["handoverDate", "shift", "city"].includes(c))
-    .map(([c, v]) => `\`${c}\` = ${esc(v)}`).join(", ");
-  await db.execute(sql.raw(
-    `INSERT INTO \`shift_handovers\` (${cols.map(([c]) => `\`${c}\``).join(",")})
-     VALUES (${cols.map(([, v]) => esc(v)).join(",")})
-     ON DUPLICATE KEY UPDATE ${updates}`,
-  ));
+  const [curRows] = await db.execute(buildHandoverCurrent(key)) as any;
+  const cur = (curRows as any[])[0] ?? null;
+  const decision = decideHandoverWrite(
+    cur ? { version: Number(cur.version ?? 1), ageMinutes: Number(cur.ageMinutes ?? 0) } : null,
+    opts.expectedVersion,
+    opts.canEditOld,
+  );
+  if (!decision.ok) throw new TRPCError({ code: decision.code, message: decision.message });
+  const bound = handoverBoundValues(data);
+  const before = cur ? handoverBoundValues(cur) : null;
+  const changed = diffHandoverFields(before, bound);
+  const who = { id: opts.userId, name: opts.userName };
+  if (decision.mode === "insert") {
+    try {
+      await db.execute(buildHandoverInsert(key, data, who));
+    } catch (err: any) {
+      // Outra pessoa criou o mesmo (dia, turno, cidade) entre a leitura e a escrita.
+      if ((err?.code ?? err?.cause?.code) === "ER_DUP_ENTRY") throw new TRPCError({ code: "CONFLICT", message: HANDOVER_EXISTS_MESSAGE });
+      throw err;
+    }
+    return { mode: "insert", changed };
+  }
+  const [res] = await db.execute(buildHandoverUpdate(Number(cur.id), Number(opts.expectedVersion), data, who)) as any;
+  if (Number(res?.affectedRows ?? 0) === 0) throw new TRPCError({ code: "CONFLICT", message: HANDOVER_CONFLICT_MESSAGE });
+  return { mode: "update", changed };
 }
 
 export async function listShiftHandovers(opts: { from?: string; to?: string; city?: string } = {}) {
   const db = await getDb();
   if (!db) return [];
-  await ensureShiftHandoverTable();
-  const conds: string[] = [];
-  if (opts.from) conds.push(`handoverDate >= '${opts.from.slice(0, 10)}'`);
-  if (opts.to) conds.push(`handoverDate <= '${opts.to.slice(0, 10)}'`);
-  if (opts.city) conds.push(`city = '${opts.city.replace(/[^a-z]/g, "")}'`);
-  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
-  const [rows] = await db.execute(sql.raw(
-    `SELECT * FROM \`shift_handovers\` ${where} ORDER BY handoverDate DESC, shift, city LIMIT 200`,
-  )) as any;
+  const [rows] = await db.execute(buildHandoverList(opts, cityNameScope(sql`\`city\``))) as any;
   // `clothingItems` sai como JSON parseado e validado — o cliente nunca vê texto cru.
-  return (rows as any[]).map((r) => ({ ...r, clothingItems: parseClothingItems(r.clothingItems) }));
+  return (rows as any[]).map((r) => ({ ...r, version: Number(r.version ?? 1), clothingItems: parseClothingItems(r.clothingItems) }));
 }
 
-/** Dashboard do supervisor (por dia): condutores por turno, carros
+/** Resumo do dia do supervisor: condutores por turno, carros
  *  recolhidos/entregues, TEMPOS pendente→entrega e atraso na recolha
- *  (previsto vs real), e reclamações do dia. */
+ *  (previsto vs real), e reclamações do dia.
+ *  O "dia" é o dia OPERACIONAL de Lisboa: 03:00 → 03:00 do dia seguinte
+ *  (manhã + noite inteira), convertido para UTC (as colunas são UTC). Tudo
+ *  dentro das cidades do utilizador (ou da cidade pedida). */
 export async function getSupervisorDayDashboard(date: string) {
   const db = await getDb();
   if (!db) return null;
-  const start = `${date} 00:00:00`;
-  const end = `${date} 23:59:59`;
-  const nextEnd = `${date} 23:59:59`;
+  const { start, end, endMs } = operationalDayWindowUtc(date);
+  // Entregas: o CHECK_OUT pode acontecer até 10h depois do pendente (o mesmo
+  // limite do TIMESTAMPDIFF < 600 abaixo) — limite superior explícito.
+  const checkoutEnd = new Date(endMs + 600 * 60_000).toISOString().slice(0, 19).replace("T", " ");
 
   // Tempos pendente→entrega (PENDING_CHECKOUT → CHECK_OUT, mesmo booking)
   const [deliveryRows] = await db.execute(sql`
     SELECT h1.bookingExternalId, TIMESTAMPDIFF(MINUTE, h1.t, h2.t) AS mins, h2.agentName
     FROM (SELECT bookingExternalId, MIN(actionTime) t FROM multipark_booking_history
-          WHERE changeType='PENDING_CHECKOUT' AND actionTime >= ${start} AND actionTime <= ${end}
+          WHERE changeType='PENDING_CHECKOUT' AND actionTime >= ${start} AND actionTime < ${end}
           GROUP BY bookingExternalId) h1
     JOIN (SELECT bookingExternalId, MIN(actionTime) t, MAX(agentName) agentName FROM multipark_booking_history
-          WHERE changeType='CHECK_OUT' AND actionTime >= ${start}
-          GROUP BY bookingExternalId) h2 USING (bookingExternalId)
-    WHERE h2.t >= h1.t AND TIMESTAMPDIFF(MINUTE, h1.t, h2.t) < 600`) as any;
+          WHERE changeType='CHECK_OUT' AND actionTime >= ${start} AND actionTime < ${checkoutEnd}
+          GROUP BY bookingExternalId) h2 ON h2.bookingExternalId = h1.bookingExternalId
+    WHERE h2.t >= h1.t AND TIMESTAMPDIFF(MINUTE, h1.t, h2.t) < 600
+      AND ${bookingHistoryScope(sql`h1.bookingExternalId`)}`) as any;
   const deliveryTimes = (deliveryRows as any[]).map((r) => ({ booking: r.bookingExternalId, mins: Number(r.mins), agent: r.agentName ?? null }));
   deliveryTimes.sort((a, b) => b.mins - a.mins);
   const dAvg = deliveryTimes.length ? Math.round(deliveryTimes.reduce((s, r) => s + r.mins, 0) / deliveryTimes.length) : 0;
@@ -4768,16 +4740,18 @@ export async function getSupervisorDayDashboard(date: string) {
   const [pickupRows] = await db.execute(sql`
     SELECT h.bookingExternalId, TIMESTAMPDIFF(MINUTE, b.checkIn, h.t) AS mins
     FROM (SELECT bookingExternalId, MIN(actionTime) t FROM multipark_booking_history
-          WHERE changeType='CHECK_IN' AND actionTime >= ${start} AND actionTime <= ${nextEnd}
+          WHERE changeType='CHECK_IN' AND actionTime >= ${start} AND actionTime < ${end}
           GROUP BY bookingExternalId) h
     JOIN multipark_bookings b ON b.externalId = h.bookingExternalId
-    WHERE b.checkIn IS NOT NULL AND ABS(TIMESTAMPDIFF(MINUTE, b.checkIn, h.t)) < 600`) as any;
+    WHERE b.checkIn IS NOT NULL AND ABS(TIMESTAMPDIFF(MINUTE, b.checkIn, h.t)) < 600
+      AND ${projectScope(sql`b.projectId`)}`) as any;
   const pickupDelays = (pickupRows as any[]).map((r) => Number(r.mins)).filter((m) => Number.isFinite(m));
   const late = pickupDelays.filter((m) => m > 15).length;
   const pAvg = pickupDelays.length ? Math.round(pickupDelays.reduce((s, m) => s + m, 0) / pickupDelays.length) : 0;
 
-  // Reclamações criadas no dia
-  const [[compl]] = await db.execute(sql`SELECT COUNT(*) n FROM complaints WHERE createdAt >= ${start} AND createdAt <= ${end}`) as any;
+  // Reclamações criadas no mesmo dia operacional
+  const [[compl]] = await db.execute(sql`SELECT COUNT(*) n FROM complaints
+    WHERE createdAt >= ${start} AND createdAt < ${end} AND ${projectScope(sql`complaints.projectId`)}`) as any;
 
   // Condutores por turno (escala extras-dia do dia + ações)
   const dayActivity = await getDayActivity(date);
@@ -4789,10 +4763,11 @@ export async function getSupervisorDayDashboard(date: string) {
     startHour: extrasDiaAssignments.startHour,
     endHour: extrasDiaAssignments.endHour,
     isTeamLeader: extrasDiaAssignments.isTeamLeader,
-  }).from(extrasDiaAssignments).where(eq(extrasDiaAssignments.assignmentDate, date));
+  }).from(extrasDiaAssignments).where(and(eq(extrasDiaAssignments.assignmentDate, date), cityNameScope(extrasDiaAssignments.city)));
 
   return {
     date,
+    window: { start, end },
     totals: dayActivity.totals,
     people: dayActivity.people,
     shifts: assignments,
@@ -5225,77 +5200,6 @@ export async function getMultiparkBookings(filters?: {
     .offset(filters?.offset ?? 0);
 }
 
-export async function getLocalBookingsByAction(filters: {
-  startDate: string;
-  endDate: string;
-  actionType: "creation" | "checkin" | "checkout" | "cancelation";
-  projectId?: number;
-}) {
-  const db = await getDb();
-  if (!db) return [];
-
-  const conditions: any[] = [];
-
-  // Filter by date range based on actionType
-  const endWithTime = filters.endDate + " 23:59:59";
-  switch (filters.actionType) {
-    case "creation":
-      conditions.push(gte(multiparkBookings.bookingCreatedAt, filters.startDate));
-      conditions.push(lte(multiparkBookings.bookingCreatedAt, endWithTime));
-      // Todas as criações contam, incluindo as entretanto canceladas.
-      // O ecrã distingue estado e valor cancelado sem ocultar reservas da origem.
-      break;
-    case "checkin":
-      conditions.push(gte(multiparkBookings.checkIn, filters.startDate));
-      conditions.push(lte(multiparkBookings.checkIn, endWithTime));
-      conditions.push(sql`${multiparkBookings.status} != 'CANCELLED'`);
-      break;
-    case "checkout":
-      conditions.push(gte(multiparkBookings.checkOut, filters.startDate));
-      conditions.push(lte(multiparkBookings.checkOut, endWithTime));
-      conditions.push(sql`${multiparkBookings.status} != 'CANCELLED'`);
-      break;
-    case "cancelation":
-      // FIX 2026-08-05: cancelledAt está NULL em ~4.6k canceladas (o sync nem
-      // sempre o traz) — filtrar por ele escondia a maioria. A fonte de verdade
-      // é o STATUS; a data usa cancelledAt quando existe, senão updatedAt
-      // (última mudança de estado — aproximação razoável do cancelamento).
-      conditions.push(sql`${multiparkBookings.status} = 'CANCELLED'`);
-      conditions.push(sql`COALESCE(${multiparkBookings.cancelledAt}, ${multiparkBookings.updatedAt}) >= ${filters.startDate}`);
-      conditions.push(sql`COALESCE(${multiparkBookings.cancelledAt}, ${multiparkBookings.updatedAt}) <= ${endWithTime}`);
-      break;
-  }
-
-  // Filter by project hierarchy (include all children; marcas globais idem)
-  if (filters.projectId) {
-    const ids = await resolveProjectIds(filters.projectId);
-    conditions.push(sql`${multiparkBookings.projectId} IN (${sql.raw(ids.join(",") || "0")})`);
-  }
-
-  const rows = await db
-    .select()
-    .from(multiparkBookings)
-    .where(and(...conditions))
-    .orderBy(desc(multiparkBookings.bookingCreatedAt))
-    .limit(5000);
-
-  // Comissões de parceiros de venda por reserva (partnerships NOVAS via
-  // campaign match — substitui o legado partnerName/percent da ficha do
-  // projeto, para bater certo com a Faturação/Parcerias).
-  const partnerMap = await buildPartnerByCampaignMap();
-  return rows.map((b) => {
-    const key = (b.campaign ?? "").trim().toLowerCase();
-    const p = key ? partnerMap.get(key) : undefined;
-    const price = parseFloat(String(b.totalPrice ?? 0)) || 0;
-    return {
-      ...b,
-      salesPartnerName: p?.name ?? null,
-      salesPartnerRate: p?.commissionRate ?? null,
-      salesPartnerCommission: p ? Math.round(price * (p.commissionRate / 100) * 100) / 100 : 0,
-    };
-  });
-}
-
 // Mapa central campanha→parceiro (campaignKey + nome + aliases), igual ao da
 // Faturação. Cacheado 60s para não pesar nas folhas operacionais.
 let partnerMapCache: { at: number; map: Map<string, { id: number; name: string; commissionRate: number; updatedAt: string }> } | null = null;
@@ -5333,23 +5237,27 @@ export async function getOperationsSummary(filters: { startDate: string; endDate
   const db = await getDb();
   const empty = { actions: {} as Record<string, { count: number; revenue: number; byCity: Array<{ name: string; count: number; revenue: number }>; byPark: Array<{ name: string; count: number; revenue: number }> }> };
   if (!db) return empty;
-  const endWithTime = filters.endDate + " 23:59:59";
+  // Dias de LISBOA → intervalo UTC [início, fim) (as colunas estão em UTC)
+  const range = lisbonDayRangeUtc(filters.startDate, filters.endDate);
   let projectCond = "";
   if (filters.projectId) {
     const ids = await resolveProjectIds(filters.projectId);
     projectCond = ` AND projectId IN (${ids.join(",") || "0"})`;
   }
+  const scoped = scopedProjectIds();
+  if (scoped !== undefined) projectCond += ` AND projectId IN (${scoped.join(",") || "0"})`;
+  const between = (col: string) => `${col} >= '${range.start}' AND ${col} < '${range.end}'`;
   const DATE_COND: Record<string, string> = {
-    creation: `bookingCreatedAt >= ? AND bookingCreatedAt <= ? AND status != 'CANCELLED'`,
-    checkin: `checkIn >= ? AND checkIn <= ? AND status != 'CANCELLED'`,
-    checkout: `checkOut >= ? AND checkOut <= ? AND status != 'CANCELLED'`,
-    cancelation: `status = 'CANCELLED' AND COALESCE(cancelledAt, updatedAt) >= ? AND COALESCE(cancelledAt, updatedAt) <= ?`,
+    // criadas NÃO canceladas (valor previsto)
+    creation: `${between("bookingCreatedAt")} AND status != 'CANCELLED'`,
+    // TODAS as criadas no período (coorte da taxa de cancelamento)
+    createdAll: between("bookingCreatedAt"),
+    checkin: `${between("checkIn")} AND status != 'CANCELLED'`,
+    checkout: `${between("checkOut")} AND status != 'CANCELLED'`,
+    cancelation: `status = 'CANCELLED' AND ${between("COALESCE(cancelledAt, updatedAt)")}`,
   };
   const out: (typeof empty)["actions"] = {};
-  for (const [action, cond] of Object.entries(DATE_COND)) {
-    // Substitui os dois ? por datas (validadas pelo zod: YYYY-MM-DD)
-    const parts = cond.split("?");
-    const q = parts[0] + `'${filters.startDate}'` + parts[1] + `'${endWithTime}'` + (parts[2] ?? "");
+  for (const [action, q] of Object.entries(DATE_COND)) {
     const [rows] = await db.execute(sql.raw(
       `SELECT COALESCE(city,'—') AS city, COALESCE(parkName,'—') AS parkName, COUNT(*) AS n, COALESCE(SUM(totalPrice),0) AS revenue
        FROM multipark_bookings WHERE ${q}${projectCond}

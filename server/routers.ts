@@ -21,7 +21,8 @@ import {
   type DeactivationInput,
   type ResolvedDeactivation,
 } from "../shared/deactivationReasons";
-import { dayToMysql, lisbonToday } from "../shared/expensePeriods";
+import { dayToMysql, isIsoDay, lisbonToday } from "../shared/expensePeriods";
+import { HANDOVER_CITIES, maxHandoverDate } from "../shared/shiftHandover";
 import { expenseTotals } from "../shared/expenseTotals";
 import { getBillingData, getAnnualBreakdown } from "./finance/compat";
 import { canViewDocuments, canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, CENTER_SCOPED_ROLES, PERSONAL_FIELDS, CONTRACT_FIELDS, type RhViewer, type EmployeeRef, isRhAdmin } from "./rhAccess";
@@ -344,7 +345,6 @@ import {
   getGpsAlerts,
   acknowledgeGpsAlert,
   getGpsAlertStats,
-  getLocalBookingsByAction,
   searchBookingByRef,
 } from "./db";
 import { generatePayrollPdf } from "./payrollPdf";
@@ -376,6 +376,9 @@ import { LEAD_STATUSES } from "../shared/extraLeadsFunnel";
 const LEAD_STATUS_ENUM = LEAD_STATUSES;
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
+
+// Dia "YYYY-MM-DD" válido (mês/dia reais) — nunca colado em SQL, mas validado na mesma.
+const handoverDaySchema = z.string().refine(isIsoDay, "Data inválida (AAAA-MM-DD)");
 
 const ROLE_HIERARCHY: Record<string, number> = {
   super_admin: 7,
@@ -6477,8 +6480,16 @@ export const appRouter = router({
       const { getDb } = await import("./db");
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
-      const { multiparkBookingExtras } = await import("../drizzle/schema");
-      const { eq } = await import("drizzle-orm");
+      const { multiparkBookingExtras, multiparkBookings } = await import("../drizzle/schema");
+      const { eq, and } = await import("drizzle-orm");
+      const { projectScope, scopedProjectIds } = await import("./cityScope");
+      if (scopedProjectIds() !== undefined) {
+        // Só serviços de reservas da(s) cidade(s) do utilizador
+        const own = await db.select({ id: multiparkBookingExtras.id }).from(multiparkBookingExtras)
+          .innerJoin(multiparkBookings, eq(multiparkBookings.externalId, multiparkBookingExtras.bookingExternalId))
+          .where(and(eq(multiparkBookingExtras.id, input.id), projectScope(multiparkBookings.projectId))).limit(1);
+        if (!own.length) throw new TRPCError({ code: "FORBIDDEN", message: "Este serviço pertence a outra cidade." });
+      }
       await db.update(multiparkBookingExtras).set({ done: input.done ? 1 : 0 }).where(eq(multiparkBookingExtras.id, input.id));
       await logActivity({ userId: ctx.user.id, action: input.done ? "complete" : "reopen", entity: "booking_extra", entityId: input.id });
       return { success: true };
@@ -6490,15 +6501,23 @@ export const appRouter = router({
     // a ALOCAÇÃO como matrícula. Agora: todos os parques, instantâneo,
     // matrícula/cliente reais via join à reserva.
     multiparkExtras: protectedProcedure.input(z.object({
-      startDate: z.string(),
-      endDate: z.string(),
+      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      // Âmbito de cidade como as outras consultas de reservas (scopeCityQuery
+      // preenche a cidade do utilizador; projectScope garante-a no SQL)
+      projectId: z.number().optional(),
     })).query(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
       const { getDb } = await import("./db");
       const db = await getDb();
       if (!db) return { total: 0, services: [] };
       const { multiparkBookingExtras, multiparkBookings } = await import("../drizzle/schema");
-      const { and, gte, lte, eq, sql } = await import("drizzle-orm");
+      const { and, gte, lt, eq, sql, inArray } = await import("drizzle-orm");
+      const { projectScope } = await import("./cityScope");
+      const { lisbonDayRangeUtc } = await import("../shared/lisbonDay");
+      const { resolveProjectIds } = await import("./db");
+      const range = lisbonDayRangeUtc(input.startDate, input.endDate);
+      const projectIds = input.projectId ? await resolveProjectIds(input.projectId) : null;
       const rows = await db
         .select({
           id: multiparkBookingExtras.id,
@@ -6518,9 +6537,12 @@ export const appRouter = router({
         .from(multiparkBookingExtras)
         .innerJoin(multiparkBookings, eq(multiparkBookings.externalId, multiparkBookingExtras.bookingExternalId))
         .where(and(
-          gte(multiparkBookings.checkOut, input.startDate),
-          lte(multiparkBookings.checkOut, input.endDate + " 23:59:59"),
+          // Dias de Lisboa → intervalo UTC [início, fim)
+          gte(multiparkBookings.checkOut, range.start),
+          lt(multiparkBookings.checkOut, range.end),
           sql`${multiparkBookings.status} != 'CANCELLED'`,
+          projectScope(multiparkBookings.projectId),
+          projectIds ? (projectIds.length ? inArray(multiparkBookings.projectId, projectIds) : sql`1 = 0`) : sql`1 = 1`,
         ))
         .limit(5000);
       const services = rows.map((r) => ({
@@ -6638,26 +6660,30 @@ export const appRouter = router({
 
   // ─── PASSAGEM DE TURNO ───────────────────────────────────────────────────
   shiftHandover: router({
-    // Team leaders preenchem; supervisor+ consulta o histórico e o dashboard
+    // Team leaders preenchem; supervisor+ consulta o histórico e o resumo do dia.
+    // A cidade (`city`) passa pelo filtro de cidades do middleware
+    // (hasForeignCityFilter → FORBIDDEN fora das cidades do utilizador).
     save: protectedProcedure.input(z.object({
-      handoverDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      handoverDate: handoverDaySchema,
       shift: z.enum(["morning", "night"]),
-      city: z.enum(["lisbon", "porto", "faro"]).default("lisbon"),
-      carsForCovered: z.number().int().min(0).nullable().optional(),
-      chargedUntilDate: z.string().max(10).nullable().optional(),
+      city: z.enum(HANDOVER_CITIES),
+      // Lock otimista: versão carregada pelo formulário (null = registo novo).
+      expectedVersion: z.number().int().min(1).nullable().optional(),
+      carsForCovered: z.number().int().min(0).max(100_000).nullable().optional(),
+      chargedUntilDate: z.string().refine(isIsoDay, "Data inválida").nullable().optional(),
       cashClosedInSafe: z.boolean().nullable().optional(),
       checkoutCashDone: z.boolean().nullable().optional(),
-      frontPouchValue: z.number().min(0).nullable().optional(),
-      terminalPouchValue: z.number().min(0).nullable().optional(),
-      ticketsExpensesPaid: z.number().min(0).nullable().optional(),
-      mbRolls: z.number().int().min(0).nullable().optional(),
-      mbRollsInPouch: z.number().int().min(0).nullable().optional(),
-      pensInPouch: z.number().int().min(0).nullable().optional(),
+      frontPouchValue: z.number().finite().min(0).max(1_000_000).nullable().optional(),
+      terminalPouchValue: z.number().finite().min(0).max(1_000_000).nullable().optional(),
+      ticketsExpensesPaid: z.number().finite().min(0).max(1_000_000).nullable().optional(),
+      mbRolls: z.number().int().min(0).max(100_000).nullable().optional(),
+      mbRollsInPouch: z.number().int().min(0).max(100_000).nullable().optional(),
+      pensInPouch: z.number().int().min(0).max(100_000).nullable().optional(),
       mbBattery: z.number().int().min(0).max(100).nullable().optional(),
       pdasCharged: z.boolean().nullable().optional(),
       // Legado: continua aceite para não apagar o valor dos registos antigos ao
       // editar; o formulário novo já não o pede (ver `clothingItems`).
-      uniformsCount: z.number().int().min(0).nullable().optional(),
+      uniformsCount: z.number().int().min(0).max(100_000).nullable().optional(),
       // Fardamento entregue: peças com quantidade e tamanho (shared/clothing.ts).
       clothingItems: z.array(z.object({
         type: z.enum(CLOTHING_TYPES),
@@ -6667,22 +6693,35 @@ export const appRouter = router({
       notes: z.string().max(2000).nullable().optional(),
     })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "team_leader");
+      if (input.handoverDate > maxHandoverDate()) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Não é possível registar passagens de turno para depois de amanhã." });
+      }
       const { saveShiftHandover } = await import("./db");
-      await saveShiftHandover({
-        ...input,
+      const { handoverDate, shift, city, expectedVersion, ...values } = input;
+      const result = await saveShiftHandover({ handoverDate, shift, city }, {
+        ...values,
         // Linhas repetidas (mesmo tipo+tamanho) somam-se antes de gravar.
-        clothingItems: input.clothingItems == null ? input.clothingItems : normalizeClothingItems(input.clothingItems),
-        filledById: ctx.user.id,
-        filledByName: ctx.user.name ?? null,
+        clothingItems: values.clothingItems == null ? values.clothingItems : normalizeClothingItems(values.clothingItems),
+      }, {
+        expectedVersion,
+        userId: ctx.user.id,
+        userName: ctx.user.name ?? null,
+        // Passadas 24h desde a criação só supervisor+ edita.
+        canEditOld: (ROLE_HIERARCHY[ctx.user.role] ?? -1) >= ROLE_HIERARCHY["supervisor"],
       });
-      await logActivity({ userId: ctx.user.id, action: "save", entity: "shift_handover", details: `${input.handoverDate} ${input.shift} ${input.city}` });
-      return { success: true };
+      await logActivity({
+        userId: ctx.user.id,
+        action: result.mode === "insert" ? "create" : "update",
+        entity: "shift_handover",
+        details: `${handoverDate} ${shift} ${city}` + (result.changed.length ? ` — alterado: ${result.changed.join(", ")}` : " — sem alterações"),
+      });
+      return { success: true, mode: result.mode };
     }),
 
     list: protectedProcedure.input(z.object({
-      from: z.string().optional(),
-      to: z.string().optional(),
-      city: z.enum(["lisbon", "porto", "faro"]).optional(),
+      from: handoverDaySchema.optional(),
+      to: handoverDaySchema.optional(),
+      city: z.enum(HANDOVER_CITIES).optional(),
     }).optional()).query(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "team_leader");
       const { listShiftHandovers } = await import("./db");
@@ -6690,7 +6729,9 @@ export const appRouter = router({
     }),
 
     supervisorDashboard: protectedProcedure.input(z.object({
-      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      date: handoverDaySchema,
+      // Opcional: restringe o resumo a uma cidade (dentro das do utilizador).
+      city: z.enum(HANDOVER_CITIES).optional(),
     })).query(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "supervisor");
       const { getSupervisorDayDashboard } = await import("./db");
@@ -7488,20 +7529,63 @@ export const appRouter = router({
     // Query LOCAL DB by actionType + date range
     localBookingsByAction: protectedProcedure
       .input(z.object({
-        startDate: z.string(),
-        endDate: z.string(),
+        startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         actionType: z.enum(["creation", "checkin", "checkout", "cancelation"]),
+        projectId: z.number().optional(),
+        // Filtros no SERVIDOR (grupo Lisboa/Porto/Faro/Marketplace, canal, estado, pesquisa)
+        group: z.enum(["all", "lisboa", "porto", "faro", "marketplace", "sem_cidade"]).optional(),
+        channel: z.string().max(32).optional(),
+        state: z.enum(["all", "active", "cancelled", "done", "pending"]).optional(),
+        search: z.string().max(100).optional(),
+        limit: z.number().int().min(1).max(20000).optional(),
+        offset: z.number().int().min(0).optional(),
+      }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { getOperationsBookings, rangeTooLong } = await import("./operationsBookings");
+        if (input.endDate < input.startDate || rangeTooLong(input.startDate, input.endDate)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Intervalo inválido (máx. 366 dias)." });
+        }
+        const r = await getOperationsBookings(input);
+        return { ...r, actionType: input.actionType, period: { startDate: input.startDate, endDate: input.endDate } };
+      }),
+
+    // Custo dos extras por dia (de Lisboa) × cidade — real (ponto), previsto
+    // (escala) e o que conta. Mesma regra do motor financeiro. Só com o gate
+    // de totais financeiros; sem ele devolve allowed=false (a UI esconde).
+    extrasCostDaily: protectedProcedure
+      .input(z.object({
+        startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         projectId: z.number().optional(),
       }))
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
-        const bookings = await getLocalBookingsByAction(input);
-        return {
-          total: bookings.length,
-          actionType: input.actionType,
-          period: { startDate: input.startDate, endDate: input.endDate },
-          bookings,
-        };
+        if (!(await canSeeFinanceTotals(ctx.user))) return { allowed: false as const, today: "", rows: [] };
+        const { getExtrasCostDaily, rangeTooLong } = await import("./operationsBookings");
+        if (input.endDate < input.startDate || rangeTooLong(input.startDate, input.endDate)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Intervalo inválido (máx. 366 dias)." });
+        }
+        return { allowed: true as const, ...(await getExtrasCostDaily(input)) };
+      }),
+
+    // Gasto em publicidade por dia × cidade (Lisboa/Porto/Faro; o marketplace
+    // não tem anúncios nossos). Mesmo gate dos totais financeiros.
+    adSpendDaily: protectedProcedure
+      .input(z.object({
+        startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        projectId: z.number().optional(),
+      }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        if (!(await canSeeFinanceTotals(ctx.user))) return { allowed: false as const, cities: [], rows: [] };
+        const { getAdSpendDaily, rangeTooLong } = await import("./operationsBookings");
+        if (input.endDate < input.startDate || rangeTooLong(input.startDate, input.endDate)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Intervalo inválido (máx. 366 dias)." });
+        }
+        return { allowed: true as const, ...(await getAdSpendDaily(input)) };
       }),
 
     // Atividade consolidada de um dia: ações + km/GPS por pessoa (visão Jorge)
@@ -7680,8 +7764,9 @@ export const appRouter = router({
         const db = await getDb();
         if (!db) return null;
         const { multiparkBookings } = await import("../drizzle/schema");
-        const { eq } = await import("drizzle-orm");
-        const rows = await db.select().from(multiparkBookings).where(eq(multiparkBookings.externalId, input.externalId)).limit(1);
+        const { and, eq } = await import("drizzle-orm");
+        const { projectScope } = await import("./cityScope");
+        const rows = await db.select().from(multiparkBookings).where(and(eq(multiparkBookings.externalId, input.externalId), projectScope(multiparkBookings.projectId))).limit(1);
         return rows[0] ?? null;
       }),
 

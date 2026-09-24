@@ -31,7 +31,8 @@ export function scopeCityQuery(path: string, access: CityAccess, input: unknown)
     return { ...raw, city: raw.city ?? (name === 'lisboa' ? 'lisbon' : name) };
   }
   if (['multipark.bookings', 'multipark.kpis', 'multipark.snapshots'].includes(path)) return { ...raw, city: raw.city ?? access.cityName };
-  if (['multipark.bookingStats', 'multipark.localBookingsByAction', 'multipark.operationsSummary', 'rh.list'].includes(path)) {
+  if (['multipark.bookingStats', 'multipark.localBookingsByAction', 'multipark.operationsSummary', 'multipark.extrasCostDaily',
+    'multipark.adSpendDaily', 'services.multiparkExtras', 'rh.list'].includes(path)) {
     return { ...raw, projectId: raw.projectId ?? access.defaultCityId };
   }
   return input;

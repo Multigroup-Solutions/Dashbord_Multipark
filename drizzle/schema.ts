@@ -770,6 +770,41 @@ export const extrasDiaAssignments = mysqlTable("extras_dia_assignments", {
 	index("idx_extras_dia_date").on(table.assignmentDate),
 ]);
 
+// Passagem de turno (team leaders) — 1 registo por (dia, turno, cidade).
+// Criada pela migration 0087 (antes nascia em db.ts). `createdBy*` = autor
+// original; `filledBy*` = último a editar; `version` = lock otimista.
+export const shiftHandovers = mysqlTable("shift_handovers", {
+	id: int().autoincrement().primaryKey(),
+	handoverDate: varchar({ length: 10 }).notNull(),
+	shift: varchar({ length: 10 }).notNull(),
+	city: varchar({ length: 16 }).default('lisbon').notNull(),
+	carsForCovered: int(),
+	chargedUntilDate: varchar({ length: 10 }),
+	cashClosedInSafe: tinyint(),
+	checkoutCashDone: tinyint(),
+	frontPouchValue: decimal({ precision: 10, scale: 2 }),
+	terminalPouchValue: decimal({ precision: 10, scale: 2 }),
+	ticketsExpensesPaid: decimal({ precision: 10, scale: 2 }),
+	mbRolls: int(),
+	mbRollsInPouch: int(),
+	pensInPouch: int(),
+	mbBattery: int(),
+	pdasCharged: tinyint(),
+	uniformsCount: int(),
+	clothingItems: text(),
+	notes: text(),
+	filledById: int(),
+	filledByName: varchar({ length: 255 }),
+	createdById: int(),
+	createdByName: varchar({ length: 255 }),
+	version: int().default(1).notNull(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("shift_handover_unique").on(table.handoverDate, table.shift, table.city),
+]);
+
 export const extrasAvailability = mysqlTable("extras_availability", {
 	id: int().autoincrement().primaryKey(),
 	employeeId: int().notNull(),
@@ -1877,3 +1912,4 @@ export type WhatsappBroadcast = typeof whatsappBroadcasts.$inferSelect;
 export type InsertWhatsappBroadcast = typeof whatsappBroadcasts.$inferInsert;
 export type AvailabilityFormToken = typeof availabilityFormTokens.$inferSelect;
 export type InsertAvailabilityFormToken = typeof availabilityFormTokens.$inferInsert;
+export type ShiftHandover = typeof shiftHandovers.$inferSelect;
