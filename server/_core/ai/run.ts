@@ -10,7 +10,10 @@
  * Nunca escreve no log o prompt, a resposta ou dados pessoais.
  */
 import type { z } from "zod";
-import { getProvider, selectProvider, type AiPart, type AiProvider, type AiProviderId, type ProviderResponse } from "./client";
+import {
+  getProvider, selectProvider,
+  type AiPart, type AiProvider, type AiProviderId, type AiToolCall, type AiToolDeclaration, type AiToolRound, type AiTurn, type ProviderResponse,
+} from "./client";
 import { getOrCreateContextCache, forgetContextCache } from "./contextCache";
 import {
   AiDisabledError,
@@ -31,6 +34,21 @@ import { enforceBudget, getPriceOverrides, logAiUsage } from "./usage";
 export const DEFAULT_AI_TIMEOUT_MS = 25_000;
 export const MAX_AI_TIMEOUT_MS = 50_000;
 export const DEFAULT_MAX_TOKENS = 1024;
+/** Voltas de ferramentas por pedido (cada volta é mais uma chamada paga). */
+export const MAX_TOOL_ROUNDS = 4;
+export const MAX_TOOL_CALLS_PER_ROUND = 4;
+
+/**
+ * Function calling: o runAi declara as ferramentas, executa as que o modelo
+ * pedir (`execute` — nunca deve lançar; se lançar, o modelo recebe um erro
+ * genérico) e devolve-lhe os resultados até haver resposta final.
+ */
+export interface AiToolsOption {
+  declarations: AiToolDeclaration[];
+  execute: (call: AiToolCall) => Promise<Record<string, unknown>>;
+  /** Máximo de voltas (omissão 3, teto MAX_TOOL_ROUNDS). */
+  maxRounds?: number;
+}
 
 export interface RunAiBase {
   feature: AiFeature;
@@ -42,7 +60,11 @@ export interface RunAiBase {
   /** Força um modelo (ex.: transcrição com AI_MODEL_STT). */
   model?: string;
   system?: string;
+  /** Turnos anteriores da conversa (texto), antes de `input`. */
+  history?: AiTurn[];
   input: string | AiPart[];
+  /** Ferramentas (function calling). Não combina com `schema`. */
+  tools?: AiToolsOption;
   maxTokens?: number;
   timeoutMs?: number;
   temperature?: number;
@@ -67,6 +89,8 @@ export interface RunAiResult<T> {
   costEur: number;
   latencyMs: number;
   attempts: number;
+  /** Ferramentas chamadas (por ordem), se houve. */
+  toolCalls?: AiToolCall[];
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -123,11 +147,12 @@ export async function runAi(opts: RunAiBase & { schema?: z.ZodType }): Promise<R
   const parts = normalizeParts(opts.input);
   const jsonSchema = opts.schema ? toProviderJsonSchema(opts.schema) : undefined;
   const overrides = await getPriceOverrides();
+  const tools = opts.tools?.declarations.length ? opts.tools : undefined;
+  const maxRounds = Math.max(1, Math.min(MAX_TOOL_ROUNDS, tools?.maxRounds ?? 3));
 
   const usageTotal: TokenUsage = { inputTokens: 0, outputTokens: 0, cachedTokens: 0, audioInputTokens: 0 };
   let cost = 0;
   let attempts = 0;
-  let lastErr: AiError | null = null;
   let switchedModel = false;
   let useCache = !!(opts.cacheSystem && opts.system);
   let invalidOutputs = 0;
@@ -140,65 +165,107 @@ export async function runAi(opts: RunAiBase & { schema?: z.ZodType }): Promise<R
     });
   };
 
-  while (attempts <= retries) {
-    const remaining = deadline - Date.now();
-    if (remaining < 500) { lastErr = lastErr ?? new AiTimeoutError(); break; }
-    attempts++;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), remaining);
-    (timer as any).unref?.();
-    let cachedContent: string | undefined;
-    try {
-      if (useCache && opts.system) {
-        const ttl = typeof opts.cacheSystem === "object" ? opts.cacheSystem.ttlSeconds : undefined;
-        cachedContent = (await getOrCreateContextCache(provider, model, opts.system, { ttlSeconds: ttl, signal: controller.signal })) ?? undefined;
-      }
-      const res = await callProvider(provider, {
-        model, system: opts.system, parts, jsonSchema, maxOutputTokens: maxTokens, temperature: opts.temperature,
-        signal: controller.signal, timeoutMs: remaining, cachedContent,
-      });
-      addUsage(usageTotal, res.usage);
-      cost += costEur(model, res.usage, overrides);
-      if (!res.text.trim()) throw new AiInvalidOutputError(`empty:${res.finishReason ?? "?"}`);
-      const output = opts.schema ? parseStructured(res.text, opts.schema) : res.text.trim();
-      await finish("ok", null);
-      return { output, text: res.text, provider: providerId, model, tier, usage: usageTotal, costEur: cost, latencyMs: Date.now() - started, attempts };
-    } catch (err) {
-      const e = controller.signal.aborted && !(err instanceof AiInvalidOutputError) ? new AiTimeoutError() : toAiError(err);
-      lastErr = e;
-      // Cache de contexto expirada do lado do fornecedor → esquecer e repetir sem ela.
-      if (cachedContent && (e.status === 404 || e.status === 400)) {
-        forgetContextCache(cachedContent);
-        useCache = false;
-        attempts--;
-        continue;
-      }
-      // Modelo inexistente (404) no nível smart → cai para o fast, uma vez.
-      if (e.status === 404 && !switchedModel) {
-        const fb = fallbackTier(tier);
-        if (fb && !opts.model) {
-          switchedModel = true;
-          tier = fb;
-          model = resolveModel(fb, providerId, env);
-          attempts--; // a troca de modelo não gasta uma tentativa
+  type Step = { kind: "final"; output: unknown; text: string } | { kind: "tools"; res: ProviderResponse };
+
+  /** Um pedido ao fornecedor com as novas tentativas (429/5xx/rede, resposta inválida 1×). */
+  const attempt = async (toolRounds: AiToolRound[]): Promise<Step> => {
+    let lastErr: AiError | null = null;
+    let tries = 0;
+    while (tries <= retries) {
+      const remaining = deadline - Date.now();
+      if (remaining < 500) { lastErr = lastErr ?? new AiTimeoutError(); break; }
+      tries++;
+      attempts++;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), remaining);
+      (timer as any).unref?.();
+      let cachedContent: string | undefined;
+      try {
+        if (useCache && opts.system) {
+          const ttl = typeof opts.cacheSystem === "object" ? opts.cacheSystem.ttlSeconds : undefined;
+          cachedContent = (await getOrCreateContextCache(provider, model, opts.system, { ttlSeconds: ttl, signal: controller.signal, tools: tools?.declarations })) ?? undefined;
+        }
+        const res = await callProvider(provider, {
+          model, system: opts.system, history: opts.history, parts, jsonSchema, maxOutputTokens: maxTokens, temperature: opts.temperature,
+          signal: controller.signal, timeoutMs: remaining, cachedContent,
+          ...(tools ? { tools: tools.declarations, toolRounds } : {}),
+        });
+        addUsage(usageTotal, res.usage);
+        cost += costEur(model, res.usage, overrides);
+        if (tools && res.toolCalls?.length) return { kind: "tools", res };
+        if (!res.text.trim()) throw new AiInvalidOutputError(`empty:${res.finishReason ?? "?"}`);
+        const output = opts.schema ? parseStructured(res.text, opts.schema) : res.text.trim();
+        return { kind: "final", output, text: res.text };
+      } catch (err) {
+        const e = controller.signal.aborted && !(err instanceof AiInvalidOutputError) ? new AiTimeoutError() : toAiError(err);
+        lastErr = e;
+        // Cache de contexto expirada do lado do fornecedor → esquecer e repetir sem ela.
+        if (cachedContent && (e.status === 404 || e.status === 400)) {
+          forgetContextCache(cachedContent);
+          useCache = false;
+          tries--;
+          attempts--;
           continue;
         }
+        // Modelo inexistente (404) no nível smart → cai para o fast, uma vez.
+        if (e.status === 404 && !switchedModel) {
+          const fb = fallbackTier(tier);
+          if (fb && !opts.model) {
+            switchedModel = true;
+            tier = fb;
+            model = resolveModel(fb, providerId, env);
+            tries--; // a troca de modelo não gasta uma tentativa
+            attempts--;
+            continue;
+          }
+        }
+        if (e instanceof AiTimeoutError || !e.retryable || tries > retries) break;
+        // Resposta inválida: repete no máximo UMA vez (cada tentativa custa).
+        if (e.code === "invalid_output" && ++invalidOutputs > 1) break;
+        const wait = backoffMs(tries);
+        if (Date.now() + wait + 500 >= deadline) break;
+        await sleep(wait);
+      } finally {
+        clearTimeout(timer);
       }
-      if (e instanceof AiTimeoutError || !e.retryable || attempts > retries) break;
-      // Resposta inválida: repete no máximo UMA vez (cada tentativa custa).
-      if (e.code === "invalid_output" && ++invalidOutputs > 1) break;
-      const wait = backoffMs(attempts);
-      if (Date.now() + wait + 500 >= deadline) break;
-      await sleep(wait);
-    } finally {
-      clearTimeout(timer);
     }
-  }
+    throw lastErr ?? new AiTimeoutError();
+  };
 
-  const final = lastErr ?? new AiTimeoutError();
-  console.warn(`[ai] ${opts.feature} falhou: ${aiErrorCode(final)} (tentativas: ${attempts}, ${providerId}/${model})`);
-  await finish("error", aiErrorCode(final));
-  throw final;
+  try {
+    const rounds: AiToolRound[] = [];
+    for (;;) {
+      const step = await attempt(rounds);
+      if (step.kind === "final") {
+        await finish("ok", null);
+        return {
+          output: step.output, text: step.text, provider: providerId, model, tier, usage: usageTotal, costEur: cost,
+          latencyMs: Date.now() - started, attempts, toolCalls: rounds.flatMap((r) => r.calls),
+        };
+      }
+      // O modelo pediu ferramentas: executa-as (nunca lançam) e devolve-lhe os resultados.
+      if (rounds.length >= maxRounds) throw new AiInvalidOutputError("tool_rounds");
+      const calls = (step.res.toolCalls ?? []).slice(0, MAX_TOOL_CALLS_PER_ROUND);
+      const results: AiToolRound["results"] = [];
+      for (const call of calls) results.push({ call, response: await executeTool(tools!.execute, call) });
+      rounds.push({ modelRaw: step.res.raw, calls, results });
+    }
+  } catch (err) {
+    const final = toAiError(err);
+    console.warn(`[ai] ${opts.feature} falhou: ${aiErrorCode(final)} (tentativas: ${attempts}, ${providerId}/${model})`);
+    await finish("error", aiErrorCode(final));
+    throw final;
+  }
+}
+
+/** Executa uma ferramenta; um erro vira `{ error }` para o modelo (sem detalhe interno). */
+async function executeTool(execute: AiToolsOption["execute"], call: AiToolCall): Promise<Record<string, unknown>> {
+  try {
+    const r = await execute(call);
+    return r && typeof r === "object" && !Array.isArray(r) ? r : { result: r ?? null };
+  } catch {
+    return { error: "Não foi possível obter estes dados." };
+  }
 }
 
 async function callProvider(provider: AiProvider, req: Parameters<AiProvider["generate"]>[0]): Promise<ProviderResponse> {

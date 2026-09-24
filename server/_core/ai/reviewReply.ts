@@ -16,14 +16,22 @@ export interface ReviewForReply {
 
 export async function draftReviewReply(
   review: ReviewForReply,
-  ctx: { userId?: number | null; reviewId?: number | null; timeoutMs?: number } = {},
+  ctx: {
+    userId?: number | null;
+    reviewId?: number | null;
+    timeoutMs?: number;
+    /** Funcionalidade para interruptor/registo (omissão: review_reply; o rascunho automático usa review_auto_draft). */
+    feature?: "review_reply" | "review_auto_draft";
+    /** Linhas de contexto interno (sentimento, reclamação/reserva ligada) — sem dados pessoais. */
+    context?: string[];
+  } = {},
 ): Promise<string> {
   const variant = reviewVariant(review.rating);
   const red = redactPii(String(review.reviewText ?? "").slice(0, 2000));
   const r = await runAi({
-    feature: "review_reply",
+    feature: ctx.feature ?? "review_reply",
     system: reviewReplySystem(variant),
-    input: reviewReplyInput({ rating: review.rating, firstName: firstName(review.reviewerName), text: red.text }),
+    input: reviewReplyInput({ rating: review.rating, firstName: firstName(review.reviewerName), text: red.text, context: ctx.context?.map((l) => redactPii(l).text) }),
     maxTokens: 600,
     timeoutMs: ctx.timeoutMs ?? 20_000,
     userId: ctx.userId ?? null,

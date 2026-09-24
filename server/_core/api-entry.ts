@@ -363,6 +363,15 @@ app.get("/api/cron/daily-ops", async (req, res) => {
         console.warn("[daily-ops] retenção activity_logs:", err);
         stepErrors.push(`retenção logs: ${String((err as any)?.message ?? err).slice(0, 200)}`);
       }
+      // Assistente (chat): conversas e mensagens com mais de 30 dias.
+      try {
+        const { purgeOldChats } = await import("./ai/chat/store");
+        const r = await purgeOldChats({ deadlineAt: startedAt + 18_000 });
+        if (r.deleted > 0) console.log(`[daily-ops] assistente: ${r.deleted} mensagem(ns)/conversa(s) antigas apagadas${r.done ? "" : ", continua amanhã"}`);
+      } catch (err) {
+        console.warn("[daily-ops] retenção do assistente:", errCode(err));
+        stepErrors.push(`retenção assistente: ${errCode(err)}`);
+      }
     }
 
     // Reconciliação Multipark (report D-1/D-2 vs BD). Retomável: corre em
@@ -455,6 +464,20 @@ app.get("/api/cron/extras-auto", async (req, res) => {
   }
 });
 
+// Briefing diário por cidade (07:30 Lisboa), anomalias e, à segunda,
+// relatórios semanais (server/aiOps/cron.ts). Idempotente; o próprio módulo
+// decide pela hora de Lisboa. done:false → o workflow repete (prazo de 45 s).
+app.get("/api/cron/ops-briefing", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const { runOpsBriefingCron } = await import("../aiOps/cron");
+    const report = await runOpsBriefingCron({ deadlineAt: Date.now() + 45_000, force: req.query?.force === "1" });
+    res.json({ ranAt: new Date().toISOString(), ...report });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: String(err?.message ?? err) });
+  }
+});
+
 // Escala automática dos extras (propor às 14h, confirmar e avisar às 18h, por
 // omissão — Definições → Parâmetros → Extras-dia). O GitHub Actions chama de
 // 30 em 30 min entre as 08h e as 23h de Lisboa; tudo idempotente (propor duas
@@ -487,6 +510,21 @@ app.get("/api/cron/email-inbound", async (req, res) => {
     // workflow ficar vermelho; erros de UM email ficam só na lista (repetem-se).
     const imapErrors = result.errors.filter((e) => e.startsWith("search "));
     res.json({ ok: result.configured && imapErrors.length === 0, done: !result.partial, ranAt: new Date().toISOString(), imapErrors: imapErrors.length, ...result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: String(err?.message ?? err) });
+  }
+});
+
+// IA na comunicação com clientes: triagem do WhatsApp (debounce vencido),
+// reclamações por triar, rascunhos das críticas novas e correspondências dos
+// Perdidos — lotes pequenos, prazo < 60 s. GitHub Actions a cada 15 min
+// (.github/workflows/ai-comms.yml). Nunca envia nada a clientes.
+app.get("/api/cron/ai-comms", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const { runCommsAiSweep } = await import("../commsAiSweep");
+    const report = await runCommsAiSweep({ deadlineAt: Date.now() + 45_000 });
+    res.json({ ok: report.errors.length === 0, ranAt: new Date().toISOString(), ...report });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: String(err?.message ?? err) });
   }

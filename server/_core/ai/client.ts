@@ -26,10 +26,50 @@ export type AiPart =
   | { type: "pdf"; data: string }
   | { type: "audio"; mimeType: string; data: string };
 
+/** Turno anterior de uma conversa (só texto). */
+export interface AiTurn {
+  role: "user" | "model";
+  text: string;
+}
+
+/**
+ * Ferramenta (function calling) declarada ao modelo. `parameters` é um JSON
+ * Schema de objeto (Gemini: `FunctionDeclaration.parametersJsonSchema`).
+ */
+export interface AiToolDeclaration {
+  name: string;
+  description: string;
+  parameters?: Record<string, unknown>;
+}
+
+/** Chamada de ferramenta pedida pelo modelo (Gemini: `FunctionCall`). */
+export interface AiToolCall {
+  id?: string;
+  name: string;
+  args: Record<string, unknown>;
+}
+
+/**
+ * Uma volta de ferramentas: o que o modelo pediu (`modelRaw` = o `Content`
+ * devolvido tal e qual — o Gemini 3 exige as `thoughtSignature` de volta) e
+ * as respostas (Gemini: `FunctionResponse`).
+ */
+export interface AiToolRound {
+  modelRaw?: unknown;
+  calls: AiToolCall[];
+  results: Array<{ call: AiToolCall; response: Record<string, unknown> }>;
+}
+
 export interface ProviderRequest {
   model: string;
   system?: string;
+  /** Turnos anteriores (antes de `parts`). */
+  history?: AiTurn[];
   parts: AiPart[];
+  /** Ferramentas disponíveis (function calling). */
+  tools?: AiToolDeclaration[];
+  /** Voltas de ferramentas já feitas neste pedido (depois de `parts`). */
+  toolRounds?: AiToolRound[];
   /** JSON Schema da resposta (já no subconjunto aceite pelo Gemini). */
   jsonSchema?: Record<string, unknown>;
   maxOutputTokens: number;
@@ -45,6 +85,10 @@ export interface ProviderResponse {
   model: string;
   finishReason: string | null;
   usage: TokenUsage;
+  /** Chamadas de ferramentas pedidas pelo modelo (vazio/ausente = resposta final). */
+  toolCalls?: AiToolCall[];
+  /** Conteúdo do modelo tal e qual (para devolver numa volta de ferramentas). */
+  raw?: unknown;
 }
 
 export interface ContextCacheHandle {
@@ -56,7 +100,7 @@ export interface AiProvider {
   id: AiProviderId;
   generate(req: ProviderRequest): Promise<ProviderResponse>;
   /** Só Gemini: guarda um prefixo longo e estável (system) para reutilizar. */
-  createCache?(p: { model: string; system: string; ttlSeconds: number; signal: AbortSignal }): Promise<ContextCacheHandle>;
+  createCache?(p: { model: string; system: string; tools?: AiToolDeclaration[]; ttlSeconds: number; signal: AbortSignal }): Promise<ContextCacheHandle>;
 }
 
 const clean = (v: string | undefined) => String(v ?? "").trim();
@@ -159,6 +203,45 @@ function toGeminiParts(parts: AiPart[]): any[] {
   });
 }
 
+/** Ferramentas → `Tool[]` do Gemini (uma entrada com `functionDeclarations`). PURA. */
+export function toGeminiTools(tools: AiToolDeclaration[]): any[] {
+  return [{
+    functionDeclarations: tools.map((t) => ({
+      name: t.name,
+      description: t.description,
+      ...(t.parameters ? { parametersJsonSchema: t.parameters } : {}),
+    })),
+  }];
+}
+
+/** Conversa → `Content[]` do Gemini: histórico, pergunta, voltas de ferramentas. PURA. */
+export function toGeminiContents(req: Pick<ProviderRequest, "history" | "parts" | "toolRounds">): any[] {
+  const contents: any[] = (req.history ?? [])
+    .filter((t) => t.text.trim())
+    .map((t) => ({ role: t.role, parts: [{ text: t.text }] }));
+  contents.push({ role: "user", parts: toGeminiParts(req.parts) });
+  for (const r of req.toolRounds ?? []) {
+    contents.push(r.modelRaw ?? { role: "model", parts: r.calls.map((c) => ({ functionCall: { ...(c.id ? { id: c.id } : {}), name: c.name, args: c.args } })) });
+    contents.push({
+      role: "user",
+      parts: r.results.map((x) => ({ functionResponse: { ...(x.call.id ? { id: x.call.id } : {}), name: x.call.name, response: x.response } })),
+    });
+  }
+  return contents;
+}
+
+/** Chamadas de ferramentas de uma resposta do Gemini (`candidates[0].content.parts[].functionCall`). PURA. */
+export function geminiToolCalls(res: any): AiToolCall[] {
+  const parts: any[] = res?.candidates?.[0]?.content?.parts ?? [];
+  return parts
+    .filter((p) => p?.functionCall?.name)
+    .map((p) => ({
+      ...(p.functionCall.id ? { id: String(p.functionCall.id) } : {}),
+      name: String(p.functionCall.name),
+      args: p.functionCall.args && typeof p.functionCall.args === "object" ? p.functionCall.args : {},
+    }));
+}
+
 /** usageMetadata do Gemini → contagens (o "thinking" paga-se como saída). PURA. */
 export function geminiUsage(meta: any): TokenUsage {
   const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
@@ -196,9 +279,13 @@ export function createGeminiProvider(env: Env = process.env): AiProvider {
         abortSignal: req.signal,
         httpOptions: { timeout: req.timeoutMs, retryOptions: { attempts: 1 } },
       };
-      // Com cache de contexto, o system já está na cache (a API recusa os dois).
+      // Com cache de contexto, o system e as ferramentas já estão na cache (a
+      // API recusa system_instruction/tools/tool_config junto com a cache).
       if (req.cachedContent) config.cachedContent = req.cachedContent;
-      else if (req.system) config.systemInstruction = req.system;
+      else {
+        if (req.system) config.systemInstruction = req.system;
+        if (req.tools?.length) config.tools = toGeminiTools(req.tools);
+      }
       if (req.jsonSchema) {
         config.responseMimeType = "application/json";
         config.responseJsonSchema = req.jsonSchema;
@@ -208,21 +295,32 @@ export function createGeminiProvider(env: Env = process.env): AiProvider {
       if (level) config.thinkingConfig = { thinkingLevel: level };
       const res = await ai.models.generateContent({
         model: req.model,
-        contents: [{ role: "user", parts: toGeminiParts(req.parts) }],
+        contents: toGeminiContents(req),
         config,
       });
+      const toolCalls = req.tools?.length ? geminiToolCalls(res) : [];
+      // Com chamadas de ferramentas, o texto sai só das partes de texto (o
+      // getter `text` do SDK avisa quando há partes que não são texto).
+      const text = toolCalls.length
+        ? (res?.candidates?.[0]?.content?.parts ?? []).filter((p: any) => typeof p?.text === "string" && !p.thought).map((p: any) => p.text).join("")
+        : String(res?.text ?? "");
       return {
-        text: String(res?.text ?? ""),
+        text,
         model: String(res?.modelVersion || req.model),
         finishReason: res?.candidates?.[0]?.finishReason ?? null,
         usage: geminiUsage(res?.usageMetadata),
+        ...(toolCalls.length ? { toolCalls, raw: res?.candidates?.[0]?.content } : {}),
       };
     },
-    async createCache({ model, system, ttlSeconds, signal }) {
+    async createCache({ model, system, tools, ttlSeconds, signal }) {
       const ai = await getGeminiClient(env);
       const c = await ai.caches.create({
         model,
-        config: { systemInstruction: system, ttl: `${Math.max(60, Math.floor(ttlSeconds))}s`, displayName: "multipark-ctx", abortSignal: signal },
+        config: {
+          systemInstruction: system,
+          ...(tools?.length ? { tools: toGeminiTools(tools) } : {}),
+          ttl: `${Math.max(60, Math.floor(ttlSeconds))}s`, displayName: "multipark-ctx", abortSignal: signal,
+        },
       });
       if (!c?.name) throw new Error("cache sem nome");
       const exp = c.expireTime ? Date.parse(c.expireTime) : NaN;
@@ -246,8 +344,11 @@ export function createLegacyProvider(): AiProvider {
           case "audio": throw new AiUnsupportedInputError("audio");
         }
       });
+      // Sem function calling no caminho antigo: as ferramentas são ignoradas
+      // (o modelo responde só com o texto que tem).
       const messages: any[] = [];
       if (req.system) messages.push({ role: "system", content: req.system });
+      for (const t of req.history ?? []) if (t.text.trim()) messages.push({ role: t.role === "model" ? "assistant" : "user", content: t.text });
       messages.push({ role: "user", content: content.length === 1 && content[0].type === "text" ? content[0].text : content });
       const r = await invokeLegacyLLM({
         messages,

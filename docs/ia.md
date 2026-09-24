@@ -95,10 +95,116 @@ da env.
 | `AI_QUIZ` | `quiz_generation`: perguntas a partir dos manuais | fast |
 | `AI_HR_AUTOFILL` | `hr_autofill`: documentos do RH | lite. **Desligado por omissão** até decisão sobre o RGPD. |
 | `AI_TRAINING_TUTOR` | `training_tutor`: tutor da Formação (chat nos manuais, vídeos, percursos e quiz) | lite |
+| `AI_COMPLAINT_TRIAGE` | `complaint_triage`: triagem das reclamações por email | lite |
+| `AI_REVIEW_AUTO_DRAFTS` | `review_auto_draft`: rascunho automático para cada crítica nova | lite |
+| `AI_WHATSAPP_TRIAGE` | `whatsapp_triage`: intenção e urgência das conversas | lite |
+| `AI_LOST_FOUND_MATCH` | `lost_found_match`: correspondências perdido ↔ achado | lite |
+| `AI_ASSISTANT` | `assistant`: assistente (chat) em todas as páginas | lite |
+| `AI_OPS_BRIEFING` | `ops_briefing`: parágrafo do briefing diário por cidade | lite |
+| `AI_WEEKLY_REPORTS` | `weekly_report`: texto dos relatórios de segunda (direção, marketing, operações, RH) | lite |
+| `AI_ANOMALY_EXPLAIN` | `anomaly_explain`: uma linha por anomalia (1 chamada por corrida) | lite |
+| `AI_AVAILABILITY_CLASSIFY` | `availability_classify`: respostas de disponibilidade pouco claras | lite |
+| `AI_LEAD_SCORING` | `lead_summary` + `lead_first_contact`: resumo da pontuação e rascunho do 1.º contacto (a aprovar) | lite |
+| `AI_EVALUATION_EXPLAIN` | `evaluation_explain`: explicação da avaliação | lite |
+| `AI_HANDOVER_REPEATS` | `handover_repeats`: pendentes repetidos e resumo semanal da passagem | lite |
+| `AI_TASKS_FROM_TEXT` | `tasks_from_text`: tarefas a partir de texto (confirmadas antes de criar) | lite |
 
 Quando uma funcionalidade está desligada, a UI mostra a mensagem "Esta
 funcionalidade de IA está desligada." e não se faz nenhum pedido. Os botões
 "IA" das páginas (WhatsApp, Formação) escondem-se.
+
+### Comunicação com clientes (nada é enviado sem aprovação)
+
+A classificação, as etiquetas e os rascunhos são automáticos. Tudo o que chega
+ao cliente passa por uma pessoa.
+
+- **Reclamações por email** (`server/complaintTriage.ts`). No fim do leitor de
+  email e no cron `ai-comms`, cada reclamação nova recebe sugestões de tipo,
+  prioridade, SLA (pela prioridade: urgente 12 h, alta 24 h, média 48 h,
+  baixa 72 h), reserva (`caseOps.deriveBookingForCase`), duplicado (reclamação
+  aberta do mesmo email, reserva ou matrícula nos últimos 60 dias) e um
+  rascunho de resposta em PT-PT.
+  - As sugestões ficam na tabela `ai_suggestions`, separadas dos campos
+    humanos, com a confiança e o motivo.
+  - Uma sugestão só se aplica sozinha com confiança ≥ 0,85 e com o campo
+    vazio. O tipo está vazio quando é "Outro". A prioridade e o SLA estão
+    vazios quando o caso foi criado pelo sistema e ninguém pegou nele. A
+    reserva está vazia quando não há referência. O valor anterior fica
+    guardado para "Desfazer".
+  - O rascunho cita sempre a reserva. Um rascunho que fale em reembolsos,
+    descontos, vouchers ou compensações é deitado fora. "Usar no email" abre
+    a janela "Enviar email" e é uma pessoa que carrega em Enviar.
+  - Na página das Reclamações, o cartão "Sugestões da IA" mostra cada
+    sugestão com os botões Aceitar e Rejeitar (Manter e Desfazer para as que
+    se aplicaram sozinhas).
+- **Críticas Google** (`server/reviewAutoDraft.ts`). No fim do sync do Google
+  Business Profile (a cada 10 min), no email criticas@ e no cron `ai-comms`,
+  cada crítica nova recebe um rascunho. O rascunho usa o prompt central
+  `draftReviewReply` com o sentimento e o contexto da reclamação ou reserva
+  ligada, que serve só para o tom e nunca é citado.
+  - O rascunho fica com `aiResponseApproved = 0`. Os botões são "Aprovar e
+    publicar" (com confirmação) e "Editar".
+- **WhatsApp** (`server/whatsappTriage.ts`). A cada mensagem recebida, a
+  conversa é classificada por intenção (reserva, alteração, cancelamento,
+  perdido/achado, reclamação, recrutamento/extra, outro) e urgência.
+  - Há debounce por conversa: no máximo uma triagem a cada 5 minutos. Uma
+    rajada de mensagens fica agendada e é apanhada pela mensagem seguinte ou
+    pelo cron.
+  - A chamada corre depois de responder à Meta.
+  - No inbox aparecem etiquetas e filtros ("Todas as intenções", "Urgentes").
+  - As conversas urgentes entram no aviso de SLA com 1/3 do prazo (mínimo
+    5 min).
+  - A sugestão de resposta continua a ser pedida à mão e nunca é enviada
+    sozinha.
+- **Perdidos & Achados** (`server/lostFoundMatch.ts`). Um pré-filtro
+  determinístico escolhe no máximo 5 candidatos do lado oposto: ±30 dias, mesmo
+  parque, e pontos por matrícula, reserva e tipo. Depois, uma única chamada lite
+  compara as descrições.
+  - Aparece "Possíveis correspondências" nos dois casos, com pontuação e
+    motivo.
+  - "Confirmar" só deixa uma nota interna. Contactar o cliente é sempre
+    humano.
+  - Sem IA, ficam só as pontuações do pré-filtro.
+
+Cron: `/api/cron/ai-comms` (`.github/workflows/ai-comms.yml`, a cada 15 min).
+Cada passo tem um lote pequeno (3 a 8 casos) e um prazo abaixo dos 60 s. O
+passo salta sem erro quando o interruptor está desligado, quando o orçamento
+se esgotou ou quando não há fornecedor. Migração: 0123.
+### Automações internas (set 2026)
+
+Nenhuma é para clientes. **Os números vêm sempre do SQL/código; a IA só
+escreve o texto.** Com o interruptor desligado ou o orçamento esgotado, a
+automação continua com um texto fixo feito no código (e não faz pedidos).
+Código em `server/aiOps/`, prompts em `server/_core/ai/prompts/ops.ts`,
+tabelas na migração 0125.
+
+- **Briefing diário por cidade** (`/api/cron/ops-briefing`, 06:32 e 07:32 UTC;
+  corre a partir das 07h de Lisboa, idempotente): reservas do dia por hora e
+  pico, extras escalados vs. necessários (previsão do Extras-Dia, só leitura),
+  reclamações/ocorrências com prazo hoje, pendentes da passagem de turno (e os
+  que se repetem), anomalias e alertas de marketing. Guardado em
+  `ops_briefings`, mostrado no Dashboard e nas Tarefas e enviado por email aos
+  team leaders/supervisores com acesso à cidade. Cada pessoa só vê as secções
+  dos módulos a que tem acesso. Interruptor da automação: `OPS_BRIEFING`.
+- **Anomalias** (`OPS_ANOMALIES`): z-score contra o mesmo dia da semana das
+  últimas 8 semanas (reservas por parque e por canal, gasto e ROAS do
+  marketing) e, nas despesas, valores fora do normal (mediana/MAD) e possíveis
+  duplicados. Aparecem como "Alertas" em Operações, Despesas e Marketing.
+- **Relatórios semanais** (`WEEKLY_REPORTS`, segunda de manhã): direção,
+  marketing, operações e RH, a quem tem o módulo com alcance nacional; resumo
+  semanal da passagem de turno por cidade.
+- **Respostas de disponibilidade** pouco claras: confiança ≥ 85% aplica-se
+  sozinha; o resto fica numa tarefa para revisão humana.
+- **Leads**: pontuação 0–100 com critérios explícitos (disponibilidade, cidade,
+  experiência, anos de carta, rapidez de resposta), nunca atributos
+  protegidos; o rascunho do 1.º contacto precisa de aprovação (o template
+  `seja_motorista` continua como antes).
+- **Avaliação**: explicação a partir das linhas das regras (nunca recalcula);
+  o team leader pode escondê-la.
+- **Tarefas a partir de texto**: a IA propõe, a pessoa confirma.
+
+Custos: pedidos curtos, dados pessoais tapados (`redactPii`), teto de 12
+chamadas por corrida do cron e cache por hash (leads, avaliação).
 
 ## 4. Custos e orçamento
 
@@ -129,10 +235,10 @@ funcionalidade de IA está desligada." e não se faz nenhum pedido. Os botões
 
 - Antes de irem para o fornecedor, os emails, telefones, IBAN, NIF e matrículas
   que aparecem em texto livre são trocados por marcadores (`[EMAIL_1]`,
-  `[TELEFONE_1]`…). Isto aplica-se às críticas, ao rádio, à passagem de turno e
-  ao WhatsApp.
+  `[TELEFONE_1]`…). Isto aplica-se às críticas, ao rádio, à passagem de turno,
+  ao WhatsApp, às reclamações, aos Perdidos & Achados e às perguntas ao assistente.
 - Quando a resposta é privada (resumo do rádio, passagem de turno, sugestão de
-  resposta no WhatsApp), os marcadores são repostos depois de a resposta
+  resposta no WhatsApp, assistente), os marcadores são repostos depois de a resposta
   chegar. Nas respostas públicas (críticas), os marcadores são retirados.
 - Dos nomes, só se envia o primeiro.
 - As imagens e PDFs (faturas, documentos do RH) vão tal como estão. Por isso o
@@ -148,17 +254,58 @@ inválida. O detalhe do fornecedor nunca chega ao ecrã. Cada pedido tem um praz
 novas tentativas, com espera exponencial. Uma resposta fora do schema tem uma
 nova tentativa.
 
-## 7. Preparação para o chat público (multipark.app)
+## 7. Assistente (chat da equipa)
 
-Os blocos já existem, mas ainda não há interface:
+Botão redondo no canto inferior direito de todas as páginas. Abre um painel
+(folha de baixo no telemóvel, painel lateral no computador) com:
+
+- **"Como se usa"**: a ajuda está em `docs/ajuda/*.md`, um ficheiro curto por
+  módulo. Depois de mudar um ficheiro, corre `pnpm tsx scripts/gen-ajuda.ts`
+  (um teste avisa se te esqueceres). A escolha do ficheiro é feita por
+  palavras-chave, sem IA. Só os 1–2 ficheiros relevantes vão no pedido.
+- **Perguntas aos dados**, só de leitura, através de ferramentas: reservas
+  (contagens por dia/cidade/parque), Extras-Dia (escalados e horas em falta),
+  casos em aberto (reclamações, ocorrências, perdidos), WhatsApp por
+  responder, a própria avaliação, as próprias tarefas e, só para quem tem
+  acesso aos totais financeiros, o valor das reservas. Cada ferramenta chama
+  o mesmo procedimento que a página usa, **como a própria pessoa**. Por isso
+  aplicam-se as mesmas cidades, as mesmas permissões e os mesmos bloqueios.
+  As ferramentas devolvem totais ou listas curtas (máximo 20 linhas), sem
+  emails, telefones, matrículas nem nomes de clientes.
+- **Histórico**: as conversas ficam guardadas 30 dias (`ai_chat_conversations`
+  e `ai_chat_messages`, migração 0130) e são apagadas pelo daily-ops. Cada
+  pessoa vê só as suas.
+- **Registo**: cada chamada de ferramenta fica em `activity_logs`
+  (`action = assistant_tool`), com o nome e os parâmetros. Os resultados não
+  ficam registados.
+
+Custos e limites:
+
+- nível `lite`. O prompt estável (regras, índice da ajuda e ferramentas) fica
+  na cache de contexto. Com a pergunta vão só os últimos 6 turnos e um resumo
+  das perguntas anteriores (feito sem IA). A resposta tem no máximo 700 tokens;
+- Definições → Parâmetros → **Limites do assistente (chat)**:
+  `{"perMinute": 20, "perDay": 200, "maxInputChars": 1000}` por pessoa;
+- conta para o orçamento mensal. Quando a IA está desligada, sem configuração
+  ou acima do orçamento, o painel mostra uma mensagem simples e não faz
+  pedidos.
+
+## 8. Preparação para o chat público (multipark.app)
+
+O núcleo do chat (`server/_core/ai/chat/`) não depende da equipa: conversas,
+ajuda por palavras-chave, registo de ferramentas e o turno com `runAi`. Um
+chat público usa o mesmo núcleo com outras peças: a sua própria FAQ, só
+ferramentas de FAQ, limites por IP (`ipKey`, guardado como hash) e o canal
+`public`. Os passos estão no [README técnico](../server/_core/ai/README.md)
+(secção "Chat público").
 
 - `checkRateLimit(chave, { perMinute, perDay })` limita os pedidos por
-  utilizador ou por IP. O IP é guardado como hash. O estado vive na BD
-  (`ai_rate_limits`), por isso funciona em serverless.
+  utilizador ou por IP. O estado vive na BD (`ai_rate_limits`), por isso
+  funciona em serverless.
 - `runAi({ cacheSystem: true, system: <contexto longo> })` usa a cache de
-  contexto do Gemini. O prefixo estável é guardado uma vez e os tokens lidos da
-  cache custam cerca de 10% do preço normal. A cache é partilhada entre
-  instâncias através de `ai_context_caches`.
+  contexto do Gemini. Os tokens lidos da cache custam cerca de 10% do preço
+  normal. A cache é partilhada entre instâncias através de
+  `ai_context_caches`.
 
 ## 8. Tutor da Formação
 
@@ -206,7 +353,8 @@ resultado). Não está no menu geral.
 | `AI_TIER_<FUNC>` | Nível por funcionalidade |
 | `AI_THINKING_LEVEL` | Raciocínio dos Gemini 3.x |
 | `AI_MONTHLY_BUDGET_EUR` | Orçamento (a página Definições ganha-lhe) |
-| `AI_ENABLED`, `AI_EXPENSE_OCR`, `AI_REVIEW_DRAFTS`, `AI_RADIO`, `AI_HANDOVER_SUMMARY`, `AI_WHATSAPP_ASSIST`, `AI_QUIZ`, `AI_HR_AUTOFILL`, `AI_TRAINING_TUTOR` | Interruptores |
 | `AI_TRAINING_TUTOR_PER_MINUTE`, `AI_TRAINING_TUTOR_PER_DAY` | Limites do tutor da Formação (Definições ganha) |
+| `AI_ENABLED`, `AI_EXPENSE_OCR`, `AI_REVIEW_DRAFTS`, `AI_RADIO`, `AI_HANDOVER_SUMMARY`, `AI_WHATSAPP_ASSIST`, `AI_QUIZ`, `AI_HR_AUTOFILL`, `AI_ASSISTANT` | Interruptores |
+| `AI_ENABLED`, `AI_EXPENSE_OCR`, `AI_REVIEW_DRAFTS`, `AI_RADIO`, `AI_HANDOVER_SUMMARY`, `AI_WHATSAPP_ASSIST`, `AI_QUIZ`, `AI_HR_AUTOFILL`, `AI_OPS_BRIEFING`, `AI_WEEKLY_REPORTS`, `AI_ANOMALY_EXPLAIN`, `AI_AVAILABILITY_CLASSIFY`, `AI_LEAD_SCORING`, `AI_EVALUATION_EXPLAIN`, `AI_HANDOVER_REPEATS`, `AI_TASKS_FROM_TEXT` | Interruptores |
 | `LLM_API_URL`, `LLM_API_KEY`, `LLM_MODEL` | Fornecedor antigo |
 | `OPENAI_API_KEY` | Whisper (só se definida) |

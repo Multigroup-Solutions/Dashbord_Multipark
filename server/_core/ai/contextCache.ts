@@ -10,7 +10,7 @@
  */
 import { createHash } from "node:crypto";
 import { sql } from "drizzle-orm";
-import type { AiProvider } from "./client";
+import type { AiProvider, AiToolDeclaration } from "./client";
 
 const mem = new Map<string, { name: string; expiresAt: number }>();
 const failedUntil = new Map<string, number>();
@@ -22,8 +22,9 @@ const rowsOf = (res: unknown): any[] => {
   return Array.isArray(r) ? r : [];
 };
 
-export function contextCacheKey(provider: string, model: string, system: string): string {
-  return createHash("sha256").update(`${provider}\u0000${model}\u0000${system}`).digest("hex");
+export function contextCacheKey(provider: string, model: string, system: string, tools?: AiToolDeclaration[]): string {
+  const t = tools?.length ? `\u0000${JSON.stringify(tools)}` : "";
+  return createHash("sha256").update(`${provider}\u0000${model}\u0000${system}${t}`).digest("hex");
 }
 
 export function resetContextCacheForTests(): void {
@@ -35,11 +36,13 @@ export async function getOrCreateContextCache(
   provider: AiProvider,
   model: string,
   system: string,
-  opts: { ttlSeconds?: number; signal: AbortSignal; now?: number },
+  opts: { ttlSeconds?: number; signal: AbortSignal; now?: number; tools?: AiToolDeclaration[] },
 ): Promise<string | null> {
   if (!provider.createCache || !system.trim()) return null;
   const now = opts.now ?? Date.now();
-  const key = contextCacheKey(provider.id, model, system);
+  // As ferramentas vão DENTRO da cache (a API recusa-as ao lado dela): cada
+  // conjunto de ferramentas tem a sua cache.
+  const key = contextCacheKey(provider.id, model, system, opts.tools);
   const hit = mem.get(key);
   if (hit && hit.expiresAt - SAFETY_MS > now) return hit.name;
   if ((failedUntil.get(key) ?? 0) > now) return null;
@@ -62,7 +65,7 @@ export async function getOrCreateContextCache(
 
   try {
     const ttl = Math.max(300, Math.min(24 * 3600, opts.ttlSeconds ?? 3600));
-    const c = await provider.createCache({ model, system, ttlSeconds: ttl, signal: opts.signal });
+    const c = await provider.createCache({ model, system, ...(opts.tools?.length ? { tools: opts.tools } : {}), ttlSeconds: ttl, signal: opts.signal });
     mem.set(key, c);
     if (db) {
       const exp = new Date(c.expiresAt).toISOString().slice(0, 19).replace("T", " ");

@@ -66,6 +66,8 @@ export type EmailSyncResult = {
   byAlias: Record<string, number>;
   /** true = parou no orçamento de tempo (Vercel 60s); o resto fica p/ a próxima corrida (dedup por messageId). */
   partial: boolean;
+  /** Reclamações triadas pela IA nesta corrida (0 se desligada/sem tempo). */
+  aiTriaged?: number;
 };
 
 /** Prazo de ligação ao IMAP (também usado no teste das Integrações). */
@@ -150,12 +152,16 @@ async function routeToModule(
       sourceEmailId: ctx.messageId,
       importedAt: new Date().toISOString().slice(0, 19).replace("T", " "),
     } as any);
-    // rascunho de resposta por IA, best-effort (não bloqueia a importação)
+    // rascunho de resposta por IA (prompt central + sentimento/contexto),
+    // best-effort e por aprovar — nunca publica. Interruptor AI_REVIEW_AUTO_DRAFTS.
     if (id) {
       try {
-        const { draftReviewReply } = await import("../_core/ai/reviewReply");
-        const aiText = await draftReviewReply({ rating: g.rating, reviewerName: reviewer, reviewText: text.slice(0, 2000) }, { reviewId: id, timeoutMs: 15_000 });
-        if (aiText) await updateGoogleReview(id, { aiResponse: aiText, status: "ai_responded" });
+        const { autoDraftReview } = await import("../reviewAutoDraft");
+        const { aiFeatureAvailableFresh } = await import("../_core/ai/status");
+        if (await aiFeatureAvailableFresh("review_auto_draft")) {
+          await updateGoogleReview(id, { aiDraftAttemptedAt: new Date().toISOString().slice(0, 19).replace("T", " ") } as any);
+          await autoDraftReview(id, { timeoutMs: 15_000 });
+        }
       } catch { /* IA opcional */ }
     }
     return { targetModule: "review", targetId: id };
@@ -423,7 +429,18 @@ async function routeToModule(
     // limpo marca; "não posso", condicionais e ambíguos ficam para revisão
     // humana (tarefa de RH com o veredicto anotado). Usa só o CORPO, não o assunto.
     const { classifyAvailabilityReply } = await import("../availabilityReply");
-    const verdict = pending ? classifyAvailabilityReply(ctx.bodyText || desc || "") : null;
+    let verdict = pending ? classifyAvailabilityReply(ctx.bodyText || desc || "") : null;
+    // Pouco clara → IA (lite, AI_AVAILABILITY_CLASSIFY): confiança alta
+    // aplica-se sozinha; o resto fica na tarefa com a leitura da IA anotada.
+    let aiYes: { days: string[]; fromHour: number | null; toHour: number | null } | null = null;
+    let aiNote = "";
+    if (pending && verdict?.verdict === "unclear") {
+      const { classifyUnclearAvailability, reviewNote } = await import("../aiOps/availabilityAi");
+      const d = await classifyUnclearAvailability(ctx.bodyText || desc || "", pending, { employeeId: pending.employeeId });
+      if (d.action === "apply_no") verdict = { ...verdict, verdict: "no", reason: `lido por IA (confiança ${Math.round(d.confidence * 100)}%)` };
+      else if (d.action === "apply_yes") { verdict = { ...verdict, verdict: "yes", reason: "lido por IA" }; aiYes = { days: d.days, fromHour: d.fromHour, toHour: d.toHour }; }
+      else aiNote = ` ${reviewNote(d)}`;
+    }
     const availabilityTask = async (label: string, detail: string) => {
       const { upsertAvailabilityTask } = await import("../tasksService");
       const day = pending!.weekStart ?? pending!.targetDate;
@@ -437,7 +454,7 @@ async function routeToModule(
     };
     if (pending && verdict && verdict.verdict !== "yes") {
       // não marca disponibilidade; UMA tarefa por pessoa × semana para decisão humana
-      desc = `[DISPONIBILIDADE ${verdict.verdict === "no" ? "NÃO" : "A CONFIRMAR"} — ${verdict.reason}] ${pending.targetDate ?? pending.weekStart ?? ""} ${pending.shift ?? ""}: "${verdict.excerpt}"`.trim() + (desc ? `\n\n${desc}` : "");
+      desc = `[DISPONIBILIDADE ${verdict.verdict === "no" ? "NÃO" : "A CONFIRMAR"} — ${verdict.reason}]${aiNote} ${pending.targetDate ?? pending.weekStart ?? ""} ${pending.shift ?? ""}: "${verdict.excerpt}"`.trim() + (desc ? `\n\n${desc}` : "");
       const taskId = await availabilityTask(verdict.verdict === "no" ? "Respondeu NÃO" : "Resposta pouco clara", desc.slice(0, 3000));
       if (taskId) return { targetModule: "availability_task", targetId: pending.employeeId, taskId };
     }
@@ -450,10 +467,21 @@ async function routeToModule(
           // fica anotada. "que horas podes?" com só "sim" fica manhã + nota.
           morning: pending.shift !== "night",
           night: pending.shift === "night",
-          fromHour: pending.fromHour,
-          toHour: pending.toHour,
-          note: `respondeu SIM por email${shiftNote ? ` (turno da ${shiftNote})` : ""}${pending.kind === "day_hours" ? " — horas por confirmar" : ""}`,
+          fromHour: aiYes?.fromHour ?? pending.fromHour,
+          toHour: aiYes?.toHour ?? pending.toHour,
+          note: `respondeu SIM por email${aiYes ? " (lido por IA)" : ""}${shiftNote ? ` (turno da ${shiftNote})` : ""}${pending.kind === "day_hours" ? " — horas por confirmar" : ""}`,
         });
+        return { targetModule: "availability", targetId: pending.employeeId };
+      }
+      // pedido da semana com dias lidos pela IA (confiança alta): marca esses dias
+      if (aiYes && aiYes.days.length) {
+        for (const day of aiYes.days) {
+          await markDayAvailability(pending.employeeId, day, {
+            morning: pending.shift !== "night", night: pending.shift === "night",
+            fromHour: aiYes.fromHour ?? pending.fromHour, toHour: aiYes.toHour ?? pending.toHour,
+            note: "respondeu por email (lido por IA)",
+          });
+        }
         return { targetModule: "availability", targetId: pending.employeeId };
       }
       // pedido da semana inteira: o "sim" não diz que dias — fica em tarefa
@@ -716,6 +744,19 @@ export async function runEmailInboundSync(opts?: { sinceDays?: number; deadlineA
   } finally {
     lock.release();
     await client.logout().catch(() => {});
+  }
+  // Triagem por IA das reclamações novas (tipo, prioridade, SLA, reserva,
+  // duplicado, rascunho) — lote pequeno e só com tempo de sobra; o que ficar
+  // apanha-se na corrida seguinte. Interruptor/orçamento → salta sem erro.
+  // Nunca envia nada ao cliente.
+  if (Date.now() + 25_000 < deadlineAt) {
+    try {
+      const { triagePendingComplaints } = await import("../complaintTriage");
+      const t = await triagePendingComplaints({ limit: 5, deadlineAt: Number.isFinite(deadlineAt) ? deadlineAt : Date.now() + 40_000 });
+      result.aiTriaged = t.triaged;
+    } catch (err: any) {
+      console.warn("[EmailInbound] triagem IA falhou:", String(err?.message ?? err).slice(0, 160));
+    }
   }
   return result;
 }

@@ -24,7 +24,8 @@ import { toast } from "sonner";
 import ClientHistoryCard from "@/components/ClientHistoryCard";
 import CaseAssignmentCard from "@/components/CaseAssignmentCard";
 import LinkInboundEmailButton from "@/components/LinkInboundEmailButton";
-import { useState, useMemo } from "react";
+import ComplaintAiPanel from "@/components/ComplaintAiPanel";
+import { useState, useMemo, useEffect } from "react";
 import {
   AlertTriangle, Plus, MessageSquare, Camera, Clock, User, Car,
   ChevronRight, ChevronLeft, Send, Eye, Trash2, Upload, Shield,
@@ -477,6 +478,8 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
   const [isInternal, setIsInternal] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<any>(null);
+  // Rascunho da IA → janela "Enviar email" (quem envia é sempre uma pessoa).
+  const [emailPreset, setEmailPreset] = useState<{ body: string; n: number } | null>(null);
 
   if (isLoading || !data) return <div className="flex justify-center py-20"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>;
 
@@ -630,6 +633,11 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
             </TabsList>
 
             <TabsContent value="details" className="space-y-4 mt-4">
+              <ComplaintAiPanel
+                complaintId={id}
+                canEdit={can(user, "reclamacoes", "edit")}
+                onUseDraft={(text) => setEmailPreset((p) => ({ body: text, n: (p?.n ?? 0) + 1 }))}
+              />
               {c.description && (
                 <Card>
                   <CardHeader><CardTitle className="text-sm">Descrição</CardTitle></CardHeader>
@@ -963,6 +971,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                 clientName={c.clientName}
                 complaintTitle={c.title}
                 lastSentAt={c.clientEmailSentAt}
+                preset={emailPreset}
               />
               <LinkInboundEmailButton
                 module="complaint" alias="reclamacoes" caseId={id}
@@ -1619,12 +1628,15 @@ function SendClientEmailButton({
   clientName,
   complaintTitle,
   lastSentAt,
+  preset,
 }: {
   complaintId: number;
   clientEmail: string | null | undefined;
   clientName: string | null | undefined;
   complaintTitle: string | null | undefined;
   lastSentAt: string | Date | null | undefined;
+  /** Rascunho (ex.: da IA) a abrir na janela — `n` muda a cada pedido. */
+  preset?: { body: string; n: number } | null;
 }) {
   const [open, setOpen] = useState(false);
   const [subject, setSubject] = useState(
@@ -1637,6 +1649,12 @@ function SendClientEmailButton({
   const utils = trpc.useUtils();
 
   const disabled = !clientEmail;
+  useEffect(() => {
+    if (!preset?.body) return;
+    setBody(preset.body);
+    if (clientEmail) setOpen(true);
+    else toast.info("Cliente sem email registado — copia o rascunho para outro canal.");
+  }, [preset?.n]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSend = async () => {
     if (!subject.trim() || !body.trim()) {

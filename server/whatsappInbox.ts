@@ -76,6 +76,9 @@ export interface ConversationRow {
   awaitingSince: string | null;
   linkedBookingId: number | null;
   linkedClientEmail: string | null;
+  /** Triagem por IA (0123): intenção e urgência (null = por classificar). */
+  aiIntent: string | null;
+  aiUrgency: string | null;
 }
 
 /**
@@ -227,6 +230,8 @@ export async function listConversations(): Promise<ConversationRow[]> {
       awaitingSince: whatsappConversations.awaitingSince,
       linkedBookingId: whatsappConversations.linkedBookingId,
       linkedClientEmail: whatsappConversations.linkedClientEmail,
+      aiIntent: whatsappConversations.aiIntent,
+      aiUrgency: whatsappConversations.aiUrgency,
     })
     .from(whatsappConversations)
     .leftJoin(employees, eq(whatsappConversations.employeeId, employees.id))
@@ -258,6 +263,8 @@ export async function listConversations(): Promise<ConversationRow[]> {
       awaitingSince: sql<string | null>`NULL`,
       linkedBookingId: sql<number | null>`NULL`,
       linkedClientEmail: sql<string | null>`NULL`,
+      aiIntent: sql<string | null>`NULL`,
+      aiUrgency: sql<string | null>`NULL`,
     })
     .from(whatsappConversations)
     .leftJoin(employees, eq(whatsappConversations.employeeId, employees.id))
@@ -300,6 +307,8 @@ export async function listConversations(): Promise<ConversationRow[]> {
       awaitingSince: c.awaitingSince,
       linkedBookingId: c.linkedBookingId,
       linkedClientEmail: c.linkedClientEmail,
+      aiIntent: c.aiIntent ?? null,
+      aiUrgency: c.aiUrgency ?? null,
     };
   });
   return sortConversations(rows);
@@ -353,6 +362,8 @@ export interface ConversationThread {
   unreadCount: number;
   linkedBookingId: number | null;
   linkedClientEmail: string | null;
+  aiIntent: string | null;
+  aiUrgency: string | null;
   messages: ThreadMessage[];
 }
 
@@ -376,6 +387,8 @@ export async function getConversationThread(conversationId: number, limit = 100)
       unreadCount: whatsappConversations.unreadCount,
       linkedBookingId: whatsappConversations.linkedBookingId,
       linkedClientEmail: whatsappConversations.linkedClientEmail,
+      aiIntent: whatsappConversations.aiIntent,
+      aiUrgency: whatsappConversations.aiUrgency,
     })
     .from(whatsappConversations)
     .leftJoin(employees, eq(whatsappConversations.employeeId, employees.id))
@@ -424,6 +437,8 @@ export async function getConversationThread(conversationId: number, limit = 100)
     unreadCount: conv.unreadCount,
     linkedBookingId: conv.linkedBookingId,
     linkedClientEmail: conv.linkedClientEmail,
+    aiIntent: conv.aiIntent ?? null,
+    aiUrgency: conv.aiUrgency ?? null,
     // Nunca devolve o URL do storage: só se há ficheiro (o link assinado é pedido à parte).
     messages: rows
       .map(({ mediaKey, mediaUrl, ...m }) => ({ ...m, mediaAvailable: !!(mediaKey || mediaUrl) }) as ThreadMessage)

@@ -459,6 +459,8 @@ export const complaints = mysqlTable("complaints", {
 	convertedToId: int(),
 	convertedFromType: varchar({ length: 16 }),
 	convertedFromId: int(),
+	/** Triagem da IA já tentada (0123) — as sugestões ficam em ai_suggestions. */
+	aiTriagedAt: timestamp({ mode: 'string' }),
 });
 
 export const dailyDriverHistory = mysqlTable("daily_driver_history", {
@@ -999,6 +1001,9 @@ export const googleReviews = mysqlTable("google_reviews", {
 	sourceEmailId: varchar({ length: 100 }),
 	sourceEmailDate: timestamp({ mode: 'string' }),
 	importedAt: timestamp({ mode: 'string' }),
+	// 0123 — sentimento (positivo/neutro/negativo) e rascunho automático já tentado
+	aiSentiment: varchar({ length: 10 }),
+	aiDraftAttemptedAt: timestamp({ mode: 'string' }),
 });
 
 export const gpsAlerts = mysqlTable("gps_alerts", {
@@ -1126,6 +1131,8 @@ export const lostFoundItems = mysqlTable("lost_found_items", {
 	convertedFromId: int(),
 	relatedComplaintId: int(),
 	lastReminderAt: timestamp({ mode: 'string' }),
+	/** 0123 — correspondências perdido ↔ achado calculadas pela última vez. */
+	aiMatchCheckedAt: timestamp({ mode: 'string' }),
 	createdBy: int().notNull(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
@@ -2202,6 +2209,11 @@ export const whatsappConversations = mysqlTable("whatsapp_conversations", {
 	/** Ligação manual a uma reserva (multipark_bookings.id) / cliente (email). */
 	linkedBookingId: int(),
 	linkedClientEmail: varchar({ length: 320 }),
+	// Migração 0123 — triagem da IA (etiquetas do inbox + debounce por conversa)
+	aiIntent: varchar({ length: 24 }),
+	aiUrgency: varchar({ length: 10 }),
+	aiTriagedAt: timestamp({ mode: 'string' }),
+	aiTriageDueAt: timestamp({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
@@ -2211,6 +2223,7 @@ export const whatsappConversations = mysqlTable("whatsapp_conversations", {
 	index("idx_whatsapp_conversations_assigned").on(table.assignedUserId),
 	index("idx_whatsapp_conversations_employee").on(table.employeeId),
 	index("idx_whatsapp_conversations_last_message").on(table.lastMessageAt),
+	index("idx_whatsapp_conversations_ai_due").on(table.aiTriageDueAt),
 ]);
 
 // Mensagem individual (entrada ou saída). waMessageId (id da Meta) é único
@@ -2572,4 +2585,169 @@ export const trainingTutorQuestions = mysqlTable("training_tutor_questions", {
 (table) => [
 	uniqueIndex("uq_tt_questions_ctx_key").on(table.contextType, table.contextId, table.questionKey),
 	index("idx_tt_questions_last").on(table.lastAskedAt),
+]);
+
+// Migração 0123 — sugestões da IA separadas dos campos humanos (uma linha por
+// entidade × campo; ex.: complaint × type/priority/sla/booking/duplicate/draft).
+export const aiSuggestions = mysqlTable("ai_suggestions", {
+	id: int().autoincrement().primaryKey(),
+	entityType: varchar({ length: 24 }).notNull(),
+	entityId: int().notNull(),
+	field: varchar({ length: 24 }).notNull(),
+	value: text(),
+	confidence: decimal({ precision: 4, scale: 3 }),
+	reason: varchar({ length: 500 }),
+	/** pending | applied (automático) | accepted | rejected */
+	status: varchar({ length: 12 }).default('pending').notNull(),
+	previousValue: varchar({ length: 255 }),
+	decidedById: int(),
+	decidedAt: timestamp({ mode: 'string' }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_ai_suggestions_entity_field").on(table.entityType, table.entityId, table.field),
+]);
+
+// Migração 0123 — correspondências perdido ↔ achado (Perdidos & Achados).
+export const lostFoundMatches = mysqlTable("lost_found_matches", {
+	id: int().autoincrement().primaryKey(),
+	lostId: int().notNull(),
+	foundId: int().notNull(),
+	prefilterScore: int().default(0).notNull(),
+	aiScore: int(),
+	reason: varchar({ length: 300 }),
+	/** suggested | confirmed | dismissed */
+	status: varchar({ length: 12 }).default('suggested').notNull(),
+	decidedById: int(),
+	decidedAt: timestamp({ mode: 'string' }),
+	computedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_lost_found_matches_pair").on(table.lostId, table.foundId),
+	index("idx_lost_found_matches_found").on(table.foundId),
+]);
+
+// ─── Assistente / chat (0130) ────────────────────────────────────────────────
+// Conversas do assistente (canal "staff"; no futuro "public"). Retenção 30 dias.
+export const aiChatConversations = mysqlTable("ai_chat_conversations", {
+	id: bigint({ mode: "number" }).autoincrement().primaryKey(),
+	channel: varchar({ length: 16 }).notNull(),
+	ownerKey: varchar({ length: 80 }).notNull(),
+	userId: int(),
+	title: varchar({ length: 120 }),
+	createdAt: datetime({ mode: 'string', fsp: 3 }).notNull(),
+	updatedAt: datetime({ mode: 'string', fsp: 3 }).notNull(),
+},
+(table) => [
+	index("idx_ai_chat_conv_owner").on(table.channel, table.ownerKey, table.updatedAt),
+	index("idx_ai_chat_conv_updated").on(table.updatedAt),
+]);
+
+// Mensagens (texto) + nomes das ferramentas usadas — nunca os resultados.
+export const aiChatMessages = mysqlTable("ai_chat_messages", {
+	id: bigint({ mode: "number" }).autoincrement().primaryKey(),
+	conversationId: bigint({ mode: "number" }).notNull(),
+	role: varchar({ length: 12 }).notNull(),
+	content: text().notNull(),
+	tools: varchar({ length: 255 }),
+	createdAt: datetime({ mode: 'string', fsp: 3 }).notNull(),
+},
+(table) => [
+	index("idx_ai_chat_msg_conv").on(table.conversationId, table.id),
+	index("idx_ai_chat_msg_created").on(table.createdAt),
+]);
+
+// ─── Automações internas com IA (migração 0125) ─────────────────────────────
+// Os números vêm sempre do SQL/código; a IA só escreve o texto.
+
+export const opsBriefings = mysqlTable("ops_briefings", {
+	id: int().autoincrement().primaryKey(),
+	city: varchar({ length: 16 }).notNull(),
+	day: char({ length: 10 }).notNull(),
+	data: mediumtext().notNull(),
+	summary: text(),
+	aiUsed: tinyint().default(0).notNull(),
+	emailedAt: datetime({ mode: 'string' }),
+	emailRecipients: int().default(0).notNull(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_ops_briefings_city_day").on(table.city, table.day),
+	index("idx_ops_briefings_day").on(table.day),
+]);
+
+export const opsAnomalies = mysqlTable("ops_anomalies", {
+	id: int().autoincrement().primaryKey(),
+	day: char({ length: 10 }).notNull(),
+	domain: varchar({ length: 16 }).notNull(),
+	kind: varchar({ length: 32 }).notNull(),
+	cityKey: varchar({ length: 16 }),
+	projectId: int(),
+	subject: varchar({ length: 160 }).notNull(),
+	value: decimal({ precision: 14, scale: 2 }).default('0').notNull(),
+	expected: decimal({ precision: 14, scale: 2 }),
+	zScore: decimal({ precision: 8, scale: 2 }),
+	severity: varchar({ length: 8 }).notNull(),
+	detail: varchar({ length: 500 }).notNull(),
+	explanation: varchar({ length: 400 }),
+	refIds: varchar({ length: 255 }),
+	dedupKey: varchar({ length: 191 }).notNull(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_ops_anomalies_dedup").on(table.dedupKey),
+	index("idx_ops_anomalies_domain_day").on(table.domain, table.day),
+]);
+
+export const aiWeeklyReports = mysqlTable("ai_weekly_reports", {
+	id: int().autoincrement().primaryKey(),
+	kind: varchar({ length: 24 }).notNull(),
+	weekStart: char({ length: 10 }).notNull(),
+	data: mediumtext().notNull(),
+	narrative: text(),
+	aiUsed: tinyint().default(0).notNull(),
+	emailedAt: datetime({ mode: 'string' }),
+	emailRecipients: int().default(0).notNull(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_ai_weekly_reports_kind_week").on(table.kind, table.weekStart),
+]);
+
+export const extraLeadScores = mysqlTable("extra_lead_scores", {
+	leadId: int().primaryKey(),
+	score: int().default(0).notNull(),
+	breakdown: text().notNull(),
+	inputsHash: char({ length: 40 }).notNull(),
+	summary: varchar({ length: 300 }),
+	summaryHash: char({ length: 40 }),
+	draftMessage: text(),
+	/** pending | approved | rejected */
+	draftStatus: varchar({ length: 12 }),
+	draftCreatedById: int(),
+	draftReviewedById: int(),
+	draftReviewedAt: datetime({ mode: 'string' }),
+	computedAt: datetime({ mode: 'string' }).notNull(),
+},
+(table) => [
+	index("idx_extra_lead_scores_score").on(table.score),
+]);
+
+export const evaluationExplanations = mysqlTable("evaluation_explanations", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	fromDay: char({ length: 10 }).notNull(),
+	toDay: char({ length: 10 }).notNull(),
+	linesHash: char({ length: 40 }).notNull(),
+	text: varchar({ length: 700 }),
+	hiddenAt: datetime({ mode: 'string' }),
+	hiddenById: int(),
+	hiddenByName: varchar({ length: 255 }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_evaluation_explanations").on(table.employeeId, table.fromDay, table.toDay),
 ]);

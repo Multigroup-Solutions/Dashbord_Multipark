@@ -22,6 +22,7 @@ import { visibilitySql } from "./whatsappInbox";
 import { last9Digits } from "./whatsappInbound";
 import { messageDisplayBody, firstNameOf } from "../shared/whatsappTemplate";
 import { parseSlaMinutes, formatWaiting, type ConversationStatus } from "../shared/whatsappConversation";
+import { effectiveSlaMinutes } from "../shared/commsAi";
 
 function nowStr(d: Date = new Date()): string {
   return d.toISOString().slice(0, 19).replace("T", " ");
@@ -401,7 +402,7 @@ export async function aiAssist(conversationId: number, mode: AiMode, ctx: { user
 
 // ─── Avisos por cidade (cron horário) ───────────────────────────────────────
 
-interface AlertRow { id: number; projectId: number | null; name: string }
+interface AlertRow { id: number; projectId: number | null; name: string; urgent?: boolean }
 
 /**
  * Conversas abertas por responder há mais do que o SLA (aviso 1× por período
@@ -418,6 +419,8 @@ export async function runWhatsappSlaAlerts(now: Date = new Date()): Promise<{ ov
   const sla = slaMinutes();
   const nowS = nowStr(now);
   const slaCutoff = nowStr(new Date(now.getTime() - sla * 60_000));
+  // Urgentes (triagem por IA) entram mais cedo no aviso — mesmo aviso, 1× por período.
+  const urgentCutoff = nowStr(new Date(now.getTime() - effectiveSlaMinutes(sla, "urgente") * 60_000));
   const recent = nowStr(new Date(now.getTime() - 3 * 24 * 3_600_000));
   const winFrom = nowStr(new Date(now.getTime() - 24 * 3_600_000));
   const winTo = nowStr(new Date(now.getTime() - 22 * 3_600_000));
@@ -429,10 +432,11 @@ export async function runWhatsappSlaAlerts(now: Date = new Date()): Promise<{ ov
   const nameCol = sql<string>`COALESCE(NULLIF(TRIM(e.fullName), ''), NULLIF(TRIM(c.profileName), ''), c.phoneE164)`;
 
   const [overdueRows] = (await db.execute(sql`
-    SELECT c.id, ${cityCol} AS projectId, ${nameCol} AS name
+    SELECT c.id, ${cityCol} AS projectId, ${nameCol} AS name, c.aiUrgency AS aiUrgency
       FROM whatsapp_conversations c LEFT JOIN employees e ON e.id = c.employeeId
      WHERE c.status = 'aberto' AND c.optedOutAt IS NULL AND c.awaitingSince IS NOT NULL
-       AND c.awaitingSince <= ${slaCutoff} AND c.awaitingSince >= ${recent}
+       AND (c.awaitingSince <= ${slaCutoff} OR (c.aiUrgency = 'urgente' AND c.awaitingSince <= ${urgentCutoff}))
+       AND c.awaitingSince >= ${recent}
        AND c.slaAlertedAt IS NULL
      ORDER BY c.awaitingSince ASC LIMIT 200`)) as any;
   const [windowRows] = (await db.execute(sql`
@@ -444,7 +448,7 @@ export async function runWhatsappSlaAlerts(now: Date = new Date()): Promise<{ ov
      ORDER BY c.lastInboundAt ASC LIMIT 200`)) as any;
 
   const norm = (rows: any[]): AlertRow[] =>
-    (rows ?? []).map((r) => ({ id: Number(r.id), projectId: r.projectId == null ? null : Number(r.projectId), name: String(r.name ?? "") }));
+    (rows ?? []).map((r) => ({ id: Number(r.id), projectId: r.projectId == null ? null : Number(r.projectId), name: String(r.name ?? ""), urgent: r.aiUrgency === "urgente" }));
   const overdue = norm(overdueRows);
   const closing = norm(windowRows);
   out.overdue = overdue.length;
@@ -493,7 +497,9 @@ export function groupAlertsByCity(overdue: AlertRow[], closing: AlertRow[]): Ale
 /** Título + texto da notificação de um grupo. PURA. */
 export function describeAlertGroup(g: AlertGroup, sla: number): { title: string; body: string } {
   const parts: string[] = [];
-  if (g.overdue.length) parts.push(`${g.overdue.length} sem resposta há +${formatWaiting(sla)}`);
+  const urgent = g.overdue.filter((r) => r.urgent).length;
+  if (urgent) parts.push(`${urgent} urgente${urgent > 1 ? "s" : ""} por responder`);
+  if (g.overdue.length - urgent > 0) parts.push(`${g.overdue.length - urgent} sem resposta há +${formatWaiting(sla)}`);
   if (g.closing.length) parts.push(`${g.closing.length} com a janela de 24h a fechar`);
   const names = [...g.overdue, ...g.closing].map((r) => firstNameOf(r.name) || r.name);
   const uniq = [...new Set(names)].slice(0, 5);

@@ -691,10 +691,44 @@ export async function handleWhatsappReply(input: { employeeId: number; conversat
     const pending = await latestRequestFor(input.employeeId);
     if (!pending) return { action: "none" };
     const { classifyAvailabilityReply } = await import("./availabilityReply");
-    const verdict = classifyAvailabilityReply(input.body).verdict;
-    if (verdict === "unclear") return { action: "none" };
+    let verdict = classifyAvailabilityReply(input.body).verdict;
+    // Pouco clara → IA (lite). Confiança alta aplica-se sozinha; o resto fica
+    // para revisão humana (server/aiOps/availabilityAi.ts).
+    let aiYes: { days: string[]; fromHour: number | null; toHour: number | null } | null = null;
+    if (verdict === "unclear") {
+      // Pedido já respondido → conversa normal no inbox (sem gastar IA).
+      if (await requestAlreadyAnswered(pending.id)) return { action: "none" };
+      const { classifyUnclearAvailability, reviewNote } = await import("./aiOps/availabilityAi");
+      const d = await classifyUnclearAvailability(input.body, pending, { employeeId: input.employeeId });
+      if (d.action === "apply_no") verdict = "no";
+      else if (d.action === "apply_yes") { verdict = "yes"; aiYes = { days: d.days, fromHour: d.fromHour, toHour: d.toHour }; }
+      else {
+        // Sem leitura da IA (desligada/indisponível) → como antes: fica no inbox.
+        // Com leitura mas sem confiança → revisão humana (tarefa/backoffice).
+        if (d.ai) await flagAvailabilityForReview(input.employeeId, pending, `${reviewNote(d)} WhatsApp: "${input.body.slice(0, 300)}"`);
+        return { action: "none" };
+      }
+    }
     const db = await getDb();
     if (!db) return { action: "none" };
+
+    // Pedido da semana com dias ditos (lidos pela IA com confiança alta): marca esses dias.
+    if (aiYes && pending.kind !== "assignment" && !pending.targetDate && pending.weekStart && aiYes.days.length) {
+      if (await requestAlreadyAnswered(pending.id)) return { action: "none" };
+      if (!(await claimRequestAnswer(pending.id, input.employeeId, "day_marked"))) return { action: "none" };
+      const { markDayAvailability } = await import("./extrasAvailability");
+      for (const day of aiYes.days) {
+        await markDayAvailability(input.employeeId, day, {
+          morning: pending.shift !== "night", night: pending.shift === "night",
+          fromHour: aiYes.fromHour ?? pending.fromHour, toHour: aiYes.toHour ?? pending.toHour,
+          note: "respondeu por WhatsApp (lido por IA)",
+        });
+      }
+      const { replyToConversation } = await import("./whatsappInbox");
+      const reply = "Obrigado! Ficou registada a tua disponibilidade ✅";
+      await replyToConversation(input.conversationId, reply, null);
+      return { action: "day_marked", reply };
+    }
 
     const action = decideAutoReply({
       pending,
@@ -745,9 +779,9 @@ export async function handleWhatsappReply(input: { employeeId: number; conversat
       await markDayAvailability(input.employeeId, pending.targetDate, {
         morning: pending.shift !== "night",
         night: pending.shift === "night",
-        fromHour: pending.fromHour,
-        toHour: pending.toHour,
-        note: "respondeu SIM por WhatsApp",
+        fromHour: aiYes?.fromHour ?? pending.fromHour,
+        toHour: aiYes?.toHour ?? pending.toHour,
+        note: aiYes ? "respondeu por WhatsApp (lido por IA)" : "respondeu SIM por WhatsApp",
       });
       const reply = "Obrigado! Ficou registada a tua disponibilidade ✅";
       await replyToConversation(input.conversationId, reply, null);
@@ -763,6 +797,26 @@ export async function handleWhatsappReply(input: { employeeId: number; conversat
   } catch (err) {
     console.warn("[extras-auto] resposta WhatsApp:", err);
     return { action: "none" };
+  }
+}
+
+/**
+ * Resposta que nem as regras nem a IA (com confiança) perceberam → humano:
+ * aviso de escala → backoffice; pedido de disponibilidade → tarefa (uma por
+ * pessoa × semana, com a leitura da IA anotada). Nunca lança.
+ */
+async function flagAvailabilityForReview(employeeId: number, pending: PendingRequest, detail: string): Promise<void> {
+  try {
+    if (pending.kind === "assignment") {
+      await notifyBackoffice("Resposta ao aviso de escala por rever", `${detail}`.slice(0, 500), "/extras-dia");
+      return;
+    }
+    const day = pending.weekStart ?? pending.targetDate;
+    if (!day) return;
+    const { upsertAvailabilityTask } = await import("./tasksService");
+    await upsertAvailabilityTask({ employeeId, day, detail: `[Resposta pouco clara por WhatsApp] ${pending.targetDate ?? pending.weekStart ?? ""} ${pending.shift ?? ""}\n${detail}`.slice(0, 3000) });
+  } catch (err) {
+    console.warn("[extras-auto] revisão da resposta:", String((err as any)?.message ?? err).slice(0, 160));
   }
 }
 

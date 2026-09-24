@@ -478,7 +478,7 @@ async function writeInbound(db: Db, m: ParsedInboundMessage, phoneE164: string, 
   });
 }
 
-async function handleInbound(db: Db, m: ParsedInboundMessage): Promise<boolean> {
+async function handleInbound(db: Db, m: ParsedInboundMessage, triage?: number[]): Promise<boolean> {
   const phoneE164 = metaFromToE164(m.from) || `+${m.from}`;
   const employeeId = await employeeIdForPhone(db, phoneE164);
   const w = await writeInbound(db, m, phoneE164, employeeId);
@@ -515,6 +515,13 @@ async function handleInbound(db: Db, m: ParsedInboundMessage): Promise<boolean> 
   if (steps.has("lead_replied") || steps.has("lead_stamp")) {
     const { handleLeadInbound } = await import("./extraLeadsSync");
     await handleLeadInbound({ phoneE164, conversationId: w.conversationId, at: ts, stampOnly: steps.has("lead_stamp") });
+  }
+
+  // Triagem por IA (intenção + urgência), com debounce por conversa. Só
+  // reserva aqui; a chamada à IA corre depois de responder à Meta.
+  if (w.plan.bumpUnread && !w.optedOut && triage) {
+    const { noteInboundForTriage } = await import("./whatsappTriage");
+    if (await noteInboundForTriage(w.conversationId)) triage.push(w.conversationId);
   }
   return true;
 }
@@ -645,10 +652,11 @@ async function handleStatus(db: Db, s: ParsedStatusUpdate): Promise<boolean> {
  */
 export async function processInboundWebhook(
   payload: any,
-): Promise<{ processed: number; deduped: number; statuses: number; ignored: number }> {
+): Promise<{ processed: number; deduped: number; statuses: number; ignored: number; triage: number[] }> {
   const parsed = parseWebhookPayload(payload, process.env.WHATSAPP_PHONE_NUMBER_ID);
+  const triage: number[] = [];
   if (!parsed.messages.length && !parsed.statuses.length) {
-    return { processed: 0, deduped: 0, statuses: 0, ignored: parsed.ignored };
+    return { processed: 0, deduped: 0, statuses: 0, ignored: parsed.ignored, triage };
   }
 
   const db = await getDb();
@@ -657,7 +665,7 @@ export async function processInboundWebhook(
   let processed = 0;
   let deduped = 0;
   for (const m of parsed.messages) {
-    const written = await handleInbound(db, m);
+    const written = await handleInbound(db, m, triage);
     if (written) processed++;
     else deduped++;
   }
@@ -667,7 +675,7 @@ export async function processInboundWebhook(
     if (await handleStatus(db, s)) statuses++;
   }
 
-  return { processed, deduped, statuses, ignored: parsed.ignored };
+  return { processed, deduped, statuses, ignored: parsed.ignored, triage };
 }
 
 // ─── Manutenção (cron horário) ──────────────────────────────────────────────

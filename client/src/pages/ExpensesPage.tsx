@@ -1,3 +1,4 @@
+import AnomalyAlerts from "@/components/aiOps/AnomalyAlerts";
 import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import { can, scopeFor } from "@shared/access";
 import { trpc } from "@/lib/trpc";
@@ -351,6 +352,8 @@ export default function ExpensesPage() {
 
   return (
     <div className="space-y-6">
+      {/* Alertas (anomalias: valores fora do normal e possíveis duplicados) — quem vê as despesas da cidade */}
+      <AnomalyAlerts domain="expenses" enabled={!!user && ["city", "national"].includes(scopeFor(user as any, "despesas"))} />
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>

@@ -97,6 +97,7 @@ import { Label } from "./ui/label";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { trpc } from "@/lib/trpc";
 import { MobileTabBar } from "@/components/MobileTabBar";
+import { AssistantWidget } from "@/components/assistant/AssistantWidget";
 import { can, roleRank, type AccessOverrides, type ModuleId } from "@shared/access";
 
 /** Papel ou utilizador (com os overrides de módulo que vêm do auth.me). */
@@ -840,6 +841,8 @@ function DashboardLayoutContent({
         </main>
         {/* Tab bar mobile (design Multipark Mobile) — só em ecrãs pequenos */}
         <MobileTabBar />
+        {/* Assistente (chat): botão flutuante em todas as páginas */}
+        <AssistantWidget />
       </SidebarInset>
     </>
   );

@@ -1,3 +1,6 @@
+import AnomalyAlerts from "@/components/aiOps/AnomalyAlerts";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { can } from "@shared/access";
 import { useState, useMemo } from "react";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { trpc } from "@/lib/trpc";
@@ -49,6 +52,12 @@ const fmtEur = (v: number | string | null | undefined) => {
   return n.toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
 };
 
+/** Alertas de reservas por parque/canal (anomalias) — só a quem vê Reservas & Operações. */
+function BookingAlerts() {
+  const { user } = useAuth();
+  return <AnomalyAlerts domain="bookings" enabled={!!user && can(user as any, "reservas_operacoes", "view")} />;
+}
+
 export default function OperacoesPage() {
   // A aba ativa persiste à navegação — voltar às Operações mantém onde estavas
   const [storedTab, setTab] = usePersistedState("operacoes.tab", "dashboard");
@@ -71,7 +80,8 @@ export default function OperacoesPage() {
           <TabsTrigger value="cancelados"><XCircle className="w-4 h-4 mr-1" />Cancelados</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="dashboard" className="mt-4">
+        <TabsContent value="dashboard" className="mt-4 space-y-4">
+          <BookingAlerts />
           <OperacoesDashboard onJump={setTab} />
         </TabsContent>
         <TabsContent value="reservas" className="mt-4">

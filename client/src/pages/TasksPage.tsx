@@ -1,3 +1,5 @@
+import OpsBriefingCard from "@/components/aiOps/OpsBriefingCard";
+import TasksFromTextDialog from "@/components/aiOps/TasksFromTextDialog";
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
@@ -20,7 +22,7 @@ import { toast } from "sonner";
 import {
   ListTodo, Plus, Clock, AlertTriangle, CheckCircle2, Circle,
   ArrowUpCircle, Pencil, Trash2, CalendarDays, Users, LayoutGrid, List, GripVertical, Bell, Search,
-  ChevronLeft, ChevronRight, User, Play, MessageSquare, Link2, Repeat, Loader2, RotateCcw,
+  ChevronLeft, ChevronRight, User, Play, MessageSquare, Link2, Repeat, Loader2, RotateCcw, Sparkles,
 } from "lucide-react";
 import {
   TASK_SOURCE_LABELS,
@@ -136,6 +138,7 @@ type ViewMode = "mine" | "kanban" | "list" | "templates";
 export default function TasksPage() {
   const { user } = useAuth();
   const utils = trpc.useUtils();
+  const [showFromText, setShowFromText] = useState(false);
   const canEdit = canEditTasks(user?.role);
   const isAdmin = !!user && ["super_admin", "admin"].includes(user.role);
   const canTemplates = !!user && ["super_admin", "admin", "supervisor"].includes(user.role);
@@ -508,10 +511,21 @@ export default function TasksPage() {
             </Button>
           )}
           {canEdit && viewMode !== "templates" && (
+            <Button variant="outline" onClick={() => setShowFromText(true)} title="Cola notas ou uma passagem de turno; a IA propõe tarefas e tu confirmas">
+              <Sparkles className="h-4 w-4 mr-2" /> Criar tarefas a partir de texto
+            </Button>
+          )}
+          {canEdit && viewMode !== "templates" && (
             <Button onClick={() => { resetForm(); setShowCreate(true); }}><Plus className="h-4 w-4 mr-2" /> Nova Tarefa</Button>
           )}
         </div>
       </div>
+
+      {viewMode !== "templates" && <OpsBriefingCard />}
+      {canEdit && (
+        <TasksFromTextDialog open={showFromText} onOpenChange={setShowFromText}
+          projectId={filterProject !== "all" ? parseInt(filterProject) : null} onCreated={invalidate} />
+      )}
 
       {viewMode === "templates" && canTemplates && <TaskTemplatesPanel projects={projects as any[]} />}
 

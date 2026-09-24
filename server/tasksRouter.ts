@@ -193,6 +193,64 @@ export const tasksRouter = router({
       await logActivity({ userId: ctx.user.id, action: "create", entity: "task", entityId: newId, details: input.title });
       return { id: newId };
     }),
+  /**
+   * "Criar tarefas a partir de texto" — passo 1: a IA PROPÕE (nada é criado).
+   * Os responsáveis sugeridos saem só de quem a pessoa pode atribuir.
+   */
+  proposeFromText: protectedProcedure
+    .input(z.object({ text: z.string().trim().min(10).max(6000), projectId: z.number().int().positive().nullable().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "tarefas", "edit");
+      if (input.projectId != null) assertProjectAccess(input.projectId);
+      const ids = input.projectId ? await resolveProjectIds(input.projectId) : null;
+      let candidates = await assignableEmployees(ids);
+      if (scopeFor(ctx.user, "tarefas") === "below_city") {
+        const team = await teamEmployeeIds(ctx.user);
+        candidates = candidates.filter((c) => team.has(c.id));
+      }
+      const { proposeTasksFromText } = await import("./aiOps/tasksFromText");
+      const { lisbonDayOf } = await import("../shared/lisbonDay");
+      const r = await proposeTasksFromText(input.text, {
+        candidates: candidates.map((c: any) => ({ id: Number(c.id), fullName: String(c.fullName ?? c.name ?? "") })),
+        today: lisbonDayOf(Date.now()), userId: ctx.user.id,
+      });
+      if (!r.ok) throw new TRPCError({ code: "BAD_REQUEST", message: r.reason });
+      return { proposals: r.proposals };
+    }),
+  /** Passo 2: cria SÓ as tarefas que a pessoa confirmou (mesmos guardas do `create`). */
+  createFromProposals: protectedProcedure
+    .input(z.object({
+      projectId: z.number().int().positive().nullable().optional(),
+      tasks: z.array(z.object({
+        title: z.string().trim().min(1).max(256),
+        description: z.string().max(5000).nullable().optional(),
+        assigneeId: z.number().int().positive().nullable().optional(),
+        dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+        priority: z.enum(["low", "medium", "high", "urgent"]).default("medium"),
+      })).min(1).max(15),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "tarefas", "edit");
+      if (input.projectId != null) assertProjectAccess(input.projectId);
+      await assertTeamAssignees(ctx.user, input.tasks.map((t) => t.assigneeId));
+      const ids: number[] = [];
+      for (const t of input.tasks) {
+        const id = await createTask({
+          title: t.title,
+          description: t.description ?? null,
+          projectId: input.projectId ?? null,
+          assigneeId: t.assigneeId ?? null,
+          createdById: ctx.user.id,
+          taskPriority: t.priority,
+          dueDate: dueDateFromDay(t.dueDate ?? undefined),
+          sourceModule: "manual",
+        });
+        if (t.assigneeId) await setTaskAssignees(id, [t.assigneeId]);
+        await logActivity({ userId: ctx.user.id, action: "create", entity: "task", entityId: id, details: `${t.title} (a partir de texto)` });
+        ids.push(id);
+      }
+      return { created: ids.length, ids };
+    }),
   update: protectedProcedure
     .input(z.object({
       id: z.number(),
