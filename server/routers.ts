@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { projectScope, campaignScope, bookingHistoryScope, scopedProjectIds, assertEmployeeAccess, assertProjectAccess } from './cityScope';
+import { projectScope, campaignScope, bookingHistoryScope, scopedProjectIds, assertEmployeeAccess, assertProjectAccess, requireGlobalCityAccess } from './cityScope';
 import { assessmentAnswers, gradeAssessment, trainingResultScope } from './trainingAssessments';
 import { z } from "zod";
 import * as XLSX from "xlsx";
@@ -4487,14 +4487,46 @@ export const appRouter = router({
         requireRole(ctx.user.role, "backoffice");
         return getDailyDriverStats(input.date);
       }),
-      /** Manually trigger data collection for a specific date */
-      collectDay: protectedProcedure.input(z.object({ date: z.string(), projectId: z.number().optional() })).mutation(async ({ ctx, input }) => {
+      /**
+       * Recolha manual de um dia (só admin — abrange todas as cidades). Prazo de
+       * 45 s (a função morre aos 60 s): devolve `done:false` e a UI volta a
+       * chamar — a recolha é retomável. `resplit`: volta a partir o GPS já
+       * recolhido por quem tinha cada PDA (depois de corrigir check-ins) — não
+       * mexe nas velocidades (já em km/h).
+       */
+      collectDay: protectedProcedure.input(z.object({
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        projectId: z.number().optional(),
+        resplit: z.boolean().optional(),
+        afterId: z.number().optional(),
+      })).mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "admin");
-        const targetDate = new Date(input.date);
-        targetDate.setHours(0, 0, 0, 0);
-        const result = await collectDailyDriverData(targetDate);
-        await logActivity({ userId: ctx.user.id, action: "create", entity: "daily_driver_history", entityId: 0, details: `Recolha manual para ${input.date}: ${result.driversProcessed} motoristas` });
-        return result;
+        requireGlobalCityAccess();
+        const deadlineAt = Date.now() + 45_000;
+        if (input.resplit) {
+          const { resplitDriverDay } = await import("./jobs/dailyDriverCollection");
+          const r = await resplitDriverDay(input.date, { deadlineAt, afterId: input.afterId });
+          if (r.done) await logActivity({ userId: ctx.user.id, action: "update", entity: "daily_driver_history", entityId: 0, details: `Re-divisão do GPS de ${input.date} por PDA` });
+          return { success: true, done: r.done, driversProcessed: r.processed, errors: r.errors, nextAfterId: r.nextAfterId, mode: "resplit" as const };
+        }
+        // Meio-dia UTC → o dia de Lisboa é sempre `input.date`
+        const result = await collectDailyDriverData(new Date(`${input.date}T12:00:00Z`), { deadlineAt });
+        await logActivity({ userId: ctx.user.id, action: "create", entity: "daily_driver_history", entityId: 0, details: `Recolha manual para ${input.date}: ${result.driversProcessed} motoristas${result.done ? "" : " (parcial)"}` });
+        return { ...result, nextAfterId: null as number | null, mode: "collect" as const };
+      }),
+      /** Histórico de velocidade de UMA pessoa (ou Zello sem login): por dia. */
+      personHistory: protectedProcedure.input(z.object({
+        employeeId: z.number().optional(), zelloUsername: z.string().max(255).optional(),
+        days: z.number().int().min(1).max(366).default(30), projectId: z.number().optional(),
+      })).query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { getPersonSpeedHistory } = await import("./dayActivity");
+        return getPersonSpeedHistory(input);
+      }),
+      people: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { listSpeedHistoryPeople, speedThreshold } = await import("./dayActivity");
+        return { ...(await listSpeedHistoryPeople(90)), threshold: await speedThreshold() };
       }),
     }),
 
@@ -7312,16 +7344,6 @@ export const appRouter = router({
         return evaluateDay(input.date);
       }),
 
-    // Dashboard por intervalo: daily series + per-person summary com
-    // in-shift vs out-of-shift actions
-    dashboardRange: protectedProcedure
-      .input(z.object({ startDate: z.string(), endDate: z.string(), projectId: z.number().optional() }))
-      .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
-        const { getDashboardRange } = await import("./multiparkEvaluation");
-        return getDashboardRange(input.startDate, input.endDate);
-      }),
-
     // Set multipark mapping para um empregado (nome curto + userId)
     setMultiparkAgentMapping: protectedProcedure
       .input(z.object({
@@ -7379,39 +7401,6 @@ export const appRouter = router({
         return { total: rows.length, byType, items: rows };
       }),
 
-    // ── Atividade por agente (TODOS os agentes com atividade) + mapeamento ──
-    // Lista os nomes de agente Multipark do histórico no período, com contagens
-    // e o colaborador a que estão ligados (employees.multiparkAgentName).
-    agentActivity: protectedProcedure
-      .input(z.object({ from: z.string(), to: z.string(), projectId: z.number().optional() }))
-      .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
-        const { getDb } = await import("./db");
-        const { sql } = await import("drizzle-orm");
-        const db = await getDb(); if (!db) return [];
-        const rows = (r: any) => (Array.isArray(r[0]) ? r[0] : r) as any[];
-        const acts = rows(await db.execute(sql`
-          SELECT agentName,
-            COUNT(*) AS total,
-            SUM(changeType = 'CHECK_IN') AS checkin,
-            SUM(changeType = 'CHECK_OUT') AS checkout,
-            SUM(changeType = 'MOVEMENT') AS movement
-          FROM multipark_booking_history
-          WHERE ${bookingHistoryScope(sql`multipark_booking_history.bookingExternalId`)} AND agentName IS NOT NULL AND agentName <> ''
-            AND actionTime >= ${input.from + " 00:00:00"} AND actionTime <= ${input.to + " 23:59:59"}
-          GROUP BY agentName ORDER BY total DESC`));
-        const emps = rows(await db.execute(sql`SELECT id, fullName, multiparkAgentName FROM employees WHERE ${projectScope(sql`employees.projectId`)} AND multiparkAgentName IS NOT NULL AND multiparkAgentName <> ''`));
-        const byAgent = new Map(emps.map((e: any) => [e.multiparkAgentName, e]));
-        return acts.map((a: any) => {
-          const e = byAgent.get(a.agentName);
-          return {
-            agentName: a.agentName,
-            total: Number(a.total), checkin: Number(a.checkin), checkout: Number(a.checkout), movement: Number(a.movement),
-            employeeId: e?.id ?? null, employeeName: e?.fullName ?? null,
-          };
-        });
-      }),
-
     // Liga (ou desliga) um nome de agente Multipark a um colaborador. Único:
     // limpa o nome de qualquer outro colaborador que o tivesse.
     mapAgentToEmployee: protectedProcedure
@@ -7424,69 +7413,28 @@ export const appRouter = router({
         // Fase 1: grava também o ID do agente (fiável) e não só o nome
         const { agentIdForName } = await import("./identityLink");
         const agentId = await agentIdForName(input.agentName);
-        // limpa o agente de quem o tivesse (nome e id)
+        // limpa o agente de quem o tivesse (nome e id — principal ou agente extra)
         await db.execute(sql`UPDATE employees SET multiparkAgentName = NULL WHERE multiparkAgentName = ${input.agentName}`);
         if (agentId) await db.execute(sql`UPDATE employees SET multiparkAgentUserId = NULL WHERE multiparkAgentUserId = ${agentId}`);
+        const { addAgentAlias, removeAgentAlias } = await import("./employeeAliases");
+        if (agentId) await removeAgentAlias(agentId).catch(() => {});
+        let asAlias = false;
         if (input.employeeId != null) {
-          await db.execute(sql`UPDATE employees SET multiparkAgentName = ${input.agentName}, multiparkAgentUserId = ${agentId} WHERE id = ${input.employeeId}`);
+          const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r) as any[]) ?? [];
+          const [cur] = rowsOf(await db.execute(sql`SELECT multiparkAgentUserId, multiparkAgentName FROM employees WHERE id = ${input.employeeId} LIMIT 1`));
+          const hasOther = cur && ((cur.multiparkAgentUserId && cur.multiparkAgentUserId !== agentId) || (!cur.multiparkAgentUserId && cur.multiparkAgentName && cur.multiparkAgentName !== input.agentName));
+          if (hasOther && agentId) {
+            // A ficha já tem OUTRO agente principal: este entra como agente extra
+            // (a mesma pessoa com várias contas Multipark) — não se sobrepõe.
+            await addAgentAlias(input.employeeId, agentId, input.agentName);
+            asAlias = true;
+          } else {
+            await db.execute(sql`UPDATE employees SET multiparkAgentName = ${input.agentName}, multiparkAgentUserId = COALESCE(${agentId}, multiparkAgentUserId) WHERE id = ${input.employeeId}`);
+          }
         }
-        await logActivity({ userId: ctx.user.id, action: "agent_attach", entity: "employee", entityId: input.employeeId ?? undefined, details: `Agente Multipark "${input.agentName}"${agentId ? ` (${agentId})` : ""} ${input.employeeId != null ? "ligado manualmente" : "desligado"}` });
-        return { success: true };
+        await logActivity({ userId: ctx.user.id, action: "agent_attach", entity: "employee", entityId: input.employeeId ?? undefined, details: `Agente Multipark "${input.agentName}"${agentId ? ` (${agentId})` : ""} ${input.employeeId != null ? (asAlias ? "ligado como agente extra" : "ligado manualmente") : "desligado"}` });
+        return { success: true, asAlias };
       }),
-
-    // Auto-liga agentes Multipark a colaboradores por NOME (normalizado, sem
-    // acentos, case-insensitive). Só liga quando o match é ÚNICO e o colaborador
-    // ainda não tem agente — os restantes ficam na fila para ligação manual.
-    // Depois de ligado (auto ou manual) fica persistente em employees.multiparkAgentName.
-    autoLinkAgents: protectedProcedure.mutation(async ({ ctx }) => {
-      requireRole(ctx.user.role, "admin");
-      const { getDb } = await import("./db");
-      const { sql } = await import("drizzle-orm");
-      const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
-      const rows = (r: any) => (Array.isArray(r[0]) ? r[0] : r) as any[];
-      const norm = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
-
-      const agents = rows(await db.execute(sql`
-        SELECT DISTINCT agentName FROM multipark_booking_history
-        WHERE agentName IS NOT NULL AND agentName <> ''
-          AND agentName NOT IN (SELECT multiparkAgentName FROM employees WHERE multiparkAgentName IS NOT NULL)`));
-      const emps = rows(await db.execute(sql`SELECT id, fullName, email, multiparkAgentName FROM employees WHERE isActive = 1`));
-
-      // Fase 1: nome completo OU "primeiro + último" (é o formato da Multipark)
-      const { nameKeys, agentIdForName } = await import("./identityLink");
-      const byName = new Map<string, any[]>();
-      for (const e of emps) {
-        for (const k of nameKeys(e.fullName ?? "")) {
-          const list = byName.get(k) ?? [];
-          if (!list.includes(e)) byName.set(k, [...list, e]);
-        }
-      }
-
-      const linked: Array<{ agentName: string; employeeName: string }> = [];
-      const ambiguous: string[] = [];
-      const unmatched: string[] = [];
-      for (const a of agents) {
-        const candidates = byName.get(nameKeys(a.agentName)[0] ?? norm(a.agentName)) ?? [];
-        const free = candidates.filter((e) => !e.multiparkAgentName);
-        if (free.length === 1) {
-          // id do agente só se ainda não estiver noutra ficha (verificado aqui —
-          // um UPDATE com subconsulta à própria tabela dá erro 1093 no MySQL)
-          let agentId = await agentIdForName(a.agentName);
-          if (agentId && rows(await db.execute(sql`SELECT id FROM employees WHERE multiparkAgentUserId = ${agentId} LIMIT 1`)).length) agentId = null;
-          await db.execute(sql`UPDATE employees SET multiparkAgentName = ${a.agentName},
-              multiparkAgentUserId = COALESCE(${agentId}, multiparkAgentUserId)
-            WHERE id = ${free[0].id} AND multiparkAgentName IS NULL`);
-          free[0].multiparkAgentName = a.agentName; // não voltar a usar este colaborador
-          linked.push({ agentName: a.agentName, employeeName: free[0].fullName });
-        } else if (candidates.length > 1) {
-          ambiguous.push(a.agentName);
-        } else {
-          unmatched.push(a.agentName);
-        }
-      }
-      await logActivity({ userId: ctx.user.id, action: "auto_link_agents", entity: "employees", details: `ligados=${linked.length} ambiguos=${ambiguous.length} sem_match=${unmatched.length}` });
-      return { linked, ambiguous, unmatched };
-    }),
 
     // Lista leve de colaboradores ativos para o dropdown de mapeamento.
     employeesForMapping: protectedProcedure.query(async ({ ctx }) => {
@@ -7557,12 +7505,33 @@ export const appRouter = router({
       }),
 
     // Atividade consolidada de um dia: ações + km/GPS por pessoa (visão Jorge)
+    // Dia ou intervalo (Hoje/Ontem/intervalo): ações, no horário/fora, custo
+    // dos extras (só com o gate de totais), GPS e ponto por pessoa.
     dayActivity: protectedProcedure
-      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), projectId: z.number().optional() }))
+      .input(z.object({
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        projectId: z.number().optional(),
+      }).refine((v) => !!(v.date || v.startDate), { message: "Indica o dia" }))
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
+        const start = (input.startDate ?? input.date)!;
+        const end = input.endDate && input.endDate >= start ? input.endDate : start;
+        const { daysInRange } = await import("../shared/lisbonDay");
+        if (daysInRange(start, end).length > 93) throw new TRPCError({ code: "BAD_REQUEST", message: "Intervalo máximo: 93 dias." });
+        const canSeeCost = await canSeeFinanceTotals(ctx.user);
         const { getDayActivity } = await import("./db");
-        return getDayActivity(input.date);
+        return getDayActivity(start, { endDate: end, canSeeCost });
+      }),
+
+    // Gaveta de uma pessoa num dia: ações, GPS (com trajeto), PDAs e ponto.
+    personDay: protectedProcedure
+      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), key: z.string().min(3).max(300), projectId: z.number().optional() }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { getPersonDay } = await import("./dayActivity");
+        return getPersonDay(input.date, input.key);
       }),
 
     // Liga um agente Multipark a um PARCEIRO (agências que marcam pelo portal)

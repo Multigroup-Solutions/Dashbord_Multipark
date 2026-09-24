@@ -33,6 +33,8 @@ export const MAX_ACCURACY_M = 100;
 export const MIN_IMPLICIT_GAP_S = 5;
 /** Acima disto é ruído (não há condutores a 150 km/h num parque). */
 export const MAX_PLAUSIBLE_KMH = 150;
+/** Abaixo disto (km/h) o condutor está parado — "horas de movimento" = o resto. */
+export const STOPPED_SPEED_KMH = 2;
 
 export function zelloAccuracyOk(props: Record<string, any> | null | undefined): boolean {
   const a = parseFloat(props?.accuracy);
@@ -73,7 +75,8 @@ export function holdersForDay(
 
 export interface GpsPoint { ts: number; speed: number; lat: number | null; lon: number | null; accurate: boolean }
 export interface HolderInterval { employeeId: number; start: number; end: number } // ms
-export interface HolderShare { employeeId: number; minutes: number; km: number; maxSpeed: number; avgSpeed: number; violations: number; points: number }
+/** `minutes` = tempo com o PDA (entre pontos); `movingMinutes` = desse, a andar (> STOPPED_SPEED_KMH). */
+export interface HolderShare { employeeId: number; minutes: number; movingMinutes: number; km: number; maxSpeed: number; avgSpeed: number; violations: number; points: number }
 
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371, dLat = ((lat2 - lat1) * Math.PI) / 180, dLon = ((lon2 - lon1) * Math.PI) / 180;
@@ -102,6 +105,9 @@ export function gpsPointsFromGeoJson(data: any): GpsPoint[] {
  * Parte os pontos de um dia pelos intervalos em que cada pessoa tinha o PDA.
  * Um segmento (km/minutos) só conta para alguém quando os DOIS pontos caem no
  * intervalo dessa pessoa; velocidades e excessos contam pelo ponto. PURA.
+ * Pontos SEM dono (ninguém com login no PDA) e segmentos que atravessam uma
+ * troca de pessoa não entram em nenhuma parte — ficam no "resto" do dia
+ * (linha do dia − soma das partes, ver `leftoverFromShares`).
  */
 export function splitByHolder(points: GpsPoint[], intervals: HolderInterval[], threshold: number): HolderShare[] {
   const holderAt = (tsSec: number): number | null => {
@@ -109,10 +115,10 @@ export function splitByHolder(points: GpsPoint[], intervals: HolderInterval[], t
     for (const i of intervals) if (ms >= i.start && ms < i.end) return i.employeeId;
     return null;
   };
-  const acc = new Map<number, { minutesS: number; km: number; max: number; sum: number; n: number; viol: number; points: number }>();
+  const acc = new Map<number, { minutesS: number; movingS: number; km: number; max: number; sum: number; n: number; viol: number; points: number }>();
   const get = (id: number) => {
     let a = acc.get(id);
-    if (!a) { a = { minutesS: 0, km: 0, max: 0, sum: 0, n: 0, viol: 0, points: 0 }; acc.set(id, a); }
+    if (!a) { a = { minutesS: 0, movingS: 0, km: 0, max: 0, sum: 0, n: 0, viol: 0, points: 0 }; acc.set(id, a); }
     return a;
   };
   let prev: (GpsPoint & { holder: number | null }) | null = null;
@@ -130,6 +136,8 @@ export function splitByHolder(points: GpsPoint[], intervals: HolderInterval[], t
         const dt = p.ts - prev.ts;
         if (dt > 0 && dt < 3600) {
           a.minutesS += dt;
+          // mesma regra da linha do dia (processGeoJsonHistory): anda se o ponto anterior ia a > 2 km/h
+          if (prev.speed > STOPPED_SPEED_KMH) a.movingS += dt;
           if (p.accurate && prev.accurate && p.lat != null && p.lon != null && prev.lat != null && prev.lon != null) {
             const km = haversineKm(prev.lat, prev.lon, p.lat, p.lon);
             if (km < 2 && (km / dt) * 3600 <= MAX_PLAUSIBLE_KMH) a.km += km;
@@ -142,6 +150,7 @@ export function splitByHolder(points: GpsPoint[], intervals: HolderInterval[], t
   return [...acc.entries()].map(([employeeId, a]) => ({
     employeeId,
     minutes: Math.round(a.minutesS / 60),
+    movingMinutes: Math.round(a.movingS / 60),
     km: Math.round(a.km * 100) / 100,
     maxSpeed: Math.round(a.max * 100) / 100,
     avgSpeed: a.n ? Math.round((a.sum / a.n) * 100) / 100 : 0,

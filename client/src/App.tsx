@@ -16,6 +16,7 @@ import MarketingPage from "./pages/MarketingPage";
 import { MarketingDashboardPage } from "./pages/MarketingPage";
 import ShiftHandoverPage from "./pages/ShiftHandoverPage";
 import OperationalPage from "./pages/OperationalPage";
+import RadioPage from "./pages/RadioPage";
 import PdaRegisterPage from "./pages/PdaRegisterPage";
 import ApiKeysPage from "./pages/ApiKeysPage";
 import IntegrationsGoogleAdsPage from "./pages/IntegrationsGoogleAdsPage";
@@ -154,6 +155,9 @@ function Router() {
       </Route>
       <Route path="/operacional">
         {() => (<DashboardLayout><OperationalPage /></DashboardLayout>)}
+      </Route>
+      <Route path="/radio">
+        {() => (<DashboardLayout><RadioPage /></DashboardLayout>)}
       </Route>
       <Route path="/reclamacoes">
         {() => (<DashboardLayout><ComplaintsPage /></DashboardLayout>)}
