@@ -19,7 +19,8 @@ export type AiFlag =
   | "AI_HANDOVER_SUMMARY"
   | "AI_WHATSAPP_ASSIST"
   | "AI_QUIZ"
-  | "AI_HR_AUTOFILL";
+  | "AI_HR_AUTOFILL"
+  | "AI_TRAINING_TUTOR";
 
 export interface AiFeatureDef {
   label: string;
@@ -43,6 +44,9 @@ export const AI_FEATURES = {
   // Manual longo → 5–20 perguntas com resposta certa: o lite inventa/repete
   // opções com frequência; `fast` chega (nunca `smart`, por custo).
   quiz_generation: { label: "Perguntas da formação", flag: "AI_QUIZ", tier: "fast", essential: false },
+  // Tutor da Formação: respostas curtas só a partir dos manuais (trechos
+  // escolhidos por palavras-chave + conteúdo do módulo em cache) — o lite chega.
+  training_tutor: { label: "Tutor da formação", flag: "AI_TRAINING_TUTOR", tier: "lite", essential: false },
   healthcheck: { label: "Teste da ligação", flag: null, tier: "lite", essential: true },
 } as const satisfies Record<string, AiFeatureDef>;
 

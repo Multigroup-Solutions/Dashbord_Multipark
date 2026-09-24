@@ -24,6 +24,7 @@ import { careerExamQuestions, careerExams, employees, quizQuestions, trainingMan
 import { TRAINING_ITEM_TYPES } from "./trainingRules";
 import { requireAccess, employeeBelowCondition } from "./_core/access";
 import { roleRank, scopeFor, seesBeyondOwn } from "../shared/access";
+import { trainingTutorRouter } from "./trainingTutorRouter";
 
 /** Fichas da equipa de um team_leader (abaixo dele, na cidade) + a própria. */
 async function trainingTeamIds(user: { id: number; role: string }): Promise<Set<number>> {
@@ -104,6 +105,9 @@ const pathInput = z.object({
 });
 
 export const trainingRouter = router({
+  // ─── Tutor (IA) — server/trainingTutorRouter.ts ─────────────────────────
+  tutor: trainingTutorRouter,
+
   // ─── Categorias ──────────────────────────────────────────────────────────
   categories: protectedProcedure.query(async ({ ctx }) => {
     requireAccess(ctx.user, "formacao", "view", { allowOwn: true });

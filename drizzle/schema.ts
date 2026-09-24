@@ -2538,3 +2538,38 @@ export const aiContextCaches = mysqlTable("ai_context_caches", {
 	cacheName: varchar({ length: 255 }).notNull(),
 	expiresAt: datetime({ mode: 'string' }).notNull(),
 });
+
+// ─── Tutor da Formação (0138) ─────────────────────────────────────────────────
+// Histórico curto (30 dias) por formando e módulo; texto do formando sem dados pessoais.
+export const trainingTutorMessages = mysqlTable("training_tutor_messages", {
+	id: bigint({ mode: "number" }).autoincrement().primaryKey(),
+	userId: int().notNull(),
+	employeeId: int(),
+	contextType: varchar({ length: 8 }).notNull(), // manual | video | path | quiz
+	contextId: int().notNull(),
+	role: varchar({ length: 10 }).notNull(), // user | assistant
+	content: text().notNull(),
+	outOfContent: tinyint().default(0).notNull(),
+	createdAt: datetime({ mode: 'string' }).notNull(),
+},
+(table) => [
+	index("idx_tt_messages_user_ctx").on(table.userId, table.contextType, table.contextId, table.createdAt),
+	index("idx_tt_messages_created").on(table.createdAt),
+]);
+
+// Perguntas mais feitas por módulo (anónimo: sem userId) — para os formadores melhorarem os manuais.
+export const trainingTutorQuestions = mysqlTable("training_tutor_questions", {
+	id: int().autoincrement().primaryKey(),
+	contextType: varchar({ length: 8 }).notNull(),
+	contextId: int().notNull(),
+	questionKey: varchar({ length: 191 }).notNull(),
+	sampleText: varchar({ length: 500 }).notNull(),
+	askCount: int().default(0).notNull(),
+	outOfContentCount: int().default(0).notNull(),
+	firstAskedAt: datetime({ mode: 'string' }).notNull(),
+	lastAskedAt: datetime({ mode: 'string' }).notNull(),
+},
+(table) => [
+	uniqueIndex("uq_tt_questions_ctx_key").on(table.contextType, table.contextId, table.questionKey),
+	index("idx_tt_questions_last").on(table.lastAskedAt),
+]);
