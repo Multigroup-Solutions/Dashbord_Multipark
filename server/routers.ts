@@ -8451,7 +8451,7 @@ export const appRouter = router({
     // ── Estado, atribuição, alertas, ligações, respostas rápidas, IA (0097) ──
     // Configuração que a UI precisa para calcular alertas (SLA) e mostrar a IA.
     inboxMeta: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "backoffice");
+      requireAccess(ctx.user, "whatsapp", "view");
       const { slaMinutes } = await import("./whatsappInboxOps");
       const { llmConfigured } = await import("./_core/llm");
       return { slaMinutes: slaMinutes(), aiConfigured: llmConfigured() };
@@ -8459,13 +8459,13 @@ export const appRouter = router({
 
     // Badge do menu: conversas visíveis que precisam de atenção.
     badge: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "backoffice");
+      requireAccess(ctx.user, "whatsapp", "view");
       const { inboxBadge } = await import("./whatsappInboxOps");
       return inboxBadge();
     }),
 
     assignees: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "backoffice");
+      requireAccess(ctx.user, "whatsapp", "view");
       const { listAssignees } = await import("./whatsappInboxOps");
       return listAssignees();
     }),
@@ -8473,7 +8473,7 @@ export const appRouter = router({
     setStatus: protectedProcedure
       .input(z.object({ conversationId: z.number().int().positive(), status: z.enum(["aberto", "pendente", "resolvido"]) }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "whatsapp", "edit");
         const { conversationVisible } = await import("./whatsappInbox");
         if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const { setConversationStatus } = await import("./whatsappInboxOps");
@@ -8493,7 +8493,7 @@ export const appRouter = router({
     assign: protectedProcedure
       .input(z.object({ conversationId: z.number().int().positive(), userId: z.number().int().positive().nullable() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "whatsapp", "edit");
         const { conversationVisible } = await import("./whatsappInbox");
         if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const { assignConversation } = await import("./whatsappInboxOps");
@@ -8514,7 +8514,7 @@ export const appRouter = router({
     context: protectedProcedure
       .input(z.object({ conversationId: z.number().int().positive() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "whatsapp", "view");
         const { conversationVisible } = await import("./whatsappInbox");
         if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const { getConversationContext } = await import("./whatsappInboxOps");
@@ -8526,7 +8526,7 @@ export const appRouter = router({
     searchBookings: protectedProcedure
       .input(z.object({ q: z.string().min(2).max(120) }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "whatsapp", "view");
         const { searchLinkableBookings } = await import("./whatsappInboxOps");
         return searchLinkableBookings(input.q);
       }),
@@ -8540,7 +8540,7 @@ export const appRouter = router({
         }),
       )
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "whatsapp", "edit");
         const { conversationVisible } = await import("./whatsappInbox");
         if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const { linkConversation } = await import("./whatsappInboxOps");
@@ -8567,14 +8567,14 @@ export const appRouter = router({
 
     quickReplies: router({
       list: protectedProcedure.query(async ({ ctx }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "whatsapp", "view");
         const { listQuickReplies } = await import("./whatsappInboxOps");
         return listQuickReplies();
       }),
       save: protectedProcedure
         .input(z.object({ id: z.number().int().positive().nullable().optional(), title: z.string().trim().min(1).max(80), body: z.string().trim().min(1).max(4000) }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "backoffice");
+          requireAccess(ctx.user, "whatsapp", "edit");
           const { saveQuickReply } = await import("./whatsappInboxOps");
           const id = await saveQuickReply(input, ctx.user.id);
           if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível guardar" });
@@ -8583,7 +8583,7 @@ export const appRouter = router({
       delete: protectedProcedure
         .input(z.object({ id: z.number().int().positive() }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "backoffice");
+          requireAccess(ctx.user, "whatsapp", "edit");
           const { deleteQuickReply } = await import("./whatsappInboxOps");
           await deleteQuickReply(input.id);
           return { success: true };
@@ -8595,7 +8595,7 @@ export const appRouter = router({
     aiAssist: protectedProcedure
       .input(z.object({ conversationId: z.number().int().positive(), mode: z.enum(["summary", "reply"]) }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "whatsapp", "edit");
         const { llmConfigured } = await import("./_core/llm");
         if (!llmConfigured()) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "A IA não está configurada." });
         const { conversationVisible } = await import("./whatsappInbox");
