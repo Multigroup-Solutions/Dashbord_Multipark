@@ -4,10 +4,11 @@
  * comprovativo de IBAN ou de morada, a IA lê o documento e preenche na ficha
  * SÓ os campos que ainda estão vazios — nunca substitui o que já lá está.
  *
- * Usa o LLM configurado na app (server/_core/llm.ts — LLM_API_KEY/LLM_MODEL).
- * Sem LLM configurado, não faz nada. Best-effort: nunca parte o upload.
+ * Usa a IA da app (server/_core/ai — runAi, saída estruturada validada por
+ * zod). Interruptor AI_HR_AUTOFILL, DESLIGADO por omissão até decisão RGPD:
+ * desligado ou sem IA, não faz nada. Best-effort: nunca parte o upload.
  */
-import { llmConfigured } from "./_core/llm";
+import { aiFeatureAvailableFresh } from "./_core/ai/status";
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 
@@ -63,19 +64,6 @@ export function validDate(raw: string | null | undefined): string | null {
   return y >= 1900 && y <= 2100 ? iso : null;
 }
 
-/** Tira o primeiro objeto JSON de uma resposta do modelo. */
-export function parseJsonObject(text: string): Record<string, unknown> | null {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end <= start) return null;
-  try {
-    const v = JSON.parse(text.slice(start, end + 1));
-    return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
-}
-
 export interface FillPlan { patch: Record<string, string>; filled: string[] }
 
 const LABEL: Record<string, string> = { nif: "NIF", birthDate: "data de nascimento", nationality: "nacionalidade", address: "morada", nib: "IBAN" };
@@ -115,23 +103,32 @@ export function planAutofill(
 
 // ─── I/O ────────────────────────────────────────────────────────────────────
 
-const PROMPT = `És um assistente de recursos humanos português. Lê o documento em anexo e devolve APENAS um objeto JSON (sem texto à volta) com estes campos, usando null quando o campo não aparece ou não é legível:
-{"fullName": string|null, "nif": string|null, "birthDate": "YYYY-MM-DD"|null, "nationality": string|null, "address": string|null, "iban": string|null, "documentNumber": string|null, "expiryDate": "YYYY-MM-DD"|null}
-Regras: não inventes; copia os números tal como aparecem; nationality em português (ex.: "Portuguesa", "Brasileira"); address numa só linha com código postal e localidade.`;
+/** IA do RH disponível? (configurada + AI_ENABLED + AI_HR_AUTOFILL). */
+export async function llmConfigured(): Promise<boolean> {
+  return aiFeatureAvailableFresh("hr_autofill");
+}
 
-// Fonte única: server/_core/llm.ts (re-exportado para os chamadores existentes).
-export { llmConfigured };
-
-export async function extractDocument(mimeType: string, base64: string): Promise<ExtractedDoc | null> {
-  const { invokeLLM } = await import("./_core/llm");
+export async function extractDocument(mimeType: string, base64: string, ctx: { userId?: number | null; employeeId?: number | null } = {}): Promise<ExtractedDoc | null> {
+  const { runAi } = await import("./_core/ai/run");
+  const { HR_DOCUMENT_INSTRUCTION, HR_DOCUMENT_SYSTEM, hrDocumentSchema } = await import("./_core/ai/prompts/hrDocument");
   const isPdf = mimeType === "application/pdf";
-  const part: any = isPdf
-    ? { type: "file_url", file_url: { url: `data:application/pdf;base64,${base64}`, mime_type: "application/pdf" } }
-    : { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64}`, detail: "high" } };
-  const r = await invokeLLM({ messages: [{ role: "user", content: [part, { type: "text", text: PROMPT }] }] });
-  const content = r.choices?.[0]?.message?.content;
-  const text = typeof content === "string" ? content : Array.isArray(content) ? content.map((c: any) => c?.text ?? "").join("") : "";
-  return parseJsonObject(text) as ExtractedDoc | null;
+  try {
+    const r = await runAi({
+      feature: "hr_autofill",
+      system: HR_DOCUMENT_SYSTEM,
+      input: [isPdf ? { type: "pdf", data: base64 } : { type: "image", mimeType, data: base64 }, { type: "text", text: HR_DOCUMENT_INSTRUCTION }],
+      schema: hrDocumentSchema,
+      maxTokens: 800,
+      timeoutMs: 30_000,
+      userId: ctx.userId ?? null,
+      entity: "employee",
+      entityId: ctx.employeeId ?? null,
+    });
+    return r.output;
+  } catch (err: any) {
+    console.warn("[documentAutofill] IA falhou:", String(err?.code ?? err?.name ?? "erro"));
+    return null;
+  }
 }
 
 /**
@@ -140,13 +137,13 @@ export async function extractDocument(mimeType: string, base64: string): Promise
  */
 export async function autofillFromDocument(opts: { employeeId: number; docType: string; mimeType: string; base64: string; userId: number }): Promise<{ filled: string[]; extracted: ExtractedDoc | null; skipped?: string }> {
   if (!(AUTOFILL_DOC_TYPES as readonly string[]).includes(opts.docType)) return { filled: [], extracted: null, skipped: "tipo de documento" };
-  if (!llmConfigured()) return { filled: [], extracted: null, skipped: "IA não configurada" };
+  if (!(await llmConfigured())) return { filled: [], extracted: null, skipped: "IA desligada ou não configurada" };
   if (!/^image\/(jpeg|png|webp|gif)$/.test(opts.mimeType) && opts.mimeType !== "application/pdf") return { filled: [], extracted: null, skipped: "formato" };
   if (opts.base64.length * 0.75 > MAX_BYTES) return { filled: [], extracted: null, skipped: "ficheiro grande" };
   const db = await getDb();
   if (!db) return { filled: [], extracted: null };
 
-  const extracted = await extractDocument(opts.mimeType, opts.base64);
+  const extracted = await extractDocument(opts.mimeType, opts.base64, { userId: opts.userId, employeeId: opts.employeeId });
   if (!extracted) return { filled: [], extracted: null, skipped: "leitura falhou" };
   const [cur] = ((await db.execute(sql`SELECT nif, birthDate, nationality, address, nib FROM employees WHERE id = ${opts.employeeId} LIMIT 1`)) as any)[0] as any[];
   if (!cur) return { filled: [], extracted };

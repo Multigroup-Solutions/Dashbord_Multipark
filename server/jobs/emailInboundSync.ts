@@ -150,19 +150,13 @@ async function routeToModule(
       sourceEmailId: ctx.messageId,
       importedAt: new Date().toISOString().slice(0, 19).replace("T", " "),
     } as any);
-    // resposta IA best-effort (não bloqueia)
+    // rascunho de resposta por IA, best-effort (não bloqueia a importação)
     if (id) {
       try {
-        const { invokeLLM } = await import("../_core/llm");
-        const resp = await invokeLLM({
-          messages: [
-            { role: "system", content: "És o gestor de atendimento de um parque de estacionamento premium. Responde a críticas de clientes de forma calorosa e profissional, em português. Máximo 3 frases." },
-            { role: "user", content: `Crítica de ${reviewer}${g.rating ? ` (${g.rating} estrelas)` : ""}: "${text.slice(0, 800)}". Gera uma resposta.` },
-          ],
-        });
-        const aiText = typeof resp?.choices?.[0]?.message?.content === "string" ? resp.choices[0].message.content : "";
+        const { draftReviewReply } = await import("../_core/ai/reviewReply");
+        const aiText = await draftReviewReply({ rating: g.rating, reviewerName: reviewer, reviewText: text.slice(0, 2000) }, { reviewId: id, timeoutMs: 15_000 });
         if (aiText) await updateGoogleReview(id, { aiResponse: aiText, status: "ai_responded" });
-      } catch { /* LLM opcional */ }
+      } catch { /* IA opcional */ }
     }
     return { targetModule: "review", targetId: id };
   }

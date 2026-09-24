@@ -278,8 +278,8 @@ export const trainingRouter = router({
   }),
   llmStatus: protectedProcedure.query(async ({ ctx }) => {
     requireAccess(ctx.user, "formacao", "manage");
-    const { llmConfigured } = await import("./trainingAttempts");
-    return { configured: llmConfigured() };
+    const { aiFeatureAvailableFresh } = await import("./_core/ai/status");
+    return { configured: await aiFeatureAvailableFresh("quiz_generation") };
   }),
   /** Começa um jogo: o servidor escolhe e guarda as perguntas servidas. */
   startQuiz: protectedProcedure.input(z.object({ categoryId: z.number().optional() }).optional()).mutation(async ({ ctx, input }) => {

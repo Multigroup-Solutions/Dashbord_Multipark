@@ -301,7 +301,7 @@ export function userSeesProject(access: { all: boolean; projectIds: number[] }, 
 
 export interface RequestRunResult { emailSent: number; whatsappSent: number; targets: number }
 
-async function sendAvailabilityRequest(weekStart: string, employeeIds: number[] | null, note: string | null): Promise<RequestRunResult> {
+export async function sendAvailabilityRequest(weekStart: string, employeeIds: number[] | null, note: string | null): Promise<RequestRunResult> {
   const { sendWeeklyAvailabilityRequest } = await import("./extrasAvailability");
   const out: RequestRunResult = { emailSent: 0, whatsappSent: 0, targets: 0 };
   if (employeeIds && employeeIds.length === 0) return out;
@@ -367,15 +367,22 @@ export async function listNotices(date: string): Promise<NoticeRow[]> {
   }));
 }
 
-export interface NotifyResult { total: number; sent: number; failed: number; skipped: number; rulesSent: number }
+export interface NotifyResult { total: number; sent: number; failed: number; skipped: number; rulesSent: number; optedOut: number }
 
 /**
- * Avisa por WhatsApp quem está escalado em `date` (e ainda não foi avisado
- * com sucesso). `city` limita a uma cidade; sem ela, todas.
+ * Avisa por WhatsApp quem está escalado em `date` e ainda não foi avisado
+ * NESTA versão da linha (tabela extras_dia_notifications; a versão sobe
+ * quando mudam pessoa/dia/horas). Só linhas CONFIRMADAS — as propostas
+ * automáticas por confirmar não são avisadas. `city` limita a uma cidade;
+ * `respectHold` salta os dias/cidades com envio automático suspenso.
+ * Quem pediu STOP não recebe (sendBroadcast) e fica registado como tal.
  */
-export async function notifyAssignments(date: string, opts: { city?: string | null; createdById?: number | null } = {}): Promise<NotifyResult> {
+export async function notifyAssignments(
+  date: string,
+  opts: { city?: string | null; createdById?: number | null; respectHold?: boolean } = {},
+): Promise<NotifyResult> {
   const db = await getDb();
-  const res: NotifyResult = { total: 0, sent: 0, failed: 0, skipped: 0, rulesSent: 0 };
+  const res: NotifyResult = { total: 0, sent: 0, failed: 0, skipped: 0, rulesSent: 0, optedOut: 0 };
   if (!db) return res;
   if (!process.env.WHATSAPP_TOKEN || !process.env.WHATSAPP_PHONE_NUMBER_ID) {
     throw new Error("WhatsApp não está configurado (WHATSAPP_TOKEN / WHATSAPP_PHONE_NUMBER_ID).");
@@ -383,25 +390,38 @@ export async function notifyAssignments(date: string, opts: { city?: string | nu
   await ensureTables();
   const { extrasDiaAssignments } = await import("../drizzle/schema");
   const { and, eq, isNotNull } = await import("drizzle-orm");
-  const conds = [eq(extrasDiaAssignments.assignmentDate, date), isNotNull(extrasDiaAssignments.employeeId)];
+  const conds = [eq(extrasDiaAssignments.assignmentDate, date), isNotNull(extrasDiaAssignments.employeeId), eq(extrasDiaAssignments.status, "confirmed")];
   if (opts.city) conds.push(eq(extrasDiaAssignments.city, opts.city));
-  const rows = await db.select().from(extrasDiaAssignments).where(and(...conds));
-  const done = new Map((await listNotices(date)).map((n) => [n.assignmentId, n]));
+  let rows = await db.select().from(extrasDiaAssignments).where(and(...conds));
+  const sched = await import("./extrasSchedule");
+  if (opts.respectHold) {
+    const held = await sched.heldCities(date);
+    rows = rows.filter((a) => !held.has(a.city));
+  }
+  const { pendingScheduleNotifications, scheduleMessageText, whatsappOutcomeStatus } = await import("../shared/extrasSchedule");
+  const legacySent = new Set((await listNotices(date)).filter((n) => n.status === "sent").map((n) => n.assignmentId));
+  const log = await sched.loadNotifyLog(rows.map((a) => a.id));
+  const candidates = pendingScheduleNotifications(rows, log, "whatsapp", legacySent);
+  res.total = rows.length;
+
+  // Reserva cada linha (corrida entre o cron e o botão: só um envia).
+  const pending: typeof rows = [];
+  for (const a of candidates) {
+    if (await sched.claimNotification(a, "scheduled", "whatsapp")) pending.push(a);
+  }
+  res.skipped = rows.length - pending.length;
+  if (!pending.length) return res;
+
   const { sendBroadcast } = await import("./whatsappBroadcast");
   const { findWhatsAppTemplate } = await import("../shared/whatsappTemplate");
   const aviso = findWhatsAppTemplate("aviso_trabalho")!;
   const regras = findWhatsAppTemplate("morada_regras")!;
   const { getSystemUserId } = await import("./db");
   const by = opts.createdById ?? (await getSystemUserId());
+  const settings = await sched.loadScheduleSettings();
 
-  res.total = rows.length;
-  const pending = rows.filter((a) => done.get(a.id)?.status !== "sent");
-  res.skipped = rows.length - pending.length;
-  if (!pending.length) return res;
-
-  // UM envio por execução (antes era um broadcast por turno): o dia/horas de
-  // cada pessoa vai no {{2}} dela. Quem tem dois turnos no dia recebe um só
-  // aviso com os dois horários.
+  // UM envio por execução: o dia/horas/cidade de cada pessoa vai no {{2}}
+  // dela. Quem tem dois turnos no dia recebe um só aviso com os dois horários.
   const byEmp = new Map<number, typeof pending>();
   for (const a of pending) {
     const empId = Number(a.employeeId);
@@ -409,11 +429,13 @@ export async function notifyAssignments(date: string, opts: { city?: string | nu
   }
   const texts: Record<number, string> = {};
   for (const [empId, list] of Array.from(byEmp.entries())) {
-    texts[empId] = list
-      .slice()
-      .sort((x, y) => x.startHour - y.startHour)
-      .map((a) => fmtWorkDay(date, a.startHour, a.sentHomeHour ?? a.endHour))
-      .join(" e ");
+    const city = list[0].city;
+    texts[empId] = scheduleMessageText({
+      date,
+      city,
+      spans: list.map((a) => ({ startHour: a.startHour, endHour: a.sentHomeHour ?? a.endHour })),
+      meetingPoint: (settings.meetingPoints as Record<string, string>)[city] ?? null,
+    });
   }
 
   const outcome = new Map<number, { status: string; error: string | null }>();
@@ -428,7 +450,7 @@ export async function notifyAssignments(date: string, opts: { city?: string | nu
     });
     for (const rec of r.recipients) {
       if (rec.employeeId == null) continue;
-      outcome.set(rec.employeeId, rec.status === "sent" ? { status: "sent", error: null } : { status: "failed", error: rec.error ?? rec.status });
+      outcome.set(rec.employeeId, { status: whatsappOutcomeStatus(rec.status), error: rec.status === "sent" ? null : (rec.error ?? rec.status) });
     }
   } catch (err: any) {
     const error = String(err?.message ?? err);
@@ -437,13 +459,17 @@ export async function notifyAssignments(date: string, opts: { city?: string | nu
 
   const sentEmployees: number[] = [];
   for (const [empId, list] of Array.from(byEmp.entries())) {
-    const o = outcome.get(empId) ?? { status: "failed", error: "sem destinatário (ficha inativa ou sem número)" };
+    const o = outcome.get(empId) ?? { status: "no_contact", error: "sem destinatário (ficha inativa ou sem número)" };
     for (const a of list) {
+      await sched.finishNotification(a, "scheduled", "whatsapp", o.status, o.error);
+      // Registo usado pela resposta "sim/não" do WhatsApp (nova versão → nova confirmação).
       await db.execute(sql`
         INSERT INTO \`extras_dia_notices\` (assignmentId, employeeId, assignmentDate, status, error)
-        VALUES (${a.id}, ${empId}, ${date}, ${o.status}, ${o.error ? o.error.slice(0, 300) : null})
-        ON DUPLICATE KEY UPDATE status = VALUES(status), error = VALUES(error), sentAt = CURRENT_TIMESTAMP`);
+        VALUES (${a.id}, ${empId}, ${date}, ${o.status === "sent" ? "sent" : "failed"}, ${o.error ? o.error.slice(0, 300) : null})
+        ON DUPLICATE KEY UPDATE status = VALUES(status), error = VALUES(error), sentAt = CURRENT_TIMESTAMP,
+          confirmedAt = IF(VALUES(status) = 'sent', NULL, confirmedAt), declinedAt = IF(VALUES(status) = 'sent', NULL, declinedAt)`);
       if (o.status === "sent") res.sent++;
+      else if (o.status === "opted_out") res.optedOut++;
       else res.failed++;
     }
     if (o.status === "sent") {
@@ -473,6 +499,15 @@ export async function notifyAssignments(date: string, opts: { city?: string | nu
       }
     }
   }
+  try {
+    const { logActivity } = await import("./db");
+    await logActivity({
+      userId: opts.createdById ?? 0,
+      action: "extras_schedule_notify_whatsapp",
+      entity: "extras_dia_assignments",
+      details: `Aviso de escala por WhatsApp · ${date}${opts.city ? ` · ${opts.city}` : ""} · ${res.sent} enviado(s), ${res.failed} falhado(s), ${res.optedOut} com STOP`,
+    });
+  } catch { /* registo é best-effort */ }
   return res;
 }
 
@@ -852,7 +887,7 @@ export async function runExtrasAutomation(now: Date = new Date()): Promise<Autom
     // ainda não foi avisado com sucesso) — assim, de hora a hora até à meia-noite,
     // apanha quem for escalado depois das 18h e repete as falhas.
     try {
-      report.details[`notify:${date}`] = await notifyAssignments(date);
+      report.details[`notify:${date}`] = await notifyAssignments(date, { respectHold: true });
       report.ran.push(`notify:${date}`);
     } catch (err: any) {
       report.errors.push(`notify:${date}: ${String(err?.message ?? err).slice(0, 200)}`);

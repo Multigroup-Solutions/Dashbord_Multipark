@@ -78,7 +78,8 @@ const DEFS: Def[] = [
   { id: "smtp", label: "Email de saída (SMTP)", description: "Emails enviados pela aplicação e alertas ao dono.", require: [["SMTP_HOST"], ["SMTP_USER"], ["SMTP_PASS"]], testable: true, group: "main", links: [] },
   { id: "zello", label: "Zello", description: "Rádio e GPS dos condutores (recolha diária).", require: [["ZELLO_API_KEY"], ["ZELLO_USERNAME"], ["ZELLO_PASSWORD"]], cron: "daily-ops", testable: true, group: "main",
     links: [{ label: "Estado do cron (daily-ops)", href: "/definicoes" }] },
-  { id: "llm", label: "IA (LLM)", description: "Resumos, classificação e preenchimento automático.", require: [["LLM_API_KEY", "OPENAI_API_KEY"], ["LLM_API_URL", "OPENAI_API_URL"]], testable: true, group: "main", links: [] },
+  { id: "llm", label: "IA (Gemini)", description: "Faturas, críticas, rádio, passagem de turno, WhatsApp e formação (server/_core/ai).", require: [["GEMINI_API_KEY", "GOOGLE_CLOUD_PROJECT", "LLM_API_KEY", "OPENAI_API_KEY"]], testable: true, group: "main",
+    links: [{ label: "Interruptores e custo (Definições)", href: "/definicoes" }] },
   { id: "multipark", label: "API Multipark", description: "Reservas dos parques (chave geral ou por parque).", require: [["MULTIPARK_API_KEY", "MULTIPARK_API_KEY_LISBON_AIRPARK", "MULTIPARK_API_KEY_FARO_AIRPARK", "MULTIPARK_API_KEY_LISBON_REDPARK", "MULTIPARK_API_KEY_LISBON_SKYPARK"]], cron: "multipark-sync", group: "main",
     links: [{ label: "Sincronização", href: "/multipark/sync" }] },
   { id: "storage", label: "Armazenamento de ficheiros", description: "S3 ou Vercel Blob.", require: [["BLOB_READ_WRITE_TOKEN", "AWS_S3_BUCKET_NAME"]], group: "main", links: [] },
@@ -147,10 +148,16 @@ export async function listIntegrationStatuses(env: Env = process.env): Promise<I
   const key = encryptionKeyStatus(env);
   if (key.warning) for (const id of ["google_ads", "google_business"]) byId.get(id)?.warnings?.push(key.warning);
   try {
-    const { llmModelStatus } = await import("./_core/llm");
+    const { aiStatus } = await import("./_core/ai/status");
     const llm = byId.get("llm");
-    const m = llmModelStatus(env);
-    if (llm?.configured && m.warning) llm.warnings!.push(m.warning);
+    const st = aiStatus(env);
+    if (llm) llm.configured = st.provider != null;
+    if (llm?.configured) llm.warnings!.push(...st.warnings);
+    if (llm?.configured && st.provider === "legacy") {
+      const { llmModelStatus } = await import("./_core/llm");
+      const m = llmModelStatus(env);
+      if (m.warning) llm.warnings!.push(m.warning);
+    }
   } catch { /* indicador */ }
 
   try {
@@ -311,9 +318,9 @@ export async function testIntegration(id: string): Promise<TestResult> {
           break;
         }
         case "llm": {
-          const { testLLM } = await import("./_core/llm");
-          const r = await testLLM();
-          message = `IA respondeu (modelo ${r.model}).`;
+          const { testAi } = await import("./_core/ai/status");
+          const r = await testAi();
+          message = `IA respondeu (${r.provider}, modelo ${r.model}).`;
           break;
         }
         default:
@@ -322,6 +329,8 @@ export async function testIntegration(id: string): Promise<TestResult> {
     })(), id === "llm" ? 50_000 : 20_000);
     return { ok: true, message, ms: Date.now() - started };
   } catch (err: any) {
+    const { isAiError, aiErrorCode } = await import("./_core/ai/errors");
+    if (isAiError(err)) return { ok: false, message: `${err.userMessage} (${aiErrorCode(err)})`, ms: Date.now() - started };
     return { ok: false, message: scrubSecrets(String(err?.message ?? err), env) || "Falhou.", ms: Date.now() - started };
   }
 }

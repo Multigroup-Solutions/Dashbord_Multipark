@@ -11,6 +11,7 @@
  *    silenciar no seu Perfil.
  */
 import { z } from "zod";
+import { AI_FEATURE_IDS, AI_TIERS } from "./aiFeatures";
 
 // ─── Taxas com data de efeito (IVA / TSU) ───────────────────────────────────
 
@@ -55,7 +56,62 @@ export const emailListSchema = z
   .max(20, "No máximo 20 emails.")
   .transform((list) => Array.from(new Set(list)));
 
-export type SettingGroup = "financeiro" | "sla" | "emails" | "disponibilidade";
+/** Preço (EUR por 1M tokens) de um modelo de IA — sobreposição da tabela do código. */
+export const aiModelPriceSchema = z.object({
+  input: z.number({ error: "Preço de entrada inválido." }).min(0).max(1000),
+  output: z.number({ error: "Preço de saída inválido." }).min(0).max(1000),
+  cached: z.number().min(0).max(1000).optional(),
+  audioInput: z.number().min(0).max(1000).optional(),
+});
+export const aiPriceOverridesSchema = z
+  .record(z.string().trim().min(1).max(80).regex(/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/, "Nome de modelo inválido."), aiModelPriceSchema)
+  .refine((r) => Object.keys(r).length <= 40, "No máximo 40 modelos.");
+export type AiPriceOverrides = z.infer<typeof aiPriceOverridesSchema>;
+
+/** Nível de modelo por funcionalidade de IA (só ids e níveis conhecidos). */
+export const aiFeatureTiersSchema = z.record(
+  z.string().refine((k) => (AI_FEATURE_IDS as readonly string[]).includes(k), "Funcionalidade de IA desconhecida."),
+  z.enum(AI_TIERS as unknown as ["lite", "fast", "smart"], { error: "Nível inválido (lite, fast ou smart)." }),
+);
+
+export type SettingGroup = "financeiro" | "sla" | "emails" | "disponibilidade" | "ia" | "extras";
+
+// ─── Extras-dia (escala automática) ─────────────────────────────────────────
+
+/** Cidades do Extras-dia (mesmos ids do servidor: server/extrasDia.ts). */
+export const EXTRAS_CITY_IDS = ["lisbon", "porto", "faro"] as const;
+export type ExtrasCityId = (typeof EXTRAS_CITY_IDS)[number];
+
+const carsPerHourValue = z
+  .number({ error: "Indica um número de carros por hora." })
+  .min(0.5, "Mínimo 0,5 carros/hora.")
+  .max(20, "Máximo 20 carros/hora.");
+
+/** Carros/hora que UM condutor despacha, por cidade (Lisboa 2, Porto 3, Faro 3). */
+export const carsPerHourMapSchema = z.object({
+  lisbon: carsPerHourValue,
+  porto: carsPerHourValue,
+  faro: carsPerHourValue,
+}, { error: "Indica os carros/hora de Lisboa, Porto e Faro." });
+export type CarsPerHourMap = z.infer<typeof carsPerHourMapSchema>;
+export const DEFAULT_CARS_PER_HOUR: CarsPerHourMap = { lisbon: 2, porto: 3, faro: 3 };
+
+/** Ponto de encontro por cidade (vai no aviso de escala); vazio = não se indica. */
+export const meetingPointMapSchema = z.object({
+  lisbon: z.string().trim().max(200, "Máximo 200 caracteres."),
+  porto: z.string().trim().max(200, "Máximo 200 caracteres."),
+  faro: z.string().trim().max(200, "Máximo 200 caracteres."),
+});
+
+/** Hora "HH:MM" (Lisboa). */
+export const hhmmSchema = z.string().trim().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Hora inválida (HH:MM, ex.: 14:00).");
+
+/** "14:30" → 870 (minutos desde a meia-noite). PURA. */
+export function hhmmToMinutes(v: string): number {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(v ?? "").trim());
+  if (!m) return NaN;
+  return Number(m[1]) * 60 + Number(m[2]);
+}
 
 export interface SettingDef<S extends z.ZodTypeAny = z.ZodTypeAny> {
   key: string;
@@ -136,6 +192,87 @@ export const SETTINGS = {
     defaultValue: "",
     wiring: "live",
   }),
+  "ai.monthlyBudgetEur": def({
+    key: "ai.monthlyBudgetEur",
+    group: "ia",
+    label: "Orçamento mensal da IA (€)",
+    description: "Teto de gasto estimado da IA por mês civil (UTC). Ao chegar a 100%, as funcionalidades não essenciais respondem \"IA temporariamente indisponível\" e os admins recebem um aviso (uma vez por mês); as essenciais (leitura de faturas) param aos 150%. 0 = sem limite. Vazio = usa AI_MONTHLY_BUDGET_EUR (ou 30 €).",
+    schema: z.number({ error: "Indica um valor em euros." }).min(0, "Não pode ser negativo.").max(100_000, "Máximo 100 000 €."),
+    defaultValue: 30,
+    wiring: "live",
+  }),
+  "ai.featureTiers": def({
+    key: "ai.featureTiers",
+    group: "ia",
+    label: "Nível de modelo por funcionalidade de IA",
+    description: "Sobrepõe o nível (lite = o mais barato, fast, smart) de cada funcionalidade. JSON: {\"expense_ocr\": \"fast\"}. Funcionalidades: " + AI_FEATURE_IDS.join(", ") + ". Vazio = omissão do código (quase tudo lite).",
+    schema: aiFeatureTiersSchema,
+    defaultValue: {},
+    wiring: "live",
+  }),
+  "ai.priceOverridesEur": def({
+    key: "ai.priceOverridesEur",
+    group: "ia",
+    label: "Preços dos modelos de IA (€ por 1M tokens)",
+    description: "Sobrepõe a tabela de preços do código (server/_core/ai/pricing.ts) para calcular o custo registado. JSON: {\"<modelo>\": {\"input\": 0.22, \"output\": 1.3, \"cached\": 0.02}}. Vazio = tabela do código.",
+    schema: aiPriceOverridesSchema,
+    defaultValue: {},
+    wiring: "live",
+  }),
+  "extras.carsPerHourPerDriver": def({
+    key: "extras.carsPerHourPerDriver",
+    group: "extras",
+    label: "Carros por hora por condutor",
+    description: "Quantos carros (recolhas + entregas, pesados por tipo de entrega) um condutor despacha por hora, por cidade. Define quantos condutores a previsão do Extras-dia pede em cada hora e a proposta automática de escala.",
+    schema: carsPerHourMapSchema,
+    defaultValue: DEFAULT_CARS_PER_HOUR,
+    wiring: "live",
+  }),
+  "extras.autoProposeAt": def({
+    key: "extras.autoProposeAt",
+    group: "extras",
+    label: "Hora da proposta automática de escala",
+    description: "A partir desta hora (Lisboa) o sistema propõe a escala dos próximos dias com os extras disponíveis (uma vez por dia e cidade; não substitui uma escala já proposta ou confirmada).",
+    schema: hhmmSchema,
+    defaultValue: "14:00",
+    wiring: "live",
+  }),
+  "extras.autoProposeDaysAhead": def({
+    key: "extras.autoProposeDaysAhead",
+    group: "extras",
+    label: "Dias propostos com antecedência",
+    description: "Quantos dias à frente a proposta automática cobre (1 = só amanhã).",
+    schema: z.number({ error: "Indica um número de dias." }).int("Número inteiro de dias.").min(1, "Mínimo 1 dia.").max(7, "Máximo 7 dias."),
+    defaultValue: 1,
+    wiring: "live",
+  }),
+  "extras.autoConfirm": def({
+    key: "extras.autoConfirm",
+    group: "extras",
+    label: "Confirmar e avisar automaticamente",
+    description: "Se ligado, a proposta de amanhã que ninguém confirmou nem suspendeu é confirmada à hora indicada abaixo e os extras são avisados por WhatsApp e email.",
+    schema: z.boolean({ error: "Ligado ou desligado." }),
+    defaultValue: true,
+    wiring: "live",
+  }),
+  "extras.autoConfirmAt": def({
+    key: "extras.autoConfirmAt",
+    group: "extras",
+    label: "Hora da confirmação automática",
+    description: "Hora (Lisboa) a partir da qual a proposta de amanhã é confirmada e enviada automaticamente (se não estiver suspensa).",
+    schema: hhmmSchema,
+    defaultValue: "18:00",
+    wiring: "live",
+  }),
+  "extras.meetingPoints": def({
+    key: "extras.meetingPoints",
+    group: "extras",
+    label: "Ponto de encontro (aviso de escala)",
+    description: "Texto curto com o ponto de encontro de cada cidade, incluído no WhatsApp e no email de escala. Vazio = não se indica.",
+    schema: meetingPointMapSchema,
+    defaultValue: { lisbon: "", porto: "", faro: "" },
+    wiring: "live",
+  }),
 } as const;
 
 export type SettingKey = keyof typeof SETTINGS;
@@ -167,6 +304,10 @@ export interface AutomationFlag {
   name: string;
   label: string;
   description: string;
+  /** Valor sem env nem sobreposição (omissão: ligado). */
+  defaultEnabled?: boolean;
+  /** Secção na página (omissão: automações gerais). */
+  group?: "ia";
 }
 
 export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
@@ -180,7 +321,21 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "HANDOVER_REMINDERS", label: "Lembretes da passagem de turno", description: "Lembra quem ainda não entregou/confirmou a passagem." },
   { name: "TRAINING_REMINDERS", label: "Lembretes da formação", description: "Avisa quem tem formação por concluir." },
   { name: "TRAINING_BLOCKS_ESCALA", label: "Formação bloqueia a escala", description: "Quem tem formação obrigatória em atraso não entra na escala." },
+  // ── IA (server/_core/ai) — AI_ENABLED desliga tudo de uma vez ──
+  { name: "AI_ENABLED", label: "IA (interruptor geral)", description: "Desligado = nenhuma funcionalidade de IA faz pedidos ao fornecedor.", group: "ia" },
+  { name: "AI_EXPENSE_OCR", label: "IA: leitura de faturas", description: "Extrai fornecedor, valor, datas e NIF das faturas carregadas nas Despesas.", group: "ia" },
+  { name: "AI_REVIEW_DRAFTS", label: "IA: rascunhos de resposta às críticas", description: "Prepara a resposta às críticas Google (nunca publica sozinha).", group: "ia" },
+  { name: "AI_RADIO", label: "IA: transcrição e resumo do rádio", description: "Transcreve as mensagens de rádio e resume-as em 1–2 frases.", group: "ia" },
+  { name: "AI_HANDOVER_SUMMARY", label: "IA: resumo da passagem de turno", description: "5 pontos para o team leader do turno seguinte.", group: "ia" },
+  { name: "AI_WHATSAPP_ASSIST", label: "IA: assistente do WhatsApp", description: "Resumo da conversa e sugestão de resposta (vai para a caixa de texto, nunca é enviada sozinha).", group: "ia" },
+  { name: "AI_QUIZ", label: "IA: perguntas da formação", description: "Gera rascunhos de perguntas a partir dos manuais.", group: "ia" },
+  { name: "AI_HR_AUTOFILL", label: "IA: preenchimento a partir de documentos do RH", description: "Lê CC, título de residência, carta, IBAN e morada para preencher campos vazios da ficha. Desligado por omissão até decisão RGPD.", defaultEnabled: false, group: "ia" },
 ];
+
+/** Omissão de um interruptor do catálogo (desconhecido → ligado). PURA. */
+export function automationFlagDefault(name: string): boolean {
+  return AUTOMATION_FLAGS.find((f) => f.name === name)?.defaultEnabled ?? true;
+}
 
 export const FLAG_SETTING_PREFIX = "flag.";
 const FLAG_NAMES = new Set(AUTOMATION_FLAGS.map((f) => f.name));
@@ -210,6 +365,9 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "google-business", label: "Críticas Google (Business Profile)", intervalMinutes: 10, workflow: "google-business-reviews.yml" },
   { name: "multipark-sync", label: "Sincronização de reservas (recente)", intervalMinutes: 60, workflow: "multipark-cron.yml" },
   { name: "extras-auto", label: "Automação dos extras", intervalMinutes: 60, workflow: "multipark-cron.yml" },
+  // Corre de 30 em 30 min entre as 08h e as 23h (Lisboa); 300 min para a
+  // pausa da noite (~8h30) não aparecer como "parado".
+  { name: "extras-schedule", label: "Escala automática dos extras (propor/confirmar/avisar)", intervalMinutes: 300, workflow: "multipark-cron.yml" },
   { name: "identity-sweep", label: "Ligações funcionário ↔ utilizador", intervalMinutes: 60, workflow: "multipark-cron.yml" },
   { name: "email-inbound", label: "Emails recebidos (IMAP)", intervalMinutes: 60, workflow: "multipark-cron.yml" },
   { name: "multipark-future", label: "Sincronização de reservas (futuras)", intervalMinutes: 120, workflow: "multipark-cron.yml" },

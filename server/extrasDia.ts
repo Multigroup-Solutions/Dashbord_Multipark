@@ -7,7 +7,9 @@
  *
  *   - Hourly check-ins / check-outs for tomorrow (or chosen base date + 1)
  *   - Lavagem (wash) counts for context days
- *   - Driver shift suggestion (3 cars/hour productivity, 3–12h shift bounds)
+ *   - Driver shift suggestion (carros/hora por condutor POR CIDADE — definição
+ *     `extras.carsPerHourPerDriver`, omissão Lisboa 2 / Porto 3 / Faro 3 —
+ *     turnos de 3–12h)
  *
  * Driver levels are flat — all do everything — so the cheapest tier wins.
  */
@@ -18,6 +20,8 @@ import { getDb } from "./db";
 import { DEFAULT_EXTRA_RATES, loadExtraRates, rateFor, type ExtraRates } from "./extraRates";
 import { multiparkBookings, extrasDiaAssignments, employees, projects } from "../drizzle/schema";
 import { getBookingTryAllParks } from "./multipark";
+import { DEFAULT_CARS_PER_HOUR } from "../shared/appSettings";
+import { FALLBACK_CARS_PER_HOUR, MAX_SHIFT_HOURS as SHIFT_MAX, MIN_SHIFT_HOURS as SHIFT_MIN, carsPerHourFor, driversNeededFor } from "../shared/extrasSchedule";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -31,9 +35,13 @@ export const DRIVER_LEVELS = [
 
 export type DriverLevelId = (typeof DRIVER_LEVELS)[number]["id"];
 
-export const CARS_PER_HOUR_PER_DRIVER = 3;
-export const MIN_SHIFT_HOURS = 3;
-export const MAX_SHIFT_HOURS = 12;
+/**
+ * SÓ fallback: a capacidade viva é por cidade (definição
+ * `extras.carsPerHourPerDriver`, ver loadCarsPerHour).
+ */
+export const CARS_PER_HOUR_PER_DRIVER = FALLBACK_CARS_PER_HOUR;
+export const MIN_SHIFT_HOURS = SHIFT_MIN;
+export const MAX_SHIFT_HOURS = SHIFT_MAX;
 export const TL_WORKING_DAYS_PER_MONTH = 15;
 export const SLOT_MINUTES = 20;
 export const SLOTS_PER_HOUR = 60 / SLOT_MINUTES; // 3
@@ -116,6 +124,20 @@ const CITY_CONFIG: Record<ExtraCity, { re: RegExp; pattern: string; prefix: stri
 
 // Resolve os projectIds da arvore da cidade (no cidade + descendentes),
 // EXATAMENTE como a folha operacional. Cacheado por processo e por cidade.
+/** Carros/hora por condutor da cidade (Definições → Parâmetros), com omissões. */
+export async function loadCarsPerHour(city: ExtraCity): Promise<number> {
+  let map: Record<string, number> | null = null;
+  try {
+    const { getSetting } = await import("./appSettings");
+    map = await getSetting("extras.carsPerHourPerDriver");
+  } catch { /* sem BD → omissões */ }
+  return carsPerHourFor(map ?? DEFAULT_CARS_PER_HOUR, city);
+}
+
+export function cityLabel(city: ExtraCity): string {
+  return EXTRA_CITIES.find(c => c.id === city)?.label ?? city;
+}
+
 const _cityProjectIds = new Map<ExtraCity, number[]>();
 async function getCityProjectIds(city: ExtraCity): Promise<number[]> {
   const cached = _cityProjectIds.get(city);
@@ -223,10 +245,11 @@ export function suggestShifts(
   hourlyCars: number[],
   level: DriverLevelId = "junior",
   rates?: ExtraRates,
+  carsPerHour: number = CARS_PER_HOUR_PER_DRIVER,
 ): { shifts: DriverShift[]; totalCost: number; peakDrivers: number; totalDriverHours: number } {
   const base = DRIVER_LEVELS.find(l => l.id === level)!;
   const rateInfo = { ...base, hourlyRate: rates ? rateFor(rates, level) : base.hourlyRate };
-  const driversPerHour = hourlyCars.map(c => Math.ceil(c / CARS_PER_HOUR_PER_DRIVER));
+  const driversPerHour = hourlyCars.map(c => driversNeededFor(c, carsPerHour));
   const peak = Math.max(0, ...driversPerHour);
 
   if (peak === 0) {
@@ -310,6 +333,10 @@ export interface ExtrasDiaForecast {
   baseDate: string;
   targetDate: string;
   city: string;
+  /** Id da cidade (lisbon/porto/faro). */
+  cityId: ExtraCity;
+  /** Capacidade usada nesta previsão (carros/hora por condutor, da cidade). */
+  carsPerHourPerDriver: number;
   source: "db";
   parksQueried: string[]; // distinct parkName values found
   parksFailed: { park: string; error: string }[]; // always empty for DB mode (kept for UI compat)
@@ -458,6 +485,12 @@ export interface Assignment {
   endHour: number;
   sentHomeHour: number | null;
   notes: string | null;
+  /** 'proposed' (proposta automática por confirmar) | 'confirmed'. */
+  status: "proposed" | "confirmed";
+  /** Sobe quando muda pessoa/dia/horas (1 aviso por versão). */
+  version: number;
+  /** "Porquê" da proposta automática. */
+  proposalReason: string | null;
   hoursBilled: number;
   cost: number;
   // Mapeamento Multipark (preenchido se employeeId está associado a empregado RH)
@@ -524,6 +557,9 @@ function rowToAssignment(
     endHour: r.endHour,
     sentHomeHour: r.sentHomeHour,
     notes: r.notes,
+    status: r.status === "proposed" ? "proposed" : "confirmed",
+    version: r.version ?? 1,
+    proposalReason: r.proposalReason ?? null,
     multiparkAgentName: multiparkAgentName ?? null,
     multiparkAgentUserId: multiparkAgentUserId ?? null,
     photoUrl: photoUrl ?? null,
@@ -605,6 +641,19 @@ export interface UpsertAssignmentInput {
   sentHomeHour?: number | null;
   notes?: string | null;
   createdById?: number | null;
+  /** Omissão: 'proposed' se o dia/cidade tem uma proposta por confirmar; senão 'confirmed'. */
+  status?: "proposed" | "confirmed";
+  proposalReason?: string | null;
+}
+
+/** A versão sobe quando muda o que foi avisado (pessoa, dia, turno ou horas). PURA. */
+export function assignmentVersionChanged(
+  prev: { employeeId: number | null; assignmentDate: string; startHour: number; endHour: number; shift: string; personName: string },
+  next: { employeeId: number | null; assignmentDate: string; startHour: number; endHour: number; shift: string; personName: string },
+): boolean {
+  return prev.employeeId !== next.employeeId || prev.assignmentDate !== next.assignmentDate
+    || prev.startHour !== next.startHour || prev.endHour !== next.endHour || prev.shift !== next.shift
+    || (prev.employeeId == null && prev.personName !== next.personName);
 }
 
 export async function upsertAssignment(input: UpsertAssignmentInput): Promise<Assignment | null> {
@@ -648,7 +697,15 @@ export async function upsertAssignment(input: UpsertAssignmentInput): Promise<As
   };
 
   if (input.id) {
-    await db.update(extrasDiaAssignments).set(payload).where(eq(extrasDiaAssignments.id, input.id));
+    const [prev] = await db.select().from(extrasDiaAssignments).where(eq(extrasDiaAssignments.id, input.id)).limit(1);
+    if (!prev) return null;
+    const bump = assignmentVersionChanged(prev, { ...payload, shift: payload.shift });
+    await db.update(extrasDiaAssignments).set({
+      ...payload,
+      ...(input.status ? { status: input.status } : {}),
+      ...(input.proposalReason !== undefined ? { proposalReason: input.proposalReason } : {}),
+      ...(bump ? { version: sql`${extrasDiaAssignments.version} + 1` } : {}),
+    } as any).where(eq(extrasDiaAssignments.id, input.id));
     const [row] = await db
       .select()
       .from(extrasDiaAssignments)
@@ -659,9 +716,15 @@ export async function upsertAssignment(input: UpsertAssignmentInput): Promise<As
     return rowToAssignment(row, tlCost, undefined, undefined, undefined, await loadExtraRates());
   }
 
+  let status = input.status;
+  if (!status) {
+    const { getScheduleState } = await import("./extrasSchedule");
+    const state = await getScheduleState(input.assignmentDate, payload.city as ExtraCity);
+    status = state?.status === "proposed" ? "proposed" : "confirmed";
+  }
   const [result] = await db
     .insert(extrasDiaAssignments)
-    .values({ ...payload, createdById: input.createdById ?? null })
+    .values({ ...payload, status, proposalReason: input.proposalReason ?? null, createdById: input.createdById ?? null })
     .$returningId();
   const newId = (result as any).id;
   const [row] = await db
@@ -1051,25 +1114,27 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
       markHourClass(hm.hour, r.deliveryType, "checkout");
     }
   }
+  // Capacidade da CIDADE: carros/hora que um condutor despacha (Lisboa 2,
+  // Porto 3, Faro 3 por omissão). Num bloco de 20min vale carsPerHour/3.
+  const carsPerHour = await loadCarsPerHour(city);
   for (const row of hourly) {
-    // Driver demand HORÁRIO: soma da procura pesada dos 3 slots, dividida
-    // por 3 (porque cada condutor "vale" 3 unidades de slot por hora).
+    // Condutores por HORA = ⌈procura pesada da hora ÷ carros/hora⌉.
     let hourWeighted = 0;
     for (const s of row.slots) {
       const idx = s.hour * SLOTS_PER_HOUR + s.slot;
       s.weightedDemand = weightedBySlot[idx];
-      s.driversNeeded = Math.ceil(s.weightedDemand);
+      s.driversNeeded = driversNeededFor(s.weightedDemand * SLOTS_PER_HOUR, carsPerHour);
       hourWeighted += s.weightedDemand;
     }
-    row.driversNeeded = Math.ceil(hourWeighted / SLOTS_PER_HOUR);
+    row.driversNeeded = driversNeededFor(hourWeighted, carsPerHour);
   }
 
   // Para sugestão de turnos usa a procura pesada agregada por hora.
   const hourlyCars = hourly.map(h => h.slots.reduce((acc, s) => acc + s.weightedDemand, 0));
   const liveRates = await loadExtraRates();
-  const cheapest = suggestShifts(hourlyCars, "junior", liveRates);
+  const cheapest = suggestShifts(hourlyCars, "junior", liveRates, carsPerHour);
   const bySingleLevel = DRIVER_LEVELS.map(l => {
-    const r = suggestShifts(hourlyCars, l.id, liveRates);
+    const r = suggestShifts(hourlyCars, l.id, liveRates, carsPerHour);
     return { level: l.id, label: l.label, totalCost: r.totalCost, totalHours: r.totalDriverHours };
   });
 
@@ -1128,7 +1193,9 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
   return {
     baseDate: dateKey(baseStart),
     targetDate: dateKey(targetStart),
-    city: "Lisboa",
+    city: cityLabel(city),
+    cityId: city,
+    carsPerHourPerDriver: carsPerHour,
     source: "db",
     parksQueried: Array.from(allParks).sort(),
     parksFailed: [],

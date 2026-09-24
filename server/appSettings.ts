@@ -148,7 +148,8 @@ export async function listAutomationFlags(env: Record<string, string | undefined
       ...f,
       envValue: parseSwitch(envRaw),
       override,
-      effective: resolveFeatureFlag(envRaw, override, true),
+      effective: resolveFeatureFlag(envRaw, override, f.defaultEnabled ?? true),
+      defaultEnabled: f.defaultEnabled ?? true,
       updatedAt: row?.updatedAt ?? null,
       updatedByName: row?.updatedByName ?? null,
     };

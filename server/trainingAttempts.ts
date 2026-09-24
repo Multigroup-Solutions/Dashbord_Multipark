@@ -3,7 +3,7 @@
  * ranking por melhor pontuação, pedidos de promoção, certificados em PDF e
  * perguntas de quiz geradas por IA (rascunhos).
  */
-import { llmConfigured } from "./_core/llm";
+import { aiFeatureAvailable } from "./_core/ai/status";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -343,45 +343,48 @@ const draftSchema = z.object({
   difficulty: z.enum(["easy", "medium", "hard"]).optional().nullable(),
 });
 
-// Fonte única: server/_core/llm.ts (re-exportado para os chamadores existentes).
-export { llmConfigured };
+/** IA das perguntas disponível? (configurada + AI_ENABLED + AI_QUIZ). */
+export function llmConfigured(): boolean {
+  return aiFeatureAvailable("quiz_generation");
+}
 
-/** Extrai a lista de perguntas de uma resposta do LLM (JSON solto ou em ```). */
-export function parseDraftQuestions(text: string): z.infer<typeof draftSchema>[] {
-  const cleaned = text.replace(/```(?:json)?/gi, "").trim();
-  let parsed: unknown = null;
-  const tryParse = (s: string) => { try { return JSON.parse(s); } catch { return null; } };
-  parsed = tryParse(cleaned);
-  if (!parsed) {
-    const obj = cleaned.match(/\{[\s\S]*\}/); const arr = cleaned.match(/\[[\s\S]*\]/);
-    parsed = (obj && tryParse(obj[0])) || (arr && tryParse(arr[0]));
-  }
-  const list = Array.isArray(parsed) ? parsed : Array.isArray((parsed as any)?.questions) ? (parsed as any).questions : [];
-  const out: z.infer<typeof draftSchema>[] = [];
+export type DraftQuestion = z.infer<typeof draftSchema>;
+
+/**
+ * Filtra as perguntas devolvidas pela IA (já em JSON estruturado e validado
+ * pelo schema da resposta): só as que passam as regras de tamanho. PURA.
+ */
+export function filterDraftQuestions(list: readonly unknown[]): DraftQuestion[] {
+  const out: DraftQuestion[] = [];
   for (const q of list) {
-    const r = draftSchema.safeParse({ ...q, correctOption: typeof q?.correctOption === "string" ? q.correctOption.trim().toUpperCase().slice(0, 1) : q?.correctOption });
+    const r = draftSchema.safeParse(q);
     if (r.success) out.push(r.data);
   }
   return out;
 }
 
 export async function generateQuizDrafts(manualId: number, count: number, userId: number) {
-  if (!llmConfigured()) return { skipped: true as const, reason: "IA não configurada (LLM_API_KEY em falta).", created: 0 };
+  await (await import("./_core/featureFlags")).ensureFeatureFlagOverrides();
+  if (!llmConfigured()) return { skipped: true as const, reason: "IA desligada ou não configurada.", created: 0 };
   const d = await db();
   const [m] = await d.select().from(trainingManuals).where(eq(trainingManuals.id, manualId)).limit(1);
   if (!m) throw new TRPCError({ code: "NOT_FOUND", message: "Manual não encontrado." });
   const text = (m.content || "").slice(0, 60_000);
-  const parts: any[] = [];
-  // PDF anexo: só o caminho Claude aceita documentos (data URI); até 4MB.
+  const parts: import("./_core/ai/client").AiPart[] = [];
+  // PDF anexo (até 4MB): o Gemini e o caminho Anthropic leem PDFs; o
+  // OpenAI-compatível não.
   const isPdf = (m.fileMimeType || "").includes("pdf") && (m.fileKey || m.fileUrl);
-  if (isPdf && (process.env.LLM_API_URL || "").includes("anthropic")) {
+  const { selectProvider } = await import("./_core/ai/client");
+  const pdfCapable = selectProvider(process.env, "quiz_generation") === "gemini" || (process.env.LLM_API_URL || "").includes("anthropic");
+  if (isPdf && pdfCapable) {
     try {
       const { storagePresignGet } = await import("./storage");
       const { url } = await storagePresignGet(m.fileKey || m.fileUrl!, { fallbackUrl: m.fileUrl });
       if (url && /^https?:\/\//.test(url)) {
-        const resp = await fetch(url);
+        const { fetchWithTimeout } = await import("./_core/fetchWithTimeout");
+        const resp = await fetchWithTimeout(url, { timeoutMs: 10_000 });
         const buf = Buffer.from(await resp.arrayBuffer());
-        if (resp.ok && buf.length <= 4 * 1024 * 1024) parts.push({ type: "file_url", file_url: { url: `data:application/pdf;base64,${buf.toString("base64")}`, mime_type: "application/pdf" } });
+        if (resp.ok && buf.length <= 4 * 1024 * 1024) parts.push({ type: "pdf", data: buf.toString("base64") });
       }
     } catch { /* segue só com o texto */ }
   }
@@ -389,22 +392,28 @@ export async function generateQuizDrafts(manualId: number, count: number, userId
     throw new TRPCError({ code: "BAD_REQUEST", message: "O manual não tem texto suficiente (nem PDF legível) para gerar perguntas." });
   }
   const n = Math.max(1, Math.min(20, Math.trunc(count)));
-  parts.unshift({ type: "text", text: `Manual: "${m.title}"\n\n${text}\n\nGera ${n} perguntas.` });
-  const { invokeLLM } = await import("./_core/llm");
-  let content = "";
+  const { runAi } = await import("./_core/ai/run");
+  const { aiTrpcError } = await import("./_core/ai/trpcError");
+  const { QUIZ_SYSTEM, quizInstruction, quizResponseSchema } = await import("./_core/ai/prompts/quiz");
+  parts.unshift({ type: "text", text: quizInstruction(m.title, text, n) });
+  let drafts: DraftQuestion[];
   try {
-    const resp = await invokeLLM({
-      messages: [
-        { role: "system", content: "És formador numa empresa de parques de estacionamento/valet (Multipark). A partir do manual dado, crias perguntas de escolha múltipla em português de Portugal (PT-PT, não brasileiro), com 4 opções (A–D), UMA correta, e uma explicação curta. Responde APENAS com JSON: {\"questions\":[{\"question\":\"…\",\"optionA\":\"…\",\"optionB\":\"…\",\"optionC\":\"…\",\"optionD\":\"…\",\"correctOption\":\"A\",\"explanation\":\"…\",\"difficulty\":\"easy|medium|hard\"}]}" },
-        { role: "user", content: parts },
-      ],
+    const r = await runAi({
+      feature: "quiz_generation",
+      system: QUIZ_SYSTEM,
+      input: parts,
+      schema: quizResponseSchema,
+      maxTokens: Math.min(8000, 600 + n * 350),
+      timeoutMs: 45_000,
+      retries: 1,
+      userId,
+      entity: "training_manual",
+      entityId: m.id,
     });
-    const c = resp?.choices?.[0]?.message?.content;
-    content = typeof c === "string" ? c : Array.isArray(c) ? c.map((p: any) => p?.text ?? "").join("") : "";
-  } catch (err: any) {
-    throw new TRPCError({ code: "BAD_REQUEST", message: `A IA falhou: ${String(err?.message ?? err).slice(0, 200)}` });
+    drafts = filterDraftQuestions(r.output.questions).slice(0, n);
+  } catch (err) {
+    throw aiTrpcError(err);
   }
-  const drafts = parseDraftQuestions(content).slice(0, n);
   if (!drafts.length) throw new TRPCError({ code: "BAD_REQUEST", message: "A IA não devolveu perguntas válidas. Tenta outra vez." });
   await d.insert(quizQuestions).values(drafts.map(q => ({
     categoryId: m.categoryId ?? null, question: q.question, optionA: q.optionA, optionB: q.optionB, optionC: q.optionC, optionD: q.optionD,

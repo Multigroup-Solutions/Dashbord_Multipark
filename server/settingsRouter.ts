@@ -51,6 +51,14 @@ export const settingsRouter = router({
     return { now: Date.now(), crons: await getCronStatuses() };
   }),
 
+  /** IA: gasto do mês por funcionalidade (ai_usage_log), orçamento e modelos em uso. */
+  aiUsage: adminOnly.query(async () => {
+    const { aiUsageSummary } = await import("./_core/ai/usage");
+    const { aiStatus } = await import("./_core/ai/status");
+    const st = aiStatus();
+    return { ...(await aiUsageSummary()), provider: st.provider, mode: st.mode, models: st.models, warnings: st.warnings };
+  }),
+
   flags: router({
     list: adminOnly.query(async () => {
       const { listAutomationFlags } = await import("./appSettings");

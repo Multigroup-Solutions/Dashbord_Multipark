@@ -93,7 +93,7 @@ export function buildHealthBody(opts: { initFailed: boolean; detailed: boolean; 
       VITE_APP_ID: has("VITE_APP_ID"),
       NODE_ENV: env.NODE_ENV ?? null,
       CRON_SECRET: has("CRON_SECRET"),
-      LLM: has("LLM_API_KEY") || has("OPENAI_API_KEY"),
+      LLM: has("GEMINI_API_KEY") || has("GOOGLE_CLOUD_PROJECT") || has("LLM_API_KEY") || has("OPENAI_API_KEY"),
       SMTP: has("SMTP_HOST") && has("SMTP_USER") && has("SMTP_PASS"),
       IMAP: has("IMAP_USER") && has("IMAP_PASS"),
       WHATSAPP_TOKEN: has("WHATSAPP_TOKEN"),

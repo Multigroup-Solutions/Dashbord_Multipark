@@ -4,7 +4,7 @@ import {
   computePathProgress, escalaEligibility, isReminderHour, pickQuestions, promotionPatch, rankBestScores, selectReminders,
   trainingBlocksEscalaEnabled, trainingRemindersEnabled, validateSubmission,
 } from "./trainingRules";
-import { parseDraftQuestions } from "./trainingAttempts";
+import { filterDraftQuestions } from "./trainingAttempts";
 import { MIGRATION_0090_STATEMENTS, IDEMPOTENT_ERROR_CODES_0090 } from "./migrations/migration_0090";
 
 const NOW = new Date("2026-09-24T10:00:00Z"); // 11:00 em Lisboa
@@ -175,17 +175,16 @@ describe("progresso de um percurso", () => {
 });
 
 describe("perguntas geradas por IA", () => {
-  it("aceita JSON em bloco de código e descarta inválidas", () => {
-    const text = "```json\n" + JSON.stringify({ questions: [
-      { question: "Qual é a velocidade máxima no parque?", optionA: "10", optionB: "20", optionC: "30", optionD: "50", correctOption: "b", explanation: "Regra interna." },
-      { question: "x", optionA: "", optionB: "", optionC: "", optionD: "", correctOption: "Z" },
-    ] }) + "\n```";
-    const out = parseDraftQuestions(text);
+  it("descarta perguntas que não passam as regras (a resposta já vem em JSON estruturado)", () => {
+    const out = filterDraftQuestions([
+      { question: "Qual é a velocidade máxima no parque?", optionA: "10", optionB: "20", optionC: "30", optionD: "50", correctOption: "B", explanation: "Regra interna.", difficulty: null },
+      { question: "x", optionA: "", optionB: "", optionC: "", optionD: "", correctOption: "A", explanation: null, difficulty: null },
+    ]);
     expect(out).toHaveLength(1);
     expect(out[0].correctOption).toBe("B");
   });
-  it("texto sem JSON → lista vazia", () => {
-    expect(parseDraftQuestions("desculpa, não consigo")).toEqual([]);
+  it("lista vazia → nada", () => {
+    expect(filterDraftQuestions([])).toEqual([]);
   });
 });
 
