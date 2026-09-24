@@ -62,14 +62,6 @@ export function partnerScope(partnerId: SQLWrapper): SQL {
         AND city_alias.aliasValue = city_booking.campaign))))`;
 }
 
-export function campaignScope(type: SQLWrapper, id: SQLWrapper): SQL {
-  if (scopedProjectIds() === undefined) return sql`1 = 1`;
-  return sql`((${type} = 'internal' AND EXISTS (SELECT 1 FROM internal_campaigns city_campaign
-    WHERE city_campaign.id = ${id} AND ${projectScope(sql`city_campaign.projectId`)}))
-    OR (${type} = 'ad' AND EXISTS (SELECT 1 FROM campaigns city_campaign
-    WHERE city_campaign.id = ${id} AND ${projectScope(sql`city_campaign.projectId`)})))`;
-}
-
 export function requireGlobalCityAccess(): void {
   if (scopedProjectIds() !== undefined) throw new TRPCError({ code: 'FORBIDDEN',
     message: 'Esta operação abrange várias cidades e exige acesso global.' });

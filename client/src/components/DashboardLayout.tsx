@@ -232,9 +232,9 @@ export const hubGroups: HubGroup[] = [
       { icon: Truck, label: "Operações", path: "/operacoes-dashboard" },
       { icon: Users, label: "Pessoas", path: "/pessoas-dashboard" },
       { icon: MessageSquareWarning, label: "Suporte", path: "/suporte-dashboard" },
-      // Endereço próprio: /marketing é o módulo (Financeiro → Marketing). Com o
-      // mesmo path, o menu marcava sempre este item e nunca o do Financeiro.
-      { icon: Megaphone, label: "Marketing", path: "/marketing-dashboard" },
+      // Um só endereço para o Marketing (24 set 2026): /marketing-dashboard era
+      // uma cópia do mesmo dashboard e agora redireciona para /marketing.
+      { icon: Megaphone, label: "Marketing", path: "/marketing" },
     ],
   },
   ...menuGroups.map(g => ({

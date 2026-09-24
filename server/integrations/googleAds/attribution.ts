@@ -8,15 +8,21 @@
  *   - `utm_source=google` + `utm_medium` de pago (cpc/ppc/paid…) → Google pago;
  *   - `utm_source=google` sem medium pago → orgânico/desconhecido (NÃO atribuir);
  *   - URL genérico sem parâmetros → "unknown" (nunca inventar atribuição).
- * O ID da campanha vem de `campaignid`/`campaign_id` (ValueTrack) ou de um
- * `utm_campaign` numérico; um nome de campanha em `utm_campaign` fica guardado
- * mas não é um ID.
+ * Meta (Facebook/Instagram, 24 set 2026):
+ *   - `fbclid` presente → clique Meta pago;
+ *   - `utm_source` ∈ facebook|instagram|meta|fb|ig → Meta pago.
+ * Prova do Google (gclid/gbraid/wbraid/utm google pago) ganha à da Meta quando
+ * as duas aparecem (o último clique pago identificado pela Google).
+ * O ID da campanha vem de `campaignid`/`campaign_id` (ValueTrack / {{campaign.id}})
+ * ou de um `utm_campaign` numérico; um nome de campanha em `utm_campaign`
+ * fica guardado mas não é um ID.
  */
-export type AdAttribution = "google_paid" | "unknown";
+export type AdAttribution = "google_paid" | "meta_paid" | "unknown";
 
 export interface UrlAttribution {
   adAttribution: AdAttribution;
   gclid: string | null;
+  fbclid: string | null;
   gbraid: string | null;
   wbraid: string | null;
   utmSource: string | null;
@@ -27,8 +33,11 @@ export interface UrlAttribution {
   /** ID numérico da campanha Google quando disponível (ValueTrack {campaignid}) */
   adCampaignExternalId: string | null;
   /** o que provou a atribuição */
-  evidence: "gclid" | "gbraid" | "wbraid" | "utm_paid" | null;
+  evidence: "gclid" | "gbraid" | "wbraid" | "utm_paid" | "fbclid" | "utm_meta" | null;
 }
+
+/** utm_source que identificam a Meta (Facebook / Instagram). */
+export const META_UTM_SOURCES = new Set(["facebook", "instagram", "meta", "fb", "ig"]);
 
 const PAID_MEDIUMS = new Set(["cpc", "ppc", "paid", "paidsearch", "paid_search", "sem", "cpm", "display", "pmax", "performance_max", "video", "youtube"]);
 const cut = (v: string | null, n: number) => (v == null ? null : v.slice(0, n));
@@ -56,7 +65,7 @@ function parseParams(url: string): URLSearchParams | null {
 
 export function attributionFromUrl(originUrl: string | null | undefined): UrlAttribution {
   const empty: UrlAttribution = {
-    adAttribution: "unknown", gclid: null, gbraid: null, wbraid: null,
+    adAttribution: "unknown", gclid: null, fbclid: null, gbraid: null, wbraid: null,
     utmSource: null, utmMedium: null, utmCampaign: null, utmContent: null, utmTerm: null,
     adCampaignExternalId: null, evidence: null,
   };
@@ -66,7 +75,7 @@ export function attributionFromUrl(originUrl: string | null | undefined): UrlAtt
   const get = (k: string) => { const v = p.get(k); return v && v.trim() ? v.trim() : null; };
   const lower = (v: string | null) => (v ? v.toLowerCase() : null);
 
-  const gclid = get("gclid"), gbraid = get("gbraid"), wbraid = get("wbraid");
+  const gclid = get("gclid"), gbraid = get("gbraid"), wbraid = get("wbraid"), fbclid = get("fbclid");
   const utmSource = lower(get("utm_source")), utmMedium = lower(get("utm_medium"));
   const utmCampaign = get("utm_campaign"), utmContent = get("utm_content"), utmTerm = get("utm_term");
   const campaignIdRaw = get("campaignid") ?? get("campaign_id") ?? get("campaignId") ?? (utmCampaign && /^\d{6,}$/.test(utmCampaign) ? utmCampaign : null);
@@ -77,10 +86,13 @@ export function attributionFromUrl(originUrl: string | null | undefined): UrlAtt
   else if (gbraid) evidence = "gbraid";
   else if (wbraid) evidence = "wbraid";
   else if (utmSource === "google" && utmMedium && PAID_MEDIUMS.has(utmMedium)) evidence = "utm_paid";
+  else if (fbclid) evidence = "fbclid";
+  else if (utmSource && META_UTM_SOURCES.has(utmSource)) evidence = "utm_meta";
+  const adAttribution: AdAttribution = !evidence ? "unknown" : evidence === "fbclid" || evidence === "utm_meta" ? "meta_paid" : "google_paid";
 
   return {
-    adAttribution: evidence ? "google_paid" : "unknown",
-    gclid: cut(gclid, 128), gbraid: cut(gbraid, 128), wbraid: cut(wbraid, 128),
+    adAttribution,
+    gclid: cut(gclid, 128), fbclid: cut(fbclid, 255), gbraid: cut(gbraid, 128), wbraid: cut(wbraid, 128),
     utmSource: cut(utmSource, 128), utmMedium: cut(utmMedium, 128), utmCampaign: cut(utmCampaign, 256),
     utmContent: cut(utmContent, 256), utmTerm: cut(utmTerm, 256),
     adCampaignExternalId, evidence,

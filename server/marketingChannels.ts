@@ -13,11 +13,15 @@
  *     vale (historicamente) um cliente de cada canal.
  *
  * Tudo com âmbito de cidade (`projectScope`) e filtro de projeto, como o resto.
+ * Cancelada e dia = as MESMAS regras das Reservas & Operações (24 set 2026):
+ * `status = 'CANCELLED'` e dias de Lisboa sobre `bookingCreatedAt` em UTC.
  * Emails da casa ficam de fora (INTERNAL_EMAIL_DOMAINS do CRM).
  */
 import { sql, type SQL } from "drizzle-orm";
 import { projectScope, scopedProjectIds } from "./cityScope";
 import { INTERNAL_EMAIL_DOMAINS, VISITED_STATUSES } from "./clientsCrm";
+import { lisbonDayRangeUtc } from "../shared/lisbonDay";
+import { CANCELLED_STATUS } from "../shared/marketingRules";
 import { CHANNEL_LABEL, CHANNEL_ORDER, GROUP_LABEL, GROUP_ORDER, channelOf, groupOf, parseFirstBooking, type ChannelGroup, type ChannelKey } from "../shared/marketingChannels";
 
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
@@ -111,7 +115,9 @@ export function buildChannels(
     }
   }
 
-  const fromAt = `${range.from} 00:00:00`, toAt = `${range.to} 23:59:59`;
+  // `first.at` está em UTC (como a coluna): compara-se com o intervalo UTC dos dias de Lisboa
+  const utc = lisbonDayRangeUtc(range.from, range.to);
+  const fromAt = utc.start, endAt = utc.end;
   const value = new Map<ChannelKey, { clients: number; bookings: number; repeat: number; value: number }>();
   let newClients = 0, returningBookings = 0;
   for (const c of clients) {
@@ -121,7 +127,7 @@ export function buildChannels(
     const v = value.get(key) ?? { clients: 0, bookings: 0, repeat: 0, value: 0 };
     v.clients++; v.bookings += c.bookings; v.value += c.value; if (c.bookings >= 2) v.repeat++;
     value.set(key, v);
-    if (first.at >= fromAt && first.at <= toAt) {
+    if (first.at >= fromAt && first.at < endAt) {
       newClients++;
       rowFor(key, groupOf(key, true)).newClients++;
       returningBookings += Math.max(0, c.periodBookings - 1);   // a 1.ª é a de entrada; as outras já são de repetente
@@ -169,7 +175,8 @@ function scopeWhere(projectIds?: number[] | null): SQL {
     : projectIds && !projectIds.length ? sql` AND 1 = 0` : sql``;
   return sql`${projectScope(sql`b.projectId`)}${proj}`;
 }
-const NOT_CANCELLED = sql`UPPER(COALESCE(b.status, '')) NOT LIKE '%CANCEL%'`;
+const NOT_CANCELLED = sql`COALESCE(b.status, '') <> ${CANCELLED_STATUS}`;
+const inPeriod = (from: string, to: string) => { const r = lisbonDayRangeUtc(from, to); return sql`(b.bookingCreatedAt >= ${r.start} AND b.bookingCreatedAt < ${r.end})`; };
 const HAS_EMAIL = sql`(b.clientEmail LIKE '%@%' AND SUBSTRING_INDEX(LOWER(TRIM(b.clientEmail)), '@', -1) NOT IN (${sql.join(INTERNAL_EMAIL_DOMAINS.map((d) => sql`${d}`), sql`, `)}))`;
 const VISITED = sql`UPPER(COALESCE(b.status, '')) IN (${sql.join(VISITED_STATUSES.map((v) => sql`${v}`), sql`, `)})`;
 
@@ -193,10 +200,10 @@ export function mixSql(from: string, to: string, projectIds?: number[] | null): 
       LEFT JOIN (
         SELECT LOWER(TRIM(x.clientEmail)) AS email, MIN(x.bookingCreatedAt) AS firstAt
         FROM multipark_bookings x
-        WHERE x.clientEmail LIKE '%@%' AND x.bookingCreatedAt IS NOT NULL AND UPPER(COALESCE(x.status, '')) NOT LIKE '%CANCEL%'
+        WHERE x.clientEmail LIKE '%@%' AND x.bookingCreatedAt IS NOT NULL AND COALESCE(x.status, '') <> ${CANCELLED_STATUS}
         GROUP BY LOWER(TRIM(x.clientEmail))
       ) fb ON fb.email = LOWER(TRIM(b.clientEmail))
-      WHERE ${NOT_CANCELLED} AND b.bookingCreatedAt BETWEEN ${`${from} 00:00:00`} AND ${`${to} 23:59:59`} AND ${scopeWhere(projectIds)}
+      WHERE ${NOT_CANCELLED} AND ${inPeriod(from, to)} AND ${scopeWhere(projectIds)}
     ) t
     GROUP BY t.origin, t.googlePaid, t.campaign, t.newClient`;
 }
@@ -208,7 +215,7 @@ export function clientsSql(from: string, to: string, projectIds?: number[] | nul
            MIN(CONCAT(DATE_FORMAT(b.bookingCreatedAt, '%Y-%m-%d %H:%i:%s'), '|', COALESCE(b.origin, ''), '|',
                       IF(b.adAttribution = 'google_paid', '1', '0'), '|', COALESCE(TRIM(b.campaign), ''))) AS first,
            COUNT(*) AS bookings,
-           SUM(b.bookingCreatedAt BETWEEN ${`${from} 00:00:00`} AND ${`${to} 23:59:59`}) AS periodBookings,
+           SUM(${inPeriod(from, to)}) AS periodBookings,
            COALESCE(SUM(CASE WHEN ${VISITED} THEN b.totalPrice END), 0) AS value
     FROM multipark_bookings b
     WHERE ${NOT_CANCELLED} AND b.bookingCreatedAt IS NOT NULL AND ${HAS_EMAIL} AND ${scopeWhere(projectIds)}

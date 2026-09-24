@@ -87,7 +87,7 @@ describe("âmbito de cidade nas queries", () => {
       // a query principal (reservas "b") tem sempre o âmbito; o derivado "x" só dá a 1.ª data por email
       const r = dialect.sqlToQuery(q);
       expect(r.sql).toContain("b.projectId IN");
-      expect(r.params).toEqual(expect.arrayContaining([50, 65, "2026-09-01 00:00:00", "2026-09-30 23:59:59"]));
+      expect(r.params).toEqual(expect.arrayContaining([50, 65, "2026-08-31 23:00:00", "2026-09-30 23:00:00", "CANCELLED"]));
     }
   }));
   it("projeto filtrado vazio → nada", () => {

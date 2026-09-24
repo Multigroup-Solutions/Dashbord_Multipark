@@ -15,7 +15,12 @@ export const GAQL_CUSTOMER_CLIENTS =
 export const GAQL_CUSTOMER =
   "SELECT customer.id, customer.descriptive_name, customer.currency_code, customer.time_zone, customer.manager FROM customer";
 
-/** Métricas diárias por campanha. */
+/**
+ * Métricas diárias por campanha — TODAS, incluindo as REMOVIDAS (24 set 2026):
+ * a recolha substitui o intervalo inteiro (apaga + reinsere), por isso filtrar
+ * as removidas apagava o gasto histórico delas. O estado vem na linha e a UI
+ * mostra "removida".
+ */
 export function gaqlCampaignDaily(from: string, to: string): string {
   assertDay(from); assertDay(to);
   return (
@@ -23,8 +28,7 @@ export function gaqlCampaignDaily(from: string, to: string): string {
     "campaign_budget.amount_micros, segments.date, " +
     "metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, " +
     "metrics.conversions_value, metrics.all_conversions " +
-    `FROM campaign WHERE segments.date BETWEEN '${from}' AND '${to}' ` +
-    "AND campaign.status != 'REMOVED'"
+    `FROM campaign WHERE segments.date BETWEEN '${from}' AND '${to}'`
   );
 }
 

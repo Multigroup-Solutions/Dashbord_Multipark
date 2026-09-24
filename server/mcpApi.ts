@@ -85,7 +85,6 @@ export function createMcpApiRouter(): Router {
         write: [
           "POST /complaints", "PATCH /complaints/:id", "POST /complaints/:id/messages",
           "POST /reviews", "POST /sync/recent", "POST /sync/future", "POST /sync/day",
-          "POST /campaigns/daily",
           "POST /availability-form/submit",
           "POST /driver-applications",
           "POST /extras-availability/submit-by-email",
@@ -219,55 +218,11 @@ export function createMcpApiRouter(): Router {
     res.json({ success: true, count: daily.length, daily });
   }));
 
-  // Upsert das métricas diárias de uma campanha (mesma semântica do botão
-  // "Atualizar campanhas": campos omitidos preservam o que já está registado).
-  // Identifica por campaignType+campaignId, ou por name (procura internal e ad).
-  r.post("/campaigns/daily", requireScope("write"), h(async (req, res) => {
-    const b = req.body ?? {};
-    const date = String(b.costDate ?? b.date ?? "").slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "costDate (YYYY-MM-DD) é obrigatório" });
-    const d = await db();
-    if (!d) return res.status(500).json({ error: "DB unavailable" });
-    const rows = (r2: any) => (Array.isArray(r2[0]) ? r2[0] : r2) as any[];
-
-    let campaignType: string | null = b.campaignType ?? null;
-    let campaignId: number | null = b.campaignId != null ? Number(b.campaignId) : null;
-    if ((!campaignType || campaignId == null) && b.name) {
-      const name = String(b.name);
-      const hitInternal = rows(await d.execute(sql`SELECT id FROM internal_campaigns WHERE name = ${name} LIMIT 1`))[0];
-      if (hitInternal) { campaignType = "internal"; campaignId = Number(hitInternal.id); }
-      else {
-        const hitAd = rows(await d.execute(sql`SELECT id FROM campaigns WHERE name = ${name} LIMIT 1`))[0];
-        if (hitAd) { campaignType = "ad"; campaignId = Number(hitAd.id); }
-      }
-      if (campaignId == null) return res.status(404).json({ error: `Campanha "${name}" não encontrada (usa GET /campaigns para listar)` });
-    }
-    if (campaignType !== "internal" && campaignType !== "ad") return res.status(400).json({ error: "campaignType deve ser 'internal' ou 'ad' (ou indica name)" });
-    if (campaignId == null || !Number.isFinite(campaignId)) return res.status(400).json({ error: "campaignId é obrigatório (ou indica name)" });
-
-    const num = (v: any) => (v === undefined || v === null || v === "" ? null : Number(v));
-    const amount = num(b.amount ?? b.spend) ?? 0;
-    const impressions = num(b.impressions);
-    const clicks = num(b.clicks);
-    const ctr = num(b.ctr) ?? (clicks != null && impressions ? Math.round((clicks / impressions) * 100000) / 1000 : null);
-    const conversions = num(b.conversions);
-    const conversionValue = num(b.conversionValue);
-    const notes = b.notes != null ? String(b.notes) : null;
-
-    await d.execute(sql`
-      INSERT INTO internal_campaign_costs (campaignType, campaignId, costDate, amount, impressions, clicks, ctr, conversions, conversionValue, notes, createdById)
-      VALUES (${campaignType}, ${campaignId}, ${date}, ${amount}, ${impressions}, ${clicks}, ${ctr}, ${conversions}, ${conversionValue}, ${notes}, ${apiKeyActorId(getApiKeyInfo(req)) || null})
-      ON DUPLICATE KEY UPDATE
-        amount = ${amount},
-        impressions = COALESCE(${impressions}, impressions),
-        clicks = COALESCE(${clicks}, clicks),
-        ctr = COALESCE(${ctr}, ctr),
-        conversions = COALESCE(${conversions}, conversions),
-        conversionValue = COALESCE(${conversionValue}, conversionValue),
-        notes = COALESCE(${notes}, notes)`);
-    await logApiKeyAction(req, { action: "update", entity: "campaign_daily", entityId: campaignId, details: `[MCP] ${campaignType}:${campaignId} ${date} €${amount}` });
-    res.json({ success: true, campaignType, campaignId, costDate: date });
-  }));
+  // Descontinuado (24 set 2026): gravava em internal_campaign_costs, que já
+  // ninguém lê — o gasto vem só das APIs (Google Ads / Meta, ad_daily_metrics).
+  r.post("/campaigns/daily", requireScope("write"), (_req: Request, res: Response) => {
+    res.status(410).json({ error: "Descontinuado: o gasto das campanhas vem das APIs Google Ads/Meta (Marketing). Nada foi gravado." });
+  });
 
   // ── RESERVAS (todos os parques/cidades) ──────────────────────────────────────
   r.get("/bookings", requireScope("read"), h(async (req, res) => {

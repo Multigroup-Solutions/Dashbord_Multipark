@@ -1,4 +1,4 @@
-import { mysqlTable, mysqlSchema, AnyMySqlColumn, bigint, int, varchar, text, timestamp, datetime, index, uniqueIndex, decimal, mysqlEnum, tinyint, boolean, date, json, mediumtext, primaryKey } from "drizzle-orm/mysql-core"
+import { mysqlTable, mysqlSchema, AnyMySqlColumn, bigint, int, varchar, text, timestamp, datetime, index, uniqueIndex, decimal, mysqlEnum, tinyint, boolean, date, json, mediumtext, primaryKey, char } from "drizzle-orm/mysql-core"
 import { sql } from "drizzle-orm"
 
 export const activityLogs = mysqlTable("activity_logs", {
@@ -209,6 +209,37 @@ export const integrationSyncRuns = mysqlTable("integration_sync_runs", {
 },
 (table) => [
 	index("idx_integration_sync_runs_provider").on(table.provider, table.startedAt),
+]);
+
+// ─── Marketing (0093) ─────────────────────────────────────────────────────────
+// Orçamento mensal por nó cidade/marca (provider 'all' = todos os fornecedores).
+export const marketingBudgets = mysqlTable("marketing_budgets", {
+	id: int().autoincrement().primaryKey(),
+	month: char({ length: 7 }).notNull(),             // "YYYY-MM"
+	projectId: int().notNull(),
+	provider: varchar({ length: 32 }).default('all').notNull(),
+	amount: decimal({ precision: 12, scale: 2 }).notNull(),
+	notes: varchar({ length: 255 }),
+	createdById: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_marketing_budgets").on(table.month, table.projectId, table.provider),
+]);
+
+// Campanha de anúncios (ad_campaigns.id) ↔ utm_campaign / código de desconto.
+export const adCampaignLinks = mysqlTable("ad_campaign_links", {
+	id: int().autoincrement().primaryKey(),
+	adCampaignId: int().notNull(),
+	keyType: mysqlEnum(['utm_campaign','discount_code']).notNull(),
+	keyValue: varchar({ length: 256 }).notNull(),
+	createdById: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_ad_campaign_links").on(table.keyType, table.keyValue),
+	index("idx_ad_campaign_links_campaign").on(table.adCampaignId),
 ]);
 
 export const campaigns = mysqlTable("campaigns", {
@@ -1202,7 +1233,8 @@ export const multiparkBookings = mysqlTable("multipark_bookings", {
 	utmContent: varchar({ length: 256 }),
 	utmTerm: varchar({ length: 256 }),
 	adCampaignExternalId: varchar({ length: 64 }),
-	adAttribution: mysqlEnum(['google_paid','unknown']),
+	adAttribution: mysqlEnum(['google_paid','meta_paid','unknown']),
+	fbclid: varchar({ length: 255 }),                // 0093 — clique Meta (Facebook/Instagram)
 	adAttributedAt: timestamp({ mode: 'string' }),
 	syncedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),

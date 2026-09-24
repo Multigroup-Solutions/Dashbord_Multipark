@@ -1,6 +1,7 @@
 import express from "express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerGoogleAdsRoutes } from "../integrations/googleAds/routes";
+import { registerMetaAdsRoutes } from "../integrations/meta/routes";
 import { registerGoogleBusinessRoutes } from "../integrations/googleBusiness/routes";
 import { syncReviews as syncGoogleBusinessReviews } from "../integrations/googleBusiness/service";
 import { appRouter } from "../routers";
@@ -36,6 +37,7 @@ let initError: string | null = null;
 try {
   registerOAuthRoutes(app);
   registerGoogleAdsRoutes(app);
+  registerMetaAdsRoutes(app);
   registerGoogleBusinessRoutes(app, () => waitUntil(syncGoogleBusinessReviews().catch(() => {
     console.error('[Google Business] A recolha será retomada pelo cron.');
   })));

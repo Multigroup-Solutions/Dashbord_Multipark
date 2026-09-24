@@ -757,6 +757,15 @@ export async function runExtrasAutomation(now: Date = new Date()): Promise<Autom
     report.errors.push(`case-sla: ${String(err?.message ?? err).slice(0, 200)}`);
   }
 
+  // Marketing: email semanal à segunda ≥ 8h, 1× por semana ISO (MARKETING_WEEKLY=off desliga).
+  try {
+    const { maybeSendMarketingWeekly } = await import("./marketingWeekly");
+    const out = await maybeSendMarketingWeekly(clock, run);
+    if (out.key) report.details["marketing-weekly"] = out;
+  } catch (err: any) {
+    report.errors.push(`marketing-weekly: ${String(err?.message ?? err).slice(0, 200)}`);
+  }
+
   // Formação: lembretes, atrasos e recertificação (TRAINING_REMINDERS=off desliga).
   try {
     const { runTrainingAutomation } = await import("./trainingPaths");
