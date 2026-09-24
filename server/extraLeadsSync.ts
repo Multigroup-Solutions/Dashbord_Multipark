@@ -451,9 +451,12 @@ export interface LeadInboundOutcome { leadIds: number[]; replied: number[]; auto
  * os leads com esse número; os `new`/`contacted` passam a `replied`, avisa-se
  * o backoffice e (se ligado) vai 1× a resposta automática com o link da
  * candidatura — a janela de 24h acabou de abrir, por isso é texto livre.
+ * `stampOnly` (STOP/INICIAR, ou número em opt-out) e leads com `optedOutAt`:
+ * só a hora da última mensagem — não passam a "Respondeu" nem recebem nada.
+ * O aviso vai ao backoffice da cidade do lead (+ quem vê todas).
  * Best-effort: nunca lança (o webhook tem de responder 200 à Meta).
  */
-export async function handleLeadInbound(input: { phoneE164: string; conversationId: number; at?: string }): Promise<LeadInboundOutcome> {
+export async function handleLeadInbound(input: { phoneE164: string; conversationId: number; at?: string; stampOnly?: boolean }): Promise<LeadInboundOutcome> {
   const out: LeadInboundOutcome = { leadIds: [], replied: [], autoReplied: [] };
   try {
     const db = await getDb();
@@ -463,7 +466,7 @@ export async function handleLeadInbound(input: { phoneE164: string; conversation
     const at = input.at ?? new Date().toISOString().slice(0, 19).replace("T", " ");
     for (const lead of leads) {
       out.leadIds.push(lead.id);
-      if (canAutoMarkReplied(lead.status)) {
+      if (!input.stampOnly && !lead.optedOutAt && canAutoMarkReplied(lead.status)) {
         const upd = await db
           .update(extraLeads)
           .set({ status: "replied", lastInboundAt: at })
@@ -473,7 +476,12 @@ export async function handleLeadInbound(input: { phoneE164: string; conversation
         await logActivity({ userId: 0, action: "extra_lead_status", entity: "extra_leads", entityId: lead.id, details: `Lead ${lead.fullName}: ${lead.status} → replied (WhatsApp recebido)` });
         try {
           const { notifyBackoffice } = await import("./extrasAutomation");
-          await notifyBackoffice(`Lead respondeu: ${lead.fullName}`, `Respondeu por WhatsApp (${lead.phone ?? input.phoneE164}). Vê a conversa no inbox.`, "/extras-leads");
+          await notifyBackoffice(
+            `Lead respondeu: ${lead.fullName}`,
+            `Respondeu por WhatsApp (${lead.phone ?? input.phoneE164}). Vê a conversa no inbox.`,
+            "/extras-leads",
+            { projectId: lead.projectId ?? null },
+          );
         } catch { /* segue */ }
 
         const applicationUrl = driverApplicationUrl();

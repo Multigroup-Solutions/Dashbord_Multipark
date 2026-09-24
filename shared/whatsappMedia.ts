@@ -1,16 +1,16 @@
 /**
- * Media recebida por WhatsApp (imagens e áudios enviados pelas pessoas) —
- * vocabulário partilhado entre o webhook (que descarrega e guarda) e o inbox
- * (que mostra). PURO, sem I/O.
+ * Media recebida por WhatsApp (imagens, áudios, vídeos e documentos enviados
+ * pelas pessoas) — vocabulário partilhado entre o webhook (que descarrega e
+ * guarda) e o inbox (que mostra). PURO, sem I/O.
  *
- * Contexto: até 2026-09-09 uma imagem/áudio entrante ficava só como o texto
- * "[imagem]" / "[áudio]" na `whatsapp_messages.body`. Agora o ficheiro é
- * descarregado da Meta no momento do webhook e guardado no storage da app
- * (`server/storage.ts`); a linha ganha `mediaType` / `mediaUrl` / `mediaMime`.
+ * O ficheiro é descarregado da Meta no webhook e guardado no storage da app
+ * (`server/storage.ts`) só pela KEY (`mediaKey`); a UI pede um URL ASSINADO de
+ * curta duração (`whatsapp.mediaUrl`). Falhas de download ficam com o
+ * `mediaId` e o cron horário re-tenta (mediaAttempts, no máximo 5).
  */
 
-/** Tipos de media da Cloud API que descarregamos. Vídeo/documento/sticker ficam para depois. */
-export const WHATSAPP_MEDIA_KINDS = ["image", "audio"] as const;
+/** Tipos de media da Cloud API que descarregamos (stickers ficam de fora). */
+export const WHATSAPP_MEDIA_KINDS = ["image", "audio", "video", "document"] as const;
 export type WhatsAppMediaKind = (typeof WHATSAPP_MEDIA_KINDS)[number];
 
 /**
@@ -24,13 +24,23 @@ export function mediaKindForMessageType(type: string | null | undefined): WhatsA
     case "audio":
     case "voice":
       return "audio";
+    case "video":
+      return "video";
+    case "document":
+      return "document";
     default:
       return null;
   }
 }
 
 /** Marcadores que o webhook grava no `body` quando não há caption. */
-const MEDIA_PLACEHOLDERS = new Set(["[imagem]", "[áudio]", "[mensagem de voz]"]);
+const MEDIA_PLACEHOLDERS = new Set(["[imagem]", "[áudio]", "[mensagem de voz]", "[vídeo]", "[documento]"]);
+
+/**
+ * Teto de tamanho da media entrante que descarregamos (documentos e vídeos
+ * podem ser grandes; acima disto fica só o `mediaId` e a UI diz porquê).
+ */
+export const INBOUND_MEDIA_MAX_BYTES = 16 * 1024 * 1024;
 
 /**
  * `true` quando o body é só o marcador "[imagem]"/"[áudio]" — com o ficheiro
@@ -74,6 +84,28 @@ export function extensionForMime(mime: string | null | undefined): string {
     case "audio/wav":
     case "audio/x-wav":
       return "wav";
+    case "video/mp4":
+      return "mp4";
+    case "video/3gpp":
+      return "3gp";
+    case "video/quicktime":
+      return "mov";
+    case "application/pdf":
+      return "pdf";
+    case "application/msword":
+      return "doc";
+    case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+      return "docx";
+    case "application/vnd.ms-excel":
+      return "xls";
+    case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+      return "xlsx";
+    case "application/vnd.ms-powerpoint":
+      return "ppt";
+    case "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+      return "pptx";
+    case "text/plain":
+      return "txt";
     default:
       return "bin";
   }

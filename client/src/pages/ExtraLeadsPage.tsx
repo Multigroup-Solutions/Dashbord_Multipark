@@ -825,12 +825,12 @@ export default function ExtraLeadsPage() {
                       className={
                         r.status === "sent"
                           ? "bg-emerald-100 text-emerald-800"
-                          : r.status === "no_phone" || r.status === "invalid_phone" || r.status === "skipped"
+                          : r.status === "no_phone" || r.status === "invalid_phone" || r.status === "skipped" || r.status === "opted_out" || r.status === "duplicate_phone"
                             ? "bg-amber-100 text-amber-800"
                             : "bg-red-100 text-red-800"
                       }
                     >
-                      {r.status === "sent" ? "enviado" : r.status === "no_phone" ? "sem telemóvel" : r.status === "invalid_phone" ? "número inválido" : r.status === "skipped" ? `não enviado (${r.error ?? "estado"})` : "falhou"}
+                      {r.status === "sent" ? "enviado" : r.status === "no_phone" ? "sem telemóvel" : r.status === "invalid_phone" ? "número inválido" : r.status === "opted_out" ? "não quer mensagens" : r.status === "duplicate_phone" ? "número repetido" : r.status === "skipped" ? `não enviado (${r.error ?? "estado"})` : "falhou"}
                     </Badge>
                     <span className="font-medium">{r.fullName}</span>
                     {r.error && <span className="text-muted-foreground break-words">— {r.error}</span>}

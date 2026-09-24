@@ -221,6 +221,14 @@ async function ensureTables(): Promise<void> {
     \`sentAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (\`employeeId\`)
   )`);
+  // Também criada pela migração 0094; aqui para ambientes sem ela.
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS \`whatsapp_request_answers\` (
+    \`requestId\` INT NOT NULL,
+    \`employeeId\` INT NOT NULL,
+    \`action\` VARCHAR(16) NOT NULL,
+    \`answeredAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (\`requestId\`)
+  )`);
   tablesEnsured = true;
 }
 
@@ -254,16 +262,38 @@ async function logWhatsappRequest(employeeId: number, kind: string, fields: { ta
     VALUES (${employeeId}, '', ${kind}, ${fields.targetDate ?? null}, NULL, NULL, NULL, ${fields.weekStart ?? null})`);
 }
 
-export async function notifyBackoffice(title: string, body: string, link: string): Promise<void> {
+/**
+ * Notificação ao backoffice. Com `projectId` (cidade da pessoa em causa), só
+ * recebe quem tem essa cidade no seu âmbito — e quem vê todas as cidades. Sem
+ * `projectId` (ou cidade desconhecida) vai a todos, como antes.
+ */
+export async function notifyBackoffice(title: string, body: string, link: string, opts: { projectId?: number | null } = {}): Promise<void> {
   const db = await getDb();
   if (!db) return;
   const { users } = await import("../drizzle/schema");
   const { createNotification } = await import("./complaintsExtended");
   const rows = await db.select({ id: users.id }).from(users)
     .where(sql`${users.role} IN ('admin','super_admin','supervisor','backoffice') AND ${users.isActive} = 1`);
-  for (const r of rows) {
-    try { await createNotification({ userId: r.id, title, body, kind: "extras", link }); } catch { /* segue */ }
+  let targets = rows.map((r) => r.id);
+  if (opts.projectId != null) {
+    const { loadCityAccess } = await import("./cityAccess");
+    const scoped: number[] = [];
+    for (const id of targets) {
+      try {
+        const access = await loadCityAccess(id);
+        if (userSeesProject(access, opts.projectId)) scoped.push(id);
+      } catch { /* sem âmbito resolvido → não recebe avisos de cidade */ }
+    }
+    targets = scoped;
   }
+  for (const id of targets) {
+    try { await createNotification({ userId: id, title, body, kind: "extras", link }); } catch { /* segue */ }
+  }
+}
+
+/** O utilizador vê a cidade/centro `projectId`? (todas as cidades → sim). PURA. */
+export function userSeesProject(access: { all: boolean; projectIds: number[] }, projectId: number): boolean {
+  return access.all || access.projectIds.includes(projectId);
 }
 
 // ─── 5. Pedido de disponibilidade automático + lembrete ─────────────────────
@@ -363,47 +393,82 @@ export async function notifyAssignments(date: string, opts: { city?: string | nu
   const { getSystemUserId } = await import("./db");
   const by = opts.createdById ?? (await getSystemUserId());
 
-  for (const a of rows) {
-    res.total++;
-    if (done.get(a.id)?.status === "sent") { res.skipped++; continue; }
-    const empId = Number(a.employeeId);
-    const end = a.sentHomeHour ?? a.endHour;
-    let status = "failed";
-    let error: string | null = null;
-    try {
-      const r = await sendBroadcast({
-        templateName: aviso.name,
-        languageCode: aviso.language,
-        bodyParam2: fmtWorkDay(date, a.startHour, end),
-        employeeIds: [empId],
-        note: `Aviso de escala ${date}`,
-        createdById: by,
-      });
-      const rec = r.recipients[0];
-      status = rec?.status === "sent" ? "sent" : "failed";
-      error = rec?.status === "sent" ? null : (rec?.error ?? "sem destinatário (ficha inativa ou sem número)");
-    } catch (err: any) {
-      error = String(err?.message ?? err);
-    }
-    await db.execute(sql`
-      INSERT INTO \`extras_dia_notices\` (assignmentId, employeeId, assignmentDate, status, error)
-      VALUES (${a.id}, ${empId}, ${date}, ${status}, ${error ? error.slice(0, 300) : null})
-      ON DUPLICATE KEY UPDATE status = VALUES(status), error = VALUES(error), sentAt = CURRENT_TIMESTAMP`);
-    if (status !== "sent") { res.failed++; continue; }
-    res.sent++;
-    try { await logWhatsappRequest(empId, "assignment", { targetDate: date }); } catch { /* segue */ }
+  res.total = rows.length;
+  const pending = rows.filter((a) => done.get(a.id)?.status !== "sent");
+  res.skipped = rows.length - pending.length;
+  if (!pending.length) return res;
 
-    // 1.ª vez de sempre → morada e regras
-    const [prev] = (await db.execute(sql`SELECT 1 AS x FROM \`extras_rules_sent\` WHERE employeeId = ${empId} LIMIT 1`)) as any;
-    if (!(prev as any[])?.length) {
+  // UM envio por execução (antes era um broadcast por turno): o dia/horas de
+  // cada pessoa vai no {{2}} dela. Quem tem dois turnos no dia recebe um só
+  // aviso com os dois horários.
+  const byEmp = new Map<number, typeof pending>();
+  for (const a of pending) {
+    const empId = Number(a.employeeId);
+    byEmp.set(empId, [...(byEmp.get(empId) ?? []), a]);
+  }
+  const texts: Record<number, string> = {};
+  for (const [empId, list] of Array.from(byEmp.entries())) {
+    texts[empId] = list
+      .slice()
+      .sort((x, y) => x.startHour - y.startHour)
+      .map((a) => fmtWorkDay(date, a.startHour, a.sentHomeHour ?? a.endHour))
+      .join(" e ");
+  }
+
+  const outcome = new Map<number, { status: string; error: string | null }>();
+  try {
+    const r = await sendBroadcast({
+      templateName: aviso.name,
+      languageCode: aviso.language,
+      bodyParam2ByEmployee: texts,
+      employeeIds: Array.from(byEmp.keys()),
+      note: `Aviso de escala ${date}`,
+      createdById: by,
+    });
+    for (const rec of r.recipients) {
+      if (rec.employeeId == null) continue;
+      outcome.set(rec.employeeId, rec.status === "sent" ? { status: "sent", error: null } : { status: "failed", error: rec.error ?? rec.status });
+    }
+  } catch (err: any) {
+    const error = String(err?.message ?? err);
+    for (const empId of Array.from(byEmp.keys())) outcome.set(empId, { status: "failed", error });
+  }
+
+  const sentEmployees: number[] = [];
+  for (const [empId, list] of Array.from(byEmp.entries())) {
+    const o = outcome.get(empId) ?? { status: "failed", error: "sem destinatário (ficha inativa ou sem número)" };
+    for (const a of list) {
+      await db.execute(sql`
+        INSERT INTO \`extras_dia_notices\` (assignmentId, employeeId, assignmentDate, status, error)
+        VALUES (${a.id}, ${empId}, ${date}, ${o.status}, ${o.error ? o.error.slice(0, 300) : null})
+        ON DUPLICATE KEY UPDATE status = VALUES(status), error = VALUES(error), sentAt = CURRENT_TIMESTAMP`);
+      if (o.status === "sent") res.sent++;
+      else res.failed++;
+    }
+    if (o.status === "sent") {
+      sentEmployees.push(empId);
+      try { await logWhatsappRequest(empId, "assignment", { targetDate: date }); } catch { /* segue */ }
+    }
+  }
+
+  // 1.ª vez de sempre → morada e regras (também num só envio)
+  if (sentEmployees.length) {
+    const [prev] = (await db.execute(sql`
+      SELECT employeeId FROM \`extras_rules_sent\`
+       WHERE employeeId IN (${sql.join(sentEmployees.map((id) => sql`${id}`), sql`, `)})`)) as any;
+    const already = new Set(((prev as any[]) ?? []).map((r) => Number(r.employeeId)));
+    const firstTimers = sentEmployees.filter((id) => !already.has(id));
+    if (firstTimers.length) {
       try {
-        const r = await sendBroadcast({ templateName: regras.name, languageCode: regras.language, employeeIds: [empId], note: "Morada e regras (1.º turno)", createdById: by });
-        if (r.recipients[0]?.status === "sent") {
-          await db.execute(sql`INSERT IGNORE INTO \`extras_rules_sent\` (employeeId) VALUES (${empId})`);
-          res.rulesSent++;
+        const r = await sendBroadcast({ templateName: regras.name, languageCode: regras.language, employeeIds: firstTimers, note: "Morada e regras (1.º turno)", createdById: by });
+        for (const rec of r.recipients) {
+          if (rec.status === "sent" && rec.employeeId != null) {
+            await db.execute(sql`INSERT IGNORE INTO \`extras_rules_sent\` (employeeId) VALUES (${rec.employeeId})`);
+            res.rulesSent++;
+          }
         }
       } catch (err) {
-        console.warn("[extras-auto] morada e regras falhou:", empId, err);
+        console.warn("[extras-auto] morada e regras falhou:", err);
       }
     }
   }
@@ -490,19 +555,53 @@ export async function coverageFor(date: string, city: CityId): Promise<CoverageG
 
 export interface WhatsappReplyOutcome { action: "none" | "confirmed" | "declined" | "day_marked" | "week_link"; reply?: string }
 
+export interface PendingRequest {
+  id: number;
+  kind: string;
+  targetDate: string | null;
+  weekStart: string | null;
+  shift: string | null;
+  fromHour: number | null;
+  toHour: number | null;
+}
+
+/**
+ * Que resposta automática dar (PURA — a regra testada da idempotência):
+ *  - aviso de escala: "sim"/"não" só enquanto o aviso estiver por responder;
+ *  - pedido de um dia: marca e agradece 1× — se o pedido já foi respondido
+ *    ou o dia/turno já está marcado, não volta a marcar nem a responder;
+ *  - pedido da semana: o link do formulário vai no MÁXIMO 1× por pedido
+ *    (antes ia a cada "ok"/"sim" durante 10 dias).
+ */
+export function decideAutoReply(input: {
+  pending: Pick<PendingRequest, "kind" | "targetDate" | "weekStart"> | null;
+  verdict: "yes" | "no" | "unclear";
+  alreadyAnswered: boolean;
+  dayAlreadyMarked: boolean;
+}): WhatsappReplyOutcome["action"] {
+  const { pending, verdict } = input;
+  if (!pending || verdict === "unclear" || input.alreadyAnswered) return "none";
+  if (pending.kind === "assignment" && pending.targetDate) return verdict === "yes" ? "confirmed" : "declined";
+  if (verdict !== "yes") return "none";
+  if (pending.targetDate) return input.dayAlreadyMarked ? "none" : "day_marked";
+  if (pending.weekStart) return "week_link";
+  return "none";
+}
+
 /** Último pedido (email ou WhatsApp) feito a este colaborador nos últimos 10 dias. */
-async function latestRequestFor(employeeId: number): Promise<{ kind: string; targetDate: string | null; weekStart: string | null; shift: string | null; fromHour: number | null; toHour: number | null } | null> {
+async function latestRequestFor(employeeId: number): Promise<PendingRequest | null> {
   const db = await getDb();
   if (!db) return null;
   try {
     const [rows] = (await db.execute(sql`
-      SELECT kind, targetDate, weekStart, shift, fromHour, toHour
+      SELECT id, kind, targetDate, weekStart, shift, fromHour, toHour
         FROM \`availability_request_log\`
        WHERE employeeId = ${employeeId} AND sentAt >= DATE_SUB(NOW(), INTERVAL 10 DAY)
        ORDER BY sentAt DESC, id DESC LIMIT 1`)) as any;
     const r = (rows as any[])?.[0];
     if (!r) return null;
     return {
+      id: Number(r.id),
       kind: String(r.kind),
       targetDate: r.targetDate ? String(r.targetDate) : null,
       weekStart: r.weekStart ? String(r.weekStart) : null,
@@ -515,8 +614,40 @@ async function latestRequestFor(employeeId: number): Promise<{ kind: string; tar
   }
 }
 
+async function requestAlreadyAnswered(requestId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return true;
+  await ensureTables();
+  const [rows] = (await db.execute(sql`SELECT 1 AS x FROM \`whatsapp_request_answers\` WHERE requestId = ${requestId} LIMIT 1`)) as any;
+  return ((rows as any[]) ?? []).length > 0;
+}
+
+/** Reserva a resposta a um pedido (corrida entre duas mensagens seguidas). false = já respondido. */
+async function claimRequestAnswer(requestId: number, employeeId: number, action: string): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  await ensureTables();
+  return extractAffectedRows(await db.execute(sql`
+    INSERT IGNORE INTO \`whatsapp_request_answers\` (requestId, employeeId, action)
+    VALUES (${requestId}, ${employeeId}, ${action})`)) > 0;
+}
+
+async function dayAlreadyMarked(employeeId: number, day: string, shift: string | null): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  try {
+    const col = shift === "night" ? sql`night` : sql`morning`;
+    const [rows] = (await db.execute(sql`
+      SELECT 1 AS x FROM extras_availability WHERE employeeId = ${employeeId} AND day = ${day} AND ${col} = 1 LIMIT 1`)) as any;
+    return ((rows as any[]) ?? []).length > 0;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Trata a mensagem de um colaborador conhecido que chegou pelo WhatsApp.
+ * Idempotente: cada pedido é respondido no máximo 1× (whatsapp_request_answers).
  * Best-effort: nunca lança (o webhook tem de responder 200 à Meta).
  */
 export async function handleWhatsappReply(input: { employeeId: number; conversationId: number; body: string }): Promise<WhatsappReplyOutcome> {
@@ -528,38 +659,52 @@ export async function handleWhatsappReply(input: { employeeId: number; conversat
     if (verdict === "unclear") return { action: "none" };
     const db = await getDb();
     if (!db) return { action: "none" };
+
+    const action = decideAutoReply({
+      pending,
+      verdict,
+      alreadyAnswered: await requestAlreadyAnswered(pending.id),
+      dayAlreadyMarked:
+        pending.kind !== "assignment" && pending.targetDate ? await dayAlreadyMarked(input.employeeId, pending.targetDate, pending.shift) : false,
+    });
+    if (action === "none") return { action };
+
     const { replyToConversation } = await import("./whatsappInbox");
     const { employees } = await import("../drizzle/schema");
     const { eq } = await import("drizzle-orm");
-    const [emp] = await db.select({ fullName: employees.fullName }).from(employees).where(eq(employees.id, input.employeeId)).limit(1);
+    const [emp] = await db.select({ fullName: employees.fullName, projectId: employees.projectId }).from(employees).where(eq(employees.id, input.employeeId)).limit(1);
     const name = emp?.fullName ?? `#${input.employeeId}`;
 
-    if (pending.kind === "assignment" && pending.targetDate) {
+    if (action === "confirmed" || action === "declined") {
       await ensureTables();
-      const col = verdict === "yes" ? sql`confirmedAt` : sql`declinedAt`;
+      const col = action === "confirmed" ? sql`confirmedAt` : sql`declinedAt`;
       const upd = await db.execute(sql`
         UPDATE \`extras_dia_notices\` SET ${col} = CURRENT_TIMESTAMP
          WHERE employeeId = ${input.employeeId} AND assignmentDate = ${pending.targetDate}
            AND confirmedAt IS NULL AND declinedAt IS NULL`);
       if (extractAffectedRows(upd) === 0) return { action: "none" }; // já tinha respondido
-      if (verdict === "yes") {
+      await claimRequestAnswer(pending.id, input.employeeId, action);
+      if (action === "confirmed") {
         const reply = "Obrigado! Fica confirmado ✅ Até lá.";
         await replyToConversation(input.conversationId, reply, null);
-        return { action: "confirmed", reply };
+        return { action, reply };
       }
       await notifyBackoffice(
         `${name} não pode ir ao turno de ${pending.targetDate}`,
         `Respondeu "não" ao aviso de escala por WhatsApp. Procura substituto.`,
         "/extras-dia",
+        { projectId: emp?.projectId ?? null },
       );
       const reply = "Obrigado por avisares. Vamos tratar da substituição.";
       await replyToConversation(input.conversationId, reply, null);
-      return { action: "declined", reply };
+      return { action, reply };
     }
 
-    if (verdict !== "yes") return { action: "none" };
+    // Pedido do dia / da semana: reserva ANTES de agir (duas mensagens seguidas
+    // não geram duas respostas).
+    if (!(await claimRequestAnswer(pending.id, input.employeeId, action))) return { action: "none" };
 
-    if (pending.targetDate) {
+    if (action === "day_marked" && pending.targetDate) {
       const { markDayAvailability } = await import("./extrasAvailability");
       await markDayAvailability(input.employeeId, pending.targetDate, {
         morning: pending.shift !== "night",
@@ -570,13 +715,13 @@ export async function handleWhatsappReply(input: { employeeId: number; conversat
       });
       const reply = "Obrigado! Ficou registada a tua disponibilidade ✅";
       await replyToConversation(input.conversationId, reply, null);
-      return { action: "day_marked", reply };
+      return { action, reply };
     }
 
-    if (pending.weekStart) {
+    if (action === "week_link" && pending.weekStart) {
       const reply = `Obrigado! Indica aqui os dias e horas em que podes (${fmtWeek(pending.weekStart)}): ${appOrigin()}/disponibilidade?week=${pending.weekStart}`;
       await replyToConversation(input.conversationId, reply, null);
-      return { action: "week_link", reply };
+      return { action, reply };
     }
     return { action: "none" };
   } catch (err) {
@@ -737,6 +882,16 @@ export async function runExtrasAutomation(now: Date = new Date()): Promise<Autom
 
   await runLeadAutomation(clock, now, report, run);
 
+  // WhatsApp: re-tenta downloads de media falhados (lote limitado) e limpa
+  // status pendentes antigos.
+  try {
+    const { runWhatsappMaintenance } = await import("./whatsappInbound");
+    report.details["whatsapp-maintenance"] = await runWhatsappMaintenance();
+    report.ran.push("whatsapp-maintenance");
+  } catch (err: any) {
+    report.errors.push(`whatsapp-maintenance: ${String(err?.message ?? err).slice(0, 200)}`);
+  }
+
   // Tarefas: checklists recorrentes do dia (idempotente) + avisos de atraso /
   // conclusão (antes só com o botão manual de admin). TASKS_AUTOMATION=off desliga.
   try {
@@ -813,7 +968,7 @@ async function runLeadAutomation(
     const db = await getDb();
     if (!db) return [];
     const { extraLeads } = await import("../drizzle/schema");
-    const { inArray } = await import("drizzle-orm");
+    const { and, inArray, isNull } = await import("drizzle-orm");
     return db
       .select({
         id: extraLeads.id,
@@ -825,7 +980,8 @@ async function runLeadAutomation(
         phoneE164: extraLeads.phoneE164,
       })
       .from(extraLeads)
-      .where(inArray(extraLeads.status, ["new", "contacted"]));
+      // Quem pediu STOP não entra no SLA nem no lembrete automático.
+      .where(and(inArray(extraLeads.status, ["new", "contacted"]), isNull(extraLeads.optedOutAt)));
   };
 
   if (clock.hour >= LEAD_SLA_NOTICE_HOUR) {
