@@ -25,7 +25,7 @@ export default function RadioPage() {
 
 function RadioTab() {
   const { user } = useAuth();
-  // Transcrever chama o OpenAI (custo real): o servidor exige team_leader+.
+  // Transcrever chama a IA (custo real): o servidor exige team_leader+.
   const canTranscribe = ["team_leader", "supervisor", "admin", "super_admin"].includes(String(user?.role ?? ""));
   const [showTranscribe, setShowTranscribe] = useState(false);
   const { data: transcriptions } = trpc.operational.radio.list.useQuery();

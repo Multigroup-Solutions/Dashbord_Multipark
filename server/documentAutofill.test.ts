@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseJsonObject, planAutofill, validDate, validIban, validNif } from "./documentAutofill";
+import { planAutofill, validDate, validIban, validNif } from "./documentAutofill";
 
 const blank = { nif: null, birthDate: null, nationality: null, address: null, nib: null };
 
@@ -20,11 +20,6 @@ describe("documentAutofill", () => {
     expect(validDate("17/05/1990")).toBe("1990-05-17");
     expect(validDate("31/02/1990")).toBeNull();
     expect(validDate("ontem")).toBeNull();
-  });
-
-  it("tira o JSON do meio do texto", () => {
-    expect(parseJsonObject('Aqui vai: {"nif":"123456789"} fim')).toEqual({ nif: "123456789" });
-    expect(parseJsonObject("nada")).toBeNull();
   });
 
   it("só preenche campos vazios e com valores válidos", () => {

@@ -28,7 +28,6 @@ import {
   searchUserDirectory,
   userDirectorySummary,
 } from "./usersDirectory";
-import { invokeLLM } from "./_core/llm";
 import { notifyOwner } from "./_core/notification";
 import { storagePut } from "./storage";
 import { resolveExpenseVisibility, expenseConditions, whereAll, canSeeExpense, canSeeAggregates, type ExpenseListFilters, type ExpenseVisibility } from "./expenseScope";
@@ -69,7 +68,6 @@ import { googleAdsRouter } from "./integrations/googleAds/router";
 import { metaAdsRouter } from "./integrations/meta/router";
 import { googleBusinessRouter } from "./integrations/googleBusiness/router";
 import { integrationsHubRouter } from "./integrations/hubRouter";
-import { transcribeAudio } from "./_core/voiceTranscription";
 import { getBookingHistory, getBookingsReport, getBookingTryAllParks } from "./multipark";
 import { deliveryErrorCode } from "./bookingDeliveryQueue";
 import {
@@ -1980,7 +1978,6 @@ export const appRouter = router({
       .input(z.object({ imageBase64: z.string(), mimeType: z.string().default("image/jpeg") }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "despesas", "edit", { allowOwn: true });
-        const imageUrl = `data:${input.mimeType};base64,${input.imageBase64}`;
         // Lista de categorias para a IA sugerir uma (mapeada por nome no cliente).
         let categoryNames: string[] = [];
         try {
@@ -1988,57 +1985,12 @@ export const appRouter = router({
           categoryNames = (cats as any[]).map((c) => c.name).filter(Boolean);
         } catch { /* opcional */ }
 
-        const llmMessages: import("./_core/llm").Message[] = [
-          {
-            role: "system",
-            content: "És um assistente especializado em extrair dados de faturas para registo de DESPESAS da empresa Multipark (marcas: Multipark, Airpark, Skypark, Redpark, Top Parking). Responde APENAS em JSON válido, sem markdown.",
-          },
-          {
-            role: "user",
-            content: [
-              { type: "image_url", image_url: { url: imageUrl, detail: "high" } } as import("./_core/llm").ImageContent,
-              { type: "text", text: 'Extrai os dados desta fatura em JSON com os campos: supplier (o EMITENTE da fatura — quem VENDE/presta o serviço, normalmente no cabeçalho com o logótipo; NUNCA o cliente/destinatário), customerName (a quem a fatura é passada, ou null), selfInvoice (true se o EMITENTE for uma empresa do grupo Multipark/Airpark/Skypark/Redpark/Top Parking — nesse caso é uma fatura NOSSA a um cliente, não uma despesa), description (descrição dos produtos/serviços), amount (valor total como string numérica com PONTO decimal e sem símbolos, ex: "45.90"), currency (ex: "EUR"), paymentMethod (cash/card/transfer/check/other), expenseDate (data da fatura, YYYY-MM-DD), paymentDueDate (data de vencimento, YYYY-MM-DD ou null), nif (NIF do emitente, ou null), invoiceNumber (nº da fatura, ou null)' + (categoryNames.length ? `, suggestedCategory (a mais adequada desta lista, ou null: ${categoryNames.join(", ")})` : "") + '. Se não conseguires extrair um campo, usa null.' } as import("./_core/llm").TextContent,
-            ],
-          },
-        ];
-        const response = await invokeLLM({
-          messages: llmMessages,
-          response_format: { type: "json_object" },
-        });
-
-        const rawContent = response.choices?.[0]?.message?.content;
-        let content = typeof rawContent === "string" ? rawContent : null;
-        if (!content) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Sem resposta do LLM" });
-
-        // Strip markdown code fences if present (e.g. ```json ... ```)
-        content = content.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/, "").trim();
-
+        const { extractInvoice } = await import("./expenseOcr");
+        const { aiTrpcError } = await import("./_core/ai/trpcError");
         try {
-          const parsed = JSON.parse(content);
-          // Sanitize "null" strings returned by LLM
-          const sanitize = (v: any) => (v === 'null' || v === 'undefined' || v === '' ? null : v);
-          // Normaliza o valor: "1.234,56 €" → "1234.56"
-          let amount = sanitize(parsed.amount);
-          if (typeof amount === "string") {
-            amount = amount.replace(/[€$£\s]/g, "").replace(/\.(?=\d{3}(\D|$))/g, "").replace(",", ".");
-            if (!/^\d+(\.\d{1,2})?$/.test(amount)) amount = null;
-          }
-          return {
-            supplier: sanitize(parsed.supplier),
-            customerName: sanitize(parsed.customerName),
-            selfInvoice: parsed.selfInvoice === true,
-            description: sanitize(parsed.description),
-            amount,
-            currency: sanitize(parsed.currency) ?? 'EUR',
-            paymentMethod: sanitize(parsed.paymentMethod),
-            expenseDate: sanitize(parsed.expenseDate),
-            paymentDueDate: sanitize(parsed.paymentDueDate),
-            nif: sanitize(parsed.nif),
-            invoiceNumber: sanitize(parsed.invoiceNumber),
-            suggestedCategory: sanitize(parsed.suggestedCategory),
-          };
-        } catch {
-          return { supplier: null, customerName: null, selfInvoice: false, description: null, amount: null, currency: "EUR", paymentMethod: null, expenseDate: null, paymentDueDate: null, nif: null, invoiceNumber: null, suggestedCategory: null };
+          return await extractInvoice({ base64: input.imageBase64, mimeType: input.mimeType, categoryNames, userId: ctx.user.id });
+        } catch (err) {
+          throw aiTrpcError(err);
         }
       }),
 
@@ -4040,20 +3992,17 @@ export const appRouter = router({
         vehicleId: z.number().optional(),
         duration: z.number().optional(),
       })).mutation(async ({ ctx, input }) => {
-        // Transcrição chama OpenAI (custo real). Restringir a team_leader+.
+        // Transcrição com custo real (IA). Restringir a team_leader+.
         requireAccess(ctx.user, "radio", "edit");
-        const result = await transcribeAudio({ audioUrl: input.audioUrl, language: "pt" });
-        if ("error" in result) {
-          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: `Transcrição falhou: ${result.error}` });
+        const { transcribeAndSummarizeRadio } = await import("./radioAi");
+        const { aiTrpcError } = await import("./_core/ai/trpcError");
+        let transcriptionText: string;
+        let summaryText: string;
+        try {
+          ({ transcription: transcriptionText, summary: summaryText } = await transcribeAndSummarizeRadio(input.audioUrl, { userId: ctx.user.id }));
+        } catch (err) {
+          throw aiTrpcError(err);
         }
-        const transcriptionText = result.text;
-        const summary = await invokeLLM({
-          messages: [
-            { role: "system", content: "Resume a seguinte transcrição de rádio em 1-2 frases curtas em português. Foca nos pontos operacionais relevantes." },
-            { role: "user", content: transcriptionText },
-          ],
-        });
-        const summaryText = typeof summary.choices[0].message.content === "string" ? summary.choices[0].message.content : "";
         const id = await createRadioTranscription({
           audioUrl: input.audioUrl,
           transcription: transcriptionText,
@@ -4065,7 +4014,7 @@ export const appRouter = router({
           createdById: ctx.user.id,
         });
         await logActivity({ userId: ctx.user.id, action: "create", entity: "radio_transcription", entityId: id, details: "Transcrição de rádio" });
-        return { id, transcription: result.text, summary: summaryText };
+        return { id, transcription: transcriptionText, summary: summaryText };
       }),
     }),
 
@@ -5139,7 +5088,7 @@ export const appRouter = router({
       projectId: z.number().optional(),
       vehiclePlate: z.string().optional(),
     })).mutation(async ({ ctx, input }) => {
-      // create dispara OpenAI (resposta IA) e/ou cria reclamação automaticamente.
+      // create dispara a IA (rascunho de resposta) e/ou cria reclamação automaticamente.
       // Custo real + acções com efeito — restringir a frontoffice+.
       requireAccess(ctx.user, "criticas", "edit");
       const reviewDate = (input.reviewDate ? new Date(input.reviewDate) : new Date()).toISOString().slice(0, 19).replace("T", " ");
@@ -5149,27 +5098,14 @@ export const appRouter = router({
         createdById: ctx.user.id,
       });
 
-      // Auto-process: if rating >= 4, generate AI response
+      // Críticas 4–5★: rascunho de resposta por IA (best-effort; nunca publica sozinho).
       if (input.rating >= 4 && id) {
         try {
-          const response = await invokeLLM({
-            messages: [
-              {
-                role: "system",
-                content: `És o gestor de atendimento ao cliente de um parque de estacionamento premium. Responde a avaliações positivas do Google de forma natural, calorosa e profissional em português. Não uses linguagem demasiado formal nem genérica. Personaliza a resposta com base no texto da avaliação. Máximo 3 frases.`
-              },
-              {
-                role: "user",
-                content: `Avaliação de ${input.rating} estrelas de ${input.reviewerName}: "${input.reviewText || 'Sem texto'}". Gera uma resposta de agradecimento.`
-              }
-            ],
-          });
-          const aiText = typeof response.choices[0].message.content === "string" ? response.choices[0].message.content : "";
-          if (aiText) {
-            await updateGoogleReview(id, { aiResponse: aiText, status: "ai_responded" });
-          }
-        } catch (e) {
-          console.error("[Reviews] AI response failed:", e);
+          const { draftReviewReply } = await import("./_core/ai/reviewReply");
+          const aiText = await draftReviewReply(input, { userId: ctx.user.id, reviewId: id });
+          if (aiText) await updateGoogleReview(id, { aiResponse: aiText, status: "ai_responded" });
+        } catch (e: any) {
+          console.warn("[Reviews] rascunho IA falhou:", String(e?.code ?? e?.name ?? "erro"));
         }
       }
 
@@ -5216,23 +5152,18 @@ export const appRouter = router({
     generateResponse: protectedProcedure.input(z.object({
       id: z.number(),
     })).mutation(async ({ ctx, input }) => {
-      // Chama OpenAI por review — restringir a frontoffice+
+      // Chama a IA por review (custo) — restringir a frontoffice+
       requireAccess(ctx.user, "criticas", "edit");
       const review = await getGoogleReviewById(input.id);
       if (!review) throw new TRPCError({ code: "NOT_FOUND" });
-      const response = await invokeLLM({
-        messages: [
-          {
-            role: "system",
-            content: `És o gestor de atendimento ao cliente de um parque de estacionamento premium. Responde a avaliações do Google de forma natural, empática e profissional em português. Se a avaliação for positiva (4-5 estrelas), agradece calorosamente. Se for negativa (1-3 estrelas), pede desculpa, mostra empatia e oferece resolução. Personaliza com base no texto. Máximo 4 frases.`
-          },
-          {
-            role: "user",
-            content: `Avaliação de ${review.rating} estrelas de ${review.reviewerName}: "${review.reviewText || 'Sem texto'}". Gera uma resposta.`
-          }
-        ],
-      });
-      const aiText = typeof response.choices[0].message.content === "string" ? response.choices[0].message.content : "";
+      const { draftReviewReply } = await import("./_core/ai/reviewReply");
+      const { aiTrpcError } = await import("./_core/ai/trpcError");
+      let aiText: string;
+      try {
+        aiText = await draftReviewReply(review, { userId: ctx.user.id, reviewId: review.id });
+      } catch (err) {
+        throw aiTrpcError(err);
+      }
       await updateGoogleReview(input.id, { aiResponse: aiText, status: "ai_responded" });
       return { response: aiText };
     }),
@@ -6378,11 +6309,16 @@ export const appRouter = router({
       openItems: z.array(openItemSchema).max(OPEN_ITEMS_MAX).nullable().optional(),
     })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "passagem_turno", "edit");
-      const { llmConfigured, generateAiSummary } = await import("./shiftHandoverAutomation");
-      if (!llmConfigured()) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "A IA não está configurada (LLM_API_KEY)." });
+      const { generateAiSummary } = await import("./shiftHandoverAutomation");
+      const { aiTrpcError } = await import("./_core/ai/trpcError");
       const { buildHandoverDraft } = await import("./shiftHandoverDraft");
       const draft = await buildHandoverDraft({ date: input.date, shift: input.shift, city: input.city }).catch(() => null);
-      const text = await generateAiSummary(draft, { city: input.city, shift: { date: input.date, shift: input.shift }, notes: input.notes ?? null, openItems: (input.openItems ?? []) as any });
+      let text: string | null;
+      try {
+        text = await generateAiSummary(draft, { city: input.city, shift: { date: input.date, shift: input.shift }, notes: input.notes ?? null, openItems: (input.openItems ?? []) as any }, { throwOnError: true, userId: ctx.user.id });
+      } catch (err) {
+        throw aiTrpcError(err);
+      }
       if (!text) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível gerar o resumo agora — tenta outra vez." });
       const { saveHandoverAiSummary } = await import("./shiftHandoverAutomation");
       await saveHandoverAiSummary({ handoverDate: input.date, shift: input.shift, city: input.city }, text);
@@ -8119,8 +8055,8 @@ export const appRouter = router({
     inboxMeta: protectedProcedure.query(async ({ ctx }) => {
       requireAccess(ctx.user, "whatsapp", "view");
       const { slaMinutes } = await import("./whatsappInboxOps");
-      const { llmConfigured } = await import("./_core/llm");
-      return { slaMinutes: slaMinutes(), aiConfigured: llmConfigured() };
+      const { aiFeatureAvailableFresh } = await import("./_core/ai/status");
+      return { slaMinutes: slaMinutes(), aiConfigured: await aiFeatureAvailableFresh("whatsapp_reply") };
     }),
 
     // Badge do menu: conversas visíveis que precisam de atenção.
@@ -8262,12 +8198,10 @@ export const appRouter = router({
       .input(z.object({ conversationId: z.number().int().positive(), mode: z.enum(["summary", "reply"]) }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "whatsapp", "edit");
-        const { llmConfigured } = await import("./_core/llm");
-        if (!llmConfigured()) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "A IA não está configurada." });
         const { conversationVisible } = await import("./whatsappInbox");
         if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const { aiAssist } = await import("./whatsappInboxOps");
-        const r = await aiAssist(input.conversationId, input.mode);
+        const r = await aiAssist(input.conversationId, input.mode, { userId: ctx.user.id });
         if (!r.ok || !r.text) throw new TRPCError({ code: "BAD_REQUEST", message: r.error || "A IA falhou" });
         return { text: r.text };
       }),

@@ -8,7 +8,8 @@
  *  - cumprimento para o "Resumo do dia".
  * Nada disto pode fazer falhar a gravação: tudo em try/catch.
  */
-import { llmConfigured } from "./_core/llm";
+import { aiFeatureAvailable } from "./_core/ai/status";
+import { firstName, redactPii } from "./_core/ai/pii";
 import { isFeatureEnabled } from "./_core/featureFlags";
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
@@ -49,8 +50,10 @@ export function appOrigin(): string {
   return (process.env.APP_URL || process.env.PUBLIC_APP_URL || "https://dashboard.multipark.pt").replace(/\/+$/, "");
 }
 
-// Fonte única: server/_core/llm.ts (re-exportado para os chamadores existentes).
-export { llmConfigured };
+/** IA do resumo disponível? (configurada + AI_ENABLED + AI_HANDOVER_SUMMARY). */
+export function llmConfigured(): boolean {
+  return aiFeatureAvailable("handover_summary");
+}
 
 /** Email ligado? (`HANDOVER_EMAIL=off` desliga; sem SMTP salta em silêncio.) */
 export function handoverEmailEnabled(env: Record<string, string | undefined> = process.env): boolean {
@@ -67,13 +70,6 @@ export function handoverEmailCc(raw: string | undefined, to: string[]): string[]
     if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v) && !seen.has(v)) { seen.add(v); out.push(v); }
   }
   return out;
-}
-
-async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  let t: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([p, new Promise<T>((_, rej) => { t = setTimeout(() => rej(new Error("timeout")), ms); })]);
-  } finally { if (t) clearTimeout(t); }
 }
 
 // ─── Team leaders de um turno (escala Extras-Dia) ───────────────────────────
@@ -103,7 +99,8 @@ export function aiPrompt(d: HandoverDraft | null, input: { city: HandoverCity; s
   const lines = [
     `Cidade: ${HANDOVER_CITY_LABELS[input.city]}. Turno que termina: ${input.shift.date} ${SHIFT_LABELS[input.shift.shift]}.`,
     ...(d ? draftKeyLines(d.counts) : []),
-    d?.people.next.length ? `Equipa do turno seguinte: ${d.people.next.map((p) => `${p.name}${p.isTeamLeader ? " (TL)" : ""}`).join(", ")}` : "",
+    // Só o primeiro nome (política de dados pessoais da IA).
+    d?.people.next.length ? `Equipa do turno seguinte: ${d.people.next.map((p) => `${firstName(p.name, "?")}${p.isTeamLeader ? " (TL)" : ""}`).join(", ")}` : "",
     d?.byHour.length ? `Picos (recolhas/entregas por hora): ${d.byHour.filter((h) => h.checkins + h.checkouts > 0).map((h) => `${h.label} ${h.checkins}/${h.checkouts}`).join("; ")}` : "",
     input.notes?.trim() ? `Notas do team leader: ${input.notes.trim().slice(0, 1500)}` : "",
     input.openItems.filter((i) => !i.resolved).length ? `Pendentes: ${input.openItems.filter((i) => !i.resolved).map((i) => i.text).slice(0, 25).join(" | ")}` : "",
@@ -111,23 +108,35 @@ export function aiPrompt(d: HandoverDraft | null, input: { city: HandoverCity; s
   return lines.filter(Boolean).join("\n");
 }
 
-/** 5 pontos em PT-PT para o turno seguinte; null se a IA não estiver configurada ou falhar. */
-export async function generateAiSummary(d: HandoverDraft | null, input: { city: HandoverCity; shift: ShiftRef; notes: string | null; openItems: OpenItem[] }): Promise<string | null> {
-  if (!llmConfigured()) return null;
+/**
+ * 5 pontos em PT-PT para o turno seguinte; null se a IA não estiver
+ * disponível ou falhar (depois de gravar é best-effort). Com `throwOnError`
+ * (pedido no ecrã) lança o AiError para a UI mostrar a mensagem genérica.
+ * Telefones/matrículas/emails das notas vão como marcadores e são repostos.
+ */
+export async function generateAiSummary(
+  d: HandoverDraft | null,
+  input: { city: HandoverCity; shift: ShiftRef; notes: string | null; openItems: OpenItem[] },
+  opts: { throwOnError?: boolean; userId?: number | null } = {},
+): Promise<string | null> {
+  if (!opts.throwOnError && !llmConfigured()) return null;
   try {
-    const { invokeLLM } = await import("./_core/llm");
-    const r = await withTimeout(invokeLLM({
-      messages: [
-        { role: "system", content: "És o assistente de operações da Multipark (parque de estacionamento com recolha e entrega de carros no aeroporto). Escreve em português de Portugal (PT-PT), nunca em português do Brasil. Responde APENAS com 5 pontos curtos (uma linha cada, a começar por \"- \") para o team leader do turno seguinte: prioridades, picos de trabalho, pendentes e riscos. Não inventes dados." },
-        { role: "user", content: aiPrompt(d, input) },
-      ],
-      maxTokens: 600,
-    }), 20_000);
-    const content = r.choices?.[0]?.message?.content;
-    const text = typeof content === "string" ? content : Array.isArray(content) ? content.map((c: any) => c?.text ?? "").join("") : "";
-    return normalizeAiBullets(text);
+    const { runAi } = await import("./_core/ai/run");
+    const { HANDOVER_SYSTEM } = await import("./_core/ai/prompts/handover");
+    const red = redactPii(aiPrompt(d, input));
+    const r = await runAi({
+      feature: "handover_summary",
+      system: HANDOVER_SYSTEM,
+      input: red.text,
+      maxTokens: 800,
+      timeoutMs: 20_000,
+      userId: opts.userId ?? null,
+      entity: "shift_handover",
+    });
+    return normalizeAiBullets(red.restore(r.output));
   } catch (err: any) {
-    console.warn("[handover] IA falhou:", String(err?.message ?? err).slice(0, 200));
+    if (opts.throwOnError) throw err;
+    console.warn("[handover] IA falhou:", String(err?.code ?? err?.name ?? "erro"));
     return null;
   }
 }

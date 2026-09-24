@@ -1,8 +1,15 @@
-import { ENV } from "./env";
+/**
+ * Transporte ANTIGO (Anthropic / OpenAI-compatível por fetch). Já não é
+ * chamado diretamente pelas funcionalidades: é o adaptador "legacy" de
+ * server/_core/ai (runAi), escolhido por AI_PROVIDER=legacy ou quando não há
+ * Gemini configurado. Ver docs/ia.md.
+ */
 import { fetchWithTimeout } from "./fetchWithTimeout";
 
-/** Prazo de uma chamada ao LLM (abaixo dos 60 s do Vercel). */
+/** Prazo por omissão de uma chamada (abaixo dos 60 s do Vercel). */
 const LLM_TIMEOUT_MS = 45_000;
+/** Máximo de tokens de saída quando o chamador não diz (antes: 32768 fixos). */
+const DEFAULT_MAX_TOKENS = 4096;
 
 export type Role = "system" | "user" | "assistant" | "tool" | "function";
 
@@ -61,6 +68,10 @@ export type ToolChoice =
 
 export type InvokeParams = {
   messages: Message[];
+  /** Modelo pedido (senão LLM_MODEL / omissão do fornecedor). */
+  model?: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
   tools?: Tool[];
   toolChoice?: ToolChoice;
   tool_choice?: ToolChoice;
@@ -226,11 +237,6 @@ const resolveApiUrl = () => {
   return `${base}/v1/chat/completions`;
 };
 
-/** IA configurada? (chave presente) — fonte única para toda a app. */
-export function llmConfigured(): boolean {
-  return !!(process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || "").trim();
-}
-
 const resolveApiKey = () => {
   const key = (process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || "").trim();
   if (!key) throw new Error("LLM_API_KEY or OPENAI_API_KEY is not configured");
@@ -281,11 +287,19 @@ export function llmErrorMessage(status: number, bodyText: string): string {
   return `Falha no serviço de IA (HTTP ${status}: ${hint}${type ? `, ${type}` : ""}).`;
 }
 
+/** Erro HTTP do fornecedor antigo: mensagem curta + estado (para retries). */
+export class LlmHttpError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+    this.name = "LlmHttpError";
+  }
+}
+
 async function failLLM(response: Response): Promise<never> {
-  const body = await response.text().catch(() => "");
-  const scrubbed = body.replace(/(sk-|sk_|key-)[A-Za-z0-9_-]{8,}/g, "***").slice(0, 500);
-  console.warn(`[LLM] HTTP ${response.status}: ${scrubbed}`);
-  throw new Error(llmErrorMessage(response.status, body));
+  // O corpo pode trazer o pedido (PII) — nunca vai para o log nem para a UI.
+  await response.text().catch(() => "");
+  console.warn(`[LLM] HTTP ${response.status}`);
+  throw new LlmHttpError(response.status, llmErrorMessage(response.status, ""));
 }
 
 const normalizeResponseFormat = ({
@@ -341,7 +355,7 @@ function isAnthropic(): boolean {
 async function invokeClaude(params: InvokeParams): Promise<InvokeResult> {
   const apiKey = resolveApiKey();
   // Usa o LLM_MODEL (limpo) se definido; senão o modelo por omissão (aviso no hub).
-  const model = resolveModel(DEFAULT_ANTHROPIC_MODEL);
+  const model = params.model || resolveModel(DEFAULT_ANTHROPIC_MODEL);
 
   // Separate system message from user/assistant messages
   const normalized = params.messages.map(normalizeMessage);
@@ -383,7 +397,7 @@ async function invokeClaude(params: InvokeParams): Promise<InvokeResult> {
     }
   }
 
-  const maxTokens = params.maxTokens ?? params.max_tokens ?? 4096;
+  const maxTokens = params.maxTokens ?? params.max_tokens ?? DEFAULT_MAX_TOKENS;
   const payload: Record<string, unknown> = {
     model,
     max_tokens: Math.max(1, Math.floor(maxTokens)),
@@ -410,7 +424,8 @@ async function invokeClaude(params: InvokeParams): Promise<InvokeResult> {
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify(payload),
-    timeoutMs: LLM_TIMEOUT_MS,
+    timeoutMs: params.timeoutMs ?? LLM_TIMEOUT_MS,
+    signal: params.signal,
   });
 
   if (!response.ok) await failLLM(response);
@@ -452,7 +467,7 @@ async function invokeOpenAI(params: InvokeParams): Promise<InvokeResult> {
     response_format,
   } = params;
 
-  const model = resolveModel(DEFAULT_OPENAI_MODEL);
+  const model = params.model || resolveModel(DEFAULT_OPENAI_MODEL);
 
   const payload: Record<string, unknown> = {
     model,
@@ -471,7 +486,7 @@ async function invokeOpenAI(params: InvokeParams): Promise<InvokeResult> {
     payload.tool_choice = normalizedToolChoice;
   }
 
-  payload.max_tokens = params.maxTokens ?? params.max_tokens ?? 32768;
+  payload.max_tokens = params.maxTokens ?? params.max_tokens ?? DEFAULT_MAX_TOKENS;
 
   const normalizedResponseFormat = normalizeResponseFormat({
     responseFormat,
@@ -491,7 +506,8 @@ async function invokeOpenAI(params: InvokeParams): Promise<InvokeResult> {
       authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify(payload),
-    timeoutMs: LLM_TIMEOUT_MS,
+    timeoutMs: params.timeoutMs ?? LLM_TIMEOUT_MS,
+    signal: params.signal,
   });
 
   if (!response.ok) await failLLM(response);
@@ -499,13 +515,8 @@ async function invokeOpenAI(params: InvokeParams): Promise<InvokeResult> {
   return (await response.json()) as InvokeResult;
 }
 
-/** Teste barato (Integrações → Testar): 1 token de resposta. */
-export async function testLLM(): Promise<{ model: string }> {
-  const r = await invokeLLM({ messages: [{ role: "user", content: "Responde só: ok" }], maxTokens: 1 });
-  return { model: r.model || llmModelStatus().model };
-}
-
-export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
+/** Só para o adaptador "legacy" de server/_core/ai/client.ts. */
+export async function invokeLegacyLLM(params: InvokeParams): Promise<InvokeResult> {
   if (isAnthropic()) {
     return invokeClaude(params);
   }

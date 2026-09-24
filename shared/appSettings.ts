@@ -11,6 +11,7 @@
  *    silenciar no seu Perfil.
  */
 import { z } from "zod";
+import { AI_FEATURE_IDS, AI_TIERS } from "./aiFeatures";
 
 // ─── Taxas com data de efeito (IVA / TSU) ───────────────────────────────────
 
@@ -55,7 +56,25 @@ export const emailListSchema = z
   .max(20, "No máximo 20 emails.")
   .transform((list) => Array.from(new Set(list)));
 
-export type SettingGroup = "financeiro" | "sla" | "emails" | "disponibilidade";
+/** Preço (EUR por 1M tokens) de um modelo de IA — sobreposição da tabela do código. */
+export const aiModelPriceSchema = z.object({
+  input: z.number({ error: "Preço de entrada inválido." }).min(0).max(1000),
+  output: z.number({ error: "Preço de saída inválido." }).min(0).max(1000),
+  cached: z.number().min(0).max(1000).optional(),
+  audioInput: z.number().min(0).max(1000).optional(),
+});
+export const aiPriceOverridesSchema = z
+  .record(z.string().trim().min(1).max(80).regex(/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/, "Nome de modelo inválido."), aiModelPriceSchema)
+  .refine((r) => Object.keys(r).length <= 40, "No máximo 40 modelos.");
+export type AiPriceOverrides = z.infer<typeof aiPriceOverridesSchema>;
+
+/** Nível de modelo por funcionalidade de IA (só ids e níveis conhecidos). */
+export const aiFeatureTiersSchema = z.record(
+  z.string().refine((k) => (AI_FEATURE_IDS as readonly string[]).includes(k), "Funcionalidade de IA desconhecida."),
+  z.enum(AI_TIERS as unknown as ["lite", "fast", "smart"], { error: "Nível inválido (lite, fast ou smart)." }),
+);
+
+export type SettingGroup = "financeiro" | "sla" | "emails" | "disponibilidade" | "ia";
 
 export interface SettingDef<S extends z.ZodTypeAny = z.ZodTypeAny> {
   key: string;
@@ -136,6 +155,33 @@ export const SETTINGS = {
     defaultValue: "",
     wiring: "live",
   }),
+  "ai.monthlyBudgetEur": def({
+    key: "ai.monthlyBudgetEur",
+    group: "ia",
+    label: "Orçamento mensal da IA (€)",
+    description: "Teto de gasto estimado da IA por mês civil (UTC). Ao chegar a 100%, as funcionalidades não essenciais respondem \"IA temporariamente indisponível\" e os admins recebem um aviso (uma vez por mês); as essenciais (leitura de faturas) param aos 150%. 0 = sem limite. Vazio = usa AI_MONTHLY_BUDGET_EUR (ou 30 €).",
+    schema: z.number({ error: "Indica um valor em euros." }).min(0, "Não pode ser negativo.").max(100_000, "Máximo 100 000 €."),
+    defaultValue: 30,
+    wiring: "live",
+  }),
+  "ai.featureTiers": def({
+    key: "ai.featureTiers",
+    group: "ia",
+    label: "Nível de modelo por funcionalidade de IA",
+    description: "Sobrepõe o nível (lite = o mais barato, fast, smart) de cada funcionalidade. JSON: {\"expense_ocr\": \"fast\"}. Funcionalidades: " + AI_FEATURE_IDS.join(", ") + ". Vazio = omissão do código (quase tudo lite).",
+    schema: aiFeatureTiersSchema,
+    defaultValue: {},
+    wiring: "live",
+  }),
+  "ai.priceOverridesEur": def({
+    key: "ai.priceOverridesEur",
+    group: "ia",
+    label: "Preços dos modelos de IA (€ por 1M tokens)",
+    description: "Sobrepõe a tabela de preços do código (server/_core/ai/pricing.ts) para calcular o custo registado. JSON: {\"<modelo>\": {\"input\": 0.22, \"output\": 1.3, \"cached\": 0.02}}. Vazio = tabela do código.",
+    schema: aiPriceOverridesSchema,
+    defaultValue: {},
+    wiring: "live",
+  }),
 } as const;
 
 export type SettingKey = keyof typeof SETTINGS;
@@ -167,6 +213,10 @@ export interface AutomationFlag {
   name: string;
   label: string;
   description: string;
+  /** Valor sem env nem sobreposição (omissão: ligado). */
+  defaultEnabled?: boolean;
+  /** Secção na página (omissão: automações gerais). */
+  group?: "ia";
 }
 
 export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
@@ -180,7 +230,21 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "HANDOVER_REMINDERS", label: "Lembretes da passagem de turno", description: "Lembra quem ainda não entregou/confirmou a passagem." },
   { name: "TRAINING_REMINDERS", label: "Lembretes da formação", description: "Avisa quem tem formação por concluir." },
   { name: "TRAINING_BLOCKS_ESCALA", label: "Formação bloqueia a escala", description: "Quem tem formação obrigatória em atraso não entra na escala." },
+  // ── IA (server/_core/ai) — AI_ENABLED desliga tudo de uma vez ──
+  { name: "AI_ENABLED", label: "IA (interruptor geral)", description: "Desligado = nenhuma funcionalidade de IA faz pedidos ao fornecedor.", group: "ia" },
+  { name: "AI_EXPENSE_OCR", label: "IA: leitura de faturas", description: "Extrai fornecedor, valor, datas e NIF das faturas carregadas nas Despesas.", group: "ia" },
+  { name: "AI_REVIEW_DRAFTS", label: "IA: rascunhos de resposta às críticas", description: "Prepara a resposta às críticas Google (nunca publica sozinha).", group: "ia" },
+  { name: "AI_RADIO", label: "IA: transcrição e resumo do rádio", description: "Transcreve as mensagens de rádio e resume-as em 1–2 frases.", group: "ia" },
+  { name: "AI_HANDOVER_SUMMARY", label: "IA: resumo da passagem de turno", description: "5 pontos para o team leader do turno seguinte.", group: "ia" },
+  { name: "AI_WHATSAPP_ASSIST", label: "IA: assistente do WhatsApp", description: "Resumo da conversa e sugestão de resposta (vai para a caixa de texto, nunca é enviada sozinha).", group: "ia" },
+  { name: "AI_QUIZ", label: "IA: perguntas da formação", description: "Gera rascunhos de perguntas a partir dos manuais.", group: "ia" },
+  { name: "AI_HR_AUTOFILL", label: "IA: preenchimento a partir de documentos do RH", description: "Lê CC, título de residência, carta, IBAN e morada para preencher campos vazios da ficha. Desligado por omissão até decisão RGPD.", defaultEnabled: false, group: "ia" },
 ];
+
+/** Omissão de um interruptor do catálogo (desconhecido → ligado). PURA. */
+export function automationFlagDefault(name: string): boolean {
+  return AUTOMATION_FLAGS.find((f) => f.name === name)?.defaultEnabled ?? true;
+}
 
 export const FLAG_SETTING_PREFIX = "flag.";
 const FLAG_NAMES = new Set(AUTOMATION_FLAGS.map((f) => f.name));

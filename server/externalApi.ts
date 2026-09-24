@@ -8,8 +8,6 @@ import { drizzle } from "drizzle-orm/mysql2";
 import { vehicles } from "../drizzle/schema";
 import { apiKeyMiddleware, logApiKeyAction } from "./apiKeyAuth";
 import { notifyOwner } from "./_core/notification";
-import { transcribeAudio } from "./_core/voiceTranscription";
-import { invokeLLM } from "./_core/llm";
 import {
   getVehicles,
   getAllEmployees,
@@ -164,30 +162,22 @@ export function createExternalApiRouter(): Router {
         return;
       }
 
-      // Transcribe
-      const result = await transcribeAudio({ audioUrl, language: "pt" });
-      if ("error" in result) {
-        res.status(500).json({ error: `Transcription failed: ${result.error}` });
+      // Transcrição (IA) + resumo best-effort
+      let result: { transcription: string; summary: string };
+      try {
+        const { transcribeAndSummarizeRadio } = await import("./radioAi");
+        result = await transcribeAndSummarizeRadio(String(audioUrl));
+      } catch (err) {
+        const { aiUserMessage, isAiError } = await import("./_core/ai/errors");
+        const code = isAiError(err) && ["disabled", "not_configured", "budget"].includes(err.code) ? 503 : 502;
+        res.status(code).json({ error: aiUserMessage(err) });
         return;
       }
-
-      // Generate summary with LLM
-      let summaryText = "";
-      try {
-        const summary = await invokeLLM({
-          messages: [
-            { role: "system", content: "Resume a seguinte transcrição de rádio em 1-2 frases curtas em português. Foca nos pontos operacionais relevantes." },
-            { role: "user", content: result.text },
-          ],
-        });
-        summaryText = typeof summary.choices[0].message.content === "string" ? summary.choices[0].message.content : "";
-      } catch {
-        summaryText = "";
-      }
+      const summaryText = result.summary;
 
       const id = await createRadioTranscription({
         audioUrl,
-        transcription: result.text,
+        transcription: result.transcription,
         summary: summaryText,
         employeeId: employeeId ? Number(employeeId) : null,
         vehicleId: vehicleId ? Number(vehicleId) : null,
@@ -198,7 +188,7 @@ export function createExternalApiRouter(): Router {
 
       await logApiKeyAction(req, { action: "create", entity: "radio_transcription", entityId: id, details: "Transcrição automática" });
 
-      res.json({ success: true, id, transcription: result.text, summary: summaryText });
+      res.json({ success: true, id, transcription: result.transcription, summary: summaryText });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -248,6 +238,7 @@ export function createExternalApiRouter(): Router {
   // ─── GMAIL IMPORT (receives pre-parsed data from external scheduled task) ─
   r.post("/gmail-import", async (req: Request, res: Response) => {
     try {
+      const importStarted = Date.now();
       const { occurrences, reviews } = req.body;
       const result = { reviewsImported: 0, reviewsSkipped: 0, incidentsImported: 0, incidentsSkipped: 0, details: [] as string[], errors: [] as string[] };
 
@@ -304,17 +295,13 @@ export function createExternalApiRouter(): Router {
             // Generate AI response if we have LLM access
             if (id && rev.aiResponse) {
               await updateGoogleReview(id, { aiResponse: rev.aiResponse, status: "ai_responded" });
-            } else if (id) {
+            } else if (id && Date.now() - importStarted < 30_000) {
+              // Rascunho IA best-effort, dentro de um orçamento de tempo (60 s do Vercel).
               try {
-                const llmResp = await invokeLLM({
-                  messages: [
-                    { role: "system", content: "\u00c9s o gestor de atendimento ao cliente de um parque de estacionamento premium. Responde a avalia\u00e7\u00f5es do Google de forma natural, calorosa e profissional em portugu\u00eas. M\u00e1ximo 3 frases." },
-                    { role: "user", content: `Avalia\u00e7\u00e3o de ${rev.rating} estrelas de ${rev.reviewerName}: "${rev.reviewText}". Gera uma resposta.` },
-                  ],
-                });
-                const aiText = typeof llmResp.choices[0].message.content === "string" ? llmResp.choices[0].message.content : "";
+                const { draftReviewReply } = await import("./_core/ai/reviewReply");
+                const aiText = await draftReviewReply({ rating: rev.rating || 5, reviewerName: rev.reviewerName, reviewText: rev.reviewText || "" }, { reviewId: id, timeoutMs: 12_000 });
                 if (aiText) await updateGoogleReview(id, { aiResponse: aiText, status: "ai_responded" });
-              } catch { /* LLM optional */ }
+              } catch { /* IA opcional */ }
             }
             result.reviewsImported++;
             result.details.push(`Cr\u00edtica: ${rev.rating}\u2605 de ${rev.reviewerName}`);

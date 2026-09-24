@@ -20,7 +20,7 @@ import { toast } from "sonner";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import {
   Activity, AlertTriangle, CheckCircle2, Clock, KeyRound, Loader2, LogOut, Plug, Plus, RotateCcw,
-  Save, ShieldCheck, SlidersHorizontal, ToggleLeft, Trash2, XCircle,
+  Save, ShieldCheck, SlidersHorizontal, Sparkles, ToggleLeft, Trash2, XCircle,
 } from "lucide-react";
 import { validateSetting, type RateEntry } from "@shared/appSettings";
 import { SyncHealthPanel } from "@/components/operacoes/SyncHealthPanel";
@@ -62,7 +62,7 @@ export default function DefinicoesPage() {
             <TabsTrigger value="seguranca"><ShieldCheck className="h-4 w-4 mr-1" />Segurança</TabsTrigger>
           </TabsList>
         </div>
-        <TabsContent value="estado" className="space-y-4"><SystemStatusCard /><SyncHealthPanel compact /></TabsContent>
+        <TabsContent value="estado" className="space-y-4"><SystemStatusCard /><AiUsageCard /><SyncHealthPanel compact /></TabsContent>
         <TabsContent value="automacoes"><AutomationsCard /></TabsContent>
         <TabsContent value="integracoes"><IntegrationsCard /></TabsContent>
         <TabsContent value="parametros"><ParametersCard /></TabsContent>
@@ -182,6 +182,94 @@ function SystemStatusCard() {
   );
 }
 
+// ─── IA: custo do mês ───────────────────────────────────────────────────────
+
+function eur(v: number): string {
+  return `${v.toLocaleString("pt-PT", { minimumFractionDigits: 2, maximumFractionDigits: v < 1 ? 4 : 2 })} €`;
+}
+
+function AiUsageCard() {
+  const q = trpc.settings.aiUsage.useQuery(undefined, { refetchInterval: 5 * 60_000 });
+  const d = q.data;
+  const pct = d?.pct ?? null;
+  const barCls = pct == null ? "bg-primary" : pct >= 100 ? "bg-red-600" : pct >= 80 ? "bg-amber-500" : "bg-emerald-600";
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+          <Sparkles className="h-4 w-4" /> IA — custo do mês
+          {q.isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+          {d && (d.provider == null
+            ? <Badge variant="outline" className="bg-muted text-muted-foreground">Não configurada</Badge>
+            : d.blocked
+              ? <Badge variant="outline" className="bg-red-100 text-red-800 border-red-200">Orçamento atingido</Badge>
+              : <Badge variant="outline" className="bg-emerald-100 text-emerald-800 border-emerald-200">{d.mode === "vertex" ? "Gemini (Vertex AI)" : d.mode === "studio" ? "Gemini" : "Fornecedor antigo"}</Badge>)}
+        </CardTitle>
+        <p className="text-xs text-muted-foreground">
+          Estimativa pelo registo de cada chamada (tokens × preço do modelo), mês civil {d?.month ?? ""} (UTC). Orçamento e preços em Parâmetros; interruptores em Automações.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {q.error && <p className="text-sm text-destructive">{q.error.message}</p>}
+        {d && (
+          <>
+            <div className="space-y-1">
+              <div className="flex items-baseline gap-2 flex-wrap text-sm">
+                <span className="font-semibold text-lg">{eur(d.spentEur)}</span>
+                <span className="text-muted-foreground">{d.budgetEur > 0 ? `de ${eur(d.budgetEur)} (${String(pct ?? 0).replace(".", ",")}%)` : "sem limite mensal"}</span>
+              </div>
+              {d.budgetEur > 0 && (
+                <div className="h-2 w-full rounded bg-muted overflow-hidden" aria-hidden>
+                  <div className={`h-full ${barCls}`} style={{ width: `${Math.min(100, pct ?? 0)}%` }} />
+                </div>
+              )}
+            </div>
+            {d.models && (
+              <div className="text-[11px] text-muted-foreground font-mono break-all">
+                lite: {d.models.lite} · fast: {d.models.fast} · smart: {d.models.smart} · áudio: {d.models.stt}
+              </div>
+            )}
+            {d.warnings.map((w, i) => (
+              <p key={i} className="text-xs text-amber-800 dark:text-amber-300"><AlertTriangle className="inline h-3 w-3 mr-1" />{w}</p>
+            ))}
+            {d.features.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Sem chamadas à IA este mês.</p>
+            ) : (
+              <div className="overflow-x-auto -mx-1">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-left text-muted-foreground border-b">
+                      <th className="py-1 px-1 font-medium">Funcionalidade</th>
+                      <th className="py-1 px-1 font-medium text-right">Chamadas</th>
+                      <th className="py-1 px-1 font-medium text-right hidden sm:table-cell">Tokens (entrada/saída)</th>
+                      <th className="py-1 px-1 font-medium text-right">Custo</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {d.features.map((f) => (
+                      <tr key={f.feature} className="border-b last:border-0">
+                        <td className="py-1 px-1">
+                          {f.label}
+                          {(f.errors > 0 || f.blocked > 0) && (
+                            <span className="text-muted-foreground"> · {f.errors ? `${f.errors} erro(s)` : ""}{f.errors && f.blocked ? ", " : ""}{f.blocked ? `${f.blocked} bloqueada(s)` : ""}</span>
+                          )}
+                        </td>
+                        <td className="py-1 px-1 text-right tabular-nums">{f.calls.toLocaleString("pt-PT")}</td>
+                        <td className="py-1 px-1 text-right tabular-nums hidden sm:table-cell">{f.inputTokens.toLocaleString("pt-PT")} / {f.outputTokens.toLocaleString("pt-PT")}</td>
+                        <td className="py-1 px-1 text-right tabular-nums">{eur(f.costEur)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Automações ─────────────────────────────────────────────────────────────
 
 function AutomationsCard() {
@@ -201,13 +289,17 @@ function AutomationsCard() {
       </CardHeader>
       <CardContent className="divide-y">
         {q.isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
-        {q.data?.map((f) => (
-          <div key={f.name} className="py-3 flex items-start gap-3">
+        {q.data?.map((f, i) => (
+          <div key={f.name}>
+          {f.group === "ia" && q.data?.[i - 1]?.group !== "ia" && (
+            <div className="pt-4 pb-1 text-sm font-semibold flex items-center gap-1"><Sparkles className="h-4 w-4" />Inteligência artificial</div>
+          )}
+          <div className="py-3 flex items-start gap-3">
             <div className="flex-1 min-w-0">
               <div className="text-sm font-semibold">{f.label}</div>
               <div className="text-xs text-muted-foreground">{f.description}</div>
               <div className="text-[11px] text-muted-foreground mt-1 font-mono break-all">
-                {f.name} · env: {f.envValue == null ? "—" : f.envValue ? "ligado" : "desligado"}
+                {f.name} · env: {f.envValue == null ? "—" : f.envValue ? "ligado" : "desligado"}{!f.defaultEnabled && " · desligado por omissão"}
                 {f.override != null && <> · <span className="text-primary font-semibold">definido aqui</span>{f.updatedByName ? ` por ${f.updatedByName}` : ""}{f.updatedAt ? ` em ${fmtPTDateTime(f.updatedAt)}` : ""}</>}
               </div>
             </div>
@@ -225,6 +317,7 @@ function AutomationsCard() {
                 </Button>
               )}
             </div>
+          </div>
           </div>
         ))}
       </CardContent>
@@ -267,7 +360,7 @@ function IntegrationsCard() {
 
 // ─── Parâmetros ─────────────────────────────────────────────────────────────
 
-const GROUP_LABEL: Record<string, string> = { financeiro: "Financeiro", sla: "Prazos (SLA)", emails: "Destinatários de email", disponibilidade: "Disponibilidades" };
+const GROUP_LABEL: Record<string, string> = { financeiro: "Financeiro", sla: "Prazos (SLA)", emails: "Destinatários de email", disponibilidade: "Disponibilidades", ia: "Inteligência artificial" };
 
 type SettingItem = {
   key: string; group: string; label: string; description: string; wiring: "live" | "store";
@@ -331,6 +424,7 @@ function SettingEditor({ item, saving, onSave, codeValue }: { item: SettingItem;
   const isRate = item.key === "finance.vat" || item.key === "finance.tsu";
   const isEmails = item.key === "emails.handoverCc";
   const isNumber = typeof item.defaultValue === "number";
+  const isJson = !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue) && !isRate && !isEmails;
 
   const [rates, setRates] = useState<{ pct: string; from: string }[]>([]);
   const [text, setText] = useState("");
@@ -339,6 +433,7 @@ function SettingEditor({ item, saving, onSave, codeValue }: { item: SettingItem;
     setError(null);
     if (isRate) setRates(((current as RateEntry[]) ?? []).map((r) => ({ pct: pct(r.rate), from: r.from })));
     else if (isEmails) setText(((current as string[]) ?? []).join("\n"));
+    else if (isJson) setText(current && Object.keys(current as object).length ? JSON.stringify(current, null, 2) : "");
     else setText(current == null ? "" : String(current));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(current)]);
@@ -346,6 +441,10 @@ function SettingEditor({ item, saving, onSave, codeValue }: { item: SettingItem;
   const build = (): unknown => {
     if (isRate) return rates.map((r) => ({ rate: Number(r.pct.replace(",", ".")) / 100, from: r.from.trim() }));
     if (isEmails) return text.split(/[\s,;]+/).map((e) => e.trim()).filter(Boolean);
+    if (isJson) {
+      if (!text.trim()) return {};
+      try { return JSON.parse(text); } catch { return "__json_invalido__"; }
+    }
     if (isNumber) return text.trim() === "" ? NaN : Number(text.replace(",", "."));
     return text.trim();
   };
@@ -403,6 +502,8 @@ function SettingEditor({ item, saving, onSave, codeValue }: { item: SettingItem;
         </div>
       ) : isEmails ? (
         <Textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder="um email por linha" />
+      ) : isJson ? (
+        <Textarea rows={4} className="font-mono text-xs" value={text} onChange={(e) => setText(e.target.value)} placeholder="{}" />
       ) : (
         <Input className="max-w-sm" inputMode={isNumber ? "numeric" : "email"} value={text} onChange={(e) => setText(e.target.value)}
           placeholder={isNumber ? String(item.defaultValue) : "nome@multipark.pt"} />

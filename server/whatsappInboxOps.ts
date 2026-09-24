@@ -364,48 +364,38 @@ export function buildAiTranscript(
   return out.join("\n");
 }
 
-async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  let t: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([p, new Promise<T>((_, rej) => { t = setTimeout(() => rej(new Error("timeout")), ms); })]);
-  } finally { if (t) clearTimeout(t); }
-}
-
-const AI_SYSTEM =
-  "És o assistente do apoio ao cliente da Multipark (parque de estacionamento com recolha e entrega de carros no aeroporto; também recruta condutores extra). " +
-  "Escreve SEMPRE em português de Portugal (PT-PT), nunca em português do Brasil. Não inventes dados (preços, horários, reservas) que não estejam na conversa.";
-
-export async function aiAssist(conversationId: number, mode: AiMode): Promise<{ ok: boolean; text?: string; error?: string }> {
-  const { llmConfigured, invokeLLM } = await import("./_core/llm");
-  if (!llmConfigured()) return { ok: false, error: "A IA não está configurada." };
+/**
+ * Resumo da conversa ou sugestão de resposta. Só o primeiro nome do contacto
+ * e o texto sem dados pessoais (telefones, emails, matrículas… → marcadores)
+ * vão para o fornecedor; a resposta repõe os valores (é privada, vai para a
+ * caixa de texto e nunca é enviada sozinha).
+ */
+export async function aiAssist(conversationId: number, mode: AiMode, ctx: { userId?: number | null } = {}): Promise<{ ok: boolean; text?: string; error?: string }> {
+  const { runAi } = await import("./_core/ai/run");
+  const { aiUserMessage } = await import("./_core/ai/errors");
+  const { firstName, redactPii } = await import("./_core/ai/pii");
+  const { WHATSAPP_SYSTEM, whatsappInstruction } = await import("./_core/ai/prompts/whatsapp");
   const { getConversationThread } = await import("./whatsappInbox");
   const thread = await getConversationThread(conversationId, 40);
   if (!thread) return { ok: false, error: "Conversa não encontrada." };
   if (!thread.messages.length) return { ok: false, error: "Conversa sem mensagens." };
-  const name = thread.recipientFirstName ?? "Contacto";
-  const transcript = buildAiTranscript(thread.messages, name);
-  const instruction =
-    mode === "summary"
-      ? "Resume esta conversa de WhatsApp em 3 a 5 pontos curtos (uma linha cada, a começar por \"- \"): o que o contacto quer, o que já foi respondido e o que falta fazer."
-      : `Sugere UMA resposta curta, cordial e profissional à última mensagem de ${name}, pronta a enviar por WhatsApp. Responde só com o texto da mensagem, sem aspas nem explicações. Se faltar informação, pede-a de forma simples.`;
+  const name = firstName(thread.recipientFirstName, "Contacto");
+  const red = redactPii(buildAiTranscript(thread.messages, name));
   try {
-    const r = await withTimeout(
-      invokeLLM({
-        messages: [
-          { role: "system", content: AI_SYSTEM },
-          { role: "user", content: `${instruction}\n\nConversa:\n${transcript}` },
-        ],
-        maxTokens: mode === "summary" ? 500 : 350,
-      }),
-      25_000,
-    );
-    const content = r.choices?.[0]?.message?.content;
-    const text = (typeof content === "string" ? content : Array.isArray(content) ? content.map((c: any) => c?.text ?? "").join("") : "").trim();
-    if (!text) return { ok: false, error: "A IA não devolveu texto." };
+    const r = await runAi({
+      feature: mode === "summary" ? "whatsapp_summary" : "whatsapp_reply",
+      system: WHATSAPP_SYSTEM,
+      input: `${whatsappInstruction(mode, name)}\n\nConversa:\n${red.text}`,
+      maxTokens: mode === "summary" ? 600 : 450,
+      timeoutMs: 25_000,
+      userId: ctx.userId ?? null,
+      entity: "whatsapp_conversation",
+      entityId: conversationId,
+    });
+    const text = red.restore(r.output).trim();
     return { ok: true, text: mode === "reply" ? text.replace(/^["“]|["”]$/g, "").trim().slice(0, 4000) : text.slice(0, 3000) };
   } catch (err: any) {
-    console.warn("[WhatsApp IA] falhou:", String(err?.message ?? err).slice(0, 200));
-    return { ok: false, error: "A IA não respondeu. Tenta outra vez." };
+    return { ok: false, error: aiUserMessage(err) };
   }
 }
 

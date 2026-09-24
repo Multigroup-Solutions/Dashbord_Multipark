@@ -2438,3 +2438,56 @@ export const userPermissions = mysqlTable("user_permissions", {
 ]);
 
 export type UserPermission = typeof userPermissions.$inferSelect;
+
+// ─── IA (0111) ────────────────────────────────────────────────────────────────
+// Uma linha por chamada à IA — só metadados (nunca o prompt nem a resposta).
+export const aiUsageLog = mysqlTable("ai_usage_log", {
+	id: bigint({ mode: "number" }).autoincrement().primaryKey(),
+	createdAt: datetime({ mode: 'string', fsp: 3 }).notNull(),
+	feature: varchar({ length: 40 }).notNull(),
+	tier: varchar({ length: 8 }).notNull(),
+	provider: varchar({ length: 16 }).notNull(),
+	model: varchar({ length: 80 }).notNull(),
+	userId: int(),
+	entity: varchar({ length: 40 }),
+	entityId: int(),
+	inputTokens: int().default(0).notNull(),
+	outputTokens: int().default(0).notNull(),
+	cachedTokens: int().default(0).notNull(),
+	costEur: decimal({ precision: 12, scale: 6 }).default('0').notNull(),
+	latencyMs: int().default(0).notNull(),
+	status: varchar({ length: 16 }).notNull(),
+	errorCode: varchar({ length: 40 }),
+},
+(table) => [
+	index("idx_ai_usage_created").on(table.createdAt),
+	index("idx_ai_usage_feature_created").on(table.feature, table.createdAt),
+]);
+
+// Mês (AAAA-MM) em que o orçamento da IA foi excedido — o aviso sai uma vez.
+export const aiBudgetAlerts = mysqlTable("ai_budget_alerts", {
+	month: char({ length: 7 }).primaryKey(),
+	notifiedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	spentEur: decimal({ precision: 12, scale: 4 }),
+	budgetEur: decimal({ precision: 12, scale: 4 }),
+});
+
+// Limitador de pedidos (por utilizador/IP, por minuto/dia) — estado na BD (serverless).
+export const aiRateLimits = mysqlTable("ai_rate_limits", {
+	bucketKey: varchar({ length: 160 }).notNull(),
+	windowStart: datetime({ mode: 'string' }).notNull(),
+	hits: int().default(0).notNull(),
+},
+(table) => [
+	primaryKey({ columns: [table.bucketKey, table.windowStart] }),
+	index("idx_ai_rate_limits_window").on(table.windowStart),
+]);
+
+// Caches de contexto do Gemini (prefixo "system" longo e estável) partilhadas entre instâncias.
+export const aiContextCaches = mysqlTable("ai_context_caches", {
+	cacheKey: char({ length: 64 }).primaryKey(),
+	provider: varchar({ length: 16 }).notNull(),
+	model: varchar({ length: 80 }).notNull(),
+	cacheName: varchar({ length: 255 }).notNull(),
+	expiresAt: datetime({ mode: 'string' }).notNull(),
+});
