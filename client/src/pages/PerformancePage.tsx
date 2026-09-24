@@ -8,6 +8,7 @@
  *  - Contestações (gestão): aceitar com correção ou recusar.
  * O âmbito de cidade é aplicado no servidor.
  */
+import EvaluationExplanation from "@/components/aiOps/EvaluationExplanation";
 import { useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -293,6 +294,7 @@ function MineView({ from, to }: { from: string; to: string }) {
         <p className="text-xs text-muted-foreground">Só vês os teus dados. Se algo estiver errado num dia, abre o dia e carrega em "Contestar".</p>
       </CardHeader>
       <CardContent>
+        <div className="mb-4"><EvaluationExplanation from={from} to={to} /></div>
         <EmployeeEvaluationDetail employeeId={d.employee.id} detail={d as any} mode="self"
           onChanged={() => utils.evaluation.mine.invalidate()} />
       </CardContent>

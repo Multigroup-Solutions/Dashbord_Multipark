@@ -464,6 +464,20 @@ app.get("/api/cron/extras-auto", async (req, res) => {
   }
 });
 
+// Briefing diário por cidade (07:30 Lisboa), anomalias e, à segunda,
+// relatórios semanais (server/aiOps/cron.ts). Idempotente; o próprio módulo
+// decide pela hora de Lisboa. done:false → o workflow repete (prazo de 45 s).
+app.get("/api/cron/ops-briefing", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const { runOpsBriefingCron } = await import("../aiOps/cron");
+    const report = await runOpsBriefingCron({ deadlineAt: Date.now() + 45_000, force: req.query?.force === "1" });
+    res.json({ ranAt: new Date().toISOString(), ...report });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: String(err?.message ?? err) });
+  }
+});
+
 // Escala automática dos extras (propor às 14h, confirmar e avisar às 18h, por
 // omissão — Definições → Parâmetros → Extras-dia). O GitHub Actions chama de
 // 30 em 30 min entre as 08h e as 23h de Lisboa; tudo idempotente (propor duas

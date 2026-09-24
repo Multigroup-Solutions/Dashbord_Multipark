@@ -1,3 +1,4 @@
+import OpsBriefingCard from "@/components/aiOps/OpsBriefingCard";
 import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
@@ -121,6 +122,7 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-8">
+      <OpsBriefingCard />
       {/* 10 KPI Cards - 2 rows of 5 */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
         <KPI

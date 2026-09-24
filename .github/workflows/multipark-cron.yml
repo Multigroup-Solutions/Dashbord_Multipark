@@ -37,6 +37,12 @@ on:
     # 05:10 UTC (mês anterior inteiro). Só correm com a ligação feita.
     - cron: "45 4 * * *"
     - cron: "10 5 2 * *"
+    # Briefing diário por cidade (07:30 de Lisboa) + anomalias + relatórios
+    # semanais à segunda: 06:32 UTC (verão = 07:32 Lisboa) e 07:32 UTC
+    # (inverno = 07:32 Lisboa). O servidor só corre a partir das 07h de Lisboa
+    # e é idempotente (a 2.ª chamada do verão não reenvia nada).
+    - cron: "32 6 * * *"
+    - cron: "32 7 * * *"
   workflow_dispatch: {} # trigger manual da UI (corre todos os jobs)
 
 permissions:
@@ -515,6 +521,52 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           title="🔴 Cron multipark falhou: meta-ads"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body="Run falhado: $run_url — $(date -u +'%Y-%m-%d %H:%M UTC')"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number' || true)
+          if [ -n "${existing:-}" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
+
+  # ── Briefing diário por cidade + anomalias + relatórios semanais (segunda).
+  #    O servidor decide pela hora de Lisboa (a partir das 07h) e é idempotente;
+  #    "done":false = acabou o prazo da função → repete.
+  ops-briefing:
+    if: github.event.schedule == '32 6 * * *' || github.event.schedule == '32 7 * * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger /api/cron/ops-briefing (repete até done)
+        env:
+          APP_URL: ${{ secrets.APP_URL || 'https://dashbord-multipark.vercel.app' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_URL:-}" ]; then
+            echo "::error::APP_URL secret não está definido — ops-briefing não corre."
+            exit 1
+          fi
+          for i in 1 2 3 4 5 6; do
+            code=$(curl -sS -m 90 -w '%{http_code}' -o /tmp/body.txt \
+              -H "Authorization: Bearer ${CRON_SECRET:-}" \
+              "$APP_URL/api/cron/ops-briefing") \
+              || { echo "::error::curl falhou ao contactar o endpoint"; cat /tmp/body.txt || true; exit 1; }
+            echo "tentativa $i — HTTP $code"; head -c 1500 /tmp/body.txt; echo
+            if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+              echo "::error::endpoint devolveu HTTP $code"; exit 1
+            fi
+            if grep -q '"ok":false' /tmp/body.txt; then
+              echo "::error::endpoint reportou ok:false"; exit 1
+            fi
+            grep -q '"done":false' /tmp/body.txt || break
+          done
+      - name: Alerta — abrir/comentar issue em caso de falha
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="🔴 Cron multipark falhou: ops-briefing"
           run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           body="Run falhado: $run_url — $(date -u +'%Y-%m-%d %H:%M UTC')"
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number' || true)

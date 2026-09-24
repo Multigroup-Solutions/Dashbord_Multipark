@@ -53,6 +53,7 @@ import {
   type OpenItem,
 } from "@shared/shiftHandoverAuto";
 import { AiSummaryBox, OpenItemsEditor, ShiftHandoverDraftPanel } from "@/components/ShiftHandoverDraftPanel";
+import HandoverRepeatsCard from "@/components/aiOps/HandoverRepeatsCard";
 import { Checkbox } from "@/components/ui/checkbox";
 
 // ─── PASSAGEM DE TURNO (pedido do Jorge, 2026-08-06) ─────────────────────────
@@ -354,6 +355,7 @@ function HandoverForm({ cityState, isSupervisor, userId }: { cityState: CityStat
           </div>
         )}
         <ShiftHandoverDraftPanel draft={draft} loading={draftQ.isFetching} onRefresh={() => draftQ.refetch()} />
+        <HandoverRepeatsCard city={city} />
         <fieldset disabled={loading} className="space-y-4 disabled:opacity-60">
           {/* Operação */}
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Operação</p>

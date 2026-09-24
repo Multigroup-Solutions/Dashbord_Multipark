@@ -100,6 +100,14 @@ da env.
 | `AI_WHATSAPP_TRIAGE` | `whatsapp_triage`: intenção e urgência das conversas | lite |
 | `AI_LOST_FOUND_MATCH` | `lost_found_match`: correspondências perdido ↔ achado | lite |
 | `AI_ASSISTANT` | `assistant`: assistente (chat) em todas as páginas | lite |
+| `AI_OPS_BRIEFING` | `ops_briefing`: parágrafo do briefing diário por cidade | lite |
+| `AI_WEEKLY_REPORTS` | `weekly_report`: texto dos relatórios de segunda (direção, marketing, operações, RH) | lite |
+| `AI_ANOMALY_EXPLAIN` | `anomaly_explain`: uma linha por anomalia (1 chamada por corrida) | lite |
+| `AI_AVAILABILITY_CLASSIFY` | `availability_classify`: respostas de disponibilidade pouco claras | lite |
+| `AI_LEAD_SCORING` | `lead_summary` + `lead_first_contact`: resumo da pontuação e rascunho do 1.º contacto (a aprovar) | lite |
+| `AI_EVALUATION_EXPLAIN` | `evaluation_explain`: explicação da avaliação | lite |
+| `AI_HANDOVER_REPEATS` | `handover_repeats`: pendentes repetidos e resumo semanal da passagem | lite |
+| `AI_TASKS_FROM_TEXT` | `tasks_from_text`: tarefas a partir de texto (confirmadas antes de criar) | lite |
 
 Quando uma funcionalidade está desligada, a UI mostra a mensagem "Esta
 funcionalidade de IA está desligada." e não se faz nenhum pedido. Os botões
@@ -162,6 +170,41 @@ Cron: `/api/cron/ai-comms` (`.github/workflows/ai-comms.yml`, a cada 15 min).
 Cada passo tem um lote pequeno (3 a 8 casos) e um prazo abaixo dos 60 s. O
 passo salta sem erro quando o interruptor está desligado, quando o orçamento
 se esgotou ou quando não há fornecedor. Migração: 0123.
+### Automações internas (set 2026)
+
+Nenhuma é para clientes. **Os números vêm sempre do SQL/código; a IA só
+escreve o texto.** Com o interruptor desligado ou o orçamento esgotado, a
+automação continua com um texto fixo feito no código (e não faz pedidos).
+Código em `server/aiOps/`, prompts em `server/_core/ai/prompts/ops.ts`,
+tabelas na migração 0125.
+
+- **Briefing diário por cidade** (`/api/cron/ops-briefing`, 06:32 e 07:32 UTC;
+  corre a partir das 07h de Lisboa, idempotente): reservas do dia por hora e
+  pico, extras escalados vs. necessários (previsão do Extras-Dia, só leitura),
+  reclamações/ocorrências com prazo hoje, pendentes da passagem de turno (e os
+  que se repetem), anomalias e alertas de marketing. Guardado em
+  `ops_briefings`, mostrado no Dashboard e nas Tarefas e enviado por email aos
+  team leaders/supervisores com acesso à cidade. Cada pessoa só vê as secções
+  dos módulos a que tem acesso. Interruptor da automação: `OPS_BRIEFING`.
+- **Anomalias** (`OPS_ANOMALIES`): z-score contra o mesmo dia da semana das
+  últimas 8 semanas (reservas por parque e por canal, gasto e ROAS do
+  marketing) e, nas despesas, valores fora do normal (mediana/MAD) e possíveis
+  duplicados. Aparecem como "Alertas" em Operações, Despesas e Marketing.
+- **Relatórios semanais** (`WEEKLY_REPORTS`, segunda de manhã): direção,
+  marketing, operações e RH, a quem tem o módulo com alcance nacional; resumo
+  semanal da passagem de turno por cidade.
+- **Respostas de disponibilidade** pouco claras: confiança ≥ 85% aplica-se
+  sozinha; o resto fica numa tarefa para revisão humana.
+- **Leads**: pontuação 0–100 com critérios explícitos (disponibilidade, cidade,
+  experiência, anos de carta, rapidez de resposta), nunca atributos
+  protegidos; o rascunho do 1.º contacto precisa de aprovação (o template
+  `seja_motorista` continua como antes).
+- **Avaliação**: explicação a partir das linhas das regras (nunca recalcula);
+  o team leader pode escondê-la.
+- **Tarefas a partir de texto**: a IA propõe, a pessoa confirma.
+
+Custos: pedidos curtos, dados pessoais tapados (`redactPii`), teto de 12
+chamadas por corrida do cron e cache por hash (leads, avaliação).
 
 ## 4. Custos e orçamento
 
@@ -312,5 +355,6 @@ resultado). Não está no menu geral.
 | `AI_MONTHLY_BUDGET_EUR` | Orçamento (a página Definições ganha-lhe) |
 | `AI_TRAINING_TUTOR_PER_MINUTE`, `AI_TRAINING_TUTOR_PER_DAY` | Limites do tutor da Formação (Definições ganha) |
 | `AI_ENABLED`, `AI_EXPENSE_OCR`, `AI_REVIEW_DRAFTS`, `AI_RADIO`, `AI_HANDOVER_SUMMARY`, `AI_WHATSAPP_ASSIST`, `AI_QUIZ`, `AI_HR_AUTOFILL`, `AI_ASSISTANT` | Interruptores |
+| `AI_ENABLED`, `AI_EXPENSE_OCR`, `AI_REVIEW_DRAFTS`, `AI_RADIO`, `AI_HANDOVER_SUMMARY`, `AI_WHATSAPP_ASSIST`, `AI_QUIZ`, `AI_HR_AUTOFILL`, `AI_OPS_BRIEFING`, `AI_WEEKLY_REPORTS`, `AI_ANOMALY_EXPLAIN`, `AI_AVAILABILITY_CLASSIFY`, `AI_LEAD_SCORING`, `AI_EVALUATION_EXPLAIN`, `AI_HANDOVER_REPEATS`, `AI_TASKS_FROM_TEXT` | Interruptores |
 | `LLM_API_URL`, `LLM_API_KEY`, `LLM_MODEL` | Fornecedor antigo |
 | `OPENAI_API_KEY` | Whisper (só se definida) |

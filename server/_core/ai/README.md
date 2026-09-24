@@ -79,7 +79,7 @@ O que o `runAi` faz, por ordem:
 | `contextCache.ts` | cache de contexto do Gemini (`runAi({ cacheSystem: true })`; chave = system + ferramentas) |
 | `chat/` | núcleo de chat reutilizável: `runChatTurn`, conversas na BD, ajuda por palavras-chave, registo de ferramentas, histórico |
 | `status.ts` | `aiStatus`, `aiFeatureAvailable(Fresh)`, `testAi` |
-| `prompts/` | todos os prompts (PT-PT) + schemas zod |
+| `prompts/` | todos os prompts (PT-PT) + schemas zod (`ops.ts` = automações internas de `server/aiOps/`) |
 | `reviewReply.ts` | `draftReviewReply` (o único prompt de resposta a críticas) |
 | `prompts/comms.ts` | triagem de reclamações e do WhatsApp, semelhança dos Perdidos (usados por `server/complaintTriage.ts`, `whatsappTriage.ts`, `lostFoundMatch.ts`, `reviewAutoDraft.ts`) |
 | `trpcError.ts` | `aiTrpcError(err)` |

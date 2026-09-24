@@ -38,6 +38,7 @@ import {
   type MetricKey,
 } from "../shared/evaluationRules";
 import { addDays, daysInRange } from "../shared/lisbonDay";
+import { roleRank } from "../shared/access";
 
 const ROLE_HIERARCHY: Record<string, number> = { super_admin: 7, admin: 6, supervisor: 5, team_leader: 4, backoffice: 3, frontoffice: 2, condutor: 1, extra: 1, user: 0 };
 const atLeast = (role: string, min: string) => (ROLE_HIERARCHY[role] ?? -1) >= (ROLE_HIERARCHY[min] ?? 0);
@@ -122,6 +123,43 @@ export const evaluationRouter = router({
     const detail = await employeeDetail(me.id, input.from, input.to);
     return { employee: me, ...detail };
   }),
+
+  /**
+   * Explicação curta (PT-PT) da pontuação do período, a partir das linhas das
+   * regras já calculadas (a IA nunca recalcula). Próprio: "A minha avaliação";
+   * outra pessoa: os mesmos guardas do detalhe (employeeDays).
+   */
+  explanation: protectedProcedure.input(rangeSchema.and(z.object({ employeeId: z.number().int().positive().optional() })))
+    .query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "extra");
+      const me = await myEmployee(ctx.user.id);
+      const employeeId = input.employeeId ?? me?.id;
+      if (!employeeId) return null;
+      const self = me?.id === employeeId;
+      if (!self) {
+        requireRole(ctx.user.role, "frontoffice");
+        await assertEmployeeAccess(employeeId);
+      }
+      const days = await loadEvaluatedDays({ startDay: input.from, endDay: input.to, employeeIds: [employeeId] });
+      if (!days.length) return null;
+      const t = totalsOf(days);
+      const { getExplanation } = await import("./aiOps/evaluationExplain");
+      const r = await getExplanation({ employeeId, from: input.from, to: input.to, lines: t.score.lines, total: t.score.totalPoints, viewerIsSelf: self, userId: ctx.user.id });
+      return { ...r, canHide: !self && roleRank(ctx.user.role) >= roleRank("team_leader") };
+    }),
+
+  /** O team leader (ou acima) esconde/mostra a explicação a um colaborador. Nunca a própria. */
+  setExplanationHidden: protectedProcedure.input(rangeSchema.and(z.object({ employeeId: z.number().int().positive(), hidden: z.boolean() })))
+    .mutation(async ({ ctx, input }) => {
+      if (roleRank(ctx.user.role) < roleRank("team_leader")) throw new TRPCError({ code: "FORBIDDEN", message: "Acesso não autorizado." });
+      const me = await myEmployee(ctx.user.id);
+      if (me?.id === input.employeeId) throw new TRPCError({ code: "FORBIDDEN", message: "Não podes esconder a explicação da tua própria avaliação." });
+      await assertEmployeeAccess(input.employeeId);
+      const { setExplanationHidden } = await import("./aiOps/evaluationExplain");
+      await setExplanationHidden({ employeeId: input.employeeId, from: input.from, to: input.to, hidden: input.hidden, user: { id: ctx.user.id, name: (ctx.user as any).name ?? null } });
+      await logActivity({ userId: ctx.user.id, action: input.hidden ? "hide_explanation" : "show_explanation", entity: "evaluation", entityId: input.employeeId, details: `${input.from}..${input.to}` });
+      return { success: true };
+    }),
 
   /** Recalcular um período (máx. 93 dias) — supervisor+ (como "Gerar Avaliação"). */
   recompute: protectedProcedure.input(rangeSchema).mutation(async ({ ctx, input }) => {

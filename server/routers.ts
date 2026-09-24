@@ -9,6 +9,7 @@ import { tasksRouter } from './tasksRouter';
 import { settingsRouter } from './settingsRouter';
 import { evaluationRouter } from './evaluationRouter';
 import { assistantRouter } from './assistant/router';
+import { aiOpsRouter } from './aiOps/router';
 import { z } from "zod";
 import * as XLSX from "xlsx";
 import { ACCESS_DENIED_MSG, COOKIE_NAME } from "@shared/const";
@@ -1517,6 +1518,7 @@ export const appRouter = router({
 
   // ── AVALIAÇÃO (motor único: individual + "A minha avaliação") ────────────────
   evaluation: evaluationRouter,
+  aiOps: aiOpsRouter,
 
   // ── CATEGORIES ──────────────────────────────────────────────────────────────
   categories: router({

@@ -9,3 +9,4 @@ export * from "./whatsapp";
 export * from "./trainingTutor";
 export * from "./comms";
 export * from "./assistant";
+export * from "./ops";

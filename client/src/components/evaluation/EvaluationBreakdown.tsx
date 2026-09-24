@@ -6,6 +6,7 @@
  */
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
+import EvaluationExplanation from "@/components/aiOps/EvaluationExplanation";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -439,7 +440,10 @@ export function EvaluationDrawer({
           {q.isLoading && <p className="text-sm text-muted-foreground">A carregar...</p>}
           {q.error && <p className="text-sm text-red-700">{q.error.message}</p>}
           {q.data && employeeId != null && (
-            <EmployeeEvaluationDetail employeeId={employeeId} detail={q.data as any} mode="manage" canAdjust={canAdjust} onChanged={refresh} />
+            <div className="space-y-4">
+              <EvaluationExplanation employeeId={employeeId} from={from} to={to} />
+              <EmployeeEvaluationDetail employeeId={employeeId} detail={q.data as any} mode="manage" canAdjust={canAdjust} onChanged={refresh} />
+            </div>
           )}
         </div>
       </SheetContent>

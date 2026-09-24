@@ -31,6 +31,9 @@ import { toast } from "sonner";
 import { AlertTriangle, Clock, Filter, Mail, MapPin, MessageCircle, Pencil, Phone, Plus, Search, Send, Trash2, UserPlus, X } from "lucide-react";
 import { findWhatsAppTemplate, LEAD_RECRUITMENT_TEMPLATE_ID } from "@shared/whatsappTemplate";
 import { matchesContactQuery } from "@shared/contactSearch";
+import { can } from "@shared/access";
+import { useAuth } from "@/_core/hooks/useAuth";
+import LeadScoreCell, { type LeadScoreRow } from "@/components/aiOps/LeadScoreCell";
 import {
   LEAD_SLA,
   LEAD_SOURCE_LABELS,
@@ -284,6 +287,12 @@ export default function ExtraLeadsPage() {
   const contactTargets = contactIds.map((id) => allLeads.find((l) => l.id === id)).filter((l): l is LeadRow => !!l);
   const contactWithPhone = contactTargets.filter((l) => !!l.phoneE164).length;
   const shownWithPhone = shown.filter((l) => !!l.phoneE164);
+  // Pontuação (critérios explícitos, calculada no servidor) das leads mostradas.
+  const { user } = useAuth();
+  const canEditLeads = !!user && can(user as any, "leads_extras", "edit");
+  const scoreIds = useMemo(() => shown.slice(0, 200).map((l) => l.id), [shown]);
+  const scores = trpc.aiOps.leads.scores.useQuery({ leadIds: scoreIds }, { enabled: scoreIds.length > 0, staleTime: 60_000, retry: false });
+  const scoreById = useMemo(() => new Map(((scores.data ?? []) as LeadScoreRow[]).map((r) => [r.leadId, r])), [scores.data]);
   const busy = create.isPending || update.isPending;
   const selectedWithPhone = allLeads.filter((l) => selectedIds.has(l.id) && !!l.phoneE164).length;
   const f = funnel.data;
@@ -586,6 +595,7 @@ export default function ExtraLeadsPage() {
                       />
                     </th>
                     <th className="text-left py-2 px-2">Nome</th>
+                    <th className="text-left py-2 px-2" title="Disponibilidade, cidade, experiência, anos de carta e rapidez de resposta">Pontuação</th>
                     <th className="text-left py-2 px-2">Telemóvel</th>
                     <th className="text-left py-2 px-2">Email</th>
                     <th className="text-left py-2 px-2">Cidade</th>
@@ -627,6 +637,9 @@ export default function ExtraLeadsPage() {
                               </span>
                             )}
                           </div>
+                        </td>
+                        <td className="py-2 px-2">
+                          <LeadScoreCell leadId={l.id} row={scoreById.get(l.id)} canEdit={canEditLeads} />
                         </td>
                         <td className="py-2 px-2 whitespace-nowrap">
                           {l.phone ? (

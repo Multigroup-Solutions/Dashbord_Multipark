@@ -25,7 +25,16 @@ export type AiFlag =
   | "AI_REVIEW_AUTO_DRAFTS"
   | "AI_WHATSAPP_TRIAGE"
   | "AI_LOST_FOUND_MATCH"
-  | "AI_ASSISTANT";
+  | "AI_ASSISTANT"
+  // Automações internas (set 2026) — cada uma com o seu interruptor.
+  | "AI_OPS_BRIEFING"
+  | "AI_WEEKLY_REPORTS"
+  | "AI_ANOMALY_EXPLAIN"
+  | "AI_AVAILABILITY_CLASSIFY"
+  | "AI_LEAD_SCORING"
+  | "AI_EVALUATION_EXPLAIN"
+  | "AI_HANDOVER_REPEATS"
+  | "AI_TASKS_FROM_TEXT";
 
 export interface AiFeatureDef {
   label: string;
@@ -61,6 +70,17 @@ export const AI_FEATURES = {
   // Assistente da app (chat da equipa): "como se usa" + perguntas aos dados
   // por ferramentas só de leitura. Lite (regra do dono; muitas mensagens curtas).
   assistant: { label: "Assistente (chat)", flag: "AI_ASSISTANT", tier: "lite", essential: false },
+  // ── Automações internas (nenhuma é para clientes). Os NÚMEROS vêm sempre do
+  // SQL/código; a IA só escreve o texto. Todas `lite` (regra do dono).
+  ops_briefing: { label: "Briefing diário por cidade", flag: "AI_OPS_BRIEFING", tier: "lite", essential: false },
+  weekly_report: { label: "Relatórios semanais (texto)", flag: "AI_WEEKLY_REPORTS", tier: "lite", essential: false },
+  anomaly_explain: { label: "Explicação de anomalias", flag: "AI_ANOMALY_EXPLAIN", tier: "lite", essential: false },
+  availability_classify: { label: "Respostas de disponibilidade pouco claras", flag: "AI_AVAILABILITY_CLASSIFY", tier: "lite", essential: false },
+  lead_summary: { label: "Leads: resumo da pontuação", flag: "AI_LEAD_SCORING", tier: "lite", essential: false },
+  lead_first_contact: { label: "Leads: rascunho do 1.º contacto", flag: "AI_LEAD_SCORING", tier: "lite", essential: false },
+  evaluation_explain: { label: "Explicação da avaliação", flag: "AI_EVALUATION_EXPLAIN", tier: "lite", essential: false },
+  handover_repeats: { label: "Passagem de turno: pendentes repetidos e resumo semanal", flag: "AI_HANDOVER_REPEATS", tier: "lite", essential: false },
+  tasks_from_text: { label: "Tarefas a partir de texto", flag: "AI_TASKS_FROM_TEXT", tier: "lite", essential: false },
   healthcheck: { label: "Teste da ligação", flag: null, tier: "lite", essential: true },
 } as const satisfies Record<string, AiFeatureDef>;
 

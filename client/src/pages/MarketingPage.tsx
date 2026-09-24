@@ -8,6 +8,7 @@ import MarketingGoogleAdsPage from "./MarketingGoogleAdsPage";
 import MarketingDashboardPanel from "@/components/marketing/MarketingDashboardPanel";
 import MarketingChannelsPanel from "@/components/marketing/MarketingChannelsPanel";
 import MarketingBudgetsPanel from "@/components/marketing/MarketingBudgetsPanel";
+import AnomalyAlerts from "@/components/aiOps/AnomalyAlerts";
 
 /**
  * Marketing (Jorge, 16 set 2026): o menu "Marketing" abre o DASHBOARD de
@@ -62,12 +63,13 @@ export default function MarketingPage() {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-6">
       <div>
         <h1 className="text-2xl font-bold">Marketing</h1>
         <p className="text-muted-foreground">Dashboard, canais e clientes, anúncios (Google Ads e Meta) e orçamentos</p>
       </div>
       <SyncHealthBanner />
+      <AnomalyAlerts domain="marketing" />
       <Tabs value={tab} onValueChange={onTab}>
         <TabsList className="flex-wrap h-auto">
           <TabsTrigger value="dashboard"><BarChart3 className="w-4 h-4 mr-1" />Dashboard</TabsTrigger>

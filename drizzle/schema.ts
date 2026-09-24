@@ -2657,3 +2657,97 @@ export const aiChatMessages = mysqlTable("ai_chat_messages", {
 	index("idx_ai_chat_msg_conv").on(table.conversationId, table.id),
 	index("idx_ai_chat_msg_created").on(table.createdAt),
 ]);
+
+// ─── Automações internas com IA (migração 0125) ─────────────────────────────
+// Os números vêm sempre do SQL/código; a IA só escreve o texto.
+
+export const opsBriefings = mysqlTable("ops_briefings", {
+	id: int().autoincrement().primaryKey(),
+	city: varchar({ length: 16 }).notNull(),
+	day: char({ length: 10 }).notNull(),
+	data: mediumtext().notNull(),
+	summary: text(),
+	aiUsed: tinyint().default(0).notNull(),
+	emailedAt: datetime({ mode: 'string' }),
+	emailRecipients: int().default(0).notNull(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_ops_briefings_city_day").on(table.city, table.day),
+	index("idx_ops_briefings_day").on(table.day),
+]);
+
+export const opsAnomalies = mysqlTable("ops_anomalies", {
+	id: int().autoincrement().primaryKey(),
+	day: char({ length: 10 }).notNull(),
+	domain: varchar({ length: 16 }).notNull(),
+	kind: varchar({ length: 32 }).notNull(),
+	cityKey: varchar({ length: 16 }),
+	projectId: int(),
+	subject: varchar({ length: 160 }).notNull(),
+	value: decimal({ precision: 14, scale: 2 }).default('0').notNull(),
+	expected: decimal({ precision: 14, scale: 2 }),
+	zScore: decimal({ precision: 8, scale: 2 }),
+	severity: varchar({ length: 8 }).notNull(),
+	detail: varchar({ length: 500 }).notNull(),
+	explanation: varchar({ length: 400 }),
+	refIds: varchar({ length: 255 }),
+	dedupKey: varchar({ length: 191 }).notNull(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_ops_anomalies_dedup").on(table.dedupKey),
+	index("idx_ops_anomalies_domain_day").on(table.domain, table.day),
+]);
+
+export const aiWeeklyReports = mysqlTable("ai_weekly_reports", {
+	id: int().autoincrement().primaryKey(),
+	kind: varchar({ length: 24 }).notNull(),
+	weekStart: char({ length: 10 }).notNull(),
+	data: mediumtext().notNull(),
+	narrative: text(),
+	aiUsed: tinyint().default(0).notNull(),
+	emailedAt: datetime({ mode: 'string' }),
+	emailRecipients: int().default(0).notNull(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_ai_weekly_reports_kind_week").on(table.kind, table.weekStart),
+]);
+
+export const extraLeadScores = mysqlTable("extra_lead_scores", {
+	leadId: int().primaryKey(),
+	score: int().default(0).notNull(),
+	breakdown: text().notNull(),
+	inputsHash: char({ length: 40 }).notNull(),
+	summary: varchar({ length: 300 }),
+	summaryHash: char({ length: 40 }),
+	draftMessage: text(),
+	/** pending | approved | rejected */
+	draftStatus: varchar({ length: 12 }),
+	draftCreatedById: int(),
+	draftReviewedById: int(),
+	draftReviewedAt: datetime({ mode: 'string' }),
+	computedAt: datetime({ mode: 'string' }).notNull(),
+},
+(table) => [
+	index("idx_extra_lead_scores_score").on(table.score),
+]);
+
+export const evaluationExplanations = mysqlTable("evaluation_explanations", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	fromDay: char({ length: 10 }).notNull(),
+	toDay: char({ length: 10 }).notNull(),
+	linesHash: char({ length: 40 }).notNull(),
+	text: varchar({ length: 700 }),
+	hiddenAt: datetime({ mode: 'string' }),
+	hiddenById: int(),
+	hiddenByName: varchar({ length: 255 }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_evaluation_explanations").on(table.employeeId, table.fromDay, table.toDay),
+]);
