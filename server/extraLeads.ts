@@ -15,7 +15,7 @@
  * A parte pura (`normalizeLeadInput`) é testada sem BD.
  */
 import { currentDefaultCityId, projectVisible, scopedProjectIds } from "./extrasCityFilter";
-import { and, desc, eq, inArray, like, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
 import { getDb, logActivity } from "./db";
 import { extraLeads } from "../drizzle/schema";
 import { normalizeEmail, isPlausibleEmail } from "../shared/email";
@@ -112,16 +112,36 @@ export async function listExtraLeads(filter: { status?: ExtraLeadStatus | null; 
       )!,
     );
   }
+  // Cidade (ponto 10): quem só vê uma cidade não vê os leads das outras;
+  // leads sem cidade (antigos) continuam visíveis a todos. No WHERE, antes do
+  // LIMIT (filtrar depois cortava leads da própria cidade com >500 linhas).
+  const scope = scopedProjectIds();
+  if (scope !== undefined) {
+    conds.push(scope.length ? or(isNull(extraLeads.projectId), inArray(extraLeads.projectId, scope))! : isNull(extraLeads.projectId));
+  }
   const rows = await db
     .select()
     .from(extraLeads)
     .where(conds.length ? and(...conds) : undefined)
     .orderBy(desc(extraLeads.createdAt))
     .limit(500);
-  // Cidade (ponto 10): quem só vê uma cidade não vê os leads das outras;
-  // leads sem cidade (antigos) continuam visíveis a todos.
-  const scope = scopedProjectIds();
-  return (rows as ExtraLeadRow[]).filter((r) => projectVisible(r.projectId, scope));
+  return rows as ExtraLeadRow[];
+}
+
+/** Lead fora das cidades de quem pede → "não encontrado" (não revela que existe). */
+export function assertLeadVisible(lead: { projectId: number | null } | undefined | null): void {
+  if (!lead || !projectVisible(lead.projectId, scopedProjectIds())) throw new Error("Lead não encontrado");
+}
+
+/**
+ * Transições de estado feitas à mão. "Convertido" só pelo botão Converter
+ * (cria/liga a ficha); um lead com ficha fica convertido.
+ */
+export function manualStatusError(current: { status: string; employeeId: number | null }, next: string): string | null {
+  if (next === current.status) return null;
+  if (next === "converted") return "Para marcar como convertido usa o botão Converter (cria ou liga a ficha do extra).";
+  if (current.employeeId) return "Este lead já tem ficha de extra — o estado fica Convertido.";
+  return null;
 }
 
 /** Outro lead (que não `excludeId`) já usa este número ou email? */
@@ -141,6 +161,11 @@ async function findDuplicate(
     .limit(5);
   const hit = rows.find((r) => r.id !== excludeId);
   if (!hit) return null;
+  const [full] = await db.select({ projectId: extraLeads.projectId }).from(extraLeads).where(eq(extraLeads.id, hit.id)).limit(1);
+  if (full && !projectVisible(full.projectId, scopedProjectIds())) {
+    // Existe noutra cidade: avisa sem mostrar quem é
+    return { id: 0, fullName: "noutra cidade", field: lead.phoneE164 && hit.phoneE164 === lead.phoneE164 ? "telemóvel" : "email" };
+  }
   return { id: hit.id, fullName: hit.fullName, field: lead.phoneE164 && hit.phoneE164 === lead.phoneE164 ? "telemóvel" : "email" };
 }
 
@@ -152,7 +177,7 @@ export async function createExtraLead(input: LeadInput, createdById: number | nu
   const { lead } = parsed;
 
   const dup = await findDuplicate(db, lead);
-  if (dup) throw new Error(`Já existe um lead com este ${dup.field}: ${dup.fullName} (#${dup.id}).`);
+  if (dup) throw new Error(dup.id ? `Já existe um lead com este ${dup.field}: ${dup.fullName} (#${dup.id}).` : `Já existe um lead com este ${dup.field} ${dup.fullName}.`);
   if (lead.phoneE164) {
     // Um número que já pertence a um colaborador ativo não é um lead — é gente
     // da casa. Evita "recrutar" quem já trabalha connosco.
@@ -182,7 +207,11 @@ export async function updateExtraLead(
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível");
   const [current] = await db.select().from(extraLeads).where(eq(extraLeads.id, id)).limit(1);
-  if (!current) throw new Error("Lead não encontrado");
+  assertLeadVisible(current);
+  if (patch.status) {
+    const err = manualStatusError(current, patch.status);
+    if (err) throw new Error(err);
+  }
 
   const parsed = normalizeLeadInput({
     fullName: patch.fullName ?? current.fullName,
@@ -193,7 +222,7 @@ export async function updateExtraLead(
   if (!parsed.ok) throw new Error(parsed.error);
   const { lead } = parsed;
   const dup = await findDuplicate(db, lead, id);
-  if (dup) throw new Error(`Já existe um lead com este ${dup.field}: ${dup.fullName} (#${dup.id}).`);
+  if (dup) throw new Error(dup.id ? `Já existe um lead com este ${dup.field}: ${dup.fullName} (#${dup.id}).` : `Já existe um lead com este ${dup.field} ${dup.fullName}.`);
 
   const set: Record<string, unknown> = { ...lead };
   if (patch.status) set.status = patch.status;
@@ -215,8 +244,8 @@ export async function updateExtraLead(
 export async function deleteExtraLead(id: number, userId: number | null): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível");
-  const [current] = await db.select({ fullName: extraLeads.fullName }).from(extraLeads).where(eq(extraLeads.id, id)).limit(1);
-  if (!current) throw new Error("Lead não encontrado");
+  const [current] = await db.select({ fullName: extraLeads.fullName, projectId: extraLeads.projectId }).from(extraLeads).where(eq(extraLeads.id, id)).limit(1);
+  assertLeadVisible(current);
   await db.delete(extraLeads).where(eq(extraLeads.id, id));
   await logActivity({ userId: userId ?? 0, action: "extra_lead_delete", entity: "extra_leads", entityId: id, details: `Lead apagado: ${current.fullName}` });
 }
@@ -224,7 +253,7 @@ export async function deleteExtraLead(id: number, userId: number | null): Promis
 export interface LeadContactResult {
   leadId: number;
   fullName: string;
-  status: BroadcastRecipient["status"] | "no_phone";
+  status: BroadcastRecipient["status"] | "no_phone" | "skipped";
   error?: string;
 }
 
@@ -253,9 +282,16 @@ export async function contactExtraLeads(opts: { leadIds: number[]; templateId: s
   const ids = [...new Set(opts.leadIds)].filter((n) => Number.isInteger(n) && n > 0);
   if (!ids.length) throw new Error("Nenhum lead selecionado.");
 
-  const leads = (await db.select().from(extraLeads).where(inArray(extraLeads.id, ids))) as ExtraLeadRow[];
+  const scope = scopedProjectIds();
+  const leads = ((await db.select().from(extraLeads).where(inArray(extraLeads.id, ids))) as ExtraLeadRow[])
+    .filter((l) => projectVisible(l.projectId, scope));
   const results: LeadContactResult[] = [];
   const contactable = leads.filter((l) => {
+    // Convertidos (já trabalham cá) e sem interesse não recebem o convite
+    if (l.status === "converted" || l.status === "declined") {
+      results.push({ leadId: l.id, fullName: l.fullName, status: "skipped", error: l.status === "converted" ? "Já é extra" : "Sem interesse" });
+      return false;
+    }
     if (l.phoneE164) return true;
     results.push({ leadId: l.id, fullName: l.fullName, status: "no_phone", error: "Sem telemóvel" });
     return false;
@@ -293,7 +329,8 @@ export async function contactExtraLeads(opts: { leadIds: number[]; templateId: s
 
   const sent = results.filter((r) => r.status === "sent").length;
   const noPhone = results.filter((r) => r.status === "no_phone").length;
-  const failed = results.length - sent - noPhone;
+  const skipped = results.filter((r) => r.status === "skipped").length;
+  const failed = results.length - sent - noPhone - skipped;
   await logActivity({
     userId: opts.createdById ?? 0,
     action: "extra_lead_contact",

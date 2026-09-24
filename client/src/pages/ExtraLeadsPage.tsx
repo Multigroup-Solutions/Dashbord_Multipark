@@ -111,11 +111,14 @@ export default function ExtraLeadsPage() {
     setConvertFor(l);
   }
 
-  const list = trpc.extraLeads.list.useQuery(
-    { status: statusFilter === "all" ? null : statusFilter },
-    { refetchInterval: 60_000 },
+  // Vem tudo e o estado filtra aqui: os contadores dos chips contam sempre
+  // o total de cada estado (antes contavam só o estado escolhido).
+  const list = trpc.extraLeads.list.useQuery(undefined, { refetchInterval: 60_000 });
+  const allLeads = (list.data ?? []) as LeadRow[];
+  const leads = useMemo(
+    () => (statusFilter === "all" ? allLeads : allLeads.filter((l) => l.status === statusFilter)),
+    [allLeads, statusFilter],
   );
-  const leads = (list.data ?? []) as LeadRow[];
 
   const trimmedSearch = search.trim();
   // Filtro local (a lista já vem completa): nome, email ou número, como no inbox.
@@ -131,11 +134,11 @@ export default function ExtraLeadsPage() {
     [leads, trimmedSearch],
   );
   const counts = useMemo(() => {
-    const c: Record<string, number> = { all: leads.length };
+    const c: Record<string, number> = { all: allLeads.length };
     for (const s of STATUS_ORDER) c[s] = 0;
-    for (const l of leads) c[l.status] = (c[l.status] ?? 0) + 1;
+    for (const l of allLeads) c[l.status] = (c[l.status] ?? 0) + 1;
     return c;
-  }, [leads]);
+  }, [allLeads]);
 
   const invalidate = () => list.refetch();
 
@@ -255,10 +258,10 @@ export default function ExtraLeadsPage() {
                   placeholder="Pesquisar nome, número ou email…"
                   aria-label="Pesquisar leads"
                   value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  onChange={(e) => { setSearch(e.target.value); setSelectedIds(new Set()); }}
                 />
                 {trimmedSearch && (
-                  <button type="button" aria-label="Limpar pesquisa" className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" onClick={() => setSearch("")}>
+                  <button type="button" aria-label="Limpar pesquisa" className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" onClick={() => { setSearch(""); setSelectedIds(new Set()); }}>
                     <X className="h-4 w-4" />
                   </button>
                 )}
@@ -364,14 +367,16 @@ export default function ExtraLeadsPage() {
                           {/* Mudar o estado é uma decisão do backoffice; o envio só muda Novo → Contactado. */}
                           <Select
                             value={l.status}
+                            disabled={!!l.employeeId}
                             onValueChange={(v) => update.mutate({ id: l.id, status: v as LeadStatus })}
                           >
                             <SelectTrigger className="h-7 w-36 text-xs border-0 bg-transparent px-1 shadow-none focus:ring-0">
                               <Badge variant="outline" className={st.className}>{st.label}</Badge>
                             </SelectTrigger>
                             <SelectContent>
+                              {/* Convertido só pelo botão Converter (cria/liga a ficha) */}
                               {STATUS_ORDER.map((s) => (
-                                <SelectItem key={s} value={s}>{STATUS[s].label}</SelectItem>
+                                <SelectItem key={s} value={s} disabled={s === "converted" && l.status !== "converted"}>{STATUS[s].label}</SelectItem>
                               ))}
                             </SelectContent>
                           </Select>
@@ -395,8 +400,8 @@ export default function ExtraLeadsPage() {
                             size="sm"
                             variant="outline"
                             className="border-green-600 text-green-700 hover:bg-green-50 dark:hover:bg-green-950 mr-1 h-8"
-                            disabled={!l.phoneE164}
-                            title={l.phoneE164 ? `Enviar “${template.label}”` : "Sem telemóvel válido"}
+                            disabled={!l.phoneE164 || l.status === "converted" || l.status === "declined"}
+                            title={!l.phoneE164 ? "Sem telemóvel válido" : l.status === "converted" ? "Já é extra" : l.status === "declined" ? "Sem interesse" : `Enviar “${template.label}”`}
                             onClick={() => openContact([l.id])}
                           >
                             <MessageCircle className="h-3.5 w-3.5" />
@@ -506,12 +511,12 @@ export default function ExtraLeadsPage() {
                       className={
                         r.status === "sent"
                           ? "bg-emerald-100 text-emerald-800"
-                          : r.status === "no_phone" || r.status === "invalid_phone"
+                          : r.status === "no_phone" || r.status === "invalid_phone" || r.status === "skipped"
                             ? "bg-amber-100 text-amber-800"
                             : "bg-red-100 text-red-800"
                       }
                     >
-                      {r.status === "sent" ? "enviado" : r.status === "no_phone" ? "sem telemóvel" : r.status === "invalid_phone" ? "número inválido" : "falhou"}
+                      {r.status === "sent" ? "enviado" : r.status === "no_phone" ? "sem telemóvel" : r.status === "invalid_phone" ? "número inválido" : r.status === "skipped" ? `não enviado (${r.error ?? "estado"})` : "falhou"}
                     </Badge>
                     <span className="font-medium">{r.fullName}</span>
                     {r.error && <span className="text-muted-foreground break-words">— {r.error}</span>}

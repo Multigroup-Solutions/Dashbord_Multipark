@@ -584,52 +584,81 @@ export async function convertLeadToExtra(leadId: number, projectId: number, user
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível");
   const { extraLeads, employees } = await import("../drizzle/schema");
-  const { eq } = await import("drizzle-orm");
+  const { and, eq, isNull, sql } = await import("drizzle-orm");
   const [lead] = await db.select().from(extraLeads).where(eq(extraLeads.id, leadId)).limit(1);
-  if (!lead) throw new Error("Lead não encontrado");
+  const { assertLeadVisible } = await import("./extraLeads");
+  assertLeadVisible(lead);
   if (lead.employeeId) throw new Error("Este lead já tem ficha de extra.");
+  if (!lead.email && !lead.phone) throw new Error("O lead não tem email nem telefone — acrescenta um contacto antes de converter.");
 
   const { getProjects } = await import("./db");
   const { resolveApprovalCostCenter, planCostCenterAssignment } = await import("./webIntake");
   const costCenter = resolveApprovalCostCenter((await getProjects()) as any, projectId);
 
-  let employeeId: number;
-  let created: boolean;
-  if (lead.email) {
-    const { findOrCreateExtraByEmail } = await import("./identity");
-    const r = await findOrCreateExtraByEmail(db as any, lead.email, { fullName: lead.fullName, phone: lead.phone, projectId });
-    employeeId = r.id;
-    created = r.created;
-    if (!created) {
-      const [emp] = await db.select({ projectId: employees.projectId }).from(employees).where(eq(employees.id, employeeId)).limit(1);
-      if (planCostCenterAssignment(emp?.projectId ?? null, projectId, false).assign) {
-        await db.update(employees).set({ projectId }).where(eq(employees.id, employeeId));
-      }
-    }
-  } else {
-    if (!lead.phone) throw new Error("O lead não tem email nem telefone — acrescenta um contacto antes de converter.");
-    const ins = await db.insert(employees).values({
-      fullName: lead.fullName.slice(0, 256),
-      phone: lead.phone,
-      position: "extra",
-      contractType: "extra",
-      projectId,
-      isActive: 1,
-    } as any);
-    employeeId = Number((ins as any)[0]?.insertId ?? (ins as any).insertId);
-    created = true;
+  // Reserva o lead ANTES de criar a ficha: dois cliques (ou duas pessoas) ao
+  // mesmo tempo já não criam duas fichas. employeeId 0 = "a converter".
+  const claim = await db.update(extraLeads).set({ employeeId: 0 }).where(and(eq(extraLeads.id, leadId), isNull(extraLeads.employeeId)));
+  if (Number((claim as any)[0]?.affectedRows ?? (claim as any).affectedRows ?? 0) !== 1) {
+    throw new Error("Este lead já está a ser convertido.");
   }
 
-  await db.update(extraLeads).set({ status: "converted", employeeId }).where(eq(extraLeads.id, leadId));
-  const { logActivity } = await import("./db");
-  await logActivity({
-    userId: userId ?? 0,
-    action: "extra_lead_convert",
-    entity: "extra_leads",
-    entityId: leadId,
-    details: `Lead convertido em extra: ${lead.fullName} → employee ${employeeId}${created ? " (criado)" : " (existente)"} · ${costCenter.projectName}`,
-  });
-  return { employeeId, created, city: costCenter.city };
+  try {
+    let employeeId: number | null = null;
+    let created = false;
+
+    // 1) Já existe ficha com este telemóvel (ativa OU inativa)? Liga-se a ela.
+    if (lead.phoneE164) {
+      const { normalizePhoneE164 } = await import("../shared/phone");
+      const rows = await db.select({ id: employees.id, phone: employees.phone }).from(employees).where(sql`${employees.phone} IS NOT NULL`);
+      const hit = rows.find((r) => r.phone && normalizePhoneE164(r.phone) === lead.phoneE164);
+      if (hit) employeeId = hit.id;
+    }
+    // 2) Pelo email (encontra ou cria a ficha)
+    if (employeeId == null && lead.email) {
+      const { findOrCreateExtraByEmail } = await import("./identity");
+      const r = await findOrCreateExtraByEmail(db as any, lead.email, { fullName: lead.fullName, phone: lead.phone, projectId });
+      employeeId = r.id;
+      created = r.created;
+    }
+    // 3) Só telefone e sem ficha: cria
+    if (employeeId == null) {
+      const ins = await db.insert(employees).values({
+        fullName: lead.fullName.slice(0, 256),
+        phone: lead.phone,
+        position: "extra",
+        contractType: "extra",
+        projectId,
+        isActive: 1,
+      } as any);
+      employeeId = Number((ins as any)[0]?.insertId ?? (ins as any).insertId);
+      created = true;
+    }
+
+    if (!created) {
+      // Ficha existente: reativa (senão não aparece na disponibilidade) e
+      // atribui o centro de custos se a regra o permitir.
+      const [emp] = await db.select({ projectId: employees.projectId, isActive: employees.isActive }).from(employees).where(eq(employees.id, employeeId)).limit(1);
+      const patch: Record<string, unknown> = {};
+      if (emp && emp.isActive !== 1) patch.isActive = 1;
+      if (planCostCenterAssignment(emp?.projectId ?? null, projectId, false).assign) patch.projectId = projectId;
+      if (Object.keys(patch).length) await db.update(employees).set(patch as any).where(eq(employees.id, employeeId));
+    }
+
+    await db.update(extraLeads).set({ status: "converted", employeeId, projectId }).where(eq(extraLeads.id, leadId));
+    const { logActivity } = await import("./db");
+    await logActivity({
+      userId: userId ?? 0,
+      action: "extra_lead_convert",
+      entity: "extra_leads",
+      entityId: leadId,
+      details: `Lead convertido em extra: ${lead.fullName} → employee ${employeeId}${created ? " (criado)" : " (existente)"} · ${costCenter.projectName}${lead.notes ? ` · notas do lead: ${lead.notes}` : ""}`,
+    });
+    return { employeeId, created, city: costCenter.city };
+  } catch (err) {
+    // Falhou: liberta a reserva para se poder tentar de novo
+    await db.update(extraLeads).set({ employeeId: null }).where(and(eq(extraLeads.id, leadId), eq(extraLeads.employeeId, 0)));
+    throw err;
+  }
 }
 
 // ─── Orquestração do cron ───────────────────────────────────────────────────
