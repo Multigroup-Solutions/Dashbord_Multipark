@@ -60,3 +60,34 @@ describe("quem tinha o PDA/Zello no dia", () => {
     expect(m.size).toBe(2);
   });
 });
+
+import { gpsPointsFromGeoJson, splitByHolder } from "./zelloGps";
+
+describe("Fase 3: GPS partido por quem tinha o PDA", () => {
+  const t0 = Date.parse("2026-09-20T08:00:00Z") / 1000;
+  // 3 pontos com a Ana (08:00–08:10) e 3 com o Rui (08:10–08:20), ~0,5 km entre pontos
+  const pts = [0, 60, 120, 660, 720, 780].map((dt, i) => ({
+    ts: t0 + dt, speed: i < 3 ? 40 : 70, lat: 38.7 + i * 0.0045, lon: -9.1, accurate: true,
+  }));
+  const intervals = [
+    { employeeId: 1, start: t0 * 1000, end: (t0 + 600) * 1000 },
+    { employeeId: 2, start: (t0 + 600) * 1000, end: (t0 + 1200) * 1000 },
+  ];
+  it("km, minutos, velocidades e excessos por pessoa; o salto na troca não conta para ninguém", () => {
+    const r = Object.fromEntries(splitByHolder(pts, intervals, 50).map((s) => [s.employeeId, s]));
+    expect(r[1]).toMatchObject({ minutes: 2, maxSpeed: 40, violations: 0, points: 3 });
+    expect(r[2]).toMatchObject({ minutes: 2, maxSpeed: 70, violations: 3, points: 3 });
+    expect(r[1].km).toBeCloseTo(1.0, 1);
+    expect(r[2].km).toBeCloseTo(1.0, 1);
+  });
+  it("pontos fora de qualquer check-in não são atribuídos", () => {
+    expect(splitByHolder(pts, [], 50)).toEqual([]);
+  });
+  it("lê o GeoJSON do Zello e ordena por tempo", () => {
+    const p = gpsPointsFromGeoJson({ features: [
+      { geometry: { type: "Point", coordinates: [-9.1, 38.7] }, properties: { timestamp: 20, speed: 10 } },
+      { geometry: { type: "Point", coordinates: [-9.1, 38.7] }, properties: { timestamp: 10, speed: 5, accuracy: 500 } },
+    ] });
+    expect(p.map((x) => [x.ts, x.speed, x.accurate])).toEqual([[10, 5, false], [20, 10, true]]);
+  });
+});

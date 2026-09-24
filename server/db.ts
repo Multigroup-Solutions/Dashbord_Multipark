@@ -139,6 +139,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0077").then(m => ({ s: m.MIGRATION_0077_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0077 })),
       import("./migrations/migration_0078").then(m => ({ s: m.MIGRATION_0078_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0078 })),
       import("./migrations/migration_0079").then(m => ({ s: m.MIGRATION_0079_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0079 })),
+      import("./migrations/migration_0080").then(m => ({ s: m.MIGRATION_0080_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0080 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -5178,87 +5179,123 @@ export async function getLastWorkedMap(): Promise<Record<number, string>> {
  *  horas do GPS (daily_driver_history, recolhido às 2h para o dia anterior). */
 export async function getDayActivity(date: string) {
   const db = await getDb();
-  if (!db) return { people: [], totals: { checkins: 0, checkouts: 0, movements: 0, cancels: 0, other: 0, totalKm: 0, activePeople: 0 } };
+  const emptyTotals = { checkins: 0, checkouts: 0, movements: 0, cancels: 0, other: 0, totalKm: 0, activePeople: 0, violations: 0 };
+  if (!db) return { people: [], totals: emptyTotals };
   const start = `${date} 00:00:00`;
   const end = `${date} 23:59:59`;
+  const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r) as any[]) ?? [];
 
-  // Ações por agente no dia
-  const [actionRows] = await db.execute(sql`
-    SELECT agentName, changeType, COUNT(*) AS n
+  // Ações por agente no dia (Fase 3: pelo ID do agente, com o nome de recurso)
+  const actionRows = rowsOf(await db.execute(sql`
+    SELECT agentUserId, agentName, changeType, COUNT(*) AS n
     FROM multipark_booking_history
     WHERE actionTime >= ${start} AND actionTime <= ${end} AND agentName IS NOT NULL AND agentName != '' AND ${bookingHistoryScope(sql`multipark_booking_history.bookingExternalId`)}
-    GROUP BY agentName, changeType`) as any;
+    GROUP BY agentUserId, agentName, changeType`));
 
-  // Ligações agente→colaborador e agente→parceiro
-  const emps = await db.select({ id: employees.id, fullName: employees.fullName, multiparkAgentName: employees.multiparkAgentName })
-    .from(employees).where(and(isNotNull(employees.multiparkAgentName), projectScope(employees.projectId)));
-  const empByAgent = new Map(emps.map((e) => [(e.multiparkAgentName ?? "").trim().toLowerCase(), e]));
+  // Fichas (nomes + ligações ao agente)
+  const emps = await db.select({ id: employees.id, fullName: employees.fullName, multiparkAgentName: employees.multiparkAgentName, multiparkAgentUserId: employees.multiparkAgentUserId })
+    .from(employees).where(projectScope(employees.projectId));
+  const empById = new Map(emps.map((e) => [e.id, e]));
+  const empByAgentId = new Map(emps.filter((e) => e.multiparkAgentUserId).map((e) => [String(e.multiparkAgentUserId).trim(), e]));
+  const empByAgent = new Map(emps.filter((e) => e.multiparkAgentName).map((e) => [(e.multiparkAgentName ?? "").trim().toLowerCase(), e]));
   const partners = await listAgentPartners();
   const partnerByAgent = new Map(partners.map((p) => [p.agentName.trim().toLowerCase(), p]));
-
-  // GPS do dia (por employeeId quando ligado)
-  const [gpsRows] = await db.execute(sql`
-    SELECT employeeId, zelloUsername, displayName, totalKm, hoursWorked, hoursStopped, totalHoursOnline, avgSpeed, maxSpeed, gpsPointsCount
-    FROM daily_driver_history WHERE DATE(date) = ${date} AND ${employeeScope(sql`daily_driver_history.employeeId`)}`) as any;
-  const gpsByEmp = new Map<number, any>();
-  const gpsUnlinked: any[] = [];
-  for (const g of gpsRows as any[]) {
-    if (g.employeeId != null) gpsByEmp.set(Number(g.employeeId), g);
-    else gpsUnlinked.push(g);
-  }
 
   type Person = {
     key: string; name: string; kind: "colaborador" | "parceiro" | "por_ligar";
     employeeId: number | null; partnerName: string | null;
     checkins: number; checkouts: number; movements: number; cancels: number; other: number; totalActions: number;
     totalKm: number | null; hoursWorked: number | null; hoursOnline: number | null; maxSpeed: number | null;
+    violations: number; pontoHours: number | null; pdaNames: string | null;
   };
   const people = new Map<string, Person>();
+  const blank = (key: string, name: string, kind: Person["kind"], employeeId: number | null, partnerName: string | null): Person => ({
+    key, name, kind, employeeId, partnerName,
+    checkins: 0, checkouts: 0, movements: 0, cancels: 0, other: 0, totalActions: 0,
+    totalKm: null, hoursWorked: null, hoursOnline: null, maxSpeed: null, violations: 0, pontoHours: null, pdaNames: null,
+  });
+  const personForEmployee = (empId: number, fallbackName?: string | null): Person => {
+    const key = `emp:${empId}`;
+    let p = people.get(key);
+    if (!p) {
+      p = blank(key, empById.get(empId)?.fullName ?? fallbackName ?? `#${empId}`, "colaborador", empId, null);
+      people.set(key, p);
+    }
+    return p;
+  };
   const CT: Record<string, keyof Pick<Person, "checkins" | "checkouts" | "movements" | "cancels">> = {
     CHECK_IN: "checkins", CHECKIN: "checkins",
     CHECK_OUT: "checkouts", CHECKOUT: "checkouts",
     MOVEMENT: "movements", MOVE: "movements",
     CANCELLATION: "cancels", CANCEL: "cancels", CANCELLED: "cancels",
   };
-  for (const r of actionRows as any[]) {
-    const key = String(r.agentName).trim().toLowerCase();
-    let p = people.get(key);
-    if (!p) {
-      const emp = empByAgent.get(key);
-      const par = partnerByAgent.get(key);
-      p = {
-        key, name: emp?.fullName ?? par?.partnerName ?? r.agentName,
-        kind: emp ? "colaborador" : par ? "parceiro" : "por_ligar",
-        employeeId: emp?.id ?? null, partnerName: par?.partnerName ?? null,
-        checkins: 0, checkouts: 0, movements: 0, cancels: 0, other: 0, totalActions: 0,
-        totalKm: null, hoursWorked: null, hoursOnline: null, maxSpeed: null,
-      };
-      if (emp) {
-        const g = gpsByEmp.get(emp.id);
-        if (g) { p.totalKm = Number(g.totalKm ?? 0); p.hoursWorked = Number(g.hoursWorked ?? 0); p.hoursOnline = Number(g.totalHoursOnline ?? 0); p.maxSpeed = Number(g.maxSpeed ?? 0); gpsByEmp.delete(emp.id); }
-      }
+  for (const r of actionRows) {
+    const nameKey = String(r.agentName).trim().toLowerCase();
+    const emp = (r.agentUserId ? empByAgentId.get(String(r.agentUserId).trim()) : undefined) ?? empByAgent.get(nameKey);
+    let p: Person;
+    if (emp) p = personForEmployee(emp.id);
+    else {
+      const par = partnerByAgent.get(nameKey);
+      const key = `agent:${nameKey}`;
+      p = people.get(key) ?? blank(key, par?.partnerName ?? String(r.agentName), par ? "parceiro" : "por_ligar", null, par?.partnerName ?? null);
       people.set(key, p);
     }
     const bucket = CT[String(r.changeType ?? "").toUpperCase()] ?? "other";
     (p as any)[bucket] += Number(r.n);
     p.totalActions += Number(r.n);
   }
-  // Pessoas com GPS mas sem ações (estiveram online sem mexer em reservas)
-  for (const [empId, g] of gpsByEmp) {
-    const emp = emps.find((e) => e.id === empId);
-    const name = emp?.fullName ?? g.displayName ?? g.zelloUsername;
-    people.set(`gps:${empId}`, {
-      key: `gps:${empId}`, name, kind: "colaborador", employeeId: empId, partnerName: null,
-      checkins: 0, checkouts: 0, movements: 0, cancels: 0, other: 0, totalActions: 0,
-      totalKm: Number(g.totalKm ?? 0), hoursWorked: Number(g.hoursWorked ?? 0), hoursOnline: Number(g.totalHoursOnline ?? 0), maxSpeed: Number(g.maxSpeed ?? 0),
-    });
+
+  const addGps = (p: Person, g: { km: number; hoursWorked?: number | null; hoursOnline?: number | null; maxSpeed: number; violations: number }) => {
+    p.totalKm = Math.round(((p.totalKm ?? 0) + g.km) * 100) / 100;
+    if (g.hoursWorked != null) p.hoursWorked = Math.round(((p.hoursWorked ?? 0) + g.hoursWorked) * 100) / 100;
+    if (g.hoursOnline != null) p.hoursOnline = Math.round(((p.hoursOnline ?? 0) + g.hoursOnline) * 100) / 100;
+    p.maxSpeed = Math.max(p.maxSpeed ?? 0, g.maxSpeed);
+    p.violations += g.violations;
+  };
+
+  // GPS partido por quem tinha o PDA (Fase 3) — tem prioridade sobre a linha do dia
+  const shareRows = rowsOf(await db.execute(sql`
+    SELECT historyId, employeeId, minutes, km, maxSpeed, violations FROM driver_day_shares
+    WHERE day = ${date} AND ${employeeScope(sql`driver_day_shares.employeeId`)}`).catch(() => [[]] as any));
+  const historyWithShares = new Set<number>();
+  for (const sh of shareRows) {
+    historyWithShares.add(Number(sh.historyId));
+    addGps(personForEmployee(Number(sh.employeeId)), { km: Number(sh.km ?? 0), hoursOnline: Number(sh.minutes ?? 0) / 60, maxSpeed: Number(sh.maxSpeed ?? 0), violations: Number(sh.violations ?? 0) });
   }
-  for (const g of gpsUnlinked) {
-    people.set(`gpsu:${g.zelloUsername}`, {
-      key: `gpsu:${g.zelloUsername}`, name: g.displayName ?? g.zelloUsername, kind: "por_ligar", employeeId: null, partnerName: null,
-      checkins: 0, checkouts: 0, movements: 0, cancels: 0, other: 0, totalActions: 0,
-      totalKm: Number(g.totalKm ?? 0), hoursWorked: Number(g.hoursWorked ?? 0), hoursOnline: Number(g.totalHoursOnline ?? 0), maxSpeed: Number(g.maxSpeed ?? 0),
-    });
+  // GPS do dia sem partes (uma pessoa só, ou sem check-in no PDA)
+  const gpsRows = rowsOf(await db.execute(sql`
+    SELECT id, employeeId, zelloUsername, displayName, totalKm, hoursWorked, totalHoursOnline, maxSpeed, speedViolations
+    FROM daily_driver_history WHERE DATE(date) = ${date} AND ${employeeScope(sql`daily_driver_history.employeeId`)}`));
+  for (const g of gpsRows) {
+    if (historyWithShares.has(Number(g.id))) continue;
+    const gps = { km: Number(g.totalKm ?? 0), hoursWorked: Number(g.hoursWorked ?? 0), hoursOnline: Number(g.totalHoursOnline ?? 0), maxSpeed: Number(g.maxSpeed ?? 0), violations: Number(g.speedViolations ?? 0) };
+    if (g.employeeId != null) addGps(personForEmployee(Number(g.employeeId), g.displayName), gps);
+    else {
+      const key = `gpsu:${g.zelloUsername}`;
+      const p = people.get(key) ?? blank(key, g.displayName ?? g.zelloUsername, "por_ligar", null, null);
+      people.set(key, p);
+      addGps(p, gps);
+    }
+  }
+
+  // Ponto do dia (horas de check-out) e PDAs usados
+  const pontoRows = rowsOf(await db.execute(sql`
+    SELECT employeeId, SUM(hoursWorked) AS h FROM time_records
+    WHERE type = 'check_out' AND recordedAt >= ${start} AND recordedAt <= ${end} AND ${employeeScope(sql`time_records.employeeId`)}
+    GROUP BY employeeId`));
+  for (const r of pontoRows) {
+    const h = Number(r.h ?? 0);
+    if (h > 0) personForEmployee(Number(r.employeeId)).pontoHours = Math.round(h * 100) / 100;
+  }
+  const pdaRows = rowsOf(await db.execute(sql`
+    SELECT c.employeeId, GROUP_CONCAT(DISTINCT p.name ORDER BY p.name SEPARATOR ', ') AS names
+    FROM pda_checkins c JOIN pdas p ON p.id = c.pdaId
+    WHERE c.employeeId IS NOT NULL AND c.checkinAt <= ${end} AND (c.checkoutAt IS NULL OR c.checkoutAt >= ${start})
+      AND ${employeeScope(sql`c.employeeId`)}
+    GROUP BY c.employeeId`));
+  for (const r of pdaRows) {
+    const p = people.get(`emp:${Number(r.employeeId)}`);
+    if (p) p.pdaNames = r.names ? String(r.names) : null; // só quem teve atividade no dia
   }
 
   const list = Array.from(people.values()).sort((a, b) => b.totalActions - a.totalActions || (b.totalKm ?? 0) - (a.totalKm ?? 0));
@@ -5270,6 +5307,7 @@ export async function getDayActivity(date: string) {
     other: list.reduce((s, p) => s + p.other, 0),
     totalKm: Math.round(list.reduce((s, p) => s + (p.totalKm ?? 0), 0) * 10) / 10,
     activePeople: list.length,
+    violations: list.reduce((s, p) => s + p.violations, 0),
   };
   return { people: list, totals };
 }
@@ -6555,6 +6593,41 @@ export async function getSpeedViolationStats(startDate?: Date, endDate?: Date) {
  * desse Zello mais tempo nesse dia (check-ins de PDA, partilhados entre
  * turnos); sem check-in, o Zello fixo da ficha (`employees.zelloUsername`).
  */
+/** Intervalos (ms) em que cada pessoa teve cada Zello/PDA num dia (UTC). */
+export async function pdaIntervalsForDay(dateStr: string): Promise<Map<string, { employeeId: number; start: number; end: number }[]>> {
+  const db = await getDb();
+  const out = new Map<string, { employeeId: number; start: number; end: number }[]>();
+  if (!db) return out;
+  const dayStart = Date.parse(`${dateStr}T00:00:00Z`);
+  const dayEnd = dayStart + 86_400_000;
+  const [rows] = await db.execute(sql`
+    SELECT zelloUsername AS zello, employeeId, checkinAt, checkoutAt FROM pda_checkins
+     WHERE zelloUsername IS NOT NULL AND employeeId IS NOT NULL
+       AND checkinAt < ${toMysqlDateTime(new Date(dayEnd))}
+       AND (checkoutAt IS NULL OR checkoutAt >= ${toMysqlDateTime(new Date(dayStart))})`) as any;
+  const toMs = (v: any) => (v instanceof Date ? v.getTime() : Date.parse(String(v).replace(" ", "T") + "Z"));
+  for (const r of (rows as any[]) ?? []) {
+    const start = Math.max(toMs(r.checkinAt), dayStart);
+    const end = Math.min(r.checkoutAt ? toMs(r.checkoutAt) : Date.now(), dayEnd);
+    if (end <= start) continue;
+    const list = out.get(String(r.zello)) ?? [];
+    list.push({ employeeId: Number(r.employeeId), start, end });
+    out.set(String(r.zello), list);
+  }
+  return out;
+}
+
+/** Grava (substitui) as partes do GPS de uma linha do histórico diário. */
+export async function saveDriverShares(historyId: number, zello: string, day: string, shares: { employeeId: number; minutes: number; km: number; maxSpeed: number; avgSpeed: number; violations: number; points: number }[]): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.execute(sql`DELETE FROM driver_day_shares WHERE historyId = ${historyId}`);
+  for (const s of shares) {
+    await db.execute(sql`INSERT INTO driver_day_shares (historyId, zelloUsername, day, employeeId, minutes, km, maxSpeed, avgSpeed, violations, points)
+      VALUES (${historyId}, ${zello}, ${day}, ${s.employeeId}, ${s.minutes}, ${String(s.km)}, ${String(s.maxSpeed)}, ${String(s.avgSpeed)}, ${s.violations}, ${s.points})`);
+  }
+}
+
 export async function resolveZelloHoldersForDay(dateStr: string): Promise<Map<string, number>> {
   const db = await getDb();
   const out = new Map<string, number>();
