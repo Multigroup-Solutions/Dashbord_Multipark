@@ -211,6 +211,7 @@ export const menuGroups: MenuGroup[] = [
       { icon: Key, label: "API Keys", path: "/api-keys", minRole: "super_admin" },
       { icon: Plug, label: "Integrações", path: "/integracoes/google-ads" },
       { icon: ScrollText, label: "Logs", path: "/logs", minRole: "super_admin" },
+      { icon: SlidersHorizontal, label: "Definições", path: "/definicoes" },
     ],
   },
 ];

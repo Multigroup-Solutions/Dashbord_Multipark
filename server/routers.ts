@@ -6,6 +6,7 @@ import {
 } from "../shared/caseRules";
 import { trainingRouter } from './trainingRouter';
 import { tasksRouter } from './tasksRouter';
+import { settingsRouter } from './settingsRouter';
 import { z } from "zod";
 import * as XLSX from "xlsx";
 import { ACCESS_DENIED_MSG, COOKIE_NAME } from "@shared/const";
@@ -1629,6 +1630,7 @@ export const appRouter = router({
 
   // ── TASKS (KANBAN) ────────────────────────────────────────────────────────────
   tasks: tasksRouter,
+  settings: settingsRouter,
 
   // ── CATEGORIES ──────────────────────────────────────────────────────────────
   categories: router({
@@ -5016,6 +5018,21 @@ export const appRouter = router({
       await markAllNotificationsRead(ctx.user.id);
       return { success: true };
     }),
+    // Preferências da própria pessoa (Perfil): tipos silenciados.
+    prefs: protectedProcedure.query(async ({ ctx }) => {
+      const { getNotificationPrefsRaw } = await import("./appSettings");
+      const { parseNotificationPrefs } = await import("../shared/appSettings");
+      return parseNotificationPrefs(await getNotificationPrefsRaw(ctx.user.id));
+    }),
+    savePrefs: protectedProcedure
+      .input(z.object({ muted: z.array(z.string().max(32)).max(50) }))
+      .mutation(async ({ ctx, input }) => {
+        const { saveNotificationPrefs } = await import("./appSettings");
+        const { parseNotificationPrefs } = await import("../shared/appSettings");
+        const prefs = parseNotificationPrefs(input);
+        await saveNotificationPrefs(ctx.user.id, prefs);
+        return prefs;
+      }),
   }),
 
   // ─── GOOGLE REVIEWS ───────────────────────────────────────────────────────

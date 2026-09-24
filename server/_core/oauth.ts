@@ -10,7 +10,7 @@ import { shouldRejectUnverifiedGoogleEmail } from "./googleIdentity";
 
 // 30 dias é o novo default (em vez de 1 ano) — reduz janela de exposição
 // caso uma cookie seja intercetada. O nome da env é opcional.
-const SESSION_MAX_MS = (() => {
+export const SESSION_MAX_MS = (() => {
   const n = parseInt(process.env.SESSION_MAX_DAYS ?? "30", 10);
   return (Number.isFinite(n) && n > 0 ? n : 30) * 24 * 60 * 60 * 1000;
 })();
@@ -119,9 +119,11 @@ export function registerOAuthRoutes(app: Express) {
           lastSignedIn: new Date().toISOString().slice(0, 19).replace("T", " "),
         });
 
+        const devAccount = await db.getUserByOpenId(openId);
         const sessionToken = await sdk.createSessionToken(openId, {
           name,
           expiresInMs: SESSION_MAX_MS,
+          sessionVersion: devAccount?.sessionVersion ?? 0,
         });
 
         const cookieOptions = getSessionCookieOptions(req);
@@ -338,6 +340,7 @@ export function registerOAuthRoutes(app: Express) {
       const sessionToken = await sdk.createSessionToken(openId, {
         name: userInfo.name || "",
         expiresInMs: SESSION_MAX_MS,
+        sessionVersion: account.sessionVersion ?? 0,
       });
 
       const cookieOptions = getSessionCookieOptions(req);

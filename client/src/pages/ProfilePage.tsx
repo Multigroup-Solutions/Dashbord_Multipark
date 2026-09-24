@@ -2,8 +2,11 @@
 import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
-import { Clock, Shield, LogOut, ChevronRight, UserCheck, Smartphone } from "lucide-react";
+import { Clock, Shield, LogOut, ChevronRight, UserCheck, Smartphone, SlidersHorizontal, Bell } from "lucide-react";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
+import { Switch } from "@/components/ui/switch";
+import { toast } from "sonner";
+import { NOTIFICATION_KINDS } from "@shared/appSettings";
 
 const ROLE_LABELS: Record<string, string> = {
   super_admin: "Super Admin", admin: "Admin", supervisor: "Supervisor",
@@ -41,7 +44,10 @@ export default function ProfilePage() {
     { icon: Clock, label: "O meu ponto", note: myStatus?.status === "in" ? "entrada aberta" : "picar entrada", action: () => openMyEmployee("timerecords") },
     { icon: UserCheck, label: "A minha ficha", note: "RH", action: () => openMyEmployee() },
     ...(user?.role && ["admin", "super_admin"].includes(user.role)
-      ? [{ icon: Shield, label: "Roles e permissões", note: "granular", action: () => navigate("/permissoes") }]
+      ? [
+          { icon: Shield, label: "Roles e permissões", note: "granular", action: () => navigate("/permissoes") },
+          { icon: SlidersHorizontal, label: "Definições", note: "sistema", action: () => navigate("/definicoes") },
+        ]
       : []),
   ];
 
@@ -99,6 +105,8 @@ export default function ProfilePage() {
         ))}
       </div>
 
+      <NotificationPrefsCard />
+
       <button
         type="button"
         onClick={() => logout()}
@@ -109,6 +117,50 @@ export default function ProfilePage() {
         </span>
         <span className="flex-1 text-[13.5px] font-semibold text-destructive">Sair</span>
       </button>
+    </div>
+  );
+}
+
+// Preferências de notificação da própria pessoa: tipos silenciados não entram
+// no sino. As obrigatórias (ex.: passagem de turno) não se desligam.
+function NotificationPrefsCard() {
+  const utils = trpc.useUtils();
+  const { data } = trpc.notifications.prefs.useQuery(undefined, { staleTime: 60_000 });
+  const save = trpc.notifications.savePrefs.useMutation({
+    onSuccess: (prefs) => { utils.notifications.prefs.setData(undefined, prefs); toast.success("Preferências guardadas."); },
+    onError: (e) => toast.error(e.message),
+  });
+  const muted = new Set(data?.muted ?? []);
+  const toggle = (kind: string, on: boolean) => {
+    const next = new Set(muted);
+    if (on) next.delete(kind); else next.add(kind);
+    save.mutate({ muted: Array.from(next) });
+  };
+  return (
+    <div className="bg-card border border-border rounded-2xl shadow-sm overflow-hidden">
+      <div className="flex items-center gap-3 px-3.5 pt-3 pb-1">
+        <span className="w-8 h-8 rounded-[9px] bg-primary/10 text-primary flex items-center justify-center shrink-0">
+          <Bell className="w-4 h-4" />
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="text-[13.5px] font-semibold text-foreground">Notificações</div>
+          <div className="text-[11.5px] text-muted-foreground">O que aparece no sino da aplicação.</div>
+        </div>
+      </div>
+      {NOTIFICATION_KINDS.map((k) => (
+        <label key={k.kind} className="flex items-center gap-3 px-3.5 min-h-[52px] border-t border-border first-of-type:border-t-0">
+          <span className="flex-1 min-w-0">
+            <span className="block text-[13px] font-medium text-foreground">{k.label}{k.required ? " (obrigatória)" : ""}</span>
+            <span className="block text-[11.5px] text-muted-foreground">{k.description}</span>
+          </span>
+          <Switch
+            checked={k.required ? true : !muted.has(k.kind)}
+            disabled={k.required || !data || save.isPending}
+            onCheckedChange={(v) => toggle(k.kind, v)}
+            aria-label={k.label}
+          />
+        </label>
+      ))}
     </div>
   );
 }

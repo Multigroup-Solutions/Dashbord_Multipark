@@ -16,6 +16,7 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { sdk } from "./sdk";
 import { requireSession } from "./requireSession";
 import { getBookingTryAllParks } from "../multipark";
+import { cronRunRecorder } from "../cronRuns";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -31,6 +32,10 @@ app.use("/api/multipark/webhook", createMultiparkWebhookRouter({
 }));
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
+// Registo de TODAS as corridas de /api/cron/* (tabela cron_runs → Definições →
+// Estado do sistema). Montado antes das rotas; waitUntil mantém a função viva
+// até a linha final estar escrita.
+app.use("/api/cron", cronRunRecorder({ defer: (p) => waitUntil(p) }));
 
 let initError: string | null = null;
 

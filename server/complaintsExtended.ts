@@ -40,6 +40,13 @@ export async function createNotification(input: {
 }): Promise<void> {
   const db = await getDb();
   if (!db) return;
+  // Preferências da pessoa (Perfil → Notificações): tipos silenciados não
+  // entram. Obrigatórias/desconhecidas entram sempre; erro a ler → entra.
+  try {
+    const { getNotificationPrefsRaw } = await import("./appSettings");
+    const { parseNotificationPrefs, wantsNotification } = await import("../shared/appSettings");
+    if (!wantsNotification(parseNotificationPrefs(await getNotificationPrefsRaw(input.userId)), input.kind ?? "info")) return;
+  } catch { /* segue: na dúvida, notifica */ }
   await db.insert(appNotifications).values({
     userId: input.userId,
     title: input.title.slice(0, 255),

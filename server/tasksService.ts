@@ -326,7 +326,13 @@ export async function upsertAvailabilityTask(input: {
   });
   const taskId = Number((res as any).insertId);
   try {
-    const owner = await findEmployeeByEmailOrName(availabilityTaskAssigneeEmail(process.env));
+    // Responsável: Definições (availability.assigneeEmail) → env → omissão.
+    let ownerEmail = availabilityTaskAssigneeEmail(process.env);
+    try {
+      const { getSetting } = await import("./appSettings");
+      ownerEmail = (await getSetting("availability.assigneeEmail")) || ownerEmail;
+    } catch { /* fica a env/omissão */ }
+    const owner = await findEmployeeByEmailOrName(ownerEmail);
     if (owner && taskId) {
       await db.insert(taskAssignees).values({ taskId, employeeId: owner.id });
       await db.update(tasks).set({ assigneeId: owner.id }).where(eq(tasks.id, taskId));
