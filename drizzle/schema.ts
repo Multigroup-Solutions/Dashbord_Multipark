@@ -576,6 +576,8 @@ export const expenseCategories = mysqlTable("expense_categories", {
 	name: varchar({ length: 128 }).notNull(),
 	department: varchar({ length: 128 }),
 	color: varchar({ length: 16 }).default('#6366f1'),
+	// IVA da categoria em % (migração 0083); NULL = taxa normal (23%)
+	vatRate: decimal({ precision: 5, scale: 2 }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 });
 

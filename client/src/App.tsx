@@ -1,13 +1,12 @@
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
-import { Route, Switch } from "wouter";
+import { Redirect, Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 import DashboardLayout from "./components/DashboardLayout";
 import ExpensesPage from "./pages/ExpensesPage";
-import ExpenseDashboard from "./pages/ExpenseDashboard";
 import UsersPage from "./pages/UsersPage";
 import LogsPage from "./pages/LogsPage";
 import HRPage from "./pages/HRPage";
@@ -83,12 +82,9 @@ function Router() {
           </DashboardLayout>
         )}
       </Route>
+      {/* O painel passou a separador "Resumo" de /despesas */}
       <Route path="/despesas/dashboard">
-        {() => (
-          <DashboardLayout>
-            <ExpenseDashboard />
-          </DashboardLayout>
-        )}
+        {() => <Redirect to="/despesas?tab=resumo" />}
       </Route>
       <Route path="/utilizadores">
         {() => (

@@ -35,7 +35,10 @@ import {
 } from "@/components/ui/table";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { RecurringExpensesDialog, CompareExpensesDialog } from "@/components/ExpenseRecurringCompare";
+import { RecurringExpensesDialog, CompareExpensesDialog, CategoryVatDialog } from "@/components/ExpenseRecurringCompare";
+import ExpenseDashboard from "./ExpenseDashboard";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
 import {
   Plus,
@@ -58,6 +61,8 @@ import {
   ArrowLeftRight,
   Repeat,
   FileText,
+  MoreHorizontal,
+  Percent,
 } from "lucide-react";
 import { toast } from "sonner";
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth } from "date-fns";
@@ -191,21 +196,19 @@ export default function ExpensesPage() {
   const filters = useGlobalFilters();
   const utils = trpc.useUtils();
 
+  // Lista | Resumo (o antigo /despesas/dashboard vive aqui)
+  const [tab, setTab] = useState<"lista" | "resumo">(() =>
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("tab") === "resumo" ? "resumo" : "lista");
+
   // Filters
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<string>("");
   const [filterCategory, setFilterCategory] = useState<string>("");
-  const [filterProject, setFilterProject] = useState<string>("");
   const [filterUser, setFilterUser] = useState<string>("");
 
-  // Sync global filter to local project filter
-  useEffect(() => {
-    if (filters.projectId !== undefined) {
-      setFilterProject(String(filters.projectId));
-    } else {
-      setFilterProject("");
-    }
-  }, [filters.projectId]);
+  // Centro de custos: só o filtro GLOBAL (o select local duplicava-o e
+  // sobrepunha-se a ele).
+  const projectFilterId = filters.projectId;
   // Por omissão mostra só a semana atual — o histórico completo vem por
   // pesquisa, pelo botão "Tudo" ou por datas manuais.
   const [startDate, setStartDate] = useState(() => quickRangeDates("week").start);
@@ -246,11 +249,14 @@ export default function ExpensesPage() {
     search: search || undefined,
     status: (filterStatus && filterStatus !== "all") ? filterStatus : undefined,
     categoryId: (filterCategory && filterCategory !== "all") ? parseInt(filterCategory) : undefined,
-    projectId: (filterProject && filterProject !== "all") ? parseInt(filterProject) : undefined,
+    projectId: projectFilterId,
     userId: (filterUser && filterUser !== "all") ? parseInt(filterUser) : undefined,
     startDate: effectiveStartDate || undefined,
     endDate: effectiveEndDate || undefined,
-  }, { enabled: !isInputOnly });
+  });
+  // Totais, comparar e resumo: só quando o servidor diz que se podem ver
+  const { data: access } = trpc.expenses.access.useQuery();
+  const showTotals = access?.canSeeTotals ?? false;
   const { data: categories } = trpc.categories.list.useQuery();
   const { data: projectsList } = trpc.projects.list.useQuery();
   const { data: employeesList } = trpc.rh.list.useQuery({});
@@ -312,7 +318,7 @@ export default function ExpensesPage() {
       search: search || undefined,
       status: (filterStatus && filterStatus !== "all") ? filterStatus : undefined,
       categoryId: (filterCategory && filterCategory !== "all") ? parseInt(filterCategory) : undefined,
-      projectId: (filterProject && filterProject !== "all") ? parseInt(filterProject) : undefined,
+      projectId: projectFilterId,
       userId: (filterUser && filterUser !== "all") ? parseInt(filterUser) : undefined,
       startDate: effectiveStartDate || undefined,
       endDate: effectiveEndDate || undefined,
@@ -325,7 +331,6 @@ export default function ExpensesPage() {
     setSearch("");
     setFilterStatus("");
     setFilterCategory("");
-    setFilterProject(filters.projectId !== undefined ? String(filters.projectId) : "");
     setFilterUser("");
     setAllHistory(false);
     applyQuickRange("week");
@@ -333,12 +338,13 @@ export default function ExpensesPage() {
 
   const defaultWeek = quickRangeDates("week");
   const hasFilters = Boolean(
-    search || filterStatus || filterCategory || filterProject || filterUser || allHistory ||
+    search || filterStatus || filterCategory || filterUser || allHistory ||
     startDate !== defaultWeek.start || endDate !== defaultWeek.end
   );
 
   const [showRecurring, setShowRecurring] = useState(false);
   const [showCompare, setShowCompare] = useState(false);
+  const [showVat, setShowVat] = useState(false);
   // As recorrentes deixaram de ser lançadas ao abrir a página: corre no cron
   // diário (/api/cron/daily-ops) e, à mão, no diálogo "Recorrentes".
 
@@ -347,7 +353,7 @@ export default function ExpensesPage() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          {!isInputOnly ? (
+          {tab === "lista" ? (
             <p className="text-sm text-muted-foreground">
               {kpisReady ? `${kpis.count} despesa(s)` : isError ? "Erro a carregar" : "A carregar…"}
               {kpisReady && kpis.cancelledCount > 0 && ` (+${kpis.cancelledCount} cancelada(s))`}
@@ -357,34 +363,48 @@ export default function ExpensesPage() {
               {selectedUserName && <> de <strong>{selectedUserName}</strong></>}
             </p>
           ) : (
-            <p className="text-sm text-muted-foreground">Registo de despesas</p>
+            <p className="text-sm text-muted-foreground">Resumo dos gastos (ano, estados, categorias e próximos pagamentos)</p>
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0 flex-wrap">
-          {canManage && (
-            <Button
-              variant="outline"
-              onClick={handleExport}
-              disabled={exportMutation.isPending}
-              className="gap-2"
-            >
-              {exportMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <FileDown className="h-4 w-4" />
-              )}
-              Exportar Excel
-            </Button>
+          {canManage && showTotals && (
+            <Tabs value={tab} onValueChange={(v) => setTab(v as "lista" | "resumo")}>
+              <TabsList>
+                <TabsTrigger value="lista">Lista</TabsTrigger>
+                <TabsTrigger value="resumo">Resumo</TabsTrigger>
+              </TabsList>
+            </Tabs>
           )}
-          {!isInputOnly && (
-            <Button variant="outline" onClick={() => setShowCompare(true)} className="gap-2">
-              <ArrowLeftRight className="h-4 w-4" /> Comparar
-            </Button>
-          )}
-          {canManage && (
-            <Button variant="outline" onClick={() => setShowRecurring(true)} className="gap-2">
-              <Repeat className="h-4 w-4" /> Recorrentes
-            </Button>
+          {(showTotals || canManage) && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="icon" aria-label="Mais ações" title="Mais ações">
+                  {exportMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreHorizontal className="h-4 w-4" />}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {showTotals && (
+                  <DropdownMenuItem onClick={() => setShowCompare(true)}>
+                    <ArrowLeftRight className="h-4 w-4 mr-2" /> Comparar períodos
+                  </DropdownMenuItem>
+                )}
+                {canManage && showTotals && (
+                  <DropdownMenuItem onClick={handleExport} disabled={exportMutation.isPending}>
+                    <FileDown className="h-4 w-4 mr-2" /> Exportar Excel
+                  </DropdownMenuItem>
+                )}
+                {canManage && (
+                  <DropdownMenuItem onClick={() => setShowRecurring(true)}>
+                    <Repeat className="h-4 w-4 mr-2" /> Despesas recorrentes
+                  </DropdownMenuItem>
+                )}
+                {canManage && (
+                  <DropdownMenuItem onClick={() => setShowVat(true)}>
+                    <Percent className="h-4 w-4 mr-2" /> Categorias e IVA
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
           <Button onClick={() => { setEditId(null); setShowForm(true); }} className="gap-2">
             <Plus className="h-4 w-4" />
@@ -393,20 +413,18 @@ export default function ExpensesPage() {
         </div>
       </div>
 
-      {/* Modo "só input" (backoffice/team_leader): regista mas não vê nada */}
+      {/* Backoffice/team leader: vêem as SUAS despesas (estado), sem totais */}
       {isInputOnly && (
-        <Card className="p-8 text-center space-y-2">
-          <Receipt className="h-10 w-10 mx-auto text-muted-foreground/40" />
-          <p className="font-medium">Regista aqui as despesas com o botão "Nova Despesa"</p>
-          <p className="text-sm text-muted-foreground">O teu perfil permite inserir despesas (com foto e extração automática); a consulta de listas e totais é reservada a supervisores e administração.</p>
-        </Card>
+        <p className="text-xs text-muted-foreground -mt-3">As tuas despesas e o estado de cada uma. Os totais da empresa são reservados à administração.</p>
       )}
 
+      {tab === "resumo" && <ExpenseDashboard />}
+      <CategoryVatDialog open={showVat} onClose={() => setShowVat(false)} categories={categories ?? []} />
       <RecurringExpensesDialog open={showRecurring} onClose={() => setShowRecurring(false)} categories={categories ?? []} projects={projectsList ?? []} />
-      <CompareExpensesDialog open={showCompare} onClose={() => setShowCompare(false)} categories={categories ?? []} projectId={(filterProject && filterProject !== "all") ? parseInt(filterProject) : undefined} />
+      <CompareExpensesDialog open={showCompare} onClose={() => setShowCompare(false)} categories={categories ?? []} projectId={projectFilterId} />
 
       {/* KPI Cards — "—" enquanto carrega ou em erro; nunca um 0 enganador */}
-      {!isInputOnly && (
+      {showTotals && tab === "lista" && (
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4" aria-busy={isLoading}>
         {([
           { label: "Total", value: kpis.total, icon: Euro, box: "bg-primary/10", ic: "text-primary", txt: "", hint: kpis.cancelledCount > 0 ? `sem ${kpis.cancelledCount} cancelada(s) · ${fmtEur(kpis.cancelled)}` : "" },
@@ -422,7 +440,7 @@ export default function ExpensesPage() {
                 </div>
                 <div className="min-w-0">
                   <p className="text-xs text-muted-foreground font-medium">{k.label}</p>
-                  <p className={`text-lg font-bold ${k.txt}`}>{kpisReady ? fmtEur(k.value) : "—"}</p>
+                  <p className={`text-base sm:text-lg font-bold truncate ${k.txt}`}>{kpisReady ? fmtEur(k.value) : "—"}</p>
                   {kpisReady && k.hint && <p className="text-[11px] text-muted-foreground truncate">{k.hint}</p>}
                 </div>
               </div>
@@ -433,14 +451,14 @@ export default function ExpensesPage() {
       )}
 
       {/* Filters */}
-      {!isInputOnly && (
+      {tab === "lista" && (
       <Card>
         <CardContent className="pt-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <div className="relative sm:col-span-2 lg:col-span-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
-                placeholder="Pesquisar fornecedor..."
+                placeholder="Pesquisar fornecedor, descrição, nº doc…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="pl-9"
@@ -468,25 +486,8 @@ export default function ExpensesPage() {
                 ))}
               </SelectContent>
             </Select>
-            <Select value={filterProject} onValueChange={setFilterProject}>
-              <SelectTrigger>
-                <SelectValue placeholder="Centro de custos" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todos (grupo / cidade / marca / projeto)</SelectItem>
-                {sortProjectsHierarchical(projectsList ?? []).map((p: any) => (
-                  <SelectItem key={p.id} value={String(p.id)}>
-                    <span style={{ paddingLeft: `${p.__depth * 12}px` }} className="inline-flex items-center gap-2">
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded border ${LEVEL_COLOR[p.level] ?? ""}`}>
-                        {LEVEL_LABEL[p.level] ?? p.level}
-                      </span>
-                      {p.name}
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {/* User filter (who inserted) */}
+            {/* Quem inseriu — só para quem gere (users.list é admin) */}
+            {canManage && (
             <Select value={filterUser} onValueChange={setFilterUser}>
               <SelectTrigger>
                 <SelectValue placeholder="Inserido por" />
@@ -498,6 +499,7 @@ export default function ExpensesPage() {
                 ))}
               </SelectContent>
             </Select>
+            )}
             {/* Navegador de datas: granularidade + setas ◀ ▶ (componente transversal) */}
             <div className="flex gap-2 items-center sm:col-span-2 lg:col-span-3 flex-wrap">
               <div className={allHistory ? "opacity-50 pointer-events-none" : ""}>
@@ -528,7 +530,7 @@ export default function ExpensesPage() {
       )}
 
       {/* Table */}
-      {!isInputOnly && (
+      {tab === "lista" && (
       <Card>
         <CardContent className="p-0">
           {isLoading ? (
@@ -555,7 +557,33 @@ export default function ExpensesPage() {
               )}
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <>
+            {/* Telemóvel: cartões (a tabela de 10 colunas não cabe) */}
+            <ul className="sm:hidden divide-y">
+              {sortedExpenses.map((row: any) => {
+                const { expense, category, project } = row;
+                return (
+                  <li key={expense.id}>
+                    <button type="button" className="w-full text-left px-4 py-3 active:bg-muted/50" onClick={() => setDetailExpense(row)}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="font-medium truncate">{expense.supplier ?? expense.description ?? "—"}</div>
+                          <div className="text-xs text-muted-foreground truncate">
+                            {expense.expenseDate ? format(parseDbDate(expense.expenseDate), "dd MMM", { locale: pt }) : "—"}
+                            {category ? ` · ${category.name}` : ""}{project ? ` · ${project.name}` : ""}
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="font-semibold">{fmtEur(expense.amount)}</div>
+                          <div className="mt-1"><StatusBadge status={expense.status} /></div>
+                        </div>
+                      </div>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            <div className="hidden sm:block overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -670,6 +698,7 @@ export default function ExpensesPage() {
                 </TableBody>
               </Table>
             </div>
+            </>
           )}
         </CardContent>
       </Card>

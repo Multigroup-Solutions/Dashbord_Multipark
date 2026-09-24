@@ -125,3 +125,16 @@ describe("computeMargin — a fórmula", () => {
     expect(netOfVat(123)).toBeCloseTo(100, 6);
   });
 });
+
+describe("computeMargin com IVA por categoria", () => {
+  it("usa o líquido das despesas vindo do motor quando existe", () => {
+    const base = { revenueGross: 1230, expensesGross: 223, salariesBase: 0, salariesProvisions: 0, salariesVariable: 0, employerTax: 0, extrasDia: 0, salesCommissions: 0, operationalCommissions: 0 };
+    // 123 € com 23% (100 líquido) + 100 € de renda isenta (100 líquido)
+    const r = computeMargin({ ...base, expensesNet: 200 });
+    expect(r.expensesNet).toBe(200);
+    expect(r.vatOnExpenses).toBeCloseTo(23, 6);
+    expect(r.vatToPay).toBeCloseTo(230 - 23, 6);
+    // sem o valor do motor, cai na taxa normal
+    expect(computeMargin(base).expensesNet).toBeCloseTo(223 / 1.23, 6);
+  });
+});

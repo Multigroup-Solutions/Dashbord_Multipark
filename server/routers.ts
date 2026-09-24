@@ -1627,6 +1627,23 @@ export const appRouter = router({
         await createCategory({ ...input, department: input.department ?? null, color: input.color ?? "#6366f1" });
         return { success: true };
       }),
+    // IVA da categoria (%): as Finanças tiram-no ao custo e ao IVA a deduzir.
+    // null = taxa normal (23%).
+    setVatRate: protectedProcedure
+      .input(z.object({ id: z.number(), vatRate: z.number().min(0).max(100).nullable() }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        const { getDb } = await import("./db");
+        const { eq } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Base de dados indisponível" });
+        const { expenseCategories } = await import("../drizzle/schema");
+        await db.update(expenseCategories)
+          .set({ vatRate: input.vatRate == null ? null : input.vatRate.toFixed(2) })
+          .where(eq(expenseCategories.id, input.id));
+        await logActivity({ userId: ctx.user.id, action: "update", entity: "expense_category", entityId: input.id, details: `IVA da categoria: ${input.vatRate == null ? "normal (23%)" : input.vatRate + "%"}` });
+        return { success: true };
+      }),
   }),
 
   // ── EXPENSES ────────────────────────────────────────────────────────────────
@@ -1636,6 +1653,14 @@ export const appRouter = router({
     // as suas + o seu centro de custos (com descendentes); admin+ vê tudo,
     // salvo deny individual de totais. A MESMA regra vale para detalhe,
     // totais, comparação, Excel e documentos (expenseWhereFor/canSeeExpense).
+    // O que o utilizador pode ver: o ecrã mostra totais/comparar/exportar só
+    // quando o servidor os devolve (antes o cliente adivinhava pelo role).
+    access: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx.user.role, "backoffice");
+      const vis = await expenseVisibilityFor(ctx.user);
+      return { scope: vis.kind, canSeeTotals: canSeeAggregates(vis) };
+    }),
+
     list: protectedProcedure
       .input(EXPENSE_LIST_INPUT)
       .query(async ({ ctx, input }) => {

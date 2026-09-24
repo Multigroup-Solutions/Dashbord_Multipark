@@ -231,6 +231,8 @@ export interface MarginInput {
   salesCommissions: number;
   operationalCommissions: number;
   vatRate?: number;
+  /** Despesas SEM IVA já calculadas com a taxa de cada categoria (0083). */
+  expensesNet?: number;
 }
 export interface MarginResult {
   revenueNet: number;
@@ -254,7 +256,8 @@ export interface MarginResult {
 export function computeMargin(i: MarginInput): MarginResult {
   const vat = i.vatRate ?? FINANCE_PARAMS.vatRate;
   const revenueNet = netOfVat(i.revenueGross, vat);
-  const expensesNet = netOfVat(i.expensesGross, vat);
+  // Líquido real (IVA por categoria) quando o motor o traz; senão, taxa normal
+  const expensesNet = i.expensesNet ?? netOfVat(i.expensesGross, vat);
   const salaries = i.salariesBase + i.salariesProvisions + i.salariesVariable;
   const personnel = salaries + i.employerTax;
   const commissions = i.salesCommissions + i.operationalCommissions;

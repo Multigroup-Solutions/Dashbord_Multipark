@@ -148,3 +148,52 @@ export function CompareExpensesDialog({ open, onClose, categories, projectId }: 
     </Dialog>
   );
 }
+
+// ─── CATEGORIAS E IVA ─────────────────────────────────────────────────────────
+// Taxa de IVA por categoria: as Finanças tiram-na ao custo e ao IVA a deduzir
+// (rendas, seguros, bancos, impostos e pessoal não têm IVA). Vazio = 23%.
+export function CategoryVatDialog({ open, onClose, categories }: { open: boolean; onClose: () => void; categories: any[] }) {
+  const utils = trpc.useUtils();
+  const [drafts, setDrafts] = useState<Record<number, string>>({});
+  const save = trpc.categories.setVatRate.useMutation({
+    onSuccess: () => { utils.categories.list.invalidate(); toast.success("IVA atualizado"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const commit = (c: any) => {
+    const raw = drafts[c.id];
+    if (raw === undefined) return;
+    const t = raw.trim().replace(",", ".");
+    const v = t === "" ? null : Number(t);
+    if (v != null && (!Number.isFinite(v) || v < 0 || v > 100)) { toast.error("Taxa inválida (0–100)"); return; }
+    const cur = c.vatRate == null ? null : Number(c.vatRate);
+    if (v === cur) return;
+    save.mutate({ id: c.id, vatRate: v });
+  };
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader><DialogTitle>Categorias e IVA</DialogTitle></DialogHeader>
+        <p className="text-xs text-muted-foreground -mt-2">A taxa de IVA de cada categoria é usada nas Finanças para o custo sem IVA e para o IVA a deduzir. Deixa vazio para a taxa normal (23%).</p>
+        <div className="space-y-1.5 max-h-96 overflow-y-auto">
+          {categories.map((c: any) => (
+            <div key={c.id} className="flex items-center gap-2 text-sm border rounded px-2 py-1.5">
+              <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: c.color ?? "#6366f1" }} />
+              <span className="flex-1 min-w-0 truncate">{c.name}</span>
+              <Input
+                className="w-20 h-8 text-right"
+                inputMode="decimal"
+                placeholder="23"
+                aria-label={`IVA de ${c.name} (%)`}
+                value={drafts[c.id] ?? (c.vatRate == null ? "" : String(Number(c.vatRate)))}
+                onChange={(e) => setDrafts({ ...drafts, [c.id]: e.target.value })}
+                onBlur={() => commit(c)}
+                onKeyDown={(e) => { if (e.key === "Enter") commit(c); }}
+              />
+              <span className="text-muted-foreground text-xs">%</span>
+            </div>
+          ))}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
