@@ -431,7 +431,11 @@ export async function autofillShift(input: { date: string; city: CityId; shift: 
   const sameCity = (await listAssignments(input.date, input.city)).filter((a) => a.shift === input.shift && !a.isTeamLeader);
   const alreadyAssigned = new Set(all.map((a) => a.employeeId).filter((x): x is number => x != null));
 
-  const cands = await listDriverCandidates(input.date);
+  // Quem tem formação obrigatória por concluir não entra no preenchimento automático.
+  const { employeesMissingTraining } = await import("./trainingPaths");
+  const allCands = await listDriverCandidates(input.date);
+  const untrained = await employeesMissingTraining(allCands.map((c) => c.id));
+  const cands = allCands.filter((c) => !untrained.has(c.id));
   const { employees } = await import("../drizzle/schema");
   const { inArray } = await import("drizzle-orm");
   const ids = cands.map((c) => c.id);
@@ -659,6 +663,9 @@ export async function convertLeadToExtra(leadId: number, projectId: number, user
       entityId: leadId,
       details: `Lead convertido em extra: ${lead.fullName} → employee ${employeeId}${created ? " (criado)" : " (existente)"} · ${costCenter.projectName}${lead.notes ? ` · notas do lead: ${lead.notes}` : ""}`,
     });
+    // Percurso de onboarding por defeito (best-effort — nunca parte a conversão).
+    const { autoAssignOnboarding } = await import("./trainingPaths");
+    await autoAssignOnboarding(employeeId, "lead_convert", userId);
     return { employeeId, created, city: costCenter.city };
   } catch (err) {
     // Falhou: liberta a reserva para se poder tentar de novo
@@ -718,6 +725,16 @@ export async function runExtrasAutomation(now: Date = new Date()): Promise<Autom
   }
 
   await runLeadAutomation(clock, now, report, run);
+
+  // Formação: lembretes, atrasos e recertificação (TRAINING_REMINDERS=off desliga).
+  try {
+    const { runTrainingAutomation } = await import("./trainingPaths");
+    const out = await runTrainingAutomation(now, clock.hour);
+    report.details.training = out;
+    if (!out.skipped) report.ran.push("training");
+  } catch (err: any) {
+    report.errors.push(`training: ${String(err?.message ?? err).slice(0, 200)}`);
+  }
   return report;
 }
 

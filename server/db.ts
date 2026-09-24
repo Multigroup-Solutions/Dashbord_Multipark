@@ -152,6 +152,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0085").then(m => ({ s: m.MIGRATION_0085_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0085 })),
       import("./migrations/migration_0086").then(m => ({ s: m.MIGRATION_0086_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0086 })),
       import("./migrations/migration_0087").then(m => ({ s: m.MIGRATION_0087_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0087 })),
+      import("./migrations/migration_0090").then(m => ({ s: m.MIGRATION_0090_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0090 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -2536,10 +2537,11 @@ export async function deleteTrainingVideo(id: number) {
   await db.delete(trainingVideos).where(eq(trainingVideos.id, id));
 }
 
-export async function getTrainingManuals(categoryId?: number, type?: string) {
+export async function getTrainingManuals(categoryId?: number, type?: string, includeUnpublished = false) {
   const db = await getDb();
   if (!db) return [];
-  const conditions: any[] = [eq(trainingManuals.published, 1)];
+  // Admins veem também os não publicados (com badge); os restantes não.
+  const conditions: any[] = includeUnpublished ? [] : [eq(trainingManuals.published, 1)];
   if (categoryId) conditions.push(eq(trainingManuals.categoryId, categoryId));
   if (type) conditions.push(eq(trainingManuals.type, type as any));
   return db.select().from(trainingManuals).where(and(...conditions)).orderBy(desc(trainingManuals.createdAt));
@@ -2552,7 +2554,7 @@ export async function createTrainingManual(data: { categoryId?: number; title: s
   return result;
 }
 
-export async function updateTrainingManual(id: number, data: { title?: string; content?: string; type?: "manual" | "update" | "news" | "procedure"; published?: boolean; fileUrl?: string; fileKey?: string; fileName?: string; fileMimeType?: string }) {
+export async function updateTrainingManual(id: number, data: { title?: string; content?: string; type?: "manual" | "update" | "news" | "procedure" | "link"; published?: boolean; fileUrl?: string | null; fileKey?: string | null; fileName?: string | null; fileMimeType?: string | null; careerLevel?: string | null; categoryId?: number | null }) {
   const db = await getDb();
   if (!db) return;
   const { published, ...rest } = data;
