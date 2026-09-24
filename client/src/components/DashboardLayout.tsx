@@ -208,9 +208,9 @@ export const menuGroups: MenuGroup[] = [
       { icon: Users, label: "Utilizadores", path: "/utilizadores" },
       { icon: ShieldCheck, label: "Permissões", path: "/permissoes" },
       { icon: RefreshCw, label: "Sincronização", path: "/multipark/sync" },
-      { icon: Key, label: "API Keys", path: "/api-keys" },
+      { icon: Key, label: "API Keys", path: "/api-keys", minRole: "super_admin" },
       { icon: Plug, label: "Integrações", path: "/integracoes/google-ads" },
-      { icon: ScrollText, label: "Logs", path: "/logs" },
+      { icon: ScrollText, label: "Logs", path: "/logs", minRole: "super_admin" },
     ],
   },
 ];

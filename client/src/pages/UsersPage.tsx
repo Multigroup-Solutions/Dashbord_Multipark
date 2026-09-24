@@ -64,6 +64,8 @@ const ROLES = [
   { value: "user", label: "Utilizador", color: "bg-gray-100 text-gray-700 border-gray-200" },
 ];
 
+type RoleValue = "super_admin" | "admin" | "supervisor" | "team_leader" | "backoffice" | "frontoffice" | "extra" | "user";
+
 const DEPARTMENTS = [
   "Administração",
   "Operações",
@@ -244,18 +246,21 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
       return;
     }
     if (editingUser) {
+      // Email e role: só o super_admin altera (o servidor recusa o resto).
       updateMutation.mutate({
         userId: editingUser.id,
         name: form.name,
-        email: form.email,
-        role: form.role,
-        department: form.department || null,
+        ...(isSuperAdmin ? {
+          email: form.email,
+          role: form.role as RoleValue,
+          department: form.department || null,
+        } : {}),
       });
     } else {
       createMutation.mutate({
         name: form.name,
         email: form.email,
-        role: form.role,
+        role: form.role as RoleValue,
         department: form.department || undefined,
       });
     }
@@ -465,7 +470,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                           <Select
                             value={u.role}
                             onValueChange={(newRole) => {
-                              updateRoleMutation.mutate({ userId: u.id, role: newRole });
+                              updateRoleMutation.mutate({ userId: u.id, role: newRole as RoleValue });
                             }}
                           >
                             <SelectTrigger className="w-32 h-7 text-xs">
@@ -672,6 +677,8 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                   value={form.email}
                   onChange={(e) => setForm({ ...form, email: e.target.value })}
                   className="pl-9"
+                  disabled={!!editingUser && !isSuperAdmin}
+                  title={editingUser && !isSuperAdmin ? "Só o super_admin pode alterar o email de uma conta." : undefined}
                 />
               </div>
             </div>
@@ -718,7 +725,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
             )}
             {editingUser?.id === currentUser?.id && !isSuperAdmin && (
               <p className="text-xs text-muted-foreground bg-muted/50 p-3 rounded-lg">
-                Podes alterar o teu nome e email. Para alterar role ou departamento, contacta um administrador.
+                Podes alterar o teu nome. Para alterar email, role ou departamento, contacta um super admin.
               </p>
             )}
             {!editingUser && (

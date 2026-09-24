@@ -6,6 +6,7 @@ import { SignJWT, jwtVerify } from "jose";
 import type { User } from "../../drizzle/schema";
 import * as db from "../db";
 import { ENV } from "./env";
+import { shouldTouchLastSignedIn } from "./lastSignedIn";
 import type { GoogleTokenResponse, GoogleUserInfo } from "./types/oauthTypes";
 
 const isNonEmptyString = (value: unknown): value is string =>
@@ -178,10 +179,13 @@ class SDKServer {
       throw ForbiddenError(ACCESS_DENIED_MSG);
     }
 
-    await db.upsertUser({
-      openId: user.openId,
-      lastSignedIn: new Date().toISOString().slice(0, 19).replace("T", " "),
-    });
+    // No máximo uma escrita a cada 5 min (antes: um UPDATE por pedido).
+    if (shouldTouchLastSignedIn(user.lastSignedIn)) {
+      await db.upsertUser({
+        openId: user.openId,
+        lastSignedIn: new Date().toISOString().slice(0, 19).replace("T", " "),
+      });
+    }
 
     return user;
   }

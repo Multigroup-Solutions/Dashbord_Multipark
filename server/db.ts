@@ -329,7 +329,7 @@ export async function createManualUser(data: { name: string; email: string; role
   return result[0];
 }
 
-export async function updateUser(userId: number, data: { name?: string; email?: string; role?: string; department?: string | null; isActive?: boolean }) {
+export async function updateUser(userId: number, data: { name?: string; email?: string; role?: string; department?: string | null; isActive?: boolean }, opts: { relinkEmployees?: boolean } = {}) {
   const db = await getDb();
   if (!db) return;
   const updates: Record<string, any> = {};
@@ -348,7 +348,8 @@ export async function updateUser(userId: number, data: { name?: string; email?: 
     await db.update(users).set(updates).where(eq(users.id, userId));
   }
   // Fase 1: email novo → liga fichas com esse email que ainda não têm conta
-  if (updates.email) {
+  // (nunca a partir de uma auto-edição — ver users.update).
+  if (updates.email && opts.relinkEmployees !== false) {
     try {
       const { linkEmployeesToUserByEmail } = await import("./identity");
       await linkEmployeesToUserByEmail(db as any, userId, updates.email);
@@ -5743,6 +5744,34 @@ export async function getInviteByToken(token: string) {
   return result[0];
 }
 
+/**
+ * Reclama o convite de forma ATÓMICA (uso único): só passa de `pending` para
+ * `accepted` uma vez. Devolve true se foi este pedido que o reclamou.
+ */
+export async function claimInviteToken(token: string): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const [res] = await (db as any).execute(sql`
+    UPDATE invite_tokens SET invite_status = 'accepted', acceptedAt = ${toMysqlDateTime(new Date())}
+    WHERE token = ${token} AND invite_status = 'pending'`);
+  return Number(res?.affectedRows ?? 0) === 1;
+}
+
+/** Devolve um convite reclamado a `pending` (a ligação da conta falhou). */
+export async function releaseInviteToken(token: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(inviteTokens).set({ inviteStatus: "pending", acceptedAt: null }).where(eq(inviteTokens.token, token));
+}
+
+/** Nº de super_admin ATIVOS (guarda do último super_admin). */
+export async function countActiveSuperAdmins(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const [rows] = await (db as any).execute(sql`SELECT COUNT(*) AS n FROM users WHERE role = 'super_admin' AND isActive = 1`);
+  return Number(rows?.[0]?.n ?? 0);
+}
+
 export async function acceptInviteToken(token: string) {
   const db = await getDb();
   if (!db) return;
@@ -7163,6 +7192,8 @@ export async function getCheckoutDriversFromDb(
         gte(multiparkBookingHistory.actionTime, startStr),
         lte(multiparkBookingHistory.actionTime, endStr),
         isNotNull(multiparkBookingHistory.agentName),
+        // Âmbito de cidade: só movimentos de reservas das cidades autorizadas.
+        bookingHistoryScope(multiparkBookingHistory.bookingExternalId),
       ),
     )
     .groupBy(multiparkBookingHistory.agentName, multiparkBookingHistory.agentUserId)
@@ -7229,6 +7260,8 @@ export async function getAgentHistoryFromDb(opts: {
   const conds: any[] = [
     gte(multiparkBookingHistory.actionTime, startStr),
     lte(multiparkBookingHistory.actionTime, endStr),
+    // Âmbito de cidade: só movimentos de reservas das cidades autorizadas.
+    bookingHistoryScope(multiparkBookingHistory.bookingExternalId),
   ];
   if (opts.userId) {
     conds.push(eq(multiparkBookingHistory.agentUserId, opts.userId));

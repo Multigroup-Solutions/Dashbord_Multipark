@@ -47,6 +47,11 @@ const requireUser = t.middleware(async opts => {
     throw new TRPCError({ code: "UNAUTHORIZED", message: UNAUTHED_ERR_MSG });
   }
 
+  // Bloqueio de login da ficha (docs/faltas/manual) — no servidor, não só na UI.
+  const { loginBlockFor } = await import('../loginBlock');
+  const blocked = await loginBlockFor(ctx.user);
+  if (blocked) throw new TRPCError({ code: "FORBIDDEN", message: blocked });
+
   const user = await applyPermissionElevation(ctx.user);
 
   const { loadCityAccess, isPersonalAccessPath, hasForeignCityFilter, scopeCityQuery, selectedCityAccess, MISSING_COST_CENTRE_MESSAGE } = await import('../cityAccess');
@@ -83,7 +88,8 @@ export const adminProcedure = t.procedure.use(
   t.middleware(async opts => {
     const { ctx, next } = opts;
 
-    if (!ctx.user || ctx.user.role !== 'admin') {
+    // Hierarquia: admin OU acima (super_admin incluído).
+    if (!ctx.user || (ROLE_RANK[ctx.user.role] ?? 0) < ROLE_RANK.admin) {
       throw new TRPCError({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });
     }
 

@@ -127,14 +127,16 @@ export default function PermissionsPage() {
                             className={`gap-1.5 text-xs ${h.mode === "grant" ? "border-green-300 bg-green-50 text-green-800" : "border-red-300 bg-red-50 text-red-800"}`}
                           >
                             {h.mode === "grant" ? "✓" : "✕"} {h.userName ?? h.userEmail ?? `#${h.userId}`}
-                            <button
-                              type="button"
-                              title="Remover override"
-                              className="hover:text-foreground"
-                              onClick={() => setMut.mutate({ userId: h.userId, permission: p.id, mode: null })}
-                            >
-                              <X className="w-3 h-3" />
-                            </button>
+                            {h.canManage !== false && (
+                              <button
+                                type="button"
+                                title="Remover override"
+                                className="hover:text-foreground"
+                                onClick={() => setMut.mutate({ userId: h.userId, permission: p.id, mode: null })}
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            )}
                           </Badge>
                         ))
                       )}

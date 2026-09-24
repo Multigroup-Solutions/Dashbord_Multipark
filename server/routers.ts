@@ -11,7 +11,9 @@ import * as XLSX from "xlsx";
 import { ACCESS_DENIED_MSG, COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
-import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
+import { protectedProcedure, publicProcedure, router, invalidatePermissionElevation } from "./_core/trpc";
+import { normalizeEmail } from "@shared/email";
+import { USER_ROLES, superAdminGuard, inviteCompletionError } from "./userAdminRules";
 import { invokeLLM } from "./_core/llm";
 import { notifyOwner } from "./_core/notification";
 import { storagePut } from "./storage";
@@ -43,7 +45,7 @@ const openItemSchema = z.object({
 });
 import { expenseTotals } from "../shared/expenseTotals";
 import { getBillingData, getAnnualBreakdown } from "./finance/compat";
-import { canViewDocuments, canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, CENTER_SCOPED_ROLES, PERSONAL_FIELDS, CONTRACT_FIELDS, type RhViewer, type EmployeeRef, isRhAdmin } from "./rhAccess";
+import { canViewDocuments, canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, CENTER_SCOPED_ROLES, PERSONAL_FIELDS, CONTRACT_FIELDS, type RhViewer, type EmployeeRef, isRhAdmin, canEditIdentity, canReadEmployeeRecord } from "./rhAccess";
 import {
   applyDocsCompliance, getExtraDocsStatus, detectExtraDiaNoShows, listPendingPenalties, reviewPenalty,
   listSuspiciousTimeRecords, reviewTimeRecord, insertTimeRecordAtomic,
@@ -285,6 +287,9 @@ import {
   createInviteToken,
   getInviteByToken,
   acceptInviteToken,
+  claimInviteToken,
+  releaseInviteToken,
+  countActiveSuperAdmins,
   getInvitesByUser,
   getInvitesByEmail,
   linkInviteToOAuthUser,
@@ -534,6 +539,20 @@ async function rhEmployeeRefOrThrow(employeeId: number): Promise<EmployeeRef> {
 async function assertEmployeeWriteScope(viewer: RhViewer, ref: EmployeeRef): Promise<void> {
   if (isOwn(viewer, ref.id)) return;
   await assertEmployeeAccess(ref.id);
+}
+/**
+ * Leitura de registos de uma ficha (horas, férias, salário, penalizações):
+ * a própria passa sempre; senão exige `minRole` e a ficha no âmbito de cidade
+ * do pedido — também para admin (um admin limitado a uma cidade não lê
+ * outra). Regra pura em rhAccess.canReadEmployeeRecord.
+ */
+async function assertOwnOrScopedEmployee(user: { id: number; role: string }, employeeId: number, minRole: string): Promise<void> {
+  const me = await getEmployeeByUserId(user.id);
+  const viewer = { role: user.role, employeeId: me?.employee?.id ?? null };
+  if (viewer.employeeId === employeeId) return;
+  const target = await getEmployeeById(employeeId);
+  const ok = canReadEmployeeRecord(viewer, { id: employeeId, projectId: target?.employee.projectId ?? null }, minRole, scopedProjectIds());
+  if (!ok) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
 }
 /** Documentos: quem mexe nos dados pessoais da ficha; sem ficha, só admin+ (checklists vazias). */
 async function assertCanViewDocuments(user: { id: number; role: string }, employeeId: number, message: string): Promise<void> {
@@ -1170,7 +1189,7 @@ export const appRouter = router({
       .input(z.object({
         name: z.string().min(1, "Nome é obrigatório"),
         email: z.string().email("Email inválido"),
-        role: z.string().default("user"),
+        role: z.enum(USER_ROLES).default("user"),
         department: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
@@ -1197,41 +1216,71 @@ export const appRouter = router({
         userId: z.number(),
         name: z.string().min(1).optional(),
         email: z.string().email().optional(),
-        role: z.string().optional(),
+        role: z.enum(USER_ROLES).optional(),
         department: z.string().nullable().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         const isSelf = ctx.user.id === input.userId;
-        // Allow self-edit for name/email only; role/department changes require super_admin
-        if (!isSelf) {
-          requireRole(ctx.user.role, "super_admin");
-        }
+        const isSuper = ctx.user.role === "super_admin";
+        // Editar OUTRA conta: só super_admin. Na própria, quem não é
+        // super_admin só muda o nome (o email é a identidade: liga fichas e
+        // contas — só o super_admin o altera).
+        if (!isSelf) requireRole(ctx.user.role, "super_admin");
         const { userId, ...data } = input;
-        // If self-edit, only allow name and email changes
-        const safeData = isSelf && ctx.user.role !== "super_admin"
-          ? { name: data.name, email: data.email }
-          : data;
-        await updateUser(userId, safeData);
+        const target = await getUserById(userId);
+        if (!target && (isSelf || data.email !== undefined || data.role !== undefined)) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Utilizador não encontrado" });
+        }
+        const emailChanged = data.email !== undefined && normalizeEmail(data.email) !== normalizeEmail(target?.email);
+        if (emailChanged && !isSuper) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Só o super_admin pode alterar o email de uma conta." });
+        }
+        if (emailChanged) {
+          const clash = await getUserByEmail(data.email!);
+          if (clash && clash.id !== userId) {
+            throw new TRPCError({ code: "CONFLICT", message: `Já existe outra conta com o email ${normalizeEmail(data.email)} (#${clash.id}).` });
+          }
+        }
+        const safeData: { name?: string; email?: string; role?: string; department?: string | null } = isSuper
+          ? { ...data, email: emailChanged ? data.email : undefined }
+          : { name: data.name };
+        const roleChanged = safeData.role !== undefined && target != null && safeData.role !== target.role;
+        if (roleChanged) {
+          const guard = superAdminGuard(ctx.user.id, target!, safeData.role!, await countActiveSuperAdmins());
+          if (guard) throw new TRPCError({ code: "FORBIDDEN", message: guard });
+        } else if (safeData.role !== undefined) {
+          delete safeData.role;
+        }
+        // Auto-edição nunca religa fichas por email.
+        await updateUser(userId, safeData, { relinkEmployees: !isSelf });
+        if (roleChanged) invalidatePermissionElevation(userId);
         await logActivity({
           userId: ctx.user.id,
           action: "update",
           entity: "user",
           entityId: userId,
-          details: `Utilizador atualizado: ${JSON.stringify(safeData)}`,
+          details: `Utilizador atualizado: ${JSON.stringify({ ...safeData, ...(roleChanged ? { role: `${target!.role} → ${safeData.role}` } : {}) })}`,
         });
         return { success: true };
       }),
     updateRole: protectedProcedure
-      .input(z.object({ userId: z.number(), role: z.string() }))
+      .input(z.object({ userId: z.number(), role: z.enum(USER_ROLES) }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "super_admin");
+        const target = await getUserById(input.userId);
+        if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "Utilizador não encontrado" });
+        const previous = target.role;
+        if (previous === input.role) return { success: true };
+        const guard = superAdminGuard(ctx.user.id, target, input.role, await countActiveSuperAdmins());
+        if (guard) throw new TRPCError({ code: "FORBIDDEN", message: guard });
         await updateUserRole(input.userId, input.role);
+        invalidatePermissionElevation(input.userId);
         await logActivity({
           userId: ctx.user.id,
           action: "update_role",
           entity: "user",
           entityId: input.userId,
-          details: `Role alterado para ${input.role}`,
+          details: `Role alterado: ${previous} → ${input.role}`,
         });
         return { success: true };
       }),
@@ -1249,6 +1298,12 @@ export const appRouter = router({
         requireRole(ctx.user.role, "super_admin");
         if (input.userId === ctx.user.id) {
           throw new Error("Não podes desativar a tua própria conta");
+        }
+        if (!input.isActive) {
+          // Nunca desativar o último super_admin ativo.
+          const target = await getUserById(input.userId);
+          const guard = target ? superAdminGuard(ctx.user.id, target, null, await countActiveSuperAdmins()) : null;
+          if (guard) throw new TRPCError({ code: "FORBIDDEN", message: guard });
         }
         const deactivation = input.isActive ? null : resolveDeactivationOrThrow(input);
         await toggleUserActive(
@@ -1318,17 +1373,27 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         if (!ctx.user) throw new TRPCError({ code: "UNAUTHORIZED", message: "Tens de fazer login primeiro" });
         const invite = await getInviteByToken(input.token);
-        if (!invite) throw new TRPCError({ code: "NOT_FOUND", message: "Token inválido" });
-        if (invite.inviteStatus === "accepted") throw new TRPCError({ code: "BAD_REQUEST", message: "Convite já utilizado" });
-        if (new Date() > new Date(invite.expiresAt)) throw new TRPCError({ code: "BAD_REQUEST", message: "Convite expirado" });
-        // Link the OAuth user to the manually-created user record
-        await linkInviteToOAuthUser(
-          invite.userId,
-          ctx.user.openId,
-          ctx.user.name,
-          ctx.user.email,
-        );
-        await acceptInviteToken(input.token);
+        // O convite só serve a quem entrou com o MESMO email (forma canónica);
+        // uso único e validade respeitados.
+        const inviteError = inviteCompletionError(invite, ctx.user.email);
+        if (inviteError) throw new TRPCError(inviteError);
+        // Reclama o convite de forma atómica ANTES de ligar (dois pedidos em
+        // paralelo com o mesmo token: só um passa).
+        if (!(await claimInviteToken(input.token))) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Convite já utilizado" });
+        }
+        try {
+          // Link the OAuth user to the manually-created user record
+          await linkInviteToOAuthUser(
+            invite!.userId,
+            ctx.user.openId,
+            ctx.user.name,
+            ctx.user.email,
+          );
+        } catch (err) {
+          await releaseInviteToken(input.token).catch(() => {});
+          throw err;
+        }
         return { success: true };
       }),
   }),
@@ -2322,7 +2387,27 @@ export const appRouter = router({
     assignments: protectedProcedure.query(async ({ ctx }) => {
       requireRole(ctx.user.role, "admin");
       const { listPermissionAssignments } = await import("./db");
-      return listPermissionAssignments();
+      const rows = await listPermissionAssignments();
+      // Admin limitado a cidades: só vê as atribuições de quem é das suas
+      // cidades, e só pode remover as de quem gere por completo (mesma regra
+      // do guarda de permissions.setForUser em cityScopeGuards.ts).
+      const allowed = scopedProjectIds();
+      if (allowed === undefined) return rows.map((r) => ({ ...r, canManage: true }));
+      const { loadCityAccess } = await import("./cityAccess");
+      const verdict = new Map<number, { visible: boolean; canManage: boolean }>();
+      for (const userId of new Set(rows.map((r) => r.userId))) {
+        try {
+          const target = await loadCityAccess(userId);
+          const visible = !target.all && target.projectIds.some((pid) => allowed.includes(pid));
+          const canManage = visible && !target.missingCostCenter && target.projectIds.every((pid) => allowed.includes(pid));
+          verdict.set(userId, { visible, canManage });
+        } catch {
+          verdict.set(userId, { visible: false, canManage: false });
+        }
+      }
+      return rows
+        .filter((r) => verdict.get(r.userId)?.visible)
+        .map((r) => ({ ...r, canManage: verdict.get(r.userId)?.canManage ?? false }));
     }),
 
     forUser: protectedProcedure
@@ -2347,7 +2432,6 @@ export const appRouter = router({
         }
         const { setUserPermission } = await import("./db");
         await setUserPermission(input.userId, input.permission, input.mode, ctx.user.id);
-        const { invalidatePermissionElevation } = await import('./_core/trpc');
         invalidatePermissionElevation(input.userId);
         await logActivity({ userId: ctx.user.id, action: "set_permission", entity: "user", entityId: input.userId, details: `${input.permission} = ${input.mode ?? "(limpo)"}` });
         return { success: true };
@@ -2482,14 +2566,9 @@ export const appRouter = router({
           if (!me) throw new TRPCError({ code: "NOT_FOUND", message: "Sem ficha de colaborador" });
           employeeId = me.employee.id;
         }
-        // Restringe: salários de outros são só para admin+; abaixo disso
-        // cada um só vê o seu próprio resumo
-        if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) {
-          const me = await getEmployeeByUserId(ctx.user.id);
-          if (!me || me.employee.id !== employeeId) {
-            throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
-          }
-        }
+        // Restringe: salários de outros são só para admin+ DA MESMA cidade;
+        // abaixo disso cada um só vê o seu próprio resumo
+        await assertOwnOrScopedEmployee(ctx.user, employeeId, "admin");
         const now = new Date();
         const year = input?.year ?? now.getFullYear();
         const month = input?.month ?? (now.getMonth() + 1);
@@ -2525,7 +2604,11 @@ export const appRouter = router({
       .input(z.object({ activeOnly: z.boolean().optional() }).optional())
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "extra"); // lista mínima (id+nome) p/ dropdowns; user não acede
-        const rows = await getAllEmployees({ isActive: input?.activeOnly ?? true });
+        let rows = await getAllEmployees({ isActive: input?.activeOnly ?? true });
+        // Âmbito de cidade (inclui extras): só colaboradores das cidades
+        // autorizadas — e nunca mais do que id + nome.
+        const allowedIds = scopedProjectIds();
+        if (allowedIds) rows = rows.filter((r: any) => r.employee.projectId != null && allowedIds.includes(r.employee.projectId));
         return rows.map((row: any) => ({
           id: row.employee.id,
           fullName: row.employee.fullName,
@@ -2765,6 +2848,15 @@ export const appRouter = router({
         }
         if (sent(PERSONAL_FIELDS) && !canEditPersonal(viewer, ref)) {
           throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para alterar os dados desta ficha." });
+        }
+        // Email pessoal liga a ficha a contas (identidade): só admin+ o muda.
+        // Reenviar o mesmo valor (formulário completo) não conta como mudança.
+        if (input.personalEmail !== undefined && !canEditIdentity(viewer, ref)) {
+          const current = await getEmployeeById(input.id);
+          const norm = (v: string | null | undefined) => (v ?? "").trim().toLowerCase();
+          if (norm(input.personalEmail) !== norm(current?.employee.personalEmail)) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "Só um administrador pode alterar o email pessoal (é usado para ligar a ficha à conta)." });
+          }
         }
         // Âmbito de cidade também nas ESCRITAS (revisão 16 set): sem isto um
         // admin do Porto editava salário/NIF de uma ficha de Lisboa.
@@ -3047,6 +3139,7 @@ export const appRouter = router({
           const viewer = await rhViewer(ctx.user);
           const ref = await rhEmployeeRef(input.employeeId);
           if (!isRhAdmin(viewer) && (!ref || !canViewTimeAndSchedule(viewer, ref))) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
+          if (!isOwn(viewer, input.employeeId)) await assertEmployeeAccess(input.employeeId);
           return getEmployeeSchedules(input.employeeId);
         }),
 
@@ -3095,6 +3188,7 @@ export const appRouter = router({
           const viewer = await rhViewer(ctx.user);
           const ref = await rhEmployeeRef(input.employeeId);
           if (!isRhAdmin(viewer) && (!ref || !canViewTimeAndSchedule(viewer, ref))) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
+          if (!isOwn(viewer, input.employeeId)) await assertEmployeeAccess(input.employeeId);
           return getTimeRecords(
             input.employeeId,
             input.startDate ? new Date(input.startDate) : undefined,
@@ -3343,12 +3437,7 @@ export const appRouter = router({
       monthlyHours: protectedProcedure
         .input(z.object({ employeeId: z.number(), year: z.number(), month: z.number() }))
         .query(async ({ ctx, input }) => {
-          if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) {
-            const me = await getEmployeeByUserId(ctx.user.id);
-            if (!me || me.employee.id !== input.employeeId) {
-              throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
-            }
-          }
+          await assertOwnOrScopedEmployee(ctx.user, input.employeeId, "admin");
           return getMonthlyHours(input.employeeId, input.year, input.month);
         }),
     }),
@@ -3485,10 +3574,7 @@ export const appRouter = router({
       list: protectedProcedure
         .input(z.object({ employeeId: z.number(), year: z.number().optional() }))
         .query(async ({ ctx, input }) => {
-          if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) {
-            const me = await getEmployeeByUserId(ctx.user.id);
-            if (!me || me.employee.id !== input.employeeId) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
-          }
+          await assertOwnOrScopedEmployee(ctx.user, input.employeeId, "admin");
           return getEmployeeLeaves(input.employeeId, input.year);
         }),
       create: protectedProcedure
@@ -3518,10 +3604,7 @@ export const appRouter = router({
     salaryHistory: protectedProcedure
       .input(z.object({ employeeId: z.number() }))
       .query(async ({ ctx, input }) => {
-        if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) {
-          const me = await getEmployeeByUserId(ctx.user.id);
-          if (!me || me.employee.id !== input.employeeId) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
-        }
+        await assertOwnOrScopedEmployee(ctx.user, input.employeeId, "admin");
         return getEmployeeSalaryHistory(input.employeeId);
       }),
 
@@ -3530,10 +3613,7 @@ export const appRouter = router({
       list: protectedProcedure
         .input(z.object({ employeeId: z.number() }))
         .query(async ({ ctx, input }) => {
-          if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["frontoffice"]) {
-            const me = await getEmployeeByUserId(ctx.user.id);
-            if (!me || me.employee.id !== input.employeeId) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
-          }
+          await assertOwnOrScopedEmployee(ctx.user, input.employeeId, "frontoffice");
           return getOpenPenalties(input.employeeId);
         }),
       clear: protectedProcedure
@@ -5431,7 +5511,8 @@ export const appRouter = router({
     checkoutDrivers: protectedProcedure.input(z.object({
       startDate: z.string(),
       endDate: z.string(),
-    })).query(async ({ input }) => {
+    })).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "frontoffice");
       const { getCheckoutDriversFromDb } = await import("./db");
       return getCheckoutDriversFromDb(input.startDate, input.endDate);
     }),
@@ -5442,7 +5523,8 @@ export const appRouter = router({
       endDate: z.string(),
       agentName: z.string().optional(),
       userId: z.string().optional(),
-    })).query(async ({ input }) => {
+    })).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "frontoffice");
       const { getAgentHistoryFromDb } = await import("./db");
       return getAgentHistoryFromDb({
         startDate: input.startDate,
@@ -6396,8 +6478,9 @@ export const appRouter = router({
     stats: protectedProcedure.input(z.object({
       month: z.number().optional(),
       year: z.number().optional(),
-    }).optional()).query(({ ctx, input }) => {
-      requireRole(ctx.user.role, "backoffice");
+    }).optional()).query(async ({ ctx, input }) => {
+      // Totais de faturação: respeita o deny individual de finance.view_totals.
+      await requireFinanceTotals(ctx.user, "backoffice");
       return getInvoiceStats(input?.month, input?.year);
     }),
 
@@ -6711,7 +6794,8 @@ export const appRouter = router({
         partnerType: z.string().optional(),
       }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        // Receita/valor a faturar: respeita o deny de finance.view_totals.
+        await requireFinanceTotals(ctx.user, "frontoffice");
         const { getPartnerInvoicingSummary } = await import("./db");
         return getPartnerInvoicingSummary(input);
       }),
@@ -6725,7 +6809,7 @@ export const appRouter = router({
         partnerType: z.string(),
       }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        await requireFinanceTotals(ctx.user, "frontoffice");
         const { getPartnerInvoicingDetailByType } = await import("./db");
         return getPartnerInvoicingDetailByType(input);
       }),
@@ -6751,8 +6835,8 @@ export const appRouter = router({
     list: protectedProcedure.input(z.object({
       year: z.number().optional(),
       projectId: z.number().optional(),
-    }).optional()).query(({ ctx, input }) => {
-      requireRole(ctx.user.role, "backoffice");
+    }).optional()).query(async ({ ctx, input }) => {
+      await requireFinanceTotals(ctx.user, "backoffice");
       return getAnnualReports(input);
     }),
 

@@ -99,10 +99,38 @@ export function canDeleteDocument(v: RhViewer, e: EmployeeRef, uploadedById: num
   return uploadedById != null && uploadedById === v.id && canEditPersonal(v, e);
 }
 
-/** Pode ver horário e registos de ponto? quem vê documentos, ou team_leader (operação). */
+/** Pode ver horário e registos de ponto? quem vê documentos, ou team_leader
+ * (operação) — mas só no SEU centro de custos (com descendentes), nunca
+ * fichas de outras cidades/centros. */
 export function canViewTimeAndSchedule(v: RhViewer, e: EmployeeRef): boolean {
   if (canViewDocuments(v, e)) return true;
-  return v.role === "team_leader";
+  return v.role === "team_leader" && inScope(v, e);
+}
+
+/** Campos que ligam a ficha a uma conta (identidade): só admin+ (não protegido)
+ * os altera — mesmo na própria ficha, para ninguém se "ligar" a outra conta. */
+export const IDENTITY_FIELDS = ["email", "personalEmail"] as const;
+export function canEditIdentity(v: RhViewer, e: EmployeeRef): boolean {
+  return canEditContract(v, e);
+}
+
+/**
+ * Leitura de registos de uma ficha (horas, férias, salário, penalizações):
+ * a própria passa sempre; senão exige `minRole` E que a ficha esteja no
+ * âmbito de cidade do pedido (`scopedProjectIds` undefined = todas as
+ * cidades). Vale também para admin: um admin limitado a uma cidade não lê
+ * fichas de outra.
+ */
+export function canReadEmployeeRecord(
+  v: Pick<RhViewer, "role" | "employeeId">,
+  e: { id: number; projectId: number | null },
+  minRole: string,
+  scopedProjectIds: number[] | undefined,
+): boolean {
+  if (v.employeeId != null && v.employeeId === e.id) return true;
+  if (rank(v.role) < rank(minRole)) return false;
+  if (scopedProjectIds === undefined) return true;
+  return e.projectId != null && scopedProjectIds.includes(e.projectId);
 }
 
 /** Campos da ficha que são DADOS PESSOAIS (o próprio e os gestores do centro editam). */

@@ -6,6 +6,7 @@ import * as db from "../db";
 import { adoptPlaceholderAccountByEmail, linkEmployeesToUserByEmail } from "../identity";
 import { getSessionCookieOptions } from "./cookies";
 import { sdk } from "./sdk";
+import { shouldRejectUnverifiedGoogleEmail } from "./googleIdentity";
 
 // 30 dias é o novo default (em vez de 1 ano) — reduz janela de exposição
 // caso uma cookie seja intercetada. O nome da env é opcional.
@@ -248,6 +249,20 @@ export function registerOAuthRoutes(app: Express) {
           renderErrorPage(
             "Resposta da Google sem identificador",
             "A Google não devolveu o <code>sub</code> (ID do utilizador)."
+          )
+        );
+        return;
+      }
+
+      // Email por verificar na Google não serve de identidade (liga contas e
+      // fichas por email) — recusa o login.
+      if (shouldRejectUnverifiedGoogleEmail(userInfo)) {
+        console.warn("[OAuth] Acesso recusado — email Google não verificado");
+        res.status(403).type("html").send(
+          renderErrorPage(
+            "Email Google não verificado",
+            "A Google indica que o email desta conta ainda não foi verificado.",
+            "Verifica o email na tua conta Google e tenta entrar de novo."
           )
         );
         return;
