@@ -14,7 +14,8 @@
  * nunca de input livre do utilizador.
  */
 import { z } from "zod";
-import { asc, desc, eq, sql } from "drizzle-orm";
+import { asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { cityTextVisible, currentCityKeys, projectVisible, scopedProjectIds } from "./extrasCityFilter";
 import { getDb, getProjects, logActivity } from "./db";
 import { driverApplications, employees } from "../drizzle/schema";
 import { setMyAvailability, weekDays, type SetDayInput } from "./extrasAvailability";
@@ -147,7 +148,23 @@ export async function listDriverApplications(status?: ApplicationStatus | null) 
   const rows = status
     ? await base.where(eq(driverApplications.status, status)).orderBy(desc(driverApplications.lastSubmittedAt))
     : await base.orderBy(desc(driverApplications.lastSubmittedAt));
-  return rows;
+
+  // Cidade (ponto 10): aprovadas → cidade da ficha; as outras → a cidade que a
+  // pessoa escreveu. Sem cidade reconhecível continua visível a todos.
+  const scope = scopedProjectIds();
+  if (scope === undefined) return rows;
+  const allowed = currentCityKeys();
+  const empIds = rows.map((r) => r.employeeId).filter((x): x is number => x != null);
+  const empProject = new Map<number, number | null>();
+  if (empIds.length) {
+    const emps = await db.select({ id: employees.id, projectId: employees.projectId }).from(employees).where(inArray(employees.id, empIds));
+    for (const e of emps) empProject.set(e.id, e.projectId);
+  }
+  return rows.filter((r) => {
+    const pid = r.employeeId != null ? empProject.get(r.employeeId) : undefined;
+    if (pid != null) return projectVisible(pid, scope);
+    return cityTextVisible(r.city, allowed);
+  });
 }
 
 export async function setApplicationStatus(

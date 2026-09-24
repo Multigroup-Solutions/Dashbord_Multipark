@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { AvailabilitySection, CandidaturasSection } from "@/pages/ExtrasDiaPage";
 import { RecruitmentSection } from "@/components/RecruitmentSection";
+import { ExtrasMetricsSection } from "@/components/ExtrasMetricsSection";
 import { Mail } from "lucide-react";
 // Campos de cada dia partilhados com o diálogo do backoffice (ExtrasDiaPage →
 // AvailabilitySection): o extra e o backoffice marcam exatamente as mesmas coisas.
@@ -50,6 +51,7 @@ export default function DisponibilidadePage() {
           </p>
         </div>
         <AvailabilitySection />
+        <ExtrasMetricsSection />
         <CandidaturasSection />
         <div>
           <h2 className="text-lg font-semibold flex items-center gap-2 mb-3">

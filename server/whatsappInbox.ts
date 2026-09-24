@@ -6,6 +6,7 @@
  * usada quer pela UI (para não duplicar lógica) quer pela validação server-side
  * do `reply`.
  */
+import { projectVisible, scopedProjectIds } from "./extrasCityFilter";
 import { desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { employees, extraLeads, whatsappConversations, whatsappMessages } from "../drizzle/schema";
@@ -102,11 +103,54 @@ export function sortConversations<T extends Pick<ConversationRow, "id" | "window
   });
 }
 
+/**
+ * Cidade (ponto 10): conversas de extras/leads de outra cidade saem da lista
+ * de quem só vê uma cidade. Números soltos (sem ficha nem lead) ficam visíveis.
+ */
+async function visibleConversations<T extends { phoneE164: string; employeeId: number | null; employeeProjectId: number | null }>(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  convs: T[],
+): Promise<T[]> {
+  const scope = scopedProjectIds();
+  if (scope === undefined) return convs;
+  const loose = convs.filter((c) => c.employeeId == null).map((c) => c.phoneE164);
+  const leadProject = new Map<string, number | null>();
+  if (loose.length) {
+    const leads = await db
+      .select({ phoneE164: extraLeads.phoneE164, projectId: extraLeads.projectId })
+      .from(extraLeads)
+      .where(inArray(extraLeads.phoneE164, loose));
+    for (const l of leads) if (l.phoneE164 && !leadProject.has(l.phoneE164)) leadProject.set(l.phoneE164, l.projectId);
+  }
+  return convs.filter((c) =>
+    c.employeeId != null ? projectVisible(c.employeeProjectId, scope) : projectVisible(leadProject.get(c.phoneE164), scope),
+  );
+}
+
+/** A conversa pertence às cidades do utilizador? (guarda da thread/resposta) */
+export async function conversationVisible(conversationId: number): Promise<boolean> {
+  if (scopedProjectIds() === undefined) return true;
+  const db = await getDb();
+  if (!db) return false;
+  const rows = await db
+    .select({
+      phoneE164: whatsappConversations.phoneE164,
+      employeeId: whatsappConversations.employeeId,
+      employeeProjectId: employees.projectId,
+    })
+    .from(whatsappConversations)
+    .leftJoin(employees, eq(whatsappConversations.employeeId, employees.id))
+    .where(eq(whatsappConversations.id, conversationId))
+    .limit(1);
+  if (!rows.length) return true; // inexistente → quem chama trata do "não encontrada"
+  return (await visibleConversations(db, rows)).length > 0;
+}
+
 export async function listConversations(): Promise<ConversationRow[]> {
   const db = await getDb();
   if (!db) return [];
 
-  const convs = await db
+  const allConvs = await db
     .select({
       id: whatsappConversations.id,
       phoneE164: whatsappConversations.phoneE164,
@@ -115,11 +159,13 @@ export async function listConversations(): Promise<ConversationRow[]> {
       lastInboundAt: whatsappConversations.lastInboundAt,
       lastMessageAt: whatsappConversations.lastMessageAt,
       employeeName: employees.fullName,
+      employeeProjectId: employees.projectId,
     })
     .from(whatsappConversations)
     .leftJoin(employees, eq(whatsappConversations.employeeId, employees.id))
     .orderBy(desc(whatsappConversations.lastMessageAt))
     .limit(300);
+  const convs = await visibleConversations(db, allConvs);
 
   const ids = convs.map((c) => c.id);
   const previewByConv = new Map<number, { body: string; direction: "in" | "out" }>();

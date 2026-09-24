@@ -14,6 +14,7 @@
  *
  * A parte pura (`normalizeLeadInput`) é testada sem BD.
  */
+import { currentDefaultCityId, projectVisible, scopedProjectIds } from "./extrasCityFilter";
 import { and, desc, eq, inArray, like, or, sql } from "drizzle-orm";
 import { getDb, logActivity } from "./db";
 import { extraLeads } from "../drizzle/schema";
@@ -87,6 +88,7 @@ export interface ExtraLeadRow {
   contactCount: number;
   lastContactedAt: string | null;
   employeeId: number | null;
+  projectId: number | null;
   createdById: number | null;
   createdAt: string;
   updatedAt: string;
@@ -116,7 +118,10 @@ export async function listExtraLeads(filter: { status?: ExtraLeadStatus | null; 
     .where(conds.length ? and(...conds) : undefined)
     .orderBy(desc(extraLeads.createdAt))
     .limit(500);
-  return rows as ExtraLeadRow[];
+  // Cidade (ponto 10): quem só vê uma cidade não vê os leads das outras;
+  // leads sem cidade (antigos) continuam visíveis a todos.
+  const scope = scopedProjectIds();
+  return (rows as ExtraLeadRow[]).filter((r) => projectVisible(r.projectId, scope));
 }
 
 /** Outro lead (que não `excludeId`) já usa este número ou email? */
@@ -155,7 +160,8 @@ export async function createExtraLead(input: LeadInput, createdById: number | nu
     if (emp) throw new Error(`Este número já pertence ao colaborador ${emp.fullName} — não é um lead.`);
   }
 
-  const result = await db.insert(extraLeads).values({ ...lead, createdById, source: "manual" });
+  // O lead fica na cidade de quem o cria (null se vê todas as cidades).
+  const result = await db.insert(extraLeads).values({ ...lead, createdById, source: "manual", projectId: currentDefaultCityId() });
   const id = Number((result as any)[0]?.insertId ?? (result as any).insertId);
   await logActivity({
     userId: createdById ?? 0,

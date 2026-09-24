@@ -2685,15 +2685,16 @@ export const appRouter = router({
       }),
 
     importExtras: protectedProcedure
-      .input(z.object({ csv: z.string().min(1) }))
+      .input(z.object({ csv: z.string().min(1), projectId: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "admin");
-        const report = await importExtrasFromCsv(input.csv, ctx.user.id);
+        assertProjectAccess(input.projectId);
+        const report = await importExtrasFromCsv(input.csv, ctx.user.id, { projectId: input.projectId });
         await logActivity({
           userId: ctx.user.id,
           action: "import",
           entity: "employee",
-          details: `Import extras CSV: ${report.created} criados, ${report.errors.length} erros (de ${report.parsed} linhas)`,
+          details: `Import extras CSV: ${report.created} criados, ${report.duplicates.length} duplicados saltados, ${report.errors.length} erros (de ${report.parsed} linhas)`,
         });
         return report;
       }),
@@ -7836,6 +7837,23 @@ export const appRouter = router({
         return coverageFor(input.date, input.city);
       }),
 
+    // ── Métricas (ponto 12) e extras parados (ponto 13) ─────────────────────
+    metrics: protectedProcedure
+      .input(z.object({ days: z.number().int().min(7).max(180).optional() }).optional())
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { getExtrasMetrics } = await import("./extrasMetrics");
+        return getExtrasMetrics(input?.days ?? 30);
+      }),
+
+    coverageOutlook: protectedProcedure
+      .input(z.object({ city: z.enum(["lisbon", "porto", "faro"]), days: z.number().int().min(1).max(14).optional() }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { getCoverageOutlook } = await import("./extrasMetrics");
+        return getCoverageOutlook(input.city, input.days ?? 7);
+      }),
+
     notices: protectedProcedure
       .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
       .query(async ({ ctx, input }) => {
@@ -8289,6 +8307,8 @@ export const appRouter = router({
         .input(z.object({ conversationId: z.number(), limit: z.number().min(1).max(300).optional() }))
         .query(async ({ ctx, input }) => {
           requireRole(ctx.user.role, "backoffice");
+          const { conversationVisible } = await import("./whatsappInbox");
+          if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
           const thread = await getConversationThread(input.conversationId, input.limit ?? 100);
           if (!thread) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
           return thread;
@@ -8320,6 +8340,8 @@ export const appRouter = router({
       .input(z.object({ conversationId: z.number(), text: z.string().min(1).max(4000) }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
+        const { conversationVisible } = await import("./whatsappInbox");
+        if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const result = await replyToConversation(input.conversationId, input.text, ctx.user.id);
         if (!result.ok) {
           throw new TRPCError({ code: "BAD_REQUEST", message: result.error || "Falha ao responder" });

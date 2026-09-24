@@ -1757,6 +1757,8 @@ export const extraLeads = mysqlTable("extra_leads", {
 	lastContactedAt: timestamp({ mode: 'string' }),
 	/** Preenchido quando o lead vira extra (ficha criada). */
 	employeeId: int(),
+	/** Centro de custos (cidade) do lead — migração 0077; NULL = visível a todos. */
+	projectId: int(),
 	createdById: int(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
@@ -1765,6 +1767,7 @@ export const extraLeads = mysqlTable("extra_leads", {
 	index("idx_extra_leads_status").on(table.status),
 	index("idx_extra_leads_phone").on(table.phoneE164),
 	index("idx_extra_leads_email").on(table.email),
+	index("idx_extra_leads_project").on(table.projectId),
 ]);
 
 // ─── Tokens do formulário externo de disponibilidades (Fase 4) ──────────────
