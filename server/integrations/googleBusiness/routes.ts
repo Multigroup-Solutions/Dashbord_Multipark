@@ -12,7 +12,7 @@ const googleKeys = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2
 export async function authorizedAdmin(req: Request) {
   const user = await sdk.authenticateRequest(req).catch(() => null);
   if (!user || !['admin', 'super_admin'].includes(user.role)) return null;
-  return (await loadCityAccess(user.id)).all ? user : null;
+  return (await loadCityAccess(user.id, user.role)).all ? user : null;
 }
 export async function verifyPush(authorization: string | undefined) {
   const c = config();

@@ -28,10 +28,10 @@ import {
 import QRCodeLib from "qrcode";
 import { CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
-const ROLE_LEVEL: Record<string, number> = { user: 0, extra: 1, frontoffice: 2, backoffice: 3, team_leader: 4, supervisor: 5, admin: 6, super_admin: 7 };
+import { roleRank } from "@shared/access";
 function useRoleAtLeast(min: string): boolean {
   const { user } = useAuth();
-  return (ROLE_LEVEL[String(user?.role ?? "")] ?? -1) >= (ROLE_LEVEL[min] ?? 99);
+  return roleRank(user?.role) >= (roleRank(min) < 0 ? 99 : roleRank(min));
 }
 
 /** Recolha GPS: o cron diário corre às 03:30 UTC (≈ 04:30 de Lisboa no verão, 03:30 no inverno). */

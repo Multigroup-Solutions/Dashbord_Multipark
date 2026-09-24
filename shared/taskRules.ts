@@ -1,3 +1,4 @@
+import { can, seesBeyondOwn } from "./access";
 /**
  * Tarefas — regras PURAS (cliente + servidor, sem BD nem relógio implícito).
  *
@@ -59,12 +60,12 @@ export function dueDateFromDay(day: string | null | undefined): string | null {
 
 // ─── Permissões ─────────────────────────────────────────────────────────────
 
-const ROLE_RANK: Record<string, number> = { super_admin: 7, admin: 6, supervisor: 5, team_leader: 4, backoffice: 3, frontoffice: 2, extra: 1, user: 0 };
-const rank = (role: string | null | undefined) => ROLE_RANK[String(role ?? "")] ?? -1;
-
-/** Criar / editar / apagar / arrastar: frontoffice ou acima. */
+// Modelo de acessos (shared/access.ts): quem tem Tarefas para além das suas
+// (team_leader para a equipa, supervisor/front/backoffice/admin) cria, edita
+// e apaga; extra/condutor só mudam o estado das suas.
+/** Criar / editar / apagar / arrastar. */
 export function canEditTasks(role: string | null | undefined): boolean {
-  return rank(role) >= ROLE_RANK.frontoffice;
+  return seesBeyondOwn(role, "tarefas") && can(role, "tarefas", "edit");
 }
 
 export interface TaskAssignLike { assigneeId: number | null; assigneeIds?: number[] | null }
@@ -77,7 +78,7 @@ export function isTaskAssignee(employeeId: number | null | undefined, t: TaskAss
 /** Mudar o ESTADO: editores, ou qualquer responsável (extra incluído) na sua própria tarefa. */
 export function canChangeTaskStatus(viewer: { role: string; employeeId: number | null }, t: TaskAssignLike): boolean {
   if (canEditTasks(viewer.role)) return true;
-  return rank(viewer.role) >= ROLE_RANK.extra && isTaskAssignee(viewer.employeeId, t);
+  return can(viewer.role, "tarefas", "edit") && isTaskAssignee(viewer.employeeId, t);
 }
 
 // ─── Atualização (efeitos colaterais do estado / prazo) ─────────────────────

@@ -80,11 +80,24 @@ describe("users", () => {
     expect(result?.role).toBe("backoffice");
   });
 
-  it("create is blocked for admin (non-super_admin)", async () => {
+  // Modelo de acessos (shared/access.ts): admin gere contas ABAIXO dele.
+  it("create: admin cria contas abaixo dele, mas não admin", async () => {
     const caller = appRouter.createCaller(createCtx({ role: "admin" }));
     await expect(
       caller.users.create({ name: "Test", email: "t@t.com", role: "user" })
+    ).resolves.toBeDefined();
+    await expect(
+      caller.users.create({ name: "Test", email: "t2@t.com", role: "admin" })
     ).rejects.toThrow();
+  });
+
+  it("create is blocked for team_leader/condutor/extra", async () => {
+    for (const role of ["team_leader", "condutor", "extra"]) {
+      const caller = appRouter.createCaller(createCtx({ role }));
+      await expect(
+        caller.users.create({ name: "Test", email: "t@t.com", role: "user" })
+      ).rejects.toThrow();
+    }
   });
 
   it("create rejects invalid email", async () => {
@@ -124,10 +137,14 @@ describe("users", () => {
     ).rejects.toThrow("Não podes desativar a tua própria conta");
   });
 
-  it("toggleActive is blocked for non-super_admin", async () => {
-    const caller = appRouter.createCaller(createCtx({ role: "admin" }));
+  it("toggleActive: admin não mexe num super_admin; team_leader não mexe em ninguém", async () => {
+    const admin = appRouter.createCaller(createCtx({ role: "admin" }));
     await expect(
-      caller.users.toggleActive({ userId: 2, isActive: false })
+      admin.users.toggleActive({ userId: 3, isActive: false })
+    ).rejects.toThrow();
+    const tl = appRouter.createCaller(createCtx({ role: "team_leader" }));
+    await expect(
+      tl.users.toggleActive({ userId: 2, isActive: false })
     ).rejects.toThrow();
   });
 

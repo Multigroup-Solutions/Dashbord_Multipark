@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { can, roleRank, seesBeyondOwn } from "@shared/access";
 import { formatBookingHistoryDetails } from "@/lib/bookingHistoryFormat";
 import { openInMultipark } from "@/lib/multiparkLinks";
 import { fileHref } from "@/lib/fileHref";
@@ -108,7 +109,7 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
     onError: (e) => toast.error(e.message || "Erro ao mover"),
   });
   const utils = trpc.useUtils();
-  const canSeeDrivers = ["team_leader", "supervisor", "admin", "super_admin"].includes(user?.role ?? "");
+  const canSeeDrivers = seesBeyondOwn(user?.role, "perdidos") && can(user?.role, "perdidos", "edit");
 
   const [newMsg, setNewMsg] = useState("");
   const [isInternal, setIsInternal] = useState(true);
@@ -245,7 +246,7 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
             ))}
           </SelectContent>
         </Select>
-        {(user?.role === "super_admin" || user?.role === "admin") && item.status !== "converted" && (
+        {can(user?.role, "perdidos", "manage") && item.status !== "converted" && (
           <>
             <Button
               variant="outline" size="sm"

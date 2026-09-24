@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { can } from "@shared/access";
+
+/** Configurar contas / desligar: gestão de Integrações (admin+). Ver e recolher: supervisor+. */
+function useIntegrationPerms() {
+  const { user } = useAuth();
+  return { canManage: can(user?.role, "integracoes", "manage"), canMarketing: can(user?.role, "marketing", "manage") };
+}
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +27,7 @@ const KIND_LABEL: Record<string, string> = { initial: "Inicial (37 meses)", dail
 const RUN_STATUS: Record<string, string> = { running: "a correr", partial: "parcial (contas falhadas, ou a continuar)", done: "concluída", failed: "falhou", skipped: "saltada" };
 
 export default function IntegrationsGoogleAdsPage() {
+  const { canManage, canMarketing } = useIntegrationPerms();
   const utils = trpc.useUtils();
   const status = trpc.integrations.googleAds.status.useQuery(undefined, { refetchInterval: 30_000 });
   const accounts = trpc.integrations.googleAds.accounts.list.useQuery();
@@ -124,7 +133,7 @@ export default function IntegrationsGoogleAdsPage() {
               </a>
             </Button>
             {s?.status !== "disconnected" && (
-              <Button variant="outline" className="gap-2" onClick={() => { if (confirm("Desligar o Google Ads? Os dados já recolhidos ficam.")) disconnect.mutate(); }}>
+              <Button variant="outline" className="gap-2" disabled={!canManage} onClick={() => { if (confirm("Desligar o Google Ads? Os dados já recolhidos ficam.")) disconnect.mutate(); }}>
                 <Unplug className="h-4 w-4" /> Desligar
               </Button>
             )}
@@ -151,13 +160,13 @@ export default function IntegrationsGoogleAdsPage() {
                 <tbody>
                   {(accounts.data ?? []).map((a) => (
                     <tr key={a.id} className={`border-b ${a.isManager ? "opacity-70" : ""}`}>
-                      <td className="p-2">{a.isManager ? <span className="text-xs text-muted-foreground">gestora</span> : <Switch checked={!!a.selected} onCheckedChange={(v) => updateAccount.mutate({ id: a.id, selected: v })} aria-label={`Consultar ${a.name ?? a.customerId}`} />}</td>
+                      <td className="p-2">{a.isManager ? <span className="text-xs text-muted-foreground">gestora</span> : <Switch disabled={!canManage} checked={!!a.selected} onCheckedChange={(v) => updateAccount.mutate({ id: a.id, selected: v })} aria-label={`Consultar ${a.name ?? a.customerId}`} />}</td>
                       <td className="p-2 font-medium">{a.name ?? "—"}{a.lastError && <div className="text-[11px] text-red-700">{a.lastError}</div>}</td>
                       <td className="p-2 font-mono text-xs">{a.customerId}</td>
                       <td className="p-2 text-xs">{a.currency ?? "—"} · {a.timezone ?? "—"}</td>
                       <td className="p-2">
                         {a.isManager ? "—" : (
-                          <Select value={a.projectId ? String(a.projectId) : "none"} onValueChange={(v) => updateAccount.mutate({ id: a.id, projectId: v === "none" ? null : Number(v) })}>
+                          <Select disabled={!canManage} value={a.projectId ? String(a.projectId) : "none"} onValueChange={(v) => updateAccount.mutate({ id: a.id, projectId: v === "none" ? null : Number(v) })}>
                             <SelectTrigger className="h-8 w-52"><SelectValue /></SelectTrigger>
                             <SelectContent>
                               <SelectItem value="none">Sem associação</SelectItem>
@@ -187,7 +196,7 @@ export default function IntegrationsGoogleAdsPage() {
                 {runSync.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PlayCircle className="h-3.5 w-3.5" />} {KIND_LABEL[k]}
               </Button>
             ))}
-            <Button variant="ghost" size="sm" disabled={backfill.isPending} onClick={() => backfill.mutate({ limit: 2000 })} className="gap-1.5" title="Lê o originUrl das reservas já sincronizadas e marca as que vieram de anúncios Google (gclid/utm)">
+            <Button variant="ghost" size="sm" disabled={backfill.isPending || !canMarketing} onClick={() => backfill.mutate({ limit: 2000 })} className="gap-1.5" title="Lê o originUrl das reservas já sincronizadas e marca as que vieram de anúncios Google (gclid/utm)">
               {backfill.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />} Atribuir reservas (originUrl)
             </Button>
           </div>
@@ -225,6 +234,7 @@ export default function IntegrationsGoogleAdsPage() {
  * de cada CAMPANHA escolhe-se no Marketing → Anúncios, como no Google.
  */
 function MetaAdsCard({ projectOptions }: { projectOptions: any[] }) {
+  const { canManage } = useIntegrationPerms();
   const utils = trpc.useUtils();
   const status = trpc.integrations.meta.status.useQuery(undefined, { refetchInterval: 60_000 });
   const runs = trpc.integrations.meta.sync.runs.useQuery({ limit: 5 });
@@ -280,9 +290,9 @@ function MetaAdsCard({ projectOptions }: { projectOptions: any[] }) {
                     <tr key={a.id} className="border-b align-top">
                       <td className="p-2">{a.name ?? `Meta ${a.customerId}`}{!s.configuredAccountIds.includes(a.customerId) && <Badge variant="outline" className="ml-1.5 text-[10px]">fora de META_AD_ACCOUNT_IDS</Badge>}</td>
                       <td className="p-2 text-xs text-muted-foreground">act_{a.customerId}</td>
-                      <td className="p-2"><Switch checked={!!a.selected} onCheckedChange={(v) => update.mutate({ id: a.id, selected: v })} aria-label={`Recolher a conta ${a.name ?? a.customerId}`} /></td>
+                      <td className="p-2"><Switch disabled={!canManage} checked={!!a.selected} onCheckedChange={(v) => update.mutate({ id: a.id, selected: v })} aria-label={`Recolher a conta ${a.name ?? a.customerId}`} /></td>
                       <td className="p-2">
-                        <Select value={a.projectId != null ? String(a.projectId) : "none"} onValueChange={(v) => update.mutate({ id: a.id, projectId: v === "none" ? null : Number(v) })}>
+                        <Select disabled={!canManage} value={a.projectId != null ? String(a.projectId) : "none"} onValueChange={(v) => update.mutate({ id: a.id, projectId: v === "none" ? null : Number(v) })}>
                           <SelectTrigger className="h-8 w-56 text-xs"><SelectValue /></SelectTrigger>
                           <SelectContent>
                             <SelectItem value="none">— sem marca —</SelectItem>

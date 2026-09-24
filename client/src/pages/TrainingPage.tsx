@@ -5,7 +5,7 @@ import { trpc } from "@/lib/trpc";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { useCallback, useMemo, useState } from "react";
 import { BarChart3, BookOpen, ClipboardList, Gamepad2, GraduationCap, HelpCircle, ListChecks, Play } from "lucide-react";
-import { atLeast } from "./training/shared";
+import { can, seesBeyondOwn } from "@shared/access";
 import { FAQsTab, ManualsTab, VideoPlayerDialog, VideosTab, useDoneSet } from "./training/ContentTabs";
 import { CareerTab, QuizTab } from "./training/Assessments";
 import { DashboardTab, MyTrainingTab, PathsAdminTab } from "./training/Management";
@@ -13,9 +13,11 @@ import { DashboardTab, MyTrainingTab, PathsAdminTab } from "./training/Managemen
 export default function TrainingPage() {
   const { user } = useAuth();
   const role = user?.role;
-  const isAdmin = atLeast(role, "admin");
+  const isAdmin = can(role, "formacao", "manage");
   const isSuperAdmin = role === "super_admin";
-  const isSupervisor = atLeast(role, "supervisor");
+  // Percursos (atribuir): supervisor+. Acompanhamento: também o team leader (a equipa).
+  const isSupervisor = seesBeyondOwn(role, "formacao") && can(role, "formacao", "edit");
+  const seesProgress = seesBeyondOwn(role, "formacao");
   const [tab, setTab] = usePersistedState("training.tab", "mine");
   const [openManualId, setOpenManualId] = useState<number | null>(null);
   const [playVideo, setPlayVideo] = useState<any>(null);
@@ -35,7 +37,7 @@ export default function TrainingPage() {
   }, [allVideos, setTab]);
   const clearOpenManual = useCallback(() => setOpenManualId(null), []);
 
-  const cols = 6 + (isAdmin ? 1 : 0) + (isSupervisor ? 1 : 0);
+  const cols = 6 + (isAdmin ? 1 : 0) + (isSupervisor ? 1 : 0) + (seesProgress && !isSupervisor ? 1 : 0);
   return (
     <div className="space-y-6">
       <p className="text-muted-foreground">Formação obrigatória, vídeos, manuais, FAQs, quiz e exames de carreira</p>
@@ -48,7 +50,7 @@ export default function TrainingPage() {
           <TabsTrigger value="quiz"><Gamepad2 className="w-4 h-4 mr-1" />Quiz</TabsTrigger>
           <TabsTrigger value="career"><GraduationCap className="w-4 h-4 mr-1" />Carreira</TabsTrigger>
           {isSupervisor && <TabsTrigger value="paths"><ClipboardList className="w-4 h-4 mr-1" />Percursos</TabsTrigger>}
-          {isSupervisor && <TabsTrigger value="dashboard"><BarChart3 className="w-4 h-4 mr-1" />Acompanhamento</TabsTrigger>}
+          {seesProgress && <TabsTrigger value="dashboard"><BarChart3 className="w-4 h-4 mr-1" />Acompanhamento</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="mine"><MyTrainingTab data={mine} onOpenItem={openItem} /></TabsContent>
@@ -58,7 +60,7 @@ export default function TrainingPage() {
         <TabsContent value="quiz"><QuizTab isAdmin={isAdmin} /></TabsContent>
         <TabsContent value="career"><CareerTab isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} certificates={mine?.certificates ?? []} /></TabsContent>
         {isSupervisor && <TabsContent value="paths"><PathsAdminTab isAdmin={isAdmin} /></TabsContent>}
-        {isSupervisor && <TabsContent value="dashboard"><DashboardTab /></TabsContent>}
+        {seesProgress && <TabsContent value="dashboard"><DashboardTab /></TabsContent>}
       </Tabs>
       <VideoPlayerDialog video={playVideo} done={playVideo ? done.has(`video:${playVideo.id}`) : false} onClose={() => setPlayVideo(null)} />
     </div>

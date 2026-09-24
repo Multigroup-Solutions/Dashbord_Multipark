@@ -70,9 +70,10 @@ describe("CRM — rotas e permissões", () => {
     expect(p.bookings_list[0].totalPrice).toBeNull();
   });
 
-  it("com totais vê tudo", async () => {
-    const l = await caller("backoffice").clients.list({ sort: "totalSpent", segment: "vip" });
+  // Totais financeiros: módulo Financeiro (admin+); backoffice só com grant.
+  it("com totais (admin) vê tudo", async () => {
+    const l = await caller("admin").clients.list({ sort: "totalSpent", segment: "vip" });
     expect(l.rows[0]).toMatchObject({ totalSpent: 500, segments: ["recurring", "vip"] });
-    expect(await caller().clients.stats({})).toMatchObject({ canSeeTotals: true, vip: 1 });
+    expect(await caller("admin").clients.stats({})).toMatchObject({ canSeeTotals: true, vip: 1 });
   });
 });

@@ -8,26 +8,23 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { and, eq } from "drizzle-orm";
 import { protectedProcedure, router } from "../../_core/trpc";
+import { requireAccess } from "../../_core/access";
 import { getDb } from "../../db";
 import { adAccounts } from "../../../drizzle/schema";
 import { META_PROVIDER } from "./config";
 import { listMetaSyncRuns, metaStatus, runMetaAdsSync } from "./sync";
 
-const RANK: Record<string, number> = { super_admin: 7, admin: 6 };
-function requireAdmin(role: string) {
-  if ((RANK[role] ?? 0) < RANK.admin) throw new TRPCError({ code: "FORBIDDEN", message: "Acesso não autorizado." });
-}
 
 export const metaAdsRouter = router({
   status: protectedProcedure.query(async ({ ctx }) => {
-    requireAdmin(ctx.user.role);
+    requireAccess(ctx.user, "integracoes", "view");
     return metaStatus();
   }),
   accounts: router({
     update: protectedProcedure
       .input(z.object({ id: z.number(), selected: z.boolean().optional(), projectId: z.number().nullable().optional() }))
       .mutation(async ({ ctx, input }) => {
-        requireAdmin(ctx.user.role);
+        requireAccess(ctx.user, "integracoes", "manage");
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
         const patch: Record<string, unknown> = {};
@@ -41,11 +38,11 @@ export const metaAdsRouter = router({
     run: protectedProcedure
       .input(z.object({ kind: z.enum(["initial", "daily", "monthly", "manual"]).default("daily") }))
       .mutation(async ({ ctx, input }) => {
-        requireAdmin(ctx.user.role);
+        requireAccess(ctx.user, "integracoes", "edit");
         return runMetaAdsSync({ kind: input.kind, deadlineAt: Date.now() + 40_000, triggeredById: ctx.user.id });
       }),
     runs: protectedProcedure.input(z.object({ limit: z.number().min(1).max(100).optional() }).optional()).query(async ({ ctx, input }) => {
-      requireAdmin(ctx.user.role);
+      requireAccess(ctx.user, "integracoes", "view");
       return listMetaSyncRuns(input?.limit ?? 10);
     }),
   }),

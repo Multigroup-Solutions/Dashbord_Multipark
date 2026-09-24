@@ -55,7 +55,8 @@ export async function assertScopedOperation(path: string, type: string, raw: unk
     const id = input.userId ?? input.id;
     if (id != null) {
       const { loadCityAccess } = await import('./cityAccess');
-      const target = await loadCityAccess(id);
+      const { getUserById } = await import('./db');
+      const target = await loadCityAccess(id, (await getUserById(id))?.role);
       const allowed = scopedProjectIds()!;
       if (target.missingCostCenter || target.all || target.projectIds.some(pid => !allowed.includes(pid))) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Este utilizador tem acesso fora das tuas cidades autorizadas.' });

@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { can } from "@shared/access";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Loader2, CalendarCheck, CheckCircle2 } from "lucide-react";
@@ -25,7 +26,6 @@ function useWeekParam(fallback: string): string {
 //   - backoffice e acima: hub de gestão — matriz de disponibilidades +
 //     envio email/WhatsApp + candidaturas do site (saíram da Extras Dia,
 //     que estava demasiado cheia). Quem é gestão não marca disponibilidade.
-const MANAGEMENT_ROLES = new Set(["backoffice", "team_leader", "supervisor", "admin", "super_admin"]);
 
 export default function DisponibilidadePage() {
   const { user, loading } = useAuth();
@@ -38,7 +38,7 @@ export default function DisponibilidadePage() {
     );
   }
 
-  if (MANAGEMENT_ROLES.has(user?.role ?? "")) {
+  if (can(user?.role, "disponibilidade_extras", "view")) {
     return (
       <div className="space-y-6">
         <div>

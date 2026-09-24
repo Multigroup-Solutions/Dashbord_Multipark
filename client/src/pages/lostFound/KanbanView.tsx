@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { can, roleRank, seesBeyondOwn } from "@shared/access";
 import { formatBookingHistoryDetails } from "@/lib/bookingHistoryFormat";
 import { openInMultipark } from "@/lib/multiparkLinks";
 import { fileHref } from "@/lib/fileHref";
@@ -42,7 +43,7 @@ export function KanbanView({ user, filterType, setFilterType, searchTerm, setSea
   const globalFilters = useGlobalFilters();
   // "Sem cidade": casos sem projeto (só quem vê todas as cidades os tem).
   const [noProject, setNoProject] = useState(false);
-  const canCrossRef = ["team_leader", "supervisor", "admin", "super_admin"].includes(user?.role ?? "");
+  const canCrossRef = seesBeyondOwn(user?.role, "perdidos") && can(user?.role, "perdidos", "edit");
   const queryInput = useMemo(() => {
     const input: any = {};
     if (filterType !== "all") input.itemType = filterType;

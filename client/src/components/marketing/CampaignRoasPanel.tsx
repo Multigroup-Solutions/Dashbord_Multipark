@@ -6,6 +6,7 @@
  * que o admin liga à campanha aqui. Em baixo, as conversões por ação.
  */
 import React, { useMemo, useState } from "react";
+import { can, roleRank, seesBeyondOwn } from "@shared/access";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -34,7 +35,7 @@ function statusBadge(status: string | null | undefined) {
 
 export default function CampaignRoasPanel({ from, to, projectId }: { from: string; to: string; projectId?: number }) {
   const { user } = useAuth();
-  const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
+  const isAdmin = can(user?.role, "marketing", "manage");
   const utils = trpc.useUtils();
   const { data, isLoading, error } = trpc.marketing.campaignRoas.useQuery({ from, to, projectId });
   const refresh = () => { utils.marketing.campaignRoas.invalidate(); utils.marketing.campaignLinks.list.invalidate(); };

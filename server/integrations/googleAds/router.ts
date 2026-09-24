@@ -6,6 +6,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { and, eq, sql } from "drizzle-orm";
 import { protectedProcedure, router } from "../../_core/trpc";
+import { requireAccess } from "../../_core/access";
 import { getDb } from "../../db";
 import { adAccounts, adCampaigns } from "../../../drizzle/schema";
 import { GOOGLE_ADS_PROVIDER, OAUTH_CALLBACK_PATH, missingApiEnvs, missingOAuthEnvs, readGoogleAdsConfig } from "./config";
@@ -13,14 +14,10 @@ import { connectionSummary, disconnect, getConnection, hasStoredRefreshToken } f
 import { isSyncStale, lastSuccessfulSyncAt, listSyncRuns, refreshAccounts, runGoogleAdsSync } from "./sync";
 import { backfillBookingAttribution } from "./marketingStats";
 
-const RANK: Record<string, number> = { super_admin: 7, admin: 6 };
-function requireAdmin(role: string) {
-  if ((RANK[role] ?? 0) < RANK.admin) throw new TRPCError({ code: "FORBIDDEN", message: "Acesso não autorizado." });
-}
 
 export const googleAdsRouter = router({
   status: protectedProcedure.query(async ({ ctx }) => {
-    requireAdmin(ctx.user.role);
+    requireAccess(ctx.user, "integracoes", "view");
     const cfg = readGoogleAdsConfig();
     const conn = await getConnection();
     const db = await getDb();
@@ -45,19 +42,19 @@ export const googleAdsRouter = router({
 
   accounts: router({
     list: protectedProcedure.query(async ({ ctx }) => {
-      requireAdmin(ctx.user.role);
+      requireAccess(ctx.user, "integracoes", "view");
       const db = await getDb();
       if (!db) return [];
       return db.select().from(adAccounts).where(eq(adAccounts.provider, GOOGLE_ADS_PROVIDER)).orderBy(adAccounts.isManager, adAccounts.name);
     }),
     refresh: protectedProcedure.mutation(async ({ ctx }) => {
-      requireAdmin(ctx.user.role);
+      requireAccess(ctx.user, "integracoes", "edit");
       return refreshAccounts();
     }),
     update: protectedProcedure
       .input(z.object({ id: z.number(), selected: z.boolean().optional(), projectId: z.number().nullable().optional() }))
       .mutation(async ({ ctx, input }) => {
-        requireAdmin(ctx.user.role);
+        requireAccess(ctx.user, "integracoes", "manage");
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
         const patch: Record<string, unknown> = {};
@@ -70,7 +67,7 @@ export const googleAdsRouter = router({
 
   campaigns: router({
     list: protectedProcedure.input(z.object({ accountId: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
-      requireAdmin(ctx.user.role);
+      requireAccess(ctx.user, "marketing", "view");
       const db = await getDb();
       if (!db) return [];
       const conds = [eq(adCampaigns.provider, GOOGLE_ADS_PROVIDER)];
@@ -82,7 +79,7 @@ export const googleAdsRouter = router({
     update: protectedProcedure
       .input(z.object({ id: z.number(), projectId: z.number().nullable(), scope: z.enum(["city", "national"]).optional() }))
       .mutation(async ({ ctx, input }) => {
-        requireAdmin(ctx.user.role);
+        requireAccess(ctx.user, "marketing", "manage");
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
         const scope = input.scope ?? "city";
@@ -93,7 +90,7 @@ export const googleAdsRouter = router({
     // pela marca da conta — regra pura em shared/adCampaignMapping.ts.
     // Só campanhas ainda sem marca/cidade; o Jorge confirma antes de aplicar.
     suggest: protectedProcedure.query(async ({ ctx }) => {
-      requireAdmin(ctx.user.role);
+      requireAccess(ctx.user, "marketing", "view");
       const db = await getDb();
       if (!db) return [];
       const { suggestCampaignProjects } = await import("../../../shared/adCampaignMapping");
@@ -105,7 +102,7 @@ export const googleAdsRouter = router({
     applySuggestions: protectedProcedure
       .input(z.object({ campaignIds: z.array(z.number().int().positive()).max(500).optional() }).optional())
       .mutation(async ({ ctx, input }) => {
-        requireAdmin(ctx.user.role);
+        requireAccess(ctx.user, "marketing", "manage");
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
         const { suggestCampaignProjects } = await import("../../../shared/adCampaignMapping");
@@ -130,18 +127,18 @@ export const googleAdsRouter = router({
     run: protectedProcedure
       .input(z.object({ kind: z.enum(["initial", "daily", "monthly", "manual", "hourly", "nightly"]).default("manual") }))
       .mutation(async ({ ctx, input }) => {
-        requireAdmin(ctx.user.role);
+        requireAccess(ctx.user, "integracoes", "edit");
         // prazo curto: no Vercel a função tem 60 s; o resultado diz se ficou parcial
         return runGoogleAdsSync({ kind: input.kind, deadlineAt: Date.now() + 40_000, triggeredById: ctx.user.id });
       }),
     runs: protectedProcedure.input(z.object({ limit: z.number().min(1).max(100).optional() }).optional()).query(async ({ ctx, input }) => {
-      requireAdmin(ctx.user.role);
+      requireAccess(ctx.user, "integracoes", "view");
       return listSyncRuns(input?.limit ?? 20);
     }),
   }),
 
   disconnect: protectedProcedure.mutation(async ({ ctx }) => {
-    requireAdmin(ctx.user.role);
+    requireAccess(ctx.user, "integracoes", "manage");
     await disconnect();
     return { success: true };
   }),
@@ -149,7 +146,7 @@ export const googleAdsRouter = router({
   backfillAttribution: protectedProcedure
     .input(z.object({ limit: z.number().min(1).max(5000).optional() }).optional())
     .mutation(async ({ ctx, input }) => {
-      requireAdmin(ctx.user.role);
+      requireAccess(ctx.user, "marketing", "manage");
       return backfillBookingAttribution(input?.limit ?? 1000);
     }),
 });

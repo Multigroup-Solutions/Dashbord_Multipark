@@ -326,9 +326,9 @@ export async function escalaAssignmentEmployeeId(assignmentId: number): Promise<
 
 // ─── Dashboard de conclusão ────────────────────────────────────────────────
 
-export async function completionDashboard(filters: { city?: string | null; pathId?: number | null; targetRole?: string | null } = {}, now: Date = new Date()) {
+export async function completionDashboard(filters: { city?: string | null; pathId?: number | null; targetRole?: string | null; employeeIds?: Set<number> | null } = {}, now: Date = new Date()) {
   const d = await db();
-  const rows = await d.select({
+  const allRows = await d.select({
     id: trainingAssignments.id, employeeId: trainingAssignments.employeeId, status: trainingAssignments.status,
     dueAt: trainingAssignments.dueAt, completedAt: trainingAssignments.completedAt, assignedAt: trainingAssignments.assignedAt,
     pathId: trainingPaths.id, pathName: trainingPaths.name, targetRole: trainingPaths.targetRole,
@@ -339,6 +339,8 @@ export async function completionDashboard(filters: { city?: string | null; pathI
     .where(and(eq(employees.isActive, 1), projectScope(employees.projectId),
       filters.pathId ? eq(trainingPaths.id, filters.pathId) : undefined,
       filters.targetRole ? eq(trainingPaths.targetRole, filters.targetRole) : undefined));
+  // team_leader: só a equipa (o chamador passa as fichas permitidas).
+  const rows = filters.employeeIds ? allRows.filter(r => filters.employeeIds!.has(r.employeeId)) : allRows;
   const { resolveCitiesForEmployeeIds } = await import("./employeeCity");
   const cities = await resolveCitiesForEmployeeIds(Array.from(new Set(rows.map(r => r.employeeId))));
   const list = rows.map(r => {

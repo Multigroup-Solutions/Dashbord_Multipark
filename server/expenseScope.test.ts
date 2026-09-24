@@ -118,11 +118,24 @@ describe("resolveExpenseVisibility", () => {
     expect(canSeeExpense(v, { insertedById: 5, projectId: 99 })).toBe(true);
     expect(canSeeExpense(v, { insertedById: 6, projectId: 10 })).toBe(false);
   });
-  it("backoffice/team_leader: só as próprias; frontoffice/extra: nada", async () => {
-    expect(await resolveExpenseVisibility({ id: 3, role: "backoffice" }, deps())).toEqual({ kind: "own", userId: 3 });
-    expect(await resolveExpenseVisibility({ id: 3, role: "team_leader" }, deps())).toEqual({ kind: "own", userId: 3 });
-    expect(await resolveExpenseVisibility({ id: 3, role: "frontoffice" }, deps())).toEqual({ kind: "none" });
+  it("backoffice/frontoffice: nacional (deny de totais → só as suas)", async () => {
+    expect(await resolveExpenseVisibility({ id: 3, role: "backoffice" }, deps())).toEqual({ kind: "all" });
+    expect(await resolveExpenseVisibility({ id: 3, role: "frontoffice" }, deps())).toEqual({ kind: "all" });
+    const v = await resolveExpenseVisibility({ id: 3, role: "backoffice" }, deps({ denied: async (_u, p) => p === "finance.view_totals" }));
+    expect(v).toEqual({ kind: "own", userId: 3 });
+  });
+  it("team_leader: as dele + as de quem está abaixo na cidade", async () => {
+    const v = await resolveExpenseVisibility({ id: 3, role: "team_leader" }, deps({ teamUserIds: async () => [3, 8, 9] }));
+    expect(v).toEqual({ kind: "users", userId: 3, userIds: [3, 8, 9] });
+    expect(canSeeExpense(v, { insertedById: 8, projectId: null })).toBe(true);
+    expect(canSeeExpense(v, { insertedById: 4, projectId: 10 })).toBe(false);
+    // sem a função de equipa: só as próprias
+    expect(await resolveExpenseVisibility({ id: 3, role: "team_leader" }, deps())).toEqual({ kind: "users", userId: 3, userIds: [3] });
+  });
+  it("condutor: só as próprias; extra/user: nada", async () => {
+    expect(await resolveExpenseVisibility({ id: 3, role: "condutor" }, deps())).toEqual({ kind: "own", userId: 3 });
     expect(await resolveExpenseVisibility({ id: 3, role: "extra" }, deps())).toEqual({ kind: "none" });
+    expect(await resolveExpenseVisibility({ id: 3, role: "user" }, deps())).toEqual({ kind: "none" });
   });
 });
 

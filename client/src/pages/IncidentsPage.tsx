@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { can, roleRank, seesBeyondOwn } from "@shared/access";
 import { openInMultipark } from "@/lib/multiparkLinks";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -23,7 +24,6 @@ import CaseDashboardCard from "@/components/CaseDashboardCard";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { useLocation } from "wouter";
 
-const LEADER_ROLES = ["team_leader", "supervisor", "admin", "super_admin"];
 
 const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
   open: { label: "Aberta", color: "bg-red-100 text-red-800" },
@@ -84,7 +84,7 @@ export default function IncidentsPage() {
   const [noProject, setNoProject] = useState(false);
   const globalFilters = useGlobalFilters();
   const [, setLocation] = useLocation();
-  const isLeader = LEADER_ROLES.includes(user?.role ?? "");
+  const isLeader = roleRank(user?.role) >= roleRank("team_leader") && can(user?.role, "ocorrencias", "edit");
 
   const scopeInput = useMemo(() => (
     noProject ? { noProject: true } : globalFilters.projectId !== undefined ? { projectId: globalFilters.projectId } : {}
@@ -477,7 +477,7 @@ function IncidentDetailDialog({ id, user, cities, employeeMap, onClose, onEdit }
 
   if (isLoading || !inc) return null;
   const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "") && inc.status !== "converted";
-  const isLeader = LEADER_ROLES.includes(user?.role ?? "");
+  const isLeader = roleRank(user?.role) >= roleRank("team_leader") && can(user?.role, "ocorrencias", "edit");
   const openStates = inc.status === "open" || inc.status === "investigating";
 
   return (

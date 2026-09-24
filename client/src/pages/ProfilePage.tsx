@@ -1,5 +1,6 @@
 // Página "Perfil" (design Multipark Mobile 2a): cartão do utilizador + atalhos.
 import { useLocation } from "wouter";
+import { can, roleRank, seesBeyondOwn } from "@shared/access";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { Clock, Shield, LogOut, ChevronRight, UserCheck, Smartphone, SlidersHorizontal, Bell } from "lucide-react";
@@ -8,11 +9,8 @@ import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { NOTIFICATION_KINDS } from "@shared/appSettings";
 
-const ROLE_LABELS: Record<string, string> = {
-  super_admin: "Super Admin", admin: "Admin", supervisor: "Supervisor",
-  team_leader: "Team Leader", backoffice: "Backoffice", frontoffice: "Frontoffice",
-  extra: "Extra", user: "Utilizador",
-};
+import { ROLE_LABELS as ACCESS_ROLE_LABELS } from "@shared/access";
+const ROLE_LABELS: Record<string, string> = { ...ACCESS_ROLE_LABELS };
 
 export default function ProfilePage() {
   const { user, logout } = useAuth();
@@ -43,11 +41,11 @@ export default function ProfilePage() {
   const rows = [
     { icon: Clock, label: "O meu ponto", note: myStatus?.status === "in" ? "entrada aberta" : "picar entrada", action: () => openMyEmployee("timerecords") },
     { icon: UserCheck, label: "A minha ficha", note: "RH", action: () => openMyEmployee() },
-    ...(user?.role && ["admin", "super_admin"].includes(user.role)
-      ? [
-          { icon: Shield, label: "Roles e permissões", note: "granular", action: () => navigate("/permissoes") },
-          { icon: SlidersHorizontal, label: "Definições", note: "sistema", action: () => navigate("/definicoes") },
-        ]
+    ...(can(user?.role, "permissoes", "manage")
+      ? [{ icon: Shield, label: "Roles e permissões", note: "granular", action: () => navigate("/permissoes") }]
+      : []),
+    ...(can(user?.role, "definicoes", "view")
+      ? [{ icon: SlidersHorizontal, label: "Definições", note: "sistema", action: () => navigate("/definicoes") }]
       : []),
   ];
 

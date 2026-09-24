@@ -19,7 +19,8 @@ vi.mock("./marketingBudgets", () => ({ listBudgetsWithPacing: async () => [] }))
 vi.mock("./integrations/googleAds/oauth", () => ({ getConnection: async () => null }));
 
 import { appRouter } from "./routers";
-const caller = (role = "backoffice") =>
+// Marketing: só super_admin (correção do dono, 24 set 2026).
+const caller = (role = "super_admin") =>
   appRouter.createCaller({ user: { id: 7, role }, req: { headers: {} }, res: {} } as any);
 
 beforeEach(() => {
@@ -29,8 +30,9 @@ beforeEach(() => {
 });
 
 describe("marketing.alerts", () => {
-  it("só backoffice+", async () => {
+  it("só super_admin", async () => {
     await expect(caller("frontoffice").marketing.alerts({})).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller("admin").marketing.alerts({})).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
   it("cruza a campanha com as reservas atribuídas pelo ID externo", async () => {
     const r = await caller().marketing.alerts({});

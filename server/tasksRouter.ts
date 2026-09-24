@@ -11,6 +11,8 @@ import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { protectedProcedure, router } from "./_core/trpc";
+import { requireAccess, employeeBelowCondition } from "./_core/access";
+import { roleRank, scopeFor } from "../shared/access";
 import { assertProjectAccess } from "./cityScope";
 import { getDb, getEmployeeByUserId, getTaskById, getTaskAssignees, logActivity, resolveProjectIds, setTaskAssignees, createTask, updateTask } from "./db";
 import { taskTemplates } from "../drizzle/schema";
@@ -36,10 +38,36 @@ import {
   taskStats,
 } from "./tasksService";
 
-const ROLE_HIERARCHY: Record<string, number> = { super_admin: 7, admin: 6, supervisor: 5, team_leader: 4, backoffice: 3, frontoffice: 2, extra: 1, user: 0 };
-const atLeast = (role: string, min: string) => (ROLE_HIERARCHY[role] ?? -1) >= (ROLE_HIERARCHY[min] ?? 0);
+const atLeast = (role: string, min: string) => roleRank(role) >= roleRank(min);
 function requireRole(role: string, min: string) {
   if (!atLeast(role, min)) throw new TRPCError({ code: "FORBIDDEN", message: "Acesso não autorizado." });
+}
+
+/**
+ * team_leader (alcance "below_city"): só atribui a si próprio e a quem está
+ * abaixo dele na cidade, e só mexe em tarefas cujos responsáveis são esses.
+ */
+async function assertTeamAssignees(user: { id: number; role: string }, employeeIds: Array<number | null | undefined>) {
+  if (scopeFor(user, "tarefas") !== "below_city") return;
+  const ids = employeeIds.filter((x): x is number => x != null);
+  if (!ids.length) return;
+  const team = await teamEmployeeIds(user);
+  if (ids.some(id => !team.has(id))) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Só podes atribuir tarefas a ti e à tua equipa." });
+  }
+}
+async function teamEmployeeIds(user: { id: number; role: string }): Promise<Set<number>> {
+  const { sql } = await import("drizzle-orm");
+  const { projectScope } = await import("./cityScope");
+  const db = await getDb();
+  const out = new Set<number>();
+  const me = await myEmployeeId(user.id);
+  if (me != null) out.add(me);
+  if (!db) return out;
+  const [rows] = await db.execute(sql`SELECT e.id FROM employees e WHERE ${projectScope(sql`e.projectId`)}
+    AND ${await employeeBelowCondition(user, sql`e.id`)}`) as any;
+  for (const r of (rows as any[]) ?? []) out.add(Number(r.id));
+  return out;
 }
 const nowMysql = () => new Date().toISOString().slice(0, 19).replace("T", " ");
 
@@ -87,7 +115,7 @@ export const tasksRouter = router({
   list: protectedProcedure
     .input(listInput)
     .query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
+      requireAccess(ctx.user, "tarefas", "view", { allowOwn: true });
       const f = { projectId: input?.projectId, status: input?.status, showOld: input?.showOld, focusId: input?.focusId } as any;
       // extra: só vê as tarefas atribuídas a si (filtro em SQL)
       if (!canEditTasks(ctx.user.role) || input?.mine) {
@@ -102,14 +130,14 @@ export const tasksRouter = router({
   getById: protectedProcedure
     .input(z.object({ id: z.number() }))
     .query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
+      requireAccess(ctx.user, "tarefas", "view", { allowOwn: true });
       const { task } = await loadTaskFor(ctx, input.id);
       return task;
     }),
   stats: protectedProcedure
     .input(z.object({ projectId: z.number().optional(), mine: z.boolean().optional() }).optional())
     .query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
+      requireAccess(ctx.user, "tarefas", "view", { allowOwn: true });
       if (!canEditTasks(ctx.user.role) || input?.mine) {
         const me = await myEmployeeId(ctx.user.id);
         if (me == null) return { total: 0, backlog: 0, todo: 0, inProgress: 0, review: 0, done: 0, overdue: 0 };
@@ -120,7 +148,7 @@ export const tasksRouter = router({
   getAssignees: protectedProcedure
     .input(z.object({ taskId: z.number() }))
     .query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
+      requireAccess(ctx.user, "tarefas", "view", { allowOwn: true });
       await loadTaskFor(ctx, input.taskId);
       return getTaskAssignees(input.taskId);
     }),
@@ -128,9 +156,12 @@ export const tasksRouter = router({
   assignable: protectedProcedure
     .input(z.object({ projectId: z.number().int().positive().nullable().optional() }).optional())
     .query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "tarefas", "edit");
       const ids = input?.projectId ? await resolveProjectIds(input.projectId) : null;
-      return assignableEmployees(ids);
+      const rows = await assignableEmployees(ids);
+      if (scopeFor(ctx.user, "tarefas") !== "below_city") return rows;
+      const team = await teamEmployeeIds(ctx.user);
+      return rows.filter(r => team.has(r.id));
     }),
   create: protectedProcedure
     .input(z.object({
@@ -143,8 +174,9 @@ export const tasksRouter = router({
       dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}/).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "tarefas", "edit");
       if (input.projectId != null) assertProjectAccess(input.projectId);
+      await assertTeamAssignees(ctx.user, [...(input.assigneeIds ?? []), input.assigneeId]);
       const primaryAssignee = input.assigneeIds?.[0] ?? input.assigneeId ?? null;
       const newId = await createTask({
         title: input.title,
@@ -174,11 +206,12 @@ export const tasksRouter = router({
       dueDate: z.string().nullable().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "tarefas", "edit");
       const prev = await getTaskById(input.id);
       if (!prev) throw new TRPCError({ code: "NOT_FOUND", message: "Tarefa não encontrada." });
       assertTaskScope(prev);
       if (input.projectId != null) assertProjectAccess(input.projectId);
+      await assertTeamAssignees(ctx.user, [prev.assigneeId, ...(await getTaskAssignees(input.id)).map((a: any) => a.assignee?.employeeId), ...(input.assigneeIds ?? []), input.assigneeId]);
       const { id, dueDate, assigneeIds, status, priority, ...rest } = input;
       const data: any = { ...rest };
       if (status !== undefined) data.taskStatus = status;
@@ -202,7 +235,7 @@ export const tasksRouter = router({
   setStatus: protectedProcedure
     .input(z.object({ id: z.number(), status: z.enum(TASK_STATUSES) }))
     .mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
+      requireAccess(ctx.user, "tarefas", "edit", { allowOwn: true });
       const { task, employeeId, view } = await loadTaskFor(ctx, input.id);
       if (!canChangeTaskStatus({ role: ctx.user.role, employeeId }, view)) throw new TRPCError({ code: "FORBIDDEN", message: "Só podes mudar o estado das tuas tarefas." });
       if (task.taskStatus === input.status) return { success: true };
@@ -215,10 +248,11 @@ export const tasksRouter = router({
   delete: protectedProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "tarefas", "edit");
       const prev = await getTaskById(input.id);
       if (!prev) return { success: true };
       assertTaskScope(prev);
+      await assertTeamAssignees(ctx.user, [prev.assigneeId, ...(await getTaskAssignees(input.id)).map((a: any) => a.assignee?.employeeId)]);
       await deleteTaskCascade(input.id);
       await logActivity({ userId: ctx.user.id, action: "delete", entity: "task", entityId: input.id });
       return { success: true };
@@ -226,6 +260,7 @@ export const tasksRouter = router({
   /** "Verificar agora": o mesmo passo que o cron horário corre. */
   checkNotifications: protectedProcedure
     .mutation(async ({ ctx }) => {
+      requireAccess(ctx.user, "tarefas", "manage");
       requireRole(ctx.user.role, "admin");
       const r = await runTaskNotifications(new Date());
       return { notified: r.overdue + r.completed, details: r.details };
@@ -235,14 +270,14 @@ export const tasksRouter = router({
   comments: protectedProcedure
     .input(z.object({ taskId: z.number() }))
     .query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
+      requireAccess(ctx.user, "tarefas", "view", { allowOwn: true });
       await loadTaskFor(ctx, input.taskId);
       return listTaskComments(input.taskId);
     }),
   addComment: protectedProcedure
     .input(z.object({ taskId: z.number(), body: z.string().trim().min(1).max(5000) }))
     .mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
+      requireAccess(ctx.user, "tarefas", "view", { allowOwn: true });
       await loadTaskFor(ctx, input.taskId);
       return addTaskComment(input.taskId, { id: ctx.user.id, name: (ctx.user as any).name ?? null }, input.body);
     }),
@@ -250,7 +285,7 @@ export const tasksRouter = router({
   // ── Checklists recorrentes (modelos) ──────────────────────────────────────
   templates: router({
     list: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "supervisor");
+      requireAccess(ctx.user, "tarefas", "manage");
       const db = await getDb();
       if (!db) return [];
       const rows = await db.select().from(taskTemplates).orderBy(taskTemplates.title).limit(500);
@@ -261,7 +296,7 @@ export const tasksRouter = router({
     save: protectedProcedure
       .input(templateInput.extend({ id: z.number().int().positive().optional() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "supervisor");
+        requireAccess(ctx.user, "tarefas", "manage");
         if (input.cityProjectId != null) assertProjectAccess(input.cityProjectId);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
@@ -293,7 +328,7 @@ export const tasksRouter = router({
     delete: protectedProcedure
       .input(z.object({ id: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "supervisor");
+        requireAccess(ctx.user, "tarefas", "manage");
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
         const [prev] = await db.select().from(taskTemplates).where(eq(taskTemplates.id, input.id)).limit(1);
@@ -306,6 +341,7 @@ export const tasksRouter = router({
       }),
     /** Gera já as tarefas de hoje (idempotente) — o cron horário faz o mesmo. */
     generateNow: protectedProcedure.mutation(async ({ ctx }) => {
+      requireAccess(ctx.user, "tarefas", "manage");
       requireRole(ctx.user.role, "admin");
       const { generateTemplateTasks } = await import("./tasksService");
       return generateTemplateTasks(new Date());

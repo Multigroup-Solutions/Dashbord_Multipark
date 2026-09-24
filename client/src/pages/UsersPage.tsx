@@ -52,19 +52,22 @@ import { format } from "date-fns";
 import { pt } from "date-fns/locale";
 import { DeactivationDialog, type DeactivationSubmitValues } from "@/components/DeactivationDialog";
 import { DEFAULT_DEACTIVATION_REASON, deactivationReasonLabel } from "@shared/deactivationReasons";
+import { ROLE_LABELS, assignableRoles, can, canGrantPermissionsTo, canManageUserRole, canTouchPermission, roleRank, type Role } from "@shared/access";
 
+// Papéis e hierarquia: shared/access.ts (a mesma matriz que o servidor aplica).
 const ROLES = [
-  { value: "super_admin", label: "Super Admin", color: "bg-purple-100 text-purple-800 border-purple-200" },
-  { value: "admin", label: "Admin", color: "bg-blue-100 text-blue-800 border-blue-200" },
-  { value: "supervisor", label: "Supervisor", color: "bg-indigo-100 text-indigo-800 border-indigo-200" },
-  { value: "team_leader", label: "Team Leader", color: "bg-cyan-100 text-cyan-800 border-cyan-200" },
-  { value: "backoffice", label: "Backoffice", color: "bg-teal-100 text-teal-800 border-teal-200" },
-  { value: "frontoffice", label: "Frontoffice", color: "bg-green-100 text-green-800 border-green-200" },
-  { value: "extra", label: "Extra", color: "bg-yellow-100 text-yellow-800 border-yellow-200" },
-  { value: "user", label: "Utilizador", color: "bg-gray-100 text-gray-700 border-gray-200" },
+  { value: "super_admin", label: ROLE_LABELS.super_admin, color: "bg-purple-100 text-purple-800 border-purple-200" },
+  { value: "admin", label: ROLE_LABELS.admin, color: "bg-blue-100 text-blue-800 border-blue-200" },
+  { value: "backoffice", label: ROLE_LABELS.backoffice, color: "bg-teal-100 text-teal-800 border-teal-200" },
+  { value: "frontoffice", label: ROLE_LABELS.frontoffice, color: "bg-green-100 text-green-800 border-green-200" },
+  { value: "supervisor", label: ROLE_LABELS.supervisor, color: "bg-indigo-100 text-indigo-800 border-indigo-200" },
+  { value: "team_leader", label: ROLE_LABELS.team_leader, color: "bg-cyan-100 text-cyan-800 border-cyan-200" },
+  { value: "condutor", label: ROLE_LABELS.condutor, color: "bg-orange-100 text-orange-800 border-orange-200" },
+  { value: "extra", label: ROLE_LABELS.extra, color: "bg-yellow-100 text-yellow-800 border-yellow-200" },
+  { value: "user", label: ROLE_LABELS.user, color: "bg-gray-100 text-gray-700 border-gray-200" },
 ];
 
-type RoleValue = "super_admin" | "admin" | "supervisor" | "team_leader" | "backoffice" | "frontoffice" | "extra" | "user";
+type RoleValue = Role;
 
 const DEPARTMENTS = [
   "Administração",
@@ -95,6 +98,67 @@ type UserFormData = {
 
 const emptyForm: UserFormData = { name: "", email: "", role: "user", department: "" };
 
+/** "Sugerir condutores": contas user/extra cuja ficha tem posto driver/senior_driver. */
+function SuggestCondutoresCard() {
+  const utils = trpc.useUtils();
+  const [open, setOpen] = useState(false);
+  const { data: rows = [], isLoading } = trpc.users.suggestCondutores.useQuery(undefined, { enabled: open });
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const promote = trpc.users.promoteToCondutor.useMutation({
+    onSuccess: (r) => {
+      toast.success(`${r.changed} conta(s) passaram a Condutor`);
+      setPicked(new Set());
+      utils.users.list.invalidate();
+      utils.users.suggestCondutores.invalidate();
+    },
+    onError: (e) => toast.error("Erro: " + e.message),
+  });
+  const all = rows.length > 0 && picked.size === rows.length;
+  return (
+    <Card>
+      <CardHeader className="pb-3 flex flex-row items-center justify-between gap-2">
+        <CardTitle className="text-base">Sugerir condutores</CardTitle>
+        <Button variant="outline" size="sm" onClick={() => setOpen((v) => !v)}>{open ? "Esconder" : "Ver sugestões"}</Button>
+      </CardHeader>
+      {open && (
+        <CardContent className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Contas com papel Utilizador ou Extra cuja ficha RH tem o posto Motorista / Motorista sénior. Ninguém muda de papel sem confirmares.
+          </p>
+          {isLoading ? <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /> : rows.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Sem sugestões.</p>
+          ) : (
+            <>
+              <div className="flex items-center gap-2">
+                <Switch checked={all} onCheckedChange={(v) => setPicked(v ? new Set(rows.map((r) => r.id)) : new Set())} className="scale-75" />
+                <span className="text-xs">Selecionar todos ({rows.length})</span>
+                <Button size="sm" className="ml-auto" disabled={picked.size === 0 || promote.isPending}
+                  onClick={() => promote.mutate({ userIds: [...picked] })}>
+                  {promote.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Passar a Condutor ({picked.size})
+                </Button>
+              </div>
+              <div className="max-h-72 overflow-y-auto divide-y border rounded-md">
+                {rows.map((r) => (
+                  <label key={r.id} className="flex items-center gap-3 px-3 py-2 text-sm cursor-pointer">
+                    <input type="checkbox" checked={picked.has(r.id)} onChange={(e) => {
+                      const next = new Set(picked);
+                      if (e.target.checked) next.add(r.id); else next.delete(r.id);
+                      setPicked(next);
+                    }} />
+                    <span className="font-medium">{r.fullName ?? r.name ?? r.email}</span>
+                    <span className="text-xs text-muted-foreground">{r.email}</span>
+                    <span className="ml-auto text-xs text-muted-foreground">{r.projectName ?? "—"} · {ROLE_LABELS[r.role as Role] ?? r.role}</span>
+                  </label>
+                ))}
+              </div>
+            </>
+          )}
+        </CardContent>
+      )}
+    </Card>
+  );
+}
+
 export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
   const { user: currentUser } = useAuth();
   const utils = trpc.useUtils();
@@ -113,6 +177,12 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
   const [form, setForm] = useState<UserFormData>(emptyForm);
 
   const isSuperAdmin = currentUser?.role === "super_admin";
+  const myRole = currentUser?.role ?? "user";
+  const canManageUsers = can(myRole, "utilizadores", "manage");
+  const assignable = assignableRoles(myRole) as string[];
+  const roleOptions = ROLES.filter((r) => assignable.includes(r.value));
+  /** Pode gerir esta conta (papel dentro do que pode atribuir; nunca a própria)? */
+  const manageable = (u: { id: number; role: string }) => canManageUserRole(myRole, u.role) && u.id !== currentUser?.id;
 
   const createMutation = trpc.users.create.useMutation({
     onSuccess: () => {
@@ -250,8 +320,8 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
       updateMutation.mutate({
         userId: editingUser.id,
         name: form.name,
-        ...(isSuperAdmin ? {
-          email: form.email,
+        ...(manageable(editingUser) ? {
+          ...(isSuperAdmin ? { email: form.email } : {}),
           role: form.role as RoleValue,
           department: form.department || null,
         } : {}),
@@ -266,7 +336,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
     }
   }
 
-  if (!["super_admin", "admin"].includes(currentUser?.role ?? "")) {
+  if (!can(myRole, "utilizadores", "view")) {
     return (
       <div className="flex flex-col items-center justify-center py-24 text-center">
         <AlertCircle className="h-12 w-12 text-muted-foreground/30 mb-4" />
@@ -290,7 +360,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
             Criar, editar e gerir utilizadores da plataforma
           </p>
         </div>
-        {isSuperAdmin && (
+        {canManageUsers && (
           <Button onClick={openCreate} className="gap-2">
             <Plus className="h-4 w-4" />
             Novo Utilizador
@@ -466,7 +536,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                       </TableCell>
                       <TableCell><UserEmployeeLinks employees={u.employees} /></TableCell>
                       <TableCell>
-                        {isSuperAdmin && u.id !== currentUser?.id ? (
+                        {manageable(u) ? (
                           <Select
                             value={u.role}
                             onValueChange={(newRole) => {
@@ -477,7 +547,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
-                              {ROLES.map((r) => (
+                              {roleOptions.map((r) => (
                                 <SelectItem key={r.value} value={r.value} className="text-xs">
                                   {r.label}
                                 </SelectItem>
@@ -499,7 +569,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                         )}
                       </TableCell>
                       <TableCell>
-                        {isSuperAdmin && u.id !== currentUser?.id ? (
+                        {manageable(u) ? (
                           <div className="flex items-center gap-2">
                             <Switch
                               checked={Boolean(u.isActive)}
@@ -549,7 +619,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                       {(isSuperAdmin || currentUser) && (
                         <TableCell className="text-right">
                           <div className="flex items-center gap-1">
-                            {(isSuperAdmin || u.id === currentUser?.id) && (
+                            {(manageable(u) || u.id === currentUser?.id) && (
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -560,7 +630,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                                 <Pencil className="h-3.5 w-3.5" />
                               </Button>
                             )}
-                            {isSuperAdmin && u.loginMethod === "manual" && (
+                            {manageable(u) && u.loginMethod === "manual" && (
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -572,15 +642,17 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                                 {sendInviteMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
                               </Button>
                             )}
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => setPermUser({ id: u.id, name: u.name ?? u.email ?? `#${u.id}` })}
-                              className="h-7 w-7 p-0"
-                              title="Permissões deste utilizador"
-                            >
-                              <KeyRound className="h-3.5 w-3.5" />
-                            </Button>
+                            {canGrantPermissionsTo(myRole, u.role) && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setPermUser({ id: u.id, name: u.name ?? u.email ?? `#${u.id}` })}
+                                className="h-7 w-7 p-0"
+                                title="Permissões deste utilizador"
+                              >
+                                <KeyRound className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
                           </div>
                         </TableCell>
                       )}
@@ -593,6 +665,9 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
         </CardContent>
       </Card>
 
+      {/* Sugerir condutores (admin+): fichas com posto driver/senior_driver */}
+      {roleRank(myRole) >= roleRank("admin") && <SuggestCondutoresCard />}
+
       {/* Role Legend */}
       <Card>
         <CardHeader className="pb-3">
@@ -604,14 +679,15 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
               <div key={r.value} className="flex flex-col gap-1 p-3 rounded-lg bg-muted/30 border">
                 <RoleBadge role={r.value} />
                 <p className="text-xs text-muted-foreground mt-1">
-                  {r.value === "super_admin" && "Acesso total, logs, roles, gestão de users"}
-                  {r.value === "admin" && "Gestão de despesas, RH e operações"}
-                  {r.value === "supervisor" && "Visão geral de todos os dados"}
-                  {r.value === "team_leader" && "Gestão da sua equipa"}
-                  {r.value === "backoffice" && "Operações internas"}
-                  {r.value === "frontoffice" && "Operações de front"}
-                  {r.value === "extra" && "Acesso limitado, registo de ponto"}
-                  {r.value === "user" && "Apenas dados próprios"}
+                  {r.value === "super_admin" && "Tudo: Faturação, Marketing, Logs, API Keys, qualquer papel"}
+                  {r.value === "admin" && "Nacional: tudo do backoffice + Financeiro (sem Faturação, Marketing nem Logs)"}
+                  {r.value === "backoffice" && "Nacional: o mesmo que o supervisor, em todas as cidades"}
+                  {r.value === "frontoffice" && "Nacional: o mesmo que o backoffice, sem Permissões"}
+                  {r.value === "supervisor" && "Cidade: tudo do team leader + utilizadores, permissões, resumo do dia"}
+                  {r.value === "team_leader" && "Cidade: a sua equipa (condutores, extras), escala, casos"}
+                  {r.value === "condutor" && "Próprio + despesas próprias, reservas e extras-dia da cidade"}
+                  {r.value === "extra" && "Próprio: ficha, formação, tarefas, serviços pendentes, PDA"}
+                  {r.value === "user" && "Apenas a própria ficha, formação e disponibilidade"}
                 </p>
               </div>
             ))}
@@ -683,7 +759,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
               </div>
             </div>
             {/* Role and Department only visible for super_admin editing others */}
-            {(isSuperAdmin && editingUser?.id !== currentUser?.id || !editingUser) && (
+            {(editingUser ? manageable(editingUser) : canManageUsers) && (
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Role</Label>
@@ -692,7 +768,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {ROLES.map((r) => (
+                    {roleOptions.map((r) => (
                       <SelectItem key={r.value} value={r.value}>
                         {r.label}
                       </SelectItem>
@@ -795,6 +871,7 @@ function UserPermissionsDialog({ user, onClose }: { user: { id: number; name: st
   const utils = trpc.useUtils();
   const { data: catalog = [] } = trpc.permissions.catalog.useQuery();
   const { data: overrides = {}, isLoading } = trpc.permissions.forUser.useQuery({ userId: user.id });
+  const { user: me } = useAuth();
   const setMut = trpc.permissions.setForUser.useMutation({
     onSuccess: () => {
       utils.permissions.forUser.invalidate({ userId: user.id });
@@ -834,7 +911,8 @@ function UserPermissionsDialog({ user, onClose }: { user: { id: number; name: st
                         size="sm"
                         variant={mode === m ? (m === "grant" ? "default" : m === "deny" ? "destructive" : "secondary") : "outline"}
                         className="h-7 text-xs px-2"
-                        disabled={setMut.isPending}
+                        disabled={setMut.isPending || !canTouchPermission(me?.role, p.id)}
+                        title={canTouchPermission(me?.role, p.id) ? undefined : "Não podes dar nem retirar esta permissão."}
                         onClick={() => setMut.mutate({ userId: user.id, permission: p.id, mode: m === "default" ? null : m })}
                       >
                         {label}

@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useMemo, useEffect } from "react";
+import { can, scopeFor } from "@shared/access";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
@@ -236,12 +237,12 @@ export default function ExpensesPage() {
   const effectiveEndDate = allHistory ? "" : endDate;
   const openDocument = useOpenExpenseDocument();
 
-  // Matriz de permissões (Jorge, 2026-08-04): backoffice/team_leader só
-  // INSEREM (modo input, sem lista/totais); supervisor vê as suas + as do
-  // seu centro de custos (filtrado no servidor); admin+ vê tudo.
+  // Matriz de acessos (shared/access.ts): condutor vê as suas; team leader
+  // as suas + as da equipa na cidade (sem totais); supervisor a cidade;
+  // front/backoffice todas; admin+ gere. O servidor filtra.
   const role = user?.role ?? "";
-  const isInputOnly = ["backoffice", "team_leader"].includes(role);
-  const canManage = ["admin", "super_admin"].includes(role);
+  const isInputOnly = ["own", "below_city"].includes(scopeFor(role, "despesas"));
+  const canManage = can(role, "despesas", "manage");
   const canDelete = role === "super_admin";
 
   // Queries
@@ -413,9 +414,9 @@ export default function ExpensesPage() {
         </div>
       </div>
 
-      {/* Backoffice/team leader: vêem as SUAS despesas (estado), sem totais */}
+      {/* Condutor / team leader: as SUAS despesas (e da equipa), sem totais */}
       {isInputOnly && (
-        <p className="text-xs text-muted-foreground -mt-3">As tuas despesas e o estado de cada uma. Os totais da empresa são reservados à administração.</p>
+        <p className="text-xs text-muted-foreground -mt-3">{scopeFor(role, "despesas") === "own" ? "As tuas despesas" : "As tuas despesas e as da tua equipa"} e o estado de cada uma. Os totais da empresa são reservados à administração.</p>
       )}
 
       {tab === "resumo" && <ExpenseDashboard />}

@@ -10,7 +10,8 @@
  * O auth.me / auth.logout são públicos e não passam por aqui: a interface
  * continua a receber a ficha (com o motivo) para mostrar o ecrã de bloqueio.
  */
-const RANK: Record<string, number> = { super_admin: 7, admin: 6, supervisor: 5, team_leader: 4, backoffice: 3, frontoffice: 2, extra: 1, user: 0 };
+import { ROLE_RANK as RANK_BY_ROLE } from "../shared/access";
+const RANK: Record<string, number> = { ...RANK_BY_ROLE };
 
 export const LOGIN_BLOCKED_FALLBACK_MSG = "O teu acesso está bloqueado. Contacta o teu supervisor.";
 
