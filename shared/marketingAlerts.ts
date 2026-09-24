@@ -27,6 +27,8 @@ export interface AlertsInput {
   windowCampaigns: Array<{ name: string; accountName: string | null; cost: number; conversions: number; attributedBookings: number }>;
   attribution: AttributionQuality;
   windowSpend: number;
+  /** conversões Google na mesma janela */
+  windowConversions?: number;
   monthSpend: number;
   prevMonthSpend: number;
   /** dia do mês de hoje (1..31) e dias do mês corrente */
@@ -40,7 +42,7 @@ const eur = (v: number) => `${Math.round(v).toLocaleString("pt-PT")} €`;
 
 export function computeMarketingAlerts(i: AlertsInput): MarketingAlert[] {
   const out: MarketingAlert[] = [];
-  const health = attributionHealth(i.attribution, i.windowSpend);
+  const health = attributionHealth(i.attribution, i.windowSpend, i.windowConversions);
   const attributionBroken = health.level === "critical";
   if (attributionBroken) {
     out.push({ level: "critical", code: "attribution_broken", title: "Atribuição partida", detail: health.message, link: "/marketing" });

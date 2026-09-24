@@ -52,6 +52,8 @@ export interface ChannelsResult {
   channels: ChannelRow[];
   partners: Array<{ name: string; bookings: number; revenue: number; commissionRate: number; commission: number }>;
   bookingsTotal: number;
+  /** conversões que a Google conta no período (medem melhor os anúncios do que as reservas que ligamos) */
+  googleConversions: number;
   /** reservas do período sem email (não dá para as ligar a um cliente) */
   bookingsWithoutEmail: number;
   newClients: number;
@@ -120,7 +122,7 @@ export function buildChannels(
     return { key: k, label: CHANNEL_LABEL[k], clients: v.clients, avgBookings: v.bookings / v.clients, repeatRate: v.repeat / v.clients, avgValue: v.value / v.clients };
   });
   return {
-    range, channels,
+    range, channels, googleConversions: 0,
     partners: [...partners.values()].sort((a, b) => b.bookings - a.bookings),
     bookingsTotal, bookingsWithoutEmail: bookingsTotal - withEmail,
     newClients, returningBookings, valueByChannel,
@@ -164,9 +166,9 @@ export function clientsSql(from: string, to: string, projectIds?: number[] | nul
 const cache = new Map<string, { at: number; value: ChannelsResult }>();
 export function invalidateChannelsCache(): void { cache.clear(); }
 
-export async function getChannels(db: any, f: { from: string; to: string; projectIds?: number[] | null; adSpend: number }): Promise<ChannelsResult> {
+export async function getChannels(db: any, f: { from: string; to: string; projectIds?: number[] | null; adSpend: number; adConversions?: number }): Promise<ChannelsResult> {
   if (!ISO.test(f.from) || !ISO.test(f.to)) throw new Error("Datas inválidas (AAAA-MM-DD)");
-  const key = JSON.stringify({ s: scopedProjectIds() ?? "all", p: f.projectIds ?? null, from: f.from, to: f.to, spend: f.adSpend });
+  const key = JSON.stringify({ s: scopedProjectIds() ?? "all", p: f.projectIds ?? null, from: f.from, to: f.to, spend: f.adSpend, conv: f.adConversions ?? 0 });
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
   const { buildPartnerByCampaignMap } = await import("./db");
@@ -186,7 +188,7 @@ export async function getChannels(db: any, f: { from: string; to: string; projec
     const p = partnerMap.get(c.trim().toLowerCase());
     return p ? { id: p.id, name: p.name, commissionRate: Number(p.commissionRate ?? 0) } : undefined;
   };
-  const value = buildChannels(mix, clients, { from: f.from, to: f.to }, f.adSpend, partnerFor);
+  const value = { ...buildChannels(mix, clients, { from: f.from, to: f.to }, f.adSpend, partnerFor), googleConversions: f.adConversions ?? 0 };
   cache.set(key, { at: Date.now(), value });
   return value;
 }

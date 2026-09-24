@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attributionHealth } from "../shared/marketingAttribution";
+import { adResultsMeasure, attributionHealth } from "../shared/marketingAttribution";
 
 describe("diagnóstico da atribuição aos anúncios", () => {
   it("sem reservas no site não há diagnóstico", () => {
@@ -16,5 +16,19 @@ describe("diagnóstico da atribuição aos anúncios", () => {
   });
   it("links e cliques a chegar → a funcionar", () => {
     expect(attributionHealth({ siteBookings: 100, withOriginUrl: 95, withClickId: 22, attributed: 20 }, 500).level).toBe("ok");
+  });
+
+  it("a Google conta muito mais conversões do que as reservas que ligamos → incompleta", () => {
+    const q = { siteBookings: 1348, withOriginUrl: 1300, withClickId: 120, attributed: 110 };
+    const h = attributionHealth(q, 24760, 480);
+    expect(h.level).toBe("warning");
+    expect(h.message).toContain("480 conversões");
+    expect(h.message).toContain("110 reservas");
+    expect(attributionHealth(q, 24760, 130).level).toBe("ok");   // 110/130 = 85% — bate certo
+    expect(attributionHealth(q, 24760, 8).level).toBe("ok");     // poucas conversões: sem comparação
+  });
+  it("medida dos resultados: a maior entre conversões Google e reservas ligadas", () => {
+    expect(adResultsMeasure(110, 480)).toEqual({ value: 480, source: "google" });
+    expect(adResultsMeasure(50, 40)).toEqual({ value: 50, source: "bookings" });
   });
 });

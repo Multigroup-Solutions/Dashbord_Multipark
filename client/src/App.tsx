@@ -14,6 +14,7 @@ import HRPage from "./pages/HRPage";
 import ProjectsPage from "./pages/ProjectsPage";
 import TasksPage from "./pages/TasksPage";
 import MarketingPage from "./pages/MarketingPage";
+import { MarketingDashboardPage } from "./pages/MarketingPage";
 import ShiftHandoverPage from "./pages/ShiftHandoverPage";
 import OperationalPage from "./pages/OperationalPage";
 import ApiKeysPage from "./pages/ApiKeysPage";
@@ -254,9 +255,9 @@ function Router() {
       <Route path="/suporte-dashboard">
         {() => (<DashboardLayout><SuporteDashboard /></DashboardLayout>)}
       </Route>
-      {/* URL antigo do dashboard de marketing → separador Dashboard do Marketing */}
+      {/* Dashboards → Marketing: só o dashboard (o módulo completo é /marketing, no Financeiro) */}
       <Route path="/marketing-dashboard">
-        {() => (<DashboardLayout><MarketingPage /></DashboardLayout>)}
+        {() => (<DashboardLayout><MarketingDashboardPage /></DashboardLayout>)}
       </Route>
       <Route path="/integracoes/google-ads">
         {() => (<DashboardLayout><IntegrationsGoogleAdsPage /></DashboardLayout>)}

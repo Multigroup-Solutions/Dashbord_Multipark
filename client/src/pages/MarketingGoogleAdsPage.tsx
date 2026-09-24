@@ -90,7 +90,7 @@ export default function MarketingGoogleAdsPage() {
         </TabsContent>
         {accounts.map((a) => (
           <TabsContent key={a.id} value={`conta-${a.id}`} className="mt-4">
-            <AccountCampaigns account={a} rows={(st?.byCampaign ?? []).filter((r: any) => r.accountId === a.id)} projects={projects as any[]} byBrandCity={byBrand?.byBrandCity ?? []} nationalShares={(st?.nationalShares ?? []).filter((s: any) => s.accountId === a.id)} />
+            <AccountCampaigns account={a} rows={(st?.byCampaign ?? []).filter((r: any) => r.accountId === a.id)} projects={projects as any[]} byBrandCity={byBrand?.byBrandCity ?? []} nationalShares={(st?.nationalShares ?? []).filter((s: any) => s.accountId === a.id)} attributedByCampaign={st?.attributedByCampaign ?? {}} />
           </TabsContent>
         ))}
       </Tabs>
@@ -110,7 +110,7 @@ function BrandSummary({ data }: { data: any }) {
       </Card>
     );
   }
-  const totals = rows.reduce((t, r) => ({ spend: t.spend + r.spend, bookings: t.bookings + r.bookings, revenue: t.revenue + r.revenue, attributed: t.attributed + r.attributed, revenueAttributed: t.revenueAttributed + (r.revenueAttributed ?? 0) }), { spend: 0, bookings: 0, revenue: 0, attributed: 0, revenueAttributed: 0 });
+  const totals = rows.reduce((t, r) => ({ spend: t.spend + r.spend, conversions: t.conversions + (r.conversions ?? 0), bookings: t.bookings + r.bookings, revenue: t.revenue + r.revenue, attributed: t.attributed + r.attributed, revenueAttributed: t.revenueAttributed + (r.revenueAttributed ?? 0) }), { spend: 0, conversions: 0, bookings: 0, revenue: 0, attributed: 0, revenueAttributed: 0 });
   return (
     <div className="space-y-4">
       <Card>
@@ -128,8 +128,10 @@ function BrandSummary({ data }: { data: any }) {
                   <th className="text-left px-4 py-2 font-medium">Marca</th>
                   <th className="text-left px-4 py-2 font-medium">Conta(s) Google</th>
                   <th className="text-right px-4 py-2 font-medium">Gasto</th>
+                  <th className="text-right px-4 py-2 font-medium" title="Conversões contadas pela Google (tag no site) — medem melhor os anúncios do que as reservas que conseguimos ligar">Conv. Google</th>
+                  <th className="text-right px-4 py-2 font-medium">Custo / conv.</th>
                   <th className="text-right px-4 py-2 font-medium">Reservas</th>
-                  <th className="text-right px-4 py-2 font-medium">Via anúncios</th>
+                  <th className="text-right px-4 py-2 font-medium" title="Reservas com gclid/utm pago no URL de origem — fica abaixo das conversões quando o gclid se perde">Ligadas (gclid)</th>
                   <th className="text-right px-4 py-2 font-medium">Valor via anúncios</th>
                   <th className="text-right px-4 py-2 font-medium">Valor reservado</th>
                   <th className="text-right px-4 py-2 font-medium">Gasto / reserva</th>
@@ -141,6 +143,8 @@ function BrandSummary({ data }: { data: any }) {
                     <td className="px-4 py-2 font-semibold">{r.brand}{!r.mapped && <Badge variant="outline" className="ml-2 text-[10px] text-amber-700">conta sem marca</Badge>}</td>
                     <td className="px-4 py-2 text-muted-foreground">{r.accounts.map((a: any) => a.name).join(", ")}</td>
                     <td className="px-4 py-2 text-right">{eur(r.spend)}</td>
+                    <td className="px-4 py-2 text-right font-semibold">{(r.conversions ?? 0).toFixed(1)}</td>
+                    <td className="px-4 py-2 text-right text-muted-foreground">{r.conversions > 0 ? eur(r.spend / r.conversions) : "—"}</td>
                     <td className="px-4 py-2 text-right font-semibold">{num(r.bookings)}</td>
                     <td className="px-4 py-2 text-right">{num(r.attributed)}</td>
                     <td className="px-4 py-2 text-right">{eur(r.revenueAttributed)}</td>
@@ -151,6 +155,8 @@ function BrandSummary({ data }: { data: any }) {
                 <tr className="bg-muted/40 font-semibold">
                   <td className="px-4 py-2" colSpan={2}>Total</td>
                   <td className="px-4 py-2 text-right">{eur(totals.spend)}</td>
+                  <td className="px-4 py-2 text-right">{totals.conversions.toFixed(1)}</td>
+                  <td className="px-4 py-2 text-right text-muted-foreground">{totals.conversions > 0 ? eur(totals.spend / totals.conversions) : "—"}</td>
                   <td className="px-4 py-2 text-right">{num(totals.bookings)}</td>
                   <td className="px-4 py-2 text-right">{num(totals.attributed)}</td>
                   <td className="px-4 py-2 text-right">{eur(totals.revenueAttributed)}</td>
@@ -173,7 +179,9 @@ function BrandSummary({ data }: { data: any }) {
 type BrandCityStats = { projectId: number; bookings: number; attributed: number; revenue: number; revenueAttributed: number };
 type NationalShare = { key: string; accountId: number; projectId: number; cost: number; clicks: number; conversions: number; conversionValue: number };
 
-function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares }: { account: { id: number; name: string }; rows: any[]; projects: any[]; byBrandCity: BrandCityStats[]; nationalShares: NationalShare[] }) {
+function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares, attributedByCampaign }: { account: { id: number; name: string }; rows: any[]; projects: any[]; byBrandCity: BrandCityStats[]; nationalShares: NationalShare[]; attributedByCampaign: Record<string, number> }) {
+  // Reservas ligadas (gclid) desta campanha — a chave é "api:<conta>:<ID externo>".
+  const linked = (r: any) => (String(r.key).startsWith("api:") ? attributedByCampaign[String(r.key).split(":").slice(2).join(":")] ?? 0 : null);
   const { user } = useAuth();
   const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
   const utils = trpc.useUtils();
@@ -294,7 +302,7 @@ function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares
                 <th className="text-right px-4 py-2 font-medium">Custo/conv.</th>
                 <th className="text-right px-4 py-2 font-medium">Valor conv.</th>
                 <th className="text-right px-4 py-2 font-medium border-l" title="Reservas Multipark reais da marca nessa cidade (todos os parques), por data de criação, sem canceladas">Reservas</th>
-                <th className="text-right px-4 py-2 font-medium" title="Reservas que vieram pelos anúncios (gclid / utm pago no URL de origem)">Via anúncios</th>
+                <th className="text-right px-4 py-2 font-medium" title="Reservas com gclid/utm pago no URL de origem. Na linha da campanha: ligadas a essa campanha. Fica abaixo das conversões Google quando o gclid se perde.">Ligadas (gclid)</th>
                 <th className="text-right px-4 py-2 font-medium" title="Valor reservado das reservas que vieram pelos anúncios">Valor via anúncios</th>
               </tr>
             </thead>
@@ -352,7 +360,7 @@ function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares
                         <td className="px-4 py-1.5 text-right text-muted-foreground">{r.conversions > 0 ? eur(r.cost / r.conversions) : "—"}</td>
                         <td className="px-4 py-1.5 text-right">{eur(r.conversionValue)}</td>
                         <td className="px-4 py-1.5 text-right text-muted-foreground border-l">—</td>
-                        <td className="px-4 py-1.5 text-right text-muted-foreground">—</td>
+                        <td className="px-4 py-1.5 text-right">{linked(r) == null ? "—" : num(linked(r))}</td>
                         <td className="px-4 py-1.5 text-right text-muted-foreground">—</td>
                       </tr>
                     );

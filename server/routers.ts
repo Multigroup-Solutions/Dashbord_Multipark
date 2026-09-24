@@ -3626,6 +3626,7 @@ export const appRouter = router({
           windowCampaigns,
           attribution: win.attributionQuality,
           windowSpend: win.spend,
+          windowConversions: win.conversionsGoogle,
           monthSpend: month.totals.cost,
           prevMonthSpend: prev.totals.cost,
           dayOfMonth: Number(today.slice(8, 10)),
@@ -3657,7 +3658,7 @@ export const appRouter = router({
         const projectIds = allowed ? (requested ? requested.filter((id) => allowed.includes(id)) : allowed) : requested;
         try {
           const ads = await getAdMetrics({ from, to, projectIds });
-          return await getChannels(db, { from, to, projectIds: requested ?? null, adSpend: ads.totals.cost });
+          return await getChannels(db, { from, to, projectIds: requested ?? null, adSpend: ads.totals.cost, adConversions: ads.totals.conversions });
         } catch (e: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) });
         }
