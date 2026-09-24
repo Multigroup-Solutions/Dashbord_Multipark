@@ -354,7 +354,22 @@ app.get("/api/cron/daily-ops", async (req, res) => {
     // corrida seguinte via registos parciais e desistia. done:false → o
     // workflow chama outra vez até done:true (a recolha é retomável).
     const result = await collectDailyDriverData(yesterday, { deadlineAt: startedAt + 45_000 });
-    res.json({ ok: true, ranAt: new Date().toISOString(), date: yesterday.toISOString().slice(0, 10), stepErrors, ...result });
+    // Fase 0: recalcula o histórico GPS antigo (velocidades ×3,6, sem
+    // funcionário) com o tempo que sobrar; o workflow repete até acabar.
+    let recompute: { updated: number; remaining: number } | null = null;
+    if (result.done && Date.now() < startedAt + 40_000) {
+      try {
+        const { recomputeDriverHistory } = await import("../jobs/dailyDriverCollection");
+        recompute = await recomputeDriverHistory({ deadlineAt: startedAt + 45_000 });
+      } catch (err: any) {
+        stepErrors.push(`recalcular GPS: ${String(err?.message ?? err).slice(0, 200)}`);
+      }
+    }
+    res.json({
+      ok: true, ranAt: new Date().toISOString(), date: yesterday.toISOString().slice(0, 10), stepErrors, ...result,
+      recompute,
+      done: result.done && (recompute == null || recompute.remaining === 0),
+    });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: String(err?.message ?? err) });
   }

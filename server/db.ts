@@ -137,6 +137,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0075").then(m => ({ s: m.MIGRATION_0075_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0075 })),
       import("./migrations/migration_0076").then(m => ({ s: m.MIGRATION_0076_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0076 })),
       import("./migrations/migration_0077").then(m => ({ s: m.MIGRATION_0077_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0077 })),
+      import("./migrations/migration_0078").then(m => ({ s: m.MIGRATION_0078_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0078 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -6538,6 +6539,35 @@ export async function getSpeedViolationStats(startDate?: Date, endDate?: Date) {
 
 
 // ─── DAILY DRIVER HISTORY ────────────────────────────────────────────────────
+
+/**
+ * Funcionário dono de cada utilizador Zello num dia (UTC): quem teve o PDA
+ * desse Zello mais tempo nesse dia (check-ins de PDA, partilhados entre
+ * turnos); sem check-in, o Zello fixo da ficha (`employees.zelloUsername`).
+ */
+export async function resolveZelloHoldersForDay(dateStr: string): Promise<Map<string, number>> {
+  const db = await getDb();
+  const out = new Map<string, number>();
+  if (!db) return out;
+  const dayStart = Date.parse(`${dateStr}T00:00:00Z`);
+  const dayEnd = dayStart + 86_400_000;
+  const fixed = await db.select({ id: employees.id, zello: employees.zelloUsername }).from(employees).where(isNotNull(employees.zelloUsername));
+  for (const e of fixed) if (e.zello && !out.has(e.zello)) out.set(e.zello, e.id);
+  const [rows] = await db.execute(sql`
+    SELECT zelloUsername AS zello, employeeId, checkinAt, checkoutAt FROM pda_checkins
+     WHERE zelloUsername IS NOT NULL AND employeeId IS NOT NULL
+       AND checkinAt < ${toMysqlDateTime(new Date(dayEnd))}
+       AND (checkoutAt IS NULL OR checkoutAt >= ${toMysqlDateTime(new Date(dayStart))})`) as any;
+  const toMs = (v: any) => (v instanceof Date ? v.getTime() : Date.parse(String(v).replace(" ", "T") + "Z"));
+  const { holdersForDay } = await import("./zelloGps");
+  const byDay = holdersForDay(
+    ((rows as any[]) ?? []).map((r) => ({ zello: r.zello, employeeId: Number(r.employeeId), start: toMs(r.checkinAt), end: r.checkoutAt ? toMs(r.checkoutAt) : null })),
+    dayStart,
+    dayEnd,
+  );
+  for (const [z, id] of byDay) out.set(z, id); // o PDA do dia ganha ao Zello fixo
+  return out;
+}
 
 export async function createDailyDriverHistory(data: InsertDailyDriverHistory) {
   const db = await getDb();

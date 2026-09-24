@@ -23,6 +23,7 @@ import {
   getDefaultSpeedLimit,
 } from "../db";
 import { storagePut } from "../storage";
+import { MAX_PLAUSIBLE_KMH, MIN_IMPLICIT_GAP_S, zelloAccuracyOk, zelloBattery, zelloSpeedKmh, zelloTimestamp } from "../zelloGps";
 import { notifyOwner } from "../_core/notification";
 
 /** Calculate distance between two GPS points using Haversine formula */
@@ -93,17 +94,18 @@ function processGeoJsonHistory(data: any): {
     if (feature.geometry.type === "Point") {
       gpsPointsCount++;
       const props = feature.properties || {};
-      const rawSpeed = parseFloat(props.speed) || 0;
-      const speed = rawSpeed * 3.6; // Zello returns m/s, convert to km/h
-      const battery = parseInt(props.battery_level || props.batteryLevel) || 0;
-      const ts = parseInt(props.timestamp || props.time || props.lastReport) || 0;
+      // O Zello já devolve km/h (ver server/zelloGps.ts — antes multiplicava-se por 3,6)
+      const speed = zelloSpeedKmh(props);
+      const battery = zelloBattery(props);
+      const ts = zelloTimestamp(props);
+      const accurate = zelloAccuracyOk(props);
 
-      // Filter GPS noise (>150 km/h is unrealistic for parking drivers)
-      if (speed > 0 && speed <= 150) {
+      // Filter GPS noise (>150 km/h is unrealistic for parking drivers) e pontos imprecisos
+      if (accurate && speed > 0 && speed <= MAX_PLAUSIBLE_KMH) {
         speedSum += speed;
         speedCount++;
+        if (speed > maxSpeed) maxSpeed = speed;
       }
-      if (speed > maxSpeed && speed <= 150) maxSpeed = speed;
       if (battery > 0) {
         batterySum += battery;
         batteryCount++;
@@ -139,11 +141,10 @@ function processGeoJsonHistory(data: any): {
   const timestamps: { ts: number; speed: number; lat: number | null; lon: number | null }[] = [];
   for (const feature of data.features) {
     const props = feature.properties || {};
-    const ts = parseInt(props.timestamp || props.time || props.lastReport) || 0;
-    const rawSpd = parseFloat(props.speed) || 0;
-    const speed = rawSpd * 3.6; // m/s to km/h
+    const ts = zelloTimestamp(props);
+    const speed = zelloSpeedKmh(props);
     let lat: number | null = null, lon: number | null = null;
-    if (feature.geometry?.type === "Point" && Array.isArray(feature.geometry.coordinates)) {
+    if (feature.geometry?.type === "Point" && Array.isArray(feature.geometry.coordinates) && zelloAccuracyOk(props)) {
       const [gLon, gLat] = feature.geometry.coordinates;
       if (Number.isFinite(gLat) && Number.isFinite(gLon) && (gLat !== 0 || gLon !== 0)) {
         lat = gLat; lon = gLon;
@@ -176,9 +177,10 @@ function processGeoJsonHistory(data: any): {
         // filtros de ruído: gaps longos e saltos GPS não contam
         if (gapS > 0 && gapS < 3600 && segKm < 2) {
           const implKmh = (segKm / gapS) * 3600;
-          if (implKmh <= 150) {
+          if (implKmh <= MAX_PLAUSIBLE_KMH) {
             pointsKm += segKm;
-            if (implKmh > 3) implicitSpeeds.push(implKmh); // parado não conta p/ velocidade
+            // parado não conta; intervalos muito curtos amplificam o "tremer" do GPS
+            if (implKmh > 3 && gapS >= MIN_IMPLICIT_GAP_S) implicitSpeeds.push(implKmh);
           }
         }
       }
@@ -214,6 +216,90 @@ function processGeoJsonHistory(data: any): {
 
 // Exportado para o backfill (recalcular dias antigos a partir dos GeoJSON no storage)
 export { processGeoJsonHistory };
+
+/**
+ * Versão das métricas GPS. 2 = velocidades em km/h (sem o ×3,6), filtro de
+ * precisão e funcionário resolvido. Linhas antigas (1) são recalculadas.
+ */
+export const DRIVER_METRICS_VERSION = 2;
+
+/** Excessos de velocidade num GeoJSON do Zello (já em km/h). */
+export function countSpeedViolations(data: any, threshold: number): number {
+  let n = 0;
+  for (const f of data?.features ?? []) {
+    if (!zelloAccuracyOk(f.properties)) continue;
+    const v = zelloSpeedKmh(f.properties);
+    if (v > threshold && v <= MAX_PLAUSIBLE_KMH) n++;
+  }
+  return n;
+}
+
+/**
+ * Recalcula o histórico GPS antigo (versão < 2) a partir dos GeoJSON guardados:
+ * velocidades corrigidas, km, excessos e funcionário. Retomável — para no
+ * `deadlineAt` e devolve quantas linhas faltam (últimos `days` dias).
+ */
+export async function recomputeDriverHistory(opts: { deadlineAt: number; days?: number; batch?: number }): Promise<{ updated: number; remaining: number }> {
+  const { getDb, resolveZelloHoldersForDay } = await import("../db");
+  const { sql } = await import("drizzle-orm");
+  const db = await getDb();
+  if (!db) return { updated: 0, remaining: 0 };
+  const days = opts.days ?? 60;
+  const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r) as any[]) ?? [];
+  const speedLimit = await getDefaultSpeedLimit();
+  const threshold = speedLimit ? speedLimit.maxSpeed * (1 + speedLimit.tolerancePercent / 100) : 999;
+  const holdersCache = new Map<string, Map<string, number>>();
+  let updated = 0;
+  for (;;) {
+    if (Date.now() > opts.deadlineAt) break;
+    const rows = rowsOf(await db.execute(sql`
+      SELECT id, zelloUsername, employeeId, date, geoJsonUrl FROM daily_driver_history
+       WHERE metricsVersion < ${DRIVER_METRICS_VERSION} AND date >= NOW() - INTERVAL ${days} DAY
+       ORDER BY date DESC LIMIT ${opts.batch ?? 25}`));
+    if (!rows.length) break;
+    for (const r of rows) {
+      if (Date.now() > opts.deadlineAt) break;
+      const day = (r.date instanceof Date ? r.date.toISOString() : String(r.date)).slice(0, 10);
+      let holders = holdersCache.get(day);
+      if (!holders) { holders = await resolveZelloHoldersForDay(day); holdersCache.set(day, holders); }
+      const employeeId = r.employeeId ?? holders.get(String(r.zelloUsername)) ?? null;
+      let m: ReturnType<typeof processGeoJsonHistory> | null = null;
+      let violations: number | null = null;
+      if (r.geoJsonUrl) {
+        try {
+          const resp = await fetch(String(r.geoJsonUrl));
+          if (resp.ok) {
+            const data = await resp.json();
+            m = processGeoJsonHistory(data);
+            violations = countSpeedViolations(data, threshold);
+          }
+        } catch (err) {
+          console.warn("[recompute] GeoJSON indisponível", r.id, String(err).slice(0, 120));
+        }
+      }
+      if (m) {
+        await db.execute(sql`UPDATE daily_driver_history SET
+            totalKm = ${String(m.totalKm)}, hoursWorked = ${String(m.hoursWorked)}, hoursStopped = ${String(m.hoursStopped)},
+            totalHoursOnline = ${String(m.totalHoursOnline)}, avgSpeed = ${String(m.avgSpeed)}, maxSpeed = ${String(m.maxSpeed)},
+            speedViolations = ${violations ?? 0}, avgBattery = ${m.avgBattery}, minBattery = ${m.minBattery},
+            employeeId = ${employeeId}, metricsVersion = ${DRIVER_METRICS_VERSION}
+          WHERE id = ${r.id}`);
+      } else {
+        // Sem GeoJSON: não dá para recalcular a velocidade — as antigas vinham
+        // ×3,6, por isso corrige-se a escala (o que passava de 150 já se perdeu).
+        await db.execute(sql`UPDATE daily_driver_history SET
+            avgSpeed = ROUND(avgSpeed / 3.6, 2), maxSpeed = ROUND(maxSpeed / 3.6, 2),
+            employeeId = ${employeeId}, metricsVersion = ${DRIVER_METRICS_VERSION}
+          WHERE id = ${r.id}`);
+      }
+      updated++;
+    }
+  }
+  const [cnt] = rowsOf(await db.execute(sql`
+    SELECT COUNT(*) AS n FROM daily_driver_history
+     WHERE metricsVersion < ${DRIVER_METRICS_VERSION} AND date >= NOW() - INTERVAL ${days} DAY`));
+  return { updated, remaining: Number(cnt?.n ?? 0) };
+}
 
 /**
  * Run the daily collection for a specific date.
@@ -259,6 +345,10 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
     const startTs = Math.floor(startOfDay.getTime() / 1000);
     const endTs = Math.floor(endOfDay.getTime() / 1000);
 
+    // Quem tinha cada Zello nesse dia (PDA partilhado → quem o teve mais tempo)
+    const { resolveZelloHoldersForDay } = await import("../db");
+    const holders = await resolveZelloHoldersForDay(dateStr);
+
     // Get speed limit for violation counting
     const speedLimit = await getDefaultSpeedLimit();
     const threshold = speedLimit
@@ -279,9 +369,9 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
         let violations = 0;
         if (historyData?.features) {
           for (const feature of historyData.features) {
-            const rawSpd = parseFloat(feature.properties?.speed) || 0;
-            const speedKmh = rawSpd * 3.6; // m/s to km/h
-            if (speedKmh > threshold && speedKmh <= 150) violations++;
+            if (!zelloAccuracyOk(feature.properties)) continue;
+            const speedKmh = zelloSpeedKmh(feature.properties); // já em km/h
+            if (speedKmh > threshold && speedKmh <= MAX_PLAUSIBLE_KMH) violations++;
           }
         }
 
@@ -306,6 +396,9 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
         await createDailyDriverHistory({
           zelloUsername: user.name,
           displayName: user.fullName || user.name,
+          // Antes ficava sempre vazio → km/horas soltos na Atividade do Dia
+          employeeId: holders.get(user.name) ?? null,
+          metricsVersion: DRIVER_METRICS_VERSION,
           date: targetDate.toISOString().slice(0, 19).replace("T", " "),
           totalKm: String(metrics.totalKm),
           hoursWorked: String(metrics.hoursWorked),
