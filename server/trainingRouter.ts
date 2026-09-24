@@ -7,7 +7,6 @@ import { TRPCError } from "@trpc/server";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { protectedProcedure, router } from "./_core/trpc";
-import { notifyOwner } from "./_core/notification";
 import { projectScope } from "./cityScope";
 import { assessmentAnswers, trainingResultScope } from "./trainingAssessments";
 import { CENTER_SCOPED_ROLES, type RhViewer } from "./rhAccess";
@@ -394,11 +393,8 @@ export const trainingRouter = router({
     const { submitAttempt } = await import("./trainingAttempts");
     const r = await submitAttempt(me.employee.id, input.sessionId, input.answers);
     if (r.kind !== "exam") throw new TRPCError({ code: "BAD_REQUEST", message: "Tentativa inválida." });
-    if (r.passed) {
-      try {
-        await notifyOwner({ title: "Exame aprovado", content: `${me.employee.fullName} passou num exame de carreira com ${r.percentage}% (mínimo: ${r.passingScore}%). Promoção pendente de aprovação.` });
-      } catch { console.warn("[Training] Resultado guardado; o envio do aviso ao responsável falhou."); }
-    }
+    // Exame aprovado → o pedido de promoção já avisa quem aprova
+    // (`training_promotion`, em trainingAttempts.requestPromotion).
     return r;
   }),
   myCareerExamAttempts: protectedProcedure.query(async ({ ctx }) => {

@@ -1,8 +1,8 @@
 /**
  * Alertas das integrações: quando uma ligação passa a `reauth_required` /
- * `error`, ou um cron fica parado ("stale"), os administradores recebem UMA
- * notificação na app e o dono um email (notifyOwner) — uma vez por
- * TRANSIÇÃO. O último estado alertado fica em integration_alert_state
+ * `error`, ou um cron fica parado ("stale"), quem recebe os tipos
+ * `integration_alert` / `cron_stale` (super_admin + admin) recebe UMA
+ * notificação na app e um email — uma vez por TRANSIÇÃO. O último estado alertado fica em integration_alert_state
  * (migração 0105); a troca de estado é um UPDATE condicional atómico, por
  * isso duas invocações em paralelo não avisam a dobrar.
  *
@@ -72,20 +72,15 @@ async function claimTransition(db: Db, key: string, state: AlertState, detail: s
   return Number((updHeader as any)?.affectedRows ?? 0) === 1 ? prev : undefined;
 }
 
-async function sendAlert(db: Db, key: string, title: string, body: string, link: string): Promise<void> {
+async function sendAlert(db: Db, key: string, kind: "conn" | "cron", title: string, body: string, link: string): Promise<void> {
   try {
-    const admins = rowsOf(await db.execute(sql`SELECT id FROM users WHERE role IN ('admin', 'super_admin') AND isActive = 1`));
-    const { createNotification } = await import("../complaintsExtended");
-    for (const a of admins) {
-      try { await createNotification({ userId: Number(a.id), title, body, kind: "integration", link }); } catch { /* segue */ }
-    }
+    // Roteamento (shared/notificationRouting.ts): super_admin + admin, na app
+    // e por email (cada pessoa pode desligar o email no Perfil).
+    const { notify } = await import("../notify");
+    await notify({ kind: kind === "cron" ? "cron_stale" : "integration_alert", title, body, link, entity: { type: "integration_alert", id: key } });
   } catch (err: any) {
-    console.warn("[alerts] notificações na app falharam:", String(err?.message ?? err).slice(0, 160));
+    console.warn("[alerts] notificação falhou:", String(err?.message ?? err).slice(0, 160));
   }
-  try {
-    const { notifyOwner } = await import("../_core/notification");
-    await notifyOwner({ title, content: body });
-  } catch { /* o email é melhor-esforço */ }
   try { await db.execute(sql`UPDATE integration_alert_state SET alertedAt = UTC_TIMESTAMP() WHERE alertKey = ${key}`); } catch { /* indicador */ }
 }
 
@@ -122,7 +117,7 @@ export async function evaluateIntegrationAlerts(opts: { force?: boolean; now?: n
       const t = alertTransition(prev, it.state);
       if (t === "alert") {
         const m = alertMessage(it.kind, it.name, it.state, it.detail, it.label);
-        await sendAlert(db as any, it.key, m.title, m.body, it.link);
+        await sendAlert(db as any, it.key, it.kind, m.title, m.body, it.link);
         out.alerted.push(it.key);
       } else if (t === "recovered") {
         out.recovered.push(it.key);

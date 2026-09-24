@@ -14,7 +14,7 @@ import { getDb } from "../db";
 import { getBookingsReport, getConfiguredParks, getParkApiKey, type BookingActionType, type ParkConfig } from "../multipark";
 import { deliveryErrorCode } from "../bookingDeliveryQueue";
 import { reconciliationAlert, reconciliationDiff, utcMysql, type ReconciliationRow } from "../syncRules";
-import { RECONCILIATION_ALERT_KEY, notifyAdmins, transitionAlert } from "../syncHealth";
+import { RECONCILIATION_ALERT_KEY, notifySyncAlert, transitionAlert } from "../syncHealth";
 
 const ACTIONS: BookingActionType[] = ["creation", "checkin", "checkout", "cancelation"];
 const CONCURRENCY = 4;
@@ -112,7 +112,7 @@ export async function runDailyReconciliation(opts: { deadlineAt: number; now?: n
     summary = reconciliationAlert(rows);
     if (summary.alert) {
       if (await transitionAlert(RECONCILIATION_ALERT_KEY, true, `drift ${summary.drift} em ${days.join(", ")}`)) {
-        notified = await notifyAdmins("Reservas Multipark por sincronizar",
+        notified = await notifySyncAlert("Reservas Multipark por sincronizar",
           `A reconciliação de ${days.join(" e ")} encontrou ${summary.missing} reserva(s) do report que não estão na BD` +
           (summary.mismatch ? ` e ${summary.mismatch} de diferença entre o total e a lista` : "") +
           ` (${summary.parks.length} parque(s)). Usar "Reparar período" na Sincronização.`);

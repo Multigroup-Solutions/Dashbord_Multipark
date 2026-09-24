@@ -99,6 +99,7 @@ import { trpc } from "@/lib/trpc";
 import { MobileTabBar } from "@/components/MobileTabBar";
 import { AssistantWidget } from "@/components/assistant/AssistantWidget";
 import { can, roleRank, type AccessOverrides, type ModuleId } from "@shared/access";
+import { NOTIFICATION_KIND_DEFS, NOTIFY_CITY_LABELS, kindLabel, type NotifyCity } from "@shared/notificationRouting";
 
 /** Papel ou utilizador (com os overrides de módulo que vêm do auth.me). */
 export type AccessSubject = string | { role: string | null | undefined; accessOverrides?: AccessOverrides | null } | null | undefined;
@@ -852,7 +853,11 @@ function NotificationsBell() {
   const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
   const countQ = trpc.notifications.unreadCount.useQuery(undefined, { refetchInterval: 60_000 });
-  const listQ = trpc.notifications.list.useQuery({ limit: 20 });
+  // Filtro por tipo (só os tipos que a pessoa pode receber).
+  const [kindFilter, setKindFilter] = useState<string>("");
+  const prefsQ = trpc.notifications.prefs.useQuery(undefined, { staleTime: 5 * 60_000 });
+  const listQ = trpc.notifications.list.useQuery({ limit: 30, kind: kindFilter || null });
+  const kindOptions = NOTIFICATION_KIND_DEFS.filter((d) => (prefsQ.data?.kinds ?? []).includes(d.kind));
   const markRead = trpc.notifications.markRead.useMutation({
     onSuccess: () => {
       utils.notifications.list.invalidate();
@@ -901,7 +906,7 @@ function NotificationsBell() {
       </PopoverTrigger>
       <PopoverContent className="w-[min(24rem,calc(100vw-2rem))]" align="end">
         <div className="space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <h4 className="font-medium text-sm">Notificações</h4>
             {count > 0 && (
               <Button
@@ -915,9 +920,20 @@ function NotificationsBell() {
               </Button>
             )}
           </div>
+          {kindOptions.length > 1 && (
+            <select
+              value={kindFilter}
+              onChange={(e) => setKindFilter(e.target.value)}
+              aria-label="Filtrar por tipo"
+              className="w-full h-8 rounded-md border border-input bg-background px-2 text-xs"
+            >
+              <option value="">Todos os tipos</option>
+              {kindOptions.map((d) => <option key={d.kind} value={d.kind}>{d.label}</option>)}
+            </select>
+          )}
           <div className="space-y-1 max-h-80 overflow-y-auto">
             {items.length === 0 ? (
-              <p className="text-xs text-muted-foreground text-center py-6">Sem notificações</p>
+              <p className="text-xs text-muted-foreground text-center py-6">{kindFilter ? "Sem notificações deste tipo" : "Sem notificações"}</p>
             ) : (
               items.map((n: any) => (
                 <button
@@ -929,7 +945,14 @@ function NotificationsBell() {
                   <div className="min-w-0 flex-1">
                     <p className="text-sm truncate">{n.title}</p>
                     {n.body && <p className="text-xs text-muted-foreground line-clamp-2 break-words">{n.body}</p>}
-                    <p className="text-[10px] text-muted-foreground mt-0.5">{fmtTime(n.createdAt)}</p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5 flex flex-wrap items-center gap-x-1.5">
+                      <span>{fmtTime(n.createdAt)}</span>
+                      <span aria-hidden>·</span>
+                      <span>{kindLabel(n.kind)}</span>
+                      {n.cityKey && NOTIFY_CITY_LABELS[n.cityKey as NotifyCity] && (
+                        <span className="rounded border border-border px-1 leading-4 text-foreground/80">{NOTIFY_CITY_LABELS[n.cityKey as NotifyCity]}</span>
+                      )}
+                    </p>
                   </div>
                 </button>
               ))

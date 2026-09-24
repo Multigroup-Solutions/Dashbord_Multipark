@@ -365,11 +365,21 @@ export const appNotifications = mysqlTable("app_notifications", {
 	link: varchar({ length: 512 }),
 	isRead: tinyint().default(0).notNull(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	// 0140 — cidade da notificação (lisbon/porto/faro) e registo (deduplicação).
+	cityKey: varchar({ length: 16 }),
+	entityKey: varchar({ length: 96 }),
 },
 (table) => [
 	index("idx_app_notifications_user_unread").on(table.userId, table.isRead, table.createdAt),
 	index("idx_app_notifications_kind").on(table.kind),
+	index("idx_app_notifications_dedupe").on(table.userId, table.kind, table.entityKey, table.createdAt),
 ]);
+
+// 0140 — marcas das limpezas únicas das notificações (ex.: '0140_mark_old_read').
+export const appNotificationMaintenance = mysqlTable("app_notification_maintenance", {
+	id: varchar({ length: 64 }).notNull().primaryKey(),
+	ranAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+});
 
 export const complaintDriversOnDuty = mysqlTable("complaint_drivers_on_duty", {
 	id: int().autoincrement().primaryKey(),
@@ -435,6 +445,8 @@ export const complaints = mysqlTable("complaints", {
 	vehiclePlate: varchar({ length: 20 }),
 	driversInvolved: text(),
 	slaDeadline: timestamp({ mode: 'string' }),
+	// 0140 — aviso "fora do prazo" já enviado (1× por reclamação).
+	slaAlertedAt: timestamp({ mode: 'string' }),
 	resolvedAt: timestamp({ mode: 'string' }),
 	projectId: int(),
 	assignedToId: int(),

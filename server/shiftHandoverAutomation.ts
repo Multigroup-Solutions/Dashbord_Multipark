@@ -211,17 +211,18 @@ export async function afterHandoverSave(input: {
   const cityLabel = HANDOVER_CITY_LABELS[input.key.city];
   if (input.mode === "insert") {
     try {
-      const { createNotification } = await import("./complaintsExtended");
-      for (const uid of new Set(leaders.map((l) => l.userId).filter((u): u is number => u != null && u !== input.userId))) {
-        await createNotification({
-          userId: uid,
-          title: `Passagem de turno — ${cityLabel} ${SHIFT_LABELS[ref.shift]}`,
-          body: `${input.userName ?? "O team leader"} entregou a passagem de ${ref.date}. Abre e carrega em "Recebi".`,
-          kind: "handover",
-          link: "/passagem-turno",
-        });
-        out.notified++;
-      }
+      // Pessoal e obrigatória: só os team leaders do turno seguinte.
+      const { notify } = await import("./notify");
+      const r = await notify({
+        kind: "handover",
+        city: input.key.city,
+        targetUserIds: leaders.map((l) => l.userId).filter((u): u is number => u != null && u !== input.userId),
+        title: `Passagem de turno — ${cityLabel} ${SHIFT_LABELS[ref.shift]}`,
+        body: `${input.userName ?? "O team leader"} entregou a passagem de ${ref.date}. Abre e carrega em "Recebi".`,
+        link: "/passagem-turno",
+        entity: { type: "shift_handover", id },
+      });
+      out.notified += r.recipients.length;
     } catch (err: any) { console.warn("[handover] notificação:", String(err?.message ?? err).slice(0, 200)); }
   }
 
@@ -297,14 +298,13 @@ export async function runHandoverReminders(now: Date = new Date()): Promise<Reco
       const body = `A passagem de turno de ${s.date} (${SHIFT_LABELS[s.shift].toLowerCase()}) em ${label} ainda não foi preenchida.`;
       let sent = 0;
       try {
-        const { createNotification } = await import("./complaintsExtended");
+        const { notify } = await import("./notify");
         const leaders = await shiftTeamLeaders(s, city);
-        for (const uid of new Set(leaders.map((l) => l.userId).filter((u): u is number => u != null))) {
-          await createNotification({ userId: uid, title, body, kind: "handover", link: "/passagem-turno" });
-          sent++;
-        }
-        const { notifyBackoffice } = await import("./extrasAutomation");
-        await notifyBackoffice(title, body, "/passagem-turno");
+        const entity = { type: "handover_missing", id: `${s.date}:${s.shift}:${city}` };
+        // Team leaders do turno (pessoal, obrigatória) + supervisores da cidade.
+        const mine = await notify({ kind: "handover", city, targetUserIds: leaders.map((l) => l.userId), title, body, link: "/passagem-turno", entity });
+        sent += mine.recipients.length;
+        await notify({ kind: "handover_missing", city, title, body, link: "/passagem-turno", entity });
       } catch (err: any) { console.warn("[handover] lembrete:", String(err?.message ?? err).slice(0, 200)); }
       await db.execute(sql`UPDATE shift_handover_reminders SET recipients = ${sent} WHERE handoverDate = ${s.date} AND shift = ${s.shift} AND city = ${city}`);
       (out[k] ??= []).push(city);

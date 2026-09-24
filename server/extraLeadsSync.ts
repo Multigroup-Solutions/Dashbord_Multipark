@@ -475,13 +475,15 @@ export async function handleLeadInbound(input: { phoneE164: string; conversation
         out.replied.push(lead.id);
         await logActivity({ userId: 0, action: "extra_lead_status", entity: "extra_leads", entityId: lead.id, details: `Lead ${lead.fullName}: ${lead.status} → replied (WhatsApp recebido)` });
         try {
-          const { notifyBackoffice } = await import("./extrasAutomation");
-          await notifyBackoffice(
-            `Lead respondeu: ${lead.fullName}`,
-            `Respondeu por WhatsApp (${lead.phone ?? input.phoneE164}). Vê a conversa no inbox.`,
-            "/extras-leads",
-            { projectId: lead.projectId ?? null },
-          );
+          const { notify } = await import("./notify");
+          await notify({
+            kind: "lead_replied",
+            projectId: lead.projectId ?? null,
+            title: `Lead respondeu: ${lead.fullName}`,
+            body: `Respondeu por WhatsApp (${lead.phone ?? input.phoneE164}). Vê a conversa no inbox.`,
+            link: "/extras-leads",
+            entity: { type: "extra_lead", id: lead.id },
+          });
         } catch { /* segue */ }
 
         const applicationUrl = driverApplicationUrl();

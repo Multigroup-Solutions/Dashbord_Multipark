@@ -9,7 +9,6 @@
 import { and, desc, eq, gte, isNull, lte, sql } from "drizzle-orm";
 import { getDb, getLastInboundMessageIdForComplaint } from "./db";
 import {
-  appNotifications,
   complaintDriversOnDuty,
   complaintMessages,
   complaintPenaltyConfig,
@@ -29,74 +28,8 @@ import {
 } from "./complaintEmail";
 import { deriveShortName } from "./extrasDia";
 
-// ─── Notifications ───────────────────────────────────────────────────────────
-
-export async function createNotification(input: {
-  userId: number;
-  title: string;
-  body?: string | null;
-  kind?: string;
-  link?: string | null;
-}): Promise<void> {
-  const db = await getDb();
-  if (!db) return;
-  // Preferências da pessoa (Perfil → Notificações): tipos silenciados não
-  // entram. Obrigatórias/desconhecidas entram sempre; erro a ler → entra.
-  try {
-    const { getNotificationPrefsRaw } = await import("./appSettings");
-    const { parseNotificationPrefs, wantsNotification } = await import("../shared/appSettings");
-    if (!wantsNotification(parseNotificationPrefs(await getNotificationPrefsRaw(input.userId)), input.kind ?? "info")) return;
-  } catch { /* segue: na dúvida, notifica */ }
-  await db.insert(appNotifications).values({
-    userId: input.userId,
-    title: input.title.slice(0, 255),
-    body: input.body ?? null,
-    kind: (input.kind ?? "info").slice(0, 32),
-    link: input.link?.slice(0, 512) ?? null,
-  });
-}
-
-export async function listNotifications(userId: number, unreadOnly = false, limit = 50) {
-  const db = await getDb();
-  if (!db) return [];
-  const cond = unreadOnly
-    ? and(eq(appNotifications.userId, userId), eq(appNotifications.isRead, 0))
-    : eq(appNotifications.userId, userId);
-  return db
-    .select()
-    .from(appNotifications)
-    .where(cond)
-    .orderBy(desc(appNotifications.createdAt))
-    .limit(limit);
-}
-
-export async function unreadCount(userId: number): Promise<number> {
-  const db = await getDb();
-  if (!db) return 0;
-  const [row] = await db
-    .select({ n: sql<number>`COUNT(*)` })
-    .from(appNotifications)
-    .where(and(eq(appNotifications.userId, userId), eq(appNotifications.isRead, 0)));
-  return Number(row?.n ?? 0);
-}
-
-export async function markNotificationRead(userId: number, id: number) {
-  const db = await getDb();
-  if (!db) return;
-  await db
-    .update(appNotifications)
-    .set({ isRead: 1 })
-    .where(and(eq(appNotifications.id, id), eq(appNotifications.userId, userId)));
-}
-
-export async function markAllNotificationsRead(userId: number) {
-  const db = await getDb();
-  if (!db) return;
-  await db
-    .update(appNotifications)
-    .set({ isRead: 1 })
-    .where(eq(appNotifications.userId, userId));
-}
+// ─── Notificações ────────────────────────────────────────────────────────────
+// O sino e os avisos vivem em server/notify.ts (roteamento por tipo/cidade).
 
 // ─── Drivers em serviço quando a reserva da reclamação correu ────────────────
 
@@ -418,11 +351,12 @@ export async function sendComplaintAutoAck(
   }
 }
 
-// ─── Notification on complaint create ────────────────────────────────────────
+// ─── Aviso de reclamação nova ────────────────────────────────────────────────
 
 /**
- * Notifica todos os admins/supervisores quando uma reclamação é criada.
- * Quando assignedToId está definido, também notifica esse utilizador.
+ * Reclamação nova → backoffice, frontoffice e supervisores DA CIDADE da
+ * reclamação (+ quem vê todas as cidades) e, se já tiver responsável, essa
+ * pessoa (é assim que o team leader recebe: só quando é o responsável).
  */
 export async function notifyComplaintCreated(complaintId: number) {
   const db = await getDb();
@@ -435,30 +369,20 @@ export async function notifyComplaintCreated(complaintId: number) {
       complaintPriority: complaints.complaintPriority,
       assignedToId: complaints.assignedToId,
       clientName: complaints.clientName,
+      projectId: complaints.projectId,
     })
     .from(complaints)
     .where(eq(complaints.id, complaintId))
     .limit(1);
   if (!c) return;
-
-  const { users } = await import("../drizzle/schema");
-  const recipients = await db
-    .select({ id: users.id })
-    .from(users)
-    .where(sql`${users.role} IN ('admin','super_admin','supervisor','team_leader')`);
-
-  const title = `Nova reclamação: ${c.title}`;
-  const body = `Tipo: ${c.complaintType} · Prioridade: ${c.complaintPriority}${
-    c.clientName ? ` · Cliente: ${c.clientName}` : ""
-  }`;
-  const link = `/reclamacoes/${complaintId}`;
-
-  const userIds = new Set<number>(recipients.map(r => r.id));
-  if (c.assignedToId) userIds.add(c.assignedToId);
-
-  for (const userId of Array.from(userIds)) {
-    try {
-      await createNotification({ userId, title, body, kind: "complaint", link });
-    } catch {}
-  }
+  const { notify } = await import("./notify");
+  await notify({
+    kind: "complaint_new",
+    projectId: c.projectId ?? null,
+    alsoUserIds: [c.assignedToId],
+    title: `Nova reclamação: ${c.title}`,
+    body: `Tipo: ${c.complaintType} · Prioridade: ${c.complaintPriority}${c.clientName ? ` · Cliente: ${c.clientName}` : ""}`,
+    link: `/reclamacoes/${complaintId}`,
+    entity: { type: "complaint", id: complaintId },
+  });
 }

@@ -239,6 +239,24 @@ export async function triageComplaint(complaintId: number, opts: { userId?: numb
   }
   await db.update(complaints).set({ ...patch, aiTriagedAt: nowStr() } as any).where(eq(complaints.id, complaintId));
   out.ok = true;
+  // Só avisa quando há algo que pede atenção humana: prioridade alta/urgente
+  // por aplicar ou possível duplicado (o resto fica no detalhe da reclamação).
+  const urgentPending = out.suggested.includes("priority") && (priority === "high" || priority === "urgent");
+  if (urgentPending || out.suggested.includes("duplicate")) {
+    try {
+      const { notify } = await import("./notify");
+      const reasons = [urgentPending ? `prioridade ${COMPLAINT_PRIORITY_LABEL_PT[priority].toLowerCase()}` : null, out.suggested.includes("duplicate") ? "possível duplicado" : null].filter(Boolean).join(" · ");
+      await notify({
+        kind: "complaint_triage",
+        projectId: (patch as any).projectId ?? c.projectId ?? null,
+        alsoUserIds: [c.assignedToId],
+        title: `Reclamação #${complaintId}: sugestões da IA por rever`,
+        body: `${String(c.title ?? "").slice(0, 120)} — ${reasons}.`,
+        link: `/reclamacoes/${complaintId}`,
+        entity: { type: "complaint", id: complaintId },
+      });
+    } catch { /* o aviso nunca parte a triagem */ }
+  }
   return out;
 }
 

@@ -30,7 +30,6 @@ import {
   searchUserDirectory,
   userDirectorySummary,
 } from "./usersDirectory";
-import { notifyOwner } from "./_core/notification";
 import { storagePut } from "./storage";
 import { resolveExpenseVisibility, expenseConditions, whereAll, canSeeExpense, canSeeAggregates, type ExpenseListFilters, type ExpenseVisibility } from "./expenseScope";
 import { parseExpenseAmount } from "../shared/expenseAmount";
@@ -1764,12 +1763,14 @@ export const appRouter = router({
           details: `Despesa criada: ${input.supplier ?? "Sem fornecedor"} - ${amountNorm}€`,
         });
 
-        // Notifica UMA vez (o notifyOwner envia sempre p/ OWNER_EMAIL — o
-        // loop antigo mandava N emails idênticos).
+        // Aviso `expense_due` (supervisor da cidade da despesa + admin/super_admin).
         if (input.paymentDueDate && input.paymentDueDate !== 'null') {
-          await notifyOwner({
+          const { notify } = await import("./notify");
+          await notify({
+            kind: "expense_due", projectId: input.projectId ?? null,
             title: "Nova despesa com data de pagamento",
-            content: `Despesa de ${input.amount}€ (${input.supplier ?? "Sem fornecedor"}) com vencimento em ${new Date(input.paymentDueDate).toLocaleDateString("pt-PT")}.`,
+            body: `Despesa de ${input.amount}€ (${input.supplier ?? "Sem fornecedor"}) com vencimento em ${new Date(input.paymentDueDate).toLocaleDateString("pt-PT")}.`,
+            link: "/despesas", entity: newId ? { type: "expense", id: newId } : null,
           });
         }
 
@@ -2110,15 +2111,26 @@ export const appRouter = router({
       await markOverdueExpenses();
 
       if (overdue.length > 0) {
-        await notifyOwner({
-          title: `⚠️ ${overdue.length} despesa(s) em atraso`,
-          content: overdue
-            .map(
-              (o) =>
-                `• ${o.expense.supplier ?? "Sem fornecedor"}: ${o.expense.amount}€ (venceu em ${o.expense.paymentDueDate ? new Date(o.expense.paymentDueDate).toLocaleDateString("pt-PT") : "—"})`
-            )
-            .join("\n"),
-        });
+        // Um aviso por projeto (cidade) da despesa — `expense_overdue`.
+        const { notify } = await import("./notify");
+        const byProject = new Map<string, typeof overdue>();
+        for (const o of overdue) {
+          const k = String((o.expense as any).projectId ?? "-");
+          byProject.set(k, [...(byProject.get(k) ?? []), o]);
+        }
+        for (const list of Array.from(byProject.values())) {
+          await notify({
+            kind: "expense_overdue", projectId: (list[0].expense as any).projectId ?? null,
+            title: `${list.length} despesa(s) em atraso`,
+            body: list
+              .map(
+                (o) =>
+                  `• ${o.expense.supplier ?? "Sem fornecedor"}: ${o.expense.amount}€ (venceu em ${o.expense.paymentDueDate ? new Date(o.expense.paymentDueDate).toLocaleDateString("pt-PT") : "—"})`
+              )
+              .join("\n"),
+            link: "/despesas",
+          });
+        }
       }
 
       return { updated: overdue.length };
@@ -3549,11 +3561,13 @@ export const appRouter = router({
         const monthName = monthNames[input.month - 1];
         const key = `payroll/folha_ordenados_${input.year}_${String(input.month).padStart(2, "0")}_${Date.now()}.pdf`;
         const { url } = await storagePut(key, pdfBuffer, "application/pdf");
-        // Notify the owner with the PDF link so they can forward it
-        const { notifyOwner } = await import("./_core/notification");
-        await notifyOwner({
+        // Aviso `payroll_ready` (quem tem RH — ordenados; app + email) com o link do PDF.
+        const { notify } = await import("./notify");
+        await notify({
+          kind: "payroll_ready",
           title: `Folha de Ordenados - ${monthName} ${input.year}`,
-          content: `A folha de ordenados de ${monthName} ${input.year} foi gerada e est\u00e1 pronta para enviar ao contabilista (${input.email}).\n\nLink do PDF: ${url}`,
+          body: `A folha de ordenados de ${monthName} ${input.year} foi gerada e est\u00e1 pronta para enviar ao contabilista (${input.email}).\n\nLink do PDF: ${url}`,
+          link: "/rh", entity: { type: "payroll", id: `${input.year}-${input.month}` },
         });
         return { url, email: input.email, monthName, year: input.year };
       }),
@@ -3970,11 +3984,14 @@ export const appRouter = router({
           longitude: input.longitude ?? null,
           roadName: input.roadName ?? null,
         });
-        // Notify super admin
-        const admins = await getSuperAdmins();
-        if (admins.length > 0) {
-          await notifyOwner({ title: "Alerta de Velocidade", content: `Viatura #${input.vehicleId} a ${input.speed} km/h (limite: ${input.speedLimit} km/h)${input.roadName ? " em " + input.roadName : ""}` });
-        }
+        // Aviso `speed_alert` (chefias da cidade do condutor + quem vê todas).
+        const { notify } = await import("./notify");
+        await notify({
+          kind: "speed_alert", employeeId: input.employeeId ?? null,
+          title: "Alerta de Velocidade",
+          body: `Viatura #${input.vehicleId} a ${input.speed} km/h (limite: ${input.speedLimit} km/h)${input.roadName ? " em " + input.roadName : ""}`,
+          link: "/operacional", entity: { type: "speed_alert", id },
+        });
         await logActivity({ userId: ctx.user.id, action: "create", entity: "speed_alert", entityId: id, details: `${input.speed}km/h (limite ${input.speedLimit}km/h)` });
         return { id };
       }),
@@ -4185,10 +4202,13 @@ export const appRouter = router({
               occurredAt: new Date().toISOString().slice(0, 19).replace("T", " "),
             });
             violationCount++;
-            // Send notification
-            await notifyOwner({
-              title: "\u26a0\ufe0f Excesso de Velocidade",
-              content: `${loc.displayName || loc.username} a ${loc.speed.toFixed(1)} km/h (limite: ${defaultLimit.maxSpeed} km/h, +${excessPercent.toFixed(0)}%) - Lat: ${loc.latitude}, Lon: ${loc.longitude}`,
+            // Aviso `speed_alert` (sem cidade conhecida no Zello → quem vê todas).
+            const { notify } = await import("./notify");
+            await notify({
+              kind: "speed_alert",
+              title: "Excesso de Velocidade",
+              body: `${loc.displayName || loc.username} a ${loc.speed.toFixed(1)} km/h (limite: ${defaultLimit.maxSpeed} km/h, +${excessPercent.toFixed(0)}%) - Lat: ${loc.latitude}, Lon: ${loc.longitude}`,
+              link: "/operacional", entity: { type: "zello_speed", id: loc.username },
             });
           }
         }
@@ -4501,9 +4521,12 @@ export const appRouter = router({
               occurredAt: new Date().toISOString().slice(0, 19).replace("T", " "),
             });
             alertsCreated++;
-            await notifyOwner({
-              title: "\u26a0\ufe0f GPS Desligado",
-              content: `${user.fullName || user.name} (${user.name}) tem o GPS desligado no Zello`,
+            const { notify } = await import("./notify");
+            await notify({
+              kind: "gps_alert",
+              title: "GPS Desligado",
+              body: `${user.fullName || user.name} (${user.name}) tem o GPS desligado no Zello`,
+              link: "/operacional", entity: { type: "zello_gps_off", id: user.name },
             });
           }
         }
@@ -5029,41 +5052,81 @@ export const appRouter = router({
   // ─── IN-APP NOTIFICATIONS ─────────────────────────────────────────────────
   notifications: router({
     list: protectedProcedure
-      .input(z.object({ unreadOnly: z.boolean().optional(), limit: z.number().int().min(1).max(200).optional() }).optional())
+      .input(z.object({
+        unreadOnly: z.boolean().optional(),
+        limit: z.number().int().min(1).max(200).optional(),
+        kind: z.string().max(32).nullable().optional(),
+      }).optional())
       .query(async ({ ctx, input }) => {
-        const { listNotifications } = await import("./complaintsExtended");
-        return listNotifications(ctx.user.id, input?.unreadOnly ?? false, input?.limit ?? 50);
+        const { listNotifications } = await import("./notify");
+        return listNotifications(ctx.user.id, { unreadOnly: input?.unreadOnly ?? false, limit: input?.limit ?? 50, kind: input?.kind ?? null });
       }),
     unreadCount: protectedProcedure.query(async ({ ctx }) => {
-      const { unreadCount } = await import("./complaintsExtended");
+      const { unreadCount } = await import("./notify");
       return { count: await unreadCount(ctx.user.id) };
     }),
     markRead: protectedProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        const { markNotificationRead } = await import("./complaintsExtended");
+        const { markNotificationRead } = await import("./notify");
         await markNotificationRead(ctx.user.id, input.id);
         return { success: true };
       }),
     markAllRead: protectedProcedure.mutation(async ({ ctx }) => {
-      const { markAllNotificationsRead } = await import("./complaintsExtended");
+      const { markAllNotificationsRead } = await import("./notify");
       await markAllNotificationsRead(ctx.user.id);
       return { success: true };
     }),
-    // Preferências da própria pessoa (Perfil): tipos silenciados.
+    // Preferências da própria pessoa (Perfil): tipos silenciados, email por
+    // tipo e os tipos que PODE receber (pelas regras de roteamento).
     prefs: protectedProcedure.query(async ({ ctx }) => {
-      const { getNotificationPrefsRaw } = await import("./appSettings");
-      const { parseNotificationPrefs } = await import("../shared/appSettings");
-      return parseNotificationPrefs(await getNotificationPrefsRaw(ctx.user.id));
+      const { getNotificationPrefsRaw, getSetting } = await import("./appSettings");
+      const { parseNotificationPrefs, parseRouting } = await import("../shared/notificationRouting");
+      const { receivableKinds } = await import("./notify");
+      const [raw, kinds, routing] = await Promise.all([
+        getNotificationPrefsRaw(ctx.user.id),
+        receivableKinds(ctx.user.id).catch(() => [] as string[]),
+        getSetting("notifications.routing").catch(() => null),
+      ]);
+      return { ...parseNotificationPrefs(raw), kinds, routing: parseRouting(routing) };
     }),
     savePrefs: protectedProcedure
-      .input(z.object({ muted: z.array(z.string().max(32)).max(50) }))
+      .input(z.object({
+        muted: z.array(z.string().max(32)).max(80),
+        email: z.record(z.string().max(32), z.boolean()).optional(),
+      }))
       .mutation(async ({ ctx, input }) => {
         const { saveNotificationPrefs } = await import("./appSettings");
-        const { parseNotificationPrefs } = await import("../shared/appSettings");
+        const { parseNotificationPrefs } = await import("../shared/notificationRouting");
+        const { invalidateNotifyCache } = await import("./notify");
         const prefs = parseNotificationPrefs(input);
         await saveNotificationPrefs(ctx.user.id, prefs);
+        invalidateNotifyCache();
         return prefs;
+      }),
+    // Regras das notificações (Definições): tabela tipo × papel. Ver: admin+;
+    // alterar: só super_admin (validado por zod em shared/notificationRouting).
+    routing: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx.user.role, "admin");
+      const { getSetting } = await import("./appSettings");
+      const { parseRouting, routingTable } = await import("../shared/notificationRouting");
+      const routing = parseRouting(await getSetting("notifications.routing"));
+      return { routing, table: routingTable(routing), editable: ctx.user.role === "super_admin" };
+    }),
+    saveRouting: protectedProcedure
+      .input(z.object({ value: z.unknown().nullable() }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "super_admin");
+        const { setSetting } = await import("./appSettings");
+        const { invalidateNotifyCache } = await import("./notify");
+        try {
+          const r = await setSetting("notifications.routing", input.value ?? null, ctx.user.id);
+          invalidateNotifyCache();
+          if (r.changed) await logActivity({ userId: ctx.user.id, action: "update", entity: "app_setting", details: `notifications.routing = ${JSON.stringify(r.value)}`.slice(0, 1000) });
+          return r;
+        } catch (err: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: String(err?.message ?? err) });
+        }
       }),
   }),
 
@@ -5371,9 +5434,14 @@ export const appRouter = router({
         }
       }
       await logActivity({ userId: ctx.user.id, action: "create", entity: "lost_found", entityId: id || 0, details: `Perdido: ${input.description.slice(0, 200)}` });
-      const admins = await getSuperAdmins();
-      if (admins.length > 0) {
-        await notifyOwner({ title: "Novo Perdido", content: `${input.clientName}: ${input.description.slice(0, 300)} (Viatura: ${input.vehiclePlate || "N/A"})` });
+      if (id) {
+        const { notify } = await import("./notify");
+        await notify({
+          kind: "lost_found_new", projectId: input.projectId ?? defaultScopedProjectId(),
+          title: "Novo Perdido",
+          body: `${input.clientName}: ${input.description.slice(0, 300)} (Viatura: ${input.vehiclePlate || "N/A"})`,
+          link: "/perdidos-achados", entity: { type: "lost_found", id },
+        });
       }
       return { id };
     }),
@@ -5804,9 +5872,10 @@ export const appRouter = router({
       const booking = await deriveBookingForCase({ bookingRef: input.bookingRef, plate: input.vehiclePlate, atUtc: utcNowStr() });
       if (booking?.projectId && !input.projectId) assertProjectAccess(booking.projectId);
       const { bookingRef, costAmount, ...rest } = input;
+      const incidentProjectId = input.projectId ?? booking?.projectId ?? defaultScopedProjectId();
       const id = await createIncident({
         ...rest,
-        projectId: input.projectId ?? booking?.projectId ?? defaultScopedProjectId(),
+        projectId: incidentProjectId,
         reservationLink: booking?.externalId ?? (bookingRef?.trim() || undefined),
         costAmount: costAmount != null ? String(costAmount) : undefined,
         reportedBy: ctx.user.id,
@@ -5816,7 +5885,14 @@ export const appRouter = router({
       });
       await logActivity({ userId: ctx.user.id, action: "create", entity: "incident", entityId: id || 0, details: `Ocorrência: ${input.description.slice(0, 200)}` });
       if (input.severity === "critical") {
-        await notifyOwner({ title: "Ocorrência Crítica", content: `${input.incidentType}: ${input.description.slice(0, 300)} (Viatura: ${input.vehiclePlate || "N/A"})` });
+        // Aviso `incident_critical` (team leader/supervisor/backoffice da cidade; app + email).
+        const { notify } = await import("./notify");
+        await notify({
+          kind: "incident_critical", projectId: incidentProjectId ?? null,
+          title: "Ocorrência Crítica",
+          body: `${input.incidentType}: ${input.description.slice(0, 300)} (Viatura: ${input.vehiclePlate || "N/A"})`,
+          link: "/ocorrencias", entity: id ? { type: "incident", id } : null,
+        });
       }
       return { id };
     }),

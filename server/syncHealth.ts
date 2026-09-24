@@ -163,17 +163,15 @@ async function alertIsActive(key: string): Promise<boolean> {
   return Number(row?.active ?? 0) === 1;
 }
 
-/** Notificação in-app a admin/super_admin ativos. */
-export async function notifyAdmins(title: string, body: string, link = "/multipark/sync"): Promise<number> {
-  const db = await getDb();
-  if (!db) return 0;
-  const { createNotification } = await import("./complaintsExtended");
-  const admins = rowsOf(await db.execute(sql`SELECT id FROM users WHERE role IN ('admin', 'super_admin') AND isActive = 1`));
-  let sent = 0;
-  for (const a of admins) {
-    try { await createNotification({ userId: Number(a.id), title, body, kind: "sync", link }); sent++; } catch { /* segue */ }
-  }
-  return sent;
+/**
+ * Aviso de sincronização (tipo `sync_alert`: quem tem a Sincronização com
+ * alcance nacional — super_admin e admin por omissão; ver
+ * shared/notificationRouting.ts). Devolve quantas pessoas receberam.
+ */
+export async function notifySyncAlert(title: string, body: string, link = "/multipark/sync", entityId?: string): Promise<number> {
+  const { notify } = await import("./notify");
+  const r = await notify({ kind: "sync_alert", title, body, link, entity: entityId ? { type: "sync_alert", id: entityId } : null });
+  return r.recipients.length;
 }
 
 /** Corre no cron das notificações (5/5 min): sem webhooks há > X h em horário
@@ -188,11 +186,11 @@ export async function checkWebhookStaleAlert(now = Date.now()) {
   let notified = 0;
   if (decision.transition === "raise") {
     if (await transitionAlert(WEBHOOK_ALERT_KEY, true, `sem webhooks há mais de ${staleHours} h`)) {
-      notified = await notifyAdmins("Sem notificações Multipark", `Não chega nenhum webhook da Multipark há mais de ${staleHours} h, em horário de operação. O sync de hora a hora continua a cobrir as reservas; verificar as Conexões na plataforma.`);
+      notified = await notifySyncAlert("Sem notificações Multipark", `Não chega nenhum webhook da Multipark há mais de ${staleHours} h, em horário de operação. O sync de hora a hora continua a cobrir as reservas; verificar as Conexões na plataforma.`);
     }
   } else if (decision.transition === "clear") {
     if (await transitionAlert(WEBHOOK_ALERT_KEY, false, null)) {
-      notified = await notifyAdmins("Notificações Multipark retomadas", "Voltaram a chegar webhooks da Multipark.");
+      notified = await notifySyncAlert("Notificações Multipark retomadas", "Voltaram a chegar webhooks da Multipark.");
     }
   }
   return { checked: true as const, ...decision, lastWebhookAt, staleHours, notified };

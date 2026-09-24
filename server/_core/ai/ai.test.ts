@@ -8,7 +8,7 @@ const h = vi.hoisted(() => ({
   cacheCreate: vi.fn(),
   ctor: [] as any[],
   db: null as any,
-  notifyAdmins: vi.fn(async () => 1),
+  notify: vi.fn(async () => ({ recipients: [1], emailed: 0, duplicates: 0, city: null })),
 }));
 
 vi.mock("@google/genai", () => ({
@@ -19,7 +19,7 @@ vi.mock("@google/genai", () => ({
   },
 }));
 vi.mock("../../db", () => ({ getDb: async () => h.db }));
-vi.mock("../../syncHealth", () => ({ notifyAdmins: h.notifyAdmins }));
+vi.mock("../../notify", () => ({ notify: h.notify }));
 
 import { AI_FEATURES, AI_FEATURE_IDS } from "../../../shared/aiFeatures";
 import { AUTOMATION_FLAGS, validateSetting } from "../../../shared/appSettings";
@@ -59,7 +59,7 @@ beforeEach(() => {
   h.gen.mockReset();
   h.cacheCreate.mockReset();
   h.ctor.length = 0;
-  h.notifyAdmins.mockClear();
+  h.notify.mockClear();
   h.db = null;
   setAiProvidersForTests(null);
   resetAiUsageCachesForTests();
@@ -325,7 +325,7 @@ describe("IA: orçamento mensal", () => {
     expect(e1.userMessage).toBe("IA temporariamente indisponível.");
     await runAi({ feature: "whatsapp_reply", input: "x" }).catch(() => null);
     expect(p.calls).toHaveLength(0);
-    expect(h.notifyAdmins).toHaveBeenCalledTimes(1);
+    expect(h.notify).toHaveBeenCalledTimes(1);
     const blocked = h.db.queries.filter((q: any) => q.sql.includes("INSERT INTO ai_usage_log"));
     expect(blocked).toHaveLength(2);
     expect(blocked[0].params).toContain("blocked");
@@ -339,7 +339,7 @@ describe("IA: orçamento mensal", () => {
     h.db = budgetDb(9999);
     setAiProvidersForTests({ gemini: createFakeProvider("gemini", [okResponse("ok")]) });
     await expect(runAi({ feature: "review_reply", input: "x" })).resolves.toMatchObject({ output: "ok" });
-    expect(h.notifyAdmins).not.toHaveBeenCalled();
+    expect(h.notify).not.toHaveBeenCalled();
   });
 });
 

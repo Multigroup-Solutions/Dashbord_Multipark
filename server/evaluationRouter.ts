@@ -232,6 +232,14 @@ export const evaluationRouter = router({
       }
       const id = await createDispute({ employeeId: me.id, day: input.day, metric: input.metric ?? null, comment: input.comment, userId: ctx.user.id });
       await logActivity({ userId: ctx.user.id, action: "create", entity: "employee_metric_dispute", entityId: id, details: `${input.day}${input.metric ? ` · ${input.metric}` : ""}` });
+      // Supervisores DA CIDADE da pessoa (+ quem vê todas) — `evaluation_dispute`.
+      const { notify } = await import("./notify");
+      await notify({
+        kind: "evaluation_dispute", employeeId: me.id,
+        title: `Contestação da avaliação: ${me.fullName}`,
+        body: `${input.day}${input.metric ? ` · ${input.metric}` : ""}: ${input.comment.slice(0, 200)}`,
+        link: "/avaliacao", entity: { type: "evaluation_dispute", id },
+      });
       return { id };
     }),
 
@@ -279,6 +287,17 @@ export const evaluationRouter = router({
         throw new TRPCError({ code: "CONFLICT", message: "Esta contestação já foi decidida." });
       }
       await logActivity({ userId: ctx.user.id, action: "update", entity: "employee_metric_dispute", entityId: d.id, details: input.accept ? "Aceite" : "Recusada" });
+      // Pessoal: só a pessoa que contestou.
+      try {
+        if (d.createdByUserId) {
+          const { notify } = await import("./notify");
+          await notify({
+            kind: "my_evaluation", targetUserId: d.createdByUserId,
+            title: `Contestação ${input.accept ? "aceite" : "recusada"} (${d.day})`,
+            body: input.resolution.slice(0, 300), link: "/avaliacao", entity: { type: "evaluation_dispute", id: d.id },
+          });
+        }
+      } catch { /* o aviso nunca parte a decisão */ }
       return { success: true, adjustmentId };
     }),
   }),

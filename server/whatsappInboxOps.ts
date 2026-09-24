@@ -402,7 +402,7 @@ export async function aiAssist(conversationId: number, mode: AiMode, ctx: { user
 
 // ─── Avisos por cidade (cron horário) ───────────────────────────────────────
 
-interface AlertRow { id: number; projectId: number | null; name: string; urgent?: boolean }
+interface AlertRow { id: number; projectId: number | null; name: string; urgent?: boolean; assignedUserId?: number | null }
 
 /**
  * Conversas abertas por responder há mais do que o SLA (aviso 1× por período
@@ -432,7 +432,7 @@ export async function runWhatsappSlaAlerts(now: Date = new Date()): Promise<{ ov
   const nameCol = sql<string>`COALESCE(NULLIF(TRIM(e.fullName), ''), NULLIF(TRIM(c.profileName), ''), c.phoneE164)`;
 
   const [overdueRows] = (await db.execute(sql`
-    SELECT c.id, ${cityCol} AS projectId, ${nameCol} AS name, c.aiUrgency AS aiUrgency
+    SELECT c.id, ${cityCol} AS projectId, ${nameCol} AS name, c.aiUrgency AS aiUrgency, c.assignedUserId AS assignedUserId
       FROM whatsapp_conversations c LEFT JOIN employees e ON e.id = c.employeeId
      WHERE c.status = 'aberto' AND c.optedOutAt IS NULL AND c.awaitingSince IS NOT NULL
        AND (c.awaitingSince <= ${slaCutoff} OR (c.aiUrgency = 'urgente' AND c.awaitingSince <= ${urgentCutoff}))
@@ -440,7 +440,7 @@ export async function runWhatsappSlaAlerts(now: Date = new Date()): Promise<{ ov
        AND c.slaAlertedAt IS NULL
      ORDER BY c.awaitingSince ASC LIMIT 200`)) as any;
   const [windowRows] = (await db.execute(sql`
-    SELECT c.id, ${cityCol} AS projectId, ${nameCol} AS name
+    SELECT c.id, ${cityCol} AS projectId, ${nameCol} AS name, c.assignedUserId AS assignedUserId
       FROM whatsapp_conversations c LEFT JOIN employees e ON e.id = c.employeeId
      WHERE c.status <> 'resolvido' AND c.optedOutAt IS NULL AND c.awaitingSince IS NOT NULL
        AND c.lastInboundAt > ${winFrom} AND c.lastInboundAt <= ${winTo}
@@ -448,7 +448,7 @@ export async function runWhatsappSlaAlerts(now: Date = new Date()): Promise<{ ov
      ORDER BY c.lastInboundAt ASC LIMIT 200`)) as any;
 
   const norm = (rows: any[]): AlertRow[] =>
-    (rows ?? []).map((r) => ({ id: Number(r.id), projectId: r.projectId == null ? null : Number(r.projectId), name: String(r.name ?? ""), urgent: r.aiUrgency === "urgente" }));
+    (rows ?? []).map((r) => ({ id: Number(r.id), projectId: r.projectId == null ? null : Number(r.projectId), name: String(r.name ?? ""), urgent: r.aiUrgency === "urgente", assignedUserId: r.assignedUserId == null ? null : Number(r.assignedUserId) }));
   const overdue = norm(overdueRows);
   const closing = norm(windowRows);
   out.overdue = overdue.length;
@@ -456,12 +456,17 @@ export async function runWhatsappSlaAlerts(now: Date = new Date()): Promise<{ ov
   if (!overdue.length && !closing.length) return out;
 
   const groups = groupAlertsByCity(overdue, closing);
-  const { notifyBackoffice } = await import("./extrasAutomation");
+  const { notify } = await import("./notify");
   for (const g of groups) {
     const { title, body } = describeAlertGroup(g, sla);
     try {
-      await notifyBackoffice(title, body, "/whatsapp", { projectId: g.projectId });
-      out.notifications++;
+      // Quem tem o WhatsApp NA CIDADE da conversa (team leader+) + o responsável.
+      const r = await notify({
+        kind: "whatsapp_sla", projectId: g.projectId,
+        alsoUserIds: [...g.overdue, ...g.closing].map((x) => x.assignedUserId),
+        title, body, link: "/whatsapp",
+      });
+      if (r.recipients.length) out.notifications++;
     } catch (err: any) {
       console.warn("[WhatsApp SLA] aviso falhou:", String(err?.message ?? err).slice(0, 160));
     }
@@ -480,7 +485,7 @@ export async function runWhatsappSlaAlerts(now: Date = new Date()): Promise<{ ov
 
 export interface AlertGroup { projectId: number | null; overdue: AlertRow[]; closing: AlertRow[] }
 
-/** Agrupa por cidade (null = sem cidade → vai a todo o backoffice). PURA. */
+/** Agrupa por cidade (null = sem cidade → só quem vê todas as cidades). PURA. */
 export function groupAlertsByCity(overdue: AlertRow[], closing: AlertRow[]): AlertGroup[] {
   const map = new Map<string, AlertGroup>();
   const get = (p: number | null) => {

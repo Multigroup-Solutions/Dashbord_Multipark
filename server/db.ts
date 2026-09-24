@@ -169,6 +169,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0125").then(m => ({ s: m.MIGRATION_0125_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0125 })),
       import("./migrations/migration_0130").then(m => ({ s: m.MIGRATION_0130_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0130 })),
       import("./migrations/migration_0138").then(m => ({ s: m.MIGRATION_0138_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0138 })),
+      import("./migrations/migration_0140").then(m => ({ s: m.MIGRATION_0140_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0140 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -4546,7 +4547,7 @@ function dayString(v: unknown): string | null {
   return String(v).slice(0, 10);
 }
 
-function toPermissionRow(r: any): PermissionRow {
+export function toPermissionRow(r: any): PermissionRow {
   return {
     permission: String(r.permission),
     mode: r.mode === "deny" ? "deny" : "grant",

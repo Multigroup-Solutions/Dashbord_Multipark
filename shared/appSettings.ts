@@ -7,11 +7,12 @@
  *    na BD (o resto das env vars NUNCA é sobreposto — ex.: INPROCESS_SCHEDULERS);
  *  - CRON_JOBS: os /api/cron/* agendados pelo GitHub Actions e o intervalo
  *    esperado de cada um (para detetar crons parados);
- *  - NOTIFICATION_KINDS: tipos de notificação na app que cada pessoa pode
- *    silenciar no seu Perfil.
+ *  - NOTIFICATION_KINDS: vista compatível do catálogo de notificações
+ *    (shared/notificationRouting.ts — quem recebe o quê).
  */
 import { z } from "zod";
 import { AI_FEATURE_IDS, AI_TIERS } from "./aiFeatures";
+import { NOTIFICATION_KIND_DEFS, NOTIFICATION_ROUTING_SETTING_KEY, notificationRoutingSchema } from "./notificationRouting";
 
 // ─── Taxas com data de efeito (IVA / TSU) ───────────────────────────────────
 
@@ -74,7 +75,7 @@ export const aiFeatureTiersSchema = z.record(
   z.enum(AI_TIERS as unknown as ["lite", "fast", "smart"], { error: "Nível inválido (lite, fast ou smart)." }),
 );
 
-export type SettingGroup = "financeiro" | "sla" | "emails" | "disponibilidade" | "ia" | "extras";
+export type SettingGroup = "financeiro" | "sla" | "emails" | "disponibilidade" | "ia" | "extras" | "notificacoes";
 
 // ─── Extras-dia (escala automática) ─────────────────────────────────────────
 
@@ -306,6 +307,15 @@ export const SETTINGS = {
     defaultValue: { perMinute: 10, perDay: 100 },
     wiring: "live",
   }),
+  [NOTIFICATION_ROUTING_SETTING_KEY]: def({
+    key: NOTIFICATION_ROUTING_SETTING_KEY,
+    group: "notificacoes",
+    label: "Regras das notificações",
+    description: "Quem recebe cada tipo de notificação (papéis), email por omissão e papéis nacionais limitados à própria cidade. Vazio = regras do código (shared/notificationRouting.ts). Editável só pelo super admin em Definições → Notificações.",
+    schema: notificationRoutingSchema,
+    defaultValue: { kinds: {}, homeCityOnly: [] },
+    wiring: "live",
+  }),
 } as const;
 
 export type SettingKey = keyof typeof SETTINGS;
@@ -505,6 +515,8 @@ export function cronOutcome(httpStatus: number, body: unknown): { ok: boolean; e
 }
 
 // ─── Preferências de notificação (por pessoa) ───────────────────────────────
+// O catálogo, as regras de quem recebe e as preferências vivem em
+// shared/notificationRouting.ts; aqui fica só a vista compatível.
 
 export interface NotificationKind {
   kind: string;
@@ -514,37 +526,8 @@ export interface NotificationKind {
   required?: boolean;
 }
 
-export const NOTIFICATION_KINDS: readonly NotificationKind[] = [
-  { kind: "task", label: "Tarefas", description: "Tarefas atribuídas, atrasadas ou concluídas." },
-  { kind: "handover", label: "Passagem de turno", description: "Passagens entregues e lembretes (pede \"Recebi\").", required: true },
-  { kind: "extras", label: "Extras e escala", description: "Falta de condutores, disponibilidades, avisos da escala." },
-  { kind: "complaint", label: "Reclamações", description: "Reclamações novas." },
-  { kind: "case_sla", label: "Casos em atraso", description: "Ocorrências e perdidos fora do prazo." },
-  { kind: "driver_application", label: "Candidaturas", description: "Candidaturas novas \"Be a Driver\"." },
-  { kind: "training", label: "Formação", description: "Formação por concluir e promoções." },
-];
+export const NOTIFICATION_KINDS: readonly NotificationKind[] = NOTIFICATION_KIND_DEFS.map((d) => ({
+  kind: d.kind, label: d.label, description: d.description, ...("mandatory" in d && d.mandatory ? { required: true } : {}),
+}));
 
-export const notificationPrefsSchema = z.object({
-  muted: z.array(z.string().max(32)).max(50).default([]),
-});
-export type NotificationPrefs = z.infer<typeof notificationPrefsSchema>;
-
-/** Normaliza as preferências guardadas (JSON cru ou objeto) — nunca lança. PURA. */
-export function parseNotificationPrefs(raw: unknown): NotificationPrefs {
-  let v = raw;
-  if (typeof v === "string") {
-    try { v = JSON.parse(v); } catch { v = null; }
-  }
-  const r = notificationPrefsSchema.safeParse(v ?? {});
-  if (!r.success) return { muted: [] };
-  const allowed = new Set(NOTIFICATION_KINDS.filter((k) => !k.required).map((k) => k.kind));
-  return { muted: Array.from(new Set(r.data.muted.filter((k) => allowed.has(k)))) };
-}
-
-/** A pessoa quer receber notificações deste tipo? (obrigatórias e tipos desconhecidos → sim). PURA. */
-export function wantsNotification(prefs: NotificationPrefs, kind: string | null | undefined): boolean {
-  const k = String(kind ?? "info");
-  const def = NOTIFICATION_KINDS.find((x) => x.kind === k);
-  if (!def || def.required) return true;
-  return !prefs.muted.includes(k);
-}
+export { notificationPrefsSchema, parseNotificationPrefs, wantsNotification, type NotificationPrefs } from "./notificationRouting";

@@ -19,13 +19,14 @@ import {
 import { toast } from "sonner";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import {
-  Activity, AlertTriangle, CheckCircle2, Clock, KeyRound, Loader2, LogOut, Plug, Plus, RotateCcw,
+  Activity, AlertTriangle, Bell, CheckCircle2, Clock, KeyRound, Loader2, LogOut, Plug, Plus, RotateCcw,
   Save, ShieldCheck, SlidersHorizontal, Sparkles, ToggleLeft, Trash2, XCircle,
 } from "lucide-react";
 import { validateSetting, type RateEntry } from "@shared/appSettings";
 import { SyncHealthPanel } from "@/components/operacoes/SyncHealthPanel";
+import { NotificationRoutingCard } from "@/components/NotificationRoutingCard";
 
-const TABS = ["estado", "automacoes", "integracoes", "parametros", "seguranca"] as const;
+const TABS = ["estado", "automacoes", "integracoes", "parametros", "notificacoes", "seguranca"] as const;
 type Tab = (typeof TABS)[number];
 
 function useStoredTab(): [Tab, (t: Tab) => void] {
@@ -50,7 +51,7 @@ export default function DefinicoesPage() {
     <div className="p-3 sm:p-6 space-y-4 max-w-5xl mx-auto">
       <div>
         <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2"><SlidersHorizontal className="h-5 w-5" /> Definições</h1>
-        <p className="text-sm text-muted-foreground">Estado do sistema, automações, integrações, parâmetros e segurança.</p>
+        <p className="text-sm text-muted-foreground">Estado do sistema, automações, integrações, parâmetros, notificações e segurança.</p>
       </div>
       <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
         <div className="overflow-x-auto -mx-3 px-3 sm:mx-0 sm:px-0">
@@ -59,6 +60,7 @@ export default function DefinicoesPage() {
             <TabsTrigger value="automacoes"><ToggleLeft className="h-4 w-4 mr-1" />Automações</TabsTrigger>
             <TabsTrigger value="integracoes"><Plug className="h-4 w-4 mr-1" />Integrações</TabsTrigger>
             <TabsTrigger value="parametros"><SlidersHorizontal className="h-4 w-4 mr-1" />Parâmetros</TabsTrigger>
+            <TabsTrigger value="notificacoes"><Bell className="h-4 w-4 mr-1" />Notificações</TabsTrigger>
             <TabsTrigger value="seguranca"><ShieldCheck className="h-4 w-4 mr-1" />Segurança</TabsTrigger>
           </TabsList>
         </div>
@@ -66,6 +68,7 @@ export default function DefinicoesPage() {
         <TabsContent value="automacoes"><AutomationsCard /></TabsContent>
         <TabsContent value="integracoes"><IntegrationsCard /></TabsContent>
         <TabsContent value="parametros"><ParametersCard /></TabsContent>
+        <TabsContent value="notificacoes"><NotificationRoutingCard /></TabsContent>
         <TabsContent value="seguranca"><SecurityCard isSuperAdmin={user.role === "super_admin"} /></TabsContent>
       </Tabs>
     </div>
@@ -384,7 +387,11 @@ function ParametersCard() {
   });
   const groups = useMemo(() => {
     const m = new Map<string, SettingItem[]>();
-    for (const s of (q.data ?? []) as SettingItem[]) { if (!m.has(s.group)) m.set(s.group, []); m.get(s.group)!.push(s); }
+    for (const s of (q.data ?? []) as SettingItem[]) {
+      if (s.group === "notificacoes") continue; // tem separador próprio (Notificações)
+      if (!m.has(s.group)) m.set(s.group, []);
+      m.get(s.group)!.push(s);
+    }
     return Array.from(m.entries());
   }, [q.data]);
 
