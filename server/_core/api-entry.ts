@@ -237,7 +237,20 @@ app.get("/api/cron/multipark-sync", async (req, res) => {
   try {
     const { runRecentCronSync } = await import("../jobs/multiparkBookingSync");
     const result = await runRecentCronSync(30);
-    res.json({ ok: true, ranAt: new Date().toISOString(), ...result });
+    // Descoberta automática de parceiros (partnerIds novos → partnership +
+    // alias; campanhas "Pro X" → empresa Pro). Melhor esforço: nunca parte o
+    // sync. Os parceiros novos nascem "Por configurar" (Gestão das Parcerias).
+    let partners: Record<string, unknown> | { error: string } | undefined;
+    try {
+      const { syncPartnersFromApi } = await import("../partnerSync");
+      const r = await syncPartnersFromApi({ maxLookups: 5 });
+      partners = { created: r.created, linkedToExisting: r.linkedToExisting, proCreated: r.proCreated, unresolved: r.unresolved.length };
+      console.log("[cron multipark-sync] parceiros:", JSON.stringify(partners));
+    } catch (err: any) {
+      partners = { error: String(err?.message ?? err).slice(0, 200) };
+      console.warn("[cron multipark-sync] sincronização de parceiros falhou:", partners.error);
+    }
+    res.json({ ok: true, ranAt: new Date().toISOString(), ...result, partners });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: String(err?.message ?? err) });
   }

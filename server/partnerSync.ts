@@ -63,7 +63,7 @@ export interface PartnerSyncResult {
  * pode correr as vezes que forem precisas (botão "Sincronizar parceiros da
  * API" na página de Parcerias).
  */
-export async function syncPartnersFromApi(): Promise<PartnerSyncResult> {
+export async function syncPartnersFromApi(opts: { maxLookups?: number } = {}): Promise<PartnerSyncResult> {
   const db = await getDb();
   const result: PartnerSyncResult = {
     legacyTypesFixed: 0, partnerIdsTotal: 0, alreadyLinked: 0,
@@ -97,6 +97,7 @@ export async function syncPartnersFromApi(): Promise<PartnerSyncResult> {
   const byName = new Map(partnershipRows.map((p) => [p.name.trim().toLowerCase(), p.id]));
 
   const { getBookingTryAllParks } = await import("./multipark");
+  let lookups = 0;
 
   for (const row of ids) {
     const partnerId = String(row.partnerId);
@@ -104,7 +105,14 @@ export async function syncPartnersFromApi(): Promise<PartnerSyncResult> {
 
     // Nome: usa o que já esteja na BD (enrichment) ou vai ao detalhe da amostra
     let name: string | null = row.knownName ?? null;
+    // O cron horário limita as idas à API (cada uma tenta todos os parques);
+    // o que ficar por resolver é tentado na próxima hora.
+    if (!name && row.sampleExternalId && opts.maxLookups != null && lookups >= opts.maxLookups) {
+      result.unresolved.push({ partnerId, reason: "adiado (limite de consultas por execução)" });
+      continue;
+    }
     if (!name && row.sampleExternalId) {
+      lookups++;
       try {
         const found = await getBookingTryAllParks(String(row.sampleExternalId));
         const pn = (found?.booking as any)?.partnerName;

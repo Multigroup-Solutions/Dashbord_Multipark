@@ -249,7 +249,9 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   if (projectIds) expConds.push(inArray(expenses.projectId, projectIds));
   const expDayExpr = sql<string>`DATE(${expenses.expenseDate})`;
   const expenseRows = await db
-    .select({ day: expDayExpr, projectId: expenses.projectId, projectName: projects.name, categoryName: expenseCategories.name, count: sql<number>`COUNT(*)`, totalAmount: sql<number>`COALESCE(SUM(${expenses.amount}), 0)` })
+    .select({ day: expDayExpr, projectId: expenses.projectId, projectName: projects.name, categoryName: expenseCategories.name, count: sql<number>`COUNT(*)`, totalAmount: sql<number>`COALESCE(SUM(${expenses.amount}), 0)`,
+      // Sem IVA com a taxa da categoria (rendas/seguros/bancos… a 0%); NULL = 23%
+      totalNet: sql<number>`COALESCE(SUM(${expenses.amount} / (1 + COALESCE(${expenseCategories.vatRate}, ${R.FINANCE_PARAMS.vatRate * 100}) / 100)), 0)` })
     .from(expenses)
     .leftJoin(projects, eq(expenses.projectId, projects.id))
     .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
@@ -296,10 +298,10 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
     .where(and(...pontoConds));
 
   // ─── 5. Parceiros (índice com conflitos) + operacionais ───────────────────
-  const partnerRows = await db.select({ id: partnerships.id, name: partnerships.name, campaignKey: partnerships.campaignKey, commissionRate: partnerships.commissionRate, partnerType: partnerships.partnerType, notes: partnerships.notes, updatedAt: partnerships.updatedAt }).from(partnerships);
+  const partnerRows = await db.select({ id: partnerships.id, name: partnerships.name, campaignKey: partnerships.campaignKey, commissionRate: partnerships.commissionRate, partnerType: partnerships.partnerType, notes: partnerships.notes, updatedAt: partnerships.updatedAt, configuredAt: partnerships.configuredAt }).from(partnerships);
   const aliasRows = await db.select({ partnershipId: partnerAliases.partnershipId, aliasValue: partnerAliases.aliasValue }).from(partnerAliases);
   const partnerIndex = R.buildPartnerIndex(
-    partnerRows.map((p) => ({ id: p.id, name: p.name, campaignKey: p.campaignKey, commissionRate: p.commissionRate == null ? null : Number(p.commissionRate), updatedAt: p.updatedAt ?? "" })) as any,
+    partnerRows.map((p) => ({ id: p.id, name: p.name, campaignKey: p.campaignKey, commissionRate: p.commissionRate == null ? null : Number(p.commissionRate), updatedAt: p.updatedAt ?? "", configuredAt: p.configuredAt ?? null })) as any,
     aliasRows,
   );
 
@@ -347,6 +349,7 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   const collectedByDay = new Map<string, number>();
   const collectedCountByDay = new Map<string, number>();
   const expensesByDay = new Map<string, number>();
+  const expensesNetByDay = new Map<string, number>();
   const salariesByDay = new Map<string, number>();
   const employerTaxByDay = new Map<string, number>();
   const salesByDay = new Map<string, number>();
@@ -385,6 +388,7 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   let expensesWithoutProject = { count: 0, total: 0 };
   for (const r of expenseRows) {
     addTo(expensesByDay, dayOf(r.day), num(r.totalAmount));
+    addTo(expensesNetByDay, dayOf(r.day), num(r.totalNet));
     if (r.projectId == null) { expensesWithoutProject.count += num(r.count); expensesWithoutProject.total += num(r.totalAmount); }
     const k = `${r.projectId ?? "null"}|${r.categoryName ?? ""}`;
     const ex = expByProjCat.get(k) ?? { projectId: r.projectId ?? null, projectName: r.projectName ?? (r.projectId == null ? "Por atribuir" : null), categoryName: r.categoryName ?? null, count: 0, totalAmount: 0 };
@@ -579,7 +583,7 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   const extrasReal = sum(extrasRealByDay);
   const salesCommissionsTotal = salesCommissions.reduce((s, r) => s + r.commission, 0);
   const operationalTotal = operationalPartners.reduce((s, r) => s + r.commission, 0);
-  const margin = R.computeMargin({ revenueGross: produced, expensesGross, salariesBase, salariesProvisions, salariesVariable, employerTax, extrasDia, salesCommissions: salesCommissionsTotal, operationalCommissions: operationalTotal });
+  const margin = R.computeMargin({ revenueGross: produced, expensesGross, expensesNet: sum(expensesNetByDay), salariesBase, salariesProvisions, salariesVariable, employerTax, extrasDia, salesCommissions: salesCommissionsTotal, operationalCommissions: operationalTotal });
 
   out.revenue = {
     produced, producedNet: margin.revenueNet, producedCount: sum(producedCountByDay),
@@ -605,13 +609,12 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   const fold = (m: Map<string, number>, key: keyof FinancePoint) => { for (const [day, v] of m) { if (day >= from && day <= to || key === "revenueForecast") (point(day)[key] as number) += v; } };
   fold(producedByDay, "produced"); fold(producedCountByDay, "producedCount");
   fold(collectedByDay, "collected"); fold(collectedCountByDay, "collectedCount");
-  fold(expensesByDay, "expenses"); fold(salariesByDay, "salaries"); fold(employerTaxByDay, "employerTax");
+  fold(expensesByDay, "expenses"); fold(expensesNetByDay, "expensesNet"); fold(salariesByDay, "salaries"); fold(employerTaxByDay, "employerTax");
   fold(salesByDay, "salesCommissions"); fold(opByDay, "operationalCommissions");
   fold(extrasByDay, "extrasCost"); fold(forecastByDay, "revenueForecast");
   for (const p of buckets.values()) {
     p.partners = p.salesCommissions + p.operationalCommissions;
     p.producedNet = R.netOfVat(p.produced);
-    p.expensesNet = R.netOfVat(p.expenses);
     p.totalCost = p.expensesNet + p.salaries + p.employerTax + p.partners + p.extrasCost;
     p.margin = p.producedNet - p.totalCost;
   }
@@ -646,7 +649,7 @@ export function monthlyRowsFromTimeseries(result: FinanceResult) {
     const key = `${mo.year}-${String(mo.month).padStart(2, "0")}`;
     const p = byMonth.get(key);
     const produced = p?.produced ?? 0, expensesGross = p?.expenses ?? 0;
-    const revenueNet = R.netOfVat(produced), expensesNet = R.netOfVat(expensesGross);
+    const revenueNet = R.netOfVat(produced), expensesNet = p?.expensesNet ?? R.netOfVat(expensesGross);
     const salaries = p?.salaries ?? 0, employerTax = p?.employerTax ?? 0, partners = p?.partners ?? 0, extras = p?.extrasCost ?? 0;
     const totalCosts = expensesNet + salaries + employerTax + partners + extras;
     return {

@@ -38,6 +38,7 @@ import { parseBookingDate, bookingDetailCore } from "../bookingRefresh";
 import { deliveryErrorCode, retryDelaySeconds } from "../bookingDeliveryQueue";
 import { classifyAllocation } from "../spotClassification";
 import { autoAttachAgentsByEmail, type SeenAgent } from "../identityReconcile";
+import { bookingCampaignFallback } from "../../shared/partnerRules";
 
 // ─── Map park name/city to projectId ─────────────────────────────────────────
 
@@ -212,9 +213,8 @@ function bookingToRecord(
   // Resolução automática do parceiro: se a API ainda devolve "Unknown User"
   // mas o partnerId/paymentMethod já está associado a um parceiro nosso, usa
   // o nome do parceiro em vez do fallback.
-  const rawFallback = (booking as any).partnerName || booking.discountCode || booking.campaign || null;
-  const isUnknown = typeof rawFallback === "string" && /unknown/i.test(rawFallback);
-  const effectiveFallback = isUnknown ? null : rawFallback;
+  // "Unknown User" (mascarado) é saltado mas NÃO descarta o código de desconto.
+  const effectiveFallback = bookingCampaignFallback(booking as any);
   const resolvedCampaign = resolvePartnerCampaign(booking, pricing, aliasResolver, effectiveFallback);
 
   return {

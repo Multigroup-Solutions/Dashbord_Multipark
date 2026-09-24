@@ -9,6 +9,8 @@ import { useMemo, useState } from "react";
 import { useRoute, useLocation } from "wouter";
 import { ArrowLeft, Euro, FileText, AlertTriangle, Wallet, Handshake } from "lucide-react";
 import { getPartnerType, PARTNER_TYPES } from "@shared/partnerTypes";
+import { monthBoundsOf } from "@shared/partnerRules";
+import { lisbonToday } from "@shared/expensePeriods";
 
 const fmt = (v: number) => new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR" }).format(v);
 
@@ -19,9 +21,8 @@ export default function PartnerTypePage() {
   const typeId = params?.typeId ?? "outro";
   const typeDef = getPartnerType(typeId);
 
-  const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
-  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
+  // Mês corrente em dias de Lisboa (toISOString de datas locais recuava um dia).
+  const { monthStart, monthEnd } = monthBoundsOf(lisbonToday());
   const [from, setFrom] = useState(monthStart);
   const [to, setTo] = useState(monthEnd);
 
@@ -116,10 +117,10 @@ export default function PartnerTypePage() {
             <span>Comissão pequena (afiliados). Os clientes deles têm desconto já reflectido nas reservas.</span>
           )}
           {cm === "monthly_fee" && (
-            <span>Avença <strong>mensal</strong>. Valor fixo do campo <code>monthlyFee</code> rateado pelo período.</span>
+            <span>Avença <strong>mensal</strong>. Valor mensal (€/mês) × meses do período (meses parciais rateados pelos dias).</span>
           )}
           {cm === "yearly_fee" && (
-            <span>Avença <strong>anual</strong>. Valor anual rateado pelo período (período / 365).</span>
+            <span>Avença <strong>anual</strong>. O valor da avença é €/mês: fatura-se valor mensal × meses do período (12 meses = valor anual).</span>
           )}
           {cm === "prepaid_with_discount" && (
             <span>Enterprise/Corporate paga logo. O desconto já vem na reserva — esta vista é apenas relatório.</span>
