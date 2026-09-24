@@ -13,6 +13,9 @@ import {
   Building2, FolderTree, Users as UsersIcon, Handshake, LogIn, AlertTriangle, Wallet, Target,
 } from "lucide-react";
 import FinanceExportButtons from "@/components/FinanceExportButtons";
+import FitAmount from "@/components/finance/FitAmount";
+import { STICKY_FIRST_COL, TABS_SCROLL } from "@/components/finance/layoutClasses";
+import { AXIS_TICK, CHART_TOOLTIP_STYLE, CHART_TOOLTIP_ITEM, eurAxis } from "@/lib/financeFormat";
 import DateRangeNav, { type DateGran, rangeFor } from "@/components/DateRangeNav";
 import { useTableSort, Th } from "@/components/SortableTable";
 import {
@@ -25,12 +28,6 @@ const fmt = (v: number | string) => {
   return new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR" }).format(Number.isFinite(n) ? n : 0);
 };
 
-const compact = (v: number) => {
-  const abs = Math.abs(v);
-  if (abs >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
-  if (abs >= 1_000) return `${(v / 1_000).toFixed(0)}k`;
-  return v.toFixed(0);
-};
 
 type Granularity = "day" | "week" | "month" | "year";
 
@@ -118,7 +115,7 @@ export default function InvoicesPage() {
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between flex-wrap gap-3">
-        <div>
+        <div className="min-w-0 max-w-3xl">
           <p className="text-muted-foreground text-sm">
             Recolhidos (carro entrou) vs entregues (carro saiu — valor realizado) e todos os custos do período, em dias de Lisboa.
             Uma reserva que atravessa meses conta inteira no mês da saída.
@@ -167,37 +164,37 @@ export default function InvoicesPage() {
         <>
           {/* KPI Cards principais — no período em curso: "Realizado até hoje" */}
           {current && (
-            <p className="text-xs text-muted-foreground -mb-1">
+            <p className="text-xs text-muted-foreground">
               <strong>Realizado até hoje ({summary.asOf})</strong>: receita entregue e custos até hoje — salários, provisões,
               TSU, equipa do dia e despesas cortados em hoje.
             </p>
           )}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
             <KpiCard
               icon={<LogIn className="w-4 h-4 text-sky-600" />}
               label="Recolhidos"
-              value={fmt(summary.collected ?? 0)}
+              amount={summary.collected ?? 0}
               hint={`${summary.collectedCount ?? 0} carros entrados no período`}
               color="text-sky-700"
             />
             <KpiCard
               icon={<Truck className="w-4 h-4 text-emerald-600" />}
               label="Entregues"
-              value={fmt(summary.produced)}
+              amount={summary.produced}
               hint={`${summary.producedCount ?? 0} carros saídos · s/ IVA: ${fmt(summary.producedNoVat)}`}
               color="text-emerald-700"
             />
             <KpiCard
               icon={<Receipt className="w-4 h-4 text-red-600" />}
               label={current ? "Custos até hoje (s/ IVA)" : "Custos (s/ IVA)"}
-              value={fmt(summary.totalCostsNoVat)}
+              amount={summary.totalCostsNoVat}
               hint={`Despesas s/IVA + pessoal + TSU + equipa-dia + comissões · c/ IVA: ${fmt(summary.totalCostsGross)} · por pagar (não soma): ${fmt(summary.expensesPending ?? 0)}`}
               color="text-red-700"
             />
             <KpiCard
               icon={summary.marginNet >= 0 ? <TrendingUp className="w-4 h-4 text-emerald-600" /> : <TrendingDown className="w-4 h-4 text-red-600" />}
               label={current ? "Margem realizada até hoje" : "Margem (s/ IVA)"}
-              value={fmt(summary.marginNet)}
+              amount={summary.marginNet}
               hint={`Entregues s/ IVA − custos · ${summary.marginPct != null ? summary.marginPct.toFixed(1) : "0"}%`}
               color={summary.marginNet >= 0 ? "text-emerald-700" : "text-red-700"}
             />
@@ -209,9 +206,9 @@ export default function InvoicesPage() {
               <div className="flex items-center gap-2 mb-2 flex-wrap">
                 <Target className="w-4 h-4 text-sky-700" />
                 <span className="text-sm font-medium">Fecho previsto ({to})</span>
-                <span className="text-[11px] text-muted-foreground">realizado + receita esperada (carros estacionados e check-ins com saída até {to}) − custos do período inteiro</span>
+                <span className="text-[11px] text-muted-foreground basis-full sm:basis-auto">realizado + receita esperada (carros estacionados e check-ins com saída até {to}) − custos do período inteiro</span>
               </div>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm [&>div]:min-w-0">
                 <div><p className="text-xs text-muted-foreground">Receita s/ IVA</p><p className="font-semibold tabular-nums">{fmt(projection.revenueNet)}</p><p className="text-[11px] text-muted-foreground">+ {fmt(projection.forecastRevenueNet)} esperados</p></div>
                 <div><p className="text-xs text-muted-foreground">Custos s/ IVA (período inteiro)</p><p className="font-semibold tabular-nums">{fmt(projection.costsNet)}</p><p className="text-[11px] text-muted-foreground">+ {fmt(projection.futureCostsNet)} até ao fim</p></div>
                 <div><p className="text-xs text-muted-foreground">Margem prevista</p><p className={`font-bold tabular-nums ${projection.margin >= 0 ? "text-emerald-700" : "text-red-700"}`}>{fmt(projection.margin)}</p></div>
@@ -223,13 +220,13 @@ export default function InvoicesPage() {
           <QualityWarnings quality={quality} />
 
           {/* KPI secundários: detalhe dos custos */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-            <KpiSmall icon={<Truck className="w-3.5 h-3.5 text-teal-600" />} label="Serviços extra (nas entregas)" value={fmt(deliveries.reduce((s2: number, d: any) => s2 + Number(d.extrasRevenue ?? 0), 0))} />
-            <KpiSmall icon={<Receipt className="w-3.5 h-3.5 text-red-500" />} label="Despesas inseridas" value={fmt(summary.expensesPaid)} />
-            <KpiSmall icon={<UsersIcon className="w-3.5 h-3.5 text-amber-500" />} label="Equipa do dia" value={fmt(summary.extrasDiaCost)} />
-            <KpiSmall icon={<UsersIcon className="w-3.5 h-3.5 text-blue-500" />} label="Salários + TSU" value={fmt((summary.salariesCost ?? 0) + (summary.employerTax ?? 0))} />
-            <KpiSmall icon={<Handshake className="w-3.5 h-3.5 text-rose-500" />} label="Comissão venda" value={fmt(summary.salesCommissions ?? 0)} />
-            <KpiSmall icon={<Handshake className="w-3.5 h-3.5 text-cyan-500" />} label="Parceiros op." value={fmt(summary.operationalCommissions ?? 0)} />
+          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+            <KpiSmall icon={<Truck className="w-3.5 h-3.5 text-teal-600" />} label="Serviços extra (nas entregas)" amount={deliveries.reduce((s2: number, d: any) => s2 + Number(d.extrasRevenue ?? 0), 0)} />
+            <KpiSmall icon={<Receipt className="w-3.5 h-3.5 text-red-500" />} label="Despesas inseridas" amount={summary.expensesPaid} />
+            <KpiSmall icon={<UsersIcon className="w-3.5 h-3.5 text-amber-500" />} label="Equipa do dia" amount={summary.extrasDiaCost} />
+            <KpiSmall icon={<UsersIcon className="w-3.5 h-3.5 text-blue-500" />} label="Salários + TSU" amount={(summary.salariesCost ?? 0) + (summary.employerTax ?? 0)} />
+            <KpiSmall icon={<Handshake className="w-3.5 h-3.5 text-rose-500" />} label="Comissão venda" amount={summary.salesCommissions ?? 0} />
+            <KpiSmall icon={<Handshake className="w-3.5 h-3.5 text-cyan-500" />} label="Parceiros op." amount={summary.operationalCommissions ?? 0} />
           </div>
 
           {/* Gráfico timeseries */}
@@ -244,25 +241,26 @@ export default function InvoicesPage() {
               {chartData.length === 0 ? (
                 <p className="text-muted-foreground text-sm text-center py-10">Sem dados no período</p>
               ) : (
-                <ResponsiveContainer width="100%" height={320}>
+                <ResponsiveContainer width="100%" height={340}>
                   <ComposedChart data={chartData} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                    <XAxis dataKey="bucket" tick={{ fontSize: 11 }} />
-                    <YAxis tick={{ fontSize: 11 }} tickFormatter={compact} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                    <XAxis dataKey="bucket" tick={AXIS_TICK} interval="preserveStartEnd" minTickGap={16} />
+                    <YAxis tick={AXIS_TICK} tickFormatter={eurAxis} width={68} />
                     <Tooltip
                       formatter={(v: any, name: string) => [fmt(Number(v)), name]}
-                      contentStyle={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, fontSize: 12 }}
+                      contentStyle={CHART_TOOLTIP_STYLE} itemStyle={CHART_TOOLTIP_ITEM}
+                      cursor={{ fill: "var(--muted)" }}
                     />
-                    <Legend wrapperStyle={{ fontSize: 12 }} />
-                    <Bar dataKey="produced" name="Entregues (s/ IVA)" fill="#10b981" radius={[3, 3, 0, 0]} />
-                    <Bar dataKey="expenses" name="Despesas (s/ IVA)" stackId="cost" fill="#f59e0b" />
-                    <Bar dataKey="salaries" name="Salários + TSU" stackId="cost" fill="#3b82f6" />
-                    <Bar dataKey="partners" name="Parceiros" stackId="cost" fill="#f43f5e" />
-                    <Bar dataKey="extrasCost" name="Equipa-dia" stackId="cost" fill="#eab308" radius={[3, 3, 0, 0]} />
-                    <Line dataKey="collected" name="Recolhidos" stroke="#0284c7" strokeWidth={2} dot={false} />
-                    <Line dataKey="revenueForecast" name="Receita esperada (s/ IVA)" stroke="#0ea5e9" strokeDasharray="4 4" strokeWidth={2} dot={false} />
-                    <Line dataKey="margin" name="Margem realizada" stroke="#111827" strokeWidth={2} dot={false} />
-                    {projection?.applies && <Line dataKey="marginForecast" name="Fecho previsto" stroke="#6b7280" strokeDasharray="4 4" strokeWidth={2} dot={false} />}
+                    <Legend iconSize={10} wrapperStyle={{ fontSize: 12, paddingTop: 8 }} formatter={(v) => <span className="text-foreground">{v}</span>} />
+                    <Bar dataKey="produced" name="Entregues (s/ IVA)" fill="var(--chart-2)" radius={[3, 3, 0, 0]} />
+                    <Bar dataKey="expenses" name="Despesas (s/ IVA)" stackId="cost" fill="var(--chart-4)" />
+                    <Bar dataKey="salaries" name="Salários + TSU" stackId="cost" fill="var(--chart-1)" />
+                    <Bar dataKey="partners" name="Parceiros" stackId="cost" fill="var(--destructive)" />
+                    <Bar dataKey="extrasCost" name="Equipa-dia" stackId="cost" fill="var(--chart-3)" radius={[3, 3, 0, 0]} />
+                    <Line dataKey="collected" name="Recolhidos" stroke="var(--chart-5)" strokeWidth={2} dot={false} />
+                    <Line dataKey="revenueForecast" name="Receita esperada (s/ IVA)" stroke="var(--chart-5)" strokeDasharray="4 4" strokeWidth={2} dot={false} />
+                    <Line dataKey="margin" name="Margem realizada" stroke="var(--secondary-foreground)" strokeWidth={2} dot={false} />
+                    {projection?.applies && <Line dataKey="marginForecast" name="Fecho previsto" stroke="var(--muted-foreground)" strokeDasharray="4 4" strokeWidth={2} dot={false} />}
                   </ComposedChart>
                 </ResponsiveContainer>
               )}
@@ -271,7 +269,7 @@ export default function InvoicesPage() {
 
           {/* Tabs com detalhes */}
           <Tabs value={tab} onValueChange={setTab} className="space-y-4">
-            <TabsList>
+            <TabsList className={TABS_SCROLL}>
               <TabsTrigger value="real">Realizado</TabsTrigger>
               <TabsTrigger value="costs">Custos detalhados</TabsTrigger>
               <TabsTrigger value="forecast">Previsão</TabsTrigger>
@@ -290,7 +288,7 @@ export default function InvoicesPage() {
                   {deliveries.length === 0 ? (
                     <p className="text-muted-foreground text-sm text-center py-6">Sem produção no período</p>
                   ) : (
-                    <div className="overflow-x-auto"><table className="w-full text-sm">
+                    <div className="overflow-x-auto"><table className={`w-full text-sm ${STICKY_FIRST_COL}`}>
                       <thead>
                         <tr className="border-b text-left">
                           <Th k="projectName" label="Projeto" sortKey={delSort.sortKey} sortDir={delSort.sortDir} onToggle={delSort.toggle} />
@@ -302,7 +300,7 @@ export default function InvoicesPage() {
                       <tbody>
                         {(delSort.sorted as any[]).map((d, i) => (
                           <tr key={i} className="border-b hover:bg-muted/50">
-                            <td className="p-2 flex items-center gap-2"><FolderTree className="w-3 h-3 text-muted-foreground" />{d.projectName ?? "Sem projeto"}</td>
+                            <td className="p-2"><span className="flex items-center gap-2"><FolderTree className="w-3 h-3 shrink-0 text-muted-foreground" />{d.projectName ?? "Sem projeto"}</span></td>
                             <td className="p-2 text-right tabular-nums">{d.count}</td>
                             <td className="p-2 text-right tabular-nums">{fmt(Number(d.extrasRevenue))}</td>
                             <td className="p-2 text-right tabular-nums font-bold">{fmt(Number(d.totalRevenue))}</td>
@@ -325,7 +323,7 @@ export default function InvoicesPage() {
                   {collectedRows.length === 0 ? (
                     <p className="text-muted-foreground text-sm text-center py-6">Sem recolhas no período</p>
                   ) : (
-                    <div className="overflow-x-auto"><table className="w-full text-sm">
+                    <div className="overflow-x-auto"><table className={`w-full text-sm ${STICKY_FIRST_COL}`}>
                       <thead>
                         <tr className="border-b text-left">
                           <Th k="projectName" label="Projeto" sortKey={colSort.sortKey} sortDir={colSort.sortDir} onToggle={colSort.toggle} />
@@ -363,15 +361,15 @@ export default function InvoicesPage() {
                     <div className="space-y-3">
                       {expPaidByProject.map((p) => (
                         <div key={p.projectName} className="border rounded-lg p-3">
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="font-medium flex items-center gap-2"><Building2 className="w-4 h-4 text-muted-foreground" />{p.projectName}</span>
-                            <span className="font-bold text-red-700">{fmt(p.total)}</span>
+                          <div className="flex items-center justify-between gap-3 mb-2">
+                            <span className="font-medium flex items-center gap-2 min-w-0"><Building2 className="w-4 h-4 shrink-0 text-muted-foreground" /><span className="truncate" title={p.projectName}>{p.projectName}</span></span>
+                            <span className="font-bold text-red-700 dark:text-red-400 tabular-nums shrink-0">{fmt(p.total)}</span>
                           </div>
                           <div className="space-y-1">
                             {p.categories.map((c, i) => (
-                              <div key={i} className="flex justify-between text-sm text-muted-foreground">
-                                <span>{c.name}</span>
-                                <span className="tabular-nums">{fmt(c.total)}</span>
+                              <div key={i} className="flex justify-between gap-3 text-sm text-muted-foreground">
+                                <span className="min-w-0 break-words">{c.name}</span>
+                                <span className="tabular-nums shrink-0">{fmt(c.total)}</span>
                               </div>
                             ))}
                           </div>
@@ -397,9 +395,9 @@ export default function InvoicesPage() {
                   <CardContent>
                     <div className="space-y-1">
                       {expensesExcluded.map((e, i) => (
-                        <div key={i} className="flex justify-between text-sm text-muted-foreground">
-                          <span>{e.projectName ?? "Por atribuir"} · {e.categoryName ?? "Sem categoria"}</span>
-                          <span className="tabular-nums">{fmt(e.totalAmount)}</span>
+                        <div key={i} className="flex justify-between gap-3 text-sm text-muted-foreground">
+                          <span className="min-w-0 break-words">{e.projectName ?? "Por atribuir"} · {e.categoryName ?? "Sem categoria"}</span>
+                          <span className="tabular-nums shrink-0">{fmt(e.totalAmount)}</span>
                         </div>
                       ))}
                     </div>
@@ -418,7 +416,7 @@ export default function InvoicesPage() {
                   {extrasDia.length === 0 ? (
                     <p className="text-muted-foreground text-sm text-center py-6">Sem escalas extras-dia no período</p>
                   ) : (
-                    <div className="overflow-x-auto"><table className="w-full text-sm">
+                    <div className="overflow-x-auto"><table className={`w-full text-sm ${STICKY_FIRST_COL}`}>
                       <thead>
                         <tr className="border-b text-left">
                           <th className="p-2">Nível</th>
@@ -464,7 +462,7 @@ export default function InvoicesPage() {
                   {salaries.byProject.length === 0 ? (
                     <p className="text-muted-foreground text-sm text-center py-6">Sem salários no período</p>
                   ) : (
-                    <div className="overflow-x-auto"><table className="w-full text-sm">
+                    <div className="overflow-x-auto"><table className={`w-full text-sm ${STICKY_FIRST_COL}`}>
                       <thead>
                         <tr className="border-b text-left">
                           <th className="p-2">Centro de custos</th>
@@ -474,13 +472,13 @@ export default function InvoicesPage() {
                       <tbody>
                         {salaries.byProject.map((s: any, i: number) => (
                           <tr key={i} className="border-b hover:bg-muted/50">
-                            <td className="p-2 flex items-center gap-2"><FolderTree className="w-3 h-3 text-muted-foreground" />{s.projectName ?? "Sem projeto"}</td>
+                            <td className="p-2"><span className="flex items-center gap-2"><FolderTree className="w-3 h-3 shrink-0 text-muted-foreground" />{s.projectName ?? "Sem projeto"}</span></td>
                             <td className="p-2 text-right tabular-nums font-bold text-blue-700">{fmt(s.cost)}</td>
                           </tr>
                         ))}
                         <tr className="bg-muted/30 font-bold">
                           <td className="p-2">Total</td>
-                          <td className="p-2 text-right">{fmt(salaries.total)}</td>
+                          <td className="p-2 text-right tabular-nums">{fmt(salaries.total)}</td>
                         </tr>
                       </tbody>
                     </table></div>
@@ -503,7 +501,7 @@ export default function InvoicesPage() {
                   {salesCommissions.length === 0 ? (
                     <p className="text-muted-foreground text-sm text-center py-6">Sem comissões de venda no período</p>
                   ) : (
-                    <div className="overflow-x-auto"><table className="w-full text-sm">
+                    <div className="overflow-x-auto"><table className={`w-full text-sm ${STICKY_FIRST_COL}`}>
                       <thead>
                         <tr className="border-b text-left">
                           <Th k="partnerName" label="Parceiro" sortKey={comSort.sortKey} sortDir={comSort.sortDir} onToggle={comSort.toggle} />
@@ -519,17 +517,17 @@ export default function InvoicesPage() {
                         {(comSort.sorted as any[]).map((c, i) => (
                           <tr key={i} className="border-b hover:bg-muted/50">
                             <td className="p-2">{c.partnerName ?? "—"}</td>
-                            <td className="p-2 flex items-center gap-2"><FolderTree className="w-3 h-3 text-muted-foreground" />{c.projectName ?? "Sem projeto"}</td>
+                            <td className="p-2"><span className="flex items-center gap-2 whitespace-nowrap"><FolderTree className="w-3 h-3 shrink-0 text-muted-foreground" />{c.projectName ?? "Sem projeto"}</span></td>
                             <td className="p-2 text-right tabular-nums">{c.bookingsCount}</td>
                             <td className="p-2 text-right tabular-nums">{fmt(c.revenueGross)}</td>
-                            <td className="p-2 text-right tabular-nums">{fmt(c.commissionBase === "gross" ? c.revenueGross : c.revenueNet)} <span className="text-[10px] text-muted-foreground">{c.commissionBase === "gross" ? "c/ IVA" : "s/ IVA"}</span></td>
+                            <td className="p-2 text-right tabular-nums">{fmt(c.commissionBase === "gross" ? c.revenueGross : c.revenueNet)} <span className="text-[11px] text-muted-foreground">{c.commissionBase === "gross" ? "c/ IVA" : "s/ IVA"}</span></td>
                             <td className="p-2 text-right tabular-nums">{c.commissionRate ?? "—"}%</td>
                             <td className="p-2 text-right tabular-nums font-bold text-rose-700">{fmt(c.commission)}</td>
                           </tr>
                         ))}
                         <tr className="bg-muted/30 font-bold">
                           <td className="p-2" colSpan={6}>Total</td>
-                          <td className="p-2 text-right">{fmt(salesCommissions.reduce((s, c) => s + c.commission, 0))}</td>
+                          <td className="p-2 text-right tabular-nums">{fmt(salesCommissions.reduce((s, c) => s + c.commission, 0))}</td>
                         </tr>
                       </tbody>
                     </table></div>
@@ -552,7 +550,7 @@ export default function InvoicesPage() {
                   {operationalPartners.length === 0 ? (
                     <p className="text-muted-foreground text-sm text-center py-6">Sem parceiros operacionais com projetos configurados no período</p>
                   ) : (
-                    <div className="overflow-x-auto"><table className="w-full text-sm">
+                    <div className="overflow-x-auto"><table className={`w-full text-sm ${STICKY_FIRST_COL}`}>
                       <thead>
                         <tr className="border-b text-left">
                           <th className="p-2">Parceiro</th>
@@ -568,17 +566,17 @@ export default function InvoicesPage() {
                         {operationalPartners.map((p, i) => (
                           <tr key={i} className="border-b hover:bg-muted/50">
                             <td className="p-2">{p.partnerName ?? "—"}</td>
-                            <td className="p-2 text-xs text-muted-foreground">{p.projectNames?.length ? p.projectNames.join(", ") : <span className="text-muted-foreground">(sem projetos)</span>}</td>
+                            <td className="p-2 text-xs text-muted-foreground min-w-[12rem]">{p.projectNames?.length ? p.projectNames.join(", ") : <span className="text-muted-foreground">(sem projetos)</span>}</td>
                             <td className="p-2 text-right tabular-nums">{p.bookingsCount}</td>
                             <td className="p-2 text-right tabular-nums">{fmt(p.revenueGross)}</td>
-                            <td className="p-2 text-right tabular-nums">{fmt(p.commissionBase === "gross" ? p.revenueGross : p.revenueNet)} <span className="text-[10px] text-muted-foreground">{p.commissionBase === "gross" ? "c/ IVA" : "s/ IVA"}</span></td>
+                            <td className="p-2 text-right tabular-nums">{fmt(p.commissionBase === "gross" ? p.revenueGross : p.revenueNet)} <span className="text-[11px] text-muted-foreground">{p.commissionBase === "gross" ? "c/ IVA" : "s/ IVA"}</span></td>
                             <td className="p-2 text-right tabular-nums">{p.commissionRate}%</td>
                             <td className="p-2 text-right tabular-nums font-bold text-cyan-700">{fmt(p.commission)}</td>
                           </tr>
                         ))}
                         <tr className="bg-muted/30 font-bold">
                           <td className="p-2" colSpan={6}>Total</td>
-                          <td className="p-2 text-right">{fmt(operationalPartners.reduce((s, p) => s + p.commission, 0))}</td>
+                          <td className="p-2 text-right tabular-nums">{fmt(operationalPartners.reduce((s, p) => s + p.commission, 0))}</td>
                         </tr>
                       </tbody>
                     </table></div>
@@ -589,11 +587,11 @@ export default function InvoicesPage() {
 
             <TabsContent value="forecast" className="space-y-4">
               {/* KPIs Previsão — receita esperada = saída prevista até ao fim do período */}
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 <KpiCard
                   icon={<CalendarClock className="w-4 h-4 text-sky-600" />}
                   label="Receita esperada"
-                  value={fmt(summary.forecastRange?.revenue ?? 0)}
+                  amount={summary.forecastRange?.revenue ?? 0}
                   hint={projection?.applies
                     ? `${summary.forecastRange?.count ?? 0} reservas por entregar (${summary.forecastRange?.from} a ${to}) · s/ IVA: ${fmt(summary.forecastRange?.revenueNet ?? 0)}`
                     : "Período encerrado: sem previsão"}
@@ -602,14 +600,14 @@ export default function InvoicesPage() {
                 <KpiCard
                   icon={<Receipt className="w-4 h-4 text-orange-600" />}
                   label="Despesas a pagar"
-                  value={fmt(summary.expensesPending)}
+                  amount={summary.expensesPending}
                   hint={`${expensesPending.length} grupos · não soma aos custos (já contadas pela data da despesa)`}
                   color="text-orange-700"
                 />
                 <KpiCard
                   icon={<Euro className="w-4 h-4 text-emerald-600" />}
                   label={projection?.applies ? "Fecho previsto (margem)" : "Realizado (período encerrado)"}
-                  value={fmt(projection?.applies ? projection.margin : summary.marginNet)}
+                  amount={projection?.applies ? projection.margin : summary.marginNet}
                   hint={projection?.applies ? "Realizado + receita esperada − custos do período inteiro" : "Sem previsão somada: o período já terminou"}
                   color="text-emerald-700"
                 />
@@ -626,7 +624,7 @@ export default function InvoicesPage() {
                   {forecast.length === 0 ? (
                     <p className="text-muted-foreground text-sm text-center py-6">Sem reservas pendentes no período</p>
                   ) : (
-                    <div className="overflow-x-auto"><table className="w-full text-sm">
+                    <div className="overflow-x-auto"><table className={`w-full text-sm ${STICKY_FIRST_COL}`}>
                       <thead>
                         <tr className="border-b text-left">
                           <th className="p-2">Projeto</th>
@@ -662,15 +660,15 @@ export default function InvoicesPage() {
                     <div className="space-y-3">
                       {expPendByProject.map((p) => (
                         <div key={p.projectName} className="border rounded-lg p-3">
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="font-medium flex items-center gap-2"><Building2 className="w-4 h-4 text-muted-foreground" />{p.projectName}</span>
-                            <span className="font-bold text-orange-700">{fmt(p.total)}</span>
+                          <div className="flex items-center justify-between gap-3 mb-2">
+                            <span className="font-medium flex items-center gap-2 min-w-0"><Building2 className="w-4 h-4 shrink-0 text-muted-foreground" /><span className="truncate" title={p.projectName}>{p.projectName}</span></span>
+                            <span className="font-bold text-orange-700 dark:text-orange-400 tabular-nums shrink-0">{fmt(p.total)}</span>
                           </div>
                           <div className="space-y-1">
                             {p.items.map((it, i) => (
-                              <div key={i} className="flex justify-between text-sm text-muted-foreground">
-                                <span>{it.supplier} · {it.category}</span>
-                                <span className="tabular-nums">{fmt(it.total)}</span>
+                              <div key={i} className="flex justify-between gap-3 text-sm text-muted-foreground">
+                                <span className="min-w-0 break-words">{it.supplier} · {it.category}</span>
+                                <span className="tabular-nums shrink-0">{fmt(it.total)}</span>
                               </div>
                             ))}
                           </div>
@@ -692,24 +690,24 @@ export default function InvoicesPage() {
   );
 }
 
-function KpiCard({ icon, label, value, hint, color }: { icon: React.ReactNode; label: string; value: string; hint?: string; color?: string }) {
+function KpiCard({ icon, label, amount, hint, color }: { icon: React.ReactNode; label: string; amount: number; hint?: string; color?: string }) {
   return (
-    <Card className="p-4">
-      <div className="flex items-center gap-2 mb-1">
-        {icon}
+    <Card className="p-4 gap-0 min-w-0">
+      <div className="flex items-center gap-2 mb-1 min-w-0">
+        <span className="shrink-0">{icon}</span>
         <span className="text-xs text-muted-foreground">{label}</span>
       </div>
-      <p className={`text-2xl font-bold ${color ?? ""}`}>{value}</p>
-      {hint && <p className="text-[11px] text-muted-foreground mt-1">{hint}</p>}
+      <FitAmount value={amount} className={`text-xl 2xl:text-2xl font-bold ${color ?? ""}`} />
+      {hint && <p className="text-[11px] leading-snug text-muted-foreground mt-1 break-words">{hint}</p>}
     </Card>
   );
 }
 
-function KpiSmall({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+function KpiSmall({ icon, label, amount }: { icon: React.ReactNode; label: string; amount: number }) {
   return (
-    <div className="border rounded-lg px-3 py-2 bg-muted/30 flex items-center justify-between">
-      <span className="flex items-center gap-2 text-xs text-muted-foreground">{icon}{label}</span>
-      <span className="font-semibold tabular-nums">{value}</span>
+    <div className="border rounded-lg px-3 py-2 bg-muted/30 min-w-0">
+      <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><span className="shrink-0">{icon}</span><span className="leading-tight">{label}</span></span>
+      <FitAmount value={amount} className="font-semibold text-sm sm:text-base mt-0.5" />
     </div>
   );
 }
@@ -748,11 +746,11 @@ function CashPanel({ cash, loading }: { cash: any; loading: boolean }) {
   if (loading || !cash) return <p className="text-sm text-muted-foreground text-center py-6">A carregar…</p>;
   return (
     <>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <KpiCard icon={<Wallet className="w-4 h-4 text-emerald-600" />} label="Recebido" value={fmt(cash.received.total)} hint={`${cash.received.count} reservas entregues · data: ${cash.dateBasis}`} color="text-emerald-700" />
-        <KpiCard icon={<Receipt className="w-4 h-4 text-orange-600" />} label="Por cobrar" value={fmt(cash.toCollect.total)} hint={`${cash.toCollect.count} reservas entregues com valor em falta`} color="text-orange-700" />
-        <KpiCard icon={<CalendarClock className="w-4 h-4 text-sky-600" />} label="No-shows pré-pagos" value={fmt(cash.prepaidNoShows.total)} hint={`${cash.prepaidNoShows.count} reservas pagas com check-in passado que nunca entraram`} color="text-sky-700" />
-        <KpiCard icon={<AlertTriangle className="w-4 h-4 text-muted-foreground" />} label="Canceladas com pagamento" value={fmt(cash.cancelledPaid.total)} hint={`${cash.cancelledPaid.count} canceladas no período — informativo, NÃO é receita (sem dados de taxa/reembolso)`} />
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+        <KpiCard icon={<Wallet className="w-4 h-4 text-emerald-600" />} label="Recebido" amount={cash.received.total} hint={`${cash.received.count} reservas entregues · data: ${cash.dateBasis}`} color="text-emerald-700" />
+        <KpiCard icon={<Receipt className="w-4 h-4 text-orange-600" />} label="Por cobrar" amount={cash.toCollect.total} hint={`${cash.toCollect.count} reservas entregues com valor em falta`} color="text-orange-700" />
+        <KpiCard icon={<CalendarClock className="w-4 h-4 text-sky-600" />} label="No-shows pré-pagos" amount={cash.prepaidNoShows.total} hint={`${cash.prepaidNoShows.count} reservas pagas com check-in passado que nunca entraram`} color="text-sky-700" />
+        <KpiCard icon={<AlertTriangle className="w-4 h-4 text-muted-foreground" />} label="Canceladas com pagamento" amount={cash.cancelledPaid.total} hint={`${cash.cancelledPaid.count} canceladas no período — informativo, NÃO é receita (sem dados de taxa/reembolso)`} />
       </div>
       <Card>
         <CardHeader><CardTitle className="text-base">Recebido por método de pagamento</CardTitle></CardHeader>
@@ -760,7 +758,7 @@ function CashPanel({ cash, loading }: { cash: any; loading: boolean }) {
           {cash.received.byMethod.length === 0 ? <p className="text-sm text-muted-foreground text-center py-4">Sem recebimentos no período</p> : (
             <div className="space-y-1">
               {cash.received.byMethod.map((m: any) => (
-                <div key={m.method} className="flex justify-between text-sm"><span>{m.method} <span className="text-xs text-muted-foreground">({m.count})</span></span><span className="tabular-nums font-medium">{fmt(m.total)}</span></div>
+                <div key={m.method} className="flex justify-between gap-3 text-sm py-1 border-b last:border-0"><span className="min-w-0 break-words">{m.method} <span className="text-xs text-muted-foreground">({m.count})</span></span><span className="tabular-nums font-medium shrink-0">{fmt(m.total)}</span></div>
               ))}
             </div>
           )}

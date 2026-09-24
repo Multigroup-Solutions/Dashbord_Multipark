@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { ChevronDown, ChevronRight, Link2, Loader2, Plus, X } from "lucide-react";
+import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
 
 const EUR = new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR", minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const EUR0 = new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR", minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -27,9 +28,9 @@ const KEY_LABEL: Record<string, string> = { utm_campaign: "utm_campaign", discou
 
 function statusBadge(status: string | null | undefined) {
   const s = String(status ?? "").toUpperCase();
-  if (s === "REMOVED" || s === "DELETED") return <Badge variant="outline" className="ml-1.5 text-[10px] text-rose-700 border-rose-200">removida</Badge>;
-  if (s === "PAUSED" || s === "CAMPAIGN_PAUSED") return <Badge variant="outline" className="ml-1.5 text-[10px] text-amber-700 border-amber-200">pausada</Badge>;
-  if (s === "ARCHIVED") return <Badge variant="outline" className="ml-1.5 text-[10px]">arquivada</Badge>;
+  if (s === "REMOVED" || s === "DELETED") return <Badge variant="outline" className="ml-1.5 text-[11px] text-rose-700 border-rose-200">removida</Badge>;
+  if (s === "PAUSED" || s === "CAMPAIGN_PAUSED") return <Badge variant="outline" className="ml-1.5 text-[11px] text-amber-700 border-amber-200">pausada</Badge>;
+  if (s === "ARCHIVED") return <Badge variant="outline" className="ml-1.5 text-[11px]">arquivada</Badge>;
   return null;
 }
 
@@ -61,7 +62,7 @@ export default function CampaignRoasPanel({ from, to, projectId }: { from: strin
         </CardHeader>
         <CardContent className="p-0 overflow-x-auto">
           {rows.length === 0 ? <p className="text-sm text-muted-foreground p-6 text-center">Sem campanhas com gasto no período.</p> : (
-            <table className="w-full text-sm">
+            <table className={`w-full text-sm tabular-nums ${STICKY_FIRST_COL}`}>
               <thead className="text-xs text-muted-foreground border-b">
                 <tr>
                   <th className="text-left px-4 py-2 font-medium">Campanha</th>
@@ -85,9 +86,9 @@ export default function CampaignRoasPanel({ from, to, projectId }: { from: strin
                             {isOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
                             {r.name}
                           </span>
-                          <Badge variant="outline" className="ml-1.5 text-[10px]">{r.provider === "meta" ? "Meta" : "Google"}</Badge>
+                          <Badge variant="outline" className="ml-1.5 text-[11px]">{r.provider === "meta" ? "Meta" : "Google"}</Badge>
                           {statusBadge(r.status)}
-                          {r.links?.length > 0 && <Badge variant="outline" className="ml-1.5 text-[10px]"><Link2 className="w-3 h-3 mr-0.5" />{r.links.length}</Badge>}
+                          {r.links?.length > 0 && <Badge variant="outline" className="ml-1.5 text-[11px]"><Link2 className="w-3 h-3 mr-0.5" />{r.links.length}</Badge>}
                           {r.accountName && <div className="text-[11px] text-muted-foreground pl-5">conta {r.accountName}</div>}
                         </td>
                         <td className="px-4 py-1.5 text-right tabular-nums">{eur(r.cost)}</td>
@@ -162,7 +163,7 @@ export default function CampaignRoasPanel({ from, to, projectId }: { from: strin
         <CardHeader className="pb-2"><CardTitle className="text-sm">Conversões por ação (todas as campanhas do âmbito)</CardTitle></CardHeader>
         <CardContent className="p-0 overflow-x-auto">
           {!(data.conversionActions ?? []).length ? <p className="text-sm text-muted-foreground p-4">Sem conversões por ação no período.</p> : (
-            <table className="w-full text-sm">
+            <table className={`w-full text-sm tabular-nums ${STICKY_FIRST_COL}`}>
               <thead className="text-xs text-muted-foreground border-b">
                 <tr><th className="text-left px-4 py-2 font-medium">Ação</th><th className="text-left px-4 py-2 font-medium">Plataforma</th><th className="text-left px-4 py-2 font-medium">Categoria</th><th className="text-right px-4 py-2 font-medium">Conversões</th><th className="text-right px-4 py-2 font-medium">Valor</th></tr>
               </thead>

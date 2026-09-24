@@ -77,7 +77,7 @@ export default function ApiKeysPage() {
   const baseUrl = window.location.origin;
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
             <p className="text-muted-foreground">Gere as chaves de API para integração com dispositivos externos (GPS Zilo, rádios, etc.)</p>
@@ -180,13 +180,13 @@ export default function ApiKeysPage() {
                 const expired = !!k.expiresAt && new Date(`${String(k.expiresAt).replace(" ", "T")}Z`).getTime() <= Date.now();
                 return (
                 <Card key={k.id}>
-                  <CardContent className="flex items-center justify-between py-4">
-                    <div className="flex items-center gap-3">
-                      <div className={`p-2 rounded-lg ${k.active && !expired ? "bg-emerald-500/15" : "bg-muted"}`}>
+                  <CardContent className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 py-4">
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <div className={`p-2 rounded-lg shrink-0 ${k.active && !expired ? "bg-emerald-500/15" : "bg-muted"}`}>
                         <Key className={`h-5 w-5 ${k.active && !expired ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}`} />
                       </div>
-                      <div>
-                        <p className="font-medium">{k.name} <span className="text-xs font-normal text-muted-foreground">· {scopeLabel(k.permissions)}</span></p>
+                      <div className="min-w-0">
+                        <p className="font-medium break-words">{k.name} <span className="text-xs font-normal text-muted-foreground">· {scopeLabel(k.permissions)}</span></p>
                         <p className="text-xs text-muted-foreground">
                           Criada: {fmtPTDate(k.createdAt)}
                           {" · "}Último uso: {k.lastUsedAt ? fmtPTDateTime(k.lastUsedAt) : "nunca"}
@@ -195,11 +195,11 @@ export default function ApiKeysPage() {
                         <code className="text-xs text-muted-foreground">{k.keyPrefix ? `${k.keyPrefix}••••••••` : "••••••••"}</code>
                       </div>
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 shrink-0 ml-auto">
                       {expired && <Badge variant="destructive">Expirada</Badge>}
                       <Badge variant={k.active ? "default" : "secondary"}>{k.active ? "Ativa" : "Inativa"}</Badge>
-                      <Switch checked={k.active} onCheckedChange={(v) => toggleMut.mutate({ id: k.id, active: v })} />
-                      <Button variant="ghost" size="icon" className="text-red-500 hover:text-red-700" onClick={() => { if (confirm("Eliminar esta API key?")) deleteMut.mutate({ id: k.id }); }}>
+                      <Switch checked={k.active} onCheckedChange={(v) => toggleMut.mutate({ id: k.id, active: v })} aria-label={k.active ? `Desativar ${k.name}` : `Ativar ${k.name}`} />
+                      <Button variant="ghost" size="icon" className="text-red-600 hover:text-red-700" aria-label={`Eliminar ${k.name}`} onClick={() => { if (confirm("Eliminar esta API key?")) deleteMut.mutate({ id: k.id }); }}>
                         <Trash2 className="h-4 w-4" />
                       </Button>
                     </div>

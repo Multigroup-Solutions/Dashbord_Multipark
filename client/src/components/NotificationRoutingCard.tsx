@@ -104,7 +104,7 @@ export function NotificationRoutingCard() {
                       <tr key={t.kind} className="border-b border-border/60 align-middle">
                         <td className="p-2 sticky left-0 bg-card z-10">
                           <div className="font-medium flex items-center gap-1">{t.label}{t.mandatory && <Lock className="h-3 w-3 text-muted-foreground" aria-label="Obrigatória" />}</div>
-                          <div className="text-[10.5px] text-muted-foreground">{t.cityScoped ? "Por cidade" : "Nacional"} · módulo {t.module}</div>
+                          <div className="text-[11px] text-muted-foreground">{t.cityScoped ? "Por cidade" : "Nacional"} · módulo {t.module}</div>
                         </td>
                         {t.personal ? (
                           <td colSpan={roleCols.length} className="p-1.5 text-center text-muted-foreground">Pessoal — só a pessoa a quem se refere{t.mandatory ? " (obrigatória)" : ""}</td>

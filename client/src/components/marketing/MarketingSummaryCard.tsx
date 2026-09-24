@@ -20,8 +20,8 @@ function Cell({ label, value, hint }: { label: string; value: string; hint?: str
   return (
     <div className="min-w-0">
       <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="text-lg font-bold tabular-nums">{value}</div>
-      {hint && <div className="text-[11px] text-muted-foreground truncate" title={hint}>{hint}</div>}
+      <div className="text-base sm:text-lg font-bold tabular-nums break-words">{value}</div>
+      {hint && <div className="text-[11px] leading-snug text-muted-foreground break-words">{hint}</div>}
     </div>
   );
 }
@@ -51,7 +51,7 @@ export default function MarketingSummaryCard({ from, to, projectId }: { from: st
           <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
         ) : (
           <>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-x-4 gap-y-3">
               <Cell label="Gasto em anúncios" value={eur(s.spend)} hint={`Google ${eur(s.spendGoogle)} · Meta ${eur(s.spendMeta)}`} />
               <Cell label="Outras despesas de marketing" value={eur(s.mktExpenses)} />
               <Cell label="Custo total de marketing" value={eur(totalMarketing)} hint={s.bookingsTotal > 0 ? `${eur(totalMarketing / s.bookingsTotal, 2)} por reserva` : undefined} />

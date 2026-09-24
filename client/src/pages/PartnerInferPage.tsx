@@ -14,6 +14,7 @@ import {
 import { Handshake, Link2, Plus, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { PARTNER_TYPES } from "@shared/partnerTypes";
+import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
 
 const fmtEur = (v: number) => v.toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
 
@@ -63,21 +64,21 @@ export default function PartnerInferPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
               {aliasCounts.map((p) => (
                 <div key={p.partnershipId} className="border rounded p-2 text-sm">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="font-medium">{p.partnershipName ?? `#${p.partnershipId}`}</span>
-                    <Badge variant="secondary" className="text-xs">{p.total} {p.total === 1 ? "código" : "códigos"}</Badge>
+                  <div className="flex items-start justify-between gap-2 mb-1">
+                    <span className="font-medium min-w-0 break-words">{p.partnershipName ?? `#${p.partnershipId}`}</span>
+                    <Badge variant="secondary" className="text-xs shrink-0">{p.total} {p.total === 1 ? "código" : "códigos"}</Badge>
                   </div>
                   <div className="flex flex-wrap gap-1">
                     {p.partnerIds.slice(0, 3).map((id) => (
-                      <Badge key={id} variant="outline" className="text-[9px] font-mono">
+                      <Badge key={id} variant="outline" className="text-[11px] font-mono">
                         ID:{id.length > 12 ? id.slice(0, 12) + "…" : id}
                       </Badge>
                     ))}
                     {p.paymentMethods.slice(0, 2).map((pm) => (
-                      <Badge key={pm} variant="outline" className="text-[9px]">pgto:{pm.slice(0, 12)}</Badge>
+                      <Badge key={pm} variant="outline" className="text-[11px]">pgto:{pm.slice(0, 12)}</Badge>
                     ))}
                     {p.total > 5 && (
-                      <Badge variant="outline" className="text-[9px]">+{p.total - 5}</Badge>
+                      <Badge variant="outline" className="text-[11px]">+{p.total - 5}</Badge>
                     )}
                   </div>
                 </div>
@@ -98,7 +99,7 @@ export default function PartnerInferPage() {
             <p className="text-sm text-muted-foreground">A carregar...</p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className={`w-full text-sm ${STICKY_FIRST_COL}`}>
                 <thead>
                   <tr className="border-b text-xs uppercase text-muted-foreground">
                     <th className="text-left py-2 px-2">Sugestão</th>
@@ -125,18 +126,18 @@ export default function PartnerInferPage() {
                       </td>
                       <td className="py-2 px-2 text-xs">
                         {r.paymentMethod ? (
-                          <Badge variant="outline" className="text-[10px]">{r.paymentMethod}</Badge>
+                          <Badge variant="outline" className="text-[11px]">{r.paymentMethod}</Badge>
                         ) : (
                           <span className="text-muted-foreground">—</span>
                         )}
                       </td>
-                      <td className="py-2 px-2 text-xs text-muted-foreground">
+                      <td className="py-2 px-2 text-xs text-muted-foreground min-w-[12rem]">
                         {r.remarksSample ? r.remarksSample.slice(0, 40) : "—"}
                       </td>
-                      <td className="py-2 px-2 text-right">{r.bookings}</td>
-                      <td className="py-2 px-2 text-right font-medium">{fmtEur(r.totalValue)}</td>
-                      <td className="py-2 px-2 font-mono text-[10px] text-muted-foreground">
-                        <Badge variant="secondary" className="text-[9px] mr-1">
+                      <td className="py-2 px-2 text-right tabular-nums">{r.bookings}</td>
+                      <td className="py-2 px-2 text-right font-medium tabular-nums whitespace-nowrap">{fmtEur(r.totalValue)}</td>
+                      <td className="py-2 px-2 font-mono text-[11px] text-muted-foreground">
+                        <Badge variant="secondary" className="text-[11px] mr-1">
                           {r.aliasType === "multipark_partner_id" ? "ID" : "pgto"}
                         </Badge>
                         {r.aliasValue.length > 16 ? r.aliasValue.slice(0, 16) + "…" : r.aliasValue}
@@ -282,7 +283,7 @@ function LinkDialog({
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-[10px] text-muted-foreground mt-1">
+              <p className="text-[11px] text-muted-foreground mt-1">
                 Fica em "Por configurar" na Gestão até definires a comissão ou a avença.
               </p>
             </div>

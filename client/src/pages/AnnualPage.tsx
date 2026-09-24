@@ -12,6 +12,8 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { useAuth } from "@/_core/hooks/useAuth";
 import { can } from "@shared/access";
 import FinanceExportButtons from "@/components/FinanceExportButtons";
+import FitAmount from "@/components/finance/FitAmount";
+import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
 import { toast } from "sonner";
 import { useState, useMemo, useEffect } from "react";
 import {
@@ -24,9 +26,13 @@ const MONTHS = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","A
 const MONTHS_SHORT = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
 
 const fmt = (v: number) => new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR" }).format(v);
+// Rótulos curtos (barras do gráfico / notas): vírgula decimal PT, sem partir linha.
 const fmtCompact = (v: number) => {
-  if (Math.abs(v) >= 1000) return `${(v / 1000).toFixed(1)}k€`;
-  return `${Math.round(v)}€`;
+  const a = Math.abs(v);
+  const sign = v < 0 ? "−" : "";
+  if (a >= 1_000_000) return `${sign}${(a / 1_000_000).toFixed(2).replace(".", ",")}M€`;
+  if (a >= 1000) return `${sign}${(a / 1000).toFixed(1).replace(".", ",")}k€`;
+  return `${sign}${Math.round(a)}€`;
 };
 
 const LEVEL_LABEL: Record<string, string> = {
@@ -143,11 +149,11 @@ function deltaPct(curr: number, prev: number): number | null {
 
 function DeltaBadge({ curr, prev, invert = false }: { curr: number; prev: number; invert?: boolean }) {
   const pct = deltaPct(curr, prev);
-  if (pct === null) return <span className="text-[10px] text-muted-foreground">—</span>;
+  if (pct === null) return <span className="text-[11px] text-muted-foreground">—</span>;
   const positive = invert ? pct < 0 : pct > 0;
   const color = positive ? "text-emerald-700 bg-emerald-50" : pct === 0 ? "text-muted-foreground bg-muted" : "text-red-700 bg-red-50";
   const arrow = pct > 0 ? "▲" : pct < 0 ? "▼" : "•";
-  return <span className={`text-[10px] px-1 rounded ${color}`}>{arrow} {Math.abs(pct).toFixed(1)}%</span>;
+  return <span className={`text-[11px] px-1 rounded whitespace-nowrap ${color}`}>{arrow} {Math.abs(pct).toFixed(1)}%</span>;
 }
 
 // Parse de CSV/Excel colado: colunas ano;mês;receita[;despesas][;ordenados][;notas]
@@ -305,7 +311,7 @@ export default function AnnualPage() {
           <div>
             <Label className="text-xs mb-1 flex items-center gap-1"><Calendar className="w-3 h-3" /> De</Label>
             <Select value={String(fromMonth)} onValueChange={(v) => setFromMonth(parseInt(v))}>
-              <SelectTrigger className="w-28 h-9"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-32 h-9"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {MONTHS.map((m, i) => <SelectItem key={i} value={String(i + 1)}>{m}</SelectItem>)}
               </SelectContent>
@@ -314,7 +320,7 @@ export default function AnnualPage() {
           <div>
             <Label className="text-xs mb-1 block">Até</Label>
             <Select value={String(toMonth)} onValueChange={(v) => setToMonth(parseInt(v))}>
-              <SelectTrigger className="w-28 h-9"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-32 h-9"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {MONTHS.map((m, i) => <SelectItem key={i} value={String(i + 1)}>{m}</SelectItem>)}
               </SelectContent>
@@ -329,7 +335,7 @@ export default function AnnualPage() {
                 {sortedProjects.map((p) => (
                   <SelectItem key={p.id} value={String(p.id)}>
                     <span style={{ paddingLeft: `${p.__depth * 12}px` }} className="inline-flex items-center gap-2">
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded border ${LEVEL_COLOR[p.level ?? "project"] ?? ""}`}>
+                      <span className={`text-[11px] px-1.5 py-0.5 rounded border ${LEVEL_COLOR[p.level ?? "project"] ?? ""}`}>
                         {LEVEL_LABEL[p.level ?? "project"] ?? p.level}
                       </span>
                       {p.name}
@@ -369,87 +375,87 @@ export default function AnnualPage() {
       ) : (
         <>
           {/* KPI Cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
-            <Card className="p-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 2xl:grid-cols-8 gap-3 [&>*]:min-w-0">
+            <Card className="p-3 gap-1">
               <div className="flex items-center gap-1 mb-1">
-                <Euro className="w-4 h-4 text-green-600" />
-                <span className="text-[10px] text-muted-foreground">Receita s/IVA</span>
+                <Euro className="w-4 h-4 text-green-700" />
+                <span className="text-xs text-muted-foreground">Receita s/IVA</span>
               </div>
-              <p className="text-lg font-bold text-green-700">{fmt(totals.revenueNoVat)}</p>
+              <FitAmount value={totals.revenueNoVat} className="text-base sm:text-lg font-bold text-green-700 dark:text-green-400" />
               {showCompare && <DeltaBadge curr={totals.revenueNoVat} prev={totalsCompare.revenueNoVat} />}
             </Card>
-            <Card className="p-3">
+            <Card className="p-3 gap-1">
               <div className="flex items-center gap-1 mb-1">
                 <HandCoins className="w-4 h-4 text-amber-600" />
-                <span className="text-[10px] text-muted-foreground">Comissões</span>
+                <span className="text-xs text-muted-foreground">Comissões</span>
               </div>
-              <p className="text-lg font-bold text-amber-700">{fmt(totals.salesCommissions + totals.operationalCommissions)}</p>
+              <FitAmount value={totals.salesCommissions + totals.operationalCommissions} className="text-base sm:text-lg font-bold text-amber-700 dark:text-amber-400" />
               {showCompare && <DeltaBadge curr={totals.salesCommissions + totals.operationalCommissions} prev={totalsCompare.salesCommissions + totalsCompare.operationalCommissions} invert />}
             </Card>
-            <Card className="p-3">
+            <Card className="p-3 gap-1">
               <div className="flex items-center gap-1 mb-1">
                 <Receipt className="w-4 h-4 text-red-600" />
-                <span className="text-[10px] text-muted-foreground">Despesas s/IVA</span>
+                <span className="text-xs text-muted-foreground">Despesas s/IVA</span>
               </div>
-              <p className="text-lg font-bold text-red-700">{fmt(totals.expensesNoVat)}</p>
+              <FitAmount value={totals.expensesNoVat} className="text-base sm:text-lg font-bold text-red-700 dark:text-red-400" />
               {showCompare && <DeltaBadge curr={totals.expensesNoVat} prev={totalsCompare.expensesNoVat} invert />}
             </Card>
-            <Card className="p-3">
+            <Card className="p-3 gap-1">
               <div className="flex items-center gap-1 mb-1">
                 <Megaphone className="w-4 h-4 text-pink-600" />
-                <span className="text-[10px] text-muted-foreground" title="Despesas s/IVA + comissões + ordenados + TSU + equipa do dia. Marketing já está nas despesas (não se soma outra vez).">Custos s/IVA</span>
+                <span className="text-xs text-muted-foreground" title="Despesas s/IVA + comissões + ordenados + TSU + equipa do dia. Marketing já está nas despesas (não se soma outra vez).">Custos s/IVA</span>
               </div>
-              <p className="text-lg font-bold text-pink-700">{fmt(totals.totalCosts)}</p>
+              <FitAmount value={totals.totalCosts} className="text-base sm:text-lg font-bold text-pink-700 dark:text-pink-400" />
               {showCompare && <DeltaBadge curr={totals.totalCosts} prev={totalsCompare.totalCosts} invert />}
             </Card>
-            <Card className="p-3">
+            <Card className="p-3 gap-1">
               <div className="flex items-center gap-1 mb-1">
-                <Users className="w-4 h-4 text-orange-600" />
-                <span className="text-[10px] text-muted-foreground">Ordenados</span>
+                <Users className="w-4 h-4 text-orange-700" />
+                <span className="text-xs text-muted-foreground">Ordenados</span>
               </div>
-              <p className="text-lg font-bold text-orange-700">{fmt(totals.salaries)}</p>
+              <FitAmount value={totals.salaries} className="text-base sm:text-lg font-bold text-orange-700 dark:text-orange-400" />
               {showCompare && <DeltaBadge curr={totals.salaries} prev={totalsCompare.salaries} invert />}
             </Card>
-            <Card className="p-3">
+            <Card className="p-3 gap-1">
               <div className="flex items-center gap-1 mb-1">
                 <Landmark className="w-4 h-4 text-purple-600" />
-                <span className="text-[10px] text-muted-foreground">TSU + Extras-dia</span>
+                <span className="text-xs text-muted-foreground">TSU + Extras-dia</span>
               </div>
-              <p className="text-lg font-bold text-purple-700">{fmt(totals.employerTax + totals.extrasDiaCost)}</p>
+              <FitAmount value={totals.employerTax + totals.extrasDiaCost} className="text-base sm:text-lg font-bold text-purple-700 dark:text-purple-400" />
               {showCompare && <DeltaBadge curr={totals.employerTax + totals.extrasDiaCost} prev={totalsCompare.employerTax + totalsCompare.extrasDiaCost} invert />}
             </Card>
-            <Card className="p-3">
+            <Card className="p-3 gap-1">
               <div className="flex items-center gap-1 mb-1">
                 <ArrowUpRight className="w-4 h-4 text-blue-600" />
-                <span className="text-[10px] text-muted-foreground">IVA a Pagar</span>
+                <span className="text-xs text-muted-foreground">IVA a Pagar</span>
               </div>
-              <p className={`text-lg font-bold ${totals.vatToPay >= 0 ? "text-red-700" : "text-green-700"}`}>{fmt(totals.vatToPay)}</p>
+              <FitAmount value={totals.vatToPay} className={`text-base sm:text-lg font-bold ${totals.vatToPay >= 0 ? "text-red-700 dark:text-red-400" : "text-green-700 dark:text-green-400"}`} />
               {showCompare && <DeltaBadge curr={totals.vatToPay} prev={totalsCompare.vatToPay} />}
             </Card>
-            <Card className="p-3 border-2 border-primary/20">
+            <Card className="p-3 gap-1 border-2 border-primary/20">
               <div className="flex items-center gap-1 mb-1">
-                {totals.profit >= 0 ? <TrendingUp className="w-4 h-4 text-green-600" /> : <TrendingDown className="w-4 h-4 text-red-600" />}
-                <span className="text-[10px] text-muted-foreground font-medium">Lucro</span>
+                {totals.profit >= 0 ? <TrendingUp className="w-4 h-4 text-green-700" /> : <TrendingDown className="w-4 h-4 text-red-600" />}
+                <span className="text-xs text-muted-foreground font-medium">Lucro</span>
               </div>
-              <p className={`text-lg font-bold ${totals.profit >= 0 ? "text-green-700" : "text-red-700"}`}>{fmt(totals.profit)}</p>
-              {totals.hasForecast && <p className="text-[10px] text-muted-foreground">Fecho previsto: {fmt(totals.forecastProfit)}</p>}
+              <FitAmount value={totals.profit} className={`text-base sm:text-lg font-bold ${totals.profit >= 0 ? "text-green-700 dark:text-green-400" : "text-red-700 dark:text-red-400"}`} />
+              {totals.hasForecast && <p className="text-[11px] text-muted-foreground tabular-nums">Fecho previsto: {fmt(totals.forecastProfit)}</p>}
               {showCompare && <DeltaBadge curr={totals.profit} prev={totalsCompare.profit} />}
             </Card>
           </div>
 
           {/* IVA summary */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <Card className="p-4 bg-blue-50/50">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 [&>*]:min-w-0">
+            <Card className="p-4 gap-1 bg-blue-50/50 dark:bg-transparent">
               <p className="text-xs text-muted-foreground mb-1">IVA Cobrado (23% das receitas líquidas)</p>
-              <p className="text-2xl font-bold text-blue-700">{fmt(totals.vatRevenue)}</p>
+              <FitAmount value={totals.vatRevenue} className="text-xl lg:text-2xl font-bold text-blue-700 dark:text-blue-400" />
             </Card>
-            <Card className="p-4 bg-cyan-50/50">
+            <Card className="p-4 gap-1 bg-cyan-50/50 dark:bg-transparent">
               <p className="text-xs text-muted-foreground mb-1">IVA Dedutível (23% das despesas)</p>
-              <p className="text-2xl font-bold text-cyan-700">{fmt(totals.vatExpenses)}</p>
+              <FitAmount value={totals.vatExpenses} className="text-xl lg:text-2xl font-bold text-cyan-700 dark:text-cyan-400" />
             </Card>
-            <Card className={`p-4 ${totals.vatToPay >= 0 ? "bg-red-50/50" : "bg-green-50/50"}`}>
+            <Card className={`p-4 gap-1 ${totals.vatToPay >= 0 ? "bg-red-50/50" : "bg-green-50/50"} dark:bg-transparent`}>
               <p className="text-xs text-muted-foreground mb-1">IVA a {totals.vatToPay >= 0 ? "Pagar" : "Recuperar"}</p>
-              <p className={`text-2xl font-bold ${totals.vatToPay >= 0 ? "text-red-700" : "text-green-700"}`}>{fmt(Math.abs(totals.vatToPay))}</p>
+              <FitAmount value={Math.abs(totals.vatToPay)} className={`text-xl lg:text-2xl font-bold ${totals.vatToPay >= 0 ? "text-red-700 dark:text-red-400" : "text-green-700 dark:text-green-400"}`} />
             </Card>
           </div>
 
@@ -462,7 +468,8 @@ export default function AnnualPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="flex items-end gap-2 h-64">
+              <div className="overflow-x-auto -mx-2 px-2 pb-1">
+              <div className="flex items-end gap-2 h-64 min-w-[640px]" role="img" aria-label={`Receita e custos por mês em ${year}`}>
                 {months.map((m, idx) => {
                   const mc = showCompare ? monthsCompare.find(x => x.month === m.month) : undefined;
                   const localMax = Math.max(maxVal, mc?.revenueNoVat ?? 0, mc?.totalCosts ?? 0);
@@ -472,38 +479,39 @@ export default function AnnualPage() {
                   const costCH = mc ? (mc.totalCosts / localMax) * 100 : 0;
                   const future = m.status === "future";
                   return (
-                    <div key={idx} className="flex-1 flex flex-col items-center gap-1">
+                    <div key={idx} className="flex-1 min-w-0 flex flex-col items-center gap-1">
                       {future ? (
-                        <span className="text-[10px] tabular-nums text-muted-foreground italic" title="Mês futuro: previsão (receita esperada − custos previstos), não resultado">
+                        <span className="text-[11px] tabular-nums whitespace-nowrap text-muted-foreground italic" title="Mês futuro: previsão (receita esperada − custos previstos), não resultado">
                           prev. {fmtCompact(m.forecastProfit ?? 0)}
                         </span>
                       ) : (
-                        <span className={`text-[10px] tabular-nums ${m.profit >= 0 ? "text-emerald-700" : "text-red-700"}`}>
+                        <span className={`text-[11px] tabular-nums whitespace-nowrap ${m.profit >= 0 ? "text-emerald-700 dark:text-emerald-400" : "text-red-700 dark:text-red-400"}`} title={`Lucro: ${fmt(m.profit)}`}>
                           {fmtCompact(m.profit)}
                         </span>
                       )}
                       <div className="w-full flex gap-0.5 items-end" style={{ height: "180px" }}>
                         {showCompare && (
                           <>
-                            <div className="flex-1 bg-green-200 rounded-t transition-all" style={{ height: `${revCH}%` }} title={`${compareYear} Receita: ${fmt(mc?.revenueNoVat ?? 0)}`} />
-                            <div className="flex-1 bg-red-100 rounded-t transition-all" style={{ height: `${costCH}%` }} title={`${compareYear} Custos: ${fmt(mc?.totalCosts ?? 0)}`} />
+                            <div className="flex-1 bg-chart-2/30 rounded-t transition-all" style={{ height: `${revCH}%` }} title={`${compareYear} Receita: ${fmt(mc?.revenueNoVat ?? 0)}`} />
+                            <div className="flex-1 bg-destructive/20 rounded-t transition-all" style={{ height: `${costCH}%` }} title={`${compareYear} Custos: ${fmt(mc?.totalCosts ?? 0)}`} />
                           </>
                         )}
-                        <div className="flex-1 bg-green-500 rounded-t transition-all" style={{ height: `${revH}%` }} title={`Receita: ${fmt(m.revenueNoVat)}`} />
-                        <div className="flex-1 bg-red-400 rounded-t transition-all" style={{ height: `${costH}%` }} title={`Custos: ${fmt(m.totalCosts)}`} />
+                        <div className="flex-1 bg-chart-2 rounded-t transition-all" style={{ height: `${revH}%` }} title={`Receita: ${fmt(m.revenueNoVat)}`} />
+                        <div className="flex-1 bg-destructive/80 rounded-t transition-all" style={{ height: `${costH}%` }} title={`Custos: ${fmt(m.totalCosts)}`} />
                       </div>
-                      <span className="text-[10px] text-muted-foreground">{MONTHS_SHORT[m.month - 1]}</span>
+                      <span className="text-xs text-muted-foreground">{MONTHS_SHORT[m.month - 1]}</span>
                     </div>
                   );
                 })}
               </div>
+              </div>
               <div className="flex items-center gap-4 mt-3 text-xs text-muted-foreground flex-wrap">
-                <span className="flex items-center gap-1"><div className="w-3 h-3 bg-green-500 rounded" /> Receita {year}</span>
-                <span className="flex items-center gap-1"><div className="w-3 h-3 bg-red-400 rounded" /> Custos {year}</span>
+                <span className="flex items-center gap-1"><div className="w-3 h-3 bg-chart-2 rounded" /> Receita {year}</span>
+                <span className="flex items-center gap-1"><div className="w-3 h-3 bg-destructive/80 rounded" /> Custos {year}</span>
                 {showCompare && (
                   <>
-                    <span className="flex items-center gap-1"><div className="w-3 h-3 bg-green-200 rounded" /> Receita {compareYear}</span>
-                    <span className="flex items-center gap-1"><div className="w-3 h-3 bg-red-100 rounded" /> Custos {compareYear}</span>
+                    <span className="flex items-center gap-1"><div className="w-3 h-3 bg-chart-2/30 rounded" /> Receita {compareYear}</span>
+                    <span className="flex items-center gap-1"><div className="w-3 h-3 bg-destructive/20 rounded" /> Custos {compareYear}</span>
                   </>
                 )}
               </div>
@@ -517,7 +525,7 @@ export default function AnnualPage() {
             </CardHeader>
             <CardContent>
               <div className="overflow-x-auto">
-                <table className="w-full text-xs">
+                <table className={`w-full text-xs ${STICKY_FIRST_COL}`}>
                   <thead>
                     <tr className="border-b text-left">
                       <th className="p-2">Mês</th>
@@ -542,18 +550,18 @@ export default function AnnualPage() {
                           <td className="p-2 font-medium">
                             {MONTHS[m.month - 1]}
                             {(m as any).fromHistory && (
-                              <span className="ml-1 text-[9px] px-1 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200" title="Valores importados do Excel (sem detalhe na app)">hist.</span>
+                              <span className="ml-1 text-[11px] px-1 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200" title="Valores importados do Excel (sem detalhe na app)">hist.</span>
                             )}
                           </td>
-                          <td className="p-2 text-right tabular-nums text-green-600">{fmt(m.revenueWithVat)}</td>
+                          <td className="p-2 text-right tabular-nums text-green-700">{fmt(m.revenueWithVat)}</td>
                           <td className="p-2 text-right tabular-nums text-blue-600">{fmt(m.vatRevenue)}</td>
                           <td className="p-2 text-right tabular-nums text-green-700 font-medium">{fmt(m.revenueNoVat)}</td>
                           <td className="p-2 text-right tabular-nums text-red-700">{fmt(m.expensesNoVat)}</td>
                           <td className="p-2 text-right tabular-nums text-amber-700">{fmt(commissions)}</td>
-                          <td className="p-2 text-right tabular-nums text-orange-600">{fmt(m.salaries)}</td>
+                          <td className="p-2 text-right tabular-nums text-orange-700">{fmt(m.salaries)}</td>
                           <td className="p-2 text-right tabular-nums text-purple-600">{fmt(m.employerTax + (m.extrasDiaCost ?? 0))}</td>
                           <td className="p-2 text-right tabular-nums text-pink-700">{fmt(m.totalCosts)}</td>
-                          <td className={`p-2 text-right tabular-nums ${m.vatToPay >= 0 ? "text-red-600" : "text-green-600"}`}>{fmt(m.vatToPay)}</td>
+                          <td className={`p-2 text-right tabular-nums ${m.vatToPay >= 0 ? "text-red-600" : "text-green-700"}`}>{fmt(m.vatToPay)}</td>
                           <td className="p-2 text-right tabular-nums font-bold">
                             {m.status === "future" ? (
                               <span className="text-muted-foreground font-normal" title="Mês futuro: sem resultado realizado">—</span>
@@ -563,12 +571,12 @@ export default function AnnualPage() {
                               </span>
                             )}
                             {(m.status === "future" || m.status === "current") && (
-                              <div className="text-[9px] font-normal text-muted-foreground italic">
+                              <div className="text-[11px] font-normal text-muted-foreground italic">
                                 {m.status === "current" ? "fecho prev." : "previsto"}: {fmtCompact(m.forecastProfit ?? 0)}
                               </div>
                             )}
                             {showCompare && mc && (
-                              <div className="text-[9px] font-normal text-muted-foreground">
+                              <div className="text-[11px] font-normal text-muted-foreground">
                                 vs {compareYear}: {mc.profit >= 0 ? "+" : ""}{fmtCompact(mc.profit)} <DeltaBadge curr={m.profit} prev={mc.profit} />
                               </div>
                             )}
@@ -579,20 +587,20 @@ export default function AnnualPage() {
                     {/* Totais */}
                     <tr className="border-t-2 font-bold bg-muted/30">
                       <td className="p-2">TOTAL</td>
-                      <td className="p-2 text-right text-green-600">{fmt(totals.revenueWithVat)}</td>
+                      <td className="p-2 text-right text-green-700">{fmt(totals.revenueWithVat)}</td>
                       <td className="p-2 text-right text-blue-600">{fmt(totals.vatRevenue)}</td>
                       <td className="p-2 text-right text-green-700">{fmt(totals.revenueNoVat)}</td>
                       <td className="p-2 text-right text-red-700">{fmt(totals.expensesNoVat)}</td>
                       <td className="p-2 text-right text-amber-700">{fmt(totals.salesCommissions + totals.operationalCommissions)}</td>
-                      <td className="p-2 text-right text-orange-600">{fmt(totals.salaries)}</td>
+                      <td className="p-2 text-right text-orange-700">{fmt(totals.salaries)}</td>
                       <td className="p-2 text-right text-purple-600">{fmt(totals.employerTax + totals.extrasDiaCost)}</td>
                       <td className="p-2 text-right text-pink-700">{fmt(totals.totalCosts)}</td>
-                      <td className={`p-2 text-right ${totals.vatToPay >= 0 ? "text-red-600" : "text-green-600"}`}>{fmt(totals.vatToPay)}</td>
+                      <td className={`p-2 text-right ${totals.vatToPay >= 0 ? "text-red-600" : "text-green-700"}`}>{fmt(totals.vatToPay)}</td>
                       <td className="p-2 text-right">
                         <span className={totals.profit >= 0 ? "text-green-700" : "text-red-700"}>
                           {totals.profit >= 0 ? "+" : ""}{fmt(totals.profit)}
                         </span>
-                        {totals.hasForecast && <div className="text-[9px] font-normal text-muted-foreground italic">fecho prev.: {fmtCompact(totals.forecastProfit)}</div>}
+                        {totals.hasForecast && <div className="text-[11px] font-normal text-muted-foreground italic">fecho prev.: {fmtCompact(totals.forecastProfit)}</div>}
                       </td>
                     </tr>
                   </tbody>
