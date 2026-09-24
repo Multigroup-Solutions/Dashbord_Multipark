@@ -31,7 +31,7 @@ import {
   Search, Plus, Clock, User, Car,
   ChevronRight, ChevronLeft, Send, Eye, Trash2, Upload, Pencil,
   BarChart3, AlertCircle, CheckCircle2, Hourglass, XCircle,
-  Package, DollarSign, Smartphone, Shirt, FileText, Glasses,
+  Package, Euro, Smartphone, Shirt, FileText, Glasses,
   HelpCircle, TrendingUp, ShieldAlert, Flag, Mail, Download, Truck, GripVertical, MessageSquareWarning, RefreshCw, ExternalLink } from "lucide-react";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { STATUS_CONFIG, TYPE_CONFIG, PRIORITY_CONFIG, KANBAN_COLUMNS, BASE_PATH, CHANGE_TYPE_CONFIG } from "./config";
@@ -158,18 +158,18 @@ export function KanbanView({ user, filterType, setFilterType, searchTerm, setSea
         {[
           { label: "Total", value: stats.total, icon: BarChart3, color: "text-foreground" },
           { label: "Novos", value: stats.new, icon: AlertCircle, color: "text-blue-600" },
-          { label: "Investigação", value: stats.investigating, icon: Hourglass, color: "text-yellow-600" },
-          { label: "Encontrados", value: stats.found, icon: Search, color: "text-emerald-600" },
-          { label: "Devolvidos", value: stats.returned, icon: CheckCircle2, color: "text-green-600" },
+          { label: "Investigação", value: stats.investigating, icon: Hourglass, color: "text-yellow-700" },
+          { label: "Encontrados", value: stats.found, icon: Search, color: "text-emerald-700" },
+          { label: "Devolvidos", value: stats.returned, icon: CheckCircle2, color: "text-green-700" },
           { label: "Fechados", value: stats.closed, icon: XCircle, color: "text-gray-600" },
           { label: "Alta Prioridade", value: stats.highPriority, icon: AlertCircle, color: "text-red-600" },
         ].map(s => (
-          <Card key={s.label} className="p-3">
-            <div className="flex items-center gap-2">
-              <s.icon className={`w-4 h-4 ${s.color}`} />
-              <span className="text-xs text-muted-foreground">{s.label}</span>
+          <Card key={s.label} className="p-3 gap-1 min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <s.icon className={`w-4 h-4 shrink-0 ${s.color}`} />
+              <span className="text-xs text-muted-foreground truncate">{s.label}</span>
             </div>
-            <p className={`text-xl font-bold mt-1 ${s.color}`}>{s.value}</p>
+            <p className={`text-xl font-bold tabular-nums truncate ${s.color}`}>{s.value}</p>
           </Card>
         ))}
       </div>
@@ -230,9 +230,9 @@ export function KanbanView({ user, filterType, setFilterType, searchTerm, setSea
                 }}
               >
                 <div className={`flex items-center gap-2 p-2 rounded-lg ${cfg.color} border`}>
-                  <cfg.icon className="w-4 h-4" />
-                  <span className="font-medium text-sm">{cfg.label}</span>
-                  <Badge variant="secondary" className="ml-auto text-xs">{colItems.length}</Badge>
+                  <cfg.icon className="w-4 h-4 shrink-0" />
+                  <span className="font-medium text-sm truncate">{cfg.label}</span>
+                  <Badge variant="secondary" className="ml-auto text-xs shrink-0 tabular-nums">{colItems.length}</Badge>
                 </div>
                 {/* div nativo: o ScrollArea (Radix) com max-h corta em vez de scrollar */}
                 <div className="max-h-[60vh] overflow-y-auto">
@@ -286,62 +286,64 @@ export function ItemCard({ item, onSelect, onMove, currentStatus }: any) {
       className={`cursor-grab active:cursor-grabbing hover:shadow-md transition-shadow ${stale ? "border-red-400 border-2" : ""}`}
     >
       <CardContent className="p-3 space-y-2">
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-1.5 min-w-0" onClick={onSelect}>
-            <GripVertical className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />
-            <TypeIcon className="w-4 h-4 text-amber-600" />
-            <span className="font-medium text-sm line-clamp-1">{item.description}</span>
+        <div className="flex items-start gap-2">
+          <div className="flex items-start gap-1.5 min-w-0" onClick={onSelect}>
+            <GripVertical className="h-3.5 w-3.5 mt-0.5 text-muted-foreground/40 shrink-0" />
+            <TypeIcon className="w-4 h-4 shrink-0 text-amber-700" />
+            <span className="font-medium text-sm leading-snug line-clamp-2 break-words" title={item.description ?? undefined}>{item.description}</span>
           </div>
-          <Badge className={`text-[10px] ${PRIORITY_CONFIG[item.priority]?.color}`}>
-            {PRIORITY_CONFIG[item.priority]?.label}
-          </Badge>
         </div>
         {ageDays >= 3 && (
-          <div className={`flex items-center gap-1 text-xs font-medium ${stale ? "text-red-600" : "text-amber-600"}`}>
-            <Clock className="w-3 h-3" /> Parado há {ageDays} dias
+          <div className={`flex items-center gap-1 text-xs font-medium ${stale ? "text-red-600" : "text-amber-700"}`}>
+            <Clock className="w-3 h-3 shrink-0" /> Parado há {ageDays} dias
           </div>
         )}
 
         {item.vehiclePlate && (
           <div className="flex items-center gap-1 text-xs text-muted-foreground">
-            <Car className="w-3 h-3" /> {item.vehiclePlate}
+            <Car className="w-3 h-3 shrink-0" /> {item.vehiclePlate}
           </div>
         )}
         {item.status === "converted" && (
-          <Badge variant="outline" className="text-[10px] text-violet-700 border-violet-300">
+          <Badge variant="outline" className="text-[11px] text-violet-700 border-violet-300">
             → {item.convertedToType === "complaint" ? "Reclamação" : item.convertedToType} #{item.convertedToId}
           </Badge>
         )}
-        {item.projectId == null && <Badge variant="outline" className="text-[10px] text-red-600 border-red-300">Sem cidade</Badge>}
-        {item.relatedComplaintId && <Badge variant="outline" className="text-[10px]">Reclamação #{item.relatedComplaintId}</Badge>}
+        {item.projectId == null && <Badge variant="outline" className="text-[11px] text-red-600 border-red-300">Sem cidade</Badge>}
+        {item.relatedComplaintId && <Badge variant="outline" className="text-[11px]">Reclamação #{item.relatedComplaintId}</Badge>}
 
-        <div className="flex items-center gap-1 text-xs text-muted-foreground">
-          <User className="w-3 h-3" /> <span className="truncate">{item.clientName}</span>
+        <div className="flex items-center gap-1 text-xs text-muted-foreground min-w-0">
+          <User className="w-3 h-3 shrink-0" /> <span className="truncate" title={item.clientName ?? undefined}>{item.clientName}</span>
         </div>
 
         {item.estimatedValue && (
-          <div className="flex items-center gap-1 text-xs text-amber-600 font-medium">
-            <DollarSign className="w-3 h-3" /> ~{item.estimatedValue}€
+          <div className="flex items-center gap-1 text-xs text-amber-800 font-medium tabular-nums min-w-0">
+            <Euro className="w-3 h-3 shrink-0" /> <span className="truncate">~{Number(item.estimatedValue).toLocaleString("pt-PT")} €</span>
           </div>
         )}
 
-        <div className="text-[10px] text-muted-foreground">
+        <div className="text-[11px] text-muted-foreground">
           {fmtPTDate(item.createdAt)}
         </div>
 
         <div className="flex items-center justify-between pt-1">
-          <span className="text-[10px] text-muted-foreground">#{item.id}</span>
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-[11px] text-muted-foreground tabular-nums">#{item.id}</span>
+            <Badge className={`text-[11px] ${PRIORITY_CONFIG[item.priority]?.color}`}>
+              {PRIORITY_CONFIG[item.priority]?.label}
+            </Badge>
+          </div>
           <div className="flex gap-1">
             {canMoveLeft && (
-              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); onMove(item.id, KANBAN_COLUMNS[colIdx - 1]); }}>
+              <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Mover para a coluna anterior" onClick={(e) => { e.stopPropagation(); onMove(item.id, KANBAN_COLUMNS[colIdx - 1]); }}>
                 <ChevronLeft className="w-3 h-3" />
               </Button>
             )}
-            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onSelect}>
+            <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Ver detalhe" onClick={onSelect}>
               <Eye className="w-3 h-3" />
             </Button>
             {canMoveRight && (
-              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); onMove(item.id, KANBAN_COLUMNS[colIdx + 1]); }}>
+              <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Mover para a coluna seguinte" onClick={(e) => { e.stopPropagation(); onMove(item.id, KANBAN_COLUMNS[colIdx + 1]); }}>
                 <ChevronRight className="w-3 h-3" />
               </Button>
             )}

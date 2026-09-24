@@ -74,11 +74,11 @@ function ModuleRow({ row, userId, onSaved }: { row: Row; userId: number; onSaved
           {row.label}
         </p>
         <div className="flex flex-wrap items-center gap-1 mt-1">
-          <span className="text-[10px] text-muted-foreground">Papel:</span>
+          <span className="text-[11px] text-muted-foreground">Papel:</span>
           <GrantBadge g={row.roleDefault} tone="role" />
         </div>
         {row.override && (
-          <p className="text-[10px] text-muted-foreground mt-1">
+          <p className="text-[11px] text-muted-foreground mt-1">
             {row.override.expired ? "Override expirado" : "Override"}
             {row.override.grantedByName ? ` · por ${row.override.grantedByName}` : ""}
             {row.override.updatedAt ? ` · ${row.override.updatedAt.slice(0, 10)}` : ""}

@@ -107,7 +107,7 @@ export default function LegacyPermissionsPanel() {
                 <CardContent className="p-4">
                   <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
                     <div className="min-w-0 flex-1">
-                      <p className="font-semibold text-sm">{p.label} <code className="text-[10px] text-muted-foreground font-normal">{p.id}</code></p>
+                      <p className="font-semibold text-sm">{p.label} <code className="text-[11px] text-muted-foreground font-normal">{p.id}</code></p>
                       <p className="text-xs text-muted-foreground mt-0.5">{p.description}</p>
                       <p className="text-[11px] text-muted-foreground mt-1 italic">Sem override: {p.defaultBehavior}</p>
                     </div>

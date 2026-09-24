@@ -71,7 +71,7 @@ export function WhatsAppContextSheet({ conversationId, contactName, open, onOpen
             {b.licensePlate ? ` · ${b.licensePlate}` : ""}
             {b.parkName ? ` · ${b.parkName}` : ""}
           </div>
-          {b.status && <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{b.status}</div>}
+          {b.status && <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{b.status}</div>}
         </div>
         {isLinked ? (
           <Badge className="bg-green-600 text-white shrink-0">Ligada</Badge>

@@ -138,13 +138,18 @@ export default function RhDashboardPage({ onBack }: { onBack?: () => void } = {}
           </CardHeader>
           <CardContent className="pt-0 space-y-1">
             {pendingPenalties.map((row: any) => (
-              <div key={row.penalty.id} className="flex flex-wrap items-center gap-2 text-sm border-b last:border-0 py-1.5">
-                <span className="font-medium">{row.employee?.fullName ?? `#${row.penalty.employeeId}`}</span>
-                <span className="text-muted-foreground">{row.penalty.reason === "no_show_extra_dia" ? "Falta a extra" : row.penalty.reason}{row.penalty.notes ? ` · ${row.penalty.notes}` : ""}</span>
-                <span className="text-xs text-muted-foreground">{row.penalty.points} pt</span>
-                <div className="flex-1" />
-                <Button size="sm" variant="outline" disabled={reviewPenalty.isPending} onClick={() => reviewPenalty.mutate({ id: row.penalty.id, decision: "confirmed" })}>Confirmar falta</Button>
-                <Button size="sm" variant="ghost" disabled={reviewPenalty.isPending} onClick={() => reviewPenalty.mutate({ id: row.penalty.id, decision: "dismissed" })}>Justificada / não conta</Button>
+              <div key={row.penalty.id} className="flex flex-col gap-2 sm:flex-row sm:items-center text-sm border-b last:border-0 py-2">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline gap-2 min-w-0">
+                    <span className="font-medium truncate">{row.employee?.fullName ?? `#${row.penalty.employeeId}`}</span>
+                    <span className="shrink-0 text-xs font-semibold tabular-nums text-amber-800">{Number(row.penalty.points).toLocaleString("pt-PT")} pt</span>
+                  </div>
+                  <p className="text-muted-foreground line-clamp-2 break-words" title={row.penalty.notes ?? undefined}>{row.penalty.reason === "no_show_extra_dia" ? "Falta a extra" : row.penalty.reason}{row.penalty.notes ? ` · ${row.penalty.notes}` : ""}</p>
+                </div>
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                  <Button size="sm" variant="outline" disabled={reviewPenalty.isPending} onClick={() => reviewPenalty.mutate({ id: row.penalty.id, decision: "confirmed" })}>Confirmar falta</Button>
+                  <Button size="sm" variant="ghost" disabled={reviewPenalty.isPending} onClick={() => reviewPenalty.mutate({ id: row.penalty.id, decision: "dismissed" })}>Justificada / não conta</Button>
+                </div>
               </div>
             ))}
           </CardContent>
@@ -185,31 +190,31 @@ export default function RhDashboardPage({ onBack }: { onBack?: () => void } = {}
 
 function KpiRow({ t }: { t: ReturnType<any> }) {
   return (
-    <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-      <Card className="p-3">
-        <p className="text-[10px] text-muted-foreground uppercase">Pessoas</p>
-        <p className="text-xl font-bold">{t.count}</p>
+    <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3">
+      <Card className="p-3 gap-1 min-w-0">
+        <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Pessoas</p>
+        <p className="text-lg sm:text-xl font-bold tabular-nums truncate" title={String(t.count)}>{t.count}</p>
       </Card>
-      <Card className="p-3">
-        <p className="text-[10px] text-muted-foreground uppercase">Horas este mês</p>
-        <p className="text-xl font-bold">{Number(t.hours).toFixed(1)}h</p>
+      <Card className="p-3 gap-1 min-w-0">
+        <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Horas este mês</p>
+        <p className="text-lg sm:text-xl font-bold tabular-nums truncate">{Number(t.hours).toFixed(1)}h</p>
       </Card>
-      <Card className="p-3">
-        <p className="text-[10px] text-muted-foreground uppercase">Bruto</p>
-        <p className="text-xl font-bold text-primary">{fmt(t.bruto)}</p>
+      <Card className="p-3 gap-1 min-w-0">
+        <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Bruto</p>
+        <p className="text-lg sm:text-xl font-bold tabular-nums truncate text-primary" title={String(fmt(t.bruto))}>{fmt(t.bruto)}</p>
       </Card>
-      <Card className="p-3 bg-amber-50/30 border-amber-200">
-        <p className="text-[10px] text-amber-700 uppercase">Líq. est.</p>
-        <p className="text-xl font-bold text-amber-700">{fmt(t.liquido)}</p>
+      <Card className="p-3 gap-1 min-w-0 bg-amber-50/30 border-amber-200">
+        <p className="text-[11px] font-medium tracking-wide text-amber-700 uppercase">Líq. est.</p>
+        <p className="text-lg sm:text-xl font-bold tabular-nums truncate text-amber-700" title={String(fmt(t.liquido))}>{fmt(t.liquido)}</p>
       </Card>
-      <Card className="p-3 bg-yellow-50/30 border-yellow-200">
-        <p className="text-[10px] text-yellow-700 uppercase">Atenção</p>
-        <p className="text-xl font-bold text-yellow-700">{t.yellowFlags}</p>
+      <Card className="p-3 gap-1 min-w-0 bg-yellow-50/30 border-yellow-200">
+        <p className="text-[11px] font-medium tracking-wide text-yellow-700 uppercase">Atenção</p>
+        <p className="text-lg sm:text-xl font-bold tabular-nums truncate text-yellow-700" title={String(t.yellowFlags)}>{t.yellowFlags}</p>
       </Card>
-      <Card className="p-3 bg-red-50/30 border-red-200">
-        <p className="text-[10px] text-red-700 uppercase">Bloqueados (acesso)</p>
-        <p className="text-xl font-bold text-red-700">{t.blocked}</p>
-        {t.redFlags > t.blocked && <p className="text-[10px] text-red-700">{t.redFlags - t.blocked} com 3+ pontos por rever</p>}
+      <Card className="p-3 gap-1 min-w-0 bg-red-50/30 border-red-200">
+        <p className="text-[11px] font-medium tracking-wide text-red-700 uppercase">Bloqueados (acesso)</p>
+        <p className="text-lg sm:text-xl font-bold tabular-nums truncate text-red-700" title={String(t.blocked)}>{t.blocked}</p>
+        {t.redFlags > t.blocked && <p className="text-[11px] font-medium tracking-wide text-red-700">{t.redFlags - t.blocked} com 3+ pontos por rever</p>}
       </Card>
     </div>
   );
@@ -244,27 +249,27 @@ function DashboardTable({ rows, extra = false }: { rows: any[]; extra?: boolean 
                 const bg = r.severity === "red" ? "bg-red-50/50" : r.severity === "yellow" ? "bg-yellow-50/40" : "";
                 return (
                   <tr key={r.employeeId} className={`border-b hover:bg-muted/30 ${bg}`}>
-                    <td className="p-2 font-medium">{r.fullName}</td>
-                    <td className="p-2 text-xs text-muted-foreground">{r.projectName ?? r.department ?? "—"}</td>
-                    <td className="p-2 text-right tabular-nums">{Number(r.currentMonth.totalHours).toFixed(1)}</td>
-                    <td className="p-2 text-right tabular-nums">{r.currentMonth.daysWorked}</td>
-                    <td className="p-2 text-right tabular-nums">{fmt(r.currentMonth.totalPayment)}</td>
-                    <td className="p-2 text-right tabular-nums text-amber-700">{fmt(r.currentMonth.netEstimate)}</td>
-                    <td className="p-2 text-right tabular-nums">{fmt(r.totalReceivedLookback)}</td>
-                    <td className="p-2 text-right tabular-nums text-emerald-700">{r.totalPaidLookback ? fmt(r.totalPaidLookback) : "—"}</td>
-                    <td className="p-2 text-right tabular-nums">{extra ? `${Number(r.avgPerHourLookback).toFixed(2)}€` : "—"}</td>
+                    <td className="p-2 font-medium min-w-[160px] max-w-[260px] truncate" title={r.fullName}>{r.fullName}</td>
+                    <td className="p-2 text-xs text-muted-foreground max-w-[200px] truncate" title={r.projectName ?? r.department ?? undefined}>{r.projectName ?? r.department ?? "—"}</td>
+                    <td className="p-2 text-right tabular-nums whitespace-nowrap">{Number(r.currentMonth.totalHours).toFixed(1)}</td>
+                    <td className="p-2 text-right tabular-nums whitespace-nowrap">{r.currentMonth.daysWorked}</td>
+                    <td className="p-2 text-right tabular-nums whitespace-nowrap">{fmt(r.currentMonth.totalPayment)}</td>
+                    <td className="p-2 text-right tabular-nums whitespace-nowrap text-amber-700">{fmt(r.currentMonth.netEstimate)}</td>
+                    <td className="p-2 text-right tabular-nums whitespace-nowrap">{fmt(r.totalReceivedLookback)}</td>
+                    <td className="p-2 text-right tabular-nums whitespace-nowrap text-emerald-700">{r.totalPaidLookback ? fmt(r.totalPaidLookback) : "—"}</td>
+                    <td className="p-2 text-right tabular-nums whitespace-nowrap">{extra ? `${Number(r.avgPerHourLookback).toFixed(2)}€` : "—"}</td>
                     <td className="p-2 text-center">
                       {r.severity === "red" && (
-                        <Badge variant="destructive" className="text-[10px] gap-1">
+                        <Badge variant="destructive" className="text-[11px] gap-1 whitespace-nowrap">
                           <AlertTriangle className="w-3 h-3" /> {r.openPenaltyPoints} pt
                         </Badge>
                       )}
                       {r.severity === "yellow" && (
-                        <Badge className="text-[10px] gap-1 bg-yellow-100 text-yellow-800 border-yellow-300">
+                        <Badge className="text-[11px] gap-1 whitespace-nowrap bg-yellow-100 text-yellow-800 border-yellow-300">
                           <AlertTriangle className="w-3 h-3" /> {r.openPenaltyPoints} pt
                         </Badge>
                       )}
-                      {r.severity === "ok" && <span className="text-[10px] text-muted-foreground">—</span>}
+                      {r.severity === "ok" && <span className="text-xs text-muted-foreground">—</span>}
                     </td>
                   </tr>
                 );

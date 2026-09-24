@@ -59,7 +59,7 @@ export function LostFoundReservationPreview({ bookingId }: { bookingId: string }
         return (
           <div key={h.id} className="flex items-center justify-between text-xs p-1.5 rounded bg-muted">
             <div className="flex items-center gap-1.5">
-              <Badge className={`${cfg.color} text-[10px] px-1`}>{cfg.label}</Badge>
+              <Badge className={`${cfg.color} text-[11px] px-1`}>{cfg.label}</Badge>
               <span>{h.user?.firstName || h.agentName || "Sistema"} {h.user?.lastName || ""}</span>
             </div>
             <span className="text-muted-foreground">{h.actionTime ? fmtPTDateTime(h.actionTime) : "—"}</span>

@@ -152,7 +152,7 @@ export function QuizTab({ isAdmin }: { isAdmin: boolean }) {
                 {(ranking as any[]).slice(0, 10).map((r, i) => (
                   <div key={r.employeeId} className="flex items-center justify-between p-2 rounded-lg bg-accent/30 gap-2">
                     <div className="flex items-center gap-3 min-w-0">
-                      <span className={`font-bold text-lg ${i === 0 ? "text-amber-500" : i === 1 ? "text-gray-400" : i === 2 ? "text-amber-700" : "text-muted-foreground"}`}>#{i + 1}</span>
+                      <span className={`font-bold text-lg ${i === 0 ? "text-amber-600" : i === 1 ? "text-gray-500" : i === 2 ? "text-amber-700" : "text-muted-foreground"}`}>#{i + 1}</span>
                       <span className="font-medium truncate">{nameMap.get(r.employeeId) ?? r.name ?? "—"}</span>
                     </div>
                     <div className="flex items-center gap-3 shrink-0">

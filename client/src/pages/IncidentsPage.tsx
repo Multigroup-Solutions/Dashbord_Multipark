@@ -308,7 +308,7 @@ export default function IncidentsPage() {
               onClick={() => setActiveTab(t.id)}
             >
               {t.label}
-              <Badge variant="secondary" className="ml-1.5 text-[10px] px-1">{tabCounts[t.id] ?? 0}</Badge>
+              <Badge variant="secondary" className="ml-1.5 text-[11px] px-1 tabular-nums">{tabCounts[t.id] ?? 0}</Badge>
             </Button>
           ))}
         </div>
@@ -332,15 +332,15 @@ export default function IncidentsPage() {
                   onClick={() => setDetailId(inc.id)}
                 >
                   <CardContent className="p-4">
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex-1 space-y-1">
+                    <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 sm:gap-4">
+                      <div className="flex-1 min-w-0 space-y-1">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="font-medium">{TYPE_CONFIG[inc.incidentType] || inc.incidentType}</span>
                           {categoryOf(inc) === "acidente" && <Badge className="bg-red-600 text-white">⚠ Acidente</Badge>}
                           {categoryOf(inc) === "reclamacao" && <Badge className="bg-amber-100 text-amber-800">Cliente reclamou</Badge>}
                           <Badge className={STATUS_CONFIG[inc.status]?.color}>{STATUS_CONFIG[inc.status]?.label}</Badge>
                           <Badge className={SEVERITY_CONFIG[inc.severity]?.color}>{SEVERITY_CONFIG[inc.severity]?.label}</Badge>
-                          {overdue && <Badge className="bg-red-500 text-white">Fora do prazo</Badge>}
+                          {overdue && <Badge className="bg-red-600 text-white">Fora do prazo</Badge>}
                           {inc.projectId == null && inc.status !== "converted" && <Badge variant="outline" className="text-red-600 border-red-300">Sem cidade</Badge>}
                           {inc.employeeId && !inc.driverConfirmed && inc.status !== "dismissed" && inc.status !== "converted" && (
                             <Badge variant="outline" className="text-amber-700 border-amber-300">Condutor por confirmar</Badge>
@@ -350,23 +350,23 @@ export default function IncidentsPage() {
                           )}
                           {(inc as any).sourceEmailId && <Badge variant="outline" className="text-xs"><Bot className="w-3 h-3 mr-1" />Gmail</Badge>}
                         </div>
-                        <p className="text-sm text-muted-foreground">{inc.description}</p>
+                        <p className="text-sm text-muted-foreground line-clamp-3 break-words">{inc.description}</p>
                         {(inc as any).aiClassification && (
-                          <p className="text-xs text-blue-600 flex items-center gap-1"><Bot className="w-3 h-3" /> IA: {(inc as any).aiClassification}</p>
+                          <p className="text-xs text-blue-700 flex items-center gap-1"><Bot className="w-3 h-3 shrink-0" /> <span className="line-clamp-2 break-words">IA: {(inc as any).aiClassification}</span></p>
                         )}
-                        <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                        <div className="flex items-center gap-x-4 gap-y-1 flex-wrap text-xs text-muted-foreground">
                           {inc.vehiclePlate && <span className="flex items-center gap-1"><Car className="w-3 h-3" /> {inc.vehiclePlate}</span>}
                           {inc.employeeId && <span className="flex items-center gap-1"><User className="w-3 h-3" /> {employeeMap.get(inc.employeeId) || `#${inc.employeeId}`}</span>}
                           <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> {fmtPTDateTime(inc.createdAt)}</span>
                           {(inc as any).gpsLatitude && (inc as any).gpsLongitude && (
-                            <a href={`https://www.google.com/maps?q=${(inc as any).gpsLatitude},${(inc as any).gpsLongitude}`} target="_blank" rel="noopener" className="flex items-center gap-1 text-blue-500 hover:underline">
+                            <a href={`https://www.google.com/maps?q=${(inc as any).gpsLatitude},${(inc as any).gpsLongitude}`} target="_blank" rel="noopener" className="flex items-center gap-1 text-blue-700 hover:underline">
                               <MapPin className="w-3 h-3" /> Ver no mapa
                             </a>
                           )}
                         </div>
                         {inc.resolution && <p className="text-xs text-green-700 mt-1">Resolução: {inc.resolution}</p>}
                       </div>
-                      <div className="flex gap-1 flex-wrap justify-end" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex gap-1 flex-wrap sm:justify-end shrink-0" onClick={(e) => e.stopPropagation()}>
                         {inc.projectId == null && inc.status !== "converted" && cities.length > 0 && (
                           <AssignCitySelect incidentId={inc.id} cities={cities} />
                         )}
@@ -542,7 +542,7 @@ function IncidentDetailDialog({ id, user, cities, employeeMap, onClose, onEdit }
               </button>
             )}
             {(inc as any).gpsLatitude && (inc as any).gpsLongitude && (
-              <a href={`https://www.google.com/maps?q=${(inc as any).gpsLatitude},${(inc as any).gpsLongitude}`} target="_blank" rel="noopener" className="text-blue-500 hover:underline"><MapPin className="w-3 h-3 inline mr-1" />Ver no mapa</a>
+              <a href={`https://www.google.com/maps?q=${(inc as any).gpsLatitude},${(inc as any).gpsLongitude}`} target="_blank" rel="noopener" className="text-blue-700 hover:underline"><MapPin className="w-3 h-3 inline mr-1" />Ver no mapa</a>
             )}
           </div>
 
@@ -555,7 +555,7 @@ function IncidentDetailDialog({ id, user, cities, employeeMap, onClose, onEdit }
                 <div>Cliente: <span className="font-medium">{peek.clientName || "—"}</span></div>
                 <div>Estadia: <span className="font-medium">{peek.checkIn ? fmtPTDate(peek.checkIn) : "—"} → {peek.checkOut ? fmtPTDate(peek.checkOut) : "—"}</span></div>
               </div>
-              <p className="text-[10px] text-muted-foreground">Ao mover para Reclamações/Perdidos, esta reserva e o cliente são ligados automaticamente.</p>
+              <p className="text-[11px] text-muted-foreground">Ao mover para Reclamações/Perdidos, esta reserva e o cliente são ligados automaticamente.</p>
             </div>
           )}
 
@@ -583,7 +583,7 @@ function IncidentDetailDialog({ id, user, cities, employeeMap, onClose, onEdit }
           )}
           {openStates && (
             <Button
-              size="sm" className="bg-green-600 hover:bg-green-700 text-white"
+              size="sm" className="bg-green-700 hover:bg-green-800 text-white"
               disabled={updateMut.isPending}
               title="Ocorrência vista e aceite — fica resolvida"
               onClick={() => updateMut.mutate({ id, status: "resolved", resolution: inc.resolution ? undefined : "Aceite" }, { onSuccess: () => { toast.success("Ocorrência aceite e resolvida"); onClose(); } })}

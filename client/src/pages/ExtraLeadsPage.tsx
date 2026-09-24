@@ -310,7 +310,7 @@ export default function ExtraLeadsPage() {
             Contactos que ainda não são extras. Convida-os com o template “{template.label}” e acompanha quem responde.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button
             variant="outline"
             className="border-green-600 text-green-700 hover:bg-green-50 dark:hover:bg-green-950"
@@ -357,9 +357,9 @@ export default function ExtraLeadsPage() {
                   const stage = prev ? pct(v, f.totals[prev]) : null;
                   const overall = k !== "created" ? pct(v, f.totals.created) : null;
                   return (
-                    <div key={k} className="rounded-md border p-2">
+                    <div key={k} className="rounded-md border p-2 min-w-0">
                       <div className="text-xs text-muted-foreground">{label}</div>
-                      <div className="text-xl font-semibold tabular-nums">{v}</div>
+                      <div className="text-xl font-semibold tabular-nums truncate" title={String(v)}>{v}</div>
                       {prev && (
                         <div className="text-[11px] text-muted-foreground tabular-nums">
                           {stage != null ? `${stage}% da etapa anterior` : "—"}
@@ -386,7 +386,7 @@ export default function ExtraLeadsPage() {
                     {f.bySource.map((r) => (
                       <tr key={r.source} className="border-b last:border-0">
                         <td className="py-1 px-2">
-                          <Badge variant="outline" className={`text-[10px] ${SOURCE_BADGE[r.source] ?? ""}`}>{LEAD_SOURCE_LABELS[r.source] ?? r.source}</Badge>
+                          <Badge variant="outline" className={`text-[11px] max-w-[20rem] ${SOURCE_BADGE[r.source] ?? ""}`} title={LEAD_SOURCE_LABELS[r.source] ?? r.source}><span className="truncate">{LEAD_SOURCE_LABELS[r.source] ?? r.source}</span></Badge>
                         </td>
                         <td className="text-right py-1 px-2 tabular-nums">{r.created}</td>
                         <td className="text-right py-1 px-2 tabular-nums">{r.contacted}</td>
@@ -458,7 +458,7 @@ export default function ExtraLeadsPage() {
               <X className="h-3.5 w-3.5 mr-1" /> Limpar
             </Button>
           )}
-          <span className="text-xs text-muted-foreground">
+          <span className="text-xs text-amber-900 dark:text-amber-200">
             Os contactados sem resposta recebem 1 lembrete automático (máx. {LEAD_SLA.maxSends} envios por lead).
           </span>
         </div>
@@ -474,10 +474,10 @@ export default function ExtraLeadsPage() {
               </span>
             </CardTitle>
             <div className="flex items-center gap-2 flex-wrap">
-              <div className="relative">
+              <div className="relative w-full sm:w-auto">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
                 <Input
-                  className="h-9 pl-8 pr-8 w-64"
+                  className="h-9 pl-8 pr-8 w-full sm:w-64"
                   placeholder="Pesquisar nome, número ou email…"
                   aria-label="Pesquisar leads"
                   value={search}
@@ -490,7 +490,7 @@ export default function ExtraLeadsPage() {
                 )}
               </div>
               <Select value={sourceFilter} onValueChange={(v) => { setSourceFilter(v); clearSelection(); }}>
-                <SelectTrigger className="h-9 w-36 text-xs" aria-label="Filtrar por origem">
+                <SelectTrigger className="h-9 w-40 text-xs" aria-label="Filtrar por origem">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -600,7 +600,7 @@ export default function ExtraLeadsPage() {
                     <th className="text-left py-2 px-2">Email</th>
                     <th className="text-left py-2 px-2">Cidade</th>
                     <th className="text-left py-2 px-2">Estado</th>
-                    <th className="text-left py-2 px-2">Último contacto</th>
+                    <th className="text-left py-2 px-2 whitespace-nowrap">Último contacto</th>
                     <th className="text-left py-2 px-2">Notas</th>
                     <th className="text-right py-2 px-2">Ações</th>
                   </tr>
@@ -625,11 +625,11 @@ export default function ExtraLeadsPage() {
                             }
                           />
                         </td>
-                        <td className="py-2 px-2">
-                          <div className="font-medium">{l.fullName}</div>
-                          <div className="flex items-center gap-1 mt-0.5">
-                            <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${SOURCE_BADGE[l.source] ?? ""}`}>
-                              {LEAD_SOURCE_LABELS[l.source] ?? l.source}
+                        <td className="py-2 px-2 min-w-[10rem] max-w-[16rem]">
+                          <div className="font-medium line-clamp-2 break-words" title={l.fullName}>{l.fullName}</div>
+                          <div className="flex items-center gap-1 mt-0.5 min-w-0">
+                            <Badge variant="outline" className={`text-[11px] px-1.5 py-0 max-w-full ${SOURCE_BADGE[l.source] ?? ""}`} title={LEAD_SOURCE_LABELS[l.source] ?? l.source}>
+                              <span className="truncate">{LEAD_SOURCE_LABELS[l.source] ?? l.source}</span>
                             </Badge>
                             {attentionById.get(l.id) && (
                               <span title={ATTENTION_LABEL[attentionById.get(l.id)!]}>
@@ -645,16 +645,16 @@ export default function ExtraLeadsPage() {
                           {l.phone ? (
                             <span className="inline-flex items-center gap-1">
                               <Phone className="h-3 w-3 text-muted-foreground" />{l.phone}
-                              {!l.phoneE164 && <Badge variant="outline" className="ml-1 text-[10px] border-amber-300 text-amber-700">inválido</Badge>}
+                              {!l.phoneE164 && <Badge variant="outline" className="ml-1 text-[11px] border-amber-300 text-amber-700">inválido</Badge>}
                             </span>
                           ) : (
                             <span className="text-muted-foreground">—</span>
                           )}
                         </td>
-                        <td className="py-2 px-2 break-all">
+                        <td className="py-2 px-2 max-w-[14rem]">
                           {l.email ? (
-                            <a href={`mailto:${l.email}`} className="inline-flex items-center gap-1 hover:underline">
-                              <Mail className="h-3 w-3 text-muted-foreground" />{l.email}
+                            <a href={`mailto:${l.email}`} className="flex items-center gap-1 min-w-0 hover:underline" title={l.email}>
+                              <Mail className="h-3 w-3 shrink-0 text-muted-foreground" /><span className="truncate">{l.email}</span>
                             </a>
                           ) : (
                             <span className="text-muted-foreground">—</span>

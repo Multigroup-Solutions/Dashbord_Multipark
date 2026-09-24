@@ -48,7 +48,7 @@ export function MatchesPanel({ item, canEdit }: { item: any; canEdit: boolean })
       <CardHeader className="pb-2">
         <CardTitle className="text-base flex items-center gap-2 flex-wrap">
           <Link2 className="w-4 h-4 text-violet-600" /> Possíveis correspondências
-          <Badge variant="outline" className="text-[10px]">{side === "lost" ? "objetos encontrados" : "perdidos reportados"}</Badge>
+          <Badge variant="outline" className="text-[11px]">{side === "lost" ? "objetos encontrados" : "perdidos reportados"}</Badge>
           {canEdit && (
             <Button size="sm" variant="ghost" className="ml-auto h-7 px-2 text-xs" disabled={recompute.isPending} onClick={() => recompute.mutate({ id: item.id })}>
               <RefreshCw className={`w-3.5 h-3.5 mr-1 ${recompute.isPending ? "animate-spin" : ""}`} /> Procurar
@@ -61,11 +61,11 @@ export function MatchesPanel({ item, canEdit }: { item: any; canEdit: boolean })
         {rows.map((m) => (
           <div key={m.id} className="rounded-md border p-2 space-y-1.5">
             <div className="flex items-center gap-1.5 flex-wrap text-sm">
-              <Badge className={`${scoreCls(m.score)} text-[10px]`} title={m.aiScore != null ? `IA ${m.aiScore} · filtro ${m.prefilterScore}` : `Filtro ${m.prefilterScore} (sem IA)`}>{m.score}%</Badge>
+              <Badge className={`${scoreCls(m.score)} text-[11px]`} title={m.aiScore != null ? `IA ${m.aiScore} · filtro ${m.prefilterScore}` : `Filtro ${m.prefilterScore} (sem IA)`}>{m.score}%</Badge>
               <span className="font-medium">#{m.otherId}</span>
               <span className="text-xs text-muted-foreground">{TYPE_CONFIG[m.other.itemType]?.label ?? m.other.itemType}</span>
               {m.other.createdAt && <span className="text-xs text-muted-foreground">· {fmtPTDate(m.other.createdAt)}</span>}
-              {m.status === "confirmed" && <Badge className="bg-emerald-100 text-emerald-800 text-[10px]">confirmada</Badge>}
+              {m.status === "confirmed" && <Badge className="bg-emerald-100 text-emerald-800 text-[11px]">confirmada</Badge>}
             </div>
             <p className="text-xs line-clamp-3 break-words">{m.other.description}</p>
             {m.reason && <p className="text-[11px] text-muted-foreground break-words">{m.reason}</p>}
@@ -86,7 +86,7 @@ export function MatchesPanel({ item, canEdit }: { item: any; canEdit: boolean })
             </div>
           </div>
         ))}
-        <p className="text-[10px] text-muted-foreground">Contactar o cliente é sempre feito por uma pessoa.</p>
+        <p className="text-[11px] text-muted-foreground">Contactar o cliente é sempre feito por uma pessoa.</p>
       </CardContent>
     </Card>
   );

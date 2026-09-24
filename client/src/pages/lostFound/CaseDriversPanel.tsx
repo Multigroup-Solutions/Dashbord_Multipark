@@ -83,13 +83,13 @@ export function CaseDriversPanel({ itemId, agents, employees, role }: {
             <div className="min-w-0 flex-1">
               <span className="font-medium">{a.driverName}</span>
               {a.movementDate && <span className="text-xs text-muted-foreground ml-2">{a.movementDate}</span>}
-              {a.source === "history" && <Badge variant="outline" className="ml-2 text-[10px]">do carro</Badge>}
+              {a.source === "history" && <Badge variant="outline" className="ml-2 text-[11px]">do carro</Badge>}
               {a.points > 0 && (
-                <Badge variant="outline" className={`ml-2 text-[10px] ${a.pointsConfirmed ? "text-red-700 border-red-300" : "text-amber-700 border-amber-300"}`}>
+                <Badge variant="outline" className={`ml-2 text-[11px] ${a.pointsConfirmed ? "text-red-700 border-red-300" : "text-amber-700 border-amber-300"}`}>
                   {a.points} pts {a.pointsConfirmed ? "confirmados" : "pendentes"}
                 </Badge>
               )}
-              {a.costAmount != null && <Badge variant="outline" className="ml-2 text-[10px]">custo {Number(a.costAmount).toLocaleString("pt-PT", { style: "currency", currency: "EUR" })}</Badge>}
+              {a.costAmount != null && <Badge variant="outline" className="ml-2 text-[11px]">custo {Number(a.costAmount).toLocaleString("pt-PT", { style: "currency", currency: "EUR" })}</Badge>}
               {a.movementsSummary && <p className="text-xs text-muted-foreground">{a.movementsSummary}</p>}
               {a.notes && <p className="text-xs">{a.notes}</p>}
               {isLeader && (
@@ -121,7 +121,7 @@ export function CaseDriversPanel({ itemId, agents, employees, role }: {
                   <div key={i} className="flex items-center justify-between gap-2">
                     <span className="truncate text-xs">
                       <span className="font-medium">{ag.agentName}</span> · {summary}
-                      {ag.flagged ? <Badge variant="outline" className="ml-1 text-[10px] text-red-600 border-red-300">tocou nesta reserva</Badge> : null}
+                      {ag.flagged ? <Badge variant="outline" className="ml-1 text-[11px] text-red-600 border-red-300">tocou nesta reserva</Badge> : null}
                     </span>
                     <Button size="sm" variant="outline" className="h-7 shrink-0" disabled={linked || attach.isPending}
                       onClick={() => attach.mutate({ itemId, driverName: ag.agentName, source: "history", movementDate: ag.lastActionAt ? String(ag.lastActionAt).slice(0, 10) : null, movementsSummary: summary })}>
@@ -169,8 +169,8 @@ function AccountabilityRow({ link, onSave, saving }: { link: any; onSave: (costA
   const locked = !!link.pointsConfirmed;
   return (
     <div className="flex flex-wrap items-end gap-2 mt-1">
-      <div><Label className="text-[10px]">Custo (€)</Label><Input className="h-7 w-24" type="number" min={0} step="0.01" value={cost} onChange={e => setCost(e.target.value)} /></div>
-      <div><Label className="text-[10px]">Pontos</Label><Input className="h-7 w-16" type="number" min={0} max={20} value={points} disabled={locked} onChange={e => setPoints(e.target.value)} /></div>
+      <div><Label className="text-[11px]">Custo (€)</Label><Input className="h-7 w-24" type="number" min={0} step="0.01" value={cost} onChange={e => setCost(e.target.value)} /></div>
+      <div><Label className="text-[11px]">Pontos</Label><Input className="h-7 w-16" type="number" min={0} max={20} value={points} disabled={locked} onChange={e => setPoints(e.target.value)} /></div>
       <Button size="sm" variant="outline" className="h-7 text-xs" disabled={saving} onClick={() => onSave(cost === "" ? null : Number(cost), Math.max(0, Math.trunc(Number(points) || 0)))}>Guardar</Button>
     </div>
   );

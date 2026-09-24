@@ -154,33 +154,33 @@ export default function AvaliacaoOperacionalPage() {
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-              <div>
+              <div className="min-w-0">
                 <div className="text-xs text-muted-foreground">Ações ponderadas (pts)</div>
-                <div className="text-xl md:text-2xl font-bold truncate">{fmtNum(evaluation.totals.weightedActions, 1)}</div>
-                <div className="text-[10px] text-muted-foreground mt-0.5">movimento +2 · recolha/entrega +3 · levar ao parque +5</div>
+                <div className="text-xl md:text-2xl font-bold tabular-nums truncate">{fmtNum(evaluation.totals.weightedActions, 1)}</div>
+                <div className="text-[11px] text-muted-foreground mt-0.5">movimento +2 · recolha/entrega +3 · levar ao parque +5</div>
               </div>
-              <div>
+              <div className="min-w-0">
                 <div className="text-xs text-muted-foreground">Acções totais</div>
-                <div className="text-xl md:text-2xl font-bold truncate">{evaluation.totals.totalActions}</div>
-                <div className="text-[10px] text-muted-foreground mt-0.5 flex flex-wrap gap-1">
+                <div className="text-xl md:text-2xl font-bold tabular-nums truncate">{evaluation.totals.totalActions}</div>
+                <div className="text-[11px] text-muted-foreground mt-0.5 flex flex-wrap gap-1">
                   {Object.entries(evaluation.totals.byType).map(([k, v]) => (
                     <span key={k}>{k}: {v}</span>
                   ))}
                 </div>
               </div>
-              <div>
+              <div className="min-w-0">
                 <div className="text-xs text-muted-foreground">Custo total</div>
-                <div className="text-xl md:text-2xl font-bold truncate">{fmtEur(evaluation.totals.totalCost)}</div>
+                <div className="text-xl md:text-2xl font-bold tabular-nums truncate">{fmtEur(evaluation.totals.totalCost)}</div>
               </div>
-              <div>
+              <div className="min-w-0">
                 <div className="text-xs text-muted-foreground">€/acção</div>
-                <div className="text-xl md:text-2xl font-bold truncate">
+                <div className="text-xl md:text-2xl font-bold tabular-nums truncate">
                   {evaluation.totals.totalActions > 0 ? fmtEur(evaluation.totals.costPerAction) : "—"}
                 </div>
               </div>
-              <div>
+              <div className="min-w-0">
                 <div className="text-xs text-muted-foreground">Acções média/pessoa</div>
-                <div className="text-xl md:text-2xl font-bold truncate">
+                <div className="text-xl md:text-2xl font-bold tabular-nums truncate">
                   {evaluation.totals.people > 0
                     ? (evaluation.totals.totalActions / evaluation.totals.people).toFixed(1)
                     : "—"}
@@ -267,9 +267,9 @@ function ShiftSection({
                 )}
               </div>
             </div>
-            <div className="flex flex-wrap gap-1 text-[10px]">
+            <div className="flex flex-wrap gap-1 text-[11px]">
               {Object.entries(shiftEval.byType).map(([k, v]: any) => (
-                <Badge key={k} variant="secondary" className="text-[10px]">{k}: {v}</Badge>
+                <Badge key={k} variant="secondary" className="text-[11px]">{k}: {v}</Badge>
               ))}
             </div>
           </div>
@@ -404,29 +404,30 @@ function AgentCard({ assignment, date, metrics, onScore }: { assignment: any; da
   return (
     <Card className={assignment.isTeamLeader ? "border-amber-200 bg-amber-50/30" : ""}>
       <CardContent className="p-4 space-y-2">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-3 flex-1 min-w-0">
             <Button
               size="sm"
               variant="ghost"
-              className="h-7 w-7 p-0"
+              className="h-7 w-7 p-0 shrink-0"
+              aria-label={expanded ? "Esconder detalhe" : "Ver detalhe"}
               onClick={() => setExpanded(v => !v)}
             >
               {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
             </Button>
             <div className="min-w-0">
               <div className="font-semibold flex flex-wrap items-center gap-2">
-                <span className="truncate">{assignment.personName}</span>
+                <span className="truncate" title={assignment.personName}>{assignment.personName}</span>
                 {assignment.isTeamLeader && (
-                  <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-[10px]">TL</Badge>
+                  <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-[11px]">TL</Badge>
                 )}
                 {assignment.shift && (
-                  <Badge variant="outline" className="text-[10px]">
+                  <Badge variant="outline" className="text-[11px]">
                     {assignment.shift === "morning" ? "Manhã" : "Noite"}
                   </Badge>
                 )}
                 {!assignment.isTeamLeader && assignment.level && (
-                  <Badge variant="secondary" className="text-[10px]">{assignment.level}</Badge>
+                  <Badge variant="secondary" className="text-[11px]">{assignment.level}</Badge>
                 )}
               </div>
               <p className="text-xs text-muted-foreground">
@@ -468,9 +469,9 @@ function AgentCard({ assignment, date, metrics, onScore }: { assignment: any; da
                   <>
                     <span className="font-mono">{resolvedShortName}</span>
                     {assignment.multiparkAgentName ? (
-                      <Badge variant="outline" className="text-[9px]">manual</Badge>
+                      <Badge variant="outline" className="text-[11px]">manual</Badge>
                     ) : (
-                      <Badge variant="outline" className="text-[9px] text-muted-foreground">auto</Badge>
+                      <Badge variant="outline" className="text-[11px] text-muted-foreground">auto</Badge>
                     )}
                     {assignment.employeeId && (
                       <Button
@@ -487,13 +488,13 @@ function AgentCard({ assignment, date, metrics, onScore }: { assignment: any; da
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center justify-end gap-2 shrink-0 pl-10 sm:pl-0">
             {metrics && (
               <div className="text-right">
-                <div className="text-xl font-bold leading-none">{metrics.totalActions}</div>
-                <div className="text-[10px] text-muted-foreground">acções · {fmtNum(metrics.weightedActions)} pts</div>
+                <div className="text-xl font-bold leading-none tabular-nums">{metrics.totalActions}</div>
+                <div className="text-[11px] text-muted-foreground">acções · {fmtNum(metrics.weightedActions)} pts</div>
                 {metrics.totalActions > 0 && (
-                  <div className="text-[10px] text-muted-foreground mt-0.5">
+                  <div className="text-[11px] text-muted-foreground mt-0.5">
                     {fmtEur(metrics.costPerAction)}/acção
                     {metrics.actionsPerHour != null && <> · {fmtNum(metrics.actionsPerHour, 2)}/h</>}
                   </div>
@@ -508,7 +509,7 @@ function AgentCard({ assignment, date, metrics, onScore }: { assignment: any; da
                 onClick={() => onScore({ employeeId: metrics.employeeId ?? null, name: assignment.personName, person: metrics })}
               >
                 <div className="text-lg font-bold leading-none tabular-nums">{fmtPts(metrics.totalPoints)}</div>
-                <div className="text-[10px] text-muted-foreground">pontos{metrics.hasAdjustments ? " · ajust." : ""}</div>
+                <div className="text-[11px] text-muted-foreground">pontos{metrics.hasAdjustments ? " · ajust." : ""}</div>
               </button>
             )}
             <Button size="sm" variant="outline" onClick={handleFetch} disabled={fetchMut.isPending}>
@@ -526,7 +527,7 @@ function AgentCard({ assignment, date, metrics, onScore }: { assignment: any; da
         {metrics && metrics.totalActions > 0 && (
           <div className="text-xs flex flex-wrap gap-1 pl-9">
             {Object.entries(metrics.byType).map(([k, v]: any) => (
-              <Badge key={k} variant="outline" className="text-[10px]">
+              <Badge key={k} variant="outline" className="text-[11px]">
                 {k}: {v}
               </Badge>
             ))}
@@ -548,7 +549,7 @@ function AgentCard({ assignment, date, metrics, onScore }: { assignment: any; da
             </div>
             <div className="flex flex-wrap gap-1 mt-1">
               {Object.entries(metrics.teamAggregate.byType).map(([k, v]: any) => (
-                <Badge key={k} variant="secondary" className="text-[10px] bg-amber-200/60">
+                <Badge key={k} variant="secondary" className="text-[11px] bg-amber-200/60">
                   {k}: {v}
                 </Badge>
               ))}
@@ -575,7 +576,7 @@ function AgentCard({ assignment, date, metrics, onScore }: { assignment: any; da
                   <div className="overflow-x-auto max-h-96 overflow-y-auto">
                     <table className="w-full">
                       <thead>
-                        <tr className="text-[10px] uppercase text-muted-foreground border-b">
+                        <tr className="text-[11px] uppercase text-muted-foreground border-b">
                           <th className="text-left py-1 px-2">Hora</th>
                           <th className="text-left py-1 px-2">Acção</th>
                           <th className="text-left py-1 px-2">Reserva</th>
@@ -589,9 +590,9 @@ function AgentCard({ assignment, date, metrics, onScore }: { assignment: any; da
                               {fmtPTTime(it.actionTime)}
                             </td>
                             <td className="py-1 px-2">
-                              <Badge variant="outline" className="text-[10px]">{it.changeType ?? "?"}</Badge>
+                              <Badge variant="outline" className="text-[11px]">{it.changeType ?? "?"}</Badge>
                             </td>
-                            <td className="py-1 px-2 font-mono text-[10px] text-muted-foreground">
+                            <td className="py-1 px-2 font-mono text-[11px] text-muted-foreground">
                               {it.bookingExternalId.slice(0, 16)}…
                             </td>
                             <td className="py-1 px-2 text-muted-foreground">

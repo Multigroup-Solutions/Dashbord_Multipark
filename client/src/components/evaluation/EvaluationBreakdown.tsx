@@ -207,8 +207,8 @@ export function EmployeeEvaluationDetail({
                 <button type="button" className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-muted/40" onClick={() => setOpenDay(isOpen ? null : d.day)}>
                   {isOpen ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
                   <span className="font-medium tabular-nums">{fmtDay(d.day)}</span>
-                  {d.shift && <Badge variant="outline" className="text-[10px]">{SHIFT_LABEL[d.shift] ?? d.shift}</Badge>}
-                  {activeAdj > 0 && <Badge variant="secondary" className="text-[10px] bg-amber-100 text-amber-800">ajustado</Badge>}
+                  {d.shift && <Badge variant="outline" className="text-[11px]">{SHIFT_LABEL[d.shift] ?? d.shift}</Badge>}
+                  {activeAdj > 0 && <Badge variant="secondary" className="text-[11px] bg-amber-100 text-amber-800">ajustado</Badge>}
                   <span className="ml-auto text-xs text-muted-foreground tabular-nums hidden sm:inline">{d.metrics.actions} ações · {fmtNum(d.metrics.hoursWorked)} h</span>
                   <span className={`w-16 text-right font-semibold tabular-nums ${ptsClass(d.score.totalPoints)}`}>{fmtPts(d.score.totalPoints)}</span>
                 </button>
@@ -218,7 +218,7 @@ export function EmployeeEvaluationDetail({
                     <MetricsGrid metrics={d.metrics} base={d.base} hideZero />
                     {Object.keys(d.actionsByType ?? {}).length > 0 && (
                       <div className="flex flex-wrap gap-1">
-                        {Object.entries(d.actionsByType).map(([k, v]) => <Badge key={k} variant="outline" className="text-[10px]">{k}: {String(v)}</Badge>)}
+                        {Object.entries(d.actionsByType).map(([k, v]) => <Badge key={k} variant="outline" className="text-[11px]">{k}: {String(v)}</Badge>)}
                       </div>
                     )}
                     {d.adjustments.length > 0 && (
@@ -283,8 +283,8 @@ export function DisputeList({ disputes, onResolve }: { disputes: any[]; onResolv
           <div className="flex flex-wrap items-center gap-2">
             {d.employeeName && onResolve && <span className="font-medium">{d.employeeName}</span>}
             <span className="tabular-nums">{fmtDay(d.day)}</span>
-            {d.metric && <Badge variant="outline" className="text-[10px]">{METRIC_LABELS[d.metric as MetricKey] ?? d.metric}</Badge>}
-            <Badge className={`text-[10px] ${d.status === "open" ? "bg-amber-100 text-amber-800" : d.status === "accepted" ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}`} variant="secondary">
+            {d.metric && <Badge variant="outline" className="text-[11px]">{METRIC_LABELS[d.metric as MetricKey] ?? d.metric}</Badge>}
+            <Badge className={`text-[11px] ${d.status === "open" ? "bg-amber-100 text-amber-800" : d.status === "accepted" ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}`} variant="secondary">
               {DISPUTE_STATUS_LABELS[d.status as DisputeStatus] ?? d.status}
             </Badge>
             {onResolve && d.status === "open" && (

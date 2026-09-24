@@ -57,9 +57,9 @@ export default function WhoHasAccessPanel() {
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5">
                     <GrantBadge g={r.grant} tone={r.source === "override" ? "override" : "role"} />
-                    <Badge variant="secondary" className="text-[10px] font-normal">{r.source === "override" ? "override" : "papel"}</Badge>
-                    {r.override?.expiresOn && !r.overrideExpired && <span className="text-[10px] text-muted-foreground">até {r.override.expiresOn}</span>}
-                    {r.overrideExpired && <span className="text-[10px] text-muted-foreground">override expirado</span>}
+                    <Badge variant="secondary" className="text-[11px] font-normal">{r.source === "override" ? "override" : "papel"}</Badge>
+                    {r.override?.expiresOn && !r.overrideExpired && <span className="text-[11px] text-muted-foreground">até {r.override.expiresOn}</span>}
+                    {r.overrideExpired && <span className="text-[11px] text-muted-foreground">override expirado</span>}
                   </div>
                 </li>
               ))}

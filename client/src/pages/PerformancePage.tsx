@@ -158,10 +158,10 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Card className="p-3"><div className="flex items-center gap-2"><Clock className="w-4 h-4" /><span className="text-xs text-muted-foreground">Horas (ponto)</span></div><p className="text-xl font-bold mt-1">{fmtNum(totals.hours)} h</p></Card>
-        <Card className="p-3"><div className="flex items-center gap-2"><Zap className="w-4 h-4 text-blue-500" /><span className="text-xs text-muted-foreground">Ações</span></div><p className="text-xl font-bold mt-1">{totals.actions}</p></Card>
-        <Card className="p-3"><div className="flex items-center gap-2"><Zap className="w-4 h-4 text-amber-500" /><span className="text-xs text-muted-foreground">Custo</span></div><p className="text-xl font-bold mt-1">{fmtNum(totals.cost, 0)} €</p></Card>
-        <Card className="p-3"><div className="flex items-center gap-2"><Award className="w-4 h-4 text-yellow-500" /><span className="text-xs text-muted-foreground">Melhor</span></div><p className="text-sm font-bold mt-1 truncate">{top ? `${top.employeeName} (${fmtPts(top.score.totalPoints)})` : "—"}</p></Card>
+        <Card className="p-3 gap-1 min-w-0"><div className="flex items-center gap-2"><Clock className="w-4 h-4 shrink-0" /><span className="text-xs text-muted-foreground">Horas (ponto)</span></div><p className="text-xl font-bold tabular-nums truncate">{fmtNum(totals.hours)} h</p></Card>
+        <Card className="p-3 gap-1 min-w-0"><div className="flex items-center gap-2"><Zap className="w-4 h-4 shrink-0 text-blue-500" /><span className="text-xs text-muted-foreground">Ações</span></div><p className="text-xl font-bold tabular-nums truncate">{totals.actions}</p></Card>
+        <Card className="p-3 gap-1 min-w-0"><div className="flex items-center gap-2"><Zap className="w-4 h-4 shrink-0 text-amber-500" /><span className="text-xs text-muted-foreground">Custo</span></div><p className="text-xl font-bold tabular-nums truncate">{fmtNum(totals.cost, 0)} €</p></Card>
+        <Card className="p-3 gap-1 min-w-0"><div className="flex items-center gap-2"><Award className="w-4 h-4 shrink-0 text-yellow-600" /><span className="text-xs text-muted-foreground">Melhor</span></div>{top ? (<><p className="text-sm font-bold truncate" title={top.employeeName}>{top.employeeName}</p><p className="text-xs font-semibold tabular-nums text-muted-foreground">{fmtPts(top.score.totalPoints)} pts</p></>) : <p className="text-xl font-bold">—</p>}</Card>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -227,32 +227,32 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
                     return (
                       <tr key={r.employeeId} className={`border-b hover:bg-muted/50 ${pos <= 3 ? "bg-yellow-50/30" : ""}`}>
                         <td className="p-2 font-bold text-center">{pos === 1 ? "🥇" : pos === 2 ? "🥈" : pos === 3 ? "🥉" : pos}</td>
-                        <td className="p-2 font-medium">
+                        <td className="p-2 font-medium min-w-[160px]">
                           <button type="button" className="hover:underline text-left" title="Abrir ficha" onClick={() => openEmployee(r.employeeId)}>{r.employeeName}</button>
-                          <span className="block text-[10px] text-muted-foreground font-normal">
+                          <span className="block text-[11px] text-muted-foreground font-normal">
                             {r.days} dia(s){r.adjustments > 0 && " · ajustado"}{r.openDisputes > 0 && ` · ${r.openDisputes} contestação(ões)`}
                           </span>
                         </td>
                         {view === "totals" ? (
                           <>
-                            <td className="p-2 text-right tabular-nums">{fmtNum(m.hoursWorked)}</td>
-                            <td className="p-2 text-right tabular-nums">{m.actions}</td>
-                            <td className="p-2 text-right tabular-nums">{m.recolhas + m.entregas}</td>
-                            <td className="p-2 text-right tabular-nums">{m.movements}{m.parkingMoves > 0 && <span className="text-muted-foreground"> ({m.parkingMoves})</span>}</td>
-                            <td className="p-2 text-right tabular-nums">{m.delays || "—"}</td>
-                            <td className="p-2 text-right tabular-nums">{m.speedingEvents}/{m.complaints}/{m.accidents}</td>
+                            <td className="p-2 text-right tabular-nums whitespace-nowrap">{fmtNum(m.hoursWorked)}</td>
+                            <td className="p-2 text-right tabular-nums whitespace-nowrap">{m.actions}</td>
+                            <td className="p-2 text-right tabular-nums whitespace-nowrap">{m.recolhas + m.entregas}</td>
+                            <td className="p-2 text-right tabular-nums whitespace-nowrap">{m.movements}{m.parkingMoves > 0 && <span className="text-muted-foreground"> ({m.parkingMoves})</span>}</td>
+                            <td className="p-2 text-right tabular-nums whitespace-nowrap">{m.delays || "—"}</td>
+                            <td className="p-2 text-right tabular-nums whitespace-nowrap">{m.speedingEvents}/{m.complaints}/{m.accidents}</td>
                           </>
                         ) : (
                           <>
-                            <td className="p-2 text-right tabular-nums">{fmtNum(r.perHour.hours)}</td>
-                            <td className="p-2 text-right tabular-nums">{fmtNum(r.perHour.actionsPerHour, 2)}</td>
-                            <td className="p-2 text-right tabular-nums">{fmtNum(r.perHour.weightedPerHour, 2)}</td>
-                            <td className="p-2 text-right tabular-nums">{fmtNum(r.perHour.pointsPerHour, 2)}</td>
+                            <td className="p-2 text-right tabular-nums whitespace-nowrap">{fmtNum(r.perHour.hours)}</td>
+                            <td className="p-2 text-right tabular-nums whitespace-nowrap">{fmtNum(r.perHour.actionsPerHour, 2)}</td>
+                            <td className="p-2 text-right tabular-nums whitespace-nowrap">{fmtNum(r.perHour.weightedPerHour, 2)}</td>
+                            <td className="p-2 text-right tabular-nums whitespace-nowrap">{fmtNum(r.perHour.pointsPerHour, 2)}</td>
                           </>
                         )}
                         <td className="p-2 text-right">
                           <button type="button" title="Ver de onde vem a pontuação"
-                            className={`font-bold text-base tabular-nums underline decoration-dotted underline-offset-4 ${ptsClass(r.score.totalPoints)}`}
+                            className={`font-bold text-base tabular-nums whitespace-nowrap underline decoration-dotted underline-offset-4 ${ptsClass(r.score.totalPoints)}`}
                             onClick={() => setDrawer({ id: r.employeeId, name: r.employeeName })}>
                             {fmtPts(r.score.totalPoints)}
                           </button>
