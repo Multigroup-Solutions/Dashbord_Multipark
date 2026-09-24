@@ -55,6 +55,7 @@ import {
   Search,
   X,
   Pencil,
+  Wand2,
 } from "lucide-react";
 import { AvailabilityDayFields, isDayMarked, type AvailabilityDayState } from "@/components/AvailabilityDayFields";
 import {
@@ -520,6 +521,7 @@ function TeamSection({
   const upsert = trpc.extrasDia.upsertAssignment.useMutation({
     onSuccess: () => {
       utils.extrasDia.assignments.invalidate();
+      utils.extrasDia.coverage.invalidate();
       toast.success("Turno guardado");
     },
     onError: (e) => toast.error(e.message),
@@ -527,10 +529,40 @@ function TeamSection({
   const del = trpc.extrasDia.deleteAssignment.useMutation({
     onSuccess: () => {
       utils.extrasDia.assignments.invalidate();
+      utils.extrasDia.coverage.invalidate();
       toast.success("Turno removido");
     },
     onError: (e) => toast.error(e.message),
   });
+
+  // Automação: horas sem gente suficiente, avisos WhatsApp e preenchimento
+  const coverageQ = trpc.extrasDia.coverage.useQuery({ date: targetDate, city });
+  const noticesQ = trpc.extrasDia.notices.useQuery({ date: targetDate });
+  const autofill = trpc.extrasDia.autofill.useMutation({
+    onSuccess: (r) => {
+      utils.extrasDia.assignments.invalidate();
+      utils.extrasDia.coverage.invalidate();
+      if (r.created.length === 0 && r.unfilled.length === 0) toast.info("A escala já cobre a previsão deste turno.");
+      else if (r.unfilled.length === 0) toast.success(`${r.created.length} extra(s) escalado(s) com base na disponibilidade.`);
+      else toast.warning(`${r.created.length} escalado(s); faltam ${r.unfilled.length} turno(s) sem ninguém disponível.`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const notify = trpc.extrasDia.notify.useMutation({
+    onSuccess: (r) => {
+      utils.extrasDia.notices.invalidate();
+      if (r.sent === 0 && r.failed === 0) toast.info("Todos os escalados já tinham sido avisados.");
+      else if (r.failed === 0) toast.success(`${r.sent} aviso(s) enviado(s) por WhatsApp${r.rulesSent ? ` · ${r.rulesSent} com morada e regras` : ""}.`);
+      else toast.warning(`${r.sent} enviado(s), ${r.failed} falhado(s) — vê o motivo na linha de cada pessoa.`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const noticeByAssignment = useMemo(
+    () => new Map((noticesQ.data ?? []).map((n) => [n.assignmentId, n])),
+    [noticesQ.data],
+  );
+  const [shiftFrom, shiftTo] = shift === "morning" ? [3, 15] : [15, 27];
+  const gaps = (coverageQ.data ?? []).filter((g) => g.hour >= shiftFrom && g.hour < shiftTo);
 
   const allAssignments = assignmentsQuery.data ?? [];
   const allCandidates = candidatesQuery.data ?? [];
@@ -578,6 +610,24 @@ function TeamSection({
               <div className="text-lg font-bold">{fmtEur(totalCost)}</div>
               <div className="text-xs text-muted-foreground">{totalHours}h pagas</div>
             </div>
+            <Button
+              size="sm"
+              variant="outline"
+              title="Escala quem disse que está disponível, pelos turnos que a previsão sugere"
+              disabled={autofill.isPending}
+              onClick={() => autofill.mutate({ date: targetDate, city, shift })}
+            >
+              <Wand2 className="h-4 w-4 mr-1" /> {autofill.isPending ? "A preencher…" : "Preencher com disponíveis"}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              title="Envia o aviso de trabalho por WhatsApp a quem ainda não foi avisado (1.ª vez: também morada e regras)"
+              disabled={notify.isPending || assignments.length === 0}
+              onClick={() => notify.mutate({ date: targetDate, city })}
+            >
+              <MessageCircle className="h-4 w-4 mr-1" /> {notify.isPending ? "A avisar…" : "Avisar por WhatsApp"}
+            </Button>
             <Button size="sm" variant="default" onClick={() => setAdding(v => !v)}>
               <Plus className="h-4 w-4 mr-1" /> {adding ? "Cancelar" : "Adicionar"}
             </Button>
@@ -585,6 +635,17 @@ function TeamSection({
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
+        {gaps.length > 0 && (
+          <div className="rounded-md border border-red-300 bg-red-50/60 p-3 text-sm text-red-900 dark:bg-red-950/30 dark:text-red-200">
+            <div className="flex items-center gap-2 font-medium">
+              <AlertTriangle className="h-4 w-4" /> Faltam condutores em {gaps.length} hora(s) deste turno
+            </div>
+            <div className="mt-1 text-xs">
+              {gaps.slice(0, 8).map((g) => `${fmtHour(g.hour)}: precisas ${g.needed}, tens ${g.have}`).join(" · ")}
+              {gaps.length > 8 ? ` · e mais ${gaps.length - 8}` : ""}
+            </div>
+          </div>
+        )}
         {/* TL banner */}
         <div className="rounded-md border border-amber-300 bg-amber-50/60 p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -685,6 +746,7 @@ function TeamSection({
                   <AssignmentRow
                     key={a.id}
                     assignment={a}
+                    notice={noticeByAssignment.get(a.id) ?? null}
                     onSave={(payload) => upsert.mutate({ ...payload, id: a.id, city })}
                     onDelete={() => del.mutate({ id: a.id })}
                     busy={upsert.isPending || del.isPending}
@@ -903,12 +965,22 @@ function AssignmentForm({
   );
 }
 
+function NoticeBadge({ notice }: { notice: { status: string; confirmedAt: string | null; declinedAt: string | null; error: string | null } | null }) {
+  if (!notice) return null;
+  if (notice.declinedAt) return <Badge variant="destructive" className="text-[10px]" title="Respondeu que não pode">✗ não pode</Badge>;
+  if (notice.confirmedAt) return <Badge className="bg-emerald-600 text-[10px]" title="Confirmou pelo WhatsApp">✓ confirmou</Badge>;
+  if (notice.status === "sent") return <Badge variant="secondary" className="text-[10px]" title="Aviso enviado por WhatsApp — à espera de resposta">avisado</Badge>;
+  return <Badge variant="outline" className="text-[10px] border-red-300 text-red-700" title={notice.error ?? "Falhou o envio"}>aviso falhou</Badge>;
+}
+
 function AssignmentRow({
   assignment,
+  notice = null,
   onSave,
   onDelete,
   busy,
 }: {
+  notice?: { status: string; confirmedAt: string | null; declinedAt: string | null; error: string | null } | null;
   assignment: {
     id: number;
     assignmentDate: string;
@@ -955,6 +1027,7 @@ function AssignmentRow({
                 {a.personName}
               </button>
             ) : a.personName}
+            <NoticeBadge notice={notice} />
           </span>
         </td>
         <td className="py-2 px-2">

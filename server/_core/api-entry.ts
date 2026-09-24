@@ -360,6 +360,20 @@ app.get("/api/cron/daily-ops", async (req, res) => {
   }
 });
 
+// Automação dos extras (pedido de disponibilidade à quinta, lembrete ao
+// sábado, aviso de escala e alerta de cobertura às 18h). Chamado de hora a
+// hora; o próprio módulo decide pela hora de Lisboa o que está na altura.
+app.get("/api/cron/extras-auto", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const { runExtrasAutomation } = await import("../extrasAutomation");
+    const report = await runExtrasAutomation();
+    res.json({ ok: report.errors.length === 0, ranAt: new Date().toISOString(), ...report });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: String(err?.message ?? err) });
+  }
+});
+
 // Leitor de email inbound: lê a caixa reservas@ por IMAP e cria registos nos
 // módulos (Críticas/Reclamações/Perdidos/RH) a partir dos emails reencaminhados
 // para os aliases. Substitui o fluxo Make.com. GitHub Actions chama a cada ~15min.
