@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BarChart3, Megaphone, Network } from "lucide-react";
 import MarketingGoogleAdsPage from "./MarketingGoogleAdsPage";
@@ -23,6 +23,21 @@ const DASH_PATH = "/marketing";
 const CHANNELS_PATH = "/marketing/canais";
 
 export { MarketingDashboardPanel };
+
+/** Dashboards → Marketing: o dashboard sozinho, com atalho para o módulo. */
+export function MarketingDashboardPage() {
+  return (
+    <div className="p-6 space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold">Dashboard de Marketing</h1>
+        <p className="text-muted-foreground">
+          Canais, clientes e campanhas no módulo <Link href="/marketing" className="underline">Financeiro → Marketing</Link>.
+        </p>
+      </div>
+      <MarketingDashboardPanel />
+    </div>
+  );
+}
 
 export default function MarketingPage() {
   const [location, navigate] = useLocation();

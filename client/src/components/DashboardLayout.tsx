@@ -229,7 +229,9 @@ export const hubGroups: HubGroup[] = [
       { icon: Truck, label: "Operações", path: "/operacoes-dashboard" },
       { icon: Users, label: "Pessoas", path: "/pessoas-dashboard" },
       { icon: MessageSquareWarning, label: "Suporte", path: "/suporte-dashboard" },
-      { icon: Megaphone, label: "Marketing", path: "/marketing" },
+      // Endereço próprio: /marketing é o módulo (Financeiro → Marketing). Com o
+      // mesmo path, o menu marcava sempre este item e nunca o do Financeiro.
+      { icon: Megaphone, label: "Marketing", path: "/marketing-dashboard" },
     ],
   },
   ...menuGroups.map(g => ({

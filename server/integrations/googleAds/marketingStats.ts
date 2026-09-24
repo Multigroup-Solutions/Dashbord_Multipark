@@ -38,6 +38,8 @@ export async function getMarketingStats(f: MarketingStatsFilters) {
 
   let bookingsTotal = 0, bookingsAttributed = 0, revenueTotal = 0, revenueAttributed = 0, mktExpenses = 0;
   let bookingsByDay: Array<{ date: string; total: number; attributed: number }> = [];
+  /** reservas ligadas (gclid) por ID externo da campanha Google */
+  const attributedByCampaign: Record<string, number> = {};
   const attributionQuality = { siteBookings: 0, withOriginUrl: 0, withClickId: 0, attributed: 0 };
   if (db) {
     const conds: any[] = [
@@ -79,6 +81,12 @@ export async function getMarketingStats(f: MarketingStatsFilters) {
     attributionQuality.withOriginUrl = Number(q?.withUrl ?? 0);
     attributionQuality.withClickId = Number(q?.withClick ?? 0);
     attributionQuality.attributed = Number(q?.attributed ?? 0);
+    const campRows = await db.select({
+      ext: multiparkBookings.adCampaignExternalId,
+      n: sql<number>`COUNT(*)`,
+    }).from(multiparkBookings).where(and(...conds, eq(multiparkBookings.adAttribution, "google_paid"), sql`${multiparkBookings.adCampaignExternalId} IS NOT NULL`))
+      .groupBy(multiparkBookings.adCampaignExternalId);
+    for (const r of campRows) if (r.ext) attributedByCampaign[String(r.ext)] = Number(r.n ?? 0);
     const mktConds: any[] = [gte(marketingExpenses.date, `${f.from} 00:00:00`), lte(marketingExpenses.date, `${f.to} 23:59:59`)];
     if (projectIds) mktConds.push(projectIds.length ? inArray(marketingExpenses.projectId, projectIds) : sql`1 = 0`);
     const [m] = await db.select({ t: sql<string>`COALESCE(SUM(${marketingExpenses.amount}), 0)` }).from(marketingExpenses).where(and(...mktConds));
@@ -119,6 +127,7 @@ export async function getMarketingStats(f: MarketingStatsFilters) {
     byDay: ads.byDay,
     bookingsByDay,
     attributionQuality,
+    attributedByCampaign,
     byCampaign: ads.byCampaign,
     nationalShares: ads.nationalShares,
     // compatibilidade com o ecrã antigo
@@ -141,6 +150,8 @@ export interface BrandRow {
   mapped: boolean;
   accounts: Array<{ id: number; name: string }>;
   spend: number;
+  /** conversões contadas pela Google nas campanhas desta marca */
+  conversions: number;
   bookings: number;
   attributed: number;
   revenue: number;
@@ -174,6 +185,7 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string }
   const spendRows = await db.select({
     accountId: adDailyMetrics.accountId, campaignProjectId: adCampaigns.projectId, scope: adCampaigns.scope,
     cost: sql<string>`COALESCE(SUM(${adDailyMetrics.costMicros}), 0)`,
+    conversions: sql<string>`COALESCE(SUM(${adDailyMetrics.conversions}), 0)`,
   }).from(adDailyMetrics)
     .leftJoin(adCampaigns, and(eq(adCampaigns.provider, adDailyMetrics.provider), eq(adCampaigns.accountId, adDailyMetrics.accountId), eq(adCampaigns.externalId, adDailyMetrics.campaignExternalId)))
     .where(and(eq(adDailyMetrics.provider, GOOGLE_ADS_PROVIDER), eq(adDailyMetrics.source, "api"), gte(adDailyMetrics.date, f.from), lte(adDailyMetrics.date, f.to)))
@@ -194,7 +206,7 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string }
 
   const key = (name: string) => name.trim().toLowerCase();
   const brands = new Map<string, BrandRow>();
-  const newRow = (brand: string, mapped: boolean): BrandRow => ({ brand, mapped, accounts: [], spend: 0, bookings: 0, attributed: 0, revenue: 0, revenueAttributed: 0 });
+  const newRow = (brand: string, mapped: boolean): BrandRow => ({ brand, mapped, accounts: [], spend: 0, conversions: 0, bookings: 0, attributed: 0, revenue: 0, revenueAttributed: 0 });
   for (const a of accounts) {
     const brand = brandNameForProject(a.projectId, allProjects);
     const k = brand ? key(brand) : `conta:${a.id}`;
@@ -210,6 +222,7 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string }
     const k = brand ? key(brand) : `conta:${accId}`;
     const row = brands.get(k) ?? newRow(brand ?? `Conta ${accId}`, !!brand);
     row.spend += Number(r.cost) / 1_000_000;
+    row.conversions += Number(r.conversions ?? 0);
     brands.set(k, row);
   }
   // Reservas por nó marca-cidade (para a lista por conta/cidade) e por marca

@@ -98,7 +98,14 @@ export default function MarketingChannelsPanel() {
                   {channels.length === 0 && <TableRow><TableCell colSpan={8} className="text-center py-8 text-muted-foreground">Sem reservas no período.</TableCell></TableRow>}
                   {channels.map((c) => (
                     <TableRow key={c.key}>
-                      <TableCell className="font-medium">{c.label}</TableCell>
+                      <TableCell className="font-medium">
+                        {c.label}
+                        {c.key === "google_ads" && data.googleConversions > c.bookings && (
+                          <div className="text-[11px] font-normal text-muted-foreground" title="A Google conta as conversões com a tag do site; nós só ligamos as reservas em que o gclid chega. Custo por conversão Google em vez do custo por reserva ligada.">
+                            a Google conta {num(Math.round(data.googleConversions))} conversões · {eur(c.cost != null && data.googleConversions > 0 ? c.cost / data.googleConversions : null, 2)}/conv.
+                          </div>
+                        )}
+                      </TableCell>
                       <TableCell className="text-right tabular-nums">{num(c.bookings)}</TableCell>
                       <TableCell><Share value={c.bookings} total={total} /></TableCell>
                       <TableCell className="text-right tabular-nums">{eur(c.revenue)}</TableCell>

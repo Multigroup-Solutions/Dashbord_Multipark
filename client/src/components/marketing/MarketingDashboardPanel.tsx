@@ -21,7 +21,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle, CheckCircle2, CircleAlert, Euro, MousePointerClick, Receipt, ShoppingCart, Target, TrendingUp } from "lucide-react";
-import { attributionHealth, type AttributionQuality } from "@shared/marketingAttribution";
+import { adResultsMeasure, attributionHealth, type AttributionQuality } from "@shared/marketingAttribution";
 import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 function lisbonDay(d = new Date()): string {
@@ -46,7 +46,8 @@ function daysBetween(from: string, to: string): string[] {
 }
 
 // Paleta validada (dataviz/validate_palette.js): claro #0055d2/#16a34a, escuro #4f8aec/#16a34a.
-const SERIES = "[--mk-1:#0055d2] [--mk-2:#16a34a] dark:[--mk-1:#4f8aec]";
+// + laranja para as conversões Google; "ligadas" a tracejado (codificação secundária — verde/laranja ficam perto para deuteranopia).
+const SERIES = "[--mk-1:#0055d2] [--mk-2:#16a34a] [--mk-3:#c2410c] dark:[--mk-1:#4f8aec] dark:[--mk-3:#ea580c]";
 const AXIS = { fontSize: 11, fill: "var(--muted-foreground)" };
 const TOOLTIP_STYLE = { background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12, color: "var(--card-foreground)" };
 
@@ -73,17 +74,22 @@ export default function MarketingDashboardPanel() {
   const series = useMemo(() => {
     if (!st) return [];
     const spend = new Map<string, number>((st.byDay ?? []).map((d: any) => [d.date, Number(d.cost ?? 0)]));
+    const conv = new Map<string, number>((st.byDay ?? []).map((d: any) => [d.date, Number(d.conversions ?? 0)]));
     const books = new Map<string, { total: number; attributed: number }>((st.bookingsByDay ?? []).map((d: any) => [d.date, d]));
     return daysBetween(from, to).map((day) => ({
       day, label: shortDay(day),
       spend: spend.get(day) ?? 0,
       bookings: books.get(day)?.total ?? 0,
       viaAds: books.get(day)?.attributed ?? 0,
+      conversions: Math.round((conv.get(day) ?? 0) * 10) / 10,
     }));
   }, [st, from, to]);
 
   const q: AttributionQuality = st?.attributionQuality ?? { siteBookings: 0, withOriginUrl: 0, withClickId: 0, attributed: 0 };
-  const health = attributionHealth(q, st?.spend ?? 0);
+  const health = attributionHealth(q, st?.spend ?? 0, st?.conversionsGoogle ?? null);
+  // Resultados dos anúncios: as conversões da Google quando medem mais do que as reservas que conseguimos ligar.
+  const results = adResultsMeasure(st?.bookingsAttributed ?? 0, st?.conversionsGoogle ?? 0);
+  const costPerResult = results.value > 0 ? (st?.spend ?? 0) / results.value : null;
   const HealthIcon = health.level === "ok" ? CheckCircle2 : health.level === "critical" ? CircleAlert : AlertTriangle;
   const healthCls = health.level === "ok" ? "border-emerald-200 bg-emerald-50 text-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200"
     : health.level === "critical" ? "border-rose-200 bg-rose-50 text-rose-900 dark:bg-rose-950/30 dark:text-rose-200"
@@ -118,12 +124,14 @@ export default function MarketingDashboardPanel() {
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
             <Kpi icon={Euro} label="Gasto Google Ads" value={eur(st.spend)} hint={`${num(st.clicks)} cliques · CPC ${eur(st.cpc, 2)}`} />
-            <Kpi icon={ShoppingCart} label="Reservas" value={num(st.bookingsTotal)} hint={`${num(st.bookingsAttributed)} via anúncios (${pct(st.bookingsAttributed, st.bookingsTotal)})`} />
-            <Kpi icon={Target} label="Custo por reserva via anúncios" value={eur(st.costPerAttributedBooking, 2)} hint={`global: ${eur(st.adCostPerBooking, 2)} de anúncios por reserva`} />
-            <Kpi icon={TrendingUp} label="ROAS real" value={roas(st.roasAttributed)} hint={`a Google diz ${roas(st.roasGoogle)} · valor via anúncios ${eur(st.revenueAttributed)}`} />
+            <Kpi icon={MousePointerClick} label="Conversões dos anúncios" value={num(Math.round(results.value))}
+              hint={results.source === "google" ? `contadas pela Google · só ligámos ${num(st.bookingsAttributed)} reservas (${pct(st.bookingsAttributed, Math.round(st.conversionsGoogle))})` : `reservas ligadas pelo gclid · a Google conta ${num(Math.round(st.conversionsGoogle))}`} />
+            <Kpi icon={Target} label="Custo por conversão" value={eur(costPerResult, 2)} hint={`por reserva ligada: ${eur(st.costPerAttributedBooking, 2)} · global: ${eur(st.adCostPerBooking, 2)}/reserva`} />
+            <Kpi icon={TrendingUp} label={results.source === "google" ? "ROAS (Google)" : "ROAS real"} value={roas(results.source === "google" ? st.roasGoogle : st.roasAttributed)}
+              hint={results.source === "google" ? `das reservas ligadas: ${roas(st.roasAttributed)} (por baixo, falta gclid)` : `a Google diz ${roas(st.roasGoogle)}`} />
             <Kpi icon={Receipt} label="Outras despesas de marketing" value={eur(st.mktExpenses)} hint="faturas (flyers, parcerias…)" />
             <Kpi icon={Euro} label="Custo total de marketing" value={eur(totalMarketing)} hint={`${eur(st.bookingsTotal > 0 ? totalMarketing / st.bookingsTotal : null, 2)} por reserva (todas)`} />
-            <Kpi icon={MousePointerClick} label="Conversões (Google)" value={num(Math.round(st.conversionsGoogle ?? 0))} hint={`custo/conv. ${eur(st.costPerConversionGoogle, 2)} — números da Google`} />
+            <Kpi icon={ShoppingCart} label="Reservas" value={num(st.bookingsTotal)} hint={`todas as origens · ${num(st.bookingsAttributed)} ligadas aos anúncios`} />
             <Kpi icon={ShoppingCart} label="Valor das reservas" value={eur(st.revenueTotal)} hint="todas, pela data de criação" />
           </div>
 
@@ -135,6 +143,7 @@ export default function MarketingDashboardPanel() {
               <span>com link de origem: <b>{num(q.withOriginUrl)}</b> ({pct(q.withOriginUrl, q.siteBookings)})</span>
               <span>com clique do Google (gclid): <b>{num(q.withClickId)}</b> ({pct(q.withClickId, q.siteBookings)})</span>
               <span>atribuídas aos anúncios: <b>{num(q.attributed)}</b> ({pct(q.attributed, q.siteBookings)})</span>
+              <span>conversões contadas pela Google: <b>{num(Math.round(st.conversionsGoogle ?? 0))}</b> — ligámos {pct(q.attributed, Math.round(st.conversionsGoogle ?? 0))}</span>
             </div>
           </div>
 
@@ -154,7 +163,7 @@ export default function MarketingDashboardPanel() {
               </CardContent>
             </Card>
             <Card>
-              <CardHeader className="pb-1"><CardTitle className="text-sm">Reservas por dia</CardTitle></CardHeader>
+              <CardHeader className="pb-1"><CardTitle className="text-sm">Reservas e conversões por dia</CardTitle></CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={220}>
                   <LineChart data={series} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
@@ -164,7 +173,8 @@ export default function MarketingDashboardPanel() {
                     <Tooltip contentStyle={TOOLTIP_STYLE} />
                     <Legend wrapperStyle={{ fontSize: 12, color: "var(--muted-foreground)" }} />
                     <Line type="monotone" dataKey="bookings" name="Todas" stroke="var(--mk-1)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
-                    <Line type="monotone" dataKey="viaAds" name="Via anúncios" stroke="var(--mk-2)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
+                    <Line type="monotone" dataKey="conversions" name="Conversões Google" stroke="var(--mk-3)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
+                    <Line type="monotone" dataKey="viaAds" name="Ligadas por nós (gclid)" stroke="var(--mk-2)" strokeWidth={2} strokeDasharray="5 3" dot={false} activeDot={{ r: 4 }} />
                   </LineChart>
                 </ResponsiveContainer>
               </CardContent>
@@ -178,7 +188,7 @@ export default function MarketingDashboardPanel() {
                 <CardContent className="p-0 overflow-x-auto">
                   <Table>
                     <TableHeader>
-                      <TableRow><TableHead>Dia</TableHead><TableHead className="text-right">Gasto</TableHead><TableHead className="text-right">Reservas</TableHead><TableHead className="text-right">Via anúncios</TableHead></TableRow>
+                      <TableRow><TableHead>Dia</TableHead><TableHead className="text-right">Gasto</TableHead><TableHead className="text-right">Reservas</TableHead><TableHead className="text-right">Conversões Google</TableHead><TableHead className="text-right">Ligadas (gclid)</TableHead></TableRow>
                     </TableHeader>
                     <TableBody>
                       {series.map((r) => (
@@ -186,6 +196,7 @@ export default function MarketingDashboardPanel() {
                           <TableCell className="text-sm">{r.label}</TableCell>
                           <TableCell className="text-right tabular-nums">{eur(r.spend, 2)}</TableCell>
                           <TableCell className="text-right tabular-nums">{r.bookings}</TableCell>
+                          <TableCell className="text-right tabular-nums">{num(r.conversions)}</TableCell>
                           <TableCell className="text-right tabular-nums">{r.viaAds}</TableCell>
                         </TableRow>
                       ))}
