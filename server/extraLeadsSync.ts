@@ -429,9 +429,13 @@ export async function approveApplicationForConvertedLead(
 
 // ─── WhatsApp recebido de um lead ───────────────────────────────────────────
 
-/** Link público da candidatura (site "Be a Driver"). */
-export function driverApplicationUrl(): string {
-  return (process.env.DRIVER_APPLICATION_URL || "https://multidriver.pt").trim();
+/**
+ * Link público da candidatura (site "Be a Driver"). Sem DRIVER_APPLICATION_URL
+ * não há resposta automática: não se manda um link adivinhado a candidatos.
+ */
+export function driverApplicationUrl(): string | null {
+  const v = (process.env.DRIVER_APPLICATION_URL || "").trim();
+  return v || null;
 }
 
 export function leadAutoReplyText(fullName: string, url: string): string {
@@ -471,14 +475,15 @@ export async function handleLeadInbound(input: { phoneE164: string; conversation
           await notifyBackoffice(`Lead respondeu: ${lead.fullName}`, `Respondeu por WhatsApp (${lead.phone ?? input.phoneE164}). Vê a conversa no inbox.`, "/extras-leads");
         } catch { /* segue */ }
 
-        if (process.env.LEAD_AUTO_REPLY !== "off") {
+        const applicationUrl = driverApplicationUrl();
+        if (process.env.LEAD_AUTO_REPLY !== "off" && applicationUrl) {
           const claim = await db
             .update(extraLeads)
             .set({ autoRepliedAt: at })
             .where(and(eq(extraLeads.id, lead.id), isNull(extraLeads.autoRepliedAt)));
           if (extractAffectedRows(claim) === 1) {
             const { replyToConversation } = await import("./whatsappInbox");
-            const r = await replyToConversation(input.conversationId, leadAutoReplyText(lead.fullName, driverApplicationUrl()), null);
+            const r = await replyToConversation(input.conversationId, leadAutoReplyText(lead.fullName, applicationUrl), null);
             if (r.ok) out.autoReplied.push(lead.id);
             else console.warn("[extraLeadsSync] resposta automática ao lead", lead.id, "falhou:", (r as any).error);
           }
