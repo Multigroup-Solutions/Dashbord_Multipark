@@ -277,6 +277,8 @@ export const SETTINGS = {
     description: "Texto curto com o ponto de encontro de cada cidade, incluído no WhatsApp e no email de escala. Vazio = não se indica.",
     schema: meetingPointMapSchema,
     defaultValue: { lisbon: "", porto: "", faro: "" },
+    wiring: "live",
+  }),
   "ai.trainingTutorLimits": def({
     key: "ai.trainingTutorLimits",
     group: "ia",
