@@ -2,6 +2,7 @@ import type { CreateExpressContextOptions } from "@trpc/server/adapters/express"
 import { ACCESS_DENIED_MSG } from "@shared/const";
 import type { User } from "../../drizzle/schema";
 import { sdk } from "./sdk";
+import { ensureFeatureFlagOverrides } from "./featureFlags";
 
 export type TrpcContext = {
   req: CreateExpressContextOptions["req"];
@@ -21,6 +22,9 @@ export async function createContext(
 ): Promise<TrpcContext> {
   let user: User | null = null;
   let accessDenied = false;
+
+  // Interruptores das automações sobrepostos na BD (cache 30s; no-op se fresca).
+  await ensureFeatureFlagOverrides();
 
   try {
     user = await sdk.authenticateRequest(opts.req);

@@ -20,6 +20,7 @@ import multer from "multer";
 import { requireSession } from "./requireSession";
 import { storagePut } from "../storage";
 import { inprocessSchedulersEnabled } from "./featureFlags";
+import { cronRunRecorder } from "../cronRuns";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -54,6 +55,8 @@ async function startServer() {
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+  // Registo das corridas de /api/cron/* (Definições → Estado do sistema).
+  app.use("/api/cron", cronRunRecorder());
   // Serve local uploads when S3 is not configured
   app.use("/uploads", requireSession, express.static("uploads"));
   // OAuth callback under /api/oauth/callback

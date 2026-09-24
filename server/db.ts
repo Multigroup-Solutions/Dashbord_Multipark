@@ -156,6 +156,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0094").then(m => ({ s: m.MIGRATION_0094_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0094 })),
       import("./migrations/migration_0095").then(m => ({ s: m.MIGRATION_0095_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0095 })),
       import("./migrations/migration_0097").then(m => ({ s: m.MIGRATION_0097_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0097 })),
+      import("./migrations/migration_0098").then(m => ({ s: m.MIGRATION_0098_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0098 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -2085,6 +2086,13 @@ export async function toggleApiKey(id: number, active: boolean) {
   await db.update(apiKeys).set({ active: active ? 1 : 0 }).where(eq(apiKeys.id, id));
 }
 
+/** Validade de uma API key ("YYYY-MM-DD HH:MM:SS" UTC) ou null = sem expiração. */
+export async function setApiKeyExpiry(id: number, expiresAt: string | null) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.update(apiKeys).set({ expiresAt }).where(eq(apiKeys.id, id));
+}
+
 export async function deleteApiKey(id: number) {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
@@ -2636,10 +2644,18 @@ export async function createIncident(data: any) {
   // Semana/ano ISO do DIA DE LISBOA da ocorrência (não do servidor/UTC).
   const at = data.sourceEmailDate ? String(data.sourceEmailDate) : caseUtcNowStr();
   const { week, year } = isoWeekYearLisbon(at.replace(" ", "T") + "Z");
+  // Prazo: Definições (sla.incidentHours) → INCIDENT_SLA_HOURS → 48h.
+  let slaHours = incidentSlaHours();
+  if (data.dueAt == null) {
+    try {
+      const { getSetting } = await import("./appSettings");
+      slaHours = (await getSetting("sla.incidentHours")) ?? slaHours;
+    } catch { /* fica o valor da env/omissão */ }
+  }
   const [result] = await db.insert(incidents).values({
     ...data,
     driverConfirmed: data.driverConfirmed ? 1 : 0,
-    dueAt: data.dueAt ?? addHoursUtc(caseUtcNowStr(), incidentSlaHours()),
+    dueAt: data.dueAt ?? addHoursUtc(caseUtcNowStr(), slaHours),
     weekNumber: data.weekNumber || week,
     yearNumber: data.yearNumber || year,
   } as any).$returningId();

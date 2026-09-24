@@ -22,6 +22,7 @@ import IntegrationsGoogleAdsPage from "./pages/IntegrationsGoogleAdsPage";
 import PermissionsPage from "./pages/PermissionsPage";
 import ModulesPage from "./pages/ModulesPage";
 import ProfilePage from "./pages/ProfilePage";
+import DefinicoesPage from "./pages/DefinicoesPage";
 import ComplaintsPage from "./pages/ComplaintsPage";
 import GoogleReviewsPage from "./pages/GoogleReviewsPage";
 import TrainingPage from "./pages/TrainingPage";
@@ -246,6 +247,9 @@ function Router() {
       </Route>
       <Route path="/perfil">
         {() => (<DashboardLayout><ProfilePage /></DashboardLayout>)}
+      </Route>
+      <Route path="/definicoes">
+        {() => (<DashboardLayout><DefinicoesPage /></DashboardLayout>)}
       </Route>
       <Route path="/financeiro">
         {() => (<DashboardLayout><FinanceiroDashboard /></DashboardLayout>)}

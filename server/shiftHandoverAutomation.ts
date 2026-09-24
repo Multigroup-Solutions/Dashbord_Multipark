@@ -219,7 +219,14 @@ export async function afterHandoverSave(input: {
   if (handoverEmailEnabled()) {
     try {
       const to = [...new Set(leaders.map((l) => l.email).filter((e): e is string => !!e))];
-      const cc = handoverEmailCc(process.env.HANDOVER_EMAIL_CC, to);
+      // CC: Definições (emails.handoverCc) → HANDOVER_EMAIL_CC.
+      let ccRaw = process.env.HANDOVER_EMAIL_CC;
+      try {
+        const { getSetting } = await import("./appSettings");
+        const list = await getSetting("emails.handoverCc");
+        if (list && list.length) ccRaw = list.join(",");
+      } catch { /* fica a env */ }
+      const cc = handoverEmailCc(ccRaw, to);
       if ((to.length || cc.length) && extractAffectedRows(await db.execute(buildClaimEmailVersion(id, version))) > 0) {
         const mail = buildHandoverEmail({
           city: input.key.city, shift: ref, authorName: row.createdByName ?? input.userName,

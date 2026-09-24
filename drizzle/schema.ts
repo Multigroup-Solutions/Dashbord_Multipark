@@ -1883,6 +1883,11 @@ export const users = mysqlTable("users", {
 	deactivationNotes: text(),
 	deactivatedAt: timestamp({ mode: 'string' }),
 	deactivatedById: int(),
+	// 0098 — versão da sessão: o cookie leva-a; subir invalida os cookies
+	// antigos ("Terminar todas as sessões"). Cookies sem versão = 0.
+	sessionVersion: int().default(0).notNull(),
+	// 0098 — preferências de notificação ({ muted: string[] }).
+	notificationPrefs: json(),
 },
 (table) => [
 	uniqueIndex("users_openId_unique").on(table.openId),
@@ -2211,3 +2216,42 @@ export type InsertWhatsappBroadcast = typeof whatsappBroadcasts.$inferInsert;
 export type AvailabilityFormToken = typeof availabilityFormTokens.$inferSelect;
 export type InsertAvailabilityFormToken = typeof availabilityFormTokens.$inferInsert;
 export type ShiftHandover = typeof shiftHandovers.$inferSelect;
+
+// ─── Definições (0098) ────────────────────────────────────────────────────────
+// Corridas dos crons /api/cron/* (GitHub Actions). ok NULL = a correr / sem resposta.
+export const cronRuns = mysqlTable("cron_runs", {
+	id: bigint({ mode: "number" }).autoincrement().primaryKey(),
+	name: varchar({ length: 64 }).notNull(),
+	startedAt: datetime({ mode: 'string', fsp: 3 }).notNull(),
+	finishedAt: datetime({ mode: 'string', fsp: 3 }),
+	ok: tinyint(),
+	error: text(),
+	durationMs: int(),
+	httpStatus: int(),
+	meta: varchar({ length: 255 }),
+},
+(table) => [
+	index("idx_cron_runs_name_started").on(table.name, table.startedAt),
+	index("idx_cron_runs_started").on(table.startedAt),
+]);
+
+// Definições chave → valor JSON (inclui "flag.<NOME>" = sobreposição dos interruptores).
+export const appSettings = mysqlTable("app_settings", {
+	settingKey: varchar({ length: 100 }).primaryKey(),
+	value: json().notNull(),
+	updatedById: int(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+});
+
+export const appSettingsAudit = mysqlTable("app_settings_audit", {
+	id: bigint({ mode: "number" }).autoincrement().primaryKey(),
+	settingKey: varchar({ length: 100 }).notNull(),
+	oldValue: json(),
+	newValue: json(),
+	changedById: int(),
+	changedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	index("idx_app_settings_audit_key_changed").on(table.settingKey, table.changedAt),
+	index("idx_app_settings_audit_changed").on(table.changedAt),
+]);
