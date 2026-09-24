@@ -7935,30 +7935,38 @@ export async function getClientHistory(q: ClientHistoryQuery) {
   const name = q.name?.trim() || null;
   if (!email && !phone && !plate && !name) return empty;
 
-  const namePat = name ? `%${name}%` : null;
+  // O nome é fraco (há muitas "Ana Silva"): só entra quando não há email,
+  // telefone nem matrícula. % e _ escapados.
+  const namePat = name && !email && !phone && !plate ? `%${name.replace(/[\\%_]/g, (c) => "\\" + c)}%` : null;
+  // Telefone pelos últimos 9 dígitos (+351 912… = 912…); matrícula sem espaços/hífens
+  const phone9 = phone ? phone.replace(/\D+/g, "").slice(-9) : null;
+  const phoneEq = (col: any) => sql`RIGHT(REGEXP_REPLACE(COALESCE(${col}, ''), '[^0-9]', ''), 9) = ${phone9}`;
+  const plateK = plate ? plate.replace(/[\s-]+/g, "").toUpperCase() : null;
+  const plateEq = (col: any) => sql`UPPER(REPLACE(REPLACE(TRIM(${col}), ' ', ''), '-', '')) = ${plateK}`;
+  const usePhone = !!phone9 && phone9.length === 9;
 
   // Reservas (multipark_bookings)
   const bookingConds: any[] = [];
   if (email) bookingConds.push(sql`LOWER(TRIM(${multiparkBookings.clientEmail})) = ${email}`);
-  if (phone) bookingConds.push(eq(multiparkBookings.clientPhone, phone));
-  if (plate) bookingConds.push(eq(multiparkBookings.licensePlate, plate));
+  if (usePhone) bookingConds.push(phoneEq(multiparkBookings.clientPhone));
+  if (plateK) bookingConds.push(plateEq(multiparkBookings.licensePlate));
   if (namePat) bookingConds.push(sql`CONCAT_WS(' ', ${multiparkBookings.clientFirstName}, ${multiparkBookings.clientLastName}) LIKE ${namePat}`);
 
   const complaintConds: any[] = [];
   if (email) complaintConds.push(sql`LOWER(TRIM(${complaints.clientEmail})) = ${email}`);
-  if (phone) complaintConds.push(eq(complaints.clientPhone, phone));
-  if (plate) complaintConds.push(eq(complaints.vehiclePlate, plate));
+  if (usePhone) complaintConds.push(phoneEq(complaints.clientPhone));
+  if (plateK) complaintConds.push(plateEq(complaints.vehiclePlate));
   if (namePat) complaintConds.push(like(complaints.clientName, namePat));
 
   const lfConds: any[] = [];
   if (email) lfConds.push(sql`LOWER(TRIM(${lostFoundItems.clientEmail})) = ${email}`);
-  if (phone) lfConds.push(eq(lostFoundItems.clientPhone, phone));
-  if (plate) lfConds.push(eq(lostFoundItems.vehiclePlate, plate));
+  if (usePhone) lfConds.push(phoneEq(lostFoundItems.clientPhone));
+  if (plateK) lfConds.push(plateEq(lostFoundItems.vehiclePlate));
   if (namePat) lfConds.push(like(lostFoundItems.clientName, namePat));
 
   const reviewConds: any[] = [];
   if (email) reviewConds.push(sql`LOWER(TRIM(${googleReviews.reviewerEmail})) = ${email}`);
-  if (plate) reviewConds.push(eq(googleReviews.vehiclePlate, plate));
+  if (plateK) reviewConds.push(plateEq(googleReviews.vehiclePlate));
   if (namePat) reviewConds.push(like(googleReviews.reviewerName, namePat));
 
   const [bookings, bookingStatsRows, complaintRows, lostFound, reviews] = await Promise.all([
@@ -7980,7 +7988,9 @@ export async function getClientHistory(q: ClientHistoryQuery) {
           total: sql<number>`COUNT(*)`,
           firstCheckIn: sql<string | null>`MIN(${multiparkBookings.checkIn})`,
           lastCheckIn: sql<string | null>`MAX(${multiparkBookings.checkIn})`,
-          totalSpent: sql<string | null>`SUM(${multiparkBookings.totalPrice})`,
+          // Gasto só em estadias efetivas (= ficha de Clientes): canceladas e futuras fora
+          totalSpent: sql<string | null>`SUM(CASE WHEN UPPER(COALESCE(${multiparkBookings.status}, '')) IN ('CHECKED_IN','CHECKING_OUT','PENDING_CHECKOUT','CHECKED_OUT') THEN ${multiparkBookings.totalPrice} END)`,
+          visited: sql<number>`SUM(UPPER(COALESCE(${multiparkBookings.status}, '')) IN ('CHECKED_IN','CHECKING_OUT','PENDING_CHECKOUT','CHECKED_OUT'))`,
           cancelled: sql<number>`SUM(UPPER(COALESCE(${multiparkBookings.status}, '')) LIKE '%CANCEL%')`,
         }).from(multiparkBookings).where(and(or(...bookingConds), projectScope(multiparkBookings.projectId)))
       : Promise.resolve([] as any[]),
@@ -8012,7 +8022,7 @@ export async function getClientHistory(q: ClientHistoryQuery) {
     firstCheckIn: (s?.firstCheckIn as string | null) ?? null,
     lastCheckIn: (s?.lastCheckIn as string | null) ?? null,
     totalSpent,
-    avgSpend: total > 0 ? totalSpent / total : 0,
+    avgSpend: Number(s?.visited ?? 0) > 0 ? totalSpent / Number(s.visited) : 0,
     cancelled: Number(s?.cancelled ?? 0),
   };
 

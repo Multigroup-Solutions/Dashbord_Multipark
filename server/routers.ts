@@ -8559,7 +8559,15 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "frontoffice");
         const { getClientHistory } = await import("./db");
-        return getClientHistory(input);
+        const h = await getClientHistory(input);
+        // Mesmo gate da ficha de Clientes: sem permissão de totais, sem valores
+        if (await canSeeFinanceTotals(ctx.user)) return { ...h, canSeeTotals: true };
+        return {
+          ...h,
+          canSeeTotals: false,
+          bookingStats: { ...h.bookingStats, totalSpent: null, avgSpend: null },
+          bookings: h.bookings.map((b: any) => ({ ...b, totalPrice: null })),
+        };
       }),
 
     // Lista/pesquisa emails inbound de um alias, para anexar à mão a um caso.

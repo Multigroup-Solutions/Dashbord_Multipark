@@ -108,14 +108,15 @@ function ClientsList({ onOpen }: { onOpen: (email: string) => void }) {
   useEffect(() => { const t = setTimeout(() => setDebounced(search), 300); return () => clearTimeout(t); }, [search]);
   useEffect(() => { setPage(1); }, [debounced, segment, storedSort, projectId]);
 
-  const { data: stats } = trpc.clients.stats.useQuery({ projectId });
+  const { data: stats, isError: statsError } = trpc.clients.stats.useQuery({ projectId });
   const canSeeTotals = stats?.canSeeTotals ?? false;
   // Sem totais financeiros não se ordena por gasto nem se filtra VIP (o servidor recusa).
   const sort: Sort = SORTS.includes(storedSort) && (canSeeTotals || storedSort !== "totalSpent") ? storedSort : "lastCheckIn";
   const activeSegment: Segment = !canSeeTotals && segment === "vip" ? "all" : segment;
   const { data, isLoading, isFetching } = trpc.clients.list.useQuery({
     search: debounced || null, segment: activeSegment, sort, dir: "desc", page, pageSize: 50, projectId,
-  }, { enabled: !!stats, placeholderData: (prev) => prev });
+  // Espera pelos stats (dizem se há totais), mas se falharem a lista carrega na mesma
+  }, { enabled: !!stats || statsError, placeholderData: (prev) => prev });
 
   const rows = data?.rows ?? [];
   const total = data?.total ?? 0;
