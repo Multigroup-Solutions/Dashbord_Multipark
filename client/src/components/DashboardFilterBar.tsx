@@ -92,13 +92,13 @@ export function DashboardFilterBar({
     if (!allProjects) return [];
     if (cityId !== null) {
       return (allProjects as any[])
-        .filter((p) => p.level === "brand" && p.parentId === cityId)
+        .filter((p) => p.level === "brand" && p.parentId === cityId && !!p.isActive)
         .map((p) => ({ id: p.id, name: p.name }))
         .sort((a, b) => a.name.localeCompare(b.name));
     }
     const byName = new Map<string, { id: number; name: string; count: number }>();
     for (const p of allProjects as any[]) {
-      if (p.level !== "brand") continue;
+      if (p.level !== "brand" || !p.isActive) continue;
       const key = p.name.trim().toLowerCase();
       const ex = byName.get(key);
       if (ex) ex.count += 1;

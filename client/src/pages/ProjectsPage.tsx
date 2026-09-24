@@ -13,8 +13,11 @@ import { toast } from "sonner";
 import {
   FolderTree, Plus, ChevronRight, ChevronDown, Users, Pencil, Trash2,
   Building2, Tag, MapPin, FolderKanban, UserPlus, X, Euro, Handshake,
-  Search, ChevronsUpDown, ChevronsDownUp
+  Search, ChevronsUpDown, ChevronsDownUp, MoveRight, RotateCcw, Ban
 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { allowedChildLevels, buildForest, isNodeActive, wouldCreateCycle } from "@shared/projectTree";
+import ParkCoverageCard from "./ProjectsParkCoverageCard";
 import { useLocation } from "wouter";
 import ProjectCostsDashboard from "./ProjectCostsDashboard";
 
@@ -39,10 +42,10 @@ type Project = {
   createdAt: string | Date; updatedAt: string | Date;
 };
 
-function buildTree(projects: Project[], parentId: number | null = null): (Project & { children: any[] })[] {
-  return projects
-    .filter(p => p.parentId === parentId)
-    .map(p => ({ ...p, children: buildTree(projects, p.id) }));
+// Raízes = nós cujo pai não está na lista visível (não só parentId=null):
+// um admin de cidade só recebe a(s) sua(s) cidade(s) e via a árvore vazia.
+function buildTree(projects: Project[]): (Project & { children: any[] })[] {
+  return buildForest(projects);
 }
 
 // Raio de picagem do ponto (geofence): check-in/out fora do raio é permitido
@@ -115,7 +118,11 @@ export default function ProjectsPage() {
   const [form, setForm] = useState({ name: "", description: "", color: "#6366f1", managerId: "", budget: "", partnerName: "", partnerPercent: "" });
   const [searchTerm, setSearchTerm] = useState("");
   const [showCosts, setShowCosts] = useState(false);
+  const [showInactive, setShowInactive] = useState(false);
+  const [moveNode, setMoveNode] = useState<Project | null>(null);
+  const [deactivateNode, setDeactivateNode] = useState<Project | null>(null);
   const { data: usersList = [] } = trpc.users.list.useQuery();
+  const { data: cityAccess } = trpc.permissions.myCityAccess.useQuery();
 
   const createMut = trpc.projects.create.useMutation({
     onSuccess: () => { utils.projects.list.invalidate(); setShowCreate(false); resetForm(); toast.success("Projeto criado!"); },
@@ -125,18 +132,24 @@ export default function ProjectsPage() {
     onSuccess: () => { utils.projects.list.invalidate(); setEditProject(null); toast.success("Projeto atualizado!"); },
     onError: (e) => toast.error(e.message),
   });
-  const deleteMut = trpc.projects.delete.useMutation({
-    onSuccess: () => { utils.projects.list.invalidate(); toast.success("Projeto eliminado!"); },
+  const reactivateMut = trpc.projects.update.useMutation({
+    onSuccess: () => { utils.projects.list.invalidate(); toast.success("Nó reativado."); },
     onError: (e) => toast.error(e.message),
   });
-  const tree = useMemo(() => buildTree(allProjects as Project[]), [allProjects]);
+  // Nós inativos (fechados) só aparecem com o interruptor ligado, a cinzento.
+  const visibleProjects = useMemo(
+    () => (allProjects as Project[]).filter(p => showInactive || isNodeActive(p)),
+    [allProjects, showInactive],
+  );
+  const inactiveCount = useMemo(() => (allProjects as Project[]).filter(p => !isNodeActive(p)).length, [allProjects]);
+  const tree = useMemo(() => buildTree(visibleProjects), [visibleProjects]);
 
   // Pesquisa: quando há termo, calcula os ids que devem aparecer (matches + os
   // seus ancestrais). Faz force-expand desses ancestrais.
   const searchMatches = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
     if (!q) return null;
-    const list = allProjects as Project[];
+    const list = visibleProjects;
     const directMatches = new Set<number>(
       list.filter((p) => p.name.toLowerCase().includes(q) || (p.description ?? "").toLowerCase().includes(q)).map((p) => p.id),
     );
@@ -151,7 +164,7 @@ export default function ProjectsPage() {
       }
     }
     return { visible, directMatches };
-  }, [searchTerm, allProjects]);
+  }, [searchTerm, visibleProjects]);
 
   // Quando há pesquisa, expande automaticamente o caminho até aos matches.
   const effectiveExpanded = useMemo(() => {
@@ -161,7 +174,7 @@ export default function ProjectsPage() {
 
   // Contagens: nº de descendentes e nº de colaboradores atribuídos por nó.
   const descendantCount = useMemo(() => {
-    const list = allProjects as Project[];
+    const list = visibleProjects;
     const childrenMap = new Map<number, number[]>();
     for (const p of list) {
       if (p.parentId != null) {
@@ -170,8 +183,11 @@ export default function ProjectsPage() {
       }
     }
     const counts = new Map<number, number>();
+    const visiting = new Set<number>();
     function count(id: number): number {
       if (counts.has(id)) return counts.get(id)!;
+      if (visiting.has(id)) return 0; // ciclo na BD: não rebenta a página
+      visiting.add(id);
       const kids = childrenMap.get(id) ?? [];
       let total = kids.length;
       for (const k of kids) total += count(k);
@@ -180,7 +196,7 @@ export default function ProjectsPage() {
     }
     for (const p of list) count(p.id);
     return counts;
-  }, [allProjects]);
+  }, [visibleProjects]);
 
   function expandAll() {
     setExpanded(new Set((allProjects as Project[]).map((p) => p.id)));
@@ -219,7 +235,10 @@ export default function ProjectsPage() {
     return u ? (u as any).name : null;
   }
 
-  const isAdmin = user && ["super_admin", "admin"].includes(user.role);
+  const isAdmin = !!user && ["super_admin", "admin"].includes(user.role);
+  const isSuperAdmin = user?.role === "super_admin";
+  // Admins de cidade não alteram Grupo/Cidade (o servidor recusa também).
+  const canEditStructure = (level: string) => !!cityAccess?.all || (level !== "group" && level !== "city");
 
   function TreeNode({ node, depth = 0 }: { node: Project & { children: any[] }; depth?: number }) {
     // Filtra invisíveis quando há pesquisa em curso
@@ -231,13 +250,14 @@ export default function ProjectsPage() {
     const childLevel = CHILD_LEVEL[node.level];
     const descCount = descendantCount.get(node.id) ?? 0;
     const isMatch = searchMatches?.directMatches.has(node.id);
+    const active = isNodeActive(node);
 
     return (
       <div>
         <div
           className={`flex items-center gap-2 py-2 px-3 rounded-lg hover:bg-muted/50 cursor-pointer transition-colors group ${
             isMatch ? "bg-amber-50 dark:bg-amber-950/20" : ""
-          }`}
+          } ${active ? "" : "opacity-50"}`}
           style={{ paddingLeft: `${depth * 24 + 12}px` }}
           onClick={() => hasChildren && toggleExpand(node.id)}
         >
@@ -268,11 +288,11 @@ export default function ProjectsPage() {
           <Badge variant="outline" className={`text-xs ${LEVEL_COLORS[node.level] ?? ""}`}>
             {LEVEL_LABELS[node.level] ?? node.level}
           </Badge>
-          {!node.isActive && <Badge variant="secondary" className="text-xs">Inativo</Badge>}
+          {!active && <Badge variant="secondary" className="text-xs">Inativo</Badge>}
           {isAdmin && (
             // Sempre visíveis (eram hover-only e ficavam "escondidos" no tema novo)
             <div className="opacity-60 group-hover:opacity-100 flex gap-1 transition-opacity">
-              {childLevel && (
+              {childLevel && active && (
                 <Button variant="ghost" size="icon" className="h-7 w-7" title={`Criar ${LEVEL_LABELS[childLevel]}`} onClick={(e) => { e.stopPropagation(); openCreate(node.id, childLevel); }}>
                   <Plus className="h-3.5 w-3.5" />
                 </Button>
@@ -283,9 +303,27 @@ export default function ProjectsPage() {
               <Button variant="ghost" size="icon" className="h-7 w-7" title="Editar" onClick={(e) => { e.stopPropagation(); openEdit(node); }}>
                 <Pencil className="h-3.5 w-3.5" />
               </Button>
-              <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" title="Eliminar" onClick={(e) => { e.stopPropagation(); if (confirm("Eliminar este projeto e todos os sub-projetos?")) deleteMut.mutate({ id: node.id }); }}>
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
+              {canEditStructure(node.level) && (
+                <Button variant="ghost" size="icon" className="h-7 w-7" title="Mover para…" onClick={(e) => { e.stopPropagation(); setMoveNode(node); }}>
+                  <MoveRight className="h-3.5 w-3.5" />
+                </Button>
+              )}
+              {canEditStructure(node.level) && (active ? (
+                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" title="Desativar / eliminar" onClick={(e) => { e.stopPropagation(); setDeactivateNode(node); }}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              ) : (
+                <>
+                  <Button variant="ghost" size="icon" className="h-7 w-7" title="Reativar" onClick={(e) => { e.stopPropagation(); reactivateMut.mutate({ id: node.id, isActive: true }); }}>
+                    <RotateCcw className="h-3.5 w-3.5" />
+                  </Button>
+                  {isSuperAdmin && (
+                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" title="Apagar definitivamente" onClick={(e) => { e.stopPropagation(); setDeactivateNode(node); }}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                </>
+              ))}
             </div>
           )}
         </div>
@@ -299,7 +337,7 @@ export default function ProjectsPage() {
 
   // Stats
   const stats = useMemo(() => {
-    const p = allProjects as Project[];
+    const p = (allProjects as Project[]).filter(isNodeActive);
     return {
       groups: p.filter(x => x.level === "group").length,
       brands: p.filter(x => x.level === "brand").length,
@@ -350,12 +388,21 @@ export default function ProjectsPage() {
         ))}
       </div>
 
+      {/* Cobertura de parques + órfãos (só admin com todas as cidades) */}
+      {isAdmin && cityAccess?.all && (
+        <ParkCoverageCard projects={allProjects as Project[]} onMove={(p) => setMoveNode(p as Project)} />
+      )}
+
       {/* Tree */}
       <Card>
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <CardTitle className="text-base">Árvore de Projetos</CardTitle>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <label className="flex items-center gap-2 text-xs text-muted-foreground" title="Nós desativados (parques/marcas fechados)">
+                <Switch checked={showInactive} onCheckedChange={setShowInactive} />
+                Mostrar inativos{inactiveCount > 0 ? ` (${inactiveCount})` : ""}
+              </label>
               <div className="relative">
                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
@@ -533,6 +580,13 @@ export default function ProjectsPage() {
         </DialogContent>
       </Dialog>
 
+      {moveNode && (
+        <MoveDialog node={moveNode} projects={allProjects as Project[]} onClose={() => setMoveNode(null)} />
+      )}
+      {deactivateNode && (
+        <DeactivateDialog node={deactivateNode} isSuperAdmin={isSuperAdmin} onClose={() => setDeactivateNode(null)} />
+      )}
+
       {/* Assign Dialog */}
       {showAssign !== null && (
         <AssignDialog
@@ -622,6 +676,107 @@ function AssignDialog({
             </div>
           )}
         </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// Mover um nó: só destinos ativos, do nível certo (Grupo→Cidade→Marca→Projeto;
+// Projeto também diretamente na Cidade) e que não sejam o próprio/descendentes.
+function MoveDialog({ node, projects, onClose }: { node: Project; projects: Project[]; onClose: () => void }) {
+  const utils = trpc.useUtils();
+  const [target, setTarget] = useState("");
+  const byId = useMemo(() => new Map(projects.map(p => [p.id, p])), [projects]);
+  const options = useMemo(() => projects
+    .filter(p => isNodeActive(p) && p.id !== node.id && p.id !== node.parentId
+      && allowedChildLevels(p.level).includes(node.level as any)
+      && !wouldCreateCycle(node.id, p.id, byId))
+    .map(p => {
+      const path: string[] = [];
+      const seen = new Set<number>();
+      let cur: Project | undefined = p;
+      while (cur && !seen.has(cur.id)) { seen.add(cur.id); path.unshift(cur.name); cur = cur.parentId != null ? byId.get(cur.parentId) : undefined; }
+      return { id: p.id, label: path.join(" › ") };
+    })
+    .sort((a, b) => a.label.localeCompare(b.label)), [projects, node, byId]);
+  const moveMut = trpc.projects.move.useMutation({
+    onSuccess: () => { utils.projects.list.invalidate(); utils.projects.parkCoverage.invalidate(); toast.success("Nó movido."); onClose(); },
+    onError: (e) => toast.error(e.message),
+  });
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Mover «{node.name}» para…</DialogTitle></DialogHeader>
+        {options.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Não há destinos válidos para um nó de nível {LEVEL_LABELS[node.level] ?? node.level}.</p>
+        ) : (
+          <Select value={target} onValueChange={setTarget}>
+            <SelectTrigger><SelectValue placeholder="Escolher destino…" /></SelectTrigger>
+            <SelectContent>
+              {options.map(o => <SelectItem key={o.id} value={String(o.id)}>{o.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancelar</Button>
+          <Button disabled={!target || moveMut.isPending} onClick={() => moveMut.mutate({ id: node.id, newParentId: Number(target) })}>Mover</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// Desativar (soft delete) mostra as referências; apagar definitivamente só
+// para super_admin e só quando não há filhos nem referências.
+function DeactivateDialog({ node, isSuperAdmin, onClose }: { node: Project; isSuperAdmin: boolean; onClose: () => void }) {
+  const utils = trpc.useUtils();
+  const { data, isLoading } = trpc.projects.references.useQuery({ id: node.id });
+  const done = (msg: string) => { utils.projects.list.invalidate(); utils.projects.parkCoverage.invalidate(); toast.success(msg); onClose(); };
+  const deactivateMut = trpc.projects.delete.useMutation({ onSuccess: () => done("Nó desativado."), onError: (e) => toast.error(e.message) });
+  const hardMut = trpc.projects.hardDelete.useMutation({ onSuccess: () => done("Nó apagado definitivamente."), onError: (e) => toast.error(e.message) });
+  const active = isNodeActive(node);
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>{active ? "Desativar" : "Apagar"} «{node.name}»</DialogTitle></DialogHeader>
+        {isLoading || !data ? (
+          <p className="text-sm text-muted-foreground">A verificar referências…</p>
+        ) : (
+          <div className="space-y-3 text-sm">
+            {active && <p className="text-muted-foreground">Desativar esconde o nó dos seletores e das atribuições novas. O histórico (despesas, reservas, reviews…) continua a contar nos relatórios.</p>}
+            <p>Sub-nós: <b>{data.totalChildren}</b> ({data.activeChildren} ativos)</p>
+            {data.references.length > 0 ? (
+              <ul className="space-y-1">
+                {data.references.map(r => (
+                  <li key={r.table} className="flex justify-between gap-2">
+                    <span>{r.label}{r.config ? <span className="text-amber-600"> · configuração</span> : null}</span>
+                    <span className="font-mono">{r.count}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : <p className="text-muted-foreground">Sem referências.</p>}
+            {active && !data.canDeactivate && (
+              <p className="text-destructive">Não é possível desativar: {data.reasons.join("; ")}</p>
+            )}
+            {!active && !data.canHardDelete && (
+              <p className="text-muted-foreground">Só é possível apagar definitivamente um nó sem sub-nós e sem referências.</p>
+            )}
+          </div>
+        )}
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={onClose}>Cancelar</Button>
+          {isSuperAdmin && data?.canHardDelete && (
+            <Button variant="destructive" disabled={hardMut.isPending}
+              onClick={() => { if (confirm(`Apagar definitivamente «${node.name}»? Não é reversível.`)) hardMut.mutate({ id: node.id }); }}>
+              Apagar definitivamente
+            </Button>
+          )}
+          {active && (
+            <Button variant="destructive" disabled={!data?.canDeactivate || deactivateMut.isPending} onClick={() => deactivateMut.mutate({ id: node.id })}>
+              <Ban className="h-4 w-4 mr-1" /> Desativar
+            </Button>
+          )}
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

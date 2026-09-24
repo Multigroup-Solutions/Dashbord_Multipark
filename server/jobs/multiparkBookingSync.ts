@@ -20,6 +20,7 @@ import {
   getConfiguredParks,
   getParkApiKey,
   matchParkConfig,
+  PARK_CONFIGS,
   type MultiparkBooking,
   type BookingActionType,
   type ParkConfig,
@@ -39,30 +40,30 @@ import { deliveryErrorCode, retryDelaySeconds } from "../bookingDeliveryQueue";
 import { classifyAllocation } from "../spotClassification";
 import { autoAttachAgentsByEmail, type SeenAgent } from "../identityReconcile";
 import { bookingCampaignFallback } from "../../shared/partnerRules";
+import { createParkMatcher } from "../../shared/projectTree";
 
 // ─── Map park name/city to projectId ─────────────────────────────────────────
 
-let projectMapCache: Map<string, number> | null = null;
+// Matcher determinístico partilhado com o backfill (shared/projectTree.ts):
+// só nós level='project' ativos, cidade obrigatória, nomes normalizados.
+type ProjectMatcher = ReturnType<typeof createParkMatcher>;
+let projectMapCache: ProjectMatcher | null = null;
 let projectMapCacheTime = 0;
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
-async function getProjectMap(): Promise<Map<string, number>> {
+/** Chamado depois de criar/alterar nós de projeto (ex.: "Criar nós em falta"). */
+export function invalidateProjectMatcherCache() {
+  projectMapCache = null;
+}
+
+async function getProjectMap(): Promise<ProjectMatcher> {
   if (projectMapCache && Date.now() - projectMapCacheTime < CACHE_TTL) {
     return projectMapCache;
   }
   const projects = await getProjects();
-  const map = new Map<string, number>();
-
-  for (const p of projects) {
-    // Match by project name (case-insensitive), supports patterns like:
-    // "Skypark Lisboa", "Top Parking Porto", "Multipark Lisboa"
-    const key = p.name.toLowerCase().trim();
-    map.set(key, p.id);
-  }
-
-  projectMapCache = map;
+  projectMapCache = createParkMatcher(projects, PARK_CONFIGS);
   projectMapCacheTime = Date.now();
-  return map;
+  return projectMapCache;
 }
 
 // ─── Alias resolver: lookup de partnerId/paymentMethod → nome do parceiro ──
@@ -127,69 +128,12 @@ function resolvePartnerCampaign(
   return fallback;
 }
 
-// Cidades vêm da API em variantes (EN/PT). Normaliza para o nome PT usado
-// nos projetos, para o match de projeto encontrar a folha certa.
-const CITY_TO_PT: Record<string, string> = {
-  lisbon: "lisboa",
-  lisboa: "lisboa",
-  oporto: "porto",
-  porto: "porto",
-  faro: "faro",
-};
-
 function findProjectId(
   parkName: string | undefined,
   city: string | undefined,
-  projectMap: Map<string, number>
+  projectMap: ProjectMatcher
 ): number | undefined {
-  if (!parkName) return undefined;
-
-  const parkLower = parkName.toLowerCase().trim();
-  // Normalize: "Airpark - Faro" -> "airpark faro"
-  const parkNorm = parkLower.replace(/\s*-\s*/g, " ");
-
-  // Try composite "ParkName City" match first (e.g. "airpark lisboa", "airpark faro").
-  // A API às vezes devolve só a marca ("Airpark") e a cidade em inglês
-  // ("lisbon"). Sem normalizar, "airpark lisbon" não casa com a folha
-  // "airpark lisboa" e a reserva escorrega para o nó da marca. Normaliza a
-  // cidade (PT) e tenta ambas as grafias ANTES do fallback para a marca.
-  if (city) {
-    const cityRaw = city.toLowerCase().trim();
-    const cityNorm = CITY_TO_PT[cityRaw] ?? cityRaw;
-    for (const c of new Set([cityNorm, cityRaw])) {
-      const composite = `${parkNorm} ${c}`;
-      if (projectMap.has(composite)) return projectMap.get(composite);
-      const composite2 = `${parkLower} ${c}`;
-      if (projectMap.has(composite2)) return projectMap.get(composite2);
-    }
-  }
-
-  // Try normalized exact match (e.g. "airpark faro" matches project "airpark faro")
-  if (projectMap.has(parkNorm)) return projectMap.get(parkNorm);
-
-  // Try exact match
-  if (projectMap.has(parkLower)) return projectMap.get(parkLower);
-
-  // Try partial match — prefer longest (most specific) match
-  let bestMatch: { key: string; id: number } | null = null;
-  for (const [key, id] of projectMap) {
-    if (key.includes(parkNorm) || parkNorm.includes(key)) {
-      if (!bestMatch || key.length > bestMatch.key.length) {
-        bestMatch = { key, id };
-      }
-    }
-  }
-  if (bestMatch) return bestMatch.id;
-
-  // Try matching city + park fragments
-  if (city) {
-    const cityLower = city.toLowerCase().trim();
-    for (const [key, id] of projectMap) {
-      if (key.includes(parkNorm) && key.includes(cityLower)) return id;
-    }
-  }
-
-  return undefined;
+  return projectMap({ parkName, city });
 }
 
 // ─── Parse date from MultiPark format "DD/MM/YYYY, HH:mm" ────────────────────
@@ -200,7 +144,7 @@ const parseMultiparkDate = parseBookingDate;
 
 function bookingToRecord(
   booking: MultiparkBooking,
-  projectMap: Map<string, number>,
+  projectMap: ProjectMatcher,
   aliasResolver: Map<string, string>,
 ) {
   const client = booking.customer || booking.client;
