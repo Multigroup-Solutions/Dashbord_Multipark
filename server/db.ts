@@ -3146,21 +3146,6 @@ export async function resolveProjectIds(projectId: number): Promise<number[]> {
   return Array.from(ids);
 }
 
-// Taxas €/hora para extras-dia (sincronizadas com server/extrasDia.ts)
-export const EXTRAS_DIA_RATES: Record<string, number> = {
-  junior: 4.5, senior: 5, terminal: 5.5, master: 6,
-};
-
-// SQL para formatar uma coluna timestamp para o bucket pretendido
-export function bucketSqlExpr(col: any, granularity: "day" | "week" | "month" | "year") {
-  switch (granularity) {
-    case "week":  return sql<string>`DATE_FORMAT(${col}, '%x-W%v')`;
-    case "month": return sql<string>`DATE_FORMAT(${col}, '%Y-%m')`;
-    case "year":  return sql<string>`DATE_FORMAT(${col}, '%Y')`;
-    default:      return sql<string>`DATE_FORMAT(${col}, '%Y-%m-%d')`;
-  }
-}
-
 /**
  * Diagnóstico da receita realizada: as MESMAS regras do motor financeiro
  * (deliveredConditions — CHECKED_OUT com saída no período de LISBOA, filtro
