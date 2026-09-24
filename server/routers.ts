@@ -21,7 +21,8 @@ import {
   type DeactivationInput,
   type ResolvedDeactivation,
 } from "../shared/deactivationReasons";
-import { dayToMysql, lisbonToday } from "../shared/expensePeriods";
+import { dayToMysql, isIsoDay, lisbonToday } from "../shared/expensePeriods";
+import { HANDOVER_CITIES, maxHandoverDate } from "../shared/shiftHandover";
 import { expenseTotals } from "../shared/expenseTotals";
 import { getBillingData, getAnnualBreakdown } from "./finance/compat";
 import { canViewDocuments, canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, CENTER_SCOPED_ROLES, PERSONAL_FIELDS, CONTRACT_FIELDS, type RhViewer, type EmployeeRef, isRhAdmin } from "./rhAccess";
@@ -376,6 +377,9 @@ import { LEAD_STATUSES } from "../shared/extraLeadsFunnel";
 const LEAD_STATUS_ENUM = LEAD_STATUSES;
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
+
+// Dia "YYYY-MM-DD" válido (mês/dia reais) — nunca colado em SQL, mas validado na mesma.
+const handoverDaySchema = z.string().refine(isIsoDay, "Data inválida (AAAA-MM-DD)");
 
 const ROLE_HIERARCHY: Record<string, number> = {
   super_admin: 7,
@@ -6638,26 +6642,30 @@ export const appRouter = router({
 
   // ─── PASSAGEM DE TURNO ───────────────────────────────────────────────────
   shiftHandover: router({
-    // Team leaders preenchem; supervisor+ consulta o histórico e o dashboard
+    // Team leaders preenchem; supervisor+ consulta o histórico e o resumo do dia.
+    // A cidade (`city`) passa pelo filtro de cidades do middleware
+    // (hasForeignCityFilter → FORBIDDEN fora das cidades do utilizador).
     save: protectedProcedure.input(z.object({
-      handoverDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      handoverDate: handoverDaySchema,
       shift: z.enum(["morning", "night"]),
-      city: z.enum(["lisbon", "porto", "faro"]).default("lisbon"),
-      carsForCovered: z.number().int().min(0).nullable().optional(),
-      chargedUntilDate: z.string().max(10).nullable().optional(),
+      city: z.enum(HANDOVER_CITIES),
+      // Lock otimista: versão carregada pelo formulário (null = registo novo).
+      expectedVersion: z.number().int().min(1).nullable().optional(),
+      carsForCovered: z.number().int().min(0).max(100_000).nullable().optional(),
+      chargedUntilDate: z.string().refine(isIsoDay, "Data inválida").nullable().optional(),
       cashClosedInSafe: z.boolean().nullable().optional(),
       checkoutCashDone: z.boolean().nullable().optional(),
-      frontPouchValue: z.number().min(0).nullable().optional(),
-      terminalPouchValue: z.number().min(0).nullable().optional(),
-      ticketsExpensesPaid: z.number().min(0).nullable().optional(),
-      mbRolls: z.number().int().min(0).nullable().optional(),
-      mbRollsInPouch: z.number().int().min(0).nullable().optional(),
-      pensInPouch: z.number().int().min(0).nullable().optional(),
+      frontPouchValue: z.number().finite().min(0).max(1_000_000).nullable().optional(),
+      terminalPouchValue: z.number().finite().min(0).max(1_000_000).nullable().optional(),
+      ticketsExpensesPaid: z.number().finite().min(0).max(1_000_000).nullable().optional(),
+      mbRolls: z.number().int().min(0).max(100_000).nullable().optional(),
+      mbRollsInPouch: z.number().int().min(0).max(100_000).nullable().optional(),
+      pensInPouch: z.number().int().min(0).max(100_000).nullable().optional(),
       mbBattery: z.number().int().min(0).max(100).nullable().optional(),
       pdasCharged: z.boolean().nullable().optional(),
       // Legado: continua aceite para não apagar o valor dos registos antigos ao
       // editar; o formulário novo já não o pede (ver `clothingItems`).
-      uniformsCount: z.number().int().min(0).nullable().optional(),
+      uniformsCount: z.number().int().min(0).max(100_000).nullable().optional(),
       // Fardamento entregue: peças com quantidade e tamanho (shared/clothing.ts).
       clothingItems: z.array(z.object({
         type: z.enum(CLOTHING_TYPES),
@@ -6667,22 +6675,35 @@ export const appRouter = router({
       notes: z.string().max(2000).nullable().optional(),
     })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "team_leader");
+      if (input.handoverDate > maxHandoverDate()) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Não é possível registar passagens de turno para depois de amanhã." });
+      }
       const { saveShiftHandover } = await import("./db");
-      await saveShiftHandover({
-        ...input,
+      const { handoverDate, shift, city, expectedVersion, ...values } = input;
+      const result = await saveShiftHandover({ handoverDate, shift, city }, {
+        ...values,
         // Linhas repetidas (mesmo tipo+tamanho) somam-se antes de gravar.
-        clothingItems: input.clothingItems == null ? input.clothingItems : normalizeClothingItems(input.clothingItems),
-        filledById: ctx.user.id,
-        filledByName: ctx.user.name ?? null,
+        clothingItems: values.clothingItems == null ? values.clothingItems : normalizeClothingItems(values.clothingItems),
+      }, {
+        expectedVersion,
+        userId: ctx.user.id,
+        userName: ctx.user.name ?? null,
+        // Passadas 24h desde a criação só supervisor+ edita.
+        canEditOld: (ROLE_HIERARCHY[ctx.user.role] ?? -1) >= ROLE_HIERARCHY["supervisor"],
       });
-      await logActivity({ userId: ctx.user.id, action: "save", entity: "shift_handover", details: `${input.handoverDate} ${input.shift} ${input.city}` });
-      return { success: true };
+      await logActivity({
+        userId: ctx.user.id,
+        action: result.mode === "insert" ? "create" : "update",
+        entity: "shift_handover",
+        details: `${handoverDate} ${shift} ${city}` + (result.changed.length ? ` — alterado: ${result.changed.join(", ")}` : " — sem alterações"),
+      });
+      return { success: true, mode: result.mode };
     }),
 
     list: protectedProcedure.input(z.object({
-      from: z.string().optional(),
-      to: z.string().optional(),
-      city: z.enum(["lisbon", "porto", "faro"]).optional(),
+      from: handoverDaySchema.optional(),
+      to: handoverDaySchema.optional(),
+      city: z.enum(HANDOVER_CITIES).optional(),
     }).optional()).query(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "team_leader");
       const { listShiftHandovers } = await import("./db");
@@ -6690,7 +6711,9 @@ export const appRouter = router({
     }),
 
     supervisorDashboard: protectedProcedure.input(z.object({
-      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      date: handoverDaySchema,
+      // Opcional: restringe o resumo a uma cidade (dentro das do utilizador).
+      city: z.enum(HANDOVER_CITIES).optional(),
     })).query(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "supervisor");
       const { getSupervisorDayDashboard } = await import("./db");

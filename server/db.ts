@@ -1,4 +1,7 @@
-import { projectScope, bookingHistoryScope, employeeScope, userScope, partnerScope, scopedProjectIds, requireGlobalCityAccess, gpsRowScope, pdaScope } from './cityScope';
+import { projectScope, bookingHistoryScope, employeeScope, userScope, partnerScope, scopedProjectIds, requireGlobalCityAccess, gpsRowScope, pdaScope, cityNameScope } from './cityScope';
+import { TRPCError } from '@trpc/server';
+import { buildHandoverCurrent, buildHandoverInsert, buildHandoverList, buildHandoverUpdate, handoverBoundValues, type HandoverInput, type HandoverKey } from './shiftHandoverSql';
+import { decideHandoverWrite, diffHandoverFields, HANDOVER_CONFLICT_MESSAGE, HANDOVER_EXISTS_MESSAGE, operationalDayWindowUtc } from '../shared/shiftHandover';
 import { and, asc, desc, eq, gte, lte, lt, ne, like, or, sql, aliasedTable, isNotNull, isNull, inArray, notInArray, getTableColumns, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { normalizeEmail } from "../shared/email";
@@ -148,6 +151,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0084").then(m => ({ s: m.MIGRATION_0084_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0084 })),
       import("./migrations/migration_0085").then(m => ({ s: m.MIGRATION_0085_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0085 })),
       import("./migrations/migration_0086").then(m => ({ s: m.MIGRATION_0086_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0086 })),
+      import("./migrations/migration_0087").then(m => ({ s: m.MIGRATION_0087_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0087 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -4658,108 +4662,76 @@ export async function autoCloseStaleCheckIns(): Promise<{ closed: number }> {
 // canetas, bateria, PDAs, fardamento + notas. 1 registo por (dia, turno, cidade).
 // `clothingItems` (JSON, ver shared/clothing.ts) substitui `uniformsCount`
 // desde 2026-09-09; a coluna antiga fica para os registos anteriores.
-let shiftHandoverEnsured = false;
-async function ensureShiftHandoverTable() {
-  if (shiftHandoverEnsured) return;
-  const db = await getDb();
-  if (!db) return;
-  await db.execute(sql`CREATE TABLE IF NOT EXISTS \`shift_handovers\` (
-    \`id\` INT NOT NULL AUTO_INCREMENT,
-    \`handoverDate\` VARCHAR(10) NOT NULL,
-    \`shift\` VARCHAR(10) NOT NULL,
-    \`city\` VARCHAR(16) NOT NULL DEFAULT 'lisbon',
-    \`carsForCovered\` INT NULL,
-    \`chargedUntilDate\` VARCHAR(10) NULL,
-    \`cashClosedInSafe\` TINYINT NULL,
-    \`checkoutCashDone\` TINYINT NULL,
-    \`frontPouchValue\` DECIMAL(10,2) NULL,
-    \`terminalPouchValue\` DECIMAL(10,2) NULL,
-    \`ticketsExpensesPaid\` DECIMAL(10,2) NULL,
-    \`mbRolls\` INT NULL,
-    \`mbRollsInPouch\` INT NULL,
-    \`pensInPouch\` INT NULL,
-    \`mbBattery\` INT NULL,
-    \`pdasCharged\` TINYINT NULL,
-    \`uniformsCount\` INT NULL,
-    \`clothingItems\` TEXT NULL,
-    \`notes\` TEXT NULL,
-    \`filledById\` INT NULL,
-    \`filledByName\` VARCHAR(255) NULL,
-    \`createdAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    \`updatedAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    PRIMARY KEY (\`id\`),
-    UNIQUE INDEX \`shift_handover_unique\` (\`handoverDate\`, \`shift\`, \`city\`)
-  )`);
-  shiftHandoverEnsured = true;
-}
+// A tabela é criada pela migration 0087 (drizzle/schema.ts `shiftHandovers`);
+// todo o SQL está em server/shiftHandoverSql.ts, sempre parametrizado.
 
-export async function saveShiftHandover(data: Record<string, any>) {
+export async function saveShiftHandover(
+  key: HandoverKey,
+  data: HandoverInput,
+  opts: { expectedVersion: number | null | undefined; userId: number; userName: string | null; canEditOld: boolean },
+): Promise<{ mode: "insert" | "update"; changed: string[] }> {
   const db = await getDb();
   if (!db) throw new Error("BD indisponível");
-  await ensureShiftHandoverTable();
-  const esc = (v: any) => v == null ? "NULL" : typeof v === "number" ? String(v) : `'${String(v).replace(/'/g, "''").slice(0, 2000)}'`;
-  const cols: Array<[string, any]> = [
-    ["handoverDate", data.handoverDate], ["shift", data.shift], ["city", data.city ?? "lisbon"],
-    ["carsForCovered", data.carsForCovered], ["chargedUntilDate", data.chargedUntilDate],
-    ["cashClosedInSafe", data.cashClosedInSafe == null ? null : (data.cashClosedInSafe ? 1 : 0)],
-    ["checkoutCashDone", data.checkoutCashDone == null ? null : (data.checkoutCashDone ? 1 : 0)],
-    ["frontPouchValue", data.frontPouchValue], ["terminalPouchValue", data.terminalPouchValue],
-    ["ticketsExpensesPaid", data.ticketsExpensesPaid], ["mbRolls", data.mbRolls],
-    ["mbRollsInPouch", data.mbRollsInPouch], ["pensInPouch", data.pensInPouch],
-    ["mbBattery", data.mbBattery],
-    ["pdasCharged", data.pdasCharged == null ? null : (data.pdasCharged ? 1 : 0)],
-    ["uniformsCount", data.uniformsCount],
-    // Lista de peças (já validada no router); `null` limpa. JSON compacto —
-    // o `esc` corta a 2000 chars, e 30 peças ficam muito abaixo disso.
-    ["clothingItems", Array.isArray(data.clothingItems) ? JSON.stringify(data.clothingItems) : data.clothingItems ?? null],
-    ["notes", data.notes],
-    ["filledById", data.filledById], ["filledByName", data.filledByName],
-  ];
-  const updates = cols.filter(([c]) => !["handoverDate", "shift", "city"].includes(c))
-    .map(([c, v]) => `\`${c}\` = ${esc(v)}`).join(", ");
-  await db.execute(sql.raw(
-    `INSERT INTO \`shift_handovers\` (${cols.map(([c]) => `\`${c}\``).join(",")})
-     VALUES (${cols.map(([, v]) => esc(v)).join(",")})
-     ON DUPLICATE KEY UPDATE ${updates}`,
-  ));
+  const [curRows] = await db.execute(buildHandoverCurrent(key)) as any;
+  const cur = (curRows as any[])[0] ?? null;
+  const decision = decideHandoverWrite(
+    cur ? { version: Number(cur.version ?? 1), ageMinutes: Number(cur.ageMinutes ?? 0) } : null,
+    opts.expectedVersion,
+    opts.canEditOld,
+  );
+  if (!decision.ok) throw new TRPCError({ code: decision.code, message: decision.message });
+  const bound = handoverBoundValues(data);
+  const before = cur ? handoverBoundValues(cur) : null;
+  const changed = diffHandoverFields(before, bound);
+  const who = { id: opts.userId, name: opts.userName };
+  if (decision.mode === "insert") {
+    try {
+      await db.execute(buildHandoverInsert(key, data, who));
+    } catch (err: any) {
+      // Outra pessoa criou o mesmo (dia, turno, cidade) entre a leitura e a escrita.
+      if ((err?.code ?? err?.cause?.code) === "ER_DUP_ENTRY") throw new TRPCError({ code: "CONFLICT", message: HANDOVER_EXISTS_MESSAGE });
+      throw err;
+    }
+    return { mode: "insert", changed };
+  }
+  const [res] = await db.execute(buildHandoverUpdate(Number(cur.id), Number(opts.expectedVersion), data, who)) as any;
+  if (Number(res?.affectedRows ?? 0) === 0) throw new TRPCError({ code: "CONFLICT", message: HANDOVER_CONFLICT_MESSAGE });
+  return { mode: "update", changed };
 }
 
 export async function listShiftHandovers(opts: { from?: string; to?: string; city?: string } = {}) {
   const db = await getDb();
   if (!db) return [];
-  await ensureShiftHandoverTable();
-  const conds: string[] = [];
-  if (opts.from) conds.push(`handoverDate >= '${opts.from.slice(0, 10)}'`);
-  if (opts.to) conds.push(`handoverDate <= '${opts.to.slice(0, 10)}'`);
-  if (opts.city) conds.push(`city = '${opts.city.replace(/[^a-z]/g, "")}'`);
-  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
-  const [rows] = await db.execute(sql.raw(
-    `SELECT * FROM \`shift_handovers\` ${where} ORDER BY handoverDate DESC, shift, city LIMIT 200`,
-  )) as any;
+  const [rows] = await db.execute(buildHandoverList(opts, cityNameScope(sql`\`city\``))) as any;
   // `clothingItems` sai como JSON parseado e validado — o cliente nunca vê texto cru.
-  return (rows as any[]).map((r) => ({ ...r, clothingItems: parseClothingItems(r.clothingItems) }));
+  return (rows as any[]).map((r) => ({ ...r, version: Number(r.version ?? 1), clothingItems: parseClothingItems(r.clothingItems) }));
 }
 
-/** Dashboard do supervisor (por dia): condutores por turno, carros
+/** Resumo do dia do supervisor: condutores por turno, carros
  *  recolhidos/entregues, TEMPOS pendente→entrega e atraso na recolha
- *  (previsto vs real), e reclamações do dia. */
+ *  (previsto vs real), e reclamações do dia.
+ *  O "dia" é o dia OPERACIONAL de Lisboa: 03:00 → 03:00 do dia seguinte
+ *  (manhã + noite inteira), convertido para UTC (as colunas são UTC). Tudo
+ *  dentro das cidades do utilizador (ou da cidade pedida). */
 export async function getSupervisorDayDashboard(date: string) {
   const db = await getDb();
   if (!db) return null;
-  const start = `${date} 00:00:00`;
-  const end = `${date} 23:59:59`;
-  const nextEnd = `${date} 23:59:59`;
+  const { start, end, endMs } = operationalDayWindowUtc(date);
+  // Entregas: o CHECK_OUT pode acontecer até 10h depois do pendente (o mesmo
+  // limite do TIMESTAMPDIFF < 600 abaixo) — limite superior explícito.
+  const checkoutEnd = new Date(endMs + 600 * 60_000).toISOString().slice(0, 19).replace("T", " ");
 
   // Tempos pendente→entrega (PENDING_CHECKOUT → CHECK_OUT, mesmo booking)
   const [deliveryRows] = await db.execute(sql`
     SELECT h1.bookingExternalId, TIMESTAMPDIFF(MINUTE, h1.t, h2.t) AS mins, h2.agentName
     FROM (SELECT bookingExternalId, MIN(actionTime) t FROM multipark_booking_history
-          WHERE changeType='PENDING_CHECKOUT' AND actionTime >= ${start} AND actionTime <= ${end}
+          WHERE changeType='PENDING_CHECKOUT' AND actionTime >= ${start} AND actionTime < ${end}
           GROUP BY bookingExternalId) h1
     JOIN (SELECT bookingExternalId, MIN(actionTime) t, MAX(agentName) agentName FROM multipark_booking_history
-          WHERE changeType='CHECK_OUT' AND actionTime >= ${start}
-          GROUP BY bookingExternalId) h2 USING (bookingExternalId)
-    WHERE h2.t >= h1.t AND TIMESTAMPDIFF(MINUTE, h1.t, h2.t) < 600`) as any;
+          WHERE changeType='CHECK_OUT' AND actionTime >= ${start} AND actionTime < ${checkoutEnd}
+          GROUP BY bookingExternalId) h2 ON h2.bookingExternalId = h1.bookingExternalId
+    WHERE h2.t >= h1.t AND TIMESTAMPDIFF(MINUTE, h1.t, h2.t) < 600
+      AND ${bookingHistoryScope(sql`h1.bookingExternalId`)}`) as any;
   const deliveryTimes = (deliveryRows as any[]).map((r) => ({ booking: r.bookingExternalId, mins: Number(r.mins), agent: r.agentName ?? null }));
   deliveryTimes.sort((a, b) => b.mins - a.mins);
   const dAvg = deliveryTimes.length ? Math.round(deliveryTimes.reduce((s, r) => s + r.mins, 0) / deliveryTimes.length) : 0;
@@ -4768,16 +4740,18 @@ export async function getSupervisorDayDashboard(date: string) {
   const [pickupRows] = await db.execute(sql`
     SELECT h.bookingExternalId, TIMESTAMPDIFF(MINUTE, b.checkIn, h.t) AS mins
     FROM (SELECT bookingExternalId, MIN(actionTime) t FROM multipark_booking_history
-          WHERE changeType='CHECK_IN' AND actionTime >= ${start} AND actionTime <= ${nextEnd}
+          WHERE changeType='CHECK_IN' AND actionTime >= ${start} AND actionTime < ${end}
           GROUP BY bookingExternalId) h
     JOIN multipark_bookings b ON b.externalId = h.bookingExternalId
-    WHERE b.checkIn IS NOT NULL AND ABS(TIMESTAMPDIFF(MINUTE, b.checkIn, h.t)) < 600`) as any;
+    WHERE b.checkIn IS NOT NULL AND ABS(TIMESTAMPDIFF(MINUTE, b.checkIn, h.t)) < 600
+      AND ${projectScope(sql`b.projectId`)}`) as any;
   const pickupDelays = (pickupRows as any[]).map((r) => Number(r.mins)).filter((m) => Number.isFinite(m));
   const late = pickupDelays.filter((m) => m > 15).length;
   const pAvg = pickupDelays.length ? Math.round(pickupDelays.reduce((s, m) => s + m, 0) / pickupDelays.length) : 0;
 
-  // Reclamações criadas no dia
-  const [[compl]] = await db.execute(sql`SELECT COUNT(*) n FROM complaints WHERE createdAt >= ${start} AND createdAt <= ${end}`) as any;
+  // Reclamações criadas no mesmo dia operacional
+  const [[compl]] = await db.execute(sql`SELECT COUNT(*) n FROM complaints
+    WHERE createdAt >= ${start} AND createdAt < ${end} AND ${projectScope(sql`complaints.projectId`)}`) as any;
 
   // Condutores por turno (escala extras-dia do dia + ações)
   const dayActivity = await getDayActivity(date);
@@ -4789,10 +4763,11 @@ export async function getSupervisorDayDashboard(date: string) {
     startHour: extrasDiaAssignments.startHour,
     endHour: extrasDiaAssignments.endHour,
     isTeamLeader: extrasDiaAssignments.isTeamLeader,
-  }).from(extrasDiaAssignments).where(eq(extrasDiaAssignments.assignmentDate, date));
+  }).from(extrasDiaAssignments).where(and(eq(extrasDiaAssignments.assignmentDate, date), cityNameScope(extrasDiaAssignments.city)));
 
   return {
     date,
+    window: { start, end },
     totals: dayActivity.totals,
     people: dayActivity.people,
     shifts: assignments,
