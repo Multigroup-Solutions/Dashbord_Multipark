@@ -417,6 +417,8 @@ export const dailyDriverHistory = mysqlTable("daily_driver_history", {
 	geoJsonUrl: text(),
 	rawDataUrl: text(),
 	notes: text(),
+	/** 2 = km/h corrigidos + funcionário resolvido (migração 0078). */
+	metricsVersion: int().default(1).notNull(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 });
 

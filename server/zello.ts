@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { MAX_PLAUSIBLE_KMH, MIN_IMPLICIT_GAP_S, zelloAccuracyOk, zelloBattery, zelloSpeedKmh, zelloTimestamp } from "./zelloGps";
 import { ENV } from "./_core/env";
 
 const NETWORK = process.env.ZELLO_NETWORK ?? "airpark";
@@ -153,19 +154,21 @@ export async function getZelloLocations(): Promise<ZelloLocation[]> {
   if (data.status !== "OK") throw new Error(`Zello location/get failed: ${data.status}`);
   return (data.locations || []).map((l: any) => ({
     username: l.username || l.name || "",
-    displayName: l.display_name || l.username || "",
+    displayName: l.displayName || l.display_name || l.username || "",
     latitude: parseFloat(l.latitude) || 0,
     longitude: parseFloat(l.longitude) || 0,
-    speed: (parseFloat(l.speed) || 0) * 3.6, // m/s to km/h
+    // A API já devolve km/h (antes multiplicava-se por 3,6 — velocidades malucas)
+    speed: zelloSpeedKmh(l),
     heading: parseFloat(l.heading) || 0,
     altitude: parseFloat(l.altitude) || 0,
-    batteryLevel: parseInt(l.battery_level, 10) || 0,
-    chargingStatus: parseInt(l.charging_status, 10) || 0,
-    signalStrength: parseInt(l.signal_strength, 10) || 0,
+    // A API usa camelCase; os nomes com _ ficam só como recurso
+    batteryLevel: zelloBattery(l),
+    chargingStatus: parseInt(l.chargingStatus ?? l.charging_status, 10) || 0,
+    signalStrength: parseInt(l.signalStrength ?? l.signal_strength, 10) || 0,
     accuracy: parseFloat(l.accuracy) || 0,
     status: l.status || "unknown",
-    lastReport: parseInt(l.last_report, 10) || 0,
-    lastReportDelay: parseInt(l.last_report_delay, 10) || 0,
+    lastReport: parseInt(l.lastReport ?? l.last_report, 10) || 0,
+    lastReportDelay: parseInt(l.lastReportDelay ?? l.last_report_delay, 10) || 0,
   }));
 }
 
@@ -226,11 +229,11 @@ export async function summarizeZelloShift(
   const pts: { ts: number; speed: number; lat: number | null; lon: number | null }[] = [];
   for (const f of features) {
     const p = f.properties || {};
-    const ts = parseInt(p.timestamp || p.time || p.lastReport) || 0;
+    const ts = zelloTimestamp(p);
     if (ts <= 0) continue;
-    const speed = (parseFloat(p.speed) || 0) * 3.6; // m/s → km/h
+    const speed = zelloAccuracyOk(p) ? zelloSpeedKmh(p) : 0; // já em km/h
     let lat: number | null = null, lon: number | null = null;
-    if (f.geometry?.type === "Point" && Array.isArray(f.geometry.coordinates)) {
+    if (f.geometry?.type === "Point" && Array.isArray(f.geometry.coordinates) && zelloAccuracyOk(p)) {
       const [gLon, gLat] = f.geometry.coordinates;
       if (Number.isFinite(gLat) && Number.isFinite(gLon) && (gLat !== 0 || gLon !== 0)) {
         lat = gLat; lon = gLon;
@@ -264,7 +267,7 @@ export async function summarizeZelloShift(
         const segKm = haversine(lastFix.lat, lastFix.lon, cur.lat, cur.lon);
         if (gapS > 0 && gapS < 3600 && segKm < 2) {
           const implKmh = (segKm / gapS) * 3600;
-          if (implKmh <= 150) { km += segKm; if (implKmh > 3) implicit.push(implKmh); }
+          if (implKmh <= MAX_PLAUSIBLE_KMH) { km += segKm; if (implKmh > 3 && gapS >= MIN_IMPLICIT_GAP_S) implicit.push(implKmh); }
         }
       }
       lastFix = { ts: cur.ts, lat: cur.lat, lon: cur.lon };
