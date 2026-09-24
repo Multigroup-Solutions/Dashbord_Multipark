@@ -384,7 +384,9 @@ async function resolveLastContactForEmployeeIds(
              MAX(sentAt >= DATE_SUB(NOW(), INTERVAL 24 HOUR)) AS recent
         FROM \`availability_request_log\`
        WHERE employeeId IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+         AND email <> ''
        GROUP BY employeeId`)) as any;
+    // email '' = pedido registado pelo WhatsApp (já contado em whatsapp_messages)
     for (const r of rows as any[]) consider(Number(r.employeeId), r.lastAt, "email", r.recent);
   } catch (err) {
     console.warn("[availability] último contacto email indisponível:", String((err as any)?.cause?.message ?? (err as any)?.message ?? err).slice(0, 120));

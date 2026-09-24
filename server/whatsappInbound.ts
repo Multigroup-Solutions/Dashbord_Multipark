@@ -266,6 +266,13 @@ async function handleInbound(db: Db, m: ParsedInboundMessage, empMap: Map<string
     status: "delivered",
     waTimestamp: ts,
   });
+
+  // Resposta de um colaborador a um pedido de disponibilidade / aviso de
+  // escala ("sim" / "não"). Best-effort: nunca lança (a Meta tem de ter 200).
+  if (employeeId != null && !m.media && m.body.trim()) {
+    const { handleWhatsappReply } = await import("./extrasAutomation");
+    await handleWhatsappReply({ employeeId, conversationId, body: m.body });
+  }
   return true;
 }
 

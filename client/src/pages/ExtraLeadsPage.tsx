@@ -49,6 +49,7 @@ type LeadRow = {
   contactCount: number;
   lastContactedAt: string | null;
   createdAt: string;
+  employeeId?: number | null;
 };
 
 type LeadDraft = { fullName: string; phone: string; email: string; notes: string };
@@ -93,6 +94,23 @@ export default function ExtraLeadsPage() {
 
   const [deleteFor, setDeleteFor] = useState<LeadRow | null>(null);
 
+  // Converter em extra: escolher a cidade (centro de custos), como na aprovação
+  // das candidaturas do site. `projects.list` já vem limitado às cidades do utilizador.
+  const [convertFor, setConvertFor] = useState<LeadRow | null>(null);
+  const [convertProjectId, setConvertProjectId] = useState<string>("");
+  const projects = trpc.projects.list.useQuery();
+  const cityProjects = useMemo(
+    () =>
+      (projects.data ?? [])
+        .filter((p: any) => p.level === "city")
+        .sort((a: any, b: any) => String(a.name).localeCompare(String(b.name), "pt")),
+    [projects.data],
+  );
+  function openConvert(l: LeadRow) {
+    setConvertProjectId(cityProjects.length === 1 ? String(cityProjects[0].id) : "");
+    setConvertFor(l);
+  }
+
   const list = trpc.extraLeads.list.useQuery(
     { status: statusFilter === "all" ? null : statusFilter },
     { refetchInterval: 60_000 },
@@ -120,6 +138,15 @@ export default function ExtraLeadsPage() {
   }, [leads]);
 
   const invalidate = () => list.refetch();
+
+  const convert = trpc.extraLeads.convert.useMutation({
+    onSuccess: (r) => {
+      toast.success(r.created ? "Ficha de extra criada — já aparece na disponibilidade e na escala." : "Lead ligado à ficha de extra que já existia.");
+      setConvertFor(null);
+      invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   const create = trpc.extraLeads.create.useMutation({
     onSuccess: (r) => { toast.success(`Lead criado: ${r.fullName}`); setEditOpen(false); invalidate(); },
@@ -374,6 +401,11 @@ export default function ExtraLeadsPage() {
                           >
                             <MessageCircle className="h-3.5 w-3.5" />
                           </Button>
+                          {!l.employeeId && l.status !== "declined" && (
+                            <Button size="sm" variant="outline" className="h-8 mr-1" title="Converter em extra (cria a ficha)" onClick={() => openConvert(l)}>
+                              <UserPlus className="h-3.5 w-3.5 mr-1" /> Converter
+                            </Button>
+                          )}
                           <Button size="sm" variant="ghost" className="h-8 mr-1" title="Editar" onClick={() => openEdit(l)}>
                             <Pencil className="h-3.5 w-3.5" />
                           </Button>
@@ -503,6 +535,44 @@ export default function ExtraLeadsPage() {
                 Enviar a {contactWithPhone}
               </Button>
             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Converter em extra ──────────────────────────────────────────────── */}
+      <Dialog open={convertFor != null} onOpenChange={(o) => { if (!o && !convert.isPending) setConvertFor(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Converter {convertFor?.fullName} em extra</DialogTitle>
+            <DialogDescription>
+              Cria a ficha de extra{convertFor?.email ? ` com o email ${convertFor.email}` : " com o telemóvel do lead"} e aloca-a à
+              cidade escolhida. Se já existir uma ficha com esse email, o lead fica ligado a ela.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label>Centro de Custos (cidade) *</Label>
+            <Select value={convertProjectId} onValueChange={setConvertProjectId} disabled={convert.isPending}>
+              <SelectTrigger className={!convertProjectId ? "border-amber-400" : undefined}>
+                <SelectValue placeholder={projects.isLoading ? "A carregar cidades…" : "Escolher cidade..."} />
+              </SelectTrigger>
+              <SelectContent>
+                {cityProjects.map((p: any) => (
+                  <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {!projects.isLoading && cityProjects.length === 0 && (
+              <p className="text-xs text-amber-600">Não tens nenhuma cidade disponível para alocar (verifica o teu centro de custos).</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConvertFor(null)} disabled={convert.isPending}>Cancelar</Button>
+            <Button
+              disabled={!convertProjectId || convert.isPending || !convertFor}
+              onClick={() => convertFor && convert.mutate({ id: convertFor.id, projectId: Number(convertProjectId) })}
+            >
+              <UserPlus className="h-4 w-4 mr-2" /> {convert.isPending ? "A converter…" : "Criar ficha de extra"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

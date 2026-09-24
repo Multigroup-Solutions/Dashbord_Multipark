@@ -7815,6 +7815,47 @@ export const appRouter = router({
         return { success: true };
       }),
 
+    // ── Automação (pontos 7 e 8): preencher com disponíveis, cobertura, avisos ──
+    autofill: protectedProcedure
+      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), city: z.enum(["lisbon", "porto", "faro"]), shift: z.enum(["morning", "night"]) }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { autofillShift } = await import("./extrasAutomation");
+        try {
+          return await autofillShift({ ...input, createdById: ctx.user.id });
+        } catch (err: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao preencher a escala" });
+        }
+      }),
+
+    coverage: protectedProcedure
+      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), city: z.enum(["lisbon", "porto", "faro"]) }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { coverageFor } = await import("./extrasAutomation");
+        return coverageFor(input.date, input.city);
+      }),
+
+    notices: protectedProcedure
+      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { listNotices } = await import("./extrasAutomation");
+        return listNotices(input.date);
+      }),
+
+    notify: protectedProcedure
+      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), city: z.enum(["lisbon", "porto", "faro"]) }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { notifyAssignments } = await import("./extrasAutomation");
+        try {
+          return await notifyAssignments(input.date, { city: input.city, createdById: ctx.user.id });
+        } catch (err: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao avisar" });
+        }
+      }),
+
     costForRange: protectedProcedure
       .input(z.object({ startDate: z.string(), endDate: z.string() }))
       .query(async ({ ctx, input }) => {
@@ -8106,6 +8147,20 @@ export const appRouter = router({
           return await updateExtraLead(id, patch, ctx.user.id);
         } catch (err: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao atualizar lead" });
+        }
+      }),
+
+    // Converte o lead numa ficha de extra no centro de custos (cidade) escolhido.
+    convert: protectedProcedure
+      .input(z.object({ id: z.number().int().positive(), projectId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        assertProjectAccess(input.projectId);
+        const { convertLeadToExtra } = await import("./extrasAutomation");
+        try {
+          return await convertLeadToExtra(input.id, input.projectId, ctx.user.id);
+        } catch (err: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao converter" });
         }
       }),
 

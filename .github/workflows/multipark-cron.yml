@@ -79,6 +79,50 @@ jobs:
             gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
           fi
 
+  extras-auto:
+    if: github.event.schedule == '7 * * * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      # Automação dos extras: o endpoint decide pela hora de Lisboa o que corre
+      # (pedido de disponibilidade à quinta, lembrete ao sábado, aviso de escala
+      # e alerta de cobertura a partir das 18h). Tudo idempotente.
+      - name: Trigger /api/cron/extras-auto
+        env:
+          # URL público de produção; secrets.APP_URL sobrepõe-se se for definido.
+          APP_URL: ${{ secrets.APP_URL || 'https://dashbord-multipark.vercel.app' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_URL:-}" ]; then
+            echo "::error::APP_URL secret não está definido — extras-auto não corre."
+            exit 1
+          fi
+          code=$(curl -sS -m 90 -w '%{http_code}' -o /tmp/body.txt \
+            -H "Authorization: Bearer ${CRON_SECRET:-}" \
+            "$APP_URL/api/cron/extras-auto") \
+            || { echo "::error::curl falhou ao contactar o endpoint"; cat /tmp/body.txt || true; exit 1; }
+          echo "HTTP $code"; head -c 1000 /tmp/body.txt; echo
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            echo "::error::endpoint devolveu HTTP $code"; exit 1
+          fi
+          if grep -q '"ok":false' /tmp/body.txt; then
+            echo "::error::endpoint reportou ok:false"; exit 1
+          fi
+      - name: Alerta — abrir/comentar issue em caso de falha
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="🔴 Cron multipark falhou: extras-auto"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body="Run falhado: $run_url — $(date -u +'%Y-%m-%d %H:%M UTC')"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number' || true)
+          if [ -n "${existing:-}" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
+
   email-inbound:
     if: github.event.schedule == '7 * * * *' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
