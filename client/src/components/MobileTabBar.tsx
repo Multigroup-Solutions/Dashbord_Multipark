@@ -12,7 +12,7 @@ export function MobileTabBar() {
   const [location, navigate] = useLocation();
   const search = useSearch();
   const activeGroup = new URLSearchParams(search).get("g");
-  const groups = getFilteredHubGroups(user?.role ?? "user");
+  const groups = getFilteredHubGroups(user ?? "user");
   const has = (id: string) => groups.some((g) => g.id === id);
 
   const inGroup = (id: string) => {

@@ -17,7 +17,7 @@ export default function ModulesPage() {
   const role = user?.role ?? "user";
 
   const groups = useMemo(() => {
-    let all = getFilteredHubGroups(role);
+    let all = getFilteredHubGroups(user ?? role);
     if (activeGroup) all = all.filter((g) => g.id === activeGroup);
     const needle = q.trim().toLowerCase();
     if (needle) {
@@ -26,7 +26,7 @@ export default function ModulesPage() {
         .filter((g) => g.items.length > 0);
     }
     return all;
-  }, [role, activeGroup, q]);
+  }, [user, role, activeGroup, q]);
 
   return (
     <div className="space-y-6 max-w-[1240px]">

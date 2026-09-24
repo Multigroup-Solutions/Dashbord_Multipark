@@ -43,7 +43,7 @@ export function KanbanView({ user, filterType, setFilterType, searchTerm, setSea
   const globalFilters = useGlobalFilters();
   // "Sem cidade": casos sem projeto (só quem vê todas as cidades os tem).
   const [noProject, setNoProject] = useState(false);
-  const canCrossRef = seesBeyondOwn(user?.role, "perdidos") && can(user?.role, "perdidos", "edit");
+  const canCrossRef = seesBeyondOwn(user, "perdidos") && can(user, "perdidos", "edit");
   const queryInput = useMemo(() => {
     const input: any = {};
     if (filterType !== "all") input.itemType = filterType;

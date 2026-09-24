@@ -41,10 +41,10 @@ export default function ProfilePage() {
   const rows = [
     { icon: Clock, label: "O meu ponto", note: myStatus?.status === "in" ? "entrada aberta" : "picar entrada", action: () => openMyEmployee("timerecords") },
     { icon: UserCheck, label: "A minha ficha", note: "RH", action: () => openMyEmployee() },
-    ...(can(user?.role, "permissoes", "manage")
+    ...(can(user, "permissoes", "manage")
       ? [{ icon: Shield, label: "Roles e permissões", note: "granular", action: () => navigate("/permissoes") }]
       : []),
-    ...(can(user?.role, "definicoes", "view")
+    ...(can(user, "definicoes", "view")
       ? [{ icon: SlidersHorizontal, label: "Definições", note: "sistema", action: () => navigate("/definicoes") }]
       : []),
   ];

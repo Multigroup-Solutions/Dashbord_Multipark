@@ -28,7 +28,7 @@ export default function Home() {
       // user/extra/condutor vão para a ficha; team leader (sem Dashboards) para as Tarefas
       const role = (user as any).role ?? "user";
       if (roleRank(role) < roleRank("team_leader")) setLocation("/rh");
-      else if (!can(role, "dashboards", "view")) setLocation("/tarefas");
+      else if (!can(user as any, "dashboards", "view")) setLocation("/tarefas");
       else setLocation("/dashboard");
     }
   }, [user, loading, setLocation]);

@@ -84,7 +84,7 @@ export default function IncidentsPage() {
   const [noProject, setNoProject] = useState(false);
   const globalFilters = useGlobalFilters();
   const [, setLocation] = useLocation();
-  const isLeader = roleRank(user?.role) >= roleRank("team_leader") && can(user?.role, "ocorrencias", "edit");
+  const isLeader = roleRank(user?.role) >= roleRank("team_leader") && can(user, "ocorrencias", "edit");
 
   const scopeInput = useMemo(() => (
     noProject ? { noProject: true } : globalFilters.projectId !== undefined ? { projectId: globalFilters.projectId } : {}
@@ -477,7 +477,7 @@ function IncidentDetailDialog({ id, user, cities, employeeMap, onClose, onEdit }
 
   if (isLoading || !inc) return null;
   const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "") && inc.status !== "converted";
-  const isLeader = roleRank(user?.role) >= roleRank("team_leader") && can(user?.role, "ocorrencias", "edit");
+  const isLeader = roleRank(user?.role) >= roleRank("team_leader") && can(user, "ocorrencias", "edit");
   const openStates = inc.status === "open" || inc.status === "investigating";
 
   return (

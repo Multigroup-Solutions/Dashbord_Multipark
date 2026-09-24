@@ -241,8 +241,8 @@ export default function ExpensesPage() {
   // as suas + as da equipa na cidade (sem totais); supervisor a cidade;
   // front/backoffice todas; admin+ gere. O servidor filtra.
   const role = user?.role ?? "";
-  const isInputOnly = ["own", "below_city"].includes(scopeFor(role, "despesas"));
-  const canManage = can(role, "despesas", "manage");
+  const isInputOnly = ["own", "below_city"].includes(scopeFor(user, "despesas"));
+  const canManage = can(user, "despesas", "manage");
   const canDelete = role === "super_admin";
 
   // Queries
@@ -416,7 +416,7 @@ export default function ExpensesPage() {
 
       {/* Condutor / team leader: as SUAS despesas (e da equipa), sem totais */}
       {isInputOnly && (
-        <p className="text-xs text-muted-foreground -mt-3">{scopeFor(role, "despesas") === "own" ? "As tuas despesas" : "As tuas despesas e as da tua equipa"} e o estado de cada uma. Os totais da empresa são reservados à administração.</p>
+        <p className="text-xs text-muted-foreground -mt-3">{scopeFor(user, "despesas") === "own" ? "As tuas despesas" : "As tuas despesas e as da tua equipa"} e o estado de cada uma. Os totais da empresa são reservados à administração.</p>
       )}
 
       {tab === "resumo" && <ExpenseDashboard />}

@@ -15,7 +15,7 @@ import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { requireAccess, isOwnOnly, userIdsAtOrBelowInCity, employeeBelowCondition } from "./_core/access";
-import { ROLE_RANK as ACCESS_ROLE_RANK, can, scopeFor, canSeeFinanceTotalsFor, canManageUserRole, canGrantPermissionsTo, canTouchPermission, assignableRoles, isNationalRole, seesBeyondOwn, type ModuleId, type Action as AccessAction } from "../shared/access";
+import { ROLE_RANK as ACCESS_ROLE_RANK, MODULE_IDS, can, scopeFor, canSeeFinanceTotalsFor, canManageUserRole, canGrantPermissionsTo, canTouchPermission, assignableRoles, isNationalRole, seesBeyondOwn, type ModuleId, type Action as AccessAction } from "../shared/access";
 import { normalizeEmail } from "@shared/email";
 import { USER_ROLES, superAdminGuard, inviteCompletionError } from "./userAdminRules";
 import {
@@ -1225,7 +1225,14 @@ export const appRouter = router({
       if (!u) return u;
       // O grant extras_dia.team_leader NÃO eleva o papel (só marca
       // elegibilidade para TL na escala): o menu/UI seguem o papel da conta.
-      const uElev = u;
+      // Acesso efetivo: o cliente resolve can()/menu com papel + overrides de
+      // módulo ativos (shared/access.ts → grantFor).
+      let accessOverrides: import("../shared/access").AccessOverrides = {};
+      try {
+        const { getUserModuleOverrides } = await import("./db");
+        accessOverrides = await getUserModuleOverrides(u.id);
+      } catch { /* sem overrides: fica o papel */ }
+      const uElev = { ...u, accessOverrides };
       // Se houver ficha de colaborador, devolve também o estado dos docs
       // e bloqueio. Lazy check para extras: actualiza flags se passou tempo.
       try {
@@ -2604,6 +2611,7 @@ export const appRouter = router({
         if (!PERMISSION_IDS.includes(input.permission as any)) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Permissão desconhecida." });
         }
+        if (input.userId === ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Não podes alterar as tuas próprias permissões." });
         const target = await getUserById(input.userId);
         if (!target || !canGrantPermissionsTo(ctx.user, target.role)) throw new TRPCError({ code: "FORBIDDEN", message: "Não podes gerir as permissões desta conta." });
         if (!(await userInCityScope(input.userId))) throw new TRPCError({ code: "FORBIDDEN", message: "Esta conta não pertence à tua cidade." });
@@ -2612,6 +2620,112 @@ export const appRouter = router({
         await setUserPermission(input.userId, input.permission, input.mode, ctx.user.id);
         await logActivity({ userId: ctx.user.id, action: "set_permission", entity: "user", entityId: input.userId, details: `${input.permission} = ${input.mode ?? "(limpo)"}` });
         return { success: true };
+      }),
+
+    // ── Overrides de MÓDULO por utilizador (pedido do dono, 24 set 2026) ──────
+    // Contas a quem se pode dar acessos (no âmbito de cidade de quem pede).
+    people: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "permissoes", "view");
+      const { listActiveUsersInScope } = await import("./db");
+      const { overrideTargetError } = await import("../shared/accessOverrides");
+      const rows = await listActiveUsersInScope();
+      // A lista já vem limitada à(s) cidade(s) de quem pede (userScope).
+      return rows.map((u) => ({ ...u, editError: overrideTargetError(ctx.user, { id: u.id, role: u.role, inActorCity: true }) }));
+    }),
+
+    // Grelha de uma pessoa: padrão do papel, override e acesso efetivo por módulo.
+    moduleAccessForUser: protectedProcedure
+      .input(z.object({ userId: z.number() }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "permissoes", "view");
+        const target = await getUserById(input.userId);
+        if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "Utilizador não encontrado" });
+        const inCity = await userInCityScope(input.userId);
+        if (!inCity) throw new TRPCError({ code: "FORBIDDEN", message: "Esta conta não pertence à tua cidade." });
+        const { listModuleOverridesForUser } = await import("./db");
+        const { MODULES, grantFor, normalizeGrant, overrideActive, roleGrantFor } = await import("../shared/access");
+        const { overrideChangeError, overrideTargetError } = await import("../shared/accessOverrides");
+        const records = await listModuleOverridesForUser(input.userId);
+        const byModule = new Map(records.map((r) => [r.module, r]));
+        const today = lisbonToday();
+        const targetRef = { id: target.id, role: target.role, inActorCity: inCity };
+        return {
+          user: { id: target.id, name: target.name, email: target.email, role: target.role },
+          editError: overrideTargetError(ctx.user, targetRef),
+          rows: MODULES.map((m) => {
+            const rec = byModule.get(m.id) ?? null;
+            const active = !!rec && overrideActive(rec.override, today);
+            const roleDefault = roleGrantFor(target.role, m.id);
+            return {
+              module: m.id, label: m.label, group: m.group,
+              roleDefault,
+              override: rec ? { ...rec.override, note: rec.note, grantedByName: rec.grantedByName, updatedAt: rec.updatedAt ?? rec.createdAt, expired: !active } : null,
+              effective: active ? normalizeGrant(rec!.override) : roleDefault,
+              // O que quem pede pode dar neste módulo (teto dos selects).
+              mine: grantFor(ctx.user, m.id),
+              // Revogar cabe sempre no alcance: o erro que sobra é do módulo/conta/override atual.
+              lockReason: overrideChangeError(ctx.user, targetRef, m.id, { access: "none", actions: [] }, rec?.override ?? null),
+            };
+          }),
+        };
+      }),
+
+    setModuleAccess: protectedProcedure
+      .input(z.object({
+        userId: z.number(),
+        module: z.enum(MODULE_IDS),
+        // null = repor o padrão do papel
+        grant: z.object({
+          access: z.enum(["none", "own", "below_city", "city", "national"]),
+          actions: z.array(z.enum(["view", "edit", "export", "manage"])).max(4),
+          expiresOn: z.string().nullable().optional(),
+        }).nullable(),
+        note: z.string().max(255).nullable().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "permissoes", "manage");
+        const target = await getUserById(input.userId);
+        if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "Utilizador não encontrado" });
+        const inCity = await userInCityScope(input.userId);
+        const { getUserPermissionRows, moduleOverrideFromRow, setModuleOverride } = await import("./db");
+        const { MODULES, moduleOverrideKey, normalizeGrant } = await import("../shared/access");
+        const { overrideChangeError, describeGrant } = await import("../shared/accessOverrides");
+        const expiresOn = input.grant?.expiresOn || null;
+        if (expiresOn && (!isIsoDay(expiresOn) || expiresOn < lisbonToday())) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Data de fim inválida (tem de ser hoje ou depois)." });
+        }
+        const next = input.grant ? { ...normalizeGrant(input.grant), expiresOn } : null;
+        const key = moduleOverrideKey(input.module);
+        const existingRow = (await getUserPermissionRows(input.userId)).find((r) => r.permission === key);
+        const existing = existingRow ? moduleOverrideFromRow(existingRow)?.override ?? null : null;
+        const err = overrideChangeError(ctx.user, { id: target.id, role: target.role, inActorCity: inCity }, input.module, next, existing);
+        if (err) throw new TRPCError({ code: "FORBIDDEN", message: err });
+        const prev = await setModuleOverride(input.userId, input.module, next, ctx.user.id, input.note ?? null);
+        const label = MODULES.find((m) => m.id === input.module)?.label ?? input.module;
+        const until = next?.expiresOn ? ` (até ${next.expiresOn})` : "";
+        await logActivity({
+          userId: ctx.user.id, action: "set_module_access", entity: "user", entityId: input.userId,
+          details: `${label} [${input.module}]: ${describeGrant(prev)} → ${describeGrant(next)}${until}${input.note?.trim() ? ` — ${input.note.trim()}` : ""}`,
+        });
+        return { success: true };
+      }),
+
+    // "Quem tem acesso a X": acesso efetivo de cada conta (papel ou override).
+    whoHasAccess: protectedProcedure
+      .input(z.object({ module: z.enum(MODULE_IDS) }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "permissoes", "view");
+        const { listUsersWithModuleOverride } = await import("./db");
+        const { normalizeGrant, roleGrantFor } = await import("../shared/access");
+        const rows = await listUsersWithModuleOverride(input.module);
+        return rows
+          .map((r) => {
+            const active = !!r.override && !r.overrideExpired;
+            const grant = active ? normalizeGrant(r.override!) : roleGrantFor(r.role, input.module);
+            return { id: r.id, name: r.name, email: r.email, role: r.role, grant, source: active ? "override" as const : "role" as const,
+              override: r.override, overrideExpired: r.overrideExpired };
+          })
+          .filter((r) => r.grant.access !== "none" || r.override);
       }),
 
     // A cidade depende exclusivamente do centro de custos, incluindo administradores.

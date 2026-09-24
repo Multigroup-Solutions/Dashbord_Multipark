@@ -39,7 +39,7 @@ export default function DisponibilidadePage() {
     );
   }
 
-  if (can(user?.role, "disponibilidade_extras", "view")) {
+  if (can(user, "disponibilidade_extras", "view")) {
     return (
       <div className="space-y-6">
         <div>

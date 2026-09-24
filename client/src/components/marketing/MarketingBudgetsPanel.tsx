@@ -35,7 +35,7 @@ const monthLabel = (m: string) => new Intl.DateTimeFormat("pt-PT", { month: "lon
 
 export default function MarketingBudgetsPanel() {
   const { user } = useAuth();
-  const isAdmin = can(user?.role, "marketing", "manage");
+  const isAdmin = can(user, "marketing", "manage");
   const { projectId } = useGlobalFilters();
   const [month, setMonth] = useState(lisbonMonth());
   const utils = trpc.useUtils();

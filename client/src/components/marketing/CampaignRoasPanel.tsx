@@ -35,7 +35,7 @@ function statusBadge(status: string | null | undefined) {
 
 export default function CampaignRoasPanel({ from, to, projectId }: { from: string; to: string; projectId?: number }) {
   const { user } = useAuth();
-  const isAdmin = can(user?.role, "marketing", "manage");
+  const isAdmin = can(user, "marketing", "manage");
   const utils = trpc.useUtils();
   const { data, isLoading, error } = trpc.marketing.campaignRoas.useQuery({ from, to, projectId });
   const refresh = () => { utils.marketing.campaignRoas.invalidate(); utils.marketing.campaignLinks.list.invalidate(); };

@@ -292,7 +292,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
 
   const isSuperAdmin = currentUser?.role === "super_admin";
   const myRole = currentUser?.role ?? "user";
-  const canManageUsers = can(myRole, "utilizadores", "manage");
+  const canManageUsers = can(currentUser, "utilizadores", "manage");
   const assignable = assignableRoles(myRole) as string[];
   const roleOptions = ROLES.filter((r) => assignable.includes(r.value));
   /** Pode gerir esta conta (papel dentro do que pode atribuir; nunca a própria)? */
@@ -438,7 +438,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
     }
   }
 
-  if (!can(myRole, "utilizadores", "view")) {
+  if (!can(currentUser, "utilizadores", "view")) {
     return (
       <div className="flex flex-col items-center justify-center py-24 text-center">
         <AlertCircle className="h-12 w-12 text-muted-foreground/30 mb-4" />

@@ -18,6 +18,9 @@
  * Ações: view (ver), edit (criar/alterar o dia a dia), export (Excel/PDF),
  * manage (configuração, apagar, aprovar, coisas de administração).
  *
+ * Por cima do papel, cada pessoa pode ter overrides por módulo (grantFor =
+ * override ativo, senão o papel) — ver "Overrides por utilizador" abaixo.
+ *
  * A tabela para revisão está em docs/permissoes.md (gerada por
  * `pnpm tsx scripts/gen-permissoes-doc.ts`; um teste garante que está em dia).
  */
@@ -268,13 +271,82 @@ export const MATRIX: Record<ModuleId, Record<Role, Grant>> = Object.fromEntries(
   (Object.keys(MATRIX_SPEC) as ModuleId[]).map(m => [m, Object.fromEntries(ROLES.map(r => [r, parse(MATRIX_SPEC[m][r])]))]),
 ) as Record<ModuleId, Record<Role, Grant>>;
 
-type UserLike = { role: string | null | undefined } | string | null | undefined;
-const roleOf = (u: UserLike): string => (typeof u === "string" ? u : u?.role ?? "") || "";
+// ─── Overrides por utilizador (pedido do dono, 24 set 2026) ─────────────────
+// "Dar a cada pessoa permissão para qualquer coisa": para qualquer módulo da
+// matriz, uma pessoa pode ter um override que SUBSTITUI o que o papel lhe dá
+// (alcance + ações), com validade opcional (`expiresOn`, dia de Lisboa,
+// inclusivo). access "none" = retirar o módulo. Guardados em user_permissions
+// com a chave `module.<id>` (migração 0099); regras de quem pode dar o quê em
+// shared/accessOverrides.ts.
 
-/** O que o papel tem neste módulo (papel desconhecido = nada). */
-export function grantFor(user: UserLike, module: ModuleId): Grant {
-  const role = roleOf(user);
+export const ACCESS_RANK: Record<Access, number> = { none: 0, own: 1, below_city: 2, city: 3, national: 4 };
+export const ACCESS_VALUES: readonly Access[] = ["none", "own", "below_city", "city", "national"];
+export const ACTION_VALUES: readonly Action[] = ["view", "edit", "export", "manage"];
+export const MODULE_IDS = MODULES.map(m => m.id) as [ModuleId, ...ModuleId[]];
+export const isModuleId = (v: unknown): v is ModuleId => typeof v === "string" && (MODULE_IDS as string[]).includes(v);
+
+export interface ModuleOverride { access: Access; actions: readonly Action[]; expiresOn?: string | null }
+export type AccessOverrides = Partial<Record<ModuleId, ModuleOverride>>;
+
+/** Chave em user_permissions de um override de módulo. */
+export const moduleOverrideKey = (m: ModuleId) => `module.${m}`;
+
+/** Dia de hoje em Lisboa (YYYY-MM-DD) — a validade é um dia inclusivo. */
+function lisbonDay(now: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now);
+  const get = (t: string) => parts.find(p => p.type === t)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+/** O override ainda vale hoje? (sem data = sem fim) */
+export function overrideActive(o: Pick<ModuleOverride, "expiresOn"> | null | undefined, today?: string): boolean {
+  if (!o) return false;
+  if (!o.expiresOn) return true;
+  return String(o.expiresOn).slice(0, 10) >= (today ?? lisbonDay());
+}
+
+/** Forma canónica: ações válidas, por ordem, sempre com "ver"; sem ações = nada. */
+export function normalizeGrant(g: { access: Access; actions: readonly Action[] }): Grant {
+  if (!g || g.access === "none" || !ACCESS_VALUES.includes(g.access)) return NONE;
+  const acts = ACTION_VALUES.filter(a => a === "view" || g.actions.includes(a));
+  return { access: g.access, actions: acts };
+}
+
+/** Letras compactas (v/e/x/m) ↔ ações, como na matriz. */
+export const actionsToLetters = (a: readonly Action[]) => ACTION_VALUES.filter(x => a.includes(x)).map(x => x === "export" ? "x" : x[0]).join("");
+export const lettersToActions = (s: string | null | undefined): Action[] => [...new Set([...(s ?? "")].map(l => LETTER[l]).filter(Boolean))];
+
+type UserLike = { role: string | null | undefined; accessOverrides?: AccessOverrides | null } | string | null | undefined;
+const roleOf = (u: UserLike): string => (typeof u === "string" ? u : u?.role ?? "") || "";
+const overridesOf = (u: UserLike): AccessOverrides | null | undefined => (typeof u === "object" && u ? u.accessOverrides : undefined);
+
+/** O que o PAPEL dá no módulo (sem overrides). */
+export function roleGrantFor(role: string | null | undefined, module: ModuleId): Grant {
   return isRole(role) ? MATRIX[module][role] : NONE;
+}
+
+/** Override ativo da pessoa neste módulo (ou null). */
+export function activeOverride(user: UserLike, module: ModuleId, today?: string): ModuleOverride | null {
+  const o = overridesOf(user)?.[module];
+  return o && overrideActive(o, today) ? o : null;
+}
+
+/**
+ * Acesso EFETIVO: override ativo da pessoa (se houver) — senão o do papel.
+ * Papel desconhecido sem override = nada. É isto que o servidor
+ * (requireAccess), o menu e os botões usam.
+ */
+export function grantFor(user: UserLike, module: ModuleId, today?: string): Grant {
+  const o = activeOverride(user, module, today);
+  return o ? normalizeGrant(o) : roleGrantFor(roleOf(user), module);
+}
+
+/** Acesso efetivo em todos os módulos (+ de onde vem). */
+export function effectiveGrants(user: UserLike, today?: string): Record<ModuleId, Grant & { source: "role" | "override" }> {
+  return Object.fromEntries(MODULE_IDS.map(m => {
+    const o = activeOverride(user, m, today);
+    return [m, { ...(o ? normalizeGrant(o) : roleGrantFor(roleOf(user), m)), source: o ? "override" : "role" }];
+  })) as Record<ModuleId, Grant & { source: "role" | "override" }>;
 }
 
 /** Pode fazer `action` no módulo (em algum alcance)? */

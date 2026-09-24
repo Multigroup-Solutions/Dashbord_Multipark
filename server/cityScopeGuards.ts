@@ -51,7 +51,7 @@ export async function assertScopedOperation(path: string, type: string, raw: unk
     if (!rows.length) throw new TRPCError({ code: 'FORBIDDEN', message: 'Este turno pertence a outra cidade.' });
   }
   if (path === 'multipark.setMultiparkAgentMapping') await assertEmployeeAccess(input.employeeId);
-  if (path.startsWith('users.') || ['permissions.forUser', 'permissions.setForUser'].includes(path)) {
+  if (path.startsWith('users.') || ['permissions.forUser', 'permissions.setForUser', 'permissions.moduleAccessForUser', 'permissions.setModuleAccess'].includes(path)) {
     const id = input.userId ?? input.id;
     if (id != null) {
       const { loadCityAccess } = await import('./cityAccess');

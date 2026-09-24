@@ -2349,3 +2349,25 @@ export const appSettingsAudit = mysqlTable("app_settings_audit", {
 	index("idx_app_settings_audit_key_changed").on(table.settingKey, table.changedAt),
 	index("idx_app_settings_audit_changed").on(table.changedAt),
 ]);
+
+// Permissões por utilizador (grant/deny além do papel) + overrides de módulo
+// (`module.<id>`, migração 0099): scope/actions substituem o que o papel dá
+// nesse módulo; expiresOn = último dia (Lisboa) em que vale.
+export const userPermissions = mysqlTable("user_permissions", {
+	userId: int().notNull(),
+	permission: varchar({ length: 64 }).notNull(),
+	mode: mysqlEnum(['grant','deny']).notNull(),
+	grantedBy: int(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+	scope: varchar({ length: 16 }),
+	actions: varchar({ length: 8 }),
+	expiresOn: date({ mode: 'string' }),
+	note: varchar({ length: 255 }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow(),
+},
+(table) => [
+	primaryKey({ columns: [table.userId, table.permission] }),
+	index("idx_user_permissions_permission").on(table.permission),
+]);
+
+export type UserPermission = typeof userPermissions.$inferSelect;

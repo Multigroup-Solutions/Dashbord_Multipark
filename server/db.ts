@@ -6,6 +6,8 @@ import { mergeStoredOpenItems, parseMaterialExceptions, parseOpenItems, type Ope
 import { and, asc, desc, eq, gte, lte, lt, ne, like, or, sql, aliasedTable, isNotNull, isNull, inArray, notInArray, getTableColumns, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { normalizeEmail } from "../shared/email";
+import { ACCESS_VALUES, actionsToLetters, isModuleId, lettersToActions, moduleOverrideKey, normalizeGrant, overrideActive, type Access, type AccessOverrides, type ModuleId, type ModuleOverride } from "../shared/access";
+import { cachedPermissionRows, type PermissionRow } from "./_core/accessContext";
 import { parseClothingItems } from "../shared/clothing";
 import {
   users,
@@ -159,6 +161,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0097").then(m => ({ s: m.MIGRATION_0097_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0097 })),
       import("./migrations/migration_0098").then(m => ({ s: m.MIGRATION_0098_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0098 })),
       import("./migrations/migration_0099").then(m => ({ s: m.MIGRATION_0099_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0099 })),
+      import("./migrations/migration_0100").then(m => ({ s: m.MIGRATION_0100_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0100 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -4619,7 +4622,10 @@ export async function listAgentPartners(): Promise<Array<{ agentName: string; pa
 
 // ─── PERMISSÕES POR UTILIZADOR (grant/deny além do role) ─────────────────────
 // Pedido Jorge 2026-08-06: "mais permissões ou menos permissões por utilizador".
-// Tabela on-demand; o catálogo vive em shared/permissions.ts.
+// O catálogo das permissões especiais vive em shared/permissions.ts; os
+// overrides de MÓDULO (chave `module.<id>`, migração 0100) na mesma tabela.
+// A tabela nasce pela migração 0100 (ensureRecentSchema); o CREATE aqui fica
+// como rede de segurança para bases antigas.
 let userPermsEnsured = false;
 async function ensureUserPermissionsTable() {
   if (userPermsEnsured) return;
@@ -4631,9 +4637,48 @@ async function ensureUserPermissionsTable() {
     \`mode\` ENUM('grant','deny') NOT NULL,
     \`grantedBy\` INT NULL,
     \`updatedAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    PRIMARY KEY (\`userId\`, \`permission\`)
+    \`scope\` VARCHAR(16) NULL,
+    \`actions\` VARCHAR(8) NULL,
+    \`expiresOn\` DATE NULL,
+    \`note\` VARCHAR(255) NULL,
+    \`createdAt\` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (\`userId\`, \`permission\`),
+    KEY \`idx_user_permissions_permission\` (\`permission\`)
   )`);
   userPermsEnsured = true;
+}
+
+/** DATE do mysql2 (Date ou string) → "YYYY-MM-DD" (a data "de calendário", sem fuso). */
+function dayString(v: unknown): string | null {
+  if (v == null || v === "") return null;
+  if (v instanceof Date) {
+    const y = v.getFullYear(), m = String(v.getMonth() + 1).padStart(2, "0"), d = String(v.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+  return String(v).slice(0, 10);
+}
+
+function toPermissionRow(r: any): PermissionRow {
+  return {
+    permission: String(r.permission),
+    mode: r.mode === "deny" ? "deny" : "grant",
+    scope: r.scope == null ? null : String(r.scope),
+    actions: r.actions == null ? null : String(r.actions),
+    expiresOn: dayString(r.expiresOn),
+  };
+}
+
+/** Todas as linhas de user_permissions da pessoa (memorizadas por pedido). */
+export async function getUserPermissionRows(userId: number): Promise<PermissionRow[]> {
+  const load = async () => {
+    const db = await getDb();
+    if (!db) return [];
+    await ensureUserPermissionsTable();
+    const [rows] = await db.execute(sql`SELECT permission, mode, scope, actions, expiresOn
+      FROM \`user_permissions\` WHERE userId = ${userId}`) as any;
+    return ((rows as any[]) ?? []).map(toPermissionRow);
+  };
+  return cachedPermissionRows(userId, load) ?? load();
 }
 
 export async function setUserPermission(userId: number, permission: string, mode: "grant" | "deny" | null, grantedBy?: number) {
@@ -4649,23 +4694,153 @@ export async function setUserPermission(userId: number, permission: string, mode
   }
 }
 
+/** Permissões especiais (não os módulos) da pessoa, só as que ainda valem. */
 export async function getUserPermissionOverrides(userId: number): Promise<Record<string, "grant" | "deny">> {
-  const db = await getDb();
-  if (!db) return {};
-  await ensureUserPermissionsTable();
-  const [rows] = await db.execute(sql`SELECT permission, mode FROM \`user_permissions\` WHERE userId = ${userId}`) as any;
+  const today = lisbonToday();
   const out: Record<string, "grant" | "deny"> = {};
-  for (const r of (rows as any[]) ?? []) out[String(r.permission)] = r.mode === "deny" ? "deny" : "grant";
+  for (const r of await getUserPermissionRows(userId)) {
+    if (r.permission.startsWith("module.")) continue;
+    if (r.expiresOn && r.expiresOn < today) continue;
+    out[r.permission] = r.mode;
+  }
   return out;
+}
+
+/** Overrides de MÓDULO ativos da pessoa (os expirados não contam). */
+export async function getUserModuleOverrides(userId: number): Promise<AccessOverrides> {
+  return moduleOverridesFromRows(await getUserPermissionRows(userId), lisbonToday());
+}
+
+export function moduleOverridesFromRows(rows: PermissionRow[], today: string): AccessOverrides {
+  const out: AccessOverrides = {};
+  for (const r of rows) {
+    const o = moduleOverrideFromRow(r);
+    if (o && overrideActive(o.override, today)) out[o.module] = o.override;
+  }
+  return out;
+}
+
+export function moduleOverrideFromRow(r: Pick<PermissionRow, "permission" | "mode" | "scope" | "actions" | "expiresOn">): { module: ModuleId; override: ModuleOverride } | null {
+  if (!r.permission.startsWith("module.")) return null;
+  const module = r.permission.slice("module.".length);
+  if (!isModuleId(module)) return null;
+  const access = (ACCESS_VALUES as readonly string[]).includes(String(r.scope)) ? r.scope as Access : "none";
+  const override: ModuleOverride = r.mode === "deny" || access === "none"
+    ? { access: "none", actions: [], expiresOn: r.expiresOn }
+    : { access, actions: normalizeGrant({ access, actions: lettersToActions(r.actions) }).actions, expiresOn: r.expiresOn };
+  return { module, override };
+}
+
+export interface ModuleOverrideRecord {
+  module: ModuleId;
+  override: ModuleOverride;
+  note: string | null;
+  grantedBy: number | null;
+  grantedByName: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+/** Overrides de módulo da pessoa (incluindo expirados), com quem deu e quando. */
+export async function listModuleOverridesForUser(userId: number): Promise<ModuleOverrideRecord[]> {
+  const db = await getDb();
+  if (!db) return [];
+  await ensureUserPermissionsTable();
+  const [rows] = await db.execute(sql`
+    SELECT p.permission, p.mode, p.scope, p.actions, p.expiresOn, p.note, p.grantedBy, p.createdAt, p.updatedAt,
+      g.name AS grantedByName
+    FROM \`user_permissions\` p LEFT JOIN users g ON g.id = p.grantedBy
+    WHERE p.userId = ${userId} AND p.permission LIKE ${"module.%"}`) as any;
+  const out: ModuleOverrideRecord[] = [];
+  for (const r of (rows as any[]) ?? []) {
+    const o = moduleOverrideFromRow(toPermissionRow(r));
+    if (!o) continue;
+    out.push({
+      ...o,
+      note: r.note == null ? null : String(r.note),
+      grantedBy: r.grantedBy == null ? null : Number(r.grantedBy),
+      grantedByName: r.grantedByName == null ? null : String(r.grantedByName),
+      createdAt: r.createdAt == null ? null : toMysqlDateTime(r.createdAt),
+      updatedAt: r.updatedAt == null ? null : toMysqlDateTime(r.updatedAt),
+    });
+  }
+  return out;
+}
+
+/**
+ * Grava (ou apaga, com `value` null = repor o padrão) o override de um módulo.
+ * Devolve o que lá estava (para o registo de atividade).
+ */
+export async function setModuleOverride(userId: number, module: ModuleId, value: ModuleOverride | null, grantedBy: number, note?: string | null): Promise<ModuleOverride | null> {
+  const db = await getDb();
+  if (!db) return null;
+  await ensureUserPermissionsTable();
+  const key = moduleOverrideKey(module);
+  const [prevRows] = await db.execute(sql`SELECT permission, mode, scope, actions, expiresOn
+    FROM \`user_permissions\` WHERE userId = ${userId} AND permission = ${key}`) as any;
+  const prevRow = ((prevRows as any[]) ?? [])[0];
+  const prev = prevRow ? moduleOverrideFromRow(toPermissionRow(prevRow))?.override ?? null : null;
+  if (!value) {
+    await db.execute(sql`DELETE FROM \`user_permissions\` WHERE userId = ${userId} AND permission = ${key}`);
+    return prev;
+  }
+  const g = normalizeGrant(value);
+  const mode = g.access === "none" ? "deny" : "grant";
+  const letters = g.access === "none" ? "" : actionsToLetters(g.actions);
+  const expiresOn = value.expiresOn ? String(value.expiresOn).slice(0, 10) : null;
+  const cleanNote = note?.trim() ? note.trim().slice(0, 255) : null;
+  await db.execute(sql`INSERT INTO \`user_permissions\` (userId, permission, mode, grantedBy, scope, actions, expiresOn, note)
+    VALUES (${userId}, ${key}, ${mode}, ${grantedBy}, ${g.access}, ${letters}, ${expiresOn}, ${cleanNote})
+    ON DUPLICATE KEY UPDATE mode = VALUES(mode), grantedBy = VALUES(grantedBy), scope = VALUES(scope),
+      actions = VALUES(actions), expiresOn = VALUES(expiresOn), note = VALUES(note), createdAt = CURRENT_TIMESTAMP`);
+  return prev;
+}
+
+/**
+ * "Quem tem acesso a X": contas ativas (no âmbito de cidade do pedido) com o
+ * override desse módulo, se houver. O acesso efetivo calcula-se em JS
+ * (papel + override) — uma só consulta, sem GROUP BY.
+ */
+export async function listUsersWithModuleOverride(module: ModuleId): Promise<Array<{
+  id: number; name: string | null; email: string | null; role: string; override: ModuleOverride | null; overrideExpired: boolean;
+}>> {
+  const db = await getDb();
+  if (!db) return [];
+  await ensureUserPermissionsTable();
+  const key = moduleOverrideKey(module);
+  const today = lisbonToday();
+  const [rows] = await db.execute(sql`
+    SELECT u.id, u.name, u.email, u.role, p.permission, p.mode, p.scope, p.actions, p.expiresOn
+    FROM users u LEFT JOIN \`user_permissions\` p ON p.userId = u.id AND p.permission = ${key}
+    WHERE u.isActive = 1 AND ${userScope(sql`u.id`)}
+    ORDER BY u.name, u.id`) as any;
+  return ((rows as any[]) ?? []).map((r) => {
+    const o = r.permission ? moduleOverrideFromRow(toPermissionRow(r))?.override ?? null : null;
+    return {
+      id: Number(r.id), name: r.name ?? null, email: r.email ?? null, role: String(r.role ?? "user"),
+      override: o, overrideExpired: !!o && !overrideActive(o, today),
+    };
+  });
+}
+
+/** Contas ativas no âmbito de cidade do pedido (para escolher a quem dar acessos). */
+export async function listActiveUsersInScope(): Promise<Array<{ id: number; name: string | null; email: string | null; role: string }>> {
+  const db = await getDb();
+  if (!db) return [];
+  const [rows] = await db.execute(sql`SELECT u.id, u.name, u.email, u.role FROM users u
+    WHERE u.isActive = 1 AND ${userScope(sql`u.id`)} ORDER BY u.name, u.id`) as any;
+  return ((rows as any[]) ?? []).map((r) => ({ id: Number(r.id), name: r.name ?? null, email: r.email ?? null, role: String(r.role ?? "user") }));
 }
 
 export async function listPermissionAssignments(): Promise<Array<{ userId: number; permission: string; mode: "grant" | "deny"; userName: string | null; userEmail: string | null }>> {
   const db = await getDb();
   if (!db) return [];
   await ensureUserPermissionsTable();
+  // Só as permissões especiais — os overrides de módulo têm a sua vista.
   const [rows] = await db.execute(sql`
     SELECT p.userId, p.permission, p.mode, u.name AS userName, u.email AS userEmail
     FROM \`user_permissions\` p LEFT JOIN users u ON u.id = p.userId
+    WHERE p.permission NOT LIKE ${"module.%"}
     ORDER BY p.permission, u.name`) as any;
   return ((rows as any[]) ?? []).map((r) => ({
     userId: Number(r.userId),

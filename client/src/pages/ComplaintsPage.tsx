@@ -589,7 +589,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
             ))}
           </SelectContent>
         </Select>
-        {can(user?.role, "reclamacoes", "manage") && (
+        {can(user, "reclamacoes", "manage") && (
           <>
             {c.complaintStatus !== "converted" && <Button
               variant="outline" size="sm"
@@ -1735,7 +1735,7 @@ function SyncEmailsButton() {
     onError: (e) => toast.error(e.message),
   });
   const role = (user as any)?.role ?? "user";
-  if (!can(role, "sincronizacao", "edit")) return null;
+  if (!can(user as any, "sincronizacao", "edit")) return null;
   return (
     <Button variant="outline" onClick={() => syncMut.mutate()} disabled={syncMut.isPending}>
       <RefreshCw className={`w-4 h-4 mr-2 ${syncMut.isPending ? "animate-spin" : ""}`} />
