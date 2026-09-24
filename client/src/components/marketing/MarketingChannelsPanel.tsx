@@ -1,13 +1,14 @@
 /**
  * Marketing → Canais e clientes (Jorge, 24 set 2026) — ver server/marketingChannels.ts.
  *
- *  - De onde vêm as reservas e quanto custa cada canal (gasto Google Ads,
- *    comissões dos parceiros).
+ *  - De onde vêm as reservas: grupo "Anúncios Google" (Marketplace, site das
+ *    marcas, telefone; custo = gasto Google Ads), parceiros (comissões),
+ *    campanhas sem parceiro e outros. O gclid é só prova de clique.
  *  - Ligação ao CRM: clientes novos por canal de entrada (canal da 1.ª
  *    reserva), custo por cliente novo, peso dos repetentes e quanto vale um
  *    cliente de cada canal.
  */
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
 import DateRangeNav from "@/components/DateRangeNav";
@@ -54,7 +55,7 @@ export default function MarketingChannelsPanel() {
   const { projectId } = useGlobalFilters();
   const { data, isLoading, error } = trpc.marketing.channels.useQuery({ from, to, projectId });
 
-  const channels = (data?.channels ?? []).filter((c) => c.bookings > 0 || c.newClients > 0);
+  const groups = (data?.groups ?? []).filter((g) => g.bookings > 0 || g.newClients > 0);
   const total = data?.bookingsTotal ?? 0;
 
   return (
@@ -88,6 +89,7 @@ export default function MarketingChannelsPanel() {
                     <TableHead className="text-right">Reservas</TableHead>
                     <TableHead>Quota</TableHead>
                     <TableHead className="text-right">Valor</TableHead>
+                    <TableHead className="text-right" title="Reservas com gclid/utm pago no link de origem — prova de clique, não decide o canal">Com prova de clique</TableHead>
                     <TableHead className="text-right">Custo</TableHead>
                     <TableHead className="text-right">Custo / reserva</TableHead>
                     <TableHead className="text-right">Clientes novos</TableHead>
@@ -95,30 +97,45 @@ export default function MarketingChannelsPanel() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {channels.length === 0 && <TableRow><TableCell colSpan={8} className="text-center py-8 text-muted-foreground">Sem reservas no período.</TableCell></TableRow>}
-                  {channels.map((c) => (
-                    <TableRow key={c.key}>
-                      <TableCell className="font-medium">
-                        {c.label}
-                        {c.key === "google_ads" && data.googleConversions > c.bookings && (
-                          <div className="text-[11px] font-normal text-muted-foreground" title="A Google conta as conversões com a tag do site; nós só ligamos as reservas em que o gclid chega. Custo por conversão Google em vez do custo por reserva ligada.">
-                            a Google conta {num(Math.round(data.googleConversions))} conversões · {eur(c.cost != null && data.googleConversions > 0 ? c.cost / data.googleConversions : null, 2)}/conv.
-                          </div>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">{num(c.bookings)}</TableCell>
-                      <TableCell><Share value={c.bookings} total={total} /></TableCell>
-                      <TableCell className="text-right tabular-nums">{eur(c.revenue)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{c.cost == null ? <span className="text-muted-foreground" title="Sem custo registado para este canal">—</span> : eur(c.cost)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{eur(c.costPerBooking, 2)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{num(c.newClients)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{eur(c.costPerNewClient, 2)}</TableCell>
-                    </TableRow>
+                  {groups.length === 0 && <TableRow><TableCell colSpan={9} className="text-center py-8 text-muted-foreground">Sem reservas no período.</TableCell></TableRow>}
+                  {groups.map((g) => (
+                    <Fragment key={g.key}>
+                      <TableRow className="bg-muted/40">
+                        <TableCell className="font-semibold">
+                          {g.label}
+                          {g.key === "anuncios" && data.googleConversions > 0 && (
+                            <div className="text-[11px] font-normal text-muted-foreground">
+                              a Google conta {num(Math.round(data.googleConversions))} conversões · {eur(g.cost != null ? g.cost / data.googleConversions : null, 2)}/conv.
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums font-semibold">{num(g.bookings)}</TableCell>
+                        <TableCell><Share value={g.bookings} total={total} /></TableCell>
+                        <TableCell className="text-right tabular-nums font-semibold">{eur(g.revenue)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{g.key === "anuncios" || g.key === "organico" ? num(g.paidProof) : "—"}</TableCell>
+                        <TableCell className="text-right tabular-nums font-semibold">{g.cost == null ? <span className="text-muted-foreground" title="Sem custo registado">—</span> : eur(g.cost)}</TableCell>
+                        <TableCell className="text-right tabular-nums font-semibold">{eur(g.costPerBooking, 2)}</TableCell>
+                        <TableCell className="text-right tabular-nums font-semibold">{num(g.newClients)}</TableCell>
+                        <TableCell className="text-right tabular-nums font-semibold">{eur(g.costPerNewClient, 2)}</TableCell>
+                      </TableRow>
+                      {g.channels.length > 1 && g.channels.filter((c) => c.bookings > 0 || c.newClients > 0).map((c) => (
+                        <TableRow key={c.key}>
+                          <TableCell className="pl-8 text-sm">{c.label}</TableCell>
+                          <TableCell className="text-right tabular-nums">{num(c.bookings)}</TableCell>
+                          <TableCell><Share value={c.bookings} total={total} /></TableCell>
+                          <TableCell className="text-right tabular-nums">{eur(c.revenue)}</TableCell>
+                          <TableCell className="text-right tabular-nums text-muted-foreground">{num(c.paidProof)}</TableCell>
+                          <TableCell className="text-right text-muted-foreground" colSpan={2}>—</TableCell>
+                          <TableCell className="text-right tabular-nums">{num(c.newClients)}</TableCell>
+                          <TableCell className="text-right text-muted-foreground">—</TableCell>
+                        </TableRow>
+                      ))}
+                    </Fragment>
                   ))}
                 </TableBody>
               </Table>
               <p className="text-[11px] text-muted-foreground px-4 py-2">
-                Google Ads = reservas com prova de clique pago no link de origem (se a atribuição estiver partida, aparecem em "Site"; ver o Dashboard). Custo / cliente novo reparte todo o custo do canal pelos clientes novos — é o custo de aquisição.
+                Marketplace, site das marcas e telefone: a reserva de um cliente novo (1.ª reserva daquele email, ou sem email) conta como <b>Anúncios Google</b> — custo = gasto do Google Ads (detalhe por marca no separador Google Ads); a de quem já era cliente conta como <b>Orgânico</b>. "Com prova de clique" = reservas em que o gclid chegou (só informação). Custo / cliente novo = custo do grupo ÷ clientes novos que entraram por ele.
               </p>
             </CardContent>
           </Card>

@@ -478,13 +478,17 @@ export async function getClientProfile(db: any, rawEmail: string, projectIds?: n
   const vip = computeVipThreshold(all);
   const where = sql`LOWER(TRIM(b.clientEmail)) = ${email} AND ${baseWhere(projectIds)}`;
   const [parks, list, refRows, names, phones, plates, nifs] = await Promise.all([
+    // Agrupa por colunas de um derivado (não por expressões): o ONLY_FULL_GROUP_BY
+    // (MariaDB e MySQL estrito) recusa "b.parkName isn't in GROUP BY" na forma direta.
     db.execute(sql`
-      SELECT COALESCE(NULLIF(TRIM(b.parkName), ''), '—') AS parkName, LOWER(NULLIF(TRIM(b.city), '')) AS city,
-             COUNT(*) AS bookings,
-             COALESCE(SUM(CASE WHEN ${VISITED} THEN b.totalPrice END), 0) AS spent
-      FROM multipark_bookings b
-      WHERE ${where}
-      GROUP BY COALESCE(NULLIF(TRIM(b.parkName), ''), '—'), LOWER(NULLIF(TRIM(b.city), ''))
+      SELECT t.parkName, t.city, COUNT(*) AS bookings, COALESCE(SUM(t.spent), 0) AS spent
+      FROM (
+        SELECT COALESCE(NULLIF(TRIM(b.parkName), ''), '—') AS parkName, LOWER(NULLIF(TRIM(b.city), '')) AS city,
+               CASE WHEN ${VISITED} THEN b.totalPrice END AS spent
+        FROM multipark_bookings b
+        WHERE ${where}
+      ) t
+      GROUP BY t.parkName, t.city
       ORDER BY bookings DESC, spent DESC`),
     db.execute(sql`
       SELECT b.id, b.externalId, b.bookingNumber, b.status, b.parkName, b.city, b.checkIn, b.checkOut,
