@@ -111,7 +111,7 @@ export default function PartnerTypePage() {
       <Card className="bg-muted/30">
         <CardContent className="p-4 text-sm">
           {cm === "commission_on_revenue" && (
-            <span>Comissão = <strong>receita das reservas × %</strong>. Cada parceiro tem a sua taxa.</span>
+            <span>Comissão = <strong>receita das reservas SEM IVA × %</strong> (com IVA só nos parceiros marcados como exceção). Cada parceiro tem a sua taxa.</span>
           )}
           {cm === "small_commission" && (
             <span>Comissão pequena (afiliados). Os clientes deles têm desconto já reflectido nas reservas.</span>
@@ -132,7 +132,7 @@ export default function PartnerTypePage() {
             <span>Campanha própria. <strong>Custo = descontos + cashback + prémios</strong>, todos imputados ao centro de custos do projeto da reserva. Sem comissões a pagar.</span>
           )}
           {cm === "operational" && (
-            <span>Parceiro operacional. Comissão sobre <strong>TODAS</strong> as reservas dos projetos operados (mesmo as que tenham agência) — pode haver <strong>dupla comissão</strong> (venda + operacional).</span>
+            <span>Parceiro operacional. Comissão sobre <strong>TODAS</strong> as reservas dos projetos operados, sobre o valor <strong>sem IVA</strong>. Uma reserva de outra agência paga a comissão dessa agência + a operacional; uma reserva com a campanha do PRÓPRIO operacional num centro que ele opera paga só a operacional (nunca duas vezes ao mesmo parceiro).</span>
           )}
           {cm === "manual" && <span>Sem cálculo automático. Lançamento manual.</span>}
         </CardContent>
@@ -158,7 +158,7 @@ export default function PartnerTypePage() {
                     <th className="p-2">Parceiro</th>
                     {showOperated && <th className="p-2 text-right">Projetos op.</th>}
                     <th className="p-2 text-right">Reservas</th>
-                    <th className="p-2 text-right">Receita</th>
+                    <th className="p-2 text-right">Receita (c/ IVA)</th>
                     {showDiscount && <th className="p-2 text-right">Desconto</th>}
                     {showCashback && <th className="p-2 text-right">Cashback %</th>}
                     {showCashback && <th className="p-2 text-right">Cashback €</th>}

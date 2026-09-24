@@ -15,12 +15,25 @@ import {
   type CampaignDailyRow, type ConversionActionRow, type CustomerClientRow,
 } from "./gaql";
 import { normalizeCustomerId } from "./metrics";
+import { fetchWithTimeout } from "../../_core/fetchWithTimeout";
 
 export class GoogleAdsApiError extends Error {
   constructor(message: string, public status: number, public code?: string, public retryable = false) { super(message); }
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Código do erro da Google Ads API: `error.status` (ex.: PERMISSION_DENIED) ou,
+ * na falta dele, o primeiro `errorCode` dos detalhes. PURA.
+ * (Antes: `a ?? b ? c : d` — o `??` ligava primeiro e o status nunca saía.)
+ */
+export function errorCodeOf(body: any): string | undefined {
+  const status = body?.error?.status;
+  if (typeof status === "string" && status) return status;
+  const detail = body?.error?.details?.[0]?.errors?.[0]?.errorCode;
+  return detail ? JSON.stringify(detail) : undefined;
+}
 
 async function apiFetch(path: string, init: RequestInit, loginCustomerId?: string | null): Promise<any> {
   const cfg = readGoogleAdsConfig();
@@ -36,11 +49,11 @@ async function apiFetch(path: string, init: RequestInit, loginCustomerId?: strin
   let attempt = 0;
   for (;;) {
     attempt++;
-    const res = await fetch(url, { ...init, headers: { ...headers, ...(init.headers as any) } });
+    const res = await fetchWithTimeout(url, { ...init, headers: { ...headers, ...(init.headers as any) }, timeoutMs: 30_000 });
     if (res.ok) return res.json();
     const text = await res.text().catch(() => "");
     let code: string | undefined;
-    try { const j = JSON.parse(text); code = j?.error?.status ?? j?.error?.details?.[0]?.errors?.[0]?.errorCode ? JSON.stringify(j.error.details[0].errors[0].errorCode) : undefined; } catch { /* texto */ }
+    try { code = errorCodeOf(JSON.parse(text)); } catch { /* texto */ }
     const retryable = res.status === 429 || res.status >= 500;
     if (retryable && attempt < 4) { await sleep(500 * 2 ** attempt); continue; }
     throw new GoogleAdsApiError(`Google Ads API ${res.status}: ${text.slice(0, 400)}`, res.status, code, retryable);

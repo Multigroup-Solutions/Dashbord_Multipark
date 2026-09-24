@@ -68,6 +68,9 @@ export type EmailSyncResult = {
   partial: boolean;
 };
 
+/** Prazo de ligação ao IMAP (também usado no teste das Integrações). */
+export const IMAP_CONNECTION_TIMEOUT_MS = 15_000;
+
 function imapConfig() {
   const user = process.env.IMAP_USER;
   const pass = process.env.IMAP_PASS;
@@ -78,6 +81,8 @@ function imapConfig() {
     secure: true,
     auth: { user, pass },
     logger: false as const,
+    // Prazo de ligação: sem isto um IMAP pendurado consumia os 60 s do Vercel.
+    connectionTimeout: IMAP_CONNECTION_TIMEOUT_MS,
   };
 }
 

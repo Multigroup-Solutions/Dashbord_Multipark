@@ -1,6 +1,8 @@
 import { classifyBookingOrigin as classifyOrigin } from "@shared/bookingOrigin";
 import { ORIGIN_GROUPS, ORIGIN_GROUP_LABELS, CHANNEL_LABELS, type OriginGroup } from "@shared/originGroup";
 import { OpsDailyPanel } from "@/components/operacoes/OpsDailyPanel";
+import { SyncHealthPanel } from "@/components/operacoes/SyncHealthPanel";
+import { can, scopeFor } from "@shared/access";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
@@ -16,14 +18,14 @@ import DateRangeNav from "@/components/DateRangeNav";
 import { useTableSort, Th } from "@/components/SortableTable";
 import BookingDetailDialog from "@/components/BookingDetailDialog";
 import { toast } from "sonner";
-import { useState, useMemo, useRef, useCallback, useEffect } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useParams } from "wouter";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { fmtBookingDateTime, fmtBookingDate, fmtBookingHHmm } from "@/lib/lisbonTime";
 import {
-  ParkingCircle, Wifi, WifiOff, RefreshCw, Calendar, Car, Truck, Bike,
+  ParkingCircle, Wifi, RefreshCw, Calendar, Car, Truck, Bike,
   MapPin, Clock, CheckCircle2, XCircle, AlertCircle, BarChart3, History, Building2,
-  Upload, TrendingUp, DollarSign, ArrowDownToLine, ArrowUpFromLine, FileSpreadsheet,
+  TrendingUp, DollarSign, ArrowDownToLine, ArrowUpFromLine,
   Filter, Download, Search, Users, CreditCard, Percent, CalendarDays, CalendarCheck,
 } from "lucide-react";
 
@@ -89,14 +91,13 @@ const SECTION_CONFIG: Record<string, {
   },
   sync: {
     title: "Sincronização",
-    subtitle: "Sincronizar dados da API e importar Excel",
+    subtitle: "Estado da sincronização com a API MultiPark e reparação de períodos",
     icon: RefreshCw,
   },
 };
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function MultiparkPage({ sectionProp }: { sectionProp?: string } = {}) {
-  const { user } = useAuth();
   const params = useParams<{ section?: string }>();
   const section = sectionProp || params.section || "reservas";
   const config = SECTION_CONFIG[section] || SECTION_CONFIG.reservas;
@@ -110,16 +111,12 @@ export default function MultiparkPage({ sectionProp }: { sectionProp?: string } 
           <div>
             <p className="text-sm text-muted-foreground">{config.subtitle}</p>
           </div>
-          {/* Teste à API da Multipark: só admin (a rota é admin-only; ao
-              backoffice aparecia sempre "Desconectado" a vermelho) */}
-          {(user?.role === "admin" || user?.role === "super_admin") && <ConnectionStatus />}
         </div>
 
         {/* Content based on section */}
         {section === "sync" ? (
           <div className="space-y-6">
             <SyncTab />
-            <ImportTab />
           </div>
         ) : config.actionType ? (
           <ActionTypeTab actionType={config.actionType} />
@@ -590,97 +587,59 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
   );
 }
 
-// ─── Connection Status ────────────────────────────────────────────────────────
-function ConnectionStatus() {
-  const { data, isLoading, refetch } = trpc.multipark.testConnection.useQuery(undefined, {
-    retry: false,
-    refetchOnWindowFocus: false,
-  });
-
-  return (
-    <div className="flex items-center gap-2">
-      {isLoading ? (
-        <Badge variant="outline" className="gap-1.5 py-1.5 px-3">
-          <RefreshCw className="w-3.5 h-3.5 animate-spin" /> A verificar...
-        </Badge>
-      ) : data?.ok ? (
-        <Badge className="bg-green-600 gap-1.5 py-1.5 px-3">
-          <Wifi className="w-3.5 h-3.5" /> Conectado {data.version ? `(v${data.version})` : ""}
-        </Badge>
-      ) : (
-        <Badge variant="destructive" className="gap-1.5 py-1.5 px-3">
-          <WifiOff className="w-3.5 h-3.5" /> Desconectado
-        </Badge>
-      )}
-      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => refetch()}>
-        <RefreshCw className="w-4 h-4" />
-      </Button>
-    </div>
-  );
-}
-
 // ─── Sync Tab ────────────────────────────────────────────────────────────────
+const LOG_TYPE_LABEL: Record<string, string> = {
+  api_sync_recent: "Recente",
+  api_sync_future: "Futuro",
+  manual: "Reparar",
+  api_sync: "API (antigo)",
+  api_sync_recovery: "Recuperação (antigo)",
+  excel_import: "Excel (antigo)",
+};
+
+const isoDay = (d: Date) => d.toISOString().slice(0, 10);
+
 function SyncTab() {
+  const { user } = useAuth();
+  // Ações (reparar, testar) só com alcance NACIONAL — um supervisor de cidade
+  // vê o estado mas não lança um sync de todos os parques. O servidor recusa na mesma.
+  const canAct = can(user, "sincronizacao", "edit") && scopeFor(user, "sincronizacao") === "national";
+  const canTest = can(user, "sincronizacao", "manage") && scopeFor(user, "sincronizacao") === "national";
+
   const today = new Date();
-  const weekAgo = new Date(today);
-  weekAgo.setDate(weekAgo.getDate() - 7);
-
-  const [syncFrom, setSyncFrom] = useState(weekAgo.toISOString().slice(0, 10));
-  const [syncTo, setSyncTo] = useState(today.toISOString().slice(0, 10));
+  const yesterday = new Date(today.getTime() - 86_400_000);
+  const [syncFrom, setSyncFrom] = useState(isoDay(yesterday));
+  const [syncTo, setSyncTo] = useState(isoDay(today));
   const [lastSyncResult, setLastSyncResult] = useState<any>(null);
+  const [logType, setLogType] = useState<"all" | "recent" | "future" | "manual">("all");
 
-  const { data: logs = [], isLoading, refetch } = trpc.multipark.syncLogs.useQuery();
+  const { data: logs = [], isLoading, refetch } = trpc.multipark.syncLogs.useQuery({ type: logType, limit: 50 });
   const coverage = trpc.multipark.syncCoverage.useQuery(undefined, { refetchInterval: 60_000 });
+  const parkTest = trpc.multipark.testConnection.useQuery(undefined, { enabled: false, retry: false, refetchOnWindowFocus: false });
   const syncMut = trpc.multipark.triggerSync.useMutation();
-  const enrichMut = trpc.multipark.enrichBatch.useMutation();
-  const historyMut = trpc.multipark.syncHistoryBatch.useMutation();
   const utils = trpc.useUtils();
-
-  const handleEnrich = async () => {
-    try {
-      const result = await enrichMut.mutateAsync({ limit: 200 });
-      if (result.scanned === 0) {
-        toast.info("Não há reservas por enriquecer.");
-      } else {
-        const noKey = (result as any).noKey ?? 0;
-        toast.success(
-          `Enriquecidas ${result.enriched} de ${result.scanned} reservas` +
-          ` (${result.errors} erros API, ${noKey} sem chave).`
-        );
-      }
-      utils.multipark.bookings.invalidate();
-    } catch (err: any) {
-      toast.error(err.message || "Erro a enriquecer");
-    }
-  };
 
   const handleSync = async () => {
     if (!syncFrom || !syncTo) {
       toast.error("Seleciona as datas de início e fim");
       return;
     }
-    // O servidor recusa mais de 31 dias por pedido (a API Multipark cobra
-    // por chamada e períodos longos prendem a função) — avisa já aqui.
     const days = Math.round((new Date(syncTo).getTime() - new Date(syncFrom).getTime()) / 86_400_000) + 1;
-    if (days > 31) {
-      toast.error(`O período tem ${days} dias. Máximo: 31 dias por sincronização — divide em partes.`);
+    if (days < 1) { toast.error("A data final é anterior à inicial."); return; }
+    if (days > 3) {
+      toast.error(`O período tem ${days} dias. Máximo: 3 dias por reparação.`);
       return;
     }
     try {
-      const result = await syncMut.mutateAsync({
-        startDate: syncFrom,
-        endDate: syncTo,
-      });
+      const result = await syncMut.mutateAsync({ startDate: syncFrom, endDate: syncTo });
       setLastSyncResult(result);
-      if (result.success) {
-        toast.success(`Sincronização concluída: ${result.processed} processadas, ${result.created} novas`);
-      } else {
-        toast.warning(`Sincronização parcial: ${result.errors?.length || 0} erros`);
-      }
+      if (result.success) toast.success(`Período reparado: ${result.processed} processadas, ${result.created} novas`);
+      else if (result.partial) toast.warning(`Reparação parcial: ${result.skippedJobs} trabalho(s) ficaram por fazer — carrega outra vez.`);
+      else toast.warning(`Reparação com avisos: ${result.errors?.length || 0} erros`);
       utils.multipark.syncLogs.invalidate();
+      utils.multipark.dataHealth.invalidate();
       utils.multipark.bookings.invalidate();
       utils.multipark.bookingStats.invalidate();
-      utils.multipark.kpis.invalidate();
       refetch();
     } catch (err: any) {
       toast.error(err.message || "Erro na sincronização");
@@ -689,101 +648,84 @@ function SyncTab() {
 
   return (
     <div className="space-y-4 mt-4">
-      {/* Manual sync */}
+      <SyncHealthPanel />
+
       <Card>
-        <CardHeader><CardTitle className="text-sm">Cobertura da sincronização</CardTitle></CardHeader>
+        <CardHeader className="pb-2 flex flex-row items-center justify-between gap-2 space-y-0">
+          <CardTitle className="text-sm">Cobertura da sincronização</CardTitle>
+          {canTest && (
+            <Button size="sm" variant="outline" className="gap-2" disabled={parkTest.isFetching} onClick={() => parkTest.refetch()}>
+              {parkTest.isFetching ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Wifi className="w-4 h-4" />}
+              Testar ligação por parque
+            </Button>
+          )}
+        </CardHeader>
         <CardContent className="space-y-3 text-sm">
           {coverage.isLoading ? <p>A verificar parques e notificações…</p> : coverage.error ?
             <p className="text-destructive">Não foi possível verificar a sincronização. Os dados podem estar desatualizados.</p> : coverage.data && <>
-            <p>{coverage.data.parks.filter(p => p.state === "configured").length} parques com chave configurada. A existência da chave não confirma que o acesso esteja válido.</p>
+            <p>{coverage.data.parks.filter(p => p.state === "configured").length} parques com chave configurada.{canTest ? " Usa \"Testar ligação por parque\" para confirmar que cada chave funciona (um pedido mínimo à API por parque)." : ""}</p>
             {coverage.data.parks.filter(p => p.state !== "configured").map(p => <p key={p.id} className={p.state === "missing_key" ? "text-destructive" : "text-muted-foreground"}>
               <strong>{p.name} — {p.city}:</strong> {p.state === "missing_key" ? "falta configurar o acesso; as reservas deste parque não estão cobertas." : "excluído da sincronização; requer revisão se tiver atividade."}
             </p>)}
-            <p>Notificações: {coverage.data.queue.pending} por processar · {coverage.data.queue.processing} em processamento · {coverage.data.queue.failed} a aguardar nova tentativa.</p>
+            <p>Notificações: {coverage.data.queue.pending} por processar · {coverage.data.queue.processing} em processamento · {coverage.data.queue.failed} a aguardar nova tentativa · {coverage.data.queue.dead} em dead-letter.</p>
             {coverage.data.queue.detailFailures > 0 && <p className="text-destructive">{coverage.data.queue.detailFailures} reservas com falha na atualização dos detalhes. A última informação válida é preservada e haverá nova tentativa.</p>}
             {coverage.data.queue.historyFailures > 0 && <p className="text-destructive">{coverage.data.queue.historyFailures} reservas com falha na atualização do histórico. Os movimentos guardados são preservados e haverá nova tentativa.</p>}
-            <p className="text-xs text-muted-foreground">As notificações e os detalhes são tratados automaticamente em ciclos de cinco minutos, sujeitos à disponibilidade da origem e ao agendamento.</p>
+            <p className="text-xs text-muted-foreground">As notificações, os detalhes e o histórico são tratados automaticamente de cinco em cinco minutos; o sync recente corre de hora a hora e o futuro de duas em duas horas.</p>
           </>}
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm font-medium flex items-center gap-2">
-            <RefreshCw className="w-4 h-4" /> Sincronizar Reservas da API
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Busca reservas diretamente da API MultiPark para o período selecionado.
-            Inclui criações, check-ins, check-outs e cancelamentos. Dados existentes são atualizados, sem duplicação.
-          </p>
-          <div className="flex flex-wrap items-end gap-3">
-            <div>
-              <Label className="text-xs mb-1 block">De</Label>
-              <Input type="date" value={syncFrom} onChange={(e) => setSyncFrom(e.target.value)} className="w-40" />
+          {parkTest.error && <p className="text-destructive text-xs">Teste falhou: {parkTest.error.message}</p>}
+          {parkTest.data && (
+            <div className="border-t pt-2">
+              <p className="text-xs text-muted-foreground mb-2">Teste de {fmtBookingDateTime(parkTest.data.testedAt)} — {parkTest.data.message}{parkTest.data.version ? ` · API v${parkTest.data.version}` : ""}</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1">
+                {parkTest.data.parks.map(p => (
+                  <div key={p.id} className="flex items-center gap-2 text-xs">
+                    {p.state === "ok" ? <CheckCircle2 className="w-3.5 h-3.5 text-green-600 shrink-0" />
+                      : p.state === "excluded" ? <AlertCircle className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                      : <XCircle className="w-3.5 h-3.5 text-red-600 shrink-0" />}
+                    <span className={p.state === "ok" ? "" : p.state === "excluded" ? "text-muted-foreground" : "text-red-700"}>
+                      {p.name} — {p.city}
+                      {p.state === "error" ? ` · ${p.errorCode}` : p.state === "missing_key" ? " · sem chave" : p.state === "excluded" ? " · excluído" : ""}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
-            <div>
-              <Label className="text-xs mb-1 block">Até</Label>
-              <Input type="date" value={syncTo} onChange={(e) => setSyncTo(e.target.value)} className="w-40" />
-            </div>
-            <Button onClick={handleSync} disabled={syncMut.isPending} className="gap-2">
-              {syncMut.isPending ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-              Sincronizar
-            </Button>
-          </div>
-
-          <div className="bg-muted/50 rounded-lg p-3 text-xs text-muted-foreground space-y-1">
-            <p>A importação de reservas corre automaticamente; as notificações e os detalhes têm um ciclo próprio de cinco minutos.</p>
-            <p>Usa este formulário para importar histórico mais antigo ou forçar uma atualização.</p>
-          </div>
-
-          <div className="border-t pt-3 flex items-center justify-between gap-3">
-            <div className="text-sm">
-              <div className="font-medium">Enriquecer reservas (recolha/entrega)</div>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Vai à API individual de cada reserva e guarda <strong>deliveryType</strong>{" "}
-                (Terminal 1, Oriente, etc.), <strong>voos</strong> e <strong>notas do cliente</strong>.
-                A atualização é automática. Este botão permite antecipar um lote de até 200 reservas.
-              </p>
-            </div>
-            <Button onClick={handleEnrich} disabled={enrichMut.isPending} variant="outline" className="gap-2 shrink-0">
-              {enrichMut.isPending ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-              Enriquecer 200
-            </Button>
-          </div>
-
-          <div className="border-t pt-3 flex items-center justify-between gap-3">
-            <div className="text-sm">
-              <div className="font-medium">Histórico das reservas (timeline)</div>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Para cada reserva (últimos 7d + próximos 30d), busca o histórico
-                completo: check-in, movimentos, check-out, com <strong>agente responsável</strong>,{" "}
-                <strong>garagem/lugar</strong> e <strong>quilometragem</strong>. 50 por execução.
-              </p>
-            </div>
-            <Button
-              onClick={async () => {
-                try {
-                  const r = await historyMut.mutateAsync({ limit: 50 });
-                  if (r.scanned === 0) toast.info("Sem reservas pendentes de history.");
-                  else toast.success(`History: ${r.fetched}/${r.scanned} (${r.errors} erros, ${r.noKey} sem chave)`);
-                  utils.multipark.bookings.invalidate();
-                } catch (e: any) { toast.error(e.message || "Erro"); }
-              }}
-              disabled={historyMut.isPending}
-              variant="outline"
-              className="gap-2 shrink-0"
-            >
-              {historyMut.isPending ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-              Buscar history 50
-            </Button>
-          </div>
+          )}
         </CardContent>
       </Card>
 
-      <HistoricalBackfillCard />
+      {canAct && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <RefreshCw className="w-4 h-4" /> Reparar período
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Volta a pedir à API MultiPark as criações, check-ins, check-outs e cancelamentos de um período curto
+              (máximo 3 dias) — por exemplo, quando a reconciliação mostra reservas em falta. Os dados existentes são
+              atualizados, sem duplicação. Se já houver uma sincronização a correr, espera um minuto.
+            </p>
+            <div className="flex flex-wrap items-end gap-3">
+              <div>
+                <Label className="text-xs mb-1 block">De</Label>
+                <Input type="date" value={syncFrom} onChange={(e) => setSyncFrom(e.target.value)} className="w-40" />
+              </div>
+              <div>
+                <Label className="text-xs mb-1 block">Até</Label>
+                <Input type="date" value={syncTo} onChange={(e) => setSyncTo(e.target.value)} className="w-40" />
+              </div>
+              <Button onClick={handleSync} disabled={syncMut.isPending} className="gap-2">
+                {syncMut.isPending ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                Reparar
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
-      {/* Last sync result */}
+      {/* Resultado da última reparação */}
       {lastSyncResult && (
         <Card className={lastSyncResult.success ? "border-green-200 bg-green-50/50" : "border-yellow-200 bg-yellow-50/50"}>
           <CardContent className="p-4">
@@ -794,7 +736,7 @@ function SyncTab() {
                 <AlertCircle className="w-5 h-5 text-yellow-600 shrink-0 mt-0.5" />
               )}
               <div className="text-sm w-full">
-                <p className="font-medium">{lastSyncResult.success ? "Sincronização concluída" : "Sincronização com avisos"}</p>
+                <p className="font-medium">{lastSyncResult.success ? "Período reparado" : lastSyncResult.partial ? "Reparação parcial (prazo esgotado)" : "Reparação com avisos"}</p>
                 <div className="grid grid-cols-3 gap-4 mt-3">
                   <div>
                     <p className="text-2xl font-bold">{lastSyncResult.processed}</p>
@@ -823,12 +765,21 @@ function SyncTab() {
         </Card>
       )}
 
-      {/* Sync log history */}
+      {/* Registo das sincronizações */}
       <Card>
-        <CardHeader className="pb-2">
+        <CardHeader className="pb-2 flex flex-row items-center justify-between gap-2 space-y-0">
           <CardTitle className="text-sm font-medium flex items-center gap-2">
-            <History className="w-4 h-4" /> Histórico de Operações
+            <History className="w-4 h-4" /> Histórico de sincronizações
           </CardTitle>
+          <Select value={logType} onValueChange={(v) => setLogType(v as typeof logType)}>
+            <SelectTrigger className="w-40 h-8 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos os tipos</SelectItem>
+              <SelectItem value="recent">Recente</SelectItem>
+              <SelectItem value="future">Futuro</SelectItem>
+              <SelectItem value="manual">Reparar (manual)</SelectItem>
+            </SelectContent>
+          </Select>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -842,6 +793,7 @@ function SyncTab() {
                   <tr>
                     <th className="text-left p-2 font-medium">Data</th>
                     <th className="text-left p-2 font-medium">Tipo</th>
+                    <th className="text-left p-2 font-medium">Janela</th>
                     <th className="text-left p-2 font-medium">Estado</th>
                     <th className="text-right p-2 font-medium">Processados</th>
                     <th className="text-right p-2 font-medium">Criados</th>
@@ -856,9 +808,10 @@ function SyncTab() {
                         {log.startedAt ? new Date(log.startedAt).toLocaleString("pt-PT") : "—"}
                       </td>
                       <td className="p-2">
-                        <Badge variant="outline" className="text-xs">
-                          {log.syncType === "excel_import" ? "Excel" : log.syncType === "api_sync" ? "API" : log.syncType === "manual" ? "Manual" : log.syncType}
-                        </Badge>
+                        <Badge variant="outline" className="text-xs">{LOG_TYPE_LABEL[log.syncType] ?? log.syncType}</Badge>
+                      </td>
+                      <td className="p-2 text-xs text-muted-foreground whitespace-nowrap">
+                        {log.windowStart ? `${String(log.windowStart).slice(0, 10)} → ${String(log.windowEnd ?? "").slice(0, 10)}` : "—"}
                       </td>
                       <td className="p-2">
                         {log.status === "success" ? (
@@ -872,7 +825,7 @@ function SyncTab() {
                       <td className="p-2 text-right">{log.recordsProcessed ?? 0}</td>
                       <td className="p-2 text-right">{log.recordsCreated ?? 0}</td>
                       <td className="p-2 text-right">{log.recordsUpdated ?? 0}</td>
-                      <td className="p-2 text-xs text-red-600 max-w-[200px] truncate">
+                      <td className="p-2 text-xs text-red-600 max-w-[240px] truncate" title={log.errorMessage || ""}>
                         {log.errorMessage || "—"}
                       </td>
                     </tr>
@@ -884,231 +837,5 @@ function SyncTab() {
         </CardContent>
       </Card>
     </div>
-  );
-}
-
-// ─── Import Tab ──────────────────────────────────────────────────────────────
-function ImportTab() {
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [importing, setImporting] = useState(false);
-  const [lastResult, setLastResult] = useState<any>(null);
-  const importMut = trpc.multipark.importExcel.useMutation();
-  const utils = trpc.useUtils();
-
-  const handleFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!file.name.endsWith(".xlsx") && !file.name.endsWith(".xls")) {
-      toast.error("Ficheiro tem que ser Excel (.xlsx ou .xls)");
-      return;
-    }
-    if (file.size > 10 * 1024 * 1024) {
-      toast.error("Ficheiro demasiado grande (máx 10MB)");
-      return;
-    }
-
-    setImporting(true);
-    try {
-      const buffer = await file.arrayBuffer();
-      const base64 = btoa(
-        new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
-      );
-      const result = await importMut.mutateAsync({
-        fileBase64: base64,
-        filename: file.name,
-      });
-      setLastResult(result);
-      toast.success(`Importação concluída: ${result.rowsParsed} reservas → ${result.snapshotsCreated + result.snapshotsUpdated} snapshots`);
-      utils.multipark.kpis.invalidate();
-      utils.multipark.syncLogs.invalidate();
-    } catch (err: any) {
-      toast.error(err.message || "Erro na importação");
-    } finally {
-      setImporting(false);
-      if (fileRef.current) fileRef.current.value = "";
-    }
-  }, [importMut, utils]);
-
-  return (
-    <div className="space-y-6 mt-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm font-medium flex items-center gap-2">
-            <Upload className="w-4 h-4" /> Importar Excel do MultiPark
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Exporta as reservas do backoffice MultiPark em Excel e importa aqui para KPIs agregados.
-            Para reservas individuais, usa a sincronização via API na tab "Sincronização".
-          </p>
-
-          <div
-            className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:border-indigo-400 hover:bg-indigo-50/50 transition-colors"
-            onClick={() => fileRef.current?.click()}
-          >
-            {importing ? (
-              <div className="flex flex-col items-center gap-3">
-                <RefreshCw className="w-10 h-10 text-indigo-500 animate-spin" />
-                <p className="text-sm font-medium">A processar ficheiro...</p>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center gap-3">
-                <FileSpreadsheet className="w-10 h-10 text-muted-foreground" />
-                <div>
-                  <p className="text-sm font-medium">Clica para selecionar ficheiro Excel</p>
-                  <p className="text-xs text-muted-foreground mt-1">Formatos: .xlsx, .xls (máx 10MB)</p>
-                </div>
-              </div>
-            )}
-          </div>
-          <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleFile} />
-        </CardContent>
-      </Card>
-
-      {lastResult && (
-        <Card className="border-green-200 bg-green-50/50">
-          <CardContent className="p-4">
-            <div className="flex gap-3">
-              <CheckCircle2 className="w-5 h-5 text-green-600 shrink-0 mt-0.5" />
-              <div className="text-sm">
-                <p className="font-medium text-green-900">Importação concluída</p>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-3">
-                  <div><p className="text-2xl font-bold text-green-700">{lastResult.rowsParsed}</p><p className="text-xs text-green-600">Reservas processadas</p></div>
-                  <div><p className="text-2xl font-bold text-green-700">{lastResult.totalGroups}</p><p className="text-xs text-green-600">Grupos (dia/parque)</p></div>
-                  <div><p className="text-2xl font-bold text-green-700">{lastResult.snapshotsCreated}</p><p className="text-xs text-green-600">Snapshots criados</p></div>
-                  <div><p className="text-2xl font-bold text-green-700">{lastResult.snapshotsUpdated}</p><p className="text-xs text-green-600">Snapshots atualizados</p></div>
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-    </div>
-  );
-}
-
-// ─── Backfill histórico: itera dia-a-dia chamando admin.runHistoricalDaySync ─
-
-function HistoricalBackfillCard() {
-  const yearStart = `${new Date().getFullYear()}-01-01`;
-  const today = new Date().toISOString().slice(0, 10);
-  const [from, setFrom] = useState(yearStart);
-  const [to, setTo] = useState(today);
-  const [running, setRunning] = useState(false);
-  const [stop, setStop] = useState(false);
-  const [progress, setProgress] = useState<{ done: number; total: number; lastDate: string; totalProcessed: number; totalCreated: number; totalUpdated: number; totalEnriched: number; totalHistory: number; errors: string[] }>({
-    done: 0, total: 0, lastDate: "", totalProcessed: 0, totalCreated: 0, totalUpdated: 0, totalEnriched: 0, totalHistory: 0, errors: [],
-  });
-  const daySyncMut = trpc.admin.runHistoricalDaySync.useMutation();
-  const utils = trpc.useUtils();
-
-  const dayList = (a: string, b: string): string[] => {
-    const out: string[] = [];
-    const start = new Date(a + "T00:00:00");
-    const end = new Date(b + "T00:00:00");
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) return out;
-    const d = new Date(start);
-    while (d <= end) {
-      out.push(d.toISOString().slice(0, 10));
-      d.setDate(d.getDate() + 1);
-    }
-    return out;
-  };
-
-  const run = async () => {
-    const days = dayList(from, to);
-    if (days.length === 0) { toast.error("Range inválido"); return; }
-    setRunning(true);
-    setStop(false);
-    setProgress({ done: 0, total: days.length, lastDate: "", totalProcessed: 0, totalCreated: 0, totalUpdated: 0, totalEnriched: 0, totalHistory: 0, errors: [] });
-    let totalProcessed = 0, totalCreated = 0, totalUpdated = 0, totalEnriched = 0, totalHistory = 0;
-    const errors: string[] = [];
-    for (let i = 0; i < days.length; i++) {
-      if (stop) break;
-      const date = days[i];
-      try {
-        const r = await daySyncMut.mutateAsync({ date });
-        totalProcessed += r.report.processed;
-        totalCreated += r.report.created;
-        totalUpdated += r.report.updated;
-        totalEnriched += r.enriched;
-        totalHistory += r.historyFetched;
-        if (r.report.errors.length > 0) errors.push(`${date}: ${r.report.errors.slice(0, 2).join(" | ")}`);
-      } catch (e: any) {
-        errors.push(`${date}: ${e?.message ?? "erro"}`);
-      }
-      setProgress({ done: i + 1, total: days.length, lastDate: date, totalProcessed, totalCreated, totalUpdated, totalEnriched, totalHistory, errors });
-    }
-    setRunning(false);
-    utils.multipark.bookings.invalidate();
-    utils.multipark.bookingStats.invalidate();
-    utils.multipark.kpis.invalidate();
-    utils.multipark.syncLogs.invalidate();
-    toast.success(`Histórico concluído: ${totalProcessed} reservas processadas (${totalCreated} novas) em ${days.length} dias`);
-  };
-
-  const pct = progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
-
-  return (
-    <Card className="border-blue-200 bg-blue-50/30">
-      <CardHeader>
-        <CardTitle className="text-sm font-medium flex items-center gap-2">
-          <Download className="w-4 h-4 text-blue-600" /> Importar Histórico (1× para puxar tudo desde o início do ano)
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <p className="text-sm text-muted-foreground">
-          Itera dia-a-dia o range escolhido. Cada dia faz <strong>report + enrich + history</strong> em paralelo
-          (cabe nos 60s do Vercel). Podes parar a qualquer altura e retomar depois mudando "De".
-        </p>
-        <div className="flex flex-wrap items-end gap-3">
-          <div>
-            <Label className="text-xs mb-1 block">De</Label>
-            <Input type="date" value={from} onChange={e => setFrom(e.target.value)} className="w-40" disabled={running} />
-          </div>
-          <div>
-            <Label className="text-xs mb-1 block">Até</Label>
-            <Input type="date" value={to} onChange={e => setTo(e.target.value)} className="w-40" disabled={running} />
-          </div>
-          {!running ? (
-            <Button onClick={run} className="gap-2">
-              <Download className="w-4 h-4" /> Importar {dayList(from, to).length} dias
-            </Button>
-          ) : (
-            <Button variant="destructive" onClick={() => setStop(true)}>
-              <XCircle className="w-4 h-4 mr-1" /> Parar
-            </Button>
-          )}
-        </div>
-
-        {(running || progress.done > 0) && (
-          <div className="space-y-2 text-sm">
-            <div className="h-2 bg-blue-100 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-blue-600 transition-all duration-300"
-                style={{ width: `${pct}%` }}
-              />
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {progress.done}/{progress.total} dias ({pct}%){progress.lastDate ? ` · último: ${progress.lastDate}` : ""}
-            </p>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
-              <div><strong>{progress.totalProcessed}</strong> processadas</div>
-              <div className="text-green-700"><strong>{progress.totalCreated}</strong> novas</div>
-              <div className="text-blue-700"><strong>{progress.totalUpdated}</strong> actualizadas</div>
-              <div><strong>{progress.totalEnriched}</strong> enriquecidas</div>
-              <div><strong>{progress.totalHistory}</strong> history</div>
-            </div>
-            {progress.errors.length > 0 && (
-              <div className="text-xs text-red-600 mt-2">
-                <p className="font-medium">{progress.errors.length} dias com avisos:</p>
-                {progress.errors.slice(0, 5).map((e, i) => <p key={i}>• {e}</p>)}
-              </div>
-            )}
-          </div>
-        )}
-      </CardContent>
-    </Card>
   );
 }

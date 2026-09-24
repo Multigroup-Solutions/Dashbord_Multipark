@@ -82,9 +82,9 @@ describe('histórico recuperável', () => {
   });
   it('mantém pendente um parque sem chave e conta apenas tentativas realizadas', async () => {
     f.pending = [{ externalId: 'b1', parkName: 'Sem chave', city: 'Porto' }];
-    expect(await syncBookingHistoryBatch(10)).toEqual({ scanned: 1, fetched: 0, errors: 0, noKey: 1 });
+    expect(await syncBookingHistoryBatch(10)).toEqual({ scanned: 1, fetched: 0, errors: 0, noKey: 1, closed: 0 });
     expect(f.row.historyFetchedAt).toBe('2026-08-01 10:00:00');
     expect(f.row.historyErrorCode).toBe('PARK_ACCESS_MISSING');
-    expect(await syncBookingHistoryBatch(10, Date.now() - 1)).toEqual({ scanned: 0, fetched: 0, errors: 0, noKey: 0 });
+    expect(await syncBookingHistoryBatch(10, Date.now() - 1)).toEqual({ scanned: 0, fetched: 0, errors: 0, noKey: 0, closed: 0 });
   });
 });

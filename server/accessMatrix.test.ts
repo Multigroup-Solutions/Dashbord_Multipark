@@ -78,11 +78,11 @@ describe("matriz de acessos — papéis do dono", () => {
     }
   });
 
-  it("admin: backoffice + Financeiro (sem Faturação) e Dashboards; sem Marketing, Logs nem Faturação", () => {
+  it("admin: backoffice + Financeiro (sem Faturação) e Dashboards; sem Marketing, Logs, Faturação nem Anual", () => {
     expect(sees("admin", "financeiro")).toBe(true);
     expect(sees("admin", "dashboards")).toBe(true);
     expect(can("admin", "permissoes", "manage")).toBe(true);
-    for (const m of ["marketing", "logs", "faturacao"] as ModuleId[]) {
+    for (const m of ["marketing", "logs", "faturacao", "anual"] as ModuleId[]) {
       expect(sees("admin", m)).toBe(false);
       expect(sees("super_admin", m)).toBe(true);
       // só super_admin
@@ -107,7 +107,7 @@ describe("matriz de acessos — papéis do dono", () => {
       for (let i = 1; i < chain.length; i++) {
         const lower = MATRIX[m.id][chain[i - 1]], upper = MATRIX[m.id][chain[i]];
         if (lower.access === "none") continue;
-        // Marketing/Logs/Faturação: correção explícita do dono (admin fica sem eles).
+        // Marketing/Logs/Faturação/Anual: correção explícita do dono (admin fica sem eles).
         for (const a of lower.actions) expect({ m: m.id, role: chain[i], has: upper.actions.includes(a) }).toEqual({ m: m.id, role: chain[i], has: true });
       }
     }

@@ -450,14 +450,50 @@ export async function calculatePricing(data: {
   return multiparkRequest({ method: "POST", path: "/pricing", body: data });
 }
 
-/** Test API connectivity */
-export async function testConnection(): Promise<{ ok: boolean; message: string; version?: string }> {
-  try {
-    const health = await healthCheck();
-    return { ok: true, message: `API OK (v${health.version})`, version: health.version };
-  } catch (error: any) {
-    return { ok: false, message: `Erro: ${error.message}` };
-  }
+export type ParkTestState = "ok" | "error" | "missing_key" | "excluded";
+export interface ParkTestResult { id: string; name: string; city: string; state: ParkTestState; errorCode?: string; ms?: number }
+
+/**
+ * Teste por parque: um report mínimo (1 dia, 1 ação) com a chave de cada
+ * parque. A chave existir não prova que o acesso seja válido — isto prova.
+ * Só códigos de erro (sem mensagens). Concorrência limitada.
+ */
+export async function testConnection(opts: { day?: string; concurrency?: number } = {}): Promise<{
+  ok: boolean; message: string; version?: string; parks: ParkTestResult[]; testedAt: string;
+}> {
+  const { deliveryErrorCode } = await import("./bookingDeliveryQueue");
+  const day = opts.day ?? new Date().toISOString().slice(0, 10);
+  const results: ParkTestResult[] = PARK_CONFIGS.map(p => ({ id: p.id, name: p.name, city: p.city,
+    state: p.closed ? "excluded" : getParkApiKey(p) ? "ok" : "missing_key" }));
+  const toTest = results.filter(r => r.state === "ok");
+  let idx = 0;
+  await Promise.all(Array.from({ length: Math.min(opts.concurrency ?? 4, toTest.length) }, async () => {
+    while (idx < toTest.length) {
+      const r = toTest[idx++];
+      const park = PARK_CONFIGS.find(p => p.id === r.id)!;
+      const t = Date.now();
+      try {
+        await multiparkRequest({ path: "/bookings/report", params: { startDate: day, endDate: day, actionType: "creation" },
+          apiKey: getParkApiKey(park), maxAttempts: 1, timeoutMs: 8000 });
+        r.ms = Date.now() - t;
+      } catch (error) {
+        r.state = "error";
+        r.errorCode = deliveryErrorCode(error);
+        r.ms = Date.now() - t;
+      }
+    }
+  }));
+  let version: string | undefined;
+  try { version = (await healthCheck()).version; } catch { /* o teste por parque é o que conta */ }
+  const failed = results.filter(r => r.state === "error" || r.state === "missing_key").length;
+  const okCount = results.filter(r => r.state === "ok").length;
+  return {
+    ok: failed === 0 && okCount > 0,
+    message: failed === 0 ? `${okCount} parques OK` : `${failed} parque(s) sem acesso válido`,
+    version,
+    parks: results,
+    testedAt: new Date().toISOString(),
+  };
 }
 
 // ─── Booking history & agent tracking ───

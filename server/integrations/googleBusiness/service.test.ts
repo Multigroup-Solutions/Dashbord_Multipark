@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MySqlDialect } from 'drizzle-orm/mysql-core';
 import { complaints, googleReviews } from '../../../drizzle/schema';
 vi.mock('./oauth', () => ({ database: vi.fn(), accessToken: vi.fn(), connection: vi.fn(), saveConnection: vi.fn() }));
-import { database } from './oauth';
-import { importReview } from './service';
+import { connection, database } from './oauth';
+import { importReview, syncReviews } from './service';
 const dialect = new MySqlDialect();
 const payload = { reviewId: 'test-review', starRating: 'ONE', reviewer: { displayName: 'Pessoa teste' }, comment: 'Comentário de teste',
   createTime: '2026-09-01T12:00:00Z', updateTime: '2026-09-02T12:00:00Z' };
@@ -105,9 +105,24 @@ describe('durable review imports', () => {
     expect(await importReview(1, payload, 10, { existingId: 7 })).toBe('updated');
     expect(reviewRows[0].complaintId).toBe(12); expect(pending).toBe(0); expect(complaintRows).toHaveLength(0);
   });
+  it('1.ª importação: crítica antiga ou já respondida entra sem abrir reclamação', async () => {
+    const nowMs = Date.parse('2026-09-24T12:00:00Z');
+    expect(await importReview(1, { ...payload, reviewId: 'antiga', updateTime: '2026-08-01T12:00:00Z' }, 10, undefined, { firstImport: true, nowMs })).toBe('created');
+    expect(await importReview(1, { ...payload, reviewId: 'respondida', updateTime: '2026-09-22T12:00:00Z',
+      reviewReply: { comment: 'Lamentamos.', updateTime: '2026-09-23T12:00:00Z' } }, 10, undefined, { firstImport: true, nowMs })).toBe('created');
+    expect(complaintRows).toHaveLength(0);
+    expect(await importReview(1, { ...payload, reviewId: 'recente', updateTime: '2026-09-22T12:00:00Z' }, 10, undefined, { firstImport: true, nowMs })).toBe('created');
+    expect(complaintRows).toHaveLength(1);
+  });
   it('does not bind a manually selected review from a different park', async () => {
     reviewRows.push({ id: 7, googleReviewKey: null, projectId: 20 });
     await expect(importReview(1, payload, 10, { existingId: 7 })).rejects.toThrow(/outro parque/);
     expect(reviewRows[0].projectId).toBe(20);
+  });
+  it('reautorização pendente → saltado (não 500), sem tocar na BD', async () => {
+    vi.mocked(connection).mockResolvedValue({ refreshTokenEnc: 'enc', status: 'reauth_required' } as any);
+    vi.mocked(database).mockClear();
+    await expect(syncReviews()).resolves.toMatchObject({ ok: true, skipped: 'reauth_required', done: true });
+    expect(database).not.toHaveBeenCalled();
   });
 });

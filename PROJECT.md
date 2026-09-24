@@ -44,11 +44,8 @@ barnie/
 │   │   ├── cookies.ts
 │   │   ├── sdk.ts
 │   │   ├── llm.ts                (OpenAI integration)
-│   │   ├── imageGeneration.ts
 │   │   ├── voiceTranscription.ts
 │   │   ├── notification.ts       (Nodemailer)
-│   │   ├── dataApi.ts
-│   │   ├── map.ts
 │   │   ├── systemRouter.ts
 │   │   ├── vite.ts
 │   │   └── env.ts
@@ -246,7 +243,7 @@ barnie/
 
 ### `multipark`
 - `testConnection`, `checkAvailability`, `listParks`
-- `syncLogs`, `kpis`, `snapshots`, `importExcel`
+- `syncLogs` (filtro por tipo), `syncCoverage`, `dataHealth`, `triggerSync` ("Reparar período", máx. 3 dias)
 - `localBookingsByAction` — Reservas por ação (creation/checkin/checkout/cancelation)
 
 ---

@@ -109,6 +109,15 @@ export const SETTINGS = {
     defaultValue: 7,
     wiring: "store",
   }),
+  "sync.webhookStaleHours": def({
+    key: "sync.webhookStaleHours",
+    group: "sla",
+    label: "Alerta sem notificações Multipark (horas)",
+    description: "Se não chegar nenhum webhook da Multipark durante este número de horas, em horário de operação (07h–23h, Lisboa), os admins recebem um aviso na app (uma vez, e outra quando voltarem).",
+    schema: z.number({ error: "Indica um número de horas." }).int("Número inteiro de horas.").min(1, "Mínimo 1 hora.").max(48, "Máximo 48 horas."),
+    defaultValue: 3,
+    wiring: "live",
+  }),
   "emails.handoverCc": def({
     key: "emails.handoverCc",
     group: "emails",
@@ -205,6 +214,7 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "email-inbound", label: "Emails recebidos (IMAP)", intervalMinutes: 60, workflow: "multipark-cron.yml" },
   { name: "multipark-future", label: "Sincronização de reservas (futuras)", intervalMinutes: 120, workflow: "multipark-cron.yml" },
   { name: "daily-ops", label: "Manutenção diária + recolha GPS", intervalMinutes: 1440, workflow: "multipark-cron.yml" },
+  { name: "evaluation-recompute", label: "Avaliação (recálculo das 4 semanas)", intervalMinutes: 1440, workflow: "multipark-cron.yml" },
   { name: "google-ads", label: "Google Ads", intervalMinutes: 1440, workflow: "multipark-cron.yml" },
   { name: "meta-ads", label: "Meta Ads", intervalMinutes: 1440, workflow: "multipark-cron.yml" },
 ];
@@ -247,19 +257,41 @@ export function cronHealth(last: CronRunLite | null, intervalMinutes: number | n
   return last.ok ? "ok" : "failed";
 }
 
-/** Resultado de uma resposta de cron: 2xx e sem `ok:false` / `status:"failed"`. PURA. */
-export function cronOutcome(httpStatus: number, body: unknown): { ok: boolean; error: string | null } {
+/**
+ * Resultado de uma resposta de cron. PURA.
+ *  - falha: HTTP não-2xx, `ok:false`, `status:"failed"`, `stepErrors[]` ou
+ *    `errors[]` não vazios (estes últimos só sem `ok:true` explícito);
+ *  - mensagem de erro: `error` → `reason` → `errors[]`/`stepErrors[]`;
+ *  - sucesso com nota: `skipped` (+ `reason`) ou `warnings[]` não vazios ficam
+ *    em `note` (a corrida é verde, mas não fica em silêncio).
+ * `errors[]` com `ok:true` explícito são erros de itens individuais (ex.: um
+ * email que falhou e se repete) → vão para a nota, não tornam a corrida
+ * vermelha; sem `ok` explícito contam como falha.
+ */
+export function cronOutcome(httpStatus: number, body: unknown): { ok: boolean; error: string | null; note?: string | null } {
   const b = body && typeof body === "object" ? (body as Record<string, unknown>) : null;
   const httpOk = httpStatus >= 200 && httpStatus < 300;
+  const strList = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x) => x != null && x !== "").map((x) => (typeof x === "string" ? x : JSON.stringify(x))) : []);
+  const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const steps = strList(b?.stepErrors);
+  const errors = strList(b?.errors);
+  const warnings = strList(b?.warnings);
+  const reason = str(b?.reason);
   const bodyFailed = !!b && (b.ok === false || b.status === "failed");
-  const ok = httpOk && !bodyFailed;
+  const errorsFail = errors.length > 0 && b?.ok !== true;
+  const ok = httpOk && !bodyFailed && steps.length === 0 && !errorsFail;
   if (ok) {
-    const steps = Array.isArray(b?.stepErrors) ? (b!.stepErrors as unknown[]).filter(Boolean) : [];
-    // daily-ops: a recolha correu, mas passos de manutenção falharam → falha.
-    if (steps.length) return { ok: false, error: steps.map(String).join(" | ").slice(0, 1000) };
-    return { ok: true, error: null };
+    const parts: string[] = [];
+    const skipped = b?.skipped != null && b.skipped !== false ? (typeof b.skipped === "string" ? b.skipped : "sim") : b?.status === "skipped" ? "sim" : null;
+    if (skipped) parts.push(`saltado: ${skipped}${reason ? ` — ${reason}` : ""}`);
+    else if (reason) parts.push(reason);
+    if (errors.length) parts.push(`${errors.length} erro(s) de itens: ${errors.slice(0, 3).join(" | ")}`);
+    if (warnings.length) parts.push(`${warnings.length} aviso(s): ${warnings.slice(0, 3).join(" | ")}`);
+    return parts.length ? { ok: true, error: null, note: parts.join(" · ").slice(0, 1000) } : { ok: true, error: null };
   }
-  const msg = typeof b?.error === "string" && b.error ? b.error : `HTTP ${httpStatus}${bodyFailed ? " (ok:false)" : ""}`;
+  // daily-ops: a recolha correu, mas passos de manutenção falharam → falha.
+  const msg = str(b?.error) ?? (steps.length ? steps.join(" | ") : null) ?? reason ?? (errors.length ? errors.join(" | ") : null)
+    ?? `HTTP ${httpStatus}${bodyFailed ? " (ok:false)" : ""}`;
   return { ok: false, error: msg.slice(0, 1000) };
 }
 

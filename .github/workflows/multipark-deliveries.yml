@@ -25,9 +25,10 @@ jobs:
             -H "Authorization: Bearer $CRON_SECRET" \
             "$APP_URL/api/cron/multipark-deliveries" > result.json
           # Erros de itens individuais (reserva ainda incompleta, histórico que
-          # falhou) já são repetidos pela fila com backoff: ficam como aviso.
-          # Vermelho só quando o endpoint em si falha (HTTP != 2xx → curl acima).
-          node -e 'const r = require("./result.json"); console.log(r); if (r.ok !== true) console.log(`::warning::itens por repetir — fila: ${r.failed ?? 0}, detalhe: ${r.details?.errors ?? 0}, histórico: ${r.history?.errors ?? 0}`)'
+          # falhou) já são repetidos pela fila com backoff: vêm em "warnings" e
+          # ficam como aviso. Vermelho só quando o endpoint em si falha ou uma
+          # fase inteira falha (o endpoint devolve 503 → curl acima).
+          node -e 'const r = require("./result.json"); console.log(JSON.stringify(r)); if (r.ok !== true) { console.log(`::error::${r.error ?? "ok:false"}`); process.exit(1); } if ((r.warnings ?? []).length) console.log(`::warning::${r.warnings.join(" · ")}`)'
       - name: Alerta — abrir/comentar issue em caso de falha
         if: failure()
         env:

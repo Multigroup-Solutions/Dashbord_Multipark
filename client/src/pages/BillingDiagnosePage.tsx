@@ -85,7 +85,7 @@ export default function BillingDiagnosePage() {
                 </thead>
                 <tbody>
                   <tr className="border-b">
-                    <td className="p-2">checkOut no período</td>
+                    <td className="p-2">saída no período (dia de Lisboa)</td>
                     <td className="p-2 text-right tabular-nums">{data.sumByCheckoutPeriod.count}</td>
                     <td className="p-2 text-right tabular-nums">{fmt(data.sumByCheckoutPeriod.sum)}</td>
                   </tr>
@@ -95,7 +95,7 @@ export default function BillingDiagnosePage() {
                     <td className="p-2 text-right tabular-nums">{fmt(data.sumWithCheckoutNotNull.sum)}</td>
                   </tr>
                   <tr className="border-b">
-                    <td className="p-2">+ status != 'CANCELLED' (exclui canceladas)</td>
+                    <td className="p-2">+ status = 'CHECKED_OUT' (receita realizada)</td>
                     <td className="p-2 text-right tabular-nums">{data.sumExcludingCancelled.count}</td>
                     <td className="p-2 text-right tabular-nums">{fmt(data.sumExcludingCancelled.sum)}</td>
                   </tr>

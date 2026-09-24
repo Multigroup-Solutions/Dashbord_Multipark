@@ -121,6 +121,13 @@ export default function MarketingGoogleAdsPage() {
           {st.connection !== "connected" && <a href="/integracoes/google-ads" className="underline">Ligar Google Ads</a>}
         </div>
       )}
+      {st && st.currencyExcluded?.length > 0 && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900" role="alert">
+          <span className="font-medium">Fora dos totais (moeda diferente de EUR, sem conversão): </span>
+          {st.currencyExcluded
+            .map((c: { accountId: number; accountName: string | null; currency: string; cost: number }) => `${c.accountName ?? `Conta ${c.accountId}`} — ${c.cost.toFixed(2)} ${c.currency}`).join("; ")}
+        </div>
+      )}
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="flex-wrap h-auto">

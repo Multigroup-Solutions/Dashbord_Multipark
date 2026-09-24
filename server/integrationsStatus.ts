@@ -1,17 +1,30 @@
 /**
- * Estado das integrações (Definições → Integrações). Diz só SE está
- * configurada (sim/não + nomes das variáveis em falta) — NUNCA o valor dos
- * segredos. "Testar ligação" só existe onde há um teste barato e sem efeitos:
+ * Estado das integrações — fonte do hub /integracoes (e do resumo em
+ * Definições → Integrações). Diz só SE está configurada (sim/não + nomes das
+ * variáveis em falta) — NUNCA o valor dos segredos. Por integração junta:
+ *   - estado da ligação guardada (integration_connections: Google Ads, Meta,
+ *     Google Business, WhatsApp);
+ *   - última recolha com sucesso e último erro (integration_sync_runs para
+ *     Google Ads/Meta; cron_runs para IMAP, Zello, Multipark, Google Business);
+ *   - avisos (chave de cifra derivada do JWT_SECRET, LLM_MODEL por omissão…);
+ *   - ligações para as páginas de gestão.
+ * "Testar" só existe onde há um teste barato e sem efeitos:
  *   - Base de dados: SELECT 1;
  *   - SMTP: ligação + autenticação (transporter.verify — não envia nada);
  *   - IMAP: ligação + autenticação + logout (não lê emails);
  *   - WhatsApp: GET do número (Graph API);
- *   - Meta Ads: GET /me com o token (Graph API).
+ *   - Meta Ads: GET /me com o token (Graph API);
+ *   - Google Ads: renova o access token + listAccessibleCustomers;
+ *   - Google Business: renova o token + lista as contas;
+ *   - Zello: gettoken + login;
+ *   - LLM: uma chamada de 1 token.
  * As mensagens de erro passam por `scrubSecrets` antes de sair.
  */
 import { sql } from "drizzle-orm";
 
 type Env = Record<string, string | undefined>;
+
+export interface IntegrationLink { label: string; href: string }
 
 export interface IntegrationStatus {
   id: string;
@@ -20,8 +33,15 @@ export interface IntegrationStatus {
   configured: boolean;
   missing: string[];
   testable: boolean;
-  /** Estado da ligação OAuth guardada (Google Ads / Business), se houver. */
+  group: "main" | "system";
+  links: IntegrationLink[];
+  /** Estado da ligação guardada (Google Ads / Meta / Business / WhatsApp), se houver. */
   connection?: { status: string; lastCheckedAt: string | null; hasError: boolean } | null;
+  /** Última recolha/corrida com sucesso ("AAAA-MM-DD HH:MM:SS", UTC). */
+  lastSyncAt?: string | null;
+  /** Último erro conhecido (já sem segredos, curto). */
+  lastError?: string | null;
+  warnings?: string[];
 }
 
 const has = (env: Env, k: string) => !!String(env[k] ?? "").trim();
@@ -33,26 +53,41 @@ interface Def {
   /** Grupos "qualquer um destes" (todos os grupos obrigatórios). */
   require: string[][];
   testable?: boolean;
+  /** linha em integration_connections */
   provider?: string;
+  /** integration_sync_runs.provider (última recolha "done") */
+  syncProvider?: string;
+  /** cron_runs.name (última corrida OK / último erro) */
+  cron?: string;
+  group: "main" | "system";
+  links: IntegrationLink[];
 }
 
 const DEFS: Def[] = [
-  { id: "database", label: "Base de dados", description: "MySQL principal.", require: [["DATABASE_URL"]], testable: true },
-  { id: "multipark", label: "API Multipark", description: "Reservas dos parques (chave geral ou por parque).", require: [["MULTIPARK_API_KEY", "MULTIPARK_API_KEY_LISBON_AIRPARK", "MULTIPARK_API_KEY_FARO_AIRPARK", "MULTIPARK_API_KEY_LISBON_REDPARK", "MULTIPARK_API_KEY_LISBON_SKYPARK"]] },
-  { id: "multipark_webhook", label: "Webhook Multipark", description: "Reservas em tempo real (assinatura HMAC).", require: [["MULTIPARK_WEBHOOK_SECRET"]] },
-  { id: "cron", label: "Crons (GitHub Actions)", description: "Segredo partilhado com os workflows.", require: [["CRON_SECRET"]] },
-  { id: "google_login", label: "Login Google", description: "Entrada na aplicação com conta Google.", require: [["GOOGLE_CLIENT_ID"], ["GOOGLE_CLIENT_SECRET"], ["JWT_SECRET"]] },
-  { id: "google_ads", label: "Google Ads", description: "Métricas de anúncios (OAuth).", require: [["GOOGLE_ADS_CLIENT_ID"], ["GOOGLE_ADS_CLIENT_SECRET"]], provider: "google_ads" },
-  { id: "google_business", label: "Google Business Profile", description: "Críticas Google (OAuth).", require: [["GOOGLE_BUSINESS_CLIENT_ID", "GOOGLE_ADS_CLIENT_ID"], ["GOOGLE_BUSINESS_CLIENT_SECRET", "GOOGLE_ADS_CLIENT_SECRET"]], provider: "google_business" },
-  { id: "meta_ads", label: "Meta Ads", description: "Métricas Facebook/Instagram (só leitura).", require: [["META_ACCESS_TOKEN"], ["META_AD_ACCOUNT_IDS"]], testable: true },
-  { id: "whatsapp", label: "WhatsApp (Cloud API)", description: "Envio de mensagens e templates.", require: [["WHATSAPP_TOKEN"], ["WHATSAPP_PHONE_NUMBER_ID"]], testable: true },
-  { id: "whatsapp_webhook", label: "Webhook WhatsApp", description: "Mensagens recebidas (verificação + assinatura).", require: [["WHATSAPP_VERIFY_TOKEN"], ["WHATSAPP_APP_SECRET"]] },
-  { id: "smtp", label: "Email de saída (SMTP)", description: "Emails enviados pela aplicação.", require: [["SMTP_HOST"], ["SMTP_USER"], ["SMTP_PASS"]], testable: true },
-  { id: "imap", label: "Email de entrada (IMAP)", description: "Leitura da caixa reservas@ (reclamações, perdidos…).", require: [["IMAP_USER"], ["IMAP_PASS"]], testable: true },
-  { id: "llm", label: "IA (LLM)", description: "Resumos, classificação e preenchimento automático.", require: [["LLM_API_KEY", "OPENAI_API_KEY"], ["LLM_API_URL", "OPENAI_API_URL"]] },
-  { id: "zello", label: "Zello", description: "Rádio e GPS dos condutores.", require: [["ZELLO_API_KEY"], ["ZELLO_USERNAME"], ["ZELLO_PASSWORD"]] },
-  { id: "storage", label: "Armazenamento de ficheiros", description: "S3 ou Vercel Blob.", require: [["BLOB_READ_WRITE_TOKEN", "AWS_S3_BUCKET_NAME"]] },
-  { id: "google_maps", label: "Google Maps", description: "Mapas e moradas.", require: [["GOOGLE_MAPS_API_KEY"]] },
+  // ── principais (uma cartão cada no hub) ──
+  { id: "google_ads", label: "Google Ads", description: "Métricas de anúncios (OAuth, só leitura).", require: [["GOOGLE_ADS_CLIENT_ID"], ["GOOGLE_ADS_CLIENT_SECRET"]], provider: "google_ads", syncProvider: "google_ads", cron: "google-ads", testable: true, group: "main",
+    links: [{ label: "Gerir ligação, contas e recolha", href: "/integracoes/google-ads" }, { label: "Marketing", href: "/marketing" }] },
+  { id: "meta_ads", label: "Meta Ads", description: "Métricas Facebook/Instagram (só leitura).", require: [["META_ACCESS_TOKEN"], ["META_AD_ACCOUNT_IDS"]], provider: "meta", syncProvider: "meta", cron: "meta-ads", testable: true, group: "main",
+    links: [{ label: "Gerir contas e recolha", href: "/integracoes/google-ads#meta" }] },
+  { id: "google_business", label: "Google Business Profile", description: "Críticas Google (OAuth).", require: [["GOOGLE_BUSINESS_CLIENT_ID", "GOOGLE_ADS_CLIENT_ID"], ["GOOGLE_BUSINESS_CLIENT_SECRET", "GOOGLE_ADS_CLIENT_SECRET"]], provider: "google_business", cron: "google-business", testable: true, group: "main",
+    links: [{ label: "Ligação e perfis (Críticas)", href: "/criticas#google-business" }] },
+  { id: "whatsapp", label: "WhatsApp (Cloud API)", description: "Envio de mensagens e templates.", require: [["WHATSAPP_TOKEN"], ["WHATSAPP_PHONE_NUMBER_ID"]], provider: "whatsapp", testable: true, group: "main",
+    links: [{ label: "WhatsApp", href: "/whatsapp" }] },
+  { id: "imap", label: "Email de entrada (IMAP)", description: "Leitura da caixa reservas@ (reclamações, perdidos…).", require: [["IMAP_USER"], ["IMAP_PASS"]], cron: "email-inbound", testable: true, group: "main",
+    links: [{ label: "Estado do cron", href: "/definicoes" }] },
+  { id: "smtp", label: "Email de saída (SMTP)", description: "Emails enviados pela aplicação e alertas ao dono.", require: [["SMTP_HOST"], ["SMTP_USER"], ["SMTP_PASS"]], testable: true, group: "main", links: [] },
+  { id: "zello", label: "Zello", description: "Rádio e GPS dos condutores (recolha diária).", require: [["ZELLO_API_KEY"], ["ZELLO_USERNAME"], ["ZELLO_PASSWORD"]], cron: "daily-ops", testable: true, group: "main",
+    links: [{ label: "Estado do cron (daily-ops)", href: "/definicoes" }] },
+  { id: "llm", label: "IA (LLM)", description: "Resumos, classificação e preenchimento automático.", require: [["LLM_API_KEY", "OPENAI_API_KEY"], ["LLM_API_URL", "OPENAI_API_URL"]], testable: true, group: "main", links: [] },
+  { id: "multipark", label: "API Multipark", description: "Reservas dos parques (chave geral ou por parque).", require: [["MULTIPARK_API_KEY", "MULTIPARK_API_KEY_LISBON_AIRPARK", "MULTIPARK_API_KEY_FARO_AIRPARK", "MULTIPARK_API_KEY_LISBON_REDPARK", "MULTIPARK_API_KEY_LISBON_SKYPARK"]], cron: "multipark-sync", group: "main",
+    links: [{ label: "Sincronização", href: "/multipark/sync" }] },
+  { id: "storage", label: "Armazenamento de ficheiros", description: "S3 ou Vercel Blob.", require: [["BLOB_READ_WRITE_TOKEN", "AWS_S3_BUCKET_NAME"]], group: "main", links: [] },
+  // ── sistema ──
+  { id: "database", label: "Base de dados", description: "MySQL principal.", require: [["DATABASE_URL"]], testable: true, group: "system", links: [] },
+  { id: "multipark_webhook", label: "Webhook Multipark", description: "Reservas em tempo real (assinatura HMAC).", require: [["MULTIPARK_WEBHOOK_SECRET"]], group: "system", links: [] },
+  { id: "cron", label: "Crons (GitHub Actions)", description: "Segredo partilhado com os workflows.", require: [["CRON_SECRET"]], group: "system", links: [{ label: "Estado do sistema", href: "/definicoes" }] },
+  { id: "google_login", label: "Login Google", description: "Entrada na aplicação com conta Google.", require: [["GOOGLE_CLIENT_ID"], ["GOOGLE_CLIENT_SECRET"], ["JWT_SECRET"]], group: "system", links: [] },
+  { id: "whatsapp_webhook", label: "Webhook WhatsApp", description: "Mensagens recebidas (verificação + assinatura).", require: [["WHATSAPP_VERIFY_TOKEN"], ["WHATSAPP_APP_SECRET"]], group: "system", links: [] },
 ];
 
 /** Variáveis em falta (um nome por grupo "qualquer um destes"). PURA. */
@@ -64,7 +99,7 @@ export function missingEnvs(require: string[][], env: Env): string[] {
 export function integrationStatusesFromEnv(env: Env = process.env): IntegrationStatus[] {
   return DEFS.map((d) => {
     const missing = missingEnvs(d.require, env);
-    return { id: d.id, label: d.label, description: d.description, configured: missing.length === 0, missing, testable: !!d.testable };
+    return { id: d.id, label: d.label, description: d.description, configured: missing.length === 0, missing, testable: !!d.testable, group: d.group, links: d.links, warnings: [] };
   });
 }
 
@@ -81,24 +116,93 @@ export function scrubSecrets(message: string, env: Env = process.env): string {
   return out.slice(0, 300);
 }
 
-export async function listIntegrationStatuses(): Promise<IntegrationStatus[]> {
-  const list = integrationStatusesFromEnv();
+/**
+ * Origem da chave que cifra os tokens guardados (refresh tokens Google).
+ * "derived" = derivada do JWT_SECRET (rodar o JWT_SECRET invalida as ligações)
+ * → aviso no hub. PURA.
+ */
+export function encryptionKeyStatus(env: Env = process.env): { source: "env" | "derived" | "none" | "invalid"; warning: string | null } {
+  const raw = env.INTEGRATIONS_ENCRYPTION_KEY;
+  if (raw) {
+    return Buffer.from(raw, "base64").length === 32
+      ? { source: "env", warning: null }
+      : { source: "invalid", warning: "INTEGRATIONS_ENCRYPTION_KEY inválida (tem de ser 32 bytes em base64: openssl rand -base64 32)." };
+  }
+  if (env.JWT_SECRET) return { source: "derived", warning: "INTEGRATIONS_ENCRYPTION_KEY não definida: os tokens guardados estão cifrados com uma chave derivada do JWT_SECRET — mudar o JWT_SECRET obriga a religar Google Ads e Google Business." };
+  return { source: "none", warning: "Sem chave de cifra (INTEGRATIONS_ENCRYPTION_KEY nem JWT_SECRET): não é possível guardar ligações OAuth." };
+}
+
+const rowsOf = (res: unknown): any[] => {
+  const r = Array.isArray(res) ? res[0] : (res as any)?.rows ?? res;
+  return Array.isArray(r) ? r : [];
+};
+const oneLine = (s: unknown) => scrubSecrets(String(s ?? "").replace(/\s+/g, " ").trim()).slice(0, 240) || null;
+
+export async function listIntegrationStatuses(env: Env = process.env): Promise<IntegrationStatus[]> {
+  const list = integrationStatusesFromEnv(env);
+  const byId = new Map(list.map((s) => [s.id, s]));
+  const defOf = (id: string) => DEFS.find((d) => d.id === id)!;
+
+  // Avisos que só dependem da env / do código
+  const key = encryptionKeyStatus(env);
+  if (key.warning) for (const id of ["google_ads", "google_business"]) byId.get(id)?.warnings?.push(key.warning);
+  try {
+    const { llmModelStatus } = await import("./_core/llm");
+    const llm = byId.get("llm");
+    const m = llmModelStatus(env);
+    if (llm?.configured && m.warning) llm.warnings!.push(m.warning);
+  } catch { /* indicador */ }
+
   try {
     const { getDb } = await import("./db");
     const db = await getDb();
-    if (db) {
-      const res = await db.execute(sql`
-        SELECT provider, status, DATE_FORMAT(lastCheckedAt, '%Y-%m-%d %H:%i:%s') AS lastCheckedAt,
-               (lastError IS NOT NULL AND lastError <> '') AS hasError
-          FROM integration_connections`);
-      const rows = (Array.isArray(res) ? res[0] : res) as unknown as any[];
-      const byProvider = new Map((rows ?? []).map((r: any) => [String(r.provider), r]));
-      for (const s of list) {
-        const provider = DEFS.find((d) => d.id === s.id)?.provider;
-        if (!provider) continue;
-        const r = byProvider.get(provider);
-        s.connection = r ? { status: String(r.status), lastCheckedAt: r.lastCheckedAt ? String(r.lastCheckedAt) : null, hasError: Number(r.hasError) === 1 } : null;
+    if (!db) return list;
+
+    const connRes = await db.execute(sql`
+      SELECT provider, status, DATE_FORMAT(lastCheckedAt, '%Y-%m-%d %H:%i:%s') AS lastCheckedAt, lastError
+        FROM integration_connections`);
+    const conns = new Map(rowsOf(connRes).map((r: any) => [String(r.provider), r]));
+
+    // Última recolha "done" e última execução terminada por fornecedor (sem colunas soltas no GROUP BY).
+    const syncOkRes = await db.execute(sql`
+      SELECT provider, DATE_FORMAT(MAX(finishedAt), '%Y-%m-%d %H:%i:%s') AS lastOk
+        FROM integration_sync_runs WHERE status = 'done' GROUP BY provider`);
+    const syncLastRes = await db.execute(sql`
+      SELECT r.provider AS provider, r.status AS status, r.error AS error
+        FROM integration_sync_runs r
+        JOIN (SELECT provider, MAX(id) AS mx FROM integration_sync_runs WHERE finishedAt IS NOT NULL GROUP BY provider) m ON m.mx = r.id`);
+    const syncOk = new Map(rowsOf(syncOkRes).map((r: any) => [String(r.provider), r.lastOk ? String(r.lastOk) : null]));
+    const syncLast = new Map(rowsOf(syncLastRes).map((r: any) => [String(r.provider), r]));
+
+    const cronNames = DEFS.map((d) => d.cron).filter((c): c is string => !!c);
+    const cronOkRes = await db.execute(sql`
+      SELECT name, DATE_FORMAT(MAX(finishedAt), '%Y-%m-%d %H:%i:%s') AS lastOk
+        FROM cron_runs WHERE ok = 1 AND name IN (${sql.join(cronNames.map((n) => sql`${n}`), sql`, `)}) GROUP BY name`);
+    const cronLastRes = await db.execute(sql`
+      SELECT r.name AS name, r.ok AS ok, r.error AS error
+        FROM cron_runs r
+        JOIN (SELECT name, MAX(id) AS mx FROM cron_runs WHERE finishedAt IS NOT NULL AND name IN (${sql.join(cronNames.map((n) => sql`${n}`), sql`, `)}) GROUP BY name) m ON m.mx = r.id`);
+    const cronOk = new Map(rowsOf(cronOkRes).map((r: any) => [String(r.name), r.lastOk ? String(r.lastOk) : null]));
+    const cronLast = new Map(rowsOf(cronLastRes).map((r: any) => [String(r.name), r]));
+
+    for (const s of list) {
+      const d = defOf(s.id);
+      if (d.provider) {
+        const r = conns.get(d.provider);
+        s.connection = r ? { status: String(r.status), lastCheckedAt: r.lastCheckedAt ? String(r.lastCheckedAt) : null, hasError: !!(r.lastError && String(r.lastError).trim()) } : null;
+        if (r?.lastError) s.lastError = oneLine(r.lastError);
       }
+      if (d.syncProvider) {
+        s.lastSyncAt = syncOk.get(d.syncProvider) ?? null;
+        const last = syncLast.get(d.syncProvider);
+        if (!s.lastError && last && last.status !== "done" && last.error) s.lastError = oneLine(last.error);
+      }
+      if (d.cron) {
+        if (!s.lastSyncAt) s.lastSyncAt = cronOk.get(d.cron) ?? null;
+        const last = cronLast.get(d.cron);
+        if (!s.lastError && last && Number(last.ok) === 0 && last.error) s.lastError = oneLine(last.error);
+      }
+      if (d.id === "google_business" && !s.lastSyncAt && s.connection?.lastCheckedAt) s.lastSyncAt = s.connection.lastCheckedAt;
     }
   } catch { /* só o estado da env */ }
   return list;
@@ -116,9 +220,16 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 }
 
 async function graphGet(path: string, token: string): Promise<any> {
-  const r = await fetch(`https://graph.facebook.com${path}`, { headers: { Authorization: `Bearer ${token}` } });
+  const { fetchWithTimeout } = await import("./_core/fetchWithTimeout");
+  const r = await fetchWithTimeout(`https://graph.facebook.com${path}`, { headers: { Authorization: `Bearer ${token}` } });
   const body: any = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(body?.error?.message ? `Meta: ${body.error.message}` : `HTTP ${r.status}`);
+  if (!r.ok) {
+    if (Number(body?.error?.code) === 190 && path.includes(String(process.env.WHATSAPP_PHONE_NUMBER_ID ?? "\u0000"))) {
+      const { recordWhatsappAuthError } = await import("./integrations/whatsappConnection");
+      await recordWhatsappAuthError(String(body?.error?.message ?? "token"));
+    }
+    throw new Error(body?.error?.message ? `Meta: ${body.error.message}` : `HTTP ${r.status}`);
+  }
   return body;
 }
 
@@ -143,7 +254,7 @@ export async function testIntegration(id: string): Promise<TestResult> {
         case "smtp": {
           const { createTransport } = await import("nodemailer");
           const port = parseInt(env.SMTP_PORT || "587", 10);
-          const t = createTransport({ host: env.SMTP_HOST, port, secure: port === 465, auth: { user: env.SMTP_USER, pass: env.SMTP_PASS } });
+          const t = createTransport({ host: env.SMTP_HOST, port, secure: port === 465, auth: { user: env.SMTP_USER, pass: env.SMTP_PASS }, connectionTimeout: 15_000 });
           try { await t.verify(); } finally { t.close(); }
           message = "Servidor SMTP aceitou a autenticação (nada foi enviado).";
           break;
@@ -156,6 +267,7 @@ export async function testIntegration(id: string): Promise<TestResult> {
             secure: true,
             auth: { user: env.IMAP_USER!, pass: env.IMAP_PASS! },
             logger: false,
+            connectionTimeout: 15_000,
           });
           await client.connect();
           await client.logout().catch(() => undefined);
@@ -163,9 +275,11 @@ export async function testIntegration(id: string): Promise<TestResult> {
           break;
         }
         case "whatsapp": {
-          const version = (env.WHATSAPP_API_VERSION || "v21.0").trim();
-          const b = await graphGet(`/${version}/${encodeURIComponent(env.WHATSAPP_PHONE_NUMBER_ID!.trim())}?fields=display_phone_number,verified_name`, env.WHATSAPP_TOKEN!.trim());
+          const { whatsappApiVersion } = await import("./whatsapp");
+          const b = await graphGet(`/${whatsappApiVersion(env)}/${encodeURIComponent(env.WHATSAPP_PHONE_NUMBER_ID!.trim())}?fields=display_phone_number,verified_name`, env.WHATSAPP_TOKEN!.trim());
           message = `Número ${b.display_phone_number ?? "?"}${b.verified_name ? ` (${b.verified_name})` : ""} acessível.`;
+          const { recordWhatsappSuccess } = await import("./integrations/whatsappConnection");
+          await recordWhatsappSuccess();
           break;
         }
         case "meta_ads": {
@@ -175,10 +289,37 @@ export async function testIntegration(id: string): Promise<TestResult> {
           message = `Token válido (${cfg.accountIds.length} conta(s) configurada(s)).`;
           break;
         }
+        case "google_ads": {
+          const { getAccessToken } = await import("./integrations/googleAds/oauth");
+          const { listAccessibleCustomers } = await import("./integrations/googleAds/client");
+          await getAccessToken({ forceRefresh: true });
+          const ids = await listAccessibleCustomers();
+          message = `Token renovado; ${ids.length} conta(s) acessível(is) pela API.`;
+          break;
+        }
+        case "google_business": {
+          const { accessToken } = await import("./integrations/googleBusiness/oauth");
+          const { BusinessClient } = await import("./integrations/googleBusiness/client");
+          const page = await new BusinessClient(await accessToken()).accounts();
+          message = `Token renovado; ${(page.accounts ?? []).length} conta(s) Google Business acessível(is).`;
+          break;
+        }
+        case "zello": {
+          const { testZelloLogin } = await import("./zello");
+          await testZelloLogin();
+          message = "Zello aceitou o login (nenhum dado lido).";
+          break;
+        }
+        case "llm": {
+          const { testLLM } = await import("./_core/llm");
+          const r = await testLLM();
+          message = `IA respondeu (modelo ${r.model}).`;
+          break;
+        }
         default:
           throw new Error("Sem teste.");
       }
-    })(), 12_000);
+    })(), id === "llm" ? 50_000 : 20_000);
     return { ok: true, message, ms: Date.now() - started };
   } catch (err: any) {
     return { ok: false, message: scrubSecrets(String(err?.message ?? err), env) || "Falhou.", ms: Date.now() - started };

@@ -4,7 +4,7 @@
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { protectedProcedure, router } from "../../_core/trpc";
 import { requireAccess } from "../../_core/access";
 import { getDb } from "../../db";
@@ -13,6 +13,7 @@ import { GOOGLE_ADS_PROVIDER, OAUTH_CALLBACK_PATH, missingApiEnvs, missingOAuthE
 import { connectionSummary, disconnect, getConnection, hasStoredRefreshToken } from "./oauth";
 import { isSyncStale, lastSuccessfulSyncAt, listSyncRuns, refreshAccounts, runGoogleAdsSync } from "./sync";
 import { backfillBookingAttribution } from "./marketingStats";
+import { CAMPAIGN_SUGGEST_PROVIDERS as SUGGEST_PROVIDERS } from "../../../shared/adCampaignMapping";
 
 
 export const googleAdsRouter = router({
@@ -88,6 +89,7 @@ export const googleAdsRouter = router({
       }),
     // Sugestões marca/cidade pelo NOME da campanha ("Airpark - Faro - EN") e
     // pela marca da conta — regra pura em shared/adCampaignMapping.ts.
+    // Google Ads E Meta (a mesma tabela ad_campaigns).
     // Só campanhas ainda sem marca/cidade; o Jorge confirma antes de aplicar.
     suggest: protectedProcedure.query(async ({ ctx }) => {
       requireAccess(ctx.user, "marketing", "view");
@@ -96,7 +98,7 @@ export const googleAdsRouter = router({
       const { suggestCampaignProjects } = await import("../../../shared/adCampaignMapping");
       const { getProjects } = await import("../../db");
       const rows = await db.select({ id: adCampaigns.id, name: adCampaigns.name, projectId: adCampaigns.projectId, scope: adCampaigns.scope, accountProjectId: adAccounts.projectId })
-        .from(adCampaigns).leftJoin(adAccounts, eq(adAccounts.id, adCampaigns.accountId)).where(eq(adCampaigns.provider, GOOGLE_ADS_PROVIDER));
+        .from(adCampaigns).leftJoin(adAccounts, eq(adAccounts.id, adCampaigns.accountId)).where(inArray(adCampaigns.provider, [...SUGGEST_PROVIDERS]));
       return suggestCampaignProjects(rows, await getProjects());
     }),
     applySuggestions: protectedProcedure
@@ -108,7 +110,7 @@ export const googleAdsRouter = router({
         const { suggestCampaignProjects } = await import("../../../shared/adCampaignMapping");
         const { getProjects, logActivity } = await import("../../db");
         const rows = await db.select({ id: adCampaigns.id, name: adCampaigns.name, projectId: adCampaigns.projectId, scope: adCampaigns.scope, accountProjectId: adAccounts.projectId })
-          .from(adCampaigns).leftJoin(adAccounts, eq(adAccounts.id, adCampaigns.accountId)).where(eq(adCampaigns.provider, GOOGLE_ADS_PROVIDER));
+          .from(adCampaigns).leftJoin(adAccounts, eq(adAccounts.id, adCampaigns.accountId)).where(inArray(adCampaigns.provider, [...SUGGEST_PROVIDERS]));
         const wanted = input?.campaignIds ? new Set(input.campaignIds) : null;
         const suggestions = suggestCampaignProjects(rows, await getProjects()).filter((s) => !wanted || wanted.has(s.campaignId));
         for (const s of suggestions) {
@@ -118,7 +120,7 @@ export const googleAdsRouter = router({
           if (s.kind === "national") await db.update(adCampaigns).set({ scope: "national", projectId: null }).where(untouched);
           else await db.update(adCampaigns).set({ projectId: s.projectId, scope: "city" }).where(untouched);
         }
-        await logActivity({ userId: ctx.user.id, action: "map", entity: "ad_campaigns", details: `Marca/cidade sugerida pelo nome aplicada a ${suggestions.length} campanha(s) Google Ads` });
+        await logActivity({ userId: ctx.user.id, action: "map", entity: "ad_campaigns", details: `Marca/cidade sugerida pelo nome aplicada a ${suggestions.length} campanha(s) Google Ads/Meta` });
         return { applied: suggestions.length, suggestions };
       }),
   }),

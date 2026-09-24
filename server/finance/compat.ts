@@ -3,11 +3,11 @@
  *
  * Mantêm a forma do payload que InvoicesPage/AnnualPage já consomem
  * (invoices.billing e annual.breakdown), mas os números vêm todos de
- * computeFinance(). As funções antigas estão em ./legacy.ts só para a
- * comparação antes/depois (scripts/finance-parity.ts).
+ * computeFinance(). (O código antigo, legacy.ts, e o script de paridade
+ * foram removidos em 24 set 2026, com a fase 1 validada.)
  */
 import { getFinancialHistory } from "../db";
-import { computeFinance, monthlyRowsFromTimeseries } from "./engine";
+import { computeFinance, monthlyRowsFromTimeseries, type FinanceResult } from "./engine";
 import { daysBetweenInclusive, monthsOverlapping } from "./rules";
 import { loadFinanceRates } from "./rates";
 
@@ -18,6 +18,11 @@ export async function getBillingData(filters: {
   granularity?: "day" | "week" | "month" | "year";
 }) {
   const r = await computeFinance({ ...filters, includePersonDetails: true });
+  return billingPayload(r, filters);
+}
+
+/** Forma do payload da Faturação (também usada pela exportação). */
+export function billingPayload(r: FinanceResult, filters: { from: string; to: string }) {
   const periodDays = Math.max(1, daysBetweenInclusive(filters.from, filters.to));
   const summary = {
     produced: r.revenue.produced, producedCount: r.revenue.producedCount,
@@ -25,27 +30,23 @@ export async function getBillingData(filters: {
     producedNoVat: r.revenue.producedNet, collectedNoVat: r.revenue.collectedNet,
     extrasRevenue: r.revenue.extrasRevenue,
     expensesPaid: r.costs.expenses, expensesPaidNoVat: r.costs.expensesNet,
-    // Dívida com vencimento no período — INFORMAÇÃO; já não é somada aos custos
+    // Dívida com vencimento no período — INFORMAÇÃO; não é somada aos custos
     expensesPending: r.costs.expensesPending,
     extrasDiaCost: r.costs.extrasDia,
     salariesCost: r.costs.salaries,
     salariesBase: r.costs.salariesBase, salariesProvisions: r.costs.salariesProvisions, salariesVariable: r.costs.salariesVariable,
     employerTax: r.costs.employerTax,
     salesCommissions: r.costs.salesCommissions,
-    operationalPartnersPaid: r.costs.operationalCommissions, operationalPartnersPending: 0,
-    // back-compat
-    invoiced: 0, marketingCost: 0,
-    partnerCommissionsPaid: r.costs.operationalCommissions, partnerCommissionsPending: 0,
-    totalCostsPaid: r.costs.totalGross,
-    totalCostsAll: r.costs.totalGross,
+    operationalCommissions: r.costs.operationalCommissions,
+    totalCostsGross: r.costs.totalGross,
     totalCostsNoVat: r.costs.totalNet,
-    marginRealized: r.revenue.produced - r.costs.totalGross,
-    marginAll: r.revenue.produced - r.costs.totalGross,
     marginNet: r.margin.margin,
     marginPct: r.margin.marginPct,
     vatRate: r.params.vatRate, tsuEmployerRate: r.params.tsuEmployerRate,
     periodDays,
     asOf: r.asOf,
+    isCurrentPeriod: r.quality.isCurrentPeriod,
+    projection: r.projection,
     forecastRange: r.forecast,
     quality: r.quality,
   };
@@ -55,22 +56,22 @@ export async function getBillingData(filters: {
       bucket: p.bucket,
       produced: p.produced, producedNet: p.producedNet, producedCount: p.producedCount,
       collected: p.collected,
-      expenses: p.expenses, expensesNet: p.expensesNet, expensesPaid: p.expenses,
+      expenses: p.expenses, expensesNet: p.expensesNet,
       // "Salários" do gráfico inclui TSU para a pilha somar o custo total
       salaries: p.salaries + p.employerTax, salariesOnly: p.salaries, employerTax: p.employerTax,
       partners: p.partners, extrasCost: p.extrasCost,
-      revenueForecast: p.revenueForecast,
-      totalCost: p.totalCost, margin: p.margin,
+      revenueForecast: p.revenueForecast, revenueForecastNet: p.revenueForecastNet, costForecast: p.costForecast,
+      totalCost: p.totalCost, margin: p.margin, marginForecast: p.marginForecast,
     })),
     granularity: r.granularity,
     range: r.range,
     deliveries: r.details.deliveries,
     collected: r.details.collected,
     expensesPaid: r.details.expenses,
+    expensesExcluded: r.details.expensesExcluded,
     expensesPending: r.details.expensesPending,
     forecast: r.details.forecast,
     extrasDia: r.details.extrasDia,
-    partnerCommissions: [] as Array<never>,
     salesCommissions: r.details.salesCommissions,
     operationalPartners: r.details.operationalPartners,
     salaries: { byProject: r.details.salariesByProject, details: r.details.salaryDetails, total: r.costs.salaries },
@@ -83,7 +84,7 @@ export async function getAnnualBreakdown(year: number, projectId?: number) {
   const round = (v: number) => Math.round(v * 100) / 100;
   const months = monthlyRowsFromTimeseries(r).map((m) => ({
     month: m.month,
-    revenueGrossWithVat: round(m.revenueGrossWithVat),
+    status: m.status,
     // Comissões são CUSTO: a receita "líquida" deixa de as deduzir
     salesCommissions: round(m.salesCommissions),
     operationalCommissions: round(m.operationalCommissions),
@@ -94,14 +95,16 @@ export async function getAnnualBreakdown(year: number, projectId?: number) {
     expensesNoVat: round(m.expensesNoVat),
     vatExpenses: round(m.vatExpenses),
     vatToPay: round(m.vatToPay),
-    // Marketing já está nas despesas — 0 aqui (antes somava ads + marketing_expenses outra vez)
-    marketingCost: 0,
     extrasDiaCost: round(m.extrasDiaCost),
     salaries: round(m.salaries),
     employerTax: round(m.employerTax),
     totalCosts: round(m.totalCosts),
     profit: round(m.profit),
     producedCount: m.producedCount,
+    // Fecho previsto (meses em curso/futuros): sem prejuízos fictícios
+    forecastRevenueNoVat: round(m.forecastRevenueNoVat),
+    forecastCosts: round(m.forecastCosts),
+    forecastProfit: round(m.forecastProfit),
     fromHistory: false,
   }));
 
@@ -118,7 +121,7 @@ export async function getAnnualBreakdown(year: number, projectId?: number) {
       for (const mo of months) {
         const h = histByMonth.get(mo.month);
         if (!h) continue;
-        const hasReal = mo.revenueGrossWithVat > 0 || mo.expensesWithVat > 0 || mo.salaries > 0 || mo.extrasDiaCost > 0;
+        const hasReal = mo.revenueWithVat > 0 || mo.expensesWithVat > 0 || mo.salaries > 0 || mo.extrasDiaCost > 0;
         if (hasReal) continue;
         const end = monthEnd.get(mo.month) ?? `${year}-12-31`;
         const vat = rates.vatOn(end), tsu = rates.tsuOn(end);
@@ -130,7 +133,7 @@ export async function getAnnualBreakdown(year: number, projectId?: number) {
         const employerTax = round(salaries * tsu);
         const totalCosts = round(expensesNoVat + salaries + employerTax);
         Object.assign(mo, {
-          revenueGrossWithVat: revenueWithVat, revenueWithVat, revenueNoVat, vatRevenue,
+          revenueWithVat, revenueNoVat, vatRevenue,
           expensesWithVat, expensesNoVat, vatExpenses, vatToPay: round(vatRevenue - vatExpenses),
           salaries, employerTax, totalCosts, profit: round(revenueNoVat - totalCosts), fromHistory: true,
         });

@@ -149,7 +149,8 @@ describe("Meta Insights (sem rede)", () => {
   it("uma compra conta uma vez (omni_purchase > purchase > pixel) e as ações de conversão vão à parte", () => {
     const r = parseInsightRow({
       campaign_id: "999", campaign_name: "Lisboa - Leads", date_start: "2026-09-20", date_stop: "2026-09-20",
-      spend: "12.34", impressions: "1000", clicks: "40",
+      // clicks = TODOS os toques (gostos, perfil…); conta só inline_link_clicks
+      spend: "12.34", impressions: "1000", clicks: "95", inline_link_clicks: "40",
       actions: [{ action_type: "link_click", value: "40" }, { action_type: "omni_purchase", value: "3" }, { action_type: "purchase", value: "3" }, { action_type: "lead", value: "2" }],
       action_values: [{ action_type: "omni_purchase", value: "150.5" }, { action_type: "purchase", value: "150.5" }],
     })!;

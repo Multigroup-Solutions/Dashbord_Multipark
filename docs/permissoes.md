@@ -64,7 +64,7 @@
 | Projetos | — | — | — | — | — | — | — | nacional VEG | nacional VEG |
 | Marketing | — | — | — | — | — | — | — | — | nacional VEXG |
 | Financeiro (totais e dashboards) | — | — | — | — | — | — | — | nacional VEXG | nacional VEXG |
-| Anual | — | — | — | — | — | — | — | nacional VEXG | nacional VEXG |
+| Anual | — | — | — | — | — | — | — | — | nacional VEXG |
 | Faturação | — | — | — | — | — | — | — | — | nacional VEXG |
 | **Dashboards** |  |  |  |  |  |  |  |  |  |
 | Dashboards (sem Faturação) | — | — | — | — | — | — | — | nacional V | nacional V |

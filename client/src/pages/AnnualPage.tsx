@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { can } from "@shared/access";
+import FinanceExportButtons from "@/components/FinanceExportButtons";
 import { toast } from "sonner";
 import { useState, useMemo, useEffect } from "react";
 import {
@@ -63,7 +65,11 @@ function sortProjectsHierarchical<T extends { id: number; name: string; parentId
 
 type MonthRow = {
   month: number;
-  revenueGrossWithVat?: number;
+  /** past = realizado; current = mês em curso (realizado até hoje); future = só previsão */
+  status?: "past" | "current" | "future";
+  forecastRevenueNoVat?: number;
+  forecastCosts?: number;
+  forecastProfit?: number;
   salesCommissions?: number;
   operationalCommissions?: number;
   revenueWithVat: number;
@@ -73,7 +79,6 @@ type MonthRow = {
   expensesNoVat: number;
   vatExpenses: number;
   vatToPay: number;
-  marketingCost?: number;
   extrasDiaCost?: number;
   salaries: number;
   employerTax: number;
@@ -82,7 +87,6 @@ type MonthRow = {
 };
 
 type Totals = {
-  revenueGrossWithVat: number;
   salesCommissions: number;
   operationalCommissions: number;
   revenueWithVat: number;
@@ -92,24 +96,25 @@ type Totals = {
   expensesNoVat: number;
   vatExpenses: number;
   vatToPay: number;
-  marketingCost: number;
   extrasDiaCost: number;
   salaries: number;
   employerTax: number;
   totalCosts: number;
   profit: number;
+  /** fecho previsto: meses passados pelo realizado, em curso/futuros pela previsão */
+  forecastProfit: number;
+  hasForecast: boolean;
 };
 
 function aggregate(rows: MonthRow[]): Totals {
   const t: Totals = {
-    revenueGrossWithVat: 0, salesCommissions: 0, operationalCommissions: 0,
+    salesCommissions: 0, operationalCommissions: 0,
     revenueWithVat: 0, revenueNoVat: 0, vatRevenue: 0,
     expensesWithVat: 0, expensesNoVat: 0, vatExpenses: 0, vatToPay: 0,
-    marketingCost: 0, extrasDiaCost: 0,
-    salaries: 0, employerTax: 0, totalCosts: 0, profit: 0,
+    extrasDiaCost: 0,
+    salaries: 0, employerTax: 0, totalCosts: 0, profit: 0, forecastProfit: 0, hasForecast: false,
   };
   for (const m of rows) {
-    t.revenueGrossWithVat += m.revenueGrossWithVat ?? m.revenueWithVat;
     t.salesCommissions += m.salesCommissions ?? 0;
     t.operationalCommissions += m.operationalCommissions ?? 0;
     t.revenueWithVat += m.revenueWithVat;
@@ -119,12 +124,14 @@ function aggregate(rows: MonthRow[]): Totals {
     t.expensesNoVat += m.expensesNoVat;
     t.vatExpenses += m.vatExpenses;
     t.vatToPay += m.vatToPay;
-    t.marketingCost += m.marketingCost ?? 0;
     t.extrasDiaCost += m.extrasDiaCost ?? 0;
     t.salaries += m.salaries;
     t.employerTax += m.employerTax;
     t.totalCosts += m.totalCosts;
     t.profit += m.profit;
+    const pending = m.status === "current" || m.status === "future";
+    t.forecastProfit += pending ? (m.forecastProfit ?? m.profit) : m.profit;
+    if (pending) t.hasForecast = true;
   }
   return t;
 }
@@ -226,7 +233,7 @@ function ImportHistoryDialog({ open, onClose, onImported }: { open: boolean; onC
 export default function AnnualPage() {
   const filters = useGlobalFilters();
   const { user } = useAuth();
-  const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
+  const canImport = can(user?.role, "anual", "manage");
   const [showImport, setShowImport] = useState(false);
   const utils = trpc.useUtils();
   const currentYear = new Date().getFullYear();
@@ -283,9 +290,10 @@ export default function AnnualPage() {
             <Link href="/faturacao">
               <a className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1 mb-1">← Faturação</a>
             </Link>
-            <p className="text-sm text-muted-foreground">Visão anual de gestão: lucros, gastos, IVA, ordenados e comissões</p>
+            <p className="text-sm text-muted-foreground">Visão anual de gestão: lucros, gastos, IVA, ordenados e comissões. Mês em curso = realizado até hoje; meses futuros só com previsão.</p>
           </div>
-          {isAdmin && (
+          <FinanceExportButtons input={{ kind: "annual", year, projectId }} />
+          {canImport && (
             <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setShowImport(true)}>
               <Upload className="h-3.5 w-3.5" /> Importar histórico
             </Button>
@@ -424,6 +432,7 @@ export default function AnnualPage() {
                 <span className="text-[10px] text-muted-foreground font-medium">Lucro</span>
               </div>
               <p className={`text-lg font-bold ${totals.profit >= 0 ? "text-green-700" : "text-red-700"}`}>{fmt(totals.profit)}</p>
+              {totals.hasForecast && <p className="text-[10px] text-muted-foreground">Fecho previsto: {fmt(totals.forecastProfit)}</p>}
               {showCompare && <DeltaBadge curr={totals.profit} prev={totalsCompare.profit} />}
             </Card>
           </div>
@@ -461,11 +470,18 @@ export default function AnnualPage() {
                   const costH = (m.totalCosts / localMax) * 100;
                   const revCH = mc ? (mc.revenueNoVat / localMax) * 100 : 0;
                   const costCH = mc ? (mc.totalCosts / localMax) * 100 : 0;
+                  const future = m.status === "future";
                   return (
                     <div key={idx} className="flex-1 flex flex-col items-center gap-1">
-                      <span className={`text-[10px] tabular-nums ${m.profit >= 0 ? "text-emerald-700" : "text-red-700"}`}>
-                        {fmtCompact(m.profit)}
-                      </span>
+                      {future ? (
+                        <span className="text-[10px] tabular-nums text-muted-foreground italic" title="Mês futuro: previsão (receita esperada − custos previstos), não resultado">
+                          prev. {fmtCompact(m.forecastProfit ?? 0)}
+                        </span>
+                      ) : (
+                        <span className={`text-[10px] tabular-nums ${m.profit >= 0 ? "text-emerald-700" : "text-red-700"}`}>
+                          {fmtCompact(m.profit)}
+                        </span>
+                      )}
                       <div className="w-full flex gap-0.5 items-end" style={{ height: "180px" }}>
                         {showCompare && (
                           <>
@@ -539,9 +555,18 @@ export default function AnnualPage() {
                           <td className="p-2 text-right tabular-nums text-pink-700">{fmt(m.totalCosts)}</td>
                           <td className={`p-2 text-right tabular-nums ${m.vatToPay >= 0 ? "text-red-600" : "text-green-600"}`}>{fmt(m.vatToPay)}</td>
                           <td className="p-2 text-right tabular-nums font-bold">
-                            <span className={m.profit >= 0 ? "text-green-700" : "text-red-700"}>
-                              {m.profit >= 0 ? "+" : ""}{fmt(m.profit)}
-                            </span>
+                            {m.status === "future" ? (
+                              <span className="text-muted-foreground font-normal" title="Mês futuro: sem resultado realizado">—</span>
+                            ) : (
+                              <span className={m.profit >= 0 ? "text-green-700" : "text-red-700"}>
+                                {m.profit >= 0 ? "+" : ""}{fmt(m.profit)}
+                              </span>
+                            )}
+                            {(m.status === "future" || m.status === "current") && (
+                              <div className="text-[9px] font-normal text-muted-foreground italic">
+                                {m.status === "current" ? "fecho prev." : "previsto"}: {fmtCompact(m.forecastProfit ?? 0)}
+                              </div>
+                            )}
                             {showCompare && mc && (
                               <div className="text-[9px] font-normal text-muted-foreground">
                                 vs {compareYear}: {mc.profit >= 0 ? "+" : ""}{fmtCompact(mc.profit)} <DeltaBadge curr={m.profit} prev={mc.profit} />
@@ -567,6 +592,7 @@ export default function AnnualPage() {
                         <span className={totals.profit >= 0 ? "text-green-700" : "text-red-700"}>
                           {totals.profit >= 0 ? "+" : ""}{fmt(totals.profit)}
                         </span>
+                        {totals.hasForecast && <div className="text-[9px] font-normal text-muted-foreground italic">fecho prev.: {fmtCompact(totals.forecastProfit)}</div>}
                       </td>
                     </tr>
                   </tbody>

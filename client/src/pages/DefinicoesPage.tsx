@@ -23,6 +23,7 @@ import {
   Save, ShieldCheck, SlidersHorizontal, ToggleLeft, Trash2, XCircle,
 } from "lucide-react";
 import { validateSetting, type RateEntry } from "@shared/appSettings";
+import { SyncHealthPanel } from "@/components/operacoes/SyncHealthPanel";
 
 const TABS = ["estado", "automacoes", "integracoes", "parametros", "seguranca"] as const;
 type Tab = (typeof TABS)[number];
@@ -61,7 +62,7 @@ export default function DefinicoesPage() {
             <TabsTrigger value="seguranca"><ShieldCheck className="h-4 w-4 mr-1" />Segurança</TabsTrigger>
           </TabsList>
         </div>
-        <TabsContent value="estado"><SystemStatusCard /></TabsContent>
+        <TabsContent value="estado" className="space-y-4"><SystemStatusCard /><SyncHealthPanel compact /></TabsContent>
         <TabsContent value="automacoes"><AutomationsCard /></TabsContent>
         <TabsContent value="integracoes"><IntegrationsCard /></TabsContent>
         <TabsContent value="parametros"><ParametersCard /></TabsContent>
@@ -146,6 +147,9 @@ function SystemStatusCard() {
                 {c.last && c.last.ok === false && c.last.error && (
                   <p className="mt-2 text-xs text-red-700 dark:text-red-300 break-words"><XCircle className="inline h-3 w-3 mr-1" />{c.last.error}</p>
                 )}
+                {c.last && c.last.ok === true && c.last.error && (
+                  <p className="mt-2 text-xs text-amber-800 dark:text-amber-300 break-words"><AlertTriangle className="inline h-3 w-3 mr-1" />{c.last.error}</p>
+                )}
                 {c.health === "stale" && (
                   <p className="mt-2 text-xs text-amber-800 dark:text-amber-300"><AlertTriangle className="inline h-3 w-3 mr-1" />Sem corridas há mais de {c.staleAfterMinutes} min — verificar o workflow {c.workflow} no GitHub.</p>
                 )}
@@ -160,7 +164,9 @@ function SystemStatusCard() {
                       <span>{fmtPTDateTime(r.startedAt)}</span>
                       <span className="text-muted-foreground">{fmtDuration(r.durationMs)}{r.httpStatus ? ` · HTTP ${r.httpStatus}` : ""}{r.meta ? ` · ${r.meta}` : ""}</span>
                       {r.ok === null && <span className="text-muted-foreground">{r.finishedAt ? "" : "sem resposta"}</span>}
-                      {r.error && <span className="text-red-700 dark:text-red-300 break-all w-full">{r.error}</span>}
+                      {r.error && (r.ok === true
+                        ? <span className="text-muted-foreground break-all w-full">Nota: {r.error}</span>
+                        : <span className="text-red-700 dark:text-red-300 break-all w-full">{r.error}</span>)}
                     </div>
                   ))}
                   {c.lastFailure && c.lastFailure.id !== c.last?.id && (
@@ -228,62 +234,32 @@ function AutomationsCard() {
 
 // ─── Integrações ────────────────────────────────────────────────────────────
 
-const CONN_LABEL: Record<string, string> = { connected: "ligado", disconnected: "desligado", reauth_required: "reautorização necessária", error: "erro" };
-
+/** Resumo: as integrações vivem no hub /integracoes (estado, testes, gestão). */
 function IntegrationsCard() {
-  const q = trpc.settings.integrations.list.useQuery();
-  const [results, setResults] = useState<Record<string, { ok: boolean; message: string; ms: number }>>({});
-  const [testing, setTesting] = useState<string | null>(null);
-  const test = trpc.settings.integrations.test.useMutation({
-    onSuccess: (r, v) => { setResults((p) => ({ ...p, [v.id]: r })); r.ok ? toast.success(r.message) : toast.error(r.message); },
-    onError: (e) => toast.error(e.message),
-    onSettled: () => setTesting(null),
-  });
+  const q = trpc.integrations.hub.list.useQuery();
+  const items = (q.data?.items ?? []).filter((i) => i.group === "main");
+  const configured = items.filter((i) => i.configured).length;
+  const problems = items.filter((i) => i.configured && (i.connection?.status === "reauth_required" || i.connection?.status === "error" || !!i.lastError));
   return (
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="text-base">Integrações</CardTitle>
-        <p className="text-xs text-muted-foreground">Só se mostra se está configurada — os valores dos segredos nunca saem do servidor. O teste não envia nem altera nada.</p>
+        <p className="text-xs text-muted-foreground">O estado, os testes e a gestão de cada ligação passaram para a página Integrações.</p>
       </CardHeader>
-      <CardContent className="space-y-2">
+      <CardContent className="space-y-2 text-sm">
         {q.isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
-        {q.data?.map((i) => {
-          const r = results[i.id];
-          return (
-            <div key={i.id} className="rounded-lg border p-3 flex flex-wrap items-start gap-2">
-              <div className="flex-1 min-w-[12rem]">
-                <div className="text-sm font-semibold flex items-center gap-2 flex-wrap">
-                  {i.label}
-                  <Badge variant="outline" className={i.configured ? "bg-emerald-100 text-emerald-800 border-emerald-200" : "bg-muted text-muted-foreground"}>
-                    {i.configured ? "Configurada" : "Não configurada"}
-                  </Badge>
-                  {i.connection && (
-                    <Badge variant="outline" className={i.connection.status === "connected" && !i.connection.hasError ? "bg-emerald-50 text-emerald-800" : "bg-amber-100 text-amber-900 border-amber-200"}>
-                      OAuth: {CONN_LABEL[i.connection.status] ?? i.connection.status}{i.connection.hasError ? " (com erro)" : ""}
-                    </Badge>
-                  )}
-                </div>
-                <div className="text-xs text-muted-foreground">{i.description}</div>
-                {!i.configured && i.missing.length > 0 && (
-                  <div className="text-[11px] text-muted-foreground mt-1 font-mono break-all">Falta: {i.missing.join(", ")}</div>
-                )}
-                {r && (
-                  <div className={`text-xs mt-1 ${r.ok ? "text-emerald-700" : "text-red-700"}`}>
-                    {r.ok ? <CheckCircle2 className="inline h-3 w-3 mr-1" /> : <XCircle className="inline h-3 w-3 mr-1" />}
-                    {r.message} <span className="text-muted-foreground">({r.ms} ms)</span>
-                  </div>
-                )}
-              </div>
-              {i.testable && (
-                <Button size="sm" variant="outline" disabled={!i.configured || testing != null}
-                  onClick={() => { setTesting(i.id); test.mutate({ id: i.id }); }}>
-                  {testing === i.id ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Plug className="h-4 w-4 mr-1" />}
-                  Testar ligação
-                </Button>
-              )}
-            </div>
-          );
-        })}
+        {q.data && (
+          <p>
+            {configured} de {items.length} configuradas
+            {problems.length > 0
+              ? <span className="text-red-700"> · com problemas: {problems.map((p) => p.label).join(", ")}</span>
+              : <span className="text-emerald-700"> · sem problemas conhecidos</span>}
+          </p>
+        )}
+        {q.data?.encryptionKey?.warning && (
+          <p className="text-xs text-amber-800"><AlertTriangle className="inline h-3 w-3 mr-1" />{q.data.encryptionKey.warning}</p>
+        )}
+        <Button asChild size="sm" variant="outline"><a href="/integracoes"><Plug className="h-4 w-4 mr-1" />Abrir Integrações</a></Button>
       </CardContent>
     </Card>
   );

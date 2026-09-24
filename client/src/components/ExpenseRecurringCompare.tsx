@@ -3,6 +3,7 @@ import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SearchableSelect } from "@/components/ui/searchable-select";
@@ -152,11 +153,18 @@ export function CompareExpensesDialog({ open, onClose, categories, projectId }: 
 // ─── CATEGORIAS E IVA ─────────────────────────────────────────────────────────
 // Taxa de IVA por categoria: as Finanças tiram-na ao custo e ao IVA a deduzir
 // (rendas, seguros, bancos, impostos e pessoal não têm IVA). Vazio = 23%.
+// Autoliquidação (Google/Meta): IVA 0% no custo. "Excluir da margem": o custo
+// já entra nas Finanças por outra via (salários + TSU pelo RH, extras pelo
+// ponto) — contar a despesa também seria contar duas vezes.
 export function CategoryVatDialog({ open, onClose, categories }: { open: boolean; onClose: () => void; categories: any[] }) {
   const utils = trpc.useUtils();
   const [drafts, setDrafts] = useState<Record<number, string>>({});
   const save = trpc.categories.setVatRate.useMutation({
     onSuccess: () => { utils.categories.list.invalidate(); toast.success("IVA atualizado"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const saveFlags = trpc.categories.setFinanceFlags.useMutation({
+    onSuccess: () => { utils.categories.list.invalidate(); toast.success("Categoria atualizada"); },
     onError: (e) => toast.error(e.message),
   });
   const commit = (c: any) => {
@@ -171,25 +179,49 @@ export function CategoryVatDialog({ open, onClose, categories }: { open: boolean
   };
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader><DialogTitle>Categorias e IVA</DialogTitle></DialogHeader>
-        <p className="text-xs text-muted-foreground -mt-2">A taxa de IVA de cada categoria é usada nas Finanças para o custo sem IVA e para o IVA a deduzir. Deixa vazio para a taxa normal (23%).</p>
-        <div className="space-y-1.5 max-h-96 overflow-y-auto">
+      <DialogContent className="max-w-2xl">
+        <DialogHeader><DialogTitle>Categorias, IVA e margem</DialogTitle></DialogHeader>
+        <p className="text-xs text-muted-foreground -mt-2">
+          A taxa de IVA de cada categoria é usada nas Finanças para o custo sem IVA e para o IVA a deduzir (vazio = taxa normal, 23%).
+          <strong> Autoliquidação</strong>: faturas sem IVA (Google, Meta) — IVA 0%.
+          <strong> Excluir da margem</strong>: o custo já é contado pelo RH (salários + TSU) ou pelo ponto (extras); a despesa não soma outra vez e aparece como aviso na Faturação.
+        </p>
+        <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-x-3 gap-y-1.5 text-sm max-h-96 overflow-y-auto">
+          <span className="text-xs text-muted-foreground">Categoria</span>
+          <span className="text-xs text-muted-foreground text-right">IVA %</span>
+          <span className="text-xs text-muted-foreground text-center">Autoliq.</span>
+          <span className="text-xs text-muted-foreground text-center">Excluir da margem</span>
           {categories.map((c: any) => (
-            <div key={c.id} className="flex items-center gap-2 text-sm border rounded px-2 py-1.5">
-              <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: c.color ?? "#6366f1" }} />
-              <span className="flex-1 min-w-0 truncate">{c.name}</span>
+            <div key={c.id} className="contents">
+              <span className="flex items-center gap-2 min-w-0">
+                <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: c.color ?? "#6366f1" }} />
+                <span className="truncate">{c.name}</span>
+              </span>
               <Input
                 className="w-20 h-8 text-right"
                 inputMode="decimal"
-                placeholder="23"
+                placeholder={c.reverseCharge ? "0" : "23"}
+                disabled={!!c.reverseCharge}
                 aria-label={`IVA de ${c.name} (%)`}
-                value={drafts[c.id] ?? (c.vatRate == null ? "" : String(Number(c.vatRate)))}
+                value={c.reverseCharge ? "" : (drafts[c.id] ?? (c.vatRate == null ? "" : String(Number(c.vatRate))))}
                 onChange={(e) => setDrafts({ ...drafts, [c.id]: e.target.value })}
                 onBlur={() => commit(c)}
                 onKeyDown={(e) => { if (e.key === "Enter") commit(c); }}
               />
-              <span className="text-muted-foreground text-xs">%</span>
+              <span className="flex justify-center">
+                <Switch
+                  checked={!!c.reverseCharge}
+                  aria-label={`Autoliquidação de IVA em ${c.name}`}
+                  onCheckedChange={(v) => saveFlags.mutate({ id: c.id, reverseCharge: v })}
+                />
+              </span>
+              <span className="flex justify-center">
+                <Switch
+                  checked={!!c.excludeFromMargin}
+                  aria-label={`Excluir ${c.name} da margem`}
+                  onCheckedChange={(v) => saveFlags.mutate({ id: c.id, excludeFromMargin: v })}
+                />
+              </span>
             </div>
           ))}
         </div>

@@ -16,6 +16,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
+import { cronAuthOk } from "./cronAuth";
 import { CRON_JOBS, cronHealth, cronNameFromPath, cronOutcome, staleThresholdMinutes, type CronHealth } from "../shared/appSettings";
 
 /** "YYYY-MM-DD HH:MM:SS.mmm" (UTC) — DATETIME(3). */
@@ -65,8 +66,7 @@ async function finishRun(id: number, startedAt: Date, finishedAt: Date, httpStat
 }
 
 function cronAuthorized(req: Request): boolean {
-  const secret = process.env.CRON_SECRET?.trim();
-  return !!secret && req.headers["authorization"] === `Bearer ${secret}`;
+  return cronAuthOk(req.headers["authorization"]);
 }
 
 /**
@@ -95,8 +95,11 @@ export function cronRunRecorder(opts: { defer?: (p: Promise<unknown>) => void } 
       const finishedAt = new Date();
       const outcome = cronOutcome(res.statusCode, body);
       const p = idPromise
-        .then((id) => (id ? finishRun(id, startedAt, finishedAt, res.statusCode, outcome.ok, outcome.error) : undefined))
-        .catch((err) => console.warn(`[cron_runs] ${name}: registo final falhou:`, String(err?.message ?? err).slice(0, 160)));
+        .then((id) => (id ? finishRun(id, startedAt, finishedAt, res.statusCode, outcome.ok, outcome.error ?? outcome.note ?? null) : undefined))
+        .catch((err) => console.warn(`[cron_runs] ${name}: registo final falhou:`, String(err?.message ?? err).slice(0, 160)))
+        // Alertas (ligação a religar / cron parado), 1×/10 min por processo.
+        .then(() => import("./integrations/alerts").then((m) => m.evaluateIntegrationAlerts()))
+        .catch(() => undefined);
       if (opts.defer) {
         try { opts.defer(p); } catch { /* segue */ }
       }

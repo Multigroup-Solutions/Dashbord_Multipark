@@ -46,6 +46,13 @@ const COLORS = [
   "#84cc16",
 ];
 
+const EVOLUTION_LABEL: Record<string, string> = {
+  receita: "Entregues s/ IVA",
+  despesas: "Custos s/ IVA",
+  receitaPrevista: "Receita esperada",
+  custosPrevistos: "Custos previstos",
+};
+
 function fmt(v: number) {
   return v.toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
 }
@@ -118,7 +125,15 @@ export default function FinanceiroDashboard() {
   // expenses.stats/upcomingPayments são admin-only no servidor
   const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
 
-  // Booking stats (entregas / receita)
+  // Receita, custos e margem: o MESMO motor da Faturação (entregues
+  // CHECKED_OUT, tudo sem IVA, receita e custos no MESMO período).
+  const { data: fin, isLoading: finLoading } = trpc.invoices.financeSummary.useQuery(
+    { from: filters.from, to: filters.to, projectId: filters.projectId },
+    { enabled: isAdmin },
+  );
+
+  // Reservas CRIADAS no período (outra base: data de criação, c/ IVA) — só
+  // para as distribuições por cidade/marca, identificadas como tal.
   const { data: bookingStats, isLoading: bookingLoading } =
     trpc.multipark.bookingStats.useQuery({
       from: filters.from,
@@ -134,14 +149,14 @@ export default function FinanceiroDashboard() {
   const { data: upcoming, isLoading: upcomingLoading } =
     trpc.expenses.upcomingPayments.useQuery(undefined, { enabled: isAdmin });
 
-  const isLoading = bookingLoading || (isAdmin && expenseLoading);
+  const isLoading = finLoading || (isAdmin && expenseLoading);
 
-  // KPI values
-  const receitaPeriodo = bookingStats?.receitaPeriodo ?? 0;
-  const despesasMes = expenseStats?.monthly?.total ?? 0;
+  // KPI values — base da Faturação (s/ IVA, mesmo período)
+  const receitaPeriodo = fin?.revenue.producedNet ?? 0;
+  const custosPeriodo = fin?.costs.totalNet ?? 0;
   const pendente = expenseStats?.pending?.total ?? 0;
   const emAtraso = expenseStats?.overdue?.total ?? 0;
-  const margem = receitaPeriodo - despesasMes;
+  const margem = fin?.margin.margin ?? 0;
 
   // Expense KPIs
   const totalDespesasAnual = expenseStats?.yearly?.total ?? 0;
@@ -171,33 +186,15 @@ export default function FinanceiroDashboard() {
     bookings: b.bookings ?? 0,
   }));
 
-  // Monthly evolution: merge booking revenue (byDay) with expense trend
-  const expenseTrendMap = new Map(
-    (expenseStats?.monthlyTrend ?? []).map((m: any) => [m.month, m.total ?? 0])
-  );
-
-  // Group byDay revenue into months for comparison with expense monthlyTrend
-  const revenueByMonth = new Map<string, number>();
-  for (const day of bookingStats?.byDay ?? []) {
-    const monthKey = (day.date as string).slice(0, 7); // YYYY-MM
-    revenueByMonth.set(
-      monthKey,
-      (revenueByMonth.get(monthKey) ?? 0) + (day.revenue ?? 0)
-    );
-  }
-
-  // Build unified monthly evolution data from the union of both sources
-  const allMonths = new Set([
-    ...revenueByMonth.keys(),
-    ...expenseTrendMap.keys(),
-  ]);
-  const monthlyEvolution = Array.from(allMonths)
-    .sort()
-    .map((month) => ({
-      month,
-      receita: revenueByMonth.get(month) ?? 0,
-      despesas: expenseTrendMap.get(month) ?? 0,
-    }));
+  // Evolução mensal: receita entregue s/ IVA vs custos s/ IVA do motor (os
+  // mesmos meses, a mesma base); meses futuros só com previsão.
+  const monthlyEvolution = (fin?.monthly ?? []).map((m) => ({
+    month: m.month,
+    receita: m.revenueNet,
+    despesas: m.costsNet,
+    receitaPrevista: m.revenueForecastNet,
+    custosPrevistos: m.costForecast,
+  }));
 
   // Expenses by category (pie)
   const categoryData = (expenseStats?.byCategory ?? []).map((c: any) => ({
@@ -211,7 +208,7 @@ export default function FinanceiroDashboard() {
       {/* Header */}
       <div>
         <p className="text-sm text-muted-foreground">
-          Entregas, despesas e margem por cidade e marca
+          Receita, custos e margem com a MESMA base da Faturação (entregues CHECKED_OUT, sem IVA, mesmo período)
         </p>
       </div>
 
@@ -375,41 +372,43 @@ export default function FinanceiroDashboard() {
         ) : (
           <>
             <StatCard
-              title="Receita Periodo"
+              title={fin?.isCurrentPeriod ? "Entregues s/ IVA (até hoje)" : "Entregues s/ IVA"}
               value={fmt(receitaPeriodo)}
-              subtitle="entregas no periodo"
+              subtitle={`${fin?.revenue.producedCount ?? 0} carros saídos (CHECKED_OUT) · base da Faturação`}
               icon={Euro}
               iconBg="bg-emerald-100"
               iconColor="text-emerald-600"
             />
             <StatCard
-              title="Despesas Mes"
-              value={fmt(despesasMes)}
-              subtitle={`${expenseStats?.monthly?.count ?? 0} registos`}
+              title={fin?.isCurrentPeriod ? "Custos s/ IVA (até hoje)" : "Custos s/ IVA"}
+              value={fmt(custosPeriodo)}
+              subtitle="despesas + pessoal + TSU + equipa do dia + comissões, no mesmo período"
               icon={TrendingDown}
               iconBg="bg-red-100"
               iconColor="text-red-600"
             />
             <StatCard
-              title="Pendente"
+              title="Pendente (dívida atual)"
               value={fmt(pendente)}
-              subtitle={`${expenseStats?.pending?.count ?? 0} despesa(s)`}
+              subtitle={`${expenseStats?.pending?.count ?? 0} despesa(s) — não depende do período`}
               icon={Clock}
               iconBg="bg-yellow-100"
               iconColor="text-yellow-600"
             />
             <StatCard
-              title="Em Atraso"
+              title="Em Atraso (dívida atual)"
               value={fmt(emAtraso)}
-              subtitle={`${expenseStats?.overdue?.count ?? 0} despesa(s)`}
+              subtitle={`${expenseStats?.overdue?.count ?? 0} despesa(s) — não depende do período`}
               icon={AlertCircle}
               iconBg="bg-orange-100"
               iconColor="text-orange-600"
             />
             <StatCard
-              title="Margem"
+              title={fin?.isCurrentPeriod ? "Margem realizada" : "Margem s/ IVA"}
               value={fmt(margem)}
-              subtitle="receita - despesas"
+              subtitle={fin?.projection.applies
+                ? `${fin.margin.marginPct != null ? fin.margin.marginPct.toFixed(1) + "% · " : ""}fecho previsto: ${fmt(fin.projection.margin)}`
+                : `${fin?.margin.marginPct != null ? fin.margin.marginPct.toFixed(1) + "% · " : ""}entregues − custos (igual à Faturação)`}
               icon={TrendingUp}
               iconBg={margem >= 0 ? "bg-emerald-100" : "bg-red-100"}
               iconColor={margem >= 0 ? "text-emerald-600" : "text-red-600"}
@@ -424,8 +423,9 @@ export default function FinanceiroDashboard() {
         <Card>
           <CardHeader>
             <CardTitle className="text-base font-semibold">
-              Receita por Cidade
+              Reservas criadas por cidade
             </CardTitle>
+            <p className="text-xs text-muted-foreground">Valor c/ IVA das reservas CRIADAS no período (outra base — não é a receita da Faturação)</p>
           </CardHeader>
           <CardContent>
             {bookingLoading ? (
@@ -472,8 +472,9 @@ export default function FinanceiroDashboard() {
         <Card>
           <CardHeader>
             <CardTitle className="text-base font-semibold">
-              Receita por Marca
+              Reservas criadas por marca
             </CardTitle>
+            <p className="text-xs text-muted-foreground">Valor c/ IVA das reservas CRIADAS no período (outra base — não é a receita da Faturação)</p>
           </CardHeader>
           <CardContent>
             {bookingLoading ? (
@@ -523,8 +524,9 @@ export default function FinanceiroDashboard() {
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle className="text-base font-semibold">
-              Evolucao Mensal: Receita vs Despesas
+              Evolução mensal: entregues vs custos (s/ IVA)
             </CardTitle>
+            <p className="text-xs text-muted-foreground">Mesma base e mesmos meses da Faturação; nos meses futuros só a previsão (tracejado)</p>
           </CardHeader>
           <CardContent>
             {isLoading ? (
@@ -589,7 +591,7 @@ export default function FinanceiroDashboard() {
                   <Tooltip
                     formatter={(v: any, name: string) => [
                       fmt(parseFloat(String(v))),
-                      name === "receita" ? "Receita" : "Despesas",
+                      EVOLUTION_LABEL[name] ?? name,
                     ]}
                     contentStyle={{
                       background: "#ffffff",
@@ -597,11 +599,7 @@ export default function FinanceiroDashboard() {
                       borderRadius: "8px",
                     }}
                   />
-                  <Legend
-                    formatter={(value) =>
-                      value === "receita" ? "Receita" : "Despesas"
-                    }
-                  />
+                  <Legend formatter={(value) => EVOLUTION_LABEL[value] ?? value} />
                   <Area
                     type="monotone"
                     dataKey="receita"
@@ -618,6 +616,8 @@ export default function FinanceiroDashboard() {
                     fillOpacity={1}
                     fill="url(#colorDespesas)"
                   />
+                  <Area type="monotone" dataKey="receitaPrevista" stroke="#10b981" strokeDasharray="4 4" strokeWidth={1.5} fillOpacity={0} />
+                  <Area type="monotone" dataKey="custosPrevistos" stroke="#ef4444" strokeDasharray="4 4" strokeWidth={1.5} fillOpacity={0} />
                 </AreaChart>
               </ResponsiveContainer>
             )}

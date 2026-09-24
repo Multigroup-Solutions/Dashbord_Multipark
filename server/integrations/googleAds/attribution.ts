@@ -10,7 +10,10 @@
  *   - URL genérico sem parâmetros → "unknown" (nunca inventar atribuição).
  * Meta (Facebook/Instagram, 24 set 2026):
  *   - `fbclid` presente → clique Meta pago;
- *   - `utm_source` ∈ facebook|instagram|meta|fb|ig → Meta pago.
+ *   - `utm_source` ∈ facebook|instagram|meta|fb|ig COM `utm_medium` de pago
+ *     (cpc, paid, paid_social, ppc, cpm…) → Meta pago. Sem medium pago (ex.:
+ *     link na bio do Instagram, publicação orgânica, utm_medium=social) →
+ *     "unknown" — um post orgânico não é um anúncio.
  * Prova do Google (gclid/gbraid/wbraid/utm google pago) ganha à da Meta quando
  * as duas aparecem (o último clique pago identificado pela Google).
  * O ID da campanha vem de `campaignid`/`campaign_id` (ValueTrack / {{campaign.id}})
@@ -40,6 +43,15 @@ export interface UrlAttribution {
 export const META_UTM_SOURCES = new Set(["facebook", "instagram", "meta", "fb", "ig"]);
 
 const PAID_MEDIUMS = new Set(["cpc", "ppc", "paid", "paidsearch", "paid_search", "sem", "cpm", "display", "pmax", "performance_max", "video", "youtube"]);
+/** utm_medium que provam um anúncio Meta (social PAGO, não publicações orgânicas). */
+export const META_PAID_MEDIUMS = new Set(["cpc", "ppc", "cpm", "cpa", "paid", "paid_social", "paidsocial", "paid-social", "social_paid", "social-paid", "paid_media", "ads", "ad", "display"]);
+
+/** utm_source da Meta + medium pago → anúncio Meta. PURA. */
+export function isMetaPaidUtm(utmSource: string | null | undefined, utmMedium: string | null | undefined): boolean {
+  const src = utmSource?.trim().toLowerCase();
+  const med = utmMedium?.trim().toLowerCase();
+  return !!src && META_UTM_SOURCES.has(src) && !!med && META_PAID_MEDIUMS.has(med);
+}
 const cut = (v: string | null, n: number) => (v == null ? null : v.slice(0, n));
 
 function parseParams(url: string): URLSearchParams | null {
@@ -87,7 +99,7 @@ export function attributionFromUrl(originUrl: string | null | undefined): UrlAtt
   else if (wbraid) evidence = "wbraid";
   else if (utmSource === "google" && utmMedium && PAID_MEDIUMS.has(utmMedium)) evidence = "utm_paid";
   else if (fbclid) evidence = "fbclid";
-  else if (utmSource && META_UTM_SOURCES.has(utmSource)) evidence = "utm_meta";
+  else if (isMetaPaidUtm(utmSource, utmMedium)) evidence = "utm_meta";
   const adAttribution: AdAttribution = !evidence ? "unknown" : evidence === "fbclid" || evidence === "utm_meta" ? "meta_paid" : "google_paid";
 
   return {

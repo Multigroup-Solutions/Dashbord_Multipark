@@ -90,6 +90,16 @@ export const integrationConnections = mysqlTable("integration_connections", {
 	uniqueIndex("uq_integration_connections_provider").on(table.provider),
 ]);
 
+// Último estado ALERTADO por ligação/cron (migração 0105) — alertas de
+// reautorização/erro/cron parado uma vez por transição.
+export const integrationAlertState = mysqlTable("integration_alert_state", {
+	alertKey: varchar({ length: 96 }).primaryKey(),
+	state: varchar({ length: 32 }).notNull(),
+	detail: varchar({ length: 500 }),
+	changedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	alertedAt: timestamp({ mode: 'string' }),
+});
+
 // Estado anti-CSRF do fluxo OAuth (consumido uma vez).
 export const oauthStates = mysqlTable("oauth_states", {
 	state: varchar({ length: 96 }).primaryKey(),
@@ -632,6 +642,11 @@ export const expenseCategories = mysqlTable("expense_categories", {
 	color: varchar({ length: 16 }).default('#6366f1'),
 	// IVA da categoria em % (migração 0083); NULL = taxa normal (23%)
 	vatRate: decimal({ precision: 5, scale: 2 }),
+	// 0110 — custo já contado por outra via (salários/TSU/extras): fora da margem.
+	// NULL = ainda sem decisão (a migração põe o valor por omissão pelo nome).
+	excludeFromMargin: tinyint(),
+	// 0110 — autoliquidação de IVA (Google/Meta): IVA 0% no custo.
+	reverseCharge: tinyint(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 });
 
@@ -1291,6 +1306,56 @@ export const multiparkSyncLogs = mysqlTable("multipark_sync_logs", {
 	triggeredById: int(),
 	startedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	completedAt: timestamp({ mode: 'string' }),
+	// Migração 0101: janela pedida e meta (JSON). NULL nas linhas antigas.
+	windowStart: datetime({ mode: 'string' }),
+	windowEnd: datetime({ mode: 'string' }),
+	meta: text(),
+});
+
+// Migração 0101 — última cobertura completa do sync recente, por parque.
+export const multiparkSyncCoverage = mysqlTable("multipark_sync_coverage", {
+	parkId: varchar({ length: 64 }).primaryKey(),
+	recentCoveredAt: datetime({ mode: 'string' }),
+	lastRunAt: datetime({ mode: 'string' }),
+	lastStatus: varchar({ length: 16 }),
+	lastErrorCode: varchar({ length: 64 }),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+});
+
+// Migração 0101 — trinco (lease) da sincronização: cron, botões e MCP.
+export const multiparkSyncLock = mysqlTable("multipark_sync_lock", {
+	name: varchar({ length: 64 }).primaryKey(),
+	holder: varchar({ length: 64 }),
+	owner: varchar({ length: 64 }),
+	acquiredAt: datetime({ mode: 'string' }),
+	leaseUntil: datetime({ mode: 'string' }),
+});
+
+// Migração 0101 — reconciliação diária (report D-1/D-2 vs BD).
+export const multiparkReconciliation = mysqlTable("multipark_reconciliation", {
+	id: int().autoincrement().primaryKey(),
+	day: varchar({ length: 10 }).notNull(),
+	parkId: varchar({ length: 64 }).notNull(),
+	actionType: varchar({ length: 16 }).notNull(),
+	apiTotal: int(),
+	apiCount: int().default(0).notNull(),
+	dbFound: int().default(0).notNull(),
+	missing: int().default(0).notNull(),
+	status: varchar({ length: 16 }).notNull(),
+	errorCode: varchar({ length: 64 }),
+	checkedAt: datetime({ mode: 'string' }).notNull(),
+}, (table) => [
+	uniqueIndex("uq_mp_recon").on(table.day, table.parkId, table.actionType),
+	index("idx_mp_recon_status").on(table.status, table.day),
+]);
+
+// Migração 0101 — estado dos alertas da sincronização (1 aviso por transição).
+export const multiparkSyncAlerts = mysqlTable("multipark_sync_alerts", {
+	alertKey: varchar({ length: 64 }).primaryKey(),
+	active: tinyint().default(0).notNull(),
+	since: datetime({ mode: 'string' }),
+	detail: varchar({ length: 255 }),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 });
 
 export const partnershipInvoices = mysqlTable("partnership_invoices", {
@@ -1340,6 +1405,8 @@ export const partnerships = mysqlTable("partnerships", {
 	// Migration 0082 — quando um admin gravou o parceiro no ecrã. NULL = "por
 	// configurar" (ex.: criado pela sincronização automática com 0%).
 	configuredAt: timestamp({ mode: 'string' }),
+	// 0110 — base da comissão: 'net' (sem IVA, regra do dono) | 'gross' (exceção).
+	commissionBase: varchar({ length: 8 }).default('net').notNull(),
 });
 
 export const multiparkBookingHistory = mysqlTable("multipark_booking_history", {

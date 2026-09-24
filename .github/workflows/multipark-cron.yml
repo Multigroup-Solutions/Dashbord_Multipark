@@ -390,7 +390,7 @@ jobs:
           set -euo pipefail
           # Decisão do Jorge (16 set 2026): ir à API o menos possível.
           # daily = última semana, uma vez por dia; monthly = mês anterior
-          # inteiro no dia 2 (os números finais, os da fatura).
+          # inteiro no dia 2 (o custo fechado da API — sem IVA nem créditos por tráfego inválido da fatura).
           case "${SCHEDULE:-}" in
             "10 5 2 * *") kind=monthly ;;
             *) kind=daily ;;

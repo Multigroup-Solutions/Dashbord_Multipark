@@ -72,8 +72,15 @@ const validatePayload = (input: NotificationPayload): NotificationPayload => {
   return { title, content };
 };
 
+/** Escapa texto para HTML (títulos/conteúdos vêm de dados de pessoas e de APIs). PURA. */
+export function escapeHtml(s: string): string {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
+}
+
 /**
- * Send a notification email to the project owner.
+ * Envia um email de notificação ao dono do projeto (OWNER_EMAIL).
+ * Devolve `true` só se o email saiu. Sem SMTP/OWNER_EMAIL devolve `false` e
+ * fica no log — antes devolvia `true` e quem chamava julgava-se avisado.
  */
 export async function notifyOwner(
   payload: NotificationPayload
@@ -85,17 +92,17 @@ export async function notifyOwner(
   const fromEmail = process.env.SMTP_FROM || process.env.SMTP_USER;
 
   if (!transporter || !ownerEmail) {
-    console.log(`[Notification] ${title}: ${content}`);
-    return true;
+    console.warn(`[Notification] Não enviado (${!transporter ? "SMTP não configurado" : "OWNER_EMAIL em falta"}): ${title}: ${content.slice(0, 500)}`);
+    return false;
   }
 
   try {
     await transporter.sendMail({
       from: `"Dashboard Multipark" <${fromEmail}>`,
       to: ownerEmail,
-      subject: `[Dashboard Multipark] ${title}`,
+      subject: `[Dashboard Multipark] ${title.replace(/[\r\n]+/g, " ")}`,
       text: content,
-      html: `<h2>${title}</h2><p>${content.replace(/\n/g, "<br>")}</p>`,
+      html: `<h2>${escapeHtml(title)}</h2><p>${escapeHtml(content).replace(/\n/g, "<br>")}</p>`,
     });
     return true;
   } catch (error) {

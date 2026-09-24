@@ -250,7 +250,8 @@ const MATRIX_SPEC: Record<ModuleId, Row> = {
   // Correção do dono (24 set 2026): Logs só super_admin (admin não).
   logs: { super_admin: "national:v" },
   financeiro: same("national:vexm", ...TOP),
-  anual: same("national:vexm", ...TOP),
+  // Correção do dono (24 set 2026): Anual só super_admin, como a Faturação.
+  anual: { super_admin: "national:vexm" },
   projetos: same("national:vem", ...TOP),
   definicoes: same("national:vem", ...TOP),
   faturacao: { super_admin: "national:vexm" },

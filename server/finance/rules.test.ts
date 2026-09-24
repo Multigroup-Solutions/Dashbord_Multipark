@@ -3,6 +3,7 @@ import {
   buildPartnerIndex, bucketKey, commissionFor, computeMargin, daysBetweenInclusive, employerTaxFor,
   extrasCityFromKey, isExtraEmployee, isoWeekKey, monthsOverlapping, netOfVat,
   salaryForPeriod, shareTargets, shiftHours, FINANCE_PARAMS,
+  commissionBaseOf, salesCommissionCoveredByOperational, assumedContractEnd,
 } from "./rules";
 
 describe("calendário", () => {
@@ -59,6 +60,14 @@ describe("pessoal — regras auxiliares", () => {
   it("TSU só sobre a base tributável", () => {
     expect(employerTaxFor(1000)).toBeCloseTo(237.5, 6);
   });
+  it("inativos sem fim de contrato: contam até à desativação / última atualização", () => {
+    expect(assumedContractEnd({ isActive: 1, contractEnd: null })).toEqual({ end: null, assumed: false });
+    expect(assumedContractEnd({ isActive: 0, contractEnd: "2026-05-31 00:00:00" })).toEqual({ end: "2026-05-31", assumed: false });
+    expect(assumedContractEnd({ isActive: 0, contractEnd: null, deactivatedAt: "2026-04-10 09:00:00", updatedAt: "2026-06-01 00:00:00" })).toEqual({ end: "2026-04-10", assumed: true });
+    expect(assumedContractEnd({ isActive: 0, contractEnd: null, deactivatedAt: null, updatedAt: "2026-06-01 10:00:00" })).toEqual({ end: "2026-06-01", assumed: true });
+    // o salário conta nos períodos anteriores a essa data
+    expect(salaryForPeriod({ monthlySalary: 3000, from: "2026-06-01", to: "2026-06-30", contractEnd: "2026-06-01" }).base).toBeCloseTo(100, 6);
+  });
 });
 
 describe("equipa do dia", () => {
@@ -89,10 +98,29 @@ describe("parceiros e comissões", () => {
     expect(idx.byKey.get("pm-a")?.id).toBe(1);
   });
   it("distingue 0% confirmado, taxa em falta e sem parceiro", () => {
-    expect(commissionFor(100, idx.byKey.get("aga"))).toEqual({ commission: 15, status: "ok" });
-    expect(commissionFor(100, idx.byKey.get("st"))).toEqual({ commission: 0, status: "rate_missing" });
-    expect(commissionFor(100, idx.byKey.get("z0"))).toEqual({ commission: 0, status: "rate_zero" });
-    expect(commissionFor(100, undefined)).toEqual({ commission: 0, status: "no_partner" });
+    // Base SEM IVA (regra do dono): 123 € c/ IVA → 100 € → 15 € (antes 15% de 123 = 18,45 €)
+    expect(commissionFor(123, idx.byKey.get("aga"))).toMatchObject({ status: "ok" });
+    expect(commissionFor(123, idx.byKey.get("aga")).commission).toBeCloseTo(15, 6);
+    expect(commissionFor(100, idx.byKey.get("st"))).toMatchObject({ commission: 0, status: "rate_missing" });
+    expect(commissionFor(100, idx.byKey.get("z0"))).toMatchObject({ commission: 0, status: "rate_zero" });
+    expect(commissionFor(100, undefined)).toMatchObject({ commission: 0, status: "no_partner" });
+  });
+  it("base da comissão: sem IVA por omissão; 'gross' é a exceção; líquido do dia tem prioridade", () => {
+    const net = { id: 9, name: "N", commissionRate: 10, updatedAt: "" };
+    const gross = { ...net, commissionBase: "gross" };
+    expect(commissionBaseOf(net)).toBe("net");
+    expect(commissionBaseOf(gross)).toBe("gross");
+    expect(commissionFor(123, net).commission).toBeCloseTo(10, 6);
+    expect(commissionFor(123, net, 102.5).commission).toBeCloseTo(10.25, 6);   // IVA do dia a 20%
+    expect(commissionFor(123, gross).commission).toBeCloseTo(12.3, 6);
+  });
+  it("sem comissão a dobrar: operacional que já opera o centro não cobra venda", () => {
+    const op = { id: 7, partnerType: "operacional" };
+    const leaves = new Map([[7, new Set([10, 11])]]);
+    expect(salesCommissionCoveredByOperational(op, 10, leaves)).toBe(true);
+    expect(salesCommissionCoveredByOperational(op, 12, leaves)).toBe(false);   // outro centro: cobra
+    expect(salesCommissionCoveredByOperational({ id: 7, partnerType: "agregador" }, 10, leaves)).toBe(false);
+    expect(salesCommissionCoveredByOperational(op, null, leaves)).toBe(false);
   });
 });
 

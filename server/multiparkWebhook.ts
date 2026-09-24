@@ -11,32 +11,47 @@
  *
  * A receção é persistida antes do ACK. O processamento usa o detalhe atual
  * da API, nunca o estado antigo do payload, e é retomado após falhas/crashes.
- * O cron da fila corre de cinco em cinco minutos; o polling periódico continua
- * necessário para movimentos que não produzem notificações.
+ * O cron da fila corre de cinco em cinco minutos; o sync periódico (de hora a
+ * hora) continua necessário para movimentos que não produzem notificações.
  * Montado antes do express.json global, para verificar o corpo original.
  */
 import express, { Router, type Request, type Response } from "express";
 import crypto from "crypto";
 import { createDeliveryStore, drainDeliveries, deliveryErrorCode } from "./bookingDeliveryQueue";
+import { bearerMatches } from "./cronAuth";
+
+/** Tolerância do `t=` da assinatura: ±5 minutos (anti-replay). */
+export const SIGNATURE_TOLERANCE_MS = 5 * 60_000;
+
+/** `t=` da assinatura → epoch ms. Aceita segundos (10 dígitos) ou ms (13). */
+export function signatureTimestampMs(ts: string): number | null {
+  if (!/^\d{9,14}$/.test(ts)) return null;
+  const n = Number(ts);
+  return n >= 1e11 ? n : n * 1000;
+}
 
 /**
  * Verifica a assinatura `X-Multipark-Signature` ("t=<ts>,v1=<hex>").
  * v1 = HMAC-SHA256(secret, `${ts}.${rawBody}`), comparação em tempo constante.
  * O `ts` usado é o do próprio header (não o X-Multipark-Timestamp) para a
- * verificação ser autocontida.
+ * verificação ser autocontida, e tem de estar a ±5 min de `now` — uma
+ * entrega capturada não pode ser reenviada mais tarde.
  */
 export function verifyMultiparkSignature(
   rawBody: Buffer,
   signatureHeader: string | undefined,
   secret: string | undefined,
+  now: number = Date.now(),
 ): boolean {
   if (!secret || !signatureHeader) return false;
   const parts = Object.fromEntries(
-    signatureHeader.split(",").map((p) => p.split("=") as [string, string]),
+    signatureHeader.split(",").map((p) => p.trim().split("=") as [string, string]),
   );
   const ts = parts["t"];
   const provided = parts["v1"];
   if (!ts || !provided) return false;
+  const tsMs = signatureTimestampMs(ts);
+  if (tsMs == null || Math.abs(now - tsMs) > SIGNATURE_TOLERANCE_MS) return false;
 
   const expected = crypto
     .createHmac("sha256", secret)
@@ -168,12 +183,12 @@ export function createMultiparkWebhookRouter(opts: { afterReceive?: () => void }
 
       const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from(String(req.body ?? ""));
       const signature = req.header("X-Multipark-Signature") ?? undefined;
-      const bearer = (req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "");
 
-      // Aceita assinatura HMAC válida OU Bearer com a chave exata — a
-      // plataforma manda ambos; a assinatura é a forte, o Bearer é o fallback.
+      // Aceita assinatura HMAC válida (±5 min) OU Bearer com a chave exata —
+      // a plataforma manda ambos; a assinatura é a forte, o Bearer é o
+      // fallback. As duas comparações são em tempo constante.
       const sigOk = verifyMultiparkSignature(raw, signature, secret);
-      const bearerOk = bearer.length > 0 && bearer === secret;
+      const bearerOk = bearerMatches(req.header("Authorization"), secret);
       if (!sigOk && !bearerOk) {
         return res.status(401).json({ error: "Assinatura/credencial inválida" });
       }

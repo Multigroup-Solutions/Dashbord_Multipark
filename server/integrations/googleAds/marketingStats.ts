@@ -154,6 +154,8 @@ export async function getMarketingStats(f: MarketingStatsFilters, preloadedAds?:
     attributedByCampaign,
     byCampaign: ads.byCampaign,
     nationalShares: ads.nationalShares,
+    /** contas noutra moeda que não entraram nos totais (aviso) */
+    currencyExcluded: ads.currencyExcluded,
   };
 }
 

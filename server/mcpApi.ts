@@ -79,7 +79,7 @@ export function createMcpApiRouter(): Router {
           "GET /parks", "GET /bookings", "GET /bookings/stats", "GET /bookings/:externalId",
           "GET /complaints", "GET /complaints/stats", "GET /complaints/:id",
           "GET /reviews", "GET /vehicles", "GET /employees", "GET /dashboard/summary",
-          "GET /campaigns", "GET /campaigns/:type/:id/daily", "GET /projects",
+          "GET /campaigns", "GET /campaigns/api/:id/daily", "GET /projects",
           "GET /availability-form/context?token=",
         ],
         write: [
@@ -202,20 +202,44 @@ export function createMcpApiRouter(): Router {
       .map((c: any) => ({ ...c, campaignType: "internal" }));
     const ad = rows(await d.execute(sql`SELECT id, name, projectId, budget AS dailyBudget, platform AS brand, campaignStatus FROM campaigns ORDER BY name`))
       .map((c: any) => ({ ...c, city: null, campaignType: "ad" }));
-    res.json({ success: true, count: internal.length + ad.length, campaigns: [...internal, ...ad] });
+    // Campanhas das APIs (Google Ads/Meta) — as que têm histórico diário (/campaigns/api/:id/daily).
+    const api = rows(await d.execute(sql`SELECT id, name, projectId, budgetMicros / 1000000 AS dailyBudget, provider AS brand, status AS campaignStatus FROM ad_campaigns ORDER BY name`))
+      .map((c: any) => ({ ...c, city: null, campaignType: "api" }));
+    res.json({ success: true, count: internal.length + ad.length + api.length, campaigns: [...internal, ...ad, ...api] });
   }));
 
-  // Histórico diário (gasto + métricas) de uma campanha.
+  // Histórico diário (gasto + métricas) de uma campanha — da MESMA fonte do
+  // Marketing (ad_daily_metrics, APIs Google Ads/Meta). type "api" = id de
+  // ad_campaigns (ver GET /campaigns). Os tipos antigos ("internal"/"ad")
+  // liam internal_campaign_costs, que já ninguém escreve → 410, como o POST.
   r.get("/campaigns/:type/:id/daily", requireScope("read"), h(async (req, res) => {
     const type = String(req.params.type);
-    if (type !== "internal" && type !== "ad") return res.status(400).json({ error: "type deve ser 'internal' ou 'ad'" });
+    if (type === "internal" || type === "ad") {
+      return res.status(410).json({ error: "Descontinuado: o histórico diário vem das APIs Google Ads/Meta. Usa GET /campaigns (campaignType 'api') e /campaigns/api/:id/daily." });
+    }
+    if (type !== "api") return res.status(400).json({ error: "type deve ser 'api'" });
     const id = Number(req.params.id);
-    if (!Number.isFinite(id)) return res.status(400).json({ error: "id inválido" });
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "id inválido" });
     const d = await db();
     if (!d) return res.status(500).json({ error: "DB unavailable" });
     const rows = (r2: any) => (Array.isArray(r2[0]) ? r2[0] : r2) as any[];
-    const daily = rows(await d.execute(sql`SELECT costDate, amount, impressions, clicks, ctr, conversions, conversionValue, notes FROM internal_campaign_costs WHERE campaignType = ${type} AND campaignId = ${id} ORDER BY costDate DESC LIMIT 120`));
-    res.json({ success: true, count: daily.length, daily });
+    const [camp] = rows(await d.execute(sql`SELECT id, provider, accountId, externalId, name FROM ad_campaigns WHERE id = ${id} LIMIT 1`));
+    if (!camp) return res.status(404).json({ error: "Campanha não encontrada" });
+    const daily = rows(await d.execute(sql`
+      SELECT m.date AS date, SUM(m.costMicros) / 1000000 AS cost, MAX(COALESCE(m.currency, a.currency)) AS currency,
+             SUM(m.impressions) AS impressions, SUM(m.clicks) AS clicks, SUM(m.conversions) AS conversions,
+             SUM(m.conversionValueMicros) / 1000000 AS conversionValue, MAX(m.isProvisional) AS provisional
+        FROM ad_daily_metrics m
+        JOIN ad_accounts a ON a.id = m.accountId
+       WHERE m.provider = ${camp.provider} AND m.accountId = ${camp.accountId} AND m.campaignExternalId = ${camp.externalId} AND m.source = 'api'
+       GROUP BY m.date
+       ORDER BY m.date DESC
+       LIMIT 120`)).map((x: any) => ({
+        date: String(x.date instanceof Date ? x.date.toISOString() : x.date).slice(0, 10),
+        cost: Number(x.cost ?? 0), currency: x.currency ?? null, impressions: Number(x.impressions ?? 0), clicks: Number(x.clicks ?? 0),
+        conversions: Number(x.conversions ?? 0), conversionValue: Number(x.conversionValue ?? 0), provisional: Number(x.provisional ?? 0) === 1,
+      }));
+    res.json({ success: true, campaign: { id: camp.id, provider: camp.provider, name: camp.name }, count: daily.length, daily });
   }));
 
   // Descontinuado (24 set 2026): gravava em internal_campaign_costs, que já
@@ -400,37 +424,40 @@ export function createMcpApiRouter(): Router {
   }));
 
   // ── SYNC (controlar a sincronização) ────────────────────────────────────────
+  // Todas partilham o trinco do cron e do botão "Reparar período": se já
+  // houver um sync a correr → 409 "já a correr" (sem chamar a API Multipark).
   r.post("/sync/recent", requireScope("write"), h(async (req, res) => {
     const { runRecentCronSync } = await import("./jobs/multiparkBookingSync");
-    const windowMinutes = req.body?.windowMinutes ? Number(req.body.windowMinutes) : 30;
-    const result = await runRecentCronSync(windowMinutes);
+    const { SYNC_BUSY_MESSAGE } = await import("./syncLock");
+    const windowMinutes = Math.min(Math.max(Number(req.body?.windowMinutes) || 30, 5), 3 * 24 * 60);
+    const result = await runRecentCronSync(windowMinutes, { owner: "mcp_recent" });
+    if (result.busy) return res.status(409).json({ success: false, busy: true, error: SYNC_BUSY_MESSAGE });
     await logApiKeyAction(req, { action: "sync", entity: "multipark", asKeyEvent: true, details: `[MCP] sync recente (${windowMinutes} min)` });
-    res.json({ success: true, ...result });
+    res.json({ success: result.parkErrors.length === 0, ...result });
   }));
 
   r.post("/sync/future", requireScope("write"), h(async (req, res) => {
     const { runFutureCronSync } = await import("./jobs/multiparkBookingSync");
-    const weeks = req.body?.weeksAhead ? Number(req.body.weeksAhead) : 4;
-    const result = await runFutureCronSync(weeks);
-    await logApiKeyAction(req, { action: "sync", entity: "multipark", asKeyEvent: true, details: `[MCP] sync futuro (${weeks} semanas)` });
-    res.json({ success: true, ...result });
+    const { SYNC_BUSY_MESSAGE } = await import("./syncLock");
+    const weeks = Math.min(Math.max(Number(req.body?.weeksAhead) || 4, 1), 8);
+    const offsetDays = Math.max(0, Math.trunc(Number(req.body?.offsetDays) || 0));
+    const result = await runFutureCronSync(weeks, { offsetDays, owner: "mcp_future" });
+    if (result.busy) return res.status(409).json({ success: false, busy: true, error: SYNC_BUSY_MESSAGE });
+    await logApiKeyAction(req, { action: "sync", entity: "multipark", asKeyEvent: true, details: `[MCP] sync futuro (${weeks} semanas, offset ${offsetDays})` });
+    res.json({ success: !result.needsRetry, ...result });
   }));
 
-  // Sincroniza um dia específico (report + enrich + history) — para backfill
+  // Repara um dia específico (report + enrich + history), com prazo.
   r.post("/sync/day", requireScope("write"), h(async (req, res) => {
     const date = String(req.body?.date ?? "").slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "date (YYYY-MM-DD) é obrigatório" });
-    const { syncBookings, enrichBookingsBatch, syncBookingHistoryBatch } = await import("./jobs/multiparkBookingSync");
-    const report = await syncBookings({ startDate: date, endDate: date });
-    const [enrichRes, historyRes] = await Promise.allSettled([enrichBookingsBatch(100), syncBookingHistoryBatch(50)]);
+    const { runRepairSync } = await import("./jobs/multiparkBookingSync");
+    const { SYNC_BUSY_MESSAGE } = await import("./syncLock");
+    const r = await runRepairSync({ startDate: date, endDate: date, owner: "mcp_day", enrich: true });
+    if (r.busy) return res.status(409).json({ success: false, busy: true, error: SYNC_BUSY_MESSAGE });
     await logApiKeyAction(req, { action: "sync", entity: "multipark", asKeyEvent: true, details: `[MCP] sync do dia ${date}` });
-    res.json({
-      success: true,
-      date,
-      report,
-      enriched: enrichRes.status === "fulfilled" ? (enrichRes.value as any).enriched : 0,
-      historyFetched: historyRes.status === "fulfilled" ? (historyRes.value as any).fetched : 0,
-    });
+    const { enrichTargets: _t, parkStatus: _p, ...report } = r.result;
+    res.json({ success: report.success, date, report, enriched: r.enriched, historyFetched: r.historyFetched });
   }));
 
   // ── ADMIN (destrutivo) ──────────────────────────────────────────────────────

@@ -21,6 +21,9 @@
  *    do nacional); projectId null = sem cidade / nacional por atribuir. Somado
  *    dá SEMPRE o total (as Reservas & Operações usam isto numa só chamada).
  *  - O orçamento é um indicador SEPARADO — nunca substitui o gasto.
+ *  - MOEDA: só se soma EUR. Linhas de contas noutra moeda (sem conversão
+ *    cambial) ficam FORA dos totais e aparecem em `currencyExcluded` para o
+ *    ecrã avisar (moeda desconhecida conta como EUR).
  */
 import { and, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { getDb, getProjects } from "../../db";
@@ -29,6 +32,7 @@ import { brandNameForProject, nationalSharesForBrand, rollingCityWeights, NATION
 import { GOOGLE_ADS_PROVIDER } from "./config";
 import { addDays, addTotals, coverageFor, derivedRatios, emptyTotals, microsToAmount, type Coverage, type MetricTotals } from "./metrics";
 import { lastSuccessfulSyncAt } from "./sync";
+import { countsInEurTotals, summarizeCurrencyExclusions, type CurrencyExclusion } from "../../../shared/marketingRules";
 
 import { META_PROVIDER } from "../meta/config";
 
@@ -63,6 +67,8 @@ export interface AdMetricsResult {
   budgetEstimate: number;
   unmappedCampaigns: number;   // campanhas da API por associar (sem marca/cidade e não nacionais)
   apiConnected: boolean;
+  /** contas noutra moeda que NÃO entraram nos totais (aviso visível) */
+  currencyExcluded: CurrencyExclusion[];
 }
 
 /** Plataforma de uma linha legada → fornecedor. */
@@ -94,7 +100,7 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
   const today = f.today ?? lisbonToday();
   const empty: AdMetricsResult = {
     totals: { ...emptyTotals(), ...derivedRatios(emptyTotals()) }, byProvider: { google_ads: 0, meta: 0, other: 0 }, byDay: [], byDayProject: [], byCampaign: [], nationalShares: [],
-    coverage: coverageFor(f.from, f.to, new Set(), new Set(), null, today), meta: { lastDataDay: null, hasDataInPeriod: false }, budgetEstimate: 0, unmappedCampaigns: 0, apiConnected: false,
+    coverage: coverageFor(f.from, f.to, new Set(), new Set(), null, today), meta: { lastDataDay: null, hasDataInPeriod: false }, budgetEstimate: 0, unmappedCampaigns: 0, apiConnected: false, currencyExcluded: [],
   };
   if (f.projectIds?.length === 0) return empty;
   const db = await getDb();
@@ -103,8 +109,8 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
 
   // ── API (fonte oficial) — desde (from − 27) para os pesos do nacional ────
   const weightsFrom = addDays(f.from, -(NATIONAL_WEIGHT_WINDOW_DAYS - 1));
-  const apiRowsAll = await db.select({
-    provider: adDailyMetrics.provider,
+  const apiRowsRaw = await db.select({
+    provider: adDailyMetrics.provider, rowCurrency: adDailyMetrics.currency, accountCurrency: adAccounts.currency,
     date: adDailyMetrics.date, campaignExternalId: adDailyMetrics.campaignExternalId, accountId: adDailyMetrics.accountId,
     campaignDbId: adCampaigns.id, campaignName: adCampaigns.name, campaignStatus: adCampaigns.status, budgetMicros: adCampaigns.budgetMicros, accountName: adAccounts.name,
     projectId: adCampaigns.projectId, scope: adCampaigns.scope, accountProjectId: adAccounts.projectId,
@@ -114,6 +120,12 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
     .innerJoin(adAccounts, and(eq(adAccounts.id, adDailyMetrics.accountId), eq(adAccounts.selected, 1), eq(adAccounts.isManager, 0)))
     .leftJoin(adCampaigns, and(eq(adCampaigns.provider, adDailyMetrics.provider), eq(adCampaigns.accountId, adDailyMetrics.accountId), eq(adCampaigns.externalId, adDailyMetrics.campaignExternalId)))
     .where(and(inArray(adDailyMetrics.provider, [...API_PROVIDERS]), eq(adDailyMetrics.source, "api"), gte(adDailyMetrics.date, weightsFrom), lte(adDailyMetrics.date, f.to)));
+  // Moeda: fora dos totais tudo o que não é EUR (sem conversão cambial) — com aviso.
+  const currencyOf = (r: (typeof apiRowsRaw)[number]) => r.rowCurrency || r.accountCurrency || null;
+  const apiRowsAll = apiRowsRaw.filter((r) => countsInEurTotals(currencyOf(r)));
+  const currencyExcluded = summarizeCurrencyExclusions(apiRowsRaw
+    .filter((r) => { const d = String(r.date).slice(0, 10); return d >= f.from && d <= f.to; })
+    .map((r) => ({ accountId: r.accountId, accountName: r.accountName ?? null, provider: r.provider, currency: currencyOf(r), cost: microsToAmount(Number(r.costMicros)) })));
 
   // Pesos: dia → nó marca-cidade → gasto das campanhas de cidade (todas as plataformas)
   const allProjects = (await getProjects()).map((p) => ({ id: p.id, name: p.name, level: String(p.level), parentId: p.parentId ?? null }));
@@ -261,6 +273,7 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
   if (days > 0) {
     const activeConds: any[] = [eq(adCampaigns.provider, GOOGLE_ADS_PROVIDER), eq(adCampaigns.status, "ENABLED")];
     if (projectFilter) activeConds.push(inArray(adCampaigns.projectId, projectFilter));
+    activeConds.push(sql`(${adAccounts.currency} IS NULL OR ${adAccounts.currency} = '' OR UPPER(${adAccounts.currency}) = 'EUR')`);
     const act = await db.select({ b: sql<string>`COALESCE(SUM(${adCampaigns.budgetMicros}), 0)` }).from(adCampaigns)
       .innerJoin(adAccounts, and(eq(adAccounts.id, adCampaigns.accountId), eq(adAccounts.selected, 1))).where(and(...activeConds));
     budgetEstimate = microsToAmount(Number(act[0]?.b ?? 0)) * days;
@@ -277,6 +290,7 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
     nationalShares: Array.from(nationalShareMap.values()),
     coverage,
     meta: { lastDataDay: metaLast, hasDataInPeriod: metaDaysInPeriod > 0 },
-    budgetEstimate, unmappedCampaigns: unmappedSet.size, apiConnected: apiRowsAll.length > 0 || lastSync != null,
+    budgetEstimate, unmappedCampaigns: unmappedSet.size, apiConnected: apiRowsRaw.length > 0 || lastSync != null,
+    currencyExcluded,
   };
 }
