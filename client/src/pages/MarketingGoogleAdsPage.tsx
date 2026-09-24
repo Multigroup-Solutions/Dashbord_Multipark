@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import DateRangeNav from "@/components/DateRangeNav";
+import { campaignTabBrand } from "@shared/adCampaignMapping";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -48,6 +49,32 @@ export default function MarketingGoogleAdsPage() {
   const st: any = stats;
   const accounts: Array<{ id: number; name: string }> = byBrand?.accounts ?? [];
 
+  // Separadores por MARCA (Jorge, 24 set 2026): uma campanha marcada "Airpark
+  // Faro" aparece no separador Airpark, seja de que conta Google for (ex.:
+  // "Estacionamento Aeroporto Faro" da conta Multipark.pt). Sem marca escolhida
+  // (nacional ou por associar), fica na marca da conta.
+  const brandTabs = useMemo(() => {
+    const byId = new Map<number, any>((projects as any[]).map((p) => [p.id, p]));
+    const brandOf = (projectId: number | null): string | null => {
+      let node = projectId != null ? byId.get(projectId) : undefined; const seen = new Set<number>();
+      while (node && node.level !== "brand") { if (seen.has(node.id) || node.parentId == null) return null; seen.add(node.id); node = byId.get(node.parentId); }
+      return node ? String(node.name) : null;
+    };
+    const accountBrand = new Map<number, string>();
+    for (const b of (byBrand?.brands ?? []) as any[]) for (const a of b.accounts ?? []) if (b.mapped) accountBrand.set(a.id, b.brand);
+    const accountName = new Map(accounts.map((a) => [a.id, a.name]));
+    const tabs = new Map<string, { brand: string; rows: any[]; cost: number }>();
+    for (const r of (st?.byCampaign ?? []) as any[]) {
+      if (r.accountId == null) continue;
+      const brand = campaignTabBrand(r, projects as any[], accountBrand, accountName);
+      const t = tabs.get(brand) ?? { brand, rows: [], cost: 0 };
+      t.rows.push({ ...r, accountLabel: accountName.get(r.accountId) ?? null }); t.cost += r.cost;
+      tabs.set(brand, t);
+    }
+    const shares = (brand: string) => ((st?.nationalShares ?? []) as any[]).filter((x) => brandOf(x.projectId) === brand);
+    return Array.from(tabs.values()).sort((a, b) => b.cost - a.cost).map((t) => ({ ...t, nationalShares: shares(t.brand) }));
+  }, [st, byBrand, projects, accounts]);
+
   const cov = st?.coverage;
   const covLabel = !cov ? "" : cov.status === "none" ? "Sem dados de anúncios no período" : cov.status === "partial" ? `Dados incompletos: ${cov.missingDays} dia(s) sem recolha` : cov.status === "stale" ? "Recolha parada há mais de um dia" : "Dados completos";
   const covCls = !cov || cov.status === "ok" ? "border-emerald-200 bg-emerald-50 text-emerald-900" : cov.status === "none" ? "border-muted bg-muted/40 text-muted-foreground" : "border-amber-200 bg-amber-50 text-amber-900";
@@ -80,17 +107,17 @@ export default function MarketingGoogleAdsPage() {
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="flex-wrap h-auto">
           <TabsTrigger value="resumo"><BarChart3 className="w-4 h-4 mr-1" />Por marca</TabsTrigger>
-          {accounts.map((a) => (
-            <TabsTrigger key={a.id} value={`conta-${a.id}`}><Megaphone className="w-4 h-4 mr-1" />{a.name}</TabsTrigger>
+          {brandTabs.map((a) => (
+            <TabsTrigger key={a.brand} value={`marca-${a.brand}`}><Megaphone className="w-4 h-4 mr-1" />{a.brand}</TabsTrigger>
           ))}
         </TabsList>
 
         <TabsContent value="resumo" className="mt-4">
           <BrandSummary data={byBrand} />
         </TabsContent>
-        {accounts.map((a) => (
-          <TabsContent key={a.id} value={`conta-${a.id}`} className="mt-4">
-            <AccountCampaigns account={a} rows={(st?.byCampaign ?? []).filter((r: any) => r.accountId === a.id)} projects={projects as any[]} byBrandCity={byBrand?.byBrandCity ?? []} nationalShares={(st?.nationalShares ?? []).filter((s: any) => s.accountId === a.id)} attributedByCampaign={st?.attributedByCampaign ?? {}} />
+        {brandTabs.map((t) => (
+          <TabsContent key={t.brand} value={`marca-${t.brand}`} className="mt-4">
+            <AccountCampaigns account={{ id: 0, name: t.brand }} rows={t.rows} projects={projects as any[]} byBrandCity={byBrand?.byBrandCity ?? []} nationalShares={t.nationalShares} attributedByCampaign={st?.attributedByCampaign ?? {}} />
           </TabsContent>
         ))}
       </Tabs>
@@ -204,6 +231,11 @@ function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares
     }
     return node?.name ?? "";
   };
+  const brandNameOf = (projectId: number | null): string | null => {
+    let node = projectId != null ? byId.get(projectId) : undefined; const seen = new Set<number>();
+    while (node && node.level !== "brand") { if (seen.has(node.id) || node.parentId == null) return null; seen.add(node.id); node = byId.get(node.parentId); }
+    return node ? String(node.name) : null;
+  };
   const label = (id: number | null): string => {
     if (id == null) return "";
     const p = byId.get(id); if (!p) return `#${id}`;
@@ -249,9 +281,11 @@ function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares
     }
     // cidades que só recebem gasto nacional repartido aparecem na mesma
     for (const projectId of shareByProject.keys()) getGroup(label(projectId), projectId);
+    // e as cidades desta marca com reservas, mesmo sem campanha (as reservas nunca ficam escondidas)
+    for (const c of byBrandCity) if (c.bookings > 0 && brandNameOf(c.projectId) === account.name) getGroup(label(c.projectId), c.projectId);
     for (const g of map.values()) g.rows.sort((a, b) => b.cost - a.cost);
     return Array.from(map.values()).sort((a, b) => groupRank(a.city) - groupRank(b.city) || (b.cost + b.nationalCost) - (a.cost + a.nationalCost));
-  }, [rows, shareByProject, cityStats]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [rows, shareByProject, cityStats, byBrandCity, account.name]); // eslint-disable-line react-hooks/exhaustive-deps
   const nationalSplitText = useMemo(() => Array.from(shareByProject.entries()).filter(([, c]) => c > 0).sort((a, b) => b[1] - a[1]).map(([id, c]) => `${label(id)} ${eur(c)}`).join(" · "), [shareByProject]); // eslint-disable-line react-hooks/exhaustive-deps
   const bookingTotals = useMemo(() => groups.reduce((t, g) => g.stats ? { bookings: t.bookings + g.stats.bookings, attributed: t.attributed + g.stats.attributed, revenueAttributed: t.revenueAttributed + g.stats.revenueAttributed } : t, { bookings: 0, attributed: 0, revenueAttributed: 0 }), [groups]);
 
@@ -268,8 +302,8 @@ function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares
 
   const total = rows.reduce((t, r) => ({ cost: t.cost + r.cost, clicks: t.clicks + r.clicks, conversions: t.conversions + r.conversions, value: t.value + r.conversionValue }), { cost: 0, clicks: 0, conversions: 0, value: 0 });
 
-  if (!rows.length) {
-    return <Card className="p-12 text-center"><p className="text-muted-foreground">Sem gasto desta conta no período.</p></Card>;
+  if (!rows.length && !groups.length) {
+    return <Card className="p-12 text-center"><p className="text-muted-foreground">Sem gasto desta marca no período.</p></Card>;
   }
 
   return (
@@ -322,15 +356,18 @@ function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares
                     <td className="px-4 py-2 text-right font-semibold">{g.conversions.toFixed(1)}</td>
                     <td className="px-4 py-2 text-right text-muted-foreground">{g.conversions > 0 ? eur(g.cost / g.conversions) : "—"}</td>
                     <td className="px-4 py-2 text-right font-semibold">{eur(g.value)}</td>
-                    <td className="px-4 py-2 text-right font-semibold border-l">{g.stats ? num(g.stats.bookings) : "—"}</td>
-                    <td className="px-4 py-2 text-right font-semibold">{g.stats ? num(g.stats.attributed) : "—"}</td>
-                    <td className="px-4 py-2 text-right font-semibold">{g.stats ? eur(g.stats.revenueAttributed) : "—"}</td>
+                    <td className="px-4 py-2 text-right font-semibold border-l" title={g.projectId != null && !g.stats ? "Sem reservas desta marca/cidade no período" : undefined}>{g.stats ? num(g.stats.bookings) : g.projectId != null ? "0" : "—"}</td>
+                    <td className="px-4 py-2 text-right font-semibold">{g.stats ? num(g.stats.attributed) : g.projectId != null ? "0" : "—"}</td>
+                    <td className="px-4 py-2 text-right font-semibold">{g.stats ? eur(g.stats.revenueAttributed) : g.projectId != null ? eur(0) : "—"}</td>
                   </tr>
                   {g.rows.map((r) => {
                     const sug = r.campaignId != null ? sugById.get(r.campaignId) : null;
                     return (
                       <tr key={r.key} className="border-b last:border-0">
-                        <td className="px-4 py-1.5 pl-8">{r.name}</td>
+                        <td className="px-4 py-1.5 pl-8">
+                          {r.name}
+                          {r.accountLabel && <div className="text-[11px] text-muted-foreground">conta {r.accountLabel}</div>}
+                        </td>
                         <td className="px-4 py-1.5">
                           {isAdmin && r.campaignId != null ? (
                             <div className="flex items-center gap-2">
@@ -368,7 +405,7 @@ function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares
                 </React.Fragment>
               ))}
               <tr className="bg-muted/60 font-semibold">
-                <td className="px-4 py-2" colSpan={2}>Total da conta</td>
+                <td className="px-4 py-2" colSpan={2}>Total da marca</td>
                 <td className="px-4 py-2 text-right">{eur(total.cost)}</td>
                 <td className="px-4 py-2 text-right text-muted-foreground">—</td>
                 <td className="px-4 py-2 text-right">{num(total.clicks)}</td>
