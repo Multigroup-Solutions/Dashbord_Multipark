@@ -2565,7 +2565,8 @@ export const appRouter = router({
       .input(z.object({
         fullName: z.string().min(1),
         email: z.string().email(),
-        multiparkAgentName: z.string().min(1, "Nome Multipark é obrigatório"),
+        // Opcional: a ligação automática (identity sweep) encontra o agente sozinha
+        multiparkAgentName: z.string().trim().max(256).optional(),
         phone: z.string().optional(),
         // Contactos pessoais — só internos (extras usam o pessoal como principal)
         personalEmail: z.string().email().optional(),
@@ -2614,7 +2615,7 @@ export const appRouter = router({
             .from(employees).where(and(eq(employees.userId, input.userId), eq(employees.isActive, 1))).limit(1);
           if (taken[0]) throw new TRPCError({ code: "BAD_REQUEST", message: `Esse utilizador já está ligado a ${taken[0].fullName} (#${taken[0].id}).` });
         }
-        if (dbDup) {
+        if (dbDup && input.multiparkAgentName) {
           const agentTaken = await dbDup.select({ id: employees.id, fullName: employees.fullName })
             .from(employees).where(and(eq(employees.multiparkAgentName, input.multiparkAgentName), eq(employees.isActive, 1))).limit(1);
           if (agentTaken[0]) throw new TRPCError({ code: "BAD_REQUEST", message: `Esse agente Multipark já está ligado a ${agentTaken[0].fullName} (#${agentTaken[0].id}).` });
@@ -2639,7 +2640,7 @@ export const appRouter = router({
         const inserted = await createEmployee({
           fullName: input.fullName,
           email: input.email,
-          multiparkAgentName: input.multiparkAgentName,
+          multiparkAgentName: input.multiparkAgentName || null,
           phone: input.phone ?? null,
           personalEmail: input.position === "extra" ? null : (input.personalEmail?.trim().toLowerCase() || null),
           personalPhone: input.position === "extra" ? null : (input.personalPhone?.trim() || null),
@@ -2918,7 +2919,14 @@ export const appRouter = router({
             uploadedById: ctx.user.id,
           });
           await logActivity({ userId: ctx.user.id, action: "upload", entity: "employee_document", entityId: input.employeeId, details: `Documento carregado: ${input.docType}` });
-          return { url, key };
+          // IA lê o documento e preenche os campos VAZIOS da ficha (best-effort)
+          let autofill: { filled: string[] } = { filled: [] };
+          try {
+            const { autofillFromDocument } = await import("./documentAutofill");
+            const r = await autofillFromDocument({ employeeId: input.employeeId, docType: input.docType, mimeType: input.mimeType, base64: input.fileBase64, userId: ctx.user.id });
+            autofill = { filled: r.filled };
+          } catch (err) { console.warn("[documents.upload] leitura por IA falhou:", String((err as any)?.message ?? err).slice(0, 200)); }
+          return { url, key, autofill };
         }),
 
       uploadBatch: protectedProcedure
@@ -2952,7 +2960,17 @@ export const appRouter = router({
             results.push({ url, key });
           }
           await logActivity({ userId: ctx.user.id, action: "upload", entity: "employee_document", entityId: input.employeeId, details: `${input.files.length} documentos carregados: ${input.docType}` });
-          return results;
+          // IA: lê as páginas (ex.: frente e verso do CC) até preencher o que falta
+          const filled: string[] = [];
+          try {
+            const { autofillFromDocument } = await import("./documentAutofill");
+            for (const f of input.files.slice(0, 3)) {
+              const r = await autofillFromDocument({ employeeId: input.employeeId, docType: input.docType, mimeType: f.mimeType, base64: f.fileBase64, userId: ctx.user.id });
+              filled.push(...r.filled);
+              if (r.skipped) break;
+            }
+          } catch (err) { console.warn("[documents.uploadBatch] leitura por IA falhou:", String((err as any)?.message ?? err).slice(0, 200)); }
+          return Object.assign(results, { autofill: { filled } });
         }),
       checklist: protectedProcedure
         .input(z.object({ employeeId: z.number() }))
