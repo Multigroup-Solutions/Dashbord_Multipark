@@ -101,27 +101,41 @@ export async function applyDocsComplianceAll(): Promise<{ checked: number }> {
 
 // ─── Faltas: "possível falta" pendente de validação ─────────────────────────
 /**
- * Extras escalados num dia sem check-in nesse dia → penalização PENDENTE
+ * Janela em que um check-in conta como presença num turno do extras-dia.
+ * startHour/endHour podem passar das 24 (turnos da madrugada seguinte: 25 =
+ * 01h do dia a seguir). Hora de Lisboa vs UTC do ponto: folga de 2 h antes do
+ * início (1 h de fuso + 1 h para quem chega cedo) e 1 h depois do fim.
+ */
+export function noShowWindow(dateStr: string, startHour: number, endHour?: number | null): { from: Date; to: Date } {
+  const base = new Date(`${dateStr}T00:00:00Z`).getTime();
+  const H = 3600000;
+  const end = endHour != null && endHour > startHour ? endHour : startHour + 8;
+  return { from: new Date(base + (startHour - 2) * H), to: new Date(base + (end + 1) * H) };
+}
+
+/**
+ * Extras escalados num dia sem check-in dentro da janela do turno → penalização PENDENTE
  * (não conta pontos, não bloqueia). Idempotente (UNIQUE employeeId+reason+relatedId).
  */
 export async function detectExtraDiaNoShows(dateStr: string): Promise<{ scanned: number; created: number; alreadyPending: number }> {
   const db = await getDb();
   if (!db) return { scanned: 0, created: 0, alreadyPending: 0 };
-  const rows = await db.select({ id: extrasDiaAssignments.id, employeeId: extrasDiaAssignments.employeeId, personName: extrasDiaAssignments.personName, startHour: extrasDiaAssignments.startHour, city: extrasDiaAssignments.city })
+  const rows = await db.select({ id: extrasDiaAssignments.id, employeeId: extrasDiaAssignments.employeeId, personName: extrasDiaAssignments.personName, startHour: extrasDiaAssignments.startHour, endHour: extrasDiaAssignments.endHour, city: extrasDiaAssignments.city })
     .from(extrasDiaAssignments)
     .where(and(eq(extrasDiaAssignments.assignmentDate, dateStr), eq(extrasDiaAssignments.isTeamLeader, 0), isNotNull(extrasDiaAssignments.employeeId)));
   let created = 0, alreadyPending = 0;
   for (const r of rows) {
     if (r.employeeId == null) continue;
-    // check-in no próprio dia (Lisboa ≈ UTC; folga de 1 h para turnos cedo)
-    const start = new Date(`${dateStr}T00:00:00Z`), end = new Date(`${dateStr}T23:59:59Z`);
+    // check-in dentro da janela DESTE turno (antes: 00h–24h do dia, o que dava
+    // falta falsa nos turnos da madrugada — startHour 24–26)
+    const { from, to } = noShowWindow(dateStr, Number(r.startHour), r.endHour == null ? null : Number(r.endHour));
     const [ci] = await db.select({ id: timeRecords.id }).from(timeRecords)
-      .where(and(eq(timeRecords.employeeId, r.employeeId), eq(timeRecords.type, "check_in"), gte(timeRecords.recordedAt, toMysqlDateTime(new Date(start.getTime() - 3600000))), lte(timeRecords.recordedAt, toMysqlDateTime(end)))).limit(1);
+      .where(and(eq(timeRecords.employeeId, r.employeeId), eq(timeRecords.type, "check_in"), gte(timeRecords.recordedAt, toMysqlDateTime(from)), lte(timeRecords.recordedAt, toMysqlDateTime(to)))).limit(1);
     if (ci) continue;
     try {
       await db.insert(employeePenalties).values({
         employeeId: r.employeeId, reason: "no_show_extra_dia", severity: "penalty", points: 1, relatedId: r.id, status: "pending",
-        notes: `Possível falta ao extras-dia em ${dateStr} (${r.personName}, ${r.city}, ${r.startHour}h) — sem check-in nesse dia; confirmar com a operação`,
+        notes: `Possível falta ao extras-dia em ${dateStr} (${r.personName}, ${r.city}, ${r.startHour}h) — sem check-in no turno; confirmar com a operação`,
       });
       created++;
     } catch (err: any) {

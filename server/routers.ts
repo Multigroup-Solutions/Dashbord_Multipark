@@ -3539,8 +3539,10 @@ export const appRouter = router({
 
     // ── EXTRA RATES ─────────────────────────────────────────────────────────────────────────────────
     extraRates: router({
+      // Leitura para quem compõe a escala (backoffice+): sem isto o Extras Dia
+      // caía em silêncio nas taxas por defeito. Editar continua super_admin.
       list: protectedProcedure.query(async ({ ctx }) => {
-        requireRole(ctx.user.role, "admin");
+        requireRole(ctx.user.role, "backoffice");
         await seedExtraRates();
         return getExtraRates();
       }),

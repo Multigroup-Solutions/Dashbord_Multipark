@@ -15,11 +15,13 @@
 import { cityNameScope, projectScope } from './cityScope';
 import { and, asc, eq, gte, lte, inArray, sql } from "drizzle-orm";
 import { getDb } from "./db";
+import { DEFAULT_EXTRA_RATES, loadExtraRates, rateFor, type ExtraRates } from "./extraRates";
 import { multiparkBookings, extrasDiaAssignments, employees, projects } from "../drizzle/schema";
 import { getBookingTryAllParks } from "./multipark";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
+/** Níveis e taxas POR DEFEITO — as taxas vivas vêm de `extra_rates` (server/extraRates.ts). */
 export const DRIVER_LEVELS = [
   { id: "junior", label: "Júnior", hourlyRate: 4.5 },
   { id: "senior", label: "Sénior", hourlyRate: 5 },
@@ -220,8 +222,10 @@ export interface DriverShift {
 export function suggestShifts(
   hourlyCars: number[],
   level: DriverLevelId = "junior",
+  rates?: ExtraRates,
 ): { shifts: DriverShift[]; totalCost: number; peakDrivers: number; totalDriverHours: number } {
-  const rateInfo = DRIVER_LEVELS.find(l => l.id === level)!;
+  const base = DRIVER_LEVELS.find(l => l.id === level)!;
+  const rateInfo = { ...base, hourlyRate: rates ? rateFor(rates, level) : base.hourlyRate };
   const driversPerHour = hourlyCars.map(c => Math.ceil(c / CARS_PER_HOUR_PER_DRIVER));
   const peak = Math.max(0, ...driversPerHour);
 
@@ -472,21 +476,21 @@ export function deriveShortName(fullName: string): string {
   return `${parts[0]} ${parts[parts.length - 1]}`;
 }
 
-function computeAssignmentCost(row: {
+export function computeAssignmentCost(row: {
   level: DriverLevelId | null;
   isTeamLeader: boolean;
   startHour: number;
   endHour: number;
   sentHomeHour: number | null;
   tlDailyCost?: number; // monthlySalary / 15
-}): { hoursBilled: number; cost: number } {
+}, rates: ExtraRates = DEFAULT_EXTRA_RATES): { hoursBilled: number; cost: number } {
   const end = row.sentHomeHour ?? row.endHour;
   const hours = Math.max(0, end - row.startHour);
   if (row.isTeamLeader) {
     // TL: fixed daily cost; ignore hours.
     return { hoursBilled: hours, cost: row.tlDailyCost ?? 0 };
   }
-  const rate = DRIVER_LEVELS.find(l => l.id === row.level)?.hourlyRate ?? 0;
+  const rate = row.level ? rateFor(rates, row.level) : 0;
   return { hoursBilled: hours, cost: hours * rate };
 }
 
@@ -496,6 +500,7 @@ function rowToAssignment(
   multiparkAgentName?: string | null,
   multiparkAgentUserId?: string | null,
   photoUrl?: string | null,
+  rates: ExtraRates = DEFAULT_EXTRA_RATES,
 ): Assignment {
   const isTL = r.isTeamLeader === 1;
   const level = (r.level as DriverLevelId | null) ?? null;
@@ -506,7 +511,7 @@ function rowToAssignment(
     endHour: r.endHour,
     sentHomeHour: r.sentHomeHour,
     tlDailyCost,
-  });
+  }, rates);
   return {
     id: r.id,
     assignmentDate: r.assignmentDate,
@@ -550,6 +555,7 @@ export async function listAssignments(date: string, city?: ExtraCity): Promise<A
     .where(and(cityNameScope(extrasDiaAssignments.city), eq(extrasDiaAssignments.assignmentDate, date), city ? eq(extrasDiaAssignments.city, city) : undefined))
     .orderBy(asc(extrasDiaAssignments.startHour));
 
+  const rates = await loadExtraRates();
   // Pre-fetch dos empregados associados (mapeamento Multipark)
   const empIds = Array.from(new Set(rows.map(r => r.employeeId).filter((x): x is number => x !== null)));
   const empMap = new Map<number, { multiparkAgentName: string | null; multiparkAgentUserId: string | null; photoUrl: string | null }>();
@@ -580,7 +586,7 @@ export async function listAssignments(date: string, city?: ExtraCity): Promise<A
       tlCost = await getEmployeeDailyCost(r.employeeId);
     }
     const map = r.employeeId ? empMap.get(r.employeeId) : undefined;
-    result.push(rowToAssignment(r, tlCost, map?.multiparkAgentName, map?.multiparkAgentUserId, map?.photoUrl));
+    result.push(rowToAssignment(r, tlCost, map?.multiparkAgentName, map?.multiparkAgentUserId, map?.photoUrl, rates));
   }
   return result;
 }
@@ -650,7 +656,7 @@ export async function upsertAssignment(input: UpsertAssignmentInput): Promise<As
       .limit(1);
     if (!row) return null;
     const tlCost = row.isTeamLeader === 1 ? await getEmployeeDailyCost(row.employeeId) : undefined;
-    return rowToAssignment(row, tlCost);
+    return rowToAssignment(row, tlCost, undefined, undefined, undefined, await loadExtraRates());
   }
 
   const [result] = await db
@@ -665,7 +671,7 @@ export async function upsertAssignment(input: UpsertAssignmentInput): Promise<As
     .limit(1);
   if (!row) return null;
   const tlCost = row.isTeamLeader === 1 ? await getEmployeeDailyCost(row.employeeId) : undefined;
-  return rowToAssignment(row, tlCost);
+  return rowToAssignment(row, tlCost, undefined, undefined, undefined, await loadExtraRates());
 }
 
 export async function deleteAssignment(id: number): Promise<void> {
@@ -1060,9 +1066,10 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
 
   // Para sugestão de turnos usa a procura pesada agregada por hora.
   const hourlyCars = hourly.map(h => h.slots.reduce((acc, s) => acc + s.weightedDemand, 0));
-  const cheapest = suggestShifts(hourlyCars, "junior");
+  const liveRates = await loadExtraRates();
+  const cheapest = suggestShifts(hourlyCars, "junior", liveRates);
   const bySingleLevel = DRIVER_LEVELS.map(l => {
-    const r = suggestShifts(hourlyCars, l.id);
+    const r = suggestShifts(hourlyCars, l.id, liveRates);
     return { level: l.id, label: l.label, totalCost: r.totalCost, totalHours: r.totalDriverHours };
   });
 
