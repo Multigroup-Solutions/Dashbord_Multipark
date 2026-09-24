@@ -407,7 +407,7 @@ describe("IA: interruptores", () => {
 
   it("todos os interruptores aparecem em Definições → Automações", () => {
     const names = AUTOMATION_FLAGS.map((f) => f.name);
-    for (const f of ["AI_ENABLED", "AI_EXPENSE_OCR", "AI_REVIEW_DRAFTS", "AI_RADIO", "AI_HANDOVER_SUMMARY", "AI_WHATSAPP_ASSIST", "AI_QUIZ", "AI_HR_AUTOFILL"]) {
+    for (const f of ["AI_ENABLED", "AI_EXPENSE_OCR", "AI_REVIEW_DRAFTS", "AI_RADIO", "AI_HANDOVER_SUMMARY", "AI_WHATSAPP_ASSIST", "AI_QUIZ", "AI_HR_AUTOFILL", "AI_TRAINING_TUTOR"]) {
       expect(names).toContain(f);
       expect(validateSetting(`flag.${f}`, false)).toEqual({ ok: true, value: false });
     }

@@ -20,6 +20,7 @@ import {
 import {
   ALL_CAREER_LEVELS, CAREER_LEVEL_LABELS, isDirectVideo, useConfirm, useOpenManualFile, useUploadTrainingFile, videoEmbedUrl,
 } from "./shared";
+import { TutorPanel } from "./TutorPanel";
 
 /** Conjunto "tipo:id" dos itens concluídos pelo próprio (vem de myTraining). */
 export type DoneSet = Set<string>;
@@ -211,7 +212,7 @@ export function VideoPlayerDialog({ video, done, onClose }: { video: any | null;
   };
   return (
     <Dialog open={!!video} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-4xl w-[calc(100vw-2rem)] p-0 overflow-hidden">
+      <DialogContent className="max-w-4xl w-[calc(100vw-2rem)] p-0 max-h-[95vh] overflow-y-auto">
         <DialogHeader className="px-4 pt-4 pb-2">
           <DialogTitle className="flex items-center gap-2"><Play className="w-4 h-4 text-primary" />{video.title}</DialogTitle>
         </DialogHeader>
@@ -242,6 +243,7 @@ export function VideoPlayerDialog({ video, done, onClose }: { video: any | null;
               !direct && <Button size="sm" variant="secondary" disabled={mark.isPending} onClick={() => complete()}><CheckCircle className="w-4 h-4 mr-1" />Marcar como visto</Button>
             )}
           </div>
+          <TutorPanel context={{ type: "video", id: video.id }} defaultOpen={false} />
         </div>
       </DialogContent>
     </Dialog>
@@ -562,6 +564,7 @@ function ManualDetail({ manual, done, isAdmin, llmConfigured, onBack, onEdit, on
           </div>
         </CardContent>
       </Card>
+      <TutorPanel context={{ type: "manual", id: manual.id }} />
     </div>
   );
 }

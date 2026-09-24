@@ -18,6 +18,9 @@ import {
   Trash2, UserPlus, Users, XCircle,
 } from "lucide-react";
 import { CAREER_LEVEL_LABELS, CITY_OPTIONS, ITEM_TYPE_LABELS, STATUS_LABELS, TARGET_ROLES, useConfirm } from "./shared";
+import { TutorPanel, TutorQuestionsCard } from "./TutorPanel";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { can } from "@shared/access";
 
 const ITEM_ICONS: Record<string, any> = { video: Play, manual: BookOpen, exam: GraduationCap, quiz: Gamepad2 };
 const cityLabel = (c: string | null | undefined) => CITY_OPTIONS.find((x) => x.id === c)?.label ?? "Sem cidade";
@@ -71,6 +74,7 @@ export function MyTrainingTab({ data, onOpenItem }: { data: any; onOpenItem: (it
                 );
               })}
             </div>
+            <TutorPanel context={{ type: "path", id: a.pathId }} defaultOpen={false} title={`Tutor — ${a.pathName}`} />
           </CardContent>
         </Card>
       ))}
@@ -293,6 +297,8 @@ function AssignDialog({ value, onClose, onDone }: { value: { pathId: number; nam
 // ─── ACOMPANHAMENTO (dashboard supervisor/admin) ──────────────────────────
 
 export function DashboardTab() {
+  const { user } = useAuth();
+  const isTrainer = can(user, "formacao", "manage");
   const [city, setCity] = useState<string>("all");
   const [pathId, setPathId] = useState<string>("all");
   const [person, setPerson] = useState<number | null>(null);
@@ -403,6 +409,8 @@ export function DashboardTab() {
           </CardContent>
         </Card>
       )}
+
+      {isTrainer && <TutorQuestionsCard />}
 
       {person != null && <PersonProgressDialog employeeId={person} onClose={() => setPerson(null)} />}
     </div>

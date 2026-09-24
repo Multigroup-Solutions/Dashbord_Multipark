@@ -94,6 +94,7 @@ da env.
 | `AI_WHATSAPP_ASSIST` | `whatsapp_summary` + `whatsapp_reply` | lite |
 | `AI_QUIZ` | `quiz_generation`: perguntas a partir dos manuais | fast |
 | `AI_HR_AUTOFILL` | `hr_autofill`: documentos do RH | lite. **Desligado por omissão** até decisão sobre o RGPD. |
+| `AI_TRAINING_TUTOR` | `training_tutor`: tutor da Formação (chat nos manuais, vídeos, percursos e quiz) | lite |
 
 Quando uma funcionalidade está desligada, a UI mostra a mensagem "Esta
 funcionalidade de IA está desligada." e não se faz nenhum pedido. Os botões
@@ -159,7 +160,42 @@ Os blocos já existem, mas ainda não há interface:
   cache custam cerca de 10% do preço normal. A cache é partilhada entre
   instâncias através de `ai_context_caches`.
 
-## 8. Variáveis de ambiente
+## 8. Tutor da Formação
+
+Um painel "Tutor da formação" aparece dentro das páginas da Formação: no
+manual, no vídeo, em cada percurso de "A minha formação" e no quiz (antes e no
+resultado). Não está no menu geral.
+
+- **Só responde com o conteúdo dos manuais.** Os manuais do módulo são partidos
+  pelos títulos e a pergunta é procurada por palavras-chave (sem embeddings,
+  sem custo). Se nenhum trecho servir, responde logo "pergunta ao formador" (com
+  o nome de quem criou o percurso, se houver) **sem chamar a IA**. Se a IA
+  disser que a resposta não está no conteúdo, a resposta é a mesma. Nunca
+  inventa regras. Os PDFs sem texto no campo "conteúdo" não entram na procura.
+- O conteúdo do módulo vai no `system` com cache de contexto (`cacheSystem`,
+  1 h) quando é grande; os trechos escolhidos, as últimas 4 trocas e a pergunta
+  vão no `input`.
+- Respostas até ~120 palavras (boas para ouvir; há um botão "Ouvir" com a voz
+  do navegador) e um botão **Explicar melhor** (~250 palavras).
+- Saudação com o progresso (módulos feitos, próximo passo, dias seguidos) e
+  dicas antes do quiz: **sem IA**.
+- Depois do quiz, "Explicar as respostas erradas": a citação do manual é
+  escolhida no servidor (texto literal) e a IA só escreve a explicação curta.
+  Com a IA desligada mostra a explicação do formador e o trecho.
+- **Limites**: Definições → Parâmetros → *Tutor da formação: limite de
+  perguntas* (`{"perMinute": 10, "perDay": 100}`), ou as env
+  `AI_TRAINING_TUTOR_PER_MINUTE` / `AI_TRAINING_TUTOR_PER_DAY`. Perguntas até
+  500 caracteres.
+- **Dados pessoais**: a pergunta passa pelo `redactPii` antes da IA e antes de
+  ser guardada. O histórico (tabela `training_tutor_messages`, migração 0138)
+  fica 30 dias e cada formando só vê o seu.
+- **Formadores** (quem gere a Formação): Formação → Acompanhamento → *Perguntas
+  ao tutor* mostra o que se pergunta mais, por módulo, e quantas ficaram sem
+  resposta. É um agregado anónimo (`training_tutor_questions`, sem utilizador).
+- Interruptor desligado ou orçamento esgotado: o painel mostra uma mensagem
+  simpática a sugerir o formador; nada falha.
+
+## 9. Variáveis de ambiente
 
 | Env | Para quê |
 |---|---|
@@ -170,6 +206,7 @@ Os blocos já existem, mas ainda não há interface:
 | `AI_TIER_<FUNC>` | Nível por funcionalidade |
 | `AI_THINKING_LEVEL` | Raciocínio dos Gemini 3.x |
 | `AI_MONTHLY_BUDGET_EUR` | Orçamento (a página Definições ganha-lhe) |
-| `AI_ENABLED`, `AI_EXPENSE_OCR`, `AI_REVIEW_DRAFTS`, `AI_RADIO`, `AI_HANDOVER_SUMMARY`, `AI_WHATSAPP_ASSIST`, `AI_QUIZ`, `AI_HR_AUTOFILL` | Interruptores |
+| `AI_ENABLED`, `AI_EXPENSE_OCR`, `AI_REVIEW_DRAFTS`, `AI_RADIO`, `AI_HANDOVER_SUMMARY`, `AI_WHATSAPP_ASSIST`, `AI_QUIZ`, `AI_HR_AUTOFILL`, `AI_TRAINING_TUTOR` | Interruptores |
+| `AI_TRAINING_TUTOR_PER_MINUTE`, `AI_TRAINING_TUTOR_PER_DAY` | Limites do tutor da Formação (Definições ganha) |
 | `LLM_API_URL`, `LLM_API_KEY`, `LLM_MODEL` | Fornecedor antigo |
 | `OPENAI_API_KEY` | Whisper (só se definida) |

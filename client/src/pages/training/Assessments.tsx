@@ -16,6 +16,7 @@ import {
   ALL_CAREER_LEVELS, AnswerReview, CAREER_LEVEL_COLORS, CAREER_LEVEL_LABELS, CAREER_TRACKS, QuestionDialog, emptyQuestion,
   questionFrom, useConfirm, useOpenManualFile, type QuestionFormValue,
 } from "./shared";
+import { QuizTutorReview, TutorPanel } from "./TutorPanel";
 
 type Answer = { questionId: number; answer: "A" | "B" | "C" | "D" };
 type Session = { sessionId: number; questions: any[]; timeLimitSeconds: number | null; attemptsLeft: number };
@@ -87,7 +88,7 @@ export function QuizTab({ isAdmin }: { isAdmin: boolean }) {
   const onErr = (e: { message: string }) => toast.error(e.message);
   const start = trpc.training.startQuiz.useMutation({ onSuccess: (s) => { setResult(null); setSession(s); }, onError: onErr });
   const submit = trpc.training.submitQuiz.useMutation({
-    onSuccess: (r) => { setResult(r); setSession(null); void utils.training.quizRanking.invalidate(); void utils.training.myTraining.invalidate(); },
+    onSuccess: (r, vars) => { setResult({ ...r, sessionId: vars.sessionId, answers: vars.answers }); setSession(null); void utils.training.quizRanking.invalidate(); void utils.training.myTraining.invalidate(); },
     onError: onErr,
   });
   const afterSave = () => { refetchAdmin(); setEditing(null); void utils.training.quizInfo.invalidate(); };
@@ -115,7 +116,9 @@ export function QuizTab({ isAdmin }: { isAdmin: boolean }) {
             </div>
           </CardContent>
         </Card>
+        {result.correct < result.total && <QuizTutorReview sessionId={result.sessionId} answers={result.answers} />}
         <AnswerReview review={result.review} />
+        <TutorPanel context={{ type: "quiz", id: 0 }} defaultOpen={false} />
       </div>
     );
   }
@@ -127,6 +130,7 @@ export function QuizTab({ isAdmin }: { isAdmin: boolean }) {
   return (
     <div className="space-y-6">
       {confirmUi}
+      <TutorPanel context={{ type: "quiz", id: 0 }} title="Tutor — dicas antes do quiz" />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <Card>
           <CardContent className="p-8 text-center space-y-4">

@@ -112,6 +112,12 @@ export function hhmmToMinutes(v: string): number {
   if (!m) return NaN;
   return Number(m[1]) * 60 + Number(m[2]);
 }
+/** Limites do tutor da formação (pedidos por pessoa). */
+export const trainingTutorLimitsSchema = z.object({
+  perMinute: z.number({ error: "Indica um número por minuto." }).int("Número inteiro.").min(1, "Mínimo 1 por minuto.").max(120, "Máximo 120 por minuto."),
+  perDay: z.number({ error: "Indica um número por dia." }).int("Número inteiro.").min(1, "Mínimo 1 por dia.").max(5000, "Máximo 5000 por dia."),
+});
+
 
 export interface SettingDef<S extends z.ZodTypeAny = z.ZodTypeAny> {
   key: string;
@@ -271,6 +277,13 @@ export const SETTINGS = {
     description: "Texto curto com o ponto de encontro de cada cidade, incluído no WhatsApp e no email de escala. Vazio = não se indica.",
     schema: meetingPointMapSchema,
     defaultValue: { lisbon: "", porto: "", faro: "" },
+  "ai.trainingTutorLimits": def({
+    key: "ai.trainingTutorLimits",
+    group: "ia",
+    label: "Tutor da formação: limite de perguntas",
+    description: "Perguntas ao tutor da formação por pessoa, por minuto e por dia. JSON: {\"perMinute\": 10, \"perDay\": 100}. Vazio = usa AI_TRAINING_TUTOR_PER_MINUTE / AI_TRAINING_TUTOR_PER_DAY (ou 10 e 100).",
+    schema: trainingTutorLimitsSchema,
+    defaultValue: { perMinute: 10, perDay: 100 },
     wiring: "live",
   }),
 } as const;
@@ -329,6 +342,7 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "AI_HANDOVER_SUMMARY", label: "IA: resumo da passagem de turno", description: "5 pontos para o team leader do turno seguinte.", group: "ia" },
   { name: "AI_WHATSAPP_ASSIST", label: "IA: assistente do WhatsApp", description: "Resumo da conversa e sugestão de resposta (vai para a caixa de texto, nunca é enviada sozinha).", group: "ia" },
   { name: "AI_QUIZ", label: "IA: perguntas da formação", description: "Gera rascunhos de perguntas a partir dos manuais.", group: "ia" },
+  { name: "AI_TRAINING_TUTOR", label: "IA: tutor da formação", description: "Chat nas páginas da Formação: responde só com o conteúdo dos manuais, motiva e explica as respostas erradas do quiz.", group: "ia" },
   { name: "AI_HR_AUTOFILL", label: "IA: preenchimento a partir de documentos do RH", description: "Lê CC, título de residência, carta, IBAN e morada para preencher campos vazios da ficha. Desligado por omissão até decisão RGPD.", defaultEnabled: false, group: "ia" },
 ];
 
