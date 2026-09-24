@@ -273,6 +273,12 @@ async function handleInbound(db: Db, m: ParsedInboundMessage, empMap: Map<string
     const { handleWhatsappReply } = await import("./extrasAutomation");
     await handleWhatsappReply({ employeeId, conversationId, body: m.body });
   }
+
+  // Mensagem de um LEAD de recrutamento (novo/contactado → "Respondeu",
+  // aviso ao backoffice, link da candidatura 1×). Corre também quando o número
+  // tem ficha (ex.: ex-extra inativo que voltou a ser lead). Nunca lança.
+  const { handleLeadInbound } = await import("./extraLeadsSync");
+  await handleLeadInbound({ phoneE164, conversationId, at: ts });
   return true;
 }
 

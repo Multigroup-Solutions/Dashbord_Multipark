@@ -1,4 +1,4 @@
-import { mysqlTable, mysqlSchema, AnyMySqlColumn, bigint, int, varchar, text, timestamp, index, uniqueIndex, decimal, mysqlEnum, tinyint, boolean, date, json } from "drizzle-orm/mysql-core"
+import { mysqlTable, mysqlSchema, AnyMySqlColumn, bigint, int, varchar, text, timestamp, datetime, index, uniqueIndex, decimal, mysqlEnum, tinyint, boolean, date, json } from "drizzle-orm/mysql-core"
 import { sql } from "drizzle-orm"
 
 export const activityLogs = mysqlTable("activity_logs", {
@@ -1759,9 +1759,20 @@ export const extraLeads = mysqlTable("extra_leads", {
 	/** E.164 — chave de envio e de ligação à conversa do inbox. */
 	phoneE164: varchar({ length: 20 }),
 	email: varchar({ length: 320 }),
-	status: mysqlEnum(['new','contacted','converted','declined']).default('new').notNull(),
+	// 'replied' acrescentado no FIM do enum (migração 0084 — alteração instantânea).
+	status: mysqlEnum(['new','contacted','converted','declined','replied']).default('new').notNull(),
 	notes: varchar({ length: 512 }),
+	/** manual | site (candidatura Be a Driver) | email (recursos-humanos@). */
 	source: varchar({ length: 64 }).default('manual').notNull(),
+	/** Origem concreta: "application:123" / "email:456" (UNIQUE, migração 0084). */
+	sourceRef: varchar({ length: 64 }),
+	/** Última mensagem WhatsApp RECEBIDA deste número (migração 0084). */
+	lastInboundAt: datetime({ mode: 'string' }),
+	/** 1.º template enviado com sucesso (métrica do funil). */
+	firstContactedAt: datetime({ mode: 'string' }),
+	convertedAt: datetime({ mode: 'string' }),
+	/** Resposta automática com o link da candidatura já enviada (no máximo 1×). */
+	autoRepliedAt: datetime({ mode: 'string' }),
 	/** Nº de templates ENVIADOS com sucesso a este lead. */
 	contactCount: int().default(0).notNull(),
 	lastContactedAt: timestamp({ mode: 'string' }),
@@ -1778,7 +1789,18 @@ export const extraLeads = mysqlTable("extra_leads", {
 	index("idx_extra_leads_phone").on(table.phoneE164),
 	index("idx_extra_leads_email").on(table.email),
 	index("idx_extra_leads_project").on(table.projectId),
+	uniqueIndex("uq_extra_leads_source_ref").on(table.sourceRef),
 ]);
+
+// Candidaturas/emails já processados pela importação para leads (migração 0084):
+// um lead apagado pelo backoffice não volta a ser criado pela mesma origem.
+export const extraLeadSources = mysqlTable("extra_lead_sources", {
+	sourceRef: varchar({ length: 64 }).primaryKey(),
+	leadId: int(),
+	/** created | merged | employee | invalid */
+	outcome: varchar({ length: 16 }).notNull(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+});
 
 // ─── Tokens do formulário externo de disponibilidades (Fase 4) ──────────────
 // Single-use: cada token é assinado (JWT) com um `jti` que também vive aqui.
