@@ -3,6 +3,7 @@ import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { StatValue } from "@/components/StatValue";
 import { Card } from "@/components/ui/card";
 import {
   Euro,
@@ -42,23 +43,21 @@ function KPI({
   loading?: boolean;
 }) {
   return (
-    <Card className="p-5 hover:shadow-md transition-all">
-      <div className="flex items-start justify-between mb-3">
-        <div
-          className="h-11 w-11 rounded-xl flex items-center justify-center"
-          style={{ backgroundColor: iconBg }}
-        >
-          <Icon className="h-5 w-5" style={{ color: iconColor }} />
-        </div>
+    <Card className="p-4 sm:p-5 gap-0 min-w-0 hover:shadow-md transition-all">
+      <div
+        className="h-10 w-10 sm:h-11 sm:w-11 rounded-xl flex items-center justify-center mb-3 shrink-0"
+        style={{ backgroundColor: iconBg }}
+      >
+        <Icon className="h-5 w-5" style={{ color: iconColor }} aria-hidden />
       </div>
-      <div className="text-[13px] font-medium text-muted-foreground mb-1">{label}</div>
+      <div className="text-[13px] font-medium text-muted-foreground mb-1 truncate" title={label}>{label}</div>
       {loading ? (
         <div className="h-8 w-20 bg-muted rounded animate-pulse" />
       ) : (
-        <div className="font-display text-2xl font-bold text-[#0c1f3f] leading-none tracking-[-0.01em]">{value}</div>
+        <StatValue value={value} className="text-foreground tracking-[-0.01em]" />
       )}
       {subtitle && !loading && (
-        <div className="text-xs text-muted-foreground mt-1">{subtitle}</div>
+        <div className="text-xs text-muted-foreground mt-1 truncate tabular-nums" title={subtitle}>{subtitle}</div>
       )}
     </Card>
   );
@@ -124,7 +123,8 @@ export default function DashboardPage() {
     <div className="space-y-8">
       <OpsBriefingCard />
       {/* 10 KPI Cards - 2 rows of 5 */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+      <div className="space-y-3 sm:space-y-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
         <KPI
           icon={CalendarCheck}
           iconColor="#6366F1"
@@ -172,7 +172,7 @@ export default function DashboardPage() {
         />
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
         <KPI
           icon={Euro}
           iconColor="#6366F1"
@@ -205,7 +205,7 @@ export default function DashboardPage() {
           iconColor="#EC4899"
           iconBg="#FCE7F3"
           label="Média Google"
-          value={`${reviewStats?.avg != null ? Number(reviewStats.avg).toFixed(1) : "—"}★`}
+          value={`${reviewStats?.avg != null ? Number(reviewStats.avg).toFixed(1).replace(".", ",") : "—"} ★`}
           subtitle={`${reviewStats?.pending ?? 0} pendentes`}
           loading={revLoading}
         />
@@ -219,6 +219,7 @@ export default function DashboardPage() {
           loading={hrLoading}
         />
       </div>
+      </div>
 
       {/* Dashboards — cartões estilo v2 (barrinha azul + ícone em quadrado azul) */}
       <div>
@@ -227,7 +228,7 @@ export default function DashboardPage() {
           <h2 className="m-0 font-display text-xs font-bold tracking-[.12em] text-[#0c1f3f] uppercase">
             Dashboards
           </h2>
-          <span className="text-xs text-slate-400">· {dashboardModules.length} atalhos</span>
+          <span className="text-xs text-muted-foreground">· {dashboardModules.length} atalhos</span>
         </div>
         <div className="grid grid-cols-2 md:[grid-template-columns:repeat(auto-fill,minmax(190px,1fr))] gap-3 md:gap-3.5">
           {dashboardModules.map((mod) => (

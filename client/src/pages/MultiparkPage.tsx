@@ -7,6 +7,7 @@ import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { Button } from "@/components/ui/button";
+import { StatValue } from "@/components/StatValue";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -105,7 +106,7 @@ export default function MultiparkPage({ sectionProp }: { sectionProp?: string } 
 
   return (
     <>
-      <div className="p-4 md:p-6 space-y-6 max-w-[1400px] mx-auto">
+      <div className="space-y-6 max-w-[1400px] mx-auto">
         {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-4">
           <div>
@@ -360,13 +361,13 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
         </p>
       )}
       {/* Summary cards (valores c/ IVA) */}
-      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
-        <Card>
+      <div className="grid grid-cols-2 md:grid-cols-4 2xl:grid-cols-8 gap-3">
+        <Card className="min-w-0">
           <CardContent className="p-3">
             <p className="text-xs text-muted-foreground">Total</p>
-            <p className="text-xl font-bold">{total}</p>
+            <StatValue value={total} min={15} max={20} />
             {(actionType === "checkin" || actionType === "checkout") && stateFilter === "all" && data && (
-              <p className="text-[10px] text-muted-foreground mt-0.5">
+              <p className="text-[11px] text-muted-foreground mt-0.5">
                 <span className="text-emerald-700">{data.done} {actionType === "checkin" ? "recolhidas" : "entregues"}</span>
                 {" · "}
                 <span className="text-amber-700">{data.pending} {actionType === "checkin" ? "por recolher" : "por entregar"}</span>
@@ -374,58 +375,58 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
             )}
           </CardContent>
         </Card>
-        <Card>
+        <Card className="min-w-0">
           <CardContent className="p-3">
-            <p className="text-xs text-muted-foreground">{actionType === "creation" ? "Valor não cancelado" : actionType === "cancelation" ? "Valor cancelado" : "Receita bruta"} <span className="text-[10px]">(c/ IVA)</span></p>
-            <p className="text-xl font-bold text-green-600">{fmtEur(totals.revenue)}</p>
+            <p className="text-xs text-muted-foreground">{actionType === "creation" ? "Valor não cancelado" : actionType === "cancelation" ? "Valor cancelado" : "Receita bruta"} <span className="text-[11px]">(c/ IVA)</span></p>
+            <StatValue value={fmtEur(totals.revenue)} min={15} max={20} className="text-green-700" />
           </CardContent>
         </Card>
         {totals.partnerTotal > 0 && (
-          <Card>
+          <Card className="min-w-0">
             <CardContent className="p-3">
-              <p className="text-xs text-muted-foreground">Parceiros <span className="text-[10px]">(c/ IVA)</span></p>
-              <p className="text-xl font-bold text-orange-600">-{fmtEur(totals.partnerTotal)}</p>
+              <p className="text-xs text-muted-foreground">Parceiros <span className="text-[11px]">(c/ IVA)</span></p>
+              <StatValue value={`-${fmtEur(totals.partnerTotal)}`} min={15} max={20} className="text-orange-700" />
             </CardContent>
           </Card>
         )}
         {totals.partnerTotal > 0 && (
           <Card className="border-green-200 bg-green-50">
             <CardContent className="p-3">
-              <p className="text-xs text-muted-foreground">Receita após parceiros <span className="text-[10px]">(c/ IVA)</span></p>
-              <p className="text-xl font-bold text-green-700">{fmtEur(totals.revenue - totals.partnerTotal)}</p>
+              <p className="text-xs text-muted-foreground">Receita após parceiros <span className="text-[11px]">(c/ IVA)</span></p>
+              <StatValue value={fmtEur(totals.revenue - totals.partnerTotal)} min={15} max={20} className="text-green-700" />
             </CardContent>
           </Card>
         )}
-        <Card>
+        <Card className="min-w-0">
           <CardContent className="p-3">
             <p className="text-xs text-muted-foreground">Pago Online</p>
-            <p className="text-xl font-bold text-sky-700">{fmtEur(totals.paidOnline)}</p>
+            <StatValue value={fmtEur(totals.paidOnline)} min={15} max={20} className="text-sky-700" />
           </CardContent>
         </Card>
-        <Card>
+        <Card className="min-w-0">
           <CardContent className="p-3">
             <p className="text-xs text-muted-foreground">Pago Multibanco</p>
-            <p className="text-xl font-bold text-indigo-700">{fmtEur(totals.paidMB)}</p>
+            <StatValue value={fmtEur(totals.paidMB)} min={15} max={20} className="text-indigo-700" />
           </CardContent>
         </Card>
-        <Card>
+        <Card className="min-w-0">
           <CardContent className="p-3">
             <p className="text-xs text-muted-foreground">Pago Dinheiro</p>
-            <p className="text-xl font-bold text-emerald-700">{fmtEur(totals.paidCash)}</p>
+            <StatValue value={fmtEur(totals.paidCash)} min={15} max={20} className="text-emerald-700" />
           </CardContent>
         </Card>
-        <Card>
+        <Card className="min-w-0">
           <CardContent className="p-3">
             <p className="text-xs text-muted-foreground">Outros meios</p>
-            <p className="text-xl font-bold text-slate-700">{fmtEur(totals.paidOther)}</p>
-            <p className="text-[10px] text-muted-foreground">agregadores, agências, prós…</p>
+            <StatValue value={fmtEur(totals.paidOther)} min={15} max={20} className="text-slate-700" />
+            <p className="text-[11px] text-muted-foreground">agregadores, agências, prós…</p>
           </CardContent>
         </Card>
         <Card className="border-amber-300 bg-amber-50/60">
           <CardContent className="p-3">
             <p className="text-xs text-muted-foreground">Falta pagar</p>
-            <p className="text-xl font-bold text-amber-700">{fmtEur(totals.toCollect)}</p>
-            <p className="text-[10px] text-muted-foreground">caixa prevista do período (c/ IVA)</p>
+            <StatValue value={fmtEur(totals.toCollect)} min={15} max={20} className="text-amber-700" />
+            <p className="text-[11px] text-muted-foreground">caixa prevista do período (c/ IVA)</p>
           </CardContent>
         </Card>
       </div>
@@ -526,17 +527,17 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
                         className={`border-t cursor-pointer ${isNonValet ? "bg-red-50 hover:bg-red-100/70" : "hover:bg-muted/30"}`}
                         onClick={() => b.externalId && setDetailExternalId(b.externalId)}
                       >
-                        <td className="p-2 font-mono text-xs">{b.bookingNumber || b.externalId}</td>
+                        <td className="p-2 font-mono text-xs whitespace-nowrap">{b.bookingNumber || b.externalId}</td>
                         <td className="p-2 text-xs max-w-[140px]">
-                          <span className="truncate block">{clientName || <span className="text-muted-foreground">—</span>}</span>
+                          <span className="truncate block" title={clientName || undefined}>{clientName || <span className="text-muted-foreground">—</span>}</span>
                         </td>
-                        <td className="p-2 font-mono text-xs">{b.licensePlate || "—"}</td>
+                        <td className="p-2 font-mono text-xs whitespace-nowrap">{b.licensePlate || "—"}</td>
                         <td className="p-2">
                           <span className="font-medium">{parkName}</span>
                           {parkCity && !parkName.includes(parkCity) && <span className="text-xs text-muted-foreground ml-1">{parkCity}</span>}
                         </td>
-                        <td className="p-2 text-xs">{fmtBookingDateTime(b.checkIn)}</td>
-                        <td className="p-2 text-xs">{fmtBookingDateTime(b.checkOut)}</td>
+                        <td className="p-2 text-xs whitespace-nowrap tabular-nums">{fmtBookingDateTime(b.checkIn)}</td>
+                        <td className="p-2 text-xs whitespace-nowrap tabular-nums">{fmtBookingDateTime(b.checkOut)}</td>
                         {actionType === "cancelation" && (
                           <td className="p-2 text-xs whitespace-nowrap" title={b.approxDate ? "Sem data de cancelamento — última alteração da reserva" : undefined}>
                             {b.approxDate ? "≈ " : ""}{fmtBookingDateTime(b.cancelledAt ?? b.updatedAt)}
@@ -544,7 +545,7 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
                         )}
                         <td className="p-2 text-xs max-w-[170px]">
                           <span className="block text-[11px] font-medium">{ORIGIN_GROUP_LABELS[b.group as OriginGroup] ?? "—"}</span>
-                          <Badge variant="outline" className={`text-[10px] ${color}`} title={b.originUrl ?? undefined}>{o.label}</Badge>
+                          <Badge variant="outline" className={`text-[11px] ${color}`} title={b.originUrl ?? undefined}>{o.label}</Badge>
                         </td>
                         <td className="p-2">
                           <Badge className={statusCfg?.color || "bg-gray-100 text-gray-800"}>
@@ -553,11 +554,11 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
                         </td>
                         <td className="p-2 text-right font-medium">
                           {fmtEur(b.totalPrice)}
-                          {toPay > 0 && <span className="block text-[10px] text-amber-700">falta {fmtEur(toPay)}</span>}
+                          {toPay > 0 && <span className="block text-[11px] text-amber-700">falta {fmtEur(toPay)}</span>}
                         </td>
                         <td className="p-2 text-xs">
                           {b.parkingType || "—"}
-                          {isNonValet && <span className="ml-1 text-red-600 font-semibold">⚠ não-valet</span>}
+                          {isNonValet && <span className="ml-1 text-red-700 font-semibold">⚠ não-valet</span>}
                         </td>
                       </tr>
                     );
@@ -815,7 +816,7 @@ function SyncTab() {
                       </td>
                       <td className="p-2">
                         {log.status === "success" ? (
-                          <Badge className="bg-green-600 text-xs">OK</Badge>
+                          <Badge className="bg-green-700 text-xs">OK</Badge>
                         ) : log.status === "partial" ? (
                           <Badge className="bg-yellow-600 text-xs">Parcial</Badge>
                         ) : (

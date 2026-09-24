@@ -98,7 +98,7 @@ export function BookingHistoryView({ onBack }: { onBack: () => void }) {
             <CardTitle className="text-sm font-medium flex items-center gap-2">
               Actividade por Condutor (histórico total)
               {flaggedDrivers > 0 && (
-                <Badge className="bg-red-500 text-white text-[10px]">
+                <Badge className="bg-red-600 text-white text-[11px]">
                   <Flag className="w-3 h-3 mr-1" /> {flaggedDrivers} envolvidos em casos
                 </Badge>
               )}
@@ -128,7 +128,7 @@ export function BookingHistoryView({ onBack }: { onBack: () => void }) {
                         <div className="flex items-center gap-2">
                           <span>{d.userName}</span>
                           {d.flagged === 1 && (
-                            <Badge className="bg-red-500 text-white text-[10px]">
+                            <Badge className="bg-red-600 text-white text-[11px]">
                               <Flag className="w-3 h-3 mr-1" /> Envolvido
                             </Badge>
                           )}

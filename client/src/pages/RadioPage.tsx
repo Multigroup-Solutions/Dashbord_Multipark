@@ -17,7 +17,7 @@ import { Eye, Plus, Radio } from "lucide-react";
 // cidade (do condutor ou, sem condutor, de quem transcreveu).
 export default function RadioPage() {
   return (
-    <div className="p-6">
+    <div>
       <RadioTab />
     </div>
   );
@@ -60,7 +60,7 @@ function RadioTab() {
                 <div className="flex flex-wrap items-center gap-2">
                   <Radio className="w-4 h-4 text-primary" />
                   <span className="text-sm text-muted-foreground">{fmtPTDateTime(t.createdAt)}</span>
-                  {t.employeeId && <Badge variant="outline">{empMap.get(t.employeeId) || `#${t.employeeId}`}</Badge>}
+                  {t.employeeId && <Badge variant="outline" className="whitespace-normal break-words text-left">{empMap.get(t.employeeId) || `#${t.employeeId}`}</Badge>}
                   {t.vehicleId && <Badge variant="secondary">{vehMap.get(t.vehicleId) || `#${t.vehicleId}`}</Badge>}
                   {t.duration && <span className="text-xs text-muted-foreground">{Math.floor(t.duration / 60)}:{String(t.duration % 60).padStart(2, "0")}</span>}
                 </div>

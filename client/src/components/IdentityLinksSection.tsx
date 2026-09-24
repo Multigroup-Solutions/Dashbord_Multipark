@@ -76,11 +76,11 @@ export function IdentityLinksSection() {
       <Card>
         <CardContent className="p-4 flex flex-wrap items-center justify-between gap-4">
           <div className="flex flex-wrap gap-6 text-sm">
-            <div><div className="text-xs text-muted-foreground">Fichas ativas</div><div className="text-xl font-semibold">{d.counts.employeesActive}</div></div>
+            <div><div className="text-xs text-muted-foreground">Fichas ativas</div><div className="text-xl font-semibold tabular-nums">{d.counts.employeesActive}</div></div>
             <div><div className="text-xs text-muted-foreground">Com utilizador</div><div className="text-xl font-semibold">{pct(d.counts.withUser, d.counts.employeesActive)}</div></div>
             <div><div className="text-xs text-muted-foreground">Com agente Multipark</div><div className="text-xl font-semibold">{pct(d.counts.withAgent, d.counts.employeesActive)}</div></div>
           </div>
-          <div className="flex flex-col items-end gap-1">
+          <div className="flex flex-col items-start sm:items-end gap-1">
             <Button onClick={() => reconcile.mutate()} disabled={reconcile.isPending}>
               <RefreshCw className={`h-4 w-4 mr-2 ${reconcile.isPending ? "animate-spin" : ""}`} /> Reconciliar agora
             </Button>
@@ -94,8 +94,8 @@ export function IdentityLinksSection() {
           <tbody>
             {d.employeesWithoutUser.map((e) => (
               <tr key={e.employeeId} className="border-b last:border-0">
-                <td className="py-1.5">{e.fullName}</td>
-                <td className="py-1.5 text-muted-foreground text-xs">{e.email}</td>
+                <td className="py-1.5 pr-2 [overflow-wrap:anywhere]">{e.fullName}</td>
+                <td className="py-1.5 pr-2 text-muted-foreground text-xs [overflow-wrap:anywhere]">{e.email}</td>
                 <td className="py-1.5 text-right">
                   <Button size="sm" variant="outline" disabled={busy} onClick={() => createUser.mutate({ employeeId: e.employeeId })}>
                     <UserPlus className="h-3.5 w-3.5 mr-1" /> {e.existingUserId ? `Ligar ao utilizador #${e.existingUserId}` : "Criar utilizador"}
@@ -118,7 +118,7 @@ export function IdentityLinksSection() {
           <tbody>
             {d.agentsToAttach.map((a) => (
               <tr key={a.agentUserId} className="border-b last:border-0">
-                <td className="py-1.5">{a.agentName} <span className="text-xs text-muted-foreground">· {a.actions} ações · último {dm(a.lastAction)}</span></td>
+                <td className="py-1.5 pr-2 [overflow-wrap:anywhere]">{a.agentName} <span className="text-xs text-muted-foreground">· {a.actions} ações · último {dm(a.lastAction)}</span></td>
                 <td className="py-1.5 text-right space-x-1">
                   {a.suggestions.map((s) => (
                     <Button key={s.employeeId} size="sm" variant="outline" disabled={busy} onClick={() => linkAgent.mutate({ employeeId: s.employeeId, agentUserId: a.agentUserId })}>
@@ -137,11 +137,11 @@ export function IdentityLinksSection() {
           <tbody>
             {d.agentsUnmatched.map((a) => (
               <tr key={a.agentUserId} className="border-b last:border-0">
-                <td className="py-1.5">
+                <td className="py-1.5 pr-2 [overflow-wrap:anywhere]">
                   {a.agentName}
                   <div className="text-xs text-muted-foreground">{a.email ?? "sem email"} · {a.actions} ações · último {dm(a.lastAction)}</div>
                 </td>
-                <td className="py-1.5">
+                <td className="py-1.5 pr-2 [overflow-wrap:anywhere]">
                   <PickEmployee options={empOptions} busy={busy} label="Ligar" onPick={(employeeId) => linkAgent.mutate({ employeeId, agentUserId: a.agentUserId })} />
                 </td>
               </tr>
@@ -156,8 +156,8 @@ export function IdentityLinksSection() {
             <tbody>
               {d.usersWithoutEmployee.map((u) => (
                 <tr key={u.userId} className="border-b last:border-0">
-                  <td className="py-1.5">{u.name ?? "—"} <span className="text-xs text-muted-foreground">· {u.email ?? "sem email"} · {u.role}</span></td>
-                  <td className="py-1.5">
+                  <td className="py-1.5 pr-2 [overflow-wrap:anywhere]">{u.name ?? "—"} <span className="text-xs text-muted-foreground">· {u.email ?? "sem email"} · {u.role}</span></td>
+                  <td className="py-1.5 pr-2 [overflow-wrap:anywhere]">
                     <PickEmployee options={empOptions} busy={busy} label="Ligar" onPick={(employeeId) => linkUser.mutate({ employeeId, userId: u.userId })} />
                   </td>
                 </tr>
@@ -178,15 +178,15 @@ export function IdentityLinksSection() {
               <tbody>
                 {d.aliases.accounts.map((a) => (
                   <tr key={`u${a.userId}`} className="border-b last:border-0">
-                    <td className="py-1.5">{a.fullName}</td>
-                    <td className="py-1.5 text-muted-foreground text-xs">login extra · {a.email ?? `#${a.userId}`}</td>
+                    <td className="py-1.5 pr-2 [overflow-wrap:anywhere]">{a.fullName}</td>
+                    <td className="py-1.5 pr-2 text-muted-foreground text-xs [overflow-wrap:anywhere]">login extra · {a.email ?? `#${a.userId}`}</td>
                     <td className="py-1.5 text-right"><Button size="sm" variant="ghost" disabled={unAccount.isPending} onClick={() => unAccount.mutate({ userId: a.userId })}>Separar</Button></td>
                   </tr>
                 ))}
                 {d.aliases.agents.map((a) => (
                   <tr key={`a${a.agentUserId}`} className="border-b last:border-0">
-                    <td className="py-1.5">{a.fullName}</td>
-                    <td className="py-1.5 text-muted-foreground text-xs">agente extra · {a.agentName ?? a.agentUserId}</td>
+                    <td className="py-1.5 pr-2 [overflow-wrap:anywhere]">{a.fullName}</td>
+                    <td className="py-1.5 pr-2 text-muted-foreground text-xs [overflow-wrap:anywhere]">agente extra · {a.agentName ?? a.agentUserId}</td>
                     <td className="py-1.5 text-right"><Button size="sm" variant="ghost" disabled={unAgent.isPending} onClick={() => unAgent.mutate({ agentUserId: a.agentUserId })}>Separar</Button></td>
                   </tr>
                 ))}
@@ -205,7 +205,7 @@ export function IdentityLinksSection() {
           <CardContent>
             <ul className="text-sm space-y-1">
               {d.conflicts.map((c, i) => (
-                <li key={i}><span className="font-medium">{c.kind}:</span> <span className="text-muted-foreground">{c.text}</span></li>
+                <li key={i} className="[overflow-wrap:anywhere]"><span className="font-medium">{c.kind}:</span> <span className="text-muted-foreground">{c.text}</span></li>
               ))}
             </ul>
           </CardContent>

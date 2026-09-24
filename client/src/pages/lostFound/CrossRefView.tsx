@@ -158,7 +158,7 @@ export function CrossRefView({ onBack }: { onBack: () => void }) {
                       <td className="p-2 text-xs text-muted-foreground">{i + 1}</td>
                       <td className="p-2 font-medium">
                         {r.name}
-                        {!r.employeeId && <Badge variant="outline" className="ml-2 text-[10px]">só nome Multipark</Badge>}
+                        {!r.employeeId && <Badge variant="outline" className="ml-2 text-[11px]">só nome Multipark</Badge>}
                       </td>
                       <td className="p-2 text-right"><Badge variant={r.caseCount >= 2 ? "destructive" : "outline"}>{r.caseCount}</Badge></td>
                       <td className="p-2 text-right text-xs text-muted-foreground">{r.attachedCases} / {r.movementCases}</td>
@@ -193,8 +193,8 @@ export function CrossRefView({ onBack }: { onBack: () => void }) {
                         <span className="truncate max-w-[320px]">{c.description}</span>
                         {c.plate && <span className="font-mono text-xs">{c.plate}</span>}
                         <span className="text-xs text-muted-foreground">{fmtPTDate(c.createdAt)}</span>
-                        {c.attached && <Badge variant="outline" className="text-[10px]">anexado</Badge>}
-                        {c.movements > 0 && <Badge variant="outline" className="text-[10px]">{c.movements} ações na reserva</Badge>}
+                        {c.attached && <Badge variant="outline" className="text-[11px]">anexado</Badge>}
+                        {c.movements > 0 && <Badge variant="outline" className="text-[11px]">{c.movements} ações na reserva</Badge>}
                       </a>
                     ))}
                   </div>

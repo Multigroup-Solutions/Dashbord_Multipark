@@ -294,8 +294,8 @@ function HandoverForm({ cityState, isSupervisor, userId }: { cityState: CityStat
 
   const YesNo = ({ value, onChange, label }: { value: boolean | null; onChange: (v: boolean) => void; label: string }) => (
     <div className="flex items-center justify-between gap-2 border rounded-lg p-2.5">
-      <span className="text-sm">{label}</span>
-      <div className="flex gap-1">
+      <span className="text-sm min-w-0">{label}</span>
+      <div className="flex gap-1 shrink-0" role="group" aria-label={label}>
         <Button type="button" size="sm" variant={value === true ? "default" : "outline"} className="h-7 px-2.5" onClick={() => onChange(true)}>Sim</Button>
         <Button type="button" size="sm" variant={value === false ? "destructive" : "outline"} className="h-7 px-2.5" onClick={() => onChange(false)}>Não</Button>
       </div>
@@ -326,12 +326,12 @@ function HandoverForm({ cityState, isSupervisor, userId }: { cityState: CityStat
           </div>
           {loading && <Badge variant="outline" className="mb-1 gap-1"><Loader2 className="w-3 h-3 animate-spin" />A carregar…</Badge>}
           {!loading && loaded && (
-            <Badge variant="outline" className="mb-1">
+            <Badge variant="outline" className="mb-1 whitespace-normal break-words text-left">
               criada por {loaded.createdByName ?? loaded.filledByName ?? "?"}
               {loaded.filledByName && loaded.filledByName !== (loaded.createdByName ?? loaded.filledByName) ? ` · última edição: ${loaded.filledByName}` : ""} — a editar
             </Badge>
           )}
-          {!loading && loaded?.ackAt && <Badge variant="outline" className="mb-1 border-emerald-300 text-emerald-700">Recebida por {loaded.ackByName ?? "?"}</Badge>}
+          {!loading && loaded?.ackAt && <Badge variant="outline" className="mb-1 whitespace-normal break-words text-left border-emerald-300 text-emerald-700">Recebida por {loaded.ackByName ?? "?"}</Badge>}
           {!loading && <Button type="button" size="sm" variant="ghost" className="mb-0.5" onClick={reload} title="Recarregar o registo guardado"><RefreshCw className="w-3.5 h-3.5" /></Button>}
         </div>
         {dateTooLate && <p className="text-xs text-red-600 mt-2">Não é possível registar passagens de turno para depois de amanhã.</p>}
@@ -661,7 +661,7 @@ function SupervisorDashboard({ cityState }: { cityState: CityState }) {
             <Card className="p-3">
               <p className="text-xs text-muted-foreground flex items-center gap-1"><Clock className="w-3 h-3" />Pendente→Entrega</p>
               <p className="text-xl font-bold">{data.delivery.avgMins} min</p>
-              <p className="text-[10px] text-muted-foreground">máx {data.delivery.maxMins} · {data.delivery.count} medidas</p>
+              <p className="text-[11px] text-muted-foreground">máx {data.delivery.maxMins} · {data.delivery.count} medidas</p>
             </Card>
             <Card className={`p-3 ${data.delivery.over30 > 0 ? "border-red-300 bg-red-50/50" : ""}`}>
               <p className="text-xs text-muted-foreground">Entregas &gt;15/&gt;30 min</p>
@@ -670,7 +670,7 @@ function SupervisorDashboard({ cityState }: { cityState: CityState }) {
             <Card className="p-3">
               <p className="text-xs text-muted-foreground">Recolhas atrasadas &gt;15min</p>
               <p className="text-xl font-bold text-amber-700">{data.pickup.over15}</p>
-              <p className="text-[10px] text-muted-foreground">desvio médio {data.pickup.avgDelayMins} min</p>
+              <p className="text-[11px] text-muted-foreground">desvio médio {data.pickup.avgDelayMins} min</p>
             </Card>
             <Card className={`p-3 ${data.complaintsToday > 0 ? "border-amber-300 bg-amber-50/50" : ""}`}>
               <p className="text-xs text-muted-foreground flex items-center gap-1"><AlertTriangle className="w-3 h-3" />Reclamações do dia</p>

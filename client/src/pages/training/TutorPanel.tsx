@@ -88,8 +88,8 @@ export function TutorPanel({ context, defaultOpen = true, title }: { context: Tu
     <Card className="border-primary/30">
       <CardHeader className="py-3 cursor-pointer select-none" onClick={() => setOpen((v) => !v)}>
         <CardTitle className="text-base flex items-center justify-between gap-2">
-          <span className="flex items-center gap-2"><GraduationCap className="w-5 h-5 text-primary" />{title ?? "Tutor da formação"}</span>
-          <span className="flex items-center gap-2">
+          <span className="flex items-center gap-2 min-w-0"><GraduationCap className="w-5 h-5 shrink-0 text-primary" /><span className="truncate">{title ?? "Tutor da formação"}</span></span>
+          <span className="flex items-center gap-2 shrink-0">
             {o && o.streak >= 2 && <Badge className="bg-orange-100 text-orange-800"><Flame className="w-3 h-3 mr-1" />{o.streak} dias</Badge>}
             {open ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
           </span>
@@ -109,7 +109,7 @@ export function TutorPanel({ context, defaultOpen = true, title }: { context: Tu
               )}
               {o.tips.length > 0 && (
                 <ul className="space-y-1">
-                  {o.tips.map((t, i) => <li key={i} className="flex gap-2 text-xs"><Lightbulb className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />{t}</li>)}
+                  {o.tips.map((t, i) => <li key={i} className="flex gap-2 text-xs"><Lightbulb className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />{t}</li>)}
                 </ul>
               )}
             </div>
@@ -119,14 +119,14 @@ export function TutorPanel({ context, defaultOpen = true, title }: { context: Tu
             <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
               {messages.map((m, i) => (
                 <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                  <div className={`rounded-lg px-3 py-2 text-sm max-w-[90%] whitespace-pre-wrap ${m.role === "user" ? "bg-primary text-primary-foreground" : m.outOfContent ? "bg-amber-50 border border-amber-200" : "bg-muted"}`}>
+                  <div className={`rounded-lg px-3 py-2 text-sm max-w-[90%] whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${m.role === "user" ? "bg-primary text-primary-foreground" : m.outOfContent ? "bg-amber-50 border border-amber-200" : "bg-muted"}`}>
                     {m.content}
                     {m.role === "assistant" && (
                       <div className="mt-1 flex flex-wrap items-center gap-1">
                         {(m.sources ?? []).slice(0, 3).map((s, j) => (
-                          <Badge key={j} variant="outline" className="text-[10px] font-normal"><BookOpen className="w-3 h-3 mr-1" />{s.heading && s.heading !== s.manualTitle ? `${s.manualTitle} · ${s.heading}` : s.manualTitle}</Badge>
+                          <Badge key={j} variant="outline" className="text-[11px] font-normal whitespace-normal text-left max-w-full"><BookOpen className="w-3 h-3 mr-1 shrink-0" />{s.heading && s.heading !== s.manualTitle ? `${s.manualTitle} · ${s.heading}` : s.manualTitle}</Badge>
                         ))}
-                        <Button size="sm" variant="ghost" className="h-6 px-1.5 text-xs" title="Ouvir" onClick={() => speak(m.content)}><Volume2 className="w-3.5 h-3.5" /></Button>
+                        <Button size="sm" variant="ghost" className="h-6 px-1.5 text-xs" title="Ouvir" aria-label="Ouvir resposta" onClick={() => speak(m.content)}><Volume2 className="w-3.5 h-3.5" /></Button>
                         {m === lastAssistant && m.question && !m.outOfContent && available && (
                           <Button size="sm" variant="ghost" className="h-6 px-1.5 text-xs" disabled={ask.isPending} onClick={() => send(m.question!, true)}>
                             <Sparkles className="w-3.5 h-3.5 mr-1" />Explicar melhor

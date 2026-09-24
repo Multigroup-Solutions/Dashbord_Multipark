@@ -55,6 +55,14 @@ const CONTRACT_LABELS: Record<ContractType, string> = {
 const PIE_COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899", "#14b8a6"];
 const DONUT_COLORS = ["#3b82f6", "#f97316", "#a855f7"];
 
+// Legenda legível: texto na cor do texto (não na cor da fatia) e com o valor —
+// substitui as etiquetas à volta da tarte, que eram cortadas em ecrãs estreitos.
+const legendLabel = (value: string, entry: any) => (
+  <span className="text-foreground">
+    {value}: <span className="font-semibold tabular-nums">{entry?.payload?.value}</span>
+  </span>
+);
+
 function getWeekNumber(d: Date): number {
   const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
   const dayNum = date.getUTCDay() || 7;
@@ -82,14 +90,14 @@ function KpiCard({
 }) {
   return (
     <Card className="relative overflow-hidden">
-      <CardContent className="pt-6">
-        <div className="flex items-start justify-between">
-          <div className="space-y-1">
-            <p className="text-sm text-muted-foreground font-medium">{title}</p>
-            <p className="text-2xl font-bold text-foreground">{value}</p>
+      <CardContent className="p-4 sm:p-6">
+        <div className="flex items-start justify-between gap-2">
+          <div className="space-y-1 min-w-0">
+            <p className="text-xs sm:text-sm text-muted-foreground font-medium break-words">{title}</p>
+            <p className="text-2xl font-bold text-foreground tabular-nums truncate" title={String(value)}>{value}</p>
             {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
           </div>
-          <div className={`h-10 w-10 rounded-xl flex items-center justify-center ${iconBg}`}>
+          <div className={`h-8 w-8 sm:h-10 sm:w-10 shrink-0 rounded-xl flex items-center justify-center ${iconBg}`}>
             <Icon className={`h-5 w-5 ${iconColor}`} />
           </div>
         </div>
@@ -238,7 +246,7 @@ export default function PessoasDashboard() {
       <div>
         <h1 className="text-2xl font-bold">Dashboard Pessoas</h1>
         <p className="text-muted-foreground">
-          Visao geral de RH, desempenho e formacao
+          Visão geral de RH, desempenho e formação
         </p>
       </div>
 
@@ -256,7 +264,7 @@ export default function PessoasDashboard() {
       {/* KPI Row */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         <KpiCard
-          title="Funcionarios Ativos"
+          title="Funcionários Ativos"
           value={stats?.totalActive ?? 0}
           subtitle={`${stats?.totalPermanent ?? 0} permanentes`}
           icon={Users}
@@ -266,7 +274,7 @@ export default function PessoasDashboard() {
         <KpiCard
           title="Contratos a Expirar"
           value={contractsExpiring30d}
-          subtitle="Proximos 30 dias"
+          subtitle="Próximos 30 dias"
           icon={CalendarClock}
           iconColor="text-amber-600"
           iconBg="bg-amber-100"
@@ -280,7 +288,7 @@ export default function PessoasDashboard() {
           iconBg="bg-red-100"
         />
         <KpiCard
-          title="Avaliacoes esta Semana"
+          title="Avaliações esta Semana"
           value={evaluationsThisWeek}
           subtitle={`Semana ${currentWeek}/${currentYear}`}
           icon={ClipboardCheck}
@@ -288,7 +296,7 @@ export default function PessoasDashboard() {
           iconBg="bg-green-100"
         />
         <KpiCard
-          title="Taxa Aprovacao Exames"
+          title="Taxa Aprovação Exames"
           value={examApprovalRate !== null ? `${examApprovalRate}%` : "—"}
           subtitle={`${examAttempts.length} tentativas`}
           icon={GraduationCap}
@@ -302,28 +310,27 @@ export default function PessoasDashboard() {
         {/* Distribuicao por Posicao (Pie) */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Distribuicao por Posicao</CardTitle>
+            <CardTitle className="text-base">Distribuição por Posição</CardTitle>
           </CardHeader>
           <CardContent>
             {positionDistribution.length === 0 ? (
               <p className="text-center text-muted-foreground py-8">Sem dados</p>
             ) : (
-              <ResponsiveContainer width="100%" height={280}>
+              <ResponsiveContainer width="100%" height={300}>
                 <PieChart>
                   <Pie
                     data={positionDistribution}
                     cx="50%"
                     cy="50%"
-                    outerRadius={100}
+                    outerRadius="80%"
                     dataKey="value"
-                    label={({ name, value }) => `${name}: ${value}`}
                   >
                     {positionDistribution.map((_, i) => (
                       <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                     ))}
                   </Pie>
                   <Tooltip />
-                  <Legend />
+                  <Legend formatter={legendLabel} wrapperStyle={{ fontSize: 12 }} />
                 </PieChart>
               </ResponsiveContainer>
             )}
@@ -333,29 +340,28 @@ export default function PessoasDashboard() {
         {/* Distribuicao por Contrato (Donut) */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Distribuicao por Tipo de Contrato</CardTitle>
+            <CardTitle className="text-base">Distribuição por Tipo de Contrato</CardTitle>
           </CardHeader>
           <CardContent>
             {contractDistribution.length === 0 ? (
               <p className="text-center text-muted-foreground py-8">Sem dados</p>
             ) : (
-              <ResponsiveContainer width="100%" height={280}>
+              <ResponsiveContainer width="100%" height={300}>
                 <PieChart>
                   <Pie
                     data={contractDistribution}
                     cx="50%"
                     cy="50%"
-                    innerRadius={60}
-                    outerRadius={100}
+                    innerRadius="50%"
+                    outerRadius="80%"
                     dataKey="value"
-                    label={({ name, value }) => `${name}: ${value}`}
                   >
                     {contractDistribution.map((_, i) => (
                       <Cell key={i} fill={DONUT_COLORS[i % DONUT_COLORS.length]} />
                     ))}
                   </Pie>
                   <Tooltip />
-                  <Legend />
+                  <Legend formatter={legendLabel} wrapperStyle={{ fontSize: 12 }} />
                 </PieChart>
               </ResponsiveContainer>
             )}
@@ -376,7 +382,7 @@ export default function PessoasDashboard() {
           <CardContent>
             {top5Performance.length === 0 ? (
               <p className="text-center text-muted-foreground py-8">
-                Sem avaliacoes esta semana
+                Sem avaliações esta semana
               </p>
             ) : (
               <ResponsiveContainer width="100%" height={220}>
@@ -388,7 +394,7 @@ export default function PessoasDashboard() {
                   <CartesianGrid strokeDasharray="3 3" horizontal={false} />
                   <XAxis type="number" />
                   <YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 12 }} />
-                  <Tooltip formatter={(value: number) => [`${value} pts`, "Pontuacao"]} />
+                  <Tooltip formatter={(value: number) => [`${value} pts`, "Pontuação"]} />
                   <Bar dataKey="totalPoints" fill="#6366f1" radius={[0, 4, 4, 0]} />
                 </BarChart>
               </ResponsiveContainer>
@@ -414,15 +420,15 @@ export default function PessoasDashboard() {
                 {top5Quiz.map((r, i) => (
                   <div
                     key={r.employeeId}
-                    className="flex items-center justify-between p-3 rounded-lg bg-accent/30"
+                    className="flex items-center justify-between gap-2 p-3 rounded-lg bg-accent/30"
                   >
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
                       <span
-                        className={`font-bold text-lg w-8 ${
+                        className={`font-bold text-lg w-8 shrink-0 ${
                           i === 0
-                            ? "text-amber-500"
+                            ? "text-amber-600"
                             : i === 1
-                            ? "text-gray-400"
+                            ? "text-gray-500"
                             : i === 2
                             ? "text-amber-700"
                             : "text-muted-foreground"
@@ -430,14 +436,14 @@ export default function PessoasDashboard() {
                       >
                         #{i + 1}
                       </span>
-                      <div>
-                        <p className="font-medium text-sm">{r.name}</p>
+                      <div className="min-w-0">
+                        <p className="font-medium text-sm truncate" title={r.name}>{r.name}</p>
                         <p className="text-xs text-muted-foreground">
                           {r.totalAttempts} jogos · melhor: {r.bestScore} pts
                         </p>
                       </div>
                     </div>
-                    <Badge variant="secondary" className="text-sm">
+                    <Badge variant="secondary" className="text-sm shrink-0 tabular-nums">
                       {r.totalScore} pts
                     </Badge>
                   </div>

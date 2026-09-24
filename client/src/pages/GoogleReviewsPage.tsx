@@ -50,7 +50,7 @@ const SENTIMENT: Record<string, { label: string; cls: string }> = {
 function SentimentBadge({ value }: { value: string }) {
   const s = SENTIMENT[value];
   if (!s) return null;
-  return <Badge className={`${s.cls} text-[10px]`} title="Sentimento (IA)">{s.label}</Badge>;
+  return <Badge className={`${s.cls} text-[11px]`} title="Sentimento (IA)">{s.label}</Badge>;
 }
 
 function Stars({ rating, size = "w-4 h-4" }: { rating: number; size?: string }) {
@@ -88,11 +88,11 @@ export default function GoogleReviewsPage() {
     <>
       <div className="space-y-6">
         <GoogleBusinessConnection />
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
           <div>
             <p className="text-muted-foreground">Gestão de avaliações e respostas automáticas</p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <Button variant="outline" onClick={() => syncGmail.mutate()} disabled={syncGmail.isPending}>
               {syncGmail.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Mail className="w-4 h-4 mr-2" />}
               {syncGmail.isPending ? "A sincronizar..." : "Sincronizar Gmail"}
@@ -102,7 +102,7 @@ export default function GoogleReviewsPage() {
         </div>
 
         <Tabs value={tab} onValueChange={setTab}>
-          <TabsList>
+          <TabsList className="max-w-full justify-start overflow-x-auto">
             <TabsTrigger value="dashboard"><BarChart3 className="w-4 h-4 mr-1" /> Dashboard</TabsTrigger>
             <TabsTrigger value="list"><MessageSquare className="w-4 h-4 mr-1" /> Reviews</TabsTrigger>
             <TabsTrigger value="drivers"><Car className="w-4 h-4 mr-1" /> Condutores</TabsTrigger>
@@ -186,30 +186,30 @@ function ReviewsDashboard() {
   return (
     <div className="space-y-6">
       {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <Card className="p-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
+        <Card className="p-4 gap-1 min-w-0">
           <div className="flex items-center gap-2 text-muted-foreground text-sm"><Star className="w-4 h-4" /> Média</div>
-          <p className="text-3xl font-bold mt-1">{stats.avg}<span className="text-lg text-muted-foreground">/5</span></p>
+          <p className="text-3xl font-bold mt-1 tabular-nums truncate">{stats.avg}<span className="text-lg text-muted-foreground">/5</span></p>
           <Stars rating={Math.round(stats.avg)} />
         </Card>
-        <Card className="p-4">
+        <Card className="p-4 gap-1 min-w-0">
           <div className="flex items-center gap-2 text-muted-foreground text-sm"><MessageSquare className="w-4 h-4" /> Total</div>
-          <p className="text-3xl font-bold mt-1">{stats.total}</p>
+          <p className="text-3xl font-bold mt-1 tabular-nums truncate" title={String(stats.total)}>{stats.total}</p>
           <p className="text-xs text-muted-foreground">avaliações{(stats as any).unrated ? ` · ${(stats as any).unrated} sem estrelas` : ""}</p>
         </Card>
-        <Card className="p-4">
+        <Card className="p-4 gap-1 min-w-0">
           <div className="flex items-center gap-2 text-muted-foreground text-sm"><CheckCircle2 className="w-4 h-4" /> Respondidas</div>
-          <p className="text-3xl font-bold mt-1 text-green-600">{stats.responded}</p>
+          <p className="text-3xl font-bold mt-1 tabular-nums truncate text-green-700" title={String(stats.responded)}>{stats.responded}</p>
           <p className="text-xs text-muted-foreground">resposta enviada</p>
         </Card>
-        <Card className="p-4">
+        <Card className="p-4 gap-1 min-w-0">
           <div className="flex items-center gap-2 text-muted-foreground text-sm"><Clock className="w-4 h-4" /> Por responder</div>
-          <p className="text-3xl font-bold mt-1 text-yellow-600">{stats.pending}</p>
+          <p className="text-3xl font-bold mt-1 tabular-nums truncate text-yellow-700" title={String(stats.pending)}>{stats.pending}</p>
           <p className="text-xs text-muted-foreground">inclui rascunhos IA por enviar</p>
         </Card>
-        <Card className="p-4">
+        <Card className="p-4 gap-1 min-w-0">
           <div className="flex items-center gap-2 text-muted-foreground text-sm"><AlertTriangle className="w-4 h-4" /> Reclamações</div>
-          <p className="text-3xl font-bold mt-1 text-red-600">{stats.complaints}</p>
+          <p className="text-3xl font-bold mt-1 tabular-nums truncate text-red-600" title={String(stats.complaints)}>{stats.complaints}</p>
           <p className="text-xs text-muted-foreground">convertidas</p>
         </Card>
       </div>
@@ -233,7 +233,7 @@ function ReviewsDashboard() {
                   style={{ width: `${(d.count / maxCount) * 100}%` }}
                 />
               </div>
-              <span className="text-sm font-medium w-10 text-right">{d.count}</span>
+              <span className="text-sm font-medium min-w-10 text-right tabular-nums">{d.count}</span>
             </div>
           ))}
         </CardContent>
@@ -246,7 +246,7 @@ function ReviewsDashboard() {
             <ThumbsUp className="w-5 h-5 text-green-500" />
             <span className="font-medium">Positivas (4-5★)</span>
           </div>
-          <p className="text-2xl font-bold">{stats.star4 + stats.star5}</p>
+          <p className="text-2xl font-bold tabular-nums">{stats.star4 + stats.star5}</p>
           <p className="text-xs text-muted-foreground">{stats.total > 0 ? Math.round(((stats.star4 + stats.star5) / stats.total) * 100) : 0}% do total</p>
         </Card>
         <Card className="p-4">
@@ -254,7 +254,7 @@ function ReviewsDashboard() {
             <ThumbsDown className="w-5 h-5 text-red-500" />
             <span className="font-medium">Negativas (1-3★)</span>
           </div>
-          <p className="text-2xl font-bold">{stats.star1 + stats.star2 + stats.star3}</p>
+          <p className="text-2xl font-bold tabular-nums">{stats.star1 + stats.star2 + stats.star3}</p>
           <p className="text-xs text-muted-foreground">{stats.total > 0 ? Math.round(((stats.star1 + stats.star2 + stats.star3) / stats.total) * 100) : 0}% do total</p>
         </Card>
       </div>
@@ -294,12 +294,12 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
         <div className="flex items-center gap-2 flex-wrap">
           <Button size="sm" variant={park === "all" ? "default" : "outline"} onClick={() => setPark("all")}>
             Todas <span className="ml-1 opacity-80">{reviews.length}</span>
-            {totalPending > 0 && <Badge className="ml-2 bg-yellow-100 text-yellow-800 text-[10px]">{totalPending} por responder</Badge>}
+            {totalPending > 0 && <Badge className="ml-2 bg-yellow-100 text-yellow-800 text-[11px]">{totalPending} por responder</Badge>}
           </Button>
           {groups.map(g => (
             <Button key={g.key} size="sm" variant={park === g.key ? "default" : "outline"} onClick={() => setPark(park === g.key ? "all" : g.key)}>
               {g.name} <span className="ml-1 opacity-80">{g.total}</span>
-              {g.pending > 0 && <Badge className="ml-2 bg-yellow-100 text-yellow-800 text-[10px]">{g.pending}</Badge>}
+              {g.pending > 0 && <Badge className="ml-2 bg-yellow-100 text-yellow-800 text-[11px]">{g.pending}</Badge>}
             </Button>
           ))}
         </div>
@@ -397,8 +397,8 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
                           <span className="font-medium">{r.reviewerName}</span>
                           <Stars rating={r.rating} size="w-3.5 h-3.5" />
                           <Badge className={STATUS_LABELS[r.status]?.color || ""}>{STATUS_LABELS[r.status]?.label}</Badge>
-                          {r.googleReply && <Badge className="bg-green-100 text-green-700 text-[10px]">no Google</Badge>}
-                          {!r.googleReply && r.aiResponse && !r.aiResponseApproved && <Badge className="bg-amber-100 text-amber-800 text-[10px]">rascunho por aprovar</Badge>}
+                          {r.googleReply && <Badge className="bg-green-100 text-green-700 text-[11px]">no Google</Badge>}
+                          {!r.googleReply && r.aiResponse && !r.aiResponseApproved && <Badge className="bg-amber-100 text-amber-800 text-[11px]">rascunho por aprovar</Badge>}
                           {(r as any).aiSentiment && <SentimentBadge value={(r as any).aiSentiment} />}
                           {r.complaintId && (
                             <Badge variant="outline" className="text-red-600 border-red-200">
@@ -688,8 +688,8 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
             <CardHeader>
               <CardTitle className="text-sm flex items-center gap-2">
                 <Bot className="w-4 h-4 text-blue-500" /> Resposta
-                {review.aiResponseApproved ? <Badge className="bg-green-100 text-green-700 text-[10px]">Aprovada</Badge>
-                  : review.aiResponse && !review.googleReply ? <Badge className="bg-amber-100 text-amber-800 text-[10px]">Rascunho IA — por aprovar</Badge> : null}
+                {review.aiResponseApproved ? <Badge className="bg-green-100 text-green-700 text-[11px]">Aprovada</Badge>
+                  : review.aiResponse && !review.googleReply ? <Badge className="bg-amber-100 text-amber-800 text-[11px]">Rascunho IA — por aprovar</Badge> : null}
                 {(review as any).aiSentiment && <SentimentBadge value={(review as any).aiSentiment} />}
                 {!review.googleReviewName && (
                   <span className="text-xs font-normal text-muted-foreground ml-auto flex items-center gap-1" title="Esta crítica veio por email e não está ligada ao Google. Para publicar a resposta, usa o perfil Google, ou espera que a importação pela API a associe.">
@@ -782,7 +782,7 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
                       <div key={c.id} className="text-sm p-2 bg-muted rounded mb-1 flex items-center gap-2">
                         <AlertTriangle className="w-3 h-3 text-orange-500" />
                         <span>{c.title}</span>
-                        <Badge variant="outline" className="text-[10px] ml-auto">{c.complaintStatus}</Badge>
+                        <Badge variant="outline" className="text-[11px] ml-auto">{c.complaintStatus}</Badge>
                       </div>
                     ))}
                   </div>

@@ -484,7 +484,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
             }}
             className="scale-75"
           />
-          <span className={`text-xs ${u.isActive ? "text-green-600" : "text-red-500"}`}>{u.isActive ? "Ativo" : "Inativo"}</span>
+          <span className={`text-xs font-medium ${u.isActive ? "text-green-700" : "text-red-700"}`}>{u.isActive ? "Ativo" : "Inativo"}</span>
         </div>
       ) : (
         <Badge variant={u.isActive ? "default" : "destructive"} className="text-xs">
@@ -547,13 +547,13 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
 
   const nameCell = (u: Row) => (
     <>
-      <div className="flex items-center gap-1.5">
-        {u.name ?? "Sem nome"}
+      <div className="flex items-center gap-1.5 min-w-0">
+        <span className="line-clamp-2 break-words" title={u.name ?? undefined}>{u.name ?? "Sem nome"}</span>
         {u.id === currentUser?.id && (
-          <Badge variant="outline" className="text-[10px] px-1.5 py-0">Tu</Badge>
+          <Badge variant="outline" className="text-[11px] px-1.5 py-0 shrink-0">Tu</Badge>
         )}
       </div>
-      {u.loginMethod === "manual" && <span className="text-[10px] text-muted-foreground">Criado manualmente</span>}
+      {u.loginMethod === "manual" && <span className="text-[11px] text-muted-foreground">Criado manualmente</span>}
     </>
   );
 
@@ -595,7 +595,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                   <Icon className="h-5 w-5" />
                 </div>
                 <div className="min-w-0">
-                  <p className="text-xl sm:text-2xl font-bold">{value ?? "—"}</p>
+                  <p className="text-xl sm:text-2xl font-bold tabular-nums truncate">{value ?? "—"}</p>
                   <p className="text-xs text-muted-foreground truncate">{label}</p>
                 </div>
               </CardContent>
@@ -676,7 +676,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
               <SlidersHorizontal className="h-4 w-4" />
               <span className="hidden sm:inline">Filtros</span>
               {activeFilterCount - (filters.search ? 1 : 0) > 0 && (
-                <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">{activeFilterCount - (filters.search ? 1 : 0)}</Badge>
+                <Badge variant="secondary" className="h-5 px-1.5 text-[11px]">{activeFilterCount - (filters.search ? 1 : 0)}</Badge>
               )}
             </Button>
           </div>
@@ -780,7 +780,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
               {/* Telemóvel: cartões */}
               <div className="md:hidden divide-y">
                 {rows.map((u) => (
-                  <div key={u.id} className={`p-3 space-y-2 ${!u.isActive ? "opacity-60" : ""}`}>
+                  <div key={u.id} className={`p-3 space-y-2 ${!u.isActive ? "bg-muted/40" : ""}`}>
                     <div className="flex items-start gap-3">
                       <Avatar className="h-8 w-8 shrink-0">
                         <AvatarFallback className="text-xs font-semibold bg-primary/10 text-primary">
@@ -796,9 +796,9 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                     <div className="flex flex-wrap items-center gap-2">
                       {roleCell(u)}
                       {u.department && (
-                        <Badge variant="secondary" className="text-xs font-normal">
-                          <Building2 className="h-3 w-3 mr-1" />
-                          {u.department}
+                        <Badge variant="secondary" className="text-xs font-normal max-w-full" title={u.department}>
+                          <Building2 className="h-3 w-3 mr-1 shrink-0" />
+                          <span className="truncate">{u.department}</span>
                         </Badge>
                       )}
                     </div>
@@ -830,7 +830,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                   </TableHeader>
                   <TableBody>
                     {rows.map((u) => (
-                      <TableRow key={u.id} className={!u.isActive ? "opacity-50" : ""}>
+                      <TableRow key={u.id} className={!u.isActive ? "bg-muted/40" : ""}>
                         <TableCell>
                           <Avatar className="h-8 w-8">
                             <AvatarFallback className="text-xs font-semibold bg-primary/10 text-primary">
@@ -838,15 +838,15 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                             </AvatarFallback>
                           </Avatar>
                         </TableCell>
-                        <TableCell className="font-medium">{nameCell(u)}</TableCell>
-                        <TableCell className="text-sm text-muted-foreground">{u.email ?? "—"}</TableCell>
+                        <TableCell className="font-medium min-w-[160px] max-w-[240px] whitespace-normal">{nameCell(u)}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground max-w-[220px] truncate" title={u.email ?? undefined}>{u.email ?? "—"}</TableCell>
                         <TableCell><UserEmployeeLinks employees={u.employees} /></TableCell>
                         <TableCell>{roleCell(u)}</TableCell>
                         <TableCell className="text-sm">
                           {u.department ? (
-                            <Badge variant="secondary" className="text-xs font-normal">
-                              <Building2 className="h-3 w-3 mr-1" />
-                              {u.department}
+                            <Badge variant="secondary" className="text-xs font-normal max-w-[180px]" title={u.department}>
+                              <Building2 className="h-3 w-3 mr-1 shrink-0" />
+                              <span className="truncate">{u.department}</span>
                             </Badge>
                           ) : (
                             <span className="text-muted-foreground text-xs">—</span>

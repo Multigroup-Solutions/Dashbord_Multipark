@@ -29,7 +29,7 @@ export default function AnomalyAlerts({ domain, enabled = true }: { domain: "boo
         {shown.map((a: any) => (
           <li key={a.id} className="text-sm break-words">
             <div className="flex flex-wrap items-center gap-1.5">
-              <Badge variant={a.severity === "critical" ? "destructive" : "secondary"} className="text-[10px]">{a.severity === "critical" ? "crítico" : "atenção"}</Badge>
+              <Badge variant={a.severity === "critical" ? "destructive" : "secondary"} className="text-[11px]">{a.severity === "critical" ? "crítico" : "atenção"}</Badge>
               <span className="text-xs text-muted-foreground tabular-nums">{shortDay(a.day)}</span>
             </div>
             <div className="mt-0.5">{a.detail}</div>

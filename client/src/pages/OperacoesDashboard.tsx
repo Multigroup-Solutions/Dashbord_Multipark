@@ -1,7 +1,9 @@
 import { useMemo } from "react";
+import { useIsMobile } from "@/hooks/useMobile";
 import { trpc } from "@/lib/trpc";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { useDashboardFilters, DashboardFilterBar } from "@/components/DashboardFilterBar";
+import { StatValue } from "@/components/StatValue";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -76,19 +78,20 @@ function KPICard({
   color?: string;
 }) {
   return (
-    <Card className="relative overflow-hidden">
-      <CardContent className="pt-6">
-        <div className="flex items-start justify-between">
-          <div className="space-y-1">
-            <p className="text-sm text-muted-foreground font-medium">{label}</p>
+    <Card className="relative overflow-hidden py-0 gap-0 min-w-0">
+      <CardContent className="p-4 sm:p-5">
+        {/* Em telemóvel o ícone vai para cima: lado a lado sobravam ~70px para o valor */}
+        <div className="flex flex-col-reverse items-start gap-2 sm:flex-row sm:justify-between">
+          <div className="space-y-1 min-w-0 w-full sm:flex-1">
+            <p className="text-sm text-muted-foreground font-medium leading-snug line-clamp-2" title={label}>{label}</p>
             {loading ? (
               <Skeleton className="h-8 w-20" />
             ) : (
-              <p className="text-2xl font-bold text-foreground">{value}</p>
+              <StatValue value={value} min={18} max={24} className="text-foreground" />
             )}
           </div>
-          <div className={`h-10 w-10 rounded-xl flex items-center justify-center bg-primary/10`}>
-            <Icon className={`h-5 w-5 ${color || "text-primary"}`} />
+          <div className={`h-9 w-9 sm:h-10 sm:w-10 shrink-0 rounded-xl flex items-center justify-center bg-primary/10`}>
+            <Icon className={`h-5 w-5 ${color || "text-primary"}`} aria-hidden />
           </div>
         </div>
       </CardContent>
@@ -117,6 +120,7 @@ function ChartTooltip({ active, payload, label }: any) {
 // ─── Main Dashboard ───────────────────────────────────────────────────────────
 
 export default function OperacoesDashboard() {
+  const isMobile = useIsMobile();
   // Default date range: 30 days ago to today
   const thirtyDaysAgo = useMemo(() => {
     const d = new Date();
@@ -193,7 +197,7 @@ export default function OperacoesDashboard() {
   // ── Render ──
 
   return (
-    <div className="p-4 md:p-6 space-y-6 max-w-[1400px] mx-auto">
+    <div className="space-y-6 max-w-[1400px] mx-auto">
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Dashboard Operações</h1>
@@ -215,7 +219,7 @@ export default function OperacoesDashboard() {
       />
 
       {/* KPIs */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6 gap-3 sm:gap-4">
         <KPICard
           icon={CalendarCheck}
           label="Reservas hoje"
@@ -324,14 +328,15 @@ export default function OperacoesDashboard() {
                     paddingAngle={3}
                     dataKey="value"
                     nameKey="name"
-                    label={({ name, value }) => `${name}: ${fmtNum(value)}`}
+                    label={isMobile ? false : ({ name, value }) => `${name}: ${fmtNum(value)}`}
                   >
                     {cityDonutData.map((_, i) => (
                       <Cell key={i} fill={DONUT_COLORS[i % DONUT_COLORS.length]} />
                     ))}
                   </Pie>
                   <Tooltip formatter={(v: number) => fmtNum(v)} />
-                  <Legend />
+                  {/* Em telemóvel os rótulos à volta do donut saíam do cartão — os valores vão para a legenda */}
+                  <Legend formatter={isMobile ? (v: string, e: any) => `${v}: ${fmtNum(e?.payload?.value ?? 0)}` : undefined} />
                 </PieChart>
               </ResponsiveContainer>
             )}
@@ -362,14 +367,14 @@ export default function OperacoesDashboard() {
                   const maxKm = gpsAgg.perDriver[0]?.km || 1;
                   return (
                     <div key={`${d.name}-${i}`} className="flex items-center gap-2">
-                      <span className="text-xs w-36 truncate text-muted-foreground">{d.name}</span>
-                      <div className="flex-1 h-4 bg-muted rounded-full overflow-hidden">
+                      <span className="text-xs w-28 sm:w-36 shrink-0 truncate text-muted-foreground" title={d.name}>{d.name}</span>
+                      <div className="flex-1 min-w-0 h-4 bg-muted rounded-full overflow-hidden">
                         <div
                           className="h-full rounded-full bg-emerald-500"
                           style={{ width: `${(d.km / maxKm) * 100}%` }}
                         />
                       </div>
-                      <span className="text-xs font-medium w-16 text-right">{d.km} km</span>
+                      <span className="text-xs font-medium shrink-0 min-w-16 text-right tabular-nums whitespace-nowrap">{d.km.toLocaleString("pt-PT", { maximumFractionDigits: 1 })} km</span>
                     </div>
                   );
                 })}

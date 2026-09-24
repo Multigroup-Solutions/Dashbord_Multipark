@@ -160,16 +160,16 @@ export default function SuporteDashboard() {
       />
 
       {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
         <Card className="relative overflow-hidden">
-          <CardContent className="pt-6">
-            <div className="flex items-start justify-between">
-              <div className="space-y-1">
-                <p className="text-sm text-muted-foreground font-medium">Reclamações Abertas</p>
-                <p className="text-2xl font-bold text-foreground">{openComplaints}</p>
+          <CardContent className="p-4 sm:p-6">
+            <div className="flex items-start justify-between gap-2">
+              <div className="space-y-1 min-w-0">
+                <p className="text-xs sm:text-sm text-muted-foreground font-medium break-words">Reclamações Abertas</p>
+                <p className="text-2xl font-bold text-foreground tabular-nums truncate">{openComplaints}</p>
                 <p className="text-xs text-muted-foreground">{complaintStats?.total ?? 0} total</p>
               </div>
-              <div className="h-10 w-10 rounded-xl flex items-center justify-center bg-red-100">
+              <div className="h-8 w-8 sm:h-10 sm:w-10 shrink-0 rounded-xl flex items-center justify-center bg-red-100">
                 <AlertTriangle className="h-5 w-5 text-red-600" />
               </div>
             </div>
@@ -177,10 +177,10 @@ export default function SuporteDashboard() {
         </Card>
 
         <Card className="relative overflow-hidden">
-          <CardContent className="pt-6">
-            <div className="flex items-start justify-between">
-              <div className="space-y-1">
-                <p className="text-sm text-muted-foreground font-medium">Rating Médio Google</p>
+          <CardContent className="p-4 sm:p-6">
+            <div className="flex items-start justify-between gap-2">
+              <div className="space-y-1 min-w-0">
+                <p className="text-xs sm:text-sm text-muted-foreground font-medium break-words">Rating Médio Google</p>
                 <p className="text-2xl font-bold text-foreground">
                   {reviewStats?.avg ?? 0}<span className="text-lg text-muted-foreground">/5</span>
                 </p>
@@ -193,7 +193,7 @@ export default function SuporteDashboard() {
                   ))}
                 </div>
               </div>
-              <div className="h-10 w-10 rounded-xl flex items-center justify-center bg-amber-100">
+              <div className="h-8 w-8 sm:h-10 sm:w-10 shrink-0 rounded-xl flex items-center justify-center bg-amber-100">
                 <Star className="h-5 w-5 text-amber-600" />
               </div>
             </div>
@@ -201,14 +201,14 @@ export default function SuporteDashboard() {
         </Card>
 
         <Card className="relative overflow-hidden">
-          <CardContent className="pt-6">
-            <div className="flex items-start justify-between">
-              <div className="space-y-1">
-                <p className="text-sm text-muted-foreground font-medium">Reviews Pendentes</p>
-                <p className="text-2xl font-bold text-yellow-600">{reviewStats?.pending ?? 0}</p>
+          <CardContent className="p-4 sm:p-6">
+            <div className="flex items-start justify-between gap-2">
+              <div className="space-y-1 min-w-0">
+                <p className="text-xs sm:text-sm text-muted-foreground font-medium break-words">Reviews Pendentes</p>
+                <p className="text-2xl font-bold text-yellow-700 tabular-nums truncate">{reviewStats?.pending ?? 0}</p>
                 <p className="text-xs text-muted-foreground">sem resposta</p>
               </div>
-              <div className="h-10 w-10 rounded-xl flex items-center justify-center bg-yellow-100">
+              <div className="h-8 w-8 sm:h-10 sm:w-10 shrink-0 rounded-xl flex items-center justify-center bg-yellow-100">
                 <MessageSquare className="h-5 w-5 text-yellow-600" />
               </div>
             </div>
@@ -216,14 +216,14 @@ export default function SuporteDashboard() {
         </Card>
 
         <Card className="relative overflow-hidden">
-          <CardContent className="pt-6">
-            <div className="flex items-start justify-between">
-              <div className="space-y-1">
-                <p className="text-sm text-muted-foreground font-medium">Ocorrências Abertas</p>
-                <p className="text-2xl font-bold text-orange-600">{incidentStats?.open ?? 0}</p>
+          <CardContent className="p-4 sm:p-6">
+            <div className="flex items-start justify-between gap-2">
+              <div className="space-y-1 min-w-0">
+                <p className="text-xs sm:text-sm text-muted-foreground font-medium break-words">Ocorrências Abertas</p>
+                <p className="text-2xl font-bold text-orange-700 tabular-nums truncate">{incidentStats?.open ?? 0}</p>
                 <p className="text-xs text-muted-foreground">{incidentStats?.total ?? 0} total</p>
               </div>
-              <div className="h-10 w-10 rounded-xl flex items-center justify-center bg-orange-100">
+              <div className="h-8 w-8 sm:h-10 sm:w-10 shrink-0 rounded-xl flex items-center justify-center bg-orange-100">
                 <AlertCircle className="h-5 w-5 text-orange-600" />
               </div>
             </div>
@@ -231,14 +231,14 @@ export default function SuporteDashboard() {
         </Card>
 
         <Card className="relative overflow-hidden">
-          <CardContent className="pt-6">
-            <div className="flex items-start justify-between">
-              <div className="space-y-1">
-                <p className="text-sm text-muted-foreground font-medium">Itens Perdidos</p>
-                <p className="text-2xl font-bold text-blue-600">{openLostFound}</p>
+          <CardContent className="p-4 sm:p-6">
+            <div className="flex items-start justify-between gap-2">
+              <div className="space-y-1 min-w-0">
+                <p className="text-xs sm:text-sm text-muted-foreground font-medium break-words">Itens Perdidos</p>
+                <p className="text-2xl font-bold text-blue-700 tabular-nums truncate">{openLostFound}</p>
                 <p className="text-xs text-muted-foreground">abertos</p>
               </div>
-              <div className="h-10 w-10 rounded-xl flex items-center justify-center bg-blue-100">
+              <div className="h-8 w-8 sm:h-10 sm:w-10 shrink-0 rounded-xl flex items-center justify-center bg-blue-100">
                 <Package className="h-5 w-5 text-blue-600" />
               </div>
             </div>
@@ -259,25 +259,31 @@ export default function SuporteDashboard() {
                 Sem dados de reclamações
               </div>
             ) : (
-              <ResponsiveContainer width="100%" height={260}>
+              <ResponsiveContainer width="100%" height={280}>
                 <PieChart>
                   <Pie
                     data={complaintDonutData}
                     cx="50%"
                     cy="50%"
-                    innerRadius={55}
-                    outerRadius={90}
+                    innerRadius="50%"
+                    outerRadius="80%"
                     paddingAngle={3}
                     dataKey="value"
                     nameKey="name"
-                    label={({ name, value }) => `${name}: ${value}`}
                   >
                     {complaintDonutData.map((_, idx) => (
                       <Cell key={idx} fill={DONUT_COLORS[idx % DONUT_COLORS.length]} />
                     ))}
                   </Pie>
                   <Tooltip />
-                  <Legend />
+                  <Legend
+                    wrapperStyle={{ fontSize: 12 }}
+                    formatter={(value: string, entry: any) => (
+                      <span className="text-foreground">
+                        {value}: <span className="font-semibold tabular-nums">{entry?.payload?.value}</span>
+                      </span>
+                    )}
+                  />
                 </PieChart>
               </ResponsiveContainer>
             )}
@@ -360,32 +366,34 @@ export default function SuporteDashboard() {
                     className="flex items-center justify-between p-3 rounded-lg bg-muted/50 hover:bg-muted transition-colors"
                   >
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-0.5">
-                        <span className="font-medium text-sm truncate">#{c.id} {c.title || c.clientName}</span>
-                        <Badge className={STATUS_LABELS[c.status]?.color || "bg-gray-100"} >
-                          {STATUS_LABELS[c.status]?.label || c.status}
-                        </Badge>
+                      <div className="flex items-center gap-2 mb-0.5 min-w-0">
+                        <span className="font-medium text-sm truncate" title={c.title || c.clientName}>#{c.id} {c.title || c.clientName}</span>
+                        {STATUS_LABELS[c.complaintStatus ?? c.status] && (
+                          <Badge className={`shrink-0 ${STATUS_LABELS[c.complaintStatus ?? c.status].color}`}>
+                            {STATUS_LABELS[c.complaintStatus ?? c.status].label}
+                          </Badge>
+                        )}
                       </div>
-                      <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                        {c.clientName && <span>{c.clientName}</span>}
+                      <div className="flex items-center gap-x-3 gap-y-0.5 flex-wrap text-xs text-muted-foreground min-w-0">
+                        {c.clientName && <span className="truncate max-w-full">{c.clientName}</span>}
                         {c.vehiclePlate && <span>{c.vehiclePlate}</span>}
                         {c.createdAt && (
                           <span>{fmtPTDate(c.createdAt)}</span>
                         )}
                       </div>
                     </div>
-                    {c.priority && (
+                    {(c.complaintPriority ?? c.priority) && (
                       <Badge
                         variant="outline"
-                        className={`text-[10px] ml-2 shrink-0 ${
-                          c.priority === "urgent"
+                        className={`text-[11px] ml-2 shrink-0 ${
+                          (c.complaintPriority ?? c.priority) === "urgent"
                             ? "border-red-300 text-red-700"
-                            : c.priority === "high"
+                            : (c.complaintPriority ?? c.priority) === "high"
                               ? "border-orange-300 text-orange-700"
                               : ""
                         }`}
                       >
-                        {c.priority === "urgent" ? "Urgente" : c.priority === "high" ? "Alta" : c.priority === "medium" ? "Média" : "Baixa"}
+                        {(c.complaintPriority ?? c.priority) === "urgent" ? "Urgente" : (c.complaintPriority ?? c.priority) === "high" ? "Alta" : (c.complaintPriority ?? c.priority) === "medium" ? "Média" : "Baixa"}
                       </Badge>
                     )}
                   </div>

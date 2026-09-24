@@ -201,9 +201,9 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
       {/* Header */}
       <div className="flex items-center gap-3 flex-wrap">
         <Button variant="outline" onClick={onBack}><ChevronLeft className="w-4 h-4 mr-1" /> Voltar</Button>
-        <div className="flex-1">
+        <div className="w-full sm:w-auto sm:flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <TypeIcon className="w-5 h-5 text-amber-600" />
+            <TypeIcon className="w-5 h-5 shrink-0 text-amber-700" />
             <h1 className="text-xl font-bold line-clamp-2 break-words">{item.description}</h1>
             <Badge className={STATUS_CONFIG[item.status]?.color}>{STATUS_CONFIG[item.status]?.label}</Badge>
             <Badge className={PRIORITY_CONFIG[item.priority]?.color}>{PRIORITY_CONFIG[item.priority]?.label}</Badge>
@@ -288,7 +288,7 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
                     </div>
                     <div>
                       <span className="text-muted-foreground">Valor Estimado:</span>
-                      <p className="font-medium">{item.estimatedValue ? `${item.estimatedValue}€` : "N/A"}</p>
+                      <p className="font-medium tabular-nums">{item.estimatedValue ? `${Number(item.estimatedValue).toLocaleString("pt-PT")} €` : "N/A"}</p>
                     </div>
                     <div className="sm:col-span-2">
                       <span className="text-muted-foreground">Descrição:</span>
@@ -538,7 +538,7 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
                               <User className={`w-4 h-4 ${a.flagged ? "text-red-600" : "text-muted-foreground"}`} />
                               <span className="font-medium">{a.agentName}</span>
                               {a.flagged === 1 && (
-                                <Badge className="bg-red-500 text-white text-[10px]">
+                                <Badge className="bg-red-600 text-white text-[11px]">
                                   <Flag className="w-3 h-3 mr-1" /> Envolvido no caso
                                 </Badge>
                               )}
@@ -658,7 +658,7 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
                   <Separator />
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Valor</span>
-                    <span className="font-medium text-amber-600">{item.estimatedValue}€</span>
+                    <span className="font-medium text-amber-800 tabular-nums">{Number(item.estimatedValue).toLocaleString("pt-PT")} €</span>
                   </div>
                 </>
               )}

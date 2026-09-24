@@ -61,7 +61,7 @@ function SegmentBadges({ segments }: { segments: string[] }) {
   return (
     <div className="flex flex-wrap gap-1">
       {segments.map((s) => (
-        <Badge key={s} variant="outline" className={`text-[10px] ${SEGMENT_CLASS[s as Exclude<Segment, "all">] ?? ""}`}>
+        <Badge key={s} variant="outline" className={`text-[11px] ${SEGMENT_CLASS[s as Exclude<Segment, "all">] ?? ""}`}>
           {SEGMENT_LABEL[s as Exclude<Segment, "all">] ?? s}
         </Badge>
       ))}
@@ -74,10 +74,10 @@ function StatTile({ icon: Icon, label, value, hint, onClick, active }: { icon: a
     <button
       type="button"
       onClick={onClick}
-      className={`text-left rounded-xl border bg-card p-3 transition-colors ${onClick ? "hover:bg-muted/50 cursor-pointer" : "cursor-default"} ${active ? "border-primary ring-1 ring-primary/30" : ""}`}
+      className={`text-left min-w-0 rounded-xl border bg-card p-3 transition-colors ${onClick ? "hover:bg-muted/50 cursor-pointer" : "cursor-default"} ${active ? "border-primary ring-1 ring-primary/30" : ""}`}
     >
-      <div className="flex items-center gap-2 text-xs text-muted-foreground"><Icon className="w-3.5 h-3.5" /> {label}</div>
-      <div className="text-2xl font-bold mt-1 tabular-nums">{value}</div>
+      <div className="flex items-start gap-2 text-xs text-muted-foreground min-h-8"><Icon className="w-3.5 h-3.5 mt-px shrink-0" /> <span className="line-clamp-2">{label}</span></div>
+      <div className="text-xl sm:text-2xl font-bold mt-1 tabular-nums truncate" title={String(value)}>{value}</div>
       {hint && <div className="text-[11px] text-muted-foreground mt-0.5">{hint}</div>}
     </button>
   );
@@ -137,7 +137,7 @@ function ClientsList({ onOpen }: { onOpen: (email: string) => void }) {
       </div>
 
       {stats && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-4 2xl:grid-cols-8 gap-2">
           <StatTile icon={Users} label="Clientes" value={stats.clients.toLocaleString("pt-PT")} hint="com email nas reservas" onClick={() => setSegment("all")} active={segment === "all"} />
           <StatTile icon={Handshake} label="Parceiros" value={stats.partners.toLocaleString("pt-PT")} hint="agências e Pro" onClick={() => toggleSegment("partner")} active={segment === "partner"} />
           <StatTile icon={Sparkles} label="Novos (30 dias)" value={stats.newLast30d.toLocaleString("pt-PT")} hint="primeira estadia recente" />
@@ -155,7 +155,7 @@ function ClientsList({ onOpen }: { onOpen: (email: string) => void }) {
           <Input className="pl-8" placeholder="Pesquisar por email, nome, telefone ou matrícula…" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
         <Select value={activeSegment} onValueChange={(v) => setSegment(v as Segment)}>
-          <SelectTrigger className="w-[160px]"><SelectValue placeholder="Segmento" /></SelectTrigger>
+          <SelectTrigger className="w-[190px]"><SelectValue placeholder="Segmento" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Todos os segmentos</SelectItem>
             <SelectItem value="new">Novos</SelectItem>
@@ -205,9 +205,9 @@ function ClientsList({ onOpen }: { onOpen: (email: string) => void }) {
               )}
               {rows.map((c) => (
                 <TableRow key={c.email} className="cursor-pointer hover:bg-muted/50" onClick={() => onOpen(c.email)}>
-                  <TableCell>
-                    <div className="font-medium">{c.name ?? "—"}</div>
-                    <div className="text-xs text-muted-foreground break-all">{c.email}</div>
+                  <TableCell className="min-w-[180px] max-w-[280px]">
+                    <div className="font-medium truncate" title={c.name ?? undefined}>{c.name ?? "—"}</div>
+                    <div className="text-xs text-muted-foreground truncate" title={c.email}>{c.email}</div>
                     {c.phone && <div className="text-xs text-muted-foreground">{c.phone}</div>}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
@@ -267,7 +267,7 @@ function ClientProfile({ email, onBack }: { email: string; onBack: () => void })
 
       <Card>
         <CardContent className="p-4 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1.5 text-sm">
-          <div className="flex items-center gap-2"><Mail className="w-4 h-4 text-muted-foreground" /> <span className="break-all">{p.email}</span></div>
+          <div className="flex items-center gap-2 min-w-0"><Mail className="w-4 h-4 shrink-0 text-muted-foreground" /> <span className="break-all">{p.email}</span></div>
           <div className="flex items-center gap-2"><Phone className="w-4 h-4 text-muted-foreground" /> {p.phones.length ? few(p.phones) : "—"}</div>
           <div className="flex items-center gap-2"><Car className="w-4 h-4 text-muted-foreground" /> {p.plates.length ? few(p.plates) : "—"}</div>
           <div className="flex items-center gap-2"><MapPin className="w-4 h-4 text-muted-foreground" /> {p.cities.join(", ") || "—"}{p.lastPark ? ` · último: ${p.lastPark}` : ""}</div>
@@ -323,12 +323,12 @@ function ClientProfile({ email, onBack }: { email: string; onBack: () => void })
                 {p.bookings_list.map((b) => (
                   <TableRow key={b.id} className={isCancelled(b.status) ? "opacity-60" : ""}>
                     <TableCell className="font-mono text-xs">{b.bookingNumber ?? b.externalId}</TableCell>
-                    <TableCell className="text-sm">{b.parkName ?? "—"}{b.city ? <span className="text-xs text-muted-foreground"> · {b.city}</span> : null}{b.deliveryService ? <Badge variant="outline" className="ml-1 text-[9px]">entrega</Badge> : null}{b.partnerName ? <Badge variant="outline" className="ml-1 text-[9px] bg-violet-50 text-violet-800">{b.partnerName}</Badge> : null}</TableCell>
+                    <TableCell className="text-sm">{b.parkName ?? "—"}{b.city ? <span className="text-xs text-muted-foreground"> · {b.city}</span> : null}{b.deliveryService ? <Badge variant="outline" className="ml-1 text-[11px]">entrega</Badge> : null}{b.partnerName ? <Badge variant="outline" className="ml-1 text-[11px] bg-violet-50 text-violet-800">{b.partnerName}</Badge> : null}</TableCell>
                     <TableCell className="text-sm whitespace-nowrap">{d(b.checkIn)}</TableCell>
                     <TableCell className="text-sm whitespace-nowrap">{d(b.checkOut)}</TableCell>
                     <TableCell className="font-mono text-xs">{b.licensePlate ?? "—"}</TableCell>
                     {canSeeTotals && <TableCell className="text-right tabular-nums">{b.totalPrice != null ? eur(Number(b.totalPrice), 2) : "—"}</TableCell>}
-                    <TableCell><Badge variant={isCancelled(b.status) ? "secondary" : "outline"} className="text-[10px]">{b.status ?? "—"}</Badge></TableCell>
+                    <TableCell><Badge variant={isCancelled(b.status) ? "secondary" : "outline"} className="text-[11px]">{b.status ?? "—"}</Badge></TableCell>
                   </TableRow>
                 ))}
                 {p.bookings > p.bookings_list.length && (

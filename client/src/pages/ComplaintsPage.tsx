@@ -207,18 +207,18 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
           {[
             { label: "Total", value: stats.total, icon: BarChart3, color: "text-foreground" },
             { label: "Novos", value: stats.new, icon: AlertCircle, color: "text-blue-600" },
-            { label: "Em Análise", value: stats.analyzing, icon: Hourglass, color: "text-yellow-600" },
+            { label: "Em Análise", value: stats.analyzing, icon: Hourglass, color: "text-yellow-700" },
             { label: "Aguarda Cliente", value: stats.waitingClient, icon: Clock, color: "text-purple-600" },
-            { label: "Resolvidos", value: stats.resolved, icon: CheckCircle2, color: "text-green-600" },
+            { label: "Resolvidos", value: stats.resolved, icon: CheckCircle2, color: "text-green-700" },
             { label: "Fechados", value: stats.closed, icon: XCircle, color: "text-gray-600" },
             { label: "Em Atraso", value: stats.overdue, icon: AlertTriangle, color: "text-red-600" },
           ].map(s => (
-            <Card key={s.label} className="p-3">
-              <div className="flex items-center gap-2">
-                <s.icon className={`w-4 h-4 ${s.color}`} />
-                <span className="text-xs text-muted-foreground">{s.label}</span>
+            <Card key={s.label} className="p-3 gap-1 min-w-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <s.icon className={`w-4 h-4 shrink-0 ${s.color}`} />
+                <span className="text-xs text-muted-foreground truncate">{s.label}</span>
               </div>
-              <p className={`text-xl font-bold mt-1 ${s.color}`}>{s.value}</p>
+              <p className={`text-xl font-bold tabular-nums truncate ${s.color}`}>{s.value}</p>
             </Card>
           ))}
         </div>
@@ -267,9 +267,9 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
                 }}
               >
                 <div className={`flex items-center gap-2 p-2 rounded-lg ${cfg.color} border`}>
-                  <cfg.icon className="w-4 h-4" />
-                  <span className="font-medium text-sm">{cfg.label}</span>
-                  <Badge variant="secondary" className="ml-auto text-xs">{items.length}</Badge>
+                  <cfg.icon className="w-4 h-4 shrink-0" />
+                  <span className="font-medium text-sm truncate">{cfg.label}</span>
+                  <Badge variant="secondary" className="ml-auto text-xs shrink-0 tabular-nums">{items.length}</Badge>
                 </div>
                 {/* div nativo: o ScrollArea (Radix) com max-h corta em vez de scrollar */}
                 <div className="max-h-[60vh] overflow-y-auto">
@@ -318,20 +318,17 @@ function ComplaintCard({ complaint: c, onSelect, onMove, currentStatus }: any) {
       className={`cursor-grab active:cursor-grabbing hover:shadow-md transition-shadow ${isOverdue ? "border-red-400 border-2" : ""}`}
     >
       <CardContent className="p-3 space-y-2">
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-1.5 min-w-0">
-            <GripVertical className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />
-            <span className="text-sm">{TYPE_CONFIG[c.complaintType]?.emoji}</span>
-            <span className="font-medium text-sm line-clamp-1" onClick={onSelect}>{c.title}</span>
+        <div className="flex items-start gap-2">
+          <div className="flex items-start gap-1.5 min-w-0">
+            <GripVertical className="h-3.5 w-3.5 mt-0.5 text-muted-foreground/40 shrink-0" />
+            <span className="text-sm shrink-0">{TYPE_CONFIG[c.complaintType]?.emoji}</span>
+            <span className="font-medium text-sm leading-snug line-clamp-2 break-words" title={c.title} onClick={onSelect}>{c.title}</span>
           </div>
-          <Badge className={`text-[10px] ${PRIORITY_CONFIG[c.complaintPriority]?.color}`}>
-            {PRIORITY_CONFIG[c.complaintPriority]?.label}
-          </Badge>
         </div>
 
         {c.vehiclePlate && (
           <div className="flex items-center gap-1 text-xs text-muted-foreground">
-            <Car className="w-3 h-3" /> {c.vehiclePlate}
+            <Car className="w-3 h-3 shrink-0" /> {c.vehiclePlate}
           </div>
         )}
 
@@ -360,18 +357,23 @@ function ComplaintCard({ complaint: c, onSelect, onMove, currentStatus }: any) {
         )}
 
         <div className="flex items-center justify-between pt-1">
-          <span className="text-[10px] text-muted-foreground">#{c.id}</span>
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-[11px] text-muted-foreground tabular-nums">#{c.id}</span>
+            <Badge className={`text-[11px] ${PRIORITY_CONFIG[c.complaintPriority]?.color}`}>
+              {PRIORITY_CONFIG[c.complaintPriority]?.label}
+            </Badge>
+          </div>
           <div className="flex gap-1">
             {canMoveLeft && (
-              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); onMove(c.id, KANBAN_COLUMNS[colIdx - 1]); }}>
+              <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Mover para a coluna anterior" onClick={(e) => { e.stopPropagation(); onMove(c.id, KANBAN_COLUMNS[colIdx - 1]); }}>
                 <ChevronLeft className="w-3 h-3" />
               </Button>
             )}
-            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onSelect}>
+            <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Ver detalhe" onClick={onSelect}>
               <Eye className="w-3 h-3" />
             </Button>
             {canMoveRight && (
-              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); onMove(c.id, KANBAN_COLUMNS[colIdx + 1]); }}>
+              <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Mover para a coluna seguinte" onClick={(e) => { e.stopPropagation(); onMove(c.id, KANBAN_COLUMNS[colIdx + 1]); }}>
                 <ChevronRight className="w-3 h-3" />
               </Button>
             )}
@@ -560,10 +562,10 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
       {/* Header */}
       <div className="flex flex-wrap items-center gap-3">
         <Button variant="outline" onClick={onBack}><ChevronLeft className="w-4 h-4 mr-1" /> Voltar</Button>
-        <div className="flex-1">
-          <div className="flex items-center gap-2">
-            <span className="text-lg">{TYPE_CONFIG[c.complaintType]?.emoji}</span>
-            <h1 className="text-xl font-bold break-words">{c.title}</h1>
+        <div className="w-full sm:w-auto sm:flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-lg shrink-0">{TYPE_CONFIG[c.complaintType]?.emoji}</span>
+            <h1 className="text-xl font-bold break-words min-w-0">{c.title}</h1>
             <Badge className={STATUS_CONFIG[c.complaintStatus]?.color}>{STATUS_CONFIG[c.complaintStatus]?.label}</Badge>
             <Badge className={PRIORITY_CONFIG[c.complaintPriority]?.color}>{PRIORITY_CONFIG[c.complaintPriority]?.label}</Badge>
             {isOverdue && <Badge className="bg-red-100 text-red-800">SLA Ultrapassado</Badge>}
@@ -777,7 +779,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                     {data.photos.map((p: any) => (
                       <div key={p.id} className="relative group">
                         <img src={fileHref(p.url, p.key) ?? undefined} alt={p.label || "Foto"} className="w-full h-40 object-cover rounded-lg" />
-                        {p.label && <span className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-2 py-0.5 rounded">{p.label}</span>}
+                        {p.label && <span className="absolute bottom-1 left-1 bg-black/60 text-white text-[11px] px-2 py-0.5 rounded">{p.label}</span>}
                         <Button
                           variant="destructive" size="icon"
                           className="absolute top-1 right-1 h-6 w-6 opacity-60 group-hover:opacity-100 transition-opacity"
@@ -803,7 +805,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                             ) : (
                               <span className="break-all text-muted-foreground" title="Ficheiro não guardado (demasiado grande ou falha de upload)">{a.filename}</span>
                             )}
-                            {a.size ? <span className="text-[10px] text-muted-foreground">{Math.max(1, Math.round(a.size / 1024))} KB</span> : null}
+                            {a.size ? <span className="text-[11px] text-muted-foreground">{Math.max(1, Math.round(a.size / 1024))} KB</span> : null}
                           </div>
                         );
                       })}
@@ -848,7 +850,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                                 <tr key={a.agentName} className={`border-t ${a.flagged ? "bg-red-50 font-medium" : ""}`}>
                                   <td className="p-2">{a.agentName}{a.flagged ? " ⚑" : ""}</td>
                                   <td className="p-2 text-right">{a.actions}</td>
-                                  <td className="p-2 text-right text-green-600">{a.checkins}</td>
+                                  <td className="p-2 text-right text-green-700">{a.checkins}</td>
                                   <td className="p-2 text-right text-violet-600">{a.checkouts}</td>
                                   <td className="p-2 text-right text-amber-600">{a.movements}</td>
                                   <td className="p-2 text-xs text-muted-foreground">{a.lastActionAt ? fmtPTDateTime(a.lastActionAt) : "—"}</td>
@@ -1080,7 +1082,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                 <p className="text-muted-foreground">Sem prazo definido</p>
               )}
               {c.resolvedAt && (
-                <div className="flex items-center gap-2 text-green-600">
+                <div className="flex items-center gap-2 text-green-700">
                   <CheckCircle2 className="w-4 h-4" />
                   Resolvido em: {fmtPTDateTime(c.resolvedAt)}
                 </div>
@@ -1131,7 +1133,7 @@ function ReservationPreview({ bookingId }: { bookingId: string }) {
         return (
           <div key={h.id} className="flex items-center justify-between text-xs p-1.5 rounded bg-muted">
             <div className="flex items-center gap-1.5">
-              <Badge className={`${cfg.color} text-[10px] px-1`}>{cfg.label}</Badge>
+              <Badge className={`${cfg.color} text-[11px] px-1`}>{cfg.label}</Badge>
               <span>{h.user?.firstName || h.agentName || "Sistema"} {h.user?.lastName || ""}</span>
             </div>
             <span className="text-muted-foreground">{h.actionTime ? fmtPTDateTime(h.actionTime) : "—"}</span>
@@ -1529,7 +1531,7 @@ function DutyDriversPanel({
               <p className="font-medium mb-1">Tabela base por tipo:</p>
               <div className="flex flex-wrap gap-1">
                 {penaltyConfigQ.data.map((p: any) => (
-                  <Badge key={p.id} variant="outline" className="text-[10px]">
+                  <Badge key={p.id} variant="outline" className="text-[11px]">
                     {p.complaintType}: {p.basePoints}
                   </Badge>
                 ))}
@@ -1557,8 +1559,8 @@ function DutyDriversPanel({
                 <div key={d.id} className="flex items-center gap-2 text-sm p-2 bg-muted rounded min-w-0">
                   <User className="w-4 h-4 shrink-0" />
                   <span className="font-medium truncate">{d.employeeName}</span>
-                  {d.roleAtTime && <Badge variant="outline" className="text-[10px]">{d.roleAtTime}</Badge>}
-                  <Badge variant="outline" className="text-[10px]">{d.source}</Badge>
+                  {d.roleAtTime && <Badge variant="outline" className="text-[11px]">{d.roleAtTime}</Badge>}
+                  <Badge variant="outline" className="text-[11px]">{d.source}</Badge>
                   {d.notes && <span className="text-xs text-muted-foreground">— {d.notes}</span>}
                   <Button
                     variant="ghost"
@@ -1597,15 +1599,15 @@ function DutyDriversPanel({
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-medium">{d.employeeName}</span>
-                      <Badge variant="outline" className="text-[10px]">
+                      <Badge variant="outline" className="text-[11px]">
                         {d.source === "history" ? "histórico API" : "escalado"}
                       </Badge>
-                      {d.roleAtTime && <Badge variant="outline" className="text-[10px]">{d.roleAtTime}</Badge>}
+                      {d.roleAtTime && <Badge variant="outline" className="text-[11px]">{d.roleAtTime}</Badge>}
                     </div>
                     {d.notes && <p className="text-xs text-muted-foreground truncate">{d.notes}</p>}
                   </div>
                   {d.alreadyLinked ? (
-                    <Badge className="bg-green-100 text-green-800 text-[10px]">Associado</Badge>
+                    <Badge className="bg-green-100 text-green-800 text-[11px]">Associado</Badge>
                   ) : (
                     <Button size="sm" variant="outline" onClick={() => handleAttach(d)} disabled={attachMut.isPending}>
                       <Plus className="w-3 h-3 mr-1" /> Associar
@@ -1688,7 +1690,7 @@ function SendClientEmailButton({
         <Mail className="w-4 h-4 mr-2" /> Enviar email
       </Button>
       {lastSentAt && (
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-[11px] text-muted-foreground">
           Último envio: {fmtPTDateTime(lastSentAt)}
         </p>
       )}
@@ -1722,7 +1724,7 @@ function SendClientEmailButton({
                 value={body}
                 onChange={(e) => setBody(e.target.value)}
               />
-              <p className="text-[10px] text-muted-foreground mt-1">
+              <p className="text-[11px] text-muted-foreground mt-1">
                 A saudação “Olá {clientName || "cliente"},” é adicionada automaticamente.
               </p>
             </div>

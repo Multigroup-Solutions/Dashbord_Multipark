@@ -387,7 +387,7 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
                 {sortProjectsHierarchical(projectsList as any[]).map((p: any) => (
                   <SelectItem key={p.id} value={String(p.id)}>
                     <span style={{ paddingLeft: `${p.__depth * 12}px` }} className="inline-flex items-center gap-2">
-                      <Badge variant="outline" className={`text-[10px] ${LEVEL_COLOR[p.level ?? "project"] ?? ""}`}>
+                      <Badge variant="outline" className={`text-[11px] ${LEVEL_COLOR[p.level ?? "project"] ?? ""}`}>
                         {LEVEL_LABEL[p.level ?? "project"] ?? p.level}
                       </Badge>
                       {p.name}
@@ -619,8 +619,8 @@ function DocumentsTab({ employeeId, access }: { employeeId: number; access: Empl
                 <div className="flex items-center gap-2">
                   <FolderOpen className={`w-4 h-4 ${hasFiles ? "text-primary" : "text-muted-foreground"}`} />
                   <span className="text-sm font-medium">{label}</span>
-                  {isMandatory && <Badge variant="outline" className="text-[10px] h-4 px-1">Obrigatório</Badge>}
-                  {hasFiles && <Badge variant="secondary" className="text-[10px] h-4 px-1.5">{typeDocs.length}</Badge>}
+                  {isMandatory && <Badge variant="outline" className="text-[11px] h-4 px-1">Obrigatório</Badge>}
+                  {hasFiles && <Badge variant="secondary" className="text-[11px] h-4 px-1.5">{typeDocs.length}</Badge>}
                 </div>
                 <div className="flex items-center gap-2">
                   {uploading && uploadingCategory === type ? (
@@ -654,7 +654,7 @@ function DocumentsTab({ employeeId, access }: { employeeId: number; access: Empl
                           {/* Info */}
                           <div className="p-2">
                             <p className="text-xs font-medium truncate">{doc.label || doc.fileKey?.split("/").pop()}</p>
-                            <p className="text-[10px] text-muted-foreground">{new Date(doc.createdAt).toLocaleDateString("pt-PT")}</p>
+                            <p className="text-[11px] text-muted-foreground">{new Date(doc.createdAt).toLocaleDateString("pt-PT")}</p>
                           </div>
                           {/* Actions overlay */}
                           <div className="absolute top-1 right-1 flex gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
@@ -866,10 +866,10 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
                   <div>
                     <p className="text-sm font-medium">
                       {r.type === "check_in" ? "Entrada" : "Saída"}
-                      {reviewStatus === "suspicious" && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">⚠ por rever — não paga</span>}
-                      {reviewStatus === "rejected" && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">rejeitado</span>}
-                      {reviewStatus === "approved" && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200">aprovado</span>}
-                      {!reviewStatus && isFlagged && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">⚠ rever</span>}
+                      {reviewStatus === "suspicious" && <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">⚠ por rever — não paga</span>}
+                      {reviewStatus === "rejected" && <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">rejeitado</span>}
+                      {reviewStatus === "approved" && <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200">aprovado</span>}
+                      {!reviewStatus && isFlagged && <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">⚠ rever</span>}
                     </p>
                     {canReview && (
                       <div className="flex gap-1 mt-1" onClick={(e) => e.stopPropagation()}>
@@ -1120,25 +1120,25 @@ function MyMonthSummaryCard({ employeeId }: { employeeId: number }) {
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
             <div>
-              <p className="text-[10px] text-muted-foreground uppercase">Horas</p>
+              <p className="text-[11px] text-muted-foreground uppercase">Horas</p>
               <p className="text-lg font-bold">{fmt(0).replace("0,00 €", "")}{Number(data.totalHours).toFixed(1)}h</p>
             </div>
             <div>
-              <p className="text-[10px] text-muted-foreground uppercase">Dias</p>
+              <p className="text-[11px] text-muted-foreground uppercase">Dias</p>
               <p className="text-lg font-bold">{data.daysWorked}</p>
             </div>
             <div>
-              <p className="text-[10px] text-muted-foreground uppercase">€/hora</p>
+              <p className="text-[11px] text-muted-foreground uppercase">€/hora</p>
               <p className="text-lg font-bold">{fmt(data.hourlyRate)}</p>
             </div>
             <div>
-              <p className="text-[10px] text-muted-foreground uppercase">A receber (bruto)</p>
+              <p className="text-[11px] text-muted-foreground uppercase">A receber (bruto)</p>
               <p className="text-lg font-bold text-primary">{fmt(data.totalPayment)}</p>
             </div>
             <div>
-              <p className="text-[10px] text-amber-700 uppercase">Líquido est.</p>
+              <p className="text-[11px] text-amber-700 uppercase">Líquido est.</p>
               <p className="text-lg font-bold text-amber-700">{fmt(data.netEstimate)}</p>
-              <p className="text-[9px] text-amber-700">TSU 11% + IRS 15%</p>
+              <p className="text-[11px] text-amber-700">TSU 11% + IRS 15%</p>
             </div>
           </div>
         )}
@@ -1483,14 +1483,14 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                   <div className="flex items-center gap-2 text-sm">
                     <Mail className="w-4 h-4 text-muted-foreground" />
                     <span className="break-all">{emp.personalEmail}</span>
-                    <Badge variant="outline" className="text-[10px]">pessoal</Badge>
+                    <Badge variant="outline" className="text-[11px]">pessoal</Badge>
                   </div>
                 )}
                 {emp.personalPhone && (
                   <div className="flex items-center gap-2 text-sm">
                     <Phone className="w-4 h-4 text-muted-foreground" />
                     <span>{emp.personalPhone}</span>
-                    <Badge variant="outline" className="text-[10px]">pessoal</Badge>
+                    <Badge variant="outline" className="text-[11px]">pessoal</Badge>
                   </div>
                 )}
                 {emp.nif && (
@@ -1682,7 +1682,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                     {sortProjectsHierarchical(projectsList as any[]).map((p: any) => (
                       <SelectItem key={p.id} value={String(p.id)}>
                         <span style={{ paddingLeft: `${p.__depth * 12}px` }} className="inline-flex items-center gap-2">
-                          <Badge variant="outline" className={`text-[10px] ${LEVEL_COLOR[p.level ?? "project"] ?? ""}`}>
+                          <Badge variant="outline" className={`text-[11px] ${LEVEL_COLOR[p.level ?? "project"] ?? ""}`}>
                             {LEVEL_LABEL[p.level ?? "project"] ?? p.level}
                           </Badge>
                           {p.name}
@@ -2133,7 +2133,7 @@ function PayrollPage({ onBack }: { onBack: () => void }) {
         <Card className="border-amber-200 bg-amber-50/30">
           <CardContent className="p-4">
             <p className="text-xs text-muted-foreground">
-              Estimativa Líquido <span className="text-[10px] text-amber-700">(TSU 11% + IRS 15%)</span>
+              Estimativa Líquido <span className="text-[11px] text-amber-700">(TSU 11% + IRS 15%)</span>
             </p>
             <p className="text-xl font-bold text-amber-700">{fmt(totals.netEstimate)}€</p>
           </CardContent>
@@ -2394,22 +2394,22 @@ export default function HRPage() {
             </p>
           )}
           {emp.department && (
-            <p className="text-xs text-muted-foreground flex items-center gap-1">
-              <Building2 className="w-3 h-3" /> {emp.department}
+            <p className="text-xs text-muted-foreground flex items-start gap-1" title={emp.department}>
+              <Building2 className="w-3 h-3 shrink-0 mt-0.5" /> <span className="line-clamp-2 break-words min-w-0">{emp.department}</span>
             </p>
           )}
           {emp.monthlySalary && (
             <p className="text-xs font-medium text-green-700 flex items-center gap-1">
-              <Euro className="w-3 h-3" /> {parseFloat(String(emp.monthlySalary)).toFixed(2)}€/mês
+              <Euro className="w-3 h-3 shrink-0" /> <span className="tabular-nums">{parseFloat(String(emp.monthlySalary)).toLocaleString("pt-PT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}€/mês</span>
             </p>
           )}
           {emp.userId ? (
-            <p className="text-xs text-blue-600 flex items-center gap-1">
-              <Shield className="w-3 h-3" /> Conta ativa
+            <p className="text-xs text-blue-700 flex items-center gap-1">
+              <Shield className="w-3 h-3 shrink-0" /> Conta ativa
             </p>
           ) : (
-            <p className="text-xs text-orange-500 flex items-center gap-1">
-              <AlertTriangle className="w-3 h-3" /> Sem conta
+            <p className="text-xs text-orange-700 flex items-center gap-1">
+              <AlertTriangle className="w-3 h-3 shrink-0" /> Sem conta
             </p>
           )}
           {(() => {
@@ -2417,13 +2417,13 @@ export default function HRPage() {
             if (!status) return null;
             const missing = status.total - status.present;
             if (missing === 0) return (
-              <p className="text-xs text-green-600 flex items-center gap-1">
-                <CheckCircle2 className="w-3 h-3" /> Docs completos
+              <p className="text-xs text-green-700 flex items-center gap-1">
+                <CheckCircle2 className="w-3 h-3 shrink-0" /> Docs completos
               </p>
             );
             return (
-              <p className="text-xs text-orange-600 flex items-center gap-1">
-                <AlertTriangle className="w-3 h-3" /> {missing} doc{missing > 1 ? "s" : ""} em falta
+              <p className="text-xs text-orange-700 flex items-center gap-1">
+                <AlertTriangle className="w-3 h-3 shrink-0" /> {missing} doc{missing > 1 ? "s" : ""} em falta
               </p>
             );
           })()}
@@ -2547,7 +2547,7 @@ export default function HRPage() {
         <div className="text-center py-12 text-muted-foreground">A carregar colaboradores...</div>
       ) : (
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="w-full sm:w-auto">
+          <TabsList className="w-full max-w-full justify-start overflow-x-auto sm:w-auto">
             <TabsTrigger value="employees">
               Colaboradores <Badge variant="secondary" className="ml-2">{employeesList.length}</Badge>
             </TabsTrigger>

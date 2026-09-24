@@ -37,12 +37,11 @@ export default function TrainingPage() {
   }, [allVideos, setTab]);
   const clearOpenManual = useCallback(() => setOpenManualId(null), []);
 
-  const cols = 6 + (isAdmin ? 1 : 0) + (isSupervisor ? 1 : 0) + (seesProgress && !isSupervisor ? 1 : 0);
   return (
     <div className="space-y-6">
       <p className="text-muted-foreground">Formação obrigatória, vídeos, manuais, FAQs, quiz e exames de carreira</p>
       <Tabs value={tab} onValueChange={setTab} className="space-y-4">
-        <TabsList className={`grid grid-cols-2 sm:grid-cols-4 ${cols > 6 ? "lg:grid-cols-8" : "lg:grid-cols-6"} w-full h-auto`}>
+        <TabsList className="flex flex-wrap justify-start w-full h-auto gap-1">
           <TabsTrigger value="mine"><ListChecks className="w-4 h-4 mr-1" />A minha formação{pending > 0 && <Badge className="ml-1 h-5 px-1.5 bg-red-500 text-white">{pending}</Badge>}</TabsTrigger>
           <TabsTrigger value="videos"><Play className="w-4 h-4 mr-1" />Vídeos</TabsTrigger>
           <TabsTrigger value="manuals"><BookOpen className="w-4 h-4 mr-1" />Manuais</TabsTrigger>

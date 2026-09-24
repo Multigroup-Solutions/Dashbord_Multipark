@@ -89,11 +89,11 @@ export default function ClientHistoryCard({ email, phone, plate, name, highlight
                 const isCurrent = !!highlightRef && b.externalId === highlightRef;
                 return (
                   <div key={b.id} className={`flex items-center justify-between gap-2 border-b last:border-0 py-0.5 ${isCurrent ? "bg-primary/10 rounded px-1 -mx-1" : ""}`}>
-                    <span className="font-mono">
+                    <span className="font-mono shrink-0">
                       #{b.bookingNumber}{b.licensePlate ? ` · ${b.licensePlate}` : ""}
-                      {isCurrent && <Badge className="ml-1 text-[9px] px-1 py-0" variant="secondary">esta</Badge>}
+                      {isCurrent && <Badge className="ml-1 text-[11px] px-1 py-0" variant="secondary">esta</Badge>}
                     </span>
-                    <span className="text-xs text-muted-foreground whitespace-nowrap">
+                    <span className="text-xs text-muted-foreground min-w-0 truncate text-right">
                       {b.parkName ?? b.city ?? ""} · {d(b.checkIn)}
                       {b.totalPrice != null ? ` · ${eur(Number(b.totalPrice))}` : ""}
                       {b.status ? ` · ${b.status}` : ""}

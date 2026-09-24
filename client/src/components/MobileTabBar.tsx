@@ -34,8 +34,9 @@ export function MobileTabBar() {
       type="button"
       onClick={go}
       disabled={hidden}
-      className={`flex flex-col items-center justify-center gap-[3px] flex-1 py-1.5 text-[10.5px] font-semibold transition-colors ${
-        hidden ? "invisible" : active ? "text-primary" : "text-slate-500"
+      aria-current={active ? "page" : undefined}
+      className={`min-w-0 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-ring flex flex-col items-center justify-center gap-[3px] flex-1 py-1.5 text-[11px] font-semibold transition-colors ${
+        hidden ? "invisible" : active ? "text-primary" : "text-slate-600"
       }`}
     >
       <span
@@ -45,12 +46,13 @@ export function MobileTabBar() {
       >
         <Icon className="w-[19px] h-[19px]" />
       </span>
-      <span className="whitespace-nowrap">{label}</span>
+      <span className="whitespace-nowrap max-w-full truncate">{label}</span>
     </button>
   );
 
   return (
     <nav
+      aria-label="Navegação principal"
       className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-white border-t border-slate-200 flex items-end px-2 pt-1.5"
       style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 6px)" }}
     >
@@ -61,7 +63,9 @@ export function MobileTabBar() {
       <button
         type="button"
         onClick={() => navigate("/modulos")}
-        className="flex flex-col items-center flex-1 -mt-5 pb-0.5"
+        aria-label="Menu"
+        aria-current={location === "/modulos" && !activeGroup ? "page" : undefined}
+        className="flex flex-col items-center flex-1 -mt-5 pb-0.5 rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <span
           className={`flex items-center justify-center w-14 h-14 rounded-2xl text-white shadow-[0_6px_16px_rgba(0,85,210,0.38)] transition-transform active:scale-95 ${
@@ -70,7 +74,7 @@ export function MobileTabBar() {
         >
           <LayoutGrid className="w-[26px] h-[26px]" />
         </span>
-        <span className="text-[10.5px] font-semibold text-primary mt-1">Menu</span>
+        <span className="text-[11px] font-semibold text-primary mt-1">Menu</span>
       </button>
 
       {side("operacoes", "Operações", Truck, () => navigate("/modulos?g=operacoes"), inGroup("operacoes"), !has("operacoes"))}

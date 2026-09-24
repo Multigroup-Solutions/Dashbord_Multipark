@@ -144,7 +144,7 @@ const POLL_MS = 20_000;
 /** Badge de opt-out (pediu STOP). */
 function OptedOutBadge() {
   return (
-    <Badge variant="outline" className="h-5 px-1.5 text-[10px] gap-1 border-red-300 text-red-700 dark:border-red-800 dark:text-red-300 shrink-0">
+    <Badge variant="outline" className="h-5 px-1.5 text-[11px] gap-1 border-red-300 text-red-700 dark:border-red-800 dark:text-red-300 shrink-0">
       <BellOff className="h-3 w-3" /> Não quer mensagens
     </Badge>
   );
@@ -426,7 +426,7 @@ export default function WhatsAppInboxPage() {
           {c.optedOut && <BellOff className="h-3.5 w-3.5 text-red-500 shrink-0" aria-label="Não quer mensagens" />}
           <span className="text-[11px] text-muted-foreground shrink-0">{fmtListTime(c.lastMessageAt, now)}</span>
           {c.unreadCount > 0 && (
-            <Badge className="bg-green-600 text-white h-5 min-w-5 px-1.5 justify-center shrink-0">
+            <Badge className="bg-green-700 text-white h-5 min-w-5 px-1.5 justify-center shrink-0">
               {c.unreadCount}
             </Badge>
           )}
@@ -445,7 +445,7 @@ export default function WhatsAppInboxPage() {
           {isOpen && (
             // Critério de ordenação deste bloco, visível na própria linha.
             <span
-              className={`text-[10px] shrink-0 tabular-nums ${
+              className={`text-[11px] shrink-0 tabular-nums ${
                 windowClosingSoon(c.windowExpiresAt, now) ? "text-amber-600 dark:text-amber-400 font-medium" : "text-green-700 dark:text-green-400"
               }`}
               title="Tempo que resta para responder em texto livre"
@@ -457,30 +457,30 @@ export default function WhatsAppInboxPage() {
         {(a?.overdue || a?.windowClosing || c.status !== "aberto" || c.assignedName || c.aiIntent || c.aiUrgency === "urgente") && (
           <div className="flex flex-wrap items-center gap-1 mt-1">
             {c.aiUrgency === "urgente" && c.status !== "resolvido" && (
-              <Badge className="h-5 px-1.5 text-[10px] gap-1 bg-orange-600 text-white" title="Urgente (IA) — entra mais cedo no aviso de SLA">
+              <Badge className="h-5 px-1.5 text-[11px] gap-1 bg-orange-600 text-white" title="Urgente (IA) — entra mais cedo no aviso de SLA">
                 <Zap className="h-3 w-3" /> Urgente
               </Badge>
             )}
             {isWhatsappIntent(c.aiIntent) && (
-              <Badge variant="outline" className="h-5 px-1.5 text-[10px] border-violet-300 text-violet-800 dark:border-violet-800 dark:text-violet-300" title="Intenção (IA)">
+              <Badge variant="outline" className="h-5 px-1.5 text-[11px] border-violet-300 text-violet-800 dark:border-violet-800 dark:text-violet-300" title="Intenção (IA)">
                 {WHATSAPP_INTENT_LABELS[c.aiIntent]}
               </Badge>
             )}
             {a?.overdue && (
-              <Badge className="h-5 px-1.5 text-[10px] gap-1 bg-red-600 text-white" title={`Sem resposta há mais de ${slaMinutes} min`}>
+              <Badge className="h-5 px-1.5 text-[11px] gap-1 bg-red-600 text-white" title={`Sem resposta há mais de ${slaMinutes} min`}>
                 <AlarmClock className="h-3 w-3" /> {formatWaiting(a.waitingMinutes)}
               </Badge>
             )}
             {a?.windowClosing && (
-              <Badge variant="outline" className="h-5 px-1.5 text-[10px] gap-1 border-amber-400 text-amber-700 dark:text-amber-300" title="Janela de 24h a fechar">
+              <Badge variant="outline" className="h-5 px-1.5 text-[11px] gap-1 border-amber-400 text-amber-700 dark:text-amber-300" title="Janela de 24h a fechar">
                 <AlertTriangle className="h-3 w-3" /> Janela a fechar
               </Badge>
             )}
             {c.status !== "aberto" && (
-              <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">{CONVERSATION_STATUS_LABELS[c.status]}</Badge>
+              <Badge variant="secondary" className="h-5 px-1.5 text-[11px]">{CONVERSATION_STATUS_LABELS[c.status]}</Badge>
             )}
             {c.assignedName && (
-              <span className="text-[10px] text-muted-foreground inline-flex items-center gap-0.5 truncate max-w-[45%]" title={`Responsável: ${c.assignedName}`}>
+              <span className="text-[11px] text-muted-foreground inline-flex items-center gap-0.5 truncate max-w-[45%]" title={`Responsável: ${c.assignedName}`}>
                 <UserRound className="h-3 w-3 shrink-0" /> {c.assignedName}
               </span>
             )}
@@ -493,7 +493,7 @@ export default function WhatsAppInboxPage() {
   function groupHeader(label: string, count: number, tone: "open" | "closed") {
     return (
       <div
-        className={`sticky top-0 z-10 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide border-b ${
+        className={`sticky top-0 z-10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide border-b ${
           tone === "open"
             ? "bg-green-50 dark:bg-green-950/40 text-green-800 dark:text-green-300"
             : "bg-muted text-muted-foreground"
@@ -556,7 +556,7 @@ export default function WhatsAppInboxPage() {
         </div>
         <div className="flex items-center gap-1.5 flex-wrap">
           <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusFilter)}>
-            <SelectTrigger className="h-7 w-[120px] text-xs" aria-label="Filtrar por estado">
+            <SelectTrigger className="h-7 w-[150px] text-xs" aria-label="Filtrar por estado">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -588,7 +588,7 @@ export default function WhatsAppInboxPage() {
         </div>
         <div className="flex items-center gap-1.5 flex-wrap">
           <Select value={intentFilter} onValueChange={setIntentFilter}>
-            <SelectTrigger className="h-7 w-[150px] text-xs" aria-label="Filtrar por intenção (IA)">
+            <SelectTrigger className="h-7 w-[170px] text-xs" aria-label="Filtrar por intenção (IA)">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -807,7 +807,7 @@ export default function WhatsAppInboxPage() {
             }}
           />
           <Button
-            className="bg-green-600 hover:bg-green-700 text-white shrink-0"
+            className="bg-green-700 hover:bg-green-800 text-white shrink-0"
             disabled={disabled || !text.trim() || reply.isPending || selectedId == null}
             onClick={submitReply}
           >
@@ -885,7 +885,7 @@ export default function WhatsAppInboxPage() {
                 onValueChange={(v) => assign.mutate({ conversationId: t.conversationId, userId: v === "none" ? null : Number(v) })}
                 disabled={assign.isPending}
               >
-                <SelectTrigger className="h-8 w-[150px] text-xs" aria-label="Responsável">
+                <SelectTrigger className="h-8 w-[180px] max-w-full text-xs" aria-label="Responsável">
                   <UserRound className="h-3.5 w-3.5 mr-1 shrink-0" />
                   <SelectValue placeholder="Responsável" />
                 </SelectTrigger>
@@ -974,13 +974,13 @@ export default function WhatsAppInboxPage() {
                 <div
                   className={`max-w-[75%] rounded-lg px-3 py-1.5 text-sm ${
                     m.direction === "out"
-                      ? "bg-green-600 text-white rounded-br-sm"
+                      ? "bg-green-700 text-white rounded-br-sm"
                       : "bg-background border rounded-bl-sm"
                   }`}
                 >
                   {m.type === "template" && (
                     <div
-                      className={`text-[10px] uppercase tracking-wide mb-0.5 ${
+                      className={`text-[11px] uppercase tracking-wide mb-0.5 ${
                         m.direction === "out" ? "text-green-100" : "text-muted-foreground"
                       }`}
                     >
@@ -995,13 +995,13 @@ export default function WhatsAppInboxPage() {
                       dizem-no em itálico em vez de aparecerem em branco. */}
                   {!(m.mediaAvailable && isMediaPlaceholderBody(m.body)) && (
                     <div
-                      className={`whitespace-pre-wrap break-words${m.body?.trim() ? "" : " italic opacity-80"}`}
+                      className={`whitespace-pre-wrap break-words [overflow-wrap:anywhere]${m.body?.trim() ? "" : " italic opacity-80"}`}
                     >
                       {messageDisplayBody(m) || "—"}
                     </div>
                   )}
                   <div
-                    className={`flex items-center gap-1 justify-end mt-0.5 text-[10px] ${
+                    className={`flex items-center gap-1 justify-end mt-0.5 text-[11px] ${
                       m.direction === "out" ? "text-green-100" : "text-muted-foreground"
                     }`}
                   >
@@ -1009,7 +1009,7 @@ export default function WhatsAppInboxPage() {
                     {m.direction === "out" && <StatusIcon status={m.status} />}
                   </div>
                   {m.direction === "out" && m.status === "failed" && m.errorDetail && (
-                    <div className="text-[10px] text-red-200 mt-0.5">{m.errorDetail}</div>
+                    <div className="text-[11px] text-red-200 mt-0.5">{m.errorDetail}</div>
                   )}
                 </div>
               </div>
@@ -1128,7 +1128,7 @@ export default function WhatsAppInboxPage() {
               Cancelar
             </Button>
             <Button
-              className="bg-green-600 hover:bg-green-700 text-white"
+              className="bg-green-700 hover:bg-green-800 text-white"
               disabled={!t || t.optedOut || tplMissing || sendTemplate.isPending}
               onClick={() =>
                 t &&

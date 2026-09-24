@@ -34,7 +34,7 @@ export default function CaseDashboardCard({ data, onOpenCrossRef, onShowNoCity, 
   if (!data) return null;
   const buckets = [
     { k: "lt1d", label: "< 1 dia", v: data.ageBuckets.lt1d, cls: "text-slate-700" },
-    { k: "d1to3", label: "1–3 dias", v: data.ageBuckets.d1to3, cls: "text-amber-600" },
+    { k: "d1to3", label: "1–3 dias", v: data.ageBuckets.d1to3, cls: "text-amber-700" },
     { k: "d3to7", label: "3–7 dias", v: data.ageBuckets.d3to7, cls: "text-orange-600" },
     { k: "gt7d", label: "> 7 dias", v: data.ageBuckets.gt7d, cls: "text-red-600" },
   ];
@@ -45,23 +45,23 @@ export default function CaseDashboardCard({ data, onOpenCrossRef, onShowNoCity, 
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
-          <div className="rounded border p-2">
+          <div className="rounded border p-2 min-w-0">
             <p className="text-xs text-muted-foreground">Abertos</p>
-            <p className="text-lg font-bold">{data.open}</p>
+            <p className="text-lg font-bold tabular-nums truncate">{data.open}</p>
           </div>
           {buckets.map((b) => (
-            <div key={b.k} className="rounded border p-2">
+            <div key={b.k} className="rounded border p-2 min-w-0">
               <p className="text-xs text-muted-foreground flex items-center gap-1"><Clock className="w-3 h-3" /> {b.label}</p>
-              <p className={`text-lg font-bold ${b.cls}`}>{b.v}</p>
+              <p className={`text-lg font-bold tabular-nums truncate ${b.cls}`}>{b.v}</p>
             </div>
           ))}
-          <div className={`rounded border p-2 ${data.overdue ? "border-red-300 bg-red-50 dark:bg-red-950/30" : ""}`}>
+          <div className={`rounded border p-2 min-w-0 ${data.overdue ? "border-red-300 bg-red-50 dark:bg-red-950/30" : ""}`}>
             <p className="text-xs text-muted-foreground flex items-center gap-1"><AlarmClock className="w-3 h-3" /> Em atraso</p>
-            <p className={`text-lg font-bold ${data.overdue ? "text-red-600" : ""}`}>{data.overdue}</p>
+            <p className={`text-lg font-bold tabular-nums truncate ${data.overdue ? "text-red-600" : ""}`}>{data.overdue}</p>
           </div>
-          <div className="rounded border p-2">
+          <div className="rounded border p-2 min-w-0">
             <p className="text-xs text-muted-foreground">{resolveLabel}</p>
-            <p className="text-lg font-bold">{fmtHours(data.avgResolveHours)}</p>
+            <p className="text-lg font-bold tabular-nums truncate">{fmtHours(data.avgResolveHours)}</p>
           </div>
         </div>
 
@@ -91,7 +91,7 @@ export default function CaseDashboardCard({ data, onOpenCrossRef, onShowNoCity, 
             </p>
             <div className="flex flex-wrap gap-2">
               {data.repeatDrivers.map((d) => (
-                <Badge key={d.key} variant="destructive" className="font-normal">
+                <Badge key={d.key} variant="destructive" className="font-normal whitespace-normal text-left">
                   {d.name}: {d.caseCount} casos · {d.incidents} ocorr. · {d.complaints} recl.
                 </Badge>
               ))}
