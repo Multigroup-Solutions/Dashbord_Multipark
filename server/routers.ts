@@ -8,6 +8,7 @@ import { trainingRouter } from './trainingRouter';
 import { tasksRouter } from './tasksRouter';
 import { settingsRouter } from './settingsRouter';
 import { evaluationRouter } from './evaluationRouter';
+import { assistantRouter } from './assistant/router';
 import { z } from "zod";
 import * as XLSX from "xlsx";
 import { ACCESS_DENIED_MSG, COOKIE_NAME } from "@shared/const";
@@ -1511,6 +1512,7 @@ export const appRouter = router({
 
   // ── TASKS (KANBAN) ────────────────────────────────────────────────────────────
   tasks: tasksRouter,
+  assistant: assistantRouter,
   settings: settingsRouter,
 
   // ── AVALIAÇÃO (motor único: individual + "A minha avaliação") ────────────────

@@ -24,7 +24,8 @@ export type AiFlag =
   | "AI_COMPLAINT_TRIAGE"
   | "AI_REVIEW_AUTO_DRAFTS"
   | "AI_WHATSAPP_TRIAGE"
-  | "AI_LOST_FOUND_MATCH";
+  | "AI_LOST_FOUND_MATCH"
+  | "AI_ASSISTANT";
 
 export interface AiFeatureDef {
   label: string;
@@ -57,6 +58,9 @@ export const AI_FEATURES = {
   review_auto_draft: { label: "Críticas: rascunho automático", flag: "AI_REVIEW_AUTO_DRAFTS", tier: "lite", essential: false },
   whatsapp_triage: { label: "WhatsApp: intenção e urgência", flag: "AI_WHATSAPP_TRIAGE", tier: "lite", essential: false },
   lost_found_match: { label: "Perdidos: correspondências", flag: "AI_LOST_FOUND_MATCH", tier: "lite", essential: false },
+  // Assistente da app (chat da equipa): "como se usa" + perguntas aos dados
+  // por ferramentas só de leitura. Lite (regra do dono; muitas mensagens curtas).
+  assistant: { label: "Assistente (chat)", flag: "AI_ASSISTANT", tier: "lite", essential: false },
   healthcheck: { label: "Teste da ligação", flag: null, tier: "lite", essential: true },
 } as const satisfies Record<string, AiFeatureDef>;
 

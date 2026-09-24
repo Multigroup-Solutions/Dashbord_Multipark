@@ -2627,3 +2627,33 @@ export const lostFoundMatches = mysqlTable("lost_found_matches", {
 	uniqueIndex("uq_lost_found_matches_pair").on(table.lostId, table.foundId),
 	index("idx_lost_found_matches_found").on(table.foundId),
 ]);
+
+// ─── Assistente / chat (0130) ────────────────────────────────────────────────
+// Conversas do assistente (canal "staff"; no futuro "public"). Retenção 30 dias.
+export const aiChatConversations = mysqlTable("ai_chat_conversations", {
+	id: bigint({ mode: "number" }).autoincrement().primaryKey(),
+	channel: varchar({ length: 16 }).notNull(),
+	ownerKey: varchar({ length: 80 }).notNull(),
+	userId: int(),
+	title: varchar({ length: 120 }),
+	createdAt: datetime({ mode: 'string', fsp: 3 }).notNull(),
+	updatedAt: datetime({ mode: 'string', fsp: 3 }).notNull(),
+},
+(table) => [
+	index("idx_ai_chat_conv_owner").on(table.channel, table.ownerKey, table.updatedAt),
+	index("idx_ai_chat_conv_updated").on(table.updatedAt),
+]);
+
+// Mensagens (texto) + nomes das ferramentas usadas — nunca os resultados.
+export const aiChatMessages = mysqlTable("ai_chat_messages", {
+	id: bigint({ mode: "number" }).autoincrement().primaryKey(),
+	conversationId: bigint({ mode: "number" }).notNull(),
+	role: varchar({ length: 12 }).notNull(),
+	content: text().notNull(),
+	tools: varchar({ length: 255 }),
+	createdAt: datetime({ mode: 'string', fsp: 3 }).notNull(),
+},
+(table) => [
+	index("idx_ai_chat_msg_conv").on(table.conversationId, table.id),
+	index("idx_ai_chat_msg_created").on(table.createdAt),
+]);

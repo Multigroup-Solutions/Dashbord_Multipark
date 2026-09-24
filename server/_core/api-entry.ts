@@ -363,6 +363,15 @@ app.get("/api/cron/daily-ops", async (req, res) => {
         console.warn("[daily-ops] retenção activity_logs:", err);
         stepErrors.push(`retenção logs: ${String((err as any)?.message ?? err).slice(0, 200)}`);
       }
+      // Assistente (chat): conversas e mensagens com mais de 30 dias.
+      try {
+        const { purgeOldChats } = await import("./ai/chat/store");
+        const r = await purgeOldChats({ deadlineAt: startedAt + 18_000 });
+        if (r.deleted > 0) console.log(`[daily-ops] assistente: ${r.deleted} mensagem(ns)/conversa(s) antigas apagadas${r.done ? "" : ", continua amanhã"}`);
+      } catch (err) {
+        console.warn("[daily-ops] retenção do assistente:", errCode(err));
+        stepErrors.push(`retenção assistente: ${errCode(err)}`);
+      }
     }
 
     // Reconciliação Multipark (report D-1/D-2 vs BD). Retomável: corre em

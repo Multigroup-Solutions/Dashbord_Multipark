@@ -99,6 +99,7 @@ da env.
 | `AI_REVIEW_AUTO_DRAFTS` | `review_auto_draft`: rascunho automático para cada crítica nova | lite |
 | `AI_WHATSAPP_TRIAGE` | `whatsapp_triage`: intenção e urgência das conversas | lite |
 | `AI_LOST_FOUND_MATCH` | `lost_found_match`: correspondências perdido ↔ achado | lite |
+| `AI_ASSISTANT` | `assistant`: assistente (chat) em todas as páginas | lite |
 
 Quando uma funcionalidade está desligada, a UI mostra a mensagem "Esta
 funcionalidade de IA está desligada." e não se faz nenhum pedido. Os botões
@@ -192,9 +193,9 @@ se esgotou ou quando não há fornecedor. Migração: 0123.
 - Antes de irem para o fornecedor, os emails, telefones, IBAN, NIF e matrículas
   que aparecem em texto livre são trocados por marcadores (`[EMAIL_1]`,
   `[TELEFONE_1]`…). Isto aplica-se às críticas, ao rádio, à passagem de turno,
-  ao WhatsApp, às reclamações e aos Perdidos & Achados.
+  ao WhatsApp, às reclamações, aos Perdidos & Achados e às perguntas ao assistente.
 - Quando a resposta é privada (resumo do rádio, passagem de turno, sugestão de
-  resposta no WhatsApp), os marcadores são repostos depois de a resposta
+  resposta no WhatsApp, assistente), os marcadores são repostos depois de a resposta
   chegar. Nas respostas públicas (críticas), os marcadores são retirados.
 - Dos nomes, só se envia o primeiro.
 - As imagens e PDFs (faturas, documentos do RH) vão tal como estão. Por isso o
@@ -210,17 +211,58 @@ inválida. O detalhe do fornecedor nunca chega ao ecrã. Cada pedido tem um praz
 novas tentativas, com espera exponencial. Uma resposta fora do schema tem uma
 nova tentativa.
 
-## 7. Preparação para o chat público (multipark.app)
+## 7. Assistente (chat da equipa)
 
-Os blocos já existem, mas ainda não há interface:
+Botão redondo no canto inferior direito de todas as páginas. Abre um painel
+(folha de baixo no telemóvel, painel lateral no computador) com:
+
+- **"Como se usa"**: a ajuda está em `docs/ajuda/*.md`, um ficheiro curto por
+  módulo. Depois de mudar um ficheiro, corre `pnpm tsx scripts/gen-ajuda.ts`
+  (um teste avisa se te esqueceres). A escolha do ficheiro é feita por
+  palavras-chave, sem IA. Só os 1–2 ficheiros relevantes vão no pedido.
+- **Perguntas aos dados**, só de leitura, através de ferramentas: reservas
+  (contagens por dia/cidade/parque), Extras-Dia (escalados e horas em falta),
+  casos em aberto (reclamações, ocorrências, perdidos), WhatsApp por
+  responder, a própria avaliação, as próprias tarefas e, só para quem tem
+  acesso aos totais financeiros, o valor das reservas. Cada ferramenta chama
+  o mesmo procedimento que a página usa, **como a própria pessoa**. Por isso
+  aplicam-se as mesmas cidades, as mesmas permissões e os mesmos bloqueios.
+  As ferramentas devolvem totais ou listas curtas (máximo 20 linhas), sem
+  emails, telefones, matrículas nem nomes de clientes.
+- **Histórico**: as conversas ficam guardadas 30 dias (`ai_chat_conversations`
+  e `ai_chat_messages`, migração 0130) e são apagadas pelo daily-ops. Cada
+  pessoa vê só as suas.
+- **Registo**: cada chamada de ferramenta fica em `activity_logs`
+  (`action = assistant_tool`), com o nome e os parâmetros. Os resultados não
+  ficam registados.
+
+Custos e limites:
+
+- nível `lite`. O prompt estável (regras, índice da ajuda e ferramentas) fica
+  na cache de contexto. Com a pergunta vão só os últimos 6 turnos e um resumo
+  das perguntas anteriores (feito sem IA). A resposta tem no máximo 700 tokens;
+- Definições → Parâmetros → **Limites do assistente (chat)**:
+  `{"perMinute": 20, "perDay": 200, "maxInputChars": 1000}` por pessoa;
+- conta para o orçamento mensal. Quando a IA está desligada, sem configuração
+  ou acima do orçamento, o painel mostra uma mensagem simples e não faz
+  pedidos.
+
+## 8. Preparação para o chat público (multipark.app)
+
+O núcleo do chat (`server/_core/ai/chat/`) não depende da equipa: conversas,
+ajuda por palavras-chave, registo de ferramentas e o turno com `runAi`. Um
+chat público usa o mesmo núcleo com outras peças: a sua própria FAQ, só
+ferramentas de FAQ, limites por IP (`ipKey`, guardado como hash) e o canal
+`public`. Os passos estão no [README técnico](../server/_core/ai/README.md)
+(secção "Chat público").
 
 - `checkRateLimit(chave, { perMinute, perDay })` limita os pedidos por
-  utilizador ou por IP. O IP é guardado como hash. O estado vive na BD
-  (`ai_rate_limits`), por isso funciona em serverless.
+  utilizador ou por IP. O estado vive na BD (`ai_rate_limits`), por isso
+  funciona em serverless.
 - `runAi({ cacheSystem: true, system: <contexto longo> })` usa a cache de
-  contexto do Gemini. O prefixo estável é guardado uma vez e os tokens lidos da
-  cache custam cerca de 10% do preço normal. A cache é partilhada entre
-  instâncias através de `ai_context_caches`.
+  contexto do Gemini. Os tokens lidos da cache custam cerca de 10% do preço
+  normal. A cache é partilhada entre instâncias através de
+  `ai_context_caches`.
 
 ## 8. Tutor da Formação
 
@@ -269,6 +311,6 @@ resultado). Não está no menu geral.
 | `AI_THINKING_LEVEL` | Raciocínio dos Gemini 3.x |
 | `AI_MONTHLY_BUDGET_EUR` | Orçamento (a página Definições ganha-lhe) |
 | `AI_TRAINING_TUTOR_PER_MINUTE`, `AI_TRAINING_TUTOR_PER_DAY` | Limites do tutor da Formação (Definições ganha) |
-| `AI_ENABLED`, `AI_EXPENSE_OCR`, `AI_REVIEW_DRAFTS`, `AI_RADIO`, `AI_HANDOVER_SUMMARY`, `AI_WHATSAPP_ASSIST`, `AI_QUIZ`, `AI_HR_AUTOFILL`, `AI_COMPLAINT_TRIAGE`, `AI_REVIEW_AUTO_DRAFTS`, `AI_WHATSAPP_TRIAGE`, `AI_LOST_FOUND_MATCH` | Interruptores |
+| `AI_ENABLED`, `AI_EXPENSE_OCR`, `AI_REVIEW_DRAFTS`, `AI_RADIO`, `AI_HANDOVER_SUMMARY`, `AI_WHATSAPP_ASSIST`, `AI_QUIZ`, `AI_HR_AUTOFILL`, `AI_ASSISTANT` | Interruptores |
 | `LLM_API_URL`, `LLM_API_KEY`, `LLM_MODEL` | Fornecedor antigo |
 | `OPENAI_API_KEY` | Whisper (só se definida) |

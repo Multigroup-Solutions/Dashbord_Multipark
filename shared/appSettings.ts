@@ -118,6 +118,15 @@ export const trainingTutorLimitsSchema = z.object({
   perDay: z.number({ error: "Indica um número por dia." }).int("Número inteiro.").min(1, "Mínimo 1 por dia.").max(5000, "Máximo 5000 por dia."),
 });
 
+/** Limites do assistente (chat): pedidos por pessoa e tamanho da pergunta. */
+export const aiAssistantLimitsSchema = z.object({
+  perMinute: z.number({ error: "perMinute tem de ser um número." }).int().min(1, "perMinute: mínimo 1.").max(120, "perMinute: máximo 120."),
+  perDay: z.number({ error: "perDay tem de ser um número." }).int().min(1, "perDay: mínimo 1.").max(5000, "perDay: máximo 5000."),
+  maxInputChars: z.number({ error: "maxInputChars tem de ser um número." }).int().min(100, "maxInputChars: mínimo 100.").max(4000, "maxInputChars: máximo 4000.").optional(),
+}).strict();
+export type AiAssistantLimits = z.infer<typeof aiAssistantLimitsSchema>;
+export const AI_ASSISTANT_DEFAULT_LIMITS = { perMinute: 20, perDay: 200, maxInputChars: 1000 } as const;
+
 
 export interface SettingDef<S extends z.ZodTypeAny = z.ZodTypeAny> {
   key: string;
@@ -214,6 +223,15 @@ export const SETTINGS = {
     description: "Sobrepõe o nível (lite = o mais barato, fast, smart) de cada funcionalidade. JSON: {\"expense_ocr\": \"fast\"}. Funcionalidades: " + AI_FEATURE_IDS.join(", ") + ". Vazio = omissão do código (quase tudo lite).",
     schema: aiFeatureTiersSchema,
     defaultValue: {},
+    wiring: "live",
+  }),
+  "ai.assistantLimits": def({
+    key: "ai.assistantLimits",
+    group: "ia",
+    label: "Limites do assistente (chat)",
+    description: "Pedidos por pessoa ao assistente e tamanho máximo da pergunta. JSON: {\"perMinute\": 20, \"perDay\": 200, \"maxInputChars\": 1000}. Acima do limite, a pessoa vê \"Muitos pedidos\" e o tempo de espera.",
+    schema: aiAssistantLimitsSchema,
+    defaultValue: { ...AI_ASSISTANT_DEFAULT_LIMITS },
     wiring: "live",
   }),
   "ai.priceOverridesEur": def({
@@ -349,6 +367,7 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "AI_REVIEW_AUTO_DRAFTS", label: "IA: rascunho automático para cada crítica nova", description: "Prepara a resposta às críticas Google novas (fica por aprovar; nunca publica sozinha).", group: "ia" },
   { name: "AI_WHATSAPP_TRIAGE", label: "IA: intenção e urgência no WhatsApp", description: "Etiqueta as conversas (reserva, cancelamento, reclamação…) e marca as urgentes (entram no aviso de SLA). No máximo 1× a cada poucos minutos por conversa; nunca responde sozinha.", group: "ia" },
   { name: "AI_LOST_FOUND_MATCH", label: "IA: correspondências nos Perdidos & Achados", description: "Compara as descrições dos perdidos com os objetos encontrados (depois de um filtro por data, matrícula/reserva e parque). Contactar o cliente é sempre humano.", group: "ia" },
+  { name: "AI_ASSISTANT", label: "IA: assistente (chat)", description: "Botão de ajuda em todas as páginas: explica como se usa a app e responde a perguntas sobre os dados que a pessoa já pode ver (só leitura).", group: "ia" },
   { name: "AI_HR_AUTOFILL", label: "IA: preenchimento a partir de documentos do RH", description: "Lê CC, título de residência, carta, IBAN e morada para preencher campos vazios da ficha. Desligado por omissão até decisão RGPD.", defaultEnabled: false, group: "ia" },
 ];
 
