@@ -422,7 +422,8 @@ export async function linkEmployeesToUserByEmail(db: Db, userId: number, rawEmai
   const rows = await db
     .select({ id: employees.id, fullName: employees.fullName })
     .from(employees)
-    .where(and(sql`LOWER(TRIM(${employees.email})) = ${email}`, isNull(employees.userId)))
+    // Email de trabalho OU pessoal (Fase 1: muitos extras só têm o pessoal)
+    .where(and(sql`(LOWER(TRIM(${employees.email})) = ${email} OR LOWER(TRIM(${employees.personalEmail})) = ${email})`, isNull(employees.userId)))
     .orderBy(asc(employees.id));
   const linked: number[] = [];
   for (const r of rows) {

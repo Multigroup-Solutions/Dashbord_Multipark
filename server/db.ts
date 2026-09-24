@@ -327,6 +327,13 @@ export async function updateUser(userId: number, data: { name?: string; email?: 
   if (Object.keys(updates).length > 0) {
     await db.update(users).set(updates).where(eq(users.id, userId));
   }
+  // Fase 1: email novo → liga fichas com esse email que ainda não têm conta
+  if (updates.email) {
+    try {
+      const { linkEmployeesToUserByEmail } = await import("./identity");
+      await linkEmployeesToUserByEmail(db as any, userId, updates.email);
+    } catch (err) { console.warn("[updateUser] religar fichas:", err); }
+  }
 }
 
 /**
@@ -6161,6 +6168,8 @@ export async function linkInviteToOAuthUser(manualUserId: number, oauthOpenId: s
       .update(users)
       .set({ isActive: 0, loginMethod: `merged_into_${oauthRow.id}`.slice(0, 64) })
       .where(eq(users.id, manualUserId));
+    // Fase 1: a ficha segue a conta que fica (antes ficava presa à desativada)
+    await db.update(employees).set({ userId: oauthRow.id }).where(eq(employees.userId, manualUserId));
     return;
   }
 

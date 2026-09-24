@@ -2752,8 +2752,31 @@ export const appRouter = router({
         if (birthDate) data.birthDate = new Date(birthDate);
         if (contractStart) data.contractStart = new Date(contractStart);
         if (contractEnd) data.contractEnd = new Date(contractEnd);
+        // Fase 1: um utilizador só pode estar numa ficha ativa (o rh.create já
+        // verificava; a edição não)
+        if (input.userId != null) {
+          const { getDb } = await import("./db");
+          const { sql } = await import("drizzle-orm");
+          const db = await getDb();
+          if (db) {
+            const [taken] = ((await db.execute(sql`SELECT id, fullName FROM employees WHERE userId = ${input.userId} AND isActive = 1 AND id <> ${id} LIMIT 1`)) as any)[0] ?? [];
+            if (taken) throw new TRPCError({ code: "BAD_REQUEST", message: `Esse utilizador já está ligado à ficha ${taken.fullName} (#${taken.id}).` });
+          }
+        }
         await updateEmployee(id, data);
         await logActivity({ userId: ctx.user.id, action: "update", entity: "employee", entityId: id, details: `Colaborador atualizado: ${id}` });
+        // Fase 1: mudou o email → volta a tentar ligar ao utilizador com esse email
+        if (input.email !== undefined || input.personalEmail !== undefined) {
+          try {
+            const { getDb } = await import("./db");
+            const db = await getDb();
+            const fresh = await getEmployeeById(id);
+            if (db && fresh && !fresh.employee.userId) {
+              const { ensureUserForEmployee } = await import("./identity");
+              await ensureUserForEmployee(db as any, { id, fullName: fresh.employee.fullName, email: fresh.employee.email, position: String(fresh.employee.position ?? ""), userId: null });
+            }
+          } catch (err) { console.warn("[rh.update] religar utilizador:", err); }
+        }
         return { success: true };
       }),
 
@@ -7424,11 +7447,16 @@ export const appRouter = router({
         const { getDb } = await import("./db");
         const { sql } = await import("drizzle-orm");
         const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
-        // limpa o agente de quem o tivesse
+        // Fase 1: grava também o ID do agente (fiável) e não só o nome
+        const { agentIdForName } = await import("./identityLink");
+        const agentId = await agentIdForName(input.agentName);
+        // limpa o agente de quem o tivesse (nome e id)
         await db.execute(sql`UPDATE employees SET multiparkAgentName = NULL WHERE multiparkAgentName = ${input.agentName}`);
+        if (agentId) await db.execute(sql`UPDATE employees SET multiparkAgentUserId = NULL WHERE multiparkAgentUserId = ${agentId}`);
         if (input.employeeId != null) {
-          await db.execute(sql`UPDATE employees SET multiparkAgentName = ${input.agentName} WHERE id = ${input.employeeId}`);
+          await db.execute(sql`UPDATE employees SET multiparkAgentName = ${input.agentName}, multiparkAgentUserId = ${agentId} WHERE id = ${input.employeeId}`);
         }
+        await logActivity({ userId: ctx.user.id, action: "agent_attach", entity: "employee", entityId: input.employeeId ?? undefined, details: `Agente Multipark "${input.agentName}"${agentId ? ` (${agentId})` : ""} ${input.employeeId != null ? "ligado manualmente" : "desligado"}` });
         return { success: true };
       }),
 
@@ -7450,21 +7478,30 @@ export const appRouter = router({
           AND agentName NOT IN (SELECT multiparkAgentName FROM employees WHERE multiparkAgentName IS NOT NULL)`));
       const emps = rows(await db.execute(sql`SELECT id, fullName, email, multiparkAgentName FROM employees WHERE isActive = 1`));
 
+      // Fase 1: nome completo OU "primeiro + último" (é o formato da Multipark)
+      const { nameKeys, agentIdForName } = await import("./identityLink");
       const byName = new Map<string, any[]>();
       for (const e of emps) {
-        const k = norm(e.fullName ?? "");
-        if (!k) continue;
-        byName.set(k, [...(byName.get(k) ?? []), e]);
+        for (const k of nameKeys(e.fullName ?? "")) {
+          const list = byName.get(k) ?? [];
+          if (!list.includes(e)) byName.set(k, [...list, e]);
+        }
       }
 
       const linked: Array<{ agentName: string; employeeName: string }> = [];
       const ambiguous: string[] = [];
       const unmatched: string[] = [];
       for (const a of agents) {
-        const candidates = byName.get(norm(a.agentName)) ?? [];
+        const candidates = byName.get(nameKeys(a.agentName)[0] ?? norm(a.agentName)) ?? [];
         const free = candidates.filter((e) => !e.multiparkAgentName);
         if (free.length === 1) {
-          await db.execute(sql`UPDATE employees SET multiparkAgentName = ${a.agentName} WHERE id = ${free[0].id} AND multiparkAgentName IS NULL`);
+          // id do agente só se ainda não estiver noutra ficha (verificado aqui —
+          // um UPDATE com subconsulta à própria tabela dá erro 1093 no MySQL)
+          let agentId = await agentIdForName(a.agentName);
+          if (agentId && rows(await db.execute(sql`SELECT id FROM employees WHERE multiparkAgentUserId = ${agentId} LIMIT 1`)).length) agentId = null;
+          await db.execute(sql`UPDATE employees SET multiparkAgentName = ${a.agentName},
+              multiparkAgentUserId = COALESCE(${agentId}, multiparkAgentUserId)
+            WHERE id = ${free[0].id} AND multiparkAgentName IS NULL`);
           free[0].multiparkAgentName = a.agentName; // não voltar a usar este colaborador
           linked.push({ agentName: a.agentName, employeeName: free[0].fullName });
         } else if (candidates.length > 1) {
@@ -7598,6 +7635,7 @@ export const appRouter = router({
       const { sql } = await import("drizzle-orm");
       const [rows] = await db.execute(sql`
         SELECT agentName,
+          MAX(agentUserId) AS agentUserId,
           COUNT(*) AS total,
           SUM(changeType IN ('CHECK_IN','CHECKIN')) AS checkins,
           SUM(changeType IN ('CHECK_OUT','CHECKOUT')) AS checkouts,
@@ -7609,15 +7647,18 @@ export const appRouter = router({
         GROUP BY agentName`) as any;
       const { employees } = await import("../drizzle/schema");
       const { isNotNull } = await import("drizzle-orm");
-      const linkedEmps = await db.select({ n: employees.multiparkAgentName }).from(employees).where(isNotNull(employees.multiparkAgentName));
-      const linked = new Set(linkedEmps.map((e) => (e.n ?? "").trim().toLowerCase()));
+      const linkedEmps = await db.select({ n: employees.multiparkAgentName, id: employees.multiparkAgentUserId }).from(employees);
+      const linked = new Set(linkedEmps.map((e) => (e.n ?? "").trim().toLowerCase()).filter(Boolean));
+      // Fase 1: um agente ligado só pelo ID (outro nome na ficha) também está ligado
+      const linkedIds = new Set(linkedEmps.map((e) => (e.id ?? "").trim()).filter(Boolean));
       const partners = new Set((await listAgentPartners()).map((p) => p.agentName.trim().toLowerCase()));
       const { listIgnoredAgents } = await import("./db");
       const ignored = new Set((await listIgnoredAgents()).map((n) => n.trim().toLowerCase()));
       return (rows as any[])
         .filter((r) => {
           const key = String(r.agentName).trim().toLowerCase();
-          return !linked.has(key) && !partners.has(key) && !ignored.has(key);
+          const id = String(r.agentUserId ?? "").trim();
+          return !linked.has(key) && !(id && linkedIds.has(id)) && !partners.has(key) && !ignored.has(key);
         })
         .map((r) => ({
           agentName: r.agentName,
@@ -7658,16 +7699,26 @@ export const appRouter = router({
         // Centro de custos: o indicado, ou PENDENTE (null) — deixou de assumir
         // Lisboa por nome literal; a ficha aparece na fila "sem centro".
         void projects; void and;
+        const { agentIdForName } = await import("./identityLink");
+        const agentId = await agentIdForName(input.agentName);
         const [ins] = await db.insert(employees).values({
           fullName: input.agentName,
           email: input.email ?? null,
           multiparkAgentName: input.agentName,
+          multiparkAgentUserId: agentId,
           position: "extra",
           contractType: "extra",
           projectId: input.projectId ?? null,
           isActive: 1,
         } as any).$returningId();
         await logActivity({ userId: ctx.user.id, action: "create", entity: "employee", entityId: (ins as any)?.id ?? 0, details: `Criado a partir do agente: ${input.agentName}` });
+        // Fase 1: toda a ficha nova com email fica com utilizador
+        if (input.email && (ins as any)?.id) {
+          try {
+            const { ensureUserForEmployee } = await import("./identity");
+            await ensureUserForEmployee(db as any, { id: (ins as any).id, fullName: input.agentName, email: input.email, position: "extra", userId: null });
+          } catch (err) { console.warn("[createEmployeeFromAgent] utilizador:", err); }
+        }
         return { id: (ins as any)?.id };
       }),
 
