@@ -455,6 +455,21 @@ app.get("/api/cron/extras-auto", async (req, res) => {
   }
 });
 
+// Escala automática dos extras (propor às 14h, confirmar e avisar às 18h, por
+// omissão — Definições → Parâmetros → Extras-dia). O GitHub Actions chama de
+// 30 em 30 min entre as 08h e as 23h de Lisboa; tudo idempotente (propor duas
+// vezes não duplica, confirmar duas vezes não reenvia). ok:false só com erros.
+app.get("/api/cron/extras-schedule", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const { runScheduleAutomation } = await import("../extrasSchedule");
+    const report = await runScheduleAutomation();
+    res.json({ ranAt: new Date().toISOString(), ...report });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: String(err?.message ?? err) });
+  }
+});
+
 // Leitor de email inbound: lê a caixa reservas@ por IMAP e cria registos nos
 // módulos (Críticas/Reclamações/Perdidos/RH) a partir dos emails reencaminhados
 // para os aliases. Substitui o fluxo Make.com. O GitHub Actions chama-o de hora

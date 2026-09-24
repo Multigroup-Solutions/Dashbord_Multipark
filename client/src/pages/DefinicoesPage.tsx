@@ -360,7 +360,13 @@ function IntegrationsCard() {
 
 // ─── Parâmetros ─────────────────────────────────────────────────────────────
 
-const GROUP_LABEL: Record<string, string> = { financeiro: "Financeiro", sla: "Prazos (SLA)", emails: "Destinatários de email", disponibilidade: "Disponibilidades", ia: "Inteligência artificial" };
+const GROUP_LABEL: Record<string, string> = { financeiro: "Financeiro", sla: "Prazos (SLA)", emails: "Destinatários de email", disponibilidade: "Disponibilidades", ia: "Inteligência artificial", extras: "Extras-dia (escala automática)" };
+
+const CITY_FIELDS: { id: "lisbon" | "porto" | "faro"; label: string }[] = [
+  { id: "lisbon", label: "Lisboa" },
+  { id: "porto", label: "Porto" },
+  { id: "faro", label: "Faro" },
+];
 
 type SettingItem = {
   key: string; group: string; label: string; description: string; wiring: "live" | "store";
@@ -424,15 +430,25 @@ function SettingEditor({ item, saving, onSave, codeValue }: { item: SettingItem;
   const isRate = item.key === "finance.vat" || item.key === "finance.tsu";
   const isEmails = item.key === "emails.handoverCc";
   const isNumber = typeof item.defaultValue === "number";
-  const isJson = !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue) && !isRate && !isEmails;
+  const isBool = typeof item.defaultValue === "boolean";
+  // Mapa por cidade (ex.: carros/hora por condutor, ponto de encontro).
+  const isCityMap = !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue)
+    && CITY_FIELDS.every((c) => c.id in (item.defaultValue as Record<string, unknown>));
+  const cityMapNumeric = isCityMap && typeof (item.defaultValue as Record<string, unknown>).lisbon === "number";
+  const isTime = typeof item.defaultValue === "string" && /^\d{2}:\d{2}$/.test(item.defaultValue as string);
+  const isJson = !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue) && !isRate && !isEmails && !isCityMap;
 
   const [rates, setRates] = useState<{ pct: string; from: string }[]>([]);
+  const [cityMap, setCityMap] = useState<Record<string, string>>({});
+  const [bool, setBool] = useState(false);
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     setError(null);
     if (isRate) setRates(((current as RateEntry[]) ?? []).map((r) => ({ pct: pct(r.rate), from: r.from })));
     else if (isEmails) setText(((current as string[]) ?? []).join("\n"));
+    else if (isCityMap) setCityMap(Object.fromEntries(CITY_FIELDS.map((c) => [c.id, String((current as Record<string, unknown>)?.[c.id] ?? "").replace(".", ",")])));
+    else if (isBool) setBool(!!current);
     else if (isJson) setText(current && Object.keys(current as object).length ? JSON.stringify(current, null, 2) : "");
     else setText(current == null ? "" : String(current));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -441,6 +457,11 @@ function SettingEditor({ item, saving, onSave, codeValue }: { item: SettingItem;
   const build = (): unknown => {
     if (isRate) return rates.map((r) => ({ rate: Number(r.pct.replace(",", ".")) / 100, from: r.from.trim() }));
     if (isEmails) return text.split(/[\s,;]+/).map((e) => e.trim()).filter(Boolean);
+    if (isCityMap) return Object.fromEntries(CITY_FIELDS.map((c) => {
+      const raw = (cityMap[c.id] ?? "").trim();
+      return [c.id, cityMapNumeric ? (raw === "" ? NaN : Number(raw.replace(",", "."))) : raw];
+    }));
+    if (isBool) return bool;
     if (isJson) {
       if (!text.trim()) return {};
       try { return JSON.parse(text); } catch { return "__json_invalido__"; }
@@ -502,6 +523,24 @@ function SettingEditor({ item, saving, onSave, codeValue }: { item: SettingItem;
         </div>
       ) : isEmails ? (
         <Textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder="um email por linha" />
+      ) : isCityMap ? (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 max-w-2xl">
+          {CITY_FIELDS.map((c) => (
+            <label key={c.id} className="text-xs space-y-1">
+              <span className="text-muted-foreground">{c.label}</span>
+              <Input inputMode={cityMapNumeric ? "decimal" : "text"} value={cityMap[c.id] ?? ""} aria-label={c.label}
+                placeholder={cityMapNumeric ? String((item.defaultValue as Record<string, unknown>)[c.id]) : "ex.: Parque P1, portão principal"}
+                onChange={(e) => setCityMap((p) => ({ ...p, [c.id]: e.target.value }))} />
+            </label>
+          ))}
+        </div>
+      ) : isBool ? (
+        <label className="flex items-center gap-2 text-sm">
+          <Switch checked={bool} onCheckedChange={setBool} aria-label={item.label} />
+          {bool ? "Ligado" : "Desligado"}
+        </label>
+      ) : isTime ? (
+        <Input type="time" className="w-32" value={text} onChange={(e) => setText(e.target.value)} aria-label={item.label} />
       ) : isJson ? (
         <Textarea rows={4} className="font-mono text-xs" value={text} onChange={(e) => setText(e.target.value)} placeholder="{}" />
       ) : (

@@ -830,9 +830,56 @@ export const extrasDiaAssignments = mysqlTable("extras_dia_assignments", {
 	createdById: int(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+	// 0115 — escala automática: 'proposed' (por confirmar) | 'confirmed';
+	// version sobe quando muda pessoa/dia/horas (1 aviso por versão).
+	status: varchar({ length: 12 }).default('confirmed').notNull(),
+	version: int().default(1).notNull(),
+	proposalReason: varchar({ length: 500 }),
 },
 (table) => [
 	index("idx_extras_dia_date").on(table.assignmentDate),
+	index("idx_extras_dia_date_city_status").on(table.assignmentDate, table.city, table.status),
+]);
+
+// 0115 — estado da escala por (dia, cidade): proposta/confirmada + suspender envio.
+export const extrasDiaSchedules = mysqlTable("extras_dia_schedules", {
+	assignmentDate: varchar({ length: 10 }).notNull(),
+	city: varchar({ length: 16 }).notNull(),
+	status: varchar({ length: 12 }).default('proposed').notNull(),
+	holdAuto: tinyint().default(0).notNull(),
+	proposedAt: timestamp({ mode: 'string' }),
+	proposedBy: varchar({ length: 8 }),
+	proposedById: int(),
+	confirmedAt: timestamp({ mode: 'string' }),
+	confirmedBy: varchar({ length: 8 }),
+	confirmedById: int(),
+	gapsJson: text(),
+	summary: varchar({ length: 1000 }),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	primaryKey({ columns: [table.assignmentDate, table.city] }),
+]);
+
+// 0115 — avisos de escala (WhatsApp/email), 1 por (linha, versão, tipo, canal).
+export const extrasDiaNotifications = mysqlTable("extras_dia_notifications", {
+	id: int().autoincrement().primaryKey(),
+	assignmentId: int().notNull(),
+	version: int().notNull(),
+	kind: varchar({ length: 12 }).notNull(),
+	channel: varchar({ length: 12 }).notNull(),
+	employeeId: int(),
+	assignmentDate: varchar({ length: 10 }).notNull(),
+	city: varchar({ length: 16 }).notNull(),
+	status: varchar({ length: 12 }).notNull(),
+	attempts: int().default(0).notNull(),
+	detail: varchar({ length: 300 }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_edn_version").on(table.assignmentId, table.version, table.kind, table.channel),
+	index("idx_edn_date_city").on(table.assignmentDate, table.city),
 ]);
 
 // Passagem de turno (team leaders) — 1 registo por (dia, turno, cidade).

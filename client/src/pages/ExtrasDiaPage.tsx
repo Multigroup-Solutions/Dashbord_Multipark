@@ -58,7 +58,11 @@ import {
   X,
   Pencil,
   Wand2,
+  Sparkles,
+  PauseCircle,
 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { describeGap } from "@shared/extrasSchedule";
 import { AvailabilityDayFields, isDayMarked, type AvailabilityDayState } from "@/components/AvailabilityDayFields";
 import {
   CITY_KEYS,
@@ -138,6 +142,8 @@ const SHIFTS: { id: ShiftId; label: string; defaultStart: number; defaultEnd: nu
 
 const fmtEur = (n: number) =>
   n.toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
+const fmtCph = (n: number) => String(n).replace(".", ",");
+
 const fmtHour = (h: number) => {
   if (h < 24) return `${String(h).padStart(2, "0")}h`;
   return `${String(h - 24).padStart(2, "0")}h+1`;
@@ -219,6 +225,13 @@ export default function ExtrasDiaPage() {
           <p className="text-sm text-muted-foreground mt-1">
             Planeamento de chegadas, saídas, lavagens e condutores para o dia seguinte.
           </p>
+          {data && (
+            <p className="text-xs mt-1">
+              <Badge variant="outline" className="font-normal" title="Definições → Parâmetros → Extras-dia">
+                {fmtCph(data.carsPerHourPerDriver)} carros/hora por condutor
+              </Badge>
+            </p>
+          )}
         </div>
         <div className="space-y-1">
           <Label htmlFor="baseDate" className="text-xs">Data base</Label>
@@ -399,6 +412,9 @@ export default function ExtrasDiaPage() {
             </CardContent>
           </Card>
 
+          {/* Proposta automática + confirmação + avisos */}
+          <SchedulePanel targetDate={data.targetDate} carsPerHour={data.carsPerHourPerDriver} />
+
           {/* Equipa do dia (real) — vem antes da estimativa */}
           {SHIFTS.map(s => (
             <TeamSection
@@ -423,7 +439,7 @@ export default function ExtrasDiaPage() {
                 <CardHeader>
                   <CardTitle className="text-base flex items-center gap-2">
                     <Users className="h-4 w-4" />
-                    Estimativa de referência (3 carros/hora · turnos 3–12h)
+                    Estimativa de referência ({fmtCph(data.carsPerHourPerDriver)} carros/hora por condutor · turnos 3–12h)
                   </CardTitle>
                   {actuals.count > 0 && (
                     <p className="text-xs text-muted-foreground">
@@ -508,6 +524,138 @@ export default function ExtrasDiaPage() {
   );
 }
 
+// ─── Proposta automática da escala ────────────────────────────────────────────
+
+const SCHEDULE_STATUS_LABEL: Record<string, { label: string; cls: string }> = {
+  none: { label: "Sem proposta", cls: "bg-muted text-muted-foreground" },
+  proposing: { label: "A propor…", cls: "bg-muted text-muted-foreground" },
+  proposed: { label: "Proposta por confirmar", cls: "bg-violet-100 text-violet-800 border-violet-200" },
+  confirmed: { label: "Escala confirmada", cls: "bg-emerald-100 text-emerald-800 border-emerald-200" },
+};
+
+function SchedulePanel({ targetDate, carsPerHour }: { targetDate: string; carsPerHour: number }) {
+  const utils = trpc.useUtils();
+  const city = useContext(ExtrasCityContext);
+  const q = trpc.extrasDia.schedule.useQuery({ date: targetDate, city }, { enabled: !!targetDate });
+  const refresh = () => {
+    utils.extrasDia.schedule.invalidate();
+    utils.extrasDia.assignments.invalidate();
+    utils.extrasDia.coverage.invalidate();
+    utils.extrasDia.notices.invalidate();
+  };
+  const propose = trpc.extrasDia.propose.useMutation({
+    onSuccess: (r) => {
+      refresh();
+      if (r.gaps.length) toast.warning(`${r.proposed} condutor(es) propostos — ${r.gaps.map(describeGap).join("; ")}.`);
+      else toast.success(r.proposed ? `${r.proposed} condutor(es) propostos. Revê e confirma.` : "Nada a propor — a previsão já está coberta.");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const confirm = trpc.extrasDia.confirmSchedule.useMutation({
+    onSuccess: (r) => {
+      refresh();
+      const n = r.notifications;
+      const parts: string[] = [];
+      if (n?.whatsapp) parts.push(`${n.whatsapp.sent} WhatsApp`);
+      if (n?.email) parts.push(`${n.email.sent} email(s)`);
+      const extra = [...(n?.warnings ?? []), ...(n?.errors ?? [])];
+      toast.success(`Escala confirmada${parts.length ? ` · avisos enviados: ${parts.join(", ")}` : ""}${extra.length ? ` · ${extra.join(" · ")}` : ""}`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const hold = trpc.extrasDia.setScheduleHold.useMutation({
+    onSuccess: (r) => { refresh(); toast.success(r.hold ? "Envio automático suspenso para este dia." : "Envio automático retomado."); },
+    onError: (e) => toast.error(e.message),
+  });
+  const ask = trpc.extrasDia.requestMissingAvailability.useMutation({
+    onSuccess: (r) => {
+      if (r.targets === 0) toast.info("Todos os extras desta cidade já responderam.");
+      else toast.success(`Pedido enviado a ${r.targets} extra(s) · ${r.emailSent} email(s), ${r.whatsappSent} WhatsApp.`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const d = q.data;
+  const st = SCHEDULE_STATUS_LABEL[d?.state?.status ?? "none"] ?? SCHEDULE_STATUS_LABEL.none;
+  const held = !!d?.state?.holdAuto;
+  const busy = propose.isPending || confirm.isPending || hold.isPending;
+  const sentCount = (d?.notifications ?? []).filter((n) => n.kind === "scheduled" && n.status === "sent").length;
+  const rows = (d?.proposedCount ?? 0) + (d?.confirmedCount ?? 0);
+
+  return (
+    <Card className="border-violet-200">
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div className="min-w-0">
+            <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+              <Sparkles className="h-4 w-4 text-violet-600" />
+              Escala automática — {fmtDate(targetDate)}
+              <Badge variant="outline" className={st.cls}>{st.label}</Badge>
+              {held && <Badge variant="outline" className="bg-amber-100 text-amber-900 border-amber-200">envio automático suspenso</Badge>}
+            </CardTitle>
+            <p className="text-xs text-muted-foreground mt-1">
+              {fmtCph(carsPerHour)} carros/hora por condutor · pico de {d?.neededPeak ?? "—"} condutor(es) ·{" "}
+              {d ? `${d.availableCount} extra(s) disponíveis, ${d.noAnswerCount} sem resposta` : "…"}
+            </p>
+            {d && (
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Proposta automática às {d.settings.autoProposeAt}
+                {d.settings.autoConfirm ? ` · confirmação e avisos (WhatsApp + email) automáticos às ${d.settings.autoConfirmAt}` : " · confirmação automática desligada"}
+                {" "}(hora de Lisboa, no dia anterior).
+              </p>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="outline" disabled={busy || !targetDate} onClick={() => propose.mutate({ date: targetDate, city })}
+              title="Preenche as horas em falta com os extras disponíveis (substitui a proposta anterior; não mexe no que já está confirmado)">
+              <Wand2 className="h-4 w-4 mr-1" />{propose.isPending ? "A propor…" : "Proposta automática"}
+            </Button>
+            <Button size="sm" disabled={busy || !targetDate || rows === 0}
+              onClick={() => confirm.mutate({ date: targetDate, city })}
+              title="Confirma todas as propostas e avisa cada extra por WhatsApp e email (quem já foi avisado não recebe outra vez)">
+              <CheckCircle2 className="h-4 w-4 mr-1" />{confirm.isPending ? "A confirmar…" : `Confirmar escala${d?.proposedCount ? ` (${d.proposedCount})` : ""}`}
+            </Button>
+            <label className="flex items-center gap-2 text-xs border rounded-md px-2 py-1.5" title="O cron não confirma nem envia avisos deste dia/cidade enquanto estiver suspenso">
+              <Switch checked={held} disabled={busy || !targetDate} onCheckedChange={(v) => hold.mutate({ date: targetDate, city, hold: v })} aria-label="Suspender envio automático" />
+              <PauseCircle className="h-3.5 w-3.5" /> Suspender envio automático
+            </label>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {q.isLoading && <div className="text-sm text-muted-foreground">A carregar…</div>}
+        {q.error && <div className="text-sm text-red-600">Erro: {q.error.message}</div>}
+        {d && d.gaps.length > 0 && (
+          <div className="rounded-md border-2 border-red-400 bg-red-50 p-3 text-sm text-red-900 dark:bg-red-950/40 dark:text-red-200">
+            <div className="flex items-center gap-2 font-semibold">
+              <AlertTriangle className="h-4 w-4 shrink-0" /> Falta de gente
+            </div>
+            <ul className="mt-1 space-y-0.5">
+              {d.gaps.map((g, i) => <li key={i}>• {describeGap(g).replace(/^./, (c) => c.toUpperCase())}</li>)}
+            </ul>
+            <Button size="sm" variant="outline" className="mt-2 bg-white dark:bg-transparent" disabled={ask.isPending || d.noAnswerCount === 0}
+              onClick={() => ask.mutate({ date: targetDate, city })}>
+              <Send className="h-4 w-4 mr-1" />
+              {ask.isPending ? "A enviar…" : `Pedir disponibilidade a quem não respondeu (${d.noAnswerCount})`}
+            </Button>
+          </div>
+        )}
+        {d && d.gaps.length === 0 && d.neededPeak > 0 && (
+          <div className="rounded-md border border-emerald-300 bg-emerald-50/60 p-2 text-xs text-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200">
+            Todas as horas previstas estão cobertas pela escala.
+          </div>
+        )}
+        {d?.state?.summary && <p className="text-xs text-muted-foreground">{d.state.summary}</p>}
+        {d?.state?.status === "confirmed" && (
+          <p className="text-xs text-muted-foreground">
+            Confirmada {d.state.confirmedBy === "auto" ? "automaticamente" : "manualmente"} · {sentCount} aviso(s) enviado(s).
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Equipa do dia (atribuições) ───────────────────────────────────────────────
 
 function TeamSection({
@@ -540,6 +688,7 @@ function TeamSection({
     onSuccess: () => {
       utils.extrasDia.assignments.invalidate();
       utils.extrasDia.coverage.invalidate();
+      utils.extrasDia.schedule.invalidate();
       toast.success("Turno guardado");
     },
     onError: (e) => { if (!(canForceTraining && e.data?.code === "PRECONDITION_FAILED")) toast.error(e.message); },
@@ -557,10 +706,12 @@ function TeamSection({
     }
   };
   const del = trpc.extrasDia.deleteAssignment.useMutation({
-    onSuccess: () => {
+    onSuccess: (r) => {
       utils.extrasDia.assignments.invalidate();
       utils.extrasDia.coverage.invalidate();
-      toast.success("Turno removido");
+      utils.extrasDia.schedule.invalidate();
+      const told = [r.notified?.whatsapp === "sent" ? "WhatsApp" : null, r.notified?.email === "sent" ? "email" : null].filter(Boolean);
+      toast.success(told.length ? `Turno removido — a pessoa foi avisada por ${told.join(" e ")}.` : "Turno removido");
     },
     onError: (e) => toast.error(e.message),
   });
@@ -572,6 +723,7 @@ function TeamSection({
     onSuccess: (r) => {
       utils.extrasDia.assignments.invalidate();
       utils.extrasDia.coverage.invalidate();
+      utils.extrasDia.schedule.invalidate();
       if (r.created.length === 0 && r.unfilled.length === 0) toast.info("A escala já cobre a previsão deste turno.");
       else if (r.unfilled.length === 0) toast.success(`${r.created.length} extra(s) escalado(s) com base na disponibilidade.`);
       else toast.warning(`${r.created.length} escalado(s); faltam ${r.unfilled.length} turno(s) sem ninguém disponível.`);
@@ -1030,6 +1182,8 @@ function AssignmentRow({
     notes: string | null;
     hoursBilled: number;
     cost: number;
+    status?: "proposed" | "confirmed";
+    proposalReason?: string | null;
   };
   onSave: (payload: AssignmentFormValues) => void;
   onDelete: () => void;
@@ -1063,7 +1217,15 @@ function AssignmentRow({
               </button>
             ) : a.personName}
             <NoticeBadge notice={notice} />
+            {a.status === "proposed" && (
+              <Badge variant="outline" className="text-[10px] border-violet-300 text-violet-700" title="Proposta automática — ainda por confirmar">proposta</Badge>
+            )}
           </span>
+          {a.proposalReason && (
+            <div className="text-[11px] text-muted-foreground mt-0.5 max-w-md leading-snug" title="Porquê esta pessoa">
+              {a.proposalReason}
+            </div>
+          )}
         </td>
         <td className="py-2 px-2">
           <Badge variant="secondary">{levels.find(l => l.id === a.level)?.label}</Badge>

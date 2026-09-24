@@ -74,7 +74,44 @@ export const aiFeatureTiersSchema = z.record(
   z.enum(AI_TIERS as unknown as ["lite", "fast", "smart"], { error: "Nível inválido (lite, fast ou smart)." }),
 );
 
-export type SettingGroup = "financeiro" | "sla" | "emails" | "disponibilidade" | "ia";
+export type SettingGroup = "financeiro" | "sla" | "emails" | "disponibilidade" | "ia" | "extras";
+
+// ─── Extras-dia (escala automática) ─────────────────────────────────────────
+
+/** Cidades do Extras-dia (mesmos ids do servidor: server/extrasDia.ts). */
+export const EXTRAS_CITY_IDS = ["lisbon", "porto", "faro"] as const;
+export type ExtrasCityId = (typeof EXTRAS_CITY_IDS)[number];
+
+const carsPerHourValue = z
+  .number({ error: "Indica um número de carros por hora." })
+  .min(0.5, "Mínimo 0,5 carros/hora.")
+  .max(20, "Máximo 20 carros/hora.");
+
+/** Carros/hora que UM condutor despacha, por cidade (Lisboa 2, Porto 3, Faro 3). */
+export const carsPerHourMapSchema = z.object({
+  lisbon: carsPerHourValue,
+  porto: carsPerHourValue,
+  faro: carsPerHourValue,
+}, { error: "Indica os carros/hora de Lisboa, Porto e Faro." });
+export type CarsPerHourMap = z.infer<typeof carsPerHourMapSchema>;
+export const DEFAULT_CARS_PER_HOUR: CarsPerHourMap = { lisbon: 2, porto: 3, faro: 3 };
+
+/** Ponto de encontro por cidade (vai no aviso de escala); vazio = não se indica. */
+export const meetingPointMapSchema = z.object({
+  lisbon: z.string().trim().max(200, "Máximo 200 caracteres."),
+  porto: z.string().trim().max(200, "Máximo 200 caracteres."),
+  faro: z.string().trim().max(200, "Máximo 200 caracteres."),
+});
+
+/** Hora "HH:MM" (Lisboa). */
+export const hhmmSchema = z.string().trim().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Hora inválida (HH:MM, ex.: 14:00).");
+
+/** "14:30" → 870 (minutos desde a meia-noite). PURA. */
+export function hhmmToMinutes(v: string): number {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(v ?? "").trim());
+  if (!m) return NaN;
+  return Number(m[1]) * 60 + Number(m[2]);
+}
 
 export interface SettingDef<S extends z.ZodTypeAny = z.ZodTypeAny> {
   key: string;
@@ -180,6 +217,58 @@ export const SETTINGS = {
     description: "Sobrepõe a tabela de preços do código (server/_core/ai/pricing.ts) para calcular o custo registado. JSON: {\"<modelo>\": {\"input\": 0.22, \"output\": 1.3, \"cached\": 0.02}}. Vazio = tabela do código.",
     schema: aiPriceOverridesSchema,
     defaultValue: {},
+  "extras.carsPerHourPerDriver": def({
+    key: "extras.carsPerHourPerDriver",
+    group: "extras",
+    label: "Carros por hora por condutor",
+    description: "Quantos carros (recolhas + entregas, pesados por tipo de entrega) um condutor despacha por hora, por cidade. Define quantos condutores a previsão do Extras-dia pede em cada hora e a proposta automática de escala.",
+    schema: carsPerHourMapSchema,
+    defaultValue: DEFAULT_CARS_PER_HOUR,
+    wiring: "live",
+  }),
+  "extras.autoProposeAt": def({
+    key: "extras.autoProposeAt",
+    group: "extras",
+    label: "Hora da proposta automática de escala",
+    description: "A partir desta hora (Lisboa) o sistema propõe a escala dos próximos dias com os extras disponíveis (uma vez por dia e cidade; não substitui uma escala já proposta ou confirmada).",
+    schema: hhmmSchema,
+    defaultValue: "14:00",
+    wiring: "live",
+  }),
+  "extras.autoProposeDaysAhead": def({
+    key: "extras.autoProposeDaysAhead",
+    group: "extras",
+    label: "Dias propostos com antecedência",
+    description: "Quantos dias à frente a proposta automática cobre (1 = só amanhã).",
+    schema: z.number({ error: "Indica um número de dias." }).int("Número inteiro de dias.").min(1, "Mínimo 1 dia.").max(7, "Máximo 7 dias."),
+    defaultValue: 1,
+    wiring: "live",
+  }),
+  "extras.autoConfirm": def({
+    key: "extras.autoConfirm",
+    group: "extras",
+    label: "Confirmar e avisar automaticamente",
+    description: "Se ligado, a proposta de amanhã que ninguém confirmou nem suspendeu é confirmada à hora indicada abaixo e os extras são avisados por WhatsApp e email.",
+    schema: z.boolean({ error: "Ligado ou desligado." }),
+    defaultValue: true,
+    wiring: "live",
+  }),
+  "extras.autoConfirmAt": def({
+    key: "extras.autoConfirmAt",
+    group: "extras",
+    label: "Hora da confirmação automática",
+    description: "Hora (Lisboa) a partir da qual a proposta de amanhã é confirmada e enviada automaticamente (se não estiver suspensa).",
+    schema: hhmmSchema,
+    defaultValue: "18:00",
+    wiring: "live",
+  }),
+  "extras.meetingPoints": def({
+    key: "extras.meetingPoints",
+    group: "extras",
+    label: "Ponto de encontro (aviso de escala)",
+    description: "Texto curto com o ponto de encontro de cada cidade, incluído no WhatsApp e no email de escala. Vazio = não se indica.",
+    schema: meetingPointMapSchema,
+    defaultValue: { lisbon: "", porto: "", faro: "" },
     wiring: "live",
   }),
 } as const;
@@ -274,6 +363,9 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "google-business", label: "Críticas Google (Business Profile)", intervalMinutes: 10, workflow: "google-business-reviews.yml" },
   { name: "multipark-sync", label: "Sincronização de reservas (recente)", intervalMinutes: 60, workflow: "multipark-cron.yml" },
   { name: "extras-auto", label: "Automação dos extras", intervalMinutes: 60, workflow: "multipark-cron.yml" },
+  // Corre de 30 em 30 min entre as 08h e as 23h (Lisboa); 300 min para a
+  // pausa da noite (~8h30) não aparecer como "parado".
+  { name: "extras-schedule", label: "Escala automática dos extras (propor/confirmar/avisar)", intervalMinutes: 300, workflow: "multipark-cron.yml" },
   { name: "identity-sweep", label: "Ligações funcionário ↔ utilizador", intervalMinutes: 60, workflow: "multipark-cron.yml" },
   { name: "email-inbound", label: "Emails recebidos (IMAP)", intervalMinutes: 60, workflow: "multipark-cron.yml" },
   { name: "multipark-future", label: "Sincronização de reservas (futuras)", intervalMinutes: 120, workflow: "multipark-cron.yml" },

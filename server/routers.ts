@@ -7336,8 +7336,69 @@ export const appRouter = router({
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "extras_dia", "edit");
-        await deleteAssignment(input.id);
-        return { success: true };
+        // Remove e, se a pessoa já tinha sido avisada de uma escala confirmada,
+        // avisa-a de que saiu (WhatsApp na janela de 24h + email).
+        const { removeAssignment } = await import("./extrasSchedule");
+        const r = await removeAssignment(input.id, ctx.user.id);
+        return { success: true, notified: r.notified };
+      }),
+
+    // ── Escala automática: proposta, confirmação e avisos ────────────────────
+    schedule: protectedProcedure
+      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), city: z.enum(["lisbon", "porto", "faro"]) }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "extras_dia", "view");
+        const { assertCityInScope, getScheduleOverview } = await import("./extrasSchedule");
+        await assertCityInScope(input.city);
+        return getScheduleOverview(input.date, input.city);
+      }),
+
+    propose: protectedProcedure
+      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), city: z.enum(["lisbon", "porto", "faro"]) }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "extras_dia", "edit");
+        const { assertCityInScope, proposeSchedule } = await import("./extrasSchedule");
+        await assertCityInScope(input.city);
+        try {
+          return await proposeSchedule({ ...input, by: "manual", userId: ctx.user.id });
+        } catch (err: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao propor a escala" });
+        }
+      }),
+
+    confirmSchedule: protectedProcedure
+      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), city: z.enum(["lisbon", "porto", "faro"]) }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "extras_dia", "edit");
+        const { assertCityInScope, confirmSchedule } = await import("./extrasSchedule");
+        await assertCityInScope(input.city);
+        try {
+          return await confirmSchedule({ ...input, by: "manual", userId: ctx.user.id });
+        } catch (err: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao confirmar a escala" });
+        }
+      }),
+
+    setScheduleHold: protectedProcedure
+      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), city: z.enum(["lisbon", "porto", "faro"]), hold: z.boolean() }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "extras_dia", "edit");
+        const { assertCityInScope, setScheduleHold } = await import("./extrasSchedule");
+        await assertCityInScope(input.city);
+        return setScheduleHold(input.date, input.city, input.hold, ctx.user.id);
+      }),
+
+    requestMissingAvailability: protectedProcedure
+      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), city: z.enum(["lisbon", "porto", "faro"]) }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "extras_dia", "edit");
+        const { assertCityInScope, resendAvailabilityRequest } = await import("./extrasSchedule");
+        await assertCityInScope(input.city);
+        try {
+          return await resendAvailabilityRequest(input.date, input.city, ctx.user.id);
+        } catch (err: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao pedir disponibilidade" });
+        }
       }),
 
     // ── Automação (pontos 7 e 8): preencher com disponíveis, cobertura, avisos ──
