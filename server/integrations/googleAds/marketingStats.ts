@@ -22,6 +22,8 @@ import { getAdMetrics } from "./adMetrics";
 import { getConnection } from "./oauth";
 
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
+/** Origens em que a reserva é feita num site (onde o gclid/utm pode chegar) — ver shared/bookingOrigin.ts. */
+export const SITE_ORIGINS = ["API", "GENERAL_FORM"];
 
 export interface MarketingStatsFilters { from: string; to: string; projectId?: number }
 
@@ -35,6 +37,8 @@ export async function getMarketingStats(f: MarketingStatsFilters) {
   const conn = await getConnection();
 
   let bookingsTotal = 0, bookingsAttributed = 0, revenueTotal = 0, revenueAttributed = 0, mktExpenses = 0;
+  let bookingsByDay: Array<{ date: string; total: number; attributed: number }> = [];
+  const attributionQuality = { siteBookings: 0, withOriginUrl: 0, withClickId: 0, attributed: 0 };
   if (db) {
     const conds: any[] = [
       sql`${multiparkBookings.status} <> 'CANCELLED'`,
@@ -52,6 +56,29 @@ export async function getMarketingStats(f: MarketingStatsFilters) {
       bookingsTotal += n; revenueTotal += rev;
       if (Number(r.attributed) === 1) { bookingsAttributed += n; revenueAttributed += rev; }
     }
+    // Por dia (data de criação, Lisboa = o que está na BD) — para o gráfico.
+    const dayRows = await db.select({
+      date: sql<string>`DATE_FORMAT(${multiparkBookings.bookingCreatedAt}, '%Y-%m-%d')`,
+      n: sql<number>`COUNT(*)`,
+      attributed: sql<number>`SUM(CASE WHEN ${multiparkBookings.adAttribution} = 'google_paid' THEN 1 ELSE 0 END)`,
+    }).from(multiparkBookings).where(and(...conds))
+      .groupBy(sql`DATE_FORMAT(${multiparkBookings.bookingCreatedAt}, '%Y-%m-%d')`)
+      .orderBy(sql`DATE_FORMAT(${multiparkBookings.bookingCreatedAt}, '%Y-%m-%d')`);
+    bookingsByDay = dayRows.map((r) => ({ date: String(r.date), total: Number(r.n ?? 0), attributed: Number(r.attributed ?? 0) }));
+    // Qualidade da atribuição: das reservas feitas no SITE (as únicas que podem
+    // trazer gclid/utm), quantas têm link de origem, quantas trazem o clique do
+    // Google e quantas ficaram atribuídas. Se o link vem mas sem gclid, o site
+    // (ou o auto-tagging do Google Ads) está a perder o identificador.
+    const [q] = await db.select({
+      site: sql<number>`COUNT(*)`,
+      withUrl: sql<number>`SUM(CASE WHEN NULLIF(TRIM(${multiparkBookings.originUrl}), '') IS NOT NULL THEN 1 ELSE 0 END)`,
+      withClick: sql<number>`SUM(CASE WHEN COALESCE(${multiparkBookings.gclid}, ${multiparkBookings.gbraid}, ${multiparkBookings.wbraid}) IS NOT NULL THEN 1 ELSE 0 END)`,
+      attributed: sql<number>`SUM(CASE WHEN ${multiparkBookings.adAttribution} = 'google_paid' THEN 1 ELSE 0 END)`,
+    }).from(multiparkBookings).where(and(...conds, inArray(multiparkBookings.origin, SITE_ORIGINS)));
+    attributionQuality.siteBookings = Number(q?.site ?? 0);
+    attributionQuality.withOriginUrl = Number(q?.withUrl ?? 0);
+    attributionQuality.withClickId = Number(q?.withClick ?? 0);
+    attributionQuality.attributed = Number(q?.attributed ?? 0);
     const mktConds: any[] = [gte(marketingExpenses.date, `${f.from} 00:00:00`), lte(marketingExpenses.date, `${f.to} 23:59:59`)];
     if (projectIds) mktConds.push(projectIds.length ? inArray(marketingExpenses.projectId, projectIds) : sql`1 = 0`);
     const [m] = await db.select({ t: sql<string>`COALESCE(SUM(${marketingExpenses.amount}), 0)` }).from(marketingExpenses).where(and(...mktConds));
@@ -90,6 +117,8 @@ export async function getMarketingStats(f: MarketingStatsFilters) {
     coverage: ads.coverage,
     unmappedCampaigns: ads.unmappedCampaigns,
     byDay: ads.byDay,
+    bookingsByDay,
+    attributionQuality,
     byCampaign: ads.byCampaign,
     nationalShares: ads.nationalShares,
     // compatibilidade com o ecrã antigo
