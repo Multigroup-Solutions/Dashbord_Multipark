@@ -15,17 +15,14 @@ export interface FinanceParams {
   vatRate: number;
   /** TSU a cargo da entidade patronal. */
   tsuEmployerRate: number;
-  /** €/hora da equipa do dia por nível (sincronizado com server/extrasDia.ts). */
-  extrasDiaRates: Record<string, number>;
-  extrasDiaDefaultRate: number;
+  // As tarifas €/hora dos extras NÃO vivem aqui: fonte única = tabela
+  // `extra_rates` via server/extraRates.ts (loadExtraRates).
   /** Meses de provisão (13.º Natal + 14.º férias) por ano: 2/12 do base por mês. */
   provisionMonthsPerYear: number;
 }
 export const FINANCE_PARAMS: Readonly<FinanceParams> = Object.freeze({
   vatRate: 0.23,
   tsuEmployerRate: 0.2375,
-  extrasDiaRates: { junior: 4.5, senior: 5, terminal: 5.5, master: 6 },
-  extrasDiaDefaultRate: 4,
   provisionMonthsPerYear: 2,
 });
 
@@ -165,9 +162,6 @@ export function shareTargets(targets: number[], filter?: Set<number>): { matchin
 export function shiftHours(startHour: number, endHour: number, sentHomeHour?: number | null): number {
   const end = sentHomeHour != null ? sentHomeHour : endHour;
   return Math.max(end - startHour, 0);
-}
-export function extrasDiaRate(level: string | null | undefined): number {
-  return FINANCE_PARAMS.extrasDiaRates[String(level ?? "junior")] ?? FINANCE_PARAMS.extrasDiaDefaultRate;
 }
 
 /** Cidade das escalas (lisbon|porto|faro) a partir da chave partilhada (lisboa|porto|faro). */

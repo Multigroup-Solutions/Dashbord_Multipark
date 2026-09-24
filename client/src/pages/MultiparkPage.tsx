@@ -112,7 +112,7 @@ export default function MultiparkPage({ sectionProp }: { sectionProp?: string } 
           </div>
           {/* Teste à API da Multipark: só admin (a rota é admin-only; ao
               backoffice aparecia sempre "Desconectado" a vermelho) */}
-          {user?.role === "admin" && <ConnectionStatus />}
+          {(user?.role === "admin" || user?.role === "super_admin") && <ConnectionStatus />}
         </div>
 
         {/* Content based on section */}
@@ -659,10 +659,11 @@ function SyncTab() {
       toast.error("Seleciona as datas de início e fim");
       return;
     }
-    // Range muito grande? Pede confirmação — a API Multipark cobra por chamada
-    // e períodos longos podem demorar minutos.
+    // O servidor recusa mais de 31 dias por pedido (a API Multipark cobra
+    // por chamada e períodos longos prendem a função) — avisa já aqui.
     const days = Math.round((new Date(syncTo).getTime() - new Date(syncFrom).getTime()) / 86_400_000) + 1;
-    if (days > 31 && !confirm(`O período tem ${days} dias. A sincronização vai puxar todas as ações (criação/check-in/check-out/cancelamento) da API e pode demorar vários minutos. Continuar?`)) {
+    if (days > 31) {
+      toast.error(`O período tem ${days} dias. Máximo: 31 dias por sincronização — divide em partes.`);
       return;
     }
     try {

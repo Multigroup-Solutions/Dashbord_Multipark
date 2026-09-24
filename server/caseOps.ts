@@ -11,6 +11,7 @@
  *
  * As decisões puras estão em shared/caseRules.ts (testadas).
  */
+import { isFeatureEnabled } from "./_core/featureFlags";
 import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 import {
   complaintDriversOnDuty, complaints, employees, incidents, lostFoundAttachedDrivers,
@@ -392,7 +393,7 @@ export interface CaseReminderReport { skipped?: string; incidents: number; lost:
  */
 export async function runCaseSlaReminders(now: Date, hour: number): Promise<CaseReminderReport> {
   const report: CaseReminderReport = { incidents: 0, lost: 0, notified: 0 };
-  if (process.env.CASE_REMINDERS === "off") return { ...report, skipped: "CASE_REMINDERS=off" };
+  if (!isFeatureEnabled("CASE_REMINDERS")) return { ...report, skipped: "CASE_REMINDERS=off" };
   if (!isCaseReminderHour(hour)) return { ...report, skipped: "fora de horas" };
   const d = await db();
   const nowStr = utcNowStr(now);

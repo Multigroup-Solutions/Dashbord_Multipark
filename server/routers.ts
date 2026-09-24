@@ -2357,15 +2357,28 @@ export const appRouter = router({
         entity: z.string().optional(),
         action: z.string().optional(),
         userId: z.number().optional(),
+        // Dias de Lisboa (YYYY-MM-DD), inclusivos; convertidos para UTC.
+        from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        search: z.string().max(200).optional(),
       }).optional())
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "super_admin");
+        const { lisbonDayRangeUtc } = await import("../shared/lisbonDay");
         return getActivityLogs(input?.limit ?? 500, {
           entity: input?.entity,
           action: input?.action,
           userId: input?.userId,
+          from: input?.from ? lisbonDayRangeUtc(input.from).start : undefined,
+          to: input?.to ? lisbonDayRangeUtc(input.to).end : undefined,
+          search: input?.search,
         });
       }),
+    entities: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx.user.role, "super_admin");
+      const { getActivityLogEntities } = await import("./db");
+      return getActivityLogEntities();
+    }),
   }),
 
   // ── RH ───────────────────────────────────────────────────────────────────────────────────────
@@ -3698,7 +3711,14 @@ export const appRouter = router({
         .input(z.object({ level: z.number(), hourlyRate: z.string() }))
         .mutation(async ({ ctx, input }) => {
           requireRole(ctx.user.role, "super_admin");
-          await updateExtraRate(input.level, input.hourlyRate);
+          const { normalizeHourlyRate, MAX_EXTRA_HOURLY_RATE } = await import("./extraRates");
+          const rate = normalizeHourlyRate(input.hourlyRate);
+          if (!rate) throw new TRPCError({ code: "BAD_REQUEST", message: `Taxa inválida: indica um valor numérico maior que 0 e até ${MAX_EXTRA_HOURLY_RATE} €/h.` });
+          const before = (await getExtraRates()).find((r: any) => Number(r.level) === input.level);
+          if (!before) throw new TRPCError({ code: "NOT_FOUND", message: "Nível de taxa inexistente" });
+          await updateExtraRate(input.level, rate);
+          await logActivity({ userId: ctx.user.id, action: "update", entity: "extra_rate", entityId: input.level,
+            details: `Taxa ${before.levelName ?? `nível ${input.level}`}: ${before.hourlyRate} → ${rate} €/h` });
           return { success: true };
         }),
     }),
@@ -4586,6 +4606,22 @@ export const appRouter = router({
         requireRole(ctx.user.role, "backoffice");
         return listPdas();
       }),
+      // PDA ligado AGORA ao próprio utilizador (check-in aberto) — para o Perfil.
+      mine: protectedProcedure.query(async ({ ctx }) => {
+        const me = await getEmployeeByUserId(ctx.user.id);
+        if (!me) return null;
+        const { getDb } = await import("./db");
+        const { sql } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) return null;
+        const res: any = await db.execute(sql`
+          SELECT p.id, p.name, p.zelloUsername, c.checkinAt
+          FROM pda_checkins c INNER JOIN pdas p ON p.id = c.pdaId
+          WHERE c.employeeId = ${me.employee.id} AND c.checkin_status = 'checked_in'
+          ORDER BY c.checkinAt DESC LIMIT 1`);
+        const row = (Array.isArray(res?.[0]) ? res[0] : res)?.[0];
+        return row ? { id: Number(row.id), name: String(row.name), zelloUsername: row.zelloUsername ?? null, since: row.checkinAt ? String(row.checkinAt) : null } : null;
+      }),
       // "Este browser É o PDA X" — regista o aparelho e devolve o token que o
       // cliente guarda no localStorage. A partir daí, qualquer check-in do
       // PONTO feito neste aparelho liga a pessoa ao PDA/Zello automaticamente.
@@ -4846,22 +4882,32 @@ export const appRouter = router({
       requireRole(ctx.user.role, "super_admin");
       return getApiKeys();
     }),
+    // A chave completa só sai AQUI, uma vez; na BD fica só o hash + prefixo.
     create: protectedProcedure.input(z.object({
-      name: z.string().min(1),
-      permissions: z.array(z.string()).optional(),
+      name: z.string().trim().min(1).max(100),
+      permissions: z.array(z.enum(["read", "write", "admin", "device"])).optional(),
+      expiresInDays: z.number().int().min(1).max(3650).optional(),
     })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "super_admin");
-      const { nanoid } = await import("nanoid");
-      const key = `mp_${nanoid(32)}`;
+      const { generateApiKey, hashApiKey, apiKeyPrefix } = await import("./apiKeyAuth");
+      const key = generateApiKey();
+      const perms = input.permissions?.length ? input.permissions : ["device"];
+      const expiresAt = input.expiresInDays
+        ? new Date(Date.now() + input.expiresInDays * 86_400_000).toISOString().slice(0, 19).replace("T", " ")
+        : null;
       const id = await createApiKey({
         name: input.name,
-        apiKey: key,
-        permissions: input.permissions ? JSON.stringify(input.permissions) : null,
+        apiKey: null,
+        keyHash: hashApiKey(key),
+        keyPrefix: apiKeyPrefix(key),
+        expiresAt,
+        permissions: JSON.stringify(perms),
         active: 1,
         createdById: ctx.user.id,
       });
-      await logActivity({ userId: ctx.user.id, action: "create", entity: "api_key", entityId: id, details: `API Key: ${input.name}` });
-      return { id, key };
+      await logActivity({ userId: ctx.user.id, action: "create", entity: "api_key", entityId: id,
+        details: `API Key: ${input.name} (${apiKeyPrefix(key)}…, scopes ${perms.join(",")}${expiresAt ? `, expira ${expiresAt.slice(0, 10)}` : ""})` });
+      return { id, key, keyPrefix: apiKeyPrefix(key) };
     }),
     toggle: protectedProcedure.input(z.object({
       id: z.number(),
@@ -7228,6 +7274,13 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "admin");
+        // Limite no servidor (não só na UI): um intervalo enorme prende a
+        // função e martela a API Multipark. Máx. 31 dias por pedido.
+        {
+          const { syncRangeError } = await import("./opsRules");
+          const err = syncRangeError(input.startDate, input.endDate, 31);
+          if (err) throw new TRPCError({ code: "BAD_REQUEST", message: err });
+        }
         try {
           const result = await syncBookings({
             startDate: input.startDate,

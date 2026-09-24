@@ -57,3 +57,17 @@ export async function loadExtraRates(): Promise<ExtraRates> {
 
 /** Depois de alterar uma taxa. */
 export function invalidateExtraRates(): void { cache = null; }
+
+/**
+ * Valida o valor introduzido em "Taxas Extra" (€/hora): número finito, > 0 e
+ * ≤ 100; aceita vírgula decimal. Devolve o valor normalizado com 2 casas
+ * ("5.50") ou `null` quando inválido — o router responde BAD_REQUEST.
+ */
+export const MAX_EXTRA_HOURLY_RATE = 100;
+export function normalizeHourlyRate(value: unknown): string | null {
+  const s = String(value ?? "").trim().replace(",", ".");
+  if (!/^\d+(\.\d+)?$/.test(s)) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n <= 0 || n > MAX_EXTRA_HOURLY_RATE) return null;
+  return n.toFixed(2);
+}

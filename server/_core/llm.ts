@@ -222,6 +222,11 @@ const resolveApiUrl = () => {
   return `${base}/v1/chat/completions`;
 };
 
+/** IA configurada? (chave presente) — fonte única para toda a app. */
+export function llmConfigured(): boolean {
+  return !!(process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || "").trim();
+}
+
 const resolveApiKey = () => {
   const key = (process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || "").trim();
   if (!key) throw new Error("LLM_API_KEY or OPENAI_API_KEY is not configured");

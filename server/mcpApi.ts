@@ -3,18 +3,19 @@
  * a partir de um servidor MCP (ou qualquer cliente HTTP).
  *
  * Montado em /api/v1. Autenticação por header X-API-Key (tabela api_keys).
- * Cada chave tem um campo `permissions` que define o scope:
+ * Cada chave tem um campo `permissions` que define o scope (ver server/apiKeyAuth.ts):
  *   - "read"           → só leituras
  *   - "read,write"     → leituras + escrita operacional (criar/editar, syncs)
  *   - "admin" ou "*"   → tudo, incluindo operações destrutivas
- * (admin implica write implica read). Chaves sem permissions não acedem aqui.
+ * (admin implica write implica read). Chaves "device" (ou sem permissions) não acedem aqui.
  *
  * Cobre todos os parques e cidades (PARK_CONFIGS).
  */
-import { Router, Request, Response, NextFunction } from "express";
-import { and, eq, sql } from "drizzle-orm";
+import { Router, Request, Response } from "express";
+import { and, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { apiKeys, multiparkBookings } from "../drizzle/schema";
+import { multiparkBookings } from "../drizzle/schema";
+import { apiKeyMiddleware, requireScope, logApiKeyAction, apiKeyActorId, getApiKeyInfo } from "./apiKeyAuth";
 import {
   getMultiparkBookings,
   getMultiparkBookingByExternalId,
@@ -32,7 +33,6 @@ import {
   createGoogleReview,
   getVehicles,
   getAllEmployees,
-  logActivity,
 } from "./db";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -43,53 +43,15 @@ async function db() {
 
 // ─── AUTH + SCOPES ────────────────────────────────────────────────────────────
 
-type Scope = "read" | "write" | "admin";
-
-function scopesFor(permissions: string | null | undefined): Set<Scope> {
-  const s = new Set<Scope>();
-  if (!permissions) return s;
-  let parts: string[] = [];
-  try {
-    const parsed = JSON.parse(permissions);
-    parts = Array.isArray(parsed) ? parsed.map(String) : String(parsed).split(/[,\s]+/);
-  } catch {
-    parts = permissions.split(/[,\s]+/);
-  }
-  const set = new Set(parts.map(p => p.trim().toLowerCase()).filter(Boolean));
-  if (set.has("*") || set.has("admin") || set.has("full")) { s.add("read"); s.add("write"); s.add("admin"); return s; }
-  if (set.has("write")) { s.add("read"); s.add("write"); }
-  if (set.has("read")) s.add("read");
-  return s;
-}
-
-async function validateApiKey(req: Request, res: Response, next: NextFunction) {
-  const key = req.headers["x-api-key"] as string;
-  if (!key) return res.status(401).json({ error: "Missing X-API-Key header" });
-  const d = await db();
-  if (!d) return res.status(500).json({ error: "Database unavailable" });
-  const rows = await d.select().from(apiKeys).where(and(eq(apiKeys.apiKey, key), eq(apiKeys.active, 1))).limit(1);
-  if (rows.length === 0) return res.status(403).json({ error: "Invalid or inactive API key" });
-  await d.update(apiKeys).set({ lastUsedAt: new Date().toISOString().slice(0, 19).replace("T", " ") }).where(eq(apiKeys.id, rows[0].id));
-  (req as any).apiKeyInfo = rows[0];
-  (req as any).scopes = scopesFor(rows[0].permissions);
-  next();
-}
-
-function requireScope(scope: Scope) {
-  return (req: Request, res: Response, next: NextFunction) => {
-    const scopes: Set<Scope> = (req as any).scopes ?? new Set();
-    if (!scopes.has(scope)) {
-      return res.status(403).json({
-        error: `Esta API key não tem o scope '${scope}'. Scopes da chave: [${Array.from(scopes).join(", ") || "nenhum"}].`,
-      });
-    }
-    next();
-  };
-}
+// Autenticação por hash, expiração, lastUsedAt (5 min) e scopes: server/apiKeyAuth.ts.
+// Chaves "device" (dispositivos) não têm acesso a nenhuma rota daqui.
 
 // helper para apanhar erros sem repetir try/catch
 const h = (fn: (req: Request, res: Response) => Promise<any>) =>
-  (req: Request, res: Response) => fn(req, res).catch((e: any) => res.status(500).json({ error: e?.message || String(e) }));
+  (req: Request, res: Response) => fn(req, res).catch((e: any) => {
+    console.error("[MCP API]", req.method, req.path, e);
+    res.status(500).json({ error: String(e?.message || "Erro interno").slice(0, 300) });
+  });
 
 function parseDate(v: any): Date | undefined {
   if (!v) return undefined;
@@ -101,7 +63,10 @@ function parseDate(v: any): Date | undefined {
 
 export function createMcpApiRouter(): Router {
   const r = Router();
-  r.use(validateApiKey);
+  r.use(apiKeyMiddleware("v1"));
+  // Defesa em profundidade: TUDO em /admin/* exige 'admin', mesmo que uma rota
+  // nova se esqueça do requireScope.
+  r.use("/admin", requireScope("admin"));
 
   // Índice / capacidades
   r.get("/", (req: Request, res: Response) => {
@@ -126,7 +91,7 @@ export function createMcpApiRouter(): Router {
           "POST /extras-availability/submit-by-email",
         ],
         admin: [
-          "DELETE /complaints/:id", "POST /admin/cleanup-duplicates", "POST /projects",
+          "DELETE /complaints/:id", "POST /projects", "POST /admin/migrate-0048", "POST /admin/backfill-projects",
           "POST /admin/merge-duplicate-extras",
         ],
       },
@@ -158,6 +123,7 @@ export function createMcpApiRouter(): Router {
     }
     const result = await submitForm(token, parsed.data);
     if (!result.ok) return res.status(result.status).json({ success: false, error: result.message, code: result.code });
+    await logApiKeyAction(req, { action: "submit", entity: "extras_availability", details: `[form] ${result.data.saved} dia(s)` });
     return res.json({ success: true, saved: result.data.saved });
   }));
 
@@ -170,6 +136,7 @@ export function createMcpApiRouter(): Router {
       return res.status(400).json({ success: false, error: "Invalid application", code: "invalid_input", details: parsed.error.flatten() });
     }
     const result = await upsertDriverApplication(parsed.data);
+    await logApiKeyAction(req, { action: "upsert", entity: "driver_application", entityId: (result as any)?.id ?? null, details: "[site] candidatura Be a Driver" });
     return res.json({ success: true, ...result });
   }));
 
@@ -182,6 +149,7 @@ export function createMcpApiRouter(): Router {
       return res.status(400).json({ success: false, error: "Invalid availability", code: "invalid_input", details: parsed.error.flatten() });
     }
     const result = await submitAvailabilityByEmail(parsed.data);
+    await logApiKeyAction(req, { action: "submit", entity: "extras_availability", entityId: (result as any)?.employeeId ?? null, details: "[site] disponibilidade por email" });
     return res.json({ success: true, ...result });
   }));
 
@@ -221,7 +189,7 @@ export function createMcpApiRouter(): Router {
     if (existing) return res.json({ success: true, created: false, project: existing });
     await d.execute(sql`INSERT INTO projects (name, parentId, level, color, isActive) VALUES (${name}, ${parentId}, ${level}, ${b.color ?? "#0055d2"}, 1)`);
     const created = rows(await d.execute(sql`SELECT id, name, parentId, level FROM projects WHERE name = ${name} AND ${parentId === null ? sql`parentId IS NULL` : sql`parentId = ${parentId}`} ORDER BY id DESC LIMIT 1`))[0];
-    await logActivity({ userId: 0, action: "create", entity: "project", entityId: created?.id ?? 0, details: `[MCP] ${level}: ${name}` });
+    await logApiKeyAction(req, { action: "create", entity: "project", entityId: created?.id ?? null, details: `[MCP] ${level}: ${name}`, asKeyEvent: true });
     res.json({ success: true, created: true, project: created });
   }));
 
@@ -288,7 +256,7 @@ export function createMcpApiRouter(): Router {
 
     await d.execute(sql`
       INSERT INTO internal_campaign_costs (campaignType, campaignId, costDate, amount, impressions, clicks, ctr, conversions, conversionValue, notes, createdById)
-      VALUES (${campaignType}, ${campaignId}, ${date}, ${amount}, ${impressions}, ${clicks}, ${ctr}, ${conversions}, ${conversionValue}, ${notes}, ${(req as any).apiKeyInfo?.createdById ?? null})
+      VALUES (${campaignType}, ${campaignId}, ${date}, ${amount}, ${impressions}, ${clicks}, ${ctr}, ${conversions}, ${conversionValue}, ${notes}, ${apiKeyActorId(getApiKeyInfo(req)) || null})
       ON DUPLICATE KEY UPDATE
         amount = ${amount},
         impressions = COALESCE(${impressions}, impressions),
@@ -297,7 +265,7 @@ export function createMcpApiRouter(): Router {
         conversions = COALESCE(${conversions}, conversions),
         conversionValue = COALESCE(${conversionValue}, conversionValue),
         notes = COALESCE(${notes}, notes)`);
-    await logActivity({ userId: 0, action: "update", entity: "campaign_daily", entityId: campaignId, details: `[MCP] ${campaignType}:${campaignId} ${date} €${amount}` });
+    await logApiKeyAction(req, { action: "update", entity: "campaign_daily", entityId: campaignId, details: `[MCP] ${campaignType}:${campaignId} ${date} €${amount}` });
     res.json({ success: true, campaignType, campaignId, costDate: date });
   }));
 
@@ -389,9 +357,9 @@ export function createMcpApiRouter(): Router {
       slaDeadline,
       projectId: b.projectId ? Number(b.projectId) : null,
       assignedToId: b.assignedToId ? Number(b.assignedToId) : null,
-      createdById: (req as any).apiKeyInfo?.createdById ?? null,
+      createdById: apiKeyActorId(getApiKeyInfo(req)) || null,
     } as any);
-    await logActivity({ userId: 0, action: "create", entity: "complaint", entityId: id, details: `[MCP] ${b.title}` });
+    await logApiKeyAction(req, { action: "create", entity: "complaint", entityId: id, details: `[MCP] ${b.title}` });
     res.json({ success: true, id });
   }));
 
@@ -410,7 +378,7 @@ export function createMcpApiRouter(): Router {
     if (b.status === "resolved") data.resolvedAt = new Date();
     if (Object.keys(data).length === 0) return res.status(400).json({ error: "Nada para atualizar" });
     await updateComplaint(id, data);
-    await logActivity({ userId: 0, action: "update", entity: "complaint", entityId: id, details: `[MCP] update` });
+    await logApiKeyAction(req, { action: "update", entity: "complaint", entityId: id, details: `[MCP] update (${Object.keys(data).join(", ")})` });
     res.json({ success: true });
   }));
 
@@ -422,16 +390,17 @@ export function createMcpApiRouter(): Router {
       complaintId,
       message: String(b.message),
       isInternal: b.isInternal ? 1 : 0,
-      authorId: (req as any).apiKeyInfo?.createdById ?? null,
+      authorId: apiKeyActorId(getApiKeyInfo(req)) || null,
       authorName: b.authorName ?? "MCP",
     } as any);
+    await logApiKeyAction(req, { action: "create", entity: "complaint_message", entityId: complaintId, details: `[MCP] mensagem #${msgId}` });
     res.json({ success: true, id: msgId });
   }));
 
   r.delete("/complaints/:id", requireScope("admin"), h(async (req, res) => {
     const id = Number(req.params.id);
     await deleteComplaint(id);
-    await logActivity({ userId: 0, action: "delete", entity: "complaint", entityId: id, details: `[MCP] delete` });
+    await logApiKeyAction(req, { action: "delete", entity: "complaint", entityId: id, details: `[MCP] delete`, asKeyEvent: true });
     res.json({ success: true });
   }));
 
@@ -458,8 +427,9 @@ export function createMcpApiRouter(): Router {
       reviewDate,
       projectId: b.projectId ? Number(b.projectId) : null,
       vehiclePlate: b.vehiclePlate ?? null,
-      createdById: (req as any).apiKeyInfo?.createdById ?? null,
+      createdById: apiKeyActorId(getApiKeyInfo(req)) || null,
     } as any);
+    await logApiKeyAction(req, { action: "create", entity: "google_review", entityId: id, details: `[MCP] ${b.rating}★ ${b.reviewerName}` });
     res.json({ success: true, id });
   }));
 
@@ -478,13 +448,17 @@ export function createMcpApiRouter(): Router {
   r.post("/sync/recent", requireScope("write"), h(async (req, res) => {
     const { runRecentCronSync } = await import("./jobs/multiparkBookingSync");
     const windowMinutes = req.body?.windowMinutes ? Number(req.body.windowMinutes) : 30;
-    res.json({ success: true, ...(await runRecentCronSync(windowMinutes)) });
+    const result = await runRecentCronSync(windowMinutes);
+    await logApiKeyAction(req, { action: "sync", entity: "multipark", asKeyEvent: true, details: `[MCP] sync recente (${windowMinutes} min)` });
+    res.json({ success: true, ...result });
   }));
 
   r.post("/sync/future", requireScope("write"), h(async (req, res) => {
     const { runFutureCronSync } = await import("./jobs/multiparkBookingSync");
     const weeks = req.body?.weeksAhead ? Number(req.body.weeksAhead) : 4;
-    res.json({ success: true, ...(await runFutureCronSync(weeks)) });
+    const result = await runFutureCronSync(weeks);
+    await logApiKeyAction(req, { action: "sync", entity: "multipark", asKeyEvent: true, details: `[MCP] sync futuro (${weeks} semanas)` });
+    res.json({ success: true, ...result });
   }));
 
   // Sincroniza um dia específico (report + enrich + history) — para backfill
@@ -494,6 +468,7 @@ export function createMcpApiRouter(): Router {
     const { syncBookings, enrichBookingsBatch, syncBookingHistoryBatch } = await import("./jobs/multiparkBookingSync");
     const report = await syncBookings({ startDate: date, endDate: date });
     const [enrichRes, historyRes] = await Promise.allSettled([enrichBookingsBatch(100), syncBookingHistoryBatch(50)]);
+    await logApiKeyAction(req, { action: "sync", entity: "multipark", asKeyEvent: true, details: `[MCP] sync do dia ${date}` });
     res.json({
       success: true,
       date,
@@ -505,7 +480,7 @@ export function createMcpApiRouter(): Router {
 
   // ── ADMIN (destrutivo) ──────────────────────────────────────────────────────
   // One-shot, idempotente: colunas de métricas diárias nas campanhas (0048).
-  r.post("/admin/migrate-0048", requireScope("admin"), h(async (_req, res) => {
+  r.post("/admin/migrate-0048", requireScope("admin"), h(async (req, res) => {
     const { MIGRATION_0048_STATEMENTS, IDEMPOTENT_ERROR_CODES_0048 } = await import("./migrations/migration_0048");
     const d = await db();
     if (!d) return res.status(500).json({ error: "DB unavailable" });
@@ -523,15 +498,18 @@ export function createMcpApiRouter(): Router {
         else errors.push(`${code ?? "ERR"}: ${msg.slice(0, 200)}`);
       }
     }
+    await logApiKeyAction(req, { action: "admin_migrate", entity: "migration_0048", asKeyEvent: true, details: `[MCP] migrate-0048: ${ok} ok, ${skipped} ignoradas, ${errors.length} erros` });
     res.json({ success: errors.length === 0, ok, skipped, errors });
   }));
 
   // Backfill: associa reservas sem projectId (ou presas num nó intermédio)
   // ao projeto certo com o matcher determinístico partilhado com o sync
   // (shared/projectTree.ts via server/projectAdmin.ts). Idempotente.
-  r.post("/admin/backfill-projects", requireScope("admin"), h(async (_req, res) => {
+  r.post("/admin/backfill-projects", requireScope("admin"), h(async (req, res) => {
     const { backfillBookingProjects } = await import("./projectAdmin");
-    res.json({ success: true, ...(await backfillBookingProjects({ includeIntermediate: true })) });
+    const result = await backfillBookingProjects({ includeIntermediate: true });
+    await logApiKeyAction(req, { action: "admin_backfill", entity: "multipark_bookings", asKeyEvent: true, details: "[MCP] backfill-projects" });
+    res.json({ success: true, ...result });
   }));
 
   // Funde extras duplicados por email (duplicados auto-criados pelo site antes
@@ -540,24 +518,8 @@ export function createMcpApiRouter(): Router {
   r.post("/admin/merge-duplicate-extras", requireScope("admin"), h(async (req, res) => {
     const { mergeDuplicateExtras } = await import("./mergeDuplicateExtras");
     const report = await mergeDuplicateExtras({ apply: req.body?.apply === true });
+    await logApiKeyAction(req, { action: "admin_merge", entity: "employees", asKeyEvent: true, details: `[MCP] merge-duplicate-extras (${req.body?.apply === true ? "apply" : "dry-run"})` });
     res.json({ success: true, ...report });
-  }));
-
-  r.post("/admin/cleanup-duplicates", requireScope("admin"), h(async (_req, res) => {
-    const d = await db();
-    if (!d) return res.status(500).json({ error: "DB unavailable" });
-    const result = await d.execute(sql`
-      DELETE FROM multipark_bookings WHERE id IN (
-        SELECT id FROM (
-          SELECT b1.id FROM multipark_bookings b1
-          INNER JOIN multipark_bookings b2
-            ON b1.externalId = b2.externalId
-           AND (b1.updatedAt < b2.updatedAt OR (b1.updatedAt = b2.updatedAt AND b1.id < b2.id))
-          LIMIT 5000
-        ) AS t
-      )`) as any;
-    const meta = Array.isArray(result[0]) ? result[0] : result;
-    res.json({ success: true, deleted: Number((meta as any)?.affectedRows ?? 0) });
   }));
 
   // ── DASHBOARD SUMMARY (visão cruzada, todos os parques) ──────────────────────

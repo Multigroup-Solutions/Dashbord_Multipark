@@ -229,12 +229,6 @@ const tools = [
     inputSchema: { type: "object", properties: { date: { type: "string" } }, required: ["date"] },
     run: (a) => api("POST", "/sync/day", { body: a }),
   },
-  {
-    name: "cleanup_duplicates",
-    description: "Apaga reservas duplicadas (destrutivo — requer scope admin).",
-    inputSchema: { type: "object", properties: {} },
-    run: () => api("POST", "/admin/cleanup-duplicates"),
-  },
 ];
 
 const toolByName = new Map(tools.map((t) => [t.name, t]));

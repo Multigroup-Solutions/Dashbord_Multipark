@@ -158,6 +158,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0090").then(m => ({ s: m.MIGRATION_0090_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0090 })),
       import("./migrations/migration_0091").then(m => ({ s: m.MIGRATION_0091_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0091 })),
       import("./migrations/migration_0092").then(m => ({ s: m.MIGRATION_0092_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0092 })),
+      import("./migrations/migration_0095").then(m => ({ s: m.MIGRATION_0095_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0095 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -815,20 +816,64 @@ export async function logActivity(data: InsertActivityLog) {
   await db.insert(activityLogs).values(data);
 }
 
-export async function getActivityLogs(limit = 100, filters: { entity?: string; action?: string; userId?: number } = {}) {
+export async function getActivityLogs(limit = 100, filters: {
+  entity?: string; action?: string; userId?: number;
+  /** "YYYY-MM-DD HH:MM:SS" (UTC), inclusivo. */
+  from?: string;
+  /** "YYYY-MM-DD HH:MM:SS" (UTC), exclusivo. */
+  to?: string;
+  /** Pesquisa no servidor (LIKE parametrizado) em detalhes/ação/entidade/nome. */
+  search?: string;
+} = {}) {
   const db = await getDb();
   if (!db) return [];
   const conds: any[] = [];
   if (filters.entity) conds.push(eq(activityLogs.entity, filters.entity));
   if (filters.action) conds.push(eq(activityLogs.action, filters.action));
   if (filters.userId) conds.push(eq(activityLogs.userId, filters.userId));
+  if (filters.from) conds.push(gte(activityLogs.createdAt, filters.from));
+  if (filters.to) conds.push(lt(activityLogs.createdAt, filters.to));
+  const q = (filters.search ?? "").trim();
+  if (q) {
+    // Escapa os curingas do LIKE: a pesquisa é literal.
+    const pattern = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    conds.push(or(like(activityLogs.details, pattern), like(activityLogs.action, pattern), like(activityLogs.entity, pattern), like(users.name, pattern)));
+  }
+  // Só as colunas do utilizador que a página mostra (nunca o registo inteiro).
   return db
-    .select({ log: activityLogs, user: users })
+    .select({ log: activityLogs, user: { id: users.id, name: users.name, email: users.email } })
     .from(activityLogs)
     .leftJoin(users, eq(activityLogs.userId, users.id))
     .where(conds.length > 0 ? and(...conds) : undefined)
     .orderBy(desc(activityLogs.createdAt))
     .limit(Math.min(Math.max(limit, 1), 2000));
+}
+
+/** Entidades distintas presentes no registo (para o filtro da página de Logs). */
+export async function getActivityLogEntities(): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.selectDistinct({ entity: activityLogs.entity }).from(activityLogs).orderBy(asc(activityLogs.entity));
+  return rows.map((r) => r.entity).filter(Boolean);
+}
+
+/**
+ * Retenção: apaga registos com mais de 12 meses em lotes de 5000
+ * (`DELETE … WHERE createdAt < ? LIMIT n` — sem subquery sobre a própria
+ * tabela). Chamado pelo daily-ops; o que não couber no prazo fica para o dia
+ * seguinte.
+ */
+export async function purgeOldActivityLogs(opts: { deadlineAt?: number; now?: Date } = {}) {
+  const db = await getDb();
+  if (!db) return { deleted: 0, batches: 0, done: true, cutoff: null as string | null };
+  const { activityLogCutoff, purgeInBatches } = await import("./opsRules");
+  const { extractAffectedRows } = await import("./availabilityFormToken");
+  const cutoff = activityLogCutoff(opts.now ?? new Date());
+  const r = await purgeInBatches(async (limit) => {
+    const res = await db.execute(sql`DELETE FROM activity_logs WHERE createdAt < ${cutoff} LIMIT ${sql.raw(String(Math.max(1, Math.floor(limit))))}`);
+    return extractAffectedRows(res);
+  }, { deadlineAt: opts.deadlineAt });
+  return { ...r, cutoff };
 }
 
 // ─── RH: EMPLOYEES ────────────────────────────────────────────────────────────
@@ -2280,10 +2325,15 @@ export async function getVehicleDriverHistory(vehicleId: number) {
 
 // ─── API KEYS ────────────────────────────────────────────────────────────────
 
+/** Lista para a UI: NUNCA devolve a chave nem o hash — só o prefixo e metadados. */
 export async function getApiKeys() {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(apiKeys).orderBy(desc(apiKeys.createdAt));
+  return db.select({
+    id: apiKeys.id, name: apiKeys.name, keyPrefix: apiKeys.keyPrefix, permissions: apiKeys.permissions,
+    active: apiKeys.active, lastUsedAt: apiKeys.lastUsedAt, expiresAt: apiKeys.expiresAt,
+    createdById: apiKeys.createdById, createdAt: apiKeys.createdAt,
+  }).from(apiKeys).orderBy(desc(apiKeys.createdAt));
 }
 
 export async function createApiKey(data: Omit<InsertApiKey, "id" | "createdAt">) {
