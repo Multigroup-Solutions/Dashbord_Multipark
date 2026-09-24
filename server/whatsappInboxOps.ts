@@ -434,7 +434,7 @@ export async function runWhatsappSlaAlerts(now: Date = new Date()): Promise<{ ov
 
   // Cidade da conversa: ficha → lead mais recente com cidade → reserva.
   const cityCol = sql<number | null>`COALESCE(e.projectId,
-    (SELECT l.projectId FROM extra_leads l WHERE l.phoneE164 = c.phoneE164 AND l.projectId IS NOT NULL ORDER BY l.id DESC LIMIT 1),
+    (SELECT l.projectId FROM extra_leads l WHERE l.phoneE164 = c.phoneE164 COLLATE utf8mb4_unicode_ci AND l.projectId IS NOT NULL ORDER BY l.id DESC LIMIT 1),
     c.bookingProjectId)`;
   const nameCol = sql<string>`COALESCE(NULLIF(TRIM(e.fullName), ''), NULLIF(TRIM(c.profileName), ''), c.phoneE164)`;
 

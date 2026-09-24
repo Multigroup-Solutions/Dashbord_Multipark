@@ -730,7 +730,7 @@ export async function sendTemplateToConversation(opts: {
       optedOutAt: whatsappConversations.optedOutAt,
       profileName: whatsappConversations.profileName,
       employeeName: employees.fullName,
-      leadName: sql<string | null>`(SELECT ln.fullName FROM extra_leads ln WHERE ln.phoneE164 = ${whatsappConversations.phoneE164} ORDER BY ln.id DESC LIMIT 1)`,
+      leadName: sql<string | null>`(SELECT ln.fullName FROM extra_leads ln WHERE ln.phoneE164 = ${whatsappConversations.phoneE164} COLLATE utf8mb4_unicode_ci ORDER BY ln.id DESC LIMIT 1)`,
     })
     .from(whatsappConversations)
     .leftJoin(employees, eq(whatsappConversations.employeeId, employees.id))
