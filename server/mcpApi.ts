@@ -424,37 +424,40 @@ export function createMcpApiRouter(): Router {
   }));
 
   // ── SYNC (controlar a sincronização) ────────────────────────────────────────
+  // Todas partilham o trinco do cron e do botão "Reparar período": se já
+  // houver um sync a correr → 409 "já a correr" (sem chamar a API Multipark).
   r.post("/sync/recent", requireScope("write"), h(async (req, res) => {
     const { runRecentCronSync } = await import("./jobs/multiparkBookingSync");
-    const windowMinutes = req.body?.windowMinutes ? Number(req.body.windowMinutes) : 30;
-    const result = await runRecentCronSync(windowMinutes);
+    const { SYNC_BUSY_MESSAGE } = await import("./syncLock");
+    const windowMinutes = Math.min(Math.max(Number(req.body?.windowMinutes) || 30, 5), 3 * 24 * 60);
+    const result = await runRecentCronSync(windowMinutes, { owner: "mcp_recent" });
+    if (result.busy) return res.status(409).json({ success: false, busy: true, error: SYNC_BUSY_MESSAGE });
     await logApiKeyAction(req, { action: "sync", entity: "multipark", asKeyEvent: true, details: `[MCP] sync recente (${windowMinutes} min)` });
-    res.json({ success: true, ...result });
+    res.json({ success: result.parkErrors.length === 0, ...result });
   }));
 
   r.post("/sync/future", requireScope("write"), h(async (req, res) => {
     const { runFutureCronSync } = await import("./jobs/multiparkBookingSync");
-    const weeks = req.body?.weeksAhead ? Number(req.body.weeksAhead) : 4;
-    const result = await runFutureCronSync(weeks);
-    await logApiKeyAction(req, { action: "sync", entity: "multipark", asKeyEvent: true, details: `[MCP] sync futuro (${weeks} semanas)` });
-    res.json({ success: true, ...result });
+    const { SYNC_BUSY_MESSAGE } = await import("./syncLock");
+    const weeks = Math.min(Math.max(Number(req.body?.weeksAhead) || 4, 1), 8);
+    const offsetDays = Math.max(0, Math.trunc(Number(req.body?.offsetDays) || 0));
+    const result = await runFutureCronSync(weeks, { offsetDays, owner: "mcp_future" });
+    if (result.busy) return res.status(409).json({ success: false, busy: true, error: SYNC_BUSY_MESSAGE });
+    await logApiKeyAction(req, { action: "sync", entity: "multipark", asKeyEvent: true, details: `[MCP] sync futuro (${weeks} semanas, offset ${offsetDays})` });
+    res.json({ success: !result.needsRetry, ...result });
   }));
 
-  // Sincroniza um dia específico (report + enrich + history) — para backfill
+  // Repara um dia específico (report + enrich + history), com prazo.
   r.post("/sync/day", requireScope("write"), h(async (req, res) => {
     const date = String(req.body?.date ?? "").slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "date (YYYY-MM-DD) é obrigatório" });
-    const { syncBookings, enrichBookingsBatch, syncBookingHistoryBatch } = await import("./jobs/multiparkBookingSync");
-    const report = await syncBookings({ startDate: date, endDate: date });
-    const [enrichRes, historyRes] = await Promise.allSettled([enrichBookingsBatch(100), syncBookingHistoryBatch(50)]);
+    const { runRepairSync } = await import("./jobs/multiparkBookingSync");
+    const { SYNC_BUSY_MESSAGE } = await import("./syncLock");
+    const r = await runRepairSync({ startDate: date, endDate: date, owner: "mcp_day", enrich: true });
+    if (r.busy) return res.status(409).json({ success: false, busy: true, error: SYNC_BUSY_MESSAGE });
     await logApiKeyAction(req, { action: "sync", entity: "multipark", asKeyEvent: true, details: `[MCP] sync do dia ${date}` });
-    res.json({
-      success: true,
-      date,
-      report,
-      enriched: enrichRes.status === "fulfilled" ? (enrichRes.value as any).enriched : 0,
-      historyFetched: historyRes.status === "fulfilled" ? (historyRes.value as any).fetched : 0,
-    });
+    const { enrichTargets: _t, parkStatus: _p, ...report } = r.result;
+    res.json({ success: report.success, date, report, enriched: r.enriched, historyFetched: r.historyFetched });
   }));
 
   // ── ADMIN (destrutivo) ──────────────────────────────────────────────────────

@@ -243,7 +243,7 @@ barnie/
 
 ### `multipark`
 - `testConnection`, `checkAvailability`, `listParks`
-- `syncLogs`, `kpis`, `snapshots`, `importExcel`
+- `syncLogs` (filtro por tipo), `syncCoverage`, `dataHealth`, `triggerSync` ("Reparar período", máx. 3 dias)
 - `localBookingsByAction` — Reservas por ação (creation/checkin/checkout/cancelation)
 
 ---

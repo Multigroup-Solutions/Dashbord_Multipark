@@ -25,8 +25,10 @@ vi.mock("./multipark", () => ({
   testConnection: vi.fn().mockResolvedValue({ ok: true, message: "API OK (v1.0.0)", version: "1.0.0" }),
 }));
 
+const repair = vi.hoisted(() => ({ run: vi.fn() }));
 vi.mock("./jobs/multiparkBookingSync", () => ({
-  syncBookings: vi.fn().mockResolvedValue({ success: true, processed: 4, created: 1, updated: 3, errors: [], enrichTargets: [] }),
+  REPAIR_MAX_DAYS: 3,
+  runRepairSync: repair.run,
 }));
 
 // ─── Mock db functions ─────────────────────────────────────────────────────
@@ -43,19 +45,6 @@ vi.mock("./db", async (importOriginal) => {
     getSyncLogs: vi.fn().mockResolvedValue([]),
     createSyncLog: vi.fn().mockResolvedValue(undefined),
     logActivity: vi.fn().mockResolvedValue(undefined),
-    getSnapshotKPIs: vi.fn().mockResolvedValue({
-      totalBookings: 242, totalRevenue: 1244786, checkins: 50, checkouts: 30,
-      cancelled: 10, reserved: 152,
-      byPark: [{ name: "Airpark - Lisboa", bookings: 100, revenue: 600000, checkins: 20, checkouts: 15 }],
-      byCity: [{ name: "Lisboa", bookings: 150, revenue: 800000 }],
-      byDay: [{ date: "2026-03-01", bookings: 80, revenue: 400000, checkins: 20, checkouts: 10 }],
-      campaigns: { "Parclick": 15, "Parkvia": 8 },
-    }),
-    getDailySnapshots: vi.fn().mockResolvedValue([
-      { id: 1, snapshotDate: new Date("2026-03-01"), parkName: "Airpark - Lisboa", city: "Lisboa", totalBookings: 80, totalRevenue: 400000 },
-    ]),
-    upsertDailySnapshot: vi.fn().mockResolvedValue({ id: 1, action: "created" }),
-    deleteSnapshotsByDateRange: vi.fn().mockResolvedValue(5),
   };
 });
 
@@ -141,43 +130,6 @@ describe("multipark.listParks", () => {
   });
 });
 
-describe("multipark.kpis", () => {
-  it("returns aggregated KPIs", async () => {
-    const caller = appRouter.createCaller(createAdminContext());
-    const result = await caller.multipark.kpis({});
-    expect(result.totalBookings).toBe(242);
-    expect(result.totalRevenue).toBe(1244786);
-    expect(result.checkins).toBe(50);
-    expect(result.checkouts).toBe(30);
-    expect(result.cancelled).toBe(10);
-    expect(result.reserved).toBe(152);
-    expect(result.byPark).toHaveLength(1);
-    expect(result.byCity).toHaveLength(1);
-    expect(result.byDay).toHaveLength(1);
-    expect(result.campaigns).toHaveProperty("Parclick", 15);
-  });
-
-  it("accepts date filters", async () => {
-    const caller = appRouter.createCaller(createAdminContext());
-    const result = await caller.multipark.kpis({
-      from: "2026-03-01",
-      to: "2026-03-03T23:59:59.999Z",
-      city: "Lisboa",
-    });
-    expect(result.totalBookings).toBe(242);
-  });
-});
-
-describe("multipark.snapshots", () => {
-  it("returns daily snapshots", async () => {
-    const caller = appRouter.createCaller(createAdminContext());
-    const result = await caller.multipark.snapshots({});
-    expect(result).toHaveLength(1);
-    expect(result[0].parkName).toBe("Airpark - Lisboa");
-    expect(result[0].totalBookings).toBe(80);
-  });
-});
-
 describe("multipark.syncLogs", () => {
   it("returns sync log list", async () => {
     const caller = appRouter.createCaller(createAdminContext());
@@ -186,26 +138,36 @@ describe("multipark.syncLogs", () => {
   });
 });
 
-describe("multipark.triggerSync", () => {
-  it("triggers sync for admin users and returns success", async () => {
+describe("multipark.triggerSync (Reparar período)", () => {
+  const okResult = { success: true, processed: 4, created: 1, updated: 3, errors: [], enrichTargets: ["x"], partial: false,
+    skippedJobs: 0, parkStatus: {}, parkErrors: [], totalMismatches: [] };
+
+  it("repara até 3 dias e não devolve a lista de ids", async () => {
+    repair.run.mockResolvedValueOnce({ busy: false, result: okResult, enriched: 0, historyFetched: 0 });
     const caller = appRouter.createCaller(createAdminContext());
-    const result = await caller.multipark.triggerSync({ startDate: "2026-09-01", endDate: "2026-09-10" });
+    const result = await caller.multipark.triggerSync({ startDate: "2026-09-08", endDate: "2026-09-10" });
     expect(result.success).toBe(true);
     expect(result.processed).toBe(4);
     expect(result.updated).toBe(3);
+    expect(result).not.toHaveProperty("enrichTargets");
+    expect(repair.run).toHaveBeenCalledWith(expect.objectContaining({ startDate: "2026-09-08", endDate: "2026-09-10", owner: "manual" }));
   });
 
-  it("rejects non-admin users", async () => {
-    const caller = appRouter.createCaller(createRegularContext());
+  it("recusa mais de 3 dias", async () => {
+    const caller = appRouter.createCaller(createAdminContext());
     await expect(caller.multipark.triggerSync({ startDate: "2026-09-01", endDate: "2026-09-10" })).rejects.toThrow();
   });
-});
 
-describe("multipark.importExcel", () => {
-  it("rejects non-admin users", async () => {
-    const caller = appRouter.createCaller(createRegularContext());
-    await expect(
-      caller.multipark.importExcel({ fileBase64: "dGVzdA==", filename: "test.xlsx" })
-    ).rejects.toThrow();
+  it("devolve 'já a correr' quando o trinco está ocupado", async () => {
+    repair.run.mockResolvedValueOnce({ busy: true });
+    const caller = appRouter.createCaller(createAdminContext());
+    await expect(caller.multipark.triggerSync({ startDate: "2026-09-09", endDate: "2026-09-10" })).rejects.toThrow(/já a correr/);
+  });
+
+  it("recusa quem não tem acesso e o supervisor de cidade", async () => {
+    await expect(appRouter.createCaller(createRegularContext()).multipark.triggerSync({ startDate: "2026-09-09", endDate: "2026-09-10" })).rejects.toThrow();
+    const sup = createRegularContext();
+    sup.user = { ...sup.user!, role: "supervisor" };
+    await expect(appRouter.createCaller(sup).multipark.triggerSync({ startDate: "2026-09-09", endDate: "2026-09-10" })).rejects.toThrow(/nacional/);
   });
 });

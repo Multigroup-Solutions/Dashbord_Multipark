@@ -72,8 +72,6 @@ import {
   multiparkBookingExtras,
   multiparkSyncLogs,
   InsertMultiparkBooking,
-  multiparkDailySnapshots,
-  InsertMultiparkDailySnapshot,
   inviteTokens,
   InsertInviteToken,
   payslipHistory,
@@ -162,6 +160,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0098").then(m => ({ s: m.MIGRATION_0098_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0098 })),
       import("./migrations/migration_0099").then(m => ({ s: m.MIGRATION_0099_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0099 })),
       import("./migrations/migration_0100").then(m => ({ s: m.MIGRATION_0100_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0100 })),
+      import("./migrations/migration_0101").then(m => ({ s: m.MIGRATION_0101_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0101 })),
       import("./migrations/migration_0105").then(m => ({ s: m.MIGRATION_0105_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0105 })),
     ]);
     for (const { s, ok } of mods) {
@@ -5536,21 +5535,32 @@ export async function createSyncLog(data: {
   errorMessage?: string;
   triggeredById?: number;
   completedAt?: Date;
+  /** Janela pedida (DATETIME UTC) e meta JSON — migração 0101. */
+  windowStart?: string;
+  windowEnd?: string;
+  meta?: string;
 }) {
   const db = await getDb();
   if (!db) return;
-  await db.insert(multiparkSyncLogs).values(data as any);
+  const { completedAt, ...rest } = data;
+  await db.insert(multiparkSyncLogs).values({
+    ...rest,
+    ...(completedAt ? { completedAt: completedAt.toISOString().slice(0, 19).replace("T", " ") } : {}),
+  } as any);
 }
 
-export async function getSyncLogs(limit = 20) {
+/** Últimos logs; `types` filtra por syncType (os legados "api_sync" contam
+ *  como recente E futuro, porque antes da 0101 os dois gravavam isso). */
+export async function getSyncLogs(limit = 20, types?: string[]) {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(multiparkSyncLogs).orderBy(desc(multiparkSyncLogs.startedAt)).limit(limit);
+  const where = types && types.length ? inArray(multiparkSyncLogs.syncType, types) : undefined;
+  return db.select().from(multiparkSyncLogs).where(where).orderBy(desc(multiparkSyncLogs.startedAt)).limit(limit);
 }
 
-/** Quando começou o último sync que chegou ao fim (success ou partial).
- *  Usado pelo cron para auto-alargar a janela quando o GitHub Actions
- *  atrasa ou falha runs — sem isto, gaps > windowMinutes perdem reservas. */
+/** Quando começou o último sync deste tipo que acabou com sucesso. Usado
+ *  como recurso da janela do sync recente (a cobertura por parque vive em
+ *  multipark_sync_coverage) e no painel de saúde. */
 export async function getLastSyncSuccessAt(syncType = "api_sync"): Promise<string | null> {
   const db = await getDb();
   if (!db) return null;
@@ -5566,140 +5576,6 @@ export async function getLastSyncSuccessAt(syncType = "api_sync"): Promise<strin
   return rows[0]?.startedAt ?? null;
 }
 
-
-// ─── MULTIPARK DAILY SNAPSHOTS (KPIs) ────────────────────────────────────────
-
-export async function upsertDailySnapshot(data: InsertMultiparkDailySnapshot) {
-  const db = await getDb();
-  if (!db) return;
-  // Check if snapshot already exists for this date+park
-  const existing = await db
-    .select({ id: multiparkDailySnapshots.id })
-    .from(multiparkDailySnapshots)
-    .where(
-      and(
-        eq(multiparkDailySnapshots.snapshotDate, data.snapshotDate!),
-        eq(multiparkDailySnapshots.parkName, data.parkName),
-        eq(multiparkDailySnapshots.city, data.city),
-      )
-    )
-    .limit(1);
-
-  if (existing.length > 0) {
-    const { id, ...updateData } = data as any;
-    await db.update(multiparkDailySnapshots).set(updateData).where(eq(multiparkDailySnapshots.id, existing[0].id));
-    return { id: existing[0].id, action: "updated" as const };
-  } else {
-    const [result] = await db.insert(multiparkDailySnapshots).values(data as any).$returningId();
-    return { id: result?.id, action: "created" as const };
-  }
-}
-
-export async function getDailySnapshots(filters?: {
-  from?: Date;
-  to?: Date;
-  parkName?: string;
-  city?: string;
-  limit?: number;
-}) {
-  const db = await getDb();
-  if (!db) return [];
-  const conditions: any[] = [];
-  if (filters?.from) conditions.push(gte(multiparkDailySnapshots.snapshotDate, toMysqlDateTime(filters.from)));
-  if (filters?.to) conditions.push(lte(multiparkDailySnapshots.snapshotDate, toMysqlDateTime(filters.to)));
-  if (filters?.parkName) conditions.push(eq(multiparkDailySnapshots.parkName, filters.parkName));
-  if (filters?.city) conditions.push(eq(multiparkDailySnapshots.city, filters.city));
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
-  return db
-    .select()
-    .from(multiparkDailySnapshots)
-    .where(where)
-    .orderBy(desc(multiparkDailySnapshots.snapshotDate))
-    .limit(filters?.limit ?? 500);
-}
-
-export async function getSnapshotKPIs(filters?: { from?: Date; to?: Date; city?: string }) {
-  const db = await getDb();
-  if (!db) return { totalBookings: 0, totalRevenue: 0, checkins: 0, checkouts: 0, cancelled: 0, reserved: 0, byPark: [], byCity: [], byDay: [], campaigns: {} };
-
-  const conditions: any[] = [];
-  if (filters?.from) conditions.push(gte(multiparkDailySnapshots.snapshotDate, toMysqlDateTime(filters.from)));
-  if (filters?.to) conditions.push(lte(multiparkDailySnapshots.snapshotDate, toMysqlDateTime(filters.to)));
-  if (filters?.city) conditions.push(eq(multiparkDailySnapshots.city, filters.city));
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
-
-  const rows = await db.select().from(multiparkDailySnapshots).where(where).orderBy(multiparkDailySnapshots.snapshotDate);
-
-  let totalBookings = 0, totalRevenue = 0, checkins = 0, checkouts = 0, cancelled = 0, reserved = 0;
-  const parkMap: Record<string, { bookings: number; revenue: number; checkins: number; checkouts: number }> = {};
-  const cityMap: Record<string, { bookings: number; revenue: number }> = {};
-  const dayMap: Record<string, { bookings: number; revenue: number; checkins: number; checkouts: number }> = {};
-  const campaignMap: Record<string, number> = {};
-
-  for (const r of rows) {
-    totalBookings += r.totalBookings;
-    totalRevenue += r.totalRevenue ?? 0;
-    checkins += r.checkinCount ?? 0;
-    checkouts += r.checkoutCount ?? 0;
-    cancelled += r.cancelledCount ?? 0;
-    reserved += r.reservedCount ?? 0;
-
-    // By park
-    if (!parkMap[r.parkName]) parkMap[r.parkName] = { bookings: 0, revenue: 0, checkins: 0, checkouts: 0 };
-    parkMap[r.parkName].bookings += r.totalBookings;
-    parkMap[r.parkName].revenue += r.totalRevenue ?? 0;
-    parkMap[r.parkName].checkins += r.checkinCount ?? 0;
-    parkMap[r.parkName].checkouts += r.checkoutCount ?? 0;
-
-    // By city
-    if (!cityMap[r.city]) cityMap[r.city] = { bookings: 0, revenue: 0 };
-    cityMap[r.city].bookings += r.totalBookings;
-    cityMap[r.city].revenue += r.totalRevenue ?? 0;
-
-    // By day
-    const dayKey = r.snapshotDate ? new Date(r.snapshotDate).toISOString().slice(0, 10) : "unknown";
-    if (!dayMap[dayKey]) dayMap[dayKey] = { bookings: 0, revenue: 0, checkins: 0, checkouts: 0 };
-    dayMap[dayKey].bookings += r.totalBookings;
-    dayMap[dayKey].revenue += r.totalRevenue ?? 0;
-    dayMap[dayKey].checkins += r.checkinCount ?? 0;
-    dayMap[dayKey].checkouts += r.checkoutCount ?? 0;
-
-    // Campaigns
-    if (r.externalCampaigns) {
-      try {
-        const camps = JSON.parse(r.externalCampaigns);
-        for (const [name, count] of Object.entries(camps)) {
-          campaignMap[name] = (campaignMap[name] || 0) + (count as number);
-        }
-      } catch {}
-    }
-  }
-
-  return {
-    totalBookings,
-    totalRevenue,
-    checkins,
-    checkouts,
-    cancelled,
-    reserved,
-    byPark: Object.entries(parkMap).map(([name, data]) => ({ name, ...data })).sort((a, b) => b.revenue - a.revenue),
-    byCity: Object.entries(cityMap).map(([name, data]) => ({ name, ...data })).sort((a, b) => b.revenue - a.revenue),
-    byDay: Object.entries(dayMap).map(([date, data]) => ({ date, ...data })).sort((a, b) => a.date.localeCompare(b.date)),
-    campaigns: campaignMap,
-  };
-}
-
-export async function deleteSnapshotsByDateRange(from: Date, to: Date) {
-  const db = await getDb();
-  if (!db) return 0;
-  const result = await db.delete(multiparkDailySnapshots).where(
-    and(
-      gte(multiparkDailySnapshots.snapshotDate, toMysqlDateTime(from)),
-      lte(multiparkDailySnapshots.snapshotDate, toMysqlDateTime(to)),
-    )
-  );
-  return (result as any)?.[0]?.affectedRows ?? 0;
-}
 
 // ─── INVITE TOKENS ──────────────────────────────────────────────────────────
 import crypto from "crypto";
@@ -6673,7 +6549,7 @@ export async function importBookingHistory(rows: {
 
 // ─── Booking history (Multipark API, via DB local) ──────────────────────────
 // As funções a seguir devolvem o histórico de reservas Multipark já sincronizado
-// para a DB local (multipark_booking_history populado pelo cron job de 15 min).
+// para a DB local (multipark_booking_history populado pelos crons de sincronização).
 // Shape mantido compatível com a UI antiga (que esperava colunas do Excel
 // import). Adicionado o campo `flagged: 1` nas linhas/condutores que tocaram
 // numa reserva que está ligada a um caso de Perdidos/Achados.

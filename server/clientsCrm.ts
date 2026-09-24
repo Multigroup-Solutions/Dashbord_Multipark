@@ -3,7 +3,7 @@
  *
  * Identidade = EMAIL normalizado (LOWER/TRIM, ver shared/email.ts). Não há
  * tabela nova: cada cliente é o agregado das suas reservas em
- * `multipark_bookings` (sincronizadas da API a cada 15 min). Assim fica sempre
+ * `multipark_bookings` (sincronizadas da API: webhooks + sync de hora a hora). Assim fica sempre
  * certo sem sync extra; se um dia pesar, passa-se a uma tabela materializada
  * com a MESMA forma de saída.
  *

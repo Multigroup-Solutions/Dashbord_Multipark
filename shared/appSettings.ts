@@ -109,6 +109,15 @@ export const SETTINGS = {
     defaultValue: 7,
     wiring: "store",
   }),
+  "sync.webhookStaleHours": def({
+    key: "sync.webhookStaleHours",
+    group: "sla",
+    label: "Alerta sem notificações Multipark (horas)",
+    description: "Se não chegar nenhum webhook da Multipark durante este número de horas, em horário de operação (07h–23h, Lisboa), os admins recebem um aviso na app (uma vez, e outra quando voltarem).",
+    schema: z.number({ error: "Indica um número de horas." }).int("Número inteiro de horas.").min(1, "Mínimo 1 hora.").max(48, "Máximo 48 horas."),
+    defaultValue: 3,
+    wiring: "live",
+  }),
   "emails.handoverCc": def({
     key: "emails.handoverCc",
     group: "emails",

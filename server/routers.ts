@@ -71,6 +71,7 @@ import { googleBusinessRouter } from "./integrations/googleBusiness/router";
 import { integrationsHubRouter } from "./integrations/hubRouter";
 import { transcribeAudio } from "./_core/voiceTranscription";
 import { getBookingHistory, getBookingsReport, getBookingTryAllParks } from "./multipark";
+import { deliveryErrorCode } from "./bookingDeliveryQueue";
 import {
   getExtrasDiaForecast,
   listAssignments,
@@ -281,10 +282,6 @@ import {
   createSyncLog,
   getSyncLogs,
   // MultiPark KPIs
-  upsertDailySnapshot,
-  getDailySnapshots,
-  getSnapshotKPIs,
-  deleteSnapshotsByDateRange,
   // Invites
   createInviteToken,
   getInviteByToken,
@@ -354,7 +351,6 @@ import {
   type VehicleType,
   type BookingActionType,
 } from "./multipark";
-import { syncBookings, enrichBookingsBatch, syncBookingHistoryBatch } from "./jobs/multiparkBookingSync";
 
 import {
   getZelloUsers,
@@ -713,32 +709,6 @@ async function applyMigration0046(): Promise<{ ok: number; skipped: number; fail
   return { ok, skipped, failed, errors };
 }
 
-async function applyMigration0048(): Promise<{ ok: number; skipped: number; failed: number; errors: string[] }> {
-  const { getDb } = await import("./db");
-  const { MIGRATION_0048_STATEMENTS, IDEMPOTENT_ERROR_CODES_0048 } = await import("./migrations/migration_0048");
-  const { sql } = await import("drizzle-orm");
-  const db = await getDb();
-  if (!db) throw new Error("DB not available");
-  let ok = 0;
-  let skipped = 0;
-  let failed = 0;
-  const errors: string[] = [];
-  for (const stmt of MIGRATION_0048_STATEMENTS) {
-    try {
-      await db.execute(sql.raw(stmt));
-      ok += 1;
-    } catch (err: any) {
-      if (err?.code && IDEMPOTENT_ERROR_CODES_0048.has(err.code)) {
-        skipped += 1;
-      } else {
-        failed += 1;
-        errors.push(`${err?.code ?? "ERR"}: ${String(err?.message ?? err).slice(0, 200)}`);
-      }
-    }
-  }
-  return { ok, skipped, failed, errors };
-}
-
 async function applyMigration0049(): Promise<{ ok: number; skipped: number; failed: number; errors: string[] }> {
   const { getDb } = await import("./db");
   const { MIGRATION_0049_STATEMENTS, IDEMPOTENT_ERROR_CODES_0049 } = await import("./migrations/migration_0049");
@@ -817,42 +787,6 @@ async function applyMigration0051(): Promise<{ ok: number; skipped: number; fail
   return { ok, skipped, failed, errors };
 }
 
-async function applyMigration0052(): Promise<{ ok: number; skipped: number; failed: number; errors: string[] }> {
-  const { getDb } = await import("./db");
-  const { MIGRATION_0052_STATEMENTS, IDEMPOTENT_ERROR_CODES_0052 } = await import("./migrations/migration_0052");
-  const { sql } = await import("drizzle-orm");
-  const db = await getDb();
-  if (!db) throw new Error("DB not available");
-  let ok = 0, skipped = 0, failed = 0;
-  const errors: string[] = [];
-  for (const stmt of MIGRATION_0052_STATEMENTS) {
-    try { await db.execute(sql.raw(stmt)); ok += 1; }
-    catch (err: any) {
-      if (err?.code && IDEMPOTENT_ERROR_CODES_0052.has(err.code)) skipped += 1;
-      else { failed += 1; errors.push(`${err?.code ?? "ERR"}: ${String(err?.message ?? err).slice(0, 200)}`); }
-    }
-  }
-  return { ok, skipped, failed, errors };
-}
-
-async function applyMigration0053(): Promise<{ ok: number; skipped: number; failed: number; errors: string[] }> {
-  const { getDb } = await import("./db");
-  const { MIGRATION_0053_STATEMENTS, IDEMPOTENT_ERROR_CODES_0053 } = await import("./migrations/migration_0053");
-  const { sql } = await import("drizzle-orm");
-  const db = await getDb();
-  if (!db) throw new Error("DB not available");
-  let ok = 0, skipped = 0, failed = 0;
-  const errors: string[] = [];
-  for (const stmt of MIGRATION_0053_STATEMENTS) {
-    try { await db.execute(sql.raw(stmt)); ok += 1; }
-    catch (err: any) {
-      if (err?.code && IDEMPOTENT_ERROR_CODES_0053.has(err.code)) skipped += 1;
-      else { failed += 1; errors.push(`${err?.code ?? "ERR"}: ${String(err?.message ?? err).slice(0, 200)}`); }
-    }
-  }
-  return { ok, skipped, failed, errors };
-}
-
 // ─── Ocorrências / Perdidos: âmbito de cidade ────────────────────────────────
 function hasRole(userRole: string, minRole: string): boolean {
   return (ROLE_HIERARCHY[userRole] ?? -1) >= (ROLE_HIERARCHY[minRole] ?? 0);
@@ -887,6 +821,14 @@ async function getLostDriverLink(id: number) {
   const [link] = await db.select().from(lostFoundAttachedDrivers).where(eq(lostFoundAttachedDrivers.id, id)).limit(1);
   if (!link) throw new TRPCError({ code: "NOT_FOUND", message: "Condutor não encontrado" });
   return link;
+}
+
+/** Ações da sincronização (reparar, etc.): só quem tem alcance NACIONAL no
+ *  módulo — um supervisor de cidade vê a página mas não lança syncs. */
+function requireNationalSync(user: { id?: number; role: string }) {
+  if (requireAccess(user, "sincronizacao", "edit") !== "national") {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Só quem tem âmbito nacional pode lançar a sincronização." });
+  }
 }
 
 /** A reserva (externalId ou nº) pertence às cidades do utilizador? */
@@ -935,18 +877,6 @@ export const appRouter = router({
       return report;
     }),
 
-    runMigration0048: protectedProcedure.mutation(async ({ ctx }) => {
-      requireAccess(ctx.user, "manutencao", "manage");
-      const report = await applyMigration0048();
-      await logActivity({
-        userId: ctx.user.id,
-        action: "migration",
-        entity: "schema",
-        details: `0048_campaign_daily_metrics: ok=${report.ok} skipped=${report.skipped} failed=${report.failed}`,
-      });
-      return report;
-    }),
-
     runMigration0049: protectedProcedure.mutation(async ({ ctx }) => {
       requireAccess(ctx.user, "manutencao", "manage");
       const report = await applyMigration0049();
@@ -983,30 +913,6 @@ export const appRouter = router({
       return report;
     }),
 
-    runMigration0052: protectedProcedure.mutation(async ({ ctx }) => {
-      requireAccess(ctx.user, "manutencao", "manage");
-      const report = await applyMigration0052();
-      await logActivity({
-        userId: ctx.user.id,
-        action: "migration",
-        entity: "schema",
-        details: `0052_lostfound_return_fields: ok=${report.ok} skipped=${report.skipped} failed=${report.failed}`,
-      });
-      return report;
-    }),
-
-    runMigration0053: protectedProcedure.mutation(async ({ ctx }) => {
-      requireAccess(ctx.user, "manutencao", "manage");
-      const report = await applyMigration0053();
-      await logActivity({
-        userId: ctx.user.id,
-        action: "migration",
-        entity: "schema",
-        details: `0053_case_assignment_audit: ok=${report.ok} skipped=${report.skipped} failed=${report.failed}`,
-      });
-      return report;
-    }),
-
     // Sincroniza os emails inbound (reclamações/perdidos/críticas/RH) on-demand.
     // backoffice+ (a equipa de suporte usa o botão nas Reclamações/Recrutamento).
     // Mesmo prazo do cron (45s < maxDuration 60s do Vercel): sem ele o botão
@@ -1023,191 +929,6 @@ export const appRouter = router({
         details: `criados=${result.created} ignorados=${result.skipped} erros=${result.errors.length}${result.partial ? " (parcial)" : ""}`,
       });
       return result;
-    }),
-
-    // Apaga um batch de duplicados em multipark_bookings. Cliente itera até
-    // deleted === 0. Evita timeout do Vercel.
-    fixMultiparkDuplicatesBatch: protectedProcedure
-      .input(z.object({ batchSize: z.number().int().min(100).max(5000).optional() }).optional())
-      .mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "manutencao", "manage");
-        const { getDb } = await import("./db");
-        const { sql } = await import("drizzle-orm");
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
-
-        const batch = input?.batchSize ?? 1000;
-
-        // Stats antes
-        const beforeRes = await db.execute(sql`SELECT COUNT(*) AS total FROM multipark_bookings`) as any;
-        const before = Array.isArray(beforeRes[0]) ? beforeRes[0] : beforeRes;
-        const totalBefore = Number(before[0]?.total ?? 0);
-
-        // Apaga até `batch` linhas duplicadas (mantém a do updatedAt mais recente)
-        const delRes = await db.execute(sql`
-          DELETE FROM multipark_bookings WHERE id IN (
-            SELECT id FROM (
-              SELECT b1.id FROM multipark_bookings b1
-              INNER JOIN multipark_bookings b2
-                ON b1.externalId = b2.externalId
-               AND (
-                     b1.updatedAt < b2.updatedAt
-                  OR (b1.updatedAt = b2.updatedAt AND b1.id < b2.id)
-               )
-              LIMIT ${sql.raw(String(batch))}
-            ) AS t
-          )
-        `) as any;
-        const meta = Array.isArray(delRes[0]) ? delRes[0] : delRes;
-        const affectedRows = Number((meta as any)?.affectedRows ?? 0);
-
-        const afterRes = await db.execute(sql`SELECT COUNT(*) AS total FROM multipark_bookings`) as any;
-        const after = Array.isArray(afterRes[0]) ? afterRes[0] : afterRes;
-        const totalAfter = Number(after[0]?.total ?? 0);
-
-        return {
-          totalBefore,
-          totalAfter,
-          deleted: affectedRows || (totalBefore - totalAfter),
-          batchSize: batch,
-        };
-      }),
-
-    // Backfill: atribui um projeto fallback (default = "Multipark" se existir,
-    // senão o primeiro grupo top-level) a todos os colaboradores activos sem
-    // projectId. Devolve quantos foram afectados e qual o projeto usado.
-    backfillEmployeeProject: protectedProcedure
-      .input(z.object({ projectId: z.number().optional(), onlyExtras: z.boolean().optional() }).optional())
-      .mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "manutencao", "manage");
-        const { getDb } = await import("./db");
-        const { sql, isNull, and: andOp, eq } = await import("drizzle-orm");
-        const { employees, projects } = await import("../drizzle/schema");
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
-
-        // Resolve o projeto fallback
-        let fallbackId = input?.projectId;
-        let fallbackName = "";
-        if (!fallbackId) {
-          const allProjects = await db.select().from(projects);
-          // Procura projeto "Multipark" (qualquer level)
-          const mp = allProjects.find(p => /^multipark$/i.test(p.name.trim()));
-          if (mp) {
-            fallbackId = mp.id;
-            fallbackName = mp.name;
-          } else {
-            // Sem "Multipark" → primeiro grupo (top-level)
-            const top = allProjects.find(p => p.level === "group");
-            if (top) {
-              fallbackId = top.id;
-              fallbackName = top.name;
-            }
-          }
-        } else {
-          const [p] = await db.select({ name: projects.name }).from(projects).where(eq(projects.id, fallbackId)).limit(1);
-          fallbackName = p?.name ?? "";
-        }
-
-        if (!fallbackId) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: "Não há projeto fallback. Cria um projeto top-level 'Multipark' ou indica projectId no input.",
-          });
-        }
-
-        // Alvo: colaboradores activos sem centro de custos. Se onlyExtras,
-        // restringe a position='extra' (não arrasta outros sem projeto).
-        const conds = [eq(employees.isActive, 1), isNull(employees.projectId)];
-        if (input?.onlyExtras) conds.push(eq(employees.position, "extra"));
-        const targetWhere = andOp(...conds);
-
-        // Conta antes
-        const beforeRes = await db
-          .select({ c: sql<number>`COUNT(*)` })
-          .from(employees)
-          .where(targetWhere);
-        const before = Number(beforeRes[0]?.c ?? 0);
-
-        // Update
-        await db
-          .update(employees)
-          .set({ projectId: fallbackId })
-          .where(targetWhere);
-
-        await logActivity({
-          userId: ctx.user.id,
-          action: "backfill",
-          entity: "employee",
-          details: `Backfill projectId=${fallbackId} (${fallbackName})${input?.onlyExtras ? " [só extras]" : ""} em ${before} colaboradores`,
-        });
-
-        return { affected: before, projectId: fallbackId, projectName: fallbackName };
-      }),
-
-    // Backfill histórico: sincroniza UM dia (todas as actionTypes) +
-    // enrich + history. Frontend itera dia-a-dia para o range pedido.
-    // Cada chamada cabe nos 60s do Vercel para um dia tipico.
-    runHistoricalDaySync: protectedProcedure
-      .input(z.object({ date: z.string() })) // YYYY-MM-DD
-      .mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "manutencao", "manage");
-        const { syncBookings, enrichBookingsBatch, syncBookingHistoryBatch } = await import("./jobs/multiparkBookingSync");
-        const t0 = Date.now();
-        // Fase 1: report do dia (todas as actionTypes). enrichTargets fica de
-        // fora da resposta (lista de IDs grande e desnecessária no backfill).
-        const { enrichTargets: _enrichTargets, ...report } = await syncBookings({
-          startDate: input.date,
-          endDate: input.date,
-          triggeredById: ctx.user.id,
-        });
-        // Fase 2 e 3 em paralelo para reservas novas/sem enrich
-        const [enrichRes, historyRes] = await Promise.allSettled([
-          enrichBookingsBatch(100),
-          syncBookingHistoryBatch(50),
-        ]);
-        return {
-          date: input.date,
-          report,
-          enriched: enrichRes.status === "fulfilled" ? enrichRes.value.enriched : 0,
-          enrichScanned: enrichRes.status === "fulfilled" ? enrichRes.value.scanned : 0,
-          historyFetched: historyRes.status === "fulfilled" ? historyRes.value.fetched : 0,
-          durationMs: Date.now() - t0,
-        };
-      }),
-
-    // Reforça o UNIQUE depois dos batches terminarem.
-    enforceMultiparkUnique: protectedProcedure.mutation(async ({ ctx }) => {
-      requireAccess(ctx.user, "manutencao", "manage");
-      const { getDb } = await import("./db");
-      const { sql } = await import("drizzle-orm");
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
-
-      const steps: { step: string; ok: boolean; error?: string }[] = [];
-      // DROP do índice (pode não existir)
-      try {
-        await db.execute(sql`ALTER TABLE multipark_bookings DROP INDEX multipark_bookings_externalId_unique`);
-        steps.push({ step: "drop_index", ok: true });
-      } catch (e: any) {
-        steps.push({ step: "drop_index", ok: false, error: e?.code ?? e?.message });
-      }
-      // CREATE UNIQUE
-      try {
-        await db.execute(sql`ALTER TABLE multipark_bookings ADD UNIQUE INDEX multipark_bookings_externalId_unique (externalId)`);
-        steps.push({ step: "create_unique", ok: true });
-      } catch (e: any) {
-        steps.push({ step: "create_unique", ok: false, error: e?.code ?? e?.message });
-      }
-
-      await logActivity({
-        userId: ctx.user.id,
-        action: "migration",
-        entity: "schema",
-        details: `enforceMultiparkUnique: ${JSON.stringify(steps)}`,
-      });
-
-      return { steps };
     }),
   }),
 
@@ -6984,7 +6705,8 @@ export const appRouter = router({
         }
       }),
 
-    // Test API connection
+    // Teste por parque: report mínimo (1 dia, 1 ação) com cada chave. Pedido
+    // à API por parque — a UI só o chama quando alguém carrega no botão.
     testConnection: protectedProcedure.query(async ({ ctx }) => {
       requireAccess(ctx.user, "sincronizacao", "manage");
       return mpTestConnection();
@@ -7033,7 +6755,7 @@ export const appRouter = router({
       return mpListParks();
     }),
 
-    // Get sync logs
+    // Cobertura (chaves por parque) + totais da fila
     syncCoverage: protectedProcedure.query(async ({ ctx }) => {
       requireAccess(ctx.user, "sincronizacao", "view");
       const { parkCoverage } = await import("./multipark");
@@ -7041,297 +6763,75 @@ export const appRouter = router({
       return { parks: parkCoverage(), queue: await getDeliveryHealth() };
     }),
 
-    syncLogs: protectedProcedure.query(async ({ ctx }) => {
+    // Saúde dos dados (Sincronização + Definições → Estado do sistema). Só
+    // totais e códigos, sem dados de clientes.
+    dataHealth: protectedProcedure.query(async ({ ctx }) => {
       requireAccess(ctx.user, "sincronizacao", "view");
-      return getSyncLogs(50);
+      const { getSyncHealth } = await import("./syncHealth");
+      return getSyncHealth();
     }),
 
-    // ── KPIs AGREGADOS ──
-    kpis: protectedProcedure
+    // Logs da sincronização, filtráveis por tipo. As linhas antigas "api_sync"
+    // (antes da 0101 o recente e o futuro gravavam os dois isso) aparecem nos
+    // filtros "recente" e "futuro".
+    syncLogs: protectedProcedure
       .input(z.object({
-        from: z.string().optional(),
-        to: z.string().optional(),
-        city: z.string().optional(),
+        type: z.enum(["all", "recent", "future", "manual"]).default("all"),
+        limit: z.number().int().min(1).max(200).default(50),
       }).optional())
       .query(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "reservas_operacoes", "view");
-        return getSnapshotKPIs({
-          from: input?.from ? new Date(input.from) : undefined,
-          to: input?.to ? new Date(input.to) : undefined,
-          city: input?.city,
-        });
+        requireAccess(ctx.user, "sincronizacao", "view");
+        const types = {
+          all: undefined,
+          recent: ["api_sync_recent", "api_sync"],
+          future: ["api_sync_future", "api_sync"],
+          manual: ["manual", "api_sync_recovery", "excel_import"],
+        }[input?.type ?? "all"];
+        return getSyncLogs(input?.limit ?? 50, types);
       }),
 
-    // Get daily snapshots (raw data)
-    snapshots: protectedProcedure
-      .input(z.object({
-        from: z.string().optional(),
-        to: z.string().optional(),
-        parkName: z.string().optional(),
-        city: z.string().optional(),
-        limit: z.number().optional(),
-      }).optional())
-      .query(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "reservas_operacoes", "view");
-        return getDailySnapshots({
-          from: input?.from ? new Date(input.from) : undefined,
-          to: input?.to ? new Date(input.to) : undefined,
-          parkName: input?.parkName,
-          city: input?.city,
-          limit: input?.limit,
-        });
-      }),
-
-    // ── IMPORT EXCEL ──
-    importExcel: protectedProcedure
-      .input(z.object({
-        fileBase64: z.string(),
-        filename: z.string(),
-      }))
-      .mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "sincronizacao", "manage");
-        const buffer = Buffer.from(input.fileBase64, "base64");
-        const wb = XLSX.read(buffer, { type: "buffer" });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        if (!ws) throw new Error("Ficheiro Excel vazio");
-        const rows: any[] = XLSX.utils.sheet_to_json(ws, { defval: null });
-        if (rows.length === 0) throw new Error("Nenhuma linha encontrada no ficheiro");
-
-        // Parse helper
-        const parsePrice = (val: any): number => {
-          if (!val) return 0;
-          const s = String(val).replace(/[^\d.,]/g, "").replace(",", ".");
-          return Math.round(parseFloat(s) * 100) || 0; // cents
-        };
-        const parseDate = (val: any): Date | null => {
-          if (!val) return null;
-          const s = String(val);
-          // Format: "03/03/2026, 16:25" or "2026-03-03"
-          const m = s.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-          if (m) return new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]));
-          const d = new Date(s);
-          return isNaN(d.getTime()) ? null : d;
-        };
-
-        // Detect column names (handle encoding issues)
-        const colMap: Record<string, string> = {};
-        const firstRow = rows[0];
-        for (const key of Object.keys(firstRow)) {
-          const k = key.toLowerCase();
-          if (k.includes("estado")) colMap.status = key;
-          if (k.includes("cria") || k === "data de cria\u00e7\u00e3o" || k.includes("cria\ufffd")) colMap.createdAt = key;
-          if (k.includes("nome do parque") || k === "nome do parque") colMap.parkName = key;
-          if (k === "parkname") colMap.parkName = colMap.parkName || key;
-          if (k.includes("cidade")) colMap.city = key;
-          if (k.includes("pre\u00e7o total") || k.includes("pre\ufffd") && k.includes("total")) colMap.totalPrice = key;
-          if (k.includes("estacionamento") && k.includes("pre")) colMap.parkingPrice = key;
-          if (k.includes("entrega") && k.includes("pre")) colMap.deliveryPrice = key;
-          if (k.includes("extra") && k.includes("pre")) colMap.extrasPrice = key;
-          if (k.includes("pagamento") && k.includes("todo")) colMap.paymentMethod = key;
-          if (k.includes("externalcampaign") || k.includes("external")) colMap.campaign = key;
-        }
-
-        // Fallback: try to find columns by index position matching known export
-        const keys = Object.keys(firstRow);
-        if (!colMap.status && keys[1]) colMap.status = keys[1];
-        if (!colMap.createdAt && keys[2]) colMap.createdAt = keys[2];
-        if (!colMap.parkName && keys[5]) colMap.parkName = keys[5];
-        if (!colMap.city && keys[8]) colMap.city = keys[8];
-        if (!colMap.totalPrice && keys[28]) colMap.totalPrice = keys[28];
-        if (!colMap.parkingPrice && keys[29]) colMap.parkingPrice = keys[29];
-        if (!colMap.deliveryPrice && keys[30]) colMap.deliveryPrice = keys[30];
-        if (!colMap.extrasPrice && keys[31]) colMap.extrasPrice = keys[31];
-        if (!colMap.paymentMethod && keys[47]) colMap.paymentMethod = keys[47];
-        if (!colMap.campaign && keys[65]) colMap.campaign = keys[65];
-
-        // Group by date + park + city
-        const grouped: Record<string, {
-          date: Date;
-          parkName: string;
-          city: string;
-          total: number;
-          reserved: number;
-          checkin: number;
-          checkout: number;
-          cancelled: number;
-          revenue: number;
-          parkingRev: number;
-          deliveryRev: number;
-          extrasRev: number;
-          online: number;
-          agent: number;
-          campaigns: Record<string, number>;
-        }> = {};
-
-        let parsedRows = 0;
-        for (const row of rows) {
-          const createdDate = parseDate(row[colMap.createdAt]);
-          if (!createdDate) continue;
-          const dateKey = createdDate.toISOString().slice(0, 10);
-          const parkName = String(row[colMap.parkName] || "Desconhecido").trim();
-          const city = String(row[colMap.city] || "Desconhecida").trim();
-          const status = String(row[colMap.status] || "").toLowerCase();
-          const groupKey = `${dateKey}|${parkName}|${city}`;
-
-          if (!grouped[groupKey]) {
-            grouped[groupKey] = {
-              date: createdDate,
-              parkName,
-              city,
-              total: 0, reserved: 0, checkin: 0, checkout: 0, cancelled: 0,
-              revenue: 0, parkingRev: 0, deliveryRev: 0, extrasRev: 0,
-              online: 0, agent: 0, campaigns: {},
-            };
-          }
-          const g = grouped[groupKey];
-          g.total++;
-          parsedRows++;
-
-          if (status.includes("reserv")) g.reserved++;
-          else if (status.includes("check-in") || status.includes("checkin")) g.checkin++;
-          else if (status.includes("check-out") || status.includes("checkout")) g.checkout++;
-          else if (status.includes("cancel")) g.cancelled++;
-
-          g.revenue += parsePrice(row[colMap.totalPrice]);
-          g.parkingRev += parsePrice(row[colMap.parkingPrice]);
-          g.deliveryRev += parsePrice(row[colMap.deliveryPrice]);
-          g.extrasRev += parsePrice(row[colMap.extrasPrice]);
-
-          const method = String(row[colMap.paymentMethod] || "").toLowerCase();
-          if (method.includes("online")) g.online++;
-
-          const campaign = row[colMap.campaign];
-          if (campaign && String(campaign).trim()) {
-            const campName = String(campaign).trim();
-            g.campaigns[campName] = (g.campaigns[campName] || 0) + 1;
-            g.agent++;
-          }
-        }
-
-        // Upsert snapshots
-        let created = 0, updated = 0;
-        for (const g of Object.values(grouped)) {
-          const result = await upsertDailySnapshot({
-            snapshotDate: new Date(g.date.toISOString().slice(0, 10) + "T00:00:00.000Z").toISOString().slice(0, 19).replace("T", " "),
-            parkName: g.parkName,
-            city: g.city,
-            totalBookings: g.total,
-            reservedCount: g.reserved,
-            checkinCount: g.checkin,
-            checkoutCount: g.checkout,
-            cancelledCount: g.cancelled,
-            totalRevenue: g.revenue,
-            parkingRevenue: g.parkingRev,
-            deliveryRevenue: g.deliveryRev,
-            extrasRevenue: g.extrasRev,
-            onlineCount: g.online,
-            agentCount: g.agent,
-            externalCampaigns: Object.keys(g.campaigns).length > 0 ? JSON.stringify(g.campaigns) : null,
-            importSource: "excel",
-            importedById: ctx.user.id,
-          });
-          if (result?.action === "created") created++;
-          else if (result?.action === "updated") updated++;
-        }
-
-        await createSyncLog({
-          syncType: "excel_import",
-          status: "success",
-          recordsProcessed: parsedRows,
-          recordsCreated: created,
-          recordsUpdated: updated,
-          triggeredById: ctx.user.id,
-          completedAt: new Date(),
-        });
-
-        await logActivity({
-          userId: ctx.user.id,
-          action: "import",
-          entity: "multipark_kpis",
-          details: `Excel importado: ${parsedRows} reservas → ${created + updated} snapshots (${input.filename})`,
-        });
-
-        return {
-          success: true,
-          rowsParsed: parsedRows,
-          snapshotsCreated: created,
-          snapshotsUpdated: updated,
-          totalGroups: Object.keys(grouped).length,
-        };
-      }),
-
-    // Manual sync trigger
-    // Sync bookings from API (manual trigger with date range)
+    // "Reparar período": report de até 3 dias, com prazo (45s) e trinco
+    // partilhado com o cron e o MCP. Só âmbito nacional (um supervisor de
+    // cidade não lança um sync de todos os parques).
     triggerSync: protectedProcedure
       .input(z.object({
         startDate: z.string(),
         endDate: z.string(),
-        actionTypes: z.array(z.enum(["creation", "checkin", "checkout", "cancelation"])).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "sincronizacao", "edit");
-        // Limite no servidor (não só na UI): um intervalo enorme prende a
-        // função e martela a API Multipark. Máx. 31 dias por pedido.
+        requireNationalSync(ctx.user);
+        const { runRepairSync, REPAIR_MAX_DAYS } = await import("./jobs/multiparkBookingSync");
         {
           const { syncRangeError } = await import("./opsRules");
-          const err = syncRangeError(input.startDate, input.endDate, 31);
+          const err = syncRangeError(input.startDate, input.endDate, REPAIR_MAX_DAYS);
           if (err) throw new TRPCError({ code: "BAD_REQUEST", message: err });
         }
         try {
-          const result = await syncBookings({
-            startDate: input.startDate,
-            endDate: input.endDate,
-            actionTypes: input.actionTypes as any,
-            triggeredById: ctx.user.id,
-          });
+          const r = await runRepairSync({ startDate: input.startDate, endDate: input.endDate, triggeredById: ctx.user.id, owner: "manual" });
+          if (r.busy) {
+            const { SYNC_BUSY_MESSAGE } = await import("./syncLock");
+            throw new TRPCError({ code: "CONFLICT", message: SYNC_BUSY_MESSAGE });
+          }
+          const { enrichTargets: _targets, parkStatus: _status, ...result } = r.result;
           await logActivity({
             userId: ctx.user.id,
             action: "sync",
             entity: "multipark",
-            details: `Sync API: ${result.processed} processadas, ${result.created} novas, ${result.updated} atualizadas`,
+            details: `Reparar período ${input.startDate}→${input.endDate}: ${result.processed} processadas, ${result.created} novas, ${result.updated} atualizadas${result.partial ? ` (parcial: ${result.skippedJobs} por fazer)` : ""}`,
           });
           return result;
         } catch (error: any) {
+          if (error instanceof TRPCError) throw error;
+          console.error("[triggerSync]", deliveryErrorCode(error));
           await createSyncLog({
             syncType: "manual",
             status: "error",
-            errorMessage: error.message,
+            errorMessage: deliveryErrorCode(error),
             triggeredById: ctx.user.id,
             completedAt: new Date(),
           });
-          return { success: false, processed: 0, created: 0, updated: 0, errors: [error.message] };
+          return { success: false, processed: 0, created: 0, updated: 0, errors: [deliveryErrorCode(error)], partial: false, skippedJobs: 0, parkErrors: [], totalMismatches: [] };
         }
-      }),
-
-    // Enrich a batch of unenriched bookings with /bookings/:id details
-    // (deliveryType, returnFlight, departingFlight, remarks).
-    enrichBatch: protectedProcedure
-      .input(z.object({ limit: z.number().int().min(1).max(300).default(200) }).optional())
-      .mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "sincronizacao", "edit");
-        const result = await enrichBookingsBatch(input?.limit ?? 200);
-        await logActivity({
-          userId: ctx.user.id,
-          action: "enrich",
-          entity: "multipark_bookings",
-          details: `Enriquecidas ${result.enriched}/${result.scanned} (${result.errors} erros API, ${result.noKey} sem chave)`,
-        });
-        return result;
-      }),
-
-    // Fetch history (timeline) das reservas recentes ou futuras 30d
-    syncHistoryBatch: protectedProcedure
-      .input(z.object({ limit: z.number().int().min(1).max(100).default(50) }).optional())
-      .mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "sincronizacao", "edit");
-        const result = await syncBookingHistoryBatch(input?.limit ?? 50);
-        await logActivity({
-          userId: ctx.user.id,
-          action: "history_sync",
-          entity: "multipark_bookings",
-          details: `History: ${result.fetched}/${result.scanned} reservas (${result.errors} erros, ${result.noKey} sem chave)`,
-        });
-        return result;
       }),
 
     // Buscar history de um agente (por nome) num dia (chama /agent/history

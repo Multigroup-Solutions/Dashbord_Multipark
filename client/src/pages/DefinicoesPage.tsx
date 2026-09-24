@@ -23,6 +23,7 @@ import {
   Save, ShieldCheck, SlidersHorizontal, ToggleLeft, Trash2, XCircle,
 } from "lucide-react";
 import { validateSetting, type RateEntry } from "@shared/appSettings";
+import { SyncHealthPanel } from "@/components/operacoes/SyncHealthPanel";
 
 const TABS = ["estado", "automacoes", "integracoes", "parametros", "seguranca"] as const;
 type Tab = (typeof TABS)[number];
@@ -61,7 +62,7 @@ export default function DefinicoesPage() {
             <TabsTrigger value="seguranca"><ShieldCheck className="h-4 w-4 mr-1" />Segurança</TabsTrigger>
           </TabsList>
         </div>
-        <TabsContent value="estado"><SystemStatusCard /></TabsContent>
+        <TabsContent value="estado" className="space-y-4"><SystemStatusCard /><SyncHealthPanel compact /></TabsContent>
         <TabsContent value="automacoes"><AutomationsCard /></TabsContent>
         <TabsContent value="integracoes"><IntegrationsCard /></TabsContent>
         <TabsContent value="parametros"><ParametersCard /></TabsContent>

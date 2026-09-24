@@ -15,7 +15,7 @@ import { deliveryErrorCode } from "../bookingDeliveryQueue";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { sdk } from "./sdk";
 import { requireSession } from "./requireSession";
-import { getBookingTryAllParks } from "../multipark";
+import { cronAuthOk as cronBearerAuthOk } from "../cronAuth";
 import { cronRunRecorder } from "../cronRuns";
 
 const app = express();
@@ -111,134 +111,65 @@ try {
   console.error("[API Init Error]", initError);
 }
 
-// Debug endpoint: fetch raw booking JSON straight from MultiPark API.
-// Admin-only (session cookie). Usage: /api/debug/booking?id=cm...
-app.get("/api/debug/booking", async (req, res) => {
-  try {
-    const user = await sdk.authenticateRequest(req);
-    if (!user || user.role !== "admin" && user.role !== "super_admin") {
-      return res.status(403).json({ error: "Forbidden — admin only" });
-    }
-    const id = String(req.query.id ?? "").trim();
-    if (!id) return res.status(400).json({ error: "Missing ?id=<externalId>" });
-
-    const found = await getBookingTryAllParks(id);
-    if (!found) {
-      return res.status(404).json({
-        error: "Reserva não encontrada em nenhum parque",
-        triedKeys: Object.keys(process.env).filter(k => k.startsWith("MULTIPARK_API_KEY_")),
-      });
-    }
-
-    return res.json({
-      park: `${found.parkConfig.name} (${found.parkConfig.city})`,
-      parkId: found.parkConfig.id,
-      booking: found.booking,
-    });
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message || String(err) });
-  }
-});
-
-// Debug endpoint: tenta várias URLs / params para descobrir se há algum
-// caminho onde a API devolve o nome real do parceiro.
-// Uso: /api/debug/probe-partner?id=<externalId>
-app.get("/api/debug/probe-partner", async (req, res) => {
-  try {
-    const user = await sdk.authenticateRequest(req);
-    if (!user || (user.role !== "admin" && user.role !== "super_admin")) {
-      return res.status(403).json({ error: "Forbidden — admin only" });
-    }
-    const id = String(req.query.id ?? "").trim();
-    if (!id) return res.status(400).json({ error: "Missing ?id=<externalId>" });
-
-    // Primeiro descobre qual parque é (para usar a chave certa)
-    const { getBookingTryAllParks, PARK_CONFIGS, getParkApiKey } = await import("../multipark");
-    const found = await getBookingTryAllParks(id);
-    if (!found) return res.status(404).json({ error: "Reserva não encontrada" });
-
-    const apiKey = getParkApiKey(found.parkConfig);
-    if (!apiKey) return res.status(500).json({ error: "Sem API key para o parque" });
-
-    const partnerId = (found.booking as any).partnerId;
-    const base = process.env.MULTIPARK_API_URL || "https://api.multipark.pt/api/v1/bookings-api";
-    const baseRoot = base.replace(/\/bookings-api$/, "");
-
-    // Lista de URLs/params para testar
-    const probes: { name: string; url: string }[] = [
-      { name: "GET /partners/:partnerId", url: `${base}/partners/${partnerId}` },
-      { name: "GET /partner/:partnerId", url: `${base}/partner/${partnerId}` },
-      { name: "GET /users/:partnerId", url: `${base}/users/${partnerId}` },
-      { name: "GET /agents/:partnerId", url: `${base}/agents/${partnerId}` },
-      { name: "GET /agent/:partnerId", url: `${base}/agent/${partnerId}` },
-      { name: "GET /bookings/:id?include=partner", url: `${base}/bookings/${id}?include=partner` },
-      { name: "GET /bookings/:id?expand=partner", url: `${base}/bookings/${id}?expand=partner` },
-      { name: "GET /bookings/:id?fields=*", url: `${base}/bookings/${id}?fields=*` },
-      { name: "GET /bookings/:id/partner", url: `${base}/bookings/${id}/partner` },
-      { name: "GET /bookings/:id/details", url: `${base}/bookings/${id}/details` },
-      { name: "GET /partners (lista)", url: `${base}/partners` },
-      { name: "GET (root)/partners/:partnerId", url: `${baseRoot}/partners/${partnerId}` },
-      { name: "GET (root)/users/:partnerId", url: `${baseRoot}/users/${partnerId}` },
-    ];
-
-    const results: any[] = [];
-    for (const probe of probes) {
-      try {
-        const r = await fetch(probe.url, {
-          headers: { "X-Api-Key": apiKey, "Content-Type": "application/json" },
-        });
-        const status = r.status;
-        let body: any = null;
-        try { body = await r.json(); } catch {}
-        results.push({
-          probe: probe.name,
-          url: probe.url,
-          status,
-          ok: r.ok,
-          body: r.ok ? body : (body?.message ?? body?.error ?? "—"),
-        });
-      } catch (err: any) {
-        results.push({ probe: probe.name, url: probe.url, error: err.message });
-      }
-    }
-
-    return res.json({
-      bookingId: id,
-      partnerId,
-      partnerNameFromReport: (found.booking as any).partnerName,
-      probes: results,
-    });
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message || String(err) });
-  }
-});
-
-// ─── Vercel Cron Jobs ────────────────────────────────────────────────────────
+// ─── Crons (GitHub Actions) ──────────────────────────────────────────────────
 // O agendador é o GitHub Actions (.github/workflows/*.yml), que chama estes
 // endpoints com Authorization: Bearer <CRON_SECRET>. Em ausência da env var,
-// nenhuma chamada é permitida.
+// nenhuma chamada é permitida. Comparação em tempo constante (server/cronAuth).
 function cronAuthOk(req: any): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return false;
-  return req.headers["authorization"] === `Bearer ${secret}`;
+  return cronBearerAuthOk(req.headers?.["authorization"]);
 }
 
+/** Código do erro para a resposta/log — nunca a mensagem (pode trazer PII). */
+const errCode = (err: unknown) => deliveryErrorCode(err);
+
+// Fila de notificações + detalhe + histórico, de 5 em 5 minutos. Falhas de
+// itens (reserva ainda incompleta, histórico que falhou) são repetidas pela
+// fila com backoff → vão em `warnings` e o cron fica verde. ok:false só quando
+// uma fase inteira falha (fila/BD indisponível).
 app.get("/api/cron/multipark-deliveries", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const startedAt = Date.now();
+  const phaseErrors: string[] = [];
+  let queue: Awaited<ReturnType<typeof retryMultiparkDeliveries>> | null = null;
+  let details: { scanned: number; enriched: number; errors: number; noKey: number; closed?: number } | null = null;
+  let history: { scanned: number; fetched: number; errors: number; noKey: number; closed?: number } | null = null;
+  let alert: unknown = null;
   try {
-    const startedAt = Date.now();
-    const { retryMultiparkDeliveries } = await import("../multiparkWebhook");
-    const result = await retryMultiparkDeliveries(startedAt + 20_000);
+    queue = await retryMultiparkDeliveries(startedAt + 20_000);
+  } catch (err) {
+    console.error("[cron multipark-deliveries] fila:", errCode(err));
+    phaseErrors.push(`fila indisponível (${errCode(err)})`);
+  }
+  try {
     const { enrichBookingsBatch, syncBookingHistoryBatch } = await import("../jobs/multiparkBookingSync");
     // O detalhe tem um ciclo próprio: um report demorado não pode impedir
     // para sempre a atualização de matrículas, clientes e campanhas.
-    const details = await enrichBookingsBatch({ limit: 40, deadlineAt: startedAt + 32_000 });
-    const history = await syncBookingHistoryBatch(20, startedAt + 45_000);
-    return res.json({ ok: result.failed === 0 && result.lostLease === 0 && details.errors === 0
-      && details.noKey === 0 && history.errors === 0 && history.noKey === 0, ...result, details, history });
-  } catch {
-    return res.status(503).json({ ok: false, error: "Fila de reservas indisponível" });
+    try {
+      details = await enrichBookingsBatch({ limit: 40, deadlineAt: startedAt + 32_000 });
+    } catch (err) {
+      console.error("[cron multipark-deliveries] detalhe:", errCode(err));
+      phaseErrors.push(`detalhe falhou (${errCode(err)})`);
+    }
+    try {
+      history = await syncBookingHistoryBatch(20, startedAt + 45_000);
+    } catch (err) {
+      console.error("[cron multipark-deliveries] histórico:", errCode(err));
+      phaseErrors.push(`histórico falhou (${errCode(err)})`);
+    }
+  } catch (err) {
+    console.error("[cron multipark-deliveries] módulo:", errCode(err));
+    phaseErrors.push(`sync indisponível (${errCode(err)})`);
   }
+  // Alerta "sem webhooks em horário de operação" (1 aviso por transição).
+  try {
+    const { checkWebhookStaleAlert } = await import("../syncHealth");
+    alert = await checkWebhookStaleAlert();
+  } catch (err) {
+    console.warn("[cron multipark-deliveries] alerta webhooks:", errCode(err));
+  }
+  const { deliveriesVerdict } = await import("../syncRules");
+  const verdict = deliveriesVerdict({ phaseErrors, queue, details, history });
+  res.status(verdict.ok ? 200 : 503).json({ ...verdict, ranAt: new Date().toISOString(), ...(queue ?? {}), queue, details, history, alert });
 });
 
 app.get("/api/cron/multipark-sync", async (req, res) => {
@@ -246,6 +177,10 @@ app.get("/api/cron/multipark-sync", async (req, res) => {
   try {
     const { runRecentCronSync } = await import("../jobs/multiparkBookingSync");
     const result = await runRecentCronSync(30);
+    if (result.busy) {
+      // Outro sync (botão, MCP) tem o trinco: não é falha, repete na hora seguinte.
+      return res.json({ ok: true, skipped: "busy", message: "Sincronização já a correr", ranAt: new Date().toISOString() });
+    }
     // Descoberta automática de parceiros (partnerIds novos → partnership +
     // alias; campanhas "Pro X" → empresa Pro). Melhor esforço: nunca parte o
     // sync. Os parceiros novos nascem "Por configurar" (Gestão das Parcerias).
@@ -256,14 +191,23 @@ app.get("/api/cron/multipark-sync", async (req, res) => {
       partners = { created: r.created, linkedToExisting: r.linkedToExisting, proCreated: r.proCreated, unresolved: r.unresolved.length };
       console.log("[cron multipark-sync] parceiros:", JSON.stringify(partners));
     } catch (err: any) {
-      partners = { error: String(err?.message ?? err).slice(0, 200) };
+      partners = { error: errCode(err) };
       console.warn("[cron multipark-sync] sincronização de parceiros falhou:", partners.error);
     }
-    // Falha da descoberta de parceiros → ok:false (o workflow fica vermelho e
-    // abre issue); as reservas já ficaram sincronizadas na mesma.
-    res.json({ ok: !(partners && "error" in partners), ranAt: new Date().toISOString(), ...result, partners });
+    const { recentSyncVerdict } = await import("../syncRules");
+    // ok:false quando há parques cujo report falhou (a cobertura deles não
+    // avançou e o próximo ciclo repete) ou quando a descoberta de parceiros
+    // falhou — o workflow fica vermelho e abre issue.
+    const verdict = recentSyncVerdict({
+      parkErrors: result.parkErrors,
+      errors: result.report.errors,
+      partnersError: partners && "error" in partners ? String(partners.error) : null,
+    });
+    if (!verdict.ok) console.warn("[cron multipark-sync]", verdict.error);
+    res.json({ ...verdict, ranAt: new Date().toISOString(), ...result, report: { ...result.report, errors: result.report.errors.slice(0, 20) }, partners });
   } catch (err: any) {
-    res.status(500).json({ ok: false, error: String(err?.message ?? err) });
+    console.error("[cron multipark-sync] falhou:", errCode(err));
+    res.status(500).json({ ok: false, error: `sync recente falhou (${errCode(err)})` });
   }
 });
 
@@ -291,9 +235,20 @@ app.get("/api/cron/multipark-future", async (req, res) => {
       ? Number(req.query.offsetDays)
       : 0;
     const result = await runFutureCronSync(4, { offsetDays });
-    res.json({ ok: true, ranAt: new Date().toISOString(), ...result });
+    if (result.busy) {
+      // Trinco ocupado: não é falha. done:true para o workflow não ciclar;
+      // a janela futura é refeita no ciclo seguinte (2 h).
+      return res.json({ ok: true, skipped: "busy", message: "Sincronização já a correr", done: true, ranAt: new Date().toISOString() });
+    }
+    const { futureSyncVerdict } = await import("../syncRules");
+    // ok:false só quando não acabou E não avançou (report falhado ou prazo
+    // esgotado na 1.ª fatia) — avançar uma fatia já é progresso.
+    const verdict = futureSyncVerdict(result);
+    if (!verdict.ok) console.warn("[cron multipark-future]", verdict.error);
+    res.json({ ...verdict, ranAt: new Date().toISOString(), ...result, report: { ...result.report, errors: result.report.errors.slice(0, 20) } });
   } catch (err: any) {
-    res.status(500).json({ ok: false, error: String(err?.message ?? err) });
+    console.error("[cron multipark-future] falhou:", errCode(err));
+    res.status(500).json({ ok: false, error: `sync futuro falhou (${errCode(err)})` });
   }
 });
 
@@ -391,6 +346,15 @@ app.get("/api/cron/daily-ops", async (req, res) => {
       // Retenção do registo de atividade: apaga > 12 meses, em lotes de 5000
       // (DELETE … LIMIT, sem subquery) e com prazo curto — o resto fica para
       // o dia seguinte.
+      // Fila de notificações Multipark: apaga concluídos com mais de 30 dias.
+      try {
+        const { purgeCompletedDeliveries } = await import("../bookingDeliveryQueue");
+        const r = await purgeCompletedDeliveries({ days: 30, deadlineAt: startedAt + 8_000 });
+        if (r.deleted > 0) console.log(`[daily-ops] fila Multipark: ${r.deleted} concluído(s) antigos apagados${r.done ? "" : ", continua amanhã"}`);
+      } catch (err) {
+        console.warn("[daily-ops] limpeza da fila Multipark:", errCode(err));
+        stepErrors.push(`limpeza fila Multipark: ${errCode(err)}`);
+      }
       try {
         const { purgeOldActivityLogs } = await import("../db");
         const r = await purgeOldActivityLogs({ deadlineAt: startedAt + 15_000 });
@@ -401,13 +365,25 @@ app.get("/api/cron/daily-ops", async (req, res) => {
       }
     }
 
+    // Reconciliação Multipark (report D-1/D-2 vs BD). Retomável: corre em
+    // todas as chamadas (também ?collectOnly=1) até verificar tudo.
+    let reconciliation: { done: boolean; checked: number; remaining: number; errors: number; summary: unknown } | null = null;
+    try {
+      const { runDailyReconciliation } = await import("../jobs/multiparkReconciliation");
+      const r = await runDailyReconciliation({ deadlineAt: Date.now() + 12_000 });
+      reconciliation = { done: r.done, checked: r.checked, remaining: r.remaining, errors: r.errors, summary: r.summary };
+    } catch (err) {
+      console.warn("[daily-ops] reconciliação Multipark:", errCode(err));
+      stepErrors.push(`reconciliação Multipark: ${errCode(err)}`);
+    }
+
     // Zello não configurado: a recolha GPS não pode correr — antes devolvia
     // "0 condutores, sucesso" em silêncio. Agora o cron fica vermelho com o
     // motivo (a manutenção acima já correu).
     const { isZelloConfigured } = await import("../zello");
     if (!isZelloConfigured()) {
       return res.json({
-        ok: false, ranAt: new Date().toISOString(), done: true, stepErrors, skipped: "zello_not_configured",
+        ok: false, ranAt: new Date().toISOString(), done: reconciliation == null || reconciliation.done, stepErrors, reconciliation, skipped: "zello_not_configured",
         error: "Zello não configurado (ZELLO_API_KEY/ZELLO_USERNAME/ZELLO_PASSWORD): recolha GPS diária não correu.",
         warnings: ["Recolha GPS saltada: Zello não configurado."],
       });
@@ -439,7 +415,8 @@ app.get("/api/cron/daily-ops", async (req, res) => {
       ok: result.success, ranAt: new Date().toISOString(), date: yesterday.toISOString().slice(0, 10), stepErrors, ...result,
       ...(result.success ? {} : { error: `Recolha Zello falhou: ${String(result.errors[result.errors.length - 1] ?? "sem detalhe").slice(0, 300)}` }),
       recompute,
-      done: result.done && (recompute == null || recompute.remaining === 0),
+      reconciliation,
+      done: result.done && (recompute == null || recompute.remaining === 0) && (reconciliation == null || reconciliation.done),
     });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: String(err?.message ?? err) });

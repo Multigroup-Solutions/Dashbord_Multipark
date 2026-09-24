@@ -4,6 +4,7 @@
  *  - retenção do registo de atividade (activity_logs) em lotes limitados;
  *  - resposta do /api/health (pública vs detalhada, nunca com stack traces).
  */
+import { cronAuthOk } from "./cronAuth";
 
 // ─── Sync manual ──────────────────────────────────────────────────────────────
 
@@ -110,7 +111,5 @@ export function buildHealthBody(opts: { initFailed: boolean; detailed: boolean; 
 
 /** Bearer CRON_SECRET válido? (sem segredo configurado → nunca). */
 export function cronBearerOk(authorization: unknown, env: EnvLike = process.env): boolean {
-  const secret = env.CRON_SECRET;
-  if (!secret) return false;
-  return authorization === `Bearer ${secret}`;
+  return cronAuthOk(authorization, env);
 }

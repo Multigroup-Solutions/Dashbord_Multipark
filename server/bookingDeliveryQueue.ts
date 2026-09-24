@@ -7,18 +7,52 @@ export interface DeliveryStore {
   claim(): Promise<DeliveryJob | null>;
   complete(job: DeliveryJob): Promise<boolean>;
   retry(job: DeliveryJob, errorCode: string, delaySeconds: number): Promise<void>;
+  /** Dead-letter: sai da fila; fica visível no painel de saúde. */
+  dead(job: DeliveryJob, errorCode: string): Promise<void>;
 }
 
 export function retryDelaySeconds(attempts: number): number {
   return Math.min(3600, 30 * 2 ** Math.min(7, Math.max(0, attempts - 1)));
 }
 
-// Apenas códigos; erros HTTP/SQL podem conter dados pessoais ou credenciais.
+/** Ao fim de MAX_DELIVERY_ATTEMPTS tentativas o trabalho passa a 'dead'. */
+export const MAX_DELIVERY_ATTEMPTS = 10;
+/** Erros que nenhuma repetição resolve (falta configurar o parque). */
+export const DEAD_LETTER_CODES: ReadonlySet<string> = new Set(["PARK_ACCESS_MISSING", "PARK_NOT_MAPPED"]);
+
+/** Repetir ou mandar para dead-letter? `attempts` já conta a tentativa atual. PURA. */
+export function deliveryDisposition(attempts: number, errorCode: string): "retry" | "dead" {
+  if (DEAD_LETTER_CODES.has(errorCode)) return "dead";
+  return attempts >= MAX_DELIVERY_ATTEMPTS ? "dead" : "retry";
+}
+
+const CODE_RE = /^[A-Z0-9_]{1,64}$/;
+const codeOf = (v: unknown): string | null => (typeof v === "string" && CODE_RE.test(v) ? v : null);
+const snake = (name: string) => name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase();
+
+/**
+ * Código estável de um erro, para guardar e agrupar. Apenas códigos: erros
+ * HTTP/SQL podem conter dados pessoais ou credenciais, por isso a mensagem
+ * NUNCA entra. Ordem: HTTP → timeout → code (próprio ou da causa) → errno /
+ * sqlState → nome da classe (TypeError → TYPE_ERROR) → PROCESSING_FAILED.
+ */
 export function deliveryErrorCode(error: unknown): string {
-  const status = (error as { status?: unknown })?.status;
-  if (typeof status === 'number' && Number.isInteger(status) && status >= 400 && status <= 599) return `API_HTTP_${status}`;
-  const code = (error as { code?: unknown })?.code ?? (error as { cause?: { code?: unknown } })?.cause?.code;
-  return typeof code === "string" && /^[A-Z0-9_]{1,64}$/.test(code) ? code : "PROCESSING_FAILED";
+  const e = (error ?? {}) as Record<string, any>;
+  const cause = (e.cause ?? {}) as Record<string, any>;
+  const status = e.status;
+  if (typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599) return `API_HTTP_${status}`;
+  // AbortSignal.timeout() rejeita com DOMException name="TimeoutError".
+  if (e.name === "TimeoutError" || cause.name === "TimeoutError") return "TIMEOUT";
+  const code = codeOf(e.code) ?? codeOf(cause.code);
+  if (code) return code;
+  const errno = typeof e.errno === "number" ? e.errno : typeof cause.errno === "number" ? cause.errno : null;
+  if (errno != null && Number.isInteger(errno)) return `ERRNO_${Math.abs(errno)}`;
+  const sqlState = [e.sqlState, cause.sqlState].find(v => typeof v === "string" && /^[0-9A-Z]{5}$/.test(v));
+  if (sqlState) return `SQLSTATE_${sqlState}`;
+  if (e.name === "AbortError" || cause.name === "AbortError") return "ABORTED";
+  const name = [e.name, cause.name].find(n => typeof n === "string" && /^[A-Za-z]{1,48}Error$/.test(n) && n !== "Error");
+  if (name) return snake(name).slice(0, 64);
+  return "PROCESSING_FAILED";
 }
 
 /** A receção e o processamento são independentes. A lease expira após crash;
@@ -28,7 +62,7 @@ export async function drainDeliveries(
   process: (event: MultiparkWebhookEvent) => Promise<{ ok: boolean; detail: string }>,
   opts: { limit?: number; deadlineAt?: number } = {},
 ) {
-  const result = { completed: 0, failed: 0, lostLease: 0 };
+  const result = { completed: 0, failed: 0, lostLease: 0, dead: 0 };
   for (let i = 0; i < (opts.limit ?? 10); i++) {
     if (Date.now() >= (opts.deadlineAt ?? Infinity)) break;
     const job = await store.claim();
@@ -39,8 +73,14 @@ export async function drainDeliveries(
       if (await store.complete(job)) result.completed++;
       else result.lostLease++;
     } catch (error) {
-      await store.retry(job, deliveryErrorCode(error), retryDelaySeconds(job.attempts));
-      result.failed++;
+      const code = deliveryErrorCode(error);
+      if (deliveryDisposition(job.attempts, code) === "dead") {
+        await store.dead(job, code);
+        result.dead++;
+      } else {
+        await store.retry(job, code, retryDelaySeconds(job.attempts));
+        result.failed++;
+      }
     }
   }
   return result;
@@ -79,6 +119,11 @@ export async function createDeliveryStore(): Promise<DeliveryStore> {
         SET state = 'completed', completedAt = UTC_TIMESTAMP(), leaseToken = NULL, leaseUntil = NULL, errorCode = NULL
         WHERE deliveryId = ${job.event.deliveryId} AND leaseToken = ${job.token} AND state = 'processing'`));
     },
+    async dead(job, code) {
+      await db.execute(sql`UPDATE multipark_webhook_jobs
+        SET state = 'dead', errorCode = ${code}, deadAt = UTC_TIMESTAMP(), leaseToken = NULL, leaseUntil = NULL
+        WHERE deliveryId = ${job.event.deliveryId} AND leaseToken = ${job.token} AND state = 'processing'`);
+    },
     async retry(job, code, delay) {
       await db.execute(sql`UPDATE multipark_webhook_jobs
         SET state = 'failed', errorCode = ${code}, nextAttemptAt = DATE_ADD(UTC_TIMESTAMP(), INTERVAL ${delay} SECOND),
@@ -98,14 +143,36 @@ export async function getDeliveryHealth() {
     COALESCE(SUM(state = 'pending'), 0) AS pending,
     COALESCE(SUM(state = 'processing'), 0) AS processing,
     COALESCE(SUM(state = 'failed'), 0) AS failed,
+    COALESCE(SUM(state = 'dead'), 0) AS dead,
     MAX(completedAt) AS lastCompletedAt
     FROM multipark_webhook_jobs`);
   const row = (result as any)[0]?.[0];
   const detailResult = await db.execute(sql`SELECT
-    COALESCE(SUM(detailErrorCode IS NOT NULL), 0) AS failures,
-    COALESCE(SUM(historyErrorCode IS NOT NULL), 0) AS historyFailures FROM multipark_bookings`);
+    COALESCE(SUM(detailErrorCode IS NOT NULL AND detailErrorCode <> 'PARK_CLOSED'), 0) AS failures,
+    COALESCE(SUM(historyErrorCode IS NOT NULL AND historyErrorCode <> 'PARK_CLOSED'), 0) AS historyFailures FROM multipark_bookings`);
   return { pending: Number(row?.pending ?? 0), processing: Number(row?.processing ?? 0),
-    failed: Number(row?.failed ?? 0), detailFailures: Number((detailResult as any)[0]?.[0]?.failures ?? 0),
+    failed: Number(row?.failed ?? 0), dead: Number(row?.dead ?? 0),
+    detailFailures: Number((detailResult as any)[0]?.[0]?.failures ?? 0),
     historyFailures: Number((detailResult as any)[0]?.[0]?.historyFailures ?? 0),
     lastCompletedAt: row?.lastCompletedAt ? String(row.lastCompletedAt) : null };
+}
+
+/** Limpeza diária: apaga trabalhos concluídos há mais de `days` dias, em
+ *  lotes (DELETE … LIMIT, sem subquery) e com prazo. */
+export async function purgeCompletedDeliveries(opts: { days?: number; batch?: number; deadlineAt?: number } = {}) {
+  const { getDb } = await import('./db');
+  const { sql } = await import('drizzle-orm');
+  const db = await getDb();
+  if (!db) throw new Error('Base de dados indisponível');
+  const days = Math.max(1, Math.trunc(opts.days ?? 30));
+  const batch = Math.max(100, Math.trunc(opts.batch ?? 5000));
+  let deleted = 0, batches = 0, done = false;
+  while (Date.now() < (opts.deadlineAt ?? Infinity)) {
+    const r = await db.execute(sql`DELETE FROM multipark_webhook_jobs
+      WHERE state = 'completed' AND completedAt < DATE_SUB(UTC_TIMESTAMP(), INTERVAL ${days} DAY) LIMIT ${batch}`);
+    const n = Number((r as any)?.[0]?.affectedRows ?? 0);
+    deleted += n; batches++;
+    if (n < batch) { done = true; break; }
+  }
+  return { deleted, batches, done };
 }
