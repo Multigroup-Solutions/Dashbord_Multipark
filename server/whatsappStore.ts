@@ -171,7 +171,8 @@ export interface OutboundRow {
 
 /**
  * Grava uma mensagem ENVIADA e atualiza a conversa (última mensagem + resumo).
- * Nunca toca em `lastInboundAt` nem em `unreadCount`.
+ * Nunca toca em `lastInboundAt` nem em `unreadCount`. Enviada com sucesso →
+ * limpa `awaitingSince` (a conversa fica respondida).
  */
 export async function recordOutboundMessage(db: DbLike, row: OutboundRow): Promise<void> {
   const now = nowStr();
@@ -196,6 +197,8 @@ export async function recordOutboundMessage(db: DbLike, row: OutboundRow): Promi
       lastPreview: p.lastPreview,
       lastDirection: p.lastDirection,
       lastType: p.lastType,
+      // Resposta enviada → a conversa deixa de estar "por responder" (SLA 0097).
+      ...(row.status === "sent" ? { awaitingSince: null, slaAlertedAt: null } : {}),
     })
     .where(eq(whatsappConversations.id, row.conversationId));
   await reconcilePendingStatus(db, row.waMessageId);

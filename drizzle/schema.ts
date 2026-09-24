@@ -1973,11 +1973,29 @@ export const whatsappConversations = mysqlTable("whatsapp_conversations", {
 	/** Cidade inferida pelo telefone de uma reserva (números sem ficha nem lead). */
 	bookingProjectId: int(),
 	bookingCheckedAt: timestamp({ mode: 'string' }),
+	// Migração 0097 ─────────────────────────────────────────────────────────
+	/** aberto/pendente/resolvido — nova mensagem recebida reabre (shared/whatsappConversation.ts). */
+	status: mysqlEnum(['aberto', 'pendente', 'resolvido']).default('aberto').notNull(),
+	/** Responsável pela conversa (users.id). */
+	assignedUserId: int(),
+	statusChangedAt: timestamp({ mode: 'string' }),
+	resolvedAt: timestamp({ mode: 'string' }),
+	/** 1.ª mensagem recebida ainda sem resposta nossa (SLA); null = respondida. */
+	awaitingSince: timestamp({ mode: 'string' }),
+	/** Aviso de SLA enviado (1× por período sem resposta). */
+	slaAlertedAt: timestamp({ mode: 'string' }),
+	/** Aviso de "janela a fechar" enviado (1× por mensagem recebida). */
+	windowAlertedAt: timestamp({ mode: 'string' }),
+	/** Ligação manual a uma reserva (multipark_bookings.id) / cliente (email). */
+	linkedBookingId: int(),
+	linkedClientEmail: varchar({ length: 320 }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
 (table) => [
 	uniqueIndex("whatsapp_conversations_phone_unique").on(table.phoneE164),
+	index("idx_whatsapp_conversations_status").on(table.status, table.awaitingSince),
+	index("idx_whatsapp_conversations_assigned").on(table.assignedUserId),
 	index("idx_whatsapp_conversations_employee").on(table.employeeId),
 	index("idx_whatsapp_conversations_last_message").on(table.lastMessageAt),
 ]);
@@ -2026,6 +2044,17 @@ export const whatsappMessages = mysqlTable("whatsapp_messages", {
 // Status de entrega que chegou ANTES de a linha outbound existir (a Meta pode
 // mandar o 'failed' antes de o envio gravar a mensagem). Reconciliado quando o
 // envio grava a linha com esse waMessageId; limpo pelo cron ao fim de 7 dias.
+// Respostas rápidas do inbox de WhatsApp (migração 0097). `{{nome}}` no texto
+// é trocado pelo primeiro nome do contacto ao inserir no composer.
+export const whatsappQuickReplies = mysqlTable("whatsapp_quick_replies", {
+	id: int().autoincrement().primaryKey(),
+	title: varchar({ length: 80 }).notNull(),
+	body: text().notNull(),
+	createdById: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+});
+
 export const whatsappPendingStatuses = mysqlTable("whatsapp_pending_statuses", {
 	waMessageId: varchar({ length: 128 }).notNull().primaryKey(),
 	status: mysqlEnum(['sent', 'delivered', 'read', 'failed']).notNull(),

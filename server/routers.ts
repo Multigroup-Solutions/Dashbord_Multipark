@@ -8270,7 +8270,170 @@ export const appRouter = router({
           entityId: input.conversationId,
           details: `Resposta WhatsApp (conversa ${input.conversationId})`,
         });
+        // Quem responde a uma conversa sem responsável fica com ela.
+        try {
+          const { claimIfUnassigned } = await import("./whatsappInboxOps");
+          await claimIfUnassigned(input.conversationId, ctx.user.id);
+        } catch { /* best-effort */ }
         return result;
+      }),
+
+    // ── Estado, atribuição, alertas, ligações, respostas rápidas, IA (0097) ──
+    // Configuração que a UI precisa para calcular alertas (SLA) e mostrar a IA.
+    inboxMeta: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx.user.role, "backoffice");
+      const { slaMinutes } = await import("./whatsappInboxOps");
+      const { llmConfigured } = await import("./_core/llm");
+      return { slaMinutes: slaMinutes(), aiConfigured: llmConfigured() };
+    }),
+
+    // Badge do menu: conversas visíveis que precisam de atenção.
+    badge: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx.user.role, "backoffice");
+      const { inboxBadge } = await import("./whatsappInboxOps");
+      return inboxBadge();
+    }),
+
+    assignees: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx.user.role, "backoffice");
+      const { listAssignees } = await import("./whatsappInboxOps");
+      return listAssignees();
+    }),
+
+    setStatus: protectedProcedure
+      .input(z.object({ conversationId: z.number().int().positive(), status: z.enum(["aberto", "pendente", "resolvido"]) }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { conversationVisible } = await import("./whatsappInbox");
+        if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+        const { setConversationStatus } = await import("./whatsappInboxOps");
+        if (!(await setConversationStatus(input.conversationId, input.status))) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+        }
+        await logActivity({
+          userId: ctx.user.id,
+          action: "whatsapp_status",
+          entity: "whatsapp_conversation",
+          entityId: input.conversationId,
+          details: `Conversa WhatsApp ${input.conversationId} → ${input.status}`,
+        });
+        return { success: true };
+      }),
+
+    assign: protectedProcedure
+      .input(z.object({ conversationId: z.number().int().positive(), userId: z.number().int().positive().nullable() }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { conversationVisible } = await import("./whatsappInbox");
+        if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+        const { assignConversation } = await import("./whatsappInboxOps");
+        if (!(await assignConversation(input.conversationId, input.userId))) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Utilizador inválido para atribuição" });
+        }
+        await logActivity({
+          userId: ctx.user.id,
+          action: "whatsapp_assign",
+          entity: "whatsapp_conversation",
+          entityId: input.conversationId,
+          details: input.userId ? `Conversa WhatsApp ${input.conversationId} atribuída ao utilizador ${input.userId}` : `Conversa WhatsApp ${input.conversationId} sem responsável`,
+        });
+        return { success: true };
+      }),
+
+    // Contexto do contacto: reserva ligada + sugestões pelo telefone/email.
+    context: protectedProcedure
+      .input(z.object({ conversationId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { conversationVisible } = await import("./whatsappInbox");
+        if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+        const { getConversationContext } = await import("./whatsappInboxOps");
+        const out = await getConversationContext(input.conversationId);
+        if (!out) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+        return out;
+      }),
+
+    searchBookings: protectedProcedure
+      .input(z.object({ q: z.string().min(2).max(120) }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { searchLinkableBookings } = await import("./whatsappInboxOps");
+        return searchLinkableBookings(input.q);
+      }),
+
+    link: protectedProcedure
+      .input(
+        z.object({
+          conversationId: z.number().int().positive(),
+          bookingId: z.number().int().positive().nullable().optional(),
+          clientEmail: z.string().max(320).nullable().optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { conversationVisible } = await import("./whatsappInbox");
+        if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+        const { linkConversation } = await import("./whatsappInboxOps");
+        const target = input.bookingId
+          ? { bookingId: input.bookingId }
+          : input.clientEmail?.trim()
+            ? { clientEmail: input.clientEmail }
+            : null;
+        const r = await linkConversation(input.conversationId, target);
+        if (!r.ok) throw new TRPCError({ code: "BAD_REQUEST", message: r.error || "Não foi possível ligar" });
+        await logActivity({
+          userId: ctx.user.id,
+          action: "whatsapp_link",
+          entity: "whatsapp_conversation",
+          entityId: input.conversationId,
+          details: target
+            ? "bookingId" in target
+              ? `Conversa WhatsApp ${input.conversationId} ligada à reserva ${target.bookingId}`
+              : `Conversa WhatsApp ${input.conversationId} ligada a um cliente`
+            : `Conversa WhatsApp ${input.conversationId} desligada`,
+        });
+        return { success: true };
+      }),
+
+    quickReplies: router({
+      list: protectedProcedure.query(async ({ ctx }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { listQuickReplies } = await import("./whatsappInboxOps");
+        return listQuickReplies();
+      }),
+      save: protectedProcedure
+        .input(z.object({ id: z.number().int().positive().nullable().optional(), title: z.string().trim().min(1).max(80), body: z.string().trim().min(1).max(4000) }))
+        .mutation(async ({ ctx, input }) => {
+          requireRole(ctx.user.role, "backoffice");
+          const { saveQuickReply } = await import("./whatsappInboxOps");
+          const id = await saveQuickReply(input, ctx.user.id);
+          if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível guardar" });
+          return { id };
+        }),
+      delete: protectedProcedure
+        .input(z.object({ id: z.number().int().positive() }))
+        .mutation(async ({ ctx, input }) => {
+          requireRole(ctx.user.role, "backoffice");
+          const { deleteQuickReply } = await import("./whatsappInboxOps");
+          await deleteQuickReply(input.id);
+          return { success: true };
+        }),
+    }),
+
+    // IA (só com LLM configurado): resumo da conversa ou sugestão de resposta
+    // (a sugestão vai para o composer — nunca é enviada sozinha).
+    aiAssist: protectedProcedure
+      .input(z.object({ conversationId: z.number().int().positive(), mode: z.enum(["summary", "reply"]) }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { llmConfigured } = await import("./_core/llm");
+        if (!llmConfigured()) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "A IA não está configurada." });
+        const { conversationVisible } = await import("./whatsappInbox");
+        if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+        const { aiAssist } = await import("./whatsappInboxOps");
+        const r = await aiAssist(input.conversationId, input.mode);
+        if (!r.ok || !r.text) throw new TRPCError({ code: "BAD_REQUEST", message: r.error || "A IA falhou" });
+        return { text: r.text };
       }),
   }),
 

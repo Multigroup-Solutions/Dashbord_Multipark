@@ -892,6 +892,16 @@ export async function runExtrasAutomation(now: Date = new Date()): Promise<Autom
     report.errors.push(`whatsapp-maintenance: ${String(err?.message ?? err).slice(0, 200)}`);
   }
 
+  // WhatsApp: conversas sem resposta há mais do que o SLA (WHATSAPP_SLA_MINUTES)
+  // e janelas de 24h a fechar → uma notificação por cidade (1× por conversa).
+  try {
+    const { runWhatsappSlaAlerts } = await import("./whatsappInboxOps");
+    report.details["whatsapp-sla"] = await runWhatsappSlaAlerts(now);
+    report.ran.push("whatsapp-sla");
+  } catch (err: any) {
+    report.errors.push(`whatsapp-sla: ${String(err?.message ?? err).slice(0, 200)}`);
+  }
+
   // Tarefas: checklists recorrentes do dia (idempotente) + avisos de atraso /
   // conclusão (antes só com o botão manual de admin). TASKS_AUTOMATION=off desliga.
   try {
