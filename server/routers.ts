@@ -156,10 +156,6 @@ import {
   getAllDailyStats,
   importDailyStats,
   deleteDailyStat,
-  getMarketingExpenses,
-  createMarketingExpense,
-  updateMarketingExpense,
-  deleteMarketingExpense,
   getMarketingDashboardStats,
   getBookingRevenueByProject,
   getCampaignByNameAndPlatform,
@@ -484,6 +480,18 @@ function cleanText(v: string | null | undefined): string | null | undefined {
   if (v === null) return null;
   const t = v.trim();
   return t === "" || t === "null" || t === "undefined" ? null : t;
+}
+
+/**
+ * O comprovativo de uma despesa tem de ser um ficheiro carregado pelo próprio
+ * (uploadInvoice grava em invoices/<userId>/…). Sem isto, quem conhecesse a
+ * key de outro ficheiro obtinha uma URL assinada dele via documentUrl.
+ */
+function assertOwnInvoiceKey(userId: number, key: string | null | undefined, url: string | null | undefined) {
+  if (!key && !url) return;
+  if (!key || !key.startsWith(`invoices/${userId}/`) || key.includes("..")) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Comprovativo inválido — volta a carregar o ficheiro" });
+  }
 }
 
 function dayOrBadRequest(day: string, label: string): string {
@@ -1706,6 +1714,11 @@ export const appRouter = router({
         requireRole(ctx.user.role, "backoffice");
         const dup = await findPossibleDuplicateExpense(input);
         if (!dup) return null;
+        const vis = await expenseVisibilityFor(ctx.user);
+        // Quem não pode ver a despesa só fica a saber que já existe
+        if (!canSeeExpense(vis, { insertedById: (dup as any).insertedById, projectId: (dup as any).projectId ?? null })) {
+          return { id: 0, supplier: null, amount: null, expenseDate: null, documentNumber: dup.documentNumber, status: null };
+        }
         return { id: dup.id, supplier: dup.supplier, amount: dup.amount, expenseDate: dup.expenseDate, documentNumber: dup.documentNumber, status: dup.status };
       }),
 
@@ -1737,6 +1750,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         // Matriz do Jorge: input de despesas a partir de backoffice.
         requireRole(ctx.user.role, "backoffice");
+        assertOwnInvoiceKey(ctx.user.id, input.invoiceImageKey, input.invoiceImageUrl);
         const amountNorm = parseExpenseAmount(input.amount);
         if (!amountNorm) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Valor inválido — usa um número positivo com até 2 casas (ex.: 45,90)" });
@@ -1757,7 +1771,8 @@ export const appRouter = router({
           supplier: cleanText(input.supplier) ?? null,
           description: cleanText(input.description) ?? null,
           amount: amountNorm,
-          currency: input.currency,
+          // Os totais somam tudo como EUR: não se aceita outra moeda
+          currency: "EUR",
           paymentMethod: input.paymentMethod ?? null,
           expenseDate,
           paymentDueDate,
@@ -1888,11 +1903,17 @@ export const appRouter = router({
         } else if (explicitPaidAt && cur.status === "paid") {
           patch.paidAt = explicitPaidAt;
         }
+        // Em atraso com o vencimento adiado para hoje ou depois → volta a pendente
+        if (input.status === undefined && cur.status === "overdue" && typeof patch.paymentDueDate === "string" && patch.paymentDueDate >= dayToMysql(lisbonToday())) {
+          patch.status = "pending";
+        }
 
         // Documento: grava primeiro, apaga o antigo DEPOIS (se o UPDATE falhar
         // o original continua acessível).
         let oldDocToDelete: string | null = null;
         if (input.invoiceImageKey !== undefined || input.invoiceImageUrl !== undefined) {
+          const sameDoc = (input.invoiceImageKey ?? null) === (cur.invoiceImageKey ?? null) && (input.invoiceImageUrl ?? null) === (cur.invoiceImageUrl ?? null);
+          if (!sameDoc) assertOwnInvoiceKey(ctx.user.id, input.invoiceImageKey, input.invoiceImageUrl);
           const newKey = input.invoiceImageKey ?? null;
           const newUrl = input.invoiceImageUrl ?? null;
           patch.invoiceImageKey = newKey;
@@ -1950,22 +1971,25 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         // Matriz do Jorge: apagar faturas é SÓ super_admin.
         requireRole(ctx.user.role, "super_admin");
-        // Apaga também a fatura do storage (antes ficava órfã no Blob).
-        try {
-          const current = await getExpenseById(input.id);
-          const k = current?.expense?.invoiceImageKey || current?.expense?.invoiceImageUrl;
-          if (k) {
-            const { storageDelete } = await import("./storage");
-            await storageDelete(k);
-          }
-          if (current) {
+        // Apaga a linha PRIMEIRO e só depois a fatura do storage (se o DELETE
+        // falhar, a despesa não fica com um link morto).
+        const current = await getExpenseById(input.id);
+        if (current) {
+          try {
             await recordExpenseEvent({
               expenseId: input.id, type: "deleted", userId: ctx.user.id,
               before: { amount: current.expense.amount, supplier: current.expense.supplier, expenseDate: current.expense.expenseDate, status: current.expense.status },
             });
-          }
-        } catch { /* best-effort */ }
+          } catch { /* best-effort */ }
+        }
         await deleteExpense(input.id);
+        const k = current?.expense?.invoiceImageKey || current?.expense?.invoiceImageUrl;
+        if (k) {
+          try {
+            const { storageDelete } = await import("./storage");
+            await storageDelete(k);
+          } catch { /* best-effort: órfão no storage é preferível a link morto */ }
+        }
         await logActivity({
           userId: ctx.user.id,
           action: "delete",
@@ -2072,7 +2096,8 @@ export const appRouter = router({
 
     // ── UPCOMING PAYMENTS ────────────────────────────────────────────────────
     upcomingPayments: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "admin");
+      // Pagamentos de TODOS: respeita a restrição finance.view_totals
+      await requireFinanceTotals(ctx.user, "admin");
       return getUpcomingPayments(7);
     }),
 
@@ -2204,7 +2229,8 @@ export const appRouter = router({
     // ── Despesas recorrentes (modelos) ──
     recurring: router({
       list: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        // Fornecedores e valores fixos: só quem gere as despesas
+        requireRole(ctx.user.role, "admin");
         const { getDb } = await import("./db");
         const { recurringExpenses } = await import("../drizzle/schema");
         const { desc } = await import("drizzle-orm");
@@ -2212,17 +2238,21 @@ export const appRouter = router({
         return db.select().from(recurringExpenses).where(projectScope(recurringExpenses.projectId)).orderBy(desc(recurringExpenses.active));
       }),
       create: protectedProcedure
-        .input(z.object({ description: z.string().optional(), supplier: z.string().optional(), amount: z.number(), paymentMethod: z.enum(["cash", "card", "transfer", "check", "other"]).optional(), categoryId: z.number().optional(), projectId: z.number().optional(), dayOfMonth: z.number().min(1).max(28).optional(), notes: z.string().optional() }))
+        .input(z.object({ description: z.string().optional(), supplier: z.string().optional(), amount: z.number(), paymentMethod: z.enum(["cash", "card", "transfer", "check", "other"]).optional(), categoryId: z.number().optional(), projectId: z.number(), dayOfMonth: z.number().min(1).max(28).optional(), notes: z.string().optional() }))
         .mutation(async ({ ctx, input }) => {
           requireRole(ctx.user.role, "admin");
+          // Mesmas regras de uma despesa normal: valor positivo com 2 casas e centro de custos existente
+          const amountNorm = parseExpenseAmount(String(input.amount));
+          if (!amountNorm) throw new TRPCError({ code: "BAD_REQUEST", message: "Valor inválido — usa um número positivo com até 2 casas" });
+          if (!(await projectExists(input.projectId))) throw new TRPCError({ code: "BAD_REQUEST", message: "Centro de custos inexistente" });
           const { getDb } = await import("./db");
           const { recurringExpenses } = await import("../drizzle/schema");
           const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
-          await db.insert(recurringExpenses).values({ description: input.description ?? null, supplier: input.supplier ?? null, amount: String(input.amount), paymentMethod: input.paymentMethod ?? "transfer", categoryId: input.categoryId ?? null, projectId: input.projectId ?? null, dayOfMonth: input.dayOfMonth ?? 1, notes: input.notes ?? null, createdById: ctx.user.id } as any);
+          await db.insert(recurringExpenses).values({ description: input.description ?? null, supplier: input.supplier ?? null, amount: amountNorm, paymentMethod: input.paymentMethod ?? "transfer", categoryId: input.categoryId ?? null, projectId: input.projectId, dayOfMonth: input.dayOfMonth ?? 1, notes: input.notes ?? null, createdById: ctx.user.id } as any);
           return { success: true };
         }),
       update: protectedProcedure
-        .input(z.object({ id: z.number(), description: z.string().optional(), supplier: z.string().optional(), amount: z.number().optional(), paymentMethod: z.enum(["cash", "card", "transfer", "check", "other"]).optional(), categoryId: z.number().nullable().optional(), projectId: z.number().nullable().optional(), dayOfMonth: z.number().min(1).max(28).optional(), active: z.boolean().optional(), notes: z.string().optional() }))
+        .input(z.object({ id: z.number(), description: z.string().optional(), supplier: z.string().optional(), amount: z.number().optional(), paymentMethod: z.enum(["cash", "card", "transfer", "check", "other"]).optional(), categoryId: z.number().nullable().optional(), projectId: z.number().optional(), dayOfMonth: z.number().min(1).max(28).optional(), active: z.boolean().optional(), notes: z.string().optional() }))
         .mutation(async ({ ctx, input }) => {
           requireRole(ctx.user.role, "admin");
           const { getDb } = await import("./db");
@@ -2231,7 +2261,12 @@ export const appRouter = router({
           const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
           const { id, amount, active, ...rest } = input;
           const patch: any = { ...rest };
-          if (amount !== undefined) patch.amount = String(amount);
+          if (amount !== undefined) {
+            const a = parseExpenseAmount(String(amount));
+            if (!a) throw new TRPCError({ code: "BAD_REQUEST", message: "Valor inválido — usa um número positivo com até 2 casas" });
+            patch.amount = a;
+          }
+          if (rest.projectId !== undefined && !(await projectExists(rest.projectId))) throw new TRPCError({ code: "BAD_REQUEST", message: "Centro de custos inexistente" });
           if (active !== undefined) patch.active = active ? 1 : 0;
           await db.update(recurringExpenses).set(patch).where(eq(recurringExpenses.id, id));
           return { success: true };
@@ -4057,51 +4092,6 @@ export const appRouter = router({
       }),
     }),
 
-    // ── MARKETING EXPENSES ──
-    expenses: router({
-      list: protectedProcedure
-        .input(z.object({ category: z.string().optional(), projectId: z.number().optional(), from: z.string().optional(), to: z.string().optional() }).optional())
-        .query(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "backoffice");
-          return getMarketingExpenses({
-            category: input?.category,
-            projectId: input?.projectId,
-            from: input?.from ? new Date(input.from) : undefined,
-            to: input?.to ? new Date(input.to) : undefined,
-          });
-        }),
-      create: protectedProcedure
-        .input(z.object({
-          description: z.string().min(1),
-          category: z.enum(["google_ads", "meta_ads", "influencer", "print", "merchandise", "event", "other"]),
-          amount: z.string(),
-          date: z.string(),
-          projectId: z.number().optional(),
-          supplier: z.string().optional(),
-          notes: z.string().optional(),
-        }))
-        .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
-          const id = await createMarketingExpense({
-            description: input.description,
-            mktCategory: input.category,
-            amount: input.amount,
-            date: new Date(input.date).toISOString().slice(0, 19).replace("T", " "),
-            projectId: input.projectId ?? null,
-            supplier: input.supplier ?? null,
-            notes: input.notes ?? null,
-            createdById: ctx.user.id,
-          });
-          await logActivity({ userId: ctx.user.id, action: "create", entity: "marketing_expense", entityId: id, details: `${input.description}: ${input.amount}€` });
-          return { id };
-        }),
-      delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "super_admin");
-        await deleteMarketingExpense(input.id);
-        await logActivity({ userId: ctx.user.id, action: "delete", entity: "marketing_expense", entityId: input.id, details: `Despesa marketing eliminada` });
-        return { success: true };
-      }),
-    }),
    }),
 
   // ─── OPERACIONAL ──────────────────────────────────────────────────────────

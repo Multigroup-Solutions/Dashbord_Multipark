@@ -4,7 +4,6 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
@@ -36,7 +35,6 @@ import {
 } from "@/components/ui/table";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { SearchableSelect } from "@/components/ui/searchable-select";
 import { RecurringExpensesDialog, CompareExpensesDialog } from "@/components/ExpenseRecurringCompare";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -57,11 +55,6 @@ import {
   FileDown,
   User,
   Euro,
-  CreditCard,
-  Banknote,
-  ArrowUpDown,
-  TrendingUp,
-  Wallet,
   ArrowLeftRight,
   Repeat,
   FileText,
@@ -138,6 +131,12 @@ function StatusBadge({ status }: { status: string }) {
       {cfg.label}
     </span>
   );
+}
+
+/** "YYYY-MM-DD HH:mm:ss" da BD → Date (Safari não aceita o espaço). */
+function parseDbDate(v: string | Date): Date {
+  if (v instanceof Date) return v;
+  return new Date(String(v).replace(" ", "T"));
 }
 
 function fmtEur(v: number | string) {
@@ -255,26 +254,24 @@ export default function ExpensesPage() {
   const { data: categories } = trpc.categories.list.useQuery();
   const { data: projectsList } = trpc.projects.list.useQuery();
   const { data: employeesList } = trpc.rh.list.useQuery({});
-  const { data: usersList } = trpc.users.list.useQuery();
+  const { data: usersList } = trpc.users.list.useQuery(undefined, { enabled: canManage, retry: false });
 
   const deleteMutation = trpc.expenses.delete.useMutation({
     onSuccess: () => {
       toast.success("Despesa eliminada");
-      utils.expenses.list.invalidate();
-      utils.expenses.stats.invalidate();
+      utils.expenses.invalidate();
     },
-    onError: () => toast.error("Erro ao eliminar despesa"),
+    onError: (e) => toast.error(e.message || "Erro ao eliminar despesa"),
   });
 
   const updateMutation = trpc.expenses.update.useMutation({
     onSuccess: () => {
       toast.success("Estado atualizado");
-      utils.expenses.list.invalidate();
-      utils.expenses.stats.invalidate();
+      utils.expenses.invalidate();
     },
+    onError: (e) => toast.error(e.message),
   });
 
-  const isAdmin = canManage;
 
   // KPIs: regra única partilhada com o Excel e a comparação (canceladas fora
   // do total). Enquanto carrega ou em erro NÃO se mostra "0 €".
@@ -328,7 +325,7 @@ export default function ExpensesPage() {
     setSearch("");
     setFilterStatus("");
     setFilterCategory("");
-    setFilterProject("");
+    setFilterProject(filters.projectId !== undefined ? String(filters.projectId) : "");
     setFilterUser("");
     setAllHistory(false);
     applyQuickRange("week");
@@ -354,9 +351,7 @@ export default function ExpensesPage() {
             <p className="text-sm text-muted-foreground">
               {kpisReady ? `${kpis.count} despesa(s)` : isError ? "Erro a carregar" : "A carregar…"}
               {kpisReady && kpis.cancelledCount > 0 && ` (+${kpis.cancelledCount} cancelada(s))`}
-              {allHistory
-                ? " — todo o histórico"
-                : effectiveStartDate || effectiveEndDate
+              {!allHistory && (effectiveStartDate || effectiveEndDate)
                   ? ` — ${effectiveStartDate ? format(new Date(`${effectiveStartDate}T00:00:00`), "dd MMM", { locale: pt }) : "…"} a ${effectiveEndDate ? format(new Date(`${effectiveEndDate}T00:00:00`), "dd MMM", { locale: pt }) : "…"}`
                   : " — todo o histórico"}
               {selectedUserName && <> de <strong>{selectedUserName}</strong></>}
@@ -386,7 +381,7 @@ export default function ExpensesPage() {
               <ArrowLeftRight className="h-4 w-4" /> Comparar
             </Button>
           )}
-          {isAdmin && (
+          {canManage && (
             <Button variant="outline" onClick={() => setShowRecurring(true)} className="gap-2">
               <Repeat className="h-4 w-4" /> Recorrentes
             </Button>
@@ -601,12 +596,12 @@ export default function ExpensesPage() {
                         </TableCell>
                         <TableCell className="text-sm">{project?.name ?? "—"}</TableCell>
                         <TableCell className="text-sm text-muted-foreground">
-                          {expense.expenseDate ? format(new Date(expense.expenseDate), "dd MMM yyyy", { locale: pt }) : "—"}
+                          {expense.expenseDate ? format(parseDbDate(expense.expenseDate), "dd MMM yyyy", { locale: pt }) : "—"}
                         </TableCell>
                         <TableCell className="text-xs text-muted-foreground">
                           {/* A coluna ordena por vencimento; o método fica por baixo (antes o cabeçalho ordenava por data mas mostrava o método) */}
                           <div className={expense.status === "overdue" ? "text-red-600 font-medium" : ""}>
-                            {expense.paymentDueDate ? format(new Date(expense.paymentDueDate), "dd MMM yyyy", { locale: pt }) : "—"}
+                            {expense.paymentDueDate ? format(parseDbDate(expense.paymentDueDate), "dd MMM yyyy", { locale: pt }) : "—"}
                           </div>
                           <div className="text-[11px]">{PAYMENT_LABELS[expense.paymentMethod ?? ""] ?? ""}</div>
                         </TableCell>
@@ -684,7 +679,7 @@ export default function ExpensesPage() {
       <ExpenseDetailSheet
         data={detailExpense}
         onClose={() => setDetailExpense(null)}
-        onEdit={(id) => { setDetailExpense(null); setEditId(id); setShowForm(true); }}
+        onEdit={canManage ? (id) => { setDetailExpense(null); setEditId(id); setShowForm(true); } : undefined}
       />
 
       {/* Form Modal */}
@@ -698,8 +693,7 @@ export default function ExpensesPage() {
           onSuccess={() => {
             setShowForm(false);
             setEditId(null);
-            utils.expenses.list.invalidate();
-            utils.expenses.stats.invalidate();
+            utils.expenses.invalidate();
           }}
         />
       )}
@@ -716,7 +710,7 @@ function ExpenseDetailSheet({
 }: {
   data: any;
   onClose: () => void;
-  onEdit: (id: number) => void;
+  onEdit?: (id: number) => void;
 }) {
   if (!data) return null;
   return (
@@ -734,14 +728,14 @@ const EVENT_LABELS: Record<string, string> = {
   document: "Comprovativo alterado", deleted: "Eliminada", approved: "Aprovada", returned: "Devolvida", submitted: "Submetida",
 };
 
-function ExpenseDetailBody({ data, onClose, onEdit }: { data: any; onClose: () => void; onEdit: (id: number) => void }) {
+function ExpenseDetailBody({ data, onClose, onEdit }: { data: any; onClose: () => void; onEdit?: (id: number) => void }) {
   const { expense, category, project, insertedBy, buyer } = data;
   const hasDoc = Boolean(expense.invoiceImageUrl || expense.invoiceImageKey);
   // URL de leitura pedida ao servidor (assinada, com a permissão do detalhe).
   const doc = trpc.expenses.documentUrl.useQuery({ id: expense.id }, { enabled: hasDoc, staleTime: 5 * 60_000 });
   const events = trpc.expenses.events.useQuery({ id: expense.id }, { staleTime: 30_000 });
   const openDocument = useOpenExpenseDocument();
-  const day = (v: string | null | undefined, fmt = "dd MMMM yyyy") => (v ? format(new Date(v), fmt, { locale: pt }) : null);
+  const day = (v: string | null | undefined, fmt = "dd MMMM yyyy") => (v ? format(parseDbDate(v), fmt, { locale: pt }) : null);
 
   return (
     <>
@@ -844,10 +838,12 @@ function ExpenseDetailBody({ data, onClose, onEdit }: { data: any; onClose: () =
         <Separator />
 
         <div className="flex gap-2">
-          <Button variant="outline" className="flex-1 gap-2" onClick={() => onEdit(expense.id)}>
-            <Pencil className="h-4 w-4" />
-            Editar
-          </Button>
+          {onEdit && (
+            <Button variant="outline" className="flex-1 gap-2" onClick={() => onEdit(expense.id)}>
+              <Pencil className="h-4 w-4" />
+              Editar
+            </Button>
+          )}
           <Button variant="outline" onClick={onClose}>Fechar</Button>
         </div>
       </div>
@@ -945,24 +941,26 @@ function ExpenseFormModal({
   });
 
   // Load existing data when editing
-  const { data: existingExpense, isLoading: loadingExisting } = trpc.expenses.byId.useQuery(
+  // Sempre fresco ao abrir: com cache, o form podia abrir com valores antigos
+  // (ex.: marcada como paga na lista) e gravá-los de volta.
+  const { data: existingExpense, isLoading: loadingExisting, isFetching: fetchingExisting } = trpc.expenses.byId.useQuery(
     { id: editId! },
-    { enabled: !!editId }
+    { enabled: !!editId, refetchOnMount: "always", staleTime: 0 }
   );
 
   // Pre-fill form when editing — em useEffect para evitar setState durante render
   const [prefilled, setPrefilled] = useState(false);
   useEffect(() => {
-    if (!editId || !existingExpense || prefilled) return;
+    if (!editId || !existingExpense || prefilled || fetchingExisting) return;
     const e = existingExpense.expense;
     setForm({
       supplier: e.supplier ?? "",
       description: e.description ?? "",
       amount: String(e.amount ?? ""),
-      currency: e.currency ?? "EUR",
+      currency: "EUR",
       paymentMethod: e.paymentMethod ?? "card",
-      expenseDate: e.expenseDate ? format(new Date(e.expenseDate), "yyyy-MM-dd") : "",
-      paymentDueDate: e.paymentDueDate ? format(new Date(e.paymentDueDate), "yyyy-MM-dd") : "",
+      expenseDate: e.expenseDate ? format(parseDbDate(e.expenseDate), "yyyy-MM-dd") : "",
+      paymentDueDate: e.paymentDueDate ? format(parseDbDate(e.paymentDueDate), "yyyy-MM-dd") : "",
       categoryId: e.categoryId ? String(e.categoryId) : "",
       projectId: e.projectId ? String(e.projectId) : "",
       buyerId: e.buyerId ? String(e.buyerId) : "",
@@ -974,11 +972,12 @@ function ExpenseFormModal({
       supplierNif: (e as any).supplierNif ?? "",
       documentNumber: (e as any).documentNumber ?? "",
       paidBy: (e as any).paidBy ?? "",
-      paidAt: e.paidAt ? format(new Date(e.paidAt), "yyyy-MM-dd") : "",
+      paidAt: e.paidAt ? format(parseDbDate(e.paidAt), "yyyy-MM-dd") : "",
     });
-    if (e.invoiceImageUrl || e.invoiceImageKey) setPreviewUrl(e.invoiceImageUrl || `key:${e.invoiceImageKey}`);
+    // Documento gravado: abre-se pela URL assinada (a pública pode não abrir)
+    if (e.invoiceImageUrl || e.invoiceImageKey) setPreviewUrl(`key:${e.invoiceImageKey || e.invoiceImageUrl}`);
     setPrefilled(true);
-  }, [editId, existingExpense, prefilled]);
+  }, [editId, existingExpense, prefilled, fetchingExisting]);
 
   const set = (key: keyof FormData, value: string | boolean) =>
     setForm((f) => ({ ...f, [key]: value }));
@@ -1079,7 +1078,6 @@ function ExpenseFormModal({
       if (data.supplier) set("supplier", data.supplier);
       if (data.description) set("description", data.description);
       if (data.amount) set("amount", data.amount);
-      if (data.currency) set("currency", data.currency);
       if (data.paymentMethod && ["cash","card","transfer","check","other"].includes(data.paymentMethod)) {
         set("paymentMethod", data.paymentMethod);
       }
@@ -1269,7 +1267,7 @@ function ExpenseFormModal({
                     <Upload className="h-3.5 w-3.5" />
                     {previewUrl ? "Substituir" : "Carregar"}
                   </Button>
-                  {form.invoiceImageUrl && (
+                  {lastFileBase64 && (
                     <Button
                       size="sm"
                       onClick={handleExtract}
@@ -1322,7 +1320,7 @@ function ExpenseFormModal({
               />
             </div>
             <div className="space-y-1.5">
-              <Label>Valor ({form.currency}) *</Label>
+              <Label>Valor (€) *</Label>
               <Input
                 type="number"
                 step="0.01"
@@ -1352,10 +1350,11 @@ function ExpenseFormModal({
               <div className="sm:col-span-2 rounded-md border border-amber-300 bg-amber-50 text-amber-900 text-xs px-3 py-2 flex gap-2" role="alert">
                 <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
                 <span>
+                  {possibleDup.id === 0 ? <>Já existe uma despesa com o mesmo nº de documento.</> : <>
                   Possível duplicado: a despesa <strong>#{possibleDup.id}</strong>
-                  {possibleDup.supplier ? ` (${possibleDup.supplier})` : ""} de {fmtEur(possibleDup.amount)}
-                  {possibleDup.expenseDate ? ` em ${format(new Date(possibleDup.expenseDate), "dd/MM/yyyy")}` : ""}
-                  {possibleDup.documentNumber ? ` tem o mesmo nº de documento` : " usa o mesmo ficheiro"}.
+                  {possibleDup.supplier ? ` (${possibleDup.supplier})` : ""} de {fmtEur(possibleDup.amount ?? 0)}
+                  {possibleDup.expenseDate ? ` em ${format(parseDbDate(possibleDup.expenseDate), "dd/MM/yyyy")}` : ""}
+                  {possibleDup.documentNumber ? ` tem o mesmo nº de documento` : " usa o mesmo ficheiro"}.</>}
                   Confirma antes de guardar.
                 </span>
               </div>

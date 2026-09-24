@@ -1,5 +1,5 @@
 import { projectScope, bookingHistoryScope, employeeScope, userScope, partnerScope, scopedProjectIds, requireGlobalCityAccess } from './cityScope';
-import { and, asc, desc, eq, gte, lte, like, or, sql, aliasedTable, isNotNull, isNull, inArray, notInArray, getTableColumns, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lte, lt, ne, like, or, sql, aliasedTable, isNotNull, isNull, inArray, notInArray, getTableColumns, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { normalizeEmail } from "../shared/email";
 import { parseClothingItems } from "../shared/clothing";
@@ -96,6 +96,7 @@ import {
 } from "../drizzle/schema";
 import type { LostFoundItem, LostFoundPhoto, LostFoundMessage } from "../drizzle/schema";
 import { ENV } from "./_core/env";
+import { lisbonToday } from "../shared/expensePeriods";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 let _schemaEnsure: Promise<void> | null = null;
@@ -561,7 +562,7 @@ export async function findPossibleDuplicateExpense(input: {
   let where: SQL = and(or(...conds), projectScope(expenses.projectId)) as SQL;
   if (input.excludeId) where = and(where, sql`${expenses.id} <> ${input.excludeId}`) as SQL;
   const rows = await db
-    .select({ id: expenses.id, supplier: expenses.supplier, amount: expenses.amount, expenseDate: expenses.expenseDate, documentNumber: expenses.documentNumber, status: expenses.status })
+    .select({ id: expenses.id, supplier: expenses.supplier, amount: expenses.amount, expenseDate: expenses.expenseDate, documentNumber: expenses.documentNumber, status: expenses.status, insertedById: expenses.insertedById, projectId: expenses.projectId })
     .from(expenses).where(where).orderBy(desc(expenses.id)).limit(1);
   return rows[0] ?? null;
 }
@@ -626,31 +627,39 @@ export async function getExpenseStats() {
   const db = await getDb();
   if (!db) return null;
 
-  const now = new Date();
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const startOfWeek = new Date(now);
-  startOfWeek.setDate(now.getDate() - now.getDay());
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  const startOfYear = new Date(now.getFullYear(), 0, 1);
+  // Dias de calendário em Lisboa; semana começa à segunda. Canceladas fora,
+  // como na lista, no Excel e nas Finanças (shared/expenseTotals).
+  const today = lisbonToday();
+  const [ty, tm, td] = today.split("-").map(Number);
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  const todayUtc = new Date(Date.UTC(ty, tm - 1, td));
+  const monday = new Date(todayUtc);
+  monday.setUTCDate(td - ((todayUtc.getUTCDay() + 6) % 7));
+  const startOfDay = `${today} 00:00:00`;
+  const startOfWeek = `${iso(monday)} 00:00:00`;
+  const startOfMonth = `${today.slice(0, 7)}-01 00:00:00`;
+  const startOfYear = `${ty}-01-01 00:00:00`;
+  const trendStart = `${iso(new Date(Date.UTC(ty, tm - 1 - 5, 1)))} 00:00:00`;
+  const live = ne(expenses.status, "cancelled");
 
-  const [daily, weekly, monthly, yearly, byCategory, byProject, byUser, pending, overdue] =
+  const [daily, weekly, monthly, yearly, byCategory, byProject, byUser, pending, overdue, paidYear] =
     await Promise.all([
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(and(projectScope(expenses.projectId), gte(expenses.expenseDate, toMysqlDateTime(startOfDay)))),
+        .where(and(projectScope(expenses.projectId), live, gte(expenses.expenseDate, startOfDay))),
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(and(projectScope(expenses.projectId), gte(expenses.expenseDate, toMysqlDateTime(startOfWeek)))),
+        .where(and(projectScope(expenses.projectId), live, gte(expenses.expenseDate, startOfWeek))),
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(and(projectScope(expenses.projectId), gte(expenses.expenseDate, toMysqlDateTime(startOfMonth)))),
+        .where(and(projectScope(expenses.projectId), live, gte(expenses.expenseDate, startOfMonth))),
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(and(projectScope(expenses.projectId), gte(expenses.expenseDate, toMysqlDateTime(startOfYear)))),
+        .where(and(projectScope(expenses.projectId), live, gte(expenses.expenseDate, startOfYear))),
       db
         .select({
           categoryId: expenses.categoryId,
@@ -661,7 +670,7 @@ export async function getExpenseStats() {
         })
         .from(expenses)
         .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
-        .where(and(projectScope(expenses.projectId), gte(expenses.expenseDate, toMysqlDateTime(startOfMonth))))
+        .where(and(projectScope(expenses.projectId), live, gte(expenses.expenseDate, startOfMonth)))
         .groupBy(expenses.categoryId, expenseCategories.name, expenseCategories.color)
         .orderBy(desc(sql`SUM(expenses.amount)`))
         .limit(8),
@@ -674,7 +683,7 @@ export async function getExpenseStats() {
         })
         .from(expenses)
         .leftJoin(projects, eq(expenses.projectId, projects.id))
-        .where(and(projectScope(expenses.projectId), gte(expenses.expenseDate, toMysqlDateTime(startOfMonth))))
+        .where(and(projectScope(expenses.projectId), live, gte(expenses.expenseDate, startOfMonth)))
         .groupBy(expenses.projectId, projects.name)
         .orderBy(desc(sql`SUM(expenses.amount)`))
         .limit(5),
@@ -687,7 +696,7 @@ export async function getExpenseStats() {
         })
         .from(expenses)
         .leftJoin(users, eq(expenses.insertedById, users.id))
-        .where(and(projectScope(expenses.projectId), gte(expenses.expenseDate, toMysqlDateTime(startOfMonth))))
+        .where(and(projectScope(expenses.projectId), live, gte(expenses.expenseDate, startOfMonth)))
         .groupBy(expenses.insertedById, users.name)
         .orderBy(desc(sql`SUM(expenses.amount)`))
         .limit(5),
@@ -699,6 +708,10 @@ export async function getExpenseStats() {
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
         .where(and(projectScope(expenses.projectId), eq(expenses.status, "overdue"))),
+      db
+        .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
+        .from(expenses)
+        .where(and(projectScope(expenses.projectId), eq(expenses.status, "paid"), gte(expenses.expenseDate, startOfYear))),
     ]);
 
   // Monthly trend (last 6 months)
@@ -709,7 +722,7 @@ export async function getExpenseStats() {
       count: sql<number>`COUNT(*)`,
     })
     .from(expenses)
-    .where(and(projectScope(expenses.projectId), gte(expenses.expenseDate, toMysqlDateTime(new Date(now.getFullYear(), now.getMonth() - 5, 1)))))
+    .where(and(projectScope(expenses.projectId), live, gte(expenses.expenseDate, trendStart)))
     .groupBy(sql`DATE_FORMAT(expenseDate, '%Y-%m')`)
     .orderBy(sql`DATE_FORMAT(expenseDate, '%Y-%m')`);
 
@@ -723,6 +736,7 @@ export async function getExpenseStats() {
     byUser: byUser.map((u) => ({ ...u, total: parseFloat(u.total || "0") })),
     pending: { total: parseFloat(pending[0]?.total || "0"), count: pending[0]?.count || 0 },
     overdue: { total: parseFloat(overdue[0]?.total || "0"), count: overdue[0]?.count || 0 },
+    paidYear: { total: parseFloat(paidYear[0]?.total || "0"), count: paidYear[0]?.count || 0 },
     monthlyTrend: monthlyTrend.map((m) => ({ ...m, total: parseFloat(m.total || "0") })),
   };
 }
@@ -730,9 +744,9 @@ export async function getExpenseStats() {
 export async function getUpcomingPayments(daysAhead = 7) {
   const db = await getDb();
   if (!db) return [];
-  const now = new Date();
-  const future = new Date();
-  future.setDate(future.getDate() + daysAhead);
+  const today = lisbonToday();
+  const end = new Date(`${today}T12:00:00Z`);
+  end.setUTCDate(end.getUTCDate() + daysAhead);
 
   return db
     .select({
@@ -747,8 +761,8 @@ export async function getUpcomingPayments(daysAhead = 7) {
       and(
         eq(expenses.status, "pending"),
         projectScope(expenses.projectId),
-        gte(expenses.paymentDueDate, toMysqlDateTime(now)),
-        lte(expenses.paymentDueDate, toMysqlDateTime(future))
+        gte(expenses.paymentDueDate, `${today} 00:00:00`),
+        lte(expenses.paymentDueDate, `${end.toISOString().slice(0, 10)} 23:59:59`)
       )
     )
     .orderBy(expenses.paymentDueDate);
@@ -757,22 +771,23 @@ export async function getUpcomingPayments(daysAhead = 7) {
 export async function getOverdueExpenses() {
   const db = await getDb();
   if (!db) return [];
-  const now = new Date();
+  const today = lisbonToday();
   return db
     .select({ expense: expenses, insertedBy: users })
     .from(expenses)
     .leftJoin(users, eq(expenses.insertedById, users.id))
-    .where(and(projectScope(expenses.projectId), eq(expenses.status, "pending"), lte(expenses.paymentDueDate, toMysqlDateTime(now))));
+    .where(and(projectScope(expenses.projectId), eq(expenses.status, "pending"), lt(expenses.paymentDueDate, `${today} 00:00:00`)));
 }
 
 export async function markOverdueExpenses() {
   const db = await getDb();
   if (!db) return;
-  const now = new Date();
+  // Vence hoje ≠ em atraso: só passa a atraso no dia seguinte (dia de Lisboa)
+  const today = lisbonToday();
   await db
     .update(expenses)
     .set({ status: "overdue" })
-    .where(and(projectScope(expenses.projectId), eq(expenses.status, "pending"), lte(expenses.paymentDueDate, toMysqlDateTime(now))));
+    .where(and(projectScope(expenses.projectId), eq(expenses.status, "pending"), lt(expenses.paymentDueDate, `${today} 00:00:00`)));
 }
 
 // ─── ACTIVITY LOGS ────────────────────────────────────────────────────────────
