@@ -18,6 +18,7 @@ export default defineConfig({
   root: path.resolve(import.meta.dirname, "client"),
   publicDir: path.resolve(import.meta.dirname, "client", "public"),
   build: {
+    rollupOptions: { input: { app: path.resolve(import.meta.dirname, 'client/index.html'), crmPreview: path.resolve(import.meta.dirname, 'client/crm-preview.html') } },
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
   },

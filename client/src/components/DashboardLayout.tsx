@@ -189,6 +189,7 @@ export const menuGroups: MenuGroup[] = [
     icon: MessageSquareWarning,
     minRole: "frontoffice",
     items: [
+      { icon: Users, label: "Clientes", path: "/clientes" },
       { icon: MessageSquareWarning, label: "Reclamações", path: "/reclamacoes" },
       { icon: Star, label: "Críticas Google", path: "/criticas" },
       { icon: AlertTriangle, label: "Ocorrências", path: "/ocorrencias" },

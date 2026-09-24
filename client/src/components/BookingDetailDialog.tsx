@@ -68,6 +68,7 @@ export default function BookingDetailDialog({ booking: b, onClose }: { booking: 
         <CardContent className="space-y-4">
           <div className="space-y-1">
             <p className="text-xs font-semibold text-muted-foreground uppercase">Cliente</p>
+            {b.clientEmail && <a className="text-xs text-primary underline" href={`/clientes?email=${encodeURIComponent(b.clientEmail)}`}>Abrir ficha de cliente</a>}
             <Row label="Nome" value={`${b.clientFirstName ?? ""} ${b.clientLastName ?? ""}`.trim()} />
             <Row label="Email" value={b.clientEmail} />
             <Row label="Telefone" value={b.clientPhone} />

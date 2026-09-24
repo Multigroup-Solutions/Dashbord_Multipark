@@ -8189,6 +8189,26 @@ export const appRouter = router({
 
   // ── HISTÓRICO DE CLIENTE (reservas + reclamações + perdidos + críticas) ─────
   clients: router({
+    crmList: protectedProcedure
+      .input(z.object({ search: z.string().trim().max(150).default(''),
+        segment: z.enum(['all', 'returning', 'first_visit', 'inactive', 'review']).default('all'),
+        sort: z.enum(['recent', 'visits', 'value']).default('recent'), page: z.number().int().min(1).max(100000).default(1),
+        inactiveDays: z.number().int().min(30).max(730).default(180), recentDays: z.number().int().min(1).max(3650).optional(),
+        projectId: z.number().int().optional() }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, 'frontoffice');
+        const { listCrmCustomers } = await import('./crm');
+        const money = (ROLE_HIERARCHY[ctx.user.role] ?? 0) >= ROLE_HIERARCHY.backoffice && !await isPermissionDenied(ctx.user.id, 'finance.view_totals');
+        return listCrmCustomers(input, money);
+      }),
+    crmDetail: protectedProcedure
+      .input(z.object({ key: z.string().regex(/^[a-f0-9]{64}$/), bookingPage: z.number().int().min(1).max(100000).default(1), projectId: z.number().int().optional() }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, 'frontoffice');
+        const { getCrmCustomer } = await import('./crm');
+        const money = (ROLE_HIERARCHY[ctx.user.role] ?? 0) >= ROLE_HIERARCHY.backoffice && !await isPermissionDenied(ctx.user.id, 'finance.view_totals');
+        return getCrmCustomer(input.key, input.bookingPage, money);
+      }),
     history: protectedProcedure
       .input(z.object({
         email: z.string().nullable().optional(),
