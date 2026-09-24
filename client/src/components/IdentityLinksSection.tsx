@@ -53,14 +53,16 @@ export function IdentityLinksSection() {
   const reconcile = trpc.identityLinks.reconcileNow.useMutation({
     onSuccess: (r) => {
       refresh();
-      const n = r.usersLinked + r.usersCreated + r.employeesLinkedToUsers + r.agentIdsFilled + r.agentsByEmail + r.agentsByName;
+      const n = r.usersLinked + r.usersCreated + r.employeesLinkedToUsers + r.agentIdsFilled + r.agentsByEmail + r.agentsByName + r.agentAliases;
       toast.success(n ? `${n} ligação(ões) feitas automaticamente.` : "Nada de novo para ligar automaticamente.");
       if (r.errors.length) toast.warning(r.errors.join(" · "));
     },
     onError: onErr,
   });
   const createUser = trpc.identityLinks.createUser.useMutation({ onSuccess: (r) => { refresh(); toast.success(r.created ? "Utilizador criado e ligado." : "Ligado ao utilizador existente."); }, onError: onErr });
-  const linkUser = trpc.identityLinks.linkUser.useMutation({ onSuccess: () => { refresh(); toast.success("Ligado."); }, onError: onErr });
+  const linkUser = trpc.identityLinks.linkUser.useMutation({ onSuccess: (r) => { refresh(); toast.success(r.mode === "extra" ? "Ligado como conta extra da mesma pessoa." : "Ligado."); }, onError: onErr });
+  const unAccount = trpc.identityLinks.removeAccountAlias.useMutation({ onSuccess: () => { refresh(); toast.success("Conta extra separada."); }, onError: onErr });
+  const unAgent = trpc.identityLinks.removeAgentAlias.useMutation({ onSuccess: () => { refresh(); toast.success("Agente extra separado."); }, onError: onErr });
   const linkAgent = trpc.identityLinks.linkAgent.useMutation({ onSuccess: (r) => { refresh(); toast.success(`Agente "${r.agentName}" ligado.`); }, onError: onErr });
   const busy = createUser.isPending || linkUser.isPending || linkAgent.isPending;
 
@@ -130,7 +132,7 @@ export function IdentityLinksSection() {
         </table>
       </Section>
 
-      <Section title="Agentes Multipark por ligar" count={d.agentsUnmatched.length} hint="Sem ficha correspondente. Liga à ficha certa (ou cria-a no separador Agentes s/ funcionário).">
+      <Section title="Agentes Multipark por ligar" count={d.agentsUnmatched.length} hint="Sem ficha correspondente. Liga à ficha certa — se a pessoa já tiver agente, este entra como agente extra.">
         <table className="w-full text-sm">
           <tbody>
             {d.agentsUnmatched.map((a) => (
@@ -149,7 +151,7 @@ export function IdentityLinksSection() {
       </Section>
 
       {d.usersWithoutEmployee.length > 0 && (
-        <Section title="Utilizadores sem ficha" count={d.usersWithoutEmployee.length} hint="Contas de login sem ficha de RH. Liga à ficha certa (sem ficha não há ponto).">
+        <Section title="Utilizadores sem ficha" count={d.usersWithoutEmployee.length} hint="Contas de login sem ficha de RH. Liga à ficha certa — se a ficha já tiver conta, esta entra como conta extra da mesma pessoa.">
           <table className="w-full text-sm">
             <tbody>
               {d.usersWithoutEmployee.map((u) => (
@@ -163,6 +165,35 @@ export function IdentityLinksSection() {
             </tbody>
           </table>
         </Section>
+      )}
+
+      {(d.aliases.accounts.length > 0 || d.aliases.agents.length > 0) && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Contas e agentes extra</CardTitle>
+            <CardDescription>A mesma pessoa com mais do que um login (ex.: email pessoal e profissional) ou mais do que um agente Multipark.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <table className="w-full text-sm">
+              <tbody>
+                {d.aliases.accounts.map((a) => (
+                  <tr key={`u${a.userId}`} className="border-b last:border-0">
+                    <td className="py-1.5">{a.fullName}</td>
+                    <td className="py-1.5 text-muted-foreground text-xs">login extra · {a.email ?? `#${a.userId}`}</td>
+                    <td className="py-1.5 text-right"><Button size="sm" variant="ghost" disabled={unAccount.isPending} onClick={() => unAccount.mutate({ userId: a.userId })}>Separar</Button></td>
+                  </tr>
+                ))}
+                {d.aliases.agents.map((a) => (
+                  <tr key={`a${a.agentUserId}`} className="border-b last:border-0">
+                    <td className="py-1.5">{a.fullName}</td>
+                    <td className="py-1.5 text-muted-foreground text-xs">agente extra · {a.agentName ?? a.agentUserId}</td>
+                    <td className="py-1.5 text-right"><Button size="sm" variant="ghost" disabled={unAgent.isPending} onClick={() => unAgent.mutate({ agentUserId: a.agentUserId })}>Separar</Button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </CardContent>
+        </Card>
       )}
 
       {d.conflicts.length > 0 && (

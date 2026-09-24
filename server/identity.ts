@@ -426,6 +426,26 @@ export async function linkEmployeesToUserByEmail(db: Db, userId: number, rawEmai
     .where(and(sql`(LOWER(TRIM(${employees.email})) = ${email} OR LOWER(TRIM(${employees.personalEmail})) = ${email})`, isNull(employees.userId)))
     .orderBy(asc(employees.id));
   const linked: number[] = [];
+  // Ficha que JÁ tem outra conta principal e este email (profissional ou
+  // pessoal) → esta conta entra como conta EXTRA da mesma pessoa (0081).
+  if (!rows.length) {
+    const owned = await db
+      .select({ id: employees.id, fullName: employees.fullName, userId: employees.userId })
+      .from(employees)
+      .where(and(
+        sql`(LOWER(TRIM(${employees.email})) = ${email} OR LOWER(TRIM(${employees.personalEmail})) = ${email})`,
+        eq(employees.isActive, 1),
+        sql`${employees.userId} IS NOT NULL AND ${employees.userId} <> ${userId}`,
+      ));
+    if (owned.length === 1) {
+      try {
+        const { addAccountAlias } = await import("./employeeAliases");
+        await addAccountAlias(owned[0].id, userId);
+        await logActivity({ userId, action: "account_link", entity: "employee", entityId: owned[0].id, details: `Conta #${userId} <${email}> junta à ficha #${owned[0].id} ${owned[0].fullName} como conta extra` });
+        linked.push(owned[0].id);
+      } catch { /* conta já é principal de outra ficha */ }
+    }
+  }
   for (const r of rows) {
     await db.update(employees).set({ userId }).where(and(eq(employees.id, r.id), isNull(employees.userId)));
     linked.push(r.id);

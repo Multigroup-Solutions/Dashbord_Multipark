@@ -261,7 +261,18 @@ export function registerOAuthRoutes(app: Express) {
       // env, mantém-se o comportamento histórico — qualquer conta Google cria
       // um utilizador com role `user` (sem permissões relevantes).
       if (LOGIN_RESTRICTED_TO_REGISTERED) {
-        const known = (await db.getUserByOpenId(openId)) ?? (email ? await db.getUserByEmail(email) : undefined);
+        let known: unknown = (await db.getUserByOpenId(openId)) ?? (email ? await db.getUserByEmail(email) : undefined);
+        // Email (profissional OU pessoal) de uma ficha ativa também conta como
+        // registado — a mesma pessoa pode entrar com qualquer dos dois (0081).
+        if (!known && email) {
+          const database0 = await db.getDb();
+          if (database0) {
+            const { sql } = await import("drizzle-orm");
+            const [r] = (await database0.execute(sql`SELECT id FROM employees WHERE isActive = 1
+              AND (LOWER(TRIM(email)) = ${email} OR LOWER(TRIM(personalEmail)) = ${email}) LIMIT 1`)) as any;
+            known = (r as any[])?.[0];
+          }
+        }
         if (!known) {
           console.warn(`[OAuth] Acesso recusado <${email || "sem email"}> — conta não registada (modo fechado)`);
           denyAccess(req, res);
