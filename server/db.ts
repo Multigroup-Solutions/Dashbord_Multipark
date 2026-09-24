@@ -5545,7 +5545,7 @@ export async function getLocalBookingsByAction(filters: {
 // Mapa central campanha→parceiro (campaignKey + nome + aliases), igual ao da
 // Faturação. Cacheado 60s para não pesar nas folhas operacionais.
 let partnerMapCache: { at: number; map: Map<string, { id: number; name: string; commissionRate: number; updatedAt: string }> } | null = null;
-async function buildPartnerByCampaignMap() {
+export async function buildPartnerByCampaignMap() {
   if (partnerMapCache && Date.now() - partnerMapCache.at < 60_000) return partnerMapCache.map;
   const map = new Map<string, { id: number; name: string; commissionRate: number; updatedAt: string }>();
   const db = await getDb();

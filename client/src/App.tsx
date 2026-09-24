@@ -150,6 +150,9 @@ function Router() {
       <Route path="/marketing/google-ads">
         {() => (<DashboardLayout><MarketingPage /></DashboardLayout>)}
       </Route>
+      <Route path="/marketing/canais">
+        {() => (<DashboardLayout><MarketingPage /></DashboardLayout>)}
+      </Route>
       <Route path="/operacional">
         {() => (<DashboardLayout><OperationalPage /></DashboardLayout>)}
       </Route>

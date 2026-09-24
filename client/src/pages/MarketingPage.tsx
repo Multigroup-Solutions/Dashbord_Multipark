@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { BarChart3, Megaphone } from "lucide-react";
+import { BarChart3, Megaphone, Network } from "lucide-react";
 import MarketingGoogleAdsPage from "./MarketingGoogleAdsPage";
 import MarketingDashboardPanel from "@/components/marketing/MarketingDashboardPanel";
+import MarketingChannelsPanel from "@/components/marketing/MarketingChannelsPanel";
 
 /**
  * Marketing (Jorge, 16 set 2026): o menu "Marketing" abre o DASHBOARD de
@@ -19,32 +20,35 @@ import MarketingDashboardPanel from "@/components/marketing/MarketingDashboardPa
 
 const ADS_PATH = "/marketing/google-ads";
 const DASH_PATH = "/marketing";
+const CHANNELS_PATH = "/marketing/canais";
 
 export { MarketingDashboardPanel };
 
 export default function MarketingPage() {
   const [location, navigate] = useLocation();
-  const tabFromPath = (p: string) => (p.startsWith(ADS_PATH) ? "ads" : "dashboard");
+  const tabFromPath = (p: string) => (p.startsWith(ADS_PATH) ? "ads" : p.startsWith(CHANNELS_PATH) ? "channels" : "dashboard");
   const [tab, setTab] = useState(tabFromPath(location));
   useEffect(() => { setTab(tabFromPath(location)); }, [location]);
   const onTab = (v: string) => {
     setTab(v);
     // só muda o URL quando estamos numa rota de Marketing (nos Dashboards fica só o estado)
-    if (location.startsWith("/marketing")) navigate(v === "ads" ? ADS_PATH : DASH_PATH, { replace: true });
+    if (location.startsWith("/marketing")) navigate(v === "ads" ? ADS_PATH : v === "channels" ? CHANNELS_PATH : DASH_PATH, { replace: true });
   };
 
   return (
     <div className="p-6 space-y-6">
       <div>
         <h1 className="text-2xl font-bold">Marketing</h1>
-        <p className="text-muted-foreground">Dashboard de marketing e Google Ads</p>
+        <p className="text-muted-foreground">Dashboard de marketing, canais e clientes, e Google Ads</p>
       </div>
       <Tabs value={tab} onValueChange={onTab}>
         <TabsList>
           <TabsTrigger value="dashboard"><BarChart3 className="w-4 h-4 mr-1" />Dashboard</TabsTrigger>
+          <TabsTrigger value="channels"><Network className="w-4 h-4 mr-1" />Canais e clientes</TabsTrigger>
           <TabsTrigger value="ads"><Megaphone className="w-4 h-4 mr-1" />Google Ads</TabsTrigger>
         </TabsList>
         <TabsContent value="dashboard" className="mt-4"><MarketingDashboardPanel /></TabsContent>
+        <TabsContent value="channels" className="mt-4"><MarketingChannelsPanel /></TabsContent>
         <TabsContent value="ads" className="mt-4"><MarketingGoogleAdsPage /></TabsContent>
       </Tabs>
     </div>

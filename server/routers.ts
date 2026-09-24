@@ -3578,6 +3578,33 @@ export const appRouter = router({
 
     // Página principal do Marketing (Jorge, 16 set 2026): gasto por marca
     // (= conta Google; Multipark = Marketplace) e reservas dessa marca.
+    // Canais e clientes (Jorge, 24 set 2026): reservas e custo por canal de
+    // aquisição + ligação ao CRM (canal de entrada de cada cliente).
+    channels: protectedProcedure
+      .input(z.object({ from: z.string().optional(), to: z.string().optional(), projectId: z.number().optional() }).optional())
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { getDb, resolveProjectIds } = await import("./db");
+        const { getChannels } = await import("./marketingChannels");
+        const { getAdMetrics } = await import("./integrations/googleAds/adMetrics");
+        const { scopedProjectIds } = await import("./cityScope");
+        const { lisbonToday } = await import("../shared/expensePeriods");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
+        const today = lisbonToday();
+        const from = input?.from || `${today.slice(0, 7)}-01`;
+        const to = input?.to || today;
+        // Mesmo recorte do marketing.dashboard: projeto pedido ∩ cidades do utilizador.
+        const requested = input?.projectId ? await resolveProjectIds(input.projectId) : null;
+        const allowed = scopedProjectIds();
+        const projectIds = allowed ? (requested ? requested.filter((id) => allowed.includes(id)) : allowed) : requested;
+        try {
+          const ads = await getAdMetrics({ from, to, projectIds });
+          return await getChannels(db, { from, to, projectIds: requested ?? null, adSpend: ads.totals.cost });
+        } catch (e: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) });
+        }
+      }),
     byBrand: protectedProcedure
       .input(z.object({ from: z.string().optional(), to: z.string().optional() }).optional())
       .query(async ({ ctx, input }) => {
