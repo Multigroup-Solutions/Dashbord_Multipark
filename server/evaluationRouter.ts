@@ -39,7 +39,7 @@ import {
 } from "../shared/evaluationRules";
 import { addDays, daysInRange } from "../shared/lisbonDay";
 
-const ROLE_HIERARCHY: Record<string, number> = { super_admin: 7, admin: 6, supervisor: 5, team_leader: 4, backoffice: 3, frontoffice: 2, extra: 1, user: 0 };
+const ROLE_HIERARCHY: Record<string, number> = { super_admin: 7, admin: 6, supervisor: 5, team_leader: 4, backoffice: 3, frontoffice: 2, condutor: 1, extra: 1, user: 0 };
 const atLeast = (role: string, min: string) => (ROLE_HIERARCHY[role] ?? -1) >= (ROLE_HIERARCHY[min] ?? 0);
 function requireRole(role: string, min: string) {
   if (!atLeast(role, min)) throw new TRPCError({ code: "FORBIDDEN", message: "Acesso não autorizado." });
