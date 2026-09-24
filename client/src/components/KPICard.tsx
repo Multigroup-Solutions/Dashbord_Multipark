@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import { TrendingUp, TrendingDown } from "lucide-react";
 import { Card } from "@/components/ui/card";
+import { StatValue } from "@/components/StatValue";
 
 interface KPICardProps {
   icon: LucideIcon;
@@ -24,19 +25,19 @@ export function KPICard({
   const isPositive = delta >= 0;
 
   return (
-    <Card className="p-5 hover:shadow-md hover:-translate-y-0.5 transition-all cursor-default">
-      <div className="flex items-start justify-between mb-4">
+    <Card className="p-4 sm:p-5 gap-0 min-w-0 hover:shadow-md hover:-translate-y-0.5 transition-all cursor-default">
+      <div className="flex items-start justify-between gap-2 mb-4">
         <div
-          className="h-12 w-12 rounded-[10px] flex items-center justify-center"
+          className="h-11 w-11 sm:h-12 sm:w-12 shrink-0 rounded-[10px] flex items-center justify-center"
           style={{ backgroundColor: iconBg }}
         >
           <Icon className="h-6 w-6" style={{ color: iconColor }} />
         </div>
         <div
-          className={`flex items-center gap-1 px-2 py-1 rounded-md text-[13px] font-semibold ${
+          className={`flex items-center gap-1 px-2 py-1 rounded-md text-[13px] font-semibold tabular-nums shrink-0 ${
             isPositive
-              ? "bg-green-100 text-green-600"
-              : "bg-red-100 text-red-600"
+              ? "bg-green-100 text-green-700"
+              : "bg-red-100 text-red-700"
           }`}
         >
           {isPositive ? (
@@ -47,13 +48,11 @@ export function KPICard({
           {Math.abs(delta)}%
         </div>
       </div>
-      <div className="text-[13px] font-medium text-muted-foreground mb-2">
+      <div className="text-[13px] font-medium text-muted-foreground mb-2 truncate" title={label}>
         {label}
       </div>
-      <div className="text-[28px] font-bold text-foreground leading-none mb-1">
-        {value}
-      </div>
-      <div className="text-xs text-muted-foreground/70">{deltaLabel}</div>
+      <StatValue value={value} className="text-foreground mb-1" />
+      <div className="text-xs text-muted-foreground truncate" title={deltaLabel}>{deltaLabel}</div>
     </Card>
   );
 }

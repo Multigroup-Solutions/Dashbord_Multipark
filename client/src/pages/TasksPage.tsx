@@ -264,9 +264,12 @@ export default function TasksPage() {
     const visible = list.slice(0, 2);
     const extra = list.length - visible.length;
     return (
-      <span className="flex items-center gap-1 text-xs text-muted-foreground flex-wrap">
-        <Users className="h-3 w-3 shrink-0" />
-        {visible.map(a => a.fullName).join(", ")}
+      <span
+        className="flex items-start gap-1 text-xs text-muted-foreground min-w-0"
+        title={list.map(a => a.fullName).join(", ")}
+      >
+        <Users className="h-3 w-3 shrink-0 mt-0.5" aria-hidden />
+        <span className="line-clamp-2 break-words min-w-0">{visible.map(a => a.fullName).join(", ")}</span>
         {extra > 0 && <span className="font-medium">+{extra}</span>}
       </span>
     );
@@ -344,16 +347,16 @@ export default function TasksPage() {
       >
         <CardContent className="p-3 space-y-2">
           <div className="flex items-start justify-between gap-2">
-            <div className="flex items-center gap-1.5 flex-1 min-w-0">
-              {canEdit && <GripVertical className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />}
-              <p className="text-sm font-medium leading-tight truncate">{task.title}</p>
+            <div className="flex items-start gap-1.5 flex-1 min-w-0">
+              {canEdit && <GripVertical className="h-3.5 w-3.5 mt-0.5 text-muted-foreground/40 shrink-0" aria-hidden />}
+              <p className="text-sm font-medium leading-snug line-clamp-2 break-words" title={task.title}>{task.title}</p>
             </div>
             {canEdit && (
               <div className="flex gap-0.5 shrink-0">
-                <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); openEdit(task); }}>
+                <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Editar tarefa" title="Editar" onClick={(e) => { e.stopPropagation(); openEdit(task); }}>
                   <Pencil className="h-3 w-3" />
                 </Button>
-                <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" onClick={(e) => { e.stopPropagation(); if (confirm("Eliminar tarefa?")) deleteMut.mutate({ id: task.id }); }}>
+                <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" aria-label="Eliminar tarefa" title="Eliminar" onClick={(e) => { e.stopPropagation(); if (confirm("Eliminar tarefa?")) deleteMut.mutate({ id: task.id }); }}>
                   <Trash2 className="h-3 w-3" />
                 </Button>
               </div>
@@ -362,13 +365,13 @@ export default function TasksPage() {
           {task.description && <p className="text-xs text-muted-foreground line-clamp-2">{task.description}</p>}
           <div className="flex flex-wrap gap-1.5">
             <Badge variant="outline" className={`text-xs ${PRIORITY_COLORS[task.priority]}`}>{PRIORITY_LABELS[task.priority]}</Badge>
-            {task.projectName && <Badge variant="outline" className="text-xs">{task.projectName}</Badge>}
+            {task.projectName && <Badge variant="outline" className="text-xs truncate" title={task.projectName}>{task.projectName}</Badge>}
             <SourceChip t={task} />
           </div>
-          <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <div className="flex flex-wrap items-start justify-between gap-x-2 gap-y-1 text-xs text-muted-foreground">
             {renderAssignees(task)}
             {task.dueDate && (
-              <span className={`flex items-center gap-1 ${overdue(task) ? "text-red-600 font-medium" : ""}`}>
+              <span className={`flex items-center gap-1 shrink-0 whitespace-nowrap tabular-nums ${overdue(task) ? "text-red-600 font-medium" : ""}`}>
                 <CalendarDays className="h-3 w-3" />
                 {fmtDue(task)}
                 {overdue(task) && <AlertTriangle className="h-3 w-3" />}
@@ -376,19 +379,19 @@ export default function TasksPage() {
             )}
           </div>
           <div className="flex items-center justify-between pt-1">
-            <span className="text-[10px] text-muted-foreground flex items-center gap-2">
+            <span className="text-[11px] text-muted-foreground flex items-center gap-2">
               #{task.id}
               {task.commentsCount > 0 && <span className="flex items-center gap-0.5"><MessageSquare className="h-3 w-3" />{task.commentsCount}</span>}
             </span>
             {canEdit && (
               <div className="flex gap-1">
                 {colIdx > 0 && (
-                  <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); move(-1); }}>
+                  <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Mover para a coluna anterior" onClick={(e) => { e.stopPropagation(); move(-1); }}>
                     <ChevronLeft className="w-3 h-3" />
                   </Button>
                 )}
                 {colIdx >= 0 && colIdx < COLUMNS.length - 1 && (
-                  <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); move(1); }}>
+                  <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Mover para a coluna seguinte" onClick={(e) => { e.stopPropagation(); move(1); }}>
                     <ChevronRight className="w-3 h-3" />
                   </Button>
                 )}
@@ -430,7 +433,7 @@ export default function TasksPage() {
               </Button>
             )}
             {!done && (
-              <Button className="flex-1 h-12 text-base bg-emerald-600 hover:bg-emerald-700" disabled={statusMut.isPending} onClick={() => statusMut.mutate({ id: task.id, status: "done" })}>
+              <Button className="flex-1 h-12 text-base bg-emerald-700 hover:bg-emerald-800" disabled={statusMut.isPending} onClick={() => statusMut.mutate({ id: task.id, status: "done" })}>
                 <CheckCircle2 className="h-5 w-5 mr-2" />Concluir
               </Button>
             )}
@@ -451,7 +454,7 @@ export default function TasksPage() {
   return (
     <div className="space-y-6">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        <div>
+        <div className="shrink-0">
           <p className="text-muted-foreground text-sm">
             {viewMode === "mine" ? "As tuas tarefas — carrega em Começar / Concluir" : viewMode === "templates" ? "Checklists recorrentes por turno e cidade" : "Quadro de tarefas"}
           </p>
@@ -491,7 +494,7 @@ export default function TasksPage() {
                     {sortProjectsHierarchical(projects as any[]).map((p: any) => (
                       <SelectItem key={p.id} value={p.id.toString()}>
                         <span style={{ paddingLeft: `${p.__depth * 12}px` }} className="inline-flex items-center gap-2">
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded border ${LEVEL_COLOR[p.level] ?? ""}`}>{LEVEL_LABEL[p.level] ?? p.level}</span>
+                          <span className={`text-[11px] px-1.5 py-0.5 rounded border ${LEVEL_COLOR[p.level] ?? ""}`}>{LEVEL_LABEL[p.level] ?? p.level}</span>
                           {p.name}
                         </span>
                       </SelectItem>
@@ -533,18 +536,18 @@ export default function TasksPage() {
       {stats && viewMode !== "templates" && (
         <div className="grid grid-cols-3 md:grid-cols-7 gap-2">
           {[
-            { label: "Total", value: stats.total, color: "text-slate-600" },
-            { label: TASK_STATUS_LABELS.backlog, value: stats.backlog, color: "text-slate-500" },
+            { label: "Total", value: stats.total, color: "text-slate-700" },
+            { label: TASK_STATUS_LABELS.backlog, value: stats.backlog, color: "text-slate-600" },
             { label: TASK_STATUS_LABELS.todo, value: stats.todo, color: "text-blue-600" },
-            { label: TASK_STATUS_LABELS.in_progress, value: stats.inProgress, color: "text-amber-600" },
+            { label: TASK_STATUS_LABELS.in_progress, value: stats.inProgress, color: "text-amber-700" },
             { label: TASK_STATUS_LABELS.review, value: stats.review, color: "text-purple-600" },
-            { label: TASK_STATUS_LABELS.done, value: stats.done, color: "text-emerald-600" },
+            { label: TASK_STATUS_LABELS.done, value: stats.done, color: "text-emerald-700" },
             { label: "Em atraso", value: stats.overdue, color: "text-red-600" },
           ].map(s => (
             <Card key={s.label}>
-              <CardContent className="py-2 px-3 text-center">
-                <p className="text-xs text-muted-foreground">{s.label}</p>
-                <p className={`text-lg font-bold ${s.color}`}>{s.value}</p>
+              <CardContent className="py-2 px-2 sm:px-3 text-center">
+                <p className="text-xs text-muted-foreground truncate" title={s.label}>{s.label}</p>
+                <p className={`text-lg font-bold tabular-nums ${s.color}`}>{s.value}</p>
               </CardContent>
             </Card>
           ))}
@@ -695,7 +698,7 @@ export default function TasksPage() {
                       {sortProjectsHierarchical(projects as any[]).map((p: any) => (
                         <SelectItem key={p.id} value={p.id.toString()}>
                           <span style={{ paddingLeft: `${p.__depth * 12}px` }} className="inline-flex items-center gap-2">
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${LEVEL_COLOR[p.level] ?? ""}`}>{LEVEL_LABEL[p.level] ?? p.level}</span>
+                            <span className={`text-[11px] px-1.5 py-0.5 rounded border ${LEVEL_COLOR[p.level] ?? ""}`}>{LEVEL_LABEL[p.level] ?? p.level}</span>
                             {p.name}
                           </span>
                         </SelectItem>
@@ -806,7 +809,7 @@ function TaskDetailDialog({ id, onClose, canEdit, onEdit, onStatus, statusPendin
                   <Button size="sm" variant="outline" disabled={statusPending} onClick={() => onStatus(t.id, "in_progress")}><Play className="h-4 w-4 mr-1" />Começar</Button>
                 )}
                 {t.status !== "done" && (
-                  <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700" disabled={statusPending} onClick={() => onStatus(t.id, "done")}><CheckCircle2 className="h-4 w-4 mr-1" />Concluir</Button>
+                  <Button size="sm" className="bg-emerald-700 hover:bg-emerald-800" disabled={statusPending} onClick={() => onStatus(t.id, "done")}><CheckCircle2 className="h-4 w-4 mr-1" />Concluir</Button>
                 )}
                 {t.status === "done" && (
                   <Button size="sm" variant="ghost" disabled={statusPending} onClick={() => onStatus(t.id, "todo")}><RotateCcw className="h-4 w-4 mr-1" />Reabrir</Button>

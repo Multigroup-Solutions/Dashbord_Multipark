@@ -48,7 +48,7 @@ export default function OperationalPage() {
   const [speedTarget, setSpeedTarget] = useState<SpeedTarget>(null);
   const openSpeedHistory = (t: SpeedTarget) => { setSpeedTarget(t); setTab("history"); };
   return (
-    <div className="p-6 space-y-6">
+    <div className="space-y-6">
       <div>
         <p className="text-muted-foreground">Quem fez o quê, km e velocidades, e os PDAs. As transcrições de rádio estão em Operações → Rádio.</p>
       </div>
@@ -136,23 +136,23 @@ function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory: (t: SpeedT
       )}
 
       {totals && (
-        <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
-          <Card className="p-3"><p className="text-xs text-muted-foreground">Recolhas</p><p className="text-xl font-bold text-emerald-700">{totals.checkins}</p></Card>
-          <Card className="p-3"><p className="text-xs text-muted-foreground">Entregas</p><p className="text-xl font-bold text-blue-700">{totals.checkouts}</p></Card>
-          <Card className="p-3"><p className="text-xs text-muted-foreground">Movimentações</p><p className="text-xl font-bold">{totals.movements}</p></Card>
-          <Card className="p-3"><p className="text-xs text-muted-foreground">Cancelamentos</p><p className="text-xl font-bold text-red-700">{totals.cancels}</p></Card>
-          <Card className="p-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 2xl:grid-cols-8 gap-3">
+          <Card className="p-3 gap-0.5 min-w-0"><p className="text-xs text-muted-foreground">Recolhas</p><p className="text-xl font-bold tabular-nums truncate text-emerald-700">{totals.checkins}</p></Card>
+          <Card className="p-3 gap-0.5 min-w-0"><p className="text-xs text-muted-foreground">Entregas</p><p className="text-xl font-bold tabular-nums truncate text-blue-700">{totals.checkouts}</p></Card>
+          <Card className="p-3 gap-0.5 min-w-0"><p className="text-xs text-muted-foreground">Movimentações</p><p className="text-xl font-bold tabular-nums truncate">{totals.movements}</p></Card>
+          <Card className="p-3 gap-0.5 min-w-0"><p className="text-xs text-muted-foreground">Cancelamentos</p><p className="text-xl font-bold tabular-nums truncate text-red-700">{totals.cancels}</p></Card>
+          <Card className="p-3 gap-0.5 min-w-0">
             <p className="text-xs text-muted-foreground">No horário / fora</p>
-            <p className="text-xl font-bold"><span className="text-emerald-700">{totals.inShift}</span> <span className="text-muted-foreground text-base">/</span> <span className="text-amber-700">{totals.outOfShift}</span></p>
-            <p className="text-[10px] text-muted-foreground">{pct(totals.inShift, totals.inShift + totals.outOfShift)} no horário · {totals.scheduledPeople} escalados</p>
+            <p className="text-xl font-bold tabular-nums truncate"><span className="text-emerald-700">{totals.inShift}</span> <span className="text-muted-foreground text-base">/</span> <span className="text-amber-700">{totals.outOfShift}</span></p>
+            <p className="text-[11px] leading-snug text-muted-foreground">{pct(totals.inShift, totals.inShift + totals.outOfShift)} no horário · {totals.scheduledPeople} escalados</p>
           </Card>
-          <Card className="p-3"><p className="text-xs text-muted-foreground">Km GPS</p><p className="text-xl font-bold text-purple-700">{totals.totalKm} km</p><p className="text-[10px] text-muted-foreground">{totals.violations} excessos</p></Card>
-          <Card className="p-3"><p className="text-xs text-muted-foreground">Pessoas ativas</p><p className="text-xl font-bold">{totals.activePeople}</p></Card>
+          <Card className="p-3 gap-0.5 min-w-0"><p className="text-xs text-muted-foreground">Km GPS</p><p className="text-xl font-bold tabular-nums truncate text-purple-700">{Number(totals.totalKm).toLocaleString("pt-PT", { maximumFractionDigits: 1 })} km</p><p className="text-[11px] text-muted-foreground">{totals.violations} excessos</p></Card>
+          <Card className="p-3 gap-0.5 min-w-0"><p className="text-xs text-muted-foreground">Pessoas ativas</p><p className="text-xl font-bold tabular-nums truncate">{totals.activePeople}</p></Card>
           {canSeeCost && totals.totalCost != null && (
-            <Card className="p-3">
+            <Card className="p-3 gap-0.5 min-w-0">
               <p className="text-xs text-muted-foreground">Custo extras</p>
-              <p className="text-xl font-bold">{fmtEur(totals.totalCost)}</p>
-              <p className="text-[10px] text-muted-foreground">{totals.costPerAction != null ? `${fmtEur(totals.costPerAction)}/ação` : "—"}</p>
+              <p className="text-xl font-bold tabular-nums truncate">{fmtEur(totals.totalCost)}</p>
+              <p className="text-[11px] text-muted-foreground">{totals.costPerAction != null ? `${fmtEur(totals.costPerAction)}/ação` : "—"}</p>
             </Card>
           )}
         </div>
@@ -178,7 +178,7 @@ function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory: (t: SpeedT
                 <tbody>
                   {(dailySort.sorted as any[]).map((d) => (
                     <tr key={d.date} className="border-b hover:bg-muted/30">
-                      <td className="py-1.5 px-2 font-mono">{d.date}{data.gpsMissingDays.includes(d.date) && <span className="ml-1 text-[10px] text-amber-700">(GPS provisório)</span>}</td>
+                      <td className="py-1.5 px-2 font-mono">{d.date}{data.gpsMissingDays.includes(d.date) && <span className="ml-1 text-[11px] text-amber-700">(GPS provisório)</span>}</td>
                       <td className="py-1.5 px-2 text-right font-semibold tabular-nums">{d.actions}</td>
                       <td className="py-1.5 px-2 text-right text-emerald-700 tabular-nums">{d.inShift}</td>
                       <td className="py-1.5 px-2 text-right text-amber-700 tabular-nums">{d.outOfShift}</td>
@@ -233,12 +233,12 @@ function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory: (t: SpeedT
                       className={`border-b hover:bg-muted/40 cursor-pointer ${pers.kind === "por_ligar" || pers.kind === "sem_login" ? "bg-amber-50/40" : ""}`}
                       onClick={() => setDrawer({ key: pers.key, name: pers.name, employeeId: pers.employeeId, zello: pers.kind === "sem_login" ? pers.key.slice(5) : null })}
                     >
-                      <td className="p-2 font-medium">
+                      <td className="p-2 font-medium min-w-[11rem]">
                         {pers.kind === "parceiro" && "🤝 "}
                         {pers.kind === "por_ligar" && "⚠ "}
                         {pers.kind === "sem_login" && "📡 "}
                         {pers.name}
-                        {pers.isTeamLeader && <Badge className="ml-1 bg-amber-100 text-amber-800 border-amber-300 text-[9px]">TL</Badge>}
+                        {pers.isTeamLeader && <Badge className="ml-1 bg-amber-100 text-amber-800 border-amber-300 text-[11px] px-1.5 py-0">TL</Badge>}
                       </td>
                       <td className="p-2 text-right text-emerald-700 tabular-nums">{pers.checkins || ""}</td>
                       <td className="p-2 text-right text-blue-700 tabular-nums">{pers.checkouts || ""}</td>
@@ -251,7 +251,7 @@ function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory: (t: SpeedT
                       {canSeeCost && <td className="p-2 text-right tabular-nums">{pers.costPerAction != null ? fmtEur(pers.costPerAction) : "—"}</td>}
                       <td className="p-2 text-right tabular-nums">
                         {pers.totalKm != null && pers.totalKm > 0 ? `${pers.totalKm} km` : "—"}
-                        {pers.provisionalKm && <span className="block text-[10px] text-amber-700">provisório</span>}
+                        {pers.provisionalKm && <span className="block text-[11px] text-amber-700">provisório</span>}
                       </td>
                       <td className="p-2 text-right tabular-nums">
                         {pers.hoursWorked != null && pers.hoursWorked > 0 ? `${pers.hoursWorked}h`
@@ -386,7 +386,7 @@ function PersonDayDrawer({ person, defaultDate, minDate, maxDate, onClose, onOpe
                           {t.type === "check_in" ? "Entrada" : "Saída"} {fmtPTTime(t.recordedAt)}
                           {t.hoursWorked != null && ` · ${Number(t.hoursWorked).toFixed(2)}h`}
                           {t.zelloKm != null && ` · ${Number(t.zelloKm).toFixed(1)} km (Zello)`}
-                          {t.reviewStatus && t.reviewStatus !== "ok" && <Badge variant="outline" className="ml-1 text-[9px]">{t.reviewStatus === "rejected" ? "rejeitado" : t.reviewStatus === "suspicious" ? "suspeito" : "aprovado"}</Badge>}
+                          {t.reviewStatus && t.reviewStatus !== "ok" && <Badge variant="outline" className="ml-1 text-[11px]">{t.reviewStatus === "rejected" ? "rejeitado" : t.reviewStatus === "suspicious" ? "suspeito" : "aprovado"}</Badge>}
                         </li>
                       ))}
                     </ul>
@@ -493,13 +493,13 @@ function DriverHistoryTab({ speedTarget, onSpeedTarget }: { speedTarget: SpeedTa
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-7 gap-3">
-        <Card><CardContent className="pt-3 pb-2"><p className="text-xs text-muted-foreground">Zellos com GPS</p><p className="text-xl font-bold">{stats?.totalDrivers ?? 0}</p></CardContent></Card>
-        <Card><CardContent className="pt-3 pb-2"><p className="text-xs text-muted-foreground">Km Total</p><p className="text-xl font-bold">{(stats?.totalKm ?? 0).toFixed(1)}</p></CardContent></Card>
-        <Card><CardContent className="pt-3 pb-2"><p className="text-xs text-muted-foreground">Horas em movimento</p><p className="text-xl font-bold">{(stats?.totalHoursWorked ?? 0).toFixed(1)}h</p></CardContent></Card>
-        <Card><CardContent className="pt-3 pb-2"><p className="text-xs text-muted-foreground">Horas Parado</p><p className="text-xl font-bold">{(stats?.totalHoursStopped ?? 0).toFixed(1)}h</p></CardContent></Card>
-        <Card><CardContent className="pt-3 pb-2"><p className="text-xs text-muted-foreground">Vel. Máx</p><p className="text-xl font-bold text-red-600">{(stats?.maxSpeedOfDay ?? 0).toFixed(0)} km/h</p></CardContent></Card>
-        <Card><CardContent className="pt-3 pb-2"><p className="text-xs text-muted-foreground">Bat. Média</p><p className="text-xl font-bold">{stats?.avgBattery ?? 0}%</p></CardContent></Card>
-        <Card><CardContent className="pt-3 pb-2"><p className="text-xs text-muted-foreground">Excessos{threshold ? ` (> ${Math.round(threshold)} km/h)` : ""}</p><p className="text-xl font-bold text-amber-600">{stats?.totalViolations ?? 0}</p></CardContent></Card>
+        <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Zellos com GPS</p><p className="text-xl font-bold tabular-nums truncate">{stats?.totalDrivers ?? 0}</p></CardContent></Card>
+        <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Km Total</p><p className="text-xl font-bold tabular-nums truncate">{(stats?.totalKm ?? 0).toFixed(1)}</p></CardContent></Card>
+        <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Horas em movimento</p><p className="text-xl font-bold tabular-nums truncate">{(stats?.totalHoursWorked ?? 0).toFixed(1)}h</p></CardContent></Card>
+        <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Horas Parado</p><p className="text-xl font-bold tabular-nums truncate">{(stats?.totalHoursStopped ?? 0).toFixed(1)}h</p></CardContent></Card>
+        <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Vel. Máx</p><p className="text-xl font-bold tabular-nums truncate text-red-600">{(stats?.maxSpeedOfDay ?? 0).toFixed(0)} km/h</p></CardContent></Card>
+        <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Bat. Média</p><p className="text-xl font-bold tabular-nums truncate">{stats?.avgBattery ?? 0}%</p></CardContent></Card>
+        <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Excessos{threshold ? ` (> ${Math.round(threshold)} km/h)` : ""}</p><p className="text-xl font-bold tabular-nums truncate text-amber-600">{stats?.totalViolations ?? 0}</p></CardContent></Card>
       </div>
 
       <SpeedHistoryCard target={speedTarget} onTarget={onSpeedTarget} people={peopleData} threshold={threshold} />
@@ -821,25 +821,25 @@ function PdasTab() {
         <Card>
           <CardContent className="pt-3 pb-2">
             <p className="text-xs text-muted-foreground">Total PDAs</p>
-            <p className="text-xl font-bold">{pdaList?.length ?? 0}</p>
+            <p className="text-xl font-bold tabular-nums truncate">{pdaList?.length ?? 0}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-3 pb-2">
             <p className="text-xs text-muted-foreground">Ativos</p>
-            <p className="text-xl font-bold text-green-600">{(pdaList || []).filter((p: any) => p.status === "active").length}</p>
+            <p className="text-xl font-bold tabular-nums truncate text-green-600">{(pdaList || []).filter((p: any) => p.status === "active").length}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-3 pb-2">
             <p className="text-xs text-muted-foreground">Em Uso (Check-in)</p>
-            <p className="text-xl font-bold text-blue-600">{activeCheckins?.length ?? 0}</p>
+            <p className="text-xl font-bold tabular-nums truncate text-blue-600">{activeCheckins?.length ?? 0}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-3 pb-2">
             <p className="text-xs text-muted-foreground">Manutenção/Perdido</p>
-            <p className="text-xl font-bold text-amber-600">{(pdaList || []).filter((p: any) => p.status === "maintenance" || p.status === "lost").length}</p>
+            <p className="text-xl font-bold tabular-nums truncate text-amber-600">{(pdaList || []).filter((p: any) => p.status === "maintenance" || p.status === "lost").length}</p>
           </CardContent>
         </Card>
       </div>

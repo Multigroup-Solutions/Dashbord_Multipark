@@ -5,6 +5,7 @@ import { useState, useMemo } from "react";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { StatValue } from "@/components/StatValue";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -38,7 +39,7 @@ function MiniPie({ title, icon, data }: { title: string; icon?: React.ReactNode;
                 {data.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
               </Pie>
               <Tooltip formatter={(v: any, n: any) => [`${v} (${total > 0 ? ((Number(v) / total) * 100).toFixed(0) : 0}%)`, n]} />
-              <Legend wrapperStyle={{ fontSize: 10 }} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
             </PieChart>
           </ResponsiveContainer>
         )}
@@ -64,7 +65,7 @@ export default function OperacoesPage() {
   // "Serviços" saiu daqui (fica no menu, em /servicos) — quem a tinha guardada volta ao Dashboard
   const tab = ["dashboard", "reservas", "entradas", "saidas", "cancelados"].includes(storedTab) ? storedTab : "dashboard";
   return (
-    <div className="p-4 md:p-6 space-y-6 max-w-[1400px] mx-auto">
+    <div className="space-y-6 max-w-[1400px] mx-auto">
       <div>
         <p className="text-sm text-muted-foreground">
           Reservas, recolhas, entregas e cancelamentos — dias de Lisboa, valores c/ IVA
@@ -166,7 +167,7 @@ function OperacoesDashboard({ onJump }: { onJump: (tab: string) => void }) {
   return (
     <div className="space-y-6">
       {/* Filtros */}
-      <Card>
+      <Card className="py-0 gap-0">
         <CardContent className="p-4 space-y-3">
           <QuickRangeBar
             active={activeRange}
@@ -231,21 +232,21 @@ function OperacoesDashboard({ onJump }: { onJump: (tab: string) => void }) {
 
       {/* Rácios */}
       <div className="grid grid-cols-2 gap-3">
-        <Card>
+        <Card className="py-0 gap-0 min-w-0">
           <CardContent className="p-4">
             <p className="text-xs text-muted-foreground">Receita média / entrega (c/ IVA)</p>
-            <p className="text-xl font-bold text-emerald-700">
+            <p className="text-xl font-bold text-emerald-700 tabular-nums truncate">
               {stats.entregas > 0 ? fmtEur(stats.entregasReceita / stats.entregas) : "—"}
             </p>
           </CardContent>
         </Card>
-        <Card>
+        <Card className="py-0 gap-0 min-w-0">
           <CardContent className="p-4">
             <p className="text-xs text-muted-foreground">Taxa de cancelamento</p>
-            <p className="text-xl font-bold text-red-700">
+            <p className="text-xl font-bold text-red-700 tabular-nums">
               {(() => { const r = cohortCancelRate(stats.criadas, stats.criadas - stats.reservas); return r == null ? "—" : `${(r * 100).toFixed(1)}%`; })()}
             </p>
-            <p className="text-[10px] text-muted-foreground">das reservas criadas no período, quantas estão canceladas</p>
+            <p className="text-[11px] leading-snug text-muted-foreground">das reservas criadas no período, quantas estão canceladas</p>
           </CardContent>
         </Card>
       </div>
@@ -298,18 +299,23 @@ function KpiCard({
   const negative = delta == null ? false : (invertDelta ? delta > 0 : delta < 0);
   return (
     <Card
-      className={onClick ? "cursor-pointer hover:shadow-md transition-shadow" : ""}
+      className={"py-0 gap-0 min-w-0 " + (onClick ? "cursor-pointer hover:shadow-md transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" : "")}
       onClick={onClick}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } } : undefined}
     >
-      <CardContent className="p-4 flex items-center gap-3">
-        <div className="p-2 rounded-lg bg-muted">{icon}</div>
-        <div className="min-w-0">
-          <p className="text-xs text-muted-foreground truncate">{label}</p>
-          <p className="text-2xl font-bold">{value}</p>
-          {sub && <p className="text-[11px] text-muted-foreground">{sub}</p>}
-          {extra && <p className="text-xs text-muted-foreground truncate"><Euro className="w-3 h-3 inline" /> {extra}</p>}
+      {/* Em telemóvel (2 colunas estreitas) o ícone fica por cima do texto —
+          lado a lado, o rótulo e os valores ficavam cortados a ~75px. */}
+      <CardContent className="p-4 flex flex-col sm:flex-row sm:items-start gap-2 sm:gap-3">
+        <div className="p-2 rounded-lg bg-muted self-start shrink-0">{icon}</div>
+        <div className="min-w-0 flex-1">
+          <p className="text-xs text-muted-foreground leading-snug">{label}</p>
+          <StatValue value={value.toLocaleString("pt-PT")} min={18} max={24} />
+          {sub && <p className="text-[11px] leading-snug text-muted-foreground tabular-nums">{sub}</p>}
+          {extra && <p className="text-xs leading-snug text-muted-foreground tabular-nums mt-0.5"><Euro className="w-3 h-3 inline -mt-0.5" aria-hidden /> {extra}</p>}
           {delta != null && (
-            <p className={"text-[11px] font-medium " + (positive ? "text-emerald-600" : negative ? "text-red-600" : "text-muted-foreground")}>
+            <p className={"text-[11px] font-medium tabular-nums " + (positive ? "text-emerald-700" : negative ? "text-red-600" : "text-muted-foreground")}>
               {delta >= 0 ? "+" : ""}{delta}{pct != null && <> ({delta >= 0 ? "+" : ""}{pct.toFixed(0)}%)</>} <span className="text-muted-foreground font-normal">vs ant.</span>
             </p>
           )}

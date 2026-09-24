@@ -521,7 +521,7 @@ function DashboardLayoutContent({
                 className="h-8 w-8 flex items-center justify-center hover:bg-accent rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring shrink-0"
                 aria-label="Toggle navigation"
               >
-                <PanelLeft className="h-4 w-4 text-gray-500" />
+                <PanelLeft className="h-4 w-4 text-slate-600" />
               </button>
               {!isCollapsed ? (
                 <img
@@ -587,7 +587,7 @@ function DashboardLayoutContent({
                           <>
                             <span className="flex-1 text-left truncate">{group.label}</span>
                             <span className={`text-[11px] font-bold rounded-full px-2 py-0.5 ${
-                              groupActive || isOpen ? "bg-white/[.22] text-white" : "bg-slate-100 text-slate-500"
+                              groupActive || isOpen ? "bg-[#0046ad] text-white" : "bg-slate-100 text-slate-600"
                             }`}>{group.items.length}</span>
                             <ChevronDown className={`mpk-chev h-4 w-4 transition-transform duration-200 ${
                               groupActive || isOpen ? "text-white/80" : "text-slate-400"
@@ -653,19 +653,22 @@ function DashboardLayoutContent({
             {isMobile && (
               <SidebarTrigger className="h-9 w-9 rounded-lg bg-background" />
             )}
-            <h1 className="text-xl lg:text-[22px] font-bold text-[#0c1f3f] truncate">
+            <h1
+              className="text-lg sm:text-xl lg:text-[22px] font-bold text-foreground truncate"
+              title={activeMenuItem?.label ?? undefined}
+            >
               {activeMenuItem?.label ?? (location === "/modulos" ? "Menu" : location === "/perfil" ? "Perfil" : "Dashboard")}
             </h1>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             {/* City filter */}
             <Select
               disabled={filters.cities.length <= 1}
               value={filters.cityId === null ? "all" : String(filters.cityId)}
               onValueChange={(v) => filters.setCityId(v === "all" ? null : Number(v))}
             >
-              <SelectTrigger className="hidden md:flex h-9 w-[130px]">
+              <SelectTrigger className="hidden md:flex h-9 w-[168px]" aria-label="Filtro de cidade">
                 <SelectValue placeholder="Cidade" />
               </SelectTrigger>
               <SelectContent>
@@ -683,7 +686,7 @@ function DashboardLayoutContent({
               value={filters.brandId === null ? "all" : String(filters.brandId)}
               onValueChange={(v) => filters.setBrandId(v === "all" ? null : Number(v))}
             >
-              <SelectTrigger className="hidden md:flex h-9 w-[140px]">
+              <SelectTrigger className="hidden md:flex h-9 w-[168px]" aria-label="Filtro de marca">
                 <SelectValue placeholder="Marca" />
               </SelectTrigger>
               <SelectContent>
@@ -708,6 +711,7 @@ function DashboardLayoutContent({
                   size="icon"
                   className="md:hidden h-9 w-9"
                   title="Cidade e marca"
+                  aria-label="Cidade e marca"
                 >
                   <MapPin className="h-4 w-4" />
                 </Button>
@@ -754,7 +758,7 @@ function DashboardLayoutContent({
             {/* User Avatar with dropdown */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-full">
+                <button className="focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-full" aria-label="Menu da conta">
                   <Avatar className="h-9 w-9 border cursor-pointer">
                     {photoUrl && <AvatarImage src={photoUrl} alt={user?.name ?? ""} className="object-cover" />}
                     <AvatarFallback className="text-xs font-medium bg-primary text-primary-foreground">
@@ -832,7 +836,9 @@ function DashboardLayoutContent({
           </div>
         </div>
 
-        <main className="flex-1 p-4 lg:p-6 min-w-0 overflow-x-hidden pb-20 md:pb-6" style={{ backgroundColor: '#F0F4FF' }}>
+        {/* pb extra: a última linha da página não fica por baixo da tab bar
+            (mobile) nem do botão flutuante do assistente */}
+        <main className="flex-1 p-4 lg:p-6 min-w-0 overflow-x-hidden pb-40 md:pb-24 lg:pb-24 bg-background">
           {filters.isLoading ? <p>A verificar o acesso às cidades…</p> : filters.missingCostCenter && location !== '/perfil' ? (
             <div role="status" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
               <strong>Sem centro de custos atribuído.</strong> O acesso às cidades fica indisponível até à atribuição.
@@ -895,10 +901,15 @@ function NotificationsBell() {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button variant="outline" size="icon" className="relative h-9 w-9">
+        <Button
+          variant="outline"
+          size="icon"
+          className="relative h-9 w-9"
+          aria-label={count > 0 ? `Notificações (${count} por ler)` : "Notificações"}
+        >
           <Bell className="h-4 w-4" />
           {count > 0 && (
-            <span className="absolute -top-1 -right-1 h-4 min-w-[16px] px-1 rounded-full bg-destructive text-[10px] font-bold text-white flex items-center justify-center">
+            <span className="absolute -top-1.5 -right-1.5 h-[18px] min-w-[18px] px-1 rounded-full bg-destructive text-[11px] leading-none font-bold text-white flex items-center justify-center tabular-nums ring-2 ring-white">
               {count > 99 ? "99+" : count}
             </span>
           )}
@@ -943,9 +954,9 @@ function NotificationsBell() {
                 >
                   <div className={`h-2 w-2 rounded-full mt-2 shrink-0 ${n.isRead ? "bg-muted-foreground" : "bg-blue-500"}`} />
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm truncate">{n.title}</p>
+                    <p className="text-sm font-medium line-clamp-2 break-words">{n.title}</p>
                     {n.body && <p className="text-xs text-muted-foreground line-clamp-2 break-words">{n.body}</p>}
-                    <p className="text-[10px] text-muted-foreground mt-0.5 flex flex-wrap items-center gap-x-1.5">
+                    <p className="text-[11px] text-muted-foreground mt-0.5 flex flex-wrap items-center gap-x-1.5">
                       <span>{fmtTime(n.createdAt)}</span>
                       <span aria-hidden>·</span>
                       <span>{kindLabel(n.kind)}</span>

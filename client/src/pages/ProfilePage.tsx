@@ -57,10 +57,10 @@ export default function ProfilePage() {
           {initials}
         </div>
         <div className="flex-1 min-w-0">
-          <div className="font-bold text-[16px] text-foreground truncate">{user?.name ?? "—"}</div>
+          <div className="font-bold text-[16px] text-foreground truncate" title={user?.name ?? undefined}>{user?.name ?? "—"}</div>
           <div className="text-xs text-muted-foreground truncate">{user?.email ?? ""}</div>
         </div>
-        <span className="text-[10.5px] font-bold px-2.5 py-1 rounded-full bg-primary/10 text-primary shrink-0">
+        <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-primary/10 text-primary shrink-0">
           {ROLE_LABELS[user?.role ?? "user"] ?? user?.role}
         </span>
       </div>

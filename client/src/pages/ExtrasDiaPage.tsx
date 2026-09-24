@@ -633,7 +633,7 @@ function SchedulePanel({ targetDate, carsPerHour }: { targetDate: string; carsPe
             <ul className="mt-1 space-y-0.5">
               {d.gaps.map((g, i) => <li key={i}>• {describeGap(g).replace(/^./, (c) => c.toUpperCase())}</li>)}
             </ul>
-            <Button size="sm" variant="outline" className="mt-2 bg-white dark:bg-transparent" disabled={ask.isPending || d.noAnswerCount === 0}
+            <Button size="sm" variant="outline" className="mt-2 h-auto min-h-8 max-w-full whitespace-normal text-left py-1.5 bg-white dark:bg-transparent" disabled={ask.isPending || d.noAnswerCount === 0}
               onClick={() => ask.mutate({ date: targetDate, city })}>
               <Send className="h-4 w-4 mr-1" />
               {ask.isPending ? "A enviar…" : `Pedir disponibilidade a quem não respondeu (${d.noAnswerCount})`}
@@ -838,9 +838,9 @@ function TeamSection({
                 <div className="font-semibold flex items-center gap-2 min-w-0">
                   <Avatar className="h-6 w-6">
                     <AvatarImage src={(tl as any).photoUrl ?? undefined} className="object-cover" />
-                    <AvatarFallback className="text-[10px]">{tl.personName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()}</AvatarFallback>
+                    <AvatarFallback className="text-[11px]">{tl.personName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()}</AvatarFallback>
                   </Avatar>
-                  <span className="truncate">{tl.personName}</span>{" "}
+                  <span className="truncate" title={tl.personName}>{tl.personName}</span>{" "}
                   <span className="font-normal text-sm text-muted-foreground">
                     · {fmtHour(tl.startHour)}–{fmtHour(tl.sentHomeHour ?? tl.endHour)} · {fmtEur(tl.cost)}/dia
                   </span>
@@ -1028,7 +1028,7 @@ function AssignmentForm({
                   <span className="flex items-center gap-1.5">
                     <Avatar className="h-5 w-5">
                       <AvatarImage src={c.photoUrl ?? undefined} className="object-cover" />
-                      <AvatarFallback className="text-[9px]">{c.fullName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()}</AvatarFallback>
+                      <AvatarFallback className="text-[11px]">{c.fullName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()}</AvatarFallback>
                     </Avatar>
                     {c.availability?.status === "available" && (
                       <span className="inline-flex gap-0.5">
@@ -1041,11 +1041,11 @@ function AssignmentForm({
                       <span className="h-2 w-2 inline-block rounded-full bg-muted-foreground/30" title="Sem resposta" />
                     )}
                     {c.availability?.status === "unavailable" && (
-                      <span className="text-[10px] text-red-500" title="Disse que não está disponível">✕</span>
+                      <span className="text-[11px] text-red-500" title="Disse que não está disponível">✕</span>
                     )}
                     <span className={c.availability?.status === "unavailable" ? "text-muted-foreground" : undefined}>{c.fullName}</span>
                     {c.trainingMissing && (
-                      <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] font-medium text-amber-800" title="Formação obrigatória por concluir">Formação em falta</span>
+                      <span className="ml-1 rounded bg-amber-100 px-1 text-[11px] font-medium text-amber-800" title="Formação obrigatória por concluir">Formação em falta</span>
                     )}
                   </span>
                 </SelectItem>
@@ -1154,10 +1154,10 @@ function AssignmentForm({
 
 function NoticeBadge({ notice }: { notice: { status: string; confirmedAt: string | null; declinedAt: string | null; error: string | null } | null }) {
   if (!notice) return null;
-  if (notice.declinedAt) return <Badge variant="destructive" className="text-[10px]" title="Respondeu que não pode">✗ não pode</Badge>;
-  if (notice.confirmedAt) return <Badge className="bg-emerald-600 text-[10px]" title="Confirmou pelo WhatsApp">✓ confirmou</Badge>;
-  if (notice.status === "sent") return <Badge variant="secondary" className="text-[10px]" title="Aviso enviado por WhatsApp — à espera de resposta">avisado</Badge>;
-  return <Badge variant="outline" className="text-[10px] border-red-300 text-red-700" title={notice.error ?? "Falhou o envio"}>aviso falhou</Badge>;
+  if (notice.declinedAt) return <Badge variant="destructive" className="text-[11px]" title="Respondeu que não pode">✗ não pode</Badge>;
+  if (notice.confirmedAt) return <Badge className="bg-emerald-700 text-[11px]" title="Confirmou pelo WhatsApp">✓ confirmou</Badge>;
+  if (notice.status === "sent") return <Badge variant="secondary" className="text-[11px]" title="Aviso enviado por WhatsApp — à espera de resposta">avisado</Badge>;
+  return <Badge variant="outline" className="text-[11px] border-red-300 text-red-700" title={notice.error ?? "Falhou o envio"}>aviso falhou</Badge>;
 }
 
 function AssignmentRow({
@@ -1209,7 +1209,7 @@ function AssignmentRow({
           <span className="flex items-center gap-2">
             <Avatar className="h-6 w-6">
               <AvatarImage src={(a as any).photoUrl ?? undefined} className="object-cover" />
-              <AvatarFallback className="text-[10px]">{a.personName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()}</AvatarFallback>
+              <AvatarFallback className="text-[11px]">{a.personName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()}</AvatarFallback>
             </Avatar>
             {a.employeeId ? (
               <button type="button" className="hover:underline" title="Abrir ficha do funcionário" onClick={() => openEmployeeRow(a.employeeId!)}>
@@ -1218,7 +1218,7 @@ function AssignmentRow({
             ) : a.personName}
             <NoticeBadge notice={notice} />
             {a.status === "proposed" && (
-              <Badge variant="outline" className="text-[10px] border-violet-300 text-violet-700" title="Proposta automática — ainda por confirmar">proposta</Badge>
+              <Badge variant="outline" className="text-[11px] border-violet-300 text-violet-700" title="Proposta automática — ainda por confirmar">proposta</Badge>
             )}
           </span>
           {a.proposalReason && (
@@ -1349,10 +1349,10 @@ function KpiCard({
           {icon}
           {label}
         </div>
-        <div className="text-2xl font-bold mt-1">{value}</div>
+        <div className="text-2xl font-bold mt-1 tabular-nums truncate" title={typeof value === "string" || typeof value === "number" ? String(value) : undefined}>{value}</div>
         {hint && <div className="text-xs text-muted-foreground mt-0.5">{hint}</div>}
         {breakdown && (breakdown.uncovered + breakdown.covered + breakdown.indoor + breakdown.unknown > 0) && (
-          <div className="text-[10px] text-muted-foreground mt-1 leading-tight">
+          <div className="text-[11px] text-muted-foreground mt-1 leading-tight">
             {breakdown.uncovered > 0 && <span>{breakdown.uncovered} desc.</span>}
             {breakdown.covered > 0 && <span className="ml-1">{breakdown.covered} cob.</span>}
             {breakdown.indoor > 0 && <span className="ml-1">{breakdown.indoor} ind.</span>}
@@ -1521,7 +1521,7 @@ function BookingList({
               <span className="font-mono text-muted-foreground">{b.licensePlate || "—"}</span>
               <span>{b.clientName}</span>
               {b.deliveryType && (
-                <Badge variant="outline" className="text-[10px] py-0 h-4">
+                <Badge variant="outline" className="text-[11px] py-0 h-5">
                   {b.deliveryType}
                 </Badge>
               )}
@@ -1800,7 +1800,7 @@ export function CandidaturasSection() {
                 {cityProjects.map((p: any) => (
                   <SelectItem key={p.id} value={String(p.id)}>
                     <span className="inline-flex items-center gap-2">
-                      <Badge variant="outline" className="text-[10px] bg-blue-100 text-blue-700 border-blue-200">Cidade</Badge>
+                      <Badge variant="outline" className="text-[11px] bg-blue-100 text-blue-700 border-blue-200">Cidade</Badge>
                       {p.name}
                     </span>
                   </SelectItem>
@@ -1814,7 +1814,7 @@ export function CandidaturasSection() {
               </p>
             )}
             {!projects.isLoading && cityProjects.length === 0 && (
-              <p className="text-xs text-amber-600">
+              <p className="text-xs text-amber-700">
                 Não tens nenhuma cidade disponível para alocar (verifica o teu centro de custos).
               </p>
             )}
@@ -1829,7 +1829,7 @@ export function CandidaturasSection() {
               Cancelar
             </Button>
             <Button
-              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+              className="bg-emerald-700 hover:bg-emerald-800 text-white"
               disabled={!approveProjectId || approve.isPending || !approveFor}
               onClick={() => approveFor && approve.mutate({ id: approveFor.id, projectId: Number(approveProjectId) })}
             >
@@ -2322,7 +2322,7 @@ export function AvailabilitySection() {
         ) : (
           <Badge
             variant="outline"
-            className="border-amber-400 text-amber-600 gap-1 font-normal"
+            className="border-amber-400 text-amber-700 gap-1 font-normal"
             title={ex.phone ? `Número não reconhecido: ${ex.phone}` : "Ficha sem telefone"}
           >
             <AlertTriangle className="h-3 w-3" /> {ex.phone ? "número não reconhecido" : "sem número"}
@@ -2348,13 +2348,13 @@ export function AvailabilitySection() {
                   {d.note && <span className="text-muted-foreground text-xs" aria-label="tem nota">✱</span>}
                 </span>
                 {(d.fromHour != null || d.toHour != null) && (
-                  <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                  <span className="text-[11px] text-muted-foreground whitespace-nowrap">
                     {d.fromHour ?? "?"}h–{d.toHour ?? "?"}h
                   </span>
                 )}
               </span>
             ) : (
-              <span className="text-muted-foreground/30">·</span>
+              <span className="text-muted-foreground/50" aria-hidden>·</span>
             )}
           </button>
         </td>
@@ -2395,8 +2395,8 @@ export function AvailabilitySection() {
             aria-expanded={showCompose}
           >
             {showCompose ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-            <span className="font-medium">Mensagem e envio de teste</span>
-            <span className="text-xs text-muted-foreground truncate">
+            <span className="font-medium shrink-0">Mensagem e envio de teste</span>
+            <span className="text-xs text-muted-foreground truncate min-w-0" title={AVAILABILITY_KINDS.find((k) => k.id === msgKind)?.label ?? msgKind}>
               · {AVAILABILITY_KINDS.find((k) => k.id === msgKind)?.label ?? msgKind}{note.trim() ? " · com nota" : ""}
             </span>
           </button>
@@ -2537,7 +2537,7 @@ export function AvailabilitySection() {
                 {shownExtras.length}
                 {shownExtras.length !== o.totalExtras ? ` de ${o.totalExtras}` : ""} extras ativos ·{" "}
                 {shownResponded} responderam para {o.weekStart} – {o.weekEnd} ·{" "}
-                <span className={shownWithPhone === 0 ? "text-amber-600" : undefined}>
+                <span className={shownWithPhone === 0 ? "text-amber-700" : undefined}>
                   {shownWithPhone} com número válido
                 </span>
               </div>
@@ -2567,7 +2567,7 @@ export function AvailabilitySection() {
                     checked={onlyNotContacted24h}
                     onChange={(e) => { setOnlyNotContacted24h(e.target.checked); setSelectedIds(new Set()); }}
                   />
-                  Sem mensagem nas últimas 24h <span className="opacity-70">({notContacted24hCount})</span>
+                  Sem mensagem nas últimas 24h <span className="text-muted-foreground">({notContacted24hCount})</span>
                 </label>
               </div>
             </div>
@@ -2597,7 +2597,7 @@ export function AvailabilitySection() {
                 )}
               </div>
               {hiddenSelectedCount > 0 && (
-                <p className="text-xs text-amber-600">
+                <p className="text-xs text-amber-700">
                   {hiddenSelectedCount} selecionado(s) fora dos filtros atuais — continuam incluídos no envio.
                 </p>
               )}
@@ -2620,7 +2620,7 @@ export function AvailabilitySection() {
                   onClick={() => changeCityFilter(key)}
                 >
                   {label}
-                  <span className="ml-1 opacity-70">{cityCounts[key] ?? 0}</span>
+                  <span className="ml-1 opacity-90 tabular-nums">{cityCounts[key] ?? 0}</span>
                 </Button>
               ))}
             </div>
@@ -2668,7 +2668,7 @@ export function AvailabilitySection() {
               {windowFilterActive ? (
                 <span className="text-xs text-muted-foreground">
                   {windowHoursActive ? formatHourWindow(windowFrom!, windowTo!) : "qualquer hora"} ·{" "}
-                  <span className={windowMatchCount === 0 ? "text-amber-600" : "text-foreground font-medium"}>
+                  <span className={windowMatchCount === 0 ? "text-amber-700" : "text-foreground font-medium"}>
                     {windowMatchCount} {windowMatchCount === 1 ? "disponível" : "disponíveis"}
                   </span>
                 </span>
@@ -2723,7 +2723,7 @@ export function AvailabilitySection() {
                       <td className="py-1 px-2" />
                       {shownPerDay.map((p) => (
                         <td key={p.day} className="px-1 text-center">
-                          <span className="text-amber-600">{p.morning}</span>
+                          <span className="text-amber-700">{p.morning}</span>
                           {" / "}
                           <span className="text-indigo-600">{p.night}</span>
                         </td>
@@ -2781,12 +2781,12 @@ export function AvailabilitySection() {
                         <span className="font-medium text-sm">{cityGroupLabel(g.key)}</span>
                         <span className="text-xs text-muted-foreground">{g.rows.length}</span>
                         <span className="text-[11px] text-muted-foreground truncate hidden sm:inline">
-                          · <span className="text-green-600">{groupCounts.available} disp.</span>
+                          · <span className="text-green-700">{groupCounts.available} disp.</span>
                           {" · "}{groupCounts.unavailable} indisp.
                           {" · "}{groupCounts.no_answer} sem resposta
                         </span>
                         {selectedInGroup > 0 && (
-                          <Badge variant="secondary" className="h-5 px-1.5 text-[10px] ml-auto shrink-0">{selectedInGroup} selec.</Badge>
+                          <Badge variant="secondary" className="h-5 px-1.5 text-[11px] ml-auto shrink-0">{selectedInGroup} selec.</Badge>
                         )}
                       </button>
                     </div>
@@ -2818,7 +2818,7 @@ export function AvailabilitySection() {
                               <td className="py-1 pr-2" />
                               {groupPerDay.map((p) => (
                                 <td key={p.day} className="px-1 text-center text-xs">
-                                  <span className="text-amber-600">{p.morning}</span>
+                                  <span className="text-amber-700">{p.morning}</span>
                                   {" / "}
                                   <span className="text-indigo-600">{p.night}</span>
                                 </td>
@@ -2995,7 +2995,7 @@ export function AvailabilitySection() {
                     {waPreviewText}
                   </div>
                 ) : (
-                  <p className="text-xs text-amber-600">
+                  <p className="text-xs text-amber-700">
                     {templatePreview.data && !templatePreview.data.ok
                       ? templatePreview.data.reason
                       : "Pré-visualização indisponível — o envio continua a funcionar."}
@@ -3055,7 +3055,7 @@ export function AvailabilitySection() {
                 Fechar
               </Button>
               <Button
-                className="bg-green-600 hover:bg-green-700 text-white"
+                className="bg-green-700 hover:bg-green-800 text-white"
                 disabled={waMissingParam || broadcast.isPending || waValidCount === 0}
                 onClick={() => submitBroadcast()}
               >

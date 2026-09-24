@@ -23,10 +23,10 @@ function Section({ title, count, link, linkLabel, tone, children }: {
   return (
     <details className="border rounded-lg group">
       <summary className="flex items-center justify-between gap-2 px-3 py-2 cursor-pointer select-none text-sm">
-        <span className="font-medium">{title}</span>
-        <span className="flex items-center gap-2">
+        <span className="font-medium min-w-0">{title}</span>
+        <span className="flex items-center gap-2 shrink-0">
           <Badge variant="outline" className={`tabular-nums ${badgeCls}`}>{count}</Badge>
-          {link && <Link href={link} className="text-xs text-blue-700 hover:underline" onClick={(e) => e.stopPropagation()}>{linkLabel ?? "abrir"}</Link>}
+          {link && <Link href={link} className="text-xs text-blue-700 hover:underline whitespace-nowrap" onClick={(e) => e.stopPropagation()}>{linkLabel ?? "abrir"}</Link>}
         </span>
       </summary>
       {count > 0 && children && <div className="px-3 pb-3 text-xs space-y-1 max-h-72 overflow-y-auto">{children}</div>}
@@ -63,7 +63,7 @@ export function ShiftHandoverDraftPanel({ draft, loading, onRefresh }: { draft: 
           <div className="grid grid-cols-6 sm:grid-cols-12 gap-1 mb-2">
             {draft.byHour.map((h) => (
               <div key={h.hour} className={`rounded border p-1 text-center ${peak > 0 && h.checkins + h.checkouts === peak ? "border-amber-400 bg-amber-50/60" : ""}`} title={`${h.label}: ${h.checkins} recolhas, ${h.checkouts} entregas`}>
-                <div className="text-[10px] text-muted-foreground">{h.label}</div>
+                <div className="text-[11px] text-muted-foreground">{h.label}</div>
                 <div className="tabular-nums"><span className="text-emerald-700">{h.checkins}</span>/<span className="text-blue-700">{h.checkouts}</span></div>
               </div>
             ))}
@@ -135,14 +135,14 @@ export function OpenItemsEditor({ items, onChange, disabled }: { items: OpenItem
             disabled={disabled}
             onCheckedChange={(v) => onChange(items.map((x) => (x.key === i.key ? { ...x, resolved: !!v, resolvedAt: v ? x.resolvedAt ?? null : null, resolvedByName: v ? x.resolvedByName ?? null : null } : x)))}
           />
-          <span className="flex-1">
-            <Badge variant="outline" className="mr-1 text-[10px]">{OPEN_ITEM_LABELS[i.kind]}</Badge>
+          <span className="flex-1 min-w-0 break-words">
+            <Badge variant="outline" className="mr-1 text-[11px]">{OPEN_ITEM_LABELS[i.kind]}</Badge>
             <span className={i.resolved ? "line-through" : ""}>{i.text}</span>
-            {i.since && <span className="text-[10px] text-muted-foreground"> · desde {i.since.replace(" morning", " manhã").replace(" night", " noite")}</span>}
-            {i.resolved && i.resolvedByName && <span className="text-[10px] text-muted-foreground"> · resolvido por {i.resolvedByName}</span>}
+            {i.since && <span className="text-[11px] text-muted-foreground"> · desde {i.since.replace(" morning", " manhã").replace(" night", " noite")}</span>}
+            {i.resolved && i.resolvedByName && <span className="text-[11px] text-muted-foreground"> · resolvido por {i.resolvedByName}</span>}
           </span>
           {!i.resolved && i.kind === "note" && !i.since && (
-            <button type="button" className="text-xs text-muted-foreground hover:text-red-600" disabled={disabled} onClick={(e) => { e.preventDefault(); onChange(items.filter((x) => x.key !== i.key)); }}>remover</button>
+            <button type="button" className="text-xs text-muted-foreground hover:text-red-600 shrink-0" disabled={disabled} onClick={(e) => { e.preventDefault(); onChange(items.filter((x) => x.key !== i.key)); }}>remover</button>
           )}
         </label>
       ))}

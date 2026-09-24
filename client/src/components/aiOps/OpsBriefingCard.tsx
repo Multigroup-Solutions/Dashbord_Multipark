@@ -34,7 +34,7 @@ function BriefingBlock({ b }: { b: any }) {
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-semibold">{CITY_LABEL[b.city] ?? b.city}</span>
         <span className="text-xs text-muted-foreground">{shortDay(b.day)}</span>
-        {b.aiUsed && <Badge variant="outline" className="text-[10px] gap-1"><Sparkles className="h-3 w-3" />texto IA</Badge>}
+        {b.aiUsed && <Badge variant="outline" className="text-[11px] gap-1"><Sparkles className="h-3 w-3" />texto IA</Badge>}
       </div>
       {b.summary && <p className="text-sm leading-relaxed bg-muted/40 rounded-lg p-3">{b.summary}</p>}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -65,7 +65,7 @@ function BriefingBlock({ b }: { b: any }) {
               <ul className="space-y-1">
                 {d.sla.items.map((i: any) => (
                   <li key={`${i.type}-${i.id}`} className="break-words">
-                    {i.overdue && <Badge variant="secondary" className="mr-1 bg-red-100 text-red-800 text-[10px]">em atraso</Badge>}
+                    {i.overdue && <Badge variant="secondary" className="mr-1 bg-red-100 text-red-800 text-[11px]">em atraso</Badge>}
                     {i.type === "complaint" ? "Reclamação" : "Ocorrência"} #{i.id} — {i.title}
                   </li>
                 ))}
@@ -88,7 +88,7 @@ function BriefingBlock({ b }: { b: any }) {
             <div>
               <div className="text-xs font-semibold mb-1">Alertas</div>
               <ul className="space-y-1">{d.anomalies.map((a: any, n: number) => (
-                <li key={n} className="break-words">{a.severity === "critical" && <Badge variant="destructive" className="mr-1 text-[10px]">crítico</Badge>}{a.detail}{a.explanation && <div className="text-xs text-muted-foreground italic">{a.explanation}</div>}</li>
+                <li key={n} className="break-words">{a.severity === "critical" && <Badge variant="destructive" className="mr-1 text-[11px]">crítico</Badge>}{a.detail}{a.explanation && <div className="text-xs text-muted-foreground italic">{a.explanation}</div>}</li>
               ))}</ul>
             </div>
           )}

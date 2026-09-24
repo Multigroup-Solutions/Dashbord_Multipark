@@ -14,9 +14,14 @@ import { useTableSort, Th } from "@/components/SortableTable";
 import DateRangeNav from "@/components/DateRangeNav";
 import BookingDetailDialog from "@/components/BookingDetailDialog";
 import { toast } from "sonner";
+import { StatValue } from "@/components/StatValue";
+
 import {
   Sparkles, Euro, TrendingUp, CheckCircle2, Clock, Droplets, Zap, Car, Package, Download,
 } from "lucide-react";
+
+const fmtN = (n: number) => n.toLocaleString("pt-PT");
+const fmtE = (n: number) => n.toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
 
 const SERVICE_ICONS: Record<string, any> = {
   lavagem: Droplets,
@@ -176,29 +181,29 @@ export default function ServicesPage() {
         <>
           {/* KPIs */}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-            <Card className="p-3">
-              <div className="flex items-center gap-2"><Sparkles className="w-4 h-4" /><span className="text-xs text-muted-foreground">Total</span></div>
-              <p className="text-2xl font-bold mt-1">{stats.total}</p>
+            <Card className="p-3 gap-1 min-w-0">
+              <div className="flex items-center gap-2"><Sparkles className="w-4 h-4" /><span className="text-xs text-muted-foreground truncate">Total</span></div>
+              <StatValue value={fmtN(stats.total)} max={24} />
             </Card>
-            <Card className="p-3">
-              <div className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-green-500" /><span className="text-xs text-muted-foreground">Feitos</span></div>
-              <p className="text-2xl font-bold mt-1 text-green-600">{stats.done}</p>
+            <Card className="p-3 gap-1 min-w-0">
+              <div className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-green-500" /><span className="text-xs text-muted-foreground truncate">Feitos</span></div>
+              <StatValue value={fmtN(stats.done)} max={24} className="text-green-700" />
             </Card>
-            <Card className="p-3">
-              <div className="flex items-center gap-2"><Clock className="w-4 h-4 text-amber-500" /><span className="text-xs text-muted-foreground">Pendentes</span></div>
-              <p className="text-2xl font-bold mt-1 text-amber-600">{stats.pending}</p>
+            <Card className="p-3 gap-1 min-w-0">
+              <div className="flex items-center gap-2"><Clock className="w-4 h-4 text-amber-500" /><span className="text-xs text-muted-foreground truncate">Pendentes</span></div>
+              <StatValue value={fmtN(stats.pending)} max={24} className="text-amber-700" />
             </Card>
-            <Card className="p-3">
-              <div className="flex items-center gap-2"><Euro className="w-4 h-4 text-blue-500" /><span className="text-xs text-muted-foreground">Valor Total</span></div>
-              <p className="text-2xl font-bold mt-1">{stats.totalValue.toFixed(2)} €</p>
+            <Card className="p-3 gap-1 min-w-0">
+              <div className="flex items-center gap-2"><Euro className="w-4 h-4 text-blue-500" /><span className="text-xs text-muted-foreground truncate">Valor Total</span></div>
+              <StatValue value={fmtE(stats.totalValue)} max={24} />
             </Card>
-            <Card className="p-3">
-              <div className="flex items-center gap-2"><Euro className="w-4 h-4 text-green-500" /><span className="text-xs text-muted-foreground">Valor Feitos</span></div>
-              <p className="text-2xl font-bold mt-1 text-green-600">{stats.doneValue.toFixed(2)} €</p>
+            <Card className="p-3 gap-1 min-w-0">
+              <div className="flex items-center gap-2"><Euro className="w-4 h-4 text-green-500" /><span className="text-xs text-muted-foreground truncate">Valor Feitos</span></div>
+              <StatValue value={fmtE(stats.doneValue)} max={24} className="text-green-700" />
             </Card>
-            <Card className="p-3">
-              <div className="flex items-center gap-2"><Euro className="w-4 h-4 text-amber-500" /><span className="text-xs text-muted-foreground">Valor Pendente</span></div>
-              <p className="text-2xl font-bold mt-1 text-amber-600">{stats.pendingValue.toFixed(2)} €</p>
+            <Card className="p-3 gap-1 min-w-0">
+              <div className="flex items-center gap-2"><Euro className="w-4 h-4 text-amber-500" /><span className="text-xs text-muted-foreground truncate">Valor Pendente</span></div>
+              <StatValue value={fmtE(stats.pendingValue)} max={24} className="text-amber-700" />
             </Card>
           </div>
 
@@ -207,17 +212,17 @@ export default function ServicesPage() {
             {Object.entries(stats.byType).map(([name, d]) => {
               const Icon = getServiceIcon(name);
               return (
-                <Card key={name} className="p-3">
+                <Card key={name} className="p-3 gap-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <Icon className="w-4 h-4 text-primary" />
-                    <span className="text-xs font-medium">{name}</span>
+                    <Icon className="w-4 h-4 shrink-0 text-primary" />
+                    <span className="text-xs font-medium truncate" title={name}>{name}</span>
                   </div>
-                  <div className="mt-2 flex items-baseline gap-3">
-                    <p className="text-lg font-bold">{d.count}</p>
-                    <span className="text-xs text-green-600">{d.done} feitos</span>
-                    {d.pending > 0 && <span className="text-xs text-amber-600">{d.pending} pend.</span>}
+                  <div className="mt-1 flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5 tabular-nums">
+                    <p className="text-lg font-bold">{fmtN(d.count)}</p>
+                    <span className="text-xs text-green-700 whitespace-nowrap">{fmtN(d.done)} feitos</span>
+                    {d.pending > 0 && <span className="text-xs text-amber-700 whitespace-nowrap">{fmtN(d.pending)} pend.</span>}
                   </div>
-                  <p className="text-xs text-muted-foreground mt-1">{d.value.toFixed(2)} €</p>
+                  <p className="text-xs text-muted-foreground tabular-nums">{fmtE(d.value)}</p>
                 </Card>
               );
             })}
@@ -232,11 +237,11 @@ export default function ServicesPage() {
                   {Object.entries(stats.byPark)
                     .sort(([, a], [, b]) => b.count - a.count)
                     .map(([park, d]) => (
-                      <div key={park} className="flex items-center justify-between p-2 rounded bg-muted">
-                        <span className="text-sm font-medium">{park}</span>
-                        <div className="flex items-center gap-4 text-sm">
-                          <span>{d.count} serviços</span>
-                          <Badge variant="secondary">{d.value.toFixed(2)} €</Badge>
+                      <div key={park} className="flex items-center justify-between gap-3 p-2 rounded bg-muted">
+                        <span className="text-sm font-medium min-w-0 truncate" title={park}>{park}</span>
+                        <div className="flex items-center gap-2 sm:gap-4 text-sm shrink-0 tabular-nums">
+                          <span className="whitespace-nowrap">{fmtN(d.count)} <span className="hidden sm:inline">serviços</span><span className="sm:hidden">serv.</span></span>
+                          <Badge variant="secondary">{fmtE(d.value)}</Badge>
                         </div>
                       </div>
                     ))}
@@ -297,7 +302,7 @@ export default function ServicesPage() {
 
           {/* Table */}
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[760px] text-sm">
               <thead>
                 <tr className="border-b text-left">
                   <Th k="serviceName" label="Serviço" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
@@ -316,15 +321,15 @@ export default function ServicesPage() {
                     className="border-b hover:bg-muted/50 cursor-pointer"
                     onClick={() => setDetailExternalId(s.bookingId)}
                   >
-                    <td className="p-2 font-medium">
+                    <td className="p-2 font-medium min-w-[12rem]">
                       {s.serviceName}
-                      {s.isFlag && <Badge variant="outline" className="ml-1 text-[9px] text-muted-foreground">flag</Badge>}
+                      {s.isFlag && <Badge variant="outline" className="ml-1 text-[11px] text-muted-foreground">flag</Badge>}
                     </td>
                     <td className="p-2 text-xs">{(s as any).clientName || "—"}</td>
-                    <td className="p-2 font-mono text-xs">{s.licensePlate || "—"}</td>
+                    <td className="p-2 font-mono text-xs whitespace-nowrap">{s.licensePlate || "—"}</td>
                     <td className="p-2">{s.parkName || "—"}</td>
-                    <td className="p-2 text-right">{(s.price || 0).toFixed(2)} €</td>
-                    <td className="p-2 text-xs">{s.checkOut ? fmtPTDate(s.checkOut) : "—"}</td>
+                    <td className="p-2 text-right tabular-nums whitespace-nowrap">{fmtE(s.price || 0)}</td>
+                    <td className="p-2 text-xs whitespace-nowrap">{s.checkOut ? fmtPTDate(s.checkOut) : "—"}</td>
                     <td className="p-2">
                       {/* Clicar dá baixa / reabre (guardado na app; o sync respeita) */}
                       <button
