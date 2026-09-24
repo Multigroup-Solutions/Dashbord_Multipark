@@ -266,67 +266,73 @@ app.get("/api/cron/multipark-future", async (req, res) => {
 app.get("/api/cron/daily-ops", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
   try {
-    // Despesas: marca vencidas como "overdue" (antes só existia um botão
-    // manual super_admin que ninguém carregava — os KPIs de "Em Atraso"
-    // nunca mexiam) e lança as despesas recorrentes do mês em nome do
-    // utilizador de sistema (antes era quem abrisse a página primeiro).
-    try {
-      const { markOverdueExpenses } = await import("../db");
-      await markOverdueExpenses();
-    } catch (err) {
-      console.warn("[daily-ops] markOverdueExpenses:", err);
-    }
-    // Recorrentes do mês corrente (Lisboa): idempotente (lock + UNIQUE por
-    // modelo/mês). Deixou de correr ao abrir a página de despesas.
-    try {
-      const { generateRecurringExpensesForMonth } = await import("../expenseRecurring");
-      const { lisbonToday } = await import("../../shared/expensePeriods");
-      const [y, m] = lisbonToday().split("-").map(Number);
-      const r = await generateRecurringExpensesForMonth(y, m, null);
-      if (r.created > 0) console.log(`[daily-ops] recorrentes ${r.period}: ${r.created} lançada(s), ${r.skipped} já existiam`);
-    } catch (err) {
-      console.warn("[daily-ops] recorrentes:", err);
-    }
-
-    // Segunda-feira (Lisboa): gera automaticamente a avaliação da semana ANTERIOR
-    try {
-      const lisbonNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Lisbon" }));
-      if (lisbonNow.getDay() === 1) {
-        const prev = new Date(lisbonNow); prev.setDate(prev.getDate() - 7);
-        const d = new Date(Date.UTC(prev.getFullYear(), prev.getMonth(), prev.getDate()));
-        const dayNum = d.getUTCDay() || 7;
-        d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-        const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-        const week = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
-        const { generateWeeklyEvaluation } = await import("../db");
-        const r = await generateWeeklyEvaluation(week, d.getUTCFullYear());
-        console.log(`[daily-ops] avaliação semanal S${week} gerada (${r.length} condutores)`);
+    const startedAt = Date.now();
+    // Tarefas de manutenção só na 1.ª chamada: as repetições (done:false) trazem
+    // ?collectOnly=1 e usam os 45s todos na recolha — antes voltavam a correr
+    // tudo e a recolha podia passar dos 60s do Vercel (504).
+    if (req.query?.collectOnly !== "1") {
+      // Despesas: marca vencidas como "overdue" (antes só existia um botão
+      // manual super_admin que ninguém carregava — os KPIs de "Em Atraso"
+      // nunca mexiam) e lança as despesas recorrentes do mês em nome do
+      // utilizador de sistema (antes era quem abrisse a página primeiro).
+      try {
+        const { markOverdueExpenses } = await import("../db");
+        await markOverdueExpenses();
+      } catch (err) {
+        console.warn("[daily-ops] markOverdueExpenses:", err);
       }
-    } catch (err) {
-      console.warn("[daily-ops] avaliação semanal:", err);
-    }
+      // Recorrentes do mês corrente (Lisboa): idempotente (lock + UNIQUE por
+      // modelo/mês). Deixou de correr ao abrir a página de despesas.
+      try {
+        const { generateRecurringExpensesForMonth } = await import("../expenseRecurring");
+        const { lisbonToday } = await import("../../shared/expensePeriods");
+        const [y, m] = lisbonToday().split("-").map(Number);
+        const r = await generateRecurringExpensesForMonth(y, m, null);
+        if (r.created > 0) console.log(`[daily-ops] recorrentes ${r.period}: ${r.created} lançada(s), ${r.skipped} já existiam`);
+      } catch (err) {
+        console.warn("[daily-ops] recorrentes:", err);
+      }
 
-    // Fecha check-ins esquecidos (>16h abertos → check-out a +12h, [SUSPEITO])
-    try {
-      const { autoCloseStaleCheckIns } = await import("../db");
-      const r = await autoCloseStaleCheckIns();
-      if (r.closed > 0) console.log(`[daily-ops] auto-checkout de ${r.closed} ponto(s) esquecido(s)`);
-    } catch (err) {
-      console.warn("[daily-ops] autoCloseStaleCheckIns:", err);
-    }
-    // RH: regra documental (escrita SÓ aqui e na ação admin — nunca no auth.me)
-    // e "possíveis faltas" de ontem (pendentes de validação; não bloqueiam).
-    try {
-      const { applyDocsComplianceAll, detectExtraDiaNoShows } = await import("../rhService");
-      const d = await applyDocsComplianceAll();
-      const { lisbonToday } = await import("../../shared/expensePeriods");
-      const y = new Date(Date.now() - 86400000);
-      const yesterday = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit" }).format(y);
-      void lisbonToday;
-      const n = await detectExtraDiaNoShows(yesterday);
-      console.log(`[daily-ops] RH: docs verificados ${d.checked}; possíveis faltas ${yesterday}: ${n.created} novas (${n.alreadyPending} já registadas)`);
-    } catch (err) {
-      console.warn("[daily-ops] RH docs/faltas:", err);
+      // Segunda-feira (Lisboa): gera automaticamente a avaliação da semana ANTERIOR
+      try {
+        const lisbonNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Lisbon" }));
+        if (lisbonNow.getDay() === 1) {
+          const prev = new Date(lisbonNow); prev.setDate(prev.getDate() - 7);
+          const d = new Date(Date.UTC(prev.getFullYear(), prev.getMonth(), prev.getDate()));
+          const dayNum = d.getUTCDay() || 7;
+          d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+          const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+          const week = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+          const { generateWeeklyEvaluation } = await import("../db");
+          const r = await generateWeeklyEvaluation(week, d.getUTCFullYear());
+          console.log(`[daily-ops] avaliação semanal S${week} gerada (${r.length} condutores)`);
+        }
+      } catch (err) {
+        console.warn("[daily-ops] avaliação semanal:", err);
+      }
+
+      // Fecha check-ins esquecidos (>16h abertos → check-out a +12h, [SUSPEITO])
+      try {
+        const { autoCloseStaleCheckIns } = await import("../db");
+        const r = await autoCloseStaleCheckIns();
+        if (r.closed > 0) console.log(`[daily-ops] auto-checkout de ${r.closed} ponto(s) esquecido(s)`);
+      } catch (err) {
+        console.warn("[daily-ops] autoCloseStaleCheckIns:", err);
+      }
+      // RH: regra documental (escrita SÓ aqui e na ação admin — nunca no auth.me)
+      // e "possíveis faltas" de ontem (pendentes de validação; não bloqueiam).
+      try {
+        const { applyDocsComplianceAll, detectExtraDiaNoShows } = await import("../rhService");
+        const d = await applyDocsComplianceAll();
+        const { lisbonToday } = await import("../../shared/expensePeriods");
+        const y = new Date(Date.now() - 86400000);
+        const yesterday = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit" }).format(y);
+        void lisbonToday;
+        const n = await detectExtraDiaNoShows(yesterday);
+        console.log(`[daily-ops] RH: docs verificados ${d.checked}; possíveis faltas ${yesterday}: ${n.created} novas (${n.alreadyPending} já registadas)`);
+      } catch (err) {
+        console.warn("[daily-ops] RH docs/faltas:", err);
+      }
     }
 
     const { collectDailyDriverData } = await import("../jobs/dailyDriverCollection");
@@ -339,7 +345,7 @@ app.get("/api/cron/daily-ops", async (req, res) => {
     // Prazo < maxDuration (60s): sem isto a recolha morria com 504 a meio e a
     // corrida seguinte via registos parciais e desistia. done:false → o
     // workflow chama outra vez até done:true (a recolha é retomável).
-    const result = await collectDailyDriverData(yesterday, { deadlineAt: Date.now() + 45_000 });
+    const result = await collectDailyDriverData(yesterday, { deadlineAt: startedAt + 45_000 });
     res.json({ ok: true, ranAt: new Date().toISOString(), date: yesterday.toISOString().slice(0, 10), ...result });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: String(err?.message ?? err) });

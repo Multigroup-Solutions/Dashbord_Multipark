@@ -2,6 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 
+// Sem BD nos testes: o middleware de cidades (centro de custos) dá acesso total.
+vi.mock("./cityAccess", async original => ({
+  ...await original<object>(),
+  loadCityAccess: async () => ({ all: true, defaultCityId: null, cityIds: [], projectIds: [], missingCostCenter: false }),
+}));
+
 // ─── Mock the multipark module ─────────────────────────────────────────────
 vi.mock("./multipark", () => ({
   healthCheck: vi.fn().mockResolvedValue({ status: "ok", timestamp: "2026-03-03T12:00:00Z", version: "1.0.0" }),

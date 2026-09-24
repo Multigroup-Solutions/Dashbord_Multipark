@@ -23,4 +23,7 @@ jobs:
           curl --fail-with-body --silent --show-error --max-time 65 \
             -H "Authorization: Bearer $CRON_SECRET" \
             "$APP_URL/api/cron/multipark-deliveries" > result.json
-          node -e 'const r = require("./result.json"); console.log(r); if (r.ok !== true) process.exit(1)'
+          # Erros de itens individuais (reserva ainda incompleta, histórico que
+          # falhou) já são repetidos pela fila com backoff: ficam como aviso.
+          # Vermelho só quando o endpoint em si falha (HTTP != 2xx → curl acima).
+          node -e 'const r = require("./result.json"); console.log(r); if (r.ok !== true) console.log(`::warning::itens por repetir — fila: ${r.failed ?? 0}, detalhe: ${r.details?.errors ?? 0}, histórico: ${r.history?.errors ?? 0}`)'
