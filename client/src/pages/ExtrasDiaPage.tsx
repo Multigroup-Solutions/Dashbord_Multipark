@@ -80,10 +80,9 @@ import {
 } from "@shared/whatsappTemplate";
 import { matchesContactQuery } from "@shared/contactSearch";
 
-// Defaults para o preview do UI — devem coincidir com a tabela `extra_rates`
-// na BD (migration 0044). O custo real é sempre calculado no backend a partir
-// de `extra_rates`; estes valores só servem para mostrar previsões enquanto
-// o admin compõe a escala.
+// Valores por defeito — as taxas vivas vêm de `extra_rates` (a mesma fonte do
+// servidor: server/extraRates.ts). A escala é a ESTIMATIVA do custo do dia;
+// o extra recebe pelo ponto (horas de ponto × a mesma taxa).
 const LEVELS = [
   { id: "junior", label: "Júnior", hourlyRate: 4.5 },
   { id: "senior", label: "Sénior", hourlyRate: 5 },
@@ -98,8 +97,11 @@ function useLiveLevels() {
   const { data: rates = [] } = trpc.rh.extraRates.list.useQuery();
   return useMemo(() => {
     const byName = new Map<string, number>();
+    const NAME_BY_LEVEL: Record<number, string> = { 1: "junior", 2: "senior", 3: "terminal", 4: "master" };
     for (const r of rates as any[]) {
-      if (r.levelName) byName.set(String(r.levelName), parseFloat(String(r.hourlyRate)));
+      const name = r.levelName ? String(r.levelName).toLowerCase() : NAME_BY_LEVEL[Number(r.level)];
+      const rate = parseFloat(String(r.hourlyRate));
+      if (name && Number.isFinite(rate) && rate > 0) byName.set(name, rate);
     }
     return LEVELS.map(l => ({
       ...l,

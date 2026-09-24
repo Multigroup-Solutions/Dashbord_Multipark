@@ -240,6 +240,7 @@ jobs:
           # As repetições levam ?collectOnly=1: a manutenção (despesas, RH…) só
           # corre na 1.ª chamada e o resto do tempo vai todo para a recolha.
           query=""
+          step_errors=""
           for i in 1 2 3 4 5 6 7 8 9 10; do
             code=$(curl -sS -m 90 -w '%{http_code}' -o /tmp/body.txt \
               -H "Authorization: Bearer ${CRON_SECRET:-}" \
@@ -252,9 +253,15 @@ jobs:
             if grep -q '"ok":false' /tmp/body.txt; then
               echo "::error::endpoint reportou ok:false"; exit 1
             fi
+            # Passos de manutenção falhados (despesas, avaliação, RH…): a recolha
+            # continua, mas o run fica vermelho no fim.
+            if grep -q '"stepErrors":\["' /tmp/body.txt; then step_errors="$(grep -o '"stepErrors":\[[^]]*\]' /tmp/body.txt)"; fi
             grep -q '"done":false' /tmp/body.txt || break
             query="?collectOnly=1"
           done
+          if [ -n "$step_errors" ]; then
+            echo "::error::passos do daily-ops falharam: $step_errors"; exit 1
+          fi
       - name: Alerta — abrir/comentar issue em caso de falha
         if: failure()
         env:

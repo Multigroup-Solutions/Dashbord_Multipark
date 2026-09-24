@@ -27,8 +27,9 @@ import { and, eq, gte, lte, sql, isNotNull, inArray, notInArray, or, isNull } fr
 import {
   multiparkBookings, projects, expenses, expenseCategories, extrasDiaAssignments,
   partnerships, partnerAliases, employees, employeeSalaryHistory, marketingExpenses,
-  campaignDailyStats, campaigns,
+  campaignDailyStats, campaigns, timeRecords,
 } from "../../drizzle/schema";
+import { loadExtraRates, rateFor } from "../extraRates";
 import { getDb, resolveProjectIds, toMysqlDateTime, getPayrollData } from "../db";
 import { matchCityKey } from "../../shared/city";
 import { parsePartnerConfig } from "../../shared/partnerTypes";
@@ -77,7 +78,12 @@ export interface FinanceResult {
     expensesPending: number;           // informativo (vencimento no período), NÃO soma
     salariesBase: number; salariesProvisions: number; salariesVariable: number; salaries: number;
     employerTax: number;
+    /** extras que entram na margem: real (ponto) até hoje + previsto (escala) nos dias futuros */
     extrasDia: number;
+    /** estimativa pela escala do Extras Dia (período inteiro) */
+    extrasPlanned: number;
+    /** pago pelo ponto (horas × tarifa) no período */
+    extrasReal: number;
     salesCommissions: number; operationalCommissions: number;
     totalNet: number; totalGross: number;
   };
@@ -89,7 +95,10 @@ export interface FinanceResult {
     collected: Array<{ projectId: number | null; projectName: string | null; count: number; totalRevenue: number }>;
     expenses: Array<{ projectId: number | null; projectName: string | null; categoryName: string | null; count: number; totalAmount: number }>;
     expensesPending: Array<{ projectId: number | null; projectName: string | null; categoryName: string | null; supplier: string | null; count: number; totalAmount: number }>;
+    /** previsto (escala), por nível */
     extrasDia: Array<{ level: string; hours: number; headcount: number; cost: number }>;
+    /** real (ponto), por nível */
+    extrasReal: Array<{ level: string; hours: number; headcount: number; cost: number }>;
     salesCommissions: Array<{ partnerId: number; partnerName: string; projectId: number | null; projectName: string | null; bookingsCount: number; revenueGross: number; commissionRate: number | null; commission: number; status: R.CommissionStatus }>;
     operationalPartners: Array<{ partnershipId: number; partnerName: string | null; partnerType: string | null; projectNames: string[]; bookingsCount: number; revenueGross: number; commissionRate: number; commission: number }>;
     salariesByProject: Array<{ projectId: number | null; projectName: string | null; cost: number }>;
@@ -129,10 +138,10 @@ export function emptyFinanceResult(filters: FinanceFilters): FinanceResult {
     params: { vatRate: R.FINANCE_PARAMS.vatRate, tsuEmployerRate: R.FINANCE_PARAMS.tsuEmployerRate, extrasDiaRates: R.FINANCE_PARAMS.extrasDiaRates },
     scope: { projectId: filters.projectId ?? null, projectIds: null, cities: null },
     revenue: { produced: 0, producedNet: 0, producedCount: 0, collected: 0, collectedNet: 0, collectedCount: 0, extrasRevenue: 0 },
-    costs: { expenses: 0, expensesNet: 0, expensesPending: 0, salariesBase: 0, salariesProvisions: 0, salariesVariable: 0, salaries: 0, employerTax: 0, extrasDia: 0, salesCommissions: 0, operationalCommissions: 0, totalNet: 0, totalGross: 0 },
+    costs: { expenses: 0, expensesNet: 0, expensesPending: 0, salariesBase: 0, salariesProvisions: 0, salariesVariable: 0, salaries: 0, employerTax: 0, extrasDia: 0, extrasPlanned: 0, extrasReal: 0, salesCommissions: 0, operationalCommissions: 0, totalNet: 0, totalGross: 0 },
     margin: zeroMargin, timeseries: [],
     forecast: { revenue: 0, count: 0, from: filters.from, to: filters.to, extended: false },
-    details: { deliveries: [], collected: [], expenses: [], expensesPending: [], extrasDia: [], salesCommissions: [], operationalPartners: [], salariesByProject: [], salaryDetails: [], forecast: [], months: [] },
+    details: { deliveries: [], collected: [], expenses: [], expensesPending: [], extrasDia: [], extrasReal: [], salesCommissions: [], operationalPartners: [], salariesByProject: [], salaryDetails: [], forecast: [], months: [] },
     quality: { partnerConflicts: [], partnersRateMissing: [], campaignsWithoutPartner: [], expensesWithoutProject: { count: 0, total: 0 }, employeesWithoutProject: 0, inactiveWithoutContractEnd: 0, extrasDiaTeamLeaderShifts: 0, payrollVariableMonths: [], marketingExcluded: { adSpend: 0, marketingExpenses: 0 }, isCurrentPeriod: false },
   };
 }
@@ -266,6 +275,26 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
     .from(extrasDiaAssignments)
     .where(and(...extrasConds));
 
+  // Extras — custo REAL: recebem pelo PONTO (horas dos check_out × tarifa do
+  // nível, as mesmas de `extra_rates` do ordenado). Cidade = centro de custos
+  // da ficha do extra.
+  const extraRatesLive = await loadExtraRates();
+  out.params = { ...out.params, extrasDiaRates: extraRatesLive };
+  const pontoConds: any[] = [
+    eq(timeRecords.type, "check_out"),
+    gte(timeRecords.recordedAt, `${from} 00:00:00`), lte(timeRecords.recordedAt, `${to} 23:59:59`),
+    or(eq(employees.contractType, "extra"), eq(employees.position, "extra")),
+    // como no ordenado (payroll/shifts countableShifts): suspeitos/rejeitados não pagam até aprovados
+    inArray(timeRecords.reviewStatus, ["ok", "approved"]),
+    sql`COALESCE(${timeRecords.notes}, '') NOT LIKE '%[SUSPEITO]%'`,
+  ];
+  if (projectIds) pontoConds.push(projectIds.length ? inArray(employees.projectId, projectIds) : sql`1 = 0`);
+  const extrasPontoRows = await db
+    .select({ recordedAt: timeRecords.recordedAt, hours: timeRecords.hoursWorked, level: employees.extraLevel, employeeId: timeRecords.employeeId })
+    .from(timeRecords)
+    .innerJoin(employees, eq(employees.id, timeRecords.employeeId))
+    .where(and(...pontoConds));
+
   // ─── 5. Parceiros (índice com conflitos) + operacionais ───────────────────
   const partnerRows = await db.select({ id: partnerships.id, name: partnerships.name, campaignKey: partnerships.campaignKey, commissionRate: partnerships.commissionRate, partnerType: partnerships.partnerType, notes: partnerships.notes, updatedAt: partnerships.updatedAt }).from(partnerships);
   const aliasRows = await db.select({ partnershipId: partnerAliases.partnershipId, aliasValue: partnerAliases.aliasValue }).from(partnerAliases);
@@ -365,20 +394,40 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   out.quality.expensesWithoutProject = expensesWithoutProject;
   const expensesPending = pendingRows.reduce((s, r) => s + num(r.totalAmount), 0);
 
-  // Equipa do dia
+  // Equipa do dia — a ESCALA é a estimativa (custo previsto); o custo que
+  // conta nas contas é o REAL (ponto) até hoje e o previsto só nos dias futuros.
   const extrasByLevel = new Map<string, { level: string; hours: number; headcount: number; cost: number }>();
+  const extrasPlannedByDay = new Map<string, number>();
+  const extrasRealByDay = new Map<string, number>();
   let tlShifts = 0;
   for (const r of extrasRows) {
     if (r.isTeamLeader) { tlShifts++; continue; }  // salário mensal já paga o team leader
     const hours = R.shiftHours(r.startHour, r.endHour, r.sentHomeHour);
-    const cost = hours * R.extrasDiaRate(r.level);
-    addTo(extrasByDay, r.date, cost);
+    const cost = hours * rateFor(extraRatesLive, r.level);
+    addTo(extrasPlannedByDay, r.date, cost);
     const lv = String(r.level ?? "junior");
     const ex = extrasByLevel.get(lv) ?? { level: lv, hours: 0, headcount: 0, cost: 0 };
     ex.hours += hours; ex.headcount += 1; ex.cost += cost;
     extrasByLevel.set(lv, ex);
   }
   out.quality.extrasDiaTeamLeaderShifts = tlShifts;
+  const extrasRealByLevel = new Map<string, { level: string; hours: number; headcount: number; cost: number }>();
+  const realPeople = new Map<string, Set<number>>();
+  for (const r of extrasPontoRows) {
+    const hours = num(r.hours);
+    if (hours <= 0) continue;
+    const lvName = ({ 1: "junior", 2: "senior", 3: "terminal", 4: "master" } as Record<number, string>)[Number(r.level ?? 1)] ?? "junior";
+    const cost = hours * rateFor(extraRatesLive, lvName);
+    addTo(extrasRealByDay, dayOf(r.recordedAt), cost);
+    const ex = extrasRealByLevel.get(lvName) ?? { level: lvName, hours: 0, headcount: 0, cost: 0 };
+    ex.hours += hours; ex.cost += cost;
+    extrasRealByLevel.set(lvName, ex);
+    const people = realPeople.get(lvName) ?? new Set<number>(); people.add(r.employeeId); realPeople.set(lvName, people);
+  }
+  for (const [lv, ppl] of realPeople) extrasRealByLevel.get(lv)!.headcount = ppl.size;
+  // O que entra na margem: real (ponto) até hoje; previsto (escala) nos dias futuros.
+  for (const [d, v] of extrasRealByDay) if (d <= today) addTo(extrasByDay, d, v);
+  for (const [d, v] of extrasPlannedByDay) if (d > today) addTo(extrasByDay, d, v);
 
   // Comissões de venda (campanha → parceiro)
   const salesAgg = new Map<string, FinanceResult["details"]["salesCommissions"][number]>();
@@ -477,8 +526,8 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   out.quality.inactiveWithoutContractEnd = inactiveWithoutContractEnd;
 
   // Pessoal — variável do RH (horas extra / noturnas / FDS / alimentação) por mês
-  // com ponto registado. Só meses já iniciados. Extras NÃO entram (a escala é a
-  // fonte do custo dos extras — evita a dupla contagem escala + ponto).
+  // com ponto registado. Só meses já iniciados. Extras NÃO entram aqui: o custo
+  // deles (horas de ponto × tarifa) já está em extrasDia — evita contar 2×.
   let salariesVariable = 0;
   const payrollMonths: string[] = [];
   const detailById = new Map(salaryDetails.map((d) => [d.employeeId, d]));
@@ -526,6 +575,8 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   const sum = (m: Map<string, number>) => { let s = 0; for (const v of m.values()) s += v; return s; };
   const produced = sum(producedByDay), collected = sum(collectedByDay), expensesGross = sum(expensesByDay);
   const extrasDia = sum(extrasByDay);
+  const extrasPlanned = sum(extrasPlannedByDay);
+  const extrasReal = sum(extrasRealByDay);
   const salesCommissionsTotal = salesCommissions.reduce((s, r) => s + r.commission, 0);
   const operationalTotal = operationalPartners.reduce((s, r) => s + r.commission, 0);
   const margin = R.computeMargin({ revenueGross: produced, expensesGross, salariesBase, salariesProvisions, salariesVariable, employerTax, extrasDia, salesCommissions: salesCommissionsTotal, operationalCommissions: operationalTotal });
@@ -537,7 +588,7 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   out.costs = {
     expenses: expensesGross, expensesNet: margin.expensesNet, expensesPending,
     salariesBase, salariesProvisions, salariesVariable, salaries: margin.salaries, employerTax,
-    extrasDia, salesCommissions: salesCommissionsTotal, operationalCommissions: operationalTotal,
+    extrasDia, extrasPlanned, extrasReal, salesCommissions: salesCommissionsTotal, operationalCommissions: operationalTotal,
     totalNet: margin.totalCostsNet, totalGross: margin.totalCostsGross,
   };
   out.margin = margin;
@@ -577,6 +628,7 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
     expenses: Array.from(expByProjCat.values()).sort((a, b) => b.totalAmount - a.totalAmount),
     expensesPending: pendingRows.map((r) => ({ projectId: r.projectId ?? null, projectName: r.projectName ?? (r.projectId == null ? "Por atribuir" : null), categoryName: r.categoryName ?? null, supplier: r.supplier ?? null, count: num(r.count), totalAmount: num(r.totalAmount) })),
     extrasDia: Array.from(extrasByLevel.values()),
+    extrasReal: Array.from(extrasRealByLevel.values()),
     salesCommissions,
     operationalPartners,
     salariesByProject: salariesByProjectRows,

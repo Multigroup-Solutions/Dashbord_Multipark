@@ -1505,12 +1505,13 @@ export async function seedExtraRates() {
   if (!db) return;
   const existing = await db.select().from(extraRates).limit(1);
   if (existing.length > 0) return;
+  // Os 4 níveis canónicos (= migração 0044 e server/extraRates.ts). Antes
+  // tinha 5 níveis com valores antigos e INVERTIDOS (nível 1 = 8,50 €).
   const defaults = [
-    { level: 1, hourlyRate: "8.50", label: "Extra Nível 1" },
-    { level: 2, hourlyRate: "7.00", label: "Extra Nível 2" },
-    { level: 3, hourlyRate: "6.00", label: "Extra Nível 3" },
-    { level: 4, hourlyRate: "5.00", label: "Extra Nível 4" },
-    { level: 5, hourlyRate: "4.00", label: "Extra Nível 5" },
+    { level: 1, levelName: "junior", hourlyRate: "4.50", label: "Extra Junior" },
+    { level: 2, levelName: "senior", hourlyRate: "5.00", label: "Extra Senior" },
+    { level: 3, levelName: "terminal", hourlyRate: "5.50", label: "Extra Terminal" },
+    { level: 4, levelName: "master", hourlyRate: "6.00", label: "Extra Master" },
   ];
   await db.insert(extraRates).values(defaults);
 }
@@ -1519,6 +1520,7 @@ export async function updateExtraRate(level: number, hourlyRate: string) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   await db.update(extraRates).set({ hourlyRate }).where(eq(extraRates.level, level));
+  (await import("./extraRates")).invalidateExtraRates();
 }
 
 // ─── RH: STATS ────────────────────────────────────────────────────────────────
@@ -2965,7 +2967,7 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
 
   // Só posições que conduzem (driver, senior_driver, extra)
   const drivers = await db
-    .select({ id: employees.id, fullName: employees.fullName, position: employees.position })
+    .select({ id: employees.id, fullName: employees.fullName, position: employees.position, extraLevel: employees.extraLevel })
     .from(employees)
     .where(and(
       eq(employees.isActive, 1),
@@ -2974,9 +2976,9 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
   if (drivers.length === 0) return [];
   const driverIds = drivers.map(d => d.id);
 
-  // ── 1. Horas trabalhadas: fixos = ponto (time_records); EXTRAS = horas da
-  // ESCALA do extras-dia (fix 2026-08-06 — extras não picam ponto e o Mov/h
-  // ficava vazio). Soma também o CUSTO semanal da escala (horas × tarifa).
+  // ── 1. Horas trabalhadas: todos pelo PONTO (time_records) — os extras picam
+  // ponto e recebem pelo ponto (Jorge, 24 set 2026). A escala do extras-dia só
+  // entra como recurso para quem ainda não tem ponto na semana.
   const hoursRows = await db
     .select({
       employeeId: timeRecords.employeeId,
@@ -3009,10 +3011,12 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
     .groupBy(extrasDiaAssignments.employeeId, extrasDiaAssignments.level);
   const scheduleHoursMap = new Map<number, number>();
   const scheduleCostMap = new Map<number, number>();
+  const { loadExtraRates, rateFor } = await import("./extraRates");
+  const liveRates = await loadExtraRates();
   for (const r of scheduleRows) {
     const empId = Number(r.employeeId);
     const hrs = Number(r.hours ?? 0);
-    const rate = EXTRAS_DIA_RATES[String(r.level ?? "junior")] ?? 4.5;
+    const rate = rateFor(liveRates, r.level ?? "junior");
     scheduleHoursMap.set(empId, (scheduleHoursMap.get(empId) ?? 0) + hrs);
     scheduleCostMap.set(empId, (scheduleCostMap.get(empId) ?? 0) + hrs * rate);
   }
@@ -3101,7 +3105,8 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
     }
   }
 
-  // ── 5. Penalizações abertas criadas na semana (employee_penalties)
+  // ── 5. Penalizações CONFIRMADAS criadas na semana (employee_penalties) —
+  // pendentes (ex.: falta automática ainda por rever) e anuladas não contam.
   const penaltyRows = await db
     .select({
       employeeId: employeePenalties.employeeId,
@@ -3110,6 +3115,7 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
     .from(employeePenalties)
     .where(and(
       inArray(employeePenalties.employeeId, driverIds),
+      eq(employeePenalties.status, "confirmed"),
       gte(employeePenalties.createdAt, startStr),
       lte(employeePenalties.createdAt, endStr),
     ))
@@ -3135,12 +3141,16 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
   const results: any[] = [];
 
   for (const emp of drivers) {
-    // Extras: horas da ESCALA (não picam ponto); fixos: ponto
-    const rawHours = emp.position === "extra"
-      ? (scheduleHoursMap.get(emp.id) ?? hoursMap.get(emp.id) ?? 0)
-      : (hoursMap.get(emp.id) ?? 0);
+    // Todos pelo ponto; extra sem ponto na semana → horas/custo da escala (estimativa)
+    const pontoHours = hoursMap.get(emp.id) ?? 0;
+    const isExtra = emp.position === "extra";
+    const useSchedule = isExtra && pontoHours <= 0;
+    const rawHours = useSchedule ? (scheduleHoursMap.get(emp.id) ?? 0) : pontoHours;
     const hoursWorked = Math.round(rawHours * 100) / 100;
-    const weeklyCost = Math.round((scheduleCostMap.get(emp.id) ?? 0) * 100) / 100;
+    const rawCost = !isExtra ? 0
+      : useSchedule ? (scheduleCostMap.get(emp.id) ?? 0)
+      : pontoHours * rateFor(liveRates, emp.extraLevel ?? 1);
+    const weeklyCost = Math.round(rawCost * 100) / 100;
     const movementsCount = movMap.get(emp.id) ?? 0;
     const movementsPerHour = hoursWorked > 0
       ? Math.round((movementsCount / hoursWorked) * 100) / 100
@@ -6343,7 +6353,9 @@ export async function getProjectCosts(year?: number, month?: number) {
     hoursMap.set(row.employeeId, row.totalHours || 0);
   }
 
-  const rates = await db.select().from(extraRates).orderBy(extraRates.level);
+  const { loadExtraRates, rateFor } = await import("./extraRates");
+  const liveExtraRates = await loadExtraRates();
+  const rateForExtra = (level: number) => rateFor(liveExtraRates, level);
 
   // Calculate salary costs per project
   const salaryCostMap = new Map<number, { totalSalary: number; employeeCount: number }>();
@@ -6363,8 +6375,8 @@ export async function getProjectCosts(year?: number, month?: number) {
       if (!emp) continue;
       if (emp.contractType === "extra") {
         const hours = hoursMap.get(empId) || 0;
-        const rate = rates.find(r => r.level === Number(emp.position || 1));
-        const hourlyRate = rate ? parseFloat(String(rate.hourlyRate)) : 6;
+        // nível do extra = employees.extraLevel (antes lia `position`, que é texto → sempre 6 €)
+        const hourlyRate = rateForExtra(emp.extraLevel ?? 1);
         totalSalary += hours * hourlyRate;
       } else {
         totalSalary += parseFloat(String(emp.monthlySalary || 0));

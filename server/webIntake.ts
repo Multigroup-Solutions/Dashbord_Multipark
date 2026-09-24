@@ -126,7 +126,7 @@ export async function upsertDriverApplication(input: DriverApplicationInput): Pr
           title: `Nova candidatura Be a Driver: ${fullName}`,
           body: `${email}${fields.city ? ` · ${fields.city}` : ""}${fields.drivingExperience ? ` · ${fields.drivingExperience}` : ""}`,
           kind: "driver_application",
-          link: "/extras-dia",
+          link: "/disponibilidade",
         });
       } catch {}
     }

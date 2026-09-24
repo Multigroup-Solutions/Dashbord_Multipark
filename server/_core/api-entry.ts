@@ -267,6 +267,9 @@ app.get("/api/cron/daily-ops", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
   try {
     const startedAt = Date.now();
+    // Passos de manutenção que falharam: antes só iam para o log e o cron ficava
+    // verde; agora vão na resposta e o workflow falha no fim (depois da recolha).
+    const stepErrors: string[] = [];
     // Tarefas de manutenção só na 1.ª chamada: as repetições (done:false) trazem
     // ?collectOnly=1 e usam os 45s todos na recolha — antes voltavam a correr
     // tudo e a recolha podia passar dos 60s do Vercel (504).
@@ -280,6 +283,7 @@ app.get("/api/cron/daily-ops", async (req, res) => {
         await markOverdueExpenses();
       } catch (err) {
         console.warn("[daily-ops] markOverdueExpenses:", err);
+        stepErrors.push(`markOverdueExpenses: ${String((err as any)?.message ?? err).slice(0, 200)}`);
       }
       // Recorrentes do mês corrente (Lisboa): idempotente (lock + UNIQUE por
       // modelo/mês). Deixou de correr ao abrir a página de despesas.
@@ -291,6 +295,7 @@ app.get("/api/cron/daily-ops", async (req, res) => {
         if (r.created > 0) console.log(`[daily-ops] recorrentes ${r.period}: ${r.created} lançada(s), ${r.skipped} já existiam`);
       } catch (err) {
         console.warn("[daily-ops] recorrentes:", err);
+        stepErrors.push(`recorrentes: ${String((err as any)?.message ?? err).slice(0, 200)}`);
       }
 
       // Segunda-feira (Lisboa): gera automaticamente a avaliação da semana ANTERIOR
@@ -309,6 +314,7 @@ app.get("/api/cron/daily-ops", async (req, res) => {
         }
       } catch (err) {
         console.warn("[daily-ops] avaliação semanal:", err);
+        stepErrors.push(`avaliação semanal: ${String((err as any)?.message ?? err).slice(0, 200)}`);
       }
 
       // Fecha check-ins esquecidos (>16h abertos → check-out a +12h, [SUSPEITO])
@@ -318,6 +324,7 @@ app.get("/api/cron/daily-ops", async (req, res) => {
         if (r.closed > 0) console.log(`[daily-ops] auto-checkout de ${r.closed} ponto(s) esquecido(s)`);
       } catch (err) {
         console.warn("[daily-ops] autoCloseStaleCheckIns:", err);
+        stepErrors.push(`autoCloseStaleCheckIns: ${String((err as any)?.message ?? err).slice(0, 200)}`);
       }
       // RH: regra documental (escrita SÓ aqui e na ação admin — nunca no auth.me)
       // e "possíveis faltas" de ontem (pendentes de validação; não bloqueiam).
@@ -332,6 +339,7 @@ app.get("/api/cron/daily-ops", async (req, res) => {
         console.log(`[daily-ops] RH: docs verificados ${d.checked}; possíveis faltas ${yesterday}: ${n.created} novas (${n.alreadyPending} já registadas)`);
       } catch (err) {
         console.warn("[daily-ops] RH docs/faltas:", err);
+        stepErrors.push(`RH docs/faltas: ${String((err as any)?.message ?? err).slice(0, 200)}`);
       }
     }
 
@@ -346,7 +354,7 @@ app.get("/api/cron/daily-ops", async (req, res) => {
     // corrida seguinte via registos parciais e desistia. done:false → o
     // workflow chama outra vez até done:true (a recolha é retomável).
     const result = await collectDailyDriverData(yesterday, { deadlineAt: startedAt + 45_000 });
-    res.json({ ok: true, ranAt: new Date().toISOString(), date: yesterday.toISOString().slice(0, 10), ...result });
+    res.json({ ok: true, ranAt: new Date().toISOString(), date: yesterday.toISOString().slice(0, 10), stepErrors, ...result });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: String(err?.message ?? err) });
   }

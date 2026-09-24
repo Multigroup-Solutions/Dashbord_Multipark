@@ -15,7 +15,8 @@ import { and, asc, eq, gte, lt, lte, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { multiparkBookingHistory, employees } from "../drizzle/schema";
 import { listAssignments } from "./extrasDia";
-import { deriveShortName, DRIVER_LEVELS, TL_WORKING_DAYS_PER_MONTH } from "./extrasDia";
+import { deriveShortName, TL_WORKING_DAYS_PER_MONTH } from "./extrasDia";
+import { loadExtraRates, rateFor } from "./extraRates";
 
 export interface PersonEvaluation {
   assignmentId: number;
@@ -253,6 +254,7 @@ export async function getDashboardRange(
   endDate: string,
 ): Promise<DashboardRange> {
   const db = await getDb();
+  const liveRates = await loadExtraRates();
   const empty: DashboardRange = {
     startDate,
     endDate,
@@ -321,7 +323,7 @@ export async function getDashboardRange(
       const monthly = parseFloat(map.monthlySalary);
       if (Number.isFinite(monthly)) cost = monthly / TL_WORKING_DAYS_PER_MONTH;
     } else if (!isTL && r.level) {
-      const rate = DRIVER_LEVELS.find(l => l.id === r.level)?.hourlyRate ?? 0;
+      const rate = rateFor(liveRates, r.level);
       cost = hours * rate;
     }
     const resolvedAgentName = map?.multiparkAgentName ?? deriveShortName(r.personName);
