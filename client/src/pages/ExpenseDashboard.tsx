@@ -25,12 +25,10 @@ import {
   CheckCircle2,
   Euro,
   Loader2,
-  Bell,
 } from "lucide-react";
 import { format } from "date-fns";
 import { pt } from "date-fns/locale";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { toast } from "sonner";
 
 const COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#06b6d4"];
 
@@ -79,22 +77,12 @@ function StatCard({
 export default function ExpenseDashboard() {
   const { projectId } = useGlobalFilters();
   const { user } = useAuth();
-  const utils = trpc.useUtils();
 
   // stats/upcomingPayments são admin-only no servidor — não chamar sem permissão
   const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
   const { data: stats, isLoading: statsLoading } = trpc.expenses.stats.useQuery({ projectId }, { enabled: isAdmin });
   const { data: upcoming, isLoading: upcomingLoading } = trpc.expenses.upcomingPayments.useQuery({ projectId }, { enabled: isAdmin });
 
-  const checkOverdueMutation = trpc.expenses.checkOverdue.useMutation({
-    onSuccess: (data) => {
-      toast.success(`${data.updated} despesa(s) marcadas como em atraso`);
-      utils.expenses.stats.invalidate();
-    },
-    onError: () => toast.error("Erro ao verificar despesas em atraso"),
-  });
-
-  const isSuperAdmin = user?.role === "super_admin";
 
   if (!isAdmin) {
     return (
@@ -115,12 +103,13 @@ export default function ExpenseDashboard() {
   const totalAmount = (stats?.yearly?.total ?? 0);
   const pendingAmount = stats?.pending?.total ?? 0;
   const overdueAmount = stats?.overdue?.total ?? 0;
-  const paidAmount = (totalAmount - pendingAmount - overdueAmount);
+  // Pago = soma real das pagas este ano (antes era total − pendentes de sempre, podia dar negativo)
+  const paidAmount = stats?.paidYear?.total ?? 0;
 
   const statusData = [
     { name: "Pendente", value: pendingAmount, count: stats?.pending?.count ?? 0 },
     { name: "Em atraso", value: overdueAmount, count: stats?.overdue?.count ?? 0 },
-    { name: "Pago", value: Math.max(0, paidAmount), count: 0 },
+    { name: "Pago", value: paidAmount, count: stats?.paidYear?.count ?? 0 },
   ].filter(s => s.value > 0);
 
   const categoryData = (stats?.byCategory ?? []).map((c: any) => ({
@@ -141,43 +130,28 @@ export default function ExpenseDashboard() {
         <div>
           <p className="text-sm text-muted-foreground">Visão geral dos gastos da empresa</p>
         </div>
-        {isSuperAdmin && (
-          <Button
-            variant="outline"
-            onClick={() => checkOverdueMutation.mutate()}
-            disabled={checkOverdueMutation.isPending}
-            className="gap-2 shrink-0"
-          >
-            {checkOverdueMutation.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Bell className="h-4 w-4" />
-            )}
-            Verificar Atrasos
-          </Button>
-        )}
       </div>
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
-          title="Total de Despesas"
+          title="Total este ano"
           value={totalAmount.toLocaleString("pt-PT", { style: "currency", currency: "EUR" })}
           subtitle={`${stats?.yearly?.count ?? 0} registos`}
           icon={Euro}
         />
         <StatCard
-          title="Pendente"
+          title="Pendente (tudo)"
           value={parseFloat(String(pendingAmount)).toLocaleString("pt-PT", { style: "currency", currency: "EUR" })}
           icon={Clock}
         />
         <StatCard
-          title="Em Atraso"
+          title="Em atraso (tudo)"
           value={parseFloat(String(overdueAmount)).toLocaleString("pt-PT", { style: "currency", currency: "EUR" })}
           icon={AlertCircle}
         />
         <StatCard
-          title="Pago"
+          title="Pago este ano"
           value={parseFloat(String(paidAmount)).toLocaleString("pt-PT", { style: "currency", currency: "EUR" })}
           icon={CheckCircle2}
         />
@@ -254,7 +228,7 @@ export default function ExpenseDashboard() {
       {categoryData.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base font-semibold">Despesas por Categoria</CardTitle>
+            <CardTitle className="text-base font-semibold">Despesas por categoria — este mês</CardTitle>
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={220}>
