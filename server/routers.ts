@@ -18,6 +18,16 @@ import { requireAccess, isOwnOnly, userIdsAtOrBelowInCity, employeeBelowConditio
 import { ROLE_RANK as ACCESS_ROLE_RANK, can, scopeFor, canSeeFinanceTotalsFor, canManageUserRole, canGrantPermissionsTo, canTouchPermission, assignableRoles, isNationalRole, seesBeyondOwn, type ModuleId, type Action as AccessAction } from "../shared/access";
 import { normalizeEmail } from "@shared/email";
 import { USER_ROLES, superAdminGuard, inviteCompletionError } from "./userAdminRules";
+import {
+  USER_DIRECTORY_CITY,
+  USER_DIRECTORY_EMPLOYEE,
+  USER_DIRECTORY_LAST_LOGIN,
+  USER_DIRECTORY_MAX_LIMIT,
+  USER_DIRECTORY_SORT,
+  USER_DIRECTORY_STATUS,
+  searchUserDirectory,
+  userDirectorySummary,
+} from "./usersDirectory";
 import { invokeLLM } from "./_core/llm";
 import { notifyOwner } from "./_core/notification";
 import { storagePut } from "./storage";
@@ -1255,6 +1265,29 @@ export const appRouter = router({
     list: protectedProcedure.query(async ({ ctx }) => {
       requireAccess(ctx.user, "utilizadores", "view");
       return getAllUsers();
+    }),
+    // Página Utilizadores: lista PAGINADA no servidor + resumo (pedido Jorge,
+    // set 2026 — a página já não abre com todas as contas). Mesma guarda e o
+    // mesmo âmbito de cidades que `list` (userScope dentro do módulo).
+    search: protectedProcedure
+      .input(z.object({
+        search: z.string().max(100).optional().nullable(),
+        role: z.enum(USER_ROLES).optional().nullable(),
+        city: z.enum(USER_DIRECTORY_CITY).optional().nullable(),
+        status: z.enum(USER_DIRECTORY_STATUS).optional().nullable(),
+        lastLogin: z.enum(USER_DIRECTORY_LAST_LOGIN).optional().nullable(),
+        employee: z.enum(USER_DIRECTORY_EMPLOYEE).optional().nullable(),
+        sort: z.enum(USER_DIRECTORY_SORT).optional().nullable(),
+        limit: z.number().int().min(1).max(USER_DIRECTORY_MAX_LIMIT).optional(),
+        offset: z.number().int().min(0).max(1_000_000).optional(),
+      }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "utilizadores", "view");
+        return searchUserDirectory(input);
+      }),
+    summary: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "utilizadores", "view");
+      return userDirectorySummary();
     }),
     getById: protectedProcedure
       .input(z.object({ id: z.number() }))

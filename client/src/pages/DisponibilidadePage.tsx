@@ -9,7 +9,8 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { AvailabilitySection, CandidaturasSection } from "@/pages/ExtrasDiaPage";
 import { RecruitmentSection } from "@/components/RecruitmentSection";
 import { ExtrasMetricsSection } from "@/components/ExtrasMetricsSection";
-import { Mail } from "lucide-react";
+import { Mail, BarChart3, Users, ChevronDown, ChevronRight } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 // Campos de cada dia partilhados com o diálogo do backoffice (ExtrasDiaPage →
 // AvailabilitySection): o extra e o backoffice marcam exatamente as mesmas coisas.
 import { AvailabilityDayFields, isDayMarked, type AvailabilityDayState as DayState } from "@/components/AvailabilityDayFields";
@@ -51,20 +52,89 @@ export default function DisponibilidadePage() {
           </p>
         </div>
         <AvailabilitySection />
-        <ExtrasMetricsSection />
-        <CandidaturasSection />
-        <div>
-          <h2 className="text-lg font-semibold flex items-center gap-2 mb-3">
-            <Mail className="h-5 w-5 text-primary" />
-            Recrutamento (recursos-humanos@)
-          </h2>
+        {/* O resto do hub fica fechado por defeito (Jorge, set 2026: ao fazer
+            scroll aparecia tudo de uma vez). Fechado = não carrega nada. */}
+        <HubSection id="metricas" title="Métricas dos extras" icon={<BarChart3 className="h-5 w-5 text-primary" />}>
+          <ExtrasMetricsSection />
+        </HubSection>
+        <HubSection
+          id="candidaturas"
+          title="Candidaturas do site"
+          icon={<Users className="h-5 w-5 text-emerald-600" />}
+          badge={<NewApplicationsBadge />}
+        >
+          <CandidaturasSection />
+        </HubSection>
+        <HubSection id="recrutamento" title="Recrutamento (recursos-humanos@)" icon={<Mail className="h-5 w-5 text-primary" />}>
           <RecruitmentSection />
-        </div>
+        </HubSection>
       </div>
     );
   }
 
   return <MyAvailability />;
+}
+
+const HUB_OPEN_KEY = "mp.disponibilidade.sections.v1";
+
+function readOpenSections(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(HUB_OPEN_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Secção recolhível do hub; lembra-se de aberta/fechada neste browser. */
+function HubSection({
+  id,
+  title,
+  icon,
+  badge,
+  children,
+}: {
+  id: string;
+  title: string;
+  icon: React.ReactNode;
+  badge?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState<boolean>(() => readOpenSections()[id] ?? false);
+  function toggle() {
+    const next = !open;
+    setOpen(next);
+    try {
+      localStorage.setItem(HUB_OPEN_KEY, JSON.stringify({ ...readOpenSections(), [id]: next }));
+    } catch {
+      /* sem localStorage — só não fica lembrado */
+    }
+  }
+  return (
+    <section className="space-y-3">
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        className="w-full flex items-center gap-2 rounded-lg border bg-card px-3 py-3 text-left hover:bg-muted/40"
+      >
+        {open ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
+        {icon}
+        <span className="text-base font-semibold">{title}</span>
+        {badge}
+      </button>
+      {open && children}
+    </section>
+  );
+}
+
+/** "N novas" no cabeçalho das candidaturas, mesmo com a secção fechada. */
+function NewApplicationsBadge() {
+  const q = trpc.driverApplications.list.useQuery({ status: "new" }, { refetchInterval: 60_000 });
+  const n = q.data?.length ?? 0;
+  if (n === 0) return null;
+  return <Badge className="bg-blue-600 text-white hover:bg-blue-600">{n} nova{n > 1 ? "s" : ""}</Badge>;
 }
 
 function MyAvailability() {
