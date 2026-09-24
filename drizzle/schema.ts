@@ -1452,6 +1452,100 @@ export const performanceEvaluations = mysqlTable("performance_evaluations", {
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 });
 
+// ─── Motor único da avaliação (migration 0099) ───────────────────────────────
+// Métricas CALCULADAS por (colaborador, dia operacional 03h→03h Lisboa). Só o
+// motor escreve aqui (server/evaluationEngine.ts); os ajustes manuais vivem em
+// employee_metric_adjustments e aplicam-se por cima, na leitura.
+export const employeeDayMetrics = mysqlTable("employee_day_metrics", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	day: varchar({ length: 10 }).notNull(),
+	projectId: int(),
+	city: varchar({ length: 16 }),
+	shift: varchar({ length: 8 }),
+	isTeamLeader: tinyint().default(0).notNull(),
+	level: varchar({ length: 16 }),
+	hoursSource: varchar({ length: 8 }),
+	hoursWorked: decimal({ precision: 8, scale: 2 }).default('0').notNull(),
+	suspiciousHours: decimal({ precision: 8, scale: 2 }).default('0').notNull(),
+	scheduledHours: decimal({ precision: 8, scale: 2 }).default('0').notNull(),
+	pontoEvents: int().default(0).notNull(),
+	cost: decimal({ precision: 10, scale: 2 }).default('0').notNull(),
+	actions: int().default(0).notNull(),
+	actionsMorning: int().default(0).notNull(),
+	actionsNight: int().default(0).notNull(),
+	recolhas: int().default(0).notNull(),
+	entregas: int().default(0).notNull(),
+	movements: int().default(0).notNull(),
+	parkingMoves: int().default(0).notNull(),
+	cancels: int().default(0).notNull(),
+	otherActions: int().default(0).notNull(),
+	weightedActions: decimal({ precision: 10, scale: 2 }).default('0').notNull(),
+	actionsByType: text(),
+	speedingEvents: int().default(0).notNull(),
+	delays: int().default(0).notNull(),
+	lateServices: int().default(0).notNull(),
+	complaints: int().default(0).notNull(),
+	accidents: int().default(0).notNull(),
+	incidentsReported: int().default(0).notNull(),
+	incidentsAgainst: int().default(0).notNull(),
+	penaltyPoints: int().default(0).notNull(),
+	positivePoints: decimal({ precision: 10, scale: 2 }).default('0').notNull(),
+	negativePoints: decimal({ precision: 10, scale: 2 }).default('0').notNull(),
+	totalPoints: decimal({ precision: 10, scale: 2 }).default('0').notNull(),
+	computedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_employee_day_metrics").on(table.employeeId, table.day),
+	index("idx_edm_day").on(table.day),
+	index("idx_edm_project_day").on(table.projectId, table.day),
+	index("idx_edm_day_emp").on(table.day, table.employeeId),
+]);
+
+// Ajustes MANUAIS (delta sobre uma métrica de um dia) — nunca alteram o
+// calculado; anulam-se (voidedAt) em vez de se apagarem.
+export const employeeMetricAdjustments = mysqlTable("employee_metric_adjustments", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	day: varchar({ length: 10 }).notNull(),
+	metric: varchar({ length: 32 }).notNull(),
+	delta: decimal({ precision: 10, scale: 2 }).notNull(),
+	reason: varchar({ length: 500 }).notNull(),
+	authorId: int(),
+	authorName: varchar({ length: 128 }),
+	disputeId: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	voidedAt: timestamp({ mode: 'string' }),
+	voidedById: int(),
+	voidReason: varchar({ length: 255 }),
+},
+(table) => [
+	index("idx_ema_emp_day").on(table.employeeId, table.day),
+	index("idx_ema_day").on(table.day),
+]);
+
+// Contestações do colaborador a um dia/métrica; o gestor aceita (com ajuste
+// opcional) ou recusa.
+export const employeeMetricDisputes = mysqlTable("employee_metric_disputes", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	day: varchar({ length: 10 }).notNull(),
+	metric: varchar({ length: 32 }),
+	comment: text().notNull(),
+	status: varchar({ length: 16 }).default('open').notNull(),
+	createdByUserId: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	resolvedById: int(),
+	resolvedByName: varchar({ length: 128 }),
+	resolvedAt: timestamp({ mode: 'string' }),
+	resolution: text(),
+	adjustmentId: int(),
+},
+(table) => [
+	index("idx_emd_emp_day").on(table.employeeId, table.day),
+	index("idx_emd_status").on(table.status, table.createdAt),
+]);
+
 export const projectEmployees = mysqlTable("project_employees", {
 	id: int().autoincrement().primaryKey(),
 	projectId: int().notNull(),

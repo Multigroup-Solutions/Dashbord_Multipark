@@ -1,286 +1,261 @@
+/**
+ * Avaliação individual — sobre o motor ÚNICO (employee_day_metrics +
+ * ajustes manuais + contestações), com as regras de shared/evaluationRules.ts.
+ *
+ *  - Ranking do período (Dia/Semana/Mês/Ano), com vista "Por hora" secundária;
+ *    clicar na pontuação abre a gaveta com as regras, métricas e dias.
+ *  - "A minha avaliação": só os dados da própria ficha (o servidor decide quem é).
+ *  - Contestações (gestão): aceitar com correção ou recusar.
+ * O âmbito de cidade é aplicado no servidor.
+ */
+import { useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
-} from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { useState, useMemo } from "react";
-import {
-  Trophy, RefreshCw, TrendingUp, TrendingDown, Minus, Clock,
-  Zap, AlertTriangle, Award, Download, Pencil,
-} from "lucide-react";
-import { useTableSort, Th } from "@/components/SortableTable";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Award, Clock, Download, RefreshCw, Trophy, Zap } from "lucide-react";
 import DateRangeNav, { rangeFor, type DateGran } from "@/components/DateRangeNav";
 import { useOpenEmployee } from "@/hooks/useOpenEmployee";
-import { fmtPTDate } from "@/lib/lisbonTime";
+import {
+  DisputeList,
+  EmployeeEvaluationDetail,
+  EvaluationDrawer,
+  ResolveDisputeDialog,
+  RulesLegend,
+  fmtDay,
+  fmtNum,
+  fmtPts,
+  ptsClass,
+} from "@/components/evaluation/EvaluationBreakdown";
 
-function getWeekNumber(d: Date): number {
-  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-  const dayNum = date.getUTCDay() || 7;
-  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
-  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
-  return Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
-}
+const ROLE_LEVEL: Record<string, number> = { super_admin: 7, admin: 6, supervisor: 5, team_leader: 4, backoffice: 3, frontoffice: 2, extra: 1, user: 0 };
+const roleAtLeast = (role: string | undefined, min: string) => (ROLE_LEVEL[role ?? ""] ?? -1) >= ROLE_LEVEL[min];
+
+type View = "totals" | "perHour";
 
 export default function PerformancePage() {
   const { user } = useAuth();
-  const now = new Date();
-  const [editing, setEditing] = useState<any>(null);
+  // só para mostrar/esconder — quem decide é o servidor
+  const canRank = roleAtLeast(user?.role, "frontoffice");
+  const isSupervisor = roleAtLeast(user?.role, "supervisor");
+  const [tab, setTab] = useState<string>(canRank ? "ranking" : "mine");
 
-  // Filtro de datas TRANSVERSAL (igual ao do Operacional): Dia/Semana/Mês/Ano
-  // com setinhas. Semana única = modo normal (editável, tendência); qualquer
-  // outro período = ranking AGREGADO (soma das semanas que o período apanha).
   const [range, setRange] = useState(() => {
-    const r = rangeFor("week", now);
+    const r = rangeFor("week", new Date());
     return { start: r.start, end: r.end, gran: "week" as DateGran };
   });
-  const singleWeek = range.gran === "week" || range.gran === "day";
-  const anchor = new Date(`${range.start || rangeFor("week", now).start}T00:00:00`);
-  const week = getWeekNumber(anchor);
-  const year = anchor.getFullYear();
+  const hasRange = !!range.start && !!range.end;
 
-  const prevWeek = week > 1 ? week - 1 : 53;
-  const prevYear = week > 1 ? year : year - 1;
+  return (
+    <div className="space-y-4 max-w-7xl mx-auto w-full">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <p className="text-muted-foreground text-sm">Pontuação por dia operacional (03h→03h), com o detalhe de cada regra.</p>
+        <DateRangeNav start={range.start} end={range.end} gran={range.gran} showAll={false}
+          onChange={(s, e, g) => setRange({ start: s, end: e, gran: g })} />
+      </div>
 
-  const { data: weekEvaluations = [], isLoading } = trpc.performance.list.useQuery({ weekNumber: week, yearNumber: year });
-  const { data: rangeRows = [] } = trpc.performance.range.useQuery(
-    { from: range.start, to: range.end },
-    { enabled: !singleWeek && !!range.start && !!range.end },
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabsList className="flex-wrap h-auto">
+          {canRank && <TabsTrigger value="ranking">Ranking</TabsTrigger>}
+          <TabsTrigger value="mine">A minha avaliação</TabsTrigger>
+          {isSupervisor && <TabsTrigger value="disputes">Contestações</TabsTrigger>}
+        </TabsList>
+        {canRank && (
+          <TabsContent value="ranking" className="mt-4">
+            {hasRange && <RankingView from={range.start} to={range.end} isSupervisor={isSupervisor} />}
+          </TabsContent>
+        )}
+        <TabsContent value="mine" className="mt-4">
+          {hasRange && <MineView from={range.start} to={range.end} />}
+        </TabsContent>
+        {isSupervisor && (
+          <TabsContent value="disputes" className="mt-4">
+            <DisputesView />
+          </TabsContent>
+        )}
+      </Tabs>
+
+      <Card>
+        <CardHeader><CardTitle className="text-base">Sistema de pontos</CardTitle></CardHeader>
+        <CardContent><RulesLegend /></CardContent>
+      </Card>
+    </div>
   );
-  // No modo agregado, mapeia para a mesma forma da tabela (sem edição)
-  const evaluations = useMemo(() => {
-    if (singleWeek) return weekEvaluations;
-    return (rangeRows as any[]).map((r) => ({
-      ...r,
-      id: r.employeeId,
-      notes: `${r.weeks} semana(s)`,
-    }));
-  }, [singleWeek, weekEvaluations, rangeRows]);
-  const lastWorkedMap = trpc.rh.lastWorkedMap.useQuery();
-  const openEmployee = useOpenEmployee();
-  const { data: prevEvaluations = [] } = trpc.performance.list.useQuery({ weekNumber: prevWeek, yearNumber: prevYear });
-  const generateMut = trpc.performance.generate.useMutation();
-  const updateMut = trpc.performance.update.useMutation();
+}
+
+// ─── Ranking ─────────────────────────────────────────────────────────────────
+
+type SortKey = "points" | "pointsPerHour" | "actions" | "actionsPerHour" | "hours" | "name";
+
+function RankingView({ from, to, isSupervisor }: { from: string; to: string; isSupervisor: boolean }) {
   const utils = trpc.useUtils();
-  // roster (id+nome) em vez de rh.list: acessível a extra+ (rh.list é admin)
-  const { data: employees = [] } = trpc.rh.roster.useQuery({ activeOnly: true });
+  const openEmployee = useOpenEmployee();
+  const q = trpc.evaluation.ranking.useQuery({ from, to });
+  const recompute = trpc.evaluation.recompute.useMutation({
+    onSuccess: (r) => { toast.success(`Recalculado: ${r.written} dia(s) de colaboradores`); utils.evaluation.invalidate(); },
+    onError: (e) => toast.error(e.message),
+  });
+  const [view, setView] = useState<View>("totals");
+  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "points", dir: -1 });
+  const [drawer, setDrawer] = useState<{ id: number; name: string } | null>(null);
+  const rows = q.data ?? [];
 
-  const employeeMap = useMemo(() => {
-    const map = new Map<number, string>();
-    employees.forEach((e: any) => map.set(e.id, e.fullName));
-    return map;
-  }, [employees]);
-
-  // Mapeia posição anterior por employeeId para tendência
-  const prevPositionMap = useMemo(() => {
-    const sorted = [...prevEvaluations].sort((a, b) => (b.totalPoints ?? 0) - (a.totalPoints ?? 0));
-    const map = new Map<number, number>();
-    sorted.forEach((ev, i) => map.set(ev.employeeId, i + 1));
-    return map;
-  }, [prevEvaluations]);
-
-  const isSupervisor = user?.role && ["supervisor", "admin", "super_admin"].includes(user.role);
-
-  // Ordenação por coluna; a POSIÇÃO do ranking (medalhas) é sempre pela
-  // pontuação, independentemente da coluna ordenada.
-  const { sorted: sortedEvals, sortKey, sortDir, toggle } = useTableSort(evaluations as any[]);
-  const rankByEmployee = useMemo(() => {
-    const byPoints = [...evaluations].sort((a: any, b: any) => (b.totalPoints ?? 0) - (a.totalPoints ?? 0));
+  // posição do ranking é sempre pela pontuação total
+  const rank = useMemo(() => {
     const m = new Map<number, number>();
-    byPoints.forEach((ev: any, i: number) => m.set(ev.employeeId, i + 1));
+    [...rows].sort((a, b) => b.score.totalPoints - a.score.totalPoints).forEach((r, i) => m.set(r.employeeId, i + 1));
     return m;
-  }, [evaluations]);
+  }, [rows]);
+  const sorted = useMemo(() => {
+    const val = (r: (typeof rows)[number]): number | string => {
+      switch (sort.key) {
+        case "name": return r.employeeName;
+        case "points": return r.score.totalPoints;
+        case "pointsPerHour": return r.perHour.pointsPerHour ?? -Infinity;
+        case "actions": return r.metrics.actions;
+        case "actionsPerHour": return r.perHour.actionsPerHour ?? -Infinity;
+        case "hours": return r.perHour.hours;
+      }
+    };
+    return [...rows].sort((a, b) => {
+      const va = val(a), vb = val(b);
+      const c = typeof va === "string" ? va.localeCompare(String(vb)) : (va as number) - (vb as number);
+      return c * sort.dir;
+    });
+  }, [rows, sort]);
+  const toggle = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: key === "name" ? 1 : -1 }));
+  const th = (key: SortKey, label: string, cls = "text-right") => (
+    <th className={`p-2 ${cls} cursor-pointer select-none whitespace-nowrap`} onClick={() => toggle(key)}>
+      {label}{sort.key === key ? (sort.dir === -1 ? " ▼" : " ▲") : ""}
+    </th>
+  );
 
-  const handleGenerate = async () => {
-    if (evaluations.length > 0 && !confirm(`Já existem ${evaluations.length} avaliações para esta semana. Recalcular vai actualizar os valores automáticos (mantém notas guardadas). Continuar?`)) {
-      return;
-    }
-    try {
-      await generateMut.mutateAsync({ weekNumber: week, yearNumber: year });
-      utils.performance.list.invalidate();
-      toast.success(`Avaliação da semana ${week} gerada!`);
-    } catch (e: any) {
-      toast.error(e.message || "Erro ao gerar avaliação");
-    }
-  };
+  const totals = useMemo(() => ({
+    hours: rows.reduce((s, r) => s + r.metrics.hoursWorked, 0),
+    actions: rows.reduce((s, r) => s + r.metrics.actions, 0),
+    cost: rows.reduce((s, r) => s + r.metrics.cost, 0),
+  }), [rows]);
+  const top = rows[0];
 
   const exportCSV = () => {
-    const headers = ["Pos","Condutor","Horas","Movs","Mov/h","Inc+","Inc-","Pts+","Pts-","Total","Custo","Notas"];
-    const rows = evaluations.map((ev: any, idx: number) => [
-      idx + 1,
-      employeeMap.get(ev.employeeId) ?? `#${ev.employeeId}`,
-      ev.hoursWorked, ev.movementsCount, ev.movementsPerHour,
-      ev.incidentsPositive, ev.incidentsNegative,
-      ev.positivePoints, ev.negativePoints, ev.totalPoints, ev.weeklyCost ?? "",
-      (ev.notes ?? "").replace(/;/g, ","),
-    ]);
-    const csv = [headers.join(";"), ...rows.map(r => r.join(";"))].join("\n");
-    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const headers = ["Pos", "Colaborador", "Dias", "Horas", "Ações", "Recolhas", "Entregas", "Movimentos", "Levar ao parque", "Atrasos", "Velocidade", "Reclamações", "Acidentes", "Pts+", "Pts−", "Total", "Ações/h", "Pontos/h", "Custo"];
+    const lines = sorted.map((r) => [
+      rank.get(r.employeeId), r.employeeName, r.days, r.metrics.hoursWorked, r.metrics.actions, r.metrics.recolhas, r.metrics.entregas,
+      r.metrics.movements, r.metrics.parkingMoves, r.metrics.delays, r.metrics.speedingEvents, r.metrics.complaints, r.metrics.accidents,
+      r.score.positivePoints, r.score.negativePoints, r.score.totalPoints, r.perHour.actionsPerHour ?? "", r.perHour.pointsPerHour ?? "", r.metrics.cost,
+    ].map((v) => String(v ?? "").replace(/;/g, ",")).join(";"));
+    const blob = new Blob(["﻿" + [headers.join(";"), ...lines].join("\n")], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url; a.download = `avaliacao_S${week}_${year}.csv`; a.click();
+    a.href = url; a.download = `avaliacao_${from}_${to}.csv`; a.click();
     URL.revokeObjectURL(url);
   };
 
-  const topPerformer = evaluations.length > 0 ? evaluations[0] : null;
-  const totalHours = evaluations.reduce((s: number, e: any) => s + (e.hoursWorked || 0), 0);
-  const totalMovements = evaluations.reduce((s: number, e: any) => s + (e.movementsCount || 0), 0);
-  const totalCost = evaluations.reduce((s: number, e: any) => s + Number(e.weeklyCost || 0), 0);
-
   return (
-    <div className="space-y-6 max-w-7xl mx-auto w-full">
-      {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <p className="text-muted-foreground">Ranking semanal dos condutores</p>
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <Card className="p-3"><div className="flex items-center gap-2"><Clock className="w-4 h-4" /><span className="text-xs text-muted-foreground">Horas (ponto)</span></div><p className="text-xl font-bold mt-1">{fmtNum(totals.hours)} h</p></Card>
+        <Card className="p-3"><div className="flex items-center gap-2"><Zap className="w-4 h-4 text-blue-500" /><span className="text-xs text-muted-foreground">Ações</span></div><p className="text-xl font-bold mt-1">{totals.actions}</p></Card>
+        <Card className="p-3"><div className="flex items-center gap-2"><Zap className="w-4 h-4 text-amber-500" /><span className="text-xs text-muted-foreground">Custo</span></div><p className="text-xl font-bold mt-1">{fmtNum(totals.cost, 0)} €</p></Card>
+        <Card className="p-3"><div className="flex items-center gap-2"><Award className="w-4 h-4 text-yellow-500" /><span className="text-xs text-muted-foreground">Melhor</span></div><p className="text-sm font-bold mt-1 truncate">{top ? `${top.employeeName} (${fmtPts(top.score.totalPoints)})` : "—"}</p></Card>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="inline-flex rounded-md border p-0.5">
+          <Button size="sm" variant={view === "totals" ? "default" : "ghost"} className="h-8" onClick={() => setView("totals")}>Totais</Button>
+          <Button size="sm" variant={view === "perHour" ? "default" : "ghost"} className="h-8" onClick={() => setView("perHour")}>Por hora</Button>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {/* Filtro transversal (igual ao Operacional): Dia/Semana/Mês/Ano + ◀ ▶ */}
-          <DateRangeNav
-            start={range.start}
-            end={range.end}
-            gran={range.gran}
-            showAll={false}
-            onChange={(s, e, g) => setRange({ start: s, end: e, gran: g })}
-          />
-          {singleWeek && <Badge variant="secondary" className="tabular-nums">S{week}/{year}</Badge>}
-          <Button variant="outline" size="sm" onClick={exportCSV} disabled={evaluations.length === 0}>
-            <Download className="w-4 h-4 mr-2" /> CSV
-          </Button>
-          {isSupervisor && singleWeek && (
-            <Button onClick={handleGenerate} disabled={generateMut.isPending} size="sm">
-              <RefreshCw className={`w-4 h-4 mr-2 ${generateMut.isPending ? "animate-spin" : ""}`} />
-              {generateMut.isPending ? "A gerar..." : evaluations.length > 0 ? "Recalcular" : "Gerar Avaliação"}
+        <div className="ml-auto flex gap-2">
+          <Button variant="outline" size="sm" onClick={exportCSV} disabled={rows.length === 0}><Download className="w-4 h-4 mr-1" /> CSV</Button>
+          {isSupervisor && (
+            <Button size="sm" disabled={recompute.isPending} onClick={() => recompute.mutate({ from, to })}>
+              <RefreshCw className={`w-4 h-4 mr-1 ${recompute.isPending ? "animate-spin" : ""}`} /> {recompute.isPending ? "A recalcular..." : "Recalcular"}
             </Button>
           )}
         </div>
       </div>
 
-      {/* Summary Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Card className="p-3">
-          <div className="flex items-center gap-2"><Clock className="w-4 h-4" /><span className="text-xs text-muted-foreground">Total Horas</span></div>
-          <p className="text-xl font-bold mt-1">{Number(totalHours).toFixed(1)}h</p>
-        </Card>
-        <Card className="p-3">
-          <div className="flex items-center gap-2"><Zap className="w-4 h-4 text-blue-500" /><span className="text-xs text-muted-foreground">Total Movimentações</span></div>
-          <p className="text-xl font-bold mt-1">{totalMovements}</p>
-        </Card>
-        <Card className="p-3">
-          <div className="flex items-center gap-2"><Zap className="w-4 h-4 text-amber-500" /><span className="text-xs text-muted-foreground">Custo Escalas</span></div>
-          <p className="text-xl font-bold mt-1">{totalCost.toFixed(0)}€</p>
-        </Card>
-        <Card className="p-3">
-          <div className="flex items-center gap-2"><Award className="w-4 h-4 text-yellow-500" /><span className="text-xs text-muted-foreground">Melhor Condutor</span></div>
-          <p className="text-sm font-bold mt-1 truncate">{topPerformer ? (employeeMap.get(topPerformer.employeeId) ?? `#${topPerformer.employeeId}`) : "—"}</p>
-        </Card>
-      </div>
-
-      {/* Ranking Table */}
-      {isLoading ? (
-        <div className="flex justify-center py-20"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>
-      ) : evaluations.length === 0 ? (
+      {q.isLoading ? (
+        <div className="flex justify-center py-16"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>
+      ) : q.error ? (
+        <Card className="p-6 text-sm text-red-700">{q.error.message}</Card>
+      ) : rows.length === 0 ? (
         <Card className="p-10 text-center">
           <Trophy className="w-12 h-12 mx-auto text-muted-foreground mb-3" />
-          <p className="text-muted-foreground">Sem avaliações para esta semana</p>
-          <p className="text-xs text-muted-foreground mt-1">
-            {isSupervisor ? "Clica em \"Gerar Avaliação\" para calcular o ranking" : "Aguarda que um supervisor gere o ranking."}
-          </p>
+          <p className="text-muted-foreground">Sem dias calculados neste período.</p>
+          <p className="text-xs text-muted-foreground mt-1">O recálculo automático corre todos os dias (últimas 4 semanas){isSupervisor ? "; para outro período usa Recalcular." : "."}</p>
         </Card>
       ) : (
         <Card>
-          <CardHeader><CardTitle className="text-base">Ranking — {singleWeek ? `Semana ${week}/${year}` : `${range.start} a ${range.end} (agregado)`}</CardTitle></CardHeader>
-          <CardContent>
+          <CardHeader><CardTitle className="text-base">Ranking — {from === to ? fmtDay(from) : `${fmtDay(from)} a ${fmtDay(to)}`}{view === "perHour" && " · por hora"}</CardTitle></CardHeader>
+          <CardContent className="px-2 sm:px-6">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[900px] text-sm">
+              <table className="w-full text-sm min-w-[640px]">
                 <thead>
                   <tr className="border-b text-left">
-                    <th className="p-2 w-12">#</th>
-                    <th className="p-2 w-12 text-center">Δ</th>
-                    <Th k="employeeName" label="Condutor" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
-                    <Th k="hoursWorked" label="Horas" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
-                    <Th k="movementsCount" label="Movs" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
-                    <Th k="movementsPerHour" label="Mov/h" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
-                    <Th k="incidentsPositive" label="Inc+" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
-                    <Th k="incidentsNegative" label="Inc−" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
-                    <Th k="positivePoints" label="Pts+" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
-                    <Th k="negativePoints" label="Pts−" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
-                    <Th k="totalPoints" label="Total" align="center" className="font-bold" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
-                    <Th k="weeklyCost" label="Custo" align="center" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
-                    <th className="p-2">Notas</th>
-                    {isSupervisor && singleWeek && <th className="p-2 w-10"></th>}
+                    <th className="p-2 w-10">#</th>
+                    {th("name", "Colaborador", "text-left")}
+                    {view === "totals" ? (
+                      <>
+                        {th("hours", "Horas")}
+                        {th("actions", "Ações")}
+                        <th className="p-2 text-right" title="Recolhas + entregas">Rec/Ent</th>
+                        <th className="p-2 text-right" title="Movimentos (dos quais levar ao parque)">Movs</th>
+                        <th className="p-2 text-right">Atrasos</th>
+                        <th className="p-2 text-right" title="Velocidade · Reclamações · Acidentes">Vel/Recl/Acid</th>
+                        {th("points", "Pontos")}
+                      </>
+                    ) : (
+                      <>
+                        {th("hours", "Horas")}
+                        {th("actionsPerHour", "Ações/h")}
+                        <th className="p-2 text-right">Pts ações/h</th>
+                        {th("pointsPerHour", "Pontos/h")}
+                        {th("points", "Pontos")}
+                      </>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedEvals.map((ev: any) => {
-                    const name = employeeMap.get(ev.employeeId) ?? ev.employeeName ?? `#${ev.employeeId}`;
-                    const currentPos = rankByEmployee.get(ev.employeeId) ?? 0;
-                    const isTop3 = currentPos <= 3;
-                    const prevPos = singleWeek ? prevPositionMap.get(ev.employeeId) : undefined;
-                    const delta = prevPos != null ? prevPos - currentPos : null; // +ve = subiu
+                  {sorted.map((r) => {
+                    const pos = rank.get(r.employeeId) ?? 0;
+                    const m = r.metrics;
                     return (
-                      <tr key={ev.id} className={`border-b hover:bg-muted/50 ${isTop3 ? "bg-yellow-50/30" : ""}`}>
-                        <td className="p-2 font-bold text-center">
-                          {currentPos === 1 ? "🥇" : currentPos === 2 ? "🥈" : currentPos === 3 ? "🥉" : currentPos}
-                        </td>
-                        <td className="p-2 text-center">
-                          {delta == null ? (
-                            singleWeek ? <Badge variant="outline" className="text-[10px]">novo</Badge> : <span className="text-muted-foreground text-xs">—</span>
-                          ) : delta > 0 ? (
-                            <span className="text-green-700 text-xs inline-flex items-center gap-0.5">
-                              <TrendingUp className="w-3 h-3" /> {delta}
-                            </span>
-                          ) : delta < 0 ? (
-                            <span className="text-red-700 text-xs inline-flex items-center gap-0.5">
-                              <TrendingDown className="w-3 h-3" /> {Math.abs(delta)}
-                            </span>
-                          ) : (
-                            <span className="text-muted-foreground text-xs inline-flex items-center"><Minus className="w-3 h-3" /></span>
-                          )}
-                        </td>
-                        <td className="p-2 font-medium whitespace-nowrap">
-                          <button type="button" className="hover:underline text-left" title="Abrir ficha do funcionário" onClick={() => openEmployee(ev.employeeId)}>
-                            {name}
-                          </button>
-                          {lastWorkedMap.data?.[ev.employeeId] && (
-                            <span className="block text-[10px] text-muted-foreground font-normal">últ. trabalho: {fmtPTDate(lastWorkedMap.data[ev.employeeId])}</span>
-                          )}
-                        </td>
-                        <td className="p-2 text-center tabular-nums">{Number(ev.hoursWorked || 0).toFixed(1)}h</td>
-                        <td className="p-2 text-center tabular-nums">{ev.movementsCount || 0}</td>
-                        <td className="p-2 text-center tabular-nums">{Number(ev.movementsPerHour || 0).toFixed(1)}</td>
-                        <td className="p-2 text-center text-green-600">{ev.incidentsPositive || 0}</td>
-                        <td className="p-2 text-center text-red-600">{ev.incidentsNegative || 0}</td>
-                        <td className="p-2 text-center"><span className="text-green-600 font-medium">+{ev.positivePoints || 0}</span></td>
-                        <td className="p-2 text-center"><span className="text-red-600 font-medium">−{ev.negativePoints || 0}</span></td>
-                        <td className="p-2 text-center">
-                          <span className={`font-bold text-base ${(ev.totalPoints || 0) >= 0 ? "text-green-600" : "text-red-600"}`}>
-                            {ev.totalPoints || 0}
+                      <tr key={r.employeeId} className={`border-b hover:bg-muted/50 ${pos <= 3 ? "bg-yellow-50/30" : ""}`}>
+                        <td className="p-2 font-bold text-center">{pos === 1 ? "🥇" : pos === 2 ? "🥈" : pos === 3 ? "🥉" : pos}</td>
+                        <td className="p-2 font-medium">
+                          <button type="button" className="hover:underline text-left" title="Abrir ficha" onClick={() => openEmployee(r.employeeId)}>{r.employeeName}</button>
+                          <span className="block text-[10px] text-muted-foreground font-normal">
+                            {r.days} dia(s){r.adjustments > 0 && " · ajustado"}{r.openDisputes > 0 && ` · ${r.openDisputes} contestação(ões)`}
                           </span>
                         </td>
-                        <td className="p-2 text-center text-xs tabular-nums">
-                          {Number(ev.weeklyCost || 0) > 0 ? (
-                            <>
-                              {Number(ev.weeklyCost).toFixed(0)}€
-                              {ev.movementsCount > 0 && <span className="block text-[10px] text-muted-foreground">{(Number(ev.weeklyCost) / ev.movementsCount).toFixed(2)}€/mov</span>}
-                            </>
-                          ) : "—"}
-                        </td>
-                        <td className="p-2 text-xs text-muted-foreground max-w-[150px] truncate" title={ev.notes ?? ""}>
-                          {ev.notes ?? <span className="text-muted-foreground/50">—</span>}
-                        </td>
-                        {isSupervisor && singleWeek && (
-                          <td className="p-2">
-                            <Button variant="ghost" size="icon" className="w-7 h-7" onClick={() => setEditing(ev)}>
-                              <Pencil className="w-3 h-3" />
-                            </Button>
-                          </td>
+                        {view === "totals" ? (
+                          <>
+                            <td className="p-2 text-right tabular-nums">{fmtNum(m.hoursWorked)}</td>
+                            <td className="p-2 text-right tabular-nums">{m.actions}</td>
+                            <td className="p-2 text-right tabular-nums">{m.recolhas + m.entregas}</td>
+                            <td className="p-2 text-right tabular-nums">{m.movements}{m.parkingMoves > 0 && <span className="text-muted-foreground"> ({m.parkingMoves})</span>}</td>
+                            <td className="p-2 text-right tabular-nums">{m.delays || "—"}</td>
+                            <td className="p-2 text-right tabular-nums">{m.speedingEvents}/{m.complaints}/{m.accidents}</td>
+                          </>
+                        ) : (
+                          <>
+                            <td className="p-2 text-right tabular-nums">{fmtNum(r.perHour.hours)}</td>
+                            <td className="p-2 text-right tabular-nums">{fmtNum(r.perHour.actionsPerHour, 2)}</td>
+                            <td className="p-2 text-right tabular-nums">{fmtNum(r.perHour.weightedPerHour, 2)}</td>
+                            <td className="p-2 text-right tabular-nums">{fmtNum(r.perHour.pointsPerHour, 2)}</td>
+                          </>
                         )}
+                        <td className="p-2 text-right">
+                          <button type="button" title="Ver de onde vem a pontuação"
+                            className={`font-bold text-base tabular-nums underline decoration-dotted underline-offset-4 ${ptsClass(r.score.totalPoints)}`}
+                            onClick={() => setDrawer({ id: r.employeeId, name: r.employeeName })}>
+                            {fmtPts(r.score.totalPoints)}
+                          </button>
+                        </td>
                       </tr>
                     );
                   })}
@@ -291,94 +266,68 @@ export default function PerformancePage() {
         </Card>
       )}
 
-      {/* Points Legend */}
-      <Card>
-        <CardHeader><CardTitle className="text-base">Sistema de Pontos</CardTitle></CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-            <div>
-              <h4 className="font-medium text-green-600 mb-2">Pontos Positivos</h4>
-              <ul className="space-y-1 text-muted-foreground">
-                <li>+2 pts por movimentação realizada</li>
-                <li>+5 pts por ocorrência reportada</li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-medium text-red-600 mb-2">Pontos Negativos</h4>
-              <ul className="space-y-1 text-muted-foreground">
-                <li>Ocorrências atribuídas ao colaborador (por severidade): low −2, medium −5, high −10, critical −20</li>
-                <li>Penalizações abertas (no-show extras-dia, etc): −5 pts por ponto aberto</li>
-              </ul>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Edit Dialog */}
-      {editing && (
-        <Dialog open onOpenChange={(v) => !v && setEditing(null)}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Ajustar pontuação — {employeeMap.get(editing.employeeId) ?? "—"}</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-3">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <Label className="text-xs">Pts positivos</Label>
-                  <Input
-                    type="number"
-                    value={editing.positivePoints}
-                    onChange={e => setEditing({ ...editing, positivePoints: parseInt(e.target.value) || 0 })}
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs">Pts negativos</Label>
-                  <Input
-                    type="number"
-                    value={editing.negativePoints}
-                    onChange={e => setEditing({ ...editing, negativePoints: parseInt(e.target.value) || 0 })}
-                  />
-                </div>
-              </div>
-              <div>
-                <Label className="text-xs">Notas do supervisor</Label>
-                <textarea
-                  className="w-full border rounded-md p-2 text-sm min-h-[80px] bg-card"
-                  value={editing.notes ?? ""}
-                  onChange={e => setEditing({ ...editing, notes: e.target.value })}
-                  placeholder="Justifica o ajuste, se aplicável..."
-                />
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Total resultante: <strong>{(editing.positivePoints || 0) - (editing.negativePoints || 0)}</strong>
-              </p>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setEditing(null)}>Cancelar</Button>
-              <Button
-                disabled={updateMut.isPending}
-                onClick={async () => {
-                  try {
-                    await updateMut.mutateAsync({
-                      id: editing.id,
-                      positivePoints: editing.positivePoints,
-                      negativePoints: editing.negativePoints,
-                      notes: editing.notes ?? null,
-                    });
-                    utils.performance.list.invalidate();
-                    toast.success("Avaliação actualizada");
-                    setEditing(null);
-                  } catch (e: any) {
-                    toast.error(e.message || "Erro ao guardar");
-                  }
-                }}
-              >
-                {updateMut.isPending ? "A guardar..." : "Guardar"}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      )}
+      <EvaluationDrawer employeeId={drawer?.id ?? null} employeeName={drawer?.name ?? ""} from={from} to={to}
+        canAdjust={isSupervisor} onOpenChange={(o) => !o && setDrawer(null)} />
     </div>
+  );
+}
+
+// ─── A minha avaliação ───────────────────────────────────────────────────────
+
+function MineView({ from, to }: { from: string; to: string }) {
+  const utils = trpc.useUtils();
+  const q = trpc.evaluation.mine.useQuery({ from, to });
+  if (q.isLoading) return <p className="text-sm text-muted-foreground">A carregar...</p>;
+  if (q.error) return <Card className="p-6 text-sm text-red-700">{q.error.message}</Card>;
+  const d = q.data;
+  if (!d?.employee) {
+    return <Card className="p-8 text-center text-muted-foreground">A tua conta não está ligada a uma ficha de colaborador — fala com o RH.</Card>;
+  }
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base flex flex-wrap items-center gap-2">
+          {d.employee.fullName}
+          {d.totals && <Badge variant="secondary" className={`tabular-nums ${ptsClass(d.totals.score.totalPoints)}`}>{fmtPts(d.totals.score.totalPoints)} pts</Badge>}
+        </CardTitle>
+        <p className="text-xs text-muted-foreground">Só vês os teus dados. Se algo estiver errado num dia, abre o dia e carrega em "Contestar".</p>
+      </CardHeader>
+      <CardContent>
+        <EmployeeEvaluationDetail employeeId={d.employee.id} detail={d as any} mode="self"
+          onChanged={() => utils.evaluation.mine.invalidate()} />
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── Contestações (gestão) ───────────────────────────────────────────────────
+
+function DisputesView() {
+  const utils = trpc.useUtils();
+  const [status, setStatus] = useState<"open" | "accepted" | "rejected">("open");
+  const q = trpc.evaluation.disputes.list.useQuery({ status });
+  const [resolving, setResolving] = useState<any>(null);
+  return (
+    <Card>
+      <CardHeader className="flex flex-row flex-wrap items-center gap-2 space-y-0">
+        <CardTitle className="text-base">Contestações</CardTitle>
+        <div className="ml-auto inline-flex rounded-md border p-0.5">
+          {(["open", "accepted", "rejected"] as const).map((s) => (
+            <Button key={s} size="sm" variant={status === s ? "default" : "ghost"} className="h-8" onClick={() => setStatus(s)}>
+              {s === "open" ? "Em análise" : s === "accepted" ? "Aceites" : "Recusadas"}
+            </Button>
+          ))}
+        </div>
+      </CardHeader>
+      <CardContent>
+        {q.isLoading ? <p className="text-sm text-muted-foreground">A carregar...</p>
+          : (q.data ?? []).length === 0 ? <p className="text-sm text-muted-foreground">Sem contestações.</p>
+          : <DisputeList disputes={q.data ?? []} onResolve={setResolving} />}
+      </CardContent>
+      {resolving && (
+        <ResolveDisputeDialog dispute={resolving} onClose={() => setResolving(null)}
+          onDone={() => { setResolving(null); utils.evaluation.invalidate(); }} />
+      )}
+    </Card>
   );
 }

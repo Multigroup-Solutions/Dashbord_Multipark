@@ -129,3 +129,54 @@ export function utcMs(at: Date | number | string): number {
   if (m) return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], m[6] ? +m[6] : 0);
   return new Date(s).getTime();
 }
+
+// ─── Dia OPERACIONAL (turnos 03h–15h e 15h–03h) ──────────────────────────────
+//
+// A operação trabalha em dois turnos — manhã 03h–15h e noite 15h–03h (hora de
+// Lisboa). O "dia operacional" D vai de D 03:00 a D+1 03:00 (Lisboa): a
+// madrugada até às 03h ainda é o turno da noite do dia anterior. As horas são
+// de RELÓGIO de Lisboa (não horas decorridas), por isso a mudança de hora não
+// empurra ações para o dia errado.
+
+/** Instante UTC (ms) da hora de RELÓGIO `hour` (0–23) de Lisboa no dia `day`. */
+export function lisbonWallTimeUtcMs(day: string, hour: number): number {
+  const midnight = lisbonMidnightUtcMs(day);
+  const t = midnight + hour * 3_600_000;
+  // se o offset mudou entre a meia-noite e essa hora (mudança de hora), corrige
+  return t - (lisbonOffsetMs(t) - lisbonOffsetMs(midnight));
+}
+
+/** Hora (Lisboa) em que começa o dia operacional (turno da manhã). */
+export const OPERATIONAL_DAY_START_HOUR = 3;
+/** Hora (Lisboa) em que começa o turno da noite (acaba às 03h do dia seguinte). */
+export const OPERATIONAL_NIGHT_START_HOUR = 15;
+
+export type OperationalShift = "morning" | "night";
+
+/** Dia operacional + turno, a partir do dia e hora de RELÓGIO de Lisboa. */
+export function operationalSlotFromLocal(lisbonDay: string, lisbonHour: number): { day: string; shift: OperationalShift } {
+  if (lisbonHour < OPERATIONAL_DAY_START_HOUR) return { day: addDays(lisbonDay, -1), shift: "night" };
+  return { day: lisbonDay, shift: lisbonHour < OPERATIONAL_NIGHT_START_HOUR ? "morning" : "night" };
+}
+
+/** Dia operacional + turno de um instante (UTC): antes das 03h → noite do dia anterior. */
+export function operationalSlotOf(at: Date | number | string): { day: string; shift: OperationalShift } {
+  const p = parts(utcMs(at));
+  const cal = `${p.y}-${String(p.m).padStart(2, "0")}-${String(p.d).padStart(2, "0")}`;
+  return operationalSlotFromLocal(cal, p.h);
+}
+
+/** Dia operacional de um instante (UTC). */
+export function operationalDayOf(at: Date | number | string): string {
+  return operationalSlotOf(at).day;
+}
+
+/**
+ * Intervalo UTC [start, end) dos dias operacionais [startDay, endDay]:
+ * startDay 03:00 → endDay+1 03:00 (Lisboa). Usar com `>= start AND < end`.
+ */
+export function operationalDayRangeUtc(startDay: string, endDay: string = startDay): { start: string; end: string; startMs: number; endMs: number } {
+  const startMs = lisbonWallTimeUtcMs(startDay, OPERATIONAL_DAY_START_HOUR);
+  const endMs = lisbonWallTimeUtcMs(addDays(endDay, 1), OPERATIONAL_DAY_START_HOUR);
+  return { start: mysql(startMs), end: mysql(endMs), startMs, endMs };
+}

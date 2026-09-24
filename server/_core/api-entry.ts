@@ -433,6 +433,24 @@ app.get("/api/cron/daily-ops", async (req, res) => {
   }
 });
 
+// Avaliação (motor único): recalcula TODOS os dias das últimas 4 semanas em
+// employee_day_metrics (ações, ponto sem [SUSPEITO], escala, ocorrências,
+// reclamações, velocidade). Fatias de 7 dias dentro do prazo: devolve
+// done:false + nextOffset e o workflow repete com ?offsetDays=N.
+app.get("/api/cron/evaluation-recompute", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const offsetDays = typeof req.query?.offsetDays === "string" && /^\d+$/.test(req.query.offsetDays)
+      ? Number(req.query.offsetDays)
+      : 0;
+    const { runEvaluationRecompute } = await import("../evaluationEngine");
+    const result = await runEvaluationRecompute({ offsetDays, deadlineAt: Date.now() + 40_000 });
+    res.json({ ok: true, ranAt: new Date().toISOString(), ...result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: String(err?.message ?? err) });
+  }
+});
+
 // Automação dos extras (pedido de disponibilidade à quinta, lembrete ao
 // sábado, aviso de escala e alerta de cobertura às 18h). Chamado de hora a
 // hora; o próprio módulo decide pela hora de Lisboa o que está na altura.

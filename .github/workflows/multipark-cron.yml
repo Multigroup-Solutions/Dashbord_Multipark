@@ -27,6 +27,9 @@ on:
     - cron: "17 */2 * * *"
     # Recolha diária de operações (driver history + alertas GPS): 03:30 UTC
     - cron: "30 3 * * *"
+    # Avaliação (motor único): recalcula as últimas 4 semanas às 04:05 UTC,
+    # depois do dia operacional (03h Lisboa) fechar e da recolha diária.
+    - cron: "5 4 * * *"
     # Google Ads: diária às 04:45 UTC (última semana) e mensal no dia 2 às
     # 05:10 UTC (mês anterior inteiro). Só correm com a ligação feita.
     - cron: "45 4 * * *"
@@ -313,6 +316,57 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           title="🔴 Cron multipark falhou: daily-ops"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body="Run falhado: $run_url — $(date -u +'%Y-%m-%d %H:%M UTC')"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number' || true)
+          if [ -n "${existing:-}" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
+
+  evaluation-recompute:
+    if: github.event.schedule == '5 4 * * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger /api/cron/evaluation-recompute (repete até done)
+        env:
+          APP_URL: ${{ secrets.APP_URL || 'https://dashbord-multipark.vercel.app' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_URL:-}" ]; then
+            echo "::error::APP_URL secret não está definido — recálculo da avaliação não corre."
+            exit 1
+          fi
+          # 4 semanas em fatias de 7 dias: o endpoint devolve "done":false +
+          # "nextOffset":N quando o prazo acaba; repete-se com ?offsetDays=N.
+          offset=0
+          for i in 1 2 3 4 5 6; do
+            code=$(curl -sS -m 90 -w '%{http_code}' -o /tmp/body.txt \
+              -H "Authorization: Bearer ${CRON_SECRET:-}" \
+              "$APP_URL/api/cron/evaluation-recompute?offsetDays=$offset") \
+              || { echo "::error::curl falhou ao contactar o endpoint"; cat /tmp/body.txt || true; exit 1; }
+            echo "tentativa $i (offset $offset) — HTTP $code"; head -c 1000 /tmp/body.txt; echo
+            if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+              echo "::error::endpoint devolveu HTTP $code"; exit 1
+            fi
+            if grep -q '"ok":false' /tmp/body.txt; then
+              echo "::error::endpoint reportou ok:false"; exit 1
+            fi
+            grep -q '"done":false' /tmp/body.txt || break
+            next=$(grep -o '"nextOffset":[0-9]*' /tmp/body.txt | grep -o '[0-9]*$' || true)
+            if [ -z "${next:-}" ] || [ "$next" -le "$offset" ]; then
+              echo "::error::resposta sem nextOffset válido — a abortar para não ciclar"; exit 1
+            fi
+            offset=$next
+          done
+      - name: Alerta — abrir/comentar issue em caso de falha
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="🔴 Cron multipark falhou: evaluation-recompute"
           run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           body="Run falhado: $run_url — $(date -u +'%Y-%m-%d %H:%M UTC')"
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number' || true)
