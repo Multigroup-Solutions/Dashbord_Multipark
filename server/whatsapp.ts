@@ -8,13 +8,18 @@
  * para mensagens legíveis em PT.
  *
  * Config por env: WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_API_VERSION
- * (default v21.0).
+ * (por omissão a MESMA versão da Graph API do Meta Ads — META_DEFAULT_API_VERSION).
+ * Cada pedido tem prazo (fetchWithTimeout). Token expirado (190) fica registado
+ * em integration_connections (provider 'whatsapp') → hub de Integrações + alerta.
  *
  * Privacidade: os logs e as mensagens de erro nunca levam o número completo —
  * só os últimos 3 dígitos (`maskPhone`).
  */
 import { maskPhone, maskPhonesInText } from "../shared/maskPhone";
 import { INBOUND_MEDIA_MAX_BYTES } from "../shared/whatsappMedia";
+import { fetchWithTimeout } from "./_core/fetchWithTimeout";
+import { META_DEFAULT_API_VERSION } from "./integrations/meta/config";
+import { isWhatsappTokenError, recordWhatsappAuthError, recordWhatsappSuccess } from "./integrations/whatsappConnection";
 
 export type WhatsappSendResult =
   | { ok: true; waMessageId: string }
@@ -131,9 +136,13 @@ export function describeMetaError(
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-function apiVersion(): string {
-  return process.env.WHATSAPP_API_VERSION || "v21.0";
+/** Versão da Graph API do WhatsApp: WHATSAPP_API_VERSION ou a mesma do Meta Ads. */
+export function whatsappApiVersion(env: Record<string, string | undefined> = process.env): string {
+  const v = env.WHATSAPP_API_VERSION?.trim();
+  if (!v) return META_DEFAULT_API_VERSION;
+  return v.startsWith("v") ? v : `v${v}`;
 }
+const apiVersion = () => whatsappApiVersion();
 
 /** Meta aceita o destinatário em dígitos (sem o "+"). */
 function toRecipient(toE164: string): string {
@@ -161,7 +170,7 @@ async function postMessage(
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      const resp = await fetch(url, {
+      const resp = await fetchWithTimeout(url, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -173,7 +182,7 @@ async function postMessage(
       if (resp.ok) {
         const data = (await resp.json().catch(() => ({}))) as any;
         const waMessageId: string | undefined = data?.messages?.[0]?.id;
-        if (waMessageId) return { ok: true, waMessageId };
+        if (waMessageId) { void recordWhatsappSuccess(); return { ok: true, waMessageId }; }
         return { ok: false, error: "Resposta da Meta sem message id." };
       }
 
@@ -197,6 +206,7 @@ async function postMessage(
       }
 
       console.warn(`[WhatsApp] Envio falhou (HTTP ${resp.status}): ${maskPhonesInText(detail)}`);
+      if (isWhatsappTokenError(code)) await recordWhatsappAuthError(String(metaErr?.message ?? detail));
       return { ok: false, error: detail, code };
     } catch (err: any) {
       lastError = err?.message || String(err);
@@ -234,11 +244,12 @@ export async function downloadMedia(mediaId: string): Promise<WhatsappMediaDownl
   if (!id) return { ok: false, error: "Media sem id." };
 
   try {
-    const metaResp = await fetch(`${GRAPH_BASE}/${apiVersion()}/${encodeURIComponent(id)}`, {
+    const metaResp = await fetchWithTimeout(`${GRAPH_BASE}/${apiVersion()}/${encodeURIComponent(id)}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!metaResp.ok) {
       const errBody = (await metaResp.json().catch(() => ({}))) as any;
+      if (isWhatsappTokenError(Number(errBody?.error?.code))) await recordWhatsappAuthError(String(errBody?.error?.message ?? "token"));
       const detail = errBody?.error ? describeMetaError(Number(errBody.error.code) || undefined, errBody.error) : `HTTP ${metaResp.status}`;
       return { ok: false, error: `Metadados da media: ${detail}` };
     }
@@ -248,7 +259,7 @@ export async function downloadMedia(mediaId: string): Promise<WhatsappMediaDownl
       return { ok: false, error: `Ficheiro demasiado grande (${Math.round(meta.file_size / 1024 / 1024)} MB).` };
     }
 
-    const fileResp = await fetch(meta.url, { headers: { Authorization: `Bearer ${token}` } });
+    const fileResp = await fetchWithTimeout(meta.url, { headers: { Authorization: `Bearer ${token}` }, timeoutMs: 30_000 });
     if (!fileResp.ok) return { ok: false, error: `Download da media: HTTP ${fileResp.status}` };
     const buf = Buffer.from(await fileResp.arrayBuffer());
     if (buf.byteLength > MEDIA_MAX_BYTES) {

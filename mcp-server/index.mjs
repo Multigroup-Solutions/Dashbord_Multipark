@@ -154,13 +154,13 @@ const tools = [
   },
   {
     name: "list_campaigns",
-    description: "Lista as campanhas de marketing (internas + ad) com id, tipo, projeto e orçamento diário.",
+    description: "Lista as campanhas de marketing (internas, ad antigas e 'api' = Google Ads/Meta) com id, tipo, projeto e orçamento diário.",
     inputSchema: { type: "object", properties: {} },
     run: () => api("GET", "/campaigns"),
   },
   {
     name: "get_campaign_daily",
-    description: "Histórico diário de uma campanha (gasto, impressões, cliques, CTR, conversões, valor). campaignType: internal|ad.",
+    description: "Histórico diário de uma campanha das APIs Google Ads/Meta (gasto, moeda, impressões, cliques, conversões, valor). campaignType: api (os tipos antigos internal|ad devolvem 410).",
     inputSchema: {
       type: "object",
       properties: { campaignType: { type: "string" }, campaignId: { type: "number" } },

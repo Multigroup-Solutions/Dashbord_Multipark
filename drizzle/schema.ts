@@ -90,6 +90,16 @@ export const integrationConnections = mysqlTable("integration_connections", {
 	uniqueIndex("uq_integration_connections_provider").on(table.provider),
 ]);
 
+// Último estado ALERTADO por ligação/cron (migração 0105) — alertas de
+// reautorização/erro/cron parado uma vez por transição.
+export const integrationAlertState = mysqlTable("integration_alert_state", {
+	alertKey: varchar({ length: 96 }).primaryKey(),
+	state: varchar({ length: 32 }).notNull(),
+	detail: varchar({ length: 500 }),
+	changedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	alertedAt: timestamp({ mode: 'string' }),
+});
+
 // Estado anti-CSRF do fluxo OAuth (consumido uma vez).
 export const oauthStates = mysqlTable("oauth_states", {
 	state: varchar({ length: 96 }).primaryKey(),

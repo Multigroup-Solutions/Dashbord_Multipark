@@ -52,3 +52,37 @@ export function notificationLocation(data: unknown): string | null {
   if (/^accounts\/\d+\/locations\/\d+$/.test(location)) return location.split('/').slice(2).join('/');
   throw new Error('Identificador de estabelecimento inválido.');
 }
+
+/** Na 1.ª importação de um perfil, críticas mais antigas do que isto não abrem reclamação. */
+export const FIRST_IMPORT_COMPLAINT_MAX_AGE_DAYS = 14;
+
+/**
+ * Abrir reclamação para esta crítica? ≤3★, ainda sem reclamação e não
+ * descartada. Na PRIMEIRA importação de um perfil (histórico todo de uma vez)
+ * não se abrem reclamações de críticas com mais de 14 dias nem das que já
+ * têm resposta pública — senão a ligação despejava dezenas de casos antigos
+ * já tratados. PURA.
+ */
+export function shouldOpenComplaint(i: {
+  rating: number; hasComplaint: boolean; dismissed: boolean; firstImport: boolean;
+  updatedIso: string; hasReply: boolean; nowMs?: number;
+}): boolean {
+  if (i.rating > 3 || i.hasComplaint || i.dismissed) return false;
+  if (!i.firstImport) return true;
+  if (i.hasReply) return false;
+  const t = Date.parse(i.updatedIso);
+  if (!Number.isFinite(t)) return false;
+  return (i.nowMs ?? Date.now()) - t <= FIRST_IMPORT_COMPLAINT_MAX_AGE_DAYS * 86_400_000;
+}
+
+/**
+ * Parar a paginação depois desta página? As críticas vêm por updateTime
+ * DESC: uma página em que TUDO já estava igual significa que o resto também
+ * está — exceto durante um backfill (1.ª importação ou retoma de uma página
+ * guardada) ou quando o perfil foi marcado como sujo (dirtyAt: notificação
+ * ou mudança de associação), que exigem a volta completa. PURA.
+ */
+export function shouldStopPaging(i: { results: string[]; backfill: boolean; dirty: boolean }): boolean {
+  if (i.backfill || i.dirty || i.results.length === 0) return false;
+  return i.results.every((r) => r === 'unchanged');
+}

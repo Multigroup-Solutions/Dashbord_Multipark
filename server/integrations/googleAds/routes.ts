@@ -6,7 +6,7 @@
  */
 import type { Express, Request, Response } from "express";
 import { sdk } from "../../_core/sdk";
-import { OAUTH_CALLBACK_PATH, missingOAuthEnvs, readGoogleAdsConfig } from "./config";
+import { OAUTH_CALLBACK_PATH, missingOAuthEnvs, readGoogleAdsConfig, safeRedirectPath } from "./config";
 import { buildConsentUrl, consumeOAuthState, createOAuthState, exchangeCodeForTokens, saveConnection, storeRefreshToken } from "./oauth";
 import { refreshAccounts, runGoogleAdsSync } from "./sync";
 import { normalizeSyncKind } from "./metrics";
@@ -43,7 +43,7 @@ export function registerGoogleAdsRoutes(app: Express) {
       return;
     }
     try {
-      const state = await createOAuthState(user.id, typeof req.query.redirectTo === "string" ? req.query.redirectTo : null);
+      const state = await createOAuthState(user.id, safeRedirectPath(req.query.redirectTo));
       res.redirect(302, buildConsentUrl(state, getOrigin(req)));
     } catch (err: any) {
       res.status(500).type("html").send(errorPage("Erro a iniciar a ligação", String(err?.message ?? err)));
@@ -60,7 +60,7 @@ export function registerGoogleAdsRoutes(app: Express) {
     try {
       const tokens = await exchangeCodeForTokens(code, getOrigin(req));
       const cfg = readGoogleAdsConfig();
-      await storeRefreshToken(tokens, st.userId, cfg.loginCustomerId);
+      const stored = await storeRefreshToken(tokens, st.userId, cfg.loginCustomerId);
       // descobre as contas (não bloqueia a ligação se o acesso do projeto Cloud ainda não estiver aprovado)
       let discovered = "";
       try {
@@ -70,7 +70,10 @@ export function registerGoogleAdsRoutes(app: Express) {
         discovered = `&accountsError=${encodeURIComponent(String(err?.message ?? err).slice(0, 200))}`;
         await saveConnection({ lastError: `Ligado, mas a listagem de contas falhou: ${String(err?.message ?? err).slice(0, 300)}` });
       }
-      res.redirect(302, `${st.redirectTo || PAGE}?connected=1${discovered}`);
+      // redirectTo validado outra vez à saída (estados antigos gravados antes da validação)
+      const target = safeRedirectPath(st.redirectTo) ?? PAGE;
+      const sep = target.includes("?") ? "&" : "?";
+      res.redirect(302, `${target}${sep}connected=1${stored?.identityChanged ? "&identityChanged=1" : ""}${discovered}`);
     } catch (err: any) {
       const msg = String(err?.message ?? err);
       const hint = /redirect_uri_mismatch/i.test(msg)
@@ -90,7 +93,7 @@ export function registerGoogleAdsRoutes(app: Express) {
       const r = await runGoogleAdsSync({ kind, deadlineAt: Date.now() + 45_000, triggeredById: null });
       res.json({ ranAt: new Date().toISOString(), ...r });
     } catch (err: any) {
-      res.status(500).json({ ok: false, done: true, error: String(err?.message ?? err) });
+      res.status(500).json({ ok: false, done: true, error: String(err?.message ?? err).slice(0, 300) });
     }
   });
 }

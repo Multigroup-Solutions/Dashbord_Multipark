@@ -44,11 +44,8 @@ barnie/
 │   │   ├── cookies.ts
 │   │   ├── sdk.ts
 │   │   ├── llm.ts                (OpenAI integration)
-│   │   ├── imageGeneration.ts
 │   │   ├── voiceTranscription.ts
 │   │   ├── notification.ts       (Nodemailer)
-│   │   ├── dataApi.ts
-│   │   ├── map.ts
 │   │   ├── systemRouter.ts
 │   │   ├── vite.ts
 │   │   └── env.ts

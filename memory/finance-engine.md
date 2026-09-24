@@ -28,8 +28,8 @@ indicadores/qualidade) ficam por fazer.
   payload (InvoicesPage/AnnualPage não mudaram de contrato); routers importam
   daqui. Anual: `monthlyRowsFromTimeseries()` + fusão do histórico importado
   (só meses sem nada real, `fromHistory`).
-- `legacy.ts` — o código antigo, intacto, SÓ para `scripts/finance-parity.ts`.
-  Apagar quando a fase 1 estiver validada em produção.
+- `legacy.ts` e `scripts/finance-parity.ts` — REMOVIDOS (24 set 2026); a
+  paridade abaixo fica como registo histórico.
 
 ## Regras fixadas (antes divergiam)
 | Tema | Faturação (antes) | Anual (antes) | Agora (ambos) |

@@ -19,6 +19,7 @@ import RadioPage from "./pages/RadioPage";
 import PdaRegisterPage from "./pages/PdaRegisterPage";
 import ApiKeysPage from "./pages/ApiKeysPage";
 import IntegrationsGoogleAdsPage from "./pages/IntegrationsGoogleAdsPage";
+import IntegrationsHubPage from "./pages/IntegrationsHubPage";
 import PermissionsPage from "./pages/PermissionsPage";
 import ModulesPage from "./pages/ModulesPage";
 import ProfilePage from "./pages/ProfilePage";
@@ -269,6 +270,9 @@ function Router() {
       </Route>
       <Route path="/integracoes/google-ads">
         {() => (<DashboardLayout><IntegrationsGoogleAdsPage /></DashboardLayout>)}
+      </Route>
+      <Route path="/integracoes">
+        {() => (<DashboardLayout><IntegrationsHubPage /></DashboardLayout>)}
       </Route>
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />

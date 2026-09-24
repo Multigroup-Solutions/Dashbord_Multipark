@@ -62,6 +62,7 @@ export default function IntegrationsGoogleAdsPage() {
     if (p.get("connected") === "1") {
       if (p.get("accountsError")) toast.warning("Ligado à Google, mas a listagem de contas falhou", { description: p.get("accountsError") ?? "", duration: 10000 });
       else toast.success(`Google Ads ligado${p.get("accounts") ? ` · ${p.get("accounts")} conta(s) encontrada(s)` : ""}`);
+      if (p.get("identityChanged") === "1") toast.warning("Ligado com outra conta Google: as contas selecionadas foram limpas — escolhe de novo as contas a consultar.", { duration: 12000 });
       window.history.replaceState({}, "", window.location.pathname);
       invalidate();
     }
@@ -79,7 +80,7 @@ export default function IntegrationsGoogleAdsPage() {
     <div className="space-y-6">
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-xl font-semibold flex items-center gap-2"><Plug className="h-5 w-5" /> Integrações · Google Ads</h1>
+          <h1 className="text-xl font-semibold flex items-center gap-2"><Plug className="h-5 w-5" /> <a href="/integracoes" className="hover:underline">Integrações</a> · Google Ads</h1>
           <p className="text-sm text-muted-foreground max-w-2xl">Ligação de leitura à Google Ads API. Depois de ligada, o servidor recolhe custo, impressões, cliques e conversões por campanha uma vez por dia (última semana) e no dia 2 de cada mês (mês anterior fechado), sem CSV, emails ou browser aberto. Nada aqui altera campanhas ou orçamentos.</p>
         </div>
         <Badge variant="outline" className={`text-sm px-3 py-1 ${st.cls}`}>{status.isLoading ? "…" : st.label}</Badge>
@@ -117,6 +118,8 @@ export default function IntegrationsGoogleAdsPage() {
             <dd className="font-mono text-xs break-all">{typeof window !== "undefined" ? `${window.location.origin}/api/integrations/google-ads/oauth/callback` : s?.config.redirectUri}</dd>
             <dt className="text-muted-foreground">Conta gestora (login-customer-id)</dt>
             <dd className="font-mono text-xs">{s?.loginCustomerId ?? s?.config.loginCustomerId ?? "— (acesso direto)"}</dd>
+            <dt className="text-muted-foreground">Conta Google</dt>
+            <dd className="text-xs">{s?.accountEmail ?? "—"}</dd>
             <dt className="text-muted-foreground">Ligado em</dt>
             <dd>{s?.connectedAt ? fmtPTDateTime(s.connectedAt) : "—"}</dd>
             <dt className="text-muted-foreground">Última recolha concluída</dt>
@@ -189,7 +192,7 @@ export default function IntegrationsGoogleAdsPage() {
       <Card>
         <CardHeader><CardTitle className="text-base flex items-center gap-2"><PlayCircle className="h-4 w-4" /> Recolha</CardTitle></CardHeader>
         <CardContent className="space-y-3">
-          <p className="text-xs text-muted-foreground">Automática pelo cron: diária às 05:45 (última semana, hoje e os 2 dias anteriores provisórios) e mensal no dia 2 (o mês anterior inteiro, os números finais da fatura). A dashboard não volta a pedir o resto. Aqui só se dispara à mão.</p>
+          <p className="text-xs text-muted-foreground">Automática pelo cron (GitHub Actions): diária às 04:45 UTC (05:45 em Lisboa no verão, 04:45 no inverno; última semana, hoje e os 2 dias anteriores provisórios) e mensal no dia 2 às 05:10 UTC (o mês anterior inteiro, já fechado — é o custo reportado pela API, que não desconta IVA nem os créditos por tráfego inválido da fatura; a fatura entra pelas Despesas). A dashboard não volta a pedir o resto. Aqui só se dispara à mão.</p>
           <div className="flex flex-wrap gap-2">
             {(["daily", "monthly", "initial"] as const).map((k) => (
               <Button key={k} variant="outline" size="sm" disabled={s?.status !== "connected" || runSync.isPending} onClick={() => runSync.mutate({ kind: k })} className="gap-1.5">

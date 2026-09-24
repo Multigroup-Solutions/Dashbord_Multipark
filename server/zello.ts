@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { MAX_PLAUSIBLE_KMH, MIN_IMPLICIT_GAP_S, zelloAccuracyOk, zelloBattery, zelloSpeedKmh, zelloTimestamp } from "./zelloGps";
 import { ENV } from "./_core/env";
+import { fetchWithTimeout } from "./_core/fetchWithTimeout";
 
 const NETWORK = process.env.ZELLO_NETWORK ?? "airpark";
 const BASE_URL = `https://${NETWORK}.zellowork.com`;
@@ -13,7 +14,7 @@ let sidExpiresAt = 0;
 
 /** Get a fresh token + sid from Zello */
 async function getToken(): Promise<{ token: string; sid: string }> {
-  const res = await fetch(`${BASE_URL}/user/gettoken`);
+  const res = await fetchWithTimeout(`${BASE_URL}/user/gettoken`);
   const data = await res.json();
   if (data.status !== "OK") throw new Error(`Zello gettoken failed: ${data.status}`);
   return { token: data.token, sid: data.sid };
@@ -37,7 +38,7 @@ async function authenticate(): Promise<string> {
   const authHash = crypto.createHash("md5").update(combined).digest("hex");
 
   const params = new URLSearchParams({ username: USERNAME, password: authHash });
-  const res = await fetch(`${BASE_URL}/user/login?sid=${sid}`, {
+  const res = await fetchWithTimeout(`${BASE_URL}/user/login?sid=${sid}`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: params.toString(),
@@ -50,6 +51,16 @@ async function authenticate(): Promise<string> {
   return sid;
 }
 
+/**
+ * Teste barato (Integrações → Testar): gettoken + login, sem ler dados.
+ * Força uma sessão nova para testar mesmo as credenciais atuais.
+ */
+export async function testZelloLogin(): Promise<void> {
+  currentSid = null;
+  sidExpiresAt = 0;
+  await authenticate();
+}
+
 /** Helper to make authenticated GET requests */
 async function zelloGet(path: string, params?: Record<string, string>): Promise<any> {
   const sid = await authenticate();
@@ -60,7 +71,7 @@ async function zelloGet(path: string, params?: Record<string, string>): Promise<
       url.searchParams.set(k, v);
     }
   }
-  const res = await fetch(url.toString());
+  const res = await fetchWithTimeout(url.toString());
   const data = await res.json();
 
   // If session expired, retry once
@@ -69,7 +80,7 @@ async function zelloGet(path: string, params?: Record<string, string>): Promise<
     sidExpiresAt = 0;
     const newSid = await authenticate();
     url.searchParams.set("sid", newSid);
-    const retryRes = await fetch(url.toString());
+    const retryRes = await fetchWithTimeout(url.toString());
     return retryRes.json();
   }
 
@@ -113,7 +124,7 @@ export interface ZelloChannel {
   isDispatch: boolean;
 }
 
-function isZelloConfigured(): boolean {
+export function isZelloConfigured(): boolean {
   return !!(ENV.zelloApiKey && USERNAME && PASSWORD);
 }
 

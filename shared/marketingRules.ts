@@ -116,3 +116,33 @@ export function weeklyRanges(monday: string): { current: { from: string; to: str
   const add = (day: string, n: number) => { const [y, m, d] = day.split("-").map(Number); return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10); };
   return { current: { from: add(monday, -7), to: add(monday, -1) }, previous: { from: add(monday, -14), to: add(monday, -8) } };
 }
+
+// ─── Moeda dos totais ───────────────────────────────────────────────────────
+
+/** Moeda em que o Marketing soma gastos (sem conversão cambial). */
+export const REPORTING_CURRENCY = "EUR";
+
+/**
+ * Uma linha de gasto entra nos totais? Só em EUR — somar USD/GBP como se
+ * fossem euros dava números errados. Moeda desconhecida (null/vazia: contas
+ * antigas, legado) conta como EUR, que é a moeda de todas as contas da
+ * Multipark. PURA.
+ */
+export function countsInEurTotals(currency: string | null | undefined): boolean {
+  const c = String(currency ?? "").trim().toUpperCase();
+  return !c || c === REPORTING_CURRENCY;
+}
+
+export interface CurrencyExclusion { accountId: number; accountName: string | null; provider: string; currency: string; cost: number }
+
+/** Junta por conta o gasto excluído por moeda (para o aviso visível). PURA. */
+export function summarizeCurrencyExclusions(rows: Array<{ accountId: number; accountName: string | null; provider: string; currency: string | null; cost: number }>): CurrencyExclusion[] {
+  const m = new Map<number, CurrencyExclusion>();
+  for (const r of rows) {
+    if (countsInEurTotals(r.currency)) continue;
+    const e = m.get(r.accountId) ?? { accountId: r.accountId, accountName: r.accountName, provider: r.provider, currency: String(r.currency).trim().toUpperCase(), cost: 0 };
+    e.cost += r.cost;
+    m.set(r.accountId, e);
+  }
+  return Array.from(m.values()).sort((a, b) => b.cost - a.cost);
+}

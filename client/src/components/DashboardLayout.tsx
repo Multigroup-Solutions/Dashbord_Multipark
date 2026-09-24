@@ -197,7 +197,7 @@ export const menuGroups: MenuGroup[] = [
       { icon: ShieldCheck, label: "Permissões", path: "/permissoes", module: "permissoes" },
       { icon: RefreshCw, label: "Sincronização", path: "/multipark/sync", module: "sincronizacao" },
       { icon: Key, label: "API Keys", path: "/api-keys", module: "api_keys" },
-      { icon: Plug, label: "Integrações", path: "/integracoes/google-ads", module: "integracoes" },
+      { icon: Plug, label: "Integrações", path: "/integracoes", module: "integracoes" },
       { icon: ScrollText, label: "Logs", path: "/logs", module: "logs" },
       { icon: SlidersHorizontal, label: "Definições", path: "/definicoes", module: "definicoes" },
     ],

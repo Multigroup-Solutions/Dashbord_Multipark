@@ -3,8 +3,8 @@
  *
  * Mantêm a forma do payload que InvoicesPage/AnnualPage já consomem
  * (invoices.billing e annual.breakdown), mas os números vêm todos de
- * computeFinance(). As funções antigas estão em ./legacy.ts só para a
- * comparação antes/depois (scripts/finance-parity.ts).
+ * computeFinance(). (O código antigo, legacy.ts, e o script de paridade
+ * foram removidos em 24 set 2026, com a fase 1 validada.)
  */
 import { getFinancialHistory } from "../db";
 import { computeFinance, monthlyRowsFromTimeseries } from "./engine";

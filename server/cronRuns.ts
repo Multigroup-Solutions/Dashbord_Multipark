@@ -95,8 +95,11 @@ export function cronRunRecorder(opts: { defer?: (p: Promise<unknown>) => void } 
       const finishedAt = new Date();
       const outcome = cronOutcome(res.statusCode, body);
       const p = idPromise
-        .then((id) => (id ? finishRun(id, startedAt, finishedAt, res.statusCode, outcome.ok, outcome.error) : undefined))
-        .catch((err) => console.warn(`[cron_runs] ${name}: registo final falhou:`, String(err?.message ?? err).slice(0, 160)));
+        .then((id) => (id ? finishRun(id, startedAt, finishedAt, res.statusCode, outcome.ok, outcome.error ?? outcome.note ?? null) : undefined))
+        .catch((err) => console.warn(`[cron_runs] ${name}: registo final falhou:`, String(err?.message ?? err).slice(0, 160)))
+        // Alertas (ligação a religar / cron parado), 1×/10 min por processo.
+        .then(() => import("./integrations/alerts").then((m) => m.evaluateIntegrationAlerts()))
+        .catch(() => undefined);
       if (opts.defer) {
         try { opts.defer(p); } catch { /* segue */ }
       }

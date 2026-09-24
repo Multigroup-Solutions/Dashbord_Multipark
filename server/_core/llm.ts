@@ -1,4 +1,8 @@
 import { ENV } from "./env";
+import { fetchWithTimeout } from "./fetchWithTimeout";
+
+/** Prazo de uma chamada ao LLM (abaixo dos 60 s do Vercel). */
+const LLM_TIMEOUT_MS = 45_000;
 
 export type Role = "system" | "user" | "assistant" | "tool" | "function";
 
@@ -236,6 +240,54 @@ const resolveApiKey = () => {
 // Modelo das env vars, sem espaços/newline; fallback por provider.
 const resolveModel = (fallback: string) => (process.env.LLM_MODEL || "").trim() || fallback;
 
+/** Modelos por omissão quando LLM_MODEL não está definido. */
+export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-20250514";
+export const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
+
+/**
+ * Estado do modelo configurado (para o hub de Integrações): qual o
+ * fornecedor, que modelo vai ser usado e se é o de omissão (aviso: o de
+ * omissão pode ser retirado pelo fornecedor sem ninguém dar conta). PURA.
+ */
+export function llmModelStatus(env: Record<string, string | undefined> = process.env): {
+  provider: "anthropic" | "openai_compatible"; model: string; source: "env" | "default"; warning: string | null;
+} {
+  const anthropic = (env.LLM_API_URL || "").trim().includes("anthropic");
+  const def = anthropic ? DEFAULT_ANTHROPIC_MODEL : DEFAULT_OPENAI_MODEL;
+  const raw = (env.LLM_MODEL || "").trim();
+  const provider = anthropic ? "anthropic" as const : "openai_compatible" as const;
+  if (!raw) return { provider, model: def, source: "default", warning: "LLM_MODEL não definido — a usar o modelo por omissão do código." };
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:/@-]{1,127}$/.test(raw)) return { provider, model: raw, source: "env", warning: "LLM_MODEL tem um formato inválido (espaços ou caracteres estranhos)." };
+  if (raw === def) return { provider, model: raw, source: "env", warning: "LLM_MODEL igual ao modelo por omissão — confirma que continua disponível." };
+  return { provider, model: raw, source: "env", warning: null };
+}
+
+/**
+ * Erro do fornecedor → mensagem CURTA para a UI (nunca o corpo da resposta,
+ * que pode trazer o pedido, dados de clientes ou pistas da chave). O corpo
+ * vai só para o log do servidor, cortado. PURA (exceto o log).
+ */
+export function llmErrorMessage(status: number, bodyText: string): string {
+  let type: string | null = null;
+  try {
+    const j = JSON.parse(bodyText);
+    const t = j?.error?.type ?? j?.error?.code ?? j?.type;
+    if (typeof t === "string" && /^[a-z0-9_.-]{1,60}$/i.test(t)) type = t;
+  } catch { /* texto */ }
+  const hint = status === 401 || status === 403 ? "chave inválida ou sem permissão"
+    : status === 404 ? "modelo ou endereço inexistente (ver LLM_MODEL/LLM_API_URL)"
+    : status === 429 ? "limite de pedidos atingido"
+    : status >= 500 ? "serviço indisponível" : "pedido recusado";
+  return `Falha no serviço de IA (HTTP ${status}: ${hint}${type ? `, ${type}` : ""}).`;
+}
+
+async function failLLM(response: Response): Promise<never> {
+  const body = await response.text().catch(() => "");
+  const scrubbed = body.replace(/(sk-|sk_|key-)[A-Za-z0-9_-]{8,}/g, "***").slice(0, 500);
+  console.warn(`[LLM] HTTP ${response.status}: ${scrubbed}`);
+  throw new Error(llmErrorMessage(response.status, body));
+}
+
 const normalizeResponseFormat = ({
   responseFormat,
   response_format,
@@ -288,8 +340,8 @@ function isAnthropic(): boolean {
 
 async function invokeClaude(params: InvokeParams): Promise<InvokeResult> {
   const apiKey = resolveApiKey();
-  // Usa o LLM_MODEL (limpo) se definido; senão um Sonnet 4 válido por defeito.
-  const model = resolveModel("claude-sonnet-4-20250514");
+  // Usa o LLM_MODEL (limpo) se definido; senão o modelo por omissão (aviso no hub).
+  const model = resolveModel(DEFAULT_ANTHROPIC_MODEL);
 
   // Separate system message from user/assistant messages
   const normalized = params.messages.map(normalizeMessage);
@@ -331,14 +383,26 @@ async function invokeClaude(params: InvokeParams): Promise<InvokeResult> {
     }
   }
 
+  const maxTokens = params.maxTokens ?? params.max_tokens ?? 4096;
   const payload: Record<string, unknown> = {
     model,
-    max_tokens: 4096,
+    max_tokens: Math.max(1, Math.floor(maxTokens)),
     messages: msgs,
   };
+
+  // JSON pedido: json_schema → ferramenta com esse schema (a resposta vem
+  // estruturada no tool_use); json_object → instrução "só JSON".
+  const format = normalizeResponseFormat(params);
+  const JSON_TOOL = "responder_json";
+  if (format?.type === "json_schema") {
+    payload.tools = [{ name: JSON_TOOL, description: format.json_schema.name || "Resposta estruturada", input_schema: format.json_schema.schema }];
+    payload.tool_choice = { type: "tool", name: JSON_TOOL };
+  } else if (format?.type === "json_object") {
+    system += "Responde APENAS com um objeto JSON válido, sem texto antes ou depois e sem blocos de código.\n";
+  }
   if (system.trim()) payload.system = system.trim();
 
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
+  const response = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -346,17 +410,16 @@ async function invokeClaude(params: InvokeParams): Promise<InvokeResult> {
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify(payload),
+    timeoutMs: LLM_TIMEOUT_MS,
   });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`);
-  }
+  if (!response.ok) await failLLM(response);
 
   const data = await response.json() as any;
 
   // Convert Anthropic response to OpenAI format
-  const textContent = data.content?.find((c: any) => c.type === "text")?.text || "";
+  const toolUse = format?.type === "json_schema" ? data.content?.find((c: any) => c.type === "tool_use" && c.name === JSON_TOOL) : null;
+  const textContent = toolUse ? JSON.stringify(toolUse.input ?? {}) : data.content?.find((c: any) => c.type === "text")?.text || "";
   return {
     id: data.id || "",
     created: Date.now(),
@@ -389,7 +452,7 @@ async function invokeOpenAI(params: InvokeParams): Promise<InvokeResult> {
     response_format,
   } = params;
 
-  const model = resolveModel("gpt-4o-mini");
+  const model = resolveModel(DEFAULT_OPENAI_MODEL);
 
   const payload: Record<string, unknown> = {
     model,
@@ -408,7 +471,7 @@ async function invokeOpenAI(params: InvokeParams): Promise<InvokeResult> {
     payload.tool_choice = normalizedToolChoice;
   }
 
-  payload.max_tokens = 32768;
+  payload.max_tokens = params.maxTokens ?? params.max_tokens ?? 32768;
 
   const normalizedResponseFormat = normalizeResponseFormat({
     responseFormat,
@@ -421,23 +484,25 @@ async function invokeOpenAI(params: InvokeParams): Promise<InvokeResult> {
     payload.response_format = normalizedResponseFormat;
   }
 
-  const response = await fetch(apiUrl, {
+  const response = await fetchWithTimeout(apiUrl, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify(payload),
+    timeoutMs: LLM_TIMEOUT_MS,
   });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(
-      `LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`
-    );
-  }
+  if (!response.ok) await failLLM(response);
 
   return (await response.json()) as InvokeResult;
+}
+
+/** Teste barato (Integrações → Testar): 1 token de resposta. */
+export async function testLLM(): Promise<{ model: string }> {
+  const r = await invokeLLM({ messages: [{ role: "user", content: "Responde só: ok" }], maxTokens: 1 });
+  return { model: r.model || llmModelStatus().model };
 }
 
 export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {

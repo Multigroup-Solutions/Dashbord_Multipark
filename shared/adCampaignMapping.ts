@@ -182,3 +182,6 @@ export function campaignTabBrand(
   if (c.accountId == null) return "Sem conta";
   return accountBrand.get(c.accountId) ?? accountName.get(c.accountId) ?? `Conta ${c.accountId}`;
 }
+
+/** Fornecedores cujas campanhas recebem sugestão de marca/cidade pelo nome (Google Ads E Meta). */
+export const CAMPAIGN_SUGGEST_PROVIDERS = ["google_ads", "meta"] as const;

@@ -401,6 +401,17 @@ app.get("/api/cron/daily-ops", async (req, res) => {
       }
     }
 
+    // Zello não configurado: a recolha GPS não pode correr — antes devolvia
+    // "0 condutores, sucesso" em silêncio. Agora o cron fica vermelho com o
+    // motivo (a manutenção acima já correu).
+    const { isZelloConfigured } = await import("../zello");
+    if (!isZelloConfigured()) {
+      return res.json({
+        ok: false, ranAt: new Date().toISOString(), done: true, stepErrors, skipped: "zello_not_configured",
+        error: "Zello não configurado (ZELLO_API_KEY/ZELLO_USERNAME/ZELLO_PASSWORD): recolha GPS diária não correu.",
+        warnings: ["Recolha GPS saltada: Zello não configurado."],
+      });
+    }
     const { collectDailyDriverData } = await import("../jobs/dailyDriverCollection");
     // ?date=YYYY-MM-DD permite recolher um dia específico (backfill de dias
     // falhados); por omissão, o dia anterior.
@@ -423,8 +434,10 @@ app.get("/api/cron/daily-ops", async (req, res) => {
         stepErrors.push(`recalcular GPS: ${String(err?.message ?? err).slice(0, 200)}`);
       }
     }
+    // Recolha Zello falhada (login, API em baixo…) → ok:false com o motivo.
     res.json({
-      ok: true, ranAt: new Date().toISOString(), date: yesterday.toISOString().slice(0, 10), stepErrors, ...result,
+      ok: result.success, ranAt: new Date().toISOString(), date: yesterday.toISOString().slice(0, 10), stepErrors, ...result,
+      ...(result.success ? {} : { error: `Recolha Zello falhou: ${String(result.errors[result.errors.length - 1] ?? "sem detalhe").slice(0, 300)}` }),
       recompute,
       done: result.done && (recompute == null || recompute.remaining === 0),
     });
