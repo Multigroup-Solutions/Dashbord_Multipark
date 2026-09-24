@@ -1,6 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
+
+// Sem BD nos testes: o middleware de cidades (centro de custos) dá acesso total.
+vi.mock("./cityAccess", async original => ({
+  ...await original<object>(),
+  loadCityAccess: async () => ({ all: true, defaultCityId: null, cityIds: [], projectIds: [], missingCostCenter: false }),
+}));
+// Criar utilizador escreve na BD; aqui só interessa a regra de acesso do router.
+vi.mock("./db", async original => ({
+  ...await original<object>(),
+  createManualUser: async (data: { name: string; email: string; role: string }) => ({ id: 1, ...data }),
+}));
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
 
