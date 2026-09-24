@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Card } from "@/components/ui/card";
 import { BarChart3, Megaphone } from "lucide-react";
 import MarketingGoogleAdsPage from "./MarketingGoogleAdsPage";
+import MarketingDashboardPanel from "@/components/marketing/MarketingDashboardPanel";
 
 /**
  * Marketing (Jorge, 16 set 2026): o menu "Marketing" abre o DASHBOARD de
@@ -13,22 +13,14 @@ import MarketingGoogleAdsPage from "./MarketingGoogleAdsPage";
  *  - /marketing e /marketing-dashboard → separador Dashboard
  *  - /marketing/google-ads → separador Google Ads
  *
- * O conteúdo do Dashboard ainda está por definir pelo Jorge; até lá fica
- * o esqueleto (sem inventar indicadores).
+ * Dashboard: indicadores do marketing e qualidade da atribuição
+ * (components/marketing/MarketingDashboardPanel.tsx).
  */
 
 const ADS_PATH = "/marketing/google-ads";
 const DASH_PATH = "/marketing";
 
-export function MarketingDashboardPanel() {
-  return (
-    <Card className="p-12 text-center">
-      <BarChart3 className="w-12 h-12 mx-auto text-muted-foreground mb-3" />
-      <p className="font-medium">Dashboard de Marketing</p>
-      <p className="text-sm text-muted-foreground mt-1">Conteúdo por definir. O gasto do Google Ads por marca e por cidade está no separador Google Ads.</p>
-    </Card>
-  );
-}
+export { MarketingDashboardPanel };
 
 export default function MarketingPage() {
   const [location, navigate] = useLocation();
