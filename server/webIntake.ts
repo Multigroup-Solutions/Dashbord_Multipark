@@ -134,6 +134,10 @@ export async function upsertDriverApplication(input: DriverApplicationInput): Pr
   } catch (err) {
     console.warn("[WebIntake] Falha ao notificar candidatura nova:", String(err).slice(0, 160));
   }
+  // Funil único: a candidatura entra também nos Leads de Extras (source 'site').
+  // Best-effort (onApplicationCreated nunca lança); o cron apanha o que falhar.
+  const { onApplicationCreated } = await import("./extraLeadsSync");
+  await onApplicationCreated(id);
   return { id, created: true, submissionCount: 1 };
 }
 
@@ -309,6 +313,10 @@ export async function approveApplication(
     entityId: id,
     details: `Candidatura aprovada: ${app.fullName} <${app.email}> → employee ${employeeId}${created ? " (criado)" : " (existente)"} · ${costCenterNote}`,
   });
+
+  // O lead correspondente (se existir) fica Convertido e ligado à ficha.
+  const { markLeadConvertedForApplication } = await import("./extraLeadsSync");
+  await markLeadConvertedForApplication(id, employeeId, costCenter.projectId, reviewedById);
 
   return {
     employeeId,

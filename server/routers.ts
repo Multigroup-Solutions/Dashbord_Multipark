@@ -370,6 +370,10 @@ import {
   getZelloUserLocation,
 } from "./zello";
 import { collectDailyDriverData } from "./jobs/dailyDriverCollection";
+import { LEAD_STATUSES } from "../shared/extraLeadsFunnel";
+
+/** Estados dos leads de extras (inclui `replied` — "Respondeu"). */
+const LEAD_STATUS_ENUM = LEAD_STATUSES;
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
@@ -8210,15 +8214,47 @@ export const appRouter = router({
       .input(
         z
           .object({
-            status: z.enum(["new", "contacted", "converted", "declined"]).nullable().optional(),
+            status: z.enum(LEAD_STATUS_ENUM).nullable().optional(),
             search: z.string().max(120).nullable().optional(),
+            source: z.string().max(64).nullable().optional(),
           })
           .optional(),
       )
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
         const { listExtraLeads } = await import("./extraLeads");
-        return listExtraLeads({ status: input?.status ?? null, search: input?.search ?? null });
+        return listExtraLeads({ status: input?.status ?? null, search: input?.search ?? null, source: input?.source ?? null });
+      }),
+
+    // Funil: origem × cidade × semana ISO (new→contacted→replied→converted) +
+    // medianas de 1.º contacto e de conversão. No âmbito de cidades de quem pede.
+    funnel: protectedProcedure
+      .input(z.object({ weeks: z.number().int().min(1).max(52).optional() }).optional())
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { getLeadFunnel } = await import("./extraLeads");
+        return getLeadFunnel({ weeks: input?.weeks });
+      }),
+
+    // Ações em lote: estado (nunca Convertido) e/ou cidade. Visibilidade e
+    // transição verificadas lead a lead; a cidade com assertProjectAccess.
+    bulkUpdate: protectedProcedure
+      .input(
+        z.object({
+          leadIds: z.array(z.number().int().positive()).min(1).max(500),
+          status: z.enum(LEAD_STATUS_ENUM).nullable().optional(),
+          projectId: z.number().int().positive().nullable().optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { bulkUpdateExtraLeads } = await import("./extraLeads");
+        try {
+          return await bulkUpdateExtraLeads(input, ctx.user.id);
+        } catch (err: any) {
+          if (err instanceof TRPCError) throw err;
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao atualizar leads" });
+        }
       }),
 
     create: protectedProcedure
@@ -8248,7 +8284,9 @@ export const appRouter = router({
           phone: z.string().max(32).nullable().optional(),
           email: z.string().max(320).nullable().optional(),
           notes: z.string().max(512).nullable().optional(),
-          status: z.enum(["new", "contacted", "converted", "declined"]).nullable().optional(),
+          status: z.enum(LEAD_STATUS_ENUM).nullable().optional(),
+          // Cidade (nó level='city'); null = sem cidade (só quem vê todas).
+          projectId: z.number().int().positive().nullable().optional(),
         }),
       )
       .mutation(async ({ ctx, input }) => {
@@ -8258,6 +8296,7 @@ export const appRouter = router({
         try {
           return await updateExtraLead(id, patch, ctx.user.id);
         } catch (err: any) {
+          if (err instanceof TRPCError) throw err;
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao atualizar lead" });
         }
       }),

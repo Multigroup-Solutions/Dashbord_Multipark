@@ -12,6 +12,8 @@
  *  8. Escala sugerida preenchida com quem está disponível + alerta de horas
  *     sem gente suficiente (no ecrã e, à tarde, notificação para amanhã).
  *  9. Converter um lead de recrutamento numa ficha de extra (com cidade).
+ * 10. Leads (funil único): importação de candidaturas/emails, resumo diário
+ *     dos leads à espera e lembrete automático a quem não respondeu.
  *
  * Tudo corre pelo cron horário `/api/cron/extras-auto`, que decide pela hora
  * de Lisboa o que está na altura; cada tarefa fica registada numa tabela de
@@ -251,7 +253,7 @@ async function logWhatsappRequest(employeeId: number, kind: string, fields: { ta
     VALUES (${employeeId}, '', ${kind}, ${fields.targetDate ?? null}, NULL, NULL, NULL, ${fields.weekStart ?? null})`);
 }
 
-async function notifyBackoffice(title: string, body: string, link: string): Promise<void> {
+export async function notifyBackoffice(title: string, body: string, link: string): Promise<void> {
   const db = await getDb();
   if (!db) return;
   const { users } = await import("../drizzle/schema");
@@ -644,7 +646,11 @@ export async function convertLeadToExtra(leadId: number, projectId: number, user
       if (Object.keys(patch).length) await db.update(employees).set(patch as any).where(eq(employees.id, employeeId));
     }
 
-    await db.update(extraLeads).set({ status: "converted", employeeId, projectId }).where(eq(extraLeads.id, leadId));
+    const convertedAt = new Date().toISOString().slice(0, 19).replace("T", " ");
+    await db.update(extraLeads).set({ status: "converted", employeeId, projectId, convertedAt }).where(eq(extraLeads.id, leadId));
+    // Funil único: a candidatura pendente da mesma pessoa fica aprovada e ligada.
+    const { approveApplicationForConvertedLead } = await import("./extraLeadsSync");
+    await approveApplicationForConvertedLead(lead, employeeId, userId);
     const { logActivity } = await import("./db");
     await logActivity({
       userId: userId ?? 0,
@@ -710,5 +716,93 @@ export async function runExtrasAutomation(now: Date = new Date()): Promise<Autom
       return out;
     });
   }
+
+  await runLeadAutomation(clock, now, report, run);
   return report;
+}
+
+// ─── Leads de recrutamento (funil, SLA, lembrete) ───────────────────────────
+
+/** Hora de Lisboa a partir da qual sai o resumo diário de leads à espera. */
+const LEAD_SLA_NOTICE_HOUR = 9;
+
+/**
+ * Tarefas horárias dos leads:
+ *  - importação idempotente das candidaturas pendentes e dos emails de
+ *    recrutamento (cada origem só é processada 1×, ver extraLeadsSync);
+ *  - resumo diário (a partir das 9h) dos leads à espera (SLA) ao backoffice;
+ *  - lembrete automático (seg–sáb, 10h–19h, 1× por dia): reenvia o template de
+ *    recrutamento aos `contacted` sem resposta há >3 dias, no máximo 2 envios
+ *    por lead no total.
+ */
+async function runLeadAutomation(
+  clock: LisbonClock,
+  now: Date,
+  report: AutomationReport,
+  run: (key: string, fn: () => Promise<unknown>) => Promise<void>,
+): Promise<void> {
+  try {
+    const { syncApplicationLeads, syncEmailLeads } = await import("./extraLeadsSync");
+    const apps = await syncApplicationLeads();
+    const emails = await syncEmailLeads();
+    report.details["leads-sync"] = { applications: apps, emails };
+    report.ran.push("leads-sync");
+  } catch (err: any) {
+    report.errors.push(`leads-sync: ${String(err?.message ?? err).slice(0, 200)}`);
+  }
+
+  const { selectSlaLeads, selectReminderLeads, isLeadReminderTime } = await import("../shared/extraLeadsFunnel");
+  const loadOpenLeads = async () => {
+    const db = await getDb();
+    if (!db) return [];
+    const { extraLeads } = await import("../drizzle/schema");
+    const { inArray } = await import("drizzle-orm");
+    return db
+      .select({
+        id: extraLeads.id,
+        status: extraLeads.status,
+        createdAt: extraLeads.createdAt,
+        lastContactedAt: extraLeads.lastContactedAt,
+        lastInboundAt: extraLeads.lastInboundAt,
+        contactCount: extraLeads.contactCount,
+        phoneE164: extraLeads.phoneE164,
+      })
+      .from(extraLeads)
+      .where(inArray(extraLeads.status, ["new", "contacted"]));
+  };
+
+  if (clock.hour >= LEAD_SLA_NOTICE_HOUR) {
+    await run(`leads-sla:${clock.date}`, async () => {
+      const { newStale, contactedStale } = selectSlaLeads(await loadOpenLeads(), now.getTime());
+      if (newStale.length || contactedStale.length) {
+        await notifyBackoffice(
+          `Leads à espera: ${newStale.length + contactedStale.length}`,
+          `${newStale.length} novo(s) sem contacto há mais de 24h · ${contactedStale.length} contactado(s) sem resposta há mais de 3 dias.`,
+          "/extras-leads",
+        );
+      }
+      return { newStale: newStale.length, contactedStale: contactedStale.length };
+    });
+  }
+
+  if (isLeadReminderTime(clock) && process.env.LEAD_REMINDERS !== "off") {
+    if (!process.env.WHATSAPP_TOKEN || !process.env.WHATSAPP_PHONE_NUMBER_ID) {
+      report.skipped.push("leads-reminder (WhatsApp não configurado)");
+      return;
+    }
+    await run(`leads-reminder:${clock.date}`, async () => {
+      const due = selectReminderLeads(await loadOpenLeads(), now.getTime());
+      if (!due.length) return { due: 0, sent: 0 };
+      const { contactExtraLeads } = await import("./extraLeads");
+      const { LEAD_RECRUITMENT_TEMPLATE_ID } = await import("../shared/whatsappTemplate");
+      const { getSystemUserId } = await import("./db");
+      const r = await contactExtraLeads({
+        leadIds: due.map((l) => l.id),
+        templateId: LEAD_RECRUITMENT_TEMPLATE_ID,
+        createdById: await getSystemUserId(),
+        note: "lembrete automático a leads sem resposta",
+      });
+      return { due: due.length, sent: r.sent, failed: r.failed };
+    });
+  }
 }
