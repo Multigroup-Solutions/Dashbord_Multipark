@@ -8,6 +8,8 @@
     "api/index.js": { "maxDuration": 60 }
   },
   "rewrites": [
+    { "source": "/crm-preview", "destination": "/crm-preview.html" },
+    { "source": "/crm-preview.html", "destination": "/crm-preview.html" },
     { "source": "/api/(.*)", "destination": "/api/index.js" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]

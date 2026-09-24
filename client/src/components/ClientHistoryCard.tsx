@@ -46,6 +46,7 @@ export default function ClientHistoryCard({ email, phone, plate, name, highlight
         <CardTitle className="text-sm flex items-center gap-2">
           <History className="w-4 h-4 text-primary" />
           Histórico do cliente
+          {email && <a href={`/clientes?email=${encodeURIComponent(email)}`} className="ml-auto text-xs font-normal underline">Abrir no CRM</a>}
           {isLoading && <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />}
         </CardTitle>
         <div className="flex flex-wrap gap-1.5 text-xs">

@@ -21,6 +21,7 @@ import IntegrationsGoogleAdsPage from "./pages/IntegrationsGoogleAdsPage";
 import PermissionsPage from "./pages/PermissionsPage";
 import ModulesPage from "./pages/ModulesPage";
 import ProfilePage from "./pages/ProfilePage";
+import ClientsPage from "./pages/ClientsPage";
 import ComplaintsPage from "./pages/ComplaintsPage";
 import GoogleReviewsPage from "./pages/GoogleReviewsPage";
 import TrainingPage from "./pages/TrainingPage";
@@ -151,6 +152,9 @@ function Router() {
       </Route>
       <Route path="/operacional">
         {() => (<DashboardLayout><OperationalPage /></DashboardLayout>)}
+      </Route>
+      <Route path="/clientes">
+        {() => <DashboardLayout><ClientsPage /></DashboardLayout>}
       </Route>
       <Route path="/reclamacoes">
         {() => (<DashboardLayout><ComplaintsPage /></DashboardLayout>)}
