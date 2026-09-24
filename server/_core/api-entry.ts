@@ -3,6 +3,8 @@ import { registerOAuthRoutes } from "./oauth";
 import { registerGoogleAdsRoutes } from "../integrations/googleAds/routes";
 import { registerMetaAdsRoutes } from "../integrations/meta/routes";
 import { registerGoogleBusinessRoutes } from "../integrations/googleBusiness/routes";
+import { registerGoogleAccountRoutes } from "../google/routes";
+import { registerMailRoutes } from "../mail/routes";
 import { syncReviews as syncGoogleBusinessReviews } from "../integrations/googleBusiness/service";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
@@ -46,6 +48,10 @@ try {
   registerGoogleBusinessRoutes(app, () => waitUntil(syncGoogleBusinessReviews().catch(() => {
     console.error('[Google Business] A recolha será retomada pelo cron.');
   })));
+  // Comunicação: "Ligar a minha conta Google" (OAuth por utilizador), cron
+  // /api/cron/mail-sync, push do Gmail e anexos a pedido.
+  registerGoogleAccountRoutes(app);
+  registerMailRoutes(app, { defer: (p) => waitUntil(p) });
   app.use("/api/external", createExternalApiRouter());
   app.use("/api/v1", createMcpApiRouter());
 
@@ -371,6 +377,16 @@ app.get("/api/cron/daily-ops", async (req, res) => {
       } catch (err) {
         console.warn("[daily-ops] retenção do assistente:", errCode(err));
         stepErrors.push(`retenção assistente: ${errCode(err)}`);
+      }
+      // Comunicação: emails mais antigos do que `mail.retentionYears` e SEM
+      // ligação a cliente/reserva/caso são apagados (os ligados ficam).
+      try {
+        const { runMailRetention } = await import("../mail/store");
+        const r = await runMailRetention({ deadlineAt: startedAt + 22_000 });
+        if (r.messages > 0) console.log(`[daily-ops] emails: ${r.messages} mensagem(ns) e ${r.threads} conversa(s) antes de ${r.cutoff} apagadas${r.partial ? ", continua amanhã" : ""}`);
+      } catch (err) {
+        console.warn("[daily-ops] retenção dos emails:", errCode(err));
+        stepErrors.push(`retenção emails: ${errCode(err)}`);
       }
     }
 

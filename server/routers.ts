@@ -69,6 +69,7 @@ import { googleAdsRouter } from "./integrations/googleAds/router";
 import { metaAdsRouter } from "./integrations/meta/router";
 import { googleBusinessRouter } from "./integrations/googleBusiness/router";
 import { integrationsHubRouter } from "./integrations/hubRouter";
+import { mailRouter, googleAccountRouter } from "./mail/router";
 import { getBookingHistory, getBookingsReport, getBookingTryAllParks } from "./multipark";
 import { deliveryErrorCode } from "./bookingDeliveryQueue";
 import {
@@ -1514,6 +1515,8 @@ export const appRouter = router({
 
   // ── TASKS (KANBAN) ────────────────────────────────────────────────────────────
   tasks: tasksRouter,
+  mail: mailRouter,
+  googleAccount: googleAccountRouter,
   assistant: assistantRouter,
   settings: settingsRouter,
 

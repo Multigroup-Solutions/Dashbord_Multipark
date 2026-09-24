@@ -31,6 +31,8 @@ O Super Admin entra sempre; o Admin entra sozinho quando a matriz lhe dá o mód
 | Ocorrências fora do prazo | `incident_sla` | Ocorrências (view) | por cidade | Team Leader, Supervisor, Backoffice, Admin, Super Admin | — | não | Cron horário: ocorrências fora do prazo (1×/dia, resumo por cidade). |
 | Perdido novo | `lost_found_new` | Perdidos e Achados (view) | por cidade | Team Leader, Supervisor, Backoffice, Admin, Super Admin | — | não | Perdido registado. |
 | Perdidos fora do prazo | `lost_found_sla` | Perdidos e Achados (view) | por cidade | Team Leader, Supervisor, Backoffice, Admin, Super Admin | — | não | Cron horário: perdidos fora do prazo (1×/dia, resumo por cidade + responsável). |
+| Email novo de cliente | `mail_new` | Comunicação (caixas de email partilhadas) (view) | por cidade | Team Leader, Supervisor, Frontoffice, Backoffice, Admin, Super Admin | — | não | Sincronização do Gmail (5 em 5 min): conversa nova ou reaberta numa caixa partilhada com aviso ligado, que não criou reclamação/perdido/crítica/ocorrência — só a quem vê essa caixa (módulo, papéis e cidade da caixa). |
+| Email atribuído a ti | `mail_assigned` | Comunicação (caixas de email partilhadas) (view) | a pessoa | Pessoal | — | não | Alguém te atribui uma conversa de email (Comunicação). |
 
 ### Operações
 
@@ -83,6 +85,7 @@ O Super Admin entra sempre; o Admin entra sozinho quando a matriz lhe dá o mód
 |---|---|---|---|---|---|---|---|
 | Integrações com problemas | `integration_alert` | Integrações (view) | nacional | Admin, Super Admin | sim (ligado) | não | Ligação (Google Ads, Meta, Google Business, WhatsApp) passa a precisar de religação ou fica em erro. |
 | Crons parados | `cron_stale` | Definições (view) | nacional | Admin, Super Admin | sim (ligado) | não | Cron parado há mais do dobro do intervalo. |
+| A tua conta Google | `google_account_reauth` | Minha ficha (view) | a pessoa | Pessoal | sim (ligado) | não | A autorização da tua conta Google (O meu email) expirou ou foi revogada — 1× por mudança de estado. |
 | Sincronização Multipark | `sync_alert` | Sincronização (view) | nacional | Admin, Super Admin | — | não | Sem webhooks Multipark / webhooks retomados / reservas por sincronizar. |
 | Orçamento da IA | `ai_budget` | Definições (view) | nacional | Admin, Super Admin | sim (desligado) | não | Gasto da IA chega ao orçamento do mês. |
 

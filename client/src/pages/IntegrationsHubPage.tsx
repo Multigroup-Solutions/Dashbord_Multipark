@@ -2,6 +2,7 @@
 // configurada sim/não (nunca segredos), estado da ligação, última recolha,
 // último erro, avisos, "Testar" e ligações para as páginas de gestão.
 // Módulo "integracoes": ver = view; testar = edit.
+import { GoogleAccountCard } from "@/components/GoogleAccountCard";
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -58,6 +59,7 @@ export default function IntegrationsHubPage() {
           ? <Badge variant="outline" className="bg-red-100 text-red-800 border-red-200">{problems} com problemas</Badge>
           : <Badge variant="outline" className="bg-emerald-100 text-emerald-800 border-emerald-200">Sem problemas conhecidos</Badge>)}
       </div>
+      <div className="max-w-xl"><GoogleAccountCard compact returnTo="/integracoes" /></div>
 
       {key?.warning && (
         <div className={`rounded-md border px-3 py-2 text-sm flex gap-2 ${key.source === "derived" ? "border-amber-300 bg-amber-50 text-amber-900" : "border-red-300 bg-red-50 text-red-900"}`} role="alert">

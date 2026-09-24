@@ -5,6 +5,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { Clock, Shield, LogOut, ChevronRight, UserCheck, Smartphone, SlidersHorizontal, Bell, Lock, Mail } from "lucide-react";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
+import { GoogleAccountCard } from "@/components/GoogleAccountCard";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { NOTIFICATION_GROUP_LABELS, NOTIFICATION_KIND_DEFS, type NotificationGroup } from "@shared/notificationRouting";
@@ -102,6 +103,8 @@ export default function ProfilePage() {
           </button>
         ))}
       </div>
+
+      <GoogleAccountCard returnTo="/perfil" />
 
       <NotificationPrefsCard />
 

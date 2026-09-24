@@ -86,6 +86,8 @@ import {
   Bell,
   Calendar,
   X,
+  Mail as MailIcon,
+  Inbox,
 } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { CSSProperties, useEffect, useRef, useState } from "react";
@@ -189,6 +191,16 @@ export const menuGroups: MenuGroup[] = [
       { icon: Star, label: "Críticas Google", path: "/criticas", module: "criticas" },
       { icon: AlertTriangle, label: "Ocorrências", path: "/ocorrencias", module: "ocorrencias" },
       { icon: Package, label: "Perdidos e Achados", path: "/perdidos-achados", module: "perdidos" },
+    ],
+  },
+  {
+    label: "Comunicação",
+    icon: MailIcon,
+    items: [
+      // Caixas partilhadas: matriz (comunicacao) + regra de cada caixa no servidor.
+      { icon: Inbox, label: "Caixas partilhadas", path: "/comunicacao", module: "comunicacao" },
+      // O próprio email: qualquer pessoa (a ficha é de todos); liga a conta Google na página.
+      { icon: MailIcon, label: "O meu email", path: "/comunicacao/meu-email", anyOf: ["ficha"] },
     ],
   },
   {
@@ -426,6 +438,13 @@ function DashboardLayoutContent({
     retry: false,
   });
   const waBadge = showWhatsappBadge ? waBadgeQ.data : undefined;
+  // Badge da Comunicação: conversas com emails por ler (caixas visíveis / pessoal).
+  const showMailBadge = filteredItems.some(i => i.path.startsWith("/comunicacao"));
+  const mailBadgeQ = trpc.mail.badge.useQuery(undefined, { enabled: showMailBadge, refetchInterval: 120_000, retry: false });
+  const mailBadgeFor = (path: string): number => {
+    if (!showMailBadge || !mailBadgeQ.data) return 0;
+    return path === "/comunicacao" ? mailBadgeQ.data.shared : path === "/comunicacao/meu-email" ? mailBadgeQ.data.personal : 0;
+  };
   const isMobile = useIsMobile();
 
   // Acordeão: um grupo aberto de cada vez. Segue a rota ativa (também quando a
@@ -611,6 +630,12 @@ function DashboardLayoutContent({
                                 >
                                   <item.icon className="h-4 w-4" />
                                   <span>{item.label}</span>
+                                  {mailBadgeFor(item.path) > 0 && (
+                                    <span className="ml-auto group-data-[collapsible=icon]:hidden min-w-5 h-5 px-1.5 rounded-full text-[11px] font-bold leading-5 text-center text-white bg-primary"
+                                      title={`${mailBadgeFor(item.path)} conversa(s) com emails por ler`}>
+                                      {mailBadgeFor(item.path) > 99 ? "99+" : mailBadgeFor(item.path)}
+                                    </span>
+                                  )}
                                   {item.path === "/whatsapp" && waBadge && waBadge.attention > 0 && (
                                     <span
                                       className={`ml-auto group-data-[collapsible=icon]:hidden min-w-5 h-5 px-1.5 rounded-full text-[11px] font-bold leading-5 text-center text-white ${

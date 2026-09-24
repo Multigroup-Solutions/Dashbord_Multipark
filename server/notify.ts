@@ -39,6 +39,8 @@ export interface NotifyInput {
   link?: string | null;
   /** Registo a que se refere (deduplicação). */
   entity?: { type: string; id: string | number } | null;
+  /** Restrição extra de destinatários (ex.: só quem vê a caixa de email). */
+  recipientFilter?: (c: RoutingCandidate) => boolean;
 }
 
 export interface NotifyResult { recipients: number[]; emailed: number; duplicates: number; city: NotifyCity | null }
@@ -81,6 +83,7 @@ export async function notifyWith(deps: NotifyDeps, input: NotifyInput): Promise<
       city,
       targetUserIds: ids([input.targetUserId, ...(input.targetUserIds ?? [])]),
       alsoUserIds: ids(input.alsoUserIds),
+      filter: input.recipientFilter,
     }, candidates, routing);
     if (!routed.length) return out;
 

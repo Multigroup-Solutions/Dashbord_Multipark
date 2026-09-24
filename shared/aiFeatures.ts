@@ -34,7 +34,8 @@ export type AiFlag =
   | "AI_LEAD_SCORING"
   | "AI_EVALUATION_EXPLAIN"
   | "AI_HANDOVER_REPEATS"
-  | "AI_TASKS_FROM_TEXT";
+  | "AI_TASKS_FROM_TEXT"
+  | "AI_MAIL_DRAFT";
 
 export interface AiFeatureDef {
   label: string;
@@ -81,6 +82,8 @@ export const AI_FEATURES = {
   evaluation_explain: { label: "Explicação da avaliação", flag: "AI_EVALUATION_EXPLAIN", tier: "lite", essential: false },
   handover_repeats: { label: "Passagem de turno: pendentes repetidos e resumo semanal", flag: "AI_HANDOVER_REPEATS", tier: "lite", essential: false },
   tasks_from_text: { label: "Tarefas a partir de texto", flag: "AI_TASKS_FROM_TEXT", tier: "lite", essential: false },
+  // Comunicação (email): rascunho de resposta — vai para o editor, nunca é enviado sozinho.
+  mail_reply: { label: "Email: rascunho de resposta", flag: "AI_MAIL_DRAFT", tier: "lite", essential: false },
   healthcheck: { label: "Teste da ligação", flag: null, tier: "lite", essential: true },
 } as const satisfies Record<string, AiFeatureDef>;
 

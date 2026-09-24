@@ -12,6 +12,12 @@
 // o ruído: só processa emails cujo Delivered-To é um dos aliases (as ~4000
 // notificações automáticas de reserva têm Delivered-To=reservas@skypark.pt e
 // nunca entram aqui). Dedup por Message-ID. Idempotente.
+//
+// Comunicação (0145): quando uma caixa com o mesmo "pipeline" está a ser lida
+// pela API do Gmail (server/mail), é ESSA sincronização que chama
+// `processInboundEmail` e o IMAP salta o alias (fica como alternativa para o
+// que não estiver configurado). O Message-ID reservado em inbound_emails
+// garante que nenhum email é processado duas vezes.
 
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
@@ -68,6 +74,8 @@ export type EmailSyncResult = {
   partial: boolean;
   /** Reclamações triadas pela IA nesta corrida (0 se desligada/sem tempo). */
   aiTriaged?: number;
+  /** Aliases lidos pela sincronização do Gmail (Comunicação) — o IMAP salta-os. */
+  viaGmail?: string[];
 };
 
 /** Prazo de ligação ao IMAP (também usado no teste das Integrações). */
@@ -551,14 +559,163 @@ async function afterComplaintEmail(
   }
 }
 
+/** Anexo cru (mailparser no IMAP; bytes da API no Gmail). */
+export type RawInboundAttachment = { filename?: string; contentType?: string; size?: number; content?: Buffer | null; related?: boolean };
+
+/** Um email já lido (IMAP ou API Gmail), pronto para o pipeline dos módulos. */
+export interface InboundEmailInput {
+  alias: InboundAlias;
+  /** Message-ID (dedup em inbound_emails — o MESMO nas duas fontes). */
+  messageId: string;
+  /** X-GM-THRID em decimal (o Gmail API dá-o em hex — converter antes). */
+  gmThreadId: string | null;
+  refs: string[];
+  fromName?: string;
+  fromEmail?: string;
+  subject: string;
+  receivedAt: string | null;
+  text?: string | null;
+  html?: string | null;
+  /** Só chamado DEPOIS de reservar o Message-ID (duplicados não descarregam nada). */
+  loadAttachments: () => Promise<RawInboundAttachment[]>;
+}
+
+export type InboundOutcome =
+  | { status: "duplicate" }
+  | { status: "skipped"; claimId: number }
+  | { status: "processed"; claimId: number; routed: { targetModule: string; targetId?: number; taskId?: number; isNew?: boolean } };
+
+/**
+ * Processa UM email recebido num alias temático: reserva o Message-ID
+ * (índice UNIQUE → nunca processado duas vezes, venha do IMAP ou do Gmail),
+ * ignora ruído de sistema, guarda anexos, cria/atualiza o registo no módulo e
+ * faz o pós-processamento das reclamações. Lança se falhar a meio (a reserva
+ * é libertada se ainda nada foi criado).
+ */
+export async function processInboundEmail(input: InboundEmailInput): Promise<InboundOutcome> {
+  const { alias, messageId, gmThreadId, refs, fromName, fromEmail, subject, receivedAt } = input;
+  const headerRefs = refs.length ? refs.join(" ").slice(0, 4000) : null;
+  // Dedup ATÓMICO: reserva o Message-ID (índice UNIQUE) ANTES de criar
+  // o registo de destino. Duas corridas em paralelo (cron + botão, ou IMAP +
+  // Gmail) nunca criam a mesma reclamação duas vezes — a 2ª leva duplicado.
+  const claimId = await claimInboundEmail({
+    messageId, alias, fromName, fromEmail, subject, gmThreadId, headerRefs, receivedAt,
+  } as any);
+  if (!claimId) return { status: "duplicate" };
+
+  let routedOk = false;
+  try {
+    // Relatório diário de campanhas por email: DESLIGADO (Jorge, 16 set
+    // 2026). A fonte única do gasto é a Google Ads API; o email fica só
+    // registado, sem tocar em campaign_daily_stats.
+    if (alias === "campanhas") {
+      await updateInboundEmail(claimId, {
+        bodyText: "Ingestão por email desligada — o gasto vem da Google Ads API.",
+        targetModule: "campaigns",
+        status: "skipped",
+        processedAt: now(),
+      } as any);
+      return { status: "skipped", claimId };
+    }
+
+    // ignora ruído de sistema (confirmações de encaminhamento, etc.)
+    if (isSystemEmail(fromEmail, subject)) {
+      await updateInboundEmail(claimId, { status: "skipped", processedAt: now() } as any);
+      return { status: "skipped", claimId };
+    }
+
+    // HTML → texto com html-to-text (mantém quebras de linha para o
+    // parsing "Etiqueta: valor", descodifica entidades, sem <style>).
+    const htmlText = typeof input.html === "string" && input.html ? htmlToPlainText(input.html) : "";
+    const bodyText = (input.text || htmlText || "").slice(0, 20000);
+    const parsed = parseInboundBody(bodyText);
+    // Guarda os ficheiros no storage (antes só se registavam os nomes e o
+    // conteúdo era deitado fora — impossível abrir um CV no backoffice).
+    // Best-effort por anexo: falha de upload não perde o email.
+    const attachments: InboundAttachment[] = [];
+    let raw: RawInboundAttachment[] = [];
+    try { raw = await input.loadAttachments(); } catch (err: any) {
+      console.warn("[EmailInbound] leitura de anexos falhou:", String(err?.message ?? err).slice(0, 160));
+    }
+    for (const a of raw) {
+      // imagens inline de assinatura/logótipo (cid:) não são anexos do cliente
+      if (a.related && String(a.contentType || "").startsWith("image/") && (a.size ?? 0) < 20 * 1024) continue;
+      const meta: InboundAttachment = { filename: a.filename, contentType: a.contentType, size: a.size };
+      if (a.content && a.size && a.size <= 15 * 1024 * 1024) {
+        try {
+          const { storagePut } = await import("../storage");
+          const safe = (a.filename || "anexo").replace(/[^\w.\-]+/g, "_").slice(0, 120);
+          const { url, key } = await storagePut(`inbound/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safe}`, a.content, a.contentType || "application/octet-stream");
+          meta.url = url;
+          meta.key = key;
+        } catch (err: any) {
+          console.warn("[EmailInbound] upload de anexo falhou:", String(err?.message ?? err).slice(0, 160));
+        }
+      }
+      attachments.push(meta);
+    }
+    const attachmentsJson = attachments.length ? JSON.stringify(attachments) : null;
+
+    const routed = await routeToModule(alias, parsed, {
+      subject, bodyText, fromName, fromEmail, messageId, gmThreadId, refs,
+    });
+    routedOk = true;
+
+    await updateInboundEmail(claimId, {
+      clientName: parsed.clientName, clientEmail: parsed.clientEmail,
+      clientPhone: parsed.clientPhone, vehiclePlate: parsed.vehiclePlate,
+      bookingRef: parsed.bookingRef,
+      bodyText,
+      attachmentsJson,
+      targetModule: routed.targetModule, targetId: routed.targetId ?? null,
+      taskId: routed.taskId ?? null,
+      status: "processed",
+      processedAt: now(),
+    } as any);
+
+    if (routed.targetModule === "complaint" && routed.targetId) {
+      await afterComplaintEmail(routed.targetId, {
+        isNew: !!routed.isNew,
+        attachments,
+        messageId,
+        fromEmail,
+      });
+    }
+    return { status: "processed", claimId, routed };
+  } catch (e: any) {
+    if (!routedOk) {
+      // Falhou ANTES de criar o registo: liberta a reserva para a
+      // próxima corrida tentar de novo.
+      await deleteInboundEmail(claimId).catch(() => {});
+    } else {
+      // O registo já existe — nunca libertar (recriava-o); fica em erro.
+      await updateInboundEmail(claimId, { status: "error", errorMsg: String(e?.message ?? e).slice(0, 500), processedAt: now() } as any).catch(() => {});
+    }
+    throw e;
+  }
+}
+
 export async function runEmailInboundSync(opts?: { sinceDays?: number; deadlineAt?: number }): Promise<EmailSyncResult> {
   const result: EmailSyncResult = { configured: false, scanned: 0, created: 0, skipped: 0, errors: [], byAlias: {}, partial: false };
+  // Aliases já lidos pela sincronização do Gmail (Comunicação): o IMAP fica
+  // só como alternativa para os restantes — nunca os dois no mesmo alias.
+  // (Mesmo que corressem os dois, o Message-ID reservado impede o duplicado.)
+  let gmailAliases = new Set<string>();
+  try {
+    const { gmailHandledPipelines } = await import("../mail/store");
+    gmailAliases = await gmailHandledPipelines();
+  } catch { /* sem Comunicação → IMAP para tudo */ }
+  const aliases = imapAliases(gmailAliases);
+  result.viaGmail = ALIASES.filter((a) => gmailAliases.has(a));
   const cfg = imapConfig();
   if (!cfg) {
+    // Tudo lido pelo Gmail → não faz falta IMAP (não é erro).
+    if (!aliases.length) { result.configured = true; return result; }
     result.errors.push("IMAP não configurado (faltam IMAP_USER/IMAP_PASS)");
     return result;
   }
   result.configured = true;
+  if (!aliases.length) return result;
   const sinceDays = opts?.sinceDays ?? Number(process.env.IMAP_SINCE_DAYS || 30);
   // Sem deadline (Railway/manual) corre até ao fim; no Vercel o endpoint passa
   // um prazo < maxDuration para nunca morrer com 504 a meio de um email.
@@ -568,7 +725,7 @@ export async function runEmailInboundSync(opts?: { sinceDays?: number; deadlineA
   await client.connect();
   const lock = await client.getMailboxLock("INBOX");
   try {
-    for (const alias of ALIASES) {
+    for (const alias of aliases) {
       if (Date.now() > deadlineAt) { result.partial = true; break; }
       // Gmail raw search: só emails entregues a este alias, dentro da janela.
       let uids: number[] = [];
@@ -625,112 +782,24 @@ export async function runEmailInboundSync(opts?: { sinceDays?: number; deadlineA
             .flatMap(r => String(r).split(/\s+/))
             .map(r => r.trim())
             .filter(Boolean);
-          const headerRefs = refs.length ? refs.join(" ").slice(0, 4000) : null;
 
           const fromAddr = mail.from?.value?.[0];
-          const fromName = fromAddr?.name || undefined;
-          const fromEmail = fromAddr?.address || undefined;
-          const subject = mail.subject || "";
-          const receivedAt = mail.date ? new Date(mail.date).toISOString().slice(0, 19).replace("T", " ") : null;
-
-          // Dedup ATÓMICO: reserva o Message-ID (índice UNIQUE) ANTES de criar
-          // o registo de destino. Duas corridas em paralelo (cron + botão)
-          // nunca criam a mesma reclamação duas vezes — a 2ª leva duplicado.
-          const claimId = await claimInboundEmail({
-            messageId, alias, fromName, fromEmail, subject, gmThreadId, headerRefs, receivedAt,
-          } as any);
-          if (!claimId) { result.skipped++; continue; }
-
-          let routedOk = false;
-          try {
-            // Relatório diário de campanhas por email: DESLIGADO (Jorge, 16 set
-            // 2026). A fonte única do gasto é a Google Ads API; o email fica só
-            // registado, sem tocar em campaign_daily_stats.
-            if (alias === "campanhas") {
-              await updateInboundEmail(claimId, {
-                bodyText: "Ingestão por email desligada — o gasto vem da Google Ads API.",
-                targetModule: "campaigns",
-                status: "skipped",
-                processedAt: now(),
-              } as any);
-              result.skipped++;
-              continue;
-            }
-
-            // ignora ruído de sistema (confirmações de encaminhamento, etc.)
-            if (isSystemEmail(fromEmail, subject)) {
-              await updateInboundEmail(claimId, { status: "skipped", processedAt: now() } as any);
-              result.skipped++;
-              continue;
-            }
-
-            // HTML → texto com html-to-text (mantém quebras de linha para o
-            // parsing "Etiqueta: valor", descodifica entidades, sem <style>).
-            const htmlText = typeof mail.html === "string" ? htmlToPlainText(mail.html) : "";
-            const bodyText = (mail.text || htmlText || "").slice(0, 20000);
-            const parsed = parseInboundBody(bodyText);
-            // Guarda os ficheiros no storage (antes só se registavam os nomes e o
-            // conteúdo era deitado fora — impossível abrir um CV no backoffice).
-            // Best-effort por anexo: falha de upload não perde o email.
-            const attachments: InboundAttachment[] = [];
-            for (const a of mail.attachments || []) {
-              // imagens inline de assinatura/logótipo (cid:) não são anexos do cliente
-              if ((a as any).related && String(a.contentType || "").startsWith("image/") && (a.size ?? 0) < 20 * 1024) continue;
-              const meta: InboundAttachment = {
-                filename: a.filename, contentType: a.contentType, size: a.size,
-              };
-              if (a.content && a.size && a.size <= 15 * 1024 * 1024) {
-                try {
-                  const { storagePut } = await import("../storage");
-                  const safe = (a.filename || "anexo").replace(/[^\w.\-]+/g, "_").slice(0, 120);
-                  const { url, key } = await storagePut(`inbound/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safe}`, a.content, a.contentType || "application/octet-stream");
-                  meta.url = url;
-                  meta.key = key;
-                } catch (err: any) {
-                  console.warn("[EmailInbound] upload de anexo falhou:", String(err?.message ?? err).slice(0, 160));
-                }
-              }
-              attachments.push(meta);
-            }
-            const attachmentsJson = attachments.length ? JSON.stringify(attachments) : null;
-
-            const routed = await routeToModule(alias, parsed, {
-              subject, bodyText, fromName, fromEmail, messageId, gmThreadId, refs,
-            });
-            routedOk = true;
-
-            await updateInboundEmail(claimId, {
-              clientName: parsed.clientName, clientEmail: parsed.clientEmail,
-              clientPhone: parsed.clientPhone, vehiclePlate: parsed.vehiclePlate,
-              bookingRef: parsed.bookingRef,
-              bodyText,
-              attachmentsJson,
-              targetModule: routed.targetModule, targetId: routed.targetId ?? null,
-              taskId: routed.taskId ?? null,
-              status: "processed",
-              processedAt: now(),
-            } as any);
-
-            if (routed.targetModule === "complaint" && routed.targetId) {
-              await afterComplaintEmail(routed.targetId, {
-                isNew: !!routed.isNew,
-                attachments,
-                messageId,
-                fromEmail,
-              });
-            }
-          } catch (e: any) {
-            if (!routedOk) {
-              // Falhou ANTES de criar o registo: liberta a reserva para a
-              // próxima corrida tentar de novo.
-              await deleteInboundEmail(claimId).catch(() => {});
-            } else {
-              // O registo já existe — nunca libertar (recriava-o); fica em erro.
-              await updateInboundEmail(claimId, { status: "error", errorMsg: String(e?.message ?? e).slice(0, 500), processedAt: now() } as any).catch(() => {});
-            }
-            throw e;
-          }
-
+          const out = await processInboundEmail({
+            alias,
+            messageId,
+            gmThreadId,
+            refs,
+            fromName: fromAddr?.name || undefined,
+            fromEmail: fromAddr?.address || undefined,
+            subject: mail.subject || "",
+            receivedAt: mail.date ? new Date(mail.date).toISOString().slice(0, 19).replace("T", " ") : null,
+            text: mail.text || null,
+            html: typeof mail.html === "string" ? mail.html : null,
+            loadAttachments: async () => (mail.attachments || []).map((a) => ({
+              filename: a.filename, contentType: a.contentType, size: a.size, content: a.content, related: !!(a as any).related,
+            })),
+          });
+          if (out.status !== "processed") { result.skipped++; continue; }
           result.created++;
           result.byAlias[alias] = (result.byAlias[alias] || 0) + 1;
         } catch (e: any) {
@@ -759,6 +828,11 @@ export async function runEmailInboundSync(opts?: { sinceDays?: number; deadlineA
     }
   }
   return result;
+}
+
+/** Aliases que o IMAP ainda lê (os que o Gmail não trata). PURA. */
+export function imapAliases(viaGmail: ReadonlySet<string>): InboundAlias[] {
+  return ALIASES.filter((a) => !viaGmail.has(a));
 }
 
 function now(): string {

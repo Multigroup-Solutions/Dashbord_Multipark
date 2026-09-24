@@ -72,12 +72,14 @@ async function claimTransition(db: Db, key: string, state: AlertState, detail: s
   return Number((updHeader as any)?.affectedRows ?? 0) === 1 ? prev : undefined;
 }
 
-async function sendAlert(db: Db, key: string, kind: "conn" | "cron", title: string, body: string, link: string): Promise<void> {
+async function sendAlert(db: Db, key: string, kind: "conn" | "cron", title: string, body: string, link: string, personalUserId?: number | null): Promise<void> {
   try {
     // Roteamento (shared/notificationRouting.ts): super_admin + admin, na app
-    // e por email (cada pessoa pode desligar o email no Perfil).
+    // e por email (cada pessoa pode desligar o email no Perfil). A conta
+    // Google PESSOAL de alguém avisa só essa pessoa (google_account_reauth).
     const { notify } = await import("../notify");
-    await notify({ kind: kind === "cron" ? "cron_stale" : "integration_alert", title, body, link, entity: { type: "integration_alert", id: key } });
+    if (personalUserId) await notify({ kind: "google_account_reauth", targetUserId: personalUserId, title, body, link, entity: { type: "integration_alert", id: key } });
+    else await notify({ kind: kind === "cron" ? "cron_stale" : "integration_alert", title, body, link, entity: { type: "integration_alert", id: key } });
   } catch (err: any) {
     console.warn("[alerts] notificação falhou:", String(err?.message ?? err).slice(0, 160));
   }
@@ -98,12 +100,24 @@ export async function evaluateIntegrationAlerts(opts: { force?: boolean; now?: n
     const db = await getDb();
     if (!db) return out;
 
-    const items: Array<{ key: string; kind: "conn" | "cron"; name: string; state: AlertState; detail: string | null; label?: string; link: string }> = [];
+    const items: Array<{ key: string; kind: "conn" | "cron"; name: string; state: AlertState; detail: string | null; label?: string; link: string; personalUserId?: number }> = [];
     const conns = rowsOf(await db.execute(sql`SELECT provider, status, lastError FROM integration_connections`));
     for (const c of conns) {
       const name = String(c.provider);
       items.push({ key: `conn:${name}`, kind: "conn", name, state: connectionAlertState(String(c.status)), detail: c.lastError ? String(c.lastError).slice(0, 300) : null, link: CONNECTION_LABELS[name]?.link ?? "/integracoes" });
     }
+    // Comunicação: contas Gmail das caixas partilhadas (delegação) → admins;
+    // conta Google ligada por cada pessoa → só essa pessoa.
+    try {
+      for (const a of rowsOf(await db.execute(sql`SELECT accountKey, email, status, lastError FROM mail_accounts WHERE accountKey LIKE 'dwd:%'`))) {
+        items.push({ key: `mail:${String(a.accountKey).slice(0, 80)}`, kind: "conn", name: String(a.accountKey), label: `Gmail (${a.email ?? a.accountKey})`,
+          state: connectionAlertState(String(a.status)), detail: a.lastError ? String(a.lastError).slice(0, 300) : null, link: "/definicoes" });
+      }
+      for (const g of rowsOf(await db.execute(sql`SELECT userId, email, status, lastError FROM google_user_accounts WHERE status <> 'disconnected'`))) {
+        items.push({ key: `guser:${Number(g.userId)}`, kind: "conn", name: `google_user:${g.userId}`, label: `A tua conta Google (${g.email})`,
+          state: connectionAlertState(String(g.status)), detail: g.lastError ? String(g.lastError).slice(0, 300) : null, link: "/perfil", personalUserId: Number(g.userId) });
+      }
+    } catch { /* tabelas ainda por criar */ }
     try {
       const { getCronStatuses } = await import("../cronRuns");
       for (const c of await getCronStatuses(now)) {
@@ -116,8 +130,10 @@ export async function evaluateIntegrationAlerts(opts: { force?: boolean; now?: n
       if (prev === undefined) continue;
       const t = alertTransition(prev, it.state);
       if (t === "alert") {
-        const m = alertMessage(it.kind, it.name, it.state, it.detail, it.label);
-        await sendAlert(db as any, it.key, it.kind, m.title, m.body, it.link);
+        const m = it.personalUserId
+          ? { title: "A tua conta Google precisa de ser religada", body: `A autorização da tua conta Google expirou ou foi revogada — "O meu email" no dashboard está parado até voltares a ligar a conta no Perfil.${it.detail ? ` Detalhe: ${it.detail}` : ""}` }
+          : alertMessage(it.kind, it.name, it.state, it.detail, it.label);
+        await sendAlert(db as any, it.key, it.kind, m.title, m.body, it.link, it.personalUserId);
         out.alerted.push(it.key);
       } else if (t === "recovered") {
         out.recovered.push(it.key);

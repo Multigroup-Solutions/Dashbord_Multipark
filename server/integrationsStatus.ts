@@ -75,6 +75,10 @@ const DEFS: Def[] = [
     links: [{ label: "WhatsApp", href: "/whatsapp" }] },
   { id: "imap", label: "Email de entrada (IMAP)", description: "Leitura da caixa reservas@ (reclamações, perdidos…).", require: [["IMAP_USER"], ["IMAP_PASS"]], cron: "email-inbound", testable: true, group: "main",
     links: [{ label: "Estado do cron", href: "/definicoes" }] },
+  { id: "gmail", label: "Gmail (Comunicação)", description: "Caixas de email partilhadas lidas e enviadas pela API do Gmail (conta de serviço com delegação no Workspace).", require: [["GOOGLE_WORKSPACE_SERVICE_ACCOUNT_JSON", "GOOGLE_SERVICE_ACCOUNT_JSON"]], cron: "mail-sync", testable: true, group: "main",
+    links: [{ label: "Caixas (Definições → Comunicação)", href: "/definicoes" }, { label: "Comunicação", href: "/comunicacao" }] },
+  { id: "google_account", label: "Contas Google dos utilizadores", description: "\"Ligar a minha conta Google\" (OAuth interno do Workspace) para \"O meu email\".", require: [["GOOGLE_WORKSPACE_CLIENT_ID", "GOOGLE_CLIENT_ID"], ["GOOGLE_WORKSPACE_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"]], group: "main",
+    links: [{ label: "Perfil", href: "/perfil" }] },
   { id: "smtp", label: "Email de saída (SMTP)", description: "Emails enviados pela aplicação e alertas ao dono.", require: [["SMTP_HOST"], ["SMTP_USER"], ["SMTP_PASS"]], testable: true, group: "main", links: [] },
   { id: "zello", label: "Zello", description: "Rádio e GPS dos condutores (recolha diária).", require: [["ZELLO_API_KEY"], ["ZELLO_USERNAME"], ["ZELLO_PASSWORD"]], cron: "daily-ops", testable: true, group: "main",
     links: [{ label: "Estado do cron (daily-ops)", href: "/definicoes" }] },
@@ -251,6 +255,21 @@ export async function testIntegration(id: string): Promise<TestResult> {
     let message = "Ligação OK.";
     await withTimeout((async () => {
       switch (id) {
+        case "gmail": {
+          const { listMailboxes } = await import("./mail/store");
+          const { sourceAccountKey } = await import("../shared/mail");
+          const keys = Array.from(new Set((await listMailboxes({ fresh: true })).filter((m) => m.active && m.sourceKind === "dwd").map((m) => sourceAccountKey(m)).filter((k): k is string => !!k)));
+          // Sem caixas ainda: testa a delegação com GOOGLE_WORKSPACE_ADMIN_SUBJECT (se houver).
+          const { workspaceConfig } = await import("./google/workspace");
+          const subject = workspaceConfig(env).adminSubject;
+          if (!keys.length && subject) keys.push(`dwd:${subject}`);
+          if (!keys.length) throw new Error("Nenhuma caixa partilhada configurada (Definições → Comunicação) nem GOOGLE_WORKSPACE_ADMIN_SUBJECT.");
+          const { gmailApiForAccount } = await import("./mail/gmailApi");
+          const api = await gmailApiForAccount(keys[0]);
+          const p = await api.getProfile();
+          message = `Ligação OK (${p.emailAddress ?? keys[0]}; ${keys.length} conta(s) de origem).`;
+          break;
+        }
         case "database": {
           const { getDb } = await import("./db");
           const db = await getDb();

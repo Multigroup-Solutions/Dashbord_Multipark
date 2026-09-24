@@ -5,6 +5,8 @@ import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerGoogleBusinessRoutes } from "../integrations/googleBusiness/routes";
+import { registerGoogleAccountRoutes } from "../google/routes";
+import { registerMailRoutes } from "../mail/routes";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
@@ -62,6 +64,9 @@ async function startServer() {
   // OAuth callback under /api/oauth/callback
   registerOAuthRoutes(app);
   registerGoogleBusinessRoutes(app);
+  // Comunicação (conta Google por utilizador, cron do Gmail, push, anexos)
+  registerGoogleAccountRoutes(app);
+  registerMailRoutes(app);
   // External REST API (device integrations)
   app.use("/api/external", createExternalApiRouter());
   // MCP Control API (X-API-Key) — paridade com o api-entry.ts (Vercel)
