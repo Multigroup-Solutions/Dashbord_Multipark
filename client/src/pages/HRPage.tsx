@@ -4,6 +4,7 @@ import { usePersistedState } from "@/hooks/usePersistedState";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { RecruitmentSection } from "@/components/RecruitmentSection";
+import { IdentityLinksSection } from "@/components/IdentityLinksSection";
 import { EmployeeAccessAvailability } from '@/components/EmployeeAccessAvailability';
 import { trpc } from "@/lib/trpc";
 import { fmtPTDateTime, fmtPTDate } from "@/lib/lisbonTime";
@@ -2768,6 +2769,9 @@ export default function HRPage() {
             <TabsTrigger value="recrutamento">
               <Mail className="w-4 h-4 mr-2" />Recrutamento
             </TabsTrigger>
+            {(userRole === "admin" || userRole === "super_admin") && (
+              <TabsTrigger value="ligacoes">Ligações</TabsTrigger>
+            )}
           </TabsList>
           <TabsContent value="employees" className="mt-4">
             {employeesList.length === 0 ? (
@@ -2793,6 +2797,11 @@ export default function HRPage() {
           <TabsContent value="recrutamento" className="mt-4">
             <RecruitmentSection />
           </TabsContent>
+          {(userRole === "admin" || userRole === "super_admin") && (
+            <TabsContent value="ligacoes" className="mt-4">
+              <IdentityLinksSection />
+            </TabsContent>
+          )}
         </Tabs>
       )}
 

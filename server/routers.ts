@@ -8204,6 +8204,60 @@ export const appRouter = router({
   }),
 
   // ── LEADS DE EXTRAS (contactos em recrutamento, ainda sem ficha) ──────────
+  // ── LIGAÇÕES funcionário ↔ utilizador ↔ agente Multipark (Fase 4) ────────
+  identityLinks: router({
+    overview: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx.user.role, "admin");
+      const { getLinksOverview } = await import("./identityScreen");
+      return getLinksOverview();
+    }),
+    reconcileNow: protectedProcedure.mutation(async ({ ctx }) => {
+      requireRole(ctx.user.role, "admin");
+      const { runIdentitySweep } = await import("./identityLink");
+      const r = await runIdentitySweep();
+      await logActivity({ userId: ctx.user.id, action: "identity_sweep", entity: "employees", details: JSON.stringify(r).slice(0, 500) });
+      return r;
+    }),
+    createUser: protectedProcedure
+      .input(z.object({ employeeId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        await assertEmployeeAccess(input.employeeId);
+        const { getDb } = await import("./db");
+        const db = await getDb();
+        const found = await getEmployeeById(input.employeeId);
+        if (!db || !found) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha não encontrada" });
+        const { ensureUserForEmployee } = await import("./identity");
+        const r = await ensureUserForEmployee(db as any, { id: input.employeeId, fullName: found.employee.fullName, email: found.employee.email, position: String(found.employee.position ?? ""), userId: found.employee.userId ?? null });
+        if (!r.userId) throw new TRPCError({ code: "BAD_REQUEST", message: "Não deu para ligar: sem email válido, ou o utilizador com esse email já está noutra ficha ativa." });
+        return r;
+      }),
+    linkUser: protectedProcedure
+      .input(z.object({ employeeId: z.number().int().positive(), userId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        await assertEmployeeAccess(input.employeeId);
+        const { linkEmployeeToUser } = await import("./identityScreen");
+        try {
+          await linkEmployeeToUser(input.employeeId, input.userId);
+        } catch (err: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        }
+        await logActivity({ userId: ctx.user.id, action: "account_link", entity: "employee", entityId: input.employeeId, details: `Ficha ligada ao utilizador #${input.userId} (ecrã Ligações)` });
+        return { success: true };
+      }),
+    linkAgent: protectedProcedure
+      .input(z.object({ employeeId: z.number().int().positive(), agentUserId: z.string().min(1).max(128) }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        await assertEmployeeAccess(input.employeeId);
+        const { linkAgentToEmployee } = await import("./identityScreen");
+        const agentName = await linkAgentToEmployee(input.agentUserId, input.employeeId);
+        await logActivity({ userId: ctx.user.id, action: "agent_attach", entity: "employee", entityId: input.employeeId, details: `Agente Multipark ${input.agentUserId} "${agentName}" ligado (ecrã Ligações)` });
+        return { success: true, agentName };
+      }),
+  }),
+
   extraLeads: router({
     list: protectedProcedure
       .input(
