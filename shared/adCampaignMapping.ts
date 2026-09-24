@@ -134,3 +134,22 @@ export function suggestCampaignProjects(campaigns: CampaignForMapping[], project
   }
   return out;
 }
+
+/**
+ * Separadores do Google Ads por MARCA (Jorge, 24 set 2026): cada campanha vai
+ * para a marca que lhe foi escolhida (ex.: "Estacionamento Aeroporto Faro" da
+ * conta Multipark.pt marcada Airpark Faro → Airpark), seja de que conta for.
+ * Nacional ou por associar → marca da conta (ou o nome da conta, se a conta
+ * não tiver marca).
+ */
+export function campaignTabBrand(
+  c: { projectId: number | null; national?: boolean; accountId: number | null },
+  projects: ProjectNode[],
+  accountBrand: Map<number, string>,
+  accountName: Map<number, string>,
+): string {
+  const chosen = !c.national && c.projectId != null ? brandNameForProject(Number(c.projectId), projects) : null;
+  if (chosen) return chosen;
+  if (c.accountId == null) return "Sem conta";
+  return accountBrand.get(c.accountId) ?? accountName.get(c.accountId) ?? `Conta ${c.accountId}`;
+}
