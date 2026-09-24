@@ -241,7 +241,7 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
     return next;
   });
 
-  const canSubmit = !!form.fullName && !!form.email && !!form.multiparkAgentName && form.projectId != null;
+  const canSubmit = !!form.fullName && !!form.email && form.projectId != null;
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) setConfirmStep(false); onClose(); }}>
@@ -266,17 +266,17 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
                 className="mt-1 font-medium"
               />
               <p className="text-xs text-muted-foreground mt-2">
-                Sugerido a partir do nome completo: <strong>{multiparkNameOf(form.fullName)}</strong>
+                Sugerido a partir do nome completo: <strong>{multiparkNameOf(form.fullName)}</strong>. Se não souberes, deixa vazio — a ligação automática encontra o agente.
               </p>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setConfirmStep(false)}>Voltar</Button>
               <Button
-                disabled={!form.multiparkAgentName.trim() || create.isPending}
+                disabled={create.isPending}
                 onClick={() => create.mutate({
                   fullName: form.fullName,
                   email: form.email,
-                  multiparkAgentName: form.multiparkAgentName,
+                  multiparkAgentName: form.multiparkAgentName.trim() || undefined,
                   phone: form.phone || undefined,
                   personalEmail: form.position !== "extra" ? form.personalEmail || undefined : undefined,
                   personalPhone: form.position !== "extra" ? form.personalPhone || undefined : undefined,
@@ -484,11 +484,17 @@ function DocumentsTab({ employeeId, access }: { employeeId: number; access: Empl
   const activeDocTypeRef = useRef<DocType>("id_card");
 
   const uploadBatch = trpc.rh.documents.uploadBatch.useMutation({
-    onSuccess: () => {
+    onSuccess: (r) => {
       utils.rh.documents.list.invalidate({ employeeId });
       utils.rh.documents.checklist.invalidate({ employeeId });
       utils.rh.documents.allStatus.invalidate();
-      toast.success("Documentos carregados!");
+      const filled = (r as any)?.autofill?.filled as string[] | undefined;
+      if (filled?.length) {
+        utils.rh.invalidate();
+        toast.success(`Documentos carregados — a IA preencheu: ${[...new Set(filled)].join(", ")}.`);
+      } else {
+        toast.success("Documentos carregados!");
+      }
       setUploading(false);
       setUploadingCategory(null);
     },
@@ -1884,59 +1890,6 @@ function RunMigration0051Button() {
   );
 }
 
-function BackfillEmployeeProjectButton() {
-  const utils = trpc.useUtils();
-  const { data: projectsList = [] } = trpc.projects.list.useQuery();
-  const [projectId, setProjectId] = useState<number | null>(null);
-  const [onlyExtras, setOnlyExtras] = useState(true);
-  const run = trpc.admin.backfillEmployeeProject.useMutation({
-    onSuccess: (r) => {
-      toast.success(`${r.affected} colaboradores atribuídos a ${r.projectName}`);
-      utils.rh.list.invalidate();
-    },
-    onError: (e) => toast.error(e.message),
-  });
-  const projName = (projectsList as any[]).find(p => p.id === projectId)?.name ?? "";
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Select value={projectId ? String(projectId) : ""} onValueChange={v => setProjectId(parseInt(v))}>
-        <SelectTrigger className="w-56" size="sm">
-          <SelectValue placeholder="Centro de custos (ex: Lisboa)..." />
-        </SelectTrigger>
-        <SelectContent>
-          {sortProjectsHierarchical(projectsList as any[]).map((p: any) => (
-            <SelectItem key={p.id} value={String(p.id)}>
-              <span style={{ paddingLeft: `${p.__depth * 12}px` }} className="inline-flex items-center gap-2">
-                <Badge variant="outline" className={`text-[10px] ${LEVEL_COLOR[p.level ?? "project"] ?? ""}`}>
-                  {LEVEL_LABEL[p.level ?? "project"] ?? p.level}
-                </Badge>
-                {p.name}
-              </span>
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <label className="flex items-center gap-1.5 text-sm text-muted-foreground cursor-pointer select-none">
-        <input type="checkbox" checked={onlyExtras} onChange={e => setOnlyExtras(e.target.checked)} className="h-4 w-4" />
-        só extras
-      </label>
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={run.isPending || !projectId}
-        onClick={() => {
-          if (!projectId) return;
-          const alvo = onlyExtras ? "os extras sem centro" : "todos os colaboradores activos sem centro";
-          if (!confirm(`Atribuir o centro de custos "${projName}" a ${alvo}? Vais poder editar individualmente depois.`)) return;
-          run.mutate({ projectId, onlyExtras });
-        }}
-      >
-        {run.isPending ? "A atribuir..." : "Atribuir aos sem centro"}
-      </Button>
-    </div>
-  );
-}
-
 // ─── EXTRA RATES DIALOG ───────────────────────────────────────────────────────
 function ExtraRatesDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const utils = trpc.useUtils();
@@ -2439,10 +2392,12 @@ export default function HRPage() {
   const [filterPosition, setFilterPosition] = usePersistedState<string>("hr.position", "all");
   const [filterAccount, setFilterAccount] = usePersistedState<string>("hr.account", "all");
   const [filterActive, setFilterActive] = usePersistedState<string>("hr.active", "active");
-  const [filterProject, setFilterProject] = usePersistedState<string>("hr.project", "all");
   // Separador Colaboradores/Extras/Recrutamento também persiste — voltar de
   // uma ficha de extra mantém-nos nos Extras (bug reportado pelo Jorge)
   const [activeTab, setActiveTab] = usePersistedState<string>("hr.tab", "employees");
+  const isAdminRole = userRole === "admin" || userRole === "super_admin";
+  // Para admins, os agentes por ligar vivem no separador Ligações
+  useEffect(() => { if (isAdminRole && activeTab === "agentes") setActiveTab("ligacoes"); }, [isAdminRole, activeTab, setActiveTab]);
   const [showPayroll, setShowPayroll] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
@@ -2466,21 +2421,6 @@ export default function HRPage() {
     projectId: globalFilters.projectId ?? undefined,
   }, { enabled: !isExtra });
   const { data: docStatus = {} } = trpc.rh.documents.allStatus.useQuery(undefined, { enabled: !isExtra });
-  const { data: allProjects = [] } = trpc.projects.list.useQuery(undefined, { enabled: !isExtra });
-
-  // Descendentes do projeto filtrado (cidade/marca/projeto), para filtrar por centro de custos
-  const projectFilterIds = useMemo(() => {
-    if (filterProject === "all") return null;
-    const root = Number(filterProject);
-    const ids = new Set<number>([root]);
-    const walk = (pid: number) => {
-      for (const p of allProjects as any[]) {
-        if (p.parentId === pid) { ids.add(p.id); walk(p.id); }
-      }
-    };
-    walk(root);
-    return ids;
-  }, [filterProject, allProjects]);
 
   // Extra users go directly to their profile
   if (isExtra) {
@@ -2505,8 +2445,7 @@ export default function HRPage() {
     const matchesAccount = filterAccount === "all" ? true
       : filterAccount === "with" ? !!e.userId
       : !e.userId;
-    const matchesProject = !projectFilterIds || (e.projectId != null && projectFilterIds.has(e.projectId));
-    return matchesSearch && matchesAccount && matchesProject;
+    return matchesSearch && matchesAccount;
   });
 
   if (showPayroll) {
@@ -2593,7 +2532,8 @@ export default function HRPage() {
           )}
           {(() => {
             const status = (docStatus as Record<number, { total: number; present: number; missing: string[] }>)[emp.id];
-            const missing = status ? status.total - status.present : 7;
+            if (!status) return null;
+            const missing = status.total - status.present;
             if (missing === 0) return (
               <p className="text-xs text-green-600 flex items-center gap-1">
                 <CheckCircle2 className="w-3 h-3" /> Docs completos
@@ -2616,12 +2556,6 @@ export default function HRPage() {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <p className="text-muted-foreground text-sm">Gestão de colaboradores, ponto e documentação</p>
         <div className="flex items-center gap-2 flex-wrap">
-          {userRole === "super_admin" && <BackfillEmployeeProjectButton />}
-          {userRole === "super_admin" && (
-            <Button variant="outline" size="sm" onClick={() => setShowDashboard(true)}>
-              <BarChart3 className="w-4 h-4 mr-2" /> Dashboard
-            </Button>
-          )}
           <Button onClick={() => setShowCreate(true)} size="sm">
             <UserPlus className="w-4 h-4 mr-2" /> Novo Colaborador
           </Button>
@@ -2632,6 +2566,11 @@ export default function HRPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
+              {userRole === "super_admin" && (
+                <DropdownMenuItem onClick={() => setShowDashboard(true)}>
+                  <BarChart3 className="w-4 h-4 mr-2" /> Dashboard de RH
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem onClick={exportEmployeesCSV}>
                 <Download className="w-4 h-4 mr-2" /> Exportar lista (CSV)
               </DropdownMenuItem>
@@ -2711,28 +2650,6 @@ export default function HRPage() {
             <SelectItem value="without">Sem conta</SelectItem>
           </SelectContent>
         </Select>
-        {/* Cidade / centro de custos / projeto */}
-        <Select value={filterProject} onValueChange={setFilterProject}>
-          <SelectTrigger className="w-full sm:w-52"><SelectValue placeholder="Centro de custos" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Todos os centros</SelectItem>
-            {(() => {
-              const result: any[] = [];
-              const walk = (parentId: number | null, depth: number) => {
-                (allProjects as any[]).filter((p) => p.parentId === parentId).forEach((p) => {
-                  result.push({ ...p, depth });
-                  walk(p.id, depth + 1);
-                });
-              };
-              walk(null, 0);
-              return result.map((p) => (
-                <SelectItem key={p.id} value={String(p.id)}>
-                  {" ".repeat(p.depth * 2)}{p.level === "city" ? "📍" : p.level === "brand" ? "🏷" : p.level === "group" ? "🏢" : "📁"} {p.name}
-                </SelectItem>
-              ));
-            })()}
-          </SelectContent>
-        </Select>
         {/* Ativos / desativados — os desativados mantêm histórico e podem ser reativados */}
         <Select value={filterActive} onValueChange={setFilterActive}>
           <SelectTrigger className="w-full sm:w-40"><SelectValue /></SelectTrigger>
@@ -2746,14 +2663,6 @@ export default function HRPage() {
       {/* Tabs Colaboradores / Extras */}
       {isLoading ? (
         <div className="text-center py-12 text-muted-foreground">A carregar colaboradores...</div>
-      ) : filtered.length === 0 ? (
-        <div className="text-center py-12 text-muted-foreground">
-          <Users className="w-12 h-12 mx-auto mb-3 opacity-30" />
-          <p>Nenhum colaborador encontrado</p>
-          <Button className="mt-4" onClick={() => setShowCreate(true)}>
-            <UserPlus className="w-4 h-4 mr-2" /> Adicionar primeiro colaborador
-          </Button>
-        </div>
       ) : (
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="w-full sm:w-auto">
@@ -2763,19 +2672,24 @@ export default function HRPage() {
             <TabsTrigger value="extras">
               Extras <Badge variant="secondary" className="ml-2">{extrasList.length}</Badge>
             </TabsTrigger>
-            <TabsTrigger value="agentes">
-              Agentes s/ funcionário <UnlinkedAgentsBadge />
-            </TabsTrigger>
+            {!isAdminRole && (
+              <TabsTrigger value="agentes">
+                Agentes s/ funcionário <UnlinkedAgentsBadge />
+              </TabsTrigger>
+            )}
             <TabsTrigger value="recrutamento">
               <Mail className="w-4 h-4 mr-2" />Recrutamento
             </TabsTrigger>
-            {(userRole === "admin" || userRole === "super_admin") && (
+            {isAdminRole && (
               <TabsTrigger value="ligacoes">Ligações</TabsTrigger>
             )}
           </TabsList>
           <TabsContent value="employees" className="mt-4">
             {employeesList.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground text-sm">Sem colaboradores nesta categoria</div>
+              <div className="text-center py-8 text-muted-foreground text-sm">
+                Nenhum colaborador encontrado.
+                <div><Button size="sm" variant="outline" className="mt-3" onClick={() => setShowCreate(true)}><UserPlus className="w-4 h-4 mr-2" /> Novo colaborador</Button></div>
+              </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {employeesList.map(renderCard)}
@@ -2791,13 +2705,15 @@ export default function HRPage() {
               </div>
             )}
           </TabsContent>
-          <TabsContent value="agentes" className="mt-4">
-            <UnlinkedAgentsSection />
-          </TabsContent>
+          {!isAdminRole && (
+            <TabsContent value="agentes" className="mt-4">
+              <UnlinkedAgentsSection />
+            </TabsContent>
+          )}
           <TabsContent value="recrutamento" className="mt-4">
             <RecruitmentSection />
           </TabsContent>
-          {(userRole === "admin" || userRole === "super_admin") && (
+          {isAdminRole && (
             <TabsContent value="ligacoes" className="mt-4">
               <IdentityLinksSection />
             </TabsContent>

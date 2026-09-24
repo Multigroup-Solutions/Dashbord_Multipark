@@ -314,6 +314,11 @@ async function invokeClaude(params: InvokeParams): Promise<InvokeResult> {
               source: { type: "url", url },
             };
           }
+          // PDF em data URI → bloco "document" do Claude (ex.: documentos do RH)
+          if (part.type === "file_url" && part.file_url?.url) {
+            const pdf = String(part.file_url.url).match(/^data:application\/pdf;base64,(.+)$/);
+            if (pdf) return { type: "document", source: { type: "base64", media_type: "application/pdf", data: pdf[1] } };
+          }
           return part;
         });
       }
