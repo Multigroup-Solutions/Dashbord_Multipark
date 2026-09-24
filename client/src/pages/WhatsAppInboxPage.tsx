@@ -191,7 +191,7 @@ export default function WhatsAppInboxPage() {
   // Estado + atribuição (0097): filtros locais, em AND com os de cima.
   const { user } = useAuth();
   const [assigneeFilter, setAssigneeFilter] = useState<AssigneeFilter>("all");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("active");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   // Só conversas com alerta (sem resposta há +SLA ou janela a fechar).
   const [onlyAlerts, setOnlyAlerts] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
