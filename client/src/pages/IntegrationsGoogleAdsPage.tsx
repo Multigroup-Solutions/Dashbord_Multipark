@@ -16,7 +16,7 @@ const STATUS_LABEL: Record<string, { label: string; cls: string }> = {
   error: { label: "Erro", cls: "bg-red-100 text-red-800 border-red-200" },
 };
 const KIND_LABEL: Record<string, string> = { initial: "Inicial (37 meses)", daily: "Diária (última semana)", monthly: "Mensal (mês anterior)", manual: "Manual (tudo)", hourly: "Horária (antiga)", nightly: "Noturna (antiga)" };
-const RUN_STATUS: Record<string, string> = { running: "a correr", partial: "parcial (continua)", done: "concluída", failed: "falhou", skipped: "saltada" };
+const RUN_STATUS: Record<string, string> = { running: "a correr", partial: "parcial (contas falhadas, ou a continuar)", done: "concluída", failed: "falhou", skipped: "saltada" };
 
 export default function IntegrationsGoogleAdsPage() {
   const utils = trpc.useUtils();
@@ -212,6 +212,106 @@ export default function IntegrationsGoogleAdsPage() {
           </div>
         </CardContent>
       </Card>
+
+      <MetaAdsCard projectOptions={projectOptions} />
     </div>
+  );
+}
+
+/**
+ * Meta Ads (Facebook/Instagram) — dormente até META_ACCESS_TOKEN e
+ * META_AD_ACCOUNT_IDS estarem no servidor. Mostra se está configurada, as
+ * contas (marca/cidade da conta), a última recolha e os erros. A marca/cidade
+ * de cada CAMPANHA escolhe-se no Marketing → Anúncios, como no Google.
+ */
+function MetaAdsCard({ projectOptions }: { projectOptions: any[] }) {
+  const utils = trpc.useUtils();
+  const status = trpc.integrations.meta.status.useQuery(undefined, { refetchInterval: 60_000 });
+  const runs = trpc.integrations.meta.sync.runs.useQuery({ limit: 5 });
+  const invalidate = () => { utils.integrations.meta.invalidate(); };
+  const update = trpc.integrations.meta.accounts.update.useMutation({ onSuccess: invalidate, onError: (e) => toast.error(e.message) });
+  const run = trpc.integrations.meta.sync.run.useMutation({
+    onSuccess: (r) => {
+      invalidate();
+      if (r.status === "skipped") toast.warning("Recolha Meta não correu", { description: r.reason });
+      else if (!r.done) toast.info(`Recolha Meta parcial: ${r.rowsWritten} linhas. Carrega outra vez para continuar.`);
+      else if (!r.ok) toast.error("Recolha Meta com falhas", { description: r.reason });
+      else toast.success(`Recolha Meta concluída: ${r.rowsWritten} linhas`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const s = status.data;
+  const connStatus = s?.connection?.status ?? null;
+  return (
+    <Card id="meta">
+      <CardHeader>
+        <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+          <Plug className="h-4 w-4" /> Meta Ads (Facebook / Instagram)
+          <Badge variant="outline" className={`ml-auto text-xs ${!s ? "" : !s.configured ? "bg-muted text-muted-foreground" : connStatus === "reauth_required" || connStatus === "error" ? "bg-red-100 text-red-800 border-red-200" : "bg-emerald-100 text-emerald-800 border-emerald-200"}`}>
+            {!s ? "…" : !s.configured ? "Não configurada" : connStatus === "reauth_required" ? "Token inválido" : connStatus === "error" ? "Erro" : "Configurada"}
+          </Badge>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        {s && !s.configured && (
+          <div className="rounded-md border bg-muted/40 p-3 text-xs space-y-1">
+            <p>Integração dormente. Para ligar, definir no servidor (Vercel → Environment Variables):</p>
+            <ul className="list-disc pl-5">
+              <li><code>META_ACCESS_TOKEN</code> — token de longa duração de um utilizador de sistema (Business Manager) com <code>ads_read</code>;</li>
+              <li><code>META_AD_ACCOUNT_IDS</code> — IDs das contas de anúncios, separados por vírgula (ex.: <code>act_123,act_456</code>);</li>
+              <li><code>META_API_VERSION</code> — opcional (por omissão {s.apiVersion}).</li>
+            </ul>
+            <p>Em falta: {s.missing.join(", ")}.</p>
+          </div>
+        )}
+        {s?.configured && (
+          <>
+            <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
+              <span>API {s.apiVersion}</span>
+              <span>Última recolha com sucesso: {s.lastSuccessfulSyncAt ? fmtPTDateTime(s.lastSuccessfulSyncAt) : "nunca"}{s.stale ? " (parada há mais de 26 h)" : ""}</span>
+              {s.connection?.lastError && <span className="text-red-700 flex items-center gap-1"><AlertTriangle className="h-3.5 w-3.5" /> {s.connection.lastError}</span>}
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead><tr className="border-b text-left text-xs text-muted-foreground"><th className="p-2">Conta</th><th className="p-2">ID</th><th className="p-2">Recolher</th><th className="p-2">Marca / cidade da conta</th><th className="p-2">Última recolha</th><th className="p-2">Erro</th></tr></thead>
+                <tbody>
+                  {(s.accounts ?? []).length === 0 && <tr><td colSpan={6} className="p-3 text-center text-muted-foreground text-xs">As contas aparecem depois da primeira recolha.</td></tr>}
+                  {(s.accounts ?? []).map((a: any) => (
+                    <tr key={a.id} className="border-b align-top">
+                      <td className="p-2">{a.name ?? `Meta ${a.customerId}`}{!s.configuredAccountIds.includes(a.customerId) && <Badge variant="outline" className="ml-1.5 text-[10px]">fora de META_AD_ACCOUNT_IDS</Badge>}</td>
+                      <td className="p-2 text-xs text-muted-foreground">act_{a.customerId}</td>
+                      <td className="p-2"><Switch checked={!!a.selected} onCheckedChange={(v) => update.mutate({ id: a.id, selected: v })} aria-label={`Recolher a conta ${a.name ?? a.customerId}`} /></td>
+                      <td className="p-2">
+                        <Select value={a.projectId != null ? String(a.projectId) : "none"} onValueChange={(v) => update.mutate({ id: a.id, projectId: v === "none" ? null : Number(v) })}>
+                          <SelectTrigger className="h-8 w-56 text-xs"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">— sem marca —</SelectItem>
+                            {projectOptions.map((p: any) => <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </td>
+                      <td className="p-2 text-xs">{a.lastSyncAt ? fmtPTDateTime(a.lastSyncAt) : "—"}</td>
+                      <td className="p-2 text-xs text-red-700 max-w-xs">{a.lastError ?? ""}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {(["daily", "monthly", "initial"] as const).map((k) => (
+                <Button key={k} variant="outline" size="sm" disabled={run.isPending} onClick={() => run.mutate({ kind: k })} className="gap-1.5">
+                  {run.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PlayCircle className="h-3.5 w-3.5" />} {KIND_LABEL[k]}
+                </Button>
+              ))}
+            </div>
+            <ul className="text-xs space-y-0.5">
+              {(runs.data ?? []).map((r: any) => (
+                <li key={r.id}>{fmtPTDateTime(r.startedAt)} · {KIND_LABEL[r.kind] ?? r.kind} · {r.rangeFrom} → {r.rangeTo} · {r.accountsDone}/{r.accountsTotal} contas · {r.rowsWritten} linhas · <b>{RUN_STATUS[r.status] ?? r.status}</b>{r.error ? <span className="text-red-700"> — {r.error}</span> : null}</li>
+              ))}
+            </ul>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }

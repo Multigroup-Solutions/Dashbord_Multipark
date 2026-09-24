@@ -1,6 +1,7 @@
 import express from "express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerGoogleAdsRoutes } from "../integrations/googleAds/routes";
+import { registerMetaAdsRoutes } from "../integrations/meta/routes";
 import { registerGoogleBusinessRoutes } from "../integrations/googleBusiness/routes";
 import { syncReviews as syncGoogleBusinessReviews } from "../integrations/googleBusiness/service";
 import { appRouter } from "../routers";
@@ -36,6 +37,7 @@ let initError: string | null = null;
 try {
   registerOAuthRoutes(app);
   registerGoogleAdsRoutes(app);
+  registerMetaAdsRoutes(app);
   registerGoogleBusinessRoutes(app, () => waitUntil(syncGoogleBusinessReviews().catch(() => {
     console.error('[Google Business] A recolha será retomada pelo cron.');
   })));
@@ -207,8 +209,9 @@ app.get("/api/debug/probe-partner", async (req, res) => {
 });
 
 // ─── Vercel Cron Jobs ────────────────────────────────────────────────────────
-// Vercel chama estes endpoints com Authorization: Bearer <CRON_SECRET>. Em
-// ausência da env var, nenhuma chamada é permitida.
+// O agendador é o GitHub Actions (.github/workflows/*.yml), que chama estes
+// endpoints com Authorization: Bearer <CRON_SECRET>. Em ausência da env var,
+// nenhuma chamada é permitida.
 function cronAuthOk(req: any): boolean {
   const secret = process.env.CRON_SECRET;
   if (!secret) return false;
@@ -251,7 +254,9 @@ app.get("/api/cron/multipark-sync", async (req, res) => {
       partners = { error: String(err?.message ?? err).slice(0, 200) };
       console.warn("[cron multipark-sync] sincronização de parceiros falhou:", partners.error);
     }
-    res.json({ ok: true, ranAt: new Date().toISOString(), ...result, partners });
+    // Falha da descoberta de parceiros → ok:false (o workflow fica vermelho e
+    // abre issue); as reservas já ficaram sincronizadas na mesma.
+    res.json({ ok: !(partners && "error" in partners), ranAt: new Date().toISOString(), ...result, partners });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: String(err?.message ?? err) });
   }
@@ -378,6 +383,17 @@ app.get("/api/cron/daily-ops", async (req, res) => {
         console.warn("[daily-ops] RH docs/faltas:", err);
         stepErrors.push(`RH docs/faltas: ${String((err as any)?.message ?? err).slice(0, 200)}`);
       }
+      // Retenção do registo de atividade: apaga > 12 meses, em lotes de 5000
+      // (DELETE … LIMIT, sem subquery) e com prazo curto — o resto fica para
+      // o dia seguinte.
+      try {
+        const { purgeOldActivityLogs } = await import("../db");
+        const r = await purgeOldActivityLogs({ deadlineAt: startedAt + 15_000 });
+        if (r.deleted > 0) console.log(`[daily-ops] activity_logs: ${r.deleted} registo(s) antigos apagados (${r.batches} lote(s)${r.done ? "" : ", continua amanhã"})`);
+      } catch (err) {
+        console.warn("[daily-ops] retenção activity_logs:", err);
+        stepErrors.push(`retenção logs: ${String((err as any)?.message ?? err).slice(0, 200)}`);
+      }
     }
 
     const { collectDailyDriverData } = await import("../jobs/dailyDriverCollection");
@@ -429,7 +445,8 @@ app.get("/api/cron/extras-auto", async (req, res) => {
 // Leitor de email inbound: lê a caixa reservas@ por IMAP e cria registos nos
 // módulos (Críticas/Reclamações/Perdidos/RH) a partir dos emails reencaminhados
 // para os aliases. Substitui o fluxo Make.com. O GitHub Actions chama-o de hora
-// a hora (multipark-cron.yml, minuto 7); no Railway corre in-process a cada 15 min.
+// a hora (multipark-cron.yml, minuto 7). O agendador in-process do servidor Node
+// (Railway) só corre com INPROCESS_SCHEDULERS=on (desligado por omissão).
 app.get("/api/cron/email-inbound", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
   try {
@@ -438,68 +455,35 @@ app.get("/api/cron/email-inbound", async (req, res) => {
     // 60s e morria SEMPRE com 504. partial:true → o workflow repete a chamada
     // (dedup por messageId torna cada corrida incremental).
     const result = await runEmailInboundSync({ deadlineAt: Date.now() + 45_000 });
-    res.json({ ok: result.configured, done: !result.partial, ranAt: new Date().toISOString(), ...result });
+    // Erros do próprio IMAP (pesquisa por alias falhou) → ok:false, para o
+    // workflow ficar vermelho; erros de UM email ficam só na lista (repetem-se).
+    const imapErrors = result.errors.filter((e) => e.startsWith("search "));
+    res.json({ ok: result.configured && imapErrors.length === 0, done: !result.partial, ranAt: new Date().toISOString(), imapErrors: imapErrors.length, ...result });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: String(err?.message ?? err) });
   }
 });
 
-app.get("/api/cron/multipark-cleanup", async (req, res) => {
-  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
-  try {
-    const { getDb } = await import("../db");
-    const { sql } = await import("drizzle-orm");
-    const db = await getDb();
-    if (!db) return res.status(500).json({ ok: false, error: "DB not available" });
-    const result = await db.execute(sql`
-      DELETE FROM multipark_bookings WHERE id IN (
-        SELECT id FROM (
-          SELECT b1.id FROM multipark_bookings b1
-          INNER JOIN multipark_bookings b2
-            ON b1.externalId = b2.externalId
-           AND (
-                 b1.updatedAt < b2.updatedAt
-              OR (b1.updatedAt = b2.updatedAt AND b1.id < b2.id)
-           )
-          LIMIT 5000
-        ) AS t
-      )
-    `) as any;
-    const meta = Array.isArray(result[0]) ? result[0] : result;
-    const deleted = Number((meta as any)?.affectedRows ?? 0);
-    res.json({ ok: true, ranAt: new Date().toISOString(), deleted });
-  } catch (err: any) {
-    res.status(500).json({ ok: false, error: String(err?.message ?? err) });
+// Health check. Público: só { ok, version? }. Com sessão admin/super_admin
+// ou Authorization: Bearer <CRON_SECRET> → presença (booleana) das variáveis
+// críticas. O erro/stack de arranque NUNCA sai na resposta — só no log.
+app.get("/api/health", async (req, res) => {
+  const { buildHealthBody, cronBearerOk } = await import("../opsRules");
+  let detailed = cronBearerOk(req.headers["authorization"]);
+  if (!detailed && !initError) {
+    try {
+      const user = await sdk.authenticateRequest(req);
+      detailed = !!user && (user.role === "admin" || user.role === "super_admin");
+    } catch { /* sem sessão → resposta pública */ }
   }
-});
-
-// Health check com diagnóstico de env vars críticas (sem expor valores)
-app.get("/api/health", (_req, res) => {
-  res.json({
-    ok: !initError,
-    error: initError,
-    env: {
-      DATABASE_URL: !!process.env.DATABASE_URL,
-      JWT_SECRET: !!process.env.JWT_SECRET,
-      GOOGLE_CLIENT_ID: !!process.env.GOOGLE_CLIENT_ID,
-      GOOGLE_CLIENT_SECRET: !!process.env.GOOGLE_CLIENT_SECRET,
-      VITE_APP_ID: !!process.env.VITE_APP_ID,
-      NODE_ENV: process.env.NODE_ENV ?? null,
-      WHATSAPP_TOKEN: !!process.env.WHATSAPP_TOKEN,
-      WHATSAPP_PHONE_NUMBER_ID: !!process.env.WHATSAPP_PHONE_NUMBER_ID,
-      WHATSAPP_VERIFY_TOKEN: !!process.env.WHATSAPP_VERIFY_TOKEN,
-      WHATSAPP_APP_SECRET: !!process.env.WHATSAPP_APP_SECRET,
-      WHATSAPP_WABA_ID: !!process.env.WHATSAPP_WABA_ID,
-      AVAILABILITY_FORM_TOKEN_SECRET: !!process.env.AVAILABILITY_FORM_TOKEN_SECRET,
-      MULTIPARK_WEBHOOK_SECRET: !!process.env.MULTIPARK_WEBHOOK_SECRET,
-    },
-  });
+  res.status(initError ? 503 : 200).json(buildHealthBody({ initFailed: !!initError, detailed }));
 });
 
 // Handler for Vercel serverless
 const handler = async (req: any, res: any) => {
   if (initError && !req.url.includes("/api/health")) {
-    return res.status(500).json({ error: "Server init failed", details: initError });
+    // Detalhe (stack) só no log do servidor — nunca na resposta.
+    return res.status(500).json({ error: "Server init failed" });
   }
   app(req, res);
 };

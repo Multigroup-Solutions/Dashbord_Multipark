@@ -3,6 +3,7 @@
  * ranking por melhor pontuação, pedidos de promoção, certificados em PDF e
  * perguntas de quiz geradas por IA (rascunhos).
  */
+import { llmConfigured } from "./_core/llm";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -342,9 +343,8 @@ const draftSchema = z.object({
   difficulty: z.enum(["easy", "medium", "hard"]).optional().nullable(),
 });
 
-export function llmConfigured(): boolean {
-  return !!(process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || "").trim();
-}
+// Fonte única: server/_core/llm.ts (re-exportado para os chamadores existentes).
+export { llmConfigured };
 
 /** Extrai a lista de perguntas de uma resposta do LLM (JSON solto ou em ```). */
 export function parseDraftQuestions(text: string): z.infer<typeof draftSchema>[] {

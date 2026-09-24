@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { projectScope, campaignScope, bookingHistoryScope, scopedProjectIds, assertEmployeeAccess, assertProjectAccess, requireGlobalCityAccess, cityScope as cityScopeStore } from './cityScope';
+import { projectScope, bookingHistoryScope, scopedProjectIds, assertEmployeeAccess, assertProjectAccess, requireGlobalCityAccess, cityScope as cityScopeStore } from './cityScope';
 import {
   INCIDENT_SEVERITIES, INCIDENT_STATUSES, INCIDENT_TYPES, LOST_ITEM_TYPES, LOST_PRIORITIES, LOST_STATUSES,
   contentTypeForFilename, incidentStatusPatch, lostStatusPatch, safeExt, textToSafeHtml, utcNowStr,
@@ -11,7 +11,9 @@ import * as XLSX from "xlsx";
 import { ACCESS_DENIED_MSG, COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
-import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
+import { protectedProcedure, publicProcedure, router, invalidatePermissionElevation } from "./_core/trpc";
+import { normalizeEmail } from "@shared/email";
+import { USER_ROLES, superAdminGuard, inviteCompletionError } from "./userAdminRules";
 import { invokeLLM } from "./_core/llm";
 import { notifyOwner } from "./_core/notification";
 import { storagePut } from "./storage";
@@ -43,13 +45,14 @@ const openItemSchema = z.object({
 });
 import { expenseTotals } from "../shared/expenseTotals";
 import { getBillingData, getAnnualBreakdown } from "./finance/compat";
-import { canViewDocuments, canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, CENTER_SCOPED_ROLES, PERSONAL_FIELDS, CONTRACT_FIELDS, type RhViewer, type EmployeeRef, isRhAdmin } from "./rhAccess";
+import { canViewDocuments, canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, CENTER_SCOPED_ROLES, PERSONAL_FIELDS, CONTRACT_FIELDS, type RhViewer, type EmployeeRef, isRhAdmin, canEditIdentity, canReadEmployeeRecord } from "./rhAccess";
 import {
   applyDocsCompliance, getExtraDocsStatus, detectExtraDiaNoShows, listPendingPenalties, reviewPenalty,
   listSuspiciousTimeRecords, reviewTimeRecord, insertTimeRecordAtomic,
   createPayrollRun, listPayrollRuns, getPayrollRun, transitionPayrollRun,
 } from "./rhService";
 import { googleAdsRouter } from "./integrations/googleAds/router";
+import { metaAdsRouter } from "./integrations/meta/router";
 import { googleBusinessRouter } from "./integrations/googleBusiness/router";
 import { transcribeAudio } from "./_core/voiceTranscription";
 import { getBookingHistory, getBookingsReport, getBookingTryAllParks } from "./multipark";
@@ -165,20 +168,6 @@ import {
   seedExtraRates,
   updateExtraRate,
   getHRStats,
-  // Marketing
-  getCampaigns,
-  getCampaignById,
-  createCampaign,
-  updateCampaign,
-  deleteCampaign,
-  getCampaignStats,
-  getAllDailyStats,
-  importDailyStats,
-  deleteDailyStat,
-  getMarketingDashboardStats,
-  getBookingRevenueByProject,
-  getCampaignByNameAndPlatform,
-  getExistingStatsForCampaignAndDateRange,
   // Operacional
   getVehicles,
   getVehicleById,
@@ -285,6 +274,9 @@ import {
   createInviteToken,
   getInviteByToken,
   acceptInviteToken,
+  claimInviteToken,
+  releaseInviteToken,
+  countActiveSuperAdmins,
   getInvitesByUser,
   getInvitesByEmail,
   linkInviteToOAuthUser,
@@ -534,6 +526,20 @@ async function rhEmployeeRefOrThrow(employeeId: number): Promise<EmployeeRef> {
 async function assertEmployeeWriteScope(viewer: RhViewer, ref: EmployeeRef): Promise<void> {
   if (isOwn(viewer, ref.id)) return;
   await assertEmployeeAccess(ref.id);
+}
+/**
+ * Leitura de registos de uma ficha (horas, férias, salário, penalizações):
+ * a própria passa sempre; senão exige `minRole` e a ficha no âmbito de cidade
+ * do pedido — também para admin (um admin limitado a uma cidade não lê
+ * outra). Regra pura em rhAccess.canReadEmployeeRecord.
+ */
+async function assertOwnOrScopedEmployee(user: { id: number; role: string }, employeeId: number, minRole: string): Promise<void> {
+  const me = await getEmployeeByUserId(user.id);
+  const viewer = { role: user.role, employeeId: me?.employee?.id ?? null };
+  if (viewer.employeeId === employeeId) return;
+  const target = await getEmployeeById(employeeId);
+  const ok = canReadEmployeeRecord(viewer, { id: employeeId, projectId: target?.employee.projectId ?? null }, minRole, scopedProjectIds());
+  if (!ok) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
 }
 /** Documentos: quem mexe nos dados pessoais da ficha; sem ficha, só admin+ (checklists vazias). */
 async function assertCanViewDocuments(user: { id: number; role: string }, employeeId: number, message: string): Promise<void> {
@@ -1170,7 +1176,7 @@ export const appRouter = router({
       .input(z.object({
         name: z.string().min(1, "Nome é obrigatório"),
         email: z.string().email("Email inválido"),
-        role: z.string().default("user"),
+        role: z.enum(USER_ROLES).default("user"),
         department: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
@@ -1197,41 +1203,71 @@ export const appRouter = router({
         userId: z.number(),
         name: z.string().min(1).optional(),
         email: z.string().email().optional(),
-        role: z.string().optional(),
+        role: z.enum(USER_ROLES).optional(),
         department: z.string().nullable().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         const isSelf = ctx.user.id === input.userId;
-        // Allow self-edit for name/email only; role/department changes require super_admin
-        if (!isSelf) {
-          requireRole(ctx.user.role, "super_admin");
-        }
+        const isSuper = ctx.user.role === "super_admin";
+        // Editar OUTRA conta: só super_admin. Na própria, quem não é
+        // super_admin só muda o nome (o email é a identidade: liga fichas e
+        // contas — só o super_admin o altera).
+        if (!isSelf) requireRole(ctx.user.role, "super_admin");
         const { userId, ...data } = input;
-        // If self-edit, only allow name and email changes
-        const safeData = isSelf && ctx.user.role !== "super_admin"
-          ? { name: data.name, email: data.email }
-          : data;
-        await updateUser(userId, safeData);
+        const target = await getUserById(userId);
+        if (!target && (isSelf || data.email !== undefined || data.role !== undefined)) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Utilizador não encontrado" });
+        }
+        const emailChanged = data.email !== undefined && normalizeEmail(data.email) !== normalizeEmail(target?.email);
+        if (emailChanged && !isSuper) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Só o super_admin pode alterar o email de uma conta." });
+        }
+        if (emailChanged) {
+          const clash = await getUserByEmail(data.email!);
+          if (clash && clash.id !== userId) {
+            throw new TRPCError({ code: "CONFLICT", message: `Já existe outra conta com o email ${normalizeEmail(data.email)} (#${clash.id}).` });
+          }
+        }
+        const safeData: { name?: string; email?: string; role?: string; department?: string | null } = isSuper
+          ? { ...data, email: emailChanged ? data.email : undefined }
+          : { name: data.name };
+        const roleChanged = safeData.role !== undefined && target != null && safeData.role !== target.role;
+        if (roleChanged) {
+          const guard = superAdminGuard(ctx.user.id, target!, safeData.role!, await countActiveSuperAdmins());
+          if (guard) throw new TRPCError({ code: "FORBIDDEN", message: guard });
+        } else if (safeData.role !== undefined) {
+          delete safeData.role;
+        }
+        // Auto-edição nunca religa fichas por email.
+        await updateUser(userId, safeData, { relinkEmployees: !isSelf });
+        if (roleChanged) invalidatePermissionElevation(userId);
         await logActivity({
           userId: ctx.user.id,
           action: "update",
           entity: "user",
           entityId: userId,
-          details: `Utilizador atualizado: ${JSON.stringify(safeData)}`,
+          details: `Utilizador atualizado: ${JSON.stringify({ ...safeData, ...(roleChanged ? { role: `${target!.role} → ${safeData.role}` } : {}) })}`,
         });
         return { success: true };
       }),
     updateRole: protectedProcedure
-      .input(z.object({ userId: z.number(), role: z.string() }))
+      .input(z.object({ userId: z.number(), role: z.enum(USER_ROLES) }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "super_admin");
+        const target = await getUserById(input.userId);
+        if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "Utilizador não encontrado" });
+        const previous = target.role;
+        if (previous === input.role) return { success: true };
+        const guard = superAdminGuard(ctx.user.id, target, input.role, await countActiveSuperAdmins());
+        if (guard) throw new TRPCError({ code: "FORBIDDEN", message: guard });
         await updateUserRole(input.userId, input.role);
+        invalidatePermissionElevation(input.userId);
         await logActivity({
           userId: ctx.user.id,
           action: "update_role",
           entity: "user",
           entityId: input.userId,
-          details: `Role alterado para ${input.role}`,
+          details: `Role alterado: ${previous} → ${input.role}`,
         });
         return { success: true };
       }),
@@ -1249,6 +1285,12 @@ export const appRouter = router({
         requireRole(ctx.user.role, "super_admin");
         if (input.userId === ctx.user.id) {
           throw new Error("Não podes desativar a tua própria conta");
+        }
+        if (!input.isActive) {
+          // Nunca desativar o último super_admin ativo.
+          const target = await getUserById(input.userId);
+          const guard = target ? superAdminGuard(ctx.user.id, target, null, await countActiveSuperAdmins()) : null;
+          if (guard) throw new TRPCError({ code: "FORBIDDEN", message: guard });
         }
         const deactivation = input.isActive ? null : resolveDeactivationOrThrow(input);
         await toggleUserActive(
@@ -1318,17 +1360,27 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         if (!ctx.user) throw new TRPCError({ code: "UNAUTHORIZED", message: "Tens de fazer login primeiro" });
         const invite = await getInviteByToken(input.token);
-        if (!invite) throw new TRPCError({ code: "NOT_FOUND", message: "Token inválido" });
-        if (invite.inviteStatus === "accepted") throw new TRPCError({ code: "BAD_REQUEST", message: "Convite já utilizado" });
-        if (new Date() > new Date(invite.expiresAt)) throw new TRPCError({ code: "BAD_REQUEST", message: "Convite expirado" });
-        // Link the OAuth user to the manually-created user record
-        await linkInviteToOAuthUser(
-          invite.userId,
-          ctx.user.openId,
-          ctx.user.name,
-          ctx.user.email,
-        );
-        await acceptInviteToken(input.token);
+        // O convite só serve a quem entrou com o MESMO email (forma canónica);
+        // uso único e validade respeitados.
+        const inviteError = inviteCompletionError(invite, ctx.user.email);
+        if (inviteError) throw new TRPCError(inviteError);
+        // Reclama o convite de forma atómica ANTES de ligar (dois pedidos em
+        // paralelo com o mesmo token: só um passa).
+        if (!(await claimInviteToken(input.token))) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Convite já utilizado" });
+        }
+        try {
+          // Link the OAuth user to the manually-created user record
+          await linkInviteToOAuthUser(
+            invite!.userId,
+            ctx.user.openId,
+            ctx.user.name,
+            ctx.user.email,
+          );
+        } catch (err) {
+          await releaseInviteToken(input.token).catch(() => {});
+          throw err;
+        }
         return { success: true };
       }),
   }),
@@ -2292,15 +2344,28 @@ export const appRouter = router({
         entity: z.string().optional(),
         action: z.string().optional(),
         userId: z.number().optional(),
+        // Dias de Lisboa (YYYY-MM-DD), inclusivos; convertidos para UTC.
+        from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        search: z.string().max(200).optional(),
       }).optional())
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "super_admin");
+        const { lisbonDayRangeUtc } = await import("../shared/lisbonDay");
         return getActivityLogs(input?.limit ?? 500, {
           entity: input?.entity,
           action: input?.action,
           userId: input?.userId,
+          from: input?.from ? lisbonDayRangeUtc(input.from).start : undefined,
+          to: input?.to ? lisbonDayRangeUtc(input.to).end : undefined,
+          search: input?.search,
         });
       }),
+    entities: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx.user.role, "super_admin");
+      const { getActivityLogEntities } = await import("./db");
+      return getActivityLogEntities();
+    }),
   }),
 
   // ── RH ───────────────────────────────────────────────────────────────────────────────────────
@@ -2322,7 +2387,27 @@ export const appRouter = router({
     assignments: protectedProcedure.query(async ({ ctx }) => {
       requireRole(ctx.user.role, "admin");
       const { listPermissionAssignments } = await import("./db");
-      return listPermissionAssignments();
+      const rows = await listPermissionAssignments();
+      // Admin limitado a cidades: só vê as atribuições de quem é das suas
+      // cidades, e só pode remover as de quem gere por completo (mesma regra
+      // do guarda de permissions.setForUser em cityScopeGuards.ts).
+      const allowed = scopedProjectIds();
+      if (allowed === undefined) return rows.map((r) => ({ ...r, canManage: true }));
+      const { loadCityAccess } = await import("./cityAccess");
+      const verdict = new Map<number, { visible: boolean; canManage: boolean }>();
+      for (const userId of new Set(rows.map((r) => r.userId))) {
+        try {
+          const target = await loadCityAccess(userId);
+          const visible = !target.all && target.projectIds.some((pid) => allowed.includes(pid));
+          const canManage = visible && !target.missingCostCenter && target.projectIds.every((pid) => allowed.includes(pid));
+          verdict.set(userId, { visible, canManage });
+        } catch {
+          verdict.set(userId, { visible: false, canManage: false });
+        }
+      }
+      return rows
+        .filter((r) => verdict.get(r.userId)?.visible)
+        .map((r) => ({ ...r, canManage: verdict.get(r.userId)?.canManage ?? false }));
     }),
 
     forUser: protectedProcedure
@@ -2347,7 +2432,6 @@ export const appRouter = router({
         }
         const { setUserPermission } = await import("./db");
         await setUserPermission(input.userId, input.permission, input.mode, ctx.user.id);
-        const { invalidatePermissionElevation } = await import('./_core/trpc');
         invalidatePermissionElevation(input.userId);
         await logActivity({ userId: ctx.user.id, action: "set_permission", entity: "user", entityId: input.userId, details: `${input.permission} = ${input.mode ?? "(limpo)"}` });
         return { success: true };
@@ -2482,14 +2566,9 @@ export const appRouter = router({
           if (!me) throw new TRPCError({ code: "NOT_FOUND", message: "Sem ficha de colaborador" });
           employeeId = me.employee.id;
         }
-        // Restringe: salários de outros são só para admin+; abaixo disso
-        // cada um só vê o seu próprio resumo
-        if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) {
-          const me = await getEmployeeByUserId(ctx.user.id);
-          if (!me || me.employee.id !== employeeId) {
-            throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
-          }
-        }
+        // Restringe: salários de outros são só para admin+ DA MESMA cidade;
+        // abaixo disso cada um só vê o seu próprio resumo
+        await assertOwnOrScopedEmployee(ctx.user, employeeId, "admin");
         const now = new Date();
         const year = input?.year ?? now.getFullYear();
         const month = input?.month ?? (now.getMonth() + 1);
@@ -2525,7 +2604,11 @@ export const appRouter = router({
       .input(z.object({ activeOnly: z.boolean().optional() }).optional())
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "extra"); // lista mínima (id+nome) p/ dropdowns; user não acede
-        const rows = await getAllEmployees({ isActive: input?.activeOnly ?? true });
+        let rows = await getAllEmployees({ isActive: input?.activeOnly ?? true });
+        // Âmbito de cidade (inclui extras): só colaboradores das cidades
+        // autorizadas — e nunca mais do que id + nome.
+        const allowedIds = scopedProjectIds();
+        if (allowedIds) rows = rows.filter((r: any) => r.employee.projectId != null && allowedIds.includes(r.employee.projectId));
         return rows.map((row: any) => ({
           id: row.employee.id,
           fullName: row.employee.fullName,
@@ -2765,6 +2848,15 @@ export const appRouter = router({
         }
         if (sent(PERSONAL_FIELDS) && !canEditPersonal(viewer, ref)) {
           throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para alterar os dados desta ficha." });
+        }
+        // Email pessoal liga a ficha a contas (identidade): só admin+ o muda.
+        // Reenviar o mesmo valor (formulário completo) não conta como mudança.
+        if (input.personalEmail !== undefined && !canEditIdentity(viewer, ref)) {
+          const current = await getEmployeeById(input.id);
+          const norm = (v: string | null | undefined) => (v ?? "").trim().toLowerCase();
+          if (norm(input.personalEmail) !== norm(current?.employee.personalEmail)) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "Só um administrador pode alterar o email pessoal (é usado para ligar a ficha à conta)." });
+          }
         }
         // Âmbito de cidade também nas ESCRITAS (revisão 16 set): sem isto um
         // admin do Porto editava salário/NIF de uma ficha de Lisboa.
@@ -3047,6 +3139,7 @@ export const appRouter = router({
           const viewer = await rhViewer(ctx.user);
           const ref = await rhEmployeeRef(input.employeeId);
           if (!isRhAdmin(viewer) && (!ref || !canViewTimeAndSchedule(viewer, ref))) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
+          if (!isOwn(viewer, input.employeeId)) await assertEmployeeAccess(input.employeeId);
           return getEmployeeSchedules(input.employeeId);
         }),
 
@@ -3095,6 +3188,7 @@ export const appRouter = router({
           const viewer = await rhViewer(ctx.user);
           const ref = await rhEmployeeRef(input.employeeId);
           if (!isRhAdmin(viewer) && (!ref || !canViewTimeAndSchedule(viewer, ref))) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
+          if (!isOwn(viewer, input.employeeId)) await assertEmployeeAccess(input.employeeId);
           return getTimeRecords(
             input.employeeId,
             input.startDate ? new Date(input.startDate) : undefined,
@@ -3343,12 +3437,7 @@ export const appRouter = router({
       monthlyHours: protectedProcedure
         .input(z.object({ employeeId: z.number(), year: z.number(), month: z.number() }))
         .query(async ({ ctx, input }) => {
-          if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) {
-            const me = await getEmployeeByUserId(ctx.user.id);
-            if (!me || me.employee.id !== input.employeeId) {
-              throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
-            }
-          }
+          await assertOwnOrScopedEmployee(ctx.user, input.employeeId, "admin");
           return getMonthlyHours(input.employeeId, input.year, input.month);
         }),
     }),
@@ -3485,10 +3574,7 @@ export const appRouter = router({
       list: protectedProcedure
         .input(z.object({ employeeId: z.number(), year: z.number().optional() }))
         .query(async ({ ctx, input }) => {
-          if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) {
-            const me = await getEmployeeByUserId(ctx.user.id);
-            if (!me || me.employee.id !== input.employeeId) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
-          }
+          await assertOwnOrScopedEmployee(ctx.user, input.employeeId, "admin");
           return getEmployeeLeaves(input.employeeId, input.year);
         }),
       create: protectedProcedure
@@ -3518,10 +3604,7 @@ export const appRouter = router({
     salaryHistory: protectedProcedure
       .input(z.object({ employeeId: z.number() }))
       .query(async ({ ctx, input }) => {
-        if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) {
-          const me = await getEmployeeByUserId(ctx.user.id);
-          if (!me || me.employee.id !== input.employeeId) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
-        }
+        await assertOwnOrScopedEmployee(ctx.user, input.employeeId, "admin");
         return getEmployeeSalaryHistory(input.employeeId);
       }),
 
@@ -3530,10 +3613,7 @@ export const appRouter = router({
       list: protectedProcedure
         .input(z.object({ employeeId: z.number() }))
         .query(async ({ ctx, input }) => {
-          if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["frontoffice"]) {
-            const me = await getEmployeeByUserId(ctx.user.id);
-            if (!me || me.employee.id !== input.employeeId) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
-          }
+          await assertOwnOrScopedEmployee(ctx.user, input.employeeId, "frontoffice");
           return getOpenPenalties(input.employeeId);
         }),
       clear: protectedProcedure
@@ -3618,7 +3698,14 @@ export const appRouter = router({
         .input(z.object({ level: z.number(), hourlyRate: z.string() }))
         .mutation(async ({ ctx, input }) => {
           requireRole(ctx.user.role, "super_admin");
-          await updateExtraRate(input.level, input.hourlyRate);
+          const { normalizeHourlyRate, MAX_EXTRA_HOURLY_RATE } = await import("./extraRates");
+          const rate = normalizeHourlyRate(input.hourlyRate);
+          if (!rate) throw new TRPCError({ code: "BAD_REQUEST", message: `Taxa inválida: indica um valor numérico maior que 0 e até ${MAX_EXTRA_HOURLY_RATE} €/h.` });
+          const before = (await getExtraRates()).find((r: any) => Number(r.level) === input.level);
+          if (!before) throw new TRPCError({ code: "NOT_FOUND", message: "Nível de taxa inexistente" });
+          await updateExtraRate(input.level, rate);
+          await logActivity({ userId: ctx.user.id, action: "update", entity: "extra_rate", entityId: input.level,
+            details: `Taxa ${before.levelName ?? `nível ${input.level}`}: ${before.hourlyRate} → ${rate} €/h` });
           return { success: true };
         }),
     }),
@@ -3626,9 +3713,10 @@ export const appRouter = router({
 
   // ─── MARKETING ────────────────────────────────────────────────────────────
   marketing: router({
-    // Fonte única (server/integrations/googleAds/marketingStats): gasto = custo
-    // importado (nunca orçamento×dias), reservas reais por data de criação,
-    // atribuídas vs sem atribuição, conversões Google à parte, cobertura.
+    // Fonte única (server/integrations/googleAds/adMetrics + marketingStats):
+    // gasto = custo importado Google + Meta (nunca orçamento×dias), reservas
+    // reais por data de criação (dias de Lisboa, sem canceladas — a regra das
+    // Reservas & Operações), ROAS s/ IVA, cobertura.
     dashboard: protectedProcedure
       .input(z.object({ from: z.string().optional(), to: z.string().optional(), projectId: z.number().optional() }).optional())
       .query(async ({ ctx, input }) => {
@@ -3645,65 +3733,15 @@ export const appRouter = router({
         }
       }),
 
-    // Página principal do Marketing (Jorge, 16 set 2026): gasto por marca
-    // (= conta Google; Multipark = Marketplace) e reservas dessa marca.
-    // Alertas do Marketing (Jorge, 24 set 2026) — regras em shared/marketingAlerts.ts.
+    // Alertas (regras em shared/marketingAlerts.ts; dados em server/marketingAlertsService.ts):
+    // atribuição, campanhas sem resultados (sugestão: pausar), ritmo do mês e
+    // dos orçamentos, recolhas Google/Meta falhadas/paradas (vermelho).
     alerts: protectedProcedure
       .input(z.object({ projectId: z.number().optional() }).optional())
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
-        const { getDb } = await import("./db");
-        const { getMarketingStats } = await import("./integrations/googleAds/marketingStats");
-        const { getAdMetrics } = await import("./integrations/googleAds/adMetrics");
-        const { projectScope, scopedProjectIds } = await import("./cityScope");
-        const { resolveProjectIds } = await import("./db");
-        const { lisbonToday } = await import("../shared/expensePeriods");
-        const { computeMarketingAlerts, ALERT_WINDOW_DAYS } = await import("../shared/marketingAlerts");
-        const { sql } = await import("drizzle-orm");
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
-        const today = lisbonToday();
-        const shift = (iso: string, days: number) => { const d = new Date(`${iso}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + days); return d.toISOString().slice(0, 10); };
-        const [y, m] = today.split("-").map(Number);
-        const monthStart = `${today.slice(0, 7)}-01`;
-        const prevEnd = shift(monthStart, -1);
-        const prevStart = `${prevEnd.slice(0, 7)}-01`;
-        const windowFrom = shift(today, -(ALERT_WINDOW_DAYS - 1));
-        const requested = input?.projectId ? await resolveProjectIds(input.projectId) : null;
-        const allowed = scopedProjectIds();
-        const projectIds = allowed ? (requested ? requested.filter((id) => allowed.includes(id)) : allowed) : requested;
-        const [win, month, prev] = await Promise.all([
-          getMarketingStats({ from: windowFrom, to: today, projectId: input?.projectId }),
-          getAdMetrics({ from: monthStart, to: today, projectIds }),
-          getAdMetrics({ from: prevStart, to: prevEnd, projectIds }),
-        ]);
-        // Reservas atribuídas por campanha (ID externo do Google) na janela.
-        const byExt = new Map<string, number>();
-        const raw: any = await db.execute(sql`
-          SELECT b.adCampaignExternalId AS ext, COUNT(*) AS n FROM multipark_bookings b
-          WHERE b.adAttribution = 'google_paid' AND b.adCampaignExternalId IS NOT NULL
-            AND UPPER(COALESCE(b.status, '')) NOT LIKE '%CANCEL%'
-            AND b.bookingCreatedAt BETWEEN ${`${windowFrom} 00:00:00`} AND ${`${today} 23:59:59`}
-            AND ${projectScope(sql`b.projectId`)}
-          GROUP BY b.adCampaignExternalId`);
-        for (const r of (Array.isArray(raw?.[0]) ? raw[0] : raw) as any[]) byExt.set(String(r.ext), Number(r.n ?? 0));
-        const windowCampaigns = (win.byCampaign as any[]).filter((c) => c.source === "api").map((c) => ({
-          name: String(c.name), accountName: c.accountName ?? null, cost: Number(c.cost ?? 0), conversions: Number(c.conversions ?? 0),
-          attributedBookings: byExt.get(String(c.key).split(":").slice(2).join(":")) ?? 0,
-        }));
-        const alerts = computeMarketingAlerts({
-          windowCampaigns,
-          attribution: win.attributionQuality,
-          windowSpend: win.spend,
-          windowConversions: win.conversionsGoogle,
-          monthSpend: month.totals.cost,
-          prevMonthSpend: prev.totals.cost,
-          dayOfMonth: Number(today.slice(8, 10)),
-          daysInMonth: new Date(Date.UTC(y, m, 0)).getUTCDate(),
-          unmappedCampaigns: month.unmappedCampaigns,
-          coverage: win.coverage ?? null,
-        });
-        return { generatedAt: new Date().toISOString(), windowFrom, alerts };
+        const { computeAlertsFor } = await import("./marketingAlertsService");
+        return computeAlertsFor(input?.projectId);
       }),
     // Canais e clientes (Jorge, 24 set 2026): reservas e custo por canal de
     // aquisição + ligação ao CRM (canal de entrada de cada cliente).
@@ -3711,10 +3749,10 @@ export const appRouter = router({
       .input(z.object({ from: z.string().optional(), to: z.string().optional(), projectId: z.number().optional() }).optional())
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
-        const { getDb, resolveProjectIds } = await import("./db");
+        const { getDb } = await import("./db");
         const { getChannels } = await import("./marketingChannels");
         const { getAdMetrics } = await import("./integrations/googleAds/adMetrics");
-        const { scopedProjectIds } = await import("./cityScope");
+        const { marketingProjectIds } = await import("./marketingSql");
         const { lisbonToday } = await import("../shared/expensePeriods");
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
@@ -3722,18 +3760,17 @@ export const appRouter = router({
         const from = input?.from || `${today.slice(0, 7)}-01`;
         const to = input?.to || today;
         // Mesmo recorte do marketing.dashboard: projeto pedido ∩ cidades do utilizador.
-        const requested = input?.projectId ? await resolveProjectIds(input.projectId) : null;
-        const allowed = scopedProjectIds();
-        const projectIds = allowed ? (requested ? requested.filter((id) => allowed.includes(id)) : allowed) : requested;
+        const projectIds = await marketingProjectIds(input?.projectId);
         try {
           const ads = await getAdMetrics({ from, to, projectIds });
-          return await getChannels(db, { from, to, projectIds: requested ?? null, adSpend: ads.totals.cost, adConversions: ads.totals.conversions });
+          return await getChannels(db, { from, to, projectIds, adSpend: ads.totals.cost, adConversions: ads.totals.conversions });
         } catch (e: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) });
         }
       }),
+    // Por marca: gasto (mesma fonte e âmbito do dashboard) e reservas da marca.
     byBrand: protectedProcedure
-      .input(z.object({ from: z.string().optional(), to: z.string().optional() }).optional())
+      .input(z.object({ from: z.string().optional(), to: z.string().optional(), projectId: z.number().optional() }).optional())
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
         const { getSpendAndBookingsByBrand } = await import("./integrations/googleAds/marketingStats");
@@ -3742,347 +3779,82 @@ export const appRouter = router({
         const from = input?.from || `${today.slice(0, 7)}-01`;
         const to = input?.to || today;
         try {
-          return await getSpendAndBookingsByBrand({ from, to });
+          return await getSpendAndBookingsByBrand({ from, to, projectId: input?.projectId });
         } catch (e: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) });
         }
       }),
 
-    bookingRevenue: protectedProcedure
-      .input(z.object({ from: z.string().optional(), to: z.string().optional(), projectId: z.number().optional() }).optional())
+    // ROAS por campanha → reservas ligadas (ID no link, utm_campaign ou código
+    // de desconto ligados pelo admin) + conversões por ação.
+    campaignRoas: protectedProcedure
+      .input(z.object({ from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), projectId: z.number().optional() }))
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
-        return getBookingRevenueByProject({ from: input?.from, to: input?.to, projectId: input?.projectId });
+        const { getCampaignRoas } = await import("./marketingCampaignRoas");
+        return getCampaignRoas(input);
       }),
 
-    // ── CAMPAIGNS ──
-    campaigns: router({
+    // Ligações campanha ↔ utm_campaign / código de desconto (admin; globais).
+    campaignLinks: router({
+      list: protectedProcedure.query(async ({ ctx }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { listCampaignLinks } = await import("./marketingCampaignRoas");
+        return listCampaignLinks();
+      }),
+      add: protectedProcedure
+        .input(z.object({ adCampaignId: z.number().int().positive(), keyType: z.enum(["utm_campaign", "discount_code"]), keyValue: z.string().trim().min(1).max(256) }))
+        .mutation(async ({ ctx, input }) => {
+          requireRole(ctx.user.role, "admin");
+          requireGlobalCityAccess();
+          const { addCampaignLink } = await import("./marketingCampaignRoas");
+          await addCampaignLink({ ...input, userId: ctx.user.id });
+          await logActivity({ userId: ctx.user.id, action: "create", entity: "ad_campaign_links", entityId: input.adCampaignId, details: `Ligação ${input.keyType}=${input.keyValue}` });
+          return { success: true };
+        }),
+      remove: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        requireGlobalCityAccess();
+        const { removeCampaignLink } = await import("./marketingCampaignRoas");
+        await removeCampaignLink(input.id);
+        return { success: true };
+      }),
+    }),
+
+    // Orçamentos mensais por cidade/marca e ritmo (0093). Ler: backoffice
+    // (âmbito de cidade); definir: admin (a guarda de cidade valida o projectId).
+    budgets: router({
       list: protectedProcedure
-        .input(z.object({ platform: z.string().optional(), projectId: z.number().optional(), status: z.string().optional() }).optional())
+        .input(z.object({ month: z.string().regex(/^\d{4}-\d{2}$/), projectId: z.number().optional() }))
         .query(async ({ ctx, input }) => {
           requireRole(ctx.user.role, "backoffice");
-          return getCampaigns({ platform: input?.platform, projectId: input?.projectId, status: input?.status });
+          const { listBudgetsWithPacing } = await import("./marketingBudgets");
+          return listBudgetsWithPacing(input);
         }),
-      get: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
-        return getCampaignById(input.id);
-      }),
-      create: protectedProcedure
-        .input(z.object({
-          name: z.string().min(1),
-          platform: z.enum(["google_ads", "meta_ads", "instagram", "other"]),
-          projectId: z.number().optional(),
-          status: z.enum(["active", "paused", "completed"]).optional(),
-          startDate: z.string().optional(),
-          endDate: z.string().optional(),
-          budget: z.string().optional(),
-          notes: z.string().optional(),
-        }))
+      upsert: protectedProcedure
+        .input(z.object({ month: z.string().regex(/^\d{4}-\d{2}$/), projectId: z.number().int(), provider: z.enum(["all", "google_ads", "meta"]).default("all"), amount: z.number().min(0).max(10_000_000), notes: z.string().max(255).nullable().optional() }))
         .mutation(async ({ ctx, input }) => {
           requireRole(ctx.user.role, "admin");
-          const id = await createCampaign({
-            name: input.name,
-            platform: input.platform,
-            projectId: input.projectId ?? null,
-            campaignStatus: input.status ?? "active",
-            startDate: input.startDate ? new Date(input.startDate).toISOString().slice(0, 19).replace("T", " ") : null,
-            endDate: input.endDate ? new Date(input.endDate).toISOString().slice(0, 19).replace("T", " ") : null,
-            budget: input.budget ?? null,
-            notes: input.notes ?? null,
-            createdById: ctx.user.id,
-          });
-          await logActivity({ userId: ctx.user.id, action: "create", entity: "campaign", entityId: id, details: `Campanha: ${input.name}` });
-          return { id };
-        }),
-      update: protectedProcedure
-        .input(z.object({
-          id: z.number(),
-          name: z.string().optional(),
-          platform: z.enum(["google_ads", "meta_ads", "instagram", "other"]).optional(),
-          projectId: z.number().nullable().optional(),
-          status: z.enum(["active", "paused", "completed"]).optional(),
-          startDate: z.string().nullable().optional(),
-          endDate: z.string().nullable().optional(),
-          budget: z.string().nullable().optional(),
-          notes: z.string().nullable().optional(),
-        }))
-        .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
-          const { id, ...data } = input;
-          const updateData: any = { ...data };
-          if (data.startDate !== undefined) updateData.startDate = data.startDate ? new Date(data.startDate) : null;
-          if (data.endDate !== undefined) updateData.endDate = data.endDate ? new Date(data.endDate) : null;
-          await updateCampaign(id, updateData);
-          await logActivity({ userId: ctx.user.id, action: "update", entity: "campaign", entityId: id, details: `Campanha atualizada` });
+          const { upsertBudget } = await import("./marketingBudgets");
+          await upsertBudget({ ...input, userId: ctx.user.id });
+          await logActivity({ userId: ctx.user.id, action: "update", entity: "marketing_budgets", entityId: input.projectId, details: `Orçamento ${input.month} ${input.provider}: ${input.amount} €` });
           return { success: true };
         }),
-      delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "super_admin");
-        await deleteCampaign(input.id);
-        await logActivity({ userId: ctx.user.id, action: "delete", entity: "campaign", entityId: input.id, details: `Campanha eliminada` });
+      remove: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        const { removeBudget } = await import("./marketingBudgets");
+        await removeBudget(input.id);
         return { success: true };
+      }),
+      copyFromPrevious: protectedProcedure.input(z.object({ month: z.string().regex(/^\d{4}-\d{2}$/) })).mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        const { copyBudgets } = await import("./marketingBudgets");
+        const [y, m] = input.month.split("-").map(Number);
+        const prev = new Date(Date.UTC(y, m - 2, 1)).toISOString().slice(0, 7);
+        return { copied: await copyBudgets(prev, input.month, ctx.user.id) };
       }),
     }),
-
-    // ── CAMPANHAS INTERNAS (das reservas Multipark) ──
-    // Campanha lógica agrupa várias chaves (campaignId do link, nome, ou padrão
-    // de URL). Atribuição "uma vez": detecta chaves novas, utilizador atribui.
-    internalCampaigns: router({
-      // Chaves ainda NÃO atribuídas: campaignId (do originUrl) + campaignName não-parceiro.
-      detect: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx }) => {
-        requireRole(ctx.user.role, "backoffice");
-        const { getDb } = await import("./db");
-        const { sql } = await import("drizzle-orm");
-        const db = await getDb();
-        if (!db) return { ids: [], names: [] };
-        const rows = (r: any) => (Array.isArray(r[0]) ? r[0] : r) as any[];
-        // TODOS os links (originUrl) ainda não atribuídos — agrega reservas por link.
-        const linksRes: any = await db.execute(sql`
-          SELECT originUrl AS value, COUNT(*) AS bookings, COALESCE(SUM(totalPrice),0) AS revenue
-          FROM multipark_bookings
-          WHERE ${projectScope(sql`multipark_bookings.projectId`)} AND originUrl IS NOT NULL AND originUrl <> ''
-            AND NOT EXISTS (
-              SELECT 1 FROM internal_campaign_keys k
-              WHERE k.keyType = 'url_pattern' AND multipark_bookings.originUrl LIKE k.keyValue
-            )
-          GROUP BY originUrl ORDER BY bookings DESC LIMIT 250`);
-        const namesRes: any = await db.execute(sql`
-          SELECT campaignName AS value, COUNT(*) AS bookings, COALESCE(SUM(totalPrice),0) AS revenue
-          FROM multipark_bookings
-          WHERE ${projectScope(sql`multipark_bookings.projectId`)} AND campaignName IS NOT NULL AND campaignName <> ''
-            AND campaignName NOT IN (SELECT name FROM partnerships)
-            AND campaignName NOT IN (SELECT keyValue FROM internal_campaign_keys WHERE keyType='campaign_name')
-          GROUP BY campaignName ORDER BY bookings DESC`);
-        return { links: rows(linksRes), names: rows(namesRes) };
-      }),
-
-      // Campanhas lógicas + chaves + custos + métricas (reservas/receita/gasto).
-      list: protectedProcedure
-        .input(z.object({ from: z.string().optional(), to: z.string().optional(), projectId: z.number().optional() }).optional())
-        .query(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "backoffice");
-          const { getDb } = await import("./db");
-          const { sql } = await import("drizzle-orm");
-          const db = await getDb();
-          if (!db) return [];
-          const rows = (r: any) => (Array.isArray(r[0]) ? r[0] : r) as any[];
-          // Campanhas vêm de DUAS fontes: internal_campaigns + campaigns (ad).
-          const internal = rows(await db.execute(sql`SELECT id, name, projectId, dailyBudget, city, brand, campaignStatus FROM internal_campaigns WHERE ${projectScope(sql`internal_campaigns.projectId`)} ORDER BY name`))
-            .map((c) => ({ ...c, campaignType: "internal" as const }));
-          const ad = rows(await db.execute(sql`SELECT id, name, projectId, budget AS dailyBudget, platform AS brand, campaignStatus FROM campaigns WHERE ${projectScope(sql`campaigns.projectId`)} ORDER BY name`))
-            .map((c) => ({ ...c, city: null, campaignType: "ad" as const }));
-          // nº de dias do período (para estimar gasto via dailyBudget)
-          const periodDays = input?.from && input?.to
-            ? Math.max(1, Math.floor((Date.parse(input.to) - Date.parse(input.from)) / 86400000) + 1)
-            : 0;
-          const projs = rows(await db.execute(sql`SELECT id, name FROM projects`));
-          const projName = new Map(projs.map((p) => [p.id, p.name]));
-          const camps = [...internal, ...ad].map((c) => ({ ...c, projectName: c.projectId ? projName.get(c.projectId) ?? null : null }));
-          const allKeys = rows(await db.execute(sql`SELECT * FROM internal_campaign_keys`));
-          const dateCond = input?.from && input?.to
-            ? sql` AND checkIn >= ${input.from + " 00:00:00"} AND checkIn <= ${input.to + " 23:59:59"}`
-            : sql``;
-          const out: any[] = [];
-          for (const c of camps) {
-            const keys = allKeys.filter((k) => k.campaignType === c.campaignType && k.campaignId === c.id);
-            const conds: any[] = [];
-            const names = keys.filter((k) => k.keyType === "campaign_name").map((k) => k.keyValue);
-            if (names.length) conds.push(sql`campaignName IN (${sql.join(names.map((v: string) => sql`${v}`), sql`, `)})`);
-            for (const k of keys.filter((k) => k.keyType === "campaign_id")) conds.push(sql`originUrl LIKE ${"%campaignId=" + k.keyValue + "%"}`);
-            for (const k of keys.filter((k) => k.keyType === "url_pattern")) conds.push(sql`originUrl LIKE ${k.keyValue}`);
-            let bookings = 0, revenue = 0;
-            if (conds.length) {
-              const m = rows(await db.execute(sql`SELECT COUNT(*) AS c, COALESCE(SUM(totalPrice),0) AS rev FROM multipark_bookings WHERE ${projectScope(sql`multipark_bookings.projectId`)} AND (${sql.join(conds, sql` OR `)})${dateCond}`))[0];
-              bookings = Number(m?.c ?? 0); revenue = Number(m?.rev ?? 0);
-            }
-            const costRow = rows(await db.execute(sql`SELECT COALESCE(SUM(amount),0) AS spend, SUM(impressions) AS impressions, SUM(clicks) AS clicks, SUM(conversions) AS conversions, SUM(conversionValue) AS conversionValue, AVG(ctr) AS avgCtr FROM internal_campaign_costs WHERE campaignType = ${c.campaignType} AND campaignId = ${c.id}${input?.from && input?.to ? sql` AND costDate >= ${input.from} AND costDate <= ${input.to}` : sql``}`))[0];
-            const manualSpend = Number(costRow?.spend ?? 0);
-            const impressions = costRow?.impressions != null ? Number(costRow.impressions) : null;
-            const clicks = costRow?.clicks != null ? Number(costRow.clicks) : null;
-            const conversions = costRow?.conversions != null ? Number(costRow.conversions) : null;
-            const conversionValue = costRow?.conversionValue != null ? Number(costRow.conversionValue) : null;
-            // CTR do período: derivado dos totais; senão média dos CTRs registados
-            const ctr = impressions && clicks != null ? Math.round((clicks / impressions) * 100000) / 1000
-              : (costRow?.avgCtr != null ? Math.round(Number(costRow.avgCtr) * 1000) / 1000 : null);
-            // Gasto real importado do Google Ads (campaign_daily_stats, só campanhas ad).
-            let realStatsSpend = 0;
-            if (c.campaignType === "ad" && input?.from && input?.to) {
-              const r = rows(await db.execute(sql`SELECT COALESCE(SUM(spend),0) AS s FROM campaign_daily_stats WHERE campaignId = ${c.id} AND date >= ${input.from + " 00:00:00"} AND date <= ${input.to + " 23:59:59"}`))[0];
-              realStatsSpend = Number(r?.s ?? 0);
-            }
-            // Prioridade: gasto real importado > custo manual > estimativa por orçamento×dias.
-            const budgetSpend = c.dailyBudget && periodDays > 0 ? Number(c.dailyBudget) * periodDays : 0;
-            const spend = realStatsSpend > 0 ? realStatsSpend : (manualSpend > 0 ? manualSpend : budgetSpend);
-            const spendEstimated = realStatsSpend === 0 && manualSpend === 0 && budgetSpend > 0;
-            out.push({ ...c, dailyBudget: c.dailyBudget != null ? Number(c.dailyBudget) : null, keys, bookings, revenue, spend, spendEstimated, costPerBooking: bookings > 0 ? spend / bookings : 0, roas: spend > 0 ? revenue / spend : null, impressions, clicks, ctr, conversions, conversionValue });
-          }
-          // Campanhas com chaves ou métricas primeiro
-          out.sort((a, b) => (b.keys.length || b.bookings) - (a.keys.length || a.bookings));
-          return out;
-        }),
-
-      create: protectedProcedure
-        .input(z.object({ name: z.string().min(1), projectId: z.number().optional(), dailyBudget: z.number().optional(), city: z.string().optional(), brand: z.string().optional() }))
-        .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
-          const { getDb } = await import("./db");
-          const { internalCampaigns } = await import("../drizzle/schema");
-          const db = await getDb();
-          if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
-          await db.insert(internalCampaigns).values({ name: input.name, projectId: input.projectId ?? null, dailyBudget: input.dailyBudget != null ? String(input.dailyBudget) : null, city: input.city ?? null, brand: input.brand ?? null, createdById: ctx.user.id } as any);
-          return { success: true };
-        }),
-
-      update: protectedProcedure
-        .input(z.object({ id: z.number(), name: z.string().optional(), projectId: z.number().nullable().optional(), dailyBudget: z.number().nullable().optional(), city: z.string().optional(), brand: z.string().optional(), campaignStatus: z.enum(["active", "paused", "completed"]).optional() }))
-        .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
-          const { getDb } = await import("./db");
-          const { internalCampaigns } = await import("../drizzle/schema");
-          const { eq, and } = await import("drizzle-orm");
-          const db = await getDb();
-          if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
-          const { id, ...rest } = input;
-          await db.update(internalCampaigns).set(rest as any).where(eq(internalCampaigns.id, id));
-          return { success: true };
-        }),
-
-      // Para ad campaigns só desliga (apaga chaves/custos desta vista); a campanha
-      // em si é gerida na tab "Campanhas". Para internas apaga tudo.
-      remove: protectedProcedure.input(z.object({ campaignType: z.enum(["internal", "ad"]), id: z.number() })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
-        const { getDb } = await import("./db");
-        const { internalCampaigns, internalCampaignKeys, internalCampaignCosts } = await import("../drizzle/schema");
-        const { eq, and } = await import("drizzle-orm");
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
-        await db.delete(internalCampaignKeys).where(and(eq(internalCampaignKeys.campaignType, input.campaignType), eq(internalCampaignKeys.campaignId, input.id)));
-        await db.delete(internalCampaignCosts).where(and(eq(internalCampaignCosts.campaignType, input.campaignType), eq(internalCampaignCosts.campaignId, input.id)));
-        if (input.campaignType === "internal") await db.delete(internalCampaigns).where(eq(internalCampaigns.id, input.id));
-        return { success: true };
-      }),
-
-      // Atribui uma chave detetada a uma campanha (a tal "atribuição uma vez").
-      assignKey: protectedProcedure
-        .input(z.object({ campaignType: z.enum(["internal", "ad"]), campaignId: z.number(), keyType: z.enum(["campaign_id", "campaign_name", "url_pattern"]), keyValue: z.string().min(1) }))
-        .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
-          const { getDb } = await import("./db");
-          const { internalCampaignKeys } = await import("../drizzle/schema");
-          const db = await getDb();
-          if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
-          await db.insert(internalCampaignKeys).values({ campaignType: input.campaignType, campaignId: input.campaignId, keyType: input.keyType, keyValue: input.keyValue } as any);
-          return { success: true };
-        }),
-
-      removeKey: protectedProcedure.input(z.object({ keyId: z.number() })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
-        const { getDb } = await import("./db");
-        const { internalCampaignKeys } = await import("../drizzle/schema");
-        const { eq, and } = await import("drizzle-orm");
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
-        await db.delete(internalCampaignKeys).where(eq(internalCampaignKeys.id, input.keyId));
-        return { success: true };
-      }),
-
-      addCost: protectedProcedure
-        .input(z.object({
-          campaignType: z.enum(["internal", "ad"]),
-          campaignId: z.number(),
-          costDate: z.string(),
-          amount: z.number(),
-          impressions: z.number().nullable().optional(),
-          clicks: z.number().nullable().optional(),
-          ctr: z.number().nullable().optional(),
-          conversions: z.number().nullable().optional(),
-          conversionValue: z.number().nullable().optional(),
-          notes: z.string().optional(),
-        }))
-        .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
-          const { getDb } = await import("./db");
-          const { sql } = await import("drizzle-orm");
-          const db = await getDb();
-          if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
-          const impressions = input.impressions ?? null;
-          const clicks = input.clicks ?? null;
-          // CTR: usa o valor dado; senão deriva de cliques/impressões
-          const ctr = input.ctr ?? (clicks != null && impressions ? Math.round((clicks / impressions) * 100000) / 1000 : null);
-          const conversions = input.conversions ?? null;
-          const conversionValue = input.conversionValue ?? null;
-          // upsert por (campaignType, campaignId, costDate); métricas omitidas
-          // (undefined→null) preservam o valor existente via COALESCE, para a
-          // entrada rápida de gasto não apagar métricas já registadas.
-          await db.execute(sql`
-            INSERT INTO internal_campaign_costs (campaignType, campaignId, costDate, amount, impressions, clicks, ctr, conversions, conversionValue, notes, createdById)
-            VALUES (${input.campaignType}, ${input.campaignId}, ${input.costDate}, ${input.amount}, ${impressions}, ${clicks}, ${ctr}, ${conversions}, ${conversionValue}, ${input.notes ?? null}, ${ctx.user.id})
-            ON DUPLICATE KEY UPDATE
-              amount = ${input.amount},
-              impressions = COALESCE(${impressions}, impressions),
-              clicks = COALESCE(${clicks}, clicks),
-              ctr = COALESCE(${ctr}, ctr),
-              conversions = COALESCE(${conversions}, conversions),
-              conversionValue = COALESCE(${conversionValue}, conversionValue),
-              notes = COALESCE(${input.notes ?? null}, notes)`);
-          return { success: true };
-        }),
-
-      // Custos/métricas de TODAS as campanhas num dia — para o diálogo "Atualizar campanhas".
-      costsByDate: protectedProcedure.input(z.object({ costDate: z.string(), projectId: z.number().optional() })).query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
-        const { getDb } = await import("./db");
-        const { internalCampaignCosts } = await import("../drizzle/schema");
-        const { eq, and } = await import("drizzle-orm");
-        const db = await getDb();
-        if (!db) return [];
-        return db.select().from(internalCampaignCosts).where(and(eq(internalCampaignCosts.costDate, input.costDate), campaignScope(internalCampaignCosts.campaignType, internalCampaignCosts.campaignId)));
-      }),
-
-      costs: protectedProcedure.input(z.object({ campaignType: z.enum(["internal", "ad"]), campaignId: z.number() })).query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
-        const { getDb } = await import("./db");
-        const { internalCampaignCosts } = await import("../drizzle/schema");
-        const { eq, and, desc } = await import("drizzle-orm");
-        const db = await getDb();
-        if (!db) return [];
-        return db.select().from(internalCampaignCosts).where(and(eq(internalCampaignCosts.campaignType, input.campaignType), eq(internalCampaignCosts.campaignId, input.campaignId))).orderBy(desc(internalCampaignCosts.costDate));
-      }),
-
-      removeCost: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
-        const { getDb } = await import("./db");
-        const { internalCampaignCosts } = await import("../drizzle/schema");
-        const { eq, and } = await import("drizzle-orm");
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
-        await db.delete(internalCampaignCosts).where(eq(internalCampaignCosts.id, input.id));
-        return { success: true };
-      }),
-    }),
-
-    // ── DAILY STATS ──
-    stats: router({
-      byCampaign: protectedProcedure.input(z.object({ campaignId: z.number() })).query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
-        return getCampaignStats(input.campaignId);
-      }),
-      all: protectedProcedure
-        .input(z.object({ from: z.string().optional(), to: z.string().optional(), projectId: z.number().optional() }).optional())
-        .query(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "backoffice");
-          const from = input?.from ? new Date(input.from) : undefined;
-          const to = input?.to ? new Date(input.to) : undefined;
-          return getAllDailyStats({ from, to, projectId: input?.projectId });
-        }),
-      delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "super_admin");
-        await deleteDailyStat(input.id);
-        return { success: true };
-      }),
-    }),
-
-   }),
+  }),
 
   // ─── OPERACIONAL ──────────────────────────────────────────────────────────
   operational: router({
@@ -4506,6 +4278,22 @@ export const appRouter = router({
         requireRole(ctx.user.role, "backoffice");
         return listPdas();
       }),
+      // PDA ligado AGORA ao próprio utilizador (check-in aberto) — para o Perfil.
+      mine: protectedProcedure.query(async ({ ctx }) => {
+        const me = await getEmployeeByUserId(ctx.user.id);
+        if (!me) return null;
+        const { getDb } = await import("./db");
+        const { sql } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) return null;
+        const res: any = await db.execute(sql`
+          SELECT p.id, p.name, p.zelloUsername, c.checkinAt
+          FROM pda_checkins c INNER JOIN pdas p ON p.id = c.pdaId
+          WHERE c.employeeId = ${me.employee.id} AND c.checkin_status = 'checked_in'
+          ORDER BY c.checkinAt DESC LIMIT 1`);
+        const row = (Array.isArray(res?.[0]) ? res[0] : res)?.[0];
+        return row ? { id: Number(row.id), name: String(row.name), zelloUsername: row.zelloUsername ?? null, since: row.checkinAt ? String(row.checkinAt) : null } : null;
+      }),
       // "Este browser É o PDA X" — regista o aparelho e devolve o token que o
       // cliente guarda no localStorage. A partir daí, qualquer check-in do
       // PONTO feito neste aparelho liga a pessoa ao PDA/Zello automaticamente.
@@ -4758,6 +4546,7 @@ export const appRouter = router({
   // ─── INTEGRAÇÕES (Google Ads) ─────────────────────────────────────────────
   integrations: router({
     googleAds: googleAdsRouter,
+    meta: metaAdsRouter,
     googleBusiness: googleBusinessRouter,
   }),
 
@@ -4766,22 +4555,32 @@ export const appRouter = router({
       requireRole(ctx.user.role, "super_admin");
       return getApiKeys();
     }),
+    // A chave completa só sai AQUI, uma vez; na BD fica só o hash + prefixo.
     create: protectedProcedure.input(z.object({
-      name: z.string().min(1),
-      permissions: z.array(z.string()).optional(),
+      name: z.string().trim().min(1).max(100),
+      permissions: z.array(z.enum(["read", "write", "admin", "device"])).optional(),
+      expiresInDays: z.number().int().min(1).max(3650).optional(),
     })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "super_admin");
-      const { nanoid } = await import("nanoid");
-      const key = `mp_${nanoid(32)}`;
+      const { generateApiKey, hashApiKey, apiKeyPrefix } = await import("./apiKeyAuth");
+      const key = generateApiKey();
+      const perms = input.permissions?.length ? input.permissions : ["device"];
+      const expiresAt = input.expiresInDays
+        ? new Date(Date.now() + input.expiresInDays * 86_400_000).toISOString().slice(0, 19).replace("T", " ")
+        : null;
       const id = await createApiKey({
         name: input.name,
-        apiKey: key,
-        permissions: input.permissions ? JSON.stringify(input.permissions) : null,
+        apiKey: null,
+        keyHash: hashApiKey(key),
+        keyPrefix: apiKeyPrefix(key),
+        expiresAt,
+        permissions: JSON.stringify(perms),
         active: 1,
         createdById: ctx.user.id,
       });
-      await logActivity({ userId: ctx.user.id, action: "create", entity: "api_key", entityId: id, details: `API Key: ${input.name}` });
-      return { id, key };
+      await logActivity({ userId: ctx.user.id, action: "create", entity: "api_key", entityId: id,
+        details: `API Key: ${input.name} (${apiKeyPrefix(key)}…, scopes ${perms.join(",")}${expiresAt ? `, expira ${expiresAt.slice(0, 10)}` : ""})` });
+      return { id, key, keyPrefix: apiKeyPrefix(key) };
     }),
     toggle: protectedProcedure.input(z.object({
       id: z.number(),
@@ -5431,7 +5230,8 @@ export const appRouter = router({
     checkoutDrivers: protectedProcedure.input(z.object({
       startDate: z.string(),
       endDate: z.string(),
-    })).query(async ({ input }) => {
+    })).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "frontoffice");
       const { getCheckoutDriversFromDb } = await import("./db");
       return getCheckoutDriversFromDb(input.startDate, input.endDate);
     }),
@@ -5442,7 +5242,8 @@ export const appRouter = router({
       endDate: z.string(),
       agentName: z.string().optional(),
       userId: z.string().optional(),
-    })).query(async ({ input }) => {
+    })).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "frontoffice");
       const { getAgentHistoryFromDb } = await import("./db");
       return getAgentHistoryFromDb({
         startDate: input.startDate,
@@ -6396,8 +6197,9 @@ export const appRouter = router({
     stats: protectedProcedure.input(z.object({
       month: z.number().optional(),
       year: z.number().optional(),
-    }).optional()).query(({ ctx, input }) => {
-      requireRole(ctx.user.role, "backoffice");
+    }).optional()).query(async ({ ctx, input }) => {
+      // Totais de faturação: respeita o deny individual de finance.view_totals.
+      await requireFinanceTotals(ctx.user, "backoffice");
       return getInvoiceStats(input?.month, input?.year);
     }),
 
@@ -6711,7 +6513,8 @@ export const appRouter = router({
         partnerType: z.string().optional(),
       }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        // Receita/valor a faturar: respeita o deny de finance.view_totals.
+        await requireFinanceTotals(ctx.user, "frontoffice");
         const { getPartnerInvoicingSummary } = await import("./db");
         return getPartnerInvoicingSummary(input);
       }),
@@ -6725,7 +6528,7 @@ export const appRouter = router({
         partnerType: z.string(),
       }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        await requireFinanceTotals(ctx.user, "frontoffice");
         const { getPartnerInvoicingDetailByType } = await import("./db");
         return getPartnerInvoicingDetailByType(input);
       }),
@@ -6751,8 +6554,8 @@ export const appRouter = router({
     list: protectedProcedure.input(z.object({
       year: z.number().optional(),
       projectId: z.number().optional(),
-    }).optional()).query(({ ctx, input }) => {
-      requireRole(ctx.user.role, "backoffice");
+    }).optional()).query(async ({ ctx, input }) => {
+      await requireFinanceTotals(ctx.user, "backoffice");
       return getAnnualReports(input);
     }),
 
@@ -7144,6 +6947,13 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "admin");
+        // Limite no servidor (não só na UI): um intervalo enorme prende a
+        // função e martela a API Multipark. Máx. 31 dias por pedido.
+        {
+          const { syncRangeError } = await import("./opsRules");
+          const err = syncRangeError(input.startDate, input.endDate, 31);
+          if (err) throw new TRPCError({ code: "BAD_REQUEST", message: err });
+        }
         try {
           const result = await syncBookings({
             startDate: input.startDate,
@@ -7409,8 +7219,9 @@ export const appRouter = router({
         return { allowed: true as const, ...(await getExtrasCostDaily(input)) };
       }),
 
-    // Gasto em publicidade por dia × cidade (Lisboa/Porto/Faro; o marketplace
-    // não tem anúncios nossos). Mesmo gate dos totais financeiros.
+    // Gasto em publicidade por dia × cidade (Lisboa/Porto/Faro) + "por atribuir"
+    // (sem cidade / nacional), numa só chamada à fonte única do Marketing.
+    // Mesmo gate dos totais financeiros.
     adSpendDaily: protectedProcedure
       .input(z.object({
         startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -7419,7 +7230,7 @@ export const appRouter = router({
       }))
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
-        if (!(await canSeeFinanceTotals(ctx.user))) return { allowed: false as const, cities: [], rows: [] };
+        if (!(await canSeeFinanceTotals(ctx.user))) return { allowed: false as const, cities: [], rows: [], unassigned: [], total: 0 };
         const { getAdSpendDaily, rangeTooLong } = await import("./operationsBookings");
         if (input.endDate < input.startDate || rangeTooLong(input.startDate, input.endDate)) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Intervalo inválido (máx. 366 dias)." });
@@ -8337,7 +8148,7 @@ export const appRouter = router({
           entity: "whatsapp_broadcast",
           entityId: summary.broadcastId ?? undefined,
           details: input.testPhone
-            ? `WhatsApp TESTE → ${input.testPhone} (template ${input.templateName})`
+            ? `WhatsApp TESTE → ${(await import("../shared/maskPhone")).maskPhone(input.testPhone)} (template ${input.templateName})`
             : `WhatsApp broadcast template ${input.templateName}: ${summary.sent} enviados, ${summary.failed} falhas, ${summary.invalidPhone} sem número`,
         });
         return summary;
@@ -8364,10 +8175,63 @@ export const appRouter = router({
         }),
     }),
 
+    // Ficheiro de uma mensagem recebida (imagem/áudio/vídeo/documento): URL
+    // ASSINADO de curta duração — o storage deixou de servir links públicos.
+    mediaUrl: protectedProcedure
+      .input(z.object({ messageId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { getInboundMediaUrl } = await import("./whatsappInbox");
+        const out = await getInboundMediaUrl(input.messageId);
+        if (!out) throw new TRPCError({ code: "NOT_FOUND", message: "Ficheiro não encontrado" });
+        return out;
+      }),
+
+    // Template a uma conversa do inbox (janela fechada / ainda sem resposta):
+    // escolhido do catálogo, {{1}} = nome REAL do contacto, envio normal (não
+    // é o modo teste). Recusa contactos que pediram STOP.
+    sendTemplate: protectedProcedure
+      .input(
+        z.object({
+          conversationId: z.number().int().positive(),
+          templateId: z.string().min(1).max(64),
+          bodyParam2: z.string().max(512).nullable().optional(),
+          weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { conversationVisible } = await import("./whatsappInbox");
+        if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+        const { sendTemplateToConversation } = await import("./whatsappBroadcast");
+        let summary;
+        try {
+          summary = await sendTemplateToConversation({
+            conversationId: input.conversationId,
+            templateId: input.templateId,
+            bodyParam2: input.bodyParam2 ?? null,
+            weekStart: input.weekStart ?? null,
+            createdById: ctx.user.id,
+          });
+        } catch (err: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro no envio do template" });
+        }
+        await logActivity({
+          userId: ctx.user.id,
+          action: "whatsapp_template",
+          entity: "whatsapp_conversation",
+          entityId: input.conversationId,
+          details: `Template WhatsApp ${input.templateId} (conversa ${input.conversationId}): ${summary.sent ? "enviado" : "falhou"}`,
+        });
+        return summary;
+      }),
+
     markRead: protectedProcedure
       .input(z.object({ conversationId: z.number() }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
+        const { conversationVisible } = await import("./whatsappInbox");
+        if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         await markConversationRead(input.conversationId);
         return { success: true };
       }),
@@ -8378,20 +8242,24 @@ export const appRouter = router({
       .input(z.object({ conversationId: z.number() }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
-        const { markConversationUnread } = await import("./whatsappInbox");
+        const { markConversationUnread, conversationVisible } = await import("./whatsappInbox");
+        if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const ok = await markConversationUnread(input.conversationId);
         if (!ok) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         return { success: true };
       }),
 
     // Resposta em texto livre — a validação da janela de 24h é feita no servidor.
+    // Contacto em opt-out (STOP): só com `confirmOptedOut` (a UI pede confirmação).
     reply: protectedProcedure
-      .input(z.object({ conversationId: z.number(), text: z.string().min(1).max(4000) }))
+      .input(z.object({ conversationId: z.number(), text: z.string().min(1).max(4000), confirmOptedOut: z.boolean().optional() }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
         const { conversationVisible } = await import("./whatsappInbox");
         if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
-        const result = await replyToConversation(input.conversationId, input.text, ctx.user.id);
+        const result = await replyToConversation(input.conversationId, input.text, ctx.user.id, {
+          allowOptedOut: input.confirmOptedOut === true,
+        });
         if (!result.ok) {
           throw new TRPCError({ code: "BAD_REQUEST", message: result.error || "Falha ao responder" });
         }

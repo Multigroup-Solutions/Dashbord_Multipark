@@ -25,6 +25,8 @@ export interface OpsDay {
   revenueByGroup: Record<OriginGroup, number>;   // c/ IVA
   ads: number | null;
   adsByCity: Record<CityKey, number>;
+  /** publicidade sem cidade / nacional por atribuir (conta em `ads`, em nenhuma cidade) */
+  adsUnassigned: number;
   extras: number | null;
   extrasByCity: Record<CityKey, number>;
 }
@@ -36,13 +38,14 @@ export function joinOpsDaily(input: {
   startDate: string; endDate: string;
   bookings: DailyBookingRow[];
   ads?: DailyCityCost[] | null;      // null/undefined = sem permissão/sem dados → linha escondida
+  adsUnassigned?: Array<{ day: string; cost: number }> | null;
   extras?: DailyCityCost[] | null;
 }): OpsDay[] {
   const map = new Map<string, OpsDay>();
   for (const day of daysInRange(input.startDate, input.endDate)) {
     map.set(day, {
       day, total: 0, byGroup: zeroGroups(), byCity: zeroCities(), revenueByGroup: zeroGroups(),
-      ads: input.ads ? 0 : null, adsByCity: zeroCities(),
+      ads: input.ads ? 0 : null, adsByCity: zeroCities(), adsUnassigned: 0,
       extras: input.extras ? 0 : null, extrasByCity: zeroCities(),
     });
   }
@@ -59,6 +62,14 @@ export function joinOpsDaily(input: {
     if (!d || !CITY_KEYS.includes(a.city)) continue;
     d.adsByCity[a.city] += a.cost;
     d.ads = (d.ads ?? 0) + a.cost;
+  }
+  if (input.ads) {
+    for (const u of input.adsUnassigned ?? []) {
+      const d = map.get(u.day);
+      if (!d) continue;
+      d.adsUnassigned += u.cost;
+      d.ads = (d.ads ?? 0) + u.cost;
+    }
   }
   for (const e of input.extras ?? []) {
     const d = map.get(e.day);

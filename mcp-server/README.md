@@ -17,7 +17,7 @@ A autenticação é por **API key** (header `X-API-Key`). Cada chave tem um
 |---|---|
 | `read` | Ler tudo (reservas, reclamações, reviews, stats, RH) |
 | `read,write` (ou `write`) | O acima + criar/editar reclamações e reviews, disparar syncs |
-| `admin` (ou `*`) | Tudo, incluindo **apagar** reclamações e cleanup de duplicados |
+| `admin` (ou `*`) | Tudo, incluindo **apagar** reclamações e rotas `/admin/*` |
 
 > `admin` implica `write` implica `read`.
 
@@ -111,7 +111,6 @@ Reinicia o Claude Desktop e as tools aparecem (ícone de ferramentas no chat).
 | `sync_recent` | write | Sincronizar reservas recentes |
 | `sync_future` | write | Sincronizar janela futura |
 | `sync_day` | write | Sincronizar um dia (backfill) |
-| `cleanup_duplicates` | **admin** | Apagar reservas duplicadas |
 
 ## Notas de segurança
 

@@ -208,9 +208,9 @@ export const menuGroups: MenuGroup[] = [
       { icon: Users, label: "Utilizadores", path: "/utilizadores" },
       { icon: ShieldCheck, label: "Permissões", path: "/permissoes" },
       { icon: RefreshCw, label: "Sincronização", path: "/multipark/sync" },
-      { icon: Key, label: "API Keys", path: "/api-keys" },
+      { icon: Key, label: "API Keys", path: "/api-keys", minRole: "super_admin" },
       { icon: Plug, label: "Integrações", path: "/integracoes/google-ads" },
-      { icon: ScrollText, label: "Logs", path: "/logs" },
+      { icon: ScrollText, label: "Logs", path: "/logs", minRole: "super_admin" },
     ],
   },
 ];
@@ -232,9 +232,9 @@ export const hubGroups: HubGroup[] = [
       { icon: Truck, label: "Operações", path: "/operacoes-dashboard" },
       { icon: Users, label: "Pessoas", path: "/pessoas-dashboard" },
       { icon: MessageSquareWarning, label: "Suporte", path: "/suporte-dashboard" },
-      // Endereço próprio: /marketing é o módulo (Financeiro → Marketing). Com o
-      // mesmo path, o menu marcava sempre este item e nunca o do Financeiro.
-      { icon: Megaphone, label: "Marketing", path: "/marketing-dashboard" },
+      // Um só endereço para o Marketing (24 set 2026): /marketing-dashboard era
+      // uma cópia do mesmo dashboard e agora redireciona para /marketing.
+      { icon: Megaphone, label: "Marketing", path: "/marketing" },
     ],
   },
   ...menuGroups.map(g => ({

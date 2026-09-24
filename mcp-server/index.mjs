@@ -169,21 +169,6 @@ const tools = [
     run: (a) => api("GET", `/campaigns/${encodeURIComponent(a.campaignType)}/${a.campaignId}/daily`),
   },
   {
-    name: "update_campaign_daily",
-    description: "Atualiza as métricas de UM dia de uma campanha (upsert): amount (gasto €), impressions, clicks, ctr (auto se faltar), conversions, conversionValue. Campos omitidos preservam o registado. Identifica por campaignType+campaignId ou por name. costDate YYYY-MM-DD obrigatório.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        campaignType: { type: "string" }, campaignId: { type: "number" }, name: { type: "string" },
-        costDate: { type: "string" }, amount: { type: "number" }, impressions: { type: "number" },
-        clicks: { type: "number" }, ctr: { type: "number" }, conversions: { type: "number" },
-        conversionValue: { type: "number" }, notes: { type: "string" },
-      },
-      required: ["costDate"],
-    },
-    run: (a) => api("POST", "/campaigns/daily", { body: a }),
-  },
-  {
     name: "list_reviews",
     description: "Lista avaliações Google. Filtros: rating (1-5), status, projectId.",
     inputSchema: { type: "object", properties: { rating: { type: "number" }, status: { type: "string" }, projectId: { type: "number" } } },
@@ -228,12 +213,6 @@ const tools = [
     description: "Sincroniza um dia específico (report + enrich + history) — útil para backfill histórico. date obrigatório (YYYY-MM-DD).",
     inputSchema: { type: "object", properties: { date: { type: "string" } }, required: ["date"] },
     run: (a) => api("POST", "/sync/day", { body: a }),
-  },
-  {
-    name: "cleanup_duplicates",
-    description: "Apaga reservas duplicadas (destrutivo — requer scope admin).",
-    inputSchema: { type: "object", properties: {} },
-    run: () => api("POST", "/admin/cleanup-duplicates"),
   },
 ];
 

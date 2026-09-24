@@ -1334,8 +1334,9 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
     const personal = access.canEditPersonal ? {
       fullName: editForm.fullName || undefined,
       phone: editForm.phone || undefined,
-      // null limpa o campo; extras não têm contactos pessoais à parte
-      personalEmail: editForm.position === "extra" ? null : (editForm.personalEmail?.trim() || null),
+      // null limpa o campo; extras não têm contactos pessoais à parte.
+      // O email pessoal liga fichas a contas (identidade) — só admin+ altera.
+      personalEmail: !access.canEditContract ? undefined : editForm.position === "extra" ? null : (editForm.personalEmail?.trim() || null),
       personalPhone: editForm.position === "extra" ? null : (editForm.personalPhone?.trim() || null),
       nif: editForm.nif || undefined,
       nib: editForm.nib || undefined,
@@ -1604,7 +1605,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                   <>
                     <div>
                       <Label>Email pessoal <span className="text-xs text-muted-foreground">(só para contacto)</span></Label>
-                      <Input type="email" value={editForm.personalEmail ?? ""} onChange={e => ef("personalEmail", e.target.value)} placeholder="nome@gmail.com" />
+                      <Input type="email" value={editForm.personalEmail ?? ""} onChange={e => ef("personalEmail", e.target.value)} placeholder="nome@gmail.com" readOnly={!access.canEditContract} disabled={!access.canEditContract} title={!access.canEditContract ? "Só um administrador pode alterar o email pessoal (liga a ficha à conta)." : undefined} />
                     </div>
                     <div>
                       <Label>Telefone pessoal <span className="text-xs text-muted-foreground">(só para contacto)</span></Label>

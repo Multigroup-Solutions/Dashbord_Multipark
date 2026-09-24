@@ -2,7 +2,8 @@
 import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
-import { Clock, Shield, LogOut, ChevronRight, UserCheck } from "lucide-react";
+import { Clock, Shield, LogOut, ChevronRight, UserCheck, Smartphone } from "lucide-react";
+import { fmtPTDateTime } from "@/lib/lisbonTime";
 
 const ROLE_LABELS: Record<string, string> = {
   super_admin: "Super Admin", admin: "Admin", supervisor: "Supervisor",
@@ -16,6 +17,7 @@ export default function ProfilePage() {
   const { data: myStatus } = trpc.rh.timeRecords.myStatus.useQuery();
 
   const { data: cityAccess } = trpc.permissions.myCityAccess.useQuery();
+  const { data: myPda } = trpc.operational.pdas.mine.useQuery(undefined, { staleTime: 60_000 });
 
   const initials = (user?.name ?? "?")
     .split(/\s+/).filter(Boolean).map((p: string) => p[0]).slice(0, 2).join("").toUpperCase();
@@ -46,39 +48,53 @@ export default function ProfilePage() {
   return (
     <div className="p-4 space-y-3 max-w-lg mx-auto">
       {/* Cartão do utilizador */}
-      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-4 flex items-center gap-3.5">
-        <div className="w-[52px] h-[52px] rounded-full bg-[#0e2957] text-white flex items-center justify-center font-bold text-lg shrink-0">
+      <div className="bg-card text-card-foreground border border-border rounded-2xl shadow-sm p-4 flex items-center gap-3.5">
+        <div className="w-[52px] h-[52px] rounded-full bg-primary text-primary-foreground flex items-center justify-center font-bold text-lg shrink-0">
           {initials}
         </div>
         <div className="flex-1 min-w-0">
-          <div className="font-bold text-[16px] text-[#0c1f3f] truncate">{user?.name ?? "—"}</div>
-          <div className="text-xs text-slate-500 truncate">{user?.email ?? ""}</div>
+          <div className="font-bold text-[16px] text-foreground truncate">{user?.name ?? "—"}</div>
+          <div className="text-xs text-muted-foreground truncate">{user?.email ?? ""}</div>
         </div>
-        <span className="text-[10.5px] font-bold px-2.5 py-1 rounded-full bg-[#e1ecff] text-[#0046ad] shrink-0">
+        <span className="text-[10.5px] font-bold px-2.5 py-1 rounded-full bg-primary/10 text-primary shrink-0">
           {ROLE_LABELS[user?.role ?? "user"] ?? user?.role}
         </span>
       </div>
 
       {cityAccess?.missingCostCenter && (
-        <div role="status" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+        <div role="status" className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-900 dark:text-amber-200">
           <strong>Sem centro de custos atribuído.</strong> O acesso às cidades fica indisponível até à atribuição.
         </div>
       )}
+      {/* PDA ligado (check-in aberto) */}
+      {myPda && (
+        <div className="bg-card border border-border rounded-2xl shadow-sm p-3.5 flex items-center gap-3">
+          <span className="w-8 h-8 rounded-[9px] bg-primary/10 text-primary flex items-center justify-center shrink-0">
+            <Smartphone className="w-4 h-4" />
+          </span>
+          <div className="flex-1 min-w-0">
+            <div className="text-[13.5px] font-semibold text-foreground truncate">PDA: {myPda.name}</div>
+            <div className="text-[11.5px] text-muted-foreground truncate">
+              {myPda.zelloUsername ? `Zello ${myPda.zelloUsername} · ` : ""}desde {fmtPTDateTime(myPda.since)}
+            </div>
+          </div>
+        </div>
+      )}
       {/* Atalhos */}
-      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+      <div className="bg-card border border-border rounded-2xl shadow-sm overflow-hidden">
         {rows.map((r, i) => (
           <button
             key={r.label}
             type="button"
             onClick={r.action}
-            className={`w-full flex items-center gap-3 px-3.5 min-h-[52px] text-left hover:bg-slate-50 ${i > 0 ? "border-t border-slate-100" : ""}`}
+            className={`w-full flex items-center gap-3 px-3.5 min-h-[52px] text-left hover:bg-accent ${i > 0 ? "border-t border-border" : ""}`}
           >
-            <span className="w-8 h-8 rounded-[9px] bg-[#f0f4ff] text-[#0055d2] flex items-center justify-center shrink-0">
+            <span className="w-8 h-8 rounded-[9px] bg-primary/10 text-primary flex items-center justify-center shrink-0">
               <r.icon className="w-4 h-4" />
             </span>
-            <span className="flex-1 text-[13.5px] font-semibold text-slate-700">{r.label}</span>
-            <span className="text-[11.5px] text-slate-400">{r.note}</span>
-            <ChevronRight className="w-4 h-4 text-slate-300" />
+            <span className="flex-1 text-[13.5px] font-semibold text-foreground">{r.label}</span>
+            <span className="text-[11.5px] text-muted-foreground">{r.note}</span>
+            <ChevronRight className="w-4 h-4 text-muted-foreground/60" />
           </button>
         ))}
       </div>
@@ -86,12 +102,12 @@ export default function ProfilePage() {
       <button
         type="button"
         onClick={() => logout()}
-        className="w-full bg-white border border-red-200 rounded-2xl shadow-sm flex items-center gap-3 px-3.5 min-h-[52px] text-left hover:bg-red-50"
+        className="w-full bg-card border border-destructive/30 rounded-2xl shadow-sm flex items-center gap-3 px-3.5 min-h-[52px] text-left hover:bg-destructive/10"
       >
-        <span className="w-8 h-8 rounded-[9px] bg-red-50 text-red-600 flex items-center justify-center shrink-0">
+        <span className="w-8 h-8 rounded-[9px] bg-destructive/10 text-destructive flex items-center justify-center shrink-0">
           <LogOut className="w-4 h-4" />
         </span>
-        <span className="flex-1 text-[13.5px] font-semibold text-red-600">Sair</span>
+        <span className="flex-1 text-[13.5px] font-semibold text-destructive">Sair</span>
       </button>
     </div>
   );

@@ -5,6 +5,7 @@ on:
   workflow_dispatch: {}
 permissions:
   contents: read
+  issues: write # alerta: abrir/comentar issue em caso de falha
 concurrency:
   group: google-business-reviews
   cancel-in-progress: false
@@ -14,7 +15,7 @@ jobs:
     steps:
       - name: Recolher avaliações e retomar páginas pendentes
         env:
-          APP_URL: ${{ secrets.APP_URL || 'https://dashboard.multipark.pt' }}
+          APP_URL: ${{ secrets.APP_URL || 'https://dashbord-multipark.vercel.app' }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
           set -euo pipefail
@@ -26,3 +27,17 @@ jobs:
             jq -e '.ok == true' /tmp/reviews.json >/dev/null
             if jq -e '.done == true or .skipped == "busy"' /tmp/reviews.json >/dev/null; then break; fi
           done
+      - name: Alerta — abrir/comentar issue em caso de falha
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="🔴 Cron multipark falhou: google-business-reviews"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body="Run falhado: $run_url — $(date -u +'%Y-%m-%d %H:%M UTC')"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number' || true)
+          if [ -n "${existing:-}" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi

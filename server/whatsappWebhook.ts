@@ -7,10 +7,10 @@
  * intacto (o `express.json` consome-o). Este router usa o seu próprio
  * `express.raw({ type: 'application/json' })` no POST.
  *
- * Fase 0 (agora): apenas verificação (GET) e validação de assinatura (POST) —
- * o POST responde 200 sem processar. O processamento/escrita na BD chega na
- * Fase 3 e, por decisão do Jorge, corre ANTES de responder 200 à Meta (volume
- * baixo, latência irrelevante; preferimos o retry da Meta a perder mensagens).
+ * GET = verificação do webhook; POST = assinatura validada e depois o
+ * processamento (whatsappInbound.ts) corre ANTES de responder 200 à Meta
+ * (decisão do Jorge: volume baixo, preferimos o retry da Meta a perder
+ * mensagens). A escrita é idempotente por `waMessageId`.
  */
 import express, { Router, type Request, type Response } from "express";
 import crypto from "crypto";
@@ -26,7 +26,12 @@ export function isValidWebhookVerification(
   verifyToken: string | undefined,
 ): boolean {
   if (!verifyToken) return false;
-  return mode === "subscribe" && typeof token === "string" && token === verifyToken;
+  if (mode !== "subscribe" || typeof token !== "string") return false;
+  // Comparação em tempo constante: os digests têm sempre 32 bytes, por isso o
+  // tamanho do token não vaza nem faz o timingSafeEqual atirar.
+  const a = crypto.createHash("sha256").update(token).digest();
+  const b = crypto.createHash("sha256").update(verifyToken).digest();
+  return crypto.timingSafeEqual(a, b);
 }
 
 /**
@@ -115,7 +120,7 @@ export function createWhatsappWebhookRouter(): Router {
       const result = await processInboundWebhook(payload);
       if (result.processed || result.statuses || result.deduped) {
         console.log(
-          `[WhatsAppWebhook] processado: ${result.processed} inbound, ${result.deduped} dedup, ${result.statuses} status`,
+          `[WhatsAppWebhook] processado: ${result.processed} inbound, ${result.deduped} dedup, ${result.statuses} status${result.ignored ? `, ${result.ignored} de outro número` : ""}`,
         );
       }
       res.sendStatus(200);

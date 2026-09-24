@@ -1,4 +1,4 @@
-import { mysqlTable, mysqlSchema, AnyMySqlColumn, bigint, int, varchar, text, timestamp, datetime, index, uniqueIndex, decimal, mysqlEnum, tinyint, boolean, date, json, mediumtext, primaryKey } from "drizzle-orm/mysql-core"
+import { mysqlTable, mysqlSchema, AnyMySqlColumn, bigint, int, varchar, text, timestamp, datetime, index, uniqueIndex, decimal, mysqlEnum, tinyint, boolean, date, json, mediumtext, primaryKey, char } from "drizzle-orm/mysql-core"
 import { sql } from "drizzle-orm"
 
 export const activityLogs = mysqlTable("activity_logs", {
@@ -9,7 +9,12 @@ export const activityLogs = mysqlTable("activity_logs", {
 	entityId: int(),
 	details: text(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
-});
+},
+(table) => [
+	// Migração 0095: página de Logs (datas/entidade) + retenção por data.
+	index("idx_activity_logs_createdAt").on(table.createdAt),
+	index("idx_activity_logs_entity_createdAt").on(table.entity, table.createdAt),
+]);
 
 export const annualReports = mysqlTable("annual_reports", {
 	id: int().autoincrement().primaryKey(),
@@ -29,7 +34,12 @@ export const annualReports = mysqlTable("annual_reports", {
 export const apiKeys = mysqlTable("api_keys", {
 	id: int().autoincrement().primaryKey(),
 	name: varchar({ length: 100 }).notNull(),
-	apiKey: varchar({ length: 64 }).notNull(),
+	// LEGADO (migração 0095): a chave em claro já não é guardada — fica NULL.
+	// A autenticação usa `keyHash` (SHA-256 hex); `keyPrefix` é só para a UI.
+	apiKey: varchar({ length: 64 }),
+	keyHash: varchar({ length: 64 }),
+	keyPrefix: varchar({ length: 16 }),
+	expiresAt: timestamp({ mode: 'string' }),
 	permissions: text(),
 	active: tinyint().default(1).notNull(),
 	lastUsedAt: timestamp({ mode: 'string' }),
@@ -38,6 +48,7 @@ export const apiKeys = mysqlTable("api_keys", {
 },
 (table) => [
 	index("api_keys_apiKey_unique").on(table.apiKey),
+	uniqueIndex("api_keys_keyHash_unique").on(table.keyHash),
 ]);
 
 export const campaignDailyStats = mysqlTable("campaign_daily_stats", {
@@ -198,6 +209,37 @@ export const integrationSyncRuns = mysqlTable("integration_sync_runs", {
 },
 (table) => [
 	index("idx_integration_sync_runs_provider").on(table.provider, table.startedAt),
+]);
+
+// ─── Marketing (0093) ─────────────────────────────────────────────────────────
+// Orçamento mensal por nó cidade/marca (provider 'all' = todos os fornecedores).
+export const marketingBudgets = mysqlTable("marketing_budgets", {
+	id: int().autoincrement().primaryKey(),
+	month: char({ length: 7 }).notNull(),             // "YYYY-MM"
+	projectId: int().notNull(),
+	provider: varchar({ length: 32 }).default('all').notNull(),
+	amount: decimal({ precision: 12, scale: 2 }).notNull(),
+	notes: varchar({ length: 255 }),
+	createdById: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_marketing_budgets").on(table.month, table.projectId, table.provider),
+]);
+
+// Campanha de anúncios (ad_campaigns.id) ↔ utm_campaign / código de desconto.
+export const adCampaignLinks = mysqlTable("ad_campaign_links", {
+	id: int().autoincrement().primaryKey(),
+	adCampaignId: int().notNull(),
+	keyType: mysqlEnum(['utm_campaign','discount_code']).notNull(),
+	keyValue: varchar({ length: 256 }).notNull(),
+	createdById: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_ad_campaign_links").on(table.keyType, table.keyValue),
+	index("idx_ad_campaign_links_campaign").on(table.adCampaignId),
 ]);
 
 export const campaigns = mysqlTable("campaigns", {
@@ -1191,7 +1233,8 @@ export const multiparkBookings = mysqlTable("multipark_bookings", {
 	utmContent: varchar({ length: 256 }),
 	utmTerm: varchar({ length: 256 }),
 	adCampaignExternalId: varchar({ length: 64 }),
-	adAttribution: mysqlEnum(['google_paid','unknown']),
+	adAttribution: mysqlEnum(['google_paid','meta_paid','unknown']),
+	fbclid: varchar({ length: 255 }),                // 0093 — clique Meta (Facebook/Instagram)
 	adAttributedAt: timestamp({ mode: 'string' }),
 	syncedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
@@ -1918,6 +1961,18 @@ export const whatsappConversations = mysqlTable("whatsapp_conversations", {
 	lastInboundAt: timestamp({ mode: 'string' }),
 	lastMessageAt: timestamp({ mode: 'string' }),
 	unreadCount: int().default(0).notNull(),
+	// Migração 0094 ─────────────────────────────────────────────────────────
+	/** Pediu para não receber mensagens (STOP/PARAR…); "INICIAR" limpa. */
+	optedOutAt: timestamp({ mode: 'string' }),
+	/** Nome de perfil WhatsApp (contacts[].profile.name do webhook). */
+	profileName: varchar({ length: 128 }),
+	/** Resumo da última mensagem (lista do inbox sem ler as mensagens). */
+	lastPreview: varchar({ length: 160 }),
+	lastDirection: mysqlEnum(['in', 'out']),
+	lastType: varchar({ length: 16 }),
+	/** Cidade inferida pelo telefone de uma reserva (números sem ficha nem lead). */
+	bookingProjectId: int(),
+	bookingCheckedAt: timestamp({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
@@ -1936,7 +1991,9 @@ export const whatsappMessages = mysqlTable("whatsapp_messages", {
 	conversationId: int().notNull(),
 	direction: mysqlEnum(['in', 'out']).notNull(),
 	waMessageId: varchar({ length: 128 }),
-	type: mysqlEnum(['text', 'template']).notNull(),
+	// image/audio/document/video acrescentados na 0094; linhas antigas de media
+	// continuam 'text' com `mediaType` preenchido (a leitura aceita as duas).
+	type: mysqlEnum(['text', 'template', 'image', 'audio', 'document', 'video']).notNull(),
 	body: text(),
 	templateName: varchar({ length: 128 }),
 	// Media recebida (imagem/áudio enviados pela pessoa) — migração 0065.
@@ -1947,6 +2004,10 @@ export const whatsappMessages = mysqlTable("whatsapp_messages", {
 	mediaMime: varchar({ length: 128 }),
 	mediaUrl: text(),
 	mediaKey: varchar({ length: 512 }),
+	/** Tentativas de download da media falhadas (retry no cron horário, 0094). */
+	mediaAttempts: int().default(0).notNull(),
+	/** phone_number_id da Meta que recebeu a mensagem (metadata do webhook, 0094). */
+	phoneNumberId: varchar({ length: 32 }),
 	status: mysqlEnum(['pending', 'sent', 'delivered', 'read', 'failed']).default('pending').notNull(),
 	errorDetail: text(),
 	sentById: int(),
@@ -1961,6 +2022,16 @@ export const whatsappMessages = mysqlTable("whatsapp_messages", {
 	index("idx_whatsapp_messages_broadcast").on(table.broadcastId),
 	index("idx_whatsapp_messages_status").on(table.status),
 ]);
+
+// Status de entrega que chegou ANTES de a linha outbound existir (a Meta pode
+// mandar o 'failed' antes de o envio gravar a mensagem). Reconciliado quando o
+// envio grava a linha com esse waMessageId; limpo pelo cron ao fim de 7 dias.
+export const whatsappPendingStatuses = mysqlTable("whatsapp_pending_statuses", {
+	waMessageId: varchar({ length: 128 }).notNull().primaryKey(),
+	status: mysqlEnum(['sent', 'delivered', 'read', 'failed']).notNull(),
+	errorDetail: text(),
+	receivedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+});
 
 // Envio em massa de um template a N destinatários (agrupa as whatsapp_messages
 // resultantes via broadcastId). Contadores para o resumo no backoffice.
@@ -2008,6 +2079,8 @@ export const extraLeads = mysqlTable("extra_leads", {
 	convertedAt: datetime({ mode: 'string' }),
 	/** Resposta automática com o link da candidatura já enviada (no máximo 1×). */
 	autoRepliedAt: datetime({ mode: 'string' }),
+	/** Pediu para não receber WhatsApp (STOP/PARAR…) — migração 0094. */
+	optedOutAt: datetime({ mode: 'string' }),
 	/** Nº de templates ENVIADOS com sucesso a este lead. */
 	contactCount: int().default(0).notNull(),
 	lastContactedAt: timestamp({ mode: 'string' }),

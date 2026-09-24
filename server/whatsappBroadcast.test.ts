@@ -91,9 +91,10 @@ describe("buildBodyParams", () => {
     expect(buildBodyParams("Bruno Costa", "   ")).toEqual(["Bruno"]);
   });
 
-  it("cai em 'Teste' quando não há nome utilizável", () => {
-    expect(buildBodyParams(null, "sexta à noite")).toEqual(["Teste", "sexta à noite"]);
-    expect(buildBodyParams("   ", null)).toEqual(["Teste"]);
+  it("sem nome utilizável: neutro nos envios reais, 'Teste' só quando pedido (modo teste)", () => {
+    expect(buildBodyParams(null, "sexta à noite")).toEqual(["colega", "sexta à noite"]);
+    expect(buildBodyParams("   ", null)).toEqual(["colega"]);
+    expect(buildBodyParams(null, null, "Teste")).toEqual(["Teste"]);
   });
 
   it("limpa quebras de linha, tabs e espaços a mais (a Meta rejeita-os)", () => {

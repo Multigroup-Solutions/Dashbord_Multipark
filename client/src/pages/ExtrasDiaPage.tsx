@@ -1966,18 +1966,18 @@ export function AvailabilitySection() {
     name: string | null;
     phone: string;
     phoneE164: string | null;
-    status: "sent" | "failed" | "invalid_phone";
+    status: "sent" | "failed" | "invalid_phone" | "opted_out" | "duplicate_phone";
     error?: string;
   };
   const [waResult, setWaResult] = useState<
-    null | { total: number; sent: number; failed: number; invalidPhone: number; recipients: WaRecipient[] }
+    null | { total: number; sent: number; failed: number; invalidPhone: number; optedOut: number; recipients: WaRecipient[] }
   >(null);
 
   const broadcast = trpc.whatsapp.sendBroadcast.useMutation({
     onSuccess: (r) => {
       setWaResult(r);
       toast.success(
-        `WhatsApp: ${r.sent} enviados${r.failed ? `, ${r.failed} falhas` : ""}${r.invalidPhone ? `, ${r.invalidPhone} sem número` : ""}`,
+        `WhatsApp: ${r.sent} enviados${r.failed ? `, ${r.failed} falhas` : ""}${r.invalidPhone ? `, ${r.invalidPhone} sem número` : ""}${r.optedOut ? `, ${r.optedOut} não querem mensagens` : ""}`,
       );
       overview.refetch();
     },
@@ -2711,13 +2711,16 @@ export function AvailabilitySection() {
                 <div className="rounded-md border p-3 space-y-2">
                   <div className="text-sm font-medium">
                     {waResult.sent} enviados · {waResult.failed} falhas · {waResult.invalidPhone} sem número
+                    {waResult.optedOut ? ` · ${waResult.optedOut} não querem mensagens` : ""}
                   </div>
                   <div className="max-h-48 overflow-y-auto text-xs divide-y">
                     {waResult.recipients.map((r, i) => (
                       <div key={i} className="flex items-center gap-2 py-1">
                         {r.status === "sent" && <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />}
                         {r.status === "failed" && <XCircle className="h-3.5 w-3.5 text-red-500 shrink-0" />}
-                        {r.status === "invalid_phone" && <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />}
+                        {(r.status === "invalid_phone" || r.status === "opted_out" || r.status === "duplicate_phone") && (
+                          <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                        )}
                         <span className="flex-1 truncate">
                           {r.name || r.phone}
                           {r.phoneE164 ? <span className="text-muted-foreground"> · {r.phoneE164}</span> : null}

@@ -9,12 +9,14 @@ vi.mock("./integrations/googleAds/marketingStats", () => ({
     attributionQuality: { siteBookings: 100, withOriginUrl: 90, withClickId: 20, attributed: 20 },
     coverage: { status: "ok" },
     byCampaign: [
-      { key: "api:3:111", name: "Sem nada", accountName: "Airpark", source: "api", cost: 120, conversions: 0 },
-      { key: "api:3:222", name: "Com reservas", accountName: "Airpark", source: "api", cost: 300, conversions: 0 },
+      { key: "api:3:111", externalId: "111", name: "Sem nada", accountName: "Airpark", source: "api", cost: 120, conversions: 0 },
+      { key: "api:3:222", externalId: "222", name: "Com reservas", accountName: "Airpark", source: "api", cost: 300, conversions: 0 },
     ],
   }),
 }));
 vi.mock("./integrations/googleAds/adMetrics", () => ({ getAdMetrics: async () => ({ totals: { cost: 100 }, unmappedCampaigns: 0 }) }));
+vi.mock("./marketingBudgets", () => ({ listBudgetsWithPacing: async () => [] }));
+vi.mock("./integrations/googleAds/oauth", () => ({ getConnection: async () => null }));
 
 import { appRouter } from "./routers";
 const caller = (role = "backoffice") =>

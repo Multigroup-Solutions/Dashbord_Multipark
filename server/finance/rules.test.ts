@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildPartnerIndex, bucketKey, commissionFor, computeMargin, daysBetweenInclusive, employerTaxFor,
-  extrasCityFromKey, extrasDiaRate, isExtraEmployee, isoWeekKey, monthsOverlapping, netOfVat,
+  extrasCityFromKey, isExtraEmployee, isoWeekKey, monthsOverlapping, netOfVat,
   salaryForPeriod, shareTargets, shiftHours, FINANCE_PARAMS,
 } from "./rules";
 
@@ -67,10 +67,8 @@ describe("equipa do dia", () => {
     expect(shiftHours(8, 16, 12)).toBe(4);
     expect(shiftHours(8, 16, 6)).toBe(0);
   });
-  it("tarifas por nível e cidade das escalas", () => {
-    expect(extrasDiaRate("master")).toBe(6);
-    expect(extrasDiaRate(null)).toBe(FINANCE_PARAMS.extrasDiaRates.junior);
-    expect(extrasDiaRate("desconhecido")).toBe(FINANCE_PARAMS.extrasDiaDefaultRate);
+  it("cidade das escalas (tarifas: fonte única em extra_rates)", () => {
+    expect((FINANCE_PARAMS as any).extrasDiaRates).toBeUndefined();
     expect(extrasCityFromKey("lisboa")).toBe("lisbon");
     expect(extrasCityFromKey("faro")).toBe("faro");
     expect(extrasCityFromKey(null)).toBeNull();

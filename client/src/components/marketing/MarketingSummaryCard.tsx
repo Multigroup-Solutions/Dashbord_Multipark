@@ -52,12 +52,12 @@ export default function MarketingSummaryCard({ from, to, projectId }: { from: st
         ) : (
           <>
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-              <Cell label="Gasto Google Ads" value={eur(s.spend)} hint={`${num(s.clicks)} cliques`} />
+              <Cell label="Gasto em anúncios" value={eur(s.spend)} hint={`Google ${eur(s.spendGoogle)} · Meta ${eur(s.spendMeta)}`} />
               <Cell label="Outras despesas de marketing" value={eur(s.mktExpenses)} />
               <Cell label="Custo total de marketing" value={eur(totalMarketing)} hint={s.bookingsTotal > 0 ? `${eur(totalMarketing / s.bookingsTotal, 2)} por reserva` : undefined} />
-              <Cell label="Conversões dos anúncios" value={num(results.value)} hint={results.source === "google" ? `Google · ligámos ${num(s.bookingsAttributed)}` : "reservas ligadas (gclid)"} />
+              <Cell label="Conversões dos anúncios" value={num(results.value)} hint={results.source === "google" ? `plataformas · ligámos ${num(s.bookingsAttributed)}` : "reservas ligadas (link)"} />
               <Cell label="Custo por conversão" value={eur(results.value > 0 ? s.spend / results.value : null, 2)} />
-              <Cell label={results.source === "google" ? "ROAS (Google)" : "ROAS real"} value={roas(results.source === "google" ? s.roasGoogle : s.roasAttributed)} />
+              <Cell label="ROAS (s/ IVA)" value={roas(s.roasAttributedNet)} hint={`Google reporta ${roas(s.roasGoogle)}`} />
             </div>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
               {health && health.level !== "none" && (
@@ -71,7 +71,7 @@ export default function MarketingSummaryCard({ from, to, projectId }: { from: st
                   <AlertTriangle className="w-3.5 h-3.5" /> {critical > 0 ? `${critical} alerta(s) crítico(s)` : ""}{critical > 0 && warnings > 0 ? " · " : ""}{warnings > 0 ? `${warnings} aviso(s)` : ""}
                 </Link>
               )}
-              <span className="text-muted-foreground">O gasto do Google entra nas contas pela fatura, nas Despesas (não é somado duas vezes).</span>
+              <span className="text-muted-foreground">O gasto em anúncios entra nas contas pela fatura, nas Despesas (não é somado duas vezes).</span>
             </div>
           </>
         )}

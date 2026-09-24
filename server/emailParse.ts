@@ -10,9 +10,10 @@
 
 export type InboundAlias = "criticas" | "reclamacoes" | "perdidos" | "recursos-humanos" | "campanhas" | "ocorrencias";
 
-// "campanhas" = relatório diário de campanhas (Google Ads/Supermetrics) com CSV
-// anexo, agendado pelo Jorge para campanhas@multipark.pt — ingerido em
-// campaign_daily_stats (ver server/campaignReportIngest.ts).
+// "campanhas" = relatório diário de campanhas por email (Google Ads/Supermetrics).
+// A ingestão está DESLIGADA desde 16 set 2026: o email fica só registado como
+// "skipped" (server/jobs/emailInboundSync.ts) — o gasto vem das APIs Google
+// Ads / Meta (ad_daily_metrics).
 const ALIASES: InboundAlias[] = ["criticas", "reclamacoes", "perdidos", "recursos-humanos", "campanhas"];
 
 // ── ROTEAMENTO ──────────────────────────────────────────────────────────────

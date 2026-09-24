@@ -13,7 +13,6 @@ import HRPage from "./pages/HRPage";
 import ProjectsPage from "./pages/ProjectsPage";
 import TasksPage from "./pages/TasksPage";
 import MarketingPage from "./pages/MarketingPage";
-import { MarketingDashboardPage } from "./pages/MarketingPage";
 import ShiftHandoverPage from "./pages/ShiftHandoverPage";
 import OperationalPage from "./pages/OperationalPage";
 import RadioPage from "./pages/RadioPage";
@@ -153,6 +152,9 @@ function Router() {
       <Route path="/marketing/canais">
         {() => (<DashboardLayout><MarketingPage /></DashboardLayout>)}
       </Route>
+      <Route path="/marketing/orcamentos">
+        {() => (<DashboardLayout><MarketingPage /></DashboardLayout>)}
+      </Route>
       <Route path="/operacional">
         {() => (<DashboardLayout><OperationalPage /></DashboardLayout>)}
       </Route>
@@ -257,9 +259,9 @@ function Router() {
       <Route path="/suporte-dashboard">
         {() => (<DashboardLayout><SuporteDashboard /></DashboardLayout>)}
       </Route>
-      {/* Dashboards → Marketing: só o dashboard (o módulo completo é /marketing, no Financeiro) */}
+      {/* Rota antiga duplicada: o dashboard de marketing é /marketing */}
       <Route path="/marketing-dashboard">
-        {() => (<DashboardLayout><MarketingDashboardPage /></DashboardLayout>)}
+        {() => <Redirect to="/marketing" />}
       </Route>
       <Route path="/integracoes/google-ads">
         {() => (<DashboardLayout><IntegrationsGoogleAdsPage /></DashboardLayout>)}

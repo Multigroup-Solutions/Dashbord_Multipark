@@ -8,9 +8,23 @@ vi.mock("./cityAccess", async original => ({
   loadCityAccess: async () => ({ all: true, defaultCityId: null, cityIds: [], projectIds: [], missingCostCenter: false }),
 }));
 // Criar utilizador escreve na BD; aqui só interessa a regra de acesso do router.
+// Contas conhecidas nos testes (sem BD): 1 e 3 são super_admin, 2 é backoffice.
+const fakeUsers: Record<number, { id: number; role: string; isActive: number; email: string }> = {
+  1: { id: 1, role: "super_admin", isActive: 1, email: "chefe@multipark.pt" },
+  2: { id: 2, role: "backoffice", isActive: 1, email: "bo@multipark.pt" },
+  3: { id: 3, role: "super_admin", isActive: 1, email: "outro@multipark.pt" },
+};
+const superCount = { n: 2 };
 vi.mock("./db", async original => ({
   ...await original<object>(),
   createManualUser: async (data: { name: string; email: string; role: string }) => ({ id: 1, ...data }),
+  getUserById: async (id: number) => fakeUsers[id],
+  getUserByEmail: async (email: string) => Object.values(fakeUsers).find(u => u.email === email.trim().toLowerCase()),
+  countActiveSuperAdmins: async () => superCount.n,
+  updateUser: async () => undefined,
+  updateUserRole: async () => undefined,
+  toggleUserActive: async () => undefined,
+  logActivity: async () => undefined,
 }));
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
@@ -153,6 +167,48 @@ describe("users", () => {
     const caller = appRouter.createCaller(createCtx({ role: "super_admin" }));
     const result = await caller.users.updateRole({ userId: 2, role: "team_leader" });
     expect(result).toEqual({ success: true });
+  });
+
+  it("updateRole rejects a role outside the enum", async () => {
+    const caller = appRouter.createCaller(createCtx({ role: "super_admin" }));
+    await expect(caller.users.updateRole({ userId: 2, role: "god" as any })).rejects.toThrow();
+  });
+
+  it("a super_admin cannot demote themselves", async () => {
+    const caller = appRouter.createCaller(createCtx({ id: 1, role: "super_admin" }));
+    await expect(caller.users.updateRole({ userId: 1, role: "admin" })).rejects.toThrow(/próprio role/);
+    await expect(caller.users.update({ userId: 1, role: "admin" })).rejects.toThrow(/próprio role/);
+  });
+
+  it("cannot demote or deactivate the LAST active super_admin", async () => {
+    superCount.n = 1;
+    try {
+      const caller = appRouter.createCaller(createCtx({ id: 99, role: "super_admin" }));
+      await expect(caller.users.updateRole({ userId: 3, role: "admin" })).rejects.toThrow(/último super_admin/);
+      await expect(caller.users.toggleActive({ userId: 3, isActive: false })).rejects.toThrow(/último super_admin/);
+    } finally {
+      superCount.n = 2;
+    }
+    const caller = appRouter.createCaller(createCtx({ id: 99, role: "super_admin" }));
+    await expect(caller.users.updateRole({ userId: 3, role: "admin" })).resolves.toEqual({ success: true });
+  });
+
+  it("self-edit of email is rejected below super_admin; name still works", async () => {
+    const caller = appRouter.createCaller(createCtx({ id: 2, role: "backoffice", email: "bo@multipark.pt" }));
+    await expect(caller.users.update({ userId: 2, email: "novo@gmail.com" })).rejects.toThrow(/super_admin/);
+    await expect(caller.users.update({ userId: 2, name: "Novo Nome", email: "BO@multipark.pt" })).resolves.toEqual({ success: true });
+  });
+
+  it("super_admin email change checks case-insensitive uniqueness", async () => {
+    const caller = appRouter.createCaller(createCtx({ id: 99, role: "super_admin" }));
+    await expect(caller.users.update({ userId: 2, email: "Chefe@Multipark.pt" })).rejects.toThrow(/Já existe outra conta/);
+    await expect(caller.users.update({ userId: 2, email: "livre@multipark.pt" })).resolves.toEqual({ success: true });
+  });
+
+  it("reviews.checkoutDrivers / agentHistory exigem frontoffice+", async () => {
+    const caller = appRouter.createCaller(createCtx({ role: "extra" }));
+    await expect(caller.reviews.checkoutDrivers({ startDate: "2026-09-01", endDate: "2026-09-02" })).rejects.toThrow(/não autorizado/);
+    await expect(caller.reviews.agentHistory({ startDate: "2026-09-01", endDate: "2026-09-02", agentName: "x" })).rejects.toThrow(/não autorizado/);
   });
 
   it("updateRole is blocked for admin", async () => {

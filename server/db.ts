@@ -26,12 +26,6 @@ import {
   InsertProjectEmployee,
   InsertTask,
   InsertActivityLog,
-  campaigns,
-  campaignDailyStats,
-  marketingExpenses,
-  InsertCampaign,
-  InsertCampaignDailyStat,
-  InsertMarketingExpense,
   vehicles,
   vehicleMovements,
   speedAlerts,
@@ -158,6 +152,9 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0090").then(m => ({ s: m.MIGRATION_0090_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0090 })),
       import("./migrations/migration_0091").then(m => ({ s: m.MIGRATION_0091_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0091 })),
       import("./migrations/migration_0092").then(m => ({ s: m.MIGRATION_0092_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0092 })),
+      import("./migrations/migration_0093").then(m => ({ s: m.MIGRATION_0093_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0093 })),
+      import("./migrations/migration_0094").then(m => ({ s: m.MIGRATION_0094_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0094 })),
+      import("./migrations/migration_0095").then(m => ({ s: m.MIGRATION_0095_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0095 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -329,7 +326,7 @@ export async function createManualUser(data: { name: string; email: string; role
   return result[0];
 }
 
-export async function updateUser(userId: number, data: { name?: string; email?: string; role?: string; department?: string | null; isActive?: boolean }) {
+export async function updateUser(userId: number, data: { name?: string; email?: string; role?: string; department?: string | null; isActive?: boolean }, opts: { relinkEmployees?: boolean } = {}) {
   const db = await getDb();
   if (!db) return;
   const updates: Record<string, any> = {};
@@ -348,7 +345,8 @@ export async function updateUser(userId: number, data: { name?: string; email?: 
     await db.update(users).set(updates).where(eq(users.id, userId));
   }
   // Fase 1: email novo → liga fichas com esse email que ainda não têm conta
-  if (updates.email) {
+  // (nunca a partir de uma auto-edição — ver users.update).
+  if (updates.email && opts.relinkEmployees !== false) {
     try {
       const { linkEmployeesToUserByEmail } = await import("./identity");
       await linkEmployeesToUserByEmail(db as any, userId, updates.email);
@@ -814,20 +812,64 @@ export async function logActivity(data: InsertActivityLog) {
   await db.insert(activityLogs).values(data);
 }
 
-export async function getActivityLogs(limit = 100, filters: { entity?: string; action?: string; userId?: number } = {}) {
+export async function getActivityLogs(limit = 100, filters: {
+  entity?: string; action?: string; userId?: number;
+  /** "YYYY-MM-DD HH:MM:SS" (UTC), inclusivo. */
+  from?: string;
+  /** "YYYY-MM-DD HH:MM:SS" (UTC), exclusivo. */
+  to?: string;
+  /** Pesquisa no servidor (LIKE parametrizado) em detalhes/ação/entidade/nome. */
+  search?: string;
+} = {}) {
   const db = await getDb();
   if (!db) return [];
   const conds: any[] = [];
   if (filters.entity) conds.push(eq(activityLogs.entity, filters.entity));
   if (filters.action) conds.push(eq(activityLogs.action, filters.action));
   if (filters.userId) conds.push(eq(activityLogs.userId, filters.userId));
+  if (filters.from) conds.push(gte(activityLogs.createdAt, filters.from));
+  if (filters.to) conds.push(lt(activityLogs.createdAt, filters.to));
+  const q = (filters.search ?? "").trim();
+  if (q) {
+    // Escapa os curingas do LIKE: a pesquisa é literal.
+    const pattern = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    conds.push(or(like(activityLogs.details, pattern), like(activityLogs.action, pattern), like(activityLogs.entity, pattern), like(users.name, pattern)));
+  }
+  // Só as colunas do utilizador que a página mostra (nunca o registo inteiro).
   return db
-    .select({ log: activityLogs, user: users })
+    .select({ log: activityLogs, user: { id: users.id, name: users.name, email: users.email } })
     .from(activityLogs)
     .leftJoin(users, eq(activityLogs.userId, users.id))
     .where(conds.length > 0 ? and(...conds) : undefined)
     .orderBy(desc(activityLogs.createdAt))
     .limit(Math.min(Math.max(limit, 1), 2000));
+}
+
+/** Entidades distintas presentes no registo (para o filtro da página de Logs). */
+export async function getActivityLogEntities(): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.selectDistinct({ entity: activityLogs.entity }).from(activityLogs).orderBy(asc(activityLogs.entity));
+  return rows.map((r) => r.entity).filter(Boolean);
+}
+
+/**
+ * Retenção: apaga registos com mais de 12 meses em lotes de 5000
+ * (`DELETE … WHERE createdAt < ? LIMIT n` — sem subquery sobre a própria
+ * tabela). Chamado pelo daily-ops; o que não couber no prazo fica para o dia
+ * seguinte.
+ */
+export async function purgeOldActivityLogs(opts: { deadlineAt?: number; now?: Date } = {}) {
+  const db = await getDb();
+  if (!db) return { deleted: 0, batches: 0, done: true, cutoff: null as string | null };
+  const { activityLogCutoff, purgeInBatches } = await import("./opsRules");
+  const { extractAffectedRows } = await import("./availabilityFormToken");
+  const cutoff = activityLogCutoff(opts.now ?? new Date());
+  const r = await purgeInBatches(async (limit) => {
+    const res = await db.execute(sql`DELETE FROM activity_logs WHERE createdAt < ${cutoff} LIMIT ${sql.raw(String(Math.max(1, Math.floor(limit))))}`);
+    return extractAffectedRows(res);
+  }, { deadlineAt: opts.deadlineAt });
+  return { ...r, cutoff };
 }
 
 // ─── RH: EMPLOYEES ────────────────────────────────────────────────────────────
@@ -1878,267 +1920,6 @@ export async function getTaskStats() {
   return taskStats();
 }
 
-// ─── MARKETING: CAMPAIGNS ────────────────────────────────────────────────────
-
-export async function getCampaigns(filters: { platform?: string; projectId?: number; status?: string } = {}) {
-  const db = await getDb();
-  if (!db) return [];
-  const conditions: any[] = [projectScope(campaigns.projectId)];
-  if (filters.platform) conditions.push(eq(campaigns.platform, filters.platform as any));
-  if (filters.projectId) {
-    // Include campaigns from child projects (e marcas globais via ID negativo)
-    const ids = await resolveProjectIds(filters.projectId);
-    conditions.push(sql`${campaigns.projectId} IN (${sql.raw(ids.join(",") || "0")})`);
-  }
-  if (filters.status) conditions.push(eq(campaigns.campaignStatus, filters.status as any));
-  const q = db.select({ campaign: campaigns, project: projects }).from(campaigns)
-    .leftJoin(projects, eq(campaigns.projectId, projects.id))
-    .orderBy(desc(campaigns.createdAt));
-  return conditions.length > 0 ? q.where(and(...conditions)) : q;
-}
-
-export async function getCampaignById(id: number) {
-  const db = await getDb();
-  if (!db) return undefined;
-  const result = await db.select().from(campaigns).where(and(eq(campaigns.id, id), projectScope(campaigns.projectId))).limit(1);
-  return result[0];
-}
-
-export async function createCampaign(data: InsertCampaign) {
-  const db = await getDb();
-  if (!db) throw new Error("DB unavailable");
-  const result = await db.insert(campaigns).values(data);
-  return result[0].insertId;
-}
-
-export async function updateCampaign(id: number, data: Partial<InsertCampaign>) {
-  const db = await getDb();
-  if (!db) throw new Error("DB unavailable");
-  await db.update(campaigns).set(data).where(eq(campaigns.id, id));
-}
-
-export async function deleteCampaign(id: number) {
-  const db = await getDb();
-  if (!db) throw new Error("DB unavailable");
-  await db.delete(campaignDailyStats).where(eq(campaignDailyStats.campaignId, id));
-  await db.delete(campaigns).where(eq(campaigns.id, id));
-}
-
-// ─── MARKETING: DAILY STATS ─────────────────────────────────────────────────
-
-export async function getCampaignStats(campaignId: number) {
-  const db = await getDb();
-  if (!db) return [];
-  return db.select().from(campaignDailyStats)
-    .where(and(eq(campaignDailyStats.campaignId, campaignId), sql`EXISTS (SELECT 1 FROM campaigns WHERE campaigns.id = ${campaignDailyStats.campaignId} AND ${projectScope(campaigns.projectId)})`))
-    .orderBy(desc(campaignDailyStats.date));
-}
-
-export async function getAllDailyStats(filters: { from?: Date; to?: Date; projectId?: number } = {}) {
-  const db = await getDb();
-  if (!db) return [];
-  const conditions: any[] = [projectScope(campaigns.projectId)];
-  if (filters.from) conditions.push(gte(campaignDailyStats.date, toMysqlDateTime(filters.from)));
-  if (filters.to) conditions.push(lte(campaignDailyStats.date, toMysqlDateTime(filters.to)));
-  if (filters.projectId) {
-    const ids = await resolveProjectIds(filters.projectId);
-    conditions.push(sql`${campaigns.projectId} IN (${sql.raw(ids.join(",") || "0")})`);
-  }
-  const q = db.select({ stat: campaignDailyStats, campaign: campaigns, project: projects })
-    .from(campaignDailyStats)
-    .leftJoin(campaigns, eq(campaignDailyStats.campaignId, campaigns.id))
-    .leftJoin(projects, eq(campaigns.projectId, projects.id))
-    .orderBy(desc(campaignDailyStats.date));
-  return conditions.length > 0 ? q.where(and(...conditions)) : q;
-}
-
-export async function importDailyStats(rows: InsertCampaignDailyStat[]) {
-  const db = await getDb();
-  if (!db) throw new Error("DB unavailable");
-  if (rows.length === 0) return;
-  await db.insert(campaignDailyStats).values(rows);
-}
-
-export async function deleteDailyStat(id: number) {
-  const db = await getDb();
-  if (!db) throw new Error("DB unavailable");
-  await db.delete(campaignDailyStats).where(eq(campaignDailyStats.id, id));
-}
-
-// ─── MARKETING: EXPENSES ─────────────────────────────────────────────────────
-
-export async function getMarketingExpenses(filters: { category?: string; projectId?: number; from?: Date; to?: Date } = {}) {
-  const db = await getDb();
-  if (!db) return [];
-  const conditions: any[] = [projectScope(marketingExpenses.projectId)];
-  if (filters.category) conditions.push(eq(marketingExpenses.mktCategory, filters.category as any));
-  if (filters.projectId) conditions.push(inArray(marketingExpenses.projectId, await resolveProjectIds(filters.projectId)));
-  if (filters.from) conditions.push(gte(marketingExpenses.date, toMysqlDateTime(filters.from)));
-  if (filters.to) conditions.push(lte(marketingExpenses.date, toMysqlDateTime(filters.to)));
-  const q = db.select({ expense: marketingExpenses, project: projects }).from(marketingExpenses)
-    .leftJoin(projects, eq(marketingExpenses.projectId, projects.id))
-    .orderBy(desc(marketingExpenses.date));
-  return conditions.length > 0 ? q.where(and(...conditions)) : q;
-}
-
-export async function createMarketingExpense(data: InsertMarketingExpense) {
-  const db = await getDb();
-  if (!db) throw new Error("DB unavailable");
-  const result = await db.insert(marketingExpenses).values(data);
-  return result[0].insertId;
-}
-
-export async function updateMarketingExpense(id: number, data: Partial<InsertMarketingExpense>) {
-  const db = await getDb();
-  if (!db) throw new Error("DB unavailable");
-  await db.update(marketingExpenses).set(data).where(eq(marketingExpenses.id, id));
-}
-
-export async function deleteMarketingExpense(id: number) {
-  const db = await getDb();
-  if (!db) throw new Error("DB unavailable");
-  await db.delete(marketingExpenses).where(eq(marketingExpenses.id, id));
-}
-
-// ─── MARKETING: DASHBOARD STATS ──────────────────────────────────────────────
-
-export async function getMarketingDashboardStats(filters: { from?: Date; to?: Date; projectId?: number } = {}) {
-  const db = await getDb();
-  if (!db) return { totalSpend: 0, totalReservations: 0, costPerReservation: 0, avgConversionValue: 0, totalMktExpenses: 0, campaignCount: 0 };
-
-  // Resolve project hierarchy if filtering (marcas globais incluídas)
-  let projectIds: Set<number> | null = null;
-  if (filters.projectId) {
-    projectIds = new Set<number>(await resolveProjectIds(filters.projectId));
-  }
-
-  // Stats from campaign daily stats (join campaigns to filter by projectId)
-  const conditions: any[] = [];
-  if (filters.from) conditions.push(gte(campaignDailyStats.date, toMysqlDateTime(filters.from)));
-  if (filters.to) conditions.push(lte(campaignDailyStats.date, toMysqlDateTime(filters.to)));
-  if (projectIds) conditions.push(sql`${campaigns.projectId} IN (${sql.raw(Array.from(projectIds).join(","))})`);
-
-  const statsQ = db.select({
-    totalSpend: sql<string>`COALESCE(SUM(${campaignDailyStats.spend}), 0)`,
-    totalReservations: sql<number>`COALESCE(SUM(${campaignDailyStats.conversions}), 0)`,
-    totalConversionValue: sql<string>`COALESCE(SUM(${campaignDailyStats.conversionValue}), 0)`,
-    totalImpressions: sql<number>`COALESCE(SUM(${campaignDailyStats.impressions}), 0)`,
-    totalClicks: sql<number>`COALESCE(SUM(${campaignDailyStats.clicks}), 0)`,
-  }).from(campaignDailyStats)
-    .innerJoin(campaigns, eq(campaignDailyStats.campaignId, campaigns.id));
-  const statsResult = conditions.length > 0 ? await statsQ.where(and(...conditions)) : await statsQ;
-  const s = statsResult[0];
-
-  // Marketing expenses
-  const mktConditions: any[] = [];
-  if (filters.from) mktConditions.push(gte(marketingExpenses.date, toMysqlDateTime(filters.from)));
-  if (filters.to) mktConditions.push(lte(marketingExpenses.date, toMysqlDateTime(filters.to)));
-  if (projectIds) mktConditions.push(sql`${marketingExpenses.projectId} IN (${sql.raw(Array.from(projectIds).join(","))})`);
-  const mktQ = db.select({
-    total: sql<string>`COALESCE(SUM(${marketingExpenses.amount}), 0)`,
-  }).from(marketingExpenses);
-  const mktResult = mktConditions.length > 0 ? await mktQ.where(and(...mktConditions)) : await mktQ;
-
-  // Campaign count
-  const campConditions: any[] = [];
-  if (projectIds) campConditions.push(sql`${campaigns.projectId} IN (${sql.raw(Array.from(projectIds).join(","))})`);
-  const campQ = db.select({ count: sql<number>`COUNT(*)` }).from(campaigns);
-  const campCount = campConditions.length > 0 ? await campQ.where(and(...campConditions)) : await campQ;
-
-  // ── Gasto estimado (orçamento diário × dias) + reservas REAIS por link ──
-  // O Dashboard deixa de depender só de campaign_daily_stats (que pode estar
-  // vazio): usa o orçamento das campanhas e atribui reservas reais via os links
-  // (internal_campaign_keys campaignType='ad').
-  const periodDays = filters.from && filters.to
-    ? Math.max(1, Math.floor((filters.to.getTime() - filters.from.getTime()) / 86400000) + 1)
-    : 30;
-  const campRowsQ = db.select({ id: campaigns.id, budget: campaigns.budget }).from(campaigns);
-  const campRows = campConditions.length > 0 ? await campRowsQ.where(and(...campConditions)) : await campRowsQ;
-  const campIdSet = new Set(campRows.map((c) => c.id));
-  const budgetSpend = campRows.reduce((acc, c) => acc + parseFloat((c.budget as any) || "0"), 0) * periodDays;
-
-  const keysRaw: any = await db.execute(sql`SELECT campaignId, keyType, keyValue FROM internal_campaign_keys WHERE campaignType = 'ad'`);
-  const keys = ((Array.isArray(keysRaw[0]) ? keysRaw[0] : keysRaw) as any[]).filter((k) => campIdSet.has(k.campaignId));
-  let linkReservations = 0, linkRevenue = 0;
-  if (keys.length) {
-    const conds: any[] = [];
-    const names = keys.filter((k) => k.keyType === "campaign_name").map((k) => k.keyValue);
-    if (names.length) conds.push(sql`campaignName IN (${sql.join(names.map((v: string) => sql`${v}`), sql`, `)})`);
-    for (const k of keys.filter((k) => k.keyType === "campaign_id")) conds.push(sql`originUrl LIKE ${"%campaignId=" + k.keyValue + "%"}`);
-    for (const k of keys.filter((k) => k.keyType === "url_pattern")) conds.push(sql`originUrl LIKE ${k.keyValue}`);
-    if (conds.length) {
-      const dateC = filters.from && filters.to ? sql` AND checkIn >= ${toMysqlDateTime(filters.from)} AND checkIn <= ${toMysqlDateTime(filters.to)}` : sql``;
-      const r: any = await db.execute(sql`SELECT COUNT(*) AS c, COALESCE(SUM(totalPrice),0) AS rev FROM multipark_bookings WHERE (${sql.join(conds, sql` OR `)})${dateC}`);
-      const row = (Array.isArray(r[0]) ? r[0] : r)[0];
-      linkReservations = Number(row?.c ?? 0); linkRevenue = Number(row?.rev ?? 0);
-    }
-  }
-
-  const realSpend = parseFloat(s.totalSpend || "0"); // de campaign_daily_stats (real, quando importado do Google Ads)
-  const totalSpend = realSpend > 0 ? realSpend : budgetSpend; // senão estima por orçamento
-  const totalReservations = linkReservations > 0 ? linkReservations : (s.totalReservations || 0);
-  const conversionValue = linkRevenue > 0 ? linkRevenue : parseFloat(s.totalConversionValue || "0");
-  const totalMktExpenses = parseFloat(mktResult[0].total || "0");
-
-  return {
-    totalSpend,
-    spendEstimated: realSpend === 0 && budgetSpend > 0,
-    totalReservations,
-    totalRevenue: conversionValue,
-    costPerReservation: totalReservations > 0 ? (totalSpend + totalMktExpenses) / totalReservations : 0,
-    avgConversionValue: totalReservations > 0 ? conversionValue / totalReservations : 0,
-    totalMktExpenses,
-    campaignCount: campCount[0].count,
-    totalImpressions: s.totalImpressions || 0,
-    totalClicks: s.totalClicks || 0,
-  };
-}
-
-export async function getBookingRevenueByProject(filters: { from?: string; to?: string; projectId?: number } = {}) {
-  const db = await getDb();
-  if (!db) return { total: 0, revenue: 0, byProject: [] as { projectId: number | null; parkName: string; count: number; revenue: number }[] };
-
-  const conditions: any[] = [projectScope(multiparkBookings.projectId),
-    sql`${multiparkBookings.status} != 'CANCELLED'`,
-  ];
-  if (filters.from) conditions.push(gte(multiparkBookings.bookingCreatedAt, filters.from));
-  if (filters.to) conditions.push(lte(multiparkBookings.bookingCreatedAt, filters.to + " 23:59:59"));
-  if (filters.projectId) {
-    // Also match children (e marcas globais via ID negativo)
-    const ids = await resolveProjectIds(filters.projectId);
-    conditions.push(sql`${multiparkBookings.projectId} IN (${sql.raw(ids.join(",") || "0")})`);
-  }
-
-  const rows = await db.select({
-    parkName: multiparkBookings.parkName,
-    city: multiparkBookings.city,
-    count: sql<number>`COUNT(*)`,
-    revenue: sql<string>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-  })
-    .from(multiparkBookings)
-    .where(and(...conditions))
-    .groupBy(multiparkBookings.parkName, multiparkBookings.city);
-
-  const byProject = rows.map(r => {
-    const name = r.parkName || "Desconhecido";
-    const city = r.city || "";
-    // If park name doesn't include city, append it
-    const displayName = city && !name.includes(city) ? `${name} ${city}` : name;
-    return {
-      projectId: null,
-      parkName: displayName,
-      count: r.count,
-      revenue: parseFloat(r.revenue || "0"),
-    };
-  });
-
-  return {
-    total: byProject.reduce((s, r) => s + r.count, 0),
-    revenue: byProject.reduce((s, r) => s + r.revenue, 0),
-    byProject,
-  };
-}
-
 // ─── OPERACIONAL: VEHICLES ──────────────────────────────────────────────────
 
 export async function getVehicles(filters?: { status?: string; projectId?: number }) {
@@ -2279,10 +2060,15 @@ export async function getVehicleDriverHistory(vehicleId: number) {
 
 // ─── API KEYS ────────────────────────────────────────────────────────────────
 
+/** Lista para a UI: NUNCA devolve a chave nem o hash — só o prefixo e metadados. */
 export async function getApiKeys() {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(apiKeys).orderBy(desc(apiKeys.createdAt));
+  return db.select({
+    id: apiKeys.id, name: apiKeys.name, keyPrefix: apiKeys.keyPrefix, permissions: apiKeys.permissions,
+    active: apiKeys.active, lastUsedAt: apiKeys.lastUsedAt, expiresAt: apiKeys.expiresAt,
+    createdById: apiKeys.createdById, createdAt: apiKeys.createdAt,
+  }).from(apiKeys).orderBy(desc(apiKeys.createdAt));
 }
 
 export async function createApiKey(data: Omit<InsertApiKey, "id" | "createdAt">) {
@@ -5743,6 +5529,34 @@ export async function getInviteByToken(token: string) {
   return result[0];
 }
 
+/**
+ * Reclama o convite de forma ATÓMICA (uso único): só passa de `pending` para
+ * `accepted` uma vez. Devolve true se foi este pedido que o reclamou.
+ */
+export async function claimInviteToken(token: string): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const [res] = await (db as any).execute(sql`
+    UPDATE invite_tokens SET invite_status = 'accepted', acceptedAt = ${toMysqlDateTime(new Date())}
+    WHERE token = ${token} AND invite_status = 'pending'`);
+  return Number(res?.affectedRows ?? 0) === 1;
+}
+
+/** Devolve um convite reclamado a `pending` (a ligação da conta falhou). */
+export async function releaseInviteToken(token: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(inviteTokens).set({ inviteStatus: "pending", acceptedAt: null }).where(eq(inviteTokens.token, token));
+}
+
+/** Nº de super_admin ATIVOS (guarda do último super_admin). */
+export async function countActiveSuperAdmins(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const [rows] = await (db as any).execute(sql`SELECT COUNT(*) AS n FROM users WHERE role = 'super_admin' AND isActive = 1`);
+  return Number(rows?.[0]?.n ?? 0);
+}
+
 export async function acceptInviteToken(token: string) {
   const db = await getDb();
   if (!db) return;
@@ -6598,28 +6412,6 @@ export async function getGpsAlertStats() {
   return { total, unacknowledged, todayAlerts, byType };
 }
 
-// ─── MARKETING: GOOGLE ADS IMPORT WITH DEDUP ────────────────────────────────
-
-export async function getCampaignByNameAndPlatform(name: string, platform: string) {
-  const db = await getDb();
-  if (!db) return undefined;
-  const result = await db.select().from(campaigns)
-    .where(and(eq(campaigns.name, name), eq(campaigns.platform, platform as any)))
-    .limit(1);
-  return result[0];
-}
-
-export async function getExistingStatsForCampaignAndDateRange(campaignId: number, startDate: Date, endDate: Date) {
-  const db = await getDb();
-  if (!db) return [];
-  return db.select().from(campaignDailyStats)
-    .where(and(
-      eq(campaignDailyStats.campaignId, campaignId),
-      gte(campaignDailyStats.date, toMysqlDateTime(startDate)),
-      lte(campaignDailyStats.date, toMysqlDateTime(endDate)),
-    ));
-}
-
 // ─── GMAIL SYNC DEDUP HELPERS ──────────────────────────────────────────────
 export async function getReviewBySourceEmailId(sourceEmailId: string) {
   const db = await getDb();
@@ -7163,6 +6955,8 @@ export async function getCheckoutDriversFromDb(
         gte(multiparkBookingHistory.actionTime, startStr),
         lte(multiparkBookingHistory.actionTime, endStr),
         isNotNull(multiparkBookingHistory.agentName),
+        // Âmbito de cidade: só movimentos de reservas das cidades autorizadas.
+        bookingHistoryScope(multiparkBookingHistory.bookingExternalId),
       ),
     )
     .groupBy(multiparkBookingHistory.agentName, multiparkBookingHistory.agentUserId)
@@ -7229,6 +7023,8 @@ export async function getAgentHistoryFromDb(opts: {
   const conds: any[] = [
     gte(multiparkBookingHistory.actionTime, startStr),
     lte(multiparkBookingHistory.actionTime, endStr),
+    // Âmbito de cidade: só movimentos de reservas das cidades autorizadas.
+    bookingHistoryScope(multiparkBookingHistory.bookingExternalId),
   ];
   if (opts.userId) {
     conds.push(eq(multiparkBookingHistory.agentUserId, opts.userId));

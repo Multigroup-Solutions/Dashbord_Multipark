@@ -7,11 +7,12 @@
  * do `reply`.
  */
 import { projectVisible, scopedProjectIds } from "./extrasCityFilter";
-import { desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql, type SQL } from "drizzle-orm";
 import { getDb } from "./db";
-import { employees, extraLeads, whatsappConversations, whatsappMessages } from "../drizzle/schema";
+import { employees, whatsappConversations, whatsappMessages } from "../drizzle/schema";
 import { sendTextMessage } from "./whatsapp";
-import { messageDisplayBody } from "../shared/whatsappTemplate";
+import { firstNameOf } from "../shared/whatsappTemplate";
+import { OPTED_OUT_ERROR, previewFields, recordOutboundMessage } from "./whatsappStore";
 
 const WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -50,10 +51,6 @@ function parseDbUtc(s: string): number | null {
   return Number.isNaN(t) ? null : t;
 }
 
-function nowStr(): string {
-  return new Date().toISOString().slice(0, 19).replace("T", " ");
-}
-
 // ─── Listagem de conversas ──────────────────────────────────────────────────
 
 export interface ConversationRow {
@@ -66,6 +63,8 @@ export interface ConversationRow {
   lastMessageAt: string | null;
   preview: string | null;
   previewDirection: "in" | "out" | null;
+  /** Pediu para não receber mensagens (STOP). */
+  optedOut: boolean;
   windowState: WindowState;
   windowExpiresAt: string | null;
 }
@@ -103,54 +102,103 @@ export function sortConversations<T extends Pick<ConversationRow, "id" | "window
   });
 }
 
-/**
- * Cidade (ponto 10): conversas de extras/leads de outra cidade saem da lista
- * de quem só vê uma cidade. Números soltos (sem ficha nem lead) ficam visíveis.
- */
-async function visibleConversations<T extends { phoneE164: string; employeeId: number | null; employeeProjectId: number | null }>(
-  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
-  convs: T[],
-): Promise<T[]> {
-  const scope = scopedProjectIds();
-  if (scope === undefined) return convs;
-  const loose = convs.filter((c) => c.employeeId == null).map((c) => c.phoneE164);
-  const leadProject = new Map<string, number | null>();
-  if (loose.length) {
-    const leads = await db
-      .select({ phoneE164: extraLeads.phoneE164, projectId: extraLeads.projectId })
-      .from(extraLeads)
-      .where(inArray(extraLeads.phoneE164, loose));
-    for (const l of leads) if (l.phoneE164 && !leadProject.has(l.phoneE164)) leadProject.set(l.phoneE164, l.projectId);
-  }
-  return convs.filter((c) =>
-    c.employeeId != null ? projectVisible(c.employeeProjectId, scope) : projectVisible(leadProject.get(c.phoneE164), scope),
-  );
+// ─── Visibilidade por cidade ────────────────────────────────────────────────
+
+/** O que se sabe de uma conversa para decidir a cidade. */
+export interface ConversationCityFacts {
+  employeeId: number | null;
+  employeeProjectId: number | null;
+  /** projectId de cada lead com este número (vazio = não é lead). */
+  leadProjectIds: (number | null)[];
+  /** Cidade inferida pelo telefone de uma reserva (só números soltos). */
+  bookingProjectId: number | null;
 }
 
-/** A conversa pertence às cidades do utilizador? (guarda da thread/resposta) */
+/**
+ * Cidade (ponto 10), regra ÚNICA — `visibilitySql` é a mesma coisa em SQL. PURA.
+ *  - quem vê todas as cidades (`scope` undefined) vê tudo;
+ *  - extra: pela cidade da ficha (ficha sem cidade → visível);
+ *  - lead: se ALGUM lead com o número é da cidade (ou sem cidade);
+ *  - número solto (sem ficha nem lead): só se uma reserva com o mesmo
+ *    telefone (últimos 9 dígitos) for de uma cidade do utilizador — senão fica
+ *    só para quem vê todas as cidades.
+ */
+export function conversationVisibleTo(c: ConversationCityFacts, scope: number[] | undefined): boolean {
+  if (scope === undefined) return true;
+  if (c.employeeId != null) return projectVisible(c.employeeProjectId, scope);
+  if (c.leadProjectIds.length) return c.leadProjectIds.some((p) => projectVisible(p, scope));
+  return c.bookingProjectId != null && scope.includes(c.bookingProjectId);
+}
+
+/** Mesma regra de `conversationVisibleTo`, em SQL (aplicada ANTES do LIMIT). */
+function visibilitySql(scope: number[] | undefined): SQL {
+  if (scope === undefined) return sql`1 = 1`;
+  if (!scope.length) return sql`1 = 0`;
+  const inScope = (col: SQL) => sql`${col} IN (${sql.join(scope.map((id) => sql`${id}`), sql`, `)})`;
+  return sql`(
+    (${whatsappConversations.employeeId} IS NOT NULL AND (${employees.projectId} IS NULL OR ${inScope(sql`${employees.projectId}`)}))
+    OR (${whatsappConversations.employeeId} IS NULL AND EXISTS (
+      SELECT 1 FROM extra_leads vis_lead WHERE vis_lead.phoneE164 = ${whatsappConversations.phoneE164}
+        AND (vis_lead.projectId IS NULL OR ${inScope(sql`vis_lead.projectId`)})))
+    OR (${whatsappConversations.employeeId} IS NULL
+      AND NOT EXISTS (SELECT 1 FROM extra_leads vis_any WHERE vis_any.phoneE164 = ${whatsappConversations.phoneE164})
+      AND ${inScope(sql`${whatsappConversations.bookingProjectId}`)})
+  )`;
+}
+
+/** A conversa pertence às cidades do utilizador? (guarda da thread/resposta/lido) */
 export async function conversationVisible(conversationId: number): Promise<boolean> {
-  if (scopedProjectIds() === undefined) return true;
+  const scope = scopedProjectIds();
+  if (scope === undefined) return true;
   const db = await getDb();
   if (!db) return false;
-  const rows = await db
-    .select({
-      phoneE164: whatsappConversations.phoneE164,
-      employeeId: whatsappConversations.employeeId,
-      employeeProjectId: employees.projectId,
-    })
+  const exists = await db
+    .select({ id: whatsappConversations.id })
     .from(whatsappConversations)
-    .leftJoin(employees, eq(whatsappConversations.employeeId, employees.id))
     .where(eq(whatsappConversations.id, conversationId))
     .limit(1);
-  if (!rows.length) return true; // inexistente → quem chama trata do "não encontrada"
-  return (await visibleConversations(db, rows)).length > 0;
+  if (!exists.length) return true; // inexistente → quem chama trata do "não encontrada"
+  const rows = await db
+    .select({ id: whatsappConversations.id })
+    .from(whatsappConversations)
+    .leftJoin(employees, eq(whatsappConversations.employeeId, employees.id))
+    .where(and(eq(whatsappConversations.id, conversationId), visibilitySql(scope)))
+    .limit(1);
+  return rows.length > 0;
+}
+
+/** Nome do lead mais recente com o número da conversa (subquery escalar). */
+const leadNameSql = sql<string | null>`(SELECT ln.fullName FROM extra_leads ln WHERE ln.phoneE164 = ${whatsappConversations.phoneE164} ORDER BY ln.id DESC LIMIT 1)`;
+
+/**
+ * Conversas antigas sem resumo (escritas antes da 0094 e não apanhadas pelo
+ * backfill): calcula-o a partir da última mensagem e grava-o, 1× por conversa.
+ */
+async function fillMissingPreviews(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, ids: number[]): Promise<Map<number, ReturnType<typeof previewFields>>> {
+  const out = new Map<number, ReturnType<typeof previewFields>>();
+  if (!ids.length) return out;
+  const [rows] = (await db.execute(sql`
+    SELECT m.conversationId, m.body, m.type, m.templateName, m.mediaType, m.direction
+      FROM whatsapp_messages m
+      JOIN (SELECT conversationId, MAX(id) AS maxId FROM whatsapp_messages
+             WHERE conversationId IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+             GROUP BY conversationId) t ON t.maxId = m.id`)) as any;
+  for (const r of rows as any[]) {
+    const p = previewFields({ body: r.body, type: r.type, templateName: r.templateName, mediaType: r.mediaType, direction: r.direction });
+    out.set(Number(r.conversationId), p);
+    await db.update(whatsappConversations).set(p).where(and(eq(whatsappConversations.id, Number(r.conversationId)), isNull(whatsappConversations.lastDirection)));
+  }
+  return out;
 }
 
 export async function listConversations(): Promise<ConversationRow[]> {
   const db = await getDb();
   if (!db) return [];
 
-  const allConvs = await db
+  // O filtro de cidade vai no WHERE, ANTES do LIMIT — senão quem só vê uma
+  // cidade podia ficar com uma lista vazia porque as 300 mais recentes eram
+  // de outra.
+  const convs = await db
     .select({
       id: whatsappConversations.id,
       phoneE164: whatsappConversations.phoneE164,
@@ -158,71 +206,38 @@ export async function listConversations(): Promise<ConversationRow[]> {
       unreadCount: whatsappConversations.unreadCount,
       lastInboundAt: whatsappConversations.lastInboundAt,
       lastMessageAt: whatsappConversations.lastMessageAt,
+      lastPreview: whatsappConversations.lastPreview,
+      lastDirection: whatsappConversations.lastDirection,
+      optedOutAt: whatsappConversations.optedOutAt,
+      profileName: whatsappConversations.profileName,
       employeeName: employees.fullName,
-      employeeProjectId: employees.projectId,
+      leadName: leadNameSql,
     })
     .from(whatsappConversations)
     .leftJoin(employees, eq(whatsappConversations.employeeId, employees.id))
+    .where(visibilitySql(scopedProjectIds()))
     .orderBy(desc(whatsappConversations.lastMessageAt))
     .limit(300);
-  const convs = await visibleConversations(db, allConvs);
 
-  const ids = convs.map((c) => c.id);
-  const previewByConv = new Map<number, { body: string; direction: "in" | "out" }>();
-  if (ids.length) {
-    // Mensagens das conversas por ordem decrescente de id → a 1ª por conversa é
-    // a mais recente (preview).
-    const msgs = await db
-      .select({
-        conversationId: whatsappMessages.conversationId,
-        body: whatsappMessages.body,
-        type: whatsappMessages.type,
-        templateName: whatsappMessages.templateName,
-        direction: whatsappMessages.direction,
-        id: whatsappMessages.id,
-      })
-      .from(whatsappMessages)
-      .where(inArray(whatsappMessages.conversationId, ids))
-      .orderBy(desc(whatsappMessages.id));
-    for (const m of msgs) {
-      if (!previewByConv.has(m.conversationId)) {
-        // Mesma regra de apresentação da bolha da thread — a lista e a conversa
-        // nunca podem contar histórias diferentes.
-        previewByConv.set(m.conversationId, {
-          body: messageDisplayBody(m),
-          direction: m.direction as "in" | "out",
-        });
-      }
-    }
-  }
-
-  // Conversas SEM ficha podem ser leads de extras (recrutamento): o nome vem da
-  // tabela de leads pelo número, senão a lista mostrava só o +351….
-  const leadNameByPhone = new Map<string, string>();
-  const unnamedPhones = convs.filter((c) => !c.employeeName).map((c) => c.phoneE164);
-  if (unnamedPhones.length) {
-    const leads = await db
-      .select({ phoneE164: extraLeads.phoneE164, fullName: extraLeads.fullName })
-      .from(extraLeads)
-      .where(inArray(extraLeads.phoneE164, unnamedPhones));
-    for (const l of leads) if (l.phoneE164 && !leadNameByPhone.has(l.phoneE164)) leadNameByPhone.set(l.phoneE164, l.fullName);
-  }
+  const missing = convs.filter((c) => c.lastDirection == null && c.lastMessageAt != null).map((c) => c.id);
+  const filled = await fillMissingPreviews(db, missing);
 
   // A query vem por `lastMessageAt` desc só para o cap de 300 apanhar as
   // conversas ativas; a ordem que a UI mostra é a de `sortConversations`.
   const rows: ConversationRow[] = convs.map((c) => {
     const w = deriveWindowState(c.lastInboundAt);
-    const preview = previewByConv.get(c.id);
+    const f = filled.get(c.id);
     return {
       id: c.id,
       phoneE164: c.phoneE164,
       employeeId: c.employeeId,
-      name: c.employeeName ?? leadNameByPhone.get(c.phoneE164) ?? c.phoneE164,
+      name: conversationDisplayName(c),
       unreadCount: c.unreadCount,
       lastInboundAt: c.lastInboundAt,
       lastMessageAt: c.lastMessageAt,
-      preview: preview?.body || null,
-      previewDirection: preview?.direction ?? null,
+      preview: (f?.lastPreview ?? c.lastPreview) || null,
+      previewDirection: (f?.lastDirection ?? c.lastDirection) ?? null,
+      optedOut: c.optedOutAt != null,
       windowState: w.windowState,
       windowExpiresAt: w.windowExpiresAt,
     };
@@ -230,17 +245,28 @@ export async function listConversations(): Promise<ConversationRow[]> {
   return sortConversations(rows);
 }
 
+/** Nome a mostrar: ficha → lead → nome de perfil WhatsApp → número. PURA. */
+export function conversationDisplayName(c: {
+  employeeName?: string | null;
+  leadName?: string | null;
+  profileName?: string | null;
+  phoneE164: string;
+}): string {
+  return c.employeeName?.trim() || c.leadName?.trim() || c.profileName?.trim() || c.phoneE164;
+}
+
 // ─── Thread de uma conversa ─────────────────────────────────────────────────
 
 export interface ThreadMessage {
   id: number;
   direction: "in" | "out";
-  type: "text" | "template";
+  type: "text" | "template" | "image" | "audio" | "document" | "video";
   body: string | null;
   templateName: string | null;
-  /** Media recebida (imagem/áudio). `mediaUrl` null com `mediaType` preenchido = download falhou. */
+  /** Media recebida. O ficheiro é privado: a UI pede um URL assinado (whatsapp.mediaUrl). */
   mediaType: "image" | "audio" | "video" | "document" | "sticker" | null;
-  mediaUrl: string | null;
+  /** Há ficheiro guardado? false com `mediaType` preenchido = download falhou (o cron re-tenta). */
+  mediaAvailable: boolean;
   mediaMime: string | null;
   status: string;
   errorDetail: string | null;
@@ -254,6 +280,11 @@ export interface ConversationThread {
   /** Ficha do colaborador associada (null = número sem ficha; o cabeçalho não fica clicável). */
   employeeId: number | null;
   name: string;
+  /** Primeiro nome real do destinatário (ficha → lead → perfil); null = só temos o número. */
+  recipientFirstName: string | null;
+  /** Pediu para não receber mensagens (STOP). */
+  optedOut: boolean;
+  optedOutAt: string | null;
   windowState: WindowState;
   windowExpiresAt: string | null;
   messages: ThreadMessage[];
@@ -269,7 +300,10 @@ export async function getConversationThread(conversationId: number, limit = 100)
       phoneE164: whatsappConversations.phoneE164,
       employeeId: whatsappConversations.employeeId,
       lastInboundAt: whatsappConversations.lastInboundAt,
+      optedOutAt: whatsappConversations.optedOutAt,
+      profileName: whatsappConversations.profileName,
       employeeName: employees.fullName,
+      leadName: leadNameSql,
     })
     .from(whatsappConversations)
     .leftJoin(employees, eq(whatsappConversations.employeeId, employees.id))
@@ -286,6 +320,7 @@ export async function getConversationThread(conversationId: number, limit = 100)
       body: whatsappMessages.body,
       templateName: whatsappMessages.templateName,
       mediaType: whatsappMessages.mediaType,
+      mediaKey: whatsappMessages.mediaKey,
       mediaUrl: whatsappMessages.mediaUrl,
       mediaMime: whatsappMessages.mediaMime,
       status: whatsappMessages.status,
@@ -299,15 +334,48 @@ export async function getConversationThread(conversationId: number, limit = 100)
     .limit(limit);
 
   const w = deriveWindowState(conv.lastInboundAt);
+  const name = conversationDisplayName(conv);
+  const realName = conv.employeeName || conv.leadName || conv.profileName;
   return {
     conversationId: conv.id,
     phoneE164: conv.phoneE164,
     employeeId: conv.employeeId,
-    name: conv.employeeName ?? conv.phoneE164,
+    name,
+    recipientFirstName: realName ? firstNameOf(realName) : null,
+    optedOut: conv.optedOutAt != null,
+    optedOutAt: conv.optedOutAt,
     windowState: w.windowState,
     windowExpiresAt: w.windowExpiresAt,
-    messages: (rows as ThreadMessage[]).reverse(), // cronológico (antigo → recente)
+    // Nunca devolve o URL do storage: só se há ficheiro (o link assinado é pedido à parte).
+    messages: rows
+      .map(({ mediaKey, mediaUrl, ...m }) => ({ ...m, mediaAvailable: !!(mediaKey || mediaUrl) }) as ThreadMessage)
+      .reverse(), // cronológico (antigo → recente)
   };
+}
+
+/**
+ * URL ASSINADO (curta duração) do ficheiro de uma mensagem recebida. A guarda
+ * de cidade é feita pela conversa da mensagem. null = mensagem sem ficheiro
+ * ou fora do âmbito (quem chama responde "não encontrado").
+ */
+export async function getInboundMediaUrl(messageId: number): Promise<{ url: string; mime: string | null } | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [m] = await db
+    .select({
+      conversationId: whatsappMessages.conversationId,
+      mediaKey: whatsappMessages.mediaKey,
+      mediaUrl: whatsappMessages.mediaUrl,
+      mediaMime: whatsappMessages.mediaMime,
+    })
+    .from(whatsappMessages)
+    .where(eq(whatsappMessages.id, messageId))
+    .limit(1);
+  if (!m || !(m.mediaKey || m.mediaUrl)) return null;
+  if (!(await conversationVisible(m.conversationId))) return null;
+  const { storagePresignGet } = await import("./storage");
+  const signed = await storagePresignGet(m.mediaKey || m.mediaUrl!, { fallbackUrl: m.mediaUrl, expiresSeconds: 600 });
+  return signed.url ? { url: signed.url, mime: m.mediaMime } : null;
 }
 
 // ─── Marcar como lido ───────────────────────────────────────────────────────
@@ -344,12 +412,23 @@ export interface ReplyResult {
   ok: boolean;
   waMessageId?: string;
   error?: string;
+  /** O contacto pediu STOP — a UI pede confirmação e reenvia com `allowOptedOut`. */
+  optedOut?: boolean;
 }
 
+/**
+ * Texto livre para uma conversa (só com a janela de 24h aberta). Usado pela
+ * resposta manual do inbox E pelas respostas automáticas.
+ *
+ * Opt-out: um contacto que pediu STOP não recebe nada automático. A resposta
+ * manual só passa com `allowOptedOut` (a UI pede confirmação antes); a
+ * confirmação do próprio STOP também usa esta via.
+ */
 export async function replyToConversation(
   conversationId: number,
   text: string,
   userId: number | null,
+  opts: { allowOptedOut?: boolean } = {},
 ): Promise<ReplyResult> {
   const body = text.trim();
   if (!body) return { ok: false, error: "Mensagem vazia." };
@@ -362,12 +441,17 @@ export async function replyToConversation(
       id: whatsappConversations.id,
       phoneE164: whatsappConversations.phoneE164,
       lastInboundAt: whatsappConversations.lastInboundAt,
+      optedOutAt: whatsappConversations.optedOutAt,
     })
     .from(whatsappConversations)
     .where(eq(whatsappConversations.id, conversationId))
     .limit(1);
   if (!rows.length) return { ok: false, error: "Conversa não encontrada." };
   const conv = rows[0];
+
+  if (conv.optedOutAt && !opts.allowOptedOut) {
+    return { ok: false, optedOut: true, error: OPTED_OUT_ERROR };
+  }
 
   // Validação da janela NO SERVIDOR — a UI não é a fonte de verdade.
   const { windowState } = deriveWindowState(conv.lastInboundAt);
@@ -382,24 +466,15 @@ export async function replyToConversation(
   }
 
   const res = await sendTextMessage(conv.phoneE164, body);
-  const now = nowStr();
-
-  await db.insert(whatsappMessages).values({
+  await recordOutboundMessage(db, {
     conversationId,
-    direction: "out",
     waMessageId: res.ok ? res.waMessageId : null,
     type: "text",
     body,
     status: res.ok ? "sent" : "failed",
     errorDetail: res.ok ? null : res.error,
     sentById: userId,
-    waTimestamp: now,
   });
-
-  await db
-    .update(whatsappConversations)
-    .set({ lastMessageAt: now })
-    .where(eq(whatsappConversations.id, conversationId));
 
   return res.ok ? { ok: true, waMessageId: res.waMessageId } : { ok: false, error: res.error };
 }
