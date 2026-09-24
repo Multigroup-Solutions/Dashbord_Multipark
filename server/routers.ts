@@ -7693,6 +7693,12 @@ export const appRouter = router({
       const linked = new Set(linkedEmps.map((e) => (e.n ?? "").trim().toLowerCase()).filter(Boolean));
       // Fase 1: um agente ligado só pelo ID (outro nome na ficha) também está ligado
       const linkedIds = new Set(linkedEmps.map((e) => (e.id ?? "").trim()).filter(Boolean));
+      // agentes EXTRA (pessoa com várias contas Multipark) também estão ligados
+      const { listAgentAliases } = await import("./employeeAliases");
+      for (const a of await listAgentAliases()) {
+        linkedIds.add(a.agentUserId);
+        if (a.agentName) linked.add(a.agentName.trim().toLowerCase());
+      }
       const partners = new Set((await listAgentPartners()).map((p) => p.agentName.trim().toLowerCase()));
       const { listIgnoredAgents } = await import("./db");
       const ignored = new Set((await listIgnoredAgents()).map((n) => n.trim().toLowerCase()));
@@ -8238,12 +8244,31 @@ export const appRouter = router({
         requireRole(ctx.user.role, "admin");
         await assertEmployeeAccess(input.employeeId);
         const { linkEmployeeToUser } = await import("./identityScreen");
+        let mode: "principal" | "extra";
         try {
-          await linkEmployeeToUser(input.employeeId, input.userId);
+          mode = await linkEmployeeToUser(input.employeeId, input.userId);
         } catch (err: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
         }
-        await logActivity({ userId: ctx.user.id, action: "account_link", entity: "employee", entityId: input.employeeId, details: `Ficha ligada ao utilizador #${input.userId} (ecrã Ligações)` });
+        await logActivity({ userId: ctx.user.id, action: "account_link", entity: "employee", entityId: input.employeeId, details: `Ficha ligada ao utilizador #${input.userId} como conta ${mode} (ecrã Ligações)` });
+        return { success: true, mode };
+      }),
+    removeAccountAlias: protectedProcedure
+      .input(z.object({ userId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        const { removeAccountAlias } = await import("./employeeAliases");
+        await removeAccountAlias(input.userId);
+        await logActivity({ userId: ctx.user.id, action: "account_unlink", entity: "user", entityId: input.userId, details: "Conta extra separada da ficha (ecrã Ligações)" });
+        return { success: true };
+      }),
+    removeAgentAlias: protectedProcedure
+      .input(z.object({ agentUserId: z.string().min(1).max(128) }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        const { removeAgentAlias } = await import("./employeeAliases");
+        await removeAgentAlias(input.agentUserId);
+        await logActivity({ userId: ctx.user.id, action: "agent_detach", entity: "employee", details: `Agente extra ${input.agentUserId} separado (ecrã Ligações)` });
         return { success: true };
       }),
     linkAgent: protectedProcedure

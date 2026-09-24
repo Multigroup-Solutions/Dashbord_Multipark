@@ -140,6 +140,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0078").then(m => ({ s: m.MIGRATION_0078_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0078 })),
       import("./migrations/migration_0079").then(m => ({ s: m.MIGRATION_0079_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0079 })),
       import("./migrations/migration_0080").then(m => ({ s: m.MIGRATION_0080_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0080 })),
+      import("./migrations/migration_0081").then(m => ({ s: m.MIGRATION_0081_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0081 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -894,7 +895,15 @@ export async function getEmployeeByUserId(userId: number) {
   const result = await db.select({ employee: employees, project: projects }).from(employees)
     .leftJoin(projects, eq(employees.projectId, projects.id))
     .where(eq(employees.userId, userId)).limit(1);
-  return result[0];
+  if (result[0]) return result[0];
+  // Conta EXTRA (ex.: email pessoal além do profissional) → a mesma ficha
+  const { employeeIdForAliasUser } = await import("./employeeAliases");
+  const empId = await employeeIdForAliasUser(userId);
+  if (empId == null) return undefined;
+  const alias = await db.select({ employee: employees, project: projects }).from(employees)
+    .leftJoin(projects, eq(employees.projectId, projects.id))
+    .where(eq(employees.id, empId)).limit(1);
+  return alias[0];
 }
 
 export async function createEmployee(data: InsertEmployee) {
@@ -3060,6 +3069,18 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
     ))
     .groupBy(employees.id);
   const movMap = new Map(movRows.map(r => [Number(r.employeeId), Number(r.count)]));
+  // Agentes EXTRA da ficha (pessoa com várias contas Multipark)
+  try {
+    const [aliasRows] = await db.execute(sql`
+      SELECT a.employeeId, COUNT(*) AS n FROM multipark_booking_history h
+      JOIN employee_agents a ON a.agentUserId = h.agentUserId
+      WHERE h.actionTime >= ${startStr} AND h.actionTime <= ${endStr}
+      GROUP BY a.employeeId`) as any;
+    for (const r of (aliasRows as any[]) ?? []) {
+      const id = Number(r.employeeId);
+      if (driverIds.includes(id)) movMap.set(id, (movMap.get(id) ?? 0) + Number(r.n));
+    }
+  } catch { /* tabela ainda não criada */ }
 
   // ── 3. Speed alerts não reconhecidos com excesso (single query)
   const alertRows = await db
@@ -5171,6 +5192,12 @@ export async function getLastWorkedMap(): Promise<Record<number, string>> {
     SELECT employeeId id, MAX(assignmentDate) d FROM extras_dia_assignments
     WHERE employeeId IS NOT NULL GROUP BY employeeId`) as any;
   for (const r of (extras as any[]) ?? []) take(r.id, r.d);
+  try {
+    const [aliasAgents] = await db.execute(sql`
+      SELECT a.employeeId id, MAX(h.actionTime) d FROM employee_agents a
+      JOIN multipark_booking_history h ON h.agentUserId = a.agentUserId GROUP BY a.employeeId`) as any;
+    for (const r of (aliasAgents as any[]) ?? []) take(r.id, r.d);
+  } catch { /* tabela ainda não criada */ }
   return out;
 }
 
@@ -5198,6 +5225,16 @@ export async function getDayActivity(date: string) {
   const empById = new Map(emps.map((e) => [e.id, e]));
   const empByAgentId = new Map(emps.filter((e) => e.multiparkAgentUserId).map((e) => [String(e.multiparkAgentUserId).trim(), e]));
   const empByAgent = new Map(emps.filter((e) => e.multiparkAgentName).map((e) => [(e.multiparkAgentName ?? "").trim().toLowerCase(), e]));
+  // Agentes EXTRA da ficha (a mesma pessoa com várias contas Multipark)
+  {
+    const { listAgentAliases } = await import("./employeeAliases");
+    for (const a of await listAgentAliases()) {
+      const e = empById.get(a.employeeId);
+      if (!e) continue;
+      empByAgentId.set(a.agentUserId, e);
+      if (a.agentName) empByAgent.set(a.agentName.trim().toLowerCase(), e);
+    }
+  }
   const partners = await listAgentPartners();
   const partnerByAgent = new Map(partners.map((p) => [p.agentName.trim().toLowerCase(), p]));
 

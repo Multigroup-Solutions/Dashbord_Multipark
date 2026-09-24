@@ -115,10 +115,12 @@ async function logLink(action: string, entityId: number, details: string) {
   } catch { /* segue */ }
 }
 
-export interface SweepReport { usersLinked: number; usersCreated: number; employeesLinkedToUsers: number; agentIdsFilled: number; agentsByEmail: number; agentsByName: number; errors: string[] }
+export interface SweepReport { usersLinked: number; usersCreated: number; employeesLinkedToUsers: number; agentIdsFilled: number; agentsByEmail: number; agentsByName: number; agentAliases: number; errors: string[] }
 
 export async function runIdentitySweep(): Promise<SweepReport> {
-  const rep: SweepReport = { usersLinked: 0, usersCreated: 0, employeesLinkedToUsers: 0, agentIdsFilled: 0, agentsByEmail: 0, agentsByName: 0, errors: [] };
+  const rep: SweepReport = { usersLinked: 0, usersCreated: 0, employeesLinkedToUsers: 0, agentIdsFilled: 0, agentsByEmail: 0, agentsByName: 0, agentAliases: 0, errors: [] };
+  const { listAgentAliases, addAgentAlias } = await import("./employeeAliases");
+  const aliasAgentIds = new Set((await listAgentAliases()).map((a) => a.agentUserId));
   const db = await getDb();
   if (!db) return rep;
   const { ensureUserForEmployee, linkEmployeesToUserByEmail } = await import("./identity");
@@ -136,10 +138,19 @@ export async function runIdentitySweep(): Promise<SweepReport> {
 
   // 2. Utilizadores ativos sem ficha → fichas com o mesmo email (trabalho ou pessoal)
   try {
-    const orphans = rowsOf(await db.execute(sql`
-      SELECT u.id, u.email FROM users u
-       WHERE u.isActive = 1 AND u.email IS NOT NULL AND u.email <> ''
-         AND NOT EXISTS (SELECT 1 FROM employees e WHERE e.userId = u.id)`));
+    let orphans: any[];
+    try {
+      orphans = rowsOf(await db.execute(sql`
+        SELECT u.id, u.email FROM users u
+         WHERE u.isActive = 1 AND u.email IS NOT NULL AND u.email <> ''
+           AND NOT EXISTS (SELECT 1 FROM employees e WHERE e.userId = u.id)
+           AND NOT EXISTS (SELECT 1 FROM employee_accounts a WHERE a.userId = u.id)`));
+    } catch {
+      orphans = rowsOf(await db.execute(sql`
+        SELECT u.id, u.email FROM users u
+         WHERE u.isActive = 1 AND u.email IS NOT NULL AND u.email <> ''
+           AND NOT EXISTS (SELECT 1 FROM employees e WHERE e.userId = u.id)`));
+    }
     for (const u of orphans) rep.employeesLinkedToUsers += (await linkEmployeesToUserByEmail(db as any, Number(u.id), String(u.email))).length;
   } catch (err: any) { rep.errors.push(`utilizadores sem ficha: ${err?.message ?? err}`); }
 
@@ -159,7 +170,8 @@ export async function runIdentitySweep(): Promise<SweepReport> {
     agents = rowsOf(await db.execute(sql`
       SELECT agentUserId AS id, agentName AS name, COUNT(*) AS n FROM multipark_booking_history
        WHERE agentUserId IS NOT NULL AND agentUserId <> '' AND actionTime >= NOW() - INTERVAL 180 DAY
-       GROUP BY agentUserId, agentName`)).map((r) => ({ id: String(r.id), name: r.name ? String(r.name) : null, count: Number(r.n) }));
+       GROUP BY agentUserId, agentName`)).map((r) => ({ id: String(r.id), name: r.name ? String(r.name) : null, count: Number(r.n) }))
+      .filter((a) => !aliasAgentIds.has(a.id)); // agentes EXTRA já estão ligados
     await loadEmps();
   } catch (err: any) { rep.errors.push(`carregar agentes: ${err?.message ?? err}`); return rep; }
 
@@ -181,7 +193,25 @@ export async function runIdentitySweep(): Promise<SweepReport> {
          AND actionTime >= NOW() - INTERVAL 180 DAY
        GROUP BY agentUserId`)).map((r) => ({ agentUserId: String(r.agentUserId), agentName: r.agentName ? String(r.agentName) : null, agentEmail: String(r.agentEmail) }));
     const { autoAttachAgentsByEmail } = await import("./identityReconcile");
-    rep.agentsByEmail = await autoAttachAgentsByEmail(db as any, seen as any);
+    rep.agentsByEmail = await autoAttachAgentsByEmail(db as any, seen.filter((s) => !aliasAgentIds.has(s.agentUserId)) as any);
+
+    // 4b. Segundo agente da mesma pessoa: email de uma ficha ativa que JÁ tem
+    // outro agente → entra como agente EXTRA (várias contas Multipark)
+    const fichas = rowsOf(await db.execute(sql`
+      SELECT e.id, e.multiparkAgentUserId AS agentId,
+             LOWER(TRIM(COALESCE(NULLIF(e.email, ''), u.email))) AS email, LOWER(TRIM(e.personalEmail)) AS personalEmail
+        FROM employees e LEFT JOIN users u ON u.id = e.userId WHERE e.isActive = 1`));
+    const linkedIds = new Set(fichas.map((f) => String(f.agentId ?? "").trim()).filter(Boolean));
+    for (const a of seen) {
+      if (linkedIds.has(a.agentUserId) || aliasAgentIds.has(a.agentUserId)) continue;
+      const email = a.agentEmail.trim().toLowerCase();
+      const m = fichas.filter((f) => f.email === email || (f.personalEmail && f.personalEmail === email));
+      if (m.length !== 1 || !m[0].agentId) continue;
+      await addAgentAlias(Number(m[0].id), a.agentUserId, a.agentName);
+      aliasAgentIds.add(a.agentUserId);
+      await logLink("agent_attach", Number(m[0].id), `[Ligações] agente Multipark ${a.agentUserId} "${a.agentName ?? ""}" junto como agente EXTRA (mesmo email)`);
+      rep.agentAliases++;
+    }
   } catch (err: any) { rep.errors.push(`agentes por email: ${err?.message ?? err}`); }
 
   // 5. Por nome, só quando é inequívoco
