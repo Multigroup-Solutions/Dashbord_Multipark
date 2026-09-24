@@ -102,6 +102,7 @@ import type { LostFoundItem, LostFoundPhoto, LostFoundMessage } from "../drizzle
 import { ENV } from "./_core/env";
 import { lisbonToday } from "../shared/expensePeriods";
 import { lisbonDayRangeUtc } from "../shared/lisbonDay";
+import { isoWeekYearLisbon, incidentSlaHours, addHoursUtc, utcNowStr as caseUtcNowStr, incidentCountsAgainstDriver } from "../shared/caseRules";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 let _schemaEnsure: Promise<void> | null = null;
@@ -156,6 +157,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0088").then(m => ({ s: m.MIGRATION_0088_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0088 })),
       import("./migrations/migration_0090").then(m => ({ s: m.MIGRATION_0090_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0090 })),
       import("./migrations/migration_0091").then(m => ({ s: m.MIGRATION_0091_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0091 })),
+      import("./migrations/migration_0092").then(m => ({ s: m.MIGRATION_0092_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0092 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -2749,9 +2751,12 @@ export async function createLostFoundItem(data: Omit<LostFoundItem, "id" | "crea
   return result.id;
 }
 
-export async function getLostFoundItems(filters?: { status?: string; itemType?: string; projectId?: number; search?: string }) {
+export async function getLostFoundItems(filters?: { status?: string; itemType?: string; projectId?: number; noProject?: boolean; search?: string }) {
   const db = await getDb(); if (!db) return [];
-  const conditions: any[] = await projectFilterConds(lostFoundItems.projectId, filters?.projectId);
+  // Quem vê todas as cidades vê também os casos "Sem cidade" (projectScope é
+  // 1=1); `noProject` mostra SÓ esses (e nada a quem está limitado a cidades).
+  const conditions: any[] = await projectFilterConds(lostFoundItems.projectId, filters?.noProject ? undefined : filters?.projectId);
+  if (filters?.noProject) conditions.push(scopedProjectIds() === undefined ? isNull(lostFoundItems.projectId) : sql`1 = 0`);
   if (filters?.status) conditions.push(eq(lostFoundItems.status, filters.status as any));
   if (filters?.itemType) conditions.push(eq(lostFoundItems.itemType, filters.itemType as any));
   if (filters?.search) conditions.push(or(
@@ -2775,11 +2780,10 @@ export async function updateLostFoundItem(id: number, data: Partial<LostFoundIte
   await closeLinkedTasksIfResolved("lost_found", id, (data as any).status);
 }
 
+/** Apaga o caso, os ficheiros no storage, mensagens e condutores ligados. */
 export async function deleteLostFoundItem(id: number) {
-  const db = await getDb(); if (!db) return;
-  await db.delete(lostFoundPhotos).where(eq(lostFoundPhotos.itemId, id));
-  await db.delete(lostFoundMessages).where(eq(lostFoundMessages.itemId, id));
-  await db.delete(lostFoundItems).where(eq(lostFoundItems.id, id));
+  const { deleteLostCaseFully } = await import("./caseOps");
+  await deleteLostCaseFully(id);
 }
 
 export async function addLostFoundPhoto(data: Omit<LostFoundPhoto, "id" | "createdAt">) {
@@ -2819,9 +2823,13 @@ export async function attachLostFoundDriver(data: {
 
 export async function listLostFoundDrivers(itemId: number) {
   const db = await getDb(); if (!db) return [];
-  return db.select().from(lostFoundAttachedDrivers)
+  const rows = await db.select({ d: lostFoundAttachedDrivers, penaltyStatus: employeePenalties.status })
+    .from(lostFoundAttachedDrivers)
+    .leftJoin(employeePenalties, eq(employeePenalties.id, lostFoundAttachedDrivers.penaltyId))
     .where(eq(lostFoundAttachedDrivers.itemId, itemId))
     .orderBy(desc(lostFoundAttachedDrivers.createdAt));
+  // pointsConfirmed reflete a revisão do RH mesmo quando feita no ecrã do RH.
+  return rows.map(r => ({ ...r.d, penaltyStatus: r.penaltyStatus ?? null, pointsConfirmed: r.penaltyStatus === "confirmed" ? 1 : 0 }));
 }
 
 export async function detachLostFoundDriver(id: number) {
@@ -2834,78 +2842,32 @@ export async function getLostFoundMessages(itemId: number) {
   return db.select().from(lostFoundMessages).where(eq(lostFoundMessages.itemId, itemId)).orderBy(lostFoundMessages.createdAt);
 }
 
-// Cruzamento de dados: ranking de condutores envolvidos em carros com desaparecimentos
-export async function getLostFoundDriverRanking() {
-  const db = await getDb(); if (!db) return [];
-  // Get all lost_found items with vehicle plates
-  const items = await db.select().from(lostFoundItems).where(sql`${lostFoundItems.vehiclePlate} IS NOT NULL AND ${lostFoundItems.vehiclePlate} != ''`);
-  if (items.length === 0) return [];
-
-  const plates = items.map(i => i.vehiclePlate!);
-  // Get all movements for those plates
-  const allMovements = await db.select().from(vehicleMovements);
-  const relevantMovements = allMovements.filter(m => {
-    // Find vehicle plate for this movement
-    return true; // We'll join with vehicles below
-  });
-
-  // Get vehicles to map vehicleId -> plate
-  const allVehicles = await db.select().from(vehicles);
-  const vehiclePlateMap = new Map(allVehicles.map(v => [v.id, v.plate]));
-  const plateVehicleMap = new Map(allVehicles.map(v => [v.plate, v.id]));
-
-  // Get movements for affected vehicles
-  const affectedVehicleIds = plates.map(p => plateVehicleMap.get(p)).filter(Boolean) as number[];
-  const movements = allMovements.filter(m => affectedVehicleIds.includes(m.vehicleId));
-
-  // Get employees
-  const { employees } = await import("../drizzle/schema");
-  const allEmployees = await db.select().from(employees);
-  const employeeMap = new Map(allEmployees.map(e => [e.id, e.fullName]));
-
-  // Count how many incident vehicles each driver touched
-  const driverIncidents = new Map<number, { name: string; vehiclePlates: Set<string>; totalIncidents: number }>();
-  for (const mov of movements) {
-    const plate = vehiclePlateMap.get(mov.vehicleId);
-    if (!plate || !plates.includes(plate)) continue;
-    const incidentsForPlate = items.filter(i => i.vehiclePlate === plate).length;
-    const existing = driverIncidents.get(mov.employeeId) || { name: employeeMap.get(mov.employeeId) || "Desconhecido", vehiclePlates: new Set(), totalIncidents: 0 };
-    existing.vehiclePlates.add(plate);
-    existing.totalIncidents += incidentsForPlate;
-    driverIncidents.set(mov.employeeId, existing);
-  }
-
-  return Array.from(driverIncidents.entries())
-    .map(([employeeId, data]) => ({
-      employeeId,
-      employeeName: data.name,
-      vehicleCount: data.vehiclePlates.size,
-      incidentCount: data.totalIncidents,
-      plates: Array.from(data.vehiclePlates),
-    }))
-    .sort((a, b) => b.incidentCount - a.incidentCount);
-}
-
 
 // ─── OCORRÊNCIAS (INCIDENTS) ─────────────────────────────────────────────────
 export async function createIncident(data: any) {
   const db = await getDb(); if (!db) return null;
-  const now = new Date();
-  const weekNum = getWeekNumber(now);
-  const [result] = await db.insert(incidents).values({ ...data, weekNumber: data.weekNumber || weekNum, yearNumber: data.yearNumber || now.getFullYear() } as any).$returningId();
+  // Semana/ano ISO do DIA DE LISBOA da ocorrência (não do servidor/UTC).
+  const at = data.sourceEmailDate ? String(data.sourceEmailDate) : caseUtcNowStr();
+  const { week, year } = isoWeekYearLisbon(at.replace(" ", "T") + "Z");
+  const [result] = await db.insert(incidents).values({
+    ...data,
+    driverConfirmed: data.driverConfirmed ? 1 : 0,
+    dueAt: data.dueAt ?? addHoursUtc(caseUtcNowStr(), incidentSlaHours()),
+    weekNumber: data.weekNumber || week,
+    yearNumber: data.yearNumber || year,
+  } as any).$returningId();
   return result?.id;
 }
 
-export async function getIncidents(filters?: { status?: string; severity?: string; employeeId?: number; weekNumber?: number; yearNumber?: number }) {
+export async function getIncidents(filters?: { status?: string; severity?: string; employeeId?: number; projectId?: number; noProject?: boolean }) {
   const db = await getDb(); if (!db) return [];
-  const conditions: any[] = [];
+  const conditions: any[] = await projectFilterConds(incidents.projectId, filters?.noProject ? undefined : filters?.projectId);
+  if (filters?.noProject) conditions.push(scopedProjectIds() === undefined ? isNull(incidents.projectId) : sql`1 = 0`);
   if (filters?.status) conditions.push(eq(incidents.status, filters.status as any));
   if (filters?.severity) conditions.push(eq(incidents.severity, filters.severity as any));
   if (filters?.employeeId) conditions.push(eq(incidents.employeeId, filters.employeeId));
-  if (filters?.weekNumber) conditions.push(eq(incidents.weekNumber, filters.weekNumber));
-  if (filters?.yearNumber) conditions.push(eq(incidents.yearNumber, filters.yearNumber));
   const where = conditions.length > 0 ? and(...conditions) : undefined;
-  return db.select().from(incidents).where(where).orderBy(desc(incidents.createdAt));
+  return db.select().from(incidents).where(where).orderBy(desc(incidents.createdAt)).limit(2000);
 }
 
 export async function getIncidentById(id: number) {
@@ -2925,35 +2887,26 @@ export async function deleteIncident(id: number) {
   await db.delete(incidents).where(eq(incidents.id, id));
 }
 
-export async function getIncidentStats(weekNumber?: number, yearNumber?: number) {
-  const db = await getDb(); if (!db) return { total: 0, open: 0, resolved: 0, critical: 0, byType: {} };
-  const conditions: any[] = [];
-  if (weekNumber) conditions.push(eq(incidents.weekNumber, weekNumber));
-  if (yearNumber) conditions.push(eq(incidents.yearNumber, yearNumber));
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
-  const all = await db.select().from(incidents).where(where);
+export async function getIncidentStats(filters?: { projectId?: number; noProject?: boolean }) {
+  const db = await getDb(); if (!db) return { total: 0, open: 0, resolved: 0, critical: 0, byType: {} as Record<string, number> };
+  const conditions: any[] = await projectFilterConds(incidents.projectId, filters?.noProject ? undefined : filters?.projectId);
+  if (filters?.noProject) conditions.push(scopedProjectIds() === undefined ? isNull(incidents.projectId) : sql`1 = 0`);
+  // Convertidas vivem noutro módulo — não contam aqui.
+  conditions.push(sql`${incidents.status} <> 'converted'`);
+  const rows = await db.select({
+    incidentType: incidents.incidentType,
+    total: sql<number>`COUNT(*)`,
+    open: sql<number>`SUM(CASE WHEN ${incidents.status} IN ('open','investigating') THEN 1 ELSE 0 END)`,
+    resolved: sql<number>`SUM(CASE WHEN ${incidents.status} = 'resolved' THEN 1 ELSE 0 END)`,
+    critical: sql<number>`SUM(CASE WHEN ${incidents.severity} = 'critical' THEN 1 ELSE 0 END)`,
+  }).from(incidents).where(and(...conditions)).groupBy(incidents.incidentType);
   const byType: Record<string, number> = {};
-  let open = 0, resolved = 0, critical = 0;
-  for (const i of all) {
-    byType[i.incidentType] = (byType[i.incidentType] || 0) + 1;
-    if (i.status === "open" || i.status === "investigating") open++;
-    if (i.status === "resolved") resolved++;
-    if (i.severity === "critical") critical++;
+  let total = 0, open = 0, resolved = 0, critical = 0;
+  for (const r of rows) {
+    byType[r.incidentType] = Number(r.total);
+    total += Number(r.total); open += Number(r.open); resolved += Number(r.resolved); critical += Number(r.critical);
   }
-  return { total: all.length, open, resolved, critical, byType };
-}
-
-export async function getIncidentsByEmployee(employeeId: number) {
-  const db = await getDb(); if (!db) return [];
-  return db.select().from(incidents).where(eq(incidents.employeeId, employeeId)).orderBy(desc(incidents.createdAt));
-}
-
-function getWeekNumber(d: Date): number {
-  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-  const dayNum = date.getUTCDay() || 7;
-  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
-  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
-  return Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return { total, open, resolved, critical, byType };
 }
 
 /** Devolve [Mon 00:00:00, Sun 23:59:59] da semana ISO indicada. */
@@ -3149,6 +3102,8 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
       reportedBy: incidents.reportedBy,
       employeeId: incidents.employeeId,
       severity: incidents.severity,
+      status: incidents.status,
+      driverConfirmed: incidents.driverConfirmed,
     })
     .from(incidents)
     .where(and(
@@ -3164,7 +3119,8 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
     if (reporterEmpId && driverIds.includes(reporterEmpId)) {
       posIncidents.set(reporterEmpId, (posIncidents.get(reporterEmpId) ?? 0) + 1);
     }
-    if (targetId && driverIds.includes(targetId)) {
+    // Pontos JUSTOS: só com envolvimento confirmado e não descartada/convertida.
+    if (targetId && driverIds.includes(targetId) && incidentCountsAgainstDriver(i)) {
       const sev = String(i.severity ?? "medium");
       const pts = INCIDENT_SEVERITY_POINTS[sev] ?? 5;
       const cur = negIncidents.get(targetId) ?? { count: 0, points: 0 };
@@ -7124,8 +7080,11 @@ export async function getAgentMovements(opts: {
     .where(
       and(
         eq(multiparkBookingHistory.agentName, opts.agentName),
-        gte(multiparkBookingHistory.actionTime, `${opts.from} 00:00:00`),
-        lte(multiparkBookingHistory.actionTime, `${opts.to} 23:59:59`),
+        // Dias de LISBOA → intervalo UTC (as colunas são UTC).
+        gte(multiparkBookingHistory.actionTime, lisbonDayRangeUtc(opts.from, opts.to).start),
+        lt(multiparkBookingHistory.actionTime, lisbonDayRangeUtc(opts.from, opts.to).end),
+        // Só reservas das cidades do utilizador (quem vê todas vê tudo).
+        scopedProjectIds() === undefined ? undefined : projectScope(multiparkBookings.projectId),
       ),
     )
     .orderBy(desc(multiparkBookingHistory.actionTime))
@@ -7438,16 +7397,37 @@ export async function syncIncidentsFromMultiparkHistory(opts: {
 
     const cls = classifyRemarks(remarks);
 
-    // Procura matrícula via booking
+    // Procura matrícula + CIDADE (projeto) via booking
     let vehiclePlate: string | undefined;
+    let bookingProjectId: number | null = null;
     try {
       const [booking] = await db
-        .select({ plate: multiparkBookings.licensePlate })
+        .select({ plate: multiparkBookings.licensePlate, projectId: multiparkBookings.projectId })
         .from(multiparkBookings)
         .where(eq(multiparkBookings.externalId, row.bookingExternalId))
         .limit(1);
       vehiclePlate = booking?.plate ?? undefined;
+      bookingProjectId = booking?.projectId ?? null;
     } catch {}
+
+    // Duplicado de uma ocorrência já criada (ex.: pelo email do painel):
+    // mesma matrícula + reserva compatível + ±2h → fica como NOTA nessa.
+    try {
+      const { findDuplicateIncident, appendIncidentNote } = await import("./caseOps");
+      const dup = await findDuplicateIncident({ plate: vehiclePlate, bookingRef: row.bookingExternalId, atUtc: row.actionTime });
+      if (dup) {
+        const marker = `(${sourceKey})`;
+        const [cur] = await db.select({ resolution: incidents.resolution }).from(incidents).where(eq(incidents.id, dup.id)).limit(1);
+        if (!(cur?.resolution ?? "").includes(marker)) {
+          await appendIncidentNote(dup.id, "Multipark", `${row.agentName ?? "Agente"} (${row.changeType ?? "—"}): ${remarks.slice(0, 800)} ${marker}`);
+          result.details.push(`nota em #${dup.id} — ${remarks.slice(0, 50)}`);
+        }
+        result.skipped++;
+        continue;
+      }
+    } catch (e: any) {
+      result.errors.push(`Dedup ${row.historyId}: ${e.message}`);
+    }
 
     // Resolve o AGENTE da ação para o colaborador (quem fez / contra quem) —
     // alimenta o Inc− da Avaliação Individual (pedido Jorge 2026-08-06)
@@ -7476,7 +7456,11 @@ export async function syncIncidentsFromMultiparkHistory(opts: {
         status: "open",
         description: remarks.slice(0, 1000),
         vehiclePlate,
+        projectId: bookingProjectId,
+        // O agente da ação fica como condutor PROVÁVEL — só conta pontos
+        // depois de um team leader confirmar o envolvimento.
         employeeId: incidentEmployeeId,
+        driverConfirmed: 0,
         reportedBy: opts.reportedById ?? null,
         sourceEmailId: sourceKey, // reaproveita para dedup (Multipark history id)
         sourceEmailDate: row.actionTime, // data REAL da ação (não a do sync)
@@ -7759,7 +7743,7 @@ export async function findComplaintByClientSignals(
   const since = new Date(Date.now() - COMPLAINT_SIGNALS_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace("T", " ");
   const rows = await db.select().from(complaints)
     .where(and(
-      notInArray(complaints.complaintStatus, ["resolved", "closed"]),
+      notInArray(complaints.complaintStatus, ["resolved", "closed", "converted"]),
       or(gte(complaints.updatedAt, since), gte(complaints.createdAt, since)),
       or(...conds),
     ))
@@ -7804,7 +7788,7 @@ export async function findOpenComplaintByClient(clientEmail?: string | null, veh
   if (vehiclePlate) conds.push(eq(complaints.vehiclePlate, vehiclePlate));
   if (!conds.length) return null;
   const rows = await db.select().from(complaints)
-    .where(and(notInArray(complaints.complaintStatus, ["resolved", "closed"]), or(...conds)))
+    .where(and(notInArray(complaints.complaintStatus, ["resolved", "closed", "converted"]), or(...conds)))
     .orderBy(desc(complaints.createdAt))
     .limit(1);
   return rows[0] || null;
@@ -8007,7 +7991,7 @@ export async function findOpenComplaintBySubject(subject?: string | null) {
   const since = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace("T", " ");
   const rows = await db.select().from(complaints)
     .where(and(
-      notInArray(complaints.complaintStatus, ["resolved", "closed"]),
+      notInArray(complaints.complaintStatus, ["resolved", "closed", "converted"]),
       gte(complaints.createdAt, since),
     ))
     .orderBy(desc(complaints.createdAt))
@@ -8024,7 +8008,7 @@ export async function findOpenLostFoundByClient(clientEmail?: string | null, veh
   if (vehiclePlate) conds.push(eq(lostFoundItems.vehiclePlate, vehiclePlate));
   if (!conds.length) return null;
   const rows = await db.select().from(lostFoundItems)
-    .where(and(notInArray(lostFoundItems.status, ["returned", "closed"]), or(...conds)))
+    .where(and(notInArray(lostFoundItems.status, ["returned", "closed", "converted"]), or(...conds)))
     .orderBy(desc(lostFoundItems.createdAt))
     .limit(1);
   return rows[0] || null;
