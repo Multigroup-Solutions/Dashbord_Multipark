@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import { Megaphone, BarChart3, CheckCircle2, Loader2, TrendingUp } from "lucide-react";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import CampaignRoasPanel from "@/components/marketing/CampaignRoasPanel";
+import { STICKY_FIRST_COL, TABS_SCROLL } from "@/components/finance/layoutClasses";
 
 /**
  * Marketing → Google Ads (Jorge, 16 set 2026). É UMA das páginas do Marketing
@@ -130,7 +131,7 @@ export default function MarketingGoogleAdsPage() {
       )}
 
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="flex-wrap h-auto">
+        <TabsList className={TABS_SCROLL}>
           <TabsTrigger value="resumo"><BarChart3 className="w-4 h-4 mr-1" />Por marca</TabsTrigger>
           <TabsTrigger value="roas"><TrendingUp className="w-4 h-4 mr-1" />ROAS por campanha</TabsTrigger>
           {brandTabs.map((a) => (
@@ -180,7 +181,7 @@ function BrandSummary({ data }: { data: any }) {
         </CardHeader>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className={`w-full text-sm tabular-nums ${STICKY_FIRST_COL}`}>
               <thead className="text-xs text-muted-foreground border-b">
                 <tr>
                   <th className="text-left px-4 py-2 font-medium">Marca</th>
@@ -201,8 +202,8 @@ function BrandSummary({ data }: { data: any }) {
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.brand} className="border-b">
-                    <td className="px-4 py-2 font-semibold">{r.brand}{!r.mapped && <Badge variant="outline" className="ml-2 text-[10px] text-amber-700">conta sem marca</Badge>}</td>
-                    <td className="px-4 py-2 text-muted-foreground">{r.accounts.map((a: any) => `${a.name}${a.provider === "meta" ? " (Meta)" : ""}`).join(", ")}</td>
+                    <td className="px-4 py-2 font-semibold min-w-[9rem]">{r.brand}{!r.mapped && <Badge variant="outline" className="ml-2 text-[11px] text-amber-700">conta sem marca</Badge>}</td>
+                    <td className="px-4 py-2 text-muted-foreground min-w-[12rem]">{r.accounts.map((a: any) => `${a.name}${a.provider === "meta" ? " (Meta)" : ""}`).join(", ")}</td>
                     <td className="px-4 py-2 text-right text-muted-foreground">{eur(r.spendGoogle ?? 0)}</td>
                     <td className="px-4 py-2 text-right text-muted-foreground">{eur(r.spendMeta ?? 0)}</td>
                     <td className="px-4 py-2 text-right">{eur(r.spend)}</td>
@@ -366,7 +367,7 @@ function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares
       </CardHeader>
       <CardContent className="p-0">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className={`w-full text-sm tabular-nums ${STICKY_FIRST_COL}`}>
             <thead className="text-xs text-muted-foreground border-b">
               <tr>
                 <th className="text-left px-4 py-2 font-medium">Campanha</th>
@@ -407,10 +408,10 @@ function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares
                     const sug = r.campaignId != null ? sugById.get(r.campaignId) : null;
                     return (
                       <tr key={r.key} className="border-b last:border-0">
-                        <td className="px-4 py-1.5 pl-8">
+                        <td className="px-4 py-1.5 pl-8 min-w-[14rem] max-w-[22rem]">
                           {r.name}
-                          {r.provider === "meta" && <Badge variant="outline" className="ml-1.5 text-[10px]">Meta</Badge>}
-                          {(() => { const b = campaignStatusBadge(r.status); return b ? <Badge variant="outline" className={`ml-1.5 text-[10px] ${b.cls}`}>{b.label}</Badge> : null; })()}
+                          {r.provider === "meta" && <Badge variant="outline" className="ml-1.5 text-[11px]">Meta</Badge>}
+                          {(() => { const b = campaignStatusBadge(r.status); return b ? <Badge variant="outline" className={`ml-1.5 text-[11px] ${b.cls}`}>{b.label}</Badge> : null; })()}
                           {r.accountLabel && <div className="text-[11px] text-muted-foreground">conta {r.accountLabel}</div>}
                         </td>
                         <td className="px-4 py-1.5">
@@ -425,7 +426,7 @@ function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares
                                 </SelectContent>
                               </Select>
                               {r.projectId == null && !r.national && sug && (
-                                <Badge variant="outline" className="text-[10px] cursor-pointer" title="Sugestão pelo nome — clica para aplicar" onClick={() => applySuggestion(r.campaignId, sug)}>
+                                <Badge variant="outline" className="text-[11px] cursor-pointer" title="Sugestão pelo nome — clica para aplicar" onClick={() => applySuggestion(r.campaignId, sug)}>
                                   sugestão: {sug.projectName}
                                 </Badge>
                               )}

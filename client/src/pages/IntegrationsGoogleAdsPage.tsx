@@ -19,7 +19,7 @@ import { Plug, PlugZap, RefreshCw, Loader2, AlertTriangle, CheckCircle2, Unplug,
 
 const STATUS_LABEL: Record<string, { label: string; cls: string }> = {
   connected: { label: "Ligado", cls: "bg-emerald-100 text-emerald-800 border-emerald-200" },
-  disconnected: { label: "Desligado", cls: "bg-muted text-muted-foreground" },
+  disconnected: { label: "Desligado", cls: "bg-muted text-secondary-foreground" },
   reauth_required: { label: "Reautorização necessária", cls: "bg-amber-100 text-amber-800 border-amber-200" },
   error: { label: "Erro", cls: "bg-red-100 text-red-800 border-red-200" },
 };
@@ -159,14 +159,14 @@ export default function IntegrationsGoogleAdsPage() {
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead><tr className="border-b text-left text-xs text-muted-foreground"><th className="p-2">Consultar</th><th className="p-2">Conta</th><th className="p-2">ID</th><th className="p-2">Moeda · Fuso</th><th className="p-2">Marca / cidade</th><th className="p-2">Última recolha</th></tr></thead>
+                <thead><tr className="border-b text-left text-xs text-muted-foreground whitespace-nowrap"><th className="p-2">Consultar</th><th className="p-2">Conta</th><th className="p-2">ID</th><th className="p-2">Moeda · Fuso</th><th className="p-2">Marca / cidade</th><th className="p-2">Última recolha</th></tr></thead>
                 <tbody>
                   {(accounts.data ?? []).map((a) => (
                     <tr key={a.id} className={`border-b ${a.isManager ? "opacity-70" : ""}`}>
                       <td className="p-2">{a.isManager ? <span className="text-xs text-muted-foreground">gestora</span> : <Switch disabled={!canManage} checked={!!a.selected} onCheckedChange={(v) => updateAccount.mutate({ id: a.id, selected: v })} aria-label={`Consultar ${a.name ?? a.customerId}`} />}</td>
-                      <td className="p-2 font-medium">{a.name ?? "—"}{a.lastError && <div className="text-[11px] text-red-700">{a.lastError}</div>}</td>
-                      <td className="p-2 font-mono text-xs">{a.customerId}</td>
-                      <td className="p-2 text-xs">{a.currency ?? "—"} · {a.timezone ?? "—"}</td>
+                      <td className="p-2 font-medium min-w-[11rem]">{a.name ?? "—"}{a.lastError && <div className="text-[11px] text-red-700">{a.lastError}</div>}</td>
+                      <td className="p-2 font-mono text-xs whitespace-nowrap">{a.customerId}</td>
+                      <td className="p-2 text-xs whitespace-nowrap">{a.currency ?? "—"} · {a.timezone ?? "—"}</td>
                       <td className="p-2">
                         {a.isManager ? "—" : (
                           <Select disabled={!canManage} value={a.projectId ? String(a.projectId) : "none"} onValueChange={(v) => updateAccount.mutate({ id: a.id, projectId: v === "none" ? null : Number(v) })}>
@@ -260,7 +260,7 @@ function MetaAdsCard({ projectOptions }: { projectOptions: any[] }) {
       <CardHeader>
         <CardTitle className="text-base flex items-center gap-2 flex-wrap">
           <Plug className="h-4 w-4" /> Meta Ads (Facebook / Instagram)
-          <Badge variant="outline" className={`ml-auto text-xs ${!s ? "" : !s.configured ? "bg-muted text-muted-foreground" : connStatus === "reauth_required" || connStatus === "error" ? "bg-red-100 text-red-800 border-red-200" : "bg-emerald-100 text-emerald-800 border-emerald-200"}`}>
+          <Badge variant="outline" className={`ml-auto text-xs ${!s ? "" : !s.configured ? "bg-muted text-secondary-foreground" : connStatus === "reauth_required" || connStatus === "error" ? "bg-red-100 text-red-800 border-red-200" : "bg-emerald-100 text-emerald-800 border-emerald-200"}`}>
             {!s ? "…" : !s.configured ? "Não configurada" : connStatus === "reauth_required" ? "Token inválido" : connStatus === "error" ? "Erro" : "Configurada"}
           </Badge>
         </CardTitle>
@@ -291,7 +291,7 @@ function MetaAdsCard({ projectOptions }: { projectOptions: any[] }) {
                   {(s.accounts ?? []).length === 0 && <tr><td colSpan={6} className="p-3 text-center text-muted-foreground text-xs">As contas aparecem depois da primeira recolha.</td></tr>}
                   {(s.accounts ?? []).map((a: any) => (
                     <tr key={a.id} className="border-b align-top">
-                      <td className="p-2">{a.name ?? `Meta ${a.customerId}`}{!s.configuredAccountIds.includes(a.customerId) && <Badge variant="outline" className="ml-1.5 text-[10px]">fora de META_AD_ACCOUNT_IDS</Badge>}</td>
+                      <td className="p-2">{a.name ?? `Meta ${a.customerId}`}{!s.configuredAccountIds.includes(a.customerId) && <Badge variant="outline" className="ml-1.5 text-[11px]">fora de META_AD_ACCOUNT_IDS</Badge>}</td>
                       <td className="p-2 text-xs text-muted-foreground">act_{a.customerId}</td>
                       <td className="p-2"><Switch disabled={!canManage} checked={!!a.selected} onCheckedChange={(v) => update.mutate({ id: a.id, selected: v })} aria-label={`Recolher a conta ${a.name ?? a.customerId}`} /></td>
                       <td className="p-2">

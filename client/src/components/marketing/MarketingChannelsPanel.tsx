@@ -16,6 +16,9 @@ import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Handshake, Repeat, ShoppingCart, UserPlus } from "lucide-react";
+import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
+import FitAmount from "@/components/finance/FitAmount";
+import { eurCompact } from "@/lib/financeFormat";
 
 function lisbonDay(d = new Date()): string {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(d);
@@ -27,11 +30,11 @@ const eur = (v: number | null | undefined, digits = 0) =>
 const num = (v: number | null | undefined, digits = 0) => (v == null ? "—" : Number(v).toLocaleString("pt-PT", { maximumFractionDigits: digits }));
 const pct = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : "—");
 
-function Kpi({ icon: Icon, label, value, hint }: { icon: any; label: string; value: string; hint?: string }) {
+function Kpi({ icon: Icon, label, value, compact, hint }: { icon: any; label: string; value: string; compact?: string; hint?: string }) {
   return (
-    <div className="rounded-xl border bg-card p-3">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground"><Icon className="w-3.5 h-3.5" /> {label}</div>
-      <div className="text-2xl font-bold mt-1 tabular-nums">{value}</div>
+    <div className="rounded-xl border bg-card p-3 min-w-0">
+      <div className="flex items-center gap-2 text-xs text-muted-foreground"><Icon className="w-3.5 h-3.5 shrink-0" /> {label}</div>
+      <FitAmount full={value} compact={compact ?? value} className="text-xl sm:text-2xl font-bold mt-1" />
       {hint && <div className="text-[11px] text-muted-foreground mt-0.5">{hint}</div>}
     </div>
   );
@@ -76,13 +79,13 @@ export default function MarketingChannelsPanel() {
             <Kpi icon={ShoppingCart} label="Reservas" value={num(total)} hint={data.bookingsWithoutEmail ? `${num(data.bookingsWithoutEmail)} sem email (fora dos clientes)` : "todas com email"} />
             <Kpi icon={UserPlus} label="Clientes novos" value={num(data.newClients)} hint="primeira reserva neste período" />
             <Kpi icon={Repeat} label="Reservas de repetentes" value={num(data.returningBookings)} hint={`${pct(data.returningBookings, total)} das reservas vêm de quem já tinha reservado`} />
-            <Kpi icon={Handshake} label="Comissões de parceiros" value={eur(data.partners.reduce((s, p) => s + p.commission, 0))} hint={`${data.partners.length} parceiro(s) com reservas`} />
+            <Kpi icon={Handshake} label="Comissões de parceiros" value={eur(data.partners.reduce((s, p) => s + p.commission, 0))} compact={eurCompact(data.partners.reduce((s, p) => s + p.commission, 0))} hint={`${data.partners.length} parceiro(s) com reservas`} />
           </div>
 
           <Card>
             <CardHeader className="pb-2"><CardTitle className="text-sm">De onde vêm as reservas</CardTitle></CardHeader>
             <CardContent className="p-0 overflow-x-auto">
-              <Table>
+              <Table className={`tabular-nums ${STICKY_FIRST_COL}`}>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Canal</TableHead>
@@ -144,7 +147,7 @@ export default function MarketingChannelsPanel() {
             <Card>
               <CardHeader className="pb-2"><CardTitle className="text-sm">Quanto vale um cliente, por canal de entrada</CardTitle></CardHeader>
               <CardContent className="p-0 overflow-x-auto">
-                <Table>
+                <Table className={`tabular-nums ${STICKY_FIRST_COL}`}>
                   <TableHeader>
                     <TableRow>
                       <TableHead>Entrou por</TableHead>
@@ -173,7 +176,7 @@ export default function MarketingChannelsPanel() {
             <Card>
               <CardHeader className="pb-2"><CardTitle className="text-sm">Parceiros no período</CardTitle></CardHeader>
               <CardContent className="p-0 overflow-x-auto">
-                <Table>
+                <Table className={`tabular-nums ${STICKY_FIRST_COL}`}>
                   <TableHeader>
                     <TableRow>
                       <TableHead>Parceiro</TableHead>

@@ -25,6 +25,9 @@ import { Button } from "@/components/ui/button";
 import { AlertTriangle, CheckCircle2, CircleAlert, Euro, MousePointerClick, Receipt, ShoppingCart, Target, TrendingUp } from "lucide-react";
 import { adResultsMeasure, attributionHealth, type AttributionQuality } from "@shared/marketingAttribution";
 import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
+import FitAmount from "@/components/finance/FitAmount";
+import { eurAxis, eurCompact } from "@/lib/financeFormat";
 
 function lisbonDay(d = new Date()): string {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(d);
@@ -54,11 +57,11 @@ const SERIES = "[--mk-1:#0055d2] [--mk-2:#16a34a] [--mk-3:#c2410c] dark:[--mk-1:
 const AXIS = { fontSize: 11, fill: "var(--muted-foreground)" };
 const TOOLTIP_STYLE = { background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12, color: "var(--card-foreground)" };
 
-function Kpi({ icon: Icon, label, value, hint, warn }: { icon: any; label: string; value: string; hint?: string; warn?: boolean }) {
+function Kpi({ icon: Icon, label, value, compact, hint, warn }: { icon: any; label: string; value: string; compact?: string; hint?: string; warn?: boolean }) {
   return (
-    <div className="rounded-xl border bg-card p-3">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground"><Icon className="w-3.5 h-3.5" /> {label}</div>
-      <div className="text-2xl font-bold mt-1 tabular-nums">{value}</div>
+    <div className="rounded-xl border bg-card p-3 min-w-0">
+      <div className="flex items-center gap-2 text-xs text-muted-foreground"><Icon className="w-3.5 h-3.5 shrink-0" /> {label}</div>
+      <FitAmount full={value} compact={compact ?? value} className="text-xl sm:text-2xl font-bold mt-1" />
       {hint && <div className={`text-[11px] mt-0.5 ${warn ? "text-amber-700 dark:text-amber-400 flex items-center gap-1" : "text-muted-foreground"}`}>{warn && <AlertTriangle className="w-3 h-3 shrink-0" />}{hint}</div>}
     </div>
   );
@@ -130,20 +133,20 @@ export default function MarketingDashboardPanel() {
           )}
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-            <Kpi icon={Euro} label="Gasto Google Ads" value={eur(st.spendGoogle)} hint={`${num(st.clicks)} cliques (todas as plataformas) · CPC ${eur(st.cpc, 2)}`} />
-            <Kpi icon={Euro} label="Gasto Meta" value={eur(st.spendMeta)}
+            <Kpi icon={Euro} label="Gasto Google Ads" value={eur(st.spendGoogle)} compact={eurCompact(st.spendGoogle)} hint={`${num(st.clicks)} cliques (todas as plataformas) · CPC ${eur(st.cpc, 2)}`} />
+            <Kpi icon={Euro} label="Gasto Meta" value={eur(st.spendMeta)} compact={eurCompact(st.spendMeta)}
               hint={metaWarning ?? (st.spendOther > 0 ? `+ ${eur(st.spendOther)} de outras plataformas (importações antigas)` : "Facebook + Instagram")} warn={!!metaWarning} />
-            <Kpi icon={Euro} label="Gasto total em anúncios" value={eur(st.spend)} hint={st.budgetEstimate > 0 ? `orçamento Google × dias: ${eur(st.budgetEstimate)} (indicador, não gasto)` : "Google + Meta + outros"} />
+            <Kpi icon={Euro} label="Gasto total em anúncios" value={eur(st.spend)} compact={eurCompact(st.spend)} hint={st.budgetEstimate > 0 ? `orçamento Google × dias: ${eur(st.budgetEstimate)} (indicador, não gasto)` : "Google + Meta + outros"} />
             <Kpi icon={MousePointerClick} label="Conversões dos anúncios" value={num(Math.round(results.value))}
               hint={results.source === "google" ? `contadas pelas plataformas · só ligámos ${num(st.bookingsAttributed)} reservas (${pct(st.bookingsAttributed, Math.round(st.conversionsGoogle))})` : `reservas ligadas pelo link · as plataformas contam ${num(Math.round(st.conversionsGoogle))}`} />
             <Kpi icon={Target} label="Custo por conversão" value={eur(costPerResult, 2)} hint={`por reserva ligada: ${eur(st.costPerAttributedBooking, 2)} · global: ${eur(st.adCostPerBooking, 2)}/reserva`} />
             <Kpi icon={TrendingUp} label="ROAS (s/ IVA)" value={roas(st.roasAttributedNet)}
               hint={`reservas ligadas, receita sem IVA ÷ gasto · todas as reservas: ${roas(st.roasTotalNet)}`} />
             <Kpi icon={TrendingUp} label="ROAS Google (reportado)" value={roas(st.roasGoogle)} hint="valor de conversão que a plataforma reporta ÷ gasto" />
-            <Kpi icon={Receipt} label="Outras despesas de marketing" value={eur(st.mktExpenses)} hint="Despesas da categoria «Marketing» no período" />
-            <Kpi icon={Euro} label="Custo total de marketing" value={eur(totalMarketing)} hint={`${eur(st.bookingsTotal > 0 ? totalMarketing / st.bookingsTotal : null, 2)} por reserva (todas)`} />
+            <Kpi icon={Receipt} label="Outras despesas de marketing" value={eur(st.mktExpenses)} compact={eurCompact(st.mktExpenses)} hint="Despesas da categoria «Marketing» no período" />
+            <Kpi icon={Euro} label="Custo total de marketing" value={eur(totalMarketing)} compact={eurCompact(totalMarketing)} hint={`${eur(st.bookingsTotal > 0 ? totalMarketing / st.bookingsTotal : null, 2)} por reserva (todas)`} />
             <Kpi icon={ShoppingCart} label="Reservas" value={num(st.bookingsTotal)} hint={`todas as origens · ${num(st.bookingsGoogle)} Google · ${num(st.bookingsMeta)} Meta (ligadas)`} />
-            <Kpi icon={ShoppingCart} label="Valor das reservas" value={eur(st.revenueTotal)} hint="todas, c/ IVA, pela data de criação" />
+            <Kpi icon={ShoppingCart} label="Valor das reservas" value={eur(st.revenueTotal)} compact={eurCompact(st.revenueTotal)} hint="todas, c/ IVA, pela data de criação" />
           </div>
 
           <div className={`rounded-md border px-3 py-2.5 text-sm space-y-1.5 ${healthCls}`} role="status">
@@ -166,7 +169,7 @@ export default function MarketingDashboardPanel() {
                   <BarChart data={series} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                     <CartesianGrid vertical={false} stroke="var(--border)" />
                     <XAxis dataKey="label" tick={AXIS} tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={16} />
-                    <YAxis tick={AXIS} tickLine={false} axisLine={false} width={48} tickFormatter={(v) => `${Number(v).toLocaleString("pt-PT")} €`} />
+                    <YAxis tick={AXIS} tickLine={false} axisLine={false} width={64} tickFormatter={eurAxis} />
                     <Tooltip cursor={{ fill: "var(--muted)" }} contentStyle={TOOLTIP_STYLE} formatter={(v: any) => [eur(Number(v), 2), "Gasto"]} />
                     <Bar dataKey="spend" name="Gasto" fill="var(--mk-1)" radius={[4, 4, 0, 0]} maxBarSize={24} />
                   </BarChart>
@@ -181,8 +184,8 @@ export default function MarketingDashboardPanel() {
                     <CartesianGrid vertical={false} stroke="var(--border)" />
                     <XAxis dataKey="label" tick={AXIS} tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={16} />
                     <YAxis tick={AXIS} tickLine={false} axisLine={false} width={36} allowDecimals={false} />
-                    <Tooltip contentStyle={TOOLTIP_STYLE} />
-                    <Legend wrapperStyle={{ fontSize: 12, color: "var(--muted-foreground)" }} />
+                    <Tooltip contentStyle={TOOLTIP_STYLE} itemStyle={{ color: "var(--card-foreground)" }} />
+                    <Legend wrapperStyle={{ fontSize: 12 }} formatter={(v) => <span className="text-foreground">{v}</span>} />
                     <Line type="monotone" dataKey="bookings" name="Todas" stroke="var(--mk-1)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
                     <Line type="monotone" dataKey="conversions" name="Conversões Google" stroke="var(--mk-3)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
                     <Line type="monotone" dataKey="viaAds" name="Ligadas por nós (gclid)" stroke="var(--mk-2)" strokeWidth={2} strokeDasharray="5 3" dot={false} activeDot={{ r: 4 }} />
@@ -197,7 +200,7 @@ export default function MarketingDashboardPanel() {
             {showTable && (
               <Card className="mt-2">
                 <CardContent className="p-0 overflow-x-auto">
-                  <Table>
+                  <Table className={`tabular-nums ${STICKY_FIRST_COL}`}>
                     <TableHeader>
                       <TableRow><TableHead>Dia</TableHead><TableHead className="text-right">Gasto</TableHead><TableHead className="text-right">Reservas</TableHead><TableHead className="text-right">Conversões Google</TableHead><TableHead className="text-right">Ligadas (gclid)</TableHead></TableRow>
                     </TableHeader>

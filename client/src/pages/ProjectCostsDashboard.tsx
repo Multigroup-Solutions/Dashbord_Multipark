@@ -34,8 +34,10 @@ import {
 } from "lucide-react";
 import { useState, useMemo, useRef } from "react";
 import { useLocation } from "wouter";
+import FitAmount from "@/components/finance/FitAmount";
+import { AXIS_TICK, CHART_PALETTE, CHART_TOOLTIP_ITEM, CHART_TOOLTIP_STYLE, eurAxis } from "@/lib/financeFormat";
 
-const COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899", "#84cc16"];
+const COLORS = CHART_PALETTE;
 
 function fmt(v: number) {
   return v.toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
@@ -46,10 +48,10 @@ function pct(v: number) {
 }
 
 function budgetColor(percentUsed: number): string {
-  if (percentUsed >= 100) return "text-red-600";
-  if (percentUsed >= 80) return "text-amber-600";
-  if (percentUsed >= 50) return "text-yellow-600";
-  return "text-emerald-600";
+  if (percentUsed >= 100) return "text-red-700";
+  if (percentUsed >= 80) return "text-amber-700";
+  if (percentUsed >= 50) return "text-yellow-700";
+  return "text-emerald-700";
 }
 
 function budgetBg(percentUsed: number): string {
@@ -340,19 +342,19 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
           </div>
 
           {/* Color dot + name */}
-          <div className="flex items-center gap-2 min-w-0 flex-1">
+          <div className="flex items-center gap-2 min-w-[13rem] flex-1">
             <div
               className="h-3 w-3 rounded-full shrink-0"
               style={{ backgroundColor: item.color || "#6366f1" }}
             />
-            <span className={`truncate ${depth === 0 ? "font-semibold" : "font-medium"} text-sm`}>
+            <span className={`truncate ${depth === 0 ? "font-semibold" : "font-medium"} text-sm`} title={hasChildren ? `${item.name} · ${r?.employeeCount ?? item.employeeCount} funcionário(s)` : item.name}>
               {item.name}
             </span>
-            <Badge variant="outline" className="text-[10px] shrink-0">
+            <Badge variant="outline" className="text-[11px] shrink-0">
               {levelLabels[item.level] || item.level}
             </Badge>
             {hasChildren && (
-              <span className="text-[10px] text-muted-foreground">
+              <span className="hidden 2xl:inline text-[11px] text-muted-foreground whitespace-nowrap shrink-0">
                 ({(r?.employeeCount ?? item.employeeCount)} func.)
               </span>
             )}
@@ -364,22 +366,22 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
           </div>
 
           {/* Budget */}
-          <div className="w-24 text-right text-sm shrink-0">
+          <div className="w-28 text-right text-sm tabular-nums whitespace-nowrap shrink-0">
             {displayBudget > 0 ? fmt(displayBudget) : <span className="text-muted-foreground text-xs">—</span>}
           </div>
 
           {/* Expenses */}
-          <div className="hidden sm:block w-24 text-right text-sm shrink-0">
+          <div className="w-28 text-right text-sm tabular-nums whitespace-nowrap shrink-0">
             {displayExpenses > 0 ? fmt(displayExpenses) : <span className="text-muted-foreground text-xs">—</span>}
           </div>
 
           {/* Salaries */}
-          <div className="hidden sm:block w-24 text-right text-sm shrink-0">
+          <div className="w-28 text-right text-sm tabular-nums whitespace-nowrap shrink-0">
             {displaySalary > 0 ? fmt(displaySalary) : <span className="text-muted-foreground text-xs">—</span>}
           </div>
 
           {/* Total cost */}
-          <div className="w-24 text-right text-sm font-semibold shrink-0">
+          <div className="w-28 text-right text-sm font-semibold tabular-nums whitespace-nowrap shrink-0">
             {displayTotal > 0 ? fmt(displayTotal) : <span className="text-muted-foreground text-xs">—</span>}
           </div>
 
@@ -393,7 +395,7 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
                     style={{ width: `${Math.min(displayPercent, 100)}%` }}
                   />
                 </div>
-                <span className={`text-xs font-medium w-12 text-right ${budgetColor(displayPercent)}`}>
+                <span className={`text-xs font-medium w-12 text-right tabular-nums ${budgetColor(displayPercent)}`}>
                   {pct(displayPercent)}
                 </span>
               </>
@@ -403,7 +405,7 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
           </div>
 
           {/* Status badge */}
-          <div className="w-20 shrink-0 flex justify-end">
+          <div className="w-28 shrink-0 flex justify-end">
             {budgetBadge(displayPercent, displayBudget)}
           </div>
         </div>
@@ -437,7 +439,7 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={goBack}>
+          <Button variant="ghost" size="icon" onClick={goBack} aria-label="Voltar aos projetos" className="shrink-0">
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div>
@@ -475,15 +477,15 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6 gap-3 [&>*]:min-w-0">
         <Card className="relative overflow-hidden">
           <CardContent className="pt-5 pb-4">
-            <div className="flex items-start justify-between">
-              <div className="space-y-1">
+            <div className="flex items-start justify-between gap-2">
+              <div className="space-y-1 min-w-0 flex-1">
                 <p className="text-xs text-muted-foreground font-medium">Orçamento Total</p>
-                <p className="text-lg font-bold">{fmt(totals.totalBudget)}</p>
+                <FitAmount value={totals.totalBudget} className="text-base sm:text-lg font-bold" />
               </div>
-              <div className="h-8 w-8 rounded-lg flex items-center justify-center bg-blue-100">
+              <div className="h-8 w-8 shrink-0 rounded-lg flex items-center justify-center bg-blue-100">
                 <Wallet className="h-4 w-4 text-blue-600" />
               </div>
             </div>
@@ -492,12 +494,12 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
 
         <Card className="relative overflow-hidden">
           <CardContent className="pt-5 pb-4">
-            <div className="flex items-start justify-between">
-              <div className="space-y-1">
+            <div className="flex items-start justify-between gap-2">
+              <div className="space-y-1 min-w-0 flex-1">
                 <p className="text-xs text-muted-foreground font-medium">Despesas</p>
-                <p className="text-lg font-bold">{fmt(totals.totalExpenses)}</p>
+                <FitAmount value={totals.totalExpenses} className="text-base sm:text-lg font-bold" />
               </div>
-              <div className="h-8 w-8 rounded-lg flex items-center justify-center bg-amber-100">
+              <div className="h-8 w-8 shrink-0 rounded-lg flex items-center justify-center bg-amber-100">
                 <Receipt className="h-4 w-4 text-amber-600" />
               </div>
             </div>
@@ -506,12 +508,12 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
 
         <Card className="relative overflow-hidden">
           <CardContent className="pt-5 pb-4">
-            <div className="flex items-start justify-between">
-              <div className="space-y-1">
+            <div className="flex items-start justify-between gap-2">
+              <div className="space-y-1 min-w-0 flex-1">
                 <p className="text-xs text-muted-foreground font-medium">Salários</p>
-                <p className="text-lg font-bold">{fmt(totals.totalSalary)}</p>
+                <FitAmount value={totals.totalSalary} className="text-base sm:text-lg font-bold" />
               </div>
-              <div className="h-8 w-8 rounded-lg flex items-center justify-center bg-purple-100">
+              <div className="h-8 w-8 shrink-0 rounded-lg flex items-center justify-center bg-purple-100">
                 <Users className="h-4 w-4 text-purple-600" />
               </div>
             </div>
@@ -520,12 +522,12 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
 
         <Card className="relative overflow-hidden">
           <CardContent className="pt-5 pb-4">
-            <div className="flex items-start justify-between">
-              <div className="space-y-1">
+            <div className="flex items-start justify-between gap-2">
+              <div className="space-y-1 min-w-0 flex-1">
                 <p className="text-xs text-muted-foreground font-medium">Custo Total</p>
-                <p className="text-lg font-bold">{fmt(totals.totalCost)}</p>
+                <FitAmount value={totals.totalCost} className="text-base sm:text-lg font-bold" />
               </div>
-              <div className="h-8 w-8 rounded-lg flex items-center justify-center bg-indigo-100">
+              <div className="h-8 w-8 shrink-0 rounded-lg flex items-center justify-center bg-indigo-100">
                 <Euro className="h-4 w-4 text-indigo-600" />
               </div>
             </div>
@@ -534,12 +536,10 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
 
         <Card className="relative overflow-hidden">
           <CardContent className="pt-5 pb-4">
-            <div className="flex items-start justify-between">
-              <div className="space-y-1">
+            <div className="flex items-start justify-between gap-2">
+              <div className="space-y-1 min-w-0 flex-1">
                 <p className="text-xs text-muted-foreground font-medium">Restante</p>
-                <p className={`text-lg font-bold ${totals.totalRemaining < 0 ? "text-red-600" : "text-emerald-600"}`}>
-                  {fmt(totals.totalRemaining)}
-                </p>
+                <FitAmount value={totals.totalRemaining} className={`text-base sm:text-lg font-bold ${totals.totalRemaining < 0 ? "text-red-700 dark:text-red-400" : "text-emerald-700 dark:text-emerald-400"}`} />
               </div>
               <div className={`h-8 w-8 rounded-lg flex items-center justify-center ${totals.totalRemaining < 0 ? "bg-red-100" : "bg-emerald-100"}`}>
                 {totals.totalRemaining < 0 ? (
@@ -554,17 +554,17 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
 
         <Card className="relative overflow-hidden">
           <CardContent className="pt-5 pb-4">
-            <div className="flex items-start justify-between">
-              <div className="space-y-1">
+            <div className="flex items-start justify-between gap-2">
+              <div className="space-y-1 min-w-0 flex-1">
                 <p className="text-xs text-muted-foreground font-medium">Alertas</p>
                 <p className="text-lg font-bold">
-                  <span className="text-red-600">{totals.projectsOverBudget}</span>
+                  <span className="text-red-700 dark:text-red-400">{totals.projectsOverBudget}</span>
                   <span className="text-muted-foreground text-sm mx-1">/</span>
-                  <span className="text-amber-600">{totals.projectsAtRisk}</span>
+                  <span className="text-amber-700 dark:text-amber-400">{totals.projectsAtRisk}</span>
                 </p>
-                <p className="text-[10px] text-muted-foreground">excedidos / em risco</p>
+                <p className="text-[11px] text-muted-foreground">excedidos / em risco</p>
               </div>
-              <div className="h-8 w-8 rounded-lg flex items-center justify-center bg-red-100">
+              <div className="h-8 w-8 shrink-0 rounded-lg flex items-center justify-center bg-red-100">
                 <AlertTriangle className="h-4 w-4 text-red-600" />
               </div>
             </div>
@@ -587,25 +587,27 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
             ) : (
               <ResponsiveContainer width="100%" height={280}>
                 <BarChart data={topProjectsChart} margin={{ top: 4, right: 4, left: 0, bottom: 4 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="name" tick={{ fontSize: 11, fill: "#64748b" }} angle={-20} textAnchor="end" height={60} />
-                  <YAxis tick={{ fontSize: 11, fill: "#64748b" }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k€`} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <XAxis dataKey="name" tick={AXIS_TICK} angle={-25} textAnchor="end" height={70} interval="preserveStartEnd" />
+                  <YAxis tick={AXIS_TICK} tickFormatter={eurAxis} width={68} />
                   <Tooltip
                     formatter={(v: any, name: string) => [
                       fmt(parseFloat(v)),
                       name === "despesas" ? "Despesas" : name === "salarios" ? "Salários" : "Orçamento",
                     ]}
-                    contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "8px", fontSize: "12px" }}
+                    contentStyle={CHART_TOOLTIP_STYLE}
+                    itemStyle={CHART_TOOLTIP_ITEM}
+                    cursor={{ fill: "var(--muted)" }}
                   />
                   <Legend
-                    formatter={(value: string) =>
-                      value === "despesas" ? "Despesas" : value === "salarios" ? "Salários" : "Orçamento"
-                    }
+                    formatter={(value: string) => (
+                      <span className="text-foreground">{value === "despesas" ? "Despesas" : value === "salarios" ? "Salários" : "Orçamento"}</span>
+                    )}
                     wrapperStyle={{ fontSize: "12px" }}
                   />
-                  <Bar dataKey="despesas" stackId="cost" fill="#f59e0b" radius={[0, 0, 0, 0]} />
-                  <Bar dataKey="salarios" stackId="cost" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="orcamento" fill="#e2e8f0" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="despesas" stackId="cost" fill="var(--chart-4)" radius={[0, 0, 0, 0]} />
+                  <Bar dataKey="salarios" stackId="cost" fill="var(--chart-3)" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="orcamento" fill="var(--muted-foreground)" fillOpacity={0.35} radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             )}
@@ -640,9 +642,10 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
                   </Pie>
                   <Tooltip
                     formatter={(v: any) => [fmt(parseFloat(String(v)))]}
-                    contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "8px", fontSize: "12px" }}
+                    contentStyle={CHART_TOOLTIP_STYLE}
+                    itemStyle={CHART_TOOLTIP_ITEM}
                   />
-                  <Legend iconSize={10} wrapperStyle={{ fontSize: "11px" }} />
+                  <Legend iconSize={10} wrapperStyle={{ fontSize: "12px" }} formatter={(v) => <span className="text-foreground">{v}</span>} />
                 </PieChart>
               </ResponsiveContainer>
             )}
@@ -658,7 +661,7 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
               <FolderTree className="h-4 w-4 text-primary" />
               Detalhe por Projeto
             </CardTitle>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <Select value={levelFilter} onValueChange={setLevelFilter}>
                 <SelectTrigger className="w-32 h-8 text-xs">
                   <SelectValue />
@@ -684,17 +687,20 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
           </div>
         </CardHeader>
         <CardContent className="p-0">
+          {/* Tabela em árvore: no telemóvel faz scroll horizontal dentro do cartão */}
+          <div className="overflow-x-auto">
+          <div className="min-w-[1040px]">
           {/* Table header */}
           <div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/40 text-xs font-medium text-muted-foreground">
             <div className="w-5 shrink-0" />
-            <div className="flex-1 min-w-0">Projeto</div>
+            <div className="flex-1 min-w-[13rem]">Projeto</div>
             <div className="hidden md:block w-28 shrink-0">Gestor</div>
-            <div className="w-24 text-right shrink-0">Orçamento</div>
-            <div className="hidden sm:block w-24 text-right shrink-0">Despesas</div>
-            <div className="hidden sm:block w-24 text-right shrink-0">Salários</div>
-            <div className="w-24 text-right shrink-0">Custo Total</div>
+            <div className="w-28 text-right shrink-0">Orçamento</div>
+            <div className="w-28 text-right shrink-0">Despesas</div>
+            <div className="w-28 text-right shrink-0">Salários</div>
+            <div className="w-28 text-right shrink-0">Custo Total</div>
             <div className="w-36 shrink-0 text-center">Utilização</div>
-            <div className="w-20 shrink-0 text-right">Estado</div>
+            <div className="w-28 shrink-0 text-right">Estado</div>
           </div>
 
           {/* Table body */}
@@ -706,6 +712,8 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
             ) : (
               rootItems.map(item => renderRow(item, 0))
             )}
+          </div>
+          </div>
           </div>
         </CardContent>
       </Card>
@@ -725,14 +733,14 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
                 .filter(d => d.budget > 0 && d.percentUsed >= 80)
                 .sort((a, b) => b.percentUsed - a.percentUsed)
                 .map(d => (
-                  <div key={d.id} className="flex items-center gap-3 p-3 rounded-lg bg-white border">
+                  <div key={d.id} className="flex items-center gap-3 p-3 rounded-lg bg-card border">
                     <div
                       className="h-3 w-3 rounded-full shrink-0"
                       style={{ backgroundColor: d.color || "#6366f1" }}
                     />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">{d.name}</p>
-                      <p className="text-xs text-muted-foreground">
+                      <p className="text-xs text-muted-foreground tabular-nums">
                         {fmt(d.totalCost)} / {fmt(d.budget)}
                       </p>
                     </div>

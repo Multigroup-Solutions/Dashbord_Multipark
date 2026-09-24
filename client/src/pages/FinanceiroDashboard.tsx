@@ -34,17 +34,10 @@ import {
   DashboardFilterBar,
 } from "@/components/DashboardFilterBar";
 import MarketingSummaryCard from "@/components/marketing/MarketingSummaryCard";
+import FitAmount from "@/components/finance/FitAmount";
+import { AXIS_TICK, CHART_PALETTE, CHART_TOOLTIP_STYLE, CHART_TOOLTIP_ITEM, eurAxis, eurFull } from "@/lib/financeFormat";
 
-const COLORS = [
-  "#6366f1",
-  "#f59e0b",
-  "#10b981",
-  "#ef4444",
-  "#8b5cf6",
-  "#06b6d4",
-  "#ec4899",
-  "#84cc16",
-];
+const COLORS = CHART_PALETTE;
 
 const EVOLUTION_LABEL: Record<string, string> = {
   receita: "Entregues s/ IVA",
@@ -53,8 +46,24 @@ const EVOLUTION_LABEL: Record<string, string> = {
   custosPrevistos: "Custos previstos",
 };
 
-function fmt(v: number) {
-  return v.toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
+const fmt = eurFull;
+
+/** Legenda em HTML (quebra de linha sem sobrepor o gráfico) com a quota. */
+function DonutLegend({ items }: { items: { name: string; value: number }[] }) {
+  const total = items.reduce((s, d) => s + d.value, 0) || 1;
+  return (
+    <ul className="mt-3 grid grid-cols-[repeat(auto-fill,minmax(9.5rem,1fr))] gap-x-5 gap-y-1.5 text-xs">
+      {items.map((d, i) => (
+        <li key={d.name} className="flex items-center gap-2 min-w-0" title={`${d.name}: ${fmt(d.value)}`}>
+          <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: COLORS[i % COLORS.length] }} />
+          <span className="truncate text-muted-foreground">{d.name}</span>
+          <span className="ml-auto shrink-0 tabular-nums font-medium text-foreground">
+            {((d.value / total) * 100).toFixed(0)}%
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 function StatCard({
@@ -64,27 +73,29 @@ function StatCard({
   icon: Icon,
   iconBg,
   iconColor,
+  className,
 }: {
+  className?: string;
   title: string;
-  value: string;
+  value: number;
   subtitle?: string;
   icon: any;
   iconBg?: string;
   iconColor?: string;
 }) {
   return (
-    <Card className="relative overflow-hidden">
+    <Card className={`relative overflow-hidden min-w-0 ${className ?? ""}`}>
       <CardContent className="pt-6">
-        <div className="flex items-start justify-between">
-          <div className="space-y-1">
+        <div className="flex items-start justify-between gap-3">
+          <div className="space-y-1 min-w-0 flex-1">
             <p className="text-sm text-muted-foreground font-medium">{title}</p>
-            <p className="text-2xl font-bold text-foreground">{value}</p>
+            <FitAmount value={value} className={`text-xl xl:text-2xl font-bold ${value < 0 ? "text-destructive" : "text-foreground"}`} />
             {subtitle && (
               <p className="text-xs text-muted-foreground">{subtitle}</p>
             )}
           </div>
           <div
-            className={`h-10 w-10 rounded-xl flex items-center justify-center ${iconBg ?? "bg-primary/10"}`}
+            className={`h-10 w-10 shrink-0 rounded-xl flex items-center justify-center ${iconBg ?? "bg-primary/10"}`}
           >
             <Icon className={`h-5 w-5 ${iconColor ?? "text-primary"}`} />
           </div>
@@ -165,9 +176,9 @@ export default function FinanceiroDashboard() {
 
   // Expense status data for mini bar
   const statusData = [
-    { name: "Pago", value: Math.max(0, pagoDespesas), color: "#10b981" },
-    { name: "Pendente", value: pendente, color: "#f59e0b" },
-    { name: "Em Atraso", value: emAtraso, color: "#ef4444" },
+    { name: "Pago", value: Math.max(0, pagoDespesas), color: "var(--chart-2)" },
+    { name: "Pendente", value: pendente, color: "var(--chart-4)" },
+    { name: "Em Atraso", value: emAtraso, color: "var(--destructive)" },
   ].filter(s => s.value > 0);
 
   const totalStatusValue = statusData.reduce((s, d) => s + d.value, 0);
@@ -246,36 +257,36 @@ export default function FinanceiroDashboard() {
           ) : (
             <>
               {/* Expense KPIs */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <div className="p-3 rounded-lg bg-muted/50 border">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="p-3 rounded-lg bg-muted/50 border min-w-0">
                   <div className="flex items-center gap-2 mb-1">
                     <Euro className="h-3.5 w-3.5 text-blue-500" />
                     <span className="text-xs text-muted-foreground">Total Despesas</span>
                   </div>
-                  <p className="text-xl font-bold">{fmt(totalDespesasAnual)}</p>
+                  <FitAmount value={totalDespesasAnual} className="text-lg sm:text-xl font-bold" />
                   <p className="text-xs text-muted-foreground">{totalDespesasCount} registos</p>
                 </div>
-                <div className="p-3 rounded-lg bg-muted/50 border">
+                <div className="p-3 rounded-lg bg-muted/50 border min-w-0">
                   <div className="flex items-center gap-2 mb-1">
                     <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
                     <span className="text-xs text-muted-foreground">Pago</span>
                   </div>
-                  <p className="text-xl font-bold text-green-600">{fmt(Math.max(0, pagoDespesas))}</p>
+                  <FitAmount value={Math.max(0, pagoDespesas)} className="text-lg sm:text-xl font-bold text-green-700 dark:text-green-400" />
                 </div>
-                <div className="p-3 rounded-lg bg-muted/50 border">
+                <div className="p-3 rounded-lg bg-muted/50 border min-w-0">
                   <div className="flex items-center gap-2 mb-1">
                     <Clock className="h-3.5 w-3.5 text-yellow-500" />
                     <span className="text-xs text-muted-foreground">Pendente</span>
                   </div>
-                  <p className="text-xl font-bold text-yellow-600">{fmt(pendente)}</p>
+                  <FitAmount value={pendente} className="text-lg sm:text-xl font-bold text-amber-700 dark:text-amber-400" />
                   <p className="text-xs text-muted-foreground">{expenseStats?.pending?.count ?? 0} despesa(s)</p>
                 </div>
-                <div className="p-3 rounded-lg bg-muted/50 border">
+                <div className="p-3 rounded-lg bg-muted/50 border min-w-0">
                   <div className="flex items-center gap-2 mb-1">
                     <AlertCircle className="h-3.5 w-3.5 text-red-500" />
                     <span className="text-xs text-muted-foreground">Em Atraso</span>
                   </div>
-                  <p className="text-xl font-bold text-red-600">{fmt(emAtraso)}</p>
+                  <FitAmount value={emAtraso} className="text-lg sm:text-xl font-bold text-destructive" />
                   <p className="text-xs text-muted-foreground">{expenseStats?.overdue?.count ?? 0} despesa(s)</p>
                 </div>
               </div>
@@ -283,7 +294,7 @@ export default function FinanceiroDashboard() {
               {/* Status progress bar */}
               {totalStatusValue > 0 && (
                 <div className="space-y-2">
-                  <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
                     {statusData.map(s => (
                       <div key={s.name} className="flex items-center gap-1.5">
                         <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: s.color }} />
@@ -314,10 +325,10 @@ export default function FinanceiroDashboard() {
                     <p className="text-xs font-medium text-muted-foreground mb-2">Despesas Mensais</p>
                     <ResponsiveContainer width="100%" height={140}>
                       <BarChart data={(expenseStats?.monthlyTrend ?? []).map((m: any) => ({ month: m.month, total: m.total ?? 0 }))} margin={{ top: 4, right: 4, left: 0, bottom: 4 }}>
-                        <XAxis dataKey="month" tick={{ fontSize: 10, fill: "#64748b" }} />
-                        <YAxis tick={{ fontSize: 10, fill: "#64748b" }} tickFormatter={v => `${v}€`} width={50} />
-                        <Tooltip formatter={(v: any) => [fmt(parseFloat(String(v))), "Total"]} contentStyle={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: "8px", fontSize: "12px" }} />
-                        <Bar dataKey="total" fill="#6366f1" radius={[3, 3, 0, 0]} />
+                        <XAxis dataKey="month" tick={AXIS_TICK} interval="preserveStartEnd" minTickGap={8} />
+                        <YAxis tick={AXIS_TICK} tickFormatter={eurAxis} width={64} />
+                        <Tooltip formatter={(v: any) => [fmt(parseFloat(String(v))), "Total"]} contentStyle={CHART_TOOLTIP_STYLE} itemStyle={CHART_TOOLTIP_ITEM} cursor={{ fill: "var(--muted)" }} />
+                        <Bar dataKey="total" fill="var(--chart-1)" radius={[3, 3, 0, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
@@ -333,9 +344,9 @@ export default function FinanceiroDashboard() {
                         .map((c: any, i: number) => {
                           const maxVal = categoryData[0]?.value || 1;
                           return (
-                            <div key={c.name} className="flex items-center gap-2">
-                              <span className="text-xs w-28 truncate text-muted-foreground">{c.name}</span>
-                              <div className="flex-1 h-4 bg-muted rounded-full overflow-hidden">
+                            <div key={c.name} className="flex items-center gap-2 min-w-0">
+                              <span className="text-xs w-24 sm:w-32 shrink-0 truncate text-muted-foreground" title={c.name}>{c.name}</span>
+                              <div className="flex-1 min-w-8 h-3 bg-muted rounded-full overflow-hidden">
                                 <div
                                   className="h-full rounded-full"
                                   style={{
@@ -344,7 +355,7 @@ export default function FinanceiroDashboard() {
                                   }}
                                 />
                               </div>
-                              <span className="text-xs font-medium w-20 text-right">{fmt(c.value)}</span>
+                              <span className="text-xs font-medium shrink-0 text-right tabular-nums">{fmt(c.value)}</span>
                             </div>
                           );
                         })}
@@ -360,7 +371,7 @@ export default function FinanceiroDashboard() {
       {/* ═══ DASHBOARD FINANCEIRO GERAL ═══ */}
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
         {isLoading ? (
           <>
             <SkeletonCard />
@@ -373,43 +384,48 @@ export default function FinanceiroDashboard() {
           <>
             <StatCard
               title={fin?.isCurrentPeriod ? "Entregues s/ IVA (até hoje)" : "Entregues s/ IVA"}
-              value={fmt(receitaPeriodo)}
+              value={receitaPeriodo}
               subtitle={`${fin?.revenue.producedCount ?? 0} carros saídos (CHECKED_OUT) · base da Faturação`}
               icon={Euro}
+              className="lg:col-span-2"
               iconBg="bg-emerald-100"
               iconColor="text-emerald-600"
             />
             <StatCard
               title={fin?.isCurrentPeriod ? "Custos s/ IVA (até hoje)" : "Custos s/ IVA"}
-              value={fmt(custosPeriodo)}
+              value={custosPeriodo}
               subtitle="despesas + pessoal + TSU + equipa do dia + comissões, no mesmo período"
               icon={TrendingDown}
+              className="lg:col-span-2"
               iconBg="bg-red-100"
               iconColor="text-red-600"
             />
             <StatCard
               title="Pendente (dívida atual)"
-              value={fmt(pendente)}
+              value={pendente}
               subtitle={`${expenseStats?.pending?.count ?? 0} despesa(s) — não depende do período`}
               icon={Clock}
+              className="sm:col-span-2 lg:col-span-2"
               iconBg="bg-yellow-100"
               iconColor="text-yellow-600"
             />
             <StatCard
               title="Em Atraso (dívida atual)"
-              value={fmt(emAtraso)}
+              value={emAtraso}
               subtitle={`${expenseStats?.overdue?.count ?? 0} despesa(s) — não depende do período`}
               icon={AlertCircle}
+              className="lg:col-span-3"
               iconBg="bg-orange-100"
               iconColor="text-orange-600"
             />
             <StatCard
               title={fin?.isCurrentPeriod ? "Margem realizada" : "Margem s/ IVA"}
-              value={fmt(margem)}
+              value={margem}
               subtitle={fin?.projection.applies
                 ? `${fin.margin.marginPct != null ? fin.margin.marginPct.toFixed(1) + "% · " : ""}fecho previsto: ${fmt(fin.projection.margin)}`
                 : `${fin?.margin.marginPct != null ? fin.margin.marginPct.toFixed(1) + "% · " : ""}entregues − custos (igual à Faturação)`}
               icon={TrendingUp}
+              className="lg:col-span-3"
               iconBg={margem >= 0 ? "bg-emerald-100" : "bg-red-100"}
               iconColor={margem >= 0 ? "text-emerald-600" : "text-red-600"}
             />
@@ -432,17 +448,18 @@ export default function FinanceiroDashboard() {
               <SkeletonChart />
             ) : byCityData.length === 0 ? (
               <div className="flex items-center justify-center h-60 text-muted-foreground text-sm">
-                Sem dados disponiveis
+                Sem dados disponíveis
               </div>
             ) : (
-              <ResponsiveContainer width="100%" height={280}>
+              <>
+              <ResponsiveContainer width="100%" height={220}>
                 <PieChart>
                   <Pie
                     data={byCityData}
                     cx="50%"
                     cy="50%"
-                    innerRadius={60}
-                    outerRadius={95}
+                    innerRadius={58}
+                    outerRadius={90}
                     paddingAngle={3}
                     dataKey="value"
                   >
@@ -455,15 +472,12 @@ export default function FinanceiroDashboard() {
                       `${fmt(parseFloat(String(v)))} (${props.payload.bookings} reservas)`,
                       props.payload.name,
                     ]}
-                    contentStyle={{
-                      background: "#ffffff",
-                      border: "1px solid #e2e8f0",
-                      borderRadius: "8px",
-                    }}
+                    contentStyle={CHART_TOOLTIP_STYLE} itemStyle={CHART_TOOLTIP_ITEM}
                   />
-                  <Legend iconSize={10} wrapperStyle={{ fontSize: "12px" }} />
                 </PieChart>
               </ResponsiveContainer>
+              <DonutLegend items={byCityData} />
+              </>
             )}
           </CardContent>
         </Card>
@@ -481,17 +495,18 @@ export default function FinanceiroDashboard() {
               <SkeletonChart />
             ) : byBrandData.length === 0 ? (
               <div className="flex items-center justify-center h-60 text-muted-foreground text-sm">
-                Sem dados disponiveis
+                Sem dados disponíveis
               </div>
             ) : (
-              <ResponsiveContainer width="100%" height={280}>
+              <>
+              <ResponsiveContainer width="100%" height={220}>
                 <PieChart>
                   <Pie
                     data={byBrandData}
                     cx="50%"
                     cy="50%"
-                    innerRadius={60}
-                    outerRadius={95}
+                    innerRadius={58}
+                    outerRadius={90}
                     paddingAngle={3}
                     dataKey="value"
                   >
@@ -504,15 +519,12 @@ export default function FinanceiroDashboard() {
                       `${fmt(parseFloat(String(v)))} (${props.payload.bookings} reservas)`,
                       props.payload.name,
                     ]}
-                    contentStyle={{
-                      background: "#ffffff",
-                      border: "1px solid #e2e8f0",
-                      borderRadius: "8px",
-                    }}
+                    contentStyle={CHART_TOOLTIP_STYLE} itemStyle={CHART_TOOLTIP_ITEM}
                   />
-                  <Legend iconSize={10} wrapperStyle={{ fontSize: "12px" }} />
                 </PieChart>
               </ResponsiveContainer>
+              <DonutLegend items={byBrandData} />
+              </>
             )}
           </CardContent>
         </Card>
@@ -533,7 +545,7 @@ export default function FinanceiroDashboard() {
               <SkeletonChart />
             ) : monthlyEvolution.length === 0 ? (
               <div className="flex items-center justify-center h-60 text-muted-foreground text-sm">
-                Sem dados mensais disponiveis
+                Sem dados mensais disponíveis
               </div>
             ) : (
               <ResponsiveContainer width="100%" height={280}>
@@ -551,12 +563,12 @@ export default function FinanceiroDashboard() {
                     >
                       <stop
                         offset="5%"
-                        stopColor="#10b981"
+                        stopColor="var(--chart-2)"
                         stopOpacity={0.3}
                       />
                       <stop
                         offset="95%"
-                        stopColor="#10b981"
+                        stopColor="var(--chart-2)"
                         stopOpacity={0}
                       />
                     </linearGradient>
@@ -569,41 +581,40 @@ export default function FinanceiroDashboard() {
                     >
                       <stop
                         offset="5%"
-                        stopColor="#ef4444"
+                        stopColor="var(--destructive)"
                         stopOpacity={0.3}
                       />
                       <stop
                         offset="95%"
-                        stopColor="#ef4444"
+                        stopColor="var(--destructive)"
                         stopOpacity={0}
                       />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                   <XAxis
                     dataKey="month"
-                    tick={{ fontSize: 12, fill: "#64748b" }}
+                    tick={AXIS_TICK}
+                    interval="preserveStartEnd"
+                    minTickGap={12}
                   />
                   <YAxis
-                    tick={{ fontSize: 12, fill: "#64748b" }}
-                    tickFormatter={(v) => `${v}€`}
+                    tick={AXIS_TICK}
+                    tickFormatter={eurAxis}
+                    width={68}
                   />
                   <Tooltip
                     formatter={(v: any, name: string) => [
                       fmt(parseFloat(String(v))),
                       EVOLUTION_LABEL[name] ?? name,
                     ]}
-                    contentStyle={{
-                      background: "#ffffff",
-                      border: "1px solid #e2e8f0",
-                      borderRadius: "8px",
-                    }}
+                    contentStyle={CHART_TOOLTIP_STYLE} itemStyle={CHART_TOOLTIP_ITEM}
                   />
-                  <Legend formatter={(value) => EVOLUTION_LABEL[value] ?? value} />
+                  <Legend iconSize={10} wrapperStyle={{ fontSize: "12px", paddingTop: 8 }} formatter={(value) => <span className="text-foreground">{EVOLUTION_LABEL[value] ?? value}</span>} />
                   <Area
                     type="monotone"
                     dataKey="receita"
-                    stroke="#10b981"
+                    stroke="var(--chart-2)"
                     strokeWidth={2}
                     fillOpacity={1}
                     fill="url(#colorReceita)"
@@ -611,13 +622,13 @@ export default function FinanceiroDashboard() {
                   <Area
                     type="monotone"
                     dataKey="despesas"
-                    stroke="#ef4444"
+                    stroke="var(--destructive)"
                     strokeWidth={2}
                     fillOpacity={1}
                     fill="url(#colorDespesas)"
                   />
-                  <Area type="monotone" dataKey="receitaPrevista" stroke="#10b981" strokeDasharray="4 4" strokeWidth={1.5} fillOpacity={0} />
-                  <Area type="monotone" dataKey="custosPrevistos" stroke="#ef4444" strokeDasharray="4 4" strokeWidth={1.5} fillOpacity={0} />
+                  <Area type="monotone" dataKey="receitaPrevista" stroke="var(--chart-2)" strokeDasharray="4 4" strokeWidth={1.5} fillOpacity={0} />
+                  <Area type="monotone" dataKey="custosPrevistos" stroke="var(--destructive)" strokeDasharray="4 4" strokeWidth={1.5} fillOpacity={0} />
                 </AreaChart>
               </ResponsiveContainer>
             )}
@@ -636,16 +647,17 @@ export default function FinanceiroDashboard() {
               <SkeletonChart />
             ) : categoryData.length === 0 ? (
               <div className="flex items-center justify-center h-60 text-muted-foreground text-sm">
-                Sem dados disponiveis
+                Sem dados disponíveis
               </div>
             ) : (
-              <ResponsiveContainer width="100%" height={280}>
+              <>
+              <ResponsiveContainer width="100%" height={220}>
                 <PieChart>
                   <Pie
                     data={categoryData}
                     cx="50%"
                     cy="50%"
-                    innerRadius={60}
+                    innerRadius={58}
                     outerRadius={90}
                     paddingAngle={3}
                     dataKey="value"
@@ -656,15 +668,12 @@ export default function FinanceiroDashboard() {
                   </Pie>
                   <Tooltip
                     formatter={(v: any) => [fmt(parseFloat(String(v)))]}
-                    contentStyle={{
-                      background: "#ffffff",
-                      border: "1px solid #e2e8f0",
-                      borderRadius: "8px",
-                    }}
+                    contentStyle={CHART_TOOLTIP_STYLE} itemStyle={CHART_TOOLTIP_ITEM}
                   />
-                  <Legend iconSize={10} wrapperStyle={{ fontSize: "12px" }} />
                 </PieChart>
               </ResponsiveContainer>
+              <DonutLegend items={categoryData} />
+              </>
             )}
           </CardContent>
         </Card>
@@ -675,7 +684,7 @@ export default function FinanceiroDashboard() {
         <CardHeader>
           <CardTitle className="text-base font-semibold flex items-center gap-2">
             <Clock className="h-4 w-4 text-yellow-500" />
-            Pagamentos nos Proximos 7 Dias
+            Pagamentos nos próximos 7 dias
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -699,7 +708,7 @@ export default function FinanceiroDashboard() {
             </div>
           ) : !upcoming || upcoming.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground text-sm">
-              Nenhum pagamento pendente nos proximos 7 dias
+              Nenhum pagamento pendente nos próximos 7 dias
             </div>
           ) : (
             <div className="space-y-3">
@@ -711,7 +720,7 @@ export default function FinanceiroDashboard() {
                 return (
                   <div
                     key={expense.id}
-                    className="flex items-center justify-between p-3 rounded-lg bg-muted/50 border"
+                    className="flex items-center justify-between gap-3 p-3 rounded-lg bg-muted/50 border"
                   >
                     <div className="flex-1 min-w-0">
                       <p className="font-medium text-sm text-foreground truncate">
@@ -724,8 +733,8 @@ export default function FinanceiroDashboard() {
                         })}
                       </p>
                     </div>
-                    <div className="flex items-center gap-3 shrink-0 ml-4">
-                      <span className="font-semibold text-sm">
+                    <div className="flex flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-3 shrink-0">
+                      <span className="font-semibold text-sm tabular-nums">
                         {fmt(parseFloat(String(expense.amount)))}
                       </span>
                       <Badge
@@ -741,7 +750,7 @@ export default function FinanceiroDashboard() {
                         {daysLeft === 0
                           ? "Hoje"
                           : daysLeft === 1
-                            ? "Amanha"
+                            ? "Amanhã"
                             : `${daysLeft} dias`}
                       </Badge>
                     </div>

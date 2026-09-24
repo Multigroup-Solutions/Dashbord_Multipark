@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
+import { eurFull } from "@/lib/financeFormat";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -80,7 +81,7 @@ function GeofenceSection({ projectId }: { projectId: number }) {
     <div className="border-t pt-3 space-y-2">
       <Label className="flex items-center gap-1.5">
         <MapPin className="w-3.5 h-3.5" /> Raio de picagem do ponto
-        {mine && <Badge variant="outline" className="text-[10px]">configurado</Badge>}
+        {mine && <Badge variant="outline" className="text-[11px]">configurado</Badge>}
       </Label>
       <p className="text-xs text-muted-foreground">Check-in/out fora deste raio fica marcado a vermelho (mas é permitido). Sem raio, herda o do nível acima.</p>
       <div className="flex gap-2 items-end flex-wrap">
@@ -255,7 +256,7 @@ export default function ProjectsPage() {
     return (
       <div>
         <div
-          className={`flex items-center gap-2 py-2 px-3 rounded-lg hover:bg-muted/50 cursor-pointer transition-colors group ${
+          className={`flex flex-wrap sm:flex-nowrap items-center gap-x-2 gap-y-1 py-2 px-3 rounded-lg hover:bg-muted/50 cursor-pointer transition-colors group ${
             isMatch ? "bg-amber-50 dark:bg-amber-950/20" : ""
           } ${active ? "" : "opacity-50"}`}
           style={{ paddingLeft: `${depth * 24 + 12}px` }}
@@ -268,9 +269,9 @@ export default function ProjectsPage() {
           )}
           <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: node.color ?? "#6366f1" }} />
           <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
-          <span className="font-medium text-sm flex-1">{node.name}</span>
+          <span className="font-medium text-sm flex-1 min-w-0 break-words">{node.name}</span>
           {descCount > 0 && (
-            <Badge variant="secondary" className="text-[10px] px-1.5">
+            <Badge variant="secondary" className="text-[11px] px-1.5 shrink-0">
               {descCount} sub
             </Badge>
           )}
@@ -283,15 +284,15 @@ export default function ProjectsPage() {
             </span>
           )}
           {node.budget && (
-            <span className="text-xs font-mono text-emerald-600">€{parseFloat(node.budget).toLocaleString("pt-PT")}</span>
+            <span className="text-xs tabular-nums whitespace-nowrap text-emerald-700 dark:text-emerald-400" title="Orçamento">{eurFull(node.budget)}</span>
           )}
-          <Badge variant="outline" className={`text-xs ${LEVEL_COLORS[node.level] ?? ""}`}>
+          <Badge variant="outline" className={`text-xs shrink-0 ${LEVEL_COLORS[node.level] ?? ""}`}>
             {LEVEL_LABELS[node.level] ?? node.level}
           </Badge>
           {!active && <Badge variant="secondary" className="text-xs">Inativo</Badge>}
           {isAdmin && (
             // Sempre visíveis (eram hover-only e ficavam "escondidos" no tema novo)
-            <div className="opacity-60 group-hover:opacity-100 flex gap-1 transition-opacity">
+            <div className="opacity-60 group-hover:opacity-100 focus-within:opacity-100 flex gap-1 transition-opacity basis-full sm:basis-auto justify-end shrink-0">
               {childLevel && active && (
                 <Button variant="ghost" size="icon" className="h-7 w-7" title={`Criar ${LEVEL_LABELS[childLevel]}`} onClick={(e) => { e.stopPropagation(); openCreate(node.id, childLevel); }}>
                   <Plus className="h-3.5 w-3.5" />
@@ -353,11 +354,11 @@ export default function ProjectsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="min-w-0">
           <p className="text-muted-foreground text-sm">Estrutura organizacional em árvore</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button variant="outline" onClick={() => setShowCosts(true)}>
             <Euro className="h-4 w-4 mr-2" /> Custos
           </Button>
@@ -368,7 +369,7 @@ export default function ProjectsPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         {[
           { label: "Grupos", value: stats.groups, icon: Building2, color: "text-indigo-600" },
           { label: "Cidades", value: stats.cities, icon: MapPin, color: "text-emerald-600" },
@@ -376,12 +377,12 @@ export default function ProjectsPage() {
           { label: "Projetos", value: stats.projects, icon: FolderKanban, color: "text-sky-600" },
           { label: "Total", value: stats.total, icon: FolderTree, color: "text-slate-600" },
         ].map(s => (
-          <Card key={s.label}>
+          <Card key={s.label} className={`py-0 min-w-0 ${s.label === "Total" ? "col-span-2 sm:col-span-1" : ""}`}>
             <CardContent className="py-3 px-4 flex items-center gap-3">
-              <s.icon className={`h-5 w-5 ${s.color}`} />
+              <s.icon className={`h-5 w-5 shrink-0 ${s.color}`} />
               <div>
                 <p className="text-xs text-muted-foreground">{s.label}</p>
-                <p className="text-lg font-bold">{s.value}</p>
+                <p className="text-lg font-bold tabular-nums">{s.value}</p>
               </div>
             </CardContent>
           </Card>

@@ -15,7 +15,7 @@ import { AlertTriangle, CheckCircle2, ExternalLink, KeyRound, Loader2, Plug, XCi
 
 const CONN: Record<string, { label: string; cls: string }> = {
   connected: { label: "Ligado", cls: "bg-emerald-100 text-emerald-800 border-emerald-200" },
-  disconnected: { label: "Desligado", cls: "bg-muted text-muted-foreground" },
+  disconnected: { label: "Desligado", cls: "bg-muted text-secondary-foreground" },
   reauth_required: { label: "Reautorização necessária", cls: "bg-red-100 text-red-800 border-red-200" },
   error: { label: "Erro", cls: "bg-red-100 text-red-800 border-red-200" },
 };
@@ -45,7 +45,7 @@ export default function IntegrationsHubPage() {
   const problems = main.filter((i) => i.configured && (i.connection?.status === "reauth_required" || i.connection?.status === "error" || !!i.lastError)).length;
 
   return (
-    <div className="p-3 sm:p-6 space-y-4 max-w-6xl mx-auto">
+    <div className="space-y-4 max-w-6xl mx-auto">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2"><Plug className="h-5 w-5" /> Integrações</h1>
@@ -106,7 +106,7 @@ export default function IntegrationsHubPage() {
 
 function ConfiguredBadge({ configured }: { configured: boolean }) {
   return (
-    <Badge variant="outline" className={configured ? "bg-emerald-100 text-emerald-800 border-emerald-200" : "bg-muted text-muted-foreground"}>
+    <Badge variant="outline" className={configured ? "bg-emerald-100 text-emerald-800 border-emerald-200" : "bg-muted text-secondary-foreground"}>
       {configured ? "Configurada" : "Não configurada"}
     </Badge>
   );

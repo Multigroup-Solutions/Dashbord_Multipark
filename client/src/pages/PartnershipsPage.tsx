@@ -1,4 +1,6 @@
 import { trpc } from "@/lib/trpc";
+import FitAmount from "@/components/finance/FitAmount";
+import { STICKY_FIRST_COL, TABS_SCROLL } from "@/components/finance/layoutClasses";
 import { useTableSort, Th } from "@/components/SortableTable";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -414,12 +416,12 @@ export default function PartnershipsPage() {
       <p className="text-muted-foreground">Parceiros, afiliados e reservas Pro da Multipark</p>
 
       <Tabs defaultValue="summary">
-        <TabsList>
+        <TabsList className={TABS_SCROLL}>
           <TabsTrigger value="summary"><Wallet className="w-3 h-3 mr-1" /> Resumo</TabsTrigger>
           <TabsTrigger value="analytics">Análise</TabsTrigger>
           <TabsTrigger value="management">
             <Settings className="w-3 h-3 mr-1" /> Gestão
-            {unconfigured.length > 0 && <Badge variant="destructive" className="ml-1 h-4 px-1 text-[9px]">{unconfigured.length}</Badge>}
+            {unconfigured.length > 0 && <Badge variant="destructive" className="ml-1 h-4 px-1 text-[11px]">{unconfigured.length}</Badge>}
           </TabsTrigger>
         </TabsList>
 
@@ -430,14 +432,14 @@ export default function PartnershipsPage() {
 
         {/* ── TAB: ANÁLISE ─────────────────────────────────────────────────── */}
         <TabsContent value="analytics" className="space-y-4">
-          <div className="flex items-center gap-3 justify-end">
-            <div>
+          <div className="flex items-end gap-3 sm:justify-end">
+            <div className="flex-1 sm:flex-none">
               <Label className="text-xs mb-1 block">De</Label>
-              <Input type="date" value={from} onChange={e => setFrom(e.target.value)} className="w-[140px]" />
+              <Input type="date" value={from} onChange={e => setFrom(e.target.value)} className="w-full sm:w-[160px]" />
             </div>
-            <div>
+            <div className="flex-1 sm:flex-none">
               <Label className="text-xs mb-1 block">Até</Label>
-              <Input type="date" value={to} onChange={e => setTo(e.target.value)} className="w-[140px]" />
+              <Input type="date" value={to} onChange={e => setTo(e.target.value)} className="w-full sm:w-[160px]" />
             </div>
           </div>
 
@@ -448,49 +450,49 @@ export default function PartnershipsPage() {
           ) : (
             <>
               {/* KPIs */}
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-3 2xl:grid-cols-6 gap-3 [&>*]:min-w-0 [&>*]:gap-1">
                 <Card className="p-3">
                   <div className="flex items-center gap-1 mb-1">
                     <Handshake className="w-4 h-4 text-blue-600" />
-                    <span className="text-[10px] text-muted-foreground">Reservas Parceiros</span>
+                    <span className="text-xs text-muted-foreground">Reservas Parceiros</span>
                   </div>
-                  <p className="text-xl font-bold text-blue-700">{totals.partnerBookings}</p>
+                  <p className="text-lg sm:text-xl font-bold tabular-nums text-blue-700 dark:text-blue-400">{totals.partnerBookings.toLocaleString("pt-PT")}</p>
                   <p className="text-xs text-muted-foreground">{partnerPct}% do total</p>
                 </Card>
                 <Card className="p-3">
                   <div className="flex items-center gap-1 mb-1">
                     <Euro className="w-4 h-4 text-blue-600" />
-                    <span className="text-[10px] text-muted-foreground">Receita Parceiros</span>
+                    <span className="text-xs text-muted-foreground">Receita Parceiros</span>
                   </div>
-                  <p className="text-xl font-bold text-blue-700">{fmt(totals.partnerRevenue)}</p>
+                  <FitAmount value={totals.partnerRevenue} className="text-lg sm:text-xl font-bold text-blue-700 dark:text-blue-400" />
                 </Card>
                 <Card className="p-3">
                   <div className="flex items-center gap-1 mb-1">
                     <ArrowRightLeft className="w-4 h-4 text-green-600" />
-                    <span className="text-[10px] text-muted-foreground">Reservas Diretas</span>
+                    <span className="text-xs text-muted-foreground">Reservas Diretas</span>
                   </div>
-                  <p className="text-xl font-bold text-green-700">{totals.directBookings}</p>
+                  <p className="text-lg sm:text-xl font-bold tabular-nums text-green-700 dark:text-green-400">{totals.directBookings.toLocaleString("pt-PT")}</p>
                 </Card>
                 <Card className="p-3">
                   <div className="flex items-center gap-1 mb-1">
                     <Euro className="w-4 h-4 text-green-600" />
-                    <span className="text-[10px] text-muted-foreground">Receita Direta</span>
+                    <span className="text-xs text-muted-foreground">Receita Direta</span>
                   </div>
-                  <p className="text-xl font-bold text-green-700">{fmt(totals.directRevenue)}</p>
+                  <FitAmount value={totals.directRevenue} className="text-lg sm:text-xl font-bold text-green-700 dark:text-green-400" />
                 </Card>
                 <Card className="p-3">
                   <div className="flex items-center gap-1 mb-1">
                     <Crown className="w-4 h-4 text-purple-600" />
-                    <span className="text-[10px] text-muted-foreground">Reservas Pro</span>
+                    <span className="text-xs text-muted-foreground">Reservas Pro</span>
                   </div>
-                  <p className="text-xl font-bold text-purple-700">{totals.proBookings}</p>
+                  <p className="text-lg sm:text-xl font-bold tabular-nums text-purple-700 dark:text-purple-400">{totals.proBookings.toLocaleString("pt-PT")}</p>
                 </Card>
                 <Card className="p-3">
                   <div className="flex items-center gap-1 mb-1">
                     <Euro className="w-4 h-4 text-purple-600" />
-                    <span className="text-[10px] text-muted-foreground">Receita Pro</span>
+                    <span className="text-xs text-muted-foreground">Receita Pro</span>
                   </div>
-                  <p className="text-xl font-bold text-purple-700">{fmt(totals.proRevenue)}</p>
+                  <FitAmount value={totals.proRevenue} className="text-lg sm:text-xl font-bold text-purple-700 dark:text-purple-400" />
                 </Card>
               </div>
 
@@ -505,7 +507,7 @@ export default function PartnershipsPage() {
                   {partnerSummary.length === 0 ? (
                     <p className="text-muted-foreground text-sm text-center py-6">Sem reservas de parceiros no período</p>
                   ) : (
-                    <div className="overflow-x-auto"><table className="w-full text-sm">
+                    <div className="overflow-x-auto"><table className={`w-full text-sm ${STICKY_FIRST_COL}`}>
                       <thead>
                         <tr className="border-b text-left">
                           <Th k="name" label="Parceiro" sortKey={psSort.sortKey} sortDir={psSort.sortDir} onToggle={psSort.toggle} />
@@ -521,23 +523,23 @@ export default function PartnershipsPage() {
                       <tbody>
                         {psSort.sorted.map(p => (
                           <tr key={p.name} className="border-b hover:bg-muted/50">
-                            <td className="p-2 font-medium">
+                            <td className="p-2 font-medium min-w-[10rem] max-w-[16rem] break-words">
                               {p.name}
                               {p.configured
-                                ? <Badge variant="secondary" className="ml-2 text-[9px]">Configurado</Badge>
-                                : p.partner && <Badge variant="outline" className="ml-2 text-[9px] border-amber-400 text-amber-700">Por configurar</Badge>}
+                                ? <Badge variant="secondary" className="ml-2 text-[11px]">Configurado</Badge>
+                                : p.partner && <Badge variant="outline" className="ml-2 text-[11px] border-amber-400 text-amber-700 dark:text-amber-400">Por configurar</Badge>}
                             </td>
                             <td className="p-2">
                               <div className="flex gap-1 flex-wrap">
                                 {p.cities.map(c => (
-                                  <Badge key={c} variant="outline" className="text-[10px]">{c}</Badge>
+                                  <Badge key={c} variant="outline" className="text-[11px]">{c}</Badge>
                                 ))}
                               </div>
                             </td>
                             <td className="p-2 text-right tabular-nums">{p.count}</td>
                             <td className="p-2 text-right tabular-nums font-medium">{fmt(p.revenue)}</td>
                             <td className="p-2 text-right tabular-nums">{fmt(p.avgPrice)}</td>
-                            <td className="p-2 text-right tabular-nums text-red-600">{fmt(p.discount)}</td>
+                            <td className="p-2 text-right tabular-nums text-red-700 dark:text-red-400">{fmt(p.discount)}</td>
                             <td className="p-2 text-right tabular-nums">
                               {totalRevenue > 0 ? ((p.revenue / totalRevenue) * 100).toFixed(1) : "0"}%
                             </td>
@@ -556,10 +558,10 @@ export default function PartnershipsPage() {
                         <tr className="bg-muted/30 font-bold">
                           <td className="p-2">Total Parceiros</td>
                           <td className="p-2"></td>
-                          <td className="p-2 text-right">{totals.partnerBookings}</td>
-                          <td className="p-2 text-right">{fmt(totals.partnerRevenue)}</td>
+                          <td className="p-2 text-right tabular-nums">{totals.partnerBookings}</td>
+                          <td className="p-2 text-right tabular-nums">{fmt(totals.partnerRevenue)}</td>
                           <td className="p-2 text-right">{totals.partnerBookings > 0 ? fmt(totals.partnerRevenue / totals.partnerBookings) : "—"}</td>
-                          <td className="p-2 text-right text-red-600">{fmt(partnerSummary.reduce((s, p) => s + p.discount, 0))}</td>
+                          <td className="p-2 text-right tabular-nums text-red-700 dark:text-red-400">{fmt(partnerSummary.reduce((s, p) => s + p.discount, 0))}</td>
                           <td className="p-2 text-right">{totalRevenue > 0 ? ((totals.partnerRevenue / totalRevenue) * 100).toFixed(1) : "0"}%</td>
                           <td className="p-2"></td>
                         </tr>
@@ -578,7 +580,7 @@ export default function PartnershipsPage() {
                     </CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <div className="overflow-x-auto"><table className="w-full text-sm">
+                    <div className="overflow-x-auto"><table className={`w-full text-sm ${STICKY_FIRST_COL}`}>
                       <thead>
                         <tr className="border-b text-left">
                           <th className="p-2">Parque</th>
@@ -647,12 +649,14 @@ export default function PartnershipsPage() {
                 Parceiros criados automaticamente (ou sem dados gravados). Até serem configurados, a comissão conta como
                 "taxa em falta" nas finanças. Confirma o tipo, a comissão (mesmo que seja 0%) ou a avença.
               </p>
-              <div className="flex flex-wrap gap-2">
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                 {unconfigured.map((p: any) => (
-                  <div key={p.id} className="flex items-center gap-2 rounded border bg-background px-2 py-1 text-sm">
-                    <span className="font-medium">{p.name}</span>
-                    <Badge variant="outline" className="text-[9px]">{getPartnerType(p.partnerType).label}</Badge>
-                    <Button size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={() => openEdit(p)}>
+                  <div key={p.id} className="flex items-center gap-2 rounded border bg-background px-2 py-1.5 text-sm min-w-0">
+                    <div className="min-w-0 flex-1">
+                      <span className="font-medium block break-words leading-snug">{p.name}</span>
+                      <Badge variant="outline" className="text-[11px] mt-0.5">{getPartnerType(p.partnerType).label}</Badge>
+                    </div>
+                    <Button size="sm" variant="outline" className="h-7 px-2 text-xs shrink-0" onClick={() => openEdit(p)}>
                       Configurar
                     </Button>
                   </div>
@@ -675,7 +679,7 @@ export default function PartnershipsPage() {
                     onClick={() => setMgmtType(t.id)}
                     className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${mgmtType === t.id ? "bg-primary text-primary-foreground border-primary" : "bg-background hover:bg-muted border-input"}`}
                   >
-                    {t.label} <span className="opacity-60">{count}</span>
+                    {t.label} <span className="opacity-80 tabular-nums">{count}</span>
                   </button>
                 );
               })}
@@ -690,21 +694,21 @@ export default function PartnershipsPage() {
             <div className="grid gap-3">
               {(partnerList as any[]).filter((p: any) => mgmtType === "all" || partnerCategoryOf(p.partnerType) === mgmtType).map((p: any) => (
                 <Card key={p.id} className="p-4">
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <h3 className="font-semibold">{p.name}</h3>
-                        <Badge variant={p.partnerStatus === "active" ? "default" : "secondary"} className="text-[10px]">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <h3 className="font-semibold break-words min-w-0">{p.name}</h3>
+                        <Badge variant={p.partnerStatus === "active" ? "default" : "secondary"} className="text-[11px]">
                           {p.partnerStatus === "active" ? "Ativo" : p.partnerStatus === "inactive" ? "Inativo" : "Pendente"}
                         </Badge>
-                        <Badge variant="outline" className="text-[10px]">
+                        <Badge variant="outline" className="text-[11px]">
                           {getPartnerType(p.partnerType).label}
                         </Badge>
                         {isPartnerUnconfigured(p) && (
-                          <Badge variant="outline" className="text-[10px] border-amber-400 text-amber-700">Por configurar</Badge>
+                          <Badge variant="outline" className="text-[11px] border-amber-400 text-amber-700 dark:text-amber-400">Por configurar</Badge>
                         )}
                       </div>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-1 text-sm text-muted-foreground mt-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-1 text-sm text-muted-foreground mt-2 [&>div]:min-w-0 [&>div]:break-words">
                         {p.campaignKey && (
                           <div><span className="text-xs font-medium text-foreground">Campaign:</span> {p.campaignKey}</div>
                         )}
@@ -725,15 +729,15 @@ export default function PartnershipsPage() {
                           <div><span className="text-xs font-medium text-foreground">Tel:</span> {p.contactPhone}</div>
                         )}
                         {p.billingAgreement && (
-                          <div className="col-span-2"><span className="text-xs font-medium text-foreground">Acordo:</span> {p.billingAgreement}</div>
+                          <div className="sm:col-span-2"><span className="text-xs font-medium text-foreground">Acordo:</span> {p.billingAgreement}</div>
                         )}
                       </div>
                     </div>
-                    <div className="flex gap-1 ml-4">
-                      <Button size="sm" variant="ghost" onClick={() => openEdit(p)}>
+                    <div className="flex gap-1 shrink-0">
+                      <Button size="sm" variant="ghost" onClick={() => openEdit(p)} aria-label={`Editar ${p.name}`}>
                         <Pencil className="w-4 h-4" />
                       </Button>
-                      <Button size="sm" variant="ghost" className="text-red-600" onClick={() => {
+                      <Button size="sm" variant="ghost" className="text-red-600" aria-label={`Eliminar ${p.name}`} onClick={() => {
                         if (confirm(`Eliminar parceiro "${p.name}"?`)) deleteMut.mutate({ id: p.id });
                       }}>
                         <Trash2 className="w-4 h-4" />
@@ -794,18 +798,18 @@ function InvoicingSummaryTab({
   return (
     <div className="space-y-4">
       <div className="flex items-end gap-3 flex-wrap">
-        <div>
+        <div className="flex-1 min-w-[9.5rem] sm:flex-none">
           <Label className="text-xs mb-1 block">De</Label>
-          <Input type="date" value={from} onChange={e => onChangeFrom(e.target.value)} className="w-[140px] h-9" />
+          <Input type="date" value={from} onChange={e => onChangeFrom(e.target.value)} className="w-full sm:w-[160px] h-9" />
         </div>
-        <div>
+        <div className="flex-1 min-w-[9.5rem] sm:flex-none">
           <Label className="text-xs mb-1 block">Até</Label>
-          <Input type="date" value={to} onChange={e => onChangeTo(e.target.value)} className="w-[140px] h-9" />
+          <Input type="date" value={to} onChange={e => onChangeTo(e.target.value)} className="w-full sm:w-[160px] h-9" />
         </div>
-        <div>
+        <div className="w-full sm:w-auto">
           <Label className="text-xs mb-1 block">Tipo</Label>
           <Select value={typeFilter} onValueChange={setTypeFilter}>
-            <SelectTrigger className="w-[200px] h-9"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="w-full sm:w-[200px] h-9"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Todos os tipos</SelectItem>
               {PARTNER_TYPES.map((t) => (
@@ -818,24 +822,24 @@ function InvoicingSummaryTab({
 
       {!billingAvailable && <p role="status" className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">Reservas e receitas limitadas à cidade selecionada. As avenças não têm cidade atribuída e estão indisponíveis nesta vista.</p>}
       {/* KPIs */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 [&>*]:min-w-0 [&>*]:gap-1">
         <Card className="p-4">
           <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
             <Euro className="w-3 h-3" /> A faturar
           </p>
-          <p className="text-2xl font-bold text-blue-700">{fmt(amountsAvailable ? totals.aFaturar : null)}</p>
+          {amountsAvailable ? <FitAmount value={totals.aFaturar} className="text-xl lg:text-2xl font-bold text-blue-700 dark:text-blue-400" /> : <p className="text-xl lg:text-2xl font-bold text-blue-700 dark:text-blue-400">{fmt(null)}</p>}
         </Card>
         <Card className="p-4">
           <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
             <Handshake className="w-3 h-3" /> Reservas concluídas
           </p>
-          <p className="text-2xl font-bold">{totals.bookings}</p>
+          <p className="text-xl lg:text-2xl font-bold tabular-nums">{totals.bookings.toLocaleString("pt-PT")}</p>
         </Card>
         <Card className="p-4">
           <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
             <Wallet className="w-3 h-3" /> Receita
           </p>
-          <p className="text-2xl font-bold text-emerald-700">{fmt(totals.revenue)}</p>
+          <FitAmount value={totals.revenue} className="text-xl lg:text-2xl font-bold text-emerald-700 dark:text-emerald-400" />
         </Card>
       </div>
 
@@ -854,7 +858,7 @@ function InvoicingSummaryTab({
             <p className="text-sm text-muted-foreground text-center py-10">Sem parceiros para mostrar.</p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className={`w-full text-sm ${STICKY_FIRST_COL}`}>
                 <thead>
                   <tr className="border-b text-left text-xs uppercase text-muted-foreground">
                     <th className="p-2">Parceiro</th>
@@ -888,9 +892,9 @@ function InvoicingSummaryTab({
                         onClick={() => setLocation(`/parcerias/tipo/${t.id}`)}
                         title={`Abrir ${t.label}`}
                       >
-                        <td className="p-2 font-medium">{r.partnerName}</td>
+                        <td className="p-2 font-medium min-w-[10rem] max-w-[18rem] break-words">{r.partnerName}</td>
                         <td className="p-2">
-                          <Badge variant="outline" className="text-[10px]">{t.label}</Badge>
+                          <Badge variant="outline" className="text-[11px] whitespace-nowrap">{t.label}</Badge>
                         </td>
                         <td className="p-2 text-right tabular-nums">{r.bookingsCount}</td>
                         <td className="p-2 text-right tabular-nums">{fmt(r.revenueGross)}</td>

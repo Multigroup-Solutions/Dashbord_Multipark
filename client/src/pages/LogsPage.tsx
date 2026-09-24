@@ -166,7 +166,7 @@ export default function LogsPage() {
                 const actionCfg = ACTION_CONFIG[logEntry.action] ?? { label: logEntry.action, icon: Receipt, color: "text-muted-foreground" };
                 const Icon = actionCfg.icon;
                 return (
-                  <div key={logEntry.id} className="flex items-start gap-4 p-4 hover:bg-muted/30 transition-colors">
+                  <div key={logEntry.id} className="flex flex-wrap sm:flex-nowrap items-start gap-x-3 gap-y-1 sm:gap-4 p-3 sm:p-4 hover:bg-muted/30 transition-colors">
                     <div className={`mt-0.5 shrink-0 ${actionCfg.color}`}>
                       <Icon className="h-4 w-4" />
                     </div>
@@ -180,10 +180,10 @@ export default function LogsPage() {
                         )}
                       </div>
                       {logEntry.details && (
-                        <p className="text-xs text-muted-foreground mt-0.5 break-all">{logEntry.details}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5 break-words [overflow-wrap:anywhere]">{logEntry.details}</p>
                       )}
                     </div>
-                    <div className="shrink-0 text-xs text-muted-foreground whitespace-nowrap">
+                    <div className="shrink-0 text-xs text-muted-foreground whitespace-nowrap tabular-nums order-first basis-full pl-7 sm:order-none sm:basis-auto sm:pl-0">
                       {logEntry.createdAt ? fmtPTDateTime(logEntry.createdAt) : "—"}
                     </div>
                   </div>

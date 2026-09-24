@@ -48,7 +48,7 @@ export default function DefinicoesPage() {
     return <div className="p-6 text-sm text-muted-foreground">Sem acesso às Definições.</div>;
   }
   return (
-    <div className="p-3 sm:p-6 space-y-4 max-w-5xl mx-auto">
+    <div className="space-y-4 max-w-5xl mx-auto">
       <div>
         <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2"><SlidersHorizontal className="h-5 w-5" /> Definições</h1>
         <p className="text-sm text-muted-foreground">Estado do sistema, automações, integrações, parâmetros, notificações e segurança.</p>
@@ -81,9 +81,9 @@ const HEALTH: Record<string, { label: string; cls: string }> = {
   ok: { label: "OK", cls: "bg-emerald-100 text-emerald-800 border-emerald-200" },
   failed: { label: "Falhou", cls: "bg-red-100 text-red-800 border-red-200" },
   stale: { label: "Parado", cls: "bg-amber-100 text-amber-900 border-amber-200" },
-  never: { label: "Sem registo", cls: "bg-muted text-muted-foreground" },
+  never: { label: "Sem registo", cls: "bg-muted text-secondary-foreground" },
   running: { label: "A correr", cls: "bg-blue-100 text-blue-800 border-blue-200" },
-  unscheduled: { label: "Sem agenda", cls: "bg-muted text-muted-foreground" },
+  unscheduled: { label: "Sem agenda", cls: "bg-muted text-secondary-foreground" },
 };
 
 function fmtDuration(ms: number | null | undefined): string {
@@ -203,7 +203,7 @@ function AiUsageCard() {
           <Sparkles className="h-4 w-4" /> IA — custo do mês
           {q.isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
           {d && (d.provider == null
-            ? <Badge variant="outline" className="bg-muted text-muted-foreground">Não configurada</Badge>
+            ? <Badge variant="outline" className="bg-muted text-secondary-foreground">Não configurada</Badge>
             : d.blocked
               ? <Badge variant="outline" className="bg-red-100 text-red-800 border-red-200">Orçamento atingido</Badge>
               : <Badge variant="outline" className="bg-emerald-100 text-emerald-800 border-emerald-200">{d.mode === "vertex" ? "Gemini (Vertex AI)" : d.mode === "studio" ? "Gemini" : "Fornecedor antigo"}</Badge>)}
@@ -656,7 +656,7 @@ function ConfirmButton(props: { label: string; title: string; description: strin
   return (
     <AlertDialog>
       <AlertDialogTrigger asChild>
-        <Button variant={props.destructive ? "destructive" : "outline"} disabled={props.pending}>
+        <Button variant={props.destructive ? "destructive" : "outline"} disabled={props.pending} className="max-w-full h-auto min-h-9 whitespace-normal text-left">
           {props.pending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <LogOut className="h-4 w-4 mr-1" />}{props.label}
         </Button>
       </AlertDialogTrigger>

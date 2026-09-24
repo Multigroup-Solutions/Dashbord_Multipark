@@ -1,4 +1,6 @@
 import AnomalyAlerts from "@/components/aiOps/AnomalyAlerts";
+import FitAmount from "@/components/finance/FitAmount";
+import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
 import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import { can, scopeFor } from "@shared/access";
 import { trpc } from "@/lib/trpc";
@@ -436,16 +438,16 @@ export default function ExpensesPage() {
           { label: "Pago", value: kpis.paid, icon: CheckCircle2, box: "bg-green-100", ic: "text-green-700", txt: "text-green-700", hint: "" },
           { label: "Em Atraso", value: kpis.overdue, icon: AlertCircle, box: "bg-red-100", ic: "text-red-700", txt: "text-red-700", hint: "" },
         ] as const).map((k) => (
-          <Card key={k.label}>
+          <Card key={k.label} className="min-w-0">
             <CardContent className="pt-4 pb-3 px-4">
-              <div className="flex items-center gap-3">
-                <div className={`p-2 rounded-lg ${k.box}`}>
+              <div className="flex items-center gap-3 min-w-0">
+                <div className={`p-2 rounded-lg shrink-0 ${k.box}`}>
                   <k.icon className={`h-5 w-5 ${k.ic}`} />
                 </div>
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <p className="text-xs text-muted-foreground font-medium">{k.label}</p>
-                  <p className={`text-base sm:text-lg font-bold truncate ${k.txt}`}>{kpisReady ? fmtEur(k.value) : "—"}</p>
-                  {kpisReady && k.hint && <p className="text-[11px] text-muted-foreground truncate">{k.hint}</p>}
+                  {kpisReady ? <FitAmount value={k.value} className={`text-base sm:text-lg font-bold ${k.txt}`} /> : <p className="text-base sm:text-lg font-bold">—</p>}
+                  {kpisReady && k.hint && <p className="text-[11px] text-muted-foreground truncate" title={k.hint}>{k.hint}</p>}
                 </div>
               </div>
             </CardContent>
@@ -457,7 +459,7 @@ export default function ExpensesPage() {
       {/* Filters */}
       {tab === "lista" && (
       <Card>
-        <CardContent className="pt-4">
+        <CardContent>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <div className="relative sm:col-span-2 lg:col-span-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -469,7 +471,7 @@ export default function ExpensesPage() {
               />
             </div>
             <Select value={filterStatus} onValueChange={setFilterStatus}>
-              <SelectTrigger>
+              <SelectTrigger className="w-full">
                 <SelectValue placeholder="Estado" />
               </SelectTrigger>
               <SelectContent>
@@ -481,7 +483,7 @@ export default function ExpensesPage() {
               </SelectContent>
             </Select>
             <Select value={filterCategory} onValueChange={setFilterCategory}>
-              <SelectTrigger>
+              <SelectTrigger className="w-full">
                 <SelectValue placeholder="Categoria" />
               </SelectTrigger>
               <SelectContent>
@@ -493,7 +495,7 @@ export default function ExpensesPage() {
             {/* Quem inseriu — só para quem gere (users.list é admin) */}
             {canManage && (
             <Select value={filterUser} onValueChange={setFilterUser}>
-              <SelectTrigger>
+              <SelectTrigger className="w-full">
                 <SelectValue placeholder="Inserido por" />
               </SelectTrigger>
               <SelectContent>
@@ -505,7 +507,7 @@ export default function ExpensesPage() {
             </Select>
             )}
             {/* Navegador de datas: granularidade + setas ◀ ▶ (componente transversal) */}
-            <div className="flex gap-2 items-center sm:col-span-2 lg:col-span-3 flex-wrap">
+            <div className="flex gap-2 items-center sm:col-span-2 lg:col-span-4 flex-wrap">
               <div className={allHistory ? "opacity-50 pointer-events-none" : ""}>
                 <DateRangeNav
                   start={startDate}
@@ -571,14 +573,14 @@ export default function ExpensesPage() {
                     <button type="button" className="w-full text-left px-4 py-3 active:bg-muted/50" onClick={() => setDetailExpense(row)}>
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="font-medium truncate">{expense.supplier ?? expense.description ?? "—"}</div>
-                          <div className="text-xs text-muted-foreground truncate">
+                          <div className="font-medium line-clamp-2 break-words">{expense.supplier ?? expense.description ?? "—"}</div>
+                          <div className="text-xs text-muted-foreground line-clamp-2">
                             {expense.expenseDate ? format(parseDbDate(expense.expenseDate), "dd MMM", { locale: pt }) : "—"}
                             {category ? ` · ${category.name}` : ""}{project ? ` · ${project.name}` : ""}
                           </div>
                         </div>
                         <div className="text-right shrink-0">
-                          <div className="font-semibold">{fmtEur(expense.amount)}</div>
+                          <div className="font-semibold tabular-nums">{fmtEur(expense.amount)}</div>
                           <div className="mt-1"><StatusBadge status={expense.status} /></div>
                         </div>
                       </div>
@@ -588,7 +590,7 @@ export default function ExpensesPage() {
               })}
             </ul>
             <div className="hidden sm:block overflow-x-auto">
-              <Table>
+              <Table className={STICKY_FIRST_COL}>
                 <TableHeader>
                   <TableRow>
                     <Th k="expense.supplier" label="Fornecedor" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
@@ -612,13 +614,13 @@ export default function ExpensesPage() {
                         className="group cursor-pointer hover:bg-muted/50"
                         onClick={() => setDetailExpense(row)}
                       >
-                        <TableCell>
-                          <div className="font-medium text-foreground">{expense.supplier ?? "—"}</div>
+                        <TableCell className="whitespace-normal min-w-[12rem] max-w-[16rem]">
+                          <div className="font-medium text-foreground line-clamp-2 break-words" title={expense.supplier ?? undefined}>{expense.supplier ?? "—"}</div>
                           {expense.description && (
-                            <div className="text-xs text-muted-foreground truncate max-w-[180px]">{expense.description}</div>
+                            <div className="text-xs text-muted-foreground truncate max-w-[14rem]" title={expense.description}>{expense.description}</div>
                           )}
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="whitespace-normal min-w-[8rem] max-w-[12rem]">
                           {category ? (
                             <span className="inline-flex items-center gap-1 text-xs">
                               <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: category.color ?? "#6366f1" }} />
@@ -640,7 +642,7 @@ export default function ExpensesPage() {
                         <TableCell className="text-sm text-muted-foreground">
                           {buyer?.fullName ?? "—"}
                         </TableCell>
-                        <TableCell className="text-right font-semibold">
+                        <TableCell className="text-right font-semibold tabular-nums">
                           {fmtEur(expense.amount)}
                         </TableCell>
                         <TableCell>
@@ -1470,7 +1472,7 @@ function ExpenseFormModal({
                   {sortProjectsHierarchical(projects).map((p: any) => (
                     <SelectItem key={p.id} value={String(p.id)}>
                       <span style={{ paddingLeft: `${p.__depth * 12}px` }} className="inline-flex items-center gap-2">
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded border ${LEVEL_COLOR[p.level] ?? ""}`}>
+                        <span className={`text-[11px] px-1.5 py-0.5 rounded border ${LEVEL_COLOR[p.level] ?? ""}`}>
                           {LEVEL_LABEL[p.level] ?? p.level}
                         </span>
                         {p.name}

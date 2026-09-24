@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { ChevronLeft, ChevronRight, Copy, Loader2, Plus, Trash2 } from "lucide-react";
+import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
 
 const EUR = new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR", maximumFractionDigits: 0, minimumFractionDigits: 0 });
 const eur = (v: number | null | undefined) => (v == null ? "—" : EUR.format(v));
@@ -79,17 +80,17 @@ export default function MarketingBudgetsPanel() {
         <Card>
           <CardHeader className="pb-2"><CardTitle className="text-sm">Definir orçamento mensal</CardTitle></CardHeader>
           <CardContent className="flex flex-wrap items-end gap-2">
-            <div>
+            <div className="w-full sm:w-auto">
               <Label className="text-xs">Cidade ou marca</Label>
               <Select value={target} onValueChange={setTarget}>
-                <SelectTrigger className="h-9 w-64"><SelectValue placeholder="Escolher…" /></SelectTrigger>
+                <SelectTrigger className="h-9 w-full sm:w-64"><SelectValue placeholder="Escolher…" /></SelectTrigger>
                 <SelectContent>{options.map((o) => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}</SelectContent>
               </Select>
             </div>
-            <div>
+            <div className="w-full sm:w-auto">
               <Label className="text-xs">Plataforma</Label>
               <Select value={provider} onValueChange={(v) => setProvider(v as any)}>
-                <SelectTrigger className="h-9 w-48"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="h-9 w-full sm:w-56"><SelectValue /></SelectTrigger>
                 <SelectContent>{PROVIDERS.map((p) => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}</SelectContent>
               </Select>
             </div>
@@ -115,14 +116,14 @@ export default function MarketingBudgetsPanel() {
           ) : rows.length === 0 ? (
             <p className="text-sm text-muted-foreground p-6 text-center">Sem orçamentos definidos para {monthLabel(month)}.{isAdmin ? " Define um acima." : ""}</p>
           ) : (
-            <table className="w-full text-sm">
+            <table className={`w-full text-sm tabular-nums ${STICKY_FIRST_COL}`}>
               <thead className="text-xs text-muted-foreground border-b">
                 <tr>
                   <th className="text-left px-4 py-2 font-medium">Objetivo</th>
                   <th className="text-right px-4 py-2 font-medium">Orçamento</th>
                   <th className="text-right px-4 py-2 font-medium">Gasto até ontem</th>
                   <th className="text-right px-4 py-2 font-medium">Esperado</th>
-                  <th className="text-left px-4 py-2 font-medium w-56">Ritmo</th>
+                  <th className="text-left px-4 py-2 font-medium w-56 min-w-[13rem]">Ritmo</th>
                   <th className="text-right px-4 py-2 font-medium">Projeção do mês</th>
                   {isAdmin && <th className="px-2 py-2" />}
                 </tr>
@@ -139,7 +140,7 @@ export default function MarketingBudgetsPanel() {
                   const mark = Math.min(100, r.amount > 0 ? (r.pacing.expected / r.amount) * 100 : 0);
                   return (
                     <tr key={r.id} className="border-b last:border-0">
-                      <td className="px-4 py-2 font-medium">{r.label}{r.notes && <div className="text-[11px] text-muted-foreground font-normal">{r.notes}</div>}</td>
+                      <td className="px-4 py-2 font-medium min-w-[9rem]">{r.label}{r.notes && <div className="text-[11px] text-muted-foreground font-normal">{r.notes}</div>}</td>
                       <td className="px-4 py-2 text-right tabular-nums">{eur(r.amount)}</td>
                       <td className="px-4 py-2 text-right tabular-nums">{eur(r.spentToDate)}</td>
                       <td className="px-4 py-2 text-right tabular-nums text-muted-foreground">{eur(r.pacing.expected)}</td>
@@ -149,7 +150,7 @@ export default function MarketingBudgetsPanel() {
                             <div className="absolute inset-y-0 left-0 rounded bg-primary" style={{ width: `${fill}%` }} />
                             <div className="absolute -top-0.5 h-3 w-0.5 bg-foreground" style={{ left: `${mark}%` }} title="Esperado até ontem" />
                           </div>
-                          <Badge variant="outline" className={`text-[10px] ${badge.c}`}>{badge.t}{pct != null ? ` ${pct}%` : ""}</Badge>
+                          <Badge variant="outline" className={`text-[11px] whitespace-nowrap shrink-0 ${badge.c}`}>{badge.t}{pct != null ? ` ${pct}%` : ""}</Badge>
                         </div>
                       </td>
                       <td className="px-4 py-2 text-right tabular-nums text-muted-foreground">{eur(r.pacing.projected)}</td>

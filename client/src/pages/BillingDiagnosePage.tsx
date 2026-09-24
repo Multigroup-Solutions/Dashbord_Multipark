@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2, Bug } from "lucide-react";
+import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
 
 const fmt = (v: number) =>
   new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR" }).format(Number.isFinite(v) ? v : 0);
@@ -30,24 +31,24 @@ export default function BillingDiagnosePage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3 flex-wrap">
-        <div className="flex-1">
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Bug className="w-5 h-5 text-amber-600" /> Diagnóstico de Faturação
+      <div className="flex items-end gap-3 flex-wrap">
+        <div className="basis-full lg:basis-0 lg:flex-1 min-w-0">
+          <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2">
+            <Bug className="w-5 h-5 shrink-0 text-amber-600" /> Diagnóstico de Faturação
           </h1>
           <p className="text-sm text-muted-foreground">
             Compara várias somas de receita com filtros progressivos para isolar onde os números divergem.
           </p>
         </div>
-        <div>
+        <div className="flex-1 min-w-[9.5rem] sm:flex-none">
           <Label className="text-xs mb-1 block">De</Label>
-          <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="w-[140px] h-9" />
+          <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="w-full sm:w-[160px] h-9" />
         </div>
-        <div>
+        <div className="flex-1 min-w-[9.5rem] sm:flex-none">
           <Label className="text-xs mb-1 block">Até</Label>
-          <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="w-[140px] h-9" />
+          <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="w-full sm:w-[160px] h-9" />
         </div>
-        <Button onClick={() => refetch()}>Atualizar</Button>
+        <Button onClick={() => refetch()} className="w-full sm:w-auto">Atualizar</Button>
       </div>
 
       {filters.brandId === null && filters.cityId === null && (
@@ -75,7 +76,7 @@ export default function BillingDiagnosePage() {
               </p>
             </CardHeader>
             <CardContent>
-              <div className="overflow-x-auto"><table className="w-full text-sm">
+              <div className="overflow-x-auto"><table className={`w-full text-sm ${STICKY_FIRST_COL}`}>
                 <thead>
                   <tr className="border-b text-left text-xs uppercase text-muted-foreground">
                     <th className="p-2">Filtro</th>
@@ -100,7 +101,7 @@ export default function BillingDiagnosePage() {
                     <td className="p-2 text-right tabular-nums">{fmt(data.sumExcludingCancelled.sum)}</td>
                   </tr>
                   <tr className="border-b bg-emerald-50 font-medium">
-                    <td className="p-2">+ filtro de projeto/hierarquia <Badge variant="outline" className="text-[10px] ml-1">USADO NA FATURAÇÃO</Badge></td>
+                    <td className="p-2">+ filtro de projeto/hierarquia <Badge variant="outline" className="text-[11px] ml-1">USADO NA FATURAÇÃO</Badge></td>
                     <td className="p-2 text-right tabular-nums">{data.sumWithProjectFilter.count}</td>
                     <td className="p-2 text-right tabular-nums">{fmt(data.sumWithProjectFilter.sum)}</td>
                   </tr>
@@ -165,7 +166,7 @@ export default function BillingDiagnosePage() {
               <CardTitle className="text-base">Receita por projeto (com filtros finais aplicados)</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="overflow-x-auto"><table className="w-full text-sm">
+              <div className="overflow-x-auto"><table className={`w-full text-sm ${STICKY_FIRST_COL}`}>
                 <thead>
                   <tr className="border-b text-left text-xs uppercase text-muted-foreground">
                     <th className="p-2">Projeto</th>
@@ -178,7 +179,7 @@ export default function BillingDiagnosePage() {
                     <tr key={i} className="border-b hover:bg-muted/50">
                       <td className="p-2">
                         {p.projectName ?? <span className="text-muted-foreground">— sem projeto —</span>}
-                        <span className="text-[10px] text-muted-foreground ml-1">#{p.projectId ?? "null"}</span>
+                        <span className="text-[11px] text-muted-foreground ml-1">#{p.projectId ?? "null"}</span>
                       </td>
                       <td className="p-2 text-right tabular-nums">{p.count}</td>
                       <td className="p-2 text-right tabular-nums">{fmt(p.sum)}</td>
@@ -195,7 +196,7 @@ export default function BillingDiagnosePage() {
               <CardTitle className="text-base">Receita por campaign</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="overflow-x-auto"><table className="w-full text-sm">
+              <div className="overflow-x-auto"><table className={`w-full text-sm ${STICKY_FIRST_COL}`}>
                 <thead>
                   <tr className="border-b text-left text-xs uppercase text-muted-foreground">
                     <th className="p-2">Campaign</th>
@@ -224,7 +225,7 @@ export default function BillingDiagnosePage() {
               <CardTitle className="text-base">Por estado da reserva</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="overflow-x-auto"><table className="w-full text-sm">
+              <div className="overflow-x-auto"><table className={`w-full text-sm ${STICKY_FIRST_COL}`}>
                 <thead>
                   <tr className="border-b text-left text-xs uppercase text-muted-foreground">
                     <th className="p-2">Status</th>
@@ -252,7 +253,7 @@ export default function BillingDiagnosePage() {
             </CardHeader>
             <CardContent>
               <div className="overflow-x-auto">
-                <table className="w-full text-xs">
+                <table className={`w-full text-xs whitespace-nowrap ${STICKY_FIRST_COL}`}>
                   <thead>
                     <tr className="border-b text-left uppercase text-muted-foreground">
                       <th className="p-2">externalId</th>
@@ -271,7 +272,7 @@ export default function BillingDiagnosePage() {
                         <td className="p-2 font-mono">{b.externalId.slice(0, 16)}</td>
                         <td className="p-2">{b.bookingNumber ?? "—"}</td>
                         <td className="p-2">{b.projectName ?? "—"}</td>
-                        <td className="p-2">{b.campaign ?? "—"}</td>
+                        <td className="p-2 whitespace-normal break-all min-w-[10rem]">{b.campaign ?? "—"}</td>
                         <td className="p-2">{b.status ?? "—"}</td>
                         <td className="p-2">{b.checkOut?.slice(0, 16) ?? "—"}</td>
                         <td className="p-2">{b.cancelledAt?.slice(0, 16) ?? "—"}</td>
