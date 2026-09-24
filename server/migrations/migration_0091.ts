@@ -57,6 +57,10 @@ export const MIGRATION_0091_STATEMENTS: string[] = [
     + "PRIMARY KEY (`id`),"
     + "INDEX `task_comments_task_idx` (`taskId`)"
     + ")",
+  // Arranque dos avisos automáticos: as tarefas JÁ atrasadas antes deste
+  // deploy não disparam uma avalanche de emails na 1.ª corrida. Data fixa, por
+  // isso é seguro correr em cada arranque (só toca em tarefas antigas).
+  "UPDATE `tasks` SET `notifiedOverdue` = 1 WHERE `notifiedOverdue` = 0 AND `taskStatus` <> 'done' AND `dueDate` IS NOT NULL AND `dueDate` < '2026-09-25 00:00:00'",
 ];
 
 export const IDEMPOTENT_ERROR_CODES_0091 = new Set<string>(["ER_DUP_FIELDNAME", "ER_DUP_KEYNAME", "ER_TABLE_EXISTS_ERROR"]);
