@@ -103,15 +103,17 @@ export function resolveCityAccess(projectId: number | null, projects: ProjectNod
 export async function loadCityAccess(userId: number): Promise<CityAccess> {
   const { getDb, getUserPermissionOverrides } = await import('./db');
   const { employees, projects } = await import('../drizzle/schema');
-  const { eq } = await import('drizzle-orm');
+  const { eq, or, sql } = await import('drizzle-orm');
   const db = await getDb();
   if (!db) throw new Error('Não foi possível verificar o centro de custos. Tenta novamente.');
   const [people, nodes, overrides] = await Promise.all([
-    db.select({ projectId: employees.projectId }).from(employees).where(eq(employees.userId, userId)),
+    db.select({ id: employees.id, projectId: employees.projectId }).from(employees).where(or(
+      eq(employees.userId, userId),
+      sql`EXISTS (SELECT 1 FROM employee_accounts ea WHERE ea.employeeId = ${employees.id} AND ea.userId = ${userId})`,
+    )),
     db.select({ id: projects.id, name: projects.name, level: projects.level, parentId: projects.parentId }).from(projects),
     getUserPermissionOverrides(userId),
   ]);
   // Uma conta ligada a várias fichas diferentes exige reconciliação.
-  const ids = [...new Set(people.map(p => p.projectId))];
-  return applyCityPermissions(resolveCityAccess(ids.length === 1 ? ids[0] : null, nodes), nodes, overrides);
+  return applyCityPermissions(resolveCityAccess(people.length === 1 ? people[0].projectId : null, nodes), nodes, overrides);
 }
