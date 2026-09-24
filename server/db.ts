@@ -162,6 +162,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0100").then(m => ({ s: m.MIGRATION_0100_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0100 })),
       import("./migrations/migration_0101").then(m => ({ s: m.MIGRATION_0101_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0101 })),
       import("./migrations/migration_0105").then(m => ({ s: m.MIGRATION_0105_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0105 })),
+      import("./migrations/migration_0110").then(m => ({ s: m.MIGRATION_0110_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0110 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -3105,68 +3106,8 @@ export async function getServiceStats(month?: number, year?: number) {
 }
 
 // ─── FATURAÇÃO (BILLING) ─────────────────────────────────────────────────────
-export async function createInvoice(data: any) {
-  const db = await getDb(); if (!db) return null;
-  const [result] = await db.insert(invoices).values(data as any).$returningId();
-  return result?.id;
-}
-
-export async function getInvoices(filters?: { status?: string; projectId?: number; search?: string; month?: number; year?: number }) {
-  const db = await getDb(); if (!db) return [];
-  const conditions: any[] = await projectFilterConds(invoices.projectId, filters?.projectId);
-  if (filters?.status) conditions.push(eq(invoices.status, filters.status as any));
-  if (filters?.search) {
-    conditions.push(or(
-      like(invoices.invoiceNumber, `%${filters.search}%`),
-      like(invoices.clientName, `%${filters.search}%`),
-      like(invoices.clientNif, `%${filters.search}%`)
-    ));
-  }
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
-  const all = await db.select().from(invoices).where(where).orderBy(desc(invoices.issueDate));
-  if (filters?.month && filters?.year) {
-    return all.filter(i => {
-      const d = new Date(i.issueDate);
-      return d.getMonth() + 1 === filters.month && d.getFullYear() === filters.year;
-    });
-  }
-  return all;
-}
-
-export async function getInvoiceById(id: number) {
-  const db = await getDb(); if (!db) return null;
-  const rows = await db.select().from(invoices).where(eq(invoices.id, id)).limit(1);
-  return rows[0] || null;
-}
-
-export async function updateInvoice(id: number, data: any) {
-  const db = await getDb(); if (!db) return;
-  await db.update(invoices).set(data).where(eq(invoices.id, id));
-}
-
-export async function deleteInvoice(id: number) {
-  const db = await getDb(); if (!db) return;
-  await db.delete(invoices).where(eq(invoices.id, id));
-}
-
-export async function getInvoiceStats(month?: number, year?: number) {
-  const db = await getDb(); if (!db) return { total: 0, totalAmount: 0, paid: 0, overdue: 0, draft: 0 };
-  let all = await db.select().from(invoices).orderBy(desc(invoices.issueDate));
-  if (month && year) {
-    all = all.filter(i => {
-      const d = new Date(i.issueDate);
-      return d.getMonth() + 1 === month && d.getFullYear() === year;
-    });
-  }
-  let totalAmount = 0, paid = 0, overdue = 0, draft = 0;
-  for (const i of all) {
-    totalAmount += i.totalAmount || 0;
-    if (i.status === "paid") paid++;
-    if (i.status === "overdue") overdue++;
-    if (i.status === "draft") draft++;
-  }
-  return { total: all.length, totalAmount, paid, overdue, draft };
-}
+// O CRUD da tabela `invoices` saiu (nunca foi usado pela interface); a tabela
+// fica (o Anual antigo ainda a lê). A Faturação vem do motor financeiro.
 
 // ─── BILLING / FATURAÇÃO ────────────────────────────────────────────────────
 // Resolve um centro de custos para o conjunto de projetos (ele + descendentes).
@@ -3221,11 +3162,11 @@ export function bucketSqlExpr(col: any, granularity: "day" | "week" | "month" | 
 }
 
 /**
- * Diagnóstico cru de receita: para isolar onde está a discrepância entre
- * "Entregas" e outras vistas. Devolve o mesmo SUM(totalPrice) calculado de
- * várias formas diferentes para o mesmo período + filtro de projeto, de
- * forma a ser possível detectar se o bug está numa query específica ou na
- * fonte dos dados.
+ * Diagnóstico da receita realizada: as MESMAS regras do motor financeiro
+ * (deliveredConditions — CHECKED_OUT com saída no período de LISBOA, filtro
+ * de centro com a hierarquia), com os passos intermédios para isolar onde um
+ * número diverge. O último passo é, por construção, a receita "Entregues" da
+ * Faturação.
  */
 export async function diagnoseBilling(filters: {
   from: string;
@@ -3256,57 +3197,21 @@ export async function diagnoseBilling(filters: {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
 
-  const fromStr = toMysqlDateTime(new Date(filters.from));
-  const toStr = toMysqlDateTime(new Date(filters.to + "T23:59:59"));
-
   let projectIds: number[] | null = null;
   if (filters.projectId) projectIds = await resolveProjectIds(filters.projectId);
+  const { deliveredConditions } = await import("./finance/engine");
+  const period = partnerCheckoutPeriod(filters.from, filters.to);
+  const countSum = { count: sql<number>`COUNT(*)`, sum: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)` };
 
-  // ── 1. Sum 1: tudo com checkOut no período (sem mais filtros) ──
-  const [a1] = await db
-    .select({
-      count: sql<number>`COUNT(*)`,
-      sum: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    })
-    .from(multiparkBookings)
-    .where(and(gte(multiparkBookings.checkOut, fromStr), lte(multiparkBookings.checkOut, toStr)));
-
-  // ── 2. + isNotNull(checkOut) ──
-  const [a2] = await db
-    .select({
-      count: sql<number>`COUNT(*)`,
-      sum: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    })
-    .from(multiparkBookings)
-    .where(and(gte(multiparkBookings.checkOut, fromStr), lte(multiparkBookings.checkOut, toStr), isNotNull(multiparkBookings.checkOut)));
-
-  // ── 3. + status = 'CHECKED_OUT' (sem o filtro de projeto ainda) ──
-  const [a3] = await db
-    .select({
-      count: sql<number>`COUNT(*)`,
-      sum: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    })
-    .from(multiparkBookings)
-    .where(and(
-      gte(multiparkBookings.checkOut, fromStr),
-      lte(multiparkBookings.checkOut, toStr),
-      sql`${multiparkBookings.status} != 'CANCELLED'`,
-    ));
-
-  // ── 4. + inArray(projectId) se filtro ──
-  const filteredConds: any[] = [
-    gte(multiparkBookings.checkOut, fromStr),
-    lte(multiparkBookings.checkOut, toStr),
-    sql`${multiparkBookings.status} != 'CANCELLED'`,
-  ];
-  if (projectIds) filteredConds.push(inArray(multiparkBookings.projectId, projectIds));
-  const [a4] = await db
-    .select({
-      count: sql<number>`COUNT(*)`,
-      sum: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    })
-    .from(multiparkBookings)
-    .where(and(...filteredConds));
+  // ── 1. tudo com saída no período (dia de Lisboa), qualquer estado ──
+  const [a1] = await db.select(countSum).from(multiparkBookings).where(and(...period));
+  // ── 2. + checkOut preenchido (redundante, mas mostra reservas sem data) ──
+  const [a2] = await db.select(countSum).from(multiparkBookings).where(and(...period, isNotNull(multiparkBookings.checkOut)));
+  // ── 3. + status = 'CHECKED_OUT' (receita realizada, sem filtro de centro) ──
+  const [a3] = await db.select(countSum).from(multiparkBookings).where(and(...deliveredConditions(filters.from, filters.to)));
+  // ── 4. + filtro de centro = EXATAMENTE o motor financeiro ──
+  const filteredConds: SQL[] = deliveredConditions(filters.from, filters.to, projectIds);
+  const [a4] = await db.select(countSum).from(multiparkBookings).where(and(...filteredConds));
 
   // ── Duplicados ──
   const distinctRow = await db
@@ -3369,12 +3274,7 @@ export async function diagnoseBilling(filters: {
     .groupBy(multiparkBookings.status);
 
   // ── Cancelled (sem filtro de cancelledAt mas com resto igual) ──
-  const cancelConds: any[] = [
-    gte(multiparkBookings.checkOut, fromStr),
-    lte(multiparkBookings.checkOut, toStr),
-    isNotNull(multiparkBookings.checkOut),
-    isNotNull(multiparkBookings.cancelledAt),
-  ];
+  const cancelConds: SQL[] = [...period, isNotNull(multiparkBookings.cancelledAt)];
   if (projectIds) cancelConds.push(inArray(multiparkBookings.projectId, projectIds));
   const [cancelled] = await db
     .select({
@@ -3438,6 +3338,22 @@ export async function diagnoseBilling(filters: {
 //  - "tem parceiro" = campaign não nula E não vazia (linhas e totais iguais).
 const partnerBookingDone = () => sql`${multiparkBookings.status} = 'CHECKED_OUT'`;
 const bookingHasCampaign = () => sql`(${multiparkBookings.campaign} IS NOT NULL AND ${multiparkBookings.campaign} <> '')`;
+/** Saída no período de LISBOA (mesma janela do motor financeiro). */
+const partnerCheckoutPeriod = (from: string, to: string): SQL[] => {
+  const r = lisbonDayRangeUtc(from, to);
+  return [gte(multiparkBookings.checkOut, r.start), lt(multiparkBookings.checkOut, r.end)];
+};
+/** SUM(valor SEM IVA) com a taxa em vigor no dia (Lisboa) da saída — base das comissões. */
+async function netRevenueSumSql(from: string, to: string) {
+  const { resolveFinanceRates, rateCaseSql } = await import("./finance/rates");
+  const { FINANCE_PARAMS } = await import("./finance/rules");
+  const fr = await resolveFinanceRates(from, to);
+  const rate = rateCaseSql(sql`${multiparkBookings.checkOut}`, fr.vatPeriods, FINANCE_PARAMS.vatRate, (d) => lisbonDayRangeUtc(d).start);
+  return sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice} / (1 + ${rate})), 0)`;
+}
+/** Comissão sobre a base do parceiro (SEM IVA por omissão; 'gross' = exceção). */
+const partnerCommissionAmount = (p: { commissionBase?: string | null }, rev: { revenue: number; revenueNet: number }, rate: number) =>
+  ((p.commissionBase === "gross" ? rev.revenue : rev.revenueNet) * rate) / 100;
 
 export async function getPartnershipAnalytics(filters: { from: string; to: string; projectId?: number }) {
   const db = await getDb();
@@ -3450,8 +3366,7 @@ export async function getPartnershipAnalytics(filters: { from: string; to: strin
   const baseConds: any[] = [projectScope(multiparkBookings.projectId),
     partnerBookingDone(),
     isNotNull(multiparkBookings.checkOut),
-    gte(multiparkBookings.checkOut, toMysqlDateTime(new Date(filters.from))),
-    lte(multiparkBookings.checkOut, toMysqlDateTime(new Date(filters.to + "T23:59:59"))),
+    ...partnerCheckoutPeriod(filters.from, filters.to),
   ];
   if (projectIds) baseConds.push(inArray(multiparkBookings.projectId, projectIds));
 
@@ -3471,15 +3386,17 @@ export async function getPartnershipAnalytics(filters: { from: string; to: strin
     .groupBy(multiparkBookings.campaign, multiparkBookings.city, multiparkBookings.parkName);
 
   // 2. All bookings for totals (partner vs direct)
-  const allRows = await db
+  //    (somas condicionais sem GROUP BY: agrupar por uma expressão CASE
+  //    falha no MariaDB com ONLY_FULL_GROUP_BY)
+  const [allTotals] = await db
     .select({
-      hasPartner: sql<number>`CASE WHEN ${bookingHasCampaign()} THEN 1 ELSE 0 END`,
+      partnerCount: sql<number>`COALESCE(SUM(CASE WHEN ${bookingHasCampaign()} THEN 1 ELSE 0 END), 0)`,
+      partnerRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${bookingHasCampaign()} THEN ${multiparkBookings.totalPrice} ELSE 0 END), 0)`,
       count: sql<number>`COUNT(*)`,
       totalRevenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
     })
     .from(multiparkBookings)
-    .where(and(...baseConds))
-    .groupBy(sql`CASE WHEN ${bookingHasCampaign()} THEN 1 ELSE 0 END`);
+    .where(and(...baseConds));
 
   // 3. Reservas Pro — usa a coluna `pro` explícita da API (o antigo
   // JSON_EXTRACT de park.isPro media "o PARQUE aceita Pro", não "a reserva
@@ -3499,16 +3416,8 @@ export async function getPartnershipAnalytics(filters: { from: string; to: strin
     .groupBy(multiparkBookings.parkName, multiparkBookings.city);
 
   // Calculate totals
-  let partnerBookings = 0, partnerRevenue = 0, directBookings = 0, directRevenue = 0;
-  for (const r of allRows) {
-    if (Number(r.hasPartner) === 1) {
-      partnerBookings = Number(r.count);
-      partnerRevenue = Number(r.totalRevenue);
-    } else {
-      directBookings = Number(r.count);
-      directRevenue = Number(r.totalRevenue);
-    }
-  }
+  const partnerBookings = Number(allTotals?.partnerCount ?? 0), partnerRevenue = Number(allTotals?.partnerRevenue ?? 0);
+  const directBookings = Number(allTotals?.count ?? 0) - partnerBookings, directRevenue = Number(allTotals?.totalRevenue ?? 0) - partnerRevenue;
   const proBookingsTotal = proRows.reduce((s, r) => s + Number(r.count), 0);
   const proRevenueTotal = proRows.reduce((s, r) => s + Number(r.totalRevenue), 0);
 
@@ -3782,9 +3691,11 @@ export async function getPartnerInvoicingSummary(filters: {
   partnerName: string;
   partnerType: string;
   commissionRate: number;
+  commissionBase: "net" | "gross";
   monthlyFee: number;
   bookingsCount: number;
   revenueGross: number;
+  revenueNet: number;
   aFaturar: number | null;
   billingAvailable: boolean;
 }>> {
@@ -3795,8 +3706,8 @@ export async function getPartnerInvoicingSummary(filters: {
   const billingAvailable = scopedProjectIds() === undefined && !filters.projectId;
   const projectIds = filters.projectId ? await resolveProjectIds(filters.projectId) : undefined;
   const projectFilter = projectIds ? inArray(multiparkBookings.projectId, projectIds) : undefined;
-  const fromStr = toMysqlDateTime(new Date(filters.from));
-  const toStr = toMysqlDateTime(new Date(filters.to + "T23:59:59"));
+  const period = partnerCheckoutPeriod(filters.from, filters.to);
+  const revenueNetSql = await netRevenueSumSql(filters.from, filters.to);
   const { partnerFeeForPeriod } = await import("../shared/partnerRules");
 
   // 1) Parcerias (com filtro opcional de tipo). Inclui notes para extrair
@@ -3807,6 +3718,7 @@ export async function getPartnerInvoicingSummary(filters: {
       name: partnerships.name,
       partnerType: partnerships.partnerType,
       commissionRate: partnerships.commissionRate,
+      commissionBase: partnerships.commissionBase,
       monthlyFee: partnerships.monthlyFee,
       campaignKey: partnerships.campaignKey,
       notes: partnerships.notes,
@@ -3818,11 +3730,10 @@ export async function getPartnerInvoicingSummary(filters: {
 
   const { parsePartnerConfig } = await import("../shared/partnerTypes");
 
-  // 2) Aliases para fazer match — mesmo padrão de getBillingData
-  const aliasRows = await db.select({
-    partnershipId: partnerAliases.partnershipId,
-    aliasValue: partnerAliases.aliasValue,
-  }).from(partnerAliases);
+  // 2) Correspondência campanha → parceiro: a MESMA do motor financeiro
+  //    (todos os parceiros + aliases; o mais recente ganha — ./finance/partners.ts)
+  const { loadPartnerIndex, partnerForCampaign } = await import("./finance/partners");
+  const { index: partnerIndex } = await loadPartnerIndex(db);
 
   // 3) Reservas concluídas (checkout no período), agrupadas por campaign
   const bookingRows = await db
@@ -3830,6 +3741,7 @@ export async function getPartnerInvoicingSummary(filters: {
       campaign: multiparkBookings.campaign,
       bookingsCount: sql<number>`COUNT(*)`,
       revenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
+      revenueNet: revenueNetSql,
     })
     .from(multiparkBookings)
     .where(
@@ -3838,38 +3750,20 @@ export async function getPartnerInvoicingSummary(filters: {
         partnerBookingDone(),
         projectScope(multiparkBookings.projectId),
         projectFilter,
-        gte(multiparkBookings.checkOut, fromStr),
-        lte(multiparkBookings.checkOut, toStr),
+        ...period,
       ),
     )
     .groupBy(multiparkBookings.campaign);
 
-  // 4) Map campaign-key (lowercased) → partnershipId — regista campaignKey +
-  // name + aliases (unificado com getBillingData; antes faltava o campaignKey
-  // e um parceiro configurado só por key ficava a zeros nesta vista)
-  const keyToPartner = new Map<string, number>();
-  function reg(rawKey: string | null | undefined, partnerId: number) {
-    if (!rawKey) return;
-    const k = rawKey.trim().toLowerCase();
-    if (k && !keyToPartner.has(k)) keyToPartner.set(k, partnerId);
-  }
-  for (const p of partnerRows) {
-    reg(p.campaignKey, p.id);
-    reg(p.name, p.id);
-  }
-  for (const a of aliasRows) {
-    reg(a.aliasValue, a.partnershipId);
-  }
-
-  // 5) Acumula bookings por parceiro
-  const bookingsByPartner = new Map<number, { count: number; revenue: number }>();
+  // 4) Acumula bookings por parceiro
+  const bookingsByPartner = new Map<number, { count: number; revenue: number; revenueNet: number }>();
   for (const b of bookingRows) {
-    const k = (b.campaign ?? "").trim().toLowerCase();
-    const pid = keyToPartner.get(k);
+    const pid = partnerForCampaign(partnerIndex, b.campaign)?.id;
     if (!pid) continue;
-    const existing = bookingsByPartner.get(pid) ?? { count: 0, revenue: 0 };
+    const existing = bookingsByPartner.get(pid) ?? { count: 0, revenue: 0, revenueNet: 0 };
     existing.count += Number(b.bookingsCount ?? 0);
     existing.revenue += Number(b.revenue ?? 0);
+    existing.revenueNet += Number(b.revenueNet ?? 0);
     bookingsByPartner.set(pid, existing);
   }
 
@@ -3884,7 +3778,7 @@ export async function getPartnerInvoicingSummary(filters: {
     .map((p) => ({ p, cfg: parsePartnerConfig(p.notes ?? null) }))
     .filter(({ cfg }) => Array.isArray(cfg.operatesProjects) && cfg.operatesProjects!.length > 0);
 
-  const operationalRevenueByPartner = new Map<number, { count: number; revenue: number }>();
+  const operationalRevenueByPartner = new Map<number, { count: number; revenue: number; revenueNet: number }>();
 
   if (operationalPartners.length > 0) {
     // Reúne todos os projectIds (com hierarquia) que algum parceiro operacional cobre.
@@ -3906,6 +3800,7 @@ export async function getPartnerInvoicingSummary(filters: {
           projectId: multiparkBookings.projectId,
           count: sql<number>`COUNT(*)`,
           revenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
+          revenueNet: revenueNetSql,
         })
         .from(multiparkBookings)
         .where(
@@ -3913,19 +3808,19 @@ export async function getPartnerInvoicingSummary(filters: {
             partnerBookingDone(),
             projectScope(multiparkBookings.projectId),
             projectFilter,
-            gte(multiparkBookings.checkOut, fromStr),
-            lte(multiparkBookings.checkOut, toStr),
+            ...period,
             inArray(multiparkBookings.projectId, Array.from(expanded)),
           ),
         )
         .groupBy(multiparkBookings.projectId);
 
-      const revenueByProject = new Map<number, { count: number; revenue: number }>();
+      const revenueByProject = new Map<number, { count: number; revenue: number; revenueNet: number }>();
       for (const r of opBookings) {
         if (r.projectId == null) continue;
         revenueByProject.set(r.projectId, {
           count: Number(r.count ?? 0),
           revenue: Number(r.revenue ?? 0),
+          revenueNet: Number(r.revenueNet ?? 0),
         });
       }
 
@@ -3934,6 +3829,7 @@ export async function getPartnerInvoicingSummary(filters: {
       for (const { p, cfg } of operationalPartners) {
         let count = 0;
         let revenue = 0;
+        let revenueNet = 0;
         const cover = new Set<number>();
         for (const root of cfg.operatesProjects ?? []) {
           const ids = await resolveProjectIds(root);
@@ -3941,16 +3837,16 @@ export async function getPartnerInvoicingSummary(filters: {
         }
         for (const pid of cover) {
           const r = revenueByProject.get(pid);
-          if (r) { count += r.count; revenue += r.revenue; }
+          if (r) { count += r.count; revenue += r.revenue; revenueNet += r.revenueNet; }
         }
-        operationalRevenueByPartner.set(p.id, { count, revenue });
+        operationalRevenueByPartner.set(p.id, { count, revenue, revenueNet });
       }
     }
   }
 
   // 7) Constrói resultado
   return partnerRows.map((p) => {
-    const bk = bookingsByPartner.get(p.id) ?? { count: 0, revenue: 0 };
+    const bk = bookingsByPartner.get(p.id) ?? { count: 0, revenue: 0, revenueNet: 0 };
     const opRev = operationalRevenueByPartner.get(p.id);
 
     const commissionRate = Number(p.commissionRate ?? 0);
@@ -3961,16 +3857,18 @@ export async function getPartnerInvoicingSummary(filters: {
     let aFaturar = 0;
     let displayBookingsCount = bk.count;
     let displayRevenue = bk.revenue;
+    let displayRevenueNet = bk.revenueNet;
 
     if (partnerType === "avenca_mensal" || partnerType === "avenca_anual") {
       aFaturar = partnerFeeForPeriod(partnerType, monthlyFee, filters.from, filters.to);
     } else if (partnerType === "operacional") {
       // Usa o cálculo via operatesProjects se configurado; senão usa o
       // campaign match (fallback). É legítimo um operacional ter ambos.
-      const revenue = opRev?.revenue ?? bk.revenue;
-      displayRevenue = revenue;
-      displayBookingsCount = opRev?.count ?? bk.count;
-      aFaturar = (revenue * commissionRate) / 100;
+      const rev = opRev ?? bk;
+      displayRevenue = rev.revenue;
+      displayRevenueNet = rev.revenueNet;
+      displayBookingsCount = rev.count;
+      aFaturar = partnerCommissionAmount(p, rev, commissionRate);
     } else if (
       partnerType === "agregador" ||
       partnerType === "agencia_viagem" ||
@@ -3978,7 +3876,7 @@ export async function getPartnerInvoicingSummary(filters: {
       partnerType === "companhia_aerea" ||
       partnerType === "afiliado"
     ) {
-      aFaturar = (bk.revenue * commissionRate) / 100;
+      aFaturar = partnerCommissionAmount(p, bk, commissionRate);
     } else if (partnerType === "cliente_pro") {
       // Cliente Pro: faturado no fim do mês com base nas reservas que ele
       // gerou. A receita já tem desconto aplicado.
@@ -3991,9 +3889,11 @@ export async function getPartnerInvoicingSummary(filters: {
       partnerName: p.name,
       partnerType,
       commissionRate,
+      commissionBase: (p.commissionBase === "gross" ? "gross" : "net") as "net" | "gross",
       monthlyFee,
       bookingsCount: displayBookingsCount,
       revenueGross: displayRevenue,
+      revenueNet: displayRevenueNet,
       aFaturar: !billingAvailable && ['avenca_mensal', 'avenca_anual'].includes(partnerType) ? null : aFaturar,
       billingAvailable,
     };
@@ -4022,9 +3922,11 @@ export async function getPartnerInvoicingDetailByType(filters: {
     partnershipId: number;
     partnerName: string;
     commissionRate: number;
+    commissionBase: "net" | "gross";
     monthlyFee: number;
     bookingsCount: number;
     revenueGross: number;
+    revenueNet: number;
     discountTotal: number;
     extrasTotal: number;
     cashbackPercent: number;
@@ -4039,8 +3941,8 @@ export async function getPartnerInvoicingDetailByType(filters: {
   const db = await getDb();
   if (!db) return { partnerType: filters.partnerType, partners: [] };
 
-  const fromStr = toMysqlDateTime(new Date(filters.from));
-  const toStr = toMysqlDateTime(new Date(filters.to + "T23:59:59"));
+  const period = partnerCheckoutPeriod(filters.from, filters.to);
+  const revenueNetSql = await netRevenueSumSql(filters.from, filters.to);
   const projectIds = filters.projectId ? await resolveProjectIds(filters.projectId) : undefined;
   const projectFilter = projectIds ? inArray(multiparkBookings.projectId, projectIds) : undefined;
 
@@ -4053,6 +3955,7 @@ export async function getPartnerInvoicingDetailByType(filters: {
       name: partnerships.name,
       partnerType: partnerships.partnerType,
       commissionRate: partnerships.commissionRate,
+      commissionBase: partnerships.commissionBase,
       monthlyFee: partnerships.monthlyFee,
       campaignKey: partnerships.campaignKey,
       notes: partnerships.notes,
@@ -4062,20 +3965,9 @@ export async function getPartnerInvoicingDetailByType(filters: {
 
   if (partnerRows.length === 0) return { partnerType: filters.partnerType, partners: [] };
 
-  // Aliases para o match de campaign
-  const aliasRows = await db.select({
-    partnershipId: partnerAliases.partnershipId,
-    aliasValue: partnerAliases.aliasValue,
-  }).from(partnerAliases);
-
-  // campaignKey + name + aliases — unificado com getBillingData/summary
-  const keyToPartner = new Map<string, number>();
-  function reg(k: string | null | undefined, pid: number) {
-    if (!k) return; const x = k.trim().toLowerCase();
-    if (x && !keyToPartner.has(x)) keyToPartner.set(x, pid);
-  }
-  for (const p of partnerRows) { reg(p.campaignKey, p.id); reg(p.name, p.id); }
-  for (const a of aliasRows) reg(a.aliasValue, a.partnershipId);
+  // Correspondência campanha → parceiro: a MESMA do motor financeiro
+  const { loadPartnerIndex, partnerForCampaign } = await import("./finance/partners");
+  const { index: partnerIndex } = await loadPartnerIndex(db);
 
   // Reservas concluídas (CHECKED_OUT) agrupadas por campaign (campanha → parceiro).
   const bookingRows = await db
@@ -4084,6 +3976,7 @@ export async function getPartnerInvoicingDetailByType(filters: {
       projectId: multiparkBookings.projectId,
       count: sql<number>`COUNT(*)`,
       revenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
+      revenueNet: revenueNetSql,
       discount: sql<number>`COALESCE(SUM(${multiparkBookings.discount}), 0)`,
       extras: sql<number>`COALESCE(SUM(${multiparkBookings.extrasTotal}), 0)`,
     })
@@ -4094,27 +3987,26 @@ export async function getPartnerInvoicingDetailByType(filters: {
         partnerBookingDone(),
         projectScope(multiparkBookings.projectId),
         projectFilter,
-        gte(multiparkBookings.checkOut, fromStr),
-        lte(multiparkBookings.checkOut, toStr),
+        ...period,
       ),
     )
     .groupBy(multiparkBookings.campaign, multiparkBookings.projectId);
 
-  const byPartner = new Map<number, { count: number; revenue: number; discount: number; extras: number }>();
+  const byPartner = new Map<number, { count: number; revenue: number; revenueNet: number; discount: number; extras: number }>();
   for (const b of bookingRows) {
-    const k = (b.campaign ?? "").trim().toLowerCase();
-    const pid = keyToPartner.get(k);
+    const pid = partnerForCampaign(partnerIndex, b.campaign)?.id;
     if (!pid) continue;
-    const ex = byPartner.get(pid) ?? { count: 0, revenue: 0, discount: 0, extras: 0 };
+    const ex = byPartner.get(pid) ?? { count: 0, revenue: 0, revenueNet: 0, discount: 0, extras: 0 };
     ex.count += Number(b.count ?? 0);
     ex.revenue += Number(b.revenue ?? 0);
+    ex.revenueNet += Number(b.revenueNet ?? 0);
     ex.discount += Number(b.discount ?? 0);
     ex.extras += Number(b.extras ?? 0);
     byPartner.set(pid, ex);
   }
 
   // Para operacional: agregação via projetos operados
-  const operationalRevenueByPartner = new Map<number, { count: number; revenue: number }>();
+  const operationalRevenueByPartner = new Map<number, { count: number; revenue: number; revenueNet: number }>();
   if (filters.partnerType === "operacional") {
     for (const p of partnerRows) {
       const cfg = parsePartnerConfig(p.notes ?? null);
@@ -4130,6 +4022,7 @@ export async function getPartnerInvoicingDetailByType(filters: {
         .select({
           count: sql<number>`COUNT(*)`,
           revenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
+          revenueNet: revenueNetSql,
         })
         .from(multiparkBookings)
         .where(
@@ -4137,14 +4030,14 @@ export async function getPartnerInvoicingDetailByType(filters: {
             partnerBookingDone(),
             projectScope(multiparkBookings.projectId),
             projectFilter,
-            gte(multiparkBookings.checkOut, fromStr),
-            lte(multiparkBookings.checkOut, toStr),
+            ...period,
             inArray(multiparkBookings.projectId, Array.from(expanded)),
           ),
         );
       operationalRevenueByPartner.set(p.id, {
         count: Number(rows[0]?.count ?? 0),
         revenue: Number(rows[0]?.revenue ?? 0),
+        revenueNet: Number(rows[0]?.revenueNet ?? 0),
       });
     }
   }
@@ -4155,18 +4048,20 @@ export async function getPartnerInvoicingDetailByType(filters: {
     const prizeBudget = Number(cfg.prizeBudget ?? 0);
     const commissionRate = Number(p.commissionRate ?? 0);
     const monthlyFee = Number(p.monthlyFee ?? 0);
-    const bk = byPartner.get(p.id) ?? { count: 0, revenue: 0, discount: 0, extras: 0 };
+    const bk = byPartner.get(p.id) ?? { count: 0, revenue: 0, revenueNet: 0, discount: 0, extras: 0 };
     const opRev = operationalRevenueByPartner.get(p.id);
 
     let bookingsCount = bk.count;
     let revenueGross = bk.revenue;
+    let revenueNet = bk.revenueNet;
     let aFaturar = 0;
     const cashbackAmount = (bk.revenue * cashbackPercent) / 100;
 
     if (filters.partnerType === "operacional" && opRev) {
       bookingsCount = opRev.count;
       revenueGross = opRev.revenue;
-      aFaturar = (opRev.revenue * commissionRate) / 100;
+      revenueNet = opRev.revenueNet;
+      aFaturar = partnerCommissionAmount(p, opRev, commissionRate);
     } else if (filters.partnerType === "avenca_mensal" || filters.partnerType === "avenca_anual") {
       aFaturar = partnerFeeForPeriod(filters.partnerType, monthlyFee, filters.from, filters.to);
     } else if (
@@ -4176,7 +4071,7 @@ export async function getPartnerInvoicingDetailByType(filters: {
       filters.partnerType === "companhia_aerea" ||
       filters.partnerType === "afiliado"
     ) {
-      aFaturar = (bk.revenue * commissionRate) / 100;
+      aFaturar = partnerCommissionAmount(p, bk, commissionRate);
     } else if (filters.partnerType === "cliente_pro") {
       aFaturar = bk.revenue;
     }
@@ -4185,9 +4080,11 @@ export async function getPartnerInvoicingDetailByType(filters: {
       partnershipId: p.id,
       partnerName: p.name,
       commissionRate,
+      commissionBase: (p.commissionBase === "gross" ? "gross" : "net") as "net" | "gross",
       monthlyFee,
       bookingsCount,
       revenueGross,
+      revenueNet,
       discountTotal: bk.discount,
       extrasTotal: bk.extras,
       cashbackPercent,
@@ -5165,32 +5062,22 @@ export async function getMultiparkBookings(filters?: {
     .offset(filters?.offset ?? 0);
 }
 
-// Mapa central campanha→parceiro (campaignKey + nome + aliases), igual ao da
-// Faturação. Cacheado 60s para não pesar nas folhas operacionais.
-let partnerMapCache: { at: number; map: Map<string, { id: number; name: string; commissionRate: number; updatedAt: string }> } | null = null;
+// Mapa central campanha→parceiro — a MESMA regra do motor financeiro
+// (R.buildPartnerIndex via ./finance/partners.ts). Cacheado 60s para não pesar
+// nas folhas operacionais.
+type CampaignPartner = { id: number; name: string; commissionRate: number; commissionBase: "net" | "gross"; partnerType: string | null; updatedAt: string };
+let partnerMapCache: { at: number; map: Map<string, CampaignPartner> } | null = null;
 export async function buildPartnerByCampaignMap() {
   if (partnerMapCache && Date.now() - partnerMapCache.at < 60_000) return partnerMapCache.map;
-  const map = new Map<string, { id: number; name: string; commissionRate: number; updatedAt: string }>();
+  const map = new Map<string, CampaignPartner>();
   const db = await getDb();
   if (!db) return map;
-  const allPartners = await db.select({
-    id: partnerships.id, name: partnerships.name, campaignKey: partnerships.campaignKey,
-    commissionRate: partnerships.commissionRate, updatedAt: partnerships.updatedAt,
-  }).from(partnerships);
-  const allAliases = await db.select({ partnershipId: partnerAliases.partnershipId, aliasValue: partnerAliases.aliasValue }).from(partnerAliases);
-  const byId = new Map(allPartners.map((p) => [p.id, p]));
-  const reg = (raw: string | null, pid: number) => {
-    if (!raw) return;
-    const key = raw.trim().toLowerCase();
-    if (!key) return;
-    const p = byId.get(pid);
-    if (!p) return;
-    const ex = map.get(key);
-    const cand = { id: p.id, name: p.name, commissionRate: Number(p.commissionRate ?? 0), updatedAt: p.updatedAt ?? "" };
-    if (!ex || cand.updatedAt > ex.updatedAt) map.set(key, cand);
-  };
-  for (const p of allPartners) { reg(p.campaignKey, p.id); reg(p.name, p.id); }
-  for (const a of allAliases) reg(a.aliasValue, a.partnershipId);
+  const { loadPartnerIndex } = await import("./finance/partners");
+  const { commissionBaseOf } = await import("./finance/rules");
+  const { index } = await loadPartnerIndex(db);
+  for (const [key, p] of index.byKey) {
+    map.set(key, { id: p.id, name: p.name, commissionRate: Number(p.commissionRate ?? 0), commissionBase: commissionBaseOf(p), partnerType: p.partnerType ?? null, updatedAt: p.updatedAt });
+  }
   partnerMapCache = { at: Date.now(), map };
   return map;
 }

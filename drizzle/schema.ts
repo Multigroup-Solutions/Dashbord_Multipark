@@ -642,6 +642,11 @@ export const expenseCategories = mysqlTable("expense_categories", {
 	color: varchar({ length: 16 }).default('#6366f1'),
 	// IVA da categoria em % (migração 0083); NULL = taxa normal (23%)
 	vatRate: decimal({ precision: 5, scale: 2 }),
+	// 0110 — custo já contado por outra via (salários/TSU/extras): fora da margem.
+	// NULL = ainda sem decisão (a migração põe o valor por omissão pelo nome).
+	excludeFromMargin: tinyint(),
+	// 0110 — autoliquidação de IVA (Google/Meta): IVA 0% no custo.
+	reverseCharge: tinyint(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 });
 
@@ -1400,6 +1405,8 @@ export const partnerships = mysqlTable("partnerships", {
 	// Migration 0082 — quando um admin gravou o parceiro no ecrã. NULL = "por
 	// configurar" (ex.: criado pela sincronização automática com 0%).
 	configuredAt: timestamp({ mode: 'string' }),
+	// 0110 — base da comissão: 'net' (sem IVA, regra do dono) | 'gross' (exceção).
+	commissionBase: varchar({ length: 8 }).default('net').notNull(),
 });
 
 export const multiparkBookingHistory = mysqlTable("multipark_booking_history", {

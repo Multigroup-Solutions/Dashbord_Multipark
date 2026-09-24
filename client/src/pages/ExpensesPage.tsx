@@ -401,7 +401,7 @@ export default function ExpensesPage() {
                 )}
                 {canManage && (
                   <DropdownMenuItem onClick={() => setShowVat(true)}>
-                    <Percent className="h-4 w-4 mr-2" /> Categorias e IVA
+                    <Percent className="h-4 w-4 mr-2" /> Categorias, IVA e margem
                   </DropdownMenuItem>
                 )}
               </DropdownMenuContent>

@@ -60,6 +60,8 @@ function PartnerDialog({ open, onClose, partner, prefill, campaignOptions }: {
     contactEmail: partner?.contactEmail ?? "",
     contactPhone: partner?.contactPhone ?? "",
     commissionRate: partner?.commissionRate ?? 0,
+    // Base da comissão: sem IVA por omissão (regra do dono); com IVA só como exceção
+    commissionBase: (partner?.commissionBase === "gross" ? "gross" : "net") as "net" | "gross",
     monthlyFee: partner?.monthlyFee ?? 0,
     nif: partner?.partnerNif ?? "",
     billingAgreement: partner?.billingAgreement ?? "",
@@ -176,6 +178,20 @@ function PartnerDialog({ open, onClose, partner, prefill, campaignOptions }: {
             <div>
               <Label className="text-xs">Comissão (%)</Label>
               <Input type="number" value={form.commissionRate} onChange={e => set("commissionRate", e.target.value)} />
+            </div>
+          )}
+          {fields.commission && (
+            <div>
+              <Label className="text-xs">Base da comissão</Label>
+              <select
+                className="w-full h-9 rounded-md border bg-background px-2 text-sm"
+                value={form.commissionBase}
+                onChange={e => set("commissionBase", e.target.value)}
+                aria-label="Base da comissão"
+              >
+                <option value="net">Valor sem IVA (regra)</option>
+                <option value="gross">Valor com IVA (exceção)</option>
+              </select>
             </div>
           )}
           {fields.invoiceTiming && (
@@ -692,7 +708,7 @@ export default function PartnershipsPage() {
                         {p.campaignKey && (
                           <div><span className="text-xs font-medium text-foreground">Campaign:</span> {p.campaignKey}</div>
                         )}
-                        <div><span className="text-xs font-medium text-foreground">Comissão:</span> {p.commissionRate ?? 0}%</div>
+                        <div><span className="text-xs font-medium text-foreground">Comissão:</span> {p.commissionRate ?? 0}% {p.commissionBase === "gross" ? "(c/ IVA)" : "(s/ IVA)"}</div>
                         {p.monthlyFee > 0 && (
                           <div><span className="text-xs font-medium text-foreground">Avença mensal:</span> {fmt(p.monthlyFee)}</div>
                         )}
@@ -844,8 +860,8 @@ function InvoicingSummaryTab({
                     <th className="p-2">Parceiro</th>
                     <th className="p-2">Tipo</th>
                     <th className="p-2 text-right">Reservas</th>
-                    <th className="p-2 text-right">Receita</th>
-                    <th className="p-2 text-right">A faturar</th>
+                    <th className="p-2 text-right">Receita (c/ IVA)</th>
+                    <th className="p-2 text-right" title="Comissão sobre o valor sem IVA (ou com IVA se o parceiro tiver essa exceção)">A faturar</th>
                   </tr>
                 </thead>
                 <tbody>

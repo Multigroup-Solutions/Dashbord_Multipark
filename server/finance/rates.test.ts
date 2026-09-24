@@ -179,7 +179,8 @@ describe("motor de finanças usa as taxas das Definições", () => {
     expect(r.revenue.produced).toBe(2460);
     expect(r.revenue.producedNet).toBeCloseTo(2000, 6);
     expect(r.revenue.collectedNet).toBeCloseTo(1000, 6);
-    expect(r.costs.employerTax).toBeCloseTo(3100 * 0.2375, 6);
+    // TSU sobre base + provisões de 13.º/14.º (2/12): antes só sobre a base (3100 × 23,75%)
+    expect(r.costs.employerTax).toBeCloseTo(3100 * (1 + 2 / 12) * 0.2375, 6);
     expect(r.params.vatRate).toBe(0.23);
     expect(r.params.tsuEmployerRate).toBe(0.2375);
     // mesmos números com as constantes injetadas explicitamente
@@ -197,8 +198,10 @@ describe("motor de finanças usa as taxas das Definições", () => {
     // receita: dia 10 a 23% (1000) + dia 20 a 20% (1025)
     expect(r.revenue.producedNet).toBeCloseTo(2025, 6);
     expect(r.revenue.collectedNet).toBeCloseTo(1025, 6);
-    // TSU: 15 dias a 23,75% + 16 dias a 25% sobre 100 €/dia
-    expect(r.costs.employerTax).toBeCloseTo(1500 * 0.2375 + 1600 * 0.25, 6);
+    // TSU: 15 dias a 23,75% + 16 dias a 25% sobre 100 €/dia de base + provisões
+    // (2/12 → 116,67 €/dia); antes só sobre a base (100 €/dia)
+    const prov = 1 + 2 / 12;
+    expect(r.costs.employerTax).toBeCloseTo(1500 * prov * 0.2375 + 1600 * prov * 0.25, 6);
     expect(r.params.vatRate).toBe(0.2);
     expect(r.params.vatPeriods).toEqual([
       { from: "2026-01-01", to: "2026-01-14", rate: 0.23 },

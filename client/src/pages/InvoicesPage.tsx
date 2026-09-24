@@ -10,8 +10,9 @@ import {
 import { useState, useMemo } from "react";
 import {
   Euro, TrendingUp, TrendingDown, Receipt, Truck, CalendarClock,
-  Building2, FolderTree, Users as UsersIcon, Handshake, LogIn,
+  Building2, FolderTree, Users as UsersIcon, Handshake, LogIn, AlertTriangle, Wallet, Target,
 } from "lucide-react";
+import FinanceExportButtons from "@/components/FinanceExportButtons";
 import DateRangeNav, { type DateGran, rangeFor } from "@/components/DateRangeNav";
 import { useTableSort, Th } from "@/components/SortableTable";
 import {
@@ -49,6 +50,8 @@ export default function InvoicesPage() {
   }, [filters.cityId, filters.brandId]);
 
   const { data, isLoading } = trpc.invoices.billing.useQuery({ from, to, projectId, granularity });
+  const [tab, setTab] = useState("real");
+  const { data: cash, isLoading: cashLoading } = trpc.invoices.cash.useQuery({ from, to, projectId }, { enabled: tab === "cash" });
 
   const summary = data?.summary as any;
   const timeseries = data?.timeseries ?? [];
@@ -58,8 +61,12 @@ export default function InvoicesPage() {
   const expensesPending = data?.expensesPending ?? [];
   const forecast = data?.forecast ?? [];
   const extrasDia = (data as any)?.extrasDia ?? [];
-  const salesCommissions: Array<{ partnerName: string | null; projectName: string | null; bookingsCount: number; revenueGross: number; commissionRate: number; commission: number }> = (data as any)?.salesCommissions ?? [];
-  const operationalPartners: Array<{ partnerName: string | null; projectNames: string[]; bookingsCount: number; revenueGross: number; commissionRate: number; commission: number }> = (data as any)?.operationalPartners ?? [];
+  const expensesExcluded = data?.expensesExcluded ?? [];
+  const salesCommissions = data?.salesCommissions ?? [];
+  const operationalPartners = data?.operationalPartners ?? [];
+  const quality = summary?.quality;
+  const projection = summary?.projection;
+  const current = !!summary?.isCurrentPeriod;
   const salaries: { byProject: Array<{ projectName: string | null; cost: number }>; total: number } = (data as any)?.salaries ?? { byProject: [], total: 0 };
 
   // Ordenação por coluna nas tabelas principais
@@ -71,16 +78,15 @@ export default function InvoicesPage() {
   // + a margem somam exatamente os Entregues s/ IVA de cada ponto.
   const chartData = useMemo(() => timeseries.map((p: any) => ({
     bucket: p.bucket,
-    produced: Number(p.producedNet ?? p.produced ?? 0),
+    produced: Number(p.producedNet ?? 0),
     collected: Number(p.collected ?? 0),
-    expenses: Number(p.expensesNet ?? p.expenses ?? p.expensesPaid ?? 0),
+    expenses: Number(p.expensesNet ?? 0),
     salaries: Number(p.salaries ?? 0),
     partners: Number(p.partners ?? 0),
     extrasCost: Number(p.extrasCost ?? 0),
-    revenueForecast: Number(p.revenueForecast ?? 0),
-    margin: p.margin != null
-      ? Number(p.margin)
-      : Number(p.producedNet ?? p.produced ?? 0) - Number(p.totalCost ?? 0),
+    revenueForecast: Number(p.revenueForecastNet ?? 0),
+    margin: Number(p.margin ?? 0),
+    marginForecast: Number(p.marginForecast ?? 0),
   })), [timeseries]);
 
   // Despesas pagas por projeto (agrupado)
@@ -114,10 +120,12 @@ export default function InvoicesPage() {
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
           <p className="text-muted-foreground text-sm">
-            Recolhidos (carro entrou) vs entregues (carro saiu — valor realizado) e todos os custos do período. Fonte única: valor das reservas.
+            Recolhidos (carro entrou) vs entregues (carro saiu — valor realizado) e todos os custos do período, em dias de Lisboa.
+            Uma reserva que atravessa meses conta inteira no mês da saída.
           </p>
         </div>
         <div className="flex items-end gap-2 flex-wrap">
+          <FinanceExportButtons input={{ kind: "billing", from, to, projectId, granularity }} />
           <Link href="/anual">
             <a className="text-xs px-2.5 py-1.5 rounded border bg-primary text-primary-foreground hover:opacity-90 transition-opacity inline-flex items-center gap-1">
               <CalendarClock className="w-3.5 h-3.5" /> Anual
@@ -157,7 +165,13 @@ export default function InvoicesPage() {
         </div>
       ) : (
         <>
-          {/* KPI Cards principais */}
+          {/* KPI Cards principais — no período em curso: "Realizado até hoje" */}
+          {current && (
+            <p className="text-xs text-muted-foreground -mb-1">
+              <strong>Realizado até hoje ({summary.asOf})</strong>: receita entregue e custos até hoje — salários, provisões,
+              TSU, equipa do dia e despesas cortados em hoje.
+            </p>
+          )}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <KpiCard
               icon={<LogIn className="w-4 h-4 text-sky-600" />}
@@ -170,24 +184,43 @@ export default function InvoicesPage() {
               icon={<Truck className="w-4 h-4 text-emerald-600" />}
               label="Entregues"
               value={fmt(summary.produced)}
-              hint={`${summary.producedCount ?? 0} carros saídos · s/ IVA: ${fmt(summary.producedNoVat ?? summary.produced / 1.23)}`}
+              hint={`${summary.producedCount ?? 0} carros saídos · s/ IVA: ${fmt(summary.producedNoVat)}`}
               color="text-emerald-700"
             />
             <KpiCard
               icon={<Receipt className="w-4 h-4 text-red-600" />}
-              label="Custos (s/ IVA)"
-              value={fmt(summary.totalCostsNoVat ?? summary.totalCostsAll)}
-              hint={`Despesas s/IVA + pessoal + TSU + equipa-dia + comissões · c/ IVA: ${fmt(summary.totalCostsAll)} · por pagar (não soma): ${fmt(summary.expensesPending ?? 0)}`}
+              label={current ? "Custos até hoje (s/ IVA)" : "Custos (s/ IVA)"}
+              value={fmt(summary.totalCostsNoVat)}
+              hint={`Despesas s/IVA + pessoal + TSU + equipa-dia + comissões · c/ IVA: ${fmt(summary.totalCostsGross)} · por pagar (não soma): ${fmt(summary.expensesPending ?? 0)}`}
               color="text-red-700"
             />
             <KpiCard
-              icon={(summary.marginNet ?? summary.marginRealized) >= 0 ? <TrendingUp className="w-4 h-4 text-emerald-600" /> : <TrendingDown className="w-4 h-4 text-red-600" />}
-              label="Margem (s/ IVA)"
-              value={fmt(summary.marginNet ?? summary.marginRealized)}
-              hint={`Entregues s/ IVA − custos · ${(summary.producedNoVat ?? 0) > 0 ? (((summary.marginNet ?? 0) / summary.producedNoVat) * 100).toFixed(1) : "0"}%`}
-              color={(summary.marginNet ?? summary.marginRealized) >= 0 ? "text-emerald-700" : "text-red-700"}
+              icon={summary.marginNet >= 0 ? <TrendingUp className="w-4 h-4 text-emerald-600" /> : <TrendingDown className="w-4 h-4 text-red-600" />}
+              label={current ? "Margem realizada até hoje" : "Margem (s/ IVA)"}
+              value={fmt(summary.marginNet)}
+              hint={`Entregues s/ IVA − custos · ${summary.marginPct != null ? summary.marginPct.toFixed(1) : "0"}%`}
+              color={summary.marginNet >= 0 ? "text-emerald-700" : "text-red-700"}
             />
           </div>
+
+          {/* Fecho previsto (período em curso / futuro) */}
+          {projection?.applies && (
+            <Card className="p-4 border-sky-200 bg-sky-50/40">
+              <div className="flex items-center gap-2 mb-2 flex-wrap">
+                <Target className="w-4 h-4 text-sky-700" />
+                <span className="text-sm font-medium">Fecho previsto ({to})</span>
+                <span className="text-[11px] text-muted-foreground">realizado + receita esperada (carros estacionados e check-ins com saída até {to}) − custos do período inteiro</span>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                <div><p className="text-xs text-muted-foreground">Receita s/ IVA</p><p className="font-semibold tabular-nums">{fmt(projection.revenueNet)}</p><p className="text-[11px] text-muted-foreground">+ {fmt(projection.forecastRevenueNet)} esperados</p></div>
+                <div><p className="text-xs text-muted-foreground">Custos s/ IVA (período inteiro)</p><p className="font-semibold tabular-nums">{fmt(projection.costsNet)}</p><p className="text-[11px] text-muted-foreground">+ {fmt(projection.futureCostsNet)} até ao fim</p></div>
+                <div><p className="text-xs text-muted-foreground">Margem prevista</p><p className={`font-bold tabular-nums ${projection.margin >= 0 ? "text-emerald-700" : "text-red-700"}`}>{fmt(projection.margin)}</p></div>
+                <div><p className="text-xs text-muted-foreground">Margem prevista %</p><p className="font-semibold tabular-nums">{projection.marginPct != null ? `${projection.marginPct.toFixed(1)}%` : "—"}</p></div>
+              </div>
+            </Card>
+          )}
+
+          <QualityWarnings quality={quality} />
 
           {/* KPI secundários: detalhe dos custos */}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -196,7 +229,7 @@ export default function InvoicesPage() {
             <KpiSmall icon={<UsersIcon className="w-3.5 h-3.5 text-amber-500" />} label="Equipa do dia" value={fmt(summary.extrasDiaCost)} />
             <KpiSmall icon={<UsersIcon className="w-3.5 h-3.5 text-blue-500" />} label="Salários + TSU" value={fmt((summary.salariesCost ?? 0) + (summary.employerTax ?? 0))} />
             <KpiSmall icon={<Handshake className="w-3.5 h-3.5 text-rose-500" />} label="Comissão venda" value={fmt(summary.salesCommissions ?? 0)} />
-            <KpiSmall icon={<Handshake className="w-3.5 h-3.5 text-cyan-500" />} label="Parceiros op." value={fmt(summary.operationalPartnersPaid ?? summary.partnerCommissionsPaid)} />
+            <KpiSmall icon={<Handshake className="w-3.5 h-3.5 text-cyan-500" />} label="Parceiros op." value={fmt(summary.operationalCommissions ?? 0)} />
           </div>
 
           {/* Gráfico timeseries */}
@@ -227,8 +260,9 @@ export default function InvoicesPage() {
                     <Bar dataKey="partners" name="Parceiros" stackId="cost" fill="#f43f5e" />
                     <Bar dataKey="extrasCost" name="Equipa-dia" stackId="cost" fill="#eab308" radius={[3, 3, 0, 0]} />
                     <Line dataKey="collected" name="Recolhidos" stroke="#0284c7" strokeWidth={2} dot={false} />
-                    <Line dataKey="revenueForecast" name="Receita prevista" stroke="#0ea5e9" strokeDasharray="4 4" strokeWidth={2} dot={false} />
-                    <Line dataKey="margin" name="Margem" stroke="#111827" strokeWidth={2} dot={false} />
+                    <Line dataKey="revenueForecast" name="Receita esperada (s/ IVA)" stroke="#0ea5e9" strokeDasharray="4 4" strokeWidth={2} dot={false} />
+                    <Line dataKey="margin" name="Margem realizada" stroke="#111827" strokeWidth={2} dot={false} />
+                    {projection?.applies && <Line dataKey="marginForecast" name="Fecho previsto" stroke="#6b7280" strokeDasharray="4 4" strokeWidth={2} dot={false} />}
                   </ComposedChart>
                 </ResponsiveContainer>
               )}
@@ -236,11 +270,12 @@ export default function InvoicesPage() {
           </Card>
 
           {/* Tabs com detalhes */}
-          <Tabs defaultValue="real" className="space-y-4">
+          <Tabs value={tab} onValueChange={setTab} className="space-y-4">
             <TabsList>
               <TabsTrigger value="real">Realizado</TabsTrigger>
               <TabsTrigger value="costs">Custos detalhados</TabsTrigger>
               <TabsTrigger value="forecast">Previsão</TabsTrigger>
+              <TabsTrigger value="cash">Caixa</TabsTrigger>
             </TabsList>
 
             <TabsContent value="real" className="space-y-4">
@@ -347,6 +382,31 @@ export default function InvoicesPage() {
                 </CardContent>
               </Card>
 
+              {/* Despesas excluídas da margem (custo já contado pelo RH / ponto) */}
+              {expensesExcluded.length > 0 && (
+                <Card className="border-amber-200">
+                  <CardHeader>
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-600" /> Despesas excluídas da margem
+                    </CardTitle>
+                    <p className="text-xs text-muted-foreground">
+                      Categorias marcadas "excluir da margem" (Despesas → Categorias, IVA e margem): o custo já entra pelos salários + TSU
+                      ou pelo ponto dos extras. NÃO somam aos custos acima.
+                    </p>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-1">
+                      {expensesExcluded.map((e, i) => (
+                        <div key={i} className="flex justify-between text-sm text-muted-foreground">
+                          <span>{e.projectName ?? "Por atribuir"} · {e.categoryName ?? "Sem categoria"}</span>
+                          <span className="tabular-nums">{fmt(e.totalAmount)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
               {/* Extras-dia */}
               <Card>
                 <CardHeader>
@@ -396,7 +456,8 @@ export default function InvoicesPage() {
                     do próprio mês, respeitando início e fim de contrato. Inclui provisões de subsídios ({fmt(summary.salariesProvisions ?? 0)})
                     e variável do ponto — horas extra, noturnas, fim de semana e alimentação ({fmt(summary.salariesVariable ?? 0)}).
                     Quem está num nível superior (Grupo / Cidade / Marca) é rateado pelas marcas folhas; sem centro fica "Por atribuir".
-                    TSU patronal ({((summary.tsuEmployerRate ?? 0.2375) * 100).toFixed(2)}%) sobre a base tributável: {fmt(summary.employerTax ?? 0)}.
+                    TSU patronal ({(summary.tsuEmployerRate * 100).toFixed(2)}%) sobre base + provisões de 13.º/14.º + variável tributável: {fmt(summary.employerTax ?? 0)}.
+                    {current && " No período em curso só conta até hoje."}
                   </p>
                 </CardHeader>
                 <CardContent>
@@ -434,7 +495,8 @@ export default function InvoicesPage() {
                     <Handshake className="w-4 h-4" /> Comissões a parceiros de venda
                   </CardTitle>
                   <p className="text-xs text-muted-foreground">
-                    Agências/parceiros com campanha — comissão = receita da reserva × <em>%</em>, atribuída à marca da reserva.
+                    Agências/parceiros com campanha — comissão = receita da reserva <strong>sem IVA</strong> × <em>%</em> (com IVA só nos parceiros marcados como exceção), atribuída à marca da reserva.
+                    Um parceiro operacional não cobra comissão de venda nas reservas dos centros que já opera.
                   </p>
                 </CardHeader>
                 <CardContent>
@@ -447,7 +509,8 @@ export default function InvoicesPage() {
                           <Th k="partnerName" label="Parceiro" sortKey={comSort.sortKey} sortDir={comSort.sortDir} onToggle={comSort.toggle} />
                           <Th k="projectName" label="Marca / Projeto" sortKey={comSort.sortKey} sortDir={comSort.sortDir} onToggle={comSort.toggle} />
                           <Th k="bookingsCount" label="Reservas" align="right" sortKey={comSort.sortKey} sortDir={comSort.sortDir} onToggle={comSort.toggle} />
-                          <Th k="revenueGross" label="Receita" align="right" sortKey={comSort.sortKey} sortDir={comSort.sortDir} onToggle={comSort.toggle} />
+                          <Th k="revenueGross" label="Receita c/ IVA" align="right" sortKey={comSort.sortKey} sortDir={comSort.sortDir} onToggle={comSort.toggle} />
+                          <Th k="revenueNet" label="Base" align="right" sortKey={comSort.sortKey} sortDir={comSort.sortDir} onToggle={comSort.toggle} />
                           <Th k="commissionRate" label="%" align="right" sortKey={comSort.sortKey} sortDir={comSort.sortDir} onToggle={comSort.toggle} />
                           <Th k="commission" label="Comissão" align="right" className="font-bold" sortKey={comSort.sortKey} sortDir={comSort.sortDir} onToggle={comSort.toggle} />
                         </tr>
@@ -459,12 +522,13 @@ export default function InvoicesPage() {
                             <td className="p-2 flex items-center gap-2"><FolderTree className="w-3 h-3 text-muted-foreground" />{c.projectName ?? "Sem projeto"}</td>
                             <td className="p-2 text-right tabular-nums">{c.bookingsCount}</td>
                             <td className="p-2 text-right tabular-nums">{fmt(c.revenueGross)}</td>
-                            <td className="p-2 text-right tabular-nums">{c.commissionRate}%</td>
+                            <td className="p-2 text-right tabular-nums">{fmt(c.commissionBase === "gross" ? c.revenueGross : c.revenueNet)} <span className="text-[10px] text-muted-foreground">{c.commissionBase === "gross" ? "c/ IVA" : "s/ IVA"}</span></td>
+                            <td className="p-2 text-right tabular-nums">{c.commissionRate ?? "—"}%</td>
                             <td className="p-2 text-right tabular-nums font-bold text-rose-700">{fmt(c.commission)}</td>
                           </tr>
                         ))}
                         <tr className="bg-muted/30 font-bold">
-                          <td className="p-2" colSpan={5}>Total</td>
+                          <td className="p-2" colSpan={6}>Total</td>
                           <td className="p-2 text-right">{fmt(salesCommissions.reduce((s, c) => s + c.commission, 0))}</td>
                         </tr>
                       </tbody>
@@ -480,7 +544,7 @@ export default function InvoicesPage() {
                     <Handshake className="w-4 h-4" /> Parceiros operacionais
                   </CardTitle>
                   <p className="text-xs text-muted-foreground">
-                    Ex.: Top Parking a operar marcas do Porto. Comissão = receita das
+                    Ex.: Top Parking a operar marcas do Porto. Comissão = receita <strong>sem IVA</strong> das
                     reservas dos projetos que o parceiro opera (configurados na ficha) × <em>%</em>.
                   </p>
                 </CardHeader>
@@ -494,7 +558,8 @@ export default function InvoicesPage() {
                           <th className="p-2">Parceiro</th>
                           <th className="p-2">Projetos operados</th>
                           <th className="p-2 text-right">Reservas</th>
-                          <th className="p-2 text-right">Receita</th>
+                          <th className="p-2 text-right">Receita c/ IVA</th>
+                          <th className="p-2 text-right">Base</th>
                           <th className="p-2 text-right">%</th>
                           <th className="p-2 text-right font-bold">Comissão</th>
                         </tr>
@@ -506,12 +571,13 @@ export default function InvoicesPage() {
                             <td className="p-2 text-xs text-muted-foreground">{p.projectNames?.length ? p.projectNames.join(", ") : <span className="text-muted-foreground">(sem projetos)</span>}</td>
                             <td className="p-2 text-right tabular-nums">{p.bookingsCount}</td>
                             <td className="p-2 text-right tabular-nums">{fmt(p.revenueGross)}</td>
+                            <td className="p-2 text-right tabular-nums">{fmt(p.commissionBase === "gross" ? p.revenueGross : p.revenueNet)} <span className="text-[10px] text-muted-foreground">{p.commissionBase === "gross" ? "c/ IVA" : "s/ IVA"}</span></td>
                             <td className="p-2 text-right tabular-nums">{p.commissionRate}%</td>
                             <td className="p-2 text-right tabular-nums font-bold text-cyan-700">{fmt(p.commission)}</td>
                           </tr>
                         ))}
                         <tr className="bg-muted/30 font-bold">
-                          <td className="p-2" colSpan={5}>Total</td>
+                          <td className="p-2" colSpan={6}>Total</td>
                           <td className="p-2 text-right">{fmt(operationalPartners.reduce((s, p) => s + p.commission, 0))}</td>
                         </tr>
                       </tbody>
@@ -522,15 +588,15 @@ export default function InvoicesPage() {
             </TabsContent>
 
             <TabsContent value="forecast" className="space-y-4">
-              {/* KPIs Previsão */}
+              {/* KPIs Previsão — receita esperada = saída prevista até ao fim do período */}
               <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                {/* Período já encerrado: a previsão é dos PRÓXIMOS 30 dias (fora do
-                    período) e NÃO se soma ao realizado desse mês. */}
                 <KpiCard
                   icon={<CalendarClock className="w-4 h-4 text-sky-600" />}
-                  label={summary.forecastRange?.extended ? "Receita prevista (próximos 30 dias)" : "Receita prevista"}
-                  value={fmt(forecast.reduce((s, f) => s + Number(f.totalRevenue ?? 0), 0))}
-                  hint={`${forecast.reduce((s, f) => s + Number(f.count ?? 0), 0)} reservas por entregar${summary.forecastRange?.extended ? ` · ${summary.forecastRange.from} a ${summary.forecastRange.to}, fora do período escolhido` : ""}`}
+                  label="Receita esperada"
+                  value={fmt(summary.forecastRange?.revenue ?? 0)}
+                  hint={projection?.applies
+                    ? `${summary.forecastRange?.count ?? 0} reservas por entregar (${summary.forecastRange?.from} a ${to}) · s/ IVA: ${fmt(summary.forecastRange?.revenueNet ?? 0)}`
+                    : "Período encerrado: sem previsão"}
                   color="text-sky-700"
                 />
                 <KpiCard
@@ -542,9 +608,9 @@ export default function InvoicesPage() {
                 />
                 <KpiCard
                   icon={<Euro className="w-4 h-4 text-emerald-600" />}
-                  label={summary.forecastRange?.extended ? "Realizado (período encerrado)" : "Total estimado"}
-                  value={fmt(summary.produced + (summary.forecastRange?.extended ? 0 : forecast.reduce((s, f) => s + Number(f.totalRevenue ?? 0), 0)))}
-                  hint={summary.forecastRange?.extended ? "Sem previsão somada: o período já terminou" : "Realizado + previsto até ao fim do período"}
+                  label={projection?.applies ? "Fecho previsto (margem)" : "Realizado (período encerrado)"}
+                  value={fmt(projection?.applies ? projection.margin : summary.marginNet)}
+                  hint={projection?.applies ? "Realizado + receita esperada − custos do período inteiro" : "Sem previsão somada: o período já terminou"}
                   color="text-emerald-700"
                 />
               </div>
@@ -554,7 +620,7 @@ export default function InvoicesPage() {
                   <CardTitle className="text-base flex items-center gap-2">
                     <CalendarClock className="w-4 h-4" /> Receita prevista por projeto
                   </CardTitle>
-                  <p className="text-xs text-muted-foreground">Reservas com check-in futuro, sem check-out e sem cancelamento</p>
+                  <p className="text-xs text-muted-foreground">Reservas não entregues nem canceladas com saída prevista até {to}: carros estacionados (saídas em atraso contam hoje) + check-ins de hoje em diante</p>
                 </CardHeader>
                 <CardContent>
                   {forecast.length === 0 ? (
@@ -615,6 +681,10 @@ export default function InvoicesPage() {
                 </CardContent>
               </Card>
             </TabsContent>
+
+            <TabsContent value="cash" className="space-y-4">
+              <CashPanel cash={cash} loading={cashLoading} />
+            </TabsContent>
           </Tabs>
         </>
       )}
@@ -641,5 +711,64 @@ function KpiSmall({ icon, label, value }: { icon: React.ReactNode; label: string
       <span className="flex items-center gap-2 text-xs text-muted-foreground">{icon}{label}</span>
       <span className="font-semibold tabular-nums">{value}</span>
     </div>
+  );
+}
+
+/** Avisos de qualidade dos dados (o que pode estar a distorcer os números). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function QualityWarnings({ quality }: { quality: any }) {
+  if (!quality) return null;
+  const items: Array<{ key: string; text: React.ReactNode }> = [];
+  const ex = quality.excludedExpenses;
+  if (ex?.total > 0) items.push({ key: "excl", text: <>Despesas excluídas da margem (já contadas pelo RH/ponto): <strong>{fmt(ex.total)}</strong> em {ex.count} despesa(s) — {ex.categories.map((c: any) => `${c.name} ${fmt(c.total)}`).join(", ")}</> });
+  const bw = quality.bookingsWithoutProject;
+  if (bw?.count > 0) items.push({ key: "bwp", text: <>Reservas entregues sem centro de custos: <strong>{bw.count}</strong> ({fmt(bw.total)}) — só contam no consolidado</> });
+  const ew = quality.expensesWithoutProject;
+  if (ew?.count > 0) items.push({ key: "ewp", text: <>Despesas sem centro de custos: <strong>{ew.count}</strong> ({fmt(ew.total)}) — "Por atribuir"</> });
+  const inact = quality.inactiveWithoutContractEnd ?? [];
+  if (inact.length > 0) items.push({ key: "inact", text: <>Inativos sem data de fim de contrato ({inact.length}) — contam até à desativação/última atualização: {inact.map((e: any) => `${e.fullName} (até ${e.assumedEnd ?? "?"})`).join(", ")}</> });
+  const cov = quality.salesCommissionsCoveredByOperational;
+  if (cov?.count > 0) items.push({ key: "cov", text: <>Comissão de venda não cobrada em {cov.count} reserva(s) ({fmt(cov.revenueGross)}): o parceiro é operacional e já opera esse centro</> });
+  if ((quality.partnersRateMissing ?? []).length > 0) items.push({ key: "rate", text: <>Parceiros sem taxa de comissão: {quality.partnersRateMissing.join(", ")}</> });
+  if ((quality.partnerConflicts ?? []).length > 0) items.push({ key: "conf", text: <>Campanhas ligadas a mais do que um parceiro: {quality.partnerConflicts.map((c: any) => c.key).join(", ")}</> });
+  if (items.length === 0) return null;
+  return (
+    <Card className="p-3 border-amber-200 bg-amber-50/50">
+      <div className="flex items-center gap-2 mb-1 text-sm font-medium text-amber-800"><AlertTriangle className="w-4 h-4" /> Qualidade dos dados</div>
+      <ul className="text-xs text-amber-900 space-y-0.5 list-disc pl-5">
+        {items.map((i) => <li key={i.key}>{i.text}</li>)}
+      </ul>
+    </Card>
+  );
+}
+
+/** Caixa: o dinheiro (recebido / por cobrar / no-shows pré-pagos). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function CashPanel({ cash, loading }: { cash: any; loading: boolean }) {
+  if (loading || !cash) return <p className="text-sm text-muted-foreground text-center py-6">A carregar…</p>;
+  return (
+    <>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <KpiCard icon={<Wallet className="w-4 h-4 text-emerald-600" />} label="Recebido" value={fmt(cash.received.total)} hint={`${cash.received.count} reservas entregues · data: ${cash.dateBasis}`} color="text-emerald-700" />
+        <KpiCard icon={<Receipt className="w-4 h-4 text-orange-600" />} label="Por cobrar" value={fmt(cash.toCollect.total)} hint={`${cash.toCollect.count} reservas entregues com valor em falta`} color="text-orange-700" />
+        <KpiCard icon={<CalendarClock className="w-4 h-4 text-sky-600" />} label="No-shows pré-pagos" value={fmt(cash.prepaidNoShows.total)} hint={`${cash.prepaidNoShows.count} reservas pagas com check-in passado que nunca entraram`} color="text-sky-700" />
+        <KpiCard icon={<AlertTriangle className="w-4 h-4 text-muted-foreground" />} label="Canceladas com pagamento" value={fmt(cash.cancelledPaid.total)} hint={`${cash.cancelledPaid.count} canceladas no período — informativo, NÃO é receita (sem dados de taxa/reembolso)`} />
+      </div>
+      <Card>
+        <CardHeader><CardTitle className="text-base">Recebido por método de pagamento</CardTitle></CardHeader>
+        <CardContent>
+          {cash.received.byMethod.length === 0 ? <p className="text-sm text-muted-foreground text-center py-4">Sem recebimentos no período</p> : (
+            <div className="space-y-1">
+              {cash.received.byMethod.map((m: any) => (
+                <div key={m.method} className="flex justify-between text-sm"><span>{m.method} <span className="text-xs text-muted-foreground">({m.count})</span></span><span className="tabular-nums font-medium">{fmt(m.total)}</span></div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+      <p className="text-[11px] text-muted-foreground">
+        Dados que faltam na sincronização Multipark: {cash.missing.join(" · ")}. As taxas de cancelamento só entram como receita quando existirem na base de dados.
+      </p>
+    </>
   );
 }
