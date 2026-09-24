@@ -2,9 +2,11 @@
  * FONTE ÚNICA das métricas de anúncios para todos os consumidores (Marketing,
  * dashboards, relatórios).
  *
- * Regra de precedência por DIA: se a API tem dados nesse dia, usa-se só a API;
- * caso contrário usa-se a importação antiga (campaign_daily_stats, CSV/email),
- * identificada como "legacy". Nunca se somam as duas para o mesmo dia.
+ * Regra de precedência por DIA E PLATAFORMA: se a API do Google Ads tem dados
+ * nesse dia, as linhas antigas do GOOGLE (campaign_daily_stats, CSV/email,
+ * "legacy") desse dia são ignoradas — nunca se somam as duas. As linhas
+ * antigas de OUTRAS plataformas (Meta/Instagram/outras) contam sempre: a API
+ * do Google não as substitui (antes eram descartadas em qualquer dia com API).
  * O orçamento é um indicador SEPARADO — nunca substitui o gasto.
  */
 import { and, eq, gte, inArray, lte, sql } from "drizzle-orm";
@@ -30,6 +32,11 @@ export interface AdMetricsResult {
   budgetEstimate: number;
   unmappedCampaigns: number;   // campanhas da API por associar (sem marca/cidade e não nacionais)
   apiConnected: boolean;
+}
+
+/** Linha legada substituída pela API? Só as do Google, e só em dias com API. */
+export function legacyOverriddenByApi(platform: string | null | undefined, day: string, apiDays: Set<string>): boolean {
+  return (platform ?? "google_ads") === "google_ads" && apiDays.has(day);
 }
 
 function lisbonToday(): string {
@@ -99,7 +106,7 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
   const legConds: any[] = [gte(campaignDailyStats.date, `${f.from} 00:00:00`), lte(campaignDailyStats.date, `${f.to} 23:59:59`)];
   if (projectFilter) legConds.push(inArray(campaigns.projectId, projectFilter));
   const legacyRows = await db.select({
-    date: sql<string>`DATE(${campaignDailyStats.date})`, campaignId: campaignDailyStats.campaignId, campaignName: campaigns.name, projectId: campaigns.projectId,
+    date: sql<string>`DATE(${campaignDailyStats.date})`, campaignId: campaignDailyStats.campaignId, campaignName: campaigns.name, projectId: campaigns.projectId, platform: campaigns.platform,
     spend: campaignDailyStats.spend, impressions: campaignDailyStats.impressions, clicks: campaignDailyStats.clicks, conversions: campaignDailyStats.conversions, conversionValue: campaignDailyStats.conversionValue,
   }).from(campaignDailyStats).leftJoin(campaigns, eq(campaigns.id, campaignDailyStats.campaignId)).where(and(...legConds));
 
@@ -139,8 +146,8 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
   nationalShares.push(...nationalShareMap.values());
   for (const r of legacyRows) {
     const day = String(r.date).slice(0, 10);
-    if (apiDays.has(day)) continue;     // API prevalece nesse dia
-    legacyDays.add(day);
+    if (legacyOverriddenByApi(r.platform, day, apiDays)) continue;     // API do Google prevalece nesse dia
+    if ((r.platform ?? "google_ads") === "google_ads") legacyDays.add(day);  // cobertura = Google
     const t = { costMicros: Math.round(Number(r.spend ?? 0) * 1_000_000), impressions: Number(r.impressions ?? 0), clicks: Number(r.clicks ?? 0), conversions: Number(r.conversions ?? 0), conversionValueMicros: Math.round(Number(r.conversionValue ?? 0) * 1_000_000) };
     totals = addTotals(totals, t);
     const d = byDayMap.get(day) ?? { date: day, source: "legacy" as const, cost: 0, impressions: 0, clicks: 0, conversions: 0, conversionValue: 0 };

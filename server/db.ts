@@ -5200,77 +5200,6 @@ export async function getMultiparkBookings(filters?: {
     .offset(filters?.offset ?? 0);
 }
 
-export async function getLocalBookingsByAction(filters: {
-  startDate: string;
-  endDate: string;
-  actionType: "creation" | "checkin" | "checkout" | "cancelation";
-  projectId?: number;
-}) {
-  const db = await getDb();
-  if (!db) return [];
-
-  const conditions: any[] = [];
-
-  // Filter by date range based on actionType
-  const endWithTime = filters.endDate + " 23:59:59";
-  switch (filters.actionType) {
-    case "creation":
-      conditions.push(gte(multiparkBookings.bookingCreatedAt, filters.startDate));
-      conditions.push(lte(multiparkBookings.bookingCreatedAt, endWithTime));
-      // Todas as criações contam, incluindo as entretanto canceladas.
-      // O ecrã distingue estado e valor cancelado sem ocultar reservas da origem.
-      break;
-    case "checkin":
-      conditions.push(gte(multiparkBookings.checkIn, filters.startDate));
-      conditions.push(lte(multiparkBookings.checkIn, endWithTime));
-      conditions.push(sql`${multiparkBookings.status} != 'CANCELLED'`);
-      break;
-    case "checkout":
-      conditions.push(gte(multiparkBookings.checkOut, filters.startDate));
-      conditions.push(lte(multiparkBookings.checkOut, endWithTime));
-      conditions.push(sql`${multiparkBookings.status} != 'CANCELLED'`);
-      break;
-    case "cancelation":
-      // FIX 2026-08-05: cancelledAt está NULL em ~4.6k canceladas (o sync nem
-      // sempre o traz) — filtrar por ele escondia a maioria. A fonte de verdade
-      // é o STATUS; a data usa cancelledAt quando existe, senão updatedAt
-      // (última mudança de estado — aproximação razoável do cancelamento).
-      conditions.push(sql`${multiparkBookings.status} = 'CANCELLED'`);
-      conditions.push(sql`COALESCE(${multiparkBookings.cancelledAt}, ${multiparkBookings.updatedAt}) >= ${filters.startDate}`);
-      conditions.push(sql`COALESCE(${multiparkBookings.cancelledAt}, ${multiparkBookings.updatedAt}) <= ${endWithTime}`);
-      break;
-  }
-
-  // Filter by project hierarchy (include all children; marcas globais idem)
-  if (filters.projectId) {
-    const ids = await resolveProjectIds(filters.projectId);
-    conditions.push(sql`${multiparkBookings.projectId} IN (${sql.raw(ids.join(",") || "0")})`);
-  }
-
-  const rows = await db
-    .select()
-    .from(multiparkBookings)
-    .where(and(...conditions))
-    .orderBy(desc(multiparkBookings.bookingCreatedAt))
-    .limit(5000);
-
-  // Comissões de parceiros de venda por reserva (partnerships NOVAS via
-  // campaign match — substitui o legado partnerName/percent da ficha do
-  // projeto, para bater certo com a Faturação/Parcerias).
-  const partnerMap = await buildPartnerByCampaignMap();
-  return rows.map((b) => {
-    const key = (b.campaign ?? "").trim().toLowerCase();
-    const p = key ? partnerMap.get(key) : undefined;
-    const price = parseFloat(String(b.totalPrice ?? 0)) || 0;
-    return {
-      ...b,
-      salesPartnerName: p?.name ?? null,
-      salesPartnerRate: p?.commissionRate ?? null,
-      salesPartnerCommission: p ? Math.round(price * (p.commissionRate / 100) * 100) / 100 : 0,
-    };
-  });
-}
-
 // Mapa central campanha→parceiro (campaignKey + nome + aliases), igual ao da
 // Faturação. Cacheado 60s para não pesar nas folhas operacionais.
 let partnerMapCache: { at: number; map: Map<string, { id: number; name: string; commissionRate: number; updatedAt: string }> } | null = null;
@@ -5308,23 +5237,27 @@ export async function getOperationsSummary(filters: { startDate: string; endDate
   const db = await getDb();
   const empty = { actions: {} as Record<string, { count: number; revenue: number; byCity: Array<{ name: string; count: number; revenue: number }>; byPark: Array<{ name: string; count: number; revenue: number }> }> };
   if (!db) return empty;
-  const endWithTime = filters.endDate + " 23:59:59";
+  // Dias de LISBOA → intervalo UTC [início, fim) (as colunas estão em UTC)
+  const range = lisbonDayRangeUtc(filters.startDate, filters.endDate);
   let projectCond = "";
   if (filters.projectId) {
     const ids = await resolveProjectIds(filters.projectId);
     projectCond = ` AND projectId IN (${ids.join(",") || "0"})`;
   }
+  const scoped = scopedProjectIds();
+  if (scoped !== undefined) projectCond += ` AND projectId IN (${scoped.join(",") || "0"})`;
+  const between = (col: string) => `${col} >= '${range.start}' AND ${col} < '${range.end}'`;
   const DATE_COND: Record<string, string> = {
-    creation: `bookingCreatedAt >= ? AND bookingCreatedAt <= ? AND status != 'CANCELLED'`,
-    checkin: `checkIn >= ? AND checkIn <= ? AND status != 'CANCELLED'`,
-    checkout: `checkOut >= ? AND checkOut <= ? AND status != 'CANCELLED'`,
-    cancelation: `status = 'CANCELLED' AND COALESCE(cancelledAt, updatedAt) >= ? AND COALESCE(cancelledAt, updatedAt) <= ?`,
+    // criadas NÃO canceladas (valor previsto)
+    creation: `${between("bookingCreatedAt")} AND status != 'CANCELLED'`,
+    // TODAS as criadas no período (coorte da taxa de cancelamento)
+    createdAll: between("bookingCreatedAt"),
+    checkin: `${between("checkIn")} AND status != 'CANCELLED'`,
+    checkout: `${between("checkOut")} AND status != 'CANCELLED'`,
+    cancelation: `status = 'CANCELLED' AND ${between("COALESCE(cancelledAt, updatedAt)")}`,
   };
   const out: (typeof empty)["actions"] = {};
-  for (const [action, cond] of Object.entries(DATE_COND)) {
-    // Substitui os dois ? por datas (validadas pelo zod: YYYY-MM-DD)
-    const parts = cond.split("?");
-    const q = parts[0] + `'${filters.startDate}'` + parts[1] + `'${endWithTime}'` + (parts[2] ?? "");
+  for (const [action, q] of Object.entries(DATE_COND)) {
     const [rows] = await db.execute(sql.raw(
       `SELECT COALESCE(city,'—') AS city, COALESCE(parkName,'—') AS parkName, COUNT(*) AS n, COALESCE(SUM(totalPrice),0) AS revenue
        FROM multipark_bookings WHERE ${q}${projectCond}

@@ -25,11 +25,12 @@
  */
 import { and, eq, gte, lte, sql, isNotNull, inArray, notInArray, or, isNull } from "drizzle-orm";
 import {
-  multiparkBookings, projects, expenses, expenseCategories, extrasDiaAssignments,
+  multiparkBookings, projects, expenses, expenseCategories,
   partnerships, partnerAliases, employees, employeeSalaryHistory, marketingExpenses,
-  campaignDailyStats, campaigns, timeRecords,
+  campaignDailyStats, campaigns,
 } from "../../drizzle/schema";
-import { loadExtraRates, rateFor } from "../extraRates";
+import { loadExtraRates } from "../extraRates";
+import { aggregateExtrasCost, loadExtrasCostRows } from "./extrasCost";
 import { getDb, resolveProjectIds, toMysqlDateTime, getPayrollData } from "../db";
 import { matchCityKey } from "../../shared/city";
 import { parsePartnerConfig } from "../../shared/partnerTypes";
@@ -270,32 +271,12 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
     .groupBy(expenses.projectId, projects.name, expenseCategories.name, expenses.supplier);
 
   // ─── 4. Equipa do dia: só extras, saída antecipada, cidade do centro ──────
-  const extrasConds: any[] = [gte(extrasDiaAssignments.assignmentDate, from), lte(extrasDiaAssignments.assignmentDate, to)];
-  if (cities) extrasConds.push(inArray(extrasDiaAssignments.city, cities));
-  const extrasRows = await db
-    .select({ date: extrasDiaAssignments.assignmentDate, level: extrasDiaAssignments.level, isTeamLeader: extrasDiaAssignments.isTeamLeader, startHour: extrasDiaAssignments.startHour, endHour: extrasDiaAssignments.endHour, sentHomeHour: extrasDiaAssignments.sentHomeHour })
-    .from(extrasDiaAssignments)
-    .where(and(...extrasConds));
-
-  // Extras — custo REAL: recebem pelo PONTO (horas dos check_out × tarifa do
-  // nível, as mesmas de `extra_rates` do ordenado). Cidade = centro de custos
-  // da ficha do extra.
+  // Extras — previsto (escala, cidade da escala) e REAL (ponto: horas dos
+  // check_out × tarifa do nível, as mesmas de `extra_rates` do ordenado; cidade
+  // = centro de custos da ficha do extra). Fonte única: ./extrasCost.ts.
   const extraRatesLive = await loadExtraRates();
   out.params = { ...out.params, extrasDiaRates: extraRatesLive };
-  const pontoConds: any[] = [
-    eq(timeRecords.type, "check_out"),
-    gte(timeRecords.recordedAt, `${from} 00:00:00`), lte(timeRecords.recordedAt, `${to} 23:59:59`),
-    or(eq(employees.contractType, "extra"), eq(employees.position, "extra")),
-    // como no ordenado (payroll/shifts countableShifts): suspeitos/rejeitados não pagam até aprovados
-    inArray(timeRecords.reviewStatus, ["ok", "approved"]),
-    sql`COALESCE(${timeRecords.notes}, '') NOT LIKE '%[SUSPEITO]%'`,
-  ];
-  if (projectIds) pontoConds.push(projectIds.length ? inArray(employees.projectId, projectIds) : sql`1 = 0`);
-  const extrasPontoRows = await db
-    .select({ recordedAt: timeRecords.recordedAt, hours: timeRecords.hoursWorked, level: employees.extraLevel, employeeId: timeRecords.employeeId })
-    .from(timeRecords)
-    .innerJoin(employees, eq(employees.id, timeRecords.employeeId))
-    .where(and(...pontoConds));
+  const extrasCostRows = await loadExtrasCostRows(db, { from, to, projectIds, cities });
 
   // ─── 5. Parceiros (índice com conflitos) + operacionais ───────────────────
   const partnerRows = await db.select({ id: partnerships.id, name: partnerships.name, campaignKey: partnerships.campaignKey, commissionRate: partnerships.commissionRate, partnerType: partnerships.partnerType, notes: partnerships.notes, updatedAt: partnerships.updatedAt, configuredAt: partnerships.configuredAt }).from(partnerships);
@@ -400,35 +381,12 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
 
   // Equipa do dia — a ESCALA é a estimativa (custo previsto); o custo que
   // conta nas contas é o REAL (ponto) até hoje e o previsto só nos dias futuros.
-  const extrasByLevel = new Map<string, { level: string; hours: number; headcount: number; cost: number }>();
-  const extrasPlannedByDay = new Map<string, number>();
-  const extrasRealByDay = new Map<string, number>();
-  let tlShifts = 0;
-  for (const r of extrasRows) {
-    if (r.isTeamLeader) { tlShifts++; continue; }  // salário mensal já paga o team leader
-    const hours = R.shiftHours(r.startHour, r.endHour, r.sentHomeHour);
-    const cost = hours * rateFor(extraRatesLive, r.level);
-    addTo(extrasPlannedByDay, r.date, cost);
-    const lv = String(r.level ?? "junior");
-    const ex = extrasByLevel.get(lv) ?? { level: lv, hours: 0, headcount: 0, cost: 0 };
-    ex.hours += hours; ex.headcount += 1; ex.cost += cost;
-    extrasByLevel.set(lv, ex);
-  }
-  out.quality.extrasDiaTeamLeaderShifts = tlShifts;
-  const extrasRealByLevel = new Map<string, { level: string; hours: number; headcount: number; cost: number }>();
-  const realPeople = new Map<string, Set<number>>();
-  for (const r of extrasPontoRows) {
-    const hours = num(r.hours);
-    if (hours <= 0) continue;
-    const lvName = ({ 1: "junior", 2: "senior", 3: "terminal", 4: "master" } as Record<number, string>)[Number(r.level ?? 1)] ?? "junior";
-    const cost = hours * rateFor(extraRatesLive, lvName);
-    addTo(extrasRealByDay, dayOf(r.recordedAt), cost);
-    const ex = extrasRealByLevel.get(lvName) ?? { level: lvName, hours: 0, headcount: 0, cost: 0 };
-    ex.hours += hours; ex.cost += cost;
-    extrasRealByLevel.set(lvName, ex);
-    const people = realPeople.get(lvName) ?? new Set<number>(); people.add(r.employeeId); realPeople.set(lvName, people);
-  }
-  for (const [lv, ppl] of realPeople) extrasRealByLevel.get(lv)!.headcount = ppl.size;
+  const extrasAgg = aggregateExtrasCost(extrasCostRows, extraRatesLive, { dayOfRecord: (v) => dayOf(v), cityOfProject: () => null });
+  const extrasByLevel = extrasAgg.plannedByLevel;
+  const extrasRealByLevel = extrasAgg.realByLevel;
+  const extrasPlannedByDay = extrasAgg.plannedByDay;
+  const extrasRealByDay = extrasAgg.realByDay;
+  out.quality.extrasDiaTeamLeaderShifts = extrasAgg.teamLeaderShifts;
   // O que entra na margem: real (ponto) até hoje; previsto (escala) nos dias futuros.
   for (const [d, v] of extrasRealByDay) if (d <= today) addTo(extrasByDay, d, v);
   for (const [d, v] of extrasPlannedByDay) if (d > today) addTo(extrasByDay, d, v);

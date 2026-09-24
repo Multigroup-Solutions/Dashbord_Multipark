@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -51,11 +52,14 @@ function isOperationalFlag(name: string, price: number): boolean {
 
 export default function ServicesPage() {
   const [defFrom, defTo] = thisMonthRange();
-  const [startDate, setStartDate] = usePersistedState("servicos.from", defFrom);
-  const [endDate, setEndDate] = usePersistedState("servicos.to", defTo);
-  const [activeRange, setActiveRange] = usePersistedState<string>("servicos.range", "thisMonth");
+  // Mesmo período das Reservas & Operações (chaves partilhadas)
+  const [startDate, setStartDate] = usePersistedState("mpk.shared.start", defFrom);
+  const [endDate, setEndDate] = usePersistedState("mpk.shared.end", defTo);
+  const [activeRange, setActiveRange] = usePersistedState<string>("mpk.shared.range", "thisMonth");
+  // Cidade/projeto do filtro global (o servidor aplica sempre o âmbito do utilizador)
+  const globalFilters = useGlobalFilters();
 
-  const { data, isLoading } = trpc.services.multiparkExtras.useQuery({ startDate, endDate });
+  const { data, isLoading } = trpc.services.multiparkExtras.useQuery({ startDate, endDate, projectId: globalFilters.projectId });
   const [showFlags, setShowFlags] = usePersistedState<boolean>("servicos.flags", false);
   const [detailExternalId, setDetailExternalId] = useState<string | null>(null);
   const detailQ = trpc.multipark.bookingByExternalId.useQuery(
