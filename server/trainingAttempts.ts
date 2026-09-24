@@ -214,9 +214,13 @@ async function requestPromotion(employeeId: number, exam: { id: number; level: s
   }
   await d.insert(trainingPromotions).values({ employeeId, examId: exam.id, attemptId, level: exam.level, score, status: "pending" });
   try {
-    const [emp] = await d.select({ fullName: employees.fullName }).from(employees).where(eq(employees.id, employeeId)).limit(1);
-    const { notifyBackoffice } = await import("./extrasAutomation");
-    await notifyBackoffice(`Promoção por aprovar: ${emp?.fullName ?? `#${employeeId}`}`, `Passou no exame "${exam.title}" com ${score}%.`, "/formacao");
+    const [emp] = await d.select({ fullName: employees.fullName, projectId: employees.projectId }).from(employees).where(eq(employees.id, employeeId)).limit(1);
+    const { notify } = await import("./notify");
+    await notify({
+      kind: "training_promotion", projectId: emp?.projectId ?? null,
+      title: `Promoção por aprovar: ${emp?.fullName ?? `#${employeeId}`}`, body: `Passou no exame "${exam.title}" com ${score}%.`, link: "/formacao",
+      entity: { type: "training_promotion", id: `${employeeId}:${exam.id}` },
+    });
   } catch { /* aviso é best-effort */ }
   return true;
 }
@@ -254,8 +258,8 @@ export async function decidePromotion(id: number, approve: boolean, note: string
     await d.update(trainingPromotions).set({ certificateId }).where(eq(trainingPromotions.id, id));
     if (emp.userId) {
       try {
-        const { createNotification } = await import("./complaintsExtended");
-        await createNotification({ userId: emp.userId, title: "Promoção aprovada 🎉", body: `Subiste para ${p.level}. O certificado está na Formação → Carreira.`, kind: "training", link: "/formacao" });
+        const { notify } = await import("./notify");
+        await notify({ kind: "my_training", targetUserId: emp.userId, title: "Promoção aprovada 🎉", body: `Subiste para ${p.level}. O certificado está na Formação → Carreira.`, link: "/formacao", entity: { type: "training_promotion", id } });
       } catch { /* segue */ }
     }
   }

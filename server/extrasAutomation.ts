@@ -262,34 +262,14 @@ async function logWhatsappRequest(employeeId: number, kind: string, fields: { ta
     VALUES (${employeeId}, '', ${kind}, ${fields.targetDate ?? null}, NULL, NULL, NULL, ${fields.weekStart ?? null})`);
 }
 
-/**
- * Notificação ao backoffice. Com `projectId` (cidade da pessoa em causa), só
- * recebe quem tem essa cidade no seu âmbito — e quem vê todas as cidades. Sem
- * `projectId` (ou cidade desconhecida) vai a todos, como antes.
- */
-export async function notifyBackoffice(title: string, body: string, link: string, opts: { projectId?: number | null } = {}): Promise<void> {
+/** Centro de custos (projeto) da ficha — dá a cidade das notificações. */
+async function employeeProjectId(employeeId: number): Promise<number | null> {
   const db = await getDb();
-  if (!db) return;
-  const { users } = await import("../drizzle/schema");
-  const { createNotification } = await import("./complaintsExtended");
-  const rows = await db.select({ id: users.id, role: users.role }).from(users)
-    .where(sql`${users.role} IN ('admin','super_admin','supervisor','backoffice') AND ${users.isActive} = 1`);
-  const roleById = new Map(rows.map((r) => [r.id, r.role]));
-  let targets = rows.map((r) => r.id);
-  if (opts.projectId != null) {
-    const { loadCityAccess } = await import("./cityAccess");
-    const scoped: number[] = [];
-    for (const id of targets) {
-      try {
-        const access = await loadCityAccess(id, roleById.get(id));
-        if (userSeesProject(access, opts.projectId)) scoped.push(id);
-      } catch { /* sem âmbito resolvido → não recebe avisos de cidade */ }
-    }
-    targets = scoped;
-  }
-  for (const id of targets) {
-    try { await createNotification({ userId: id, title, body, kind: "extras", link }); } catch { /* segue */ }
-  }
+  if (!db) return null;
+  const { employees } = await import("../drizzle/schema");
+  const { eq } = await import("drizzle-orm");
+  const [e] = await db.select({ projectId: employees.projectId }).from(employees).where(eq(employees.id, employeeId)).limit(1);
+  return e?.projectId ?? null;
 }
 
 /** O utilizador vê a cidade/centro `projectId`? (todas as cidades → sim). PURA. */
@@ -759,12 +739,15 @@ export async function handleWhatsappReply(input: { employeeId: number; conversat
         await replyToConversation(input.conversationId, reply, null);
         return { action, reply };
       }
-      await notifyBackoffice(
-        `${name} não pode ir ao turno de ${pending.targetDate}`,
-        `Respondeu "não" ao aviso de escala por WhatsApp. Procura substituto.`,
-        "/extras-dia",
-        { projectId: emp?.projectId ?? null },
-      );
+      const { notify } = await import("./notify");
+      await notify({
+        kind: "extras_schedule_reply",
+        projectId: emp?.projectId ?? null,
+        title: `${name} não pode ir ao turno de ${pending.targetDate}`,
+        body: `Respondeu "não" ao aviso de escala por WhatsApp. Procura substituto.`,
+        link: "/extras-dia",
+        entity: { type: "extras_notice", id: `${input.employeeId}:${pending.targetDate}` },
+      });
       const reply = "Obrigado por avisares. Vamos tratar da substituição.";
       await replyToConversation(input.conversationId, reply, null);
       return { action, reply };
@@ -808,7 +791,15 @@ export async function handleWhatsappReply(input: { employeeId: number; conversat
 async function flagAvailabilityForReview(employeeId: number, pending: PendingRequest, detail: string): Promise<void> {
   try {
     if (pending.kind === "assignment") {
-      await notifyBackoffice("Resposta ao aviso de escala por rever", `${detail}`.slice(0, 500), "/extras-dia");
+      const { notify } = await import("./notify");
+      await notify({
+        kind: "extras_schedule_reply",
+        projectId: await employeeProjectId(employeeId),
+        title: "Resposta ao aviso de escala por rever",
+        body: `${detail}`.slice(0, 500),
+        link: "/extras-dia",
+        entity: { type: "extras_notice", id: `${employeeId}:${pending.targetDate ?? ""}` },
+      });
       return;
     }
     const day = pending.weekStart ?? pending.targetDate;
@@ -953,7 +944,12 @@ export async function runExtrasAutomation(now: Date = new Date()): Promise<Autom
         out[city] = gaps.length;
         if (gaps.length) {
           const label = city === "lisbon" ? "Lisboa" : city === "porto" ? "Porto" : "Faro";
-          await notifyBackoffice(`Faltam condutores amanhã em ${label}`, `${date}: ${describeGaps(gaps)}`, "/extras-dia");
+          const { notify } = await import("./notify");
+          await notify({
+            kind: "extras_gap", city,
+            title: `Faltam condutores amanhã em ${label}`, body: `${date}: ${describeGaps(gaps)}`, link: "/extras-dia",
+            entity: { type: "extras_gap", id: `${date}:${city}` },
+          });
         }
       }
       return out;
@@ -1073,6 +1069,7 @@ async function runLeadAutomation(
       .select({
         id: extraLeads.id,
         status: extraLeads.status,
+        projectId: extraLeads.projectId,
         createdAt: extraLeads.createdAt,
         lastContactedAt: extraLeads.lastContactedAt,
         lastInboundAt: extraLeads.lastInboundAt,
@@ -1087,12 +1084,26 @@ async function runLeadAutomation(
   if (clock.hour >= LEAD_SLA_NOTICE_HOUR) {
     await run(`leads-sla:${clock.date}`, async () => {
       const { newStale, contactedStale } = selectSlaLeads(await loadOpenLeads(), now.getTime());
-      if (newStale.length || contactedStale.length) {
-        await notifyBackoffice(
-          `Leads à espera: ${newStale.length + contactedStale.length}`,
-          `${newStale.length} novo(s) sem contacto há mais de 24h · ${contactedStale.length} contactado(s) sem resposta há mais de 3 dias.`,
-          "/extras-leads",
-        );
+      // Um resumo por cidade da lead (sem cidade → só quem vê todas as cidades).
+      const byProject = new Map<string, { projectId: number | null; fresh: number; contacted: number }>();
+      const bump = (projectId: number | null, k: "fresh" | "contacted") => {
+        const key = String(projectId);
+        const g = byProject.get(key) ?? { projectId, fresh: 0, contacted: 0 };
+        g[k]++;
+        byProject.set(key, g);
+      };
+      for (const l of newStale) bump(l.projectId ?? null, "fresh");
+      for (const l of contactedStale) bump(l.projectId ?? null, "contacted");
+      const { notify } = await import("./notify");
+      for (const g of Array.from(byProject.values())) {
+        await notify({
+          kind: "leads_waiting",
+          projectId: g.projectId,
+          title: `Leads à espera: ${g.fresh + g.contacted}`,
+          body: `${g.fresh} novo(s) sem contacto há mais de 24h · ${g.contacted} contactado(s) sem resposta há mais de 3 dias.`,
+          link: "/extras-leads",
+          entity: { type: "leads_waiting", id: `${clock.date}:${g.projectId ?? "-"}` },
+        });
       }
       return { newStale: newStale.length, contactedStale: contactedStale.length };
     });

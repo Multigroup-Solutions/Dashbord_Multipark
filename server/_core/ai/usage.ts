@@ -113,19 +113,21 @@ export async function getPriceOverrides(): Promise<AiPriceOverrides | null> {
   }
 }
 
-/** Aviso aos admins, UMA vez por mês (INSERT IGNORE). Nunca lança. */
+/** Aviso `ai_budget` (super_admin/admin), UMA vez por mês (INSERT IGNORE). Nunca lança. */
 export async function notifyBudgetExceededOnce(month: string, spentEur: number, budgetEur: number): Promise<boolean> {
   try {
     const d = await db();
     if (!d) return false;
     const res = await d.execute(sql`INSERT IGNORE INTO ai_budget_alerts (month, spentEur, budgetEur) VALUES (${month}, ${spentEur.toFixed(4)}, ${budgetEur.toFixed(4)})`);
     if (affectedRows(res) !== 1) return false;
-    const { notifyAdmins } = await import("../../syncHealth");
-    await notifyAdmins(
-      "Orçamento da IA atingido",
-      `A IA já gastou cerca de ${spentEur.toFixed(2).replace(".", ",")} € este mês (orçamento: ${budgetEur.toFixed(2).replace(".", ",")} €). As funcionalidades não essenciais ficam em pausa até ao próximo mês ou até o orçamento subir em Definições → Parâmetros.`,
-      "/definicoes",
-    );
+    const { notify } = await import("../../notify");
+    await notify({
+      kind: "ai_budget",
+      title: "Orçamento da IA atingido",
+      body: `A IA já gastou cerca de ${spentEur.toFixed(2).replace(".", ",")} € este mês (orçamento: ${budgetEur.toFixed(2).replace(".", ",")} €). As funcionalidades não essenciais ficam em pausa até ao próximo mês ou até o orçamento subir em Definições → Parâmetros.`,
+      link: "/definicoes",
+      entity: { type: "ai_budget", id: month },
+    });
     return true;
   } catch (err: any) {
     console.warn("[ai] aviso de orçamento falhou:", String(err?.code ?? err?.name ?? "erro"));

@@ -87,7 +87,35 @@ export async function applyDocsCompliance(employeeId: number, opts: { enforceBlo
     await db.update(employees).set(patch).where(eq(employees.id, employeeId));
     await recomputeLoginBlocked(employeeId);
   }
+  // 1.º aviso (14 dias): RH da cidade (backoffice/supervisor) + a própria pessoa.
+  if (patch.docsWarningAt) await notifyDocsMissing(employeeId, st.missingDocs, st.daysSinceStart);
   return getExtraDocsStatus(employeeId);
+}
+
+/** Avisos "documentos em falta" (1× por aviso: só quando docsWarningAt é gravado). Nunca lança. */
+async function notifyDocsMissing(employeeId: number, missingDocs: string[], days: number): Promise<void> {
+  try {
+    const db = await getDb();
+    if (!db) return;
+    const [emp] = await db.select({ fullName: employees.fullName, userId: employees.userId, projectId: employees.projectId })
+      .from(employees).where(eq(employees.id, employeeId)).limit(1);
+    if (!emp) return;
+    const list = missingDocs.slice(0, 6).join(", ") + (missingDocs.length > 6 ? "…" : "");
+    const { notify } = await import("./notify");
+    const entity = { type: "employee_docs", id: employeeId };
+    await notify({
+      kind: "rh_docs_missing", projectId: emp.projectId ?? null,
+      title: `Documentos em falta: ${emp.fullName}`, body: `Há ${days} dias sem: ${list}.`, link: "/rh", entity,
+    });
+    if (emp.userId) {
+      await notify({
+        kind: "my_docs_missing", targetUserId: emp.userId,
+        title: "Tens documentos em falta", body: `Carrega na tua ficha: ${list}.`, link: "/perfil", entity,
+      });
+    }
+  } catch (err) {
+    console.warn("[docs] aviso de documentos em falta:", String((err as any)?.message ?? err).slice(0, 160));
+  }
 }
 
 /** Cron diário: aplica a regra documental a todos os extras ativos. */

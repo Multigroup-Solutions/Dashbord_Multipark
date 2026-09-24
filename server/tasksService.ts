@@ -180,8 +180,9 @@ export async function deleteTaskCascade(id: number): Promise<void> {
 type Notify = (n: { userId: number; title: string; body: string; link: string }) => Promise<void>;
 
 async function defaultNotify(n: { userId: number; title: string; body: string; link: string }) {
-  const { createNotification } = await import("./complaintsExtended");
-  await createNotification({ userId: n.userId, title: n.title, body: n.body, kind: "task", link: n.link });
+  // Pessoal: só a pessoa indicada (criador, responsável, gestor da hierarquia).
+  const { notify } = await import("./notify");
+  await notify({ kind: "task", targetUserId: n.userId, title: n.title, body: n.body, link: n.link });
 }
 
 async function emailUser(userId: number, subject: string, text: string): Promise<void> {

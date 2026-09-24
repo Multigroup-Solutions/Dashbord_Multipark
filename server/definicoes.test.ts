@@ -145,9 +145,9 @@ describe("definições: validação", () => {
 
 describe("preferências de notificação", () => {
   it("só guarda tipos conhecidos e silenciáveis", () => {
-    expect(parseNotificationPrefs('{"muted":["task","handover","lixo","task"]}')).toEqual({ muted: ["task"] });
-    expect(parseNotificationPrefs(null)).toEqual({ muted: [] });
-    expect(parseNotificationPrefs("{nope")).toEqual({ muted: [] });
+    expect(parseNotificationPrefs('{"muted":["task","handover","lixo","task"]}')).toEqual({ muted: ["task"], email: {} });
+    expect(parseNotificationPrefs(null)).toEqual({ muted: [], email: {} });
+    expect(parseNotificationPrefs("{nope")).toEqual({ muted: [], email: {} });
   });
   it("obrigatórias e desconhecidas entram sempre", () => {
     const prefs = { muted: ["task", "handover"] };

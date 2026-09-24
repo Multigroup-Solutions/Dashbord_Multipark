@@ -103,9 +103,12 @@ export const settingsRouter = router({
     set: adminOnly
       .input(z.object({ key: z.enum(SETTING_KEYS as [string, ...string[]]), value: z.unknown() }))
       .mutation(async ({ ctx, input }) => {
+        // As regras das notificações são do super_admin (Definições → Notificações).
+        if (input.key === "notifications.routing") requireSuperAdmin(ctx.user.role);
         const { setSetting } = await import("./appSettings");
         try {
           const r = await setSetting(input.key, input.value === undefined ? null : input.value, ctx.user.id);
+          if (input.key === "notifications.routing") (await import("./notify")).invalidateNotifyCache();
           if (r.changed) await log(ctx.user.id, "update", "app_setting", `${input.key} = ${JSON.stringify(r.value)}`);
           return r;
         } catch (err: any) {

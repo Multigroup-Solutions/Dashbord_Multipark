@@ -403,6 +403,7 @@ export async function runTrainingAutomation(now: Date, hour: number): Promise<Tr
     lastReminderAt: trainingAssignments.lastReminderAt, escalatedAt: trainingAssignments.escalatedAt,
     employeeId: trainingAssignments.employeeId, pathName: trainingPaths.name,
     fullName: employees.fullName, userId: employees.userId, email: employees.email, personalEmail: employees.personalEmail,
+    projectId: employees.projectId,
   }).from(trainingAssignments)
     .innerJoin(trainingPaths, eq(trainingPaths.id, trainingAssignments.pathId))
     .innerJoin(employees, eq(employees.id, trainingAssignments.employeeId))
@@ -410,7 +411,7 @@ export async function runTrainingAutomation(now: Date, hour: number): Promise<Tr
 
   const { remind, escalate } = selectReminders(open, now);
   const byId = new Map(open.map(o => [o.id, o]));
-  const { createNotification } = await import("./complaintsExtended");
+  const { notify } = await import("./notify");
   const { sendEmail, isSmtpConfigured } = await import("./_core/notification");
   const smtp = isSmtpConfigured();
   const link = `${appOrigin()}/formacao`;
@@ -421,7 +422,7 @@ export async function runTrainingAutomation(now: Date, hour: number): Promise<Tr
       ? `A formação "${a.pathName}" está em atraso há ${late} dia(s). Conclui-a em ${link}`
       : `A formação "${a.pathName}" termina a ${lisbonDay(parseDbDate(a.dueAt!))}. Conclui-a em ${link}`;
     if (a.userId) {
-      try { await createNotification({ userId: a.userId, title: `Formação por concluir — ${a.pathName}`, body, kind: "training", link: "/formacao" }); } catch { /* segue */ }
+      await notify({ kind: "my_training", targetUserId: a.userId, title: `Formação por concluir — ${a.pathName}`, body, link: "/formacao", entity: { type: "training_assignment", id: a.id } });
     }
     const to = a.email || a.personalEmail;
     if (to && smtp) {
@@ -438,10 +439,14 @@ export async function runTrainingAutomation(now: Date, hour: number): Promise<Tr
     report.reminded++;
   }
   if (escalate.length) {
-    const { notifyBackoffice } = await import("./extrasAutomation");
     for (const id of escalate) {
       const a = byId.get(id)!;
-      await notifyBackoffice(`Formação em atraso: ${a.fullName}`, `"${a.pathName}" está em atraso há ${daysLate(a.dueAt, now)} dia(s).`, "/formacao");
+      // Chefias DA CIDADE da pessoa (team leader/supervisor) + quem vê todas.
+      await notify({
+        kind: "training_overdue", projectId: a.projectId ?? null,
+        title: `Formação em atraso: ${a.fullName}`, body: `"${a.pathName}" está em atraso há ${daysLate(a.dueAt, now)} dia(s).`, link: "/formacao",
+        entity: { type: "training_assignment", id: a.id },
+      });
       await d.update(trainingAssignments).set({ escalatedAt: nowDb }).where(eq(trainingAssignments.id, id));
       report.escalated++;
     }

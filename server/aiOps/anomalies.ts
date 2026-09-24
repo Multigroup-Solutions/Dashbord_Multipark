@@ -252,9 +252,28 @@ export async function saveAnomalies(list: AnomalyRecord[]): Promise<number> {
       INSERT IGNORE INTO ops_anomalies (day, domain, kind, cityKey, projectId, subject, value, expected, zScore, severity, detail, refIds, dedupKey)
       VALUES (${a.day}, ${a.domain}, ${a.kind}, ${a.cityKey}, ${a.projectId}, ${a.subject}, ${a.value}, ${a.expected}, ${a.zScore}, ${a.severity}, ${a.detail}, ${a.refIds}, ${a.dedupKey})`);
     const header: any = Array.isArray(res) ? res[0] : res;
-    inserted += Number(header?.affectedRows ?? 0) > 0 ? 1 : 0;
+    const isNew = Number(header?.affectedRows ?? 0) > 0;
+    inserted += isNew ? 1 : 0;
+    if (isNew && a.severity === "critical") await notifyAnomaly(a);
   }
   return inserted;
+}
+
+const ANOMALY_KIND = { bookings: "anomaly_bookings", expenses: "anomaly_expenses", marketing: "marketing_alert" } as const;
+const ANOMALY_LINK = { bookings: "/operacoes", expenses: "/despesas", marketing: "/marketing" } as const;
+
+/** Anomalia CRÍTICA nova → aviso do domínio (reservas/despesas: cidade; marketing: só quem tem o Marketing). Nunca lança. */
+async function notifyAnomaly(a: AnomalyRecord): Promise<void> {
+  const kind = ANOMALY_KIND[a.domain as keyof typeof ANOMALY_KIND];
+  if (!kind) return;
+  try {
+    const { notify } = await import("../notify");
+    await notify({
+      kind, projectId: a.projectId ?? null, city: a.cityKey ?? null,
+      title: `Anomalia: ${a.subject}`.slice(0, 255), body: a.detail,
+      link: ANOMALY_LINK[a.domain as keyof typeof ANOMALY_LINK], entity: { type: "anomaly", id: a.dedupKey },
+    });
+  } catch { /* o aviso é best-effort */ }
 }
 
 /** Pedido compacto (sem nomes de pessoas: só fornecedor/parque/canal e números). PURA. */

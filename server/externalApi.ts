@@ -7,7 +7,6 @@ import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { vehicles } from "../drizzle/schema";
 import { apiKeyMiddleware, logApiKeyAction } from "./apiKeyAuth";
-import { notifyOwner } from "./_core/notification";
 import {
   getVehicles,
   getAllEmployees,
@@ -94,16 +93,19 @@ export function createExternalApiRouter(): Router {
         roadName: roadName ?? null,
       });
 
-      // Notify super admin
+      // Aviso `speed_alert` (chefias da cidade do condutor + quem vê todas).
       const plateLabel = plate || `Viatura #${resolvedVehicleId}`;
-      await notifyOwner({
-        title: "⚠️ Alerta de Velocidade (GPS)",
-        content: `${plateLabel} a ${speed} km/h (limite: ${speedLimit} km/h)${roadName ? " em " + roadName : ""}. Excesso: +${speed - speedLimit} km/h.`,
+      const { notify } = await import("./notify");
+      await notify({
+        kind: "speed_alert", employeeId: employeeId ?? null,
+        title: "Alerta de Velocidade (GPS)",
+        body: `${plateLabel} a ${speed} km/h (limite: ${speedLimit} km/h)${roadName ? " em " + roadName : ""}. Excesso: +${speed - speedLimit} km/h.`,
+        link: "/operacional", entity: { type: "speed_alert", id },
       });
 
       await logApiKeyAction(req, { action: "create", entity: "speed_alert", entityId: id, details: `${speed}km/h (limite ${speedLimit}km/h) - ${plateLabel}` });
 
-      res.json({ success: true, id, message: "Speed alert registered and admin notified" });
+      res.json({ success: true, id, message: "Speed alert registered and team notified" });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

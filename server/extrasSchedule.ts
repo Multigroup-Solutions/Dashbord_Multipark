@@ -362,12 +362,14 @@ export async function proposeSchedule(input: { date: string; city: ScheduleCity;
 
     if (by === "auto" && plan.gaps.length) {
       try {
-        const { notifyBackoffice } = await import("./extrasAutomation");
-        await notifyBackoffice(
-          `Faltam condutores em ${CITY_LABELS_PT[city]} (${date})`,
-          `Proposta automática: ${plan.gaps.map(describeGap).join("; ")}. Pede disponibilidade a quem não respondeu.`,
-          "/extras-dia",
-        );
+        const { notify } = await import("./notify");
+        await notify({
+          kind: "extras_gap", city,
+          title: `Faltam condutores em ${CITY_LABELS_PT[city]} (${date})`,
+          body: `Proposta automática: ${plan.gaps.map(describeGap).join("; ")}. Pede disponibilidade a quem não respondeu.`,
+          link: "/extras-dia",
+          entity: { type: "extras_gap", id: `${date}:${city}` },
+        });
       } catch { /* aviso é best-effort */ }
     }
     return { status: "proposed", proposed: plan.picks.length, kept: kept.length, gaps: plan.gaps, summary };

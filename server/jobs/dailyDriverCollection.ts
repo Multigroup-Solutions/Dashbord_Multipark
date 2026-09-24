@@ -24,7 +24,6 @@ import {
 } from "../db";
 import { storagePut } from "../storage";
 import { MAX_PLAUSIBLE_KMH, MIN_IMPLICIT_GAP_S, STOPPED_SPEED_KMH, gpsPointsFromGeoJson, splitByHolder, zelloAccuracyOk, zelloBattery, zelloSpeedKmh, zelloTimestamp } from "../zelloGps";
-import { notifyOwner } from "../_core/notification";
 import { lisbonDayOf, lisbonDayRangeUtc } from "../../shared/lisbonDay";
 
 /** Calculate distance between two GPS points using Haversine formula */
@@ -508,9 +507,12 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
 
     // Send summary notification (só quando termina, para não duplicar em corridas parciais)
     if (done && driversProcessed > 0) {
-      await notifyOwner({
+      const { notify } = await import("../notify");
+      await notify({
+        kind: "driver_daily_report",
         title: "Relatório Diário de Motoristas",
-        content: `Recolha automática para ${dateStr}: ${driversProcessed + alreadyDone.size} motoristas processados${errors.length > 0 ? `, ${errors.length} erros` : ""}`,
+        body: `Recolha automática para ${dateStr}: ${driversProcessed + alreadyDone.size} motoristas processados${errors.length > 0 ? `, ${errors.length} erros` : ""}`,
+        link: "/operacional", entity: { type: "driver_daily_report", id: dateStr },
       });
     }
 

@@ -384,15 +384,17 @@ export async function getLostDashboard(f: CaseScopeFilter) {
 
 // ─── Lembretes de SLA (cron horário) ────────────────────────────────────────
 
-export interface CaseReminderReport { skipped?: string; incidents: number; lost: number; notified: number }
+export interface CaseReminderReport { skipped?: string; incidents: number; lost: number; complaints: number; notified: number }
 
 /**
- * Casos em atraso → UM resumo por destinatário por dia (assignee do caso +
- * team leaders/supervisores da cidade do caso; "Sem cidade" → só quem vê
- * todas as cidades). `lastReminderAt` garante 1×/dia por caso.
+ * Casos em atraso → UM resumo por CIDADE por tipo e por dia (as regras de quem
+ * recebe estão em shared/notificationRouting.ts: team leaders/supervisores/
+ * backoffice da cidade + quem vê todas; "sem cidade" → só quem vê todas) e o
+ * responsável do caso. `lastReminderAt` garante 1×/dia por ocorrência/perdido;
+ * `slaAlertedAt` 1× por reclamação.
  */
 export async function runCaseSlaReminders(now: Date, hour: number): Promise<CaseReminderReport> {
-  const report: CaseReminderReport = { incidents: 0, lost: 0, notified: 0 };
+  const report: CaseReminderReport = { incidents: 0, lost: 0, complaints: 0, notified: 0 };
   if (!isFeatureEnabled("CASE_REMINDERS")) return { ...report, skipped: "CASE_REMINDERS=off" };
   if (!isCaseReminderHour(hour)) return { ...report, skipped: "fora de horas" };
   const d = await db();
@@ -405,55 +407,72 @@ export async function runCaseSlaReminders(now: Date, hour: number): Promise<Case
     SELECT id, projectId, assignedTo, lastReminderAt FROM lost_found_items
     WHERE status IN ('new','investigating','found') AND COALESCE(dueDate, DATE_ADD(createdAt, INTERVAL 7 DAY)) < ${nowStr}
     ORDER BY id ASC LIMIT 500`)).filter((r) => reminderDue(fmt(r.lastReminderAt), now));
-  if (!incRows.length && !lostRows.length) return report;
+  let complaintRows: any[] = [];
+  try {
+    complaintRows = rowsOf(await d.execute(sql`
+      SELECT id, projectId, assignedToId FROM complaints
+      WHERE complaint_status IN ('new','analyzing') AND slaDeadline IS NOT NULL AND slaDeadline < ${nowStr}
+        AND slaAlertedAt IS NULL
+      ORDER BY slaDeadline ASC LIMIT 500`));
+  } catch { /* coluna slaAlertedAt ainda por criar (0140) */ }
+  if (!incRows.length && !lostRows.length && !complaintRows.length) return report;
 
-  const { cityOf, nodes } = await projectCityMap();
-  const leaders = await d.select({ userId: users.id, role: users.role, projectId: employees.projectId })
-    .from(users).innerJoin(employees, eq(employees.userId, users.id))
-    .where(and(eq(users.isActive, 1), inArray(users.role, ["team_leader", "supervisor"])));
-  const leaderInfo = leaders.map((l) => {
-    const acc = resolveCityAccess(l.projectId ?? null, nodes as any);
-    return { userId: l.userId, all: acc.all, cityId: cityOf(l.projectId)?.id ?? null };
-  });
-  const recipientsFor = (projectId: number | null): number[] => {
-    const city = cityOf(projectId);
-    return leaderInfo.filter((l) => (city ? l.all || l.cityId === city.id : l.all)).map((l) => l.userId);
+  const { cityOf } = await projectCityMap();
+  const day = nowStr.slice(0, 10);
+  /** Agrupa por cidade (nó `city`): a notificação leva o id do nó da cidade. */
+  const byCity = <T extends { projectId: unknown }>(rows: T[]) => {
+    const m = new Map<string, { cityId: number | null; rows: T[] }>();
+    for (const r of rows) {
+      const c = cityOf(r.projectId != null ? Number(r.projectId) : null);
+      const k = String(c?.id ?? "-");
+      const g = m.get(k) ?? { cityId: c?.id ?? null, rows: [] as T[] };
+      g.rows.push(r);
+      m.set(k, g);
+    }
+    return Array.from(m.values());
   };
+  const idList = (rows: any[]) => `#${rows.slice(0, 5).map((r) => Number(r.id)).join(", #")}${rows.length > 5 ? "…" : ""}`;
+  const { notify } = await import("./notify");
 
-  const digest = new Map<number, { inc: number[]; lost: number[] }>();
-  const add = (uid: number, kind: "inc" | "lost", id: number) => {
-    const e = digest.get(uid) ?? { inc: [], lost: [] };
-    e[kind].push(id);
-    digest.set(uid, e);
-  };
-  for (const r of incRows) for (const u of recipientsFor(r.projectId != null ? Number(r.projectId) : null)) add(u, "inc", Number(r.id));
+  for (const g of byCity(incRows)) {
+    const r = await notify({
+      kind: "incident_sla", projectId: g.cityId,
+      title: "Ocorrências em atraso", body: `Fora do prazo: ${g.rows.length} ocorrência(s) (${idList(g.rows)}).`,
+      link: "/ocorrencias", entity: { type: "incident_sla", id: `${day}:${g.cityId ?? "-"}` },
+    });
+    report.notified += r.recipients.length;
+  }
+
   const assigneeIds = Array.from(new Set(lostRows.map((r) => Number(r.assignedTo)).filter(Boolean)));
   const assigneeUser = new Map<number, number>();
   if (assigneeIds.length) {
     const emps = await d.select({ id: employees.id, userId: employees.userId }).from(employees).where(inArray(employees.id, assigneeIds));
     for (const e of emps) if (e.userId) assigneeUser.set(e.id, e.userId);
   }
-  for (const r of lostRows) {
-    const set = new Set(recipientsFor(r.projectId != null ? Number(r.projectId) : null));
-    const au = assigneeUser.get(Number(r.assignedTo));
-    if (au) set.add(au);
-    for (const u of Array.from(set)) add(u, "lost", Number(r.id));
+  for (const g of byCity(lostRows)) {
+    const r = await notify({
+      kind: "lost_found_sla", projectId: g.cityId,
+      alsoUserIds: g.rows.map((x) => assigneeUser.get(Number(x.assignedTo))),
+      title: "Perdidos em atraso", body: `Fora do prazo: ${g.rows.length} perdido(s) (${idList(g.rows)}).`,
+      link: "/perdidos-achados", entity: { type: "lost_found_sla", id: `${day}:${g.cityId ?? "-"}` },
+    });
+    report.notified += r.recipients.length;
   }
 
-  const { createNotification } = await import("./complaintsExtended");
-  for (const [userId, e] of Array.from(digest.entries())) {
-    const parts: string[] = [];
-    if (e.inc.length) parts.push(`${e.inc.length} ocorrência(s) (#${e.inc.slice(0, 5).join(", #")}${e.inc.length > 5 ? "…" : ""})`);
-    if (e.lost.length) parts.push(`${e.lost.length} perdido(s) (#${e.lost.slice(0, 5).join(", #")}${e.lost.length > 5 ? "…" : ""})`);
-    try {
-      await createNotification({
-        userId, kind: "case_sla", title: "Casos em atraso",
-        body: `Fora do prazo: ${parts.join(" · ")}.`,
-        link: e.lost.length && !e.inc.length ? "/perdidos-achados" : "/ocorrencias",
-      });
-      report.notified++;
-    } catch { /* best-effort */ }
+  for (const g of byCity(complaintRows)) {
+    const r = await notify({
+      kind: "complaint_sla", projectId: g.cityId,
+      alsoUserIds: g.rows.map((x) => (x.assignedToId == null ? null : Number(x.assignedToId))),
+      title: "Reclamações fora do prazo", body: `Passaram o SLA: ${g.rows.length} reclamação(ões) (${idList(g.rows)}).`,
+      link: "/reclamacoes", entity: { type: "complaint_sla", id: `${day}:${g.cityId ?? "-"}` },
+    });
+    report.notified += r.recipients.length;
   }
+  if (complaintRows.length) {
+    await d.execute(sql`UPDATE complaints SET slaAlertedAt = ${nowStr}
+      WHERE id IN (${sql.join(complaintRows.map((r) => sql`${Number(r.id)}`), sql`, `)}) AND slaAlertedAt IS NULL`);
+  }
+  report.complaints = complaintRows.length;
   if (incRows.length) {
     await d.update(incidents).set({ lastReminderAt: nowStr }).where(inArray(incidents.id, incRows.map((r) => Number(r.id))));
   }
