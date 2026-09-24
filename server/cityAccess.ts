@@ -101,7 +101,22 @@ export function resolveCityAccess(projectId: number | null, projects: ProjectNod
   return { all: false, defaultCityId: node.id, cityName: node.name, cityIds: [node.id], projectIds: [...ids], missingCostCenter: false };
 }
 
-export async function loadCityAccess(userId: number): Promise<CityAccess> {
+/**
+ * Papéis NACIONAIS (frontoffice, backoffice, admin, super_admin — ver
+ * shared/access.ts) veem todas as cidades. Continuam a precisar de centro de
+ * custos válido, exceto o super_admin, que nunca fica trancado fora.
+ * Os papéis de cidade (user…supervisor) ficam com o centro + grants.
+ */
+export function applyRoleScope(access: CityAccess, role: string | null | undefined, projects: ProjectNode[]): CityAccess {
+  const national = ['frontoffice', 'backoffice', 'admin', 'super_admin'].includes(String(role ?? ''));
+  if (!national) return access;
+  if (access.missingCostCenter && role !== 'super_admin') return access;
+  const cities = projects.filter(p => p.level === 'city');
+  return { ...access, all: true, missingCostCenter: false, cityIds: cities.map(p => p.id), cityNames: cities.map(p => p.name),
+    projectIds: projects.map(p => p.id) };
+}
+
+export async function loadCityAccess(userId: number, role?: string | null): Promise<CityAccess> {
   const { getDb, getUserPermissionOverrides } = await import('./db');
   const { employees, projects } = await import('../drizzle/schema');
   const { eq, or, sql } = await import('drizzle-orm');
@@ -116,5 +131,6 @@ export async function loadCityAccess(userId: number): Promise<CityAccess> {
     getUserPermissionOverrides(userId),
   ]);
   // Uma conta ligada a várias fichas diferentes exige reconciliação.
-  return applyCityPermissions(resolveCityAccess(people.length === 1 ? people[0].projectId : null, nodes), nodes, overrides);
+  const base = applyCityPermissions(resolveCityAccess(people.length === 1 ? people[0].projectId : null, nodes), nodes, overrides);
+  return applyRoleScope(base, role, nodes);
 }

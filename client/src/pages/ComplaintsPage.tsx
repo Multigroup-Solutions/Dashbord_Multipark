@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { can, roleRank, seesBeyondOwn } from "@shared/access";
 import { openInMultipark } from "@/lib/multiparkLinks";
 import { formatBookingHistoryDetails } from "@/lib/bookingHistoryFormat";
 import { fileHref } from "@/lib/fileHref";
@@ -588,7 +589,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
             ))}
           </SelectContent>
         </Select>
-        {["admin", "super_admin"].includes(user?.role) && (
+        {can(user?.role, "reclamacoes", "manage") && (
           <>
             {c.complaintStatus !== "converted" && <Button
               variant="outline" size="sm"
@@ -1734,7 +1735,7 @@ function SyncEmailsButton() {
     onError: (e) => toast.error(e.message),
   });
   const role = (user as any)?.role ?? "user";
-  if (!["backoffice", "team_leader", "supervisor", "admin", "super_admin"].includes(role)) return null;
+  if (!can(role, "sincronizacao", "edit")) return null;
   return (
     <Button variant="outline" onClick={() => syncMut.mutate()} disabled={syncMut.isPending}>
       <RefreshCw className={`w-4 h-4 mr-2 ${syncMut.isPending ? "animate-spin" : ""}`} />

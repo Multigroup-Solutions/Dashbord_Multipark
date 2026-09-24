@@ -7,7 +7,8 @@ vi.mock("./integrations/googleAds/adMetrics", () => ({ getAdMetrics: async () =>
 vi.mock("./marketingChannels", () => ({ getChannels: f.channels }));
 
 import { appRouter } from "./routers";
-const caller = (role = "backoffice") =>
+// Marketing: só super_admin (correção do dono, 24 set 2026).
+const caller = (role = "super_admin") =>
   appRouter.createCaller({ user: { id: 7, role }, req: { headers: {} }, res: {} } as any);
 
 beforeEach(() => {
@@ -17,7 +18,9 @@ beforeEach(() => {
 });
 
 describe("marketing.channels — permissões", () => {
-  it("frontoffice e extras não veem", async () => {
+  it("admin, backoffice, frontoffice e extras não veem", async () => {
+    await expect(caller("admin").marketing.channels({})).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller("backoffice").marketing.channels({})).rejects.toMatchObject({ code: "FORBIDDEN" });
     await expect(caller("frontoffice").marketing.channels({})).rejects.toMatchObject({ code: "FORBIDDEN" });
     await expect(caller("extra").marketing.channels({})).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(f.channels).not.toHaveBeenCalled();

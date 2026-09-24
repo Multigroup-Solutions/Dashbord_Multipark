@@ -207,7 +207,7 @@ export async function listConversations(): Promise<ConversationRow[]> {
   // O filtro de cidade vai no WHERE, ANTES do LIMIT — senão quem só vê uma
   // cidade podia ficar com uma lista vazia porque as 300 mais recentes eram
   // de outra.
-  const convs = await db
+  const fullQuery = () => db
     .select({
       id: whatsappConversations.id,
       phoneE164: whatsappConversations.phoneE164,
@@ -234,6 +234,44 @@ export async function listConversations(): Promise<ConversationRow[]> {
     .where(visibilitySql(scopedProjectIds()))
     .orderBy(desc(whatsappConversations.lastMessageAt))
     .limit(300);
+
+  // Rede de segurança: se a query completa falhar em produção (ex.: coluna da
+  // 0097 em falta, JOIN a users), a caixa continua a mostrar as conversas com
+  // os campos base — e o erro fica no log com a mensagem do MySQL.
+  const baseQuery = () => db
+    .select({
+      id: whatsappConversations.id,
+      phoneE164: whatsappConversations.phoneE164,
+      employeeId: whatsappConversations.employeeId,
+      unreadCount: whatsappConversations.unreadCount,
+      lastInboundAt: whatsappConversations.lastInboundAt,
+      lastMessageAt: whatsappConversations.lastMessageAt,
+      lastPreview: whatsappConversations.lastPreview,
+      lastDirection: whatsappConversations.lastDirection,
+      optedOutAt: whatsappConversations.optedOutAt,
+      profileName: whatsappConversations.profileName,
+      employeeName: employees.fullName,
+      leadName: sql<string | null>`NULL`,
+      status: sql<ConversationStatus>`'aberto'`,
+      assignedUserId: sql<number | null>`NULL`,
+      assignedName: sql<string | null>`NULL`,
+      awaitingSince: sql<string | null>`NULL`,
+      linkedBookingId: sql<number | null>`NULL`,
+      linkedClientEmail: sql<string | null>`NULL`,
+    })
+    .from(whatsappConversations)
+    .leftJoin(employees, eq(whatsappConversations.employeeId, employees.id))
+    .where(visibilitySql(scopedProjectIds()))
+    .orderBy(desc(whatsappConversations.lastMessageAt))
+    .limit(300);
+
+  let convs: Awaited<ReturnType<typeof fullQuery>>;
+  try {
+    convs = await fullQuery();
+  } catch (err: any) {
+    console.error("[WhatsApp] listConversations falhou, a usar query base:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 500));
+    convs = (await baseQuery()) as typeof convs;
+  }
 
   const missing = convs.filter((c) => c.lastDirection == null && c.lastMessageAt != null).map((c) => c.id);
   const filled = await fillMissingPreviews(db, missing);

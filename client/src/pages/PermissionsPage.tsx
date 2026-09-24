@@ -9,9 +9,12 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { ShieldCheck, Plus, X } from "lucide-react";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { canGrantPermissionsTo, canTouchPermission } from "@shared/access";
 
 export default function PermissionsPage() {
   const utils = trpc.useUtils();
+  const { user: me } = useAuth();
   const { data: catalog = [] } = trpc.permissions.catalog.useQuery();
   const { data: assignments = [], isLoading } = trpc.permissions.assignments.useQuery();
   const { data: users = [] } = trpc.users.list.useQuery();
@@ -40,8 +43,10 @@ export default function PermissionsPage() {
   const userOptions = useMemo(
     () => (users as any[])
       .filter((u) => u.isActive !== 0 && u.isActive !== false)
+      // Só contas a quem posso dar permissões (shared/access.ts)
+      .filter((u) => canGrantPermissionsTo(me?.role, u.role))
       .map((u) => ({ value: String(u.id), label: `${u.name ?? u.email ?? "#" + u.id}${u.email ? ` (${u.email})` : ""}` })),
-    [users]
+    [users, me?.role]
   );
 
   const categories = useMemo(() => {
@@ -77,7 +82,7 @@ export default function PermissionsPage() {
             <Select value={selPerm} onValueChange={setSelPerm}>
               <SelectTrigger className="w-72"><SelectValue placeholder="Permissão…" /></SelectTrigger>
               <SelectContent>
-                {(catalog as any[]).map((p) => (
+                {(catalog as any[]).filter((p) => canTouchPermission(me?.role, p.id)).map((p) => (
                   <SelectItem key={p.id} value={p.id}>{p.label}</SelectItem>
                 ))}
               </SelectContent>

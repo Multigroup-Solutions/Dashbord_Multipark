@@ -97,121 +97,106 @@ import { Label } from "./ui/label";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { trpc } from "@/lib/trpc";
 import { MobileTabBar } from "@/components/MobileTabBar";
+import { can, roleRank, type ModuleId } from "@shared/access";
 
 export type MenuItem = {
   icon: React.ElementType;
   label: string;
   path: string;
-  minRole?: string;
+  /** Módulo da matriz de acessos (shared/access.ts); visível com can(role, módulo, "view"). */
+  module?: ModuleId;
+  /** Alternativas: visível se QUALQUER destes módulos se vir (ex.: RH ou a própria ficha). */
+  anyOf?: ModuleId[];
 };
 
 export type MenuGroup = {
   label: string;
   items: MenuItem[];
-  minRole?: string;
   icon?: React.ElementType;
 };
 
-const ROLE_HIERARCHY: Record<string, number> = {
-  user: 0,
-  extra: 1,
-  frontoffice: 2,
-  backoffice: 3,
-  team_leader: 4,
-  supervisor: 5,
-  admin: 6,
-  super_admin: 7,
-};
-
-export function hasRole(userRole: string, minRole: string): boolean {
-  return (ROLE_HIERARCHY[userRole] ?? 0) >= (ROLE_HIERARCHY[minRole] ?? 0);
+/** O item é visível para o papel? (sem módulo = visível a qualquer sessão) */
+export function canSeeItem(userRole: string, item: Pick<MenuItem, "module" | "anyOf">): boolean {
+  const mods = item.anyOf ?? (item.module ? [item.module] : []);
+  return mods.length === 0 || mods.some(m => can(userRole, m, "view"));
 }
 
 export function getFilteredMenuGroups(userRole: string): MenuGroup[] {
   return menuGroups
-    .filter(g => !g.minRole || hasRole(userRole, g.minRole))
-    .map(g => ({
-      ...g,
-      items: g.items.filter(i => !i.minRole || hasRole(userRole, i.minRole)),
-    }))
+    .map(g => ({ ...g, items: g.items.filter(i => canSeeItem(userRole, i)) }))
     .filter(g => g.items.length > 0);
 }
 
 // Itens fixos no topo, fora dos grupos — o mais usado nunca fica escondido
 // pelo acordeão.
 export const topLevelItems: MenuItem[] = [
-  // dashboards iniciais não aparecem ao frontoffice
-  { icon: BarChart3, label: "Dashboards", path: "/dashboards", minRole: "backoffice" },
+  { icon: BarChart3, label: "Dashboards", path: "/dashboards", module: "dashboards" },
 ];
 
+// Menu conduzido pela matriz de acessos (shared/access.ts) — o servidor aplica
+// a MESMA matriz (requireAccess), por isso o que aparece aqui é o que abre.
 export const menuGroups: MenuGroup[] = [
   {
     label: "Financeiro",
     icon: Receipt,
-    minRole: "frontoffice",
     items: [
-      { icon: Receipt, label: "Despesas", path: "/despesas" },
-      // Faturação / Projetos / Marketing escondidos do frontoffice
-      { icon: FileText, label: "Faturação", path: "/faturacao", minRole: "admin" },
-      { icon: Handshake, label: "Parcerias", path: "/parcerias" },
-      { icon: FolderTree, label: "Projetos", path: "/projetos", minRole: "backoffice" },
-      { icon: Megaphone, label: "Marketing", path: "/marketing", minRole: "backoffice" },
+      { icon: Receipt, label: "Despesas", path: "/despesas", module: "despesas" },
+      { icon: FileText, label: "Faturação", path: "/faturacao", module: "faturacao" },
+      { icon: Handshake, label: "Parcerias", path: "/parcerias", module: "parcerias" },
+      { icon: FolderTree, label: "Projetos", path: "/projetos", module: "projetos" },
+      { icon: Megaphone, label: "Marketing", path: "/marketing", module: "marketing" },
     ],
   },
   {
     label: "Pessoas",
     icon: Users,
     items: [
-      // RH visível a todos os roles (user/extra veem só o próprio perfil)
-      { icon: UserCheck, label: "Recursos Humanos", path: "/rh" },
-      { icon: UserPlus, label: "Leads de Extras", path: "/extras-leads", minRole: "backoffice" },
-      { icon: GraduationCap, label: "Formação", path: "/formacao", minRole: "extra" },
-      // extra vê a própria avaliação (última semana) — filtrado no servidor
-      { icon: Trophy, label: "Avaliação Individual", path: "/avaliacao", minRole: "extra" },
-      { icon: Trophy, label: "Avaliação Operacional", path: "/avaliacao-operacional", minRole: "backoffice" },
+      // RH: quem gere fichas vê a lista; os restantes veem só a própria ficha
+      { icon: UserCheck, label: "Recursos Humanos", path: "/rh", anyOf: ["rh", "ficha"] },
+      { icon: UserPlus, label: "Leads de Extras", path: "/extras-leads", module: "leads_extras" },
+      { icon: GraduationCap, label: "Formação", path: "/formacao", module: "formacao" },
+      // extra/condutor veem a própria avaliação — filtrado no servidor
+      { icon: Trophy, label: "Avaliação Individual", path: "/avaliacao", module: "avaliacao" },
+      { icon: Trophy, label: "Avaliação Operacional", path: "/avaliacao-operacional", module: "avaliacao_operacional" },
     ],
   },
   {
     label: "Operações",
     icon: Truck,
-    // Operações escondidas do frontoffice (backoffice+); Tarefas/Disponibilidade
-    // são a exceção — extra+ vê (extra só as suas)
     items: [
-      { icon: LayoutDashboard, label: "Reservas & Operações", path: "/operacoes", minRole: "backoffice" },
-      { icon: Wrench, label: "Serviços", path: "/servicos", minRole: "backoffice" },
-      { icon: Truck, label: "Actividade Diária", path: "/operacional", minRole: "backoffice" },
-      { icon: Radio, label: "Rádio", path: "/radio", minRole: "backoffice" },
-      { icon: ListTodo, label: "Tarefas", path: "/tarefas", minRole: "extra" },
-      { icon: CalendarDays, label: "Extras Dia", path: "/extras-dia", minRole: "backoffice" },
-      { icon: CalendarCheck, label: "Passagem de Turno", path: "/passagem-turno", minRole: "team_leader" },
-      { icon: CalendarCheck, label: "Disponibilidade", path: "/disponibilidade", minRole: "extra" },
-      { icon: MessageCircle, label: "WhatsApp", path: "/whatsapp", minRole: "backoffice" },
+      { icon: LayoutDashboard, label: "Reservas & Operações", path: "/operacoes", module: "reservas_operacoes" },
+      { icon: Wrench, label: "Serviços", path: "/servicos", module: "servicos" },
+      { icon: Truck, label: "Actividade Diária", path: "/operacional", anyOf: ["atividade_diaria", "historico_diario"] },
+      { icon: Radio, label: "Rádio", path: "/radio", module: "radio" },
+      { icon: ListTodo, label: "Tarefas", path: "/tarefas", module: "tarefas" },
+      { icon: CalendarDays, label: "Extras Dia", path: "/extras-dia", module: "extras_dia" },
+      { icon: CalendarCheck, label: "Passagem de Turno", path: "/passagem-turno", module: "passagem_turno" },
+      { icon: CalendarCheck, label: "Disponibilidade", path: "/disponibilidade", anyOf: ["disponibilidade", "disponibilidade_extras"] },
+      { icon: MessageCircle, label: "WhatsApp", path: "/whatsapp", module: "whatsapp" },
     ],
   },
   {
     label: "Suporte",
     icon: MessageSquareWarning,
-    minRole: "frontoffice",
     items: [
-      { icon: Contact, label: "Clientes", path: "/clientes" },
-      { icon: MessageSquareWarning, label: "Reclamações", path: "/reclamacoes" },
-      { icon: Star, label: "Críticas Google", path: "/criticas" },
-      { icon: AlertTriangle, label: "Ocorrências", path: "/ocorrencias" },
-      { icon: Package, label: "Perdidos e Achados", path: "/perdidos-achados" },
+      { icon: Contact, label: "Clientes", path: "/clientes", module: "clientes" },
+      { icon: MessageSquareWarning, label: "Reclamações", path: "/reclamacoes", module: "reclamacoes" },
+      { icon: Star, label: "Críticas Google", path: "/criticas", module: "criticas" },
+      { icon: AlertTriangle, label: "Ocorrências", path: "/ocorrencias", module: "ocorrencias" },
+      { icon: Package, label: "Perdidos e Achados", path: "/perdidos-achados", module: "perdidos" },
     ],
   },
   {
     label: "Sistema",
     icon: SlidersHorizontal,
-    minRole: "admin",
     items: [
-      { icon: Users, label: "Utilizadores", path: "/utilizadores" },
-      { icon: ShieldCheck, label: "Permissões", path: "/permissoes" },
-      { icon: RefreshCw, label: "Sincronização", path: "/multipark/sync" },
-      { icon: Key, label: "API Keys", path: "/api-keys", minRole: "super_admin" },
-      { icon: Plug, label: "Integrações", path: "/integracoes/google-ads" },
-      { icon: ScrollText, label: "Logs", path: "/logs", minRole: "super_admin" },
-      { icon: SlidersHorizontal, label: "Definições", path: "/definicoes" },
+      { icon: Users, label: "Utilizadores", path: "/utilizadores", module: "utilizadores" },
+      { icon: ShieldCheck, label: "Permissões", path: "/permissoes", module: "permissoes" },
+      { icon: RefreshCw, label: "Sincronização", path: "/multipark/sync", module: "sincronizacao" },
+      { icon: Key, label: "API Keys", path: "/api-keys", module: "api_keys" },
+      { icon: Plug, label: "Integrações", path: "/integracoes/google-ads", module: "integracoes" },
+      { icon: ScrollText, label: "Logs", path: "/logs", module: "logs" },
+      { icon: SlidersHorizontal, label: "Definições", path: "/definicoes", module: "definicoes" },
     ],
   },
 ];
@@ -226,16 +211,15 @@ export const hubGroups: HubGroup[] = [
     id: "dashboards",
     label: "Dashboards",
     icon: BarChart3,
-    minRole: "backoffice",
     items: [
-      { icon: BarChart3, label: "Geral", path: "/dashboards" },
-      { icon: Receipt, label: "Financeiro", path: "/financeiro" },
-      { icon: Truck, label: "Operações", path: "/operacoes-dashboard" },
-      { icon: Users, label: "Pessoas", path: "/pessoas-dashboard" },
-      { icon: MessageSquareWarning, label: "Suporte", path: "/suporte-dashboard" },
+      { icon: BarChart3, label: "Geral", path: "/dashboards", module: "dashboards" },
+      { icon: Receipt, label: "Financeiro", path: "/financeiro", module: "financeiro" },
+      { icon: Truck, label: "Operações", path: "/operacoes-dashboard", module: "dashboards" },
+      { icon: Users, label: "Pessoas", path: "/pessoas-dashboard", module: "dashboards" },
+      { icon: MessageSquareWarning, label: "Suporte", path: "/suporte-dashboard", module: "dashboards" },
       // Um só endereço para o Marketing (24 set 2026): /marketing-dashboard era
       // uma cópia do mesmo dashboard e agora redireciona para /marketing.
-      { icon: Megaphone, label: "Marketing", path: "/marketing" },
+      { icon: Megaphone, label: "Marketing", path: "/marketing", module: "marketing" },
     ],
   },
   ...menuGroups.map(g => ({
@@ -245,8 +229,7 @@ export const hubGroups: HubGroup[] = [
 ];
 export function getFilteredHubGroups(userRole: string): HubGroup[] {
   return hubGroups
-    .filter(g => !g.minRole || hasRole(userRole, g.minRole))
-    .map(g => ({ ...g, items: g.items.filter(i => !i.minRole || hasRole(userRole, i.minRole)) }))
+    .map(g => ({ ...g, items: g.items.filter(i => canSeeItem(userRole, i)) }))
     .filter(g => g.items.length > 0);
 }
 
@@ -462,9 +445,9 @@ function DashboardLayoutContent({
   useEffect(() => {
     if (!user) return;
     const allowedPaths = new Set(filteredItems.map(i => i.path));
-    const isLowRole = (ROLE_HIERARCHY[userRole] ?? 0) < ROLE_HIERARCHY["backoffice"];
+    const isLowRole = roleRank(userRole) < roleRank("team_leader");
     if (isLowRole) {
-      // user/extra/frontoffice: whitelist estrita — qualquer rota fora do
+      // user/extra/condutor: whitelist estrita — qualquer rota fora do
       // menu permitido (incl. /dashboard e /dashboards) cai na 1ª permitida
       const base = "/" + (location.split("/")[1] ?? "");
       if (!allowedPaths.has(location) && !allowedPaths.has(base)) {

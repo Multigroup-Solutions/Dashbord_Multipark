@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { can, roleRank, seesBeyondOwn } from "@shared/access";
 import { trpc } from "@/lib/trpc";
 import DateRangeNav from "@/components/DateRangeNav";
 import { campaignTabBrand } from "@shared/adCampaignMapping";
@@ -245,7 +246,7 @@ function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares
   // Reservas ligadas (gclid) desta campanha — a chave é "api:<conta>:<ID externo>".
   const linked = (r: any) => (String(r.key).startsWith("api:") ? attributedByCampaign[String(r.key).split(":").slice(2).join(":")] ?? 0 : null);
   const { user } = useAuth();
-  const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
+  const isAdmin = can(user?.role, "marketing", "manage");
   const utils = trpc.useUtils();
   const refresh = () => { utils.marketing.dashboard.invalidate(); utils.marketing.byBrand.invalidate(); utils.marketing.campaignRoas.invalidate(); utils.integrations.googleAds.campaigns.suggest.invalidate(); };
   const { data: suggestions = [] } = trpc.integrations.googleAds.campaigns.suggest.useQuery(undefined, { enabled: isAdmin, retry: false });

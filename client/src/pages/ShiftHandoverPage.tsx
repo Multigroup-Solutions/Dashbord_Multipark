@@ -61,7 +61,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 // Dia e turno por omissão = turno operacional em Lisboa (a noite 15h–03h é do
 // dia em que começa), nunca o relógio do browser.
 
-const ROLE_H: Record<string, number> = { user: 0, extra: 1, frontoffice: 2, backoffice: 3, team_leader: 4, supervisor: 5, admin: 6, super_admin: 7 };
+import { can, roleRank } from "@shared/access";
 const CITY_LABELS: Record<string, string> = HANDOVER_CITY_LABELS;
 const LAST_CITY_KEY = "mp.handover.lastCity";
 
@@ -120,7 +120,8 @@ type NumField = keyof typeof NUM_RULES;
 
 export default function ShiftHandoverPage() {
   const { user } = useAuth();
-  const isSupervisor = (ROLE_H[user?.role ?? ""] ?? 0) >= ROLE_H["supervisor"];
+  // "Resumo do dia": supervisor e acima (o team leader preenche e lê, mas não o vê).
+  const isSupervisor = can(user?.role, "passagem_resumo_dia", "view");
   const [tab, setTab] = usePersistedState("handover.tab", "preencher");
   const cityState = useHandoverCity();
 

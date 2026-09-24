@@ -12,7 +12,9 @@ import * as XLSX from "xlsx";
 import { ACCESS_DENIED_MSG, COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
-import { protectedProcedure, publicProcedure, router, invalidatePermissionElevation } from "./_core/trpc";
+import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
+import { requireAccess, isOwnOnly, userIdsAtOrBelowInCity, employeeBelowCondition } from "./_core/access";
+import { ROLE_RANK as ACCESS_ROLE_RANK, can, scopeFor, canSeeFinanceTotalsFor, canManageUserRole, canGrantPermissionsTo, canTouchPermission, assignableRoles, isNationalRole, seesBeyondOwn, type ModuleId, type Action as AccessAction } from "../shared/access";
 import { normalizeEmail } from "@shared/email";
 import { USER_ROLES, superAdminGuard, inviteCompletionError } from "./userAdminRules";
 import { invokeLLM } from "./_core/llm";
@@ -360,16 +362,11 @@ const LEAD_STATUS_ENUM = LEAD_STATUSES;
 // Dia "YYYY-MM-DD" válido (mês/dia reais) — nunca colado em SQL, mas validado na mesma.
 const handoverDaySchema = z.string().refine(isIsoDay, "Data inválida (AAAA-MM-DD)");
 
-const ROLE_HIERARCHY: Record<string, number> = {
-  super_admin: 7,
-  admin: 6,
-  supervisor: 5,
-  team_leader: 4,
-  backoffice: 3,
-  frontoffice: 2,
-  extra: 1,
-  user: 0,
-};
+// Hierarquia (modelo de acessos, shared/access.ts): user < extra < condutor <
+// team_leader < supervisor < frontoffice = backoffice < admin < super_admin.
+// A porta de cada módulo é `requireAccess(user, módulo, ação)`; `requireRole`
+// fica só para limiares FINOS dentro de um módulo (ex.: só super_admin apaga).
+const ROLE_HIERARCHY: Record<string, number> = { ...ACCESS_ROLE_RANK };
 
 function requireRole(userRole: string, minRole: string) {
   if ((ROLE_HIERARCHY[userRole] ?? -1) < (ROLE_HIERARCHY[minRole] ?? 0)) {
@@ -385,16 +382,17 @@ async function isPermissionDenied(userId: number, permission: string): Promise<b
   return ov[permission] === "deny";
 }
 
-/** Versão não-fatal: backoffice+ sem deny de finance.view_totals vê totais. */
-async function canSeeFinanceTotals(user: { id: number; role: string }, minRole = "backoffice"): Promise<boolean> {
-  if ((ROLE_HIERARCHY[user.role] ?? -1) < (ROLE_HIERARCHY[minRole] ?? 0)) return false;
-  return !(await isPermissionDenied(user.id, "finance.view_totals"));
+/** Totais financeiros: módulo Financeiro (admin+) sem deny de
+ * finance.view_totals; um grant explícito abre-os a supervisor/front/backoffice. */
+async function canSeeFinanceTotals(user: { id: number; role: string }): Promise<boolean> {
+  const { getUserPermissionOverrides } = await import("./db");
+  return canSeeFinanceTotalsFor(user, await getUserPermissionOverrides(user.id));
 }
 
-/** Role mínimo + respeita o deny de finance.view_totals. */
-async function requireFinanceTotals(user: { id: number; role: string }, minRole = "backoffice") {
-  requireRole(user.role, minRole);
-  if (await isPermissionDenied(user.id, "finance.view_totals")) {
+/** Porta do módulo + totais financeiros (respeita o deny de finance.view_totals). */
+async function requireFinanceTotals(user: { id: number; role: string }, module: ModuleId, action: AccessAction = "view") {
+  requireAccess(user, module, action);
+  if (!(await canSeeFinanceTotals(user))) {
     throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para ver totais financeiros." });
   }
 }
@@ -416,6 +414,7 @@ async function expenseVisibilityFor(user: { id: number; role: string }): Promise
       return emp?.employee?.projectId ?? null;
     },
     resolveProjectIds,
+    teamUserIds: userIdsAtOrBelowInCity,
   });
 }
 
@@ -554,6 +553,96 @@ async function assertCanUploadDocuments(user: { id: number; role: string }, empl
   const ref = await rhEmployeeRefOrThrow(employeeId);
   if (!canEditPersonal(viewer, ref)) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para carregar documentos nesta ficha" });
   await assertEmployeeWriteScope(viewer, ref);
+}
+
+// ─── CASOS PRÓPRIOS (alcance "own" de extra/condutor) ─────────────────────────
+type OwnCaseKind = "complaint" | "review" | "incident" | "lost_found";
+/**
+ * Ids dos casos em que o utilizador é o condutor envolvido: reclamações
+ * (condutores ligados), críticas (via a reclamação em que foram convertidas),
+ * ocorrências (condutor da ocorrência) e perdidos (condutores ligados).
+ * Sem ficha → nenhum.
+ */
+async function ownCaseIds(userId: number, kind: OwnCaseKind): Promise<Set<number>> {
+  const me = await getEmployeeByUserId(userId);
+  const emp = me?.employee?.id;
+  if (emp == null) return new Set();
+  const { getDb } = await import("./db");
+  const { sql } = await import("drizzle-orm");
+  const db = await getDb();
+  if (!db) return new Set();
+  const q = kind === "complaint"
+    ? sql`SELECT DISTINCT complaintId AS id FROM complaint_drivers_on_duty WHERE employeeId = ${emp}`
+    : kind === "review"
+      ? sql`SELECT DISTINCT r.id AS id FROM google_reviews r JOIN complaint_drivers_on_duty d ON d.complaintId = r.complaintId WHERE d.employeeId = ${emp}`
+      : kind === "incident"
+        ? sql`SELECT id FROM incidents WHERE employeeId = ${emp}`
+        : sql`SELECT DISTINCT itemId AS id FROM lost_found_attached_drivers WHERE employeeId = ${emp}`;
+  const [rows] = await db.execute(q) as any;
+  return new Set(((rows as any[]) ?? []).map(r => Number(r.id)));
+}
+/** Alcance "own": só passa se o caso é do próprio. */
+async function assertOwnCase(user: { id: number; role: string }, module: ModuleId, kind: OwnCaseKind, id: number) {
+  if (!isOwnOnly(user, module)) return;
+  if (!(await ownCaseIds(user.id, kind)).has(id)) throw new TRPCError({ code: "FORBIDDEN", message: "Só podes ver os casos em que estás envolvido." });
+}
+/** Alcance "own": filtra a lista pelos casos do próprio. */
+async function filterOwnCases<T extends { id: number }>(user: { id: number; role: string }, module: ModuleId, kind: OwnCaseKind, rows: T[]): Promise<T[]> {
+  if (!isOwnOnly(user, module)) return rows;
+  const ids = await ownCaseIds(user.id, kind);
+  return rows.filter(r => ids.has(r.id));
+}
+
+// ─── EQUIPA: fichas abaixo de quem vê, na sua cidade (alcance "below_city") ──
+async function belowEmployeeIds(user: { id: number; role: string }): Promise<Set<number>> {
+  const { getDb } = await import("./db");
+  const { sql } = await import("drizzle-orm");
+  const db = await getDb();
+  if (!db) return new Set();
+  const [rows] = await db.execute(sql`SELECT e.id FROM employees e
+    WHERE ${projectScope(sql`e.projectId`)} AND ${await employeeBelowCondition(user, sql`e.id`)}`) as any;
+  return new Set(((rows as any[]) ?? []).map(r => Number(r.id)));
+}
+/** Alcance "below_city": só as linhas de fichas da equipa (+ a própria). */
+async function filterBelowEmployees<T extends { employeeId: number | null }>(user: { id: number; role: string }, module: ModuleId, rows: T[]): Promise<T[]> {
+  if (scopeFor(user, module) !== "below_city") return rows;
+  const ids = await belowEmployeeIds(user);
+  const me = (await getEmployeeByUserId(user.id))?.employee?.id;
+  if (me != null) ids.add(me);
+  return rows.filter(r => r.employeeId != null && ids.has(r.employeeId));
+}
+
+// ─── UTILIZADORES: quem gere quem (shared/access.ts) ──────────────────────────
+/** A conta está no âmbito de cidade do pedido (ficha numa cidade autorizada)? */
+async function userInCityScope(userId: number): Promise<boolean> {
+  if (scopedProjectIds() === undefined) return true;
+  const { getDb } = await import("./db");
+  const { sql } = await import("drizzle-orm");
+  const { userScope } = await import("./cityScope");
+  const db = await getDb();
+  if (!db) return false;
+  const [rows] = await db.execute(sql`SELECT 1 AS ok FROM users u WHERE u.id = ${userId} AND ${userScope(sql`u.id`)} LIMIT 1`) as any;
+  return Array.isArray(rows) && rows.length > 0;
+}
+/**
+ * Pode gerir esta conta (editar, ativar, convidar, mudar papel)? Papel da
+ * conta dentro do que o ator pode atribuir e, para papéis de cidade, a conta
+ * na sua cidade. `newRole` (se vier) também tem de ser atribuível.
+ */
+async function assertCanManageUser(actor: { id: number; role: string }, targetId: number, newRole?: string) {
+  requireAccess(actor, "utilizadores", "manage");
+  const target = await getUserById(targetId);
+  if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "Utilizador não encontrado" });
+  if (!canManageUserRole(actor, target.role)) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Não podes gerir contas com este papel." });
+  }
+  if (newRole !== undefined && !(assignableRoles(actor) as string[]).includes(newRole)) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Não podes atribuir este papel." });
+  }
+  if (!(await userInCityScope(targetId))) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Esta conta não pertence à tua cidade." });
+  }
+  return target;
 }
 
 // ─── APP ROUTER ───────────────────────────────────────────────────────────────
@@ -811,7 +900,7 @@ export const appRouter = router({
   // ── ADMIN (one-shot migrations) ───────────────────────────────────────────
   admin: router({
     runMigration0044: protectedProcedure.mutation(async ({ ctx }) => {
-      requireRole(ctx.user.role, "super_admin");
+      requireAccess(ctx.user, "manutencao", "manage");
       const report = await applyMigration0044();
       await logActivity({
         userId: ctx.user.id,
@@ -823,7 +912,7 @@ export const appRouter = router({
     }),
 
     runMigration0046: protectedProcedure.mutation(async ({ ctx }) => {
-      requireRole(ctx.user.role, "super_admin");
+      requireAccess(ctx.user, "manutencao", "manage");
       const report = await applyMigration0046();
       await logActivity({
         userId: ctx.user.id,
@@ -835,7 +924,7 @@ export const appRouter = router({
     }),
 
     runMigration0048: protectedProcedure.mutation(async ({ ctx }) => {
-      requireRole(ctx.user.role, "super_admin");
+      requireAccess(ctx.user, "manutencao", "manage");
       const report = await applyMigration0048();
       await logActivity({
         userId: ctx.user.id,
@@ -847,7 +936,7 @@ export const appRouter = router({
     }),
 
     runMigration0049: protectedProcedure.mutation(async ({ ctx }) => {
-      requireRole(ctx.user.role, "super_admin");
+      requireAccess(ctx.user, "manutencao", "manage");
       const report = await applyMigration0049();
       await logActivity({
         userId: ctx.user.id,
@@ -859,7 +948,7 @@ export const appRouter = router({
     }),
 
     runMigration0050: protectedProcedure.mutation(async ({ ctx }) => {
-      requireRole(ctx.user.role, "super_admin");
+      requireAccess(ctx.user, "manutencao", "manage");
       const report = await applyMigration0050();
       await logActivity({
         userId: ctx.user.id,
@@ -871,7 +960,7 @@ export const appRouter = router({
     }),
 
     runMigration0051: protectedProcedure.mutation(async ({ ctx }) => {
-      requireRole(ctx.user.role, "super_admin");
+      requireAccess(ctx.user, "manutencao", "manage");
       const report = await applyMigration0051();
       await logActivity({
         userId: ctx.user.id,
@@ -883,7 +972,7 @@ export const appRouter = router({
     }),
 
     runMigration0052: protectedProcedure.mutation(async ({ ctx }) => {
-      requireRole(ctx.user.role, "super_admin");
+      requireAccess(ctx.user, "manutencao", "manage");
       const report = await applyMigration0052();
       await logActivity({
         userId: ctx.user.id,
@@ -895,7 +984,7 @@ export const appRouter = router({
     }),
 
     runMigration0053: protectedProcedure.mutation(async ({ ctx }) => {
-      requireRole(ctx.user.role, "super_admin");
+      requireAccess(ctx.user, "manutencao", "manage");
       const report = await applyMigration0053();
       await logActivity({
         userId: ctx.user.id,
@@ -912,7 +1001,7 @@ export const appRouter = router({
     // morria com 504 a meio; partial:true → carregar outra vez continua
     // (dedup por messageId torna cada corrida incremental).
     runEmailInbound: protectedProcedure.mutation(async ({ ctx }) => {
-      requireRole(ctx.user.role, "backoffice");
+      requireAccess(ctx.user, "sincronizacao", "edit");
       const { runEmailInboundSync } = await import("./jobs/emailInboundSync");
       const result = await runEmailInboundSync({ deadlineAt: Date.now() + 45_000 });
       await logActivity({
@@ -929,7 +1018,7 @@ export const appRouter = router({
     fixMultiparkDuplicatesBatch: protectedProcedure
       .input(z.object({ batchSize: z.number().int().min(100).max(5000).optional() }).optional())
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "super_admin");
+        requireAccess(ctx.user, "manutencao", "manage");
         const { getDb } = await import("./db");
         const { sql } = await import("drizzle-orm");
         const db = await getDb();
@@ -978,7 +1067,7 @@ export const appRouter = router({
     backfillEmployeeProject: protectedProcedure
       .input(z.object({ projectId: z.number().optional(), onlyExtras: z.boolean().optional() }).optional())
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "super_admin");
+        requireAccess(ctx.user, "manutencao", "manage");
         const { getDb } = await import("./db");
         const { sql, isNull, and: andOp, eq } = await import("drizzle-orm");
         const { employees, projects } = await import("../drizzle/schema");
@@ -1050,7 +1139,7 @@ export const appRouter = router({
     runHistoricalDaySync: protectedProcedure
       .input(z.object({ date: z.string() })) // YYYY-MM-DD
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "super_admin");
+        requireAccess(ctx.user, "manutencao", "manage");
         const { syncBookings, enrichBookingsBatch, syncBookingHistoryBatch } = await import("./jobs/multiparkBookingSync");
         const t0 = Date.now();
         // Fase 1: report do dia (todas as actionTypes). enrichTargets fica de
@@ -1077,7 +1166,7 @@ export const appRouter = router({
 
     // Reforça o UNIQUE depois dos batches terminarem.
     enforceMultiparkUnique: protectedProcedure.mutation(async ({ ctx }) => {
-      requireRole(ctx.user.role, "super_admin");
+      requireAccess(ctx.user, "manutencao", "manage");
       const { getDb } = await import("./db");
       const { sql } = await import("drizzle-orm");
       const db = await getDb();
@@ -1123,10 +1212,9 @@ export const appRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: ACCESS_DENIED_MSG });
       }
       if (!u) return u;
-      // Elevação por permissão (grant extras_dia.team_leader → vê como TL);
-      // o menu/UI seguem o role devolvido aqui.
-      const { applyPermissionElevation } = await import("./_core/trpc");
-      const uElev = await applyPermissionElevation(u);
+      // O grant extras_dia.team_leader NÃO eleva o papel (só marca
+      // elegibilidade para TL na escala): o menu/UI seguem o papel da conta.
+      const uElev = u;
       // Se houver ficha de colaborador, devolve também o estado dos docs
       // e bloqueio. Lazy check para extras: actualiza flags se passou tempo.
       try {
@@ -1164,13 +1252,14 @@ export const appRouter = router({
   // ── USERS ───────────────────────────────────────────────────────────────────
   users: router({
     list: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "utilizadores", "view");
       return getAllUsers();
     }),
     getById: protectedProcedure
       .input(z.object({ id: z.number() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "utilizadores", "view");
+        if (!(await userInCityScope(input.id))) throw new TRPCError({ code: "FORBIDDEN", message: "Esta conta não pertence à tua cidade." });
         return getUserById(input.id);
       }),
     create: protectedProcedure
@@ -1181,7 +1270,10 @@ export const appRouter = router({
         department: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "super_admin");
+        requireAccess(ctx.user, "utilizadores", "manage");
+        if (!(assignableRoles(ctx.user) as string[]).includes(input.role)) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Não podes atribuir este papel." });
+        }
         // Um email = uma identidade: recusa cedo em vez de criar uma 2ª conta
         // que depois compete com a primeira no login (ver server/identity.ts).
         let newUser: Awaited<ReturnType<typeof createManualUser>>;
@@ -1210,10 +1302,12 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         const isSelf = ctx.user.id === input.userId;
         const isSuper = ctx.user.role === "super_admin";
-        // Editar OUTRA conta: só super_admin. Na própria, quem não é
-        // super_admin só muda o nome (o email é a identidade: liga fichas e
-        // contas — só o super_admin o altera).
-        if (!isSelf) requireRole(ctx.user.role, "super_admin");
+        // Editar OUTRA conta: quem gere utilizadores e pode gerir o papel dela
+        // (e atribuir o novo). Na própria, quem não é super_admin só muda o
+        // nome (o email é a identidade: liga fichas e contas — só o
+        // super_admin o altera; o próprio papel nunca se muda a si mesmo).
+        const canManageOther = !isSelf;
+        if (canManageOther) await assertCanManageUser(ctx.user, input.userId, input.role);
         const { userId, ...data } = input;
         const target = await getUserById(userId);
         if (!target && (isSelf || data.email !== undefined || data.role !== undefined)) {
@@ -1231,7 +1325,7 @@ export const appRouter = router({
         }
         const safeData: { name?: string; email?: string; role?: string; department?: string | null } = isSuper
           ? { ...data, email: emailChanged ? data.email : undefined }
-          : { name: data.name };
+          : canManageOther ? { name: data.name, role: data.role, department: data.department } : { name: data.name };
         const roleChanged = safeData.role !== undefined && target != null && safeData.role !== target.role;
         if (roleChanged) {
           const guard = superAdminGuard(ctx.user.id, target!, safeData.role!, await countActiveSuperAdmins());
@@ -1241,7 +1335,6 @@ export const appRouter = router({
         }
         // Auto-edição nunca religa fichas por email.
         await updateUser(userId, safeData, { relinkEmployees: !isSelf });
-        if (roleChanged) invalidatePermissionElevation(userId);
         await logActivity({
           userId: ctx.user.id,
           action: "update",
@@ -1254,15 +1347,15 @@ export const appRouter = router({
     updateRole: protectedProcedure
       .input(z.object({ userId: z.number(), role: z.enum(USER_ROLES) }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "super_admin");
-        const target = await getUserById(input.userId);
-        if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "Utilizador não encontrado" });
+        if (input.userId === ctx.user.id && ctx.user.role !== "super_admin") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Não podes mudar o teu próprio papel." });
+        }
+        const target = await assertCanManageUser(ctx.user, input.userId, input.role);
         const previous = target.role;
         if (previous === input.role) return { success: true };
         const guard = superAdminGuard(ctx.user.id, target, input.role, await countActiveSuperAdmins());
         if (guard) throw new TRPCError({ code: "FORBIDDEN", message: guard });
         await updateUserRole(input.userId, input.role);
-        invalidatePermissionElevation(input.userId);
         await logActivity({
           userId: ctx.user.id,
           action: "update_role",
@@ -1283,10 +1376,10 @@ export const appRouter = router({
         notes: z.string().max(DEACTIVATION_NOTES_MAX).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "super_admin");
         if (input.userId === ctx.user.id) {
           throw new Error("Não podes desativar a tua própria conta");
         }
+        await assertCanManageUser(ctx.user, input.userId);
         if (!input.isActive) {
           // Nunca desativar o último super_admin ativo.
           const target = await getUserById(input.userId);
@@ -1316,9 +1409,7 @@ export const appRouter = router({
         origin: z.string(), // frontend origin for building the invite link
       }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "super_admin");
-        const targetUser = await getUserById(input.userId);
-        if (!targetUser) throw new TRPCError({ code: "NOT_FOUND", message: "Utilizador não encontrado" });
+        const targetUser = await assertCanManageUser(ctx.user, input.userId);
         if (!targetUser.email) throw new TRPCError({ code: "BAD_REQUEST", message: "Utilizador não tem email" });
         const invite = await createInviteToken({
           email: targetUser.email,
@@ -1344,8 +1435,43 @@ export const appRouter = router({
     getInvites: protectedProcedure
       .input(z.object({ userId: z.number() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "utilizadores", "view");
+        if (!(await userInCityScope(input.userId))) throw new TRPCError({ code: "FORBIDDEN", message: "Esta conta não pertence à tua cidade." });
         return getInvitesByUser(input.userId);
+      }),
+    /** Contas cuja ficha tem posto driver/senior_driver e que ainda não são
+     * condutor (nem estão acima) — para passar a Condutor de uma vez. admin+. */
+    suggestCondutores: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "utilizadores", "manage");
+      requireRole(ctx.user.role, "admin");
+      const { getDb } = await import("./db");
+      const { sql } = await import("drizzle-orm");
+      const { userScope } = await import("./cityScope");
+      const db = await getDb();
+      if (!db) return [];
+      const [rows] = await db.execute(sql`SELECT u.id, u.name, u.email, u.role,
+          MIN(e.fullName) AS fullName, MIN(e.position) AS position, MIN(p.name) AS projectName
+        FROM users u JOIN employees e ON e.userId = u.id LEFT JOIN projects p ON p.id = e.projectId
+        WHERE u.isActive = 1 AND e.isActive = 1 AND e.position IN ('driver', 'senior_driver')
+          AND u.role IN ('user', 'extra') AND ${userScope(sql`u.id`)}
+        GROUP BY u.id, u.name, u.email, u.role
+        ORDER BY MIN(e.fullName) LIMIT 500`) as any;
+      return ((rows as any[]) ?? []).map(r => ({ id: Number(r.id), name: r.name ?? null, email: r.email ?? null, role: String(r.role),
+        fullName: r.fullName ?? null, position: r.position ?? null, projectName: r.projectName ?? null }));
+    }),
+    promoteToCondutor: protectedProcedure
+      .input(z.object({ userIds: z.array(z.number().int().positive()).min(1).max(500) }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        let changed = 0;
+        for (const id of [...new Set(input.userIds)]) {
+          const target = await assertCanManageUser(ctx.user, id, "condutor");
+          if (target.role === "condutor" || !["user", "extra"].includes(target.role)) continue;
+          await updateUserRole(id, "condutor");
+          await logActivity({ userId: ctx.user.id, action: "update_role", entity: "user", entityId: id, details: `Role alterado: ${target.role} → condutor (sugestão por posto)` });
+          changed++;
+        }
+        return { changed };
       }),
     acceptInvite: publicProcedure
       .input(z.object({ token: z.string() }))
@@ -1417,7 +1543,7 @@ export const appRouter = router({
         partnerPercent: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "projetos", "manage");
         const { validatePlacement, siblingNameConflict, isNodeActive } = await import("../shared/projectTree");
         const nodes = await getProjects();
         const parentId = input.parentId ?? null;
@@ -1456,7 +1582,7 @@ export const appRouter = router({
         isActive: z.boolean().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "projetos", "manage");
         const { id, level, isActive, ...data } = input;
         const { siblingNameConflict, isNodeActive, evaluateDelete } = await import("../shared/projectTree");
         const nodes = await getProjects();
@@ -1495,7 +1621,7 @@ export const appRouter = router({
     references: protectedProcedure
       .input(z.object({ id: z.number() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "projetos", "manage");
         const { evaluateDelete, isNodeActive } = await import("../shared/projectTree");
         const { countProjectReferences } = await import("./projectAdmin");
         const nodes = await getProjects();
@@ -1509,7 +1635,7 @@ export const appRouter = router({
     delete: protectedProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "projetos", "manage");
         const { evaluateDelete, isNodeActive } = await import("../shared/projectTree");
         const { countProjectReferences } = await import("./projectAdmin");
         const nodes = await getProjects();
@@ -1557,7 +1683,7 @@ export const appRouter = router({
     move: protectedProcedure
       .input(z.object({ id: z.number(), newParentId: z.number().nullable() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "projetos", "manage");
         const { validatePlacement, siblingNameConflict, wouldCreateCycle, isNodeActive } = await import("../shared/projectTree");
         const nodes = await getProjects();
         const node = nodes.find(n => n.id === input.id);
@@ -1580,13 +1706,13 @@ export const appRouter = router({
     // Cobertura PARK_CONFIGS ↔ nós de projeto + reservas sem projeto + diagnóstico
     // (órfãos, ciclos, nomes duplicados). Só admin com acesso a todas as cidades.
     parkCoverage: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "projetos", "manage");
       requireGlobalCityAccess();
       const { getParkCoverage } = await import("./projectAdmin");
       return getParkCoverage();
     }),
     createMissingParkNodes: protectedProcedure.mutation(async ({ ctx }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "projetos", "manage");
       requireGlobalCityAccess();
       const { createMissingParkNodes } = await import("./projectAdmin");
       const result = await createMissingParkNodes();
@@ -1598,14 +1724,14 @@ export const appRouter = router({
     getEmployees: protectedProcedure
       .input(z.object({ projectId: z.number() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "projetos", "view");
         assertProjectAccess(input.projectId);
         return getProjectEmployees(input.projectId);
       }),
     assignEmployee: protectedProcedure
       .input(z.object({ projectId: z.number(), employeeId: z.number(), role: z.string().optional() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "projetos", "manage");
         await assignEmployeeToProject({ projectId: input.projectId, employeeId: input.employeeId, role: input.role ?? "member" });
         await logActivity({ userId: ctx.user.id, action: "assign", entity: "project_employee", entityId: input.projectId, details: `emp:${input.employeeId}` });
         return { success: true };
@@ -1613,7 +1739,7 @@ export const appRouter = router({
     removeEmployee: protectedProcedure
       .input(z.object({ projectId: z.number(), employeeId: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "projetos", "manage");
         await removeEmployeeFromProject(input.projectId, input.employeeId);
         return { success: true };
       }),
@@ -1621,7 +1747,7 @@ export const appRouter = router({
       .input(z.object({ year: z.number().optional(), month: z.number().optional() }).optional())
       .query(async ({ ctx, input }) => {
         // Expõe salários: exige ver totais financeiros + âmbito de cidade.
-        await requireFinanceTotals(ctx.user, "backoffice");
+        await requireFinanceTotals(ctx.user, "projetos", "view");
         const rows = await getProjectCosts(input?.year, input?.month);
         const scoped = scopedProjectIds();
         return scoped === undefined ? rows : rows.filter(r => scoped.includes(r.id));
@@ -1635,14 +1761,14 @@ export const appRouter = router({
   // ── CATEGORIES ──────────────────────────────────────────────────────────────
   categories: router({
     list: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "despesas", "view", { allowOwn: true });
       await seedDefaultCategories();
       return getAllCategories();
     }),
     create: protectedProcedure
       .input(z.object({ name: z.string().min(1), department: z.string().optional(), color: z.string().optional() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "despesas", "manage");
         await createCategory({ ...input, department: input.department ?? null, color: input.color ?? "#6366f1" });
         return { success: true };
       }),
@@ -1651,7 +1777,7 @@ export const appRouter = router({
     setVatRate: protectedProcedure
       .input(z.object({ id: z.number(), vatRate: z.number().min(0).max(100).nullable() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "despesas", "manage");
         const { getDb } = await import("./db");
         const { eq } = await import("drizzle-orm");
         const db = await getDb();
@@ -1675,7 +1801,7 @@ export const appRouter = router({
     // O que o utilizador pode ver: o ecrã mostra totais/comparar/exportar só
     // quando o servidor os devolve (antes o cliente adivinhava pelo role).
     access: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "backoffice");
+      requireAccess(ctx.user, "despesas", "view", { allowOwn: true });
       const vis = await expenseVisibilityFor(ctx.user);
       return { scope: vis.kind, canSeeTotals: canSeeAggregates(vis) };
     }),
@@ -1683,7 +1809,7 @@ export const appRouter = router({
     list: protectedProcedure
       .input(EXPENSE_LIST_INPUT)
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "despesas", "view", { allowOwn: true });
         const { vis, where } = await expenseWhereFor(ctx.user, input);
         if (vis.kind === "none") return [];
         return listExpenses(where);
@@ -1692,7 +1818,7 @@ export const appRouter = router({
     byId: protectedProcedure
       .input(z.object({ id: z.number() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "despesas", "view", { allowOwn: true });
         const row = await getExpenseById(input.id);
         if (!row) return row;
         const vis = await expenseVisibilityFor(ctx.user);
@@ -1707,7 +1833,7 @@ export const appRouter = router({
     documentUrl: protectedProcedure
       .input(z.object({ id: z.number() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "despesas", "view", { allowOwn: true });
         const row = await getExpenseById(input.id);
         if (!row) throw new TRPCError({ code: "NOT_FOUND" });
         const vis = await expenseVisibilityFor(ctx.user);
@@ -1730,7 +1856,7 @@ export const appRouter = router({
     events: protectedProcedure
       .input(z.object({ id: z.number() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "despesas", "view", { allowOwn: true });
         const row = await getExpenseById(input.id);
         if (!row) throw new TRPCError({ code: "NOT_FOUND" });
         const vis = await expenseVisibilityFor(ctx.user);
@@ -1755,7 +1881,7 @@ export const appRouter = router({
         documentNumber: z.string().optional(), invoiceImageKey: z.string().optional(),
       }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "despesas", "edit", { allowOwn: true });
         const dup = await findPossibleDuplicateExpense(input);
         if (!dup) return null;
         const vis = await expenseVisibilityFor(ctx.user);
@@ -1793,7 +1919,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         // Matriz do Jorge: input de despesas a partir de backoffice.
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "despesas", "edit", { allowOwn: true });
         assertOwnInvoiceKey(ctx.user.id, input.invoiceImageKey, input.invoiceImageUrl);
         const amountNorm = parseExpenseAmount(input.amount);
         if (!amountNorm) {
@@ -1891,7 +2017,7 @@ export const appRouter = router({
         // Matriz do Jorge: editar despesas (valores, datas, estados) é
         // admin+; DESMARCAR um pagamento (paid → outro estado) é só
         // super_admin.
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "despesas", "manage");
         const current = await getExpenseById(input.id);
         if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Despesa não encontrada" });
         const cur = current.expense;
@@ -2054,7 +2180,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "despesas", "edit", { allowOwn: true });
         const buffer = Buffer.from(input.fileBase64, "base64");
         const suffix = Date.now() + "-" + Math.random().toString(36).slice(2, 8);
         const safeName = input.fileName.replace(/[^\w.\-]+/g, "_").slice(0, 120);
@@ -2067,7 +2193,7 @@ export const appRouter = router({
     extractFromImage: protectedProcedure
       .input(z.object({ imageBase64: z.string(), mimeType: z.string().default("image/jpeg") }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "despesas", "edit", { allowOwn: true });
         const imageUrl = `data:${input.mimeType};base64,${input.imageBase64}`;
         // Lista de categorias para a IA sugerir uma (mapeada por nome no cliente).
         let categoryNames: string[] = [];
@@ -2134,14 +2260,14 @@ export const appRouter = router({
     stats: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx }) => {
       // Totais da empresa inteira — só admin+ (matriz do Jorge), e respeita o
       // deny de finance.view_totals por utilizador.
-      await requireFinanceTotals(ctx.user, "admin");
+      await requireFinanceTotals(ctx.user, "financeiro", "view");
       return getExpenseStats();
     }),
 
     // ── UPCOMING PAYMENTS ────────────────────────────────────────────────────
     upcomingPayments: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx }) => {
       // Pagamentos de TODOS: respeita a restrição finance.view_totals
-      await requireFinanceTotals(ctx.user, "admin");
+      await requireFinanceTotals(ctx.user, "financeiro", "view");
       return getUpcomingPayments(7);
     }),
 
@@ -2152,7 +2278,7 @@ export const appRouter = router({
         // MESMOS filtros e MESMA visibilidade da lista (antes: sem requireRole,
         // fim do intervalo às 00:00 — perdia o último dia — e supervisor
         // exportava a empresa toda).
-        requireRole(ctx.user.role, "supervisor");
+        requireAccess(ctx.user, "despesas", "export");
         const { vis, where } = await expenseWhereFor(ctx.user, input);
         if (!canSeeAggregates(vis)) {
           throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para exportar totais financeiros." });
@@ -2262,7 +2388,7 @@ export const appRouter = router({
     summary: protectedProcedure
       .input(z.object({ from: z.string(), to: z.string(), projectId: z.number().optional() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "despesas", "view", { allowOwn: true });
         const { vis, where } = await expenseWhereFor(ctx.user, { startDate: input.from, endDate: input.to, projectId: input.projectId });
         if (!canSeeAggregates(vis)) {
           throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para ver totais financeiros." });
@@ -2274,7 +2400,7 @@ export const appRouter = router({
     recurring: router({
       list: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx }) => {
         // Fornecedores e valores fixos: só quem gere as despesas
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "despesas", "manage");
         const { getDb } = await import("./db");
         const { recurringExpenses } = await import("../drizzle/schema");
         const { desc } = await import("drizzle-orm");
@@ -2284,7 +2410,7 @@ export const appRouter = router({
       create: protectedProcedure
         .input(z.object({ description: z.string().optional(), supplier: z.string().optional(), amount: z.number(), paymentMethod: z.enum(["cash", "card", "transfer", "check", "other"]).optional(), categoryId: z.number().optional(), projectId: z.number(), dayOfMonth: z.number().min(1).max(28).optional(), notes: z.string().optional() }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
+          requireAccess(ctx.user, "despesas", "manage");
           // Mesmas regras de uma despesa normal: valor positivo com 2 casas e centro de custos existente
           const amountNorm = parseExpenseAmount(String(input.amount));
           if (!amountNorm) throw new TRPCError({ code: "BAD_REQUEST", message: "Valor inválido — usa um número positivo com até 2 casas" });
@@ -2298,7 +2424,7 @@ export const appRouter = router({
       update: protectedProcedure
         .input(z.object({ id: z.number(), description: z.string().optional(), supplier: z.string().optional(), amount: z.number().optional(), paymentMethod: z.enum(["cash", "card", "transfer", "check", "other"]).optional(), categoryId: z.number().nullable().optional(), projectId: z.number().optional(), dayOfMonth: z.number().min(1).max(28).optional(), active: z.boolean().optional(), notes: z.string().optional() }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
+          requireAccess(ctx.user, "despesas", "manage");
           const { getDb } = await import("./db");
           const { recurringExpenses } = await import("../drizzle/schema");
           const { eq } = await import("drizzle-orm");
@@ -2316,7 +2442,7 @@ export const appRouter = router({
           return { success: true };
         }),
       remove: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "despesas", "manage");
         const { getDb } = await import("./db");
         const { recurringExpenses } = await import("../drizzle/schema");
         const { eq } = await import("drizzle-orm");
@@ -2330,7 +2456,7 @@ export const appRouter = router({
       generateMonth: protectedProcedure
         .input(z.object({ year: z.number().int().min(2000).max(2100), month: z.number().int().min(1).max(12), projectId: z.number().optional() }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
+          requireAccess(ctx.user, "despesas", "manage");
           const { generateRecurringExpensesForMonth } = await import("./expenseRecurring");
           const r = await generateRecurringExpensesForMonth(input.year, input.month, ctx.user.id);
           return { created: r.created, skipped: r.skipped, period: r.period };
@@ -2352,7 +2478,7 @@ export const appRouter = router({
         search: z.string().max(200).optional(),
       }).optional())
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "super_admin");
+        requireAccess(ctx.user, "logs", "view");
         const { lisbonDayRangeUtc } = await import("../shared/lisbonDay");
         return getActivityLogs(input?.limit ?? 500, {
           entity: input?.entity,
@@ -2364,7 +2490,7 @@ export const appRouter = router({
         });
       }),
     entities: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "super_admin");
+      requireAccess(ctx.user, "logs", "view");
       const { getActivityLogEntities } = await import("./db");
       return getActivityLogEntities();
     }),
@@ -2387,19 +2513,25 @@ export const appRouter = router({
 
     // Todas as atribuições (página Sistema → Permissões)
     assignments: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "permissoes", "view");
       const { listPermissionAssignments } = await import("./db");
       const rows = await listPermissionAssignments();
       // Admin limitado a cidades: só vê as atribuições de quem é das suas
       // cidades, e só pode remover as de quem gere por completo (mesma regra
       // do guarda de permissions.setForUser em cityScopeGuards.ts).
       const allowed = scopedProjectIds();
-      if (allowed === undefined) return rows.map((r) => ({ ...r, canManage: true }));
+      // Papel de cada conta: só gere quem o modelo deixa (canGrantPermissionsTo)
+      // e só as permissões que ele próprio pode dar (canTouchPermission).
+      const roleById = new Map<number, string>();
+      for (const userId of new Set(rows.map((r) => r.userId))) roleById.set(userId, (await getUserById(userId))?.role ?? "user");
+      const manageable = (r: { userId: number; permission: string }) =>
+        canGrantPermissionsTo(ctx.user, roleById.get(r.userId)) && canTouchPermission(ctx.user, r.permission);
+      if (allowed === undefined) return rows.map((r) => ({ ...r, canManage: manageable(r) }));
       const { loadCityAccess } = await import("./cityAccess");
       const verdict = new Map<number, { visible: boolean; canManage: boolean }>();
       for (const userId of new Set(rows.map((r) => r.userId))) {
         try {
-          const target = await loadCityAccess(userId);
+          const target = await loadCityAccess(userId, roleById.get(userId));
           const visible = !target.all && target.projectIds.some((pid) => allowed.includes(pid));
           const canManage = visible && !target.missingCostCenter && target.projectIds.every((pid) => allowed.includes(pid));
           verdict.set(userId, { visible, canManage });
@@ -2409,13 +2541,16 @@ export const appRouter = router({
       }
       return rows
         .filter((r) => verdict.get(r.userId)?.visible)
-        .map((r) => ({ ...r, canManage: verdict.get(r.userId)?.canManage ?? false }));
+        .map((r) => ({ ...r, canManage: (verdict.get(r.userId)?.canManage ?? false) && manageable(r) }));
     }),
 
     forUser: protectedProcedure
       .input(z.object({ userId: z.number() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "permissoes", "view");
+        const target = await getUserById(input.userId);
+        if (!target || !canGrantPermissionsTo(ctx.user, target.role)) throw new TRPCError({ code: "FORBIDDEN", message: "Não podes gerir as permissões desta conta." });
+        if (!(await userInCityScope(input.userId))) throw new TRPCError({ code: "FORBIDDEN", message: "Esta conta não pertence à tua cidade." });
         const { getUserPermissionOverrides } = await import("./db");
         return getUserPermissionOverrides(input.userId);
       }),
@@ -2427,14 +2562,17 @@ export const appRouter = router({
         mode: z.enum(["grant", "deny"]).nullable(),
       }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "permissoes", "manage");
         const { PERMISSION_IDS } = await import("../shared/permissions");
         if (!PERMISSION_IDS.includes(input.permission as any)) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Permissão desconhecida." });
         }
+        const target = await getUserById(input.userId);
+        if (!target || !canGrantPermissionsTo(ctx.user, target.role)) throw new TRPCError({ code: "FORBIDDEN", message: "Não podes gerir as permissões desta conta." });
+        if (!(await userInCityScope(input.userId))) throw new TRPCError({ code: "FORBIDDEN", message: "Esta conta não pertence à tua cidade." });
+        if (!canTouchPermission(ctx.user, input.permission)) throw new TRPCError({ code: "FORBIDDEN", message: "Não podes dar nem retirar esta permissão." });
         const { setUserPermission } = await import("./db");
         await setUserPermission(input.userId, input.permission, input.mode, ctx.user.id);
-        invalidatePermissionElevation(input.userId);
         await logActivity({ userId: ctx.user.id, action: "set_permission", entity: "user", entityId: input.userId, details: `${input.permission} = ${input.mode ?? "(limpo)"}` });
         return { success: true };
       }),
@@ -2442,7 +2580,7 @@ export const appRouter = router({
     // A cidade depende exclusivamente do centro de custos, incluindo administradores.
     myCityAccess: protectedProcedure.query(async ({ ctx }) => {
       const { loadCityAccess } = await import("./cityAccess");
-      return loadCityAccess(ctx.user.id);
+      return loadCityAccess(ctx.user.id, ctx.user.role);
     }),
   }),
 
@@ -2475,7 +2613,7 @@ export const appRouter = router({
 
     // ── RECRUTAMENTO (emails recebidos em recursos-humanos@) ───────────────────
     recruitmentEmails: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "backoffice");
+      requireAccess(ctx.user, "leads_extras", "view");
       const { listInboundEmailsByAlias } = await import("./db");
       return listInboundEmailsByAlias("recursos-humanos", 200);
     }),
@@ -2484,7 +2622,7 @@ export const appRouter = router({
     setRecruitmentNotes: protectedProcedure
       .input(z.object({ id: z.number(), notes: z.string().max(10000) }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "leads_extras", "edit");
         const { getDb } = await import("./db");
         const { eq } = await import("drizzle-orm");
         const database = await getDb();
@@ -2512,7 +2650,7 @@ export const appRouter = router({
         })).max(5).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "leads_extras", "edit");
         const { sendEmail } = await import("./_core/notification");
 
         const emailAttachments: Array<{ filename: string; content: Buffer }> = [];
@@ -2619,7 +2757,7 @@ export const appRouter = router({
 
     // ── STATS ──────────────────────────────────────────────────────────────────────────────────
     stats: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "rh", "view");
       await seedExtraRates();
       return getHRStats();
     }),
@@ -2627,7 +2765,7 @@ export const appRouter = router({
     // Última vez que cada colaborador trabalhou (cartões dos extras:
     // disponibilidade, extras-dia, avaliações)
     lastWorkedMap: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "rh", "view");
       const { getLastWorkedMap } = await import("./db");
       return getLastWorkedMap();
     }),
@@ -2639,7 +2777,7 @@ export const appRouter = router({
     list: protectedProcedure
       .input(z.object({ isActive: z.boolean().optional(), position: z.string().optional(), projectId: z.number().optional() }).optional())
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "rh", "view");
         const viewer = await rhViewer(ctx.user);
         let rows = await getAllEmployees({ isActive: input?.isActive, position: input?.position });
         const allowedIds = scopedProjectIds();
@@ -2698,7 +2836,7 @@ export const appRouter = router({
         userId: z.number().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "rh", "manage");
 
         // ── ANTI-DUPLICAÇÃO (regra do Jorge): mesmo nome/email/NIF ativo = 1 só ficha
         const { getDb: getDbDup } = await import("./db");
@@ -2798,7 +2936,7 @@ export const appRouter = router({
     importExtras: protectedProcedure
       .input(z.object({ csv: z.string().min(1), projectId: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "rh", "manage");
         assertProjectAccess(input.projectId);
         const report = await importExtrasFromCsv(input.csv, ctx.user.id, { projectId: input.projectId });
         await logActivity({
@@ -2923,7 +3061,7 @@ export const appRouter = router({
         notes: z.string().max(DEACTIVATION_NOTES_MAX).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "rh", "manage");
         // Âmbito de cidade: desativar cascateia para a conta e grava o motivo —
         // nunca sobre uma pessoa de outra cidade. E um admin nunca desativa
         // um super_admin (ficha protegida).
@@ -3099,7 +3237,7 @@ export const appRouter = router({
         }),
       allStatus: protectedProcedure
         .query(async ({ ctx }) => {
-          requireRole(ctx.user.role, "frontoffice");
+          requireAccess(ctx.user, "rh", "view");
           const map = await getAllEmployeesDocumentStatus();
           const MANDATORY = ["photo","id_card","driving_license","nib_proof","address_proof","contract","responsibility_term"];
           const result: Record<number, { total: number; present: number; missing: string[] }> = {};
@@ -3154,7 +3292,7 @@ export const appRouter = router({
           isWorkDay: z.boolean(),
         }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
+          requireAccess(ctx.user, "rh", "manage");
           await upsertSchedule({ ...input, isWorkDay: input.isWorkDay ? 1 : 0 });
           return { success: true };
         }),
@@ -3162,7 +3300,7 @@ export const appRouter = router({
       delete: protectedProcedure
         .input(z.object({ employeeId: z.number(), weekday: z.number().min(0).max(6) }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
+          requireAccess(ctx.user, "rh", "manage");
           await deleteSchedule(input.employeeId, input.weekday);
           return { success: true };
         }),
@@ -3202,13 +3340,13 @@ export const appRouter = router({
       suspicious: protectedProcedure
         .input(z.object({ employeeId: z.number().optional(), limit: z.number().max(500).optional() }).optional())
         .query(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "supervisor");
+          requireAccess(ctx.user, "rh", "edit");
           return listSuspiciousTimeRecords({ employeeId: input?.employeeId, limit: input?.limit });
         }),
       review: protectedProcedure
         .input(z.object({ id: z.number(), decision: z.enum(["approved", "rejected"]), note: z.string().max(255).optional(), correctedHours: z.number().min(0).max(24).optional() }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
+          requireAccess(ctx.user, "rh", "manage");
           await reviewTimeRecord(input.id, input.decision, ctx.user.id, input.note ?? null, input.correctedHours ?? null);
           await logActivity({ userId: ctx.user.id, action: "review", entity: "time_record", entityId: input.id, details: `${input.decision}${input.correctedHours != null ? ` (${input.correctedHours}h)` : ""}${input.note ? ` — ${input.note}` : ""}` });
           return { success: true };
@@ -3417,13 +3555,13 @@ export const appRouter = router({
 
       // ── Geofence por centro de custos (raio de picagem) ───────────────────
       geofences: protectedProcedure.query(async ({ ctx }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "rh", "manage");
         return listProjectGeofences();
       }),
       setGeofence: protectedProcedure
         .input(z.object({ projectId: z.number(), lat: z.number(), lng: z.number(), radiusM: z.number().min(50).max(50000) }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
+          requireAccess(ctx.user, "rh", "manage");
           await setProjectGeofence(input.projectId, input.lat, input.lng, input.radiusM);
           await logActivity({ userId: ctx.user.id, action: "update", entity: "project_geofence", entityId: input.projectId });
           return { success: true };
@@ -3431,7 +3569,7 @@ export const appRouter = router({
       deleteGeofence: protectedProcedure
         .input(z.object({ projectId: z.number() }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
+          requireAccess(ctx.user, "rh", "manage");
           await deleteProjectGeofence(input.projectId);
           return { success: true };
         }),
@@ -3450,7 +3588,7 @@ export const appRouter = router({
     payroll: protectedProcedure
       .input(z.object({ year: z.number(), month: z.number().min(1).max(12), projectId: z.number().optional() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "rh_salarios", "view");
         return getPayrollData(input.year, input.month, { projectId: input.projectId ?? null });
       }),
 
@@ -3459,19 +3597,19 @@ export const appRouter = router({
       list: protectedProcedure
         .input(z.object({ year: z.number().optional(), month: z.number().min(1).max(12).optional() }).optional())
         .query(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
+          requireAccess(ctx.user, "rh_salarios", "view");
           return listPayrollRuns(input?.year, input?.month);
         }),
       get: protectedProcedure
         .input(z.object({ id: z.number() }))
         .query(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
+          requireAccess(ctx.user, "rh_salarios", "view");
           return getPayrollRun(input.id);
         }),
       create: protectedProcedure
         .input(z.object({ year: z.number(), month: z.number().min(1).max(12), notes: z.string().max(1000).optional() }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
+          requireAccess(ctx.user, "rh_salarios", "manage");
           const r = await createPayrollRun(input.year, input.month, ctx.user.id, input.notes ?? null);
           await logActivity({ userId: ctx.user.id, action: "payroll_close", entity: "payroll_run", entityId: r.runId, details: `${input.year}-${String(input.month).padStart(2, "0")} v${r.version}: ${r.employeesCount} pessoas, ${r.totalGross.toFixed(2)}€ bruto, ${r.warningsCount} com avisos` });
           return r;
@@ -3504,7 +3642,7 @@ export const appRouter = router({
     payrollPdf: protectedProcedure
       .input(z.object({ year: z.number(), month: z.number().min(1).max(12) }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "rh_salarios", "export");
         const pdfBuffer = await generatePayrollPdf(input.year, input.month);
         const { storagePut } = await import("./storage");
         const fileName = `folha_ordenados_${input.year}_${String(input.month).padStart(2, "0")}.pdf`;
@@ -3517,7 +3655,7 @@ export const appRouter = router({
     payslipPdf: protectedProcedure
       .input(z.object({ year: z.number(), month: z.number().min(1).max(12), employeeId: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "rh_salarios", "export");
         // O recibo de vencimento é da cidade da ficha, não de quem o pede.
         await assertEmployeeAccess(input.employeeId);
         const pdfBuffer = await generatePayslipPdf(input.year, input.month, input.employeeId);
@@ -3536,7 +3674,7 @@ export const appRouter = router({
     allPayslipsPdf: protectedProcedure
       .input(z.object({ year: z.number(), month: z.number().min(1).max(12) }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "rh_salarios", "export");
         const payslips = await generateAllPayslipsPdf(input.year, input.month);
         const { storagePut } = await import("./storage");
         const results: Array<{ employeeId: number; fullName: string; url: string }> = [];
@@ -3554,7 +3692,7 @@ export const appRouter = router({
     sendPayrollEmail: protectedProcedure
       .input(z.object({ year: z.number(), month: z.number().min(1).max(12), email: z.string().email() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "rh_salarios", "manage");
         // Generate PDF and upload to S3
         const pdfBuffer = await generatePayrollPdf(input.year, input.month);
         const { storagePut } = await import("./storage");
@@ -3588,7 +3726,7 @@ export const appRouter = router({
           notes: z.string().optional(),
         }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
+          requireAccess(ctx.user, "rh", "manage");
           await createEmployeeLeave({ ...input, createdById: ctx.user.id });
           await logActivity({ userId: ctx.user.id, action: "create", entity: "employee_leave", entityId: input.employeeId, details: `${input.leaveType} ${input.fromDate}→${input.toDate}` });
           return { success: true };
@@ -3596,7 +3734,7 @@ export const appRouter = router({
       delete: protectedProcedure
         .input(z.object({ id: z.number() }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
+          requireAccess(ctx.user, "rh", "manage");
           await deleteEmployeeLeave(input.id);
           return { success: true };
         }),
@@ -3615,13 +3753,13 @@ export const appRouter = router({
       list: protectedProcedure
         .input(z.object({ employeeId: z.number() }))
         .query(async ({ ctx, input }) => {
-          await assertOwnOrScopedEmployee(ctx.user, input.employeeId, "frontoffice");
+          await assertOwnOrScopedEmployee(ctx.user, input.employeeId, "team_leader");
           return getOpenPenalties(input.employeeId);
         }),
       clear: protectedProcedure
         .input(z.object({ id: z.number() }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "supervisor");
+          requireAccess(ctx.user, "rh", "edit");
           await clearPenalty(input.id, ctx.user.id);
           await logActivity({ userId: ctx.user.id, action: "clear", entity: "employee_penalty", entityId: input.id });
           return { success: true };
@@ -3630,19 +3768,19 @@ export const appRouter = router({
       processNoShows: protectedProcedure
         .input(z.object({ date: z.string() }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
+          requireAccess(ctx.user, "rh", "manage");
           const report = await detectExtraDiaNoShows(input.date);
           await logActivity({ userId: ctx.user.id, action: "process_noshows", entity: "extras_dia", details: `${input.date}: ${report.created} possíveis faltas` });
           return report;
         }),
       pending: protectedProcedure.query(async ({ ctx }) => {
-        requireRole(ctx.user.role, "supervisor");
+        requireAccess(ctx.user, "rh", "edit");
         return listPendingPenalties();
       }),
       review: protectedProcedure
         .input(z.object({ id: z.number(), decision: z.enum(["confirmed", "dismissed"]), note: z.string().max(200).optional() }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "supervisor");
+          requireAccess(ctx.user, "rh", "edit");
           const r = await reviewPenalty(input.id, input.decision, ctx.user.id, input.note ?? null);
           await logActivity({ userId: ctx.user.id, action: input.decision === "confirmed" ? "confirm_penalty" : "dismiss_penalty", entity: "employee_penalty", entityId: input.id, details: `${input.decision}${input.note ? ` — ${input.note}` : ""} · pontos ${r.points}${r.blocked ? " · BLOQUEADO" : ""}` });
           return r;
@@ -3653,7 +3791,7 @@ export const appRouter = router({
     unblock: protectedProcedure
       .input(z.object({ employeeId: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "supervisor");
+        requireAccess(ctx.user, "rh", "edit");
         await unblockEmployeeLogin(input.employeeId, ctx.user.id);
         return { success: true };
       }),
@@ -3691,7 +3829,7 @@ export const appRouter = router({
       // Leitura para quem compõe a escala (backoffice+): sem isto o Extras Dia
       // caía em silêncio nas taxas por defeito. Editar continua super_admin.
       list: protectedProcedure.query(async ({ ctx }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "rh_salarios", "view");
         await seedExtraRates();
         return getExtraRates();
       }),
@@ -3722,7 +3860,7 @@ export const appRouter = router({
     dashboard: protectedProcedure
       .input(z.object({ from: z.string().optional(), to: z.string().optional(), projectId: z.number().optional() }).optional())
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "marketing", "view");
         const { getMarketingStats } = await import("./integrations/googleAds/marketingStats");
         const { lisbonToday } = await import("../shared/expensePeriods");
         const today = lisbonToday();
@@ -3741,7 +3879,7 @@ export const appRouter = router({
     alerts: protectedProcedure
       .input(z.object({ projectId: z.number().optional() }).optional())
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "marketing", "view");
         const { computeAlertsFor } = await import("./marketingAlertsService");
         return computeAlertsFor(input?.projectId);
       }),
@@ -3750,7 +3888,7 @@ export const appRouter = router({
     channels: protectedProcedure
       .input(z.object({ from: z.string().optional(), to: z.string().optional(), projectId: z.number().optional() }).optional())
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "marketing", "view");
         const { getDb } = await import("./db");
         const { getChannels } = await import("./marketingChannels");
         const { getAdMetrics } = await import("./integrations/googleAds/adMetrics");
@@ -3774,7 +3912,7 @@ export const appRouter = router({
     byBrand: protectedProcedure
       .input(z.object({ from: z.string().optional(), to: z.string().optional(), projectId: z.number().optional() }).optional())
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "marketing", "view");
         const { getSpendAndBookingsByBrand } = await import("./integrations/googleAds/marketingStats");
         const { lisbonToday } = await import("../shared/expensePeriods");
         const today = lisbonToday();
@@ -3792,7 +3930,7 @@ export const appRouter = router({
     campaignRoas: protectedProcedure
       .input(z.object({ from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), projectId: z.number().optional() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "marketing", "view");
         const { getCampaignRoas } = await import("./marketingCampaignRoas");
         return getCampaignRoas(input);
       }),
@@ -3800,14 +3938,14 @@ export const appRouter = router({
     // Ligações campanha ↔ utm_campaign / código de desconto (admin; globais).
     campaignLinks: router({
       list: protectedProcedure.query(async ({ ctx }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "marketing", "view");
         const { listCampaignLinks } = await import("./marketingCampaignRoas");
         return listCampaignLinks();
       }),
       add: protectedProcedure
         .input(z.object({ adCampaignId: z.number().int().positive(), keyType: z.enum(["utm_campaign", "discount_code"]), keyValue: z.string().trim().min(1).max(256) }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
+          requireAccess(ctx.user, "marketing", "manage");
           requireGlobalCityAccess();
           const { addCampaignLink } = await import("./marketingCampaignRoas");
           await addCampaignLink({ ...input, userId: ctx.user.id });
@@ -3815,7 +3953,7 @@ export const appRouter = router({
           return { success: true };
         }),
       remove: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "marketing", "manage");
         requireGlobalCityAccess();
         const { removeCampaignLink } = await import("./marketingCampaignRoas");
         await removeCampaignLink(input.id);
@@ -3829,27 +3967,27 @@ export const appRouter = router({
       list: protectedProcedure
         .input(z.object({ month: z.string().regex(/^\d{4}-\d{2}$/), projectId: z.number().optional() }))
         .query(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "backoffice");
+          requireAccess(ctx.user, "marketing", "view");
           const { listBudgetsWithPacing } = await import("./marketingBudgets");
           return listBudgetsWithPacing(input);
         }),
       upsert: protectedProcedure
         .input(z.object({ month: z.string().regex(/^\d{4}-\d{2}$/), projectId: z.number().int(), provider: z.enum(["all", "google_ads", "meta"]).default("all"), amount: z.number().min(0).max(10_000_000), notes: z.string().max(255).nullable().optional() }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
+          requireAccess(ctx.user, "marketing", "manage");
           const { upsertBudget } = await import("./marketingBudgets");
           await upsertBudget({ ...input, userId: ctx.user.id });
           await logActivity({ userId: ctx.user.id, action: "update", entity: "marketing_budgets", entityId: input.projectId, details: `Orçamento ${input.month} ${input.provider}: ${input.amount} €` });
           return { success: true };
         }),
       remove: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "marketing", "manage");
         const { removeBudget } = await import("./marketingBudgets");
         await removeBudget(input.id);
         return { success: true };
       }),
       copyFromPrevious: protectedProcedure.input(z.object({ month: z.string().regex(/^\d{4}-\d{2}$/) })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "marketing", "manage");
         const { copyBudgets } = await import("./marketingBudgets");
         const [y, m] = input.month.split("-").map(Number);
         const prev = new Date(Date.UTC(y, m - 2, 1)).toISOString().slice(0, 7);
@@ -3861,18 +3999,18 @@ export const appRouter = router({
   // ─── OPERACIONAL ──────────────────────────────────────────────────────────
   operational: router({
     dashboard: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "backoffice");
+      requireAccess(ctx.user, "atividade_diaria", "view");
       return getOperationalStats();
     }),
 
     vehicles: router({
       // frontoffice: usado nas Reclamações (associar viatura)
       list: protectedProcedure.input(z.object({ status: z.string().optional(), projectId: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "atividade_diaria", "view");
         return getVehicles(input ?? undefined);
       }),
       get: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "atividade_diaria", "view");
         return getVehicleById(input.id);
       }),
       create: protectedProcedure.input(z.object({
@@ -3885,7 +4023,7 @@ export const appRouter = router({
         projectId: z.number().optional(),
         notes: z.string().optional(),
       })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "atividade_diaria", "manage");
         const id = await createVehicle({
           plate: input.plate,
           brand: input.brand ?? null,
@@ -3912,7 +4050,7 @@ export const appRouter = router({
           notes: z.string().optional(),
         }),
       })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "atividade_diaria", "manage");
         const { status, ...rest } = input.data;
         await updateVehicle(input.id, { ...rest, ...(status !== undefined && { vehicleStatus: status }) });
         await logActivity({ userId: ctx.user.id, action: "update", entity: "vehicle", entityId: input.id, details: "Viatura atualizada" });
@@ -3925,14 +4063,14 @@ export const appRouter = router({
         return { success: true };
       }),
       driverHistory: protectedProcedure.input(z.object({ vehicleId: z.number() })).query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "atividade_diaria", "view");
         return getVehicleDriverHistory(input.vehicleId);
       }),
     }),
 
     movements: router({
       list: protectedProcedure.input(z.object({ vehicleId: z.number().optional(), employeeId: z.number().optional(), limit: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "atividade_diaria", "view");
         return getVehicleMovements(input ?? undefined);
       }),
       create: protectedProcedure.input(z.object({
@@ -3944,7 +4082,7 @@ export const appRouter = router({
         longitude: z.string().optional(),
         notes: z.string().optional(),
       })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "atividade_diaria", "edit");
         const id = await createVehicleMovement({
           vehicleId: input.vehicleId,
           employeeId: input.employeeId,
@@ -3961,7 +4099,7 @@ export const appRouter = router({
 
     speedAlerts: router({
       list: protectedProcedure.input(z.object({ vehicleId: z.number().optional(), acknowledged: z.boolean().optional(), limit: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "atividade_diaria", "view");
         return getSpeedAlerts(input ?? undefined);
       }),
       create: protectedProcedure.input(z.object({
@@ -3973,7 +4111,7 @@ export const appRouter = router({
         longitude: z.string().optional(),
         roadName: z.string().optional(),
       })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "atividade_diaria", "edit");
         const id = await createSpeedAlert({
           vehicleId: input.vehicleId,
           employeeId: input.employeeId ?? null,
@@ -3992,7 +4130,7 @@ export const appRouter = router({
         return { id };
       }),
       acknowledge: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "atividade_diaria", "manage");
         await acknowledgeSpeedAlert(input.id, ctx.user.id);
         return { success: true };
       }),
@@ -4000,7 +4138,7 @@ export const appRouter = router({
 
     radio: router({
       list: protectedProcedure.input(z.object({ employeeId: z.number().optional(), vehicleId: z.number().optional(), limit: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "radio", "view");
         return getRadioTranscriptions(input ?? undefined);
       }),
       transcribe: protectedProcedure.input(z.object({
@@ -4010,7 +4148,7 @@ export const appRouter = router({
         duration: z.number().optional(),
       })).mutation(async ({ ctx, input }) => {
         // Transcrição chama OpenAI (custo real). Restringir a team_leader+.
-        requireRole(ctx.user.role, "team_leader");
+        requireAccess(ctx.user, "radio", "edit");
         const result = await transcribeAudio({ audioUrl: input.audioUrl, language: "pt" });
         if ("error" in result) {
           throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: `Transcrição falhou: ${result.error}` });
@@ -4041,14 +4179,14 @@ export const appRouter = router({
     // ─── ZELLO INTEGRATION ──────────────────────────────────────────────
     zello: router({
       users: protectedProcedure.query(async ({ ctx }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "atividade_diaria", "view");
         return getZelloUsers();
       }),
       // Resolução Zello→pessoa para o mapa ao vivo: check-ins de PDA ativos
       // primeiro (os "Extra NNN" vivem nos PDAs e cada dia é uma pessoa
       // diferente), ligações fixas da ficha como fallback.
       mappings: protectedProcedure.query(async ({ ctx }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "atividade_diaria", "view");
         const { getZelloLiveMappings } = await import("./db");
         return getZelloLiveMappings();
       }),
@@ -4058,7 +4196,7 @@ export const appRouter = router({
       mapUserToEmployee: protectedProcedure
         .input(z.object({ zelloUsername: z.string().min(1), employeeId: z.number().nullable() }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "backoffice");
+          requireAccess(ctx.user, "atividade_diaria", "edit");
           const { getDb } = await import("./db");
           const { sql } = await import("drizzle-orm");
           const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
@@ -4070,15 +4208,15 @@ export const appRouter = router({
           return { success: true };
         }),
       channels: protectedProcedure.query(async ({ ctx }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "atividade_diaria", "view");
         return getZelloChannels();
       }),
       locations: protectedProcedure.query(async ({ ctx }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "atividade_diaria", "view");
         return getZelloLocations();
       }),
       userLocation: protectedProcedure.input(z.object({ username: z.string() })).query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "atividade_diaria", "view");
         return getZelloUserLocation(input.username);
       }),
       userHistory: protectedProcedure.input(z.object({
@@ -4086,7 +4224,7 @@ export const appRouter = router({
         startTs: z.number(),
         endTs: z.number(),
       })).query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "atividade_diaria", "view");
         return getZelloUserHistory(input.username, input.startTs, input.endTs);
       }),
     }),
@@ -4095,7 +4233,7 @@ export const appRouter = router({
     speedMonitoring: router({
       limits: router({
         list: protectedProcedure.query(async ({ ctx }) => {
-          requireRole(ctx.user.role, "backoffice");
+          requireAccess(ctx.user, "atividade_diaria", "view");
           return getSpeedLimits();
         }),
         create: protectedProcedure.input(z.object({
@@ -4104,7 +4242,7 @@ export const appRouter = router({
           tolerancePercent: z.number().min(0).max(100).default(10),
           isDefault: z.boolean().default(false),
         })).mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
+          requireAccess(ctx.user, "atividade_diaria", "manage");
           const id = await createSpeedLimit({
             name: input.name,
             maxSpeed: input.maxSpeed,
@@ -4124,7 +4262,7 @@ export const appRouter = router({
             isActive: z.boolean().optional(),
           }),
         })).mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
+          requireAccess(ctx.user, "atividade_diaria", "manage");
           const { isDefault, isActive, ...rest } = input.data;
           const patch: Record<string, unknown> = { ...rest };
           if (isDefault !== undefined) patch.isDefault = isDefault ? 1 : 0;
@@ -4133,7 +4271,7 @@ export const appRouter = router({
           return { success: true };
         }),
         delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
+          requireAccess(ctx.user, "atividade_diaria", "manage");
           await deleteSpeedLimit(input.id);
           return { success: true };
         }),
@@ -4146,7 +4284,7 @@ export const appRouter = router({
           username: z.string().optional(),
           acknowledged: z.boolean().optional(),
         }).optional()).query(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "backoffice");
+          requireAccess(ctx.user, "atividade_diaria", "view");
           return getSpeedViolations({
             startDate: input?.startDate ? new Date(input.startDate) : undefined,
             endDate: input?.endDate ? new Date(input.endDate) : undefined,
@@ -4158,7 +4296,7 @@ export const appRouter = router({
           id: z.number(),
           notes: z.string().optional(),
         })).mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
+          requireAccess(ctx.user, "atividade_diaria", "manage");
           await acknowledgeSpeedViolation(input.id, ctx.user.id, input.notes);
           await logActivity({ userId: ctx.user.id, action: "update", entity: "speed_violation", entityId: input.id, details: "Infração reconhecida" });
           return { success: true };
@@ -4167,7 +4305,7 @@ export const appRouter = router({
           startDate: z.string().optional(),
           endDate: z.string().optional(),
         }).optional()).query(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "backoffice");
+          requireAccess(ctx.user, "atividade_diaria", "view");
           return getSpeedViolationStats(
             input?.startDate ? new Date(input.startDate) : undefined,
             input?.endDate ? new Date(input.endDate) : undefined,
@@ -4177,7 +4315,7 @@ export const appRouter = router({
 
       /** Check all Zello locations and record violations */
       checkNow: protectedProcedure.mutation(async ({ ctx }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "atividade_diaria", "manage");
         const locations = await getZelloLocations();
         const defaultLimit = await getDefaultSpeedLimit();
         if (!defaultLimit) return { checked: 0, violations: 0, message: "Nenhum limite de velocidade configurado" };
@@ -4216,19 +4354,19 @@ export const appRouter = router({
     // ─── DAILY DRIVER HISTORY ──────────────────────────────────────────
     driverHistory: router({
       byDate: protectedProcedure.input(z.object({ date: z.string(), projectId: z.number().optional() })).query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "historico_diario", "view");
         return getDailyDriverHistoryByDate(input.date);
       }),
       byUser: protectedProcedure.input(z.object({ username: z.string(), projectId: z.number().optional(), limit: z.number().optional() })).query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "historico_diario", "view");
         return getDailyDriverHistoryByUser(input.username, input.limit);
       }),
       range: protectedProcedure.input(z.object({ startDate: z.string(), endDate: z.string() })).query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "historico_diario", "view");
         return getDailyDriverHistoryRange(input.startDate, input.endDate);
       }),
       stats: protectedProcedure.input(z.object({ date: z.string(), projectId: z.number().optional() })).query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "historico_diario", "view");
         return getDailyDriverStats(input.date);
       }),
       /**
@@ -4244,7 +4382,7 @@ export const appRouter = router({
         resplit: z.boolean().optional(),
         afterId: z.number().optional(),
       })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "historico_diario", "manage");
         requireGlobalCityAccess();
         const deadlineAt = Date.now() + 45_000;
         if (input.resplit) {
@@ -4263,12 +4401,18 @@ export const appRouter = router({
         employeeId: z.number().optional(), zelloUsername: z.string().max(255).optional(),
         days: z.number().int().min(1).max(366).default(30), projectId: z.number().optional(),
       })).query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "historico_diario", "view", { allowOwn: true });
         const { getPersonSpeedHistory } = await import("./dayActivity");
+        // extra/condutor: só o PRÓPRIO histórico (a ficha da conta), nunca outro.
+        if (isOwnOnly(ctx.user, "historico_diario")) {
+          const me = await getEmployeeByUserId(ctx.user.id);
+          if (!me) throw new TRPCError({ code: "FORBIDDEN", message: "Sem ficha associada." });
+          return getPersonSpeedHistory({ ...input, employeeId: me.employee.id, zelloUsername: undefined });
+        }
         return getPersonSpeedHistory(input);
       }),
       people: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "historico_diario", "view");
         const { listSpeedHistoryPeople, speedThreshold } = await import("./dayActivity");
         return { ...(await listSpeedHistoryPeople(90)), threshold: await speedThreshold() };
       }),
@@ -4277,7 +4421,7 @@ export const appRouter = router({
     // ─── PDAs (DISPOSITIVOS) ──────────────────────────────────────────
     pdas: router({
       list: protectedProcedure.query(async ({ ctx }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "pdas", "view");
         return listPdas();
       }),
       // PDA ligado AGORA ao próprio utilizador (check-in aberto) — para o Perfil.
@@ -4300,7 +4444,7 @@ export const appRouter = router({
       // cliente guarda no localStorage. A partir daí, qualquer check-in do
       // PONTO feito neste aparelho liga a pessoa ao PDA/Zello automaticamente.
       registerDevice: protectedProcedure.input(z.object({ pdaId: z.number() })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "team_leader");
+        requireAccess(ctx.user, "pdas", "edit", { allowOwn: true });
         const { setPdaDeviceToken } = await import("./db");
         const token = await setPdaDeviceToken(input.pdaId);
         if (!token) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
@@ -4310,7 +4454,7 @@ export const appRouter = router({
       // ── Fase 2: QR code, ligação no login e libertação no logout ─────────
       // Link do QR a imprimir e colar no PDA.
       qrLink: protectedProcedure.input(z.object({ pdaId: z.number() })).query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "pdas", "view");
         const { ensurePdaQrCode } = await import("./db");
         const code = await ensurePdaQrCode(input.pdaId);
         if (!code) throw new TRPCError({ code: "NOT_FOUND", message: "PDA não encontrado" });
@@ -4319,7 +4463,7 @@ export const appRouter = router({
       // Ler o QR no próprio aparelho regista-o como este PDA (substitui a
       // escolha na lista). Só chefias — é uma vez por aparelho.
       registerByQr: protectedProcedure.input(z.object({ pdaId: z.number(), code: z.string().min(8).max(64) })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "team_leader");
+        requireAccess(ctx.user, "pdas", "edit", { allowOwn: true });
         const { verifyPdaQrCode, setPdaDeviceToken } = await import("./db");
         const pda = await verifyPdaQrCode(input.pdaId, input.code);
         if (!pda) throw new TRPCError({ code: "BAD_REQUEST", message: "QR inválido ou PDA inativo." });
@@ -4357,7 +4501,7 @@ export const appRouter = router({
         return getPdaByDeviceToken(input.token);
       }),
       get: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "pdas", "view");
         return getPdaById(input.id);
       }),
       create: protectedProcedure.input(z.object({
@@ -4371,7 +4515,7 @@ export const appRouter = router({
         simDataPlan: z.string().optional(),
         notes: z.string().optional(),
       })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "team_leader");
+        requireAccess(ctx.user, "pdas", "edit");
         const id = await createPda({
           name: input.name,
           phoneNumber: input.phoneNumber ?? null,
@@ -4400,13 +4544,13 @@ export const appRouter = router({
           notes: z.string().nullable().optional(),
         }),
       })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "team_leader");
+        requireAccess(ctx.user, "pdas", "edit");
         await updatePda(input.id, input.data);
         await logActivity({ userId: ctx.user.id, action: "update", entity: "pda", entityId: input.id, details: "PDA atualizado" });
         return { success: true };
       }),
       delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "pdas", "manage");
         await deletePda(input.id);
         await logActivity({ userId: ctx.user.id, action: "delete", entity: "pda", entityId: input.id, details: "PDA eliminado" });
         return { success: true };
@@ -4414,15 +4558,15 @@ export const appRouter = router({
       // Check-ins
       checkins: router({
         active: protectedProcedure.query(async ({ ctx }) => {
-          requireRole(ctx.user.role, "backoffice");
+          requireAccess(ctx.user, "pdas", "view");
           return getActiveCheckins();
         }),
         byDate: protectedProcedure.input(z.object({ date: z.string() })).query(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "backoffice");
+          requireAccess(ctx.user, "pdas", "view");
           return getCheckinsByDate(input.date);
         }),
         byPda: protectedProcedure.input(z.object({ pdaId: z.number(), limit: z.number().optional() })).query(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "backoffice");
+          requireAccess(ctx.user, "pdas", "view");
           return getCheckinsByPda(input.pdaId, input.limit);
         }),
         checkin: protectedProcedure.input(z.object({
@@ -4439,7 +4583,7 @@ export const appRouter = router({
           mobileDataMbStart: z.number().optional(),
           notes: z.string().optional(),
         })).mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "backoffice");
+          requireAccess(ctx.user, "pdas", "edit");
           const id = await createPdaCheckin({
             pdaId: input.pdaId,
             employeeId: input.employeeId,
@@ -4463,7 +4607,7 @@ export const appRouter = router({
           mobileDataMbEnd: z.number().optional(),
           notes: z.string().optional(),
         })).mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "backoffice");
+          requireAccess(ctx.user, "pdas", "edit");
           await checkoutPda(input.id, {
             photoExitUrl: input.photoExitUrl,
             mobileDataMbEnd: input.mobileDataMbEnd,
@@ -4481,22 +4625,22 @@ export const appRouter = router({
         limit: z.number().optional(),
         unacknowledgedOnly: z.boolean().optional(),
       }).optional()).query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "atividade_diaria", "view");
         return getGpsAlerts(input ?? {});
       }),
       stats: protectedProcedure.query(async ({ ctx }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "atividade_diaria", "view");
         return getGpsAlertStats();
       }),
       acknowledge: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "team_leader");
+        requireAccess(ctx.user, "atividade_diaria", "edit");
         await acknowledgeGpsAlert(input.id, ctx.user.id);
         await logActivity({ userId: ctx.user.id, action: "update", entity: "gps_alert", entityId: input.id, details: "Alerta GPS reconhecido" });
         return { success: true };
       }),
       /** Check all users and create alerts for disabled GPS/Zello */
       checkNow: protectedProcedure.mutation(async ({ ctx }) => {
-        requireRole(ctx.user.role, "team_leader");
+        requireAccess(ctx.user, "atividade_diaria", "edit");
         const users = await getZelloUsers();
         let alertsCreated = 0;
         for (const user of users) {
@@ -4554,7 +4698,7 @@ export const appRouter = router({
 
   apiKeys: router({
     list: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "super_admin");
+      requireAccess(ctx.user, "api_keys", "manage");
       return getApiKeys();
     }),
     // A chave completa só sai AQUI, uma vez; na BD fica só o hash + prefixo.
@@ -4563,7 +4707,7 @@ export const appRouter = router({
       permissions: z.array(z.enum(["read", "write", "admin", "device"])).optional(),
       expiresInDays: z.number().int().min(1).max(3650).optional(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "super_admin");
+      requireAccess(ctx.user, "api_keys", "manage");
       const { generateApiKey, hashApiKey, apiKeyPrefix } = await import("./apiKeyAuth");
       const key = generateApiKey();
       const perms = input.permissions?.length ? input.permissions : ["device"];
@@ -4588,13 +4732,13 @@ export const appRouter = router({
       id: z.number(),
       active: z.boolean(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "super_admin");
+      requireAccess(ctx.user, "api_keys", "manage");
       await toggleApiKey(input.id, input.active);
       await logActivity({ userId: ctx.user.id, action: "update", entity: "api_key", entityId: input.id, details: input.active ? "Ativada" : "Desativada" });
       return { success: true };
     }),
     delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "super_admin");
+      requireAccess(ctx.user, "api_keys", "manage");
       await deleteApiKey(input.id);
       await logActivity({ userId: ctx.user.id, action: "delete", entity: "api_key", entityId: input.id, details: "API Key eliminada" });
       return { success: true };
@@ -4606,13 +4750,13 @@ export const appRouter = router({
     searchBooking: protectedProcedure
       .input(z.object({ search: z.string().min(2) }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "reclamacoes", "edit");
         return searchBookingByRef(input.search);
       }),
     fetchBookingDetails: protectedProcedure
       .input(z.object({ externalId: z.string() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "reclamacoes", "edit");
         const { getBooking } = await import("./multipark");
         try {
           return await getBooking(input.externalId);
@@ -4627,11 +4771,12 @@ export const appRouter = router({
       assignedToId: z.number().optional(),
       projectId: z.number().optional(),
     }).optional()).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
-      return getComplaints(input ?? {});
+      requireAccess(ctx.user, "reclamacoes", "view", { allowOwn: true });
+      return filterOwnCases(ctx.user, "reclamacoes", "complaint", await getComplaints(input ?? {}));
     }),
     getById: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "reclamacoes", "view", { allowOwn: true });
+      await assertOwnCase(ctx.user, "reclamacoes", "complaint", input.id);
       const complaint = await getComplaintById(input.id);
       if (!complaint) throw new TRPCError({ code: "NOT_FOUND" });
       const messages = await getComplaintMessages(input.id);
@@ -4659,7 +4804,7 @@ export const appRouter = router({
       projectId: z.number().optional(),
       assignedToId: z.number().optional(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "reclamacoes", "edit");
       const slaDeadline = input.slaHours ? new Date(Date.now() + input.slaHours * 3600000).toISOString().slice(0, 19).replace("T", " ") : null;
       const id = await createComplaint({
         title: input.title,
@@ -4704,7 +4849,7 @@ export const appRouter = router({
     findDriversOnDuty: protectedProcedure
       .input(z.object({ complaintId: z.number() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "reclamacoes", "edit");
         const { findDriversOnDuty } = await import("./complaintsExtended");
         return findDriversOnDuty(input.complaintId);
       }),
@@ -4718,7 +4863,7 @@ export const appRouter = router({
         notes: z.string().max(512).nullable().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "reclamacoes", "edit");
         const { attachDriverToComplaint } = await import("./complaintsExtended");
         await attachDriverToComplaint(input);
         return { success: true };
@@ -4726,14 +4871,14 @@ export const appRouter = router({
     listAttachedDrivers: protectedProcedure
       .input(z.object({ complaintId: z.number() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "reclamacoes", "view");
         const { listComplaintDrivers } = await import("./complaintsExtended");
         return listComplaintDrivers(input.complaintId);
       }),
     detachDriver: protectedProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "reclamacoes", "edit");
         const { detachComplaintDriver } = await import("./complaintsExtended");
         await detachComplaintDriver(input.id);
         return { success: true };
@@ -4741,14 +4886,14 @@ export const appRouter = router({
 
     // ── Penalty config ──────────────────────────────────────────────────────
     listPenaltyConfig: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "reclamacoes", "view");
       const { listPenaltyConfig } = await import("./complaintsExtended");
       return listPenaltyConfig();
     }),
     updatePenaltyConfig: protectedProcedure
       .input(z.object({ complaintType: z.string().max(32), basePoints: z.number().int() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "reclamacoes", "manage");
         const { updatePenaltyConfig } = await import("./complaintsExtended");
         await updatePenaltyConfig(input.complaintType, input.basePoints);
         return { success: true };
@@ -4763,7 +4908,7 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         // Envia email em nome da empresa — só frontoffice+ pode disparar
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "reclamacoes", "edit");
         const { sendComplaintEmailToClient } = await import("./complaintsExtended");
         const r = await sendComplaintEmailToClient(input);
         if (r.ok) {
@@ -4807,7 +4952,7 @@ export const appRouter = router({
       dueDate: z.string().nullable().optional(),
       investigatedById: z.number().nullable().optional(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "reclamacoes", "edit");
       const { id, slaHours, type, status, priority, penaltyPoints, dueDate, ...rest } = input;
       const updateData: any = { ...rest };
       // Map to actual DB column names
@@ -4850,7 +4995,7 @@ export const appRouter = router({
       return { success: true };
     }),
     delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "reclamacoes", "manage");
       await deleteComplaint(input.id);
       await logActivity({ userId: ctx.user.id, action: "delete", entity: "complaint", entityId: input.id, details: "Reclamação eliminada" });
       return { success: true };
@@ -4859,7 +5004,7 @@ export const appRouter = router({
     // fotos, condutores) e FECHA a reclamação como 'converted', ligada nos
     // dois sentidos. Nada é apagado. Admin+.
     convertToLostFound: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "reclamacoes", "manage");
       const c = await getComplaintById(input.id);
       if (!c) throw new TRPCError({ code: "NOT_FOUND" });
       assertProjectAccess(c.projectId);
@@ -4875,7 +5020,7 @@ export const appRouter = router({
       message: z.string().min(1),
       isInternal: z.boolean().optional(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "reclamacoes", "edit");
       const id = await addComplaintMessage({
         complaintId: input.complaintId,
         message: input.message,
@@ -4891,7 +5036,7 @@ export const appRouter = router({
       filename: z.string(),
       label: z.string().optional(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "reclamacoes", "edit");
       const buffer = Buffer.from(input.base64, "base64");
       const ext = input.filename.split(".").pop() || "jpg";
       const key = `complaints/${input.complaintId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
@@ -4906,17 +5051,17 @@ export const appRouter = router({
       return { id, url };
     }),
     deletePhoto: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "reclamacoes", "edit");
       await deleteComplaintPhoto(input.id);
       return { success: true };
     }),
     stats: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "reclamacoes", "view");
       return getComplaintStats(input?.projectId);
     }),
     // Get vehicle driver history for a complaint
     vehicleHistory: protectedProcedure.input(z.object({ vehicleId: z.number() })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "reclamacoes", "view");
       return getVehicleDriverHistory(input.vehicleId);
     }),
     // Booking timeline — BD local primeiro (o fetch live usava a chave GLOBAL
@@ -4924,7 +5069,7 @@ export const appRouter = router({
     bookingTimeline: protectedProcedure.input(z.object({
       bookingId: z.string(),
     })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "reclamacoes", "view");
       const { getComplaintBookingDossier } = await import("./complaintDossier");
       const d = await getComplaintBookingDossier(input.bookingId);
       if (d.history.length) {
@@ -4957,7 +5102,7 @@ export const appRouter = router({
     bookingDossier: protectedProcedure.input(z.object({
       reservationRef: z.string().min(1),
     })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "reclamacoes", "view");
       const { getComplaintBookingDossier } = await import("./complaintDossier");
       return getComplaintBookingDossier(input.reservationRef);
     }),
@@ -4967,7 +5112,7 @@ export const appRouter = router({
     autoLink: protectedProcedure.input(z.object({
       id: z.number(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "reclamacoes", "edit");
       const { autoLinkComplaintBooking } = await import("./complaintDossier");
       return autoLinkComplaintBooking(input.id);
     }),
@@ -4978,7 +5123,7 @@ export const appRouter = router({
     refreshBookingData: protectedProcedure.input(z.object({
       reservationRef: z.string().min(1),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "reclamacoes", "edit");
       const { refreshBookingFromApi } = await import("./complaintDossier");
       return refreshBookingFromApi(input.reservationRef);
     }),
@@ -4988,7 +5133,7 @@ export const appRouter = router({
       plate: z.string().min(2),
       currentBookingRef: z.string().optional(),
     })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "reclamacoes", "view");
       const { getVehicleAgentsByPlate } = await import("./db");
       return getVehicleAgentsByPlate(input.plate, input.currentBookingRef);
     }),
@@ -5042,22 +5187,23 @@ export const appRouter = router({
       status: z.string().optional(),
       projectId: z.number().optional(),
     }).optional()).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
-      return getGoogleReviews(input ?? undefined);
+      requireAccess(ctx.user, "criticas", "view", { allowOwn: true });
+      return filterOwnCases(ctx.user, "criticas", "review", await getGoogleReviews(input ?? undefined));
     }),
     getById: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "criticas", "view", { allowOwn: true });
+      await assertOwnCase(ctx.user, "criticas", "review", input.id);
       return getGoogleReviewById(input.id);
     }),
     stats: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "criticas", "view");
       return getGoogleReviewStats(input);
     }),
     // Transforma uma crítica (tipicamente 1-2★) numa Reclamação para ser
     // tratada com SLA/atribuição/dossier. A crítica fica marcada como
     // convertida e ligada à reclamação (o schema já previa isto).
     convertToComplaint: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "backoffice");
+      requireAccess(ctx.user, "criticas", "edit");
       const review = await getGoogleReviewById(input.id);
       if (!review) throw new TRPCError({ code: "NOT_FOUND" });
       if (review.status === "converted_complaint" && review.complaintId) {
@@ -5101,7 +5247,7 @@ export const appRouter = router({
     })).mutation(async ({ ctx, input }) => {
       // create dispara OpenAI (resposta IA) e/ou cria reclamação automaticamente.
       // Custo real + acções com efeito — restringir a frontoffice+.
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "criticas", "edit");
       const reviewDate = (input.reviewDate ? new Date(input.reviewDate) : new Date()).toISOString().slice(0, 19).replace("T", " ");
       const id = await createGoogleReview({
         ...input,
@@ -5163,7 +5309,7 @@ export const appRouter = router({
       aiResponse: z.string().optional(),
       status: z.enum(["pending_response", "ai_responded", "manually_responded", "converted_complaint", "dismissed"]).optional(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "criticas", "edit");
       const { id, ...data } = input;
       if (data.status === "manually_responded" || data.aiResponse) {
         (data as any).respondedAt = new Date().toISOString().slice(0, 19).replace("T", " ");
@@ -5177,7 +5323,7 @@ export const appRouter = router({
       id: z.number(),
     })).mutation(async ({ ctx, input }) => {
       // Chama OpenAI por review — restringir a frontoffice+
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "criticas", "edit");
       const review = await getGoogleReviewById(input.id);
       if (!review) throw new TRPCError({ code: "NOT_FOUND" });
       const response = await invokeLLM({
@@ -5202,14 +5348,14 @@ export const appRouter = router({
       plate: z.string().optional(),
     })).query(async ({ ctx, input }) => {
       // PII de clientes — restringir
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "criticas", "edit");
       return searchClientHistory(input.name, input.email, input.plate);
     }),
     // Publica no Google a resposta escrita/gerada no dashboard (Jorge, 16 set
     // 2026: "receber a crítica e responder pela dashboard"). Só críticas
     // importadas pela API têm ligação ao Google; as de email ficam só locais.
     publishReply: protectedProcedure.input(z.object({ id: z.number(), comment: z.string().min(1).max(4096) })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "criticas", "edit");
       const review = await getGoogleReviewById(input.id); // já aplica o âmbito de cidade
       if (!review) throw new TRPCError({ code: "NOT_FOUND", message: "Crítica não encontrada" });
       const { publishReply } = await import("./integrations/googleBusiness/service");
@@ -5223,7 +5369,7 @@ export const appRouter = router({
       }
     }),
     approveResponse: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "criticas", "edit");
       await updateGoogleReview(input.id, { aiResponseApproved: 1, respondedAt: new Date().toISOString().slice(0, 19).replace("T", " "), respondedBy: ctx.user.id, status: "manually_responded" });
       await logActivity({ userId: ctx.user.id, action: "approve", entity: "google_review", entityId: input.id, details: "Resposta aprovada" });
       return { success: true };
@@ -5248,7 +5394,7 @@ export const appRouter = router({
       startDate: z.string(),
       endDate: z.string(),
     })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "criticas", "view");
       const { getCheckoutDriversFromDb } = await import("./db");
       return getCheckoutDriversFromDb(input.startDate, input.endDate);
     }),
@@ -5260,7 +5406,7 @@ export const appRouter = router({
       agentName: z.string().optional(),
       userId: z.string().optional(),
     })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "criticas", "view");
       const { getAgentHistoryFromDb } = await import("./db");
       return getAgentHistoryFromDb({
         startDate: input.startDate,
@@ -5283,13 +5429,14 @@ export const appRouter = router({
       projectId: z.number().optional(),
       noProject: z.boolean().optional(),
       search: z.string().max(200).optional(),
-    }).optional()).query(({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
-      return getLostFoundItems(input);
+    }).optional()).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "perdidos", "view", { allowOwn: true });
+      return filterOwnCases(ctx.user, "perdidos", "lost_found", await getLostFoundItems(input));
     }),
 
     getById: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "perdidos", "view", { allowOwn: true });
+      await assertOwnCase(ctx.user, "perdidos", "lost_found", input.id);
       const item = await loadLostInScope(input.id);
       const { signedFileUrl } = await import("./caseOps");
       return { ...item, returnPhotoUrl: item.returnPhotoUrl || item.returnPhotoKey ? await signedFileUrl(item.returnPhotoKey, item.returnPhotoUrl) : null };
@@ -5297,7 +5444,7 @@ export const appRouter = router({
 
     dashboard: protectedProcedure.input(z.object({ projectId: z.number().optional(), noProject: z.boolean().optional() }).optional())
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "perdidos", "view");
         const { getLostDashboard } = await import("./caseOps");
         const d = await getLostDashboard(input ?? {});
         // Condutores repetidos é informação sensível → só team leader+.
@@ -5316,7 +5463,7 @@ export const appRouter = router({
       estimatedValue: z.number().int().min(0).optional(),
       priority: z.enum(LOST_PRIORITIES).optional(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "perdidos", "edit");
       if (input.projectId) assertProjectAccess(input.projectId);
       const id = await createLostFoundItem({ ...input, projectId: input.projectId ?? defaultScopedProjectId(), createdBy: ctx.user.id, status: "new", priority: input.priority || "medium" } as any);
       // Auto-liga a reserva a partir dos sinais (matrícula/email/telefone/nome).
@@ -5362,7 +5509,7 @@ export const appRouter = router({
       dueDate: z.string().max(30).nullable().optional(),
       investigatedById: z.number().nullable().optional(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "perdidos", "edit");
       const existing = await loadLostInScope(input.id);
       const { id, dueDate, status, ...rest } = input;
       if (rest.projectId !== undefined && rest.projectId !== null) assertProjectAccess(rest.projectId);
@@ -5393,7 +5540,7 @@ export const appRouter = router({
       base64: z.string().max(22_000_000),
       filename: z.string().max(255),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "perdidos", "edit");
       await loadLostInScope(input.itemId);
       const buffer = Buffer.from(input.base64, "base64");
       const key = `lost-found/${input.itemId}/return-${Date.now()}.${safeExt(input.filename)}`;
@@ -5409,7 +5556,7 @@ export const appRouter = router({
       subject: z.string().min(1).max(255),
       body: z.string().min(1).max(10000),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "perdidos", "edit");
       const item = await loadLostInScope(input.itemId);
       if (!item.clientEmail) throw new TRPCError({ code: "BAD_REQUEST", message: "Item sem email de cliente" });
       const { sendEmail } = await import("./_core/notification");
@@ -5447,7 +5594,8 @@ export const appRouter = router({
 
     // Photos — URLs assinadas (temporárias), nunca a URL pública guardada.
     getPhotos: protectedProcedure.input(z.object({ itemId: z.number() })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "perdidos", "view", { allowOwn: true });
+      await assertOwnCase(ctx.user, "perdidos", "lost_found", input.itemId);
       await loadLostInScope(input.itemId);
       const { signedFileUrl } = await import("./caseOps");
       const photos = await getLostFoundPhotos(input.itemId);
@@ -5460,7 +5608,7 @@ export const appRouter = router({
       filename: z.string().max(255),
       caption: z.string().max(255).optional(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "perdidos", "edit");
       await loadLostInScope(input.itemId);
       const buffer = Buffer.from(input.base64, "base64");
       const key = `lost-found/${input.itemId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${safeExt(input.filename)}`;
@@ -5472,7 +5620,8 @@ export const appRouter = router({
 
     // Messages
     getMessages: protectedProcedure.input(z.object({ itemId: z.number() })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "perdidos", "view", { allowOwn: true });
+      await assertOwnCase(ctx.user, "perdidos", "lost_found", input.itemId);
       await loadLostInScope(input.itemId);
       return getLostFoundMessages(input.itemId);
     }),
@@ -5482,7 +5631,7 @@ export const appRouter = router({
       message: z.string().min(1).max(5000),
       isInternal: z.boolean().optional(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "perdidos", "edit");
       await loadLostInScope(input.itemId);
       await addLostFoundMessage({ itemId: input.itemId, userId: ctx.user.id, userName: ctx.user.name || "Utilizador", message: input.message, isInternal: input.isInternal === false ? 0 : 1 });
       return { success: true };
@@ -5490,7 +5639,7 @@ export const appRouter = router({
 
     // ── Condutores ligados ao caso ─────────────────────────────────────────
     attachedDrivers: protectedProcedure.input(z.object({ itemId: z.number() })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "perdidos", "view");
       await loadLostInScope(input.itemId);
       const { listLostFoundDrivers } = await import("./db");
       return listLostFoundDrivers(input.itemId);
@@ -5506,7 +5655,7 @@ export const appRouter = router({
       movementsSummary: z.string().max(512).nullable().optional(),
       notes: z.string().max(512).nullable().optional(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "team_leader");
+      requireAccess(ctx.user, "perdidos", "edit");
       await loadLostInScope(input.itemId);
       const { attachLostFoundDriver } = await import("./db");
       const id = await attachLostFoundDriver({ ...input, attachedById: ctx.user.id });
@@ -5515,7 +5664,7 @@ export const appRouter = router({
     }),
 
     detachDriver: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "team_leader");
+      requireAccess(ctx.user, "perdidos", "edit");
       const link = await getLostDriverLink(input.id);
       await loadLostInScope(link.itemId);
       if (link.penaltyId && link.pointsConfirmed) {
@@ -5536,7 +5685,7 @@ export const appRouter = router({
       costAmount: z.number().min(0).max(100000).nullable().optional(),
       points: z.number().int().min(0).max(20).optional(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "team_leader");
+      requireAccess(ctx.user, "perdidos", "edit");
       const link = await getLostDriverLink(input.linkId);
       await loadLostInScope(link.itemId);
       const { setLostDriverAccountability } = await import("./caseOps");
@@ -5552,7 +5701,7 @@ export const appRouter = router({
     // Supervisor+: confirma ou anula os pontos propostos.
     reviewDriverPoints: protectedProcedure.input(z.object({ linkId: z.number(), decision: z.enum(["confirmed", "dismissed"]) }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "supervisor");
+        requireAccess(ctx.user, "perdidos", "edit");
         const link = await getLostDriverLink(input.linkId);
         await loadLostInScope(link.itemId);
         const { reviewLostDriverPoints } = await import("./caseOps");
@@ -5565,20 +5714,20 @@ export const appRouter = router({
 
     // ── Cruzamento de condutores (team leader+, por cidade) ────────────────
     crossRef: protectedProcedure.input(crossRefInput).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "team_leader");
+      requireAccess(ctx.user, "perdidos", "edit");
       const { getDriverCrossRef } = await import("./caseOps");
       return getDriverCrossRef(input);
     }),
 
     crossRefDetail: protectedProcedure.input(crossRefInput.extend({ key: z.string().min(3).max(300) })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "team_leader");
+      requireAccess(ctx.user, "perdidos", "edit");
       const { getDriverCrossRefDetail } = await import("./caseOps");
       return getDriverCrossRefDetail(input);
     }),
 
     // "Aparece em N outros casos" no detalhe de um caso.
     caseRepeatDrivers: protectedProcedure.input(z.object({ itemId: z.number() })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "team_leader");
+      requireAccess(ctx.user, "perdidos", "edit");
       await loadLostInScope(input.itemId);
       const { getCaseRepeatDrivers } = await import("./caseOps");
       return getCaseRepeatDrivers(input.itemId);
@@ -5589,7 +5738,7 @@ export const appRouter = router({
     vehicleAgents: protectedProcedure
       .input(z.object({ plate: z.string().max(20), currentBookingRef: z.string().max(128).optional() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "perdidos", "view");
         const { getVehicleAgentsByPlate } = await import("./db");
         return getVehicleAgentsByPlate(input.plate, input.currentBookingRef);
       }),
@@ -5598,7 +5747,7 @@ export const appRouter = router({
     bookingHistory: protectedProcedure
       .input(z.object({ bookingId: z.string().optional(), plate: z.string().optional(), search: z.string().optional() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "perdidos", "view");
         if (input.bookingId) return getBookingHistoryByBookingId(input.bookingId);
         if (input.plate) return getBookingHistoryByPlate(input.plate);
         if (input.search) return searchBookingHistory(input.search);
@@ -5606,7 +5755,7 @@ export const appRouter = router({
       }),
 
     bookingHistoryDriverStats: protectedProcedure.query(({ ctx }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "perdidos", "view");
       return getBookingHistoryDriverStats();
     }),
 
@@ -5615,7 +5764,7 @@ export const appRouter = router({
     driversForPeriod: protectedProcedure
       .input(z.object({ from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "team_leader");
+        requireAccess(ctx.user, "perdidos", "edit");
         const { getDb } = await import("./db");
         const { sql } = await import("drizzle-orm");
         const { lisbonDayRangeUtc } = await import("../shared/lisbonDay");
@@ -5638,7 +5787,7 @@ export const appRouter = router({
     agentMovements: protectedProcedure
       .input(z.object({ agentName: z.string().min(1).max(256), from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "team_leader");
+        requireAccess(ctx.user, "perdidos", "edit");
         const { getAgentMovements } = await import("./db");
         return getAgentMovements(input);
       }),
@@ -5648,7 +5797,7 @@ export const appRouter = router({
     bookingTimeline: protectedProcedure.input(z.object({
       bookingId: z.string().max(128),
     })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "perdidos", "view");
       if (!(await bookingRefInScope(input.bookingId))) return { bookingId: input.bookingId, total: 0, history: [] };
       const { getComplaintBookingDossier } = await import("./complaintDossier");
       const d = await getComplaintBookingDossier(input.bookingId);
@@ -5679,7 +5828,7 @@ export const appRouter = router({
     bookingDossier: protectedProcedure.input(z.object({
       reservationRef: z.string().min(1).max(128),
     })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "perdidos", "view");
       if (!(await bookingRefInScope(input.reservationRef))) throw new TRPCError({ code: "FORBIDDEN", message: "Reserva fora das tuas cidades." });
       const { getComplaintBookingDossier } = await import("./complaintDossier");
       return getComplaintBookingDossier(input.reservationRef);
@@ -5689,7 +5838,7 @@ export const appRouter = router({
     // fotos, condutores, valor/tipo) e FECHA este caso como 'converted',
     // ligado nos dois sentidos. Nada é apagado. Admin+.
     convertToComplaint: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "perdidos", "manage");
       await loadLostInScope(input.id);
       const { convertLostToComplaint } = await import("./caseOps");
       let r: { newId: number };
@@ -5703,7 +5852,7 @@ export const appRouter = router({
     autoLink: protectedProcedure.input(z.object({
       id: z.number(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "perdidos", "edit");
       await loadLostInScope(input.id);
       const { autoLinkLostFoundBooking } = await import("./complaintDossier");
       return autoLinkLostFoundBooking(input.id);
@@ -5714,7 +5863,7 @@ export const appRouter = router({
     refreshBookingData: protectedProcedure.input(z.object({
       reservationRef: z.string().min(1).max(128),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "perdidos", "edit");
       if (!(await bookingRefInScope(input.reservationRef))) throw new TRPCError({ code: "FORBIDDEN", message: "Reserva fora das tuas cidades." });
       const { refreshBookingFromApi } = await import("./complaintDossier");
       return refreshBookingFromApi(input.reservationRef);
@@ -5729,13 +5878,14 @@ export const appRouter = router({
       employeeId: z.number().optional(),
       projectId: z.number().optional(),
       noProject: z.boolean().optional(),
-    }).optional()).query(({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
-      return getIncidents(input);
+    }).optional()).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "ocorrencias", "view", { allowOwn: true });
+      return filterOwnCases(ctx.user, "ocorrencias", "incident", await getIncidents(input));
     }),
 
     getById: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "ocorrencias", "view", { allowOwn: true });
+      await assertOwnCase(ctx.user, "ocorrencias", "incident", input.id);
       return loadIncidentInScope(input.id);
     }),
 
@@ -5750,7 +5900,8 @@ export const appRouter = router({
       costAmount: z.number().min(0).max(100000).optional(),
     })).mutation(async ({ ctx, input }) => {
       // Apontar um condutor afeta a avaliação dele → team leader+.
-      requireRole(ctx.user.role, input.employeeId ? "team_leader" : "frontoffice");
+      requireAccess(ctx.user, "ocorrencias", "edit");
+      if (input.employeeId) requireRole(ctx.user.role, "team_leader");
       if (input.projectId) assertProjectAccess(input.projectId);
       if (input.employeeId) await assertEmployeeAccess(input.employeeId);
       const { deriveBookingForCase } = await import("./caseOps");
@@ -5788,7 +5939,7 @@ export const appRouter = router({
       projectId: z.number().optional(),
       costAmount: z.number().min(0).max(100000).nullable().optional(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "ocorrencias", "edit");
       const existing = await loadIncidentInScope(input.id);
       const { id, status, employeeId, costAmount, ...rest } = input;
       const data: any = { ...rest };
@@ -5816,7 +5967,7 @@ export const appRouter = router({
 
     // Confirmar/retirar o envolvimento do condutor (só então conta pontos).
     confirmDriver: protectedProcedure.input(z.object({ id: z.number(), confirmed: z.boolean() })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "team_leader");
+      requireAccess(ctx.user, "ocorrencias", "edit");
       const inc = await loadIncidentInScope(input.id);
       if (!inc.employeeId) throw new TRPCError({ code: "BAD_REQUEST", message: "Ocorrência sem condutor" });
       await updateIncident(input.id, input.confirmed
@@ -5838,13 +5989,13 @@ export const appRouter = router({
       projectId: z.number().optional(),
       noProject: z.boolean().optional(),
     }).optional()).query(({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "ocorrencias", "view");
       return getIncidentStats(input);
     }),
 
     dashboard: protectedProcedure.input(z.object({ projectId: z.number().optional(), noProject: z.boolean().optional() }).optional())
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "ocorrencias", "view");
         const { getIncidentDashboard } = await import("./caseOps");
         const d = await getIncidentDashboard(input ?? {});
         return hasRole(ctx.user.role, "team_leader") ? d : { ...d, repeatDrivers: [] };
@@ -5856,7 +6007,7 @@ export const appRouter = router({
       id: z.number(),
       note: z.string().min(1).max(2000),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "ocorrencias", "edit");
       await loadIncidentInScope(input.id);
       const { appendIncidentNote } = await import("./caseOps");
       await appendIncidentNote(input.id, ctx.user.name ?? "—", input.note);
@@ -5866,7 +6017,7 @@ export const appRouter = router({
     // Reserva relacionada com a ocorrência (pela ref ligada ou pela matrícula,
     // ancorada na data da ocorrência).
     bookingPeek: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "ocorrencias", "view");
       const inc = await loadIncidentInScope(input.id);
       if (!inc.vehiclePlate && !inc.reservationLink) return null;
       const { matchBookingForComplaint } = await import("./complaintDossier");
@@ -5901,7 +6052,7 @@ export const appRouter = router({
     syncFromMultipark: protectedProcedure
       .input(z.object({ lookbackDays: z.number().int().min(1).max(180).optional() }).optional())
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "ocorrencias", "edit");
         const { syncIncidentsFromMultiparkHistory } = await import("./db");
         const r = await syncIncidentsFromMultiparkHistory({
           lookbackDays: input?.lookbackDays ?? 30,
@@ -5917,7 +6068,7 @@ export const appRouter = router({
     // Conversões NÃO destrutivas: cria o registo novo e fecha esta ocorrência
     // como 'converted', ligada nos dois sentidos. Admin+.
     convertToComplaint: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "ocorrencias", "manage");
       await loadIncidentInScope(input.id);
       const { convertIncident } = await import("./caseOps");
       let r: { newId: number };
@@ -5928,7 +6079,7 @@ export const appRouter = router({
     }),
 
     convertToLostFound: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "ocorrencias", "manage");
       await loadIncidentInScope(input.id);
       const { convertIncident } = await import("./caseOps");
       let r: { newId: number };
@@ -5947,7 +6098,7 @@ export const appRouter = router({
       from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
       to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "avaliacao", "view");
       // semanas ISO que intersectam o período
       const weeks: Array<{ week: number; year: number }> = [];
       const d = new Date(`${input.from}T00:00:00`);
@@ -5965,10 +6116,12 @@ export const appRouter = router({
         weeks.push(isoWeek(d));
         d.setDate(d.getDate() + 7);
       }
-      const rows: any[] = [];
+      let rows: any[] = [];
       for (const w of weeks) {
         rows.push(...await getPerformanceEvaluations({ weekNumber: w.week, yearNumber: w.year }));
       }
+      // team_leader: só a equipa (condutores/extras abaixo dele na cidade)
+      rows = await filterBelowEmployees(ctx.user, "avaliacao", rows);
       // agrega por colaborador
       const byEmp = new Map<number, any>();
       for (const r of rows) {
@@ -5998,9 +6151,9 @@ export const appRouter = router({
       yearNumber: z.number().optional(),
       employeeId: z.number().optional(),
     }).optional()).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
+      requireAccess(ctx.user, "avaliacao", "view", { allowOwn: true });
       // extra: só a própria avaliação, e apenas a semana mais recente
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["frontoffice"]) {
+      if (isOwnOnly(ctx.user, "avaliacao")) {
         const me = await getEmployeeByUserId(ctx.user.id);
         if (!me) return [];
         const mine = await getPerformanceEvaluations({ employeeId: me.employee.id });
@@ -6009,14 +6162,14 @@ export const appRouter = router({
           b.yearNumber > a.yearNumber || (b.yearNumber === a.yearNumber && b.weekNumber > a.weekNumber) ? b : a);
         return mine.filter((r: any) => r.yearNumber === latest.yearNumber && r.weekNumber === latest.weekNumber);
       }
-      return getPerformanceEvaluations(input);
+      return filterBelowEmployees(ctx.user, "avaliacao", await getPerformanceEvaluations(input) as any[]);
     }),
 
     generate: protectedProcedure.input(z.object({
       weekNumber: z.number(),
       yearNumber: z.number(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "supervisor");
+      requireAccess(ctx.user, "avaliacao", "edit");
       const results = await generateWeeklyEvaluation(input.weekNumber, input.yearNumber);
       await logActivity({ userId: ctx.user.id, action: "generate", entity: "performance_evaluation", details: `Semana ${input.weekNumber}/${input.yearNumber}: ${results.length} linhas` });
       return results;
@@ -6028,7 +6181,7 @@ export const appRouter = router({
       negativePoints: z.number().optional(),
       notes: z.string().nullable().optional(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "supervisor");
+      requireAccess(ctx.user, "avaliacao", "edit");
       const { id, ...data } = input;
       // Lê o valor actual para preservar campos não enviados ao calcular totalPoints
       const current = await getPerformanceEvaluations({});
@@ -6042,7 +6195,7 @@ export const appRouter = router({
     }),
 
     delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "supervisor");
+      requireAccess(ctx.user, "avaliacao", "edit");
       await deletePerformanceEvaluation(input.id);
       return { success: true };
     }),
@@ -6060,7 +6213,7 @@ export const appRouter = router({
       id: z.number(),
       done: z.boolean(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "backoffice");
+      requireAccess(ctx.user, "servicos", "edit");
       const { getDb } = await import("./db");
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
@@ -6091,7 +6244,7 @@ export const appRouter = router({
       // preenche a cidade do utilizador; projectScope garante-a no SQL)
       projectId: z.number().optional(),
     })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "servicos", "view");
       const { getDb } = await import("./db");
       const db = await getDb();
       if (!db) return { total: 0, services: [] };
@@ -6154,12 +6307,12 @@ export const appRouter = router({
       month: z.number().optional(),
       year: z.number().optional(),
     }).optional()).query(({ ctx, input }) => {
-      requireRole(ctx.user.role, "backoffice");
+      requireAccess(ctx.user, "faturacao", "view");
       return getInvoices(input);
     }),
 
     getById: protectedProcedure.input(z.object({ id: z.number() })).query(({ ctx, input }) => {
-      requireRole(ctx.user.role, "backoffice");
+      requireAccess(ctx.user, "faturacao", "view");
       return getInvoiceById(input.id);
     }),
 
@@ -6176,7 +6329,7 @@ export const appRouter = router({
       paymentMethod: z.string().optional(),
       notes: z.string().optional(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "faturacao", "manage");
       const data = {
         ...input,
         issueDate: new Date(input.issueDate),
@@ -6197,7 +6350,7 @@ export const appRouter = router({
       paymentMethod: z.string().optional(),
       notes: z.string().optional(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "faturacao", "manage");
       const { id, ...data } = input;
       await updateInvoice(id, data);
       await logActivity({ userId: ctx.user.id, action: "update", entity: "invoice", entityId: id });
@@ -6205,7 +6358,7 @@ export const appRouter = router({
     }),
 
     delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "faturacao", "manage");
       await deleteInvoice(input.id);
       await logActivity({ userId: ctx.user.id, action: "delete", entity: "invoice", entityId: input.id });
       return { success: true };
@@ -6216,7 +6369,7 @@ export const appRouter = router({
       year: z.number().optional(),
     }).optional()).query(async ({ ctx, input }) => {
       // Totais de faturação: respeita o deny individual de finance.view_totals.
-      await requireFinanceTotals(ctx.user, "backoffice");
+      await requireFinanceTotals(ctx.user, "faturacao", "view");
       return getInvoiceStats(input?.month, input?.year);
     }),
 
@@ -6225,7 +6378,7 @@ export const appRouter = router({
       .input(z.object({ from: z.string(), to: z.string(), projectId: z.number().optional() }))
       .query(async ({ ctx, input }) => {
         // Somas de receita — mesma restrição de totais que a Faturação
-        await requireFinanceTotals(ctx.user, "admin");
+        await requireFinanceTotals(ctx.user, "faturacao", "manage");
         const { diagnoseBilling } = await import("./db");
         return diagnoseBilling(input);
       }),
@@ -6238,7 +6391,7 @@ export const appRouter = router({
     })).query(async ({ ctx, input }) => {
       // Margens, salários (com detalhe por pessoa) e comissões — admin+, e
       // respeita o deny de finance.view_totals por utilizador
-      await requireFinanceTotals(ctx.user, "admin");
+      await requireFinanceTotals(ctx.user, "faturacao", "view");
       return getBillingData(input);
     }),
   }),
@@ -6284,7 +6437,7 @@ export const appRouter = router({
       })).max(CLOTHING_MAX_ITEMS).nullable().optional(),
       notes: z.string().max(2000).nullable().optional(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "team_leader");
+      requireAccess(ctx.user, "passagem_turno", "edit");
       if (input.handoverDate > maxHandoverDate()) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Não é possível registar passagens de turno para depois de amanhã." });
       }
@@ -6328,7 +6481,7 @@ export const appRouter = router({
       shift: z.enum(["morning", "night"]),
       city: z.enum(HANDOVER_CITIES),
     })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "team_leader");
+      requireAccess(ctx.user, "passagem_turno", "edit");
       const { buildHandoverDraft } = await import("./shiftHandoverDraft");
       return buildHandoverDraft({ date: input.date, shift: input.shift, city: input.city });
     }),
@@ -6341,7 +6494,7 @@ export const appRouter = router({
       notes: z.string().max(2000).nullable().optional(),
       openItems: z.array(openItemSchema).max(OPEN_ITEMS_MAX).nullable().optional(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "team_leader");
+      requireAccess(ctx.user, "passagem_turno", "edit");
       const { llmConfigured, generateAiSummary } = await import("./shiftHandoverAutomation");
       if (!llmConfigured()) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "A IA não está configurada (LLM_API_KEY)." });
       const { buildHandoverDraft } = await import("./shiftHandoverDraft");
@@ -6358,7 +6511,7 @@ export const appRouter = router({
       id: z.number().int().positive(),
       city: z.enum(HANDOVER_CITIES),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "team_leader");
+      requireAccess(ctx.user, "passagem_turno", "edit");
       const { ackHandover } = await import("./shiftHandoverAutomation");
       const r = await ackHandover(input.id, input.city, { id: ctx.user.id, name: ctx.user.name ?? null });
       if (!r.ok) throw new TRPCError({ code: "BAD_REQUEST", message: r.message });
@@ -6371,7 +6524,7 @@ export const appRouter = router({
       date: handoverDaySchema,
       city: z.enum(HANDOVER_CITIES).optional(),
     })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "supervisor");
+      requireAccess(ctx.user, "passagem_resumo_dia", "view");
       const { getHandoverCompliance } = await import("./shiftHandoverAutomation");
       return getHandoverCompliance(input.date, input.city ?? null);
     }),
@@ -6381,7 +6534,7 @@ export const appRouter = router({
       to: handoverDaySchema.optional(),
       city: z.enum(HANDOVER_CITIES).optional(),
     }).optional()).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "team_leader");
+      requireAccess(ctx.user, "passagem_turno", "view");
       const { listShiftHandovers } = await import("./db");
       return listShiftHandovers(input ?? {});
     }),
@@ -6391,7 +6544,7 @@ export const appRouter = router({
       // Opcional: restringe o resumo a uma cidade (dentro das do utilizador).
       city: z.enum(HANDOVER_CITIES).optional(),
     })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "supervisor");
+      requireAccess(ctx.user, "passagem_resumo_dia", "view");
       const { getSupervisorDayDashboard } = await import("./db");
       return getSupervisorDayDashboard(input.date);
     }),
@@ -6404,7 +6557,7 @@ export const appRouter = router({
       to: z.string(),
       projectId: z.number().optional(),
     })).query(({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "parcerias", "view");
       return getPartnershipAnalytics(input);
     }),
 
@@ -6413,7 +6566,7 @@ export const appRouter = router({
       partnerType: z.string().optional(),
       status: z.string().optional(),
     }).optional()).query(({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "parcerias", "view");
       return getPartnerships(input);
     }),
 
@@ -6430,7 +6583,7 @@ export const appRouter = router({
       billingAgreement: z.string().optional(),
       notes: z.string().optional(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "parcerias", "manage");
       const name = input.name.trim();
       if (await partnershipNameExists(name)) {
         throw new TRPCError({ code: "CONFLICT", message: `Já existe um parceiro com o nome "${name}". Usa "Associar a existente" ou escolhe outro nome.` });
@@ -6459,7 +6612,7 @@ export const appRouter = router({
       partnerStatus: z.enum(["active", "inactive", "pending"]).optional(),
       notes: z.string().optional(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "parcerias", "manage");
       const { id, nif, ...rest } = input;
       if (rest.name !== undefined) {
         rest.name = rest.name.trim();
@@ -6475,7 +6628,7 @@ export const appRouter = router({
     }),
 
     delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "parcerias", "manage");
       await deletePartnership(input.id);
       await logActivity({ userId: ctx.user.id, action: "delete", entity: "partnership", entityId: input.id });
       return { success: true };
@@ -6483,7 +6636,7 @@ export const appRouter = router({
 
     // ── Inferência de parceiros a partir das reservas Multipark ──────────────
     inferList: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "parcerias", "manage");
       return inferPartnersFromBookings();
     }),
 
@@ -6495,7 +6648,7 @@ export const appRouter = router({
         applyToBookings: z.boolean().default(true),
       }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "parcerias", "manage");
         const updated = await addPartnerAlias(
           input.partnershipId,
           input.aliasType,
@@ -6516,7 +6669,7 @@ export const appRouter = router({
     // já tem associados (cada parceiro tem normalmente 1 código por
     // cidade × marca, logo vários).
     aliasCounts: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "parcerias", "view");
       const { aliasCountsByPartner } = await import("./db");
       return aliasCountsByPartner();
     }),
@@ -6531,7 +6684,7 @@ export const appRouter = router({
       }))
       .query(async ({ ctx, input }) => {
         // Receita/valor a faturar: respeita o deny de finance.view_totals.
-        await requireFinanceTotals(ctx.user, "frontoffice");
+        await requireFinanceTotals(ctx.user, "parcerias", "view");
         const { getPartnerInvoicingSummary } = await import("./db");
         return getPartnerInvoicingSummary(input);
       }),
@@ -6545,7 +6698,7 @@ export const appRouter = router({
         partnerType: z.string(),
       }))
       .query(async ({ ctx, input }) => {
-        await requireFinanceTotals(ctx.user, "frontoffice");
+        await requireFinanceTotals(ctx.user, "parcerias", "view");
         const { getPartnerInvoicingDetailByType } = await import("./db");
         return getPartnerInvoicingDetailByType(input);
       }),
@@ -6555,7 +6708,7 @@ export const appRouter = router({
     // campanhas "Pro <empresa>" e normaliza tipos legados. Substitui a
     // inferência por heurísticas. Idempotente.
     syncFromApi: protectedProcedure.mutation(async ({ ctx }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "parcerias", "manage");
       const { syncPartnersFromApi } = await import("./partnerSync");
       const r = await syncPartnersFromApi();
       await logActivity({
@@ -6572,7 +6725,7 @@ export const appRouter = router({
       year: z.number().optional(),
       projectId: z.number().optional(),
     }).optional()).query(async ({ ctx, input }) => {
-      await requireFinanceTotals(ctx.user, "backoffice");
+      await requireFinanceTotals(ctx.user, "anual", "view");
       return getAnnualReports(input);
     }),
 
@@ -6582,7 +6735,7 @@ export const appRouter = router({
     })).query(async ({ ctx, input }) => {
       // Lucros, salários e IVA — reservado à administração e respeita o deny
       // individual de totais (antes o Anual contornava a restrição da Faturação)
-      await requireFinanceTotals(ctx.user, "admin");
+      await requireFinanceTotals(ctx.user, "anual", "manage");
       return getAnnualBreakdown(input.year, input.projectId);
     }),
 
@@ -6597,7 +6750,7 @@ export const appRouter = router({
         notes: z.string().optional(),
       })).min(1).max(600),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "anual", "manage");
       const { importFinancialHistory } = await import("./db");
       const res = await importFinancialHistory(input.rows);
       await logActivity({ userId: ctx.user.id, action: "import", entity: "financial_history", details: `${res.imported} meses importados` });
@@ -6607,7 +6760,7 @@ export const appRouter = router({
     historyList: protectedProcedure.input(z.object({
       year: z.number().optional(),
     }).optional()).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "anual", "manage");
       const { getFinancialHistory } = await import("./db");
       return getFinancialHistory(input?.year);
     }),
@@ -6626,7 +6779,7 @@ export const appRouter = router({
       projectId: z.number().optional(),
       splitPartner: z.number().min(0).max(100).optional(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "anual", "manage");
       const results = await generateAnnualSummary(input.year, input.projectId, input.splitPartner ?? 60);
       await logActivity({ userId: ctx.user.id, action: "generate", entity: "annual_report", details: `Relatório anual ${input.year}` });
       return results;
@@ -6641,14 +6794,14 @@ export const appRouter = router({
       splitRatio: z.string().optional(),
       notes: z.string().optional(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "anual", "manage");
       const { id, ...data } = input;
       await updateAnnualReport(id, data);
       return { success: true };
     }),
 
     delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "anual", "manage");
       await deleteAnnualReport(input.id);
       return { success: true };
     }),
@@ -6662,14 +6815,14 @@ export const appRouter = router({
     searchBooking: protectedProcedure
       .input(z.object({ search: z.string().min(2) }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "reservas_operacoes", "view");
         return searchBookingByRef(input.search);
       }),
     // Detalhe de uma reserva específica via API Multipark
     fetchBookingDetails: protectedProcedure
       .input(z.object({ externalId: z.string() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "reservas_operacoes", "view");
         const { getBooking } = await import("./multipark");
         try {
           return await getBooking(input.externalId);
@@ -6680,7 +6833,7 @@ export const appRouter = router({
 
     // Test API connection
     testConnection: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "sincronizacao", "manage");
       return mpTestConnection();
     }),
 
@@ -6688,7 +6841,7 @@ export const appRouter = router({
     inspectBooking: protectedProcedure
       .input(z.object({ externalId: z.string().min(1) }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "sincronizacao", "manage");
         const found = await getBookingTryAllParks(input.externalId);
         if (!found) {
           throw new TRPCError({
@@ -6712,7 +6865,7 @@ export const appRouter = router({
         parkingType: z.enum(["COVERED", "UNCOVERED", "INDOOR", "VIP"]).default("COVERED"),
       }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "reservas_operacoes", "view");
         return mpCheckAvailability(
           input.checkIn,
           input.checkOut,
@@ -6723,20 +6876,20 @@ export const appRouter = router({
 
     // List parks
     listParks: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireAccess(ctx.user, "reservas_operacoes", "view");
       return mpListParks();
     }),
 
     // Get sync logs
     syncCoverage: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "backoffice");
+      requireAccess(ctx.user, "sincronizacao", "view");
       const { parkCoverage } = await import("./multipark");
       const { getDeliveryHealth } = await import("./bookingDeliveryQueue");
       return { parks: parkCoverage(), queue: await getDeliveryHealth() };
     }),
 
     syncLogs: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "backoffice");
+      requireAccess(ctx.user, "sincronizacao", "view");
       return getSyncLogs(50);
     }),
 
@@ -6748,7 +6901,7 @@ export const appRouter = router({
         city: z.string().optional(),
       }).optional())
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "reservas_operacoes", "view");
         return getSnapshotKPIs({
           from: input?.from ? new Date(input.from) : undefined,
           to: input?.to ? new Date(input.to) : undefined,
@@ -6766,7 +6919,7 @@ export const appRouter = router({
         limit: z.number().optional(),
       }).optional())
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "reservas_operacoes", "view");
         return getDailySnapshots({
           from: input?.from ? new Date(input.from) : undefined,
           to: input?.to ? new Date(input.to) : undefined,
@@ -6783,7 +6936,7 @@ export const appRouter = router({
         filename: z.string(),
       }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "sincronizacao", "manage");
         const buffer = Buffer.from(input.fileBase64, "base64");
         const wb = XLSX.read(buffer, { type: "buffer" });
         const ws = wb.Sheets[wb.SheetNames[0]];
@@ -6963,7 +7116,7 @@ export const appRouter = router({
         actionTypes: z.array(z.enum(["creation", "checkin", "checkout", "cancelation"])).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "sincronizacao", "edit");
         // Limite no servidor (não só na UI): um intervalo enorme prende a
         // função e martela a API Multipark. Máx. 31 dias por pedido.
         {
@@ -7002,7 +7155,7 @@ export const appRouter = router({
     enrichBatch: protectedProcedure
       .input(z.object({ limit: z.number().int().min(1).max(300).default(200) }).optional())
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "sincronizacao", "edit");
         const result = await enrichBookingsBatch(input?.limit ?? 200);
         await logActivity({
           userId: ctx.user.id,
@@ -7017,7 +7170,7 @@ export const appRouter = router({
     syncHistoryBatch: protectedProcedure
       .input(z.object({ limit: z.number().int().min(1).max(100).default(50) }).optional())
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "sincronizacao", "edit");
         const result = await syncBookingHistoryBatch(input?.limit ?? 50);
         await logActivity({
           userId: ctx.user.id,
@@ -7036,7 +7189,7 @@ export const appRouter = router({
         date: z.string(), // YYYY-MM-DD
       }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "sincronizacao", "edit");
         const { fetchAgentHistoryByName } = await import("./jobs/multiparkBookingSync");
         return fetchAgentHistoryByName(input.agentName, input.date);
       }),
@@ -7046,7 +7199,7 @@ export const appRouter = router({
     dayEvaluation: protectedProcedure
       .input(z.object({ date: z.string(), projectId: z.number().optional() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "avaliacao_operacional", "view");
         const { evaluateDay } = await import("./multiparkEvaluation");
         return evaluateDay(input.date);
       }),
@@ -7059,7 +7212,7 @@ export const appRouter = router({
         multiparkAgentUserId: z.string().max(128).nullable().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "rh", "manage");
         const { getDb } = await import("./db");
         const db = await getDb(); if (!db) return { success: false };
         const { employees } = await import("../drizzle/schema");
@@ -7079,7 +7232,7 @@ export const appRouter = router({
         date: z.string(), projectId: z.number().optional(),
       }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "rh", "view");
         const { getDb } = await import("./db");
         const db = await getDb(); if (!db) return null;
         const { multiparkBookingHistory } = await import("../drizzle/schema");
@@ -7113,7 +7266,7 @@ export const appRouter = router({
     mapAgentToEmployee: protectedProcedure
       .input(z.object({ agentName: z.string().min(1), employeeId: z.number().nullable() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "rh", "manage");
         const { getDb } = await import("./db");
         const { sql } = await import("drizzle-orm");
         const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
@@ -7145,7 +7298,7 @@ export const appRouter = router({
 
     // Lista leve de colaboradores ativos para o dropdown de mapeamento.
     employeesForMapping: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "backoffice");
+      requireAccess(ctx.user, "rh", "view");
       const { getDb } = await import("./db");
       const { sql } = await import("drizzle-orm");
       const db = await getDb(); if (!db) return [];
@@ -7167,7 +7320,7 @@ export const appRouter = router({
         limit: z.number().optional(),
       }).optional())
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "reservas_operacoes", "view");
         return getMultiparkBookings({
           city: input?.city,
           status: input?.status,
@@ -7188,7 +7341,7 @@ export const appRouter = router({
       }).optional())
       .query(async ({ ctx, input }) => {
         // Receitas — respeita o deny de finance.view_totals por utilizador
-        await requireFinanceTotals(ctx.user, "backoffice");
+        await requireFinanceTotals(ctx.user, "financeiro", "view");
         return getMultiparkBookingStats(input ?? undefined);
       }),
 
@@ -7208,7 +7361,7 @@ export const appRouter = router({
         offset: z.number().int().min(0).optional(),
       }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "reservas_operacoes", "view");
         const { getOperationsBookings, rangeTooLong } = await import("./operationsBookings");
         if (input.endDate < input.startDate || rangeTooLong(input.startDate, input.endDate)) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Intervalo inválido (máx. 366 dias)." });
@@ -7227,7 +7380,7 @@ export const appRouter = router({
         projectId: z.number().optional(),
       }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "dashboards", "view");
         if (!(await canSeeFinanceTotals(ctx.user))) return { allowed: false as const, today: "", rows: [] };
         const { getExtrasCostDaily, rangeTooLong } = await import("./operationsBookings");
         if (input.endDate < input.startDate || rangeTooLong(input.startDate, input.endDate)) {
@@ -7246,7 +7399,7 @@ export const appRouter = router({
         projectId: z.number().optional(),
       }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "dashboards", "view");
         if (!(await canSeeFinanceTotals(ctx.user))) return { allowed: false as const, cities: [], rows: [], unassigned: [], total: 0 };
         const { getAdSpendDaily, rangeTooLong } = await import("./operationsBookings");
         if (input.endDate < input.startDate || rangeTooLong(input.startDate, input.endDate)) {
@@ -7266,7 +7419,7 @@ export const appRouter = router({
         projectId: z.number().optional(),
       }).refine((v) => !!(v.date || v.startDate), { message: "Indica o dia" }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "atividade_diaria", "view");
         const start = (input.startDate ?? input.date)!;
         const end = input.endDate && input.endDate >= start ? input.endDate : start;
         const { daysInRange } = await import("../shared/lisbonDay");
@@ -7280,7 +7433,7 @@ export const appRouter = router({
     personDay: protectedProcedure
       .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), key: z.string().min(3).max(300), projectId: z.number().optional() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "atividade_diaria", "view");
         const { getPersonDay } = await import("./dayActivity");
         return getPersonDay(input.date, input.key);
       }),
@@ -7289,7 +7442,7 @@ export const appRouter = router({
     setAgentPartner: protectedProcedure
       .input(z.object({ agentName: z.string().min(1).max(256), partnershipId: z.number().nullable() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "parcerias", "manage");
         const { setAgentPartner } = await import("./db");
         await setAgentPartner(input.agentName, input.partnershipId);
         await logActivity({ userId: ctx.user.id, action: "map", entity: "agent_partner", details: `${input.agentName} → partnership ${input.partnershipId ?? "—"}` });
@@ -7297,7 +7450,7 @@ export const appRouter = router({
       }),
 
     agentPartners: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "backoffice");
+      requireAccess(ctx.user, "rh", "view");
       const { listAgentPartners } = await import("./db");
       return listAgentPartners();
     }),
@@ -7307,7 +7460,7 @@ export const appRouter = router({
     ignoreAgent: protectedProcedure
       .input(z.object({ agentName: z.string().min(1).max(256), ignored: z.boolean() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "rh", "manage");
         const { setAgentIgnored } = await import("./db");
         await setAgentIgnored(input.agentName, input.ignored);
         await logActivity({ userId: ctx.user.id, action: input.ignored ? "ignore" : "unignore", entity: "agent", details: input.agentName });
@@ -7315,14 +7468,14 @@ export const appRouter = router({
       }),
 
     ignoredAgents: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "backoffice");
+      requireAccess(ctx.user, "rh", "view");
       const { listIgnoredAgents } = await import("./db");
       return listIgnoredAgents();
     }),
 
     // Agentes do histórico SEM funcionário nem parceiro (aba RH "Agentes")
     unlinkedAgents: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "backoffice");
+      requireAccess(ctx.user, "rh", "view");
       const { getDb, listAgentPartners } = await import("./db");
       const db = await getDb();
       if (!db) return [];
@@ -7376,7 +7529,7 @@ export const appRouter = router({
     createEmployeeFromAgent: protectedProcedure
       .input(z.object({ agentName: z.string().min(1).max(256), email: z.string().email().optional(), projectId: z.number().optional() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "rh", "manage");
         const { getDb } = await import("./db");
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
@@ -7426,7 +7579,7 @@ export const appRouter = router({
     bookingByExternalId: protectedProcedure
       .input(z.object({ externalId: z.string().min(1).max(128) }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "reservas_operacoes", "view");
         const { getDb } = await import("./db");
         const db = await getDb();
         if (!db) return null;
@@ -7446,7 +7599,7 @@ export const appRouter = router({
         projectId: z.number().optional(),
       }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "reservas_operacoes", "view");
         const { getOperationsSummary } = await import("./db");
         return getOperationsSummary(input);
       }),
@@ -7459,7 +7612,7 @@ export const appRouter = router({
         actionType: z.enum(["creation", "checkin", "checkout", "cancelation"]),
       }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "reservas_operacoes", "view");
         const results = await getBookingsReportAllParks(
           input.startDate,
           input.endDate,
@@ -7492,7 +7645,7 @@ export const appRouter = router({
     forecast: protectedProcedure
       .input(z.object({ baseDate: z.string().optional(), city: z.enum(["lisbon", "porto", "faro"]).optional() }).optional())
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "extras_dia", "view");
         return getExtrasDiaForecast(input?.baseDate, input?.city ?? "lisbon");
       }),
 
@@ -7503,7 +7656,7 @@ export const appRouter = router({
         forTeamLeader: z.boolean().optional(),
       }).optional())
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "extras_dia", "view");
         const list = await listDriverCandidates(input?.date, { forTeamLeader: input?.forTeamLeader });
         // Badge "Formação em falta" no seletor da escala (server/trainingPaths.ts)
         const { employeesMissingTraining } = await import("./trainingPaths");
@@ -7514,7 +7667,7 @@ export const appRouter = router({
     assignments: protectedProcedure
       .input(z.object({ date: z.string(), projectId: z.number().optional(), city: z.enum(["lisbon", "porto", "faro"]).optional() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "extras_dia", "view");
         return listAssignments(input.date, input.city);
       }),
 
@@ -7538,7 +7691,7 @@ export const appRouter = router({
         }),
       )
       .mutation(async ({ ctx, input: rawInput }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "extras_dia", "edit");
         const { override, ...input } = rawInput;
         if (input.endHour <= input.startHour) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Fim tem de ser depois do início" });
@@ -7580,7 +7733,7 @@ export const appRouter = router({
     deleteAssignment: protectedProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "extras_dia", "edit");
         await deleteAssignment(input.id);
         return { success: true };
       }),
@@ -7589,7 +7742,7 @@ export const appRouter = router({
     autofill: protectedProcedure
       .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), city: z.enum(["lisbon", "porto", "faro"]), shift: z.enum(["morning", "night"]) }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "extras_dia", "edit");
         const { autofillShift } = await import("./extrasAutomation");
         try {
           return await autofillShift({ ...input, createdById: ctx.user.id });
@@ -7601,7 +7754,7 @@ export const appRouter = router({
     coverage: protectedProcedure
       .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), city: z.enum(["lisbon", "porto", "faro"]) }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "extras_dia", "view");
         const { coverageFor } = await import("./extrasAutomation");
         return coverageFor(input.date, input.city);
       }),
@@ -7610,7 +7763,7 @@ export const appRouter = router({
     metrics: protectedProcedure
       .input(z.object({ days: z.number().int().min(7).max(180).optional() }).optional())
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "extras_dia", "view");
         const { getExtrasMetrics } = await import("./extrasMetrics");
         return getExtrasMetrics(input?.days ?? 30);
       }),
@@ -7618,7 +7771,7 @@ export const appRouter = router({
     coverageOutlook: protectedProcedure
       .input(z.object({ city: z.enum(["lisbon", "porto", "faro"]), days: z.number().int().min(1).max(14).optional() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "extras_dia", "view");
         const { getCoverageOutlook } = await import("./extrasMetrics");
         return getCoverageOutlook(input.city, input.days ?? 7);
       }),
@@ -7626,7 +7779,7 @@ export const appRouter = router({
     notices: protectedProcedure
       .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "extras_dia", "view");
         const { listNotices } = await import("./extrasAutomation");
         return listNotices(input.date);
       }),
@@ -7634,7 +7787,7 @@ export const appRouter = router({
     notify: protectedProcedure
       .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), city: z.enum(["lisbon", "porto", "faro"]) }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "extras_dia", "edit");
         const { notifyAssignments } = await import("./extrasAutomation");
         try {
           return await notifyAssignments(input.date, { city: input.city, createdById: ctx.user.id });
@@ -7646,7 +7799,7 @@ export const appRouter = router({
     costForRange: protectedProcedure
       .input(z.object({ startDate: z.string(), endDate: z.string() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "extras_dia", "view");
         return getExtrasDiaCostForRange(input.startDate, input.endDate);
       }),
 
@@ -7661,7 +7814,7 @@ export const appRouter = router({
         }),
       )
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "extras_dia", "view");
         return getBookingsInSlot(input.date, input.hour, input.slot, input.type, input.city ?? "lisbon");
       }),
   }),
@@ -7744,7 +7897,7 @@ export const appRouter = router({
         }),
       )
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "disponibilidade_extras", "edit");
         let result: { saved: number; employeeName: string };
         await assertEmployeeAccess(input.employeeId);
         try {
@@ -7766,7 +7919,7 @@ export const appRouter = router({
     overview: protectedProcedure
       .input(z.object({ weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), projectId: z.number().nullable().optional() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "disponibilidade_extras", "view");
         return getWeekOverview(input.weekStart, input.projectId ?? null);
       }),
 
@@ -7792,7 +7945,7 @@ export const appRouter = router({
         }),
       )
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "disponibilidade_extras", "edit");
         const result = await sendWeeklyAvailabilityRequest({
           weekStart: input.weekStart,
           origin: input.origin,
@@ -7819,7 +7972,7 @@ export const appRouter = router({
     list: protectedProcedure
       .input(z.object({ status: z.enum(["new", "reviewed", "approved", "rejected"]).nullable().optional() }).optional())
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "leads_extras", "view");
         const { listDriverApplications } = await import("./webIntake");
         return listDriverApplications(input?.status ?? null);
       }),
@@ -7833,7 +7986,7 @@ export const appRouter = router({
         }),
       )
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "leads_extras", "edit");
         const { setApplicationStatus } = await import("./webIntake");
         await setApplicationStatus(input.id, input.status, ctx.user.id, input.notes);
         return { success: true };
@@ -7868,7 +8021,7 @@ export const appRouter = router({
     approve: protectedProcedure
       .input(z.object({ id: z.number(), projectId: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "leads_extras", "edit");
         assertProjectAccess(input.projectId);
         const { approveApplication } = await import("./webIntake");
         try {
@@ -7883,12 +8036,12 @@ export const appRouter = router({
   // ── LIGAÇÕES funcionário ↔ utilizador ↔ agente Multipark (Fase 4) ────────
   identityLinks: router({
     overview: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "rh", "manage");
       const { getLinksOverview } = await import("./identityScreen");
       return getLinksOverview();
     }),
     reconcileNow: protectedProcedure.mutation(async ({ ctx }) => {
-      requireRole(ctx.user.role, "admin");
+      requireAccess(ctx.user, "rh", "manage");
       const { runIdentitySweep } = await import("./identityLink");
       const r = await runIdentitySweep();
       await logActivity({ userId: ctx.user.id, action: "identity_sweep", entity: "employees", details: JSON.stringify(r).slice(0, 500) });
@@ -7897,7 +8050,7 @@ export const appRouter = router({
     createUser: protectedProcedure
       .input(z.object({ employeeId: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "rh", "manage");
         await assertEmployeeAccess(input.employeeId);
         const { getDb } = await import("./db");
         const db = await getDb();
@@ -7911,7 +8064,7 @@ export const appRouter = router({
     linkUser: protectedProcedure
       .input(z.object({ employeeId: z.number().int().positive(), userId: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "rh", "manage");
         await assertEmployeeAccess(input.employeeId);
         const { linkEmployeeToUser } = await import("./identityScreen");
         let mode: "principal" | "extra";
@@ -7926,7 +8079,7 @@ export const appRouter = router({
     removeAccountAlias: protectedProcedure
       .input(z.object({ userId: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "rh", "manage");
         const { removeAccountAlias } = await import("./employeeAliases");
         await removeAccountAlias(input.userId);
         await logActivity({ userId: ctx.user.id, action: "account_unlink", entity: "user", entityId: input.userId, details: "Conta extra separada da ficha (ecrã Ligações)" });
@@ -7935,7 +8088,7 @@ export const appRouter = router({
     removeAgentAlias: protectedProcedure
       .input(z.object({ agentUserId: z.string().min(1).max(128) }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "rh", "manage");
         const { removeAgentAlias } = await import("./employeeAliases");
         await removeAgentAlias(input.agentUserId);
         await logActivity({ userId: ctx.user.id, action: "agent_detach", entity: "employee", details: `Agente extra ${input.agentUserId} separado (ecrã Ligações)` });
@@ -7944,7 +8097,7 @@ export const appRouter = router({
     linkAgent: protectedProcedure
       .input(z.object({ employeeId: z.number().int().positive(), agentUserId: z.string().min(1).max(128) }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
+        requireAccess(ctx.user, "rh", "manage");
         await assertEmployeeAccess(input.employeeId);
         const { linkAgentToEmployee } = await import("./identityScreen");
         const agentName = await linkAgentToEmployee(input.agentUserId, input.employeeId);
@@ -7965,7 +8118,7 @@ export const appRouter = router({
           .optional(),
       )
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "leads_extras", "view");
         const { listExtraLeads } = await import("./extraLeads");
         return listExtraLeads({ status: input?.status ?? null, search: input?.search ?? null, source: input?.source ?? null });
       }),
@@ -7975,7 +8128,7 @@ export const appRouter = router({
     funnel: protectedProcedure
       .input(z.object({ weeks: z.number().int().min(1).max(52).optional() }).optional())
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "leads_extras", "view");
         const { getLeadFunnel } = await import("./extraLeads");
         return getLeadFunnel({ weeks: input?.weeks });
       }),
@@ -7991,7 +8144,7 @@ export const appRouter = router({
         }),
       )
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "leads_extras", "edit");
         const { bulkUpdateExtraLeads } = await import("./extraLeads");
         try {
           return await bulkUpdateExtraLeads(input, ctx.user.id);
@@ -8011,7 +8164,7 @@ export const appRouter = router({
         }),
       )
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "leads_extras", "edit");
         const { createExtraLead } = await import("./extraLeads");
         try {
           return await createExtraLead(input, ctx.user.id);
@@ -8034,7 +8187,7 @@ export const appRouter = router({
         }),
       )
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "leads_extras", "edit");
         const { updateExtraLead } = await import("./extraLeads");
         const { id, ...patch } = input;
         try {
@@ -8049,7 +8202,7 @@ export const appRouter = router({
     convert: protectedProcedure
       .input(z.object({ id: z.number().int().positive(), projectId: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "leads_extras", "edit");
         assertProjectAccess(input.projectId);
         const { convertLeadToExtra } = await import("./extrasAutomation");
         try {
@@ -8062,7 +8215,7 @@ export const appRouter = router({
     remove: protectedProcedure
       .input(z.object({ id: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "leads_extras", "edit");
         const { deleteExtraLead } = await import("./extraLeads");
         await deleteExtraLead(input.id, ctx.user.id);
         return { success: true };
@@ -8078,7 +8231,7 @@ export const appRouter = router({
         }),
       )
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "leads_extras", "edit");
         const { contactExtraLeads } = await import("./extraLeads");
         try {
           return await contactExtraLeads({ leadIds: input.leadIds, templateId: input.templateId, createdById: ctx.user.id });
@@ -8103,7 +8256,7 @@ export const appRouter = router({
         }),
       )
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "whatsapp", "view");
         const meta = await getTemplateMeta(input.templateName, input.languageCode);
         if (!meta.available) return { ok: false as const, reason: meta.reason };
         if (!meta.lookup.ok) {
@@ -8142,7 +8295,7 @@ export const appRouter = router({
         }),
       )
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "whatsapp", "edit");
         let summary;
         try {
           summary = await sendBroadcast({
@@ -8174,7 +8327,7 @@ export const appRouter = router({
     // ── INBOX ──────────────────────────────────────────────────────────────
     conversations: router({
       list: protectedProcedure.query(async ({ ctx }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "whatsapp", "view");
         return listConversations();
       }),
     }),
@@ -8183,7 +8336,7 @@ export const appRouter = router({
       byConversation: protectedProcedure
         .input(z.object({ conversationId: z.number(), limit: z.number().min(1).max(300).optional() }))
         .query(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "backoffice");
+          requireAccess(ctx.user, "whatsapp", "view");
           const { conversationVisible } = await import("./whatsappInbox");
           if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
           const thread = await getConversationThread(input.conversationId, input.limit ?? 100);
@@ -8197,7 +8350,7 @@ export const appRouter = router({
     mediaUrl: protectedProcedure
       .input(z.object({ messageId: z.number().int().positive() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "whatsapp", "view");
         const { getInboundMediaUrl } = await import("./whatsappInbox");
         const out = await getInboundMediaUrl(input.messageId);
         if (!out) throw new TRPCError({ code: "NOT_FOUND", message: "Ficheiro não encontrado" });
@@ -8217,7 +8370,7 @@ export const appRouter = router({
         }),
       )
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "whatsapp", "edit");
         const { conversationVisible } = await import("./whatsappInbox");
         if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const { sendTemplateToConversation } = await import("./whatsappBroadcast");
@@ -8246,7 +8399,7 @@ export const appRouter = router({
     markRead: protectedProcedure
       .input(z.object({ conversationId: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "whatsapp", "edit");
         const { conversationVisible } = await import("./whatsappInbox");
         if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         await markConversationRead(input.conversationId);
@@ -8258,7 +8411,7 @@ export const appRouter = router({
     markUnread: protectedProcedure
       .input(z.object({ conversationId: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "whatsapp", "edit");
         const { markConversationUnread, conversationVisible } = await import("./whatsappInbox");
         if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const ok = await markConversationUnread(input.conversationId);
@@ -8271,7 +8424,7 @@ export const appRouter = router({
     reply: protectedProcedure
       .input(z.object({ conversationId: z.number(), text: z.string().min(1).max(4000), confirmOptedOut: z.boolean().optional() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "whatsapp", "edit");
         const { conversationVisible } = await import("./whatsappInbox");
         if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const result = await replyToConversation(input.conversationId, input.text, ctx.user.id, {
@@ -8298,7 +8451,7 @@ export const appRouter = router({
     // ── Estado, atribuição, alertas, ligações, respostas rápidas, IA (0097) ──
     // Configuração que a UI precisa para calcular alertas (SLA) e mostrar a IA.
     inboxMeta: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "backoffice");
+      requireAccess(ctx.user, "whatsapp", "view");
       const { slaMinutes } = await import("./whatsappInboxOps");
       const { llmConfigured } = await import("./_core/llm");
       return { slaMinutes: slaMinutes(), aiConfigured: llmConfigured() };
@@ -8306,13 +8459,13 @@ export const appRouter = router({
 
     // Badge do menu: conversas visíveis que precisam de atenção.
     badge: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "backoffice");
+      requireAccess(ctx.user, "whatsapp", "view");
       const { inboxBadge } = await import("./whatsappInboxOps");
       return inboxBadge();
     }),
 
     assignees: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "backoffice");
+      requireAccess(ctx.user, "whatsapp", "view");
       const { listAssignees } = await import("./whatsappInboxOps");
       return listAssignees();
     }),
@@ -8320,7 +8473,7 @@ export const appRouter = router({
     setStatus: protectedProcedure
       .input(z.object({ conversationId: z.number().int().positive(), status: z.enum(["aberto", "pendente", "resolvido"]) }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "whatsapp", "edit");
         const { conversationVisible } = await import("./whatsappInbox");
         if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const { setConversationStatus } = await import("./whatsappInboxOps");
@@ -8340,7 +8493,7 @@ export const appRouter = router({
     assign: protectedProcedure
       .input(z.object({ conversationId: z.number().int().positive(), userId: z.number().int().positive().nullable() }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "whatsapp", "edit");
         const { conversationVisible } = await import("./whatsappInbox");
         if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const { assignConversation } = await import("./whatsappInboxOps");
@@ -8361,7 +8514,7 @@ export const appRouter = router({
     context: protectedProcedure
       .input(z.object({ conversationId: z.number().int().positive() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "whatsapp", "view");
         const { conversationVisible } = await import("./whatsappInbox");
         if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const { getConversationContext } = await import("./whatsappInboxOps");
@@ -8373,7 +8526,7 @@ export const appRouter = router({
     searchBookings: protectedProcedure
       .input(z.object({ q: z.string().min(2).max(120) }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "whatsapp", "view");
         const { searchLinkableBookings } = await import("./whatsappInboxOps");
         return searchLinkableBookings(input.q);
       }),
@@ -8387,7 +8540,7 @@ export const appRouter = router({
         }),
       )
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "whatsapp", "edit");
         const { conversationVisible } = await import("./whatsappInbox");
         if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const { linkConversation } = await import("./whatsappInboxOps");
@@ -8414,14 +8567,14 @@ export const appRouter = router({
 
     quickReplies: router({
       list: protectedProcedure.query(async ({ ctx }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "whatsapp", "view");
         const { listQuickReplies } = await import("./whatsappInboxOps");
         return listQuickReplies();
       }),
       save: protectedProcedure
         .input(z.object({ id: z.number().int().positive().nullable().optional(), title: z.string().trim().min(1).max(80), body: z.string().trim().min(1).max(4000) }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "backoffice");
+          requireAccess(ctx.user, "whatsapp", "edit");
           const { saveQuickReply } = await import("./whatsappInboxOps");
           const id = await saveQuickReply(input, ctx.user.id);
           if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível guardar" });
@@ -8430,7 +8583,7 @@ export const appRouter = router({
       delete: protectedProcedure
         .input(z.object({ id: z.number().int().positive() }))
         .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "backoffice");
+          requireAccess(ctx.user, "whatsapp", "edit");
           const { deleteQuickReply } = await import("./whatsappInboxOps");
           await deleteQuickReply(input.id);
           return { success: true };
@@ -8442,7 +8595,7 @@ export const appRouter = router({
     aiAssist: protectedProcedure
       .input(z.object({ conversationId: z.number().int().positive(), mode: z.enum(["summary", "reply"]) }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
+        requireAccess(ctx.user, "whatsapp", "edit");
         const { llmConfigured } = await import("./_core/llm");
         if (!llmConfigured()) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "A IA não está configurada." });
         const { conversationVisible } = await import("./whatsappInbox");
@@ -8470,7 +8623,7 @@ export const appRouter = router({
         projectId: z.number().optional(),
       }).optional())
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "clientes", "view");
         const { getDb } = await import("./db");
         const { listClients, stripTotals } = await import("./clientsCrm");
         const db = await getDb();
@@ -8487,7 +8640,7 @@ export const appRouter = router({
     stats: protectedProcedure
       .input(z.object({ projectId: z.number().optional() }).optional())
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "clientes", "view");
         const { getDb } = await import("./db");
         const { clientsStats, countBookingsWithoutEmail } = await import("./clientsCrm");
         const db = await getDb();
@@ -8500,7 +8653,7 @@ export const appRouter = router({
     profile: protectedProcedure
       .input(z.object({ email: z.string().min(3).max(320), projectId: z.number().optional() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "clientes", "view");
         const { getDb } = await import("./db");
         const { getClientProfile, stripTotals } = await import("./clientsCrm");
         const db = await getDb();
@@ -8521,7 +8674,7 @@ export const appRouter = router({
         name: z.string().nullable().optional(),
       }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "clientes", "view");
         const { getClientHistory } = await import("./db");
         const h = await getClientHistory(input);
         // Mesmo gate da ficha de Clientes: sem permissão de totais, sem valores
@@ -8538,7 +8691,7 @@ export const appRouter = router({
     inboundEmails: protectedProcedure
       .input(z.object({ alias: z.enum(["reclamacoes", "perdidos", "criticas", "recursos-humanos"]), search: z.string().nullable().optional() }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "clientes", "view");
         const { searchInboundEmails } = await import("./db");
         return searchInboundEmails(input.alias, input.search);
       }),
@@ -8553,7 +8706,7 @@ export const appRouter = router({
         caseId: z.number(),
       }))
       .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireAccess(ctx.user, "clientes", "edit");
         const { getInboundEmailById, setInboundEmailTarget } = await import("./db");
         const em = await getInboundEmailById(input.inboundId);
         if (!em) throw new TRPCError({ code: "NOT_FOUND", message: "Email não encontrado" });

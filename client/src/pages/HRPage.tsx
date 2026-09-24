@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from "react";
+import { can, roleRank, seesBeyondOwn } from "@shared/access";
 import { useSearch, useLocation } from 'wouter';
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { SearchableSelect } from "@/components/ui/searchable-select";
@@ -1163,7 +1164,7 @@ function EmployeeAlertsCard({ employeeId }: { employeeId: number }) {
     onError: (e) => toast.error(e.message),
   });
 
-  const isSupervisor = user?.role && ["supervisor", "admin", "super_admin"].includes(user.role);
+  const isSupervisor = roleRank(user?.role) >= roleRank("supervisor");
   const isBlocked = Boolean(emp?.employee?.loginBlocked);
   const totalPoints = penalties.reduce((s, p) => s + Number(p.points ?? 0), 0);
 

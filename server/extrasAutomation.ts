@@ -272,15 +272,16 @@ export async function notifyBackoffice(title: string, body: string, link: string
   if (!db) return;
   const { users } = await import("../drizzle/schema");
   const { createNotification } = await import("./complaintsExtended");
-  const rows = await db.select({ id: users.id }).from(users)
+  const rows = await db.select({ id: users.id, role: users.role }).from(users)
     .where(sql`${users.role} IN ('admin','super_admin','supervisor','backoffice') AND ${users.isActive} = 1`);
+  const roleById = new Map(rows.map((r) => [r.id, r.role]));
   let targets = rows.map((r) => r.id);
   if (opts.projectId != null) {
     const { loadCityAccess } = await import("./cityAccess");
     const scoped: number[] = [];
     for (const id of targets) {
       try {
-        const access = await loadCityAccess(id);
+        const access = await loadCityAccess(id, roleById.get(id));
         if (userSeesProject(access, opts.projectId)) scoped.push(id);
       } catch { /* sem âmbito resolvido → não recebe avisos de cidade */ }
     }

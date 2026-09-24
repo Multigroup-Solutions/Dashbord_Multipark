@@ -2,13 +2,15 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { protectedProcedure, router } from '../../_core/trpc';
 import { requireGlobalCityAccess } from '../../cityScope';
+import { can } from '../../../shared/access';
 import { config } from './config';
 import { connection, disconnect, saveConnection } from './oauth';
 import { locations, mapLocation, pendingReviews, refreshLocations, resolvePending, syncReviews } from './service';
 import { safeError } from './domain';
 
 const admin = protectedProcedure.use(async ({ ctx, next }) => {
-  if (!['admin', 'super_admin'].includes(ctx.user.role)) throw new TRPCError({ code: 'FORBIDDEN' });
+  // Ligação à conta Google: gestão de Integrações (admin+ — shared/access.ts).
+  if (!can(ctx.user, 'integracoes', 'manage')) throw new TRPCError({ code: 'FORBIDDEN' });
   requireGlobalCityAccess();
   return next();
 });

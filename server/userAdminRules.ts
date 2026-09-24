@@ -4,7 +4,7 @@
 import { normalizeEmail } from "@shared/email";
 
 /** Os roles reais (igual ao enum de `users.role` em drizzle/schema.ts). */
-export const USER_ROLES = ["super_admin", "admin", "supervisor", "team_leader", "backoffice", "frontoffice", "extra", "user"] as const;
+export const USER_ROLES = ["super_admin", "admin", "supervisor", "team_leader", "backoffice", "frontoffice", "condutor", "extra", "user"] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
 export interface RoleChangeTarget {

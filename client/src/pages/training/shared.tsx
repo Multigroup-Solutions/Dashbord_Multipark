@@ -14,8 +14,9 @@ import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { CheckCircle, XCircle } from "lucide-react";
 
-export const ROLE_HIERARCHY: Record<string, number> = { user: 0, extra: 1, frontoffice: 2, backoffice: 3, team_leader: 4, supervisor: 5, admin: 6, super_admin: 7 };
-export const atLeast = (role: string | undefined | null, min: string) => (ROLE_HIERARCHY[role ?? ""] ?? -1) >= (ROLE_HIERARCHY[min] ?? 0);
+import { ROLE_RANK, roleRank } from "@shared/access";
+export const ROLE_HIERARCHY: Record<string, number> = { ...ROLE_RANK };
+export const atLeast = (role: string | undefined | null, min: string) => roleRank(role) >= Math.max(0, roleRank(min));
 
 // ─── Níveis de carreira (estrutura do Jorge, 2026-08-05) ─────────────────────
 export const CAREER_TRACKS: Array<{ key: string; label: string; color: string; barColor: string; levels: string[] }> = [

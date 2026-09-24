@@ -6,6 +6,7 @@
  * Ver: backoffice (âmbito de cidade). Definir: admin.
  */
 import { useMemo, useState } from "react";
+import { can, roleRank, seesBeyondOwn } from "@shared/access";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
@@ -34,7 +35,7 @@ const monthLabel = (m: string) => new Intl.DateTimeFormat("pt-PT", { month: "lon
 
 export default function MarketingBudgetsPanel() {
   const { user } = useAuth();
-  const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
+  const isAdmin = can(user?.role, "marketing", "manage");
   const { projectId } = useGlobalFilters();
   const [month, setMonth] = useState(lisbonMonth());
   const utils = trpc.useUtils();

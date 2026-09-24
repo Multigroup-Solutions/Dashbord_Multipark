@@ -2,6 +2,7 @@
 // painel dividido — formulário à esquerda com o logo real, painel navy com
 // gradiente e números do grupo à direita. Lógica de auth intacta.
 import { useAuth } from "@/_core/hooks/useAuth";
+import { can, roleRank, seesBeyondOwn } from "@shared/access";
 import { Button } from "@/components/ui/button";
 import { getLoginUrl } from "@/const";
 import { ACCESS_DENIED_MSG, AUTH_DENIED_PARAM, AUTH_DENIED_VALUE } from "@shared/const";
@@ -24,10 +25,10 @@ export default function Home() {
 
   useEffect(() => {
     if (!loading && user) {
-      // user/extra/frontoffice nunca aterram na dashboard principal
+      // user/extra/condutor vão para a ficha; team leader (sem Dashboards) para as Tarefas
       const role = (user as any).role ?? "user";
-      if (["user", "extra"].includes(role)) setLocation("/rh");
-      else if (role === "frontoffice") setLocation("/despesas");
+      if (roleRank(role) < roleRank("team_leader")) setLocation("/rh");
+      else if (!can(role, "dashboards", "view")) setLocation("/tarefas");
       else setLocation("/dashboard");
     }
   }, [user, loading, setLocation]);

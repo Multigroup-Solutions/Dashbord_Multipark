@@ -34,9 +34,10 @@ describe("canReadEmployeeRecord — próprio / no âmbito / fora / admin de cida
 
 describe("canViewTimeAndSchedule — team_leader só no seu centro", () => {
   const tl: RhViewer = { id: 4, role: "team_leader", employeeId: 40, scopeProjectIds: [100, 101] };
-  it("vê horário/ponto no seu centro, incluindo fichas protegidas (operação)", () => {
+  it("vê horário/ponto no seu centro de quem está abaixo dele (não de admins)", () => {
     expect(canViewTimeAndSchedule(tl, { id: 1, projectId: 101 })).toBe(true);
-    expect(canViewTimeAndSchedule(tl, { id: 2, projectId: 101, role: "admin" })).toBe(true);
+    expect(canViewTimeAndSchedule(tl, { id: 5, projectId: 101, role: "condutor" })).toBe(true);
+    expect(canViewTimeAndSchedule(tl, { id: 2, projectId: 101, role: "admin" })).toBe(false);
   });
   it("já não vê fichas de outros centros/cidades", () => {
     expect(canViewTimeAndSchedule(tl, { id: 3, projectId: 500 })).toBe(false);
@@ -78,7 +79,7 @@ describe("inviteCompletionError — email da sessão tem de ser o do convite", (
 
 describe("superAdminGuard + USER_ROLES", () => {
   it("o enum tem exactamente os roles reais", () => {
-    expect([...USER_ROLES].sort()).toEqual(["admin", "backoffice", "extra", "frontoffice", "super_admin", "supervisor", "team_leader", "user"]);
+    expect([...USER_ROLES].sort()).toEqual(["admin", "backoffice", "condutor", "extra", "frontoffice", "super_admin", "supervisor", "team_leader", "user"]);
   });
   const sa = { id: 3, role: "super_admin", isActive: 1 };
   it("não se tira o último super_admin ativo (despromover ou desativar)", () => {
