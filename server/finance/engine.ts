@@ -298,10 +298,10 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
     .where(and(...pontoConds));
 
   // ─── 5. Parceiros (índice com conflitos) + operacionais ───────────────────
-  const partnerRows = await db.select({ id: partnerships.id, name: partnerships.name, campaignKey: partnerships.campaignKey, commissionRate: partnerships.commissionRate, partnerType: partnerships.partnerType, notes: partnerships.notes, updatedAt: partnerships.updatedAt }).from(partnerships);
+  const partnerRows = await db.select({ id: partnerships.id, name: partnerships.name, campaignKey: partnerships.campaignKey, commissionRate: partnerships.commissionRate, partnerType: partnerships.partnerType, notes: partnerships.notes, updatedAt: partnerships.updatedAt, configuredAt: partnerships.configuredAt }).from(partnerships);
   const aliasRows = await db.select({ partnershipId: partnerAliases.partnershipId, aliasValue: partnerAliases.aliasValue }).from(partnerAliases);
   const partnerIndex = R.buildPartnerIndex(
-    partnerRows.map((p) => ({ id: p.id, name: p.name, campaignKey: p.campaignKey, commissionRate: p.commissionRate == null ? null : Number(p.commissionRate), updatedAt: p.updatedAt ?? "" })) as any,
+    partnerRows.map((p) => ({ id: p.id, name: p.name, campaignKey: p.campaignKey, commissionRate: p.commissionRate == null ? null : Number(p.commissionRate), updatedAt: p.updatedAt ?? "", configuredAt: p.configuredAt ?? null })) as any,
     aliasRows,
   );
 

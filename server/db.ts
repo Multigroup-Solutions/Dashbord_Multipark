@@ -142,6 +142,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0079").then(m => ({ s: m.MIGRATION_0079_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0079 })),
       import("./migrations/migration_0080").then(m => ({ s: m.MIGRATION_0080_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0080 })),
       import("./migrations/migration_0081").then(m => ({ s: m.MIGRATION_0081_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0081 })),
+      import("./migrations/migration_0082").then(m => ({ s: m.MIGRATION_0082_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0082 })),
       import("./migrations/migration_0083").then(m => ({ s: m.MIGRATION_0083_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0083 })),
     ]);
     for (const { s, ok } of mods) {
@@ -3640,6 +3641,13 @@ export async function diagnoseBilling(filters: {
   };
 }
 
+// Regras comuns às vistas de Parcerias (Análise, Resumo, detalhe por tipo):
+//  - só reservas CONCLUÍDAS (CHECKED_OUT) pela data de saída — a mesma regra da
+//    receita realizada no motor financeiro; canceladas e em curso ficam fora;
+//  - "tem parceiro" = campaign não nula E não vazia (linhas e totais iguais).
+const partnerBookingDone = () => sql`${multiparkBookings.status} = 'CHECKED_OUT'`;
+const bookingHasCampaign = () => sql`(${multiparkBookings.campaign} IS NOT NULL AND ${multiparkBookings.campaign} <> '')`;
+
 export async function getPartnershipAnalytics(filters: { from: string; to: string; projectId?: number }) {
   const db = await getDb();
   if (!db) return { partners: [], proBookings: [], totals: { partnerBookings: 0, partnerRevenue: 0, directBookings: 0, directRevenue: 0, proBookings: 0, proRevenue: 0 } };
@@ -3649,13 +3657,14 @@ export async function getPartnershipAnalytics(filters: { from: string; to: strin
 
   // Base conditions: checkouts in period
   const baseConds: any[] = [projectScope(multiparkBookings.projectId),
+    partnerBookingDone(),
     isNotNull(multiparkBookings.checkOut),
     gte(multiparkBookings.checkOut, toMysqlDateTime(new Date(filters.from))),
     lte(multiparkBookings.checkOut, toMysqlDateTime(new Date(filters.to + "T23:59:59"))),
   ];
   if (projectIds) baseConds.push(inArray(multiparkBookings.projectId, projectIds));
 
-  // 1. Partner bookings (campaign is not null = came from partner/affiliate)
+  // 1. Partner bookings (campaign preenchida = veio de parceiro/afiliado)
   const partnerRows = await db
     .select({
       campaign: multiparkBookings.campaign,
@@ -3667,19 +3676,19 @@ export async function getPartnershipAnalytics(filters: { from: string; to: strin
       totalDiscount: sql<number>`COALESCE(SUM(${multiparkBookings.discount}), 0)`,
     })
     .from(multiparkBookings)
-    .where(and(...baseConds, isNotNull(multiparkBookings.campaign)))
+    .where(and(...baseConds, bookingHasCampaign()))
     .groupBy(multiparkBookings.campaign, multiparkBookings.city, multiparkBookings.parkName);
 
   // 2. All bookings for totals (partner vs direct)
   const allRows = await db
     .select({
-      hasPartner: sql<number>`CASE WHEN ${multiparkBookings.campaign} IS NOT NULL AND ${multiparkBookings.campaign} != '' THEN 1 ELSE 0 END`,
+      hasPartner: sql<number>`CASE WHEN ${bookingHasCampaign()} THEN 1 ELSE 0 END`,
       count: sql<number>`COUNT(*)`,
       totalRevenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
     })
     .from(multiparkBookings)
     .where(and(...baseConds))
-    .groupBy(sql`CASE WHEN ${multiparkBookings.campaign} IS NOT NULL AND ${multiparkBookings.campaign} != '' THEN 1 ELSE 0 END`);
+    .groupBy(sql`CASE WHEN ${bookingHasCampaign()} THEN 1 ELSE 0 END`);
 
   // 3. Reservas Pro — usa a coluna `pro` explícita da API (o antigo
   // JSON_EXTRACT de park.isPro media "o PARQUE aceita Pro", não "a reserva
@@ -3739,52 +3748,6 @@ export async function getPartnershipAnalytics(filters: { from: string; to: strin
   };
 }
 
-export async function getBookingsByCampaign(filters: { campaignKey: string; from: string; to: string; projectId?: number }) {
-  const db = await getDb();
-  if (!db) return [];
-
-  let projectIds: number[] | undefined;
-  if (filters.projectId) projectIds = await resolveProjectIds(filters.projectId);
-
-  const conds: any[] = [projectScope(multiparkBookings.projectId),
-    eq(multiparkBookings.campaign, filters.campaignKey),
-    isNotNull(multiparkBookings.checkOut),
-    gte(multiparkBookings.checkOut, toMysqlDateTime(new Date(filters.from))),
-    lte(multiparkBookings.checkOut, toMysqlDateTime(new Date(filters.to + "T23:59:59"))),
-  ];
-  if (projectIds) conds.push(inArray(multiparkBookings.projectId, projectIds));
-
-  const rows = await db
-    .select({
-      id: multiparkBookings.id,
-      bookingNumber: multiparkBookings.bookingNumber,
-      clientFirstName: multiparkBookings.clientFirstName,
-      clientLastName: multiparkBookings.clientLastName,
-      licensePlate: multiparkBookings.licensePlate,
-      checkIn: multiparkBookings.checkIn,
-      checkOut: multiparkBookings.checkOut,
-      parkName: multiparkBookings.parkName,
-      city: multiparkBookings.city,
-      totalPrice: multiparkBookings.totalPrice,
-      discount: multiparkBookings.discount,
-      parkingPrice: multiparkBookings.parkingPrice,
-      deliveryCharges: multiparkBookings.deliveryCharges,
-      extrasTotal: multiparkBookings.extrasTotal,
-    })
-    .from(multiparkBookings)
-    .where(and(...conds))
-    .orderBy(desc(multiparkBookings.checkOut));
-
-  return rows.map(r => ({
-    ...r,
-    totalPrice: Number(r.totalPrice ?? 0),
-    discount: Number(r.discount ?? 0),
-    parkingPrice: Number(r.parkingPrice ?? 0),
-    deliveryCharges: Number(r.deliveryCharges ?? 0),
-    extrasTotal: Number(r.extrasTotal ?? 0),
-  }));
-}
-
 // ─── PARCERIAS (PARTNERSHIPS) ────────────────────────────────────────────────
 export async function createPartnership(data: any) {
   const db = await getDb(); if (!db) return null;
@@ -3833,8 +3796,9 @@ export async function inferPartnersFromBookings(): Promise<Array<{
       remarks,
       totalPrice
     FROM multipark_bookings
-    WHERE ${projectScope(sql`multipark_bookings.projectId`)} AND (rawJson LIKE '%partnerId%' AND JSON_EXTRACT(rawJson, '$.partnerId') IS NOT NULL)
-       OR paymentMethod IS NOT NULL
+    WHERE ${projectScope(sql`multipark_bookings.projectId`)}
+      AND ((rawJson LIKE '%partnerId%' AND JSON_EXTRACT(rawJson, '$.partnerId') IS NOT NULL)
+        OR paymentMethod IS NOT NULL)
   `);
 
   type Agg = {
@@ -4007,20 +3971,20 @@ export async function addPartnerAlias(
 }
 
 /**
- * Sumário de faturação por parceiro. Para cada parceiro calcula:
- *  - aFaturar: comissão gerada no período (de bookings com checkout) +
- *              avença mensal/anual proporcional ao período se o
- *              chargeModel for monthly_fee / yearly_fee
- *  - faturado: somatório das partnership_invoices no período (excepto canceladas)
- *  - emAtraso: partnership_invoices com status='overdue'
- *  - pendente: max(0, aFaturar - faturado)
+ * Sumário de faturação por parceiro. Para cada parceiro calcula aFaturar:
+ * comissão das reservas concluídas no período (CHECKED_OUT pela data de
+ * saída) ou avença mensal/anual rateada pelos meses cobertos.
+ * (As colunas faturado/pendente/em atraso foram retiradas: nada na app cria
+ * partnership_invoices, por isso eram sempre zero.)
  *
  * O cálculo de comissão usa os mesmos aliases que getBillingData para
- * fazer match com as reservas.
+ * fazer match com as reservas. `projectId` (filtro global de cidade/marca)
+ * limita as reservas; as avenças não têm cidade e ficam indisponíveis.
  */
 export async function getPartnerInvoicingSummary(filters: {
   from: string;
   to: string;
+  projectId?: number;
   partnerType?: string;
 }): Promise<Array<{
   partnershipId: number;
@@ -4032,26 +3996,17 @@ export async function getPartnerInvoicingSummary(filters: {
   revenueGross: number;
   aFaturar: number | null;
   billingAvailable: boolean;
-  faturado: number | null;
-  emAtraso: number | null;
-  pendente: number | null;
-  faturasEmAtrasoCount: number;
 }>> {
   const db = await getDb();
   if (!db) return [];
 
-  const billingAvailable = scopedProjectIds() === undefined;
+  // Avenças são globais (sem cidade): só se mostram sem filtro/limite de cidade.
+  const billingAvailable = scopedProjectIds() === undefined && !filters.projectId;
+  const projectIds = filters.projectId ? await resolveProjectIds(filters.projectId) : undefined;
+  const projectFilter = projectIds ? inArray(multiparkBookings.projectId, projectIds) : undefined;
   const fromStr = toMysqlDateTime(new Date(filters.from));
   const toStr = toMysqlDateTime(new Date(filters.to + "T23:59:59"));
-
-  // Período em dias / fracção de mês — para avenças
-  const msPerDay = 1000 * 60 * 60 * 24;
-  const periodDays = Math.max(
-    1,
-    Math.floor((new Date(filters.to).getTime() - new Date(filters.from).getTime()) / msPerDay) + 1,
-  );
-  const monthFraction = periodDays / 30;
-  const yearFraction = periodDays / 365;
+  const { partnerFeeForPeriod } = await import("../shared/partnerRules");
 
   // 1) Parcerias (com filtro opcional de tipo). Inclui notes para extrair
   //    config JSON (operatesProjects, cashbackPercent, prizeBudget).
@@ -4078,7 +4033,7 @@ export async function getPartnerInvoicingSummary(filters: {
     aliasValue: partnerAliases.aliasValue,
   }).from(partnerAliases);
 
-  // 3) Bookings com checkout efectivo no período, agrupados por campaign
+  // 3) Reservas concluídas (checkout no período), agrupadas por campaign
   const bookingRows = await db
     .select({
       campaign: multiparkBookings.campaign,
@@ -4088,9 +4043,10 @@ export async function getPartnerInvoicingSummary(filters: {
     .from(multiparkBookings)
     .where(
       and(
-        isNotNull(multiparkBookings.campaign),
-        sql`${multiparkBookings.status} != 'CANCELLED'`,
+        bookingHasCampaign(),
+        partnerBookingDone(),
         projectScope(multiparkBookings.projectId),
+        projectFilter,
         gte(multiparkBookings.checkOut, fromStr),
         lte(multiparkBookings.checkOut, toStr),
       ),
@@ -4126,40 +4082,9 @@ export async function getPartnerInvoicingSummary(filters: {
     bookingsByPartner.set(pid, existing);
   }
 
-  // 6) Partnership invoices no período — agrupadas por parceiro e estado
-  const invRows = await db
-    .select({
-      partnershipId: partnershipInvoices.partnershipId,
-      status: partnershipInvoices.invoiceStatus,
-      total: sql<number>`COALESCE(SUM(${partnershipInvoices.amount}), 0)`,
-      count: sql<number>`COUNT(*)`,
-    })
-    .from(partnershipInvoices)
-    .where(
-      and(
-        billingAvailable ? sql`1 = 1` : sql`1 = 0`,
-        gte(partnershipInvoices.sentAt, fromStr),
-        lte(partnershipInvoices.sentAt, toStr),
-        sql`${partnershipInvoices.invoiceStatus} != 'cancelled'`,
-      ),
-    )
-    .groupBy(partnershipInvoices.partnershipId, partnershipInvoices.invoiceStatus);
-
-  const invByPartner = new Map<number, { faturado: number; emAtraso: number; emAtrasoCount: number }>();
-  for (const r of invRows) {
-    const ex = invByPartner.get(r.partnershipId) ?? { faturado: 0, emAtraso: 0, emAtrasoCount: 0 };
-    const amount = Number(r.total ?? 0);
-    ex.faturado += amount;
-    if (r.status === "overdue") {
-      ex.emAtraso += amount;
-      ex.emAtrasoCount += Number(r.count ?? 0);
-    }
-    invByPartner.set(r.partnershipId, ex);
-  }
-
   // 6b) Para parceiros tipo "operacional" com operatesProjects definidos,
   //     a comissão é calculada sobre TODAS as reservas dos projetos operados
-  //     (com checkout no período, não canceladas), expandindo a hierarquia
+  //     (concluídas, com checkout no período), expandindo a hierarquia
   //     para cobrir filhos. Independente do campo `campaign`, o que permite
   //     que uma mesma reserva acumule comissão de venda (via campaign) e
   //     comissão operacional (via operatesProjects).
@@ -4194,9 +4119,10 @@ export async function getPartnerInvoicingSummary(filters: {
         .from(multiparkBookings)
         .where(
           and(
-            sql`${multiparkBookings.status} != 'CANCELLED'`,
+            partnerBookingDone(),
             projectScope(multiparkBookings.projectId),
-        gte(multiparkBookings.checkOut, fromStr),
+            projectFilter,
+            gte(multiparkBookings.checkOut, fromStr),
             lte(multiparkBookings.checkOut, toStr),
             inArray(multiparkBookings.projectId, Array.from(expanded)),
           ),
@@ -4234,7 +4160,6 @@ export async function getPartnerInvoicingSummary(filters: {
   // 7) Constrói resultado
   return partnerRows.map((p) => {
     const bk = bookingsByPartner.get(p.id) ?? { count: 0, revenue: 0 };
-    const inv = invByPartner.get(p.id) ?? { faturado: 0, emAtraso: 0, emAtrasoCount: 0 };
     const opRev = operationalRevenueByPartner.get(p.id);
 
     const commissionRate = Number(p.commissionRate ?? 0);
@@ -4246,10 +4171,8 @@ export async function getPartnerInvoicingSummary(filters: {
     let displayBookingsCount = bk.count;
     let displayRevenue = bk.revenue;
 
-    if (partnerType === "avenca_mensal") {
-      aFaturar = monthlyFee * monthFraction;
-    } else if (partnerType === "avenca_anual") {
-      aFaturar = monthlyFee * yearFraction;
+    if (partnerType === "avenca_mensal" || partnerType === "avenca_anual") {
+      aFaturar = partnerFeeForPeriod(partnerType, monthlyFee, filters.from, filters.to);
     } else if (partnerType === "operacional") {
       // Usa o cálculo via operatesProjects se configurado; senão usa o
       // campaign match (fallback). É legítimo um operacional ter ambos.
@@ -4272,8 +4195,6 @@ export async function getPartnerInvoicingSummary(filters: {
     }
     // enterprise / campanha_propria / outro → não há a faturar automático
 
-    const pendente = Math.max(0, aFaturar - inv.faturado);
-
     return {
       partnershipId: p.id,
       partnerName: p.name,
@@ -4284,10 +4205,6 @@ export async function getPartnerInvoicingSummary(filters: {
       revenueGross: displayRevenue,
       aFaturar: !billingAvailable && ['avenca_mensal', 'avenca_anual'].includes(partnerType) ? null : aFaturar,
       billingAvailable,
-      faturado: billingAvailable ? inv.faturado : null,
-      emAtraso: billingAvailable ? inv.emAtraso : null,
-      pendente: billingAvailable ? pendente : null,
-      faturasEmAtrasoCount: inv.emAtrasoCount,
     };
   })
     .sort((a, b) => (b.aFaturar ?? 0) - (a.aFaturar ?? 0));
@@ -4306,6 +4223,7 @@ export async function getPartnerInvoicingSummary(filters: {
 export async function getPartnerInvoicingDetailByType(filters: {
   from: string;
   to: string;
+  projectId?: number;
   partnerType: string;
 }): Promise<{
   partnerType: string;
@@ -4332,15 +4250,11 @@ export async function getPartnerInvoicingDetailByType(filters: {
 
   const fromStr = toMysqlDateTime(new Date(filters.from));
   const toStr = toMysqlDateTime(new Date(filters.to + "T23:59:59"));
-  const msPerDay = 1000 * 60 * 60 * 24;
-  const periodDays = Math.max(
-    1,
-    Math.floor((new Date(filters.to).getTime() - new Date(filters.from).getTime()) / msPerDay) + 1,
-  );
-  const monthFraction = periodDays / 30;
-  const yearFraction = periodDays / 365;
+  const projectIds = filters.projectId ? await resolveProjectIds(filters.projectId) : undefined;
+  const projectFilter = projectIds ? inArray(multiparkBookings.projectId, projectIds) : undefined;
 
   const { parsePartnerConfig } = await import("../shared/partnerTypes");
+  const { partnerFeeForPeriod } = await import("../shared/partnerRules");
 
   const partnerRows = await db
     .select({
@@ -4372,7 +4286,7 @@ export async function getPartnerInvoicingDetailByType(filters: {
   for (const p of partnerRows) { reg(p.campaignKey, p.id); reg(p.name, p.id); }
   for (const a of aliasRows) reg(a.aliasValue, a.partnershipId);
 
-  // Bookings agrupados por campaign (campanha → parceiro). Só CHECKED_OUT.
+  // Reservas concluídas (CHECKED_OUT) agrupadas por campaign (campanha → parceiro).
   const bookingRows = await db
     .select({
       campaign: multiparkBookings.campaign,
@@ -4385,9 +4299,10 @@ export async function getPartnerInvoicingDetailByType(filters: {
     .from(multiparkBookings)
     .where(
       and(
-        isNotNull(multiparkBookings.campaign),
-        sql`${multiparkBookings.status} != 'CANCELLED'`,
+        bookingHasCampaign(),
+        partnerBookingDone(),
         projectScope(multiparkBookings.projectId),
+        projectFilter,
         gte(multiparkBookings.checkOut, fromStr),
         lte(multiparkBookings.checkOut, toStr),
       ),
@@ -4428,9 +4343,10 @@ export async function getPartnerInvoicingDetailByType(filters: {
         .from(multiparkBookings)
         .where(
           and(
-            sql`${multiparkBookings.status} != 'CANCELLED'`,
+            partnerBookingDone(),
             projectScope(multiparkBookings.projectId),
-        gte(multiparkBookings.checkOut, fromStr),
+            projectFilter,
+            gte(multiparkBookings.checkOut, fromStr),
             lte(multiparkBookings.checkOut, toStr),
             inArray(multiparkBookings.projectId, Array.from(expanded)),
           ),
@@ -4460,10 +4376,8 @@ export async function getPartnerInvoicingDetailByType(filters: {
       bookingsCount = opRev.count;
       revenueGross = opRev.revenue;
       aFaturar = (opRev.revenue * commissionRate) / 100;
-    } else if (filters.partnerType === "avenca_mensal") {
-      aFaturar = monthlyFee * monthFraction;
-    } else if (filters.partnerType === "avenca_anual") {
-      aFaturar = monthlyFee * yearFraction;
+    } else if (filters.partnerType === "avenca_mensal" || filters.partnerType === "avenca_anual") {
+      aFaturar = partnerFeeForPeriod(filters.partnerType, monthlyFee, filters.from, filters.to);
     } else if (
       filters.partnerType === "agregador" ||
       filters.partnerType === "agencia_viagem" ||
@@ -4495,11 +4409,6 @@ export async function getPartnerInvoicingDetailByType(filters: {
   }).sort((a, b) => b.aFaturar - a.aFaturar);
 
   return { partnerType: filters.partnerType, partners };
-}
-
-export async function listPartnerAliases(partnershipId: number) {
-  const db = await getDb(); if (!db) return [];
-  return db.select().from(partnerAliases).where(and(eq(partnerAliases.partnershipId, partnershipId), partnerScope(partnerAliases.partnershipId)));
 }
 
 /**
@@ -4544,162 +4453,31 @@ export async function aliasCountsByPartner(): Promise<Array<{
     .sort((a, b) => b.total - a.total);
 }
 
-export async function deletePartnerAlias(id: number) {
-  const db = await getDb(); if (!db) return;
-  await db.delete(partnerAliases).where(eq(partnerAliases.id, id));
-}
-
-/**
- * Associa um partnerId da Multipark a uma parceria existente.
- * Opcionalmente actualiza a coluna `campaign` de todas as reservas com esse
- * partnerId para o nome do parceiro (substitui "Unknown User").
- */
-export async function linkMultiparkPartnerId(
-  partnershipId: number,
-  multiparkPartnerId: string,
-  applyToBookings: boolean,
-): Promise<number> {
-  const db = await getDb(); if (!db) return 0;
-
-  await db.update(partnerships)
-    .set({ multiparkPartnerId })
-    .where(eq(partnerships.id, partnershipId));
-
-  if (!applyToBookings) return 0;
-
-  const [p] = await db.select({ name: partnerships.name })
-    .from(partnerships).where(eq(partnerships.id, partnershipId)).limit(1);
-  if (!p) return 0;
-
-  const [result] = await (db as any).execute(sql`
-    UPDATE multipark_bookings
-    SET campaign = ${p.name}
-    WHERE JSON_UNQUOTE(JSON_EXTRACT(rawJson, '$.partnerId')) = ${multiparkPartnerId}
-  `);
-  return (result as any).affectedRows ?? 0;
-}
-
-export async function getPartnershipById(id: number) {
-  const db = await getDb(); if (!db) return null;
-  const rows = await db.select().from(partnerships).where(and(eq(partnerships.id, id), partnerScope(partnerships.id))).limit(1);
-  return rows[0] || null;
-}
-
 export async function updatePartnership(id: number, data: any) {
   const db = await getDb(); if (!db) return;
   await db.update(partnerships).set(data).where(eq(partnerships.id, id));
 }
 
+/** Apaga a parceria e tudo o que a referencia — sobretudo os aliases: o
+ * UNIQUE(aliasType, aliasValue) impedia voltar a ligar o partnerId/método de
+ * pagamento a outro parceiro, e a sincronização considerava-o "já ligado". */
 export async function deletePartnership(id: number) {
   const db = await getDb(); if (!db) return;
+  await db.delete(partnerAliases).where(eq(partnerAliases.partnershipId, id));
+  await db.delete(partnershipInvoices).where(eq(partnershipInvoices.partnershipId, id));
   await db.delete(partnershipTransactions).where(eq(partnershipTransactions.partnershipId, id));
   await db.delete(partnerships).where(eq(partnerships.id, id));
 }
 
-export async function createPartnershipTransaction(data: any) {
-  const db = await getDb(); if (!db) return null;
-  const [result] = await db.insert(partnershipTransactions).values(data as any).$returningId();
-  return result?.id;
-}
-
-export async function getPartnershipTransactions(partnershipId: number) {
-  const db = await getDb(); if (!db) return [];
-  return db.select().from(partnershipTransactions).where(and(eq(partnershipTransactions.partnershipId, partnershipId), projectScope(partnershipTransactions.projectId))).orderBy(desc(partnershipTransactions.transactionDate));
-}
-
-// ─── PARTNERSHIP INVOICES ────────────────────────────────────────────────
-export async function createPartnershipInvoice(data: any) {
-  const db = await getDb(); if (!db) return null;
-  const [result] = await db.insert(partnershipInvoices).values(data as any).$returningId();
-  return result?.id;
-}
-
-export async function getPartnershipInvoices(filters?: { partnershipId?: number; status?: string; year?: number; month?: number }) {
-  const db = await getDb(); if (!db) return [];
-  const conditions: any[] = [];
-  if (filters?.partnershipId) conditions.push(eq(partnershipInvoices.partnershipId, filters.partnershipId));
-  if (filters?.status) conditions.push(eq(partnershipInvoices.invoiceStatus, filters.status as any));
-  if (filters?.year) conditions.push(eq(partnershipInvoices.referenceYear, filters.year));
-  if (filters?.month) conditions.push(eq(partnershipInvoices.referenceMonth, filters.month));
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
-  return db.select().from(partnershipInvoices).where(where).orderBy(desc(partnershipInvoices.createdAt));
-}
-
-export async function updatePartnershipInvoice(id: number, data: any) {
-  const db = await getDb(); if (!db) return;
-  await db.update(partnershipInvoices).set(data).where(eq(partnershipInvoices.id, id));
-}
-
-export async function deletePartnershipInvoice(id: number) {
-  const db = await getDb(); if (!db) return;
-  await db.delete(partnershipInvoices).where(eq(partnershipInvoices.id, id));
-}
-
-export async function markOverduePartnershipInvoices() {
-  const db = await getDb(); if (!db) return 0;
-  const now = new Date();
-  const result = await db.update(partnershipInvoices)
-    .set({ invoiceStatus: "overdue" as any })
-    .where(
-      and(
-        eq(partnershipInvoices.invoiceStatus, "sent" as any),
-        sql`${partnershipInvoices.dueDate} < ${toMysqlDateTime(now)}`
-      )
-    );
-  return (result as any)[0]?.affectedRows || 0;
-}
-
-export async function getPartnershipDashboardStats() {
-  const db = await getDb(); if (!db) return null;
-  const allPartners = await db.select().from(partnerships);
-  const allInvoices = await db.select().from(partnershipInvoices);
-  const allTx = await db.select().from(partnershipTransactions);
-
-  const totalPartners = allPartners.length;
-  const activePartners = allPartners.filter(p => p.partnerStatus === "active").length;
-  const byType: Record<string, number> = {};
-  allPartners.forEach(p => { byType[p.partnerType] = (byType[p.partnerType] || 0) + 1; });
-
-  const pendingInvoices = allInvoices.filter(i => i.invoiceStatus === "sent");
-  const overdueInvoices = allInvoices.filter(i => i.invoiceStatus === "overdue");
-  const paidInvoices = allInvoices.filter(i => i.invoiceStatus === "paid");
-
-  const totalPending = pendingInvoices.reduce((s, i) => s + (i.amount || 0), 0);
-  const totalOverdue = overdueInvoices.reduce((s, i) => s + (i.amount || 0), 0);
-  const totalPaid = paidInvoices.reduce((s, i) => s + (i.amount || 0), 0);
-  const totalBookings = allTx.filter(t => t.transactionType === "booking").reduce((s, t) => s + (t.amount || 0), 0);
-
-  // Per-partner summary
-  const partnerSummaries = allPartners.map(p => {
-    const pInvoices = allInvoices.filter(i => i.partnershipId === p.id);
-    const pTx = allTx.filter(t => t.partnershipId === p.id);
-    const pending = pInvoices.filter(i => i.invoiceStatus === "sent").reduce((s, i) => s + (i.amount || 0), 0);
-    const overdue = pInvoices.filter(i => i.invoiceStatus === "overdue").reduce((s, i) => s + (i.amount || 0), 0);
-    const paid = pInvoices.filter(i => i.invoiceStatus === "paid").reduce((s, i) => s + (i.amount || 0), 0);
-    const bookings = pTx.filter(t => t.transactionType === "booking").reduce((s, t) => s + (t.amount || 0), 0);
-    return {
-      ...p,
-      invoicesPending: pending,
-      invoicesOverdue: overdue,
-      invoicesPaid: paid,
-      totalBookings: bookings,
-      invoiceCount: pInvoices.length,
-      hasOverdue: overdue > 0,
-    };
-  });
-
-  return {
-    totalPartners,
-    activePartners,
-    byType,
-    totalPending,
-    totalOverdue,
-    totalPaid,
-    totalBookings,
-    pendingCount: pendingInvoices.length,
-    overdueCount: overdueInvoices.length,
-    partnerSummaries,
-  };
+/** Já existe uma parceria com este nome (sem distinguir maiúsculas/espaços)? */
+export async function partnershipNameExists(name: string, exceptId?: number): Promise<boolean> {
+  const db = await getDb(); if (!db) return false;
+  const rows = await db.select({ id: partnerships.id }).from(partnerships)
+    .where(and(
+      sql`LOWER(TRIM(${partnerships.name})) = ${name.trim().toLowerCase()}`,
+      exceptId != null ? ne(partnerships.id, exceptId) : undefined,
+    )).limit(1);
+  return rows.length > 0;
 }
 
 // ─── ANUAL (ANNUAL REPORTS) ────────────────────────────────────────────────
@@ -5804,8 +5582,11 @@ export async function upsertMultiparkBooking(data: InsertMultiparkBooking) {
   // tinha preenchido (a perda ficava PERMANENTE quando não havia mudança de
   // estado para reabrir o enrichment). Era por isto que só ~20% das reservas
   // tinham dados de cliente/matrícula.
+  // `campaign` também: depois de o enrichment/resolver de aliases atribuir a
+  // reserva a um parceiro, um /report posterior (sem partnerName real nem
+  // alias) devolvia null e a reserva "fugia" do parceiro (drift de atribuição).
   const ENRICH_PROTECTED = [
-    "partnerName",
+    "partnerName", "campaign",
     "clientFirstName", "clientLastName", "clientEmail", "clientPhone", "clientNif",
     "licensePlate", "vehicleBrand", "vehicleModel", "vehicleColor", "vehicleType",
     "arrivalFlight", "departureFlight",

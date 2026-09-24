@@ -67,8 +67,8 @@ describe('consultas dos módulos respeitam a autorização sem filtros do client
     await expect(caller().marketing.stats.byCampaign({ campaignId: 9 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(caller().marketing.internalCampaigns.costs({ campaignType: 'internal', campaignId: 9 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
-  it('não expõe faturas globais com acesso local', async () => {
-    await expect(caller().partnerships.listInvoices()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  it('não deixa alterar parceiros (globais) com acesso local', async () => {
+    await expect(caller().partnerships.delete({ id: 9 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     // A importação manual de campanhas (CSV) foi removida: a fonte única é a Google Ads API.
     await expect((caller().marketing as any).importCampaignCsv({ csv: 'ficheiro de demonstração' })).rejects.toThrow(/No procedure found/);
   });

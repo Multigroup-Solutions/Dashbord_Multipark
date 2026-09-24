@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/select";
 import { Handshake, Link2, Plus, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
+import { PARTNER_TYPES } from "@shared/partnerTypes";
 
 const fmtEur = (v: number) => v.toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
 
@@ -39,7 +40,7 @@ export default function PartnerInferPage() {
       <div>
         <h1 className="text-2xl font-bold flex items-center gap-2">
           <Handshake className="h-6 w-6 text-purple-600" />
-          Inferir Parceiros
+          Associar métodos de pagamento
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
           PartnerIds e paymentMethods da API Multipark com nome sugerido. Associa cada
@@ -198,6 +199,8 @@ function LinkDialog({
 
   const [mode, setMode] = useState<"new" | "existing">("new");
   const [name, setName] = useState(target.suggestedName);
+  // Tipo do parceiro novo (antes era sempre "agência de viagem").
+  const [partnerType, setPartnerType] = useState("outro");
   const [existingId, setExistingId] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -208,7 +211,7 @@ function LinkDialog({
       if (mode === "new") {
         const r = await create.mutateAsync({
           name: name.trim(),
-          partnerType: "agencia_viagem",
+          partnerType,
         });
         partnershipId = (r as any).id;
       } else {
@@ -270,6 +273,18 @@ function LinkDialog({
             <div>
               <Label className="text-xs">Nome do parceiro</Label>
               <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Parkos, Onepark, ..." />
+              <Label className="text-xs mt-2 block">Tipo</Label>
+              <Select value={partnerType} onValueChange={setPartnerType}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {PARTNER_TYPES.map((t) => (
+                    <SelectItem key={t.id} value={t.id}>{t.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[10px] text-muted-foreground mt-1">
+                Fica em "Por configurar" na Gestão até definires a comissão ou a avença.
+              </p>
             </div>
           ) : (
             <div>
