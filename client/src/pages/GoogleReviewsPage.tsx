@@ -41,6 +41,18 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   dismissed: { label: "Dispensado", color: "bg-gray-100 text-gray-800" },
 };
 
+const SENTIMENT: Record<string, { label: string; cls: string }> = {
+  positivo: { label: "Positivo", cls: "bg-emerald-100 text-emerald-800" },
+  neutro: { label: "Neutro", cls: "bg-slate-100 text-slate-700" },
+  negativo: { label: "Negativo", cls: "bg-red-100 text-red-800" },
+};
+
+function SentimentBadge({ value }: { value: string }) {
+  const s = SENTIMENT[value];
+  if (!s) return null;
+  return <Badge className={`${s.cls} text-[10px]`} title="Sentimento (IA)">{s.label}</Badge>;
+}
+
 function Stars({ rating, size = "w-4 h-4" }: { rating: number; size?: string }) {
   return (
     <div className="flex gap-0.5">
@@ -386,6 +398,8 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
                           <Stars rating={r.rating} size="w-3.5 h-3.5" />
                           <Badge className={STATUS_LABELS[r.status]?.color || ""}>{STATUS_LABELS[r.status]?.label}</Badge>
                           {r.googleReply && <Badge className="bg-green-100 text-green-700 text-[10px]">no Google</Badge>}
+                          {!r.googleReply && r.aiResponse && !r.aiResponseApproved && <Badge className="bg-amber-100 text-amber-800 text-[10px]">rascunho por aprovar</Badge>}
+                          {(r as any).aiSentiment && <SentimentBadge value={(r as any).aiSentiment} />}
                           {r.complaintId && (
                             <Badge variant="outline" className="text-red-600 border-red-200">
                               <AlertTriangle className="w-3 h-3 mr-1" /> Reclamação #{r.complaintId}
@@ -597,6 +611,15 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
     toast.success("Resposta aprovada!");
   };
 
+  // Publicar é público e irreversível no Google: pede confirmação. A resposta
+  // publicada fica aprovada (aiResponseApproved = 1) pelo publishReply.
+  const handleApproveAndPublish = (text: string) => {
+    const t = text.trim();
+    if (!t) { toast.error("Escreve a resposta antes de publicar."); return; }
+    if (!confirm("Publicar esta resposta no Google? Fica visível para todos.")) return;
+    publishMut.mutate({ id, comment: t }, { onSuccess: () => setEditingResponse(false) });
+  };
+
   const handleSaveResponse = async () => {
     await updateMut.mutateAsync({ id, aiResponse: responseText, status: "manually_responded" });
     setEditingResponse(false);
@@ -665,7 +688,9 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
             <CardHeader>
               <CardTitle className="text-sm flex items-center gap-2">
                 <Bot className="w-4 h-4 text-blue-500" /> Resposta
-                {review.aiResponseApproved && <Badge className="bg-green-100 text-green-700 text-[10px]">Aprovada</Badge>}
+                {review.aiResponseApproved ? <Badge className="bg-green-100 text-green-700 text-[10px]">Aprovada</Badge>
+                  : review.aiResponse && !review.googleReply ? <Badge className="bg-amber-100 text-amber-800 text-[10px]">Rascunho IA — por aprovar</Badge> : null}
+                {(review as any).aiSentiment && <SentimentBadge value={(review as any).aiSentiment} />}
                 {!review.googleReviewName && (
                   <span className="text-xs font-normal text-muted-foreground ml-auto flex items-center gap-1" title="Esta crítica veio por email e não está ligada ao Google. Para publicar a resposta, usa o perfil Google, ou espera que a importação pela API a associe.">
                     <Mail className="w-3 h-3" /> só local (veio por email)
@@ -676,9 +701,14 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
             <CardContent className="space-y-3">
               {editingResponse ? (
                 <>
-                  <Textarea value={responseText} onChange={e => setResponseText(e.target.value)} rows={4} />
-                  <div className="flex gap-2">
-                    <Button size="sm" onClick={handleSaveResponse} disabled={updateMut.isPending}>Guardar</Button>
+                  <Textarea value={responseText} onChange={e => setResponseText(e.target.value)} rows={5} />
+                  <div className="flex gap-2 flex-wrap">
+                    {review.googleReviewName && (
+                      <Button size="sm" onClick={() => handleApproveAndPublish(responseText)} disabled={publishMut.isPending || !responseText.trim()}>
+                        <ExternalLink className="w-4 h-4 mr-1" /> {publishMut.isPending ? "A publicar..." : "Aprovar e publicar"}
+                      </Button>
+                    )}
+                    <Button size="sm" variant={review.googleReviewName ? "outline" : "default"} onClick={handleSaveResponse} disabled={updateMut.isPending}>Guardar</Button>
                     <Button size="sm" variant="outline" onClick={() => setEditingResponse(false)}>Cancelar</Button>
                   </div>
                 </>
@@ -687,12 +717,12 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
                   <p className="text-sm bg-blue-50 p-3 rounded-lg border border-blue-100">{review.aiResponse}</p>
                   <div className="flex gap-2 flex-wrap">
                     {review.googleReviewName && review.googleReply !== review.aiResponse && (
-                      <Button size="sm" onClick={() => publishMut.mutate({ id, comment: review.aiResponse || "" })} disabled={publishMut.isPending}>
-                        <ExternalLink className="w-4 h-4 mr-1" /> {publishMut.isPending ? "A publicar..." : review.googleReply ? "Substituir no Google" : "Publicar no Google"}
+                      <Button size="sm" onClick={() => handleApproveAndPublish(review.aiResponse || "")} disabled={publishMut.isPending}>
+                        <ExternalLink className="w-4 h-4 mr-1" /> {publishMut.isPending ? "A publicar..." : review.googleReply ? "Aprovar e substituir no Google" : "Aprovar e publicar"}
                       </Button>
                     )}
-                    {!review.aiResponseApproved && (
-                      <Button size="sm" onClick={handleApprove} disabled={approveMut.isPending}>
+                    {!review.googleReviewName && !review.aiResponseApproved && (
+                      <Button size="sm" onClick={handleApprove} disabled={approveMut.isPending} title="Esta crítica veio por email: depois de aprovar, publica a resposta no perfil Google.">
                         <CheckCircle2 className="w-4 h-4 mr-1" /> Aprovar
                       </Button>
                     )}

@@ -95,10 +95,72 @@ da env.
 | `AI_QUIZ` | `quiz_generation`: perguntas a partir dos manuais | fast |
 | `AI_HR_AUTOFILL` | `hr_autofill`: documentos do RH | lite. **Desligado por omissão** até decisão sobre o RGPD. |
 | `AI_TRAINING_TUTOR` | `training_tutor`: tutor da Formação (chat nos manuais, vídeos, percursos e quiz) | lite |
+| `AI_COMPLAINT_TRIAGE` | `complaint_triage`: triagem das reclamações por email | lite |
+| `AI_REVIEW_AUTO_DRAFTS` | `review_auto_draft`: rascunho automático para cada crítica nova | lite |
+| `AI_WHATSAPP_TRIAGE` | `whatsapp_triage`: intenção e urgência das conversas | lite |
+| `AI_LOST_FOUND_MATCH` | `lost_found_match`: correspondências perdido ↔ achado | lite |
 
 Quando uma funcionalidade está desligada, a UI mostra a mensagem "Esta
 funcionalidade de IA está desligada." e não se faz nenhum pedido. Os botões
 "IA" das páginas (WhatsApp, Formação) escondem-se.
+
+### Comunicação com clientes (nada é enviado sem aprovação)
+
+A classificação, as etiquetas e os rascunhos são automáticos. Tudo o que chega
+ao cliente passa por uma pessoa.
+
+- **Reclamações por email** (`server/complaintTriage.ts`). No fim do leitor de
+  email e no cron `ai-comms`, cada reclamação nova recebe sugestões de tipo,
+  prioridade, SLA (pela prioridade: urgente 12 h, alta 24 h, média 48 h,
+  baixa 72 h), reserva (`caseOps.deriveBookingForCase`), duplicado (reclamação
+  aberta do mesmo email, reserva ou matrícula nos últimos 60 dias) e um
+  rascunho de resposta em PT-PT.
+  - As sugestões ficam na tabela `ai_suggestions`, separadas dos campos
+    humanos, com a confiança e o motivo.
+  - Uma sugestão só se aplica sozinha com confiança ≥ 0,85 e com o campo
+    vazio. O tipo está vazio quando é "Outro". A prioridade e o SLA estão
+    vazios quando o caso foi criado pelo sistema e ninguém pegou nele. A
+    reserva está vazia quando não há referência. O valor anterior fica
+    guardado para "Desfazer".
+  - O rascunho cita sempre a reserva. Um rascunho que fale em reembolsos,
+    descontos, vouchers ou compensações é deitado fora. "Usar no email" abre
+    a janela "Enviar email" e é uma pessoa que carrega em Enviar.
+  - Na página das Reclamações, o cartão "Sugestões da IA" mostra cada
+    sugestão com os botões Aceitar e Rejeitar (Manter e Desfazer para as que
+    se aplicaram sozinhas).
+- **Críticas Google** (`server/reviewAutoDraft.ts`). No fim do sync do Google
+  Business Profile (a cada 10 min), no email criticas@ e no cron `ai-comms`,
+  cada crítica nova recebe um rascunho. O rascunho usa o prompt central
+  `draftReviewReply` com o sentimento e o contexto da reclamação ou reserva
+  ligada, que serve só para o tom e nunca é citado.
+  - O rascunho fica com `aiResponseApproved = 0`. Os botões são "Aprovar e
+    publicar" (com confirmação) e "Editar".
+- **WhatsApp** (`server/whatsappTriage.ts`). A cada mensagem recebida, a
+  conversa é classificada por intenção (reserva, alteração, cancelamento,
+  perdido/achado, reclamação, recrutamento/extra, outro) e urgência.
+  - Há debounce por conversa: no máximo uma triagem a cada 5 minutos. Uma
+    rajada de mensagens fica agendada e é apanhada pela mensagem seguinte ou
+    pelo cron.
+  - A chamada corre depois de responder à Meta.
+  - No inbox aparecem etiquetas e filtros ("Todas as intenções", "Urgentes").
+  - As conversas urgentes entram no aviso de SLA com 1/3 do prazo (mínimo
+    5 min).
+  - A sugestão de resposta continua a ser pedida à mão e nunca é enviada
+    sozinha.
+- **Perdidos & Achados** (`server/lostFoundMatch.ts`). Um pré-filtro
+  determinístico escolhe no máximo 5 candidatos do lado oposto: ±30 dias, mesmo
+  parque, e pontos por matrícula, reserva e tipo. Depois, uma única chamada lite
+  compara as descrições.
+  - Aparece "Possíveis correspondências" nos dois casos, com pontuação e
+    motivo.
+  - "Confirmar" só deixa uma nota interna. Contactar o cliente é sempre
+    humano.
+  - Sem IA, ficam só as pontuações do pré-filtro.
+
+Cron: `/api/cron/ai-comms` (`.github/workflows/ai-comms.yml`, a cada 15 min).
+Cada passo tem um lote pequeno (3 a 8 casos) e um prazo abaixo dos 60 s. O
+passo salta sem erro quando o interruptor está desligado, quando o orçamento
+se esgotou ou quando não há fornecedor. Migração: 0123.
 
 ## 4. Custos e orçamento
 
@@ -129,8 +191,8 @@ funcionalidade de IA está desligada." e não se faz nenhum pedido. Os botões
 
 - Antes de irem para o fornecedor, os emails, telefones, IBAN, NIF e matrículas
   que aparecem em texto livre são trocados por marcadores (`[EMAIL_1]`,
-  `[TELEFONE_1]`…). Isto aplica-se às críticas, ao rádio, à passagem de turno e
-  ao WhatsApp.
+  `[TELEFONE_1]`…). Isto aplica-se às críticas, ao rádio, à passagem de turno,
+  ao WhatsApp, às reclamações e aos Perdidos & Achados.
 - Quando a resposta é privada (resumo do rádio, passagem de turno, sugestão de
   resposta no WhatsApp), os marcadores são repostos depois de a resposta
   chegar. Nas respostas públicas (críticas), os marcadores são retirados.
@@ -206,7 +268,7 @@ resultado). Não está no menu geral.
 | `AI_TIER_<FUNC>` | Nível por funcionalidade |
 | `AI_THINKING_LEVEL` | Raciocínio dos Gemini 3.x |
 | `AI_MONTHLY_BUDGET_EUR` | Orçamento (a página Definições ganha-lhe) |
-| `AI_ENABLED`, `AI_EXPENSE_OCR`, `AI_REVIEW_DRAFTS`, `AI_RADIO`, `AI_HANDOVER_SUMMARY`, `AI_WHATSAPP_ASSIST`, `AI_QUIZ`, `AI_HR_AUTOFILL`, `AI_TRAINING_TUTOR` | Interruptores |
 | `AI_TRAINING_TUTOR_PER_MINUTE`, `AI_TRAINING_TUTOR_PER_DAY` | Limites do tutor da Formação (Definições ganha) |
+| `AI_ENABLED`, `AI_EXPENSE_OCR`, `AI_REVIEW_DRAFTS`, `AI_RADIO`, `AI_HANDOVER_SUMMARY`, `AI_WHATSAPP_ASSIST`, `AI_QUIZ`, `AI_HR_AUTOFILL`, `AI_COMPLAINT_TRIAGE`, `AI_REVIEW_AUTO_DRAFTS`, `AI_WHATSAPP_TRIAGE`, `AI_LOST_FOUND_MATCH` | Interruptores |
 | `LLM_API_URL`, `LLM_API_KEY`, `LLM_MODEL` | Fornecedor antigo |
 | `OPENAI_API_KEY` | Whisper (só se definida) |

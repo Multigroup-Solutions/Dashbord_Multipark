@@ -9,6 +9,7 @@
  *                para o SLA de resposta;
  *  - resolvido → fechado. Uma nova mensagem do contacto REABRE (→ aberto).
  */
+import { effectiveSlaMinutes } from "./commsAi";
 
 export const CONVERSATION_STATUSES = ["aberto", "pendente", "resolvido"] as const;
 export type ConversationStatus = (typeof CONVERSATION_STATUSES)[number];
@@ -74,6 +75,8 @@ export interface AlertInput {
   /** ISO, só com a janela aberta. */
   windowExpiresAt: string | null | undefined;
   optedOut?: boolean;
+  /** Urgência da triagem por IA (0123): "urgente" entra no SLA mais cedo. */
+  aiUrgency?: string | null;
 }
 
 export interface ConversationAlerts {
@@ -97,7 +100,7 @@ export function conversationAlerts(c: AlertInput, now: number, slaMinutes: numbe
   const since = parseDbUtcMs(c.awaitingSince ?? null);
   const unanswered = status === "aberto" && since != null && !c.optedOut;
   const waitingMinutes = unanswered ? Math.max(0, Math.floor((now - since!) / 60_000)) : 0;
-  const overdue = unanswered && waitingMinutes >= slaMinutes;
+  const overdue = unanswered && waitingMinutes >= effectiveSlaMinutes(slaMinutes, c.aiUrgency);
 
   let windowMinutesLeft: number | null = null;
   if (c.windowState === "open" && c.windowExpiresAt) {

@@ -62,6 +62,7 @@ O que o `runAi` faz, por ordem:
 | `status.ts` | `aiStatus`, `aiFeatureAvailable(Fresh)`, `testAi` |
 | `prompts/` | todos os prompts (PT-PT) + schemas zod |
 | `reviewReply.ts` | `draftReviewReply` (o único prompt de resposta a críticas) |
+| `prompts/comms.ts` | triagem de reclamações e do WhatsApp, semelhança dos Perdidos (usados por `server/complaintTriage.ts`, `whatsappTriage.ts`, `lostFoundMatch.ts`, `reviewAutoDraft.ts`) |
 | `trpcError.ts` | `aiTrpcError(err)` |
 
 ## Acrescentar uma funcionalidade (ex.: chat, triagem)

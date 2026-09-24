@@ -20,7 +20,11 @@ export type AiFlag =
   | "AI_WHATSAPP_ASSIST"
   | "AI_QUIZ"
   | "AI_HR_AUTOFILL"
-  | "AI_TRAINING_TUTOR";
+  | "AI_TRAINING_TUTOR"
+  | "AI_COMPLAINT_TRIAGE"
+  | "AI_REVIEW_AUTO_DRAFTS"
+  | "AI_WHATSAPP_TRIAGE"
+  | "AI_LOST_FOUND_MATCH";
 
 export interface AiFeatureDef {
   label: string;
@@ -47,6 +51,12 @@ export const AI_FEATURES = {
   // Tutor da Formação: respostas curtas só a partir dos manuais (trechos
   // escolhidos por palavras-chave + conteúdo do módulo em cache) — o lite chega.
   training_tutor: { label: "Tutor da formação", flag: "AI_TRAINING_TUTOR", tier: "lite", essential: false },
+  // Comunicação com clientes (triagem/rascunhos/correspondências). Nada é
+  // enviado sem aprovação humana; tudo `lite` (regra do dono).
+  complaint_triage: { label: "Reclamações: triagem e rascunho", flag: "AI_COMPLAINT_TRIAGE", tier: "lite", essential: false },
+  review_auto_draft: { label: "Críticas: rascunho automático", flag: "AI_REVIEW_AUTO_DRAFTS", tier: "lite", essential: false },
+  whatsapp_triage: { label: "WhatsApp: intenção e urgência", flag: "AI_WHATSAPP_TRIAGE", tier: "lite", essential: false },
+  lost_found_match: { label: "Perdidos: correspondências", flag: "AI_LOST_FOUND_MATCH", tier: "lite", essential: false },
   healthcheck: { label: "Teste da ligação", flag: null, tier: "lite", essential: true },
 } as const satisfies Record<string, AiFeatureDef>;
 

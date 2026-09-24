@@ -459,6 +459,8 @@ export const complaints = mysqlTable("complaints", {
 	convertedToId: int(),
 	convertedFromType: varchar({ length: 16 }),
 	convertedFromId: int(),
+	/** Triagem da IA já tentada (0123) — as sugestões ficam em ai_suggestions. */
+	aiTriagedAt: timestamp({ mode: 'string' }),
 });
 
 export const dailyDriverHistory = mysqlTable("daily_driver_history", {
@@ -999,6 +1001,9 @@ export const googleReviews = mysqlTable("google_reviews", {
 	sourceEmailId: varchar({ length: 100 }),
 	sourceEmailDate: timestamp({ mode: 'string' }),
 	importedAt: timestamp({ mode: 'string' }),
+	// 0123 — sentimento (positivo/neutro/negativo) e rascunho automático já tentado
+	aiSentiment: varchar({ length: 10 }),
+	aiDraftAttemptedAt: timestamp({ mode: 'string' }),
 });
 
 export const gpsAlerts = mysqlTable("gps_alerts", {
@@ -1126,6 +1131,8 @@ export const lostFoundItems = mysqlTable("lost_found_items", {
 	convertedFromId: int(),
 	relatedComplaintId: int(),
 	lastReminderAt: timestamp({ mode: 'string' }),
+	/** 0123 — correspondências perdido ↔ achado calculadas pela última vez. */
+	aiMatchCheckedAt: timestamp({ mode: 'string' }),
 	createdBy: int().notNull(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
@@ -2202,6 +2209,11 @@ export const whatsappConversations = mysqlTable("whatsapp_conversations", {
 	/** Ligação manual a uma reserva (multipark_bookings.id) / cliente (email). */
 	linkedBookingId: int(),
 	linkedClientEmail: varchar({ length: 320 }),
+	// Migração 0123 — triagem da IA (etiquetas do inbox + debounce por conversa)
+	aiIntent: varchar({ length: 24 }),
+	aiUrgency: varchar({ length: 10 }),
+	aiTriagedAt: timestamp({ mode: 'string' }),
+	aiTriageDueAt: timestamp({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
@@ -2211,6 +2223,7 @@ export const whatsappConversations = mysqlTable("whatsapp_conversations", {
 	index("idx_whatsapp_conversations_assigned").on(table.assignedUserId),
 	index("idx_whatsapp_conversations_employee").on(table.employeeId),
 	index("idx_whatsapp_conversations_last_message").on(table.lastMessageAt),
+	index("idx_whatsapp_conversations_ai_due").on(table.aiTriageDueAt),
 ]);
 
 // Mensagem individual (entrada ou saída). waMessageId (id da Meta) é único
@@ -2572,4 +2585,45 @@ export const trainingTutorQuestions = mysqlTable("training_tutor_questions", {
 (table) => [
 	uniqueIndex("uq_tt_questions_ctx_key").on(table.contextType, table.contextId, table.questionKey),
 	index("idx_tt_questions_last").on(table.lastAskedAt),
+]);
+
+// Migração 0123 — sugestões da IA separadas dos campos humanos (uma linha por
+// entidade × campo; ex.: complaint × type/priority/sla/booking/duplicate/draft).
+export const aiSuggestions = mysqlTable("ai_suggestions", {
+	id: int().autoincrement().primaryKey(),
+	entityType: varchar({ length: 24 }).notNull(),
+	entityId: int().notNull(),
+	field: varchar({ length: 24 }).notNull(),
+	value: text(),
+	confidence: decimal({ precision: 4, scale: 3 }),
+	reason: varchar({ length: 500 }),
+	/** pending | applied (automático) | accepted | rejected */
+	status: varchar({ length: 12 }).default('pending').notNull(),
+	previousValue: varchar({ length: 255 }),
+	decidedById: int(),
+	decidedAt: timestamp({ mode: 'string' }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_ai_suggestions_entity_field").on(table.entityType, table.entityId, table.field),
+]);
+
+// Migração 0123 — correspondências perdido ↔ achado (Perdidos & Achados).
+export const lostFoundMatches = mysqlTable("lost_found_matches", {
+	id: int().autoincrement().primaryKey(),
+	lostId: int().notNull(),
+	foundId: int().notNull(),
+	prefilterScore: int().default(0).notNull(),
+	aiScore: int(),
+	reason: varchar({ length: 300 }),
+	/** suggested | confirmed | dismissed */
+	status: varchar({ length: 12 }).default('suggested').notNull(),
+	decidedById: int(),
+	decidedAt: timestamp({ mode: 'string' }),
+	computedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_lost_found_matches_pair").on(table.lostId, table.foundId),
+	index("idx_lost_found_matches_found").on(table.foundId),
 ]);

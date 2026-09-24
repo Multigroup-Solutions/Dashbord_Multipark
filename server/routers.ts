@@ -4629,6 +4629,46 @@ export const appRouter = router({
       const emailAttachments = await listComplaintEmailAttachments(input.id).catch(() => []);
       return { complaint, messages, photos, emailAttachments };
     }),
+    // ── IA: sugestões da triagem (separadas dos campos humanos) ──────────
+    aiSuggestions: protectedProcedure.input(z.object({ complaintId: z.number() })).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "reclamacoes", "view", { allowOwn: true });
+      await assertOwnCase(ctx.user, "reclamacoes", "complaint", input.complaintId);
+      const complaint = await getComplaintById(input.complaintId); // âmbito de cidade
+      if (!complaint) throw new TRPCError({ code: "NOT_FOUND" });
+      const { getComplaintSuggestions } = await import("./complaintTriage");
+      const { aiFeatureAvailableFresh } = await import("./_core/ai/status");
+      return {
+        suggestions: await getComplaintSuggestions(input.complaintId),
+        triagedAt: (complaint as any).aiTriagedAt ?? null,
+        available: await aiFeatureAvailableFresh("complaint_triage"),
+      };
+    }),
+    aiDecide: protectedProcedure.input(z.object({
+      complaintId: z.number(),
+      field: z.enum(["type", "priority", "sla", "booking", "duplicate", "draft"]),
+      decision: z.enum(["accept", "reject"]),
+    })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "reclamacoes", "edit");
+      const complaint = await getComplaintById(input.complaintId); // âmbito de cidade
+      if (!complaint) throw new TRPCError({ code: "NOT_FOUND" });
+      const { decideComplaintSuggestion } = await import("./complaintTriage");
+      const r = await decideComplaintSuggestion(input.complaintId, input.field, input.decision, { id: ctx.user.id, name: ctx.user.name });
+      if (!r.ok) throw new TRPCError({ code: "BAD_REQUEST", message: r.error || "Não foi possível guardar a decisão." });
+      await logActivity({ userId: ctx.user.id, action: input.decision === "accept" ? "ai_accept" : "ai_reject", entity: "complaint", entityId: input.complaintId, details: `Sugestão IA: ${input.field}` });
+      return { success: true };
+    }),
+    aiRetriage: protectedProcedure.input(z.object({ complaintId: z.number() })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "reclamacoes", "edit");
+      const complaint = await getComplaintById(input.complaintId); // âmbito de cidade
+      if (!complaint) throw new TRPCError({ code: "NOT_FOUND" });
+      const { triageComplaint } = await import("./complaintTriage");
+      const { AI_USER_MESSAGES } = await import("./_core/ai/errors");
+      const r = await triageComplaint(input.complaintId, { force: true, userId: ctx.user.id });
+      // Sem erro na UI: desligada/orçamento → mensagem calma.
+      if (r.skipped === "disabled") return { ok: false, message: AI_USER_MESSAGES.disabled };
+      if (!r.ok) return { ok: false, message: (AI_USER_MESSAGES as any)[String(r.error ?? "").split("_")[0]] ?? AI_USER_MESSAGES.provider };
+      return { ok: true, message: r.applied.length ? `Aplicado: ${r.applied.length}; por decidir: ${r.suggested.length}.` : `Sugestões por decidir: ${r.suggested.length}.` };
+    }),
     create: protectedProcedure.input(z.object({
       title: z.string().min(1),
       description: z.string().optional(),
@@ -5266,6 +5306,32 @@ export const appRouter = router({
       const { signedFileUrl } = await import("./caseOps");
       return { ...item, returnPhotoUrl: item.returnPhotoUrl || item.returnPhotoKey ? await signedFileUrl(item.returnPhotoKey, item.returnPhotoUrl) : null };
     }),
+
+    // ── IA: possíveis correspondências perdido ↔ achado (humano contacta) ──
+    matches: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "perdidos", "view", { allowOwn: true });
+      await assertOwnCase(ctx.user, "perdidos", "lost_found", input.id);
+      await loadLostInScope(input.id);
+      const { listMatchesFor } = await import("./lostFoundMatch");
+      return listMatchesFor(input.id);
+    }),
+    recomputeMatches: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "perdidos", "edit");
+      await loadLostInScope(input.id);
+      const { computeMatchesFor } = await import("./lostFoundMatch");
+      const r = await computeMatchesFor(input.id, { userId: ctx.user.id });
+      return { candidates: r.candidates, ai: r.ai };
+    }),
+    decideMatch: protectedProcedure.input(z.object({ id: z.number(), matchId: z.number(), decision: z.enum(["confirmed", "dismissed"]) }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "perdidos", "edit");
+        await loadLostInScope(input.id);
+        const { decideMatch } = await import("./lostFoundMatch");
+        const r = await decideMatch(input.matchId, input.id, input.decision, { id: ctx.user.id, name: ctx.user.name });
+        if (!r.ok) throw new TRPCError({ code: "BAD_REQUEST", message: r.error || "Não foi possível guardar." });
+        await logActivity({ userId: ctx.user.id, action: `match_${input.decision}`, entity: "lost_found", entityId: input.id, details: `Correspondência #${input.matchId}` });
+        return { success: true };
+      }),
 
     dashboard: protectedProcedure.input(z.object({ projectId: z.number().optional(), noProject: z.boolean().optional() }).optional())
       .query(async ({ ctx, input }) => {

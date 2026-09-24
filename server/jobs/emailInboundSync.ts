@@ -66,6 +66,8 @@ export type EmailSyncResult = {
   byAlias: Record<string, number>;
   /** true = parou no orçamento de tempo (Vercel 60s); o resto fica p/ a próxima corrida (dedup por messageId). */
   partial: boolean;
+  /** Reclamações triadas pela IA nesta corrida (0 se desligada/sem tempo). */
+  aiTriaged?: number;
 };
 
 /** Prazo de ligação ao IMAP (também usado no teste das Integrações). */
@@ -150,12 +152,16 @@ async function routeToModule(
       sourceEmailId: ctx.messageId,
       importedAt: new Date().toISOString().slice(0, 19).replace("T", " "),
     } as any);
-    // rascunho de resposta por IA, best-effort (não bloqueia a importação)
+    // rascunho de resposta por IA (prompt central + sentimento/contexto),
+    // best-effort e por aprovar — nunca publica. Interruptor AI_REVIEW_AUTO_DRAFTS.
     if (id) {
       try {
-        const { draftReviewReply } = await import("../_core/ai/reviewReply");
-        const aiText = await draftReviewReply({ rating: g.rating, reviewerName: reviewer, reviewText: text.slice(0, 2000) }, { reviewId: id, timeoutMs: 15_000 });
-        if (aiText) await updateGoogleReview(id, { aiResponse: aiText, status: "ai_responded" });
+        const { autoDraftReview } = await import("../reviewAutoDraft");
+        const { aiFeatureAvailableFresh } = await import("../_core/ai/status");
+        if (await aiFeatureAvailableFresh("review_auto_draft")) {
+          await updateGoogleReview(id, { aiDraftAttemptedAt: new Date().toISOString().slice(0, 19).replace("T", " ") } as any);
+          await autoDraftReview(id, { timeoutMs: 15_000 });
+        }
       } catch { /* IA opcional */ }
     }
     return { targetModule: "review", targetId: id };
@@ -716,6 +722,19 @@ export async function runEmailInboundSync(opts?: { sinceDays?: number; deadlineA
   } finally {
     lock.release();
     await client.logout().catch(() => {});
+  }
+  // Triagem por IA das reclamações novas (tipo, prioridade, SLA, reserva,
+  // duplicado, rascunho) — lote pequeno e só com tempo de sobra; o que ficar
+  // apanha-se na corrida seguinte. Interruptor/orçamento → salta sem erro.
+  // Nunca envia nada ao cliente.
+  if (Date.now() + 25_000 < deadlineAt) {
+    try {
+      const { triagePendingComplaints } = await import("../complaintTriage");
+      const t = await triagePendingComplaints({ limit: 5, deadlineAt: Number.isFinite(deadlineAt) ? deadlineAt : Date.now() + 40_000 });
+      result.aiTriaged = t.triaged;
+    } catch (err: any) {
+      console.warn("[EmailInbound] triagem IA falhou:", String(err?.message ?? err).slice(0, 160));
+    }
   }
   return result;
 }

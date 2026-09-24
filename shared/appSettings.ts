@@ -345,6 +345,10 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "AI_WHATSAPP_ASSIST", label: "IA: assistente do WhatsApp", description: "Resumo da conversa e sugestão de resposta (vai para a caixa de texto, nunca é enviada sozinha).", group: "ia" },
   { name: "AI_QUIZ", label: "IA: perguntas da formação", description: "Gera rascunhos de perguntas a partir dos manuais.", group: "ia" },
   { name: "AI_TRAINING_TUTOR", label: "IA: tutor da formação", description: "Chat nas páginas da Formação: responde só com o conteúdo dos manuais, motiva e explica as respostas erradas do quiz.", group: "ia" },
+  { name: "AI_COMPLAINT_TRIAGE", label: "IA: triagem das reclamações por email", description: "Sugere tipo, prioridade, SLA, reserva e duplicados e prepara um rascunho de resposta (nunca é enviado sozinho). Só aplica sozinha com confiança alta e campo vazio.", group: "ia" },
+  { name: "AI_REVIEW_AUTO_DRAFTS", label: "IA: rascunho automático para cada crítica nova", description: "Prepara a resposta às críticas Google novas (fica por aprovar; nunca publica sozinha).", group: "ia" },
+  { name: "AI_WHATSAPP_TRIAGE", label: "IA: intenção e urgência no WhatsApp", description: "Etiqueta as conversas (reserva, cancelamento, reclamação…) e marca as urgentes (entram no aviso de SLA). No máximo 1× a cada poucos minutos por conversa; nunca responde sozinha.", group: "ia" },
+  { name: "AI_LOST_FOUND_MATCH", label: "IA: correspondências nos Perdidos & Achados", description: "Compara as descrições dos perdidos com os objetos encontrados (depois de um filtro por data, matrícula/reserva e parque). Contactar o cliente é sempre humano.", group: "ia" },
   { name: "AI_HR_AUTOFILL", label: "IA: preenchimento a partir de documentos do RH", description: "Lê CC, título de residência, carta, IBAN e morada para preencher campos vazios da ficha. Desligado por omissão até decisão RGPD.", defaultEnabled: false, group: "ia" },
 ];
 

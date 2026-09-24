@@ -59,6 +59,7 @@ import {
   type ConversationStatus,
   type StatusFilter,
 } from "@shared/whatsappConversation";
+import { WHATSAPP_INTENTS, WHATSAPP_INTENT_LABELS, isWhatsappIntent } from "@shared/commsAi";
 import { WhatsAppContextSheet } from "@/components/whatsapp/WhatsAppContextSheet";
 import { QuickRepliesDialog } from "@/components/whatsapp/QuickRepliesDialog";
 import {
@@ -194,6 +195,9 @@ export default function WhatsAppInboxPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   // Só conversas com alerta (sem resposta há +SLA ou janela a fechar).
   const [onlyAlerts, setOnlyAlerts] = useState(false);
+  // Etiquetas da triagem por IA (intenção + urgência).
+  const [intentFilter, setIntentFilter] = useState<string>("all");
+  const [onlyUrgent, setOnlyUrgent] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
   const [aiSummary, setAiSummary] = useState<string | null>(null);
@@ -305,6 +309,7 @@ export default function WhatsAppInboxPage() {
   const unreadTotal = scoped.filter((c) => c.unreadCount > 0).length;
   const overdueTotal = scoped.filter((c) => alertsById.get(c.id)?.overdue).length;
   const closingTotal = scoped.filter((c) => alertsById.get(c.id)?.windowClosing).length;
+  const urgentTotal = scoped.filter((c) => c.aiUrgency === "urgente" && c.status !== "resolvido").length;
   const mineTotal = allConversations.filter((c) => c.assignedUserId != null && c.assignedUserId === user?.id && c.status !== "resolvido").length;
   const searchLower = search.trim().toLowerCase();
   // A conversa ABERTA fica sempre à vista (ex.: acabou de ser resolvida).
@@ -318,7 +323,9 @@ export default function WhatsAppInboxPage() {
         (c.assignedName ?? "").toLowerCase().includes(searchLower) ||
         (c.preview ?? "").toLowerCase().includes(searchLower)) &&
       (!onlyUnread || c.unreadCount > 0 || c.id === selectedId) &&
-      (!onlyAlerts || a?.overdue || a?.windowClosing || c.id === selectedId)
+      (!onlyAlerts || a?.overdue || a?.windowClosing || c.id === selectedId) &&
+      (intentFilter === "all" || c.aiIntent === intentFilter || c.id === selectedId) &&
+      (!onlyUrgent || c.aiUrgency === "urgente" || c.id === selectedId)
     );
   });
 
@@ -447,8 +454,18 @@ export default function WhatsAppInboxPage() {
             </span>
           )}
         </div>
-        {(a?.overdue || a?.windowClosing || c.status !== "aberto" || c.assignedName) && (
+        {(a?.overdue || a?.windowClosing || c.status !== "aberto" || c.assignedName || c.aiIntent || c.aiUrgency === "urgente") && (
           <div className="flex flex-wrap items-center gap-1 mt-1">
+            {c.aiUrgency === "urgente" && c.status !== "resolvido" && (
+              <Badge className="h-5 px-1.5 text-[10px] gap-1 bg-orange-600 text-white" title="Urgente (IA) — entra mais cedo no aviso de SLA">
+                <Zap className="h-3 w-3" /> Urgente
+              </Badge>
+            )}
+            {isWhatsappIntent(c.aiIntent) && (
+              <Badge variant="outline" className="h-5 px-1.5 text-[10px] border-violet-300 text-violet-800 dark:border-violet-800 dark:text-violet-300" title="Intenção (IA)">
+                {WHATSAPP_INTENT_LABELS[c.aiIntent]}
+              </Badge>
+            )}
             {a?.overdue && (
               <Badge className="h-5 px-1.5 text-[10px] gap-1 bg-red-600 text-white" title={`Sem resposta há mais de ${slaMinutes} min`}>
                 <AlarmClock className="h-3 w-3" /> {formatWaiting(a.waitingMinutes)}
@@ -568,6 +585,32 @@ export default function WhatsAppInboxPage() {
               <X className="h-3.5 w-3.5 mr-1" /> Todas
             </Button>
           )}
+        </div>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <Select value={intentFilter} onValueChange={setIntentFilter}>
+            <SelectTrigger className="h-7 w-[150px] text-xs" aria-label="Filtrar por intenção (IA)">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todas as intenções</SelectItem>
+              {WHATSAPP_INTENTS.map((i) => (
+                <SelectItem key={i} value={i}>{WHATSAPP_INTENT_LABELS[i]}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button
+            type="button"
+            size="sm"
+            variant={onlyUrgent ? "default" : "outline"}
+            className="h-7 text-xs"
+            aria-pressed={onlyUrgent}
+            title="Mostrar só conversas marcadas como urgentes pela IA"
+            onClick={() => setOnlyUrgent((v) => !v)}
+          >
+            <Zap className="h-3.5 w-3.5 mr-1" />
+            Urgentes
+            <span className="ml-1 opacity-70 tabular-nums">{urgentTotal}</span>
+          </Button>
         </div>
       </div>
       {(overdueTotal > 0 || closingTotal > 0 || onlyAlerts) && (

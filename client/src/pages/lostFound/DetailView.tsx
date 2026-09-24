@@ -36,6 +36,7 @@ import {
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { STATUS_CONFIG, TYPE_CONFIG, PRIORITY_CONFIG, KANBAN_COLUMNS, BASE_PATH, CHANGE_TYPE_CONFIG } from "./config";
 import { ReturnPanel } from "./ReturnPanel";
+import { MatchesPanel } from "./MatchesPanel";
 import { CaseDriversPanel } from "./CaseDriversPanel";
 
 // ─── DETAIL VIEW ──────────────────────────────────────────────────────────────
@@ -429,6 +430,8 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
                   </CardContent>
                 </Card>
               )}
+
+              <MatchesPanel item={item} canEdit={can(user, "perdidos", "edit")} />
 
               {canSeeDrivers && <RepeatDriversCard itemId={item.id} />}
 

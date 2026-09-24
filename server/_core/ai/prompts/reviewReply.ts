@@ -37,8 +37,12 @@ export function reviewReplySystem(variant: ReviewVariant): string {
   return [...BASE, VARIANT[variant]].join("\n");
 }
 
-export function reviewReplyInput(p: { rating: number | null | undefined; firstName: string; text: string }): string {
+export function reviewReplyInput(p: { rating: number | null | undefined; firstName: string; text: string; context?: string[] }): string {
   const stars = Number(p.rating ?? 0) >= 1 ? `${p.rating} estrela(s)` : "classificação desconhecida";
   const body = p.text.trim() ? p.text.trim() : "(sem texto)";
-  return `Crítica de ${p.firstName} (${stars}):\n"""\n${body}\n"""\nEscreve a resposta.`;
+  // Contexto interno (sentimento, reclamação/reserva ligada): só para o tom —
+  // nunca para citar na resposta pública.
+  const ctx = (p.context ?? []).filter(Boolean).slice(0, 4);
+  const ctxBlock = ctx.length ? `Contexto interno (não citar dados):\n${ctx.map((l) => `- ${l.slice(0, 200)}`).join("\n")}\n` : "";
+  return `Crítica de ${p.firstName} (${stars}):\n"""\n${body}\n"""\n${ctxBlock}Escreve a resposta.`;
 }

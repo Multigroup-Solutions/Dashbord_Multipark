@@ -114,7 +114,7 @@ export async function importReview(locationId: number, payload: GoogleReview, us
     if (existing) {
       id = existing.id;
       await tx.update(googleReviews).set({ ...data,
-        ...(contentChanged ? { aiResponse: null, aiResponseApproved: 0 } : {}),
+        ...(contentChanged ? { aiResponse: null, aiResponseApproved: 0, aiDraftAttemptedAt: null } : {}),
         ...(review.reply ? { respondedAt: review.replyAt, status: existing.complaintId ? 'converted_complaint' as const : 'manually_responded' as const }
           : { respondedAt: null, status: existing.complaintId ? 'converted_complaint' as const : existing.status === 'dismissed' ? 'dismissed' as const : 'pending_response' as const }),
       }).where(eq(googleReviews.id, id));
@@ -249,7 +249,16 @@ export async function syncReviews(deadline = Date.now() + 35_000) {
       }
     }
     await saveConnection({ lastCheckedAt: now(), lastError: errors[0] || null });
-    return { ok: !errors.length, done, imported, pending, stoppedEarly, errors };
+    // Rascunho IA (lite) para as críticas novas — fica por aprovar, nunca
+    // publica sozinho. Lote pequeno e só com tempo; interruptor/orçamento → salta.
+    let aiDrafted = 0;
+    if (Date.now() < deadline - 5_000) {
+      try {
+        const { draftPendingReviewReplies } = await import('../../reviewAutoDraft');
+        aiDrafted = (await draftPendingReviewReplies({ limit: 3, deadlineAt: deadline + 15_000 })).drafted;
+      } catch { /* IA opcional: a recolha já terminou */ }
+    }
+    return { ok: !errors.length, done, imported, pending, stoppedEarly, errors, aiDrafted };
   } finally {
     await db.execute(sql`UPDATE integration_connections SET syncLockAt = NULL WHERE provider = ${PROVIDER} AND syncLockAt = ${lock}`);
   }

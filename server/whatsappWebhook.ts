@@ -124,6 +124,15 @@ export function createWhatsappWebhookRouter(): Router {
         );
       }
       res.sendStatus(200);
+      // Triagem por IA (intenção/urgência) DEPOIS do 200 — nunca atrasa a Meta
+      // nem responde ao cliente. No Vercel o waitUntil mantém a função viva.
+      if (result.triage?.length) {
+        const work = import("./whatsappTriage").then((m) => m.runTriagesFor(result.triage)).catch(() => {});
+        try {
+          const { waitUntil } = await import("@vercel/functions");
+          waitUntil(work);
+        } catch { /* fora do Vercel a promessa continua sozinha */ }
+      }
     } catch (err: any) {
       console.error("[WhatsAppWebhook] ERRO a processar (Meta fará retry):", err?.message || err);
       res.status(500).json({ error: "processing_failed" });

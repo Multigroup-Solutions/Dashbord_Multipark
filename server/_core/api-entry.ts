@@ -492,6 +492,21 @@ app.get("/api/cron/email-inbound", async (req, res) => {
   }
 });
 
+// IA na comunicação com clientes: triagem do WhatsApp (debounce vencido),
+// reclamações por triar, rascunhos das críticas novas e correspondências dos
+// Perdidos — lotes pequenos, prazo < 60 s. GitHub Actions a cada 15 min
+// (.github/workflows/ai-comms.yml). Nunca envia nada a clientes.
+app.get("/api/cron/ai-comms", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const { runCommsAiSweep } = await import("../commsAiSweep");
+    const report = await runCommsAiSweep({ deadlineAt: Date.now() + 45_000 });
+    res.json({ ok: report.errors.length === 0, ranAt: new Date().toISOString(), ...report });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: String(err?.message ?? err) });
+  }
+});
+
 // Health check. Público: só { ok, version? }. Com sessão admin/super_admin
 // ou Authorization: Bearer <CRON_SECRET> → presença (booleana) das variáveis
 // críticas. O erro/stack de arranque NUNCA sai na resposta — só no log.
