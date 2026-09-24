@@ -48,6 +48,16 @@ export async function assertScopedOperation(path: string, type: string, raw: unk
       }
     }
   }
+  // Árvore de Projetos: um admin de cidade só lê/cria/altera/move/desativa
+  // nós dentro das suas cidades (o próprio nó, o pai novo e o destino).
+  if (path.startsWith('projects.') && path !== 'projects.list') {
+    if (input.id != null) assertProjectAccess(input.id);
+    if (input.projectId != null) assertProjectAccess(input.projectId);
+    if (path === 'projects.create') assertProjectAccess(input.parentId ?? null);
+    if (path === 'projects.move') assertProjectAccess(input.newParentId ?? null);
+    if (path === 'projects.assignEmployee' && input.employeeId != null) await assertEmployeeAccess(input.employeeId);
+    if (['projects.parkCoverage', 'projects.createMissingParkNodes'].includes(path)) requireGlobalCityAccess();
+  }
   // Partner master data has no city owner. Its mutation cannot safely be
   // delegated to one city.
   if (path.startsWith('partnerships.') && type === 'mutation') requireGlobalCityAccess();

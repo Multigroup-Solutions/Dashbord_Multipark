@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const fakes = vi.hoisted(() => ({ report: vi.fn(), upsert: vi.fn(), log: vi.fn() }));
 vi.mock('../multipark', () => ({
   getBookingsReport: fakes.report, getBooking: vi.fn(), getBookingHistory: vi.fn(), getAgentHistory: vi.fn(),
-  isMultiparkConfigured: () => true, getParkApiKey: () => 'unit-test-key', matchParkConfig: vi.fn(),
+  isMultiparkConfigured: () => true, getParkApiKey: () => 'unit-test-key', matchParkConfig: vi.fn(), PARK_CONFIGS: [],
   getConfiguredParks: () => [{ id: 'TEST_PORTO', name: 'Parque teste', city: 'Porto', envKey: 'UNIT_TEST' }],
 }));
 vi.mock('../db', () => ({

@@ -419,6 +419,14 @@ async function requireFinanceTotals(user: { id: number; role: string }, minRole 
   }
 }
 
+/** Admins de cidade não mexem nos nós estruturais (Grupo/Cidade): só no que
+ * está dentro das suas cidades. Global mantém tudo. */
+function assertStructuralNodeEditable(node: { level: string }) {
+  if (scopedProjectIds() !== undefined && (node.level === "group" || node.level === "city")) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Só quem tem acesso a todas as cidades pode alterar grupos e cidades." });
+  }
+}
+
 // ─── DESPESAS: âmbito único (ver server/expenseScope.ts) ─────────────────────
 async function expenseVisibilityFor(user: { id: number; role: string }): Promise<ExpenseVisibility> {
   return resolveExpenseVisibility(user, {
@@ -1297,11 +1305,15 @@ export const appRouter = router({
       .input(z.object({ id: z.number() }))
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "extra");
+        assertProjectAccess(input.id); // só nós das cidades do utilizador
         return getProjectById(input.id);
       }),
+    // Regras de nível/pai, nomes únicos por pai e soft delete: ver
+    // shared/projectTree.ts (puras) e server/projectAdmin.ts (BD). Guardas de
+    // cidade em server/cityScopeGuards.ts (projects.*).
     create: protectedProcedure
       .input(z.object({
-        name: z.string().min(1),
+        name: z.string().trim().min(1),
         description: z.string().optional(),
         parentId: z.number().optional(),
         level: z.enum(["group", "brand", "city", "project"]).default("project"),
@@ -1313,10 +1325,20 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "admin");
+        const { validatePlacement, siblingNameConflict, isNodeActive } = await import("../shared/projectTree");
+        const nodes = await getProjects();
+        const parentId = input.parentId ?? null;
+        const parent = parentId == null ? null : nodes.find(n => n.id === parentId);
+        const placementError = validatePlacement(input.level, parent, parentId);
+        if (placementError) throw new TRPCError({ code: "BAD_REQUEST", message: placementError });
+        if (parent && !isNodeActive(parent)) throw new TRPCError({ code: "BAD_REQUEST", message: "O nó pai está inativo. Reativa-o primeiro." });
+        if (siblingNameConflict(input.name, parentId, nodes)) {
+          throw new TRPCError({ code: "CONFLICT", message: `Já existe um nó chamado «${input.name.trim()}» neste nível.` });
+        }
         await createProject({
-          name: input.name,
+          name: input.name.trim(),
           description: input.description ?? null,
-          parentId: input.parentId ?? null,
+          parentId,
           level: input.level,
           color: input.color ?? "#6366f1",
           managerId: input.managerId ?? null,
@@ -1330,7 +1352,7 @@ export const appRouter = router({
     update: protectedProcedure
       .input(z.object({
         id: z.number(),
-        name: z.string().optional(),
+        name: z.string().trim().min(1).optional(),
         description: z.string().optional(),
         level: z.enum(["group", "brand", "city", "project"]).optional(),
         color: z.string().optional(),
@@ -1342,15 +1364,98 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "admin");
-        const { id, ...data } = input;
-        await updateProject(id, data as any);
+        const { id, level, isActive, ...data } = input;
+        const { siblingNameConflict, isNodeActive, evaluateDelete } = await import("../shared/projectTree");
+        const nodes = await getProjects();
+        const node = nodes.find(n => n.id === id);
+        if (!node) throw new TRPCError({ code: "NOT_FOUND", message: "Nó não encontrado." });
+        assertStructuralNodeEditable(node);
+        if (level !== undefined && level !== node.level) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "O nível não pode ser alterado depois de criado." });
+        }
+        if (data.name !== undefined && siblingNameConflict(data.name, node.parentId, nodes, id)) {
+          throw new TRPCError({ code: "CONFLICT", message: `Já existe um nó chamado «${data.name.trim()}» neste nível.` });
+        }
+        const patch: Record<string, unknown> = { ...data };
+        if (isActive !== undefined && isActive !== isNodeActive(node)) {
+          if (isActive) {
+            const parent = node.parentId == null ? null : nodes.find(n => n.id === node.parentId);
+            if (node.parentId != null && (!parent || !isNodeActive(parent))) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: "O nó pai está inativo ou não existe. Reativa-o ou move este nó primeiro." });
+            }
+          } else {
+            const { countProjectReferences } = await import("./projectAdmin");
+            const check = evaluateDelete({
+              activeChildren: nodes.filter(n => n.parentId === id && isNodeActive(n)).length,
+              totalChildren: nodes.filter(n => n.parentId === id).length,
+              references: await countProjectReferences(id),
+            });
+            if (!check.canDeactivate) throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Não é possível desativar: ${check.reasons.join("; ")}` });
+          }
+          patch.isActive = isActive ? 1 : 0;
+        }
+        await updateProject(id, patch as any);
         await logActivity({ userId: ctx.user.id, action: "update", entity: "project", entityId: id });
         return { success: true };
       }),
+    // Referências a um nó (pré-visualização antes de desativar/apagar).
+    references: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        const { evaluateDelete, isNodeActive } = await import("../shared/projectTree");
+        const { countProjectReferences } = await import("./projectAdmin");
+        const nodes = await getProjects();
+        const references = await countProjectReferences(input.id);
+        const activeChildren = nodes.filter(n => n.parentId === input.id && isNodeActive(n)).length;
+        const totalChildren = nodes.filter(n => n.parentId === input.id).length;
+        return { references: references.filter(r => r.count > 0), activeChildren, totalChildren,
+          ...evaluateDelete({ activeChildren, totalChildren, references }) };
+      }),
+    // "Eliminar" = DESATIVAR (isActive=0). O histórico continua a contar.
     delete: protectedProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        const { evaluateDelete, isNodeActive } = await import("../shared/projectTree");
+        const { countProjectReferences } = await import("./projectAdmin");
+        const nodes = await getProjects();
+        const node = nodes.find(n => n.id === input.id);
+        if (!node) throw new TRPCError({ code: "NOT_FOUND", message: "Nó não encontrado." });
+        assertStructuralNodeEditable(node);
+        const check = evaluateDelete({
+          activeChildren: nodes.filter(n => n.parentId === input.id && isNodeActive(n)).length,
+          totalChildren: nodes.filter(n => n.parentId === input.id).length,
+          references: await countProjectReferences(input.id),
+        });
+        if (!check.canDeactivate) throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Não é possível desativar: ${check.reasons.join("; ")}` });
+        await updateProject(input.id, { isActive: 0 } as any);
+        await logActivity({ userId: ctx.user.id, action: "update", entity: "project", entityId: input.id, details: "desativado" });
+        return { success: true };
+      }),
+    // Apagar definitivamente: só super_admin e só sem filhos e sem referências.
+    hardDelete: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "super_admin");
+        const { evaluateDelete, isNodeActive } = await import("../shared/projectTree");
+        const { countProjectReferences } = await import("./projectAdmin");
+        const nodes = await getProjects();
+        const node = nodes.find(n => n.id === input.id);
+        if (!node) throw new TRPCError({ code: "NOT_FOUND", message: "Nó não encontrado." });
+        assertStructuralNodeEditable(node);
+        const references = await countProjectReferences(input.id);
+        const totalChildren = nodes.filter(n => n.parentId === input.id).length;
+        const check = evaluateDelete({
+          activeChildren: nodes.filter(n => n.parentId === input.id && isNodeActive(n)).length,
+          totalChildren,
+          references,
+        });
+        if (!check.canHardDelete) {
+          const used = references.filter(r => r.count > 0).map(r => `${r.label}: ${r.count}`);
+          throw new TRPCError({ code: "PRECONDITION_FAILED",
+            message: `Não é possível apagar definitivamente: ${[totalChildren ? `${totalChildren} sub-nó(s)` : null, ...used].filter(Boolean).join("; ")}. Usa "Desativar".` });
+        }
         await deleteProject(input.id);
         await logActivity({ userId: ctx.user.id, action: "delete", entity: "project", entityId: input.id });
         return { success: true };
@@ -1360,14 +1465,50 @@ export const appRouter = router({
       .input(z.object({ id: z.number(), newParentId: z.number().nullable() }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "admin");
+        const { validatePlacement, siblingNameConflict, wouldCreateCycle, isNodeActive } = await import("../shared/projectTree");
+        const nodes = await getProjects();
+        const node = nodes.find(n => n.id === input.id);
+        if (!node) throw new TRPCError({ code: "NOT_FOUND", message: "Nó não encontrado." });
+        assertStructuralNodeEditable(node);
+        const parent = input.newParentId == null ? null : nodes.find(n => n.id === input.newParentId);
+        const placementError = validatePlacement(node.level, parent, input.newParentId);
+        if (placementError) throw new TRPCError({ code: "BAD_REQUEST", message: placementError });
+        if (parent && !isNodeActive(parent)) throw new TRPCError({ code: "BAD_REQUEST", message: "O destino está inativo." });
+        if (wouldCreateCycle(input.id, input.newParentId, new Map(nodes.map(n => [n.id, n])))) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Não pode mover um nó para dentro de si próprio ou de um descendente." });
+        }
+        if (siblingNameConflict(node.name, input.newParentId, nodes, input.id)) {
+          throw new TRPCError({ code: "CONFLICT", message: `Já existe um nó chamado «${node.name}» no destino.` });
+        }
         await moveProject(input.id, input.newParentId);
         await logActivity({ userId: ctx.user.id, action: "update", entity: "project", entityId: input.id, details: `moved to parent:${input.newParentId}` });
         return { success: true };
       }),
+    // Cobertura PARK_CONFIGS ↔ nós de projeto + reservas sem projeto + diagnóstico
+    // (órfãos, ciclos, nomes duplicados). Só admin com acesso a todas as cidades.
+    parkCoverage: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx.user.role, "admin");
+      requireGlobalCityAccess();
+      const { getParkCoverage } = await import("./projectAdmin");
+      return getParkCoverage();
+    }),
+    createMissingParkNodes: protectedProcedure.mutation(async ({ ctx }) => {
+      requireRole(ctx.user.role, "admin");
+      requireGlobalCityAccess();
+      const { createMissingParkNodes } = await import("./projectAdmin");
+      const result = await createMissingParkNodes();
+      await logActivity({ userId: ctx.user.id, action: "create", entity: "project",
+        details: `nós de parque em falta: ${result.created.length} criados; reservas associadas: ${result.backfill.matched}` });
+      return result;
+    }),
     // Employee assignments
     getEmployees: protectedProcedure
       .input(z.object({ projectId: z.number() }))
-      .query(async ({ input }) => getProjectEmployees(input.projectId)),
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        assertProjectAccess(input.projectId);
+        return getProjectEmployees(input.projectId);
+      }),
     assignEmployee: protectedProcedure
       .input(z.object({ projectId: z.number(), employeeId: z.number(), role: z.string().optional() }))
       .mutation(async ({ ctx, input }) => {
@@ -1386,8 +1527,11 @@ export const appRouter = router({
     costs: protectedProcedure
       .input(z.object({ year: z.number().optional(), month: z.number().optional() }).optional())
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
-        return getProjectCosts(input?.year, input?.month);
+        // Expõe salários: exige ver totais financeiros + âmbito de cidade.
+        await requireFinanceTotals(ctx.user, "backoffice");
+        const rows = await getProjectCosts(input?.year, input?.month);
+        const scoped = scopedProjectIds();
+        return scoped === undefined ? rows : rows.filter(r => scoped.includes(r.id));
       }),
   }),
 
