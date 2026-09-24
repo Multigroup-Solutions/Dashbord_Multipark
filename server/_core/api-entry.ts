@@ -243,6 +243,19 @@ app.get("/api/cron/multipark-sync", async (req, res) => {
   }
 });
 
+// Ligações automáticas funcionário ↔ utilizador ↔ agente Multipark (Fase 1),
+// de hora a hora. Conservador e idempotente — ver server/identityLink.ts.
+app.get("/api/cron/identity-sweep", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const { runIdentitySweep } = await import("../identityLink");
+    const report = await runIdentitySweep();
+    res.json({ ok: report.errors.length === 0, ranAt: new Date().toISOString(), ...report });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: String(err?.message ?? err) });
+  }
+});
+
 app.get("/api/cron/multipark-future", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
   try {

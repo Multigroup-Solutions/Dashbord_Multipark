@@ -199,7 +199,7 @@ export async function importExtrasFromCsv(
     for (const k of keys) seen.set(k, i + 1);
 
     try {
-      await createEmployee({
+      const created = await createEmployee({
         fullName: nome,
         email: pick(row, "email") ?? null,
         phone: pick(row, "telefone") ?? null,
@@ -217,6 +217,15 @@ export async function importExtrasFromCsv(
         isActive: 1,
       } as any);
       report.created++;
+      // Fase 1: toda a ficha nova com email fica com utilizador
+      const newId = Number((created as any)?.[0]?.insertId ?? (created as any)?.insertId);
+      const email = pick(row, "email");
+      if (db && newId && email) {
+        try {
+          const { ensureUserForEmployee } = await import("./identity");
+          await ensureUserForEmployee(db as any, { id: newId, fullName: nome, email, position: "extra", userId: null });
+        } catch { /* a ficha fica criada; o sweep horário tenta outra vez */ }
+      }
     } catch (err: any) {
       report.errors.push({ rowIndex: i + 1, nome, reason: err.message || String(err) });
     }

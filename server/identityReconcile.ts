@@ -781,7 +781,8 @@ export async function autoAttachAgentsByEmail(db: Db, seen: SeenAgent[]): Promis
 
   const [rows] = (await db.execute(sql`
     SELECT e.id, e.fullName, e.email, e.isActive, e.multiparkAgentName, e.multiparkAgentUserId,
-           LOWER(TRIM(COALESCE(NULLIF(e.email, ''), u.email))) AS effectiveEmail
+           LOWER(TRIM(COALESCE(NULLIF(e.email, ''), u.email))) AS effectiveEmail,
+           LOWER(TRIM(e.personalEmail)) AS personalEmail
     FROM employees e LEFT JOIN users u ON u.id = e.userId`)) as any;
   const emps = (rows as any[]).map((r) => ({
     id: Number(r.id),
@@ -790,6 +791,7 @@ export async function autoAttachAgentsByEmail(db: Db, seen: SeenAgent[]): Promis
     agentName: (r.multiparkAgentName ?? null) as string | null,
     agentUserId: ((r.multiparkAgentUserId ?? "") as string).trim() || null,
     effectiveEmail: String(r.effectiveEmail ?? ""),
+    personalEmail: String(r.personalEmail ?? ""),
   }));
   const linkedAgentIds = new Set(emps.map((e) => e.agentUserId).filter(Boolean) as string[]);
   const linkedNames = new Set(emps.map((e) => (e.agentName ?? "").trim().toLowerCase()).filter(Boolean));
@@ -798,7 +800,8 @@ export async function autoAttachAgentsByEmail(db: Db, seen: SeenAgent[]): Promis
   for (const a of byId.values()) {
     if (linkedAgentIds.has(a.agentUserId)) continue;
     if (a.agentName && linkedNames.has(a.agentName.toLowerCase())) continue; // já ligado por nome
-    const matches = emps.filter((e) => e.isActive === 1 && e.effectiveEmail === a.agentEmail);
+    // email de trabalho (ou do utilizador) OU pessoal — Fase 1
+    const matches = emps.filter((e) => e.isActive === 1 && (e.effectiveEmail === a.agentEmail || e.personalEmail === a.agentEmail));
     if (matches.length !== 1) continue;
     const e = matches[0];
     if (e.agentUserId) continue; // já tem outro agente real
