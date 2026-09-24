@@ -417,7 +417,8 @@ app.get("/api/cron/extras-auto", async (req, res) => {
 
 // Leitor de email inbound: lê a caixa reservas@ por IMAP e cria registos nos
 // módulos (Críticas/Reclamações/Perdidos/RH) a partir dos emails reencaminhados
-// para os aliases. Substitui o fluxo Make.com. GitHub Actions chama a cada ~15min.
+// para os aliases. Substitui o fluxo Make.com. O GitHub Actions chama-o de hora
+// a hora (multipark-cron.yml, minuto 7); no Railway corre in-process a cada 15 min.
 app.get("/api/cron/email-inbound", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
   try {

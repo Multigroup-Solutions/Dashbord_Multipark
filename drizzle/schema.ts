@@ -396,6 +396,10 @@ export const complaints = mysqlTable("complaints", {
 	closedById: int(),
 	closedAt: timestamp({ mode: 'string' }),
 	clientNotes: text(),
+	/** Aviso de receção automático enviado (sai no máximo 1×) — migration 0085. */
+	autoAckSentAt: timestamp({ mode: 'string' }),
+	/** Message-ID do último email enviado ao cliente (threading) — migration 0085. */
+	lastOutboundMessageId: varchar({ length: 255 }),
 });
 
 export const dailyDriverHistory = mysqlTable("daily_driver_history", {
@@ -1660,7 +1664,7 @@ export const inboundEmails = mysqlTable("inbound_emails", {
 	gmThreadId: varchar({ length: 64 }),                   // X-GM-THRID (thread do Gmail) p/ agrupar respostas
 	headerRefs: text(),                                    // In-Reply-To + References (message-ids) p/ threading
 	notes: text(),                                         // notas internas do backoffice sobre o candidato/email (migration 0061)
-	status: mysqlEnum(['processed', 'skipped', 'error']).default('processed').notNull(),
+	status: mysqlEnum(['processed', 'skipped', 'error', 'processing']).default('processed').notNull(), // processing = Message-ID reservado, reclamação a ser criada (migration 0085)
 	errorMsg: varchar({ length: 500 }),
 	receivedAt: timestamp({ mode: 'string' }),
 	processedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),

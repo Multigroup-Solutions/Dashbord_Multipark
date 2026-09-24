@@ -27,8 +27,11 @@ import {
   createComplaint,
   createLostFoundItem,
   createTask,
-  createInboundEmail,
-  getInboundEmailByMessageId,
+  claimInboundEmail,
+  updateInboundEmail,
+  deleteInboundEmail,
+  addComplaintPhoto,
+  getComplaintById,
   listExistingInboundMessageIds,
   findEmployeeByEmailOrName,
   getSystemUserId,
@@ -41,6 +44,17 @@ import {
   addComplaintMessage,
   addLostFoundMessage,
 } from "../db";
+import {
+  clientSignalEmail,
+  complaintSlaDeadline,
+  htmlToPlainText,
+  isGenericSenderName,
+  isLivroReclamacoes,
+  parseComplaintCaseTag,
+  COMPLAINT_DEFAULT_SLA_HOURS,
+} from "../complaintEmail";
+
+export type InboundAttachment = { filename?: string; contentType?: string; size?: number; url?: string; key?: string };
 
 const ALIASES: InboundAlias[] = ["criticas", "reclamacoes", "perdidos", "recursos-humanos", "campanhas", "ocorrencias"];
 const RH_TASK_OWNER = "kamilafagundes@multipark.pt"; // tarefa de recrutamento atribuída a (Kamila Fagundes)
@@ -82,8 +96,15 @@ async function routeToModule(
     gmThreadId?: string | null;
     refs?: string[];
   },
-): Promise<{ targetModule: string; targetId?: number; taskId?: number }> {
-  const clientName = parsed.clientName || ctx.fromName || "Desconhecido";
+): Promise<{ targetModule: string; targetId?: number; taskId?: number; isNew?: boolean }> {
+  // O remetente do cabeçalho é muitas vezes o BACKOFFICE que reencaminha
+  // (reservas@/info@ "Multipark") — só conta como cliente se for externo e
+  // com nome próprio; senão os reencaminhamentos misturavam clientes.
+  const senderEmail = clientSignalEmail(ctx.fromEmail);
+  const senderName = senderEmail && !isGenericSenderName(ctx.fromName) ? ctx.fromName?.trim() : undefined;
+  const bodyName = parsed.clientName && !isGenericSenderName(parsed.clientName) ? parsed.clientName.trim() : undefined;
+  const clientName = bodyName || senderName || "Desconhecido";
+  const clientEmail = clientSignalEmail(parsed.clientEmail) || senderEmail;
   let desc = `${ctx.subject}\n\n${ctx.bodyText}`.trim().slice(0, 5000);
 
   if (alias === "criticas") {
@@ -173,12 +194,16 @@ async function routeToModule(
       return { targetModule: "ignored" };
     }
     // Agrupa respostas/emails repetidos na MESMA reclamação. Ordem de sinais:
+    //  0) etiqueta [REC-<id>] no assunto (as nossas respostas levam-na)
     //  1) thread do Gmail / referências (resposta ao mesmo email — o mais fiável)
-    //  2) email do cliente (corpo) ou remetente / matrícula
+    //  2) email do cliente / matrícula / nome — só casos ABERTOS recentes e
+    //     nunca com endereços internos ou nomes genéricos ("Multipark")
     //  3) assunto normalizado (resposta reencaminhada que perdeu o thread)
+    const taggedId = parseComplaintCaseTag(ctx.subject);
     const existing =
+      (taggedId ? await getComplaintById(taggedId) : null) ||
       (await findComplaintByThread({ gmThreadId: ctx.gmThreadId, refs: ctx.refs })) ||
-      (await findComplaintByClientSignals(parsed.clientEmail || ctx.fromEmail, parsed.vehiclePlate, clientName)) ||
+      (await findComplaintByClientSignals(clientEmail, parsed.vehiclePlate, clientName)) ||
       (await findOpenComplaintBySubject(ctx.subject));
     if (existing) {
       await addComplaintMessage({
@@ -196,7 +221,7 @@ async function routeToModule(
       if (!existing.reservationRef) {
         try { await autoLinkComplaintBooking(existing.id); } catch { /* best-effort */ }
       }
-      return { targetModule: "complaint", targetId: existing.id };
+      return { targetModule: "complaint", targetId: existing.id, isNew: false };
     }
     // Auto-anexa a reserva DE QUE O CLIENTE SE QUEIXA: ref explícita do email
     // ganha; senão matrícula/email/telefone/nome ancorados na data de hoje
@@ -204,36 +229,36 @@ async function routeToModule(
     const match = await matchBookingForComplaint({
       reservationRef: parsed.bookingRef,
       vehiclePlate: parsed.vehiclePlate,
-      clientEmail: parsed.clientEmail || ctx.fromEmail,
+      clientEmail,
       clientPhone: parsed.clientPhone,
       clientName,
     });
     const booking = match?.booking ?? null;
     // Livro de Reclamações oficial (nº ROR…): prazo legal de resposta —
-    // entra logo como URGENTE
-    const isLivro = /livro de reclama|ROR\d{6,}/i.test(`${ctx.subject}
-${ctx.bodyText}`);
+    // entra logo como URGENTE. SLA igual ao da criação manual (48h por
+    // omissão do formulário) — não há no código um prazo próprio para o ROR.
+    const isLivro = isLivroReclamacoes(ctx.subject, ctx.bodyText);
     const id = await createComplaint({
       title: (ctx.subject || "Reclamação por email").slice(0, 255),
       description: desc,
       complaintType: "other",
       complaintStatus: "new",
-      complaintPriority: "medium",
-      clientName,
-      clientEmail: parsed.clientEmail ?? (booking?.clientEmail || undefined),
+      complaintPriority: isLivro ? "urgent" : "medium",
+      clientName: clientName.slice(0, 200),
+      clientEmail: clientEmail ?? (booking?.clientEmail || undefined),
       clientPhone: parsed.clientPhone ?? (booking?.clientPhone || undefined),
       vehiclePlate: parsed.vehiclePlate ?? (booking?.licensePlate || undefined),
       reservationRef: parsed.bookingRef ?? (booking?.externalId || undefined),
       reservationStart: booking?.checkIn ?? undefined,
       reservationEnd: booking?.checkOut ?? undefined,
       projectId: booking?.projectId ?? undefined,
-          priority: isLivro ? "urgent" : undefined,
-} as any);
-    return { targetModule: "complaint", targetId: id };
+      slaDeadline: complaintSlaDeadline(COMPLAINT_DEFAULT_SLA_HOURS),
+    } as any);
+    return { targetModule: "complaint", targetId: id, isNew: true };
   }
 
   if (alias === "perdidos") {
-    const existing = await findOpenLostFoundByClient(parsed.clientEmail || ctx.fromEmail, parsed.vehiclePlate);
+    const existing = await findOpenLostFoundByClient(clientEmail, parsed.vehiclePlate);
     if (existing) {
       await addLostFoundMessage({
         itemId: existing.id,
@@ -253,14 +278,14 @@ ${ctx.bodyText}`);
     const lfMatch = await matchBookingForComplaint({
       reservationRef: parsed.bookingRef,
       vehiclePlate: parsed.vehiclePlate,
-      clientEmail: parsed.clientEmail || ctx.fromEmail,
+      clientEmail: clientEmail,
       clientPhone: parsed.clientPhone,
       clientName,
     });
     const lfBooking = lfMatch?.booking ?? null;
     const id = await createLostFoundItem({
       clientName,
-      clientEmail: parsed.clientEmail ?? (lfBooking?.clientEmail || undefined),
+      clientEmail: clientEmail ?? (lfBooking?.clientEmail || undefined),
       clientPhone: parsed.clientPhone ?? (lfBooking?.clientPhone || undefined),
       vehiclePlate: parsed.vehiclePlate ?? (lfBooking?.licensePlate || undefined),
       bookingRef: parsed.bookingRef ?? (lfBooking?.externalId || undefined),
@@ -416,6 +441,59 @@ ${ctx.bodyText}`);
   return { targetModule: "rh", taskId };
 }
 
+/**
+ * Pós-processamento de um email ligado a uma reclamação (best-effort, nunca
+ * lança):
+ *  - anexos: imagens → complaint_photos (aparecem na aba Fotos); os restantes
+ *    ficam em inbound_emails.attachmentsJson e aparecem como links no detalhe;
+ *  - reclamação NOVA: alerta in-app (notifyComplaintCreated) + aviso de
+ *    receção automático ao cliente (1×, [REC-<id>], COMPLAINT_AUTO_ACK=off
+ *    desliga).
+ */
+async function afterComplaintEmail(
+  complaintId: number,
+  ctx: { isNew: boolean; attachments: InboundAttachment[]; messageId: string; fromEmail?: string },
+): Promise<void> {
+  try {
+    const systemUser = await getSystemUserId().catch(() => undefined);
+    for (const a of ctx.attachments) {
+      if (!a.url || !String(a.contentType || "").toLowerCase().startsWith("image/")) continue;
+      if (a.url.length > 500) continue;
+      await addComplaintPhoto({
+        complaintId,
+        url: a.url,
+        fileKey: (a.key || a.url).slice(0, 500),
+        label: `Email: ${a.filename || "imagem"}`.slice(0, 100),
+        uploadedById: systemUser ?? null,
+      } as any);
+    }
+  } catch (err) {
+    console.warn("[EmailInbound] cópia de anexos para a reclamação falhou:", err);
+  }
+  if (!ctx.isNew) return;
+  try {
+    const { notifyComplaintCreated } = await import("../complaintsExtended");
+    await notifyComplaintCreated(complaintId);
+  } catch (err) {
+    console.warn("[EmailInbound] notificação de reclamação falhou:", err);
+  }
+  try {
+    const c = await getComplaintById(complaintId);
+    // In-Reply-To só quando o email veio DIRETAMENTE do cliente (num
+    // reencaminhamento o Message-ID é do backoffice, não do cliente).
+    const direct = !!c?.clientEmail && !!ctx.fromEmail && c.clientEmail.toLowerCase() === ctx.fromEmail.toLowerCase();
+    const { sendComplaintAutoAck } = await import("../complaintsExtended");
+    const r = await sendComplaintAutoAck(complaintId, {
+      inReplyTo: direct && !ctx.messageId.startsWith("uid:") ? ctx.messageId : null,
+    });
+    if (!r.sent && r.reason && r.reason !== "sem email externo do cliente") {
+      console.log(`[EmailInbound] aviso de receção #${complaintId} não enviado: ${r.reason}`);
+    }
+  } catch (err) {
+    console.warn("[EmailInbound] aviso de receção falhou:", err);
+  }
+}
+
 export async function runEmailInboundSync(opts?: { sinceDays?: number; deadlineAt?: number }): Promise<EmailSyncResult> {
   const result: EmailSyncResult = { configured: false, scanned: 0, created: 0, skipped: 0, errors: [], byAlias: {}, partial: false };
   const cfg = imapConfig();
@@ -492,83 +570,109 @@ export async function runEmailInboundSync(opts?: { sinceDays?: number; deadlineA
             .filter(Boolean);
           const headerRefs = refs.length ? refs.join(" ").slice(0, 4000) : null;
 
-          // dedup
-          const existing = await getInboundEmailByMessageId(messageId);
-          if (existing) { result.skipped++; continue; }
-
           const fromAddr = mail.from?.value?.[0];
           const fromName = fromAddr?.name || undefined;
           const fromEmail = fromAddr?.address || undefined;
           const subject = mail.subject || "";
+          const receivedAt = mail.date ? new Date(mail.date).toISOString().slice(0, 19).replace("T", " ") : null;
 
-          // Relatório diário de campanhas por email: DESLIGADO (Jorge, 16 set
-          // 2026). A fonte única do gasto é a Google Ads API; o email fica só
-          // registado, sem tocar em campaign_daily_stats.
-          if (alias === "campanhas") {
-            await createInboundEmail({
-              messageId, alias, fromName, fromEmail, subject,
-              bodyText: "Ingestão por email desligada — o gasto vem da Google Ads API.",
-              targetModule: "campaigns",
-              status: "skipped",
-              receivedAt: mail.date ? new Date(mail.date).toISOString().slice(0, 19).replace("T", " ") : null,
+          // Dedup ATÓMICO: reserva o Message-ID (índice UNIQUE) ANTES de criar
+          // o registo de destino. Duas corridas em paralelo (cron + botão)
+          // nunca criam a mesma reclamação duas vezes — a 2ª leva duplicado.
+          const claimId = await claimInboundEmail({
+            messageId, alias, fromName, fromEmail, subject, gmThreadId, headerRefs, receivedAt,
+          } as any);
+          if (!claimId) { result.skipped++; continue; }
+
+          let routedOk = false;
+          try {
+            // Relatório diário de campanhas por email: DESLIGADO (Jorge, 16 set
+            // 2026). A fonte única do gasto é a Google Ads API; o email fica só
+            // registado, sem tocar em campaign_daily_stats.
+            if (alias === "campanhas") {
+              await updateInboundEmail(claimId, {
+                bodyText: "Ingestão por email desligada — o gasto vem da Google Ads API.",
+                targetModule: "campaigns",
+                status: "skipped",
+                processedAt: now(),
+              } as any);
+              result.skipped++;
+              continue;
+            }
+
+            // ignora ruído de sistema (confirmações de encaminhamento, etc.)
+            if (isSystemEmail(fromEmail, subject)) {
+              await updateInboundEmail(claimId, { status: "skipped", processedAt: now() } as any);
+              result.skipped++;
+              continue;
+            }
+
+            // HTML → texto com html-to-text (mantém quebras de linha para o
+            // parsing "Etiqueta: valor", descodifica entidades, sem <style>).
+            const htmlText = typeof mail.html === "string" ? htmlToPlainText(mail.html) : "";
+            const bodyText = (mail.text || htmlText || "").slice(0, 20000);
+            const parsed = parseInboundBody(bodyText);
+            // Guarda os ficheiros no storage (antes só se registavam os nomes e o
+            // conteúdo era deitado fora — impossível abrir um CV no backoffice).
+            // Best-effort por anexo: falha de upload não perde o email.
+            const attachments: InboundAttachment[] = [];
+            for (const a of mail.attachments || []) {
+              // imagens inline de assinatura/logótipo (cid:) não são anexos do cliente
+              if ((a as any).related && String(a.contentType || "").startsWith("image/") && (a.size ?? 0) < 20 * 1024) continue;
+              const meta: InboundAttachment = {
+                filename: a.filename, contentType: a.contentType, size: a.size,
+              };
+              if (a.content && a.size && a.size <= 15 * 1024 * 1024) {
+                try {
+                  const { storagePut } = await import("../storage");
+                  const safe = (a.filename || "anexo").replace(/[^\w.\-]+/g, "_").slice(0, 120);
+                  const { url, key } = await storagePut(`inbound/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safe}`, a.content, a.contentType || "application/octet-stream");
+                  meta.url = url;
+                  meta.key = key;
+                } catch (err: any) {
+                  console.warn("[EmailInbound] upload de anexo falhou:", String(err?.message ?? err).slice(0, 160));
+                }
+              }
+              attachments.push(meta);
+            }
+            const attachmentsJson = attachments.length ? JSON.stringify(attachments) : null;
+
+            const routed = await routeToModule(alias, parsed, {
+              subject, bodyText, fromName, fromEmail, messageId, gmThreadId, refs,
+            });
+            routedOk = true;
+
+            await updateInboundEmail(claimId, {
+              clientName: parsed.clientName, clientEmail: parsed.clientEmail,
+              clientPhone: parsed.clientPhone, vehiclePlate: parsed.vehiclePlate,
+              bookingRef: parsed.bookingRef,
+              bodyText,
+              attachmentsJson,
+              targetModule: routed.targetModule, targetId: routed.targetId ?? null,
+              taskId: routed.taskId ?? null,
+              status: "processed",
               processedAt: now(),
             } as any);
-            result.skipped++;
-            continue;
-          }
 
-          // ignora ruído de sistema (confirmações de encaminhamento, etc.)
-          if (isSystemEmail(fromEmail, subject)) {
-            await createInboundEmail({
-              messageId, alias, fromName, fromEmail, subject,
-              status: "skipped", processedAt: now(),
-            } as any);
-            result.skipped++;
-            continue;
-          }
-
-          const htmlText = typeof mail.html === "string" ? mail.html.replace(/<[^>]+>/g, " ") : "";
-          const bodyText = (mail.text || htmlText || "").slice(0, 20000);
-          const parsed = parseInboundBody(bodyText);
-          // Guarda os ficheiros no storage (antes só se registavam os nomes e o
-          // conteúdo era deitado fora — impossível abrir um CV no backoffice).
-          // Best-effort por anexo: falha de upload não perde o email.
-          const attachments: Array<{ filename?: string; contentType?: string; size?: number; url?: string }> = [];
-          for (const a of mail.attachments || []) {
-            const meta: { filename?: string; contentType?: string; size?: number; url?: string } = {
-              filename: a.filename, contentType: a.contentType, size: a.size,
-            };
-            if (a.content && a.size && a.size <= 15 * 1024 * 1024) {
-              try {
-                const { storagePut } = await import("../storage");
-                const safe = (a.filename || "anexo").replace(/[^\w.\-]+/g, "_").slice(0, 120);
-                const { url } = await storagePut(`inbound/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safe}`, a.content, a.contentType || "application/octet-stream");
-                meta.url = url;
-              } catch (err: any) {
-                console.warn("[EmailInbound] upload de anexo falhou:", String(err?.message ?? err).slice(0, 160));
-              }
+            if (routed.targetModule === "complaint" && routed.targetId) {
+              await afterComplaintEmail(routed.targetId, {
+                isNew: !!routed.isNew,
+                attachments,
+                messageId,
+                fromEmail,
+              });
             }
-            attachments.push(meta);
+          } catch (e: any) {
+            if (!routedOk) {
+              // Falhou ANTES de criar o registo: liberta a reserva para a
+              // próxima corrida tentar de novo.
+              await deleteInboundEmail(claimId).catch(() => {});
+            } else {
+              // O registo já existe — nunca libertar (recriava-o); fica em erro.
+              await updateInboundEmail(claimId, { status: "error", errorMsg: String(e?.message ?? e).slice(0, 500), processedAt: now() } as any).catch(() => {});
+            }
+            throw e;
           }
-
-          const routed = await routeToModule(alias, parsed, {
-            subject, bodyText, fromName, fromEmail, messageId, gmThreadId, refs,
-          });
-
-          await createInboundEmail({
-            messageId, alias, fromName, fromEmail,
-            clientName: parsed.clientName, clientEmail: parsed.clientEmail,
-            clientPhone: parsed.clientPhone, vehiclePlate: parsed.vehiclePlate,
-            bookingRef: parsed.bookingRef,
-            subject, bodyText,
-            attachmentsJson: attachments.length ? JSON.stringify(attachments) : null,
-            targetModule: routed.targetModule, targetId: routed.targetId ?? null,
-            taskId: routed.taskId ?? null,
-            gmThreadId, headerRefs,
-            status: "processed",
-            receivedAt: mail.date ? new Date(mail.date).toISOString().slice(0, 19).replace("T", " ") : null,
-            processedAt: now(),
-          } as any);
 
           result.created++;
           result.byAlias[alias] = (result.byAlias[alias] || 0) + 1;
@@ -592,10 +696,12 @@ function now(): string {
 }
 
 /**
- * Scheduler in-process para o servidor Railway: corre o sync de emails a cada
- * 15 minutos. Substitui o cron do GitHub Actions (workflow removido a 14/jul,
- * que deixou o email-inbound só com botões manuais). Self-skip quando o IMAP
- * não está configurado — seguro arrancar em qualquer ambiente.
+ * Scheduler in-process (só no servidor Node/Railway — `server/_core/index.ts`):
+ * corre o sync de emails a cada 15 minutos. No Vercel não há processo
+ * persistente: aí o sync corre pelo endpoint /api/cron/email-inbound, chamado
+ * DE HORA A HORA pelo GitHub Actions (.github/workflows/multipark-cron.yml),
+ * mais o botão "Sincronizar emails". Self-skip quando o IMAP não está
+ * configurado — seguro arrancar em qualquer ambiente.
  */
 export function startEmailInboundScheduler() {
   const INTERVAL_MS = 15 * 60 * 1000;

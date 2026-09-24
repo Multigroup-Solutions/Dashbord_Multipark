@@ -145,6 +145,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0082").then(m => ({ s: m.MIGRATION_0082_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0082 })),
       import("./migrations/migration_0083").then(m => ({ s: m.MIGRATION_0083_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0083 })),
       import("./migrations/migration_0084").then(m => ({ s: m.MIGRATION_0084_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0084 })),
+      import("./migrations/migration_0085").then(m => ({ s: m.MIGRATION_0085_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0085 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -7735,10 +7736,112 @@ export async function listExistingInboundMessageIds(messageIds: string[]): Promi
   const db = await getDb();
   if (!db || messageIds.length === 0) return new Set();
   const rows = await db
-    .select({ m: inboundEmails.messageId })
+    .select({ m: inboundEmails.messageId, status: inboundEmails.status, processedAt: inboundEmails.processedAt })
     .from(inboundEmails)
     .where(inArray(inboundEmails.messageId, messageIds));
-  return new Set(rows.map(r => r.m));
+  // Reservas 'processing' ABANDONADAS (corrida morta a meio) não contam como
+  // conhecidas — o claimInboundEmail retoma-as.
+  const stale = inboundStaleCutoff();
+  return new Set(rows.filter(r => !(r.status === "processing" && (r.processedAt ?? "") < stale)).map(r => r.m));
+}
+
+/** Reserva 'processing' mais antiga do que isto é considerada abandonada. */
+const INBOUND_CLAIM_STALE_MS = 15 * 60 * 1000;
+function inboundStaleCutoff(): string {
+  return new Date(Date.now() - INBOUND_CLAIM_STALE_MS).toISOString().slice(0, 19).replace("T", " ");
+}
+
+/**
+ * RESERVA o Message-ID antes de criar o registo de destino (reclamação…):
+ * insere a linha em inbound_emails com status 'processing' e deixa o índice
+ * UNIQUE decidir. Duas corridas em paralelo (cron + botão manual) nunca criam
+ * o mesmo caso duas vezes. Devolve o id da linha reservada, ou null se o email
+ * já existe (duplicado → ignorar). Uma reserva 'processing' abandonada há mais
+ * de 15 min (corrida morta a meio) é retomada atomicamente.
+ */
+export async function claimInboundEmail(data: InsertInboundEmail): Promise<number | null> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const nowStr = new Date().toISOString().slice(0, 19).replace("T", " ");
+  try {
+    return await createInboundEmail({ ...data, status: "processing", processedAt: nowStr } as any);
+  } catch (err: any) {
+    const code = err?.code ?? err?.cause?.code;
+    if (code !== "ER_DUP_ENTRY") throw err;
+  }
+  const [res] = await db.update(inboundEmails)
+    .set({ processedAt: nowStr })
+    .where(and(
+      eq(inboundEmails.messageId, data.messageId),
+      eq(inboundEmails.status, "processing"),
+      lt(inboundEmails.processedAt, inboundStaleCutoff()),
+    )) as any;
+  if (!res?.affectedRows) return null;
+  const row = await getInboundEmailByMessageId(data.messageId);
+  return row?.id ?? null;
+}
+
+export async function updateInboundEmail(id: number, data: Partial<InsertInboundEmail>) {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const clamp = (v: unknown, n: number) => (typeof v === "string" ? v.slice(0, n) : v);
+  const safe: Partial<InsertInboundEmail> = { ...data };
+  for (const [k, n] of [["fromName", 255], ["fromEmail", 320], ["clientName", 255], ["clientEmail", 320], ["clientPhone", 50], ["vehiclePlate", 20], ["bookingRef", 100], ["subject", 500], ["errorMsg", 500]] as const) {
+    if (k in safe) (safe as any)[k] = clamp((safe as any)[k], n);
+  }
+  await db.update(inboundEmails).set(safe).where(eq(inboundEmails.id, id));
+}
+
+/** Liberta uma reserva (falha a criar o registo → a próxima corrida tenta de novo). */
+export async function deleteInboundEmail(id: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(inboundEmails).where(eq(inboundEmails.id, id));
+}
+
+/** Message-ID do último email RECEBIDO de uma reclamação (threading das respostas). */
+export async function getLastInboundMessageIdForComplaint(complaintId: number): Promise<string | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select({ m: inboundEmails.messageId })
+    .from(inboundEmails)
+    .where(and(eq(inboundEmails.targetModule, "complaint"), eq(inboundEmails.targetId, complaintId)))
+    .orderBy(desc(inboundEmails.id))
+    .limit(1);
+  const m = rows[0]?.m;
+  return m && !m.startsWith("uid:") ? m : null;
+}
+
+/**
+ * Anexos (não-imagem) dos emails ligados a uma reclamação — as imagens são
+ * copiadas para complaint_photos na ingestão; o resto aparece como links.
+ */
+export async function listComplaintEmailAttachments(complaintId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({ id: inboundEmails.id, subject: inboundEmails.subject, receivedAt: inboundEmails.receivedAt, attachmentsJson: inboundEmails.attachmentsJson })
+    .from(inboundEmails)
+    .where(and(
+      eq(inboundEmails.targetModule, "complaint"),
+      eq(inboundEmails.targetId, complaintId),
+      isNotNull(inboundEmails.attachmentsJson),
+    ))
+    .orderBy(desc(inboundEmails.id))
+    .limit(50);
+  const out: Array<{ emailId: number; subject: string | null; receivedAt: string | null; filename: string; contentType: string | null; size: number | null; url: string | null; key: string | null }> = [];
+  for (const r of rows) {
+    let list: any[] = [];
+    try { list = JSON.parse(r.attachmentsJson || "[]"); } catch { list = []; }
+    for (const a of Array.isArray(list) ? list : []) {
+      if (String(a?.contentType ?? "").toLowerCase().startsWith("image/")) continue;
+      out.push({
+        emailId: r.id, subject: r.subject, receivedAt: r.receivedAt,
+        filename: String(a?.filename || "anexo"), contentType: a?.contentType ?? null,
+        size: typeof a?.size === "number" ? a.size : null, url: a?.url ?? null, key: a?.key ?? null,
+      });
+    }
+  }
+  return out;
 }
 
 export async function getInboundEmailByMessageId(messageId: string) {
@@ -7838,11 +7941,11 @@ export async function assignTaskToEmployee(taskId: number, employeeId: number) {
 // Procura uma reclamação ABERTA do mesmo cliente (email ou matrícula), para
 // agrupar emails repetidos/respostas em vez de criar reclamações novas.
 /**
- * Agrupamento AGRESSIVO de reclamações por cliente: email OU matrícula OU nome
- * (nome exato, ≥6 chars, para evitar falsos positivos). Ao contrário do
- * findOpenComplaintByClient, também devolve reclamações resolvidas/fechadas —
- * o caller reabre-as. Preferência: aberta > mais recente. Objetivo: 10 emails
- * do mesmo cliente = 1 reclamação com 10 mensagens, nunca 10 reclamações.
+ * Agrupamento de reclamações por cliente: email OU matrícula (normalizada) OU
+ * nome (exato, ≥6 chars). Só casos ABERTOS (não resolvidos/fechados) com
+ * atividade nos últimos 60 dias — um cliente que volta meses depois com outro
+ * problema abre um caso novo. Ignora remetentes internos e nomes genéricos.
+ * Objetivo: 10 emails do mesmo cliente = 1 reclamação com 10 mensagens.
  */
 export async function findComplaintByClientSignals(
   clientEmail?: string | null,
@@ -7851,21 +7954,29 @@ export async function findComplaintByClientSignals(
 ) {
   const db = await getDb();
   if (!db) return null;
+  const { clientSignalEmail, clientSignalName, normalizePlate, COMPLAINT_SIGNALS_WINDOW_DAYS } = await import("./complaintEmail");
   const conds: any[] = [];
-  if (clientEmail) conds.push(eq(complaints.clientEmail, clientEmail));
-  if (vehiclePlate) conds.push(eq(complaints.vehiclePlate, vehiclePlate));
-  const name = clientName?.trim();
-  if (name && name.length >= 6 && name.toLowerCase() !== "desconhecido") {
-    conds.push(eq(complaints.clientName, name));
+  // Endereços internos (multipark.pt, …) e nomes genéricos ("Multipark") são
+  // do BACKOFFICE que reencaminha, não do cliente — nunca agrupam.
+  const email = clientSignalEmail(clientEmail)?.toLowerCase();
+  if (email) conds.push(sql`LOWER(${complaints.clientEmail}) = ${email}`);
+  const plate = normalizePlate(vehiclePlate);
+  if (plate.length >= 4) {
+    conds.push(sql`UPPER(REPLACE(REPLACE(REPLACE(${complaints.vehiclePlate}, ' ', ''), '-', ''), '.', '')) = ${plate}`);
   }
+  const name = clientSignalName(clientName);
+  if (name) conds.push(eq(complaints.clientName, name));
   if (!conds.length) return null;
+  const since = new Date(Date.now() - COMPLAINT_SIGNALS_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace("T", " ");
   const rows = await db.select().from(complaints)
-    .where(or(...conds))
+    .where(and(
+      notInArray(complaints.complaintStatus, ["resolved", "closed"]),
+      or(gte(complaints.updatedAt, since), gte(complaints.createdAt, since)),
+      or(...conds),
+    ))
     .orderBy(desc(complaints.createdAt))
-    .limit(5);
-  if (!rows.length) return null;
-  const open = rows.find(r => r.complaintStatus !== "resolved" && r.complaintStatus !== "closed");
-  return open ?? rows[0];
+    .limit(1);
+  return rows[0] ?? null;
 }
 
 /**
@@ -8058,6 +8169,15 @@ export async function findComplaintByThread(opts: { gmThreadId?: string | null; 
 
   const refs = (opts.refs || []).map(r => r.trim()).filter(Boolean);
   if (refs.length) {
+    // Resposta direta a um email NOSSO (Message-ID guardado no envio).
+    const outRows = await db.select({ id: complaints.id }).from(complaints)
+      .where(inArray(complaints.lastOutboundMessageId, refs.slice(0, 100)))
+      .orderBy(desc(complaints.id))
+      .limit(1);
+    if (outRows[0]) {
+      const c = await getComplaintById(outRows[0].id);
+      if (c) return c;
+    }
     const refSet = new Set(refs);
     const recent = await db.select().from(inboundEmails)
       .where(and(eq(inboundEmails.targetModule, "complaint"), isNotNull(inboundEmails.targetId)))
