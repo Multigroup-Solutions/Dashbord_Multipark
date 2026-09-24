@@ -217,6 +217,8 @@ export const SETTINGS = {
     description: "Sobrepõe a tabela de preços do código (server/_core/ai/pricing.ts) para calcular o custo registado. JSON: {\"<modelo>\": {\"input\": 0.22, \"output\": 1.3, \"cached\": 0.02}}. Vazio = tabela do código.",
     schema: aiPriceOverridesSchema,
     defaultValue: {},
+    wiring: "live",
+  }),
   "extras.carsPerHourPerDriver": def({
     key: "extras.carsPerHourPerDriver",
     group: "extras",
