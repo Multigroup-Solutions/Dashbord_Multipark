@@ -8,6 +8,8 @@ A página **Suporte → Clientes** (`/clientes`) reúne as reservas sincronizada
 
 Há pesquisa por nome, email, telefone ou matrícula, paginação e filtros de recorrência, primeira estadia, inatividade e identidade a validar. O período do CRM filtra a última visita; as métricas mantêm todo o histórico autorizado. O gráfico mostra o mês atual e os 11 anteriores. As reservas e o cartão de histórico existente têm atalhos para o CRM.
 
+O aspeto segue o design existente da dashboard: cores e tipografia do tema global, cartões claros, azul Multipark e os componentes partilhados `Card`, `Button`, `Input`, `Select` e `Tabs`. O CSS específico limita-se à composição da lista/ficha e aos elementos do histórico; não redefine o tema das outras páginas.
+
 O CRM consulta as reservas existentes: acompanha os dados da sincronização Multipark nas novas consultas, ao regressar à janela ou ao atualizar. Não introduz uma segunda importação nem uma cópia de reservas para manter manualmente. Não substitui nem corrige o processo de sincronização da origem.
 
 ## Como experimentar

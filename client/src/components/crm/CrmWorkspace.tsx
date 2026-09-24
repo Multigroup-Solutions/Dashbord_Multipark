@@ -19,6 +19,17 @@ import {
   type CrmFilters,
   type CrmList,
 } from "@shared/crm";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import "./crm.css";
 
 export const crmDate = (value?: string | null) =>
@@ -78,6 +89,32 @@ interface Props {
   demo?: boolean;
 }
 
+function CrmSelect({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: [string, string][];
+}) {
+  return (
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger aria-label={label} className="crm-select bg-card">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map(([key, text]) => (
+          <SelectItem key={key} value={key}>
+            {text}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
 export function CrmWorkspace(p: Props) {
   const [tab, setTab] = useState<"reservas" | "contactos" | "interacoes">(
     "reservas"
@@ -119,37 +156,54 @@ export function CrmWorkspace(p: Props) {
       )}
       <header className="crm-heading">
         <div>
-          <div className="crm-eyebrow">MULTIPARK / RELAÇÃO COM O CLIENTE</div>
-          <h1>Clientes que voltam.</h1>
-          <p>Uma visão do histórico, da frequência e de cada próxima visita.</p>
+          <h1>Clientes</h1>
+          <p>
+            Histórico de reservas, frequência e próximas visitas dos clientes.
+          </p>
         </div>
-        <button className="crm-button" onClick={p.onRetry} disabled={p.loading}>
+        <Button
+          variant="outline"
+          size="sm"
+          className="crm-button"
+          onClick={p.onRetry}
+          disabled={p.loading}
+        >
           <RefreshCw size={15} className={p.loading ? "crm-spin" : ""} />{" "}
           Atualizar
-        </button>
+        </Button>
       </header>
       <div className="crm-overview">
-        <div>
-          <span>Contactos no âmbito selecionado</span>
-          <strong>
-            {p.list?.overview.contacts.toLocaleString("pt-PT") ?? "—"}
-          </strong>
-          <small>Agrupados pelo email da reserva</small>
-        </div>
-        <div>
-          <span>Clientes recorrentes</span>
-          <strong>
-            {p.list?.overview.returning.toLocaleString("pt-PT") ?? "—"}
-          </strong>
-          <small>Duas ou mais estadias concluídas</small>
-        </div>
-        <div>
-          <span>Identidades a validar</span>
-          <strong>
-            {p.list?.overview.review.toLocaleString("pt-PT") ?? "—"}
-          </strong>
-          <small>Vários nomes ou nome em falta</small>
-        </div>
+        {[
+          {
+            label: "Contactos no âmbito selecionado",
+            value: p.list?.overview.contacts,
+            note: "Agrupados pelo email da reserva",
+            icon: Users,
+          },
+          {
+            label: "Clientes recorrentes",
+            value: p.list?.overview.returning,
+            note: "Duas ou mais estadias concluídas",
+            icon: RefreshCw,
+          },
+          {
+            label: "Identidades a validar",
+            value: p.list?.overview.review,
+            note: "Vários nomes ou nome em falta",
+            icon: CircleAlert,
+          },
+        ].map(stat => (
+          <Card key={stat.label} className="gap-2 p-4">
+            <div className="flex items-center gap-2 text-muted-foreground text-xs">
+              <stat.icon className="size-4 text-primary" />
+              <span>{stat.label}</span>
+            </div>
+            <strong className="text-2xl font-bold tabular-nums">
+              {stat.value?.toLocaleString("pt-PT") ?? "—"}
+            </strong>
+            <small className="text-xs text-muted-foreground">{stat.note}</small>
+          </Card>
+        ))}
       </div>
       {!!p.list?.overview.missingEmailBookings && (
         <div className="crm-notice">
@@ -163,72 +217,69 @@ export function CrmWorkspace(p: Props) {
       <div className="crm-filters">
         <label className="crm-search">
           <Search size={17} />
-          <input
+          <Input
             aria-label="Pesquisar clientes"
             placeholder="Nome, email, telefone ou matrícula"
             value={p.filters.search}
             onChange={e => change({ search: e.target.value })}
           />
           {p.filters.search && (
-            <button
+            <Button
+              variant="ghost"
+              size="icon-sm"
               aria-label="Limpar pesquisa"
               onClick={() => change({ search: "" })}
             >
               <X size={15} />
-            </button>
+            </Button>
           )}
         </label>
-        <label>
-          <span className="crm-sr">Segmento</span>
-          <select
-            aria-label="Segmento"
-            value={p.filters.segment}
-            onChange={e =>
-              change({ segment: e.target.value as CrmFilters["segment"] })
-            }
-          >
-            {Object.entries(CRM_SEGMENTS).map(([v, label]) => (
-              <option key={v} value={v}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <select
-          aria-label="Período de última visita"
-          value={p.filters.recentDays ?? ""}
-          onChange={e =>
-            change({
-              recentDays: e.target.value ? Number(e.target.value) : undefined,
-            })
+        <CrmSelect
+          label="Segmento"
+          value={p.filters.segment}
+          onChange={value =>
+            change({ segment: value as CrmFilters["segment"] })
           }
-        >
-          <option value="">Todo o histórico</option>
-          <option value="365">Visita nos últimos 12 meses</option>
-          <option value="90">Visita nos últimos 90 dias</option>
-        </select>
-        <select
-          aria-label="Ordenar clientes"
+          options={Object.entries(CRM_SEGMENTS)}
+        />
+        <CrmSelect
+          label="Período de última visita"
+          value={String(p.filters.recentDays ?? "all")}
+          onChange={value =>
+            change({ recentDays: value === "all" ? undefined : Number(value) })
+          }
+          options={[
+            ["all", "Todo o histórico"],
+            ["365", "Visita nos últimos 12 meses"],
+            ["90", "Visita nos últimos 90 dias"],
+          ]}
+        />
+        <CrmSelect
+          label="Ordenar clientes"
           value={p.filters.sort}
-          onChange={e => change({ sort: e.target.value as CrmFilters["sort"] })}
-        >
-          <option value="recent">Visita mais recente</option>
-          <option value="visits">Mais estadias</option>
-          {money && <option value="value">Maior valor em EUR</option>}
-        </select>
+          onChange={value => change({ sort: value as CrmFilters["sort"] })}
+          options={[
+            ["recent", "Visita mais recente"],
+            ["visits", "Mais estadias"],
+            ...(money
+              ? [["value", "Maior valor em EUR"] as [string, string]]
+              : []),
+          ]}
+        />
         {p.filters.segment === "inactive" && (
-          <label className="crm-days">
-            Sem visita há{" "}
-            <select
-              aria-label="Dias sem visita"
-              value={p.filters.inactiveDays}
-              onChange={e => change({ inactiveDays: Number(e.target.value) })}
-            >
-              <option value="90">90 dias</option>
-              <option value="180">180 dias</option>
-              <option value="365">365 dias</option>
-            </select>
-          </label>
+          <div className="crm-days">
+            <span>Sem visita há</span>
+            <CrmSelect
+              label="Dias sem visita"
+              value={String(p.filters.inactiveDays)}
+              onChange={value => change({ inactiveDays: Number(value) })}
+              options={[
+                ["90", "90 dias"],
+                ["180", "180 dias"],
+                ["365", "365 dias"],
+              ]}
+            />
+          </div>
         )}
       </div>
       {p.error ? (
@@ -236,9 +287,14 @@ export function CrmWorkspace(p: Props) {
           <CircleAlert />
           <h2>Não foi possível carregar os clientes</h2>
           <p>{p.error}</p>
-          <button className="crm-button" onClick={p.onRetry}>
+          <Button
+            variant="outline"
+            size="sm"
+            className="crm-button"
+            onClick={p.onRetry}
+          >
             Tentar novamente
-          </button>
+          </Button>
         </div>
       ) : (
         <div className={`crm-layout ${p.selected ? "crm-has-selection" : ""}`}>
@@ -300,23 +356,27 @@ export function CrmWorkspace(p: Props) {
                 </button>
               ))}
             <div className="crm-pagination">
-              <button
+              <Button
+                variant="ghost"
+                size="icon-sm"
                 aria-label="Página anterior de clientes"
                 disabled={p.filters.page <= 1 || p.loading}
                 onClick={() => p.onFilters({ page: p.filters.page - 1 })}
               >
                 <ArrowLeft size={16} />
-              </button>
+              </Button>
               <span>
                 {p.filters.page} / {totalPages}
               </span>
-              <button
+              <Button
+                variant="ghost"
+                size="icon-sm"
                 aria-label="Página seguinte de clientes"
                 disabled={p.filters.page >= totalPages || p.loading}
                 onClick={() => p.onFilters({ page: p.filters.page + 1 })}
               >
                 <ArrowRight size={16} />
-              </button>
+              </Button>
             </div>
           </aside>
           <article
@@ -329,12 +389,8 @@ export function CrmWorkspace(p: Props) {
                 <div className="crm-welcome-icon">
                   <Users size={30} />
                 </div>
-                <div className="crm-eyebrow">CADA VISITA TEM UMA HISTÓRIA</div>
-                <h2>
-                  Conhece quem está
-                  <br />
-                  do outro lado da reserva.
-                </h2>
+                <div className="crm-eyebrow">HISTÓRICO DO CLIENTE</div>
+                <h2>Seleciona um cliente</h2>
                 <p>
                   Escolhe um cliente para ver as suas visitas, próximas reservas
                   e interações com a equipa.
@@ -347,12 +403,14 @@ export function CrmWorkspace(p: Props) {
               </div>
             ) : (
               <>
-                <button
+                <Button
+                  variant="ghost"
+                  size="sm"
                   className="crm-back"
                   onClick={() => p.onSelect(undefined)}
                 >
                   <ArrowLeft size={15} /> Voltar à lista
-                </button>
+                </Button>
                 {p.detailLoading ? (
                   <div className="crm-loading" role="status">
                     A abrir a ficha…
@@ -361,9 +419,14 @@ export function CrmWorkspace(p: Props) {
                   <div className="crm-empty" role="alert">
                     <h2>Não foi possível abrir a ficha</h2>
                     <p>{p.detailError}</p>
-                    <button className="crm-button" onClick={p.onDetailRetry}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="crm-button"
+                      onClick={p.onDetailRetry}
+                    >
                       Tentar novamente
-                    </button>
+                    </Button>
                   </div>
                 ) : (
                   c &&
@@ -481,203 +544,178 @@ export function CrmWorkspace(p: Props) {
                           ))}
                         </div>
                       </div>
-                      <div
-                        className="crm-tabs"
-                        role="tablist"
-                        aria-label="Detalhes do cliente"
+                      <Tabs
+                        value={tab}
+                        onValueChange={value => setTab(value as typeof tab)}
                       >
-                        {(["reservas", "contactos", "interacoes"] as const).map(
-                          t => (
-                            <button
-                              id={`crm-tab-${t}`}
-                              role="tab"
-                              tabIndex={tab === t ? 0 : -1}
-                              aria-selected={tab === t}
-                              aria-controls="crm-tab-content"
-                              key={t}
-                              className={tab === t ? "active" : ""}
-                              onClick={() => setTab(t)}
-                              onKeyDown={event => {
-                                const tabs = [
-                                  "reservas",
-                                  "contactos",
-                                  "interacoes",
-                                ] as const;
-                                const index = tabs.indexOf(t);
-                                const next =
-                                  event.key === "ArrowRight"
-                                    ? (index + 1) % 3
-                                    : event.key === "ArrowLeft"
-                                      ? (index + 2) % 3
-                                      : event.key === "Home"
-                                        ? 0
-                                        : event.key === "End"
-                                          ? 2
-                                          : -1;
-                                if (next < 0) return;
-                                event.preventDefault();
-                                setTab(tabs[next]);
-                                document
-                                  .getElementById(`crm-tab-${tabs[next]}`)
-                                  ?.focus();
-                              }}
-                            >
+                        <TabsList
+                          className="crm-tabs"
+                          aria-label="Detalhes do cliente"
+                        >
+                          {(
+                            ["reservas", "contactos", "interacoes"] as const
+                          ).map(t => (
+                            <TabsTrigger key={t} value={t}>
                               {t === "reservas"
                                 ? `Reservas (${c.bookingCount})`
                                 : t === "contactos"
                                   ? "Contactos e viaturas"
                                   : "Interações"}
-                            </button>
-                          )
-                        )}
-                      </div>
-                      <div
-                        id="crm-tab-content"
-                        role="tabpanel"
-                        aria-labelledby={`crm-tab-${tab}`}
-                      >
-                        {tab === "reservas" && (
-                          <>
-                            <div className="crm-booking-table">
-                              <table>
-                                <thead>
-                                  <tr>
-                                    <th>Reserva / entrada</th>
-                                    <th>Parque</th>
-                                    <th>Estado</th>
-                                    {money && <th>Valor</th>}
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {p.detail.bookings.map(b => (
-                                    <tr key={b.externalId}>
-                                      <td>
-                                        <button
-                                          onClick={() => p.onBooking(b)}
-                                          className="crm-link"
-                                        >
-                                          {b.number ?? b.externalId}
-                                        </button>
-                                        <small>{crmDate(b.checkIn)}</small>
-                                      </td>
-                                      <td>
-                                        {b.park ?? "—"}
-                                        <small>
-                                          {b.city} ·{" "}
-                                          {b.plate ?? "Sem matrícula"}
-                                        </small>
-                                      </td>
-                                      <td>
-                                        <span
-                                          className={`crm-status ${b.status === "CHECKED_OUT" ? "done" : b.status?.startsWith("CANCEL") ? "cancelled" : ""}`}
-                                        >
-                                          {statusName(b.status)}
-                                        </span>
-                                      </td>
-                                      {money && (
-                                        <td>{amount(b.value, b.currency)}</td>
-                                      )}
+                            </TabsTrigger>
+                          ))}
+                        </TabsList>
+                        <TabsContent value={tab}>
+                          {tab === "reservas" && (
+                            <>
+                              <div className="crm-booking-table">
+                                <table>
+                                  <thead>
+                                    <tr>
+                                      <th>Reserva / entrada</th>
+                                      <th>Parque</th>
+                                      <th>Estado</th>
+                                      {money && <th>Valor</th>}
                                     </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                            <div className="crm-pagination">
-                              <button
-                                aria-label="Página anterior de reservas"
-                                disabled={p.detail.bookingPage <= 1}
-                                onClick={() =>
-                                  p.onBookingPage(p.detail!.bookingPage - 1)
-                                }
-                              >
-                                <ArrowLeft size={16} />
-                              </button>
-                              <span>
-                                {p.detail.bookingPage} /{" "}
-                                {Math.max(
-                                  1,
-                                  Math.ceil(
-                                    p.detail.bookingTotal / CRM_PAGE_SIZE
-                                  )
-                                )}
-                              </span>
-                              <button
-                                aria-label="Página seguinte de reservas"
-                                disabled={
-                                  p.detail.bookingPage * CRM_PAGE_SIZE >=
-                                  p.detail.bookingTotal
-                                }
-                                onClick={() =>
-                                  p.onBookingPage(p.detail!.bookingPage + 1)
-                                }
-                              >
-                                <ArrowRight size={16} />
-                              </button>
-                            </div>
-                          </>
-                        )}
-                        {tab === "contactos" && (
-                          <div className="crm-contact-panel">
-                            <h3>Contactos presentes nas reservas</h3>
-                            {p.detail.contacts.map((v, i) => (
-                              <p key={i}>
-                                <strong>{v.name || "Nome em falta"}</strong>
-                                <span>{v.phone ?? "Telefone em falta"}</span>
-                              </p>
-                            ))}
-                            <h3>Viaturas utilizadas em reservas</h3>
-                            {p.detail.vehicles.length === 0 && (
-                              <p>Sem viaturas identificadas.</p>
-                            )}
-                            {p.detail.vehicles.map(v => (
-                              <p key={v.plate}>
-                                <Car size={16} />
-                                <strong>{v.plate}</strong>
+                                  </thead>
+                                  <tbody>
+                                    {p.detail.bookings.map(b => (
+                                      <tr key={b.externalId}>
+                                        <td>
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            onClick={() => p.onBooking(b)}
+                                            className="crm-link"
+                                          >
+                                            {b.number ?? b.externalId}
+                                          </Button>
+                                          <small>{crmDate(b.checkIn)}</small>
+                                        </td>
+                                        <td>
+                                          {b.park ?? "—"}
+                                          <small>
+                                            {b.city} ·{" "}
+                                            {b.plate ?? "Sem matrícula"}
+                                          </small>
+                                        </td>
+                                        <td>
+                                          <span
+                                            className={`crm-status ${b.status === "CHECKED_OUT" ? "done" : b.status?.startsWith("CANCEL") ? "cancelled" : ""}`}
+                                          >
+                                            {statusName(b.status)}
+                                          </span>
+                                        </td>
+                                        {money && (
+                                          <td>{amount(b.value, b.currency)}</td>
+                                        )}
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                              <div className="crm-pagination">
+                                <Button
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  aria-label="Página anterior de reservas"
+                                  disabled={p.detail.bookingPage <= 1}
+                                  onClick={() =>
+                                    p.onBookingPage(p.detail!.bookingPage - 1)
+                                  }
+                                >
+                                  <ArrowLeft size={16} />
+                                </Button>
                                 <span>
-                                  {[v.brand, v.model].filter(Boolean).join(" ")}{" "}
-                                  · {v.bookings} reservas
+                                  {p.detail.bookingPage} /{" "}
+                                  {Math.max(
+                                    1,
+                                    Math.ceil(
+                                      p.detail.bookingTotal / CRM_PAGE_SIZE
+                                    )
+                                  )}
                                 </span>
-                              </p>
-                            ))}
-                          </div>
-                        )}
-                        {tab === "interacoes" && (
-                          <div className="crm-interactions">
-                            {p.detail.interactions.length === 0 ? (
-                              <p>
-                                Sem interações associadas a este email no âmbito
-                                autorizado.
-                              </p>
-                            ) : (
-                              p.detail.interactions.map(event => (
-                                <a key={event.id} href={event.href}>
-                                  <span className="crm-event-dot" />
-                                  <div>
-                                    <small>
-                                      {crmDate(event.date)} ·{" "}
-                                      {event.kind === "complaint"
-                                        ? "Reclamação"
-                                        : event.kind === "lost"
-                                          ? "Perdidos e achados"
-                                          : "Avaliação"}
-                                    </small>
-                                    <strong>{event.title}</strong>
-                                    <span>{event.status}</span>
-                                  </div>
-                                  <ChevronRight size={16} />
-                                </a>
-                              ))
-                            )}
-                            {p.detail.interactionsTruncated && (
-                              <small>
-                                Mostram-se as 50 interações mais recentes.
-                                Consulta os módulos de origem para o restante
-                                histórico.
-                              </small>
-                            )}
-                          </div>
-                        )}
-                      </div>
+                                <Button
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  aria-label="Página seguinte de reservas"
+                                  disabled={
+                                    p.detail.bookingPage * CRM_PAGE_SIZE >=
+                                    p.detail.bookingTotal
+                                  }
+                                  onClick={() =>
+                                    p.onBookingPage(p.detail!.bookingPage + 1)
+                                  }
+                                >
+                                  <ArrowRight size={16} />
+                                </Button>
+                              </div>
+                            </>
+                          )}
+                          {tab === "contactos" && (
+                            <div className="crm-contact-panel">
+                              <h3>Contactos presentes nas reservas</h3>
+                              {p.detail.contacts.map((v, i) => (
+                                <p key={i}>
+                                  <strong>{v.name || "Nome em falta"}</strong>
+                                  <span>{v.phone ?? "Telefone em falta"}</span>
+                                </p>
+                              ))}
+                              <h3>Viaturas utilizadas em reservas</h3>
+                              {p.detail.vehicles.length === 0 && (
+                                <p>Sem viaturas identificadas.</p>
+                              )}
+                              {p.detail.vehicles.map(v => (
+                                <p key={v.plate}>
+                                  <Car size={16} />
+                                  <strong>{v.plate}</strong>
+                                  <span>
+                                    {[v.brand, v.model]
+                                      .filter(Boolean)
+                                      .join(" ")}{" "}
+                                    · {v.bookings} reservas
+                                  </span>
+                                </p>
+                              ))}
+                            </div>
+                          )}
+                          {tab === "interacoes" && (
+                            <div className="crm-interactions">
+                              {p.detail.interactions.length === 0 ? (
+                                <p>
+                                  Sem interações associadas a este email no
+                                  âmbito autorizado.
+                                </p>
+                              ) : (
+                                p.detail.interactions.map(event => (
+                                  <a key={event.id} href={event.href}>
+                                    <span className="crm-event-dot" />
+                                    <div>
+                                      <small>
+                                        {crmDate(event.date)} ·{" "}
+                                        {event.kind === "complaint"
+                                          ? "Reclamação"
+                                          : event.kind === "lost"
+                                            ? "Perdidos e achados"
+                                            : "Avaliação"}
+                                      </small>
+                                      <strong>{event.title}</strong>
+                                      <span>{event.status}</span>
+                                    </div>
+                                    <ChevronRight size={16} />
+                                  </a>
+                                ))
+                              )}
+                              {p.detail.interactionsTruncated && (
+                                <small>
+                                  Mostram-se as 50 interações mais recentes.
+                                  Consulta os módulos de origem para o restante
+                                  histórico.
+                                </small>
+                              )}
+                            </div>
+                          )}
+                        </TabsContent>
+                      </Tabs>
                       <footer className="crm-footnote">
                         Histórico conhecido nas reservas sincronizadas. Os
                         valores das estadias não equivalem a pagamentos

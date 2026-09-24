@@ -23,14 +23,14 @@ function Preview() {
   return (
     <main
       style={{
-        background: "#f0f4f2",
+        background: "var(--background)",
         minHeight: "100vh",
         padding: "clamp(12px,3vw,42px)",
       }}
     >
       <div
         style={{
-          maxWidth: 1540,
+          maxWidth: 1600,
           margin: "0 auto 14px",
           display: "flex",
           gap: 10,

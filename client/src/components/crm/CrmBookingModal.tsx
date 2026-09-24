@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -60,12 +61,13 @@ export function CrmBookingModal({
               )}
             </dl>
             {!demo && (
-              <button
+              <Button
+                variant="outline"
                 className="crm-button"
                 onClick={() => openInMultipark(booking.externalId)}
               >
                 Abrir reserva na Multipark
-              </button>
+              </Button>
             )}
           </div>
         )}
