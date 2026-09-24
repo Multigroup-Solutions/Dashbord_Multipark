@@ -298,6 +298,8 @@ export const careerExams = mysqlTable("career_exams", {
 	description: text(),
 	passingScore: int().notNull(),
 	timeLimitMinutes: int().default(30),
+	validityMonths: int().default(12).notNull(), // validade do certificado (0090)
+	maxAttemptsPerDay: int().default(3).notNull(), // (0090)
 	archivedAt: timestamp({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 });
@@ -457,6 +459,7 @@ export const employees = mysqlTable("employees", {
 	photoKey: varchar({ length: 512 }),
 	position: mysqlEnum(['director','supervisor','team_leader','backoffice','frontoffice','senior_driver','driver','extra']).default('driver').notNull(),
 	extraLevel: int(),
+	careerLevel: varchar({ length: 32 }), // nível de carreira aprovado (migration 0090)
 	department: varchar({ length: 128 }),
 	projectId: int(),
 	contractType: mysqlEnum(['permanent','fixed_term','extra']).default('permanent'),
@@ -1424,6 +1427,8 @@ export const quizQuestions = mysqlTable("quiz_questions", {
 	explanation: text(),
 	difficulty: mysqlEnum(['easy','medium','hard']).default('medium').notNull(),
 	points: int().default(10).notNull(),
+	published: tinyint().default(1).notNull(), // 0 = rascunho (ex.: gerado por IA) — 0090
+	sourceManualId: int(), // manual de origem (perguntas geradas por IA) — 0090
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 });
 
@@ -1646,6 +1651,109 @@ export const trainingVideos = mysqlTable("training_videos", {
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 });
+
+// ─── Formação: percursos obrigatórios (migration 0090) ───────────────────────
+export const trainingPaths = mysqlTable("training_paths", {
+	id: int().autoincrement().primaryKey(),
+	name: varchar({ length: 255 }).notNull(),
+	description: text(),
+	targetRole: varchar({ length: 32 }), // extra | condutor | terminal | front | …
+	city: varchar({ length: 16 }), // lisbon | porto | faro | null = todas
+	active: tinyint().default(1).notNull(),
+	isDefaultOnboarding: tinyint().default(0).notNull(),
+	blocksEscala: tinyint().default(1).notNull(),
+	dueDays: int().default(7).notNull(),
+	createdById: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+});
+
+export const trainingPathItems = mysqlTable("training_path_items", {
+	id: int().autoincrement().primaryKey(),
+	pathId: int().notNull(),
+	itemType: varchar({ length: 16 }).notNull(), // video | manual | exam | quiz
+	itemId: int().notNull(), // quiz: categoria (0 = geral)
+	sortOrder: int().default(0).notNull(),
+	required: tinyint().default(1).notNull(),
+},
+(table) => [index("training_path_items_path_idx").on(table.pathId)]);
+
+export const trainingAssignments = mysqlTable("training_assignments", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	pathId: int().notNull(),
+	status: varchar({ length: 16 }).default('assigned').notNull(), // assigned | in_progress | completed | overdue
+	dueAt: datetime({ mode: 'string' }),
+	assignedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	completedAt: datetime({ mode: 'string' }),
+	assignedById: int(),
+	source: varchar({ length: 32 }),
+	lastReminderAt: datetime({ mode: 'string' }),
+	escalatedAt: datetime({ mode: 'string' }),
+},
+(table) => [
+	uniqueIndex("training_assignments_emp_path").on(table.employeeId, table.pathId),
+	index("training_assignments_status_idx").on(table.status),
+]);
+
+export const trainingProgress = mysqlTable("training_progress", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	itemType: varchar({ length: 16 }).notNull(),
+	itemId: int().notNull(),
+	viewedAt: datetime({ mode: 'string' }),
+	completedAt: datetime({ mode: 'string' }),
+	seconds: int().default(0).notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [uniqueIndex("training_progress_unique").on(table.employeeId, table.itemType, table.itemId)]);
+
+export const trainingAttemptSessions = mysqlTable("training_attempt_sessions", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	kind: varchar({ length: 8 }).notNull(), // quiz | exam
+	examId: int(),
+	categoryId: int(),
+	questionIds: text().notNull(), // JSON: ids servidos nesta tentativa
+	startedAt: datetime({ mode: 'string' }).notNull(),
+	deadlineAt: datetime({ mode: 'string' }),
+	submittedAt: datetime({ mode: 'string' }),
+	resultId: int(),
+	score: int(),
+	passed: tinyint(),
+},
+(table) => [index("training_attempt_sessions_emp_idx").on(table.employeeId, table.kind, table.startedAt)]);
+
+export const trainingPromotions = mysqlTable("training_promotions", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	examId: int().notNull(),
+	attemptId: int(),
+	level: varchar({ length: 32 }).notNull(),
+	score: int(),
+	status: varchar({ length: 16 }).default('pending').notNull(), // pending | approved | rejected
+	requestedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	decidedAt: datetime({ mode: 'string' }),
+	decidedById: int(),
+	note: varchar({ length: 500 }),
+	certificateId: int(),
+},
+(table) => [index("training_promotions_status_idx").on(table.status)]);
+
+export const trainingCertificates = mysqlTable("training_certificates", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	examId: int().notNull(),
+	level: varchar({ length: 32 }).notNull(),
+	issuedAt: datetime({ mode: 'string' }).notNull(),
+	validUntil: date({ mode: 'string' }),
+	fileKey: varchar({ length: 512 }),
+	fileUrl: text(),
+	promotionId: int(),
+	recertAssignedAt: datetime({ mode: 'string' }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [index("training_certificates_emp_idx").on(table.employeeId)]);
 
 export const users = mysqlTable("users", {
 	id: int().autoincrement().primaryKey(),

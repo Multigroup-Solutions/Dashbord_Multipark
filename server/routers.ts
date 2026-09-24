@@ -1,6 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { projectScope, campaignScope, bookingHistoryScope, scopedProjectIds, assertEmployeeAccess, assertProjectAccess, requireGlobalCityAccess } from './cityScope';
-import { assessmentAnswers, gradeAssessment, trainingResultScope } from './trainingAssessments';
+import { trainingRouter } from './trainingRouter';
 import { z } from "zod";
 import * as XLSX from "xlsx";
 import { ACCESS_DENIED_MSG, COOKIE_NAME } from "@shared/const";
@@ -213,35 +213,6 @@ import {
   updateGoogleReview,
   getGoogleReviewStats,
   searchClientHistory,
-  // Formação e Apoio
-  getTrainingCategories,
-  createTrainingCategory,
-  deleteTrainingCategory,
-  getTrainingVideos,
-  createTrainingVideo,
-  deleteTrainingVideo,
-  getTrainingManuals,
-  createTrainingManual,
-  updateTrainingManual,
-  deleteTrainingManual,
-  getFAQs,
-  createFAQ,
-  updateFAQ,
-  deleteFAQ,
-  getQuizQuestions,
-  getQuizQuestionsForPlayer,
-  createQuizQuestion,
-  deleteQuizQuestion,
-  saveQuizAttempt,
-  getQuizRanking,
-  getCareerExams,
-  createCareerExam,
-  getCareerExamQuestions,
-  getCareerExamQuestionsForPlayer,
-  createCareerExamQuestion,
-  saveCareerExamAttempt,
-  getCareerExamAttempts,
-  deleteCareerExam,
   // Perdidos e Achados
   createLostFoundItem,
   getLostFoundItems,
@@ -5679,211 +5650,8 @@ export const appRouter = router({
   }),
 
   // ─── FORMAÇÃO E APOIO ──────────────────────────────────────────────────────
-  training: router({
-    // Categories
-    categories: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "extra");
-      return getTrainingCategories();
-    }),
-    createCategory: protectedProcedure.input(z.object({ name: z.string(), description: z.string().optional(), icon: z.string().optional(), sortOrder: z.number().optional() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      const result = await createTrainingCategory(input);
-      await logActivity({ userId: ctx.user.id, action: "create", entity: "training_category", entityId: result.id, details: input.name });
-      return result;
-    }),
-    deleteCategory: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["super_admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      await deleteTrainingCategory(input.id);
-      await logActivity({ userId: ctx.user.id, action: "delete", entity: "training_category", entityId: input.id, details: "" });
-      return { success: true };
-    }),
-
-    // Videos
-    videos: protectedProcedure.input(z.object({ categoryId: z.number().optional() })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
-      return getTrainingVideos(input.categoryId);
-    }),
-    createVideo: protectedProcedure.input(z.object({ categoryId: z.number(), title: z.string(), description: z.string().optional(), videoUrl: z.string(), thumbnailUrl: z.string().optional(), durationMinutes: z.number().optional(), careerLevel: z.string().max(32).optional() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      const result = await createTrainingVideo({ ...input, createdBy: ctx.user.id });
-      await logActivity({ userId: ctx.user.id, action: "create", entity: "training_video", entityId: result.id, details: input.title });
-      return result;
-    }),
-    deleteVideo: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      await deleteTrainingVideo(input.id);
-      await logActivity({ userId: ctx.user.id, action: "delete", entity: "training_video", entityId: input.id, details: "" });
-      return { success: true };
-    }),
-
-    // Manuals / Blog
-    manuals: protectedProcedure.input(z.object({ categoryId: z.number().optional(), type: z.string().optional() })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
-      return getTrainingManuals(input.categoryId, input.type);
-    }),
-    createManual: protectedProcedure.input(z.object({ categoryId: z.number().optional(), title: z.string(), content: z.string(), type: z.enum(["manual", "update", "news", "procedure", "link"]).optional(), fileUrl: z.string().optional(), fileKey: z.string().optional(), fileName: z.string().optional(), fileMimeType: z.string().optional(), careerLevel: z.string().max(32).optional() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      const result = await createTrainingManual({ ...input, createdBy: ctx.user.id });
-      await logActivity({ userId: ctx.user.id, action: "create", entity: "training_manual", entityId: result.id, details: input.title });
-      return result;
-    }),
-    uploadManualFile: protectedProcedure.input(z.object({ fileName: z.string(), fileBase64: z.string(), mimeType: z.string() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      const { storagePut } = await import("./storage");
-      const buffer = Buffer.from(input.fileBase64, "base64");
-      const key = `training/manuals/${Date.now()}-${input.fileName}`;
-      const { url } = await storagePut(key, buffer, input.mimeType);
-      return { url, key, fileName: input.fileName, mimeType: input.mimeType };
-    }),
-    updateManual: protectedProcedure.input(z.object({ id: z.number(), title: z.string().optional(), content: z.string().optional(), type: z.enum(["manual", "update", "news", "procedure"]).optional(), published: z.boolean().optional(), fileUrl: z.string().optional(), fileKey: z.string().optional(), fileName: z.string().optional(), fileMimeType: z.string().optional() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      const { id, ...data } = input;
-      await updateTrainingManual(id, data);
-      await logActivity({ userId: ctx.user.id, action: "update", entity: "training_manual", entityId: id, details: data.title || "" });
-      return { success: true };
-    }),
-    deleteManual: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      await deleteTrainingManual(input.id);
-      await logActivity({ userId: ctx.user.id, action: "delete", entity: "training_manual", entityId: input.id, details: "" });
-      return { success: true };
-    }),
-
-    // FAQs
-    faqs: protectedProcedure.input(z.object({ categoryId: z.number().optional() })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
-      return getFAQs(input.categoryId);
-    }),
-    createFAQ: protectedProcedure.input(z.object({ categoryId: z.number().optional(), question: z.string(), answer: z.string(), sortOrder: z.number().optional() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      const result = await createFAQ(input);
-      await logActivity({ userId: ctx.user.id, action: "create", entity: "faq", entityId: result.id, details: input.question });
-      return result;
-    }),
-    updateFAQ: protectedProcedure.input(z.object({ id: z.number(), question: z.string().optional(), answer: z.string().optional() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      const { id, ...data } = input;
-      await updateFAQ(id, data);
-      return { success: true };
-    }),
-    deleteFAQ: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      await deleteFAQ(input.id);
-      return { success: true };
-    }),
-
-    // Quiz
-    // ADMIN: tem acesso à correctOption (para edição)
-    quizQuestions: protectedProcedure.input(z.object({ categoryId: z.number().optional() })).query(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Usa quizQuestionsForPlayer" });
-      }
-      return getQuizQuestions(input.categoryId);
-    }),
-    // PLAYER: sem correctOption (extra ou superior pode jogar)
-    quizQuestionsForPlayer: protectedProcedure.input(z.object({ categoryId: z.number().optional() })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
-      return getQuizQuestionsForPlayer(input.categoryId);
-    }),
-    createQuizQuestion: protectedProcedure.input(z.object({ categoryId: z.number().optional(), question: z.string(), optionA: z.string(), optionB: z.string(), optionC: z.string(), optionD: z.string(), correctOption: z.enum(["A", "B", "C", "D"]), explanation: z.string().optional(), difficulty: z.enum(["easy", "medium", "hard"]).optional(), points: z.number().int().min(1).max(10000).optional() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      const result = await createQuizQuestion(input);
-      await logActivity({ userId: ctx.user.id, action: "create", entity: "quiz_question", entityId: result.id, details: input.question });
-      return result;
-    }),
-    deleteQuizQuestion: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      await deleteQuizQuestion(input.id);
-      return { success: true };
-    }),
-    submitQuiz: protectedProcedure.input(z.object({ answers: assessmentAnswers, timeSpentSeconds: z.number().int().min(0).max(86400).optional() })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
-      // employeeId derivado de ctx.user.id (não confiável o do cliente)
-      const me = await getEmployeeByUserId(ctx.user.id);
-      if (!me) throw new TRPCError({ code: "NOT_FOUND", message: "Sem ficha de colaborador. Pede ao admin para te cadastrar primeiro." });
-      const questions = await getQuizQuestions();
-      if (!input.answers.length) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Responde a pelo menos uma pergunta.' });
-      const { correct, score } = gradeAssessment(questions, input.answers);
-      const result = await saveQuizAttempt({ employeeId: me.employee.id, totalQuestions: input.answers.length, correctAnswers: correct, score, timeSpentSeconds: input.timeSpentSeconds });
-      return { ...result, correct, score, total: input.answers.length };
-    }),
-    quizRanking: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "extra");
-      return getQuizRanking();
-    }),
-
-    // Career Exams
-    careerExams: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "extra");
-      return getCareerExams();
-    }),
-    createCareerExam: protectedProcedure.input(z.object({
-      // Trilhas do Jorge (2026-08-05): condutor/terminal/front níveis 1-4 + chefias
-      level: z.enum([
-        "condutor_1", "condutor_2", "condutor_3", "condutor_4",
-        "terminal_1", "terminal_2", "terminal_3", "terminal_4",
-        "front_1", "front_2", "front_3", "front_4",
-        "team_leader", "supervisor",
-      ]),
-      title: z.string(), description: z.string().optional(), passingScore: z.number().int().min(1).max(100), timeLimitMinutes: z.number().int().min(1).max(240).optional() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      const result = await createCareerExam(input);
-      await logActivity({ userId: ctx.user.id, action: "create", entity: "career_exam", entityId: result.id, details: input.title });
-      return result;
-    }),
-    deleteCareerExam: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["super_admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      await deleteCareerExam(input.id);
-      await logActivity({ userId: ctx.user.id, action: 'update', entity: 'career_exam', entityId: input.id, details: 'Exame arquivado; resultados preservados' });
-      return { success: true };
-    }),
-    careerExamQuestions: protectedProcedure.input(z.object({ examId: z.number() })).query(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Usa careerExamQuestionsForPlayer" });
-      }
-      return getCareerExamQuestions(input.examId);
-    }),
-    careerExamQuestionsForPlayer: protectedProcedure.input(z.object({ examId: z.number() })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
-      if (!(await getCareerExams()).some(exam => exam.id === input.examId)) throw new TRPCError({ code: 'NOT_FOUND', message: 'Exame não disponível.' });
-      return getCareerExamQuestionsForPlayer(input.examId);
-    }),
-    createCareerExamQuestion: protectedProcedure.input(z.object({ examId: z.number(), question: z.string(), optionA: z.string(), optionB: z.string(), optionC: z.string(), optionD: z.string(), correctOption: z.enum(["A", "B", "C", "D"]), explanation: z.string().optional(), points: z.number().int().min(1).max(10000).optional() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      if (!(await getCareerExams()).some(exam => exam.id === input.examId)) throw new TRPCError({ code: 'NOT_FOUND', message: 'Exame não disponível.' });
-      const result = await createCareerExamQuestion(input);
-      return result;
-    }),
-    submitCareerExam: protectedProcedure.input(z.object({ examId: z.number(), answers: assessmentAnswers, timeSpentSeconds: z.number().int().min(0).max(86400).optional() })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
-      const me = await getEmployeeByUserId(ctx.user.id);
-      if (!me) throw new TRPCError({ code: "NOT_FOUND", message: "Sem ficha de colaborador" });
-      const questions = await getCareerExamQuestions(input.examId);
-      const exams = await getCareerExams();
-      const exam = exams.find(e => e.id === input.examId);
-      if (!exam) throw new TRPCError({ code: "NOT_FOUND", message: "Exame n\u00e3o encontrado" });
-      const { correct, percentage } = gradeAssessment(questions, input.answers);
-      const passed = percentage >= exam.passingScore;
-      const result = await saveCareerExamAttempt({ examId: input.examId, employeeId: me.employee.id, totalQuestions: questions.length, correctAnswers: correct, score: percentage, passed, timeSpentSeconds: input.timeSpentSeconds });
-      if (passed) {
-        try {
-          await notifyOwner({ title: `Exame aprovado: ${exam.title}`, content: `${me.employee.fullName} passou no exame "${exam.title}" com ${percentage}% (m\u00ednimo: ${exam.passingScore}%)` });
-        } catch { console.warn('[Training] Resultado guardado; o envio do aviso ao responsável falhou.'); }
-      }
-      return { ...result, correct, score: percentage, total: questions.length, passed, passingScore: exam.passingScore };
-    }),
-
-    myCareerExamAttempts: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "extra");
-      const me = await getEmployeeByUserId(ctx.user.id);
-      if (!me) return [];
-      return getCareerExamAttempts(me.employee.id);
-    }),
-    careerExamAttempts: protectedProcedure.input(z.object({ employeeId: z.number().optional(), examId: z.number().optional() })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
-      return getCareerExamAttempts(input.employeeId, input.examId, trainingResultScope(await rhViewer(ctx.user)));
-    }),
-  }),
+  // Router da Formação vive em server/trainingRouter.ts
+  training: trainingRouter,
 
   // ─── PERDIDOS E ACHADOS ────────────────────────────────────────────────────
   lostFound: router({
@@ -8067,7 +7835,11 @@ export const appRouter = router({
       }).optional())
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
-        return listDriverCandidates(input?.date, { forTeamLeader: input?.forTeamLeader });
+        const list = await listDriverCandidates(input?.date, { forTeamLeader: input?.forTeamLeader });
+        // Badge "Formação em falta" no seletor da escala (server/trainingPaths.ts)
+        const { employeesMissingTraining } = await import("./trainingPaths");
+        const missing = await employeesMissingTraining(list.map(c => c.id));
+        return list.map(c => ({ ...c, trainingMissing: missing.has(c.id) }));
       }),
 
     assignments: protectedProcedure
@@ -8092,10 +7864,13 @@ export const appRouter = router({
           endHour: z.number().int().min(1).max(27),
           sentHomeHour: z.number().int().min(0).max(27).nullable().optional(),
           notes: z.string().max(255).nullable().optional(),
+          // Admin força a escala de quem ainda não concluiu a formação obrigatória
+          override: z.boolean().optional(),
         }),
       )
-      .mutation(async ({ ctx, input }) => {
+      .mutation(async ({ ctx, input: rawInput }) => {
         requireRole(ctx.user.role, "backoffice");
+        const { override, ...input } = rawInput;
         if (input.endHour <= input.startHour) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Fim tem de ser depois do início" });
         }
@@ -8115,6 +7890,16 @@ export const appRouter = router({
             code: "BAD_REQUEST",
             message: "Team Leader tem de ser um funcionário registado (salário usado no custo).",
           });
+        }
+        // Só verifica quando a pessoa entra na escala (nova linha ou troca de pessoa).
+        const { checkEscalaEligibility, escalaAssignmentEmployeeId } = await import("./trainingPaths");
+        if (input.employeeId && (!input.id || (await escalaAssignmentEmployeeId(input.id)) !== input.employeeId)) {
+          const canOverride = (ROLE_HIERARCHY[ctx.user.role] ?? 0) >= ROLE_HIERARCHY.admin;
+          const elig = await checkEscalaEligibility(input.employeeId, { override, canOverride });
+          if (!elig.ok) throw new TRPCError({ code: "PRECONDITION_FAILED", message: elig.message ?? "Formação obrigatória por concluir." });
+          if (elig.overridden) {
+            await logActivity({ userId: ctx.user.id, action: "training_escala_override", entity: "employees", entityId: input.employeeId, details: `Escalado sem formação concluída (${elig.missing.join(", ")}) · ${input.assignmentDate} ${input.shift}` });
+          }
         }
         try {
           return await upsertAssignment({ ...input, createdById: ctx.user.id });

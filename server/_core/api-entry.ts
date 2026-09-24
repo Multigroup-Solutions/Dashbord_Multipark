@@ -13,6 +13,7 @@ import { waitUntil } from "@vercel/functions";
 import { deliveryErrorCode } from "../bookingDeliveryQueue";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { sdk } from "./sdk";
+import { requireSession } from "./requireSession";
 import { getBookingTryAllParks } from "../multipark";
 
 const app = express();
@@ -44,7 +45,7 @@ try {
   // Upload multipart (paridade com o index.ts do Railway — os PDAs usam isto
   // p/ a foto de entrada/saída do check-in; sem isto o Vercel dava 404).
   // NOTA: o Vercel limita o body a ~4.5MB — o cliente redimensiona antes.
-  app.post("/api/upload", async (req, res, next) => {
+  app.post("/api/upload", requireSession, async (req, res, next) => {
     const multer = (await import("multer")).default;
     const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 4 * 1024 * 1024 } });
     upload.single("file")(req as any, res as any, async (err: any) => {
@@ -67,7 +68,7 @@ try {
   // Resolve um ficheiro do storage pela KEY (ex.: training/manuals/...).
   // Necessário porque URLs relativas "/uploads/..." gravadas na BD não são
   // servidas no Vercel (o rewrite manda tudo o que não é /api p/ o index.html).
-  app.get(/^\/api\/file\/(.+)/, async (req, res) => {
+  app.get(/^\/api\/file\/(.+)/, requireSession, async (req, res) => {
     try {
       // O Express já decodifica os grupos capturados — um 2º decodeURIComponent
       // lançava URIError (500) com nomes que contêm "%".
