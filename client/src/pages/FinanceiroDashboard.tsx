@@ -33,6 +33,7 @@ import {
   useDashboardFilters,
   DashboardFilterBar,
 } from "@/components/DashboardFilterBar";
+import MarketingSummaryCard from "@/components/marketing/MarketingSummaryCard";
 
 const COLORS = [
   "#6366f1",
@@ -228,6 +229,9 @@ export default function FinanceiroDashboard() {
         period={filters.period}
         onPeriodChange={filters.setPeriod}
       />
+
+      {/* ═══ MARKETING (resumo; detalhe em Financeiro → Marketing) ═══ */}
+      <MarketingSummaryCard from={filters.from} to={filters.to} projectId={filters.projectId} />
 
       {/* ═══ DESPESAS DASHBOARD ═══ */}
       <Card className="border-dashed">
