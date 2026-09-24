@@ -144,16 +144,42 @@ export async function cityKeyResolver(): Promise<(pid: number | null) => CityKey
 
 function lisbonToday(): string { return lisbonDayOf(Date.now()); }
 
-/** Gasto em publicidade (Google Ads API + legado, nacional repartido) por dia × cidade. */
+/**
+ * Gasto em publicidade por dia × cidade — UMA chamada à fonte única
+ * (getAdMetrics: Google + Meta + legado, contas selecionadas, nacional
+ * repartido com pesos estáveis). O que não cai em nenhuma cidade (campanhas
+ * por associar, nacional de marca sem cidades, legado sem projeto) vem em
+ * `unassigned` — Σ cidades + por atribuir = total do Marketing.
+ */
 export async function getAdSpendDaily(f: { startDate: string; endDate: string; projectId?: number }) {
   const { getAdMetrics } = await import("./integrations/googleAds/adMetrics");
   const cities = await scopedCityNodes(f.projectId);
-  const rows: Array<{ day: string; city: CityKey; cost: number }> = [];
-  for (const c of cities) {
-    const m = await getAdMetrics({ from: f.startDate, to: f.endDate, projectIds: c.projectIds });
-    for (const d of m.byDay) if (d.cost) rows.push({ day: d.date, city: c.key, cost: Math.round(d.cost * 100) / 100 });
+  const scoped = scopedProjectIds() !== undefined || !!f.projectId;
+  const projectIds = scoped ? Array.from(new Set(cities.flatMap((c) => c.projectIds))) : null;
+  const round = (v: number) => Math.round(v * 100) / 100;
+  if (scoped && !projectIds!.length) return { cities: [] as CityKey[], rows: [] as Array<{ day: string; city: CityKey; cost: number }>, unassigned: [] as Array<{ day: string; cost: number }>, total: 0 };
+  const m = await getAdMetrics({ from: f.startDate, to: f.endDate, projectIds });
+  const cityOf = await cityKeyResolver();
+  const allowed = new Set(cities.map((c) => c.key));
+  const byKey = new Map<string, { day: string; city: CityKey; cost: number }>();
+  const unassigned = new Map<string, number>();
+  for (const d of m.byDayProject) {
+    const city = cityOf(d.projectId);
+    if (city && allowed.has(city)) {
+      const k = `${d.date}|${city}`;
+      const e = byKey.get(k) ?? { day: d.date, city, cost: 0 };
+      e.cost += d.cost; byKey.set(k, e);
+    } else {
+      unassigned.set(d.date, (unassigned.get(d.date) ?? 0) + d.cost);
+    }
   }
-  return { cities: cities.map((c) => c.key), rows };
+  const rows = Array.from(byKey.values()).filter((r) => r.cost).map((r) => ({ ...r, cost: round(r.cost) }))
+    .sort((a, b) => a.day.localeCompare(b.day) || CITY_KEYS.indexOf(a.city) - CITY_KEYS.indexOf(b.city));
+  return {
+    cities: cities.map((c) => c.key), rows,
+    unassigned: Array.from(unassigned, ([day, cost]) => ({ day, cost: round(cost) })).filter((u) => u.cost).sort((a, b) => a.day.localeCompare(b.day)),
+    total: round(m.totals.cost),
+  };
 }
 
 /** Custo dos extras por dia (de Lisboa) × cidade: real (ponto), previsto (escala) e o que conta. */

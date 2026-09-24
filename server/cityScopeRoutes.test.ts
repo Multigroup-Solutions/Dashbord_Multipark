@@ -30,12 +30,11 @@ const porto = { all: false, defaultCityId: 50, cityName: 'Porto', cityIds: [50],
 beforeEach(() => { state.load.mockReset().mockResolvedValue(porto); state.queried.mockClear(); state.recordProject = 49; });
 
 describe('consultas dos módulos respeitam a autorização sem filtros do cliente', () => {
-  it.each(['atividade', 'avaliacao', 'despesas', 'marketing', 'parcerias', 'catalogo'] as const)('%s recebe Porto no servidor', async module => {
+  it.each(['atividade', 'avaliacao', 'despesas', 'parcerias', 'catalogo'] as const)('%s recebe Porto no servidor', async module => {
     const c = caller();
     if (module === 'atividade') await c.multipark.dayActivity({ date: '2026-09-15' });
     if (module === 'avaliacao') await c.multipark.dayEvaluation({ date: '2026-09-15' });
     if (module === 'despesas') await c.expenses.list();
-    if (module === 'marketing') await c.marketing.stats.all();
     if (module === 'parcerias') await c.partnerships.analytics({ from: '2026-09-01', to: '2026-09-15' });
     if (module === 'catalogo') await c.partnerships.list();
     expect(state.queried).toHaveBeenCalledWith(expect.objectContaining({ projectIds: [50, 65], all: false }));
@@ -63,9 +62,15 @@ describe('consultas dos módulos respeitam a autorização sem filtros do client
     await expect(caller().integrations.googleBusiness.status()).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(caller().integrations.googleBusiness.sync()).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
-  it('bloqueia custos e métricas de campanhas de outra cidade por identificador', async () => {
-    await expect(caller().marketing.stats.byCampaign({ campaignId: 9 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    await expect(caller().marketing.internalCampaigns.costs({ campaignType: 'internal', campaignId: 9 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  it('orçamentos de marketing de outra cidade: nem definir nem apagar por id', async () => {
+    await expect(caller().marketing.budgets.upsert({ month: '2026-09', projectId: 49, provider: 'all', amount: 500 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().marketing.budgets.remove({ id: 9 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+  it('as rotas antigas de campanhas manuais/estatísticas deixaram de existir', async () => {
+    await expect((caller().marketing as any).stats.all()).rejects.toThrow();
+    await expect((caller().marketing as any).internalCampaigns.list()).rejects.toThrow();
+    await expect((caller().marketing as any).campaigns.list()).rejects.toThrow();
+    await expect((caller().marketing as any).bookingRevenue()).rejects.toThrow(/No procedure found/);
   });
   it('não deixa alterar parceiros (globais) com acesso local', async () => {
     await expect(caller().partnerships.delete({ id: 9 })).rejects.toMatchObject({ code: 'FORBIDDEN' });

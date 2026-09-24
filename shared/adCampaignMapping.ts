@@ -122,6 +122,35 @@ export function nationalSharesForBrand(brand: string, projects: ProjectNode[], c
   return nodes.map((n, i) => ({ projectId: n.id, fraction: weights[i] / total }));
 }
 
+/**
+ * Janela ESTÁVEL dos pesos do nacional (decisão 24 set 2026): os 28 dias que
+ * acabam no próprio dia (inclusive). Assim a parte de uma cidade num dia não
+ * muda com o período escolhido no ecrã (antes o peso era o gasto de cidade
+ * do período selecionado: o mesmo dia 10 dava valores diferentes em
+ * "1–15" e "1–30"). Escolhida em vez do mês de calendário para não haver
+ * saltos no dia 1 nem meses começados com poucos dados.
+ */
+export const NATIONAL_WEIGHT_WINDOW_DAYS = 28;
+
+const shiftDay = (day: string, n: number) => {
+  const [y, m, d] = day.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+};
+
+/**
+ * Pesos por nó marca-cidade para `day`: soma do gasto das campanhas DE
+ * CIDADE em [day − (janela−1), day]. `costByDay` = dia → (nó → gasto).
+ */
+export function rollingCityWeights(costByDay: Map<string, Map<number, number>>, day: string, windowDays = NATIONAL_WEIGHT_WINDOW_DAYS): Map<number, number> {
+  const out = new Map<number, number>();
+  for (let i = 0; i < windowDays; i++) {
+    const m = costByDay.get(shiftDay(day, -i));
+    if (!m) continue;
+    for (const [node, cost] of m) out.set(node, (out.get(node) ?? 0) + cost);
+  }
+  return out;
+}
+
 /** Sugestões para todas as campanhas; `onlyUnmapped` ignora as que já têm marca/cidade ou são nacionais. */
 export function suggestCampaignProjects(campaigns: CampaignForMapping[], projects: ProjectNode[], onlyUnmapped = true): MappingSuggestion[] {
   const out: MappingSuggestion[] = [];

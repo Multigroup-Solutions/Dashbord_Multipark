@@ -9,7 +9,11 @@
  *    `deadlineAt` (Vercel: 60 s) devolve done:false e a chamada seguinte continua;
  *  - VALIDA antes de substituir: uma resposta vazia para um intervalo que já
  *    tinha dados NÃO apaga nada (fica um aviso); erros de acesso não gravam zeros;
- *  - regista execução, contas, intervalo, linhas e erro — sem credenciais.
+ *  - regista execução, contas, intervalo, linhas e erro — sem credenciais;
+ *  - estado HONESTO (24 set 2026): todas as contas falharam → failed; algumas
+ *    → partial (terminada, com finishedAt); só "done" conta como recolha com
+ *    sucesso. Ligação a pedir reautorização → failed logo à cabeça (ok:false),
+ *    para o cron do GitHub ficar vermelho e abrir issue.
  */
 import { and, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { getDb } from "../../db";
@@ -18,6 +22,7 @@ import { GOOGLE_ADS_PROVIDER, missingApiEnvs, readGoogleAdsConfig } from "./conf
 import { getConnection, saveConnection } from "./oauth";
 import { fetchCampaignDaily, fetchConversionActions, getCustomer, listAccessibleCustomers, listCustomerClients, GoogleAdsApiError } from "./client";
 import { chunkRange, isProvisional, normalizeSyncKind, syncWindow, type SyncKind } from "./metrics";
+import { finalSyncStatus, isStaleSince } from "../../../shared/marketingRules";
 
 const nowMysql = () => new Date().toISOString().slice(0, 19).replace("T", " ");
 function lisbonToday(): string {
@@ -168,6 +173,7 @@ export async function runGoogleAdsSync(opts: { kind: SyncKind; deadlineAt?: numb
   if (missing.length) return { ...base, reason: `envs em falta: ${missing.join(", ")}` };
   const conn = await getConnection();
   if (!conn || conn.status === "disconnected" || !conn.refreshTokenEnc) return { ...base, reason: "Google Ads não está ligado" };
+  if (conn.status === "reauth_required") return { ...base, status: "failed", reason: "Reautorização necessária: volta a ligar o Google Ads em Integrações" };
 
   const accounts = await db.select().from(adAccounts).where(and(eq(adAccounts.provider, GOOGLE_ADS_PROVIDER), eq(adAccounts.selected, 1), eq(adAccounts.isManager, 0)));
   if (accounts.length === 0) return { ...base, reason: "nenhuma conta publicitária selecionada" };
@@ -180,12 +186,14 @@ export async function runGoogleAdsSync(opts: { kind: SyncKind; deadlineAt?: numb
 
   // retoma uma execução parcial recente do mesmo tipo
   let runId: number;
-  let cursor = { accountIdx: 0, chunkIdx: 0 };
+  let cursor: { accountIdx: number; chunkIdx: number; failed?: number; curFailed?: boolean } = { accountIdx: 0, chunkIdx: 0, failed: 0 };
   let rowsWritten = 0;
   const prev = await db.select().from(integrationSyncRuns)
     .where(and(eq(integrationSyncRuns.provider, GOOGLE_ADS_PROVIDER), eq(integrationSyncRuns.kind, opts.kind), eq(integrationSyncRuns.status, "partial")))
     .orderBy(desc(integrationSyncRuns.id)).limit(1);
-  const resumable = prev[0] && prev[0].rangeFrom === window.from && prev[0].rangeTo === window.to && (Date.now() - new Date(prev[0].startedAt).getTime()) < 6 * 3600_000;
+  // só retoma as que pararam por falta de tempo (cursor, sem fim); uma "partial"
+  // terminada (algumas contas falharam) já tem finishedAt e não é retomada
+  const resumable = prev[0] && prev[0].cursor && !prev[0].finishedAt && prev[0].rangeFrom === window.from && prev[0].rangeTo === window.to && (Date.now() - new Date(prev[0].startedAt).getTime()) < 6 * 3600_000;
   if (resumable) {
     runId = prev[0].id; rowsWritten = prev[0].rowsWritten;
     try { cursor = JSON.parse(prev[0].cursor ?? "{}"); } catch { /* recomeça */ }
@@ -197,14 +205,14 @@ export async function runGoogleAdsSync(opts: { kind: SyncKind; deadlineAt?: numb
   }
 
   let accountsDone = cursor.accountIdx;
-  let failed = false;
+  let accountsFailed = Number(cursor.failed ?? 0);
   try {
     for (let ai = cursor.accountIdx; ai < accounts.length; ai++) {
       const acc = accounts[ai];
-      let accountFailed = false;
+      let accountFailed = ai === cursor.accountIdx ? Boolean(cursor.curFailed) : false;
       for (let ci = ai === cursor.accountIdx ? cursor.chunkIdx : 0; ci < chunks.length; ci++) {
         if (opts.deadlineAt && Date.now() > opts.deadlineAt) {
-          await db.update(integrationSyncRuns).set({ status: "partial", cursor: JSON.stringify({ accountIdx: ai, chunkIdx: ci }), accountsDone, rowsWritten, warnings: warnings.join("\n") || null }).where(eq(integrationSyncRuns.id, runId));
+          await db.update(integrationSyncRuns).set({ status: "partial", cursor: JSON.stringify({ accountIdx: ai, chunkIdx: ci, failed: accountsFailed, curFailed: accountFailed }), accountsDone, rowsWritten, warnings: warnings.join("\n") || null }).where(eq(integrationSyncRuns.id, runId));
           await releaseLock(db);
           return { ok: true, done: false, runId, kind: opts.kind, status: "partial", accountsTotal: accounts.length, accountsDone, rowsWritten, warnings, range: window };
         }
@@ -223,20 +231,22 @@ export async function runGoogleAdsSync(opts: { kind: SyncKind; deadlineAt?: numb
         }
       }
       if (!accountFailed) await db.update(adAccounts).set({ lastSyncAt: nowMysql(), lastError: null }).where(eq(adAccounts.id, acc.id));
+      else accountsFailed++;
       accountsDone = ai + 1;
     }
   } catch (err: any) {
-    failed = true;
     await db.update(integrationSyncRuns).set({ status: "failed", error: String(err?.message ?? err).slice(0, 1000), accountsDone, rowsWritten, warnings: warnings.join("\n") || null, finishedAt: nowMysql() }).where(eq(integrationSyncRuns.id, runId));
     await saveConnection({ lastCheckedAt: nowMysql() });
     await releaseLock(db);
     return { ok: false, done: true, runId, kind: opts.kind, status: "failed", reason: String(err?.message ?? err).slice(0, 300), accountsTotal: accounts.length, accountsDone, rowsWritten, warnings, range: window };
   }
 
-  await db.update(integrationSyncRuns).set({ status: "done", cursor: null, accountsDone, rowsWritten, warnings: warnings.join("\n") || null, finishedAt: nowMysql() }).where(eq(integrationSyncRuns.id, runId));
+  const final = finalSyncStatus(accounts.length, accountsFailed);
+  const error = final.status === "done" ? null : `${accountsFailed} de ${accounts.length} conta(s) falharam`;
+  await db.update(integrationSyncRuns).set({ status: final.status, cursor: null, accountsDone, rowsWritten, error, warnings: warnings.join("\n") || null, finishedAt: nowMysql() }).where(eq(integrationSyncRuns.id, runId));
   await saveConnection({ lastCheckedAt: nowMysql() });
   await releaseLock(db);
-  return { ok: !failed, done: true, runId, kind: opts.kind, status: "done", accountsTotal: accounts.length, accountsDone, rowsWritten, warnings, range: window };
+  return { ok: final.ok, done: true, runId, kind: opts.kind, status: final.status, reason: error ?? undefined, accountsTotal: accounts.length, accountsDone, rowsWritten, warnings, range: window };
 }
 
 export async function listSyncRuns(limit = 20) {
@@ -255,9 +265,17 @@ export async function lastSuccessfulSyncAt(): Promise<string | null> {
   return rows[0]?.finishedAt ?? null;
 }
 
-/** Sinal de atraso: dois ciclos horários seguidos sem sucesso. */
+/** Sinal de atraso: a recolha é diária → parada ao fim de 26 h sem sucesso (igual em todo o lado). */
 export async function isSyncStale(): Promise<boolean> {
-  const last = await lastSuccessfulSyncAt();
-  if (!last) return true;
-  return Date.now() - new Date(last.replace(" ", "T") + "Z").getTime() > 2 * 3600_000;
+  return isStaleSince(await lastSuccessfulSyncAt());
+}
+
+/** Última execução terminada (qualquer estado) — para o alerta do Marketing. */
+export async function lastFinishedRun(provider: string = GOOGLE_ADS_PROVIDER): Promise<{ status: string; error: string | null; finishedAt: string | null } | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select({ status: integrationSyncRuns.status, error: integrationSyncRuns.error, finishedAt: integrationSyncRuns.finishedAt }).from(integrationSyncRuns)
+    .where(and(eq(integrationSyncRuns.provider, provider), inArray(integrationSyncRuns.status, ["done", "partial", "failed"]), sql`${integrationSyncRuns.finishedAt} IS NOT NULL`))
+    .orderBy(desc(integrationSyncRuns.id)).limit(1);
+  return rows[0] ?? null;
 }

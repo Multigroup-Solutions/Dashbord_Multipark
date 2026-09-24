@@ -11,7 +11,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { Megaphone, BarChart3, CheckCircle2, Loader2 } from "lucide-react";
+import { Megaphone, BarChart3, CheckCircle2, Loader2, TrendingUp } from "lucide-react";
+import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
+import CampaignRoasPanel from "@/components/marketing/CampaignRoasPanel";
 
 /**
  * Marketing → Google Ads (Jorge, 16 set 2026). É UMA das páginas do Marketing
@@ -23,7 +25,10 @@ import { Megaphone, BarChart3, CheckCircle2, Loader2 } from "lucide-react";
  *    marca/cidade (+ reservas dessa marca/cidade para comparar com as
  *    conversões da Google). "Nacional" (Brand, Pmax, Portugal) mostra-se à
  *    parte, mas o gasto é repartido pelas cidades da marca.
- * Tudo vem da Google Ads API (recolha diária); não há importações manuais.
+ * Tudo vem das APIs (Google Ads e Meta, recolha diária); não há importações
+ * manuais. Mesmo gasto e mesmo âmbito (cidades do utilizador + filtro global
+ * de projeto) do Dashboard — a fonte única é getAdMetrics.
+ * "ROAS por campanha": gasto → reservas ligadas, ROAS s/ IVA e CPA.
  */
 
 // Dia de calendário em Lisboa (o toISOString() dava o último dia do mês anterior no verão).
@@ -33,7 +38,18 @@ function lisbonDay(d = new Date()): string {
   return `${g("year")}-${g("month")}-${g("day")}`;
 }
 
-const eur = (v: number | null | undefined) => (v == null ? "—" : `${Number(v).toFixed(2)} €`);
+// PT-PT via Intl ("12,34 €"), como no resto do Marketing
+const EUR = new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR", minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const eur = (v: number | null | undefined) => (v == null ? "—" : EUR.format(Number(v)));
+const roasX = (v: number | null | undefined) => (v == null ? "—" : `${v.toFixed(2).replace(".", ",")}×`);
+/** Estado da campanha na plataforma → etiqueta (removida/arquivada/pausada). */
+export function campaignStatusBadge(status: string | null | undefined): { label: string; cls: string } | null {
+  const s = String(status ?? "").toUpperCase();
+  if (s === "REMOVED" || s === "DELETED") return { label: "removida", cls: "text-rose-700 border-rose-200" };
+  if (s === "ARCHIVED") return { label: "arquivada", cls: "text-muted-foreground" };
+  if (s === "PAUSED" || s === "CAMPAIGN_PAUSED") return { label: "pausada", cls: "text-amber-700 border-amber-200" };
+  return null;
+}
 const num = (v: number | null | undefined) => (v == null ? "—" : Number(v).toLocaleString("pt-PT"));
 
 export default function MarketingGoogleAdsPage() {
@@ -41,7 +57,8 @@ export default function MarketingGoogleAdsPage() {
   const [from, setFrom] = useState(`${today.slice(0, 7)}-01`);
   const [to, setTo] = useState(today);
   const [tab, setTab] = useState("resumo");
-  const range = { from, to };
+  const { projectId } = useGlobalFilters();
+  const range = { from, to, projectId };
 
   const { data: stats } = trpc.marketing.dashboard.useQuery(range);
   const { data: byBrand } = trpc.marketing.byBrand.useQuery(range);
@@ -83,9 +100,9 @@ export default function MarketingGoogleAdsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <p className="text-muted-foreground">Gasto Google Ads por marca e por campanha, e reservas por marca</p>
+          <p className="text-muted-foreground">Gasto em anúncios (Google Ads e Meta) por marca e por campanha, reservas por marca e ROAS por campanha</p>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Dados da Google Ads API (recolha diária da última semana; no dia 2, o mês anterior fechado). Contas e ligação em <a href="/integracoes/google-ads" className="underline">Integrações → Google Ads</a>. A fatura da Google entra pelas Despesas.
+            Dados das APIs Google Ads e Meta (recolha diária da última semana; no dia 2, o mês anterior fechado). Contas e ligação em <a href="/integracoes/google-ads" className="underline">Integrações</a>. As faturas entram pelas Despesas.
           </p>
         </div>
         <div>
@@ -107,6 +124,7 @@ export default function MarketingGoogleAdsPage() {
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="flex-wrap h-auto">
           <TabsTrigger value="resumo"><BarChart3 className="w-4 h-4 mr-1" />Por marca</TabsTrigger>
+          <TabsTrigger value="roas"><TrendingUp className="w-4 h-4 mr-1" />ROAS por campanha</TabsTrigger>
           {brandTabs.map((a) => (
             <TabsTrigger key={a.brand} value={`marca-${a.brand}`}><Megaphone className="w-4 h-4 mr-1" />{a.brand}</TabsTrigger>
           ))}
@@ -114,6 +132,9 @@ export default function MarketingGoogleAdsPage() {
 
         <TabsContent value="resumo" className="mt-4">
           <BrandSummary data={byBrand} />
+        </TabsContent>
+        <TabsContent value="roas" className="mt-4">
+          {tab === "roas" && <CampaignRoasPanel from={from} to={to} projectId={projectId} />}
         </TabsContent>
         {brandTabs.map((t) => (
           <TabsContent key={t.brand} value={`marca-${t.brand}`} className="mt-4">
@@ -133,18 +154,20 @@ function BrandSummary({ data }: { data: any }) {
     return (
       <Card className="p-12 text-center">
         <Megaphone className="w-12 h-12 mx-auto text-muted-foreground mb-3" />
-        <p className="text-muted-foreground">Sem contas Google Ads selecionadas. Liga e seleciona as contas em Integrações → Google Ads.</p>
+        <p className="text-muted-foreground">Sem gasto nem contas de anúncios selecionadas neste âmbito. Liga e seleciona as contas em Integrações.</p>
       </Card>
     );
   }
-  const totals = rows.reduce((t, r) => ({ spend: t.spend + r.spend, conversions: t.conversions + (r.conversions ?? 0), bookings: t.bookings + r.bookings, revenue: t.revenue + r.revenue, attributed: t.attributed + r.attributed, revenueAttributed: t.revenueAttributed + (r.revenueAttributed ?? 0) }), { spend: 0, conversions: 0, bookings: 0, revenue: 0, attributed: 0, revenueAttributed: 0 });
+  const totals = rows.reduce((t, r) => ({ spend: t.spend + r.spend, spendGoogle: t.spendGoogle + (r.spendGoogle ?? 0), spendMeta: t.spendMeta + (r.spendMeta ?? 0), conversions: t.conversions + (r.conversions ?? 0), bookings: t.bookings + r.bookings, revenue: t.revenue + r.revenue, attributed: t.attributed + r.attributed, revenueAttributed: t.revenueAttributed + (r.revenueAttributed ?? 0) }), { spend: 0, spendGoogle: 0, spendMeta: 0, conversions: 0, bookings: 0, revenue: 0, attributed: 0, revenueAttributed: 0 });
+  const vat = Number(data.vatRate ?? 0.23);
+  const roasNet = (rev: number, spend: number) => (spend > 0 ? rev / (1 + vat) / spend : null);
   return (
     <div className="space-y-4">
       <Card>
         <CardHeader>
           <CardTitle>Gasto e reservas por marca</CardTitle>
           <p className="text-xs text-muted-foreground mt-1">
-            Marca = a escolhida em cada campanha (uma campanha da conta Multipark.pt marcada como Airpark Faro conta na Airpark); sem escolha, a marca da conta (Multipark.pt e Multipark SA são a marca Marketplace). Reservas = reservas Multipark reais dessa marca, por data de criação, sem canceladas. "Atribuídas" são as que trazem gclid/utm pago no URL de origem.
+            Marca = a escolhida em cada campanha (uma campanha da conta Multipark.pt marcada como Airpark Faro conta na Airpark); sem escolha, a marca da conta (Multipark.pt e Multipark SA são a marca Marketplace). Reservas = reservas Multipark reais dessa marca, por data de criação (dias de Lisboa), sem canceladas. "Ligadas" são as que trazem gclid/fbclid/utm pago no URL de origem. ROAS s/ IVA = valor reservado ÷ 1,23 ÷ gasto. Com âmbito de cidade, o gasto é o imputado a essas cidades (nacional pela sua parte).
           </p>
         </CardHeader>
         <CardContent className="p-0">
@@ -153,8 +176,10 @@ function BrandSummary({ data }: { data: any }) {
               <thead className="text-xs text-muted-foreground border-b">
                 <tr>
                   <th className="text-left px-4 py-2 font-medium">Marca</th>
-                  <th className="text-left px-4 py-2 font-medium">Conta(s) Google</th>
-                  <th className="text-right px-4 py-2 font-medium">Gasto</th>
+                  <th className="text-left px-4 py-2 font-medium">Conta(s)</th>
+                  <th className="text-right px-4 py-2 font-medium">Google</th>
+                  <th className="text-right px-4 py-2 font-medium">Meta</th>
+                  <th className="text-right px-4 py-2 font-medium">Gasto total</th>
                   <th className="text-right px-4 py-2 font-medium" title="Conversões contadas pela Google (tag no site) — medem melhor os anúncios do que as reservas que conseguimos ligar">Conv. Google</th>
                   <th className="text-right px-4 py-2 font-medium">Custo / conv.</th>
                   <th className="text-right px-4 py-2 font-medium">Reservas</th>
@@ -162,13 +187,16 @@ function BrandSummary({ data }: { data: any }) {
                   <th className="text-right px-4 py-2 font-medium">Valor via anúncios</th>
                   <th className="text-right px-4 py-2 font-medium">Valor reservado</th>
                   <th className="text-right px-4 py-2 font-medium">Gasto / reserva</th>
+                  <th className="text-right px-4 py-2 font-medium" title="Valor reservado sem IVA ÷ gasto (todas as reservas da marca)">ROAS (s/ IVA)</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.brand} className="border-b">
                     <td className="px-4 py-2 font-semibold">{r.brand}{!r.mapped && <Badge variant="outline" className="ml-2 text-[10px] text-amber-700">conta sem marca</Badge>}</td>
-                    <td className="px-4 py-2 text-muted-foreground">{r.accounts.map((a: any) => a.name).join(", ")}</td>
+                    <td className="px-4 py-2 text-muted-foreground">{r.accounts.map((a: any) => `${a.name}${a.provider === "meta" ? " (Meta)" : ""}`).join(", ")}</td>
+                    <td className="px-4 py-2 text-right text-muted-foreground">{eur(r.spendGoogle ?? 0)}</td>
+                    <td className="px-4 py-2 text-right text-muted-foreground">{eur(r.spendMeta ?? 0)}</td>
                     <td className="px-4 py-2 text-right">{eur(r.spend)}</td>
                     <td className="px-4 py-2 text-right font-semibold">{(r.conversions ?? 0).toFixed(1)}</td>
                     <td className="px-4 py-2 text-right text-muted-foreground">{r.conversions > 0 ? eur(r.spend / r.conversions) : "—"}</td>
@@ -177,10 +205,13 @@ function BrandSummary({ data }: { data: any }) {
                     <td className="px-4 py-2 text-right">{eur(r.revenueAttributed)}</td>
                     <td className="px-4 py-2 text-right text-muted-foreground">{eur(r.revenue)}</td>
                     <td className="px-4 py-2 text-right">{r.bookings > 0 ? eur(r.spend / r.bookings) : "—"}</td>
+                    <td className="px-4 py-2 text-right">{roasX(r.roasNet ?? roasNet(r.revenue, r.spend))}</td>
                   </tr>
                 ))}
                 <tr className="bg-muted/40 font-semibold">
                   <td className="px-4 py-2" colSpan={2}>Total</td>
+                  <td className="px-4 py-2 text-right">{eur(totals.spendGoogle)}</td>
+                  <td className="px-4 py-2 text-right">{eur(totals.spendMeta)}</td>
                   <td className="px-4 py-2 text-right">{eur(totals.spend)}</td>
                   <td className="px-4 py-2 text-right">{totals.conversions.toFixed(1)}</td>
                   <td className="px-4 py-2 text-right text-muted-foreground">{totals.conversions > 0 ? eur(totals.spend / totals.conversions) : "—"}</td>
@@ -189,6 +220,7 @@ function BrandSummary({ data }: { data: any }) {
                   <td className="px-4 py-2 text-right">{eur(totals.revenueAttributed)}</td>
                   <td className="px-4 py-2 text-right text-muted-foreground">{eur(totals.revenue)}</td>
                   <td className="px-4 py-2 text-right">{totals.bookings > 0 ? eur(totals.spend / totals.bookings) : "—"}</td>
+                  <td className="px-4 py-2 text-right">{roasX(roasNet(totals.revenue, totals.spend))}</td>
                 </tr>
               </tbody>
             </table>
@@ -197,6 +229,9 @@ function BrandSummary({ data }: { data: any }) {
       </Card>
       {data.bookingsWithoutBrand > 0 && (
         <p className="text-xs text-muted-foreground">{num(data.bookingsWithoutBrand)} reserva(s) do período sem parque/marca atribuída — não entram em nenhuma linha.</p>
+      )}
+      {data.unassignedSpend > 0 && (
+        <p className="text-xs text-muted-foreground">{eur(data.unassignedSpend)} de gasto sem cidade (campanhas por associar ou nacional de marca sem cidades) — conta no total da marca, em nenhuma cidade.</p>
       )}
     </div>
   );
@@ -212,7 +247,7 @@ function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares
   const { user } = useAuth();
   const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
   const utils = trpc.useUtils();
-  const refresh = () => { utils.marketing.dashboard.invalidate(); utils.marketing.byBrand.invalidate(); utils.integrations.googleAds.campaigns.suggest.invalidate(); };
+  const refresh = () => { utils.marketing.dashboard.invalidate(); utils.marketing.byBrand.invalidate(); utils.marketing.campaignRoas.invalidate(); utils.integrations.googleAds.campaigns.suggest.invalidate(); };
   const { data: suggestions = [] } = trpc.integrations.googleAds.campaigns.suggest.useQuery(undefined, { enabled: isAdmin, retry: false });
   const update = trpc.integrations.googleAds.campaigns.update.useMutation({ onSuccess: () => { refresh(); toast.success("Marca/cidade atualizada"); }, onError: (e) => toast.error(e.message) });
   const apply = trpc.integrations.googleAds.campaigns.applySuggestions.useMutation({
@@ -366,6 +401,8 @@ function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares
                       <tr key={r.key} className="border-b last:border-0">
                         <td className="px-4 py-1.5 pl-8">
                           {r.name}
+                          {r.provider === "meta" && <Badge variant="outline" className="ml-1.5 text-[10px]">Meta</Badge>}
+                          {(() => { const b = campaignStatusBadge(r.status); return b ? <Badge variant="outline" className={`ml-1.5 text-[10px] ${b.cls}`}>{b.label}</Badge> : null; })()}
                           {r.accountLabel && <div className="text-[11px] text-muted-foreground">conta {r.accountLabel}</div>}
                         </td>
                         <td className="px-4 py-1.5">

@@ -3,6 +3,8 @@
  * recolha e cobertura. Sem BD, sem rede — tudo testável.
  */
 
+import { isStaleSince } from "../../../shared/marketingRules";
+
 /** A API devolve dinheiro em micros (1 € = 1 000 000). Guardamos micros; convertemos só para mostrar. */
 export const microsToAmount = (micros: number | string | bigint | null | undefined): number =>
   Number(micros ?? 0) / 1_000_000;
@@ -131,8 +133,9 @@ export function coverageFor(
     else if (legacyDays.has(d)) legacy++;
     else if (d <= today) missing++;
   }
-  // A recolha é DIÁRIA (16 set 2026): só conta como parada ao fim de 26 h.
-  const stale = lastSuccessfulSyncAt ? (Date.now() - new Date(lastSuccessfulSyncAt).getTime()) > 26 * 3600_000 : true;
+  // A recolha é DIÁRIA (16 set 2026): só conta como parada ao fim de 26 h
+  // (SYNC_STALE_HOURS — o mesmo limiar em todo o lado).
+  const stale = isStaleSince(lastSuccessfulSyncAt);
   const status: Coverage["status"] = api + legacy === 0 ? "none" : missing > 0 ? "partial" : stale && api > 0 ? "stale" : "ok";
   return { from, to, daysInRange: total, apiDays: api, legacyDays: legacy, missingDays: missing, lastCompleteDay: lastComplete, lastSuccessfulSyncAt, status };
 }

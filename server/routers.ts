@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { projectScope, campaignScope, bookingHistoryScope, scopedProjectIds, assertEmployeeAccess, assertProjectAccess, requireGlobalCityAccess, cityScope as cityScopeStore } from './cityScope';
+import { projectScope, bookingHistoryScope, scopedProjectIds, assertEmployeeAccess, assertProjectAccess, requireGlobalCityAccess, cityScope as cityScopeStore } from './cityScope';
 import {
   INCIDENT_SEVERITIES, INCIDENT_STATUSES, INCIDENT_TYPES, LOST_ITEM_TYPES, LOST_PRIORITIES, LOST_STATUSES,
   contentTypeForFilename, incidentStatusPatch, lostStatusPatch, safeExt, textToSafeHtml, utcNowStr,
@@ -50,6 +50,7 @@ import {
   createPayrollRun, listPayrollRuns, getPayrollRun, transitionPayrollRun,
 } from "./rhService";
 import { googleAdsRouter } from "./integrations/googleAds/router";
+import { metaAdsRouter } from "./integrations/meta/router";
 import { googleBusinessRouter } from "./integrations/googleBusiness/router";
 import { transcribeAudio } from "./_core/voiceTranscription";
 import { getBookingHistory, getBookingsReport, getBookingTryAllParks } from "./multipark";
@@ -165,20 +166,6 @@ import {
   seedExtraRates,
   updateExtraRate,
   getHRStats,
-  // Marketing
-  getCampaigns,
-  getCampaignById,
-  createCampaign,
-  updateCampaign,
-  deleteCampaign,
-  getCampaignStats,
-  getAllDailyStats,
-  importDailyStats,
-  deleteDailyStat,
-  getMarketingDashboardStats,
-  getBookingRevenueByProject,
-  getCampaignByNameAndPlatform,
-  getExistingStatsForCampaignAndDateRange,
   // Operacional
   getVehicles,
   getVehicleById,
@@ -3626,9 +3613,10 @@ export const appRouter = router({
 
   // ─── MARKETING ────────────────────────────────────────────────────────────
   marketing: router({
-    // Fonte única (server/integrations/googleAds/marketingStats): gasto = custo
-    // importado (nunca orçamento×dias), reservas reais por data de criação,
-    // atribuídas vs sem atribuição, conversões Google à parte, cobertura.
+    // Fonte única (server/integrations/googleAds/adMetrics + marketingStats):
+    // gasto = custo importado Google + Meta (nunca orçamento×dias), reservas
+    // reais por data de criação (dias de Lisboa, sem canceladas — a regra das
+    // Reservas & Operações), ROAS s/ IVA, cobertura.
     dashboard: protectedProcedure
       .input(z.object({ from: z.string().optional(), to: z.string().optional(), projectId: z.number().optional() }).optional())
       .query(async ({ ctx, input }) => {
@@ -3645,65 +3633,15 @@ export const appRouter = router({
         }
       }),
 
-    // Página principal do Marketing (Jorge, 16 set 2026): gasto por marca
-    // (= conta Google; Multipark = Marketplace) e reservas dessa marca.
-    // Alertas do Marketing (Jorge, 24 set 2026) — regras em shared/marketingAlerts.ts.
+    // Alertas (regras em shared/marketingAlerts.ts; dados em server/marketingAlertsService.ts):
+    // atribuição, campanhas sem resultados (sugestão: pausar), ritmo do mês e
+    // dos orçamentos, recolhas Google/Meta falhadas/paradas (vermelho).
     alerts: protectedProcedure
       .input(z.object({ projectId: z.number().optional() }).optional())
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
-        const { getDb } = await import("./db");
-        const { getMarketingStats } = await import("./integrations/googleAds/marketingStats");
-        const { getAdMetrics } = await import("./integrations/googleAds/adMetrics");
-        const { projectScope, scopedProjectIds } = await import("./cityScope");
-        const { resolveProjectIds } = await import("./db");
-        const { lisbonToday } = await import("../shared/expensePeriods");
-        const { computeMarketingAlerts, ALERT_WINDOW_DAYS } = await import("../shared/marketingAlerts");
-        const { sql } = await import("drizzle-orm");
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
-        const today = lisbonToday();
-        const shift = (iso: string, days: number) => { const d = new Date(`${iso}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + days); return d.toISOString().slice(0, 10); };
-        const [y, m] = today.split("-").map(Number);
-        const monthStart = `${today.slice(0, 7)}-01`;
-        const prevEnd = shift(monthStart, -1);
-        const prevStart = `${prevEnd.slice(0, 7)}-01`;
-        const windowFrom = shift(today, -(ALERT_WINDOW_DAYS - 1));
-        const requested = input?.projectId ? await resolveProjectIds(input.projectId) : null;
-        const allowed = scopedProjectIds();
-        const projectIds = allowed ? (requested ? requested.filter((id) => allowed.includes(id)) : allowed) : requested;
-        const [win, month, prev] = await Promise.all([
-          getMarketingStats({ from: windowFrom, to: today, projectId: input?.projectId }),
-          getAdMetrics({ from: monthStart, to: today, projectIds }),
-          getAdMetrics({ from: prevStart, to: prevEnd, projectIds }),
-        ]);
-        // Reservas atribuídas por campanha (ID externo do Google) na janela.
-        const byExt = new Map<string, number>();
-        const raw: any = await db.execute(sql`
-          SELECT b.adCampaignExternalId AS ext, COUNT(*) AS n FROM multipark_bookings b
-          WHERE b.adAttribution = 'google_paid' AND b.adCampaignExternalId IS NOT NULL
-            AND UPPER(COALESCE(b.status, '')) NOT LIKE '%CANCEL%'
-            AND b.bookingCreatedAt BETWEEN ${`${windowFrom} 00:00:00`} AND ${`${today} 23:59:59`}
-            AND ${projectScope(sql`b.projectId`)}
-          GROUP BY b.adCampaignExternalId`);
-        for (const r of (Array.isArray(raw?.[0]) ? raw[0] : raw) as any[]) byExt.set(String(r.ext), Number(r.n ?? 0));
-        const windowCampaigns = (win.byCampaign as any[]).filter((c) => c.source === "api").map((c) => ({
-          name: String(c.name), accountName: c.accountName ?? null, cost: Number(c.cost ?? 0), conversions: Number(c.conversions ?? 0),
-          attributedBookings: byExt.get(String(c.key).split(":").slice(2).join(":")) ?? 0,
-        }));
-        const alerts = computeMarketingAlerts({
-          windowCampaigns,
-          attribution: win.attributionQuality,
-          windowSpend: win.spend,
-          windowConversions: win.conversionsGoogle,
-          monthSpend: month.totals.cost,
-          prevMonthSpend: prev.totals.cost,
-          dayOfMonth: Number(today.slice(8, 10)),
-          daysInMonth: new Date(Date.UTC(y, m, 0)).getUTCDate(),
-          unmappedCampaigns: month.unmappedCampaigns,
-          coverage: win.coverage ?? null,
-        });
-        return { generatedAt: new Date().toISOString(), windowFrom, alerts };
+        const { computeAlertsFor } = await import("./marketingAlertsService");
+        return computeAlertsFor(input?.projectId);
       }),
     // Canais e clientes (Jorge, 24 set 2026): reservas e custo por canal de
     // aquisição + ligação ao CRM (canal de entrada de cada cliente).
@@ -3711,10 +3649,10 @@ export const appRouter = router({
       .input(z.object({ from: z.string().optional(), to: z.string().optional(), projectId: z.number().optional() }).optional())
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
-        const { getDb, resolveProjectIds } = await import("./db");
+        const { getDb } = await import("./db");
         const { getChannels } = await import("./marketingChannels");
         const { getAdMetrics } = await import("./integrations/googleAds/adMetrics");
-        const { scopedProjectIds } = await import("./cityScope");
+        const { marketingProjectIds } = await import("./marketingSql");
         const { lisbonToday } = await import("../shared/expensePeriods");
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
@@ -3722,18 +3660,17 @@ export const appRouter = router({
         const from = input?.from || `${today.slice(0, 7)}-01`;
         const to = input?.to || today;
         // Mesmo recorte do marketing.dashboard: projeto pedido ∩ cidades do utilizador.
-        const requested = input?.projectId ? await resolveProjectIds(input.projectId) : null;
-        const allowed = scopedProjectIds();
-        const projectIds = allowed ? (requested ? requested.filter((id) => allowed.includes(id)) : allowed) : requested;
+        const projectIds = await marketingProjectIds(input?.projectId);
         try {
           const ads = await getAdMetrics({ from, to, projectIds });
-          return await getChannels(db, { from, to, projectIds: requested ?? null, adSpend: ads.totals.cost, adConversions: ads.totals.conversions });
+          return await getChannels(db, { from, to, projectIds, adSpend: ads.totals.cost, adConversions: ads.totals.conversions });
         } catch (e: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) });
         }
       }),
+    // Por marca: gasto (mesma fonte e âmbito do dashboard) e reservas da marca.
     byBrand: protectedProcedure
-      .input(z.object({ from: z.string().optional(), to: z.string().optional() }).optional())
+      .input(z.object({ from: z.string().optional(), to: z.string().optional(), projectId: z.number().optional() }).optional())
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
         const { getSpendAndBookingsByBrand } = await import("./integrations/googleAds/marketingStats");
@@ -3742,347 +3679,82 @@ export const appRouter = router({
         const from = input?.from || `${today.slice(0, 7)}-01`;
         const to = input?.to || today;
         try {
-          return await getSpendAndBookingsByBrand({ from, to });
+          return await getSpendAndBookingsByBrand({ from, to, projectId: input?.projectId });
         } catch (e: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) });
         }
       }),
 
-    bookingRevenue: protectedProcedure
-      .input(z.object({ from: z.string().optional(), to: z.string().optional(), projectId: z.number().optional() }).optional())
+    // ROAS por campanha → reservas ligadas (ID no link, utm_campaign ou código
+    // de desconto ligados pelo admin) + conversões por ação.
+    campaignRoas: protectedProcedure
+      .input(z.object({ from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), projectId: z.number().optional() }))
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
-        return getBookingRevenueByProject({ from: input?.from, to: input?.to, projectId: input?.projectId });
+        const { getCampaignRoas } = await import("./marketingCampaignRoas");
+        return getCampaignRoas(input);
       }),
 
-    // ── CAMPAIGNS ──
-    campaigns: router({
+    // Ligações campanha ↔ utm_campaign / código de desconto (admin; globais).
+    campaignLinks: router({
+      list: protectedProcedure.query(async ({ ctx }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { listCampaignLinks } = await import("./marketingCampaignRoas");
+        return listCampaignLinks();
+      }),
+      add: protectedProcedure
+        .input(z.object({ adCampaignId: z.number().int().positive(), keyType: z.enum(["utm_campaign", "discount_code"]), keyValue: z.string().trim().min(1).max(256) }))
+        .mutation(async ({ ctx, input }) => {
+          requireRole(ctx.user.role, "admin");
+          requireGlobalCityAccess();
+          const { addCampaignLink } = await import("./marketingCampaignRoas");
+          await addCampaignLink({ ...input, userId: ctx.user.id });
+          await logActivity({ userId: ctx.user.id, action: "create", entity: "ad_campaign_links", entityId: input.adCampaignId, details: `Ligação ${input.keyType}=${input.keyValue}` });
+          return { success: true };
+        }),
+      remove: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        requireGlobalCityAccess();
+        const { removeCampaignLink } = await import("./marketingCampaignRoas");
+        await removeCampaignLink(input.id);
+        return { success: true };
+      }),
+    }),
+
+    // Orçamentos mensais por cidade/marca e ritmo (0093). Ler: backoffice
+    // (âmbito de cidade); definir: admin (a guarda de cidade valida o projectId).
+    budgets: router({
       list: protectedProcedure
-        .input(z.object({ platform: z.string().optional(), projectId: z.number().optional(), status: z.string().optional() }).optional())
+        .input(z.object({ month: z.string().regex(/^\d{4}-\d{2}$/), projectId: z.number().optional() }))
         .query(async ({ ctx, input }) => {
           requireRole(ctx.user.role, "backoffice");
-          return getCampaigns({ platform: input?.platform, projectId: input?.projectId, status: input?.status });
+          const { listBudgetsWithPacing } = await import("./marketingBudgets");
+          return listBudgetsWithPacing(input);
         }),
-      get: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
-        return getCampaignById(input.id);
-      }),
-      create: protectedProcedure
-        .input(z.object({
-          name: z.string().min(1),
-          platform: z.enum(["google_ads", "meta_ads", "instagram", "other"]),
-          projectId: z.number().optional(),
-          status: z.enum(["active", "paused", "completed"]).optional(),
-          startDate: z.string().optional(),
-          endDate: z.string().optional(),
-          budget: z.string().optional(),
-          notes: z.string().optional(),
-        }))
+      upsert: protectedProcedure
+        .input(z.object({ month: z.string().regex(/^\d{4}-\d{2}$/), projectId: z.number().int(), provider: z.enum(["all", "google_ads", "meta"]).default("all"), amount: z.number().min(0).max(10_000_000), notes: z.string().max(255).nullable().optional() }))
         .mutation(async ({ ctx, input }) => {
           requireRole(ctx.user.role, "admin");
-          const id = await createCampaign({
-            name: input.name,
-            platform: input.platform,
-            projectId: input.projectId ?? null,
-            campaignStatus: input.status ?? "active",
-            startDate: input.startDate ? new Date(input.startDate).toISOString().slice(0, 19).replace("T", " ") : null,
-            endDate: input.endDate ? new Date(input.endDate).toISOString().slice(0, 19).replace("T", " ") : null,
-            budget: input.budget ?? null,
-            notes: input.notes ?? null,
-            createdById: ctx.user.id,
-          });
-          await logActivity({ userId: ctx.user.id, action: "create", entity: "campaign", entityId: id, details: `Campanha: ${input.name}` });
-          return { id };
-        }),
-      update: protectedProcedure
-        .input(z.object({
-          id: z.number(),
-          name: z.string().optional(),
-          platform: z.enum(["google_ads", "meta_ads", "instagram", "other"]).optional(),
-          projectId: z.number().nullable().optional(),
-          status: z.enum(["active", "paused", "completed"]).optional(),
-          startDate: z.string().nullable().optional(),
-          endDate: z.string().nullable().optional(),
-          budget: z.string().nullable().optional(),
-          notes: z.string().nullable().optional(),
-        }))
-        .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
-          const { id, ...data } = input;
-          const updateData: any = { ...data };
-          if (data.startDate !== undefined) updateData.startDate = data.startDate ? new Date(data.startDate) : null;
-          if (data.endDate !== undefined) updateData.endDate = data.endDate ? new Date(data.endDate) : null;
-          await updateCampaign(id, updateData);
-          await logActivity({ userId: ctx.user.id, action: "update", entity: "campaign", entityId: id, details: `Campanha atualizada` });
+          const { upsertBudget } = await import("./marketingBudgets");
+          await upsertBudget({ ...input, userId: ctx.user.id });
+          await logActivity({ userId: ctx.user.id, action: "update", entity: "marketing_budgets", entityId: input.projectId, details: `Orçamento ${input.month} ${input.provider}: ${input.amount} €` });
           return { success: true };
         }),
-      delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "super_admin");
-        await deleteCampaign(input.id);
-        await logActivity({ userId: ctx.user.id, action: "delete", entity: "campaign", entityId: input.id, details: `Campanha eliminada` });
+      remove: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        const { removeBudget } = await import("./marketingBudgets");
+        await removeBudget(input.id);
         return { success: true };
+      }),
+      copyFromPrevious: protectedProcedure.input(z.object({ month: z.string().regex(/^\d{4}-\d{2}$/) })).mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        const { copyBudgets } = await import("./marketingBudgets");
+        const [y, m] = input.month.split("-").map(Number);
+        const prev = new Date(Date.UTC(y, m - 2, 1)).toISOString().slice(0, 7);
+        return { copied: await copyBudgets(prev, input.month, ctx.user.id) };
       }),
     }),
-
-    // ── CAMPANHAS INTERNAS (das reservas Multipark) ──
-    // Campanha lógica agrupa várias chaves (campaignId do link, nome, ou padrão
-    // de URL). Atribuição "uma vez": detecta chaves novas, utilizador atribui.
-    internalCampaigns: router({
-      // Chaves ainda NÃO atribuídas: campaignId (do originUrl) + campaignName não-parceiro.
-      detect: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx }) => {
-        requireRole(ctx.user.role, "backoffice");
-        const { getDb } = await import("./db");
-        const { sql } = await import("drizzle-orm");
-        const db = await getDb();
-        if (!db) return { ids: [], names: [] };
-        const rows = (r: any) => (Array.isArray(r[0]) ? r[0] : r) as any[];
-        // TODOS os links (originUrl) ainda não atribuídos — agrega reservas por link.
-        const linksRes: any = await db.execute(sql`
-          SELECT originUrl AS value, COUNT(*) AS bookings, COALESCE(SUM(totalPrice),0) AS revenue
-          FROM multipark_bookings
-          WHERE ${projectScope(sql`multipark_bookings.projectId`)} AND originUrl IS NOT NULL AND originUrl <> ''
-            AND NOT EXISTS (
-              SELECT 1 FROM internal_campaign_keys k
-              WHERE k.keyType = 'url_pattern' AND multipark_bookings.originUrl LIKE k.keyValue
-            )
-          GROUP BY originUrl ORDER BY bookings DESC LIMIT 250`);
-        const namesRes: any = await db.execute(sql`
-          SELECT campaignName AS value, COUNT(*) AS bookings, COALESCE(SUM(totalPrice),0) AS revenue
-          FROM multipark_bookings
-          WHERE ${projectScope(sql`multipark_bookings.projectId`)} AND campaignName IS NOT NULL AND campaignName <> ''
-            AND campaignName NOT IN (SELECT name FROM partnerships)
-            AND campaignName NOT IN (SELECT keyValue FROM internal_campaign_keys WHERE keyType='campaign_name')
-          GROUP BY campaignName ORDER BY bookings DESC`);
-        return { links: rows(linksRes), names: rows(namesRes) };
-      }),
-
-      // Campanhas lógicas + chaves + custos + métricas (reservas/receita/gasto).
-      list: protectedProcedure
-        .input(z.object({ from: z.string().optional(), to: z.string().optional(), projectId: z.number().optional() }).optional())
-        .query(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "backoffice");
-          const { getDb } = await import("./db");
-          const { sql } = await import("drizzle-orm");
-          const db = await getDb();
-          if (!db) return [];
-          const rows = (r: any) => (Array.isArray(r[0]) ? r[0] : r) as any[];
-          // Campanhas vêm de DUAS fontes: internal_campaigns + campaigns (ad).
-          const internal = rows(await db.execute(sql`SELECT id, name, projectId, dailyBudget, city, brand, campaignStatus FROM internal_campaigns WHERE ${projectScope(sql`internal_campaigns.projectId`)} ORDER BY name`))
-            .map((c) => ({ ...c, campaignType: "internal" as const }));
-          const ad = rows(await db.execute(sql`SELECT id, name, projectId, budget AS dailyBudget, platform AS brand, campaignStatus FROM campaigns WHERE ${projectScope(sql`campaigns.projectId`)} ORDER BY name`))
-            .map((c) => ({ ...c, city: null, campaignType: "ad" as const }));
-          // nº de dias do período (para estimar gasto via dailyBudget)
-          const periodDays = input?.from && input?.to
-            ? Math.max(1, Math.floor((Date.parse(input.to) - Date.parse(input.from)) / 86400000) + 1)
-            : 0;
-          const projs = rows(await db.execute(sql`SELECT id, name FROM projects`));
-          const projName = new Map(projs.map((p) => [p.id, p.name]));
-          const camps = [...internal, ...ad].map((c) => ({ ...c, projectName: c.projectId ? projName.get(c.projectId) ?? null : null }));
-          const allKeys = rows(await db.execute(sql`SELECT * FROM internal_campaign_keys`));
-          const dateCond = input?.from && input?.to
-            ? sql` AND checkIn >= ${input.from + " 00:00:00"} AND checkIn <= ${input.to + " 23:59:59"}`
-            : sql``;
-          const out: any[] = [];
-          for (const c of camps) {
-            const keys = allKeys.filter((k) => k.campaignType === c.campaignType && k.campaignId === c.id);
-            const conds: any[] = [];
-            const names = keys.filter((k) => k.keyType === "campaign_name").map((k) => k.keyValue);
-            if (names.length) conds.push(sql`campaignName IN (${sql.join(names.map((v: string) => sql`${v}`), sql`, `)})`);
-            for (const k of keys.filter((k) => k.keyType === "campaign_id")) conds.push(sql`originUrl LIKE ${"%campaignId=" + k.keyValue + "%"}`);
-            for (const k of keys.filter((k) => k.keyType === "url_pattern")) conds.push(sql`originUrl LIKE ${k.keyValue}`);
-            let bookings = 0, revenue = 0;
-            if (conds.length) {
-              const m = rows(await db.execute(sql`SELECT COUNT(*) AS c, COALESCE(SUM(totalPrice),0) AS rev FROM multipark_bookings WHERE ${projectScope(sql`multipark_bookings.projectId`)} AND (${sql.join(conds, sql` OR `)})${dateCond}`))[0];
-              bookings = Number(m?.c ?? 0); revenue = Number(m?.rev ?? 0);
-            }
-            const costRow = rows(await db.execute(sql`SELECT COALESCE(SUM(amount),0) AS spend, SUM(impressions) AS impressions, SUM(clicks) AS clicks, SUM(conversions) AS conversions, SUM(conversionValue) AS conversionValue, AVG(ctr) AS avgCtr FROM internal_campaign_costs WHERE campaignType = ${c.campaignType} AND campaignId = ${c.id}${input?.from && input?.to ? sql` AND costDate >= ${input.from} AND costDate <= ${input.to}` : sql``}`))[0];
-            const manualSpend = Number(costRow?.spend ?? 0);
-            const impressions = costRow?.impressions != null ? Number(costRow.impressions) : null;
-            const clicks = costRow?.clicks != null ? Number(costRow.clicks) : null;
-            const conversions = costRow?.conversions != null ? Number(costRow.conversions) : null;
-            const conversionValue = costRow?.conversionValue != null ? Number(costRow.conversionValue) : null;
-            // CTR do período: derivado dos totais; senão média dos CTRs registados
-            const ctr = impressions && clicks != null ? Math.round((clicks / impressions) * 100000) / 1000
-              : (costRow?.avgCtr != null ? Math.round(Number(costRow.avgCtr) * 1000) / 1000 : null);
-            // Gasto real importado do Google Ads (campaign_daily_stats, só campanhas ad).
-            let realStatsSpend = 0;
-            if (c.campaignType === "ad" && input?.from && input?.to) {
-              const r = rows(await db.execute(sql`SELECT COALESCE(SUM(spend),0) AS s FROM campaign_daily_stats WHERE campaignId = ${c.id} AND date >= ${input.from + " 00:00:00"} AND date <= ${input.to + " 23:59:59"}`))[0];
-              realStatsSpend = Number(r?.s ?? 0);
-            }
-            // Prioridade: gasto real importado > custo manual > estimativa por orçamento×dias.
-            const budgetSpend = c.dailyBudget && periodDays > 0 ? Number(c.dailyBudget) * periodDays : 0;
-            const spend = realStatsSpend > 0 ? realStatsSpend : (manualSpend > 0 ? manualSpend : budgetSpend);
-            const spendEstimated = realStatsSpend === 0 && manualSpend === 0 && budgetSpend > 0;
-            out.push({ ...c, dailyBudget: c.dailyBudget != null ? Number(c.dailyBudget) : null, keys, bookings, revenue, spend, spendEstimated, costPerBooking: bookings > 0 ? spend / bookings : 0, roas: spend > 0 ? revenue / spend : null, impressions, clicks, ctr, conversions, conversionValue });
-          }
-          // Campanhas com chaves ou métricas primeiro
-          out.sort((a, b) => (b.keys.length || b.bookings) - (a.keys.length || a.bookings));
-          return out;
-        }),
-
-      create: protectedProcedure
-        .input(z.object({ name: z.string().min(1), projectId: z.number().optional(), dailyBudget: z.number().optional(), city: z.string().optional(), brand: z.string().optional() }))
-        .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
-          const { getDb } = await import("./db");
-          const { internalCampaigns } = await import("../drizzle/schema");
-          const db = await getDb();
-          if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
-          await db.insert(internalCampaigns).values({ name: input.name, projectId: input.projectId ?? null, dailyBudget: input.dailyBudget != null ? String(input.dailyBudget) : null, city: input.city ?? null, brand: input.brand ?? null, createdById: ctx.user.id } as any);
-          return { success: true };
-        }),
-
-      update: protectedProcedure
-        .input(z.object({ id: z.number(), name: z.string().optional(), projectId: z.number().nullable().optional(), dailyBudget: z.number().nullable().optional(), city: z.string().optional(), brand: z.string().optional(), campaignStatus: z.enum(["active", "paused", "completed"]).optional() }))
-        .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
-          const { getDb } = await import("./db");
-          const { internalCampaigns } = await import("../drizzle/schema");
-          const { eq, and } = await import("drizzle-orm");
-          const db = await getDb();
-          if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
-          const { id, ...rest } = input;
-          await db.update(internalCampaigns).set(rest as any).where(eq(internalCampaigns.id, id));
-          return { success: true };
-        }),
-
-      // Para ad campaigns só desliga (apaga chaves/custos desta vista); a campanha
-      // em si é gerida na tab "Campanhas". Para internas apaga tudo.
-      remove: protectedProcedure.input(z.object({ campaignType: z.enum(["internal", "ad"]), id: z.number() })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
-        const { getDb } = await import("./db");
-        const { internalCampaigns, internalCampaignKeys, internalCampaignCosts } = await import("../drizzle/schema");
-        const { eq, and } = await import("drizzle-orm");
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
-        await db.delete(internalCampaignKeys).where(and(eq(internalCampaignKeys.campaignType, input.campaignType), eq(internalCampaignKeys.campaignId, input.id)));
-        await db.delete(internalCampaignCosts).where(and(eq(internalCampaignCosts.campaignType, input.campaignType), eq(internalCampaignCosts.campaignId, input.id)));
-        if (input.campaignType === "internal") await db.delete(internalCampaigns).where(eq(internalCampaigns.id, input.id));
-        return { success: true };
-      }),
-
-      // Atribui uma chave detetada a uma campanha (a tal "atribuição uma vez").
-      assignKey: protectedProcedure
-        .input(z.object({ campaignType: z.enum(["internal", "ad"]), campaignId: z.number(), keyType: z.enum(["campaign_id", "campaign_name", "url_pattern"]), keyValue: z.string().min(1) }))
-        .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
-          const { getDb } = await import("./db");
-          const { internalCampaignKeys } = await import("../drizzle/schema");
-          const db = await getDb();
-          if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
-          await db.insert(internalCampaignKeys).values({ campaignType: input.campaignType, campaignId: input.campaignId, keyType: input.keyType, keyValue: input.keyValue } as any);
-          return { success: true };
-        }),
-
-      removeKey: protectedProcedure.input(z.object({ keyId: z.number() })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
-        const { getDb } = await import("./db");
-        const { internalCampaignKeys } = await import("../drizzle/schema");
-        const { eq, and } = await import("drizzle-orm");
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
-        await db.delete(internalCampaignKeys).where(eq(internalCampaignKeys.id, input.keyId));
-        return { success: true };
-      }),
-
-      addCost: protectedProcedure
-        .input(z.object({
-          campaignType: z.enum(["internal", "ad"]),
-          campaignId: z.number(),
-          costDate: z.string(),
-          amount: z.number(),
-          impressions: z.number().nullable().optional(),
-          clicks: z.number().nullable().optional(),
-          ctr: z.number().nullable().optional(),
-          conversions: z.number().nullable().optional(),
-          conversionValue: z.number().nullable().optional(),
-          notes: z.string().optional(),
-        }))
-        .mutation(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "admin");
-          const { getDb } = await import("./db");
-          const { sql } = await import("drizzle-orm");
-          const db = await getDb();
-          if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
-          const impressions = input.impressions ?? null;
-          const clicks = input.clicks ?? null;
-          // CTR: usa o valor dado; senão deriva de cliques/impressões
-          const ctr = input.ctr ?? (clicks != null && impressions ? Math.round((clicks / impressions) * 100000) / 1000 : null);
-          const conversions = input.conversions ?? null;
-          const conversionValue = input.conversionValue ?? null;
-          // upsert por (campaignType, campaignId, costDate); métricas omitidas
-          // (undefined→null) preservam o valor existente via COALESCE, para a
-          // entrada rápida de gasto não apagar métricas já registadas.
-          await db.execute(sql`
-            INSERT INTO internal_campaign_costs (campaignType, campaignId, costDate, amount, impressions, clicks, ctr, conversions, conversionValue, notes, createdById)
-            VALUES (${input.campaignType}, ${input.campaignId}, ${input.costDate}, ${input.amount}, ${impressions}, ${clicks}, ${ctr}, ${conversions}, ${conversionValue}, ${input.notes ?? null}, ${ctx.user.id})
-            ON DUPLICATE KEY UPDATE
-              amount = ${input.amount},
-              impressions = COALESCE(${impressions}, impressions),
-              clicks = COALESCE(${clicks}, clicks),
-              ctr = COALESCE(${ctr}, ctr),
-              conversions = COALESCE(${conversions}, conversions),
-              conversionValue = COALESCE(${conversionValue}, conversionValue),
-              notes = COALESCE(${input.notes ?? null}, notes)`);
-          return { success: true };
-        }),
-
-      // Custos/métricas de TODAS as campanhas num dia — para o diálogo "Atualizar campanhas".
-      costsByDate: protectedProcedure.input(z.object({ costDate: z.string(), projectId: z.number().optional() })).query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
-        const { getDb } = await import("./db");
-        const { internalCampaignCosts } = await import("../drizzle/schema");
-        const { eq, and } = await import("drizzle-orm");
-        const db = await getDb();
-        if (!db) return [];
-        return db.select().from(internalCampaignCosts).where(and(eq(internalCampaignCosts.costDate, input.costDate), campaignScope(internalCampaignCosts.campaignType, internalCampaignCosts.campaignId)));
-      }),
-
-      costs: protectedProcedure.input(z.object({ campaignType: z.enum(["internal", "ad"]), campaignId: z.number() })).query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
-        const { getDb } = await import("./db");
-        const { internalCampaignCosts } = await import("../drizzle/schema");
-        const { eq, and, desc } = await import("drizzle-orm");
-        const db = await getDb();
-        if (!db) return [];
-        return db.select().from(internalCampaignCosts).where(and(eq(internalCampaignCosts.campaignType, input.campaignType), eq(internalCampaignCosts.campaignId, input.campaignId))).orderBy(desc(internalCampaignCosts.costDate));
-      }),
-
-      removeCost: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
-        const { getDb } = await import("./db");
-        const { internalCampaignCosts } = await import("../drizzle/schema");
-        const { eq, and } = await import("drizzle-orm");
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
-        await db.delete(internalCampaignCosts).where(eq(internalCampaignCosts.id, input.id));
-        return { success: true };
-      }),
-    }),
-
-    // ── DAILY STATS ──
-    stats: router({
-      byCampaign: protectedProcedure.input(z.object({ campaignId: z.number() })).query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
-        return getCampaignStats(input.campaignId);
-      }),
-      all: protectedProcedure
-        .input(z.object({ from: z.string().optional(), to: z.string().optional(), projectId: z.number().optional() }).optional())
-        .query(async ({ ctx, input }) => {
-          requireRole(ctx.user.role, "backoffice");
-          const from = input?.from ? new Date(input.from) : undefined;
-          const to = input?.to ? new Date(input.to) : undefined;
-          return getAllDailyStats({ from, to, projectId: input?.projectId });
-        }),
-      delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "super_admin");
-        await deleteDailyStat(input.id);
-        return { success: true };
-      }),
-    }),
-
-   }),
+  }),
 
   // ─── OPERACIONAL ──────────────────────────────────────────────────────────
   operational: router({
@@ -4758,6 +4430,7 @@ export const appRouter = router({
   // ─── INTEGRAÇÕES (Google Ads) ─────────────────────────────────────────────
   integrations: router({
     googleAds: googleAdsRouter,
+    meta: metaAdsRouter,
     googleBusiness: googleBusinessRouter,
   }),
 
@@ -7409,8 +7082,9 @@ export const appRouter = router({
         return { allowed: true as const, ...(await getExtrasCostDaily(input)) };
       }),
 
-    // Gasto em publicidade por dia × cidade (Lisboa/Porto/Faro; o marketplace
-    // não tem anúncios nossos). Mesmo gate dos totais financeiros.
+    // Gasto em publicidade por dia × cidade (Lisboa/Porto/Faro) + "por atribuir"
+    // (sem cidade / nacional), numa só chamada à fonte única do Marketing.
+    // Mesmo gate dos totais financeiros.
     adSpendDaily: protectedProcedure
       .input(z.object({
         startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -7419,7 +7093,7 @@ export const appRouter = router({
       }))
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
-        if (!(await canSeeFinanceTotals(ctx.user))) return { allowed: false as const, cities: [], rows: [] };
+        if (!(await canSeeFinanceTotals(ctx.user))) return { allowed: false as const, cities: [], rows: [], unassigned: [], total: 0 };
         const { getAdSpendDaily, rangeTooLong } = await import("./operationsBookings");
         if (input.endDate < input.startDate || rangeTooLong(input.startDate, input.endDate)) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Intervalo inválido (máx. 366 dias)." });

@@ -41,11 +41,13 @@ export function OpsDailyPanel({ actionType, startDate, endDate, projectId, daily
   const adsQ = trpc.multipark.adSpendDaily.useQuery({ startDate, endDate, projectId }, { enabled: wantAds, refetchOnWindowFocus: false, retry: false });
   const extrasQ = trpc.multipark.extrasCostDaily.useQuery({ startDate, endDate, projectId }, { enabled: wantExtras, refetchOnWindowFocus: false, retry: false });
   const ads = wantAds && adsQ.data?.allowed ? adsQ.data.rows : null;
+  const adsUnassigned = wantAds && adsQ.data?.allowed ? adsQ.data.unassigned : null;
   const extras = wantExtras && extrasQ.data?.allowed ? extrasQ.data.rows.map((r) => ({ day: r.day, city: r.city, cost: r.cost })) : null;
   const costsHidden = (wantAds && adsQ.data && !adsQ.data.allowed) || (wantExtras && extrasQ.data && !extrasQ.data.allowed);
 
-  const days = useMemo(() => joinOpsDaily({ startDate, endDate, bookings: daily, ads, extras }), [startDate, endDate, daily, ads, extras]);
+  const days = useMemo(() => joinOpsDaily({ startDate, endDate, bookings: daily, ads, adsUnassigned, extras }), [startDate, endDate, daily, ads, adsUnassigned, extras]);
   const byCity = useMemo(() => periodByCity(days), [days]);
+  const adsUnassignedTotal = useMemo(() => days.reduce((t, d) => t + (d.adsUnassigned ?? 0), 0), [days]);
   const groupsPresent = useMemo(() => (["lisboa", "porto", "faro", "marketplace", "sem_cidade"] as OriginGroup[])
     .filter((g) => g !== "sem_cidade" || days.some((d) => d.byGroup.sem_cidade > 0)), [days]);
   const citiesPresent = useMemo(() => CITY_KEYS.filter((c) => byCity.find((b) => b.city === c && (b.own || b.ops || b.ads || b.extras))), [byCity]);
@@ -70,6 +72,7 @@ export function OpsDailyPanel({ actionType, startDate, endDate, projectId, daily
         {d.ads != null && <div>
           <p><span className="inline-block w-2 h-2 rounded-full mr-1" style={{ background: ADS_COLOR }} />Publicidade: <b>{fmtEur(d.ads)}</b></p>
           {CITY_KEYS.map((c) => d.adsByCity[c] ? <p key={c} className="pl-3 text-muted-foreground">{CITY_LABELS[c]}: {fmtEur(d.adsByCity[c])}{actionType === "creation" && d.byGroup[c] ? ` · ${fmtEur(d.adsByCity[c] / d.byGroup[c])}/reserva` : ""}</p> : null)}
+          {d.adsUnassigned ? <p className="pl-3 text-muted-foreground">Sem cidade / nacional por atribuir: {fmtEur(d.adsUnassigned)}</p> : null}
         </div>}
         {d.extras != null && <div>
           <p><span className="inline-block w-2 h-2 rounded-full mr-1" style={{ background: EXTRAS_COLOR }} />Custo extras: <b>{fmtEur(d.extras)}</b></p>
@@ -102,7 +105,7 @@ export function OpsDailyPanel({ actionType, startDate, endDate, projectId, daily
           </ResponsiveContainer>
           {showMoneyChart && (
             <>
-              <p className="text-[11px] text-muted-foreground px-3 pt-2">€ por dia (c/ IVA){ads ? " — Publicidade: Google Ads (nacional repartido pelas cidades) + importações antigas (Meta incluída)" : ""}{extras ? " — Custo extras: ponto real até hoje, escala prevista nos dias futuros" : ""}</p>
+              <p className="text-[11px] text-muted-foreground px-3 pt-2">€ por dia (c/ IVA){ads ? " — Publicidade: Google Ads + Meta (nacional repartido pelas cidades; o que não tem cidade conta no total como «por atribuir») + importações antigas" : ""}{extras ? " — Custo extras: ponto real até hoje, escala prevista nos dias futuros" : ""}</p>
               <ResponsiveContainer width="100%" height={160}>
                 <LineChart data={chartData} syncId="opsDaily" margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
                   <CartesianGrid vertical={false} stroke="currentColor" strokeOpacity={0.08} />
@@ -157,6 +160,15 @@ export function OpsDailyPanel({ actionType, startDate, endDate, projectId, daily
                       </tr>
                     );
                   })}
+                  {ads && adsUnassignedTotal > 0 && (
+                    <tr className="border-t text-muted-foreground" title="Campanhas sem cidade (por associar ou nacional de marca sem cidades): contam no total do Marketing, em nenhuma cidade">
+                      <td className="p-2">Sem cidade / nacional por atribuir</td>
+                      <td className="p-2 text-right">—</td>
+                      <td className="p-2 text-right">{fmtEur(adsUnassignedTotal)}</td>
+                      {actionType === "creation" && <td className="p-2" colSpan={3} />}
+                      {extras && <td className="p-2" colSpan={2} />}
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>

@@ -27,7 +27,6 @@ import { and, eq, gte, lte, sql, isNotNull, inArray, notInArray, or, isNull } fr
 import {
   multiparkBookings, projects, expenses, expenseCategories,
   partnerships, partnerAliases, employees, employeeSalaryHistory, marketingExpenses,
-  campaignDailyStats, campaigns,
 } from "../../drizzle/schema";
 import { loadExtraRates } from "../extraRates";
 import { aggregateExtrasCost, loadExtrasCostRows } from "./extrasCost";
@@ -319,10 +318,11 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   const mktConds: any[] = [gte(marketingExpenses.date, fromStr), lte(marketingExpenses.date, toStr)];
   if (projectIds) mktConds.push(inArray(marketingExpenses.projectId, projectIds));
   const [mkt] = await db.select({ total: sql<number>`COALESCE(SUM(${marketingExpenses.amount}), 0)` }).from(marketingExpenses).where(and(...mktConds));
-  const adsConds: any[] = [gte(campaignDailyStats.date, fromStr), lte(campaignDailyStats.date, toStr)];
-  if (projectIds) adsConds.push(inArray(campaigns.projectId, projectIds));
-  const [ads] = await db.select({ total: sql<number>`COALESCE(SUM(${campaignDailyStats.spend}), 0)` }).from(campaignDailyStats).innerJoin(campaigns, eq(campaigns.id, campaignDailyStats.campaignId)).where(and(...adsConds));
-  out.quality.marketingExcluded = { adSpend: num(ads?.total), marketingExpenses: num(mkt?.total) };
+  // Gasto em anúncios: a MESMA fonte do Marketing (ad_daily_metrics via
+  // getAdMetrics — Google + Meta + legado sem duplicar, contas selecionadas).
+  const { getAdMetrics } = await import("../integrations/googleAds/adMetrics");
+  const adsMetrics = await getAdMetrics({ from, to, projectIds: projectIds ?? null });
+  out.quality.marketingExcluded = { adSpend: num(adsMetrics.totals.cost), marketingExpenses: num(mkt?.total) };
 
   // ═══════════════════════════════ CÁLCULO ══════════════════════════════════
   const producedByDay = new Map<string, number>();

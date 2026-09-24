@@ -15,7 +15,6 @@ export async function assertScopedOperation(path: string, type: string, raw: unk
     const [row] = await db.select({ projectId: table.projectId }).from(table as any).where(eq(table.id, id)).limit(1);
     assertProjectAccess(row?.projectId as number | null | undefined);
   };
-  const campaign = (kind: string, id: number) => projectRecord(kind === 'ad' ? schema.campaigns : schema.internalCampaigns, id);
   if (path.startsWith('reviews.')) {
     if (input.id != null) await projectRecord(schema.googleReviews, input.id);
     if (path === 'reviews.create') assertProjectAccess(input.projectId);
@@ -27,26 +26,9 @@ export async function assertScopedOperation(path: string, type: string, raw: unk
   }
   if (path.startsWith('marketing.')) {
     if (type === 'mutation' && (path.endsWith('.create') || input.projectId !== undefined)) assertProjectAccess(input.projectId);
-    if (path.startsWith('marketing.campaigns.') && input.id != null) await projectRecord(schema.campaigns, input.id);
-    if (path.startsWith('marketing.expenses.') && input.id != null) await projectRecord(schema.marketingExpenses, input.id);
-    if (path.startsWith('marketing.stats.') && input.campaignId != null) await projectRecord(schema.campaigns, input.campaignId);
-    if (path === 'marketing.stats.delete') {
-      const db = await getDb();
-      const [row] = db ? await db.select().from(schema.campaignDailyStats).where(eq(schema.campaignDailyStats.id, input.id)).limit(1) : [];
-      if (!row) throw new TRPCError({ code: 'FORBIDDEN' });
-      await projectRecord(schema.campaigns, row.campaignId);
-    }
-    if (path.startsWith('marketing.internalCampaigns.')) {
-      if (input.campaignId != null) await campaign(input.campaignType, input.campaignId);
-      if (['update', 'remove'].some(action => path.endsWith(`.${action}`))) await campaign(input.campaignType ?? 'internal', input.id);
-      if (path.endsWith('.removeKey') || path.endsWith('.removeCost')) {
-        const db = await getDb();
-        const table = path.endsWith('.removeKey') ? schema.internalCampaignKeys : schema.internalCampaignCosts;
-        const [row] = db ? await db.select().from(table).where(eq(table.id, input.keyId ?? input.id)).limit(1) : [];
-        if (!row) throw new TRPCError({ code: 'FORBIDDEN' });
-        await campaign(row.campaignType, row.campaignId);
-      }
-    }
+    // Orçamento: apagar por id só dentro das cidades autorizadas (o upsert já
+    // passa pelo assertProjectAccess acima, via projectId).
+    if (path === 'marketing.budgets.remove' && input.id != null) await projectRecord(schema.marketingBudgets as any, input.id);
   }
   // Árvore de Projetos: um admin de cidade só lê/cria/altera/move/desativa
   // nós dentro das suas cidades (o próprio nó, o pai novo e o destino).
