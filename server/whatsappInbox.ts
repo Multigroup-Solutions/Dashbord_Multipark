@@ -147,10 +147,10 @@ export function visibilitySql(scope: number[] | undefined): SQL {
   return sql`(
     (${whatsappConversations.employeeId} IS NOT NULL AND (${employees.projectId} IS NULL OR ${inScope(sql`${employees.projectId}`)}))
     OR (${whatsappConversations.employeeId} IS NULL AND EXISTS (
-      SELECT 1 FROM extra_leads vis_lead WHERE vis_lead.phoneE164 = ${whatsappConversations.phoneE164}
+      SELECT 1 FROM extra_leads vis_lead WHERE vis_lead.phoneE164 = ${whatsappConversations.phoneE164} COLLATE utf8mb4_unicode_ci
         AND (vis_lead.projectId IS NULL OR ${inScope(sql`vis_lead.projectId`)})))
     OR (${whatsappConversations.employeeId} IS NULL
-      AND NOT EXISTS (SELECT 1 FROM extra_leads vis_any WHERE vis_any.phoneE164 = ${whatsappConversations.phoneE164})
+      AND NOT EXISTS (SELECT 1 FROM extra_leads vis_any WHERE vis_any.phoneE164 = ${whatsappConversations.phoneE164} COLLATE utf8mb4_unicode_ci)
       AND ${inScope(sql`${whatsappConversations.bookingProjectId}`)})
   )`;
 }
@@ -177,7 +177,7 @@ export async function conversationVisible(conversationId: number): Promise<boole
 }
 
 /** Nome do lead mais recente com o número da conversa (subquery escalar). */
-const leadNameSql = sql<string | null>`(SELECT ln.fullName FROM extra_leads ln WHERE ln.phoneE164 = ${whatsappConversations.phoneE164} ORDER BY ln.id DESC LIMIT 1)`;
+const leadNameSql = sql<string | null>`(SELECT ln.fullName FROM extra_leads ln WHERE ln.phoneE164 = ${whatsappConversations.phoneE164} COLLATE utf8mb4_unicode_ci ORDER BY ln.id DESC LIMIT 1)`;
 
 /**
  * Conversas antigas sem resumo (escritas antes da 0094 e não apanhadas pelo
