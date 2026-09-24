@@ -67,8 +67,12 @@ export default function ClientHistoryCard({ email, phone, plate, name, highlight
           <div className="grid grid-cols-2 gap-2 rounded-lg bg-muted/50 p-2 text-xs">
             <div><span className="text-muted-foreground">Cliente desde:</span> <span className="font-medium">{stats.firstCheckIn ? d(stats.firstCheckIn) : "—"}</span></div>
             <div><span className="text-muted-foreground">Última estadia:</span> <span className="font-medium">{stats.lastCheckIn ? d(stats.lastCheckIn) : "—"}</span></div>
-            <div><span className="text-muted-foreground">Total gasto:</span> <span className="font-medium">{eur(stats.totalSpent)}</span></div>
-            <div><span className="text-muted-foreground">Média/reserva:</span> <span className="font-medium">{eur(stats.avgSpend)}</span></div>
+            {stats.totalSpent != null && (
+              <>
+                <div><span className="text-muted-foreground">Total gasto:</span> <span className="font-medium">{eur(stats.totalSpent)}</span></div>
+                <div><span className="text-muted-foreground">Média/estadia:</span> <span className="font-medium">{eur(stats.avgSpend ?? 0)}</span></div>
+              </>
+            )}
             {stats.cancelled > 0 && (
               <div className="col-span-2"><span className="text-muted-foreground">Canceladas:</span> <span className="font-medium">{stats.cancelled}</span></div>
             )}

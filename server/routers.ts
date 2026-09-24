@@ -850,15 +850,18 @@ export const appRouter = router({
 
     // Sincroniza os emails inbound (reclamações/perdidos/críticas/RH) on-demand.
     // backoffice+ (a equipa de suporte usa o botão nas Reclamações/Recrutamento).
+    // Mesmo prazo do cron (45s < maxDuration 60s do Vercel): sem ele o botão
+    // morria com 504 a meio; partial:true → carregar outra vez continua
+    // (dedup por messageId torna cada corrida incremental).
     runEmailInbound: protectedProcedure.mutation(async ({ ctx }) => {
       requireRole(ctx.user.role, "backoffice");
       const { runEmailInboundSync } = await import("./jobs/emailInboundSync");
-      const result = await runEmailInboundSync();
+      const result = await runEmailInboundSync({ deadlineAt: Date.now() + 45_000 });
       await logActivity({
         userId: ctx.user.id,
         action: "email_sync",
         entity: "inbound_emails",
-        details: `criados=${result.created} ignorados=${result.skipped} erros=${result.errors.length}`,
+        details: `criados=${result.created} ignorados=${result.skipped} erros=${result.errors.length}${result.partial ? " (parcial)" : ""}`,
       });
       return result;
     }),
@@ -4830,7 +4833,10 @@ export const appRouter = router({
       if (!complaint) throw new TRPCError({ code: "NOT_FOUND" });
       const messages = await getComplaintMessages(input.id);
       const photos = await getComplaintPhotos(input.id);
-      return { complaint, messages, photos };
+      // Anexos não-imagem dos emails do caso (as imagens já estão em photos).
+      const { listComplaintEmailAttachments } = await import("./db");
+      const emailAttachments = await listComplaintEmailAttachments(input.id).catch(() => []);
+      return { complaint, messages, photos, emailAttachments };
     }),
     create: protectedProcedure.input(z.object({
       title: z.string().min(1),
@@ -4963,7 +4969,7 @@ export const appRouter = router({
           // Transcreve o email enviado como mensagem do caso (histórico da conversa).
           await addComplaintMessage({
             complaintId: input.complaintId,
-            message: `📤 Email enviado ao cliente — ${input.subject}\n\n${input.body}`,
+            message: `📤 Email enviado ao cliente — ${r.subject ?? input.subject}\n\n${input.body}`,
             isInternal: 0,
             authorId: ctx.user.id,
             authorName: ctx.user.name ?? "Multipark",
@@ -5443,14 +5449,14 @@ export const appRouter = router({
       if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
       // Leitor IMAP nativo (substitui o antigo fluxo Make.com 2x/dia).
       const { runEmailInboundSync } = await import("./jobs/emailInboundSync");
-      const r = await runEmailInboundSync();
+      const r = await runEmailInboundSync({ deadlineAt: Date.now() + 45_000 });
       return {
         reviewsImported: r.byAlias["criticas"] || 0,
         reviewsSkipped: r.skipped,
         incidentsImported: 0,
         incidentsSkipped: 0,
         message: r.configured
-          ? `Sincronizado: ${r.created} novos registos, ${r.skipped} ignorados.`
+          ? `Sincronizado: ${r.created} novos registos, ${r.skipped} ignorados.${r.partial ? " Parcial — carregue outra vez para continuar." : ""}`
           : "IMAP n\u00e3o configurado no servidor.",
       };
     }),
@@ -8559,7 +8565,15 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "frontoffice");
         const { getClientHistory } = await import("./db");
-        return getClientHistory(input);
+        const h = await getClientHistory(input);
+        // Mesmo gate da ficha de Clientes: sem permissão de totais, sem valores
+        if (await canSeeFinanceTotals(ctx.user)) return { ...h, canSeeTotals: true };
+        return {
+          ...h,
+          canSeeTotals: false,
+          bookingStats: { ...h.bookingStats, totalSpent: null, avgSpend: null },
+          bookings: h.bookings.map((b: any) => ({ ...b, totalPrice: null })),
+        };
       }),
 
     // Lista/pesquisa emails inbound de um alias, para anexar à mão a um caso.

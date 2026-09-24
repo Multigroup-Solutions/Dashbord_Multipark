@@ -116,7 +116,8 @@ const NOT_CANCELLED = sql`UPPER(COALESCE(b.status, '')) NOT LIKE '%CANCEL%'`;
 /** Estados em que o carro já entrou no parque (= COLLECTED_STATUSES do finance/engine). */
 export const VISITED_STATUSES = ["CHECKED_IN", "CHECKING_OUT", "PENDING_CHECKOUT", "CHECKED_OUT"];
 const VISITED = sql`UPPER(COALESCE(b.status, '')) IN (${sql.join(VISITED_STATUSES.map((v) => sql`${v}`), sql`, `)})`;
-const UPCOMING = sql`(${NOT_CANCELLED} AND b.checkIn > NOW())`;
+// checkIn guardado em UTC (a sync usa UTC_TIMESTAMP): NOW() dependia do fuso da sessão
+const UPCOMING = sql`(${NOT_CANCELLED} AND b.checkIn > UTC_TIMESTAMP())`;
 
 function baseWhere(projectIds?: number[] | null): SQL {
   const scope = projectScope(sql`b.projectId`);
@@ -267,7 +268,10 @@ async function loadIdentities(db: any, emails: string[], projectIds?: number[] |
 async function searchIdentityEmails(db: any, term: string, projectIds?: number[] | null): Promise<Set<string>> {
   const pat = `%${term.toLowerCase()}%`;
   const digits = term.replace(/\D+/g, "");
-  const phoneCond = digits.length >= 3 ? sql` OR REPLACE(REPLACE(b.clientPhone, ' ', ''), '+', '') LIKE ${`%${digits}%`}` : sql``;
+  // "+351 912 345 678" e "912345678" são o mesmo: compara sem separadores e,
+  // com 9+ dígitos, pelos últimos 9 (sem o indicativo)
+  const needle = digits.length >= 9 ? digits.slice(-9) : digits;
+  const phoneCond = digits.length >= 3 ? sql` OR REGEXP_REPLACE(COALESCE(b.clientPhone, ''), '[^0-9]', '') LIKE ${`%${needle}%`}` : sql``;
   const raw = rows(await db.execute(sql`
     SELECT DISTINCT LOWER(TRIM(b.clientEmail)) AS email
     FROM multipark_bookings b

@@ -29,7 +29,7 @@ import {
   ChevronRight, ChevronLeft, Send, Eye, Trash2, Upload, Shield,
   BarChart3, AlertCircle, CheckCircle2, Hourglass, XCircle, Pencil,
   Mail, UserPlus, LinkIcon, X as XIcon, Download, RefreshCw, GripVertical, Package,
-  ExternalLink,
+  ExternalLink, Paperclip,
 } from "lucide-react";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
@@ -614,7 +614,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
             <TabsList className="flex-wrap">
               <TabsTrigger value="details">Detalhes</TabsTrigger>
               <TabsTrigger value="messages">Mensagens ({data.messages.length})</TabsTrigger>
-              <TabsTrigger value="photos">Fotos ({data.photos.length})</TabsTrigger>
+              <TabsTrigger value="photos">Fotos ({data.photos.length}){(data as any).emailAttachments?.length ? ` · Anexos (${(data as any).emailAttachments.length})` : ""}</TabsTrigger>
               {(c.vehiclePlate || c.vehicleId) && <TabsTrigger value="vehicle">Viatura</TabsTrigger>}
               <TabsTrigger value="duty">Em serviço</TabsTrigger>
               <TabsTrigger value="booking-history">Histórico ({timelineHist.length})</TabsTrigger>
@@ -773,6 +773,25 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                       </div>
                     ))}
                   </div>
+                  {(data as any).emailAttachments?.length > 0 && (
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-muted-foreground">Anexos recebidos por email</p>
+                      {(data as any).emailAttachments.map((a: any, i: number) => {
+                        const href = fileHref(a.url, a.key);
+                        return (
+                          <div key={`${a.emailId}-${i}`} className="flex items-center gap-2 text-sm">
+                            <Paperclip className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                            {href ? (
+                              <a href={href} target="_blank" rel="noreferrer" className="underline break-all">{a.filename}</a>
+                            ) : (
+                              <span className="break-all text-muted-foreground" title="Ficheiro não guardado (demasiado grande ou falha de upload)">{a.filename}</span>
+                            )}
+                            {a.size ? <span className="text-[10px] text-muted-foreground">{Math.max(1, Math.round(a.size / 1024))} KB</span> : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                   <label className="flex items-center gap-2 cursor-pointer">
                     <Button variant="outline" asChild><span><Upload className="w-4 h-4 mr-2" /> Carregar Foto</span></Button>
                     <input type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
@@ -1702,7 +1721,7 @@ function SyncEmailsButton() {
   const syncMut = trpc.admin.runEmailInbound.useMutation({
     onSuccess: (r: any) => {
       utils.complaints.invalidate();
-      toast.success(`Emails sincronizados: ${r.created} novos, ${r.skipped} ignorados${r.errors?.length ? `, ${r.errors.length} erros` : ""}`);
+      toast.success(`Emails sincronizados: ${r.created} novos, ${r.skipped} ignorados${r.errors?.length ? `, ${r.errors.length} erros` : ""}${r.partial ? " — parcial, carregue outra vez para continuar" : ""}`);
     },
     onError: (e) => toast.error(e.message),
   });

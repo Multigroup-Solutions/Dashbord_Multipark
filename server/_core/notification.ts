@@ -104,10 +104,12 @@ export async function notifyOwner(
   }
 }
 
-/**
- * Send an email to any recipient.
- */
-export async function sendEmail(options: {
+/** true = há SMTP configurado (SMTP_HOST/SMTP_USER/SMTP_PASS). */
+export function isSmtpConfigured(): boolean {
+  return !!(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
+}
+
+export type SendEmailOptions = {
   to: string;
   subject: string;
   text?: string;
@@ -115,7 +117,21 @@ export async function sendEmail(options: {
   from?: string;     // endereço de envio (ex: recursos-humanos@multipark.pt); default SMTP_FROM
   fromName?: string; // nome do remetente apresentado
   attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>;
-}): Promise<boolean> {
+  /** Threading: Message-ID a que isto responde (In-Reply-To). */
+  inReplyTo?: string;
+  /** Threading: cadeia de Message-IDs (References). */
+  references?: string | string[];
+};
+
+/**
+ * Send an email to any recipient.
+ */
+export async function sendEmail(options: SendEmailOptions): Promise<boolean> {
+  return (await sendEmailDetailed(options)).ok;
+}
+
+/** Como sendEmail, mas devolve também o Message-ID enviado (threading). */
+export async function sendEmailDetailed(options: SendEmailOptions): Promise<{ ok: boolean; messageId?: string }> {
   const transporter = getTransporter();
   // Só permite enviar de aliases do próprio domínio (send-as configurados no Gmail).
   const allowedDomain = (process.env.SMTP_USER || "").split("@")[1] || "multipark.pt";
@@ -125,18 +141,20 @@ export async function sendEmail(options: {
 
   if (!transporter) {
     console.warn("[Email] SMTP not configured, cannot send email");
-    return false;
+    return { ok: false };
   }
 
-  const { from: _from, fromName: _fromName, ...rest } = options;
+  const { from: _from, fromName: _fromName, inReplyTo, references, ...rest } = options;
   try {
-    await transporter.sendMail({
+    const info = await transporter.sendMail({
       from: `"${fromName}" <${fromEmail}>`,
       ...rest,
+      ...(inReplyTo ? { inReplyTo } : {}),
+      ...(references && (Array.isArray(references) ? references.length : references) ? { references } : {}),
     });
-    return true;
+    return { ok: true, messageId: typeof info?.messageId === "string" ? info.messageId : undefined };
   } catch (error) {
     console.warn("[Email] Failed to send:", error);
-    return false;
+    return { ok: false };
   }
 }
