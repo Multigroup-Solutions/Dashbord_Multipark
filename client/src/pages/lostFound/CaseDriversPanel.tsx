@@ -44,7 +44,8 @@ export function CaseDriversPanel({ itemId, agents, employees, role }: {
   role?: string;
 }) {
   // Ligar suspeitos e propor pontos: team leader+. Confirmar pontos: supervisor+.
-  const isLeader = seesBeyondOwn(role, "perdidos") && can(role, "perdidos", "edit");
+  const { user: me } = useAuth();
+  const isLeader = seesBeyondOwn(me ?? role, "perdidos") && can(me ?? role, "perdidos", "edit");
   const isSupervisor = isLeader && roleRank(role) >= roleRank("supervisor");
   const utils = trpc.useUtils();
   const { data: attached = [] } = trpc.lostFound.attachedDrivers.useQuery({ itemId });

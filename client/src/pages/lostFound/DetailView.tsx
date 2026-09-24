@@ -109,7 +109,7 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
     onError: (e) => toast.error(e.message || "Erro ao mover"),
   });
   const utils = trpc.useUtils();
-  const canSeeDrivers = seesBeyondOwn(user?.role, "perdidos") && can(user?.role, "perdidos", "edit");
+  const canSeeDrivers = seesBeyondOwn(user, "perdidos") && can(user, "perdidos", "edit");
 
   const [newMsg, setNewMsg] = useState("");
   const [isInternal, setIsInternal] = useState(true);
@@ -246,7 +246,7 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
             ))}
           </SelectContent>
         </Select>
-        {can(user?.role, "perdidos", "manage") && item.status !== "converted" && (
+        {can(user, "perdidos", "manage") && item.status !== "converted" && (
           <>
             <Button
               variant="outline" size="sm"

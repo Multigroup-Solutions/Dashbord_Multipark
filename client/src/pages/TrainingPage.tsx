@@ -13,11 +13,11 @@ import { DashboardTab, MyTrainingTab, PathsAdminTab } from "./training/Managemen
 export default function TrainingPage() {
   const { user } = useAuth();
   const role = user?.role;
-  const isAdmin = can(role, "formacao", "manage");
+  const isAdmin = can(user, "formacao", "manage");
   const isSuperAdmin = role === "super_admin";
   // Percursos (atribuir): supervisor+. Acompanhamento: também o team leader (a equipa).
-  const isSupervisor = seesBeyondOwn(role, "formacao") && can(role, "formacao", "edit");
-  const seesProgress = seesBeyondOwn(role, "formacao");
+  const isSupervisor = seesBeyondOwn(user, "formacao") && can(user, "formacao", "edit");
+  const seesProgress = seesBeyondOwn(user, "formacao");
   const [tab, setTab] = usePersistedState("training.tab", "mine");
   const [openManualId, setOpenManualId] = useState<number | null>(null);
   const [playVideo, setPlayVideo] = useState<any>(null);

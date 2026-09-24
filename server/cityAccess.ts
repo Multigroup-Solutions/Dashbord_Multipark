@@ -117,6 +117,15 @@ export function applyRoleScope(access: CityAccess, role: string | null | undefin
 }
 
 export async function loadCityAccess(userId: number, role?: string | null): Promise<CityAccess> {
+  return (await loadCityAccessParts(userId, role)).access;
+}
+
+/**
+ * `access` = o que o papel dá (como sempre); `base` = só o centro de custos +
+ * cidades dadas (sem o alargamento do papel nacional); `all` = todas as
+ * cidades (para um override de módulo "nacional"; null sem centro de custos).
+ */
+export async function loadCityAccessParts(userId: number, role?: string | null): Promise<{ access: CityAccess; base: CityAccess; all: CityAccess | null }> {
   const { getDb, getUserPermissionOverrides } = await import('./db');
   const { employees, projects } = await import('../drizzle/schema');
   const { eq, or, sql } = await import('drizzle-orm');
@@ -132,5 +141,7 @@ export async function loadCityAccess(userId: number, role?: string | null): Prom
   ]);
   // Uma conta ligada a várias fichas diferentes exige reconciliação.
   const base = applyCityPermissions(resolveCityAccess(people.length === 1 ? people[0].projectId : null, nodes), nodes, overrides);
-  return applyRoleScope(base, role, nodes);
+  const access = applyRoleScope(base, role, nodes);
+  const all = access.missingCostCenter ? null : applyRoleScope({ ...base, missingCostCenter: false }, 'super_admin', nodes);
+  return { access, base, all };
 }

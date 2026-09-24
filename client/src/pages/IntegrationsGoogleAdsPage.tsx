@@ -6,7 +6,7 @@ import { can } from "@shared/access";
 /** Configurar contas / desligar: gestão de Integrações (admin+). Ver e recolher: supervisor+. */
 function useIntegrationPerms() {
   const { user } = useAuth();
-  return { canManage: can(user?.role, "integracoes", "manage"), canMarketing: can(user?.role, "marketing", "manage") };
+  return { canManage: can(user, "integracoes", "manage"), canMarketing: can(user, "marketing", "manage") };
 }
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";

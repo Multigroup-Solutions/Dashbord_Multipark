@@ -121,7 +121,7 @@ type NumField = keyof typeof NUM_RULES;
 export default function ShiftHandoverPage() {
   const { user } = useAuth();
   // "Resumo do dia": supervisor e acima (o team leader preenche e lê, mas não o vê).
-  const isSupervisor = can(user?.role, "passagem_resumo_dia", "view");
+  const isSupervisor = can(user, "passagem_resumo_dia", "view");
   const [tab, setTab] = usePersistedState("handover.tab", "preencher");
   const cityState = useHandoverCity();
 

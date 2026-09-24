@@ -77,5 +77,25 @@ export function renderPermissoesDoc(): string {
   out.push("- **Despesas do Team Leader**: as dele e as registadas por contas abaixo dele (condutores, extras, utilizadores) na sua cidade.");
   out.push("- **RH do Team Leader**: fichas da sua cidade de quem está abaixo dele; fichas sem conta contam pelo posto (extra, condutor, condutor sénior).");
   out.push("");
+  out.push("## Acessos por pessoa (overrides)");
+  out.push("");
+  out.push("A matriz acima é o **padrão do papel**. Em Sistema → Permissões → *Por pessoa* pode-se dar ou retirar a uma pessoa em concreto o acesso a **qualquer módulo** da matriz:");
+  out.push("");
+  out.push("- **O override substitui o padrão do papel** nesse módulo (alcance e ações). *Sem acesso* retira o módulo; *Repor padrão* apaga o override e a pessoa volta ao que o papel dá.");
+  out.push("- **Alcance**: próprio, equipa (cidade), cidade ou nacional. **Ações**: V, E, X, G (ver está sempre incluído).");
+  out.push("- **Validade opcional**: último dia (hora de Lisboa, inclusivo) em que o override vale. Depois disso deixa de contar sozinho e a pessoa volta ao padrão do papel.");
+  out.push("- **Onde se aplica**: no servidor (`requireAccess`), no menu e nos botões (`can()` no cliente, com os overrides que vêm do `auth.me`). As permissões da pessoa são lidas uma vez por pedido.");
+  out.push("- **Cidade**: um override *nacional* a quem é de cidade abre todas as cidades nesse módulo; um override de *cidade* (ou mais estreito) a quem é nacional limita-o à cidade do seu centro de custos nesse módulo.");
+  out.push("- **Auditoria**: cada override guarda quem o deu e quando; cada mudança fica nos Logs (`set_module_access`, antes → depois).");
+  out.push("- **\"Quem tem acesso\"**: por módulo, lista quem tem acesso e se vem do papel ou de um override.");
+  out.push("");
+  out.push("Regras para dar/retirar:");
+  out.push("");
+  out.push("- **Ninguém dá mais do que tem**: o alcance tem de ser igual ou mais estreito e as ações só as que a própria pessoa tem nesse módulo. Mudar ou repor um override dado por alguém com mais acesso também não é possível.");
+  out.push("- **Marketing, Logs, Faturação e API Keys**: só o super admin dá ou retira.");
+  out.push("- **Supervisor**: só a contas da sua cidade e nunca a admins (nem a papéis nacionais). Admin: só a quem está abaixo dele. Super admin: a todos.");
+  out.push("- **Ninguém altera os seus próprios acessos** (nem os overrides de módulo nem as permissões especiais).");
+  out.push("- **Permissões especiais** (TL na escala, totais financeiros, cidades extra) continuam a existir ao lado, no separador *Permissões especiais*. Os totais financeiros acompanham também um override do módulo Financeiro.");
+  out.push("");
   return out.join("\n");
 }

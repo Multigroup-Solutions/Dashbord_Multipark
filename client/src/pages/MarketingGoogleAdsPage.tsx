@@ -246,7 +246,7 @@ function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares
   // Reservas ligadas (gclid) desta campanha — a chave é "api:<conta>:<ID externo>".
   const linked = (r: any) => (String(r.key).startsWith("api:") ? attributedByCampaign[String(r.key).split(":").slice(2).join(":")] ?? 0 : null);
   const { user } = useAuth();
-  const isAdmin = can(user?.role, "marketing", "manage");
+  const isAdmin = can(user, "marketing", "manage");
   const utils = trpc.useUtils();
   const refresh = () => { utils.marketing.dashboard.invalidate(); utils.marketing.byBrand.invalidate(); utils.marketing.campaignRoas.invalidate(); utils.integrations.googleAds.campaigns.suggest.invalidate(); };
   const { data: suggestions = [] } = trpc.integrations.googleAds.campaigns.suggest.useQuery(undefined, { enabled: isAdmin, retry: false });

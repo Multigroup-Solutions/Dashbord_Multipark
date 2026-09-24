@@ -97,7 +97,10 @@ import { Label } from "./ui/label";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { trpc } from "@/lib/trpc";
 import { MobileTabBar } from "@/components/MobileTabBar";
-import { can, roleRank, type ModuleId } from "@shared/access";
+import { can, roleRank, type AccessOverrides, type ModuleId } from "@shared/access";
+
+/** Papel ou utilizador (com os overrides de módulo que vêm do auth.me). */
+export type AccessSubject = string | { role: string | null | undefined; accessOverrides?: AccessOverrides | null } | null | undefined;
 
 export type MenuItem = {
   icon: React.ElementType;
@@ -115,13 +118,13 @@ export type MenuGroup = {
   icon?: React.ElementType;
 };
 
-/** O item é visível para o papel? (sem módulo = visível a qualquer sessão) */
-export function canSeeItem(userRole: string, item: Pick<MenuItem, "module" | "anyOf">): boolean {
+/** O item é visível para a pessoa (papel + overrides)? (sem módulo = visível a qualquer sessão) */
+export function canSeeItem(userRole: AccessSubject, item: Pick<MenuItem, "module" | "anyOf">): boolean {
   const mods = item.anyOf ?? (item.module ? [item.module] : []);
   return mods.length === 0 || mods.some(m => can(userRole, m, "view"));
 }
 
-export function getFilteredMenuGroups(userRole: string): MenuGroup[] {
+export function getFilteredMenuGroups(userRole: AccessSubject): MenuGroup[] {
   return menuGroups
     .map(g => ({ ...g, items: g.items.filter(i => canSeeItem(userRole, i)) }))
     .filter(g => g.items.length > 0);
@@ -227,7 +230,7 @@ export const hubGroups: HubGroup[] = [
     id: g.label.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase(),
   })),
 ];
-export function getFilteredHubGroups(userRole: string): HubGroup[] {
+export function getFilteredHubGroups(userRole: AccessSubject): HubGroup[] {
   return hubGroups
     .map(g => ({ ...g, items: g.items.filter(i => canSeeItem(userRole, i)) }))
     .filter(g => g.items.length > 0);
@@ -410,7 +413,7 @@ function DashboardLayoutContent({
     );
   };
   const pontoStatus = pontoQ.data?.employeeId ? pontoQ.data.status : null;
-  const filteredGroups = getFilteredHubGroups(userRole);
+  const filteredGroups = getFilteredHubGroups(user ?? userRole);
   const filteredItems = filteredGroups.flatMap(g => g.items);
   const activeMenuItem = allMenuItems.find(item => item.path === location);
   // Badge do WhatsApp: conversas por ler/por responder (só para quem tem o item no menu).
