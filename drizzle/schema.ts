@@ -371,7 +371,7 @@ export const complaints = mysqlTable("complaints", {
 	title: varchar({ length: 255 }).notNull(),
 	description: text(),
 	complaintType: mysqlEnum("complaint_type", ['damage','dirt','delay','overcharge','staff','other']).notNull(),
-	complaintStatus: mysqlEnum("complaint_status", ['new','analyzing','waiting_client','resolved','closed']).default('new').notNull(),
+	complaintStatus: mysqlEnum("complaint_status", ['new','analyzing','waiting_client','resolved','closed','converted']).default('new').notNull(),
 	complaintPriority: mysqlEnum("complaint_priority", ['low','medium','high','urgent']).default('medium').notNull(),
 	clientName: varchar({ length: 200 }),
 	clientEmail: varchar({ length: 320 }),
@@ -402,6 +402,11 @@ export const complaints = mysqlTable("complaints", {
 	autoAckSentAt: timestamp({ mode: 'string' }),
 	/** Message-ID do último email enviado ao cliente (threading) — migration 0085. */
 	lastOutboundMessageId: varchar({ length: 255 }),
+	// 0092 — conversões não destrutivas (ligação nos dois sentidos)
+	convertedToType: varchar({ length: 16 }),
+	convertedToId: int(),
+	convertedFromType: varchar({ length: 16 }),
+	convertedFromId: int(),
 });
 
 export const dailyDriverHistory = mysqlTable("daily_driver_history", {
@@ -919,7 +924,7 @@ export const incidents = mysqlTable("incidents", {
 	incidentType: mysqlEnum(['vidro_aberto','mal_estacionado','dano','chave_errada','combustivel','limpeza','documentos','outro']).default('outro').notNull(),
 	severity: mysqlEnum(['low','medium','high','critical']).default('medium').notNull(),
 	description: text().notNull(),
-	status: mysqlEnum(['open','investigating','resolved','dismissed']).default('open').notNull(),
+	status: mysqlEnum(['open','investigating','resolved','dismissed','converted']).default('open').notNull(),
 	resolution: text(),
 	resolvedAt: timestamp({ mode: 'string' }),
 	resolvedBy: int(),
@@ -935,6 +940,17 @@ export const incidents = mysqlTable("incidents", {
 	reservationLink: text(),
 	aiClassification: text(),
 	aiSeverity: mysqlEnum(['low','medium','high','critical']),
+	// 0092 — pontos justos: só conta contra o condutor com envolvimento confirmado
+	driverConfirmed: tinyint().default(0).notNull(),
+	driverConfirmedById: int(),
+	driverConfirmedAt: timestamp({ mode: 'string' }),
+	dueAt: timestamp({ mode: 'string' }),
+	lastReminderAt: timestamp({ mode: 'string' }),
+	costAmount: decimal({ precision: 10, scale: 2 }),
+	convertedToType: varchar({ length: 16 }),
+	convertedToId: int(),
+	convertedFromType: varchar({ length: 16 }),
+	convertedFromId: int(),
 });
 
 export const inviteTokens = mysqlTable("invite_tokens", {
@@ -983,7 +999,7 @@ export const lostFoundItems = mysqlTable("lost_found_items", {
 	itemType: mysqlEnum(['money','electronics','clothing','documents','accessories','other']).default('other').notNull(),
 	description: text().notNull(),
 	estimatedValue: int(),
-	status: mysqlEnum(['new','investigating','found','returned','closed']).default('new').notNull(),
+	status: mysqlEnum(['new','investigating','found','returned','closed','converted']).default('new').notNull(),
 	priority: mysqlEnum(['low','medium','high']).default('medium').notNull(),
 	assignedTo: int(),
 	resolution: text(),
@@ -999,6 +1015,13 @@ export const lostFoundItems = mysqlTable("lost_found_items", {
 	closedById: int(),
 	closedAt: timestamp({ mode: 'string' }),
 	clientNotes: text(),
+	// 0092 — conversões + reclamação relacionada + lembretes SLA
+	convertedToType: varchar({ length: 16 }),
+	convertedToId: int(),
+	convertedFromType: varchar({ length: 16 }),
+	convertedFromId: int(),
+	relatedComplaintId: int(),
+	lastReminderAt: timestamp({ mode: 'string' }),
 	createdBy: int().notNull(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
@@ -1033,6 +1056,11 @@ export const lostFoundAttachedDrivers = mysqlTable("lost_found_attached_drivers"
 	movementsSummary: varchar({ length: 512 }),
 	notes: varchar({ length: 512 }),
 	attachedById: int(),
+	// 0092 — responsabilização: custo de recuperação + pontos (penalização RH pendente até supervisor confirmar)
+	costAmount: decimal({ precision: 10, scale: 2 }),
+	points: int().default(0).notNull(),
+	pointsConfirmed: tinyint().default(0).notNull(),
+	penaltyId: int(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 },
 (table) => [

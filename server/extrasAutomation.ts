@@ -736,6 +736,16 @@ export async function runExtrasAutomation(now: Date = new Date()): Promise<Autom
 
   await runLeadAutomation(clock, now, report, run);
 
+  // Ocorrências/Perdidos em atraso: 1 resumo por pessoa por dia (CASE_REMINDERS=off desliga).
+  try {
+    const { runCaseSlaReminders } = await import("./caseOps");
+    const out = await runCaseSlaReminders(now, clock.hour);
+    report.details["case-sla"] = out;
+    if (!out.skipped) report.ran.push("case-sla");
+  } catch (err: any) {
+    report.errors.push(`case-sla: ${String(err?.message ?? err).slice(0, 200)}`);
+  }
+
   // Formação: lembretes, atrasos e recertificação (TRAINING_REMINDERS=off desliga).
   try {
     const { runTrainingAutomation } = await import("./trainingPaths");

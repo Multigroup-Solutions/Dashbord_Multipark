@@ -58,6 +58,7 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   waiting_client: { label: "Aguarda Cliente", color: "bg-purple-100 text-purple-800" },
   resolved: { label: "Resolvido", color: "bg-green-100 text-green-800" },
   closed: { label: "Fechado", color: "bg-gray-100 text-gray-800" },
+  converted: { label: "Convertido", color: "bg-violet-100 text-violet-800" },
 };
 
 export default function SuporteDashboard() {

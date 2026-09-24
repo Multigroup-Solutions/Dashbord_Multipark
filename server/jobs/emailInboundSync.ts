@@ -283,6 +283,20 @@ async function routeToModule(
       clientName,
     });
     const lfBooking = lfMatch?.booking ?? null;
+    // Reclamação ABERTA do mesmo cliente: mesma reserva → o email junta-se à
+    // reclamação (não duplica); só o mesmo cliente/matrícula → cria o perdido
+    // mas fica "relacionado com reclamação #".
+    const lfRef = parsed.bookingRef ?? lfBooking?.externalId ?? null;
+    const openComplaint = await findComplaintByClientSignals(clientEmail, parsed.vehiclePlate ?? lfBooking?.licensePlate, clientName);
+    if (openComplaint && lfRef && openComplaint.reservationRef && openComplaint.reservationRef === lfRef) {
+      await addComplaintMessage({
+        complaintId: openComplaint.id,
+        message: `📦 Email para perdidos@ (possível objeto perdido) — ${ctx.subject}\n\n${ctx.bodyText}`.trim().slice(0, 5000),
+        isInternal: 0,
+        authorName: (clientName || "").slice(0, 200) || null,
+      } as any);
+      return { targetModule: "complaint", targetId: openComplaint.id, isNew: false };
+    }
     const id = await createLostFoundItem({
       clientName,
       clientEmail: clientEmail ?? (lfBooking?.clientEmail || undefined),
@@ -290,6 +304,7 @@ async function routeToModule(
       vehiclePlate: parsed.vehiclePlate ?? (lfBooking?.licensePlate || undefined),
       bookingRef: parsed.bookingRef ?? (lfBooking?.externalId || undefined),
       projectId: lfBooking?.projectId ?? undefined,
+      relatedComplaintId: openComplaint?.id ?? undefined,
       itemType: "other",
       description: desc || "(sem descrição)",
       status: "new",
@@ -297,44 +312,6 @@ async function routeToModule(
       createdBy: await getSystemUserId(),
     } as any);
     return { targetModule: "lostfound", targetId: id ?? undefined };
-  }
-
-  // ── "SIM" automático (pedido Jorge): resposta de um extra ao pedido de
-  // disponibilidade marca-o logo disponível naquela data/turno/horas. As
-  // respostas chegam aqui porque o pedido sai de recursos-humanos@. Só depois
-  // é que o resto vira tarefa de recrutamento.
-  try {
-    const { matchPendingAvailabilityReply, markDayAvailability } = await import("../extrasAvailability");
-    const pending = ctx.fromEmail ? await matchPendingAvailabilityReply(ctx.fromEmail) : null;
-    // Classificação com NEGAÇÃO (server/availabilityReply.ts): só um "sim"
-    // limpo marca; "não posso", condicionais e ambíguos ficam para revisão
-    // humana (tarefa de RH com o veredicto anotado). Usa só o CORPO, não o assunto.
-    const { classifyAvailabilityReply } = await import("../availabilityReply");
-    const verdict = pending ? classifyAvailabilityReply(ctx.bodyText || desc || "") : null;
-    if (pending && verdict && verdict.verdict !== "yes") {
-      // não marca disponibilidade; deixa a resposta na fila de RH com contexto
-      desc = `[DISPONIBILIDADE ${verdict.verdict === "no" ? "NÃO" : "A CONFIRMAR"} — ${verdict.reason}] ${pending.targetDate ?? pending.weekStart ?? ""} ${pending.shift ?? ""}: "${verdict.excerpt}"`.trim() + (desc ? `\n\n${desc}` : "");
-    }
-    const saidYes = verdict?.verdict === "yes";
-    if (pending && saidYes) {
-      const shiftNote = pending.shift === "morning" ? "manhã" : pending.shift === "afternoon" ? "tarde" : pending.shift === "night" ? "noite" : null;
-      if (pending.targetDate) {
-        await markDayAvailability(pending.employeeId, pending.targetDate, {
-          // Turnos do extras-dia são manhã/noite; a tarde conta como manhã e
-          // fica anotada. "que horas podes?" com só "sim" fica manhã + nota.
-          morning: pending.shift !== "night",
-          night: pending.shift === "night",
-          fromHour: pending.fromHour,
-          toHour: pending.toHour,
-          note: `respondeu SIM por email${shiftNote ? ` (turno da ${shiftNote})` : ""}${pending.kind === "day_hours" ? " — horas por confirmar" : ""}`,
-        });
-        return { targetModule: "availability", targetId: pending.employeeId };
-      }
-      // pedido da semana inteira: o "sim" não diz que dias — fica em tarefa
-      // normal para alguém confirmar (não dá para adivinhar os dias).
-    }
-  } catch (err) {
-    console.warn("[inbound] verificação de resposta de disponibilidade falhou:", err);
   }
 
   // ocorrencias → OCORRÊNCIA a partir do email do painel Multipark (o Jorge
@@ -393,35 +370,87 @@ async function routeToModule(
       parkM ? `Parque: ${parkM[1].trim()}` : null,
       rawType && !TYPE_MAP[rawType] ? `Tipo (Multipark): ${typeM![1].trim()}` : null,
     ].filter(Boolean);
-    const { createIncident, getDb: getDbOcc } = await import("../db");
-    // Dedup por CONTEÚDO: o mesmo email reencaminhado 2x tem messageId novo,
-    // mas a ocorrência é a mesma (matrícula + data original)
-    if (plateM && srcDate) {
-      const dbOcc = await getDbOcc();
-      if (dbOcc) {
-        const { sql: sqlOcc } = await import("drizzle-orm");
-        const [dupRows] = await dbOcc.execute(sqlOcc`
-          SELECT id FROM incidents WHERE vehiclePlate = ${plateM[1].toUpperCase()}
-            AND sourceEmailDate = ${srcDate} LIMIT 1`) as any;
-        if ((dupRows as any[])?.length) {
-          return { targetModule: "incident_dup", targetId: (dupRows as any[])[0].id };
-        }
+    const { createIncident } = await import("../db");
+    const { lisbonLocalToUtc } = await import("../../shared/caseRules");
+    // A linha "Date" do forward é hora de LISBOA → grava-se em UTC.
+    const srcDateUtc = srcDate ? lisbonLocalToUtc(srcDate) ?? undefined : undefined;
+    const plate = plateM ? plateM[1].toUpperCase() : undefined;
+    const bookingRefOcc = cuidM ? cuidM[0] : undefined;
+    const { findDuplicateIncident, appendIncidentNote, deriveBookingForCase } = await import("../caseOps");
+    // Dedup por CONTEÚDO (o mesmo email reencaminhado 2x tem messageId novo) e
+    // contra a sincronização dos remarks Multipark: mesma matrícula + reserva
+    // compatível + ±2h → fica como NOTA na ocorrência existente.
+    if (plate && srcDateUtc) {
+      const dup = await findDuplicateIncident({ plate, bookingRef: bookingRefOcc, atUtc: srcDateUtc });
+      if (dup) {
+        try {
+          const { getIncidentById } = await import("../db");
+          const cur = await getIncidentById(dup.id);
+          const marker = `(email ${String(ctx.messageId).slice(0, 60)})`;
+          const sameText = (cur?.description ?? "").trim() === descParts.join("\n").slice(0, 5000).trim();
+          if (!sameText && !(cur?.resolution ?? "").includes(marker)) {
+            await appendIncidentNote(dup.id, "Email", `${descParts.join(" · ").slice(0, 1500)} ${marker}`);
+          }
+        } catch { /* best-effort */ }
+        return { targetModule: "incident_dup", targetId: dup.id };
       }
     }
+    // Cidade da ocorrência = cidade da reserva (ref do email ou matrícula+data).
+    const occBooking = await deriveBookingForCase({ bookingRef: bookingRefOcc, plate, atUtc: srcDateUtc ?? null });
     const id = await createIncident({
       incidentType: (mapped?.t ?? "outro") as any,
       severity: (mapped?.s ?? "medium") as any,
       description: descParts.join("\n").slice(0, 5000),
-      vehiclePlate: plateM ? plateM[1].toUpperCase() : undefined,
-      reservationLink: cuidM ? cuidM[0] : undefined,
+      vehiclePlate: plate,
+      reservationLink: occBooking?.externalId ?? bookingRefOcc,
+      projectId: occBooking?.projectId ?? undefined,
       gpsLatitude: gpsM ? gpsM[1] : undefined,
       gpsLongitude: gpsM ? gpsM[2] : undefined,
       status: "open",
       reportedBy: await getSystemUserId(),
       sourceEmailId: ctx.messageId?.slice(0, 100),
-      ...(srcDate ? { sourceEmailDate: srcDate } : {}),
+      ...(srcDateUtc ? { sourceEmailDate: srcDateUtc } : {}),
     } as any);
     return { targetModule: "incident", targetId: id ?? undefined };
+  }
+
+  // ── "SIM" automático (pedido Jorge): resposta de um extra ao pedido de
+  // disponibilidade marca-o logo disponível naquela data/turno/horas. As
+  // respostas chegam aqui porque o pedido sai de recursos-humanos@ — por isso
+  // o matcher SÓ corre para esse alias (ocorrências/perdidos são classificados
+  // antes e nunca passam por aqui). Só depois o resto vira tarefa de RH.
+  if (alias === "recursos-humanos") try {
+    const { matchPendingAvailabilityReply, markDayAvailability } = await import("../extrasAvailability");
+    const pending = ctx.fromEmail ? await matchPendingAvailabilityReply(ctx.fromEmail) : null;
+    // Classificação com NEGAÇÃO (server/availabilityReply.ts): só um "sim"
+    // limpo marca; "não posso", condicionais e ambíguos ficam para revisão
+    // humana (tarefa de RH com o veredicto anotado). Usa só o CORPO, não o assunto.
+    const { classifyAvailabilityReply } = await import("../availabilityReply");
+    const verdict = pending ? classifyAvailabilityReply(ctx.bodyText || desc || "") : null;
+    if (pending && verdict && verdict.verdict !== "yes") {
+      // não marca disponibilidade; deixa a resposta na fila de RH com contexto
+      desc = `[DISPONIBILIDADE ${verdict.verdict === "no" ? "NÃO" : "A CONFIRMAR"} — ${verdict.reason}] ${pending.targetDate ?? pending.weekStart ?? ""} ${pending.shift ?? ""}: "${verdict.excerpt}"`.trim() + (desc ? `\n\n${desc}` : "");
+    }
+    const saidYes = verdict?.verdict === "yes";
+    if (pending && saidYes) {
+      const shiftNote = pending.shift === "morning" ? "manhã" : pending.shift === "afternoon" ? "tarde" : pending.shift === "night" ? "noite" : null;
+      if (pending.targetDate) {
+        await markDayAvailability(pending.employeeId, pending.targetDate, {
+          // Turnos do extras-dia são manhã/noite; a tarde conta como manhã e
+          // fica anotada. "que horas podes?" com só "sim" fica manhã + nota.
+          morning: pending.shift !== "night",
+          night: pending.shift === "night",
+          fromHour: pending.fromHour,
+          toHour: pending.toHour,
+          note: `respondeu SIM por email${shiftNote ? ` (turno da ${shiftNote})` : ""}${pending.kind === "day_hours" ? " — horas por confirmar" : ""}`,
+        });
+        return { targetModule: "availability", targetId: pending.employeeId };
+      }
+      // pedido da semana inteira: o "sim" não diz que dias — fica em tarefa
+      // normal para alguém confirmar (não dá para adivinhar os dias).
+    }
+  } catch (err) {
+    console.warn("[inbound] verificação de resposta de disponibilidade falhou:", err);
   }
 
   // recursos-humanos → tarefa de recrutamento para a Kamila (o email fica
