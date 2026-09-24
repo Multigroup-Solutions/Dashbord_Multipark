@@ -2808,9 +2808,19 @@ export default function HRPage() {
 function ImportExtrasDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const utils = trpc.useUtils();
   const [csv, setCsv] = useState("");
+  const [projectId, setProjectId] = useState<string>("");
+  const { data: importProjects = [] } = trpc.projects.list.useQuery(undefined, { enabled: open });
+  const cityProjects = useMemo(
+    () => (importProjects as any[]).filter((p) => p.level === "city").sort((a, b) => String(a.name).localeCompare(String(b.name), "pt")),
+    [importProjects],
+  );
+  useEffect(() => {
+    if (!projectId && cityProjects.length === 1) setProjectId(String(cityProjects[0].id));
+  }, [cityProjects, projectId]);
   const [report, setReport] = useState<{
     parsed: number;
     created: number;
+    duplicates: { rowIndex: number; nome: string; reason: string }[];
     errors: { rowIndex: number; nome?: string; reason: string }[];
     unknownColumns: string[];
   } | null>(null);
@@ -2821,6 +2831,7 @@ function ImportExtrasDialog({ open, onClose }: { open: boolean; onClose: () => v
       utils.rh.list.invalidate();
       utils.rh.stats.invalidate();
       if (r.created > 0) toast.success(`${r.created} extras criados`);
+      if (r.duplicates.length > 0) toast.info(`${r.duplicates.length} já existiam — saltados`);
       if (r.errors.length > 0) toast.warning(`${r.errors.length} linhas com erro`);
     },
     onError: (e) => toast.error(e.message),
@@ -2838,8 +2849,12 @@ function ImportExtrasDialog({ open, onClose }: { open: boolean; onClose: () => v
       toast.error("Cola um CSV ou seleciona um ficheiro.");
       return;
     }
+    if (!projectId) {
+      toast.error("Escolhe a cidade dos extras a importar.");
+      return;
+    }
     setReport(null);
-    importMutation.mutate({ csv });
+    importMutation.mutate({ csv, projectId: Number(projectId) });
   };
 
   const TEMPLATE_HEADERS = [
@@ -2887,6 +2902,23 @@ function ImportExtrasDialog({ open, onClose }: { open: boolean; onClose: () => v
           </div>
 
           <div>
+            <Label className="text-xs">Cidade (centro de custos) *</Label>
+            <Select value={projectId} onValueChange={setProjectId}>
+              <SelectTrigger className={`mt-1 ${!projectId ? "border-amber-400" : ""}`}>
+                <SelectValue placeholder="Escolher cidade..." />
+              </SelectTrigger>
+              <SelectContent>
+                {cityProjects.map((p: any) => (
+                  <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground mt-1">
+              Todos os extras do ficheiro ficam nesta cidade. Quem já tiver ficha (mesmo email, NIF ou telemóvel) é saltado.
+            </p>
+          </div>
+
+          <div>
             <Label htmlFor="csv-file" className="text-xs">Ficheiro CSV</Label>
             <Input
               id="csv-file"
@@ -2922,6 +2954,17 @@ function ImportExtrasDialog({ open, onClose }: { open: boolean; onClose: () => v
                   Colunas desconhecidas (ignoradas): {report.unknownColumns.join(", ")}
                 </div>
               )}
+              {report.duplicates.length > 0 && (
+                <div className="text-amber-700">
+                  <div className="font-medium">{report.duplicates.length} já existia(m) — saltado(s):</div>
+                  <ul className="space-y-0.5 mt-1">
+                    {report.duplicates.slice(0, 20).map((d, i) => (
+                      <li key={i}>Linha {d.rowIndex} ({d.nome}): {d.reason}</li>
+                    ))}
+                    {report.duplicates.length > 20 && <li>...e mais {report.duplicates.length - 20}</li>}
+                  </ul>
+                </div>
+              )}
               {report.errors.length > 0 && (
                 <div className="text-red-700">
                   <div className="font-medium">{report.errors.length} erro(s):</div>
@@ -2942,7 +2985,7 @@ function ImportExtrasDialog({ open, onClose }: { open: boolean; onClose: () => v
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Fechar</Button>
-          <Button onClick={handleImport} disabled={importMutation.isPending || !csv.trim()}>
+          <Button onClick={handleImport} disabled={importMutation.isPending || !csv.trim() || !projectId}>
             {importMutation.isPending ? "A importar..." : "Importar"}
           </Button>
         </DialogFooter>
