@@ -2,6 +2,7 @@ import { getLoginUrl } from "@/const";
 import { trpc } from "@/lib/trpc";
 import { TRPCClientError } from "@trpc/client";
 import { useCallback, useEffect, useMemo } from "react";
+import { getPdaToken, markClaimed } from "@/lib/pdaDevice";
 
 type UseAuthOptions = {
   redirectOnUnauthenticated?: boolean;
@@ -18,6 +19,9 @@ export function useAuth(options?: UseAuthOptions) {
     refetchOnWindowFocus: false,
   });
 
+  // Fase 2: sair num PDA registado solta-o (fica livre para o próximo turno)
+  const releasePda = trpc.operational.pdas.releaseOnLogout.useMutation();
+
   const logoutMutation = trpc.auth.logout.useMutation({
     onSuccess: () => {
       utils.auth.me.setData(undefined, null);
@@ -25,6 +29,11 @@ export function useAuth(options?: UseAuthOptions) {
   });
 
   const logout = useCallback(async () => {
+    const pdaToken = getPdaToken();
+    if (pdaToken) {
+      try { await releasePda.mutateAsync({ token: pdaToken }); } catch { /* não impede o logout */ }
+    }
+    markClaimed(null);
     try {
       await logoutMutation.mutateAsync();
     } catch (error: unknown) {
@@ -39,7 +48,7 @@ export function useAuth(options?: UseAuthOptions) {
       utils.auth.me.setData(undefined, null);
       await utils.auth.me.invalidate();
     }
-  }, [logoutMutation, utils]);
+  }, [logoutMutation, releasePda, utils]);
 
   const state = useMemo(() => {
     return {

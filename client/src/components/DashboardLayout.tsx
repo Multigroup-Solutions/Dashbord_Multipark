@@ -1,4 +1,5 @@
 import { useAuth } from "@/_core/hooks/useAuth";
+import { PdaDeviceBinder } from "@/components/PdaDeviceBinder";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -504,6 +505,8 @@ function DashboardLayoutContent({
 
   return (
     <>
+      {/* Fase 2: login num PDA registado → o PDA fica com esta pessoa */}
+      <PdaDeviceBinder userId={user?.id} />
       {/* Segurança: sem localização precisa + permissão de câmara, a app não
           funciona (overlay bloqueante). */}
       <div className="relative" ref={sidebarRef}>

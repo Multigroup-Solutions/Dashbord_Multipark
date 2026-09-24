@@ -24,7 +24,9 @@ import {
   MapPin, Gauge, ArrowUpDown, Clock, Wrench, XCircle, Satellite, Shield, Users, Settings,
   History, Smartphone, Bell, Battery, Upload, Camera, LogOut, ChevronDown, ChevronUp,
   CalendarDays, Route, Zap, Link as LinkIcon,
+  QrCode,
 } from "lucide-react";
+import QRCodeLib from "qrcode";
 
 const STATUS_LABELS: Record<string, string> = { active: "Ativa", maintenance: "Manutenção", inactive: "Inativa" };
 const STATUS_COLORS: Record<string, string> = { active: "bg-green-100 text-green-800", maintenance: "bg-amber-100 text-amber-800", inactive: "bg-red-100 text-red-800" };
@@ -728,6 +730,7 @@ function PdasTab() {
   const [showCheckin, setShowCheckin] = useState<number | null>(null);
   const [editPda, setEditPda] = useState<any | null>(null);
   const [viewPda, setViewPda] = useState<number | null>(null);
+  const [qrPda, setQrPda] = useState<{ id: number; name: string } | null>(null);
   const utils = trpc.useUtils();
 
   const { data: pdaList, isLoading } = trpc.operational.pdas.list.useQuery();
@@ -844,6 +847,9 @@ function PdasTab() {
                     <Button size="sm" variant="outline" onClick={() => setEditPda(pda)}>
                       <Settings className="w-3 h-3" />
                     </Button>
+                    <Button size="sm" variant="outline" title="QR para colar no aparelho" onClick={() => setQrPda({ id: pda.id, name: pda.name })}>
+                      <QrCode className="w-3 h-3" />
+                    </Button>
                     <Button size="sm" variant="outline" onClick={() => setViewPda(pda.id)}>
                       <Eye className="w-3 h-3" />
                     </Button>
@@ -865,7 +871,50 @@ function PdasTab() {
       {editPda && <EditPdaDialog pda={editPda} onClose={() => setEditPda(null)} />}
       {showCheckin !== null && <CheckinDialog pdaId={showCheckin} onClose={() => setShowCheckin(null)} />}
       {viewPda !== null && <PdaHistoryDialog pdaId={viewPda} onClose={() => setViewPda(null)} />}
+      {qrPda && <PdaQrDialog pda={qrPda} onClose={() => setQrPda(null)} />}
     </div>
+  );
+}
+
+// QR para imprimir e colar no PDA (Fase 2): lido no próprio aparelho, regista-o
+// como este PDA; depois quem faz login nele fica com o PDA/Zello até sair.
+function PdaQrDialog({ pda, onClose }: { pda: { id: number; name: string }; onClose: () => void }) {
+  const { data, error } = trpc.operational.pdas.qrLink.useQuery({ pdaId: pda.id });
+  const [img, setImg] = useState<string | null>(null);
+  const url = data ? `${window.location.origin}${data.path}` : null;
+  useEffect(() => {
+    if (!url) return;
+    QRCodeLib.toDataURL(url, { width: 320, margin: 2 }).then(setImg).catch(() => setImg(null));
+  }, [url]);
+  const print = () => {
+    if (!img) return;
+    const name = pda.name.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
+    const w = window.open("", "_blank", "width=420,height=560");
+    if (!w) return;
+    w.document.write(`<html><head><title>${name}</title></head><body style="font-family:sans-serif;text-align:center;padding:24px">
+      <h2 style="margin:0 0 8px">${name}</h2><img src="${img}" style="width:280px;height:280px"/>
+      <p style="font-size:12px;color:#555">Ler com este aparelho para o registar como ${name}.</p></body></html>`);
+    w.document.close();
+    w.focus();
+    w.print();
+  };
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader><DialogTitle>QR do {pda.name}</DialogTitle></DialogHeader>
+        <div className="text-center space-y-3">
+          {error ? <p className="text-sm text-red-600">{error.message}</p> : img ? <img src={img} alt={`QR ${pda.name}`} className="mx-auto w-64 h-64" /> : <p className="text-sm text-muted-foreground">A gerar…</p>}
+          <p className="text-xs text-muted-foreground">
+            Imprime e cola no aparelho. Uma chefia lê o QR <b>no próprio PDA</b> (uma vez) e fica registado.
+            Depois, quem fizer login nele fica com o PDA e o Zello até sair ou entrar outra pessoa.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Fechar</Button>
+          <Button onClick={print} disabled={!img}>Imprimir</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
