@@ -25,6 +25,7 @@ import ComplaintsPage from "./pages/ComplaintsPage";
 import GoogleReviewsPage from "./pages/GoogleReviewsPage";
 import TrainingPage from "./pages/TrainingPage";
 import LostFoundPage from "./pages/LostFoundPage";
+import ClientsPage from "./pages/ClientsPage";
 import ServicesPage from "./pages/ServicesPage";
 import IncidentsPage from "./pages/IncidentsPage";
 import PerformancePage from "./pages/PerformancePage";
@@ -157,6 +158,9 @@ function Router() {
       </Route>
       <Route path="/criticas">
         {() => (<DashboardLayout><GoogleReviewsPage /></DashboardLayout>)}
+      </Route>
+      <Route path="/clientes">
+        {() => (<DashboardLayout><ClientsPage /></DashboardLayout>)}
       </Route>
       <Route path="/extras-leads">
         {() => (<DashboardLayout><ExtraLeadsPage /></DashboardLayout>)}

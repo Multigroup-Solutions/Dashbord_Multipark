@@ -54,7 +54,8 @@ function Stars({ rating, size = "w-4 h-4" }: { rating: number; size?: string }) 
 export default function GoogleReviewsPage() {
   const [tab, setTab] = useState("dashboard");
   const [showCreate, setShowCreate] = useState(false);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  // ?id=N abre logo a crítica (links a partir da ficha do cliente no CRM).
+  const [selectedId, setSelectedId] = useState<number | null>(() => Number(new URLSearchParams(window.location.search).get("id")) || null);
   const [syncResult, setSyncResult] = useState<any>(null);
   const utils = trpc.useUtils();
   const syncGmail = trpc.reviews.syncFromGmail.useMutation({
