@@ -398,7 +398,7 @@ function SettingEditor({ item, saving, onSave, codeValue }: { item: SettingItem;
             <div className="text-[11px] mt-0.5">
               Em vigor hoje: <b>{pct(inForce.rate)}%</b>
               {codeValue != null && Math.abs(codeValue - inForce.rate) > 1e-9 && (
-                <span className="text-amber-700"> — atenção: o código usa {pct(codeValue)}%</span>
+                <span className="text-amber-700"> — atenção: os cálculos usam hoje {pct(codeValue)}%</span>
               )}
             </div>
           )}

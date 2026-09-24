@@ -231,7 +231,11 @@ export interface MarginInput {
   extrasDia: number;
   salesCommissions: number;
   operationalCommissions: number;
+  /** Taxa única (período sem mudança de taxa); omissão = FINANCE_PARAMS. */
   vatRate?: number;
+  /** Receita SEM IVA já calculada dia a dia com a taxa em vigor em cada dia
+   *  (Definições → IVA com data de efeito). Tem prioridade sobre `vatRate`. */
+  revenueNet?: number;
   /** Despesas SEM IVA já calculadas com a taxa de cada categoria (0083). */
   expensesNet?: number;
 }
@@ -256,7 +260,7 @@ export interface MarginResult {
  */
 export function computeMargin(i: MarginInput): MarginResult {
   const vat = i.vatRate ?? FINANCE_PARAMS.vatRate;
-  const revenueNet = netOfVat(i.revenueGross, vat);
+  const revenueNet = i.revenueNet ?? netOfVat(i.revenueGross, vat);
   // Líquido real (IVA por categoria) quando o motor o traz; senão, taxa normal
   const expensesNet = i.expensesNet ?? netOfVat(i.expensesGross, vat);
   const salaries = i.salariesBase + i.salariesProvisions + i.salariesVariable;

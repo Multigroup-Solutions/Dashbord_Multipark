@@ -8,7 +8,8 @@
  */
 import { getFinancialHistory } from "../db";
 import { computeFinance, monthlyRowsFromTimeseries } from "./engine";
-import { FINANCE_PARAMS, daysBetweenInclusive } from "./rules";
+import { daysBetweenInclusive, monthsOverlapping } from "./rules";
+import { loadFinanceRates } from "./rates";
 
 export async function getBillingData(filters: {
   from: string;
@@ -110,18 +111,23 @@ export async function getAnnualBreakdown(year: number, projectId?: number) {
     try {
       const history = await getFinancialHistory(year);
       const histByMonth = new Map(history.map((h) => [h.month, h]));
+      // O histórico importado só tem totais MENSAIS (não dá para partir por
+      // dia): usa-se o IVA/TSU das Definições em vigor no ÚLTIMO dia do mês.
+      const rates = await loadFinanceRates();
+      const monthEnd = new Map(monthsOverlapping(`${year}-01-01`, `${year}-12-31`).map((m) => [m.month, m.to]));
       for (const mo of months) {
         const h = histByMonth.get(mo.month);
         if (!h) continue;
         const hasReal = mo.revenueGrossWithVat > 0 || mo.expensesWithVat > 0 || mo.salaries > 0 || mo.extrasDiaCost > 0;
         if (hasReal) continue;
-        const vat = FINANCE_PARAMS.vatRate;
+        const end = monthEnd.get(mo.month) ?? `${year}-12-31`;
+        const vat = rates.vatOn(end), tsu = rates.tsuOn(end);
         const revenueWithVat = h.revenueWithVat, expensesWithVat = h.expensesWithVat, salaries = h.salaries;
         const vatRevenue = round(revenueWithVat * vat / (1 + vat));
         const vatExpenses = round(expensesWithVat * vat / (1 + vat));
         const revenueNoVat = round(revenueWithVat - vatRevenue);
         const expensesNoVat = round(expensesWithVat - vatExpenses);
-        const employerTax = round(salaries * FINANCE_PARAMS.tsuEmployerRate);
+        const employerTax = round(salaries * tsu);
         const totalCosts = round(expensesNoVat + salaries + employerTax);
         Object.assign(mo, {
           revenueGrossWithVat: revenueWithVat, revenueWithVat, revenueNoVat, vatRevenue,

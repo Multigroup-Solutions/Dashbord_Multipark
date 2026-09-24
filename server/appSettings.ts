@@ -191,6 +191,10 @@ export async function setSetting(key: string, value: unknown, userId: number): P
     INSERT INTO app_settings_audit (settingKey, oldValue, newValue, changedById)
     VALUES (${key}, ${oldRow ? JSON.stringify(oldValue) : null}, ${normalized === null ? null : JSON.stringify(normalized)}, ${userId})`);
   invalidateSettingsCache();
+  if (key === "finance.vat" || key === "finance.tsu") {
+    const { invalidateFinanceRatesCache } = await import("./finance/rates");
+    invalidateFinanceRatesCache();
+  }
   if (isFlagSettingKey(key)) {
     const { setCachedFeatureOverride } = await import("./_core/featureFlags");
     setCachedFeatureOverride(key.slice(FLAG_SETTING_PREFIX.length), normalized as boolean | null);

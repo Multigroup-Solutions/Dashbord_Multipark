@@ -9,7 +9,8 @@
  *    sem canceladas — a mesma regra e a mesma fronteira das Reservas &
  *    Operações (server/marketingSql.ts).
  *  - "Via anúncios" = adAttribution google_paid OU meta_paid (prova no link).
- *  - ROAS s/ IVA = receita ÷ (1 + IVA) ÷ gasto (FINANCE_PARAMS.vatRate). O
+ *  - ROAS s/ IVA = receita ÷ (1 + IVA) ÷ gasto, com o IVA das Definições em
+ *    vigor no fim do período (finance/rates.ts → vatRateForPeriod). O
  *    ROAS que a Google reporta (valor de conversão ÷ gasto) mostra-se à parte.
  *  - "Outras despesas de marketing" = Despesas da categoria "Marketing" no
  *    período e âmbito (marketing_expenses não tinha caminho de escrita).
@@ -21,7 +22,7 @@ import { adAccounts, multiparkBookings, projects } from "../../../drizzle/schema
 import { brandNameForProject } from "../../../shared/adCampaignMapping";
 import { roasNetOfVat } from "../../../shared/marketingRules";
 import { lisbonDaySql } from "../../../shared/lisbonDay";
-import { FINANCE_PARAMS } from "../../finance/rules";
+import { vatRateForPeriod } from "../../finance/rates";
 import { inLisbonDaysSql, marketingProjectIds, notCancelledSql } from "../../marketingSql";
 import { getAdMetrics, API_PROVIDERS, type AdMetricsResult } from "./adMetrics";
 import { getConnection } from "./oauth";
@@ -53,7 +54,7 @@ export async function getMarketingStats(f: MarketingStatsFilters, preloadedAds?:
   const projectIds = await marketingProjectIds(f.projectId);
   const ads = preloadedAds ?? await getAdMetrics({ from: f.from, to: f.to, projectIds });
   const conn = await getConnection();
-  const vat = FINANCE_PARAMS.vatRate;
+  const vat = await vatRateForPeriod(f.from, f.to);
 
   let bookingsTotal = 0, bookingsAttributed = 0, bookingsGoogle = 0, bookingsMeta = 0, revenueTotal = 0, revenueAttributed = 0, mktExpenses = 0;
   let bookingsByDay: Array<{ date: string; total: number; attributed: number }> = [];
@@ -190,7 +191,7 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string; 
   const empty = { range: { from: f.from, to: f.to }, accounts: [] as Array<{ id: number; name: string; provider: string }>, brands: [] as BrandRow[], byBrandCity: [] as CityRow[], bookingsWithoutBrand: 0, unassignedSpend: 0 };
   if (!db) return empty;
   const projectIds = await marketingProjectIds(f.projectId);
-  const vat = FINANCE_PARAMS.vatRate;
+  const vat = await vatRateForPeriod(f.from, f.to);
 
   const allProjects = await db.select({ id: projects.id, name: projects.name, level: projects.level, parentId: projects.parentId }).from(projects);
   const accounts = await db.select({ id: adAccounts.id, name: adAccounts.name, projectId: adAccounts.projectId, provider: adAccounts.provider })
