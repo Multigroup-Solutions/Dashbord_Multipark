@@ -67,6 +67,7 @@ export default function MarketingDashboardPanel() {
   const [showTable, setShowTable] = useState(false);
   const { projectId } = useGlobalFilters();
   const { data, isLoading, error } = trpc.marketing.dashboard.useQuery({ from, to, projectId });
+  const { data: alertsData } = trpc.marketing.alerts.useQuery({ projectId });
   const st: any = data;
 
   const series = useMemo(() => {
@@ -100,6 +101,8 @@ export default function MarketingDashboardPanel() {
         </p>
         <DateRangeNav start={from} end={to} gran="month" showAll={false} onChange={(s, e) => { setFrom(s); setTo(e); }} />
       </div>
+
+      <AlertsCard alerts={alertsData?.alerts} windowFrom={alertsData?.windowFrom} />
 
       {error && <p role="alert" className="text-sm text-destructive">{error.message}</p>}
       {isLoading && <div className="flex justify-center py-12"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>}
@@ -195,5 +198,38 @@ export default function MarketingDashboardPanel() {
         </>
       )}
     </div>
+  );
+}
+
+/** Alertas (independentes do período escolhido: últimos 14 dias e mês corrente). Nunca só cor: ícone + texto. */
+function AlertsCard({ alerts, windowFrom }: { alerts?: Array<{ level: "critical" | "warning"; code: string; title: string; detail: string; link?: string }>; windowFrom?: string }) {
+  if (!alerts) return null;
+  if (!alerts.length) {
+    return (
+      <div className="rounded-md border border-emerald-200 bg-emerald-50 text-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200 px-3 py-2 text-xs flex items-center gap-2" role="status">
+        <CheckCircle2 className="w-4 h-4" /> Sem alertas: campanhas com resultados, ritmo do mês normal e todas as campanhas associadas.
+      </div>
+    );
+  }
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-amber-600" /> Alertas ({alerts.length})</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {alerts.map((a, i) => {
+          const critical = a.level === "critical";
+          const Icon = critical ? CircleAlert : AlertTriangle;
+          const body = (
+            <div className={`rounded-md border px-3 py-2 text-sm ${critical ? "border-rose-200 bg-rose-50 text-rose-900 dark:bg-rose-950/30 dark:text-rose-200" : "border-amber-200 bg-amber-50 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200"}`}>
+              <div className="flex items-center gap-2 font-medium"><Icon className="w-4 h-4 shrink-0" /><span className="sr-only">{critical ? "Crítico:" : "Atenção:"}</span>{a.title}</div>
+              <p className="text-xs mt-0.5">{a.detail}</p>
+            </div>
+          );
+          return a.link ? <Link key={`${a.code}-${i}`} href={a.link} className="block hover:opacity-90">{body}</Link> : <div key={`${a.code}-${i}`}>{body}</div>;
+        })}
+        {windowFrom && <p className="text-[11px] text-muted-foreground">Campanhas: últimos 14 dias (desde {windowFrom.slice(8, 10)}/{windowFrom.slice(5, 7)}). Ritmo: mês corrente vs mês passado.</p>}
+      </CardContent>
+    </Card>
   );
 }

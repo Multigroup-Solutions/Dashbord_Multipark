@@ -3578,6 +3578,63 @@ export const appRouter = router({
 
     // Página principal do Marketing (Jorge, 16 set 2026): gasto por marca
     // (= conta Google; Multipark = Marketplace) e reservas dessa marca.
+    // Alertas do Marketing (Jorge, 24 set 2026) — regras em shared/marketingAlerts.ts.
+    alerts: protectedProcedure
+      .input(z.object({ projectId: z.number().optional() }).optional())
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { getDb } = await import("./db");
+        const { getMarketingStats } = await import("./integrations/googleAds/marketingStats");
+        const { getAdMetrics } = await import("./integrations/googleAds/adMetrics");
+        const { projectScope, scopedProjectIds } = await import("./cityScope");
+        const { resolveProjectIds } = await import("./db");
+        const { lisbonToday } = await import("../shared/expensePeriods");
+        const { computeMarketingAlerts, ALERT_WINDOW_DAYS } = await import("../shared/marketingAlerts");
+        const { sql } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
+        const today = lisbonToday();
+        const shift = (iso: string, days: number) => { const d = new Date(`${iso}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + days); return d.toISOString().slice(0, 10); };
+        const [y, m] = today.split("-").map(Number);
+        const monthStart = `${today.slice(0, 7)}-01`;
+        const prevEnd = shift(monthStart, -1);
+        const prevStart = `${prevEnd.slice(0, 7)}-01`;
+        const windowFrom = shift(today, -(ALERT_WINDOW_DAYS - 1));
+        const requested = input?.projectId ? await resolveProjectIds(input.projectId) : null;
+        const allowed = scopedProjectIds();
+        const projectIds = allowed ? (requested ? requested.filter((id) => allowed.includes(id)) : allowed) : requested;
+        const [win, month, prev] = await Promise.all([
+          getMarketingStats({ from: windowFrom, to: today, projectId: input?.projectId }),
+          getAdMetrics({ from: monthStart, to: today, projectIds }),
+          getAdMetrics({ from: prevStart, to: prevEnd, projectIds }),
+        ]);
+        // Reservas atribuídas por campanha (ID externo do Google) na janela.
+        const byExt = new Map<string, number>();
+        const raw: any = await db.execute(sql`
+          SELECT b.adCampaignExternalId AS ext, COUNT(*) AS n FROM multipark_bookings b
+          WHERE b.adAttribution = 'google_paid' AND b.adCampaignExternalId IS NOT NULL
+            AND UPPER(COALESCE(b.status, '')) NOT LIKE '%CANCEL%'
+            AND b.bookingCreatedAt BETWEEN ${`${windowFrom} 00:00:00`} AND ${`${today} 23:59:59`}
+            AND ${projectScope(sql`b.projectId`)}
+          GROUP BY b.adCampaignExternalId`);
+        for (const r of (Array.isArray(raw?.[0]) ? raw[0] : raw) as any[]) byExt.set(String(r.ext), Number(r.n ?? 0));
+        const windowCampaigns = (win.byCampaign as any[]).filter((c) => c.source === "api").map((c) => ({
+          name: String(c.name), accountName: c.accountName ?? null, cost: Number(c.cost ?? 0), conversions: Number(c.conversions ?? 0),
+          attributedBookings: byExt.get(String(c.key).split(":").slice(2).join(":")) ?? 0,
+        }));
+        const alerts = computeMarketingAlerts({
+          windowCampaigns,
+          attribution: win.attributionQuality,
+          windowSpend: win.spend,
+          monthSpend: month.totals.cost,
+          prevMonthSpend: prev.totals.cost,
+          dayOfMonth: Number(today.slice(8, 10)),
+          daysInMonth: new Date(Date.UTC(y, m, 0)).getUTCDate(),
+          unmappedCampaigns: month.unmappedCampaigns,
+          coverage: win.coverage ?? null,
+        });
+        return { generatedAt: new Date().toISOString(), windowFrom, alerts };
+      }),
     // Canais e clientes (Jorge, 24 set 2026): reservas e custo por canal de
     // aquisição + ligação ao CRM (canal de entrada de cada cliente).
     channels: protectedProcedure
