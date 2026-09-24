@@ -5,6 +5,9 @@ import {
   buildHandoverEmail,
   cashDifference,
   citiesNeedingReminder,
+  coveredCarsPending,
+  HANDOVER_CITY_FIELDS,
+  type CoveredCarCandidate,
   complianceStatus,
   compliancePercent,
   extractNoteItems,
@@ -212,10 +215,36 @@ describe("email ao team leader do turno seguinte", () => {
 });
 
 describe("material por cidade", () => {
-  it("Faro sem bolsa do terminal", () => {
-    expect(materialExceptionsFor("faro")).not.toContain("terminal_pouch");
-    expect(materialExceptionsFor("faro")).not.toContain("mb_rolls_pouch");
-    expect(materialExceptionsFor("lisbon")).toContain("terminal_pouch");
+  it("bolsa do terminal em todas as cidades (incl. Faro e Porto)", () => {
+    for (const c of ["lisbon", "porto", "faro"] as const) {
+      expect(HANDOVER_CITY_FIELDS[c].terminalPouch).toBe(true);
+      expect(materialExceptionsFor(c)).toContain("terminal_pouch");
+      expect(materialExceptionsFor(c)).toContain("mb_rolls_pouch");
+    }
+  });
+});
+
+describe("carros p/ coberto (automático)", () => {
+  const base: CoveredCarCandidate = { externalId: "a", bookingNumber: "1", plate: "AA-00-00", parkName: "P", status: "CHECKED_IN", spotType: "covered", parkingType: null, checkInMs: 1000, lastMoveMs: null };
+  const now = 10_000;
+  it("conta coberto, no parque e sem movimento depois do check-in", () => {
+    expect(coveredCarsPending([base], now).map((b) => b.externalId)).toEqual(["a"]);
+  });
+  it("movimento depois do check-in → já foi para o coberto", () => {
+    expect(coveredCarsPending([{ ...base, lastMoveMs: 2000 }], now)).toEqual([]);
+    // movimento de uma estadia anterior (antes do check-in) não conta
+    expect(coveredCarsPending([{ ...base, lastMoveMs: 500 }], now)).toHaveLength(1);
+  });
+  it("ignora descobertos, já entregues e check-ins futuros; aceita parkingType COVERED", () => {
+    expect(coveredCarsPending([{ ...base, spotType: "uncovered" }], now)).toEqual([]);
+    expect(coveredCarsPending([{ ...base, spotType: "unknown", parkingType: "COVERED" }], now)).toHaveLength(1);
+    expect(coveredCarsPending([{ ...base, status: "CHECKED_OUT" }], now)).toEqual([]);
+    expect(coveredCarsPending([{ ...base, status: "PENDING_CHECKOUT" }], now)).toEqual([]);
+    expect(coveredCarsPending([{ ...base, checkInMs: 20_000 }], now)).toEqual([]);
+  });
+  it("ordena por check-in", () => {
+    const r = coveredCarsPending([{ ...base, externalId: "b", checkInMs: 3000 }, { ...base, externalId: "c", checkInMs: 2000 }], now);
+    expect(r.map((x) => x.externalId)).toEqual(["c", "b"]);
   });
 });
 

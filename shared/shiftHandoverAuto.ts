@@ -273,12 +273,60 @@ export interface HandoverCityFields {
   coveredCars: boolean;
 }
 
-/** Configuração por cidade — Faro não tem bolsa do terminal. */
+/**
+ * Configuração por cidade. Decisão do dono (set 2026): a bolsa do terminal
+ * existe em TODAS as cidades (incluindo Faro e Porto) — já não há exceção.
+ */
 export const HANDOVER_CITY_FIELDS: Record<HandoverCity, HandoverCityFields> = {
   lisbon: { terminalPouch: true, coveredCars: true },
   porto: { terminalPouch: true, coveredCars: true },
-  faro: { terminalPouch: false, coveredCars: true },
+  faro: { terminalPouch: true, coveredCars: true },
 };
+
+// ─── Carros p/ coberto (automático) ─────────────────────────────────────────
+//
+// REGRA (sinal escolhido — a Multipark não tem um evento "movido para o
+// coberto"; o que existe é o evento de histórico `MOVEMENT`/`MOVE`, com
+// `modifiedFields.garagem/lugar`, que regista qualquer mudança de lugar):
+//  1. reserva de lugar COBERTO: `spotType = 'covered'` (classificado pelo nº de
+//     allocation 5000–7999, ver server/spotClassification.ts) OU
+//     `parkingType = 'COVERED'` (produto coberto comprado);
+//  2. carro NO PARQUE: estado `CHECKED_IN` (recebido, ainda sem entrega —
+//     CHECKING_OUT/PENDING_CHECKOUT/CHECKED_OUT já estão a sair/saíram);
+//  3. SEM movimento depois da receção: nenhum evento MOVEMENT/MOVE com
+//     `actionTime` >= último CHECK_IN (ou >= `checkIn` quando o evento de
+//     CHECK_IN ainda não foi sincronizado). O 1.º movimento depois da receção
+//     é, na operação, a ida do carro da zona de receção para o lugar coberto.
+
+export interface CoveredCarCandidate {
+  externalId: string;
+  bookingNumber: string | null;
+  plate: string | null;
+  parkName: string | null;
+  status: string | null;
+  spotType: string | null;
+  parkingType: string | null;
+  /** Instante (ms) do último CHECK_IN (histórico) ou do `checkIn` previsto. */
+  checkInMs: number | null;
+  /** Instante (ms) do último MOVEMENT/MOVE. */
+  lastMoveMs: number | null;
+}
+
+export const IN_PARK_STATUSES = ["CHECKED_IN"] as const;
+
+export function isCoveredBooking(b: { spotType: string | null; parkingType: string | null }): boolean {
+  return String(b.spotType ?? "").toLowerCase() === "covered" || String(b.parkingType ?? "").toUpperCase() === "COVERED";
+}
+
+/** Carros que ainda têm de ir para o coberto (ordenados por check-in). */
+export function coveredCarsPending(rows: CoveredCarCandidate[], nowMs: number = Date.now()): CoveredCarCandidate[] {
+  return rows
+    .filter((b) => isCoveredBooking(b))
+    .filter((b) => (IN_PARK_STATUSES as readonly string[]).includes(String(b.status ?? "").toUpperCase()))
+    .filter((b) => b.checkInMs == null || b.checkInMs <= nowMs)
+    .filter((b) => b.lastMoveMs == null || (b.checkInMs != null && b.lastMoveMs < b.checkInMs))
+    .sort((a, b) => (a.checkInMs ?? 0) - (b.checkInMs ?? 0));
+}
 
 export function materialExceptionsFor(city: HandoverCity): MaterialException[] {
   const f = HANDOVER_CITY_FIELDS[city];

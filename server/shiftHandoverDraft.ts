@@ -27,6 +27,8 @@ import {
   previousShiftOf,
   shiftHours,
   shiftWindowUtc,
+  coveredCarsPending,
+  type CoveredCarCandidate,
   type DraftBookingRow,
   type HandoverDraftCounts,
   type OpenItem,
@@ -103,6 +105,8 @@ export interface HandoverDraft {
   checkins: DraftBookingRow[];
   checkouts: DraftBookingRow[];
   coveredCheckinsNext: number;
+  /** Carros p/ coberto (automático): lugar coberto, no parque, ainda sem movimento. Regra em shared/shiftHandoverAuto.ts. */
+  coveredCars: { count: number; list: Array<{ externalId: string; bookingNumber: string | null; plate: string | null; park: string | null; checkIn: string }> };
   pendingDeliveries: Array<{ externalId: string; bookingNumber: string | null; plate: string | null; clientName: string; since: string }>;
   complaints: Array<{ id: number; title: string; status: string; priority: string; createdAt: string; isNew: boolean }>;
   lostFound: Array<{ id: number; clientName: string; description: string; status: string }>;
@@ -184,6 +188,28 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
         WHERE c.bookingExternalId = h.bookingExternalId AND c.changeType = 'CHECK_OUT' AND c.actionTime >= h.actionTime)
     GROUP BY h.bookingExternalId, b.bookingNumber, b.licensePlate, b.clientFirstName, b.clientLastName
     ORDER BY t LIMIT 200`)), [] as any[]);
+
+  // Carros p/ coberto: reservas de lugar coberto ainda no parque (CHECKED_IN,
+  // recebidas nos últimos 60 dias) — o filtro "sem movimento depois do
+  // check-in" é o helper puro `coveredCarsPending`.
+  const coveredSince = new Date(nowMs - 60 * 86_400_000).toISOString().slice(0, 19).replace("T", " ");
+  const coveredRows = await safe("covered cars", async () => rowsOf(await db.execute(sql`
+    SELECT b.externalId, b.bookingNumber, b.licensePlate, b.parkName, b.status, b.spotType, b.parkingType,
+      UNIX_TIMESTAMP(COALESCE(
+        (SELECT MAX(h.actionTime) FROM multipark_booking_history h WHERE h.bookingExternalId = b.externalId AND h.changeType IN ('CHECK_IN', 'CHECKIN')),
+        b.checkIn)) AS ciT,
+      UNIX_TIMESTAMP((SELECT MAX(m.actionTime) FROM multipark_booking_history m WHERE m.bookingExternalId = b.externalId AND m.changeType IN ('MOVEMENT', 'MOVE'))) AS mvT
+    FROM multipark_bookings b
+    WHERE UPPER(b.status) = 'CHECKED_IN'
+      AND (b.spotType = 'covered' OR UPPER(b.parkingType) = 'COVERED')
+      AND b.checkIn >= ${coveredSince}
+      AND ${inCity(sql`b.projectId`)}
+    ORDER BY b.checkIn LIMIT 500`)), [] as any[]);
+  const coveredPending = coveredCarsPending(coveredRows.map((r): CoveredCarCandidate => ({
+    externalId: String(r.externalId), bookingNumber: r.bookingNumber ?? null, plate: r.licensePlate ?? null, parkName: r.parkName ?? null,
+    status: r.status ?? null, spotType: r.spotType ?? null, parkingType: r.parkingType ?? null,
+    checkInMs: r.ciT == null ? null : num(r.ciT) * 1000, lastMoveMs: r.mvT == null ? null : num(r.mvT) * 1000,
+  })), nowMs);
 
   // Reclamações novas no turno + abertas
   const complaintsRows = await safe("complaints", async () => rowsOf(await db.execute(sql`
@@ -328,6 +354,13 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
     checkins: checkins.slice(0, LIST_LIMIT),
     checkouts: checkouts.slice(0, LIST_LIMIT),
     coveredCheckinsNext: checkins.filter((b) => b.spotType === "covered").length,
+    coveredCars: {
+      count: coveredPending.length,
+      list: coveredPending.slice(0, LIST_LIMIT).map((b) => ({
+        externalId: b.externalId, bookingNumber: b.bookingNumber, plate: b.plate, park: b.parkName,
+        checkIn: b.checkInMs == null ? "" : `${new Date(b.checkInMs).toLocaleDateString("pt-PT", { timeZone: "Europe/Lisbon", day: "2-digit", month: "2-digit" })} ${lisbonHHMM(b.checkInMs)}`,
+      })),
+    },
     pendingDeliveries: pendingDeliveries.slice(0, LIST_LIMIT),
     complaints: complaints.slice(0, LIST_LIMIT),
     lostFound: lostFound.slice(0, LIST_LIMIT),
@@ -351,6 +384,7 @@ export function draftSnapshot(d: HandoverDraft): string {
     counts: d.counts,
     byHour: d.byHour,
     coveredCheckinsNext: d.coveredCheckinsNext,
+    coveredCars: d.coveredCars?.count ?? 0,
     people: d.people,
     checkouts: d.checkouts.slice(0, 40),
     pendingDeliveries: d.pendingDeliveries.slice(0, 40),

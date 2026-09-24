@@ -155,6 +155,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0087").then(m => ({ s: m.MIGRATION_0087_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0087 })),
       import("./migrations/migration_0088").then(m => ({ s: m.MIGRATION_0088_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0088 })),
       import("./migrations/migration_0090").then(m => ({ s: m.MIGRATION_0090_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0090 })),
+      import("./migrations/migration_0091").then(m => ({ s: m.MIGRATION_0091_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0091 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -1764,7 +1765,7 @@ export async function removeEmployeeFromProject(projectId: number, employeeId: n
 /** Filtro por projeto HIERÁRQUICO (nó + descendentes; id negativo = marca em
  * todas as cidades) + âmbito de cidade do utilizador. `allowNull`: registos
  * sem projeto continuam visíveis (ex.: tarefas transversais). */
-async function projectFilterConds(column: any, projectId: number | undefined, opts: { allowNull?: boolean } = {}): Promise<any[]> {
+export async function projectFilterConds(column: any, projectId: number | undefined, opts: { allowNull?: boolean } = {}): Promise<any[]> {
   const conds: any[] = [opts.allowNull ? sql`(${column} IS NULL OR ${projectScope(column)})` : projectScope(column)];
   if (projectId) {
     const ids = await resolveProjectIds(projectId);
@@ -1809,9 +1810,9 @@ export async function updateTask(id: number, data: Partial<InsertTask>) {
 }
 
 export async function deleteTask(id: number) {
-  const db = await getDb();
-  if (!db) throw new Error("DB not available");
-  await db.delete(tasks).where(eq(tasks.id, id));
+  // Apaga também os responsáveis e os comentários (antes ficavam órfãos).
+  const { deleteTaskCascade } = await import("./tasksService");
+  await deleteTaskCascade(id);
 }
 
 /**
@@ -1870,19 +1871,9 @@ export async function getTasksWithAssignees(filters?: {
 }
 
 export async function getTaskStats() {
-  const db = await getDb();
-  if (!db) return { total: 0, backlog: 0, todo: 0, inProgress: 0, review: 0, done: 0, overdue: 0 };
-  const all = await db.select().from(tasks);
-  const now = new Date();
-  return {
-    total: all.length,
-    backlog: all.filter(t => t.taskStatus === "backlog").length,
-    todo: all.filter(t => t.taskStatus === "todo").length,
-    inProgress: all.filter(t => t.taskStatus === "in_progress").length,
-    review: all.filter(t => t.taskStatus === "review").length,
-    done: all.filter(t => t.taskStatus === "done").length,
-    overdue: all.filter(t => t.dueDate && new Date(t.dueDate) < now && t.taskStatus !== "done").length,
-  };
+  // COUNT/GROUP BY em SQL (antes carregava a tabela inteira para memória).
+  const { taskStats } = await import("./tasksService");
+  return taskStats();
 }
 
 // ─── MARKETING: CAMPAIGNS ────────────────────────────────────────────────────
@@ -2352,6 +2343,16 @@ export async function updateComplaint(id: number, data: Partial<InsertComplaint>
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
   await db.update(complaints).set(data).where(eq(complaints.id, id));
+  await closeLinkedTasksIfResolved("complaint", id, (data as any).complaintStatus);
+}
+
+/** Origem resolvida → fecha as tarefas ligadas (sourceModule/sourceId). Nunca lança. */
+async function closeLinkedTasksIfResolved(module: "complaint" | "incident" | "lost_found", id: number, status: unknown): Promise<void> {
+  if (typeof status !== "string") return;
+  const { SOURCE_RESOLVED_STATUSES } = await import("../shared/taskRules");
+  if (!SOURCE_RESOLVED_STATUSES[module].includes(status)) return;
+  const { closeTasksForSource } = await import("./tasksService");
+  await closeTasksForSource(module, id);
 }
 
 export async function deleteComplaint(id: number) {
@@ -2771,6 +2772,7 @@ export async function getLostFoundItemById(id: number) {
 export async function updateLostFoundItem(id: number, data: Partial<LostFoundItem>) {
   const db = await getDb(); if (!db) return;
   await db.update(lostFoundItems).set(data as any).where(eq(lostFoundItems.id, id));
+  await closeLinkedTasksIfResolved("lost_found", id, (data as any).status);
 }
 
 export async function deleteLostFoundItem(id: number) {
@@ -2915,6 +2917,7 @@ export async function getIncidentById(id: number) {
 export async function updateIncident(id: number, data: any) {
   const db = await getDb(); if (!db) return;
   await db.update(incidents).set(data).where(eq(incidents.id, id));
+  await closeLinkedTasksIfResolved("incident", id, data?.status);
 }
 
 export async function deleteIncident(id: number) {
