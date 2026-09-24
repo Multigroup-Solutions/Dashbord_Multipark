@@ -1,4 +1,6 @@
 import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { atLeast, useConfirm } from "./training/shared";
 import { createContext, useContext } from "react";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { useOpenEmployee } from "@/hooks/useOpenEmployee";
@@ -518,14 +520,31 @@ function TeamSection({
   // "só devia aparecer aqueles que têm permissão de ser team leader")
   const tlCandidatesQuery = trpc.extrasDia.candidates.useQuery({ date: targetDate, forTeamLeader: true });
 
+  // Formação obrigatória em falta: o servidor recusa (PRECONDITION_FAILED);
+  // um admin pode forçar (fica registado no log de atividade).
+  const { user } = useAuth();
+  const canForceTraining = atLeast(user?.role, "admin");
+  const [confirmForce, confirmForceUi] = useConfirm();
   const upsert = trpc.extrasDia.upsertAssignment.useMutation({
     onSuccess: () => {
       utils.extrasDia.assignments.invalidate();
       utils.extrasDia.coverage.invalidate();
       toast.success("Turno guardado");
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => { if (!(canForceTraining && e.data?.code === "PRECONDITION_FAILED")) toast.error(e.message); },
   });
+  type UpsertInput = Parameters<typeof upsert.mutateAsync>[0];
+  const saveAssignment = async (values: UpsertInput) => {
+    try {
+      return await upsert.mutateAsync(values);
+    } catch (e: any) {
+      if (canForceTraining && e?.data?.code === "PRECONDITION_FAILED") {
+        const ok = await confirmForce({ title: "Formação obrigatória em falta", description: e.message, confirmLabel: "Forçar mesmo sem formação", destructive: true });
+        if (ok) return await upsert.mutateAsync({ ...values, override: true });
+      }
+      throw e;
+    }
+  };
   const del = trpc.extrasDia.deleteAssignment.useMutation({
     onSuccess: () => {
       utils.extrasDia.assignments.invalidate();
@@ -635,6 +654,7 @@ function TeamSection({
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
+        {confirmForceUi}
         {gaps.length > 0 && (
           <div className="rounded-md border border-red-300 bg-red-50/60 p-3 text-sm text-red-900 dark:bg-red-950/30 dark:text-red-200">
             <div className="flex items-center gap-2 font-medium">
@@ -690,7 +710,7 @@ function TeamSection({
                 defaultStart={defaultStart}
                 defaultEnd={defaultEnd}
                 onSubmit={async (values) => {
-                  await upsert.mutateAsync({ ...values, city });
+                  await saveAssignment({ ...values, city });
                   setAddingTL(false);
                 }}
                 onCancel={() => setAddingTL(false)}
@@ -708,7 +728,7 @@ function TeamSection({
             defaultStart={defaultStart}
             defaultEnd={defaultEnd}
             onSubmit={async (values) => {
-              await upsert.mutateAsync({ ...values, city });
+              await saveAssignment({ ...values, city });
               setAdding(false);
             }}
             onCancel={() => setAdding(false)}
@@ -747,7 +767,7 @@ function TeamSection({
                     key={a.id}
                     assignment={a}
                     notice={noticeByAssignment.get(a.id) ?? null}
-                    onSave={(payload) => upsert.mutate({ ...payload, id: a.id, city })}
+                    onSave={(payload) => { void saveAssignment({ ...payload, id: a.id, city }).catch(() => {}); }}
                     onDelete={() => del.mutate({ id: a.id })}
                     busy={upsert.isPending || del.isPending}
                   />
@@ -791,6 +811,7 @@ function AssignmentForm({
     suggestedLevel: LevelId;
     photoUrl?: string | null;
     availability?: { status: "available" | "unavailable" | "no_response"; morning: boolean; night: boolean } | null;
+    trainingMissing?: boolean;
   }[];
   asTeamLeader?: boolean;
   shift: ShiftId;
@@ -860,6 +881,9 @@ function AssignmentForm({
                       <span className="text-[10px] text-red-500" title="Disse que não está disponível">✕</span>
                     )}
                     <span className={c.availability?.status === "unavailable" ? "text-muted-foreground" : undefined}>{c.fullName}</span>
+                    {c.trainingMissing && (
+                      <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] font-medium text-amber-800" title="Formação obrigatória por concluir">Formação em falta</span>
+                    )}
                   </span>
                 </SelectItem>
               ))}

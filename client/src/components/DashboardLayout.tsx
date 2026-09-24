@@ -669,16 +669,16 @@ function DashboardLayoutContent({
               </SelectContent>
             </Select>
 
-            {/* Brand/Park filter */}
+            {/* Filtro de Marca (nós level=brand; antes dizia "Parque") */}
             <Select
               value={filters.brandId === null ? "all" : String(filters.brandId)}
               onValueChange={(v) => filters.setBrandId(v === "all" ? null : Number(v))}
             >
               <SelectTrigger className="hidden md:flex h-9 w-[140px]">
-                <SelectValue placeholder="Parque" />
+                <SelectValue placeholder="Marca" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">Todos os parques</SelectItem>
+                <SelectItem value="all">Todas as marcas</SelectItem>
                 {filters.brands.map((brand) => (
                   <SelectItem key={brand.id} value={String(brand.id)}>
                     {brand.name}
@@ -698,7 +698,7 @@ function DashboardLayoutContent({
                   variant={filters.cityId !== null || filters.brandId !== null ? "default" : "outline"}
                   size="icon"
                   className="md:hidden h-9 w-9"
-                  title="Cidade e parques"
+                  title="Cidade e marca"
                 >
                   <MapPin className="h-4 w-4" />
                 </Button>
@@ -721,14 +721,14 @@ function DashboardLayoutContent({
                   </Select>
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-xs">Parque</Label>
+                  <Label className="text-xs">Marca</Label>
                   <Select
                     value={filters.brandId === null ? "all" : String(filters.brandId)}
                     onValueChange={(v) => filters.setBrandId(v === "all" ? null : Number(v))}
                   >
-                    <SelectTrigger className="w-full h-9"><SelectValue placeholder="Parque" /></SelectTrigger>
+                    <SelectTrigger className="w-full h-9"><SelectValue placeholder="Marca" /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="all">Todos os parques</SelectItem>
+                      <SelectItem value="all">Todas as marcas</SelectItem>
                       {filters.brands.map((brand) => (
                         <SelectItem key={brand.id} value={String(brand.id)}>{brand.name}</SelectItem>
                       ))}

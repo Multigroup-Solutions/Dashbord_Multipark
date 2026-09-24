@@ -526,59 +526,12 @@ export function createMcpApiRouter(): Router {
     res.json({ success: errors.length === 0, ok, skipped, errors });
   }));
 
-  // Backfill: associa reservas sem projectId ao projeto certo via
-  // "parque + cidade" (mesma normalização do sync). Idempotente.
+  // Backfill: associa reservas sem projectId (ou presas num nó intermédio)
+  // ao projeto certo com o matcher determinístico partilhado com o sync
+  // (shared/projectTree.ts via server/projectAdmin.ts). Idempotente.
   r.post("/admin/backfill-projects", requireScope("admin"), h(async (_req, res) => {
-    const d = await db();
-    if (!d) return res.status(500).json({ error: "DB unavailable" });
-    const rows = (r2: any) => (Array.isArray(r2[0]) ? r2[0] : r2) as any[];
-    const CITY_PT: Record<string, string> = { lisbon: "lisboa", lisboa: "lisboa", oporto: "porto", porto: "porto", faro: "faro" };
-
-    const projs = rows(await d.execute(sql`SELECT id, name FROM projects WHERE level = 'project' AND isActive = 1`));
-    const projMap = new Map<string, number>(projs.map((p: any) => [String(p.name).toLowerCase().trim(), Number(p.id)]));
-
-    // Sem projeto OU arquivadas num nó intermédio (cidade/marca/grupo) — o
-    // fallback do sync usava o nó da cidade quando o projeto folha não existia.
-    const pending = rows(await d.execute(sql`
-      SELECT id, parkName, city FROM multipark_bookings
-      WHERE parkName IS NOT NULL AND parkName <> ''
-        AND (projectId IS NULL OR projectId IN (SELECT id FROM projects WHERE level <> 'project'))`));
-    const byProject = new Map<number, number[]>();
-    let unmatched = 0;
-    const unmatchedNames = new Map<string, number>();
-    for (const b of pending) {
-      const parkNorm = String(b.parkName).toLowerCase().replace(/\s*-\s*/g, " ").replace(/\s+/g, " ").trim();
-      const cityRaw = String(b.city ?? "").toLowerCase().trim();
-      const cityPt = CITY_PT[cityRaw] ?? cityRaw;
-      // 1) parkName já contém a cidade ("boardingpark faro"); 2) junta a coluna city
-      const pid = projMap.get(parkNorm) ?? (cityPt ? projMap.get(`${parkNorm} ${cityPt}`) : undefined);
-      if (pid) {
-        if (!byProject.has(pid)) byProject.set(pid, []);
-        byProject.get(pid)!.push(Number(b.id));
-      } else {
-        unmatched++;
-        unmatchedNames.set(parkNorm, (unmatchedNames.get(parkNorm) ?? 0) + 1);
-      }
-    }
-
-    const updated: Array<{ projectId: number; project: string; bookings: number }> = [];
-    for (const [pid, ids] of byProject) {
-      for (let i = 0; i < ids.length; i += 500) {
-        const chunk = ids.slice(i, i + 500);
-        await d.execute(sql`UPDATE multipark_bookings SET projectId = ${pid} WHERE id IN (${sql.join(chunk.map((v) => sql`${v}`), sql`, `)})`);
-      }
-      const pname = projs.find((p: any) => Number(p.id) === pid)?.name ?? String(pid);
-      updated.push({ projectId: pid, project: pname, bookings: ids.length });
-    }
-    updated.sort((a, b) => b.bookings - a.bookings);
-    res.json({
-      success: true,
-      pending: pending.length,
-      matched: pending.length - unmatched,
-      unmatched,
-      unmatchedTop: Array.from(unmatchedNames.entries()).sort((a, b) => b[1] - a[1]).slice(0, 15).map(([name, n]) => ({ name, bookings: n })),
-      updated,
-    });
+    const { backfillBookingProjects } = await import("./projectAdmin");
+    res.json({ success: true, ...(await backfillBookingProjects({ includeIntermediate: true })) });
   }));
 
   // Funde extras duplicados por email (duplicados auto-criados pelo site antes

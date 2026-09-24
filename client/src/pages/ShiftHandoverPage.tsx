@@ -39,6 +39,21 @@ import {
   type HandoverCity,
   type HandoverShift,
 } from "@shared/shiftHandover";
+import {
+  COMPLIANCE_LABELS,
+  HANDOVER_CITY_FIELDS,
+  MATERIAL_EXCEPTION_LABELS,
+  SHIFT_LABELS,
+  materialExceptionsFor,
+  mergeCarryOver,
+  withNoteItems,
+  type ComplianceStatus,
+  type MaterialException,
+  type MaterialExceptionItem,
+  type OpenItem,
+} from "@shared/shiftHandoverAuto";
+import { AiSummaryBox, OpenItemsEditor, ShiftHandoverDraftPanel } from "@/components/ShiftHandoverDraftPanel";
+import { Checkbox } from "@/components/ui/checkbox";
 
 // ─── PASSAGEM DE TURNO (pedido do Jorge, 2026-08-06) ─────────────────────────
 // Os team leaders preenchem o checklist no fim do turno; o supervisor consulta
@@ -122,8 +137,8 @@ export default function ShiftHandoverPage() {
           <Card className="mt-4"><CardContent className="p-8 text-center text-muted-foreground">Sem cidade atribuída — pede a um administrador para associar o teu centro de custos.</CardContent></Card>
         ) : (
           <>
-            <TabsContent value="preencher"><HandoverForm cityState={cityState as CityState} isSupervisor={isSupervisor} /></TabsContent>
-            <TabsContent value="historico"><HandoverHistory cityState={cityState as CityState} /></TabsContent>
+            <TabsContent value="preencher"><HandoverForm cityState={cityState as CityState} isSupervisor={isSupervisor} userId={user?.id ?? null} /></TabsContent>
+            <TabsContent value="historico"><HandoverHistory cityState={cityState as CityState} userId={user?.id ?? null} /></TabsContent>
             {isSupervisor && <TabsContent value="dashboard"><SupervisorDashboard cityState={cityState as CityState} /></TabsContent>}
           </>
         )}
@@ -139,7 +154,7 @@ const EMPTY_FORM = {
   carsForCovered: "", chargedUntilDate: "", cashClosedInSafe: null as boolean | null,
   checkoutCashDone: null as boolean | null, frontPouchValue: "", terminalPouchValue: "",
   ticketsExpensesPaid: "", mbRolls: "", mbRollsInPouch: "", pensInPouch: "",
-  mbBattery: "", pdasCharged: null as boolean | null, uniformsCount: "", notes: "",
+  mbBattery: "", pdasCharged: null as boolean | null, notes: "",
 };
 type FormState = typeof EMPTY_FORM;
 
@@ -159,12 +174,11 @@ function formFromRecord(existing: any): FormState {
     pensInPouch: str(existing.pensInPouch),
     mbBattery: str(existing.mbBattery),
     pdasCharged: existing.pdasCharged == null ? null : !!existing.pdasCharged,
-    uniformsCount: existing.uniformsCount != null ? String(existing.uniformsCount) : "",
     notes: existing.notes ?? "",
   };
 }
 
-function HandoverForm({ cityState, isSupervisor }: { cityState: CityState; isSupervisor: boolean }) {
+function HandoverForm({ cityState, isSupervisor, userId }: { cityState: CityState; isSupervisor: boolean; userId: number | null }) {
   const utils = trpc.useUtils();
   const { city, allowed, setCity } = cityState;
   // Turno operacional em Lisboa (01:30 → noite do dia anterior)
@@ -174,9 +188,17 @@ function HandoverForm({ cityState, isSupervisor }: { cityState: CityState; isSup
 
   const [f, setF] = useState<FormState>(EMPTY_FORM);
   // Fardamento: linhas em rascunho (qty como texto enquanto se escreve). O
-  // "Número de fardas" antigo deixou de se pedir; `f.uniformsCount` fica só
-  // para devolver intacto o valor dos registos anteriores a 2026-09-09.
+  // "Número de fardas" antigo deixou de se pedir (e saiu da API): o servidor
+  // já não mexe no valor dos registos anteriores a 2026-09-09.
   const [clothing, setClothing] = useState<ClothingDraftRow[]>([]);
+  // Material simplificado: "Material OK?" + exceções (canetas/rolos/bateria).
+  const [materialOk, setMaterialOk] = useState<boolean | null>(null);
+  const [materialExc, setMaterialExc] = useState<MaterialExceptionItem[]>([]);
+  // Pendentes que passam de turno (carry-over) e resumo IA.
+  const [openItems, setOpenItems] = useState<OpenItem[]>([]);
+  const [aiText, setAiText] = useState<string | null>(null);
+  const [carriedKey, setCarriedKey] = useState<string | null>(null);
+  const cityFields = HANDOVER_CITY_FIELDS[city];
 
   // Carrega o registo existente do (dia, turno, cidade) ANTES de deixar
   // escrever: os campos ficam bloqueados até a leitura acabar, e só se
@@ -195,15 +217,41 @@ function HandoverForm({ cityState, isSupervisor }: { cityState: CityState; isSup
     setClothing(((existing?.clothingItems ?? []) as ClothingItem[]).map(toDraftRow));
     setLoadedVersion(existing ? Number(existing.version ?? 1) : null);
     setLoaded(existing ?? null);
+    setMaterialOk(existing?.materialOk == null ? null : !!existing.materialOk);
+    setMaterialExc((existing?.materialExceptions ?? []) as MaterialExceptionItem[]);
+    setOpenItems((existing?.openItems ?? []) as OpenItem[]);
+    setAiText(existing?.aiSummary ?? null);
+    setCarriedKey(null);
     setLoadedKey(formKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formKey, loadedKey, existingQ.isSuccess, existingQ.isFetching, existingQ.dataUpdatedAt]);
   const loading = loadedKey !== formKey;
   const reload = () => { setLoadedKey(null); existingQ.refetch(); };
 
+  // Resumo automático (rascunho) do turno — só leitura.
+  const draftQ = trpc.shiftHandover.draft.useQuery({ date, shift, city }, { staleTime: 60_000, refetchOnWindowFocus: false });
+  const draft = draftQ.data ?? null;
+  // Pendentes: junta (1× por chave) os da passagem anterior + os abertos do rascunho aos já gravados.
+  useEffect(() => {
+    if (loading || !draft || draftQ.isFetching || carriedKey === formKey) return;
+    setOpenItems((cur) => mergeCarryOver({ previous: [], draft: draft.carryOver as OpenItem[], current: cur }));
+    setCarriedKey(formKey);
+  }, [loading, draft, draftQ.isFetching, carriedKey, formKey]);
+
+  const ai = trpc.shiftHandover.aiSummary.useMutation({
+    onSuccess: (r) => { setAiText(r.aiSummary); toast.success("Resumo gerado"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const ack = trpc.shiftHandover.ack.useMutation({
+    onSuccess: async () => { toast.success("Passagem confirmada (Recebi)"); await utils.shiftHandover.invalidate(); },
+    onError: (e) => toast.error(e.message),
+  });
+
   const save = trpc.shiftHandover.save.useMutation({
-    onSuccess: async () => {
-      toast.success("Passagem de turno guardada");
+    onSuccess: async (r) => {
+      const a = r.automation;
+      toast.success("Passagem de turno guardada" + (a?.emailed ? ` — email enviado (${a.emailed})` : "") + (a?.notified ? ` — ${a.notified} team leader(s) avisado(s)` : ""));
+      await utils.shiftHandover.draft.invalidate();
       // Recarrega o registo gravado (nova versão) antes de permitir nova edição.
       await utils.shiftHandover.list.invalidate();
       setLoadedKey(null);
@@ -255,6 +303,7 @@ function HandoverForm({ cityState, isSupervisor }: { cityState: CityState; isSup
     : lockedOld ? "Passaram mais de 24h — só um supervisor pode alterar"
     : hasNumErrors ? "Há valores inválidos" : hasIncompleteClothingRow(clothing) ? "Há peças de fardamento sem quantidade válida" : undefined;
 
+  const prev = draft?.previous ?? null;
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -278,17 +327,35 @@ function HandoverForm({ cityState, isSupervisor }: { cityState: CityState; isSup
               {loaded.filledByName && loaded.filledByName !== (loaded.createdByName ?? loaded.filledByName) ? ` · última edição: ${loaded.filledByName}` : ""} — a editar
             </Badge>
           )}
+          {!loading && loaded?.ackAt && <Badge variant="outline" className="mb-1 border-emerald-300 text-emerald-700">Recebida por {loaded.ackByName ?? "?"}</Badge>}
           {!loading && <Button type="button" size="sm" variant="ghost" className="mb-0.5" onClick={reload} title="Recarregar o registo guardado"><RefreshCw className="w-3.5 h-3.5" /></Button>}
         </div>
         {dateTooLate && <p className="text-xs text-red-600 mt-2">Não é possível registar passagens de turno para depois de amanhã.</p>}
         {lockedOld && <p className="text-xs text-amber-700 mt-2">Esta passagem foi criada há mais de 24h — só um supervisor a pode alterar.</p>}
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-4">
+        {/* Passagem que este turno recebeu — "Recebi" do team leader que entra */}
+        {prev && (
+          <div className="border rounded-lg p-3 space-y-1 bg-blue-50/40 dark:bg-blue-950/20">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <p className="text-sm font-medium">Passagem recebida — {SHIFT_LABELS[prev.shift]} {fmtPTDate(prev.date)}{prev.authorName ? ` · por ${prev.authorName}` : ""}</p>
+              {prev.acked ? <Badge variant="outline" className="border-emerald-300 text-emerald-700">Recebida por {prev.ackByName ?? "?"}</Badge>
+                : prev.createdById !== userId ? (
+                  <Button type="button" size="sm" disabled={ack.isPending} onClick={() => ack.mutate({ id: prev.id, city })}>
+                    {ack.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <CheckCircle2 className="w-3.5 h-3.5 mr-1" />}Recebi
+                  </Button>
+                ) : <Badge variant="outline">à espera do "Recebi"</Badge>}
+            </div>
+            {prev.aiSummary ? <p className="text-sm whitespace-pre-line">{prev.aiSummary}</p> : prev.notes ? <p className="text-sm text-muted-foreground whitespace-pre-line">{prev.notes}</p> : null}
+            {prev.openItems.length > 0 && <p className="text-xs text-amber-700">{prev.openItems.length} pendente(s) por resolver — estão na lista "Pendentes" abaixo.</p>}
+          </div>
+        )}
+        <ShiftHandoverDraftPanel draft={draft} loading={draftQ.isFetching} onRefresh={() => draftQ.refetch()} />
         <fieldset disabled={loading} className="space-y-4 disabled:opacity-60">
           {/* Operação */}
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Operação</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {NumInput({ k: "carsForCovered", label: "Carros p/ coberto" })}
+            {cityFields.coveredCars && NumInput({ k: "carsForCovered", label: "Carros p/ coberto" })}
             <div><Label className="text-xs">Carregamentos feitos até (dia)</Label><Input type="date" value={f.chargedUntilDate} onChange={(e) => setF({ ...f, chargedUntilDate: e.target.value })} /></div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -300,19 +367,48 @@ function HandoverForm({ cityState, isSupervisor }: { cityState: CityState; isSup
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Valores</p>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {NumInput({ k: "frontPouchValue", label: "Valor bolsa do front (€)", decimal: true })}
-            {NumInput({ k: "terminalPouchValue", label: "Valor bolsa terminal (€)", decimal: true })}
+            {cityFields.terminalPouch && NumInput({ k: "terminalPouchValue", label: "Valor bolsa terminal (€)", decimal: true })}
             {NumInput({ k: "ticketsExpensesPaid", label: "Tickets/despesas pagos no dia (€)", decimal: true })}
           </div>
 
           {/* Material */}
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Material</p>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {NumInput({ k: "mbRolls", label: "Rolos de MB" })}
-            {NumInput({ k: "mbRollsInPouch", label: "Rolos MB na bolsa do terminal" })}
-            {NumInput({ k: "pensInPouch", label: "Canetas na bolsa do terminal" })}
-            {NumInput({ k: "mbBattery", label: "Bateria do MB (%)" })}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <YesNo label="Material OK? (canetas, rolos, bateria MB)" value={materialOk} onChange={(v) => { setMaterialOk(v); if (v) setMaterialExc([]); }} />
+            <YesNo label="PDAs carregados a 100%" value={f.pdasCharged} onChange={(v) => setF({ ...f, pdasCharged: v })} />
           </div>
-          <YesNo label="PDAs carregados a 100%" value={f.pdasCharged} onChange={(v) => setF({ ...f, pdasCharged: v })} />
+          {materialOk === false && (
+            <div className="border rounded-lg p-2.5 space-y-1.5">
+              <p className="text-xs text-muted-foreground">O que falta / está mal?</p>
+              {materialExceptionsFor(city).map((code) => {
+                const cur = materialExc.find((x) => x.code === code);
+                return (
+                  <div key={code} className="flex flex-wrap items-center gap-2">
+                    <label className="flex items-center gap-2 text-sm min-w-[14rem]">
+                      <Checkbox
+                        checked={!!cur}
+                        onCheckedChange={(v) => setMaterialExc((l) => (v ? [...l, { code: code as MaterialException, note: null }] : l.filter((x) => x.code !== code)))}
+                      />
+                      {MATERIAL_EXCEPTION_LABELS[code]}
+                    </label>
+                    {cur && (
+                      <Input className="h-8 flex-1 min-w-[10rem]" maxLength={200} placeholder="detalhe (opcional)" value={cur.note ?? ""}
+                        onChange={(e) => setMaterialExc((l) => l.map((x) => (x.code === code ? { ...x, note: e.target.value } : x)))} />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <details className="border rounded-lg">
+            <summary className="px-3 py-2 text-xs text-muted-foreground cursor-pointer select-none">Contagens detalhadas (opcional)</summary>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-3 pt-0">
+              {NumInput({ k: "mbRolls", label: "Rolos de MB" })}
+              {cityFields.terminalPouch && NumInput({ k: "mbRollsInPouch", label: "Rolos MB na bolsa do terminal" })}
+              {cityFields.terminalPouch && NumInput({ k: "pensInPouch", label: "Canetas na bolsa do terminal" })}
+              {NumInput({ k: "mbBattery", label: "Bateria do MB (%)" })}
+            </div>
+          </details>
 
           {/* Fardamento — peças com quantidade e tamanho (Jorge, 2026-09-09) */}
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Fardamento</p>
@@ -324,8 +420,19 @@ function HandoverForm({ cityState, isSupervisor }: { cityState: CityState; isSup
           {/* Notas */}
           <div>
             <Label className="text-xs">Observações / notas</Label>
-            <Textarea rows={3} maxLength={2000} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} placeholder="Tudo o que o turno seguinte precisa de saber…" />
+            <Textarea rows={3} maxLength={2000} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} placeholder="Tudo o que o turno seguinte precisa de saber… (linhas começadas por '- ' passam a pendentes)" />
           </div>
+
+          {/* Pendentes que passam de turno */}
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Pendentes para o turno seguinte</p>
+          <OpenItemsEditor items={openItems} onChange={setOpenItems} />
+
+          <AiSummaryBox
+            text={aiText}
+            available
+            pending={ai.isPending}
+            onGenerate={() => ai.mutate({ date, shift, city, notes: f.notes || null, openItems })}
+          />
 
           <Button
             className="w-full gap-2"
@@ -346,9 +453,11 @@ function HandoverForm({ cityState, isSupervisor }: { cityState: CityState; isSup
               pensInPouch: numVal("pensInPouch"),
               mbBattery: numVal("mbBattery"),
               pdasCharged: f.pdasCharged,
-              uniformsCount: f.uniformsCount.trim() === "" ? null : parseInt(f.uniformsCount, 10),
+              materialOk,
+              materialExceptions: materialOk === false ? materialExc.map((x) => ({ code: x.code, note: x.note?.trim() || null })) : [],
               clothingItems: draftRowsToItems(clothing),
               notes: f.notes || null,
+              openItems: withNoteItems(openItems, f.notes, `${date} ${shift}`),
             })}
           >
             {save.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
@@ -430,7 +539,12 @@ function ClothingEditor({ rows, onChange }: { rows: ClothingDraftRow[]; onChange
 }
 
 // ─── HISTÓRICO ───────────────────────────────────────────────────────────────
-function HandoverHistory({ cityState }: { cityState: CityState }) {
+function HandoverHistory({ cityState, userId }: { cityState: CityState; userId: number | null }) {
+  const utils = trpc.useUtils();
+  const ack = trpc.shiftHandover.ack.useMutation({
+    onSuccess: async () => { toast.success("Passagem confirmada (Recebi)"); await utils.shiftHandover.invalidate(); },
+    onError: (e) => toast.error(e.message),
+  });
   const { city, allowed, setCity } = cityState;
   const [days, setDays] = useState(14);
   // Dias de Lisboa (não o relógio/UTC do browser)
@@ -471,6 +585,8 @@ function HandoverHistory({ cityState }: { cityState: CityState }) {
                 <th className="p-2">Fardamento</th>
                 <th className="p-2">Preenchido por</th>
                 <th className="p-2">Notas</th>
+                <th className="p-2">Pendentes</th>
+                <th className="p-2">Recebida</th>
               </tr>
             </thead>
             <tbody>
@@ -489,7 +605,16 @@ function HandoverHistory({ cityState }: { cityState: CityState }) {
                   <td className="p-2 text-center"><YN v={h.pdasCharged} /></td>
                   <td className="p-2 text-xs max-w-[220px] truncate" title={clothingCell(h)}>{clothingCell(h) || "—"}</td>
                   <td className="p-2 text-xs">{h.createdByName ?? h.filledByName ?? "—"}{h.filledByName && h.createdByName && h.filledByName !== h.createdByName ? <span className="text-muted-foreground"> (editado por {h.filledByName})</span> : null}</td>
-                  <td className="p-2 text-xs text-muted-foreground max-w-[200px] truncate" title={h.notes ?? ""}>{h.notes ?? "—"}</td>
+                  <td className="p-2 text-xs text-muted-foreground max-w-[200px] truncate" title={h.aiSummary ?? h.notes ?? ""}>{h.notes ?? (h.aiSummary ? "✨ resumo IA" : "—")}</td>
+                  <td className="p-2 text-xs tabular-nums" title={(h.openItems ?? []).filter((i: any) => !i.resolved).map((i: any) => i.text).join("\n")}>
+                    {(h.openItems ?? []).length ? `${(h.openItems ?? []).filter((i: any) => !i.resolved).length} abertos / ${(h.openItems ?? []).length}` : "—"}
+                  </td>
+                  <td className="p-2 text-xs">
+                    {h.ackAt ? <span className="text-emerald-700" title={String(h.ackAt)}>✓ {h.ackByName ?? "?"}</span>
+                      : h.createdById !== userId ? (
+                        <Button type="button" size="sm" variant="outline" className="h-7" disabled={ack.isPending} onClick={() => ack.mutate({ id: h.id, city: h.city })}>Recebi</Button>
+                      ) : <span className="text-muted-foreground">—</span>}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -507,6 +632,7 @@ function SupervisorDashboard({ cityState }: { cityState: CityState }) {
   const [date, setDate] = useState(() => operationalShift().date);
   const { data, isLoading } = trpc.shiftHandover.supervisorDashboard.useQuery({ date, city });
   const peopleSort = useTableSort((data?.people ?? []) as any[]);
+  const complianceQ = trpc.shiftHandover.compliance.useQuery({ date, city });
 
   // Pelo id do funcionário; só sem id se cai no nome (e na cidade).
   const shiftOf = (employeeId: number | null, name: string) => {
@@ -546,6 +672,9 @@ function SupervisorDashboard({ cityState }: { cityState: CityState }) {
               <p className="text-xl font-bold">{data.complaintsToday}</p>
             </Card>
           </div>
+
+          {/* Cumprimento das passagens de turno */}
+          <HandoverCompliance data={complianceQ.data} loading={complianceQ.isLoading} />
 
           {/* Piores entregas */}
           {data.delivery.worst.length > 0 && (
@@ -598,5 +727,51 @@ function SupervisorDashboard({ cityState }: { cityState: CityState }) {
         </>
       )}
     </div>
+  );
+}
+
+// ─── Cumprimento das passagens (Resumo do dia) ──────────────────────────────
+const COMPLIANCE_TONE: Record<ComplianceStatus, string> = {
+  pending: "text-muted-foreground",
+  missing: "border-red-300 text-red-700 bg-red-50/60",
+  late: "border-amber-300 text-amber-700 bg-amber-50/60",
+  on_time: "border-emerald-300 text-emerald-700",
+  confirmed: "border-emerald-400 text-emerald-800 bg-emerald-50/60",
+};
+
+function HandoverCompliance({ data, loading }: {
+  data: { day: Array<{ date: string; shift: HandoverShift; city: string; status: ComplianceStatus; late: boolean; ackByName: string | null; authorName: string | null; cashDiff: number | null; reminded: boolean }>; percent30: number | null; expected30: number } | undefined;
+  loading: boolean;
+}) {
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <CardTitle className="text-sm">Passagens de turno</CardTitle>
+          {data?.percent30 != null && (
+            <Badge variant="outline" className={data.percent30 >= 90 ? "border-emerald-300 text-emerald-700" : data.percent30 >= 70 ? "border-amber-300 text-amber-700" : "border-red-300 text-red-700"}>
+              {data.percent30}% a tempo nos últimos 30 dias ({data.expected30} turnos)
+            </Badge>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent>
+        {loading ? <p className="text-sm text-muted-foreground">A carregar…</p> : !data?.day.length ? (
+          <p className="text-sm text-muted-foreground">Sem turnos escalados nem passagens neste dia.</p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {data.day.map((r) => (
+              <div key={`${r.shift}-${r.city}`} className="border rounded-lg px-3 py-2 text-xs space-y-1 min-w-[12rem]">
+                <p className="font-medium">{r.shift === "morning" ? "☀️ Manhã" : "🌙 Noite"} · {CITY_LABELS[r.city] ?? r.city}</p>
+                <Badge variant="outline" className={COMPLIANCE_TONE[r.status]}>{COMPLIANCE_LABELS[r.status]}{r.status === "confirmed" && r.late ? " · entregue atrasada" : ""}</Badge>
+                {r.authorName && <p className="text-muted-foreground">por {r.authorName}{r.ackByName ? ` · recebida por ${r.ackByName}` : ""}</p>}
+                {r.cashDiff != null && <p className={r.cashDiff < 0 ? "text-red-700" : "text-amber-700"}>Caixa vs passagem anterior: {r.cashDiff > 0 ? "+" : ""}{r.cashDiff.toFixed(2).replace(".", ",")} €</p>}
+                {r.reminded && <p className="text-muted-foreground">lembrete enviado</p>}
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

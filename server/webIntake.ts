@@ -318,6 +318,10 @@ export async function approveApplication(
   const { markLeadConvertedForApplication } = await import("./extraLeadsSync");
   await markLeadConvertedForApplication(id, employeeId, costCenter.projectId, reviewedById);
 
+  // Percurso de onboarding por defeito (best-effort — nunca parte a aprovação).
+  const { autoAssignOnboarding } = await import("./trainingPaths");
+  await autoAssignOnboarding(employeeId, "application_approve", reviewedById);
+
   return {
     employeeId,
     employeeCreated: created,

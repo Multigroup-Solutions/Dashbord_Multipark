@@ -111,6 +111,7 @@ export function isSmtpConfigured(): boolean {
 
 export type SendEmailOptions = {
   to: string;
+  cc?: string;
   subject: string;
   text?: string;
   html?: string;

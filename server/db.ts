@@ -2,6 +2,7 @@ import { projectScope, bookingHistoryScope, employeeScope, userScope, partnerSco
 import { TRPCError } from '@trpc/server';
 import { buildHandoverCurrent, buildHandoverInsert, buildHandoverList, buildHandoverUpdate, handoverBoundValues, type HandoverInput, type HandoverKey } from './shiftHandoverSql';
 import { decideHandoverWrite, diffHandoverFields, HANDOVER_CONFLICT_MESSAGE, HANDOVER_EXISTS_MESSAGE, operationalDayWindowUtc } from '../shared/shiftHandover';
+import { mergeStoredOpenItems, parseMaterialExceptions, parseOpenItems, type OpenItem } from '../shared/shiftHandoverAuto';
 import { and, asc, desc, eq, gte, lte, lt, ne, like, or, sql, aliasedTable, isNotNull, isNull, inArray, notInArray, getTableColumns, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { normalizeEmail } from "../shared/email";
@@ -152,6 +153,8 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0085").then(m => ({ s: m.MIGRATION_0085_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0085 })),
       import("./migrations/migration_0086").then(m => ({ s: m.MIGRATION_0086_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0086 })),
       import("./migrations/migration_0087").then(m => ({ s: m.MIGRATION_0087_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0087 })),
+      import("./migrations/migration_0088").then(m => ({ s: m.MIGRATION_0088_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0088 })),
+      import("./migrations/migration_0090").then(m => ({ s: m.MIGRATION_0090_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0090 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -1621,11 +1624,11 @@ export async function updateProject(id: number, data: Partial<InsertProject>) {
   await db.update(projects).set(data).where(eq(projects.id, id));
 }
 
+/** Apagar DEFINITIVAMENTE um único nó. Só é chamado depois de o router
+ * confirmar zero filhos e zero referências (ver shared/projectTree.ts). */
 export async function deleteProject(id: number) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  // Delete children first
-  await db.delete(projects).where(eq(projects.parentId, id));
   await db.delete(projects).where(eq(projects.id, id));
 }
 
@@ -1713,17 +1716,13 @@ export async function seedProjectHierarchy() {
 export async function moveProject(id: number, newParentId: number | null) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  // Prevent moving to self or to a descendant
+  // Não pode ir para si próprio nem para um descendente. Termina sempre,
+  // mesmo que a árvore já tenha um ciclo (visitados em shared/projectTree).
   if (newParentId === id) throw new Error("Não pode mover para si próprio");
-  if (newParentId !== null) {
-    let current = newParentId;
-    while (current) {
-      const [parent] = await db.select({ id: projects.id, parentId: projects.parentId })
-        .from(projects).where(eq(projects.id, current)).limit(1);
-      if (!parent) break;
-      if (parent.parentId === id) throw new Error("Não pode mover para um descendente");
-      current = parent.parentId!;
-    }
+  const { wouldCreateCycle } = await import("../shared/projectTree");
+  const all = await db.select({ id: projects.id, name: projects.name, level: projects.level, parentId: projects.parentId }).from(projects);
+  if (wouldCreateCycle(id, newParentId, new Map(all.map(p => [p.id, p])))) {
+    throw new Error("Não pode mover para um descendente");
   }
   await db.update(projects).set({ parentId: newParentId } as any).where(eq(projects.id, id));
 }
@@ -1762,6 +1761,18 @@ export async function removeEmployeeFromProject(projectId: number, employeeId: n
 // TASKS — KANBAN
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/** Filtro por projeto HIERÁRQUICO (nó + descendentes; id negativo = marca em
+ * todas as cidades) + âmbito de cidade do utilizador. `allowNull`: registos
+ * sem projeto continuam visíveis (ex.: tarefas transversais). */
+async function projectFilterConds(column: any, projectId: number | undefined, opts: { allowNull?: boolean } = {}): Promise<any[]> {
+  const conds: any[] = [opts.allowNull ? sql`(${column} IS NULL OR ${projectScope(column)})` : projectScope(column)];
+  if (projectId) {
+    const ids = await resolveProjectIds(projectId);
+    conds.push(ids.length ? inArray(column, ids) : sql`1 = 0`);
+  }
+  return conds;
+}
+
 export async function getTasks(filters?: {
   projectId?: number;
   assigneeId?: number;
@@ -1769,8 +1780,7 @@ export async function getTasks(filters?: {
 }) {
   const db = await getDb();
   if (!db) return [];
-  const conds: any[] = [];
-  if (filters?.projectId) conds.push(eq(tasks.projectId, filters.projectId));
+  const conds: any[] = await projectFilterConds(tasks.projectId, filters?.projectId, { allowNull: true });
   if (filters?.assigneeId) conds.push(eq(tasks.assigneeId, filters.assigneeId));
   if (filters?.status) conds.push(eq(tasks.taskStatus, filters.status as any));
   return db.select().from(tasks)
@@ -1815,8 +1825,7 @@ export async function getTasksWithAssignees(filters?: {
 }): Promise<Array<any & { assignees: Array<{ id: number; fullName: string }>; projectName: string | null }>> {
   const db = await getDb();
   if (!db) return [];
-  const conds: any[] = [];
-  if (filters?.projectId) conds.push(eq(tasks.projectId, filters.projectId));
+  const conds: any[] = await projectFilterConds(tasks.projectId, filters?.projectId, { allowNull: true });
   if (filters?.status) conds.push(eq(tasks.taskStatus, filters.status as any));
 
   const taskRows = await db
@@ -2143,9 +2152,8 @@ export async function getVehicles(filters?: { status?: string; projectId?: numbe
   const db = await getDb();
   if (!db) return [];
   let query = db.select().from(vehicles).orderBy(desc(vehicles.createdAt));
-  const conditions: any[] = [];
+  const conditions: any[] = await projectFilterConds(vehicles.projectId, filters?.projectId);
   if (filters?.status) conditions.push(eq(vehicles.vehicleStatus, filters.status as any));
-  if (filters?.projectId) conditions.push(eq(vehicles.projectId, filters.projectId));
   if (conditions.length > 0) query = query.where(and(...conditions) as any) as any;
   return query;
 }
@@ -2308,12 +2316,11 @@ export async function deleteApiKey(id: number) {
 export async function getComplaints(filters?: { status?: string; type?: string; vehicleId?: number; assignedToId?: number; projectId?: number }) {
   const db = await getDb();
   if (!db) return [];
-  const conditions: any[] = [];
+  const conditions: any[] = await projectFilterConds(complaints.projectId, filters?.projectId);
   if (filters?.status) conditions.push(eq(complaints.complaintStatus, filters.status as any));
   if (filters?.type) conditions.push(eq(complaints.complaintType, filters.type as any));
   if (filters?.vehicleId) conditions.push(eq(complaints.vehicleId, filters.vehicleId));
   if (filters?.assignedToId) conditions.push(eq(complaints.assignedToId, filters.assignedToId));
-  if (filters?.projectId) conditions.push(eq(complaints.projectId, filters.projectId));
   return db
     .select({ ...getTableColumns(complaints), assignedToName: employees.fullName })
     .from(complaints)
@@ -2329,7 +2336,7 @@ export async function getComplaintById(id: number) {
     .select({ ...getTableColumns(complaints), assignedToName: employees.fullName })
     .from(complaints)
     .leftJoin(employees, eq(complaints.assignedToId, employees.id))
-    .where(eq(complaints.id, id))
+    .where(and(eq(complaints.id, id), projectScope(complaints.projectId)))
     .limit(1);
   return result[0];
 }
@@ -2393,7 +2400,7 @@ export async function getComplaintStats(projectId?: number) {
   const all = await db
     .select()
     .from(complaints)
-    .where(projectId !== undefined ? eq(complaints.projectId, projectId) : undefined);
+    .where(and(...await projectFilterConds(complaints.projectId, projectId)));
   const now = new Date();
   return {
     total: all.length,
@@ -2536,10 +2543,11 @@ export async function deleteTrainingVideo(id: number) {
   await db.delete(trainingVideos).where(eq(trainingVideos.id, id));
 }
 
-export async function getTrainingManuals(categoryId?: number, type?: string) {
+export async function getTrainingManuals(categoryId?: number, type?: string, includeUnpublished = false) {
   const db = await getDb();
   if (!db) return [];
-  const conditions: any[] = [eq(trainingManuals.published, 1)];
+  // Admins veem também os não publicados (com badge); os restantes não.
+  const conditions: any[] = includeUnpublished ? [] : [eq(trainingManuals.published, 1)];
   if (categoryId) conditions.push(eq(trainingManuals.categoryId, categoryId));
   if (type) conditions.push(eq(trainingManuals.type, type as any));
   return db.select().from(trainingManuals).where(and(...conditions)).orderBy(desc(trainingManuals.createdAt));
@@ -2552,7 +2560,7 @@ export async function createTrainingManual(data: { categoryId?: number; title: s
   return result;
 }
 
-export async function updateTrainingManual(id: number, data: { title?: string; content?: string; type?: "manual" | "update" | "news" | "procedure"; published?: boolean; fileUrl?: string; fileKey?: string; fileName?: string; fileMimeType?: string }) {
+export async function updateTrainingManual(id: number, data: { title?: string; content?: string; type?: "manual" | "update" | "news" | "procedure" | "link"; published?: boolean; fileUrl?: string | null; fileKey?: string | null; fileName?: string | null; fileMimeType?: string | null; careerLevel?: string | null; categoryId?: number | null }) {
   const db = await getDb();
   if (!db) return;
   const { published, ...rest } = data;
@@ -2742,10 +2750,9 @@ export async function createLostFoundItem(data: Omit<LostFoundItem, "id" | "crea
 
 export async function getLostFoundItems(filters?: { status?: string; itemType?: string; projectId?: number; search?: string }) {
   const db = await getDb(); if (!db) return [];
-  const conditions: any[] = [];
+  const conditions: any[] = await projectFilterConds(lostFoundItems.projectId, filters?.projectId);
   if (filters?.status) conditions.push(eq(lostFoundItems.status, filters.status as any));
   if (filters?.itemType) conditions.push(eq(lostFoundItems.itemType, filters.itemType as any));
-  if (filters?.projectId) conditions.push(eq(lostFoundItems.projectId, filters.projectId));
   if (filters?.search) conditions.push(or(
     like(lostFoundItems.clientName, `%${filters.search}%`),
     like(lostFoundItems.description, `%${filters.search}%`),
@@ -3264,10 +3271,9 @@ export async function createService(data: any) {
 
 export async function getServices(filters?: { serviceType?: string; employeeId?: number; projectId?: number; month?: number; year?: number }) {
   const db = await getDb(); if (!db) return [];
-  const conditions: any[] = [];
+  const conditions: any[] = await projectFilterConds(services.projectId, filters?.projectId);
   if (filters?.serviceType) conditions.push(eq(services.serviceType, filters.serviceType as any));
   if (filters?.employeeId) conditions.push(eq(services.employeeId, filters.employeeId));
-  if (filters?.projectId) conditions.push(eq(services.projectId, filters.projectId));
   const where = conditions.length > 0 ? and(...conditions) : undefined;
   const all = await db.select().from(services).where(where).orderBy(desc(services.serviceDate));
   if (filters?.month && filters?.year) {
@@ -3337,9 +3343,8 @@ export async function createInvoice(data: any) {
 
 export async function getInvoices(filters?: { status?: string; projectId?: number; search?: string; month?: number; year?: number }) {
   const db = await getDb(); if (!db) return [];
-  const conditions: any[] = [];
+  const conditions: any[] = await projectFilterConds(invoices.projectId, filters?.projectId);
   if (filters?.status) conditions.push(eq(invoices.status, filters.status as any));
-  if (filters?.projectId) conditions.push(eq(invoices.projectId, filters.projectId));
   if (filters?.search) {
     conditions.push(or(
       like(invoices.invoiceNumber, `%${filters.search}%`),
@@ -3400,12 +3405,18 @@ export async function getInvoiceStats(month?: number, year?: number) {
 // os nós level='brand' com o MESMO nome (Airpark Lisboa/Porto/Faro) e os seus
 // descendentes. Funciona porque as marcas têm nome igual entre cidades e
 // porque TODOS os endpoints filtram via esta função — nada mais muda.
+//
+// INATIVOS: inclui de propósito os descendentes com isActive=0 — um parque
+// fechado continua a contar no histórico (relatórios, despesas, reservas).
+// Os seletores e o matcher de reservas é que ignoram nós inativos para
+// atribuições NOVAS. Seguro com ciclos na árvore (conjunto de visitados).
 export async function resolveProjectIds(projectId: number): Promise<number[]> {
   const db = await getDb();
   if (!db) return [Math.abs(projectId)];
-  const allProjects = await db.select().from(projects);
+  const allProjects = await db.select({ id: projects.id, parentId: projects.parentId, level: projects.level, name: projects.name }).from(projects);
   const ids = new Set<number>();
   const addChildren = (pid: number) => {
+    if (ids.has(pid)) return;
     ids.add(pid);
     for (const p of allProjects) {
       if (p.parentId === pid) addChildren(p.id);
@@ -4499,9 +4510,8 @@ export async function createAnnualReport(data: any) {
 
 export async function getAnnualReports(filters?: { year?: number; projectId?: number }) {
   const db = await getDb(); if (!db) return [];
-  const conditions: any[] = [];
+  const conditions: any[] = await projectFilterConds(annualReports.projectId, filters?.projectId);
   if (filters?.year) conditions.push(eq(annualReports.year, filters.year));
-  if (filters?.projectId) conditions.push(eq(annualReports.projectId, filters.projectId));
   const where = conditions.length > 0 ? and(...conditions) : undefined;
   return db.select().from(annualReports).where(where).orderBy(annualReports.month);
 }
@@ -4680,6 +4690,11 @@ export async function saveShiftHandover(
     opts.canEditOld,
   );
   if (!decision.ok) throw new TRPCError({ code: decision.code, message: decision.message });
+  // Pendentes: a resolução é monotónica (um item resolvido pela passagem
+  // seguinte não reabre por causa de um formulário antigo).
+  if (cur && Array.isArray(data.openItems)) {
+    data = { ...data, openItems: mergeStoredOpenItems(parseOpenItems(cur.openItems), data.openItems as OpenItem[]) };
+  }
   const bound = handoverBoundValues(data);
   const before = cur ? handoverBoundValues(cur) : null;
   const changed = diffHandoverFields(before, bound);
@@ -4704,7 +4719,15 @@ export async function listShiftHandovers(opts: { from?: string; to?: string; cit
   if (!db) return [];
   const [rows] = await db.execute(buildHandoverList(opts, cityNameScope(sql`\`city\``))) as any;
   // `clothingItems` sai como JSON parseado e validado — o cliente nunca vê texto cru.
-  return (rows as any[]).map((r) => ({ ...r, version: Number(r.version ?? 1), clothingItems: parseClothingItems(r.clothingItems) }));
+  return (rows as any[]).map(({ autoSummary, ...r }) => ({
+    ...r,
+    version: Number(r.version ?? 1),
+    clothingItems: parseClothingItems(r.clothingItems),
+    openItems: parseOpenItems(r.openItems),
+    materialExceptions: parseMaterialExceptions(r.materialExceptions),
+    // A fotografia do resumo automático (JSON grande) não vai na lista.
+    hasAutoSummary: !!autoSummary,
+  }));
 }
 
 /** Resumo do dia do supervisor: condutores por turno, carros

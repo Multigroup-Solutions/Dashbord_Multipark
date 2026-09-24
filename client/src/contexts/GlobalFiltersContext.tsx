@@ -67,7 +67,9 @@ export function GlobalFiltersProvider({ children }: { children: ReactNode }) {
     if (cityId !== null) {
       // Com cidade escolhida: marcas dessa cidade (comportamento normal)
       return allProjects
-        .filter((p: any) => p.level === "brand" && p.parentId === cityId)
+        // Nós inativos (marca fechada) não entram no seletor — o histórico
+        // continua acessível porque o servidor inclui descendentes inativos.
+        .filter((p: any) => p.level === "brand" && p.parentId === cityId && !!p.isActive)
         .map((p: any) => ({ id: p.id, name: p.name }))
         .sort((a: any, b: any) => a.name.localeCompare(b.name));
     }
@@ -77,7 +79,7 @@ export function GlobalFiltersProvider({ children }: { children: ReactNode }) {
     // cidades. Pedido do Jorge: "medir o que uma marca fez nas diferentes cidades".
     const byName = new Map<string, { id: number; name: string; count: number }>();
     for (const p of allProjects as any[]) {
-      if (p.level !== "brand") continue;
+      if (p.level !== "brand" || !p.isActive) continue;
       const key = p.name.trim().toLowerCase();
       const ex = byName.get(key);
       if (ex) ex.count += 1;

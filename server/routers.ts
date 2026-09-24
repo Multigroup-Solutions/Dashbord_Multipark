@@ -1,6 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { projectScope, campaignScope, bookingHistoryScope, scopedProjectIds, assertEmployeeAccess, assertProjectAccess, requireGlobalCityAccess } from './cityScope';
-import { assessmentAnswers, gradeAssessment, trainingResultScope } from './trainingAssessments';
+import { trainingRouter } from './trainingRouter';
 import { z } from "zod";
 import * as XLSX from "xlsx";
 import { ACCESS_DENIED_MSG, COOKIE_NAME } from "@shared/const";
@@ -23,6 +23,19 @@ import {
 } from "../shared/deactivationReasons";
 import { dayToMysql, isIsoDay, lisbonToday } from "../shared/expensePeriods";
 import { HANDOVER_CITIES, maxHandoverDate } from "../shared/shiftHandover";
+import { MATERIAL_EXCEPTIONS, OPEN_ITEM_KINDS, OPEN_ITEMS_MAX } from "../shared/shiftHandoverAuto";
+
+// Pendente da passagem de turno (carry-over) — validado antes de gravar.
+const openItemSchema = z.object({
+  key: z.string().min(1).max(160),
+  kind: z.enum(OPEN_ITEM_KINDS),
+  refId: z.union([z.number(), z.string().max(128)]).nullable().optional(),
+  text: z.string().min(1).max(300),
+  resolved: z.boolean(),
+  resolvedAt: z.string().max(40).nullable().optional(),
+  resolvedByName: z.string().max(255).nullable().optional(),
+  since: z.string().max(40).nullable().optional(),
+});
 import { expenseTotals } from "../shared/expenseTotals";
 import { getBillingData, getAnnualBreakdown } from "./finance/compat";
 import { canViewDocuments, canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, CENTER_SCOPED_ROLES, PERSONAL_FIELDS, CONTRACT_FIELDS, type RhViewer, type EmployeeRef, isRhAdmin } from "./rhAccess";
@@ -200,35 +213,6 @@ import {
   updateGoogleReview,
   getGoogleReviewStats,
   searchClientHistory,
-  // Formação e Apoio
-  getTrainingCategories,
-  createTrainingCategory,
-  deleteTrainingCategory,
-  getTrainingVideos,
-  createTrainingVideo,
-  deleteTrainingVideo,
-  getTrainingManuals,
-  createTrainingManual,
-  updateTrainingManual,
-  deleteTrainingManual,
-  getFAQs,
-  createFAQ,
-  updateFAQ,
-  deleteFAQ,
-  getQuizQuestions,
-  getQuizQuestionsForPlayer,
-  createQuizQuestion,
-  deleteQuizQuestion,
-  saveQuizAttempt,
-  getQuizRanking,
-  getCareerExams,
-  createCareerExam,
-  getCareerExamQuestions,
-  getCareerExamQuestionsForPlayer,
-  createCareerExamQuestion,
-  saveCareerExamAttempt,
-  getCareerExamAttempts,
-  deleteCareerExam,
   // Perdidos e Achados
   createLostFoundItem,
   getLostFoundItems,
@@ -416,6 +400,14 @@ async function requireFinanceTotals(user: { id: number; role: string }, minRole 
   requireRole(user.role, minRole);
   if (await isPermissionDenied(user.id, "finance.view_totals")) {
     throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para ver totais financeiros." });
+  }
+}
+
+/** Admins de cidade não mexem nos nós estruturais (Grupo/Cidade): só no que
+ * está dentro das suas cidades. Global mantém tudo. */
+function assertStructuralNodeEditable(node: { level: string }) {
+  if (scopedProjectIds() !== undefined && (node.level === "group" || node.level === "city")) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Só quem tem acesso a todas as cidades pode alterar grupos e cidades." });
   }
 }
 
@@ -1297,11 +1289,15 @@ export const appRouter = router({
       .input(z.object({ id: z.number() }))
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "extra");
+        assertProjectAccess(input.id); // só nós das cidades do utilizador
         return getProjectById(input.id);
       }),
+    // Regras de nível/pai, nomes únicos por pai e soft delete: ver
+    // shared/projectTree.ts (puras) e server/projectAdmin.ts (BD). Guardas de
+    // cidade em server/cityScopeGuards.ts (projects.*).
     create: protectedProcedure
       .input(z.object({
-        name: z.string().min(1),
+        name: z.string().trim().min(1),
         description: z.string().optional(),
         parentId: z.number().optional(),
         level: z.enum(["group", "brand", "city", "project"]).default("project"),
@@ -1313,10 +1309,20 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "admin");
+        const { validatePlacement, siblingNameConflict, isNodeActive } = await import("../shared/projectTree");
+        const nodes = await getProjects();
+        const parentId = input.parentId ?? null;
+        const parent = parentId == null ? null : nodes.find(n => n.id === parentId);
+        const placementError = validatePlacement(input.level, parent, parentId);
+        if (placementError) throw new TRPCError({ code: "BAD_REQUEST", message: placementError });
+        if (parent && !isNodeActive(parent)) throw new TRPCError({ code: "BAD_REQUEST", message: "O nó pai está inativo. Reativa-o primeiro." });
+        if (siblingNameConflict(input.name, parentId, nodes)) {
+          throw new TRPCError({ code: "CONFLICT", message: `Já existe um nó chamado «${input.name.trim()}» neste nível.` });
+        }
         await createProject({
-          name: input.name,
+          name: input.name.trim(),
           description: input.description ?? null,
-          parentId: input.parentId ?? null,
+          parentId,
           level: input.level,
           color: input.color ?? "#6366f1",
           managerId: input.managerId ?? null,
@@ -1330,7 +1336,7 @@ export const appRouter = router({
     update: protectedProcedure
       .input(z.object({
         id: z.number(),
-        name: z.string().optional(),
+        name: z.string().trim().min(1).optional(),
         description: z.string().optional(),
         level: z.enum(["group", "brand", "city", "project"]).optional(),
         color: z.string().optional(),
@@ -1342,15 +1348,98 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "admin");
-        const { id, ...data } = input;
-        await updateProject(id, data as any);
+        const { id, level, isActive, ...data } = input;
+        const { siblingNameConflict, isNodeActive, evaluateDelete } = await import("../shared/projectTree");
+        const nodes = await getProjects();
+        const node = nodes.find(n => n.id === id);
+        if (!node) throw new TRPCError({ code: "NOT_FOUND", message: "Nó não encontrado." });
+        assertStructuralNodeEditable(node);
+        if (level !== undefined && level !== node.level) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "O nível não pode ser alterado depois de criado." });
+        }
+        if (data.name !== undefined && siblingNameConflict(data.name, node.parentId, nodes, id)) {
+          throw new TRPCError({ code: "CONFLICT", message: `Já existe um nó chamado «${data.name.trim()}» neste nível.` });
+        }
+        const patch: Record<string, unknown> = { ...data };
+        if (isActive !== undefined && isActive !== isNodeActive(node)) {
+          if (isActive) {
+            const parent = node.parentId == null ? null : nodes.find(n => n.id === node.parentId);
+            if (node.parentId != null && (!parent || !isNodeActive(parent))) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: "O nó pai está inativo ou não existe. Reativa-o ou move este nó primeiro." });
+            }
+          } else {
+            const { countProjectReferences } = await import("./projectAdmin");
+            const check = evaluateDelete({
+              activeChildren: nodes.filter(n => n.parentId === id && isNodeActive(n)).length,
+              totalChildren: nodes.filter(n => n.parentId === id).length,
+              references: await countProjectReferences(id),
+            });
+            if (!check.canDeactivate) throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Não é possível desativar: ${check.reasons.join("; ")}` });
+          }
+          patch.isActive = isActive ? 1 : 0;
+        }
+        await updateProject(id, patch as any);
         await logActivity({ userId: ctx.user.id, action: "update", entity: "project", entityId: id });
         return { success: true };
       }),
+    // Referências a um nó (pré-visualização antes de desativar/apagar).
+    references: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        const { evaluateDelete, isNodeActive } = await import("../shared/projectTree");
+        const { countProjectReferences } = await import("./projectAdmin");
+        const nodes = await getProjects();
+        const references = await countProjectReferences(input.id);
+        const activeChildren = nodes.filter(n => n.parentId === input.id && isNodeActive(n)).length;
+        const totalChildren = nodes.filter(n => n.parentId === input.id).length;
+        return { references: references.filter(r => r.count > 0), activeChildren, totalChildren,
+          ...evaluateDelete({ activeChildren, totalChildren, references }) };
+      }),
+    // "Eliminar" = DESATIVAR (isActive=0). O histórico continua a contar.
     delete: protectedProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "admin");
+        const { evaluateDelete, isNodeActive } = await import("../shared/projectTree");
+        const { countProjectReferences } = await import("./projectAdmin");
+        const nodes = await getProjects();
+        const node = nodes.find(n => n.id === input.id);
+        if (!node) throw new TRPCError({ code: "NOT_FOUND", message: "Nó não encontrado." });
+        assertStructuralNodeEditable(node);
+        const check = evaluateDelete({
+          activeChildren: nodes.filter(n => n.parentId === input.id && isNodeActive(n)).length,
+          totalChildren: nodes.filter(n => n.parentId === input.id).length,
+          references: await countProjectReferences(input.id),
+        });
+        if (!check.canDeactivate) throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Não é possível desativar: ${check.reasons.join("; ")}` });
+        await updateProject(input.id, { isActive: 0 } as any);
+        await logActivity({ userId: ctx.user.id, action: "update", entity: "project", entityId: input.id, details: "desativado" });
+        return { success: true };
+      }),
+    // Apagar definitivamente: só super_admin e só sem filhos e sem referências.
+    hardDelete: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "super_admin");
+        const { evaluateDelete, isNodeActive } = await import("../shared/projectTree");
+        const { countProjectReferences } = await import("./projectAdmin");
+        const nodes = await getProjects();
+        const node = nodes.find(n => n.id === input.id);
+        if (!node) throw new TRPCError({ code: "NOT_FOUND", message: "Nó não encontrado." });
+        assertStructuralNodeEditable(node);
+        const references = await countProjectReferences(input.id);
+        const totalChildren = nodes.filter(n => n.parentId === input.id).length;
+        const check = evaluateDelete({
+          activeChildren: nodes.filter(n => n.parentId === input.id && isNodeActive(n)).length,
+          totalChildren,
+          references,
+        });
+        if (!check.canHardDelete) {
+          const used = references.filter(r => r.count > 0).map(r => `${r.label}: ${r.count}`);
+          throw new TRPCError({ code: "PRECONDITION_FAILED",
+            message: `Não é possível apagar definitivamente: ${[totalChildren ? `${totalChildren} sub-nó(s)` : null, ...used].filter(Boolean).join("; ")}. Usa "Desativar".` });
+        }
         await deleteProject(input.id);
         await logActivity({ userId: ctx.user.id, action: "delete", entity: "project", entityId: input.id });
         return { success: true };
@@ -1360,14 +1449,50 @@ export const appRouter = router({
       .input(z.object({ id: z.number(), newParentId: z.number().nullable() }))
       .mutation(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "admin");
+        const { validatePlacement, siblingNameConflict, wouldCreateCycle, isNodeActive } = await import("../shared/projectTree");
+        const nodes = await getProjects();
+        const node = nodes.find(n => n.id === input.id);
+        if (!node) throw new TRPCError({ code: "NOT_FOUND", message: "Nó não encontrado." });
+        assertStructuralNodeEditable(node);
+        const parent = input.newParentId == null ? null : nodes.find(n => n.id === input.newParentId);
+        const placementError = validatePlacement(node.level, parent, input.newParentId);
+        if (placementError) throw new TRPCError({ code: "BAD_REQUEST", message: placementError });
+        if (parent && !isNodeActive(parent)) throw new TRPCError({ code: "BAD_REQUEST", message: "O destino está inativo." });
+        if (wouldCreateCycle(input.id, input.newParentId, new Map(nodes.map(n => [n.id, n])))) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Não pode mover um nó para dentro de si próprio ou de um descendente." });
+        }
+        if (siblingNameConflict(node.name, input.newParentId, nodes, input.id)) {
+          throw new TRPCError({ code: "CONFLICT", message: `Já existe um nó chamado «${node.name}» no destino.` });
+        }
         await moveProject(input.id, input.newParentId);
         await logActivity({ userId: ctx.user.id, action: "update", entity: "project", entityId: input.id, details: `moved to parent:${input.newParentId}` });
         return { success: true };
       }),
+    // Cobertura PARK_CONFIGS ↔ nós de projeto + reservas sem projeto + diagnóstico
+    // (órfãos, ciclos, nomes duplicados). Só admin com acesso a todas as cidades.
+    parkCoverage: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx.user.role, "admin");
+      requireGlobalCityAccess();
+      const { getParkCoverage } = await import("./projectAdmin");
+      return getParkCoverage();
+    }),
+    createMissingParkNodes: protectedProcedure.mutation(async ({ ctx }) => {
+      requireRole(ctx.user.role, "admin");
+      requireGlobalCityAccess();
+      const { createMissingParkNodes } = await import("./projectAdmin");
+      const result = await createMissingParkNodes();
+      await logActivity({ userId: ctx.user.id, action: "create", entity: "project",
+        details: `nós de parque em falta: ${result.created.length} criados; reservas associadas: ${result.backfill.matched}` });
+      return result;
+    }),
     // Employee assignments
     getEmployees: protectedProcedure
       .input(z.object({ projectId: z.number() }))
-      .query(async ({ input }) => getProjectEmployees(input.projectId)),
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        assertProjectAccess(input.projectId);
+        return getProjectEmployees(input.projectId);
+      }),
     assignEmployee: protectedProcedure
       .input(z.object({ projectId: z.number(), employeeId: z.number(), role: z.string().optional() }))
       .mutation(async ({ ctx, input }) => {
@@ -1386,8 +1511,11 @@ export const appRouter = router({
     costs: protectedProcedure
       .input(z.object({ year: z.number().optional(), month: z.number().optional() }).optional())
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "backoffice");
-        return getProjectCosts(input?.year, input?.month);
+        // Expõe salários: exige ver totais financeiros + âmbito de cidade.
+        await requireFinanceTotals(ctx.user, "backoffice");
+        const rows = await getProjectCosts(input?.year, input?.month);
+        const scoped = scopedProjectIds();
+        return scoped === undefined ? rows : rows.filter(r => scoped.includes(r.id));
       }),
   }),
 
@@ -5522,211 +5650,8 @@ export const appRouter = router({
   }),
 
   // ─── FORMAÇÃO E APOIO ──────────────────────────────────────────────────────
-  training: router({
-    // Categories
-    categories: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "extra");
-      return getTrainingCategories();
-    }),
-    createCategory: protectedProcedure.input(z.object({ name: z.string(), description: z.string().optional(), icon: z.string().optional(), sortOrder: z.number().optional() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      const result = await createTrainingCategory(input);
-      await logActivity({ userId: ctx.user.id, action: "create", entity: "training_category", entityId: result.id, details: input.name });
-      return result;
-    }),
-    deleteCategory: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["super_admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      await deleteTrainingCategory(input.id);
-      await logActivity({ userId: ctx.user.id, action: "delete", entity: "training_category", entityId: input.id, details: "" });
-      return { success: true };
-    }),
-
-    // Videos
-    videos: protectedProcedure.input(z.object({ categoryId: z.number().optional() })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
-      return getTrainingVideos(input.categoryId);
-    }),
-    createVideo: protectedProcedure.input(z.object({ categoryId: z.number(), title: z.string(), description: z.string().optional(), videoUrl: z.string(), thumbnailUrl: z.string().optional(), durationMinutes: z.number().optional(), careerLevel: z.string().max(32).optional() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      const result = await createTrainingVideo({ ...input, createdBy: ctx.user.id });
-      await logActivity({ userId: ctx.user.id, action: "create", entity: "training_video", entityId: result.id, details: input.title });
-      return result;
-    }),
-    deleteVideo: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      await deleteTrainingVideo(input.id);
-      await logActivity({ userId: ctx.user.id, action: "delete", entity: "training_video", entityId: input.id, details: "" });
-      return { success: true };
-    }),
-
-    // Manuals / Blog
-    manuals: protectedProcedure.input(z.object({ categoryId: z.number().optional(), type: z.string().optional() })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
-      return getTrainingManuals(input.categoryId, input.type);
-    }),
-    createManual: protectedProcedure.input(z.object({ categoryId: z.number().optional(), title: z.string(), content: z.string(), type: z.enum(["manual", "update", "news", "procedure", "link"]).optional(), fileUrl: z.string().optional(), fileKey: z.string().optional(), fileName: z.string().optional(), fileMimeType: z.string().optional(), careerLevel: z.string().max(32).optional() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      const result = await createTrainingManual({ ...input, createdBy: ctx.user.id });
-      await logActivity({ userId: ctx.user.id, action: "create", entity: "training_manual", entityId: result.id, details: input.title });
-      return result;
-    }),
-    uploadManualFile: protectedProcedure.input(z.object({ fileName: z.string(), fileBase64: z.string(), mimeType: z.string() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      const { storagePut } = await import("./storage");
-      const buffer = Buffer.from(input.fileBase64, "base64");
-      const key = `training/manuals/${Date.now()}-${input.fileName}`;
-      const { url } = await storagePut(key, buffer, input.mimeType);
-      return { url, key, fileName: input.fileName, mimeType: input.mimeType };
-    }),
-    updateManual: protectedProcedure.input(z.object({ id: z.number(), title: z.string().optional(), content: z.string().optional(), type: z.enum(["manual", "update", "news", "procedure"]).optional(), published: z.boolean().optional(), fileUrl: z.string().optional(), fileKey: z.string().optional(), fileName: z.string().optional(), fileMimeType: z.string().optional() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      const { id, ...data } = input;
-      await updateTrainingManual(id, data);
-      await logActivity({ userId: ctx.user.id, action: "update", entity: "training_manual", entityId: id, details: data.title || "" });
-      return { success: true };
-    }),
-    deleteManual: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      await deleteTrainingManual(input.id);
-      await logActivity({ userId: ctx.user.id, action: "delete", entity: "training_manual", entityId: input.id, details: "" });
-      return { success: true };
-    }),
-
-    // FAQs
-    faqs: protectedProcedure.input(z.object({ categoryId: z.number().optional() })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
-      return getFAQs(input.categoryId);
-    }),
-    createFAQ: protectedProcedure.input(z.object({ categoryId: z.number().optional(), question: z.string(), answer: z.string(), sortOrder: z.number().optional() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      const result = await createFAQ(input);
-      await logActivity({ userId: ctx.user.id, action: "create", entity: "faq", entityId: result.id, details: input.question });
-      return result;
-    }),
-    updateFAQ: protectedProcedure.input(z.object({ id: z.number(), question: z.string().optional(), answer: z.string().optional() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      const { id, ...data } = input;
-      await updateFAQ(id, data);
-      return { success: true };
-    }),
-    deleteFAQ: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      await deleteFAQ(input.id);
-      return { success: true };
-    }),
-
-    // Quiz
-    // ADMIN: tem acesso à correctOption (para edição)
-    quizQuestions: protectedProcedure.input(z.object({ categoryId: z.number().optional() })).query(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Usa quizQuestionsForPlayer" });
-      }
-      return getQuizQuestions(input.categoryId);
-    }),
-    // PLAYER: sem correctOption (extra ou superior pode jogar)
-    quizQuestionsForPlayer: protectedProcedure.input(z.object({ categoryId: z.number().optional() })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
-      return getQuizQuestionsForPlayer(input.categoryId);
-    }),
-    createQuizQuestion: protectedProcedure.input(z.object({ categoryId: z.number().optional(), question: z.string(), optionA: z.string(), optionB: z.string(), optionC: z.string(), optionD: z.string(), correctOption: z.enum(["A", "B", "C", "D"]), explanation: z.string().optional(), difficulty: z.enum(["easy", "medium", "hard"]).optional(), points: z.number().int().min(1).max(10000).optional() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      const result = await createQuizQuestion(input);
-      await logActivity({ userId: ctx.user.id, action: "create", entity: "quiz_question", entityId: result.id, details: input.question });
-      return result;
-    }),
-    deleteQuizQuestion: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      await deleteQuizQuestion(input.id);
-      return { success: true };
-    }),
-    submitQuiz: protectedProcedure.input(z.object({ answers: assessmentAnswers, timeSpentSeconds: z.number().int().min(0).max(86400).optional() })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
-      // employeeId derivado de ctx.user.id (não confiável o do cliente)
-      const me = await getEmployeeByUserId(ctx.user.id);
-      if (!me) throw new TRPCError({ code: "NOT_FOUND", message: "Sem ficha de colaborador. Pede ao admin para te cadastrar primeiro." });
-      const questions = await getQuizQuestions();
-      if (!input.answers.length) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Responde a pelo menos uma pergunta.' });
-      const { correct, score } = gradeAssessment(questions, input.answers);
-      const result = await saveQuizAttempt({ employeeId: me.employee.id, totalQuestions: input.answers.length, correctAnswers: correct, score, timeSpentSeconds: input.timeSpentSeconds });
-      return { ...result, correct, score, total: input.answers.length };
-    }),
-    quizRanking: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "extra");
-      return getQuizRanking();
-    }),
-
-    // Career Exams
-    careerExams: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "extra");
-      return getCareerExams();
-    }),
-    createCareerExam: protectedProcedure.input(z.object({
-      // Trilhas do Jorge (2026-08-05): condutor/terminal/front níveis 1-4 + chefias
-      level: z.enum([
-        "condutor_1", "condutor_2", "condutor_3", "condutor_4",
-        "terminal_1", "terminal_2", "terminal_3", "terminal_4",
-        "front_1", "front_2", "front_3", "front_4",
-        "team_leader", "supervisor",
-      ]),
-      title: z.string(), description: z.string().optional(), passingScore: z.number().int().min(1).max(100), timeLimitMinutes: z.number().int().min(1).max(240).optional() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      const result = await createCareerExam(input);
-      await logActivity({ userId: ctx.user.id, action: "create", entity: "career_exam", entityId: result.id, details: input.title });
-      return result;
-    }),
-    deleteCareerExam: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["super_admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      await deleteCareerExam(input.id);
-      await logActivity({ userId: ctx.user.id, action: 'update', entity: 'career_exam', entityId: input.id, details: 'Exame arquivado; resultados preservados' });
-      return { success: true };
-    }),
-    careerExamQuestions: protectedProcedure.input(z.object({ examId: z.number() })).query(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Usa careerExamQuestionsForPlayer" });
-      }
-      return getCareerExamQuestions(input.examId);
-    }),
-    careerExamQuestionsForPlayer: protectedProcedure.input(z.object({ examId: z.number() })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
-      if (!(await getCareerExams()).some(exam => exam.id === input.examId)) throw new TRPCError({ code: 'NOT_FOUND', message: 'Exame não disponível.' });
-      return getCareerExamQuestionsForPlayer(input.examId);
-    }),
-    createCareerExamQuestion: protectedProcedure.input(z.object({ examId: z.number(), question: z.string(), optionA: z.string(), optionB: z.string(), optionC: z.string(), optionD: z.string(), correctOption: z.enum(["A", "B", "C", "D"]), explanation: z.string().optional(), points: z.number().int().min(1).max(10000).optional() })).mutation(async ({ ctx, input }) => {
-      if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      if (!(await getCareerExams()).some(exam => exam.id === input.examId)) throw new TRPCError({ code: 'NOT_FOUND', message: 'Exame não disponível.' });
-      const result = await createCareerExamQuestion(input);
-      return result;
-    }),
-    submitCareerExam: protectedProcedure.input(z.object({ examId: z.number(), answers: assessmentAnswers, timeSpentSeconds: z.number().int().min(0).max(86400).optional() })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
-      const me = await getEmployeeByUserId(ctx.user.id);
-      if (!me) throw new TRPCError({ code: "NOT_FOUND", message: "Sem ficha de colaborador" });
-      const questions = await getCareerExamQuestions(input.examId);
-      const exams = await getCareerExams();
-      const exam = exams.find(e => e.id === input.examId);
-      if (!exam) throw new TRPCError({ code: "NOT_FOUND", message: "Exame n\u00e3o encontrado" });
-      const { correct, percentage } = gradeAssessment(questions, input.answers);
-      const passed = percentage >= exam.passingScore;
-      const result = await saveCareerExamAttempt({ examId: input.examId, employeeId: me.employee.id, totalQuestions: questions.length, correctAnswers: correct, score: percentage, passed, timeSpentSeconds: input.timeSpentSeconds });
-      if (passed) {
-        try {
-          await notifyOwner({ title: `Exame aprovado: ${exam.title}`, content: `${me.employee.fullName} passou no exame "${exam.title}" com ${percentage}% (m\u00ednimo: ${exam.passingScore}%)` });
-        } catch { console.warn('[Training] Resultado guardado; o envio do aviso ao responsável falhou.'); }
-      }
-      return { ...result, correct, score: percentage, total: questions.length, passed, passingScore: exam.passingScore };
-    }),
-
-    myCareerExamAttempts: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "extra");
-      const me = await getEmployeeByUserId(ctx.user.id);
-      if (!me) return [];
-      return getCareerExamAttempts(me.employee.id);
-    }),
-    careerExamAttempts: protectedProcedure.input(z.object({ employeeId: z.number().optional(), examId: z.number().optional() })).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
-      return getCareerExamAttempts(input.employeeId, input.examId, trainingResultScope(await rhViewer(ctx.user)));
-    }),
-  }),
+  // Router da Formação vive em server/trainingRouter.ts
+  training: trainingRouter,
 
   // ─── PERDIDOS E ACHADOS ────────────────────────────────────────────────────
   lostFound: router({
@@ -6681,9 +6606,16 @@ export const appRouter = router({
       pensInPouch: z.number().int().min(0).max(100_000).nullable().optional(),
       mbBattery: z.number().int().min(0).max(100).nullable().optional(),
       pdasCharged: z.boolean().nullable().optional(),
-      // Legado: continua aceite para não apagar o valor dos registos antigos ao
-      // editar; o formulário novo já não o pede (ver `clothingItems`).
-      uniformsCount: z.number().int().min(0).max(100_000).nullable().optional(),
+      // `uniformsCount` (legado) saiu da API: a coluna fica e o UPDATE já não
+      // lhe toca, por isso os registos antigos mantêm o valor.
+      // "Material OK?" + exceções (canetas/rolos/bateria agrupados).
+      materialOk: z.boolean().nullable().optional(),
+      materialExceptions: z.array(z.object({
+        code: z.enum(MATERIAL_EXCEPTIONS),
+        note: z.string().max(200).nullable().optional(),
+      })).max(MATERIAL_EXCEPTIONS.length).nullable().optional(),
+      // Pendentes que passam de turno (resolved por item).
+      openItems: z.array(openItemSchema).max(OPEN_ITEMS_MAX).nullable().optional(),
       // Fardamento entregue: peças com quantidade e tamanho (shared/clothing.ts).
       clothingItems: z.array(z.object({
         type: z.enum(CLOTHING_TYPES),
@@ -6702,6 +6634,10 @@ export const appRouter = router({
         ...values,
         // Linhas repetidas (mesmo tipo+tamanho) somam-se antes de gravar.
         clothingItems: values.clothingItems == null ? values.clothingItems : normalizeClothingItems(values.clothingItems),
+        // Quem resolve e quando (o formulário só manda o visto).
+        openItems: values.openItems == null ? values.openItems : values.openItems.map((i) => (i.resolved && !i.resolvedAt
+          ? { ...i, resolvedAt: new Date().toISOString(), resolvedByName: i.resolvedByName ?? ctx.user.name ?? null }
+          : i)),
       }, {
         expectedVersion,
         userId: ctx.user.id,
@@ -6715,7 +6651,69 @@ export const appRouter = router({
         entity: "shift_handover",
         details: `${handoverDate} ${shift} ${city}` + (result.changed.length ? ` — alterado: ${result.changed.join(", ")}` : " — sem alterações"),
       });
-      return { success: true, mode: result.mode };
+      // Resumo automático, IA, pendentes, notificação e email — nunca falham a gravação.
+      let automation: Awaited<ReturnType<typeof import("./shiftHandoverAutomation").afterHandoverSave>> | null = null;
+      try {
+        const { afterHandoverSave } = await import("./shiftHandoverAutomation");
+        automation = await afterHandoverSave({ key: { handoverDate, shift, city }, mode: result.mode, userId: ctx.user.id, userName: ctx.user.name ?? null });
+      } catch (err: any) {
+        console.warn("[handover] automação:", String(err?.message ?? err).slice(0, 200));
+      }
+      return { success: true, mode: result.mode, automation };
+    }),
+
+    // Resumo automático do turno (rascunho) — só leitura, dentro da cidade.
+    draft: protectedProcedure.input(z.object({
+      date: handoverDaySchema,
+      shift: z.enum(["morning", "night"]),
+      city: z.enum(HANDOVER_CITIES),
+    })).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "team_leader");
+      const { buildHandoverDraft } = await import("./shiftHandoverDraft");
+      return buildHandoverDraft({ date: input.date, shift: input.shift, city: input.city });
+    }),
+
+    // Resumo por IA a pedido (5 pontos PT-PT); guarda-o se a passagem já existir.
+    aiSummary: protectedProcedure.input(z.object({
+      date: handoverDaySchema,
+      shift: z.enum(["morning", "night"]),
+      city: z.enum(HANDOVER_CITIES),
+      notes: z.string().max(2000).nullable().optional(),
+      openItems: z.array(openItemSchema).max(OPEN_ITEMS_MAX).nullable().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "team_leader");
+      const { llmConfigured, generateAiSummary } = await import("./shiftHandoverAutomation");
+      if (!llmConfigured()) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "A IA não está configurada (LLM_API_KEY)." });
+      const { buildHandoverDraft } = await import("./shiftHandoverDraft");
+      const draft = await buildHandoverDraft({ date: input.date, shift: input.shift, city: input.city }).catch(() => null);
+      const text = await generateAiSummary(draft, { city: input.city, shift: { date: input.date, shift: input.shift }, notes: input.notes ?? null, openItems: (input.openItems ?? []) as any });
+      if (!text) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível gerar o resumo agora — tenta outra vez." });
+      const { saveHandoverAiSummary } = await import("./shiftHandoverAutomation");
+      await saveHandoverAiSummary({ handoverDate: input.date, shift: input.shift, city: input.city }, text);
+      return { aiSummary: text };
+    }),
+
+    // "Recebi" — o team leader que entra confirma (nunca o autor).
+    ack: protectedProcedure.input(z.object({
+      id: z.number().int().positive(),
+      city: z.enum(HANDOVER_CITIES),
+    })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "team_leader");
+      const { ackHandover } = await import("./shiftHandoverAutomation");
+      const r = await ackHandover(input.id, input.city, { id: ctx.user.id, name: ctx.user.name ?? null });
+      if (!r.ok) throw new TRPCError({ code: "BAD_REQUEST", message: r.message });
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "shift_handover", entityId: input.id, details: `Recebi — passagem ${input.id} (${input.city})` });
+      return { success: true };
+    }),
+
+    // Cumprimento por turno e cidade + % a 30 dias (Resumo do dia).
+    compliance: protectedProcedure.input(z.object({
+      date: handoverDaySchema,
+      city: z.enum(HANDOVER_CITIES).optional(),
+    })).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "supervisor");
+      const { getHandoverCompliance } = await import("./shiftHandoverAutomation");
+      return getHandoverCompliance(input.date, input.city ?? null);
     }),
 
     list: protectedProcedure.input(z.object({
@@ -7837,7 +7835,11 @@ export const appRouter = router({
       }).optional())
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
-        return listDriverCandidates(input?.date, { forTeamLeader: input?.forTeamLeader });
+        const list = await listDriverCandidates(input?.date, { forTeamLeader: input?.forTeamLeader });
+        // Badge "Formação em falta" no seletor da escala (server/trainingPaths.ts)
+        const { employeesMissingTraining } = await import("./trainingPaths");
+        const missing = await employeesMissingTraining(list.map(c => c.id));
+        return list.map(c => ({ ...c, trainingMissing: missing.has(c.id) }));
       }),
 
     assignments: protectedProcedure
@@ -7862,10 +7864,13 @@ export const appRouter = router({
           endHour: z.number().int().min(1).max(27),
           sentHomeHour: z.number().int().min(0).max(27).nullable().optional(),
           notes: z.string().max(255).nullable().optional(),
+          // Admin força a escala de quem ainda não concluiu a formação obrigatória
+          override: z.boolean().optional(),
         }),
       )
-      .mutation(async ({ ctx, input }) => {
+      .mutation(async ({ ctx, input: rawInput }) => {
         requireRole(ctx.user.role, "backoffice");
+        const { override, ...input } = rawInput;
         if (input.endHour <= input.startHour) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Fim tem de ser depois do início" });
         }
@@ -7885,6 +7890,16 @@ export const appRouter = router({
             code: "BAD_REQUEST",
             message: "Team Leader tem de ser um funcionário registado (salário usado no custo).",
           });
+        }
+        // Só verifica quando a pessoa entra na escala (nova linha ou troca de pessoa).
+        const { checkEscalaEligibility, escalaAssignmentEmployeeId } = await import("./trainingPaths");
+        if (input.employeeId && (!input.id || (await escalaAssignmentEmployeeId(input.id)) !== input.employeeId)) {
+          const canOverride = (ROLE_HIERARCHY[ctx.user.role] ?? 0) >= ROLE_HIERARCHY.admin;
+          const elig = await checkEscalaEligibility(input.employeeId, { override, canOverride });
+          if (!elig.ok) throw new TRPCError({ code: "PRECONDITION_FAILED", message: elig.message ?? "Formação obrigatória por concluir." });
+          if (elig.overridden) {
+            await logActivity({ userId: ctx.user.id, action: "training_escala_override", entity: "employees", entityId: input.employeeId, details: `Escalado sem formação concluída (${elig.missing.join(", ")}) · ${input.assignmentDate} ${input.shift}` });
+          }
         }
         try {
           return await upsertAssignment({ ...input, createdById: ctx.user.id });

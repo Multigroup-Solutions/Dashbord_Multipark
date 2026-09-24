@@ -17,6 +17,7 @@ import { startBookingSyncScheduler } from "../jobs/multiparkBookingSync";
 import { startEmailInboundScheduler } from "../jobs/emailInboundSync";
 import { seedProjectHierarchy } from "../db";
 import multer from "multer";
+import { requireSession } from "./requireSession";
 import { storagePut } from "../storage";
 // Gmail sync handled externally via Make scheduled tasks
 
@@ -54,7 +55,7 @@ async function startServer() {
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   // Serve local uploads when S3 is not configured
-  app.use("/uploads", express.static("uploads"));
+  app.use("/uploads", requireSession, express.static("uploads"));
   // OAuth callback under /api/oauth/callback
   registerOAuthRoutes(app);
   registerGoogleBusinessRoutes(app);
@@ -65,7 +66,7 @@ async function startServer() {
 
   // File upload endpoint (multer)
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024 } });
-  app.post("/api/upload", upload.single("file"), async (req: any, res: any) => {
+  app.post("/api/upload", requireSession, upload.single("file"), async (req: any, res: any) => {
     try {
       if (!req.file) return res.status(400).json({ error: "No file" });
       const ext = req.file.originalname?.split(".").pop() || "bin";
@@ -79,7 +80,7 @@ async function startServer() {
   });
   // Resolve ficheiro do storage pela KEY (paridade com o api-entry.ts do
   // Vercel): Blob → redirect para a URL pública; local → redirect p/ /uploads.
-  app.get(/^\/api\/file\/(.+)/, async (req: any, res: any) => {
+  app.get(/^\/api\/file\/(.+)/, requireSession, async (req: any, res: any) => {
     try {
       // O Express já decodifica os grupos capturados — sem 2º decode.
       const key = String(req.params[0] ?? "");
