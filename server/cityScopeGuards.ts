@@ -48,11 +48,9 @@ export async function assertScopedOperation(path: string, type: string, raw: unk
       }
     }
   }
-  // Partner master data and invoices have no city owner. Their mutation or
-  // global financial totals cannot safely be delegated to one city.
-  if (path.startsWith('partnerships.') && ((type === 'mutation' && path !== 'partnerships.addTransaction')
-    || ['partnerships.dashboardStats', 'partnerships.listInvoices'].includes(path))) requireGlobalCityAccess();
-  if (path === 'partnerships.addTransaction') assertProjectAccess(input.projectId);
+  // Partner master data has no city owner. Its mutation cannot safely be
+  // delegated to one city.
+  if (path.startsWith('partnerships.') && type === 'mutation') requireGlobalCityAccess();
   if (path === 'extrasDia.upsertAssignment' && input.employeeId) await assertEmployeeAccess(input.employeeId);
   if (['extrasDia.upsertAssignment', 'extrasDia.deleteAssignment'].includes(path) && input.id != null) {
     const db = await getDb();

@@ -177,7 +177,12 @@ export function extrasCityFromKey(key: string | null): string | null {
 }
 
 // ─── Parceiros / comissões ───────────────────────────────────────────────────
-export interface PartnerLite { id: number; name: string; commissionRate: number | null; updatedAt: string }
+export interface PartnerLite {
+  id: number; name: string; commissionRate: number | null; updatedAt: string;
+  /** NULL = nunca gravado por um admin (ex.: criado pela sincronização automática
+   * com 0%). undefined = informação não disponível → comportamento antigo. */
+  configuredAt?: string | null;
+}
 export interface PartnerIndex {
   byKey: Map<string, PartnerLite>;
   /** chaves com mais do que um parceiro (o mais recente ganha, mas fica ASSINALADO) */
@@ -215,7 +220,9 @@ export type CommissionStatus = "ok" | "rate_missing" | "rate_zero" | "no_partner
 export function commissionFor(revenueGross: number, partner: PartnerLite | undefined): { commission: number; status: CommissionStatus } {
   if (!partner) return { commission: 0, status: "no_partner" };
   if (partner.commissionRate == null) return { commission: 0, status: "rate_missing" };
-  if (partner.commissionRate === 0) return { commission: 0, status: "rate_zero" };
+  // 0% só é "confirmado" se alguém configurou o parceiro; um 0% vindo da
+  // sincronização automática (configuredAt NULL) é taxa em falta.
+  if (partner.commissionRate === 0) return { commission: 0, status: partner.configuredAt === null ? "rate_missing" : "rate_zero" };
   return { commission: revenueGross * (partner.commissionRate / 100), status: "ok" };
 }
 

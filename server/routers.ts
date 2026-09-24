@@ -272,21 +272,9 @@ import {
   getPartnerships,
   inferPartnersFromBookings,
   addPartnerAlias,
-  listPartnerAliases,
-  deletePartnerAlias,
-  getPartnershipById,
   updatePartnership,
   deletePartnership,
-  createPartnershipTransaction,
-  getPartnershipTransactions,
-  // Partnership Invoices
-  createPartnershipInvoice,
-  getPartnershipInvoices,
-  updatePartnershipInvoice,
-  deletePartnershipInvoice,
-  markOverduePartnershipInvoices,
-  getPartnershipDashboardStats,
-  getBookingsByCampaign,
+  partnershipNameExists,
   // Annual Reports
   createAnnualReport,
   getAnnualReports,
@@ -6649,7 +6637,10 @@ export const appRouter = router({
       from: z.string(),
       to: z.string(),
       projectId: z.number().optional(),
-    })).query(({ input }) => getPartnershipAnalytics(input)),
+    })).query(({ ctx, input }) => {
+      requireRole(ctx.user.role, "frontoffice");
+      return getPartnershipAnalytics(input);
+    }),
 
     list: protectedProcedure.input(z.object({
       projectId: z.number().optional(),
@@ -6658,17 +6649,6 @@ export const appRouter = router({
     }).optional()).query(({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
       return getPartnerships(input);
-    }),
-
-    getById: protectedProcedure.input(z.object({ id: z.number() })).query(({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
-      return getPartnershipById(input.id);
-    }),
-
-    dashboardStats: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx.user.role, "frontoffice");
-      await markOverduePartnershipInvoices();
-      return getPartnershipDashboardStats();
     }),
 
     create: protectedProcedure.input(z.object({
@@ -6685,8 +6665,15 @@ export const appRouter = router({
       notes: z.string().optional(),
     })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "admin");
+      const name = input.name.trim();
+      if (await partnershipNameExists(name)) {
+        throw new TRPCError({ code: "CONFLICT", message: `Já existe um parceiro com o nome "${name}". Usa "Associar a existente" ou escolhe outro nome.` });
+      }
       const { nif, ...rest } = input;
-      const id = await createPartnership({ ...rest, partnerNif: nif });
+      // Criado pelo formulário completo (envia comissão/avença) = configurado.
+      // Criado só com nome e tipo (Associar métodos de pagamento) fica "Por configurar".
+      const configured = input.commissionRate !== undefined || input.monthlyFee !== undefined;
+      const id = await createPartnership({ ...rest, name, partnerNif: nif, ...(configured ? { configuredAt: new Date().toISOString().slice(0, 19).replace("T", " ") } : {}) });
       await logActivity({ userId: ctx.user.id, action: "create", entity: "partnership", entityId: id || 0, details: `Parceria: ${input.name}` });
       return { id };
     }),
@@ -6708,7 +6695,15 @@ export const appRouter = router({
     })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "admin");
       const { id, nif, ...rest } = input;
-      await updatePartnership(id, { ...rest, ...(nif !== undefined ? { partnerNif: nif } : {}) });
+      if (rest.name !== undefined) {
+        rest.name = rest.name.trim();
+        if (await partnershipNameExists(rest.name, id)) {
+          throw new TRPCError({ code: "CONFLICT", message: `Já existe outro parceiro com o nome "${rest.name}".` });
+        }
+      }
+      // Gravar no ecrã tira o parceiro da fila "Por configurar" (0% passa a ser
+      // uma taxa confirmada e não "em falta" nas finanças).
+      await updatePartnership(id, { ...rest, ...(nif !== undefined ? { partnerNif: nif } : {}), configuredAt: new Date().toISOString().slice(0, 19).replace("T", " ") });
       await logActivity({ userId: ctx.user.id, action: "update", entity: "partnership", entityId: id });
       return { success: true };
     }),
@@ -6751,13 +6746,6 @@ export const appRouter = router({
         return { updated };
       }),
 
-    listAliases: protectedProcedure
-      .input(z.object({ partnershipId: z.number() }))
-      .query(({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
-        return listPartnerAliases(input.partnershipId);
-      }),
-
     // Aliases agregados por parceiro — mostra quantos códigos cada parceiro
     // já tem associados (cada parceiro tem normalmente 1 código por
     // cidade × marca, logo vários).
@@ -6767,7 +6755,7 @@ export const appRouter = router({
       return aliasCountsByPartner();
     }),
 
-    // Sumário de faturação por parceiro: a faturar / faturado / pendente / em atraso
+    // Sumário de faturação por parceiro: reservas, receita e valor a faturar
     invoicingSummary: protectedProcedure
       .input(z.object({
         from: z.string(),
@@ -6795,14 +6783,6 @@ export const appRouter = router({
         return getPartnerInvoicingDetailByType(input);
       }),
 
-    deleteAlias: protectedProcedure
-      .input(z.object({ id: z.number() }))
-      .mutation(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "admin");
-        await deletePartnerAlias(input.id);
-        return { success: true };
-      }),
-
     // Sincroniza parceiros a partir dos dados EXPLÍCITOS da API: resolve os
     // partnerIds mascarados (nome real via detalhe), cria empresas Pro das
     // campanhas "Pro <empresa>" e normaliza tipos legados. Substitui a
@@ -6816,97 +6796,6 @@ export const appRouter = router({
         details: `Parceiros da API: ${r.created} criados, ${r.linkedToExisting} ligados, ${r.proCreated} Pro criados, ${r.unresolved.length} por resolver`,
       });
       return r;
-    }),
-
-    // Transactions
-    getTransactions: protectedProcedure.input(z.object({ partnershipId: z.number() })).query(({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
-      return getPartnershipTransactions(input.partnershipId);
-    }),
-
-    addTransaction: protectedProcedure.input(z.object({
-      partnershipId: z.number(),
-      projectId: z.number().optional(),
-      transactionType: z.enum(["booking", "commission", "payment", "adjustment"]),
-      description: z.string().optional(),
-      amount: z.number(),
-      transactionDate: z.string().optional(),
-    })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "admin");
-      const data = { ...input, transactionDate: input.transactionDate ? new Date(input.transactionDate) : new Date() };
-      const id = await createPartnershipTransaction(data);
-      return { id };
-    }),
-
-    // Invoices
-    listInvoices: protectedProcedure.input(z.object({
-      partnershipId: z.number().optional(),
-      status: z.string().optional(),
-      year: z.number().optional(),
-      month: z.number().optional(),
-    }).optional()).query(({ input }) => getPartnershipInvoices(input)),
-
-    createInvoice: protectedProcedure.input(z.object({
-      partnershipId: z.number(),
-      invoiceNumber: z.string().optional(),
-      amount: z.number(),
-      referenceMonth: z.number().min(1).max(12),
-      referenceYear: z.number(),
-      dueDate: z.string().optional(),
-      notes: z.string().optional(),
-    })).mutation(async ({ ctx, input }) => {
-      if (!ctx.user) throw new TRPCError({ code: "UNAUTHORIZED" });
-      const data = { ...input, dueDate: input.dueDate ? new Date(input.dueDate) : undefined };
-      const id = await createPartnershipInvoice(data);
-      await logActivity({ userId: ctx.user.id, action: "create", entity: "partnership_invoice", entityId: id || 0 });
-      return { id };
-    }),
-
-    updateInvoice: protectedProcedure.input(z.object({
-      id: z.number(),
-      status: z.enum(["draft", "sent", "paid", "overdue", "cancelled"]).optional(),
-      invoiceNumber: z.string().optional(),
-      amount: z.number().optional(),
-      dueDate: z.string().optional(),
-      sentAt: z.string().optional(),
-      paidAt: z.string().optional(),
-      notes: z.string().optional(),
-    })).mutation(async ({ ctx, input }) => {
-      if (!ctx.user) throw new TRPCError({ code: "UNAUTHORIZED" });
-      const { id, ...rest } = input;
-      const data: any = { ...rest };
-      if (rest.dueDate) data.dueDate = new Date(rest.dueDate);
-      if (rest.sentAt) data.sentAt = new Date(rest.sentAt);
-      if (rest.paidAt) data.paidAt = new Date(rest.paidAt);
-      if (rest.status === "sent" && !rest.sentAt) data.sentAt = new Date();
-      if (rest.status === "paid" && !rest.paidAt) data.paidAt = new Date();
-      await updatePartnershipInvoice(id, data);
-      await logActivity({ userId: ctx.user.id, action: "update", entity: "partnership_invoice", entityId: id });
-      return { success: true };
-    }),
-
-    deleteInvoice: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      if (!ctx.user) throw new TRPCError({ code: "UNAUTHORIZED" });
-      await deletePartnershipInvoice(input.id);
-      await logActivity({ userId: ctx.user.id, action: "delete", entity: "partnership_invoice", entityId: input.id });
-      return { success: true };
-    }),
-
-    markOverdue: protectedProcedure.mutation(async ({ ctx }) => {
-      if (!ctx.user) throw new TRPCError({ code: "UNAUTHORIZED" });
-      const count = await markOverduePartnershipInvoices();
-      return { updated: count };
-    }),
-
-    // Bookings by campaign key for monthly billing
-    bookingsByCampaign: protectedProcedure.input(z.object({
-      campaignKey: z.string(),
-      from: z.string(),
-      to: z.string(),
-      projectId: z.number().optional(),
-    })).query(({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
-      return getBookingsByCampaign(input);
     }),
   }),
 

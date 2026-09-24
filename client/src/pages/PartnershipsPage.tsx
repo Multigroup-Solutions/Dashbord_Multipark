@@ -1,6 +1,5 @@
 import { trpc } from "@/lib/trpc";
 import { useTableSort, Th } from "@/components/SortableTable";
-import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -16,26 +15,36 @@ import {
 } from "@/components/ui/select";
 import { Fragment, useState, useMemo } from "react";
 import {
-  Handshake, Euro, Building2, Crown, ArrowRightLeft,
-  Plus, Pencil, Trash2, FileText, Settings, Link2, AlertTriangle, Wallet,
+  Handshake, Euro, Crown, ArrowRightLeft,
+  Plus, Pencil, Trash2, Settings, Link2, AlertTriangle, Wallet,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { PARTNER_TYPES, PARTNER_CATEGORIES, getPartnerType, partnerCategoryOf, parsePartnerConfig, serializePartnerConfig, partnerFormFields } from "@shared/partnerTypes";
+import { isPartnerUnconfigured, monthBoundsOf } from "@shared/partnerRules";
+import { lisbonToday } from "@shared/expensePeriods";
 import { toast } from "sonner";
 
 const fmt = (v: number | null) => v == null ? "Indisponível" : new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR" }).format(v);
 
 // ── Partner Form Dialog ──────────────────────────────────────────────────────
 
-function PartnerDialog({ open, onClose, partner, campaignOptions }: {
+function PartnerDialog({ open, onClose, partner, prefill, campaignOptions }: {
   open: boolean;
   onClose: () => void;
   partner?: any;
+  /** Novo parceiro já preenchido (ex.: "Configurar" numa campanha da Análise). */
+  prefill?: { name: string; campaignKey: string } | null;
   campaignOptions: string[];
 }) {
   const utils = trpc.useUtils();
-  const create = trpc.partnerships.create.useMutation({ onSuccess: () => { utils.partnerships.list.invalidate(); onClose(); } });
-  const update = trpc.partnerships.update.useMutation({ onSuccess: () => { utils.partnerships.list.invalidate(); onClose(); } });
+  const onSaved = () => {
+    utils.partnerships.list.invalidate();
+    utils.partnerships.invoicingSummary.invalidate();
+    onClose();
+  };
+  const onError = (e: { message: string }) => toast.error(e.message || "Erro ao gravar o parceiro");
+  const create = trpc.partnerships.create.useMutation({ onSuccess: onSaved, onError });
+  const update = trpc.partnerships.update.useMutation({ onSuccess: onSaved, onError });
 
   const initialCfg = useMemo(() => parsePartnerConfig(partner?.notes), [partner?.notes]);
   const initialPlainNotes = useMemo(() => {
@@ -44,8 +53,8 @@ function PartnerDialog({ open, onClose, partner, campaignOptions }: {
   }, [partner?.notes]);
 
   const [form, setForm] = useState({
-    name: partner?.name ?? "",
-    campaignKey: partner?.campaignKey ?? "",
+    name: partner?.name ?? prefill?.name ?? "",
+    campaignKey: partner?.campaignKey ?? prefill?.campaignKey ?? "",
     partnerType: partner?.partnerType ?? "outro",
     contactName: partner?.contactName ?? "",
     contactEmail: partner?.contactEmail ?? "",
@@ -61,6 +70,9 @@ function PartnerDialog({ open, onClose, partner, campaignOptions }: {
     avencaDate: initialCfg.avencaDate ?? "",
     invoiceDay: initialCfg.invoiceDay ?? 0,
   });
+
+  // Chave escrita à mão (não está na lista de campanhas): input controlado.
+  const [manualKey, setManualKey] = useState(() => !!form.campaignKey && !campaignOptions.includes(form.campaignKey));
 
   // Projetos para multi-select (operacional)
   const { data: allProjects = [] } = trpc.projects.list.useQuery();
@@ -118,7 +130,13 @@ function PartnerDialog({ open, onClose, partner, campaignOptions }: {
           <div className="col-span-2">
             <Label className="text-xs">Campaign Key (da API Multipark)</Label>
             {campaignOptions.length > 0 ? (
-              <Select value={form.campaignKey} onValueChange={v => set("campaignKey", v)}>
+              <Select
+                value={manualKey ? "_manual" : form.campaignKey}
+                onValueChange={v => {
+                  if (v === "_manual") { setManualKey(true); set("campaignKey", ""); }
+                  else { setManualKey(false); set("campaignKey", v); }
+                }}
+              >
                 <SelectTrigger><SelectValue placeholder="Selecionar campaign..." /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="_manual">Introduzir manualmente</SelectItem>
@@ -130,8 +148,8 @@ function PartnerDialog({ open, onClose, partner, campaignOptions }: {
             ) : (
               <Input value={form.campaignKey} onChange={e => set("campaignKey", e.target.value)} placeholder="ex: booking.com, trivago" />
             )}
-            {form.campaignKey === "_manual" && (
-              <Input className="mt-1" value="" onChange={e => set("campaignKey", e.target.value)} placeholder="Escrever campaign key..." />
+            {campaignOptions.length > 0 && manualKey && (
+              <Input className="mt-1" value={form.campaignKey} onChange={e => set("campaignKey", e.target.value)} placeholder="Escrever campaign key..." />
             )}
           </div>
           <div>
@@ -273,10 +291,10 @@ function PartnerDialog({ open, onClose, partner, campaignOptions }: {
 
 export default function PartnershipsPage() {
   const filters = useGlobalFilters();
-  const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
-  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
-  const today = now.toISOString().slice(0, 10);
+  // Dias de calendário de Lisboa (o toISOString de uma data local recuava um
+  // dia no verão: 1 de setembro 00:00 PT = 31 de agosto 23:00 UTC).
+  const today = lisbonToday();
+  const { monthStart, monthEnd } = monthBoundsOf(today);
 
   const [from, setFrom] = useState(monthStart);
   const [to, setTo] = useState(today);
@@ -284,7 +302,9 @@ export default function PartnershipsPage() {
   const [billingTo, setBillingTo] = useState(monthEnd);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editPartner, setEditPartner] = useState<any>(null);
-  const [selectedBillingPartner, setSelectedBillingPartner] = useState<string>("all");
+  const [prefill, setPrefill] = useState<{ name: string; campaignKey: string } | null>(null);
+  const openEdit = (p: any) => { setPrefill(null); setEditPartner(p); setDialogOpen(true); };
+  const openNew = (pre: { name: string; campaignKey: string } | null = null) => { setEditPartner(null); setPrefill(pre); setDialogOpen(true); };
   const [mgmtType, setMgmtType] = useState<string>("all"); // segmentação da tab Gestão por tipo
 
   const projectId = useMemo(() => {
@@ -312,13 +332,6 @@ export default function PartnershipsPage() {
     onError: (e) => toast.error(e.message || "Erro na sincronização de parceiros"),
   });
 
-  // Billing query: bookings for selected partner
-  const selectedPartnerObj = partnerList.find((p: any) => String(p.id) === selectedBillingPartner);
-  const { data: billingBookings = [], isLoading: billingLoading } = trpc.partnerships.bookingsByCampaign.useQuery(
-    { campaignKey: selectedPartnerObj?.campaignKey ?? "", from: billingFrom, to: billingTo, projectId },
-    { enabled: !!selectedPartnerObj?.campaignKey }
-  );
-
   const partners = analyticsData?.partners ?? [];
   const proBookings = analyticsData?.proBookings ?? [];
   const totals = analyticsData?.totals ?? { partnerBookings: 0, partnerRevenue: 0, directBookings: 0, directRevenue: 0, proBookings: 0, proRevenue: 0 };
@@ -327,12 +340,29 @@ export default function PartnershipsPage() {
   const totalRevenue = totals.partnerRevenue + totals.directRevenue;
   const partnerPct = totalBookings > 0 ? ((totals.partnerBookings / totalBookings) * 100).toFixed(1) : "0";
 
-  // Campaign options from analytics (campaigns not yet linked to a partner)
-  const linkedCampaigns = new Set(partnerList.map((p: any) => p.campaignKey).filter(Boolean));
+  // campanha (minúsculas) → parceiro: pelo nome (o resolver de aliases grava
+  // o nome do parceiro em `campaign`) e pela campaign key.
+  const partnerByCampaign = useMemo(() => {
+    const m = new Map<string, any>();
+    for (const p of partnerList as any[]) {
+      for (const k of [p.name, p.campaignKey]) {
+        const key = (k ?? "").trim().toLowerCase();
+        if (key && !m.has(key)) m.set(key, p);
+      }
+    }
+    return m;
+  }, [partnerList]);
+  const partnerForCampaign = (c: string) => partnerByCampaign.get(c.trim().toLowerCase());
+
+  // Opções de campaign para o formulário: campanhas ainda sem parceiro
   const campaignOptions = useMemo(() => {
-    const campaigns = new Set(partners.map(p => p.campaign).filter(Boolean));
-    return Array.from(campaigns).filter(c => !linkedCampaigns.has(c));
-  }, [partners, linkedCampaigns]);
+    const campaigns = new Set(partners.map(p => p.campaign).filter(Boolean) as string[]);
+    return Array.from(campaigns).filter(c => !partnerByCampaign.has(c.trim().toLowerCase()));
+  }, [partners, partnerByCampaign]);
+
+  // Fila "Por configurar": parceiros que nenhum admin gravou (ex.: criados
+  // pela sincronização automática com 0% e sem avença).
+  const unconfigured = useMemo(() => (partnerList as any[]).filter(isPartnerUnconfigured), [partnerList]);
 
   // Group partners by campaign name
   const partnerSummary = useMemo(() => {
@@ -356,21 +386,12 @@ export default function PartnershipsPage() {
         discount: d.discount,
         cities: Array.from(d.cities),
         parks: Array.from(d.parks),
-        linked: linkedCampaigns.has(name),
+        partner: partnerByCampaign.get(name.trim().toLowerCase()) ?? null,
       }))
+      .map(r => ({ ...r, configured: !!r.partner && !isPartnerUnconfigured(r.partner) }))
       .sort((a, b) => b.revenue - a.revenue);
-  }, [partners, linkedCampaigns]);
+  }, [partners, partnerByCampaign]);
   const psSort = useTableSort(partnerSummary);
-
-  // Billing calculations
-  const billingTotals = useMemo(() => {
-    const revenue = billingBookings.reduce((s: number, b: any) => s + b.totalPrice, 0);
-    const discounts = billingBookings.reduce((s: number, b: any) => s + b.discount, 0);
-    const rate = selectedPartnerObj?.commissionRate ?? 0;
-    const commission = revenue * (rate / 100);
-    const fee = selectedPartnerObj?.monthlyFee ?? 0;
-    return { revenue, discounts, commission, fee, total: commission + fee, count: billingBookings.length, rate };
-  }, [billingBookings, selectedPartnerObj]);
 
   return (
     <div className="space-y-6">
@@ -380,8 +401,10 @@ export default function PartnershipsPage() {
         <TabsList>
           <TabsTrigger value="summary"><Wallet className="w-3 h-3 mr-1" /> Resumo</TabsTrigger>
           <TabsTrigger value="analytics">Análise</TabsTrigger>
-          <TabsTrigger value="management"><Settings className="w-3 h-3 mr-1" /> Gestão</TabsTrigger>
-          <TabsTrigger value="billing"><FileText className="w-3 h-3 mr-1" /> Faturação</TabsTrigger>
+          <TabsTrigger value="management">
+            <Settings className="w-3 h-3 mr-1" /> Gestão
+            {unconfigured.length > 0 && <Badge variant="destructive" className="ml-1 h-4 px-1 text-[9px]">{unconfigured.length}</Badge>}
+          </TabsTrigger>
         </TabsList>
 
         {/* ── TAB: RESUMO DE FATURAÇÃO POR PARCEIRO ─────────────────────────── */}
@@ -484,7 +507,9 @@ export default function PartnershipsPage() {
                           <tr key={p.name} className="border-b hover:bg-muted/50">
                             <td className="p-2 font-medium">
                               {p.name}
-                              {p.linked && <Badge variant="secondary" className="ml-2 text-[9px]">Configurado</Badge>}
+                              {p.configured
+                                ? <Badge variant="secondary" className="ml-2 text-[9px]">Configurado</Badge>
+                                : p.partner && <Badge variant="outline" className="ml-2 text-[9px] border-amber-400 text-amber-700">Por configurar</Badge>}
                             </td>
                             <td className="p-2">
                               <div className="flex gap-1 flex-wrap">
@@ -501,10 +526,10 @@ export default function PartnershipsPage() {
                               {totalRevenue > 0 ? ((p.revenue / totalRevenue) * 100).toFixed(1) : "0"}%
                             </td>
                             <td className="p-2 text-center">
-                              {!p.linked && (
+                              {!p.configured && (
                                 <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => {
-                                  setEditPartner(null);
-                                  setDialogOpen(true);
+                                  if (p.partner) openEdit(p.partner);
+                                  else openNew({ name: p.name, campaignKey: p.name });
                                 }}>
                                   <Plus className="w-3 h-3 mr-1" /> Configurar
                                 </Button>
@@ -585,15 +610,40 @@ export default function PartnershipsPage() {
                 {syncApiMut.isPending ? "A sincronizar…" : "Sincronizar parceiros da API"}
               </Button>
               <Link href="/parcerias/inferir">
-                <Button size="sm" variant="ghost" title="Inferência antiga por método de pagamento (histórico)">
-                  Inferência antiga
+                <Button size="sm" variant="ghost" title="Associar partnerIds e métodos de pagamento das reservas a parceiros">
+                  Associar métodos de pagamento
                 </Button>
               </Link>
-              <Button size="sm" onClick={() => { setEditPartner(null); setDialogOpen(true); }}>
+              <Button size="sm" onClick={() => openNew()}>
                 <Plus className="w-4 h-4 mr-1" /> Novo Parceiro
               </Button>
             </div>
           </div>
+
+          {/* Fila "Por configurar" — parceiros novos (sincronização automática) sem taxa/avença confirmada */}
+          {unconfigured.length > 0 && (
+            <Card className="p-4 border-amber-300 bg-amber-50/60 dark:bg-amber-950/20">
+              <div className="flex items-center gap-2 mb-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600" />
+                <h3 className="font-semibold text-sm">Por configurar ({unconfigured.length})</h3>
+              </div>
+              <p className="text-xs text-muted-foreground mb-3">
+                Parceiros criados automaticamente (ou sem dados gravados). Até serem configurados, a comissão conta como
+                "taxa em falta" nas finanças. Confirma o tipo, a comissão (mesmo que seja 0%) ou a avença.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {unconfigured.map((p: any) => (
+                  <div key={p.id} className="flex items-center gap-2 rounded border bg-background px-2 py-1 text-sm">
+                    <span className="font-medium">{p.name}</span>
+                    <Badge variant="outline" className="text-[9px]">{getPartnerType(p.partnerType).label}</Badge>
+                    <Button size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={() => openEdit(p)}>
+                      Configurar
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
 
           {/* Segmentação por CATEGORIA (Prós | Agências | Empresas | Agregadores | Operacional) */}
           {partnerList.length > 0 && (
@@ -634,6 +684,9 @@ export default function PartnershipsPage() {
                         <Badge variant="outline" className="text-[10px]">
                           {getPartnerType(p.partnerType).label}
                         </Badge>
+                        {isPartnerUnconfigured(p) && (
+                          <Badge variant="outline" className="text-[10px] border-amber-400 text-amber-700">Por configurar</Badge>
+                        )}
                       </div>
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-1 text-sm text-muted-foreground mt-2">
                         {p.campaignKey && (
@@ -641,7 +694,7 @@ export default function PartnershipsPage() {
                         )}
                         <div><span className="text-xs font-medium text-foreground">Comissão:</span> {p.commissionRate ?? 0}%</div>
                         {p.monthlyFee > 0 && (
-                          <div><span className="text-xs font-medium text-foreground">Fee Mensal:</span> {fmt(p.monthlyFee / 100)}</div>
+                          <div><span className="text-xs font-medium text-foreground">Avença mensal:</span> {fmt(p.monthlyFee)}</div>
                         )}
                         {p.partnerNif && (
                           <div><span className="text-xs font-medium text-foreground">NIF:</span> {p.partnerNif}</div>
@@ -661,7 +714,7 @@ export default function PartnershipsPage() {
                       </div>
                     </div>
                     <div className="flex gap-1 ml-4">
-                      <Button size="sm" variant="ghost" onClick={() => { setEditPartner(p); setDialogOpen(true); }}>
+                      <Button size="sm" variant="ghost" onClick={() => openEdit(p)}>
                         <Pencil className="w-4 h-4" />
                       </Button>
                       <Button size="sm" variant="ghost" className="text-red-600" onClick={() => {
@@ -677,145 +730,15 @@ export default function PartnershipsPage() {
           )}
         </TabsContent>
 
-        {/* ── TAB: FATURAÇÃO ───────────────────────────────────────────────── */}
-        <TabsContent value="billing" className="space-y-4">
-          <div className="flex items-center gap-3 flex-wrap">
-            <div>
-              <Label className="text-xs mb-1 block">Parceiro</Label>
-              <Select value={selectedBillingPartner} onValueChange={setSelectedBillingPartner}>
-                <SelectTrigger className="w-56"><SelectValue placeholder="Selecionar parceiro..." /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">— Selecionar —</SelectItem>
-                  {(partnerList as any[]).filter((p: any) => p.campaignKey).map((p: any) => (
-                    <SelectItem key={p.id} value={String(p.id)}>{p.name} ({p.campaignKey})</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label className="text-xs mb-1 block">De</Label>
-              <Input type="date" value={billingFrom} onChange={e => setBillingFrom(e.target.value)} className="w-[140px]" />
-            </div>
-            <div>
-              <Label className="text-xs mb-1 block">Até</Label>
-              <Input type="date" value={billingTo} onChange={e => setBillingTo(e.target.value)} className="w-[140px]" />
-            </div>
-          </div>
-
-          {!selectedPartnerObj?.campaignKey ? (
-            <Card className="p-8 text-center text-muted-foreground">
-              Seleciona um parceiro com campaign key configurada para ver a faturação.
-              {(partnerList as any[]).filter((p: any) => p.campaignKey).length === 0 && (
-                <p className="mt-2 text-xs">Nenhum parceiro tem campaign key. Vai à tab Gestão e configura.</p>
-              )}
-            </Card>
-          ) : billingLoading ? (
-            <div className="flex justify-center py-10">
-              <div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" />
-            </div>
-          ) : (
-            <>
-              {/* Billing KPIs */}
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-                <Card className="p-3">
-                  <p className="text-[10px] text-muted-foreground mb-1">Reservas</p>
-                  <p className="text-xl font-bold">{billingTotals.count}</p>
-                </Card>
-                <Card className="p-3">
-                  <p className="text-[10px] text-muted-foreground mb-1">Receita Total</p>
-                  <p className="text-xl font-bold text-green-700">{fmt(billingTotals.revenue)}</p>
-                </Card>
-                <Card className="p-3">
-                  <p className="text-[10px] text-muted-foreground mb-1">Descontos</p>
-                  <p className="text-xl font-bold text-red-600">{fmt(billingTotals.discounts)}</p>
-                </Card>
-                <Card className="p-3">
-                  <p className="text-[10px] text-muted-foreground mb-1">Comissão ({billingTotals.rate}%)</p>
-                  <p className="text-xl font-bold text-orange-700">{fmt(billingTotals.commission)}</p>
-                </Card>
-                <Card className="p-3 border-2 border-primary/20">
-                  <p className="text-[10px] text-muted-foreground mb-1">Total a Faturar</p>
-                  <p className="text-xl font-bold text-blue-700">{fmt(billingTotals.total)}</p>
-                  {billingTotals.fee > 0 && <p className="text-[10px] text-muted-foreground">Incl. fee mensal {fmt(billingTotals.fee / 100)}</p>}
-                </Card>
-              </div>
-
-              {/* Partner info card */}
-              <Card className="p-3 bg-muted/30">
-                <div className="flex items-center gap-4 text-sm">
-                  <span><strong>Parceiro:</strong> {selectedPartnerObj.name}</span>
-                  {selectedPartnerObj.partnerNif && <span><strong>NIF:</strong> {selectedPartnerObj.partnerNif}</span>}
-                  <span><strong>Campaign:</strong> {selectedPartnerObj.campaignKey}</span>
-                  <span><strong>Comissão:</strong> {selectedPartnerObj.commissionRate ?? 0}%</span>
-                </div>
-              </Card>
-
-              {/* Bookings table */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <FileText className="w-4 h-4" /> Reservas — {selectedPartnerObj.name}
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {billingBookings.length === 0 ? (
-                    <p className="text-muted-foreground text-sm text-center py-6">Sem reservas neste período</p>
-                  ) : (
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="border-b text-left text-xs">
-                            <th className="p-2">Reserva</th>
-                            <th className="p-2">Cliente</th>
-                            <th className="p-2">Matrícula</th>
-                            <th className="p-2">Parque</th>
-                            <th className="p-2">Check-in</th>
-                            <th className="p-2">Check-out</th>
-                            <th className="p-2 text-right">Preço</th>
-                            <th className="p-2 text-right">Desconto</th>
-                            <th className="p-2 text-right">Comissão</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {billingBookings.map((b: any) => {
-                            const commission = b.totalPrice * ((selectedPartnerObj.commissionRate ?? 0) / 100);
-                            return (
-                              <tr key={b.id} className="border-b hover:bg-muted/50">
-                                <td className="p-2 font-medium">{b.bookingNumber || `#${b.id}`}</td>
-                                <td className="p-2">{[b.clientFirstName, b.clientLastName].filter(Boolean).join(" ") || "—"}</td>
-                                <td className="p-2 font-mono text-xs">{b.licensePlate || "—"}</td>
-                                <td className="p-2 text-muted-foreground">{b.parkName}{b.city ? ` (${b.city})` : ""}</td>
-                                <td className="p-2 text-xs">{b.checkIn ? fmtPTDate(b.checkIn) : "—"}</td>
-                                <td className="p-2 text-xs">{b.checkOut ? fmtPTDate(b.checkOut) : "—"}</td>
-                                <td className="p-2 text-right tabular-nums">{fmt(b.totalPrice)}</td>
-                                <td className="p-2 text-right tabular-nums text-red-600">{b.discount > 0 ? fmt(b.discount) : "—"}</td>
-                                <td className="p-2 text-right tabular-nums text-orange-700 font-medium">{fmt(commission)}</td>
-                              </tr>
-                            );
-                          })}
-                          <tr className="bg-muted/30 font-bold border-t-2">
-                            <td className="p-2" colSpan={6}>TOTAL</td>
-                            <td className="p-2 text-right">{fmt(billingTotals.revenue)}</td>
-                            <td className="p-2 text-right text-red-600">{fmt(billingTotals.discounts)}</td>
-                            <td className="p-2 text-right text-orange-700">{fmt(billingTotals.commission)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            </>
-          )}
-        </TabsContent>
       </Tabs>
 
       {/* Dialog */}
       {dialogOpen && (
         <PartnerDialog
           open={dialogOpen}
-          onClose={() => { setDialogOpen(false); setEditPartner(null); }}
+          onClose={() => { setDialogOpen(false); setEditPartner(null); setPrefill(null); }}
           partner={editPartner}
+          prefill={prefill}
           campaignOptions={campaignOptions as string[]}
         />
       )}
@@ -846,11 +769,10 @@ function InvoicingSummaryTab({
   const totals = useMemo(() => {
     return rows.reduce((acc, r) => {
       acc.aFaturar += r.aFaturar ?? 0;
-      acc.faturado += r.faturado ?? 0;
-      acc.pendente += r.pendente ?? 0;
-      acc.emAtraso += r.emAtraso ?? 0;
+      acc.bookings += r.bookingsCount;
+      acc.revenue += r.revenueGross;
       return acc;
-    }, { aFaturar: 0, faturado: 0, pendente: 0, emAtraso: 0 });
+    }, { aFaturar: 0, bookings: 0, revenue: 0 });
   }, [rows]);
 
   return (
@@ -878,9 +800,9 @@ function InvoicingSummaryTab({
         </div>
       </div>
 
-      {!billingAvailable && <p role="status" className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">Reservas e receitas limitadas à cidade selecionada. Faturas globais, saldos e avenças sem cidade atribuída estão indisponíveis nesta vista.</p>}
+      {!billingAvailable && <p role="status" className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">Reservas e receitas limitadas à cidade selecionada. As avenças não têm cidade atribuída e estão indisponíveis nesta vista.</p>}
       {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <Card className="p-4">
           <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
             <Euro className="w-3 h-3" /> A faturar
@@ -889,21 +811,15 @@ function InvoicingSummaryTab({
         </Card>
         <Card className="p-4">
           <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
-            <FileText className="w-3 h-3" /> Já faturado
+            <Handshake className="w-3 h-3" /> Reservas concluídas
           </p>
-          <p className="text-2xl font-bold text-emerald-700">{fmt(billingAvailable ? totals.faturado : null)}</p>
+          <p className="text-2xl font-bold">{totals.bookings}</p>
         </Card>
         <Card className="p-4">
           <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
-            <Wallet className="w-3 h-3" /> Pendente
+            <Wallet className="w-3 h-3" /> Receita
           </p>
-          <p className="text-2xl font-bold text-orange-700">{fmt(billingAvailable ? totals.pendente : null)}</p>
-        </Card>
-        <Card className="p-4">
-          <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
-            <AlertTriangle className="w-3 h-3" /> Em atraso
-          </p>
-          <p className="text-2xl font-bold text-red-700">{fmt(billingAvailable ? totals.emAtraso : null)}</p>
+          <p className="text-2xl font-bold text-emerald-700">{fmt(totals.revenue)}</p>
         </Card>
       </div>
 
@@ -911,8 +827,8 @@ function InvoicingSummaryTab({
         <CardHeader>
           <CardTitle className="text-base">Resumo por parceiro</CardTitle>
           <p className="text-xs text-muted-foreground">
-            <strong>A faturar</strong> = comissão das reservas no período + avença mensal/anual rateada (se aplicável).
-            <strong> Pendente</strong> = a faturar − já faturado.
+            <strong>A faturar</strong> = comissão das reservas concluídas (check-out no período) ou avença
+            mensal/anual rateada pelos meses do período.
           </p>
         </CardHeader>
         <CardContent>
@@ -930,19 +846,15 @@ function InvoicingSummaryTab({
                     <th className="p-2 text-right">Reservas</th>
                     <th className="p-2 text-right">Receita</th>
                     <th className="p-2 text-right">A faturar</th>
-                    <th className="p-2 text-right">Faturado</th>
-                    <th className="p-2 text-right">Pendente</th>
-                    <th className="p-2 text-right">Em atraso</th>
                   </tr>
                 </thead>
                 <tbody>
                   {PARTNER_CATEGORIES.map((cat) => {
-                    const catRows = rows.filter((r: any) => partnerCategoryOf(r.partnerType) === cat.id);
+                    const catRows = rows.filter((r) => partnerCategoryOf(r.partnerType) === cat.id);
                     if (catRows.length === 0) return null;
-                    const sub = catRows.reduce((a: any, r: any) => ({
-                      n: a.n + r.bookingsCount, rev: a.rev + r.revenueGross,
-                      af: a.af + r.aFaturar, f: a.f + r.faturado, p: a.p + r.pendente, ea: a.ea + r.emAtraso,
-                    }), { n: 0, rev: 0, af: 0, f: 0, p: 0, ea: 0 });
+                    const sub = catRows.reduce((a, r) => ({
+                      n: a.n + r.bookingsCount, rev: a.rev + r.revenueGross, af: a.af + (r.aFaturar ?? 0),
+                    }), { n: 0, rev: 0, af: 0 });
                     return (
                       <Fragment key={cat.id}>
                         <tr className="bg-muted/70 border-b">
@@ -950,16 +862,13 @@ function InvoicingSummaryTab({
                           <td className="p-2 text-right tabular-nums text-xs font-medium">{sub.n}</td>
                           <td className="p-2 text-right tabular-nums text-xs font-medium">{fmt(sub.rev)}</td>
                           <td className="p-2 text-right tabular-nums text-xs font-medium text-blue-700">{fmt(catRows.every(r => r.aFaturar != null) ? sub.af : null)}</td>
-                          <td className="p-2 text-right tabular-nums text-xs font-medium text-emerald-700">{fmt(billingAvailable ? sub.f : null)}</td>
-                          <td className="p-2 text-right tabular-nums text-xs font-medium text-orange-700">{fmt(billingAvailable ? sub.p : null)}</td>
-                          <td className="p-2 text-right tabular-nums text-xs font-medium text-red-700">{!billingAvailable ? 'Indisponível' : sub.ea > 0 ? fmt(sub.ea) : '—'}</td>
                         </tr>
                         {catRows.map((r: any) => {
                     const t = getPartnerType(r.partnerType);
                     return (
                       <tr
                         key={r.partnershipId}
-                        className={`border-b hover:bg-muted/50 cursor-pointer ${r.emAtraso > 0 ? "bg-red-50/40" : ""}`}
+                        className="border-b hover:bg-muted/50 cursor-pointer"
                         onClick={() => setLocation(`/parcerias/tipo/${t.id}`)}
                         title={`Abrir ${t.label}`}
                       >
@@ -970,19 +879,6 @@ function InvoicingSummaryTab({
                         <td className="p-2 text-right tabular-nums">{r.bookingsCount}</td>
                         <td className="p-2 text-right tabular-nums">{fmt(r.revenueGross)}</td>
                         <td className="p-2 text-right tabular-nums font-medium text-blue-700">{fmt(r.aFaturar)}</td>
-                        <td className="p-2 text-right tabular-nums text-emerald-700">{fmt(r.faturado)}</td>
-                        <td className="p-2 text-right tabular-nums text-orange-700 font-medium">{fmt(r.pendente)}</td>
-                        <td className="p-2 text-right tabular-nums">
-                          {r.emAtraso == null ? 'Indisponível' : r.emAtraso > 0 ? (
-                            <span className="text-red-700 font-medium inline-flex items-center gap-1">
-                              <AlertTriangle className="w-3 h-3" />
-                              {fmt(r.emAtraso)}
-                              <span className="text-[10px] text-muted-foreground">({r.faturasEmAtrasoCount})</span>
-                            </span>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                        </td>
                       </tr>
                     );
                   })}
@@ -994,9 +890,6 @@ function InvoicingSummaryTab({
                   <tr className="bg-muted/50 font-bold border-t-2">
                     <td className="p-2" colSpan={4}>TOTAL</td>
                     <td className="p-2 text-right tabular-nums text-blue-700">{fmt(amountsAvailable ? totals.aFaturar : null)}</td>
-                    <td className="p-2 text-right tabular-nums text-emerald-700">{fmt(billingAvailable ? totals.faturado : null)}</td>
-                    <td className="p-2 text-right tabular-nums text-orange-700">{fmt(billingAvailable ? totals.pendente : null)}</td>
-                    <td className="p-2 text-right tabular-nums text-red-700">{fmt(billingAvailable ? totals.emAtraso : null)}</td>
                   </tr>
                 </tfoot>
               </table>

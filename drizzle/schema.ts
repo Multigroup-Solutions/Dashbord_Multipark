@@ -1198,6 +1198,9 @@ export const partnerships = mysqlTable("partnerships", {
 	partnerNif: varchar("partner_nif", { length: 20 }),
 	monthlyFee: int().default(0),
 	multiparkPartnerId: varchar({ length: 128 }),
+	// Migration 0082 — quando um admin gravou o parceiro no ecrã. NULL = "por
+	// configurar" (ex.: criado pela sincronização automática com 0%).
+	configuredAt: timestamp({ mode: 'string' }),
 });
 
 export const multiparkBookingHistory = mysqlTable("multipark_booking_history", {
