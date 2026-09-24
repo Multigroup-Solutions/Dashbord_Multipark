@@ -17,7 +17,7 @@
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { projectScope } from "./cityScope";
-import { FINANCE_PARAMS } from "./finance/rules";
+import { vatRateForPeriod } from "./finance/rates";
 import { netOfVatAmount, roasNetOfVat } from "../shared/marketingRules";
 import { inLisbonDaysSql, marketingProjectIds, notCancelledSql } from "./marketingSql";
 
@@ -70,7 +70,8 @@ export async function listCampaignLinks(): Promise<Array<CampaignLinkKey & { cam
 
 export async function getCampaignRoas(f: { from: string; to: string; projectId?: number }) {
   const db = await getDb();
-  const vat = FINANCE_PARAMS.vatRate;
+  // IVA em vigor no período (Definições; ROAS agregado → taxa do fim do período)
+  const vat = await vatRateForPeriod(f.from, f.to);
   const projectIds = await marketingProjectIds(f.projectId);
   const { getAdMetrics } = await import("./integrations/googleAds/adMetrics");
   const ads = await getAdMetrics({ from: f.from, to: f.to, projectIds });

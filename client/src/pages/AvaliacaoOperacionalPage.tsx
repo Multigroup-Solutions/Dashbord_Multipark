@@ -10,17 +10,31 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { ClipboardList, Download, RefreshCw, ChevronDown, ChevronRight, Pencil, Check, X } from "lucide-react";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { operationalDayOf } from "@shared/lisbonDay";
+import {
+  EvaluationDrawer,
+  PerHourStrip,
+  RuleLinesTable,
+  RulesLegend,
+  fmtDay,
+  fmtNum,
+  fmtPts,
+  ptsClass,
+} from "@/components/evaluation/EvaluationBreakdown";
 
 const fmtHour = (h: number) => {
   if (h < 24) return `${String(h).padStart(2, "0")}h`;
   return `${String(h - 24).padStart(2, "0")}h+1`;
 };
 
+/** Dia OPERACIONAL de hoje: antes das 03h de Lisboa ainda é a noite de ontem. */
 function todayISO(): string {
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return operationalDayOf(Date.now());
 }
+
+type ScoreTarget = { employeeId: number | null; name: string; person: any };
 
 /** "Gelson Manuel Leão Sousa" → "Gelson Sousa" */
 function deriveShortName(fullName: string): string {
@@ -33,7 +47,10 @@ const fmtEur = (n: number) => n.toLocaleString("pt-PT", { style: "currency", cur
 
 export default function AvaliacaoOperacionalPage() {
   const { projectId } = useGlobalFilters();
+  const { user } = useAuth();
+  const isSupervisor = !!user?.role && ["supervisor", "admin", "super_admin"].includes(user.role);
   const [date, setDate] = useState(todayISO());
+  const [scoreOf, setScoreOf] = useState<ScoreTarget | null>(null);
 
   const assignmentsQ = trpc.extrasDia.assignments.useQuery({ date, projectId });
   const assignments = assignmentsQ.data ?? [];
@@ -49,7 +66,8 @@ export default function AvaliacaoOperacionalPage() {
             Avaliação Operacional
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Cruza extras escalados em /extras-dia com actividade real registada na API Multipark.
+            Escala do /extras-dia × atividade real (API Multipark), com as mesmas regras e números da Avaliação individual.
+            Manhã 03h–15h · noite 15h–03h (Lisboa). Clica nos pontos de alguém para ver o detalhe.
           </p>
         </div>
         <div className="flex flex-wrap items-end gap-2">
@@ -62,7 +80,7 @@ export default function AvaliacaoOperacionalPage() {
               variant="outline"
               size="sm"
               onClick={() => {
-                const headers = ["Turno","Nome","TL","Nível","Horas pagas","Custo","Ações","€/Acção","Por tipo"];
+                const headers = ["Turno","Nome","TL","Nível","Horas pagas","Horas ponto","Custo","Ações","Pts ações","Pontos","€/Acção","Por tipo"];
                 const rows: string[][] = [];
                 for (const s of evaluation.shifts) {
                   const shiftLabel = s.shift === "morning" ? "Manhã" : "Noite";
@@ -74,8 +92,11 @@ export default function AvaliacaoOperacionalPage() {
                       "TL",
                       "—",
                       String(tlA?.hoursBilled ?? 0),
-                      (tlA?.cost ?? 0).toFixed(2),
+                      String(s.tl.hoursWorked),
+                      s.tl.cost.toFixed(2),
                       String(s.tl.totalActions),
+                      String(s.tl.weightedActions),
+                      String(s.tl.totalPoints),
                       s.tl.totalActions > 0 ? s.tl.costPerAction.toFixed(2) : "—",
                       Object.entries(s.tl.byType).map(([k, v]) => `${k}:${v}`).join("|"),
                     ]);
@@ -89,8 +110,11 @@ export default function AvaliacaoOperacionalPage() {
                       "",
                       a.level ?? "",
                       String(a.hoursBilled),
-                      a.cost.toFixed(2),
+                      String(m.hoursWorked),
+                      m.cost.toFixed(2),
                       String(m.totalActions),
+                      String(m.weightedActions),
+                      String(m.totalPoints),
                       m.totalActions > 0 ? m.costPerAction.toFixed(2) : "—",
                       Object.entries(m.byType).map(([k, v]) => `${k}:${v}`).join("|"),
                     ]);
@@ -129,7 +153,12 @@ export default function AvaliacaoOperacionalPage() {
             <CardTitle className="text-base">Equipa do dia · {evaluation.totals.people} pessoas</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+              <div>
+                <div className="text-xs text-muted-foreground">Ações ponderadas (pts)</div>
+                <div className="text-xl md:text-2xl font-bold truncate">{fmtNum(evaluation.totals.weightedActions, 1)}</div>
+                <div className="text-[10px] text-muted-foreground mt-0.5">movimento +2 · recolha/entrega +3 · levar ao parque +5</div>
+              </div>
               <div>
                 <div className="text-xs text-muted-foreground">Acções totais</div>
                 <div className="text-xl md:text-2xl font-bold truncate">{evaluation.totals.totalActions}</div>
@@ -172,9 +201,41 @@ export default function AvaliacaoOperacionalPage() {
       {/* Totais por turno + TL + drivers */}
       {evaluation?.shifts.map(s => (
         s.drivers > 0 ? (
-          <ShiftSection key={s.shift} shiftEval={s} date={date} assignments={assignments} />
+          <ShiftSection key={s.shift} shiftEval={s} date={date} assignments={assignments} onScore={setScoreOf} />
         ) : null
       ))}
+
+      {evaluation && evaluation.totals.people > 0 && (
+        <Card>
+          <CardHeader><CardTitle className="text-base">Sistema de pontos</CardTitle></CardHeader>
+          <CardContent><RulesLegend /></CardContent>
+        </Card>
+      )}
+
+      {/* Detalhe: com ficha → o mesmo detalhe da Avaliação individual; sem ficha → só as ações */}
+      <EvaluationDrawer
+        employeeId={scoreOf?.employeeId ?? null}
+        employeeName={scoreOf?.name ?? ""}
+        from={date}
+        to={date}
+        canAdjust={isSupervisor}
+        onOpenChange={(o) => !o && setScoreOf(null)}
+      />
+      <Sheet open={!!scoreOf && scoreOf.employeeId == null} onOpenChange={(o) => !o && setScoreOf(null)}>
+        <SheetContent side="right" className="w-full sm:max-w-xl overflow-y-auto">
+          <SheetHeader>
+            <SheetTitle>{scoreOf?.name}</SheetTitle>
+            <SheetDescription>{fmtDay(date)} · sem ficha de colaborador: só as ações do agente "{scoreOf?.person?.resolvedAgentName}"</SheetDescription>
+          </SheetHeader>
+          {scoreOf?.person && (
+            <div className="px-4 pb-6 space-y-4">
+              <RuleLinesTable lines={scoreOf.person.lines} total={scoreOf.person.totalPoints} />
+              <PerHourStrip perHour={{ hours: scoreOf.person.hoursWorked || scoreOf.person.hoursPaid, actionsPerHour: scoreOf.person.actionsPerHour, weightedPerHour: scoreOf.person.weightedPerHour, pointsPerHour: null }} />
+              <p className="text-xs text-muted-foreground">Liga esta pessoa a uma ficha (RH) para contar o ponto, atrasos, reclamações e ocorrências.</p>
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
@@ -183,10 +244,12 @@ function ShiftSection({
   shiftEval,
   date,
   assignments,
+  onScore,
 }: {
   shiftEval: any;
   date: string;
   assignments: any[];
+  onScore: (t: ScoreTarget) => void;
 }) {
   const shiftLabel = shiftEval.shift === "morning" ? "Manhã (03–15)" : "Noite (15–03)";
 
@@ -198,7 +261,7 @@ function ShiftSection({
             <div>
               <h2 className="font-semibold text-sm">{shiftLabel}</h2>
               <div className="text-xs text-muted-foreground">
-                {shiftEval.drivers} pessoas · {shiftEval.totalActions} acções · {fmtEur(shiftEval.totalCost)}
+                {shiftEval.drivers} pessoas · {shiftEval.totalActions} acções · {fmtNum(shiftEval.weightedActions)} pts ações · {fmtEur(shiftEval.totalCost)}
                 {shiftEval.totalActions > 0 && (
                   <span> · {fmtEur(shiftEval.costPerAction)}/acção</span>
                 )}
@@ -222,6 +285,7 @@ function ShiftSection({
             assignment={tlAssignment}
             date={date}
             metrics={shiftEval.tl}
+            onScore={onScore}
           />
         ) : null;
       })()}
@@ -230,7 +294,7 @@ function ShiftSection({
       {shiftEval.members.map((m: any) => {
         const a = assignments.find(x => x.id === m.assignmentId);
         return a ? (
-          <AgentCard key={m.assignmentId} assignment={a} date={date} metrics={m} />
+          <AgentCard key={m.assignmentId} assignment={a} date={date} metrics={m} onScore={onScore} />
         ) : null;
       })}
     </div>
@@ -283,7 +347,7 @@ function BulkActions({ date, agents }: { date: string; agents: string[] }) {
   );
 }
 
-function AgentCard({ assignment, date, metrics }: { assignment: any; date: string; metrics?: any }) {
+function AgentCard({ assignment, date, metrics, onScore }: { assignment: any; date: string; metrics?: any; onScore: (t: ScoreTarget) => void }) {
   const { projectId } = useGlobalFilters();
   const utils = trpc.useUtils();
   const [expanded, setExpanded] = useState(false);
@@ -368,6 +432,8 @@ function AgentCard({ assignment, date, metrics }: { assignment: any; date: strin
               <p className="text-xs text-muted-foreground">
                 {fmtHour(assignment.startHour)}–{fmtHour(assignment.sentHomeHour ?? assignment.endHour)}
                 {" · "}{assignment.hoursBilled}h pagas
+                {metrics && metrics.hoursSource === "ponto" && <>{" · "}{fmtNum(metrics.hoursWorked)}h ponto</>}
+                {metrics && metrics.suspiciousHours > 0 && <span className="text-red-700">{" · "}{fmtNum(metrics.suspiciousHours)}h [SUSPEITO] fora</span>}
                 {" · "}€{assignment.cost.toFixed(2)}
               </p>
               <div className="mt-1 flex flex-wrap items-center gap-1 text-xs">
@@ -425,13 +491,25 @@ function AgentCard({ assignment, date, metrics }: { assignment: any; date: strin
             {metrics && (
               <div className="text-right">
                 <div className="text-xl font-bold leading-none">{metrics.totalActions}</div>
-                <div className="text-[10px] text-muted-foreground">acções</div>
+                <div className="text-[10px] text-muted-foreground">acções · {fmtNum(metrics.weightedActions)} pts</div>
                 {metrics.totalActions > 0 && (
                   <div className="text-[10px] text-muted-foreground mt-0.5">
                     {fmtEur(metrics.costPerAction)}/acção
+                    {metrics.actionsPerHour != null && <> · {fmtNum(metrics.actionsPerHour, 2)}/h</>}
                   </div>
                 )}
               </div>
+            )}
+            {metrics && (
+              <button
+                type="button"
+                title="Ver de onde vem a pontuação"
+                className={`rounded-md border px-2 py-1 text-right hover:bg-muted/50 ${ptsClass(metrics.totalPoints)}`}
+                onClick={() => onScore({ employeeId: metrics.employeeId ?? null, name: assignment.personName, person: metrics })}
+              >
+                <div className="text-lg font-bold leading-none tabular-nums">{fmtPts(metrics.totalPoints)}</div>
+                <div className="text-[10px] text-muted-foreground">pontos{metrics.hasAdjustments ? " · ajust." : ""}</div>
+              </button>
             )}
             <Button size="sm" variant="outline" onClick={handleFetch} disabled={fetchMut.isPending}>
               {fetchMut.isPending ? (

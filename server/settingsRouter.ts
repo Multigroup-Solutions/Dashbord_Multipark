@@ -110,10 +110,13 @@ export const settingsRouter = router({
         const { listSettingsAudit } = await import("./appSettings");
         return listSettingsAudit(input?.limit ?? 50);
       }),
-    /** Valores em uso no código (para comparar com o IVA/TSU guardados). */
+    /** IVA/TSU em vigor HOJE nos cálculos (Definições; sem nada gravado = constantes do código). */
     codeConstants: adminOnly.query(async () => {
+      const { financeRatesAt, lisbonTodayIso } = await import("./finance/rates");
       const { FINANCE_PARAMS } = await import("./finance/rules");
-      return { vatRate: FINANCE_PARAMS.vatRate, tsuEmployerRate: FINANCE_PARAMS.tsuEmployerRate };
+      const today = lisbonTodayIso();
+      const r = await financeRatesAt(today);
+      return { today, vatRate: r.vatRate, tsuEmployerRate: r.tsuEmployerRate, fallback: { vatRate: FINANCE_PARAMS.vatRate, tsuEmployerRate: FINANCE_PARAMS.tsuEmployerRate } };
     }),
   }),
 

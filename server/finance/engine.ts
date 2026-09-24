@@ -34,6 +34,7 @@ import { getDb, resolveProjectIds, toMysqlDateTime, getPayrollData } from "../db
 import { matchCityKey } from "../../shared/city";
 import { parsePartnerConfig } from "../../shared/partnerTypes";
 import * as R from "./rules";
+import { resolveFinanceRates, rateCaseSql, type FinanceRates, type RatePeriod } from "./rates";
 
 export interface FinanceFilters {
   from: string;                 // YYYY-MM-DD
@@ -44,6 +45,8 @@ export interface FinanceFilters {
   today?: string;
   /** devolver salários POR PESSOA (só para detalhe autorizado) */
   includePersonDetails?: boolean;
+  /** taxas IVA/TSU — injetável para testes; omissão = Definições (cache 60 s) */
+  rates?: FinanceRates;
 }
 
 export interface FinancePoint {
@@ -66,7 +69,9 @@ export interface FinanceResult {
   range: { from: string; to: string };
   asOf: string;
   granularity: R.Granularity;
-  params: { vatRate: number; tsuEmployerRate: number; extrasDiaRates: Record<string, number> };
+  /** vatRate/tsuEmployerRate = taxa em vigor no FIM do período; os
+   *  sub-períodos dizem que taxa se aplicou a cada parte (mudança a meio). */
+  params: { vatRate: number; tsuEmployerRate: number; vatPeriods: RatePeriod[]; tsuPeriods: RatePeriod[]; extrasDiaRates: Record<string, number> };
   scope: { projectId: number | null; projectIds: number[] | null; cities: string[] | null };
   revenue: {
     produced: number; producedNet: number; producedCount: number;
@@ -135,7 +140,12 @@ export function emptyFinanceResult(filters: FinanceFilters): FinanceResult {
   const zeroMargin = R.computeMargin({ revenueGross: 0, expensesGross: 0, salariesBase: 0, salariesProvisions: 0, salariesVariable: 0, employerTax: 0, extrasDia: 0, salesCommissions: 0, operationalCommissions: 0 });
   return {
     range: { from: filters.from, to: filters.to }, asOf: filters.today ?? "", granularity: filters.granularity ?? "day",
-    params: { vatRate: R.FINANCE_PARAMS.vatRate, tsuEmployerRate: R.FINANCE_PARAMS.tsuEmployerRate, extrasDiaRates: { ...DEFAULT_EXTRA_RATES } },
+    params: {
+      vatRate: R.FINANCE_PARAMS.vatRate, tsuEmployerRate: R.FINANCE_PARAMS.tsuEmployerRate,
+      vatPeriods: [{ from: filters.from, to: filters.to, rate: R.FINANCE_PARAMS.vatRate }],
+      tsuPeriods: [{ from: filters.from, to: filters.to, rate: R.FINANCE_PARAMS.tsuEmployerRate }],
+      extrasDiaRates: { ...DEFAULT_EXTRA_RATES },
+    },
     scope: { projectId: filters.projectId ?? null, projectIds: null, cities: null },
     revenue: { produced: 0, producedNet: 0, producedCount: 0, collected: 0, collectedNet: 0, collectedCount: 0, extrasRevenue: 0 },
     costs: { expenses: 0, expensesNet: 0, expensesPending: 0, salariesBase: 0, salariesProvisions: 0, salariesVariable: 0, salaries: 0, employerTax: 0, extrasDia: 0, extrasPlanned: 0, extrasReal: 0, salesCommissions: 0, operationalCommissions: 0, totalNet: 0, totalGross: 0 },
@@ -166,6 +176,13 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   const months = R.monthsOverlapping(from, to);
   out.details.months = months;
   out.quality.isCurrentPeriod = to >= today && from <= today;
+
+  // ─── Taxas IVA / TSU (Definições, com data de efeito) ─────────────────────
+  // Cada dia usa a taxa em vigor NESSE dia (receita, despesas sem taxa de
+  // categoria, TSU); sem nada gravado = FINANCE_PARAMS (comportamento antigo).
+  const fr = await resolveFinanceRates(from, to, filters.rates);
+  const rates = fr.rates;
+  out.params = { ...out.params, vatRate: fr.vatAtEnd, tsuEmployerRate: fr.tsuAtEnd, vatPeriods: fr.vatPeriods, tsuPeriods: fr.tsuPeriods };
 
   // ─── Árvore de projetos (uma leitura; serve filtro, rateio e cidades) ─────
   const allProjects = await db.select({ id: projects.id, name: projects.name, parentId: projects.parentId, level: projects.level }).from(projects);
@@ -250,8 +267,9 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   const expDayExpr = sql<string>`DATE(${expenses.expenseDate})`;
   const expenseRows = await db
     .select({ day: expDayExpr, projectId: expenses.projectId, projectName: projects.name, categoryName: expenseCategories.name, count: sql<number>`COUNT(*)`, totalAmount: sql<number>`COALESCE(SUM(${expenses.amount}), 0)`,
-      // Sem IVA com a taxa da categoria (rendas/seguros/bancos… a 0%); NULL = 23%
-      totalNet: sql<number>`COALESCE(SUM(${expenses.amount} / (1 + COALESCE(${expenseCategories.vatRate}, ${R.FINANCE_PARAMS.vatRate * 100}) / 100)), 0)` })
+      // Sem IVA com a taxa da categoria (rendas/seguros/bancos… a 0%); NULL =
+      // taxa normal em vigor no dia da despesa (Definições; parâmetros ligados).
+      totalNet: sql<number>`COALESCE(SUM(${expenses.amount} / (1 + COALESCE(${expenseCategories.vatRate} / 100, ${rateCaseSql(expDayExpr, fr.vatPeriods, R.FINANCE_PARAMS.vatRate)}))), 0)` })
     .from(expenses)
     .leftJoin(projects, eq(expenses.projectId, projects.id))
     .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
@@ -474,11 +492,12 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
     empShare.set(e.id, { share: effShare, targets: matching });
     const base = sal.base * effShare, prov = sal.provisions * effShare;
     salariesBase += base; salariesProvisions += prov;
-    const tax = R.employerTaxFor(base);
-    employerTax += tax;
+    // TSU dia a dia com a taxa em vigor em cada dia (mudança a meio do período)
     for (const d of sal.perDay) {
       addTo(salariesByDay, d.day, (d.base + d.provisions) * effShare);
-      addTo(employerTaxByDay, d.day, R.employerTaxFor(d.base * effShare));
+      const dayTax = R.employerTaxFor(d.base * effShare, rates.tsuOn(d.day));
+      employerTax += dayTax;
+      addTo(employerTaxByDay, d.day, dayTax);
     }
     if (matching.length === 0) salariesUnallocated += base + prov;
     else for (const t of matching) addTo(salaryByProject as any, t as any, (base + prov) / matching.length);
@@ -515,10 +534,14 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
     if (monthVariable) {
       payrollMonths.push(`${mo.year}-${String(mo.month).padStart(2, "0")}`);
       salariesVariable += monthVariable;
-      const tax = R.employerTaxFor(monthTaxable);
-      employerTax += tax;
-      const perDayV = monthVariable / mo.days, perDayT = tax / mo.days;
-      for (let d = mo.from; d <= mo.to; d = R.addDays(d, 1)) { addTo(salariesByDay, d, perDayV); addTo(employerTaxByDay, d, perDayT); }
+      // Variável mensal repartido pelos dias do mês; a TSU de cada dia usa a
+      // taxa em vigor nesse dia (mudança de TSU a meio do mês fica correta).
+      const perDayV = monthVariable / mo.days, perDayTaxable = monthTaxable / mo.days;
+      for (let d = mo.from; d <= mo.to; d = R.addDays(d, 1)) {
+        const dayTax = R.employerTaxFor(perDayTaxable, rates.tsuOn(d));
+        employerTax += dayTax;
+        addTo(salariesByDay, d, perDayV); addTo(employerTaxByDay, d, dayTax);
+      }
     }
   }
   out.quality.payrollVariableMonths = payrollMonths;
@@ -535,17 +558,20 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
 
   // ─── Totais (somas dos mapas diários) ─────────────────────────────────────
   const sum = (m: Map<string, number>) => { let s = 0; for (const v of m.values()) s += v; return s; };
+  // Receita sem IVA dia a dia (IVA em vigor em cada dia)
+  const netByDay = (m: Map<string, number>) => { const o = new Map<string, number>(); for (const [d, v] of m) addTo(o, d, R.netOfVat(v, rates.vatOn(d))); return o; };
+  const producedNetByDay = netByDay(producedByDay), collectedNetByDay = netByDay(collectedByDay);
   const produced = sum(producedByDay), collected = sum(collectedByDay), expensesGross = sum(expensesByDay);
   const extrasDia = sum(extrasByDay);
   const extrasPlanned = sum(extrasPlannedByDay);
   const extrasReal = sum(extrasRealByDay);
   const salesCommissionsTotal = salesCommissions.reduce((s, r) => s + r.commission, 0);
   const operationalTotal = operationalPartners.reduce((s, r) => s + r.commission, 0);
-  const margin = R.computeMargin({ revenueGross: produced, expensesGross, expensesNet: sum(expensesNetByDay), salariesBase, salariesProvisions, salariesVariable, employerTax, extrasDia, salesCommissions: salesCommissionsTotal, operationalCommissions: operationalTotal });
+  const margin = R.computeMargin({ revenueGross: produced, revenueNet: sum(producedNetByDay), vatRate: fr.vatAtEnd, expensesGross, expensesNet: sum(expensesNetByDay), salariesBase, salariesProvisions, salariesVariable, employerTax, extrasDia, salesCommissions: salesCommissionsTotal, operationalCommissions: operationalTotal });
 
   out.revenue = {
     produced, producedNet: margin.revenueNet, producedCount: sum(producedCountByDay),
-    collected, collectedNet: R.netOfVat(collected), collectedCount: sum(collectedCountByDay), extrasRevenue,
+    collected, collectedNet: sum(collectedNetByDay), collectedCount: sum(collectedCountByDay), extrasRevenue,
   };
   out.costs = {
     expenses: expensesGross, expensesNet: margin.expensesNet, expensesPending,
@@ -565,14 +591,13 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
     return p;
   };
   const fold = (m: Map<string, number>, key: keyof FinancePoint) => { for (const [day, v] of m) { if (day >= from && day <= to || key === "revenueForecast") (point(day)[key] as number) += v; } };
-  fold(producedByDay, "produced"); fold(producedCountByDay, "producedCount");
+  fold(producedByDay, "produced"); fold(producedNetByDay, "producedNet"); fold(producedCountByDay, "producedCount");
   fold(collectedByDay, "collected"); fold(collectedCountByDay, "collectedCount");
   fold(expensesByDay, "expenses"); fold(expensesNetByDay, "expensesNet"); fold(salariesByDay, "salaries"); fold(employerTaxByDay, "employerTax");
   fold(salesByDay, "salesCommissions"); fold(opByDay, "operationalCommissions");
   fold(extrasByDay, "extrasCost"); fold(forecastByDay, "revenueForecast");
   for (const p of buckets.values()) {
     p.partners = p.salesCommissions + p.operationalCommissions;
-    p.producedNet = R.netOfVat(p.produced);
     p.totalCost = p.expensesNet + p.salaries + p.employerTax + p.partners + p.extrasCost;
     p.margin = p.producedNet - p.totalCost;
   }
@@ -607,7 +632,8 @@ export function monthlyRowsFromTimeseries(result: FinanceResult) {
     const key = `${mo.year}-${String(mo.month).padStart(2, "0")}`;
     const p = byMonth.get(key);
     const produced = p?.produced ?? 0, expensesGross = p?.expenses ?? 0;
-    const revenueNet = R.netOfVat(produced), expensesNet = p?.expensesNet ?? R.netOfVat(expensesGross);
+    // Sem IVA já vêm dia a dia do motor (taxa em vigor em cada dia)
+    const revenueNet = p?.producedNet ?? 0, expensesNet = p?.expensesNet ?? 0;
     const salaries = p?.salaries ?? 0, employerTax = p?.employerTax ?? 0, partners = p?.partners ?? 0, extras = p?.extrasCost ?? 0;
     const totalCosts = expensesNet + salaries + employerTax + partners + extras;
     return {

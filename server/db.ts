@@ -158,6 +158,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0096").then(m => ({ s: m.MIGRATION_0096_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0096 })),
       import("./migrations/migration_0097").then(m => ({ s: m.MIGRATION_0097_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0097 })),
       import("./migrations/migration_0098").then(m => ({ s: m.MIGRATION_0098_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0098 })),
+      import("./migrations/migration_0099").then(m => ({ s: m.MIGRATION_0099_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0099 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -2804,6 +2805,9 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
       eq(timeRecords.type, "check_out"),
       gte(timeRecords.recordedAt, startStr),
       lte(timeRecords.recordedAt, endStr),
+      // ponto [SUSPEITO] / por rever não conta horas (como no ordenado)
+      inArray(timeRecords.reviewStatus, ["ok", "approved"]),
+      sql`(${timeRecords.reviewStatus} = 'approved' OR COALESCE(${timeRecords.notes}, '') NOT LIKE '%[SUSPEITO]%')`,
     ))
     .groupBy(timeRecords.employeeId);
   const hoursMap = new Map(hoursRows.map(r => [r.employeeId, Number(r.hours)]));
