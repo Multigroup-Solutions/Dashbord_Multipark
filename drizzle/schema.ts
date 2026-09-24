@@ -1278,6 +1278,9 @@ export const pdas = mysqlTable("pdas", {
 	// é o PDA X") — o check-in do ponto envia-o e liga a pessoa ao PDA/Zello
 	// automaticamente, sem passos manuais.
 	deviceToken: varchar({ length: 64 }),
+	// Código secreto do QR colado no PDA (migração 0079) — ler o QR no próprio
+	// aparelho regista-o como este PDA.
+	qrCode: varchar({ length: 40 }),
 	status: mysqlEnum(['active','inactive','maintenance','lost']).default('active').notNull(),
 	photoUrl: text(),
 	simDataPlan: varchar({ length: 255 }),

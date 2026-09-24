@@ -138,6 +138,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0076").then(m => ({ s: m.MIGRATION_0076_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0076 })),
       import("./migrations/migration_0077").then(m => ({ s: m.MIGRATION_0077_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0077 })),
       import("./migrations/migration_0078").then(m => ({ s: m.MIGRATION_0078_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0078 })),
+      import("./migrations/migration_0079").then(m => ({ s: m.MIGRATION_0079_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0079 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -6759,7 +6760,7 @@ export async function attachZelloToEmployeeIfUnset(employeeId: number, zelloUser
  * check-in aberto, a app fecha-o e troca — "a própria aplicação mudava quem é
  * que estava".
  */
-export async function attachPdaByDeviceToken(deviceToken: string, employeeId: number): Promise<{ pdaId: number; pdaName: string; zelloUsername: string | null; replacedName: string | null } | null> {
+export async function attachPdaByDeviceToken(deviceToken: string, employeeId: number): Promise<{ pdaId: number; pdaName: string; zelloUsername: string | null; replacedName: string | null; changed: boolean } | null> {
   const db = await getDb(); if (!db) return null;
   const [pdaRows] = await db.execute(sql`SELECT id, name, zelloUsername FROM pdas WHERE deviceToken = ${deviceToken} AND status = 'active' LIMIT 1`) as any;
   const pda = (pdaRows as any[])?.[0];
@@ -6787,7 +6788,39 @@ export async function attachPdaByDeviceToken(deviceToken: string, employeeId: nu
       checkinAt: now,
     } as any);
   }
-  return { pdaId: Number(pda.id), pdaName: String(pda.name), zelloUsername: pda.zelloUsername ? String(pda.zelloUsername) : null, replacedName };
+  return { pdaId: Number(pda.id), pdaName: String(pda.name), zelloUsername: pda.zelloUsername ? String(pda.zelloUsername) : null, replacedName, changed: !alreadyMine };
+}
+
+/** Logout num PDA registado: solta-o (fecha o check-in desta pessoa NESTE PDA). */
+export async function releasePdaByDeviceToken(deviceToken: string, employeeId: number): Promise<number> {
+  const db = await getDb(); if (!db) return 0;
+  const [res] = await db.execute(sql`
+    UPDATE pda_checkins c JOIN pdas p ON p.id = c.pdaId
+       SET c.checkoutAt = ${toMysqlDateTime(new Date())}, c.checkinStatus = 'checked_out',
+           c.notes = CONCAT(COALESCE(c.notes,''), ' · fechado no logout')
+     WHERE p.deviceToken = ${deviceToken} AND c.employeeId = ${employeeId} AND c.checkinStatus = 'checked_in'`) as any;
+  return Number((res as any)?.affectedRows ?? 0);
+}
+
+/** Código do QR de um PDA (criado na primeira vez). */
+export async function ensurePdaQrCode(pdaId: number): Promise<string | null> {
+  const db = await getDb(); if (!db) return null;
+  const [rows] = await db.execute(sql`SELECT qrCode FROM pdas WHERE id = ${pdaId} LIMIT 1`) as any;
+  const r = (rows as any[])?.[0];
+  if (!r) return null;
+  if (r.qrCode) return String(r.qrCode);
+  const code = crypto.randomUUID().replace(/-/g, "");
+  await db.execute(sql`UPDATE pdas SET qrCode = ${code} WHERE id = ${pdaId} AND qrCode IS NULL`);
+  const [again] = await db.execute(sql`SELECT qrCode FROM pdas WHERE id = ${pdaId} LIMIT 1`) as any;
+  return (again as any[])?.[0]?.qrCode ? String((again as any[])[0].qrCode) : code;
+}
+
+/** O código lido no QR é o deste PDA (e está ativo)? */
+export async function verifyPdaQrCode(pdaId: number, code: string): Promise<{ name: string } | null> {
+  const db = await getDb(); if (!db) return null;
+  const [rows] = await db.execute(sql`SELECT name FROM pdas WHERE id = ${pdaId} AND qrCode = ${code} AND status = 'active' LIMIT 1`) as any;
+  const r = (rows as any[])?.[0];
+  return r ? { name: String(r.name) } : null;
 }
 
 /** Fecha os check-ins de PDA abertos de um funcionário (no check-out do ponto). */

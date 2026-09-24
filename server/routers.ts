@@ -4487,6 +4487,48 @@ export const appRouter = router({
         await logActivity({ userId: ctx.user.id, action: "register_device", entity: "pda", entityId: input.pdaId, details: "Browser registado como este PDA" });
         return { token };
       }),
+      // ── Fase 2: QR code, ligação no login e libertação no logout ─────────
+      // Link do QR a imprimir e colar no PDA.
+      qrLink: protectedProcedure.input(z.object({ pdaId: z.number() })).query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { ensurePdaQrCode } = await import("./db");
+        const code = await ensurePdaQrCode(input.pdaId);
+        if (!code) throw new TRPCError({ code: "NOT_FOUND", message: "PDA não encontrado" });
+        return { path: `/pda/registar?pda=${input.pdaId}&c=${code}` };
+      }),
+      // Ler o QR no próprio aparelho regista-o como este PDA (substitui a
+      // escolha na lista). Só chefias — é uma vez por aparelho.
+      registerByQr: protectedProcedure.input(z.object({ pdaId: z.number(), code: z.string().min(8).max(64) })).mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "team_leader");
+        const { verifyPdaQrCode, setPdaDeviceToken } = await import("./db");
+        const pda = await verifyPdaQrCode(input.pdaId, input.code);
+        if (!pda) throw new TRPCError({ code: "BAD_REQUEST", message: "QR inválido ou PDA inativo." });
+        const token = await setPdaDeviceToken(input.pdaId);
+        if (!token) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
+        await logActivity({ userId: ctx.user.id, action: "register_device", entity: "pda", entityId: input.pdaId, details: `Aparelho registado por QR como ${pda.name}` });
+        return { token, name: pda.name };
+      }),
+      // Login num PDA registado → o PDA (e o Zello) fica com esta pessoa até
+      // sair ou entrar outra (PDAs partilhados entre turnos).
+      claimOnLogin: protectedProcedure.input(z.object({ token: z.string().min(8) })).mutation(async ({ ctx, input }) => {
+        const me = await getEmployeeByUserId(ctx.user.id);
+        if (!me) return { attached: false as const, reason: "sem ficha" };
+        const { attachPdaByDeviceToken } = await import("./db");
+        const att = await attachPdaByDeviceToken(input.token, me.employee.id);
+        if (!att) return { attached: false as const, reason: "aparelho não registado" };
+        if (att.changed) {
+          await logActivity({ userId: ctx.user.id, action: "create", entity: "pda_checkin", entityId: att.pdaId, details: `Auto: login→PDA ${att.pdaName}${att.replacedName ? ` (substituiu ${att.replacedName})` : ""}` });
+        }
+        return { attached: true as const, changed: att.changed, pdaName: att.pdaName, zelloUsername: att.zelloUsername, replacedName: att.replacedName };
+      }),
+      releaseOnLogout: protectedProcedure.input(z.object({ token: z.string().min(8) })).mutation(async ({ ctx, input }) => {
+        const me = await getEmployeeByUserId(ctx.user.id);
+        if (!me) return { released: 0 };
+        const { releasePdaByDeviceToken } = await import("./db");
+        const released = await releasePdaByDeviceToken(input.token, me.employee.id);
+        if (released) await logActivity({ userId: ctx.user.id, action: "update", entity: "pda_checkin", details: "Auto: logout soltou o PDA" });
+        return { released };
+      }),
       // Info do aparelho atual (cartão "Este aparelho" na aba PDAs) — qualquer
       // role autenticada pode consultar: os condutores precisam de ver em que
       // PDA estão a picar o ponto.
