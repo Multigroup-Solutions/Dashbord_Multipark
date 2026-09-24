@@ -7935,7 +7935,8 @@ export async function getClientHistory(q: ClientHistoryQuery) {
   };
   if (!db) return empty;
 
-  const email = q.email?.trim() || null;
+  // Email é a identidade: comparar sempre pela forma canónica (shared/email.ts).
+  const email = q.email?.trim().toLowerCase() || null;
   const phone = q.phone?.trim() || null;
   const plate = q.plate?.trim() || null;
   const name = q.name?.trim() || null;
@@ -7945,25 +7946,25 @@ export async function getClientHistory(q: ClientHistoryQuery) {
 
   // Reservas (multipark_bookings)
   const bookingConds: any[] = [];
-  if (email) bookingConds.push(eq(multiparkBookings.clientEmail, email));
+  if (email) bookingConds.push(sql`LOWER(TRIM(${multiparkBookings.clientEmail})) = ${email}`);
   if (phone) bookingConds.push(eq(multiparkBookings.clientPhone, phone));
   if (plate) bookingConds.push(eq(multiparkBookings.licensePlate, plate));
   if (namePat) bookingConds.push(sql`CONCAT_WS(' ', ${multiparkBookings.clientFirstName}, ${multiparkBookings.clientLastName}) LIKE ${namePat}`);
 
   const complaintConds: any[] = [];
-  if (email) complaintConds.push(eq(complaints.clientEmail, email));
+  if (email) complaintConds.push(sql`LOWER(TRIM(${complaints.clientEmail})) = ${email}`);
   if (phone) complaintConds.push(eq(complaints.clientPhone, phone));
   if (plate) complaintConds.push(eq(complaints.vehiclePlate, plate));
   if (namePat) complaintConds.push(like(complaints.clientName, namePat));
 
   const lfConds: any[] = [];
-  if (email) lfConds.push(eq(lostFoundItems.clientEmail, email));
+  if (email) lfConds.push(sql`LOWER(TRIM(${lostFoundItems.clientEmail})) = ${email}`);
   if (phone) lfConds.push(eq(lostFoundItems.clientPhone, phone));
   if (plate) lfConds.push(eq(lostFoundItems.vehiclePlate, plate));
   if (namePat) lfConds.push(like(lostFoundItems.clientName, namePat));
 
   const reviewConds: any[] = [];
-  if (email) reviewConds.push(eq(googleReviews.reviewerEmail, email));
+  if (email) reviewConds.push(sql`LOWER(TRIM(${googleReviews.reviewerEmail})) = ${email}`);
   if (plate) reviewConds.push(eq(googleReviews.vehiclePlate, plate));
   if (namePat) reviewConds.push(like(googleReviews.reviewerName, namePat));
 
@@ -7976,7 +7977,7 @@ export async function getClientHistory(q: ClientHistoryQuery) {
           checkIn: multiparkBookings.checkIn, checkOut: multiparkBookings.checkOut,
           licensePlate: multiparkBookings.licensePlate, totalPrice: multiparkBookings.totalPrice,
           clientFirstName: multiparkBookings.clientFirstName, clientLastName: multiparkBookings.clientLastName,
-        }).from(multiparkBookings).where(or(...bookingConds)).orderBy(desc(multiparkBookings.checkIn)).limit(30)
+        }).from(multiparkBookings).where(and(or(...bookingConds), projectScope(multiparkBookings.projectId))).orderBy(desc(multiparkBookings.checkIn)).limit(30)
       : Promise.resolve([]),
     // Agregados sobre TODAS as reservas do cliente (a lista acima é limitada
     // a 30): quantas, desde quando, total gasto, média — o retrato para quem
@@ -7988,19 +7989,19 @@ export async function getClientHistory(q: ClientHistoryQuery) {
           lastCheckIn: sql<string | null>`MAX(${multiparkBookings.checkIn})`,
           totalSpent: sql<string | null>`SUM(${multiparkBookings.totalPrice})`,
           cancelled: sql<number>`SUM(UPPER(COALESCE(${multiparkBookings.status}, '')) LIKE '%CANCEL%')`,
-        }).from(multiparkBookings).where(or(...bookingConds))
+        }).from(multiparkBookings).where(and(or(...bookingConds), projectScope(multiparkBookings.projectId)))
       : Promise.resolve([] as any[]),
     complaintConds.length
       ? db.select({
           id: complaints.id, title: complaints.title, status: complaints.complaintStatus,
           vehiclePlate: complaints.vehiclePlate, createdAt: complaints.createdAt,
-        }).from(complaints).where(or(...complaintConds)).orderBy(desc(complaints.createdAt)).limit(30)
+        }).from(complaints).where(and(or(...complaintConds), projectScope(complaints.projectId))).orderBy(desc(complaints.createdAt)).limit(30)
       : Promise.resolve([]),
     lfConds.length
       ? db.select({
           id: lostFoundItems.id, itemType: lostFoundItems.itemType, description: lostFoundItems.description,
           status: lostFoundItems.status, vehiclePlate: lostFoundItems.vehiclePlate, createdAt: lostFoundItems.createdAt,
-        }).from(lostFoundItems).where(or(...lfConds)).orderBy(desc(lostFoundItems.createdAt)).limit(30)
+        }).from(lostFoundItems).where(and(or(...lfConds), projectScope(lostFoundItems.projectId))).orderBy(desc(lostFoundItems.createdAt)).limit(30)
       : Promise.resolve([]),
     reviewConds.length
       ? db.select({

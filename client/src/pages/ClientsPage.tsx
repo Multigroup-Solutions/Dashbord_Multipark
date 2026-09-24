@@ -4,13 +4,14 @@
  * Email = cliente. Tudo o que aqui aparece é o agregado das reservas Multipark
  * já sincronizadas (server/clientsCrm.ts): quantas reservas, quanto gastou,
  * com que frequência vem, cidades/parques, e o que se passou com ele
- * (reclamações, perdidos, críticas — do histórico já existente).
+ * (reclamações, perdidos, críticas — ligados pelo email ou por uma reserva
+ * dele). Matrículas que também aparecem noutro email ficam assinaladas.
  *
  * Lista com pesquisa, segmento e ordenação; clicar abre a ficha.
  * Gasto e média só para quem vê totais financeiros (backoffice+ sem deny).
  */
 import { useEffect, useMemo, useState } from "react";
-import { useLocation, useSearch } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { fmtPTDate } from "@/lib/lisbonTime";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
@@ -23,11 +24,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   Contact, Search, ChevronLeft, ChevronRight, Mail, Phone, Car, CalendarDays, Euro, Repeat, MapPin,
-  MessageSquareWarning, PackageSearch, Star, Loader2, Users, Crown, AlertTriangle, Sparkles, CalendarClock, Handshake,
+  MessageSquareWarning, PackageSearch, Star, Loader2, Users, Crown, AlertTriangle, Sparkles, CalendarClock, Handshake, MailX,
 } from "lucide-react";
 
 type Segment = "all" | "new" | "recurring" | "vip" | "at_risk" | "partner" | "shared";
-type Sort = "lastCheckIn" | "totalSpent" | "bookings" | "firstCheckIn" | "name";
+type Sort = "lastCheckIn" | "totalSpent" | "bookings" | "firstCheckIn";
+const SORTS: Sort[] = ["lastCheckIn", "totalSpent", "bookings", "firstCheckIn"];
 
 const SEGMENT_LABEL: Record<Exclude<Segment, "all">, string> = {
   new: "Novo", recurring: "Recorrente", vip: "VIP", at_risk: "Em risco", partner: "Parceiro", shared: "Email genérico",
@@ -100,21 +102,24 @@ function ClientsList({ onOpen }: { onOpen: (email: string) => void }) {
   const { projectId } = useGlobalFilters();
   const [search, setSearch] = usePersistedState("clients.search", "");
   const [segment, setSegment] = usePersistedState<Segment>("clients.segment", "all");
-  const [sort, setSort] = usePersistedState<Sort>("clients.sort", "lastCheckIn");
+  const [storedSort, setSort] = usePersistedState<Sort>("clients.sort", "lastCheckIn");
   const [page, setPage] = useState(1);
   const [debounced, setDebounced] = useState(search);
   useEffect(() => { const t = setTimeout(() => setDebounced(search), 300); return () => clearTimeout(t); }, [search]);
-  useEffect(() => { setPage(1); }, [debounced, segment, sort, projectId]);
+  useEffect(() => { setPage(1); }, [debounced, segment, storedSort, projectId]);
 
   const { data: stats } = trpc.clients.stats.useQuery({ projectId });
+  const canSeeTotals = stats?.canSeeTotals ?? false;
+  // Sem totais financeiros não se ordena por gasto nem se filtra VIP (o servidor recusa).
+  const sort: Sort = SORTS.includes(storedSort) && (canSeeTotals || storedSort !== "totalSpent") ? storedSort : "lastCheckIn";
+  const activeSegment: Segment = !canSeeTotals && segment === "vip" ? "all" : segment;
   const { data, isLoading, isFetching } = trpc.clients.list.useQuery({
-    search: debounced || null, segment, sort, dir: sort === "name" ? "asc" : "desc", page, pageSize: 50, projectId,
-  }, { placeholderData: (prev) => prev });
+    search: debounced || null, segment: activeSegment, sort, dir: "desc", page, pageSize: 50, projectId,
+  }, { enabled: !!stats, placeholderData: (prev) => prev });
 
   const rows = data?.rows ?? [];
   const total = data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / (data?.pageSize ?? 50)));
-  const canSeeTotals = data?.canSeeTotals ?? false;
   const toggleSegment = (s: Segment) => setSegment(segment === s ? "all" : s);
 
   return (
@@ -131,29 +136,30 @@ function ClientsList({ onOpen }: { onOpen: (email: string) => void }) {
       </div>
 
       {stats && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
           <StatTile icon={Users} label="Clientes" value={stats.clients.toLocaleString("pt-PT")} hint="com email nas reservas" onClick={() => setSegment("all")} active={segment === "all"} />
           <StatTile icon={Handshake} label="Parceiros" value={stats.partners.toLocaleString("pt-PT")} hint="agências e Pro" onClick={() => toggleSegment("partner")} active={segment === "partner"} />
           <StatTile icon={Sparkles} label="Novos (30 dias)" value={stats.newLast30d.toLocaleString("pt-PT")} hint="primeira estadia recente" />
           <StatTile icon={Repeat} label="Recorrentes" value={stats.recurring.toLocaleString("pt-PT")} hint="3 ou mais estadias" onClick={() => toggleSegment("recurring")} active={segment === "recurring"} />
-          <StatTile icon={Crown} label="VIP" value={stats.vip.toLocaleString("pt-PT")} hint={stats.vipThreshold != null ? `top 10% · desde ${eur(stats.vipThreshold)}` : "top 10% em gasto"} onClick={() => toggleSegment("vip")} active={segment === "vip"} />
+          {stats.vip != null && <StatTile icon={Crown} label="VIP" value={stats.vip.toLocaleString("pt-PT")} hint={stats.vipThreshold != null ? `top 10% · desde ${eur(stats.vipThreshold)}` : "top 10% em gasto"} onClick={() => toggleSegment("vip")} active={segment === "vip"} />}
           <StatTile icon={AlertTriangle} label="Em risco" value={stats.atRisk.toLocaleString("pt-PT")} hint="recorrentes sem vir há 12 meses" onClick={() => toggleSegment("at_risk")} active={segment === "at_risk"} />
           <StatTile icon={CalendarClock} label="Com reserva futura" value={stats.upcoming.toLocaleString("pt-PT")} hint="vão voltar" />
+          <StatTile icon={MailX} label="Reservas sem email" value={stats.bookingsWithoutEmail.toLocaleString("pt-PT")} hint="não dá para as ligar a um cliente" />
         </div>
       )}
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative flex-1 min-w-[220px]">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input className="pl-8" placeholder="Pesquisar por email, nome ou telefone…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <Input className="pl-8" placeholder="Pesquisar por email, nome, telefone ou matrícula…" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
-        <Select value={segment} onValueChange={(v) => setSegment(v as Segment)}>
+        <Select value={activeSegment} onValueChange={(v) => setSegment(v as Segment)}>
           <SelectTrigger className="w-[160px]"><SelectValue placeholder="Segmento" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Todos os segmentos</SelectItem>
             <SelectItem value="new">Novos</SelectItem>
             <SelectItem value="recurring">Recorrentes</SelectItem>
-            <SelectItem value="vip">VIP</SelectItem>
+            {canSeeTotals && <SelectItem value="vip">VIP</SelectItem>}
             <SelectItem value="at_risk">Em risco</SelectItem>
             <SelectItem value="partner">Parceiros</SelectItem>
             <SelectItem value="shared">Emails genéricos</SelectItem>
@@ -166,7 +172,6 @@ function ClientsList({ onOpen }: { onOpen: (email: string) => void }) {
             {canSeeTotals && <SelectItem value="totalSpent">Total gasto</SelectItem>}
             <SelectItem value="bookings">Nº de reservas</SelectItem>
             <SelectItem value="firstCheckIn">Cliente desde</SelectItem>
-            <SelectItem value="name">Nome</SelectItem>
           </SelectContent>
         </Select>
         {isFetching && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />}
@@ -179,6 +184,7 @@ function ClientsList({ onOpen }: { onOpen: (email: string) => void }) {
               <TableRow>
                 <TableHead>Cliente</TableHead>
                 <TableHead className="text-right">Reservas</TableHead>
+                <TableHead className="text-right">Estadias</TableHead>
                 {canSeeTotals && <TableHead className="text-right">Total gasto</TableHead>}
                 {canSeeTotals && <TableHead className="text-right">Média</TableHead>}
                 <TableHead>Frequência</TableHead>
@@ -191,10 +197,10 @@ function ClientsList({ onOpen }: { onOpen: (email: string) => void }) {
             </TableHeader>
             <TableBody>
               {isLoading && (
-                <TableRow><TableCell colSpan={10} className="text-center py-10 text-muted-foreground">A carregar clientes…</TableCell></TableRow>
+                <TableRow><TableCell colSpan={11} className="text-center py-10 text-muted-foreground">A carregar clientes…</TableCell></TableRow>
               )}
               {!isLoading && rows.length === 0 && (
-                <TableRow><TableCell colSpan={10} className="text-center py-10 text-muted-foreground">Sem clientes para estes filtros.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={11} className="text-center py-10 text-muted-foreground">Sem clientes para estes filtros.</TableCell></TableRow>
               )}
               {rows.map((c) => (
                 <TableRow key={c.email} className="cursor-pointer hover:bg-muted/50" onClick={() => onOpen(c.email)}>
@@ -207,6 +213,7 @@ function ClientsList({ onOpen }: { onOpen: (email: string) => void }) {
                     {c.bookings}
                     {c.cancelled > 0 && <span className="text-xs text-muted-foreground"> ({c.cancelled} canc.)</span>}
                   </TableCell>
+                  <TableCell className="text-right tabular-nums">{c.completed}</TableCell>
                   {canSeeTotals && <TableCell className="text-right tabular-nums font-medium">{eur(c.totalSpent)}</TableCell>}
                   {canSeeTotals && <TableCell className="text-right tabular-nums text-muted-foreground">{eur(c.avgSpend)}</TableCell>}
                   <TableCell className="text-sm">{freq(c.frequencyDays)}</TableCell>
@@ -235,8 +242,8 @@ function ClientsList({ onOpen }: { onOpen: (email: string) => void }) {
 
 // ─── FICHA ───────────────────────────────────────────────────────────────────
 function ClientProfile({ email, onBack }: { email: string; onBack: () => void }) {
-  const { data: p, isLoading, error } = trpc.clients.profile.useQuery({ email });
-  const { data: hist } = trpc.clients.history.useQuery({ email, phone: null, plate: null, name: null });
+  const { projectId } = useGlobalFilters();
+  const { data: p, isLoading, error } = trpc.clients.profile.useQuery({ email, projectId });
 
   if (isLoading) return <div className="p-8 text-center text-muted-foreground">A carregar ficha…</div>;
   if (!p) {
@@ -270,11 +277,27 @@ function ClientProfile({ email, onBack }: { email: string; onBack: () => void })
         </CardContent>
       </Card>
 
+      {p.sharedPlates.length > 0 && (
+        <Card className="border-amber-300 bg-amber-50/60 dark:bg-amber-950/20">
+          <CardContent className="p-3 space-y-1 text-sm">
+            <div className="flex items-center gap-2 font-medium"><Car className="w-4 h-4 text-amber-700" /> Matrículas partilhadas com outros clientes</div>
+            {p.sharedPlates.map((sp) => (
+              <div key={`${sp.plate}-${sp.email}`} className="text-xs">
+                A matrícula <span className="font-mono font-semibold">{sp.plate}</span> também pertence a{" "}
+                <Link href={`/clientes?email=${encodeURIComponent(sp.email)}`} className="text-primary underline">{sp.name ?? sp.email}</Link>
+                {sp.name ? <span className="text-muted-foreground"> ({sp.email})</span> : null}
+                <span className="text-muted-foreground"> · {sp.bookings} reserva(s), última {d(sp.lastCheckIn)}</span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-        <StatTile icon={Car} label="Reservas" value={p.bookings} hint={p.cancelled ? `${p.cancelled} canceladas` : "nenhuma cancelada"} />
-        {canSeeTotals && <StatTile icon={Euro} label="Total gasto" value={eur(p.totalSpent)} hint="reservas não canceladas" />}
-        {canSeeTotals && <StatTile icon={Euro} label="Média por reserva" value={eur(p.avgSpend)} />}
-        <StatTile icon={Repeat} label="Frequência" value={freq(p.frequencyDays)} hint={p.completed >= 2 ? `${p.completed} estadias` : "precisa de 2 estadias"} />
+        <StatTile icon={Car} label="Reservas" value={p.bookings} hint={`${p.completed} estadias · ${p.upcoming} futuras · ${p.cancelled} canceladas`} />
+        {canSeeTotals && <StatTile icon={Euro} label="Total gasto" value={eur(p.totalSpent)} hint="só estadias (o carro entrou no parque)" />}
+        {canSeeTotals && <StatTile icon={Euro} label="Média por estadia" value={eur(p.avgSpend)} />}
+        <StatTile icon={Repeat} label="Frequência" value={freq(p.frequencyDays)} hint={p.frequencyDays != null ? `${p.completed} estadias` : "precisa de 2 dias de estadia"} />
         <StatTile icon={CalendarDays} label="Cliente desde" value={d(p.firstCheckIn)} />
         <StatTile icon={CalendarClock} label={p.nextCheckIn ? "Próxima reserva" : "Última estadia"} value={p.nextCheckIn ? d(p.nextCheckIn) : d(p.lastCheckIn)} hint={p.nextCheckIn ? `última: ${d(p.lastCheckIn)}` : undefined} />
       </div>
@@ -333,52 +356,45 @@ function ClientProfile({ email, onBack }: { email: string; onBack: () => void })
             <CardHeader className="pb-2">
               <CardTitle className="text-sm flex items-center gap-2"><MessageSquareWarning className="w-4 h-4 text-primary" /> Suporte</CardTitle>
               <div className="flex flex-wrap gap-1.5 text-xs">
-                <Badge variant="outline"><MessageSquareWarning className="w-3 h-3 mr-1" />{hist?.complaints.length ?? 0} reclamações</Badge>
-                <Badge variant="outline"><PackageSearch className="w-3 h-3 mr-1" />{hist?.lostFound.length ?? 0} perdidos</Badge>
-                <Badge variant="outline"><Star className="w-3 h-3 mr-1" />{hist?.reviews.length ?? 0} críticas</Badge>
+                <Badge variant="outline"><MessageSquareWarning className="w-3 h-3 mr-1" />{p.complaints.length} reclamações</Badge>
+                <Badge variant="outline"><PackageSearch className="w-3 h-3 mr-1" />{p.lostFound.length} perdidos</Badge>
+                <Badge variant="outline"><Star className="w-3 h-3 mr-1" />{p.reviews.length} críticas</Badge>
               </div>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
-              {hist && hist.complaints.length + hist.lostFound.length + hist.reviews.length === 0 && (
+              {p.complaints.length + p.lostFound.length + p.reviews.length === 0 && (
                 <p className="text-xs text-muted-foreground">Sem reclamações, perdidos ou críticas.</p>
               )}
-              {hist && hist.complaints.length > 0 && (
-                <div>
-                  <div className="text-xs font-medium text-muted-foreground mb-1">Reclamações</div>
-                  {hist.complaints.map((c) => (
-                    <div key={c.id} className="flex items-center justify-between gap-2 border-b last:border-0 py-0.5">
-                      <span className="truncate">{c.title}</span>
-                      <span className="text-xs text-muted-foreground whitespace-nowrap">{c.status} · {d(c.createdAt)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {hist && hist.lostFound.length > 0 && (
-                <div>
-                  <div className="text-xs font-medium text-muted-foreground mb-1">Perdidos & Achados</div>
-                  {hist.lostFound.map((l) => (
-                    <div key={l.id} className="flex items-center justify-between gap-2 border-b last:border-0 py-0.5">
-                      <span className="truncate">{l.itemType} — {l.description?.slice(0, 60)}</span>
-                      <span className="text-xs text-muted-foreground whitespace-nowrap">{l.status} · {d(l.createdAt)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {hist && hist.reviews.length > 0 && (
-                <div>
-                  <div className="text-xs font-medium text-muted-foreground mb-1">Críticas</div>
-                  {hist.reviews.map((r) => (
-                    <div key={r.id} className="flex items-center justify-between gap-2 border-b last:border-0 py-0.5">
-                      <span className="truncate">{"★".repeat(Math.max(0, r.rating))} {r.reviewText?.slice(0, 60)}</span>
-                      <span className="text-xs text-muted-foreground whitespace-nowrap">{r.status} · {d(r.createdAt)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
+              <InteractionList title="Reclamações" items={p.complaints} href={(id) => `/reclamacoes?id=${id}`} />
+              <InteractionList title="Perdidos & Achados" items={p.lostFound} href={(id) => `/perdidos-achados/caso/${id}`} />
+              <InteractionList title="Críticas" items={p.reviews} href={(id) => `/criticas?id=${id}`} />
             </CardContent>
           </Card>
         </div>
       </div>
+    </div>
+  );
+}
+
+const VIA_LABEL: Record<string, string> = { email: "", reserva: "pela reserva", "reclamação": "pela reclamação" };
+
+function InteractionList({ title, items, href }: {
+  title: string;
+  items: { id: number; title: string; status: string; createdAt: string | null; via: string; rating?: number }[];
+  href: (id: number) => string;
+}) {
+  if (!items.length) return null;
+  return (
+    <div>
+      <div className="text-xs font-medium text-muted-foreground mb-1">{title}</div>
+      {items.map((it) => (
+        <Link key={it.id} href={href(it.id)} className="flex items-center justify-between gap-2 border-b last:border-0 py-0.5 hover:bg-muted/50 rounded">
+          <span className="truncate">{it.rating != null ? `${"★".repeat(Math.max(0, it.rating))} ` : ""}{it.title || "—"}</span>
+          <span className="text-xs text-muted-foreground whitespace-nowrap">
+            {VIA_LABEL[it.via] ? `${VIA_LABEL[it.via]} · ` : ""}{it.status} · {d(it.createdAt)}
+          </span>
+        </Link>
+      ))}
     </div>
   );
 }

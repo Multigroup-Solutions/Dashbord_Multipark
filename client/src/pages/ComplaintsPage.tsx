@@ -73,8 +73,9 @@ function parseDriversInvolved(raw: string | null | undefined): any[] {
 
 export default function ComplaintsPage() {
   const { user } = useAuth();
-  const [view, setView] = useState<"kanban" | "detail">("kanban");
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  // ?id=N abre logo o caso (links a partir da ficha do cliente no CRM).
+  const [selectedId, setSelectedId] = useState<number | null>(() => Number(new URLSearchParams(window.location.search).get("id")) || null);
+  const [view, setView] = useState<"kanban" | "detail">(() => (selectedId ? "detail" : "kanban"));
   const [, setFilterProject] = useState<string>("all");
   const [showCreate, setShowCreate] = useState(false);
   const [filterType, setFilterType] = useState<string>("all");

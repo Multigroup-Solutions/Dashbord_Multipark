@@ -8202,7 +8202,7 @@ export const appRouter = router({
       .input(z.object({
         search: z.string().max(200).nullable().optional(),
         segment: z.enum(["all", "new", "recurring", "vip", "at_risk", "partner", "shared"]).nullable().optional(),
-        sort: z.enum(["lastCheckIn", "totalSpent", "bookings", "firstCheckIn", "name"]).optional(),
+        sort: z.enum(["lastCheckIn", "totalSpent", "bookings", "firstCheckIn"]).optional(),
         dir: z.enum(["asc", "desc"]).optional(),
         page: z.number().int().min(1).optional(),
         pageSize: z.number().int().min(10).max(200).optional(),
@@ -8216,6 +8216,10 @@ export const appRouter = router({
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
         const projectIds = input?.projectId ? await resolveProjectIds(input.projectId) : null;
         const totals = await canSeeFinanceTotals(ctx.user);
+        // Ordenar por gasto ou filtrar VIP revela quem gasta mais — é informação financeira.
+        if (!totals && (input?.sort === "totalSpent" || input?.segment === "vip")) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Sem acesso aos totais financeiros" });
+        }
         const res = await listClients(db, { ...(input ?? {}), projectIds });
         return { ...res, canSeeTotals: totals, rows: totals ? res.rows : res.rows.map(stripTotals), vipThreshold: totals ? res.vipThreshold : null };
       }),
@@ -8224,22 +8228,24 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "frontoffice");
         const { getDb } = await import("./db");
-        const { clientsStats } = await import("./clientsCrm");
+        const { clientsStats, countBookingsWithoutEmail } = await import("./clientsCrm");
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
         const projectIds = input?.projectId ? await resolveProjectIds(input.projectId) : null;
-        const s = await clientsStats(db, projectIds);
-        return (await canSeeFinanceTotals(ctx.user)) ? s : { ...s, vipThreshold: null };
+        const [s, withoutEmail] = await Promise.all([clientsStats(db, projectIds), countBookingsWithoutEmail(db, projectIds)]);
+        const out = { ...s, bookingsWithoutEmail: withoutEmail };
+        return (await canSeeFinanceTotals(ctx.user)) ? { ...out, canSeeTotals: true } : { ...out, canSeeTotals: false, vip: null, vipThreshold: null };
       }),
     profile: protectedProcedure
-      .input(z.object({ email: z.string().min(3).max(320) }))
+      .input(z.object({ email: z.string().min(3).max(320), projectId: z.number().optional() }))
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "frontoffice");
         const { getDb } = await import("./db");
         const { getClientProfile, stripTotals } = await import("./clientsCrm");
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
-        const p = await getClientProfile(db, input.email);
+        const projectIds = input.projectId ? await resolveProjectIds(input.projectId) : null;
+        const p = await getClientProfile(db, input.email, projectIds);
         if (!p) throw new TRPCError({ code: "NOT_FOUND", message: "Cliente sem reservas" });
         const totals = await canSeeFinanceTotals(ctx.user);
         if (totals) return { ...p, canSeeTotals: true };

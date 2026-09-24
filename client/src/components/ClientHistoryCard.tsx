@@ -1,4 +1,6 @@
 import { trpc } from "@/lib/trpc";
+import { Link } from "wouter";
+import { normalizeEmail } from "@shared/email";
 import { fmtPTDate } from "@/lib/lisbonTime";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -46,6 +48,7 @@ export default function ClientHistoryCard({ email, phone, plate, name, highlight
         <CardTitle className="text-sm flex items-center gap-2">
           <History className="w-4 h-4 text-primary" />
           Histórico do cliente
+          {email && <Link href={`/clientes?email=${encodeURIComponent(normalizeEmail(email))}`} className="ml-auto text-xs font-normal text-primary underline">Abrir ficha de cliente</Link>}
           {isLoading && <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />}
         </CardTitle>
         <div className="flex flex-wrap gap-1.5 text-xs">

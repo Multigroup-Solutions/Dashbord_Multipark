@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { computeStats, computeVipThreshold, frequencyDaysOf, isPartner, isShared, normalizeCity, segmentsOf, stripTotals, toClientRow } from "./clientsCrm";
+import { computeStats, computeVipThreshold, frequencyDaysOf, isPartner, isShared, normalizeCity, plateKey, segmentsOf, stripTotals, toClientRow } from "./clientsCrm";
 
 const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
 const inDays = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString();
 const agg = (o: Partial<Parameters<typeof toClientRow>[0]> & { email: string }) => ({
-  bookings: 1, cancelled: 0, completed: 1, partnerBookings: 0, distinctNames: 1, totalSpent: 50, firstCheckIn: daysAgo(3), lastCheckIn: daysAgo(3), nextCheckIn: null, cities: [] as string[], ...o,
+  bookings: 1, cancelled: 0, completed: 1, upcoming: 0, visitDays: o.completed ?? 1, partnerBookings: 0, distinctNames: 1, totalSpent: 50, firstCheckIn: daysAgo(3), lastCheckIn: daysAgo(3), nextCheckIn: null, cities: [] as string[], ...o,
 });
 
 describe("clientsCrm — regras de cliente", () => {
@@ -56,5 +56,28 @@ describe("clientsCrm — regras de cliente", () => {
     expect(normalizeCity("porto")).toBe("Porto"); expect(normalizeCity("FARO")).toBe("Faro"); expect(normalizeCity("")).toBeNull();
     const s = stripTotals(toClientRow(agg({ email: "a@x.pt", totalSpent: 9999 }), Infinity));
     expect(s.totalSpent).toBeNull(); expect(s.avgSpend).toBeNull(); expect(s.bookings).toBe(1);
+    // VIP = top 10% em gasto: também é informação financeira
+    const vip = stripTotals(toClientRow(agg({ email: "v@x.pt", bookings: 3, completed: 3, totalSpent: 9999 }), 100));
+    expect(vip.segments).toEqual(["recurring"]);
+  });
+
+  it("frequência só com estadias, por dias distintos (reservas futuras não contam)", () => {
+    // 2 estadias passadas (há 100 e há 40 dias) + 1 reserva futura
+    const a = agg({ email: "f@x.pt", bookings: 3, completed: 2, visitDays: 2, upcoming: 1, firstCheckIn: daysAgo(100), lastCheckIn: daysAgo(40), nextCheckIn: inDays(10) });
+    expect(frequencyDaysOf(a)).toBe(60);
+    // duas reservas no mesmo dia (dois carros) = um só dia de estadia
+    expect(frequencyDaysOf(agg({ email: "g@x.pt", bookings: 2, completed: 2, visitDays: 1 }))).toBeNull();
+  });
+
+  it("novo ignora canceladas; só com reserva futura não tem estadias", () => {
+    expect(segmentsOf(agg({ email: "c@x.pt", bookings: 1, cancelled: 1, completed: 0, visitDays: 0, totalSpent: null }), Infinity)).toEqual([]);
+    expect(segmentsOf(agg({ email: "d@x.pt", bookings: 2, cancelled: 1, completed: 1 }), Infinity)).toEqual(["new"]);
+    const futuro = toClientRow(agg({ email: "e@x.pt", completed: 0, visitDays: 0, upcoming: 1, totalSpent: null, firstCheckIn: null, lastCheckIn: null, nextCheckIn: inDays(20) }), Infinity);
+    expect(futuro.firstCheckIn).toBeNull(); expect(futuro.avgSpend).toBeNull(); expect(futuro.upcoming).toBe(1);
+  });
+
+  it("matrícula comparável ignora espaços, hífens e maiúsculas", () => {
+    expect(plateKey(" aa-00 bb ")).toBe("AA00BB");
+    expect(plateKey(null)).toBe("");
   });
 });
