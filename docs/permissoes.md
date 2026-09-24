@@ -54,6 +54,7 @@
 | WhatsApp | — | — | — | cidade VE | cidade VE | nacional VE | nacional VE | nacional VEG | nacional VEG |
 | **Suporte** |  |  |  |  |  |  |  |  |  |
 | Clientes | — | — | — | cidade VE | cidade VE | nacional VE | nacional VE | nacional VEXG | nacional VEXG |
+| Comunicação (caixas de email partilhadas) | — | — | — | cidade VE | cidade VE | nacional VE | nacional VE | nacional VEG | nacional VEG |
 | Reclamações | — | próprio V | próprio V | cidade VE | cidade VE | nacional VE | nacional VE | nacional VEXG | nacional VEXG |
 | Críticas Google | — | próprio V | próprio V | cidade VE | cidade VE | nacional VE | nacional VE | nacional VEXG | nacional VEXG |
 | Ocorrências | — | próprio V | próprio V | cidade VE | cidade VE | nacional VE | nacional VE | nacional VEXG | nacional VEXG |

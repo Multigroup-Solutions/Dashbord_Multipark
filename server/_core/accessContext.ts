@@ -95,6 +95,7 @@ const PATH_MODULE: Array<[string, ModuleId]> = [
   ["extraLeads.", "leads_extras"],
   ["whatsapp.", "whatsapp"],
   ["clients.", "clientes"],
+  ["mail.", "comunicacao"],
   ["services.", "servicos"],
   ["partnerships.", "parcerias"],
   ["tasks.", "tarefas"],

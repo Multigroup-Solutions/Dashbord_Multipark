@@ -1,4 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CommunicationsTimeline } from "@/components/mail/CommunicationsTimeline";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { fmtBookingDateTime } from "@/lib/lisbonTime";
@@ -115,6 +116,11 @@ export default function BookingDetailDialog({ booking: b, onClose }: { booking: 
             <Row label="Criada em" value={fmtBookingDateTime(b.bookingCreatedAt)} />
             <Row label="Observações" value={b.remarks} />
           </div>
+          {b.externalId && (
+            <div className="border-t pt-3">
+              <CommunicationsTimeline type="booking" id={b.externalId} />
+            </div>
+          )}
           <div className="flex justify-end">
             <Button variant="outline" size="sm" onClick={onClose}>Fechar</Button>
           </div>

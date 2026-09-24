@@ -70,7 +70,7 @@ export type ModuleId =
   | "servicos" | "historico_diario" | "pdas" | "tarefas" | "despesas"
   | "reservas_operacoes" | "extras_dia" | "parcerias" | "rh" | "rh_salarios"
   | "leads_extras" | "atividade_diaria" | "radio" | "passagem_turno" | "passagem_resumo_dia"
-  | "disponibilidade_extras" | "whatsapp" | "clientes"
+  | "disponibilidade_extras" | "whatsapp" | "clientes" | "comunicacao"
   | "reclamacoes" | "criticas" | "ocorrencias" | "perdidos"
   | "utilizadores" | "permissoes" | "sincronizacao" | "integracoes"
   | "marketing" | "logs" | "financeiro" | "faturacao" | "dashboards" | "anual" | "projetos"
@@ -100,6 +100,7 @@ export const MODULES: readonly ModuleDef[] = [
   { id: "disponibilidade_extras", label: "Disponibilidade dos extras", group: "Operações" },
   { id: "whatsapp", label: "WhatsApp", group: "Operações" },
   { id: "clientes", label: "Clientes", group: "Suporte" },
+  { id: "comunicacao", label: "Comunicação (caixas de email partilhadas)", group: "Suporte" },
   { id: "reclamacoes", label: "Reclamações", group: "Suporte" },
   { id: "criticas", label: "Críticas Google", group: "Suporte" },
   { id: "ocorrencias", label: "Ocorrências", group: "Suporte" },
@@ -218,6 +219,13 @@ const MATRIX_SPEC: Record<ModuleId, Row> = {
   clientes: {
     ...same("city:ve", "team_leader", "supervisor"),
     ...same("national:ve", ...NAT_OPS), ...same("national:vexm", ...TOP),
+  },
+  // Comunicação (caixas de email partilhadas, pedido do dono set 2026). Cada
+  // caixa tem ainda a sua regra (módulo + papéis + cidade) em shared/mail.ts;
+  // "O meu email" (caixa pessoal) não depende deste módulo — só do dono.
+  comunicacao: {
+    ...same("city:ve", "team_leader", "supervisor"),
+    ...same("national:ve", ...NAT_OPS), ...same("national:vem", ...TOP),
   },
   reclamacoes: {
     ...same("own:v", "extra", "condutor"),

@@ -275,7 +275,7 @@ describe("ajuda: escolha do ficheiro", () => {
 
   it("tem um ficheiro por módulo pedido", () => {
     expect(docs.map((d) => d.file).sort()).toEqual([
-      "definicoes.md", "despesas.md", "disponibilidade.md", "extras-dia.md", "faturacao.md", "formacao.md", "marketing.md",
+      "comunicacao.md", "definicoes.md", "despesas.md", "disponibilidade.md", "extras-dia.md", "faturacao.md", "formacao.md", "marketing.md",
       "ocorrencias.md", "passagem-turno.md", "perdidos.md", "permissoes.md", "reclamacoes.md", "rh-ponto.md", "tarefas.md", "whatsapp.md",
     ]);
   });

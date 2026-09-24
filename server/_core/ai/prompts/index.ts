@@ -10,3 +10,4 @@ export * from "./trainingTutor";
 export * from "./comms";
 export * from "./assistant";
 export * from "./ops";
+export * from "./mail";

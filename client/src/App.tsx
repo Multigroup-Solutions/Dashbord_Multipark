@@ -46,6 +46,7 @@ import MultiparkInspectPage from "./pages/MultiparkInspectPage";
 import InvitePage from "./pages/InvitePage";
 import DisponibilidadePage from "./pages/DisponibilidadePage";
 import WhatsAppInboxPage from "./pages/WhatsAppInboxPage";
+import ComunicacaoPage from "./pages/ComunicacaoPage";
 import ExtraLeadsPage from "./pages/ExtraLeadsPage";
 import ProjectCostsDashboard from "./pages/ProjectCostsDashboard";
 import DashboardPage from "./pages/DashboardPage";
@@ -230,6 +231,12 @@ function Router() {
       </Route>
       <Route path="/whatsapp">
         {() => (<DashboardLayout><WhatsAppInboxPage /></DashboardLayout>)}
+      </Route>
+      <Route path="/comunicacao/meu-email">
+        {() => (<DashboardLayout><ComunicacaoPage key="pessoal" personal /></DashboardLayout>)}
+      </Route>
+      <Route path="/comunicacao">
+        {() => (<DashboardLayout><ComunicacaoPage key="partilhadas" /></DashboardLayout>)}
       </Route>
       <Route path="/passagem-turno">
         {() => (<DashboardLayout><ShiftHandoverPage /></DashboardLayout>)}

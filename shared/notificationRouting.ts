@@ -106,6 +106,11 @@ export const NOTIFICATION_KIND_DEFS = [
   K({ kind: "lost_found_sla", group: "suporte", label: "Perdidos fora do prazo", description: "Resumo diário dos perdidos em atraso (e os que tens atribuídos).",
     module: "perdidos", action: "view", roles: ["team_leader", "supervisor", "backoffice"], cityScoped: true, personal: false, channels: IN_APP, dedupeMinutes: 12 * 60 }),
 
+  K({ kind: "mail_new", group: "suporte", label: "Email novo de cliente", description: "Conversa nova (ou reaberta) numa caixa de email partilhada que vês (Comunicação).",
+    module: "comunicacao", action: "view", roles: ["team_leader", "supervisor", "frontoffice", "backoffice"], cityScoped: true, personal: false, channels: IN_APP }),
+  K({ kind: "mail_assigned", group: "suporte", label: "Email atribuído a ti", description: "Uma conversa de email foi-te atribuída.",
+    module: "comunicacao", action: "view", roles: [], cityScoped: false, personal: true, channels: IN_APP }),
+
   // ── Operações ──
   K({ kind: "whatsapp_sla", group: "operacoes", label: "WhatsApp por responder", description: "Conversas fora do prazo, urgentes ou com a janela de 24h a fechar (e as que te estão atribuídas).",
     module: "whatsapp", action: "view", roles: ["team_leader", "supervisor", "frontoffice", "backoffice"], cityScoped: true, personal: false, channels: IN_APP }),
@@ -169,6 +174,8 @@ export const NOTIFICATION_KIND_DEFS = [
     module: "integracoes", action: "view", roles: [], cityScoped: false, personal: false, channels: WITH_EMAIL, emailDefault: true }),
   K({ kind: "cron_stale", group: "sistema", label: "Crons parados", description: "Tarefas automáticas que deixaram de correr.",
     module: "definicoes", action: "view", roles: [], cityScoped: false, personal: false, channels: WITH_EMAIL, emailDefault: true }),
+  K({ kind: "google_account_reauth", group: "sistema", label: "A tua conta Google", description: "A ligação à tua conta Google (O meu email) expirou ou foi revogada e tem de ser religada.",
+    module: "ficha", action: "view", roles: [], cityScoped: false, personal: true, channels: WITH_EMAIL, emailDefault: true }),
   K({ kind: "sync_alert", group: "sistema", label: "Sincronização Multipark", description: "Webhooks parados/retomados e reservas por sincronizar.",
     module: "sincronizacao", action: "view", roles: [], cityScoped: false, personal: false, channels: IN_APP }),
   K({ kind: "ai_budget", group: "sistema", label: "Orçamento da IA", description: "O gasto da IA chegou ao orçamento do mês.",
@@ -346,6 +353,8 @@ export interface RouteInput {
   targetUserIds?: readonly number[];
   /** Tipos não pessoais: pessoas a juntar (ex.: o responsável do caso), com acesso ao módulo. */
   alsoUserIds?: readonly number[];
+  /** Restrição extra (ex.: só quem vê a caixa de email em causa). */
+  filter?: (c: RoutingCandidate) => boolean;
 }
 
 export interface RoutedRecipient { userId: number; email: boolean; reason: "role" | "override" | "personal" | "assignee" }
@@ -420,11 +429,12 @@ export function resolveRecipients(input: RouteInput, candidates: readonly Routin
     const byOverride = !byRole && !!activeOverride(c, d.module);
     if (!byRole && !byOverride) continue;
     if (!seesCity(c, d, d.cityScoped ? input.city : null, routing)) continue;
+    if (input.filter && !input.filter(c)) continue;
     add(c, byRole ? "role" : "override");
   }
   for (const id of input.alsoUserIds ?? []) {
     const c = byId.get(id);
-    if (c && !c.personalOnly && can(c, d.module, "view")) add(c, "assignee");
+    if (c && !c.personalOnly && can(c, d.module, "view") && (!input.filter || input.filter(c))) add(c, "assignee");
   }
   return Array.from(out.values());
 }

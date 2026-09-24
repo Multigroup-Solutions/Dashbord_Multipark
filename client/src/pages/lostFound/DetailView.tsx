@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { CommunicationsTimeline } from "@/components/mail/CommunicationsTimeline";
 import { can, roleRank, seesBeyondOwn } from "@shared/access";
 import { formatBookingHistoryDetails } from "@/lib/bookingHistoryFormat";
 import { openInMultipark } from "@/lib/multiparkLinks";
@@ -275,6 +276,7 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
               <TabsTrigger value="photos">Fotos ({photos.length})</TabsTrigger>
               {item.vehiclePlate && <TabsTrigger value="vehicle">Viatura</TabsTrigger>}
               {item.bookingRef && <TabsTrigger value="booking-history">Histórico ({timelineHist.length})</TabsTrigger>}
+              <TabsTrigger value="comms">Comunicações</TabsTrigger>
             </TabsList>
 
             <TabsContent value="details" className="space-y-4">
@@ -564,6 +566,10 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
                 </Card>
               </TabsContent>
             )}
+
+            <TabsContent value="comms" className="space-y-4">
+              <CommunicationsTimeline type="lost_found" id={id} compact />
+            </TabsContent>
 
             {item.bookingRef && (
               <TabsContent value="booking-history" className="space-y-4">

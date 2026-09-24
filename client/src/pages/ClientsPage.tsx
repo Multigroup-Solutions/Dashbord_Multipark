@@ -10,6 +10,7 @@
  * Lista com pesquisa, segmento e ordenação; clicar abre a ficha.
  * Gasto e média só para quem vê totais financeiros (backoffice+ sem deny).
  */
+import { CommunicationsTimeline } from "@/components/mail/CommunicationsTimeline";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useSearch } from "wouter";
 import { trpc } from "@/lib/trpc";
@@ -369,6 +370,14 @@ function ClientProfile({ email, onBack }: { email: string; onBack: () => void })
               <InteractionList title="Reclamações" items={p.complaints} href={(id) => `/reclamacoes?id=${id}`} />
               <InteractionList title="Perdidos & Achados" items={p.lostFound} href={(id) => `/perdidos-achados/caso/${id}`} />
               <InteractionList title="Críticas" items={p.reviews} href={(id) => `/criticas?id=${id}`} />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2"><Mail className="w-4 h-4 text-primary" /> Comunicações</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <CommunicationsTimeline type="client" id={p.email} compact />
             </CardContent>
           </Card>
         </div>

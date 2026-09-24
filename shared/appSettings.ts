@@ -13,6 +13,7 @@
 import { z } from "zod";
 import { AI_FEATURE_IDS, AI_TIERS } from "./aiFeatures";
 import { NOTIFICATION_KIND_DEFS, NOTIFICATION_ROUTING_SETTING_KEY, notificationRoutingSchema } from "./notificationRouting";
+import { DEFAULT_BRAND_DOMAINS, MAIL_BRAND_IDS, MAIL_DEFAULT_BACKFILL_DAYS, MAIL_DEFAULT_RETENTION_YEARS, MAIL_DEFAULT_SLA_HOURS } from "./mail";
 
 // ─── Taxas com data de efeito (IVA / TSU) ───────────────────────────────────
 
@@ -307,6 +308,42 @@ export const SETTINGS = {
     defaultValue: { perMinute: 10, perDay: 100 },
     wiring: "live",
   }),
+  "sla.mailHours": def({
+    key: "sla.mailHours",
+    group: "sla",
+    label: "Prazo de resposta aos emails (horas)",
+    description: "Comunicação: uma conversa de uma caixa partilhada por responder há mais do que isto fica \"fora do prazo\" (lista e filtro \"Por responder\").",
+    schema: z.number({ error: "Indica um número de horas." }).int("Número inteiro de horas.").min(1, "Mínimo 1 hora.").max(720, "Máximo 720 horas."),
+    defaultValue: MAIL_DEFAULT_SLA_HOURS,
+    wiring: "live",
+  }),
+  "mail.retentionYears": def({
+    key: "mail.retentionYears",
+    group: "emails",
+    label: "Retenção dos emails (anos)",
+    description: "Comunicação: os emails guardados há mais do que isto e SEM ligação a um cliente, reserva, reclamação, perdido ou ocorrência são apagados da base de dados (limpeza diária). Os ligados ficam.",
+    schema: z.number({ error: "Indica um número de anos." }).int("Número inteiro de anos.").min(1, "Mínimo 1 ano.").max(20, "Máximo 20 anos."),
+    defaultValue: MAIL_DEFAULT_RETENTION_YEARS,
+    wiring: "live",
+  }),
+  "mail.backfillDays": def({
+    key: "mail.backfillDays",
+    group: "emails",
+    label: "Emails a importar ao ligar uma caixa (dias)",
+    description: "Comunicação: quando uma caixa (ou a conta Google de alguém) é ligada, importam-se os emails destes últimos dias; depois a sincronização é incremental.",
+    schema: z.number({ error: "Indica um número de dias." }).int("Número inteiro de dias.").min(1, "Mínimo 1 dia.").max(730, "Máximo 730 dias."),
+    defaultValue: MAIL_DEFAULT_BACKFILL_DAYS,
+    wiring: "live",
+  }),
+  "mail.brandDomains": def({
+    key: "mail.brandDomains",
+    group: "emails",
+    label: "Domínios de email por marca",
+    description: "Comunicação: domínio(s) de cada marca, para detetar a marca de um email pelo endereço de quem o recebeu (quando o endereço não está numa caixa). JSON: {\"multipark\": [\"multipark.pt\"], \"skypark\": [\"skypark.pt\"]}. Marcas: " + MAIL_BRAND_IDS.join(", ") + ".",
+    schema: z.partialRecord(z.enum(MAIL_BRAND_IDS, { error: "Marca desconhecida." }), z.array(z.string().trim().toLowerCase().regex(/^[a-z0-9.-]+\.[a-z]{2,}$/, "Domínio inválido.")).max(10)),
+    defaultValue: DEFAULT_BRAND_DOMAINS,
+    wiring: "live",
+  }),
   [NOTIFICATION_ROUTING_SETTING_KEY]: def({
     key: NOTIFICATION_ROUTING_SETTING_KEY,
     group: "notificacoes",
@@ -366,6 +403,7 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "TRAINING_BLOCKS_ESCALA", label: "Formação bloqueia a escala", description: "Quem tem formação obrigatória em atraso não entra na escala." },
   { name: "OPS_BRIEFING", label: "Briefing diário por cidade", description: "Às 07:30 (Lisboa): reservas do dia, extras, SLA, pendentes e alertas por email aos team leaders/supervisores da cidade e no Dashboard." },
   { name: "WEEKLY_REPORTS", label: "Relatórios semanais", description: "À segunda de manhã: direção, marketing, operações e RH por email a quem tem acesso nacional ao módulo; resumo semanal da passagem de turno." },
+  { name: "MAIL_PUSH", label: "Gmail: notificações push (Pub/Sub)", description: "Além do cron de 5 em 5 min, o Gmail avisa a app logo que chega um email (precisa do tópico Pub/Sub configurado: GMAIL_PUSH_TOPIC). Desligado por omissão.", defaultEnabled: false },
   { name: "OPS_ANOMALIES", label: "Deteção de anomalias", description: "Todos os dias: reservas por parque/canal, despesas (valores fora do normal e duplicados) e gasto/ROAS do marketing." },
   // ── IA (server/_core/ai) — AI_ENABLED desliga tudo de uma vez ──
   { name: "AI_ENABLED", label: "IA (interruptor geral)", description: "Desligado = nenhuma funcionalidade de IA faz pedidos ao fornecedor.", group: "ia" },
@@ -389,6 +427,7 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "AI_LEAD_SCORING", label: "IA: resumo e 1.º contacto das leads", description: "Resumo de uma linha da pontuação (calculada no sistema) e rascunho do 1.º contacto, que precisa de aprovação.", group: "ia" },
   { name: "AI_EVALUATION_EXPLAIN", label: "IA: explicação da avaliação", description: "Explica em PT-PT a pontuação a partir das linhas das regras (nunca recalcula).", group: "ia" },
   { name: "AI_HANDOVER_REPEATS", label: "IA: pendentes repetidos da passagem de turno", description: "Redige os pendentes que se repetem entre turnos e o resumo semanal por cidade.", group: "ia" },
+  { name: "AI_MAIL_DRAFT", label: "IA: rascunho de resposta a emails", description: "Botão \"Rascunho IA\" na Comunicação: prepara uma resposta ao cliente (vai para o editor; nunca é enviada sozinha).", group: "ia" },
   { name: "AI_TASKS_FROM_TEXT", label: "IA: tarefas a partir de texto", description: "Propõe tarefas a partir de notas coladas; nada é criado sem confirmação.", group: "ia" },
 ];
 
@@ -430,6 +469,7 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "extras-schedule", label: "Escala automática dos extras (propor/confirmar/avisar)", intervalMinutes: 300, workflow: "multipark-cron.yml" },
   { name: "identity-sweep", label: "Ligações funcionário ↔ utilizador", intervalMinutes: 60, workflow: "multipark-cron.yml" },
   { name: "email-inbound", label: "Emails recebidos (IMAP)", intervalMinutes: 60, workflow: "multipark-cron.yml" },
+  { name: "mail-sync", label: "Comunicação: sincronização do Gmail", intervalMinutes: 5, workflow: "mail-sync.yml" },
   { name: "multipark-future", label: "Sincronização de reservas (futuras)", intervalMinutes: 120, workflow: "multipark-cron.yml" },
   { name: "daily-ops", label: "Manutenção diária + recolha GPS", intervalMinutes: 1440, workflow: "multipark-cron.yml" },
   { name: "evaluation-recompute", label: "Avaliação (recálculo das 4 semanas)", intervalMinutes: 1440, workflow: "multipark-cron.yml" },
