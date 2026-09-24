@@ -9,10 +9,11 @@
 import { projectVisible, scopedProjectIds } from "./extrasCityFilter";
 import { and, desc, eq, isNull, sql, type SQL } from "drizzle-orm";
 import { getDb } from "./db";
-import { employees, whatsappConversations, whatsappMessages } from "../drizzle/schema";
+import { employees, users, whatsappConversations, whatsappMessages } from "../drizzle/schema";
 import { sendTextMessage } from "./whatsapp";
 import { firstNameOf } from "../shared/whatsappTemplate";
 import { OPTED_OUT_ERROR, previewFields, recordOutboundMessage } from "./whatsappStore";
+import type { ConversationStatus } from "../shared/whatsappConversation";
 
 const WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -67,6 +68,14 @@ export interface ConversationRow {
   optedOut: boolean;
   windowState: WindowState;
   windowExpiresAt: string | null;
+  /** aberto/pendente/resolvido (0097). */
+  status: ConversationStatus;
+  assignedUserId: number | null;
+  assignedName: string | null;
+  /** 1.ª mensagem recebida ainda sem resposta (SLA); null = respondida. */
+  awaitingSince: string | null;
+  linkedBookingId: number | null;
+  linkedClientEmail: string | null;
 }
 
 /**
@@ -131,7 +140,7 @@ export function conversationVisibleTo(c: ConversationCityFacts, scope: number[] 
 }
 
 /** Mesma regra de `conversationVisibleTo`, em SQL (aplicada ANTES do LIMIT). */
-function visibilitySql(scope: number[] | undefined): SQL {
+export function visibilitySql(scope: number[] | undefined): SQL {
   if (scope === undefined) return sql`1 = 1`;
   if (!scope.length) return sql`1 = 0`;
   const inScope = (col: SQL) => sql`${col} IN (${sql.join(scope.map((id) => sql`${id}`), sql`, `)})`;
@@ -212,9 +221,16 @@ export async function listConversations(): Promise<ConversationRow[]> {
       profileName: whatsappConversations.profileName,
       employeeName: employees.fullName,
       leadName: leadNameSql,
+      status: whatsappConversations.status,
+      assignedUserId: whatsappConversations.assignedUserId,
+      assignedName: users.name,
+      awaitingSince: whatsappConversations.awaitingSince,
+      linkedBookingId: whatsappConversations.linkedBookingId,
+      linkedClientEmail: whatsappConversations.linkedClientEmail,
     })
     .from(whatsappConversations)
     .leftJoin(employees, eq(whatsappConversations.employeeId, employees.id))
+    .leftJoin(users, eq(whatsappConversations.assignedUserId, users.id))
     .where(visibilitySql(scopedProjectIds()))
     .orderBy(desc(whatsappConversations.lastMessageAt))
     .limit(300);
@@ -240,6 +256,12 @@ export async function listConversations(): Promise<ConversationRow[]> {
       optedOut: c.optedOutAt != null,
       windowState: w.windowState,
       windowExpiresAt: w.windowExpiresAt,
+      status: c.status,
+      assignedUserId: c.assignedUserId,
+      assignedName: c.assignedName ?? null,
+      awaitingSince: c.awaitingSince,
+      linkedBookingId: c.linkedBookingId,
+      linkedClientEmail: c.linkedClientEmail,
     };
   });
   return sortConversations(rows);
@@ -287,6 +309,12 @@ export interface ConversationThread {
   optedOutAt: string | null;
   windowState: WindowState;
   windowExpiresAt: string | null;
+  status: ConversationStatus;
+  assignedUserId: number | null;
+  awaitingSince: string | null;
+  unreadCount: number;
+  linkedBookingId: number | null;
+  linkedClientEmail: string | null;
   messages: ThreadMessage[];
 }
 
@@ -304,6 +332,12 @@ export async function getConversationThread(conversationId: number, limit = 100)
       profileName: whatsappConversations.profileName,
       employeeName: employees.fullName,
       leadName: leadNameSql,
+      status: whatsappConversations.status,
+      assignedUserId: whatsappConversations.assignedUserId,
+      awaitingSince: whatsappConversations.awaitingSince,
+      unreadCount: whatsappConversations.unreadCount,
+      linkedBookingId: whatsappConversations.linkedBookingId,
+      linkedClientEmail: whatsappConversations.linkedClientEmail,
     })
     .from(whatsappConversations)
     .leftJoin(employees, eq(whatsappConversations.employeeId, employees.id))
@@ -346,6 +380,12 @@ export async function getConversationThread(conversationId: number, limit = 100)
     optedOutAt: conv.optedOutAt,
     windowState: w.windowState,
     windowExpiresAt: w.windowExpiresAt,
+    status: conv.status,
+    assignedUserId: conv.assignedUserId,
+    awaitingSince: conv.awaitingSince,
+    unreadCount: conv.unreadCount,
+    linkedBookingId: conv.linkedBookingId,
+    linkedClientEmail: conv.linkedClientEmail,
     // Nunca devolve o URL do storage: só se há ficheiro (o link assinado é pedido à parte).
     messages: rows
       .map(({ mediaKey, mediaUrl, ...m }) => ({ ...m, mediaAvailable: !!(mediaKey || mediaUrl) }) as ThreadMessage)

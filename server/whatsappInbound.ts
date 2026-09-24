@@ -22,6 +22,7 @@
  *
  * As funções de parse e de planeamento são puras e testáveis sem Express nem BD.
  */
+import { nextAwaitingSince, nextStatusOnInbound } from "../shared/whatsappConversation";
 import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { employees, extraLeads, whatsappConversations, whatsappMessages, whatsappPendingStatuses } from "../drizzle/schema";
@@ -390,7 +391,7 @@ async function writeInbound(db: Db, m: ParsedInboundMessage, phoneE164: string, 
     // 1. Conversa existe (sem tocar em contadores/datas).
     await tx
       .insert(whatsappConversations)
-      .values({ phoneE164, employeeId })
+      .values({ phoneE164, employeeId, statusChangedAt: nowStr() })
       .onDuplicateKeyUpdate({
         set: { employeeId: sql`COALESCE(${whatsappConversations.employeeId}, ${employeeId})` },
       });
@@ -402,6 +403,8 @@ async function writeInbound(db: Db, m: ParsedInboundMessage, phoneE164: string, 
         lastInboundAt: whatsappConversations.lastInboundAt,
         lastMessageAt: whatsappConversations.lastMessageAt,
         bookingCheckedAt: whatsappConversations.bookingCheckedAt,
+        status: whatsappConversations.status,
+        awaitingSince: whatsappConversations.awaitingSince,
       })
       .from(whatsappConversations)
       .where(eq(whatsappConversations.phoneE164, phoneE164))
@@ -450,6 +453,17 @@ async function writeInbound(db: Db, m: ParsedInboundMessage, phoneE164: string, 
     };
     if (plan.openWindow) set.lastInboundAt = laterTimestamp(conv.lastInboundAt, ts);
     if (plan.bumpUnread) set.unreadCount = sql`${whatsappConversations.unreadCount} + 1`;
+    // Estado (0097): uma resposta verdadeira reabre a conversa resolvida/pendente
+    // e marca-a "por responder" desde a 1.ª mensagem sem resposta (SLA).
+    if (plan.bumpUnread) {
+      const nextStatus = nextStatusOnInbound(conv.status, true);
+      if (nextStatus !== conv.status) {
+        set.status = nextStatus;
+        set.statusChangedAt = nowStr();
+        set.resolvedAt = null;
+      }
+      set.awaitingSince = nextAwaitingSince(conv.awaitingSince, ts, true);
+    }
     await tx.update(whatsappConversations).set(set).where(eq(whatsappConversations.id, conv.id));
 
     return {

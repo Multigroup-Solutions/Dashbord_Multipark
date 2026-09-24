@@ -429,6 +429,14 @@ function DashboardLayoutContent({
   const filteredGroups = getFilteredHubGroups(userRole);
   const filteredItems = filteredGroups.flatMap(g => g.items);
   const activeMenuItem = allMenuItems.find(item => item.path === location);
+  // Badge do WhatsApp: conversas por ler/por responder (só para quem tem o item no menu).
+  const showWhatsappBadge = filteredItems.some(i => i.path === "/whatsapp");
+  const waBadgeQ = trpc.whatsapp.badge.useQuery(undefined, {
+    enabled: showWhatsappBadge,
+    refetchInterval: 60_000,
+    retry: false,
+  });
+  const waBadge = showWhatsappBadge ? waBadgeQ.data : undefined;
   const isMobile = useIsMobile();
 
   // Acordeão: um grupo aberto de cada vez. Segue a rota ativa (também quando a
@@ -614,6 +622,18 @@ function DashboardLayoutContent({
                                 >
                                   <item.icon className="h-4 w-4" />
                                   <span>{item.label}</span>
+                                  {item.path === "/whatsapp" && waBadge && waBadge.attention > 0 && (
+                                    <span
+                                      className={`ml-auto group-data-[collapsible=icon]:hidden min-w-5 h-5 px-1.5 rounded-full text-[11px] font-bold leading-5 text-center text-white ${
+                                        waBadge.overdue > 0 ? "bg-red-600" : "bg-green-600"
+                                      }`}
+                                      title={waBadge.overdue > 0
+                                        ? `${waBadge.attention} conversas por tratar · ${waBadge.overdue} sem resposta há mais de ${waBadge.slaMinutes} min`
+                                        : `${waBadge.attention} conversas por ler/responder`}
+                                    >
+                                      {waBadge.attention > 99 ? "99+" : waBadge.attention}
+                                    </span>
+                                  )}
                                 </SidebarMenuButton>
                               </SidebarMenuItem>
                             );

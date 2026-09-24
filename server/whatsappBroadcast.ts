@@ -249,6 +249,7 @@ async function upsertConversation(
       phoneE164,
       employeeId: employeeId ?? null,
       lastMessageAt: now,
+      statusChangedAt: now,
     })
     .onDuplicateKeyUpdate({
       set: {
