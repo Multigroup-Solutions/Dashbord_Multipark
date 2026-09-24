@@ -344,7 +344,6 @@ import {
   getGpsAlerts,
   acknowledgeGpsAlert,
   getGpsAlertStats,
-  getLocalBookingsByAction,
   searchBookingByRef,
 } from "./db";
 import { generatePayrollPdf } from "./payrollPdf";
@@ -6477,8 +6476,16 @@ export const appRouter = router({
       const { getDb } = await import("./db");
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
-      const { multiparkBookingExtras } = await import("../drizzle/schema");
-      const { eq } = await import("drizzle-orm");
+      const { multiparkBookingExtras, multiparkBookings } = await import("../drizzle/schema");
+      const { eq, and } = await import("drizzle-orm");
+      const { projectScope, scopedProjectIds } = await import("./cityScope");
+      if (scopedProjectIds() !== undefined) {
+        // Só serviços de reservas da(s) cidade(s) do utilizador
+        const own = await db.select({ id: multiparkBookingExtras.id }).from(multiparkBookingExtras)
+          .innerJoin(multiparkBookings, eq(multiparkBookings.externalId, multiparkBookingExtras.bookingExternalId))
+          .where(and(eq(multiparkBookingExtras.id, input.id), projectScope(multiparkBookings.projectId))).limit(1);
+        if (!own.length) throw new TRPCError({ code: "FORBIDDEN", message: "Este serviço pertence a outra cidade." });
+      }
       await db.update(multiparkBookingExtras).set({ done: input.done ? 1 : 0 }).where(eq(multiparkBookingExtras.id, input.id));
       await logActivity({ userId: ctx.user.id, action: input.done ? "complete" : "reopen", entity: "booking_extra", entityId: input.id });
       return { success: true };
@@ -6490,15 +6497,23 @@ export const appRouter = router({
     // a ALOCAÇÃO como matrícula. Agora: todos os parques, instantâneo,
     // matrícula/cliente reais via join à reserva.
     multiparkExtras: protectedProcedure.input(z.object({
-      startDate: z.string(),
-      endDate: z.string(),
+      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      // Âmbito de cidade como as outras consultas de reservas (scopeCityQuery
+      // preenche a cidade do utilizador; projectScope garante-a no SQL)
+      projectId: z.number().optional(),
     })).query(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
       const { getDb } = await import("./db");
       const db = await getDb();
       if (!db) return { total: 0, services: [] };
       const { multiparkBookingExtras, multiparkBookings } = await import("../drizzle/schema");
-      const { and, gte, lte, eq, sql } = await import("drizzle-orm");
+      const { and, gte, lt, eq, sql, inArray } = await import("drizzle-orm");
+      const { projectScope } = await import("./cityScope");
+      const { lisbonDayRangeUtc } = await import("../shared/lisbonDay");
+      const { resolveProjectIds } = await import("./db");
+      const range = lisbonDayRangeUtc(input.startDate, input.endDate);
+      const projectIds = input.projectId ? await resolveProjectIds(input.projectId) : null;
       const rows = await db
         .select({
           id: multiparkBookingExtras.id,
@@ -6518,9 +6533,12 @@ export const appRouter = router({
         .from(multiparkBookingExtras)
         .innerJoin(multiparkBookings, eq(multiparkBookings.externalId, multiparkBookingExtras.bookingExternalId))
         .where(and(
-          gte(multiparkBookings.checkOut, input.startDate),
-          lte(multiparkBookings.checkOut, input.endDate + " 23:59:59"),
+          // Dias de Lisboa → intervalo UTC [início, fim)
+          gte(multiparkBookings.checkOut, range.start),
+          lt(multiparkBookings.checkOut, range.end),
           sql`${multiparkBookings.status} != 'CANCELLED'`,
+          projectScope(multiparkBookings.projectId),
+          projectIds ? (projectIds.length ? inArray(multiparkBookings.projectId, projectIds) : sql`1 = 0`) : sql`1 = 1`,
         ))
         .limit(5000);
       const services = rows.map((r) => ({
@@ -7488,20 +7506,63 @@ export const appRouter = router({
     // Query LOCAL DB by actionType + date range
     localBookingsByAction: protectedProcedure
       .input(z.object({
-        startDate: z.string(),
-        endDate: z.string(),
+        startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         actionType: z.enum(["creation", "checkin", "checkout", "cancelation"]),
+        projectId: z.number().optional(),
+        // Filtros no SERVIDOR (grupo Lisboa/Porto/Faro/Marketplace, canal, estado, pesquisa)
+        group: z.enum(["all", "lisboa", "porto", "faro", "marketplace", "sem_cidade"]).optional(),
+        channel: z.string().max(32).optional(),
+        state: z.enum(["all", "active", "cancelled", "done", "pending"]).optional(),
+        search: z.string().max(100).optional(),
+        limit: z.number().int().min(1).max(20000).optional(),
+        offset: z.number().int().min(0).optional(),
+      }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        const { getOperationsBookings, rangeTooLong } = await import("./operationsBookings");
+        if (input.endDate < input.startDate || rangeTooLong(input.startDate, input.endDate)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Intervalo inválido (máx. 366 dias)." });
+        }
+        const r = await getOperationsBookings(input);
+        return { ...r, actionType: input.actionType, period: { startDate: input.startDate, endDate: input.endDate } };
+      }),
+
+    // Custo dos extras por dia (de Lisboa) × cidade — real (ponto), previsto
+    // (escala) e o que conta. Mesma regra do motor financeiro. Só com o gate
+    // de totais financeiros; sem ele devolve allowed=false (a UI esconde).
+    extrasCostDaily: protectedProcedure
+      .input(z.object({
+        startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         projectId: z.number().optional(),
       }))
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "backoffice");
-        const bookings = await getLocalBookingsByAction(input);
-        return {
-          total: bookings.length,
-          actionType: input.actionType,
-          period: { startDate: input.startDate, endDate: input.endDate },
-          bookings,
-        };
+        if (!(await canSeeFinanceTotals(ctx.user))) return { allowed: false as const, today: "", rows: [] };
+        const { getExtrasCostDaily, rangeTooLong } = await import("./operationsBookings");
+        if (input.endDate < input.startDate || rangeTooLong(input.startDate, input.endDate)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Intervalo inválido (máx. 366 dias)." });
+        }
+        return { allowed: true as const, ...(await getExtrasCostDaily(input)) };
+      }),
+
+    // Gasto em publicidade por dia × cidade (Lisboa/Porto/Faro; o marketplace
+    // não tem anúncios nossos). Mesmo gate dos totais financeiros.
+    adSpendDaily: protectedProcedure
+      .input(z.object({
+        startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        projectId: z.number().optional(),
+      }))
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "backoffice");
+        if (!(await canSeeFinanceTotals(ctx.user))) return { allowed: false as const, cities: [], rows: [] };
+        const { getAdSpendDaily, rangeTooLong } = await import("./operationsBookings");
+        if (input.endDate < input.startDate || rangeTooLong(input.startDate, input.endDate)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Intervalo inválido (máx. 366 dias)." });
+        }
+        return { allowed: true as const, ...(await getAdSpendDaily(input)) };
       }),
 
     // Atividade consolidada de um dia: ações + km/GPS por pessoa (visão Jorge)
@@ -7680,8 +7741,9 @@ export const appRouter = router({
         const db = await getDb();
         if (!db) return null;
         const { multiparkBookings } = await import("../drizzle/schema");
-        const { eq } = await import("drizzle-orm");
-        const rows = await db.select().from(multiparkBookings).where(eq(multiparkBookings.externalId, input.externalId)).limit(1);
+        const { and, eq } = await import("drizzle-orm");
+        const { projectScope } = await import("./cityScope");
+        const rows = await db.select().from(multiparkBookings).where(and(eq(multiparkBookings.externalId, input.externalId), projectScope(multiparkBookings.projectId))).limit(1);
         return rows[0] ?? null;
       }),
 

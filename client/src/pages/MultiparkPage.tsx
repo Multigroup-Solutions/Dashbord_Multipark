@@ -1,5 +1,6 @@
 import { classifyBookingOrigin as classifyOrigin } from "@shared/bookingOrigin";
-import { matchesOperationState, summarizeOperationBookings } from "@shared/operationBookings";
+import { ORIGIN_GROUPS, ORIGIN_GROUP_LABELS, CHANNEL_LABELS, type OriginGroup } from "@shared/originGroup";
+import { OpsDailyPanel } from "@/components/operacoes/OpsDailyPanel";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
@@ -109,7 +110,9 @@ export default function MultiparkPage({ sectionProp }: { sectionProp?: string } 
           <div>
             <p className="text-sm text-muted-foreground">{config.subtitle}</p>
           </div>
-          <ConnectionStatus />
+          {/* Teste à API da Multipark: só admin (a rota é admin-only; ao
+              backoffice aparecia sempre "Desconectado" a vermelho) */}
+          {user?.role === "admin" && <ConnectionStatus />}
         </div>
 
         {/* Content based on section */}
@@ -126,26 +129,37 @@ export default function MultiparkPage({ sectionProp }: { sectionProp?: string } 
   );
 }
 
-// ─── Action Type Tab (queries API directly per actionType) ───────────────────
+// ─── Action Type Tab (BD local; filtros e totais no SERVIDOR) ────────────────
+const PAGE_SIZE = 500;
+
 function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "checkout" | "cancelation" }) {
   const globalFilters = useGlobalFilters();
+  const utils = trpc.useUtils();
   const [defFrom, defTo] = thisMonthRange();
   // Filtros PARTILHADOS entre as abas das Operações (pedido do Jorge:
   // "ponho um filtro nas Reservas e mudo para Recolhas — ele fica"):
-  // datas, projeto, pesquisa e origem seguem contigo de aba para aba.
+  // datas, projeto, pesquisa, grupo e canal seguem contigo de aba para aba.
   const [startDate, setStartDate] = usePersistedState("mpk.shared.start", defFrom);
   const [endDate, setEndDate] = usePersistedState("mpk.shared.end", defTo);
   const [activeRange, setActiveRange] = usePersistedState<string>("mpk.shared.range", "thisMonth");
   const [searchTerm, setSearchTerm] = usePersistedState("mpk.shared.search", "");
   const [projectId, setProjectId] = usePersistedState<string>("mpk.shared.project", "");
   const [lastGlobalProject, setLastGlobalProject] = usePersistedState<string>("mpk.shared.globalProject", "__initial__");
-  const [originFilter, setOriginFilter] = usePersistedState<string>("mpk.shared.origin", "all");
-  // Estado real vs previsto (passo 2 do Jorge): as CONTAS de topo são sempre a
-  // previsão do período; este seletor filtra a lista para ver o que já foi
-  // recolhido/entregue vs o que falta. Por aba (não partilhado — "recolhidas"
-  // não faz sentido nas entregas).
+  // Grupo (Lisboa/Porto/Faro/Marketplace) e canal de venda (secundário)
+  const [groupFilter, setGroupFilter] = usePersistedState<string>("mpk.shared.group", "all");
+  const [channelFilter, setChannelFilter] = usePersistedState<string>("mpk.shared.channel", "all");
+  // Estado real vs previsto: por aba ("recolhidas" não faz sentido nas entregas).
   const [stateFilter, setStateFilter] = usePersistedState<string>(`mpk.${actionType}.state`, "all");
-  const [detailBooking, setDetailBooking] = useState<any>(null);
+  const [detailExternalId, setDetailExternalId] = useState<string | null>(null);
+  const [limit, setLimit] = useState(PAGE_SIZE);
+  const [exporting, setExporting] = useState(false);
+
+  // Pesquisa vai ao servidor com um pequeno atraso (não a cada tecla)
+  const [debouncedSearch, setDebouncedSearch] = useState(searchTerm);
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchTerm), 350);
+    return () => clearTimeout(t);
+  }, [searchTerm]);
 
   // Limpar o filtro global também limpa a seleção local da aba.
   useEffect(() => {
@@ -173,46 +187,76 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
 
   const levelIcon = (level: string) => level === "group" ? "🏢" : level === "city" ? "📍" : level === "brand" ? "🏷" : "📁";
 
-  const { data, isLoading, refetch } = trpc.multipark.localBookingsByAction.useQuery(
-    { startDate, endDate, actionType, projectId: projectId ? Number(projectId) : undefined },
-    { refetchOnWindowFocus: false }
+  const baseInput = {
+    startDate, endDate, actionType,
+    projectId: projectId ? Number(projectId) : undefined,
+    group: groupFilter as any,
+    channel: channelFilter,
+    state: (actionType === "cancelation" ? "all" : stateFilter) as any,
+    search: debouncedSearch || undefined,
+  };
+  // Nova pesquisa/filtro → volta à primeira página
+  const filterKey = JSON.stringify(baseInput);
+  useEffect(() => { setLimit(PAGE_SIZE); }, [filterKey]);
+
+  const { data, isLoading, isFetching, refetch } = trpc.multipark.localBookingsByAction.useQuery(
+    { ...baseInput, limit },
+    { refetchOnWindowFocus: false, placeholderData: (prev) => prev },
   );
+  const bookings: any[] = data?.bookings ?? [];
+  const total = data?.total ?? 0;
+  const totals = data?.summary ?? { revenue: 0, byPark: {}, partnerTotal: 0, toCollect: 0, paidOnline: 0, paidMB: 0, paidCash: 0, paidOther: 0, cancelledCount: 0, cancelledValue: 0 };
 
+  const detailQ = trpc.multipark.bookingByExternalId.useQuery(
+    { externalId: detailExternalId ?? "" },
+    { enabled: !!detailExternalId },
+  );
+  const detailRow = bookings.find((b) => b.externalId === detailExternalId);
 
-
-  const isDone = (b: any) => matchesOperationState(b.status, actionType, "done");
-
-  const ORIGIN_GROUPS: Array<{ id: string; label: string }> = [
-    { id: "site", label: "Sites próprios" },
-    { id: "telefone", label: "Telefone" },
-    { id: "parceiro", label: "Parceiros" },
-    { id: "campanha", label: "Campanhas internas" },
-    { id: "marketplace", label: "Marketplace" },
-    { id: "outros", label: "Sem origem / por identificar" },
-  ];
-
-  const bookings = useMemo(() => {
-    let list: any[] = data?.bookings ?? [];
-    if (originFilter !== "all") list = list.filter((b) => classifyOrigin(b).group === originFilter);
-    list = list.filter((b) => matchesOperationState(b.status, actionType, stateFilter));
-    if (!searchTerm) return list;
-    const s = searchTerm.toLowerCase();
-    return list.filter((b: any) =>
-      (b.clientFirstName || "").toLowerCase().includes(s) ||
-      (b.clientLastName || "").toLowerCase().includes(s) ||
-      (b.licensePlate || "").toLowerCase().includes(s) ||
-      (b.bookingNumber || "").toLowerCase().includes(s) ||
-      (b.clientEmail || "").toLowerCase().includes(s)
-    );
-  }, [data, searchTerm, originFilter, stateFilter, actionType]);
-
-  // Ordenação por coluna (setas nos cabeçalhos)
+  // Ordenação por coluna (setas nos cabeçalhos) — dentro da página carregada
   const { sorted: sortedBookings, sortKey, sortDir, toggle } = useTableSort(bookings as any[]);
 
-  const totals = useMemo(() => summarizeOperationBookings(bookings, actionType), [bookings, actionType]);
+  const exportCsv = async () => {
+    setExporting(true);
+    try {
+      const all = await utils.multipark.localBookingsByAction.fetch({ ...baseInput, limit: 20000, offset: 0 });
+      const headers = ["Reserva","Cliente","Email","Matrícula","Parque","Cidade","Grupo","Canal","Check-in","Check-out","Tipo Recolha/Entrega","Estado","Tipo Parque","Preço (c/ IVA)","Delivery","Extras","Desconto","Campanha"];
+      const rows = (all.bookings as any[]).map(b => [
+        b.bookingNumber || b.externalId || "",
+        `${b.clientFirstName || ""} ${b.clientLastName || ""}`.trim().replace(/;/g, ","),
+        (b.clientEmail || "").replace(/;/g, ","),
+        b.licensePlate || "",
+        (b.parkName || "").replace(/;/g, ","),
+        b.city || "",
+        ORIGIN_GROUP_LABELS[b.group as OriginGroup] ?? "",
+        CHANNEL_LABELS[b.channel] ?? b.channel ?? "",
+        b.checkIn || "",
+        b.checkOut || "",
+        b.deliveryType || "",
+        b.status || "",
+        b.parkingType || "",
+        parseFloat(b.totalPrice || "0").toFixed(2),
+        parseFloat(b.deliveryCharges || "0").toFixed(2),
+        parseFloat(b.extrasTotal || "0").toFixed(2),
+        parseFloat(b.discount || "0").toFixed(2),
+        (b.campaign || "").replace(/;/g, ","),
+      ]);
+      const csv = [headers.join(";"), ...rows.map(r => r.join(";"))].join("\n");
+      const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `reservas_${actionType}_${startDate}_${endDate}.csv`; a.click();
+      URL.revokeObjectURL(url);
+      if (all.hasMore) toast.warning("CSV limitado às primeiras 20.000 linhas — encurta o período.");
+    } catch (e: any) {
+      toast.error(e?.message ?? "Erro ao exportar");
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 min-w-0">
       {/* Atalhos de período */}
       <QuickRangeBar
         active={activeRange}
@@ -221,7 +265,7 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
 
       {/* Filters */}
       <div className="flex flex-wrap items-end gap-3">
-        <div className="mb-0.5">
+        <div className="mb-0.5 max-w-full">
           <DateRangeNav
             start={startDate}
             end={endDate}
@@ -249,13 +293,25 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
           </div>
         )}
         <div>
-          <Label className="text-xs mb-1 block">Origem</Label>
-          <Select value={originFilter} onValueChange={setOriginFilter}>
+          <Label className="text-xs mb-1 block">Grupo</Label>
+          <Select value={groupFilter} onValueChange={setGroupFilter}>
+            <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos os grupos</SelectItem>
+              {ORIGIN_GROUPS.map((g) => (
+                <SelectItem key={g} value={g}>{ORIGIN_GROUP_LABELS[g]}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label className="text-xs mb-1 block">Canal</Label>
+          <Select value={channelFilter} onValueChange={setChannelFilter}>
             <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">Todas as origens</SelectItem>
-              {ORIGIN_GROUPS.map((g) => (
-                <SelectItem key={g.id} value={g.id}>{g.label}</SelectItem>
+              <SelectItem value="all">Todos os canais</SelectItem>
+              {Object.entries(CHANNEL_LABELS).map(([id, label]) => (
+                <SelectItem key={id} value={id}>{label}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -263,7 +319,7 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
         <div>
           <Label className="text-xs mb-1 block">Grupo / Projeto</Label>
           <Select value={projectId} onValueChange={v => setProjectId(v === "all" ? "" : v)}>
-            <SelectTrigger className="w-56"><SelectValue placeholder="Todos" /></SelectTrigger>
+            <SelectTrigger className="w-56 max-w-full"><SelectValue placeholder="Todos" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Todos</SelectItem>
               {sortedProjects.map(p => (
@@ -274,7 +330,7 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
             </SelectContent>
           </Select>
         </div>
-        <div>
+        <div className="max-w-full">
           <Label className="text-xs mb-1 block">Pesquisar</Label>
           <div className="relative">
             <Search className="w-4 h-4 absolute left-2.5 top-2.5 text-muted-foreground" />
@@ -282,85 +338,55 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
               placeholder="Nome, matrícula, email..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-8 w-56"
+              className="pl-8 w-56 max-w-full"
             />
           </div>
         </div>
-        <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isLoading}>
-          <RefreshCw className={`w-4 h-4 mr-1 ${isLoading ? "animate-spin" : ""}`} />
+        <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
+          <RefreshCw className={`w-4 h-4 mr-1 ${isFetching ? "animate-spin" : ""}`} />
           Atualizar
         </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={bookings.length === 0}
-          onClick={() => {
-            const headers = ["Reserva","Cliente","Email","Matrícula","Parque","Cidade","Check-in","Check-out","Tipo Recolha/Entrega","Estado","Tipo Parque","Preço","Delivery","Extras","Desconto","Campanha"];
-            const rows = (bookings as any[]).map(b => [
-              b.bookingNumber || b.externalId || "",
-              `${b.clientFirstName || ""} ${b.clientLastName || ""}`.trim().replace(/;/g, ","),
-              (b.clientEmail || "").replace(/;/g, ","),
-              b.licensePlate || "",
-              (b.parkName || "").replace(/;/g, ","),
-              b.city || "",
-              b.checkIn || "",
-              b.checkOut || "",
-              b.deliveryType || "",
-              b.status || "",
-              b.parkingType || "",
-              parseFloat(b.totalPrice || "0").toFixed(2),
-              parseFloat(b.deliveryCharges || "0").toFixed(2),
-              parseFloat(b.extrasTotal || "0").toFixed(2),
-              parseFloat(b.discount || "0").toFixed(2),
-              b.campaign || "",
-            ]);
-            const csv = [headers.join(";"), ...rows.map(r => r.join(";"))].join("\n");
-            const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url; a.download = `reservas_${actionType}_${startDate}_${endDate}.csv`; a.click();
-            URL.revokeObjectURL(url);
-          }}
-        >
-          <Download className="w-4 h-4 mr-1" /> CSV
+        <Button variant="outline" size="sm" disabled={total === 0 || exporting} onClick={exportCsv}>
+          <Download className="w-4 h-4 mr-1" /> {exporting ? "A exportar…" : "CSV"}
         </Button>
       </div>
 
-      {actionType === "creation" && (
+      {actionType === "creation" && data && (
         <p className="text-sm text-muted-foreground">
-          {bookings.length} reservas criadas: {bookings.length - totals.cancelledCount} não canceladas e {totals.cancelledCount} canceladas.
-          {" "}Valor cancelado: {fmtEur(totals.cancelledValue)}. Os valores financeiros abaixo referem-se apenas às não canceladas.
+          <b className="text-foreground">{total}</b> reservas criadas: <b className="text-foreground">{data.active}</b> não canceladas e <b className="text-foreground">{data.cancelled}</b> canceladas.
+          {" "}Valor cancelado: {fmtEur(totals.cancelledValue)} (c/ IVA). Os valores financeiros abaixo referem-se apenas às não canceladas.
         </p>
       )}
-      {/* Summary cards */}
+      {actionType === "cancelation" && data && data.approxDates > 0 && (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+          {data.approxDates} de {total} sem data de cancelamento na Multipark — datadas pela última alteração da reserva (aproximado, assinaladas com ≈).
+        </p>
+      )}
+      {/* Summary cards (valores c/ IVA) */}
       <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
         <Card>
           <CardContent className="p-3">
             <p className="text-xs text-muted-foreground">Total</p>
-            <p className="text-xl font-bold">{bookings.length}</p>
-            {(actionType === "checkin" || actionType === "checkout") && stateFilter === "all" && (() => {
-              const done = (bookings as any[]).filter((b) => isDone(b)).length;
-              const pending = bookings.length - done;
-              return (
-                <p className="text-[10px] text-muted-foreground mt-0.5">
-                  <span className="text-emerald-700">{done} {actionType === "checkin" ? "recolhidas" : "entregues"}</span>
-                  {" · "}
-                  <span className="text-amber-700">{pending} {actionType === "checkin" ? "por recolher" : "por entregar"}</span>
-                </p>
-              );
-            })()}
+            <p className="text-xl font-bold">{total}</p>
+            {(actionType === "checkin" || actionType === "checkout") && stateFilter === "all" && data && (
+              <p className="text-[10px] text-muted-foreground mt-0.5">
+                <span className="text-emerald-700">{data.done} {actionType === "checkin" ? "recolhidas" : "entregues"}</span>
+                {" · "}
+                <span className="text-amber-700">{data.pending} {actionType === "checkin" ? "por recolher" : "por entregar"}</span>
+              </p>
+            )}
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-3">
-            <p className="text-xs text-muted-foreground">{actionType === "creation" ? "Valor não cancelado" : "Receita Bruta"}</p>
+            <p className="text-xs text-muted-foreground">{actionType === "creation" ? "Valor não cancelado" : actionType === "cancelation" ? "Valor cancelado" : "Receita bruta"} <span className="text-[10px]">(c/ IVA)</span></p>
             <p className="text-xl font-bold text-green-600">{fmtEur(totals.revenue)}</p>
           </CardContent>
         </Card>
         {totals.partnerTotal > 0 && (
           <Card>
             <CardContent className="p-3">
-              <p className="text-xs text-muted-foreground">Parceiros</p>
+              <p className="text-xs text-muted-foreground">Parceiros <span className="text-[10px]">(c/ IVA)</span></p>
               <p className="text-xl font-bold text-orange-600">-{fmtEur(totals.partnerTotal)}</p>
             </CardContent>
           </Card>
@@ -368,7 +394,7 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
         {totals.partnerTotal > 0 && (
           <Card className="border-green-200 bg-green-50">
             <CardContent className="p-3">
-              <p className="text-xs text-muted-foreground">Receita Líquida</p>
+              <p className="text-xs text-muted-foreground">Receita após parceiros <span className="text-[10px]">(c/ IVA)</span></p>
               <p className="text-xl font-bold text-green-700">{fmtEur(totals.revenue - totals.partnerTotal)}</p>
             </CardContent>
           </Card>
@@ -402,53 +428,40 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
           <CardContent className="p-3">
             <p className="text-xs text-muted-foreground">Falta pagar</p>
             <p className="text-xl font-bold text-amber-700">{fmtEur(totals.toCollect)}</p>
-            <p className="text-[10px] text-muted-foreground">caixa prevista do período</p>
+            <p className="text-[10px] text-muted-foreground">caixa prevista do período (c/ IVA)</p>
           </CardContent>
         </Card>
       </div>
 
-      {/* Origens das reservas (só na aba Reservas) — detalhe a afinar com o Jorge */}
-      {actionType === "creation" && bookings.length > 0 && (
-        <Card>
-          <CardContent className="p-3">
-            <p className="text-xs text-muted-foreground mb-1.5">Origens das reservas</p>
-            <div className="flex flex-wrap gap-2">
-              {(() => {
-                const counts = new Map<string, number>();
-                for (const b of bookings as any[]) {
-                  const key = classifyOrigin(b).label;
-                  counts.set(key, (counts.get(key) ?? 0) + 1);
-                }
-                return Array.from(counts.entries())
-                  .sort((a, b) => b[1] - a[1])
-                  .slice(0, 12)
-                  .map(([name, n]) => (
-                    <Badge key={name} variant="outline" className="text-xs py-1 px-2">
-                      {name}: <span className="font-bold ml-1">{n}</span>
-                    </Badge>
-                  ));
-              })()}
-            </div>
-          </CardContent>
-        </Card>
+      {/* Gráfico diário por grupo + custos por cidade + origens */}
+      {data && (
+        <OpsDailyPanel
+          actionType={actionType}
+          startDate={startDate}
+          endDate={endDate}
+          projectId={projectId ? Number(projectId) : undefined}
+          daily={data.daily as any}
+          origins={actionType === "creation" ? (data.origins as any) : undefined}
+          activeGroup={groupFilter}
+          onPickGroup={setGroupFilter}
+        />
       )}
 
-      {/* Aviso do corte de 5.000 linhas (períodos grandes) */}
-      {(data?.bookings?.length ?? 0) >= 5000 && (
+      {data?.scanTruncated && (
         <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-          ⚠ A mostrar as primeiras 5.000 reservas — o período escolhido tem mais. Encurta o período para ver tudo.
+          ⚠ O período tem mais de 50.000 reservas — os totais consideram só as 50.000 mais recentes. Encurta o período.
         </p>
       )}
 
       {/* Per-park breakdown */}
       {Object.keys(totals.byPark).length > 1 && (
         <div className="flex flex-wrap gap-2">
-          {Object.entries(totals.byPark).map(([park, data]) => (
+          {Object.entries(totals.byPark as Record<string, any>).map(([park, pd]) => (
             <Badge key={park} variant="outline" className="text-xs py-1 px-2">
-              {park}: {data.count} ({fmtEur(data.revenue)})
-              {data.partnerName && (
+              {park}: {pd.count} ({fmtEur(pd.revenue)})
+              {pd.partnerName && (
                 <span className="text-orange-600 ml-1">
-                  | {data.partnerName}: {fmtEur(data.partnerShare)}
+                  | {pd.partnerName}: {fmtEur(pd.partnerShare)}
                 </span>
               )}
             </Badge>
@@ -488,9 +501,10 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
                     <Th k="parkName" label="Parque" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                     <Th k="checkIn" label="Recolha" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                     <Th k="checkOut" label="Entrega" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
-                    <Th k="origin" label="Origem" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    {actionType === "cancelation" && <Th k="day" label="Cancelada" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />}
+                    <Th k="group" label="Grupo / canal" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                     <Th k="status" label="Estado" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
-                    <Th k="totalPrice" label="Preço" align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                    <Th k="totalPrice" label="Preço (c/ IVA)" align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                     <Th k="parkingType" label="Tipo" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                   </tr>
                 </thead>
@@ -503,12 +517,17 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
                     const isNonValet = (b.parkingType ?? "").toUpperCase() !== "VALET";
                     const clientName = `${b.clientFirstName || ""} ${b.clientLastName || ""}`.trim();
                     const toPay = parseFloat(b.remainingToPay) || 0;
+                    const o = classifyOrigin(b);
+                    const color = o.group === "parceiro" ? "border-rose-200 text-rose-700"
+                      : o.group === "campanha" ? "border-violet-200 text-violet-700"
+                      : o.group === "telefone" ? "border-amber-200 text-amber-700"
+                      : "";
 
                     return (
                       <tr
                         key={b.id || i}
                         className={`border-t cursor-pointer ${isNonValet ? "bg-red-50 hover:bg-red-100/70" : "hover:bg-muted/30"}`}
-                        onClick={() => setDetailBooking(b)}
+                        onClick={() => b.externalId && setDetailExternalId(b.externalId)}
                       >
                         <td className="p-2 font-mono text-xs">{b.bookingNumber || b.externalId}</td>
                         <td className="p-2 text-xs max-w-[140px]">
@@ -521,15 +540,14 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
                         </td>
                         <td className="p-2 text-xs">{fmtBookingDateTime(b.checkIn)}</td>
                         <td className="p-2 text-xs">{fmtBookingDateTime(b.checkOut)}</td>
-                        <td className="p-2 text-xs max-w-[150px]">
-                          {(() => {
-                            const o = classifyOrigin(b);
-                            const color = o.group === "parceiro" ? "border-rose-200 text-rose-700"
-                              : o.group === "campanha" ? "border-violet-200 text-violet-700"
-                              : o.group === "telefone" ? "border-amber-200 text-amber-700"
-                              : "";
-                            return <Badge variant="outline" className={`text-[10px] ${color}`} title={b.originUrl ?? undefined}>{o.label}</Badge>;
-                          })()}
+                        {actionType === "cancelation" && (
+                          <td className="p-2 text-xs whitespace-nowrap" title={b.approxDate ? "Sem data de cancelamento — última alteração da reserva" : undefined}>
+                            {b.approxDate ? "≈ " : ""}{fmtBookingDateTime(b.cancelledAt ?? b.updatedAt)}
+                          </td>
+                        )}
+                        <td className="p-2 text-xs max-w-[170px]">
+                          <span className="block text-[11px] font-medium">{ORIGIN_GROUP_LABELS[b.group as OriginGroup] ?? "—"}</span>
+                          <Badge variant="outline" className={`text-[10px] ${color}`} title={b.originUrl ?? undefined}>{o.label}</Badge>
                         </td>
                         <td className="p-2">
                           <Badge className={statusCfg?.color || "bg-gray-100 text-gray-800"}>
@@ -550,11 +568,24 @@ function ActionTypeTab({ actionType }: { actionType: "creation" | "checkin" | "c
                 </tbody>
               </table>
             </div>
+            <div className="flex items-center justify-between gap-2 flex-wrap px-3 py-2 border-t text-xs text-muted-foreground">
+              <span>A mostrar {bookings.length} de {total}</span>
+              {data?.hasMore && (
+                <Button variant="outline" size="sm" disabled={isFetching} onClick={() => setLimit((l) => l + PAGE_SIZE)}>
+                  {isFetching ? "A carregar…" : `Mostrar mais ${Math.min(PAGE_SIZE, total - bookings.length)}`}
+                </Button>
+              )}
+            </div>
           </CardContent>
         </Card>
       )}
 
-      {detailBooking && <BookingDetailDialog booking={detailBooking} onClose={() => setDetailBooking(null)} />}
+      {detailExternalId && (detailQ.data || detailRow) && (
+        <BookingDetailDialog
+          booking={{ ...(detailRow ?? {}), ...(detailQ.data ?? {}), salesPartnerName: detailRow?.salesPartnerName, salesPartnerRate: detailRow?.salesPartnerRate, salesPartnerCommission: detailRow?.salesPartnerCommission }}
+          onClose={() => setDetailExternalId(null)}
+        />
+      )}
     </div>
   );
 }
@@ -584,738 +615,6 @@ function ConnectionStatus() {
       <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => refetch()}>
         <RefreshCw className="w-4 h-4" />
       </Button>
-    </div>
-  );
-}
-
-// ─── Dashboard Tab (KPIs from snapshots) ─────────────────────────────────────
-function DashboardTab() {
-  const today = new Date();
-  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-  const [from, setFrom] = useState(monthStart.toISOString().slice(0, 10));
-  const [to, setTo] = useState(today.toISOString().slice(0, 10));
-  const [city, setCity] = useState<string>("all");
-
-  const queryInput = useMemo(() => ({
-    from: from || undefined,
-    to: to ? to + "T23:59:59.999Z" : undefined,
-    city: city && city !== "all" ? city : undefined,
-  }), [from, to, city]);
-
-  const { data: kpis, isLoading } = trpc.multipark.kpis.useQuery(queryInput);
-
-  // Also fetch synced booking stats for comparison
-  const { data: bookingStats } = trpc.multipark.bookingStats.useQuery();
-
-  if (isLoading) return <div className="py-12 text-center text-muted-foreground">A carregar KPIs...</div>;
-
-  if (!kpis || kpis.totalBookings === 0) {
-    return (
-      <div className="mt-4 space-y-4">
-        <FilterBar from={from} to={to} city={city} onFromChange={setFrom} onToChange={setTo} onCityChange={setCity} cities={[]} />
-        <Card className="border-dashed">
-          <CardContent className="py-16 text-center">
-            <FileSpreadsheet className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-            <h3 className="font-semibold text-lg mb-2">Sem dados para o período selecionado</h3>
-            <p className="text-sm text-muted-foreground mb-4">
-              Sincroniza as reservas via API ou importa um ficheiro Excel para ver os KPIs.
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
-  const cities = kpis.byCity.map(c => c.name);
-
-  const topKpis = [
-    { label: "Total Reservas", value: fmtNum(kpis.totalBookings), icon: ParkingCircle, color: "text-indigo-600 bg-indigo-100" },
-    { label: "Receita Total", value: fmtCents(kpis.totalRevenue), icon: DollarSign, color: "text-green-600 bg-green-100" },
-    { label: "Recolhas", value: fmtNum(kpis.checkins), icon: ArrowDownToLine, color: "text-blue-600 bg-blue-100" },
-    { label: "Entregas", value: fmtNum(kpis.checkouts), icon: ArrowUpFromLine, color: "text-purple-600 bg-purple-100" },
-    { label: "Reservados", value: fmtNum(kpis.reserved), icon: Calendar, color: "text-amber-600 bg-amber-100" },
-    { label: "Cancelados", value: fmtNum(kpis.cancelled), icon: XCircle, color: "text-red-600 bg-red-100" },
-  ];
-
-  return (
-    <div className="space-y-6 mt-4">
-      <FilterBar from={from} to={to} city={city} onFromChange={setFrom} onToChange={setTo} onCityChange={setCity} cities={cities} />
-
-      {/* Booking sync stats */}
-      {bookingStats && bookingStats.total > 0 && (
-        <Card className="border-indigo-200 bg-indigo-50/30">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <RefreshCw className="w-4 h-4 text-indigo-600" />
-              <span className="text-sm font-medium text-indigo-900">Reservas sincronizadas via API</span>
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-              <div><span className="text-xl font-bold text-indigo-700">{bookingStats.total}</span><p className="text-xs text-indigo-600">Total</p></div>
-              <div><span className="text-xl font-bold text-green-700">{bookingStats.reservasHoje}</span><p className="text-xs text-green-600">Hoje</p></div>
-              <div><span className="text-xl font-bold text-blue-700">{bookingStats.checkinHoje}</span><p className="text-xs text-blue-600">Check-in hoje</p></div>
-              <div><span className="text-xl font-bold text-purple-700">{bookingStats.reservasMes}</span><p className="text-xs text-purple-600">Este mês</p></div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        {topKpis.map((k) => (
-          <Card key={k.label}>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2 mb-2">
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${k.color}`}>
-                  <k.icon className="w-4 h-4" />
-                </div>
-              </div>
-              <p className="text-xl font-bold">{k.value}</p>
-              <p className="text-xs text-muted-foreground">{k.label}</p>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      {/* Revenue by Park / City */}
-      <div className="grid md:grid-cols-2 gap-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Building2 className="w-4 h-4" /> Receita por Parque
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {kpis.byPark.length > 0 ? (
-              <div className="space-y-3">
-                {kpis.byPark.map((p) => {
-                  const pct = kpis.totalRevenue > 0 ? (p.revenue / kpis.totalRevenue) * 100 : 0;
-                  return (
-                    <div key={p.name}>
-                      <div className="flex items-center justify-between text-sm mb-1">
-                        <span className="truncate font-medium">{p.name}</span>
-                        <span className="text-muted-foreground ml-2 shrink-0">
-                          {fmtCents(p.revenue)} ({fmtNum(p.bookings)} res.)
-                        </span>
-                      </div>
-                      <div className="h-2 bg-muted rounded-full overflow-hidden">
-                        <div className="h-full bg-indigo-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">Sem dados</p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <MapPin className="w-4 h-4" /> Receita por Cidade
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {kpis.byCity.length > 0 ? (
-              <div className="space-y-3">
-                {kpis.byCity.map((c) => {
-                  const pct = kpis.totalRevenue > 0 ? (c.revenue / kpis.totalRevenue) * 100 : 0;
-                  return (
-                    <div key={c.name}>
-                      <div className="flex items-center justify-between text-sm mb-1">
-                        <span className="font-medium">{c.name}</span>
-                        <span className="text-muted-foreground">
-                          {fmtCents(c.revenue)} ({fmtNum(c.bookings)} res.)
-                        </span>
-                      </div>
-                      <div className="h-2 bg-muted rounded-full overflow-hidden">
-                        <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">Sem dados</p>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Campaigns */}
-      {Object.keys(kpis.campaigns).length > 0 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <TrendingUp className="w-4 h-4" /> Campanhas Externas (Agentes)
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-wrap gap-2">
-              {Object.entries(kpis.campaigns)
-                .sort((a, b) => (b[1] as number) - (a[1] as number))
-                .map(([name, count]) => (
-                  <Badge key={name} variant="outline" className="text-sm py-1 px-3">
-                    {name}: <span className="font-bold ml-1">{fmtNum(count as number)}</span>
-                  </Badge>
-                ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Daily trend */}
-      {kpis.byDay.length > 1 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <BarChart3 className="w-4 h-4" /> Evolução Diária
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50">
-                  <tr>
-                    <th className="text-left p-2 font-medium">Data</th>
-                    <th className="text-right p-2 font-medium">Reservas</th>
-                    <th className="text-right p-2 font-medium">Receita</th>
-                    <th className="text-right p-2 font-medium">Check-ins</th>
-                    <th className="text-right p-2 font-medium">Check-outs</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {kpis.byDay.map((d) => (
-                    <tr key={d.date} className="border-t">
-                      <td className="p-2">{new Date(d.date).toLocaleDateString("pt-PT")}</td>
-                      <td className="p-2 text-right font-medium">{fmtNum(d.bookings)}</td>
-                      <td className="p-2 text-right text-green-600">{fmtCents(d.revenue)}</td>
-                      <td className="p-2 text-right">{fmtNum(d.checkins)}</td>
-                      <td className="p-2 text-right">{fmtNum(d.checkouts)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-    </div>
-  );
-}
-
-// ─── Bookings Tab (synced from API) ──────────────────────────────────────────
-function BookingsTab({ statusFilter: statusFilterProp }: { statusFilter?: string[] }) {
-  const today = new Date();
-  // Filtros persistem à navegação (pedido do Jorge)
-  const [from, setFrom] = usePersistedState("mpk.bookings.from", today.toISOString().slice(0, 10));
-  const [to, setTo] = usePersistedState("mpk.bookings.to", today.toISOString().slice(0, 10));
-  const [statusFilter, setStatusFilter] = usePersistedState<string>("mpk.bookings.status", "all");
-  const [searchTerm, setSearchTerm] = usePersistedState("mpk.bookings.search", "");
-  const [viewMode, setViewMode] = usePersistedState<"today" | "range" | "month">("mpk.bookings.view", "today");
-
-  // Month selector
-  const [selectedMonth, setSelectedMonth] = useState(`${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`);
-
-  const queryDates = useMemo(() => {
-    if (viewMode === "today") {
-      const d = today.toISOString().slice(0, 10);
-      return { from: d, to: d };
-    }
-    if (viewMode === "month") {
-      const [y, m] = selectedMonth.split("-").map(Number);
-      const start = new Date(y, m - 1, 1);
-      const end = new Date(y, m, 0);
-      return { from: start.toISOString().slice(0, 10), to: end.toISOString().slice(0, 10) };
-    }
-    return { from, to };
-  }, [viewMode, from, to, selectedMonth]);
-
-  const { data: rawBookings = [], isLoading, refetch } = trpc.multipark.bookings.useQuery({
-    from: queryDates.from,
-    to: queryDates.to + "T23:59:59.999Z",
-    status: statusFilter !== "all" ? statusFilter : undefined,
-    search: searchTerm || undefined,
-    limit: 1000,
-  }, {
-    // Com o webhook das Conexões, as reservas entram na BD em segundos —
-    // refresca sozinho para não parecer que só chegam com o botão de sync.
-    refetchInterval: 60_000,
-    refetchOnWindowFocus: true,
-  });
-
-  // Filter by section status (from sidebar nav)
-  const bookings = useMemo(() => {
-    if (!statusFilterProp?.length) return rawBookings;
-    return rawBookings.filter(b => statusFilterProp.includes(b.status || ""));
-  }, [rawBookings, statusFilterProp]);
-
-  // Aggregate stats from visible bookings
-  const stats = useMemo(() => {
-    const s = {
-      total: bookings.length,
-      totalRevenue: 0,
-      byStatus: {} as Record<string, number>,
-      byPark: {} as Record<string, { count: number; revenue: number }>,
-      byCity: {} as Record<string, { count: number; revenue: number }>,
-      withDelivery: 0,
-      avgPrice: 0,
-    };
-    for (const b of bookings) {
-      const price = parseFloat(b.totalPrice || "0");
-      s.totalRevenue += price;
-      s.byStatus[b.status || "UNKNOWN"] = (s.byStatus[b.status || "UNKNOWN"] || 0) + 1;
-      if (b.deliveryService) s.withDelivery++;
-
-      const park = b.parkName || "Desconhecido";
-      if (!s.byPark[park]) s.byPark[park] = { count: 0, revenue: 0 };
-      s.byPark[park].count++;
-      s.byPark[park].revenue += price;
-
-      const city = b.city || "Desconhecida";
-      if (!s.byCity[city]) s.byCity[city] = { count: 0, revenue: 0 };
-      s.byCity[city].count++;
-      s.byCity[city].revenue += price;
-    }
-    s.avgPrice = s.total > 0 ? s.totalRevenue / s.total : 0;
-    return s;
-  }, [bookings]);
-
-  const viewLabel = viewMode === "today" ? "Hoje" : viewMode === "month"
-    ? new Date(parseInt(selectedMonth.split("-")[0]), parseInt(selectedMonth.split("-")[1]) - 1).toLocaleDateString("pt-PT", { month: "long", year: "numeric" })
-    : `${fmtDate(queryDates.from)} — ${fmtDate(queryDates.to)}`;
-
-  return (
-    <div className="space-y-4 mt-4">
-      {/* View mode + filters */}
-      <div className="flex flex-wrap items-end gap-3">
-        <div>
-          <Label className="text-xs mb-1 block">Vista</Label>
-          <Select value={viewMode} onValueChange={(v) => setViewMode(v as any)}>
-            <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="today">Hoje</SelectItem>
-              <SelectItem value="month">Por Mês</SelectItem>
-              <SelectItem value="range">Intervalo</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        {viewMode === "month" && (
-          <div>
-            <Label className="text-xs mb-1 block">Mês</Label>
-            <Input type="month" value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} className="w-44" />
-          </div>
-        )}
-        {viewMode === "range" && (
-          <>
-            <div>
-              <Label className="text-xs mb-1 block">De</Label>
-              <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="w-40" />
-            </div>
-            <div>
-              <Label className="text-xs mb-1 block">Até</Label>
-              <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="w-40" />
-            </div>
-          </>
-        )}
-
-        {!statusFilterProp?.length && (
-          <div>
-            <Label className="text-xs mb-1 block">Estado</Label>
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todos</SelectItem>
-                {Object.entries(STATUS_MAP).map(([k, v]) => (
-                  <SelectItem key={k} value={k}>{v.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
-
-        <div>
-          <Label className="text-xs mb-1 block">Pesquisar</Label>
-          <div className="relative">
-            <Search className="w-4 h-4 absolute left-2.5 top-2.5 text-muted-foreground" />
-            <Input
-              placeholder="Nome, matrícula, email..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-8 w-56"
-            />
-          </div>
-        </div>
-
-        <Button variant="outline" size="sm" className="gap-1.5" onClick={() => refetch()}>
-          <RefreshCw className="w-3.5 h-3.5" /> Atualizar
-        </Button>
-      </div>
-
-      {/* Stats cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-2xl font-bold">{stats.total}</p>
-            <p className="text-xs text-muted-foreground">Reservas ({viewLabel})</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-2xl font-bold text-green-600">{fmtEur(stats.totalRevenue)}</p>
-            <p className="text-xs text-muted-foreground">Receita Total</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-2xl font-bold text-blue-600">{fmtEur(stats.avgPrice)}</p>
-            <p className="text-xs text-muted-foreground">Ticket Médio</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-2xl font-bold text-purple-600">{stats.withDelivery}</p>
-            <p className="text-xs text-muted-foreground">Com Entrega</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex flex-wrap gap-1">
-              {Object.entries(stats.byStatus).map(([status, count]) => {
-                const s = STATUS_MAP[status] || { label: status, color: "bg-gray-100 text-gray-800" };
-                return (
-                  <Badge key={status} className={`${s.color} text-xs`}>
-                    {s.label}: {count}
-                  </Badge>
-                );
-              })}
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">Por estado</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Revenue by park/city summary */}
-      {stats.total > 0 && (
-        <div className="grid md:grid-cols-2 gap-4">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium">Por Parque</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-2">
-                {Object.entries(stats.byPark)
-                  .sort((a, b) => b[1].revenue - a[1].revenue)
-                  .map(([name, d]) => (
-                    <div key={name} className="flex justify-between text-sm">
-                      <span className="truncate font-medium">{name}</span>
-                      <span className="text-muted-foreground shrink-0 ml-2">
-                        {fmtEur(d.revenue)} ({d.count} res.)
-                      </span>
-                    </div>
-                  ))}
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium">Por Cidade</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-2">
-                {Object.entries(stats.byCity)
-                  .sort((a, b) => b[1].revenue - a[1].revenue)
-                  .map(([name, d]) => (
-                    <div key={name} className="flex justify-between text-sm">
-                      <span className="font-medium">{name}</span>
-                      <span className="text-muted-foreground">
-                        {fmtEur(d.revenue)} ({d.count} res.)
-                      </span>
-                    </div>
-                  ))}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      {/* Bookings table */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-medium flex items-center justify-between">
-            <span className="flex items-center gap-2">
-              <CreditCard className="w-4 h-4" /> Reservas ({stats.total})
-            </span>
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <div className="py-8 text-center text-muted-foreground">A carregar reservas...</div>
-          ) : bookings.length === 0 ? (
-            <div className="py-8 text-center text-muted-foreground">
-              <Calendar className="w-10 h-10 mx-auto mb-3 opacity-50" />
-              <p>Sem reservas para o período selecionado</p>
-              <p className="text-xs mt-1">Usa a tab "Sincronização" para importar dados da API</p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50">
-                  <tr>
-                    <th className="text-left p-2 font-medium">Reserva</th>
-                    <th className="text-left p-2 font-medium">Cliente</th>
-                    <th className="text-left p-2 font-medium">Viatura</th>
-                    <th className="text-left p-2 font-medium">Parque</th>
-                    <th className="text-left p-2 font-medium">Check-in</th>
-                    <th className="text-left p-2 font-medium">Check-out</th>
-                    <th className="text-right p-2 font-medium">Valor</th>
-                    <th className="text-left p-2 font-medium">Estado</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {bookings.map((b: any) => {
-                    const s = STATUS_MAP[b.status] || { label: b.status || "—", color: "bg-gray-100 text-gray-800" };
-                    return (
-                      <tr key={b.id} className="border-t hover:bg-muted/30">
-                        <td className="p-2">
-                          <span className="font-mono text-xs">{b.bookingNumber || b.externalId?.slice(0, 12)}</span>
-                          {b.campaign && (
-                            <Badge variant="outline" className="ml-1 text-[10px] py-0">{b.campaign}</Badge>
-                          )}
-                        </td>
-                        <td className="p-2">
-                          <div className="text-xs">
-                            <span className="font-medium">{[b.clientFirstName, b.clientLastName].filter(Boolean).join(" ") || "—"}</span>
-                            {b.clientEmail && <p className="text-muted-foreground truncate max-w-[150px]">{b.clientEmail}</p>}
-                          </div>
-                        </td>
-                        <td className="p-2">
-                          <span className="font-mono text-xs">{b.licensePlate || "—"}</span>
-                          {b.vehicleBrand && <span className="text-muted-foreground text-xs ml-1">{b.vehicleBrand}</span>}
-                        </td>
-                        <td className="p-2 text-xs">
-                          <span className="font-medium">{b.parkName || "—"}</span>
-                          {b.city && <p className="text-muted-foreground">{b.city}</p>}
-                        </td>
-                        <td className="p-2 text-xs">
-                          {fmtBookingDate(b.checkIn)}
-                          {b.checkInTime && <span className="text-muted-foreground ml-1">{fmtBookingHHmm(b.checkInTime)}</span>}
-                        </td>
-                        <td className="p-2 text-xs">
-                          {fmtBookingDate(b.checkOut)}
-                          {b.checkOutTime && <span className="text-muted-foreground ml-1">{fmtBookingHHmm(b.checkOutTime)}</span>}
-                        </td>
-                        <td className="p-2 text-right font-medium text-green-700">
-                          {fmtEur(b.totalPrice)}
-                          {b.deliveryService ? (
-                            <Badge variant="outline" className="ml-1 text-[10px] py-0">Entrega</Badge>
-                          ) : null}
-                        </td>
-                        <td className="p-2">
-                          <Badge className={`${s.color} text-[10px]`}>{s.label}</Badge>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-// ─── Filter Bar (reused in Dashboard) ────────────────────────────────────────
-function FilterBar({ from, to, city, onFromChange, onToChange, onCityChange, cities }: {
-  from: string; to: string; city: string;
-  onFromChange: (v: string) => void; onToChange: (v: string) => void; onCityChange: (v: string) => void;
-  cities: string[];
-}) {
-  return (
-    <div className="flex flex-wrap items-end gap-3">
-      <div>
-        <Label className="text-xs mb-1 block">De</Label>
-        <Input type="date" value={from} onChange={(e) => onFromChange(e.target.value)} className="w-40" />
-      </div>
-      <div>
-        <Label className="text-xs mb-1 block">Até</Label>
-        <Input type="date" value={to} onChange={(e) => onToChange(e.target.value)} className="w-40" />
-      </div>
-      {cities.length > 0 && (
-        <div>
-          <Label className="text-xs mb-1 block">Cidade</Label>
-          <Select value={city} onValueChange={onCityChange}>
-            <SelectTrigger className="w-40">
-              <SelectValue placeholder="Todas" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Todas</SelectItem>
-              {cities.map((c) => (
-                <SelectItem key={c} value={c}>{c}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Availability Tab ─────────────────────────────────────────────────────────
-function AvailabilityTab() {
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const dayAfter = new Date();
-  dayAfter.setDate(dayAfter.getDate() + 3);
-  const dateFmt = (d: Date) => d.toISOString().split("T")[0];
-
-  const [checkIn, setCheckIn] = useState(dateFmt(tomorrow));
-  const [checkOut, setCheckOut] = useState(dateFmt(dayAfter));
-  const [vehicleType, setVehicleType] = useState("CAR");
-  const [parkingType, setParkingType] = useState("COVERED");
-  const [doQuery, setDoQuery] = useState(false);
-
-  const queryInput = useMemo(() => ({
-    checkIn, checkOut,
-    vehicleType: vehicleType as any,
-    parkingType: parkingType as any,
-  }), [checkIn, checkOut, vehicleType, parkingType]);
-
-  const { data, isLoading, refetch } = trpc.multipark.checkAvailability.useQuery(queryInput, {
-    enabled: doQuery,
-    retry: false,
-  });
-
-  const handleCheck = () => {
-    if (!checkIn || !checkOut) { toast.error("Seleciona as datas"); return; }
-    setDoQuery(true);
-    refetch();
-  };
-
-  return (
-    <div className="space-y-6 mt-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm font-medium">Verificar Disponibilidade</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div>
-              <Label className="text-xs">Check-in</Label>
-              <Input type="date" value={checkIn} onChange={(e) => setCheckIn(e.target.value)} />
-            </div>
-            <div>
-              <Label className="text-xs">Check-out</Label>
-              <Input type="date" value={checkOut} onChange={(e) => setCheckOut(e.target.value)} />
-            </div>
-            <div>
-              <Label className="text-xs">Veículo</Label>
-              <Select value={vehicleType} onValueChange={setVehicleType}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {Object.entries(VEHICLE_LABELS).map(([k, v]) => (
-                    <SelectItem key={k} value={k}>{v}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label className="text-xs">Tipo</Label>
-              <Select value={parkingType} onValueChange={setParkingType}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {Object.entries(PARKING_LABELS).map(([k, v]) => (
-                    <SelectItem key={k} value={k}>{v}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <Button onClick={handleCheck} disabled={isLoading} className="gap-2">
-            {isLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Calendar className="w-4 h-4" />}
-            Verificar
-          </Button>
-        </CardContent>
-      </Card>
-
-      {data && (
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center gap-4">
-              <div className={`w-16 h-16 rounded-full flex items-center justify-center ${data.available ? "bg-green-100" : "bg-red-100"}`}>
-                {data.available ? <CheckCircle2 className="w-8 h-8 text-green-600" /> : <XCircle className="w-8 h-8 text-red-600" />}
-              </div>
-              <div>
-                <h3 className="text-lg font-bold">{data.available ? "Disponível" : "Sem disponibilidade"}</h3>
-                <p className="text-sm text-muted-foreground">{data.message}</p>
-                <p className="text-sm mt-1">
-                  <span className="font-medium">{data.availableSpots}</span> de{" "}
-                  <span className="font-medium">{data.totalSpots}</span> lugares livres
-                </p>
-              </div>
-            </div>
-            <div className="mt-4">
-              <div className="h-3 bg-muted rounded-full overflow-hidden">
-                <div
-                  className={`h-full rounded-full transition-all ${data.availableSpots / data.totalSpots > 0.3 ? "bg-green-500" : data.availableSpots / data.totalSpots > 0.1 ? "bg-yellow-500" : "bg-red-500"}`}
-                  style={{ width: `${((data.totalSpots - data.availableSpots) / data.totalSpots) * 100}%` }}
-                />
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                Ocupação: {((data.totalSpots - data.availableSpots) / data.totalSpots * 100).toFixed(0)}%
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-    </div>
-  );
-}
-
-// ─── Parks Tab ────────────────────────────────────────────────────────────────
-function ParksTab() {
-  const { data, isLoading } = trpc.multipark.listParks.useQuery();
-  if (isLoading) return <div className="py-12 text-center text-muted-foreground">A carregar parques...</div>;
-  const parks = (data as any)?.parks || data || [];
-
-  return (
-    <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-      {parks.map((park: any) => (
-        <Card key={park.id} className="hover:shadow-md transition-shadow">
-          <CardContent className="p-4">
-            <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center shrink-0">
-                <MapPin className="w-5 h-5 text-blue-600" />
-              </div>
-              <div className="min-w-0">
-                <h3 className="font-semibold truncate">{park.name}</h3>
-                <p className="text-xs text-muted-foreground mt-0.5">{park.address}</p>
-                {park.lat && park.lng && (
-                  <a
-                    href={`https://www.google.com/maps?q=${park.lat},${park.lng}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs text-blue-600 hover:underline mt-1 inline-block"
-                  >
-                    Ver no Google Maps →
-                  </a>
-                )}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      ))}
-      {parks.length === 0 && (
-        <Card className="col-span-full">
-          <CardContent className="py-12 text-center text-muted-foreground">
-            Nenhum parque encontrado
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }

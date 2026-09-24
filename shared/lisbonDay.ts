@@ -81,6 +81,45 @@ export function lisbonHoursSince(day: string, at: Date | number | string): numbe
   return (utcMs(at) - lisbonMidnightUtcMs(day)) / 3_600_000;
 }
 
+/**
+ * Troços de offset constante (horas Lisboa − UTC) que cobrem [startDay, endDay]
+ * de Lisboa, para agrupar por DIA DE LISBOA no SQL sem depender das tabelas de
+ * fusos do MySQL (CONVERT_TZ com nomes precisa delas). `untilUtc` é o instante
+ * UTC ("YYYY-MM-DD HH:MM:SS") em que o troço acaba (exclusivo); o último é null.
+ * As mudanças de hora em Lisboa são às 01:00 UTC (regra da UE).
+ */
+export function lisbonOffsetSegments(startDay: string, endDay: string): Array<{ offsetHours: number; untilUtc: string | null }> {
+  const segs: Array<{ offsetHours: number; untilUtc: string | null }> = [];
+  const days = daysInRange(addDays(startDay, -1), addDays(endDay, 1));
+  const offAt = (d: string, h: number) => {
+    const [y, m, dd] = d.split("-").map(Number);
+    return Math.round(lisbonOffsetMs(Date.UTC(y, m - 1, dd, h)) / 3_600_000);
+  };
+  let cur = offAt(days[0], 0);
+  for (const d of days) {
+    const at = offAt(d, 2); // depois das 01:00 UTC desse dia
+    if (at !== cur) {
+      segs.push({ offsetHours: cur, untilUtc: `${d} 01:00:00` });
+      cur = at;
+    }
+  }
+  segs.push({ offsetHours: cur, untilUtc: null });
+  return segs;
+}
+
+/**
+ * Expressão SQL (MySQL) do dia de Lisboa de uma coluna TIMESTAMP em UTC.
+ * `col` tem de ser SQL confiável (nome de coluna/expressão escrita no código);
+ * os literais vêm de `lisbonOffsetSegments` (datas validadas).
+ */
+export function lisbonDaySql(col: string, startDay: string, endDay: string): string {
+  if (!DAY_RE.test(startDay) || !DAY_RE.test(endDay)) throw new Error("Dia inválido");
+  const segs = lisbonOffsetSegments(startDay, endDay);
+  if (segs.length === 1) return `DATE(DATE_ADD(${col}, INTERVAL ${segs[0].offsetHours} HOUR))`;
+  const cases = segs.slice(0, -1).map((s) => `WHEN ${col} < '${s.untilUtc}' THEN ${s.offsetHours}`).join(" ");
+  return `DATE(DATE_ADD(${col}, INTERVAL (CASE ${cases} ELSE ${segs[segs.length - 1].offsetHours} END) HOUR))`;
+}
+
 /** Instante UTC em ms; strings sem fuso são UTC (como as da BD). */
 export function utcMs(at: Date | number | string): number {
   if (typeof at === "number") return at;
