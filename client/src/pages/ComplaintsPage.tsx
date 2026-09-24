@@ -38,6 +38,7 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }>
   waiting_client: { label: "Aguarda Cliente", color: "bg-purple-100 text-purple-800 border-purple-200", icon: Clock },
   resolved: { label: "Resolvido", color: "bg-green-100 text-green-800 border-green-200", icon: CheckCircle2 },
   closed: { label: "Fechado", color: "bg-gray-100 text-gray-800 border-gray-200", icon: XCircle },
+  converted: { label: "Convertida", color: "bg-violet-100 text-violet-800 border-violet-200", icon: XCircle },
 };
 
 const TYPE_CONFIG: Record<string, { label: string; emoji: string }> = {
@@ -123,7 +124,9 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
     const map: Record<string, any[]> = {};
     KANBAN_COLUMNS.forEach(s => map[s] = []);
     complaints.forEach((c: any) => {
-      if (map[c.complaintStatus]) map[c.complaintStatus].push(c);
+      // Convertidas (fechadas e ligadas ao registo novo) ficam na coluna Fechado.
+      const col = c.complaintStatus === "converted" ? "closed" : c.complaintStatus;
+      if (map[col]) map[col].push(c);
     });
     return map;
   }, [complaints]);
@@ -464,7 +467,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
     onError: (e) => toast.error(e.message || "Erro ao eliminar"),
   });
   const convertMut = trpc.complaints.convertToLostFound.useMutation({
-    onSuccess: (r) => { toast.success(`Movida para os Perdidos & Achados (caso #${r.newId})`); utils.complaints.list.invalidate(); utils.lostFound.list.invalidate(); onBack(); },
+    onSuccess: (r) => { toast.success(`Convertida no Perdido #${r.newId} (a reclamação fica fechada e ligada)`); utils.complaints.list.invalidate(); utils.lostFound.list.invalidate(); onBack(); },
     onError: (e) => toast.error(e.message || "Erro ao mover"),
   });
   const utils = trpc.useUtils();
@@ -572,27 +575,32 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={startEditing}><Pencil className="w-4 h-4 mr-1" /> Editar</Button>
-        <Select value={c.complaintStatus} onValueChange={handleStatusChange}>
+        {c.complaintStatus === "converted" && (c as any).convertedToId && (
+          <a href={`/perdidos-achados/caso/${(c as any).convertedToId}`} className="text-xs underline text-violet-700">
+            Convertida no Perdido #{(c as any).convertedToId}
+          </a>
+        )}
+        <Select value={c.complaintStatus} onValueChange={handleStatusChange} disabled={c.complaintStatus === "converted"}>
           <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
           <SelectContent>
-            {Object.entries(STATUS_CONFIG).map(([k, v]) => (
-              <SelectItem key={k} value={k}>{v.label}</SelectItem>
+            {Object.entries(STATUS_CONFIG).filter(([k]) => k !== "converted" || c.complaintStatus === "converted").map(([k, v]) => (
+              <SelectItem key={k} value={k} disabled={k === "converted"}>{v.label}</SelectItem>
             ))}
           </SelectContent>
         </Select>
         {["admin", "super_admin"].includes(user?.role) && (
           <>
-            <Button
+            {c.complaintStatus !== "converted" && <Button
               variant="outline" size="sm"
               disabled={convertMut.isPending}
-              title="Isto afinal é um Perdido/Achado — move o caso inteiro"
+              title="Isto afinal é um Perdido — cria o caso e fecha esta reclamação (ligados)"
               onClick={() => {
-                if (!confirm("Mover esta reclamação (com mensagens e fotos) para os Perdidos & Achados?")) return;
+                if (!confirm("Converter em caso de Perdidos? Leva mensagens, fotos e condutores; a reclamação fica fechada como 'Convertida' e ligada.")) return;
                 convertMut.mutate({ id });
               }}
             >
-              <Package className="w-4 h-4 mr-1" /> {convertMut.isPending ? "A mover…" : "Mover p/ Perdidos"}
-            </Button>
+              <Package className="w-4 h-4 mr-1" /> {convertMut.isPending ? "A converter…" : "Converter em Perdido"}
+            </Button>}
             <Button
               variant="destructive" size="sm"
               disabled={deleteMut.isPending}

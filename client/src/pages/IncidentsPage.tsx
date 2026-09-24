@@ -19,13 +19,21 @@ import {
   RefreshCw, Loader2, Bot, MapPin, Download, ExternalLink,
 } from "lucide-react";
 import BookingSearchField from "@/components/BookingSearchField";
+import CaseDashboardCard from "@/components/CaseDashboardCard";
+import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
+import { useLocation } from "wouter";
+
+const LEADER_ROLES = ["team_leader", "supervisor", "admin", "super_admin"];
 
 const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
   open: { label: "Aberta", color: "bg-red-100 text-red-800" },
   investigating: { label: "Em Investigação", color: "bg-yellow-100 text-yellow-800" },
   resolved: { label: "Resolvida", color: "bg-green-100 text-green-800" },
   dismissed: { label: "Descartada", color: "bg-gray-100 text-gray-800" },
+  converted: { label: "Convertida", color: "bg-violet-100 text-violet-800" },
 };
+type EditableStatus = "open" | "investigating" | "resolved" | "dismissed";
+const isOpenStatus = (s: string) => s === "open" || s === "investigating";
 
 const SEVERITY_CONFIG: Record<string, { label: string; color: string }> = {
   low: { label: "Baixa", color: "bg-slate-100 text-slate-700" },
@@ -72,25 +80,35 @@ export default function IncidentsPage() {
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterSeverity, setFilterSeverity] = useState("all");
   const [activeTab, setActiveTab] = useState("all");
-  const [detailId, setDetailId] = useState<number | null>(null);
+  const [detailId, setDetailId] = useState<number | null>(() => Number(new URLSearchParams(window.location.search).get("id")) || null);
+  const [noProject, setNoProject] = useState(false);
+  const globalFilters = useGlobalFilters();
+  const [, setLocation] = useLocation();
+  const isLeader = LEADER_ROLES.includes(user?.role ?? "");
 
+  const scopeInput = useMemo(() => (
+    noProject ? { noProject: true } : globalFilters.projectId !== undefined ? { projectId: globalFilters.projectId } : {}
+  ), [noProject, globalFilters.projectId]);
   const queryInput = useMemo(() => {
-    const input: any = {};
+    const input: any = { ...scopeInput };
     if (filterStatus !== "all") input.status = filterStatus;
     if (filterSeverity !== "all") input.severity = filterSeverity;
     return Object.keys(input).length > 0 ? input : undefined;
-  }, [filterStatus, filterSeverity]);
+  }, [filterStatus, filterSeverity, scopeInput]);
 
   const { data: incidents = [], isLoading } = trpc.incidents.list.useQuery(queryInput);
-  const { data: stats } = trpc.incidents.stats.useQuery(undefined);
+  const { data: stats } = trpc.incidents.stats.useQuery(Object.keys(scopeInput).length ? scopeInput : undefined);
+  const { data: dashboard } = trpc.incidents.dashboard.useQuery(Object.keys(scopeInput).length ? scopeInput : undefined);
+  const { data: allProjects = [] } = trpc.projects.list.useQuery();
+  const cities = useMemo(() => (allProjects as any[]).filter(p => p.level === "city").map(p => ({ id: p.id as number, name: p.name as string })), [allProjects]);
   const updateMut = trpc.incidents.update.useMutation();
   const deleteMut = trpc.incidents.delete.useMutation();
   const toComplaintMut = trpc.incidents.convertToComplaint.useMutation({
-    onSuccess: (r) => { toast.success(`Movida para as Reclamações (#${r.newId}) — reserva e cliente ligados automaticamente se a matrícula bater`); utils.incidents.list.invalidate(); utils.incidents.stats.invalidate(); utils.complaints.list.invalidate(); },
+    onSuccess: (r) => { toast.success(`Convertida na Reclamação #${r.newId} (a ocorrência fica fechada e ligada)`); utils.incidents.list.invalidate(); utils.incidents.stats.invalidate(); utils.incidents.dashboard.invalidate(); utils.complaints.list.invalidate(); },
     onError: (e) => toast.error(e.message || "Erro ao mover"),
   });
   const toLostFoundMut = trpc.incidents.convertToLostFound.useMutation({
-    onSuccess: (r) => { toast.success(`Movida para os Perdidos & Achados (#${r.newId})`); utils.incidents.list.invalidate(); utils.incidents.stats.invalidate(); utils.lostFound.list.invalidate(); },
+    onSuccess: (r) => { toast.success(`Convertida no Perdido #${r.newId} (a ocorrência fica fechada e ligada)`); utils.incidents.list.invalidate(); utils.incidents.stats.invalidate(); utils.incidents.dashboard.invalidate(); utils.lostFound.list.invalidate(); },
     onError: (e) => toast.error(e.message || "Erro ao mover"),
   });
   const utils = trpc.useUtils();
@@ -119,11 +137,11 @@ export default function IncidentsPage() {
     return map;
   }, [employees]);
 
-  const is48hOverdue = (createdAt: string, status: string) => {
-    if (status === "resolved" || status === "dismissed") return false;
-    const created = new Date(createdAt);
-    const now = new Date();
-    return (now.getTime() - created.getTime()) > 48 * 60 * 60 * 1000;
+  // SLA: prazo guardado (dueAt, UTC). Sem prazo (legado) → 48h desde a criação.
+  const isOverdue = (inc: any) => {
+    if (!isOpenStatus(inc.status)) return false;
+    const due = inc.dueAt ? utcMs(inc.dueAt) : utcMs(inc.createdAt) + 48 * 3_600_000;
+    return Date.now() > due;
   };
 
   const handleResolve = async (id: number, resolution: string) => {
@@ -162,7 +180,7 @@ export default function IncidentsPage() {
           <div>
             <p className="text-muted-foreground">Gestão e análise de ocorrências reportadas</p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <Button
               variant="outline"
               disabled={incidents.length === 0}
@@ -194,6 +212,11 @@ export default function IncidentsPage() {
               {syncMultipark.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
               {syncMultipark.isPending ? "A sincronizar..." : "Sincronizar Multipark"}
             </Button>
+            {isLeader && (
+              <Button variant="outline" onClick={() => setLocation("/perdidos-achados/cruzamento")}>
+                <ShieldAlert className="w-4 h-4 mr-2" /> Cruzamento de condutores
+              </Button>
+            )}
             <Button onClick={() => setShowCreate(true)}><Plus className="w-4 h-4 mr-2" /> Nova Ocorrência</Button>
           </div>
         </div>
@@ -220,6 +243,12 @@ export default function IncidentsPage() {
           </div>
         )}
 
+        <CaseDashboardCard
+          data={dashboard}
+          onOpenCrossRef={isLeader ? () => setLocation("/perdidos-achados/cruzamento") : undefined}
+          onShowNoCity={() => setNoProject(true)}
+        />
+
         {/* By Type Chart */}
         {stats && Object.keys(stats.byType).length > 0 && (
           <Card>
@@ -239,6 +268,9 @@ export default function IncidentsPage() {
 
         {/* Filters */}
         <div className="flex items-center gap-3 flex-wrap">
+          <label className="flex items-center gap-1 text-sm cursor-pointer">
+            <input type="checkbox" checked={noProject} onChange={e => setNoProject(e.target.checked)} /> Sem cidade
+          </label>
           <div className="flex items-center gap-2">
             <Label>Estado:</Label>
             <Select value={filterStatus} onValueChange={setFilterStatus}>
@@ -292,7 +324,7 @@ export default function IncidentsPage() {
         ) : (
           <div className="space-y-2">
             {visibleIncidents.map((inc: any) => {
-              const overdue = is48hOverdue(inc.createdAt, inc.status);
+              const overdue = isOverdue(inc);
               return (
                 <Card
                   key={inc.id}
@@ -308,7 +340,14 @@ export default function IncidentsPage() {
                           {categoryOf(inc) === "reclamacao" && <Badge className="bg-amber-100 text-amber-800">Cliente reclamou</Badge>}
                           <Badge className={STATUS_CONFIG[inc.status]?.color}>{STATUS_CONFIG[inc.status]?.label}</Badge>
                           <Badge className={SEVERITY_CONFIG[inc.severity]?.color}>{SEVERITY_CONFIG[inc.severity]?.label}</Badge>
-                          {overdue && <Badge className="bg-red-500 text-white">+48h sem resolução</Badge>}
+                          {overdue && <Badge className="bg-red-500 text-white">Fora do prazo</Badge>}
+                          {inc.projectId == null && inc.status !== "converted" && <Badge variant="outline" className="text-red-600 border-red-300">Sem cidade</Badge>}
+                          {inc.employeeId && !inc.driverConfirmed && inc.status !== "dismissed" && inc.status !== "converted" && (
+                            <Badge variant="outline" className="text-amber-700 border-amber-300">Condutor por confirmar</Badge>
+                          )}
+                          {inc.status === "converted" && inc.convertedToId && (
+                            <Badge variant="outline" className="text-violet-700 border-violet-300">→ {inc.convertedToType === "complaint" ? "Reclamação" : "Perdido"} #{inc.convertedToId}</Badge>
+                          )}
                           {(inc as any).sourceEmailId && <Badge variant="outline" className="text-xs"><Bot className="w-3 h-3 mr-1" />Gmail</Badge>}
                         </div>
                         <p className="text-sm text-muted-foreground">{inc.description}</p>
@@ -328,22 +367,27 @@ export default function IncidentsPage() {
                         {inc.resolution && <p className="text-xs text-green-700 mt-1">Resolução: {inc.resolution}</p>}
                       </div>
                       <div className="flex gap-1 flex-wrap justify-end" onClick={(e) => e.stopPropagation()}>
-                        <Button size="sm" variant="ghost" onClick={() => setEditInc(inc)}>
-                          <Pencil className="w-4 h-4" />
-                        </Button>
+                        {inc.projectId == null && inc.status !== "converted" && cities.length > 0 && (
+                          <AssignCitySelect incidentId={inc.id} cities={cities} />
+                        )}
+                        {inc.status !== "converted" && (
+                          <Button size="sm" variant="ghost" onClick={() => setEditInc(inc)}>
+                            <Pencil className="w-4 h-4" />
+                          </Button>
+                        )}
                         {(inc.status === "open" || inc.status === "investigating") && (
                           <Button size="sm" variant="outline" onClick={() => setSelectedId(inc.id)}>
                             Resolver
                           </Button>
                         )}
-                        {["admin", "super_admin"].includes(user?.role ?? "") && (
+                        {["admin", "super_admin"].includes(user?.role ?? "") && inc.status !== "converted" && (
                           <>
                             <Button
                               size="sm" variant="outline" className="text-xs"
                               disabled={toComplaintMut.isPending}
                               title="Converte em Reclamação — vai buscar a reserva e os dados do cliente pela matrícula"
                               onClick={() => {
-                                if (!confirm("Mover esta ocorrência para as Reclamações? A reserva/cliente serão ligados automaticamente pela matrícula.")) return;
+                                if (!confirm("Converter em Reclamação? A ocorrência fica fechada como 'Convertida' e ligada à reclamação nova (reserva/cliente ligados pela matrícula).")) return;
                                 toComplaintMut.mutate({ id: inc.id });
                               }}
                             >
@@ -354,7 +398,7 @@ export default function IncidentsPage() {
                               disabled={toLostFoundMut.isPending}
                               title="Converte em caso de Perdidos & Achados"
                               onClick={() => {
-                                if (!confirm("Mover esta ocorrência para os Perdidos & Achados?")) return;
+                                if (!confirm("Converter em caso de Perdidos? A ocorrência fica fechada como 'Convertida' e ligada ao caso novo.")) return;
                                 toLostFoundMut.mutate({ id: inc.id });
                               }}
                             >
@@ -377,13 +421,14 @@ export default function IncidentsPage() {
         )}
       </div>
 
-      {showCreate && <CreateIncidentDialog employees={employees} onClose={() => setShowCreate(false)} />}
+      {showCreate && <CreateIncidentDialog employees={employees} canSetDriver={isLeader} onClose={() => setShowCreate(false)} />}
       {selectedId && <ResolveDialog id={selectedId} onResolve={handleResolve} onClose={() => setSelectedId(null)} />}
-      {editInc && <EditIncidentDialog incident={editInc} employees={employees} onClose={() => setEditInc(null)} />}
+      {editInc && <EditIncidentDialog incident={editInc} employees={employees} canSetDriver={isLeader} onClose={() => setEditInc(null)} />}
       {detailId && (
         <IncidentDetailDialog
           id={detailId}
           user={user}
+          cities={cities}
           employeeMap={employeeMap}
           onClose={() => setDetailId(null)}
           onEdit={(inc) => { setDetailId(null); setEditInc(inc); }}
@@ -398,8 +443,8 @@ export default function IncidentsPage() {
  * relacionada pela matrícula, notas datadas, aceitar/resolver num clique e
  * conversão para Reclamações/Perdidos.
  */
-function IncidentDetailDialog({ id, user, employeeMap, onClose, onEdit }: {
-  id: number; user: any; employeeMap: Map<number, string>; onClose: () => void; onEdit: (inc: any) => void;
+function IncidentDetailDialog({ id, user, cities, employeeMap, onClose, onEdit }: {
+  id: number; user: any; cities: { id: number; name: string }[]; employeeMap: Map<number, string>; onClose: () => void; onEdit: (inc: any) => void;
 }) {
   const { data: inc, isLoading } = trpc.incidents.getById.useQuery({ id });
   const { data: peek } = trpc.incidents.bookingPeek.useQuery({ id });
@@ -410,23 +455,29 @@ function IncidentDetailDialog({ id, user, employeeMap, onClose, onEdit }: {
     utils.incidents.getById.invalidate({ id });
     utils.incidents.list.invalidate();
     utils.incidents.stats.invalidate();
+    utils.incidents.dashboard.invalidate();
   };
+  const confirmDriverMut = trpc.incidents.confirmDriver.useMutation({
+    onSuccess: (_r, v) => { toast.success(v.confirmed ? "Envolvimento confirmado — conta na avaliação" : "Envolvimento retirado — não conta pontos"); invalidate(); },
+    onError: (e) => toast.error(e.message),
+  });
   const updateMut = trpc.incidents.update.useMutation({ onSuccess: invalidate });
   const addNoteMut = trpc.incidents.addNote.useMutation({
     onSuccess: () => { setNote(""); toast.success("Nota adicionada"); invalidate(); },
     onError: (e) => toast.error(e.message || "Erro ao adicionar nota"),
   });
   const toComplaintMut = trpc.incidents.convertToComplaint.useMutation({
-    onSuccess: (r) => { toast.success(`Movida para as Reclamações (#${r.newId})`); invalidate(); utils.complaints.list.invalidate(); onClose(); },
+    onSuccess: (r) => { toast.success(`Convertida na Reclamação #${r.newId}`); invalidate(); utils.complaints.list.invalidate(); onClose(); },
     onError: (e) => toast.error(e.message || "Erro ao mover"),
   });
   const toLostFoundMut = trpc.incidents.convertToLostFound.useMutation({
-    onSuccess: (r) => { toast.success(`Movida para os Perdidos & Achados (#${r.newId})`); invalidate(); utils.lostFound.list.invalidate(); onClose(); },
+    onSuccess: (r) => { toast.success(`Convertida no Perdido #${r.newId}`); invalidate(); utils.lostFound.list.invalidate(); onClose(); },
     onError: (e) => toast.error(e.message || "Erro ao mover"),
   });
 
   if (isLoading || !inc) return null;
-  const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
+  const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "") && inc.status !== "converted";
+  const isLeader = LEADER_ROLES.includes(user?.role ?? "");
   const openStates = inc.status === "open" || inc.status === "investigating";
 
   return (
@@ -455,8 +506,31 @@ function IncidentDetailDialog({ id, user, employeeMap, onClose, onEdit }: {
 
           <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
             {inc.vehiclePlate && <div><Car className="w-3 h-3 inline mr-1" />Matrícula: <span className="font-medium text-foreground">{inc.vehiclePlate}</span></div>}
-            {inc.employeeId && <div><User className="w-3 h-3 inline mr-1" />Colaborador: <span className="font-medium text-foreground">{employeeMap.get(inc.employeeId) || `#${inc.employeeId}`}</span></div>}
+            {inc.employeeId && (
+              <div className="col-span-2 flex flex-wrap items-center gap-2">
+                <span><User className="w-3 h-3 inline mr-1" />Condutor: <span className="font-medium text-foreground">{employeeMap.get(inc.employeeId) || `#${inc.employeeId}`}</span></span>
+                {inc.driverConfirmed
+                  ? <Badge className="bg-red-100 text-red-800">Envolvimento confirmado — conta pontos</Badge>
+                  : <Badge variant="outline" className="text-amber-700 border-amber-300">Por confirmar — não conta pontos</Badge>}
+                {isLeader && inc.status !== "converted" && inc.status !== "dismissed" && (
+                  <Button size="sm" variant="outline" className="h-6 text-xs" disabled={confirmDriverMut.isPending}
+                    onClick={() => confirmDriverMut.mutate({ id, confirmed: !inc.driverConfirmed })}>
+                    {inc.driverConfirmed ? "Retirar confirmação" : "Confirmar envolvimento"}
+                  </Button>
+                )}
+              </div>
+            )}
             <div><Clock className="w-3 h-3 inline mr-1" />Criada: <span className="font-medium text-foreground">{fmtPTDateTime(inc.createdAt)}</span></div>
+            {inc.dueAt && isOpenStatus(inc.status) && <div>Prazo: <span className={`font-medium ${Date.now() > utcMs(inc.dueAt) ? "text-red-600" : "text-foreground"}`}>{fmtPTDateTime(inc.dueAt)}</span></div>}
+            {inc.costAmount != null && <div>Custo: <span className="font-medium text-foreground">{Number(inc.costAmount).toLocaleString("pt-PT", { style: "currency", currency: "EUR" })}</span></div>}
+            <div className="flex items-center gap-1">Cidade: {inc.projectId != null
+              ? <span className="font-medium text-foreground">{cities.find(c => c.id === inc.projectId)?.name ?? `#${inc.projectId}`}</span>
+              : cities.length > 0 && inc.status !== "converted" ? <AssignCitySelect incidentId={inc.id} cities={cities} /> : <span className="text-red-600">Sem cidade</span>}</div>
+            {inc.status === "converted" && inc.convertedToId && (
+              <a className="text-violet-700 underline" href={inc.convertedToType === "complaint" ? `/reclamacoes?id=${inc.convertedToId}` : `/perdidos-achados/caso/${inc.convertedToId}`}>
+                Convertida em {inc.convertedToType === "complaint" ? "Reclamação" : "Perdido"} #{inc.convertedToId}
+              </a>
+            )}
             {(inc as any).sourceEmailDate && <div>Email original: <span className="font-medium text-foreground">{fmtPTDateTime((inc as any).sourceEmailDate)}</span></div>}
             {(inc as any).reservationLink && (
               <button
@@ -500,7 +574,13 @@ function IncidentDetailDialog({ id, user, employeeMap, onClose, onEdit }: {
         </div>
 
         <DialogFooter className="flex-wrap gap-2">
-          <Button variant="outline" size="sm" onClick={() => onEdit(inc)}><Pencil className="w-4 h-4 mr-1" /> Editar</Button>
+          {inc.status !== "converted" && <Button variant="outline" size="sm" onClick={() => onEdit(inc)}><Pencil className="w-4 h-4 mr-1" /> Editar</Button>}
+          {openStates && (
+            <Button size="sm" variant="outline" disabled={updateMut.isPending} title="Não é ocorrência / sem fundamento — não conta pontos"
+              onClick={() => updateMut.mutate({ id, status: "dismissed" }, { onSuccess: () => { toast.success("Ocorrência descartada"); onClose(); } })}>
+              Descartar
+            </Button>
+          )}
           {openStates && (
             <Button
               size="sm" className="bg-green-600 hover:bg-green-700 text-white"
@@ -518,10 +598,10 @@ function IncidentDetailDialog({ id, user, employeeMap, onClose, onEdit }: {
           )}
           {isAdmin && (
             <>
-              <Button size="sm" variant="outline" disabled={toComplaintMut.isPending} onClick={() => { if (confirm("Mover para as Reclamações?")) toComplaintMut.mutate({ id }); }}>
+              <Button size="sm" variant="outline" disabled={toComplaintMut.isPending} onClick={() => { if (confirm("Converter em Reclamação? A ocorrência fica fechada e ligada.")) toComplaintMut.mutate({ id }); }}>
                 → Reclamações
               </Button>
-              <Button size="sm" variant="outline" disabled={toLostFoundMut.isPending} onClick={() => { if (confirm("Mover para os Perdidos & Achados?")) toLostFoundMut.mutate({ id }); }}>
+              <Button size="sm" variant="outline" disabled={toLostFoundMut.isPending} onClick={() => { if (confirm("Converter em caso de Perdidos? A ocorrência fica fechada e ligada.")) toLostFoundMut.mutate({ id }); }}>
                 → Perdidos
               </Button>
             </>
@@ -552,7 +632,7 @@ function ResolveDialog({ id, onResolve, onClose }: { id: number; onResolve: (id:
   );
 }
 
-function CreateIncidentDialog({ employees, onClose }: { employees: any[]; onClose: () => void }) {
+function CreateIncidentDialog({ employees, canSetDriver, onClose }: { employees: any[]; canSetDriver: boolean; onClose: () => void }) {
   const [form, setForm] = useState({
     vehiclePlate: "",
     employeeId: "",
@@ -569,13 +649,16 @@ function CreateIncidentDialog({ employees, onClose }: { employees: any[]; onClos
     try {
       await createMut.mutateAsync({
         vehiclePlate: form.vehiclePlate || undefined,
-        employeeId: form.employeeId && form.employeeId !== "none" ? parseInt(form.employeeId) : undefined,
+        // A reserva escolhida define a cidade e fica ligada à ocorrência.
+        bookingRef: form.bookingRef || undefined,
+        employeeId: canSetDriver && form.employeeId && form.employeeId !== "none" ? parseInt(form.employeeId) : undefined,
         incidentType: form.incidentType,
         severity: form.severity,
         description: form.description,
       });
       utils.incidents.list.invalidate();
       utils.incidents.stats.invalidate();
+      utils.incidents.dashboard.invalidate();
       toast.success("Ocorrência criada");
       onClose();
     } catch (e: any) { toast.error(e.message || "Erro"); }
@@ -630,6 +713,7 @@ function CreateIncidentDialog({ employees, onClose }: { employees: any[]; onClos
               <Label>Matrícula</Label>
               <Input value={form.vehiclePlate} onChange={e => setForm(f => ({ ...f, vehiclePlate: e.target.value.toUpperCase() }))} placeholder="AA-00-BB" />
             </div>
+            {canSetDriver && (
             <div>
               <Label>Condutor Responsável</Label>
               <Select value={form.employeeId} onValueChange={v => setForm(f => ({ ...f, employeeId: v }))}>
@@ -643,6 +727,7 @@ function CreateIncidentDialog({ employees, onClose }: { employees: any[]; onClos
                 </SelectContent>
               </Select>
             </div>
+            )}
           </div>
           <div>
             <Label>Descrição *</Label>
@@ -658,7 +743,7 @@ function CreateIncidentDialog({ employees, onClose }: { employees: any[]; onClos
   );
 }
 
-function EditIncidentDialog({ incident, employees, onClose }: { incident: any; employees: any[]; onClose: () => void }) {
+function EditIncidentDialog({ incident, employees, canSetDriver, onClose }: { incident: any; employees: any[]; canSetDriver: boolean; onClose: () => void }) {
   const [form, setForm] = useState({
     incidentType: incident.incidentType || "outro",
     severity: incident.severity || "medium",
@@ -666,6 +751,7 @@ function EditIncidentDialog({ incident, employees, onClose }: { incident: any; e
     vehiclePlate: incident.vehiclePlate || "",
     employeeId: incident.employeeId ? String(incident.employeeId) : "",
     status: incident.status || "open",
+    costAmount: incident.costAmount != null ? String(incident.costAmount) : "",
   });
   const updateMut = trpc.incidents.update.useMutation();
   const utils = trpc.useUtils();
@@ -678,8 +764,12 @@ function EditIncidentDialog({ incident, employees, onClose }: { incident: any; e
         severity: form.severity as any,
         description: form.description || undefined,
         vehiclePlate: form.vehiclePlate || undefined,
-        employeeId: form.employeeId && form.employeeId !== "none" ? parseInt(form.employeeId) : undefined,
-        status: form.status as any,
+        // Só team leader+ mexe no condutor (null = retirar); os outros não enviam.
+        ...(canSetDriver ? {
+          employeeId: form.employeeId && form.employeeId !== "none" ? parseInt(form.employeeId) : null,
+          costAmount: form.costAmount === "" ? null : Number(form.costAmount),
+        } : {}),
+        status: form.status as EditableStatus,
       });
       utils.incidents.list.invalidate();
       utils.incidents.stats.invalidate();
@@ -721,7 +811,7 @@ function EditIncidentDialog({ incident, employees, onClose }: { incident: any; e
               <Select value={form.status} onValueChange={(v: any) => setForm(f => ({ ...f, status: v }))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {Object.entries(STATUS_CONFIG).map(([k, v]) => (
+                  {Object.entries(STATUS_CONFIG).filter(([k]) => k !== "converted").map(([k, v]) => (
                     <SelectItem key={k} value={k}>{v.label}</SelectItem>
                   ))}
                 </SelectContent>
@@ -731,7 +821,13 @@ function EditIncidentDialog({ incident, employees, onClose }: { incident: any; e
               <Label>Matrícula</Label>
               <Input value={form.vehiclePlate} onChange={e => setForm(f => ({ ...f, vehiclePlate: e.target.value.toUpperCase() }))} placeholder="AA-00-BB" />
             </div>
-            <div className="col-span-2">
+            {canSetDriver && (
+              <div>
+                <Label>Custo (€)</Label>
+                <Input type="number" min={0} step="0.01" value={form.costAmount} onChange={e => setForm(f => ({ ...f, costAmount: e.target.value }))} placeholder="0" />
+              </div>
+            )}
+            {canSetDriver && <div className="col-span-2">
               <Label>Condutor Responsável</Label>
               <Select value={form.employeeId} onValueChange={v => setForm(f => ({ ...f, employeeId: v }))}>
                 <SelectTrigger><SelectValue placeholder="Selecionar..." /></SelectTrigger>
@@ -743,7 +839,7 @@ function EditIncidentDialog({ incident, employees, onClose }: { incident: any; e
                   })}
                 </SelectContent>
               </Select>
-            </div>
+            </div>}
           </div>
           <div>
             <Label>Descrição</Label>
@@ -756,5 +852,32 @@ function EditIncidentDialog({ incident, employees, onClose }: { incident: any; e
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function utcMs(s: string): number {
+  const m = String(s).match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
+  return m ? Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], m[6] ? +m[6] : 0) : new Date(s).getTime();
+}
+
+/** "Atribuir cidade" rápido a uma ocorrência sem cidade. */
+function AssignCitySelect({ incidentId, cities }: { incidentId: number; cities: { id: number; name: string }[] }) {
+  const utils = trpc.useUtils();
+  const mut = trpc.incidents.update.useMutation({
+    onSuccess: () => {
+      toast.success("Cidade atribuída");
+      utils.incidents.list.invalidate();
+      utils.incidents.getById.invalidate({ id: incidentId });
+      utils.incidents.dashboard.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  return (
+    <Select onValueChange={(v) => mut.mutate({ id: incidentId, projectId: Number(v) })} disabled={mut.isPending}>
+      <SelectTrigger className="h-8 w-36 text-xs"><SelectValue placeholder="Atribuir cidade" /></SelectTrigger>
+      <SelectContent>
+        {cities.map(c => <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>)}
+      </SelectContent>
+    </Select>
   );
 }

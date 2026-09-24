@@ -1,5 +1,9 @@
 import { TRPCError } from "@trpc/server";
-import { projectScope, campaignScope, bookingHistoryScope, scopedProjectIds, assertEmployeeAccess, assertProjectAccess, requireGlobalCityAccess } from './cityScope';
+import { projectScope, campaignScope, bookingHistoryScope, scopedProjectIds, assertEmployeeAccess, assertProjectAccess, requireGlobalCityAccess, cityScope as cityScopeStore } from './cityScope';
+import {
+  INCIDENT_SEVERITIES, INCIDENT_STATUSES, INCIDENT_TYPES, LOST_ITEM_TYPES, LOST_PRIORITIES, LOST_STATUSES,
+  contentTypeForFilename, incidentStatusPatch, lostStatusPatch, safeExt, textToSafeHtml, utcNowStr,
+} from "../shared/caseRules";
 import { trainingRouter } from './trainingRouter';
 import { tasksRouter } from './tasksRouter';
 import { z } from "zod";
@@ -224,7 +228,6 @@ import {
   getLostFoundPhotos,
   addLostFoundMessage,
   getLostFoundMessages,
-  getLostFoundDriverRanking,
   getBookingHistoryByBookingId,
   getBookingHistoryByPlate,
   searchBookingHistory,
@@ -237,7 +240,6 @@ import {
   updateIncident,
   deleteIncident,
   getIncidentStats,
-  getIncidentsByEmployee,
   // Performance Evaluations
   createPerformanceEvaluation,
   getPerformanceEvaluations,
@@ -742,6 +744,59 @@ async function applyMigration0053(): Promise<{ ok: number; skipped: number; fail
   }
   return { ok, skipped, failed, errors };
 }
+
+// ─── Ocorrências / Perdidos: âmbito de cidade ────────────────────────────────
+function hasRole(userRole: string, minRole: string): boolean {
+  return (ROLE_HIERARCHY[userRole] ?? -1) >= (ROLE_HIERARCHY[minRole] ?? 0);
+}
+
+/** Cidade por omissão de quem está limitado a cidades (para o registo não ficar invisível). */
+function defaultScopedProjectId(): number | null {
+  const a = cityScopeStore.getStore();
+  return a && !a.all ? a.defaultCityId ?? null : null;
+}
+
+async function loadLostInScope(id: number) {
+  const item = await getLostFoundItemById(id);
+  if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Caso não encontrado" });
+  assertProjectAccess(item.projectId);
+  return item;
+}
+
+async function loadIncidentInScope(id: number) {
+  const inc = await getIncidentById(id);
+  if (!inc) throw new TRPCError({ code: "NOT_FOUND", message: "Ocorrência não encontrada" });
+  assertProjectAccess(inc.projectId);
+  return inc;
+}
+
+async function getLostDriverLink(id: number) {
+  const { getDb } = await import("./db");
+  const { lostFoundAttachedDrivers } = await import("../drizzle/schema");
+  const { eq } = await import("drizzle-orm");
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+  const [link] = await db.select().from(lostFoundAttachedDrivers).where(eq(lostFoundAttachedDrivers.id, id)).limit(1);
+  if (!link) throw new TRPCError({ code: "NOT_FOUND", message: "Condutor não encontrado" });
+  return link;
+}
+
+/** A reserva (externalId ou nº) pertence às cidades do utilizador? */
+async function bookingRefInScope(ref: string): Promise<boolean> {
+  const ids = scopedProjectIds();
+  if (ids === undefined) return true;
+  const { getDb } = await import("./db");
+  const { multiparkBookings } = await import("../drizzle/schema");
+  const { eq, or } = await import("drizzle-orm");
+  const db = await getDb();
+  if (!db) return false;
+  const [b] = await db.select({ projectId: multiparkBookings.projectId }).from(multiparkBookings)
+    .where(or(eq(multiparkBookings.externalId, ref), eq(multiparkBookings.bookingNumber, ref))).limit(1);
+  return !!b?.projectId && ids.includes(b.projectId);
+}
+
+const dayStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const crossRefInput = z.object({ from: dayStr, to: dayStr, projectId: z.number().optional(), noProject: z.boolean().optional() });
 
 export const appRouter = router({
   system: systemRouter,
@@ -4966,6 +5021,10 @@ export const appRouter = router({
           ? new Date(Date.now() + slaHours * 3600000)
           : null;
       }
+      if (status) {
+        const cur = await getComplaintById(id);
+        if (cur?.complaintStatus === "converted") throw new TRPCError({ code: "BAD_REQUEST", message: `Reclamação convertida (${cur.convertedToType} #${cur.convertedToId}) — trata-a no registo novo.` });
+      }
       if (status === "resolved") updateData.resolvedAt = new Date();
       // Auditoria de fecho: quem fechou e quando (em resolved/closed).
       if (status === "resolved" || status === "closed") {
@@ -4995,59 +5054,20 @@ export const appRouter = router({
       await logActivity({ userId: ctx.user.id, action: "delete", entity: "complaint", entityId: input.id, details: "Reclamação eliminada" });
       return { success: true };
     }),
-    // "Isto afinal é um Perdido" — move o caso inteiro (dados + mensagens +
-    // fotos) para os Perdidos & Achados e apaga a reclamação. Admin+.
+    // "Isto afinal é um Perdido" — cria o caso nos Perdidos (dados, mensagens,
+    // fotos, condutores) e FECHA a reclamação como 'converted', ligada nos
+    // dois sentidos. Nada é apagado. Admin+.
     convertToLostFound: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "admin");
       const c = await getComplaintById(input.id);
       if (!c) throw new TRPCError({ code: "NOT_FOUND" });
-      const [messages, photos] = await Promise.all([
-        getComplaintMessages(input.id),
-        getComplaintPhotos(input.id),
-      ]);
-      const { createLostFoundItem, addLostFoundMessage, addLostFoundPhoto } = await import("./db");
-      const newId = await createLostFoundItem({
-        clientName: c.clientName || "Desconhecido",
-        clientEmail: c.clientEmail ?? undefined,
-        clientPhone: c.clientPhone ?? undefined,
-        vehiclePlate: c.vehiclePlate ?? undefined,
-        bookingRef: c.reservationRef ?? undefined,
-        projectId: c.projectId ?? undefined,
-        itemType: "other",
-        description: `${c.title}${c.description ? `\n\n${c.description}` : ""}`.trim(),
-        status: "new",
-        priority: c.complaintPriority === "urgent" || c.complaintPriority === "high" ? "high" : c.complaintPriority === "low" ? "low" : "medium",
-        clientNotes: c.clientNotes ?? undefined,
-        assignedTo: c.assignedToId ?? undefined,
-        createdBy: ctx.user.id,
-      } as any);
-      if (!newId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Falha a criar o registo nos Perdidos" });
-      for (const m of messages) {
-        try {
-          await addLostFoundMessage({
-            itemId: newId,
-            userId: (m as any).authorId ?? ctx.user.id,
-            userName: (m as any).authorName ?? "—",
-            message: m.message,
-            isInternal: m.isInternal,
-          } as any);
-        } catch { /* best-effort */ }
-      }
-      for (const p of photos) {
-        try {
-          await addLostFoundPhoto({ itemId: newId, url: p.url, fileKey: p.fileKey, caption: p.label ?? null } as any);
-        } catch { /* best-effort */ }
-      }
-      await addLostFoundMessage({
-        itemId: newId,
-        userId: ctx.user.id,
-        userName: ctx.user.name ?? "—",
-        message: `📦 Movido das Reclamações (#${input.id}) por ${ctx.user.name ?? "—"}.`,
-        isInternal: 1,
-      } as any);
-      await deleteComplaint(input.id);
-      await logActivity({ userId: ctx.user.id, action: "update", entity: "lost_found", entityId: newId, details: `Movido da reclamação #${input.id}` });
-      return { newId };
+      assertProjectAccess(c.projectId);
+      const { convertComplaintToLost } = await import("./caseOps");
+      let r: { newId: number };
+      try { r = await convertComplaintToLost(input.id, { id: ctx.user.id, name: ctx.user.name }); }
+      catch (e: any) { throw new TRPCError({ code: "BAD_REQUEST", message: e?.message ?? "Erro ao converter" }); }
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "lost_found", entityId: r.newId, details: `Convertido da reclamação #${input.id}` });
+      return r;
     }),
     addMessage: protectedProcedure.input(z.object({
       complaintId: z.number(),
@@ -5440,34 +5460,47 @@ export const appRouter = router({
   // ─── PERDIDOS E ACHADOS ────────────────────────────────────────────────────
   lostFound: router({
     list: protectedProcedure.input(z.object({
-      status: z.string().optional(),
-      itemType: z.string().optional(),
+      status: z.enum(LOST_STATUSES).optional(),
+      itemType: z.enum(LOST_ITEM_TYPES).optional(),
       projectId: z.number().optional(),
-      search: z.string().optional(),
+      noProject: z.boolean().optional(),
+      search: z.string().max(200).optional(),
     }).optional()).query(({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
       return getLostFoundItems(input);
     }),
 
-    getById: protectedProcedure.input(z.object({ id: z.number() })).query(({ ctx, input }) => {
+    getById: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
-      return getLostFoundItemById(input.id);
+      const item = await loadLostInScope(input.id);
+      const { signedFileUrl } = await import("./caseOps");
+      return { ...item, returnPhotoUrl: item.returnPhotoUrl || item.returnPhotoKey ? await signedFileUrl(item.returnPhotoKey, item.returnPhotoUrl) : null };
     }),
+
+    dashboard: protectedProcedure.input(z.object({ projectId: z.number().optional(), noProject: z.boolean().optional() }).optional())
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "frontoffice");
+        const { getLostDashboard } = await import("./caseOps");
+        const d = await getLostDashboard(input ?? {});
+        // Condutores repetidos é informação sensível → só team leader+.
+        return hasRole(ctx.user.role, "team_leader") ? d : { ...d, repeatDrivers: [] };
+      }),
 
     create: protectedProcedure.input(z.object({
       projectId: z.number().optional(),
-      vehiclePlate: z.string().optional(),
-      clientName: z.string().min(1),
-      clientEmail: z.string().optional(),
-      clientPhone: z.string().optional(),
-      bookingRef: z.string().optional(),
-      itemType: z.enum(["money", "electronics", "clothing", "documents", "accessories", "other"]),
-      description: z.string().min(1),
-      estimatedValue: z.number().optional(),
-      priority: z.enum(["low", "medium", "high"]).optional(),
+      vehiclePlate: z.string().max(20).optional(),
+      clientName: z.string().min(1).max(255),
+      clientEmail: z.string().max(320).optional(),
+      clientPhone: z.string().max(50).optional(),
+      bookingRef: z.string().max(100).optional(),
+      itemType: z.enum(LOST_ITEM_TYPES),
+      description: z.string().min(1).max(5000),
+      estimatedValue: z.number().int().min(0).optional(),
+      priority: z.enum(LOST_PRIORITIES).optional(),
     })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
-      const id = await createLostFoundItem({ ...input, createdBy: ctx.user.id, status: "new", priority: input.priority || "medium" } as any);
+      if (input.projectId) assertProjectAccess(input.projectId);
+      const id = await createLostFoundItem({ ...input, projectId: input.projectId ?? defaultScopedProjectId(), createdBy: ctx.user.id, status: "new", priority: input.priority || "medium" } as any);
       // Auto-liga a reserva a partir dos sinais (matrícula/email/telefone/nome).
       if (id) {
         try {
@@ -5477,53 +5510,51 @@ export const appRouter = router({
           console.warn("[lostfound create] autolink failed:", err);
         }
       }
-      await logActivity({ userId: ctx.user.id, action: "create", entity: "lost_found", entityId: id || 0, details: `Perdido/Achado: ${input.description}` });
-      // Notify super admin
+      await logActivity({ userId: ctx.user.id, action: "create", entity: "lost_found", entityId: id || 0, details: `Perdido: ${input.description.slice(0, 200)}` });
       const admins = await getSuperAdmins();
       if (admins.length > 0) {
-        await notifyOwner({ title: "Novo Perdido/Achado", content: `${input.clientName}: ${input.description} (Viatura: ${input.vehiclePlate || "N/A"})` });
+        await notifyOwner({ title: "Novo Perdido", content: `${input.clientName}: ${input.description.slice(0, 300)} (Viatura: ${input.vehiclePlate || "N/A"})` });
       }
       return { id };
     }),
 
     update: protectedProcedure.input(z.object({
       id: z.number(),
-      status: z.string().optional(),
-      priority: z.string().optional(),
-      assignedTo: z.number().optional(),
-      resolution: z.string().optional(),
-      clientName: z.string().optional(),
-      clientEmail: z.string().optional(),
-      clientPhone: z.string().optional(),
-      bookingRef: z.string().optional(),
-      vehiclePlate: z.string().optional(),
-      itemType: z.string().optional(),
-      description: z.string().optional(),
-      estimatedValue: z.number().optional(),
-      clientNotes: z.string().nullable().optional(),
+      // 'converted' só pelas conversões (nunca à mão).
+      status: z.enum(["new", "investigating", "found", "returned", "closed"]).optional(),
+      priority: z.enum(LOST_PRIORITIES).optional(),
+      assignedTo: z.number().nullable().optional(),
+      resolution: z.string().max(5000).optional(),
+      clientName: z.string().max(255).optional(),
+      clientEmail: z.string().max(320).optional(),
+      clientPhone: z.string().max(50).optional(),
+      bookingRef: z.string().max(100).optional(),
+      vehiclePlate: z.string().max(20).optional(),
+      itemType: z.enum(LOST_ITEM_TYPES).optional(),
+      description: z.string().max(5000).optional(),
+      estimatedValue: z.number().int().min(0).optional(),
+      clientNotes: z.string().max(5000).nullable().optional(),
       // Devolução estruturada
-      foundLocation: z.string().nullable().optional(),
-      foundByName: z.string().nullable().optional(),
-      returnMethod: z.string().nullable().optional(),
-      returnedAt: z.string().nullable().optional(),
+      foundLocation: z.string().max(255).nullable().optional(),
+      foundByName: z.string().max(255).nullable().optional(),
+      returnMethod: z.string().max(100).nullable().optional(),
+      returnedAt: z.string().max(30).nullable().optional(),
       // Atribuição / prazo / auditoria
       projectId: z.number().nullable().optional(),
-      dueDate: z.string().nullable().optional(),
+      dueDate: z.string().max(30).nullable().optional(),
       investigatedById: z.number().nullable().optional(),
     })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
+      const existing = await loadLostInScope(input.id);
       const { id, dueDate, status, ...rest } = input;
-      const data: any = { ...rest };
-      if (status) data.status = status;
-      if (dueDate !== undefined) data.dueDate = dueDate ? dueDate.slice(0, 19).replace("T", " ") : null;
-      // Auditoria de fecho (returned/closed): quem fechou e quando.
-      if (status === "returned" || status === "closed") {
-        const existing = await getLostFoundItemById(id);
-        if (existing && existing.status !== "returned" && existing.status !== "closed") {
-          data.closedById = ctx.user.id;
-          data.closedAt = new Date().toISOString().slice(0, 19).replace("T", " ");
-        }
+      if (rest.projectId !== undefined && rest.projectId !== null) assertProjectAccess(rest.projectId);
+      if (rest.projectId === null && scopedProjectIds() !== undefined) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Só quem vê todas as cidades pode deixar um caso sem cidade." });
       }
+      const data: any = { ...rest };
+      if (dueDate !== undefined) data.dueDate = dueDate ? dueDate.slice(0, 19).replace("T", " ") : null;
+      if (status && existing.status === "converted") throw new TRPCError({ code: "BAD_REQUEST", message: `Caso convertido (${existing.convertedToType} #${existing.convertedToId}) — trata-o no registo novo.` });
+      if (status) Object.assign(data, lostStatusPatch(existing, status, utcNowStr(), ctx.user.id));
       await updateLostFoundItem(id, data as any);
       // Se a ref de reserva mudou, repopula os campos em falta a partir dela.
       if (input.bookingRef) {
@@ -5534,49 +5565,49 @@ export const appRouter = router({
           console.warn("[lostfound update] autolink failed:", err);
         }
       }
-      await logActivity({ userId: ctx.user.id, action: "update", entity: "lost_found", entityId: id, details: `Atualizado: ${JSON.stringify(data)}` });
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "lost_found", entityId: id, details: `Atualizado: ${JSON.stringify(data).slice(0, 500)}` });
       return { success: true };
     }),
 
     // Foto/assinatura da entrega ao cliente.
     uploadReturnPhoto: protectedProcedure.input(z.object({
       itemId: z.number(),
-      base64: z.string(),
-      filename: z.string(),
+      base64: z.string().max(22_000_000),
+      filename: z.string().max(255),
     })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
+      await loadLostInScope(input.itemId);
       const buffer = Buffer.from(input.base64, "base64");
-      const ext = input.filename.split(".").pop() || "jpg";
-      const key = `lost-found/${input.itemId}/return-${Date.now()}.${ext}`;
-      const { url } = await storagePut(key, buffer, `image/${ext}`);
+      const key = `lost-found/${input.itemId}/return-${Date.now()}.${safeExt(input.filename)}`;
+      const { url } = await storagePut(key, buffer, contentTypeForFilename(input.filename));
       await updateLostFoundItem(input.itemId, { returnPhotoUrl: url, returnPhotoKey: key } as any);
-      return { url };
+      const { signedFileUrl } = await import("./caseOps");
+      return { url: await signedFileUrl(key, url) };
     }),
 
-    // Email ao cliente (ex.: objeto encontrado / pronto a devolver). Sai de perdidos@.
+    // Email ao cliente — SÓ manual (nunca automático). Sai de perdidos@.
     sendEmailToClient: protectedProcedure.input(z.object({
       itemId: z.number(),
       subject: z.string().min(1).max(255),
-      body: z.string().min(1),
+      body: z.string().min(1).max(10000),
     })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
-      const item = await getLostFoundItemById(input.itemId);
-      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Item não encontrado" });
+      const item = await loadLostInScope(input.itemId);
       if (!item.clientEmail) throw new TRPCError({ code: "BAD_REQUEST", message: "Item sem email de cliente" });
       const { sendEmail } = await import("./_core/notification");
       const greeting = item.clientName ? `Olá ${item.clientName},\n\n` : "Olá,\n\n";
       const full = greeting + input.body;
       const ok = await sendEmail({
         to: item.clientEmail,
-        subject: input.subject,
+        subject: input.subject.replace(/[\r\n]+/g, " "),
         text: full,
-        html: `<p>${full.replace(/\n/g, "<br>")}</p>`,
+        // Todo o texto do utilizador/cliente é escapado antes de virar HTML.
+        html: textToSafeHtml(full),
         from: "perdidos@multipark.pt",
         fromName: "Multipark",
       });
       if (!ok) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Falha ao enviar email (SMTP)" });
-      await updateLostFoundItem(input.itemId, { clientEmailSentAt: new Date().toISOString().slice(0, 19).replace("T", " ") } as any);
-      // Transcreve o email enviado como mensagem do caso (histórico da conversa).
+      await updateLostFoundItem(input.itemId, { clientEmailSentAt: utcNowStr() } as any);
       await addLostFoundMessage({
         itemId: input.itemId,
         userId: ctx.user.id,
@@ -5589,68 +5620,76 @@ export const appRouter = router({
     }),
 
     delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      if (!ctx.user) throw new TRPCError({ code: "UNAUTHORIZED" });
-      const role = ctx.user.role || "user";
-      if (role !== "super_admin") throw new TRPCError({ code: "FORBIDDEN" });
+      requireRole(ctx.user.role, "super_admin");
+      await loadLostInScope(input.id);
       await deleteLostFoundItem(input.id);
-      await logActivity({ userId: ctx.user.id, action: "delete", entity: "lost_found", entityId: input.id, details: "Eliminado" });
+      await logActivity({ userId: ctx.user.id, action: "delete", entity: "lost_found", entityId: input.id, details: "Eliminado (com ficheiros e condutores)" });
       return { success: true };
     }),
 
-    // Photos
-    getPhotos: protectedProcedure.input(z.object({ itemId: z.number() })).query(({ ctx, input }) => {
+    // Photos — URLs assinadas (temporárias), nunca a URL pública guardada.
+    getPhotos: protectedProcedure.input(z.object({ itemId: z.number() })).query(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
-      return getLostFoundPhotos(input.itemId);
+      await loadLostInScope(input.itemId);
+      const { signedFileUrl } = await import("./caseOps");
+      const photos = await getLostFoundPhotos(input.itemId);
+      return Promise.all(photos.map(async (p) => ({ ...p, url: (await signedFileUrl(p.fileKey, p.url)) ?? "", isPdf: /\.pdf$/i.test(p.fileKey || p.url || "") })));
     }),
 
     uploadPhoto: protectedProcedure.input(z.object({
       itemId: z.number(),
-      base64: z.string(),
-      filename: z.string(),
-      caption: z.string().optional(),
+      base64: z.string().max(22_000_000),
+      filename: z.string().max(255),
+      caption: z.string().max(255).optional(),
     })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
+      await loadLostInScope(input.itemId);
       const buffer = Buffer.from(input.base64, "base64");
-      const ext = input.filename.split(".").pop() || "jpg";
-      const key = `lost-found/${input.itemId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-      const { url } = await storagePut(key, buffer, `image/${ext}`);
+      const key = `lost-found/${input.itemId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${safeExt(input.filename)}`;
+      const { url } = await storagePut(key, buffer, contentTypeForFilename(input.filename));
       await addLostFoundPhoto({ itemId: input.itemId, url, fileKey: key, caption: input.caption || null });
-      return { url };
+      const { signedFileUrl } = await import("./caseOps");
+      return { url: await signedFileUrl(key, url) };
     }),
 
     // Messages
-    getMessages: protectedProcedure.input(z.object({ itemId: z.number() })).query(({ ctx, input }) => {
+    getMessages: protectedProcedure.input(z.object({ itemId: z.number() })).query(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
+      await loadLostInScope(input.itemId);
       return getLostFoundMessages(input.itemId);
     }),
 
     addMessage: protectedProcedure.input(z.object({
       itemId: z.number(),
-      message: z.string().min(1),
+      message: z.string().min(1).max(5000),
       isInternal: z.boolean().optional(),
     })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
+      await loadLostInScope(input.itemId);
       await addLostFoundMessage({ itemId: input.itemId, userId: ctx.user.id, userName: ctx.user.name || "Utilizador", message: input.message, isInternal: input.isInternal === false ? 0 : 1 });
       return { success: true };
     }),
 
-    // ── Condutores anexados ao caso (roubos) ──────────────────────────────
+    // ── Condutores ligados ao caso ─────────────────────────────────────────
     attachedDrivers: protectedProcedure.input(z.object({ itemId: z.number() })).query(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
+      await loadLostInScope(input.itemId);
       const { listLostFoundDrivers } = await import("./db");
       return listLostFoundDrivers(input.itemId);
     }),
 
+    // Ligar um condutor SUSPEITO é sensível → team leader+.
     attachDriver: protectedProcedure.input(z.object({
       itemId: z.number(),
       employeeId: z.number().nullable().optional(),
-      driverName: z.string().min(1),
+      driverName: z.string().min(1).max(256),
       source: z.enum(["history", "manual"]).default("manual"),
-      movementDate: z.string().nullable().optional(),
-      movementsSummary: z.string().nullable().optional(),
-      notes: z.string().nullable().optional(),
+      movementDate: z.string().max(10).nullable().optional(),
+      movementsSummary: z.string().max(512).nullable().optional(),
+      notes: z.string().max(512).nullable().optional(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireRole(ctx.user.role, "team_leader");
+      await loadLostInScope(input.itemId);
       const { attachLostFoundDriver } = await import("./db");
       const id = await attachLostFoundDriver({ ...input, attachedById: ctx.user.id });
       await logActivity({ userId: ctx.user.id, action: "attach_driver", entity: "lost_found", entityId: input.itemId, details: `Condutor anexado: ${input.driverName}` });
@@ -5658,22 +5697,79 @@ export const appRouter = router({
     }),
 
     detachDriver: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
+      requireRole(ctx.user.role, "team_leader");
+      const link = await getLostDriverLink(input.id);
+      await loadLostInScope(link.itemId);
+      if (link.penaltyId && link.pointsConfirmed) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Os pontos deste condutor já foram confirmados — anula-os primeiro (supervisor)." });
+      }
+      if (link.penaltyId) {
+        const { setLostDriverAccountability } = await import("./caseOps");
+        await setLostDriverAccountability(input.id, { points: 0 }, ctx.user.id);
+      }
       const { detachLostFoundDriver } = await import("./db");
       await detachLostFoundDriver(input.id);
       return { success: true };
     }),
 
-    // Driver ranking (cruzamento de dados)
-    driverRanking: protectedProcedure.query(({ ctx }) => {
-      requireRole(ctx.user.role, "frontoffice");
-      return getLostFoundDriverRanking();
+    // Custo de recuperação + pontos propostos (penalização RH PENDENTE).
+    setDriverAccountability: protectedProcedure.input(z.object({
+      linkId: z.number(),
+      costAmount: z.number().min(0).max(100000).nullable().optional(),
+      points: z.number().int().min(0).max(20).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "team_leader");
+      const link = await getLostDriverLink(input.linkId);
+      await loadLostInScope(link.itemId);
+      const { setLostDriverAccountability } = await import("./caseOps");
+      try {
+        await setLostDriverAccountability(input.linkId, { costAmount: input.costAmount, points: input.points }, ctx.user.id);
+      } catch (e: any) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: e?.message ?? "Erro" });
+      }
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "lost_found", entityId: link.itemId, details: `Responsabilização ${link.driverName}: custo=${input.costAmount ?? "—"} pontos=${input.points ?? "—"}` });
+      return { success: true };
+    }),
+
+    // Supervisor+: confirma ou anula os pontos propostos.
+    reviewDriverPoints: protectedProcedure.input(z.object({ linkId: z.number(), decision: z.enum(["confirmed", "dismissed"]) }))
+      .mutation(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "supervisor");
+        const link = await getLostDriverLink(input.linkId);
+        await loadLostInScope(link.itemId);
+        const { reviewLostDriverPoints } = await import("./caseOps");
+        try {
+          return await reviewLostDriverPoints(input.linkId, input.decision, ctx.user.id);
+        } catch (e: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: e?.message ?? "Erro" });
+        }
+      }),
+
+    // ── Cruzamento de condutores (team leader+, por cidade) ────────────────
+    crossRef: protectedProcedure.input(crossRefInput).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "team_leader");
+      const { getDriverCrossRef } = await import("./caseOps");
+      return getDriverCrossRef(input);
+    }),
+
+    crossRefDetail: protectedProcedure.input(crossRefInput.extend({ key: z.string().min(3).max(300) })).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "team_leader");
+      const { getDriverCrossRefDetail } = await import("./caseOps");
+      return getDriverCrossRefDetail(input);
+    }),
+
+    // "Aparece em N outros casos" no detalhe de um caso.
+    caseRepeatDrivers: protectedProcedure.input(z.object({ itemId: z.number() })).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "team_leader");
+      await loadLostInScope(input.itemId);
+      const { getCaseRepeatDrivers } = await import("./caseOps");
+      return getCaseRepeatDrivers(input.itemId);
     }),
 
     // Agentes Multipark que mexeram na matrícula. Sinaliza os que tocaram
     // especificamente na reserva do caso aberto (currentBookingRef).
     vehicleAgents: protectedProcedure
-      .input(z.object({ plate: z.string(), currentBookingRef: z.string().optional() }))
+      .input(z.object({ plate: z.string().max(20), currentBookingRef: z.string().max(128).optional() }))
       .query(async ({ ctx, input }) => {
         requireRole(ctx.user.role, "frontoffice");
         const { getVehicleAgentsByPlate } = await import("./db");
@@ -5696,45 +5792,46 @@ export const appRouter = router({
       return getBookingHistoryDriverStats();
     }),
 
-    bookingHistoryCrossRef: protectedProcedure.query(({ ctx }) => {
-      requireRole(ctx.user.role, "frontoffice");
-      return getBookingHistoryCrossReference();
-    }),
-
     // Condutores com atividade no período (alimenta o dropdown da vista
-    // "Movimentos por Condutor" do Cruzamento).
+    // "Movimentos por Condutor" do Cruzamento). Só reservas das cidades do utilizador.
     driversForPeriod: protectedProcedure
-      .input(z.object({ from: z.string(), to: z.string() }))
+      .input(z.object({ from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireRole(ctx.user.role, "team_leader");
         const { getDb } = await import("./db");
         const { sql } = await import("drizzle-orm");
+        const { lisbonDayRangeUtc } = await import("../shared/lisbonDay");
         const db = await getDb();
         if (!db) return [];
+        const { start, end } = lisbonDayRangeUtc(input.from, input.to);
         const rows = (r: any) => (Array.isArray(r[0]) ? r[0] : r) as any[];
         const acts = rows(await db.execute(sql`
-          SELECT agentName, COUNT(*) AS total
-          FROM multipark_booking_history
-          WHERE agentName IS NOT NULL AND agentName <> ''
-            AND actionTime >= ${input.from + " 00:00:00"} AND actionTime <= ${input.to + " 23:59:59"}
-          GROUP BY agentName ORDER BY total DESC`));
+          SELECT h.agentName, COUNT(*) AS total
+          FROM multipark_booking_history h
+          WHERE h.agentName IS NOT NULL AND h.agentName <> ''
+            AND h.actionTime >= ${start} AND h.actionTime < ${end}
+            AND ${bookingHistoryScope(sql`h.bookingExternalId`)}
+          GROUP BY h.agentName ORDER BY total DESC`));
         return acts.map((a: any) => ({ agentName: a.agentName as string, total: Number(a.total) }));
       }),
 
     // Movimentos de UM condutor no período escolhido — que carros mexeu,
     // com matrícula/parque e sinalização dos que têm caso aberto.
     agentMovements: protectedProcedure
-      .input(z.object({ agentName: z.string().min(1), from: z.string(), to: z.string() }))
+      .input(z.object({ agentName: z.string().min(1).max(256), from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
       .query(async ({ ctx, input }) => {
-        requireRole(ctx.user.role, "frontoffice");
+        requireRole(ctx.user.role, "team_leader");
         const { getAgentMovements } = await import("./db");
         return getAgentMovements(input);
       }),
-    // Booking timeline — BD local primeiro (o fetch live usava a chave GLOBAL
-    // e falhava em parques com chave própria); on-demand fetch na 1ª abertura.
+
+    // Booking timeline — BD local primeiro; on-demand fetch na 1ª abertura.
+    // Só reservas das cidades do utilizador.
     bookingTimeline: protectedProcedure.input(z.object({
-      bookingId: z.string(),
-    })).query(async ({ input }) => {
+      bookingId: z.string().max(128),
+    })).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "frontoffice");
+      if (!(await bookingRefInScope(input.bookingId))) return { bookingId: input.bookingId, total: 0, history: [] };
       const { getComplaintBookingDossier } = await import("./complaintDossier");
       const d = await getComplaintBookingDossier(input.bookingId);
       if (d.history.length) {
@@ -5762,70 +5859,26 @@ export const appRouter = router({
 
     // Dossier completo da reserva ligada (mesma peça das Reclamações).
     bookingDossier: protectedProcedure.input(z.object({
-      reservationRef: z.string().min(1),
+      reservationRef: z.string().min(1).max(128),
     })).query(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
+      if (!(await bookingRefInScope(input.reservationRef))) throw new TRPCError({ code: "FORBIDDEN", message: "Reserva fora das tuas cidades." });
       const { getComplaintBookingDossier } = await import("./complaintDossier");
       return getComplaintBookingDossier(input.reservationRef);
     }),
 
-    // "Isto afinal é uma Reclamação" — move o caso inteiro (dados + mensagens
-    // + fotos) para as Reclamações e apaga o registo dos Perdidos. Admin+.
+    // "Isto afinal é uma Reclamação" — cria a reclamação (dados, mensagens,
+    // fotos, condutores, valor/tipo) e FECHA este caso como 'converted',
+    // ligado nos dois sentidos. Nada é apagado. Admin+.
     convertToComplaint: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "admin");
-      const item = await getLostFoundItemById(input.id);
-      if (!item) throw new TRPCError({ code: "NOT_FOUND" });
-      const { getLostFoundMessages, getLostFoundPhotos } = await import("./db");
-      const [messages, photos] = await Promise.all([
-        getLostFoundMessages(input.id),
-        getLostFoundPhotos(input.id),
-      ]);
-      const newId = await createComplaint({
-        title: (item.description || `Perdido #${input.id}`).split("\n")[0].slice(0, 255),
-        description: item.description ?? null,
-        complaintType: "other",
-        complaintStatus: "new",
-        complaintPriority: item.priority === "high" ? "high" : item.priority === "low" ? "low" : "medium",
-        clientName: item.clientName ?? null,
-        clientEmail: item.clientEmail ?? null,
-        clientPhone: item.clientPhone ?? null,
-        vehiclePlate: item.vehiclePlate ?? null,
-        reservationRef: item.bookingRef ?? null,
-        projectId: item.projectId ?? null,
-        assignedToId: item.assignedTo ?? null,
-        clientNotes: item.clientNotes ?? null,
-        createdById: ctx.user.id,
-      });
-      for (const m of messages as any[]) {
-        try {
-          await addComplaintMessage({
-            complaintId: newId,
-            message: m.message,
-            isInternal: m.isInternal,
-            authorId: m.userId ?? ctx.user.id,
-            authorName: m.userName ?? null,
-          });
-        } catch { /* best-effort */ }
-      }
-      for (const p of photos as any[]) {
-        try {
-          await addComplaintPhoto({ complaintId: newId, url: p.url, fileKey: p.fileKey, label: p.caption ?? null, uploadedById: ctx.user.id });
-        } catch { /* best-effort */ }
-      }
-      await addComplaintMessage({
-        complaintId: newId,
-        message: `📦 Movido dos Perdidos & Achados (#${input.id}) por ${ctx.user.name ?? "—"}.`,
-        isInternal: 1,
-        authorId: ctx.user.id,
-        authorName: ctx.user.name ?? null,
-      });
-      try {
-        const { autoLinkComplaintBooking } = await import("./complaintDossier");
-        await autoLinkComplaintBooking(newId);
-      } catch { /* best-effort */ }
-      await deleteLostFoundItem(input.id);
-      await logActivity({ userId: ctx.user.id, action: "update", entity: "complaint", entityId: newId, details: `Movido do perdido #${input.id}` });
-      return { newId };
+      await loadLostInScope(input.id);
+      const { convertLostToComplaint } = await import("./caseOps");
+      let r: { newId: number };
+      try { r = await convertLostToComplaint(input.id, { id: ctx.user.id, name: ctx.user.name }); }
+      catch (e: any) { throw new TRPCError({ code: "BAD_REQUEST", message: e?.message ?? "Erro ao converter" }); }
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "complaint", entityId: r.newId, details: `Convertida do perdido #${input.id}` });
+      return r;
     }),
 
     // Liga automaticamente a reserva ao caso e completa campos em falta.
@@ -5833,6 +5886,7 @@ export const appRouter = router({
       id: z.number(),
     })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
+      await loadLostInScope(input.id);
       const { autoLinkLostFoundBooking } = await import("./complaintDossier");
       return autoLinkLostFoundBooking(input.id);
     }),
@@ -5840,9 +5894,10 @@ export const appRouter = router({
     // Botão "Atualizar da API": puxa a reserva completa + histórico direto da
     // API Multipark e grava na BD local.
     refreshBookingData: protectedProcedure.input(z.object({
-      reservationRef: z.string().min(1),
+      reservationRef: z.string().min(1).max(128),
     })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
+      if (!(await bookingRefInScope(input.reservationRef))) throw new TRPCError({ code: "FORBIDDEN", message: "Reserva fora das tuas cidades." });
       const { refreshBookingFromApi } = await import("./complaintDossier");
       return refreshBookingFromApi(input.reservationRef);
     }),
@@ -5851,80 +5906,131 @@ export const appRouter = router({
   // ─── OCORRÊNCIAS (INCIDENTS) ──────────────────────────────────────────────
   incidents: router({
     list: protectedProcedure.input(z.object({
-      status: z.string().optional(),
-      severity: z.string().optional(),
+      status: z.enum(INCIDENT_STATUSES).optional(),
+      severity: z.enum(INCIDENT_SEVERITIES).optional(),
       employeeId: z.number().optional(),
-      weekNumber: z.number().optional(),
-      yearNumber: z.number().optional(),
+      projectId: z.number().optional(),
+      noProject: z.boolean().optional(),
     }).optional()).query(({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
       return getIncidents(input);
     }),
 
-    getById: protectedProcedure.input(z.object({ id: z.number() })).query(({ ctx, input }) => {
+    getById: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
-      return getIncidentById(input.id);
+      return loadIncidentInScope(input.id);
     }),
 
     create: protectedProcedure.input(z.object({
       projectId: z.number().optional(),
-      vehiclePlate: z.string().optional(),
+      vehiclePlate: z.string().max(20).optional(),
+      bookingRef: z.string().max(128).optional(),
       employeeId: z.number().optional(),
-      incidentType: z.enum(["vidro_aberto", "mal_estacionado", "dano", "chave_errada", "combustivel", "limpeza", "documentos", "outro"]),
-      severity: z.enum(["low", "medium", "high", "critical"]),
-      description: z.string().min(1),
+      incidentType: z.enum(INCIDENT_TYPES),
+      severity: z.enum(INCIDENT_SEVERITIES),
+      description: z.string().min(1).max(5000),
+      costAmount: z.number().min(0).max(100000).optional(),
     })).mutation(async ({ ctx, input }) => {
-      // Ocorrências afectam a avaliação dos condutores (pontos negativos) e o
-      // sistema RH de penalizações — só frontoffice+ pode criar.
-      requireRole(ctx.user.role, "frontoffice");
-      const id = await createIncident({ ...input, reportedBy: ctx.user.id, status: "open" });
-      await logActivity({ userId: ctx.user.id, action: "create", entity: "incident", entityId: id || 0, details: `Ocorrência: ${input.description}` });
+      // Apontar um condutor afeta a avaliação dele → team leader+.
+      requireRole(ctx.user.role, input.employeeId ? "team_leader" : "frontoffice");
+      if (input.projectId) assertProjectAccess(input.projectId);
+      if (input.employeeId) await assertEmployeeAccess(input.employeeId);
+      const { deriveBookingForCase } = await import("./caseOps");
+      // A reserva do formulário é USADA: define a cidade e a ligação.
+      const booking = await deriveBookingForCase({ bookingRef: input.bookingRef, plate: input.vehiclePlate, atUtc: utcNowStr() });
+      if (booking?.projectId && !input.projectId) assertProjectAccess(booking.projectId);
+      const { bookingRef, costAmount, ...rest } = input;
+      const id = await createIncident({
+        ...rest,
+        projectId: input.projectId ?? booking?.projectId ?? defaultScopedProjectId(),
+        reservationLink: booking?.externalId ?? (bookingRef?.trim() || undefined),
+        costAmount: costAmount != null ? String(costAmount) : undefined,
+        reportedBy: ctx.user.id,
+        status: "open",
+        // Quem cria com condutor já é team leader+ → envolvimento confirmado.
+        ...(input.employeeId ? { driverConfirmed: 1, driverConfirmedById: ctx.user.id, driverConfirmedAt: utcNowStr() } : {}),
+      });
+      await logActivity({ userId: ctx.user.id, action: "create", entity: "incident", entityId: id || 0, details: `Ocorrência: ${input.description.slice(0, 200)}` });
       if (input.severity === "critical") {
-        await notifyOwner({ title: "Ocorrência Crítica", content: `${input.incidentType}: ${input.description} (Viatura: ${input.vehiclePlate || "N/A"})` });
+        await notifyOwner({ title: "Ocorrência Crítica", content: `${input.incidentType}: ${input.description.slice(0, 300)} (Viatura: ${input.vehiclePlate || "N/A"})` });
       }
       return { id };
     }),
 
     update: protectedProcedure.input(z.object({
       id: z.number(),
-      status: z.string().optional(),
-      severity: z.string().optional(),
-      resolution: z.string().optional(),
-      incidentType: z.string().optional(),
-      description: z.string().optional(),
-      vehiclePlate: z.string().optional(),
-      employeeId: z.number().optional(),
+      // 'converted' só pelas conversões.
+      status: z.enum(["open", "investigating", "resolved", "dismissed"]).optional(),
+      severity: z.enum(INCIDENT_SEVERITIES).optional(),
+      resolution: z.string().max(10000).optional(),
+      incidentType: z.enum(INCIDENT_TYPES).optional(),
+      description: z.string().max(5000).optional(),
+      vehiclePlate: z.string().max(20).optional(),
+      employeeId: z.number().nullable().optional(),
+      projectId: z.number().optional(),
+      costAmount: z.number().min(0).max(100000).nullable().optional(),
     })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
-      const { id, ...data } = input;
-      if (data.status === "resolved") {
-        (data as any).resolvedAt = new Date().toISOString().slice(0, 19).replace("T", " ");
-        (data as any).resolvedBy = ctx.user.id;
+      const existing = await loadIncidentInScope(input.id);
+      const { id, status, employeeId, costAmount, ...rest } = input;
+      const data: any = { ...rest };
+      if (rest.projectId !== undefined) assertProjectAccess(rest.projectId);
+      if (employeeId !== undefined && employeeId !== existing.employeeId) {
+        requireRole(ctx.user.role, "team_leader");
+        if (employeeId) await assertEmployeeAccess(employeeId);
+        data.employeeId = employeeId;
+        // Mudou o condutor → o novo envolvimento tem de ser (re)confirmado;
+        // quem muda já é team leader+, por isso fica confirmado por ele.
+        Object.assign(data, employeeId
+          ? { driverConfirmed: 1, driverConfirmedById: ctx.user.id, driverConfirmedAt: utcNowStr() }
+          : { driverConfirmed: 0, driverConfirmedById: null, driverConfirmedAt: null });
       }
+      if (costAmount !== undefined) {
+        requireRole(ctx.user.role, "team_leader");
+        data.costAmount = costAmount == null ? null : String(costAmount);
+      }
+      if (status && existing.status === "converted") throw new TRPCError({ code: "BAD_REQUEST", message: `Ocorrência convertida (${existing.convertedToType} #${existing.convertedToId}) — trata-a no registo novo.` });
+      if (status) Object.assign(data, incidentStatusPatch(existing, status, utcNowStr(), ctx.user.id));
       await updateIncident(id, data);
-      await logActivity({ userId: ctx.user.id, action: "update", entity: "incident", entityId: id });
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "incident", entityId: id, details: JSON.stringify(data).slice(0, 500) });
+      return { success: true };
+    }),
+
+    // Confirmar/retirar o envolvimento do condutor (só então conta pontos).
+    confirmDriver: protectedProcedure.input(z.object({ id: z.number(), confirmed: z.boolean() })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "team_leader");
+      const inc = await loadIncidentInScope(input.id);
+      if (!inc.employeeId) throw new TRPCError({ code: "BAD_REQUEST", message: "Ocorrência sem condutor" });
+      await updateIncident(input.id, input.confirmed
+        ? { driverConfirmed: 1, driverConfirmedById: ctx.user.id, driverConfirmedAt: utcNowStr() }
+        : { driverConfirmed: 0, driverConfirmedById: ctx.user.id, driverConfirmedAt: utcNowStr() });
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "incident", entityId: input.id, details: input.confirmed ? "Envolvimento do condutor confirmado" : "Envolvimento do condutor retirado" });
       return { success: true };
     }),
 
     delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "super_admin");
+      await loadIncidentInScope(input.id);
       await deleteIncident(input.id);
       await logActivity({ userId: ctx.user.id, action: "delete", entity: "incident", entityId: input.id });
       return { success: true };
     }),
 
     stats: protectedProcedure.input(z.object({
-      weekNumber: z.number().optional(),
-      yearNumber: z.number().optional(),
+      projectId: z.number().optional(),
+      noProject: z.boolean().optional(),
     }).optional()).query(({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
-      return getIncidentStats(input?.weekNumber, input?.yearNumber);
+      return getIncidentStats(input);
     }),
 
-    byEmployee: protectedProcedure.input(z.object({ employeeId: z.number() })).query(({ ctx, input }) => {
-      requireRole(ctx.user.role, "frontoffice");
-      return getIncidentsByEmployee(input.employeeId);
-    }),
+    dashboard: protectedProcedure.input(z.object({ projectId: z.number().optional(), noProject: z.boolean().optional() }).optional())
+      .query(async ({ ctx, input }) => {
+        requireRole(ctx.user.role, "frontoffice");
+        const { getIncidentDashboard } = await import("./caseOps");
+        const d = await getIncidentDashboard(input ?? {});
+        return hasRole(ctx.user.role, "team_leader") ? d : { ...d, repeatDrivers: [] };
+      }),
 
     // Nota rápida no tratamento da ocorrência (as ocorrências não têm tabela
     // de mensagens — as notas empilham-se no campo resolution, datadas).
@@ -5933,28 +6039,27 @@ export const appRouter = router({
       note: z.string().min(1).max(2000),
     })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
-      const inc = await getIncidentById(input.id);
-      if (!inc) throw new TRPCError({ code: "NOT_FOUND" });
-      const stamp = new Date().toLocaleString("pt-PT", { timeZone: "Europe/Lisbon", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
-      const line = `[${stamp} — ${ctx.user.name ?? "—"}] ${input.note.trim()}`;
-      const resolution = inc.resolution ? `${inc.resolution}\n${line}` : line;
-      await updateIncident(input.id, { resolution } as any);
+      await loadIncidentInScope(input.id);
+      const { appendIncidentNote } = await import("./caseOps");
+      await appendIncidentNote(input.id, ctx.user.name ?? "—", input.note);
       return { success: true };
     }),
 
-    // Reserva relacionada com a ocorrência (pela matrícula, ancorada na data
-    // da ocorrência) — o contexto que faltava para tratar/triar.
+    // Reserva relacionada com a ocorrência (pela ref ligada ou pela matrícula,
+    // ancorada na data da ocorrência).
     bookingPeek: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "frontoffice");
-      const inc = await getIncidentById(input.id);
-      if (!inc?.vehiclePlate) return null;
+      const inc = await loadIncidentInScope(input.id);
+      if (!inc.vehiclePlate && !inc.reservationLink) return null;
       const { matchBookingForComplaint } = await import("./complaintDossier");
       const match = await matchBookingForComplaint({
-        vehiclePlate: inc.vehiclePlate,
-        anchorDate: (inc as any).sourceEmailDate ?? inc.createdAt,
+        reservationRef: inc.reservationLink && /^[A-Za-z0-9_-]{4,128}$/.test(inc.reservationLink) ? inc.reservationLink : undefined,
+        vehiclePlate: inc.vehiclePlate ?? undefined,
+        anchorDate: inc.sourceEmailDate ?? inc.createdAt,
       });
       if (!match) return null;
       const b = match.booking;
+      if (!(await bookingRefInScope(b.externalId))) return null;
       return {
         matchedBy: match.matchedBy,
         externalId: b.externalId,
@@ -5962,6 +6067,7 @@ export const appRouter = router({
         status: b.status,
         parkName: b.parkName,
         city: b.city,
+        projectId: b.projectId,
         checkIn: b.checkIn,
         checkOut: b.checkOut,
         clientName: `${b.clientFirstName ?? ""} ${b.clientLastName ?? ""}`.trim() || null,
@@ -5972,11 +6078,11 @@ export const appRouter = router({
     }),
 
     // Sincroniza ocorrências a partir do multipark_booking_history (remarks
-    // dos agentes nos check-in/out/movements). Dedup por sourceEmailId.
+    // dos agentes nos check-in/out/movements). Dedup por sourceEmailId e por
+    // matrícula+reserva±2h (vira nota na ocorrência existente).
     syncFromMultipark: protectedProcedure
       .input(z.object({ lookbackDays: z.number().int().min(1).max(180).optional() }).optional())
       .mutation(async ({ ctx, input }) => {
-        if (!ctx.user) throw new TRPCError({ code: "UNAUTHORIZED" });
         requireRole(ctx.user.role, "frontoffice");
         const { syncIncidentsFromMultiparkHistory } = await import("./db");
         const r = await syncIncidentsFromMultiparkHistory({
@@ -5985,82 +6091,33 @@ export const appRouter = router({
         });
         await logActivity({
           userId: ctx.user.id, action: "sync", entity: "incident", entityId: 0,
-          details: `Multipark sync: ${r.imported} importadas, ${r.skipped} já existiam, ${r.scanned} analisadas`,
+          details: `Multipark sync: ${r.imported} importadas, ${r.skipped} já existiam/duplicadas, ${r.scanned} analisadas`,
         });
         return r;
       }),
 
-    // "Isto é uma Reclamação de cliente" — converte a ocorrência numa
-    // Reclamação (o auto-link vai buscar a reserva pela matrícula e preenche
-    // os dados do cliente) e apaga a ocorrência. Admin+.
+    // Conversões NÃO destrutivas: cria o registo novo e fecha esta ocorrência
+    // como 'converted', ligada nos dois sentidos. Admin+.
     convertToComplaint: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "admin");
-      const inc = await getIncidentById(input.id);
-      if (!inc) throw new TRPCError({ code: "NOT_FOUND" });
-      const TYPE_LABEL: Record<string, string> = {
-        vidro_aberto: "Vidro Aberto", mal_estacionado: "Mal Estacionado", dano: "Dano",
-        chave_errada: "Chave Errada", combustivel: "Combustível", limpeza: "Limpeza",
-        documentos: "Documentos", outro: "Ocorrência",
-      };
-      const prio = inc.severity === "critical" ? "urgent" : inc.severity === "high" ? "high" : inc.severity === "low" ? "low" : "medium";
-      const newId = await createComplaint({
-        title: `${TYPE_LABEL[inc.incidentType] ?? "Ocorrência"}${inc.vehiclePlate ? ` — ${inc.vehiclePlate}` : ""}: ${(inc.description ?? "").split("\n")[0]}`.slice(0, 255),
-        description: inc.description ?? null,
-        complaintType: inc.incidentType === "dano" ? "damage" : inc.incidentType === "limpeza" ? "dirt" : "other",
-        complaintStatus: "new",
-        complaintPriority: prio,
-        vehiclePlate: inc.vehiclePlate ?? null,
-        projectId: inc.projectId ?? null,
-        createdById: ctx.user.id,
-      });
-      await addComplaintMessage({
-        complaintId: newId,
-        message: `🚨 Movida das Ocorrências (#${input.id}, ${TYPE_LABEL[inc.incidentType] ?? inc.incidentType}, gravidade ${inc.severity}) por ${ctx.user.name ?? "—"}.${inc.resolution ? `\n\nResolução registada na ocorrência:\n${inc.resolution}` : ""}${(inc as any).aiClassification ? `\n\nClassificação IA: ${(inc as any).aiClassification}` : ""}`,
-        isInternal: 1,
-        authorId: ctx.user.id,
-        authorName: ctx.user.name ?? null,
-      });
-      try {
-        const { autoLinkComplaintBooking } = await import("./complaintDossier");
-        await autoLinkComplaintBooking(newId);
-      } catch { /* best-effort */ }
-      await deleteIncident(input.id);
-      await logActivity({ userId: ctx.user.id, action: "update", entity: "complaint", entityId: newId, details: `Movida da ocorrência #${input.id}` });
-      return { newId };
+      await loadIncidentInScope(input.id);
+      const { convertIncident } = await import("./caseOps");
+      let r: { newId: number };
+      try { r = await convertIncident(input.id, "complaint", { id: ctx.user.id, name: ctx.user.name }); }
+      catch (e: any) { throw new TRPCError({ code: "BAD_REQUEST", message: e?.message ?? "Erro ao converter" }); }
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "complaint", entityId: r.newId, details: `Convertida da ocorrência #${input.id}` });
+      return r;
     }),
 
-    // "Isto é um Perdido/roubo" — converte a ocorrência num caso de Perdidos
-    // & Achados e apaga a ocorrência. Admin+.
     convertToLostFound: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "admin");
-      const inc = await getIncidentById(input.id);
-      if (!inc) throw new TRPCError({ code: "NOT_FOUND" });
-      const { createLostFoundItem, addLostFoundMessage } = await import("./db");
-      const newId = await createLostFoundItem({
-        clientName: "Desconhecido",
-        vehiclePlate: inc.vehiclePlate ?? undefined,
-        projectId: inc.projectId ?? undefined,
-        itemType: "other",
-        description: inc.description || `Ocorrência #${input.id}`,
-        status: "new",
-        priority: inc.severity === "critical" || inc.severity === "high" ? "high" : inc.severity === "low" ? "low" : "medium",
-        createdBy: ctx.user.id,
-      } as any);
-      if (!newId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Falha a criar o registo nos Perdidos" });
-      await addLostFoundMessage({
-        itemId: newId,
-        userId: ctx.user.id,
-        userName: ctx.user.name ?? "—",
-        message: `🚨 Movida das Ocorrências (#${input.id}, gravidade ${inc.severity}) por ${ctx.user.name ?? "—"}.`,
-        isInternal: 1,
-      } as any);
-      try {
-        const { autoLinkLostFoundBooking } = await import("./complaintDossier");
-        await autoLinkLostFoundBooking(newId);
-      } catch { /* best-effort */ }
-      await deleteIncident(input.id);
-      await logActivity({ userId: ctx.user.id, action: "update", entity: "lost_found", entityId: newId, details: `Movida da ocorrência #${input.id}` });
-      return { newId };
+      await loadIncidentInScope(input.id);
+      const { convertIncident } = await import("./caseOps");
+      let r: { newId: number };
+      try { r = await convertIncident(input.id, "lost", { id: ctx.user.id, name: ctx.user.name }); }
+      catch (e: any) { throw new TRPCError({ code: "BAD_REQUEST", message: e?.message ?? "Erro ao converter" }); }
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "lost_found", entityId: r.newId, details: `Convertida da ocorrência #${input.id}` });
+      return r;
     }),
   }),
 
