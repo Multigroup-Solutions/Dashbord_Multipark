@@ -4,7 +4,9 @@
 //   criticas@        → Google Reviews   (createGoogleReview + resposta IA)
 //   reclamacoes@     → Reclamações      (createComplaint)
 //   perdidos@        → Perdidos&Achados (createLostFoundItem)
-//   recursos-humanos@→ inbound_emails (aba Recrutamento) + Tarefa p/ Kamila
+//   recursos-humanos@→ inbound_emails (aba Recrutamento; os Leads de Extras
+//                      tratam-nos). Só respostas de disponibilidade que
+//                      precisam de decisão humana viram tarefa (1 por pessoa × semana).
 //
 // Substitui o fluxo Make.com (Gmail→críticas/ocorrências). Filtra automaticamente
 // o ruído: só processa emails cujo Delivered-To é um dos aliases (as ~4000
@@ -26,16 +28,13 @@ import {
   updateGoogleReview,
   createComplaint,
   createLostFoundItem,
-  createTask,
   claimInboundEmail,
   updateInboundEmail,
   deleteInboundEmail,
   addComplaintPhoto,
   getComplaintById,
   listExistingInboundMessageIds,
-  findEmployeeByEmailOrName,
   getSystemUserId,
-  assignTaskToEmployee,
   findComplaintByClientSignals,
   findOpenLostFoundByClient,
   findComplaintByThread,
@@ -57,7 +56,6 @@ import {
 export type InboundAttachment = { filename?: string; contentType?: string; size?: number; url?: string; key?: string };
 
 const ALIASES: InboundAlias[] = ["criticas", "reclamacoes", "perdidos", "recursos-humanos", "campanhas", "ocorrencias"];
-const RH_TASK_OWNER = "kamilafagundes@multipark.pt"; // tarefa de recrutamento atribuída a (Kamila Fagundes)
 
 export type EmailSyncResult = {
   configured: boolean;
@@ -311,9 +309,22 @@ async function routeToModule(
     // humana (tarefa de RH com o veredicto anotado). Usa só o CORPO, não o assunto.
     const { classifyAvailabilityReply } = await import("../availabilityReply");
     const verdict = pending ? classifyAvailabilityReply(ctx.bodyText || desc || "") : null;
+    const availabilityTask = async (label: string, detail: string) => {
+      const { upsertAvailabilityTask } = await import("../tasksService");
+      const day = pending!.weekStart ?? pending!.targetDate;
+      if (!day) return null;
+      const r = await upsertAvailabilityTask({
+        employeeId: pending!.employeeId,
+        day,
+        detail: `[${label}] ${detail}${ctx.subject ? `\nAssunto: ${ctx.subject}` : ""}`,
+      });
+      return r.taskId;
+    };
     if (pending && verdict && verdict.verdict !== "yes") {
-      // não marca disponibilidade; deixa a resposta na fila de RH com contexto
+      // não marca disponibilidade; UMA tarefa por pessoa × semana para decisão humana
       desc = `[DISPONIBILIDADE ${verdict.verdict === "no" ? "NÃO" : "A CONFIRMAR"} — ${verdict.reason}] ${pending.targetDate ?? pending.weekStart ?? ""} ${pending.shift ?? ""}: "${verdict.excerpt}"`.trim() + (desc ? `\n\n${desc}` : "");
+      const taskId = await availabilityTask(verdict.verdict === "no" ? "Respondeu NÃO" : "Resposta pouco clara", desc.slice(0, 3000));
+      if (taskId) return { targetModule: "availability_task", targetId: pending.employeeId, taskId };
     }
     const saidYes = verdict?.verdict === "yes";
     if (pending && saidYes) {
@@ -331,7 +342,9 @@ async function routeToModule(
         return { targetModule: "availability", targetId: pending.employeeId };
       }
       // pedido da semana inteira: o "sim" não diz que dias — fica em tarefa
-      // normal para alguém confirmar (não dá para adivinhar os dias).
+      // "Disponibilidade a confirmar" (não dá para adivinhar os dias).
+      const taskId = await availabilityTask("Respondeu SIM à semana inteira — confirmar dias", `"${verdict!.excerpt}"`);
+      if (taskId) return { targetModule: "availability_task", targetId: pending.employeeId, taskId };
     }
   } catch (err) {
     console.warn("[inbound] verificação de resposta de disponibilidade falhou:", err);
@@ -424,21 +437,9 @@ async function routeToModule(
     return { targetModule: "incident", targetId: id ?? undefined };
   }
 
-  // recursos-humanos → tarefa de recrutamento para a Kamila (o email fica
-  // guardado em inbound_emails para a aba "Recrutamento" do RH).
-  const systemUser = await getSystemUserId();
-  const taskId = await createTask({
-    title: `Recrutamento: ${(ctx.subject || clientName).slice(0, 200)}`,
-    description: desc,
-    createdById: systemUser,
-    taskStatus: "todo",
-    taskPriority: "medium",
-  } as any);
-  try {
-    const emp = await findEmployeeByEmailOrName(RH_TASK_OWNER);
-    if (emp && taskId) await assignTaskToEmployee(taskId, emp.id);
-  } catch { /* atribuição best-effort */ }
-  return { targetModule: "rh", taskId };
+  // recursos-humanos → já NÃO cria tarefa de recrutamento: o email fica em
+  // inbound_emails (aba "Recrutamento") e os Leads de Extras tratam-no.
+  return { targetModule: "rh" };
 }
 
 /**

@@ -1539,6 +1539,42 @@ export const tasks = mysqlTable("tasks", {
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 	notifiedOverdue: tinyint().default(0),
 	notifiedComplete: tinyint().default(0),
+	// 0091 — origem (link + fecho automático), prazo com hora, checklists
+	sourceModule: varchar({ length: 32 }),
+	sourceId: int(),
+	sourceKey: varchar({ length: 128 }),
+	dueHasTime: tinyint().default(0).notNull(),
+	templateId: int(),
+	templateDate: varchar({ length: 10 }),
+	templateShift: varchar({ length: 8 }),
+	completedById: int(),
+});
+
+// 0091 — checklists recorrentes por turno/cidade
+export const taskTemplates = mysqlTable("task_templates", {
+	id: int().autoincrement().primaryKey(),
+	title: varchar({ length: 256 }).notNull(),
+	description: text(),
+	cityProjectId: int(),
+	shift: varchar({ length: 8 }).default('any').notNull(),
+	weekdaysMask: int().default(127).notNull(),
+	dueHour: int(),
+	priority: varchar({ length: 16 }).default('medium').notNull(),
+	assigneeRole: varchar({ length: 32 }),
+	assigneeEmployeeIds: text(),
+	active: tinyint().default(1).notNull(),
+	createdById: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+});
+
+// 0091 — comentários por tarefa
+export const taskComments = mysqlTable("task_comments", {
+	id: int().autoincrement().primaryKey(),
+	taskId: int().notNull(),
+	userId: int().notNull(),
+	body: text().notNull(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 });
 
 export const timeRecords = mysqlTable("time_records", {

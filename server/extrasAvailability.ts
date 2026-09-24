@@ -249,6 +249,12 @@ export async function setMyAvailability(
     .filter(r => r.morning === 1 || r.night === 1 || r.fromHour != null || r.toHour != null || r.note);
 
   if (rows.length > 0) await db.insert(extrasAvailability).values(rows);
+  // A disponibilidade da semana ficou registada → fecha a tarefa
+  // "Disponibilidade a confirmar" dessa pessoa × semana (se existir).
+  try {
+    const { closeAvailabilityTasks } = await import("./tasksService");
+    await closeAvailabilityTasks(employeeId, weekStart);
+  } catch { /* best-effort */ }
   return { saved: rows.length };
 }
 
@@ -672,6 +678,10 @@ export async function markDayAvailability(
       fromHour = COALESCE(VALUES(fromHour), fromHour),
       toHour = COALESCE(VALUES(toHour), toHour),
       note = COALESCE(VALUES(note), note)`);
+  try {
+    const { closeAvailabilityTasks } = await import("./tasksService");
+    await closeAvailabilityTasks(employeeId, weekStart);
+  } catch { /* best-effort */ }
 }
 
 export async function sendWeeklyAvailabilityRequest(opts: {

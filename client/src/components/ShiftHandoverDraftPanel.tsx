@@ -78,6 +78,10 @@ export function ShiftHandoverDraftPanel({ draft, loading, onRefresh }: { draft: 
             <p key={`i${b.externalId}`}>{b.time} · {b.clientName}{b.plate ? ` · ${b.plate}` : ""}{b.flight ? ` · ✈ ${b.flight}` : ""}</p>
           ))}
         </Section>
+        <Section title="Carros p/ coberto (no parque, ainda sem movimento)" count={draft.coveredCars?.count ?? 0} link="/operacoes" linkLabel="operações" tone="warn">
+          <p className="text-muted-foreground">Reservas de lugar coberto com check-in feito e sem movimento registado depois da receção.</p>
+          {(draft.coveredCars?.list ?? []).map((b) => <p key={`cv${b.externalId}`}>{b.plate ?? "sem matrícula"} · {b.bookingNumber ?? b.externalId}{b.park ? ` · ${b.park}` : ""} · check-in {b.checkIn}</p>)}
+        </Section>
         <Section title="Entregas pendentes (sem check-out)" count={c.pendingDeliveries} link="/operacoes" linkLabel="operações" tone="bad">
           {draft.pendingDeliveries.map((b) => <p key={b.externalId}>{b.since} · {b.bookingNumber ?? b.externalId} · {b.clientName}{b.plate ? ` · ${b.plate}` : ""}</p>)}
         </Section>

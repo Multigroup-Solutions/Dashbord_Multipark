@@ -736,6 +736,16 @@ export async function runExtrasAutomation(now: Date = new Date()): Promise<Autom
 
   await runLeadAutomation(clock, now, report, run);
 
+  // Tarefas: checklists recorrentes do dia (idempotente) + avisos de atraso /
+  // conclusão (antes só com o botão manual de admin). TASKS_AUTOMATION=off desliga.
+  try {
+    const { runTaskAutomation } = await import("./tasksService");
+    report.details.tasks = await runTaskAutomation(now);
+    report.ran.push("tasks");
+  } catch (err: any) {
+    report.errors.push(`tasks: ${String(err?.message ?? err).slice(0, 200)}`);
+  }
+
   // Formação: lembretes, atrasos e recertificação (TRAINING_REMINDERS=off desliga).
   try {
     const { runTrainingAutomation } = await import("./trainingPaths");

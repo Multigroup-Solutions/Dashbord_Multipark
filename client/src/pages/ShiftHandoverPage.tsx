@@ -235,6 +235,8 @@ function HandoverForm({ cityState, isSupervisor, userId }: { cityState: CityStat
   useEffect(() => {
     if (loading || !draft || draftQ.isFetching || carriedKey === formKey) return;
     setOpenItems((cur) => mergeCarryOver({ previous: [], draft: draft.carryOver as OpenItem[], current: cur }));
+    // Carros p/ coberto: pré-preenchido com o número automático (continua editável).
+    if (draft.coveredCars) setF((prev) => (prev.carsForCovered === "" ? { ...prev, carsForCovered: String(draft.coveredCars.count) } : prev));
     setCarriedKey(formKey);
   }, [loading, draft, draftQ.isFetching, carriedKey, formKey]);
 

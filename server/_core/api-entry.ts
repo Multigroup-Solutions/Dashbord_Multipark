@@ -344,6 +344,16 @@ app.get("/api/cron/daily-ops", async (req, res) => {
         stepErrors.push(`avaliação semanal: ${String((err as any)?.message ?? err).slice(0, 200)}`);
       }
 
+      // Tarefas (rede de segurança do extras-auto horário): checklists do dia
+      // + avisos de atraso/conclusão. Idempotente.
+      try {
+        const { runTaskAutomation } = await import("../tasksService");
+        await runTaskAutomation(new Date());
+      } catch (err) {
+        console.warn("[daily-ops] tarefas:", err);
+        stepErrors.push(`tarefas: ${String((err as any)?.message ?? err).slice(0, 200)}`);
+      }
+
       // Fecha check-ins esquecidos (>16h abertos → check-out a +12h, [SUSPEITO])
       try {
         const { autoCloseStaleCheckIns } = await import("../db");
