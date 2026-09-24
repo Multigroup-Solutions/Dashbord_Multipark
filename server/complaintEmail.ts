@@ -13,6 +13,7 @@
 //  - HTML → texto com `html-to-text` (mantém quebras de linha para o parsing
 //    `Etiqueta: valor`, descodifica entidades, ignora <style>/<script>).
 
+import { isFeatureEnabled } from "./_core/featureFlags";
 import { convert } from "html-to-text";
 import { INTERNAL_EMAIL_DOMAINS } from "./clientsCrm";
 
@@ -162,8 +163,7 @@ export function complaintSlaDeadline(hours = COMPLAINT_DEFAULT_SLA_HOURS, now = 
 
 /** Desligado com COMPLAINT_AUTO_ACK=off|false|0|no. */
 export function isComplaintAutoAckEnabled(env: Record<string, string | undefined> = process.env): boolean {
-  const v = String(env.COMPLAINT_AUTO_ACK ?? "").trim().toLowerCase();
-  return !["off", "false", "0", "no", "nao", "não"].includes(v);
+  return isFeatureEnabled("COMPLAINT_AUTO_ACK", { env });
 }
 
 /**

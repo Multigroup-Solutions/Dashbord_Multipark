@@ -7,6 +7,7 @@
  * Usa o LLM configurado na app (server/_core/llm.ts — LLM_API_KEY/LLM_MODEL).
  * Sem LLM configurado, não faz nada. Best-effort: nunca parte o upload.
  */
+import { llmConfigured } from "./_core/llm";
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 
@@ -118,9 +119,8 @@ const PROMPT = `És um assistente de recursos humanos português. Lê o document
 {"fullName": string|null, "nif": string|null, "birthDate": "YYYY-MM-DD"|null, "nationality": string|null, "address": string|null, "iban": string|null, "documentNumber": string|null, "expiryDate": "YYYY-MM-DD"|null}
 Regras: não inventes; copia os números tal como aparecem; nationality em português (ex.: "Portuguesa", "Brasileira"); address numa só linha com código postal e localidade.`;
 
-export function llmConfigured(): boolean {
-  return !!(process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || "").trim();
-}
+// Fonte única: server/_core/llm.ts (re-exportado para os chamadores existentes).
+export { llmConfigured };
 
 export async function extractDocument(mimeType: string, base64: string): Promise<ExtractedDoc | null> {
   const { invokeLLM } = await import("./_core/llm");

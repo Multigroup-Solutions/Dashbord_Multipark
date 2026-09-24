@@ -523,8 +523,9 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
 }
 
 /**
- * Start the daily collection scheduler.
- * Runs at 2:00 AM Lisbon time every day, collecting the previous day's data.
+ * Timer in-process: recolha diária às 02:00 de Lisboa (dia anterior). SÓ
+ * arranca com INPROCESS_SCHEDULERS=on — o agendador oficial é o GitHub Actions
+ * (/api/cron/daily-ops, 03:30 UTC).
  */
 export function startDailyCollectionScheduler() {
   // Calculate ms until next 2:00 AM Lisbon time

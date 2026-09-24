@@ -19,6 +19,7 @@
  * de Lisboa o que está na altura; cada tarefa fica registada numa tabela de
  * execuções (chave única) para nunca correr duas vezes.
  */
+import { isFeatureEnabled } from "./_core/featureFlags";
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { extractAffectedRows } from "./availabilityFormToken";
@@ -682,7 +683,7 @@ export async function runExtrasAutomation(now: Date = new Date()): Promise<Autom
   const clock = lisbonClock(now);
   const due = dueTasks(clock);
   const report: AutomationReport = { clock, ran: [], skipped: [], errors: [], details: {} };
-  if (process.env.EXTRAS_AUTOMATION === "off") { report.skipped.push("desligado (EXTRAS_AUTOMATION=off)"); return report; }
+  if (!isFeatureEnabled("EXTRAS_AUTOMATION")) { report.skipped.push("desligado (EXTRAS_AUTOMATION=off)"); return report; }
 
   const run = async (key: string, fn: () => Promise<unknown>) => {
     if (!(await claimRun(key))) { report.skipped.push(key); return; }
@@ -832,7 +833,7 @@ async function runLeadAutomation(
     });
   }
 
-  if (isLeadReminderTime(clock) && process.env.LEAD_REMINDERS !== "off") {
+  if (isLeadReminderTime(clock) && isFeatureEnabled("LEAD_REMINDERS")) {
     if (!process.env.WHATSAPP_TOKEN || !process.env.WHATSAPP_PHONE_NUMBER_ID) {
       report.skipped.push("leads-reminder (WhatsApp não configurado)");
       return;

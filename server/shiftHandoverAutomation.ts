@@ -8,6 +8,8 @@
  *  - cumprimento para o "Resumo do dia".
  * Nada disto pode fazer falhar a gravação: tudo em try/catch.
  */
+import { llmConfigured } from "./_core/llm";
+import { isFeatureEnabled } from "./_core/featureFlags";
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { cityNameScope } from "./cityScope";
@@ -47,13 +49,12 @@ export function appOrigin(): string {
   return (process.env.APP_URL || process.env.PUBLIC_APP_URL || "https://dashboard.multipark.pt").replace(/\/+$/, "");
 }
 
-export function llmConfigured(): boolean {
-  return !!(process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || "").trim();
-}
+// Fonte única: server/_core/llm.ts (re-exportado para os chamadores existentes).
+export { llmConfigured };
 
 /** Email ligado? (`HANDOVER_EMAIL=off` desliga; sem SMTP salta em silêncio.) */
 export function handoverEmailEnabled(env: Record<string, string | undefined> = process.env): boolean {
-  if ((env.HANDOVER_EMAIL ?? "").trim().toLowerCase() === "off") return false;
+  if (!isFeatureEnabled("HANDOVER_EMAIL", { env })) return false;
   return !!(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS);
 }
 
@@ -261,7 +262,7 @@ export async function ackHandover(id: number, city: HandoverCity, user: { id: nu
 
 export async function runHandoverReminders(now: Date = new Date()): Promise<Record<string, string[]>> {
   const out: Record<string, string[]> = {};
-  if (process.env.HANDOVER_REMINDERS === "off") return out;
+  if (!isFeatureEnabled("HANDOVER_REMINDERS")) return out;
   const db = await getDb();
   if (!db) return out;
   for (const s of remindersDue(now.getTime())) {

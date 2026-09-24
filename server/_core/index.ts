@@ -19,7 +19,7 @@ import { seedProjectHierarchy } from "../db";
 import multer from "multer";
 import { requireSession } from "./requireSession";
 import { storagePut } from "../storage";
-// Gmail sync handled externally via Make scheduled tasks
+import { inprocessSchedulersEnabled } from "./featureFlags";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -117,13 +117,22 @@ async function startServer() {
 
   server.listen(port, () => {
     console.log(`Server running on http://localhost:${port}/`);
-    // Seed data & start background jobs
     seedProjectHierarchy().catch(e => console.error("[Seed] Project hierarchy error:", e));
-    startDailyCollectionScheduler();
-    startBookingSyncScheduler();
-    // Emails (criticas@/reclamacoes@/perdidos@/recursos-humanos@) — o cron do
-    // GitHub Actions foi removido a 14/jul; passa a correr aqui, in-process.
-    startEmailInboundScheduler();
+    // AGENDADOR OFICIAL = GitHub Actions (.github/workflows/multipark-cron.yml
+    // e companhia → /api/cron/*): sync de reservas, emails (IMAP), recolha
+    // Zello diária, extras, etc. Os timers in-process abaixo (sync de reservas
+    // 15 min, emails 15 min, Zello às 02:00) duplicavam esses jobs e ignoravam
+    // os kill-switches — ficam DESLIGADOS por omissão. Só ligar com
+    // INPROCESS_SCHEDULERS=on num servidor persistente que NÃO seja servido
+    // pelos crons do GitHub Actions.
+    if (inprocessSchedulersEnabled()) {
+      console.log("[Schedulers] INPROCESS_SCHEDULERS=on — a arrancar os agendadores in-process");
+      startDailyCollectionScheduler();
+      startBookingSyncScheduler();
+      startEmailInboundScheduler();
+    } else {
+      console.log("[Schedulers] in-process desligados (agendador = GitHub Actions; INPROCESS_SCHEDULERS=on para ligar)");
+    }
   });
 }
 

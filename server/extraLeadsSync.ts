@@ -19,6 +19,7 @@
  * Tudo best-effort do lado de quem chama (webhook, cron, intake): nunca parte
  * o fluxo principal.
  */
+import { isFeatureEnabled } from "./_core/featureFlags";
 import { and, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { getDb, logActivity } from "./db";
 import { driverApplications, employees, extraLeadSources, extraLeads, inboundEmails } from "../drizzle/schema";
@@ -476,7 +477,7 @@ export async function handleLeadInbound(input: { phoneE164: string; conversation
         } catch { /* segue */ }
 
         const applicationUrl = driverApplicationUrl();
-        if (process.env.LEAD_AUTO_REPLY !== "off" && applicationUrl) {
+        if (isFeatureEnabled("LEAD_AUTO_REPLY") && applicationUrl) {
           const claim = await db
             .update(extraLeads)
             .set({ autoRepliedAt: at })

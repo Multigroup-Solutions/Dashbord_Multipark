@@ -13,6 +13,7 @@
  *
  * SQL sempre parametrizado; ONLY_FULL_GROUP_BY (só agregados/colunas agrupadas).
  */
+import { isFeatureEnabled } from "./_core/featureFlags";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { getDb, projectFilterConds } from "./db";
@@ -454,7 +455,7 @@ export async function generateTemplateTasks(now: Date = new Date()): Promise<{ d
 
 /** Automação horária (chamada pelo extras-auto). TASKS_AUTOMATION=off desliga. */
 export async function runTaskAutomation(now: Date = new Date()): Promise<Record<string, unknown>> {
-  if (process.env.TASKS_AUTOMATION === "off") return { skipped: "TASKS_AUTOMATION=off" };
+  if (!isFeatureEnabled("TASKS_AUTOMATION")) return { skipped: "TASKS_AUTOMATION=off" };
   const out: Record<string, unknown> = {};
   try { out.templates = await generateTemplateTasks(now); } catch (e: any) { out.templatesError = String(e?.message ?? e).slice(0, 200); }
   try { const r = await runTaskNotifications(now); out.notifications = { overdue: r.overdue, completed: r.completed }; } catch (e: any) { out.notificationsError = String(e?.message ?? e).slice(0, 200); }

@@ -10,6 +10,7 @@
  *  - progresso de um percurso.
  */
 
+import { isFeatureEnabled } from "./_core/featureFlags";
 export type TrainingItemType = "video" | "manual" | "exam" | "quiz";
 export const TRAINING_ITEM_TYPES: TrainingItemType[] = ["video", "manual", "exam", "quiz"];
 export type AssignmentStatus = "assigned" | "in_progress" | "completed" | "overdue";
@@ -69,7 +70,7 @@ export interface EligibilityAssignment {
 export interface EligibilityResult { ok: boolean; missing: string[]; overridden: boolean; message: string | null }
 
 export function trainingBlocksEscalaEnabled(env: Record<string, string | undefined> = process.env): boolean {
-  return (env.TRAINING_BLOCKS_ESCALA ?? "").trim().toLowerCase() !== "off";
+  return isFeatureEnabled("TRAINING_BLOCKS_ESCALA", { env });
 }
 
 /**
@@ -202,7 +203,7 @@ export const REMINDER_WINDOW_DAYS = 2;
 export const ESCALATE_AFTER_DAYS = 3;
 
 export function trainingRemindersEnabled(env: Record<string, string | undefined> = process.env): boolean {
-  return (env.TRAINING_REMINDERS ?? "").trim().toLowerCase() !== "off";
+  return isFeatureEnabled("TRAINING_REMINDERS", { env });
 }
 
 /** Horas de Lisboa em que se enviam lembretes (dia). */

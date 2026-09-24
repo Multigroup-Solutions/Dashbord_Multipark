@@ -1,6 +1,8 @@
 name: Multipark Sync Cron
 
-# Substituto gratuito dos Vercel Cron Jobs (Hobby limita a 1/dia).
+# AGENDADOR OFICIAL da app (substitui os Vercel Cron Jobs — o Hobby limita a
+# 1/dia). Os timers in-process do servidor Node estão desligados por omissão
+# (INPROCESS_SCHEDULERS), para os jobs não correrem a dobrar.
 # Chama os endpoints HTTP /api/cron/* com Authorization: Bearer ${CRON_SECRET}.
 #
 # Pré-requisitos (Settings → Secrets and variables → Actions):
@@ -23,12 +25,10 @@ on:
     - cron: "7 * * * *"
     # Janela futura: minuto 17 a cada 2 horas
     - cron: "17 */2 * * *"
-    # Cleanup: 03:00 UTC (=04:00 PT verão)
-    - cron: "0 3 * * *"
     # Recolha diária de operações (driver history + alertas GPS): 03:30 UTC
     - cron: "30 3 * * *"
-    # Google Ads: horária (últimos 7 dias) ao minuto 22; noturna (90 dias) 04:45 UTC;
-    # mensal (resto do histórico) dia 1 às 05:10 UTC. Só correm com a ligação feita.
+    # Google Ads: diária às 04:45 UTC (última semana) e mensal no dia 2 às
+    # 05:10 UTC (mês anterior inteiro). Só correm com a ligação feita.
     - cron: "45 4 * * *"
     - cron: "10 5 2 * *"
   workflow_dispatch: {} # trigger manual da UI (corre todos os jobs)
@@ -256,47 +256,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           title="🔴 Cron multipark falhou: sync-future"
-          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          body="Run falhado: $run_url — $(date -u +'%Y-%m-%d %H:%M UTC')"
-          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number' || true)
-          if [ -n "${existing:-}" ]; then
-            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
-          else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
-          fi
-
-  cleanup:
-    if: github.event.schedule == '0 3 * * *' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger /api/cron/multipark-cleanup
-        env:
-          # URL público de produção; secrets.APP_URL sobrepõe-se se for definido.
-          APP_URL: ${{ secrets.APP_URL || 'https://dashbord-multipark.vercel.app' }}
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
-        run: |
-          set -euo pipefail
-          if [ -z "${APP_URL:-}" ]; then
-            echo "::error::APP_URL secret não está definido — cleanup não corre."
-            exit 1
-          fi
-          code=$(curl -sS -m 90 -w '%{http_code}' -o /tmp/body.txt \
-            -H "Authorization: Bearer ${CRON_SECRET:-}" \
-            "$APP_URL/api/cron/multipark-cleanup") \
-            || { echo "::error::curl falhou ao contactar o endpoint"; cat /tmp/body.txt || true; exit 1; }
-          echo "HTTP $code"; head -c 1000 /tmp/body.txt; echo
-          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
-            echo "::error::endpoint devolveu HTTP $code"; exit 1
-          fi
-          if grep -q '"ok":false' /tmp/body.txt; then
-            echo "::error::endpoint reportou ok:false"; exit 1
-          fi
-      - name: Alerta — abrir/comentar issue em caso de falha
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          title="🔴 Cron multipark falhou: cleanup"
           run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           body="Run falhado: $run_url — $(date -u +'%Y-%m-%d %H:%M UTC')"
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number' || true)

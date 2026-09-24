@@ -726,12 +726,12 @@ function now(): string {
 }
 
 /**
- * Scheduler in-process (só no servidor Node/Railway — `server/_core/index.ts`):
- * corre o sync de emails a cada 15 minutos. No Vercel não há processo
- * persistente: aí o sync corre pelo endpoint /api/cron/email-inbound, chamado
- * DE HORA A HORA pelo GitHub Actions (.github/workflows/multipark-cron.yml),
+ * Scheduler in-process (servidor Node persistente — `server/_core/index.ts`),
+ * a cada 15 minutos. SÓ arranca com INPROCESS_SCHEDULERS=on (desligado por
+ * omissão): o agendador oficial é o GitHub Actions, que chama
+ * /api/cron/email-inbound DE HORA A HORA (.github/workflows/multipark-cron.yml),
  * mais o botão "Sincronizar emails". Self-skip quando o IMAP não está
- * configurado — seguro arrancar em qualquer ambiente.
+ * configurado.
  */
 export function startEmailInboundScheduler() {
   const INTERVAL_MS = 15 * 60 * 1000;

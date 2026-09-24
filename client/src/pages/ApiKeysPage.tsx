@@ -18,13 +18,33 @@ const SCOPES = [
   { value: "admin", label: "Controlo total (admin)", desc: "Tudo, incluindo apagar. Para o MCP do Claude.", perms: ["admin"] },
   { value: "write", label: "Leitura + escrita", desc: "Criar/editar reclamações e reviews, disparar syncs. Não apaga.", perms: ["read", "write"] },
   { value: "read", label: "Só leitura", desc: "Apenas consultar dados (reservas, reclamações, stats…).", perms: ["read"] },
-  { value: "device", label: "Dispositivos (GPS / rádio)", desc: "Para /api/external (Zello, rádios). Sem acesso à /api/v1.", perms: [] as string[] },
+  { value: "device", label: "Dispositivos (GPS / rádio)", desc: "Para /api/external (Zello, rádios). Sem acesso à /api/v1.", perms: ["device"] },
+] as const;
+
+// Validade opcional (dias). "0" = sem expiração.
+const EXPIRY_OPTIONS = [
+  { value: "0", label: "Sem expiração" },
+  { value: "30", label: "30 dias" },
+  { value: "90", label: "90 dias" },
+  { value: "365", label: "1 ano" },
 ];
+
+function scopeLabel(permissions: string | null | undefined): string {
+  let list: string[] = [];
+  try { const p = JSON.parse(permissions ?? "[]"); list = Array.isArray(p) ? p.map(String) : [String(p)]; }
+  catch { list = String(permissions ?? "").split(/[,\s]+/).filter(Boolean); }
+  if (list.length === 0 || list.includes("device")) return "Dispositivos";
+  if (list.includes("admin") || list.includes("*")) return "Admin";
+  if (list.includes("write")) return "Leitura + escrita";
+  if (list.includes("read")) return "Só leitura";
+  return list.join(", ");
+}
 
 export default function ApiKeysPage() {
   const { user } = useAuth();
   const [newKeyName, setNewKeyName] = useState("");
-  const [scope, setScope] = useState("admin");
+  const [scope, setScope] = useState<string>("read");
+  const [expiry, setExpiry] = useState("0");
   const [showCreate, setShowCreate] = useState(false);
   const [newKey, setNewKey] = useState<string | null>(null);
 
@@ -83,10 +103,10 @@ export default function ApiKeysPage() {
                   </DialogHeader>
                   {newKey ? (
                     <div className="space-y-4">
-                      <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                        <p className="text-sm font-medium text-green-800 mb-2">Chave criada com sucesso! Copia-a agora — não será mostrada novamente.</p>
+                      <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-4">
+                        <p className="text-sm font-medium text-emerald-700 dark:text-emerald-300 mb-2">Chave criada com sucesso! Copia-a agora — não será mostrada novamente (só guardamos o hash).</p>
                         <div className="flex gap-2">
-                          <code className="flex-1 bg-white p-2 rounded text-xs break-all border">{newKey}</code>
+                          <code className="flex-1 bg-background p-2 rounded text-xs break-all border">{newKey}</code>
                           <Button size="sm" variant="outline" onClick={() => { navigator.clipboard.writeText(newKey); toast.success("Copiado!"); }}>
                             <Copy className="h-4 w-4" />
                           </Button>
@@ -119,12 +139,23 @@ export default function ApiKeysPage() {
                           ))}
                         </div>
                       </div>
+                      <div>
+                        <Label>Validade</Label>
+                        <div className="flex flex-wrap gap-2 mt-1">
+                          {EXPIRY_OPTIONS.map((o) => (
+                            <Button key={o.value} type="button" size="sm" variant={expiry === o.value ? "default" : "outline"} onClick={() => setExpiry(o.value)}>
+                              {o.label}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
                       <Button
                         className="w-full"
                         disabled={!newKeyName.trim() || createMut.isPending}
                         onClick={() => {
-                          const perms = SCOPES.find((s) => s.value === scope)?.perms ?? [];
-                          createMut.mutate({ name: newKeyName, permissions: perms.length ? perms : undefined });
+                          const perms = [...(SCOPES.find((s) => s.value === scope)?.perms ?? ["read"])];
+                          const days = Number(expiry);
+                          createMut.mutate({ name: newKeyName, permissions: perms, expiresInDays: days > 0 ? days : undefined });
                         }}
                       >
                         {createMut.isPending ? "A criar..." : "Criar API Key"}
@@ -145,23 +176,27 @@ export default function ApiKeysPage() {
             )}
 
             <div className="grid gap-3">
-              {keysQuery.data?.map((k: any) => (
+              {keysQuery.data?.map((k: any) => {
+                const expired = !!k.expiresAt && new Date(`${String(k.expiresAt).replace(" ", "T")}Z`).getTime() <= Date.now();
+                return (
                 <Card key={k.id}>
                   <CardContent className="flex items-center justify-between py-4">
                     <div className="flex items-center gap-3">
-                      <div className={`p-2 rounded-lg ${k.active ? "bg-green-100" : "bg-gray-100"}`}>
-                        <Key className={`h-5 w-5 ${k.active ? "text-green-600" : "text-gray-400"}`} />
+                      <div className={`p-2 rounded-lg ${k.active && !expired ? "bg-emerald-500/15" : "bg-muted"}`}>
+                        <Key className={`h-5 w-5 ${k.active && !expired ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}`} />
                       </div>
                       <div>
-                        <p className="font-medium">{k.name}</p>
+                        <p className="font-medium">{k.name} <span className="text-xs font-normal text-muted-foreground">· {scopeLabel(k.permissions)}</span></p>
                         <p className="text-xs text-muted-foreground">
                           Criada: {fmtPTDate(k.createdAt)}
-                          {k.lastUsedAt && ` · Último uso: ${fmtPTDate(k.lastUsedAt)}`}
+                          {" · "}Último uso: {k.lastUsedAt ? fmtPTDateTime(k.lastUsedAt) : "nunca"}
+                          {" · "}{k.expiresAt ? `${expired ? "Expirou" : "Expira"}: ${fmtPTDate(k.expiresAt)}` : "Sem expiração"}
                         </p>
-                        <code className="text-xs text-muted-foreground">mp_••••••••{k.key?.slice(-8) || "••••"}</code>
+                        <code className="text-xs text-muted-foreground">{k.keyPrefix ? `${k.keyPrefix}••••••••` : "••••••••"}</code>
                       </div>
                     </div>
                     <div className="flex items-center gap-3">
+                      {expired && <Badge variant="destructive">Expirada</Badge>}
                       <Badge variant={k.active ? "default" : "secondary"}>{k.active ? "Ativa" : "Inativa"}</Badge>
                       <Switch checked={k.active} onCheckedChange={(v) => toggleMut.mutate({ id: k.id, active: v })} />
                       <Button variant="ghost" size="icon" className="text-red-500 hover:text-red-700" onClick={() => { if (confirm("Eliminar esta API key?")) deleteMut.mutate({ id: k.id }); }}>
@@ -170,7 +205,8 @@ export default function ApiKeysPage() {
                     </div>
                   </CardContent>
                 </Card>
-              ))}
+                );
+              })}
             </div>
           </TabsContent>
 

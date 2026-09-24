@@ -757,6 +757,11 @@ export async function syncBookings(opts: {
 
 const SYNC_INTERVAL = 15 * 60 * 1000; // 15 minutes
 
+/**
+ * Timer in-process (servidor Node persistente). SÓ arranca com
+ * INPROCESS_SCHEDULERS=on — o agendador oficial é o GitHub Actions
+ * (/api/cron/multipark-sync e /api/cron/multipark-future).
+ */
 export function startBookingSyncScheduler() {
   async function runSync() {
     if (!isMultiparkConfigured()) {

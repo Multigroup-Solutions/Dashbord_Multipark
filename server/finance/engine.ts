@@ -29,7 +29,7 @@ import {
   partnerships, partnerAliases, employees, employeeSalaryHistory, marketingExpenses,
   campaignDailyStats, campaigns,
 } from "../../drizzle/schema";
-import { loadExtraRates } from "../extraRates";
+import { DEFAULT_EXTRA_RATES, loadExtraRates } from "../extraRates";
 import { aggregateExtrasCost, loadExtrasCostRows } from "./extrasCost";
 import { getDb, resolveProjectIds, toMysqlDateTime, getPayrollData } from "../db";
 import { matchCityKey } from "../../shared/city";
@@ -136,7 +136,7 @@ export function emptyFinanceResult(filters: FinanceFilters): FinanceResult {
   const zeroMargin = R.computeMargin({ revenueGross: 0, expensesGross: 0, salariesBase: 0, salariesProvisions: 0, salariesVariable: 0, employerTax: 0, extrasDia: 0, salesCommissions: 0, operationalCommissions: 0 });
   return {
     range: { from: filters.from, to: filters.to }, asOf: filters.today ?? "", granularity: filters.granularity ?? "day",
-    params: { vatRate: R.FINANCE_PARAMS.vatRate, tsuEmployerRate: R.FINANCE_PARAMS.tsuEmployerRate, extrasDiaRates: R.FINANCE_PARAMS.extrasDiaRates },
+    params: { vatRate: R.FINANCE_PARAMS.vatRate, tsuEmployerRate: R.FINANCE_PARAMS.tsuEmployerRate, extrasDiaRates: { ...DEFAULT_EXTRA_RATES } },
     scope: { projectId: filters.projectId ?? null, projectIds: null, cities: null },
     revenue: { produced: 0, producedNet: 0, producedCount: 0, collected: 0, collectedNet: 0, collectedCount: 0, extrasRevenue: 0 },
     costs: { expenses: 0, expensesNet: 0, expensesPending: 0, salariesBase: 0, salariesProvisions: 0, salariesVariable: 0, salaries: 0, employerTax: 0, extrasDia: 0, extrasPlanned: 0, extrasReal: 0, salesCommissions: 0, operationalCommissions: 0, totalNet: 0, totalGross: 0 },

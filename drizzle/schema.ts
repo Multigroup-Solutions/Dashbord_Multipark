@@ -9,7 +9,12 @@ export const activityLogs = mysqlTable("activity_logs", {
 	entityId: int(),
 	details: text(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
-});
+},
+(table) => [
+	// Migração 0095: página de Logs (datas/entidade) + retenção por data.
+	index("idx_activity_logs_createdAt").on(table.createdAt),
+	index("idx_activity_logs_entity_createdAt").on(table.entity, table.createdAt),
+]);
 
 export const annualReports = mysqlTable("annual_reports", {
 	id: int().autoincrement().primaryKey(),
@@ -29,7 +34,12 @@ export const annualReports = mysqlTable("annual_reports", {
 export const apiKeys = mysqlTable("api_keys", {
 	id: int().autoincrement().primaryKey(),
 	name: varchar({ length: 100 }).notNull(),
-	apiKey: varchar({ length: 64 }).notNull(),
+	// LEGADO (migração 0095): a chave em claro já não é guardada — fica NULL.
+	// A autenticação usa `keyHash` (SHA-256 hex); `keyPrefix` é só para a UI.
+	apiKey: varchar({ length: 64 }),
+	keyHash: varchar({ length: 64 }),
+	keyPrefix: varchar({ length: 16 }),
+	expiresAt: timestamp({ mode: 'string' }),
 	permissions: text(),
 	active: tinyint().default(1).notNull(),
 	lastUsedAt: timestamp({ mode: 'string' }),
@@ -38,6 +48,7 @@ export const apiKeys = mysqlTable("api_keys", {
 },
 (table) => [
 	index("api_keys_apiKey_unique").on(table.apiKey),
+	uniqueIndex("api_keys_keyHash_unique").on(table.keyHash),
 ]);
 
 export const campaignDailyStats = mysqlTable("campaign_daily_stats", {

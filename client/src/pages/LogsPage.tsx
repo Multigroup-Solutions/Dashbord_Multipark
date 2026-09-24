@@ -8,9 +8,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   ScrollText, Loader2, AlertCircle, User, Receipt, Trash2, Edit, Plus, Download,
 } from "lucide-react";
-import { useMemo, useState } from "react";
-import { format } from "date-fns";
-import { pt } from "date-fns/locale";
+import { useEffect, useMemo, useState } from "react";
+import { fmtPTDateTime } from "@/lib/lisbonTime";
 
 const ACTION_CONFIG: Record<string, { label: string; icon: any; color: string }> = {
   create: { label: "Criou", icon: Plus, color: "text-green-600" },
@@ -25,40 +24,31 @@ export default function LogsPage() {
   const [entity, setEntity] = useState<string>("all");
   const [action, setAction] = useState<string>("all");
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+
+  // Pesquisa no SERVIDOR (antes filtrava só os N registos já carregados).
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 350);
+    return () => clearTimeout(t);
+  }, [search]);
 
   const queryInput = useMemo(() => {
     const i: any = { limit };
     if (entity !== "all") i.entity = entity;
     if (action !== "all") i.action = action;
+    if (from) i.from = from;
+    if (to) i.to = to;
+    if (debouncedSearch) i.search = debouncedSearch;
     return i;
-  }, [limit, entity, action]);
+  }, [limit, entity, action, from, to, debouncedSearch]);
 
-  const { data: logs = [], isLoading } = trpc.logs.list.useQuery(queryInput, {
-    enabled: currentUser?.role === "super_admin",
-  });
-
-  const filtered = useMemo(() => {
-    const s = search.toLowerCase().trim();
-    if (!s) return logs;
-    return logs.filter((item: any) => {
-      const log = item.log ?? item;
-      const u = item.user ?? null;
-      return (
-        (log.details ?? "").toLowerCase().includes(s) ||
-        (log.entity ?? "").toLowerCase().includes(s) ||
-        (u?.name ?? "").toLowerCase().includes(s)
-      );
-    });
-  }, [logs, search]);
-
-  const entityOptions = useMemo(() => {
-    const set = new Set<string>();
-    logs.forEach((item: any) => {
-      const e = (item.log ?? item).entity;
-      if (e) set.add(e);
-    });
-    return Array.from(set).sort();
-  }, [logs]);
+  const isSuper = currentUser?.role === "super_admin";
+  const { data: logs = [], isLoading } = trpc.logs.list.useQuery(queryInput, { enabled: isSuper });
+  // Lista de entidades vem da BD (DISTINCT), não só das linhas carregadas.
+  const { data: entityOptions = [] } = trpc.logs.entities.useQuery(undefined, { enabled: isSuper, staleTime: 5 * 60_000 });
+  const filtered = logs;
 
   const exportCsv = () => {
     const headers = ["Data", "Utilizador", "Ação", "Entidade", "EntityID", "Detalhes"];
@@ -66,7 +56,7 @@ export default function LogsPage() {
       const log = item.log ?? item;
       const u = item.user ?? null;
       return [
-        log.createdAt ? new Date(log.createdAt).toISOString() : "",
+        log.createdAt ? fmtPTDateTime(log.createdAt) : "",
         (u?.name ?? "Sistema").replace(/;/g, ","),
         log.action ?? "",
         log.entity ?? "",
@@ -97,7 +87,7 @@ export default function LogsPage() {
   return (
     <div className="space-y-4 max-w-7xl mx-auto w-full">
       <p className="text-sm text-muted-foreground">
-        Registo completo de todas as ações na plataforma · {filtered.length} entradas {filtered.length !== logs.length ? `(filtradas de ${logs.length})` : ""}
+        Registo de todas as ações na plataforma (retenção: 12 meses) · {filtered.length} entradas{filtered.length >= limit ? ` (limite ${limit} — afina os filtros)` : ""}
       </p>
 
       {/* Filtros */}
@@ -108,9 +98,17 @@ export default function LogsPage() {
             <Input
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="Detalhes, entidade ou utilizador..."
+              placeholder="Detalhes, ação, entidade ou utilizador..."
               className="h-9"
             />
+          </div>
+          <div>
+            <Label className="text-xs">De</Label>
+            <Input type="date" value={from} max={to || undefined} onChange={e => setFrom(e.target.value)} className="h-9 w-40" />
+          </div>
+          <div>
+            <Label className="text-xs">Até</Label>
+            <Input type="date" value={to} min={from || undefined} onChange={e => setTo(e.target.value)} className="h-9 w-40" />
           </div>
           <div>
             <Label className="text-xs">Entidade</Label>
@@ -118,7 +116,7 @@ export default function LogsPage() {
               <SelectTrigger className="w-44 h-9"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todas</SelectItem>
-                {entityOptions.map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}
+                {entityOptions.map((e: string) => <SelectItem key={e} value={e}>{e}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
@@ -186,7 +184,7 @@ export default function LogsPage() {
                       )}
                     </div>
                     <div className="shrink-0 text-xs text-muted-foreground whitespace-nowrap">
-                      {logEntry.createdAt ? format(new Date(logEntry.createdAt), "dd MMM, HH:mm", { locale: pt }) : "—"}
+                      {logEntry.createdAt ? fmtPTDateTime(logEntry.createdAt) : "—"}
                     </div>
                   </div>
                 );
