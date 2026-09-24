@@ -48,6 +48,16 @@ describe('city access for primary and alternate accounts', () => {
     state.overrides = { 'city.extra.faro': 'grant' };
     expect(await loadCityAccess(123)).toMatchObject({ cityIds: [50, 51], missingCostCenter: false });
   });
+  it('super_admin sem ficha (sem centro de custos) vê todos os nós', async () => {
+    people = [];
+    expect(await loadCityAccess(123, 'super_admin')).toMatchObject({ all: true, missingCostCenter: false, cityIds: [50, 51], projectIds: [48, 50, 51, 65] });
+    // Sem papel continua bloqueado (o papel é que alarga o âmbito).
+    expect(await loadCityAccess(123)).toMatchObject({ all: false, missingCostCenter: true });
+  });
+  it('papel nacional que não é super_admin, sem ficha, continua bloqueado', async () => {
+    people = [];
+    expect(await loadCityAccess(123, 'backoffice')).toMatchObject({ all: false, missingCostCenter: true });
+  });
   it('does not grant access when the account lookup fails', async () => {
     queryError = new Error('database unavailable');
     await expect(loadCityAccess(123)).rejects.toMatchObject({ cause: queryError });

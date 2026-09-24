@@ -1272,7 +1272,9 @@ export const appRouter = router({
     list: protectedProcedure.query(async ({ ctx }) => {
       requireRole(ctx.user.role, "extra"); // extra precisa dos nomes (tarefas); user não acede
       const { loadCityAccess } = await import("./cityAccess");
-      const access = await loadCityAccess(ctx.user.id);
+      // Com o papel: um papel nacional (ex.: super_admin sem ficha) vê todos os
+      // nós — igual ao permissions.myCityAccess e ao middleware.
+      const access = await loadCityAccess(ctx.user.id, ctx.user.role);
       const rows = await getProjects();
       return access.all ? rows : rows.filter(p => access.projectIds.includes(p.id));
     }),
@@ -2460,7 +2462,7 @@ export const appRouter = router({
         const { getUserPermissionOverrides } = await import('./db');
         const { loadCityAccess } = await import('./cityAccess');
         const { userAccessSummary } = await import('../shared/userAccessSummary');
-        const [overrides, cities] = await Promise.all([getUserPermissionOverrides(account.id), loadCityAccess(account.id)]);
+        const [overrides, cities] = await Promise.all([getUserPermissionOverrides(account.id), loadCityAccess(account.id, account.role)]);
         const allowedIds = scopedProjectIds();
         const canManage = ['admin', 'super_admin'].includes(ctx.user.role)
           && (!allowedIds || (!cities.all && !cities.missingCostCenter && cities.projectIds.every(id => allowedIds.includes(id))));
