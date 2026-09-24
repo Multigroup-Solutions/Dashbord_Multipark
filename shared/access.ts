@@ -276,7 +276,7 @@ export const MATRIX: Record<ModuleId, Record<Role, Grant>> = Object.fromEntries(
 // matriz, uma pessoa pode ter um override que SUBSTITUI o que o papel lhe dá
 // (alcance + ações), com validade opcional (`expiresOn`, dia de Lisboa,
 // inclusivo). access "none" = retirar o módulo. Guardados em user_permissions
-// com a chave `module.<id>` (migração 0099); regras de quem pode dar o quê em
+// com a chave `module.<id>` (migração 0100); regras de quem pode dar o quê em
 // shared/accessOverrides.ts.
 
 export const ACCESS_RANK: Record<Access, number> = { none: 0, own: 1, below_city: 2, city: 3, national: 4 };

@@ -2351,7 +2351,7 @@ export const appSettingsAudit = mysqlTable("app_settings_audit", {
 ]);
 
 // Permissões por utilizador (grant/deny além do papel) + overrides de módulo
-// (`module.<id>`, migração 0099): scope/actions substituem o que o papel dá
+// (`module.<id>`, migração 0100): scope/actions substituem o que o papel dá
 // nesse módulo; expiresOn = último dia (Lisboa) em que vale.
 export const userPermissions = mysqlTable("user_permissions", {
 	userId: int().notNull(),
