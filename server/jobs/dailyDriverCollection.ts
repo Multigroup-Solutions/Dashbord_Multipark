@@ -23,7 +23,7 @@ import {
   getDefaultSpeedLimit,
 } from "../db";
 import { storagePut } from "../storage";
-import { MAX_PLAUSIBLE_KMH, MIN_IMPLICIT_GAP_S, zelloAccuracyOk, zelloBattery, zelloSpeedKmh, zelloTimestamp } from "../zelloGps";
+import { MAX_PLAUSIBLE_KMH, MIN_IMPLICIT_GAP_S, gpsPointsFromGeoJson, splitByHolder, zelloAccuracyOk, zelloBattery, zelloSpeedKmh, zelloTimestamp } from "../zelloGps";
 import { notifyOwner } from "../_core/notification";
 
 /** Calculate distance between two GPS points using Haversine formula */
@@ -221,7 +221,7 @@ export { processGeoJsonHistory };
  * Versão das métricas GPS. 2 = velocidades em km/h (sem o ×3,6), filtro de
  * precisão e funcionário resolvido. Linhas antigas (1) são recalculadas.
  */
-export const DRIVER_METRICS_VERSION = 2;
+export const DRIVER_METRICS_VERSION = 3; // 3 = + GPS partido por quem tinha o PDA (Fase 3)
 
 /** Excessos de velocidade num GeoJSON do Zello (já em km/h). */
 export function countSpeedViolations(data: any, threshold: number): number {
@@ -240,7 +240,7 @@ export function countSpeedViolations(data: any, threshold: number): number {
  * `deadlineAt` e devolve quantas linhas faltam (últimos `days` dias).
  */
 export async function recomputeDriverHistory(opts: { deadlineAt: number; days?: number; batch?: number }): Promise<{ updated: number; remaining: number }> {
-  const { getDb, resolveZelloHoldersForDay } = await import("../db");
+  const { getDb, resolveZelloHoldersForDay, pdaIntervalsForDay, saveDriverShares } = await import("../db");
   const { sql } = await import("drizzle-orm");
   const db = await getDb();
   if (!db) return { updated: 0, remaining: 0 };
@@ -249,11 +249,12 @@ export async function recomputeDriverHistory(opts: { deadlineAt: number; days?: 
   const speedLimit = await getDefaultSpeedLimit();
   const threshold = speedLimit ? speedLimit.maxSpeed * (1 + speedLimit.tolerancePercent / 100) : 999;
   const holdersCache = new Map<string, Map<string, number>>();
+  const intervalsCache = new Map<string, Awaited<ReturnType<typeof pdaIntervalsForDay>>>();
   let updated = 0;
   for (;;) {
     if (Date.now() > opts.deadlineAt) break;
     const rows = rowsOf(await db.execute(sql`
-      SELECT id, zelloUsername, employeeId, date, geoJsonUrl FROM daily_driver_history
+      SELECT id, zelloUsername, employeeId, date, geoJsonUrl, metricsVersion FROM daily_driver_history
        WHERE metricsVersion < ${DRIVER_METRICS_VERSION} AND date >= NOW() - INTERVAL ${days} DAY
        ORDER BY date DESC LIMIT ${opts.batch ?? 25}`));
     if (!rows.length) break;
@@ -272,6 +273,10 @@ export async function recomputeDriverHistory(opts: { deadlineAt: number; days?: 
             const data = await resp.json();
             m = processGeoJsonHistory(data);
             violations = countSpeedViolations(data, threshold);
+            let dayIntervals = intervalsCache.get(day);
+            if (!dayIntervals) { dayIntervals = await pdaIntervalsForDay(day); intervalsCache.set(day, dayIntervals); }
+            const zi = dayIntervals.get(String(r.zelloUsername));
+            if (zi?.length) await saveDriverShares(Number(r.id), String(r.zelloUsername), day, splitByHolder(gpsPointsFromGeoJson(data), zi, threshold));
           }
         } catch (err) {
           console.warn("[recompute] GeoJSON indisponível", r.id, String(err).slice(0, 120));
@@ -284,13 +289,17 @@ export async function recomputeDriverHistory(opts: { deadlineAt: number; days?: 
             speedViolations = ${violations ?? 0}, avgBattery = ${m.avgBattery}, minBattery = ${m.minBattery},
             employeeId = ${employeeId}, metricsVersion = ${DRIVER_METRICS_VERSION}
           WHERE id = ${r.id}`);
-      } else {
-        // Sem GeoJSON: não dá para recalcular a velocidade — as antigas vinham
-        // ×3,6, por isso corrige-se a escala (o que passava de 150 já se perdeu).
+      } else if (Number(r.metricsVersion ?? 1) < 2) {
+        // Sem GeoJSON: não dá para recalcular a velocidade — as antigas (v1)
+        // vinham ×3,6, por isso corrige-se a escala UMA vez (o que passava de
+        // 150 já se perdeu).
         await db.execute(sql`UPDATE daily_driver_history SET
             avgSpeed = ROUND(avgSpeed / 3.6, 2), maxSpeed = ROUND(maxSpeed / 3.6, 2),
             employeeId = ${employeeId}, metricsVersion = ${DRIVER_METRICS_VERSION}
           WHERE id = ${r.id}`);
+      } else {
+        // v2 sem GeoJSON: velocidades já corrigidas; só sobe a versão
+        await db.execute(sql`UPDATE daily_driver_history SET employeeId = ${employeeId}, metricsVersion = ${DRIVER_METRICS_VERSION} WHERE id = ${r.id}`);
       }
       updated++;
     }
@@ -346,8 +355,10 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
     const endTs = Math.floor(endOfDay.getTime() / 1000);
 
     // Quem tinha cada Zello nesse dia (PDA partilhado → quem o teve mais tempo)
-    const { resolveZelloHoldersForDay } = await import("../db");
+    const { resolveZelloHoldersForDay, pdaIntervalsForDay, saveDriverShares } = await import("../db");
     const holders = await resolveZelloHoldersForDay(dateStr);
+    // Fase 3: intervalos de cada pessoa em cada PDA → GPS partido por pessoa
+    const intervals = await pdaIntervalsForDay(dateStr);
 
     // Get speed limit for violation counting
     const speedLimit = await getDefaultSpeedLimit();
@@ -393,7 +404,7 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
         }
 
         // Create the daily record
-        await createDailyDriverHistory({
+        const historyId = await createDailyDriverHistory({
           zelloUsername: user.name,
           displayName: user.fullName || user.name,
           // Antes ficava sempre vazio → km/horas soltos na Atividade do Dia
@@ -412,6 +423,13 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
           gpsPointsCount: metrics.gpsPointsCount,
           geoJsonUrl,
         });
+
+        const zIntervals = intervals.get(user.name);
+        if (historyId && zIntervals?.length && historyData?.features) {
+          try {
+            await saveDriverShares(Number(historyId), user.name, dateStr, splitByHolder(gpsPointsFromGeoJson(historyData), zIntervals, threshold));
+          } catch (err) { console.warn(`[DailyCollection] partes do GPS ${user.name}:`, err); }
+        }
 
         driversProcessed++;
 

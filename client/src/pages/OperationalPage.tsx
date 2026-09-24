@@ -354,7 +354,7 @@ function DayActivityTab() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Quem fez o quê — {date}</CardTitle>
-          <p className="text-xs text-muted-foreground">Ações das reservas + GPS por pessoa. 🤝 = agente que é um parceiro/agência; ⚠ = agente por ligar (aba Por Colaborador).</p>
+          <p className="text-xs text-muted-foreground">Ações das reservas + GPS + ponto por pessoa. O GPS de um PDA partilhado vai para quem o tinha em cada momento. 🤝 = agente que é um parceiro/agência; ⚠ = agente por ligar (aba Por Colaborador).</p>
         </CardHeader>
         <CardContent>
           {isLoading ? <p className="text-sm text-muted-foreground">A carregar…</p> : (
@@ -370,7 +370,11 @@ function DayActivityTab() {
                     <Th k="totalActions" label="Total" align="right" className="font-bold" sortKey={daySort.sortKey} sortDir={daySort.sortDir} onToggle={daySort.toggle} />
                     <Th k="totalKm" label="Km" align="right" sortKey={daySort.sortKey} sortDir={daySort.sortDir} onToggle={daySort.toggle} />
                     <Th k="hoursWorked" label="H. movimento" align="right" sortKey={daySort.sortKey} sortDir={daySort.sortDir} onToggle={daySort.toggle} />
-                    <Th k="hoursOnline" label="H. online" align="right" sortKey={daySort.sortKey} sortDir={daySort.sortDir} onToggle={daySort.toggle} />
+                    <Th k="hoursOnline" label="H. com PDA" align="right" sortKey={daySort.sortKey} sortDir={daySort.sortDir} onToggle={daySort.toggle} />
+                    <Th k="maxSpeed" label="Vel. máx" align="right" sortKey={daySort.sortKey} sortDir={daySort.sortDir} onToggle={daySort.toggle} />
+                    <Th k="violations" label="Excessos" align="right" sortKey={daySort.sortKey} sortDir={daySort.sortDir} onToggle={daySort.toggle} />
+                    <Th k="pontoHours" label="Ponto" align="right" sortKey={daySort.sortKey} sortDir={daySort.sortDir} onToggle={daySort.toggle} />
+                    <Th k="pdaNames" label="PDA" sortKey={daySort.sortKey} sortDir={daySort.sortDir} onToggle={daySort.toggle} />
                   </tr>
                 </thead>
                 <tbody>
@@ -389,9 +393,13 @@ function DayActivityTab() {
                       <td className="p-2 text-right tabular-nums">{pers.totalKm != null && pers.totalKm > 0 ? `${pers.totalKm} km` : "—"}</td>
                       <td className="p-2 text-right tabular-nums">{pers.hoursWorked != null && pers.hoursWorked > 0 ? `${pers.hoursWorked}h` : "—"}</td>
                       <td className="p-2 text-right tabular-nums">{pers.hoursOnline != null && pers.hoursOnline > 0 ? `${pers.hoursOnline}h` : "—"}</td>
+                      <td className="p-2 text-right tabular-nums">{pers.maxSpeed != null && pers.maxSpeed > 0 ? `${Math.round(pers.maxSpeed)} km/h` : "—"}</td>
+                      <td className={`p-2 text-right tabular-nums ${pers.violations > 0 ? "text-red-700 font-semibold" : ""}`}>{pers.violations || ""}</td>
+                      <td className="p-2 text-right tabular-nums">{pers.pontoHours != null ? `${pers.pontoHours}h` : "—"}</td>
+                      <td className="p-2 text-xs text-muted-foreground">{pers.pdaNames ?? ""}</td>
                     </tr>
                   ))}
-                  {people.length === 0 && <tr><td colSpan={9} className="p-6 text-center text-muted-foreground">Sem atividade registada neste dia.</td></tr>}
+                  {people.length === 0 && <tr><td colSpan={13} className="p-6 text-center text-muted-foreground">Sem atividade registada neste dia.</td></tr>}
                 </tbody>
               </table>
             </div>
