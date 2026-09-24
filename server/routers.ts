@@ -23,6 +23,19 @@ import {
 } from "../shared/deactivationReasons";
 import { dayToMysql, isIsoDay, lisbonToday } from "../shared/expensePeriods";
 import { HANDOVER_CITIES, maxHandoverDate } from "../shared/shiftHandover";
+import { MATERIAL_EXCEPTIONS, OPEN_ITEM_KINDS, OPEN_ITEMS_MAX } from "../shared/shiftHandoverAuto";
+
+// Pendente da passagem de turno (carry-over) — validado antes de gravar.
+const openItemSchema = z.object({
+  key: z.string().min(1).max(160),
+  kind: z.enum(OPEN_ITEM_KINDS),
+  refId: z.union([z.number(), z.string().max(128)]).nullable().optional(),
+  text: z.string().min(1).max(300),
+  resolved: z.boolean(),
+  resolvedAt: z.string().max(40).nullable().optional(),
+  resolvedByName: z.string().max(255).nullable().optional(),
+  since: z.string().max(40).nullable().optional(),
+});
 import { expenseTotals } from "../shared/expenseTotals";
 import { getBillingData, getAnnualBreakdown } from "./finance/compat";
 import { canViewDocuments, canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, CENTER_SCOPED_ROLES, PERSONAL_FIELDS, CONTRACT_FIELDS, type RhViewer, type EmployeeRef, isRhAdmin } from "./rhAccess";
@@ -6825,9 +6838,16 @@ export const appRouter = router({
       pensInPouch: z.number().int().min(0).max(100_000).nullable().optional(),
       mbBattery: z.number().int().min(0).max(100).nullable().optional(),
       pdasCharged: z.boolean().nullable().optional(),
-      // Legado: continua aceite para não apagar o valor dos registos antigos ao
-      // editar; o formulário novo já não o pede (ver `clothingItems`).
-      uniformsCount: z.number().int().min(0).max(100_000).nullable().optional(),
+      // `uniformsCount` (legado) saiu da API: a coluna fica e o UPDATE já não
+      // lhe toca, por isso os registos antigos mantêm o valor.
+      // "Material OK?" + exceções (canetas/rolos/bateria agrupados).
+      materialOk: z.boolean().nullable().optional(),
+      materialExceptions: z.array(z.object({
+        code: z.enum(MATERIAL_EXCEPTIONS),
+        note: z.string().max(200).nullable().optional(),
+      })).max(MATERIAL_EXCEPTIONS.length).nullable().optional(),
+      // Pendentes que passam de turno (resolved por item).
+      openItems: z.array(openItemSchema).max(OPEN_ITEMS_MAX).nullable().optional(),
       // Fardamento entregue: peças com quantidade e tamanho (shared/clothing.ts).
       clothingItems: z.array(z.object({
         type: z.enum(CLOTHING_TYPES),
@@ -6846,6 +6866,10 @@ export const appRouter = router({
         ...values,
         // Linhas repetidas (mesmo tipo+tamanho) somam-se antes de gravar.
         clothingItems: values.clothingItems == null ? values.clothingItems : normalizeClothingItems(values.clothingItems),
+        // Quem resolve e quando (o formulário só manda o visto).
+        openItems: values.openItems == null ? values.openItems : values.openItems.map((i) => (i.resolved && !i.resolvedAt
+          ? { ...i, resolvedAt: new Date().toISOString(), resolvedByName: i.resolvedByName ?? ctx.user.name ?? null }
+          : i)),
       }, {
         expectedVersion,
         userId: ctx.user.id,
@@ -6859,7 +6883,69 @@ export const appRouter = router({
         entity: "shift_handover",
         details: `${handoverDate} ${shift} ${city}` + (result.changed.length ? ` — alterado: ${result.changed.join(", ")}` : " — sem alterações"),
       });
-      return { success: true, mode: result.mode };
+      // Resumo automático, IA, pendentes, notificação e email — nunca falham a gravação.
+      let automation: Awaited<ReturnType<typeof import("./shiftHandoverAutomation").afterHandoverSave>> | null = null;
+      try {
+        const { afterHandoverSave } = await import("./shiftHandoverAutomation");
+        automation = await afterHandoverSave({ key: { handoverDate, shift, city }, mode: result.mode, userId: ctx.user.id, userName: ctx.user.name ?? null });
+      } catch (err: any) {
+        console.warn("[handover] automação:", String(err?.message ?? err).slice(0, 200));
+      }
+      return { success: true, mode: result.mode, automation };
+    }),
+
+    // Resumo automático do turno (rascunho) — só leitura, dentro da cidade.
+    draft: protectedProcedure.input(z.object({
+      date: handoverDaySchema,
+      shift: z.enum(["morning", "night"]),
+      city: z.enum(HANDOVER_CITIES),
+    })).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "team_leader");
+      const { buildHandoverDraft } = await import("./shiftHandoverDraft");
+      return buildHandoverDraft({ date: input.date, shift: input.shift, city: input.city });
+    }),
+
+    // Resumo por IA a pedido (5 pontos PT-PT); guarda-o se a passagem já existir.
+    aiSummary: protectedProcedure.input(z.object({
+      date: handoverDaySchema,
+      shift: z.enum(["morning", "night"]),
+      city: z.enum(HANDOVER_CITIES),
+      notes: z.string().max(2000).nullable().optional(),
+      openItems: z.array(openItemSchema).max(OPEN_ITEMS_MAX).nullable().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "team_leader");
+      const { llmConfigured, generateAiSummary } = await import("./shiftHandoverAutomation");
+      if (!llmConfigured()) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "A IA não está configurada (LLM_API_KEY)." });
+      const { buildHandoverDraft } = await import("./shiftHandoverDraft");
+      const draft = await buildHandoverDraft({ date: input.date, shift: input.shift, city: input.city }).catch(() => null);
+      const text = await generateAiSummary(draft, { city: input.city, shift: { date: input.date, shift: input.shift }, notes: input.notes ?? null, openItems: (input.openItems ?? []) as any });
+      if (!text) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível gerar o resumo agora — tenta outra vez." });
+      const { saveHandoverAiSummary } = await import("./shiftHandoverAutomation");
+      await saveHandoverAiSummary({ handoverDate: input.date, shift: input.shift, city: input.city }, text);
+      return { aiSummary: text };
+    }),
+
+    // "Recebi" — o team leader que entra confirma (nunca o autor).
+    ack: protectedProcedure.input(z.object({
+      id: z.number().int().positive(),
+      city: z.enum(HANDOVER_CITIES),
+    })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "team_leader");
+      const { ackHandover } = await import("./shiftHandoverAutomation");
+      const r = await ackHandover(input.id, input.city, { id: ctx.user.id, name: ctx.user.name ?? null });
+      if (!r.ok) throw new TRPCError({ code: "BAD_REQUEST", message: r.message });
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "shift_handover", entityId: input.id, details: `Recebi — passagem ${input.id} (${input.city})` });
+      return { success: true };
+    }),
+
+    // Cumprimento por turno e cidade + % a 30 dias (Resumo do dia).
+    compliance: protectedProcedure.input(z.object({
+      date: handoverDaySchema,
+      city: z.enum(HANDOVER_CITIES).optional(),
+    })).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "supervisor");
+      const { getHandoverCompliance } = await import("./shiftHandoverAutomation");
+      return getHandoverCompliance(input.date, input.city ?? null);
     }),
 
     list: protectedProcedure.input(z.object({

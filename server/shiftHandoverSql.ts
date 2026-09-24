@@ -10,9 +10,11 @@ import { sql, type SQL } from "drizzle-orm";
 export const HANDOVER_VALUE_COLUMNS = [
   "carsForCovered", "chargedUntilDate", "cashClosedInSafe", "checkoutCashDone",
   "frontPouchValue", "terminalPouchValue", "ticketsExpensesPaid", "mbRolls",
-  "mbRollsInPouch", "pensInPouch", "mbBattery", "pdasCharged", "uniformsCount",
-  "clothingItems", "notes",
+  "mbRollsInPouch", "pensInPouch", "mbBattery", "pdasCharged", "materialOk",
+  "materialExceptions", "clothingItems", "notes", "openItems",
 ] as const;
+// `uniformsCount` (legado, anterior a 2026-09-09) já não se escreve: a coluna
+// fica na BD e os registos antigos mantêm o valor (o UPDATE não lhe toca).
 export type HandoverValueColumn = (typeof HANDOVER_VALUE_COLUMNS)[number];
 
 export interface HandoverKey { handoverDate: string; shift: "morning" | "night"; city: "lisbon" | "porto" | "faro" }
@@ -42,12 +44,21 @@ export function handoverBoundValues(data: HandoverInput): Record<HandoverValueCo
     pensInPouch: numOrNull(data.pensInPouch),
     mbBattery: numOrNull(data.mbBattery),
     pdasCharged: bit(data.pdasCharged),
-    uniformsCount: numOrNull(data.uniformsCount),
+    materialOk: bit(data.materialOk),
+    materialExceptions: jsonList(data.materialExceptions),
     // JSON compacto — nunca se corta (cortar partia o JSON); o router limita a
     // CLOTHING_MAX_ITEMS peças, muito abaixo do TEXT.
     clothingItems: Array.isArray(data.clothingItems) ? JSON.stringify(data.clothingItems) : cut(data.clothingItems, 60_000),
     notes: cut(data.notes, 2000),
+    openItems: jsonList(data.openItems),
   };
+}
+
+/** Lista → JSON compacto (o router limita o tamanho); texto já serializado passa; resto → NULL. */
+function jsonList(v: unknown): string | null {
+  if (v == null) return null;
+  if (Array.isArray(v)) return JSON.stringify(v);
+  return typeof v === "string" ? v.slice(0, 60_000) : null;
 }
 
 const col = (name: string) => sql.identifier(name);
@@ -104,4 +115,47 @@ export function buildHandoverList(opts: { from?: string; to?: string; city?: str
   if (opts.city) conds.push(sql`\`city\` = ${opts.city}`);
   return sql`SELECT * FROM \`shift_handovers\` WHERE ${sql.join(conds, sql` AND `)}
     ORDER BY \`handoverDate\` DESC, \`shift\`, \`city\` LIMIT 200`;
+}
+
+// ─── Automação (0088) ───────────────────────────────────────────────────────
+
+/** Colunas que o sistema escreve depois da gravação — NÃO mexem na versão (lock). */
+export const HANDOVER_META_COLUMNS = ["autoSummary", "aiSummary", "emailSentVersion"] as const;
+export type HandoverMetaColumn = (typeof HANDOVER_META_COLUMNS)[number];
+
+export function buildHandoverMetaUpdate(id: number, patch: Partial<Record<HandoverMetaColumn, string | number | null>>): SQL | null {
+  const sets = HANDOVER_META_COLUMNS
+    .filter((c) => patch[c] !== undefined)
+    .map((c) => sql`${col(c)} = ${c === "emailSentVersion" ? numOrNull(patch[c]) : cut(patch[c], c === "autoSummary" ? 4_000_000 : 20_000)}`);
+  if (!sets.length) return null;
+  // `updatedAt` = ele próprio: metadados do sistema não contam como edição.
+  return sql`UPDATE \`shift_handovers\` SET ${sql.join(sets, sql`, `)}, \`updatedAt\` = \`updatedAt\` WHERE \`id\` = ${id}`;
+}
+
+/** Envio do email idempotente por versão: só "ganha" quem vê a versão ainda por enviar. */
+export function buildClaimEmailVersion(id: number, version: number): SQL {
+  return sql`UPDATE \`shift_handovers\` SET \`emailSentVersion\` = ${version}, \`updatedAt\` = \`updatedAt\`
+    WHERE \`id\` = ${id} AND \`version\` = ${version} AND (\`emailSentVersion\` IS NULL OR \`emailSentVersion\` < ${version})`;
+}
+
+/** Pendentes resolvidos pelo sistema/turno seguinte — sem versão (não é edição do autor). */
+export function buildHandoverOpenItemsUpdate(id: number, openItemsJson: string): SQL {
+  return sql`UPDATE \`shift_handovers\` SET \`openItems\` = ${openItemsJson}, \`updatedAt\` = \`updatedAt\` WHERE \`id\` = ${id}`;
+}
+
+/** "Recebi": só a 1.ª confirmação conta; o autor original nunca confirma a própria. */
+export function buildHandoverAck(id: number, user: { id: number; name: string | null }): SQL {
+  return sql`UPDATE \`shift_handovers\` SET \`ackById\` = ${user.id}, \`ackByName\` = ${cut(user.name, 255)}, \`ackAt\` = NOW(), \`updatedAt\` = \`updatedAt\`
+    WHERE \`id\` = ${id} AND \`ackAt\` IS NULL AND (\`createdById\` IS NULL OR \`createdById\` <> ${user.id})`;
+}
+
+/** Passagens de um intervalo de dias (cumprimento), com o âmbito de cidades. */
+export function buildHandoverRange(from: string, to: string, city: string | null, scope: SQL): SQL {
+  const conds: SQL[] = [scope, sql`\`handoverDate\` >= ${from}`, sql`\`handoverDate\` <= ${to}`];
+  if (city) conds.push(sql`\`city\` = ${city}`);
+  return sql`SELECT \`id\`, \`handoverDate\`, \`shift\`, \`city\`, UNIX_TIMESTAMP(\`createdAt\`) AS createdAtUnix,
+      UNIX_TIMESTAMP(\`ackAt\`) AS ackAtUnix, \`ackByName\`,
+      \`frontPouchValue\`, \`terminalPouchValue\`, \`createdByName\`, \`filledByName\`
+    FROM \`shift_handovers\` WHERE ${sql.join(conds, sql` AND `)}
+    ORDER BY \`handoverDate\`, \`shift\`, \`city\` LIMIT 1000`;
 }

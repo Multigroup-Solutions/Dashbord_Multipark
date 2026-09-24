@@ -1,4 +1,4 @@
-import { mysqlTable, mysqlSchema, AnyMySqlColumn, bigint, int, varchar, text, timestamp, datetime, index, uniqueIndex, decimal, mysqlEnum, tinyint, boolean, date, json } from "drizzle-orm/mysql-core"
+import { mysqlTable, mysqlSchema, AnyMySqlColumn, bigint, int, varchar, text, timestamp, datetime, index, uniqueIndex, decimal, mysqlEnum, tinyint, boolean, date, json, mediumtext, primaryKey } from "drizzle-orm/mysql-core"
 import { sql } from "drizzle-orm"
 
 export const activityLogs = mysqlTable("activity_logs", {
@@ -790,19 +790,43 @@ export const shiftHandovers = mysqlTable("shift_handovers", {
 	pensInPouch: int(),
 	mbBattery: int(),
 	pdasCharged: tinyint(),
+	// 0088 — "Material OK?" + exceções (JSON, shared/shiftHandoverAuto.ts)
+	materialOk: tinyint(),
+	materialExceptions: text(),
 	uniformsCount: int(),
 	clothingItems: text(),
 	notes: text(),
+	// 0088 — pendentes que passam de turno (JSON), resumo automático (JSON) e IA
+	openItems: text(),
+	autoSummary: mediumtext(),
+	aiSummary: text(),
 	filledById: int(),
 	filledByName: varchar({ length: 255 }),
 	createdById: int(),
 	createdByName: varchar({ length: 255 }),
 	version: int().default(1).notNull(),
+	// 0088 — "Recebi" do team leader que entra + email enviado por versão
+	ackById: int(),
+	ackByName: varchar({ length: 255 }),
+	ackAt: timestamp({ mode: 'string' }),
+	emailSentVersion: int(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
 (table) => [
 	uniqueIndex("shift_handover_unique").on(table.handoverDate, table.shift, table.city),
+]);
+
+// 0088 — lembrete de passagem de turno em falta, 1× por (dia, turno, cidade).
+export const shiftHandoverReminders = mysqlTable("shift_handover_reminders", {
+	handoverDate: varchar({ length: 10 }).notNull(),
+	shift: varchar({ length: 10 }).notNull(),
+	city: varchar({ length: 16 }).notNull(),
+	reminderSentAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	recipients: int().default(0).notNull(),
+},
+(table) => [
+	primaryKey({ columns: [table.handoverDate, table.shift, table.city] }),
 ]);
 
 export const extrasAvailability = mysqlTable("extras_availability", {

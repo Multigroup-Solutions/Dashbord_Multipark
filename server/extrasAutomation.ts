@@ -717,6 +717,16 @@ export async function runExtrasAutomation(now: Date = new Date()): Promise<Autom
     });
   }
 
+  // Passagem de turno em falta (~15:30 manhã / ~03:30 noite, Lisboa): lembrete
+  // aos team leaders do turno + backoffice, 1× por (dia, turno, cidade).
+  try {
+    const { runHandoverReminders } = await import("./shiftHandoverAutomation");
+    report.details["handover-reminders"] = await runHandoverReminders(now);
+    report.ran.push("handover-reminders");
+  } catch (err: any) {
+    report.errors.push(`handover-reminders: ${String(err?.message ?? err).slice(0, 200)}`);
+  }
+
   await runLeadAutomation(clock, now, report, run);
   return report;
 }

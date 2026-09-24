@@ -2,6 +2,7 @@ import { projectScope, bookingHistoryScope, employeeScope, userScope, partnerSco
 import { TRPCError } from '@trpc/server';
 import { buildHandoverCurrent, buildHandoverInsert, buildHandoverList, buildHandoverUpdate, handoverBoundValues, type HandoverInput, type HandoverKey } from './shiftHandoverSql';
 import { decideHandoverWrite, diffHandoverFields, HANDOVER_CONFLICT_MESSAGE, HANDOVER_EXISTS_MESSAGE, operationalDayWindowUtc } from '../shared/shiftHandover';
+import { mergeStoredOpenItems, parseMaterialExceptions, parseOpenItems, type OpenItem } from '../shared/shiftHandoverAuto';
 import { and, asc, desc, eq, gte, lte, lt, ne, like, or, sql, aliasedTable, isNotNull, isNull, inArray, notInArray, getTableColumns, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { normalizeEmail } from "../shared/email";
@@ -152,6 +153,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0085").then(m => ({ s: m.MIGRATION_0085_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0085 })),
       import("./migrations/migration_0086").then(m => ({ s: m.MIGRATION_0086_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0086 })),
       import("./migrations/migration_0087").then(m => ({ s: m.MIGRATION_0087_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0087 })),
+      import("./migrations/migration_0088").then(m => ({ s: m.MIGRATION_0088_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0088 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -4686,6 +4688,11 @@ export async function saveShiftHandover(
     opts.canEditOld,
   );
   if (!decision.ok) throw new TRPCError({ code: decision.code, message: decision.message });
+  // Pendentes: a resolução é monotónica (um item resolvido pela passagem
+  // seguinte não reabre por causa de um formulário antigo).
+  if (cur && Array.isArray(data.openItems)) {
+    data = { ...data, openItems: mergeStoredOpenItems(parseOpenItems(cur.openItems), data.openItems as OpenItem[]) };
+  }
   const bound = handoverBoundValues(data);
   const before = cur ? handoverBoundValues(cur) : null;
   const changed = diffHandoverFields(before, bound);
@@ -4710,7 +4717,15 @@ export async function listShiftHandovers(opts: { from?: string; to?: string; cit
   if (!db) return [];
   const [rows] = await db.execute(buildHandoverList(opts, cityNameScope(sql`\`city\``))) as any;
   // `clothingItems` sai como JSON parseado e validado — o cliente nunca vê texto cru.
-  return (rows as any[]).map((r) => ({ ...r, version: Number(r.version ?? 1), clothingItems: parseClothingItems(r.clothingItems) }));
+  return (rows as any[]).map(({ autoSummary, ...r }) => ({
+    ...r,
+    version: Number(r.version ?? 1),
+    clothingItems: parseClothingItems(r.clothingItems),
+    openItems: parseOpenItems(r.openItems),
+    materialExceptions: parseMaterialExceptions(r.materialExceptions),
+    // A fotografia do resumo automático (JSON grande) não vai na lista.
+    hasAutoSummary: !!autoSummary,
+  }));
 }
 
 /** Resumo do dia do supervisor: condutores por turno, carros
