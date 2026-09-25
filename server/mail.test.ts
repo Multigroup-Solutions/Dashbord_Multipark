@@ -456,7 +456,8 @@ describe("OAuth por utilizador", () => {
   });
   it("autorização incremental: só os âmbitos pedidos (gmail); os outros ficam preparados mas desligados", () => {
     expect(scopesFor(["gmail"])).toEqual(["openid", "email", "profile", "https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/gmail.send"]);
-    expect(requestedFeatures("drive,contacts")).toEqual(["gmail"]);
+    expect(requestedFeatures("drive")).toEqual(["gmail"]);
+    expect(requestedFeatures("drive,contacts")).toEqual(["contacts"]);
     expect(requestedFeatures("calendar,drive,tasks")).toEqual(["calendar", "tasks"]);
     expect(requestedFeatures("gmail,x")).toEqual(["gmail"]);
     expect(hasFeatureScopes("openid https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send", "gmail")).toBe(true);

@@ -70,7 +70,7 @@ export type ModuleId =
   | "servicos" | "historico_diario" | "pdas" | "tarefas" | "despesas"
   | "reservas_operacoes" | "extras_dia" | "parcerias" | "rh" | "rh_salarios"
   | "leads_extras" | "atividade_diaria" | "radio" | "passagem_turno" | "passagem_resumo_dia"
-  | "disponibilidade_extras" | "whatsapp" | "clientes" | "comunicacao"
+  | "disponibilidade_extras" | "whatsapp" | "clientes" | "contactos" | "comunicacao"
   | "reclamacoes" | "criticas" | "ocorrencias" | "perdidos"
   | "utilizadores" | "permissoes" | "sincronizacao" | "integracoes"
   | "marketing" | "logs" | "financeiro" | "faturacao" | "dashboards" | "anual" | "projetos"
@@ -100,6 +100,7 @@ export const MODULES: readonly ModuleDef[] = [
   { id: "disponibilidade_extras", label: "Disponibilidade dos extras", group: "Operações" },
   { id: "whatsapp", label: "WhatsApp", group: "Operações" },
   { id: "clientes", label: "Clientes", group: "Suporte" },
+  { id: "contactos", label: "Contactos (pesquisa unificada e diretório)", group: "Suporte" },
   { id: "comunicacao", label: "Comunicação (caixas de email partilhadas)", group: "Suporte" },
   { id: "reclamacoes", label: "Reclamações", group: "Suporte" },
   { id: "criticas", label: "Críticas Google", group: "Suporte" },
@@ -217,6 +218,13 @@ const MATRIX_SPEC: Record<ModuleId, Row> = {
     ...same("national:ve", ...NAT_OPS), ...same("national:vem", ...TOP),
   },
   clientes: {
+    ...same("city:ve", "team_leader", "supervisor"),
+    ...same("national:ve", ...NAT_OPS), ...same("national:vexm", ...TOP),
+  },
+  // Contactos (pedido do dono set 2026): pesquisa unificada + diretório da
+  // empresa, com as mesmas entregas dos Clientes. Cada tipo de contacto
+  // precisa ainda do seu módulo (shared/contacts.ts → contactKindsFor).
+  contactos: {
     ...same("city:ve", "team_leader", "supervisor"),
     ...same("national:ve", ...NAT_OPS), ...same("national:vexm", ...TOP),
   },

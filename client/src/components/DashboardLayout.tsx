@@ -65,6 +65,7 @@ import {
   MessageSquareWarning,
   MessageCircle,
   Contact,
+  BookUser,
   Star,
   AlertTriangle,
   Package,
@@ -187,6 +188,7 @@ export const menuGroups: MenuGroup[] = [
     icon: MessageSquareWarning,
     items: [
       { icon: Contact, label: "Clientes", path: "/clientes", module: "clientes" },
+      { icon: BookUser, label: "Contactos", path: "/contactos", module: "contactos" },
       { icon: MessageSquareWarning, label: "Reclamações", path: "/reclamacoes", module: "reclamacoes" },
       { icon: Star, label: "Críticas Google", path: "/criticas", module: "criticas" },
       { icon: AlertTriangle, label: "Ocorrências", path: "/ocorrencias", module: "ocorrencias" },

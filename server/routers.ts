@@ -71,6 +71,7 @@ import { googleBusinessRouter } from "./integrations/googleBusiness/router";
 import { integrationsHubRouter } from "./integrations/hubRouter";
 import { mailRouter, googleAccountRouter } from "./mail/router";
 import { googleCalendarRouter } from "./google/router";
+import { contactsRouter } from "./contactsRouter";
 import { getBookingHistory, getBookingsReport, getBookingTryAllParks } from "./multipark";
 import { deliveryErrorCode } from "./bookingDeliveryQueue";
 import {
@@ -1519,6 +1520,7 @@ export const appRouter = router({
   mail: mailRouter,
   googleAccount: googleAccountRouter,
   googleCalendar: googleCalendarRouter,
+  contacts: contactsRouter,
   assistant: assistantRouter,
   settings: settingsRouter,
 

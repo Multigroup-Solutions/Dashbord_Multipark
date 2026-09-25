@@ -6,8 +6,8 @@
  *  - só contas do Workspace da empresa: id_token VERIFICADO (assinatura,
  *    audiência) + email verificado + claim `hd` em GOOGLE_WORKSPACE_DOMAINS;
  *  - autorização incremental: cada funcionalidade pede só os seus âmbitos
- *    (agora gmail.modify + gmail.send; calendário/tarefas/drive/contactos
- *    ficam preparados em shared/mail.ts → GOOGLE_FEATURE_SCOPES);
+ *    (Gmail, Calendário, Tarefas e Contactos ligados; o Drive fica
+ *    preparado — shared/mail.ts → GOOGLE_FEATURE_SCOPES);
  *  - refresh token CIFRADO (AES-256-GCM, INTEGRATIONS_ENCRYPTION_KEY);
  *  - revogado/expirado → status `reauth_required` + aviso à própria pessoa
  *    (alerts.ts → google_account_reauth); "Desligar" revoga na Google.
@@ -191,6 +191,18 @@ export async function userGoogleAuth(userId: number, feature: GoogleFeature = "g
 /** Desliga: revoga na Google (best-effort), apaga o token e para a sincronização. */
 export async function disconnectGoogleAccount(userId: number): Promise<void> {
   const acc = await getGoogleAccount(userId);
+  // Contactos: antes de revogar, apaga (best-effort, ≤ 12 s) os contactos que a
+  // app criou no Google da pessoa; o que se guardou dos contactos dela é apagado.
+  if (acc?.refreshTokenEnc && hasFeatureScopes(acc.scopes, "contacts")) {
+    try {
+      const { removeAllAppContacts } = await import("./contactsService");
+      await removeAllAppContacts(userId, Date.now() + 12_000);
+    } catch { /* sem rede/sem autorização: a ligação é apagada na mesma */ }
+  }
+  try {
+    const { purgeUserContacts } = await import("./contactsStore");
+    await purgeUserContacts(userId);
+  } catch { /* tabelas ainda por criar */ }
   if (acc?.refreshTokenEnc) {
     try {
       const client = newOAuthClient();

@@ -275,13 +275,14 @@ describe("ajuda: escolha do ficheiro", () => {
 
   it("tem um ficheiro por módulo pedido", () => {
     expect(docs.map((d) => d.file).sort()).toEqual([
-      "comunicacao.md", "definicoes.md", "despesas.md", "disponibilidade.md", "extras-dia.md", "faturacao.md", "formacao.md", "marketing.md",
+      "comunicacao.md", "contactos.md", "definicoes.md", "despesas.md", "disponibilidade.md", "extras-dia.md", "faturacao.md", "formacao.md", "marketing.md",
       "ocorrencias.md", "passagem-turno.md", "perdidos.md", "permissoes.md", "reclamacoes.md", "rh-ponto.md", "tarefas.md", "whatsapp.md",
     ]);
   });
 
   it.each([
     ["Como pico o ponto?", "rh-ponto.md"],
+    ["Como ponho os clientes do serviço no meu telemóvel para saber quem liga?", "contactos.md"],
     ["Como marco a minha disponibilidade para a semana?", "disponibilidade.md"],
     ["O que é a janela de 24h no WhatsApp?", "whatsapp.md"],
     ["Como preencho a passagem de turno?", "passagem-turno.md"],

@@ -410,8 +410,8 @@ export const GOOGLE_FEATURE_LABELS: Record<GoogleFeature, string> = {
   drive: "Drive",
   contacts: "Contactos",
 };
-/** Ligadas: Gmail, Calendário e Tarefas; Drive e Contactos ficam preparados (hooks). */
-export const GOOGLE_FEATURES_ENABLED: readonly GoogleFeature[] = ["gmail", "calendar", "tasks"];
+/** Ligadas: Gmail, Calendário, Tarefas e Contactos; o Drive fica preparado (hook). */
+export const GOOGLE_FEATURES_ENABLED: readonly GoogleFeature[] = ["gmail", "calendar", "tasks", "contacts"];
 export const GOOGLE_FEATURE_SCOPES: Record<GoogleFeature, readonly string[]> = {
   gmail: ["https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/gmail.send"],
   // Calendário: eventos (turnos, prazos, reuniões com Meet), o calendário
@@ -426,7 +426,10 @@ export const GOOGLE_FEATURE_SCOPES: Record<GoogleFeature, readonly string[]> = {
   ],
   tasks: ["https://www.googleapis.com/auth/tasks"],
   drive: ["https://www.googleapis.com/auth/drive.file"],
-  contacts: ["https://www.googleapis.com/auth/contacts.readonly"],
+  // Contactos (shared/contacts.ts): escrever o grupo "Multipark — Serviço"
+  // (só os contactos criados pela app) e ler os "Outros contactos" para
+  // sugerir ligações a clientes/leads/parceiros.
+  contacts: ["https://www.googleapis.com/auth/contacts", "https://www.googleapis.com/auth/contacts.other.readonly"],
 };
 
 /** A conta tem todos os âmbitos da funcionalidade? PURA. */
