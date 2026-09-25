@@ -11,6 +11,8 @@ import { trpc } from "@/lib/trpc";
 import { fmtPTDateTime, fmtPTDate } from "@/lib/lisbonTime";
 import { DeactivationDialog } from "@/components/DeactivationDialog";
 import { deactivationReasonLabel } from "@shared/deactivationReasons";
+import { DriveFilesPanel } from "@/components/google/DriveFilesPanel";
+import { ImportFromSheetButton, SaveToDriveButton } from "@/components/google/DriveActions";
 import { toCsv } from "@shared/csv";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 
@@ -662,6 +664,7 @@ function DocumentsTab({ employeeId, access }: { employeeId: number; access: Empl
                             <Button size="icon" variant="secondary" className="w-6 h-6" aria-label="Abrir documento" onClick={() => openDoc(doc.id)}>
                               <Eye className="w-3 h-3" />
                             </Button>
+                            <SaveToDriveButton source={{ kind: "employee_document", id: doc.id }} iconOnly variant="outline" className="w-6 h-6 bg-secondary" label="Guardar no meu Drive" />
                             {canDeleteDoc(doc.uploadedById) && (
                               <Button size="icon" variant="secondary" className="w-6 h-6 text-destructive" aria-label="Eliminar documento" onClick={() => del.mutate({ id: doc.id })}>
                                 <Trash2 className="w-3 h-3" />
@@ -678,6 +681,9 @@ function DocumentsTab({ employeeId, access }: { employeeId: number; access: Empl
           );
         })}
       </div>
+
+      {/* Google Drive: ficheiros ligados, documentos gerados dos modelos (contratos, declarações) */}
+      <DriveFilesPanel entityType="employee" entityId={employeeId} title="Google Drive (contratos e documentos gerados)" />
 
       {/* Image preview dialog */}
       {previewUrl && (
@@ -2750,6 +2756,11 @@ function ImportExtrasDialog({ open, onClose }: { open: boolean; onClose: () => v
               Opcional: <code>salario_mensal</code>, <code>subsidio_alim_dia</code>, <code>nif</code>, <code>nib</code>,{" "}
               <code>telefone</code>, <code>email</code>, <code>morada</code>, <code>nacionalidade</code>, <code>data_nascimento</code> (YYYY-MM-DD).
             </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1">
+            <ImportFromSheetButton purpose="extras" onCsv={(text) => { setCsv(text); setReport(null); }} />
+            <span className="text-[11.5px] text-muted-foreground">Mesmas colunas; o conteúdo aparece abaixo para confirmares antes de importar.</span>
           </div>
 
           <div>

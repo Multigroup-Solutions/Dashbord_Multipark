@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { ExportToSheetsButton } from "@/components/google/DriveActions";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -217,10 +218,11 @@ export default function FinanceiroDashboard() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
         <p className="text-sm text-muted-foreground">
           Receita, custos e margem com a MESMA base da Faturação (entregues CHECKED_OUT, sem IVA, mesmo período)
         </p>
+        {isAdmin && <ExportToSheetsButton input={{ report: "financeiro", from: filters.from, to: filters.to, projectId: filters.projectId ?? undefined }} />}
       </div>
 
       {/* Filter Bar */}

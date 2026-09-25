@@ -6,8 +6,8 @@
  *  - só contas do Workspace da empresa: id_token VERIFICADO (assinatura,
  *    audiência) + email verificado + claim `hd` em GOOGLE_WORKSPACE_DOMAINS;
  *  - autorização incremental: cada funcionalidade pede só os seus âmbitos
- *    (Gmail, Calendário, Tarefas e Contactos ligados; o Drive fica
- *    preparado — shared/mail.ts → GOOGLE_FEATURE_SCOPES);
+ *    (Gmail, Calendário, Tarefas, Drive — só drive.file — e Contactos;
+ *    shared/mail.ts → GOOGLE_FEATURE_SCOPES);
  *  - refresh token CIFRADO (AES-256-GCM, INTEGRATIONS_ENCRYPTION_KEY);
  *  - revogado/expirado → status `reauth_required` + aviso à própria pessoa
  *    (alerts.ts → google_account_reauth); "Desligar" revoga na Google.

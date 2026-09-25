@@ -3151,3 +3151,82 @@ export const crmContacts = mysqlTable("crm_contacts", {
 	index("idx_crm_contacts_phone").on(table.phoneE164),
 	index("idx_crm_contacts_project").on(table.projectId),
 ]);
+
+// ─── Google Drive / Docs / Sheets — migração 0160 ───────────────────────────
+// Ficheiros do Drive ligados a um registo (só a referência, nunca o conteúdo).
+export const googleDriveLinks = mysqlTable("google_drive_links", {
+	id: int().autoincrement().primaryKey(),
+	entityType: varchar({ length: 16 }).notNull(),
+	entityId: varchar({ length: 320 }).notNull(),
+	fileId: varchar({ length: 200 }).notNull(),
+	name: varchar({ length: 255 }).notNull(),
+	mimeType: varchar({ length: 160 }),
+	webViewLink: varchar({ length: 1000 }),
+	iconLink: varchar({ length: 1000 }),
+	ownerEmail: varchar({ length: 320 }),
+	ownerName: varchar({ length: 255 }),
+	source: varchar({ length: 12 }).default('link').notNull(),
+	location: varchar({ length: 8 }).default('user').notNull(),
+	templateId: int(),
+	createdById: int(),
+	removedAt: timestamp({ mode: 'string' }),
+	removedById: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_google_drive_links_entity_file").on(table.entityType, table.entityId, table.fileId),
+	index("idx_google_drive_links_entity").on(table.entityType, table.entityId, table.removedAt),
+	index("idx_google_drive_links_file").on(table.fileId),
+]);
+
+// Pastas criadas pela app (pasta "Multipark" de cada pessoa; caminhos no Shared Drive).
+export const googleDriveFolders = mysqlTable("google_drive_folders", {
+	id: int().autoincrement().primaryKey(),
+	scopeKey: varchar({ length: 64 }).notNull(),
+	pathKey: varchar({ length: 500 }).notNull(),
+	folderId: varchar({ length: 200 }).notNull(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+});
+
+// Espelho no Shared Drive (documentos do RH, provas das reclamações) — retomável.
+export const googleDriveMirror = mysqlTable("google_drive_mirror", {
+	id: int().autoincrement().primaryKey(),
+	sourceType: varchar({ length: 24 }).notNull(),
+	sourceId: int().notNull(),
+	fileId: varchar({ length: 200 }),
+	status: varchar({ length: 12 }).default('pending').notNull(),
+	attempts: int().default(0).notNull(),
+	lastError: varchar({ length: 500 }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_google_drive_mirror_source").on(table.sourceType, table.sourceId),
+	index("idx_google_drive_mirror_status").on(table.status, table.updatedAt),
+]);
+
+// Modelos Google Docs com {{marcadores}} (Definições → Comunicação → Google Drive).
+export const googleDocTemplates = mysqlTable("google_doc_templates", {
+	id: int().autoincrement().primaryKey(),
+	name: varchar({ length: 160 }).notNull(),
+	templateType: varchar({ length: 32 }).notNull(),
+	fileId: varchar({ length: 200 }).notNull(),
+	fileName: varchar({ length: 255 }),
+	description: varchar({ length: 500 }),
+	placeholdersJson: varchar({ length: 2000 }),
+	active: tinyint().default(1).notNull(),
+	createdById: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	index("idx_google_doc_templates_type").on(table.templateType, table.active),
+]);
+
+// Pequenos valores do Drive (Shared Drive resolvido, folha dos relatórios ao vivo).
+export const googleDriveState = mysqlTable("google_drive_state", {
+	stateKey: varchar({ length: 64 }).primaryKey(),
+	value: varchar({ length: 1000 }),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+});

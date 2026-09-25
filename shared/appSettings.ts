@@ -16,6 +16,7 @@ import { NOTIFICATION_KIND_DEFS, NOTIFICATION_ROUTING_SETTING_KEY, notificationR
 import { DEFAULT_BRAND_DOMAINS, MAIL_BRAND_IDS, MAIL_DEFAULT_BACKFILL_DAYS, MAIL_DEFAULT_RETENTION_YEARS, MAIL_DEFAULT_SLA_HOURS } from "./mail";
 import { DEFAULT_SHARED_CALENDARS_CONFIG, sharedCalendarsConfigSchema } from "./googleSync";
 import { DEFAULT_CONTACTS_CONFIG, contactsConfigSchema } from "./contacts";
+import { DEFAULT_DRIVE_CONFIG, driveConfigSchema } from "./drive";
 
 // ─── Taxas com data de efeito (IVA / TSU) ───────────────────────────────────
 
@@ -362,6 +363,15 @@ export const SETTINGS = {
     description: "Diretório da empresa (conta de serviço com delegação, a impersonar a conta indicada), grupo \"Multipark — Serviço\" com os clientes das recolhas/entregas de hoje e amanhã (papéis e dias de retenção) e grupo opcional de parceiros. Editável em Definições → Comunicação (só super admin).",
     schema: contactsConfigSchema,
     defaultValue: DEFAULT_CONTACTS_CONFIG,
+    wiring: "live",
+  }),
+  "google.drive": def({
+    key: "google.drive",
+    group: "emails",
+    label: "Google Drive (Shared Drive, espelho e relatórios ao vivo)",
+    description: "Shared Drive \"Multipark\" da empresa (conta de serviço com delegação, a impersonar a conta indicada): pastas Clientes/Reclamações/RH criadas a pedido, espelho opcional dos documentos do RH e das provas das reclamações e relatórios ao vivo numa folha atualizada 1×/dia. Editável em Definições → Comunicação (só super admin).",
+    schema: driveConfigSchema,
+    defaultValue: DEFAULT_DRIVE_CONFIG,
     wiring: "live",
   }),
   [NOTIFICATION_ROUTING_SETTING_KEY]: def({

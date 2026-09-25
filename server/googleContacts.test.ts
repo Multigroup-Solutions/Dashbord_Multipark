@@ -28,10 +28,10 @@ describe("Contactos — âmbitos e funcionalidade", () => {
     expect(GOOGLE_FEATURE_SCOPES.contacts).toEqual(["https://www.googleapis.com/auth/contacts", "https://www.googleapis.com/auth/contacts.other.readonly"]);
     expect(scopesFor(["contacts"])).toEqual(["openid", "email", "profile", ...GOOGLE_FEATURE_SCOPES.contacts]);
   });
-  it("pedido incremental aceita contacts; o drive continua desligado", () => {
+  it("pedido incremental aceita contacts (e o drive, ligado na fase do Drive)", () => {
     expect(requestedFeatures("contacts")).toEqual(["contacts"]);
-    expect(requestedFeatures("tasks,contacts,drive")).toEqual(["tasks", "contacts"]);
-    expect(requestedFeatures("drive")).toEqual(["gmail"]);
+    expect(requestedFeatures("tasks,contacts,drive")).toEqual(["tasks", "contacts", "drive"]);
+    expect(requestedFeatures("drive")).toEqual(["drive"]);
   });
   it("hasFeatureScopes exige os dois âmbitos (readonly antigo não chega)", () => {
     const both = `openid ${GOOGLE_FEATURE_SCOPES.contacts.join(" ")} https://www.googleapis.com/auth/gmail.modify`;

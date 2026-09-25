@@ -71,6 +71,7 @@ import { googleBusinessRouter } from "./integrations/googleBusiness/router";
 import { integrationsHubRouter } from "./integrations/hubRouter";
 import { mailRouter, googleAccountRouter } from "./mail/router";
 import { googleCalendarRouter } from "./google/router";
+import { googleDriveRouter } from "./google/driveRouter";
 import { contactsRouter } from "./contactsRouter";
 import { getBookingHistory, getBookingsReport, getBookingTryAllParks } from "./multipark";
 import { deliveryErrorCode } from "./bookingDeliveryQueue";
@@ -546,13 +547,13 @@ async function assertOwnOrScopedEmployee(user: { id: number; role: string }, emp
   if (!ok) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
 }
 /** Documentos: quem mexe nos dados pessoais da ficha; sem ficha, só admin+ (checklists vazias). */
-async function assertCanViewDocuments(user: { id: number; role: string }, employeeId: number, message: string): Promise<void> {
+export async function assertCanViewDocuments(user: { id: number; role: string }, employeeId: number, message: string): Promise<void> {
   const viewer = await rhViewer(user);
   const ref = await rhEmployeeRef(employeeId);
   const allowed = ref ? canViewDocuments(viewer, ref) : isRhAdmin(viewer);
   if (!allowed) throw new TRPCError({ code: "FORBIDDEN", message });
 }
-async function assertCanUploadDocuments(user: { id: number; role: string }, employeeId: number): Promise<void> {
+export async function assertCanUploadDocuments(user: { id: number; role: string }, employeeId: number): Promise<void> {
   const viewer = await rhViewer(user);
   const ref = await rhEmployeeRefOrThrow(employeeId);
   if (!canEditPersonal(viewer, ref)) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para carregar documentos nesta ficha" });
@@ -1520,6 +1521,7 @@ export const appRouter = router({
   mail: mailRouter,
   googleAccount: googleAccountRouter,
   googleCalendar: googleCalendarRouter,
+  googleDrive: googleDriveRouter,
   contacts: contactsRouter,
   assistant: assistantRouter,
   settings: settingsRouter,

@@ -81,6 +81,8 @@ const DEFS: Def[] = [
     links: [{ label: "Perfil → Google", href: "/perfil" }, { label: "Calendários partilhados (Definições → Comunicação)", href: "/definicoes" }] },
   { id: "google_contacts", label: "Google Contactos (People API)", description: "Diretório da empresa (conta de serviço com delegação, 1×/dia), grupo \"Multipark — Serviço\" no telemóvel de condutores/TL (clientes de hoje e amanhã, apagados depois da retenção) e sugestões a partir dos contactos Google de cada pessoa.", require: [["GOOGLE_WORKSPACE_CLIENT_ID", "GOOGLE_CLIENT_ID"], ["GOOGLE_WORKSPACE_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"]], cron: "google-sync", testable: true, group: "main",
     links: [{ label: "Contactos", href: "/contactos" }, { label: "Contactos Google (Definições → Comunicação)", href: "/definicoes" }] },
+  { id: "google_drive", label: "Google Drive / Docs / Sheets", description: "Anexar do Drive e \"Guardar no Drive\" (cada pessoa, só drive.file), documentos gerados a partir de modelos Google Docs, \"Exportar para Sheets\", importação de folhas e Shared Drive \"Multipark\" da empresa (delegação: pastas por registo, espelho de documentos, relatórios ao vivo).", require: [["GOOGLE_WORKSPACE_CLIENT_ID", "GOOGLE_CLIENT_ID"], ["GOOGLE_WORKSPACE_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"]], cron: "google-sync", testable: true, group: "main",
+    links: [{ label: "Perfil → Google", href: "/perfil" }, { label: "Google Drive (Definições → Comunicação)", href: "/definicoes" }] },
   { id: "google_account", label: "Contas Google dos utilizadores", description: "\"Ligar a minha conta Google\" (OAuth interno do Workspace) para \"O meu email\".", require: [["GOOGLE_WORKSPACE_CLIENT_ID", "GOOGLE_CLIENT_ID"], ["GOOGLE_WORKSPACE_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"]], group: "main",
     links: [{ label: "Perfil", href: "/perfil" }] },
   { id: "smtp", label: "Email de saída (SMTP)", description: "Emails enviados pela aplicação e alertas ao dono.", require: [["SMTP_HOST"], ["SMTP_USER"], ["SMTP_PASS"]], testable: true, group: "main", links: [] },
@@ -267,6 +269,11 @@ export async function testIntegration(id: string): Promise<TestResult> {
         case "google_contacts": {
           const { testGoogleContacts } = await import("./google/contactsService");
           message = await testGoogleContacts();
+          break;
+        }
+        case "google_drive": {
+          const { testGoogleDrive } = await import("./google/driveService");
+          message = await testGoogleDrive();
           break;
         }
         case "gmail": {

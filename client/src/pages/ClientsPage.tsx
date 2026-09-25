@@ -11,7 +11,9 @@
  * Gasto e média só para quem vê totais financeiros (backoffice+ sem deny).
  */
 import { CommunicationsTimeline } from "@/components/mail/CommunicationsTimeline";
+import { ExportToSheetsButton } from "@/components/google/DriveActions";
 import { CreateMeetingButton } from "@/components/google/CreateMeetingButton";
+import { DriveFilesPanel } from "@/components/google/DriveFilesPanel";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useSearch } from "wouter";
 import { trpc } from "@/lib/trpc";
@@ -136,6 +138,7 @@ function ClientsList({ onOpen }: { onOpen: (email: string) => void }) {
             Um cliente por email, com todas as reservas Multipark anexadas: quantas, quanto gastou e com que frequência vem.
           </p>
         </div>
+        <ExportToSheetsButton input={{ report: "clientes", search: debounced || null, segment: activeSegment, projectId: projectId ?? undefined }} />
       </div>
 
       {stats && (
@@ -381,6 +384,7 @@ function ClientProfile({ email, onBack }: { email: string; onBack: () => void })
             </CardHeader>
             <CardContent>
               <CommunicationsTimeline type="client" id={p.email} compact />
+              <div className="mt-3"><DriveFilesPanel entityType="client" entityId={p.email} compact /></div>
             </CardContent>
           </Card>
         </div>
