@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { CreateMeetingButton } from "@/components/google/CreateMeetingButton";
 import FitAmount from "@/components/finance/FitAmount";
 import { STICKY_FIRST_COL, TABS_SCROLL } from "@/components/finance/layoutClasses";
 import { useTableSort, Th } from "@/components/SortableTable";
@@ -733,7 +734,8 @@ export default function PartnershipsPage() {
                         )}
                       </div>
                     </div>
-                    <div className="flex gap-1 shrink-0">
+                    <div className="flex gap-1 shrink-0 flex-wrap justify-end">
+                      <CreateMeetingButton entityType="partnership" entityId={p.id} defaultTitle={`Reunião — ${p.name}`} />
                       <Button size="sm" variant="ghost" onClick={() => openEdit(p)} aria-label={`Editar ${p.name}`}>
                         <Pencil className="w-4 h-4" />
                       </Button>

@@ -23,6 +23,7 @@ import {
   Mail, Save, ShieldCheck, SlidersHorizontal, Sparkles, ToggleLeft, Trash2, XCircle,
 } from "lucide-react";
 import { MailboxesSettings } from "@/components/mail/MailboxesSettings";
+import { SharedCalendarsSettings } from "@/components/google/SharedCalendarsSettings";
 import { validateSetting, type RateEntry } from "@shared/appSettings";
 import { SyncHealthPanel } from "@/components/operacoes/SyncHealthPanel";
 import { NotificationRoutingCard } from "@/components/NotificationRoutingCard";
@@ -69,7 +70,7 @@ export default function DefinicoesPage() {
         <TabsContent value="estado" className="space-y-4"><SystemStatusCard /><AiUsageCard /><SyncHealthPanel compact /></TabsContent>
         <TabsContent value="automacoes"><AutomationsCard /></TabsContent>
         <TabsContent value="integracoes"><IntegrationsCard /></TabsContent>
-        <TabsContent value="comunicacao"><MailboxesSettings /></TabsContent>
+        <TabsContent value="comunicacao" className="space-y-4"><MailboxesSettings /><SharedCalendarsSettings /></TabsContent>
         <TabsContent value="parametros"><ParametersCard /></TabsContent>
         <TabsContent value="notificacoes"><NotificationRoutingCard /></TabsContent>
         <TabsContent value="seguranca"><SecurityCard isSuperAdmin={user.role === "super_admin"} /></TabsContent>
@@ -392,6 +393,7 @@ function ParametersCard() {
     const m = new Map<string, SettingItem[]>();
     for (const s of (q.data ?? []) as SettingItem[]) {
       if (s.group === "notificacoes") continue; // tem separador próprio (Notificações)
+      if (s.key === "google.sharedCalendars") continue; // cartão próprio (Comunicação)
       if (!m.has(s.group)) m.set(s.group, []);
       m.get(s.group)!.push(s);
     }

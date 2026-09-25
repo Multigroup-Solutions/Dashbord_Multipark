@@ -77,6 +77,8 @@ const DEFS: Def[] = [
     links: [{ label: "Estado do cron", href: "/definicoes" }] },
   { id: "gmail", label: "Gmail (Comunicação)", description: "Caixas de email partilhadas lidas e enviadas pela API do Gmail (conta de serviço com delegação no Workspace).", require: [["GOOGLE_WORKSPACE_SERVICE_ACCOUNT_JSON", "GOOGLE_SERVICE_ACCOUNT_JSON"]], cron: "mail-sync", testable: true, group: "main",
     links: [{ label: "Caixas (Definições → Comunicação)", href: "/definicoes" }, { label: "Comunicação", href: "/comunicacao" }] },
+  { id: "google_sync", label: "Google Tarefas & Calendário", description: "Tarefas atribuídas ↔ lista \"Multipark\" do Google Tasks (nos dois sentidos) e calendário \"Multipark\" de cada pessoa (turnos, passagens de turno, formação, prazos, SLAs); calendários partilhados da escala por cidade (opcional, delegação); reuniões com Meet.", require: [["GOOGLE_WORKSPACE_CLIENT_ID", "GOOGLE_CLIENT_ID"], ["GOOGLE_WORKSPACE_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"]], cron: "google-sync", testable: true, group: "main",
+    links: [{ label: "Perfil → Google", href: "/perfil" }, { label: "Calendários partilhados (Definições → Comunicação)", href: "/definicoes" }] },
   { id: "google_account", label: "Contas Google dos utilizadores", description: "\"Ligar a minha conta Google\" (OAuth interno do Workspace) para \"O meu email\".", require: [["GOOGLE_WORKSPACE_CLIENT_ID", "GOOGLE_CLIENT_ID"], ["GOOGLE_WORKSPACE_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"]], group: "main",
     links: [{ label: "Perfil", href: "/perfil" }] },
   { id: "smtp", label: "Email de saída (SMTP)", description: "Emails enviados pela aplicação e alertas ao dono.", require: [["SMTP_HOST"], ["SMTP_USER"], ["SMTP_PASS"]], testable: true, group: "main", links: [] },
@@ -255,6 +257,11 @@ export async function testIntegration(id: string): Promise<TestResult> {
     let message = "Ligação OK.";
     await withTimeout((async () => {
       switch (id) {
+        case "google_sync": {
+          const { testGoogleSync } = await import("./google/syncService");
+          message = await testGoogleSync();
+          break;
+        }
         case "gmail": {
           const { listMailboxes } = await import("./mail/store");
           const { sourceAccountKey } = await import("../shared/mail");

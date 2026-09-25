@@ -410,11 +410,20 @@ export const GOOGLE_FEATURE_LABELS: Record<GoogleFeature, string> = {
   drive: "Drive",
   contacts: "Contactos",
 };
-/** Só o Gmail está ligado por agora; os outros ficam preparados (hooks). */
-export const GOOGLE_FEATURES_ENABLED: readonly GoogleFeature[] = ["gmail"];
+/** Ligadas: Gmail, Calendário e Tarefas; Drive e Contactos ficam preparados (hooks). */
+export const GOOGLE_FEATURES_ENABLED: readonly GoogleFeature[] = ["gmail", "calendar", "tasks"];
 export const GOOGLE_FEATURE_SCOPES: Record<GoogleFeature, readonly string[]> = {
   gmail: ["https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/gmail.send"],
-  calendar: ["https://www.googleapis.com/auth/calendar.events"],
+  // Calendário: eventos (turnos, prazos, reuniões com Meet), o calendário
+  // secundário "Multipark" criado pela app, a lista de calendários (para o
+  // reencontrar) e só a disponibilidade (livre/ocupado) — nunca o conteúdo
+  // dos eventos pessoais.
+  calendar: [
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/calendar.app.created",
+    "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+    "https://www.googleapis.com/auth/calendar.freebusy",
+  ],
   tasks: ["https://www.googleapis.com/auth/tasks"],
   drive: ["https://www.googleapis.com/auth/drive.file"],
   contacts: ["https://www.googleapis.com/auth/contacts.readonly"],

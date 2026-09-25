@@ -1,10 +1,11 @@
 /**
- * Rotas HTTP do OAuth "Ligar a minha conta Google" (a sessão da app tem de
+ * Rotas HTTP do OAuth "Ligar a minha conta Google" + cron /api/cron/google-sync (a sessão da app tem de
  * ser a mesma no início e no callback; o `state` é de uso único e ligado ao
  * utilizador). Os erros voltam à página de origem como `?google=error&msg=`.
  */
 import type { Express, Request, Response } from "express";
 import { sdk } from "../_core/sdk";
+import { cronAuthOk } from "../cronAuth";
 import { GOOGLE_ACCOUNT_CALLBACK_PATH, GOOGLE_ACCOUNT_START_PATH, googleErrorMessage } from "./workspace";
 
 function withQuery(path: string, params: Record<string, string>): string {
@@ -14,6 +15,20 @@ function withQuery(path: string, params: Record<string, string>): string {
 }
 
 export function registerGoogleAccountRoutes(app: Express) {
+  // Google Tarefas & Calendário: cron do GitHub Actions de 10 em 10 min.
+  // Prazo 45 s (maxDuration 60 s do Vercel); `done:false` → a corrida
+  // seguinte continua (cursores e ligações guardados a cada passo).
+  app.get("/api/cron/google-sync", async (req: Request, res: Response) => {
+    if (!cronAuthOk(req.headers["authorization"])) { res.status(401).json({ error: "Unauthorized" }); return; }
+    try {
+      const { runGoogleSync } = await import("./syncService");
+      const r = await runGoogleSync({ deadlineAt: Date.now() + 45_000 });
+      res.json({ ...r, ranAt: new Date().toISOString() });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: String(err?.message ?? err).slice(0, 300) });
+    }
+  });
+
   app.get(GOOGLE_ACCOUNT_START_PATH, async (req: Request, res: Response) => {
     const { safeReturnPath, requestedFeatures, startGoogleAccountOAuth } = await import("./userAccounts");
     const returnTo = safeReturnPath(req.query.returnTo);

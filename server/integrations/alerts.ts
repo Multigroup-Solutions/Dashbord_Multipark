@@ -131,7 +131,7 @@ export async function evaluateIntegrationAlerts(opts: { force?: boolean; now?: n
       const t = alertTransition(prev, it.state);
       if (t === "alert") {
         const m = it.personalUserId
-          ? { title: "A tua conta Google precisa de ser religada", body: `A autorização da tua conta Google expirou ou foi revogada — "O meu email" no dashboard está parado até voltares a ligar a conta no Perfil.${it.detail ? ` Detalhe: ${it.detail}` : ""}` }
+          ? { title: "A tua conta Google precisa de ser religada", body: `A autorização da tua conta Google expirou ou foi revogada — "O meu email", as Tarefas e o Calendário Google estão parados até voltares a ligar a conta no Perfil.${it.detail ? ` Detalhe: ${it.detail}` : ""}` }
           : alertMessage(it.kind, it.name, it.state, it.detail, it.label);
         await sendAlert(db as any, it.key, it.kind, m.title, m.body, it.link, it.personalUserId);
         out.alerted.push(it.key);

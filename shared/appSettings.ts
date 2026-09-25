@@ -14,6 +14,7 @@ import { z } from "zod";
 import { AI_FEATURE_IDS, AI_TIERS } from "./aiFeatures";
 import { NOTIFICATION_KIND_DEFS, NOTIFICATION_ROUTING_SETTING_KEY, notificationRoutingSchema } from "./notificationRouting";
 import { DEFAULT_BRAND_DOMAINS, MAIL_BRAND_IDS, MAIL_DEFAULT_BACKFILL_DAYS, MAIL_DEFAULT_RETENTION_YEARS, MAIL_DEFAULT_SLA_HOURS } from "./mail";
+import { DEFAULT_SHARED_CALENDARS_CONFIG, sharedCalendarsConfigSchema } from "./googleSync";
 
 // ─── Taxas com data de efeito (IVA / TSU) ───────────────────────────────────
 
@@ -344,6 +345,15 @@ export const SETTINGS = {
     defaultValue: DEFAULT_BRAND_DOMAINS,
     wiring: "live",
   }),
+  "google.sharedCalendars": def({
+    key: "google.sharedCalendars",
+    group: "emails",
+    label: "Calendários partilhados da escala (Google)",
+    description: "Calendários \"Escala Multipark — <cidade>\" escritos pela conta de serviço (delegação) em nome da conta dona, para quem não ligou a conta Google poder subscrever. Editável em Definições → Comunicação (só super admin).",
+    schema: sharedCalendarsConfigSchema,
+    defaultValue: DEFAULT_SHARED_CALENDARS_CONFIG,
+    wiring: "live",
+  }),
   [NOTIFICATION_ROUTING_SETTING_KEY]: def({
     key: NOTIFICATION_ROUTING_SETTING_KEY,
     group: "notificacoes",
@@ -470,6 +480,7 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "identity-sweep", label: "Ligações funcionário ↔ utilizador", intervalMinutes: 60, workflow: "multipark-cron.yml" },
   { name: "email-inbound", label: "Emails recebidos (IMAP)", intervalMinutes: 60, workflow: "multipark-cron.yml" },
   { name: "mail-sync", label: "Comunicação: sincronização do Gmail", intervalMinutes: 5, workflow: "mail-sync.yml" },
+  { name: "google-sync", label: "Google Tarefas & Calendário", intervalMinutes: 10, workflow: "google-sync.yml" },
   { name: "multipark-future", label: "Sincronização de reservas (futuras)", intervalMinutes: 120, workflow: "multipark-cron.yml" },
   { name: "daily-ops", label: "Manutenção diária + recolha GPS", intervalMinutes: 1440, workflow: "multipark-cron.yml" },
   { name: "evaluation-recompute", label: "Avaliação (recálculo das 4 semanas)", intervalMinutes: 1440, workflow: "multipark-cron.yml" },

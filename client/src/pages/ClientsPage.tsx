@@ -11,6 +11,7 @@
  * Gasto e média só para quem vê totais financeiros (backoffice+ sem deny).
  */
 import { CommunicationsTimeline } from "@/components/mail/CommunicationsTimeline";
+import { CreateMeetingButton } from "@/components/google/CreateMeetingButton";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useSearch } from "wouter";
 import { trpc } from "@/lib/trpc";
@@ -374,7 +375,9 @@ function ClientProfile({ email, onBack }: { email: string; onBack: () => void })
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm flex items-center gap-2"><Mail className="w-4 h-4 text-primary" /> Comunicações</CardTitle>
+              <CardTitle className="text-sm flex items-center gap-2 flex-wrap"><Mail className="w-4 h-4 text-primary" /> Comunicações
+                <span className="ml-auto"><CreateMeetingButton entityType="client" entityId={p.email} /></span>
+              </CardTitle>
             </CardHeader>
             <CardContent>
               <CommunicationsTimeline type="client" id={p.email} compact />

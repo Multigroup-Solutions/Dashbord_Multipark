@@ -85,7 +85,7 @@ O Super Admin entra sempre; o Admin entra sozinho quando a matriz lhe dá o mód
 |---|---|---|---|---|---|---|---|
 | Integrações com problemas | `integration_alert` | Integrações (view) | nacional | Admin, Super Admin | sim (ligado) | não | Ligação (Google Ads, Meta, Google Business, WhatsApp) passa a precisar de religação ou fica em erro. |
 | Crons parados | `cron_stale` | Definições (view) | nacional | Admin, Super Admin | sim (ligado) | não | Cron parado há mais do dobro do intervalo. |
-| A tua conta Google | `google_account_reauth` | Minha ficha (view) | a pessoa | Pessoal | sim (ligado) | não | A autorização da tua conta Google (O meu email) expirou ou foi revogada — 1× por mudança de estado. |
+| A tua conta Google | `google_account_reauth` | Minha ficha (view) | a pessoa | Pessoal | sim (ligado) | não | A autorização da tua conta Google (O meu email, Tarefas e Calendário) expirou ou foi revogada — 1× por mudança de estado. |
 | Sincronização Multipark | `sync_alert` | Sincronização (view) | nacional | Admin, Super Admin | — | não | Sem webhooks Multipark / webhooks retomados / reservas por sincronizar. |
 | Orçamento da IA | `ai_budget` | Definições (view) | nacional | Admin, Super Admin | sim (desligado) | não | Gasto da IA chega ao orçamento do mês. |
 

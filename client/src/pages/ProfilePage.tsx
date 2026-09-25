@@ -6,6 +6,7 @@ import { trpc } from "@/lib/trpc";
 import { Clock, Shield, LogOut, ChevronRight, UserCheck, Smartphone, SlidersHorizontal, Bell, Lock, Mail } from "lucide-react";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
 import { GoogleAccountCard } from "@/components/GoogleAccountCard";
+import { GoogleSyncCard } from "@/components/google/GoogleSyncCard";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { NOTIFICATION_GROUP_LABELS, NOTIFICATION_KIND_DEFS, type NotificationGroup } from "@shared/notificationRouting";
@@ -105,6 +106,8 @@ export default function ProfilePage() {
       </div>
 
       <GoogleAccountCard returnTo="/perfil" />
+
+      <GoogleSyncCard returnTo="/perfil" />
 
       <NotificationPrefsCard />
 

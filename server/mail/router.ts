@@ -7,6 +7,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import { requireAccess, withOverrides } from "../_core/access";
+import { googleSyncRouter } from "../google/router";
 import {
   MAIL_LINK_TYPES, MAIL_THREAD_STATUSES, mailboxConfigSchema, userIdOfAccountKey, type MailViewer,
 } from "../../shared/mail";
@@ -210,6 +211,8 @@ async function slaHours(): Promise<number> {
 }
 
 export const googleAccountRouter = router({
+  /** Google Tarefas & Calendário (Perfil → Google): estado, preferências, sincronizar, livre/ocupado. */
+  sync: googleSyncRouter,
   status: protectedProcedure.query(async ({ ctx }) => {
     const { googleAccountSummary } = await import("../google/userAccounts");
     return googleAccountSummary(ctx.user.id);

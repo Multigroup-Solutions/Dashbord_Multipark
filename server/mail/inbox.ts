@@ -569,7 +569,7 @@ export async function aiDraft(viewer: MailViewer, threadId: number): Promise<{ o
 // ─── Timeline de um registo (cliente, reserva, reclamação, perdido, ocorrência) ──
 
 /** O registo está no âmbito (cidade) de quem pede? Papéis nacionais: sempre. */
-async function assertEntityInScope(type: MailLinkType, entityId: string): Promise<void> {
+export async function assertEntityInScope(type: MailLinkType, entityId: string): Promise<void> {
   const ids = scopedProjectIds();
   if (ids === undefined) return;
   const d = await db();
@@ -644,12 +644,28 @@ export async function entityTimeline(viewer: MailViewer, type: MailLinkType, raw
       });
     }
   }
+  // Reuniões (Google Meet) criadas a partir deste registo ("Criar reunião").
+  if (type === "client" || type === "complaint") {
+    try {
+      const meets = rowsOf(await d.execute(sql`SELECT m.id, m.title, m.startAt, m.meetLink, m.invitedEmail, u.name AS userName
+        FROM google_meetings m LEFT JOIN users u ON u.id = m.userId
+        WHERE m.entityType = ${type} AND m.entityId = ${entityId} ORDER BY m.startAt DESC LIMIT 30`));
+      for (const m of meets) {
+        items.push({
+          kind: "meeting", id: `g${m.id}`, threadId: null, at: m.startAt ? String(m.startAt) : null, direction: "out",
+          who: String(m.userName ?? "Multipark"), subject: String(m.title ?? "Reunião"),
+          text: `Reunião com Google Meet${m.invitedEmail ? ` · cliente convidado (${m.invitedEmail})` : ""}`,
+          source: "Reunião", link: m.meetLink ? String(m.meetLink) : null,
+        });
+      }
+    } catch { /* tabela ainda por criar */ }
+  }
   items.sort((a, b) => String(b.at ?? "").localeCompare(String(a.at ?? "")));
   return { items: items.slice(0, 200) };
 }
 
 export interface TimelineItem {
-  kind: "email" | "whatsapp"; id: string; threadId: number | null; at: string | null; direction: "in" | "out";
+  kind: "email" | "whatsapp" | "meeting"; id: string; threadId: number | null; at: string | null; direction: "in" | "out";
   who: string; subject: string; text: string; source: string; link: string | null;
 }
 

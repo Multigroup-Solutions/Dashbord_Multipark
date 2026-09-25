@@ -1,5 +1,6 @@
 import { trpc } from "@/lib/trpc";
 import { CommunicationsTimeline } from "@/components/mail/CommunicationsTimeline";
+import { CreateMeetingButton } from "@/components/google/CreateMeetingButton";
 import { can, roleRank, seesBeyondOwn } from "@shared/access";
 import { openInMultipark } from "@/lib/multiparkLinks";
 import { formatBookingHistoryDetails } from "@/lib/bookingHistoryFormat";
@@ -899,7 +900,8 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
               }} />
             </TabsContent>
 
-            <TabsContent value="comms" className="mt-4">
+            <TabsContent value="comms" className="mt-4 space-y-3">
+              <div className="flex justify-end"><CreateMeetingButton entityType="complaint" entityId={id} defaultTitle={`Reunião — reclamação #${id}${c.clientName ? ` (${c.clientName})` : ""}`} /></div>
               <CommunicationsTimeline type="complaint" id={id} compact />
             </TabsContent>
             <TabsContent value="booking-history" className="mt-4">
