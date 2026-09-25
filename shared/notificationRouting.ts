@@ -97,6 +97,8 @@ export const NOTIFICATION_KIND_DEFS = [
     module: "reclamacoes", action: "view", roles: ["frontoffice", "backoffice", "supervisor"], cityScoped: true, personal: false, channels: IN_APP, dedupeMinutes: 12 * 60 }),
   K({ kind: "complaint_triage", group: "suporte", label: "Triagem da IA por rever", description: "Reclamação urgente ou possível duplicado sugerido pela IA.",
     module: "reclamacoes", action: "view", roles: ["frontoffice", "backoffice", "supervisor"], cityScoped: true, personal: false, channels: IN_APP }),
+  K({ kind: "google_reviews_alert", group: "suporte", label: "Críticas Google: alertas", description: "Média de estrelas dos últimos 7 dias a cair e críticas Google sem resposta há demasiado tempo (por perfil da tua cidade).",
+    module: "criticas", action: "view", roles: ["supervisor"], cityScoped: true, personal: false, channels: WITH_EMAIL, dedupeMinutes: 1440 }),
   K({ kind: "incident_critical", group: "suporte", label: "Ocorrência crítica", description: "Ocorrências registadas com gravidade crítica.",
     module: "ocorrencias", action: "view", roles: ["team_leader", "supervisor", "backoffice"], cityScoped: true, personal: false, channels: WITH_EMAIL, emailDefault: true }),
   K({ kind: "incident_sla", group: "suporte", label: "Ocorrências fora do prazo", description: "Resumo diário das ocorrências em atraso.",
@@ -168,7 +170,9 @@ export const NOTIFICATION_KIND_DEFS = [
   // ── Marketing ──
   K({ kind: "marketing_alert", group: "marketing", label: "Alertas de marketing", description: "Gasto ou ROAS fora do normal (só críticos).",
     module: "marketing", action: "view", roles: [], cityScoped: false, personal: false, channels: WITH_EMAIL }),
-  K({ kind: "web_analytics_alert", group: "marketing", label: "Alertas Web & SEO", description: "Quedas de sessões ou de cliques do Google, pesquisas a perder posição e PageSpeed móvel baixa.",
+  K({ kind: "google_business_alert", group: "marketing", label: "Alertas Google Business", description: "Impressões ou chamadas dos perfis Google a cair e perfis suspensos, fechados, alterados pela Google ou com edições pendentes.",
+    module: "marketing", action: "view", roles: [], cityScoped: false, personal: false, channels: WITH_EMAIL, dedupeMinutes: 1440 }),
+  K({ kind: "web_analytics_alert", group: "marketing", label: "Alertas Web & SEO", description: "Quedas de sessões ou de cliques do Google, pesquisas a perder posição, PageSpeed móvel baixa e experiência real (CrUX) lenta nas páginas-chave.",
     module: "marketing", action: "view", roles: [], cityScoped: false, personal: false, channels: WITH_EMAIL, dedupeMinutes: 1440 }),
 
   // ── Sistema ──

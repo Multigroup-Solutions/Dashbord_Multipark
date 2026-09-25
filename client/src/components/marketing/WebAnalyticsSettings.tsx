@@ -18,7 +18,8 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { CheckCircle2, CircleAlert, Copy, Globe, Loader2, Plus, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
-import { WEB_BRAND_IDS, WEB_BRAND_LABELS, webAnalyticsConfigSchema, type WebAnalyticsConfig, type WebBrand } from "@shared/webAnalytics";
+import { PAGESPEED_MAX_URLS, WEB_BRAND_IDS, WEB_BRAND_LABELS, brandOfUrl, parseBulkUrls, webAnalyticsConfigSchema, type WebAnalyticsConfig, type WebBrand } from "@shared/webAnalytics";
+import { Textarea } from "@/components/ui/textarea";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
 
 function BrandSelect({ value, onChange, disabled }: { value: string; onChange: (v: "" | WebBrand) => void; disabled?: boolean }) {
@@ -41,6 +42,7 @@ export function WebAnalyticsSettings() {
   const [cfg, setCfg] = useState<WebAnalyticsConfig | null>(null);
   const [events, setEvents] = useState("");
   const [check, setCheck] = useState<CheckResult | null>(null);
+  const [bulk, setBulk] = useState("");
   useEffect(() => { if (q.data) { setCfg(q.data.config); setEvents(q.data.config.funnelEvents.join(", ")); } }, [q.data]);
   const save = trpc.marketing.web.settings.save.useMutation({
     onSuccess: (r) => { toast.success(r.changed ? "Guardado." : "Sem alterações."); utils.marketing.web.invalidate(); },
@@ -110,6 +112,7 @@ export function WebAnalyticsSettings() {
                 Search Console (Definições → Utilizadores e autorizações). No Google Cloud do projeto da conta de serviço ativa "Google Analytics Data API", "Google Search Console API" e "PageSpeed Insights API".
               </p>
               <p className="text-muted-foreground">PageSpeed: {d.pagespeedKey ? "com chave (GOOGLE_PAGESPEED_API_KEY)." : "sem chave — funciona com quota baixa; recomenda-se GOOGLE_PAGESPEED_API_KEY."}</p>
+              <p className="text-muted-foreground">Dados reais (Chrome UX Report): {(d as any).cruxKey ? "chave definida — ativa também a \"Chrome UX Report API\" no projeto da chave." : "sem chave — define GOOGLE_PAGESPEED_API_KEY (ou GOOGLE_CRUX_API_KEY) e ativa a \"Chrome UX Report API\"."}</p>
             </div>
           )}
           <div className="flex flex-wrap gap-2">
@@ -186,17 +189,41 @@ export function WebAnalyticsSettings() {
             <Switch checked={cfg.pagespeedEnabled} disabled={!canEdit} onCheckedChange={(v) => set({ pagespeedEnabled: v })} />
             <span>PageSpeed (1×/semana, móvel e computador)</span>
           </label>
+          <label className="flex items-center gap-3 min-h-[44px] text-sm">
+            <Switch checked={cfg.cruxEnabled} disabled={!canEdit} onCheckedChange={(v) => set({ cruxEnabled: v })} />
+            <span>Dados reais (Chrome UX Report) 1×/semana para as mesmas páginas e respetivos sites</span>
+          </label>
+          <p className="text-[11px] text-muted-foreground">
+            {cfg.pagespeedUrls.length} de {PAGESPEED_MAX_URLS} páginas. Junta as páginas de reserva de cada marca; "Chave" = página-chave (entra nos alertas dos dados reais).
+          </p>
           {cfg.pagespeedUrls.map((u, i) => (
             <div key={i} className="flex flex-wrap items-center gap-2">
               <Input className="h-9 w-72" placeholder="https://multipark.pt/" aria-label="Página" value={u.url} disabled={!canEdit}
-                onChange={(e) => set({ pagespeedUrls: cfg.pagespeedUrls.map((x, j) => (j === i ? { ...x, url: e.target.value } : x)) })} />
+                onChange={(e) => set({ pagespeedUrls: cfg.pagespeedUrls.map((x, j) => (j === i ? { ...x, url: e.target.value, brand: x.brand || brandOfUrl(e.target.value) || "" } : x)) })} />
               <Input className="h-9 w-48" placeholder="Nome" aria-label="Nome" value={u.label} disabled={!canEdit}
                 onChange={(e) => set({ pagespeedUrls: cfg.pagespeedUrls.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)) })} />
               <BrandSelect value={u.brand} disabled={!canEdit} onChange={(v) => set({ pagespeedUrls: cfg.pagespeedUrls.map((x, j) => (j === i ? { ...x, brand: v } : x)) })} />
+              <label className="flex items-center gap-1.5 text-xs"><Switch checked={u.keyUrl} disabled={!canEdit} onCheckedChange={(v) => set({ pagespeedUrls: cfg.pagespeedUrls.map((x, j) => (j === i ? { ...x, keyUrl: v } : x)) })} />Chave</label>
               <Button variant="ghost" size="sm" disabled={!canEdit} aria-label="Remover" onClick={() => set({ pagespeedUrls: cfg.pagespeedUrls.filter((_, j) => j !== i) })}><Trash2 className="w-4 h-4" /></Button>
             </div>
           ))}
-          <Button variant="outline" size="sm" disabled={!canEdit || cfg.pagespeedUrls.length >= 15} onClick={() => set({ pagespeedUrls: [...cfg.pagespeedUrls, { url: "", label: "", brand: "" }] })}><Plus className="w-4 h-4 mr-1" />Adicionar página</Button>
+          <Button variant="outline" size="sm" disabled={!canEdit || cfg.pagespeedUrls.length >= PAGESPEED_MAX_URLS} onClick={() => set({ pagespeedUrls: [...cfg.pagespeedUrls, { url: "", label: "", brand: "", keyUrl: true }] })}><Plus className="w-4 h-4 mr-1" />Adicionar página</Button>
+          {canEdit && (
+            <div className="space-y-1 rounded-lg border p-2">
+              <Label htmlFor="wa-bulk" className="text-xs">Colar várias páginas (uma por linha; opcional "URL | nome" — a marca é adivinhada pelo domínio)</Label>
+              <Textarea id="wa-bulk" rows={3} value={bulk} onChange={(e) => setBulk(e.target.value)} placeholder={"https://redpark.pt/reservar | Redpark — reserva\nhttps://skypark.pt/booking"} className="font-mono text-xs" />
+              <Button variant="outline" size="sm" disabled={!bulk.trim()} onClick={() => {
+                const r = parseBulkUrls(bulk, cfg.pagespeedUrls.map((x) => x.url));
+                const room = PAGESPEED_MAX_URLS - cfg.pagespeedUrls.length;
+                const add = r.add.slice(0, Math.max(0, room));
+                set({ pagespeedUrls: [...cfg.pagespeedUrls, ...add.map((x) => ({ ...x, keyUrl: true }))] });
+                setBulk(r.rejected.join("\n"));
+                if (r.rejected.length) toast.error(`${r.rejected.length} linha(s) inválida(s) ficaram na caixa.`);
+                if (r.add.length > add.length) toast.error(`Só cabem ${PAGESPEED_MAX_URLS} páginas: ${r.add.length - add.length} ficaram de fora.`);
+                if (add.length) toast.success(`${add.length} página(s) adicionada(s) — carrega em Guardar.`);
+              }}><Plus className="w-4 h-4 mr-1" />Adicionar da lista</Button>
+            </div>
+          )}
         </div>
 
         {/* Recolha */}
@@ -233,6 +260,15 @@ export function WebAnalyticsSettings() {
             {numInput("wa-a5", "Pesquisas do top vigiadas", cfg.alerts.positionTopN, (n) => setAlert("positionTopN", n))}
             {numInput("wa-a6", "Sessões mínimas (base)", cfg.alerts.minSessions, (n) => setAlert("minSessions", n), "/dia")}
             {numInput("wa-a7", "Cliques mínimos (base)", cfg.alerts.minClicks, (n) => setAlert("minClicks", n), "/semana")}
+          </div>
+          <label className="flex items-center gap-3 min-h-[44px] text-sm">
+            <Switch checked={cfg.alerts.cruxEnabled} disabled={!canEdit} onCheckedChange={(v) => setAlert("cruxEnabled", v)} />
+            <span>Dados reais (CrUX, p75 28 dias) das páginas-chave acima de:</span>
+          </label>
+          <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
+            {numInput("wa-c1", "LCP", cfg.alerts.cruxLcpMs, (n) => setAlert("cruxLcpMs", n), "ms")}
+            {numInput("wa-c2", "INP", cfg.alerts.cruxInpMs, (n) => setAlert("cruxInpMs", n), "ms")}
+            {numInput("wa-c3", "CLS", cfg.alerts.cruxCls, (n) => setAlert("cruxCls", n))}
           </div>
         </div>
 

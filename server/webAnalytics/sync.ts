@@ -18,15 +18,15 @@
  * resumo "o que mudou e porquê" (IA lite, só com totais; texto fixo sem IA).
  */
 import {
-  GA_DIMS, GA_MAX_PAGES, GA_PAGE_LIMIT, GA_PARTS, SC_DIMS, SC_MAX_PAGES, SC_PARTS, SC_ROW_LIMIT,
-  applySyncWindow, gaDailyRows, gaDimRequest, gaTotalsRequest, mergeGaRows, nextSyncWindow, pagespeedDue, parseCursor, parseGaReport,
-  parsePagespeed, parseScRows, scRequest,
+  CRUX_INTERVAL_DAYS, GA_DIMS, GA_MAX_PAGES, GA_PAGE_LIMIT, GA_PARTS, SC_DIMS, SC_MAX_PAGES, SC_PARTS, SC_ROW_LIMIT,
+  applySyncWindow, cruxCheckKey, cruxDue, cruxTargets, extractLighthouseAudits, gaDailyRows, gaDimRequest, gaTotalsRequest, mergeGaRows, nextSyncWindow,
+  pagespeedDue, parseCruxHistory, parseCursor, parseGaReport, parsePagespeed, parseScRows, scRequest,
   type GaDimKind, type GaPart, type GaRow, type PsStrategy, type ScDimKind, type ScPart, type ScRow, type SyncWindow, type WebAnalyticsConfig,
 } from "../../shared/webAnalytics";
-import { lisbonDayOf, lisbonHoursSince } from "../../shared/lisbonDay";
+import { addDays, lisbonDayOf, lisbonHoursSince } from "../../shared/lisbonDay";
 import { googleErrorMessage, httpStatusOf } from "../google/workspace";
 import { isRateLimitError } from "../google/apis";
-import type { GaApiLike, PsiApiLike, ScApiLike } from "./apis";
+import type { CruxApiLike, GaApiLike, PsiApiLike, ScApiLike } from "./apis";
 import { PAGESPEED_TIMEOUT_MS } from "./apis";
 import type { WebStore } from "./store";
 
@@ -48,6 +48,8 @@ export interface WebSyncReport {
   busy?: boolean;
   units: UnitReport[];
   pagespeed: { measured: number; failed: number; pending: number };
+  /** Chrome UX Report: consultas feitas / sem dados suficientes / falhadas / por fazer. */
+  crux?: { measured: number; noData: number; failed: number; pending: number };
   alerts?: number | null;
   insight?: { created: boolean; ai: boolean } | null;
   errors: string[];
@@ -58,6 +60,8 @@ export interface CoreDeps {
   ga: GaApiLike | null;
   sc: ScApiLike | null;
   psi: PsiApiLike | null;
+  /** Chrome UX Report (null = sem chave ou desligado). */
+  crux?: CruxApiLike | null;
   store: WebStore;
   now?: () => number;
 }
@@ -136,6 +140,8 @@ export async function runWebAnalyticsCore(cfg: WebAnalyticsConfig, deps: CoreDep
         const r = results[i], b = batch[i];
         if (r.status === "fulfilled") {
           await store.savePagespeed({ url: b.url, strategy: b.strategy, runDay: today, result: parsePagespeed(r.value), error: null });
+          // "O que corrigir primeiro" (0170) — nunca parte a medição.
+          if (store.savePagespeedAudits) await store.savePagespeedAudits(b.url, b.strategy, today, extractLighthouseAudits(r.value)).catch(() => {});
           report.pagespeed.measured++;
         } else {
           report.pagespeed.failed++;
@@ -145,6 +151,38 @@ export async function runWebAnalyticsCore(cfg: WebAnalyticsConfig, deps: CoreDep
     }
     report.pagespeed.pending = Math.max(0, due.length - batch.length);
     if (report.pagespeed.pending > 0) report.done = false;
+  }
+
+  // ── Chrome UX Report (dados reais, 1×/semana por origem/página × dispositivo; pedidos rápidos) ──
+  if (cfg.pagespeedEnabled && cfg.cruxEnabled && deps.crux && store.saveCrux && cfg.pagespeedUrls.length) {
+    const crux = { measured: 0, noData: 0, failed: 0, pending: 0 };
+    report.crux = crux;
+    const raw = await store.getState("crux:checked");
+    let checked: Record<string, string> = {};
+    try { checked = raw ? JSON.parse(raw) : {}; } catch { checked = {}; }
+    const due = cruxDue(cruxTargets(cfg.pagespeedUrls), new Map(Object.entries(checked)), today);
+    let done = 0, stop = false;
+    for (const d of due.slice(0, 16)) {
+      if (remaining() < 10_000) break;
+      const key = cruxCheckKey(d.target, d.formFactor);
+      done++;
+      try {
+        const res = await deps.crux.history(d.target, d.formFactor, Math.min(12_000, remaining() - 5_000));
+        const rows = res ? parseCruxHistory(res) : [];
+        if (rows.length) { await store.saveCrux(d.target, d.formFactor, rows); crux.measured++; } else crux.noData++;
+        checked[key] = today;
+      } catch (err) {
+        crux.failed++;
+        // Não insiste hoje (volta a tentar amanhã).
+        checked[key] = addDays(today, -(CRUX_INTERVAL_DAYS - 1));
+        if (report.warnings.length < 20) report.warnings.push(`CrUX ${d.formFactor === "PHONE" ? "telemóvel" : "computador"} ${d.target}: ${googleErrorMessage(err).slice(0, 160)}`);
+        // Limite de pedidos ou erro de configuração (API/chave): o resto falharia igual.
+        if (isRateLimitError(err) || /não está ativa|inválida|restrita/.test(String((err as any)?.message ?? ""))) { stop = true; break; }
+      }
+    }
+    await store.setState("crux:checked", JSON.stringify(checked));
+    crux.pending = stop ? 0 : Math.max(0, due.length - done);
+    if (crux.pending > 0) report.done = false;
   }
 
   // ── GA4 e Search Console ──
@@ -267,8 +305,10 @@ export async function runWebAnalyticsSync(o: { deadlineAt: number; now?: () => n
         if (hasSc) sc = scApi(auth, retry);
       }
     }
-    const { psiApi } = await import("./apis");
-    report = await runWebAnalyticsCore(cfg, { ga, sc, psi: hasPs ? psiApi() : null, store: dbWebStore, now }, { deadlineAt: o.deadlineAt });
+    const { psiApi, cruxApi } = await import("./apis");
+    const crux = hasPs && cfg.cruxEnabled ? cruxApi() : null;
+    report = await runWebAnalyticsCore(cfg, { ga, sc, psi: hasPs ? psiApi() : null, crux, store: dbWebStore, now }, { deadlineAt: o.deadlineAt });
+    if (hasPs && cfg.cruxEnabled && !crux) report.warnings.unshift("Chrome UX Report sem chave (GOOGLE_PAGESPEED_API_KEY ou GOOGLE_CRUX_API_KEY) — só dados de laboratório.");
     report.errors.unshift(...errors);
     report.ok = report.errors.length === 0;
 

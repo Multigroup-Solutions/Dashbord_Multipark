@@ -1,6 +1,6 @@
 import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { complaints, googleReviews, projects } from '../../../drizzle/schema';
-import { BusinessClient, REPLY_MAX_LENGTH } from './client';
+import { BusinessClient, REPLY_MAX_LENGTH, type GoogleLocation } from './client';
 import { accountPattern, locationPattern, normalizeReview, reviewPattern, safeError, shouldOpenComplaint, shouldStopPaging, type GoogleReview } from './domain';
 import { accessToken, connection, database, saveConnection } from './oauth';
 import { PROVIDER } from './config';
@@ -9,6 +9,9 @@ export interface Location {
   id: number; locationName: string; accountName: string; title: string; address: string | null;
   projectId: number | null; selected: number; available: number; nextPageToken: string | null;
   lastSyncAt: string | null; lastError: string | null; dirtyAt: string | null; dirtyVersion: number;
+  // 0170 — estado do perfil (lido na listagem, readMask metadata,openInfo)
+  hasGoogleUpdated?: number | null; hasPendingEdits?: number | null; hasVoiceOfMerchant?: number | null;
+  canOperateLocalPost?: number | null; openStatus?: string | null; mapsUri?: string | null; placeId?: string | null; metaCheckedAt?: string | null;
 }
 export const rows = <T = any>(result: any): T[] => result[0] as T[];
 const now = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
@@ -19,9 +22,20 @@ export async function locations() {
   return rows<Location>(await db.execute(sql`SELECT * FROM google_business_locations ORDER BY title`));
 }
 
+/** Estado do perfil (0170): verificação, edições pendentes, alterado pela Google, aberto/fechado. PURA. */
+export function locationMeta(l: GoogleLocation) {
+  const b = (v: unknown) => (typeof v === 'boolean' ? (v ? 1 : 0) : null);
+  const s = (v: unknown, n: number) => (typeof v === 'string' && v ? v.slice(0, n) : null);
+  return {
+    hasGoogleUpdated: b(l.metadata?.hasGoogleUpdated), hasPendingEdits: b(l.metadata?.hasPendingEdits),
+    hasVoiceOfMerchant: b(l.metadata?.hasVoiceOfMerchant), canOperateLocalPost: b(l.metadata?.canOperateLocalPost),
+    openStatus: s(l.openInfo?.status, 30), mapsUri: s(l.metadata?.mapsUri, 500), placeId: s(l.metadata?.placeId, 100),
+  };
+}
+
 export async function refreshLocations(deadline = Date.now() + 35_000) {
-  const client = new BusinessClient(await accessToken());
-  const found = new Map<string, { accountName: string; title: string; address: string }>();
+  const client = new BusinessClient(await accessToken(), { deadlineAt: deadline });
+  const found = new Map<string, { accountName: string; title: string; address: string; meta: ReturnType<typeof locationMeta> }>();
   const accountTokens = new Set<string>(); let accountToken = '';
   do {
     if (Date.now() > deadline || accountTokens.has(accountToken)) throw new Error('Listagem incompleta; volta a atualizar os perfis.');
@@ -38,7 +52,7 @@ export async function refreshLocations(deadline = Date.now() + 35_000) {
           if (!locationPattern.test(location.name)) throw new Error('Local Google inválido.');
           const a = location.storefrontAddress;
           found.set(location.name, { accountName: account.name, title: location.title.slice(0, 256),
-            address: [...(a?.addressLines || []), a?.postalCode, a?.locality].filter(Boolean).join(', ') });
+            address: [...(a?.addressLines || []), a?.postalCode, a?.locality].filter(Boolean).join(', '), meta: locationMeta(location) });
         }
         token = result.nextPageToken || '';
       } while (token);
@@ -50,9 +64,14 @@ export async function refreshLocations(deadline = Date.now() + 35_000) {
     // A failed/partial discovery never disables a previous, valid mapping.
     await tx.execute(sql`UPDATE google_business_locations SET available = 0`);
     for (const [name, location] of found) {
-      await tx.execute(sql`INSERT INTO google_business_locations (locationName, accountName, title, address)
-        VALUES (${name}, ${location.accountName}, ${location.title}, ${location.address})
-        ON DUPLICATE KEY UPDATE accountName = ${location.accountName}, title = ${location.title}, address = ${location.address}, available = 1`);
+      const m = location.meta;
+      await tx.execute(sql`INSERT INTO google_business_locations (locationName, accountName, title, address,
+          hasGoogleUpdated, hasPendingEdits, hasVoiceOfMerchant, canOperateLocalPost, openStatus, mapsUri, placeId, metaCheckedAt)
+        VALUES (${name}, ${location.accountName}, ${location.title}, ${location.address},
+          ${m.hasGoogleUpdated}, ${m.hasPendingEdits}, ${m.hasVoiceOfMerchant}, ${m.canOperateLocalPost}, ${m.openStatus}, ${m.mapsUri}, ${m.placeId}, UTC_TIMESTAMP())
+        ON DUPLICATE KEY UPDATE accountName = ${location.accountName}, title = ${location.title}, address = ${location.address}, available = 1,
+          hasGoogleUpdated = ${m.hasGoogleUpdated}, hasPendingEdits = ${m.hasPendingEdits}, hasVoiceOfMerchant = ${m.hasVoiceOfMerchant},
+          canOperateLocalPost = ${m.canOperateLocalPost}, openStatus = ${m.openStatus}, mapsUri = ${m.mapsUri}, placeId = ${m.placeId}, metaCheckedAt = UTC_TIMESTAMP()`);
     }
   });
   await saveConnection({ lastError: null, lastCheckedAt: now() });
@@ -202,7 +221,7 @@ export async function syncReviews(deadline = Date.now() + 35_000) {
   let imported = 0, pending = 0, done = true, stoppedEarly = 0; const errors: string[] = [];
   try {
     let client: BusinessClient;
-    try { client = new BusinessClient(await accessToken()); }
+    try { client = new BusinessClient(await accessToken(), { deadlineAt: deadline }); }
     catch (error) {
       // A renovação acabou de marcar reauth_required (invalid_grant) → saltado, não 500.
       const after = await connection();

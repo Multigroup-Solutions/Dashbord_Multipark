@@ -18,6 +18,7 @@ import { DEFAULT_SHARED_CALENDARS_CONFIG, sharedCalendarsConfigSchema } from "./
 import { DEFAULT_CONTACTS_CONFIG, contactsConfigSchema } from "./contacts";
 import { DEFAULT_DRIVE_CONFIG, driveConfigSchema } from "./drive";
 import { DEFAULT_WEB_ANALYTICS_CONFIG, WEB_ANALYTICS_SETTING_KEY, webAnalyticsConfigSchema } from "./webAnalytics";
+import { DEFAULT_GBP_CONFIG, GBP_SETTING_KEY, gbpConfigSchema } from "./googleBusinessProfile";
 
 // ─── Taxas com data de efeito (IVA / TSU) ───────────────────────────────────
 
@@ -384,6 +385,15 @@ export const SETTINGS = {
     defaultValue: DEFAULT_WEB_ANALYTICS_CONFIG,
     wiring: "live",
   }),
+  [GBP_SETTING_KEY]: def({
+    key: GBP_SETTING_KEY,
+    group: "marketing",
+    label: "Google Business Profile (desempenho, pesquisas e alertas)",
+    description: "Recolha diária do desempenho dos perfis Google (impressões, chamadas, direções, cliques no site) e das pesquisas mensais, cidade/marca de cada perfil e limiares dos alertas. Editável em Marketing → Web & SEO → Google Business (só super admin).",
+    schema: gbpConfigSchema,
+    defaultValue: DEFAULT_GBP_CONFIG,
+    wiring: "live",
+  }),
   [NOTIFICATION_ROUTING_SETTING_KEY]: def({
     key: NOTIFICATION_ROUTING_SETTING_KEY,
     group: "notificacoes",
@@ -468,6 +478,8 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "AI_EVALUATION_EXPLAIN", label: "IA: explicação da avaliação", description: "Explica em PT-PT a pontuação a partir das linhas das regras (nunca recalcula).", group: "ia" },
   { name: "AI_HANDOVER_REPEATS", label: "IA: pendentes repetidos da passagem de turno", description: "Redige os pendentes que se repetem entre turnos e o resumo semanal por cidade.", group: "ia" },
   { name: "AI_MAIL_DRAFT", label: "IA: rascunho de resposta a emails", description: "Botão \"Rascunho IA\" na Comunicação: prepara uma resposta ao cliente (vai para o editor; nunca é enviada sozinha).", group: "ia" },
+  { name: "AI_GBP_POSTS", label: "IA: rascunho de publicações Google Business", description: "Marketing → Web & SEO → Google Business: propõe o texto de uma Novidade/Oferta/Evento a partir do tema indicado (fica no editor; nada é publicado sem confirmação).", group: "ia" },
+  { name: "AI_PAGESPEED_EXPLAIN", label: "IA: explicar o que corrigir na PageSpeed", description: "Marketing → Web & SEO → Velocidade: explica em PT-PT as principais oportunidades do Lighthouse (só com os títulos e poupanças; sem dados pessoais).", group: "ia" },
   { name: "AI_WEB_INSIGHT", label: "IA: resumo semanal Web & SEO", description: "Marketing → Web & SEO: um parágrafo por semana sobre o que mudou no tráfego, na pesquisa Google e na velocidade (só a partir dos totais; sem dados pessoais).", group: "ia" },
   { name: "AI_TASKS_FROM_TEXT", label: "IA: tarefas a partir de texto", description: "Propõe tarefas a partir de notas coladas; nada é criado sem confirmação.", group: "ia" },
 ];
@@ -502,7 +514,7 @@ export interface CronJob {
 
 export const CRON_JOBS: readonly CronJob[] = [
   { name: "multipark-deliveries", label: "Fila do webhook Multipark", intervalMinutes: 5, workflow: "multipark-deliveries.yml" },
-  { name: "google-business", label: "Críticas Google (Business Profile)", intervalMinutes: 10, workflow: "google-business-reviews.yml" },
+  { name: "google-business", label: "Google Business Profile (críticas, desempenho e pesquisas)", intervalMinutes: 10, workflow: "google-business-reviews.yml" },
   { name: "multipark-sync", label: "Sincronização de reservas (recente)", intervalMinutes: 60, workflow: "multipark-cron.yml" },
   { name: "extras-auto", label: "Automação dos extras", intervalMinutes: 60, workflow: "multipark-cron.yml" },
   // Corre de 30 em 30 min entre as 08h e as 23h (Lisboa); 300 min para a

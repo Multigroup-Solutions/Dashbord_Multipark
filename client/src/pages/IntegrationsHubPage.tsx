@@ -118,7 +118,7 @@ function TestLine({ r }: { r: TestResult }) {
   return (
     <div className={`w-full text-xs ${r.ok ? "text-emerald-700" : "text-red-700"}`}>
       {r.ok ? <CheckCircle2 className="inline h-3 w-3 mr-1" /> : <XCircle className="inline h-3 w-3 mr-1" />}
-      {r.message} <span className="text-muted-foreground">({r.ms} ms)</span>
+      <span className="whitespace-pre-line">{r.message}</span> <span className="text-muted-foreground">({r.ms} ms)</span>
     </div>
   );
 }

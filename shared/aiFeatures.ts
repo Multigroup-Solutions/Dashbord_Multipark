@@ -36,7 +36,9 @@ export type AiFlag =
   | "AI_HANDOVER_REPEATS"
   | "AI_TASKS_FROM_TEXT"
   | "AI_MAIL_DRAFT"
-  | "AI_WEB_INSIGHT";
+  | "AI_WEB_INSIGHT"
+  | "AI_GBP_POSTS"
+  | "AI_PAGESPEED_EXPLAIN";
 
 export interface AiFeatureDef {
   label: string;
@@ -87,6 +89,10 @@ export const AI_FEATURES = {
   mail_reply: { label: "Email: rascunho de resposta", flag: "AI_MAIL_DRAFT", tier: "lite", essential: false },
   // Marketing → Web & SEO: resumo semanal a partir dos totais (GA4/Search Console/PageSpeed).
   web_insight: { label: "Web & SEO: resumo semanal", flag: "AI_WEB_INSIGHT", tier: "lite", essential: false },
+  // Google Business: rascunho de publicação (vai para o editor; publicar é humano).
+  gbp_post_draft: { label: "Google Business: rascunho de publicação", flag: "AI_GBP_POSTS", tier: "lite", essential: false },
+  // PageSpeed: "o que corrigir primeiro" explicado em PT-PT (só títulos e poupanças).
+  pagespeed_explain: { label: "PageSpeed: explicar o que corrigir", flag: "AI_PAGESPEED_EXPLAIN", tier: "lite", essential: false },
   healthcheck: { label: "Teste da ligação", flag: null, tier: "lite", essential: true },
 } as const satisfies Record<string, AiFeatureDef>;
 

@@ -11,7 +11,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { getDb } from "../db";
 import {
   GA_DIMS, SC_DIMS, topNPerDay,
-  type GaDailyRow, type GaDimKind, type GaRow, type PagespeedResult, type ScDimKind, type ScRow,
+  type CruxPeriodRow, type GaDailyRow, type GaDimKind, type GaRow, type LighthouseAudit, type PagespeedResult, type ScDimKind, type ScRow,
 } from "../../shared/webAnalytics";
 
 export const rowsOf = (res: unknown): any[] => {
@@ -34,6 +34,10 @@ export interface WebStore {
   replaceScDims(siteUrl: string, dim: ScDimKind, from: string, to: string, rows: ScRow[]): Promise<void>;
   latestPagespeed(): Promise<Array<{ url: string; strategy: string; runDay: string; score: number | null }>>;
   savePagespeed(r: { url: string; strategy: string; runDay: string; result: PagespeedResult | null; error: string | null }): Promise<void>;
+  /** 0170: oportunidades/diagnósticos Lighthouse de uma medição (substitui os da mesma medição). */
+  savePagespeedAudits?(url: string, strategy: string, runDay: string, audits: readonly LighthouseAudit[]): Promise<void>;
+  /** 0170: períodos CrUX de um alvo × dispositivo (idempotente por período). */
+  saveCrux?(target: { type: "origin" | "url"; target: string }, formFactor: string, rows: readonly CruxPeriodRow[]): Promise<void>;
 }
 
 /** Linhas a gravar de uma dimensão GA4: top N por dia, valor cortado. PURA. */
@@ -137,6 +141,45 @@ export const dbWebStore: WebStore = {
         speedIndexMs = VALUES(speedIndexMs), inpMs = VALUES(inpMs), fieldLcpMs = VALUES(fieldLcpMs), fieldCls = VALUES(fieldCls),
         fieldCategory = VALUES(fieldCategory), error = VALUES(error)`);
   },
+};
+
+/** Linha a gravar de um período CrUX (colunas p75 e distribuição). PURA. */
+export function cruxRowToStore(r: CruxPeriodRow) {
+  const d = (k: keyof CruxPeriodRow["dist"]) => r.dist[k];
+  return {
+    periodStart: r.periodStart, periodEnd: r.periodEnd,
+    lcpP75: r.p75.lcp, inpP75: r.p75.inp, clsP75: r.p75.cls, fcpP75: r.p75.fcp, ttfbP75: r.p75.ttfb,
+    lcpGood: d("lcp")?.good ?? null, lcpNi: d("lcp")?.ni ?? null, lcpPoor: d("lcp")?.poor ?? null,
+    inpGood: d("inp")?.good ?? null, inpNi: d("inp")?.ni ?? null, inpPoor: d("inp")?.poor ?? null,
+    clsGood: d("cls")?.good ?? null, clsNi: d("cls")?.ni ?? null, clsPoor: d("cls")?.poor ?? null,
+    fcpGood: d("fcp")?.good ?? null, fcpNi: d("fcp")?.ni ?? null, fcpPoor: d("fcp")?.poor ?? null,
+    ttfbGood: d("ttfb")?.good ?? null, ttfbNi: d("ttfb")?.ni ?? null, ttfbPoor: d("ttfb")?.poor ?? null,
+  };
+}
+
+export const CRUX_COLS = ["lcpP75", "inpP75", "clsP75", "fcpP75", "ttfbP75", "lcpGood", "lcpNi", "lcpPoor", "inpGood", "inpNi", "inpPoor", "clsGood", "clsNi", "clsPoor", "fcpGood", "fcpNi", "fcpPoor", "ttfbGood", "ttfbNi", "ttfbPoor"] as const;
+
+dbWebStore.savePagespeedAudits = async (url, strategy, runDay, audits) => {
+  const d = await db();
+  const h = sha1(url);
+  await d.execute(sql`DELETE FROM web_pagespeed_audits WHERE urlHash = ${h} AND strategy = ${strategy} AND runDay = ${runDay}`);
+  if (!audits.length) return;
+  const values = sql.join(audits.map((a) => sql`(${h}, ${strategy}, ${runDay}, ${clip(a.id, 80)}, ${a.kind}, ${clip(a.title, 300)}, ${a.displayValue ? clip(a.displayValue, 160) : null}, ${a.savingsMs}, ${a.savingsBytes}, ${a.score})`), sql`, `);
+  await d.execute(sql`INSERT INTO web_pagespeed_audits (urlHash, strategy, runDay, auditId, kind, title, displayValue, savingsMs, savingsBytes, score) VALUES ${values}
+    ON DUPLICATE KEY UPDATE kind = VALUES(kind), title = VALUES(title), displayValue = VALUES(displayValue), savingsMs = VALUES(savingsMs), savingsBytes = VALUES(savingsBytes), score = VALUES(score)`);
+};
+
+dbWebStore.saveCrux = async (t, formFactor, rows) => {
+  if (!rows.length) return;
+  const d = await db();
+  const h = sha1(`${t.type}:${t.target}`);
+  const cols = sql.raw(CRUX_COLS.join(", "));
+  const updates = sql.raw(["periodStart = VALUES(periodStart)", "target = VALUES(target)", ...CRUX_COLS.map((c) => `${c} = VALUES(${c})`)].join(", "));
+  const values = sql.join(rows.map((r) => {
+    const x = cruxRowToStore(r);
+    return sql`(${t.type}, ${clip(t.target, 1000)}, ${h}, ${formFactor}, ${x.periodStart}, ${x.periodEnd}, ${sql.join(CRUX_COLS.map((c) => sql`${x[c]}`), sql`, `)})`;
+  }), sql`, `);
+  await d.execute(sql`INSERT INTO web_crux_records (targetType, target, targetHash, formFactor, periodStart, periodEnd, ${cols}) VALUES ${values} ON DUPLICATE KEY UPDATE ${updates}`);
 };
 
 // ─── Trinco (lease numa linha; expira sozinho > maxDuration) ────────────────

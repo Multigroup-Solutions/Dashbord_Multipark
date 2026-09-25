@@ -109,6 +109,8 @@ export const settingsRouter = router({
         if (input.key === "google.sharedCalendars") requireSuperAdmin(ctx.user.role);
         // Web & SEO (GA4/Search Console/PageSpeed): cartão próprio, só super_admin.
         if (input.key === "marketing.webAnalytics") requireSuperAdmin(ctx.user.role);
+        // Google Business Profile (desempenho, associação dos perfis, alertas): só super_admin.
+        if (input.key === "marketing.googleBusiness") requireSuperAdmin(ctx.user.role);
         // Contactos e Drive Google (inclui a conta com que correm os relatórios ao vivo): só super_admin.
         if (input.key === "google.contacts" || input.key === "google.drive") requireSuperAdmin(ctx.user.role);
         const { setSetting } = await import("./appSettings");

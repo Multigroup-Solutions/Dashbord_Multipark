@@ -3326,3 +3326,80 @@ export const webAnalyticsState = mysqlTable("web_analytics_state", {
 	leaseUntil: datetime({ mode: 'string' }),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 });
+
+// ─── Google Business Profile + CrUX (migração 0170) — só agregados ─────────
+
+export const gbpDailyMetrics = mysqlTable("gbp_daily_metrics", {
+	id: int().autoincrement().primaryKey(),
+	locationId: int().notNull(),
+	day: date({ mode: 'string' }).notNull(),
+	impDesktopMaps: int().default(0).notNull(),
+	impDesktopSearch: int().default(0).notNull(),
+	impMobileMaps: int().default(0).notNull(),
+	impMobileSearch: int().default(0).notNull(),
+	callClicks: int().default(0).notNull(),
+	websiteClicks: int().default(0).notNull(),
+	directionRequests: int().default(0).notNull(),
+	conversations: int().default(0).notNull(),
+	bookings: int().default(0).notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_gbp_daily_metrics").on(table.locationId, table.day),
+	index("idx_gbp_daily_metrics_day").on(table.day),
+]);
+
+export const gbpSearchKeywords = mysqlTable("gbp_search_keywords", {
+	id: bigint({ mode: "number" }).autoincrement().primaryKey(),
+	locationId: int().notNull(),
+	month: date({ mode: 'string' }).notNull(),
+	keywordHash: char({ length: 40 }).notNull(),
+	keyword: varchar({ length: 300 }).notNull(),
+	impressions: int(),
+	threshold: int(),
+},
+(table) => [
+	uniqueIndex("uq_gbp_search_keywords").on(table.locationId, table.month, table.keywordHash),
+	index("idx_gbp_search_keywords_month").on(table.month),
+]);
+
+export const webCruxRecords = mysqlTable("web_crux_records", {
+	id: int().autoincrement().primaryKey(),
+	targetType: varchar({ length: 6 }).notNull(),
+	target: varchar({ length: 1000 }).notNull(),
+	targetHash: char({ length: 40 }).notNull(),
+	formFactor: varchar({ length: 8 }).notNull(),
+	periodStart: date({ mode: 'string' }).notNull(),
+	periodEnd: date({ mode: 'string' }).notNull(),
+	lcpP75: int(),
+	inpP75: int(),
+	clsP75: decimal({ precision: 6, scale: 3 }),
+	fcpP75: int(),
+	ttfbP75: int(),
+	lcpGood: decimal({ precision: 5, scale: 4 }), lcpNi: decimal({ precision: 5, scale: 4 }), lcpPoor: decimal({ precision: 5, scale: 4 }),
+	inpGood: decimal({ precision: 5, scale: 4 }), inpNi: decimal({ precision: 5, scale: 4 }), inpPoor: decimal({ precision: 5, scale: 4 }),
+	clsGood: decimal({ precision: 5, scale: 4 }), clsNi: decimal({ precision: 5, scale: 4 }), clsPoor: decimal({ precision: 5, scale: 4 }),
+	fcpGood: decimal({ precision: 5, scale: 4 }), fcpNi: decimal({ precision: 5, scale: 4 }), fcpPoor: decimal({ precision: 5, scale: 4 }),
+	ttfbGood: decimal({ precision: 5, scale: 4 }), ttfbNi: decimal({ precision: 5, scale: 4 }), ttfbPoor: decimal({ precision: 5, scale: 4 }),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_web_crux_records").on(table.targetHash, table.formFactor, table.periodEnd),
+]);
+
+export const webPagespeedAudits = mysqlTable("web_pagespeed_audits", {
+	id: int().autoincrement().primaryKey(),
+	urlHash: char({ length: 40 }).notNull(),
+	strategy: varchar({ length: 8 }).notNull(),
+	runDay: date({ mode: 'string' }).notNull(),
+	auditId: varchar({ length: 80 }).notNull(),
+	kind: varchar({ length: 12 }).notNull(),
+	title: varchar({ length: 300 }).notNull(),
+	displayValue: varchar({ length: 160 }),
+	savingsMs: int(),
+	savingsBytes: int(),
+	score: decimal({ precision: 4, scale: 2 }),
+},
+(table) => [
+	uniqueIndex("uq_web_pagespeed_audits").on(table.urlHash, table.strategy, table.runDay, table.auditId),
+]);
