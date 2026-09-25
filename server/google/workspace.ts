@@ -6,7 +6,9 @@
  *
  * Variáveis (servidor):
  *   GOOGLE_WORKSPACE_CLIENT_ID / _SECRET  cliente OAuth (ecrã de consentimento
- *                                         "Internal"); omissão: GOOGLE_CLIENT_ID/SECRET do login
+ *                                         "Internal"); omissão: GOOGLE_BUSINESS_CLIENT_ID/SECRET,
+ *                                         GOOGLE_ADS_… e por fim GOOGLE_CLIENT_ID/SECRET do login (sempre o par
+ *                                         id+secret da mesma variável)
  *   GOOGLE_WORKSPACE_REDIRECT_URI         omissão: <APP_URL>/api/google-account/oauth/callback
  *   GOOGLE_WORKSPACE_DOMAINS              domínios aceites (claim `hd`), ex.: "multipark.pt"
  *   GOOGLE_WORKSPACE_SERVICE_ACCOUNT_JSON conta de serviço com DWD (JSON cru ou base64);
@@ -32,6 +34,8 @@ const clean = (v: string | undefined) => (v ?? "").trim();
 export interface WorkspaceConfig {
   clientId: string;
   clientSecret: string;
+  /** De que variável veio o par id+secret (diagnóstico do redirect_uri_mismatch). */
+  clientSource: "GOOGLE_WORKSPACE_CLIENT_ID" | "GOOGLE_BUSINESS_CLIENT_ID" | "GOOGLE_ADS_CLIENT_ID" | "GOOGLE_CLIENT_ID" | null;
   redirectUri: string;
   domains: string[];
   serviceAccount: { client_email: string; private_key: string } | null;
@@ -42,14 +46,26 @@ export function appOrigin(env: Env = process.env): string {
   return (clean(env.APP_URL) || clean(env.PUBLIC_APP_URL) || "https://dashboard.multipark.pt").replace(/\/+$/, "");
 }
 
+// Mesma ordem que o Google Business usa (BUSINESS → ADS), antes do cliente do login.
+const CLIENT_SOURCES = ["GOOGLE_WORKSPACE", "GOOGLE_BUSINESS", "GOOGLE_ADS", "GOOGLE"] as const;
+
+/** Primeiro par id+secret completo (nunca mistura id de uma variável com secret de outra). PURA. */
+function oauthClientPair(env: Env): Pick<WorkspaceConfig, "clientId" | "clientSecret" | "clientSource"> {
+  for (const p of CLIENT_SOURCES) {
+    const id = clean(env[`${p}_CLIENT_ID`]);
+    const secret = clean(env[`${p}_CLIENT_SECRET`]);
+    if (id && secret) return { clientId: id, clientSecret: secret, clientSource: `${p}_CLIENT_ID` as WorkspaceConfig["clientSource"] };
+  }
+  return { clientId: "", clientSecret: "", clientSource: null };
+}
+
 /** Configuração (PURA sobre o env). */
 export function workspaceConfig(env: Env = process.env): WorkspaceConfig {
   const sa = parseServiceAccount(env.GOOGLE_WORKSPACE_SERVICE_ACCOUNT_JSON || env.GOOGLE_SERVICE_ACCOUNT_JSON);
   const email = typeof sa?.client_email === "string" ? sa.client_email : "";
   const key = typeof sa?.private_key === "string" ? sa.private_key : "";
   return {
-    clientId: clean(env.GOOGLE_WORKSPACE_CLIENT_ID) || clean(env.GOOGLE_CLIENT_ID),
-    clientSecret: clean(env.GOOGLE_WORKSPACE_CLIENT_SECRET) || clean(env.GOOGLE_CLIENT_SECRET),
+    ...oauthClientPair(env),
     redirectUri: clean(env.GOOGLE_WORKSPACE_REDIRECT_URI) || `${appOrigin(env)}${GOOGLE_ACCOUNT_CALLBACK_PATH}`,
     domains: parseDomainList(env.GOOGLE_WORKSPACE_DOMAINS || "multipark.pt"),
     serviceAccount: email && key ? { client_email: email, private_key: key } : null,
@@ -89,8 +105,10 @@ export function scopesFor(features: readonly GoogleFeature[]): string[] {
 export function consentUrl(client: OAuth2Client, opts: { state: string; codeChallenge: string; features: readonly GoogleFeature[]; loginHint?: string | null; hd?: string | null }): string {
   return client.generateAuthUrl({
     access_type: "offline",
-    // "consent" garante refresh_token; include_granted_scopes = autorização incremental.
-    prompt: "consent",
+    // "consent" garante refresh_token; "select_account" obriga a escolher a conta (com várias
+    // sessões Google no browser, nunca avança sozinho para a última); include_granted_scopes =
+    // autorização incremental.
+    prompt: "consent select_account",
     include_granted_scopes: true,
     scope: scopesFor(opts.features),
     state: opts.state,

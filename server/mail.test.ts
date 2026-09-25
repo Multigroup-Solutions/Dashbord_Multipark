@@ -497,7 +497,24 @@ describe("OAuth por utilizador", () => {
   });
   it("configuração: domínios por omissão e fallback do cliente OAuth do login", () => {
     const c = workspaceConfig({ GOOGLE_CLIENT_ID: "a", GOOGLE_CLIENT_SECRET: "b", APP_URL: "https://dash.multipark.pt/" });
-    expect(c).toMatchObject({ clientId: "a", clientSecret: "b", domains: ["multipark.pt"], serviceAccount: null, redirectUri: "https://dash.multipark.pt/api/google-account/oauth/callback" });
+    expect(c).toMatchObject({ clientId: "a", clientSecret: "b", clientSource: "GOOGLE_CLIENT_ID", domains: ["multipark.pt"], serviceAccount: null, redirectUri: "https://dash.multipark.pt/api/google-account/oauth/callback" });
+  });
+  it("cliente OAuth: Workspace > Business > login, sempre o par id+secret da mesma variável", () => {
+    const base = { GOOGLE_CLIENT_ID: "login", GOOGLE_CLIENT_SECRET: "ls", GOOGLE_BUSINESS_CLIENT_ID: "biz", GOOGLE_BUSINESS_CLIENT_SECRET: "bs" };
+    expect(workspaceConfig(base)).toMatchObject({ clientId: "biz", clientSecret: "bs", clientSource: "GOOGLE_BUSINESS_CLIENT_ID" });
+    expect(workspaceConfig({ ...base, GOOGLE_WORKSPACE_CLIENT_ID: "ws", GOOGLE_WORKSPACE_CLIENT_SECRET: "wss" })).toMatchObject({ clientId: "ws", clientSecret: "wss", clientSource: "GOOGLE_WORKSPACE_CLIENT_ID" });
+    // id do Workspace sem secret: não mistura com o secret de outro cliente.
+    expect(workspaceConfig({ ...base, GOOGLE_WORKSPACE_CLIENT_ID: "ws" })).toMatchObject({ clientId: "biz", clientSecret: "bs" });
+    expect(workspaceConfig({})).toMatchObject({ clientId: "", clientSecret: "", clientSource: null });
+  });
+  it("consentimento: obriga a escolher a conta e sugere o email do Workspace", async () => {
+    const { consentUrl, newOAuthClient } = await import("./google/workspace");
+    const cfg = workspaceConfig({ GOOGLE_BUSINESS_CLIENT_ID: "biz.apps.googleusercontent.com", GOOGLE_BUSINESS_CLIENT_SECRET: "bs" });
+    const url = new URL(consentUrl(newOAuthClient(cfg), { state: "s", codeChallenge: "c", features: ["gmail"], loginHint: "jorge@multipark.pt", hd: "multipark.pt" }));
+    expect(url.searchParams.get("prompt")).toBe("consent select_account");
+    expect(url.searchParams.get("login_hint")).toBe("jorge@multipark.pt");
+    expect(url.searchParams.get("client_id")).toBe("biz.apps.googleusercontent.com");
+    expect(url.searchParams.get("redirect_uri")).toBe("https://dashboard.multipark.pt/api/google-account/oauth/callback");
   });
 });
 

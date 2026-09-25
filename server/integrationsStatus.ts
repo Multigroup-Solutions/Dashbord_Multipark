@@ -309,7 +309,9 @@ export async function testIntegration(id: string): Promise<TestResult> {
           const { gmailApiForAccount } = await import("./mail/gmailApi");
           const api = await gmailApiForAccount(keys[0]);
           const p = await api.getProfile();
-          message = `Ligação OK (${p.emailAddress ?? keys[0]}; ${keys.length} conta(s) de origem).`;
+          const oc = workspaceConfig(env);
+          const oauth = oc.clientSource ? ` "Ligar a minha conta Google" usa ${oc.clientSource} (…${oc.clientId.split(".")[0].slice(-8)}); URI de redirecionamento: ${oc.redirectUri}.` : "";
+          message = `Ligação OK (${p.emailAddress ?? keys[0]}; ${keys.length} conta(s) de origem).${oauth}`;
           break;
         }
         case "database": {
