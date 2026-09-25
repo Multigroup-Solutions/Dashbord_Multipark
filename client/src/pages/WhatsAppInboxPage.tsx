@@ -172,7 +172,8 @@ function StatusIcon({ status }: { status: string }) {
 export default function WhatsAppInboxPage() {
   const isMobile = useIsMobile();
   const openEmployee = useOpenEmployee();
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  // ?c=<id> (pesquisa global) abre logo a conversa.
+  const [selectedId, setSelectedId] = useState<number | null>(() => Number(new URLSearchParams(window.location.search).get("c")) || null);
   const [text, setText] = useState("");
   const [tplOpen, setTplOpen] = useState(false);
   // Template escolhido do CATÁLOGO (shared/whatsappTemplate.ts) — nunca nome/língua à mão.
@@ -184,7 +185,7 @@ export default function WhatsAppInboxPage() {
   const pageVisible = usePageVisible();
   const [now, setNow] = useState(() => Date.now());
   // Pesquisa por nome ou número (filtro local — a lista já vem completa).
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(() => (new URLSearchParams(window.location.search).get("q") ?? "").slice(0, 120));
   // Só conversas com mensagens por ler (filtro local, compõe em AND com a
   // pesquisa). A conversa ABERTA fica sempre à vista: abrir marca como lida e
   // sem isto a linha desaparecia debaixo do clique.

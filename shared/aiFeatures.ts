@@ -38,7 +38,9 @@ export type AiFlag =
   | "AI_MAIL_DRAFT"
   | "AI_WEB_INSIGHT"
   | "AI_GBP_POSTS"
-  | "AI_PAGESPEED_EXPLAIN";
+  | "AI_PAGESPEED_EXPLAIN"
+  // Base de conhecimento (manuais do Drive/uploads): índice por embeddings e leitura de PDFs.
+  | "AI_KNOWLEDGE";
 
 export interface AiFeatureDef {
   label: string;
@@ -93,6 +95,11 @@ export const AI_FEATURES = {
   gbp_post_draft: { label: "Google Business: rascunho de publicação", flag: "AI_GBP_POSTS", tier: "lite", essential: false },
   // PageSpeed: "o que corrigir primeiro" explicado em PT-PT (só títulos e poupanças).
   pagespeed_explain: { label: "PageSpeed: explicar o que corrigir", flag: "AI_PAGESPEED_EXPLAIN", tier: "lite", essential: false },
+  // Base de conhecimento: vetores dos trechos (modelo de embeddings, o mais
+  // barato; o `tier` não se aplica — ver server/_core/ai/embed.ts) e leitura
+  // de PDFs sem Drive (lite). Sem IA, a pesquisa cai para FULLTEXT/palavras.
+  knowledge_embed: { label: "Base de conhecimento: índice (embeddings)", flag: "AI_KNOWLEDGE", tier: "lite", essential: false },
+  knowledge_extract: { label: "Base de conhecimento: ler PDFs", flag: "AI_KNOWLEDGE", tier: "lite", essential: false },
   healthcheck: { label: "Teste da ligação", flag: null, tier: "lite", essential: true },
 } as const satisfies Record<string, AiFeatureDef>;
 

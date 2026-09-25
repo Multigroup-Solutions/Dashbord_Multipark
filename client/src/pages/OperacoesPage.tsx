@@ -1,7 +1,7 @@
 import AnomalyAlerts from "@/components/aiOps/AnomalyAlerts";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { can } from "@shared/access";
-import { useState, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -59,11 +59,45 @@ function BookingAlerts() {
   return <AnomalyAlerts domain="bookings" enabled={!!user && can(user as any, "reservas_operacoes", "view")} />;
 }
 
+const OPERACOES_TABS = ["dashboard", "reservas", "entradas", "saidas", "cancelados"];
+
+/**
+ * Link da pesquisa global (`?tab=reservas&q=…&de=AAAA-MM-DD`): põe a pesquisa
+ * e o período nos filtros partilhados das folhas ANTES de elas montarem (sem
+ * `de`, os últimos 12 meses — o máximo que a lista aceita). Devolve a aba.
+ */
+function seedFromUrl(): string | null {
+  const p = new URLSearchParams(window.location.search);
+  const tab = p.get("tab");
+  const q = p.get("q");
+  try {
+    if (q != null) {
+      const iso = (d: Date) => d.toISOString().slice(0, 10);
+      const de = p.get("de");
+      const day = de && /^\d{4}-\d{2}-\d{2}$/.test(de) ? new Date(`${de}T12:00:00Z`) : null;
+      const from = new Date(day ?? Date.now());
+      const to = new Date(day ?? Date.now());
+      if (day) { from.setUTCDate(from.getUTCDate() - 2); to.setUTCDate(to.getUTCDate() + 2); } else from.setUTCDate(from.getUTCDate() - 364);
+      const put = (k: string, v: unknown) => sessionStorage.setItem(`mp.filters.${k}`, JSON.stringify(v));
+      put("mpk.shared.search", q.slice(0, 100));
+      put("mpk.shared.start", iso(from));
+      put("mpk.shared.end", iso(to));
+      put("mpk.shared.range", "");
+      put("mpk.shared.group", "all");
+      put("mpk.shared.channel", "all");
+    }
+  } catch { /* sessionStorage indisponível: abre sem filtro */ }
+  return tab && OPERACOES_TABS.includes(tab) ? tab : null;
+}
+
 export default function OperacoesPage() {
+  const [urlTab] = useState(seedFromUrl);
   // A aba ativa persiste à navegação — voltar às Operações mantém onde estavas
-  const [storedTab, setTab] = usePersistedState("operacoes.tab", "dashboard");
+  const [storedTab, setTab] = usePersistedState("operacoes.tab", urlTab ?? "dashboard");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (urlTab) setTab(urlTab); }, [urlTab]);
   // "Serviços" saiu daqui (fica no menu, em /servicos) — quem a tinha guardada volta ao Dashboard
-  const tab = ["dashboard", "reservas", "entradas", "saidas", "cancelados"].includes(storedTab) ? storedTab : "dashboard";
+  const tab = OPERACOES_TABS.includes(storedTab) ? storedTab : "dashboard";
   return (
     <div className="space-y-6 max-w-[1400px] mx-auto">
       <div>

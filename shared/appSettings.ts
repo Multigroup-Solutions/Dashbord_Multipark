@@ -19,6 +19,7 @@ import { DEFAULT_CONTACTS_CONFIG, contactsConfigSchema } from "./contacts";
 import { DEFAULT_DRIVE_CONFIG, driveConfigSchema } from "./drive";
 import { DEFAULT_WEB_ANALYTICS_CONFIG, WEB_ANALYTICS_SETTING_KEY, webAnalyticsConfigSchema } from "./webAnalytics";
 import { DEFAULT_GBP_CONFIG, GBP_SETTING_KEY, gbpConfigSchema } from "./googleBusinessProfile";
+import { DEFAULT_KNOWLEDGE_CONFIG, KNOWLEDGE_SETTING_KEY, knowledgeConfigSchema } from "./knowledge";
 
 // ─── Taxas com data de efeito (IVA / TSU) ───────────────────────────────────
 
@@ -394,6 +395,15 @@ export const SETTINGS = {
     defaultValue: DEFAULT_GBP_CONFIG,
     wiring: "live",
   }),
+  [KNOWLEDGE_SETTING_KEY]: def({
+    key: KNOWLEDGE_SETTING_KEY,
+    group: "ia",
+    label: "Base de conhecimento (pastas do Drive, índice e uso pela IA)",
+    description: "Pastas do Shared Drive sincronizadas para a base de conhecimento (e quem vê cada uma), índice por embeddings e se o assistente/tutor a usam. Editável em Formação → Base de conhecimento (admin).",
+    schema: knowledgeConfigSchema,
+    defaultValue: DEFAULT_KNOWLEDGE_CONFIG,
+    wiring: "live",
+  }),
   [NOTIFICATION_ROUTING_SETTING_KEY]: def({
     key: NOTIFICATION_ROUTING_SETTING_KEY,
     group: "notificacoes",
@@ -481,6 +491,7 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "AI_GBP_POSTS", label: "IA: rascunho de publicações Google Business", description: "Marketing → Web & SEO → Google Business: propõe o texto de uma Novidade/Oferta/Evento a partir do tema indicado (fica no editor; nada é publicado sem confirmação).", group: "ia" },
   { name: "AI_PAGESPEED_EXPLAIN", label: "IA: explicar o que corrigir na PageSpeed", description: "Marketing → Web & SEO → Velocidade: explica em PT-PT as principais oportunidades do Lighthouse (só com os títulos e poupanças; sem dados pessoais).", group: "ia" },
   { name: "AI_WEB_INSIGHT", label: "IA: resumo semanal Web & SEO", description: "Marketing → Web & SEO: um parágrafo por semana sobre o que mudou no tráfego, na pesquisa Google e na velocidade (só a partir dos totais; sem dados pessoais).", group: "ia" },
+  { name: "AI_KNOWLEDGE", label: "IA: base de conhecimento", description: "Índice dos manuais (Drive e ficheiros carregados) por embeddings e leitura de PDFs sem Drive. Desligado = a pesquisa usa só palavras-chave (FULLTEXT).", group: "ia" },
   { name: "AI_TASKS_FROM_TEXT", label: "IA: tarefas a partir de texto", description: "Propõe tarefas a partir de notas coladas; nada é criado sem confirmação.", group: "ia" },
 ];
 
@@ -530,6 +541,7 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "evaluation-recompute", label: "Avaliação (recálculo das 4 semanas)", intervalMinutes: 1440, workflow: "multipark-cron.yml" },
   { name: "google-ads", label: "Google Ads", intervalMinutes: 1440, workflow: "multipark-cron.yml" },
   { name: "meta-ads", label: "Meta Ads", intervalMinutes: 1440, workflow: "multipark-cron.yml" },
+  { name: "knowledge-sync", label: "Base de conhecimento (pastas do Drive)", intervalMinutes: 60, workflow: "knowledge-sync.yml" },
   { name: "ops-briefing", label: "Briefing diário, anomalias e relatórios semanais", intervalMinutes: 1440, workflow: "multipark-cron.yml" },
 ];
 

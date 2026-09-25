@@ -84,7 +84,8 @@ export default function ComplaintsPage() {
   const [selectedId, setSelectedId] = useState<number | null>(() => Number(new URLSearchParams(window.location.search).get("id")) || null);
   const [view, setView] = useState<"kanban" | "detail">(() => (selectedId ? "detail" : "kanban"));
   const [, setFilterProject] = useState<string>("all");
-  const [showCreate, setShowCreate] = useState(false);
+  // ?new=1 (atalho "Nova reclamação" da pesquisa global) abre logo o formulário.
+  const [showCreate, setShowCreate] = useState(() => new URLSearchParams(window.location.search).get("new") === "1");
   const [filterType, setFilterType] = useState<string>("all");
 
   return (
@@ -119,7 +120,16 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
     if (globalFilters.projectId !== undefined) input.projectId = globalFilters.projectId;
     return input;
   }, [filterType, globalFilters.projectId]);
-  const { data: complaints = [], isLoading } = trpc.complaints.list.useQuery(complaintsQueryInput);
+  const { data: allComplaints = [], isLoading } = trpc.complaints.list.useQuery(complaintsQueryInput);
+  // ?q= (pesquisa global → "ver todos"): filtro local por título, cliente, reserva, matrícula ou nº.
+  const [q, setQ] = useState(() => (new URLSearchParams(window.location.search).get("q") ?? "").slice(0, 120));
+  const complaints = useMemo(() => {
+    const needle = q.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    if (!needle) return allComplaints;
+    const norm = (v: unknown) => String(v ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    return (allComplaints as any[]).filter((c: any) => [c.id, c.title, c.clientName, c.clientEmail, c.reservationRef, c.vehiclePlate]
+      .some((v) => norm(v).includes(needle) || norm(v).replace(/-/g, "").includes(needle.replace(/-/g, ""))));
+  }, [allComplaints, q]);
   const { data: stats } = trpc.complaints.stats.useQuery(
     globalFilters.projectId !== undefined ? { projectId: globalFilters.projectId } : undefined
   );
@@ -169,6 +179,13 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
           <p className="text-muted-foreground">Gestão de tickets e reclamações de clientes</p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Filtrar (nome, reserva, matrícula, nº)…"
+            className="h-9 w-full sm:w-64"
+            aria-label="Filtrar reclamações"
+          />
           <Button
             variant="outline"
             disabled={complaints.length === 0}

@@ -29,6 +29,20 @@ export function registerGoogleAccountRoutes(app: Express) {
     }
   });
 
+  // Base de conhecimento: pastas do Shared Drive + documentos por processar
+  // (cron do GitHub Actions de hora a hora). Prazo 45 s; `done:false` → a
+  // corrida seguinte continua (cursor da descoberta e estado de cada documento).
+  app.get("/api/cron/knowledge-sync", async (req: Request, res: Response) => {
+    if (!cronAuthOk(req.headers["authorization"])) { res.status(401).json({ error: "Unauthorized" }); return; }
+    try {
+      const { runKnowledgeSync } = await import("../knowledge/sync");
+      const r = await runKnowledgeSync({ deadlineAt: Date.now() + 45_000 });
+      res.json({ ...r, ranAt: new Date().toISOString() });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: String(err?.message ?? err).slice(0, 300) });
+    }
+  });
+
   // Web & SEO (GA4, Search Console, PageSpeed): cron do GitHub Actions de
   // hora a hora. Prazo 50 s (maxDuration 60 s); `done:false` → a corrida
   // seguinte continua (cursores por propriedade × parte guardados a cada bloco).

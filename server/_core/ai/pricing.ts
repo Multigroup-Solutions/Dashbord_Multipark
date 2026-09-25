@@ -33,6 +33,8 @@ const GEMINI_PRICES_USD: Record<string, ModelPrice> = {
   "gemini-3.5-flash": { input: 1.5, output: 9, cached: 0.15 },
   "gemini-3.1-pro-preview": { input: 2, output: 12, cached: 0.2 },
   "gemini-2.5-flash-lite": { input: 0.1, output: 0.4, cached: 0.01, audioInput: 0.3 },
+  // Embeddings (base de conhecimento): só entrada.
+  "gemini-embedding-001": { input: 0.15, output: 0 },
 };
 
 const toEur = (p: ModelPrice): ModelPrice => ({

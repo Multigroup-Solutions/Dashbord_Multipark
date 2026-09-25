@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
   runAi: vi.fn(),
+  kb: vi.fn(),
   store: {
     loadModule: vi.fn(),
     manualsForQuestions: vi.fn(),
@@ -26,6 +27,12 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock("./_core/ai/run", () => ({ runAi: h.runAi }));
+// Base de conhecimento simulada (a recuperação real está em knowledge.test.ts).
+vi.mock("./knowledge/retrieve", () => ({
+  retrieveKnowledge: (...a: any[]) => h.kb(...a),
+  kbViewerFrom: (role: string, a: any) => ({ role, allCities: !!a?.all, cityNames: a?.cityNames ?? [] }),
+}));
+vi.mock("./knowledge/sync", () => ({ loadKnowledgeConfig: async () => ({ useInTutor: true, useInAssistant: true }) }));
 vi.mock("./trainingTutorStore", () => h.store);
 vi.mock("./db", async (orig) => ({
   ...(await orig<object>()),
@@ -72,6 +79,8 @@ beforeEach(() => {
   process.env.GEMINI_API_KEY = "test-key";
   resetRateLimitMemoryForTests();
   h.runAi.mockReset();
+  h.kb.mockReset();
+  h.kb.mockResolvedValue({ hits: [], citations: [], mode: "none" });
   for (const f of Object.values(h.store)) f.mockReset();
   h.store.loadModule.mockResolvedValue({ title: MANUAL.title, manuals: [MANUAL], createdBy: 5, categoryId: null, found: true });
   h.store.trainerUserId.mockResolvedValue(5);
@@ -157,6 +166,21 @@ describe("tutor: perguntas", () => {
     expect(r.answer).toContain("Marta");
     expect(h.runAi).not.toHaveBeenCalled();
     expect(h.store.recordQuestion).toHaveBeenCalledWith(ctx, expect.any(String), expect.any(String), true, undefined);
+  });
+
+  it("fora do módulo mas na base de conhecimento → responde com o manual do Drive e indica a fonte", async () => {
+    h.kb.mockResolvedValueOnce({
+      hits: [{ chunkId: 1, docId: 42, title: "Regulamento interno", section: "Refeitório", text: "O refeitório abre às 12h. Contacto 912 345 678.", href: "https://docs.google.com/document/d/x", source: "drive", score: 1 }],
+      citations: [], mode: "fulltext",
+    });
+    h.runAi.mockResolvedValueOnce(aiText("O refeitório abre às 12h."));
+    const r = await tutorAsk(user, 7, ctx, "Qual é o horário do refeitório?");
+    expect(r.outOfContent).toBe(false);
+    expect(r.sources).toEqual([{ manualId: 0, manualTitle: "Regulamento interno", heading: "Refeitório", kbDocId: 42, href: "https://docs.google.com/document/d/x" }]);
+    const input = String(h.runAi.mock.calls[0][0].input);
+    expect(input).toContain("Regulamento interno");
+    expect(input).not.toContain("912 345 678");
+    expect(h.kb.mock.calls[0][0].viewer).toMatchObject({ role: "extra" });
   });
 
   it("o modelo diz SEM_RESPOSTA → pergunta ao formador (nunca inventa)", async () => {

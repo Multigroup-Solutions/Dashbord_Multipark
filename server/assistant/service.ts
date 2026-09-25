@@ -11,6 +11,22 @@ import { userKey } from "../_core/ai/rateLimit";
 import { assistantSystemPrompt } from "../_core/ai/prompts/assistant";
 import { HELP_FILES } from "./helpDocs.generated";
 import { STAFF_TOOLS, type StaffToolCtx } from "./tools";
+import type { KbCitation } from "../../shared/knowledge";
+import type { CityAccess } from "../cityAccess";
+
+/**
+ * Trechos da base de conhecimento para o assistente — só os que a pessoa pode
+ * ver (papel + cidades do pedido); a ajuda da app já vai à parte (<ajuda>).
+ * Nunca lança; desligado nas definições → nada.
+ */
+export async function assistantKnowledge(question: string, role: string, access: CityAccess | undefined): Promise<{ block: string; citations: KbCitation[] } | null> {
+  const { loadKnowledgeConfig } = await import("../knowledge/sync");
+  if (!(await loadKnowledgeConfig()).useInAssistant) return null;
+  const { retrieveKnowledge, knowledgeBlock, kbViewerFrom } = await import("../knowledge/retrieve");
+  const r = await retrieveKnowledge({ question, viewer: kbViewerFrom(role, access), topK: 4, excludeSources: ["help"] });
+  if (!r.hits.length) return null;
+  return { block: knowledgeBlock(r.hits), citations: r.citations };
+}
 
 export const ASSISTANT_FEATURE = "assistant" as const;
 export const ASSISTANT_CHANNEL = "staff" as const;
@@ -73,7 +89,11 @@ export interface AskInput {
 export async function askAssistant(
   input: AskInput,
   toolCtx: StaffToolCtx,
-  hooks: { logToolCall?: (name: string, args: Record<string, unknown>, conversationId: number | null) => Promise<void> } = {},
+  hooks: {
+    logToolCall?: (name: string, args: Record<string, unknown>, conversationId: number | null) => Promise<void>;
+    /** Base de conhecimento (omisso = a real; null = sem). */
+    knowledge?: ((question: string) => Promise<{ block: string; citations: KbCitation[] } | null>) | null;
+  } = {},
 ): Promise<ChatTurnResult> {
   const limits = await assistantLimits();
   const user = toolCtx.user;
@@ -95,6 +115,7 @@ export async function askAssistant(
     path: input.path,
     tools: STAFF_TOOLS,
     toolCtx,
+    knowledge: hooks.knowledge === null ? undefined : (hooks.knowledge ?? ((q) => assistantKnowledge(q, user.role, toolCtx.access))),
     onToolCall: async (name, args, conversationId) => {
       await hooks.logToolCall?.(name, args, conversationId);
     },

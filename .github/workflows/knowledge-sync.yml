@@ -1,0 +1,52 @@
+name: Base de conhecimento — sincronizar (Drive)
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write # alerta: abrir/comentar issue em caso de falha
+concurrency:
+  group: knowledge-sync
+  cancel-in-progress: false
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger /api/cron/knowledge-sync (repete até done)
+        env:
+          APP_URL: ${{ secrets.APP_URL || 'https://dashbord-multipark.vercel.app' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          test -n "$CRON_SECRET"
+          # Prazo de 45 s por chamada (maxDuration 60 s do Vercel). "done":false
+          # = documentos por processar → repete (cada corrida
+          # continua de onde a anterior parou; cursor e estado guardados).
+          for i in 1 2 3; do
+            code=$(curl -sS -m 70 -w '%{http_code}' -o result.json \
+              -H "Authorization: Bearer $CRON_SECRET" \
+              "$APP_URL/api/cron/knowledge-sync") \
+              || { echo "::error::curl falhou ao contactar o endpoint"; cat result.json || true; exit 1; }
+            echo "tentativa $i — HTTP $code"; head -c 1500 result.json; echo
+            if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+              echo "::error::endpoint devolveu HTTP $code"; exit 1
+            fi
+            node -e 'const r = require("./result.json"); if (r.ok !== true) { console.log(`::error::${(r.errors ?? []).join(" · ") || r.error || "ok:false"}`); process.exit(1); }'
+            grep -q '"done":false' result.json || break
+          done
+      - name: Alerta — abrir/comentar issue em caso de falha
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="🔴 Cron multipark falhou: knowledge-sync"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body="Run falhado: $run_url — $(date -u +'%Y-%m-%d %H:%M UTC')"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number' || true)
+          if [ -n "${existing:-}" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi

@@ -96,9 +96,22 @@ export interface ContextCacheHandle {
   expiresAt: number;
 }
 
+/** Pedido de embeddings (só Gemini). */
+export interface EmbedRequest {
+  model: string;
+  texts: string[];
+  /** RETRIEVAL_DOCUMENT (trechos) | RETRIEVAL_QUERY (pergunta). */
+  taskType: "RETRIEVAL_DOCUMENT" | "RETRIEVAL_QUERY";
+  dimensions: number;
+  signal: AbortSignal;
+  timeoutMs: number;
+}
+
 export interface AiProvider {
   id: AiProviderId;
   generate(req: ProviderRequest): Promise<ProviderResponse>;
+  /** Só Gemini: vetores (um por texto, pela mesma ordem). */
+  embed?(req: EmbedRequest): Promise<number[][]>;
   /** Só Gemini: guarda um prefixo longo e estável (system) para reutilizar. */
   createCache?(p: { model: string; system: string; tools?: AiToolDeclaration[]; ttlSeconds: number; signal: AbortSignal }): Promise<ContextCacheHandle>;
 }
@@ -311,6 +324,21 @@ export function createGeminiProvider(env: Env = process.env): AiProvider {
         usage: geminiUsage(res?.usageMetadata),
         ...(toolCalls.length ? { toolCalls, raw: res?.candidates?.[0]?.content } : {}),
       };
+    },
+    async embed(req) {
+      const ai = await getGeminiClient(env);
+      const res = await ai.models.embedContent({
+        model: req.model,
+        contents: req.texts,
+        config: {
+          taskType: req.taskType,
+          outputDimensionality: req.dimensions,
+          abortSignal: req.signal,
+          httpOptions: { timeout: req.timeoutMs, retryOptions: { attempts: 1 } },
+        },
+      });
+      const list: any[] = Array.isArray(res?.embeddings) ? res.embeddings : [];
+      return list.map((e) => (Array.isArray(e?.values) ? e.values.map(Number) : []));
     },
     async createCache({ model, system, tools, ttlSeconds, signal }) {
       const ai = await getGeminiClient(env);

@@ -161,6 +161,18 @@ function todayISO(): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+function baseDateFromUrl(): string | null {
+  const dia = new URLSearchParams(window.location.search).get("dia");
+  if (!dia) return null;
+  if (dia === "amanha") return todayISO();
+  const target = dia === "hoje" ? todayISO() : /^\d{4}-\d{2}-\d{2}$/.test(dia) ? dia : null;
+  if (!target) return null;
+  const d = new Date(`${target}T12:00:00`);
+  d.setDate(d.getDate() - 1);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 // Cidade ativa do Extras-Dia (Lisboa/Porto/Faro) — contexto para não arrastar
 // a prop por 4 níveis até aos slots.
 type ExtraCityId = "lisbon" | "porto" | "faro";
@@ -183,7 +195,9 @@ export default function ExtrasDiaPage() {
     setSavedCity(value);
     globalFilters.setCityId(globalFilters.cities.find(p => p.name === choice.label)!.id);
   };
-  const [baseDate, setBaseDate] = useState(todayISO());
+  // ?dia=amanha|hoje|AAAA-MM-DD (pesquisa global): a escala mostrada é a de
+  // baseDate + 1 (previsão do dia seguinte), por isso baseDate = dia − 1.
+  const [baseDate, setBaseDate] = useState(() => baseDateFromUrl() ?? todayISO());
 
   const { data, isLoading, error } = trpc.extrasDia.forecast.useQuery({ baseDate, city }, { enabled: !globalFilters.isLoading && allowedCities.length > 0 });
   const targetDate = data?.targetDate ?? "";

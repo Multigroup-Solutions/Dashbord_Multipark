@@ -27,6 +27,7 @@ import DefinicoesPage from "./pages/DefinicoesPage";
 import ComplaintsPage from "./pages/ComplaintsPage";
 import GoogleReviewsPage from "./pages/GoogleReviewsPage";
 import TrainingPage from "./pages/TrainingPage";
+import KnowledgeBasePage from "./pages/KnowledgeBasePage";
 import LostFoundPage from "./pages/LostFoundPage";
 import ClientsPage from "./pages/ClientsPage";
 import ContactsPage from "./pages/ContactsPage";
@@ -182,6 +183,9 @@ function Router() {
       </Route>
       <Route path="/extras-leads">
         {() => (<DashboardLayout><ExtraLeadsPage /></DashboardLayout>)}
+      </Route>
+      <Route path="/formacao/conhecimento">
+        {() => (<DashboardLayout><KnowledgeBasePage /></DashboardLayout>)}
       </Route>
       <Route path="/formacao">
         {() => (<DashboardLayout><TrainingPage /></DashboardLayout>)}

@@ -30,6 +30,8 @@ import {
   retrieveChunks, type Chunk, type NextStep,
 } from "./trainingTutorRules";
 import * as store from "./trainingTutorStore";
+import type { KbHit } from "./knowledge/retrieve";
+import { safeCitationHref } from "../shared/knowledge";
 import { lisbonDay } from "./trainingRules";
 
 export interface TutorUser { id: number; role: string; name?: string | null }
@@ -40,7 +42,8 @@ export interface TutorAnswer {
   answer: string;
   outOfContent: boolean;
   fallback: TutorFallback;
-  sources: Array<{ manualId: number; manualTitle: string; heading: string }>;
+  /** Manuais do módulo (manualId > 0) e documentos da base de conhecimento (kbDocId + ligação). */
+  sources: Array<{ manualId: number; manualTitle: string; heading: string; kbDocId?: number; href?: string | null }>;
   trainerName: string | null;
 }
 
@@ -122,6 +125,22 @@ function uniqueSources(hits: Chunk[]) {
   return out;
 }
 
+// ─── Base de conhecimento ──────────────────────────────────────────────────
+
+/** Trechos da base de conhecimento visíveis para quem pergunta (nunca lança). */
+async function tutorKnowledge(question: string, role: string, topK: number): Promise<KbHit[]> {
+  try {
+    const { loadKnowledgeConfig } = await import("./knowledge/sync");
+    if (!(await loadKnowledgeConfig()).useInTutor) return [];
+    const { retrieveKnowledge, kbViewerFrom } = await import("./knowledge/retrieve");
+    const { cityScope } = await import("./cityScope");
+    const r = await retrieveKnowledge({ question, viewer: kbViewerFrom(role, cityScope.getStore()), topK });
+    return r.hits;
+  } catch {
+    return [];
+  }
+}
+
 // ─── Pergunta ──────────────────────────────────────────────────────────────
 
 export async function tutorAsk(
@@ -165,7 +184,11 @@ export async function tutorAsk(
     }
   };
 
-  if (!hits.length) {
+  // Base de conhecimento (manuais do Drive/carregados): só o que a pessoa pode
+  // ver; completa os trechos do módulo (ou substitui-os quando o módulo não tem).
+  const kbHits = await tutorKnowledge(detail && lastUserQ ? `${safeQ} ${lastUserQ}` : safeQ, user.role, hits.length ? 2 : 3);
+
+  if (!hits.length && !kbHits.length) {
     const answer = outOfContentAnswer(trainerName);
     await persist(answer, true);
     return { ...base, answer, outOfContent: true, fallback: null };
@@ -180,7 +203,10 @@ export async function tutorAsk(
       cacheSystem: text.length >= CACHE_MIN_CHARS ? { ttlSeconds: 3600 } : undefined,
       input: tutorInput({
         question: safeQ,
-        passages: hits.map((h) => ({ manualTitle: h.manualTitle, heading: h.heading, text: h.text })),
+        passages: [
+          ...hits.map((h) => ({ manualTitle: h.manualTitle, heading: h.heading, text: h.text })),
+          ...kbHits.map((h) => ({ manualTitle: h.title, heading: h.section ?? h.title, text: redactPii(h.text).text })),
+        ],
         history: history.map((t) => ({ role: t.role, content: t.content })),
         maxWords,
         detail,
@@ -205,7 +231,10 @@ export async function tutorAsk(
   }
   const stored = limitWords(output, maxWords);
   await persist(stored, false);
-  return { ...base, answer: redaction.restore(stored), outOfContent: false, fallback: null, sources: uniqueSources(hits) };
+  const kbSources = kbHits
+    .filter((h, i, arr) => arr.findIndex((x) => x.docId === h.docId) === i)
+    .map((h) => ({ manualId: 0, manualTitle: h.title, heading: h.section ?? h.title, kbDocId: h.docId, href: safeCitationHref(h.href) }));
+  return { ...base, answer: redaction.restore(stored), outOfContent: false, fallback: null, sources: [...uniqueSources(hits), ...kbSources] };
 }
 
 // ─── Saudação, progresso e dicas (sem IA) ──────────────────────────────────
