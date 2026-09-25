@@ -3,6 +3,8 @@
 // ligações (cliente, reserva, reclamação…) e editor.
 import { useEffect, useState } from "react";
 import { Link } from "wouter";
+import { DriveFilesPanel } from "@/components/google/DriveFilesPanel";
+import { SaveToDriveButton } from "@/components/google/DriveActions";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -136,6 +138,7 @@ export function MailThreadView({ threadId, onBack, onChanged, canAi }: { threadI
           {showImages && <span className="text-[11px] text-muted-foreground inline-flex items-center gap-1"><ImageOff className="h-3 w-3" />imagens carregadas</span>}
         </div>
         {showLinks && <LinksPanel threadId={threadId} links={t.links} canAct={t.canAct} onChanged={() => { q.refetch(); onChanged(); }} />}
+        {showLinks && <DriveFilesPanel entityType="mail_thread" entityId={threadId} title="Ficheiros do Google Drive" compact />}
       </div>
 
       {/* Mensagens */}
@@ -200,10 +203,13 @@ function MessageCard({ m, defaultOpen }: { m: Msg; defaultOpen: boolean }) {
           {m.attachments.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
               {m.attachments.map((a) => (
-                <a key={a.index} href={a.href} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs border rounded px-1.5 py-0.5 hover:bg-accent max-w-full">
-                  <Paperclip className="h-3 w-3 shrink-0" /><span className="truncate">{a.filename}</span>
-                  <span className="text-muted-foreground shrink-0">{a.size > 0 ? `${Math.max(1, Math.round(a.size / 1024))} KB` : ""}</span>
-                </a>
+                <span key={a.index} className="inline-flex items-center max-w-full border rounded">
+                  <a href={a.href} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 hover:bg-accent max-w-full min-w-0">
+                    <Paperclip className="h-3 w-3 shrink-0" /><span className="truncate">{a.filename}</span>
+                    <span className="text-muted-foreground shrink-0">{a.size > 0 ? `${Math.max(1, Math.round(a.size / 1024))} KB` : ""}</span>
+                  </a>
+                  <SaveToDriveButton source={{ kind: "mail_attachment", messageId: m.id, index: a.index }} iconOnly label="Guardar no meu Drive" />
+                </span>
               ))}
             </div>
           )}

@@ -454,11 +454,11 @@ describe("OAuth por utilizador", () => {
     expect(isAllowedWorkspaceIdentity({ email: "ana@multipark.pt", email_verified: false, hd: "multipark.pt" }, d).ok).toBe(false);
     expect(isAllowedWorkspaceIdentity({ email: "ana@multipark.pt", email_verified: true, hd: "multipark.pt" }, []).ok).toBe(false);
   });
-  it("autorização incremental: só os âmbitos pedidos (gmail); os outros ficam preparados mas desligados", () => {
+  it("autorização incremental: só os âmbitos pedidos; funcionalidades desconhecidas ficam de fora", () => {
     expect(scopesFor(["gmail"])).toEqual(["openid", "email", "profile", "https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/gmail.send"]);
-    expect(requestedFeatures("drive")).toEqual(["gmail"]);
-    expect(requestedFeatures("drive,contacts")).toEqual(["contacts"]);
-    expect(requestedFeatures("calendar,drive,tasks")).toEqual(["calendar", "tasks"]);
+    expect(requestedFeatures("drive")).toEqual(["drive"]);
+    expect(requestedFeatures("drive,contacts")).toEqual(["drive", "contacts"]);
+    expect(requestedFeatures("calendar,drive,tasks")).toEqual(["calendar", "drive", "tasks"]);
     expect(requestedFeatures("gmail,x")).toEqual(["gmail"]);
     expect(hasFeatureScopes("openid https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send", "gmail")).toBe(true);
     expect(hasFeatureScopes("https://www.googleapis.com/auth/gmail.readonly", "gmail")).toBe(false);

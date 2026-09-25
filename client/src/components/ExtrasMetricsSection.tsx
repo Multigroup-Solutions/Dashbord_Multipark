@@ -3,6 +3,7 @@
  * Mostrado no hub de Disponibilidades (gestão).
  */
 import { useMemo, useState } from "react";
+import { ExportToSheetsButton } from "@/components/google/DriveActions";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
@@ -76,13 +77,16 @@ export function ExtrasMetricsSection() {
               {m ? `De ${dm(m.period.from)} a ${dm(m.period.to)}` : "A carregar…"} · só as tuas cidades
             </CardDescription>
           </div>
-          <Select value={String(days)} onValueChange={(v) => setDays(Number(v))}>
-            <SelectTrigger className="w-[150px]"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="30">Últimos 30 dias</SelectItem>
-              <SelectItem value="90">Últimos 90 dias</SelectItem>
-            </SelectContent>
-          </Select>
+          <div className="flex flex-wrap items-center gap-2">
+            <Select value={String(days)} onValueChange={(v) => setDays(Number(v))}>
+              <SelectTrigger className="w-[150px]"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="30">Últimos 30 dias</SelectItem>
+                <SelectItem value="90">Últimos 90 dias</SelectItem>
+              </SelectContent>
+            </Select>
+            <ExportToSheetsButton input={{ report: "extras_metricas", days }} />
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-5">

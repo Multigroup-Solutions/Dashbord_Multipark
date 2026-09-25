@@ -9,6 +9,7 @@
  * O âmbito de cidade é aplicado no servidor.
  */
 import EvaluationExplanation from "@/components/aiOps/EvaluationExplanation";
+import { ExportToSheetsButton } from "@/components/google/DriveActions";
 import { useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -171,6 +172,7 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
         </div>
         <div className="ml-auto flex gap-2">
           <Button variant="outline" size="sm" onClick={exportCSV} disabled={rows.length === 0}><Download className="w-4 h-4 mr-1" /> CSV</Button>
+          <ExportToSheetsButton input={{ report: "avaliacoes", from, to }} disabled={rows.length === 0} />
           {isSupervisor && (
             <Button size="sm" disabled={recompute.isPending} onClick={() => recompute.mutate({ from, to })}>
               <RefreshCw className={`w-4 h-4 mr-1 ${recompute.isPending ? "animate-spin" : ""}`} /> {recompute.isPending ? "A recalcular..." : "Recalcular"}

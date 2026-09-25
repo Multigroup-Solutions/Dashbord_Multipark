@@ -1,4 +1,5 @@
 import { Link } from "wouter";
+import { ImportFromSheetButton } from "@/components/google/DriveActions";
 import { trpc } from "@/lib/trpc";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -211,6 +212,7 @@ function ImportHistoryDialog({ open, onClose, onImported }: { open: boolean; onC
             não tem dados reais (reservas/despesas/payroll) — os anos com dados reais nunca são substituídos.
             Reimportar o mesmo ano/mês substitui o valor anterior.
           </p>
+          <ImportFromSheetButton purpose="financial_history" onCsv={setText} />
           <Textarea
             value={text}
             onChange={(e) => setText(e.target.value)}

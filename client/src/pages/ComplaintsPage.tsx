@@ -1,6 +1,8 @@
 import { trpc } from "@/lib/trpc";
 import { CommunicationsTimeline } from "@/components/mail/CommunicationsTimeline";
 import { CreateMeetingButton } from "@/components/google/CreateMeetingButton";
+import { DriveFilesPanel } from "@/components/google/DriveFilesPanel";
+import { SaveToDriveButton } from "@/components/google/DriveActions";
 import { can, roleRank, seesBeyondOwn } from "@shared/access";
 import { openInMultipark } from "@/lib/multiparkLinks";
 import { formatBookingHistoryDetails } from "@/lib/bookingHistoryFormat";
@@ -783,6 +785,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                       <div key={p.id} className="relative group">
                         <img src={fileHref(p.url, p.key) ?? undefined} alt={p.label || "Foto"} className="w-full h-40 object-cover rounded-lg" />
                         {p.label && <span className="absolute bottom-1 left-1 bg-black/60 text-white text-[11px] px-2 py-0.5 rounded">{p.label}</span>}
+                        <span className="absolute top-1 left-1 opacity-80 group-hover:opacity-100 bg-background/90 rounded"><SaveToDriveButton source={{ kind: "complaint_photo", id: p.id }} iconOnly label="Guardar no meu Drive" /></span>
                         <Button
                           variant="destructive" size="icon"
                           className="absolute top-1 right-1 h-6 w-6 opacity-60 group-hover:opacity-100 transition-opacity"
@@ -903,6 +906,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
             <TabsContent value="comms" className="mt-4 space-y-3">
               <div className="flex justify-end"><CreateMeetingButton entityType="complaint" entityId={id} defaultTitle={`Reunião — reclamação #${id}${c.clientName ? ` (${c.clientName})` : ""}`} /></div>
               <CommunicationsTimeline type="complaint" id={id} compact />
+              <DriveFilesPanel entityType="complaint" entityId={id} />
             </TabsContent>
             <TabsContent value="booking-history" className="mt-4">
                 <Card>

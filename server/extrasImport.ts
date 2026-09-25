@@ -41,7 +41,7 @@ const KNOWN_COLUMNS = new Set([
   "data_nascimento",
 ]);
 
-function parseCsvLine(line: string): string[] {
+export function parseCsvLine(line: string): string[] {
   const out: string[] = [];
   let cur = "";
   let inQuotes = false;

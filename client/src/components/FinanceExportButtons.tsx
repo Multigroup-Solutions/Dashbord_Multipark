@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { ExportToSheetsButton } from "@/components/google/DriveActions";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { can } from "@shared/access";
 import { Button } from "@/components/ui/button";
@@ -36,6 +37,9 @@ export default function FinanceExportButtons({ input }: { input: ExportInput }) 
         {mut.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Download className="w-3.5 h-3.5 mr-1" />} XLSX
       </Button>
       <Button size="sm" variant="outline" className="h-9" disabled={mut.isPending} onClick={() => run("csv")}>CSV</Button>
+      {input.kind === "billing" && (
+        <ExportToSheetsButton input={{ report: "faturacao", from: input.from, to: input.to, projectId: input.projectId, granularity: input.granularity }} />
+      )}
     </div>
   );
 }

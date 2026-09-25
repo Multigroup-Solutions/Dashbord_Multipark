@@ -410,8 +410,8 @@ export const GOOGLE_FEATURE_LABELS: Record<GoogleFeature, string> = {
   drive: "Drive",
   contacts: "Contactos",
 };
-/** Ligadas: Gmail, Calendário, Tarefas e Contactos; o Drive fica preparado (hook). */
-export const GOOGLE_FEATURES_ENABLED: readonly GoogleFeature[] = ["gmail", "calendar", "tasks", "contacts"];
+/** Todas ligadas: Gmail, Calendário, Tarefas, Drive e Contactos. */
+export const GOOGLE_FEATURES_ENABLED: readonly GoogleFeature[] = ["gmail", "calendar", "tasks", "drive", "contacts"];
 export const GOOGLE_FEATURE_SCOPES: Record<GoogleFeature, readonly string[]> = {
   gmail: ["https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/gmail.send"],
   // Calendário: eventos (turnos, prazos, reuniões com Meet), o calendário
@@ -425,6 +425,10 @@ export const GOOGLE_FEATURE_SCOPES: Record<GoogleFeature, readonly string[]> = {
     "https://www.googleapis.com/auth/calendar.freebusy",
   ],
   tasks: ["https://www.googleapis.com/auth/tasks"],
+  // Drive (shared/drive.ts): SÓ drive.file — a app vê apenas os ficheiros que
+  // criou ou que a pessoa abriu com ela (Google Picker). Chega para guardar no
+  // Drive, exportar para Sheets e gerar documentos (APIs Sheets/Docs aceitam
+  // drive.file nos ficheiros da app). Nunca lê o resto do Drive da pessoa.
   drive: ["https://www.googleapis.com/auth/drive.file"],
   // Contactos (shared/contacts.ts): escrever o grupo "Multipark — Serviço"
   // (só os contactos criados pela app) e ler os "Outros contactos" para

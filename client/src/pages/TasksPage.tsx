@@ -1,4 +1,5 @@
 import OpsBriefingCard from "@/components/aiOps/OpsBriefingCard";
+import { DriveFilesPanel } from "@/components/google/DriveFilesPanel";
 import TasksFromTextDialog from "@/components/aiOps/TasksFromTextDialog";
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { Link } from "wouter";
@@ -816,6 +817,8 @@ function TaskDetailDialog({ id, onClose, canEdit, onEdit, onStatus, statusPendin
                 )}
                 {canEdit && <Button size="sm" variant="ghost" onClick={() => onEdit(t)}><Pencil className="h-4 w-4 mr-1" />Editar</Button>}
               </div>
+
+              <div className="border-t pt-3"><DriveFilesPanel entityType="task" entityId={t.id} title="Ficheiros do Google Drive" compact /></div>
 
               <div className="border-t pt-3 space-y-2">
                 <p className="font-medium flex items-center gap-1"><MessageSquare className="h-4 w-4" />Comentários</p>

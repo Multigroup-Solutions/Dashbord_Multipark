@@ -16,7 +16,8 @@
  *  - disponibilidade (livre/ocupado) e reuniões com Meet;
  *  - Contactos (People API): grupo "Multipark — Serviço" / parceiros e
  *    leitura para sugestões por pessoa (contactsService.ts) e o diretório da
- *    empresa 1×/dia (conta de serviço com delegação).
+ *    empresa 1×/dia (conta de serviço com delegação);
+ *  - Drive (driveJobs.ts): espelho no Shared Drive e relatórios ao vivo.
  */
 import { sql } from "drizzle-orm";
 import {
@@ -49,6 +50,7 @@ export interface GoogleSyncReport {
   users: GoogleSyncUserReport[];
   shared: Array<{ city: string; status: string; error?: string; inserted?: number; updated?: number; deleted?: number }>;
   directory?: { ran: boolean; done: boolean; count: number | null; error: string | null };
+  drive?: { done: boolean; mirrored: number; mirrorFailed: number; live: { ran: boolean; reports: string[]; partial: boolean; error: string | null } | null };
   errors: string[];
   warnings: string[];
 }
@@ -340,7 +342,8 @@ export async function runGoogleSync(opts: { deadlineAt: number; onlyUserIds?: re
   const sharedErrors: string[] = [];
   try {
     report.configured = oauthConfigured() || (await loadSharedCalendarsConfig()).enabled
-      || (await (await import("./contactsService")).loadContactsConfig()).directory.enabled;
+      || (await (await import("./contactsService")).loadContactsConfig()).directory.enabled
+      || (await (await import("./driveService")).loadDriveConfig()).sharedEnabled;
     if (!report.configured) return report;
     const list = await candidates(opts.onlyUserIds);
     for (const c of list) {
@@ -367,6 +370,16 @@ export async function runGoogleSync(opts: { deadlineAt: number; onlyUserIds?: re
           report.directory = { ran: dir.ran, done: dir.done, count: dir.count, error: dir.error };
           if (!dir.done) report.done = false;
           if (dir.error) sharedErrors.push(dir.error);
+        }
+      }
+      // Drive: espelho no Shared Drive e relatórios ao vivo (lotes, retomável).
+      if (Date.now() < opts.deadlineAt - 12_000) {
+        const { runDriveJobs } = await import("./driveJobs");
+        const dj = await runDriveJobs({ deadlineAt: opts.deadlineAt - 2_000, now: opts.now });
+        if (dj.configured) {
+          report.drive = { done: dj.done, mirrored: dj.mirrored, mirrorFailed: dj.mirrorFailed, live: dj.live };
+          if (!dj.done) report.done = false;
+          sharedErrors.push(...dj.errors);
         }
       }
     }

@@ -85,7 +85,7 @@ async function myEmployeeId(userId: number): Promise<number | null> {
 }
 
 /** Tarefa + responsáveis, com âmbito de cidade e (para quem não edita) só as suas. */
-async function loadTaskFor(ctx: { user: { id: number; role: string } }, id: number) {
+export async function loadTaskFor(ctx: { user: { id: number; role: string } }, id: number) {
   const task = await getTaskWithAssignees(id);
   if (!task) throw new TRPCError({ code: "NOT_FOUND", message: "Tarefa não encontrada." });
   assertTaskScope(task);
