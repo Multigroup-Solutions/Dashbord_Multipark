@@ -27,6 +27,7 @@ O Super Admin entra sempre; o Admin entra sozinho quando a matriz lhe dá o mód
 | Reclamação nova | `complaint_new` | Reclamações (view) | por cidade | Supervisor, Frontoffice, Backoffice, Admin, Super Admin | — | não | Reclamação criada (manual ou por email). |
 | Reclamações fora do prazo | `complaint_sla` | Reclamações (view) | por cidade | Supervisor, Frontoffice, Backoffice, Admin, Super Admin | — | não | Cron horário: reclamações novas/em análise que passaram o SLA (1× por reclamação, resumo por cidade). |
 | Triagem da IA por rever | `complaint_triage` | Reclamações (view) | por cidade | Supervisor, Frontoffice, Backoffice, Admin, Super Admin | — | não | Triagem da IA com prioridade alta/urgente por aplicar ou possível duplicado. |
+| Críticas Google: alertas | `google_reviews_alert` | Críticas Google (view) | por cidade | Supervisor, Admin, Super Admin | sim (desligado) | não | Recolha do Google Business Profile (/api/cron/google-business), 1×/dia: média de estrelas dos últimos 7 dias abaixo da dos 90 dias anteriores e críticas Google sem resposta há mais de N horas (por perfil; vai à cidade do perfil). |
 | Ocorrência crítica | `incident_critical` | Ocorrências (view) | por cidade | Team Leader, Supervisor, Backoffice, Admin, Super Admin | sim (ligado) | não | Ocorrência criada com gravidade crítica. |
 | Ocorrências fora do prazo | `incident_sla` | Ocorrências (view) | por cidade | Team Leader, Supervisor, Backoffice, Admin, Super Admin | — | não | Cron horário: ocorrências fora do prazo (1×/dia, resumo por cidade). |
 | Perdido novo | `lost_found_new` | Perdidos e Achados (view) | por cidade | Team Leader, Supervisor, Backoffice, Admin, Super Admin | — | não | Perdido registado. |
@@ -78,7 +79,8 @@ O Super Admin entra sempre; o Admin entra sozinho quando a matriz lhe dá o mód
 | Tipo | Chave | Módulo (ação) | Âmbito | Quem recebe | Email | Obrigatória | Quando |
 |---|---|---|---|---|---|---|---|
 | Alertas de marketing | `marketing_alert` | Marketing (view) | nacional | Super Admin | sim (desligado) | não | Deteção diária de anomalias no gasto/ROAS do marketing (só críticas). |
-| Alertas Web & SEO | `web_analytics_alert` | Marketing (view) | nacional | Super Admin | sim (desligado) | não | Recolha diária Web & SEO (/api/cron/web-analytics): sessões de ontem abaixo da média de 7 dias, cliques orgânicos da semana a cair, pesquisas do top a perder posição, PageSpeed móvel abaixo do mínimo (limiares em Definições → Integrações → Web & SEO; 1× por propriedade e dia). |
+| Alertas Google Business | `google_business_alert` | Marketing (view) | nacional | Super Admin | sim (desligado) | não | Recolha do Google Business Profile (/api/cron/google-business), 1×/dia depois da atualização: impressões ou chamadas da semana a cair face à anterior, perfil sem controlo (suspenso/por verificar), fechado, alterado pela Google ou com edições pendentes (limiares em Marketing → Web & SEO → Google Business → Configurar). |
+| Alertas Web & SEO | `web_analytics_alert` | Marketing (view) | nacional | Super Admin | sim (desligado) | não | Recolha diária Web & SEO (/api/cron/web-analytics): sessões de ontem abaixo da média de 7 dias, cliques orgânicos da semana a cair, pesquisas do top a perder posição, PageSpeed móvel abaixo do mínimo e dados reais (Chrome UX Report) das páginas-chave acima dos limiares de LCP/INP/CLS (limiares em Definições → Integrações → Web & SEO; 1× por propriedade e dia). |
 
 ### Sistema
 

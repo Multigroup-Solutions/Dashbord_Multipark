@@ -77,6 +77,40 @@ export const webAnalyticsRouter = router({
     return { enabled: cfg.pagespeedEnabled, urls, runs, thresholdMobile: cfg.alerts.pagespeedMobileMin };
   }),
 
+  /** Dados reais (Chrome UX Report): histórico por origem/página × telemóvel/computador. */
+  crux: protectedProcedure.input(z.object({ brand: brandInput, weeks: z.number().int().min(4).max(60).default(26) }).optional()).query(async ({ ctx, input }) => {
+    requireAccess(ctx.user, "marketing", "view");
+    const { loadWebAnalyticsConfig } = await import("./service");
+    const { cruxHistory } = await import("./queries");
+    const { cruxApiKey } = await import("./apis");
+    const { cruxTargets } = await import("../../shared/webAnalytics");
+    const { lisbonToday } = await import("../../shared/expensePeriods");
+    const cfg = await loadWebAnalyticsConfig();
+    const urls = cfg.pagespeedUrls.filter((u) => !input?.brand || u.brand === input.brand);
+    const targets = cruxTargets(urls);
+    const rows = await cruxHistory(targets, addDays(lisbonToday(), -7 * (input?.weeks ?? 26)));
+    return { enabled: cfg.pagespeedEnabled && cfg.cruxEnabled, hasKey: !!cruxApiKey(), targets, rows, thresholds: { lcpMs: cfg.alerts.cruxLcpMs, inpMs: cfg.alerts.cruxInpMs, cls: cfg.alerts.cruxCls } };
+  }),
+
+  /** "O que corrigir primeiro": oportunidades Lighthouse da medição mais recente de uma página. */
+  opportunities: protectedProcedure.input(z.object({ url: z.string().max(1000), strategy: z.enum(["mobile", "desktop"]).default("mobile") })).query(async ({ ctx, input }) => {
+    requireAccess(ctx.user, "marketing", "view");
+    const { loadWebAnalyticsConfig } = await import("./service");
+    const cfg = await loadWebAnalyticsConfig();
+    if (!cfg.pagespeedUrls.some((u) => u.url === input.url)) throw new TRPCError({ code: "NOT_FOUND", message: "Página não configurada." });
+    const { latestAudits } = await import("./queries");
+    return { audits: await latestAudits(input.url, input.strategy) };
+  }),
+
+  /** Explicação em PT-PT (IA lite; respeita o interruptor AI_PAGESPEED_EXPLAIN e o orçamento). */
+  explainOpportunities: protectedProcedure.input(z.object({ url: z.string().max(1000), strategy: z.enum(["mobile", "desktop"]).default("mobile") })).mutation(async ({ ctx, input }) => {
+    requireAccess(ctx.user, "marketing", "manage");
+    const { loadWebAnalyticsConfig, explainOpportunities } = await import("./service");
+    const cfg = await loadWebAnalyticsConfig();
+    if (!cfg.pagespeedUrls.some((u) => u.url === input.url)) throw new TRPCError({ code: "NOT_FOUND", message: "Página não configurada." });
+    try { return await explainOpportunities(input.url, input.strategy, ctx.user.id); } catch (e) { badRequest(e); }
+  }),
+
   settings: router({
     get: protectedProcedure.query(async ({ ctx }) => {
       requireAccess(ctx.user, "marketing", "view");
@@ -95,6 +129,7 @@ export const webAnalyticsRouter = router({
         serviceAccount: dwdConfigured(),
         serviceAccountEmail: workspaceConfig().serviceAccount?.client_email ?? null,
         pagespeedKey: !!String(process.env.GOOGLE_PAGESPEED_API_KEY ?? "").trim(),
+        cruxKey: !!(String(process.env.GOOGLE_PAGESPEED_API_KEY ?? "").trim() || String(process.env.GOOGLE_CRUX_API_KEY ?? "").trim()),
         lastRun,
         lastSuccessAt,
       };

@@ -74,6 +74,7 @@ import { googleCalendarRouter } from "./google/router";
 import { googleDriveRouter } from "./google/driveRouter";
 import { contactsRouter } from "./contactsRouter";
 import { webAnalyticsRouter } from "./webAnalytics/router";
+import { gbpRouter } from "./integrations/googleBusiness/profileRouter";
 import { getBookingHistory, getBookingsReport, getBookingTryAllParks } from "./multipark";
 import { deliveryErrorCode } from "./bookingDeliveryQueue";
 import {
@@ -3730,6 +3731,8 @@ export const appRouter = router({
   marketing: router({
     // Web & SEO (GA4, Search Console, PageSpeed) — server/webAnalytics/router.ts.
     web: webAnalyticsRouter,
+    // Google Business Profile (desempenho, pesquisas, horários, publicações) — server/integrations/googleBusiness/profileRouter.ts.
+    gbp: gbpRouter,
     // Fonte única (server/integrations/googleAds/adMetrics + marketingStats):
     // gasto = custo importado Google + Meta (nunca orçamento×dias), reservas
     // reais por data de criação (dias de Lisboa, sem canceladas — a regra das

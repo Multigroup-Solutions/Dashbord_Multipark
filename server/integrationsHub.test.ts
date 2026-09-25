@@ -102,7 +102,7 @@ describe("hub: cartões por fornecedor", () => {
   it("um cartão principal por fornecedor, sem Google Maps, com testes baratos", () => {
     const list = integrationStatusesFromEnv({});
     const main = list.filter((i) => i.group === "main").map((i) => i.id);
-    expect(main).toEqual(["google_ads", "meta_ads", "google_business", "whatsapp", "imap", "gmail", "google_sync", "google_contacts", "google_drive", "google_analytics", "search_console", "pagespeed", "google_account", "smtp", "zello", "llm", "multipark", "storage"]);
+    expect(main).toEqual(["google_ads", "meta_ads", "google_business", "whatsapp", "imap", "gmail", "google_sync", "google_contacts", "google_drive", "google_analytics", "search_console", "pagespeed", "crux", "google_account", "smtp", "zello", "llm", "multipark", "storage"]);
     expect(list.some((i) => i.id === "google_maps")).toBe(false);
     for (const id of ["google_ads", "google_business", "zello", "llm", "google_analytics", "search_console", "pagespeed"]) expect(list.find((i) => i.id === id)?.testable).toBe(true);
     // PageSpeed funciona sem chave (quota baixa) → configurada sem variáveis.
@@ -110,6 +110,9 @@ describe("hub: cartões por fornecedor", () => {
     expect(list.find((i) => i.id === "multipark")?.testable).toBe(false);
     expect(list.find((i) => i.id === "google_ads")?.links.map((l) => l.href)).toContain("/integracoes/google-ads");
     expect(list.find((i) => i.id === "google_business")?.links.map((l) => l.href)).toContain("/criticas#google-business");
+    // CrUX precisa de chave (a da PageSpeed serve) e tem Testar.
+    expect(list.find((i) => i.id === "crux")).toMatchObject({ testable: true, configured: false, missing: ["GOOGLE_PAGESPEED_API_KEY ou GOOGLE_CRUX_API_KEY"] });
+    expect(integrationStatusesFromEnv({ GOOGLE_PAGESPEED_API_KEY: "k" }).find((i) => i.id === "crux")?.configured).toBe(true);
   });
 });
 

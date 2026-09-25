@@ -186,6 +186,61 @@ export async function pagespeedHistory(urls: readonly string[], sinceDay: string
   }));
 }
 
+// ─── Chrome UX Report e "o que corrigir primeiro" (0170) ────────────────────
+
+export interface CruxRecordRow {
+  targetType: string; target: string; formFactor: string; periodStart: string; periodEnd: string;
+  lcpP75: number | null; inpP75: number | null; clsP75: number | null; fcpP75: number | null; ttfbP75: number | null;
+  dist: Record<"lcp" | "inp" | "cls" | "fcp" | "ttfb", { good: number; ni: number; poor: number } | null>;
+}
+
+function cruxRowOf(r: any): CruxRecordRow {
+  const nn = (v: unknown) => (v == null ? null : n(v));
+  const dist = (k: string) => (r[`${k}Good`] == null && r[`${k}Ni`] == null && r[`${k}Poor`] == null ? null : { good: n(r[`${k}Good`]), ni: n(r[`${k}Ni`]), poor: n(r[`${k}Poor`]) });
+  return {
+    targetType: String(r.targetType), target: String(r.target), formFactor: String(r.formFactor), periodStart: dayStr(r.periodStart), periodEnd: dayStr(r.periodEnd),
+    lcpP75: nn(r.lcpP75), inpP75: nn(r.inpP75), clsP75: nn(r.clsP75), fcpP75: nn(r.fcpP75), ttfbP75: nn(r.ttfbP75),
+    dist: { lcp: dist("lcp"), inp: dist("inp"), cls: dist("cls"), fcp: dist("fcp"), ttfb: dist("ttfb") },
+  };
+}
+
+/** Histórico CrUX dos alvos (origem/página), desde `sinceDay` (fim do período). */
+export async function cruxHistory(targets: ReadonlyArray<{ type: string; target: string }>, sinceDay: string): Promise<CruxRecordRow[]> {
+  if (!targets.length) return [];
+  const d = await db();
+  const { sha1 } = await import("./store");
+  const rows = rowsOf(await d.execute(sql`SELECT * FROM web_crux_records WHERE ${inStrings(sql`targetHash`, targets.map((t) => sha1(`${t.type}:${t.target}`)))}
+    AND periodEnd >= ${sinceDay} ORDER BY periodEnd LIMIT 5000`));
+  return rows.map(cruxRowOf);
+}
+
+/** Período CrUX mais recente de cada alvo × dispositivo. */
+export async function latestCrux(targets: ReadonlyArray<{ type: string; target: string }>): Promise<CruxRecordRow[]> {
+  if (!targets.length) return [];
+  const d = await db();
+  const { sha1 } = await import("./store");
+  const hashes = targets.map((t) => sha1(`${t.type}:${t.target}`));
+  const rows = rowsOf(await d.execute(sql`SELECT r.* FROM web_crux_records r
+    JOIN (SELECT targetHash, formFactor, MAX(periodEnd) AS mx FROM web_crux_records WHERE ${inStrings(sql`targetHash`, hashes)} GROUP BY targetHash, formFactor) m
+      ON m.targetHash = r.targetHash AND m.formFactor = r.formFactor AND m.mx = r.periodEnd`));
+  return rows.map(cruxRowOf);
+}
+
+export interface AuditRow { auditId: string; kind: string; title: string; displayValue: string | null; savingsMs: number | null; savingsBytes: number | null; score: number | null; runDay: string }
+
+/** Oportunidades/diagnósticos da medição mais recente de uma página × estratégia (já ordenados). */
+export async function latestAudits(url: string, strategy: string): Promise<AuditRow[]> {
+  const d = await db();
+  const { sha1 } = await import("./store");
+  const h = sha1(url);
+  const rows = rowsOf(await d.execute(sql`SELECT auditId, kind, title, displayValue, savingsMs, savingsBytes, score, DATE_FORMAT(runDay, '%Y-%m-%d') AS runDay
+    FROM web_pagespeed_audits WHERE urlHash = ${h} AND strategy = ${strategy}
+      AND runDay = (SELECT MAX(runDay) FROM web_pagespeed_audits WHERE urlHash = ${h} AND strategy = ${strategy})
+    ORDER BY (kind = 'opportunity') DESC, COALESCE(savingsMs, 0) DESC, COALESCE(savingsBytes, 0) DESC, COALESCE(score, 1) ASC, auditId LIMIT 30`));
+  const nn = (v: unknown) => (v == null ? null : n(v));
+  return rows.map((r) => ({ auditId: String(r.auditId), kind: String(r.kind), title: String(r.title), displayValue: r.displayValue ?? null, savingsMs: nn(r.savingsMs), savingsBytes: nn(r.savingsBytes), score: nn(r.score), runDay: dayStr(r.runDay) }));
+}
+
 // ─── Negócio: reservas e gasto por dia (por marca) ─────────────────────────
 
 /** Origens em que a reserva é feita num site (shared/bookingOrigin.ts). */

@@ -26,75 +26,23 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import {
-  AlertTriangle, ArrowDownRight, ArrowUpRight, CheckCircle2, ChevronLeft, ChevronRight, CircleAlert, Gauge, Globe, Loader2, MousePointerClick,
-  RefreshCw, Search, Settings, ShoppingCart, Sparkles, TrendingUp, Users,
+  AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, CircleAlert, Gauge, Globe, Loader2, MousePointerClick,
+  MapPin, RefreshCw, Search, Settings, ShoppingCart, Sparkles, TrendingUp, Users,
 } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, ComposedChart, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { STICKY_FIRST_COL, TABS_SCROLL } from "@/components/finance/layoutClasses";
-import { StatValue } from "@/components/StatValue";
 import { AXIS_TICK, CHART_TOOLTIP_ITEM, CHART_TOOLTIP_STYLE, eurCompact } from "@/lib/financeFormat";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
-import { WEB_BRAND_LABELS, psLevel, type CompareMode, type PsLevel, type PsMetric, type WebBrand } from "@shared/webAnalytics";
+import { WEB_BRAND_LABELS, type CompareMode, type WebBrand } from "@shared/webAnalytics";
 
-function lisbonDay(d = new Date()): string {
-  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(d);
-  const g = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
-  return `${g("year")}-${g("month")}-${g("day")}`;
-}
-const num = (v: number | null | undefined, digits = 0) => (v == null ? "—" : Number(v).toLocaleString("pt-PT", { maximumFractionDigits: digits }));
-const eur = (v: number | null | undefined, digits = 0) =>
-  v == null ? "—" : v.toLocaleString("pt-PT", { style: "currency", currency: "EUR", maximumFractionDigits: digits, minimumFractionDigits: digits });
-const pctOf = (v: number | null | undefined, digits = 1) => (v == null ? "—" : `${(v * 100).toLocaleString("pt-PT", { maximumFractionDigits: digits, minimumFractionDigits: digits })}%`);
-const posFmt = (v: number | null | undefined) => (v == null ? "—" : v.toLocaleString("pt-PT", { maximumFractionDigits: 1, minimumFractionDigits: 1 }));
-const shortDay = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
-const fmtDay = (iso: string | null | undefined) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : "—");
-const change = (cur: number | null | undefined, prev: number | null | undefined) => (cur == null || prev == null || prev === 0 ? null : (cur - prev) / Math.abs(prev));
+import { SERIES, Delta, Kpi, PsChip, eur, fmtDay, lisbonDay, num, pctOf, posFmt, shortDay } from "./webKpi";
+import { GbpBusinessCard, GbpSection } from "./MarketingGbpPanel";
+import { CruxSection, FixFirstCard } from "./WebSpeedExtras";
 
-// Paleta: atual = Royal Blue (#0055D2 / escuro #4f8aec); comparação = cinzento a tracejado; posição = laranja.
-const SERIES = "[--wb-1:#0055d2] [--wb-2:#16a34a] [--wb-3:#c2410c] dark:[--wb-1:#4f8aec] dark:[--wb-3:#ea580c]";
-
-/** Variação com seta + texto (nunca só cor). `invert`: descer é bom (posição). */
-function Delta({ cur, prev, invert, abs }: { cur: number | null | undefined; prev: number | null | undefined; invert?: boolean; abs?: (d: number) => string }) {
-  if (cur == null || prev == null) return <span className="text-muted-foreground">sem comparação</span>;
-  const d = abs ? cur - prev : change(cur, prev);
-  if (d == null || !Number.isFinite(d)) return <span className="text-muted-foreground">sem base</span>;
-  if (Math.abs(d) < (abs ? 0.05 : 0.005)) return <span className="text-muted-foreground">= estável</span>;
-  const up = d > 0;
-  const good = invert ? !up : up;
-  const Icon = up ? ArrowUpRight : ArrowDownRight;
-  return (
-    <span className={`inline-flex items-center gap-0.5 ${good ? "text-emerald-700 dark:text-emerald-400" : "text-rose-700 dark:text-rose-400"}`}>
-      <Icon className="w-3 h-3" aria-hidden />
-      <span className="sr-only">{up ? "subiu" : "desceu"}</span>
-      {abs ? abs(d) : `${up ? "+" : "−"}${Math.round(Math.abs(d) * 100)}%`}
-    </span>
-  );
-}
-
-function Kpi({ icon: Icon, label, value, cur, prev, invert, hint, abs }: { icon: any; label: string; value: string; cur?: number | null; prev?: number | null; invert?: boolean; hint?: string; abs?: (d: number) => string }) {
-  return (
-    <div className="rounded-xl border bg-card p-3 min-w-0">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground"><Icon className="w-3.5 h-3.5 shrink-0" /> <span className="truncate">{label}</span></div>
-      <StatValue value={value} className="mt-1" max={26} />
-      <div className="text-[11px] mt-0.5 flex flex-wrap gap-x-2">
-        {cur !== undefined && <Delta cur={cur} prev={prev} invert={invert} abs={abs} />}
-        {hint && <span className="text-muted-foreground">{hint}</span>}
-      </div>
-    </div>
-  );
-}
-
-const LEVEL_CLS: Record<PsLevel, string> = {
-  good: "bg-emerald-100 text-emerald-900 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-200",
-  needs_improvement: "bg-amber-100 text-amber-900 border-amber-200 dark:bg-amber-950/40 dark:text-amber-200",
-  poor: "bg-rose-100 text-rose-900 border-rose-200 dark:bg-rose-950/40 dark:text-rose-200",
-};
-const LEVEL_LABEL: Record<PsLevel, string> = { good: "Bom", needs_improvement: "A melhorar", poor: "Fraco" };
-
-function PsChip({ metric, value, text }: { metric: PsMetric; value: number | null | undefined; text: string }) {
-  const lvl = psLevel(metric, value);
-  if (!lvl) return <span className="text-muted-foreground">—</span>;
-  return <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-xs tabular-nums ${LEVEL_CLS[lvl]}`} title={LEVEL_LABEL[lvl]}>{text}<span className="sr-only"> ({LEVEL_LABEL[lvl]})</span></span>;
+const SECTIONS = ["trafego", "pesquisa", "velocidade", "negocio", "google-business"];
+/** Separador inicial a partir de `?sec=` (links dos alertas e das Integrações). */
+function initialSection(): string {
+  try { const v = new URLSearchParams(window.location.search).get("sec"); return v && SECTIONS.includes(v) ? v : "trafego"; } catch { return "trafego"; }
 }
 
 type Common = { from: string; to: string; brand: "" | WebBrand; compare: CompareMode };
@@ -196,7 +144,7 @@ export default function MarketingWebPanel() {
   const [to, setTo] = useState(today);
   const [compare, setCompare] = useState<CompareMode>("previous");
   const [brand, setBrand] = useState<"" | WebBrand>("");
-  const [section, setSection] = useState("trafego");
+  const [section, setSection] = useState(initialSection);
   const [geoDim, setGeoDim] = useState<"country" | "city">("country");
   const common: Common = { from, to, brand, compare };
   const utils = trpc.useUtils();
@@ -354,6 +302,7 @@ export default function MarketingWebPanel() {
               <TabsTrigger value="pesquisa"><Search className="w-4 h-4 mr-1" />Pesquisa Google</TabsTrigger>
               <TabsTrigger value="velocidade"><Gauge className="w-4 h-4 mr-1" />Velocidade</TabsTrigger>
               <TabsTrigger value="negocio"><ShoppingCart className="w-4 h-4 mr-1" />Negócio</TabsTrigger>
+              <TabsTrigger value="google-business"><MapPin className="w-4 h-4 mr-1" />Google Business</TabsTrigger>
             </TabsList>
 
             {/* ── Tráfego ── */}
@@ -492,7 +441,7 @@ export default function MarketingWebPanel() {
 
             {/* ── Velocidade ── */}
             <TabsContent value="velocidade" className={`mt-4 space-y-4 ${SERIES}`}>
-              <PagespeedSection data={ps.data} loading={ps.isLoading} />
+              <PagespeedSection data={ps.data} loading={ps.isLoading} canEdit={canEdit} brand={brand} />
             </TabsContent>
 
             {/* ── Negócio ── */}
@@ -526,6 +475,12 @@ export default function MarketingWebPanel() {
                   </p>
                 </CardContent>
               </Card>
+              {section === "negocio" && <GbpBusinessCard from={from} to={to} />}
+            </TabsContent>
+
+            {/* ── Google Business Profile ── */}
+            <TabsContent value="google-business" className="mt-4">
+              {section === "google-business" && <GbpSection range={{ from, to, compare }} />}
             </TabsContent>
           </Tabs>
         </>
@@ -534,7 +489,7 @@ export default function MarketingWebPanel() {
   );
 }
 
-function PagespeedSection({ data, loading }: { data: any; loading: boolean }) {
+function PagespeedSection({ data, loading, canEdit, brand }: { data: any; loading: boolean; canEdit: boolean; brand: "" | WebBrand }) {
   const [url, setUrl] = useState<string | null>(null);
   if (loading) return <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-primary" /></div>;
   if (!data) return null;
@@ -616,6 +571,8 @@ function PagespeedSection({ data, loading }: { data: any; loading: boolean }) {
           )}
         </CardContent>
       </Card>
+      {sel && <FixFirstCard key={sel} url={sel} label={urls.find((u) => u.url === sel)?.label || sel} canEdit={canEdit} />}
+      <CruxSection brand={brand} enabled />
     </>
   );
 }

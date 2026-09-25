@@ -48,7 +48,24 @@ export function registerGoogleBusinessRoutes(app: Express, afterReceive?: () => 
   app.get('/api/cron/google-business', async (req, res) => {
     const secret = process.env.CRON_SECRET?.trim();
     if (!secret || req.headers.authorization !== `Bearer ${secret}`) { res.status(401).json({ error: 'Unauthorized' }); return; }
-    try { res.json(await syncReviews()); }
+    const started = Date.now();
+    try {
+      const reviews = await syncReviews(started + 35_000);
+      // Desempenho/pesquisas/estado dos perfis (Performance API) com o tempo
+      // que sobrar (prazo total 50 s — maxDuration 60 s). Um erro de
+      // configuração (quota 0, API por ativar) fica no diagnóstico da UI e do
+      // "Testar" — não falha o cron das críticas.
+      let insights: unknown = null, insightsDone = true;
+      if (Date.now() < started + 38_000) {
+        try {
+          const { runGbpInsightsSync } = await import('./insights');
+          const r = await runGbpInsightsSync({ deadlineAt: started + 50_000 });
+          insights = { ok: r.ok, done: r.done, skipped: r.skipped ?? null, busy: !!r.busy, blocked: r.blocked, windows: r.windows, keywordMonths: r.keywordMonths, errors: r.errors, warnings: r.warnings.slice(0, 5), alerts: r.alerts ?? null };
+          insightsDone = r.done || !!r.busy;
+        } catch (error) { insights = { ok: false, error: safeError(error) }; }
+      } else insightsDone = false;
+      res.json({ ...reviews, done: reviews.done && insightsDone, insights });
+    }
     catch (error) { res.status(500).json({ ok: false, error: safeError(error) }); }
   });
   app.post('/api/integrations/google-business/webhook', async (req, res) => {

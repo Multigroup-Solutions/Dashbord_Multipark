@@ -102,6 +102,8 @@ const psUrlSchema = z.object({
   }),
   label: labelField,
   brand: brandField,
+  /** Página-chave: entra nos alertas dos dados reais (CrUX). */
+  keyUrl: z.boolean().default(true),
 });
 export type PagespeedUrlConfig = z.output<typeof psUrlSchema>;
 
@@ -122,13 +124,20 @@ export const webAlertThresholdsSchema = z.object({
   /** Base mínima para não alarmar com números pequenos. */
   minSessions: z.number().int().min(0).max(100_000).default(50),
   minClicks: z.number().int().min(0).max(100_000).default(20),
+  /** Dados reais (CrUX, p75 28 dias) das páginas-chave acima dos limiares Google. */
+  cruxEnabled: z.boolean().default(true),
+  cruxLcpMs: z.number().int().min(500).max(20_000).default(2500),
+  cruxInpMs: z.number().int().min(50).max(5_000).default(200),
+  cruxCls: z.number().min(0.01).max(2).default(0.1),
 });
 export type WebAlertThresholds = z.output<typeof webAlertThresholdsSchema>;
 
-export const DEFAULT_PAGESPEED_URLS: Array<{ url: string; label: string; brand: WebBrand }> = [
-  { url: "https://multipark.pt/", label: "Multipark — página inicial", brand: "multipark" },
-  { url: "https://multipark.app/", label: "Multipark — reservas", brand: "multipark" },
+export const DEFAULT_PAGESPEED_URLS: Array<{ url: string; label: string; brand: WebBrand; keyUrl: boolean }> = [
+  { url: "https://multipark.pt/", label: "Multipark — página inicial", brand: "multipark", keyUrl: true },
+  { url: "https://multipark.app/", label: "Multipark — reservas", brand: "multipark", keyUrl: true },
 ];
+/** Páginas medidas (PageSpeed + CrUX): as de reserva de cada marca cabem com folga. */
+export const PAGESPEED_MAX_URLS = 40;
 export const DEFAULT_FUNNEL_EVENTS = ["view_item", "begin_checkout", "add_payment_info", "purchase"];
 
 export const webAnalyticsConfigSchema = z.object({
@@ -143,7 +152,9 @@ export const webAnalyticsConfigSchema = z.object({
   ga4Properties: z.array(ga4PropertySchema).max(20, "No máximo 20 propriedades GA4.").default([]),
   searchConsoleSites: z.array(scSiteSchema).max(20, "No máximo 20 propriedades da Search Console.").default([]),
   pagespeedEnabled: z.boolean().default(true),
-  pagespeedUrls: z.array(psUrlSchema).max(15, "No máximo 15 páginas na PageSpeed.").default(DEFAULT_PAGESPEED_URLS),
+  pagespeedUrls: z.array(psUrlSchema).max(PAGESPEED_MAX_URLS, `No máximo ${PAGESPEED_MAX_URLS} páginas na PageSpeed.`).default(DEFAULT_PAGESPEED_URLS),
+  /** Chrome UX Report (dados reais) 1×/semana por origem e por página — precisa de chave de API. */
+  cruxEnabled: z.boolean().default(true),
   /** Hora (Lisboa) a partir da qual corre a atualização do dia. */
   refreshHour: z.number().int().min(0).max(23).default(7),
   /** Dias de histórico na primeira recolha (e se aumentar, alarga para trás). */
@@ -551,7 +562,7 @@ export function pctChange(cur: number | null | undefined, prev: number | null | 
 // ─── Alertas ────────────────────────────────────────────────────────────────
 
 export interface WebAlert {
-  code: "sessions_drop" | "clicks_drop" | "pagespeed_low" | "position_drop";
+  code: "sessions_drop" | "clicks_drop" | "pagespeed_low" | "position_drop" | "crux_poor";
   level: "critical" | "warning";
   /** Chave de deduplicação (1 aviso por registo e dia). */
   key: string;
@@ -571,6 +582,8 @@ export interface AlertInputs {
   queries: Array<{ siteId: string; siteLabel: string; query: string; prevClicks: number; curPosition: number | null; prevPosition: number | null }>;
   /** Último dia completo da Search Console. */
   scEnd: string;
+  /** Dados reais (CrUX) mais recentes das páginas-chave. */
+  crux?: Array<{ target: string; label: string; formFactor: string; periodEnd: string; lcpP75: number | null; inpP75: number | null; clsP75: number | null }>;
 }
 
 const fmtPct = (x: number) => `${Math.round(x * 100)}%`;
@@ -643,8 +656,26 @@ export function evaluateWebAlerts(inp: AlertInputs): WebAlert[] {
       items: worse.slice(0, 8).map((q) => `"${q.query}": ${fmtPos(q.prevPosition!)} → ${fmtPos(q.curPosition!)}`),
     });
   }
+  // Dados reais (CrUX): p75 acima dos limiares nas páginas-chave.
+  if (t.cruxEnabled) {
+    for (const c of inp.crux ?? []) {
+      const bad: string[] = [];
+      let critical = false;
+      if (c.lcpP75 != null && c.lcpP75 > t.cruxLcpMs) { bad.push(`LCP ${fmtSec(c.lcpP75)} (máx. ${fmtSec(t.cruxLcpMs)})`); critical ||= c.lcpP75 > PS_THRESHOLDS.lcpMs[1]; }
+      if (c.inpP75 != null && c.inpP75 > t.cruxInpMs) { bad.push(`INP ${c.inpP75} ms (máx. ${t.cruxInpMs} ms)`); critical ||= c.inpP75 > PS_THRESHOLDS.inpMs[1]; }
+      if (c.clsP75 != null && c.clsP75 > t.cruxCls) { bad.push(`CLS ${c.clsP75.toFixed(2).replace(".", ",")} (máx. ${String(t.cruxCls).replace(".", ",")})`); critical ||= c.clsP75 > PS_THRESHOLDS.cls[1]; }
+      if (!bad.length) continue;
+      out.push({
+        code: "crux_poor", level: critical ? "critical" : "warning", key: `crux:${c.target}:${c.formFactor}:${c.periodEnd}`,
+        title: `Experiência real lenta (${c.formFactor === "DESKTOP" ? "computador" : "telemóvel"}): ${c.label}`,
+        detail: `Visitantes reais (Chrome, 28 dias até ${c.periodEnd.slice(8, 10)}/${c.periodEnd.slice(5, 7)}, p75): ${bad.join("; ")}.`,
+      });
+    }
+  }
   return out;
 }
+
+const fmtSec = (ms: number) => `${(ms / 1000).toFixed(1).replace(".", ",")} s`;
 
 // ─── Ligação ao negócio ─────────────────────────────────────────────────────
 
@@ -750,4 +781,198 @@ export function webInsightFallback(f: WebWeekFacts): string {
   if (f.losers[0]) parts.push(`Maior perda: "${f.losers[0].query}" (${f.losers[0].delta} cliques).`);
   if (f.bookings) parts.push(`Reservas no site ${signedPct(f.bookings.siteBookings, f.bookings.prevSiteBookings)}.`);
   return parts.join(" ") || "Sem dados suficientes para comparar as duas últimas semanas.";
+}
+
+// ─── Chrome UX Report (dados reais) ─────────────────────────────────────────
+
+export const CRUX_METRICS = ["lcp", "inp", "cls", "fcp", "ttfb"] as const;
+export type CruxMetric = (typeof CRUX_METRICS)[number];
+export const CRUX_API_NAMES: Record<CruxMetric, string[]> = {
+  lcp: ["largest_contentful_paint"],
+  inp: ["interaction_to_next_paint"],
+  cls: ["cumulative_layout_shift"],
+  fcp: ["first_contentful_paint"],
+  ttfb: ["experimental_time_to_first_byte", "time_to_first_byte"],
+};
+/** Limiares Google [bom até, a melhorar até] (ms; CLS sem unidade). */
+export const CRUX_THRESHOLDS: Record<CruxMetric, [number, number]> = {
+  lcp: [2500, 4000], inp: [200, 500], cls: [0.1, 0.25], fcp: [1800, 3000], ttfb: [800, 1800],
+};
+export const CRUX_FORM_FACTORS = ["PHONE", "DESKTOP"] as const;
+export type CruxFormFactor = (typeof CRUX_FORM_FACTORS)[number];
+/** Uma consulta por alvo × dispositivo por semana (a CrUX atualiza 1×/semana). */
+export const CRUX_INTERVAL_DAYS = 7;
+
+export interface CruxDist { good: number; ni: number; poor: number }
+export interface CruxPeriodRow {
+  periodStart: string;
+  periodEnd: string;
+  p75: Record<CruxMetric, number | null>;
+  dist: Record<CruxMetric, CruxDist | null>;
+}
+
+export function cruxLevel(metric: CruxMetric, v: number | null | undefined): PsLevel | null {
+  if (v == null || !Number.isFinite(v)) return null;
+  const [g, ni] = CRUX_THRESHOLDS[metric];
+  return v <= g ? "good" : v <= ni ? "needs_improvement" : "poor";
+}
+
+const numOrNull = (v: unknown): number | null => {
+  if (v == null || v === "NaN") return null;
+  const x = Number(v);
+  return Number.isFinite(x) ? x : null;
+};
+const cruxDate = (d: any): string | null => {
+  const y = Number(d?.year), m = Number(d?.month), day = Number(d?.day);
+  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(day)) return null;
+  return `${y}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+};
+const roundP75 = (metric: CruxMetric, v: number | null) => (v == null ? null : metric === "cls" ? Math.round(v * 1000) / 1000 : Math.round(v));
+const roundFrac = (v: number) => Math.max(0, Math.min(1, Math.round(v * 10_000) / 10_000));
+
+/**
+ * Resposta do `records:queryHistoryRecord` (até 25 períodos semanais de 28
+ * dias) → uma linha por período. Valores em falta ("NaN") ficam null. Também
+ * aceita a resposta do `records:queryRecord` (um só período). PURA.
+ */
+export function parseCruxHistory(res: any): CruxPeriodRow[] {
+  const rec = res?.record ?? {};
+  const metrics = rec.metrics ?? {};
+  const single = !Array.isArray(rec.collectionPeriods);
+  const periods: any[] = single ? (rec.collectionPeriod ? [rec.collectionPeriod] : []) : rec.collectionPeriods;
+  const rows: CruxPeriodRow[] = periods.map((p) => ({
+    periodStart: cruxDate(p?.firstDate) ?? "",
+    periodEnd: cruxDate(p?.lastDate) ?? "",
+    p75: { lcp: null, inp: null, cls: null, fcp: null, ttfb: null },
+    dist: { lcp: null, inp: null, cls: null, fcp: null, ttfb: null },
+  }));
+  for (const metric of CRUX_METRICS) {
+    const m = CRUX_API_NAMES[metric].map((k) => metrics[k]).find(Boolean);
+    if (!m) continue;
+    const p75s: unknown[] = single ? [m.percentiles?.p75] : Array.isArray(m.percentilesTimeseries?.p75s) ? m.percentilesTimeseries.p75s : [];
+    const bins: any[] = single ? (Array.isArray(m.histogram) ? m.histogram : []) : Array.isArray(m.histogramTimeseries) ? m.histogramTimeseries : [];
+    rows.forEach((row, i) => {
+      row.p75[metric] = roundP75(metric, numOrNull(p75s[i]));
+      if (bins.length >= 3) {
+        const at = (b: any) => numOrNull(single ? b?.density : Array.isArray(b?.densities) ? b.densities[i] : null);
+        const good = at(bins[0]), ni = at(bins[1]), poor = at(bins[2]);
+        row.dist[metric] = good == null && ni == null && poor == null ? null : { good: roundFrac(good ?? 0), ni: roundFrac(ni ?? 0), poor: roundFrac(poor ?? 0) };
+      }
+    });
+  }
+  return rows.filter((r) => r.periodStart && r.periodEnd && CRUX_METRICS.some((k) => r.p75[k] != null));
+}
+
+export interface CruxTarget { type: "origin" | "url"; target: string; label: string; keyUrl: boolean }
+
+/** Alvos CrUX: a origem de cada página (uma vez) e a própria página. PURA. */
+export function cruxTargets(urls: ReadonlyArray<{ url: string; label?: string; keyUrl?: boolean }>): CruxTarget[] {
+  const out: CruxTarget[] = [];
+  const seen = new Set<string>();
+  for (const u of urls) {
+    let origin: string;
+    try { origin = new URL(u.url).origin; } catch { continue; }
+    if (!seen.has(`o:${origin}`)) { seen.add(`o:${origin}`); out.push({ type: "origin", target: origin, label: `${new URL(origin).host} (site todo)`, keyUrl: false }); }
+    if (!seen.has(`u:${u.url}`)) { seen.add(`u:${u.url}`); out.push({ type: "url", target: u.url, label: u.label || u.url, keyUrl: u.keyUrl ?? true }); }
+  }
+  return out;
+}
+
+export const cruxCheckKey = (t: Pick<CruxTarget, "type" | "target">, ff: CruxFormFactor) => `${t.type}:${t.target}:${ff}`;
+
+/** Alvos × dispositivos a consultar hoje (sem consulta nos últimos 7 dias). PURA. */
+export function cruxDue(targets: readonly CruxTarget[], checked: ReadonlyMap<string, string>, today: string): Array<{ target: CruxTarget; formFactor: CruxFormFactor }> {
+  const limit = addDays(today, -CRUX_INTERVAL_DAYS);
+  const out: Array<{ target: CruxTarget; formFactor: CruxFormFactor }> = [];
+  for (const t of targets) for (const ff of CRUX_FORM_FACTORS) {
+    const d = checked.get(cruxCheckKey(t, ff));
+    if (!d || d <= limit) out.push({ target: t, formFactor: ff });
+  }
+  return out;
+}
+
+// ─── Lighthouse: "o que corrigir primeiro" ─────────────────────────────────
+
+export interface LighthouseAudit {
+  id: string;
+  kind: "opportunity" | "diagnostic";
+  title: string;
+  displayValue: string | null;
+  savingsMs: number | null;
+  savingsBytes: number | null;
+  score: number | null;
+}
+
+const LH_SKIP_MODES = new Set(["informative", "notApplicable", "manual", "error"]);
+const cleanTitle = (s: unknown) => String(s ?? "").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/`/g, "").replace(/\s+/g, " ").trim().slice(0, 300);
+
+/**
+ * Oportunidades e diagnósticos do Lighthouse (categoria desempenho) que
+ * falharam, com a poupança estimada: `details.overallSavingsMs/Bytes` (ou
+ * `metricSavings` nas versões novas). As métricas em si (LCP, CLS…) ficam de fora. PURA.
+ */
+export function extractLighthouseAudits(res: any, max = 15): LighthouseAudit[] {
+  const lh = res?.lighthouseResult ?? res;
+  const audits = lh?.audits ?? {};
+  const refs: any[] = Array.isArray(lh?.categories?.performance?.auditRefs) ? lh.categories.performance.auditRefs : Object.keys(audits).map((id) => ({ id }));
+  const out: LighthouseAudit[] = [];
+  for (const ref of refs) {
+    if (ref?.group === "metrics" || ref?.group === "hidden") continue;
+    const a = audits[ref?.id];
+    if (!a || typeof a !== "object") continue;
+    if (LH_SKIP_MODES.has(String(a.scoreDisplayMode ?? ""))) continue;
+    const score = typeof a.score === "number" ? a.score : null;
+    if (score == null || score >= 0.9) continue;
+    const d = a.details ?? {};
+    const ms = numOrNull(d.overallSavingsMs);
+    const metricMs = a.metricSavings && typeof a.metricSavings === "object"
+      ? Math.max(0, ...["LCP", "FCP", "TBT", "INP"].map((k) => numOrNull(a.metricSavings[k]) ?? 0)) : 0;
+    const savingsMs = ms != null && ms > 0 ? Math.round(ms) : metricMs > 0 ? Math.round(metricMs) : null;
+    const bytes = numOrNull(d.overallSavingsBytes);
+    const savingsBytes = bytes != null && bytes > 0 ? Math.round(bytes) : null;
+    const kind: LighthouseAudit["kind"] = d.type === "opportunity" || savingsMs != null || savingsBytes != null ? "opportunity" : "diagnostic";
+    const title = cleanTitle(a.title);
+    if (!title) continue;
+    out.push({ id: String(ref.id).slice(0, 80), kind, title, displayValue: a.displayValue ? cleanTitle(a.displayValue).slice(0, 160) : null, savingsMs, savingsBytes, score: Math.round(score * 100) / 100 });
+  }
+  return rankFixFirst(out).slice(0, max);
+}
+
+/** Ordem "o que corrigir primeiro": oportunidades com mais tempo poupado, depois bytes, depois pior pontuação. PURA. */
+export function rankFixFirst(list: readonly LighthouseAudit[]): LighthouseAudit[] {
+  return [...list].sort((a, b) =>
+    (a.kind === b.kind ? 0 : a.kind === "opportunity" ? -1 : 1)
+    || (b.savingsMs ?? 0) - (a.savingsMs ?? 0)
+    || (b.savingsBytes ?? 0) - (a.savingsBytes ?? 0)
+    || (a.score ?? 1) - (b.score ?? 1)
+    || a.id.localeCompare(b.id));
+}
+
+/** Marca adivinhada pelo domínio da página (redpark.pt → redpark). PURA. */
+export function brandOfUrl(url: string): WebBrand | null {
+  let host = "";
+  try { host = new URL(url).hostname.toLowerCase(); } catch { return null; }
+  const order = [...WEB_BRAND_IDS].sort((a, b) => b.length - a.length);
+  return (order.find((b) => host.includes(b)) as WebBrand | undefined) ?? null;
+}
+
+/**
+ * Colar várias páginas de uma vez (uma por linha; "URL | nome" opcional):
+ * devolve as válidas (sem repetidas nem as que já existem) e as recusadas. PURA.
+ */
+export function parseBulkUrls(text: string, existing: readonly string[] = []): { add: Array<{ url: string; label: string; brand: WebBrand | "" }>; rejected: string[] } {
+  const have = new Set(existing);
+  const add: Array<{ url: string; label: string; brand: WebBrand | "" }> = [];
+  const rejected: string[] = [];
+  for (const raw of String(text ?? "").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const [u, ...rest] = line.split("|");
+    const url = normalizePagespeedUrl(u.trim());
+    if (!url) { rejected.push(line.slice(0, 120)); continue; }
+    if (have.has(url)) continue;
+    have.add(url);
+    add.push({ url, label: rest.join("|").trim().slice(0, 80), brand: brandOfUrl(url) ?? "" });
+  }
+  return { add, rejected };
 }

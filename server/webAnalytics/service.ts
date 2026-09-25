@@ -5,9 +5,9 @@
  * ("Testar" nas Integrações e nas Definições).
  */
 import {
-  DEFAULT_WEB_ANALYTICS_CONFIG, WEB_ANALYTICS_SETTING_KEY, businessJoin, comparisonRange, daysBetweenInclusive, evaluateWebAlerts, parseCursor,
+  DEFAULT_WEB_ANALYTICS_CONFIG, WEB_ANALYTICS_SETTING_KEY, businessJoin, comparisonRange, cruxTargets, daysBetweenInclusive, evaluateWebAlerts, parseCursor,
   scopeByBrand, webFactsText, webInsightFallback,
-  type CompareMode, type WebAlert, type WebAnalyticsConfig, type WebWeekFacts,
+  type AlertInputs, type CompareMode, type WebAlert, type WebAnalyticsConfig, type WebWeekFacts,
 } from "../../shared/webAnalytics";
 import { addDays, daysInRange } from "../../shared/lisbonDay";
 import { adSpendByDay, bookingsByDay, dimCompare, gaDaily, gaDailyByProperty, scDaily, scDailyBySite, sumGa, sumSc } from "./queries";
@@ -125,6 +125,27 @@ export async function buildAlertInputs(cfg: WebAnalyticsConfig, today: string) {
   const scRows = await scDailyBySite(sites.map((s) => s.siteUrl), addDays(scEnd, -13), scEnd);
   const latest = await dbWebStore.latestPagespeed();
   const psLabel = new Map(cfg.pagespeedUrls.map((u) => [u.url, u.label]));
+  // Dados reais (CrUX) das páginas-chave: a própria página ou, sem dados, a origem.
+  let crux: AlertInputs["crux"] = [];
+  if (cfg.cruxEnabled) {
+    try {
+      const { latestCrux } = await import("./queries");
+      const keyTargets = cruxTargets(cfg.pagespeedUrls).filter((t) => t.type === "url" && t.keyUrl);
+      const origins = Array.from(new Set(keyTargets.map((t) => new URL(t.target).origin))).map((o) => ({ type: "origin", target: o }));
+      const recs = await latestCrux([...keyTargets, ...origins]);
+      const seenOrigin = new Set<string>();
+      for (const t of keyTargets) {
+        for (const ff of ["PHONE", "DESKTOP"]) {
+          const own = recs.find((r) => r.targetType === "url" && r.target === t.target && r.formFactor === ff);
+          const origin = new URL(t.target).origin;
+          const rec = own ?? (seenOrigin.has(`${origin}:${ff}`) ? null : recs.find((r) => r.targetType === "origin" && r.target === origin && r.formFactor === ff));
+          if (!rec) continue;
+          if (!own) seenOrigin.add(`${origin}:${ff}`);
+          crux.push({ target: rec.target, label: own ? t.label : `${new URL(origin).host} (site todo)`, formFactor: ff, periodEnd: rec.periodEnd, lcpP75: rec.lcpP75, inpP75: rec.inpP75, clsP75: rec.clsP75 });
+        }
+      }
+    } catch { crux = []; }
+  }
   const queries: Array<{ siteId: string; siteLabel: string; query: string; prevClicks: number; curPosition: number | null; prevPosition: number | null }> = [];
   const curR = { from: addDays(scEnd, -6), to: scEnd };
   const prevR = { from: addDays(scEnd, -13), to: addDays(scEnd, -7) };
@@ -138,6 +159,7 @@ export async function buildAlertInputs(cfg: WebAnalyticsConfig, today: string) {
     sc: sites.map((s) => ({ id: s.siteUrl, label: s.label || s.siteUrl, days: scRows.filter((r) => r.siteUrl === s.siteUrl) })),
     pagespeed: latest.filter((l) => psLabel.has(l.url)).map((l) => ({ ...l, label: psLabel.get(l.url) ?? l.url })),
     queries,
+    crux,
   };
 }
 
@@ -317,4 +339,42 @@ export async function testPagespeed(): Promise<string> {
   const res = parsePagespeed(await psiApi().run(url, "mobile", 45_000));
   const keyNote = String(process.env.GOOGLE_PAGESPEED_API_KEY ?? "").trim() ? "com chave" : "sem chave (quota baixa — recomenda-se GOOGLE_PAGESPEED_API_KEY)";
   return `PageSpeed respondeu ${keyNote}: ${url} — móvel ${res.score ?? "?"}/100.`;
+}
+
+/** "Testar" da Chrome UX Report: dados reais da origem da 1.ª página (telemóvel). */
+export async function testCrux(): Promise<string> {
+  const cfg = await loadWebAnalyticsConfig();
+  const url = cfg.pagespeedUrls[0]?.url;
+  if (!url) throw new Error("Nenhuma página configurada (Definições → Integrações → Web & SEO).");
+  const { cruxApi } = await import("./apis");
+  const api = cruxApi();
+  if (!api) throw new Error("Sem chave: define GOOGLE_PAGESPEED_API_KEY (ou GOOGLE_CRUX_API_KEY) no Vercel e ativa a \"Chrome UX Report API\" no projeto da chave.");
+  const { parseCruxHistory } = await import("../../shared/webAnalytics");
+  const origin = new URL(url).origin;
+  const res = await api.history({ type: "origin", target: origin }, "PHONE", 15_000);
+  if (!res) return `Chrome UX Report respondeu: ${origin} ainda não tem visitas Chrome suficientes para dados reais (normal em sites pequenos).`;
+  const rows = parseCruxHistory(res);
+  const last = rows[rows.length - 1];
+  if (!last) return `Chrome UX Report respondeu (${origin}) mas sem métricas.`;
+  const s = (v: number | null) => (v == null ? "—" : `${(v / 1000).toFixed(1).replace(".", ",")} s`);
+  return `Chrome UX Report OK — ${origin} (telemóvel, 28 dias até ${last.periodEnd}): LCP ${s(last.p75.lcp)}, INP ${last.p75.inp ?? "—"} ms, CLS ${last.p75.cls ?? "—"} (${rows.length} período(s) de histórico).`;
+}
+
+const EXPLAIN_SYSTEM = [
+  "És especialista em desempenho web e explicas a uma equipa de marketing (não técnica) de uma empresa de estacionamento em aeroportos.",
+  "Recebes a lista de problemas do Lighthouse (PageSpeed) de UMA página, já ordenada por impacto, com a poupança estimada.",
+  "Em português de Portugal (PT-PT), explica em 3 a 6 pontos curtos (começa cada um por \"- \") o que corrigir primeiro e porquê, em linguagem simples, e a quem pedir (quem gere o site/programador).",
+  "Usa só os dados dados; não inventes números nem ferramentas; se a lista estiver vazia, diz que não há nada urgente.",
+].join(" ");
+
+/** Explicação IA (lite) das oportunidades mais recentes de uma página; sem IA → null. */
+export async function explainOpportunities(url: string, strategy: "mobile" | "desktop", userId: number): Promise<{ text: string | null; skipped: string | null }> {
+  const { latestAudits } = await import("./queries");
+  const audits = await latestAudits(url, strategy);
+  if (!audits.length) return { text: null, skipped: "empty" };
+  const lines = audits.slice(0, 10).map((a, i) => `${i + 1}. ${a.title}${a.savingsMs ? ` — poupa ~${(a.savingsMs / 1000).toFixed(1)} s` : ""}${a.savingsBytes ? ` — ${Math.round(a.savingsBytes / 1024)} KB` : ""}${a.displayValue ? ` (${a.displayValue})` : ""}`);
+  const { tryAi } = await import("../aiOps/aiCall");
+  const r = await tryAi({ feature: "pagespeed_explain", system: EXPLAIN_SYSTEM, input: `Página (${strategy === "mobile" ? "telemóvel" : "computador"}): ${new URL(url).pathname}\n${lines.join("\n")}`, maxTokens: 450, userId, entity: "pagespeed_explain" });
+  if (!r.ok) return { text: null, skipped: r.skipped };
+  return { text: String(r.output ?? "").trim().slice(0, 2000) || null, skipped: null };
 }

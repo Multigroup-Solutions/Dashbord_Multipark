@@ -71,3 +71,57 @@ export function psiApi(env: Record<string, string | undefined> = process.env): P
     },
   };
 }
+
+// ─── Chrome UX Report (dados reais) ─────────────────────────────────────────
+
+export interface CruxApiLike {
+  /** Histórico (até 25 períodos semanais); null = a CrUX não tem dados suficientes (404). */
+  history(target: { type: "origin" | "url"; target: string }, formFactor: "PHONE" | "DESKTOP", timeoutMs: number): Promise<any | null>;
+}
+
+/** Chave da CrUX: a mesma da PageSpeed ou uma própria. */
+export function cruxApiKey(env: Record<string, string | undefined> = process.env): string {
+  return String(env.GOOGLE_PAGESPEED_API_KEY ?? "").trim() || String(env.GOOGLE_CRUX_API_KEY ?? "").trim();
+}
+
+/** Erro da CrUX → mensagem PT-PT (sem a chave nem o URL do pedido). PURA. */
+export function cruxErrorMessage(status: number, body: any): string {
+  const details: any[] = Array.isArray(body?.error?.details) ? body.error.details : [];
+  const reason = String(details.find((d) => d?.reason)?.reason ?? body?.error?.status ?? "");
+  if (status === 403 && /SERVICE_DISABLED|ACCESS_NOT_CONFIGURED/.test(reason)) return "A Chrome UX Report API não está ativa no projeto da chave (Google Cloud → APIs e serviços → Biblioteca → Chrome UX Report API).";
+  if (status === 400 && /API_KEY_INVALID/.test(reason)) return "Chave de API inválida (GOOGLE_PAGESPEED_API_KEY / GOOGLE_CRUX_API_KEY).";
+  if (status === 403 && /API_KEY_SERVICE_BLOCKED/.test(reason)) return "A chave está restrita a outras APIs — junta a Chrome UX Report API às restrições da chave.";
+  if (status === 429) return "Chrome UX Report: limite de pedidos atingido (volta a tentar amanhã).";
+  return `Chrome UX Report: HTTP ${status}${reason ? ` (${reason.slice(0, 60)})` : ""}.`;
+}
+
+/**
+ * Chrome UX Report API (records:queryHistoryRecord) por `fetch` com prazo —
+ * pedido JSON simples, sem cliente extra no bundle. A chave vai na query
+ * string e NUNCA aparece nas mensagens de erro (só o código/estado).
+ */
+export function cruxApi(env: Record<string, string | undefined> = process.env, fetchImpl?: typeof fetch): CruxApiLike | null {
+  const key = cruxApiKey(env);
+  if (!key) return null;
+  return {
+    async history(t, formFactor, timeoutMs) {
+      const { fetchWithTimeout } = await import("../_core/fetchWithTimeout");
+      const res = await fetchWithTimeout(`https://chromeuxreport.googleapis.com/v1/records:queryHistoryRecord?key=${encodeURIComponent(key)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // Sem lista de métricas: a API devolve todas as que tem (um nome de métrica
+        // desconhecido — ex.: TTFB ainda "experimental_" — daria 400).
+        body: JSON.stringify({ [t.type]: t.target, formFactor }),
+        timeoutMs: Math.max(3_000, Math.min(timeoutMs, 15_000)),
+      }, fetchImpl as any);
+      if (res.status === 404) return null;
+      const body: any = await res.json().catch(() => null);
+      if (!res.ok) {
+        const err: any = new Error(cruxErrorMessage(res.status, body));
+        err.response = { status: res.status };
+        throw err;
+      }
+      return body;
+    },
+  };
+}

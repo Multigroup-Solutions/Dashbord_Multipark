@@ -13,7 +13,7 @@ jobs:
   collect:
     runs-on: ubuntu-latest
     steps:
-      - name: Recolher avaliações e retomar páginas pendentes
+      - name: Recolher avaliações, desempenho dos perfis e retomar o pendente
         env:
           APP_URL: ${{ secrets.APP_URL || 'https://dashbord-multipark.vercel.app' }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}

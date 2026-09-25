@@ -15,12 +15,14 @@
  *   - WhatsApp: GET do número (Graph API);
  *   - Meta Ads: GET /me com o token (Graph API);
  *   - Google Ads: renova o access token + listAccessibleCustomers;
- *   - Google Business: renova o token + lista as contas;
+ *   - Google Business: token → contas → perfis → desempenho → publicações,
+ *     com o diagnóstico de cada falha (quota 0, API por ativar, religar…);
  *   - Zello: gettoken + login;
  *   - LLM: uma chamada de 1 token.
  *   - Google Analytics 4 / Search Console: lê cada propriedade configurada
  *     (pedido mínimo) e diz quais a conta de serviço não consegue ler;
- *   - PageSpeed: uma análise móvel da 1.ª página configurada.
+ *   - PageSpeed: uma análise móvel da 1.ª página configurada;
+ *   - Chrome UX Report: dados reais da origem da 1.ª página (telemóvel).
  * As mensagens de erro passam por `scrubSecrets` antes de sair.
  */
 import { sql } from "drizzle-orm";
@@ -72,8 +74,8 @@ const DEFS: Def[] = [
     links: [{ label: "Gerir ligação, contas e recolha", href: "/integracoes/google-ads" }, { label: "Marketing", href: "/marketing" }] },
   { id: "meta_ads", label: "Meta Ads", description: "Métricas Facebook/Instagram (só leitura).", require: [["META_ACCESS_TOKEN"], ["META_AD_ACCOUNT_IDS"]], provider: "meta", syncProvider: "meta", cron: "meta-ads", testable: true, group: "main",
     links: [{ label: "Gerir contas e recolha", href: "/integracoes/google-ads#meta" }] },
-  { id: "google_business", label: "Google Business Profile", description: "Críticas Google (OAuth).", require: [["GOOGLE_BUSINESS_CLIENT_ID", "GOOGLE_ADS_CLIENT_ID"], ["GOOGLE_BUSINESS_CLIENT_SECRET", "GOOGLE_ADS_CLIENT_SECRET"]], provider: "google_business", cron: "google-business", testable: true, group: "main",
-    links: [{ label: "Ligação e perfis (Críticas)", href: "/criticas#google-business" }] },
+  { id: "google_business", label: "Google Business Profile", description: "Críticas Google e resposta pelo dashboard; desempenho dos perfis (impressões, chamadas, direções, pesquisas), horários e publicações no Marketing → Web & SEO (OAuth business.manage). O Testar verifica cada API (contas, perfis, desempenho, publicações) e diz o que falta (quota 0 → pedir acesso; API por ativar; religar).", require: [["GOOGLE_BUSINESS_CLIENT_ID", "GOOGLE_ADS_CLIENT_ID"], ["GOOGLE_BUSINESS_CLIENT_SECRET", "GOOGLE_ADS_CLIENT_SECRET"]], provider: "google_business", cron: "google-business", testable: true, group: "main",
+    links: [{ label: "Ligação e perfis (Críticas)", href: "/criticas#google-business" }, { label: "Desempenho, horários e publicações", href: "/marketing/web?sec=google-business" }] },
   { id: "whatsapp", label: "WhatsApp (Cloud API)", description: "Envio de mensagens e templates.", require: [["WHATSAPP_TOKEN"], ["WHATSAPP_PHONE_NUMBER_ID"]], provider: "whatsapp", testable: true, group: "main",
     links: [{ label: "WhatsApp", href: "/whatsapp" }] },
   { id: "imap", label: "Email de entrada (IMAP)", description: "Leitura da caixa reservas@ (reclamações, perdidos…).", require: [["IMAP_USER"], ["IMAP_PASS"]], cron: "email-inbound", testable: true, group: "main",
@@ -92,6 +94,8 @@ const DEFS: Def[] = [
     links: [{ label: "Web & SEO (Marketing)", href: "/marketing/web" }, { label: "Propriedades (Definições → Integrações)", href: "/definicoes" }] },
   { id: "pagespeed", label: "PageSpeed Insights", description: "Velocidade das páginas principais (móvel e computador) 1×/semana. Funciona sem chave com quota baixa; GOOGLE_PAGESPEED_API_KEY opcional.", require: [], cron: "web-analytics", testable: true, group: "main",
     links: [{ label: "Web & SEO (Marketing)", href: "/marketing/web" }] },
+  { id: "crux", label: "Chrome UX Report (CrUX)", description: "Dados reais dos visitantes Chrome (p75 de LCP, INP, CLS, FCP e TTFB, 28 dias) por origem e por página, telemóvel e computador, 1×/semana ao lado da PageSpeed. Precisa de chave de API (GOOGLE_PAGESPEED_API_KEY ou GOOGLE_CRUX_API_KEY) com a \"Chrome UX Report API\" ativa.", require: [["GOOGLE_PAGESPEED_API_KEY", "GOOGLE_CRUX_API_KEY"]], cron: "web-analytics", testable: true, group: "main",
+    links: [{ label: "Velocidade (Web & SEO)", href: "/marketing/web?sec=velocidade" }] },
   { id: "google_account", label: "Contas Google dos utilizadores", description: "\"Ligar a minha conta Google\" (OAuth interno do Workspace) para \"O meu email\".", require: [["GOOGLE_WORKSPACE_CLIENT_ID", "GOOGLE_CLIENT_ID"], ["GOOGLE_WORKSPACE_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"]], group: "main",
     links: [{ label: "Perfil", href: "/perfil" }] },
   { id: "smtp", label: "Email de saída (SMTP)", description: "Emails enviados pela aplicação e alertas ao dono.", require: [["SMTP_HOST"], ["SMTP_USER"], ["SMTP_PASS"]], testable: true, group: "main", links: [] },
@@ -124,7 +128,7 @@ export function integrationStatusesFromEnv(env: Env = process.env): IntegrationS
 }
 
 /** Tira de uma mensagem qualquer valor de segredo presente na env. PURA. */
-export function scrubSecrets(message: string, env: Env = process.env): string {
+export function scrubSecrets(message: string, env: Env = process.env, max = 300): string {
   let out = String(message ?? "");
   const secretish = /(KEY|TOKEN|SECRET|PASS|PASSWORD|DATABASE_URL)/;
   for (const [k, v] of Object.entries(env)) {
@@ -133,7 +137,7 @@ export function scrubSecrets(message: string, env: Env = process.env): string {
   }
   // Credenciais em URLs (user:pass@host) e tokens em query strings.
   out = out.replace(/\/\/[^/@\s:]+:[^/@\s]+@/g, "//***:***@").replace(/(access_token=)[^&\s]+/gi, "$1***");
-  return out.slice(0, 300);
+  return out.slice(0, max);
 }
 
 /**
@@ -309,7 +313,9 @@ export async function testIntegration(id: string): Promise<TestResult> {
           const { gmailApiForAccount } = await import("./mail/gmailApi");
           const api = await gmailApiForAccount(keys[0]);
           const p = await api.getProfile();
-          message = `Ligação OK (${p.emailAddress ?? keys[0]}; ${keys.length} conta(s) de origem).`;
+          const oc = workspaceConfig(env);
+          const oauth = oc.clientSource ? ` "Ligar a minha conta Google" usa ${oc.clientSource} (…${oc.clientId.split(".")[0].slice(-8)}); URI de redirecionamento: ${oc.redirectUri}.` : "";
+          message = `Ligação OK (${p.emailAddress ?? keys[0]}; ${keys.length} conta(s) de origem).${oauth}`;
           break;
         }
         case "database": {
@@ -366,10 +372,38 @@ export async function testIntegration(id: string): Promise<TestResult> {
           break;
         }
         case "google_business": {
-          const { accessToken } = await import("./integrations/googleBusiness/oauth");
+          // Passo a passo (token → contas → perfis → desempenho → publicações),
+          // com a causa exata e o que fazer (quota 0, API por ativar, religar…).
+          const { accessToken, connection } = await import("./integrations/googleBusiness/oauth");
           const { BusinessClient } = await import("./integrations/googleBusiness/client");
-          const page = await new BusinessClient(await accessToken()).accounts();
-          message = `Token renovado; ${(page.accounts ?? []).length} conta(s) Google Business acessível(is).`;
+          const { config } = await import("./integrations/googleBusiness/config");
+          const { testGoogleBusiness, projectNumberOfClientId } = await import("./integrations/googleBusiness/diagnostics");
+          const { addDays } = await import("../shared/lisbonDay");
+          const { lisbonToday } = await import("../shared/expensePeriods");
+          const c = config();
+          const conn = await connection();
+          const ctx = { projectNumber: projectNumberOfClientId(c.clientId), accountEmail: conn?.accountEmail ?? null };
+          const day = addDays(lisbonToday(), -7);
+          message = await testGoogleBusiness({
+            connection: async () => conn,
+            accessToken,
+            client: (token) => {
+              const bc = new BusinessClient(token, { context: ctx, timeoutMs: 8_000 });
+              return {
+                accounts: () => bc.accounts(),
+                locations: (account) => bc.locations(account, "", "name,title"),
+                performanceProbe: (location) => bc.performance(location, day, day),
+                postsProbe: (account, location) => bc.listPosts(account, location, 1),
+              };
+            },
+            clientId: c.clientId || null,
+            clientIdSource: env.GOOGLE_BUSINESS_CLIENT_ID?.trim() ? "GOOGLE_BUSINESS_CLIENT_ID" : env.GOOGLE_ADS_CLIENT_ID?.trim() ? "GOOGLE_ADS_CLIENT_ID" : null,
+          });
+          break;
+        }
+        case "crux": {
+          const { testCrux } = await import("./webAnalytics/service");
+          message = await testCrux();
           break;
         }
         case "zello": {
@@ -387,11 +421,12 @@ export async function testIntegration(id: string): Promise<TestResult> {
         default:
           throw new Error("Sem teste.");
       }
-    })(), id === "llm" || id === "pagespeed" ? 50_000 : id === "google_analytics" || id === "search_console" ? 30_000 : 20_000);
+    })(), id === "llm" || id === "pagespeed" ? 50_000 : id === "google_analytics" || id === "search_console" || id === "google_business" ? 30_000 : 20_000);
     return { ok: true, message, ms: Date.now() - started };
   } catch (err: any) {
     const { isAiError, aiErrorCode } = await import("./_core/ai/errors");
     if (isAiError(err)) return { ok: false, message: `${err.userMessage} (${aiErrorCode(err)})`, ms: Date.now() - started };
-    return { ok: false, message: scrubSecrets(String(err?.message ?? err), env) || "Falhou.", ms: Date.now() - started };
+    // Diagnósticos passo a passo (Google Business) são mais longos: até 1200 caracteres.
+    return { ok: false, message: scrubSecrets(String(err?.message ?? err), env, 1200) || "Falhou.", ms: Date.now() - started };
   }
 }
