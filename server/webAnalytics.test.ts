@@ -615,5 +615,7 @@ describe("marketing.web — permissões", () => {
 
   it("a definição genérica também é só do super admin", async () => {
     await expect(caller("admin").settings.values.set({ key: "marketing.webAnalytics", value: { enabled: true } })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller("admin").settings.values.set({ key: "google.drive", value: {} })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller("admin").settings.values.set({ key: "google.contacts", value: {} })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 });
