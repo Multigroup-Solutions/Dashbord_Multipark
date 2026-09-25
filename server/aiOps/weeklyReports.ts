@@ -124,6 +124,8 @@ async function marketing(monday: string): Promise<Pick<WeeklyReportData, "metric
   const r = await buildWeeklyReport(monday);
   const roas = (rev: number, spend: number) => (spend > 0 ? rev / (1 + r.vatRate) / spend : null);
   const cpa = (spend: number, n: number) => (n > 0 ? spend / n : null);
+  // Resumo semanal do Web & SEO (GA4/Search Console), se houver um recente.
+  const web = await import("../webAnalytics/service").then((m) => m.webInsightNote()).catch(() => null);
   return {
     metrics: [
       { label: "Gasto em anúncios", value: r.total.spend, prev: r.total.prevSpend, unit: "eur" },
@@ -135,6 +137,7 @@ async function marketing(monday: string): Promise<Pick<WeeklyReportData, "metric
       ...(r.top[0] ? [`Melhor campanha: ${r.top[0].name} (ROAS s/ IVA ${fmtMetric(r.top[0].roasNet, "x")}).`] : []),
       ...(r.bottom[0] ? [`Pior campanha: ${r.bottom[0].name} (${fmtMetric(r.bottom[0].cost, "eur")}, ROAS s/ IVA ${fmtMetric(r.bottom[0].roasNet, "x")}).`] : []),
       ...(r.alerts.length ? [`${r.alerts.length} alerta(s) de marketing ativo(s).`] : []),
+      ...(web ? [web] : []),
     ],
   };
 }

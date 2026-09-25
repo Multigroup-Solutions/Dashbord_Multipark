@@ -168,6 +168,8 @@ export const NOTIFICATION_KIND_DEFS = [
   // ── Marketing ──
   K({ kind: "marketing_alert", group: "marketing", label: "Alertas de marketing", description: "Gasto ou ROAS fora do normal (só críticos).",
     module: "marketing", action: "view", roles: [], cityScoped: false, personal: false, channels: WITH_EMAIL }),
+  K({ kind: "web_analytics_alert", group: "marketing", label: "Alertas Web & SEO", description: "Quedas de sessões ou de cliques do Google, pesquisas a perder posição e PageSpeed móvel baixa.",
+    module: "marketing", action: "view", roles: [], cityScoped: false, personal: false, channels: WITH_EMAIL, dedupeMinutes: 1440 }),
 
   // ── Sistema ──
   K({ kind: "integration_alert", group: "sistema", label: "Integrações com problemas", description: "Ligação que precisa de ser religada ou está em erro.",

@@ -107,6 +107,8 @@ export const settingsRouter = router({
         if (input.key === "notifications.routing") requireSuperAdmin(ctx.user.role);
         // Calendários partilhados (Google): Definições → Comunicação, só super_admin.
         if (input.key === "google.sharedCalendars") requireSuperAdmin(ctx.user.role);
+        // Web & SEO (GA4/Search Console/PageSpeed): cartão próprio, só super_admin.
+        if (input.key === "marketing.webAnalytics") requireSuperAdmin(ctx.user.role);
         const { setSetting } = await import("./appSettings");
         try {
           const r = await setSetting(input.key, input.value === undefined ? null : input.value, ctx.user.id);

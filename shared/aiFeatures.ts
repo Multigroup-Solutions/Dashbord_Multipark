@@ -35,7 +35,8 @@ export type AiFlag =
   | "AI_EVALUATION_EXPLAIN"
   | "AI_HANDOVER_REPEATS"
   | "AI_TASKS_FROM_TEXT"
-  | "AI_MAIL_DRAFT";
+  | "AI_MAIL_DRAFT"
+  | "AI_WEB_INSIGHT";
 
 export interface AiFeatureDef {
   label: string;
@@ -84,6 +85,8 @@ export const AI_FEATURES = {
   tasks_from_text: { label: "Tarefas a partir de texto", flag: "AI_TASKS_FROM_TEXT", tier: "lite", essential: false },
   // Comunicação (email): rascunho de resposta — vai para o editor, nunca é enviado sozinho.
   mail_reply: { label: "Email: rascunho de resposta", flag: "AI_MAIL_DRAFT", tier: "lite", essential: false },
+  // Marketing → Web & SEO: resumo semanal a partir dos totais (GA4/Search Console/PageSpeed).
+  web_insight: { label: "Web & SEO: resumo semanal", flag: "AI_WEB_INSIGHT", tier: "lite", essential: false },
   healthcheck: { label: "Teste da ligação", flag: null, tier: "lite", essential: true },
 } as const satisfies Record<string, AiFeatureDef>;
 

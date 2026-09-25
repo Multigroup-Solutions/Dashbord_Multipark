@@ -29,6 +29,20 @@ export function registerGoogleAccountRoutes(app: Express) {
     }
   });
 
+  // Web & SEO (GA4, Search Console, PageSpeed): cron do GitHub Actions de
+  // hora a hora. Prazo 50 s (maxDuration 60 s); `done:false` → a corrida
+  // seguinte continua (cursores por propriedade × parte guardados a cada bloco).
+  app.get("/api/cron/web-analytics", async (req: Request, res: Response) => {
+    if (!cronAuthOk(req.headers["authorization"])) { res.status(401).json({ error: "Unauthorized" }); return; }
+    try {
+      const { runWebAnalyticsSync } = await import("../webAnalytics/sync");
+      const r = await runWebAnalyticsSync({ deadlineAt: Date.now() + 50_000 });
+      res.json({ ...r, units: r.units.filter((u) => u.status !== "ok" || u.windows > 0), ranAt: new Date().toISOString() });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: String(err?.message ?? err).slice(0, 300) });
+    }
+  });
+
   app.get(GOOGLE_ACCOUNT_START_PATH, async (req: Request, res: Response) => {
     const { safeReturnPath, requestedFeatures, startGoogleAccountOAuth } = await import("./userAccounts");
     const returnTo = safeReturnPath(req.query.returnTo);

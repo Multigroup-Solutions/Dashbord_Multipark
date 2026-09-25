@@ -159,6 +159,9 @@ function Router() {
       <Route path="/marketing/orcamentos">
         {() => (<DashboardLayout><MarketingPage /></DashboardLayout>)}
       </Route>
+      <Route path="/marketing/web">
+        {() => (<DashboardLayout><MarketingPage /></DashboardLayout>)}
+      </Route>
       <Route path="/operacional">
         {() => (<DashboardLayout><OperationalPage /></DashboardLayout>)}
       </Route>

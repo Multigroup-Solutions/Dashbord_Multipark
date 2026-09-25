@@ -18,6 +18,9 @@
  *   - Google Business: renova o token + lista as contas;
  *   - Zello: gettoken + login;
  *   - LLM: uma chamada de 1 token.
+ *   - Google Analytics 4 / Search Console: lê cada propriedade configurada
+ *     (pedido mínimo) e diz quais a conta de serviço não consegue ler;
+ *   - PageSpeed: uma análise móvel da 1.ª página configurada.
  * As mensagens de erro passam por `scrubSecrets` antes de sair.
  */
 import { sql } from "drizzle-orm";
@@ -83,6 +86,12 @@ const DEFS: Def[] = [
     links: [{ label: "Contactos", href: "/contactos" }, { label: "Contactos Google (Definições → Comunicação)", href: "/definicoes" }] },
   { id: "google_drive", label: "Google Drive / Docs / Sheets", description: "Anexar do Drive e \"Guardar no Drive\" (cada pessoa, só drive.file), documentos gerados a partir de modelos Google Docs, \"Exportar para Sheets\", importação de folhas e Shared Drive \"Multipark\" da empresa (delegação: pastas por registo, espelho de documentos, relatórios ao vivo).", require: [["GOOGLE_WORKSPACE_CLIENT_ID", "GOOGLE_CLIENT_ID"], ["GOOGLE_WORKSPACE_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"]], cron: "google-sync", testable: true, group: "main",
     links: [{ label: "Perfil → Google", href: "/perfil" }, { label: "Google Drive (Definições → Comunicação)", href: "/definicoes" }] },
+  { id: "google_analytics", label: "Google Analytics 4", description: "Tráfego dos sites por dia (sessões, canais, páginas de entrada, dispositivos, funil) no Marketing → Web & SEO. A conta de serviço é adicionada como Leitor em cada propriedade GA4 (sem delegação).", require: [["GOOGLE_WORKSPACE_SERVICE_ACCOUNT_JSON", "GOOGLE_SERVICE_ACCOUNT_JSON"]], cron: "web-analytics", testable: true, group: "main",
+    links: [{ label: "Web & SEO (Marketing)", href: "/marketing/web" }, { label: "Propriedades (Definições → Integrações)", href: "/definicoes" }] },
+  { id: "search_console", label: "Search Console", description: "Cliques, impressões, posição, pesquisas e páginas do Google orgânico no Marketing → Web & SEO. A conta de serviço é adicionada como utilizador em cada propriedade.", require: [["GOOGLE_WORKSPACE_SERVICE_ACCOUNT_JSON", "GOOGLE_SERVICE_ACCOUNT_JSON"]], cron: "web-analytics", testable: true, group: "main",
+    links: [{ label: "Web & SEO (Marketing)", href: "/marketing/web" }, { label: "Propriedades (Definições → Integrações)", href: "/definicoes" }] },
+  { id: "pagespeed", label: "PageSpeed Insights", description: "Velocidade das páginas principais (móvel e computador) 1×/semana. Funciona sem chave com quota baixa; GOOGLE_PAGESPEED_API_KEY opcional.", require: [], cron: "web-analytics", testable: true, group: "main",
+    links: [{ label: "Web & SEO (Marketing)", href: "/marketing/web" }] },
   { id: "google_account", label: "Contas Google dos utilizadores", description: "\"Ligar a minha conta Google\" (OAuth interno do Workspace) para \"O meu email\".", require: [["GOOGLE_WORKSPACE_CLIENT_ID", "GOOGLE_CLIENT_ID"], ["GOOGLE_WORKSPACE_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"]], group: "main",
     links: [{ label: "Perfil", href: "/perfil" }] },
   { id: "smtp", label: "Email de saída (SMTP)", description: "Emails enviados pela aplicação e alertas ao dono.", require: [["SMTP_HOST"], ["SMTP_USER"], ["SMTP_PASS"]], testable: true, group: "main", links: [] },
@@ -276,6 +285,18 @@ export async function testIntegration(id: string): Promise<TestResult> {
           message = await testGoogleDrive();
           break;
         }
+        case "google_analytics":
+        case "search_console": {
+          const { accessCheckMessage, checkWebAccess } = await import("./webAnalytics/service");
+          const kind = id === "google_analytics" ? "ga" : "sc";
+          message = accessCheckMessage(kind, await checkWebAccess(kind === "ga" ? { ga: true } : { sc: true }));
+          break;
+        }
+        case "pagespeed": {
+          const { testPagespeed } = await import("./webAnalytics/service");
+          message = await testPagespeed();
+          break;
+        }
         case "gmail": {
           const { listMailboxes } = await import("./mail/store");
           const { sourceAccountKey } = await import("../shared/mail");
@@ -366,7 +387,7 @@ export async function testIntegration(id: string): Promise<TestResult> {
         default:
           throw new Error("Sem teste.");
       }
-    })(), id === "llm" ? 50_000 : 20_000);
+    })(), id === "llm" || id === "pagespeed" ? 50_000 : id === "google_analytics" || id === "search_console" ? 30_000 : 20_000);
     return { ok: true, message, ms: Date.now() - started };
   } catch (err: any) {
     const { isAiError, aiErrorCode } = await import("./_core/ai/errors");

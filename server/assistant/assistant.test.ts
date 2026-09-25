@@ -276,7 +276,7 @@ describe("ajuda: escolha do ficheiro", () => {
   it("tem um ficheiro por módulo pedido", () => {
     expect(docs.map((d) => d.file).sort()).toEqual([
       "comunicacao.md", "contactos.md", "definicoes.md", "despesas.md", "disponibilidade.md", "drive.md", "extras-dia.md", "faturacao.md", "formacao.md", "marketing.md",
-      "ocorrencias.md", "passagem-turno.md", "perdidos.md", "permissoes.md", "reclamacoes.md", "rh-ponto.md", "tarefas.md", "whatsapp.md",
+      "ocorrencias.md", "passagem-turno.md", "perdidos.md", "permissoes.md", "reclamacoes.md", "rh-ponto.md", "tarefas.md", "web-analytics.md", "whatsapp.md",
     ]);
   });
 
@@ -284,6 +284,7 @@ describe("ajuda: escolha do ficheiro", () => {
     ["Como pico o ponto?", "rh-ponto.md"],
     ["Como ponho os clientes do serviço no meu telemóvel para saber quem liga?", "contactos.md"],
     ["Como exporto a faturação para o Google Sheets?", "drive.md"],
+    ["Como adiciono a conta de serviço ao Google Analytics e à Search Console?", "web-analytics.md"],
     ["Como gero um contrato a partir de um modelo do Google Docs?", "drive.md"],
     ["Como marco a minha disponibilidade para a semana?", "disponibilidade.md"],
     ["O que é a janela de 24h no WhatsApp?", "whatsapp.md"],

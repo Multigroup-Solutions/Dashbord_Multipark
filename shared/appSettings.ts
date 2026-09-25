@@ -17,6 +17,7 @@ import { DEFAULT_BRAND_DOMAINS, MAIL_BRAND_IDS, MAIL_DEFAULT_BACKFILL_DAYS, MAIL
 import { DEFAULT_SHARED_CALENDARS_CONFIG, sharedCalendarsConfigSchema } from "./googleSync";
 import { DEFAULT_CONTACTS_CONFIG, contactsConfigSchema } from "./contacts";
 import { DEFAULT_DRIVE_CONFIG, driveConfigSchema } from "./drive";
+import { DEFAULT_WEB_ANALYTICS_CONFIG, WEB_ANALYTICS_SETTING_KEY, webAnalyticsConfigSchema } from "./webAnalytics";
 
 // ─── Taxas com data de efeito (IVA / TSU) ───────────────────────────────────
 
@@ -79,7 +80,7 @@ export const aiFeatureTiersSchema = z.record(
   z.enum(AI_TIERS as unknown as ["lite", "fast", "smart"], { error: "Nível inválido (lite, fast ou smart)." }),
 );
 
-export type SettingGroup = "financeiro" | "sla" | "emails" | "disponibilidade" | "ia" | "extras" | "notificacoes";
+export type SettingGroup = "financeiro" | "sla" | "emails" | "disponibilidade" | "ia" | "extras" | "notificacoes" | "marketing";
 
 // ─── Extras-dia (escala automática) ─────────────────────────────────────────
 
@@ -374,6 +375,15 @@ export const SETTINGS = {
     defaultValue: DEFAULT_DRIVE_CONFIG,
     wiring: "live",
   }),
+  [WEB_ANALYTICS_SETTING_KEY]: def({
+    key: WEB_ANALYTICS_SETTING_KEY,
+    group: "marketing",
+    label: "Web & SEO (Google Analytics 4, Search Console, PageSpeed)",
+    description: "Propriedades GA4 e da Search Console (por marca) lidas pela conta de serviço, páginas medidas na PageSpeed, hora da recolha diária, eventos do funil e limiares dos alertas. Editável em Definições → Integrações (só super admin).",
+    schema: webAnalyticsConfigSchema,
+    defaultValue: DEFAULT_WEB_ANALYTICS_CONFIG,
+    wiring: "live",
+  }),
   [NOTIFICATION_ROUTING_SETTING_KEY]: def({
     key: NOTIFICATION_ROUTING_SETTING_KEY,
     group: "notificacoes",
@@ -458,6 +468,7 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "AI_EVALUATION_EXPLAIN", label: "IA: explicação da avaliação", description: "Explica em PT-PT a pontuação a partir das linhas das regras (nunca recalcula).", group: "ia" },
   { name: "AI_HANDOVER_REPEATS", label: "IA: pendentes repetidos da passagem de turno", description: "Redige os pendentes que se repetem entre turnos e o resumo semanal por cidade.", group: "ia" },
   { name: "AI_MAIL_DRAFT", label: "IA: rascunho de resposta a emails", description: "Botão \"Rascunho IA\" na Comunicação: prepara uma resposta ao cliente (vai para o editor; nunca é enviada sozinha).", group: "ia" },
+  { name: "AI_WEB_INSIGHT", label: "IA: resumo semanal Web & SEO", description: "Marketing → Web & SEO: um parágrafo por semana sobre o que mudou no tráfego, na pesquisa Google e na velocidade (só a partir dos totais; sem dados pessoais).", group: "ia" },
   { name: "AI_TASKS_FROM_TEXT", label: "IA: tarefas a partir de texto", description: "Propõe tarefas a partir de notas coladas; nada é criado sem confirmação.", group: "ia" },
 ];
 
@@ -501,6 +512,7 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "email-inbound", label: "Emails recebidos (IMAP)", intervalMinutes: 60, workflow: "multipark-cron.yml" },
   { name: "mail-sync", label: "Comunicação: sincronização do Gmail", intervalMinutes: 5, workflow: "mail-sync.yml" },
   { name: "google-sync", label: "Google Tarefas, Calendário e Contactos", intervalMinutes: 10, workflow: "google-sync.yml" },
+  { name: "web-analytics", label: "Web & SEO (GA4, Search Console, PageSpeed)", intervalMinutes: 60, workflow: "web-analytics.yml" },
   { name: "multipark-future", label: "Sincronização de reservas (futuras)", intervalMinutes: 120, workflow: "multipark-cron.yml" },
   { name: "daily-ops", label: "Manutenção diária + recolha GPS", intervalMinutes: 1440, workflow: "multipark-cron.yml" },
   { name: "evaluation-recompute", label: "Avaliação (recálculo das 4 semanas)", intervalMinutes: 1440, workflow: "multipark-cron.yml" },

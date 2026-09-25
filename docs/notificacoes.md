@@ -78,6 +78,7 @@ O Super Admin entra sempre; o Admin entra sozinho quando a matriz lhe dá o mód
 | Tipo | Chave | Módulo (ação) | Âmbito | Quem recebe | Email | Obrigatória | Quando |
 |---|---|---|---|---|---|---|---|
 | Alertas de marketing | `marketing_alert` | Marketing (view) | nacional | Super Admin | sim (desligado) | não | Deteção diária de anomalias no gasto/ROAS do marketing (só críticas). |
+| Alertas Web & SEO | `web_analytics_alert` | Marketing (view) | nacional | Super Admin | sim (desligado) | não | Recolha diária Web & SEO (/api/cron/web-analytics): sessões de ontem abaixo da média de 7 dias, cliques orgânicos da semana a cair, pesquisas do top a perder posição, PageSpeed móvel abaixo do mínimo (limiares em Definições → Integrações → Web & SEO; 1× por propriedade e dia). |
 
 ### Sistema
 
