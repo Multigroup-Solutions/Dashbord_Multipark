@@ -9,7 +9,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { AvailabilitySection, CandidaturasSection } from "@/pages/ExtrasDiaPage";
 import { RecruitmentSection } from "@/components/RecruitmentSection";
 import { ExtrasMetricsSection } from "@/components/ExtrasMetricsSection";
-import { Mail, BarChart3, Users, ChevronDown, ChevronRight } from "lucide-react";
+import { Mail, BarChart3, Users, ChevronDown, ChevronRight, CalendarDays } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 // Campos de cada dia partilhados com o diálogo do backoffice (ExtrasDiaPage →
 // AvailabilitySection): o extra e o backoffice marcam exatamente as mesmas coisas.
@@ -149,6 +149,11 @@ function MyAvailability() {
 
   const [days, setDays] = useState<DayState[]>([]);
   const [savedOnce, setSavedOnce] = useState(false);
+  // Google Calendar (só leitura, livre/ocupado): ajuda a preencher — nada é marcado sozinho.
+  const busy = trpc.googleAccount.sync.busy.useQuery(
+    { fromDay: myWeek.data?.weekStart ?? weekStart, toDay: myWeek.data?.weekEnd ?? weekStart },
+    { enabled: !!myWeek.data?.weekStart && !!myWeek.data?.weekEnd, retry: false, staleTime: 5 * 60_000 },
+  );
 
   useEffect(() => {
     if (myWeek.data) setDays(myWeek.data.days);
@@ -202,6 +207,14 @@ function MyAvailability() {
             Semana de {myWeek.data?.weekStart} a {myWeek.data?.weekEnd}. Marca os dias e turnos
             em que podes trabalhar. Podes também indicar horas específicas.
           </CardDescription>
+          {busy.data?.enabled && (
+            <p className="text-[11.5px] text-muted-foreground">Mostramos as horas ocupadas no teu Google Calendar para te ajudar — a disponibilidade é sempre marcada por ti.</p>
+          )}
+          {busy.data?.reason === "scope_missing" && (
+            <p className="text-[11.5px] text-muted-foreground">
+              Queres ver aqui as horas ocupadas no teu Google Calendar? <a className="text-primary underline" href={`/api/google-account/oauth/start?features=calendar&returnTo=${encodeURIComponent("/disponibilidade")}`}>Ativar Calendário</a>
+            </p>
+          )}
         </CardHeader>
       </Card>
 
@@ -216,6 +229,12 @@ function MyAvailability() {
                   {savedOnce && active && <CheckCircle2 className="h-4 w-4 text-green-500" />}
                 </div>
                 <AvailabilityDayFields day={d} onChange={(p) => patch(idx, p)} />
+                {busy.data?.enabled && (busy.data.days[d.day]?.length ?? 0) > 0 && (
+                  <p className="text-[11.5px] text-muted-foreground flex items-start gap-1">
+                    <CalendarDays className="h-3.5 w-3.5 mt-0.5 shrink-0 text-primary" />
+                    <span>Ocupado no teu Google Calendar: {busy.data.days[d.day].map((b) => `${b.start}–${b.end}`).join(", ")}</span>
+                  </p>
+                )}
               </CardContent>
             </Card>
           );

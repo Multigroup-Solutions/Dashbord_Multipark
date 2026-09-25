@@ -174,7 +174,7 @@ export const NOTIFICATION_KIND_DEFS = [
     module: "integracoes", action: "view", roles: [], cityScoped: false, personal: false, channels: WITH_EMAIL, emailDefault: true }),
   K({ kind: "cron_stale", group: "sistema", label: "Crons parados", description: "Tarefas automáticas que deixaram de correr.",
     module: "definicoes", action: "view", roles: [], cityScoped: false, personal: false, channels: WITH_EMAIL, emailDefault: true }),
-  K({ kind: "google_account_reauth", group: "sistema", label: "A tua conta Google", description: "A ligação à tua conta Google (O meu email) expirou ou foi revogada e tem de ser religada.",
+  K({ kind: "google_account_reauth", group: "sistema", label: "A tua conta Google", description: "A ligação à tua conta Google (O meu email, Tarefas e Calendário) expirou ou foi revogada e tem de ser religada.",
     module: "ficha", action: "view", roles: [], cityScoped: false, personal: true, channels: WITH_EMAIL, emailDefault: true }),
   K({ kind: "sync_alert", group: "sistema", label: "Sincronização Multipark", description: "Webhooks parados/retomados e reservas por sincronizar.",
     module: "sincronizacao", action: "view", roles: [], cityScoped: false, personal: false, channels: IN_APP }),

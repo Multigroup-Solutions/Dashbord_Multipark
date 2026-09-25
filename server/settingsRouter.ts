@@ -105,6 +105,8 @@ export const settingsRouter = router({
       .mutation(async ({ ctx, input }) => {
         // As regras das notificações são do super_admin (Definições → Notificações).
         if (input.key === "notifications.routing") requireSuperAdmin(ctx.user.role);
+        // Calendários partilhados (Google): Definições → Comunicação, só super_admin.
+        if (input.key === "google.sharedCalendars") requireSuperAdmin(ctx.user.role);
         const { setSetting } = await import("./appSettings");
         try {
           const r = await setSetting(input.key, input.value === undefined ? null : input.value, ctx.user.id);

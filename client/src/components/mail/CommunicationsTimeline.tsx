@@ -1,10 +1,11 @@
 // "Comunicações" de um registo (cliente, reserva, reclamação, perdido,
 // ocorrência): emails ligados (automática ou manualmente) + WhatsApp do
-// mesmo cliente/reserva, por ordem cronológica.
+// mesmo cliente/reserva + reuniões (Google Meet) criadas no registo, por
+// ordem cronológica.
 import { useState } from "react";
 import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
-import { Loader2, Mail, MessageCircle, ArrowDownLeft, ArrowUpRight } from "lucide-react";
+import { Loader2, Mail, MessageCircle, ArrowDownLeft, ArrowUpRight, Video } from "lucide-react";
 import type { MailLinkType } from "@shared/mail";
 import { fullTime } from "./mailUi";
 
@@ -19,7 +20,7 @@ export function CommunicationsTimeline({ type, id, title = "Comunicações", com
     <div className="space-y-2">
       {!compact && <div className="text-sm font-semibold flex items-center gap-1.5"><Mail className="h-4 w-4 text-primary" />{title} {q.data ? `(${items.length})` : ""}</div>}
       {q.isLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-      {!q.isLoading && items.length === 0 && <p className="text-xs text-muted-foreground">Sem emails nem mensagens ligadas.</p>}
+      {!q.isLoading && items.length === 0 && <p className="text-xs text-muted-foreground">Sem emails, mensagens nem reuniões ligadas.</p>}
       <div className="space-y-1.5">
         {items.map((it) => {
           const open = expanded === it.id;
@@ -27,7 +28,7 @@ export function CommunicationsTimeline({ type, id, title = "Comunicações", com
             <div key={it.id} className={`rounded-lg border bg-card px-3 py-2 ${it.direction === "out" ? "border-primary/25" : ""}`}>
               <button type="button" className="w-full text-left" onClick={() => setExpanded(open ? null : it.id)}>
                 <div className="flex items-center gap-1.5 text-xs">
-                  {it.kind === "whatsapp" ? <MessageCircle className="h-3.5 w-3.5 text-green-600 shrink-0" /> : <Mail className="h-3.5 w-3.5 text-primary shrink-0" />}
+                  {it.kind === "whatsapp" ? <MessageCircle className="h-3.5 w-3.5 text-green-600 shrink-0" /> : it.kind === "meeting" ? <Video className="h-3.5 w-3.5 text-primary shrink-0" /> : <Mail className="h-3.5 w-3.5 text-primary shrink-0" />}
                   {it.direction === "out" ? <ArrowUpRight className="h-3 w-3 text-muted-foreground shrink-0" /> : <ArrowDownLeft className="h-3 w-3 text-muted-foreground shrink-0" />}
                   <span className="font-semibold truncate">{it.who}</span>
                   <span className="text-muted-foreground truncate">· {it.source}</span>
@@ -36,7 +37,8 @@ export function CommunicationsTimeline({ type, id, title = "Comunicações", com
                 {it.subject && <div className="text-[12.5px] font-medium truncate mt-0.5">{it.subject}</div>}
                 <div className={`text-xs text-muted-foreground whitespace-pre-wrap break-words ${open ? "" : "line-clamp-2"}`}>{it.text}</div>
               </button>
-              {open && it.link && <Link href={it.link} className="text-xs text-primary underline">Abrir {it.kind === "whatsapp" ? "no WhatsApp" : "na Comunicação"}</Link>}
+              {open && it.link && it.kind === "meeting" && <a href={it.link} target="_blank" rel="noreferrer" className="text-xs text-primary underline">Entrar no Google Meet</a>}
+              {open && it.link && it.kind !== "meeting" && <Link href={it.link} className="text-xs text-primary underline">Abrir {it.kind === "whatsapp" ? "no WhatsApp" : "na Comunicação"}</Link>}
             </div>
           );
         })}

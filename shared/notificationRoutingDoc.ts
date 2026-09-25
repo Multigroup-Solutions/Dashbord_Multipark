@@ -13,7 +13,7 @@ export const KIND_SOURCES: Record<string, string> = {
   complaint_triage: "Triagem da IA com prioridade alta/urgente por aplicar ou possível duplicado.",
   mail_new: "Sincronização do Gmail (5 em 5 min): conversa nova ou reaberta numa caixa partilhada com aviso ligado, que não criou reclamação/perdido/crítica/ocorrência — só a quem vê essa caixa (módulo, papéis e cidade da caixa).",
   mail_assigned: "Alguém te atribui uma conversa de email (Comunicação).",
-  google_account_reauth: "A autorização da tua conta Google (O meu email) expirou ou foi revogada — 1× por mudança de estado.",
+  google_account_reauth: "A autorização da tua conta Google (O meu email, Tarefas e Calendário) expirou ou foi revogada — 1× por mudança de estado.",
   incident_critical: "Ocorrência criada com gravidade crítica.",
   incident_sla: "Cron horário: ocorrências fora do prazo (1×/dia, resumo por cidade).",
   lost_found_new: "Perdido registado.",

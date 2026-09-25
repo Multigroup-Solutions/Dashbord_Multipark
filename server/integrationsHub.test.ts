@@ -102,7 +102,7 @@ describe("hub: cartões por fornecedor", () => {
   it("um cartão principal por fornecedor, sem Google Maps, com testes baratos", () => {
     const list = integrationStatusesFromEnv({});
     const main = list.filter((i) => i.group === "main").map((i) => i.id);
-    expect(main).toEqual(["google_ads", "meta_ads", "google_business", "whatsapp", "imap", "gmail", "google_account", "smtp", "zello", "llm", "multipark", "storage"]);
+    expect(main).toEqual(["google_ads", "meta_ads", "google_business", "whatsapp", "imap", "gmail", "google_sync", "google_account", "smtp", "zello", "llm", "multipark", "storage"]);
     expect(list.some((i) => i.id === "google_maps")).toBe(false);
     for (const id of ["google_ads", "google_business", "zello", "llm"]) expect(list.find((i) => i.id === id)?.testable).toBe(true);
     expect(list.find((i) => i.id === "multipark")?.testable).toBe(false);

@@ -71,6 +71,14 @@ async function teamEmployeeIds(user: { id: number; role: string }): Promise<Set<
 }
 const nowMysql = () => new Date().toISOString().slice(0, 19).replace("T", " ");
 
+/**
+ * Google Tasks: depois de uma alteração, sincroniza já as pessoas afetadas
+ * (best-effort, sem atrasar a resposta; o cron de 10 min apanha o resto).
+ */
+function googleSyncAfter(taskIds: number[]): void {
+  import("./google/syncService").then((m) => m.scheduleGoogleTaskSync({ taskIds })).catch(() => undefined);
+}
+
 async function myEmployeeId(userId: number): Promise<number | null> {
   const me = await getEmployeeByUserId(userId);
   return me?.employee?.id ?? null;
@@ -191,6 +199,7 @@ export const tasksRouter = router({
       const ids = input.assigneeIds ?? (input.assigneeId ? [input.assigneeId] : []);
       if (ids.length) await setTaskAssignees(newId, ids);
       await logActivity({ userId: ctx.user.id, action: "create", entity: "task", entityId: newId, details: input.title });
+      googleSyncAfter([newId]);
       return { id: newId };
     }),
   /**
@@ -249,6 +258,7 @@ export const tasksRouter = router({
         await logActivity({ userId: ctx.user.id, action: "create", entity: "task", entityId: id, details: `${t.title} (a partir de texto)` });
         ids.push(id);
       }
+      googleSyncAfter(ids);
       return { created: ids.length, ids };
     }),
   update: protectedProcedure
@@ -287,6 +297,7 @@ export const tasksRouter = router({
       await updateTask(id, data);
       if (assigneeIds !== undefined) await setTaskAssignees(id, assigneeIds);
       await logActivity({ userId: ctx.user.id, action: "update", entity: "task", entityId: id, details: input.status ?? "" });
+      googleSyncAfter([id]);
       return { success: true };
     }),
   /** Mudar só o estado: editores ou qualquer responsável na sua própria tarefa. */
@@ -301,6 +312,7 @@ export const tasksRouter = router({
       if (input.status === "done") data.completedById = ctx.user.id;
       await updateTask(input.id, data);
       await logActivity({ userId: ctx.user.id, action: "status", entity: "task", entityId: input.id, details: input.status });
+      googleSyncAfter([input.id]);
       return { success: true };
     }),
   delete: protectedProcedure
@@ -313,6 +325,7 @@ export const tasksRouter = router({
       await assertTeamAssignees(ctx.user, [prev.assigneeId, ...(await getTaskAssignees(input.id)).map((a: any) => a.assignee?.employeeId)]);
       await deleteTaskCascade(input.id);
       await logActivity({ userId: ctx.user.id, action: "delete", entity: "task", entityId: input.id });
+      googleSyncAfter([input.id]);
       return { success: true };
     }),
   /** "Verificar agora": o mesmo passo que o cron horário corre. */

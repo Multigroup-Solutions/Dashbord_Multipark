@@ -70,6 +70,7 @@ import { metaAdsRouter } from "./integrations/meta/router";
 import { googleBusinessRouter } from "./integrations/googleBusiness/router";
 import { integrationsHubRouter } from "./integrations/hubRouter";
 import { mailRouter, googleAccountRouter } from "./mail/router";
+import { googleCalendarRouter } from "./google/router";
 import { getBookingHistory, getBookingsReport, getBookingTryAllParks } from "./multipark";
 import { deliveryErrorCode } from "./bookingDeliveryQueue";
 import {
@@ -1517,6 +1518,7 @@ export const appRouter = router({
   tasks: tasksRouter,
   mail: mailRouter,
   googleAccount: googleAccountRouter,
+  googleCalendar: googleCalendarRouter,
   assistant: assistantRouter,
   settings: settingsRouter,
 

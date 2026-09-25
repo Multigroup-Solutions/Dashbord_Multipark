@@ -108,15 +108,15 @@ export function taskUpdateSideEffects(
 
 // ─── Origem (link para o registo) ───────────────────────────────────────────
 
-export const TASK_SOURCE_MODULES = ["manual", "availability", "complaint", "incident", "lost_found", "template"] as const;
+export const TASK_SOURCE_MODULES = ["manual", "availability", "complaint", "incident", "lost_found", "template", "google_tasks"] as const;
 export type TaskSourceModule = (typeof TASK_SOURCE_MODULES)[number];
 export const TASK_SOURCE_LABELS: Record<TaskSourceModule, string> = {
-  manual: "Manual", availability: "Disponibilidade", complaint: "Reclamação", incident: "Ocorrência", lost_found: "Perdidos e achados", template: "Checklist",
+  manual: "Manual", availability: "Disponibilidade", complaint: "Reclamação", incident: "Ocorrência", lost_found: "Perdidos e achados", template: "Checklist", google_tasks: "Google Tarefas",
 };
 
 /** Link da origem (null quando não há página própria). */
 export function taskSourceLink(module: string | null | undefined, id: number | null | undefined, key?: string | null): string | null {
-  if (!module || module === "manual" || module === "template") return null;
+  if (!module || module === "manual" || module === "template" || module === "google_tasks") return null;
   switch (module) {
     case "availability": {
       const week = key?.split(":")[2];

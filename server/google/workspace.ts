@@ -38,7 +38,7 @@ export interface WorkspaceConfig {
   adminSubject: string | null;
 }
 
-function appOrigin(env: Env): string {
+export function appOrigin(env: Env = process.env): string {
   return (clean(env.APP_URL) || clean(env.PUBLIC_APP_URL) || "https://dashboard.multipark.pt").replace(/\/+$/, "");
 }
 
@@ -141,6 +141,29 @@ export function httpStatusOf(err: unknown): number | null {
   const e = err as any;
   const s = Number(e?.response?.status ?? e?.status ?? (typeof e?.code === "number" ? e.code : NaN));
   return Number.isFinite(s) ? s : null;
+}
+
+/**
+ * Tipo de falha de uma chamada às APIs Tasks/Calendar de uma pessoa. PURA.
+ *  - reauth_required: autorização revogada/expirada (a pessoa é avisada);
+ *  - scope_missing: a conta não autorizou este acesso (Perfil → Ativar);
+ *  - rate_limited: limite de pedidos (repete na próxima corrida);
+ *  - error: o resto (ex.: API desligada no Google Cloud) — conta como falha.
+ */
+export function calendarAndTasksErrorKind(err: unknown): "reauth_required" | "scope_missing" | "rate_limited" | "error" {
+  const e = err as any;
+  if (e?.rateLimited) return "rate_limited";
+  if (isAuthRevokedError(err)) return "reauth_required";
+  const msg = String(e?.message ?? "");
+  if (/não autorizou este acesso/i.test(msg)) return "scope_missing";
+  if (/expirou|não ligada|volta a ligar/i.test(msg)) return "reauth_required";
+  const status = httpStatusOf(err);
+  if (status === 401) return "reauth_required";
+  let data = "";
+  try { data = JSON.stringify(e?.response?.data ?? ""); } catch { data = ""; }
+  if (status === 403 && /insufficientPermissions|ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficient authentication scopes/i.test(`${data} ${msg}`)) return "scope_missing";
+  if (status === 429) return "rate_limited";
+  return "error";
 }
 
 /** Mensagem curta para a UI/registos — sem tokens. PURA. */

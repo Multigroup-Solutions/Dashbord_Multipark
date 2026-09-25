@@ -2931,3 +2931,99 @@ export const mailLinks = mysqlTable("mail_links", {
 	uniqueIndex("uq_mail_links_thread_entity").on(table.threadId, table.entityType, table.entityId),
 	index("idx_mail_links_entity").on(table.entityType, table.entityId),
 ]);
+
+// ─── Google Tarefas & Calendário — migração 0150 ────────────────────────────
+// Estado da sincronização por utilizador (preferências, lista/calendário
+// "Multipark", cursores, bloqueio, "sujo" = sincronizar já).
+export const googleSyncState = mysqlTable("google_sync_state", {
+	userId: int().primaryKey(),
+	prefsJson: text(),
+	tasksListId: varchar({ length: 255 }),
+	tasksUpdatedMin: varchar({ length: 40 }),
+	calendarId: varchar({ length: 255 }),
+	calendarSyncToken: varchar({ length: 512 }),
+	lastTasksSyncAt: timestamp({ mode: 'string' }),
+	lastCalendarSyncAt: timestamp({ mode: 'string' }),
+	lastRunAt: timestamp({ mode: 'string' }),
+	lastStatus: varchar({ length: 24 }),
+	lastError: varchar({ length: 500 }),
+	lastWarning: varchar({ length: 500 }),
+	lockAt: timestamp({ mode: 'string' }),
+	dirtyAt: timestamp({ mode: 'string' }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	index("idx_google_sync_state_run").on(table.dirtyAt, table.lastRunAt),
+]);
+
+// Tarefa do dashboard ↔ tarefa do Google Tasks (por pessoa).
+export const googleTaskLinks = mysqlTable("google_task_links", {
+	id: int().autoincrement().primaryKey(),
+	userId: int().notNull(),
+	taskId: int(),
+	googleTaskId: varchar({ length: 128 }).notNull(),
+	listId: varchar({ length: 255 }).notNull(),
+	etag: varchar({ length: 255 }),
+	googleUpdatedAt: varchar({ length: 40 }),
+	syncedHash: varchar({ length: 32 }),
+	state: varchar({ length: 12 }).default('active').notNull(),
+	lastSyncedAt: timestamp({ mode: 'string' }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_google_task_links_gtask").on(table.userId, table.googleTaskId),
+	uniqueIndex("uq_google_task_links_task").on(table.userId, table.taskId),
+	index("idx_google_task_links_task").on(table.taskId),
+]);
+
+// Origem (turno, escala, passagem, formação, prazo, SLA) ↔ evento do Google Calendar.
+export const googleCalendarEvents = mysqlTable("google_calendar_events", {
+	id: int().autoincrement().primaryKey(),
+	target: varchar({ length: 40 }).notNull(),
+	calendarId: varchar({ length: 255 }).notNull(),
+	sourceKey: varchar({ length: 120 }).notNull(),
+	eventId: varchar({ length: 128 }).notNull(),
+	version: varchar({ length: 40 }),
+	hash: varchar({ length: 32 }),
+	startMs: bigint({ mode: "number" }),
+	remoteDeleted: tinyint().default(0).notNull(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_google_calendar_events_key").on(table.target, table.sourceKey),
+	index("idx_google_calendar_events_event").on(table.target, table.eventId),
+]);
+
+// Calendários partilhados "Escala Multipark — <cidade>" (conta de serviço com delegação).
+export const googleSharedCalendars = mysqlTable("google_shared_calendars", {
+	city: varchar({ length: 16 }).primaryKey(),
+	ownerEmail: varchar({ length: 320 }).notNull(),
+	calendarId: varchar({ length: 255 }),
+	syncToken: varchar({ length: 512 }),
+	aclDomain: varchar({ length: 255 }),
+	lastSyncAt: timestamp({ mode: 'string' }),
+	lastError: varchar({ length: 500 }),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+});
+
+// Reuniões com Meet criadas a partir de um cliente / reclamação / parceria.
+export const googleMeetings = mysqlTable("google_meetings", {
+	id: int().autoincrement().primaryKey(),
+	userId: int().notNull(),
+	entityType: varchar({ length: 16 }).notNull(),
+	entityId: varchar({ length: 320 }).notNull(),
+	eventId: varchar({ length: 128 }).notNull(),
+	title: varchar({ length: 255 }).notNull(),
+	startAt: datetime({ mode: 'string' }).notNull(),
+	endAt: datetime({ mode: 'string' }).notNull(),
+	meetLink: varchar({ length: 500 }),
+	htmlLink: varchar({ length: 1000 }),
+	invitedEmail: varchar({ length: 320 }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	index("idx_google_meetings_entity").on(table.entityType, table.entityId),
+]);
