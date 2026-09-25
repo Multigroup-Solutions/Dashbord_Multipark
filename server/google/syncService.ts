@@ -13,7 +13,10 @@
  *    religar ou sem âmbito são avisos (a própria pessoa é avisada pelo
  *    alerts.ts → google_account_reauth); falhas reais pintam o cron de vermelho;
  *  - sincronizar já depois de uma alteração nas Tarefas (best-effort);
- *  - disponibilidade (livre/ocupado) e reuniões com Meet.
+ *  - disponibilidade (livre/ocupado) e reuniões com Meet;
+ *  - Contactos (People API): grupo "Multipark — Serviço" / parceiros e
+ *    leitura para sugestões por pessoa (contactsService.ts) e o diretório da
+ *    empresa 1×/dia (conta de serviço com delegação).
  */
 import { sql } from "drizzle-orm";
 import {
@@ -36,6 +39,7 @@ import {
 export interface GoogleSyncUserReport extends GoogleSyncUserOutcome {
   tasks?: Pick<TaskSyncResult, "pulled" | "pushed" | "created" | "createdRemote" | "unassigned" | "deletedRemote" | "rejected" | "conflicts" | "partial">;
   calendar?: Pick<CalendarSyncResult, "inserted" | "updated" | "deleted" | "adopted" | "partial">;
+  contacts?: { pulled: number; created: number; deleted: number; forgotten: number; adopted: number; partial: boolean };
 }
 
 export interface GoogleSyncReport {
@@ -44,6 +48,7 @@ export interface GoogleSyncReport {
   done: boolean;
   users: GoogleSyncUserReport[];
   shared: Array<{ city: string; status: string; error?: string; inserted?: number; updated?: number; deleted?: number }>;
+  directory?: { ran: boolean; done: boolean; count: number | null; error: string | null };
   errors: string[];
   warnings: string[];
 }
@@ -165,12 +170,20 @@ export async function syncOneUser(c: Candidate, opts: { deadlineAt: number; task
   const wantCal = !opts.tasksOnly && (anyCalendarPref(prefs) || !!state.calendarId);
   const hasTasks = hasFeatureScopes(c.scopes, "tasks");
   const hasCal = hasFeatureScopes(c.scopes, "calendar");
+  const hasContacts = hasFeatureScopes(c.scopes, "contacts");
   const missing: string[] = [];
-  if (wantTasks && !hasTasks) missing.push("Tarefas");
-  if (!opts.tasksOnly && anyCalendarPref(prefs) && !hasCal) missing.push("Calendário");
+  // Tarefas/Calendário só avisam em falta a quem não autorizou nada disso (quem só quer Contactos não é incomodado).
+  const onlyContacts = hasContacts && !hasTasks && !hasCal;
+  if (wantTasks && !hasTasks && !onlyContacts) missing.push("Tarefas");
+  if (!opts.tasksOnly && anyCalendarPref(prefs) && !hasCal && !onlyContacts) missing.push("Calendário");
   const runTasks = wantTasks && hasTasks;
   const runCal = wantCal && hasCal;
-  if (!runTasks && !runCal) {
+  let runContacts = false;
+  if (!opts.tasksOnly && hasContacts) {
+    const { wantsContacts } = await import("./contactsService");
+    runContacts = await wantsContacts(c.userId, c.role);
+  }
+  if (!runTasks && !runCal && !runContacts) {
     const warning = missing.length ? `Falta autorizar: ${missing.join(" e ")} (Perfil → Google → Ativar).` : null;
     if (warning) await patchSyncState(c.userId, { lastWarning: warning, lastStatus: "scope_missing" }).catch(() => {});
     return { ...out, status: missing.length ? "scope_missing" : "skipped", error: warning ?? undefined };
@@ -210,6 +223,22 @@ export async function syncOneUser(c: Candidate, opts: { deadlineAt: number; task
       if (r.partial) partial = true;
       if (!r.partial) await patchSyncState(c.userId, { lastCalendarSyncAt: nowSql() });
     } else if (runCal) partial = true;
+    if (runContacts && Date.now() < opts.deadlineAt - 4_000) {
+      const { runUserContacts } = await import("./contactsService");
+      const { patchContactsState } = await import("./contactsStore");
+      try {
+        const r = await runUserContacts({ userId: c.userId, role: c.role }, employeeId, { deadlineAt: opts.deadlineAt, now: opts.now });
+        out.contacts = { pulled: r.pulled, created: r.created, deleted: r.deleted, forgotten: r.forgotten, adopted: r.adopted, partial: r.partial };
+        if (r.rateLimited) out.status = "rate_limited";
+        if (r.partial) partial = true;
+        warnings.push(...r.warnings);
+        await patchContactsState(c.userId, { lastRunAt: nowSql(), lastStatus: r.rateLimited ? "rate_limited" : r.partial ? "partial" : "ok", lastError: null, lastWarning: r.warnings.join(" ").slice(0, 500) || null });
+      } catch (err) {
+        const kind = calendarAndTasksErrorKind(err);
+        await patchContactsState(c.userId, { lastRunAt: nowSql(), lastStatus: kind, lastError: googleErrorMessage(err) }).catch(() => {});
+        throw err;
+      }
+    } else if (runContacts) partial = true;
     if (partial && out.status === "ok") out.status = "partial";
     await patchSyncState(c.userId, {
       lastRunAt: nowSql(), lastStatus: out.status, lastError: null, lastWarning: warnings.join(" ").slice(0, 500) || null,
@@ -302,7 +331,7 @@ async function candidates(onlyUserIds?: readonly number[] | null): Promise<Candi
     LIMIT 500`));
   return rows
     .map((r) => ({ userId: Number(r.userId), scopes: String(r.scopes ?? ""), status: String(r.status), role: String(r.role ?? "user"), isActive: Number(r.isActive ?? 1) === 1 }))
-    .filter((c) => hasFeatureScopes(c.scopes, "tasks") || hasFeatureScopes(c.scopes, "calendar") || !!onlyUserIds?.length);
+    .filter((c) => hasFeatureScopes(c.scopes, "tasks") || hasFeatureScopes(c.scopes, "calendar") || hasFeatureScopes(c.scopes, "contacts") || !!onlyUserIds?.length);
 }
 
 export async function runGoogleSync(opts: { deadlineAt: number; onlyUserIds?: readonly number[] | null; tasksOnly?: boolean; includeShared?: boolean; now?: () => number }): Promise<GoogleSyncReport> {
@@ -310,7 +339,8 @@ export async function runGoogleSync(opts: { deadlineAt: number; onlyUserIds?: re
   let fatal: string | null = null;
   const sharedErrors: string[] = [];
   try {
-    report.configured = oauthConfigured() || (await loadSharedCalendarsConfig()).enabled;
+    report.configured = oauthConfigured() || (await loadSharedCalendarsConfig()).enabled
+      || (await (await import("./contactsService")).loadContactsConfig()).directory.enabled;
     if (!report.configured) return report;
     const list = await candidates(opts.onlyUserIds);
     for (const c of list) {
@@ -329,6 +359,16 @@ export async function runGoogleSync(opts: { deadlineAt: number; onlyUserIds?: re
         sharedErrors.push(...s.errors);
         if (s.cities.some((x) => x.status === "partial")) report.done = false;
       } else if ((await loadSharedCalendarsConfig()).enabled) report.done = false;
+      // Diretório da empresa (1×/dia, resumível) — só com tempo de sobra.
+      if (Date.now() < opts.deadlineAt - 10_000) {
+        const { runDirectorySync } = await import("./contactsService");
+        const dir = await runDirectorySync({ deadlineAt: opts.deadlineAt - 2_000, now: opts.now });
+        if (dir.configured) {
+          report.directory = { ran: dir.ran, done: dir.done, count: dir.count, error: dir.error };
+          if (!dir.done) report.done = false;
+          if (dir.error) sharedErrors.push(dir.error);
+        }
+      }
     }
   } catch (err: any) {
     fatal = String(err?.message ?? err).slice(0, 300);

@@ -3027,3 +3027,127 @@ export const googleMeetings = mysqlTable("google_meetings", {
 (table) => [
 	index("idx_google_meetings_entity").on(table.entityType, table.entityId),
 ]);
+
+// ─── Contactos (Google People API) — migração 0155 ─────────────────────────
+// Cache do diretório do domínio do Workspace (perfis), ligado à conta e à
+// ficha pelo email.
+export const googleDirectoryPeople = mysqlTable("google_directory_people", {
+	id: int().autoincrement().primaryKey(),
+	resourceName: varchar({ length: 128 }).notNull(),
+	primaryEmail: varchar({ length: 320 }).notNull(),
+	emailsJson: varchar({ length: 2000 }),
+	displayName: varchar({ length: 255 }).notNull(),
+	givenName: varchar({ length: 128 }),
+	familyName: varchar({ length: 128 }),
+	jobTitle: varchar({ length: 255 }),
+	department: varchar({ length: 255 }),
+	phoneE164: varchar({ length: 20 }),
+	phoneRaw: varchar({ length: 64 }),
+	photoUrl: varchar({ length: 1000 }),
+	userId: int(),
+	employeeId: int(),
+	seenRunAt: bigint({ mode: "number" }),
+	deletedAt: timestamp({ mode: 'string' }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_google_directory_people_resource").on(table.resourceName),
+	index("idx_google_directory_people_email").on(table.primaryEmail),
+	index("idx_google_directory_people_user").on(table.userId),
+	index("idx_google_directory_people_employee").on(table.employeeId),
+]);
+
+// Cursor da leitura do diretório (1 linha, id = 1).
+export const googleDirectoryState = mysqlTable("google_directory_state", {
+	id: tinyint().primaryKey(),
+	pageToken: varchar({ length: 1024 }),
+	runStartedMs: bigint({ mode: "number" }),
+	lastFullSyncAt: timestamp({ mode: 'string' }),
+	lastRunAt: timestamp({ mode: 'string' }),
+	lastError: varchar({ length: 500 }),
+	peopleCount: int().default(0).notNull(),
+	lockAt: timestamp({ mode: 'string' }),
+});
+
+// Estado da funcionalidade "Contactos" por utilizador (preferências, cursores, grupos).
+export const googleContactsState = mysqlTable("google_contacts_state", {
+	userId: int().primaryKey(),
+	prefsJson: text(),
+	otherSyncToken: varchar({ length: 1024 }),
+	otherPageToken: varchar({ length: 1024 }),
+	connSyncToken: varchar({ length: 1024 }),
+	connPageToken: varchar({ length: 1024 }),
+	serviceGroup: varchar({ length: 128 }),
+	partnersGroup: varchar({ length: 128 }),
+	lastPullAt: timestamp({ mode: 'string' }),
+	lastPushAt: timestamp({ mode: 'string' }),
+	lastRunAt: timestamp({ mode: 'string' }),
+	lastStatus: varchar({ length: 24 }),
+	lastError: varchar({ length: 500 }),
+	lastWarning: varchar({ length: 500 }),
+	lockAt: timestamp({ mode: 'string' }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+});
+
+// Contactos Google da própria pessoa (nome + emails/telefones normalizados) — sugestões.
+export const googleUserContacts = mysqlTable("google_user_contacts", {
+	id: int().autoincrement().primaryKey(),
+	userId: int().notNull(),
+	resourceName: varchar({ length: 128 }).notNull(),
+	source: varchar({ length: 12 }).notNull(),
+	displayName: varchar({ length: 255 }),
+	emailsJson: varchar({ length: 2000 }),
+	phonesJson: varchar({ length: 500 }),
+	primaryEmail: varchar({ length: 320 }),
+	primaryPhone: varchar({ length: 20 }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_google_user_contacts_res").on(table.userId, table.resourceName),
+	index("idx_google_user_contacts_email").on(table.userId, table.primaryEmail),
+	index("idx_google_user_contacts_phone").on(table.userId, table.primaryPhone),
+]);
+
+// Contactos que a APP criou no Google da pessoa (grupos "Multipark — …"), com retenção.
+export const googlePushedContacts = mysqlTable("google_pushed_contacts", {
+	id: int().autoincrement().primaryKey(),
+	userId: int().notNull(),
+	groupKey: varchar({ length: 12 }).notNull(),
+	sourceKey: varchar({ length: 64 }).notNull(),
+	resourceName: varchar({ length: 128 }).notNull(),
+	hash: varchar({ length: 32 }),
+	expiresAt: bigint({ mode: "number" }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_google_pushed_contacts_key").on(table.userId, table.groupKey, table.sourceKey),
+	index("idx_google_pushed_contacts_res").on(table.userId, table.resourceName),
+	index("idx_google_pushed_contacts_exp").on(table.expiresAt),
+]);
+
+// Contactos do CRM criados à mão / a partir de um contacto Google (cliente ou lead comercial).
+export const crmContacts = mysqlTable("crm_contacts", {
+	id: int().autoincrement().primaryKey(),
+	kind: varchar({ length: 12 }).default('client').notNull(),
+	name: varchar({ length: 255 }).notNull(),
+	email: varchar({ length: 320 }),
+	phone: varchar({ length: 32 }),
+	phoneE164: varchar({ length: 20 }),
+	company: varchar({ length: 255 }),
+	notes: varchar({ length: 1000 }),
+	projectId: int(),
+	source: varchar({ length: 16 }).default('manual').notNull(),
+	googleResourceName: varchar({ length: 128 }),
+	createdById: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	index("idx_crm_contacts_email").on(table.email),
+	index("idx_crm_contacts_phone").on(table.phoneE164),
+	index("idx_crm_contacts_project").on(table.projectId),
+]);

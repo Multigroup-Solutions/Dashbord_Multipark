@@ -48,6 +48,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { directoryInfoFor, useDirectoryLookup } from "@/hooks/useDirectoryLookup";
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
@@ -2303,6 +2304,8 @@ export default function HRPage() {
     projectId: globalFilters.projectId ?? undefined,
   }, { enabled: !isExtra });
   const { data: docStatus = {} } = trpc.rh.documents.allStatus.useQuery(undefined, { enabled: !isExtra });
+  // Diretório do Workspace (foto, cargo, telefone) para a equipa interna (os extras não têm conta do Workspace).
+  const directory = useDirectoryLookup(isExtra ? [] : (employees as any[]).filter((r) => r.employee.position !== "extra").map((r) => r.employee.email));
 
   // Extra users go directly to their profile
   if (isExtra) {
@@ -2374,13 +2377,16 @@ export default function HRPage() {
       <CardContent className="p-4">
         <div className="flex items-center gap-3">
           <Avatar className="w-12 h-12">
-            <AvatarImage src={emp.photoUrl ?? undefined} />
+            <AvatarImage src={emp.photoUrl ?? directoryInfoFor(directory, emp.email)?.photoUrl ?? undefined} referrerPolicy="no-referrer" />
             <AvatarFallback className="bg-primary/10 text-primary font-semibold">
               {emp.fullName.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase()}
             </AvatarFallback>
           </Avatar>
           <div className="flex-1 min-w-0">
             <p className="font-semibold truncate">{emp.fullName}</p>
+            {directoryInfoFor(directory, emp.email)?.jobTitle && (
+              <p className="text-[11px] text-muted-foreground truncate" title="Cargo no diretório Google">{directoryInfoFor(directory, emp.email)!.jobTitle}</p>
+            )}
             <Badge className={`text-xs mt-1 ${POSITION_COLORS[emp.position as Position]}`}>
               {POSITION_LABELS[emp.position as Position]}
               {emp.position === "extra" && emp.extraLevel ? ` N${emp.extraLevel}` : ""}
@@ -2391,6 +2397,11 @@ export default function HRPage() {
           {emp.email && (
             <p className="text-xs text-muted-foreground flex items-center gap-1 truncate">
               <Mail className="w-3 h-3 shrink-0" /> <span className="truncate">{emp.email}</span>
+            </p>
+          )}
+          {directoryInfoFor(directory, emp.email)?.phone && (
+            <p className="text-xs text-muted-foreground flex items-center gap-1 truncate" title="Telefone no diretório Google">
+              <Phone className="w-3 h-3 shrink-0" /> <span className="truncate">{directoryInfoFor(directory, emp.email)!.phone}</span>
             </p>
           )}
           {emp.department && (

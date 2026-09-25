@@ -15,6 +15,7 @@ import { AI_FEATURE_IDS, AI_TIERS } from "./aiFeatures";
 import { NOTIFICATION_KIND_DEFS, NOTIFICATION_ROUTING_SETTING_KEY, notificationRoutingSchema } from "./notificationRouting";
 import { DEFAULT_BRAND_DOMAINS, MAIL_BRAND_IDS, MAIL_DEFAULT_BACKFILL_DAYS, MAIL_DEFAULT_RETENTION_YEARS, MAIL_DEFAULT_SLA_HOURS } from "./mail";
 import { DEFAULT_SHARED_CALENDARS_CONFIG, sharedCalendarsConfigSchema } from "./googleSync";
+import { DEFAULT_CONTACTS_CONFIG, contactsConfigSchema } from "./contacts";
 
 // ─── Taxas com data de efeito (IVA / TSU) ───────────────────────────────────
 
@@ -354,6 +355,15 @@ export const SETTINGS = {
     defaultValue: DEFAULT_SHARED_CALENDARS_CONFIG,
     wiring: "live",
   }),
+  "google.contacts": def({
+    key: "google.contacts",
+    group: "emails",
+    label: "Contactos Google (diretório e grupos no telemóvel)",
+    description: "Diretório da empresa (conta de serviço com delegação, a impersonar a conta indicada), grupo \"Multipark — Serviço\" com os clientes das recolhas/entregas de hoje e amanhã (papéis e dias de retenção) e grupo opcional de parceiros. Editável em Definições → Comunicação (só super admin).",
+    schema: contactsConfigSchema,
+    defaultValue: DEFAULT_CONTACTS_CONFIG,
+    wiring: "live",
+  }),
   [NOTIFICATION_ROUTING_SETTING_KEY]: def({
     key: NOTIFICATION_ROUTING_SETTING_KEY,
     group: "notificacoes",
@@ -480,7 +490,7 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "identity-sweep", label: "Ligações funcionário ↔ utilizador", intervalMinutes: 60, workflow: "multipark-cron.yml" },
   { name: "email-inbound", label: "Emails recebidos (IMAP)", intervalMinutes: 60, workflow: "multipark-cron.yml" },
   { name: "mail-sync", label: "Comunicação: sincronização do Gmail", intervalMinutes: 5, workflow: "mail-sync.yml" },
-  { name: "google-sync", label: "Google Tarefas & Calendário", intervalMinutes: 10, workflow: "google-sync.yml" },
+  { name: "google-sync", label: "Google Tarefas, Calendário e Contactos", intervalMinutes: 10, workflow: "google-sync.yml" },
   { name: "multipark-future", label: "Sincronização de reservas (futuras)", intervalMinutes: 120, workflow: "multipark-cron.yml" },
   { name: "daily-ops", label: "Manutenção diária + recolha GPS", intervalMinutes: 1440, workflow: "multipark-cron.yml" },
   { name: "evaluation-recompute", label: "Avaliação (recálculo das 4 semanas)", intervalMinutes: 1440, workflow: "multipark-cron.yml" },

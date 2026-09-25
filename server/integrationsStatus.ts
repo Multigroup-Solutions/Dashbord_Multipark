@@ -79,6 +79,8 @@ const DEFS: Def[] = [
     links: [{ label: "Caixas (Definições → Comunicação)", href: "/definicoes" }, { label: "Comunicação", href: "/comunicacao" }] },
   { id: "google_sync", label: "Google Tarefas & Calendário", description: "Tarefas atribuídas ↔ lista \"Multipark\" do Google Tasks (nos dois sentidos) e calendário \"Multipark\" de cada pessoa (turnos, passagens de turno, formação, prazos, SLAs); calendários partilhados da escala por cidade (opcional, delegação); reuniões com Meet.", require: [["GOOGLE_WORKSPACE_CLIENT_ID", "GOOGLE_CLIENT_ID"], ["GOOGLE_WORKSPACE_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"]], cron: "google-sync", testable: true, group: "main",
     links: [{ label: "Perfil → Google", href: "/perfil" }, { label: "Calendários partilhados (Definições → Comunicação)", href: "/definicoes" }] },
+  { id: "google_contacts", label: "Google Contactos (People API)", description: "Diretório da empresa (conta de serviço com delegação, 1×/dia), grupo \"Multipark — Serviço\" no telemóvel de condutores/TL (clientes de hoje e amanhã, apagados depois da retenção) e sugestões a partir dos contactos Google de cada pessoa.", require: [["GOOGLE_WORKSPACE_CLIENT_ID", "GOOGLE_CLIENT_ID"], ["GOOGLE_WORKSPACE_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"]], cron: "google-sync", testable: true, group: "main",
+    links: [{ label: "Contactos", href: "/contactos" }, { label: "Contactos Google (Definições → Comunicação)", href: "/definicoes" }] },
   { id: "google_account", label: "Contas Google dos utilizadores", description: "\"Ligar a minha conta Google\" (OAuth interno do Workspace) para \"O meu email\".", require: [["GOOGLE_WORKSPACE_CLIENT_ID", "GOOGLE_CLIENT_ID"], ["GOOGLE_WORKSPACE_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"]], group: "main",
     links: [{ label: "Perfil", href: "/perfil" }] },
   { id: "smtp", label: "Email de saída (SMTP)", description: "Emails enviados pela aplicação e alertas ao dono.", require: [["SMTP_HOST"], ["SMTP_USER"], ["SMTP_PASS"]], testable: true, group: "main", links: [] },
@@ -260,6 +262,11 @@ export async function testIntegration(id: string): Promise<TestResult> {
         case "google_sync": {
           const { testGoogleSync } = await import("./google/syncService");
           message = await testGoogleSync();
+          break;
+        }
+        case "google_contacts": {
+          const { testGoogleContacts } = await import("./google/contactsService");
+          message = await testGoogleContacts();
           break;
         }
         case "gmail": {

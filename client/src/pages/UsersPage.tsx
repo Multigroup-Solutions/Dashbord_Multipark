@@ -31,7 +31,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Switch } from "@/components/ui/switch";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { directoryInfoFor, useDirectoryLookup } from "@/hooks/useDirectoryLookup";
 import {
   Users,
   Shield,
@@ -281,6 +282,8 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
   );
   const rows = searchQ.data?.rows ?? [];
   const total = searchQ.data?.total ?? 0;
+  // Diretório do Workspace (foto e cargo) só para as linhas desta página.
+  const directory = useDirectoryLookup(rows.map((r) => r.email));
   const isLoading = searchQ.isLoading;
   const pageCount = Math.max(1, Math.ceil(total / filters.pageSize));
   const summary = summaryQ.data;
@@ -553,9 +556,16 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
           <Badge variant="outline" className="text-[11px] px-1.5 py-0 shrink-0">Tu</Badge>
         )}
       </div>
+      {directoryInfoFor(directory, u.email)?.jobTitle && (
+        <span className="block text-[11px] text-muted-foreground truncate" title="Cargo no diretório Google">{directoryInfoFor(directory, u.email)!.jobTitle}</span>
+      )}
       {u.loginMethod === "manual" && <span className="text-[11px] text-muted-foreground">Criado manualmente</span>}
     </>
   );
+  const avatarPhoto = (u: Row) => {
+    const url = directoryInfoFor(directory, u.email)?.photoUrl;
+    return url ? <AvatarImage src={url} alt="" referrerPolicy="no-referrer" /> : null;
+  };
 
   const from = total === 0 ? 0 : page * filters.pageSize + 1;
   const to = Math.min(total, (page + 1) * filters.pageSize);
@@ -783,6 +793,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                   <div key={u.id} className={`p-3 space-y-2 ${!u.isActive ? "bg-muted/40" : ""}`}>
                     <div className="flex items-start gap-3">
                       <Avatar className="h-8 w-8 shrink-0">
+                        {avatarPhoto(u)}
                         <AvatarFallback className="text-xs font-semibold bg-primary/10 text-primary">
                           {u.name?.charAt(0).toUpperCase() ?? "?"}
                         </AvatarFallback>
@@ -833,6 +844,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                       <TableRow key={u.id} className={!u.isActive ? "bg-muted/40" : ""}>
                         <TableCell>
                           <Avatar className="h-8 w-8">
+                            {avatarPhoto(u)}
                             <AvatarFallback className="text-xs font-semibold bg-primary/10 text-primary">
                               {u.name?.charAt(0).toUpperCase() ?? "?"}
                             </AvatarFallback>
