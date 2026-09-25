@@ -20,6 +20,9 @@ importers:
       '@google/genai':
         specifier: ^2.24.0
         version: 2.24.0
+      '@googleapis/analyticsdata':
+        specifier: 10.1.0
+        version: 10.1.0
       '@googleapis/calendar':
         specifier: ^20.0.1
         version: 20.0.1
@@ -32,9 +35,15 @@ importers:
       '@googleapis/gmail':
         specifier: ^22.0.1
         version: 22.0.1
+      '@googleapis/pagespeedonline':
+        specifier: 10.0.1
+        version: 10.0.1
       '@googleapis/people':
         specifier: 12.0.0
         version: 12.0.0
+      '@googleapis/searchconsole':
+        specifier: 11.0.1
+        version: 11.0.1
       '@googleapis/sheets':
         specifier: 18.0.1
         version: 18.0.1
@@ -1092,6 +1101,10 @@ packages:
       '@modelcontextprotocol/sdk':
         optional: true
 
+  '@googleapis/analyticsdata@10.1.0':
+    resolution: {integrity: sha512-YpX5QkZIqMQpjC3aW5+ifBp2fC3hQcbJE4LNKtf5GFSG36nS6ek31d2U8o1TeOVbGPIVHScLMDuQD4tt8kC/DQ==}
+    engines: {node: '>=22.0.0'}
+
   '@googleapis/calendar@20.0.1':
     resolution: {integrity: sha512-NclDdcEoPvPBCHwUtcQj9rqWelAVl/nRj98WLUrNM2ByvqXjjUP0Ux/0nVb/FH9hoLR+dw9f0zHDOu2Di8oqrg==}
     engines: {node: '>=22.0.0'}
@@ -1108,8 +1121,16 @@ packages:
     resolution: {integrity: sha512-v/RGUAWmYQQWLivB/tUcoecxC4ortqvtfzaRloUfcv6hogMyenq8HxdJDShFtSEGVF4of+H+b4xiL6yBlxcTmA==}
     engines: {node: '>=22.0.0'}
 
+  '@googleapis/pagespeedonline@10.0.1':
+    resolution: {integrity: sha512-bxmLh1b+z5zfzEPz84Wb8t7axem6NBxDOCXqaK9YTvRa7aIxk5XgvFfsDDxoT16LkSvpP0ThInV0hr+TNvJbjQ==}
+    engines: {node: '>=22.0.0'}
+
   '@googleapis/people@12.0.0':
     resolution: {integrity: sha512-N8vlXWvhN92jk2UcfXpKwlCBw6V5hzxr5IjlpCcp+QKDBltGEGQ2itBvA8PKra2UpIOtTFHXZnwjD6XwyRi4WA==}
+    engines: {node: '>=22.0.0'}
+
+  '@googleapis/searchconsole@11.0.1':
+    resolution: {integrity: sha512-v4pvCsjMmpRe9IUjn+Y8bfYBhEmQzaomKYymq5PIVlbJZ7YjPI+c54UwsXtB4P1xl70Kz2vYbiM4BS08arBifw==}
     engines: {node: '>=22.0.0'}
 
   '@googleapis/sheets@18.0.1':
@@ -6092,6 +6113,12 @@ snapshots:
       - supports-color
       - utf-8-validate
 
+  '@googleapis/analyticsdata@10.1.0':
+    dependencies:
+      googleapis-common: 9.1.0
+    transitivePeerDependencies:
+      - supports-color
+
   '@googleapis/calendar@20.0.1':
     dependencies:
       googleapis-common: 9.1.0
@@ -6116,7 +6143,19 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  '@googleapis/pagespeedonline@10.0.1':
+    dependencies:
+      googleapis-common: 9.1.0
+    transitivePeerDependencies:
+      - supports-color
+
   '@googleapis/people@12.0.0':
+    dependencies:
+      googleapis-common: 9.1.0
+    transitivePeerDependencies:
+      - supports-color
+
+  '@googleapis/searchconsole@11.0.1':
     dependencies:
       googleapis-common: 9.1.0
     transitivePeerDependencies:

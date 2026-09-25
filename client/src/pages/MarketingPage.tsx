@@ -3,11 +3,12 @@ import { Link, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { BarChart3, CircleAlert, Megaphone, Network, Target } from "lucide-react";
+import { BarChart3, CircleAlert, Globe, Megaphone, Network, Target } from "lucide-react";
 import MarketingGoogleAdsPage from "./MarketingGoogleAdsPage";
 import MarketingDashboardPanel from "@/components/marketing/MarketingDashboardPanel";
 import MarketingChannelsPanel from "@/components/marketing/MarketingChannelsPanel";
 import MarketingBudgetsPanel from "@/components/marketing/MarketingBudgetsPanel";
+import MarketingWebPanel from "@/components/marketing/MarketingWebPanel";
 import AnomalyAlerts from "@/components/aiOps/AnomalyAlerts";
 import { TABS_SCROLL } from "@/components/finance/layoutClasses";
 
@@ -20,6 +21,7 @@ import { TABS_SCROLL } from "@/components/finance/layoutClasses";
  *  - /marketing/google-ads → Anúncios (Google Ads + Meta)
  *  - /marketing/canais → Canais e clientes
  *  - /marketing/orcamentos → Orçamentos
+ *  - /marketing/web → Web & SEO (GA4, Search Console, PageSpeed — set 2026)
  *
  * Por cima de todos os separadores: aviso VERMELHO quando a recolha do Google
  * Ads / Meta falhou, pede reautorização ou está parada (> 26 h).
@@ -29,6 +31,7 @@ const ADS_PATH = "/marketing/google-ads";
 const DASH_PATH = "/marketing";
 const CHANNELS_PATH = "/marketing/canais";
 const BUDGETS_PATH = "/marketing/orcamentos";
+const WEB_PATH = "/marketing/web";
 
 export { MarketingDashboardPanel };
 
@@ -54,20 +57,20 @@ function SyncHealthBanner() {
 
 export default function MarketingPage() {
   const [location, navigate] = useLocation();
-  const tabFromPath = (p: string) => (p.startsWith(ADS_PATH) ? "ads" : p.startsWith(CHANNELS_PATH) ? "channels" : p.startsWith(BUDGETS_PATH) ? "budgets" : "dashboard");
+  const tabFromPath = (p: string) => (p.startsWith(ADS_PATH) ? "ads" : p.startsWith(CHANNELS_PATH) ? "channels" : p.startsWith(BUDGETS_PATH) ? "budgets" : p.startsWith(WEB_PATH) ? "web" : "dashboard");
   const [tab, setTab] = useState(tabFromPath(location));
   useEffect(() => { setTab(tabFromPath(location)); }, [location]);
   const onTab = (v: string) => {
     setTab(v);
     // só muda o URL quando estamos numa rota de Marketing (nos Dashboards fica só o estado)
-    if (location.startsWith("/marketing")) navigate(v === "ads" ? ADS_PATH : v === "channels" ? CHANNELS_PATH : v === "budgets" ? BUDGETS_PATH : DASH_PATH, { replace: true });
+    if (location.startsWith("/marketing")) navigate(v === "ads" ? ADS_PATH : v === "channels" ? CHANNELS_PATH : v === "budgets" ? BUDGETS_PATH : v === "web" ? WEB_PATH : DASH_PATH, { replace: true });
   };
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-xl sm:text-2xl font-bold">Marketing</h1>
-        <p className="text-muted-foreground">Dashboard, canais e clientes, anúncios (Google Ads e Meta) e orçamentos</p>
+        <p className="text-muted-foreground">Dashboard, canais e clientes, anúncios (Google Ads e Meta), orçamentos e Web & SEO</p>
       </div>
       <SyncHealthBanner />
       <AnomalyAlerts domain="marketing" />
@@ -77,11 +80,13 @@ export default function MarketingPage() {
           <TabsTrigger value="channels"><Network className="w-4 h-4 mr-1" />Canais e clientes</TabsTrigger>
           <TabsTrigger value="ads"><Megaphone className="w-4 h-4 mr-1" />Anúncios</TabsTrigger>
           <TabsTrigger value="budgets"><Target className="w-4 h-4 mr-1" />Orçamentos</TabsTrigger>
+          <TabsTrigger value="web"><Globe className="w-4 h-4 mr-1" />Web & SEO</TabsTrigger>
         </TabsList>
         <TabsContent value="dashboard" className="mt-4"><MarketingDashboardPanel /></TabsContent>
         <TabsContent value="channels" className="mt-4"><MarketingChannelsPanel /></TabsContent>
         <TabsContent value="ads" className="mt-4"><MarketingGoogleAdsPage /></TabsContent>
         <TabsContent value="budgets" className="mt-4"><MarketingBudgetsPanel /></TabsContent>
+        <TabsContent value="web" className="mt-4">{tab === "web" && <MarketingWebPanel />}</TabsContent>
       </Tabs>
     </div>
   );

@@ -120,6 +120,22 @@ export function delegatedClient(subject: string, scopes: readonly string[], cfg:
   });
 }
 
+/**
+ * Conta de serviço como ELA PRÓPRIA (sem delegação) — para recursos onde é
+ * adicionada como utilizadora (propriedades GA4, Search Console). Com
+ * `subject`, impersona essa conta do Workspace (delegação ao nível do domínio).
+ */
+export function serviceAccountClient(scopes: readonly string[], subject?: string | null, cfg: WorkspaceConfig = workspaceConfig()): JWT {
+  if (!cfg.serviceAccount) throw new Error("Conta de serviço Google em falta (GOOGLE_WORKSPACE_SERVICE_ACCOUNT_JSON ou GOOGLE_SERVICE_ACCOUNT_JSON).");
+  return new JWT({
+    email: cfg.serviceAccount.client_email,
+    key: cfg.serviceAccount.private_key,
+    scopes: [...scopes],
+    ...(subject ? { subject } : {}),
+    transporterOptions: transporterOptions(),
+  });
+}
+
 /** API Gmail v1 (oficial) com o cliente de autenticação dado. */
 export function gmailFor(auth: OAuth2Client | JWT): gmail_v1.Gmail {
   return gmailFactory({ version: "v1", auth, timeout: GOOGLE_API_TIMEOUT_MS, fetchImplementation: timedFetch() });

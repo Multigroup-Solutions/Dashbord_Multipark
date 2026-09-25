@@ -3230,3 +3230,99 @@ export const googleDriveState = mysqlTable("google_drive_state", {
 	value: varchar({ length: 1000 }),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 });
+
+// ─── Web & SEO (migração 0165): GA4, Search Console e PageSpeed — só agregados ─
+
+export const webGaDaily = mysqlTable("web_ga_daily", {
+	id: int().autoincrement().primaryKey(),
+	propertyId: varchar({ length: 20 }).notNull(),
+	day: date({ mode: 'string' }).notNull(),
+	sessions: int().default(0).notNull(),
+	totalUsers: int().default(0).notNull(),
+	newUsers: int().default(0).notNull(),
+	engagedSessions: int().default(0).notNull(),
+	keyEvents: decimal({ precision: 14, scale: 2 }).default('0').notNull(),
+	revenue: decimal({ precision: 14, scale: 2 }).default('0').notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_web_ga_daily").on(table.propertyId, table.day),
+]);
+
+export const webGaDims = mysqlTable("web_ga_dims", {
+	id: bigint({ mode: "number" }).autoincrement().primaryKey(),
+	propertyId: varchar({ length: 20 }).notNull(),
+	dim: varchar({ length: 12 }).notNull(),
+	day: date({ mode: 'string' }).notNull(),
+	valueHash: char({ length: 40 }).notNull(),
+	dimValue: varchar({ length: 500 }).notNull(),
+	sessions: int().default(0).notNull(),
+	totalUsers: int().default(0).notNull(),
+	engagedSessions: int().default(0).notNull(),
+	keyEvents: decimal({ precision: 14, scale: 2 }).default('0').notNull(),
+	revenue: decimal({ precision: 14, scale: 2 }).default('0').notNull(),
+	eventCount: int().default(0).notNull(),
+},
+(table) => [
+	uniqueIndex("uq_web_ga_dims").on(table.propertyId, table.dim, table.day, table.valueHash),
+	index("idx_web_ga_dims_hash").on(table.propertyId, table.dim, table.valueHash),
+]);
+
+export const webScDaily = mysqlTable("web_sc_daily", {
+	id: int().autoincrement().primaryKey(),
+	siteUrl: varchar({ length: 255 }).notNull(),
+	day: date({ mode: 'string' }).notNull(),
+	clicks: int().default(0).notNull(),
+	impressions: int().default(0).notNull(),
+	position: decimal({ precision: 8, scale: 2 }),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_web_sc_daily").on(table.siteUrl, table.day),
+]);
+
+export const webScDims = mysqlTable("web_sc_dims", {
+	id: bigint({ mode: "number" }).autoincrement().primaryKey(),
+	siteUrl: varchar({ length: 255 }).notNull(),
+	dim: varchar({ length: 12 }).notNull(),
+	day: date({ mode: 'string' }).notNull(),
+	valueHash: char({ length: 40 }).notNull(),
+	dimValue: varchar({ length: 1000 }).notNull(),
+	clicks: int().default(0).notNull(),
+	impressions: int().default(0).notNull(),
+	position: decimal({ precision: 8, scale: 2 }),
+},
+(table) => [
+	uniqueIndex("uq_web_sc_dims").on(table.siteUrl, table.dim, table.day, table.valueHash),
+	index("idx_web_sc_dims_hash").on(table.siteUrl, table.dim, table.valueHash),
+]);
+
+export const webPagespeedRuns = mysqlTable("web_pagespeed_runs", {
+	id: int().autoincrement().primaryKey(),
+	url: varchar({ length: 1000 }).notNull(),
+	urlHash: char({ length: 40 }).notNull(),
+	strategy: varchar({ length: 8 }).notNull(),
+	runDay: date({ mode: 'string' }).notNull(),
+	score: int(),
+	lcpMs: int(),
+	cls: decimal({ precision: 6, scale: 3 }),
+	tbtMs: int(),
+	fcpMs: int(),
+	speedIndexMs: int(),
+	inpMs: int(),
+	fieldLcpMs: int(),
+	fieldCls: decimal({ precision: 6, scale: 3 }),
+	fieldCategory: varchar({ length: 20 }),
+	error: varchar({ length: 300 }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_web_pagespeed_runs").on(table.urlHash, table.strategy, table.runDay),
+]);
+
+export const webAnalyticsState = mysqlTable("web_analytics_state", {
+	stateKey: varchar({ length: 191 }).primaryKey(),
+	value: text(),
+	leaseUntil: datetime({ mode: 'string' }),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+});
