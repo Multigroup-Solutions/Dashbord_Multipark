@@ -47,7 +47,9 @@ Fora da agenda (só à mão): **Base de conhecimento** (botão **Sincronizar ago
 
 **Recolha GPS do Zello**: o Zello dá o dia de hoje durante o próprio dia, deixa de o dar à meia-noite e só o volta a dar cerca de 2 dias depois. Por isso há duas recolhas: uma **provisória** às 23:15–23:55 (o dia de hoje, para o Histórico Diário e a Atividade do Dia terem dados logo) e a **final** às 04:30, do dia de **anteontem** (D-2), que substitui a provisória (inclui os turnos que acabam depois da meia-noite) e recupera qualquer dia dos últimos 7 que tenha ficado incompleto. O alerta "GPS desligado" sai uma só vez por condutor e dia. Recolher à mão o dia de **ontem** não é possível (o Zello não o dá nesse momento).
 
-As linhas antigas do GPS com a velocidade no formato errado (anteriores à correção, "v1") são **apagadas** aos poucos pela manutenção diária, em vez de recalculadas.
+As linhas antigas do GPS com a velocidade no formato errado (anteriores à correção, "v1") **ficam na base de dados**, mas já não são recalculadas nem entram na avaliação. Para as apagar à mão há um script em `scripts/sql/gps-antigo-apagar.sql`.
+
+Dias recolhidos vazios (o antigo erro de recolher "ontem"): `scripts/sql/gps-dias-vazios.sql` lista-os; depois, em **Histórico Diário**, escolhe o dia e carrega em **Recolher Dados** — a recolha manual volta a buscar as linhas vazias (as que têm dados não são tocadas).
 
 ## Ler o cartão "Agendador" (Definições → Estado, só super admin)
 

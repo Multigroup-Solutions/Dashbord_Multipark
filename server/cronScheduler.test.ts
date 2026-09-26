@@ -201,15 +201,25 @@ describe("semanais (RH: regra documental à segunda)", () => {
   });
 });
 
-describe("GPS antigo (v1): apagado em vez de recalculado", () => {
-  it("sem a 'Fase 0' e só linhas v1 (nunca as já corrigidas)", () => {
+describe("GPS antigo (v1): fica, sem recálculo nem limpeza automática", () => {
+  it("sem a 'Fase 0' e sem apagar nada no daily-ops", () => {
     const src = readFileSync(resolve(root, "server/jobs/dailyDriverCollection.ts"), "utf8");
     expect(src).not.toContain("recomputeDriverHistory");
-    const purge = src.slice(src.indexOf("export async function purgeLegacyDriverHistory"));
-    expect(purge).toContain("SELECT id FROM daily_driver_history WHERE metricsVersion < 2");
-    expect(purge).toContain("DELETE FROM daily_driver_history WHERE id IN (${list}) AND metricsVersion < 2");
-    expect(purge).toContain("DELETE FROM driver_day_shares WHERE historyId IN (${list})");
-    expect(readFileSync(resolve(root, "server/cronJobs.ts"), "utf8")).toContain("purgeLegacyDriverHistory({ deadlineAt: cap(");
+    expect(src).not.toContain("purgeLegacyDriverHistory");
+    expect(readFileSync(resolve(root, "server/cronJobs.ts"), "utf8")).not.toContain("purge-legacy-gps");
+  });
+});
+
+describe("recolha manual: volta a buscar finais vazias", () => {
+  it("só com retryEmpty e só linhas finais vazias", () => {
+    const existing = new Map<string, ExistingDriverRow>([
+      ["vazio", { id: 1, pass: "final", collectedAtMs: 0, empty: true }],
+      ["cheio", { id: 2, pass: "final", collectedAtMs: 0, empty: false }],
+    ]);
+    const users = ["vazio", "cheio", "novo"];
+    expect(usersToCollect(users, existing, "final", 0)).toEqual(["novo"]);
+    expect(usersToCollect(users, existing, "final", 0, { retryEmpty: true })).toEqual(["vazio", "novo"]);
+    expect(usersToCollect(users, existing, "sameday", 0, { retryEmpty: true })).toEqual(["novo"]);
   });
 });
 

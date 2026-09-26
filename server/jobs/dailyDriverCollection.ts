@@ -220,8 +220,9 @@ export { processGeoJsonHistory };
 
 /**
  * Versão das métricas GPS. 2 = velocidades em km/h (sem o ×3,6), filtro de
- * precisão e funcionário resolvido. Linhas antigas (1) são apagadas
- * (purgeLegacyDriverHistory).
+ * precisão e funcionário resolvido. Linhas antigas (1) ficam na BD mas já não
+ * são recalculadas (decisão do Jorge, 26 set 2026 — limpeza opcional à mão:
+ * scripts/sql/gps-antigo-apagar.sql).
  */
 // 3 = + GPS partido por quem tinha o PDA (Fase 3)
 // 4 = partes com minutos em movimento (0086) e dias de Lisboa nos intervalos do PDA
@@ -236,37 +237,6 @@ export function countSpeedViolations(data: any, threshold: number): number {
     if (v > threshold && v <= MAX_PLAUSIBLE_KMH) n++;
   }
   return n;
-}
-
-/**
- * Linhas GPS antigas por corrigir = v1 (`metricsVersion < 2`): velocidades
- * gravadas ×3,6 e sem funcionário. Decisão do Jorge (26 set 2026): em vez de
- * as recalcular (a antiga "Fase 0"), APAGAM-SE — com as partes por pessoa
- * delas (driver_day_shares, ligadas pelo `historyId`). Nunca toca em linhas
- * já recalculadas nem gravadas depois da correção da velocidade (v ≥ 2).
- * Os alertas GPS e de velocidade não têm ligação à linha (só nome Zello e
- * hora) e ficam. Em lotes (DELETE … WHERE id IN, com prazo); quando não
- * houver mais nenhuma, é um no-op.
- */
-export const LEGACY_GPS_PREDICATE = "metricsVersion < 2";
-
-export async function purgeLegacyDriverHistory(opts: { deadlineAt: number; batch?: number }): Promise<{ deleted: number; sharesDeleted: number; done: boolean }> {
-  const { getDb } = await import("../db");
-  const { sql } = await import("drizzle-orm");
-  const db = await getDb();
-  if (!db) return { deleted: 0, sharesDeleted: 0, done: true };
-  const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r) as any[]) ?? [];
-  const affected = (r: any): number => Number((Array.isArray(r) ? r[0] : r)?.affectedRows ?? 0);
-  let deleted = 0;
-  let sharesDeleted = 0;
-  for (;;) {
-    if (Date.now() > opts.deadlineAt) return { deleted, sharesDeleted, done: false };
-    const ids = rowsOf(await db.execute(sql`SELECT id FROM daily_driver_history WHERE metricsVersion < 2 ORDER BY id LIMIT ${opts.batch ?? 500}`)).map((r) => Number(r.id));
-    if (!ids.length) return { deleted, sharesDeleted, done: true };
-    const list = sql.join(ids.map((id) => sql`${id}`), sql`, `);
-    sharesDeleted += affected(await db.execute(sql`DELETE FROM driver_day_shares WHERE historyId IN (${list})`));
-    deleted += affected(await db.execute(sql`DELETE FROM daily_driver_history WHERE id IN (${list}) AND metricsVersion < 2`));
-  }
 }
 
 /**
@@ -323,20 +293,21 @@ export async function resplitDriverDay(day: string, opts: { deadlineAt: number; 
  */
 export type CollectionPass = "sameday" | "final";
 
-export interface ExistingDriverRow { id: number; pass: string; collectedAtMs: number | null }
+export interface ExistingDriverRow { id: number; pass: string; collectedAtMs: number | null; empty?: boolean }
 
 /**
  * Condutores a (re)recolher numa passagem. PURA.
  *  - final: sem linha, ou com linha provisória (a final substitui-a);
  *  - sameday: sem linha, ou provisória recolhida ANTES desta passagem
  *    (`passStartedAt`) — as feitas nesta passagem ficam (retoma entre ticks);
- *    uma linha final nunca é tocada.
+ *    uma linha final nunca é tocada — exceto, com `retryEmpty` (recolha
+ *    manual), as finais VAZIAS (0 pontos GPS: o antigo bug do D-1).
  */
-export function usersToCollect(users: readonly string[], existing: ReadonlyMap<string, ExistingDriverRow>, pass: CollectionPass, passStartedAt: number): string[] {
+export function usersToCollect(users: readonly string[], existing: ReadonlyMap<string, ExistingDriverRow>, pass: CollectionPass, passStartedAt: number, o: { retryEmpty?: boolean } = {}): string[] {
   return users.filter((u) => {
     const row = existing.get(u);
     if (!row) return true;
-    if (row.pass === "final") return false;
+    if (row.pass === "final") return pass === "final" && Boolean(o.retryEmpty && row.empty);
     if (pass === "final") return true;
     return row.collectedAtMs == null || row.collectedAtMs < passStartedAt;
   });
@@ -358,7 +329,7 @@ export function passForDay(day: string, nowMs: number): CollectionPass | null {
  * o alerta "GPS desligado" é criado uma só vez por condutor e dia; o resumo
  * "Relatório Diário de Motoristas" só sai na passagem final.
  */
-export async function collectDailyDriverData(targetDate: Date, opts?: { deadlineAt?: number; pass?: CollectionPass; passStartedAt?: number }): Promise<{
+export async function collectDailyDriverData(targetDate: Date, opts?: { deadlineAt?: number; pass?: CollectionPass; passStartedAt?: number; retryEmpty?: boolean }): Promise<{
   success: boolean;
   driversProcessed: number;
   errors: string[];
@@ -384,7 +355,7 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
     // Get all Zello users
     const users = await getZelloUsers();
     const allNonAdmin = users.filter(u => !u.admin);
-    const todo = new Set(usersToCollect(allNonAdmin.map((u) => u.name), existing, pass, passStartedAt));
+    const todo = new Set(usersToCollect(allNonAdmin.map((u) => u.name), existing, pass, passStartedAt, { retryEmpty: opts?.retryEmpty }));
     const nonAdminUsers = allNonAdmin.filter((u) => todo.has(u.name));
     if (allNonAdmin.length > 0 && nonAdminUsers.length === 0) {
       console.log(`[DailyCollection] ${dateStr} (${pass}) já completo (${existing.size} registos).`);
@@ -520,13 +491,13 @@ async function existingRowsForDay(day: string): Promise<Map<string, ExistingDriv
   const out = new Map<string, ExistingDriverRow>();
   if (!db) return out;
   const res = await db.execute(sql`
-    SELECT id, zelloUsername, collectionPass, DATE_FORMAT(collectedAt, '%Y-%m-%d %H:%i:%s') AS collectedAt
+    SELECT id, zelloUsername, collectionPass, gpsPointsCount, DATE_FORMAT(collectedAt, '%Y-%m-%d %H:%i:%s') AS collectedAt
       FROM daily_driver_history WHERE DATE(date) = ${day} ORDER BY id`);
   const rows = ((Array.isArray(res) ? res[0] : res) as unknown as any[]) ?? [];
   for (const r of rows) {
     const at = r.collectedAt ? Date.parse(`${String(r.collectedAt).replace(" ", "T")}Z`) : NaN;
     // Duplicados antigos (se os houver): fica a 1.ª linha.
-    if (!out.has(String(r.zelloUsername))) out.set(String(r.zelloUsername), { id: Number(r.id), pass: String(r.collectionPass ?? "final"), collectedAtMs: Number.isFinite(at) ? at : null });
+    if (!out.has(String(r.zelloUsername))) out.set(String(r.zelloUsername), { id: Number(r.id), pass: String(r.collectionPass ?? "final"), collectedAtMs: Number.isFinite(at) ? at : null, empty: !(Number(r.gpsPointsCount) > 0) });
   }
   return out;
 }

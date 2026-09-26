@@ -184,7 +184,7 @@ const noonUtc = (day: string) => new Date(`${day}T12:00:00Z`);
 
 /**
  * Manutenção diária (despesas, avaliação semanal, tarefas, ponto, possíveis
- * faltas, retenções, limpeza do GPS antigo), reconciliação Multipark e
+ * faltas, retenções), reconciliação Multipark e
  * recolha GPS FINAL do Zello, TUDO dentro de
  * `deadlineAt`: cada passo só arranca com tempo (≥ 8 s) e os que ficarem de
  * fora seguem na chamada seguinte (`done:false`; o agendador guarda no cursor
@@ -286,14 +286,6 @@ export async function dailyOpsCron(o: { deadlineAt: number; collectOnly?: boolea
         const { purgeOldChats } = await import("./_core/ai/chat/store");
         const r = await purgeOldChats({ deadlineAt: cap(4_000) });
         if (r.deleted > 0) console.log(`[daily-ops] assistente: ${r.deleted} mensagem(ns)/conversa(s) antigas apagadas${r.done ? "" : ", continua amanhã"}`);
-      });
-      // GPS antigo por corrigir (v1: velocidades ×3,6, sem funcionário):
-      // apagado em lotes (decisão do Jorge, 26 set 2026 — já não se recalcula).
-      // Quando não houver mais nenhum, é um no-op.
-      await step("purge-legacy-gps", "limpeza GPS antigo", async () => {
-        const { purgeLegacyDriverHistory } = await import("./jobs/dailyDriverCollection");
-        const r = await purgeLegacyDriverHistory({ deadlineAt: cap(6_000) });
-        if (r.deleted > 0) console.log(`[daily-ops] GPS antigo (v1): ${r.deleted} linha(s) e ${r.sharesDeleted} parte(s) apagadas${r.done ? "" : ", continua amanhã"}`);
       });
       // Comunicação: emails mais antigos do que `mail.retentionYears` e SEM
       // ligação a cliente/reserva/caso são apagados (os ligados ficam).
