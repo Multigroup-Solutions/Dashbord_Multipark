@@ -31,7 +31,9 @@ Pronto. Não é preciso mais nada no GitHub.
 | Tarefa | Quando |
 | --- | --- |
 | Gmail (Comunicação) | de 5 em 5 min |
-| Fila do webhook Multipark · IA na comunicação · Google Tarefas/Calendário/Contactos/Drive | de 15 em 15 min |
+| Fila do webhook Multipark · IA na comunicação · Google: alterações por enviar/receber que falharam (repetição) | de 15 em 15 min |
+| Google Tarefas/Calendário/Contactos/Drive — sincronização completa (rede de segurança; o resto é em tempo real, ver Ajuda → Google em tempo real) | de 4 em 4 horas |
+| Google: renovar os canais de notificação (Calendário e Drive) | 1×/dia a partir das 03:40 |
 | Reservas recentes · emails IMAP · automação dos extras · ligações funcionário ↔ utilizador | de hora a hora |
 | Escala automática dos extras (propor às 14h, confirmar às 18h, por omissão) | de hora a hora, das 08h às 23h |
 | Reservas futuras | de 2 em 2 horas |
@@ -43,7 +45,7 @@ Pronto. Não é preciso mais nada no GitHub.
 | Google Ads e Meta Ads | 1×/dia a partir das 05:45 (última semana) e no dia 2 de cada mês (mês anterior) |
 | Web & SEO | 1×/dia a partir das 09:00 (ou da hora escolhida nas Definições, se for mais tarde) |
 
-Fora da agenda (só à mão): **Base de conhecimento** (botão **Sincronizar agora**) e **Google Business Profile** (em pausa até a Google aprovar o acesso).
+Fora da agenda: **Base de conhecimento** (atualiza-se quando a Google avisa que um ficheiro das pastas mudou e na verificação de 4 em 4 horas do Google; o botão **Sincronizar agora** continua) e **Google Business Profile** (só à mão, em pausa até a Google aprovar o acesso).
 
 **Recolha GPS do Zello**: o Zello dá o dia de hoje durante o próprio dia, deixa de o dar à meia-noite e só o volta a dar cerca de 2 dias depois. Por isso há duas recolhas: uma **provisória** às 23:15–23:55 (o dia de hoje, para o Histórico Diário e a Atividade do Dia terem dados logo) e a **final** às 04:30, do dia de **anteontem** (D-2), que substitui a provisória (inclui os turnos que acabam depois da meia-noite) e recupera qualquer dia dos últimos 7 que tenha ficado incompleto. O alerta "GPS desligado" sai uma só vez por condutor e dia. Recolher à mão o dia de **ontem** não é possível (o Zello não o dá nesse momento).
 

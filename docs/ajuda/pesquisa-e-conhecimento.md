@@ -27,7 +27,7 @@ Regras:
 Manuais e procedimentos da empresa que o **tutor da formação**, o **assistente** e a **pesquisa global** usam para responder. As respostas indicam as **Fontes** (título do documento e ligação); carregar na fonte abre o documento.
 
 **Onde estão os documentos**
-- Pastas do Shared Drive "Multipark" (por omissão **Formação** e **Procedimentos**), sincronizadas quando carregas em **Sincronizar agora** (não há sincronização automática): Google Docs, PDF, DOCX e ficheiros de texto. Um ficheiro alterado no Drive é lido outra vez; um ficheiro apagado sai do índice.
+- Pastas do Shared Drive "Multipark" (por omissão **Formação** e **Procedimentos**), sincronizadas sozinhas quando alguém muda um ficheiro nessas pastas (a Google avisa a app) e, mesmo sem avisos, de 4 em 4 horas; **Sincronizar agora** continua a funcionar: Google Docs, PDF, DOCX e ficheiros de texto. Um ficheiro alterado no Drive é lido outra vez; um ficheiro apagado sai do índice.
 - Ficheiros carregados na app (PDF, DOCX, TXT ou MD até 4 MB).
 - A ajuda da própria app (atualiza-se sozinha).
 

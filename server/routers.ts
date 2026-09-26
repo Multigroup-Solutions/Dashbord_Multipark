@@ -4913,7 +4913,13 @@ export const appRouter = router({
           updateData.closedAt = new Date();
         }
       }
+      const prevAssignee = rest.assignedToId !== undefined || slaHours !== undefined || status ? (await getComplaintById(id))?.assignedToId ?? null : null;
       await updateComplaint(id, updateData);
+      // SLA no Google Calendar de quem tinha e de quem tem a reclamação, já.
+      if (rest.assignedToId !== undefined || slaHours !== undefined || status) {
+        const ids = [prevAssignee, rest.assignedToId ?? null].filter((x): x is number => typeof x === "number");
+        if (ids.length) import("./google/pendingSync").then((m) => m.scheduleGoogleUsersSync(ids, "complaint_sla")).catch(() => undefined);
+      }
       // Se a ref de reserva mudou, repopula os campos em falta a partir dela
       // (datas, matrícula, contactos, projeto).
       if (input.reservationRef) {

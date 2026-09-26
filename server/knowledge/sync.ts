@@ -1,7 +1,9 @@
 /**
  * Base de conhecimento — sincronização (SEM agenda desde 26 set 2026: botão
  * "Sincronizar agora" ou /api/cron/knowledge-sync à mão, 45 s por corrida;
- * cada carregamento é processado logo) e processamento de um documento.
+ * cada carregamento é processado logo; as alterações nas pastas do Drive
+ * chegam por notificação da Google — server/knowledge/driveChanges.ts) e
+ * processamento de um documento.
  *
  *  1. Ajuda da app (docs/ajuda, no bundle) → documentos "help" (só muda com
  *     um deploy; checksum igual = nada a fazer).
@@ -87,7 +89,7 @@ const LAST_PASS_KEY = "drive:lastPass";
 const PASS_EVERY_MS = 50 * 60_000;
 const MAX_DEPTH = 4;
 
-async function resolveFolder(api: KbDriveApi, path: string): Promise<string | null> {
+export async function resolveFolder(api: Pick<KbDriveApi, "driveId" | "findFolder">, path: string): Promise<string | null> {
   let parent = api.driveId;
   for (const seg of path.split("/").map((x) => x.trim()).filter(Boolean)) {
     const id = await api.findFolder(seg, parent);
@@ -119,6 +121,15 @@ export async function upsertDriveFile(d: store.Db, f: { id: string; name: string
       ${changed && !excluded ? sql`, status = 'pending', attempts = 0, error = NULL` : sql``}
     WHERE id = ${Number(r.id)}`);
   return changed && !excluded;
+}
+
+/**
+ * Pede uma volta completa às pastas na próxima corrida (ex.: o Drive avisou
+ * de um ficheiro novo numa pasta da base de conhecimento), mesmo que a última
+ * tenha sido há menos de 50 min.
+ */
+export async function forceNextDiscovery(d: store.Db): Promise<void> {
+  await store.setState(d, LAST_PASS_KEY, "0");
 }
 
 export async function discoverDrive(d: store.Db, api: KbDriveApi, folders: readonly KbFolder[], deadlineAt: number, report: KbSyncReport, now: Date = new Date()): Promise<void> {

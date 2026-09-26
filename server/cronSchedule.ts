@@ -64,7 +64,12 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   { key: "mail-sync", runName: "mail-sync", label: "Comunicação: sincronização do Gmail", cadence: { kind: "interval", minutes: 5 }, priority: 10, minMs: 10 * S, maxMs: 25 * S },
   { key: "multipark-deliveries", runName: "multipark-deliveries", label: "Fila do webhook Multipark", cadence: { kind: "interval", minutes: 15 }, priority: 20, minMs: 15 * S, maxMs: 30 * S },
   { key: "ai-comms", runName: "ai-comms", label: "IA na comunicação com clientes", cadence: { kind: "interval", minutes: 15 }, priority: 30, minMs: 20 * S, maxMs: 30 * S },
-  { key: "google-sync", runName: "google-sync", label: "Google Tarefas, Calendário, Contactos e Drive", cadence: { kind: "interval", minutes: 15 }, priority: 40, minMs: 12 * S, maxMs: 25 * S },
+  // Google por eventos (26 set 2026): o que muda vai/vem logo (push da Google,
+  // fila "sincronizar já", heartbeat do dashboard); aqui só a repetição do que
+  // falhou (15 min), a rede de segurança completa (4 h) e a renovação diária
+  // dos canais de notificação (expiram em ≤ 7 dias).
+  { key: "google-pending", runName: "google-pending", label: "Google: alterações por enviar/receber (repetição)", cadence: { kind: "interval", minutes: 15 }, priority: 38, minMs: 10 * S, maxMs: 25 * S },
+  { key: "google-sync", runName: "google-sync", label: "Google Tarefas, Calendário, Contactos e Drive (rede de segurança)", cadence: { kind: "interval", minutes: 240 }, priority: 40, minMs: 12 * S, maxMs: 25 * S },
   { key: "extras-schedule", runName: "extras-schedule", label: "Escala automática dos extras (propor/confirmar/avisar)", cadence: { kind: "interval", minutes: 60, window: { fromHour: 8, toHour: 23 } }, priority: 45, minMs: 15 * S, maxMs: 45 * S },
   { key: "multipark-sync", runName: "multipark-sync", label: "Sincronização de reservas (recente)", cadence: { kind: "interval", minutes: 60 }, priority: 50, minMs: 25 * S, maxMs: 45 * S },
   { key: "email-inbound", runName: "email-inbound", label: "Emails recebidos (IMAP)", cadence: { kind: "interval", minutes: 60 }, priority: 60, minMs: 15 * S, maxMs: 40 * S },
@@ -72,6 +77,7 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   { key: "identity-sweep", runName: "identity-sweep", label: "Ligações funcionário ↔ utilizador", cadence: { kind: "interval", minutes: 60 }, priority: 80, minMs: 10 * S, maxMs: 30 * S },
   { key: "multipark-future", runName: "multipark-future", label: "Sincronização de reservas (futuras)", cadence: { kind: "interval", minutes: 120 }, priority: 90, minMs: 25 * S, maxMs: 45 * S },
   { key: "zello-sameday", runName: "zello-sameday", label: "GPS do Zello — recolha provisória do dia", cadence: { kind: "daily", from: ZELLO_SAMEDAY_WINDOW.from, until: ZELLO_SAMEDAY_WINDOW.until }, priority: 95, minMs: 15 * S, maxMs: 45 * S },
+  { key: "google-watch-renew", runName: "google-watch-renew", label: "Google: renovar canais de notificação (Calendário/Drive)", cadence: { kind: "daily", from: "03:40" }, priority: 98, minMs: 15 * S, maxMs: 40 * S },
   { key: "daily-ops", runName: "daily-ops", label: "Manutenção diária + recolha GPS final (D-2)", cadence: { kind: "daily", from: "04:30" }, priority: 100, minMs: 20 * S, maxMs: 45 * S },
   { key: "rh-docs-weekly", runName: "rh-docs-weekly", label: "RH: regra documental dos extras (semanal)", cadence: { kind: "weekly", dow: 1, from: "04:45" }, priority: 102, minMs: 15 * S, maxMs: 45 * S },
   { key: "ops-briefing", runName: "ops-briefing", label: "Briefing diário, anomalias e relatórios semanais", cadence: { kind: "daily", from: "07:30" }, priority: 105, minMs: 20 * S, maxMs: 45 * S },

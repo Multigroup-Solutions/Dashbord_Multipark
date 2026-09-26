@@ -286,7 +286,7 @@ describe("registo dos trabalhos", () => {
   it("cadências pedidas (tabela do Jorge)", () => {
     const c = Object.fromEntries(TICK_JOBS.map((j) => [j.key, describeCadence(j.cadence)]));
     expect(c).toMatchObject({
-      "mail-sync": "a cada 5 min", "multipark-deliveries": "a cada 15 min", "ai-comms": "a cada 15 min", "google-sync": "a cada 15 min",
+      "mail-sync": "a cada 5 min", "multipark-deliveries": "a cada 15 min", "ai-comms": "a cada 15 min", "google-sync": "a cada 4 h", "google-pending": "a cada 15 min", "google-watch-renew": "diário a partir das 03:40",
       "multipark-sync": "de hora a hora", "email-inbound": "de hora a hora", "extras-auto": "de hora a hora", "identity-sweep": "de hora a hora",
       "extras-schedule": "de hora a hora (08h–23h)", "multipark-future": "a cada 2 h",
       "daily-ops": "diário a partir das 04:30", "zello-sameday": "diário das 23:15 às 23:55", "rh-docs-weekly": "semanal, segunda a partir das 04:45", "ops-briefing": "diário a partir das 07:30", "web-analytics": "diário a partir das 09:00",
@@ -375,7 +375,7 @@ describe("migração 0190, schema e acessos", () => {
   it("registada no ensureRecentSchema (por ordem), idempotente e espelhada no schema drizzle", async () => {
     const db = readFileSync(resolve(root, "server/db.ts"), "utf8");
     const nums = [...db.matchAll(/import\("\.\/migrations\/migration_(\d{4})"\)\.then\(m => \(\{ s: m\.MIGRATION_/g)].map((x) => Number(x[1]));
-    expect(nums[nums.length - 1]).toBe(190);
+    expect(nums).toContain(190);
     expect([...nums].sort((a, b) => a - b)).toEqual(nums);
     const { MIGRATION_0190_STATEMENTS } = await import("./migrations/migration_0190");
     expect(MIGRATION_0190_STATEMENTS[0]).toMatch(/^CREATE TABLE IF NOT EXISTS `cron_job_state`/);

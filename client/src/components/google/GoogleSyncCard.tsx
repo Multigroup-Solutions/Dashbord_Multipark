@@ -48,6 +48,7 @@ export function GoogleSyncCard({ returnTo = "/perfil" }: { returnTo?: string }) 
     },
     onError: (e) => toast.error(e.message),
   });
+  const push = trpc.googleAccount.sync.pushStatus.useQuery(undefined, { staleTime: 60_000, enabled: !!q.data?.account.connected });
   const s = q.data;
   if (q.isLoading) return <div className="bg-card border border-border rounded-2xl p-4"><Loader2 className="h-4 w-4 animate-spin" /></div>;
   if (!s || !s.account.configured) return null;
@@ -123,6 +124,11 @@ export function GoogleSyncCard({ returnTo = "/perfil" }: { returnTo?: string }) 
           {s.lastStatus && <span>· {STATUS_LABEL[s.lastStatus] ?? s.lastStatus}</span>}
           {s.linkedTasks > 0 && <span>· {s.linkedTasks} tarefa(s) ligadas</span>}
           {s.rejectedTasks > 0 && <span>· {s.rejectedTasks} criada(s) no Google sem permissão (ficaram só no Google)</span>}
+          {push.data?.enabled && s.calendarGranted && (
+            <span>· Calendário em tempo real: {push.data.calendar ? (push.data.calendar.health === "expired" ? "a renovar" : "ativo") : "a ligar"}
+              {push.data.calendar?.lastNotifiedAt ? ` (último aviso ${fmtPTDateTime(push.data.calendar.lastNotifiedAt)})` : ""}</span>
+          )}
+          {push.data?.lastOnlineSyncAt && <span>· Tarefas/Contactos enquanto tens o dashboard aberto (último: {fmtPTDateTime(push.data.lastOnlineSyncAt)})</span>}
           <Button size="sm" variant="outline" className="ml-auto" disabled={syncNow.isPending || (!s.tasksGranted && !s.calendarGranted)} onClick={() => syncNow.mutate()}>
             {syncNow.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}Sincronizar agora
           </Button>

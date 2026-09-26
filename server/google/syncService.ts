@@ -1,6 +1,11 @@
 /**
- * Google Tarefas & Calendário — corrida (trabalho google-sync do agendador
- * /api/cron/tick, de 15 em 15 min, com prazo, resumível) e o que a app usa:
+ * Google Tarefas & Calendário — corrida completa (trabalho google-sync do
+ * agendador /api/cron/tick, de 4 em 4 horas como rede de segurança, com
+ * prazo, resumível) e o que a app usa. Desde 26 set 2026 a sincronização é
+ * por eventos (shared/googlePush.ts): o que muda no dashboard vai logo
+ * (pendingSync.ts), o Calendário e o Drive avisam por notificação
+ * (pushChannels.ts) e Tarefas/Contactos sincronizam enquanto o dashboard
+ * está aberto (heartbeat). Aqui:
  *
  *  - por pessoa com a conta Google ligada: Tarefas (se ligou "Tarefas" no
  *    Perfil e autorizou o âmbito) e Calendário "Multipark" (turnos, escala da
@@ -51,6 +56,7 @@ export interface GoogleSyncReport {
   shared: Array<{ city: string; status: string; error?: string; inserted?: number; updated?: number; deleted?: number }>;
   directory?: { ran: boolean; done: boolean; count: number | null; error: string | null };
   drive?: { done: boolean; mirrored: number; mirrorFailed: number; live: { ran: boolean; reports: string[]; partial: boolean; error: string | null } | null };
+  knowledge?: { status: string; seen: number; updated: number; removed: number; processed: number };
   errors: string[];
   warnings: string[];
 }
@@ -163,14 +169,18 @@ async function permsFor(c: Candidate, employeeId: number | null) {
   return taskSyncPermissions({ id: c.userId, role: c.role, accessOverrides: overrides as any, employeeId }, inScope);
 }
 
-export async function syncOneUser(c: Candidate, opts: { deadlineAt: number; tasksOnly?: boolean; now?: () => number }): Promise<GoogleSyncUserReport> {
+/** Partes a sincronizar numa corrida de uma pessoa (omissão: todas). */
+export interface SyncParts { tasks?: boolean; calendar?: boolean; contacts?: boolean }
+
+export async function syncOneUser(c: Candidate, opts: { deadlineAt: number; tasksOnly?: boolean; parts?: SyncParts; now?: () => number }): Promise<GoogleSyncUserReport> {
   const out: GoogleSyncUserReport = { userId: c.userId, status: "ok" };
   if (!c.isActive) return { ...out, status: "skipped", error: "utilizador inativo" };
   if (c.status === "reauth_required") return { ...out, status: "reauth_required" };
   const state = await getSyncState(c.userId);
   const prefs = state.prefs;
-  const wantTasks = prefs.tasks;
-  const wantCal = !opts.tasksOnly && (anyCalendarPref(prefs) || !!state.calendarId);
+  const parts = opts.tasksOnly ? { tasks: true, calendar: false, contacts: false } : { tasks: opts.parts?.tasks !== false, calendar: opts.parts?.calendar !== false, contacts: opts.parts?.contacts !== false };
+  const wantTasks = parts.tasks && prefs.tasks;
+  const wantCal = parts.calendar && (anyCalendarPref(prefs) || !!state.calendarId);
   const hasTasks = hasFeatureScopes(c.scopes, "tasks");
   const hasCal = hasFeatureScopes(c.scopes, "calendar");
   const hasContacts = hasFeatureScopes(c.scopes, "contacts");
@@ -178,11 +188,11 @@ export async function syncOneUser(c: Candidate, opts: { deadlineAt: number; task
   // Tarefas/Calendário só avisam em falta a quem não autorizou nada disso (quem só quer Contactos não é incomodado).
   const onlyContacts = hasContacts && !hasTasks && !hasCal;
   if (wantTasks && !hasTasks && !onlyContacts) missing.push("Tarefas");
-  if (!opts.tasksOnly && anyCalendarPref(prefs) && !hasCal && !onlyContacts) missing.push("Calendário");
+  if (parts.calendar && anyCalendarPref(prefs) && !hasCal && !onlyContacts) missing.push("Calendário");
   const runTasks = wantTasks && hasTasks;
   const runCal = wantCal && hasCal;
   let runContacts = false;
-  if (!opts.tasksOnly && hasContacts) {
+  if (parts.contacts && hasContacts) {
     const { wantsContacts } = await import("./contactsService");
     runContacts = await wantsContacts(c.userId, c.role);
   }
@@ -225,6 +235,11 @@ export async function syncOneUser(c: Candidate, opts: { deadlineAt: number; task
       if (r.rateLimited) out.status = "rate_limited";
       if (r.partial) partial = true;
       if (!r.partial) await patchSyncState(c.userId, { lastCalendarSyncAt: nowSql() });
+      // Notificações da Google para este calendário (cria o canal se faltar).
+      if (r.calendarId && !r.partial) {
+        const { ensureWatch } = await import("./pushChannels");
+        await ensureWatch({ kind: "calendar", scopeKey: `user:${c.userId}`, resourceKey: r.calendarId, userId: c.userId }, { deadlineAt: opts.deadlineAt, apis: { calendar: api } });
+      }
     } else if (runCal) partial = true;
     if (runContacts && Date.now() < opts.deadlineAt - 4_000) {
       const { runUserContacts } = await import("./contactsService");
@@ -269,7 +284,7 @@ export async function loadSharedCalendarsConfig() {
   } catch { return parseSharedCalendarsConfig(null); }
 }
 
-export async function syncSharedCalendars(opts: { deadlineAt: number; now?: () => number }): Promise<{ configured: boolean; cities: GoogleSyncReport["shared"]; errors: string[] }> {
+export async function syncSharedCalendars(opts: { deadlineAt: number; now?: () => number; onlyCity?: string | null }): Promise<{ configured: boolean; cities: GoogleSyncReport["shared"]; errors: string[] }> {
   const cfg = await loadSharedCalendarsConfig();
   const out = { configured: cfg.enabled, cities: [] as GoogleSyncReport["shared"], errors: [] as string[] };
   if (!cfg.enabled) return out;
@@ -287,6 +302,7 @@ export async function syncSharedCalendars(opts: { deadlineAt: number; now?: () =
   const domain = cfg.ownerEmail.split("@")[1] ?? "";
   for (const city of SHARED_CALENDAR_CITIES) {
     if (!cfg.cities[city]) continue;
+    if (opts.onlyCity && opts.onlyCity !== city) continue;
     if (Date.now() > opts.deadlineAt - 3_000) { out.cities.push({ city, status: "partial" }); continue; }
     try {
       const prev = rowsOf(await d.execute(sql`SELECT ownerEmail FROM google_shared_calendars WHERE city = ${city} LIMIT 1`))[0];
@@ -309,6 +325,10 @@ export async function syncSharedCalendars(opts: { deadlineAt: number; now?: () =
         },
       });
       await d.execute(sql`UPDATE google_shared_calendars SET lastSyncAt = ${nowSql()}, lastError = NULL WHERE city = ${city}`);
+      if (r.calendarId && !r.partial) {
+        const { ensureWatch } = await import("./pushChannels");
+        await ensureWatch({ kind: "calendar", scopeKey: `shared:${city}`, resourceKey: r.calendarId, userId: null }, { deadlineAt: opts.deadlineAt, apis: { calendar: api } });
+      }
       out.cities.push({ city, status: r.partial ? "partial" : "ok", inserted: r.inserted, updated: r.updated, deleted: r.deleted });
     } catch (err) {
       const msg = googleErrorMessage(err);
@@ -337,7 +357,7 @@ async function candidates(onlyUserIds?: readonly number[] | null): Promise<Candi
     .filter((c) => hasFeatureScopes(c.scopes, "tasks") || hasFeatureScopes(c.scopes, "calendar") || hasFeatureScopes(c.scopes, "contacts") || !!onlyUserIds?.length);
 }
 
-export async function runGoogleSync(opts: { deadlineAt: number; onlyUserIds?: readonly number[] | null; tasksOnly?: boolean; includeShared?: boolean; now?: () => number }): Promise<GoogleSyncReport> {
+export async function runGoogleSync(opts: { deadlineAt: number; onlyUserIds?: readonly number[] | null; tasksOnly?: boolean; parts?: SyncParts; includeShared?: boolean; now?: () => number }): Promise<GoogleSyncReport> {
   const report: GoogleSyncReport = { ok: true, configured: false, done: true, users: [], shared: [], errors: [], warnings: [] };
   let fatal: string | null = null;
   const sharedErrors: string[] = [];
@@ -349,7 +369,7 @@ export async function runGoogleSync(opts: { deadlineAt: number; onlyUserIds?: re
     const list = await candidates(opts.onlyUserIds);
     for (const c of list) {
       if (Date.now() > opts.deadlineAt - 4_000) { report.done = false; break; }
-      const r = await syncOneUser(c, { deadlineAt: opts.deadlineAt, tasksOnly: opts.tasksOnly, now: opts.now });
+      const r = await syncOneUser(c, { deadlineAt: opts.deadlineAt, tasksOnly: opts.tasksOnly, parts: opts.parts, now: opts.now });
       report.users.push(r);
       if (r.status === "partial" || r.status === "rate_limited") report.done = false;
       if (r.status === "error") report.errors.push(`utilizador ${c.userId}: ${r.error ?? "erro"}`);
@@ -384,6 +404,24 @@ export async function runGoogleSync(opts: { deadlineAt: number; onlyUserIds?: re
           report.warnings.push(...dj.warnings);
         }
       }
+      // Base de conhecimento: as alterações nas pastas do Drive chegam por
+      // notificação; aqui fica a verificação "mesmo sem avisos" de 4 em 4 h
+      // (sem tempo → fica na fila, o google-pending corre-a).
+      try {
+        const { loadKnowledgeConfig } = await import("../knowledge/sync");
+        const kcfg = await loadKnowledgeConfig();
+        // Só quando o resto acabou (uma corrida retomada não repete a verificação).
+        if (report.done && kcfg.driveEnabled && kcfg.folders.length) {
+          const { markPending } = await import("./pendingSync");
+          if (Date.now() < opts.deadlineAt - 15_000) {
+            const { runKbChanges } = await import("../knowledge/driveChanges");
+            const kb = await runKbChanges({ deadlineAt: opts.deadlineAt - 2_000, force: true });
+            report.knowledge = { status: kb.status, seen: kb.seen, updated: kb.updated, removed: kb.removed, processed: kb.processed };
+            if (kb.status === "partial") await markPending(["drive:kb"], "safety_net");
+            if (kb.status === "error" && kb.error) report.warnings.push(`Base de conhecimento (Drive): ${kb.error}`);
+          } else await markPending(["drive:kb"], "safety_net");
+        }
+      } catch (err) { report.warnings.push(`Base de conhecimento (Drive): ${googleErrorMessage(err)}`); }
     }
   } catch (err: any) {
     fatal = String(err?.message ?? err).slice(0, 300);
@@ -397,10 +435,10 @@ export async function runGoogleSync(opts: { deadlineAt: number; onlyUserIds?: re
 // ─── Sincronizar já (depois de uma alteração nas Tarefas) ───────────────────
 
 /**
- * Marca como "sujas" as pessoas afetadas por uma alteração (responsáveis e
- * quem tinha a tarefa ligada) e tenta sincronizá-las já (≤ 20 s, sem
- * atrasar a resposta; no Vercel o waitUntil mantém a função viva). Nunca
- * lança — o agendador (15 em 15 min) apanha o que falhar.
+ * Pessoas afetadas por uma alteração numa tarefa (responsáveis e quem tinha
+ * a tarefa ligada) → Tarefas + Calendário (prazo) já para o Google, em
+ * segundo plano (pendingSync.ts). Nunca lança — o agendador repete o que
+ * falhar (google-pending) e o google-sync de 4 h é a rede de segurança.
  */
 export function scheduleGoogleTaskSync(input: { taskIds?: readonly number[]; employeeIds?: readonly number[] }): void {
   const work = (async () => {
@@ -420,10 +458,12 @@ export function scheduleGoogleTaskSync(input: { taskIds?: readonly number[]; emp
     }
     if (!users.size) return;
     const connected = rowsOf(await d.execute(sql`SELECT userId, scopes FROM google_user_accounts WHERE userId IN (${inList(Array.from(users))}) AND status = 'connected'`))
-      .filter((r) => hasFeatureScopes(String(r.scopes ?? ""), "tasks")).map((r) => Number(r.userId));
+      .filter((r) => hasFeatureScopes(String(r.scopes ?? ""), "tasks") || hasFeatureScopes(String(r.scopes ?? ""), "calendar")).map((r) => Number(r.userId));
     if (!connected.length) return;
     for (const u of connected) await patchSyncState(u, { dirtyAt: nowSql() });
-    await runGoogleSync({ deadlineAt: Date.now() + 20_000, onlyUserIds: connected, tasksOnly: true, includeShared: false });
+    const { markPending, drainPending } = await import("./pendingSync");
+    const keys = await markPending(connected.map((u) => `user:${u}`), "task");
+    await drainPending({ deadlineAt: Date.now() + 20_000, keys });
   })().catch((err) => console.warn("[google-sync] sincronização imediata falhou:", String(err?.message ?? err).slice(0, 160)));
   import("@vercel/functions").then((m) => m.waitUntil(work)).catch(() => { /* fora do Vercel a promessa continua sozinha */ });
 }

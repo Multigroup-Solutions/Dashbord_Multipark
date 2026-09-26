@@ -531,7 +531,10 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "mail-sync", label: "Comunicação: sincronização do Gmail", intervalMinutes: 5, workflow: "tick" },
   { name: "multipark-deliveries", label: "Fila do webhook Multipark", intervalMinutes: 15, workflow: "tick" },
   { name: "ai-comms", label: "IA na comunicação com clientes", intervalMinutes: 15, workflow: "tick" },
-  { name: "google-sync", label: "Google Tarefas, Calendário, Contactos e Drive", intervalMinutes: 15, workflow: "tick" },
+  // Google por eventos: repetição de 15 em 15 min, rede de segurança de 4 em 4 h, renovação diária dos canais.
+  { name: "google-pending", label: "Google: alterações por enviar/receber (repetição)", intervalMinutes: 15, workflow: "tick" },
+  { name: "google-sync", label: "Google Tarefas, Calendário, Contactos e Drive (rede de segurança)", intervalMinutes: 240, workflow: "tick" },
+  { name: "google-watch-renew", label: "Google: renovar canais de notificação (Calendário/Drive)", intervalMinutes: 1440, workflow: "tick" },
   { name: "multipark-sync", label: "Sincronização de reservas (recente)", intervalMinutes: 60, workflow: "tick" },
   { name: "extras-auto", label: "Automação dos extras", intervalMinutes: 60, workflow: "tick" },
   // De hora a hora entre as 08h e as 23h (Lisboa); 300 min para a pausa da
