@@ -511,8 +511,10 @@ export async function heldCities(date: string): Promise<Set<string>> {
   return out;
 }
 
-function smtpConfigured(): boolean {
-  return !!(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
+/** Envio de email disponível (API do Gmail pela conta de serviço — server/mail/systemMail.ts)? */
+async function emailConfigured(): Promise<boolean> {
+  const { isEmailSendConfigured } = await import("./mail/systemMail");
+  return isEmailSendConfigured();
 }
 
 function whatsappConfigured(): boolean {
@@ -539,7 +541,7 @@ export async function sendScheduleEmails(date: string, city: ScheduleCity, opts:
   const res = await db.execute(sql`SELECT id, fullName, email FROM employees WHERE id IN (${inList(empIds)})`);
   const people = new Map(rowsOf(res).map((r) => [Number(r.id), { fullName: String(r.fullName ?? ""), email: r.email ? String(r.email).trim() : "" }]));
   const settings = await loadScheduleSettings();
-  const { sendEmail } = await import("./_core/notification");
+  const { sendEmail } = await import("./mail/systemMail");
 
   for (const empId of empIds) {
     const mine = pending.filter((r) => r.employeeId === empId);
@@ -584,14 +586,14 @@ export async function sendScheduleNotifications(date: string, city: ScheduleCity
   } else {
     out.warnings.push("WhatsApp não configurado — só email");
   }
-  if (smtpConfigured()) {
+  if (await emailConfigured()) {
     try {
       out.email = await sendScheduleEmails(date, city, { respectHold: opts.respectHold });
     } catch (err: any) {
       out.errors.push(`email: ${String(err?.message ?? err).slice(0, 200)}`);
     }
   } else {
-    out.warnings.push("SMTP não configurado — sem email");
+    out.warnings.push("Envio de email (Gmail) não configurado — sem email");
   }
   return out;
 }
@@ -682,12 +684,12 @@ async function notifyRemoval(row: AssignmentRow, userId: number | null): Promise
     out.whatsapp = status;
   }
   const email = emp?.email ? String(emp.email).trim() : "";
-  if (smtpConfigured() && (await claimNotification(row, "removed", "email"))) {
+  if ((await emailConfigured()) && (await claimNotification(row, "removed", "email"))) {
     if (!email) {
       await finishNotification(row, "removed", "email", "no_contact", "sem email na ficha");
       out.email = "no_contact";
     } else {
-      const { sendEmail } = await import("./_core/notification");
+      const { sendEmail } = await import("./mail/systemMail");
       const ok = await sendEmail({
         to: email,
         subject: `Escala Multipark — turno cancelado (${text.split(" · ")[0]})`,

@@ -427,7 +427,7 @@ backoffice (3) > frontoffice (2) > extra (1) > user (0)
 | **Zello Work** | GPS/Rádio frota | `ZELLO_API_KEY`, `ZELLO_USERNAME`, `ZELLO_PASSWORD` |
 | **OpenAI (compat.)** | IA respostas, OCR | `LLM_API_URL`, `LLM_API_KEY`, `LLM_MODEL` |
 | **AWS S3** | Storage ficheiros | `AWS_S3_REGION`, `AWS_S3_BUCKET_NAME`, `AWS_S3_ACCESS_KEY`, `AWS_S3_SECRET_ACCESS_KEY` |
-| **Nodemailer SMTP** | Emails/notificações | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` |
+| **Gmail API** | TODO o email: envio (notificações, clientes) e receção (caixas, alias → pipelines) — sem SMTP/IMAP | `GOOGLE_WORKSPACE_SERVICE_ACCOUNT_JSON` (delegação gmail.modify + gmail.send); remetente e aliases em Definições → Comunicação |
 | **Google Maps** | Mapas GPS | `VITE_GOOGLE_MAPS_API_KEY` |
 
 ---
@@ -465,12 +465,8 @@ LLM_API_URL=https://api.openai.com/v1
 LLM_API_KEY=sk-...
 LLM_MODEL=gpt-4o-mini
 
-# Email (SMTP)
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=noreply@multipark.pt
-SMTP_PASS=app-password
-SMTP_FROM=noreply@multipark.pt
+# Email: tudo pela API do Gmail (sem SMTP/IMAP) — conta de serviço com delegação
+GOOGLE_WORKSPACE_SERVICE_ACCOUNT_JSON={...}
 
 # MultiPark
 MULTIPARK_API_KEY=xxx
@@ -522,7 +518,7 @@ GOOGLE_MAPS_API_KEY=AIza...
 | xlsx | 0.18.5 | Excel parsing |
 | pdfkit | 0.17.2 | Geração PDF |
 | @aws-sdk/client-s3 | 3.693.0 | Storage |
-| nodemailer | 6.9.16 | Email |
+| nodemailer | 6.9.16 | Composição MIME (MailComposer) dos emails enviados pela API do Gmail |
 | axios | 1.12.0 | HTTP client |
 | wouter | 3.3.5 | Client routing |
 | framer-motion | 12.23.22 | Animações |

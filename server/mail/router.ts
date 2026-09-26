@@ -10,7 +10,7 @@ import { requireAccess, withOverrides } from "../_core/access";
 import { googleSyncRouter } from "../google/router";
 import { googleContactsRouter } from "../contactsRouter";
 import {
-  MAIL_LINK_TYPES, MAIL_THREAD_STATUSES, mailboxConfigSchema, userIdOfAccountKey, type MailViewer,
+  MAIL_LINK_TYPES, MAIL_THREAD_STATUSES, mailAliasRowSchema, mailboxConfigSchema, userIdOfAccountKey, type MailViewer,
 } from "../../shared/mail";
 
 type CtxUser = { id: number; role: string; accessOverrides?: any };
@@ -108,6 +108,18 @@ export const mailRouter = router({
       await unlinkThread(viewerOf(ctx.user as CtxUser), input.id, input.type, input.entityId);
       return { ok: true };
     }),
+    /** "Por classificar" → caixa (admin/super_admin): opcionalmente pelo alias e acrescentando um endereço novo à tabela. */
+    assignTriage: protectedProcedure
+      .input(threadId.extend({
+        mailbox: z.string().min(1).max(40),
+        alias: z.string().trim().max(320).nullish(),
+        addAlias: z.string().trim().max(320).nullish(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        adminOnly(ctx.user as CtxUser);
+        const { assignTriagedThread } = await import("./inbox");
+        return assignTriagedThread(viewerOf(ctx.user as CtxUser), input.id, input);
+      }),
     aiDraft: protectedProcedure.input(threadId).mutation(async ({ ctx, input }) => {
       const { aiDraft } = await import("./inbox");
       const r = await aiDraft(viewerOf(ctx.user as CtxUser), input.id);
@@ -158,9 +170,25 @@ export const mailRouter = router({
       const googleUsers = rowsOf(await d.execute(sql`SELECT g.userId, g.email, g.status, u.name FROM google_user_accounts g JOIN users u ON u.id = g.userId
         WHERE g.status <> 'disconnected' ORDER BY u.name LIMIT 500`)).map((r) => ({ userId: Number(r.userId), email: String(r.email), status: String(r.status), name: String(r.name ?? r.email) }));
       const cfg = workspaceConfig();
+      const mailboxes = await listMailboxes({ fresh: true });
+      const { aliasTableOf } = await import("../../shared/mail");
+      const { systemSenderAddress } = await import("./systemMail");
+      const { getProjects } = await import("../db");
+      const cities = (await getProjects().catch(() => [] as any[])).filter((p: any) => p.level === "city").map((p: any) => ({ id: Number(p.id), name: String(p.name) }));
+      const staff = rowsOf(await d.execute(sql`SELECT id, name, role FROM users WHERE isActive = 1
+        AND role IN ('team_leader','supervisor','frontoffice','backoffice','admin','super_admin') ORDER BY name LIMIT 500`))
+        .map((r) => ({ id: Number(r.id), name: String(r.name ?? `#${r.id}`), role: String(r.role) }));
+      const { mailRoutingWarningsNow } = await import("../integrationsStatus");
       return {
         canEdit: (ctx.user as CtxUser).role === "super_admin",
-        mailboxes: await listMailboxes({ fresh: true }),
+        /** A tabela de aliases e o remetente de sistema: admin e super_admin. */
+        canEditAliases: true,
+        mailboxes,
+        aliases: aliasTableOf(mailboxes),
+        cities,
+        staff,
+        systemSender: await systemSenderAddress(),
+        routingWarnings: await mailRoutingWarningsNow().catch(() => [] as string[]),
         accounts: (await listMailAccountRows()).map((a) => ({ ...a, ownerUserId: userIdOfAccountKey(a.accountKey) })),
         googleUsers,
         env: {
@@ -189,6 +217,56 @@ export const mailRouter = router({
         await logActivity({ userId: ctx.user.id, action: "delete", entity: "mail_mailbox", entityId: null, details: `Caixa ${input.key} apagada` } as any);
       } catch { /* registo */ }
       return { ok: true };
+    }),
+    /** Tabela de encaminhamento por alias (admin/super_admin): substitui os endereços das caixas. */
+    saveAliases: protectedProcedure
+      .input(z.object({ rows: z.array(mailAliasRowSchema).max(2000) }))
+      .mutation(async ({ ctx, input }) => {
+        adminOnly(ctx.user as CtxUser);
+        const { listMailboxes, saveMailbox } = await import("./store");
+        const { applyAliasTable } = await import("../../shared/mail");
+        const current = await listMailboxes({ fresh: true });
+        const r = applyAliasTable(current, input.rows);
+        if (!r.ok) throw new TRPCError({ code: "BAD_REQUEST", message: r.error });
+        for (const m of r.changed) {
+          const { id: _id, updatedAt: _u, ...cfg } = m;
+          const parsed = mailboxConfigSchema.safeParse(cfg);
+          if (!parsed.success) throw new TRPCError({ code: "BAD_REQUEST", message: `Caixa "${m.label}": ${parsed.error.issues[0]?.message ?? "inválida"}` });
+          await saveMailbox(parsed.data, ctx.user.id);
+        }
+        try {
+          const { logActivity } = await import("../db");
+          await logActivity({ userId: ctx.user.id, action: "update", entity: "mail_aliases", entityId: null, details: `Tabela de aliases: ${input.rows.length} linha(s); caixas alteradas: ${r.changed.map((m) => m.key).join(", ") || "nenhuma"}` } as any);
+        } catch { /* registo */ }
+        return { ok: true, changed: r.changed.length };
+      }),
+    /** Remetente dos emails de sistema (Gmail API) — admin/super_admin. */
+    setSystemSender: protectedProcedure
+      .input(z.object({ email: z.string().trim().toLowerCase().email("Email inválido.").max(320) }))
+      .mutation(async ({ ctx, input }) => {
+        adminOnly(ctx.user as CtxUser);
+        const { setSetting } = await import("../appSettings");
+        await setSetting("mail.systemSender", input.email, ctx.user.id);
+        return { ok: true };
+      }),
+    /** Testa o remetente (delegação + "Enviar como") e envia um email de teste ao próprio. */
+    testSystemSender: protectedProcedure.mutation(async ({ ctx }) => {
+      adminOnly(ctx.user as CtxUser);
+      const { testSystemSender, sendEmailDetailed } = await import("./systemMail");
+      let message: string;
+      try { message = await testSystemSender(); } catch (err: any) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: String(err?.message ?? err).slice(0, 300) });
+      }
+      const to = String((ctx.user as any).email ?? "").trim();
+      if (!to) return { ok: true, message, sentTo: null };
+      const r = await sendEmailDetailed({
+        to, subject: "Teste do envio de email (Gmail) — Dashboard Multipark",
+        text: "Este é um email de teste enviado pela API do Gmail a partir de Definições → Comunicação.",
+        html: "<p>Este é um email de teste enviado pela API do Gmail a partir de Definições → Comunicação.</p>",
+        kind: "system",
+      });
+      if (!r.ok) throw new TRPCError({ code: "BAD_REQUEST", message: `A delegação está OK mas o envio falhou: ${r.error ?? "erro"}` });
+      return { ok: true, message, sentTo: to };
     }),
     syncNow: protectedProcedure.mutation(async ({ ctx }) => {
       adminOnly(ctx.user as CtxUser);

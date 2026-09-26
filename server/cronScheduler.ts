@@ -22,8 +22,8 @@ import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { fromMysqlMs, recordCronRun, toMysqlMs } from "./cronRuns";
 import {
-  LEASE_GRACE_MS, TICK_JOBS, applyOutcome, leaseFree, cursorForRun, describeCadence, emptyState, isDue, jobDeadline, nextDueAt, periodKeyFor, planTick,
-  type JobState, type JobStatus, type PlannedJob, type TickJobSpec,
+  LEASE_GRACE_MS, TICK_JOBS, applyOutcome, effectiveTickJobs, leaseFree, cursorForRun, describeCadence, emptyState, isDue, jobDeadline, mailPushHealthy, nextDueAt,
+  periodKeyFor, planTick, type DynamicCadence, type JobState, type JobStatus, type PlannedJob, type TickJobSpec,
 } from "./cronSchedule";
 import type { CronJobRun } from "./cronJobs";
 
@@ -49,7 +49,6 @@ export const JOB_RUNNERS: Record<string, JobRunner> = {
   "google-watch-renew": async (o) => (await import("./cronJobs")).googleWatchRenewCron(o),
   "extras-schedule": async () => (await import("./cronJobs")).extrasScheduleCron(),
   "multipark-sync": async (o) => (await import("./cronJobs")).multiparkSyncCron(o),
-  "email-inbound": async (o) => (await import("./cronJobs")).emailInboundCron(o),
   "extras-auto": async (o) => (await import("./cronJobs")).extrasAutoCron({ deadlineAt: o.deadlineAt, from: o.cursor || null }),
   "identity-sweep": async () => (await import("./cronJobs")).identitySweepCron(),
   "multipark-future": async (o) => (await import("./cronJobs")).multiparkFutureCron({ deadlineAt: o.deadlineAt, offsetDays: offset(o.cursor) }),
@@ -77,6 +76,24 @@ async function fromOverrides(): Promise<Map<string, number | null>> {
   const { webAnalyticsRefreshMinutes } = await import("./cronJobs");
   m.set("web-analytics", await webAnalyticsRefreshMinutes());
   return m;
+}
+
+/**
+ * Cadência dinâmica: o push do Gmail está saudável (MAIL_PUSH ligado, tópico
+ * configurado, watch em dia em todas as contas e push recebido há pouco —
+ * mail_accounts.pushPendingAt)? Na dúvida (BD/flags em erro) fica a cadência
+ * normal de 5 min.
+ */
+export async function loadDynamicCadence(now = Date.now()): Promise<DynamicCadence> {
+  try {
+    const { mailPushEnabled } = await import("./mail/service");
+    const { mailPushState } = await import("./mail/store");
+    const [flagOn, push] = await Promise.all([mailPushEnabled(), mailPushState(now)]);
+    const topicConfigured = !!String(process.env.GMAIL_PUSH_TOPIC ?? "").trim();
+    return { mailPushHealthy: mailPushHealthy({ flagOn, topicConfigured, lastPushAt: push.lastPushAt, allWatched: push.allWatched, now }) };
+  } catch {
+    return { mailPushHealthy: false };
+  }
 }
 
 // ─── Estado (cron_job_state) ────────────────────────────────────────────────
@@ -175,16 +192,15 @@ export interface TickReport {
   errors: string[];
 }
 
-export interface TickPlan { now: number; states: Map<string, JobState>; overrides: Map<string, number | null>; planned: PlannedJob[] }
+export interface TickPlan { now: number; states: Map<string, JobState>; overrides: Map<string, number | null>; planned: PlannedJob[]; specs?: TickJobSpec[] }
 
 /** O que está na altura agora (lê o estado; não reserva nada). */
 export async function planDueJobs(now = Date.now()): Promise<TickPlan> {
   const states = await loadJobStates();
   const overrides = await fromOverrides().catch(() => new Map<string, number | null>());
-  return { now, states, overrides, planned: planTick(TICK_JOBS, states, now, overrides) };
+  const specs = effectiveTickJobs(TICK_JOBS, await loadDynamicCadence(now));
+  return { now, states, overrides, planned: planTick(specs, states, now, overrides), specs };
 }
-
-const SPECS = new Map(TICK_JOBS.map((s) => [s.key, s]));
 
 /** Mensagem de uma corrida que ficou sem resultado (a função morreu a meio). */
 export const ABANDONED_ERROR = "a corrida anterior não terminou (função terminada pelo limite de tempo?)";
@@ -237,6 +253,7 @@ async function runOne(spec: TickJobSpec, plan: TickPlan, owner: string, deadline
  */
 export async function runTick(plan: TickPlan, budgetEndAt: number): Promise<TickReport> {
   const owner = `tick-${plan.now.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const SPECS = new Map((plan.specs ?? TICK_JOBS).map((s) => [s.key, s]));
   const report: TickReport = { ok: true, startedAt: new Date(plan.now).toISOString(), budgetMs: budgetEndAt - plan.now, planned: plan.planned, jobs: [], errors: [] };
   for (const p of plan.planned) {
     const spec = SPECS.get(p.key);
@@ -281,7 +298,8 @@ export async function schedulerStatus(now = Date.now()): Promise<{ now: number; 
   const owners = new Map<string, string>();
   const db = await getDb();
   if (db) for (const r of rowsOf(await db.execute(sql`SELECT jobKey, leaseOwner FROM cron_job_state WHERE leaseOwner IS NOT NULL`))) owners.set(String(r.jobKey), String(r.leaseOwner));
-  const jobs = TICK_JOBS.map((spec) => {
+  const specs = effectiveTickJobs(TICK_JOBS, await loadDynamicCadence(now));
+  const jobs = specs.map((spec) => {
     const st = states.get(spec.key) ?? emptyState(spec.key);
     const due = isDue(spec, st, now, states, overrides.get(spec.key));
     const period = periodKeyFor(spec.cadence, now);

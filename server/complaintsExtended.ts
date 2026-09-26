@@ -18,7 +18,7 @@ import {
   multiparkBookingHistory,
   multiparkBookings,
 } from "../drizzle/schema";
-import { isSmtpConfigured, sendEmailDetailed } from "./_core/notification";
+import { isEmailSendConfigured, sendEmailDetailed } from "./mail/systemMail";
 import {
   clientSignalName,
   complaintAckBody,
@@ -267,7 +267,7 @@ export async function sendComplaintEmailToClient(input: {
       .where(eq(complaints.id, input.complaintId));
     return { ok: true, subject };
   }
-  return { ok: false, error: "Falha ao enviar email (SMTP)" };
+  return { ok: false, error: `Falha ao enviar email (Gmail)${sent.error ? `: ${sent.error}` : ""}` };
 }
 
 function escapeHtml(s: string): string {
@@ -281,7 +281,7 @@ function escapeHtml(s: string): string {
  * (de reclamacoes@, com o nº do processo [REC-<id>] no assunto). Guarda:
  * `autoAckSentAt` reservado atomicamente (UPDATE … WHERE autoAckSentAt IS NULL)
  * antes do envio — nunca sai duas vezes. Desligável com COMPLAINT_AUTO_ACK=off;
- * sem SMTP configurado não faz nada. Best-effort: nunca lança.
+ * sem envio de email (Gmail) configurado não faz nada. Best-effort: nunca lança.
  */
 export async function sendComplaintAutoAck(
   complaintId: number,
@@ -289,7 +289,7 @@ export async function sendComplaintAutoAck(
 ): Promise<{ sent: boolean; reason?: string }> {
   try {
     if (!isComplaintAutoAckEnabled()) return { sent: false, reason: "desligado (COMPLAINT_AUTO_ACK=off)" };
-    if (!isSmtpConfigured()) return { sent: false, reason: "SMTP não configurado" };
+    if (!isEmailSendConfigured()) return { sent: false, reason: "envio de email (Gmail) não configurado" };
     const db = await getDb();
     if (!db) return { sent: false, reason: "DB indisponível" };
     const [c] = await db
@@ -327,9 +327,9 @@ export async function sendComplaintAutoAck(
       // é pior do que nenhum); a nota no caso diz que falhou.
       await db.insert(complaintMessages).values({
         complaintId, isInternal: 1, authorName: "Sistema",
-        message: "⚠️ Aviso de receção automático NÃO enviado (falha SMTP).",
+        message: "⚠️ Aviso de receção automático NÃO enviado (falha no envio pelo Gmail).",
       } as any).catch(() => {});
-      return { sent: false, reason: "falha SMTP" };
+      return { sent: false, reason: "falha no envio (Gmail)" };
     }
     await db
       .update(complaints)

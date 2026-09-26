@@ -1,6 +1,9 @@
-// Definições → Comunicação: caixas de email partilhadas (só o super admin
-// edita; os admins veem), estado das contas Gmail e "Sincronizar agora".
+// Definições → Comunicação: remetente dos emails de sistema (Gmail API),
+// tabela de encaminhamento por alias (admin e super admin editam), caixas de
+// email partilhadas (só o super admin edita; os admins veem), estado das
+// contas Gmail, avisos do encaminhamento e "Sincronizar agora".
 import { useState } from "react";
+import { MailAliasTable, SystemSenderCard } from "./MailAliasTable";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -21,7 +24,7 @@ import {
 import { fmtPTDateTime } from "@/lib/lisbonTime";
 
 const EMPTY: MailboxConfig = {
-  key: "", label: "", addresses: [{ address: "", brand: "multipark" }], sourceKind: "dwd", sourceEmail: "", sourceUserId: null,
+  key: "", label: "", addresses: [{ address: "", brand: "multipark", cityId: null, destination: "caixa", owner: null, tag: "", active: true }], sourceKind: "dwd", sourceEmail: "", sourceUserId: null,
   module: "comunicacao", pipeline: null, cityRule: "all", visibleRoles: [], signatures: {}, catchAll: false, notify: true, active: true, sortOrder: 100,
 };
 
@@ -30,10 +33,16 @@ const moduleLabel = (id: string) => MODULES.find((m) => m.id === id)?.label ?? i
 function addressesToText(list: MailboxConfig["addresses"]): string {
   return list.map((a) => `${a.address} ${a.brand}`).join("\n");
 }
-function textToAddresses(text: string): MailboxConfig["addresses"] {
+/** Texto → endereços; os campos da tabela de aliases (cidade, destino, responsável…) mantêm-se para os endereços que já existiam. */
+function textToAddresses(text: string, previous: MailboxConfig["addresses"] = []): MailboxConfig["addresses"] {
   return text.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
     const [address, brand] = l.split(/[\s,;]+/);
-    return { address: (address ?? "").toLowerCase(), brand: (isMailBrand(brand) ? brand : "multipark") as MailBrand };
+    const addr = (address ?? "").toLowerCase();
+    const prev = previous.find((a) => a.address === addr);
+    return {
+      cityId: null, destination: "caixa" as const, owner: null, tag: "", active: true, ...prev,
+      address: addr, brand: (isMailBrand(brand) ? brand : "multipark") as MailBrand,
+    };
   });
 }
 
@@ -49,7 +58,7 @@ function MailboxDialog({ initial, isNew, googleUsers, onClose }: {
   });
   const set = <K extends keyof MailboxConfig>(k: K, v: MailboxConfig[K]) => setM((p) => ({ ...p, [k]: v }));
   const submit = () => {
-    const r = mailboxConfigSchema.safeParse({ ...m, addresses: textToAddresses(addr) });
+    const r = mailboxConfigSchema.safeParse({ ...m, addresses: textToAddresses(addr, initial.addresses) });
     if (!r.success) { toast.error(r.error.issues.map((i) => i.message).join(" ")); return; }
     save.mutate(r.data);
   };
@@ -62,7 +71,7 @@ function MailboxDialog({ initial, isNew, googleUsers, onClose }: {
           <div className="space-y-1"><Label className="text-xs">Chave</Label><Input value={m.key} disabled={!isNew} onChange={(e) => set("key", e.target.value.toLowerCase())} placeholder="ex.: info" /></div>
           <div className="space-y-1"><Label className="text-xs">Nome</Label><Input value={m.label} onChange={(e) => set("label", e.target.value)} /></div>
           <div className="space-y-1 sm:col-span-2">
-            <Label className="text-xs">Endereços / aliases (um por linha: "email marca")</Label>
+            <Label className="text-xs">Endereços / aliases (um por linha: "email marca") — cidade, destino, responsável e etiqueta na tabela de aliases</Label>
             <Textarea rows={4} value={addr} onChange={(e) => setAddr(e.target.value)} className="font-mono text-xs" placeholder={"info@multipark.pt multipark\ninfo@skypark.pt skypark"} />
             <p className="text-[11px] text-muted-foreground">Marcas: {MAIL_BRAND_IDS.join(", ")}. Cada alias tem de estar em "Enviar email como" na conta de origem para se poder responder.</p>
           </div>
@@ -102,7 +111,7 @@ function MailboxDialog({ initial, isNew, googleUsers, onClose }: {
             </Select>
           </div>
           <div className="space-y-1">
-            <Label className="text-xs">Processamento automático (como o IMAP)</Label>
+            <Label className="text-xs">Processamento automático (pipeline da caixa)</Label>
             <Select value={m.pipeline ?? "none"} onValueChange={(v) => set("pipeline", v === "none" ? null : v as any)}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -167,7 +176,7 @@ export function MailboxesSettings() {
             {d.env.serviceAccountEmail && <span className="text-xs text-muted-foreground ml-2 break-all">{d.env.serviceAccountEmail}</span>}</div>
           <div>OAuth "Ligar a minha conta Google": {d.env.oauth ? <Badge variant="outline" className="border-emerald-400 text-emerald-700">configurado</Badge> : <Badge variant="outline" className="border-amber-400 text-amber-700">em falta</Badge>}
             <span className="text-xs text-muted-foreground ml-2">domínios: {d.env.domains.join(", ") || "—"}</span></div>
-          <div>Push do Gmail (Pub/Sub): {d.env.pushTopic ? "tópico configurado (ligar o interruptor MAIL_PUSH nas Automações)" : "sem tópico — só o cron de 5 em 5 min"}</div>
+          <div>Push do Gmail (Pub/Sub): {d.env.pushTopic ? "tópico configurado (interruptor MAIL_PUSH nas Automações; com push a chegar, a sincronização agendada passa a de hora a hora)" : "sem tópico — sincronização agendada de 5 em 5 min"}</div>
           <div className="pt-1">
             <Button size="sm" variant="outline" onClick={() => sync.mutate()} disabled={sync.isPending}>
               {sync.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}Sincronizar agora
@@ -175,6 +184,19 @@ export function MailboxesSettings() {
           </div>
         </CardContent>
       </Card>
+
+      {d.routingWarnings.length > 0 && (
+        <Card className="border-amber-300">
+          <CardHeader className="pb-2"><CardTitle className="text-base text-amber-800 dark:text-amber-300">Avisos do encaminhamento</CardTitle></CardHeader>
+          <CardContent>
+            <ul className="text-xs space-y-1 list-disc pl-4">{d.routingWarnings.map((w) => <li key={w}>{w}</li>)}</ul>
+          </CardContent>
+        </Card>
+      )}
+
+      <SystemSenderCard current={d.systemSender} />
+
+      <MailAliasTable rows={d.aliases} mailboxes={d.mailboxes} cities={d.cities} staff={d.staff} canEdit={d.canEditAliases} />
 
       <Card>
         <CardHeader className="pb-2 flex flex-row items-center justify-between">

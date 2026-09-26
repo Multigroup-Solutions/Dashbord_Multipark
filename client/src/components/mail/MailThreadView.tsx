@@ -19,6 +19,7 @@ import {
 } from "@shared/mail";
 import { BrandChip, EmailHtmlFrame, MAIL_LINK_HREF, fullTime } from "./mailUi";
 import { MailComposer, type ComposeMode } from "./MailComposer";
+import { TriagePanel } from "./TriagePanel";
 
 function LinksPanel({ threadId, links, canAct, onChanged }: {
   threadId: number;
@@ -100,8 +101,10 @@ export function MailThreadView({ threadId, onBack, onChanged, canAi }: { threadI
           <div className="flex-1 min-w-0">
             <h2 className="font-semibold text-[15px] leading-snug break-words">{t.thread.subject || "(sem assunto)"}</h2>
             <div className="text-xs text-muted-foreground flex flex-wrap items-center gap-1.5 mt-0.5">
-              <span>{t.mailbox?.label ?? (t.personal ? "O meu email" : "Sem caixa")}</span>
+              <span>{t.mailbox?.label ?? (t.personal ? "O meu email" : t.thread.needsTriage ? "Por classificar" : "Sem caixa")}</span>
               <BrandChip brand={t.thread.brand} />
+              {t.thread.routeLabel && <Badge variant="outline" className="h-5 px-1.5 text-[10.5px] font-normal">{t.thread.routeLabel}</Badge>}
+              {t.thread.needsTriage && <Badge variant="outline" className="h-5 px-1.5 text-[10.5px] border-amber-400 text-amber-700 dark:text-amber-300">Por classificar</Badge>}
               {t.thread.contactEmail && <span className="truncate">· {t.thread.contactName ? `${t.thread.contactName} <${t.thread.contactEmail}>` : t.thread.contactEmail}</span>}
             </div>
           </div>
@@ -137,6 +140,7 @@ export function MailThreadView({ threadId, onBack, onChanged, canAi }: { threadI
           )}
           {showImages && <span className="text-[11px] text-muted-foreground inline-flex items-center gap-1"><ImageOff className="h-3 w-3" />imagens carregadas</span>}
         </div>
+        {t.canTriage && <TriagePanel threadId={threadId} matchedAddress={t.thread.matchedAddress} onDone={() => { q.refetch(); onChanged(); }} />}
         {showLinks && <LinksPanel threadId={threadId} links={t.links} canAct={t.canAct} onChanged={() => { q.refetch(); onChanged(); }} />}
         {showLinks && <DriveFilesPanel entityType="mail_thread" entityId={threadId} title="Ficheiros do Google Drive" compact />}
       </div>

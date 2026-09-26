@@ -414,8 +414,8 @@ export async function runTrainingAutomation(now: Date, hour: number): Promise<Tr
   const { remind, escalate } = selectReminders(open, now);
   const byId = new Map(open.map(o => [o.id, o]));
   const { notify } = await import("./notify");
-  const { sendEmail, isSmtpConfigured } = await import("./_core/notification");
-  const smtp = isSmtpConfigured();
+  const { sendEmail, isEmailSendConfigured } = await import("./mail/systemMail");
+  const canEmail = isEmailSendConfigured();
   const link = `${appOrigin()}/formacao`;
   for (const id of remind) {
     const a = byId.get(id)!;
@@ -427,7 +427,7 @@ export async function runTrainingAutomation(now: Date, hour: number): Promise<Tr
       await notify({ kind: "my_training", targetUserId: a.userId, title: `Formação por concluir — ${a.pathName}`, body, link: "/formacao", entity: { type: "training_assignment", id: a.id } });
     }
     const to = a.email || a.personalEmail;
-    if (to && smtp) {
+    if (to && canEmail) {
       try {
         const ok = await sendEmail({
           to, subject: `Formação por concluir — ${a.pathName}`,

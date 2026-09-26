@@ -11,7 +11,7 @@
 import { TRPCError } from "@trpc/server";
 import { sql, type SQL } from "drizzle-orm";
 import {
-  MAIL_BRAND_LABELS, MAIL_LINK_MODULE, canActOnMailbox, canSeeMailbox, canSeePersonalMailbox, canSendFromPersonalMailbox, checkSendAs,
+  MAIL_BRAND_LABELS, MAIL_LINK_MODULE, MAIL_TRIAGE_KEY, brandOfAddress, canActOnMailbox, canSeeMailbox, canSeePersonalMailbox, canSendFromPersonalMailbox, checkSendAs,
   extractAddresses, hideAutomaticThreads, isCompanyAddress, isMailBrand, mailboxCityRestricted, normalizeAddress, normalizeLinkEntityId, personalAccountKey,
   pickFromAddress, type MailLinkType, type MailViewer, type MailThreadStatus,
 } from "../../shared/mail";
@@ -36,9 +36,16 @@ export interface ThreadRow {
   subject: string | null; snippet: string | null; contactEmail: string | null; contactName: string | null; matchedAddress: string | null;
   messageCount: number; unreadCount: number; lastMessageAt: string | null; lastInboundAt: string | null; lastOutboundAt: string | null;
   awaitingSince: string | null; status: MailThreadStatus; assignedUserId: number | null; assignedName: string | null; projectId: number | null;
-  /** Só notificações automáticas de reserva (escondida por omissão nas listas). */
+  /** Só automáticos (notificações de reserva, emails de sistema) — escondida por omissão nas listas. */
   automated: boolean;
+  /** "Por classificar": entrou por um endereço fora da tabela de aliases. */
+  needsTriage: boolean;
+  /** Etiqueta do alias por onde entrou. */
+  routeLabel: string | null;
 }
+
+/** Quem trata "Por classificar" (e edita a tabela de aliases): admin e super_admin. */
+export const canTriageMail = (v: Pick<MailViewer, "role"> | null | undefined): boolean => v?.role === "admin" || v?.role === "super_admin";
 
 function toThread(r: any): ThreadRow {
   return {
@@ -50,6 +57,8 @@ function toThread(r: any): ThreadRow {
     status: (r.status ?? "aberto") as MailThreadStatus, assignedUserId: r.assignedUserId != null ? Number(r.assignedUserId) : null,
     assignedName: r.assignedName ?? null, projectId: r.projectId != null ? Number(r.projectId) : null,
     automated: Number(r.automated ?? 0) === 1,
+    needsTriage: Number(r.needsTriage ?? 0) === 1,
+    routeLabel: r.routeLabel ?? null,
   };
 }
 
@@ -82,8 +91,8 @@ export async function threadAccess(viewer: MailViewer, threadId: number): Promis
   }
   const mailbox = await getMailbox(thread.mailboxKey);
   if (!mailbox) {
-    // Sem caixa (conta sem "apanha tudo"): só a administração vê.
-    if (viewer.role !== "super_admin") throw forbidden();
+    // Sem caixa ("Por classificar" ou caixa apagada): só a administração vê e atribui.
+    if (!canTriageMail(viewer)) throw forbidden();
     return { thread, mailbox: null, personal: false, canAct: true, canSend: false };
   }
   if (!canSeeMailbox(viewer, mailbox)) throw forbidden();
@@ -116,7 +125,13 @@ export async function visibleMailboxes(viewer: MailViewer) {
   }
   const pr = rowsOf(await d.execute(sql`SELECT SUM(CASE WHEN unreadCount > 0 THEN 1 ELSE 0 END) AS unread FROM mail_threads
     WHERE ownerUserId = ${viewer.id} AND mailboxKey IS NULL AND COALESCE(automated, 0) = 0`))[0] ?? {};
-  return { mailboxes: out, personalUnread: Number(pr.unread ?? 0) };
+  let triage: { open: number; unread: number } | null = null;
+  if (canTriageMail(viewer)) {
+    const tr = rowsOf(await d.execute(sql`SELECT COUNT(*) AS n, SUM(CASE WHEN unreadCount > 0 THEN 1 ELSE 0 END) AS unread FROM mail_threads
+      WHERE needsTriage = 1 AND status <> 'resolvido'`))[0] ?? {};
+    triage = { open: Number(tr.n ?? 0), unread: Number(tr.unread ?? 0) };
+  }
+  return { mailboxes: out, personalUnread: Number(pr.unread ?? 0), triage };
 }
 
 /** Badge do menu: conversas por ler nas caixas visíveis + pessoal. */
@@ -148,6 +163,9 @@ export async function listThreads(viewer: MailViewer, input: ThreadListInput) {
     const owner = input.ownerUserId ?? viewer.id;
     if (!canSeePersonalMailbox(viewer, owner)) throw forbidden();
     conds.push(sql`t.ownerUserId = ${owner} AND t.mailboxKey IS NULL`);
+  } else if (input.mailbox === MAIL_TRIAGE_KEY) {
+    if (!canTriageMail(viewer)) throw forbidden();
+    conds.push(sql`t.needsTriage = 1`);
   } else {
     const m = await getMailbox(input.mailbox);
     if (!m || !canSeeMailbox(viewer, m)) throw forbidden();
@@ -260,6 +278,8 @@ export async function getThread(viewer: MailViewer, threadId: number, opts: { sh
     personal: acc.personal,
     canAct: acc.canAct,
     canSend: acc.canSend,
+    /** "Por classificar" e quem vê pode atribuí-la a uma caixa (admin/super_admin). */
+    canTriage: acc.thread.needsTriage && canTriageMail(viewer),
     messages,
     blockedImages: blocked,
     links: links.map((l) => ({ type: l.entityType, id: l.entityId, confidence: l.confidence, source: l.source, reason: l.reason })),
@@ -343,6 +363,56 @@ export async function assigneesFor(viewer: MailViewer, mailboxKey: string) {
   return users
     .filter((u) => canSeeMailbox({ id: Number(u.id), role: String(u.role), accessOverrides: null }, m))
     .map((u) => ({ id: Number(u.id), name: String(u.name ?? `#${u.id}`) }));
+}
+
+// ─── "Por classificar" → caixa ──────────────────────────────────────────────
+
+/**
+ * Atribui uma conversa "Por classificar" a uma caixa (admin/super_admin):
+ * opcionalmente pelo alias da tabela (dá marca, cidade, destino, etiqueta) e
+ * opcionalmente acrescentando um endereço novo à tabela dessa caixa (os
+ * próximos emails por esse endereço já chegam classificados). Se o destino
+ * tiver pipeline, corre-o nas mensagens recebidas da conversa.
+ */
+export async function assignTriagedThread(viewer: MailViewer, threadId: number, input: { mailbox: string; alias?: string | null; addAlias?: string | null }): Promise<{ processed: number; created: number }> {
+  if (!canTriageMail(viewer)) throw forbidden("Só a administração classifica emails.");
+  const thread = await loadThread(threadId);
+  if (!thread) throw notFound();
+  if (thread.ownerUserId != null && !thread.needsTriage) throw bad("Conversa pessoal — não se classifica.");
+  if (thread.mailboxKey && !thread.needsTriage) throw bad("Esta conversa já está classificada numa caixa.");
+  let mailbox = await getMailbox(input.mailbox);
+  if (!mailbox) throw bad("Caixa desconhecida.");
+  const { listMailboxes, saveMailbox, setThreadProjectIfEmpty } = await import("./store");
+  const newAddr = normalizeAddress(input.addAlias);
+  if (newAddr) {
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(newAddr)) throw bad("Endereço inválido.");
+    const all = await listMailboxes({ fresh: true });
+    const owner = all.find((m) => m.addresses.some((a) => normalizeAddress(a.address) === newAddr));
+    if (owner && owner.key !== mailbox.key) throw bad(`O endereço ${newAddr} já encaminha para a caixa "${owner.label}".`);
+    if (!owner) {
+      const { mailboxAddressSchema } = await import("../../shared/mail");
+      const brand = brandOfAddress(newAddr) ?? mailbox.addresses[0]?.brand ?? "multipark";
+      const next = { ...mailbox, addresses: [...mailbox.addresses, mailboxAddressSchema.parse({ address: newAddr, brand })] };
+      const { id: _id, updatedAt: _u, ...cfg } = next;
+      await saveMailbox(cfg, viewer.id);
+      mailbox = (await getMailbox(mailbox.key)) ?? mailbox;
+    }
+  }
+  const aliasAddr = normalizeAddress(input.alias) || newAddr;
+  const alias = aliasAddr ? mailbox.addresses.find((a) => normalizeAddress(a.address) === aliasAddr) ?? null : null;
+  const d = await db();
+  await d.execute(sql`UPDATE mail_threads SET mailboxKey = ${mailbox.key}, needsTriage = 0,
+      brand = COALESCE(${alias?.brand ?? null}, brand), routeLabel = COALESCE(${alias?.tag || null}, routeLabel),
+      matchedAddress = COALESCE(${alias ? normalizeAddress(alias.address) : null}, matchedAddress)
+    WHERE id = ${threadId}`);
+  await d.execute(sql`UPDATE mail_messages SET mailboxKey = ${mailbox.key} WHERE threadId = ${threadId}`);
+  if (alias?.cityId) await setThreadProjectIfEmpty(threadId, alias.cityId);
+  try {
+    const { logActivity } = await import("../db");
+    await logActivity({ userId: viewer.id, action: "update", entity: "mail_thread", entityId: threadId, details: `Por classificar → ${mailbox.key}${alias ? ` (${alias.address})` : ""}${newAddr ? ` +alias ${newAddr}` : ""}` } as any);
+  } catch { /* registo */ }
+  const { reprocessThreadPipeline } = await import("./service");
+  return reprocessThreadPipeline(threadId, mailbox, alias);
 }
 
 // ─── Ligações manuais ───────────────────────────────────────────────────────

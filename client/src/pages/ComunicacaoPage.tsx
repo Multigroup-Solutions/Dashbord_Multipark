@@ -14,7 +14,7 @@ import { useIsMobile } from "@/hooks/useMobile";
 import { toast } from "sonner";
 import { AlarmClock, Bot, Inbox, Loader2, Mail, PenSquare, RefreshCw, Search, UserRound } from "lucide-react";
 import {
-  MAIL_BRAND_LABELS, MAIL_THREAD_STATUSES, MAIL_THREAD_STATUS_LABELS, isMailBrand, isMailOverdue, type MailThreadStatus,
+  MAIL_BRAND_LABELS, MAIL_THREAD_STATUSES, MAIL_THREAD_STATUS_LABELS, MAIL_TRIAGE_KEY, MAIL_TRIAGE_LABEL, isMailBrand, isMailOverdue, type MailThreadStatus,
 } from "@shared/mail";
 import { GoogleAccountCard, useGoogleOAuthReturnToast } from "@/components/GoogleAccountCard";
 import { MailThreadView } from "@/components/mail/MailThreadView";
@@ -33,6 +33,7 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
 
   const overview = trpc.mail.overview.useQuery(undefined, { refetchInterval: POLL_MS });
   const boxes = overview.data?.mailboxes ?? [];
+  const triage = overview.data?.triage ?? null;
   const [mailbox, setMailbox] = useState<string | null>(() => personal ? "me" : params.get("caixa"));
   const [ownerUserId, setOwnerUserId] = useState<number | null>(null);
   const [selected, setSelected] = useState<number | null>(() => Number(params.get("t")) || null);
@@ -52,7 +53,8 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
   useEffect(() => {
     if (personal) { setMailbox("me"); return; }
     if (!mailbox && boxes.length) setMailbox(boxes[0].key);
-  }, [personal, boxes, mailbox]);
+    else if (!mailbox && triage) setMailbox(MAIL_TRIAGE_KEY);
+  }, [personal, boxes, mailbox, triage]);
   useEffect(() => { setPage(1); }, [mailbox, brand, status, assigned, awaiting, unread, showAutomatic, q, ownerUserId]);
   useEffect(() => { const t = Number(params.get("t")) || null; if (t) setSelected(t); const c = params.get("caixa"); if (c && !personal) setMailbox(c); }, [params, personal]);
 
@@ -121,7 +123,7 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
       </div>
     );
   }
-  if (!personal && boxes.length === 0) {
+  if (!personal && boxes.length === 0 && !triage) {
     return (
       <div className="space-y-3">
         {header}
@@ -142,6 +144,9 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
               {boxes.map((b) => (
                 <SelectItem key={b.key} value={b.key}>{b.label}{b.unread ? ` (${b.unread})` : ""}</SelectItem>
               ))}
+              {triage && (
+                <SelectItem value={MAIL_TRIAGE_KEY}>{MAIL_TRIAGE_LABEL}{triage.open ? ` (${triage.open})` : ""}</SelectItem>
+              )}
             </SelectContent>
           </Select>
         )}
@@ -201,6 +206,8 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
               <div className="text-xs text-muted-foreground truncate">{t.snippet}</div>
               <div className="flex flex-wrap items-center gap-1 mt-1">
                 <BrandChip brand={t.brand} />
+                {t.routeLabel && <Badge variant="outline" className="h-5 px-1.5 text-[10.5px] font-normal">{t.routeLabel}</Badge>}
+                {t.needsTriage && mailbox !== MAIL_TRIAGE_KEY && <Badge variant="outline" className="h-5 px-1.5 text-[10.5px] border-amber-400 text-amber-700 dark:text-amber-300">Por classificar</Badge>}
                 {t.automated && <Badge variant="outline" className="h-5 px-1.5 text-[10.5px] gap-1"><Bot className="h-3 w-3" />Automático</Badge>}
                 {t.unreadCount > 0 && <Badge className="h-5 px-1.5 text-[10.5px]">{t.unreadCount} nova{t.unreadCount > 1 ? "s" : ""}</Badge>}
                 {t.awaitingSince && t.status !== "resolvido" && (

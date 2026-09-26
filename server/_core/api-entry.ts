@@ -251,14 +251,6 @@ app.get("/api/cron/extras-schedule", async (req, res) => {
   sendCronRun(res, await extrasScheduleCron());
 });
 
-// Leitor de email inbound: lê a caixa reservas@ por IMAP e cria registos nos
-// módulos (Críticas/Reclamações/Perdidos/RH). partial → done:false (repetir).
-app.get("/api/cron/email-inbound", async (req, res) => {
-  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
-  const { emailInboundCron, sendCronRun } = await import("../cronJobs");
-  sendCronRun(res, await emailInboundCron({ deadlineAt: manualDeadline() }));
-});
-
 // IA na comunicação com clientes: triagem do WhatsApp, reclamações por
 // triar, rascunhos das críticas e Perdidos — lotes pequenos. Nunca envia nada.
 app.get("/api/cron/ai-comms", async (req, res) => {

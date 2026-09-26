@@ -168,14 +168,15 @@ describe("sessões: versão", () => {
 });
 
 describe("integrações: nunca revelar segredos", () => {
-  const env = { META_ACCESS_TOKEN: "EAAB-secret-token-123", META_AD_ACCOUNT_IDS: "act_1", SMTP_HOST: "smtp.x", SMTP_USER: "u", SMTP_PASS: "pa55word!" };
+  const env = { META_ACCESS_TOKEN: "EAAB-secret-token-123", META_AD_ACCOUNT_IDS: "act_1", GOOGLE_WORKSPACE_SERVICE_ACCOUNT_JSON: "{\"private_key\":\"pa55word!\"}" };
   it("estado só com sim/não e nomes das variáveis", () => {
     const list = integrationStatusesFromEnv(env);
     const json = JSON.stringify(list);
     expect(json).not.toContain("EAAB-secret-token-123");
     expect(json).not.toContain("pa55word!");
     expect(list.find((i) => i.id === "meta_ads")?.configured).toBe(true);
-    expect(list.find((i) => i.id === "smtp")?.configured).toBe(true);
+    expect(list.find((i) => i.id === "gmail_send")?.configured).toBe(true);
+    expect(list.some((i) => i.id === "smtp" || i.id === "imap")).toBe(false);
     expect(list.find((i) => i.id === "whatsapp")?.missing).toEqual(["WHATSAPP_TOKEN", "WHATSAPP_PHONE_NUMBER_ID"]);
   });
   it("grupos 'qualquer um destes'", () => {

@@ -456,18 +456,6 @@ export async function extrasScheduleCron(): Promise<CronJobRun> {
   } catch (err) { return fail(err); }
 }
 
-/** Leitor de email inbound (IMAP). partial → retoma (dedup por messageId). */
-export async function emailInboundCron(o: { deadlineAt: number }): Promise<CronJobRun> {
-  try {
-    const { runEmailInboundSync } = await import("./jobs/emailInboundSync");
-    const result = await runEmailInboundSync({ deadlineAt: o.deadlineAt });
-    // Erros do próprio IMAP (pesquisa por alias falhou) → ok:false; erros de
-    // UM email ficam só na lista (repetem-se).
-    const imapErrors = result.errors.filter((e) => e.startsWith("search "));
-    return { httpStatus: 200, body: { ok: result.configured && imapErrors.length === 0, done: !result.partial, ranAt: ranAt(), imapErrors: imapErrors.length, ...result }, done: !result.partial };
-  } catch (err) { return fail(err); }
-}
-
 /** IA na comunicação com clientes (lotes pequenos; nunca envia nada a clientes). */
 export async function aiCommsCron(o: { deadlineAt: number }): Promise<CronJobRun> {
   try {

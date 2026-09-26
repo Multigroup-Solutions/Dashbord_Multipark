@@ -14,8 +14,9 @@
  *     historyId expirado (404) → recomeça com uma importação curta (7 dias).
  *  3. Dedupe: (conta, id Gmail) único; o `store` diz o que já existe.
  *
- * Classificação (alias → caixa → marca) e o que acontece a seguir (pipeline
- * antigo, ligações, notificações) ficam fora: `onStored`.
+ * Classificação (alias → caixa → marca, shared/mail.ts classifyMessage) e o
+ * que acontece a seguir (pipeline temático, cidade, responsável, ligações,
+ * notificações) ficam fora: `onStored` (server/mail/service.ts).
  */
 import type { gmail_v1 } from "@googleapis/gmail";
 import { classifyMessage, isAutomatedSender, isCompanyAddress, isReservationNotificationEmail, type Classification, type MailboxConfig } from "../../shared/mail";
@@ -56,6 +57,8 @@ export interface SyncStore {
     ownerUserId: number | null; automated: boolean; contactEmail: string | null; contactName: string | null;
     /** Notificação automática de reserva (escondida por omissão nas listas; a pesquisa encontra-a). */
     reservationNotice?: boolean;
+    /** Email de sistema do dashboard (X-Multipark-System): automático e escondido, nunca "Por classificar". */
+    systemMail?: boolean;
   }): Promise<StoreMessageResult>;
   setRead(accountKey: string, gmailId: string, read: boolean): Promise<void>;
 }
@@ -165,7 +168,7 @@ async function processIds(
       const classification = classifyMessage(
         { deliveredTo: parsed.deliveredTo, xOriginalTo: parsed.xOriginalTo, to: parsed.to, cc: parsed.cc, bcc: parsed.bcc, from: parsed.fromEmail },
         account.mailboxes,
-        { outbound: parsed.outbound, personalOwner: account.ownerUserId != null, brandDomains: opts.brandDomains },
+        { outbound: parsed.outbound, personalOwner: account.ownerUserId != null, brandDomains: opts.brandDomains, accountEmails: [account.email] },
       );
       const party = (() => {
         if (!parsed.outbound) {
@@ -177,11 +180,13 @@ async function processIds(
       })();
       const reservationNotice = isReservationNotificationEmail(
         { fromEmail: parsed.fromEmail, fromName: parsed.fromName, subject: parsed.subject, outbound: parsed.outbound }, opts.brandDomains);
-      const automated = reservationNotice || (!parsed.outbound && isAutomatedSender(parsed.fromEmail, { autoSubmitted: parsed.autoSubmitted, precedence: parsed.precedence }));
+      const systemMail = parsed.systemMail;
+      const automated = systemMail || reservationNotice || (!parsed.outbound && isAutomatedSender(parsed.fromEmail, { autoSubmitted: parsed.autoSubmitted, precedence: parsed.precedence }));
       const result = await store.storeMessage(account.key, parsed, classification, {
         ownerUserId: classification.personal ? account.ownerUserId : null,
         automated,
         reservationNotice,
+        systemMail,
         contactEmail: party.email,
         contactName: party.name,
       });
