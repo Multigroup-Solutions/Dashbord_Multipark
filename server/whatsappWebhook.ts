@@ -142,7 +142,7 @@ export function createWhatsappWebhookRouter(): Router {
       // process-then-ack (idempotente pelo id da chamada). Só importa o módulo
       // quando o payload traz algo de chamadas.
       let missedCalls: number[] = [];
-      if (hasCallContent(payload)) {
+      if (hasCallContent(payload) && (await (await import("./whatsappCalls")).whatsappCallsEnabled())) {
         const { processCallWebhook } = await import("./whatsappCalls");
         const calls = await processCallWebhook(payload);
         missedCalls = calls.missed;

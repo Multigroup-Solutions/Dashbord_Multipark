@@ -248,6 +248,9 @@ export default function WhatsAppInboxPage() {
 
   const utils = trpc.useUtils();
   const canEditWa = !!user && can(user as any, "whatsapp", "edit");
+  // Interruptor WHATSAPP_CALLS (desligado por omissão): sem ele não aparece "Ligar".
+  const callsFlag = trpc.whatsapp.calls.enabled.useQuery(undefined, { enabled: canEditWa, staleTime: 5 * 60_000, retry: false });
+  const callsOn = !!callsFlag.data?.enabled;
   const convCalls = trpc.whatsapp.calls.byConversation.useQuery(
     { conversationId: selectedId ?? 0 },
     { enabled: selectedId != null, refetchInterval: pageVisible ? POLL_MS : false, retry: false },
@@ -963,7 +966,7 @@ export default function WhatsAppInboxPage() {
                   <CheckCheck className="h-3.5 w-3.5 mr-1" /> Resolver
                 </Button>
               )}
-              {canEditWa && (
+              {canEditWa && callsOn && (
                 <Button
                   size="sm"
                   variant="outline"

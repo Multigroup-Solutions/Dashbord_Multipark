@@ -53,10 +53,27 @@ const superOnly = (role: string) => {
 
 const WEEKDAY = z.enum(["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]);
 
+/** Chamadas desligadas (interruptor WHATSAPP_CALLS) → erro claro. */
+async function requireCallsEnabled(): Promise<void> {
+  const { whatsappCallsEnabled } = await import("./whatsappCalls");
+  if (!(await whatsappCallsEnabled())) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: "As chamadas do WhatsApp estão desligadas (Definições → Automações → Chamadas de voz do WhatsApp)." });
+  }
+}
+
 export const whatsappCallsRouter = router({
+  /** Interruptor WHATSAPP_CALLS: o cliente só faz polling/mostra "Ligar" se ligado. */
+  enabled: protectedProcedure.query(async ({ ctx }) => {
+    requireAccess(ctx.user, "whatsapp", "view");
+    const { whatsappCallsEnabled } = await import("./whatsappCalls");
+    return { enabled: await whatsappCallsEnabled() };
+  }),
+
   /** Toque: chamadas recebidas a tocar visíveis (polling curto, 2–3 s). */
   incoming: protectedProcedure.query(async ({ ctx }) => {
     requireAccess(ctx.user, "whatsapp", "edit");
+    const { whatsappCallsEnabled } = await import("./whatsappCalls");
+    if (!(await whatsappCallsEnabled())) return [];
     const { sweepStaleCallsThrottled } = await import("./whatsappCalls");
     await sweepStaleCallsThrottled();
     const { listIncomingCalls } = await import("./whatsappCallsQueries");
@@ -66,6 +83,7 @@ export const whatsappCallsRouter = router({
   /** "Atender": o primeiro ganha; devolve a oferta SDP só a esse. */
   claim: protectedProcedure.input(z.object({ id: ID })).mutation(async ({ ctx, input }) => {
     requireAccess(ctx.user, "whatsapp", "edit");
+    await requireCallsEnabled();
     await assertCallVisible(input.id);
     const { claimCall } = await import("./whatsappCalls");
     const r = await claimCall(input.id, ctx.user.id, await deps());
@@ -84,6 +102,7 @@ export const whatsappCallsRouter = router({
   /** Resposta SDP do browser → pre_accept + accept. */
   answer: protectedProcedure.input(z.object({ id: ID, sdp: SDP })).mutation(async ({ ctx, input }) => {
     requireAccess(ctx.user, "whatsapp", "edit");
+    await requireCallsEnabled();
     const row = await assertCallVisible(input.id);
     const { answerCall } = await import("./whatsappCalls");
     const r = await answerCall(input.id, ctx.user.id, input.sdp, await deps());
@@ -168,6 +187,7 @@ export const whatsappCallsRouter = router({
     .input(z.object({ conversationId: ID, text: z.string().trim().max(1024).optional() }))
     .mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "whatsapp", "edit");
+    await requireCallsEnabled();
       await assertConversation(input.conversationId);
       const { conversationCallContext } = await import("./whatsappCallsQueries");
       const conv = await conversationCallContext(input.conversationId);
@@ -215,6 +235,7 @@ export const whatsappCallsRouter = router({
   /** "Ligar": oferta SDP do browser → connect (com autorização e limites verificados). */
   start: protectedProcedure.input(z.object({ conversationId: ID, sdp: SDP })).mutation(async ({ ctx, input }) => {
     requireAccess(ctx.user, "whatsapp", "edit");
+    await requireCallsEnabled();
     await assertConversation(input.conversationId);
     const { conversationCallContext } = await import("./whatsappCallsQueries");
     const conv = await conversationCallContext(input.conversationId);

@@ -596,6 +596,18 @@ describe("acessos", () => {
     }
     expect(src).toMatch(/configure: protectedProcedure[\s\S]*?superOnly/);
   });
+  it("interruptor WHATSAPP_CALLS: desligado por omissão e aplicado no toque, atender, ligar e webhook", async () => {
+    const { automationFlagDefault, AUTOMATION_FLAGS } = await import("../shared/appSettings");
+    expect(AUTOMATION_FLAGS.some((f) => f.name === "WHATSAPP_CALLS")).toBe(true);
+    expect(automationFlagDefault("WHATSAPP_CALLS")).toBe(false);
+    const src = readFileSync(resolve(root, "server/whatsappCallsRouter.ts"), "utf8");
+    for (const name of ["claim", "answer", "start", "requestPermission"]) {
+      expect(new RegExp(`\\n  ${name}: protectedProcedure[\\s\\S]*?requireCallsEnabled\\(\\)`).test(src), name).toBe(true);
+    }
+    expect(src).toMatch(/incoming: protectedProcedure[\s\S]*?whatsappCallsEnabled\(\)\)\) return \[\]/);
+    const wh = readFileSync(resolve(root, "server/whatsappWebhook.ts"), "utf8");
+    expect(wh).toMatch(/hasCallContent\(payload\) && \(await \(await import\("\.\/whatsappCalls"\)\)\.whatsappCallsEnabled\(\)\)/);
+  });
   it("montado em whatsapp.calls (alcance de cidade do módulo whatsapp)", () => {
     const r = readFileSync(resolve(root, "server/routers.ts"), "utf8");
     expect(r).toContain("calls: whatsappCallsRouter,");

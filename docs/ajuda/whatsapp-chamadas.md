@@ -35,6 +35,8 @@ Na conversa, cada chamada aparece como uma linha: "Chamada recebida 14:32 · 3 m
 
 ## Configuração (dono / super admin)
 
+0. **Interruptor geral:** Definições → Automações → **Chamadas de voz do WhatsApp** vem **desligado**. Enquanto estiver desligado não toca nada, não aparece "Ligar" e os eventos de chamada da Meta são ignorados. Liga-o só depois de fazer os passos abaixo na Meta.
+
 Pré-requisitos da Meta:
 - número na **WhatsApp Cloud API** (não na app WhatsApp Business) e app com a permissão `whatsapp_business_messaging`;
 - **limite de mensagens de pelo menos 2000** destinatários únicos por dia (tier da conta);

@@ -890,3 +890,11 @@ export async function sweepStaleCallsThrottled(force = false): Promise<void> {
 }
 
 
+
+/** Interruptor WHATSAPP_CALLS (Definições → Automações; desligado por omissão). */
+export async function whatsappCallsEnabled(): Promise<boolean> {
+  const { ensureFeatureFlagOverrides, isFeatureEnabled } = await import("./_core/featureFlags");
+  const { automationFlagDefault } = await import("../shared/appSettings");
+  await ensureFeatureFlagOverrides();
+  return isFeatureEnabled("WHATSAPP_CALLS", { defaultEnabled: automationFlagDefault("WHATSAPP_CALLS") });
+}
