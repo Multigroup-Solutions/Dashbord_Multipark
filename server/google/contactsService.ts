@@ -13,7 +13,7 @@
  */
 import { sql } from "drizzle-orm";
 import {
-  DIRECTORY_SCOPES, desiredPartnerContacts, desiredServiceContacts, parseContactsConfig, partnersPushAllowed, servicePushAllowed,
+  DIRECTORY_SCOPES, desiredPartnerContacts, desiredServiceContacts, parseContactsConfig, partnersPushAllowed, serviceRoleEligible, servicePushAllowed,
   type ContactsConfig, type DesiredPushContact, type GoogleContactsPrefs, type ServiceWindow,
 } from "../../shared/contacts";
 import { hasFeatureScopes } from "../../shared/mail";
@@ -92,6 +92,8 @@ async function baseCities(userId: number, role: string): Promise<string[]> {
 /**
  * Janelas de serviço da pessoa (hoje e amanhã, Lisboa) por cidade:
  *  - turnos confirmados no Extras-Dia → das (início − 1 h) às (fim + 1 h);
+ *  - supervisor ou acima (os únicos que recebem o grupo — decisão de 26 set
+ *    2026) → o dia inteiro das suas cidades de base;
  *  - team leader → o dia inteiro das suas cidades (coordena todos);
  *  - condutor sem turno nesse dia na escala → o dia inteiro da sua cidade
  *    (os condutores da casa nem sempre estão no Extras-Dia).
@@ -112,7 +114,8 @@ export async function serviceWindows(u: { userId: number; role: string; employee
       withShift.add(String(r.assignmentDate));
     }
   }
-  const wholeDayFor = u.role === "team_leader" ? days : u.role === "condutor" ? days.filter((x) => !withShift.has(x)) : [];
+  // Só supervisor ou acima chega aqui (servicePushAllowed): o dia inteiro das suas cidades de base.
+  const wholeDayFor = serviceRoleEligible(u.role) || u.role === "team_leader" ? days : u.role === "condutor" ? days.filter((x) => !withShift.has(x)) : [];
   if (wholeDayFor.length) {
     for (const city of await baseCities(u.userId, u.role)) {
       for (const day of wholeDayFor) add(city, { fromMs: lisbonMidnightUtcMs(day), toMs: lisbonMidnightUtcMs(addDays(day, 1)) });

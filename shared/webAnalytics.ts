@@ -156,7 +156,7 @@ export const webAnalyticsConfigSchema = z.object({
   /** Chrome UX Report (dados reais) 1×/semana por origem e por página — precisa de chave de API. */
   cruxEnabled: z.boolean().default(true),
   /** Hora (Lisboa) a partir da qual corre a atualização do dia. */
-  refreshHour: z.number().int().min(0).max(23).default(7),
+  refreshHour: z.number().int().min(0).max(23).default(9),
   /** Dias de histórico na primeira recolha (e se aumentar, alarga para trás). */
   backfillDays: z.number().int().min(7).max(480).default(90),
   /** Eventos do funil de reserva (GA4) — só os que existirem aparecem. */

@@ -58,11 +58,11 @@ describe("definições (marketing.webAnalytics)", () => {
     expect(normalizeSearchConsoleSite("multipark.pt")).toBeNull();
   });
 
-  it("omissões seguras: desligado, 90 dias, 07:00, limiares do pedido", () => {
+  it("omissões seguras: desligado, 90 dias, 09:00, limiares do pedido", () => {
     const c = DEFAULT_WEB_ANALYTICS_CONFIG;
     expect(c.enabled).toBe(false);
     expect(c.backfillDays).toBe(90);
-    expect(c.refreshHour).toBe(7);
+    expect(c.refreshHour).toBe(9);
     expect(c.alerts).toMatchObject({ enabled: true, sessionsDropPct: 30, clicksDropPct: 30, pagespeedMobileMin: 50, positionDrop: 3, positionTopN: 20 });
     expect(c.funnelEvents).toContain("begin_checkout");
     expect(c.funnelEvents).toContain("purchase");
@@ -304,7 +304,7 @@ const fakePsi = (calls: string[]): PsiApiLike => ({
   },
 });
 
-// 25/09/2026 11:00 em Lisboa (10:00 UTC) — depois da hora da atualização (07:00).
+// 25/09/2026 11:00 em Lisboa (10:00 UTC) — depois da hora da atualização (09:00).
 const NOW = Date.UTC(2026, 8, 25, 10, 0, 0);
 const cfgWith = (patch: Partial<WebAnalyticsConfig> = {}): WebAnalyticsConfig => webAnalyticsConfigSchema.parse({
   enabled: true,

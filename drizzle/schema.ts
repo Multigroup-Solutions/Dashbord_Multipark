@@ -2862,12 +2862,15 @@ export const mailThreads = mysqlTable("mail_threads", {
 	assignedUserId: int(),
 	statusChangedAt: timestamp({ mode: 'string' }),
 	projectId: int(),
+	// 0180: 1 = só notificações automáticas de reserva (escondida por omissão na Comunicação); NULL = por calcular.
+	automated: tinyint(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
 (table) => [
 	uniqueIndex("uq_mail_threads_account_thread").on(table.accountKey, table.gmailThreadId),
 	index("idx_mail_threads_mailbox").on(table.mailboxKey, table.lastMessageAt),
+	index("idx_mail_threads_mailbox_auto").on(table.mailboxKey, table.automated, table.lastMessageAt),
 	index("idx_mail_threads_owner").on(table.ownerUserId, table.lastMessageAt),
 	index("idx_mail_threads_assigned").on(table.assignedUserId),
 	index("idx_mail_threads_contact").on(table.contactEmail),
@@ -2900,6 +2903,7 @@ export const mailMessages = mysqlTable("mail_messages", {
 	labelIdsJson: varchar({ length: 1000 }),
 	sentAt: datetime({ mode: 'string' }),
 	isRead: tinyint().default(0).notNull(),
+	// 0 = pessoa, 1 = remetente automático, 2 = notificação automática de reserva (0180).
 	automated: tinyint().default(0).notNull(),
 	sentById: int(),
 	pipeline: varchar({ length: 40 }),

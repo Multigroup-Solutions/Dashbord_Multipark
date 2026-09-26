@@ -36,8 +36,15 @@ describe("Contactos — rotas e permissões", () => {
 
   it("definições: admin vê, só o super admin grava", async () => {
     await expect(caller("backoffice").contacts.settings.get()).rejects.toMatchObject({ code: "FORBIDDEN" });
-    const cfg = { directory: { enabled: false, adminEmail: "" }, service: { roles: ["condutor"], retentionDays: 2, maxPerUser: 100 }, partners: { enabled: false, roles: [] } } as any;
+    const cfg = { directory: { enabled: false, adminEmail: "" }, service: { roles: ["supervisor"], retentionDays: 2, maxPerUser: 100 }, partners: { enabled: false, roles: [] } } as any;
     await expect(caller("admin").contacts.settings.save(cfg)).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("grupo Serviço: o condutor (e o TL) nunca — nem o super admin o consegue gravar", async () => {
+    for (const roles of [["condutor"], ["team_leader"], ["condutor", "supervisor"]]) {
+      const cfg = { directory: { enabled: false, adminEmail: "" }, service: { roles, retentionDays: 2, maxPerUser: 100 }, partners: { enabled: false, roles: [] } } as any;
+      await expect(caller("super_admin").contacts.settings.save(cfg)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    }
   });
 
   it("diretório: 'Atualizar agora' só admin", async () => {

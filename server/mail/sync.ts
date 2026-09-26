@@ -18,7 +18,7 @@
  * antigo, ligações, notificações) ficam fora: `onStored`.
  */
 import type { gmail_v1 } from "@googleapis/gmail";
-import { classifyMessage, isAutomatedSender, isCompanyAddress, type Classification, type MailboxConfig } from "../../shared/mail";
+import { classifyMessage, isAutomatedSender, isCompanyAddress, isReservationNotificationEmail, type Classification, type MailboxConfig } from "../../shared/mail";
 import { parseGmailMessage, type ParsedGmailMessage } from "./parse";
 
 // ─── Dependências ───────────────────────────────────────────────────────────
@@ -52,7 +52,11 @@ export interface SyncStore {
   getState(accountKey: string): Promise<AccountSyncState>;
   saveState(accountKey: string, patch: Partial<AccountSyncState>): Promise<void>;
   knownMessageIds(accountKey: string, gmailIds: readonly string[]): Promise<Set<string>>;
-  storeMessage(accountKey: string, p: ParsedGmailMessage, c: Classification, extra: { ownerUserId: number | null; automated: boolean; contactEmail: string | null; contactName: string | null }): Promise<StoreMessageResult>;
+  storeMessage(accountKey: string, p: ParsedGmailMessage, c: Classification, extra: {
+    ownerUserId: number | null; automated: boolean; contactEmail: string | null; contactName: string | null;
+    /** Notificação automática de reserva (escondida por omissão nas listas; a pesquisa encontra-a). */
+    reservationNotice?: boolean;
+  }): Promise<StoreMessageResult>;
   setRead(accountKey: string, gmailId: string, read: boolean): Promise<void>;
 }
 
@@ -171,10 +175,13 @@ async function processIds(
         const e = [...parsed.to, ...parsed.cc].find((a) => !company(a)) ?? null;
         return { email: e, name: null };
       })();
-      const automated = !parsed.outbound && isAutomatedSender(parsed.fromEmail, { autoSubmitted: parsed.autoSubmitted, precedence: parsed.precedence });
+      const reservationNotice = isReservationNotificationEmail(
+        { fromEmail: parsed.fromEmail, fromName: parsed.fromName, subject: parsed.subject, outbound: parsed.outbound }, opts.brandDomains);
+      const automated = reservationNotice || (!parsed.outbound && isAutomatedSender(parsed.fromEmail, { autoSubmitted: parsed.autoSubmitted, precedence: parsed.precedence }));
       const result = await store.storeMessage(account.key, parsed, classification, {
         ownerUserId: classification.personal ? account.ownerUserId : null,
         automated,
+        reservationNotice,
         contactEmail: party.email,
         contactName: party.name,
       });

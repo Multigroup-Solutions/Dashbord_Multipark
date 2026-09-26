@@ -7,7 +7,7 @@ import crypto from "node:crypto";
 import type { gmail_v1 } from "@googleapis/gmail";
 import {
   canActOnMailbox, canSeeMailbox, canSeePersonalMailbox, canSendFromPersonalMailbox, checkSendAs, classifyMessage, extractAddresses,
-  hasFeatureScopes, isAllowedWorkspaceIdentity, isAutomatedSender, isMailOverdue, mailboxCityRestricted, mailboxConfigSchema, parseDomainList,
+  hasFeatureScopes, hideAutomaticThreads, isAllowedWorkspaceIdentity, isAutomatedSender, isReservationNotificationEmail, MAIL_AUTOMATED_RESERVATION, isMailOverdue, mailboxCityRestricted, mailboxConfigSchema, parseDomainList,
   pickFromAddress, pipelineFor, retentionCutoff, sourceAccountKey, type MailboxConfig,
 } from "../shared/mail";
 import { MATRIX, can } from "../shared/access";
@@ -22,6 +22,7 @@ import { consentUrl, scopesFor, isAuthRevokedError, workspaceConfig } from "./go
 import { requestedFeatures, safeReturnPath } from "./google/userAccounts";
 import { decryptSecret, encryptSecret } from "./integrations/googleAds/crypto";
 import { MIGRATION_0145_STATEMENTS, SEED_0145_ID } from "./migrations/migration_0145";
+import { MIGRATION_0180_STATEMENTS } from "./migrations/migration_0180";
 
 // ─── Utilitários ────────────────────────────────────────────────────────────
 
@@ -77,15 +78,15 @@ function fakeApi(opts: {
 /** BD falsa (em memória) com dedupe por (conta, id Gmail). */
 function memStore() {
   const state = new Map<string, AccountSyncState>();
-  const msgs = new Map<string, { gmailId: string; mailboxKey: string | null; brand: string | null; personal: boolean; read: boolean }>();
+  const msgs = new Map<string, { gmailId: string; mailboxKey: string | null; brand: string | null; personal: boolean; read: boolean; automated?: boolean; reservationNotice?: boolean }>();
   const store: SyncStore = {
     async getState(k) { return state.get(k) ?? { historyId: null, backfillStartHistoryId: null, backfillPageToken: null, backfillDoneAt: null, backfillDays: null }; },
     async saveState(k, patch) { state.set(k, { ...(await store.getState(k)), ...patch }); },
     async knownMessageIds(k, ids) { return new Set(ids.filter((id) => msgs.has(`${k}|${id}`))); },
-    async storeMessage(k, p, c) {
+    async storeMessage(k, p, c, extra) {
       const key = `${k}|${p.gmailMessageId}`;
       if (msgs.has(key)) return { stored: false, threadId: 1, messageId: null, newThread: false, reopened: false };
-      msgs.set(key, { gmailId: p.gmailMessageId, mailboxKey: c.mailboxKey, brand: c.brand, personal: c.personal, read: !p.unread });
+      msgs.set(key, { gmailId: p.gmailMessageId, mailboxKey: c.mailboxKey, brand: c.brand, personal: c.personal, read: !p.unread, automated: extra.automated, reservationNotice: !!extra.reservationNotice });
       return { stored: true, threadId: 1, messageId: msgs.size, newThread: true, reopened: false };
     },
     async setRead(k, id, read) { const m = msgs.get(`${k}|${id}`); if (m) m.read = read; },
@@ -556,5 +557,51 @@ describe("migração 0145", () => {
       expect(seeds.some((s) => s.includes(`'${k}'`))).toBe(true);
     }
     expect(MIGRATION_0145_STATEMENTS.at(-1)).toContain(SEED_0145_ID);
+  });
+});
+
+// ─── Notificações automáticas de reserva (26 set 2026) ──────────────────────
+
+describe("notificações automáticas de reserva: guardadas, escondidas por omissão, encontradas na pesquisa", () => {
+  it("reconhece a notificação do sistema; respostas, reencaminhamentos e clientes não", () => {
+    expect(isReservationNotificationEmail({ fromEmail: "info@multipark.pt", subject: "Nova Reserva - MP12345" })).toBe(true);
+    expect(isReservationNotificationEmail({ fromEmail: "reservas@skypark.pt", subject: "NOVA RESERVA #88" })).toBe(true);
+    expect(isReservationNotificationEmail({ fromEmail: "info@multipark.pt", fromName: "Nova Reserva - SkyPark", subject: "Reserva 88" })).toBe(true);
+    expect(isReservationNotificationEmail({ fromEmail: "info@multipark.pt", subject: "Re: Nova Reserva - MP12345" })).toBe(false);
+    expect(isReservationNotificationEmail({ fromEmail: "info@multipark.pt", subject: "Fwd: Nova Reserva - MP12345" })).toBe(false);
+    expect(isReservationNotificationEmail({ fromEmail: "cliente@gmail.com", subject: "Nova reserva para sábado?" })).toBe(false);
+    expect(isReservationNotificationEmail({ fromEmail: "info@multipark.pt", subject: "Nova Reserva", outbound: true })).toBe(false);
+    expect(isReservationNotificationEmail({ fromEmail: "info@multipark.pt", subject: "Pedido de fatura" })).toBe(false);
+    expect(MAIL_AUTOMATED_RESERVATION).toBe(2);
+  });
+
+  it("listas: escondidas por omissão; 'Mostrar automáticos' mostra; a pesquisa mostra sempre", () => {
+    expect(hideAutomaticThreads({})).toBe(true);
+    expect(hideAutomaticThreads({ showAutomatic: false, search: "" })).toBe(true);
+    expect(hideAutomaticThreads({ showAutomatic: false, search: "   " })).toBe(true);
+    expect(hideAutomaticThreads({ showAutomatic: true })).toBe(false);
+    expect(hideAutomaticThreads({ showAutomatic: false, search: "MP12345" })).toBe(false);
+  });
+
+  it("a sincronização guarda-as (não as salta) e marca-as como automáticas de reserva", async () => {
+    const messages = {
+      n1: gmailMsg("n1", { from: "Multipark <info@multipark.pt>", subject: "Nova Reserva - MP1", deliveredTo: "reservas@multipark.pt" }),
+      c1: gmailMsg("c1", { subject: "Dúvida sobre a reserva", deliveredTo: "reservas@multipark.pt" }),
+    };
+    const { api } = fakeApi({ messages, listPages: [["n1", "c1"]], profileHistoryId: "900" });
+    const { store, msgs } = memStore();
+    const r = await syncAccount(api, store, account([mb({ key: "reservas", addresses: [{ address: "reservas@multipark.pt", brand: "multipark" }], catchAll: true })]), { deadlineAt: Date.now() + 10_000, backfillDays: 90 });
+    expect(r.stored).toBe(2);
+    const byId = new Map([...msgs.values()].map((m) => [m.gmailId, m]));
+    expect(byId.get("n1")).toMatchObject({ reservationNotice: true, automated: true });
+    expect(byId.get("c1")).toMatchObject({ reservationNotice: false, automated: false });
+  });
+
+  it("migração 0180 idempotente: coluna/índice novos e backfill só das conversas por calcular", () => {
+    const all = MIGRATION_0180_STATEMENTS.join("\n");
+    expect(MIGRATION_0180_STATEMENTS[0]).toBe("ALTER TABLE `mail_threads` ADD COLUMN `automated` TINYINT NULL");
+    expect(all).toMatch(/ADD INDEX `idx_mail_threads_mailbox_auto`/);
+    for (const s of MIGRATION_0180_STATEMENTS.filter((x) => x.startsWith("UPDATE"))) expect(s).toMatch(/t\.`automated` IS NULL/);
+    expect(all).toMatch(/nova reserva/);
   });
 });

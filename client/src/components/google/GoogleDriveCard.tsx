@@ -1,6 +1,6 @@
-// Perfil → Google Drive: "Ativar Drive" (autorização incremental, só
-// drive.file — a app vê apenas os ficheiros que ela criou ou que escolheres
-// com ela). Usado por "Guardar no Drive", "Exportar para Sheets", documentos
+// Perfil → Google Drive: "Ativar Drive" (autorização incremental: drive.file
+// — a app vê apenas os ficheiros que ela criou ou que escolheres com ela — e
+// spreadsheets.readonly, só para importar de qualquer folha que a pessoa abre). Usado por "Guardar no Drive", "Exportar para Sheets", documentos
 // gerados em "O meu Drive" e importação de folhas. O token nunca chega ao
 // browser (o Picker recebe um token curto só com drive.file).
 import { trpc } from "@/lib/trpc";
@@ -35,6 +35,16 @@ export function GoogleDriveCard({ returnTo = "/perfil" }: { returnTo?: string })
           </p>
           <Button asChild size="sm">
             <a href={googleFeaturesHref(["drive"], returnTo)}><Sparkles className="h-4 w-4 mr-1" />Ativar Drive</a>
+          </Button>
+        </div>
+      )}
+      {s.granted && !s.sheetsRead && !s.needsReauth && (
+        <div className="rounded-lg border p-3 space-y-2">
+          <p className="text-xs text-foreground">
+            Para "Importar do Google Sheets" a partir de qualquer link de folha que consegues abrir, autoriza também a leitura de folhas (só leitura; nunca Docs nem outros ficheiros).
+          </p>
+          <Button asChild size="sm" variant="outline">
+            <a href={googleFeaturesHref(["drive"], returnTo)}><Sparkles className="h-4 w-4 mr-1" />Autorizar leitura de folhas</a>
           </Button>
         </div>
       )}

@@ -6,7 +6,7 @@
 import { sql, type SQL } from "drizzle-orm";
 import { getDb } from "../db";
 import {
-  MAIL_DEFAULT_BACKFILL_DAYS, DEFAULT_BRAND_DOMAINS, hasFeatureScopes, mailboxConfigSchema, normalizeAddress, personalAccountKey,
+  MAIL_AUTOMATED_RESERVATION, MAIL_DEFAULT_BACKFILL_DAYS, DEFAULT_BRAND_DOMAINS, hasFeatureScopes, mailboxConfigSchema, normalizeAddress, personalAccountKey,
   sourceAccountKey, userIdOfAccountKey, type Classification, type MailboxConfig, type MailLinkType,
 } from "../../shared/mail";
 import type { AccountSyncState, StoreMessageResult, SyncAccount, SyncStore } from "./sync";
@@ -210,10 +210,12 @@ export async function recomputeThread(threadId: number): Promise<void> {
              SUM(CASE WHEN isRead = 0 AND direction = 'in' THEN 1 ELSE 0 END) AS u,
              MAX(sentAt) AS lastAt,
              MAX(CASE WHEN direction = 'in' THEN sentAt END) AS li,
-             MAX(CASE WHEN direction = 'out' THEN sentAt END) AS lo
+             MAX(CASE WHEN direction = 'out' THEN sentAt END) AS lo,
+             SUM(CASE WHEN automated = ${MAIL_AUTOMATED_RESERVATION} THEN 0 ELSE 1 END) AS na
       FROM mail_messages WHERE threadId = ${threadId} GROUP BY threadId
     ) x ON x.threadId = t.id
     SET t.messageCount = x.c, t.unreadCount = x.u, t.lastMessageAt = x.lastAt, t.lastInboundAt = x.li, t.lastOutboundAt = x.lo,
+        t.automated = CASE WHEN x.c > 0 AND x.na = 0 THEN 1 ELSE 0 END,
         t.awaitingSince = (SELECT MIN(m.sentAt) FROM mail_messages m
                            WHERE m.threadId = x.threadId AND m.direction = 'in' AND m.automated = 0 AND (x.lo IS NULL OR m.sentAt > x.lo))
     WHERE t.id = ${threadId}`);
@@ -289,12 +291,12 @@ export const dbSyncStore: SyncStore = {
         ${JSON.stringify(p.to)}, ${JSON.stringify(p.cc)}, ${p.deliveredTo[0] ?? null}, ${c.matchedAddress}, ${p.subject || null}, ${p.snippet || null},
         ${p.text ? p.text.slice(0, 200_000) : null}, ${p.html ? sanitizeForStorage(p.html) : null},
         ${p.attachments.length ? JSON.stringify(p.attachments) : null}, ${JSON.stringify(p.labelIds).slice(0, 1000)}, ${p.sentAt},
-        ${p.outbound || !p.unread ? 1 : 0}, ${extra.automated ? 1 : 0})`);
+        ${p.outbound || !p.unread ? 1 : 0}, ${extra.reservationNotice ? MAIL_AUTOMATED_RESERVATION : extra.automated ? 1 : 0})`);
     const stored = Number(header(ins)?.affectedRows ?? 0) === 1;
     if (!stored) return { stored: false, threadId, messageId: null, newThread: false, reopened: false };
     const messageId = Number(header(ins)?.insertId ?? 0) || null;
     let reopened = false;
-    if (!p.outbound && !extra.automated && String(thread.status) === "resolvido") {
+    if (!p.outbound && !extra.automated && !extra.reservationNotice && String(thread.status) === "resolvido") {
       await d.execute(sql`UPDATE mail_threads SET status = 'aberto', statusChangedAt = ${nowUtc()} WHERE id = ${threadId}`);
       reopened = true;
     }

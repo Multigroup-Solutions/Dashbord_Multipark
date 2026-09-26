@@ -1,6 +1,7 @@
 // Botões do Google Drive para usar nas páginas:
-//  - SaveToDriveButton: "Guardar no Drive" (anexo de email, documento do RH,
-//    prova de reclamação) → pasta "Multipark" do Drive da pessoa;
+//  - SaveToDriveButton: "Guardar no Drive" (anexo de email, prova de
+//    reclamação) → pasta "Multipark" do Drive da pessoa. Os documentos do RH
+//    NUNCA vão para o Drive (decisão do dono, 26 set 2026);
 //  - ExportToSheetsButton: "Exportar para Sheets" de um relatório (os mesmos
 //    dados e permissões da página; a folha fica na pasta "Multipark");
 //  - ImportFromSheetButton: lê uma folha Google como CSV para as importações
@@ -22,7 +23,6 @@ import { useGooglePicker } from "./useGooglePicker";
 
 type SaveSource =
   | { kind: "mail_attachment"; messageId: number; index: number }
-  | { kind: "employee_document"; id: number }
   | { kind: "complaint_photo"; id: number };
 
 const here = () => window.location.pathname + window.location.search;

@@ -48,7 +48,7 @@ Em **Definições → Integrações → Web & SEO** aparece o email da conta de 
 **5. Preencher as Definições** (Definições → Integrações → Web & SEO)
 1. Adiciona cada propriedade GA4 (ID, nome, marca) e cada propriedade da Search Console (nome exato, marca).
 2. Confere as páginas da PageSpeed (por omissão as páginas iniciais multipark.pt e multipark.app — junta as páginas de reserva de cada marca, até 40). Para juntar muitas de uma vez usa **Colar várias páginas** (uma por linha, `URL | nome` opcional; a marca é adivinhada pelo domínio). "Chave" = página-chave (entra nos alertas dos dados reais). O interruptor **Dados reais (Chrome UX Report)** consulta 1×/semana as mesmas páginas e os respetivos sites.
-3. Escolhe a **hora da atualização diária** (Lisboa), o histórico da 1.ª recolha (90 dias por omissão), os **eventos do funil** (ex.: `begin_checkout`, `purchase`) e os limiares dos alertas.
+3. Escolhe a **hora da atualização diária** (Lisboa; 09:00 por omissão), o histórico da 1.ª recolha (90 dias por omissão), os **eventos do funil** (ex.: `begin_checkout`, `purchase`) e os limiares dos alertas.
 4. Liga **Recolha diária** e carrega em **Guardar**.
 5. Carrega em **Testar acesso**: diz, para cada propriedade, se a conta de serviço a consegue ler. As que falham mostram o email a adicionar.
 6. **Recolher agora** começa já (o histórico de 90 dias leva algumas corridas; o cron de hora a hora continua sozinho).

@@ -62,7 +62,7 @@ export const DWD_CALENDAR_SCOPES = [
 export const googleSyncPrefsSchema = z.object({
   /** Tarefas atribuídas ↔ lista "Multipark" do Google Tasks. */
   tasks: z.boolean().default(true),
-  /** Calendário: turnos confirmados (e, para TL/supervisor, a escala da cidade + passagens de turno). */
+  /** Calendário: turnos confirmados (e, para TL/supervisor, a escala da cidade + passagens de turno, se ligadas nas Definições). */
   calShifts: z.boolean().default(true),
   /** Calendário: prazos da formação. */
   calTraining: z.boolean().default(true),
@@ -93,11 +93,30 @@ export const sharedCalendarsConfigSchema = z.object({
   cities: z.object({ lisbon: z.boolean(), porto: z.boolean(), faro: z.boolean() }).default({ lisbon: true, porto: true, faro: true }),
   /** Partilha de leitura com todo o domínio do Workspace (para subscrever). */
   shareWithDomain: z.boolean().default(true),
+  /**
+   * TL/supervisor: evento diário "Escala da cidade" (30 dias) no calendário
+   * pessoal. Desligado por omissão (decisão do dono, 26 set 2026) — o código
+   * fica, liga-se aqui.
+   */
+  leadCityDayEvents: z.boolean().default(false),
+  /**
+   * Evento diário "Passagem de turno" (15h) — calendário pessoal do TL e
+   * calendários partilhados. Desligado por omissão (decisão do dono, 26 set 2026).
+   */
+  handoverEvents: z.boolean().default(false),
 }).superRefine((v, ctx) => {
   if (v.enabled && !v.ownerEmail) ctx.addIssue({ code: "custom", message: "Indica a conta do Workspace dona dos calendários partilhados." });
 });
 export type SharedCalendarsConfig = z.output<typeof sharedCalendarsConfigSchema>;
 export const DEFAULT_SHARED_CALENDARS_CONFIG: SharedCalendarsConfig = sharedCalendarsConfigSchema.parse({});
+
+/**
+ * Tira os eventos automáticos da escala da cidade / passagem de turno que
+ * estejam desligados nas Definições (os turnos pessoais ficam sempre). PURA.
+ */
+export function filterLeadEvents<T extends { sourceType: string }>(events: readonly T[], cfg: Pick<SharedCalendarsConfig, "leadCityDayEvents" | "handoverEvents">): T[] {
+  return events.filter((e) => (e.sourceType === "cityday" ? cfg.leadCityDayEvents : e.sourceType === "handover" ? cfg.handoverEvents : true));
+}
 
 export function parseSharedCalendarsConfig(raw: unknown): SharedCalendarsConfig {
   let v: unknown = raw;

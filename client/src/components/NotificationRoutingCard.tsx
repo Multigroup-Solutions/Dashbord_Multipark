@@ -143,7 +143,7 @@ export function NotificationRoutingCard() {
 
           <div className="rounded-lg border p-3 space-y-2">
             <div className="text-sm font-semibold">Papéis nacionais só da própria cidade</div>
-            <p className="text-xs text-muted-foreground">Marcado = esse papel só recebe as notificações da(s) cidade(s) do seu centro de custos (e das cidades dadas), em vez de todas.</p>
+            <p className="text-xs text-muted-foreground">Marcado = esse papel só recebe as notificações da(s) cidade(s) do seu centro de custos (e das cidades dadas), em vez de todas. Ligado por omissão para os três; o super admin recebe sempre tudo.</p>
             <div className="flex flex-wrap gap-4">
               {HOME_CITY_ROLES.map((r) => (
                 <label key={r} className="flex items-center gap-2 text-sm min-h-[36px]">

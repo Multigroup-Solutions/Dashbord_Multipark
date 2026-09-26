@@ -8,7 +8,9 @@
  *    app, "Guardar no Drive", "Exportar para Sheets", documentos gerados em
  *    "O meu Drive", importação de uma folha escolhida com o Picker;
  *  - Shared Drive da empresa (conta de serviço com delegação a impersonar a
- *    conta dona): pastas por registo criadas a pedido, modelos Docs, espelho.
+ *    conta dona): pastas por registo criadas a pedido, modelos Docs, espelho
+ *    das provas das reclamações; relatórios ao vivo num Shared Drive restrito
+ *    próprio. Os documentos do RH NUNCA vão para o Drive (26 set 2026).
  *
  * Nunca se regista conteúdo de ficheiros nem dados pessoais; os tokens ficam
  * cifrados na BD (userAccounts.ts) e o que vai ao browser para o Picker é um
@@ -18,11 +20,11 @@ import { TRPCError } from "@trpc/server";
 import { sql } from "drizzle-orm";
 import {
   DOC_TEMPLATE_ENTITIES, DOC_TEMPLATE_LABELS, DRIVE_FILE_SCOPE, DWD_DRIVE_SCOPES, GOOGLE_MIME, buildPlaceholderValues, extractPlaceholders,
-  fallbackViewLink, generatedDocName, parseDriveConfig, parseDriveFileId, placeholdersFor, replaceAllTextRequests, safeGoogleLink,
-  sanitizeDriveName, sharedFolderPath, type DocTemplateType, type DriveConfig, type DriveEntityType, type GenerateEntityType,
+  fallbackViewLink, generateDestinationAllowed, generatedDocName, liveDriveProblem, parseDriveConfig, parseDriveFileId, placeholdersFor, replaceAllTextRequests, safeGoogleLink,
+  sanitizeDriveName, sharedFolderPath, type DocTemplateType, type DriveConfig, type DriveEntityType, type GenerateDestination, type GenerateEntityType,
   type SheetImportPurpose, sheetValuesToCsv, type SheetExportInput, exportSpreadsheetName,
 } from "../../shared/drive";
-import { hasFeatureScopes } from "../../shared/mail";
+import { hasFeatureScopes, hasSheetsReadScope } from "../../shared/mail";
 import { can } from "../../shared/access";
 import { lisbonDayOf } from "../../shared/lisbonDay";
 import { delegatedClient, dwdConfigured, googleErrorMessage, httpStatusOf, isAuthRevokedError, oauthConfigured, workspaceConfig } from "./workspace";
@@ -68,14 +70,14 @@ export async function loadDriveConfig(): Promise<DriveConfig> {
 }
 
 /** APIs com a conta Google da pessoa (exige a funcionalidade "drive"). */
-export async function userDriveApis(userId: number, deadlineAt: number): Promise<{ apis: Apis; email: string }> {
+export async function userDriveApis(userId: number, deadlineAt: number): Promise<{ apis: Apis; email: string; sheetsRead: boolean }> {
   const { getGoogleAccount, userGoogleAuth } = await import("./userAccounts");
   const acc = await getGoogleAccount(userId).catch(() => null);
   if (!acc || acc.status === "disconnected" || !acc.refreshTokenEnc) throw precondition("Liga primeiro a tua conta Google (Perfil → Google).");
   if (!hasFeatureScopes(acc.scopes, "drive")) throw precondition("Ativa o Google Drive na tua conta (Perfil → Google → Ativar Drive).");
   try {
     const { client, email } = await userGoogleAuth(userId, "drive");
-    return { apis: googleWorkspaceApis(client, deadlineAt), email };
+    return { apis: googleWorkspaceApis(client, deadlineAt), email, sheetsRead: hasSheetsReadScope(acc.scopes) };
   } catch (err: any) {
     throw precondition(String(err?.message ?? err));
   }
@@ -97,14 +99,19 @@ export { getState as getDriveState, setState as setDriveState };
 export interface SharedDriveContext { apis: Apis; driveId: string; ownerEmail: string; scopeKey: string; cfg: DriveConfig }
 
 /**
- * Shared Drive da empresa (delegação a impersonar a conta dona). `restricted`
- * = RH → o Shared Drive de RH quando configurado.
+ * Shared Drive da empresa (delegação a impersonar a conta dona). `live` = o
+ * Shared Drive RESTRITO dos relatórios ao vivo (sem ele configurado → erro;
+ * nunca cai no Shared Drive geral).
  */
-export async function sharedDriveContext(deadlineAt: number, o: { restricted?: boolean; cfg?: DriveConfig } = {}): Promise<SharedDriveContext> {
+export async function sharedDriveContext(deadlineAt: number, o: { live?: boolean; cfg?: DriveConfig } = {}): Promise<SharedDriveContext> {
   const cfg = o.cfg ?? (await loadDriveConfig());
   if (!cfg.sharedEnabled || !cfg.ownerEmail) throw precondition("O Shared Drive da empresa não está configurado (Definições → Comunicação → Google Drive).");
+  if (o.live) {
+    const problem = liveDriveProblem(cfg);
+    if (problem) throw precondition(problem);
+  }
   if (!dwdConfigured()) throw precondition("Conta de serviço Google (delegação) em falta no servidor.");
-  const name = o.restricted && cfg.rhDriveName ? cfg.rhDriveName : cfg.sharedDriveName;
+  const name = o.live ? cfg.liveDriveName.trim() : cfg.sharedDriveName;
   const client = delegatedClient(cfg.ownerEmail, DWD_DRIVE_SCOPES);
   const apis = googleWorkspaceApis(client, deadlineAt);
   const key = `drive:${name}`.slice(0, 64);
@@ -207,7 +214,6 @@ export async function removeDriveLink(user: DriveUser, linkId: number): Promise<
 
 export type SaveSource =
   | { kind: "mail_attachment"; messageId: number; index: number }
-  | { kind: "employee_document"; id: number }
   | { kind: "complaint_photo"; id: number };
 
 export async function fetchStoredBytes(keyOrUrl: string, fallbackUrl?: string | null): Promise<Buffer> {
@@ -235,13 +241,7 @@ export async function loadSourceBytes(user: DriveUser, s: SaveSource): Promise<{
     const t = rowsOf(await d.execute(sql`SELECT threadId FROM mail_messages WHERE id = ${s.messageId} LIMIT 1`))[0];
     return { name: a.filename || "anexo", mimeType: a.mimeType || "application/octet-stream", bytes: a.content, link: t ? { entityType: "mail_thread", entityId: String(t.threadId) } : null };
   }
-  if (s.kind === "employee_document") {
-    const r = rowsOf(await d.execute(sql`SELECT id, employeeId, docType, label, fileKey, fileUrl, mimeType FROM employee_documents WHERE id = ${s.id} LIMIT 1`))[0];
-    if (!r) throw new TRPCError({ code: "NOT_FOUND", message: "Documento não encontrado." });
-    await assertDriveEntityAccess(user, "employee", String(r.employeeId), "view");
-    const ext = String(r.fileKey ?? "").match(/\.[A-Za-z0-9]{1,6}$/)?.[0] ?? "";
-    return { name: `${r.label || r.docType}${ext}`, mimeType: r.mimeType || "application/octet-stream", bytes: await fetchStoredBytes(String(r.fileKey || r.fileUrl), r.fileUrl), link: { entityType: "employee", entityId: String(r.employeeId) } };
-  }
+  if ((s as { kind: string }).kind === "employee_document") throw new TRPCError({ code: "FORBIDDEN", message: HR_NO_DRIVE_MESSAGE });
   const r = rowsOf(await d.execute(sql`SELECT id, complaintId, url, fileKey, label FROM complaint_photos WHERE id = ${s.id} LIMIT 1`))[0];
   if (!r) throw new TRPCError({ code: "NOT_FOUND", message: "Ficheiro não encontrado." });
   await assertDriveEntityAccess(user, "complaint", String(r.complaintId), "view");
@@ -250,8 +250,12 @@ export async function loadSourceBytes(user: DriveUser, s: SaveSource): Promise<{
   return { name: r.label ? `${r.label} — ${name}` : name, mimeType: mime, bytes: await fetchStoredBytes(String(r.fileKey || r.url), r.url), link: { entityType: "complaint", entityId: String(r.complaintId) } };
 }
 
+/** Os documentos do RH nunca vão para o Google Drive (decisão do dono, 26 set 2026). */
+export const HR_NO_DRIVE_MESSAGE = "Os documentos do RH nunca vão para o Google Drive — ficam só nos documentos da ficha, na app.";
+
 /** "Guardar no Drive": copia para a pasta "Multipark" do Drive da pessoa (e liga ao registo). */
 export async function saveToUserDrive(user: DriveUser, s: SaveSource, o: { linkToRecord?: boolean } = {}): Promise<{ file: DriveFileMeta; linkId: number | null }> {
+  if ((s as { kind: string }).kind === "employee_document") throw new TRPCError({ code: "FORBIDDEN", message: HR_NO_DRIVE_MESSAGE });
   const src = await loadSourceBytes(user, s);
   const { apis } = await userDriveApis(user.id, Date.now() + 50_000);
   try {
@@ -363,7 +367,8 @@ export interface GenerateInput {
   templateId: number;
   entityType: GenerateEntityType;
   entityId: string;
-  destination: "shared" | "user";
+  /** "app" = só o PDF nos documentos da ficha (obrigatório no RH; nunca fica no Drive). */
+  destination: GenerateDestination;
 }
 
 /**
@@ -375,8 +380,13 @@ export interface GenerateInput {
  *    drive.file chega) e a substituição corre com o token dela.
  * O PDF (passo 2) é pedido à parte (exportPdf) para caber no limite de 60 s.
  */
-export async function generateDocument(user: DriveUser, input: GenerateInput): Promise<{ linkId: number; file: DriveFileMeta; replaced: number; missing: string[]; warnings: string[] }> {
+export async function generateDocument(user: DriveUser, input: GenerateInput): Promise<{ linkId: number | null; file: DriveFileMeta | null; replaced: number; missing: string[]; warnings: string[]; employeeDocumentId: number | null }> {
   const deadlineAt = Date.now() + 45_000;
+  if (!generateDestinationAllowed(input.entityType, input.destination)) {
+    throw input.entityType === "employee"
+      ? new TRPCError({ code: "FORBIDDEN", message: HR_NO_DRIVE_MESSAGE })
+      : bad("Escolhe onde guardar o documento (Shared Drive ou o teu Drive).");
+  }
   const info = await assertDriveEntityAccess(user, input.entityType, input.entityId, "edit");
   const d = await database();
   const tr = rowsOf(await d.execute(sql`SELECT * FROM google_doc_templates WHERE id = ${input.templateId} AND active = 1 LIMIT 1`))[0];
@@ -399,7 +409,15 @@ export async function generateDocument(user: DriveUser, input: GenerateInput): P
   const requests = replaceAllTextRequests(values);
   const name = generatedDocName(template.templateType, info.label, lisbonDayOf(Date.now()));
 
-  const shared = await sharedDriveContext(deadlineAt, { restricted: info.restricted });
+  const shared = await sharedDriveContext(deadlineAt);
+  if (input.destination === "app") {
+    // RH: cópia de trabalho PRIVADA da conta dona (O meu Drive dela, fora de
+    // qualquer Shared Drive) → marcadores → PDF → apagada; o PDF vai só para
+    // os documentos da ficha (S3). Nada fica no Google Drive.
+    const r = await generateEmployeePdf(user, shared, { template, requests, name, employeeId: Number(info.id) });
+    await logDrive(user.id, "generate", `Documento gerado (só PDF na ficha): ${DOC_TEMPLATE_LABELS[template.templateType]} (employee ${info.id})`, r.employeeDocumentId);
+    return { linkId: null, file: null, replaced: r.replaced, missing, warnings, employeeDocumentId: r.employeeDocumentId };
+  }
   let file: DriveFileMeta;
   let replaced = 0;
   try {
@@ -419,13 +437,63 @@ export async function generateDocument(user: DriveUser, input: GenerateInput): P
   } catch (err) { throw driveError(err, "Gerar documento"); }
   const linkId = await upsertLink(info.type, info.id, file, { source: "generated", location: input.destination, userId: user.id, templateId: template.id });
   await logDrive(user.id, "generate", `Documento gerado: ${DOC_TEMPLATE_LABELS[template.templateType]} (${info.type} ${info.type === "client" ? "cliente" : info.id}, ${input.destination})`, linkId);
-  return { linkId, file: { ...file, webViewLink: safeGoogleLink(file.webViewLink) ?? fallbackViewLink(file.id, GOOGLE_MIME.doc) }, replaced, missing, warnings };
+  return { linkId, file: { ...file, webViewLink: safeGoogleLink(file.webViewLink) ?? fallbackViewLink(file.id, GOOGLE_MIME.doc) }, replaced, missing, warnings, employeeDocumentId: null };
+}
+
+export interface EmployeeDocStore {
+  put(key: string, pdf: Buffer): Promise<string>;
+  createDoc(row: Record<string, unknown>): Promise<number | null>;
+}
+
+const defaultEmployeeDocStore: EmployeeDocStore = {
+  async put(key, pdf) {
+    const { storagePut } = await import("../storage");
+    return (await storagePut(key, pdf, GOOGLE_MIME.pdf)).url;
+  },
+  async createDoc(row) {
+    const { createEmployeeDocument } = await import("../db");
+    const r: any = await createEmployeeDocument(row as any);
+    return Number((Array.isArray(r) ? r[0] : r)?.insertId ?? 0) || null;
+  },
+};
+
+/**
+ * RH: modelo → PDF nos documentos da ficha, sem deixar nada no Drive. A cópia
+ * de trabalho (Google Doc) é criada no Drive PRIVADO da conta dona (sem
+ * pasta, fora dos Shared Drives) e apagada no fim, mesmo que falhe a meio.
+ */
+export async function generateEmployeePdf(
+  user: DriveUser, shared: Pick<SharedDriveContext, "apis">,
+  o: { template: Pick<DocTemplateRow, "fileId" | "templateType">; requests: unknown[]; name: string; employeeId: number },
+  store: EmployeeDocStore = defaultEmployeeDocStore,
+): Promise<{ replaced: number; employeeDocumentId: number | null }> {
+  let tmpId: string | null = null;
+  let pdf: Buffer;
+  let replaced = 0;
+  try {
+    const docx = await shared.apis.drive.exportAs(o.template.fileId, GOOGLE_MIME.docx);
+    const tmp = await shared.apis.drive.upload({ name: `${sanitizeDriveName(o.name, 180)} (temporário)`, mimeType: GOOGLE_MIME.docx, convertTo: GOOGLE_MIME.doc }, docx);
+    tmpId = tmp.id;
+    replaced = (await shared.apis.docs.batchUpdate(tmp.id, o.requests as any)).replaced;
+    pdf = await shared.apis.drive.exportAs(tmp.id, GOOGLE_MIME.pdf);
+  } catch (err) {
+    throw driveError(err, "Gerar documento");
+  } finally {
+    if (tmpId) await shared.apis.drive.remove(tmpId).catch(() => { /* limpeza: tenta sempre */ });
+  }
+  const key = `employees/${o.employeeId}/docs/gerado-${Date.now()}.pdf`;
+  const url = await store.put(key, pdf);
+  const docType = o.template.templateType === "contrato_trabalho" ? "contract" : "other";
+  const employeeDocumentId = await store.createDoc({
+    employeeId: o.employeeId, docType, label: sanitizeDriveName(`${o.name}.pdf`, 250), fileUrl: url, fileKey: key, mimeType: GOOGLE_MIME.pdf, uploadedById: user.id,
+  });
+  return { replaced, employeeDocumentId };
 }
 
 /**
  * Passo 2: PDF do documento gerado, ao lado dele no Drive e ligado ao
- * registo; no RH também entra nos documentos da ficha (S3), como contrato
- * ou "outro".
+ * registo (reclamações, clientes, parcerias). O RH não passa por aqui: o
+ * PDF vai direto para os documentos da ficha (generateEmployeePdf).
  */
 export async function exportGeneratedPdf(user: DriveUser, linkId: number): Promise<{ linkId: number; file: DriveFileMeta; employeeDocumentId: number | null }> {
   const deadlineAt = Date.now() + 45_000;
@@ -433,13 +501,14 @@ export async function exportGeneratedPdf(user: DriveUser, linkId: number): Promi
   const l = rowsOf(await d.execute(sql`SELECT l.*, t.templateType FROM google_drive_links l LEFT JOIN google_doc_templates t ON t.id = l.templateId
     WHERE l.id = ${linkId} AND l.removedAt IS NULL LIMIT 1`))[0];
   if (!l || l.source !== "generated") throw new TRPCError({ code: "NOT_FOUND", message: "Documento gerado não encontrado." });
+  // RH: nunca para o Drive (documentos gerados antes de 26 set 2026 incluídos).
+  if (String(l.entityType) === "employee") throw new TRPCError({ code: "FORBIDDEN", message: HR_NO_DRIVE_MESSAGE });
   const info = await assertDriveEntityAccess(user, l.entityType as DriveEntityType, String(l.entityId), "edit");
   let file: DriveFileMeta;
-  let pdf: Buffer;
   try {
-    const shared = l.location === "shared" ? await sharedDriveContext(deadlineAt, { restricted: info.restricted }) : null;
+    const shared = l.location === "shared" ? await sharedDriveContext(deadlineAt) : null;
     const apis = shared ? shared.apis : (await userDriveApis(user.id, deadlineAt)).apis;
-    pdf = await apis.drive.exportAs(String(l.fileId), GOOGLE_MIME.pdf);
+    const pdf = await apis.drive.exportAs(String(l.fileId), GOOGLE_MIME.pdf);
     let parents: string[] | undefined;
     if (shared && info.folder) parents = [await sharedFolderFor(shared, sharedFolderPath(info.folder), false)];
     else if (!shared) parents = [await ensureUserFolder(apis.drive, user.id)];
@@ -447,18 +516,7 @@ export async function exportGeneratedPdf(user: DriveUser, linkId: number): Promi
     if (shared && user.email) await shared.apis.drive.shareWithUser(file.id, String(user.email).toLowerCase(), "reader").catch(() => {});
   } catch (err) { throw driveError(err, "Exportar PDF"); }
   const newId = await upsertLink(info.type, info.id, file, { source: "pdf", location: l.location === "shared" ? "shared" : "user", userId: user.id, templateId: l.templateId ?? null });
-  let employeeDocumentId: number | null = null;
-  if (info.type === "employee") {
-    try {
-      const { storagePut } = await import("../storage");
-      const { createEmployeeDocument } = await import("../db");
-      const key = `employees/${info.id}/docs/gerado-${Date.now()}.pdf`;
-      const { url } = await storagePut(key, pdf, GOOGLE_MIME.pdf);
-      const docType = l.templateType === "contrato_trabalho" ? "contract" : "other";
-      const r: any = await createEmployeeDocument({ employeeId: Number(info.id), docType, label: sanitizeDriveName(String(l.name), 250), fileUrl: url, fileKey: key, mimeType: GOOGLE_MIME.pdf, uploadedById: user.id } as any);
-      employeeDocumentId = Number((Array.isArray(r) ? r[0] : r)?.insertId ?? 0) || null;
-    } catch { /* o PDF fica no Drive na mesma */ }
-  }
+  const employeeDocumentId: number | null = null;
   await logDrive(user.id, "export_pdf", `PDF do documento gerado (${info.type} ${info.type === "client" ? "cliente" : info.id})`, newId);
   return { linkId: newId, file: { ...file, webViewLink: safeGoogleLink(file.webViewLink) ?? fallbackViewLink(file.id, GOOGLE_MIME.pdf) }, employeeDocumentId };
 }
@@ -488,8 +546,11 @@ export async function exportReportToSheets(
 /**
  * Importar de uma folha Google: lê o 1.º separador (ou o indicado) e devolve
  * CSV no formato das importações existentes — a validação é a da importação
- * (o mesmo caminho do CSV colado). drive.file: a folha tem de ter sido
- * escolhida com o Picker (ou criada pela app).
+ * (o mesmo caminho do CSV colado). Com spreadsheets.readonly (pedido com o
+ * Drive desde 26 set 2026) lê qualquer folha que a pessoa consiga abrir; sem
+ * ele (autorização antiga, só drive.file) a folha tem de ter sido escolhida
+ * com o Picker (ou criada pela app) — a mensagem de erro pede para voltar a
+ * autorizar o Drive.
  */
 export async function readSheetAsCsv(user: DriveUser, input: { link: string; purpose: SheetImportPurpose; sheetTitle?: string | null }): Promise<{ csv: string; rows: number; title: string }> {
   const { requireAccess } = await import("../_core/access");
@@ -497,7 +558,7 @@ export async function readSheetAsCsv(user: DriveUser, input: { link: string; pur
   else requireAccess(user, "anual", "manage");
   const fileId = parseDriveFileId(input.link);
   if (!fileId) throw bad("Link da folha Google inválido.");
-  const { apis } = await userDriveApis(user.id, Date.now() + 30_000);
+  const { apis, sheetsRead } = await userDriveApis(user.id, Date.now() + 30_000);
   try {
     const tabs = await apis.sheets.listSheets(fileId);
     const title = input.sheetTitle && tabs.some((t) => t.title === input.sheetTitle) ? input.sheetTitle : tabs[0]?.title;
@@ -508,10 +569,17 @@ export async function readSheetAsCsv(user: DriveUser, input: { link: string; pur
     return { csv, rows: csv ? csv.split("\n").length : 0, title };
   } catch (err) {
     if (httpStatusOf(err) === 404 || httpStatusOf(err) === 403) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "A app não tem acesso a esta folha. Usa \"Escolher do Drive\" para a abrir com a app (o acesso é só a esse ficheiro)." });
+      throw new TRPCError({ code: "NOT_FOUND", message: sheetImportDeniedMessage(sheetsRead) });
     }
     throw driveError(err, "Importar do Sheets");
   }
+}
+
+/** Mensagem quando a Google recusa ler a folha (com/sem spreadsheets.readonly). PURA. */
+export function sheetImportDeniedMessage(sheetsRead: boolean): string {
+  return sheetsRead
+    ? "Não tens acesso a esta folha no Google (confirma o link ou pede ao dono que ta partilhe)."
+    : "A app ainda não pode ler folhas pelo link. Volta a autorizar o Drive (Perfil → Google Drive → \"Autorizar leitura de folhas\") ou usa \"Escolher do Drive\" para abrir a folha com a app.";
 }
 
 // ─── Estado e teste ─────────────────────────────────────────────────────────
@@ -526,6 +594,8 @@ export async function driveStatus(userId: number) {
     connected,
     needsReauth: acc?.status === "reauth_required",
     granted: connected && hasFeatureScopes(acc!.scopes, "drive"),
+    /** Pode importar de qualquer folha que a pessoa abre (spreadsheets.readonly). */
+    sheetsRead: connected && hasSheetsReadScope(acc!.scopes),
     sharedEnabled: cfg.sharedEnabled && dwdConfigured(),
   };
 }

@@ -66,6 +66,7 @@ export const mailRouter = router({
         awaiting: z.boolean().optional(),
         unread: z.boolean().optional(),
         search: z.string().max(100).nullish(),
+        showAutomatic: z.boolean().optional(),
         page: z.number().int().min(1).max(500).optional(),
         pageSize: z.number().int().min(10).max(100).optional(),
       }))

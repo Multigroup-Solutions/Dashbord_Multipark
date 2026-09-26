@@ -24,13 +24,18 @@ import {
   DWD_DRIVE_SCOPES, DRIVE_FILE_SCOPE, SHEET_EXPORT_GATES, buildPlaceholderValues, chunkSheetWrites, columnLetter, driveQueryLiteral, extractPlaceholders,
   fallbackViewLink, folderPathKey, generatedDocName, normalizeDriveEntityId, parseDriveConfig, parseDriveFileId, placeholdersFor, replaceAllTextRequests,
   safeGoogleLink, sanitizeDriveName, sanitizeSheetTitle, sharedFolderPath, sheetValuesToCsv, templateTypesFor, a1Range, driveFileKind,
+  DEFAULT_DRIVE_CONFIG, GENERATE_DESTINATIONS, GOOGLE_MIME, driveConfigSchema, generateDestinationAllowed, liveDriveProblem,
 } from "../shared/drive";
-import { GOOGLE_FEATURES_ENABLED, GOOGLE_FEATURE_SCOPES, hasFeatureScopes } from "../shared/mail";
+import { GOOGLE_FEATURES_ENABLED, GOOGLE_FEATURE_SCOPES, SHEETS_READONLY_SCOPE, hasFeatureScopes, hasSheetsReadScope } from "../shared/mail";
 import { scopesFor } from "./google/workspace";
 import { requestedFeatures } from "./google/userAccounts";
 import { ensureFolderPath, type FolderStore } from "./google/driveFolders";
 import { createSpreadsheet, refreshSpreadsheet, loadReportTabs, assertCanExportReport, liveReportInput, normalizeTabs } from "./google/sheetsExport";
 import { prefixTabs } from "./google/driveJobs";
+import {
+  HR_NO_DRIVE_MESSAGE, generateDocument, generateEmployeePdf, loadSourceBytes, saveToUserDrive, sharedDriveContext, sheetImportDeniedMessage,
+} from "./google/driveService";
+import { liveSheetInDrive } from "./google/driveJobs";
 import { multipartBody, type DriveApiLike, type DriveFileMeta, type SheetsApiLike } from "./google/driveApi";
 import { assertDriveEntityAccess, cityNameOfProject } from "./google/driveAccess";
 import { parseCsvLine } from "./extrasImport";
@@ -46,13 +51,22 @@ beforeEach(() => {
 // ─── 1. Âmbitos ─────────────────────────────────────────────────────────────
 
 describe("Drive — âmbitos (mínimos)", () => {
-  it("funcionalidade 'drive' ligada e pede SÓ drive.file", () => {
+  it("funcionalidade 'drive' ligada e pede drive.file + spreadsheets.readonly (importar de qualquer folha)", () => {
     expect(GOOGLE_FEATURES_ENABLED).toContain("drive");
-    expect(GOOGLE_FEATURE_SCOPES.drive).toEqual([DRIVE_FILE_SCOPE]);
+    expect(GOOGLE_FEATURE_SCOPES.drive).toEqual([DRIVE_FILE_SCOPE, SHEETS_READONLY_SCOPE]);
     expect(DRIVE_FILE_SCOPE).toBe("https://www.googleapis.com/auth/drive.file");
-    expect(scopesFor(["drive"])).toEqual(["openid", "email", "profile", "https://www.googleapis.com/auth/drive.file"]);
-    // nada de drive / drive.readonly / spreadsheets no OAuth por pessoa
+    expect(SHEETS_READONLY_SCOPE).toBe("https://www.googleapis.com/auth/spreadsheets.readonly");
+    expect(scopesFor(["drive"])).toEqual(["openid", "email", "profile", "https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/spreadsheets.readonly"]);
+    // nada de drive / drive.readonly / spreadsheets (escrita) / documents no OAuth por pessoa
     expect(scopesFor(["drive"]).some((s) => /auth\/(drive|drive\.readonly|spreadsheets|documents)$/.test(s))).toBe(false);
+  });
+  it("spreadsheets.readonly é opcional: quem só tem drive.file continua com o Drive ativo, mas sem ler folhas pelo link", () => {
+    expect(hasFeatureScopes(`openid ${DRIVE_FILE_SCOPE}`, "drive")).toBe(true);
+    expect(hasSheetsReadScope(`openid ${DRIVE_FILE_SCOPE}`)).toBe(false);
+    expect(hasSheetsReadScope(`openid ${DRIVE_FILE_SCOPE} ${SHEETS_READONLY_SCOPE}`)).toBe(true);
+    expect(hasFeatureScopes(`openid ${SHEETS_READONLY_SCOPE}`, "drive")).toBe(false);
+    expect(sheetImportDeniedMessage(false)).toMatch(/Autorizar leitura de folhas/);
+    expect(sheetImportDeniedMessage(true)).toMatch(/Não tens acesso a esta folha/);
   });
   it("autorização incremental: 'drive' pedido sozinho ou com outros", () => {
     expect(requestedFeatures("drive")).toEqual(["drive"]);
@@ -73,8 +87,15 @@ describe("Drive — âmbitos (mínimos)", () => {
     expect(d.sharedEnabled).toBe(false);
     expect(d.sharedDriveName).toBe("Multipark");
     expect(parseDriveConfig({ sharedEnabled: true, ownerEmail: "" }).sharedEnabled).toBe(false); // inválido → omissão
-    expect(parseDriveConfig({ mirrorRhDocuments: true }).mirrorRhDocuments).toBe(false);
-    expect(parseDriveConfig({ sharedEnabled: true, ownerEmail: "Drive@Multipark.pt", mirrorRhDocuments: true }).ownerEmail).toBe("drive@multipark.pt");
+    expect(parseDriveConfig({ mirrorComplaintEvidence: true }).mirrorComplaintEvidence).toBe(false);
+    expect(parseDriveConfig({ sharedEnabled: true, ownerEmail: "Drive@Multipark.pt", mirrorComplaintEvidence: true }).ownerEmail).toBe("drive@multipark.pt");
+  });
+  it("RH nunca no Drive: sem espelho do RH nem Shared Drive do RH (valores antigos ignorados)", () => {
+    const old = parseDriveConfig({ sharedEnabled: true, ownerEmail: "drive@multipark.pt", mirrorRhDocuments: true, rhDriveName: "Multipark RH" }) as Record<string, unknown>;
+    expect(old.sharedEnabled).toBe(true);
+    expect("mirrorRhDocuments" in old).toBe(false);
+    expect("rhDriveName" in old).toBe(false);
+    expect("mirrorRhDocuments" in DEFAULT_DRIVE_CONFIG).toBe(false);
   });
 });
 
@@ -112,12 +133,13 @@ describe("Drive — links e nomes", () => {
     expect(sanitizeDriveName("a".repeat(300)).length).toBe(120);
     expect(driveQueryLiteral("O'Neil \\ x")).toBe("'O\\'Neil \\\\ x'");
   });
-  it("estrutura do Shared Drive (Clientes, Reclamações/ano/id, RH/cidade/trabalhador)", () => {
+  it("estrutura do Shared Drive (Clientes, Reclamações/ano/id, Parcerias; sem RH)", () => {
     expect(sharedFolderPath({ kind: "client", name: "Ana Silva", email: "ana@x.pt" })).toEqual(["Clientes", "Ana Silva (ana@x.pt)"]);
     expect(sharedFolderPath({ kind: "client", name: null, email: "ana@x.pt" })).toEqual(["Clientes", "ana@x.pt"]);
     expect(sharedFolderPath({ kind: "complaint", id: 42, createdAt: "2026-03-01 10:00:00" })).toEqual(["Reclamações", "2026", "42"]);
     expect(sharedFolderPath({ kind: "complaint", id: 42, createdAt: null })).toEqual(["Reclamações", "Sem data", "42"]);
-    expect(sharedFolderPath({ kind: "employee", id: 9, name: "João/Pé", city: null })).toEqual(["RH", "Sem cidade", "João-Pé (#9)"]);
+    // RH/<cidade>/<trabalhador> deixou de existir (os documentos do RH nunca vão para o Drive).
+    expect(sharedFolderPath({ kind: "employee", id: 9, name: "João/Pé", city: null } as any)).toBeUndefined();
     expect(sharedFolderPath({ kind: "partner", id: 3, name: "Agência X" })).toEqual(["Parcerias", "Agência X"]);
     expect(folderPathKey(["RH", "Porto", "Ana (#1)"])).toBe("RH/Porto/Ana (#1)");
   });
@@ -411,13 +433,12 @@ describe("Drive — acesso aos registos", () => {
     // extra só vê as reclamações "próprias" → não liga ficheiros
     await expect(assertDriveEntityAccess({ id: 1, role: "extra" }, "complaint", "7", "edit")).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
-  it("RH: ver = quem vê os documentos da ficha; ligar/gerar = quem os carrega; pasta RH/cidade/trabalhador restrita", async () => {
+  it("RH: ver = quem vê os documentos da ficha; ligar/gerar = quem os carrega; SEM pasta no Drive", async () => {
     f.canView.mockResolvedValue(undefined);
     const r = await assertDriveEntityAccess({ id: 1, role: "supervisor" }, "employee", "9", "view");
     expect(f.canView).toHaveBeenCalledWith(expect.objectContaining({ id: 1 }), 9, expect.any(String));
     expect(f.canUpload).not.toHaveBeenCalled();
-    expect(r.restricted).toBe(true);
-    expect(r.folder).toEqual({ kind: "employee", id: 9, name: "Ana Silva", city: "Porto" });
+    expect(r.folder).toBeNull();
     f.canUpload.mockRejectedValueOnce(new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" }));
     await expect(assertDriveEntityAccess({ id: 2, role: "user" }, "employee", "9", "edit")).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
@@ -446,5 +467,74 @@ describe("Drive — acesso aos registos", () => {
   it("cidade de um centro de custos sobe na árvore", async () => {
     expect(await cityNameOfProject(7)).toBe("Porto");
     expect(await cityNameOfProject(null)).toBeNull();
+  });
+});
+
+// ─── Decisões do dono (26 set 2026): RH nunca no Drive; relatórios ao vivo restritos ─
+
+describe("RH nunca vai para o Google Drive", () => {
+  it("'Guardar no Drive' de um documento do RH é recusado (antes de ler o ficheiro)", async () => {
+    await expect(saveToUserDrive({ id: 1, role: "super_admin" }, { kind: "employee_document", id: 5 } as any)).rejects.toMatchObject({ code: "FORBIDDEN", message: HR_NO_DRIVE_MESSAGE });
+    await expect(loadSourceBytes({ id: 1, role: "super_admin" }, { kind: "employee_document", id: 5 } as any)).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+  it("'Gerar documento' no RH só para a app (PDF na ficha); Drive recusado — e os outros registos nunca 'app'", async () => {
+    expect(GENERATE_DESTINATIONS).toEqual(["shared", "user", "app"]);
+    expect(generateDestinationAllowed("employee", "app")).toBe(true);
+    expect(generateDestinationAllowed("employee", "shared")).toBe(false);
+    expect(generateDestinationAllowed("employee", "user")).toBe(false);
+    expect(generateDestinationAllowed("complaint", "app")).toBe(false);
+    expect(generateDestinationAllowed("client", "shared")).toBe(true);
+    for (const destination of ["shared", "user"] as const) {
+      await expect(generateDocument({ id: 1, role: "super_admin" }, { templateId: 1, entityType: "employee", entityId: "9", destination })).rejects.toMatchObject({ code: "FORBIDDEN", message: HR_NO_DRIVE_MESSAGE });
+    }
+  });
+  it("gerar no RH: a cópia de trabalho é apagada do Drive (mesmo se falhar) e o PDF vai só para a ficha", async () => {
+    const calls: string[] = [];
+    const drive = {
+      async exportAs(id: string, mime: string) { calls.push(`export:${id}:${mime}`); return Buffer.from(mime === GOOGLE_MIME.pdf ? "%PDF" : "docx"); },
+      async upload(meta: { name: string; parents?: string[] }) { calls.push(`upload:${meta.parents ? "com-pasta" : "privado"}`); return { id: "tmp1", name: meta.name } as any; },
+      async remove(id: string) { calls.push(`remove:${id}`); },
+    };
+    const docs = { async batchUpdate() { return { replaced: 3 }; } };
+    const stored: Array<Record<string, unknown>> = [];
+    const store = { async put(key: string) { calls.push(`s3:${key.split("/")[0]}`); return `https://s3/${key}`; }, async createDoc(row: Record<string, unknown>) { stored.push(row); return 77; } };
+    const r = await generateEmployeePdf({ id: 4, role: "admin" }, { apis: { drive, docs } as any }, { template: { fileId: "tpl", templateType: "contrato_trabalho" }, requests: [], name: "Contrato — Ana", employeeId: 9 }, store);
+    expect(r).toEqual({ replaced: 3, employeeDocumentId: 77 });
+    expect(calls).toEqual([`export:tpl:${GOOGLE_MIME.docx}`, "upload:privado", `export:tmp1:${GOOGLE_MIME.pdf}`, "remove:tmp1", "s3:employees"]);
+    expect(stored[0]).toMatchObject({ employeeId: 9, docType: "contract", mimeType: GOOGLE_MIME.pdf, uploadedById: 4 });
+    // Falha a meio → a cópia é apagada na mesma e nada vai para a ficha.
+    const calls2: string[] = [];
+    const failing = { ...drive, async exportAs(id: string, mime: string) { if (id === "tmp1") throw new Error("boom"); return Buffer.from(mime); }, async remove(id: string) { calls2.push(`remove:${id}`); } };
+    const stored2: unknown[] = [];
+    await expect(generateEmployeePdf({ id: 4, role: "admin" }, { apis: { drive: failing, docs } as any }, { template: { fileId: "tpl", templateType: "declaracao" }, requests: [], name: "X", employeeId: 9 },
+      { async put() { return "x"; }, async createDoc(row) { stored2.push(row); return 1; } })).rejects.toBeTruthy();
+    expect(calls2).toEqual(["remove:tmp1"]);
+    expect(stored2).toEqual([]);
+  });
+});
+
+describe("Relatórios ao vivo: só num Shared Drive restrito próprio", () => {
+  const base = { sharedEnabled: true, ownerEmail: "drive@multipark.pt", sharedDriveName: "Multipark" };
+  it("sem Shared Drive restrito → não se podem ligar (mensagem clara)", () => {
+    const r = driveConfigSchema.safeParse({ ...base, liveReports: { enabled: true, reports: ["financeiro"], hour: 6 } });
+    expect(r.success).toBe(false);
+    expect(liveDriveProblem({ liveDriveName: "", sharedDriveName: "Multipark" })).toMatch(/Shared Drive restrito/);
+    expect(parseDriveConfig(null).liveDriveName).toBe("");
+  });
+  it("o Shared Drive restrito tem de ser diferente do geral", () => {
+    expect(driveConfigSchema.safeParse({ ...base, liveDriveName: " multipark ", liveReports: { enabled: true } }).success).toBe(false);
+    expect(liveDriveProblem({ liveDriveName: "multipark", sharedDriveName: "Multipark" })).toMatch(/diferente/);
+    const ok = driveConfigSchema.safeParse({ ...base, liveDriveName: "Multipark Direção", liveReports: { enabled: true } });
+    expect(ok.success).toBe(true);
+    expect(liveDriveProblem(ok.data!)).toBeNull();
+  });
+  it("a folha só conta se estiver no Shared Drive restrito (a antiga, no geral, é substituída)", () => {
+    expect(liveSheetInDrive({ driveId: "restrito" }, "restrito")).toBe(true);
+    expect(liveSheetInDrive({ driveId: "geral" }, "restrito")).toBe(false);
+    expect(liveSheetInDrive({ driveId: null }, "restrito")).toBe(false);
+  });
+  it("sem Shared Drive restrito, o contexto 'live' recusa (nunca cai no Shared Drive geral)", async () => {
+    const cfg = driveConfigSchema.parse({ ...base });
+    await expect(sharedDriveContext(Date.now() + 5_000, { cfg, live: true })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/Shared Drive restrito/) });
   });
 });

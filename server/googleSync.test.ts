@@ -8,7 +8,7 @@ import type { calendar_v3 } from "@googleapis/calendar";
 import {
   CALENDAR_WINDOW_FUTURE_DAYS, DEFAULT_GOOGLE_SYNC_PREFS, busyByDay, calendarEventId, calendarWindow, decideTaskSync, eventBody, eventHash,
   googleSyncCronOk, lisbonLocalToUtcMs, mappingFromEvent, meetLinkOf, meetingEventBody, normLocal, normRemote, notesFromGoogle,
-  parseGoogleSyncPrefs, planCalendarOps, pullPatch, sharedCalendarsConfigSchema, shiftEvent, stableHash, taskIdFromNotes, taskSyncPermissions,
+  filterLeadEvents, parseGoogleSyncPrefs, planCalendarOps, pullPatch, sharedCalendarsConfigSchema, shiftEvent, stableHash, taskIdFromNotes, taskSyncPermissions,
   taskToGoogle, type CalendarMapping, type DesiredEvent, type LocalTaskLike, type ShiftRow,
 } from "../shared/googleSync";
 import { GOOGLE_FEATURE_SCOPES, hasFeatureScopes } from "../shared/mail";
@@ -600,6 +600,16 @@ describe("Outros (preferências, configuração, livre/ocupado, migração)", ()
   it("calendários partilhados: ligar exige a conta dona", () => {
     expect(sharedCalendarsConfigSchema.safeParse({ enabled: true, ownerEmail: "" }).success).toBe(false);
     expect(sharedCalendarsConfigSchema.safeParse({ enabled: true, ownerEmail: "Escala@Multipark.pt" }).data?.ownerEmail).toBe("escala@multipark.pt");
+  });
+
+  it("escala da cidade e passagem de turno automáticas: desligadas por omissão; turnos pessoais ficam sempre", () => {
+    const cfg = sharedCalendarsConfigSchema.parse({});
+    expect(cfg.leadCityDayEvents).toBe(false);
+    expect(cfg.handoverEvents).toBe(false);
+    const evs = [{ sourceType: "shift" }, { sourceType: "cityday" }, { sourceType: "handover" }, { sourceType: "training" }];
+    expect(filterLeadEvents(evs, cfg).map((e) => e.sourceType)).toEqual(["shift", "training"]);
+    expect(filterLeadEvents(evs, { leadCityDayEvents: true, handoverEvents: false }).map((e) => e.sourceType)).toEqual(["shift", "cityday", "training"]);
+    expect(filterLeadEvents(evs, { leadCityDayEvents: false, handoverEvents: true }).map((e) => e.sourceType)).toEqual(["shift", "handover", "training"]);
   });
 
   it("livre/ocupado por dia de Lisboa, cortado à meia-noite (só horas)", () => {

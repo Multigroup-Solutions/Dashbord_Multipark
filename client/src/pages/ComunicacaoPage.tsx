@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useIsMobile } from "@/hooks/useMobile";
 import { toast } from "sonner";
-import { AlarmClock, Inbox, Loader2, Mail, PenSquare, RefreshCw, Search, UserRound } from "lucide-react";
+import { AlarmClock, Bot, Inbox, Loader2, Mail, PenSquare, RefreshCw, Search, UserRound } from "lucide-react";
 import {
   MAIL_BRAND_LABELS, MAIL_THREAD_STATUSES, MAIL_THREAD_STATUS_LABELS, isMailBrand, isMailOverdue, type MailThreadStatus,
 } from "@shared/mail";
@@ -42,6 +42,8 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
   const [assigned, setAssigned] = useState<"all" | "me" | "none">("all");
   const [awaiting, setAwaiting] = useState(false);
   const [unread, setUnread] = useState(false);
+  // Notificações automáticas de reserva: escondidas por omissão (a pesquisa encontra-as sempre).
+  const [showAutomatic, setShowAutomatic] = useState(false);
   const [q, setQ] = useState(() => (params.get("q") ?? "").slice(0, 120));
   const [page, setPage] = useState(1);
   const [composeNew, setComposeNew] = useState(false);
@@ -51,7 +53,7 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
     if (personal) { setMailbox("me"); return; }
     if (!mailbox && boxes.length) setMailbox(boxes[0].key);
   }, [personal, boxes, mailbox]);
-  useEffect(() => { setPage(1); }, [mailbox, brand, status, assigned, awaiting, unread, q, ownerUserId]);
+  useEffect(() => { setPage(1); }, [mailbox, brand, status, assigned, awaiting, unread, showAutomatic, q, ownerUserId]);
   useEffect(() => { const t = Number(params.get("t")) || null; if (t) setSelected(t); const c = params.get("caixa"); if (c && !personal) setMailbox(c); }, [params, personal]);
 
   const google = overview.data?.google;
@@ -60,7 +62,7 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
   const list = trpc.mail.threads.list.useQuery({
     mailbox: mailbox ?? "me", ownerUserId: mailbox === "me" ? ownerUserId : null,
     brand: brand === "all" ? null : brand, status, assigned: mailbox === "me" ? "all" : assigned, awaiting, unread,
-    search: q.trim() || null, page, pageSize: 40,
+    search: q.trim() || null, showAutomatic, page, pageSize: 40,
   }, { enabled, refetchInterval: POLL_MS, placeholderData: (p) => p });
 
   const syncMine = trpc.mail.syncMine.useMutation({
@@ -177,6 +179,10 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
           )}
           <Button size="sm" variant={awaiting ? "secondary" : "ghost"} className="h-7 text-xs" onClick={() => setAwaiting((x) => !x)}><AlarmClock className="h-3.5 w-3.5 mr-1" />Por responder</Button>
           <Button size="sm" variant={unread ? "secondary" : "ghost"} className="h-7 text-xs" onClick={() => setUnread((x) => !x)}>Não lidas</Button>
+          <Button size="sm" variant={showAutomatic ? "secondary" : "ghost"} className="h-7 text-xs" onClick={() => setShowAutomatic((x) => !x)}
+            title="Notificações automáticas de reserva: escondidas por omissão; a pesquisa encontra-as sempre.">
+            <Bot className="h-3.5 w-3.5 mr-1" />Mostrar automáticos
+          </Button>
         </div>
       </div>
       <div className="flex-1 overflow-y-auto">
@@ -195,6 +201,7 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
               <div className="text-xs text-muted-foreground truncate">{t.snippet}</div>
               <div className="flex flex-wrap items-center gap-1 mt-1">
                 <BrandChip brand={t.brand} />
+                {t.automated && <Badge variant="outline" className="h-5 px-1.5 text-[10.5px] gap-1"><Bot className="h-3 w-3" />Automático</Badge>}
                 {t.unreadCount > 0 && <Badge className="h-5 px-1.5 text-[10.5px]">{t.unreadCount} nova{t.unreadCount > 1 ? "s" : ""}</Badge>}
                 {t.awaitingSince && t.status !== "resolvido" && (
                   <Badge variant="outline" className={`h-5 px-1.5 text-[10.5px] gap-1 ${overdue ? "border-red-400 text-red-700 dark:text-red-300" : ""}`}>

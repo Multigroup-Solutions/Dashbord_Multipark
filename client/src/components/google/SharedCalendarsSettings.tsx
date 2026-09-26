@@ -51,7 +51,7 @@ export function SharedCalendarsSettings() {
           <Badge variant="outline" className={cfg.enabled ? "bg-emerald-100 text-emerald-800 border-emerald-200" : "bg-muted text-secondary-foreground"}>{cfg.enabled ? "Ligados" : "Desligados"}</Badge>
         </CardTitle>
         <p className="text-xs text-muted-foreground">
-          Um calendário "Escala Multipark — cidade" por cidade com os turnos confirmados e as passagens de turno, escrito pela conta de serviço em nome da conta dona.
+          Um calendário "Escala Multipark — cidade" por cidade com os turnos confirmados (e as passagens de turno, se ligadas abaixo), escrito pela conta de serviço em nome da conta dona.
           Quem não ligou a conta Google pode subscrevê-lo. Quem ligou recebe os seus turnos no próprio calendário "Multipark" (Perfil → Google).
         </p>
       </CardHeader>
@@ -86,6 +86,20 @@ export function SharedCalendarsSettings() {
           <Switch checked={cfg.shareWithDomain} disabled={!canEdit} onCheckedChange={(v) => setCfg({ ...cfg, shareWithDomain: v })} />
           <span>Partilhar (só leitura) com todo o domínio da conta dona</span>
         </label>
+        <div className="rounded-lg border p-3 space-y-1">
+          <div className="text-sm font-semibold">Eventos automáticos dos TL/supervisores</div>
+          <p className="text-xs text-muted-foreground">
+            Desligados por omissão. Os turnos confirmados de cada pessoa vão sempre para o calendário pessoal (Perfil → Google).
+          </p>
+          <label className="flex items-center gap-3 min-h-[44px]">
+            <Switch checked={cfg.leadCityDayEvents} disabled={!canEdit} onCheckedChange={(v) => setCfg({ ...cfg, leadCityDayEvents: v })} />
+            <span>Escala da cidade: um evento por dia (próximos 30 dias) no calendário do TL/supervisor</span>
+          </label>
+          <label className="flex items-center gap-3 min-h-[44px]">
+            <Switch checked={cfg.handoverEvents} disabled={!canEdit} onCheckedChange={(v) => setCfg({ ...cfg, handoverEvents: v })} />
+            <span>Passagem de turno (15h): um evento por dia no calendário do TL e nos calendários partilhados</span>
+          </label>
+        </div>
         {d.calendars.length > 0 && (
           <div className="space-y-1.5">
             {d.calendars.map((c) => (
