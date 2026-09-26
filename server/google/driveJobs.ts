@@ -1,17 +1,19 @@
 /**
  * Trabalhos do Drive no cron /api/cron/google-sync (10 em 10 min), sempre com
  * prazo e retomáveis:
- *  - espelho no Shared Drive: documentos do RH → RH/<cidade>/<trabalhador>
- *    (Shared Drive de RH quando configurado) e provas das reclamações →
+ *  - espelho no Shared Drive: provas das reclamações →
  *    Reclamações/<ano>/<id>; lotes pequenos, 1 linha por origem em
- *    google_drive_mirror (erro → nova tentativa, até 5);
+ *    google_drive_mirror (erro → nova tentativa, até 5). Os documentos do RH
+ *    NUNCA são copiados para o Drive (decisão do dono, 26 set 2026);
  *  - relatórios ao vivo: 1×/dia (a partir da hora configurada), uma folha
- *    fixa em Relatórios/ no Shared Drive; um relatório de cada vez, os já
- *    feitos no dia ficam marcados (a corrida seguinte continua).
+ *    fixa em Relatórios/ num Shared Drive RESTRITO próprio (ex.: "Multipark
+ *    Direção") — nunca no Shared Drive geral; sem ele, não correm. Um
+ *    relatório de cada vez, os já feitos no dia ficam marcados (a corrida
+ *    seguinte continua).
  * Nunca regista conteúdo nem dados pessoais (só ids e contagens).
  */
 import { sql } from "drizzle-orm";
-import { GOOGLE_MIME, LIVE_REPORT_KEYS, SHEET_EXPORT_LABELS, sharedFolderPath, type DriveConfig, type LiveReportKey, type SheetTab } from "../../shared/drive";
+import { GOOGLE_MIME, LIVE_REPORT_KEYS, SHEET_EXPORT_LABELS, liveDriveProblem, sharedFolderPath, type DriveConfig, type LiveReportKey, type SheetTab } from "../../shared/drive";
 import { lisbonDayOf, lisbonHoursSince } from "../../shared/lisbonDay";
 import { dwdConfigured, googleErrorMessage, httpStatusOf } from "./workspace";
 
@@ -47,33 +49,25 @@ async function markMirror(sourceType: string, sourceId: number, patch: { fileId?
       attempts = attempts + ${patch.status === "error" ? 1 : 0}, lastError = VALUES(lastError)`);
 }
 
-/** Espelho de uma origem (RH ou reclamações) — até ao prazo. */
-async function mirrorBatch(kind: "employee_document" | "complaint_photo", cfg: DriveConfig, deadlineAt: number, report: DriveJobsReport): Promise<void> {
+/** Espelho das provas das reclamações — até ao prazo. (O RH nunca vai para o Drive.) */
+async function mirrorBatch(kind: "complaint_photo", cfg: DriveConfig, deadlineAt: number, report: DriveJobsReport): Promise<void> {
   const d = await database();
-  const pending = kind === "employee_document"
-    ? rowsOf(await d.execute(sql`SELECT x.id, x.employeeId AS ownerId, x.docType, x.label, x.fileKey, x.fileUrl, x.mimeType, e.fullName, e.projectId
-        FROM employee_documents x JOIN employees e ON e.id = x.employeeId
-        LEFT JOIN google_drive_mirror m ON m.sourceType = 'employee_document' AND m.sourceId = x.id
-        WHERE m.id IS NULL OR (m.status = 'error' AND m.attempts < ${MAX_ATTEMPTS}) ORDER BY x.id LIMIT ${MIRROR_BATCH}`))
-    : rowsOf(await d.execute(sql`SELECT x.id, x.complaintId AS ownerId, x.label, x.fileKey, x.url AS fileUrl, c.createdAt
+  const pending = rowsOf(await d.execute(sql`SELECT x.id, x.complaintId AS ownerId, x.label, x.fileKey, x.url AS fileUrl, c.createdAt
         FROM complaint_photos x JOIN complaints c ON c.id = x.complaintId
         LEFT JOIN google_drive_mirror m ON m.sourceType = 'complaint_photo' AND m.sourceId = x.id
         WHERE m.id IS NULL OR (m.status = 'error' AND m.attempts < ${MAX_ATTEMPTS}) ORDER BY x.id LIMIT ${MIRROR_BATCH}`));
   if (!pending.length) return;
   const { sharedDriveContext, sharedFolderFor, fetchStoredBytes } = await import("./driveService");
-  const { cityNameOfProject } = await import("./driveAccess");
-  const ctx = await sharedDriveContext(deadlineAt, { restricted: kind === "employee_document", cfg });
+  const ctx = await sharedDriveContext(deadlineAt, { cfg });
   for (const r of pending) {
     if (Date.now() > deadlineAt - 8_000) { report.done = false; return; }
     try {
-      const segments = kind === "employee_document"
-        ? sharedFolderPath({ kind: "employee", id: Number(r.ownerId), name: String(r.fullName ?? ""), city: await cityNameOfProject(r.projectId != null ? Number(r.projectId) : null) })
-        : sharedFolderPath({ kind: "complaint", id: Number(r.ownerId), createdAt: r.createdAt ? String(r.createdAt) : null });
+      const segments = sharedFolderPath({ kind: "complaint", id: Number(r.ownerId), createdAt: r.createdAt ? String(r.createdAt) : null });
       const folderId = await sharedFolderFor(ctx, segments, false);
       const bytes = await fetchStoredBytes(String(r.fileKey || r.fileUrl), r.fileUrl);
       const base = String(r.fileKey ?? "").split("/").pop() || `${kind}-${r.id}`;
-      const name = kind === "employee_document" ? `${r.label || r.docType} (#${r.id}) — ${base}` : `${r.label ? `${r.label} — ` : ""}${base}`;
-      const mime = r.mimeType || (/\.pdf$/i.test(base) ? "application/pdf" : /\.png$/i.test(base) ? "image/png" : /\.(jpe?g)$/i.test(base) ? "image/jpeg" : "application/octet-stream");
+      const name = `${r.label ? `${r.label} — ` : ""}${base}`;
+      const mime = /\.pdf$/i.test(base) ? "application/pdf" : /\.png$/i.test(base) ? "image/png" : /\.(jpe?g)$/i.test(base) ? "image/jpeg" : "application/octet-stream";
       const file = await ctx.apis.drive.upload({ name: name.slice(0, 200), mimeType: mime, parents: [folderId] }, bytes);
       await markMirror(kind, Number(r.id), { fileId: file.id, status: "done" });
       report.mirrored++;
@@ -88,12 +82,12 @@ async function mirrorBatch(kind: "employee_document" | "complaint_photo", cfg: D
   if (pending.length === MIRROR_BATCH) report.done = false;
 }
 
-/** Utilizador (super admin/admin ativo) cujas permissões os relatórios ao vivo usam. */
+/** Utilizador (super admin ativo) cujas permissões os relatórios ao vivo usam. */
 async function liveRunAs(cfg: DriveConfig): Promise<any | null> {
   if (!cfg.liveRunAsUserId) return null;
   const { getUserById } = await import("../db");
   const u: any = await getUserById(cfg.liveRunAsUserId);
-  if (!u || !["admin", "super_admin"].includes(String(u.role)) || Number(u.isActive ?? 1) === 0) return null;
+  if (!u || String(u.role) !== "super_admin" || Number(u.isActive ?? 1) === 0) return null;
   return u;
 }
 
@@ -113,14 +107,25 @@ async function runLiveReports(cfg: DriveConfig, deadlineAt: number, now: number,
   if (!todo.length) return;
   const live: NonNullable<DriveJobsReport["live"]> = { ran: true, reports: [], partial: false, error: null };
   report.live = live;
+  // Só num Shared Drive restrito próprio (nunca no geral): sem ele, não corre.
+  const problem = liveDriveProblem(cfg);
+  if (problem) { live.error = problem; return; }
   const user = await liveRunAs(cfg);
-  if (!user) { live.error = "Relatórios ao vivo: a conta configurada já não é admin/super admin — volta a gravar as definições."; return; }
+  if (!user) { live.error = "Relatórios ao vivo: a conta configurada já não é super admin — volta a gravar as definições."; return; }
   try {
-    const ctx = await sharedDriveContext(deadlineAt, { cfg });
+    const ctx = await sharedDriveContext(deadlineAt, { cfg, live: true });
     let spreadsheetId = await getDriveState("live:spreadsheetId");
     if (spreadsheetId) {
-      try { await ctx.apis.drive.getFile(spreadsheetId); }
-      catch (err) { if ([404, 410].includes(httpStatusOf(err) ?? 0)) spreadsheetId = null; else throw err; }
+      try {
+        const meta = await ctx.apis.drive.getFile(spreadsheetId);
+        if (!liveSheetInDrive(meta, ctx.driveId)) {
+          // Folha antiga fora do Shared Drive restrito (ex.: no geral, antes de
+          // 26 set 2026): apaga-a (é gerada) e cria outra no sítio certo.
+          await ctx.apis.drive.remove(spreadsheetId).catch(() => {});
+          spreadsheetId = null;
+          await setDriveState("live:spreadsheetUrl", null);
+        }
+      } catch (err) { if ([404, 410].includes(httpStatusOf(err) ?? 0)) spreadsheetId = null; else throw err; }
     }
     if (!spreadsheetId) {
       const folderId = await sharedFolderFor(ctx, sharedFolderPath({ kind: "reports" }));
@@ -154,7 +159,16 @@ async function runLiveReports(cfg: DriveConfig, deadlineAt: number, now: number,
   }
 }
 
-export async function runDriveJobs(opts: { deadlineAt: number; now?: () => number }): Promise<DriveJobsReport> {
+/** A folha dos relatórios ao vivo está no Shared Drive restrito? PURA. */
+export function liveSheetInDrive(meta: { driveId?: string | null }, restrictedDriveId: string): boolean {
+  return !!meta.driveId && meta.driveId === restrictedDriveId;
+}
+
+/**
+ * `includeLive: false` → não corre os relatórios ao vivo (ex.: "Correr agora"
+ * por um admin — os relatórios ao vivo são só do super admin).
+ */
+export async function runDriveJobs(opts: { deadlineAt: number; now?: () => number; includeLive?: boolean }): Promise<DriveJobsReport> {
   const report: DriveJobsReport = { configured: false, done: true, mirrored: 0, mirrorFailed: 0, live: null, errors: [] };
   const { loadDriveConfig } = await import("./driveService");
   const cfg = await loadDriveConfig();
@@ -162,9 +176,8 @@ export async function runDriveJobs(opts: { deadlineAt: number; now?: () => numbe
   report.configured = true;
   const now = (opts.now ?? Date.now)();
   const steps: Array<() => Promise<void>> = [];
-  if (cfg.mirrorRhDocuments) steps.push(() => mirrorBatch("employee_document", cfg, opts.deadlineAt, report));
   if (cfg.mirrorComplaintEvidence) steps.push(() => mirrorBatch("complaint_photo", cfg, opts.deadlineAt, report));
-  if (cfg.liveReports.enabled) steps.push(() => runLiveReports(cfg, opts.deadlineAt, now, report));
+  if (cfg.liveReports.enabled && opts.includeLive !== false) steps.push(() => runLiveReports(cfg, opts.deadlineAt, now, report));
   for (const step of steps) {
     if (Date.now() > opts.deadlineAt - 8_000) { report.done = false; break; }
     try { await step(); } catch (err) { report.errors.push(`Drive: ${googleErrorMessage(err)}`); }

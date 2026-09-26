@@ -3,7 +3,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { can, type AccessOverrides } from "../shared/access";
 import {
-  NOTIFICATION_KIND_DEFS, NOTIFY_CITIES, canReceiveKind, effectiveRoles, entityKeyOf, kindDef, kindFilterValues,
+  EMPTY_ROUTING, NOTIFICATION_KIND_DEFS, NOTIFY_CITIES, canReceiveKind, effectiveRoles, entityKeyOf, kindDef, kindFilterValues,
   notificationRoutingSchema, parseNotificationPrefs, parseRouting, resolveRecipients, routingTable,
   type NotificationKindDef, type NotificationRouting, type RoutingCandidate,
 } from "../shared/notificationRouting";
@@ -92,13 +92,21 @@ describe("destinatários por papel e cidade", () => {
     expect(r).toEqual(expect.arrayContaining([superAdmin.id, admin.id]));
     expect(r).not.toContain(supLx.id);
   });
-  it("papéis nacionais recebem todas as cidades, a não ser que o super_admin os limite à própria", () => {
-    expect(who("complaint_new", "porto", everyone)).toContain(backofficeLx.id);
-    const routing = parseRouting({ homeCityOnly: ["backoffice", "frontoffice"] });
-    const r = who("complaint_new", "porto", everyone, routing);
-    expect(r).not.toContain(backofficeLx.id);
-    expect(r).not.toContain(frontofficeLx.id);
-    expect(who("complaint_new", "lisbon", everyone, routing)).toContain(backofficeLx.id);
+  it("papéis nacionais: só da própria cidade POR OMISSÃO; o super_admin pode desligar; super_admin recebe tudo", () => {
+    // Omissão (26 set 2026): ligado para frontoffice, backoffice e admin.
+    expect(EMPTY_ROUTING.homeCityOnly).toEqual(["frontoffice", "backoffice", "admin"]);
+    expect(parseRouting({}).homeCityOnly).toEqual(["frontoffice", "backoffice", "admin"]);
+    const def = who("complaint_new", "porto", everyone);
+    expect(def).not.toContain(backofficeLx.id);
+    expect(def).not.toContain(frontofficeLx.id);
+    expect(def).toContain(superAdmin.id);
+    expect(who("complaint_new", "lisbon", everyone)).toContain(backofficeLx.id);
+    // Desligado explicitamente pelo super_admin → todas as cidades.
+    const off = parseRouting({ homeCityOnly: [] });
+    expect(who("complaint_new", "porto", everyone, off)).toContain(backofficeLx.id);
+    const partial = parseRouting({ homeCityOnly: ["backoffice"] });
+    expect(who("complaint_new", "porto", everyone, partial)).not.toContain(backofficeLx.id);
+    expect(who("complaint_new", "porto", everyone, partial)).toContain(frontofficeLx.id);
   });
   it("quem está inativo nunca recebe", () => {
     const off = person("supervisor", ["lisbon"], { isActive: false });
@@ -239,8 +247,8 @@ describe("validação das regras (app_settings notifications.routing)", () => {
     expect(notificationRoutingSchema.safeParse({ kinds: { rh_docs_missing: { roles: ["condutor"] } } }).success).toBe(false);
   });
   it("valor guardado inválido → omissões do código", () => {
-    expect(parseRouting({ kinds: { nope: {} } })).toEqual({ kinds: {}, homeCityOnly: [] });
-    expect(parseRouting(null)).toEqual({ kinds: {}, homeCityOnly: [] });
+    expect(parseRouting({ kinds: { nope: {} } })).toEqual({ kinds: {}, homeCityOnly: ["frontoffice", "backoffice", "admin"] });
+    expect(parseRouting(null)).toEqual({ kinds: {}, homeCityOnly: ["frontoffice", "backoffice", "admin"] });
   });
   it("a definição está registada e validada no registo de Definições", async () => {
     const { validateSetting } = await import("../shared/appSettings");

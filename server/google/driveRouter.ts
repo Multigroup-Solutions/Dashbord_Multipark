@@ -8,7 +8,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import {
-  DRIVE_ENTITY_TYPES, GENERATE_ENTITY_TYPES, SHEET_IMPORT_PURPOSES, docTemplateInputSchema, driveConfigSchema,
+  DRIVE_ENTITY_TYPES, GENERATE_DESTINATIONS, GENERATE_ENTITY_TYPES, SHEET_IMPORT_PURPOSES, docTemplateInputSchema, driveConfigSchema,
   driveLinkInputSchema, sheetExportInputSchema, type GenerateEntityType,
 } from "../../shared/drive";
 
@@ -20,9 +20,9 @@ const superOnly = (u: CtxUser) => {
   if (u.role !== "super_admin") throw new TRPCError({ code: "FORBIDDEN", message: "Só o super admin configura o Shared Drive." });
 };
 
+// Os documentos do RH ("employee_document") NUNCA vão para o Drive (decisão do dono, 26 set 2026).
 const saveSourceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("mail_attachment"), messageId: z.number().int().positive(), index: z.number().int().min(0).max(500) }),
-  z.object({ kind: z.literal("employee_document"), id: z.number().int().positive() }),
   z.object({ kind: z.literal("complaint_photo"), id: z.number().int().positive() }),
 ]);
 
@@ -102,12 +102,16 @@ export const googleDriveRouter = router({
       templateId: z.number().int().positive(),
       entityType: z.enum(GENERATE_ENTITY_TYPES as unknown as [GenerateEntityType, ...GenerateEntityType[]]),
       entityId: z.string().trim().min(1).max(320),
-      destination: z.enum(["shared", "user"]),
+      // "app" = RH: só o PDF nos documentos da ficha (nunca fica no Drive).
+      destination: z.enum(GENERATE_DESTINATIONS),
     }))
     .mutation(async ({ ctx, input }) => {
       const { generateDocument } = await import("./driveService");
       const r = await generateDocument(ctx.user as CtxUser, input);
-      return { linkId: r.linkId, url: r.file.webViewLink, name: r.file.name, replaced: r.replaced, missing: r.missing, warnings: r.warnings };
+      return {
+        linkId: r.linkId, url: r.file?.webViewLink ?? null, name: r.file?.name ?? null, replaced: r.replaced, missing: r.missing, warnings: r.warnings,
+        employeeDocumentId: r.employeeDocumentId,
+      };
     }),
   /** Passo 2 (pedido à parte, por causa do limite de 60 s): PDF anexado ao registo. */
   pdf: protectedProcedure.input(z.object({ linkId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
@@ -152,13 +156,17 @@ export const googleDriveRouter = router({
         const res: any = d ? await d.execute(sql`SELECT sourceType, status, COUNT(*) AS n FROM google_drive_mirror GROUP BY sourceType, status`) : [[]];
         mirror = (Array.isArray(res) ? res[0] : []).map((r: any) => ({ sourceType: String(r.sourceType), status: String(r.status), n: Number(r.n) }));
       } catch { mirror = []; }
+      // Relatórios ao vivo: ver/configurar só o super admin (os admins não veem o link nem a configuração).
+      const isSuper = (ctx.user as CtxUser).role === "super_admin";
+      const config = await loadDriveConfig();
       return {
-        canEdit: (ctx.user as CtxUser).role === "super_admin",
-        config: await loadDriveConfig(),
+        canEdit: isSuper,
+        canSeeLive: isSuper,
+        config: isSuper ? config : { ...config, liveDriveName: "", liveReports: { ...config.liveReports, enabled: false, reports: [] }, liveRunAsUserId: null },
         dwd: dwdConfigured(),
         serviceAccountEmail: workspaceConfig().serviceAccount?.client_email ?? null,
-        liveSpreadsheetUrl: await getDriveState("live:spreadsheetUrl"),
-        liveLastRunAt: await getDriveState("live:lastRunAt"),
+        liveSpreadsheetUrl: isSuper ? await getDriveState("live:spreadsheetUrl") : null,
+        liveLastRunAt: isSuper ? await getDriveState("live:lastRunAt") : null,
         mirror,
       };
     }),
@@ -181,7 +189,8 @@ export const googleDriveRouter = router({
     runNow: protectedProcedure.mutation(async ({ ctx }) => {
       adminOnly(ctx.user as CtxUser);
       const { runDriveJobs } = await import("./driveJobs");
-      return runDriveJobs({ deadlineAt: Date.now() + 40_000 });
+      // Relatórios ao vivo: só quando é o super admin a pedir.
+      return runDriveJobs({ deadlineAt: Date.now() + 40_000, includeLive: (ctx.user as CtxUser).role === "super_admin" });
     }),
   }),
 });

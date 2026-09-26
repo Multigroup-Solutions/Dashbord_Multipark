@@ -3,8 +3,10 @@ import { MySqlDialect } from "drizzle-orm/mysql-core";
 import {
   APP_CONTACT_EXPIRES_KEY, APP_CONTACT_MARKER_KEY, DEFAULT_CONTACTS_CONFIG, PUSH_GROUP_NAMES, appMarkerOf, buildMatchIndex, contactKindsFor, desiredPartnerContacts,
   desiredServiceContacts, emailKey, mapDirectoryPerson, matchContact, parseContactQuery, parseContactsConfig, partnersPushAllowed, phoneKey, planPushOps,
-  pushContactBody, selectDeletable, servicePushAllowed, type DesiredPushContact, type PersonLike, type PushMapping,
+  pushContactBody, selectDeletable, servicePushAllowed, SERVICE_ELIGIBLE_ROLES, contactsConfigSchema, serviceRoleEligible,
+  type DesiredPushContact, type PersonLike, type PushMapping,
 } from "../shared/contacts";
+import { validateSetting } from "../shared/appSettings";
 import { GOOGLE_FEATURES_ENABLED, GOOGLE_FEATURE_SCOPES, hasFeatureScopes } from "../shared/mail";
 import { scopesFor } from "./google/workspace";
 import { requestedFeatures } from "./google/userAccounts";
@@ -39,20 +41,47 @@ describe("Contactos — âmbitos e funcionalidade", () => {
     expect(hasFeatureScopes("https://www.googleapis.com/auth/contacts.readonly https://www.googleapis.com/auth/contacts.other.readonly", "contacts")).toBe(false);
     expect(hasFeatureScopes("https://www.googleapis.com/auth/contacts", "contacts")).toBe(false);
   });
-  it("definições: omissões (condutor e TL, 2 dias) e leitura campo a campo", () => {
+  it("definições: omissões (supervisor e acima, 2 dias) e leitura campo a campo", () => {
     expect(parseContactsConfig(null)).toEqual(DEFAULT_CONTACTS_CONFIG);
-    expect(DEFAULT_CONTACTS_CONFIG.service.roles).toEqual(["condutor", "team_leader"]);
+    expect(DEFAULT_CONTACTS_CONFIG.service.roles).toEqual(["supervisor", "admin", "super_admin"]);
     expect(DEFAULT_CONTACTS_CONFIG.service.retentionDays).toBe(2);
     const c = parseContactsConfig({ service: { retentionDays: 5 } });
     expect(c.service.retentionDays).toBe(5);
-    expect(c.service.roles).toEqual(["condutor", "team_leader"]);
-    expect(servicePushAllowed("condutor", c)).toBe(true);
-    expect(servicePushAllowed("team_leader", c)).toBe(true);
+    expect(c.service.roles).toEqual(["supervisor", "admin", "super_admin"]);
+    expect(servicePushAllowed("supervisor", c)).toBe(true);
+    expect(servicePushAllowed("admin", c)).toBe(true);
+    expect(servicePushAllowed("super_admin", c)).toBe(true);
+    expect(servicePushAllowed("condutor", c)).toBe(false);
+    expect(servicePushAllowed("team_leader", c)).toBe(false);
     expect(servicePushAllowed("backoffice", c)).toBe(false);
     expect(partnersPushAllowed("backoffice", c)).toBe(false); // desligado por omissão
     expect(partnersPushAllowed("backoffice", parseContactsConfig({ partners: { enabled: true } }))).toBe(true);
     // Diretório ligado sem conta → inválido → omissões seguras
     expect(parseContactsConfig({ directory: { enabled: true, adminEmail: "" } }).directory.enabled).toBe(false);
+  });
+  it("grupo Serviço: condutor bloqueado no servidor (não é só a omissão); só supervisor ou acima", () => {
+    expect(serviceRoleEligible("condutor")).toBe(false);
+    expect(serviceRoleEligible("team_leader")).toBe(false);
+    expect(serviceRoleEligible("extra")).toBe(false);
+    expect(serviceRoleEligible("supervisor")).toBe(true);
+    expect(serviceRoleEligible("backoffice")).toBe(true);
+    expect(serviceRoleEligible("super_admin")).toBe(true);
+    expect(SERVICE_ELIGIBLE_ROLES).not.toContain("condutor");
+    // Gravar com condutor/TL → recusado (Definições e registo de Definições).
+    const bad = { ...DEFAULT_CONTACTS_CONFIG, service: { ...DEFAULT_CONTACTS_CONFIG.service, roles: ["condutor", "supervisor"] } };
+    expect(contactsConfigSchema.safeParse(bad).success).toBe(false);
+    expect(contactsConfigSchema.safeParse({ ...bad, service: { ...bad.service, roles: ["team_leader"] } }).success).toBe(false);
+    expect(validateSetting("google.contacts", bad).ok).toBe(false);
+    // Mesmo que a configuração em memória tenha o condutor, não recebe.
+    const forced = { ...DEFAULT_CONTACTS_CONFIG, service: { ...DEFAULT_CONTACTS_CONFIG.service, roles: ["condutor", "team_leader", "supervisor"] } } as any;
+    expect(servicePushAllowed("condutor", forced)).toBe(false);
+    expect(servicePushAllowed("team_leader", forced)).toBe(false);
+    expect(servicePushAllowed("supervisor", forced)).toBe(true);
+    // Valor antigo guardado: a omissão antiga passa para a nova; papéis não elegíveis caem sem estragar o resto.
+    expect(parseContactsConfig({ directory: { enabled: true, adminEmail: "a@multipark.pt" }, service: { roles: ["condutor", "team_leader"] } }).service.roles).toEqual(["supervisor", "admin", "super_admin"]);
+    const mixed = parseContactsConfig({ directory: { enabled: true, adminEmail: "a@multipark.pt" }, service: { roles: ["condutor", "admin"] } });
+    expect(mixed.service.roles).toEqual(["admin"]);
+    expect(mixed.directory.enabled).toBe(true);
   });
   it("syncToken expirado reconhecido (410 / EXPIRED_SYNC_TOKEN)", () => {
     expect(isExpiredSyncTokenError({ response: { status: 410 } })).toBe(true);

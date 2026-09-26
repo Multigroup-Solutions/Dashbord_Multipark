@@ -16,7 +16,7 @@
  *     retenção — SÓ os contactos que a app criou (marca em clientData).
  */
 import { z } from "zod";
-import { ROLES, grantFor, type Access, type AccessOverrides, type ModuleId, type Role } from "./access";
+import { ROLES, ROLE_RANK, grantFor, roleRank, type Access, type AccessOverrides, type ModuleId, type Role } from "./access";
 import { normalizeEmail, isPlausibleEmail } from "./email";
 import { normalizePhoneE164 } from "./phone";
 import { normalizeSearchText } from "./contactSearch";
@@ -159,7 +159,22 @@ export function mapDirectoryPerson(p: PersonLike): DirectoryPersonRow | null {
 const emailOrEmpty = z.union([z.literal(""), z.string().trim().toLowerCase().email("Email inválido.")]);
 const roleList = z.array(z.enum(ROLES as unknown as [Role, ...Role[]])).max(ROLES.length);
 
-export const DEFAULT_SERVICE_ROLES: Role[] = ["condutor", "team_leader"];
+/**
+ * Grupo "Multipark — Serviço" (dados de clientes no telemóvel): decisão do
+ * dono (26 set 2026) — SÓ supervisor ou acima; o condutor NUNCA (bloqueio no
+ * servidor, não é só a omissão). O team leader também fica de fora.
+ */
+export const SERVICE_MIN_ROLE: Role = "supervisor";
+/** O papel pode receber dados de clientes no grupo "Serviço"? (supervisor ou acima; nunca condutor). PURA. */
+export function serviceRoleEligible(role: string | null | undefined): boolean {
+  const r = String(role ?? "");
+  if (r === "condutor") return false;
+  return roleRank(r) >= ROLE_RANK[SERVICE_MIN_ROLE];
+}
+export const SERVICE_ELIGIBLE_ROLES: Role[] = ROLES.filter((r) => serviceRoleEligible(r));
+export const DEFAULT_SERVICE_ROLES: Role[] = ["supervisor", "admin", "super_admin"];
+/** Omissão antiga (até 26 set 2026) — se estiver guardada tal e qual, passa para a nova. */
+const LEGACY_DEFAULT_SERVICE_ROLES = ["condutor", "team_leader"];
 export const DEFAULT_PARTNERS_ROLES: Role[] = ["backoffice", "admin", "super_admin"];
 
 export const contactsConfigSchema = z.object({
@@ -170,8 +185,10 @@ export const contactsConfigSchema = z.object({
     adminEmail: emailOrEmpty,
   }),
   service: z.object({
-    /** Papéis com o grupo "Multipark — Serviço" (condutor e TL por omissão). */
-    roles: roleList,
+    /** Papéis com o grupo "Multipark — Serviço" (supervisor, admin e super admin por omissão; nunca condutor nem abaixo de supervisor). */
+    roles: roleList.refine((l) => l.every((r) => serviceRoleEligible(r)), {
+      message: "Grupo \"Multipark — Serviço\": só supervisor ou acima (o condutor e o team leader nunca recebem dados de clientes no telemóvel).",
+    }),
     /** Dias depois do serviço até o contacto ser apagado do telemóvel. */
     retentionDays: z.number({ error: "Indica os dias de retenção." }).int("Número inteiro de dias.").min(0, "Mínimo 0 dias.").max(30, "Máximo 30 dias."),
     /** Máximo de contactos por pessoa (os serviços mais próximos primeiro). */
@@ -203,12 +220,20 @@ export function parseContactsConfig(raw: unknown): ContactsConfig {
     service: { ...d.service, ...(v.service ?? {}) },
     partners: { ...d.partners, ...(v.partners ?? {}) },
   };
+  // Valor guardado antes da decisão de 26 set 2026: a omissão antiga passa para
+  // a nova; papéis não elegíveis (condutor, TL…) caem em vez de invalidar tudo.
+  if (Array.isArray(merged.service.roles)) {
+    const saved = merged.service.roles.map(String);
+    const legacy = saved.length === LEGACY_DEFAULT_SERVICE_ROLES.length && LEGACY_DEFAULT_SERVICE_ROLES.every((r) => saved.includes(r));
+    merged.service = { ...merged.service, roles: legacy ? [...DEFAULT_SERVICE_ROLES] : saved.filter((r: string) => serviceRoleEligible(r)) };
+  }
   const r = contactsConfigSchema.safeParse(merged);
   return r.success ? r.data : d;
 }
 
+/** Recebe o grupo "Serviço"? Papel na lista E supervisor ou acima (o condutor nunca, mesmo que a lista o tenha). PURA. */
 export function servicePushAllowed(role: string | null | undefined, cfg: ContactsConfig): boolean {
-  return (cfg.service.roles as string[]).includes(String(role ?? ""));
+  return serviceRoleEligible(role) && (cfg.service.roles as string[]).includes(String(role ?? ""));
 }
 export function partnersPushAllowed(role: string | null | undefined, cfg: ContactsConfig): boolean {
   return cfg.partners.enabled && (cfg.partners.roles as string[]).includes(String(role ?? ""));

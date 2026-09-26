@@ -12,7 +12,7 @@
  */
 import { z } from "zod";
 import { AI_FEATURE_IDS, AI_TIERS } from "./aiFeatures";
-import { NOTIFICATION_KIND_DEFS, NOTIFICATION_ROUTING_SETTING_KEY, notificationRoutingSchema } from "./notificationRouting";
+import { DEFAULT_HOME_CITY_ONLY, NOTIFICATION_KIND_DEFS, NOTIFICATION_ROUTING_SETTING_KEY, notificationRoutingSchema } from "./notificationRouting";
 import { DEFAULT_BRAND_DOMAINS, MAIL_BRAND_IDS, MAIL_DEFAULT_BACKFILL_DAYS, MAIL_DEFAULT_RETENTION_YEARS, MAIL_DEFAULT_SLA_HOURS } from "./mail";
 import { DEFAULT_SHARED_CALENDARS_CONFIG, sharedCalendarsConfigSchema } from "./googleSync";
 import { DEFAULT_CONTACTS_CONFIG, contactsConfigSchema } from "./contacts";
@@ -408,9 +408,9 @@ export const SETTINGS = {
     key: NOTIFICATION_ROUTING_SETTING_KEY,
     group: "notificacoes",
     label: "Regras das notificações",
-    description: "Quem recebe cada tipo de notificação (papéis), email por omissão e papéis nacionais limitados à própria cidade. Vazio = regras do código (shared/notificationRouting.ts). Editável só pelo super admin em Definições → Notificações.",
+    description: "Quem recebe cada tipo de notificação (papéis), email por omissão e papéis nacionais limitados à própria cidade (ligado por omissão para frontoffice, backoffice e admin; super admin recebe sempre tudo). Vazio = regras do código (shared/notificationRouting.ts). Editável só pelo super admin em Definições → Notificações.",
     schema: notificationRoutingSchema,
-    defaultValue: { kinds: {}, homeCityOnly: [] },
+    defaultValue: { kinds: {}, homeCityOnly: [...DEFAULT_HOME_CITY_ONLY] },
     wiring: "live",
   }),
 } as const;

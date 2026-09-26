@@ -71,7 +71,24 @@ describe("Google Drive — rotas e permissões", () => {
     expect(await caller("supervisor").googleDrive.pickerToken()).toBeNull();
   });
 
-  it("guardar no Drive um documento que não existe / não se pode ver → recusado", async () => {
-    await expect(caller("extra").googleDrive.save({ source: { kind: "employee_document", id: 1 } })).rejects.toMatchObject({ code: "NOT_FOUND" });
+  it("guardar no Drive uma prova que não existe / não se pode ver → recusado", async () => {
+    await expect(caller("extra").googleDrive.save({ source: { kind: "complaint_photo", id: 1 } })).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+  it("relatórios ao vivo: só o super admin vê a configuração e o link; os admins não", async () => {
+    const a = await caller("admin").googleDrive.settings.get();
+    expect(a.canSeeLive).toBe(false);
+    expect(a.liveSpreadsheetUrl).toBeNull();
+    expect(a.liveLastRunAt).toBeNull();
+    expect(a.config.liveReports.enabled).toBe(false);
+    expect(a.config.liveDriveName).toBe("");
+    const s = await caller("super_admin").googleDrive.settings.get();
+    expect(s.canSeeLive).toBe(true);
+    await expect(caller("supervisor").googleDrive.settings.get()).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+  it("documentos do RH nunca vão para o Drive: 'Guardar no Drive' e 'Gerar documento' para o Drive recusados, mesmo ao super admin", async () => {
+    await expect(caller("super_admin").googleDrive.save({ source: { kind: "employee_document", id: 1 } as any })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    for (const destination of ["shared", "user"] as const) {
+      await expect(caller("super_admin").googleDrive.generate({ templateId: 1, entityType: "employee", entityId: "1", destination })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    }
   });
 });

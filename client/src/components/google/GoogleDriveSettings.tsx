@@ -1,9 +1,12 @@
 // Definições → Comunicação → Google Drive:
 //  - Shared Drive "Multipark" da empresa (conta de serviço com delegação, a
-//    impersonar a conta dona): pastas Clientes/Reclamações/RH criadas a
-//    pedido, espelho opcional dos documentos do RH e das provas das
-//    reclamações, relatórios ao vivo (folha fixa atualizada 1×/dia). Só o
-//    super admin edita; os admins veem o estado.
+//    impersonar a conta dona): pastas Clientes/Reclamações/Parcerias criadas
+//    a pedido e espelho opcional das provas das reclamações. Os documentos
+//    do RH nunca vão para o Drive (decisão do dono, 26 set 2026). Só o super
+//    admin edita; os admins veem o estado.
+//  - Relatórios ao vivo (folha fixa atualizada 1×/dia) num Shared Drive
+//    RESTRITO próprio (ex.: "Multipark Direção"); só o super admin os vê e
+//    configura.
 //  - Modelos Google Docs com {{marcadores}} (admin e super admin).
 import { useEffect, useState } from "react";
 import { trpc } from "@/lib/trpc";
@@ -18,7 +21,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import { ExternalLink, FileText, HardDrive, Loader2, Plus, RefreshCw, Search } from "lucide-react";
 import {
-  DOC_TEMPLATE_ENTITIES, DOC_TEMPLATE_LABELS, DOC_TEMPLATE_TYPES, DRIVE_ENTITY_LABELS, DWD_DRIVE_SCOPES, LIVE_REPORT_KEYS, SHEET_EXPORT_LABELS,
+  liveDriveProblem, DOC_TEMPLATE_ENTITIES, DOC_TEMPLATE_LABELS, DOC_TEMPLATE_TYPES, DRIVE_ENTITY_LABELS, DWD_DRIVE_SCOPES, LIVE_REPORT_KEYS, SHEET_EXPORT_LABELS,
   driveConfigSchema, placeholdersFor, type DocTemplateType, type DriveConfig, type GenerateEntityType,
 } from "@shared/drive";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
@@ -66,8 +69,8 @@ export function GoogleDriveSettings() {
             <Badge variant="outline" className={cfg.sharedEnabled ? "bg-emerald-100 text-emerald-800 border-emerald-200" : "bg-muted text-secondary-foreground"}>{cfg.sharedEnabled ? "Ligado" : "Desligado"}</Badge>
           </CardTitle>
           <p className="text-xs text-muted-foreground">
-            Pastas por registo criadas a pedido (Clientes/nome, Reclamações/ano/n.º, RH/cidade/trabalhador, Parcerias/nome, Relatórios), documentos gerados dos modelos
-            e, opcionalmente, cópia dos documentos do RH e das provas das reclamações. O Drive pessoal de cada um liga-se no Perfil (só ficheiros da app).
+            Pastas por registo criadas a pedido (Clientes/nome, Reclamações/ano/n.º, Parcerias/nome), documentos gerados dos modelos e, opcionalmente, cópia das
+            provas das reclamações. Os documentos do RH nunca vão para o Google Drive. O Drive pessoal de cada um liga-se no Perfil (só ficheiros da app).
           </p>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
@@ -91,24 +94,29 @@ export function GoogleDriveSettings() {
               <Label htmlFor="drive-name">Nome do Shared Drive</Label>
               <Input id="drive-name" value={cfg.sharedDriveName} disabled={!canEdit} onChange={(e) => setCfg({ ...cfg, sharedDriveName: e.target.value })} />
             </div>
-            <div className="space-y-1 sm:col-span-2">
-              <Label htmlFor="drive-rh">Shared Drive só do RH (opcional, recomendado — membros restritos)</Label>
-              <Input id="drive-rh" placeholder="Multipark RH" value={cfg.rhDriveName} disabled={!canEdit} onChange={(e) => setCfg({ ...cfg, rhDriveName: e.target.value })} />
-              <p className="text-[11px] text-muted-foreground">Vazio = pasta "RH" no Shared Drive principal (todos os membros dele a veem). Na app, os ficheiros do RH só aparecem a quem já vê os documentos do RH.</p>
-            </div>
           </div>
-          <label className="flex items-center gap-3 min-h-[44px]">
-            <Switch checked={cfg.mirrorRhDocuments} disabled={!canEdit} onCheckedChange={(v) => setCfg({ ...cfg, mirrorRhDocuments: v })} />
-            <span>Copiar os documentos do RH para RH/cidade/trabalhador <span className="text-muted-foreground">({mirrorCount("employee_document", "done")} copiados{mirrorCount("employee_document", "error") ? `, ${mirrorCount("employee_document", "error")} com erro` : ""})</span></span>
-          </label>
+          <p className="text-[11px] text-muted-foreground">
+            Os documentos do RH nunca vão para o Google Drive (sem cópia, sem "Guardar no Drive"). "Gerar documento" num colaborador cria só o PDF nos documentos da ficha.
+          </p>
           <label className="flex items-center gap-3 min-h-[44px]">
             <Switch checked={cfg.mirrorComplaintEvidence} disabled={!canEdit} onCheckedChange={(v) => setCfg({ ...cfg, mirrorComplaintEvidence: v })} />
             <span>Copiar as provas das reclamações para Reclamações/ano/n.º <span className="text-muted-foreground">({mirrorCount("complaint_photo", "done")} copiadas{mirrorCount("complaint_photo", "error") ? `, ${mirrorCount("complaint_photo", "error")} com erro` : ""})</span></span>
           </label>
+          {d.canSeeLive && (
           <div className="rounded-lg border p-3 space-y-2">
+            <div className="text-[13px] font-semibold">Relatórios ao vivo (só super admin)</div>
+            <div className="space-y-1">
+              <Label htmlFor="drive-live">Shared Drive restrito dos relatórios (membros geridos por ti)</Label>
+              <Input id="drive-live" placeholder="Multipark Direção" value={cfg.liveDriveName} disabled={!canEdit} onChange={(e) => setCfg({ ...cfg, liveDriveName: e.target.value })} />
+              <p className="text-[11px] text-muted-foreground">
+                Cria no Google um Shared Drive só para a direção, junta a conta do Workspace acima como Gestor de conteúdo e escolhe tu os membros.
+                Nunca vão para o Shared Drive geral. Sem este nome, os relatórios ao vivo ficam desligados.
+              </p>
+              {cfg.liveReports.enabled && liveDriveProblem(cfg) && <p className="text-[11px] text-amber-800 dark:text-amber-200">{liveDriveProblem(cfg)}</p>}
+            </div>
             <label className="flex items-center gap-3 min-h-[44px]">
-              <Switch checked={cfg.liveReports.enabled} disabled={!canEdit} onCheckedChange={(v) => setCfg({ ...cfg, liveReports: { ...cfg.liveReports, enabled: v } })} />
-              <span>Relatórios ao vivo (folha "Relatórios ao vivo — Multipark" em Relatórios/, atualizada 1×/dia)</span>
+              <Switch checked={cfg.liveReports.enabled} disabled={!canEdit || !cfg.liveDriveName.trim()} onCheckedChange={(v) => setCfg({ ...cfg, liveReports: { ...cfg.liveReports, enabled: v } })} />
+              <span>Relatórios ao vivo (folha "Relatórios ao vivo — Multipark" em Relatórios/ do Shared Drive restrito, atualizada 1×/dia)</span>
             </label>
             <div className="flex flex-wrap gap-4">
               {LIVE_REPORT_KEYS.map((k) => (
@@ -125,11 +133,12 @@ export function GoogleDriveSettings() {
               <span className="text-muted-foreground">h (Lisboa)</span>
             </div>
             <p className="text-[11px] text-muted-foreground">
-              Os números são calculados com as permissões de quem grava estas definições e ficam visíveis a todos os membros do Shared Drive.
+              Os números são calculados com as permissões do super admin que grava estas definições e só os membros do Shared Drive restrito os veem.
               {d.liveLastRunAt ? ` Última atualização: ${fmtPTDateTime(d.liveLastRunAt)}.` : ""}
             </p>
             {d.liveSpreadsheetUrl && <a href={d.liveSpreadsheetUrl} target="_blank" rel="noopener noreferrer" className="text-primary underline inline-flex items-center gap-1 text-xs">Abrir a folha <ExternalLink className="h-3 w-3" /></a>}
           </div>
+          )}
           <div className="flex flex-wrap gap-2">
             {canEdit && (
               <Button size="sm" onClick={onSave} disabled={save.isPending}>
@@ -171,8 +180,8 @@ function DocTemplatesCard({ sharedReady }: { sharedReady: boolean }) {
       <CardHeader className="pb-2">
         <CardTitle className="text-base flex items-center gap-2"><FileText className="h-4 w-4 text-blue-600" /> Modelos de documentos (Google Docs)</CardTitle>
         <p className="text-xs text-muted-foreground">
-          Um Google Doc com marcadores como {"{{nome}}"} ou {"{{cliente_nome}}"}. "Gerar documento" (RH, reclamações, clientes, parcerias) copia o modelo para a pasta do registo
-          no Shared Drive (ou para o Drive de quem gera) e substitui os marcadores. Guarda o modelo no Shared Drive para a conta dona lhe chegar.
+          Um Google Doc com marcadores como {"{{nome}}"} ou {"{{cliente_nome}}"}. "Gerar documento" (reclamações, clientes, parcerias) copia o modelo para a pasta do registo
+          no Shared Drive (ou para o Drive de quem gera) e substitui os marcadores; no RH cria só o PDF nos documentos da ficha (nada fica no Drive). Guarda o modelo no Shared Drive para a conta dona lhe chegar.
         </p>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">

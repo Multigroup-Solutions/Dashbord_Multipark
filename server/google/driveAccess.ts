@@ -9,7 +9,7 @@
  *  - tarefa: as regras da tarefa (atribuída ou quem gere tarefas + cidade);
  *  - parceria: módulo Parcerias (+ cidade de operação).
  * Também carrega os dados do registo para os modelos {{…}} e a pasta no
- * Shared Drive.
+ * Shared Drive (o RH não tem: os documentos do RH nunca vão para o Drive).
  */
 import { TRPCError } from "@trpc/server";
 import { sql } from "drizzle-orm";
@@ -23,10 +23,8 @@ export interface DriveEntityInfo {
   type: DriveEntityType;
   id: string;
   label: string;
-  /** Caminho no Shared Drive (null = não tem pasta própria, ex.: tarefas). */
+  /** Caminho no Shared Drive (null = não tem pasta própria, ex.: tarefas, RH). */
   folder: SharedFolderTarget | null;
-  /** RH: só vai para o Shared Drive de RH (restrito). */
-  restricted: boolean;
 }
 
 const rowsOf = (res: unknown): any[] => {
@@ -74,7 +72,7 @@ export async function assertDriveEntityAccess(user: DriveUser, type: DriveEntity
     const r = rowsOf(await d.execute(sql`SELECT MAX(NULLIF(TRIM(CONCAT_WS(' ', clientFirstName, clientLastName)), '')) AS name, COUNT(*) AS n
       FROM multipark_bookings WHERE LOWER(TRIM(clientEmail)) = ${id}`))[0];
     const name = r?.name ? String(r.name) : null;
-    return { type, id, label: name ? `${name} (${id})` : id, folder: { kind: "client", name, email: id }, restricted: false };
+    return { type, id, label: name ? `${name} (${id})` : id, folder: { kind: "client", name, email: id } };
   }
   if (type === "complaint") {
     requireAccess(u, "reclamacoes", action);
@@ -83,13 +81,13 @@ export async function assertDriveEntityAccess(user: DriveUser, type: DriveEntity
     const d = await database();
     const r = rowsOf(await d.execute(sql`SELECT id, title, clientName, createdAt FROM complaints WHERE id = ${Number(id)} LIMIT 1`))[0];
     if (!r) throw notFound("Reclamação não encontrada.");
-    return { type, id, label: `Reclamação #${id} — ${r.clientName ?? r.title ?? ""}`.trim(), folder: { kind: "complaint", id: Number(id), createdAt: r.createdAt ? String(r.createdAt) : null }, restricted: false };
+    return { type, id, label: `Reclamação #${id} — ${r.clientName ?? r.title ?? ""}`.trim(), folder: { kind: "complaint", id: Number(id), createdAt: r.createdAt ? String(r.createdAt) : null } };
   }
   if (type === "mail_thread") {
     const { threadAccess } = await import("../mail/inbox");
     const a = await threadAccess({ id: u.id, role: u.role, accessOverrides: u.accessOverrides ?? null } as any, Number(id));
     if (action === "edit" && !a.canAct) throw forbidden("Só quem trata esta conversa pode ligar ficheiros.");
-    return { type, id, label: a.thread.subject ? `Email: ${a.thread.subject}` : `Conversa #${id}`, folder: null, restricted: false };
+    return { type, id, label: a.thread.subject ? `Email: ${a.thread.subject}` : `Conversa #${id}`, folder: null };
   }
   if (type === "employee") {
     const { assertCanViewDocuments, assertCanUploadDocuments } = await import("../routers");
@@ -98,17 +96,14 @@ export async function assertDriveEntityAccess(user: DriveUser, type: DriveEntity
     const { getEmployeeById } = await import("../db");
     const e = await getEmployeeById(Number(id));
     if (!e) throw notFound("Colaborador não encontrado.");
-    return {
-      type, id, label: e.employee.fullName,
-      folder: { kind: "employee", id: Number(id), name: e.employee.fullName, city: await cityNameOfProject(e.employee.projectId) },
-      restricted: true,
-    };
+    // Sem pasta no Drive: os documentos do RH nunca vão para o Google Drive (26 set 2026).
+    return { type, id, label: e.employee.fullName, folder: null };
   }
   if (type === "task") {
     requireAccess(u, "tarefas", "view", { allowOwn: true });
     const { loadTaskFor } = await import("../tasksRouter");
     const { task } = await loadTaskFor({ user: u }, Number(id));
-    return { type, id, label: `Tarefa: ${task.title}`, folder: null, restricted: false };
+    return { type, id, label: `Tarefa: ${task.title}`, folder: null };
   }
   // partner
   requireAccess(u, "parcerias", action);
@@ -116,7 +111,7 @@ export async function assertDriveEntityAccess(user: DriveUser, type: DriveEntity
   const d = await database();
   const r = rowsOf(await d.execute(sql`SELECT p.id, p.name FROM partnerships p WHERE p.id = ${Number(id)} AND ${partnerScope(sql`p.id`)} LIMIT 1`))[0];
   if (!r) throw notFound("Parceria não encontrada.");
-  return { type, id, label: `Parceria — ${r.name}`, folder: { kind: "partner", id: Number(id), name: String(r.name) }, restricted: false };
+  return { type, id, label: `Parceria — ${r.name}`, folder: { kind: "partner", id: Number(id), name: String(r.name) } };
 }
 
 /** Dados do registo para os modelos {{…}} (depois de assertDriveEntityAccess). */

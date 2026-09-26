@@ -3,12 +3,22 @@
  * sem rede, sem relógio implícito). Pedido do dono (set 2026).
  *
  * Âmbitos (mínimos — ver docs/ajuda/drive.md):
- *  - por pessoa (OAuth, autorização incremental "drive"): SÓ
- *    `drive.file` — a app só vê os ficheiros que ela própria criou ou que a
- *    pessoa abriu com a app (Google Picker). Chega para "Guardar no Drive",
- *    "Exportar para Sheets" (a folha é criada pela app; a API Sheets aceita
- *    drive.file) e para gerar documentos na pasta "Multipark" da pessoa
- *    (a API Docs aceita drive.file nos ficheiros da app);
+ *  - por pessoa (OAuth, autorização incremental "drive"): `drive.file` — a
+ *    app só vê os ficheiros que ela própria criou ou que a pessoa abriu com a
+ *    app (Google Picker). Chega para "Guardar no Drive", "Exportar para
+ *    Sheets" (a folha é criada pela app; a API Sheets aceita drive.file) e
+ *    para gerar documentos na pasta "Multipark" da pessoa (a API Docs aceita
+ *    drive.file nos ficheiros da app) — e `spreadsheets.readonly` (26 set
+ *    2026) só para importar de qualquer folha que a pessoa consiga abrir;
+ *
+ * Decisões do dono (26 set 2026):
+ *  - os documentos do RH NUNCA vão para o Google Drive: sem "Guardar no
+ *    Drive" nem espelho no Shared Drive, sem pastas RH/<cidade>/<trabalhador>;
+ *    "Gerar documento" para um colaborador produz só o PDF nos documentos da
+ *    ficha (a cópia de trabalho no Drive é apagada logo a seguir);
+ *  - os relatórios ao vivo vão para um Shared Drive RESTRITO próprio (ex.:
+ *    "Multipark Direção", membros geridos pelo dono) — sem ele, desligados;
+ *    ver/configurar só o super admin.
  *  - conta de serviço com delegação (DWD), a impersonar a conta dona do
  *    Shared Drive "Multipark": `drive` + `documents` (pastas, cópias de
  *    modelos, espelho de documentos, relatórios ao vivo). A API Sheets
@@ -129,14 +139,14 @@ export const DEFAULT_SHARED_DRIVE_NAME = "Multipark";
 export type SharedFolderTarget =
   | { kind: "client"; name: string | null; email: string }
   | { kind: "complaint"; id: number; createdAt: string | null }
-  | { kind: "employee"; city: string | null; name: string; id: number }
   | { kind: "partner"; name: string; id: number }
   | { kind: "reports" };
 
 /**
  * Caminho (pastas) no Shared Drive, criado a pedido:
- *   Clientes/<nome>, Reclamações/<ano>/<id>, RH/<cidade>/<trabalhador>,
- *   Parcerias/<nome>, Relatórios. PURA.
+ *   Clientes/<nome>, Reclamações/<ano>/<id>, Parcerias/<nome>, Relatórios
+ *   (este no Shared Drive restrito dos relatórios ao vivo). O RH não tem
+ *   pasta: os documentos do RH nunca vão para o Drive. PURA.
  */
 export function sharedFolderPath(t: SharedFolderTarget): string[] {
   switch (t.kind) {
@@ -148,8 +158,6 @@ export function sharedFolderPath(t: SharedFolderTarget): string[] {
       const year = /^\d{4}/.test(String(t.createdAt ?? "")) ? String(t.createdAt).slice(0, 4) : "Sem data";
       return ["Reclamações", year, String(Math.trunc(t.id))];
     }
-    case "employee":
-      return ["RH", sanitizeDriveName(t.city, 60, "Sem cidade"), sanitizeDriveName(`${t.name} (#${Math.trunc(t.id)})`, 100)];
     case "partner":
       return ["Parcerias", sanitizeDriveName(t.name, 100)];
     case "reports":
@@ -201,13 +209,17 @@ export const driveConfigSchema = z.object({
   /** Conta do Workspace membro (gestor) do Shared Drive, impersonada pela conta de serviço. */
   ownerEmail: z.union([z.literal(""), z.string().trim().toLowerCase().email("Email inválido.")]).default(""),
   sharedDriveName: z.string().trim().min(1).max(100).default(DEFAULT_SHARED_DRIVE_NAME),
-  /** Shared Drive só para RH (membros restritos). Vazio = pasta "RH" no Shared Drive principal. */
-  rhDriveName: z.string().trim().max(100).default(""),
-  /** Copiar os documentos do RH para RH/<cidade>/<trabalhador>. */
-  mirrorRhDocuments: z.boolean().default(false),
+  // (Removidos a 26 set 2026: "rhDriveName" e "mirrorRhDocuments" — os
+  // documentos do RH nunca vão para o Drive. Valores antigos são ignorados.)
   /** Copiar as provas (fotos/ficheiros) das reclamações para Reclamações/<ano>/<id>. */
   mirrorComplaintEvidence: z.boolean().default(false),
-  /** Relatórios ao vivo: folha fixa no Shared Drive, atualizada 1×/dia pelo cron. */
+  /**
+   * Shared Drive RESTRITO só para os relatórios ao vivo (ex.: "Multipark
+   * Direção"; membros geridos pelo dono). Vazio = relatórios ao vivo
+   * desligados — nunca vão para o Shared Drive geral.
+   */
+  liveDriveName: z.string().trim().max(100).default(""),
+  /** Relatórios ao vivo: folha fixa no Shared Drive restrito, atualizada 1×/dia pelo cron. */
   liveReports: z.object({
     enabled: z.boolean().default(false),
     reports: z.array(z.enum(LIVE_REPORT_KEYS)).max(LIVE_REPORT_KEYS.length).default(["financeiro"]),
@@ -218,10 +230,32 @@ export const driveConfigSchema = z.object({
   liveRunAsUserId: z.number().int().positive().nullable().default(null),
 }).superRefine((v, ctx) => {
   if (v.sharedEnabled && !v.ownerEmail) ctx.addIssue({ code: "custom", message: "Indica a conta do Workspace membro do Shared Drive." });
-  if ((v.mirrorRhDocuments || v.mirrorComplaintEvidence || v.liveReports.enabled) && !v.sharedEnabled) {
+  if ((v.mirrorComplaintEvidence || v.liveReports.enabled) && !v.sharedEnabled) {
     ctx.addIssue({ code: "custom", message: "O espelho e os relatórios ao vivo precisam do Shared Drive ligado." });
   }
+  const live = liveDriveProblem(v);
+  if (v.liveReports.enabled && live) ctx.addIssue({ code: "custom", message: live });
 });
+
+/**
+ * Porque é que os relatórios ao vivo não podem correr (null = podem): exigem
+ * um Shared Drive restrito próprio, diferente do Shared Drive geral (os
+ * membros dele veriam os números da empresa). PURA.
+ */
+export function liveDriveProblem(v: { liveDriveName: string; sharedDriveName: string }): string | null {
+  const live = v.liveDriveName.trim();
+  if (!live) return "Relatórios ao vivo: indica o Shared Drive restrito (ex.: \"Multipark Direção\", com membros geridos por ti) — sem ele ficam desligados.";
+  if (live.toLowerCase() === v.sharedDriveName.trim().toLowerCase()) return "Relatórios ao vivo: o Shared Drive restrito tem de ser diferente do Shared Drive geral (todos os membros dele veriam os relatórios).";
+  return null;
+}
+
+/** Destinos de "Gerar documento": o RH só para a app (PDF na ficha), nunca para o Drive. */
+export const GENERATE_DESTINATIONS = ["shared", "user", "app"] as const;
+export type GenerateDestination = (typeof GENERATE_DESTINATIONS)[number];
+/** O destino é permitido para este registo? Colaborador → só "app"; o resto → só Drive. PURA. */
+export function generateDestinationAllowed(entityType: string, destination: GenerateDestination): boolean {
+  return entityType === "employee" ? destination === "app" : destination !== "app";
+}
 export type DriveConfig = z.output<typeof driveConfigSchema>;
 export const DEFAULT_DRIVE_CONFIG: DriveConfig = driveConfigSchema.parse({});
 

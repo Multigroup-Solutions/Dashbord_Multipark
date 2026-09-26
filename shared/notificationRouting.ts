@@ -13,8 +13,9 @@
  *  - super_admin recebe TUDO de todas as cidades; admin recebe tudo o que a
  *    matriz lhe dá (sem Marketing/Logs/Faturação/Anual → nada disso);
  *  - papéis de cidade só recebem da(s) sua(s) cidade(s) (centro de custos +
- *    cidades dadas); papéis nacionais recebem de todas (ou só da sua, se o
- *    super_admin o escolher em "Só a própria cidade");
+ *    cidades dadas); papéis nacionais recebem só da sua (omissão desde 26 set
+ *    2026 — "Só a própria cidade" ligado) ou de todas, se o super_admin o
+ *    desligar;
  *  - tipos PESSOAIS ("a tua tarefa", "os teus documentos") vão só à pessoa;
  *  - cada pessoa pode silenciar qualquer tipo que não seja OBRIGATÓRIO e
  *    ligar/desligar o email nos tipos que têm email.
@@ -235,6 +236,13 @@ export const NOTIFICATION_ROUTING_SETTING_KEY = "notifications.routing";
 
 /** Papéis nacionais que o super_admin pode limitar à própria cidade. */
 export const HOME_CITY_ROLES = ["frontoffice", "backoffice", "admin"] as const satisfies readonly Role[];
+/**
+ * Omissão (decisão do dono, 26 set 2026): "Papéis nacionais só da própria
+ * cidade" LIGADO para todos — cada um recebe só a(s) sua(s) cidade(s). O
+ * super_admin recebe sempre tudo; quem tem "todas as cidades" (grupo) também.
+ */
+export type HomeCityRole = (typeof HOME_CITY_ROLES)[number];
+export const DEFAULT_HOME_CITY_ONLY: HomeCityRole[] = [...HOME_CITY_ROLES];
 
 const roleSchema = z.enum(ROLES as unknown as [Role, ...Role[]], { error: "Papel desconhecido." });
 
@@ -245,7 +253,7 @@ export const kindRoutingOverrideSchema = z.object({
 
 export const notificationRoutingSchema = z.object({
   kinds: z.record(z.string(), kindRoutingOverrideSchema).default({}),
-  homeCityOnly: z.array(z.enum(HOME_CITY_ROLES, { error: "Só frontoffice, backoffice ou admin." })).max(3).default([]),
+  homeCityOnly: z.array(z.enum(HOME_CITY_ROLES, { error: "Só frontoffice, backoffice ou admin." })).max(3).default(() => [...DEFAULT_HOME_CITY_ONLY]),
 }).strict().superRefine((v, ctx) => {
   for (const [kind, o] of Object.entries(v.kinds)) {
     const d = DEF_BY_KIND.get(kind);
@@ -267,12 +275,13 @@ export const notificationRoutingSchema = z.object({
 }));
 
 export type NotificationRouting = z.output<typeof notificationRoutingSchema>;
-export const EMPTY_ROUTING: NotificationRouting = { kinds: {}, homeCityOnly: [] };
+/** Regras do código (nada sobreposto): papéis nacionais só da própria cidade. */
+export const EMPTY_ROUTING: NotificationRouting = { kinds: {}, homeCityOnly: [...DEFAULT_HOME_CITY_ONLY] };
 
 /** Normaliza o valor guardado (nunca lança; inválido → omissões). PURA. */
 export function parseRouting(raw: unknown): NotificationRouting {
   const r = notificationRoutingSchema.safeParse(raw ?? {});
-  return r.success ? r.data : { kinds: {}, homeCityOnly: [] };
+  return r.success ? r.data : { kinds: {}, homeCityOnly: [...DEFAULT_HOME_CITY_ONLY] };
 }
 
 /** Papéis que recebem o tipo (omissão + sobreposição; super_admin sempre; admin se a matriz deixar). PURA. */

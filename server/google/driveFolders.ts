@@ -3,7 +3,7 @@
  *  - "Multipark" no Drive de cada pessoa (drive.file: a app só encontra as
  *    pastas que ela própria criou — é o que se quer);
  *  - o caminho de um registo no Shared Drive (Clientes/<nome>,
- *    Reclamações/<ano>/<id>, RH/<cidade>/<trabalhador>, …).
+ *    Reclamações/<ano>/<id>, Parcerias/<nome>, …; o RH nunca vai para o Drive).
  * Cada nível: cache → procura (nome exato, não apagada) → cria. Uma pasta
  * apagada no Drive (404) invalida a cache e é recriada.
  */

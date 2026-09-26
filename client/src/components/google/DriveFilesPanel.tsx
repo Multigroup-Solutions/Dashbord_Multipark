@@ -189,9 +189,11 @@ function GenerateDialog({ entityType, entityId, label, templates, sharedAvailabl
   templates: Array<{ id: number; name: string; templateType: string; description: string | null }>; onClose: () => void;
 }) {
   const utils = trpc.useUtils();
+  // RH: os documentos nunca vão para o Drive — só o PDF nos documentos da ficha (26 set 2026).
+  const hrOnlyApp = entityType === "employee";
   const [templateId, setTemplateId] = useState(templates[0] ? String(templates[0].id) : "");
   const [destination, setDestination] = useState<"shared" | "user">(sharedAvailable ? "shared" : "user");
-  const [pdf, setPdf] = useState(entityType === "employee" || entityType === "complaint");
+  const [pdf, setPdf] = useState(entityType === "complaint");
   const [result, setResult] = useState<{ url: string | null; pdfUrl?: string | null; warnings: string[]; missing: string[] } | null>(null);
   const [step, setStep] = useState<"idle" | "doc" | "pdf">("idle");
   const generate = trpc.googleDrive.generate.useMutation();
@@ -199,16 +201,22 @@ function GenerateDialog({ entityType, entityId, label, templates, sharedAvailabl
   const run = async () => {
     try {
       setStep("doc");
+      if (hrOnlyApp) {
+        const r = await generate.mutateAsync({ templateId: Number(templateId), entityType, entityId, destination: "app" });
+        setResult({ url: null, pdfUrl: null, warnings: r.warnings, missing: r.missing });
+        utils.rh.documents.list.invalidate().catch(() => {});
+        toast.success("PDF gerado e guardado nos documentos da ficha.");
+        return;
+      }
       const r = await generate.mutateAsync({ templateId: Number(templateId), entityType, entityId, destination });
       let pdfUrl: string | null = null;
-      if (pdf) {
+      if (pdf && r.linkId != null) {
         setStep("pdf");
         try { pdfUrl = (await toPdf.mutateAsync({ linkId: r.linkId })).url; }
         catch (e: any) { toast.error(`Documento criado, mas o PDF falhou: ${e.message}`); }
       }
       setResult({ url: r.url, pdfUrl, warnings: r.warnings, missing: r.missing });
       utils.googleDrive.links.list.invalidate({ entityType, entityId });
-      if (entityType === "employee") utils.rh.documents.list.invalidate().catch(() => {});
       toast.success("Documento gerado.");
     } catch (e: any) {
       toast.error(e.message);
@@ -221,7 +229,7 @@ function GenerateDialog({ entityType, entityId, label, templates, sharedAvailabl
         <DialogHeader><DialogTitle className="flex items-center gap-2"><FilePlus2 className="h-5 w-5 text-primary" />Gerar documento</DialogTitle></DialogHeader>
         {result ? (
           <div className="space-y-2 text-sm">
-            <p>Documento criado para <b>{label}</b>.</p>
+            <p>{hrOnlyApp ? <>PDF criado para <b>{label}</b> e guardado nos documentos da ficha (nada fica no Google Drive).</> : <>Documento criado para <b>{label}</b>.</>}</p>
             {result.url && <a className="text-primary underline flex items-center gap-1" href={result.url} target="_blank" rel="noopener noreferrer"><FileText className="h-4 w-4" />Abrir o documento</a>}
             {result.pdfUrl && <a className="text-primary underline flex items-center gap-1" href={result.pdfUrl} target="_blank" rel="noopener noreferrer"><FileText className="h-4 w-4 text-red-600" />Abrir o PDF</a>}
             {result.warnings.map((w) => <p key={w} className="text-xs text-amber-800 dark:text-amber-200">{w}</p>)}
@@ -238,6 +246,11 @@ function GenerateDialog({ entityType, entityId, label, templates, sharedAvailabl
                 </SelectContent>
               </Select>
             </div>
+            {hrOnlyApp ? (
+              <p className="text-xs text-muted-foreground">
+                O PDF fica só nos documentos da ficha, na app. Os documentos do RH nunca vão para o Google Drive (a cópia de trabalho é apagada logo a seguir).
+              </p>
+            ) : (<>
             <div className="space-y-1.5">
               <Label>Onde guardar</Label>
               <Select value={destination} onValueChange={(v) => setDestination(v as "shared" | "user")}>
@@ -250,14 +263,15 @@ function GenerateDialog({ entityType, entityId, label, templates, sharedAvailabl
             </div>
             <label className="flex items-center gap-2 text-sm min-h-[44px]">
               <Checkbox checked={pdf} onCheckedChange={(v) => setPdf(!!v)} />
-              Criar também o PDF e anexá-lo ao registo{entityType === "employee" ? " (entra nos documentos da ficha)" : ""}
+              Criar também o PDF e anexá-lo ao registo
             </label>
+            </>)}
           </div>
         )}
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={onClose} disabled={busy}>{result ? "Fechar" : "Cancelar"}</Button>
           {!result && (
-            <Button disabled={!templateId || busy || (destination === "user" && !userAvailable)} onClick={run}>
+            <Button disabled={!templateId || busy || (!hrOnlyApp && destination === "user" && !userAvailable)} onClick={run}>
               {busy && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}{step === "pdf" ? "A criar o PDF…" : step === "doc" ? "A gerar…" : "Gerar"}
             </Button>
           )}

@@ -22,7 +22,7 @@
 import { sql } from "drizzle-orm";
 import {
   DWD_CALENDAR_SCOPES, GOOGLE_CALENDAR_DESCRIPTION, GOOGLE_CALENDAR_TITLE, SHARED_CALENDAR_CITIES, anyCalendarPref, busyByDay, calendarWindow,
-  cityDayEvent, googleSyncCronOk, handoverEvent, meetLinkOf, meetingEventBody, parseSharedCalendarsConfig, sharedCalendarTitle, sharedShiftEvent,
+  cityDayEvent, filterLeadEvents, googleSyncCronOk, handoverEvent, meetLinkOf, meetingEventBody, parseSharedCalendarsConfig, sharedCalendarTitle, sharedShiftEvent,
   shiftEvent, slaEvent, taskDueEvent, taskSyncPermissions, toSqlUtc, trainingEvent,
   type DesiredEvent, type GoogleSyncPrefs, type GoogleSyncUserOutcome, type SharedCalendarCity, type ShiftRow,
 } from "../../shared/googleSync";
@@ -132,7 +132,8 @@ export async function desiredEventsForUser(u: { userId: number; role: string; em
     for (const r of rows) { const e = slaEvent({ id: Number(r.id), title: String(r.title), slaDeadline: String(r.slaDeadline) }, appUrl); if (e) out.push(e); }
   }
   const seen = new Set<string>();
-  return out.filter((e) => (seen.has(e.key) ? false : (seen.add(e.key), true)));
+  const lead = await loadSharedCalendarsConfig();
+  return filterLeadEvents(out, lead).filter((e) => (seen.has(e.key) ? false : (seen.add(e.key), true)));
 }
 
 export async function desiredEventsForSharedCity(city: SharedCalendarCity, nowMs: number, appUrl = appOrigin()): Promise<DesiredEvent[]> {
@@ -140,7 +141,7 @@ export async function desiredEventsForSharedCity(city: SharedCalendarCity, nowMs
   const rows = await confirmedShifts({ cities: [city] }, fromDay, toDay);
   const out: DesiredEvent[] = rows.map((r) => sharedShiftEvent(r, appUrl));
   for (const date of Array.from(new Set(rows.map((r) => r.assignmentDate)))) out.push(handoverEvent(date, city, appUrl));
-  return out;
+  return filterLeadEvents(out, await loadSharedCalendarsConfig());
 }
 
 // ─── Uma pessoa ─────────────────────────────────────────────────────────────

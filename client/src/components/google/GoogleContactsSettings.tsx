@@ -12,17 +12,19 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { BookUser, Loader2, RefreshCw } from "lucide-react";
-import { DIRECTORY_SCOPES, PUSH_GROUP_NAMES, contactsConfigSchema, type ContactsConfig } from "@shared/contacts";
+import { DIRECTORY_SCOPES, PUSH_GROUP_NAMES, contactsConfigSchema, serviceRoleEligible, type ContactsConfig } from "@shared/contacts";
 import { ROLES, ROLE_LABELS, type Role } from "@shared/access";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
 
-function RolePicker({ value, disabled, onChange }: { value: Role[]; disabled: boolean; onChange: (v: Role[]) => void }) {
+function RolePicker({ value, disabled, onChange, allowed }: { value: Role[]; disabled: boolean; onChange: (v: Role[]) => void; allowed?: (r: Role) => boolean }) {
   return (
     <div className="flex flex-wrap gap-1.5">
       {ROLES.map((r) => {
-        const on = value.includes(r);
+        const ok = allowed ? allowed(r) : true;
+        const on = ok && value.includes(r);
         return (
-          <Button key={r} type="button" size="sm" variant={on ? "default" : "outline"} className="h-8" disabled={disabled}
+          <Button key={r} type="button" size="sm" variant={on ? "default" : "outline"} className="h-8" disabled={disabled || !ok}
+            title={ok ? undefined : "Só supervisor ou acima pode receber dados de clientes no telemóvel."}
             onClick={() => onChange(on ? value.filter((x) => x !== r) : [...value, r])}>{ROLE_LABELS[r]}</Button>
         );
       })}
@@ -101,11 +103,16 @@ export function GoogleContactsSettings() {
         <div className="space-y-2">
           <div className="font-semibold text-[13px]">Grupo "{PUSH_GROUP_NAMES.service}"</div>
           <p className="text-[11.5px] text-muted-foreground">
-            Clientes (nome, matrícula e telefone) das recolhas/entregas de hoje e amanhã: no turno confirmado da pessoa (±1 h) ou, para team leaders e condutores sem turno
-            nesse dia, o dia inteiro da sua cidade. Só para quem ativou "Contactos" no Perfil.
+            Clientes (nome, matrícula e telefone) das recolhas/entregas de hoje e amanhã: no turno confirmado da pessoa (±1 h) ou o dia inteiro da(s) sua(s) cidade(s)
+            de base. Só para quem ativou "Contactos" no Perfil.
           </p>
           <Label>Papéis</Label>
-          <RolePicker value={cfg.service.roles} disabled={!canEdit} onChange={(roles) => setCfg({ ...cfg, service: { ...cfg.service, roles } })} />
+          <RolePicker value={cfg.service.roles} disabled={!canEdit} allowed={serviceRoleEligible}
+            onChange={(roles) => setCfg({ ...cfg, service: { ...cfg.service, roles: roles.filter(serviceRoleEligible) } })} />
+          <p className="text-[11.5px] text-muted-foreground">
+            Só supervisor ou acima (por omissão: supervisor, admin e super admin). O condutor e o team leader nunca recebem os contactos dos clientes no telemóvel —
+            o servidor bloqueia-o mesmo que a lista os tenha.
+          </p>
           <div className="grid grid-cols-2 gap-3 max-w-md">
             <div className="space-y-1">
               <Label htmlFor="ret-days">Retenção (dias depois do serviço)</Label>

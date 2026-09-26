@@ -26,7 +26,7 @@ const STATUS_LABEL: Record<string, string> = {
 
 type PrefKey = keyof GoogleSyncPrefs;
 const CAL_PREFS: Array<{ key: PrefKey; label: string; hint: string }> = [
-  { key: "calShifts", label: "Turnos", hint: "Turnos confirmados na escala (TL/supervisor: escala da cidade e passagens de turno)." },
+  { key: "calShifts", label: "Turnos", hint: "Turnos confirmados na escala (TL/supervisor: escala da cidade e passagens de turno só se o super admin as ligar em Definições)." },
   { key: "calTraining", label: "Formação", hint: "Prazos das formações atribuídas." },
   { key: "calTaskDue", label: "Prazos das tarefas", hint: "Um evento por prazo de tarefa atribuída." },
   { key: "calSla", label: "SLAs", hint: "Prazo (SLA) das reclamações atribuídas a ti." },

@@ -110,6 +110,46 @@ export function isAutomatedSender(address: string | null | undefined, headers: {
   return prec === "bulk" || prec === "list" || prec === "junk";
 }
 
+// ─── Notificações automáticas de reserva (decisão do dono, 26 set 2026) ────
+//
+// As ~4000 notificações automáticas "Nova Reserva" por mês que a Multipark
+// manda para a caixa "Reservas (geral)" ficam GUARDADAS, mas escondidas por
+// omissão nas listas da Comunicação ("Mostrar automáticos" desligado); a
+// pesquisa continua a encontrá-las. Mesma heurística do pipeline antigo
+// (server/emailParse.ts isReservationNotification + remetente interno).
+
+/** mail_messages.automated: 0 = pessoa, 1 = remetente automático, 2 = notificação automática de reserva. */
+export const MAIL_AUTOMATED_RESERVATION = 2;
+
+const RESERVATION_NOTICE_SUBJECT = /nova reserva/i;
+const REPLY_OR_FORWARD = /^\s*(re|res|fw|fwd|enc|reenc|tr)\s*:/i;
+const INTERNAL_SENDER = /@(multipark|skypark)\.(pt|app)$/;
+
+/**
+ * Notificação automática de reserva enviada pelo próprio sistema (assunto
+ * "Nova Reserva…" de um endereço interno; respostas/reencaminhamentos não
+ * contam — podem trazer contexto humano). PURA.
+ */
+export function isReservationNotificationEmail(m: { fromEmail?: string | null; fromName?: string | null; subject?: string | null; outbound?: boolean }, domains: Record<string, string[]> = DEFAULT_BRAND_DOMAINS): boolean {
+  if (m.outbound) return false;
+  const subject = String(m.subject ?? "");
+  if (REPLY_OR_FORWARD.test(subject)) return false;
+  const byName = /nova reserva\s*-\s*skypark/i.test(String(m.fromName ?? ""));
+  if (!RESERVATION_NOTICE_SUBJECT.test(subject) && !byName) return false;
+  const a = normalizeAddress(m.fromEmail);
+  return INTERNAL_SENDER.test(a) || isCompanyAddress(a, domains);
+}
+
+/**
+ * Esconder as conversas automáticas (notificações de reserva) nesta lista?
+ * Escondidas por omissão; "Mostrar automáticos" mostra-as e a PESQUISA
+ * encontra-as sempre. PURA.
+ */
+export function hideAutomaticThreads(input: { showAutomatic?: boolean | null; search?: string | null }): boolean {
+  if (input.showAutomatic) return false;
+  return !String(input.search ?? "").trim();
+}
+
 // ─── Configuração das caixas partilhadas ────────────────────────────────────
 
 /** "Pipeline" antigo (emailInboundSync): o email cria o registo no módulo. */
@@ -425,22 +465,49 @@ export const GOOGLE_FEATURE_SCOPES: Record<GoogleFeature, readonly string[]> = {
     "https://www.googleapis.com/auth/calendar.freebusy",
   ],
   tasks: ["https://www.googleapis.com/auth/tasks"],
-  // Drive (shared/drive.ts): SÓ drive.file — a app vê apenas os ficheiros que
+  // Drive (shared/drive.ts): drive.file — a app vê apenas os ficheiros que
   // criou ou que a pessoa abriu com ela (Google Picker). Chega para guardar no
   // Drive, exportar para Sheets e gerar documentos (APIs Sheets/Docs aceitam
   // drive.file nos ficheiros da app). Nunca lê o resto do Drive da pessoa.
-  drive: ["https://www.googleapis.com/auth/drive.file"],
+  // + spreadsheets.readonly (decisão do dono, 26 set 2026): "Importar do
+  // Google Sheets" a partir de QUALQUER link de folha que a pessoa consiga
+  // abrir (só leitura de folhas; nunca Docs/ficheiros). É opcional: quem
+  // ativou o Drive antes continua com o Drive ativo e só lhe é pedido de novo
+  // para importar de folhas que a app não conhece.
+  drive: ["https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/spreadsheets.readonly"],
   // Contactos (shared/contacts.ts): escrever o grupo "Multipark — Serviço"
   // (só os contactos criados pela app) e ler os "Outros contactos" para
   // sugerir ligações a clientes/leads/parceiros.
   contacts: ["https://www.googleapis.com/auth/contacts", "https://www.googleapis.com/auth/contacts.other.readonly"],
 };
 
-/** A conta tem todos os âmbitos da funcionalidade? PURA. */
-export function hasFeatureScopes(granted: string | readonly string[] | null | undefined, feature: GoogleFeature): boolean {
+/** Leitura de folhas Google (importar de qualquer link que a pessoa abre). */
+export const SHEETS_READONLY_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly";
+
+/**
+ * Âmbitos pedidos com a funcionalidade mas que NÃO são precisos para ela
+ * contar como ativa (quem ativou antes não perde o acesso; é-lhe pedido de
+ * novo só quando precisa). PURA.
+ */
+export const GOOGLE_FEATURE_OPTIONAL_SCOPES: Partial<Record<GoogleFeature, readonly string[]>> = {
+  drive: [SHEETS_READONLY_SCOPE],
+};
+
+function scopeSet(granted: string | readonly string[] | null | undefined): Set<string> {
   const list = Array.isArray(granted) ? granted : String(granted ?? "").split(/[\s,]+/);
-  const set = new Set(list.filter(Boolean));
-  return GOOGLE_FEATURE_SCOPES[feature].every((s) => set.has(s));
+  return new Set(list.filter(Boolean));
+}
+
+/** A conta tem todos os âmbitos (obrigatórios) da funcionalidade? PURA. */
+export function hasFeatureScopes(granted: string | readonly string[] | null | undefined, feature: GoogleFeature): boolean {
+  const set = scopeSet(granted);
+  const optional = GOOGLE_FEATURE_OPTIONAL_SCOPES[feature] ?? [];
+  return GOOGLE_FEATURE_SCOPES[feature].every((s) => optional.includes(s) || set.has(s));
+}
+
+/** A conta pode ler qualquer folha Google que a pessoa abre (spreadsheets.readonly)? PURA. */
+export function hasSheetsReadScope(granted: string | readonly string[] | null | undefined): boolean {
+  return scopeSet(granted).has(SHEETS_READONLY_SCOPE);
 }
 
 /**

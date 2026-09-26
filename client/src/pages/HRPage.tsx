@@ -12,7 +12,7 @@ import { fmtPTDateTime, fmtPTDate } from "@/lib/lisbonTime";
 import { DeactivationDialog } from "@/components/DeactivationDialog";
 import { deactivationReasonLabel } from "@shared/deactivationReasons";
 import { DriveFilesPanel } from "@/components/google/DriveFilesPanel";
-import { ImportFromSheetButton, SaveToDriveButton } from "@/components/google/DriveActions";
+import { ImportFromSheetButton } from "@/components/google/DriveActions";
 import { toCsv } from "@shared/csv";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 
@@ -664,7 +664,6 @@ function DocumentsTab({ employeeId, access }: { employeeId: number; access: Empl
                             <Button size="icon" variant="secondary" className="w-6 h-6" aria-label="Abrir documento" onClick={() => openDoc(doc.id)}>
                               <Eye className="w-3 h-3" />
                             </Button>
-                            <SaveToDriveButton source={{ kind: "employee_document", id: doc.id }} iconOnly variant="outline" className="w-6 h-6 bg-secondary" label="Guardar no meu Drive" />
                             {canDeleteDoc(doc.uploadedById) && (
                               <Button size="icon" variant="secondary" className="w-6 h-6 text-destructive" aria-label="Eliminar documento" onClick={() => del.mutate({ id: doc.id })}>
                                 <Trash2 className="w-3 h-3" />
@@ -683,7 +682,7 @@ function DocumentsTab({ employeeId, access }: { employeeId: number; access: Empl
       </div>
 
       {/* Google Drive: ficheiros ligados, documentos gerados dos modelos (contratos, declarações) */}
-      <DriveFilesPanel entityType="employee" entityId={employeeId} title="Google Drive (contratos e documentos gerados)" />
+      <DriveFilesPanel entityType="employee" entityId={employeeId} title="Modelos e ligações do Google Drive (os documentos do RH ficam só na app)" />
 
       {/* Image preview dialog */}
       {previewUrl && (

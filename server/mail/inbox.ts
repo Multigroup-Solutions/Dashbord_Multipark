@@ -12,7 +12,7 @@ import { TRPCError } from "@trpc/server";
 import { sql, type SQL } from "drizzle-orm";
 import {
   MAIL_BRAND_LABELS, MAIL_LINK_MODULE, canActOnMailbox, canSeeMailbox, canSeePersonalMailbox, canSendFromPersonalMailbox, checkSendAs,
-  extractAddresses, isCompanyAddress, isMailBrand, mailboxCityRestricted, normalizeAddress, normalizeLinkEntityId, personalAccountKey,
+  extractAddresses, hideAutomaticThreads, isCompanyAddress, isMailBrand, mailboxCityRestricted, normalizeAddress, normalizeLinkEntityId, personalAccountKey,
   pickFromAddress, type MailLinkType, type MailViewer, type MailThreadStatus,
 } from "../../shared/mail";
 import { can, grantFor } from "../../shared/access";
@@ -36,6 +36,8 @@ export interface ThreadRow {
   subject: string | null; snippet: string | null; contactEmail: string | null; contactName: string | null; matchedAddress: string | null;
   messageCount: number; unreadCount: number; lastMessageAt: string | null; lastInboundAt: string | null; lastOutboundAt: string | null;
   awaitingSince: string | null; status: MailThreadStatus; assignedUserId: number | null; assignedName: string | null; projectId: number | null;
+  /** Só notificações automáticas de reserva (escondida por omissão nas listas). */
+  automated: boolean;
 }
 
 function toThread(r: any): ThreadRow {
@@ -47,6 +49,7 @@ function toThread(r: any): ThreadRow {
     lastInboundAt: r.lastInboundAt ?? null, lastOutboundAt: r.lastOutboundAt ?? null, awaitingSince: r.awaitingSince ?? null,
     status: (r.status ?? "aberto") as MailThreadStatus, assignedUserId: r.assignedUserId != null ? Number(r.assignedUserId) : null,
     assignedName: r.assignedName ?? null, projectId: r.projectId != null ? Number(r.projectId) : null,
+    automated: Number(r.automated ?? 0) === 1,
   };
 }
 
@@ -104,7 +107,7 @@ export async function visibleMailboxes(viewer: MailViewer) {
         SUM(CASE WHEN t.unreadCount > 0 THEN 1 ELSE 0 END) AS unread,
         SUM(CASE WHEN t.awaitingSince IS NOT NULL AND t.status <> 'resolvido' THEN 1 ELSE 0 END) AS awaiting,
         SUM(CASE WHEN t.status = 'aberto' THEN 1 ELSE 0 END) AS open
-      FROM mail_threads t WHERE t.mailboxKey = ${m.key} AND ${cityCondition(viewer, m)}`))[0] ?? {};
+      FROM mail_threads t WHERE t.mailboxKey = ${m.key} AND ${cityCondition(viewer, m)} AND COALESCE(t.automated, 0) = 0`))[0] ?? {};
     out.push({
       key: m.key, label: m.label, module: m.module, brands: Array.from(new Set(m.addresses.map((a) => a.brand))),
       addresses: m.addresses, signatures: m.signatures, canAct: canActOnMailbox(viewer, m), pipeline: m.pipeline,
@@ -112,7 +115,7 @@ export async function visibleMailboxes(viewer: MailViewer) {
     });
   }
   const pr = rowsOf(await d.execute(sql`SELECT SUM(CASE WHEN unreadCount > 0 THEN 1 ELSE 0 END) AS unread FROM mail_threads
-    WHERE ownerUserId = ${viewer.id} AND mailboxKey IS NULL`))[0] ?? {};
+    WHERE ownerUserId = ${viewer.id} AND mailboxKey IS NULL AND COALESCE(automated, 0) = 0`))[0] ?? {};
   return { mailboxes: out, personalUnread: Number(pr.unread ?? 0) };
 }
 
@@ -133,6 +136,8 @@ export interface ThreadListInput {
   awaiting?: boolean;
   unread?: boolean;
   search?: string | null;
+  /** Mostrar as conversas automáticas (notificações de reserva) — escondidas por omissão; a pesquisa mostra-as sempre. */
+  showAutomatic?: boolean;
   page?: number;
   pageSize?: number;
 }
@@ -155,6 +160,7 @@ export async function listThreads(viewer: MailViewer, input: ThreadListInput) {
   else if (typeof input.assigned === "number") conds.push(sql`t.assignedUserId = ${input.assigned}`);
   if (input.awaiting) conds.push(sql`t.awaitingSince IS NOT NULL AND t.status <> 'resolvido'`);
   if (input.unread) conds.push(sql`t.unreadCount > 0`);
+  if (hideAutomaticThreads(input)) conds.push(sql`COALESCE(t.automated, 0) = 0`);
   const q = String(input.search ?? "").trim().slice(0, 100);
   if (q) {
     const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
