@@ -1,6 +1,7 @@
 /**
- * Trabalhos do Drive no trabalho google-sync do agendador (15 em 15 min), sempre com
- * prazo e retomáveis:
+ * Trabalhos do Drive no trabalho google-sync do agendador (rede de segurança de
+ * 4 em 4 h; cada prova nova de uma reclamação corre o espelho logo — âmbito
+ * `drive:mirror` em pendingSync.ts), sempre com prazo e retomáveis:
  *  - espelho no Shared Drive: provas das reclamações →
  *    Reclamações/<ano>/<id>; lotes pequenos, 1 linha por origem em
  *    google_drive_mirror (erro → nova tentativa, até 5). Os documentos do RH

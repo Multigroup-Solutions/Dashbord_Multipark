@@ -495,6 +495,25 @@ export async function googleSyncCron(o: { deadlineAt: number }): Promise<CronJob
   } catch (err) { return { httpStatus: 500, body: { ok: false, error: msg(err) } }; }
 }
 
+/** Fila "sincronizar já" do Google: repete o que falhou ou ficou a meio (lease + espera crescente). */
+export async function googlePendingCron(o: { deadlineAt: number }): Promise<CronJobRun> {
+  try {
+    const { drainPending } = await import("./google/pendingSync");
+    const r = await drainPending({ deadlineAt: o.deadlineAt });
+    // Falhas de um âmbito (ex.: conta de alguém) não pintam o trabalho de vermelho: esperam e repetem.
+    return { httpStatus: 200, body: { ok: true, ...r, ranAt: ranAt() }, done: true };
+  } catch (err) { return { httpStatus: 500, body: { ok: false, error: msg(err) } }; }
+}
+
+/** Canais de notificação da Google: cria os em falta, renova os que expiram em 48 h, pára os órfãos. */
+export async function googleWatchRenewCron(o: { deadlineAt: number }): Promise<CronJobRun> {
+  try {
+    const { renewWatchChannels } = await import("./google/pushChannels");
+    const r = await renewWatchChannels({ deadlineAt: o.deadlineAt });
+    return { httpStatus: 200, body: { ...r, ranAt: ranAt() }, done: r.done };
+  } catch (err) { return { httpStatus: 500, body: { ok: false, error: msg(err) } }; }
+}
+
 export async function knowledgeSyncCron(o: { deadlineAt: number }): Promise<CronJobRun> {
   try {
     const { runKnowledgeSync } = await import("./knowledge/sync");

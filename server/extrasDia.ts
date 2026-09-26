@@ -712,6 +712,7 @@ export async function upsertAssignment(input: UpsertAssignmentInput): Promise<As
       .where(eq(extrasDiaAssignments.id, input.id))
       .limit(1);
     if (!row) return null;
+    googleShiftChanged({ city: row.city, date: String(row.assignmentDate), employeeIds: [prev.employeeId, row.employeeId] });
     const tlCost = row.isTeamLeader === 1 ? await getEmployeeDailyCost(row.employeeId) : undefined;
     return rowToAssignment(row, tlCost, undefined, undefined, undefined, await loadExtraRates());
   }
@@ -733,6 +734,7 @@ export async function upsertAssignment(input: UpsertAssignmentInput): Promise<As
     .where(eq(extrasDiaAssignments.id, newId))
     .limit(1);
   if (!row) return null;
+  if (status === "confirmed") googleShiftChanged({ city: row.city, date: String(row.assignmentDate), employeeIds: [row.employeeId] });
   const tlCost = row.isTeamLeader === 1 ? await getEmployeeDailyCost(row.employeeId) : undefined;
   return rowToAssignment(row, tlCost, undefined, undefined, undefined, await loadExtraRates());
 }
@@ -740,7 +742,19 @@ export async function upsertAssignment(input: UpsertAssignmentInput): Promise<As
 export async function deleteAssignment(id: number): Promise<void> {
   const db = await getDb();
   if (!db) return;
+  const [prev] = await db.select().from(extrasDiaAssignments).where(eq(extrasDiaAssignments.id, id)).limit(1);
   await db.delete(extrasDiaAssignments).where(eq(extrasDiaAssignments.id, id));
+  if (prev) googleShiftChanged({ city: prev.city, date: String(prev.assignmentDate), employeeIds: [prev.employeeId] });
+}
+
+/**
+ * Escala mudou → turnos já para o Google Calendar (calendário partilhado da
+ * cidade + calendário "Multipark" de quem está escalado), em segundo plano.
+ */
+function googleShiftChanged(input: { city: string | null; date: string; employeeIds: Array<number | null | undefined> }): void {
+  import("./google/pendingSync")
+    .then((m) => m.scheduleGoogleShiftSync({ city: input.city, date: input.date.slice(0, 10), employeeIds: input.employeeIds.filter((x): x is number => typeof x === "number") }))
+    .catch(() => undefined);
 }
 
 /**

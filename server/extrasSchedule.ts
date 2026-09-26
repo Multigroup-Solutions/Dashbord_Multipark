@@ -428,6 +428,7 @@ export async function confirmSchedule(input: { date: string; city: ScheduleCity;
         ON DUPLICATE KEY UPDATE status = 'confirmed', confirmedAt = NOW(), confirmedBy = 'manual', confirmedById = VALUES(confirmedById)`);
     });
   }
+  if (confirmed > 0) import("./google/pendingSync").then((m) => m.scheduleGoogleShiftSync({ city, date })).catch(() => undefined);
   const notifications = await sendScheduleNotifications(date, city, { userId: input.userId, respectHold: false });
   await logActivity({
     userId: input.userId ?? 0,
@@ -634,6 +635,9 @@ export async function removeAssignment(id: number, userId: number | null): Promi
   const notified = await wasScheduledNotified(row.id);
   await db.execute(sql`DELETE FROM extras_dia_assignments WHERE id = ${id}`);
   out.removed = true;
+  import("./google/pendingSync")
+    .then((m) => m.scheduleGoogleShiftSync({ city: row.city, date: row.assignmentDate.slice(0, 10), employeeIds: row.employeeId != null ? [row.employeeId] : [] }))
+    .catch(() => undefined);
   const future = row.assignmentDate >= lisbonNow().date;
   if (future && shouldNotifyRemoval(row, notified)) out.notified = await notifyRemoval(row, userId);
   await logActivity({

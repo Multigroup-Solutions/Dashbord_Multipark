@@ -3032,6 +3032,8 @@ export const googleSyncState = mysqlTable("google_sync_state", {
 	lastWarning: varchar({ length: 500 }),
 	lockAt: timestamp({ mode: 'string' }),
 	dirtyAt: timestamp({ mode: 'string' }),
+	// Migração 0200: última sincronização "online" (heartbeat do dashboard).
+	lastOnlineSyncAt: datetime({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
@@ -3090,6 +3092,44 @@ export const googleSharedCalendars = mysqlTable("google_shared_calendars", {
 	lastError: varchar({ length: 500 }),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 });
+
+// ─── Google por eventos — migração 0200 (shared/googlePush.ts) ─────────────
+// Canais de notificação da Google (Calendário events.watch, Drive changes.watch).
+export const googleWatchChannels = mysqlTable("google_watch_channels", {
+	id: varchar({ length: 64 }).primaryKey(),
+	kind: varchar({ length: 16 }).notNull(),
+	scopeKey: varchar({ length: 128 }).notNull(),
+	resourceKey: varchar({ length: 255 }),
+	userId: int(),
+	resourceId: varchar({ length: 255 }),
+	tokenHash: char({ length: 64 }).notNull(),
+	expiration: datetime({ mode: 'string' }),
+	lastMessageNumber: bigint({ mode: "number" }),
+	lastNotifiedAt: datetime({ mode: 'string' }),
+	notifications: int().default(0).notNull(),
+	lastError: varchar({ length: 500 }),
+	createdAt: datetime({ mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull(),
+},
+(table) => [
+	index("idx_google_watch_scope").on(table.scopeKey),
+	index("idx_google_watch_exp").on(table.expiration),
+]);
+
+// Fila "sincronizar já" por âmbito (alteração no dashboard ou notificação da Google).
+export const googleSyncPending = mysqlTable("google_sync_pending", {
+	scopeKey: varchar({ length: 128 }).primaryKey(),
+	reason: varchar({ length: 32 }),
+	version: int().default(1).notNull(),
+	dirtyAt: datetime({ mode: 'string' }).notNull(),
+	runningUntil: datetime({ mode: 'string' }),
+	attempts: int().default(0).notNull(),
+	nextAttemptAt: datetime({ mode: 'string' }),
+	lastError: varchar({ length: 500 }),
+	createdAt: datetime({ mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull(),
+},
+(table) => [
+	index("idx_google_sync_pending_due").on(table.nextAttemptAt, table.dirtyAt),
+]);
 
 // Reuniões com Meet criadas a partir de um cliente / reclamação / parceria.
 export const googleMeetings = mysqlTable("google_meetings", {

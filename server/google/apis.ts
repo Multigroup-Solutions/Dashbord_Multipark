@@ -130,7 +130,14 @@ export interface CalendarApiLike {
   deleteEvent(calendarId: string, eventId: string): Promise<void>;
   freeBusy(timeMin: string, timeMax: string, calendarIds: string[]): Promise<Array<{ start?: string | null; end?: string | null }>>;
   insertAcl(calendarId: string, rule: calendar_v3.Schema$AclRule): Promise<void>;
+  /** Canal de notificações (events.watch) → id do recurso + expiração (ms). Opcional nas falsas dos testes. */
+  watchEvents?(calendarId: string, channel: WatchChannelRequest): Promise<WatchChannelResponse>;
+  /** Pára um canal (channels.stop); 404 = já não existe (ok). */
+  stopChannel?(channelId: string, resourceId: string): Promise<void>;
 }
+
+export interface WatchChannelRequest { id: string; address: string; token: string; ttlSeconds: number }
+export interface WatchChannelResponse { resourceId: string; expiration: number | null }
 
 export function calendarFor(auth: OAuth2Client | JWT): calendar_v3.Calendar {
   return calendarFactory({ version: "v3", auth, timeout: GOOGLE_API_TIMEOUT_MS, fetchImplementation: timedFetch() } as any);
@@ -184,6 +191,18 @@ export function wrapCalendar(c: calendar_v3.Calendar, retry: RetryOptions): Cale
     async insertAcl(calendarId, rule) {
       try { await r(() => c.acl.insert({ calendarId, requestBody: rule, sendNotifications: false })); }
       catch (err) { if (httpStatusOf(err) !== 409) throw err; }
+    },
+    async watchEvents(calendarId, ch) {
+      const res = await r(() => c.events.watch({
+        calendarId,
+        requestBody: { id: ch.id, type: "web_hook", address: ch.address, token: ch.token, params: { ttl: String(ch.ttlSeconds) } },
+      }));
+      const exp = Number(res.data.expiration ?? NaN);
+      return { resourceId: String(res.data.resourceId ?? ""), expiration: Number.isFinite(exp) ? exp : null };
+    },
+    async stopChannel(channelId, resourceId) {
+      try { await r(() => c.channels.stop({ requestBody: { id: channelId, resourceId } })); }
+      catch (err) { if (![404, 410].includes(httpStatusOf(err) ?? 0)) throw err; }
     },
   };
 }

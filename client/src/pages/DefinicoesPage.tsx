@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { MailboxesSettings } from "@/components/mail/MailboxesSettings";
 import { SharedCalendarsSettings } from "@/components/google/SharedCalendarsSettings";
+import { GooglePushSettings } from "@/components/google/GooglePushSettings";
 import { GoogleContactsSettings } from "@/components/google/GoogleContactsSettings";
 import { GoogleDriveSettings } from "@/components/google/GoogleDriveSettings";
 import { WebAnalyticsSettings } from "@/components/marketing/WebAnalyticsSettings";
@@ -73,7 +74,7 @@ export default function DefinicoesPage() {
         <TabsContent value="estado" className="space-y-4"><SystemStatusCard />{user.role === "super_admin" && <SchedulerCard />}<AiUsageCard /><SyncHealthPanel compact /></TabsContent>
         <TabsContent value="automacoes"><AutomationsCard /></TabsContent>
         <TabsContent value="integracoes" className="space-y-4"><IntegrationsCard /><WebAnalyticsSettings /></TabsContent>
-        <TabsContent value="comunicacao" className="space-y-4"><MailboxesSettings /><SharedCalendarsSettings /><GoogleContactsSettings /><GoogleDriveSettings /></TabsContent>
+        <TabsContent value="comunicacao" className="space-y-4"><MailboxesSettings /><SharedCalendarsSettings /><GooglePushSettings /><GoogleContactsSettings /><GoogleDriveSettings /></TabsContent>
         <TabsContent value="parametros"><ParametersCard /></TabsContent>
         <TabsContent value="notificacoes"><NotificationRoutingCard /></TabsContent>
         <TabsContent value="seguranca"><SecurityCard isSuperAdmin={user.role === "super_admin"} /></TabsContent>

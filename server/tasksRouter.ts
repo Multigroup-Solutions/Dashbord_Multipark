@@ -72,8 +72,9 @@ async function teamEmployeeIds(user: { id: number; role: string }): Promise<Set<
 const nowMysql = () => new Date().toISOString().slice(0, 19).replace("T", " ");
 
 /**
- * Google Tasks: depois de uma alteração, sincroniza já as pessoas afetadas
- * (best-effort, sem atrasar a resposta; o cron de 10 min apanha o resto).
+ * Google Tasks/Calendário: depois de uma alteração, sincroniza já as pessoas
+ * afetadas (best-effort, sem atrasar a resposta; o agendador repete o que
+ * falhar — google-pending, 15 min — e o google-sync de 4 h é a rede de segurança).
  */
 function googleSyncAfter(taskIds: number[]): void {
   import("./google/syncService").then((m) => m.scheduleGoogleTaskSync({ taskIds })).catch(() => undefined);

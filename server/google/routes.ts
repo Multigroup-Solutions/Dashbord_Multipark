@@ -2,11 +2,17 @@
  * Rotas HTTP do OAuth "Ligar a minha conta Google" + crons manuais google-sync/knowledge-sync/web-analytics (a sessão da app tem de
  * ser a mesma no início e no callback; o `state` é de uso único e ligado ao
  * utilizador). Os erros voltam à página de origem como `?google=error&msg=`.
+ *
+ * POST /api/google/push — notificações da Google (Calendário e Drive), sem
+ * sessão: autenticadas pelo canal (id + segredo X-Goog-Channel-Token com
+ * hash na BD + X-Goog-Resource-ID). Responde logo (200) e sincroniza só
+ * aquele calendário/Drive em segundo plano (server/google/pushChannels.ts).
  */
 import type { Express, Request, Response } from "express";
 import { sdk } from "../_core/sdk";
 import { cronAuthOk } from "../cronAuth";
 import { GOOGLE_ACCOUNT_CALLBACK_PATH, GOOGLE_ACCOUNT_START_PATH, googleErrorMessage } from "./workspace";
+import { GOOGLE_PUSH_PATH } from "../../shared/googlePush";
 
 function withQuery(path: string, params: Record<string, string>): string {
   const [base, hash] = path.split("#");
@@ -14,10 +20,30 @@ function withQuery(path: string, params: Record<string, string>): string {
   return `${base}${sep}${new URLSearchParams(params).toString()}${hash ? `#${hash}` : ""}`;
 }
 
-export function registerGoogleAccountRoutes(app: Express) {
-  // Google Tarefas & Calendário (+ Contactos e Drive): o agendador
-  // /api/cron/tick corre-o de 15 em 15 min; este endpoint fica para uso
-  // manual. Prazo 45 s; `done:false` → a corrida seguinte continua.
+export function registerGoogleAccountRoutes(app: Express, opts: { defer?: (p: Promise<unknown>) => void } = {}) {
+  // Notificações da Google. O corpo vem vazio (tudo nos cabeçalhos); nunca
+  // devolve pormenores. 404/401 fazem a Google desistir desse canal.
+  app.post(GOOGLE_PUSH_PATH, async (req: Request, res: Response) => {
+    try {
+      const { handleGooglePush } = await import("./pushChannels");
+      const out = await handleGooglePush(req.headers as Record<string, unknown>);
+      res.status(out.status).end();
+      if (out.key) {
+        const key = out.key;
+        const { markPending, drainPending } = await import("./pendingSync");
+        const work = markPending([key], "push").then((keys) => (keys.length ? drainPending({ deadlineAt: Date.now() + 40_000, keys }) : null))
+          .catch((err) => console.warn("[google-push] sincronização falhou:", String(err?.message ?? err).slice(0, 160)));
+        if (opts.defer) opts.defer(work);
+      }
+    } catch {
+      if (!res.headersSent) res.status(503).end();
+    }
+  });
+
+  // Google Tarefas & Calendário (+ Contactos e Drive): rede de segurança do
+  // agendador /api/cron/tick de 4 em 4 horas (o resto chega por eventos);
+  // este endpoint fica para uso manual. Prazo 45 s; `done:false` → a corrida
+  // seguinte continua.
   app.get("/api/cron/google-sync", async (req: Request, res: Response) => {
     if (!cronAuthOk(req.headers["authorization"])) { res.status(401).json({ error: "Unauthorized" }); return; }
     const { googleSyncCron, sendCronRun } = await import("../cronJobs");

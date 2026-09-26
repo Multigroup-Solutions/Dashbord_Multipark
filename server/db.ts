@@ -180,6 +180,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0180").then(m => ({ s: m.MIGRATION_0180_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0180 })),
       import("./migrations/migration_0185").then(m => ({ s: m.MIGRATION_0185_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0185 })),
       import("./migrations/migration_0190").then(m => ({ s: m.MIGRATION_0190_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0190 })),
+      import("./migrations/migration_0200").then(m => ({ s: m.MIGRATION_0200_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0200 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -2206,6 +2207,8 @@ export async function addComplaintPhoto(data: Omit<InsertComplaintPhoto, "id" | 
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
   const result = await db.insert(complaintPhotos).values(data);
+  // Espelho no Shared Drive (se ligado) já, em segundo plano.
+  import("./google/pendingSync").then((m) => m.scheduleGoogleDriveMirror()).catch(() => undefined);
   return Number(result[0].insertId);
 }
 

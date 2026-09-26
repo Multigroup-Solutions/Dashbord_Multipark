@@ -162,6 +162,8 @@ export async function assignPath(pathId: number, employeeIds: number[], opts: { 
     created++;
   }
   for (const id of employeeIds) await refreshAssignmentsFor(id, now);
+  // Prazo da formação no Google Calendar de quem a recebeu (se ligou), já.
+  if (created || reset) import("./google/pendingSync").then((m) => m.scheduleGoogleEmployeesSync(employeeIds, "training")).catch(() => undefined);
   return { created, reset, skipped };
 }
 

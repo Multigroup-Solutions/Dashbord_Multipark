@@ -43,6 +43,22 @@ export const googleSyncRouter = router({
     const me = r.users[0];
     return { status: me?.status ?? "skipped", error: me?.error ?? null, tasks: me?.tasks ?? null, calendar: me?.calendar ?? null, done: r.done };
   }),
+  /**
+   * Heartbeat do dashboard (DashboardLayout, de 5 em 5 min com a aba
+   * visível): Tarefas e Contactos da PRÓPRIA pessoa (a Google não avisa
+   * alterações nestes dois). Limitado a 1 corrida por pessoa a cada ~5 min
+   * no servidor; responde logo e sincroniza em segundo plano.
+   */
+  heartbeat: protectedProcedure.mutation(async ({ ctx }) => {
+    const { onlineHeartbeat } = await import("./pendingSync");
+    try { return await onlineHeartbeat(ctx.user.id); }
+    catch { return { ran: false, reason: "not_connected" as const }; }
+  }),
+  /** Notificações do calendário da própria pessoa + última sincronização "online". */
+  pushStatus: protectedProcedure.query(async ({ ctx }) => {
+    const { userPushStatus } = await import("./pushChannels");
+    return userPushStatus(ctx.user.id);
+  }),
   /** Blocos ocupados do Google Calendar da própria pessoa (só horas; nunca o conteúdo). */
   busy: protectedProcedure.input(z.object({ fromDay: day, toDay: day })).query(async ({ ctx, input }) => {
     if (input.toDay < input.fromDay) throw new TRPCError({ code: "BAD_REQUEST", message: "Intervalo inválido." });
@@ -164,6 +180,21 @@ export const googleCalendarRouter = router({
       adminOnly(ctx.user as CtxUser);
       const { syncSharedCalendars } = await import("./syncService");
       return syncSharedCalendars({ deadlineAt: Date.now() + 40_000 });
+    }),
+  }),
+
+  /** Canais de notificação da Google (Calendário/Drive) e fila "sincronizar já" — admin vê. */
+  push: router({
+    status: protectedProcedure.query(async ({ ctx }) => {
+      adminOnly(ctx.user as CtxUser);
+      const { pushStatusSummary } = await import("./pushChannels");
+      return pushStatusSummary();
+    }),
+    /** "Renovar agora": cria os canais em falta, renova os que expiram, pára os órfãos (só super admin). */
+    renewNow: protectedProcedure.mutation(async ({ ctx }) => {
+      superOnly(ctx.user as CtxUser);
+      const { renewWatchChannels } = await import("./pushChannels");
+      return renewWatchChannels({ deadlineAt: Date.now() + 40_000 });
     }),
   }),
 });

@@ -50,7 +50,8 @@ try {
   })));
   // Comunicação: "Ligar a minha conta Google" (OAuth por utilizador), cron
   // /api/cron/mail-sync, push do Gmail e anexos a pedido.
-  registerGoogleAccountRoutes(app);
+  // Notificações da Google (Calendário/Drive): POST /api/google/push.
+  registerGoogleAccountRoutes(app, { defer: (p) => waitUntil(p) });
   registerMailRoutes(app, { defer: (p) => waitUntil(p) });
   app.use("/api/external", createExternalApiRouter());
   app.use("/api/v1", createMcpApiRouter());
