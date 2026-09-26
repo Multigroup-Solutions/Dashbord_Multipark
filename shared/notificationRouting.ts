@@ -117,6 +117,8 @@ export const NOTIFICATION_KIND_DEFS = [
   // ── Operações ──
   K({ kind: "whatsapp_sla", group: "operacoes", label: "WhatsApp por responder", description: "Conversas fora do prazo, urgentes ou com a janela de 24h a fechar (e as que te estão atribuídas).",
     module: "whatsapp", action: "view", roles: ["team_leader", "supervisor", "frontoffice", "backoffice"], cityScoped: true, personal: false, channels: IN_APP }),
+  K({ kind: "whatsapp_missed_call", group: "operacoes", label: "Chamada WhatsApp perdida", description: "Um cliente ligou pelo WhatsApp e ninguém atendeu (conversa da tua cidade) — devolver a chamada.",
+    module: "whatsapp", action: "view", roles: ["team_leader", "supervisor", "frontoffice", "backoffice"], cityScoped: true, personal: false, channels: IN_APP, dedupeMinutes: 10 }),
   K({ kind: "extras_gap", group: "operacoes", label: "Faltam condutores", description: "Horas sem condutores suficientes na escala (proposta e véspera).",
     module: "extras_dia", action: "view", roles: ["team_leader", "supervisor"], cityScoped: true, personal: false, channels: IN_APP }),
   K({ kind: "extras_schedule_reply", group: "operacoes", label: "Respostas ao aviso de escala", description: "Extra que não pode ir ao turno ou resposta por rever.",

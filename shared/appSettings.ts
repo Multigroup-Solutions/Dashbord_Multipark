@@ -463,6 +463,7 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "TRAINING_BLOCKS_ESCALA", label: "Formação bloqueia a escala", description: "Quem tem formação obrigatória em atraso não entra na escala." },
   { name: "OPS_BRIEFING", label: "Briefing diário por cidade", description: "Às 07:30 (Lisboa): reservas do dia, extras, SLA, pendentes e alertas por email aos team leaders/supervisores da cidade e no Dashboard." },
   { name: "WEEKLY_REPORTS", label: "Relatórios semanais", description: "À segunda de manhã: direção, marketing, operações e RH por email a quem tem acesso nacional ao módulo; resumo semanal da passagem de turno." },
+  { name: "WHATSAPP_CALLS", label: "Chamadas de voz do WhatsApp", description: "Toque no dashboard, atender no browser e \"Ligar\" nas conversas. Desligado por omissão: liga só depois de ativar as chamadas no número na Meta (e subscrever o campo `calls` do webhook).", defaultEnabled: false },
   { name: "MAIL_PUSH", label: "Gmail: notificações push (Pub/Sub)", description: "Além do cron de 5 em 5 min, o Gmail avisa a app logo que chega um email (precisa do tópico Pub/Sub configurado: GMAIL_PUSH_TOPIC). Desligado por omissão.", defaultEnabled: false },
   { name: "OPS_ANOMALIES", label: "Deteção de anomalias", description: "Todos os dias: reservas por parque/canal, despesas (valores fora do normal e duplicados) e gasto/ROAS do marketing." },
   // ── IA (server/_core/ai) — AI_ENABLED desliga tudo de uma vez ──

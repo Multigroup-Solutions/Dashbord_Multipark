@@ -103,6 +103,7 @@ import { trpc } from "@/lib/trpc";
 import { MobileTabBar } from "@/components/MobileTabBar";
 import { AssistantWidget } from "@/components/assistant/AssistantWidget";
 import { GlobalSearch, GlobalSearchButton } from "@/components/GlobalSearch";
+import { WhatsAppCallManager } from "@/components/whatsapp/WhatsAppCallManager";
 import { can, roleRank, type AccessOverrides, type ModuleId } from "@shared/access";
 import { NOTIFICATION_KIND_DEFS, NOTIFY_CITY_LABELS, kindLabel, type NotifyCity } from "@shared/notificationRouting";
 
@@ -379,6 +380,12 @@ function DashboardLayoutContent({
   // Ponto rápido a partir do avatar: estado atual + entrada/saída com selfie+GPS
   // (mesmas regras do ponto na ficha de RH).
   const utils = trpc.useUtils();
+  // Interruptor WHATSAPP_CALLS (desligado por omissão): sem ele não há polling de chamadas.
+  const callsFlag = trpc.whatsapp.calls.enabled.useQuery(undefined, {
+    enabled: !!user && can(user as any, "whatsapp", "edit"),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
   const pontoQ = trpc.rh.timeRecords.myStatus.useQuery(undefined, {
     enabled: !!employee,
     refetchInterval: 120_000,
@@ -885,6 +892,8 @@ function DashboardLayoutContent({
         <AssistantWidget />
         {/* Pesquisa global: paleta Ctrl/Cmd+K */}
         <GlobalSearch />
+        {/* Chamadas de voz do WhatsApp: toque + chamada em curso em qualquer página */}
+        <WhatsAppCallManager enabled={!!user && can(user as any, "whatsapp", "edit") && !!callsFlag.data?.enabled} userId={user?.id ?? null} />
       </SidebarInset>
     </>
   );

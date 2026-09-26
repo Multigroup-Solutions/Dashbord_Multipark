@@ -40,6 +40,7 @@ O Super Admin entra sempre; o Admin entra sozinho quando a matriz lhe dá o mód
 | Tipo | Chave | Módulo (ação) | Âmbito | Quem recebe | Email | Obrigatória | Quando |
 |---|---|---|---|---|---|---|---|
 | WhatsApp por responder | `whatsapp_sla` | WhatsApp (view) | por cidade | Team Leader, Supervisor, Frontoffice, Backoffice, Admin, Super Admin | — | não | Cron: conversas por responder / urgentes / janela de 24h a fechar (resumo por cidade + responsável da conversa). |
+| Chamada WhatsApp perdida | `whatsapp_missed_call` | WhatsApp (view) | por cidade | Team Leader, Supervisor, Frontoffice, Backoffice, Admin, Super Admin | — | não | Webhook de chamadas do WhatsApp: chamada recebida que ninguém atendeu (terminou a tocar, ou passou o prazo de ~1 min) — 1× por chamada, à cidade da conversa (mesma regra do inbox). |
 | Faltam condutores | `extras_gap` | Extras Dia (view) | por cidade | Team Leader, Supervisor, Admin, Super Admin | — | não | Proposta automática da escala e verificação da véspera com horas sem condutores. |
 | Respostas ao aviso de escala | `extras_schedule_reply` | Extras Dia (view) | por cidade | Team Leader, Supervisor, Admin, Super Admin | — | não | Extra responde "não" ao aviso de escala, ou resposta que o sistema não percebeu. |
 | A tua passagem de turno | `handover` | Passagem de Turno (view) | a pessoa | Pessoal | — | sim | Passagem de turno entregue (team leaders do turno seguinte) e lembrete de passagem em falta (team leaders do turno). |

@@ -22,6 +22,7 @@ export const KIND_SOURCES: Record<string, string> = {
   lost_found_new: "Perdido registado.",
   lost_found_sla: "Cron horário: perdidos fora do prazo (1×/dia, resumo por cidade + responsável).",
   whatsapp_sla: "Cron: conversas por responder / urgentes / janela de 24h a fechar (resumo por cidade + responsável da conversa).",
+  whatsapp_missed_call: "Webhook de chamadas do WhatsApp: chamada recebida que ninguém atendeu (terminou a tocar, ou passou o prazo de ~1 min) — 1× por chamada, à cidade da conversa (mesma regra do inbox).",
   extras_gap: "Proposta automática da escala e verificação da véspera com horas sem condutores.",
   extras_schedule_reply: "Extra responde \"não\" ao aviso de escala, ou resposta que o sistema não percebeu.",
   handover: "Passagem de turno entregue (team leaders do turno seguinte) e lembrete de passagem em falta (team leaders do turno).",

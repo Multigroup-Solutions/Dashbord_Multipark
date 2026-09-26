@@ -40,6 +40,8 @@ import {
   Sparkles,
   Zap,
   Settings2,
+  Phone,
+  PhoneMissed,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -62,6 +64,8 @@ import {
 import { WHATSAPP_INTENTS, WHATSAPP_INTENT_LABELS, isWhatsappIntent } from "@shared/commsAi";
 import { WhatsAppContextSheet } from "@/components/whatsapp/WhatsAppContextSheet";
 import { QuickRepliesDialog } from "@/components/whatsapp/QuickRepliesDialog";
+import { CallContactDialog, CallTimelineEntry, PendingCallbacksDialog } from "@/components/whatsapp/WhatsAppCallsPanels";
+import { can } from "@shared/access";
 import {
   DEFAULT_WHATSAPP_TEMPLATE_ID,
   WHATSAPP_TEMPLATES,
@@ -167,6 +171,26 @@ function StatusIcon({ status }: { status: string }) {
   }
 }
 
+// ─── Linha do tempo: mensagens + chamadas por ordem de hora ─────────────────
+
+type TimelineItem<M, C> = { kind: "message"; at: number; message: M } | { kind: "call"; at: number; call: C };
+
+/** Junta mensagens e chamadas (ordem cronológica; empate: mensagem primeiro). */
+function timeline<M extends { id: number; waTimestamp: string | null; createdAt: string }, C extends { id: number; startedAt: string }>(
+  messages: readonly M[],
+  calls: readonly C[],
+): TimelineItem<M, C>[] {
+  const items: TimelineItem<M, C>[] = [
+    ...messages.map((m) => ({ kind: "message" as const, at: parseDbTime(m.waTimestamp ?? m.createdAt)?.getTime() ?? 0, message: m })),
+    ...calls.map((c) => ({ kind: "call" as const, at: parseDbTime(c.startedAt)?.getTime() ?? 0, call: c })),
+  ];
+  // Só chamadas dentro do período das mensagens carregadas (a thread mostra as últimas N).
+  const firstMsg = messages.length ? Math.min(...items.filter((i) => i.kind === "message").map((i) => i.at)) : -Infinity;
+  return items
+    .filter((i) => i.kind === "message" || i.at >= firstMsg || messages.length < 100)
+    .sort((a, b) => a.at - b.at || (a.kind === "message" ? -1 : 1));
+}
+
 // ─── Página ─────────────────────────────────────────────────────────────────
 
 export default function WhatsAppInboxPage() {
@@ -202,6 +226,9 @@ export default function WhatsAppInboxPage() {
   const [contextOpen, setContextOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
   const [aiSummary, setAiSummary] = useState<string | null>(null);
+  // Chamadas de voz (WhatsApp Calling API): "Ligar" e "Por devolver" (?chamadas=1 abre a lista).
+  const [callOpen, setCallOpen] = useState(false);
+  const [callbacksOpen, setCallbacksOpen] = useState(() => new URLSearchParams(window.location.search).get("chamadas") === "1");
   const searchRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
 
@@ -220,6 +247,18 @@ export default function WhatsAppInboxPage() {
   );
 
   const utils = trpc.useUtils();
+  const canEditWa = !!user && can(user as any, "whatsapp", "edit");
+  // Interruptor WHATSAPP_CALLS (desligado por omissão): sem ele não aparece "Ligar".
+  const callsFlag = trpc.whatsapp.calls.enabled.useQuery(undefined, { enabled: canEditWa, staleTime: 5 * 60_000, retry: false });
+  const callsOn = !!callsFlag.data?.enabled;
+  const convCalls = trpc.whatsapp.calls.byConversation.useQuery(
+    { conversationId: selectedId ?? 0 },
+    { enabled: selectedId != null, refetchInterval: pageVisible ? POLL_MS : false, retry: false },
+  );
+  const pendingCallbacks = trpc.whatsapp.calls.pendingCallbacks.useQuery(undefined, {
+    refetchInterval: pageVisible ? 60_000 : false,
+    retry: false,
+  });
   const meta = trpc.whatsapp.inboxMeta.useQuery(undefined, { staleTime: 10 * 60_000 });
   const slaMinutes = meta.data?.slaMinutes ?? 15;
   const assignees = trpc.whatsapp.assignees.useQuery(undefined, { staleTime: 10 * 60_000 });
@@ -228,6 +267,7 @@ export default function WhatsAppInboxPage() {
   function refreshAll() {
     conversations.refetch();
     if (selectedId != null) thread.refetch();
+    if (selectedId != null) convCalls.refetch();
     utils.whatsapp.badge.invalidate();
   }
 
@@ -614,6 +654,18 @@ export default function WhatsAppInboxPage() {
           </Button>
         </div>
       </div>
+      {(pendingCallbacks.data?.length ?? 0) > 0 && (
+        <button
+          type="button"
+          onClick={() => setCallbacksOpen(true)}
+          className="shrink-0 flex items-center gap-2 px-3 py-1.5 text-xs border-b text-left bg-red-50 dark:bg-red-950/30 text-red-800 dark:text-red-300"
+          title="Chamadas de clientes que ninguém atendeu"
+        >
+          <PhoneMissed className="h-4 w-4 shrink-0" />
+          <span className="flex-1"><strong>{pendingCallbacks.data!.length}</strong> chamada{pendingCallbacks.data!.length > 1 ? "s" : ""} perdida{pendingCallbacks.data!.length > 1 ? "s" : ""} por devolver</span>
+          <span className="underline shrink-0">Ver</span>
+        </button>
+      )}
       {(overdueTotal > 0 || closingTotal > 0 || onlyAlerts) && (
         <button
           type="button"
@@ -914,6 +966,17 @@ export default function WhatsAppInboxPage() {
                   <CheckCheck className="h-3.5 w-3.5 mr-1" /> Resolver
                 </Button>
               )}
+              {canEditWa && callsOn && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 text-xs border-green-300 text-green-800 dark:border-green-900 dark:text-green-300"
+                  title="Chamada de voz pelo WhatsApp (pede autorização ao cliente se for preciso)"
+                  onClick={() => setCallOpen(true)}
+                >
+                  <Phone className="h-3.5 w-3.5 mr-1" /> Ligar
+                </Button>
+              )}
               <Button
                 size="sm"
                 variant={t.linkedBookingId || t.linkedClientEmail ? "secondary" : "outline"}
@@ -967,10 +1030,12 @@ export default function WhatsAppInboxPage() {
 
           <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-muted/20">
             {thread.isLoading && <div className="text-sm text-muted-foreground text-center">A carregar…</div>}
-            {t?.messages.length === 0 && (
+            {t?.messages.length === 0 && !(convCalls.data ?? []).length && (
               <div className="text-sm text-muted-foreground text-center">Sem mensagens.</div>
             )}
-            {t?.messages.map((m) => (
+            {t && timeline(t.messages, convCalls.data ?? []).map((item) => item.kind === "call" ? (
+              <CallTimelineEntry key={`call-${item.call.id}`} c={item.call} />
+            ) : ((m) => (
               <div key={m.id} className={`flex ${m.direction === "out" ? "justify-end" : "justify-start"}`}>
                 <div
                   className={`max-w-[75%] rounded-lg px-3 py-1.5 text-sm ${
@@ -1014,7 +1079,7 @@ export default function WhatsAppInboxPage() {
                   )}
                 </div>
               </div>
-            ))}
+            ))(item.message))}
           </div>
 
           {windowBanner()}
@@ -1061,6 +1126,22 @@ export default function WhatsAppInboxPage() {
         onLinked={refreshAll}
       />
       <QuickRepliesDialog open={quickOpen} onOpenChange={setQuickOpen} />
+      {t && selectedId != null && (
+        <CallContactDialog
+          open={callOpen}
+          onOpenChange={setCallOpen}
+          conversationId={t.conversationId}
+          name={t.name}
+          subtitle={t.phoneE164}
+        />
+      )}
+      <PendingCallbacksDialog
+        open={callbacksOpen}
+        onOpenChange={(v) => { setCallbacksOpen(v); if (!v) void pendingCallbacks.refetch(); }}
+        onOpenConversation={openConversation}
+        canEdit={canEditWa}
+        isSuperAdmin={user?.role === "super_admin"}
+      />
 
       {/* Dialog de template (janela fechada ou ainda sem resposta) */}
       <Dialog open={tplOpen} onOpenChange={(open) => { if (!sendTemplate.isPending) setTplOpen(open); }}>
