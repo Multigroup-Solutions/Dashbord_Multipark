@@ -207,7 +207,7 @@ describe("consultas (queries.ts): SQL gerado", () => {
     for (const engine of ["postgres", "mysql"] as const) {
       for (const q of [
         changedSinceSql(engine, BOOKING_QUERY, since, 10), changedSinceSql(engine, MOVEMENT_QUERY, since, 10),
-        byIdSql(engine, BOOKING_QUERY, BOOKING_QUERY.cursorId, "x"), byColumnSql(engine, MOVEMENT_QUERY, "h.TODO_bookingId", "x"),
+        byIdSql(engine, BOOKING_QUERY, BOOKING_QUERY.cursorId, "x"), byColumnSql(engine, MOVEMENT_QUERY, MOVEMENT_QUERY.columns.booking_id!, "x"),
         bookingsByPeriodSql(engine, "2026-09-01", "2026-09-30", "checkin"), driversSql(),
       ]) expect(() => assertReadOnlySql(q.sql)).not.toThrow();
     }

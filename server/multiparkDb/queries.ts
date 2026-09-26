@@ -2,9 +2,10 @@
  * ÚNICO sítio com o conhecimento do esquema da BD Multipark: as consultas e o
  * mapeamento "nosso campo ← tabela.coluna deles".
  *
- * ESTADO: POR MAPEAR. O esquema ainda não foi visto (a BD só é acessível do
- * PC do Jorge). Os nomes `TODO_…` abaixo são MARCADORES, não nomes reais.
- * Enquanto `MULTIPARK_DB_MAPPED.<entidade>` for false, o DbSource recusa-se a
+ * ESTADO: MAPEADO (26 set 2026) sobre o esquema real — docs/multipark-db/schema.md,
+ * obtido online pelo workflow "BD Multipark — descobrir esquema". Falta
+ * confirmar datas e ids com a sonda (/api/cron/multipark-db-probe) antes de
+ * pôr as entidades a true. Enquanto `MULTIPARK_DB_MAPPED.<entidade>` for false, o DbSource recusa-se a
  * correr (erro "por mapear") — nada lê nem escreve.
  *
  * Como preencher (sessão seguinte — ver docs/multipark-db/README.md):
@@ -84,7 +85,7 @@ export const DRIVER_ALIASES = [
 export type DriverAlias = (typeof DRIVER_ALIASES)[number];
 export type DriverRow = Partial<Record<DriverAlias, unknown>>;
 
-// ─── Consultas (TODO: preencher depois de correr o script do esquema) ───────
+// ─── Consultas (mapeadas a 26 set 2026 sobre docs/multipark-db/schema.md) ──
 
 export interface EntityQuery<A extends string> {
   /** Tabela principal com alias + JOINs (sem WHERE). */
@@ -99,124 +100,169 @@ export interface EntityQuery<A extends string> {
 
 /**
  * Tabela de mapeamento das reservas: alias ← tabela.coluna deles.
- * O MultiparkBooking (formato da API) que sai daqui alimenta os campos de
- * multipark_bookings indicados no comentário (via bookingToRecord /
- * applyBookingDetail).
+ * Esquema real: docs/multipark-db/schema.md (be-multipark, PostgreSQL 17,
+ * Prisma — nomes "camelCase" entre aspas). O MultiparkBooking (formato da API)
+ * que sai daqui alimenta os campos de multipark_bookings indicados no
+ * comentário (via bookingToRecord / applyBookingDetail).
+ *
+ * Notas do mapeamento (26 set 2026):
+ *  - não há "número de reserva": a API também não o dá e o bookingToRecord
+ *    usa a `allocation` ("29484") — igual aqui (booking_number = NULL);
+ *  - `parkingType` gravado hoje é o 1.º tipo do PARQUE ("VALET"), não o
+ *    "ParkingType" da reserva (COVERED/…) — mantido para não misturar dados;
+ *  - preços: soma das linhas de "BookingPricing" (total / pago), com o
+ *    "bookingPrice" como recurso; a confirmar com a sonda (multipark-db-probe);
+ *  - `updatedAt` da reserva é o cursor; alterações só em tabelas-filhas
+ *    (pagamentos, extras, cancelamento) podem não o mexer — a reserva volta a
+ *    ser lida na próxima alteração dela ou pelo webhook.
  */
 export const BOOKING_QUERY: EntityQuery<BookingAlias> = {
-  from: "TODO_bookings b", // ex. (Prisma/Postgres): "Booking" b LEFT JOIN "Park" p ON p."id" = b."parkId" LEFT JOIN "Client" c ON …
-  cursorAt: "b.TODO_updatedAt",
-  cursorId: "b.TODO_id",
+  from: [
+    `"Booking" b`,
+    `LEFT JOIN "Park" p ON p."id" = b."parkId"`,
+    `LEFT JOIN "Client" c ON c."id" = COALESCE(b."customerId", b."clientId")`,
+    `LEFT JOIN "BookingVehicle" v ON v."id" = b."vehicleId"`,
+    `LEFT JOIN "Partner" pa ON pa."id" = b."partnerId"`,
+    `LEFT JOIN "Campaign" ca ON ca."id" = b."campaignId"`,
+    `LEFT JOIN LATERAL (SELECT x."createdAt" AS at, x."cancellationType" AS kind, x."cancellationObs" AS obs FROM "Cancellation" x WHERE x."bookingId" = b."id" ORDER BY x."createdAt" DESC LIMIT 1) cx ON TRUE`,
+    `LEFT JOIN LATERAL (SELECT SUM(y."total") AS total, SUM(y."amountPaid") AS paid, string_agg(DISTINCT NULLIF(y."paymentMethod", ''), ', ') AS pm FROM "BookingPricing" y WHERE y."bookingId" = b."id") bp ON TRUE`,
+    `LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id', e."id", 'name', e."name", 'description', e."description", 'price', e."price", 'done', e."done") ORDER BY e."name", e."id") AS items, SUM(e."price") AS total FROM "BookingExtraService" e WHERE e."bookingId" = b."id") ex ON TRUE`,
+  ].join("\n"),
+  cursorAt: `b."updatedAt"`,
+  cursorId: `b."id"`,
   columns: {
-    id: "b.TODO_id",                                   // → externalId (TEM de ser o mesmo id da API/webhook)
-    booking_number: "b.TODO_bookingNumber",            // → bookingNumber
-    status: "b.TODO_status",                           // → status (BOOKED, CHECKED_IN, CHECKED_OUT, CANCELLED, …)
-    check_in: "b.TODO_checkIn",                        // → checkIn (DATE_MODE)
-    check_out: "b.TODO_checkOut",                      // → checkOut
-    check_in_time: null,                               // → checkInTime "HH:mm" (null = derivado de check_in)
-    check_out_time: null,                              // → checkOutTime
-    created_at: "b.TODO_createdAt",                    // → bookingCreatedAt
-    updated_at: "b.TODO_updatedAt",                    // → sourceUpdatedAt (impede recuos)
-    cancelled_at: "b.TODO_cancelledAt",                // → cancelledAt
-    cancel_reason: "b.TODO_cancelReason",              // → cancelReason
-    park_id: "TODO_park.id",                           // → parkId
-    park_name: "TODO_park.name",                       // → parkName (+ projectId pelo matcher)
-    park_city: "TODO_park.city",                       // → city
-    parking_type: "b.TODO_parkingType",                // → parkingType
-    vehicle_type: "TODO_vehicle.type",                 // → vehicleType
-    client_first_name: "TODO_client.firstName",        // → clientFirstName
-    client_last_name: "TODO_client.lastName",          // → clientLastName
-    client_email: "TODO_client.email",                 // → clientEmail
-    client_phone: "TODO_client.phoneNumber",           // → clientPhone
-    client_nif: "TODO_client.nif",                     // → clientNif
-    license_plate: "TODO_vehicle.licensePlate",        // → licensePlate
-    vehicle_brand: "TODO_vehicle.brand",               // → vehicleBrand
-    vehicle_model: "TODO_vehicle.model",               // → vehicleModel
-    vehicle_color: "TODO_vehicle.color",               // → vehicleColor
-    currency: null,                                    // → currency (null = EUR)
-    total_price: "b.TODO_totalPrice",                  // → totalPrice
-    parking_price: "b.TODO_parkingPrice",              // → parkingPrice
-    delivery_charges: "b.TODO_deliveryCharges",        // → deliveryCharges
-    extras_total: "b.TODO_extraServicesTotal",         // → extrasTotal
-    discount: "b.TODO_discount",                       // → discount
-    remaining_to_pay: "b.TODO_remainingToPay",         // → remainingToPay
-    total_paid: "b.TODO_totalPaid",                    // → totalPaid
-    payment_method: "b.TODO_paymentMethod",            // → paymentMethod (+ alias de parceiro)
-    delivery_service: "b.TODO_deliveryService",        // → deliveryService
-    delivery_type: "b.TODO_deliveryType",              // → deliveryType
-    delivery_address: "b.TODO_deliveryAddress",        // → deliveryAddress
-    pickup_address: "b.TODO_pickupAddress",            // → pickupAddress
-    arrival_flight: "b.TODO_arrivalFlight",            // → arrivalFlight
-    departure_flight: "b.TODO_departureFlight",        // → departureFlight
-    return_flight: "b.TODO_returnFlight",              // → returnFlight
-    departing_flight: "b.TODO_departingFlight",        // → departingFlight
-    remarks: "b.TODO_remarks",                         // → remarks
-    notes: "b.TODO_notes",                             // → notes
-    origin: "b.TODO_origin",                           // → origin
-    origin_url: "b.TODO_originUrl",                    // → originUrl (+ atribuição Google/Meta Ads)
-    partner_id: "b.TODO_partnerId",                    // → partnerId (casa com partner_aliases)
-    partner_name: "TODO_partner.name",                 // → partnerName
-    campaign_id: "b.TODO_campaignId",                  // → campaignId
-    campaign_name: "TODO_campaign.name",               // → campaignName
-    discount_code: "b.TODO_discountCode",              // → campaign (fallback)
-    pro: "b.TODO_pro",                                 // → pro
-    allocation: "b.TODO_allocation",                   // → spotType/parkBrand (classifyAllocation)
-    cash_validated_by_name: "b.TODO_cashValidatedByName",     // → cashValidatedByName
-    driver_validated_by_name: "b.TODO_driverValidatedByName", // → driverValidatedByName
-    cashier_closed_by_name: "b.TODO_cashierClosedByName",     // → cashierClosedByName
-    extra_services: null,                              // → multipark_booking_extras (JSON: json_agg/JSON_ARRAYAGG de {id,name,description,price,done})
+    id: `b."id"`,                                             // → externalId (= id da API/webhook, cuid)
+    booking_number: null,                                     // → bookingNumber (não existe; bookingToRecord usa a allocation)
+    status: `b."status"::text`,                               // → status (BOOKED, CHECKED_IN, CHECKED_OUT, CANCELLED, …)
+    check_in: `b."checkInDate"`,                              // → checkIn (a API manda "checkInDate"; DATE_MODE)
+    check_out: `b."checkOutDate"`,                            // → checkOut
+    check_in_time: `NULLIF(b."checkInTime", '')`,             // → checkInTime
+    check_out_time: `NULLIF(b."checkOutTime", '')`,           // → checkOutTime
+    created_at: `b."createdAt"`,                              // → bookingCreatedAt
+    updated_at: `b."updatedAt"`,                              // → sourceUpdatedAt (impede recuos)
+    cancelled_at: `cx.at`,                                    // → cancelledAt ("Cancellation" mais recente)
+    cancel_reason: `NULLIF(concat_ws(' — ', NULLIF(cx.kind, ''), NULLIF(cx.obs, '')), '')`, // → cancelReason
+    park_id: `p."id"`,                                        // → parkId
+    park_name: `p."name"`,                                    // → parkName (+ projectId pelo matcher)
+    park_city: `p."city"`,                                    // → city
+    parking_type: `(p."types")[1]::text`,                     // → parkingType (como a API: 1.º tipo do parque)
+    vehicle_type: `v."vehicleType"::text`,                    // → vehicleType
+    client_first_name: `c."firstName"`,                       // → clientFirstName
+    client_last_name: `c."lastName"`,                         // → clientLastName
+    client_email: `c."email"`,                                // → clientEmail
+    client_phone: `c."phoneNumber"`,                          // → clientPhone
+    client_nif: `c."nif"`,                                    // → clientNif
+    license_plate: `v."licensePlate"`,                        // → licensePlate
+    vehicle_brand: `v."brand"`,                               // → vehicleBrand
+    vehicle_model: `v."model"`,                               // → vehicleModel
+    vehicle_color: `v."color"`,                               // → vehicleColor
+    currency: `b."currency"`,                                 // → currency
+    total_price: `COALESCE(bp.total, b."bookingPrice")`,      // → totalPrice
+    parking_price: `b."parkingPrice"`,                        // → parkingPrice
+    delivery_charges: `b."deliveryPrice"`,                    // → deliveryCharges
+    extras_total: `ex.total`,                                 // → extrasTotal
+    discount: `b."discountApplied"`,                          // → discount
+    remaining_to_pay: `GREATEST(COALESCE(bp.total, b."bookingPrice") - COALESCE(bp.paid, 0), 0)`, // → remainingToPay
+    total_paid: `bp.paid`,                                    // → totalPaid
+    payment_method: `COALESCE(NULLIF(b."paymentMethod", ''), bp.pm)`, // → paymentMethod (+ alias de parceiro)
+    delivery_service: null,                                   // → deliveryService (a API não o manda; fica 0)
+    delivery_type: `NULLIF(b."deliveryType", '')`,            // → deliveryType
+    delivery_address: `b."deliveryLocation"`,                 // → deliveryAddress
+    pickup_address: null,                                     // → pickupAddress (não existe)
+    arrival_flight: null,                                     // → arrivalFlight (não existe; há returnFlight)
+    departure_flight: null,                                   // → departureFlight (não existe; há departingFlight)
+    return_flight: `b."returnFlight"`,                        // → returnFlight
+    departing_flight: `b."departingFlight"`,                  // → departingFlight
+    remarks: `b."remarks"`,                                   // → remarks
+    notes: null,                                              // → notes (notas internas estão em "EntityNote")
+    origin: `b."origin"::text`,                               // → origin
+    origin_url: `b."originUrl"`,                              // → originUrl (+ atribuição Google/Meta Ads)
+    partner_id: `b."partnerId"`,                              // → partnerId (casa com partner_aliases)
+    partner_name: `pa."name"`,                                // → partnerName (nome real, sem "Unknown User")
+    campaign_id: `b."campaignId"`,                            // → campaignId
+    campaign_name: `ca."name"`,                               // → campaignName
+    discount_code: `ca."discountCode"`,                       // → campaign (fallback)
+    pro: `b."pro"`,                                           // → pro
+    allocation: `b."allocation"`,                             // → bookingNumber + spotType/parkBrand (classifyAllocation)
+    cash_validated_by_name: `b."cashValidatedByName"`,        // → cashValidatedByName
+    driver_validated_by_name: `b."driverValidatedByName"`,    // → driverValidatedByName
+    cashier_closed_by_name: `b."cashierClosedByName"`,        // → cashierClosedByName
+    extra_services: `ex.items`,                               // → multipark_booking_extras ({id,name,description,price,done})
   },
 };
 
-/** Coluna de data de cada ação do report (/bookings/report?actionType=…). */
+/**
+ * Coluna de data de cada ação do report (/bookings/report?actionType=…).
+ * Datas na BD em UTC; com DATE_MODE "lisbon_wallclock" o período é aplicado
+ * na hora de Lisboa (ver bookingsByPeriodSql), como os dias da API.
+ */
 export const BOOKING_PERIOD_COLUMNS: Record<BookingActionType, string> = {
-  creation: "b.TODO_createdAt",
-  checkin: "b.TODO_checkIn",       // TODO: data prevista ou a do movimento CHECK_IN? (igual à API)
-  checkout: "b.TODO_checkOut",
-  cancelation: "b.TODO_cancelledAt",
+  creation: `b."createdAt"`,
+  checkin: `b."checkInDate"`,
+  checkout: `b."checkOutDate"`,
+  cancelation: `cx.at`,
 };
 
-/** Movimentos (check-in, check-out, mudanças de lugar, …) com quem e quando. */
+/**
+ * Movimentos: tabela "History" (check-in, check-out, mudanças de lugar, …)
+ * com quem ("userId" + "agentName") e quando ("actionTime"). Não tem
+ * "updatedAt" (só se acrescenta) → o cursor é o "actionTime".
+ * ⚠️ A "History" (~280 mil linhas) NÃO tem índices além da PK — pedir à
+ * Multipark: CREATE INDEX ON "History" ("actionTime"); e ("bookingId").
+ * O email do agente não está nesta BD (os utilizadores vivem noutro sistema).
+ */
 export const MOVEMENT_QUERY: EntityQuery<MovementAlias> = {
-  from: "TODO_booking_history h", // ex.: "BookingHistory" h LEFT JOIN "User" u ON u."id" = h."userId"
-  cursorAt: "h.TODO_createdAt",
-  cursorId: "h.TODO_id",
+  from: `"History" h`,
+  cursorAt: `h."actionTime"`,
+  cursorId: `h."id"`,
   columns: {
-    id: "h.TODO_id",                       // → multipark_booking_history.historyId (MESMO id da API!)
-    booking_id: "h.TODO_bookingId",        // → bookingExternalId
-    change_type: "h.TODO_changeType",      // → changeType (CHECK_IN, CHECK_OUT, MOVEMENT, …)
-    action_time: "h.TODO_actionTime",      // → actionTime
-    agent_user_id: "h.TODO_userId",        // → agentUserId (liga à ficha via employee_agents)
-    agent_name: null,                      // → agentName (null = nome + apelido)
-    agent_first_name: "TODO_user.firstName",
-    agent_last_name: "TODO_user.lastName",
-    agent_email: "TODO_user.email",        // → agentEmail (anexa agente ↔ ficha por email)
-    remarks: "h.TODO_remarks",             // → remarks
-    modified_fields: "h.TODO_modifiedFields", // → modifiedFields (garagem, lugar, km)
-    platform: "h.TODO_platform",           // → platform
+    id: `h."id"`,                          // → multipark_booking_history.historyId (MESMO id da API — confirmar com a sonda)
+    booking_id: `h."bookingId"`,           // → bookingExternalId
+    change_type: `h."changeType"::text`,   // → changeType (CHECK_IN, CHECK_OUT, MOVEMENT, CHECKING_IN, …)
+    action_time: `h."actionTime"`,         // → actionTime
+    agent_user_id: `h."userId"`,           // → agentUserId (liga à ficha via employee_agents)
+    agent_name: `NULLIF(h."agentName", '')`, // → agentName
+    agent_first_name: null,
+    agent_last_name: null,
+    agent_email: null,                     // → agentEmail (não existe nesta BD)
+    remarks: `h."remarks"`,                // → remarks
+    modified_fields: `h."modifiedFields"`, // → modifiedFields (garagem, lugar, km)
+    platform: `h."platform"`,              // → platform
   },
 };
 
-/** Condutores / utilizadores da app Multipark (agentes). */
+/**
+ * Agentes da app Multipark: tabela "Agent" (uma linha por utilizador × parque;
+ * "userId" = o agentUserId do histórico). Juntamos por utilizador: a linha
+ * ativa mais recente dá nome/função/parque; ativo = ativo em algum parque;
+ * email = o do convite ("AgentInvite") que criou algum dos seus agentes.
+ */
 export const DRIVER_QUERY: EntityQuery<DriverAlias> = {
-  from: "TODO_users u", // ex.: "User" u WHERE role IN (…) — o filtro vai em DRIVER_FILTER
-  cursorAt: "u.TODO_updatedAt",
-  cursorId: "u.TODO_id",
+  from: [
+    `(SELECT DISTINCT ON (a."userId") a."userId" AS uid, a."name" AS name, a."role"::text AS role, a."parkId" AS park_id,`,
+    ` bool_or(a."isActive") OVER (PARTITION BY a."userId") AS any_active,`,
+    ` max(a."updatedAt") OVER (PARTITION BY a."userId") AS updated_at,`,
+    ` (SELECT i."email" FROM "AgentInvite" i JOIN "Agent" a2 ON a2."id" = i."createdAgentId" WHERE a2."userId" = a."userId" ORDER BY i."updatedAt" DESC LIMIT 1) AS email`,
+    ` FROM "Agent" a ORDER BY a."userId", a."isActive" DESC, a."updatedAt" DESC) u`,
+    `LEFT JOIN "Park" p ON p."id" = u.park_id`,
+  ].join("\n"),
+  cursorAt: `u.updated_at`,
+  cursorId: `u.uid`,
   columns: {
-    id: "u.TODO_id",               // → multipark_agents.agentUserId (= agentUserId do histórico)
-    first_name: "u.TODO_firstName",
-    last_name: "u.TODO_lastName",
-    full_name: null,               // null = nome + apelido
-    email: "u.TODO_email",         // → email (liga à ficha do colaborador)
-    role: "u.TODO_role",           // → role
-    active: "u.TODO_active",       // → active
-    park_id: null,                 // → parkId (se existir)
-    city: null,                    // → city (se existir)
-    updated_at: "u.TODO_updatedAt",// → sourceUpdatedAt
+    id: `u.uid`,                  // → multipark_agents.agentUserId (= agentUserId do histórico)
+    first_name: null,
+    last_name: null,
+    full_name: `NULLIF(u.name, '')`,
+    email: `u.email`,             // → email (liga à ficha do colaborador)
+    role: `u.role`,               // → role (ADMIN, SUPERVISOR, DRIVER, JUNIOR, LEADER, …)
+    active: `u.any_active`,       // → active
+    park_id: `u.park_id`,         // → parkId
+    city: `p."city"`,             // → city
+    updated_at: `u.updated_at`,   // → sourceUpdatedAt
   },
 };
-/** Filtro opcional (SQL) para ficar só com condutores/agentes. TODO. */
-export const DRIVER_FILTER: string | null = null;
+/** Só pessoal dos parques (os utilizadores de parceiros ficam de fora). */
+export const DRIVER_FILTER: string | null = `u.role <> 'PARTNER'`;
 
 // ─── Construção do SQL (PURA) ───────────────────────────────────────────────
 
@@ -271,7 +317,12 @@ export function byColumnSql<A extends string>(engine: MultiparkDbEngine, q: Enti
 
 /** Reservas cuja data da ação cai em [from, to] (dias "AAAA-MM-DD", inclusive). PURA. */
 export function bookingsByPeriodSql(engine: MultiparkDbEngine, from: string, to: string, action: BookingActionType): BuiltQuery {
-  const col = BOOKING_PERIOD_COLUMNS[action];
+  const raw = BOOKING_PERIOD_COLUMNS[action];
+  // Os dias da API são de Lisboa; a BD guarda UTC. Em "lisbon_wallclock" o
+  // período compara na hora de Lisboa (sem índice — ~70 mil reservas, leve).
+  const col = DATE_MODE === "lisbon_wallclock" && engine === "postgres"
+    ? `((${raw} AT TIME ZONE 'UTC') AT TIME ZONE 'Europe/Lisbon')`
+    : raw;
   const p = (n: number) => placeholder(engine, n);
   return {
     sql: `SELECT\n  ${selectList(BOOKING_QUERY)},\n  ${cursorText(engine, BOOKING_QUERY.cursorAt)} AS cursor_at\nFROM ${BOOKING_QUERY.from}\nWHERE ${col} >= ${p(1)} AND ${col} < ${p(2)}\nORDER BY ${col}, ${BOOKING_QUERY.cursorId}`,
