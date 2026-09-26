@@ -213,6 +213,27 @@ app.get("/api/cron/multipark-db-schema", async (req, res) => {
   }
 });
 
+// Sonda do mapeamento da BD Multipark (README, passo 3): compara reservas e
+// movimentos recentes que já temos (da API) com a BD deles — datas nos dois
+// modos, ids, preços. SÓ LÊ; dados pessoais só como igual/diferente.
+// ?sample=10 (máx 20) &days=14. Chamado pelo workflow multipark-db-schema.yml (modo "probe").
+app.get("/api/cron/multipark-db-probe", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { isMultiparkDbConfigured, redactSecrets } = await import("../multiparkDb/client");
+  if (!isMultiparkDbConfigured()) {
+    return res.status(503).json({ ok: false, error: "DATABASE_URL_MULTIPARK não está definida neste ambiente." });
+  }
+  try {
+    const { runMultiparkDbProbe } = await import("../multiparkDb/probe");
+    const sample = Number(req.query?.sample) || undefined;
+    const days = Number(req.query?.days) || undefined;
+    res.status(200).json(await runMultiparkDbProbe({ sample, days }));
+  } catch (err) {
+    console.error("[multipark-db-probe] falhou:", redactSecrets(err));
+    res.status(500).json({ ok: false, error: redactSecrets(err).slice(0, 500) });
+  }
+});
+
 // Ligações automáticas funcionário ↔ utilizador ↔ agente Multipark (Fase 1).
 // Conservador e idempotente — ver server/identityLink.ts.
 app.get("/api/cron/identity-sweep", async (req, res) => {

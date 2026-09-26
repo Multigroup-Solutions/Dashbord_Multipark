@@ -1,47 +1,69 @@
 name: BD Multipark — descobrir esquema (manual)
-# Corre a descoberta do esquema da BD da aplicação Multipark DENTRO da Vercel
-# (é lá que está a DATABASE_URL_MULTIPARK, guardada como "sensível") e guarda
-# o resultado como artefacto `multipark-db-schema` (schema.md).
-# SÓ ESTRUTURA: tabelas, colunas, chaves, índices, enums e contagens
-# aproximadas — nunca linhas de reservas, clientes ou condutores.
+# Corre DENTRO da Vercel (é lá que está a DATABASE_URL_MULTIPARK, guardada
+# como "sensível") e guarda o resultado como artefacto.
+#  - modo "schema": descoberta do esquema → artefacto `multipark-db-schema`
+#    (schema.md). SÓ ESTRUTURA: tabelas, colunas, chaves, índices, enums e
+#    contagens aproximadas — nunca linhas.
+#  - modo "probe": sonda do mapeamento → artefacto `multipark-db-probe`
+#    (probe.json): compara reservas/movimentos recentes que já temos (da API)
+#    com a BD deles (datas nos dois modos, ids, preços). Dados pessoais só
+#    como igual/diferente.
 # Ver docs/multipark-db/README.md.
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: "schema = descobrir esquema; probe = sonda do mapeamento"
+        required: false
+        default: "schema"
+        type: choice
+        options: [schema, probe]
       schema:
-        description: "Esquemas a ler, separados por vírgula (vazio = todos os do utilizador)"
+        description: "(schema) Esquemas a ler, separados por vírgula (vazio = todos)"
         required: false
         default: ""
+      sample:
+        description: "(probe) N.º de reservas a comparar (máx 20)"
+        required: false
+        default: "10"
 permissions:
   contents: read
 jobs:
-  schema:
+  run:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: GET /api/cron/multipark-db-schema
+      - name: Chamar o endpoint
         env:
           APP_URL: ${{ secrets.APP_URL || 'https://dashbord-multipark.vercel.app' }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          MODE: ${{ inputs.mode }}
           SCHEMA: ${{ inputs.schema }}
+          SAMPLE: ${{ inputs.sample }}
         run: |
           set -euo pipefail
           test -n "$CRON_SECRET"
           mkdir -p out
-          q=""
-          if [ -n "$SCHEMA" ]; then q="?schema=$(printf '%s' "$SCHEMA" | jq -sRr @uri)"; fi
-          code=$(curl -sS -m 90 -w '%{http_code}' -o out/schema.md \
-            -H "Authorization: Bearer $CRON_SECRET" \
-            "$APP_URL/api/cron/multipark-db-schema$q") \
-            || { echo "::error::curl falhou ao contactar o endpoint"; cat out/schema.md || true; exit 1; }
+          if [ "$MODE" = "probe" ]; then
+            file=out/probe.json
+            url="$APP_URL/api/cron/multipark-db-probe?sample=$(printf '%s' "${SAMPLE:-10}" | tr -cd '0-9')"
+          else
+            file=out/schema.md
+            q=""
+            if [ -n "$SCHEMA" ]; then q="?schema=$(printf '%s' "$SCHEMA" | jq -sRr @uri)"; fi
+            url="$APP_URL/api/cron/multipark-db-schema$q"
+          fi
+          code=$(curl -sS -m 90 -w '%{http_code}' -o "$file" \
+            -H "Authorization: Bearer $CRON_SECRET" "$url") \
+            || { echo "::error::curl falhou ao contactar o endpoint"; cat "$file" || true; exit 1; }
           echo "HTTP $code"
           if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
-            cat out/schema.md; echo
+            cat "$file"; echo
             echo "::error::endpoint devolveu HTTP $code"; exit 1
           fi
-          head -n 40 out/schema.md
+          if [ "$MODE" = "probe" ]; then jq '{verdict, tally, history: (.history | del(.examples)), queries}' "$file"; else head -n 40 "$file"; fi
       - uses: actions/upload-artifact@v4
         with:
-          name: multipark-db-schema
-          path: out/schema.md
+          name: multipark-db-${{ inputs.mode || 'schema' }}
+          path: out/
           retention-days: 14
