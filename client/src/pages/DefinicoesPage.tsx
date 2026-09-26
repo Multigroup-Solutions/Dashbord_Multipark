@@ -398,6 +398,7 @@ function ParametersCard() {
       if (s.group === "notificacoes") continue; // tem separador próprio (Notificações)
       if (s.key === "google.sharedCalendars" || s.key === "google.contacts" || s.key === "google.drive") continue; // cartões próprios (Comunicação)
       if (s.key === "marketing.webAnalytics") continue; // cartão próprio (Integrações → Web & SEO)
+      if (s.key === "knowledge.config") continue; // cartão próprio (Formação → Base de conhecimento)
       if (!m.has(s.group)) m.set(s.group, []);
       m.get(s.group)!.push(s);
     }

@@ -30,6 +30,12 @@ const TOOL_LABELS: Record<string, string> = {
   financeiro_totais: "totais financeiros",
 };
 
+/** Evento para abrir o assistente com uma pergunta (ex.: "Perguntar à IA" na pesquisa global). */
+export const ASSISTANT_ASK_EVENT = "mp:assistant-ask";
+export function openAssistantWith(question: string) {
+  window.dispatchEvent(new CustomEvent(ASSISTANT_ASK_EVENT, { detail: { question } }));
+}
+
 const fmtWhen = (iso: string) => {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? "" : d.toLocaleString("pt-PT", { timeZone: "Europe/Lisbon", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
@@ -45,6 +51,18 @@ export function AssistantWidget() {
   const [input, setInput] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
   const utils = trpc.useUtils();
+  // Pergunta vinda de fora (pesquisa global): envia quando o estado estiver carregado.
+  const [pending, setPending] = useState<string | null>(null);
+  useEffect(() => {
+    const onAsk = (e: Event) => {
+      const q = String((e as CustomEvent<{ question?: string }>).detail?.question ?? "").trim();
+      if (!q) return;
+      setOpen(true);
+      setPending(q);
+    };
+    window.addEventListener(ASSISTANT_ASK_EVENT, onAsk);
+    return () => window.removeEventListener(ASSISTANT_ASK_EVENT, onAsk);
+  }, []);
 
   const status = trpc.assistant.status.useQuery({ path: location }, { enabled: open, staleTime: 60_000 });
   const history = trpc.assistant.messages.useQuery(conversationId ? { conversationId } : undefined, {
@@ -111,6 +129,15 @@ export function AssistantWidget() {
     setInput("");
     ask.mutate({ question: q, conversationId: conversationId ?? undefined, newConversation: fresh || !conversationId ? true : undefined, path: location });
   }
+
+  useEffect(() => {
+    if (!pending || !open || !status.data) return;
+    const q = pending;
+    setPending(null);
+    if (status.data.available && q.length <= maxChars && !ask.isPending) send(q);
+    else setInput(q);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending, open, status.data]);
 
   const shown = messages;
 

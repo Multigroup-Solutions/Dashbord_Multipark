@@ -57,6 +57,7 @@ import {
   Users,
   Trophy,
   GraduationCap,
+  BookOpen,
   Truck,
   Radio,
   Megaphone,
@@ -101,6 +102,7 @@ import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { trpc } from "@/lib/trpc";
 import { MobileTabBar } from "@/components/MobileTabBar";
 import { AssistantWidget } from "@/components/assistant/AssistantWidget";
+import { GlobalSearch, GlobalSearchButton } from "@/components/GlobalSearch";
 import { can, roleRank, type AccessOverrides, type ModuleId } from "@shared/access";
 import { NOTIFICATION_KIND_DEFS, NOTIFY_CITY_LABELS, kindLabel, type NotifyCity } from "@shared/notificationRouting";
 
@@ -163,6 +165,8 @@ export const menuGroups: MenuGroup[] = [
       { icon: UserCheck, label: "Recursos Humanos", path: "/rh", anyOf: ["rh", "ficha"] },
       { icon: UserPlus, label: "Leads de Extras", path: "/extras-leads", module: "leads_extras" },
       { icon: GraduationCap, label: "Formação", path: "/formacao", module: "formacao" },
+      // Base de conhecimento (manuais do Drive/carregados): gestão admin/super_admin.
+      { icon: BookOpen, label: "Base de conhecimento", path: "/formacao/conhecimento", module: "definicoes" },
       // extra/condutor veem a própria avaliação — filtrado no servidor
       { icon: Trophy, label: "Avaliação Individual", path: "/avaliacao", module: "avaliacao" },
       { icon: Trophy, label: "Avaliação Operacional", path: "/avaliacao-operacional", module: "avaliacao_operacional" },
@@ -689,6 +693,8 @@ function DashboardLayoutContent({
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            {/* Pesquisa global (Ctrl/Cmd+K) */}
+            <GlobalSearchButton />
             {/* City filter */}
             <Select
               disabled={filters.cities.length <= 1}
@@ -877,6 +883,8 @@ function DashboardLayoutContent({
         <MobileTabBar />
         {/* Assistente (chat): botão flutuante em todas as páginas */}
         <AssistantWidget />
+        {/* Pesquisa global: paleta Ctrl/Cmd+K */}
+        <GlobalSearch />
       </SidebarInset>
     </>
   );

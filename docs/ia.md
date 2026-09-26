@@ -350,6 +350,7 @@ resultado). Não está no menu geral.
 | `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `GOOGLE_SERVICE_ACCOUNT_JSON` | Vertex AI na UE |
 | `AI_PROVIDER`, `AI_PROVIDER_<FUNC>` | Escolha do fornecedor |
 | `AI_MODEL_LITE`, `AI_MODEL_FAST`, `AI_MODEL_SMART`, `AI_MODEL_STT` | Modelos |
+| `AI_MODEL_EMBED` | Modelo de embeddings da base de conhecimento (omissão `gemini-embedding-001`, 768 dimensões; interruptor `AI_KNOWLEDGE`; sem Gemini/IA a pesquisa usa só palavras-chave) |
 | `AI_TIER_<FUNC>` | Nível por funcionalidade |
 | `AI_THINKING_LEVEL` | Raciocínio dos Gemini 3.x |
 | `AI_MONTHLY_BUDGET_EUR` | Orçamento (a página Definições ganha-lhe) |

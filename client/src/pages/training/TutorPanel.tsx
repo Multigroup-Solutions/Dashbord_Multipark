@@ -18,7 +18,7 @@ type Msg = {
   role: "user" | "assistant";
   content: string;
   outOfContent?: boolean;
-  sources?: Array<{ manualId: number; manualTitle: string; heading: string }>;
+  sources?: Array<{ manualId: number; manualTitle: string; heading: string; kbDocId?: number; href?: string | null }>;
   question?: string;
 };
 
@@ -60,6 +60,10 @@ export function TutorPanel({ context, defaultOpen = true, title }: { context: Tu
       setLocal((m) => m.slice(0, -1));
       toast.error(e.message);
     },
+  });
+  const kbOpen = trpc.knowledge.open.useMutation({ onError: (e) => toast.error(e.message) });
+  const openKb = (id: number) => kbOpen.mutate({ id }, {
+    onSuccess: (r) => { if (r.url) { if (/^https:/.test(r.url)) window.open(r.url, "_blank", "noopener,noreferrer"); else window.location.assign(r.url); } },
   });
   const clear = trpc.training.tutor.clearHistory.useMutation({
     onSuccess: () => { setLocal([]); void utils.training.tutor.history.invalidate({ context }); },
@@ -123,9 +127,17 @@ export function TutorPanel({ context, defaultOpen = true, title }: { context: Tu
                     {m.content}
                     {m.role === "assistant" && (
                       <div className="mt-1 flex flex-wrap items-center gap-1">
-                        {(m.sources ?? []).slice(0, 3).map((s, j) => (
-                          <Badge key={j} variant="outline" className="text-[11px] font-normal whitespace-normal text-left max-w-full"><BookOpen className="w-3 h-3 mr-1 shrink-0" />{s.heading && s.heading !== s.manualTitle ? `${s.manualTitle} · ${s.heading}` : s.manualTitle}</Badge>
-                        ))}
+                        {(m.sources ?? []).slice(0, 4).map((s, j) => {
+                          const label = s.heading && s.heading !== s.manualTitle ? `${s.manualTitle} · ${s.heading}` : s.manualTitle;
+                          // Documento da base de conhecimento: abre (o servidor volta a verificar quem pode ver).
+                          return s.kbDocId ? (
+                            <button key={j} type="button" onClick={() => openKb(s.kbDocId!)} title="Abrir o documento" className="inline-flex max-w-full items-center rounded-md border px-2 py-0.5 text-left text-[11px] text-primary hover:bg-accent">
+                              <BookOpen className="w-3 h-3 mr-1 shrink-0" />{label}
+                            </button>
+                          ) : (
+                            <Badge key={j} variant="outline" className="text-[11px] font-normal whitespace-normal text-left max-w-full"><BookOpen className="w-3 h-3 mr-1 shrink-0" />{label}</Badge>
+                          );
+                        })}
                         <Button size="sm" variant="ghost" className="h-6 px-1.5 text-xs" title="Ouvir" aria-label="Ouvir resposta" onClick={() => speak(m.content)}><Volume2 className="w-3.5 h-3.5" /></Button>
                         {m === lastAssistant && m.question && !m.outOfContent && available && (
                           <Button size="sm" variant="ghost" className="h-6 px-1.5 text-xs" disabled={ask.isPending} onClick={() => send(m.question!, true)}>

@@ -37,11 +37,12 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
   const [ownerUserId, setOwnerUserId] = useState<number | null>(null);
   const [selected, setSelected] = useState<number | null>(() => Number(params.get("t")) || null);
   const [brand, setBrand] = useState("all");
-  const [status, setStatus] = useState<MailThreadStatus | "all">(personal ? "all" : "aberto");
+  // ?q= (pesquisa global → "ver todos"): pesquisa já escrita e todos os estados.
+  const [status, setStatus] = useState<MailThreadStatus | "all">(personal || params.get("q") ? "all" : "aberto");
   const [assigned, setAssigned] = useState<"all" | "me" | "none">("all");
   const [awaiting, setAwaiting] = useState(false);
   const [unread, setUnread] = useState(false);
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(() => (params.get("q") ?? "").slice(0, 120));
   const [page, setPage] = useState(1);
   const [composeNew, setComposeNew] = useState(false);
 

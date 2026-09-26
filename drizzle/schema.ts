@@ -1727,6 +1727,7 @@ export const quizQuestions = mysqlTable("quiz_questions", {
 	points: int().default(10).notNull(),
 	published: tinyint().default(1).notNull(), // 0 = rascunho (ex.: gerado por IA) — 0090
 	sourceManualId: int(), // manual de origem (perguntas geradas por IA) — 0090
+	sourceKbDocId: int(), // documento da base de conhecimento de origem — 0175
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 });
 
@@ -3403,3 +3404,61 @@ export const webPagespeedAudits = mysqlTable("web_pagespeed_audits", {
 (table) => [
 	uniqueIndex("uq_web_pagespeed_audits").on(table.urlHash, table.strategy, table.runDay, table.auditId),
 ]);
+
+// ─── Base de conhecimento (0175) ─────────────────────────────────────────────
+// Documentos (Drive/carregados/ajuda), trechos com vetor opcional e cursores
+// da sincronização. Visibilidade: papéis/cidades em JSON (vazio = todos).
+export const kbDocuments = mysqlTable("kb_documents", {
+	id: int().autoincrement().primaryKey(),
+	source: varchar({ length: 12 }).notNull(), // drive | upload | help
+	driveFileId: varchar({ length: 128 }),
+	folderPath: varchar({ length: 300 }),
+	title: varchar({ length: 300 }).notNull(),
+	mimeType: varchar({ length: 160 }),
+	webViewLink: varchar({ length: 600 }),
+	fileKey: varchar({ length: 512 }),
+	fileUrl: text(),
+	sizeBytes: int(),
+	modifiedTime: varchar({ length: 40 }),
+	md5: varchar({ length: 64 }),
+	checksum: char({ length: 64 }),
+	status: varchar({ length: 12 }).default('pending').notNull(), // pending | processing | synced | error | skipped
+	error: varchar({ length: 500 }),
+	attempts: int().default(0).notNull(),
+	visibilityRoles: varchar({ length: 400 }),
+	visibilityCities: varchar({ length: 200 }),
+	visibilityCustom: tinyint().default(0).notNull(), // 1 = definida à mão (a pasta não a sobrepõe)
+	chunkCount: int().default(0).notNull(),
+	charCount: int().default(0).notNull(),
+	embedded: tinyint().default(0).notNull(),
+	embedModel: varchar({ length: 80 }),
+	textContent: mediumtext(),
+	createdById: int(),
+	syncedAt: datetime({ mode: 'string' }),
+	seenAt: datetime({ mode: 'string' }),
+	deletedAt: datetime({ mode: 'string' }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_kb_documents_drive").on(table.driveFileId),
+	index("idx_kb_documents_status").on(table.status, table.updatedAt),
+]);
+
+export const kbChunks = mysqlTable("kb_chunks", {
+	id: bigint({ mode: "number" }).autoincrement().primaryKey(),
+	docId: int().notNull(),
+	ord: int().notNull(),
+	section: varchar({ length: 300 }),
+	text: text().notNull(),
+	tokens: int().default(0).notNull(),
+	embedding: mediumtext(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [index("idx_kb_chunks_doc").on(table.docId, table.ord)]);
+
+export const kbSyncState = mysqlTable("kb_sync_state", {
+	stateKey: varchar({ length: 64 }).primaryKey(),
+	value: text(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+});

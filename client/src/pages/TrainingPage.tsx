@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { useCallback, useMemo, useState } from "react";
+import { Link } from "wouter";
 import { BarChart3, BookOpen, ClipboardList, Gamepad2, GraduationCap, HelpCircle, ListChecks, Play } from "lucide-react";
 import { can, seesBeyondOwn } from "@shared/access";
 import { FAQsTab, ManualsTab, VideoPlayerDialog, VideosTab, useDoneSet } from "./training/ContentTabs";
@@ -39,7 +40,14 @@ export default function TrainingPage() {
 
   return (
     <div className="space-y-6">
-      <p className="text-muted-foreground">Formação obrigatória, vídeos, manuais, FAQs, quiz e exames de carreira</p>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-muted-foreground">Formação obrigatória, vídeos, manuais, FAQs, quiz e exames de carreira</p>
+        {isAdmin && (
+          <Link href="/formacao/conhecimento" className="inline-flex items-center gap-1 text-sm text-primary hover:underline">
+            <BookOpen className="h-4 w-4" /> Base de conhecimento (Drive e documentos)
+          </Link>
+        )}
+      </div>
       <Tabs value={tab} onValueChange={setTab} className="space-y-4">
         <TabsList className="flex flex-wrap justify-start w-full h-auto gap-1">
           <TabsTrigger value="mine"><ListChecks className="w-4 h-4 mr-1" />A minha formação{pending > 0 && <Badge className="ml-1 h-5 px-1.5 bg-red-500 text-white">{pending}</Badge>}</TabsTrigger>

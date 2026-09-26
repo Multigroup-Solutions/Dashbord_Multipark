@@ -235,7 +235,8 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
 
   // Filtros (lembrados) + página atual (não lembrada: volta sempre à 1ª).
   const [filters, setFilters] = useState<DirFilters>(loadDirFilters);
-  const [searchInput, setSearchInput] = useState(filters.search);
+  // ?q= (pesquisa global) pré-preenche a pesquisa do diretório.
+  const [searchInput, setSearchInput] = useState(() => new URLSearchParams(window.location.search).get("q")?.slice(0, 100) ?? filters.search);
   const [page, setPage] = useState(0);
   const [showFilters, setShowFilters] = useState(false);
   const [showLegend, setShowLegend] = useState(false);

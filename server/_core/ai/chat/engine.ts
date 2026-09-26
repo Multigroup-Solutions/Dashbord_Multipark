@@ -21,6 +21,7 @@ import { trimHistory, DEFAULT_MAX_TURNS } from "./history";
 import { helpContext, pickHelpDocs, type HelpDoc } from "./retrieval";
 import { appendExchange, loadMessages, resolveConversation, type ChatChannel } from "./store";
 import { availableTools, makeToolExecutor, toolDeclarations, type ChatTool } from "./tools";
+import { appendCitations, type KbCitation } from "../../../../shared/knowledge";
 
 export interface ChatLimits extends RateLimitRule {
   maxInputChars: number;
@@ -44,6 +45,12 @@ export interface ChatTurnInput<Ctx> {
   /** Contexto deste turno (data, página, papel…) — fora da cache. */
   context?: string;
   helpDocs?: HelpDoc[];
+  /**
+   * Trechos de uma base de conhecimento para esta pergunta (bloco já pronto e
+   * as citações [K1]…). Já filtrados pela visibilidade de quem pergunta; o
+   * bloco passa pela mesma redação de dados pessoais que a pergunta.
+   */
+  knowledge?: (question: string) => Promise<{ block: string; citations: KbCitation[] } | null>;
   path?: string | null;
   tools?: ChatTool<Ctx>[];
   toolCtx?: Ctx;
@@ -57,7 +64,7 @@ export interface ChatTurnInput<Ctx> {
 export type ChatFailure = "empty" | "too_long" | "disabled" | "not_configured" | "budget" | "rate_limited" | "error";
 
 export type ChatTurnResult =
-  | { ok: true; answer: string; conversationId: number | null; toolsUsed: string[]; helpFiles: string[] }
+  | { ok: true; answer: string; conversationId: number | null; toolsUsed: string[]; helpFiles: string[]; citations?: KbCitation[] }
   | { ok: false; reason: ChatFailure; message: string; retryAfterSec?: number; conversationId?: number | null };
 
 export const CHAT_MESSAGES: Record<Exclude<ChatFailure, "too_long" | "rate_limited" | "error">, string> = {
@@ -98,18 +105,26 @@ export async function runChatTurn<Ctx>(input: ChatTurnInput<Ctx>): Promise<ChatT
   const { turns, summary } = trimHistory(stored, { maxTurns: input.maxTurns ?? DEFAULT_MAX_TURNS });
 
   const help = input.helpDocs?.length ? pickHelpDocs(input.helpDocs, question, { path: input.path }) : [];
+  let kb: { block: string; citations: KbCitation[] } | null = null;
+  if (input.knowledge) {
+    try { kb = await input.knowledge(question); } catch { kb = null; }
+    if (kb && !kb.block.trim()) kb = null;
+  }
 
   // Dados pessoais escritos à mão (emails, telefones, matrículas…) não vão para
   // o fornecedor; a resposta é privada, por isso os marcadores são repostos.
-  const red = redactPii([...turns.map((t) => t.text), question].join(SEP));
+  // O bloco da base de conhecimento vai na mesma redação (marcadores coerentes).
+  const red = redactPii([...turns.map((t) => t.text), ...(kb ? [kb.block] : []), question].join(SEP));
   const redParts = red.text.split(SEP);
   const history = turns.map((t, i) => ({ role: t.role, text: redParts[i] ?? t.text }));
   const safeQuestion = redParts[redParts.length - 1] ?? question;
+  const safeKnowledge = kb ? redParts[turns.length] ?? "" : "";
 
   const blocks: string[] = [];
   if (input.context?.trim()) blocks.push(`<contexto>\n${input.context.trim()}\n</contexto>`);
   if (summary) blocks.push(`<resumo>\n${summary}\n</resumo>`);
   if (help.length) blocks.push(helpContext(help));
+  if (safeKnowledge) blocks.push(safeKnowledge);
   blocks.push(`<pergunta>\n${safeQuestion}\n</pergunta>`);
 
   const tools = input.tools && input.toolCtx !== undefined ? availableTools(input.tools, input.toolCtx) : [];
@@ -143,9 +158,10 @@ export async function runChatTurn<Ctx>(input: ChatTurnInput<Ctx>): Promise<ChatT
           }
         : {}),
     });
-    const answer = red.restore(r.output).trim();
+    const cited = kb ? appendCitations(red.restore(r.output), kb.citations) : null;
+    const answer = (cited ? cited.text : red.restore(r.output)).trim();
     if (conversationId) await appendExchange(conversationId, question, answer, { tools: used }).catch(() => undefined);
-    return { ok: true, answer, conversationId, toolsUsed: [...new Set(used)], helpFiles: help.map((d) => d.file) };
+    return { ok: true, answer, conversationId, toolsUsed: [...new Set(used)], helpFiles: help.map((d) => d.file), ...(cited ? { citations: cited.used } : {}) };
   } catch (err) {
     if (isAiError(err)) {
       if (err.code === "disabled" || err.code === "not_configured" || err.code === "budget") {

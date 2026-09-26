@@ -105,7 +105,8 @@ function LoadMore({ hasMore, loading, onMore }: { hasMore: boolean; loading: boo
 // ─── Pesquisa ───────────────────────────────────────────────────────────────
 
 function SearchTab({ onOpen }: { onOpen: (it: Item) => void }) {
-  const [text, setText] = useState("");
+  // ?q= (pesquisa global → "ver todos") pré-preenche a pesquisa.
+  const [text, setText] = useState(() => (new URLSearchParams(window.location.search).get("q") ?? "").slice(0, 120));
   const [kind, setKind] = useState<ContactKind | "all">("all");
   const q = useDebounced(text.trim());
   const kindsQ = trpc.contacts.kinds.useQuery(undefined, { staleTime: 5 * 60_000 });

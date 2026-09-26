@@ -73,6 +73,8 @@ import { mailRouter, googleAccountRouter } from "./mail/router";
 import { googleCalendarRouter } from "./google/router";
 import { googleDriveRouter } from "./google/driveRouter";
 import { contactsRouter } from "./contactsRouter";
+import { searchRouter } from "./globalSearchRouter";
+import { knowledgeRouter } from "./knowledge/router";
 import { webAnalyticsRouter } from "./webAnalytics/router";
 import { gbpRouter } from "./integrations/googleBusiness/profileRouter";
 import { getBookingHistory, getBookingsReport, getBookingTryAllParks } from "./multipark";
@@ -1526,6 +1528,8 @@ export const appRouter = router({
   googleDrive: googleDriveRouter,
   contacts: contactsRouter,
   assistant: assistantRouter,
+  search: searchRouter,
+  knowledge: knowledgeRouter,
   settings: settingsRouter,
 
   // ── AVALIAÇÃO (motor único: individual + "A minha avaliação") ────────────────

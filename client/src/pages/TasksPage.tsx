@@ -28,7 +28,10 @@ import {
 import {
   TASK_SOURCE_LABELS,
   TASK_STATUS_LABELS,
+  COST_CENTRE_ALL_HINT,
+  COST_CENTRE_ALL_LABEL,
   canEditTasks,
+  costCentreTriggerLabel,
   isTaskOverdue,
   taskSourceLink,
   type TaskSourceModule,
@@ -149,7 +152,8 @@ export default function TasksPage() {
   useEffect(() => { if (user && !canEdit && viewMode !== "mine") setViewMode("mine"); }, [user, canEdit, viewMode]);
 
   const [filterProject, setFilterProject] = useState<string>("all");
-  const [searchTerm, setSearchTerm] = useState("");
+  // ?q= (pesquisa global → "ver todos") pré-preenche a pesquisa.
+  const [searchTerm, setSearchTerm] = useState(() => (new URLSearchParams(window.location.search).get("q") ?? "").slice(0, 120));
   const [showOld, setShowOld] = useState(false);
   const [focusId] = useState<number | null>(() => {
     const n = Number(new URLSearchParams(window.location.search).get("focus"));
@@ -167,7 +171,8 @@ export default function TasksPage() {
   const { data: stats } = trpc.tasks.stats.useQuery({ projectId: listInput.projectId, mine: listInput.mine });
   const { data: projects = [] } = trpc.projects.list.useQuery(undefined, { enabled: canEdit });
 
-  const [showCreate, setShowCreate] = useState(false);
+  // ?new=1 (atalho "Nova tarefa" da pesquisa global) abre logo o formulário.
+  const [showCreate, setShowCreate] = useState(() => canEdit && new URLSearchParams(window.location.search).get("new") === "1");
   const [editTask, setEditTask] = useState<Task | null>(null);
   const [form, setForm] = useState({
     title: "", description: "", projectId: "", assigneeIds: [] as number[], priority: "medium", dueDate: "",
@@ -489,9 +494,20 @@ export default function TasksPage() {
               </div>
               {canEdit && (
                 <Select value={filterProject} onValueChange={setFilterProject}>
-                  <SelectTrigger className="w-56"><SelectValue placeholder="Centro de custos..." /></SelectTrigger>
+                  <SelectTrigger
+                    className="w-full min-w-0 sm:w-56"
+                    aria-label="Centro de custos"
+                    title={filterProject === "all" ? COST_CENTRE_ALL_HINT : (projects as any[]).find((p: any) => String(p.id) === filterProject)?.name}
+                  >
+                    <span className="truncate">{costCentreTriggerLabel(filterProject, projects as any[])}</span>
+                  </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">Todos (grupo / cidade / marca / projeto)</SelectItem>
+                    <SelectItem value="all" title={COST_CENTRE_ALL_HINT}>
+                      <span className="flex flex-col">
+                        <span>{COST_CENTRE_ALL_LABEL}</span>
+                        <span className="text-[11px] text-muted-foreground">grupo, cidade, marca e projeto</span>
+                      </span>
+                    </SelectItem>
                     {sortProjectsHierarchical(projects as any[]).map((p: any) => (
                       <SelectItem key={p.id} value={p.id.toString()}>
                         <span style={{ paddingLeft: `${p.__depth * 12}px` }} className="inline-flex items-center gap-2">

@@ -68,6 +68,22 @@ export function canEditTasks(role: string | null | undefined): boolean {
   return seesBeyondOwn(role, "tarefas") && can(role, "tarefas", "edit");
 }
 
+// ─── Filtro "centro de custos" (/tarefas) ───────────────────────────────────
+// O texto antigo "Todos (grupo / cidade / marca / projeto)" não cabia no
+// seletor (cortado no computador e no telemóvel). O botão mostra o rótulo
+// curto; a explicação completa fica na opção e na dica (title).
+export const COST_CENTRE_ALL_LABEL = "Todos os centros";
+export const COST_CENTRE_ALL_HINT = "Todos os centros de custos (grupo, cidade, marca e projeto)";
+/** Máximo de caracteres que o botão do filtro mostra sem cortar (largura w-56). */
+export const COST_CENTRE_TRIGGER_MAX_CHARS = 24;
+
+/** Texto do botão do filtro para o valor escolhido (nomes longos encurtados com "…"). PURA. */
+export function costCentreTriggerLabel(value: string, projects: ReadonlyArray<{ id: number; name: string }>): string {
+  if (value === "all" || !value) return COST_CENTRE_ALL_LABEL;
+  const name = projects.find((p) => String(p.id) === value)?.name ?? COST_CENTRE_ALL_LABEL;
+  return name.length > COST_CENTRE_TRIGGER_MAX_CHARS ? `${name.slice(0, COST_CENTRE_TRIGGER_MAX_CHARS - 1)}…` : name;
+}
+
 export interface TaskAssignLike { assigneeId: number | null; assigneeIds?: number[] | null }
 
 export function isTaskAssignee(employeeId: number | null | undefined, t: TaskAssignLike): boolean {

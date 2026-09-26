@@ -255,6 +255,36 @@ describe("custo e segurança", () => {
     expect(JSON.stringify(provider.calls[0].parts)).not.toContain("ana@exemplo.pt");
   });
 
+  it("base de conhecimento: trechos no pedido (sem dados pessoais) e 'Fontes:' com as etiquetas usadas", async () => {
+    const provider = createFakeProvider("gemini", [okResponse("A chave fica no cofre [K1]. Liga para [TELEFONE_1].")]);
+    setAiProvidersForTests({ gemini: provider });
+    const r = await runChatTurn({
+      ...base, limits: { ...base.limits, maxInputChars: 500 }, question: "Onde fica a chave?",
+      knowledge: async () => ({
+        block: "<conhecimento>\n[K1] «Manual de receção» — secção «Chaves»:\nA chave fica no cofre. Dúvidas: 912 345 678.\n</conhecimento>",
+        citations: [
+          { tag: "K1", docId: 10, title: "Manual de receção", section: "Chaves", href: "https://docs.google.com/document/d/abc" },
+          { tag: "K2", docId: 11, title: "Outro", section: null, href: null },
+        ],
+      }),
+    });
+    expect(r.ok).toBe(true);
+    const sent = JSON.stringify(provider.calls[0].parts);
+    expect(sent).toContain("<conhecimento>");
+    expect(sent).not.toContain("912 345 678");
+    const answer = (r as any).answer as string;
+    expect(answer).toContain("Liga para 912 345 678.");
+    expect(answer).toContain("Fontes:\n- [K1] [Manual de receção — Chaves](https://docs.google.com/document/d/abc)");
+    expect(answer).not.toContain("Outro");
+    expect((r as any).citations.map((c: any) => c.docId)).toEqual([10]);
+  });
+
+  it("base de conhecimento em baixo não parte o chat", async () => {
+    setAiProvidersForTests({ gemini: createFakeProvider("gemini", [okResponse("ok")]) });
+    const r = await runChatTurn({ ...base, question: "a", knowledge: async () => { throw new Error("x"); } });
+    expect(r).toMatchObject({ ok: true, answer: "ok" });
+  });
+
   it("usa a cache de contexto para o prompt estável (e segue sem ela se falhar)", async () => {
     const create = vi.fn(async () => ({ name: "cachedContents/a", expiresAt: Date.now() + 3_600_000 }));
     const p = createFakeProvider("gemini", [okResponse("ok")]);
@@ -276,7 +306,7 @@ describe("ajuda: escolha do ficheiro", () => {
   it("tem um ficheiro por módulo pedido", () => {
     expect(docs.map((d) => d.file).sort()).toEqual([
       "comunicacao.md", "contactos.md", "definicoes.md", "despesas.md", "disponibilidade.md", "drive.md", "extras-dia.md", "faturacao.md", "formacao.md", "google-business.md", "marketing.md",
-      "ocorrencias.md", "passagem-turno.md", "perdidos.md", "permissoes.md", "reclamacoes.md", "rh-ponto.md", "tarefas.md", "web-analytics.md", "whatsapp.md",
+      "ocorrencias.md", "passagem-turno.md", "perdidos.md", "permissoes.md", "pesquisa-e-conhecimento.md", "reclamacoes.md", "rh-ponto.md", "tarefas.md", "web-analytics.md", "whatsapp.md",
     ]);
   });
 
@@ -298,6 +328,8 @@ describe("ajuda: escolha do ficheiro", () => {
     ["Como dou acesso a um módulo a uma pessoa?", "permissoes.md"],
     ["Como faço o exame de carreira?", "formacao.md"],
     ["Como escalo o team leader no extras dia?", "extras-dia.md"],
+    ["Como uso a pesquisa global com Ctrl K?", "pesquisa-e-conhecimento.md"],
+    ["Como carrego um documento na base de conhecimento?", "pesquisa-e-conhecimento.md"],
   ])("%s → %s", (q, file) => {
     expect(pick(q)[0]).toBe(file);
   });
