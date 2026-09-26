@@ -69,6 +69,20 @@ export function verifyMetaSignature(
   }
 }
 
+/** O payload traz eventos de chamadas (campo `calls`, status de chamada ou resposta de autorização)? PURA. */
+export function hasCallContent(payload: any): boolean {
+  for (const entry of Array.isArray(payload?.entry) ? payload.entry : []) {
+    for (const change of Array.isArray(entry?.changes) ? entry.changes : []) {
+      const v = change?.value;
+      if (!v) continue;
+      if (change?.field === "calls" || Array.isArray(v.calls)) return true;
+      if (Array.isArray(v.statuses) && v.statuses.some((st: any) => st?.type === "call")) return true;
+      if (Array.isArray(v.messages) && v.messages.some((m: any) => m?.interactive?.type === "call_permission_reply")) return true;
+    }
+  }
+  return false;
+}
+
 export function createWhatsappWebhookRouter(): Router {
   const r = Router();
 
@@ -123,7 +137,30 @@ export function createWhatsappWebhookRouter(): Router {
           `[WhatsAppWebhook] processado: ${result.processed} inbound, ${result.deduped} dedup, ${result.statuses} status${result.ignored ? `, ${result.ignored} de outro número` : ""}`,
         );
       }
+      // Chamadas de voz (campo `calls`: connect/terminate/status) e respostas
+      // ao pedido de autorização para ligar. Mesma assinatura, mesmo
+      // process-then-ack (idempotente pelo id da chamada). Só importa o módulo
+      // quando o payload traz algo de chamadas.
+      let missedCalls: number[] = [];
+      if (hasCallContent(payload)) {
+        const { processCallWebhook } = await import("./whatsappCalls");
+        const calls = await processCallWebhook(payload);
+        missedCalls = calls.missed;
+        if (calls.connects || calls.terminates || calls.statuses || calls.permissions) {
+          console.log(
+            `[WhatsAppWebhook] chamadas: ${calls.connects} connect, ${calls.terminates} terminate, ${calls.statuses} status, ${calls.permissions} autorizações${calls.deduped ? `, ${calls.deduped} dedup` : ""}`,
+          );
+        }
+      }
       res.sendStatus(200);
+      // Aviso das chamadas perdidas DEPOIS do 200 (não atrasa a Meta).
+      if (missedCalls.length) {
+        const work = import("./whatsappCalls").then((m) => m.notifyMissedByIds(missedCalls)).catch(() => {});
+        try {
+          const { waitUntil } = await import("@vercel/functions");
+          waitUntil(work);
+        } catch { /* fora do Vercel a promessa continua sozinha */ }
+      }
       // Triagem por IA (intenção/urgência) DEPOIS do 200 — nunca atrasa a Meta
       // nem responde ao cliente. No Vercel o waitUntil mantém a função viva.
       if (result.triage?.length) {

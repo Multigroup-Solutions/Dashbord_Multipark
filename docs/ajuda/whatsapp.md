@@ -20,3 +20,6 @@ Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e client
 - **Marcar como não lida** para retomar mais tarde.
 - Liga a conversa a uma reserva ou cliente no painel lateral.
 - Contactos que pediram STOP ficam marcados "Não quer mensagens".
+
+**Chamadas de voz**
+- Os clientes podem ligar para o WhatsApp da empresa e a chamada toca no dashboard (**Atender** / **Recusar**); na conversa há o botão **Ligar** para devolver chamadas. Ver a ajuda "WhatsApp — Chamadas de voz".

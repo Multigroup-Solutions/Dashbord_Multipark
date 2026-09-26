@@ -78,6 +78,8 @@ const DEFS: Def[] = [
     links: [{ label: "Ligação e perfis (Críticas)", href: "/criticas#google-business" }, { label: "Desempenho, horários e publicações", href: "/marketing/web?sec=google-business" }] },
   { id: "whatsapp", label: "WhatsApp (Cloud API)", description: "Envio de mensagens e templates.", require: [["WHATSAPP_TOKEN"], ["WHATSAPP_PHONE_NUMBER_ID"]], provider: "whatsapp", testable: true, group: "main",
     links: [{ label: "WhatsApp", href: "/whatsapp" }] },
+  { id: "whatsapp_calls", label: "WhatsApp — Chamadas", description: "Chamadas de voz do WhatsApp no dashboard (Business Calling API): receber no browser e devolver chamadas com autorização do cliente. O Testar lê as definições de chamadas do número (ativas, horário, pedido de autorização) e confirma se o campo \"calls\" está subscrito no webhook da app Meta.", require: [["WHATSAPP_TOKEN"], ["WHATSAPP_PHONE_NUMBER_ID"]], testable: true, group: "main",
+    links: [{ label: "Chamadas (WhatsApp)", href: "/whatsapp?chamadas=1" }] },
   { id: "imap", label: "Email de entrada (IMAP)", description: "Leitura da caixa reservas@ (reclamações, perdidos…).", require: [["IMAP_USER"], ["IMAP_PASS"]], cron: "email-inbound", testable: true, group: "main",
     links: [{ label: "Estado do cron", href: "/definicoes" }] },
   { id: "gmail", label: "Gmail (Comunicação)", description: "Caixas de email partilhadas lidas e enviadas pela API do Gmail (conta de serviço com delegação no Workspace).", require: [["GOOGLE_WORKSPACE_SERVICE_ACCOUNT_JSON", "GOOGLE_SERVICE_ACCOUNT_JSON"]], cron: "mail-sync", testable: true, group: "main",
@@ -358,6 +360,11 @@ export async function testIntegration(id: string): Promise<TestResult> {
           await recordWhatsappSuccess();
           break;
         }
+        case "whatsapp_calls": {
+          const { testWhatsappCalling } = await import("./whatsappCallsDiagnostics");
+          message = await testWhatsappCalling(env);
+          break;
+        }
         case "meta_ads": {
           const { readMetaConfig } = await import("./integrations/meta/config");
           const cfg = readMetaConfig(env);
@@ -423,7 +430,7 @@ export async function testIntegration(id: string): Promise<TestResult> {
         default:
           throw new Error("Sem teste.");
       }
-    })(), id === "llm" || id === "pagespeed" ? 50_000 : id === "google_analytics" || id === "search_console" || id === "google_business" ? 30_000 : 20_000);
+    })(), id === "llm" || id === "pagespeed" ? 50_000 : id === "google_analytics" || id === "search_console" || id === "google_business" || id === "whatsapp_calls" ? 30_000 : 20_000);
     return { ok: true, message, ms: Date.now() - started };
   } catch (err: any) {
     const { isAiError, aiErrorCode } = await import("./_core/ai/errors");

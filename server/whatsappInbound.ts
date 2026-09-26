@@ -132,6 +132,12 @@ export function messageBody(m: any): string {
       return String(m?.button?.text ?? "[botão]");
     case "interactive": {
       const i = m?.interactive;
+      // Resposta ao pedido de autorização para ligar (Calling API).
+      if (i?.type === "call_permission_reply") {
+        const r = i?.call_permission_reply;
+        if (String(r?.response ?? "").toLowerCase() !== "accept") return "[Não autorizou chamadas]";
+        return r?.is_permanent ? "[Autorizou chamadas (sem prazo)]" : "[Autorizou chamadas durante 7 dias]";
+      }
       return String(
         i?.button_reply?.title ?? i?.list_reply?.title ?? "[resposta interativa]",
       );
@@ -570,7 +576,7 @@ async function applyOptIntent(db: Db, intent: OptIntent, conversationId: number,
  * dígitos). Corre 1× por conversa (`bookingCheckedAt`); só serve a
  * visibilidade por cidade de números que também não são leads.
  */
-async function matchBookingCity(db: Db, conversationId: number, phoneE164: string): Promise<void> {
+export async function matchBookingCity(db: Db, conversationId: number, phoneE164: string): Promise<void> {
   const last9 = last9Digits(phoneE164);
   try {
     let projectId: number | null = null;
@@ -728,6 +734,12 @@ export async function runWhatsappMaintenance(): Promise<WhatsappMaintenanceResul
       if (await fetchAndStoreMedia(db, r.id, r.waMessageId, { kind, id: r.mediaId, mime: r.mediaMime })) out.mediaStored++;
     }
   }
+
+  // Chamadas de voz sem "terminate" da Meta (webhook perdido) → fechadas.
+  try {
+    const { sweepStaleCallsThrottled } = await import("./whatsappCalls");
+    await sweepStaleCallsThrottled(true);
+  } catch { /* nunca parte a manutenção */ }
 
   const del = await db
     .delete(whatsappPendingStatuses)

@@ -2319,6 +2319,61 @@ export const whatsappBroadcasts = mysqlTable("whatsapp_broadcasts", {
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 });
 
+// ─── Chamadas de voz do WhatsApp (migração 0185) ───────────────────────────
+// Uma chamada da WhatsApp Business Calling API (id `wacid.…` da Meta único →
+// dedup dos retries do webhook). `sdpOffer`/`sdpAnswer` são de vida curta:
+// limpos ao atender/terminar (server/whatsappCalls.ts).
+export const whatsappCalls = mysqlTable("whatsapp_calls", {
+	id: int().autoincrement().primaryKey(),
+	callId: varchar({ length: 160 }).notNull(),
+	conversationId: int(),
+	phoneE164: varchar({ length: 20 }).notNull(),
+	direction: mysqlEnum(['in', 'out']).notNull(),
+	/** ringing/answering/dialing/connected/ended/missed/rejected/failed (shared/whatsappCalls.ts). */
+	status: varchar({ length: 16 }).default('ringing').notNull(),
+	sdpOffer: mediumtext(),
+	sdpAnswer: mediumtext(),
+	/** Cidade da conversa (ficha → lead → reserva), no momento da chamada. */
+	projectId: int(),
+	startedAt: datetime({ mode: 'string' }).notNull(),
+	answeredAt: datetime({ mode: 'string' }),
+	endedAt: datetime({ mode: 'string' }),
+	durationSec: int(),
+	answeredByUserId: int(),
+	startedByUserId: int(),
+	/** Chamada recebida que ninguém atendeu. */
+	missed: tinyint().default(0).notNull(),
+	missedNotifiedAt: datetime({ mode: 'string' }),
+	/** "Por devolver" resolvido (chamada devolvida ou marcada à mão). */
+	callbackDoneAt: datetime({ mode: 'string' }),
+	callbackByUserId: int(),
+	metaStatus: varchar({ length: 32 }),
+	endReason: varchar({ length: 200 }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_whatsapp_calls_call_id").on(table.callId),
+	index("idx_whatsapp_calls_status").on(table.status, table.startedAt),
+	index("idx_whatsapp_calls_conversation").on(table.conversationId, table.startedAt),
+	index("idx_whatsapp_calls_callback").on(table.direction, table.callbackDoneAt, table.startedAt),
+]);
+
+// Autorização do cliente para a empresa lhe ligar (call_permission_request).
+export const whatsappCallPermissions = mysqlTable("whatsapp_call_permissions", {
+	phoneE164: varchar({ length: 20 }).notNull().primaryKey(),
+	/** none/requested/temporary/permanent/rejected */
+	status: varchar({ length: 16 }).default('none').notNull(),
+	expiresAt: datetime({ mode: 'string' }),
+	isPermanent: tinyint().default(0).notNull(),
+	lastRequestAt: datetime({ mode: 'string' }),
+	/** JSON: datas dos pedidos dos últimos 7 dias (limites da Meta). */
+	requestTimes: varchar({ length: 400 }),
+	respondedAt: datetime({ mode: 'string' }),
+	requestedByUserId: int(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+});
+
 // ─── Leads de extras (2026-09-17) ───────────────────────────────────────────
 // Contactos que AINDA não são extras mas estão a ser recrutados. Vivem fora de
 // `employees` de propósito: uma ficha só nasce quando a pessoa aceita (aí o
@@ -2447,6 +2502,7 @@ export type WhatsappMessage = typeof whatsappMessages.$inferSelect;
 export type InsertWhatsappMessage = typeof whatsappMessages.$inferInsert;
 export type WhatsappBroadcast = typeof whatsappBroadcasts.$inferSelect;
 export type InsertWhatsappBroadcast = typeof whatsappBroadcasts.$inferInsert;
+export type WhatsappCall = typeof whatsappCalls.$inferSelect;
 export type AvailabilityFormToken = typeof availabilityFormTokens.$inferSelect;
 export type InsertAvailabilityFormToken = typeof availabilityFormTokens.$inferInsert;
 export type ShiftHandover = typeof shiftHandovers.$inferSelect;

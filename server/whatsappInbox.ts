@@ -180,7 +180,7 @@ export async function conversationVisible(conversationId: number): Promise<boole
 }
 
 /** Nome do lead mais recente com o número da conversa (subquery escalar). */
-const leadNameSql = sql<string | null>`(SELECT ln.fullName FROM extra_leads ln WHERE ln.phoneE164 = ${whatsappConversations.phoneE164} COLLATE utf8mb4_unicode_ci ORDER BY ln.id DESC LIMIT 1)`;
+export const leadNameSql = sql<string | null>`(SELECT ln.fullName FROM extra_leads ln WHERE ln.phoneE164 = ${whatsappConversations.phoneE164} COLLATE utf8mb4_unicode_ci ORDER BY ln.id DESC LIMIT 1)`;
 
 /**
  * Conversas antigas sem resumo (escritas antes da 0094 e não apanhadas pelo

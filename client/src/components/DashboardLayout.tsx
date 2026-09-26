@@ -103,6 +103,7 @@ import { trpc } from "@/lib/trpc";
 import { MobileTabBar } from "@/components/MobileTabBar";
 import { AssistantWidget } from "@/components/assistant/AssistantWidget";
 import { GlobalSearch, GlobalSearchButton } from "@/components/GlobalSearch";
+import { WhatsAppCallManager } from "@/components/whatsapp/WhatsAppCallManager";
 import { can, roleRank, type AccessOverrides, type ModuleId } from "@shared/access";
 import { NOTIFICATION_KIND_DEFS, NOTIFY_CITY_LABELS, kindLabel, type NotifyCity } from "@shared/notificationRouting";
 
@@ -885,6 +886,8 @@ function DashboardLayoutContent({
         <AssistantWidget />
         {/* Pesquisa global: paleta Ctrl/Cmd+K */}
         <GlobalSearch />
+        {/* Chamadas de voz do WhatsApp: toque + chamada em curso em qualquer página */}
+        <WhatsAppCallManager enabled={!!user && can(user as any, "whatsapp", "edit")} userId={user?.id ?? null} />
       </SidebarInset>
     </>
   );

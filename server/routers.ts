@@ -77,6 +77,7 @@ import { searchRouter } from "./globalSearchRouter";
 import { knowledgeRouter } from "./knowledge/router";
 import { webAnalyticsRouter } from "./webAnalytics/router";
 import { gbpRouter } from "./integrations/googleBusiness/profileRouter";
+import { whatsappCallsRouter } from "./whatsappCallsRouter";
 import { getBookingHistory, getBookingsReport, getBookingTryAllParks } from "./multipark";
 import { deliveryErrorCode } from "./bookingDeliveryQueue";
 import {
@@ -8153,6 +8154,9 @@ export const appRouter = router({
         });
         return summary;
       }),
+
+    // ── CHAMADAS DE VOZ (WhatsApp Business Calling API) ────────────────────
+    calls: whatsappCallsRouter,
 
     // ── INBOX ──────────────────────────────────────────────────────────────
     conversations: router({

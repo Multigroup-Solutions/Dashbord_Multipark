@@ -306,12 +306,13 @@ describe("ajuda: escolha do ficheiro", () => {
   it("tem um ficheiro por módulo pedido", () => {
     expect(docs.map((d) => d.file).sort()).toEqual([
       "comunicacao.md", "contactos.md", "definicoes.md", "despesas.md", "disponibilidade.md", "drive.md", "extras-dia.md", "faturacao.md", "formacao.md", "google-business.md", "marketing.md",
-      "ocorrencias.md", "passagem-turno.md", "perdidos.md", "permissoes.md", "pesquisa-e-conhecimento.md", "reclamacoes.md", "rh-ponto.md", "tarefas.md", "web-analytics.md", "whatsapp.md",
+      "ocorrencias.md", "passagem-turno.md", "perdidos.md", "permissoes.md", "pesquisa-e-conhecimento.md", "reclamacoes.md", "rh-ponto.md", "tarefas.md", "web-analytics.md", "whatsapp-chamadas.md", "whatsapp.md",
     ]);
   });
 
   it.each([
     ["Como pico o ponto?", "rh-ponto.md"],
+    ["Como atendo uma chamada de um cliente no WhatsApp?", "whatsapp-chamadas.md"],
     ["Como ponho os clientes do serviço no meu telemóvel para saber quem liga?", "contactos.md"],
     ["Como exporto a faturação para o Google Sheets?", "drive.md"],
     ["Como adiciono a conta de serviço ao Google Analytics e à Search Console?", "web-analytics.md"],
