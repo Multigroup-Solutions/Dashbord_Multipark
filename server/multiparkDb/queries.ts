@@ -36,9 +36,9 @@ import { placeholder } from "./client";
 
 /** Passa a true por entidade depois de preenchida e testada. */
 export const MULTIPARK_DB_MAPPED = {
-  bookings: false,
-  movements: false,
-  drivers: false,
+  bookings: true,   // confirmado pela sonda a 26 set 2026 (19/19 reservas, 114/114 no período)
+  movements: true,  // 204/204 movimentos com o mesmo id, tipo e hora
+  drivers: true,    // 176 agentes; o email pode faltar (só existe nos convites)
 } as const;
 
 export type MappedEntity = keyof typeof MULTIPARK_DB_MAPPED;
@@ -48,7 +48,9 @@ export type MappedEntity = keyof typeof MULTIPARK_DB_MAPPED;
  *  - "utc": o instante real em UTC (se a API também já estiver em UTC);
  *  - "lisbon_wallclock": hora de Lisboa escrita como se fosse UTC — que é o
  *    que o parseBookingDate faz hoje com o "DD/MM/YYYY, HH:mm" da API.
- * TODO(mapeamento): confirmar comparando reservas (README, passo 4).
+ * CONFIRMADO "utc" pela sonda (26 set 2026): criação 19/19 e movimentos
+ * 204/204 batem em UTC (em hora de Lisboa: 1/19 e 2/204) — o report da API
+ * já dá as horas em UTC, como diz o parseBookingDate.
  */
 export const DATE_MODE: "utc" | "lisbon_wallclock" = "utc";
 
@@ -134,8 +136,8 @@ export const BOOKING_QUERY: EntityQuery<BookingAlias> = {
     id: `b."id"`,                                             // → externalId (= id da API/webhook, cuid)
     booking_number: null,                                     // → bookingNumber (não existe; bookingToRecord usa a allocation)
     status: `b."status"::text`,                               // → status (BOOKED, CHECKED_IN, CHECKED_OUT, CANCELLED, …)
-    check_in: `b."checkInDate"`,                              // → checkIn (a API manda "checkInDate"; DATE_MODE)
-    check_out: `b."checkOutDate"`,                            // → checkOut
+    check_in: `b."checkIn"`,                                  // → checkIn: a coluna "checkIn" (hora real) é a que a API manda como "checkInDate"; a "checkInDate" da BD fica muitas vezes só com o dia (00:00)
+    check_out: `b."checkOut"`,                                // → checkOut (idem)
     check_in_time: `NULLIF(b."checkInTime", '')`,             // → checkInTime
     check_out_time: `NULLIF(b."checkOutTime", '')`,           // → checkOutTime
     created_at: `b."createdAt"`,                              // → bookingCreatedAt
@@ -198,8 +200,8 @@ export const BOOKING_QUERY: EntityQuery<BookingAlias> = {
  */
 export const BOOKING_PERIOD_COLUMNS: Record<BookingActionType, string> = {
   creation: `b."createdAt"`,
-  checkin: `b."checkInDate"`,
-  checkout: `b."checkOutDate"`,
+  checkin: `b."checkIn"`,
+  checkout: `b."checkOut"`,
   cancelation: `cx.at`,
 };
 
@@ -242,7 +244,7 @@ export const DRIVER_QUERY: EntityQuery<DriverAlias> = {
     `(SELECT DISTINCT ON (a."userId") a."userId" AS uid, a."name" AS name, a."role"::text AS role, a."parkId" AS park_id,`,
     ` bool_or(a."isActive") OVER (PARTITION BY a."userId") AS any_active,`,
     ` max(a."updatedAt") OVER (PARTITION BY a."userId") AS updated_at,`,
-    ` (SELECT i."email" FROM "AgentInvite" i JOIN "Agent" a2 ON a2."id" = i."createdAgentId" WHERE a2."userId" = a."userId" ORDER BY i."updatedAt" DESC LIMIT 1) AS email`,
+    ` (SELECT i."email" FROM "AgentInvite" i LEFT JOIN "Agent" a2 ON a2."id" = i."createdAgentId" WHERE (a2."userId" = a."userId" OR i."acceptedBy" = a."userId") AND i."email" <> '' ORDER BY i."updatedAt" DESC LIMIT 1) AS email`,
     ` FROM "Agent" a ORDER BY a."userId", a."isActive" DESC, a."updatedAt" DESC) u`,
     `LEFT JOIN "Park" p ON p."id" = u.park_id`,
   ].join("\n"),

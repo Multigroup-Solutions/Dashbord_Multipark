@@ -214,5 +214,9 @@ export async function runMultiparkDbProbe(opts: ProbeOptions = {}) {
     bookingIdsSame: (tally.found?.diff ?? 0) === 0 && (tally.found?.same ?? 0) > 0,
     historyIdsSame: history.ours > 0 && history.oursMissingInDb === 0,
   };
-  return { ok: true, ranAt: new Date().toISOString(), sample: ours.length, verdict, tally, history, queries, bookings };
+  // Interruptor: o que está pedido (Definições/env) e a fonte efetiva agora.
+  const src = await import("./source");
+  const requested = await src.requestedMultiparkSource();
+  const source = { requested, effective: src.effectiveMultiparkSource(requested, src.dbSourceReadiness(process.env)) };
+  return { ok: true, ranAt: new Date().toISOString(), sample: ours.length, source, verdict, tally, history, queries, bookings };
 }

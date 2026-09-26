@@ -61,7 +61,7 @@ jobs:
             cat "$file"; echo
             echo "::error::endpoint devolveu HTTP $code"; exit 1
           fi
-          if [ "$MODE" = "probe" ]; then jq '{verdict, tally, history: (.history | del(.examples)), queries}' "$file"; else head -n 40 "$file"; fi
+          if [ "$MODE" = "probe" ]; then jq '{source, verdict, tally, history: (.history | del(.examples)), queries}' "$file"; else head -n 40 "$file"; fi
       - uses: actions/upload-artifact@v4
         with:
           name: multipark-db-${{ inputs.mode || 'schema' }}
