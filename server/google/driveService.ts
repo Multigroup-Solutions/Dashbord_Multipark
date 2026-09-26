@@ -118,10 +118,19 @@ export async function sharedDriveContext(deadlineAt: number, o: { live?: boolean
   let driveId = await getState(key);
   if (!driveId) {
     driveId = await apis.drive.findSharedDrive(name);
-    if (!driveId) throw precondition(`Shared Drive "${name}" não encontrado para ${cfg.ownerEmail} (cria-o e junta essa conta como gestor).`);
+    if (!driveId) {
+      const err = precondition(`Shared Drive "${name}" não encontrado para ${cfg.ownerEmail} (cria-o e junta essa conta como gestor).`);
+      (err as any).sharedDriveMissing = true;
+      throw err;
+    }
     await setState(key, driveId).catch(() => {});
   }
   return { apis, driveId, ownerEmail: cfg.ownerEmail, scopeKey: sharedScopeKey(driveId), cfg };
+}
+
+/** O erro é "o Shared Drive configurado não existe" (aviso nos crons, não falha)? */
+export function isSharedDriveMissing(err: unknown): boolean {
+  return !!(err as any)?.sharedDriveMissing;
 }
 
 /** Pasta do registo no Shared Drive (criada a pedido). */

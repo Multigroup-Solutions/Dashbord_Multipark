@@ -5,8 +5,8 @@ name: IA — comunicação com clientes
 # Interruptores em Definições → Automações (AI_COMPLAINT_TRIAGE,
 # AI_REVIEW_AUTO_DRAFTS, AI_WHATSAPP_TRIAGE, AI_LOST_FOUND_MATCH).
 on:
-  schedule:
-    - cron: '11,26,41,56 * * * *'
+  # Sem schedule: quem agenda é o /api/cron/tick (cron-job.org) — ver
+  # docs/ajuda/agendador.md. Aqui fica só a corrida manual.
   workflow_dispatch: {}
 permissions:
   contents: read

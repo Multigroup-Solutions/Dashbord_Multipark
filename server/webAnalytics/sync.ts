@@ -1,6 +1,7 @@
 /**
- * Web & SEO — recolha diária (cron /api/cron/web-analytics, de hora a hora;
- * prazo 50 s, retomável):
+ * Web & SEO — recolha diária (trabalho web-analytics do agendador
+ * /api/cron/tick: 1×/dia a partir das 09h ou da hora das Definições, a
+ * retomar enquanto done:false; prazo por corrida, retomável):
  *
  *  - GA4 (runReport) por propriedade: totais por dia, canal, página de entrada
  *    (top 50/dia), dispositivo, país, cidade e eventos do funil;

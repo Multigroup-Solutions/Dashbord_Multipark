@@ -1,6 +1,7 @@
 /**
- * Base de conhecimento — sincronização (cron /api/cron/knowledge-sync, de hora
- * a hora, 45 s por corrida) e processamento de um documento.
+ * Base de conhecimento — sincronização (SEM agenda desde 26 set 2026: botão
+ * "Sincronizar agora" ou /api/cron/knowledge-sync à mão, 45 s por corrida;
+ * cada carregamento é processado logo) e processamento de um documento.
  *
  *  1. Ajuda da app (docs/ajuda, no bundle) → documentos "help" (só muda com
  *     um deploy; checksum igual = nada a fazer).
@@ -82,7 +83,7 @@ interface DiscoveryCursor {
 
 const CURSOR_KEY = "drive:cursor";
 const LAST_PASS_KEY = "drive:lastPass";
-/** Uma volta completa, no máximo, de hora a hora (o cron é horário). */
+/** Uma volta completa às pastas do Drive, no máximo, a cada 50 min. */
 const PASS_EVERY_MS = 50 * 60_000;
 const MAX_DEPTH = 4;
 

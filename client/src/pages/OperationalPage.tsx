@@ -419,7 +419,7 @@ function DriverHistoryTab({ speedTarget, onSpeedTarget }: { speedTarget: SpeedTa
   const collectMut = trpc.operational.driverHistory.collectDay.useMutation();
   const run = async (mode: "collect" | "resplit") => {
     const msg = mode === "collect"
-      ? `Recolher do Zello os dados de ${selectedDate}? (continua de onde parou; só faltam os que ainda não foram recolhidos)`
+      ? `Recolher do Zello os dados de ${selectedDate}? (hoje = provisório; ontem o Zello não dá — só daqui a 2 dias; dias anteriores = final, substitui o provisório. Continua de onde parou.)`
       : `Voltar a partir o GPS de ${selectedDate} por quem tinha cada PDA? Usa os check-ins de PDA atuais (depois de os corrigir). Os km/velocidades não mudam.`;
     if (!confirm(msg)) return;
     setRunning(mode);

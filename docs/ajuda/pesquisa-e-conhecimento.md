@@ -27,7 +27,7 @@ Regras:
 Manuais e procedimentos da empresa que o **tutor da formação**, o **assistente** e a **pesquisa global** usam para responder. As respostas indicam as **Fontes** (título do documento e ligação); carregar na fonte abre o documento.
 
 **Onde estão os documentos**
-- Pastas do Shared Drive "Multipark" (por omissão **Formação** e **Procedimentos**), sincronizadas de hora a hora: Google Docs, PDF, DOCX e ficheiros de texto. Um ficheiro alterado no Drive é lido outra vez; um ficheiro apagado sai do índice.
+- Pastas do Shared Drive "Multipark" (por omissão **Formação** e **Procedimentos**), sincronizadas quando carregas em **Sincronizar agora** (não há sincronização automática): Google Docs, PDF, DOCX e ficheiros de texto. Um ficheiro alterado no Drive é lido outra vez; um ficheiro apagado sai do índice.
 - Ficheiros carregados na app (PDF, DOCX, TXT ou MD até 4 MB).
 - A ajuda da própria app (atualiza-se sozinha).
 
@@ -35,7 +35,7 @@ Manuais e procedimentos da empresa que o **tutor da formação**, o **assistente
 1. **Definições**: liga **Sincronizar pastas do Drive**, indica as pastas (caminho a partir da raiz do Shared Drive, ex.: `Procedimentos/Porto`) e quem vê cada pasta (papéis e cidades; nada marcado = todos). Liga ou desliga o índice por IA e se o assistente/tutor usam a base.
 2. **Carregar documento**: escolhe o ficheiro, o título e quem o vê.
 3. Em cada documento: **pré-visualizar** o texto lido, **visibilidade**, **voltar a sincronizar**, **perguntas de quiz** (rascunhos) e **excluir** (Drive: sai do índice, o ficheiro fica no Drive) ou **apagar** (carregados).
-4. **Sincronizar agora** corre a sincronização sem esperar pela hora certa.
+4. **Sincronizar agora** lê as pastas do Drive e processa o que falta (é a única forma de trazer ficheiros novos ou alterados do Drive; os carregados na app são processados logo).
 
 **Estados**: Sincronizado · Por processar · A processar · Erro (vê a mensagem; tenta de novo sozinho até 3 vezes) · Ignorado (excluído por um administrador).
 

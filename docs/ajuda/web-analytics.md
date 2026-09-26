@@ -51,7 +51,7 @@ Em **Definições → Integrações → Web & SEO** aparece o email da conta de 
 3. Escolhe a **hora da atualização diária** (Lisboa; 09:00 por omissão), o histórico da 1.ª recolha (90 dias por omissão), os **eventos do funil** (ex.: `begin_checkout`, `purchase`) e os limiares dos alertas.
 4. Liga **Recolha diária** e carrega em **Guardar**.
 5. Carrega em **Testar acesso**: diz, para cada propriedade, se a conta de serviço a consegue ler. As que falham mostram o email a adicionar.
-6. **Recolher agora** começa já (o histórico de 90 dias leva algumas corridas; o cron de hora a hora continua sozinho).
+6. **Recolher agora** começa já (o histórico de 90 dias leva algumas corridas; o agendador continua sozinho 1×/dia, a partir das 09h ou da hora escolhida, se for mais tarde).
 
 Também há **Testar** para "Google Analytics 4", "Search Console", "PageSpeed Insights" e "Chrome UX Report" no hub de **Integrações**.
 

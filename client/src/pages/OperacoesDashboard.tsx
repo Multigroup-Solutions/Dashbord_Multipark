@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useIsMobile } from "@/hooks/useMobile";
 import { trpc } from "@/lib/trpc";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
+import { addDays, lisbonDayOf } from "@shared/lisbonDay";
 import { useDashboardFilters, DashboardFilterBar } from "@/components/DashboardFilterBar";
 import { StatValue } from "@/components/StatValue";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -141,11 +142,9 @@ export default function OperacoesDashboard() {
 
   // GPS de ontem (Zello): km, velocidades e condutores — substitui os antigos
   // KPIs mortos (viaturas/violações manuais, tabelas sempre vazias)
-  const yesterdayStr = useMemo(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 1);
-    return d.toISOString().slice(0, 10);
-  }, []);
+  // Ontem no calendário de Lisboa (antes era UTC). Os dados de ontem são os da
+  // recolha provisória (23:15–23:55); a final (D-2) substitui-os 2 dias depois.
+  const yesterdayStr = useMemo(() => addDays(lisbonDayOf(Date.now()), -1), []);
   const { data: gpsYesterday = [], isLoading: gpsLoading } =
     trpc.operational.driverHistory.byDate.useQuery({ date: yesterdayStr });
 
@@ -360,7 +359,7 @@ export default function OperacoesDashboard() {
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               </div>
             ) : gpsAgg.perDriver.length === 0 ? (
-              <p className="text-muted-foreground text-center py-12">Sem dados GPS de ontem.</p>
+              <p className="text-muted-foreground text-center py-12">Sem dados GPS de ontem (a recolha provisória corre às 23:15; a final 2 dias depois).</p>
             ) : (
               <div className="space-y-1.5">
                 {gpsAgg.perDriver.map((d, i) => {

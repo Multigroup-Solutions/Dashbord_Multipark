@@ -1,9 +1,12 @@
 /**
  * Daily Driver Data Collection Job
- * 
- * Runs at 2:00 AM Lisbon time (Europe/Lisbon) every day.
- * Collects the PREVIOUS day's data from Zello GPS history.
- * 
+ *
+ * Corre no trabalho diário `daily-ops` do agendador (/api/cron/tick, a partir
+ * das 04:30 de Lisboa). Recolhe o histórico GPS do Zello de D-2 (Lisboa): o
+ * Zello só disponibiliza um dia depois da meia-noite do dia a seguir ao
+ * seguinte. Recupera também os dias dos últimos 7 (até D-2) que ficaram
+ * incompletos (incompleteCollectionDays), o mais antigo primeiro.
+ *
  * For each Zello user, it:
  * 1. Fetches location history for the target day
  * 2. Calculates km driven, hours worked, idle time, speeds
@@ -19,12 +22,11 @@ import { getZelloUsers, getZelloUserHistory, getZelloLocations } from "../zello"
 import {
   createDailyDriverHistory,
   createGpsAlert,
-  getDailyDriverHistoryByDate,
   getDefaultSpeedLimit,
 } from "../db";
 import { storagePut } from "../storage";
 import { MAX_PLAUSIBLE_KMH, MIN_IMPLICIT_GAP_S, STOPPED_SPEED_KMH, gpsPointsFromGeoJson, splitByHolder, zelloAccuracyOk, zelloBattery, zelloSpeedKmh, zelloTimestamp } from "../zelloGps";
-import { lisbonDayOf, lisbonDayRangeUtc } from "../../shared/lisbonDay";
+import { addDays, lisbonDayOf, lisbonDayRangeUtc, zelloLatestDay } from "../../shared/lisbonDay";
 
 /** Calculate distance between two GPS points using Haversine formula */
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -214,12 +216,13 @@ function processGeoJsonHistory(data: any): {
   };
 }
 
-// Exportado para o backfill (recalcular dias antigos a partir dos GeoJSON no storage)
 export { processGeoJsonHistory };
 
 /**
  * Versão das métricas GPS. 2 = velocidades em km/h (sem o ×3,6), filtro de
- * precisão e funcionário resolvido. Linhas antigas (1) são recalculadas.
+ * precisão e funcionário resolvido. Linhas antigas (1) ficam na BD mas já não
+ * são recalculadas (decisão do Jorge, 26 set 2026 — limpeza opcional à mão:
+ * scripts/sql/gps-antigo-apagar.sql).
  */
 // 3 = + GPS partido por quem tinha o PDA (Fase 3)
 // 4 = partes com minutos em movimento (0086) e dias de Lisboa nos intervalos do PDA
@@ -234,88 +237,6 @@ export function countSpeedViolations(data: any, threshold: number): number {
     if (v > threshold && v <= MAX_PLAUSIBLE_KMH) n++;
   }
   return n;
-}
-
-/**
- * Recalcula o histórico GPS antigo a partir dos GeoJSON guardados:
- * velocidades corrigidas, km, excessos, funcionário e partes por PDA.
- * Retomável — para no `deadlineAt` e devolve quantas linhas faltam.
- *
- * Janela: as versões < DRIVER_METRICS_VERSION dos últimos `days` dias E TODAS
- * as linhas v1 (velocidades ×3,6), seja qual for a idade — senão as antigas
- * ficavam com 180 km/h para sempre. Idempotente: a divisão por 3,6 só se faz
- * a linhas v1 e a própria linha sobe logo de versão; com GeoJSON recalcula-se
- * tudo do zero (nunca sobre o valor já guardado).
- */
-export async function recomputeDriverHistory(opts: { deadlineAt: number; days?: number; batch?: number }): Promise<{ updated: number; remaining: number }> {
-  const { getDb, resolveZelloHoldersForDay, pdaIntervalsForDay, saveDriverShares } = await import("../db");
-  const { sql } = await import("drizzle-orm");
-  const db = await getDb();
-  if (!db) return { updated: 0, remaining: 0 };
-  const days = opts.days ?? 60;
-  const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r) as any[]) ?? [];
-  const speedLimit = await getDefaultSpeedLimit();
-  const threshold = speedLimit ? speedLimit.maxSpeed * (1 + speedLimit.tolerancePercent / 100) : 999;
-  const holdersCache = new Map<string, Map<string, number>>();
-  const intervalsCache = new Map<string, Awaited<ReturnType<typeof pdaIntervalsForDay>>>();
-  let updated = 0;
-  for (;;) {
-    if (Date.now() > opts.deadlineAt) break;
-    const rows = rowsOf(await db.execute(sql`
-      SELECT id, zelloUsername, employeeId, DATE_FORMAT(date, '%Y-%m-%d') AS day, geoJsonUrl, metricsVersion FROM daily_driver_history
-       WHERE metricsVersion < ${DRIVER_METRICS_VERSION} AND (metricsVersion < 2 OR date >= NOW() - INTERVAL ${days} DAY)
-       ORDER BY date DESC LIMIT ${opts.batch ?? 25}`));
-    if (!rows.length) break;
-    for (const r of rows) {
-      if (Date.now() > opts.deadlineAt) break;
-      const day = String(r.day);
-      let holders = holdersCache.get(day);
-      if (!holders) { holders = await resolveZelloHoldersForDay(day); holdersCache.set(day, holders); }
-      const employeeId = r.employeeId ?? holders.get(String(r.zelloUsername)) ?? null;
-      let m: ReturnType<typeof processGeoJsonHistory> | null = null;
-      let violations: number | null = null;
-      if (r.geoJsonUrl) {
-        try {
-          const resp = await fetch(String(r.geoJsonUrl));
-          if (resp.ok) {
-            const data = await resp.json();
-            m = processGeoJsonHistory(data);
-            violations = countSpeedViolations(data, threshold);
-            let dayIntervals = intervalsCache.get(day);
-            if (!dayIntervals) { dayIntervals = await pdaIntervalsForDay(day); intervalsCache.set(day, dayIntervals); }
-            const zi = dayIntervals.get(String(r.zelloUsername));
-            if (zi?.length) await saveDriverShares(Number(r.id), String(r.zelloUsername), day, splitByHolder(gpsPointsFromGeoJson(data), zi, threshold));
-          }
-        } catch (err) {
-          console.warn("[recompute] GeoJSON indisponível", r.id, String(err).slice(0, 120));
-        }
-      }
-      if (m) {
-        await db.execute(sql`UPDATE daily_driver_history SET
-            totalKm = ${String(m.totalKm)}, hoursWorked = ${String(m.hoursWorked)}, hoursStopped = ${String(m.hoursStopped)},
-            totalHoursOnline = ${String(m.totalHoursOnline)}, avgSpeed = ${String(m.avgSpeed)}, maxSpeed = ${String(m.maxSpeed)},
-            speedViolations = ${violations ?? 0}, avgBattery = ${m.avgBattery}, minBattery = ${m.minBattery},
-            employeeId = ${employeeId}, metricsVersion = ${DRIVER_METRICS_VERSION}
-          WHERE id = ${r.id}`);
-      } else if (Number(r.metricsVersion ?? 1) < 2) {
-        // Sem GeoJSON: não dá para recalcular a velocidade — as antigas (v1)
-        // vinham ×3,6, por isso corrige-se a escala UMA vez (o que passava de
-        // 150 já se perdeu).
-        await db.execute(sql`UPDATE daily_driver_history SET
-            avgSpeed = ROUND(avgSpeed / 3.6, 2), maxSpeed = ROUND(maxSpeed / 3.6, 2),
-            employeeId = ${employeeId}, metricsVersion = ${DRIVER_METRICS_VERSION}
-          WHERE id = ${r.id}`);
-      } else {
-        // v2 sem GeoJSON: velocidades já corrigidas; só sobe a versão
-        await db.execute(sql`UPDATE daily_driver_history SET employeeId = ${employeeId}, metricsVersion = ${DRIVER_METRICS_VERSION} WHERE id = ${r.id}`);
-      }
-      updated++;
-    }
-  }
-  const [cnt] = rowsOf(await db.execute(sql`
-    SELECT COUNT(*) AS n FROM daily_driver_history
-     WHERE metricsVersion < ${DRIVER_METRICS_VERSION} AND (metricsVersion < 2 OR date >= NOW() - INTERVAL ${days} DAY)`));
-  return { updated, remaining: Number(cnt?.n ?? 0) };
 }
 
 /**
@@ -364,15 +285,51 @@ export async function resplitDriverDay(day: string, opts: { deadlineAt: number; 
 }
 
 /**
- * Run the daily collection for a specific date.
- *
- * RETOMÁVEL: processa só os condutores ainda SEM registo nesse dia e para no
- * `deadlineAt` (Vercel guilhotina aos 60s → antes disto, uma corrida parcial
- * deixava registos a meio e a seguinte via "already exists" e nunca acabava).
- * Devolve `done:false` quando ficou trabalho por fazer — o chamador (workflow)
- * volta a chamar até `done:true`.
+ * Passagens da recolha GPS: o Zello dá o dia de HOJE durante o próprio dia,
+ * deixa de o dar à meia-noite e só o volta a dar ~2 dias depois (D-2).
+ *  - 'sameday': provisória, 23:15–23:55 de Lisboa (trabalho zello-sameday);
+ *  - 'final': D-2 às 04:30 (daily-ops) — completa (turnos depois da
+ *    meia-noite incluídos) e SUBSTITUI a provisória na mesma linha.
  */
-export async function collectDailyDriverData(targetDate: Date, opts?: { deadlineAt?: number }): Promise<{
+export type CollectionPass = "sameday" | "final";
+
+export interface ExistingDriverRow { id: number; pass: string; collectedAtMs: number | null; empty?: boolean }
+
+/**
+ * Condutores a (re)recolher numa passagem. PURA.
+ *  - final: sem linha, ou com linha provisória (a final substitui-a);
+ *  - sameday: sem linha, ou provisória recolhida ANTES desta passagem
+ *    (`passStartedAt`) — as feitas nesta passagem ficam (retoma entre ticks);
+ *    uma linha final nunca é tocada — exceto, com `retryEmpty` (recolha
+ *    manual), as finais VAZIAS (0 pontos GPS: o antigo bug do D-1).
+ */
+export function usersToCollect(users: readonly string[], existing: ReadonlyMap<string, ExistingDriverRow>, pass: CollectionPass, passStartedAt: number, o: { retryEmpty?: boolean } = {}): string[] {
+  return users.filter((u) => {
+    const row = existing.get(u);
+    if (!row) return true;
+    if (row.pass === "final") return pass === "final" && Boolean(o.retryEmpty && row.empty);
+    if (pass === "final") return true;
+    return row.collectedAtMs == null || row.collectedAtMs < passStartedAt;
+  });
+}
+
+/** Que passagem serve para um dia (Lisboa): hoje → provisória; até D-2 → final; ontem → nenhuma. PURA. */
+export function passForDay(day: string, nowMs: number): CollectionPass | null {
+  if (day === lisbonDayOf(nowMs)) return "sameday";
+  return day <= zelloLatestDay(nowMs) ? "final" : null;
+}
+
+/**
+ * Recolhe o GPS de um dia (Lisboa; `targetDate` = meio-dia UTC desse dia).
+ *
+ * RETOMÁVEL: processa só os condutores em falta nesta passagem
+ * (usersToCollect) e para no `deadlineAt` (o Vercel corta aos 60 s).
+ * Devolve `done:false` quando ficou trabalho por fazer — o chamador volta a
+ * chamar até `done:true`. Uma linha existente é ATUALIZADA (nunca duplica);
+ * o alerta "GPS desligado" é criado uma só vez por condutor e dia; o resumo
+ * "Relatório Diário de Motoristas" só sai na passagem final.
+ */
+export async function collectDailyDriverData(targetDate: Date, opts?: { deadlineAt?: number; pass?: CollectionPass; passStartedAt?: number; retryEmpty?: boolean }): Promise<{
   success: boolean;
   driversProcessed: number;
   errors: string[];
@@ -383,28 +340,33 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
   const deadlineAt = opts?.deadlineAt ?? Number.POSITIVE_INFINITY;
 
   try {
-    // Dia de LISBOA a que os dados pertencem (o cron corre às 03:30 UTC ≈
-    // 04:30 de Lisboa no verão; `targetDate` é "há 24 h" ou meio-dia UTC).
     const dateStr = lisbonDayOf(targetDate);
-    const existing = await getDailyDriverHistoryByDate(dateStr);
-    const alreadyDone = new Set(existing.map((r: any) => r.zelloUsername));
+    // Ontem (D-1) o Zello já não dá e ainda não voltou a dar: recolher dava
+    // linhas VAZIAS (0 km) — nunca. Hoje → provisória; até D-2 → final.
+    const pass = opts?.pass ?? passForDay(dateStr, Date.now());
+    if (!pass || passForDay(dateStr, Date.now()) !== pass) {
+      return { success: false, driversProcessed: 0, errors: [`O Zello não disponibiliza agora o histórico de ${dateStr} (só o dia de hoje até à meia-noite, e os dias até ${zelloLatestDay(Date.now())}).`], done: true };
+    }
+    // Uma passagem provisória "começa" 15 min antes (chamadas repetidas do
+    // botão ou do agendador não voltam a buscar quem já foi feito).
+    const passStartedAt = opts?.passStartedAt ?? Date.now() - 15 * 60_000;
+    const existing = await existingRowsForDay(dateStr);
 
     // Get all Zello users
     const users = await getZelloUsers();
-    let nonAdminUsers = users.filter(u => !u.admin);
-    if (nonAdminUsers.length > 0 && alreadyDone.size > 0) {
-      nonAdminUsers = nonAdminUsers.filter(u => !alreadyDone.has(u.name));
-      if (nonAdminUsers.length === 0) {
-        console.log(`[DailyCollection] ${dateStr} já completo (${alreadyDone.size} registos).`);
-        return { success: true, driversProcessed: alreadyDone.size, errors: [], done: true };
-      }
-      console.log(`[DailyCollection] ${dateStr}: a retomar — faltam ${nonAdminUsers.length} de ${users.filter(u => !u.admin).length}.`);
+    const allNonAdmin = users.filter(u => !u.admin);
+    const todo = new Set(usersToCollect(allNonAdmin.map((u) => u.name), existing, pass, passStartedAt, { retryEmpty: opts?.retryEmpty }));
+    const nonAdminUsers = allNonAdmin.filter((u) => todo.has(u.name));
+    if (allNonAdmin.length > 0 && nonAdminUsers.length === 0) {
+      console.log(`[DailyCollection] ${dateStr} (${pass}) já completo (${existing.size} registos).`);
+      return { success: true, driversProcessed: 0, errors: [], done: true };
     }
+    if (existing.size > 0) console.log(`[DailyCollection] ${dateStr} (${pass}): faltam ${nonAdminUsers.length} de ${allNonAdmin.length}.`);
 
     // Janela do dia de Lisboa (meia-noite a meia-noite, com a mudança de hora)
     const win = lisbonDayRangeUtc(dateStr);
     const startTs = Math.floor(win.startMs / 1000);
-    const endTs = Math.floor(win.endMs / 1000) - 1;
+    const endTs = Math.min(Math.floor(win.endMs / 1000), Math.floor(Date.now() / 1000)) - 1;
 
     // Quem tinha cada Zello nesse dia (PDA partilhado → quem o teve mais tempo)
     const { resolveZelloHoldersForDay, pdaIntervalsForDay, saveDriverShares } = await import("../db");
@@ -418,7 +380,7 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
       ? speedLimit.maxSpeed * (1 + speedLimit.tolerancePercent / 100)
       : 999;
 
-    console.log(`[DailyCollection] Processing ${nonAdminUsers.length} users for ${dateStr}`);
+    console.log(`[DailyCollection] Processing ${nonAdminUsers.length} users for ${dateStr} (${pass})`);
 
     let stoppedAtDeadline = false;
     for (const user of nonAdminUsers) {
@@ -427,18 +389,9 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
         // Fetch history from Zello
         const historyData = await getZelloUserHistory(user.name, startTs, endTs);
         const metrics = processGeoJsonHistory(historyData);
+        const violations = countSpeedViolations(historyData, threshold);
 
-        // Count speed violations from the data
-        let violations = 0;
-        if (historyData?.features) {
-          for (const feature of historyData.features) {
-            if (!zelloAccuracyOk(feature.properties)) continue;
-            const speedKmh = zelloSpeedKmh(feature.properties); // já em km/h
-            if (speedKmh > threshold && speedKmh <= MAX_PLAUSIBLE_KMH) violations++;
-          }
-        }
-
-        // Store GeoJSON in S3 if we have data
+        // Store GeoJSON in S3 if we have data (a final substitui a provisória)
         let geoJsonUrl: string | null = null;
         if (metrics.gpsPointsCount > 0 && metrics.geojson) {
           try {
@@ -455,8 +408,7 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
           }
         }
 
-        // Create the daily record
-        const historyId = await createDailyDriverHistory({
+        const row = {
           zelloUsername: user.name,
           displayName: user.fullName || user.name,
           // Antes ficava sempre vazio → km/horas soltos na Atividade do Dia
@@ -474,19 +426,26 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
           minBattery: metrics.minBattery,
           gpsPointsCount: metrics.gpsPointsCount,
           geoJsonUrl,
-        });
+          collectionPass: pass,
+          collectedAt: new Date().toISOString().slice(0, 19).replace("T", " "),
+        };
+        // Linha já existente (provisória) → atualiza a MESMA linha; senão cria.
+        const prev = existing.get(user.name);
+        const historyId = prev ? (await updateDriverHistoryRow(prev.id, row), prev.id) : await createDailyDriverHistory(row);
 
         const zIntervals = intervals.get(user.name);
-        if (historyId && zIntervals?.length && historyData?.features) {
+        if (historyId) {
           try {
-            await saveDriverShares(Number(historyId), user.name, dateStr, splitByHolder(gpsPointsFromGeoJson(historyData), zIntervals, threshold));
+            // Substitui as partes (DELETE + INSERT por historyId): sem PDA partilhado, nenhuma.
+            if (zIntervals?.length && historyData?.features) await saveDriverShares(Number(historyId), user.name, dateStr, splitByHolder(gpsPointsFromGeoJson(historyData), zIntervals, threshold));
+            else if (prev) await saveDriverShares(Number(historyId), user.name, dateStr, []);
           } catch (err) { console.warn(`[DailyCollection] partes do GPS ${user.name}:`, err); }
         }
 
         driversProcessed++;
 
-        // Check for GPS disabled
-        if (user.geotrackingOff) {
+        // GPS desligado: um alerta por condutor e dia (as duas passagens não o repetem)
+        if (user.geotrackingOff && !(await hasGpsAlert(user.name, "gps_off", win.start))) {
           await createGpsAlert({
             zelloUsername: user.name,
             displayName: user.fullName || user.name,
@@ -503,15 +462,15 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
     }
 
     const done = !stoppedAtDeadline;
-    console.log(`[DailyCollection] ${done ? "Completed" : "Partial (deadline)"}: ${driversProcessed}/${nonAdminUsers.length} users processed for ${dateStr}`);
+    console.log(`[DailyCollection] ${done ? "Completed" : "Partial (deadline)"}: ${driversProcessed}/${nonAdminUsers.length} users processed for ${dateStr} (${pass})`);
 
-    // Send summary notification (só quando termina, para não duplicar em corridas parciais)
-    if (done && driversProcessed > 0) {
+    // Resumo só na passagem final e quando termina (não duplica em corridas parciais)
+    if (pass === "final" && done && driversProcessed > 0) {
       const { notify } = await import("../notify");
       await notify({
         kind: "driver_daily_report",
         title: "Relatório Diário de Motoristas",
-        body: `Recolha automática para ${dateStr}: ${driversProcessed + alreadyDone.size} motoristas processados${errors.length > 0 ? `, ${errors.length} erros` : ""}`,
+        body: `Recolha automática para ${dateStr}: ${allNonAdmin.length - nonAdminUsers.length + driversProcessed} motoristas processados${errors.length > 0 ? `, ${errors.length} erros` : ""}`,
         link: "/operacional", entity: { type: "driver_daily_report", id: dateStr },
       });
     }
@@ -524,51 +483,77 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
   }
 }
 
+/** Linhas já gravadas de um dia (por nome Zello), com a passagem e a hora da recolha. */
+async function existingRowsForDay(day: string): Promise<Map<string, ExistingDriverRow>> {
+  const { getDb } = await import("../db");
+  const { sql } = await import("drizzle-orm");
+  const db = await getDb();
+  const out = new Map<string, ExistingDriverRow>();
+  if (!db) return out;
+  const res = await db.execute(sql`
+    SELECT id, zelloUsername, collectionPass, gpsPointsCount, DATE_FORMAT(collectedAt, '%Y-%m-%d %H:%i:%s') AS collectedAt
+      FROM daily_driver_history WHERE DATE(date) = ${day} ORDER BY id`);
+  const rows = ((Array.isArray(res) ? res[0] : res) as unknown as any[]) ?? [];
+  for (const r of rows) {
+    const at = r.collectedAt ? Date.parse(`${String(r.collectedAt).replace(" ", "T")}Z`) : NaN;
+    // Duplicados antigos (se os houver): fica a 1.ª linha.
+    if (!out.has(String(r.zelloUsername))) out.set(String(r.zelloUsername), { id: Number(r.id), pass: String(r.collectionPass ?? "final"), collectedAtMs: Number.isFinite(at) ? at : null, empty: !(Number(r.gpsPointsCount) > 0) });
+  }
+  return out;
+}
+
+async function updateDriverHistoryRow(id: number, row: Record<string, unknown>): Promise<void> {
+  const { getDb } = await import("../db");
+  const { eq } = await import("drizzle-orm");
+  const { dailyDriverHistory } = await import("../../drizzle/schema");
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  await db.update(dailyDriverHistory).set(row as any).where(eq(dailyDriverHistory.id, id));
+}
+
+/** Já há um alerta deste tipo para o condutor nesse instante (início do dia)? */
+async function hasGpsAlert(zello: string, type: string, occurredAt: string): Promise<boolean> {
+  const { getDb } = await import("../db");
+  const { sql } = await import("drizzle-orm");
+  const db = await getDb();
+  if (!db) return false;
+  const res = await db.execute(sql`SELECT id FROM gps_alerts WHERE zelloUsername = ${zello} AND alertType = ${type} AND occurredAt = ${occurredAt} LIMIT 1`);
+  const rows = ((Array.isArray(res) ? res[0] : res) as unknown as any[]) ?? [];
+  return rows.length > 0;
+}
+
 /**
- * Timer in-process: recolha diária às 02:00 de Lisboa (dia anterior). SÓ
- * arranca com INPROCESS_SCHEDULERS=on — o agendador oficial é o GitHub Actions
- * (/api/cron/daily-ops, 03:30 UTC).
+ * Dias a recolher agora, o mais antigo primeiro: dos últimos `lookbackDays`
+ * até `latestDay` (D-2), os que têm menos registos do que condutores Zello
+ * (`expected`). Um dia sem nenhum registo conta sempre como em falta. PURA.
  */
-export function startDailyCollectionScheduler() {
-  // Calculate ms until next 2:00 AM Lisbon time
-  function msUntilNext2AM(): number {
-    const now = new Date();
-    // Get current time in Lisbon
-    const lisbonNow = new Date(now.toLocaleString("en-US", { timeZone: "Europe/Lisbon" }));
-    const target = new Date(lisbonNow);
-    target.setHours(2, 0, 0, 0);
-    if (target <= lisbonNow) {
-      target.setDate(target.getDate() + 1);
-    }
-    // Convert back to UTC difference
-    const diff = target.getTime() - lisbonNow.getTime();
-    return diff;
+export function pickIncompleteDays(latestDay: string, counts: ReadonlyMap<string, number>, expected: number, lookbackDays = 7): string[] {
+  const out: string[] = [];
+  for (let i = lookbackDays - 1; i >= 0; i--) {
+    const day = addDays(latestDay, -i);
+    const n = counts.get(day) ?? 0;
+    if (n === 0 || n < expected) out.push(day);
   }
+  return out;
+}
 
-  function scheduleNext() {
-    const delay = msUntilNext2AM();
-    const nextRun = new Date(Date.now() + delay);
-    console.log(`[DailyCollection] Next run scheduled for ${nextRun.toISOString()} (in ${Math.round(delay / 60000)} minutes)`);
-
-    setTimeout(async () => {
-      try {
-        // Collect yesterday's data
-        const yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1);
-        yesterday.setHours(0, 0, 0, 0);
-
-        console.log(`[DailyCollection] Starting collection for ${yesterday.toISOString().split("T")[0]}`);
-        const result = await collectDailyDriverData(yesterday);
-        console.log(`[DailyCollection] Result:`, result);
-      } catch (error) {
-        console.error("[DailyCollection] Scheduler error:", error);
-      }
-
-      // Schedule the next run
-      scheduleNext();
-    }, delay);
-  }
-
-  scheduleNext();
-  console.log("[DailyCollection] Scheduler started — runs daily at 2:00 AM Lisbon time");
+/**
+ * Dias incompletos dos últimos 7 (até D-2): conta os registos FINAIS por dia
+ * (os provisórios não contam) e compara com os condutores Zello atuais (não admin). A recolha é por
+ * condutor sem registo, por isso voltar a um dia só busca os que faltam.
+ */
+export async function incompleteCollectionDays(latestDay: string, lookbackDays = 7): Promise<string[]> {
+  const { getDb } = await import("../db");
+  const { sql } = await import("drizzle-orm");
+  const db = await getDb();
+  if (!db) return [latestDay];
+  const first = addDays(latestDay, -(lookbackDays - 1));
+  const res = await db.execute(sql`
+    SELECT DATE_FORMAT(date, '%Y-%m-%d') AS d, COUNT(*) AS n FROM daily_driver_history
+     WHERE collectionPass = 'final' AND date >= ${`${first} 00:00:00`} AND date < ${`${addDays(latestDay, 1)} 00:00:00`}
+     GROUP BY DATE_FORMAT(date, '%Y-%m-%d')`);
+  const rows = ((Array.isArray(res) ? res[0] : res) as unknown as any[]) ?? [];
+  const counts = new Map<string, number>(rows.map((r: any) => [String(r.d), Number(r.n)]));
+  const expected = (await getZelloUsers()).filter((u) => !u.admin).length;
+  return pickIncompleteDays(latestDay, counts, expected, lookbackDays);
 }

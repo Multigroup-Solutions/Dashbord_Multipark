@@ -1,6 +1,6 @@
 /**
- * Google Tarefas & Calendário — corrida (cron /api/cron/google-sync de 10 em
- * 10 min, prazo 45 s, resumível) e o que a app usa:
+ * Google Tarefas & Calendário — corrida (trabalho google-sync do agendador
+ * /api/cron/tick, de 15 em 15 min, com prazo, resumível) e o que a app usa:
  *
  *  - por pessoa com a conta Google ligada: Tarefas (se ligou "Tarefas" no
  *    Perfil e autorizou o âmbito) e Calendário "Multipark" (turnos, escala da
@@ -381,6 +381,7 @@ export async function runGoogleSync(opts: { deadlineAt: number; onlyUserIds?: re
           report.drive = { done: dj.done, mirrored: dj.mirrored, mirrorFailed: dj.mirrorFailed, live: dj.live };
           if (!dj.done) report.done = false;
           sharedErrors.push(...dj.errors);
+          report.warnings.push(...dj.warnings);
         }
       }
     }
@@ -399,7 +400,7 @@ export async function runGoogleSync(opts: { deadlineAt: number; onlyUserIds?: re
  * Marca como "sujas" as pessoas afetadas por uma alteração (responsáveis e
  * quem tinha a tarefa ligada) e tenta sincronizá-las já (≤ 20 s, sem
  * atrasar a resposta; no Vercel o waitUntil mantém a função viva). Nunca
- * lança — o cron de 10 min apanha o que falhar.
+ * lança — o agendador (15 em 15 min) apanha o que falhar.
  */
 export function scheduleGoogleTaskSync(input: { taskIds?: readonly number[]; employeeIds?: readonly number[] }): void {
   const work = (async () => {

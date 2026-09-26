@@ -1,7 +1,7 @@
 name: Base de conhecimento — sincronizar (Drive)
 on:
-  schedule:
-    - cron: "17 * * * *"
+  # Sem schedule (decisão do Jorge, 26 set 2026): a base de conhecimento só
+  # sincroniza à mão — botão "Sincronizar agora" na app ou este workflow.
   workflow_dispatch:
 permissions:
   contents: read

@@ -100,7 +100,7 @@ describe("definições (marketing.webAnalytics)", () => {
     expect(SETTINGS["marketing.webAnalytics"].group).toBe("marketing");
     expect(validateSetting("marketing.webAnalytics", { enabled: true }).ok).toBe(true);
     expect(validateSetting("marketing.webAnalytics", { refreshHour: 30 }).ok).toBe(false);
-    expect(CRON_JOBS.find((j) => j.name === "web-analytics")).toMatchObject({ intervalMinutes: 60, workflow: "web-analytics.yml" });
+    expect(CRON_JOBS.find((j) => j.name === "web-analytics")).toMatchObject({ intervalMinutes: 1440, workflow: "tick" });
     expect(AUTOMATION_FLAGS.some((f) => f.name === "AI_WEB_INSIGHT" && f.group === "ia")).toBe(true);
     expect(AI_FEATURES.web_insight).toMatchObject({ flag: "AI_WEB_INSIGHT", tier: "lite" });
     expect(kindDef("web_analytics_alert")).toMatchObject({ module: "marketing", group: "marketing", personal: false });

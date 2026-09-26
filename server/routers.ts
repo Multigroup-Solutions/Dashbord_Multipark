@@ -4280,7 +4280,8 @@ export const appRouter = router({
           return { success: true, done: r.done, driversProcessed: r.processed, errors: r.errors, nextAfterId: r.nextAfterId, mode: "resplit" as const };
         }
         // Meio-dia UTC → o dia de Lisboa é sempre `input.date`
-        const result = await collectDailyDriverData(new Date(`${input.date}T12:00:00Z`), { deadlineAt });
+        // Manual: volta também a buscar as linhas finais VAZIAS (antigo bug do D-1).
+        const result = await collectDailyDriverData(new Date(`${input.date}T12:00:00Z`), { deadlineAt, retryEmpty: true });
         await logActivity({ userId: ctx.user.id, action: "create", entity: "daily_driver_history", entityId: 0, details: `Recolha manual para ${input.date}: ${result.driversProcessed} motoristas${result.done ? "" : " (parcial)"}` });
         return { ...result, nextAfterId: null as number | null, mode: "collect" as const };
       }),

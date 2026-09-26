@@ -9,8 +9,8 @@
  *   - vazio ou valor desconhecido → o valor por omissão (`defaultEnabled`).
  *
  * As automações existentes são "ligadas por omissão" (só se desligam
- * explicitamente). Interruptores "desligados por omissão" (ex.:
- * INPROCESS_SCHEDULERS) passam `{ defaultEnabled: false }`.
+ * explicitamente). Interruptores "desligados por omissão" passam
+ * `{ defaultEnabled: false }`.
  */
 
 const OFF_VALUES = new Set(["off", "false", "0", "no", "nao", "não", "disabled"]);
@@ -98,15 +98,3 @@ export function setCachedFeatureOverride(name: string, value: boolean | null): v
   overrideCache = next;
 }
 
-/**
- * Agendadores in-process (setInterval/setTimeout no servidor Node de longa
- * duração). DESLIGADOS por omissão em TODO o lado: o agendador oficial é o
- * GitHub Actions (.github/workflows/*.yml → /api/cron/*). Só ligar com
- * `INPROCESS_SCHEDULERS=on` num servidor persistente (ex.: Railway) que NÃO
- * esteja a ser servido também pelos crons — senão os jobs correm a dobrar.
- * No Vercel nunca liga (não há processo persistente).
- */
-export function inprocessSchedulersEnabled(env: EnvLike = process.env): boolean {
-  if (env.VERCEL) return false;
-  return isFeatureEnabled("INPROCESS_SCHEDULERS", { defaultEnabled: false, env });
-}

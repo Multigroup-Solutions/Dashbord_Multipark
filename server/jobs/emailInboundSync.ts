@@ -839,29 +839,3 @@ function now(): string {
   return new Date().toISOString().slice(0, 19).replace("T", " ");
 }
 
-/**
- * Scheduler in-process (servidor Node persistente — `server/_core/index.ts`),
- * a cada 15 minutos. SÓ arranca com INPROCESS_SCHEDULERS=on (desligado por
- * omissão): o agendador oficial é o GitHub Actions, que chama
- * /api/cron/email-inbound DE HORA A HORA (.github/workflows/multipark-cron.yml),
- * mais o botão "Sincronizar emails". Self-skip quando o IMAP não está
- * configurado.
- */
-export function startEmailInboundScheduler() {
-  const INTERVAL_MS = 15 * 60 * 1000;
-  const run = async () => {
-    try {
-      const r = await runEmailInboundSync();
-      if (r.errors.length && r.errors[0].includes("IMAP não configurado")) {
-        console.log("[EmailInbound] Skipped — IMAP não configurado");
-        return;
-      }
-      console.log(`[EmailInbound] scanned=${r.scanned} created=${r.created} skipped=${r.skipped} errors=${r.errors.length}`);
-    } catch (err: any) {
-      console.error("[EmailInbound] erro:", err?.message ?? err);
-    }
-  };
-  setTimeout(run, 30_000); // arranque suave, depois de o servidor estabilizar
-  setInterval(run, INTERVAL_MS);
-  console.log("[EmailInbound] Scheduler started — runs every 15 minutes");
-}

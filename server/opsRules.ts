@@ -104,7 +104,6 @@ export function buildHealthBody(opts: { initFailed: boolean; detailed: boolean; 
       AVAILABILITY_FORM_TOKEN_SECRET: has("AVAILABILITY_FORM_TOKEN_SECRET"),
       AVAILABILITY_FORM_URL: has("AVAILABILITY_FORM_URL"),
       MULTIPARK_WEBHOOK_SECRET: has("MULTIPARK_WEBHOOK_SECRET"),
-      INPROCESS_SCHEDULERS: env.INPROCESS_SCHEDULERS ?? null,
     },
   };
 }

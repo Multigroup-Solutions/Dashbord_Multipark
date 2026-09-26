@@ -1,5 +1,5 @@
 /**
- * Rotas HTTP do OAuth "Ligar a minha conta Google" + cron /api/cron/google-sync (a sessão da app tem de
+ * Rotas HTTP do OAuth "Ligar a minha conta Google" + crons manuais google-sync/knowledge-sync/web-analytics (a sessão da app tem de
  * ser a mesma no início e no callback; o `state` é de uso único e ligado ao
  * utilizador). Os erros voltam à página de origem como `?google=error&msg=`.
  */
@@ -15,46 +15,31 @@ function withQuery(path: string, params: Record<string, string>): string {
 }
 
 export function registerGoogleAccountRoutes(app: Express) {
-  // Google Tarefas & Calendário: cron do GitHub Actions de 10 em 10 min.
-  // Prazo 45 s (maxDuration 60 s do Vercel); `done:false` → a corrida
-  // seguinte continua (cursores e ligações guardados a cada passo).
+  // Google Tarefas & Calendário (+ Contactos e Drive): o agendador
+  // /api/cron/tick corre-o de 15 em 15 min; este endpoint fica para uso
+  // manual. Prazo 45 s; `done:false` → a corrida seguinte continua.
   app.get("/api/cron/google-sync", async (req: Request, res: Response) => {
     if (!cronAuthOk(req.headers["authorization"])) { res.status(401).json({ error: "Unauthorized" }); return; }
-    try {
-      const { runGoogleSync } = await import("./syncService");
-      const r = await runGoogleSync({ deadlineAt: Date.now() + 45_000 });
-      res.json({ ...r, ranAt: new Date().toISOString() });
-    } catch (err: any) {
-      res.status(500).json({ ok: false, error: String(err?.message ?? err).slice(0, 300) });
-    }
+    const { googleSyncCron, sendCronRun } = await import("../cronJobs");
+    sendCronRun(res, await googleSyncCron({ deadlineAt: Date.now() + 45_000 }));
   });
 
-  // Base de conhecimento: pastas do Shared Drive + documentos por processar
-  // (cron do GitHub Actions de hora a hora). Prazo 45 s; `done:false` → a
-  // corrida seguinte continua (cursor da descoberta e estado de cada documento).
+  // Base de conhecimento: pastas do Shared Drive + documentos por processar.
+  // SEM agenda (decisão do Jorge, 26 set 2026): só à mão — "Sincronizar
+  // agora" na página ou este endpoint; os carregamentos processam-se logo.
   app.get("/api/cron/knowledge-sync", async (req: Request, res: Response) => {
     if (!cronAuthOk(req.headers["authorization"])) { res.status(401).json({ error: "Unauthorized" }); return; }
-    try {
-      const { runKnowledgeSync } = await import("../knowledge/sync");
-      const r = await runKnowledgeSync({ deadlineAt: Date.now() + 45_000 });
-      res.json({ ...r, ranAt: new Date().toISOString() });
-    } catch (err: any) {
-      res.status(500).json({ ok: false, error: String(err?.message ?? err).slice(0, 300) });
-    }
+    const { knowledgeSyncCron, sendCronRun } = await import("../cronJobs");
+    sendCronRun(res, await knowledgeSyncCron({ deadlineAt: Date.now() + 45_000 }));
   });
 
-  // Web & SEO (GA4, Search Console, PageSpeed): cron do GitHub Actions de
-  // hora a hora. Prazo 50 s (maxDuration 60 s); `done:false` → a corrida
-  // seguinte continua (cursores por propriedade × parte guardados a cada bloco).
+  // Web & SEO (GA4, Search Console, PageSpeed): o agendador corre-o 1×/dia
+  // a partir das 09h (ou da hora das Definições, se for mais tarde), a
+  // retomar enquanto `done:false`. Prazo 45 s.
   app.get("/api/cron/web-analytics", async (req: Request, res: Response) => {
     if (!cronAuthOk(req.headers["authorization"])) { res.status(401).json({ error: "Unauthorized" }); return; }
-    try {
-      const { runWebAnalyticsSync } = await import("../webAnalytics/sync");
-      const r = await runWebAnalyticsSync({ deadlineAt: Date.now() + 50_000 });
-      res.json({ ...r, units: r.units.filter((u) => u.status !== "ok" || u.windows > 0), ranAt: new Date().toISOString() });
-    } catch (err: any) {
-      res.status(500).json({ ok: false, error: String(err?.message ?? err).slice(0, 300) });
-    }
+    const { webAnalyticsCron, sendCronRun } = await import("../cronJobs");
+    sendCronRun(res, await webAnalyticsCron({ deadlineAt: Date.now() + 45_000 }));
   });
 
   app.get(GOOGLE_ACCOUNT_START_PATH, async (req: Request, res: Response) => {

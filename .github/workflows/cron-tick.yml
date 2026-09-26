@@ -1,0 +1,55 @@
+name: Agendador — rede de segurança (tick)
+# O agendador oficial é o próprio servidor: GET /api/cron/tick, chamado de 5
+# em 5 min pelo cron-job.org (docs/ajuda/agendador.md). Este workflow chama o
+# mesmo tick de hora a hora (e à mão), com ?wait=1 para receber o relatório
+# completo — se o cron-job.org parar, os trabalhos continuam a correr (mais
+# devagar). Chamadas duplicadas são inofensivas: cada trabalho tem um lease
+# (cron_job_state) e só corre o que estiver na altura.
+#
+# Vermelho (e issue aberta/comentada) quando o endpoint falha ou algum
+# trabalho deste tick devolveu erro ("ok":false).
+on:
+  schedule:
+    - cron: "41 * * * *" # minuto desfasado (o GitHub atrasa as horas cheias)
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  issues: write # alerta: abrir/comentar issue em caso de falha
+concurrency:
+  group: cron-tick
+  cancel-in-progress: false
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Trigger /api/cron/tick?wait=1
+        env:
+          APP_URL: ${{ secrets.APP_URL || 'https://dashbord-multipark.vercel.app' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          test -n "$CRON_SECRET"
+          code=$(curl -sS -m 90 -w '%{http_code}' -o result.json \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$APP_URL/api/cron/tick?wait=1") \
+            || { echo "::error::curl falhou ao contactar o endpoint"; cat result.json || true; exit 1; }
+          echo "HTTP $code"; head -c 3000 result.json; echo
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            echo "::error::endpoint devolveu HTTP $code"; exit 1
+          fi
+          node -e 'const r = require("./result.json"); for (const j of r.jobs ?? []) console.log(`${j.key}: ${j.status}${j.reason ? ` (${j.reason})` : ""}${j.error ? ` — ${j.error}` : ""}`); if (r.ok !== true) { console.log(`::error::${(r.errors ?? []).join(" · ") || r.error || "ok:false"}`); process.exit(1); }'
+      - name: Alerta — abrir/comentar issue em caso de falha
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="🔴 Cron multipark falhou: tick"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body="Run falhado: $run_url — $(date -u +'%Y-%m-%d %H:%M UTC')"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number' || true)
+          if [ -n "${existing:-}" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi

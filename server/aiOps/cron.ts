@@ -1,7 +1,8 @@
 /**
- * /api/cron/ops-briefing — corre de manhã (GitHub Actions, 06:32 e 07:32 UTC:
- * cobre 07:32 de Lisboa no verão e no inverno). O servidor decide pela hora
- * de Lisboa (a partir das 07h) e tudo é idempotente:
+ * Trabalho ops-briefing do agendador /api/cron/tick: 1×/dia a partir das
+ * 07:30 de Lisboa, a retomar enquanto devolver done:false (manual:
+ * /api/cron/ops-briefing). O módulo só corre a partir das 07h de Lisboa e
+ * tudo é idempotente:
  *
  *   1. anomalias do dia anterior (OPS_ANOMALIES) + explicações (1 chamada);
  *   2. briefing por cidade (OPS_BRIEFING): guarda em ops_briefings e envia o
@@ -11,7 +12,7 @@
  *
  * Custos: teto de chamadas à IA por corrida; IA desligada/orçamento → texto
  * fixo (os números nunca dependem da IA). Prazo: devolve done:false antes
- * dos 60 s do Vercel e o workflow repete.
+ * dos 60 s do Vercel e o tick seguinte repete.
  *
  * `ok` honesto: false se um passo falhou (BD, email). IA saltada = aviso.
  */

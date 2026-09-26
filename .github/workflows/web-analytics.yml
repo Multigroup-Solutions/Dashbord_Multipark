@@ -1,10 +1,7 @@
 name: Web & SEO — GA4, Search Console e PageSpeed
 on:
-  schedule:
-    # De hora a hora (minuto 23, longe da hora cheia). A atualização do dia só
-    # corre depois da hora definida em Definições → Integrações → Web & SEO;
-    # nas outras horas só continua o histórico/PageSpeed em falta (ou nada).
-    - cron: "23 * * * *"
+  # Sem schedule: quem agenda é o /api/cron/tick (cron-job.org) — ver
+  # docs/ajuda/agendador.md. Aqui fica só a corrida manual.
   workflow_dispatch:
 permissions:
   contents: read
