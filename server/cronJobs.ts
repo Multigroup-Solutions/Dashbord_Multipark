@@ -154,6 +154,44 @@ export async function multiparkFutureCron(o: { deadlineAt: number; offsetDays: n
   }
 }
 
+/**
+ * BD Multipark (só com o interruptor MULTIPARK_SOURCE = BD): reservas,
+ * movimentos e condutores por cursor, retomável (done:false → o agendador
+ * volta no tick seguinte). Com a fonte = API não faz nada (e nem entra no
+ * plano do agendador). Erros de itens → aviso; um fluxo inteiro a falhar
+ * (ex.: "por mapear", BD indisponível) → vermelho.
+ */
+export async function multiparkDbSyncCron(o: { deadlineAt: number }): Promise<CronJobRun> {
+  try {
+    const { dbSourceReadiness, effectiveMultiparkSource, requestedMultiparkSource } = await import("./multiparkDb/source");
+    const eff = effectiveMultiparkSource(await requestedMultiparkSource(), dbSourceReadiness(process.env));
+    if (eff.source !== "db") {
+      const reason = eff.reason ?? "Interruptor \"Reservas: ler da BD da Multipark\" desligado.";
+      return { httpStatus: 200, body: { ok: true, skipped: "fonte=api", reason, ranAt: ranAt() }, done: true };
+    }
+    const { runMultiparkDbSync } = await import("./multiparkDb/dbSync");
+    const r = await runMultiparkDbSync({ deadlineAt: o.deadlineAt });
+    if (r.busy) {
+      return { httpStatus: 200, body: { ok: true, skipped: "busy", message: "Sincronização já a correr", ranAt: ranAt() }, done: true };
+    }
+    const ok = r.streamErrors.length === 0;
+    const { redactSecrets } = await import("./multiparkDb/client");
+    const streamErrors = r.streamErrors.map((e) => redactSecrets(e));
+    return {
+      httpStatus: 200,
+      body: {
+        ok, ranAt: ranAt(), ...r, streamErrors,
+        ...(ok ? {} : { error: streamErrors.join(" | ").slice(0, 500) }),
+        warnings: r.itemErrors.slice(0, 10),
+      },
+      done: ok ? r.done : true,
+    };
+  } catch (err: any) {
+    console.error("[cron multipark-db-sync] falhou:", await errCode(err));
+    return { httpStatus: 500, body: { ok: false, error: `sync da BD Multipark falhou (${await errCode(err)})` } };
+  }
+}
+
 /** Ligações automáticas funcionário ↔ utilizador ↔ agente Multipark (conservador e idempotente). */
 export async function identitySweepCron(): Promise<CronJobRun> {
   try {
@@ -300,6 +338,15 @@ export async function dailyOpsCron(o: { deadlineAt: number; collectOnly?: boolea
     // todas as chamadas (também collectOnly) até verificar tudo.
     let reconciliation: { done: boolean; checked: number; remaining: number; errors: number; summary: unknown } | null = null;
     let reconciliationPending = false;
+    // Com a fonte = BD Multipark não há API a reconciliar (a BD é a origem).
+    if (!stepsDone.has("reconciliation")) {
+      let sourceIsDb = false;
+      try { sourceIsDb = (await (await import("./multiparkDb/source")).getMultiparkSourceKind()) === "db"; } catch { /* em dúvida, API */ }
+      if (sourceIsDb) {
+        reconciliation = { done: true, checked: 0, remaining: 0, errors: 0, summary: "saltada: fonte das reservas = BD Multipark" };
+        stepsDone.add("reconciliation");
+      }
+    }
     if (!stepsDone.has("reconciliation")) {
       if (hasTime()) {
         try {

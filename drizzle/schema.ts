@@ -1501,6 +1501,34 @@ export const multiparkBookingHistory = mysqlTable("multipark_booking_history", {
 	index("idx_bh_changeType").on(table.changeType),
 ]);
 
+// Migração 0205 — BD Multipark como fonte (server/multiparkDb): catálogo dos
+// condutores/agentes da app Multipark e cursores do sync incremental.
+export const multiparkAgents = mysqlTable("multipark_agents", {
+	agentUserId: varchar({ length: 128 }).primaryKey(),
+	agentName: varchar({ length: 256 }),
+	email: varchar({ length: 320 }),
+	role: varchar({ length: 64 }),
+	active: tinyint().default(1).notNull(),
+	parkId: varchar({ length: 128 }),
+	city: varchar({ length: 64 }),
+	sourceUpdatedAt: datetime({ mode: 'string' }),
+	syncedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	index("idx_multipark_agents_email").on(table.email),
+]);
+
+export const multiparkDbCursors = mysqlTable("multipark_db_cursors", {
+	stream: varchar({ length: 32 }).primaryKey(),
+	cursorAt: varchar({ length: 40 }),
+	cursorId: varchar({ length: 128 }),
+	lastRunAt: datetime({ mode: 'string' }),
+	lastOkAt: datetime({ mode: 'string' }),
+	lastStatus: varchar({ length: 16 }),
+	lastError: varchar({ length: 500 }),
+	rowsTotal: bigint({ mode: 'number' }).default(0).notNull(),
+});
+
 export const partnerAliases = mysqlTable("partner_aliases", {
 	id: int().autoincrement().primaryKey(),
 	partnershipId: int().notNull(),

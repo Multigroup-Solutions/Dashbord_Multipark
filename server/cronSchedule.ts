@@ -42,6 +42,12 @@ export interface TickJobSpec {
   minMs: number;
   /** Teto (ms) desta corrida dentro do tick (os outros também precisam de tempo). */
   maxMs: number;
+  /**
+   * Só entra no plano com esta fonte das reservas (interruptor
+   * MULTIPARK_SOURCE): "api" = sync pela API (hoje); "db" = BD Multipark.
+   * Omissão: corre sempre.
+   */
+  source?: "api" | "db";
 }
 
 const S = 1000;
@@ -62,6 +68,8 @@ export const ZELLO_SAMEDAY_WINDOW = { from: "23:15", until: "23:55" } as const;
  */
 export const TICK_JOBS: readonly TickJobSpec[] = [
   { key: "mail-sync", runName: "mail-sync", label: "Comunicação: sincronização do Gmail", cadence: { kind: "interval", minutes: 5 }, priority: 10, minMs: 10 * S, maxMs: 25 * S },
+  // Só com MULTIPARK_SOURCE = BD (substitui multipark-sync + multipark-future + reconciliação).
+  { key: "multipark-db-sync", runName: "multipark-db-sync", label: "Reservas, movimentos e condutores da BD Multipark", cadence: { kind: "interval", minutes: 5 }, priority: 15, minMs: 15 * S, maxMs: 40 * S, source: "db" },
   { key: "multipark-deliveries", runName: "multipark-deliveries", label: "Fila do webhook Multipark", cadence: { kind: "interval", minutes: 15 }, priority: 20, minMs: 15 * S, maxMs: 30 * S },
   { key: "ai-comms", runName: "ai-comms", label: "IA na comunicação com clientes", cadence: { kind: "interval", minutes: 15 }, priority: 30, minMs: 20 * S, maxMs: 30 * S },
   // Google por eventos (26 set 2026): o que muda vai/vem logo (push da Google,
@@ -71,10 +79,10 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   { key: "google-pending", runName: "google-pending", label: "Google: alterações por enviar/receber (repetição)", cadence: { kind: "interval", minutes: 15 }, priority: 38, minMs: 10 * S, maxMs: 25 * S },
   { key: "google-sync", runName: "google-sync", label: "Google Tarefas, Calendário, Contactos e Drive (rede de segurança)", cadence: { kind: "interval", minutes: 240 }, priority: 40, minMs: 12 * S, maxMs: 25 * S },
   { key: "extras-schedule", runName: "extras-schedule", label: "Escala automática dos extras (propor/confirmar/avisar)", cadence: { kind: "interval", minutes: 60, window: { fromHour: 8, toHour: 23 } }, priority: 45, minMs: 15 * S, maxMs: 45 * S },
-  { key: "multipark-sync", runName: "multipark-sync", label: "Sincronização de reservas (recente)", cadence: { kind: "interval", minutes: 60 }, priority: 50, minMs: 25 * S, maxMs: 45 * S },
+  { key: "multipark-sync", runName: "multipark-sync", label: "Sincronização de reservas (recente)", cadence: { kind: "interval", minutes: 60 }, priority: 50, minMs: 25 * S, maxMs: 45 * S, source: "api" },
   { key: "extras-auto", runName: "extras-auto", label: "Automação dos extras", cadence: { kind: "interval", minutes: 60 }, priority: 70, minMs: 12 * S, maxMs: 40 * S },
   { key: "identity-sweep", runName: "identity-sweep", label: "Ligações funcionário ↔ utilizador", cadence: { kind: "interval", minutes: 60 }, priority: 80, minMs: 10 * S, maxMs: 30 * S },
-  { key: "multipark-future", runName: "multipark-future", label: "Sincronização de reservas (futuras)", cadence: { kind: "interval", minutes: 120 }, priority: 90, minMs: 25 * S, maxMs: 45 * S },
+  { key: "multipark-future", runName: "multipark-future", label: "Sincronização de reservas (futuras)", cadence: { kind: "interval", minutes: 120 }, priority: 90, minMs: 25 * S, maxMs: 45 * S, source: "api" },
   { key: "zello-sameday", runName: "zello-sameday", label: "GPS do Zello — recolha provisória do dia", cadence: { kind: "daily", from: ZELLO_SAMEDAY_WINDOW.from, until: ZELLO_SAMEDAY_WINDOW.until }, priority: 95, minMs: 15 * S, maxMs: 45 * S },
   { key: "google-watch-renew", runName: "google-watch-renew", label: "Google: renovar canais de notificação (Calendário/Drive)", cadence: { kind: "daily", from: "03:40" }, priority: 98, minMs: 15 * S, maxMs: 40 * S },
   { key: "daily-ops", runName: "daily-ops", label: "Manutenção diária + recolha GPS final (D-2)", cadence: { kind: "daily", from: "04:30" }, priority: 100, minMs: 20 * S, maxMs: 45 * S },
@@ -120,6 +128,14 @@ export function effectiveTickJobs(specs: readonly TickJobSpec[], d: DynamicCaden
     ? { ...s, cadence: { kind: "interval", minutes: d.mailPushHealthy ? MAIL_SYNC_SAFETY_NET_MINUTES : MAIL_SYNC_MINUTES } as JobCadence,
         label: d.mailPushHealthy ? "Comunicação: sincronização do Gmail (rede de segurança — push ativo)" : s.label }
     : s));
+}
+
+/**
+ * Trabalhos ativos para a fonte das reservas em vigor (mesma ordem). Com
+ * "api" é a lista de sempre (sem o multipark-db-sync). PURA.
+ */
+export function activeTickJobs(specs: readonly TickJobSpec[], source: "api" | "db"): TickJobSpec[] {
+  return specs.filter((s) => !s.source || s.source === source);
 }
 
 /** Dias depois do dia D em que um mensal falhado ainda é apanhado. */
