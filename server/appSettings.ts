@@ -18,6 +18,7 @@ import {
   isAutomationFlag,
   isFlagSettingKey,
   isSettingKey,
+  normalizeFlagEnv,
   validateSetting,
   type SettingKey,
   type SettingValue,
@@ -143,7 +144,7 @@ export async function listAutomationFlags(env: Record<string, string | undefined
   return AUTOMATION_FLAGS.map((f) => {
     const row = rows.get(flagSettingKey(f.name));
     const override = typeof row?.value === "boolean" ? row.value : null;
-    const envRaw = env[f.name];
+    const envRaw = normalizeFlagEnv(f.name, env[f.name]);
     return {
       ...f,
       envValue: parseSwitch(envRaw),

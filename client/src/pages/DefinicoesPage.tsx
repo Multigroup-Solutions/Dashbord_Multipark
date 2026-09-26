@@ -359,6 +359,8 @@ function AiUsageCard() {
 
 function AutomationsCard() {
   const utils = trpc.useUtils();
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "super_admin";
   const q = trpc.settings.flags.list.useQuery();
   const setFlag = trpc.settings.flags.set.useMutation({
     onSuccess: () => { utils.settings.flags.list.invalidate(); utils.settings.values.audit.invalidate(); toast.success("Guardado (aplica-se em até 30 s)."); },
@@ -384,19 +386,19 @@ function AutomationsCard() {
               <div className="text-sm font-semibold">{f.label}</div>
               <div className="text-xs text-muted-foreground">{f.description}</div>
               <div className="text-[11px] text-muted-foreground mt-1 font-mono break-all">
-                {f.name} · env: {f.envValue == null ? "—" : f.envValue ? "ligado" : "desligado"}{!f.defaultEnabled && " · desligado por omissão"}
+                {f.name} · env: {f.envValue == null ? "—" : f.envValue ? "ligado" : "desligado"}{!f.defaultEnabled && " · desligado por omissão"}{f.superAdminOnly && " · só super admin"}
                 {f.override != null && <> · <span className="text-primary font-semibold">definido aqui</span>{f.updatedByName ? ` por ${f.updatedByName}` : ""}{f.updatedAt ? ` em ${fmtPTDateTime(f.updatedAt)}` : ""}</>}
               </div>
             </div>
             <div className="flex flex-col items-end gap-1 shrink-0">
               <Switch
                 checked={f.effective}
-                disabled={setFlag.isPending}
+                disabled={setFlag.isPending || (!!f.superAdminOnly && !isSuperAdmin)}
                 onCheckedChange={(v) => setFlag.mutate({ name: f.name, value: v })}
                 aria-label={f.label}
               />
               {f.override != null && (
-                <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" disabled={setFlag.isPending}
+                <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" disabled={setFlag.isPending || (!!f.superAdminOnly && !isSuperAdmin)}
                   onClick={() => setFlag.mutate({ name: f.name, value: null })}>
                   <RotateCcw className="h-3 w-3 mr-1" />Seguir env
                 </Button>

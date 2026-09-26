@@ -18,7 +18,7 @@ export const SYNC_LOCK_NAME = "multipark_sync";
 export const SYNC_LOCK_LEASE_SECONDS = 75;
 export const SYNC_BUSY_MESSAGE = "Sincronização já a correr — tenta daqui a um minuto.";
 
-export type SyncLockOwner = "cron_recent" | "cron_future" | "manual" | "mcp_recent" | "mcp_future" | "mcp_day";
+export type SyncLockOwner = "cron_recent" | "cron_future" | "cron_db" | "manual" | "mcp_recent" | "mcp_future" | "mcp_day";
 
 const affected = (r: unknown): number => Number((r as any)?.[0]?.affectedRows ?? (r as any)?.affectedRows ?? 0);
 

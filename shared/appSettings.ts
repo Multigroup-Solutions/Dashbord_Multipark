@@ -457,6 +457,10 @@ export interface AutomationFlag {
   defaultEnabled?: boolean;
   /** Secção na página (omissão: automações gerais). */
   group?: "ia";
+  /** Só o super_admin o pode mudar (os admins veem-no, mas não mexem). */
+  superAdminOnly?: boolean;
+  /** Valores próprios da env além de on/off (ex.: MULTIPARK_SOURCE=db → ligado). */
+  envAliases?: Record<string, boolean>;
 }
 
 export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
@@ -474,6 +478,11 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "WEEKLY_REPORTS", label: "Relatórios semanais", description: "À segunda de manhã: direção, marketing, operações e RH por email a quem tem acesso nacional ao módulo; resumo semanal da passagem de turno." },
   { name: "WHATSAPP_CALLS", label: "Chamadas de voz do WhatsApp", description: "Toque no dashboard, atender no browser e \"Ligar\" nas conversas. Desligado por omissão: liga só depois de ativar as chamadas no número na Meta (e subscrever o campo `calls` do webhook).", defaultEnabled: false },
   { name: "MAIL_PUSH", label: "Gmail: notificações push (Pub/Sub)", description: "O Gmail avisa a app logo que chega um email (precisa do tópico Pub/Sub configurado: GMAIL_PUSH_TOPIC). Com o push a chegar (últimas 6 h), a sincronização agendada passa de 5 em 5 min a de hora a hora (rede de segurança); sem push volta sozinha aos 5 min. Desligado por omissão.", defaultEnabled: false },
+  // Fonte das reservas: desligado = API (hoje, sem mudanças); ligado = BD da
+  // aplicação Multipark (DATABASE_URL_MULTIPARK, só leitura) pelo trabalho
+  // multipark-db-sync, que substitui multipark-sync/multipark-future/reconciliação.
+  // Ver docs/multipark-db/README.md. Env: MULTIPARK_SOURCE=api|db.
+  { name: "MULTIPARK_SOURCE", label: "Reservas: ler da BD da Multipark (em vez da API)", description: "Desligado = API Multipark (sincronização de hora a hora, janela futura e reconciliação, como sempre). Ligado = lê reservas, movimentos e condutores diretamente da BD da Multipark (DATABASE_URL_MULTIPARK, só leitura) de 5 em 5 min. A fila do webhook continua ligada. Só tem efeito com DATABASE_URL_MULTIPARK definida e as consultas mapeadas (senão continua na API). Só o super admin; ligar primeiro numa preview.", defaultEnabled: false, superAdminOnly: true, envAliases: { db: true, api: false } },
   { name: "OPS_ANOMALIES", label: "Deteção de anomalias", description: "Todos os dias: reservas por parque/canal, despesas (valores fora do normal e duplicados) e gasto/ROAS do marketing." },
   // ── IA (server/_core/ai) — AI_ENABLED desliga tudo de uma vez ──
   { name: "AI_ENABLED", label: "IA (interruptor geral)", description: "Desligado = nenhuma funcionalidade de IA faz pedidos ao fornecedor.", group: "ia" },
@@ -508,6 +517,22 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
 /** Omissão de um interruptor do catálogo (desconhecido → ligado). PURA. */
 export function automationFlagDefault(name: string): boolean {
   return AUTOMATION_FLAGS.find((f) => f.name === name)?.defaultEnabled ?? true;
+}
+
+/**
+ * Valor da env de um interruptor já traduzido para on/off quando o catálogo
+ * tem valores próprios (ex.: MULTIPARK_SOURCE=db → "on"). PURA.
+ */
+export function normalizeFlagEnv(name: string, raw: string | undefined | null): string | undefined {
+  if (raw == null) return undefined;
+  const aliases = AUTOMATION_FLAGS.find((f) => f.name === name)?.envAliases;
+  const hit = aliases?.[String(raw).trim().toLowerCase()];
+  return hit === undefined ? raw : hit ? "on" : "off";
+}
+
+/** Só o super_admin pode mudar este interruptor? PURA. */
+export function automationFlagSuperAdminOnly(name: string): boolean {
+  return AUTOMATION_FLAGS.find((f) => f.name === name)?.superAdminOnly === true;
 }
 
 export const FLAG_SETTING_PREFIX = "flag.";
@@ -552,6 +577,9 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "extras-schedule", label: "Escala automática dos extras (propor/confirmar/avisar)", intervalMinutes: 300, workflow: "tick" },
   { name: "identity-sweep", label: "Ligações funcionário ↔ utilizador", intervalMinutes: 60, workflow: "tick" },
   { name: "multipark-future", label: "Sincronização de reservas (futuras)", intervalMinutes: 120, workflow: "tick" },
+  // Só entra no agendador com MULTIPARK_SOURCE ligado (fonte = BD Multipark);
+  // sem intervalo fixo aqui para não aparecer "parado" enquanto a fonte é a API.
+  { name: "multipark-db-sync", label: "Reservas, movimentos e condutores da BD Multipark (só com a fonte = BD)", intervalMinutes: null, workflow: "tick (fonte = BD)" },
   { name: "daily-ops", label: "Manutenção diária + recolha GPS final (D-2)", intervalMinutes: 1440, workflow: "tick" },
   { name: "zello-sameday", label: "GPS do Zello — recolha provisória do dia (23:15–23:55)", intervalMinutes: 1440, workflow: "tick" },
   { name: "rh-docs-weekly", label: "RH: regra documental dos extras (semanal)", intervalMinutes: 10080, workflow: "tick" },
@@ -565,6 +593,20 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "knowledge-sync", label: "Base de conhecimento (pastas do Drive)", intervalMinutes: null, workflow: "manual" },
   { name: "google-business", label: "Google Business Profile (críticas, desempenho e pesquisas)", intervalMinutes: null, workflow: "manual (em pausa)" },
 ];
+
+/**
+ * Crons esperados para a fonte das reservas em vigor (interruptor
+ * MULTIPARK_SOURCE). "api" → CRON_JOBS tal e qual. "db" → o
+ * multipark-db-sync passa a ter intervalo (5 min) e o multipark-sync /
+ * multipark-future deixam de ter (não aparecem "parados"). PURA.
+ */
+export function cronJobsForSource(source: "api" | "db"): readonly CronJob[] {
+  if (source === "api") return CRON_JOBS;
+  return CRON_JOBS.map((j) =>
+    j.name === "multipark-db-sync" ? { ...j, intervalMinutes: 5, workflow: "tick" }
+      : j.name === "multipark-sync" || j.name === "multipark-future" ? { ...j, intervalMinutes: null, workflow: "tick (só com a fonte = API)" }
+        : j);
+}
 
 const CRON_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
