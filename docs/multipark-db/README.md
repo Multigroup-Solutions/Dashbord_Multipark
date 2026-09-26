@@ -1,10 +1,14 @@
 # BD da Multipark como fonte das reservas
 
-Estado (26 set 2026): **preparado, por mapear.** O código está pronto para ler
-reservas, movimentos e condutores diretamente da base de dados da aplicação
-Multipark, mas o esquema dessa BD ainda não foi visto. Enquanto o mapeamento não
-for preenchido, nada muda: o interruptor fica em **API** e o `DbSource` recusa-se
-a correr (erro "por mapear").
+Estado (26 set 2026): **mapeado e confirmado, interruptor DESLIGADO.** O esquema
+real está em `schema.md` e as consultas em `server/multiparkDb/queries.ts`. A
+sonda (workflow em modo `probe`) confirmou: datas em UTC (`DATE_MODE = "utc"`),
+os mesmos ids das reservas e dos movimentos, os mesmos preços/estados e as
+mesmas 114 reservas num dia de check-ins. A fonte continua a ser a **API** até o
+super admin ligar o interruptor nas Definições (passos 5–7).
+
+Pendentes do lado da Multipark: utilizador só de leitura; índices em
+`"History"("actionTime")` e `("bookingId")` (a tabela só tem a PK).
 
 ## O que é `DATABASE_URL_MULTIPARK`
 

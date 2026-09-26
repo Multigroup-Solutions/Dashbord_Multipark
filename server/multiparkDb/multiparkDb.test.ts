@@ -312,8 +312,10 @@ describe("mapeamento (queries.ts) com linhas-exemplo", () => {
 });
 
 describe("fontes (source.ts)", () => {
-  it("DbSource recusa-se a correr enquanto estiver por mapear", async () => {
-    expect(MULTIPARK_DB_MAPPED).toEqual({ bookings: false, movements: false, drivers: false });
+  it("mapeado (26 set 2026): reservas, movimentos e agentes", () => {
+    expect(MULTIPARK_DB_MAPPED).toEqual({ bookings: true, movements: true, drivers: true });
+  });
+  it.skip("DbSource recusa-se a correr enquanto estiver por mapear (só com MAPPED a false)", async () => {
     let calls = 0;
     const src = createDbSource(async () => { calls++; return fakeClient("postgres"); });
     await expect(src.listBookingsChangedSince({ at: "2026-01-01 00:00:00", id: "" }, 10)).rejects.toThrow(MultiparkDbNotMappedError);
@@ -360,9 +362,9 @@ describe("interruptor MULTIPARK_SOURCE (omissão = API → nada muda em produç�
   });
   it("pedir a BD sem env ou por mapear continua na API (nunca desliga o sync sem substituto)", async () => {
     expect(await getMultiparkSourceKind({ MULTIPARK_SOURCE: "db" })).toBe("api");
-    expect(await getMultiparkSourceKind({ MULTIPARK_SOURCE: "db", DATABASE_URL_MULTIPARK: PG_URL })).toBe("api"); // ainda por mapear
     expect(dbSourceReadiness({})).toMatch(/DATABASE_URL_MULTIPARK/);
-    expect(dbSourceReadiness({ DATABASE_URL_MULTIPARK: PG_URL })).toMatch(/por mapear/);
+    expect(dbSourceReadiness({ DATABASE_URL_MULTIPARK: PG_URL }, { bookings: false, movements: true })).toMatch(/por mapear/);
+    expect(dbSourceReadiness({ DATABASE_URL_MULTIPARK: PG_URL })).toBeNull();
     expect(dbSourceReadiness({ DATABASE_URL_MULTIPARK: PG_URL }, { bookings: true, movements: true })).toBeNull();
     expect(effectiveMultiparkSource("db", null)).toEqual({ source: "db", reason: null });
     expect(effectiveMultiparkSource("db", "x")).toMatchObject({ source: "api" });
