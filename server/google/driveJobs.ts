@@ -1,10 +1,13 @@
 /**
- * Trabalhos do Drive no cron /api/cron/google-sync (10 em 10 min), sempre com
+ * Trabalhos do Drive no trabalho google-sync do agendador (15 em 15 min), sempre com
  * prazo e retomáveis:
  *  - espelho no Shared Drive: provas das reclamações →
  *    Reclamações/<ano>/<id>; lotes pequenos, 1 linha por origem em
  *    google_drive_mirror (erro → nova tentativa, até 5). Os documentos do RH
- *    NUNCA são copiados para o Drive (decisão do dono, 26 set 2026);
+ *    NUNCA são copiados para o Drive (decisão do dono, 26 set 2026 — não há
+ *    Shared Drive do RH nem espelho do RH);
+ *  - Shared Drive configurado que não existe (ex.: um nome antigo) → AVISO,
+ *    não erro: o google-sync continua ok:true e o espelho fica parado;
  *  - relatórios ao vivo: 1×/dia (a partir da hora configurada), uma folha
  *    fixa em Relatórios/ num Shared Drive RESTRITO próprio (ex.: "Multipark
  *    Direção") — nunca no Shared Drive geral; sem ele, não correm. Um
@@ -29,6 +32,8 @@ export interface DriveJobsReport {
   mirrorFailed: number;
   live: { ran: boolean; reports: string[]; partial: boolean; error: string | null } | null;
   errors: string[];
+  /** Avisos (não pintam o cron de vermelho): ex.: Shared Drive em falta. */
+  warnings: string[];
 }
 
 const MIRROR_BATCH = 15;
@@ -57,8 +62,13 @@ async function mirrorBatch(kind: "complaint_photo", cfg: DriveConfig, deadlineAt
         LEFT JOIN google_drive_mirror m ON m.sourceType = 'complaint_photo' AND m.sourceId = x.id
         WHERE m.id IS NULL OR (m.status = 'error' AND m.attempts < ${MAX_ATTEMPTS}) ORDER BY x.id LIMIT ${MIRROR_BATCH}`));
   if (!pending.length) return;
-  const { sharedDriveContext, sharedFolderFor, fetchStoredBytes } = await import("./driveService");
-  const ctx = await sharedDriveContext(deadlineAt, { cfg });
+  const { sharedDriveContext, sharedFolderFor, fetchStoredBytes, isSharedDriveMissing } = await import("./driveService");
+  let ctx: Awaited<ReturnType<typeof sharedDriveContext>>;
+  try { ctx = await sharedDriveContext(deadlineAt, { cfg }); } catch (err) {
+    if (!isSharedDriveMissing(err)) throw err;
+    report.warnings.push(`Espelho das provas das reclamações parado: ${googleErrorMessage(err)}`);
+    return;
+  }
   for (const r of pending) {
     if (Date.now() > deadlineAt - 8_000) { report.done = false; return; }
     try {
@@ -155,6 +165,8 @@ async function runLiveReports(cfg: DriveConfig, deadlineAt: number, now: number,
     }
     await setDriveState("live:lastRunAt", new Date().toISOString());
   } catch (err: any) {
+    const { isSharedDriveMissing } = await import("./driveService");
+    if (isSharedDriveMissing(err)) { report.warnings.push(`Relatórios ao vivo parados: ${googleErrorMessage(err)}`); return; }
     live.error = `Relatórios ao vivo: ${googleErrorMessage(err)}`;
   }
 }
@@ -169,7 +181,7 @@ export function liveSheetInDrive(meta: { driveId?: string | null }, restrictedDr
  * por um admin — os relatórios ao vivo são só do super admin).
  */
 export async function runDriveJobs(opts: { deadlineAt: number; now?: () => number; includeLive?: boolean }): Promise<DriveJobsReport> {
-  const report: DriveJobsReport = { configured: false, done: true, mirrored: 0, mirrorFailed: 0, live: null, errors: [] };
+  const report: DriveJobsReport = { configured: false, done: true, mirrored: 0, mirrorFailed: 0, live: null, errors: [], warnings: [] };
   const { loadDriveConfig } = await import("./driveService");
   const cfg = await loadDriveConfig();
   if (!cfg.sharedEnabled || !cfg.ownerEmail || !dwdConfigured()) return report;

@@ -8,8 +8,7 @@ import type { Express, Request, Response } from "express";
 import { sdk } from "../../_core/sdk";
 import { OAUTH_CALLBACK_PATH, missingOAuthEnvs, readGoogleAdsConfig, safeRedirectPath } from "./config";
 import { buildConsentUrl, consumeOAuthState, createOAuthState, exchangeCodeForTokens, saveConnection, storeRefreshToken } from "./oauth";
-import { refreshAccounts, runGoogleAdsSync } from "./sync";
-import { normalizeSyncKind } from "./metrics";
+import { refreshAccounts } from "./sync";
 
 const ROLE_RANK: Record<string, number> = { super_admin: 7, admin: 6 };
 const PAGE = "/integracoes/google-ads";
@@ -83,17 +82,12 @@ export function registerGoogleAdsRoutes(app: Express) {
     }
   });
 
-  // ── 3. cron (GitHub Actions / Vercel) ─────────────────────────────────────
+  // ── 3. cron manual (o agendador /api/cron/tick corre a diária e a mensal) ──
   app.get("/api/cron/google-ads", async (req: Request, res: Response) => {
     const secret = process.env.CRON_SECRET?.trim();
     if (!secret || req.headers["authorization"] !== `Bearer ${secret}`) { res.status(401).json({ error: "Unauthorized" }); return; }
     // daily (última semana) | monthly (mês anterior) | initial; hourly/nightly = daily
-    const kind = normalizeSyncKind(String(req.query.kind ?? "daily"));
-    try {
-      const r = await runGoogleAdsSync({ kind, deadlineAt: Date.now() + 45_000, triggeredById: null });
-      res.json({ ranAt: new Date().toISOString(), ...r });
-    } catch (err: any) {
-      res.status(500).json({ ok: false, done: true, error: String(err?.message ?? err).slice(0, 300) });
-    }
+    const { googleAdsCron, sendCronRun } = await import("../../cronJobs");
+    sendCronRun(res, await googleAdsCron({ kind: String(req.query.kind ?? "daily"), deadlineAt: Date.now() + 45_000 }));
   });
 }

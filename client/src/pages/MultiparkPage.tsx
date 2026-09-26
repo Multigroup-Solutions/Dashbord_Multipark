@@ -671,7 +671,7 @@ function SyncTab() {
             <p>Notificações: {coverage.data.queue.pending} por processar · {coverage.data.queue.processing} em processamento · {coverage.data.queue.failed} a aguardar nova tentativa · {coverage.data.queue.dead} em dead-letter.</p>
             {coverage.data.queue.detailFailures > 0 && <p className="text-destructive">{coverage.data.queue.detailFailures} reservas com falha na atualização dos detalhes. A última informação válida é preservada e haverá nova tentativa.</p>}
             {coverage.data.queue.historyFailures > 0 && <p className="text-destructive">{coverage.data.queue.historyFailures} reservas com falha na atualização do histórico. Os movimentos guardados são preservados e haverá nova tentativa.</p>}
-            <p className="text-xs text-muted-foreground">As notificações, os detalhes e o histórico são tratados automaticamente de cinco em cinco minutos; o sync recente corre de hora a hora e o futuro de duas em duas horas.</p>
+            <p className="text-xs text-muted-foreground">As notificações chegam em tempo real pelo webhook; a fila, os detalhes e o histórico são revistos automaticamente de quinze em quinze minutos; o sync recente corre de hora a hora e o futuro de duas em duas horas.</p>
           </>}
           {parkTest.error && <p className="text-destructive text-xs">Teste falhou: {parkTest.error.message}</p>}
           {parkTest.data && (

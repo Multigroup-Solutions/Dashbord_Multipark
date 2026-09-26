@@ -5,7 +5,7 @@ import {
   generateApiKey, hashApiKey, isApiKeyExpired, scopesFor, shouldTouchLastUsed, v1Allowed,
   LAST_USED_THROTTLE_MS, type ApiKeyRow,
 } from "./apiKeyAuth";
-import { isFeatureEnabled, inprocessSchedulersEnabled, parseSwitch } from "./_core/featureFlags";
+import { isFeatureEnabled, parseSwitch } from "./_core/featureFlags";
 import { activityLogCutoff, buildHealthBody, cronBearerOk, purgeInBatches, syncRangeError } from "./opsRules";
 import { normalizeHourlyRate } from "./extraRates";
 import { MIGRATION_0095_STATEMENTS, IDEMPOTENT_ERROR_CODES_0095 } from "./migrations/migration_0095";
@@ -125,11 +125,6 @@ describe("isFeatureEnabled", () => {
     expect(isFeatureEnabled("X", { env: { X: "talvez" } })).toBe(true);
     expect(isFeatureEnabled("X", { env: { X: "" }, defaultEnabled: false })).toBe(false);
     expect(parseSwitch(undefined)).toBeNull();
-  });
-  it("INPROCESS_SCHEDULERS: desligado por omissão, nunca no Vercel", () => {
-    expect(inprocessSchedulersEnabled({})).toBe(false);
-    expect(inprocessSchedulersEnabled({ INPROCESS_SCHEDULERS: "on" })).toBe(true);
-    expect(inprocessSchedulersEnabled({ INPROCESS_SCHEDULERS: "on", VERCEL: "1" })).toBe(false);
   });
 });
 

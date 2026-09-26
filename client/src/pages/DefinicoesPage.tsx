@@ -70,7 +70,7 @@ export default function DefinicoesPage() {
             <TabsTrigger value="seguranca"><ShieldCheck className="h-4 w-4 mr-1" />Segurança</TabsTrigger>
           </TabsList>
         </div>
-        <TabsContent value="estado" className="space-y-4"><SystemStatusCard /><AiUsageCard /><SyncHealthPanel compact /></TabsContent>
+        <TabsContent value="estado" className="space-y-4"><SystemStatusCard />{user.role === "super_admin" && <SchedulerCard />}<AiUsageCard /><SyncHealthPanel compact /></TabsContent>
         <TabsContent value="automacoes"><AutomationsCard /></TabsContent>
         <TabsContent value="integracoes" className="space-y-4"><IntegrationsCard /><WebAnalyticsSettings /></TabsContent>
         <TabsContent value="comunicacao" className="space-y-4"><MailboxesSettings /><SharedCalendarsSettings /><GoogleContactsSettings /><GoogleDriveSettings /></TabsContent>
@@ -130,7 +130,7 @@ function SystemStatusCard() {
             : <Badge variant="outline" className="bg-emerald-100 text-emerald-800 border-emerald-200">Tudo a correr</Badge>}
         </CardTitle>
         <p className="text-xs text-muted-foreground">
-          Última corrida de cada cron (GitHub Actions → /api/cron/*). "Parado" = sem corridas há mais de 2× o intervalo esperado (mínimo 30 min).
+          Última corrida de cada cron (agendador /api/cron/tick, chamado pelo cron-job.org de 5 em 5 min; ou à mão). "Parado" = sem corridas há mais de 2× o intervalo esperado (mínimo 30 min).
         </p>
       </CardHeader>
       <CardContent className="space-y-2">
@@ -161,7 +161,7 @@ function SystemStatusCard() {
                   <p className="mt-2 text-xs text-amber-800 dark:text-amber-300 break-words"><AlertTriangle className="inline h-3 w-3 mr-1" />{c.last.error}</p>
                 )}
                 {c.health === "stale" && (
-                  <p className="mt-2 text-xs text-amber-800 dark:text-amber-300"><AlertTriangle className="inline h-3 w-3 mr-1" />Sem corridas há mais de {c.staleAfterMinutes} min — verificar o workflow {c.workflow} no GitHub.</p>
+                  <p className="mt-2 text-xs text-amber-800 dark:text-amber-300"><AlertTriangle className="inline h-3 w-3 mr-1" />Sem corridas há mais de {c.staleAfterMinutes} min — {c.workflow === "tick" || c.workflow === "cron-job.org" ? "verificar o agendador (cron-job.org → /api/cron/tick; ver Ajuda → Agendador)" : `corre só à mão (${c.workflow})`}.</p>
                 )}
               </button>
               {open === c.name && (
@@ -183,6 +183,80 @@ function SystemStatusCard() {
                     <p className="text-xs text-muted-foreground pt-1">Última falha: {fmtPTDateTime(c.lastFailure.startedAt)} — {c.lastFailure.error ?? "sem detalhe"}</p>
                   )}
                 </div>
+              )}
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── Agendador (/api/cron/tick) — só super admin ────────────────────────────
+
+const JOB_STATUS: Record<string, { label: string; cls: string }> = {
+  ok: { label: "OK", cls: "bg-emerald-100 text-emerald-800 border-emerald-200" },
+  error: { label: "Erro", cls: "bg-red-100 text-red-800 border-red-200" },
+  partial: { label: "A meio (retoma)", cls: "bg-blue-100 text-blue-800 border-blue-200" },
+};
+
+function until(ts: number | null | undefined, now: number): string {
+  if (ts == null) return "—";
+  if (ts <= now + 30_000) return "agora";
+  const m = Math.round((ts - now) / 60_000);
+  if (m < 60) return `daqui a ${m} min`;
+  const h = Math.round(m / 60);
+  return h < 48 ? `daqui a ${h} h` : `daqui a ${Math.round(h / 24)} dias`;
+}
+
+function SchedulerCard() {
+  const q = trpc.settings.scheduler.useQuery(undefined, { refetchInterval: 60_000 });
+  const jobs = q.data?.jobs ?? [];
+  const now = q.data?.now ?? Date.now();
+  const errors = jobs.filter((j) => j.lastStatus === "error" || j.abandoned).length;
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+          <Clock className="h-4 w-4" /> Agendador
+          {q.isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : errors > 0
+            ? <Badge variant="outline" className="bg-red-100 text-red-800 border-red-200">{errors} com erro</Badge>
+            : <Badge variant="outline" className="bg-emerald-100 text-emerald-800 border-emerald-200">Sem erros</Badge>}
+        </CardTitle>
+        <p className="text-xs text-muted-foreground">
+          O cron-job.org chama /api/cron/tick de 5 em 5 min; cada tick corre, um a um, os trabalhos que estão na altura (hora de Lisboa). "A meio" = não coube no tempo e continua no tick seguinte. Só leitura.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {q.error && <p className="text-sm text-destructive">{q.error.message}</p>}
+        {jobs.map((j) => {
+          const st = j.lastStatus ? JOB_STATUS[j.lastStatus] : null;
+          const bad = j.lastStatus === "error" || j.abandoned;
+          return (
+            <div key={j.key} className={`rounded-lg border p-3 ${bad ? "border-red-300 bg-red-50/60 dark:bg-red-950/20" : "border-border"}`}>
+              <div className="flex items-start gap-2 flex-wrap">
+                <div className="flex-1 min-w-[12rem]">
+                  <div className="font-semibold text-sm">{j.label}</div>
+                  <div className="text-xs text-muted-foreground"><span className="font-mono">{j.key}</span> · {j.cadence}</div>
+                </div>
+                {j.running && <Badge variant="outline" className="bg-blue-100 text-blue-800 border-blue-200">A correr</Badge>}
+                {st
+                  ? <Badge variant="outline" className={st.cls}>{st.label}</Badge>
+                  : <Badge variant="outline" className="bg-muted text-secondary-foreground">Ainda não correu</Badge>}
+              </div>
+              <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-x-3 gap-y-1 text-xs">
+                <div><span className="text-muted-foreground">Última: </span>{j.lastStartedAt ? `${fmtPTDateTime(j.lastStartedAt)} (${ago(j.lastStartedAt, now)})` : "—"}</div>
+                <div><span className="text-muted-foreground">Duração: </span>{fmtDuration(j.lastDurationMs)}</div>
+                <div><span className="text-muted-foreground">Último OK: </span>{j.lastOkAt ? ago(j.lastOkAt, now) : "—"}</div>
+                <div><span className="text-muted-foreground">Próxima: </span>{j.dueNow ? "no próximo tick" : `${until(j.nextDueAt, now)}${j.nextDueAt ? ` (${fmtPTDateTime(j.nextDueAt)})` : ""}`}</div>
+              </div>
+              {j.periodDone && <p className="mt-1 text-xs text-muted-foreground"><CheckCircle2 className="inline h-3 w-3 mr-1 text-emerald-600" />Feito neste período.</p>}
+              {j.attempts > 0 && <p className="mt-1 text-xs text-amber-800 dark:text-amber-300">{j.attempts} tentativa(s) falhada(s) neste período (máx. 3, de 30 em 30 min).</p>}
+              {j.abandoned && <p className="mt-1 text-xs text-red-700 dark:text-red-300"><XCircle className="inline h-3 w-3 mr-1" />A última corrida não terminou (a função foi terminada a meio).</p>}
+              {j.lastError && (
+                <p className={`mt-1 text-xs break-words ${j.lastStatus === "error" ? "text-red-700 dark:text-red-300" : "text-muted-foreground"}`}>
+                  {j.lastStatus === "error" && <XCircle className="inline h-3 w-3 mr-1" />}{j.lastError}
+                </p>
               )}
             </div>
           );

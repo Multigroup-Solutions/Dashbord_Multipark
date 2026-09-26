@@ -1,49 +1,34 @@
 name: Multipark Sync Cron
 
-# AGENDADOR OFICIAL da app (substitui os Vercel Cron Jobs — o Hobby limita a
-# 1/dia). Os timers in-process do servidor Node estão desligados por omissão
-# (INPROCESS_SCHEDULERS), para os jobs não correrem a dobrar.
+# CORRIDA MANUAL (workflow_dispatch) dos crons da app. JÁ NÃO É O AGENDADOR:
+# o agendador oficial é o próprio servidor — GET /api/cron/tick, chamado de 5
+# em 5 min pelo cron-job.org (ver docs/ajuda/agendador.md) e, como rede de
+# segurança, de hora a hora pelo workflow cron-tick.yml. O tick decide pela
+# hora de Lisboa o que está na altura (server/cronSchedule.ts), com lease,
+# prazo e retoma (server/cronScheduler.ts). Os schedules do GitHub foram
+# retirados: o GitHub atrasava-os/saltava-os (mail-sync correu 8× em 29 h;
+# o daily-ops das 03:30 UTC correu às 08:45).
+#
+# Este workflow continua útil para correr TUDO à mão (Actions → Run workflow),
+# com as mesmas repetições até done:true de antes.
 # Chama os endpoints HTTP /api/cron/* com Authorization: Bearer ${CRON_SECRET}.
 #
 # Pré-requisitos (Settings → Secrets and variables → Actions):
-#   1. APP_URL      — URL base de produção (ex: https://dashbord-multipark.vercel.app)
+#   1. APP_URL      — URL base de produção (ex: https://dashboard.multipark.pt)
 #   2. CRON_SECRET  — mesma string que a env var CRON_SECRET no Vercel
 #
-# Se APP_URL não estiver definido, ou o endpoint devolver erro / {"ok":false},
-# o job FALHA (vermelho) E abre/comenta uma issue no repo (notificação por email
-# do GitHub — não depende de SMTP nosso).
-#
-# Granularidade mínima do GitHub cron: 5 min, e pode atrasar até alguns minutos
-# (na prática, em horas de pico, MUITO mais — por isso os minutos desfasados e a
-# janela auto-recuperável no servidor, que cobre gaps até 3 dias).
+# Se o endpoint devolver erro / {"ok":false}, o job FALHA (vermelho) E
+# abre/comenta uma issue no repo (notificação por email do GitHub).
 
 on:
-  schedule:
-    # Sync recente: DE HORA A HORA (min 7, desfasado). Com o webhook das Conexões
-    # a entregar reservas em tempo real, isto é só rede de segurança (check-ins/
-    # check-outs/condutores/enrichment + email-inbound).
-    - cron: "7 * * * *"
-    # Janela futura: minuto 17 a cada 2 horas
-    - cron: "17 */2 * * *"
-    # Escala automática dos extras: de 30 em 30 min (min 12 e 42) das 07h às
-    # 22h UTC = ~08h–23h de Lisboa (verão 08:12–23:42, inverno 07:12–22:42).
-    - cron: "12,42 7-22 * * *"
-    # Recolha diária de operações (driver history + alertas GPS): 03:30 UTC
-    - cron: "30 3 * * *"
-    # Avaliação (motor único): recalcula as últimas 4 semanas às 04:05 UTC,
-    # depois do dia operacional (03h Lisboa) fechar e da recolha diária.
-    - cron: "5 4 * * *"
-    # Google Ads: diária às 04:45 UTC (última semana) e mensal no dia 2 às
-    # 05:10 UTC (mês anterior inteiro). Só correm com a ligação feita.
-    - cron: "45 4 * * *"
-    - cron: "10 5 2 * *"
-    # Briefing diário por cidade (07:30 de Lisboa) + anomalias + relatórios
-    # semanais à segunda: 06:32 UTC (verão = 07:32 Lisboa) e 07:32 UTC
-    # (inverno = 07:32 Lisboa). O servidor só corre a partir das 07h de Lisboa
-    # e é idempotente (a 2.ª chamada do verão não reenvia nada).
-    - cron: "32 6 * * *"
-    - cron: "32 7 * * *"
-  workflow_dispatch: {} # trigger manual da UI (corre todos os jobs)
+  workflow_dispatch: # trigger manual da UI (corre todos os jobs)
+    inputs:
+      ads_kind:
+        description: "Google Ads / Meta Ads: daily (última semana) ou monthly (mês anterior)"
+        required: false
+        default: daily
+        type: choice
+        options: [daily, monthly]
 
 permissions:
   contents: read
@@ -51,7 +36,6 @@ permissions:
 
 jobs:
   sync-recent:
-    if: github.event.schedule == '7 * * * *' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger /api/cron/multipark-sync
@@ -92,7 +76,6 @@ jobs:
           fi
 
   extras-auto:
-    if: github.event.schedule == '7 * * * *' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       # Automação dos extras: o endpoint decide pela hora de Lisboa o que corre
@@ -136,7 +119,6 @@ jobs:
           fi
 
   extras-schedule:
-    if: github.event.schedule == '12,42 7-22 * * *' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       # Escala automática: propõe (a partir de extras.autoProposeAt), confirma e
@@ -178,7 +160,6 @@ jobs:
           fi
 
   identity-sweep:
-    if: github.event.schedule == '7 * * * *' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       # Ligações automáticas funcionário ↔ utilizador ↔ agente Multipark.
@@ -220,7 +201,6 @@ jobs:
           fi
 
   email-inbound:
-    if: github.event.schedule == '7 * * * *' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger /api/cron/email-inbound (repete até done)
@@ -266,7 +246,6 @@ jobs:
           fi
 
   sync-future:
-    if: github.event.schedule == '17 */2 * * *' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger /api/cron/multipark-future (repete até done)
@@ -320,7 +299,6 @@ jobs:
           fi
 
   daily-ops:
-    if: github.event.schedule == '30 3 * * *' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger /api/cron/daily-ops (repete até done)
@@ -377,7 +355,6 @@ jobs:
           fi
 
   evaluation-recompute:
-    if: github.event.schedule == '5 4 * * *' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger /api/cron/evaluation-recompute (repete até done)
@@ -429,21 +406,20 @@ jobs:
 
   # ── Google Ads: recolha horária / noturna / mensal (repete enquanto done:false) ──
   google-ads:
-    if: github.event.schedule == '45 4 * * *' || github.event.schedule == '10 5 2 * *' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger /api/cron/google-ads (repete até done)
         env:
           APP_URL: ${{ secrets.APP_URL || 'https://dashbord-multipark.vercel.app' }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          SCHEDULE: ${{ github.event.schedule }}
+          ADS_KIND: ${{ inputs.ads_kind }}
         run: |
           set -euo pipefail
           # Decisão do Jorge (16 set 2026): ir à API o menos possível.
           # daily = última semana, uma vez por dia; monthly = mês anterior
           # inteiro no dia 2 (o custo fechado da API — sem IVA nem créditos por tráfego inválido da fatura).
-          case "${SCHEDULE:-}" in
-            "10 5 2 * *") kind=monthly ;;
+          case "${ADS_KIND:-}" in
+            monthly) kind=monthly ;;
             *) kind=daily ;;
           esac
           echo "kind=$kind"
@@ -484,18 +460,17 @@ jobs:
   #    Dormente enquanto META_ACCESS_TOKEN / META_AD_ACCOUNT_IDS não estiverem
   #    no servidor: o endpoint devolve ok:true + skipped:"not_configured".
   meta-ads:
-    if: github.event.schedule == '45 4 * * *' || github.event.schedule == '10 5 2 * *' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger /api/cron/meta-ads (repete até done)
         env:
           APP_URL: ${{ secrets.APP_URL || 'https://dashbord-multipark.vercel.app' }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          SCHEDULE: ${{ github.event.schedule }}
+          ADS_KIND: ${{ inputs.ads_kind }}
         run: |
           set -euo pipefail
-          case "${SCHEDULE:-}" in
-            "10 5 2 * *") kind=monthly ;;
+          case "${ADS_KIND:-}" in
+            monthly) kind=monthly ;;
             *) kind=daily ;;
           esac
           echo "kind=$kind"
@@ -534,7 +509,6 @@ jobs:
   #    O servidor decide pela hora de Lisboa (a partir das 07h) e é idempotente;
   #    "done":false = acabou o prazo da função → repete.
   ops-briefing:
-    if: github.event.schedule == '32 6 * * *' || github.event.schedule == '32 7 * * *' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger /api/cron/ops-briefing (repete até done)

@@ -76,6 +76,18 @@ export function lisbonDayOf(at: Date | number | string): string {
   return `${p.y}-${String(p.m).padStart(2, "0")}-${String(p.d).padStart(2, "0")}`;
 }
 
+/**
+ * O Zello só disponibiliza o histórico GPS de um dia depois da meia-noite do
+ * dia a seguir ao seguinte (às 04:30 de dia 27 ainda não há o dia 26, só o
+ * 25): o último dia recolhível é D-2 no calendário de Lisboa.
+ */
+export const ZELLO_HISTORY_LAG_DAYS = 2;
+
+/** Último dia (Lisboa) com histórico GPS do Zello disponível: D-2. */
+export function zelloLatestDay(at: Date | number | string): string {
+  return addDays(lisbonDayOf(at), -ZELLO_HISTORY_LAG_DAYS);
+}
+
 /** Horas (decimais) desde a meia-noite de Lisboa de `day` até ao instante. */
 export function lisbonHoursSince(day: string, at: Date | number | string): number {
   return (utcMs(at) - lisbonMidnightUtcMs(day)) / 3_600_000;

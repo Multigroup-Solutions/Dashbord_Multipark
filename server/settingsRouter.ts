@@ -51,6 +51,16 @@ export const settingsRouter = router({
     return { now: Date.now(), crons: await getCronStatuses() };
   }),
 
+  /**
+   * Agendador único (/api/cron/tick): cadência, última corrida, estado, último
+   * erro e próxima vez de cada trabalho. Só leitura; só o super admin.
+   */
+  scheduler: protectedProcedure.query(async ({ ctx }) => {
+    requireSuperAdmin(ctx.user.role);
+    const { schedulerStatus } = await import("./cronScheduler");
+    return schedulerStatus();
+  }),
+
   /** IA: gasto do mês por funcionalidade (ai_usage_log), orçamento e modelos em uso. */
   aiUsage: adminOnly.query(async () => {
     const { aiUsageSummary } = await import("./_core/ai/usage");

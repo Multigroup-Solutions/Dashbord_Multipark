@@ -1,5 +1,6 @@
 /**
- * Registo das corridas dos crons (/api/cron/*, chamados pelo GitHub Actions)
+ * Registo das corridas dos crons (/api/cron/*: o agendador /api/cron/tick e
+ * as chamadas manuais)
  * na tabela `cron_runs` (migração 0098): nome, início, fim, ok, erro, duração.
  *
  * `cronRunRecorder()` é um middleware Express montado em "/api/cron" ANTES das
@@ -62,6 +63,31 @@ async function finishRun(id: number, startedAt: Date, finishedAt: Date, httpStat
   if (Math.random() < 0.02) {
     const cutoff = toMysqlMs(new Date(Date.now() - RETENTION_DAYS * 86_400_000));
     await db.execute(sql`DELETE FROM cron_runs WHERE startedAt < ${cutoff} LIMIT 5000`);
+  }
+}
+
+/**
+ * Regista uma corrida feita DENTRO do processo (agendador /api/cron/tick):
+ * mesma linha em cron_runs que um pedido HTTP a /api/cron/<name> daria, para
+ * o Estado do sistema e os alertas de "cron parado" continuarem a funcionar.
+ * Nunca lança por causa do registo (só se o próprio `run` lançar).
+ */
+export async function recordCronRun<T extends { httpStatus: number; body: unknown }>(name: string, meta: string | null, run: () => Promise<T>): Promise<T> {
+  const startedAt = new Date();
+  const id = await insertRun(name, startedAt, meta ? meta.slice(0, 255) : null).catch((err) => {
+    console.warn(`[cron_runs] ${name}: registo inicial falhou:`, String(err?.message ?? err).slice(0, 160));
+    return null;
+  });
+  let result: T | null = null;
+  try {
+    result = await run();
+    return result;
+  } finally {
+    const outcome = result ? cronOutcome(result.httpStatus, result.body) : { ok: false, error: "exceção", note: null };
+    if (id) {
+      await finishRun(id, startedAt, new Date(), result?.httpStatus ?? 500, outcome.ok, outcome.error ?? outcome.note ?? null)
+        .catch((err) => console.warn(`[cron_runs] ${name}: registo final falhou:`, String(err?.message ?? err).slice(0, 160)));
+    }
   }
 }
 

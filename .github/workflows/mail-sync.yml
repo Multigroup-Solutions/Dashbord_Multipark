@@ -1,7 +1,7 @@
 name: Comunicação — sincronizar Gmail
 on:
-  schedule:
-    - cron: "*/5 * * * *"
+  # Sem schedule: quem agenda é o /api/cron/tick (cron-job.org) — ver
+  # docs/ajuda/agendador.md. Aqui fica só a corrida manual.
   workflow_dispatch:
 permissions:
   contents: read

@@ -192,7 +192,7 @@ export default function IntegrationsGoogleAdsPage() {
       <Card>
         <CardHeader><CardTitle className="text-base flex items-center gap-2"><PlayCircle className="h-4 w-4" /> Recolha</CardTitle></CardHeader>
         <CardContent className="space-y-3">
-          <p className="text-xs text-muted-foreground">Automática pelo cron (GitHub Actions): diária às 04:45 UTC (05:45 em Lisboa no verão, 04:45 no inverno; última semana, hoje e os 2 dias anteriores provisórios) e mensal no dia 2 às 05:10 UTC (o mês anterior inteiro, já fechado — é o custo reportado pela API, que não desconta IVA nem os créditos por tráfego inválido da fatura; a fatura entra pelas Despesas). A dashboard não volta a pedir o resto. Aqui só se dispara à mão.</p>
+          <p className="text-xs text-muted-foreground">Automática pelo agendador: diária a partir das 05:45 de Lisboa (última semana, hoje e os 2 dias anteriores provisórios) e mensal no dia 2 a partir das 05:45 (o mês anterior inteiro, já fechado — é o custo reportado pela API, que não desconta IVA nem os créditos por tráfego inválido da fatura; a fatura entra pelas Despesas). A dashboard não volta a pedir o resto. Aqui só se dispara à mão.</p>
           <div className="flex flex-wrap gap-2">
             {(["daily", "monthly", "initial"] as const).map((k) => (
               <Button key={k} variant="outline" size="sm" disabled={s?.status !== "connected" || runSync.isPending} onClick={() => runSync.mutate({ kind: k })} className="gap-1.5">

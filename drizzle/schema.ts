@@ -497,6 +497,10 @@ export const dailyDriverHistory = mysqlTable("daily_driver_history", {
 	/** 2 = km/h corrigidos + funcionário resolvido (migração 0078). */
 	metricsVersion: int().default(1).notNull(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	/** 'sameday' = provisório (23h do próprio dia) | 'final' = D-2 (migração 0190). */
+	collectionPass: varchar({ length: 12 }).default('final').notNull(),
+	/** Quando esta linha foi recolhida/atualizada pela última vez (UTC). */
+	collectedAt: datetime({ mode: 'string' }),
 });
 
 export const employeeDocuments = mysqlTable("employee_documents", {
@@ -2524,6 +2528,23 @@ export const cronRuns = mysqlTable("cron_runs", {
 	index("idx_cron_runs_name_started").on(table.name, table.startedAt),
 	index("idx_cron_runs_started").on(table.startedAt),
 ]);
+
+// Agendador único /api/cron/tick (0190): estado, cursor, período feito e lease por trabalho.
+export const cronJobState = mysqlTable("cron_job_state", {
+	jobKey: varchar({ length: 64 }).primaryKey(),
+	lastStartedAt: datetime({ mode: 'string', fsp: 3 }),
+	lastFinishedAt: datetime({ mode: 'string', fsp: 3 }),
+	lastOkAt: datetime({ mode: 'string', fsp: 3 }),
+	lastStatus: varchar({ length: 16 }),
+	lastError: varchar({ length: 1000 }),
+	lastDurationMs: int(),
+	resumeCursor: text(),
+	periodKey: varchar({ length: 16 }),
+	attempts: int().default(0).notNull(),
+	leaseUntil: datetime({ mode: 'string', fsp: 3 }),
+	leaseOwner: varchar({ length: 40 }),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+});
 
 // Definições chave → valor JSON (inclui "flag.<NOME>" = sobreposição dos interruptores).
 export const appSettings = mysqlTable("app_settings", {

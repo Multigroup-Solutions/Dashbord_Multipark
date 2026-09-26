@@ -63,6 +63,6 @@ Em **Integrações → Google Business Profile → Testar** (ou "Testar APIs" no
 - "não gere nenhum perfil" / "nenhum perfil nas contas" → ligaste uma conta Google errada (passo 3).
 - "acesso recusado … Proprietária ou Gestora" → a conta ligada não tem permissão nesse perfil.
 
-Depois do Testar ficar todo com ✓, carrega em **Atualizar agora** (ou espera pelo cron de 10 em 10 minutos): a 1.ª recolha traz ~6 meses de desempenho; depois relê só os últimos 5 dias, 1×/dia.
+Depois do Testar ficar todo com ✓, carrega em **Atualizar agora** (a recolha automática está **em pausa** até a Google aprovar o acesso à API; depois volta ao agendador): a 1.ª recolha traz ~6 meses de desempenho; depois relê só os últimos 5 dias, 1×/dia.
 
 **Variáveis no Vercel** (já existentes): `GOOGLE_BUSINESS_CLIENT_ID` e `GOOGLE_BUSINESS_CLIENT_SECRET` (se faltarem usa-se o cliente do Google Ads), `INTEGRATIONS_ENCRYPTION_KEY` (cifra do token). Nada de novo é preciso para o Google Business.

@@ -118,7 +118,7 @@ async function notifyDocsMissing(employeeId: number, missingDocs: string[], days
   }
 }
 
-/** Cron diário: aplica a regra documental a todos os extras ativos. */
+/** Semanal (trabalho rh-docs-weekly, segunda 04:45): aplica a regra documental a todos os extras ativos. */
 export async function applyDocsComplianceAll(): Promise<{ checked: number }> {
   const db = await getDb();
   if (!db) return { checked: 0 };

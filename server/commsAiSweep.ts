@@ -1,6 +1,6 @@
 /**
- * Varrimento da IA na comunicação com clientes (cron /api/cron/ai-comms, a
- * cada 15 min pelo GitHub Actions). Cada passo tem lote pequeno e o prazo
+ * Varrimento da IA na comunicação com clientes (trabalho ai-comms do
+ * agendador /api/cron/tick, de 15 em 15 min). Cada passo tem lote pequeno e o prazo
  * total fica abaixo dos 60 s do Vercel; interruptores desligados / orçamento
  * esgotado → o passo salta sem erro. Nada é enviado a clientes.
  */

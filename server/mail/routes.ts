@@ -1,6 +1,6 @@
 /**
  * Rotas HTTP da Comunicação:
- *  - GET  /api/cron/mail-sync           cron (GitHub Actions, 5 em 5 min; prazo 45 s; `done:false` → repetir)
+ *  - GET  /api/cron/mail-sync           manual (o agendador /api/cron/tick corre-o de 5 em 5 min; prazo 45 s; `done:false` → repetir)
  *  - POST /api/mail/push                Gmail push (Pub/Sub, OIDC verificado) — só com MAIL_PUSH ligado
  *  - GET  /api/mail/attachment/:m/:i    bytes de um anexo a pedido (sessão + acesso à conversa)
  */
@@ -34,13 +34,8 @@ export async function verifyGmailPush(authorization: string | undefined): Promis
 export function registerMailRoutes(app: Express, opts: { defer?: (p: Promise<unknown>) => void } = {}) {
   app.get("/api/cron/mail-sync", async (req: Request, res: Response) => {
     if (!cronAuthOk(req.headers["authorization"])) { res.status(401).json({ error: "Unauthorized" }); return; }
-    try {
-      const { runMailSync } = await import("./service");
-      const r = await runMailSync({ deadlineAt: Date.now() + 45_000 });
-      res.json({ ...r, ranAt: new Date().toISOString() });
-    } catch (err: any) {
-      res.status(500).json({ ok: false, error: String(err?.message ?? err).slice(0, 300) });
-    }
+    const { mailSyncCron, sendCronRun } = await import("../cronJobs");
+    sendCronRun(res, await mailSyncCron({ deadlineAt: Date.now() + 45_000 }));
   });
 
   app.post("/api/mail/push", async (req: Request, res: Response) => {
@@ -59,7 +54,7 @@ export function registerMailRoutes(app: Express, opts: { defer?: (p: Promise<unk
       const keys = rowsOf(await d.execute(sql`SELECT accountKey FROM mail_accounts WHERE email = ${email} AND status IN ('ok','pending') LIMIT 5`)).map((r) => String(r.accountKey));
       if (keys.length) await d.execute(sql`UPDATE mail_accounts SET pushPendingAt = ${nowUtc()} WHERE email = ${email}`);
       res.status(204).end();
-      // Sincroniza já essas contas (o cron de 5 min apanha o que falhar).
+      // Sincroniza já essas contas (o tick de 5 min apanha o que falhar).
       const { runMailSync } = await import("./service");
       for (const key of keys) {
         const p = runMailSync({ deadlineAt: Date.now() + 40_000, onlyAccountKey: key }).catch(() => undefined);

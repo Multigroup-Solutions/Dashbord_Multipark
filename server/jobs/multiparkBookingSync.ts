@@ -2,12 +2,13 @@
  * MultiPark Booking Sync Job
  *
  * Vai buscar reservas ao /bookings/report da API MultiPark e guarda-as na BD.
- * O agendador oficial é o GitHub Actions (.github/workflows/multipark-cron.yml):
- *  - sync recente de hora a hora (/api/cron/multipark-sync), com janela por
+ * Corre pelo agendador único /api/cron/tick (server/cronScheduler.ts):
+ *  - sync recente de hora a hora (trabalho multipark-sync), com janela por
  *    parque a partir da última cobertura completa desse parque (máx. 3 dias);
- *  - janela futura de 2 em 2 horas (/api/cron/multipark-future), retomável;
- *  - fila de notificações/detalhe/histórico de 5 em 5 min
- *    (/api/cron/multipark-deliveries).
+ *  - janela futura de 2 em 2 horas (multipark-future), retomável;
+ *  - fila de notificações/detalhe/histórico de 15 em 15 min
+ *    (multipark-deliveries; o webhook também a despacha em tempo real).
+ * Os endpoints /api/cron/<nome> ficam para uso manual.
  * Ações: creation, checkin, checkout, cancelation.
  *
  * Também serve o "Reparar período" manual (máx. 3 dias, com prazo) e o MCP.
@@ -854,48 +855,12 @@ export async function syncBookings(opts: {
   };
 }
 
-// ─── Automatic scheduler ─────────────────────────────────────────────────────
-
-const SYNC_INTERVAL = 15 * 60 * 1000; // 15 minutes
-
-/**
- * Timer in-process (servidor Node persistente). SÓ arranca com
- * INPROCESS_SCHEDULERS=on — o agendador oficial é o GitHub Actions
- * (/api/cron/multipark-sync de hora a hora e /api/cron/multipark-future).
- * Usa os mesmos wrappers do cron (janela por parque, trinco e prazo).
- */
-export function startBookingSyncScheduler() {
-  async function runSync() {
-    if (!isMultiparkConfigured()) {
-      console.log("[BookingSync] Skipped — MULTIPARK_API_KEY not configured");
-      return;
-    }
-    try {
-      const recent = await runRecentCronSync(30);
-      if (recent.busy) { console.log("[BookingSync] recente: já a correr"); return; }
-      console.log(`[BookingSync] recente: ${recent.report.processed} processadas, ${recent.report.created} novas${recent.report.errors.length ? `, ${recent.report.errors.length} erros` : ""}`);
-      let offset = 0;
-      for (let i = 0; i < 6; i++) {
-        const future = await runFutureCronSync(4, { offsetDays: offset });
-        if (future.busy || future.done || future.nextOffset == null || future.nextOffset <= offset) break;
-        offset = future.nextOffset;
-      }
-    } catch (error) {
-      console.error("[BookingSync] Scheduler error:", deliveryErrorCode(error));
-    }
-  }
-
-  // Arranca 10s depois do servidor e repete a cada 15 minutos.
-  setTimeout(runSync, 10_000);
-  setInterval(runSync, SYNC_INTERVAL);
-  console.log("[BookingSync] Scheduler in-process ligado — corre a cada 15 minutos");
-}
-
-// ─── Cron wrappers (GitHub Actions chama os endpoints HTTP) ──────────────────
+// ─── Cron wrappers (agendador /api/cron/tick e endpoints manuais) ────────────
 
 /** Orçamento de tempo do cron: tem de caber DENTRO do maxDuration do Vercel
  *  (60s em vercel.json) com margem para a resposta HTTP sair. Sem isto, um
- *  ciclo mais pesado é morto aos 60s → 504 → run vermelho no GitHub Actions. */
+ *  ciclo mais pesado é morto aos 60s → 504. O tick passa sempre o seu prazo;
+ *  isto é só o valor por omissão (chamadas sem prazo). */
 const CRON_BUDGET_MS = Number(process.env.CRON_BUDGET_MS || 50_000);
 /** Os reports param de arrancar aqui, para sobrar tempo ao enriquecimento. */
 const REPORT_RESERVE_MS = 12_000;
@@ -941,9 +906,9 @@ export interface RecentCronResult {
 }
 
 /** Sync recente: report por parque + enrich + history, com trinco e prazo.
- *  Chamado pelo cron (GitHub Actions) de hora a hora — mas o agendamento do
- *  GitHub atrasa com frequência, por isso a janela de CADA parque alarga até
- *  à última cobertura completa desse parque (clamp: 3 dias).
+ *  Chamado pelo agendador de hora a hora — se uma corrida falhar ou atrasar,
+ *  a janela de CADA parque alarga até à última cobertura completa desse
+ *  parque (clamp: 3 dias).
  *
  *  Todas as fases respeitam o prazo: o que não couber fica para os ciclos
  *  seguintes (enrichedAt/historyFetchedAt NULL = fila persistente; parque

@@ -4,9 +4,9 @@
  *
  *  - SETTINGS: definições editáveis (chave → schema zod + valor por omissão);
  *  - AUTOMATION_FLAGS: interruptores das automações que podem ser sobrepostos
- *    na BD (o resto das env vars NUNCA é sobreposto — ex.: INPROCESS_SCHEDULERS);
- *  - CRON_JOBS: os /api/cron/* agendados pelo GitHub Actions e o intervalo
- *    esperado de cada um (para detetar crons parados);
+ *    na BD (o resto das env vars NUNCA é sobreposto);
+ *  - CRON_JOBS: os /api/cron/* (corridos pelo agendador /api/cron/tick) e o
+ *    intervalo esperado de cada um (para detetar crons parados);
  *  - NOTIFICATION_KINDS: vista compatível do catálogo de notificações
  *    (shared/notificationRouting.ts — quem recebe o quê).
  */
@@ -514,36 +514,44 @@ export function isFlagSettingKey(key: string): boolean {
   return key.startsWith(FLAG_SETTING_PREFIX) && isAutomationFlag(key.slice(FLAG_SETTING_PREFIX.length));
 }
 
-// ─── Crons (GitHub Actions → /api/cron/*) ───────────────────────────────────
+// ─── Crons (agendador /api/cron/tick → trabalhos) ───────────────────────────
 
 export interface CronJob {
   name: string;
   label: string;
   /** Intervalo esperado entre corridas (min); `null` = sem agenda fixa. */
   intervalMinutes: number | null;
+  /** Quem o corre: "tick" (agendador, cron-job.org de 5 em 5 min) ou "manual". */
   workflow: string;
 }
 
 export const CRON_JOBS: readonly CronJob[] = [
-  { name: "multipark-deliveries", label: "Fila do webhook Multipark", intervalMinutes: 5, workflow: "multipark-deliveries.yml" },
-  { name: "google-business", label: "Google Business Profile (críticas, desempenho e pesquisas)", intervalMinutes: 10, workflow: "google-business-reviews.yml" },
-  { name: "multipark-sync", label: "Sincronização de reservas (recente)", intervalMinutes: 60, workflow: "multipark-cron.yml" },
-  { name: "extras-auto", label: "Automação dos extras", intervalMinutes: 60, workflow: "multipark-cron.yml" },
-  // Corre de 30 em 30 min entre as 08h e as 23h (Lisboa); 300 min para a
-  // pausa da noite (~8h30) não aparecer como "parado".
-  { name: "extras-schedule", label: "Escala automática dos extras (propor/confirmar/avisar)", intervalMinutes: 300, workflow: "multipark-cron.yml" },
-  { name: "identity-sweep", label: "Ligações funcionário ↔ utilizador", intervalMinutes: 60, workflow: "multipark-cron.yml" },
-  { name: "email-inbound", label: "Emails recebidos (IMAP)", intervalMinutes: 60, workflow: "multipark-cron.yml" },
-  { name: "mail-sync", label: "Comunicação: sincronização do Gmail", intervalMinutes: 5, workflow: "mail-sync.yml" },
-  { name: "google-sync", label: "Google Tarefas, Calendário e Contactos", intervalMinutes: 10, workflow: "google-sync.yml" },
-  { name: "web-analytics", label: "Web & SEO (GA4, Search Console, PageSpeed)", intervalMinutes: 60, workflow: "web-analytics.yml" },
-  { name: "multipark-future", label: "Sincronização de reservas (futuras)", intervalMinutes: 120, workflow: "multipark-cron.yml" },
-  { name: "daily-ops", label: "Manutenção diária + recolha GPS", intervalMinutes: 1440, workflow: "multipark-cron.yml" },
-  { name: "evaluation-recompute", label: "Avaliação (recálculo das 4 semanas)", intervalMinutes: 1440, workflow: "multipark-cron.yml" },
-  { name: "google-ads", label: "Google Ads", intervalMinutes: 1440, workflow: "multipark-cron.yml" },
-  { name: "meta-ads", label: "Meta Ads", intervalMinutes: 1440, workflow: "multipark-cron.yml" },
-  { name: "knowledge-sync", label: "Base de conhecimento (pastas do Drive)", intervalMinutes: 60, workflow: "knowledge-sync.yml" },
-  { name: "ops-briefing", label: "Briefing diário, anomalias e relatórios semanais", intervalMinutes: 1440, workflow: "multipark-cron.yml" },
+  // O próprio agendador (cron-job.org de 5 em 5 min; GitHub Actions de hora a hora).
+  { name: "tick", label: "Agendador (cron-job.org → /api/cron/tick)", intervalMinutes: 5, workflow: "cron-job.org" },
+  { name: "mail-sync", label: "Comunicação: sincronização do Gmail", intervalMinutes: 5, workflow: "tick" },
+  { name: "multipark-deliveries", label: "Fila do webhook Multipark", intervalMinutes: 15, workflow: "tick" },
+  { name: "ai-comms", label: "IA na comunicação com clientes", intervalMinutes: 15, workflow: "tick" },
+  { name: "google-sync", label: "Google Tarefas, Calendário, Contactos e Drive", intervalMinutes: 15, workflow: "tick" },
+  { name: "multipark-sync", label: "Sincronização de reservas (recente)", intervalMinutes: 60, workflow: "tick" },
+  { name: "extras-auto", label: "Automação dos extras", intervalMinutes: 60, workflow: "tick" },
+  // De hora a hora entre as 08h e as 23h (Lisboa); 300 min para a pausa da
+  // noite (~9 h) não aparecer como "parado".
+  { name: "extras-schedule", label: "Escala automática dos extras (propor/confirmar/avisar)", intervalMinutes: 300, workflow: "tick" },
+  { name: "identity-sweep", label: "Ligações funcionário ↔ utilizador", intervalMinutes: 60, workflow: "tick" },
+  { name: "email-inbound", label: "Emails recebidos (IMAP)", intervalMinutes: 60, workflow: "tick" },
+  { name: "multipark-future", label: "Sincronização de reservas (futuras)", intervalMinutes: 120, workflow: "tick" },
+  { name: "daily-ops", label: "Manutenção diária + recolha GPS final (D-2)", intervalMinutes: 1440, workflow: "tick" },
+  { name: "zello-sameday", label: "GPS do Zello — recolha provisória do dia (23:15–23:55)", intervalMinutes: 1440, workflow: "tick" },
+  { name: "rh-docs-weekly", label: "RH: regra documental dos extras (semanal)", intervalMinutes: 10080, workflow: "tick" },
+  { name: "evaluation-recompute", label: "Avaliação (recálculo das 4 semanas)", intervalMinutes: 1440, workflow: "tick" },
+  { name: "google-ads", label: "Google Ads", intervalMinutes: 1440, workflow: "tick" },
+  { name: "meta-ads", label: "Meta Ads", intervalMinutes: 1440, workflow: "tick" },
+  { name: "ops-briefing", label: "Briefing diário, anomalias e relatórios semanais", intervalMinutes: 1440, workflow: "tick" },
+  { name: "web-analytics", label: "Web & SEO (GA4, Search Console, PageSpeed)", intervalMinutes: 1440, workflow: "tick" },
+  // Fora da agenda (só à mão): base de conhecimento (botão "Sincronizar
+  // agora") e Google Business Profile (em pausa até a Google aprovar a API).
+  { name: "knowledge-sync", label: "Base de conhecimento (pastas do Drive)", intervalMinutes: null, workflow: "manual" },
+  { name: "google-business", label: "Google Business Profile (críticas, desempenho e pesquisas)", intervalMinutes: null, workflow: "manual (em pausa)" },
 ];
 
 const CRON_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -554,7 +562,7 @@ export function cronNameFromPath(path: string): string | null {
   return CRON_NAME.test(seg) ? seg : null;
 }
 
-/** O GitHub Actions atrasa os crons (às vezes muito): nunca menos de 30 min de folga. */
+/** Folga mínima antes de dar um cron como "parado" (um tick falhado não chega). */
 export const CRON_MIN_STALE_MINUTES = 30;
 
 /** Limite (min) sem corridas a partir do qual o cron é "parado": 2× o intervalo. */

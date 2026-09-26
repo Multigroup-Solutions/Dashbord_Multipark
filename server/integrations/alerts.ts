@@ -45,7 +45,7 @@ export const CONNECTION_LABELS: Record<string, { label: string; link: string }> 
 export function alertMessage(kind: "conn" | "cron", name: string, state: AlertState, detail: string | null, label?: string): { title: string; body: string } {
   const who = label ?? CONNECTION_LABELS[name]?.label ?? name;
   if (kind === "cron") {
-    return { title: `Cron parado: ${who}`, body: `O cron "${who}" não corre há mais do dobro do intervalo esperado. Ver Definições → Estado e o GitHub Actions.${detail ? ` Última nota: ${detail}` : ""}` };
+    return { title: `Cron parado: ${who}`, body: `O cron "${who}" não corre há mais do dobro do intervalo esperado. Ver Definições → Estado (Agendador) e o cron-job.org.${detail ? ` Última nota: ${detail}` : ""}` };
   }
   if (state === "reauth_required") {
     return { title: `${who} precisa de ser religado`, body: `A autorização de ${who} expirou ou foi revogada — a recolha está parada até alguém voltar a ligar em Integrações.${detail ? ` Detalhe: ${detail}` : ""}` };

@@ -15,9 +15,11 @@
  * 10. Leads (funil único): importação de candidaturas/emails, resumo diário
  *     dos leads à espera e lembrete automático a quem não respondeu.
  *
- * Tudo corre pelo cron horário `/api/cron/extras-auto`, que decide pela hora
- * de Lisboa o que está na altura; cada tarefa fica registada numa tabela de
- * execuções (chave única) para nunca correr duas vezes.
+ * Tudo corre de hora a hora (agendador /api/cron/tick → trabalho extras-auto;
+ * à mão em /api/cron/extras-auto), que decide pela hora de Lisboa o que está
+ * na altura; cada tarefa fica registada numa tabela de execuções (chave
+ * única) para nunca correr duas vezes. Com prazo: os passos que não couberem
+ * ficam para a corrida seguinte (runStepsWithDeadline).
  */
 import { isFeatureEnabled } from "./_core/featureFlags";
 import { sql } from "drizzle-orm";
@@ -903,12 +905,50 @@ export async function convertLeadToExtra(leadId: number, projectId: number, user
 
 // ─── Orquestração do cron ───────────────────────────────────────────────────
 
-export interface AutomationReport { clock: LisbonClock; ran: string[]; skipped: string[]; errors: string[]; details: Record<string, unknown> }
+export interface AutomationReport {
+  clock: LisbonClock; ran: string[]; skipped: string[]; errors: string[]; details: Record<string, unknown>;
+  /** false = o prazo acabou antes do último passo; o tick seguinte retoma em `nextStep`. */
+  done: boolean;
+  nextStep: string | null;
+}
 
-export async function runExtrasAutomation(now: Date = new Date()): Promise<AutomationReport> {
+/** Folga mínima para arrancar um passo novo (nenhum passo deve ir além disto). */
+export const STEP_RESERVE_MS = 6_000;
+
+export interface AutomationStep { key: string; fn: () => Promise<void> }
+
+/**
+ * Corre os passos por ordem, a partir de `from` (se existir na lista), e
+ * deixa de ARRANCAR passos quando faltam menos de `reserveMs` para o prazo:
+ * devolve `done:false` + `nextStep` e a próxima chamada continua dali (os
+ * passos são idempotentes — chave de execução ou "1× por …" — por isso
+ * repetir um passo não duplica nada). Um passo que lança não pára os outros.
+ */
+export async function runStepsWithDeadline(
+  steps: readonly AutomationStep[],
+  o: { deadlineAt: number; from?: string | null; reserveMs?: number; now?: () => number; onError?: (key: string, err: unknown) => void },
+): Promise<{ done: boolean; nextStep: string | null; started: string[] }> {
+  const now = o.now ?? Date.now;
+  const reserve = o.reserveMs ?? STEP_RESERVE_MS;
+  const startIdx = Math.max(0, o.from ? steps.findIndex((s) => s.key === o.from) : 0);
+  const started: string[] = [];
+  for (let i = startIdx; i < steps.length; i++) {
+    if (started.length > 0 && now() > o.deadlineAt - reserve) return { done: false, nextStep: steps[i].key, started };
+    started.push(steps[i].key);
+    try { await steps[i].fn(); } catch (err) { o.onError?.(steps[i].key, err); }
+  }
+  return { done: true, nextStep: null, started };
+}
+
+/**
+ * Automação horária dos extras (e companhia). Com prazo (`deadlineAt`, por
+ * omissão 45 s): antes não tinha nenhum e morria com 504 no Vercel. `from`
+ * retoma a partir de um passo (o agendador guarda-o como cursor).
+ */
+export async function runExtrasAutomation(now: Date = new Date(), opts: { deadlineAt?: number; from?: string | null } = {}): Promise<AutomationReport> {
   const clock = lisbonClock(now);
   const due = dueTasks(clock);
-  const report: AutomationReport = { clock, ran: [], skipped: [], errors: [], details: {} };
+  const report: AutomationReport = { clock, ran: [], skipped: [], errors: [], details: {}, done: true, nextStep: null };
   if (!isFeatureEnabled("EXTRAS_AUTOMATION")) { report.skipped.push("desligado (EXTRAS_AUTOMATION=off)"); return report; }
 
   const run = async (key: string, fn: () => Promise<unknown>) => {
@@ -923,21 +963,27 @@ export async function runExtrasAutomation(now: Date = new Date()): Promise<Autom
       await releaseRun(key);
     }
   };
+  /** Passo sem chave de execução: regista o resultado ou o erro. */
+  const plain = (key: string, fn: () => Promise<unknown>, opts2: { skippedWhen?: (out: any) => boolean } = {}) => async () => {
+    try {
+      const out = await fn();
+      report.details[key] = out;
+      if (!opts2.skippedWhen?.(out)) report.ran.push(key);
+    } catch (err: any) {
+      report.errors.push(`${key}: ${String(err?.message ?? err).slice(0, 200)}`);
+    }
+  };
 
-  if (due.weeklyRequest) await run(`request:${due.weeklyRequest}`, () => runWeeklyRequest(due.weeklyRequest!));
-  if (due.reminder) await run(`reminder:${due.reminder}`, () => runReminder(due.reminder!));
+  const steps: AutomationStep[] = [];
+  if (due.weeklyRequest) steps.push({ key: "weekly-request", fn: () => run(`request:${due.weeklyRequest}`, () => runWeeklyRequest(due.weeklyRequest!)) });
+  if (due.reminder) steps.push({ key: "reminder", fn: () => run(`reminder:${due.reminder}`, () => runReminder(due.reminder!)) });
   if (due.tomorrow) {
     const date = due.tomorrow;
     // Sem chave de execução: o aviso já é idempotente por turno (só envia a quem
     // ainda não foi avisado com sucesso) — assim, de hora a hora até à meia-noite,
     // apanha quem for escalado depois das 18h e repete as falhas.
-    try {
-      report.details[`notify:${date}`] = await notifyAssignments(date, { respectHold: true });
-      report.ran.push(`notify:${date}`);
-    } catch (err: any) {
-      report.errors.push(`notify:${date}: ${String(err?.message ?? err).slice(0, 200)}`);
-    }
-    await run(`coverage:${date}`, async () => {
+    steps.push({ key: "tomorrow-notify", fn: plain(`notify:${date}`, () => notifyAssignments(date, { respectHold: true })) });
+    steps.push({ key: "tomorrow-coverage", fn: () => run(`coverage:${date}`, async () => {
       const out: Record<string, number> = {};
       for (const city of ["lisbon", "porto", "faro"] as CityId[]) {
         const gaps = await coverageFor(date, city);
@@ -953,79 +999,70 @@ export async function runExtrasAutomation(now: Date = new Date()): Promise<Autom
         }
       }
       return out;
-    });
+    }) });
   }
 
   // Passagem de turno em falta (~15:30 manhã / ~03:30 noite, Lisboa): lembrete
   // aos team leaders do turno + backoffice, 1× por (dia, turno, cidade).
-  try {
+  steps.push({ key: "handover-reminders", fn: plain("handover-reminders", async () => {
     const { runHandoverReminders } = await import("./shiftHandoverAutomation");
-    report.details["handover-reminders"] = await runHandoverReminders(now);
-    report.ran.push("handover-reminders");
-  } catch (err: any) {
-    report.errors.push(`handover-reminders: ${String(err?.message ?? err).slice(0, 200)}`);
-  }
+    return runHandoverReminders(now);
+  }) });
 
-  await runLeadAutomation(clock, now, report, run);
+  steps.push({ key: "leads", fn: () => runLeadAutomation(clock, now, report, run) });
 
   // WhatsApp: re-tenta downloads de media falhados (lote limitado) e limpa
   // status pendentes antigos.
-  try {
+  steps.push({ key: "whatsapp-maintenance", fn: plain("whatsapp-maintenance", async () => {
     const { runWhatsappMaintenance } = await import("./whatsappInbound");
-    report.details["whatsapp-maintenance"] = await runWhatsappMaintenance();
-    report.ran.push("whatsapp-maintenance");
-  } catch (err: any) {
-    report.errors.push(`whatsapp-maintenance: ${String(err?.message ?? err).slice(0, 200)}`);
-  }
+    return runWhatsappMaintenance();
+  }) });
 
   // WhatsApp: conversas sem resposta há mais do que o SLA (WHATSAPP_SLA_MINUTES)
   // e janelas de 24h a fechar → uma notificação por cidade (1× por conversa).
-  try {
+  steps.push({ key: "whatsapp-sla", fn: plain("whatsapp-sla", async () => {
     const { runWhatsappSlaAlerts } = await import("./whatsappInboxOps");
-    report.details["whatsapp-sla"] = await runWhatsappSlaAlerts(now);
-    report.ran.push("whatsapp-sla");
-  } catch (err: any) {
-    report.errors.push(`whatsapp-sla: ${String(err?.message ?? err).slice(0, 200)}`);
-  }
+    return runWhatsappSlaAlerts(now);
+  }) });
 
   // Tarefas: checklists recorrentes do dia (idempotente) + avisos de atraso /
   // conclusão (antes só com o botão manual de admin). TASKS_AUTOMATION=off desliga.
-  try {
+  steps.push({ key: "tasks", fn: plain("tasks", async () => {
     const { runTaskAutomation } = await import("./tasksService");
-    report.details.tasks = await runTaskAutomation(now);
-    report.ran.push("tasks");
-  } catch (err: any) {
-    report.errors.push(`tasks: ${String(err?.message ?? err).slice(0, 200)}`);
-  }
+    return runTaskAutomation(now);
+  }) });
 
   // Ocorrências/Perdidos em atraso: 1 resumo por pessoa por dia (CASE_REMINDERS=off desliga).
-  try {
+  steps.push({ key: "case-sla", fn: plain("case-sla", async () => {
     const { runCaseSlaReminders } = await import("./caseOps");
-    const out = await runCaseSlaReminders(now, clock.hour);
-    report.details["case-sla"] = out;
-    if (!out.skipped) report.ran.push("case-sla");
-  } catch (err: any) {
-    report.errors.push(`case-sla: ${String(err?.message ?? err).slice(0, 200)}`);
-  }
+    return runCaseSlaReminders(now, clock.hour);
+  }, { skippedWhen: (out) => !!out?.skipped }) });
 
   // Marketing: email semanal à segunda ≥ 8h, 1× por semana ISO (MARKETING_WEEKLY=off desliga).
-  try {
-    const { maybeSendMarketingWeekly } = await import("./marketingWeekly");
-    const out = await maybeSendMarketingWeekly(clock, run);
-    if (out.key) report.details["marketing-weekly"] = out;
-  } catch (err: any) {
-    report.errors.push(`marketing-weekly: ${String(err?.message ?? err).slice(0, 200)}`);
-  }
+  steps.push({ key: "marketing-weekly", fn: async () => {
+    try {
+      const { maybeSendMarketingWeekly } = await import("./marketingWeekly");
+      const out = await maybeSendMarketingWeekly(clock, run);
+      if (out.key) report.details["marketing-weekly"] = out;
+    } catch (err: any) {
+      report.errors.push(`marketing-weekly: ${String(err?.message ?? err).slice(0, 200)}`);
+    }
+  } });
 
   // Formação: lembretes, atrasos e recertificação (TRAINING_REMINDERS=off desliga).
-  try {
+  steps.push({ key: "training", fn: plain("training", async () => {
     const { runTrainingAutomation } = await import("./trainingPaths");
-    const out = await runTrainingAutomation(now, clock.hour);
-    report.details.training = out;
-    if (!out.skipped) report.ran.push("training");
-  } catch (err: any) {
-    report.errors.push(`training: ${String(err?.message ?? err).slice(0, 200)}`);
-  }
+    return runTrainingAutomation(now, clock.hour);
+  }, { skippedWhen: (out) => !!out?.skipped }) });
+
+  const r = await runStepsWithDeadline(steps, {
+    deadlineAt: opts.deadlineAt ?? Date.now() + 45_000,
+    from: opts.from,
+    onError: (key, err: any) => report.errors.push(`${key}: ${String(err?.message ?? err).slice(0, 200)}`),
+  });
+  report.done = r.done;
+  report.nextStep = r.nextStep;
+  if (!r.done) report.skipped.push(`prazo: continua em "${r.nextStep}" na próxima corrida`);
   return report;
 }
 
