@@ -202,10 +202,12 @@ describe("email ao team leader do turno seguinte", () => {
     expect(m.text).toContain("Sem pendentes.");
   });
   it("interruptor e CC", () => {
-    const smtp = { SMTP_HOST: "h", SMTP_USER: "u", SMTP_PASS: "p" };
-    expect(handoverEmailEnabled(smtp)).toBe(true);
-    expect(handoverEmailEnabled({ ...smtp, HANDOVER_EMAIL: "off" })).toBe(false);
+    // Envio pela API do Gmail: basta a conta de serviço (delegação); SMTP_* já não conta.
+    const gmail = { GOOGLE_WORKSPACE_SERVICE_ACCOUNT_JSON: JSON.stringify({ client_email: "sa@x.iam.gserviceaccount.com", private_key: "k" }) };
+    expect(handoverEmailEnabled(gmail)).toBe(true);
+    expect(handoverEmailEnabled({ ...gmail, HANDOVER_EMAIL: "off" })).toBe(false);
     expect(handoverEmailEnabled({})).toBe(false);
+    expect(handoverEmailEnabled({ SMTP_HOST: "h", SMTP_USER: "u", SMTP_PASS: "p" })).toBe(false);
     expect(handoverEmailCc("a@x.pt; B@x.pt, lixo, a@x.pt", ["b@x.pt"])).toEqual(["a@x.pt"]);
   });
   it("IA → no máximo 5 pontos", () => {

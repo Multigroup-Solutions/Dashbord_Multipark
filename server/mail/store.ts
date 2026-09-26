@@ -6,7 +6,7 @@
 import { sql, type SQL } from "drizzle-orm";
 import { getDb } from "../db";
 import {
-  MAIL_AUTOMATED_RESERVATION, MAIL_DEFAULT_BACKFILL_DAYS, DEFAULT_BRAND_DOMAINS, hasFeatureScopes, mailboxConfigSchema, normalizeAddress, personalAccountKey,
+  MAIL_AUTOMATED_RESERVATION, MAIL_AUTOMATED_SYSTEM, MAIL_DEFAULT_BACKFILL_DAYS, DEFAULT_BRAND_DOMAINS, hasFeatureScopes, mailboxConfigSchema, normalizeAddress, personalAccountKey,
   sourceAccountKey, userIdOfAccountKey, type Classification, type MailboxConfig, type MailLinkType,
 } from "../../shared/mail";
 import type { AccountSyncState, StoreMessageResult, SyncAccount, SyncStore } from "./sync";
@@ -178,24 +178,25 @@ export async function markAccount(accountKey: string, patch: { status: string; l
     WHERE accountKey = ${accountKey}`);
 }
 
-/**
- * Pipelines antigos (aliases) que a sincronização do Gmail já trata: caixa
- * ativa com pipeline + conta de origem saudável (importação inicial feita e
- * sincronizada com sucesso nas últimas 2 h). Os restantes ficam no IMAP.
- */
-export async function gmailHandledPipelines(): Promise<Set<string>> {
-  const out = new Set<string>();
-  const mailboxes = (await listMailboxes()).filter((m) => m.active && m.pipeline);
-  if (!mailboxes.length) return out;
+/** Estado das contas de origem (para os avisos do encaminhamento por alias). */
+export async function mailSourceHealth(): Promise<Array<{ accountKey: string; status: string | null; lastOkAt: string | Date | null }>> {
   const d = await db();
-  const cutoff = nowUtc(new Date(Date.now() - 2 * 3_600_000));
-  const healthy = new Set(rowsOf(await d.execute(sql`SELECT accountKey FROM mail_accounts
-    WHERE status = 'ok' AND backfillDoneAt IS NOT NULL AND lastOkAt >= ${cutoff}`)).map((r) => String(r.accountKey)));
-  for (const m of mailboxes) {
-    const key = sourceAccountKey(m);
-    if (key && healthy.has(key)) out.add(m.pipeline!);
-  }
-  return out;
+  return rowsOf(await d.execute(sql`SELECT accountKey, status, lastOkAt FROM mail_accounts`))
+    .map((r) => ({ accountKey: String(r.accountKey), status: r.status ?? null, lastOkAt: r.lastOkAt ?? null }));
+}
+
+/**
+ * Estado do push do Gmail: último push recebido (qualquer conta, epoch ms;
+ * null = nunca) e se TODAS as contas a sincronizar (status ok) têm o watch
+ * em dia — uma conta sem watch só seria lida pelo agendador.
+ */
+export async function mailPushState(now = Date.now()): Promise<{ lastPushAt: number | null; allWatched: boolean }> {
+  const d = await db();
+  const r = rowsOf(await d.execute(sql`SELECT DATE_FORMAT(MAX(pushPendingAt), '%Y-%m-%d %H:%i:%s') AS t,
+      SUM(CASE WHEN status = 'ok' AND (watchExpiration IS NULL OR watchExpiration < ${now}) THEN 1 ELSE 0 END) AS unwatched
+    FROM mail_accounts`))[0];
+  const ms = r?.t ? Date.parse(String(r.t).replace(" ", "T") + "Z") : NaN;
+  return { lastPushAt: Number.isFinite(ms) ? ms : null, allWatched: Number(r?.unwatched ?? 0) === 0 };
 }
 
 // ─── SyncStore (BD) ─────────────────────────────────────────────────────────
@@ -211,7 +212,7 @@ export async function recomputeThread(threadId: number): Promise<void> {
              MAX(sentAt) AS lastAt,
              MAX(CASE WHEN direction = 'in' THEN sentAt END) AS li,
              MAX(CASE WHEN direction = 'out' THEN sentAt END) AS lo,
-             SUM(CASE WHEN automated = ${MAIL_AUTOMATED_RESERVATION} THEN 0 ELSE 1 END) AS na
+             SUM(CASE WHEN automated IN (${MAIL_AUTOMATED_RESERVATION}, ${MAIL_AUTOMATED_SYSTEM}) THEN 0 ELSE 1 END) AS na
       FROM mail_messages WHERE threadId = ${threadId} GROUP BY threadId
     ) x ON x.threadId = t.id
     SET t.messageCount = x.c, t.unreadCount = x.u, t.lastMessageAt = x.lastAt, t.lastInboundAt = x.li, t.lastOutboundAt = x.lo,
@@ -266,11 +267,14 @@ export const dbSyncStore: SyncStore = {
     }
     let thread = rowsOf(await d.execute(sql`SELECT id, status FROM mail_threads WHERE accountKey = ${accountKey} AND gmailThreadId = ${p.gmailThreadId} LIMIT 1`))[0];
     let newThread = false;
+    // "Por classificar": entrou por um endereço fora da tabela de aliases (e não é automático).
+    const triage = !!c.triage && !p.outbound && !extra.automated && !extra.reservationNotice && !extra.systemMail;
+    const routeLabel = c.alias?.tag ? c.alias.tag.slice(0, 80) : null;
     if (!thread) {
       const ins = await d.execute(sql`INSERT IGNORE INTO mail_threads (accountKey, gmailThreadId, mailboxKey, ownerUserId, brand, subject, snippet,
-          contactEmail, contactName, matchedAddress, status, awaitingSince)
+          contactEmail, contactName, matchedAddress, status, awaitingSince, needsTriage, routeLabel)
         VALUES (${accountKey}, ${p.gmailThreadId}, ${c.mailboxKey}, ${extra.ownerUserId}, ${c.brand}, ${p.subject || null}, ${p.snippet || null},
-          ${extra.contactEmail}, ${extra.contactName ? extra.contactName.slice(0, 255) : null}, ${c.matchedAddress}, 'aberto', NULL)`);
+          ${extra.contactEmail}, ${extra.contactName ? extra.contactName.slice(0, 255) : null}, ${c.matchedAddress}, 'aberto', NULL, ${triage ? 1 : 0}, ${routeLabel})`);
       newThread = Number(header(ins)?.affectedRows ?? 0) === 1;
       thread = rowsOf(await d.execute(sql`SELECT id, status FROM mail_threads WHERE accountKey = ${accountKey} AND gmailThreadId = ${p.gmailThreadId} LIMIT 1`))[0];
     } else {
@@ -278,7 +282,9 @@ export const dbSyncStore: SyncStore = {
       await d.execute(sql`UPDATE mail_threads SET
           mailboxKey = COALESCE(mailboxKey, ${c.mailboxKey}), brand = COALESCE(brand, ${c.brand}),
           contactEmail = COALESCE(contactEmail, ${extra.contactEmail}), contactName = COALESCE(contactName, ${extra.contactName ? extra.contactName.slice(0, 255) : null}),
-          matchedAddress = COALESCE(matchedAddress, ${c.matchedAddress}), subject = COALESCE(NULLIF(subject, ''), ${p.subject || null})
+          matchedAddress = COALESCE(matchedAddress, ${c.matchedAddress}), subject = COALESCE(NULLIF(subject, ''), ${p.subject || null}),
+          routeLabel = COALESCE(routeLabel, ${routeLabel}),
+          needsTriage = CASE WHEN ${c.alias ? 1 : 0} = 1 AND mailboxKey = ${c.mailboxKey} THEN 0 ELSE needsTriage END
         WHERE id = ${Number(thread.id)}`);
     }
     const threadId = Number(thread.id);
@@ -291,7 +297,7 @@ export const dbSyncStore: SyncStore = {
         ${JSON.stringify(p.to)}, ${JSON.stringify(p.cc)}, ${p.deliveredTo[0] ?? null}, ${c.matchedAddress}, ${p.subject || null}, ${p.snippet || null},
         ${p.text ? p.text.slice(0, 200_000) : null}, ${p.html ? sanitizeForStorage(p.html) : null},
         ${p.attachments.length ? JSON.stringify(p.attachments) : null}, ${JSON.stringify(p.labelIds).slice(0, 1000)}, ${p.sentAt},
-        ${p.outbound || !p.unread ? 1 : 0}, ${extra.reservationNotice ? MAIL_AUTOMATED_RESERVATION : extra.automated ? 1 : 0})`);
+        ${p.outbound || !p.unread ? 1 : 0}, ${extra.systemMail ? MAIL_AUTOMATED_SYSTEM : extra.reservationNotice ? MAIL_AUTOMATED_RESERVATION : extra.automated ? 1 : 0})`);
     const stored = Number(header(ins)?.affectedRows ?? 0) === 1;
     if (!stored) return { stored: false, threadId, messageId: null, newThread: false, reopened: false };
     const messageId = Number(header(ins)?.insertId ?? 0) || null;

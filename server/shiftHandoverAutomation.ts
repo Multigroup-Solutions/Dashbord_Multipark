@@ -11,6 +11,7 @@
 import { aiFeatureAvailable } from "./_core/ai/status";
 import { firstName, redactPii } from "./_core/ai/pii";
 import { isFeatureEnabled } from "./_core/featureFlags";
+import { isEmailSendConfigured } from "./mail/systemMail";
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { cityNameScope } from "./cityScope";
@@ -55,10 +56,10 @@ export function llmConfigured(): boolean {
   return aiFeatureAvailable("handover_summary");
 }
 
-/** Email ligado? (`HANDOVER_EMAIL=off` desliga; sem SMTP salta em silêncio.) */
+/** Email ligado? (`HANDOVER_EMAIL=off` desliga; sem envio de email pelo Gmail salta em silêncio.) */
 export function handoverEmailEnabled(env: Record<string, string | undefined> = process.env): boolean {
   if (!isFeatureEnabled("HANDOVER_EMAIL", { env })) return false;
-  return !!(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS);
+  return isEmailSendConfigured(env);
 }
 
 /** CC opcional (`HANDOVER_EMAIL_CC`, separado por vírgulas/;), sem repetidos nem os "to". */
@@ -243,7 +244,7 @@ export async function afterHandoverSave(input: {
           aiSummary: ai ?? row.aiSummary ?? null, counts: draft?.counts ?? null, notes: row.notes ?? null,
           openItems, link: `${appOrigin()}/passagem-turno`,
         });
-        const { sendEmail } = await import("./_core/notification");
+        const { sendEmail } = await import("./mail/systemMail");
         const recipients = to.length ? to : cc;
         const ok = await sendEmail({
           to: recipients.join(", "),

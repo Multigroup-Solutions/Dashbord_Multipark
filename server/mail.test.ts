@@ -78,7 +78,7 @@ function fakeApi(opts: {
 /** BD falsa (em memória) com dedupe por (conta, id Gmail). */
 function memStore() {
   const state = new Map<string, AccountSyncState>();
-  const msgs = new Map<string, { gmailId: string; mailboxKey: string | null; brand: string | null; personal: boolean; read: boolean; automated?: boolean; reservationNotice?: boolean }>();
+  const msgs = new Map<string, { gmailId: string; mailboxKey: string | null; brand: string | null; personal: boolean; read: boolean; automated?: boolean; reservationNotice?: boolean; systemMail?: boolean; triage?: boolean; alias?: string | null }>();
   const store: SyncStore = {
     async getState(k) { return state.get(k) ?? { historyId: null, backfillStartHistoryId: null, backfillPageToken: null, backfillDoneAt: null, backfillDays: null }; },
     async saveState(k, patch) { state.set(k, { ...(await store.getState(k)), ...patch }); },
@@ -86,7 +86,7 @@ function memStore() {
     async storeMessage(k, p, c, extra) {
       const key = `${k}|${p.gmailMessageId}`;
       if (msgs.has(key)) return { stored: false, threadId: 1, messageId: null, newThread: false, reopened: false };
-      msgs.set(key, { gmailId: p.gmailMessageId, mailboxKey: c.mailboxKey, brand: c.brand, personal: c.personal, read: !p.unread, automated: extra.automated, reservationNotice: !!extra.reservationNotice });
+      msgs.set(key, { gmailId: p.gmailMessageId, mailboxKey: c.mailboxKey, brand: c.brand, personal: c.personal, read: !p.unread, automated: extra.automated, reservationNotice: !!extra.reservationNotice, systemMail: !!extra.systemMail, triage: !!c.triage, alias: c.alias?.address ?? null });
       return { stored: true, threadId: 1, messageId: msgs.size, newThread: true, reopened: false };
     },
     async setRead(k, id, read) { const m = msgs.get(`${k}|${id}`); if (m) m.read = read; },
@@ -412,7 +412,7 @@ describe("retenção dos emails", () => {
   });
 });
 
-// ─── 8. IMAP como alternativa, sem processar duas vezes ─────────────────────
+// ─── 8. Pipeline temático: sem processar duas vezes ─────────────────────────
 
 vi.mock("./db", async (orig) => {
   const actual: any = await orig();
@@ -425,21 +425,23 @@ vi.mock("./db", async (orig) => {
   };
 });
 
-describe("pipeline antigo partilhado IMAP ↔ Gmail", () => {
-  it("o mesmo Message-ID só é processado uma vez (a 2.ª fonte leva 'duplicado' e nem lê anexos)", async () => {
+describe("pipeline temático (Gmail — sem IMAP)", () => {
+  it("o mesmo Message-ID só é processado uma vez (a 2.ª corrida leva 'duplicado' e nem lê anexos)", async () => {
     const { processInboundEmail } = await import("./jobs/emailInboundSync");
     const load = vi.fn(async () => []);
     const base = { alias: "campanhas" as const, messageId: "<dup-1@x>", gmThreadId: null, refs: [], subject: "Relatório", receivedAt: null, loadAttachments: load };
-    const first = await processInboundEmail(base);   // ex.: veio pelo Gmail
-    const second = await processInboundEmail(base);  // ex.: o IMAP apanhou o mesmo email
+    const first = await processInboundEmail(base);   // ex.: veio pelo push do Gmail
+    const second = await processInboundEmail(base);  // ex.: o agendador apanhou o mesmo email
     expect(first.status).toBe("skipped");
     expect(second.status).toBe("duplicate");
     expect(load).not.toHaveBeenCalled();
   });
-  it("o IMAP salta os aliases que o Gmail já trata e fica com os restantes", async () => {
-    const { imapAliases } = await import("./jobs/emailInboundSync");
-    expect(imapAliases(new Set(["reclamacoes", "perdidos"]))).toEqual(["criticas", "recursos-humanos", "campanhas", "ocorrencias"]);
-    expect(imapAliases(new Set())).toHaveLength(6);
+  it("o leitor IMAP e o fallback gmailHandledPipelines desapareceram", async () => {
+    const mod = await import("./jobs/emailInboundSync");
+    expect("runEmailInboundSync" in mod).toBe(false);
+    expect("imapAliases" in mod).toBe(false);
+    const store = await import("./mail/store");
+    expect("gmailHandledPipelines" in store).toBe(false);
   });
 });
 
@@ -595,6 +597,24 @@ describe("notificações automáticas de reserva: guardadas, escondidas por omis
     const byId = new Map([...msgs.values()].map((m) => [m.gmailId, m]));
     expect(byId.get("n1")).toMatchObject({ reservationNotice: true, automated: true });
     expect(byId.get("c1")).toMatchObject({ reservationNotice: false, automated: false });
+  });
+
+  it("encaminhamento por alias na sincronização: alias de outro domínio, Bcc → Por classificar, email de sistema → automático", async () => {
+    const sys = gmailMsg("s1", { from: "Dashboard Multipark <reservas@multipark.pt>", subject: "[Dashboard Multipark] Aviso", deliveredTo: "reservas@multipark.pt", to: "jorge@multipark.pt" });
+    sys.payload!.headers!.push({ name: "X-Multipark-System", value: "1" }, { name: "Auto-Submitted", value: "auto-generated" });
+    const messages = {
+      a1: gmailMsg("a1", { subject: "Reserva Porto", deliveredTo: "reservas@multipark.pt", to: "reservas@skypark.pt" }),
+      b1: gmailMsg("b1", { subject: "Em Bcc", deliveredTo: "reservas@multipark.pt", to: "fornecedor@empresa.pt" }),
+      s1: sys,
+    };
+    const { api } = fakeApi({ messages, listPages: [["a1", "b1", "s1"]], profileHistoryId: "950" });
+    const { store, msgs } = memStore();
+    const boxes = [mb({ key: "reservas", addresses: [{ address: "reservas@multipark.pt", brand: "multipark" }, { address: "reservas@skypark.pt", brand: "skypark" }], catchAll: true })];
+    await syncAccount(api, store, account(boxes), { deadlineAt: Date.now() + 10_000, backfillDays: 90 });
+    const byId = new Map([...msgs.values()].map((m) => [m.gmailId, m]));
+    expect(byId.get("a1")).toMatchObject({ mailboxKey: "reservas", brand: "skypark", alias: "reservas@skypark.pt", triage: false });
+    expect(byId.get("b1")).toMatchObject({ mailboxKey: "reservas", alias: null, triage: true });
+    expect(byId.get("s1")).toMatchObject({ systemMail: true, automated: true });
   });
 
   it("migração 0180 idempotente: coluna/índice novos e backfill só das conversas por calcular", () => {

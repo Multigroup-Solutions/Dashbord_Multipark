@@ -141,8 +141,8 @@ async function briefingForCity(tree: CityTree, day: string, cap: AiCallCap, repo
   if (!row) throw new Error("briefing não gravado");
   if (row.emailedAt) return { created, emailed: 0, already: true };
 
-  const { isSmtpConfigured, sendEmail } = await import("../_core/notification");
-  if (!isSmtpConfigured()) { report.warnings.push(`briefing ${tree.city}: SMTP não configurado`); return { created, emailed: 0 }; }
+  const { isEmailSendConfigured, sendEmail } = await import("../mail/systemMail");
+  if (!isEmailSendConfigured()) { report.warnings.push(`briefing ${tree.city}: envio de email (Gmail) não configurado`); return { created, emailed: 0 }; }
   const { cityRecipients } = await import("./recipients");
   const to = await cityRecipients(tree.city, "passagem_turno");
   if (!to.length) { report.warnings.push(`briefing ${tree.city}: sem destinatários`); return { created, emailed: 0 }; }
@@ -186,7 +186,7 @@ async function claimAndSend(id: number, recipients: Array<{ email: string }>, ma
   if (!db) throw new Error("BD indisponível");
   const claim = await db.execute(sql`UPDATE ai_weekly_reports SET emailedAt = ${nowMysql()} WHERE id = ${id} AND emailedAt IS NULL`);
   if (Number((Array.isArray(claim) ? (claim[0] as any) : (claim as any))?.affectedRows ?? 0) === 0) return 0;
-  const { sendEmail } = await import("../_core/notification");
+  const { sendEmail } = await import("../mail/systemMail");
   let sent = 0;
   for (const r of recipients) if (await sendEmail({ to: r.email, subject: mail.subject, html: mail.html, text: mail.text, fromName: "Dashboard Multipark" })) sent++;
   await db.execute(sql`UPDATE ai_weekly_reports SET emailRecipients = ${sent} WHERE id = ${id}`);
@@ -205,8 +205,8 @@ async function weeklyReport(kind: import("./weeklyReports").WeeklyKind, monday: 
     row = await saveWeekly(kind, weekStart, data, n.text, n.ai);
   }
   if (row.emailedAt) return { already: true };
-  const { isSmtpConfigured } = await import("../_core/notification");
-  if (!isSmtpConfigured()) { report.warnings.push(`semanal ${kind}: SMTP não configurado`); return { emailed: 0 }; }
+  const { isEmailSendConfigured } = await import("../mail/systemMail");
+  if (!isEmailSendConfigured()) { report.warnings.push(`semanal ${kind}: envio de email (Gmail) não configurado`); return { emailed: 0 }; }
   const { nationalRecipients } = await import("./recipients");
   const to = await nationalRecipients(WEEKLY_META[kind].module);
   if (!to.length) { report.warnings.push(`semanal ${kind}: sem destinatários`); return { emailed: 0 }; }
@@ -226,8 +226,8 @@ async function handoverWeek(city: OpsCity, monday: string, cap: AiCallCap, repor
     row = await saveWeekly(kind, from, data, n.text, n.ai);
   }
   if (row.emailedAt) return { already: true };
-  const { isSmtpConfigured } = await import("../_core/notification");
-  if (!isSmtpConfigured()) return { emailed: 0 };
+  const { isEmailSendConfigured } = await import("../mail/systemMail");
+  if (!isEmailSendConfigured()) return { emailed: 0 };
   const { cityRecipients } = await import("./recipients");
   const recipients = await cityRecipients(city, "passagem_turno");
   if (!recipients.length) { report.warnings.push(`passagem semanal ${city}: sem destinatários`); return { emailed: 0 }; }

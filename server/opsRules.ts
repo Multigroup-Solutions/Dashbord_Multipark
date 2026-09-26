@@ -94,8 +94,8 @@ export function buildHealthBody(opts: { initFailed: boolean; detailed: boolean; 
       NODE_ENV: env.NODE_ENV ?? null,
       CRON_SECRET: has("CRON_SECRET"),
       LLM: has("GEMINI_API_KEY") || has("GOOGLE_CLOUD_PROJECT") || has("LLM_API_KEY") || has("OPENAI_API_KEY"),
-      SMTP: has("SMTP_HOST") && has("SMTP_USER") && has("SMTP_PASS"),
-      IMAP: has("IMAP_USER") && has("IMAP_PASS"),
+      // Email (envio e receção) pela API do Gmail — conta de serviço com delegação.
+      GMAIL: has("GOOGLE_WORKSPACE_SERVICE_ACCOUNT_JSON") || has("GOOGLE_SERVICE_ACCOUNT_JSON"),
       WHATSAPP_TOKEN: has("WHATSAPP_TOKEN"),
       WHATSAPP_PHONE_NUMBER_ID: has("WHATSAPP_PHONE_NUMBER_ID"),
       WHATSAPP_VERIFY_TOKEN: has("WHATSAPP_VERIFY_TOKEN"),

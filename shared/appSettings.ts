@@ -13,7 +13,7 @@
 import { z } from "zod";
 import { AI_FEATURE_IDS, AI_TIERS } from "./aiFeatures";
 import { DEFAULT_HOME_CITY_ONLY, NOTIFICATION_KIND_DEFS, NOTIFICATION_ROUTING_SETTING_KEY, notificationRoutingSchema } from "./notificationRouting";
-import { DEFAULT_BRAND_DOMAINS, MAIL_BRAND_IDS, MAIL_DEFAULT_BACKFILL_DAYS, MAIL_DEFAULT_RETENTION_YEARS, MAIL_DEFAULT_SLA_HOURS } from "./mail";
+import { DEFAULT_BRAND_DOMAINS, DEFAULT_MAILBOX_SOURCE, MAIL_BRAND_IDS, MAIL_DEFAULT_BACKFILL_DAYS, MAIL_DEFAULT_RETENTION_YEARS, MAIL_DEFAULT_SLA_HOURS } from "./mail";
 import { DEFAULT_SHARED_CALENDARS_CONFIG, sharedCalendarsConfigSchema } from "./googleSync";
 import { DEFAULT_CONTACTS_CONFIG, contactsConfigSchema } from "./contacts";
 import { DEFAULT_DRIVE_CONFIG, driveConfigSchema } from "./drive";
@@ -341,6 +341,15 @@ export const SETTINGS = {
     defaultValue: MAIL_DEFAULT_BACKFILL_DAYS,
     wiring: "live",
   }),
+  "mail.systemSender": def({
+    key: "mail.systemSender",
+    group: "emails",
+    label: "Remetente dos emails de sistema (Gmail)",
+    description: "Conta do Google Workspace pela qual a aplicação envia os emails de sistema (notificações, briefing, escala, tarefas, formação, relatórios) pela API do Gmail — tem de estar autorizada na delegação da conta de serviço (gmail.send). Os emails a clientes saem pelo alias da caixa (reclamacoes@, perdidos@…) quando está em \"Enviar email como\" na conta de origem. Editável em Definições → Comunicação.",
+    schema: emailSchema,
+    defaultValue: DEFAULT_MAILBOX_SOURCE,
+    wiring: "live",
+  }),
   "mail.brandDomains": def({
     key: "mail.brandDomains",
     group: "emails",
@@ -464,7 +473,7 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "OPS_BRIEFING", label: "Briefing diário por cidade", description: "Às 07:30 (Lisboa): reservas do dia, extras, SLA, pendentes e alertas por email aos team leaders/supervisores da cidade e no Dashboard." },
   { name: "WEEKLY_REPORTS", label: "Relatórios semanais", description: "À segunda de manhã: direção, marketing, operações e RH por email a quem tem acesso nacional ao módulo; resumo semanal da passagem de turno." },
   { name: "WHATSAPP_CALLS", label: "Chamadas de voz do WhatsApp", description: "Toque no dashboard, atender no browser e \"Ligar\" nas conversas. Desligado por omissão: liga só depois de ativar as chamadas no número na Meta (e subscrever o campo `calls` do webhook).", defaultEnabled: false },
-  { name: "MAIL_PUSH", label: "Gmail: notificações push (Pub/Sub)", description: "Além do cron de 5 em 5 min, o Gmail avisa a app logo que chega um email (precisa do tópico Pub/Sub configurado: GMAIL_PUSH_TOPIC). Desligado por omissão.", defaultEnabled: false },
+  { name: "MAIL_PUSH", label: "Gmail: notificações push (Pub/Sub)", description: "O Gmail avisa a app logo que chega um email (precisa do tópico Pub/Sub configurado: GMAIL_PUSH_TOPIC). Com o push a chegar (últimas 6 h), a sincronização agendada passa de 5 em 5 min a de hora a hora (rede de segurança); sem push volta sozinha aos 5 min. Desligado por omissão.", defaultEnabled: false },
   { name: "OPS_ANOMALIES", label: "Deteção de anomalias", description: "Todos os dias: reservas por parque/canal, despesas (valores fora do normal e duplicados) e gasto/ROAS do marketing." },
   // ── IA (server/_core/ai) — AI_ENABLED desliga tudo de uma vez ──
   { name: "AI_ENABLED", label: "IA (interruptor geral)", description: "Desligado = nenhuma funcionalidade de IA faz pedidos ao fornecedor.", group: "ia" },
@@ -528,7 +537,8 @@ export interface CronJob {
 export const CRON_JOBS: readonly CronJob[] = [
   // O próprio agendador (cron-job.org de 5 em 5 min; GitHub Actions de hora a hora).
   { name: "tick", label: "Agendador (cron-job.org → /api/cron/tick)", intervalMinutes: 5, workflow: "cron-job.org" },
-  { name: "mail-sync", label: "Comunicação: sincronização do Gmail", intervalMinutes: 5, workflow: "tick" },
+  // 5 em 5 min sem push; de hora a hora (rede de segurança) com o push do Gmail saudável → "parado" só depois de 2 h.
+  { name: "mail-sync", label: "Comunicação: sincronização do Gmail", intervalMinutes: 60, workflow: "tick" },
   { name: "multipark-deliveries", label: "Fila do webhook Multipark", intervalMinutes: 15, workflow: "tick" },
   { name: "ai-comms", label: "IA na comunicação com clientes", intervalMinutes: 15, workflow: "tick" },
   // Google por eventos: repetição de 15 em 15 min, rede de segurança de 4 em 4 h, renovação diária dos canais.
@@ -541,7 +551,6 @@ export const CRON_JOBS: readonly CronJob[] = [
   // noite (~9 h) não aparecer como "parado".
   { name: "extras-schedule", label: "Escala automática dos extras (propor/confirmar/avisar)", intervalMinutes: 300, workflow: "tick" },
   { name: "identity-sweep", label: "Ligações funcionário ↔ utilizador", intervalMinutes: 60, workflow: "tick" },
-  { name: "email-inbound", label: "Emails recebidos (IMAP)", intervalMinutes: 60, workflow: "tick" },
   { name: "multipark-future", label: "Sincronização de reservas (futuras)", intervalMinutes: 120, workflow: "tick" },
   { name: "daily-ops", label: "Manutenção diária + recolha GPS final (D-2)", intervalMinutes: 1440, workflow: "tick" },
   { name: "zello-sameday", label: "GPS do Zello — recolha provisória do dia (23:15–23:55)", intervalMinutes: 1440, workflow: "tick" },

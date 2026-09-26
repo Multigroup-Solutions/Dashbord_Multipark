@@ -72,7 +72,6 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   { key: "google-sync", runName: "google-sync", label: "Google Tarefas, Calendário, Contactos e Drive (rede de segurança)", cadence: { kind: "interval", minutes: 240 }, priority: 40, minMs: 12 * S, maxMs: 25 * S },
   { key: "extras-schedule", runName: "extras-schedule", label: "Escala automática dos extras (propor/confirmar/avisar)", cadence: { kind: "interval", minutes: 60, window: { fromHour: 8, toHour: 23 } }, priority: 45, minMs: 15 * S, maxMs: 45 * S },
   { key: "multipark-sync", runName: "multipark-sync", label: "Sincronização de reservas (recente)", cadence: { kind: "interval", minutes: 60 }, priority: 50, minMs: 25 * S, maxMs: 45 * S },
-  { key: "email-inbound", runName: "email-inbound", label: "Emails recebidos (IMAP)", cadence: { kind: "interval", minutes: 60 }, priority: 60, minMs: 15 * S, maxMs: 40 * S },
   { key: "extras-auto", runName: "extras-auto", label: "Automação dos extras", cadence: { kind: "interval", minutes: 60 }, priority: 70, minMs: 12 * S, maxMs: 40 * S },
   { key: "identity-sweep", runName: "identity-sweep", label: "Ligações funcionário ↔ utilizador", cadence: { kind: "interval", minutes: 60 }, priority: 80, minMs: 10 * S, maxMs: 30 * S },
   { key: "multipark-future", runName: "multipark-future", label: "Sincronização de reservas (futuras)", cadence: { kind: "interval", minutes: 120 }, priority: 90, minMs: 25 * S, maxMs: 45 * S },
@@ -88,6 +87,40 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   { key: "meta-ads-monthly", runName: "meta-ads", label: "Meta Ads (mês anterior)", cadence: { kind: "monthly", day: 2, from: "05:45" }, priority: 123, minMs: 15 * S, maxMs: 45 * S },
   { key: "web-analytics", runName: "web-analytics", label: "Web & SEO (GA4, Search Console, PageSpeed)", cadence: { kind: "daily", from: "09:00" }, priority: 130, minMs: 20 * S, maxMs: 45 * S },
 ];
+
+// ─── Cadência do mail-sync com o push do Gmail ──────────────────────────────
+
+/** Um push do Gmail nestas últimas horas = push saudável. */
+export const MAIL_PUSH_HEALTHY_HOURS = 6;
+/** mail-sync sem push saudável (é ele que traz o email). */
+export const MAIL_SYNC_MINUTES = 5;
+/** mail-sync com push saudável: só rede de segurança (e renovação do watch, que expira aos 7 dias). */
+export const MAIL_SYNC_SAFETY_NET_MINUTES = 60;
+
+/**
+ * O push do Gmail está saudável? Interruptor MAIL_PUSH ligado, tópico
+ * Pub/Sub configurado, todas as contas ativas com o watch em dia
+ * (`allWatched`; omissão true) e uma notificação recebida nas últimas
+ * MAIL_PUSH_HEALTHY_HOURS horas. PURA.
+ */
+export function mailPushHealthy(o: { flagOn: boolean; topicConfigured: boolean; lastPushAt: number | null; now: number; hours?: number; allWatched?: boolean }): boolean {
+  if (!o.flagOn || !o.topicConfigured || o.lastPushAt == null || o.allWatched === false) return false;
+  const age = o.now - o.lastPushAt;
+  return age >= -5 * 60_000 && age <= (o.hours ?? MAIL_PUSH_HEALTHY_HOURS) * 3_600_000;
+}
+
+export interface DynamicCadence { mailPushHealthy: boolean }
+
+/**
+ * Tabela efetiva do tick: com push saudável o mail-sync passa de 5 em 5 min
+ * a de hora a hora (rede de segurança); sem push volta logo aos 5 min. PURA.
+ */
+export function effectiveTickJobs(specs: readonly TickJobSpec[], d: DynamicCadence): TickJobSpec[] {
+  return specs.map((s) => (s.key === "mail-sync"
+    ? { ...s, cadence: { kind: "interval", minutes: d.mailPushHealthy ? MAIL_SYNC_SAFETY_NET_MINUTES : MAIL_SYNC_MINUTES } as JobCadence,
+        label: d.mailPushHealthy ? "Comunicação: sincronização do Gmail (rede de segurança — push ativo)" : s.label }
+    : s));
+}
 
 /** Dias depois do dia D em que um mensal falhado ainda é apanhado. */
 export const MONTHLY_CATCHUP_DAYS = 6;

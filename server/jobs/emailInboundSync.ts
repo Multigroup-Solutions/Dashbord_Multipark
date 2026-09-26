@@ -1,26 +1,20 @@
 // server/jobs/emailInboundSync.ts
-// Leitor IMAP da caixa reservas@multipark.pt. Lê os emails que o backoffice
-// REENCAMINHA para os aliases temáticos e cria o registo no módulo certo:
+// Pipelines temáticos do email recebido: cria o registo no módulo certo a
+// partir de UM email que chegou por um alias temático:
 //   criticas@        → Google Reviews   (createGoogleReview + resposta IA)
 //   reclamacoes@     → Reclamações      (createComplaint)
 //   perdidos@        → Perdidos&Achados (createLostFoundItem)
 //   recursos-humanos@→ inbound_emails (aba Recrutamento; os Leads de Extras
 //                      tratam-nos). Só respostas de disponibilidade que
 //                      precisam de decisão humana viram tarefa (1 por pessoa × semana).
+//   campanhas@ / ocorrencias@ → inbound_emails / Ocorrências.
 //
-// Substitui o fluxo Make.com (Gmail→críticas/ocorrências). Filtra automaticamente
-// o ruído: só processa emails cujo Delivered-To é um dos aliases (as ~4000
-// notificações automáticas de reserva têm Delivered-To=reservas@skypark.pt e
-// nunca entram aqui). Dedup por Message-ID. Idempotente.
-//
-// Comunicação (0145): quando uma caixa com o mesmo "pipeline" está a ser lida
-// pela API do Gmail (server/mail), é ESSA sincronização que chama
-// `processInboundEmail` e o IMAP salta o alias (fica como alternativa para o
-// que não estiver configurado). O Message-ID reservado em inbound_emails
-// garante que nenhum email é processado duas vezes.
+// A ÚNICA fonte é a sincronização da API do Gmail (server/mail/service.ts):
+// o alias pelo qual o email entrou (tabela de aliases em Definições →
+// Comunicação; Delivered-To / X-Original-To / To / Cc) decide o destino e
+// chama `processInboundEmail`. O leitor IMAP e os reencaminhamentos
+// acabaram. Dedup por Message-ID (reservado em inbound_emails). Idempotente.
 
-import { ImapFlow } from "imapflow";
-import { simpleParser } from "mailparser";
 import {
   routeAlias,
   isSystemEmail,
@@ -39,7 +33,6 @@ import {
   deleteInboundEmail,
   addComplaintPhoto,
   getComplaintById,
-  listExistingInboundMessageIds,
   getSystemUserId,
   findComplaintByClientSignals,
   findOpenLostFoundByClient,
@@ -60,41 +53,6 @@ import {
 } from "../complaintEmail";
 
 export type InboundAttachment = { filename?: string; contentType?: string; size?: number; url?: string; key?: string };
-
-const ALIASES: InboundAlias[] = ["criticas", "reclamacoes", "perdidos", "recursos-humanos", "campanhas", "ocorrencias"];
-
-export type EmailSyncResult = {
-  configured: boolean;
-  scanned: number;
-  created: number;
-  skipped: number;
-  errors: string[];
-  byAlias: Record<string, number>;
-  /** true = parou no orçamento de tempo (Vercel 60s); o resto fica p/ a próxima corrida (dedup por messageId). */
-  partial: boolean;
-  /** Reclamações triadas pela IA nesta corrida (0 se desligada/sem tempo). */
-  aiTriaged?: number;
-  /** Aliases lidos pela sincronização do Gmail (Comunicação) — o IMAP salta-os. */
-  viaGmail?: string[];
-};
-
-/** Prazo de ligação ao IMAP (também usado no teste das Integrações). */
-export const IMAP_CONNECTION_TIMEOUT_MS = 15_000;
-
-function imapConfig() {
-  const user = process.env.IMAP_USER;
-  const pass = process.env.IMAP_PASS;
-  if (!user || !pass) return null;
-  return {
-    host: process.env.IMAP_HOST || "imap.gmail.com",
-    port: Number(process.env.IMAP_PORT || 993),
-    secure: true,
-    auth: { user, pass },
-    logger: false as const,
-    // Prazo de ligação: sem isto um IMAP pendurado consumia os 60 s do Vercel.
-    connectionTimeout: IMAP_CONNECTION_TIMEOUT_MS,
-  };
-}
 
 // Cria o registo no módulo de destino e devolve { module, id, taskId }.
 async function routeToModule(
@@ -559,13 +517,13 @@ async function afterComplaintEmail(
   }
 }
 
-/** Anexo cru (mailparser no IMAP; bytes da API no Gmail). */
+/** Anexo cru (bytes da API do Gmail, lidos só depois de reservar o Message-ID). */
 export type RawInboundAttachment = { filename?: string; contentType?: string; size?: number; content?: Buffer | null; related?: boolean };
 
-/** Um email já lido (IMAP ou API Gmail), pronto para o pipeline dos módulos. */
+/** Um email já lido pela API do Gmail, pronto para o pipeline dos módulos. */
 export interface InboundEmailInput {
   alias: InboundAlias;
-  /** Message-ID (dedup em inbound_emails — o MESMO nas duas fontes). */
+  /** Message-ID (dedup em inbound_emails). */
   messageId: string;
   /** X-GM-THRID em decimal (o Gmail API dá-o em hex — converter antes). */
   gmThreadId: string | null;
@@ -587,7 +545,7 @@ export type InboundOutcome =
 
 /**
  * Processa UM email recebido num alias temático: reserva o Message-ID
- * (índice UNIQUE → nunca processado duas vezes, venha do IMAP ou do Gmail),
+ * (índice UNIQUE → nunca processado duas vezes, mesmo com push + agendador),
  * ignora ruído de sistema, guarda anexos, cria/atualiza o registo no módulo e
  * faz o pós-processamento das reclamações. Lança se falhar a meio (a reserva
  * é libertada se ainda nada foi criado).
@@ -596,8 +554,8 @@ export async function processInboundEmail(input: InboundEmailInput): Promise<Inb
   const { alias, messageId, gmThreadId, refs, fromName, fromEmail, subject, receivedAt } = input;
   const headerRefs = refs.length ? refs.join(" ").slice(0, 4000) : null;
   // Dedup ATÓMICO: reserva o Message-ID (índice UNIQUE) ANTES de criar
-  // o registo de destino. Duas corridas em paralelo (cron + botão, ou IMAP +
-  // Gmail) nunca criam a mesma reclamação duas vezes — a 2ª leva duplicado.
+  // o registo de destino. Duas corridas em paralelo (agendador + push do
+  // Gmail, ou botão) nunca criam a mesma reclamação duas vezes — a 2ª leva duplicado.
   const claimId = await claimInboundEmail({
     messageId, alias, fromName, fromEmail, subject, gmThreadId, headerRefs, receivedAt,
   } as any);
@@ -693,146 +651,6 @@ export async function processInboundEmail(input: InboundEmailInput): Promise<Inb
     }
     throw e;
   }
-}
-
-export async function runEmailInboundSync(opts?: { sinceDays?: number; deadlineAt?: number }): Promise<EmailSyncResult> {
-  const result: EmailSyncResult = { configured: false, scanned: 0, created: 0, skipped: 0, errors: [], byAlias: {}, partial: false };
-  // Aliases já lidos pela sincronização do Gmail (Comunicação): o IMAP fica
-  // só como alternativa para os restantes — nunca os dois no mesmo alias.
-  // (Mesmo que corressem os dois, o Message-ID reservado impede o duplicado.)
-  let gmailAliases = new Set<string>();
-  try {
-    const { gmailHandledPipelines } = await import("../mail/store");
-    gmailAliases = await gmailHandledPipelines();
-  } catch { /* sem Comunicação → IMAP para tudo */ }
-  const aliases = imapAliases(gmailAliases);
-  result.viaGmail = ALIASES.filter((a) => gmailAliases.has(a));
-  const cfg = imapConfig();
-  if (!cfg) {
-    // Tudo lido pelo Gmail → não faz falta IMAP (não é erro).
-    if (!aliases.length) { result.configured = true; return result; }
-    result.errors.push("IMAP não configurado (faltam IMAP_USER/IMAP_PASS)");
-    return result;
-  }
-  result.configured = true;
-  if (!aliases.length) return result;
-  const sinceDays = opts?.sinceDays ?? Number(process.env.IMAP_SINCE_DAYS || 30);
-  // Sem deadline (Railway/manual) corre até ao fim; no Vercel o endpoint passa
-  // um prazo < maxDuration para nunca morrer com 504 a meio de um email.
-  const deadlineAt = opts?.deadlineAt ?? Number.POSITIVE_INFINITY;
-
-  const client = new ImapFlow(cfg);
-  await client.connect();
-  const lock = await client.getMailboxLock("INBOX");
-  try {
-    for (const alias of aliases) {
-      if (Date.now() > deadlineAt) { result.partial = true; break; }
-      // Gmail raw search: só emails entregues a este alias, dentro da janela.
-      let uids: number[] = [];
-      try {
-        // "ocorrencias": além do alias próprio, apanha REENCAMINHADOS para a
-        // caixa principal com "ocorrência" no assunto (o Jorge reencaminha o
-        // email do painel Multipark até o alias existir / a regra automática)
-        const gmQuery = alias === "ocorrencias"
-          ? `newer_than:${sinceDays}d {deliveredto:ocorrencias@multipark.pt subject:ocorrencia subject:ocorrência subject:ocorrencias subject:ocorrências}`
-          : `deliveredto:${alias}@multipark.pt newer_than:${sinceDays}d`;
-        uids = (await client.search(
-          { gmraw: gmQuery },
-          { uid: true },
-        )) || [];
-      } catch (e: any) {
-        result.errors.push(`search ${alias}: ${e?.message ?? e}`);
-        continue;
-      }
-      // Pré-triagem BARATA: só envelopes (messageId) + dedup em lote na BD,
-      // antes de descarregar qualquer corpo. Sem isto, cada corrida gastava o
-      // orçamento de 45s a re-descarregar as mesmas dezenas de emails já
-      // processados e nunca progredia para os aliases seguintes.
-      const uidToMessageId = new Map<number, string>();
-      let known = new Set<string>();
-      try {
-        if (uids.length > 0) {
-          const envs = await client.fetchAll(uids.join(","), { envelope: true }, { uid: true });
-          for (const e of envs as any[]) {
-            uidToMessageId.set(e.uid, e.envelope?.messageId || `uid:${alias}:${e.uid}`);
-          }
-          known = await listExistingInboundMessageIds([...uidToMessageId.values()]);
-        }
-      } catch (e: any) {
-        // Sem pré-triagem o dedup por-uid (abaixo) continua correto — só lento.
-        console.warn(`[EmailInbound] pré-triagem ${alias} falhou:`, String(e?.message ?? e).slice(0, 120));
-      }
-
-      for (const uid of uids) {
-        if (Date.now() > deadlineAt) { result.partial = true; break; }
-        const preId = uidToMessageId.get(uid);
-        if (preId && known.has(preId)) { result.skipped++; continue; }
-        result.scanned++;
-        try {
-          const msg = await client.fetchOne(uid, { source: true, threadId: true }, { uid: true });
-          if (!msg || !msg.source) { result.skipped++; continue; }
-          const mail = await simpleParser(msg.source as Buffer);
-          const messageId = mail.messageId || `uid:${alias}:${uid}`;
-          // Thread do Gmail + referências de cabeçalho (p/ agrupar respostas).
-          const gmThreadId = (msg as any).threadId ? String((msg as any).threadId) : null;
-          const refsRaw = mail.references
-            ? (Array.isArray(mail.references) ? mail.references : [mail.references])
-            : [];
-          const refs = [...(mail.inReplyTo ? [mail.inReplyTo] : []), ...refsRaw]
-            .flatMap(r => String(r).split(/\s+/))
-            .map(r => r.trim())
-            .filter(Boolean);
-
-          const fromAddr = mail.from?.value?.[0];
-          const out = await processInboundEmail({
-            alias,
-            messageId,
-            gmThreadId,
-            refs,
-            fromName: fromAddr?.name || undefined,
-            fromEmail: fromAddr?.address || undefined,
-            subject: mail.subject || "",
-            receivedAt: mail.date ? new Date(mail.date).toISOString().slice(0, 19).replace("T", " ") : null,
-            text: mail.text || null,
-            html: typeof mail.html === "string" ? mail.html : null,
-            loadAttachments: async () => (mail.attachments || []).map((a) => ({
-              filename: a.filename, contentType: a.contentType, size: a.size, content: a.content, related: !!(a as any).related,
-            })),
-          });
-          if (out.status !== "processed") { result.skipped++; continue; }
-          result.created++;
-          result.byAlias[alias] = (result.byAlias[alias] || 0) + 1;
-        } catch (e: any) {
-          // O DrizzleQueryError só traz a SQL na message; a razão real do MySQL
-          // (ex.: "Data too long", "Incorrect string value") vive em e.cause.
-          const cause = (e as any)?.cause?.message ? ` — ${(e as any).cause.message}` : "";
-          result.errors.push(`${alias} uid ${uid}: ${String(e?.message ?? e).slice(0, 160)}${String(cause).slice(0, 200)}`);
-        }
-      }
-    }
-  } finally {
-    lock.release();
-    await client.logout().catch(() => {});
-  }
-  // Triagem por IA das reclamações novas (tipo, prioridade, SLA, reserva,
-  // duplicado, rascunho) — lote pequeno e só com tempo de sobra; o que ficar
-  // apanha-se na corrida seguinte. Interruptor/orçamento → salta sem erro.
-  // Nunca envia nada ao cliente.
-  if (Date.now() + 25_000 < deadlineAt) {
-    try {
-      const { triagePendingComplaints } = await import("../complaintTriage");
-      const t = await triagePendingComplaints({ limit: 5, deadlineAt: Number.isFinite(deadlineAt) ? deadlineAt : Date.now() + 40_000 });
-      result.aiTriaged = t.triaged;
-    } catch (err: any) {
-      console.warn("[EmailInbound] triagem IA falhou:", String(err?.message ?? err).slice(0, 160));
-    }
-  }
-  return result;
-}
-
-/** Aliases que o IMAP ainda lê (os que o Gmail não trata). PURA. */
-export function imapAliases(viaGmail: ReadonlySet<string>): InboundAlias[] {
-  return ALIASES.filter((a) => !viaGmail.has(a));
 }
 
 function now(): string {

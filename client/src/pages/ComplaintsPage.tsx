@@ -1771,14 +1771,14 @@ function SendClientEmailButton({
 }
 
 // ─── SYNC EMAILS (manual) ─────────────────────────────────────────────────────
-// Corre o leitor IMAP on-demand — o cron horário continua, isto é o "já".
+// Corre já a sincronização do Gmail (a mesma do agendador/push) — isto é o "já".
 function SyncEmailsButton() {
   const { user } = useAuth();
   const utils = trpc.useUtils();
   const syncMut = trpc.admin.runEmailInbound.useMutation({
     onSuccess: (r: any) => {
       utils.complaints.invalidate();
-      toast.success(`Emails sincronizados: ${r.created} novos, ${r.skipped} ignorados${r.errors?.length ? `, ${r.errors.length} erros` : ""}${r.partial ? " — parcial, carregue outra vez para continuar" : ""}`);
+      toast.success(`Emails sincronizados: ${r.stored ?? 0} novos, ${r.created} registo(s) criados${r.errors?.length ? `, ${r.errors.length} erros` : ""}${r.partial ? " — parcial, carregue outra vez para continuar" : ""}`);
     },
     onError: (e) => toast.error(e.message),
   });

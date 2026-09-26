@@ -915,20 +915,20 @@ export const appRouter = router({
       return report;
     }),
 
-    // Sincroniza os emails inbound (reclamações/perdidos/críticas/RH) on-demand.
+    // Sincroniza já o email (Gmail → reclamações/perdidos/críticas/RH…) on-demand.
     // backoffice+ (a equipa de suporte usa o botão nas Reclamações/Recrutamento).
-    // Mesmo prazo do cron (45s < maxDuration 60s do Vercel): sem ele o botão
-    // morria com 504 a meio; partial:true → carregar outra vez continua
-    // (dedup por messageId torna cada corrida incremental).
+    // É a mesma sincronização do agendador/push (API do Gmail — não há IMAP);
+    // prazo 45s < maxDuration 60s do Vercel; partial:true → carregar outra vez continua.
     runEmailInbound: protectedProcedure.mutation(async ({ ctx }) => {
       requireAccess(ctx.user, "sincronizacao", "edit");
-      const { runEmailInboundSync } = await import("./jobs/emailInboundSync");
-      const result = await runEmailInboundSync({ deadlineAt: Date.now() + 45_000 });
+      const { runMailSync } = await import("./mail/service");
+      const r = await runMailSync({ deadlineAt: Date.now() + 45_000 });
+      const result = { configured: r.configured, created: r.pipelineCreated, stored: r.stored, skipped: 0, errors: r.errors, partial: !r.done, aiTriaged: r.aiTriaged ?? 0 };
       await logActivity({
         userId: ctx.user.id,
         action: "email_sync",
         entity: "inbound_emails",
-        details: `criados=${result.created} ignorados=${result.skipped} erros=${result.errors.length}${result.partial ? " (parcial)" : ""}`,
+        details: `gmail: guardados=${r.stored} registos=${r.pipelineCreated} erros=${r.errors.length}${r.done ? "" : " (parcial)"}`,
       });
       return result;
     }),
@@ -2530,7 +2530,7 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "leads_extras", "edit");
-        const { sendEmail } = await import("./_core/notification");
+        const { sendEmail } = await import("./mail/systemMail");
 
         const emailAttachments: Array<{ filename: string; content: Buffer }> = [];
         for (const a of input.attachments ?? []) {
@@ -2570,7 +2570,7 @@ export const appRouter = router({
           entity: "recruitment",
           details: `Resposta a ${input.to}: ${input.subject.slice(0, 80)}${inviteLink ? " (+link registo)" : ""}${emailAttachments.length ? ` (+${emailAttachments.length} anexo${emailAttachments.length > 1 ? "s" : ""})` : ""}`,
         });
-        if (!ok) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "SMTP não configurado ou falhou o envio" });
+        if (!ok) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Envio de email (Gmail) não configurado ou falhou o envio" });
         return { ok, inviteLink };
       }),
 
@@ -5337,17 +5337,17 @@ export const appRouter = router({
     }),
     syncFromGmail: protectedProcedure.mutation(async ({ ctx }) => {
       if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      // Leitor IMAP nativo (substitui o antigo fluxo Make.com 2x/dia).
-      const { runEmailInboundSync } = await import("./jobs/emailInboundSync");
-      const r = await runEmailInboundSync({ deadlineAt: Date.now() + 45_000 });
+      // Sincronização do Gmail (a mesma do agendador/push; o alias criticas@ cria as críticas).
+      const { runMailSync } = await import("./mail/service");
+      const r = await runMailSync({ deadlineAt: Date.now() + 45_000 });
       return {
-        reviewsImported: r.byAlias["criticas"] || 0,
-        reviewsSkipped: r.skipped,
+        reviewsImported: r.pipelineCreated,
+        reviewsSkipped: 0,
         incidentsImported: 0,
         incidentsSkipped: 0,
         message: r.configured
-          ? `Sincronizado: ${r.created} novos registos, ${r.skipped} ignorados.${r.partial ? " Parcial — carregue outra vez para continuar." : ""}`
-          : "IMAP n\u00e3o configurado no servidor.",
+          ? `Sincronizado: ${r.stored} email(s) novos, ${r.pipelineCreated} registo(s) criados.${r.done ? "" : " Parcial — carregue outra vez para continuar."}`
+          : "Nenhuma caixa Gmail ligada (Definições → Comunicação).",
       };
     }),
     // Checkout drivers ranking (DB local — alimentada pelo sync da API Multipark)
@@ -5551,7 +5551,7 @@ export const appRouter = router({
       requireAccess(ctx.user, "perdidos", "edit");
       const item = await loadLostInScope(input.itemId);
       if (!item.clientEmail) throw new TRPCError({ code: "BAD_REQUEST", message: "Item sem email de cliente" });
-      const { sendEmail } = await import("./_core/notification");
+      const { sendEmail } = await import("./mail/systemMail");
       const greeting = item.clientName ? `Olá ${item.clientName},\n\n` : "Olá,\n\n";
       const full = greeting + input.body;
       const ok = await sendEmail({
@@ -5563,7 +5563,7 @@ export const appRouter = router({
         from: "perdidos@multipark.pt",
         fromName: "Multipark",
       });
-      if (!ok) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Falha ao enviar email (SMTP)" });
+      if (!ok) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Falha ao enviar email (Gmail)" });
       await updateLostFoundItem(input.itemId, { clientEmailSentAt: utcNowStr() } as any);
       await addLostFoundMessage({
         itemId: input.itemId,

@@ -180,6 +180,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0180").then(m => ({ s: m.MIGRATION_0180_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0180 })),
       import("./migrations/migration_0185").then(m => ({ s: m.MIGRATION_0185_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0185 })),
       import("./migrations/migration_0190").then(m => ({ s: m.MIGRATION_0190_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0190 })),
+      import("./migrations/migration_0195").then(m => ({ s: m.MIGRATION_0195_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0195 })),
       import("./migrations/migration_0200").then(m => ({ s: m.MIGRATION_0200_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0200 })),
     ]);
     for (const { s, ok } of mods) {
@@ -7264,20 +7265,6 @@ export async function createInboundEmail(data: InsertInboundEmail): Promise<numb
   };
   const [result] = await db.insert(inboundEmails).values(safe);
   return (result as any).insertId as number;
-}
-
-/** Batch do dedup do email-inbound: quais destes messageIds já existem. */
-export async function listExistingInboundMessageIds(messageIds: string[]): Promise<Set<string>> {
-  const db = await getDb();
-  if (!db || messageIds.length === 0) return new Set();
-  const rows = await db
-    .select({ m: inboundEmails.messageId, status: inboundEmails.status, processedAt: inboundEmails.processedAt })
-    .from(inboundEmails)
-    .where(inArray(inboundEmails.messageId, messageIds));
-  // Reservas 'processing' ABANDONADAS (corrida morta a meio) não contam como
-  // conhecidas — o claimInboundEmail retoma-as.
-  const stale = inboundStaleCutoff();
-  return new Set(rows.filter(r => !(r.status === "processing" && (r.processedAt ?? "") < stale)).map(r => r.m));
 }
 
 /** Reserva 'processing' mais antiga do que isto é considerada abandonada. */

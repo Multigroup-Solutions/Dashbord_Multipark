@@ -118,8 +118,19 @@ export function isAutomatedSender(address: string | null | undefined, headers: {
 // pesquisa continua a encontrá-las. Mesma heurística do pipeline antigo
 // (server/emailParse.ts isReservationNotification + remetente interno).
 
-/** mail_messages.automated: 0 = pessoa, 1 = remetente automático, 2 = notificação automática de reserva. */
+/** mail_messages.automated: 0 = pessoa, 1 = remetente automático, 2 = notificação automática de reserva, 3 = email de sistema do dashboard. */
 export const MAIL_AUTOMATED_RESERVATION = 2;
+/**
+ * Email de sistema enviado pelo próprio dashboard (notificações, briefing,
+ * escala, tarefas, formações…) pela API do Gmail: leva o cabeçalho
+ * `X-Multipark-System` e, quando a sincronização o encontra (enviados da
+ * conta remetente ou recebido numa caixa), fica automático e escondido —
+ * nunca aparece como conversa de cliente na Comunicação.
+ */
+export const MAIL_AUTOMATED_SYSTEM = 3;
+export const SYSTEM_MAIL_HEADER = "X-Multipark-System";
+/** Valores de mail_messages.automated que tornam a conversa "automática" (escondida por omissão). */
+export const MAIL_HIDDEN_AUTOMATED_VALUES: readonly number[] = [MAIL_AUTOMATED_RESERVATION, MAIL_AUTOMATED_SYSTEM];
 
 const RESERVATION_NOTICE_SUBJECT = /nova reserva/i;
 const REPLY_OR_FORWARD = /^\s*(re|res|fw|fwd|enc|reenc|tr)\s*:/i;
@@ -152,9 +163,54 @@ export function hideAutomaticThreads(input: { showAutomatic?: boolean | null; se
 
 // ─── Configuração das caixas partilhadas ────────────────────────────────────
 
-/** "Pipeline" antigo (emailInboundSync): o email cria o registo no módulo. */
+/** Pipeline temático (server/jobs/emailInboundSync.ts → processInboundEmail): o email cria o registo no módulo. */
 export const MAIL_PIPELINES = ["criticas", "reclamacoes", "perdidos", "recursos-humanos", "campanhas", "ocorrencias"] as const;
 export type MailPipeline = (typeof MAIL_PIPELINES)[number];
+export const MAIL_PIPELINE_LABELS: Record<MailPipeline, string> = {
+  criticas: "Críticas",
+  reclamacoes: "Reclamações",
+  perdidos: "Perdidos e Achados",
+  "recursos-humanos": "Recursos Humanos",
+  campanhas: "Campanhas",
+  ocorrencias: "Ocorrências",
+};
+export const isMailPipeline = (v: unknown): v is MailPipeline => typeof v === "string" && (MAIL_PIPELINES as readonly string[]).includes(v);
+
+/**
+ * Destino de um alias na tabela de encaminhamento: "caixa" = o da caixa
+ * (o pipeline dela, se tiver); "geral"/"reservas" = só a conversa na caixa
+ * (sem criar registos); os restantes = pipeline temático.
+ */
+export const MAIL_ALIAS_DESTINATIONS = ["caixa", "geral", "reservas", ...MAIL_PIPELINES] as const;
+export type MailAliasDestination = (typeof MAIL_ALIAS_DESTINATIONS)[number];
+export const MAIL_ALIAS_DESTINATION_LABELS: Record<MailAliasDestination, string> = {
+  caixa: "Como a caixa",
+  geral: "Geral (só conversa)",
+  reservas: "Reservas (só conversa)",
+  ...MAIL_PIPELINE_LABELS,
+};
+
+/** Papéis que podem ser "equipa" responsável por um alias. */
+export const MAIL_OWNER_ROLES = ["team_leader", "supervisor", "frontoffice", "backoffice", "admin", "super_admin"] as const;
+export type MailOwnerRole = (typeof MAIL_OWNER_ROLES)[number];
+
+/** Responsável de um alias: "user:<id>" (pessoa) ou "role:<papel>" (equipa = quem tem o papel). */
+export const mailOwnerSchema = z.string().trim().regex(new RegExp(`^(user:[1-9]\\d{0,9}|role:(${MAIL_OWNER_ROLES.join("|")}))$`), "Responsável inválido.");
+export type MailOwner = { kind: "user"; userId: number } | { kind: "role"; role: MailOwnerRole };
+
+/** "user:12" / "role:backoffice" → responsável; resto → null. PURA. */
+export function parseMailOwner(v: string | null | undefined): MailOwner | null {
+  const s = String(v ?? "").trim();
+  const u = /^user:([1-9]\d{0,9})$/.exec(s);
+  if (u) return { kind: "user", userId: Number(u[1]) };
+  const r = /^role:([a-z_]+)$/.exec(s);
+  if (r && (MAIL_OWNER_ROLES as readonly string[]).includes(r[1])) return { kind: "role", role: r[1] as MailOwnerRole };
+  return null;
+}
+
+/** Caixa virtual "Por classificar" (emails que chegaram por um endereço que não está na tabela de aliases). */
+export const MAIL_TRIAGE_KEY = "por-classificar";
+export const MAIL_TRIAGE_LABEL = "Por classificar";
 
 /** Módulos da matriz a que uma caixa pode pertencer (quem a vê). */
 export const MAILBOX_MODULES = [
@@ -172,9 +228,24 @@ export const MAILBOX_CITY_RULE_LABELS: Record<MailboxCityRule, string> = {
 
 const addressSchema = z.string().trim().toLowerCase().email("Endereço inválido.").max(320);
 
+/**
+ * Uma linha da tabela de encaminhamento por alias (Definições → Comunicação):
+ * o endereço (qualquer domínio) por onde o email entrou → caixa, marca,
+ * cidade, destino (pipeline), responsável, etiqueta. Guardada no
+ * `addressesJson` da caixa (a mesma configuração, sem sistema paralelo);
+ * os campos novos têm omissões — as caixas antigas continuam válidas.
+ */
 export const mailboxAddressSchema = z.object({
   address: addressSchema,
   brand: z.enum(MAIL_BRAND_IDS, { error: "Marca desconhecida." }),
+  /** Cidade (id do nó "cidade" da árvore de projetos): a conversa fica dessa cidade. */
+  cityId: z.number().int().positive().nullable().default(null),
+  destination: z.enum(MAIL_ALIAS_DESTINATIONS, { error: "Destino desconhecido." }).default("caixa"),
+  owner: mailOwnerSchema.nullable().default(null),
+  /** Etiqueta mostrada na conversa (ex.: "Skypark Porto"). */
+  tag: z.string().trim().max(40, "Etiqueta: máximo 40 caracteres.").default(""),
+  /** Inativo = o endereço deixa de encaminhar (os emails por ele vão para "Por classificar"). */
+  active: z.boolean().default(true),
 });
 export type MailboxAddress = z.infer<typeof mailboxAddressSchema>;
 
@@ -182,7 +253,7 @@ export const mailboxConfigSchema = z.object({
   key: z.string().trim().regex(/^[a-z0-9][a-z0-9_-]{1,39}$/, "Chave: 2–40 letras minúsculas, números, - ou _."),
   label: z.string().trim().min(1, "Indica o nome da caixa.").max(80),
   /** Endereços/aliases que chegam a esta caixa (e com que marca). */
-  addresses: z.array(mailboxAddressSchema).min(1, "Indica pelo menos um endereço.").max(40),
+  addresses: z.array(mailboxAddressSchema).min(1, "Indica pelo menos um endereço.").max(300),
   /** De onde se lê: conta do Workspace por delegação (service account) ou a conta Google ligada de um utilizador. */
   sourceKind: z.enum(["dwd", "user"]),
   /** Conta do Workspace a impersonar (sourceKind = dwd). */
@@ -212,6 +283,44 @@ export const mailboxConfigSchema = z.object({
   }
 });
 export type MailboxConfig = z.output<typeof mailboxConfigSchema>;
+
+/** Linha da tabela de aliases (Definições → Comunicação → Aliases): o alias + a caixa a que pertence. */
+export const mailAliasRowSchema = mailboxAddressSchema.extend({
+  mailboxKey: z.string().trim().min(1, "Escolhe a caixa.").max(40),
+});
+export type MailAliasRow = z.output<typeof mailAliasRowSchema>;
+
+/** Caixas → tabela plana de aliases (pela ordem das caixas). PURA. */
+export function aliasTableOf(mailboxes: readonly Pick<MailboxConfig, "key" | "addresses">[]): MailAliasRow[] {
+  return mailboxes.flatMap((m) => m.addresses.map((a) => ({ ...a, mailboxKey: m.key })));
+}
+
+/**
+ * Aplica a tabela de aliases editada às caixas: cada caixa fica com as suas
+ * linhas (por ordem). Recusa endereços repetidos (um alias só encaminha para
+ * UMA caixa), caixas desconhecidas e caixas que ficariam sem endereços.
+ * Devolve só as caixas alteradas. PURA.
+ */
+export function applyAliasTable<M extends MailboxConfig>(mailboxes: readonly M[], rows: readonly MailAliasRow[]): { ok: true; changed: M[] } | { ok: false; error: string } {
+  const keys = new Set(mailboxes.map((m) => m.key));
+  const seen = new Map<string, string>();
+  const byBox = new Map<string, MailboxAddress[]>();
+  for (const r of rows) {
+    const addr = normalizeAddress(r.address);
+    if (!keys.has(r.mailboxKey)) return { ok: false, error: `Caixa desconhecida: ${r.mailboxKey}.` };
+    if (seen.has(addr)) return { ok: false, error: `O endereço ${addr} está repetido (caixas ${seen.get(addr)} e ${r.mailboxKey}) — cada alias encaminha para uma só caixa.` };
+    seen.set(addr, r.mailboxKey);
+    const { mailboxKey, ...alias } = r;
+    byBox.set(mailboxKey, [...(byBox.get(mailboxKey) ?? []), { ...alias, address: addr }]);
+  }
+  const changed: M[] = [];
+  for (const m of mailboxes) {
+    const next = byBox.get(m.key) ?? [];
+    if (!next.length) return { ok: false, error: `A caixa "${m.label}" ficaria sem endereços — mantém pelo menos um (ou apaga a caixa).` };
+    if (JSON.stringify(next) !== JSON.stringify(m.addresses)) changed.push({ ...m, addresses: next });
+  }
+  return { ok: true, changed };
+}
 
 /** Chave da conta de sincronização de uma caixa ("dwd:email" / "user:id"). PURA. */
 export function sourceAccountKey(m: Pick<MailboxConfig, "sourceKind" | "sourceEmail" | "sourceUserId">): string | null {
@@ -251,36 +360,94 @@ export interface Classification {
   matchedAddress: string | null;
   /** Conversa da caixa pessoal (conta ligada de um utilizador, sem caixa partilhada). */
   personal: boolean;
+  /** Linha da tabela de aliases que encaminhou a mensagem (null = nenhum alias conhecido). */
+  alias?: MailboxAddress | null;
+  /** Cabeçalho onde o alias foi encontrado. */
+  via?: AliasHeader | null;
+  /** Recebida numa caixa partilhada por um endereço que não está na tabela → "Por classificar". */
+  triage?: boolean;
+}
+
+/** Cabeçalhos por ordem de confiança (as enviadas usam o From). */
+export const ALIAS_HEADER_ORDER = ["delivered-to", "x-original-to", "to", "cc", "bcc"] as const;
+export type AliasHeader = (typeof ALIAS_HEADER_ORDER)[number] | "from";
+
+export interface AliasResolution {
+  mailboxKey: string | null;
+  alias: MailboxAddress | null;
+  matchedAddress: string | null;
+  via: AliasHeader | null;
 }
 
 /**
- * Em que caixa cai uma mensagem de uma conta. Ordem dos sinais (o mais fiável
- * primeiro): Delivered-To, X-Original-To, To, Cc, Bcc; nas mensagens ENVIADAS
- * conta o From (o alias com que saiu). Sem correspondência: caixa "apanha
- * tudo" da conta; conta pessoal → "O meu email"; senão sem caixa (fica
- * guardada, visível só na administração). PURA.
+ * Resolve o alias pelo qual a mensagem chegou: percorre Delivered-To →
+ * X-Original-To → To → Cc → Bcc (nas ENVIADAS, o From) e devolve a primeira
+ * linha ATIVA da tabela de aliases (caixas ativas) que corresponde, em
+ * qualquer domínio. O Delivered-To igual à própria conta de origem
+ * (reservas@/info@) não diz nada — no Google Workspace é sempre o endereço
+ * principal da caixa — e é saltado; o alias vem nos cabeçalhos seguintes.
+ * Um endereço que esteja em duas caixas conta na primeira (ordem da lista). PURA.
+ */
+export function resolveAlias(
+  r: MessageRecipients,
+  mailboxes: readonly Pick<MailboxConfig, "key" | "addresses" | "active">[],
+  opts: { outbound?: boolean; accountEmails?: readonly (string | null | undefined)[] } = {},
+): AliasResolution {
+  const index = new Map<string, { key: string; alias: MailboxAddress }>();
+  for (const m of mailboxes) {
+    if (!m.active) continue;
+    for (const a of m.addresses) {
+      if (a.active === false) continue;
+      const k = normalizeAddress(a.address);
+      if (k && !index.has(k)) index.set(k, { key: m.key, alias: a as MailboxAddress });
+    }
+  }
+  const accounts = new Set((opts.accountEmails ?? []).map(normalizeAddress).filter(Boolean));
+  const ordered: Array<[AliasHeader, readonly string[] | undefined]> = opts.outbound
+    ? [["from", r.from ? [r.from] : []]]
+    : [["delivered-to", r.deliveredTo], ["x-original-to", r.xOriginalTo], ["to", r.to], ["cc", r.cc], ["bcc", r.bcc]];
+  for (const [via, list] of ordered) {
+    for (const raw of list ?? []) {
+      const addr = normalizeAddress(raw);
+      if (!addr) continue;
+      if (via === "delivered-to" && accounts.has(addr)) continue;
+      const hit = index.get(addr);
+      if (hit) return { mailboxKey: hit.key, alias: hit.alias, matchedAddress: addr, via };
+    }
+  }
+  return { mailboxKey: null, alias: null, matchedAddress: null, via: null };
+}
+
+/**
+ * Em que caixa cai uma mensagem de uma conta: o alias (ver `resolveAlias`)
+ * dá a caixa e a marca. Sem alias conhecido: conta pessoal → "O meu email";
+ * caixa partilhada → fica marcada "Por classificar" (triage) e, se houver,
+ * guardada na caixa "apanha tudo" da conta até alguém a atribuir. PURA.
  */
 export function classifyMessage(
   r: MessageRecipients,
   mailboxes: readonly Pick<MailboxConfig, "key" | "addresses" | "catchAll" | "active">[],
-  opts: { outbound?: boolean; personalOwner?: boolean; brandDomains?: Record<string, string[]> } = {},
+  opts: { outbound?: boolean; personalOwner?: boolean; brandDomains?: Record<string, string[]>; accountEmails?: readonly (string | null | undefined)[] } = {},
 ): Classification {
+  const hit = resolveAlias(r, mailboxes, { outbound: opts.outbound, accountEmails: opts.accountEmails });
+  if (hit.mailboxKey && hit.alias) {
+    return { mailboxKey: hit.mailboxKey, brand: hit.alias.brand, matchedAddress: hit.matchedAddress, personal: false, alias: hit.alias, via: hit.via, triage: false };
+  }
   const active = mailboxes.filter((m) => m.active);
   const order: string[] = opts.outbound
     ? [...(r.from ? [r.from] : [])]
     : [...(r.deliveredTo ?? []), ...(r.xOriginalTo ?? []), ...(r.to ?? []), ...(r.cc ?? []), ...(r.bcc ?? [])];
   const candidates = order.map(normalizeAddress).filter(Boolean);
-  for (const addr of candidates) {
-    for (const m of active) {
-      const hit = m.addresses.find((a) => normalizeAddress(a.address) === addr);
-      if (hit) return { mailboxKey: m.key, brand: hit.brand, matchedAddress: addr, personal: false };
-    }
-  }
-  const brandAddr = candidates.find((a) => brandOfAddress(a, opts.brandDomains));
+  // O endereço "interessante" é o da empresa que não é a própria conta (ex.: o alias por configurar).
+  const own = new Set((opts.accountEmails ?? []).map(normalizeAddress).filter(Boolean));
+  const brandAddr = candidates.find((a) => !own.has(a) && brandOfAddress(a, opts.brandDomains)) ?? candidates.find((a) => brandOfAddress(a, opts.brandDomains));
   const brand = brandAddr ? brandOfAddress(brandAddr, opts.brandDomains) : null;
-  if (opts.personalOwner) return { mailboxKey: null, brand, matchedAddress: brandAddr ?? null, personal: true };
+  if (opts.personalOwner) return { mailboxKey: null, brand, matchedAddress: brandAddr ?? null, personal: true, alias: null, via: null, triage: false };
   const catchAll = active.find((m) => m.catchAll);
-  return { mailboxKey: catchAll?.key ?? null, brand: brand ?? catchAll?.addresses[0]?.brand ?? null, matchedAddress: brandAddr ?? null, personal: false };
+  return {
+    mailboxKey: catchAll?.key ?? null, brand: brand ?? catchAll?.addresses[0]?.brand ?? null, matchedAddress: brandAddr ?? null, personal: false,
+    alias: null, via: null, triage: !opts.outbound,
+  };
 }
 
 /** A mensagem entra no pipeline antigo (ocorrências por assunto, como o IMAP fazia)? PURA. */
@@ -294,6 +461,84 @@ export function pipelineFor(
   // "ocorrência" no assunto (enquanto o alias próprio não existia).
   if (accountPipelines.includes("ocorrencias") && /ocorr[eê]ncias?/i.test(String(subject ?? ""))) return "ocorrencias";
   return null;
+}
+
+/**
+ * Pipeline de uma mensagem encaminhada por um alias: o destino do alias manda
+ * (pipeline, ou "geral"/"reservas" = nenhum); "como a caixa" → `pipelineFor`. PURA.
+ */
+export function aliasPipeline(
+  mailbox: Pick<MailboxConfig, "pipeline"> | null | undefined,
+  alias: Pick<MailboxAddress, "destination"> | null | undefined,
+  subject: string | null | undefined,
+  accountPipelines: readonly MailPipeline[] = [],
+): MailPipeline | null {
+  const d = alias?.destination ?? "caixa";
+  if (isMailPipeline(d)) return d;
+  if (d === "geral" || d === "reservas") return null;
+  return pipelineFor(mailbox, subject, accountPipelines);
+}
+
+/** Pipelines que a configuração encaminha (caixa com pipeline ou alias com destino). PURA. */
+export function configuredPipelines(mailboxes: readonly Pick<MailboxConfig, "active" | "pipeline" | "addresses">[]): Map<MailPipeline, number> {
+  const out = new Map<MailPipeline, number>();
+  const add = (p: MailPipeline) => out.set(p, (out.get(p) ?? 0) + 1);
+  for (const m of mailboxes) {
+    if (!m.active) continue;
+    for (const a of m.addresses) {
+      if (a.active === false) continue;
+      const p = aliasPipeline(m, a, null);
+      if (p) add(p);
+    }
+  }
+  return out;
+}
+
+export interface MailSourceHealth { accountKey: string; status: string | null; lastOkAt: string | Date | null }
+
+/**
+ * Avisos do encaminhamento por alias para Integrações/Estado: pipeline sem
+ * nenhum alias/caixa a alimentá-lo e caixas (e os pipelines delas) cuja conta
+ * Gmail de origem não está ligada ou não sincroniza há mais de `staleHours`.
+ * Sem IMAP de reserva: um pipeline sem Gmail saudável NÃO cria registos. PURA.
+ */
+export function mailRoutingWarnings(input: {
+  mailboxes: readonly MailboxConfig[];
+  accounts: readonly MailSourceHealth[];
+  dwdAvailable: boolean;
+  now?: number;
+  staleHours?: number;
+}): string[] {
+  const now = input.now ?? Date.now();
+  const staleMs = (input.staleHours ?? 2) * 3_600_000;
+  const byKey = new Map(input.accounts.map((a) => [a.accountKey, a]));
+  const parseUtc = (s: string | Date | null) => (s instanceof Date ? s.getTime() : s ? Date.parse(String(s).replace(" ", "T") + (/[zZ]|[+-]\d\d:?\d\d$/.test(String(s)) ? "" : "Z")) : NaN);
+  const problemOf = (m: MailboxConfig): string | null => {
+    const key = sourceAccountKey(m);
+    if (!key) return "sem conta Google de origem";
+    if (m.sourceKind === "dwd" && !input.dwdAvailable) return "conta de serviço Google (delegação) em falta";
+    const a = byKey.get(key);
+    const who = m.sourceKind === "dwd" ? m.sourceEmail : `conta ligada #${m.sourceUserId}`;
+    if (!a) return `a conta ${who} ainda não sincronizou`;
+    if (a.status && a.status !== "ok" && a.status !== "pending") return `a conta ${who} está em "${a.status}"`;
+    const ok = parseUtc(a.lastOkAt);
+    if (!Number.isFinite(ok)) return `a conta ${who} ainda não sincronizou com sucesso`;
+    if (now - ok > staleMs) return `a conta ${who} não sincroniza há mais de ${Math.round(staleMs / 3_600_000)} h`;
+    return null;
+  };
+  const out: string[] = [];
+  const active = input.mailboxes.filter((m) => m.active);
+  const fed = configuredPipelines(active);
+  for (const p of MAIL_PIPELINES) {
+    if (!fed.has(p)) out.push(`${MAIL_PIPELINE_LABELS[p]}: nenhum alias encaminha para este destino — os emails não criam registos (Definições → Comunicação → Aliases).`);
+  }
+  for (const m of active) {
+    const problem = problemOf(m);
+    if (!problem) continue;
+    const pipes = Array.from(new Set(m.addresses.filter((a) => a.active !== false).map((a) => aliasPipeline(m, a, null)).filter((x): x is MailPipeline => !!x)));
+    out.push(`Caixa "${m.label}": ${problem}${pipes.length ? ` — ${pipes.map((x) => MAIL_PIPELINE_LABELS[x]).join(", ")} não está(ão) a criar registos` : ""}.`);
+  }
+  return out;
 }
 
 // ─── Quem vê o quê ──────────────────────────────────────────────────────────

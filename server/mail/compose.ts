@@ -51,18 +51,27 @@ export interface RawMessageInput {
   html: string;
   inReplyTo?: string | null;
   references?: string[];
-  attachments?: Array<{ filename: string; contentType: string; content: Buffer }>;
+  attachments?: Array<{ filename: string; contentType?: string; content: Buffer }>;
+  /** Cabeçalhos extra (ex.: X-Multipark-System e Auto-Submitted nos emails de sistema). */
+  headers?: Record<string, string>;
+  /** Message-ID a usar ("<…@…>"); sem ele o MailComposer gera um. */
+  messageId?: string;
+  /** Resposta vai para aqui (ex.: alias da caixa quando o remetente é a conta de sistema). */
+  replyTo?: string | null;
 }
 
 export async function buildRawMessage(m: RawMessageInput): Promise<Buffer> {
   const composer = new MailComposer({
+    ...(m.headers && Object.keys(m.headers).length ? { headers: m.headers } : {}),
+    ...(m.messageId ? { messageId: m.messageId } : {}),
+    ...(m.replyTo ? { replyTo: m.replyTo } : {}),
     from: m.from.name ? { name: m.from.name, address: m.from.address } : m.from.address,
     to: m.to,
     cc: m.cc.length ? m.cc : undefined,
     bcc: m.bcc.length ? m.bcc : undefined,
     subject: m.subject,
-    text: m.text,
-    html: m.html,
+    text: m.text || undefined,
+    html: m.html || undefined,
     inReplyTo: m.inReplyTo ?? undefined,
     references: m.references?.length ? m.references : undefined,
     attachments: (m.attachments ?? []).map((a) => ({ filename: a.filename, contentType: a.contentType, content: a.content })),

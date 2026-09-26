@@ -1,20 +1,25 @@
 /**
- * Comunicação — corrida da sincronização (cron /api/cron/mail-sync, 5 em 5
- * min, prazo 45 s, resumível) e o que acontece a cada email guardado:
+ * Comunicação — corrida da sincronização (agendador /api/cron/tick: de 5 em
+ * 5 min, ou de hora a hora como rede de segurança quando o push do Gmail está
+ * saudável; prazo por corrida, resumível) e o que acontece a cada email
+ * guardado (TODO o email entra pela API do Gmail — não há IMAP):
  *
- *  1. pipeline antigo (reclamações, perdidos, críticas, RH, ocorrências) para
- *     emails RECEBIDOS nas caixas com pipeline, dentro da janela do IMAP
- *     (IMAP_SINCE_DAYS, 30 d) — o Message-ID reservado em inbound_emails
- *     impede que o IMAP e o Gmail processem o mesmo email;
- *  2. ligações automáticas (cliente, reserva, reclamação, perdido…);
- *  3. notificação `mail_new` (conversa nova/reaberta, caixa com aviso, sem
+ *  1. pipeline temático (reclamações, perdidos, críticas, RH, campanhas,
+ *     ocorrências) para emails RECEBIDOS, pelo destino do alias (tabela de
+ *     aliases) ou da caixa, dentro de MAIL_PIPELINE_WINDOW_DAYS — o
+ *     Message-ID reservado em inbound_emails impede processar duas vezes;
+ *  2. ligações automáticas (cliente, reserva…) e cidade do alias (a conversa
+ *     fica dessa cidade — regra de cidade das caixas e notificações);
+ *  3. responsável do alias: pessoa → atribuída + `mail_assigned`; equipa
+ *     (papel) → `mail_new` a quem tem o papel e vê a caixa (na cidade);
+ *  4. notificação `mail_new` (conversa nova/reaberta, caixa com aviso, sem
  *     registo criado pelo pipeline — esse já avisa) a quem vê a caixa.
  * "ok" honesto: falha de uma conta de caixa partilhada → ok:false; uma conta
  * pessoal que precisa de ser religada não pinta o cron de vermelho (avisa a
  * própria pessoa).
  */
 import { sql } from "drizzle-orm";
-import { canSeeMailbox, pipelineFor, isCompanyAddress, type MailboxConfig, type MailPipeline } from "../../shared/mail";
+import { aliasPipeline, canSeeMailbox, configuredPipelines, isCompanyAddress, parseMailOwner, type MailboxAddress, type MailboxConfig, type MailPipeline } from "../../shared/mail";
 import type { InboundAlias } from "../emailParse";
 import { gmailThreadIdToImap } from "./parse";
 import { syncAccount, type AccountSyncResult, type StoredEvent } from "./sync";
@@ -37,7 +42,8 @@ export interface MailSyncReport {
   watchRenewed?: number;
 }
 
-const PIPELINE_WINDOW_DAYS = () => Math.max(1, Number(process.env.IMAP_SINCE_DAYS || 30));
+/** Só emails recebidos nestes últimos dias criam registos (a importação inicial de 90 d não ressuscita casos antigos). */
+export const MAIL_PIPELINE_WINDOW_DAYS = 30;
 
 // ─── Dependências reais das ligações automáticas ────────────────────────────
 
@@ -89,7 +95,7 @@ export const dbAutoLinkDeps: AutoLinkDeps = {
 
 // ─── Pós-processamento de cada email guardado ───────────────────────────────
 
-async function runPipeline(e: StoredEvent, api: GmailApi, pipeline: MailPipeline): Promise<{ targetModule: string; targetId?: number } | null> {
+async function runPipeline(e: Pick<StoredEvent, "parsed" | "result">, api: Pick<GmailApi, "getAttachment">, pipeline: MailPipeline): Promise<{ targetModule: string; targetId?: number } | null> {
   const p = e.parsed;
   if (!p.rfcMessageId) return null;
   const { processInboundEmail } = await import("../jobs/emailInboundSync");
@@ -132,16 +138,50 @@ async function notifyNewMail(e: StoredEvent, mailbox: MailboxConfig, projectId: 
   });
 }
 
+/** Responsável do alias: pessoa → atribui (se ainda ninguém) e avisa; equipa (papel) → avisa quem tem o papel e vê a caixa. */
+async function notifyAliasOwner(e: StoredEvent, mailbox: MailboxConfig, alias: MailboxAddress, projectId: number | null): Promise<boolean> {
+  const owner = parseMailOwner(alias.owner);
+  if (!owner) return false;
+  const { notify } = await import("../notify");
+  const link = `/comunicacao?caixa=${encodeURIComponent(mailbox.key)}&t=${e.result.threadId}`;
+  const who = e.parsed.fromName || e.parsed.fromEmail || "cliente";
+  const title = `${alias.tag || mailbox.label}: ${e.parsed.subject || "(sem assunto)"}`.slice(0, 255);
+  const body = `Chegou por ${alias.address} — ${who}: ${e.parsed.snippet}`.slice(0, 500);
+  const d = await db();
+  if (owner.kind === "user") {
+    const u = rowsOf(await d.execute(sql`SELECT id, role, isActive FROM users WHERE id = ${owner.userId} LIMIT 1`))[0];
+    if (!u || Number(u.isActive) !== 1) return false;
+    // Só se atribui a quem vê a caixa (a mesma regra da atribuição manual).
+    const { getUserModuleOverrides } = await import("../db");
+    const target = { id: Number(u.id), role: String(u.role), accessOverrides: await getUserModuleOverrides(Number(u.id)).catch(() => ({})) };
+    if (!canSeeMailbox(target, mailbox)) return false;
+    await d.execute(sql`UPDATE mail_threads SET assignedUserId = ${owner.userId} WHERE id = ${e.result.threadId} AND assignedUserId IS NULL`);
+    await notify({ kind: "mail_assigned", targetUserId: owner.userId, projectId, title, body, link, entity: { type: "mail_thread", id: e.result.threadId } });
+    return true;
+  }
+  // Papéis nacionais (admin/super_admin) não estão nos destinatários por omissão de mail_new: juntam-se à mão.
+  const also = owner.role === "admin" || owner.role === "super_admin"
+    ? rowsOf(await d.execute(sql`SELECT id FROM users WHERE isActive = 1 AND role = ${owner.role} LIMIT 200`)).map((r) => Number(r.id))
+    : [];
+  await notify({
+    kind: "mail_new", projectId, title, body, link, alsoUserIds: also,
+    entity: { type: "mail_thread", id: e.result.threadId },
+    recipientFilter: (c) => c.role === owner.role && canSeeMailbox({ id: c.id, role: c.role, accessOverrides: c.accessOverrides }, mailbox),
+  });
+  return true;
+}
+
 export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains: Record<string, string[]>) {
-  const windowMs = PIPELINE_WINDOW_DAYS() * 86_400_000;
+  const windowMs = MAIL_PIPELINE_WINDOW_DAYS * 86_400_000;
   return async (e: StoredEvent) => {
     const p = e.parsed;
     const mailbox = e.classification.mailboxKey ? e.account.mailboxes.find((m) => m.key === e.classification.mailboxKey) ?? null : null;
+    const alias = e.classification.alias ?? null;
     let routed: { targetModule: string; targetId?: number } | null = null;
-    // 1) Pipeline antigo — só emails RECEBIDOS, recentes, de caixas partilhadas.
-    if (!p.outbound && !e.classification.personal) {
-      const accountPipelines = e.account.mailboxes.filter((m) => m.pipeline).map((m) => m.pipeline!) as MailPipeline[];
-      const pipeline = pipelineFor(mailbox, p.subject, accountPipelines);
+    // 1) Pipeline temático — só emails RECEBIDOS (de pessoas), recentes, de caixas partilhadas.
+    if (!p.outbound && !e.classification.personal && !p.systemMail) {
+      const accountPipelines = [...configuredPipelines(e.account.mailboxes).keys()];
+      const pipeline = aliasPipeline(mailbox, alias, p.subject, accountPipelines);
       const recent = p.sentAt ? Date.now() - Date.parse(p.sentAt.replace(" ", "T") + "Z") <= windowMs : false;
       if (pipeline && recent) {
         routed = await runPipeline(e, api, pipeline);
@@ -164,13 +204,53 @@ export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains
       projectId = projectFromLinks(links);
       await setThreadProjectIfEmpty(e.result.threadId, projectId);
     }
-    // 3) Aviso a quem vê a caixa (conversa nova ou reaberta, não automática).
+    // Cidade do alias: a conversa fica dessa cidade quando as ligações não deram
+    // um parque/cidade (regra "linked" das caixas → server/cityScope + cityAccess).
+    if (projectId == null && alias?.cityId) {
+      await setThreadProjectIfEmpty(e.result.threadId, alias.cityId);
+      projectId = alias.cityId;
+    }
+    // 3) Avisos (conversa nova ou reaberta, recebida, não automática).
     const createdCase = !!routed && ["complaint", "lostfound", "review", "incident", "incident_dup"].includes(routed.targetModule);
     const automated = !!(await (await db()).execute(sql`SELECT automated FROM mail_messages WHERE id = ${e.result.messageId ?? 0}`).then((r) => Number(rowsOf(r)[0]?.automated ?? 0)));
-    if (mailbox?.notify && !p.outbound && !automated && !createdCase && (e.result.newThread || e.result.reopened)) {
+    const fresh = !p.outbound && !automated && (e.result.newThread || e.result.reopened);
+    let ownerNotified = false;
+    if (fresh && mailbox && alias?.owner && e.result.newThread) {
+      ownerNotified = await notifyAliasOwner(e, mailbox, alias, projectId).catch(() => false);
+    }
+    if (fresh && mailbox?.notify && !createdCase && !ownerNotified) {
       await notifyNewMail(e, mailbox, projectId).catch(() => {});
     }
   };
+}
+
+/**
+ * "Por classificar" → caixa: depois de atribuída a conversa, se o destino
+ * (alias escolhido ou caixa) tiver pipeline, corre-o nas mensagens recebidas
+ * ainda não processadas (vão buscar-se ao Gmail — anexos incluídos).
+ */
+export async function reprocessThreadPipeline(threadId: number, mailbox: MailboxConfig, alias: MailboxAddress | null): Promise<{ processed: number; created: number }> {
+  const out = { processed: 0, created: 0 };
+  const pipeline = aliasPipeline(mailbox, alias, null);
+  if (!pipeline) return out;
+  const d = await db();
+  const t = rowsOf(await d.execute(sql`SELECT accountKey FROM mail_threads WHERE id = ${threadId} LIMIT 1`))[0];
+  if (!t) return out;
+  const msgs = rowsOf(await d.execute(sql`SELECT id, gmailMessageId FROM mail_messages
+    WHERE threadId = ${threadId} AND direction = 'in' AND automated = 0 AND pipeline IS NULL ORDER BY sentAt LIMIT 10`));
+  if (!msgs.length) return out;
+  const { gmailApiForAccount } = await import("./gmailApi");
+  const { parseGmailMessage } = await import("./parse");
+  const api = await gmailApiForAccount(String(t.accountKey));
+  for (const m of msgs) {
+    const raw = await api.getMessage(String(m.gmailMessageId)).catch(() => null);
+    if (!raw) continue;
+    const parsed = parseGmailMessage(raw);
+    const routed = await runPipeline({ parsed, result: { stored: true, threadId, messageId: Number(m.id), newThread: false, reopened: false } }, api, pipeline);
+    out.processed++;
+    if (routed && ["complaint", "lostfound", "review", "incident"].includes(routed.targetModule)) out.created++;
+  }
+  return out;
 }
 
 // ─── Corrida ────────────────────────────────────────────────────────────────

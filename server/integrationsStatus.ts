@@ -5,13 +5,14 @@
  *   - estado da ligação guardada (integration_connections: Google Ads, Meta,
  *     Google Business, WhatsApp);
  *   - última recolha com sucesso e último erro (integration_sync_runs para
- *     Google Ads/Meta; cron_runs para IMAP, Zello, Multipark, Google Business);
+ *     Google Ads/Meta; cron_runs para Gmail, Zello, Multipark, Google Business);
  *   - avisos (chave de cifra derivada do JWT_SECRET, LLM_MODEL por omissão…);
  *   - ligações para as páginas de gestão.
  * "Testar" só existe onde há um teste barato e sem efeitos:
  *   - Base de dados: SELECT 1;
- *   - SMTP: ligação + autenticação (transporter.verify — não envia nada);
- *   - IMAP: ligação + autenticação + logout (não lê emails);
+ *   - Gmail (leitura): perfil da 1.ª conta de origem das caixas;
+ *   - Email de saída (Gmail): perfil + "Enviar como" da conta remetente de
+ *     sistema (não envia nada);
  *   - WhatsApp: GET do número (Graph API);
  *   - Meta Ads: GET /me com o token (Graph API);
  *   - Google Ads: renova o access token + listAccessibleCustomers;
@@ -80,9 +81,7 @@ const DEFS: Def[] = [
     links: [{ label: "WhatsApp", href: "/whatsapp" }] },
   { id: "whatsapp_calls", label: "WhatsApp — Chamadas", description: "Chamadas de voz do WhatsApp no dashboard (Business Calling API): receber no browser e devolver chamadas com autorização do cliente. O Testar lê as definições de chamadas do número (ativas, horário, pedido de autorização) e confirma se o campo \"calls\" está subscrito no webhook da app Meta.", require: [["WHATSAPP_TOKEN"], ["WHATSAPP_PHONE_NUMBER_ID"]], testable: true, group: "main",
     links: [{ label: "Chamadas (WhatsApp)", href: "/whatsapp?chamadas=1" }] },
-  { id: "imap", label: "Email de entrada (IMAP)", description: "Leitura da caixa reservas@ (reclamações, perdidos…).", require: [["IMAP_USER"], ["IMAP_PASS"]], cron: "email-inbound", testable: true, group: "main",
-    links: [{ label: "Estado do cron", href: "/definicoes" }] },
-  { id: "gmail", label: "Gmail (Comunicação)", description: "Caixas de email partilhadas lidas e enviadas pela API do Gmail (conta de serviço com delegação no Workspace).", require: [["GOOGLE_WORKSPACE_SERVICE_ACCOUNT_JSON", "GOOGLE_SERVICE_ACCOUNT_JSON"]], cron: "mail-sync", testable: true, group: "main",
+  { id: "gmail", label: "Gmail (Comunicação)", description: "TODO o email recebido entra pela API do Gmail (conta de serviço com delegação no Workspace): caixas partilhadas, encaminhamento por alias (marca, cidade, destino, responsável) e os pipelines de reclamações, perdidos, críticas, RH, campanhas e ocorrências. Os avisos dizem que destinos não têm uma caixa Gmail ligada.", require: [["GOOGLE_WORKSPACE_SERVICE_ACCOUNT_JSON", "GOOGLE_SERVICE_ACCOUNT_JSON"]], cron: "mail-sync", testable: true, group: "main",
     links: [{ label: "Caixas (Definições → Comunicação)", href: "/definicoes" }, { label: "Comunicação", href: "/comunicacao" }] },
   { id: "google_sync", label: "Google Tarefas & Calendário", description: "Tarefas atribuídas ↔ lista \"Multipark\" do Google Tasks (nos dois sentidos) e calendário \"Multipark\" de cada pessoa (turnos, passagens de turno, formação, prazos, SLAs); calendários partilhados da escala por cidade (opcional, delegação); reuniões com Meet.", require: [["GOOGLE_WORKSPACE_CLIENT_ID", "GOOGLE_CLIENT_ID"], ["GOOGLE_WORKSPACE_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"]], cron: "google-sync", testable: true, group: "main",
     links: [{ label: "Perfil → Google", href: "/perfil" }, { label: "Calendários partilhados (Definições → Comunicação)", href: "/definicoes" }] },
@@ -102,7 +101,8 @@ const DEFS: Def[] = [
     links: [{ label: "Velocidade (Web & SEO)", href: "/marketing/web?sec=velocidade" }] },
   { id: "google_account", label: "Contas Google dos utilizadores", description: "\"Ligar a minha conta Google\" (OAuth interno do Workspace) para \"O meu email\".", require: [["GOOGLE_WORKSPACE_CLIENT_ID", "GOOGLE_CLIENT_ID"], ["GOOGLE_WORKSPACE_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"]], group: "main",
     links: [{ label: "Perfil", href: "/perfil" }] },
-  { id: "smtp", label: "Email de saída (SMTP)", description: "Emails enviados pela aplicação e alertas ao dono.", require: [["SMTP_HOST"], ["SMTP_USER"], ["SMTP_PASS"]], testable: true, group: "main", links: [] },
+  { id: "gmail_send", label: "Email de saída (Gmail)", description: "Todos os emails enviados pela aplicação (notificações, briefing, escala, tarefas, formação, relatórios, alertas ao dono e respostas a clientes) saem pela API do Gmail — remetente de sistema em Definições → Comunicação; os emails a clientes saem pelo alias da caixa (\"Enviar como\"). O Testar confirma a delegação da conta remetente sem enviar nada.", require: [["GOOGLE_WORKSPACE_SERVICE_ACCOUNT_JSON", "GOOGLE_SERVICE_ACCOUNT_JSON"]], testable: true, group: "main",
+    links: [{ label: "Remetente (Definições → Comunicação)", href: "/definicoes" }] },
   { id: "zello", label: "Zello", description: "Rádio e GPS dos condutores (recolha diária).", require: [["ZELLO_API_KEY"], ["ZELLO_USERNAME"], ["ZELLO_PASSWORD"]], cron: "daily-ops", testable: true, group: "main",
     links: [{ label: "Estado do cron (daily-ops)", href: "/definicoes" }] },
   { id: "llm", label: "IA (Gemini)", description: "Faturas, críticas, rádio, passagem de turno, WhatsApp e formação (server/_core/ai).", require: [["GEMINI_API_KEY", "GOOGLE_CLOUD_PROJECT", "LLM_API_KEY", "OPENAI_API_KEY"]], testable: true, group: "main",
@@ -165,6 +165,15 @@ const rowsOf = (res: unknown): any[] => {
   return Array.isArray(r) ? r : [];
 };
 const oneLine = (s: unknown) => scrubSecrets(String(s ?? "").replace(/\s+/g, " ").trim()).slice(0, 240) || null;
+
+/** Avisos do encaminhamento por alias (caixas/pipelines sem Gmail ligado). */
+export async function mailRoutingWarningsNow(env: Env = process.env): Promise<string[]> {
+  const { listMailboxes, mailSourceHealth } = await import("./mail/store");
+  const { mailRoutingWarnings } = await import("../shared/mail");
+  const { dwdConfigured } = await import("./google/workspace");
+  const [mailboxes, accounts] = await Promise.all([listMailboxes({ fresh: true }), mailSourceHealth()]);
+  return mailRoutingWarnings({ mailboxes, accounts, dwdAvailable: dwdConfigured(env) });
+}
 
 export async function listIntegrationStatuses(env: Env = process.env): Promise<IntegrationStatus[]> {
   const list = integrationStatusesFromEnv(env);
@@ -237,6 +246,13 @@ export async function listIntegrationStatuses(env: Env = process.env): Promise<I
         if (!s.lastError && last && Number(last.ok) === 0 && last.error) s.lastError = oneLine(last.error);
       }
       if (d.id === "google_business" && !s.lastSyncAt && s.connection?.lastCheckedAt) s.lastSyncAt = s.connection.lastCheckedAt;
+    }
+    // Encaminhamento por alias: pipeline/caixa sem conta Gmail ligada NÃO cria registos (não há IMAP de reserva) — avisar, nunca em silêncio.
+    const gmail = byId.get("gmail");
+    if (gmail) {
+      try {
+        gmail.warnings!.push(...(await mailRoutingWarningsNow(env)));
+      } catch { /* sem tabelas da Comunicação */ }
     }
   } catch { /* só o estado da env */ }
   return list;
@@ -329,27 +345,9 @@ export async function testIntegration(id: string): Promise<TestResult> {
           await db.execute(sql`SELECT 1`);
           break;
         }
-        case "smtp": {
-          const { createTransport } = await import("nodemailer");
-          const port = parseInt(env.SMTP_PORT || "587", 10);
-          const t = createTransport({ host: env.SMTP_HOST, port, secure: port === 465, auth: { user: env.SMTP_USER, pass: env.SMTP_PASS }, connectionTimeout: 15_000 });
-          try { await t.verify(); } finally { t.close(); }
-          message = "Servidor SMTP aceitou a autenticação (nada foi enviado).";
-          break;
-        }
-        case "imap": {
-          const { ImapFlow } = await import("imapflow");
-          const client = new ImapFlow({
-            host: env.IMAP_HOST || "imap.gmail.com",
-            port: Number(env.IMAP_PORT || 993),
-            secure: true,
-            auth: { user: env.IMAP_USER!, pass: env.IMAP_PASS! },
-            logger: false,
-            connectionTimeout: 15_000,
-          });
-          await client.connect();
-          await client.logout().catch(() => undefined);
-          message = "Caixa IMAP aceitou a autenticação (nenhum email lido).";
+        case "gmail_send": {
+          const { testSystemSender } = await import("./mail/systemMail");
+          message = await testSystemSender();
           break;
         }
         case "whatsapp": {

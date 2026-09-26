@@ -2,11 +2,11 @@
 modulo: comunicacao
 titulo: Comunicação (email)
 rotas: /comunicacao, /comunicacao/meu-email
-palavras: email, emails, gmail, caixa, caixas, info@, comercial@, admin@, reclamacoes@, perdidos@, responder, reencaminhar, enviar como, alias, assinatura, conta google, ligar conta, o meu email, ligações, anexos, mostrar imagens, rascunho ia, automáticos, mostrar automáticos, nova reserva, notificações de reserva
+palavras: email, emails, gmail, por classificar, alias, etiqueta, caixa, caixas, info@, comercial@, admin@, reclamacoes@, perdidos@, responder, reencaminhar, enviar como, alias, assinatura, conta google, ligar conta, o meu email, ligações, anexos, mostrar imagens, rascunho ia, automáticos, mostrar automáticos, nova reserva, notificações de reserva
 ---
 # Comunicação (email)
 
-Os emails das caixas partilhadas da empresa e o teu próprio email @multipark, dentro do dashboard.
+Os emails das caixas partilhadas da empresa e o teu próprio email @multipark, dentro do dashboard. Todo o email entra e sai pela API do Gmail; cada email é separado pelo alias a que foi enviado (tabela em Definições → Comunicação — ver a ajuda "Email por alias").
 
 **Caixas partilhadas** (menu **Comunicação → Caixas partilhadas**)
 1. Escolhe a caixa (ex.: Reclamações, Info, Comercial). Só vês as caixas do teu módulo; algumas caixas (ex.: admin@) são só para a administração.
@@ -14,7 +14,8 @@ Os emails das caixas partilhadas da empresa e o teu próprio email @multipark, d
 3. Abre a conversa: **Responder**, **Responder a todos** ou **Reencaminhar**. O email sai pelo endereço (alias) a que o cliente escreveu, com a assinatura da marca. Se o alias não estiver configurado como "Enviar email como" no Gmail, aparece um erro a explicar o que falta.
 4. **Rascunho IA** põe uma sugestão no editor — revê sempre antes de enviar. Nada é enviado sozinho.
 5. Atribui um **Responsável** e muda o estado. Um email novo do cliente reabre uma conversa resolvida.
-6. **Notificações automáticas de reserva** (os emails "Nova Reserva" que o sistema Multipark manda para a caixa "Reservas (geral)", ~4000 por mês): ficam guardadas, mas **escondidas** nas listas. Carrega em **Mostrar automáticos** para as ver (aparecem com a etiqueta "Automático"). A **pesquisa** encontra-as sempre. Não contam como por ler nem geram avisos.
+6. **Por classificar** (só admin e super admin): emails que chegaram por um endereço fora da tabela de aliases (ex.: em Bcc). Abre e carrega em **Atribuir à caixa** — ver a ajuda "Email por alias".
+7. **Notificações automáticas de reserva** (os emails "Nova Reserva" que o sistema Multipark manda para a caixa "Reservas (geral)", ~4000 por mês): ficam guardadas, mas **escondidas** nas listas. Carrega em **Mostrar automáticos** para as ver (aparecem com a etiqueta "Automático"). A **pesquisa** encontra-as sempre. Não contam como por ler nem geram avisos.
 
 **Ligações**
 - Cada email fica ligado automaticamente ao cliente, à reserva, à reclamação ou ao perdido (com a confiança da ligação). Em **Ligações** podes ligar ou desligar à mão.

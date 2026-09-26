@@ -2939,8 +2939,12 @@ export const mailThreads = mysqlTable("mail_threads", {
 	assignedUserId: int(),
 	statusChangedAt: timestamp({ mode: 'string' }),
 	projectId: int(),
-	// 0180: 1 = só notificações automáticas de reserva (escondida por omissão na Comunicação); NULL = por calcular.
+	// 0180: 1 = só automáticos (notificações de reserva; 0195: e emails de sistema) — escondida por omissão na Comunicação; NULL = por calcular.
 	automated: tinyint(),
+	// 0195: 1 = "Por classificar" (entrou por um endereço fora da tabela de aliases).
+	needsTriage: tinyint().default(0).notNull(),
+	// 0195: etiqueta do alias por onde entrou.
+	routeLabel: varchar({ length: 80 }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
@@ -2952,6 +2956,7 @@ export const mailThreads = mysqlTable("mail_threads", {
 	index("idx_mail_threads_assigned").on(table.assignedUserId),
 	index("idx_mail_threads_contact").on(table.contactEmail),
 	index("idx_mail_threads_last").on(table.lastMessageAt),
+	index("idx_mail_threads_triage").on(table.needsTriage, table.lastMessageAt),
 ]);
 
 export const mailMessages = mysqlTable("mail_messages", {

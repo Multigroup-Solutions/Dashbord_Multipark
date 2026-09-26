@@ -30,11 +30,11 @@ Pronto. Não é preciso mais nada no GitHub.
 
 | Tarefa | Quando |
 | --- | --- |
-| Gmail (Comunicação) | de 5 em 5 min |
+| Gmail (Comunicação — todo o email recebido, pipelines por alias, renovação do push) | de 5 em 5 min; **de hora a hora** (rede de segurança) quando o push do Gmail está ligado (MAIL_PUSH) e chegou um push nas últimas 6 h — sem push volta sozinho aos 5 min |
 | Fila do webhook Multipark · IA na comunicação · Google: alterações por enviar/receber que falharam (repetição) | de 15 em 15 min |
 | Google Tarefas/Calendário/Contactos/Drive — sincronização completa (rede de segurança; o resto é em tempo real, ver Ajuda → Google em tempo real) | de 4 em 4 horas |
 | Google: renovar os canais de notificação (Calendário e Drive) | 1×/dia a partir das 03:40 |
-| Reservas recentes · emails IMAP · automação dos extras · ligações funcionário ↔ utilizador | de hora a hora |
+| Reservas recentes · automação dos extras · ligações funcionário ↔ utilizador | de hora a hora |
 | Escala automática dos extras (propor às 14h, confirmar às 18h, por omissão) | de hora a hora, das 08h às 23h |
 | Reservas futuras | de 2 em 2 horas |
 | GPS do Zello — recolha provisória do próprio dia | 1×/dia entre as 23:15 e as 23:55 (se falhar, fica para a final) |

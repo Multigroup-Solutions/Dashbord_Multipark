@@ -697,7 +697,7 @@ export async function sendWeeklyAvailabilityRequest(opts: {
   if (!parseIsoDate(opts.weekStart)) {
     throw new Error("weekStart inválido (esperado YYYY-MM-DD)");
   }
-  const { sendEmail } = await import("./_core/notification");
+  const { sendEmail } = await import("./mail/systemMail");
   const headers = weekDays(opts.weekStart);
   const weekLabel = headers.length
     ? `${headers[0].label} a ${headers[headers.length - 1].label}`

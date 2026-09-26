@@ -4,7 +4,7 @@
  * (só metadados — os bytes vêm a pedido), direção. PURA (testável).
  */
 import type { gmail_v1 } from "@googleapis/gmail";
-import { extractAddresses, parseMailbox } from "../../shared/mail";
+import { SYSTEM_MAIL_HEADER, extractAddresses, parseMailbox } from "../../shared/mail";
 
 export interface MailAttachmentMeta {
   index: number;
@@ -41,6 +41,8 @@ export interface ParsedGmailMessage {
   replyTo: string | null;
   autoSubmitted: string | null;
   precedence: string | null;
+  /** Email de sistema enviado pelo dashboard (cabeçalho X-Multipark-System). */
+  systemMail: boolean;
   text: string;
   html: string;
   attachments: MailAttachmentMeta[];
@@ -118,11 +120,15 @@ export function parseGmailMessage(m: gmail_v1.Schema$Message, opts: { accountEma
     to: extractAddresses(headerValues(h, "To").join(", ")),
     cc: extractAddresses(headerValues(h, "Cc").join(", ")),
     bcc: extractAddresses(headerValues(h, "Bcc").join(", ")),
+    // Destinatários por ordem de confiança para o encaminhamento por alias
+    // (shared/mail.ts resolveAlias): Delivered-To (todos os saltos),
+    // X-Original-To / Envelope-To / X-Forwarded-To/-For (reencaminhamentos), To, Cc.
     deliveredTo: extractAddresses(headerValues(h, "Delivered-To").join(", ")),
-    xOriginalTo: extractAddresses([...headerValues(h, "X-Original-To"), ...headerValues(h, "X-Forwarded-To"), ...headerValues(h, "X-Forwarded-For")].join(", ")),
+    xOriginalTo: extractAddresses([...headerValues(h, "X-Original-To"), ...headerValues(h, "Envelope-To"), ...headerValues(h, "X-Forwarded-To"), ...headerValues(h, "X-Forwarded-For")].join(", ")),
     replyTo: extractAddresses(header(h, "Reply-To"))[0] ?? null,
     autoSubmitted: header(h, "Auto-Submitted"),
     precedence: header(h, "Precedence"),
+    systemMail: !!header(h, SYSTEM_MAIL_HEADER),
     text: bodies.text.join("\n\n").slice(0, 200_000),
     html: bodies.html.join("\n").slice(0, 1_000_000),
     attachments: bodies.attachments,

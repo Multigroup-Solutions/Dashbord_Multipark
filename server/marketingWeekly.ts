@@ -7,12 +7,12 @@
  * com a semana antes dessa: gasto, reservas, CPA e ROAS s/ IVA por marca e
  * por cidade, as melhores/piores campanhas e os alertas ativos.
  *
- * Destinatários: MARKETING_REPORT_EMAILS (vírgulas). Sem SMTP ou sem
+ * Destinatários: MARKETING_REPORT_EMAILS (vírgulas). Sem envio de email (Gmail) ou sem
  * destinatários → não envia (e não gasta a chave). MARKETING_WEEKLY=off desliga.
  * Números da fonte única (getAdMetrics / getSpendAndBookingsByBrand), sem
  * âmbito de cidade (é um resumo da direção).
  */
-import { isSmtpConfigured, sendEmail } from "./_core/notification";
+import { isEmailSendConfigured, sendEmail } from "./mail/systemMail";
 import { weeklyRanges, weeklyReportDue, weeklyReportRunKey } from "../shared/marketingRules";
 
 export function weeklyRecipients(env: Record<string, string | undefined> = process.env): string[] {
@@ -115,7 +115,7 @@ export async function maybeSendMarketingWeekly(clock: { date: string; dow: numbe
   if (!weeklyReportDue(clock)) return { skipped: "fora de horas" };
   const to = weeklyRecipients();
   if (!to.length) return { skipped: "sem MARKETING_REPORT_EMAILS" };
-  if (!isSmtpConfigured()) return { skipped: "SMTP não configurado" };
+  if (!isEmailSendConfigured()) return { skipped: "envio de email (Gmail) não configurado" };
   const key = weeklyReportRunKey(clock.date);
   await run(key, async () => {
     const report = await buildWeeklyReport(clock.date);
