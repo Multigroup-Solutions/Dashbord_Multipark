@@ -183,6 +183,36 @@ app.get("/api/cron/multipark-db-sync", async (req, res) => {
   sendCronRun(res, await multiparkDbSyncCron({ deadlineAt: manualDeadline() }));
 });
 
+// Descoberta do esquema da BD Multipark A PARTIR DA VERCEL (é onde está a
+// DATABASE_URL_MULTIPARK; o valor é "sensível" e não sai de lá). Faz o mesmo
+// que scripts/multipark-db-schema.ts: SÓ ESTRUTURA (tabelas, colunas, chaves,
+// índices, enums, contagens aproximadas) — nunca lê linhas. Recusa se a
+// sessão não ficar só de leitura. ?format=md (omissão) | json; ?schema=a,b.
+// Chamado à mão pelo workflow .github/workflows/multipark-db-schema.yml.
+app.get("/api/cron/multipark-db-schema", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { getMultiparkDb, isMultiparkDbConfigured, redactSecrets } = await import("../multiparkDb/client");
+  if (!isMultiparkDbConfigured()) {
+    return res.status(503).json({ ok: false, error: "DATABASE_URL_MULTIPARK não está definida neste ambiente." });
+  }
+  try {
+    const db = await getMultiparkDb();
+    const readOnly = await db.readOnlyCheck();
+    if (!readOnly) {
+      return res.status(409).json({ ok: false, engine: db.engine, readOnly, error: "A sessão NÃO ficou só de leitura — parar e pedir um utilizador só de leitura." });
+    }
+    const { loadSchemaSnapshot, renderSchemaMarkdown } = await import("../multiparkDb/schemaDoc");
+    const schemaParam = typeof req.query?.schema === "string" ? req.query.schema : "";
+    const schemas = schemaParam.split(",").map((s: string) => s.trim()).filter(Boolean).slice(0, 10);
+    const snap = await loadSchemaSnapshot(db, schemas.length ? { schemas } : {});
+    if (req.query?.format === "json") return res.status(200).json({ ok: true, engine: db.engine, readOnly, snapshot: snap });
+    res.status(200).type("text/markdown; charset=utf-8").send(renderSchemaMarkdown(snap) + "\n");
+  } catch (err) {
+    console.error("[multipark-db-schema] falhou:", redactSecrets(err));
+    res.status(500).json({ ok: false, error: redactSecrets(err).slice(0, 500) });
+  }
+});
+
 // Ligações automáticas funcionário ↔ utilizador ↔ agente Multipark (Fase 1).
 // Conservador e idempotente — ver server/identityLink.ts.
 app.get("/api/cron/identity-sweep", async (req, res) => {

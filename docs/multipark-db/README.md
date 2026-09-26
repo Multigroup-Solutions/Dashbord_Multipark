@@ -144,7 +144,15 @@ latência e o número de tabelas.
 
 ## Passo a passo da próxima sessão (no PC do Jorge, onde a BD é acessível)
 
-1. **Esquema.** Pôr `DATABASE_URL_MULTIPARK` no `.env.local` e correr:
+1. **Esquema.** **Via online (recomendado — a `DATABASE_URL_MULTIPARK` está na
+   Vercel como variável "sensível" e não dá para a puxar):** GitHub → Actions →
+   **"BD Multipark — descobrir esquema (manual)"** → Run workflow (ou
+   `gh workflow run multipark-db-schema.yml` e depois `gh run download <id> -n multipark-db-schema`).
+   Chama `GET /api/cron/multipark-db-schema` em produção (token dos cron; só
+   estrutura; recusa se a sessão não ficar só de leitura) e guarda o
+   `schema.md` como artefacto → copiar para `docs/multipark-db/schema.md`.
+
+   **Via local** (num PC que chegue à BD): pôr `DATABASE_URL_MULTIPARK` no `.env.local` e correr:
    ```bash
    pnpm tsx scripts/multipark-db-schema.ts
    # opções: --out <ficheiro.md>  --schema public  --json /tmp/esquema.json  --print
