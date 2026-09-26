@@ -10,7 +10,7 @@ import { z } from "zod";
 import { COOKIE_NAME } from "@shared/const";
 import { protectedProcedure, router } from "./_core/trpc";
 import { getSessionCookieOptions } from "./_core/cookies";
-import { AUTOMATION_FLAGS, SETTING_KEYS, flagSettingKey, isAutomationFlag } from "../shared/appSettings";
+import { AUTOMATION_FLAGS, SETTING_KEYS, automationFlagSuperAdminOnly, flagSettingKey, isAutomationFlag } from "../shared/appSettings";
 
 const RANK: Record<string, number> = { super_admin: 7, admin: 6 };
 function requireAdmin(role: string) {
@@ -79,6 +79,8 @@ export const settingsRouter = router({
       .input(z.object({ name: z.string().max(64), value: z.boolean().nullable() }))
       .mutation(async ({ ctx, input }) => {
         if (!isAutomationFlag(input.name)) throw new TRPCError({ code: "BAD_REQUEST", message: "Interruptor desconhecido." });
+        // Ex.: MULTIPARK_SOURCE (fonte das reservas: API ou BD da Multipark).
+        if (automationFlagSuperAdminOnly(input.name)) requireSuperAdmin(ctx.user.role);
         const { setSetting } = await import("./appSettings");
         const r = await setSetting(flagSettingKey(input.name), input.value, ctx.user.id);
         if (r.changed) {
@@ -97,7 +99,8 @@ export const settingsRouter = router({
     test: adminOnly
       .input(z.object({ id: z.string().max(40) }))
       .mutation(async ({ ctx, input }) => {
-        const { testIntegration } = await import("./integrationsStatus");
+        const { integrationTestSuperAdminOnly, testIntegration } = await import("./integrationsStatus");
+        if (integrationTestSuperAdminOnly(input.id)) requireSuperAdmin(ctx.user.role);
         const r = await testIntegration(input.id);
         await log(ctx.user.id, "test", "integration", `${input.id}: ${r.ok ? "OK" : "falhou"}`);
         return r;

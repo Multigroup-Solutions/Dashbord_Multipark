@@ -253,6 +253,24 @@ async function enrichBookingIfNeeded(externalId: string, apiKey: string, prefetc
   try {
     const detailed = prefetched ?? await getBooking(externalId, apiKey, { maxAttempts: 1, timeoutMs: 8000 });
     if (detailed?.id !== externalId) throw Object.assign(new Error("Detalhe não corresponde à reserva"), { code: "BOOKING_ID_MISMATCH" });
+    await applyBookingDetail(db, externalId, detailed, context);
+    return true;
+  } catch (error) {
+    await deferBookingDetail(externalId, deliveryErrorCode(error));
+    return false;
+  }
+}
+
+type SyncDb = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+
+/**
+ * Grava o detalhe de uma reserva (formato /bookings/:id) na linha de
+ * multipark_bookings. Partilhado pelo enriquecimento pela API (acima) e pelo
+ * multipark-db-sync (BD Multipark, server/multiparkDb). Lança em erro — quem
+ * chama decide o que fazer (a API reagenda com deferBookingDetail).
+ */
+export async function applyBookingDetail(db: SyncDb, externalId: string, detailed: MultiparkBooking,
+  context?: { parkName: string | null; city: string | null }): Promise<void> {
     const b: any = detailed;
     const projectMap = await getProjectMap();
     const mapped = bookingToRecord(detailed, projectMap, await getAliasResolver());
@@ -310,11 +328,22 @@ async function enrichBookingIfNeeded(externalId: string, apiKey: string, prefetc
       eq(multiparkBookings.externalId, externalId),
       version ? or(isNull(multiparkBookings.sourceUpdatedAt), lte(multiparkBookings.sourceUpdatedAt, version)) : undefined,
     ));
-    return true;
-  } catch (error) {
-    await deferBookingDetail(externalId, deliveryErrorCode(error));
-    return false;
-  }
+}
+
+/**
+ * Uma reserva vinda da BD Multipark (já no formato da API): mesmo caminho do
+ * sync pela API — bookingToRecord + upsert + extras — e logo a seguir o
+ * detalhe (applyBookingDetail), porque a BD já traz tudo (sem /bookings/:id).
+ */
+export async function saveBookingFromSource(booking: MultiparkBooking): Promise<{ action: "created" | "updated"; statusChanged: boolean }> {
+  const db = await getDb();
+  if (!db) throw new Error("Base de dados indisponível");
+  const projectMap = await getProjectMap();
+  const record = bookingToRecord(booking, projectMap, await getAliasResolver());
+  const result = await upsertMultiparkBooking(record);
+  await upsertBookingExtras(booking.id, (booking as any).extraServices);
+  await applyBookingDetail(db, booking.id, booking, { parkName: record.parkName, city: record.city });
+  return { action: result?.action ?? "updated", statusChanged: !!result?.statusChanged };
 }
 
 /** Enriquecimento só volta a rodar semanalmente em reservas vivas: não

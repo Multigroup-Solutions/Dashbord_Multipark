@@ -3,6 +3,7 @@
  * Ver: módulo "integracoes" (view). Testar: "edit" (os testes são baratos e
  * sem efeitos, mas vão a serviços externos). Nunca devolve segredos.
  */
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import { requireAccess } from "../_core/access";
@@ -17,7 +18,10 @@ export const integrationsHubRouter = router({
     .input(z.object({ id: z.string().max(40) }))
     .mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "integracoes", "edit");
-      const { testIntegration } = await import("../integrationsStatus");
+      const { integrationTestSuperAdminOnly, testIntegration } = await import("../integrationsStatus");
+      if (integrationTestSuperAdminOnly(input.id) && ctx.user.role !== "super_admin") {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Só o super admin pode testar esta ligação." });
+      }
       const r = await testIntegration(input.id);
       try {
         const { logActivity } = await import("../db");

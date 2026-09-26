@@ -102,12 +102,14 @@ describe("hub: cartões por fornecedor", () => {
   it("um cartão principal por fornecedor, sem Google Maps, com testes baratos", () => {
     const list = integrationStatusesFromEnv({});
     const main = list.filter((i) => i.group === "main").map((i) => i.id);
-    expect(main).toEqual(["google_ads", "meta_ads", "google_business", "whatsapp", "whatsapp_calls", "gmail", "google_sync", "google_contacts", "google_drive", "knowledge_base", "google_analytics", "search_console", "pagespeed", "crux", "google_account", "gmail_send", "zello", "llm", "multipark", "storage"]);
+    expect(main).toEqual(["google_ads", "meta_ads", "google_business", "whatsapp", "whatsapp_calls", "gmail", "google_sync", "google_contacts", "google_drive", "knowledge_base", "google_analytics", "search_console", "pagespeed", "crux", "google_account", "gmail_send", "zello", "llm", "multipark", "multipark_db", "storage"]);
     expect(list.some((i) => i.id === "google_maps")).toBe(false);
     for (const id of ["google_ads", "google_business", "zello", "llm", "google_analytics", "search_console", "pagespeed"]) expect(list.find((i) => i.id === id)?.testable).toBe(true);
     // PageSpeed funciona sem chave (quota baixa) → configurada sem variáveis.
     expect(list.find((i) => i.id === "pagespeed")?.configured).toBe(true);
     expect(list.find((i) => i.id === "multipark")?.testable).toBe(false);
+    // BD Multipark (só leitura): tem Testar (só super_admin); sem a env → não configurada.
+    expect(list.find((i) => i.id === "multipark_db")).toMatchObject({ testable: true, configured: false, missing: ["DATABASE_URL_MULTIPARK"] });
     expect(list.find((i) => i.id === "google_ads")?.links.map((l) => l.href)).toContain("/integracoes/google-ads");
     expect(list.find((i) => i.id === "google_business")?.links.map((l) => l.href)).toContain("/criticas#google-business");
     // CrUX precisa de chave (a da PageSpeed serve) e tem Testar.

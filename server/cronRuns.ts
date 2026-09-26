@@ -18,7 +18,7 @@ import type { NextFunction, Request, Response } from "express";
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { cronAuthOk } from "./cronAuth";
-import { CRON_JOBS, cronHealth, cronNameFromPath, cronOutcome, staleThresholdMinutes, type CronHealth } from "../shared/appSettings";
+import { cronHealth, cronJobsForSource, cronNameFromPath, cronOutcome, staleThresholdMinutes, type CronHealth } from "../shared/appSettings";
 
 /** "YYYY-MM-DD HH:MM:SS.mmm" (UTC) — DATETIME(3). */
 export function toMysqlMs(d: Date): string {
@@ -186,8 +186,12 @@ const RUN_COLUMNS = sql`id, DATE_FORMAT(startedAt, '%Y-%m-%d %H:%i:%s.%f') AS st
 
 export async function getCronStatuses(now = Date.now()): Promise<CronStatus[]> {
   const db = await getDb();
-  const known = new Map(CRON_JOBS.map((j) => [j.name, j]));
   if (!db) return [];
+  // Com a fonte das reservas = BD Multipark, o multipark-sync/-future param
+  // (não são "parados") e o multipark-db-sync passa a ter intervalo.
+  let source: "api" | "db" = "api";
+  try { source = await (await import("./multiparkDb/source")).getMultiparkSourceKind(); } catch { /* em dúvida, API */ }
+  const known = new Map(cronJobsForSource(source).map((j) => [j.name, j]));
   const since = toMysqlMs(new Date(now - 86_400_000));
 
   // Agregados só com colunas agrupadas (ONLY_FULL_GROUP_BY).

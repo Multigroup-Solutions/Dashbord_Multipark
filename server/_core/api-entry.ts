@@ -175,6 +175,14 @@ app.get("/api/cron/multipark-sync", async (req, res) => {
   sendCronRun(res, await multiparkSyncCron({ deadlineAt: manualDeadline() }));
 });
 
+// BD Multipark (só com o interruptor MULTIPARK_SOURCE = BD; tick: de 5 em 5
+// min). Com a fonte = API responde "saltado". done:false → chamar outra vez.
+app.get("/api/cron/multipark-db-sync", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { multiparkDbSyncCron, sendCronRun } = await import("../cronJobs");
+  sendCronRun(res, await multiparkDbSyncCron({ deadlineAt: manualDeadline() }));
+});
+
 // Ligações automáticas funcionário ↔ utilizador ↔ agente Multipark (Fase 1).
 // Conservador e idempotente — ver server/identityLink.ts.
 app.get("/api/cron/identity-sweep", async (req, res) => {
