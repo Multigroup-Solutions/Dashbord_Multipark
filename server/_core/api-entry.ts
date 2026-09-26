@@ -234,6 +234,27 @@ app.get("/api/cron/multipark-db-probe", async (req, res) => {
   }
 });
 
+// Relatório de cancelamentos: nossa BD × BD da Multipark num período de dias
+// (hora de Lisboa) — quando foram canceladas, para quando eram, quem cancelou e
+// as que desapareceram do lado deles. SÓ LÊ; sem dados pessoais do cliente.
+// ?from=AAAA-MM-DD&to=AAAA-MM-DD (máx 62 dias). Workflow multipark-db-schema.yml (modo "cancelamentos").
+app.get("/api/cron/multipark-db-cancelamentos", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { isMultiparkDbConfigured, redactSecrets } = await import("../multiparkDb/client");
+  if (!isMultiparkDbConfigured()) {
+    return res.status(503).json({ ok: false, error: "DATABASE_URL_MULTIPARK não está definida neste ambiente." });
+  }
+  try {
+    const { runMultiparkDbCancellations } = await import("../multiparkDb/cancellations");
+    const from = typeof req.query?.from === "string" ? req.query.from : undefined;
+    const to = typeof req.query?.to === "string" ? req.query.to : undefined;
+    res.status(200).json(await runMultiparkDbCancellations({ from, to }));
+  } catch (err) {
+    console.error("[multipark-db-cancelamentos] falhou:", redactSecrets(err));
+    res.status(500).json({ ok: false, error: redactSecrets(err).slice(0, 500) });
+  }
+});
+
 // Ligações automáticas funcionário ↔ utilizador ↔ agente Multipark (Fase 1).
 // Conservador e idempotente — ver server/identityLink.ts.
 app.get("/api/cron/identity-sweep", async (req, res) => {

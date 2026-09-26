@@ -8,16 +8,19 @@ name: BD Multipark — descobrir esquema (manual)
 #    (probe.json): compara reservas/movimentos recentes que já temos (da API)
 #    com a BD deles (datas nos dois modos, ids, preços). Dados pessoais só
 #    como igual/diferente.
+#  - modo "cancelamentos": relatório de cancelamentos → artefacto
+#    `multipark-db-cancelamentos` (cancelamentos.json): nossa BD × BD deles no
+#    período from..to (hora de Lisboa) e as reservas que desapareceram deles.
 # Ver docs/multipark-db/README.md.
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "schema = descobrir esquema; probe = sonda do mapeamento"
+        description: "schema = descobrir esquema; probe = sonda do mapeamento; cancelamentos = relatório de cancelamentos"
         required: false
         default: "schema"
         type: choice
-        options: [schema, probe]
+        options: [schema, probe, cancelamentos]
       schema:
         description: "(schema) Esquemas a ler, separados por vírgula (vazio = todos)"
         required: false
@@ -26,6 +29,14 @@ on:
         description: "(probe) N.º de reservas a comparar (máx 20)"
         required: false
         default: "10"
+      from:
+        description: "(cancelamentos) Primeiro dia AAAA-MM-DD (hora de Lisboa)"
+        required: false
+        default: "2026-09-10"
+      to:
+        description: "(cancelamentos) Último dia AAAA-MM-DD (vazio = igual ao primeiro)"
+        required: false
+        default: ""
 permissions:
   contents: read
 jobs:
@@ -40,6 +51,8 @@ jobs:
           MODE: ${{ inputs.mode }}
           SCHEMA: ${{ inputs.schema }}
           SAMPLE: ${{ inputs.sample }}
+          FROM: ${{ inputs.from }}
+          TO: ${{ inputs.to }}
         run: |
           set -euo pipefail
           test -n "$CRON_SECRET"
@@ -47,6 +60,11 @@ jobs:
           if [ "$MODE" = "probe" ]; then
             file=out/probe.json
             url="$APP_URL/api/cron/multipark-db-probe?sample=$(printf '%s' "${SAMPLE:-10}" | tr -cd '0-9')"
+          elif [ "$MODE" = "cancelamentos" ]; then
+            file=out/cancelamentos.json
+            f=$(printf '%s' "${FROM:-2026-09-10}" | tr -cd '0-9-')
+            t=$(printf '%s' "${TO:-$f}" | tr -cd '0-9-')
+            url="$APP_URL/api/cron/multipark-db-cancelamentos?from=$f&to=${t:-$f}"
           else
             file=out/schema.md
             q=""
@@ -61,7 +79,9 @@ jobs:
             cat "$file"; echo
             echo "::error::endpoint devolveu HTTP $code"; exit 1
           fi
-          if [ "$MODE" = "probe" ]; then jq '{source, verdict, tally, history: (.history | del(.examples)), queries}' "$file"; else head -n 40 "$file"; fi
+          if [ "$MODE" = "probe" ]; then jq '{source, verdict, tally, history: (.history | del(.examples)), queries}' "$file"
+          elif [ "$MODE" = "cancelamentos" ]; then jq '{periodo, totais, resumo, desaparecidas404: .desaparecidas404.resumo}' "$file"
+          else head -n 40 "$file"; fi
       - uses: actions/upload-artifact@v4
         with:
           name: multipark-db-${{ inputs.mode || 'schema' }}
