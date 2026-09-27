@@ -299,7 +299,7 @@ app.get("/api/cron/daily-ops", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
   const { dailyOpsCron, sendCronRun } = await import("../cronJobs");
   const date = typeof req.query?.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? req.query.date : null;
-  sendCronRun(res, await dailyOpsCron({ deadlineAt: manualDeadline(), collectOnly: req.query?.collectOnly === "1", date }));
+  sendCronRun(res, await dailyOpsCron({ deadlineAt: manualDeadline(), collectOnly: req.query?.collectOnly === "1", date, reconcile: req.query?.reconcile === "1" }));
 });
 
 // GPS do Zello — passagem provisória do dia de hoje (tick: 23:15–23:55 de

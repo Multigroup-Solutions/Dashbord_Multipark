@@ -579,16 +579,16 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "google-pending", label: "Google: alterações por enviar/receber (repetição)", intervalMinutes: 15, workflow: "tick" },
   { name: "google-sync", label: "Google Tarefas, Calendário, Contactos e Drive (rede de segurança)", intervalMinutes: 240, workflow: "tick" },
   { name: "google-watch-renew", label: "Google: renovar canais de notificação (Calendário/Drive)", intervalMinutes: 1440, workflow: "tick" },
-  { name: "multipark-sync", label: "Sincronização de reservas (recente)", intervalMinutes: 60, workflow: "tick" },
+  { name: "multipark-sync", label: "Sincronização de reservas (recente)", intervalMinutes: null, workflow: "manual" },
   { name: "extras-auto", label: "Automação dos extras", intervalMinutes: 60, workflow: "tick" },
   // De hora a hora entre as 08h e as 23h (Lisboa); 300 min para a pausa da
   // noite (~9 h) não aparecer como "parado".
   { name: "extras-schedule", label: "Escala automática dos extras (propor/confirmar/avisar)", intervalMinutes: 300, workflow: "tick" },
   { name: "identity-sweep", label: "Ligações funcionário ↔ utilizador", intervalMinutes: 60, workflow: "tick" },
-  { name: "multipark-future", label: "Sincronização de reservas (futuras)", intervalMinutes: 120, workflow: "tick" },
-  // Só entra no agendador com MULTIPARK_SOURCE ligado (fonte = BD Multipark);
-  // sem intervalo fixo aqui para não aparecer "parado" enquanto a fonte é a API.
-  { name: "multipark-db-sync", label: "Reservas, movimentos e condutores da BD Multipark (só com a fonte = BD)", intervalMinutes: null, workflow: "tick (fonte = BD)" },
+  // Reservas só pelo webhook (27 set 2026): estes três já não estão na agenda —
+  // ficam para correr à mão, sem intervalo (nunca aparecem "parados").
+  { name: "multipark-future", label: "Sincronização de reservas (futuras)", intervalMinutes: null, workflow: "manual" },
+  { name: "multipark-db-sync", label: "Reservas, movimentos e condutores da BD Multipark", intervalMinutes: null, workflow: "manual" },
   { name: "daily-ops", label: "Manutenção diária + recolha GPS final (D-2)", intervalMinutes: 1440, workflow: "tick" },
   { name: "zello-sameday", label: "GPS do Zello — recolha provisória do dia (23:15–23:55)", intervalMinutes: 1440, workflow: "tick" },
   { name: "rh-docs-weekly", label: "RH: regra documental dos extras (semanal)", intervalMinutes: 10080, workflow: "tick" },
@@ -604,17 +604,12 @@ export const CRON_JOBS: readonly CronJob[] = [
 ];
 
 /**
- * Crons esperados para a fonte das reservas em vigor (interruptor
- * MULTIPARK_SOURCE). "api" → CRON_JOBS tal e qual. "db" → o
- * multipark-db-sync passa a ter intervalo (5 min) e o multipark-sync /
- * multipark-future deixam de ter (não aparecem "parados"). PURA.
+ * Crons esperados (interruptor MULTIPARK_SOURCE já não muda a agenda: as
+ * reservas só entram pelo webhook). PURA.
  */
-export function cronJobsForSource(source: "api" | "db"): readonly CronJob[] {
-  if (source === "api") return CRON_JOBS;
-  return CRON_JOBS.map((j) =>
-    j.name === "multipark-db-sync" ? { ...j, intervalMinutes: 5, workflow: "tick" }
-      : j.name === "multipark-sync" || j.name === "multipark-future" ? { ...j, intervalMinutes: null, workflow: "tick (só com a fonte = API)" }
-        : j);
+export function cronJobsForSource(_source: "api" | "db"): readonly CronJob[] {
+  // Reservas só pelo webhook: nenhum sync de reservas na agenda, seja qual for a fonte.
+  return CRON_JOBS;
 }
 
 const CRON_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
