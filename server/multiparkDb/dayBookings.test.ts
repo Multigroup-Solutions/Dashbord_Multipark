@@ -8,7 +8,7 @@ vi.mock("./client", async (importOriginal) => {
 
 import { assertReadOnlySql } from "./client";
 import {
-  DAY_BOOKINGS_LIMIT, buildDayBookingsSql, buildParksSql, getMultiparkDayBookings, lisbonDayBounds, mapDayBookingRow, mapParks,
+  DAY_BOOKINGS_LIMIT, buildDayBookingsSql, buildParksSql, getMultiparkDayBookings, getMultiparkParkClassification, lisbonDayBounds, mapDayBookingRow, mapParks,
 } from "./dayBookings";
 import { allParkGroups, classifyPark, ourBrandOf } from "../../shared/multiparkParks";
 import {
@@ -79,21 +79,66 @@ describe("classificação dos parques", () => {
   });
 });
 
-describe("origem: Direto vs Marketplace", () => {
-  it("parceiro → Marketplace, com o nome e o tipo", () => {
-    expect(classifyBookingChannel({ partnerId: "pa1", partnerName: "Parkos", partnerType: "AGGREGATOR", origin: "API" }))
-      .toEqual({ channel: "marketplace", detail: "Parkos (agregador)" });
-    expect(classifyBookingChannel({ partnerId: "pa2", partnerName: null, partnerType: "AGENCY" }).detail).toBe("Parceiro (agência)");
+describe("classificação dos parques: firebaseBrand", () => {
+  it("firebaseBrand preenchido manda (normalizado), mesmo que o nome não tenha a marca", () => {
+    expect(classifyPark({ name: "Parque do Aeroporto", city: "Lisboa", firebaseBrand: "  AIR park " }))
+      .toMatchObject({ key: "airpark_lisboa", ours: true, brand: "airpark", brandSource: "firebaseBrand" });
+    expect(classifyPark({ name: "P2", city: "Faro", firebaseBrand: "Skypark" }).key).toBe("skypark_faro");
   });
-  it("origem de terceiros ou cobrada por agregador → Marketplace", () => {
-    expect(classifyBookingChannel({ origin: "MARKETPLACE" }).channel).toBe("marketplace");
-    expect(classifyBookingChannel({ origin: "PARTNER_DASHBOARD" }).detail).toBe("Painel de parceiro");
-    expect(classifyBookingChannel({ origin: "API", paymentSource: "PARKVIA" })).toEqual({ channel: "marketplace", detail: "Parkvia" });
+  it("firebaseBrand de outra marca → Marketplace, mesmo com 'Airpark' no nome", () => {
+    const c = classifyPark({ name: "Airpark Lisboa (antigo)", city: "Lisboa", firebaseBrand: "TopParking" });
+    expect(c).toMatchObject({ key: "marketplace", ours: false, brandSource: "firebaseBrand" });
+    expect(c.reason).toContain("TopParking");
   });
-  it("site, formulário, manual, Stripe → Direto", () => {
-    expect(classifyBookingChannel({ origin: "API", paymentSource: "STRIPE" })).toEqual({ channel: "direto", detail: "API / site" });
-    expect(classifyBookingChannel({ origin: "MANUAL" }).channel).toBe("direto");
-    expect(classifyBookingChannel({}).channel).toBe("direto");
+  it("firebaseBrand vazio/nulo → marca pelo nome", () => {
+    expect(classifyPark({ name: "Redpark Porto", city: "Porto", firebaseBrand: "" })).toMatchObject({ key: "redpark_porto", brandSource: "name" });
+    expect(classifyPark({ name: "Redpark Porto", city: "Porto", firebaseBrand: null }).brandSource).toBe("name");
+  });
+  it("cidade: o campo cidade manda; o nome só quando a cidade está vazia", () => {
+    expect(classifyPark({ name: "Skypark Faro", city: "" })).toMatchObject({ key: "skypark_faro", citySource: "name" });
+    expect(classifyPark({ name: "Airpark Lisboa", city: "Madrid" }).key).toBe("marketplace");
+  });
+  it("listingType só se expõe (não muda a classificação)", () => {
+    expect(classifyPark({ name: "Airpark", city: "Lisboa", listingType: "directory" })).toMatchObject({ ours: true, listingType: "DIRECTORY" });
+    expect(classifyPark({ name: "Parkvia", city: "Lisboa", listingType: "ON_PLATFORM" })).toMatchObject({ ours: false, listingType: "ON_PLATFORM" });
+  });
+  it("mapParks lê firebaseBrand, listingType e status", () => {
+    const [p] = mapParks([{ id: "p1", name: "Parque X", city: "Porto", firebase_brand: "redpark", listing_type: "ON_PLATFORM", status: "ACTIVE" }]);
+    expect(p).toMatchObject({ key: "redpark_porto", firebaseBrand: "redpark", listingType: "ON_PLATFORM", status: "ACTIVE", brandSource: "firebaseBrand" });
+  });
+});
+
+describe("canal: Direto / Parceiro / Marketplace", () => {
+  const ours = { parkOurs: true };
+  it("parque que não é nosso → Marketplace, seja qual for a origem", () => {
+    expect(classifyBookingChannel({ parkOurs: false, origin: "API", paymentSource: "STRIPE" })).toMatchObject({ channel: "marketplace", badge: "Marketplace", detail: "Parque de terceiros" });
+    expect(classifyBookingChannel({ parkOurs: false, partnerId: "pa1", partnerName: "Parkos", partnerType: "AGGREGATOR" }).detail).toBe("Parque de terceiros · Parkos (agregador)");
+  });
+  it("origem MARKETPLACE num parque nosso → Marketplace (ganha ao parceiro)", () => {
+    expect(classifyBookingChannel({ ...ours, origin: "MARKETPLACE" })).toMatchObject({ channel: "marketplace", detail: "Origem Marketplace" });
+    expect(classifyBookingChannel({ ...ours, origin: "marketplace", partnerId: "pa1", partnerName: "X" }).channel).toBe("marketplace");
+  });
+  it("parceiro ligado → Parceiro com nome e tipo (agência / agregador / parceiro)", () => {
+    expect(classifyBookingChannel({ ...ours, partnerId: "pa1", partnerName: "Parkos", partnerType: "AGGREGATOR", origin: "API" }))
+      .toEqual({ channel: "parceiro", detail: "Parkos (agregador)", partnerName: "Parkos", partnerTypeLabel: "agregador", badge: "Parceiro · Parkos" });
+    expect(classifyBookingChannel({ ...ours, partnerId: "pa2", partnerName: "Viagens Lda", partnerType: "AGENCY" }).detail).toBe("Viagens Lda (agência)");
+    expect(classifyBookingChannel({ ...ours, partnerId: "pa3", partnerName: "Hotel Y", partnerType: "PARTNER" }).partnerTypeLabel).toBe("parceiro");
+    expect(classifyBookingChannel({ ...ours, partnerId: "pa4", partnerName: null, partnerType: null })).toMatchObject({ detail: "Parceiro", badge: "Parceiro · Parceiro" });
+  });
+  it("origem de parceiro (API / painel) sem partnerId → Parceiro", () => {
+    expect(classifyBookingChannel({ ...ours, origin: "PARTNER_API" })).toMatchObject({ channel: "parceiro", detail: "API de parceiro", badge: "Parceiro" });
+    expect(classifyBookingChannel({ ...ours, origin: "PARTNER_DASHBOARD" }).detail).toBe("Painel de parceiro");
+  });
+  it("paymentSource de agregador só como pista quando não há partnerId", () => {
+    expect(classifyBookingChannel({ ...ours, origin: "API", paymentSource: "PARKVIA" })).toMatchObject({ channel: "parceiro", partnerName: "Parkvia", badge: "Parceiro · Parkvia" });
+    expect(classifyBookingChannel({ ...ours, paymentSource: "AGGREGATOR_OTHER" }).channel).toBe("parceiro");
+    // Com partnerId, o parceiro manda (não o agregador que cobrou).
+    expect(classifyBookingChannel({ ...ours, partnerId: "pa1", partnerName: "Agência Z", partnerType: "AGENCY", paymentSource: "PARKOS" }).partnerName).toBe("Agência Z");
+  });
+  it("site, formulário, manual, Stripe num parque nosso → Direto", () => {
+    expect(classifyBookingChannel({ ...ours, origin: "API", paymentSource: "STRIPE" })).toMatchObject({ channel: "direto", detail: "API / site", badge: "Direto" });
+    expect(classifyBookingChannel({ ...ours, origin: "MANUAL" }).channel).toBe("direto");
+    expect(classifyBookingChannel(ours).channel).toBe("direto");
   });
 });
 
@@ -101,6 +146,8 @@ describe("SQL", () => {
   it("parques: leitura simples com LIMIT", () => {
     const { sql, params } = buildParksSql();
     expect(sql).toContain(`FROM "Park" p`);
+    expect(sql).toContain(`p."firebaseBrand"`);
+    expect(sql).toContain(`p."listingType"::text`);
     expect(sql).toMatch(/LIMIT 500$/);
     expect(params).toEqual([]);
     expect(() => assertReadOnlySql(sql)).not.toThrow();
@@ -149,7 +196,7 @@ describe("mapeamento da linha", () => {
       parkName: "Airpark", parkCity: "Lisboa", groupKey: "airpark_lisboa", groupLabel: "Airpark Lisboa", ours: true,
       clientName: "Ana Silva", plate: "AA-00-BB", vehicleBrand: "Renault",
       departingFlightEta: "2026-09-27T10:05:00.000Z", returnFlightEta: null,
-      channel: "marketplace", channelDetail: "Parkvia",
+      channel: "parceiro", channelDetail: "Parkvia (cobrado pelo agregador)", channelBadge: "Parceiro · Parkvia",
       garage: "Garagem A", spot: "B 12", price: 49.9, paid: 20, toPay: 29.9, pro: false,
       extrasCount: 2, extrasPending: 1, customerCheckinEta: 15,
     });
@@ -158,6 +205,7 @@ describe("mapeamento da linha", () => {
   it("parque desconhecido → Marketplace; preço em falta → sem 'falta pagar'", () => {
     const b = mapDayBookingRow({ ...ROW, price: null, paid: null, client_first_name: null, client_last_name: null }, undefined);
     expect(b.groupKey).toBe("marketplace");
+    expect(b.channel).toBe("marketplace");
     expect(b.toPay).toBeNull();
     expect(b.clientName).toBeNull();
   });
@@ -202,6 +250,8 @@ describe("movimentos, filtros e contagens", () => {
     expect(filterMovements(rows, { search: "cc22" }).map((m) => m.booking.id)).toEqual(["b"]);
     expect(filterMovements(rows, { search: "joao" }).map((m) => m.booking.id)).toEqual(["b"]);
     expect(filterMovements(rows, { search: "100" }).map((m) => m.booking.id)).toEqual(["a"]);
+    expect(filterMovements(rows, { channel: "parceiro" }).map((m) => m.booking.id)).toEqual(["a", "b"]);
+    expect(filterMovements(rows, { channel: "direto" })).toEqual([]);
   });
   it("contagens: entradas, saídas, por grupo, canceladas à parte", () => {
     const rows = toDayMovements([
@@ -213,6 +263,8 @@ describe("movimentos, filtros e contagens", () => {
     expect(s).toMatchObject({ entradas: 1, saidas: 1, canceladas: 1, entradasPorFazer: 1, saidasPorFazer: 0 });
     expect(s.groups.find((g) => g.key === "airpark_lisboa")).toMatchObject({ entradas: 1, saidas: 0 });
     expect(s.groups.find((g) => g.key === "marketplace")).toMatchObject({ entradas: 0, saidas: 1 });
+    expect(s.channels.map((c) => c.channel)).toEqual(["direto", "parceiro", "marketplace"]);
+    expect(s.channels.find((c) => c.channel === "parceiro")).toMatchObject({ entradas: 1, saidas: 1 });
   });
 });
 
@@ -253,6 +305,16 @@ describe("leitura (com a BD simulada)", () => {
     const r = await getMultiparkDayBookings("2026-09-27");
     expect(r.available && r.data.truncated).toBe(true);
     expect(r.available && r.data.movements.length).toBe(DAY_BOOKINGS_LIMIT);
+  });
+  it("classificação dos parques: leitura leve, com âmbito", async () => {
+    process.env[ENV] = "postgres://ro:x@db.example.com:5432/mp";
+    queryMock.mockResolvedValueOnce([
+      { id: "p1", name: "Parque A", city: "Lisboa", firebase_brand: "Airpark", listing_type: "ON_PLATFORM", status: "ACTIVE" },
+      { id: "p2", name: "Outro", city: "Porto", firebase_brand: null, listing_type: "DIRECTORY", status: "INACTIVE" },
+    ]);
+    const r = await getMultiparkParkClassification(["Lisboa"]);
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    expect(r.available && r.data.parks).toEqual([expect.objectContaining({ id: "p1", ours: true, label: "Airpark Lisboa", firebaseBrand: "Airpark", listingType: "ON_PLATFORM", status: "ACTIVE" })]);
   });
   it("erro da BD → indisponível (não lança)", async () => {
     process.env[ENV] = "postgres://ro:x@db.example.com:5432/mp";

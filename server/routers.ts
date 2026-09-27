@@ -7139,6 +7139,18 @@ export const appRouter = router({
         return { available: true as const, ...r.data };
       }),
 
+    // "Classificação dos parques": cada Park (marca, cidade, listingType,
+    // estado) e a classificação calculada (nosso marca+cidade / Marketplace),
+    // lida ao vivo. Mesma permissão e âmbito de cidade das Reservas do dia.
+    parkClassification: protectedProcedure
+      .query(async ({ ctx }) => {
+        requireAccess(ctx.user, "reservas_operacoes", "view");
+        const { getMultiparkParkClassification } = await import("./multiparkDb/dayBookings");
+        const r = await getMultiparkParkClassification(scopedCityNames());
+        if (!r.available) return { available: false as const, reason: r.reason, code: r.code };
+        return { available: true as const, ...r.data };
+      }),
+
     // Atividade consolidada de um dia: ações + km/GPS por pessoa (visão Jorge)
     // Dia ou intervalo (Hoje/Ontem/intervalo): ações, no horário/fora, custo
     // dos extras (só com o gate de totais), GPS e ponto por pessoa.

@@ -7,16 +7,24 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import BookingDetailDialog from "@/components/BookingDetailDialog";
+import ParkClassificationDialog from "@/components/operacoes/ParkClassificationDialog";
 import { fmtPTTime } from "@/lib/lisbonTime";
 import { addDays, lisbonDayOf } from "@shared/lisbonDay";
 import {
   BOOKING_CHANNEL_LABELS, BOOKING_STATUSES, BOOKING_STATUS_COLORS, filterMovements, phaseLabel, statusLabel, summarizeDay,
-  type BookingStatus, type DayMovement, type MovementKind,
+  type BookingChannel, type BookingStatus, type DayMovement, type MovementKind,
 } from "@shared/reservasDoDia";
 import { MARKETPLACE_GROUP_KEY, allParkGroups } from "@shared/multiparkParks";
 import {
-  ArrowDownToLine, ArrowUpFromLine, CalendarDays, ChevronLeft, ChevronRight, Plane, RefreshCw, Search, XCircle, AlertTriangle,
+  ArrowDownToLine, ArrowUpFromLine, CalendarDays, ChevronLeft, ChevronRight, Plane, RefreshCw, Search, XCircle, AlertTriangle, Tags,
 } from "lucide-react";
+
+/** Cores do distintivo do canal (contabilidade). */
+const CHANNEL_BADGE: Record<BookingChannel, string> = {
+  direto: "border-sky-200 text-sky-700",
+  parceiro: "border-violet-200 text-violet-700",
+  marketplace: "border-rose-200 text-rose-700",
+};
 
 const fmtEur = (v: number | null | undefined) =>
   v == null ? "—" : v.toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
@@ -55,6 +63,8 @@ export default function ReservasDoDia() {
   const [kind, setKind] = useState<"todas" | MovementKind>(seed.kind);
   const [parkId, setParkId] = useState<string>("");
   const [state, setState] = useState<string>("ativas");
+  const [channel, setChannel] = useState<BookingChannel | "">("");
+  const [showParks, setShowParks] = useState(false);
   const [search, setSearch] = useState(seed.q);
   const [open, setOpen] = useState<DayMovement | null>(null);
 
@@ -72,7 +82,7 @@ export default function ReservasDoDia() {
   }, [data, parkId]);
 
   const summary = useMemo(() => summarizeDay(movements), [movements]);
-  const filtered = useMemo(() => filterMovements(movements, { kind, parkId, state, search }), [movements, kind, parkId, state, search]);
+  const filtered = useMemo(() => filterMovements(movements, { kind, parkId, state, search, channel }), [movements, kind, parkId, state, search, channel]);
 
   const sections = useMemo(() => {
     const groups = allParkGroups();
@@ -118,7 +128,10 @@ export default function ReservasDoDia() {
             <span className="truncate first-letter:uppercase">{longDay(day)}</span>
             {isToday && <Badge variant="outline" className="text-[11px]">hoje</Badge>}
           </span>
-          <Button variant="ghost" size="sm" className="ml-auto" onClick={() => q.refetch()} disabled={q.isFetching}>
+          <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setShowParks(true)} title="Como cada parque é classificado (nosso / Marketplace)">
+            <Tags className="w-4 h-4 mr-1" /> Classificação dos parques
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => q.refetch()} disabled={q.isFetching}>
             <RefreshCw className={`w-4 h-4 mr-1 ${q.isFetching ? "animate-spin" : ""}`} /> Atualizar
           </Button>
         </CardContent>
@@ -144,6 +157,23 @@ export default function ReservasDoDia() {
             <Counter icon={<ArrowDownToLine className="w-4 h-4 text-emerald-600" />} label="Entradas" value={summary.entradas} sub={summary.entradasPorFazer ? `${summary.entradasPorFazer} por fazer` : undefined} onClick={() => setKind(kind === "entrada" ? "todas" : "entrada")} active={kind === "entrada"} />
             <Counter icon={<ArrowUpFromLine className="w-4 h-4 text-amber-600" />} label="Saídas" value={summary.saidas} sub={summary.saidasPorFazer ? `${summary.saidasPorFazer} por fazer` : undefined} onClick={() => setKind(kind === "saida" ? "todas" : "saida")} active={kind === "saida"} />
             <Counter icon={<XCircle className="w-4 h-4 text-red-600" />} label="Canceladas" value={summary.canceladas} onClick={() => setState(state === "CANCELLED" ? "ativas" : "CANCELLED")} active={state === "CANCELLED"} />
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs text-muted-foreground mr-0.5">Canal:</span>
+            {summary.channels.map((c) => (
+              <button
+                key={c.channel}
+                type="button"
+                onClick={() => setChannel(channel === c.channel ? "" : c.channel)}
+                aria-pressed={channel === c.channel}
+                className={`inline-flex items-center rounded-md border text-xs py-1 px-2 transition-colors ${CHANNEL_BADGE[c.channel]} ${channel === c.channel ? "bg-primary/10 ring-1 ring-primary" : "bg-background hover:bg-muted"}`}
+              >
+                <span className="font-medium mr-1.5">{c.label}</span>
+                <span className="tabular-nums">↓{c.entradas}</span>
+                <span className="tabular-nums ml-1.5">↑{c.saidas}</span>
+              </button>
+            ))}
+            {channel && <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setChannel("")}>Todos os canais</Button>}
           </div>
           <div className="flex flex-wrap gap-1.5">
             {summary.groups.filter((g) => g.entradas + g.saidas > 0).map((g) => (
@@ -278,6 +308,7 @@ export default function ReservasDoDia() {
           onClose={() => setOpen(null)}
         />
       )}
+      <ParkClassificationDialog open={showParks} onOpenChange={setShowParks} />
     </div>
   );
 }
@@ -318,7 +349,7 @@ function GroupTable({ label, rows, onOpen, showPark }: { label: string; rows: Da
               <th className="p-2 font-medium">Estado</th>
               <th className="p-2 font-medium">Voo</th>
               <th className="p-2 font-medium">Entrega</th>
-              <th className="p-2 font-medium">Origem</th>
+              <th className="p-2 font-medium">Canal</th>
               <th className="p-2 font-medium">Lugar</th>
               <th className="p-2 font-medium text-right">Valor</th>
             </tr>
@@ -367,8 +398,8 @@ function GroupTable({ label, rows, onOpen, showPark }: { label: string; rows: Da
                     {b.extrasCount > 0 && <span className="block text-[11px] text-muted-foreground">{b.extrasCount} extra{b.extrasCount > 1 ? "s" : ""}{b.extrasPending ? ` · ${b.extrasPending} por fazer` : ""}</span>}
                   </td>
                   <td className="p-2 text-xs max-w-[160px]">
-                    <Badge variant="outline" className={`text-[11px] ${b.channel === "marketplace" ? "border-rose-200 text-rose-700" : "border-sky-200 text-sky-700"}`}>
-                      {BOOKING_CHANNEL_LABELS[b.channel]}
+                    <Badge variant="outline" className={`text-[11px] max-w-full ${CHANNEL_BADGE[b.channel]}`} title={b.channelBadge}>
+                      <span className="truncate">{b.channelBadge}</span>
                     </Badge>
                     <span className="truncate block text-[11px] text-muted-foreground" title={b.channelDetail}>{b.channelDetail}</span>
                   </td>

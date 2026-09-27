@@ -5,8 +5,9 @@
  * nunca lança (`{ available:false, reason }`).
  *
  * Duas leituras por dia:
- *   1. os parques ("Park": id, name, city — ~55 linhas), filtrados pelas
- *      cidades do utilizador e classificados (shared/multiparkParks.ts);
+ *   1. os parques ("Park": id, name, city, firebaseBrand, listingType, status
+ *      — ~55 linhas), filtrados pelas cidades do utilizador e classificados
+ *      (shared/multiparkParks.ts — o classificador único);
  *   2. as reservas com entrada OU saída nesse dia de Lisboa, só desses parques.
  *
  * O dia: [00:00, 24:00) de Lisboa → instantes UTC (a BD grava UTC).
@@ -17,6 +18,7 @@
  *     pré-filtro com 1 dia de folga de cada lado deixa o Postgres usá-los.
  *
  * Colunas usadas (docs/multipark-db/schema.md):
+ *   Park: id, name, city, firebaseBrand, listingType, status
  *   Booking: id, allocation, status, checkIn, checkOut, checkInDate, checkOutDate,
  *     checkInTime, checkOutTime, createdAt, parkId, clientId, customerId, vehicleId,
  *     partnerId, garageId, spotId, externalGarage, externalRow, externalSpot,
@@ -35,8 +37,8 @@
  */
 import { multiparkDbQuery, type SqlParam } from "./client";
 import { ParamList, cityAliases, safeMultiparkRead, toIsoUtc, type MultiparkRead } from "./read";
-import { classifyPark, type ParkClassification } from "../../shared/multiparkParks";
-import { classifyBookingChannel, toDayMovements, type DayBooking, type DayMovement } from "../../shared/reservasDoDia";
+import { classifyBookingChannel, classifyPark, type ParkClassification } from "../../shared/multiparkParks";
+import { toDayMovements, type DayBooking, type DayMovement } from "../../shared/reservasDoDia";
 import { addDays, lisbonMidnightUtcMs } from "../../shared/lisbonDay";
 
 export const DAY_BOOKINGS_LIMIT = 1000;
@@ -80,11 +82,25 @@ export interface DayPark extends ParkClassification {
   id: string;
   name: string;
   cityName: string | null;
+  firebaseBrand: string | null;
+  status: string | null;
 }
+
+/** O que a página recebe de cada parque (lista de parques e "Classificação dos parques"). */
+export type DayParkOut = Pick<DayPark, "id" | "name" | "cityName" | "key" | "label" | "ours" | "firebaseBrand" | "listingType" | "status" | "brandSource" | "citySource" | "reason">;
+
+const parkOut = (p: DayPark): DayParkOut => ({
+  id: p.id, name: p.name, cityName: p.cityName, key: p.key, label: p.label, ours: p.ours,
+  firebaseBrand: p.firebaseBrand, listingType: p.listingType, status: p.status,
+  brandSource: p.brandSource, citySource: p.citySource, reason: p.reason,
+});
 
 /** SQL dos parques (tabela pequena). PURA. */
 export function buildParksSql(): { sql: string; params: SqlParam[] } {
-  return { sql: `SELECT p."id" AS id, p."name" AS name, p."city" AS city FROM "Park" p ORDER BY p."name" LIMIT 500`, params: [] };
+  return {
+    sql: `SELECT p."id" AS id, p."name" AS name, p."city" AS city, NULLIF(p."firebaseBrand", '') AS firebase_brand, p."listingType"::text AS listing_type, p."status"::text AS status FROM "Park" p ORDER BY p."name" LIMIT 500`,
+    params: [],
+  };
 }
 
 /** Linhas dos parques → classificados e filtrados pelo âmbito de cidade. PURA. */
@@ -97,7 +113,8 @@ export function mapParks(rows: Array<Record<string, unknown>>, cities?: string[]
     const cityName = str(r.city);
     if (allowed && !allowed.has(String(cityName ?? "").trim().toLowerCase())) continue;
     const name = str(r.name) ?? id;
-    out.push({ id, name, cityName, ...classifyPark({ name, city: cityName }) });
+    const firebaseBrand = str(r.firebase_brand);
+    out.push({ id, name, cityName, firebaseBrand, status: str(r.status), ...classifyPark({ name, city: cityName, firebaseBrand, listingType: str(r.listing_type) }) });
   }
   return out.sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, "pt"));
 }
@@ -207,7 +224,7 @@ export function buildDayBookingsSql(bounds: DayBounds, parkIds: string[], limit 
 
 export type DayBookingRow = Record<string, unknown>;
 
-/** Linha → reserva (com o grupo do parque e o canal Direto/Marketplace). PURA. */
+/** Linha → reserva (com o grupo do parque e o canal Direto/Parceiro/Marketplace). PURA. */
 export function mapDayBookingRow(r: DayBookingRow, park: Pick<DayPark, "name" | "cityName" | "key" | "label" | "ours"> | undefined): DayBooking {
   const price = num(r.price);
   const paid = num(r.paid);
@@ -216,8 +233,8 @@ export function mapDayBookingRow(r: DayBookingRow, park: Pick<DayPark, "name" | 
   const partnerType = str(r.partner_type);
   const origin = str(r.origin);
   const paymentSource = str(r.payment_source);
-  const { channel, detail } = classifyBookingChannel({ partnerId, partnerName, partnerType, origin, paymentSource });
   const cls = park ?? { name: null, cityName: null, ...classifyPark({}) };
+  const ch = classifyBookingChannel({ parkOurs: cls.ours, partnerId, partnerName, partnerType, origin, paymentSource });
   const clientName = [str(r.client_first_name), str(r.client_last_name)].filter(Boolean).join(" ") || null;
   return {
     id: String(r.id ?? ""),
@@ -255,8 +272,10 @@ export function mapDayBookingRow(r: DayBookingRow, park: Pick<DayPark, "name" | 
     partnerId,
     partnerName,
     partnerType,
-    channel,
-    channelDetail: detail,
+    channel: ch.channel,
+    channelDetail: ch.detail,
+    channelBadge: ch.badge,
+    partnerTypeLabel: ch.partnerTypeLabel,
     garage: str(r.garage),
     spot: str(r.spot),
     price,
@@ -290,7 +309,7 @@ export interface DayBookingsResult {
   day: string;
   startMs: number;
   endMs: number;
-  parks: Array<Pick<DayPark, "id" | "name" | "cityName" | "key" | "label" | "ours">>;
+  parks: DayParkOut[];
   movements: DayMovement[];
   /** Houve mais reservas do que o limite (a lista está cortada). */
   truncated: boolean;
@@ -304,7 +323,7 @@ export async function getMultiparkDayBookings(day: string, cities?: string[], qu
     const ps = buildParksSql();
     const parks = mapParks(await query(ps.sql, ps.params), cities);
     const base = { day, startMs: bounds.startMs, endMs: bounds.endMs, limit: DAY_BOOKINGS_LIMIT };
-    const parksOut = parks.map(({ id, name, cityName, key, label, ours }) => ({ id, name, cityName, key, label, ours }));
+    const parksOut = parks.map(parkOut);
     if (!parks.length) return { ...base, parks: parksOut, movements: [], truncated: false };
     const { sql, params } = buildDayBookingsSql(bounds, parks.map((p) => p.id), DAY_BOOKINGS_LIMIT + 1);
     const rows = await query<DayBookingRow>(sql, params);
@@ -316,6 +335,17 @@ export async function getMultiparkDayBookings(day: string, cities?: string[], qu
       movements: toDayMovements(bookings, bounds.startMs, bounds.endMs),
       truncated: rows.length > DAY_BOOKINGS_LIMIT,
     };
+  });
+}
+
+/**
+ * "Classificação dos parques": todos os parques do âmbito com a classificação
+ * calculada (para o Jorge confirmar). Uma leitura leve da tabela "Park".
+ */
+export async function getMultiparkParkClassification(cities?: string[], query: Query = multiparkDbQuery): Promise<MultiparkRead<{ parks: DayParkOut[] }>> {
+  return safeMultiparkRead("classificação dos parques", async () => {
+    const ps = buildParksSql();
+    return { parks: mapParks(await query(ps.sql, ps.params), cities).map(parkOut) };
   });
 }
 

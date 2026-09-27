@@ -7,7 +7,7 @@
  * a Saída (check-out nesse dia) de uma reserva. Uma reserva que entra e sai no
  * mesmo dia dá duas linhas.
  */
-import { MARKETPLACE_GROUP_KEY, allParkGroups } from "./multiparkParks";
+import { BOOKING_CHANNELS, BOOKING_CHANNEL_LABELS, MARKETPLACE_GROUP_KEY, allParkGroups, type BookingChannel } from "./multiparkParks";
 
 // ─── Estados e fases ────────────────────────────────────────────────────────
 
@@ -67,62 +67,12 @@ export function phaseLabel(b: Pick<DayBooking, "status" | "phases">): string | n
   return null;
 }
 
-// ─── Origem (contabilidade): Direto vs Marketplace ──────────────────────────
-
-export type BookingChannel = "direto" | "marketplace";
-
-export const BOOKING_CHANNEL_LABELS: Record<BookingChannel, string> = {
-  direto: "Direto",
-  marketplace: "Marketplace",
-};
-
-/** Origens ("BookingOrigin") que já são de um canal de terceiros. */
-export const MARKETPLACE_ORIGINS: readonly string[] = ["MARKETPLACE", "PARTNER_API", "PARTNER_DASHBOARD"];
-/** Quem cobrou ("PaymentSource") que é um agregador (não a Stripe do parque). */
-export const MARKETPLACE_PAYMENT_SOURCES: readonly string[] = ["PARKVIA", "PARKOS", "AGGREGATOR_OTHER", "PARKFLOW"];
-
-export const PARTNER_TYPE_LABELS: Record<string, string> = {
-  AGENCY: "agência",
-  AGGREGATOR: "agregador",
-  PARTNER: "parceiro",
-};
-
-export const ORIGIN_LABELS: Record<string, string> = {
-  GENERAL_FORM: "Formulário",
-  MANUAL: "Manual",
-  MARKETPLACE: "Marketplace",
-  IMPORTED: "Importada",
-  API: "API / site",
-  MOBILE_APP: "App",
-  PARTNER_API: "API de parceiro",
-  PARTNER_DASHBOARD: "Painel de parceiro",
-  CLIENT_PLAN: "Avença",
-};
-
-/**
- * Canal da reserva para a contabilidade: "marketplace" quando veio por um
- * parceiro/agregador/agência (`partnerId`), por uma origem de terceiros
- * (`origin`) ou foi cobrada por um agregador (`paymentSource`); senão "direto".
- * Conta mesmo nos parques nossos. PURA.
- */
-export function classifyBookingChannel(b: {
-  partnerId?: string | null;
-  partnerName?: string | null;
-  partnerType?: string | null;
-  origin?: string | null;
-  paymentSource?: string | null;
-}): { channel: BookingChannel; detail: string } {
-  const origin = String(b.origin ?? "").toUpperCase();
-  const pay = String(b.paymentSource ?? "").toUpperCase();
-  if (b.partnerId) {
-    const type = PARTNER_TYPE_LABELS[String(b.partnerType ?? "").toUpperCase()];
-    const name = b.partnerName?.trim() || "Parceiro";
-    return { channel: "marketplace", detail: type ? `${name} (${type})` : name };
-  }
-  if (MARKETPLACE_ORIGINS.includes(origin)) return { channel: "marketplace", detail: ORIGIN_LABELS[origin] ?? origin };
-  if (MARKETPLACE_PAYMENT_SOURCES.includes(pay)) return { channel: "marketplace", detail: pay.charAt(0) + pay.slice(1).toLowerCase().replace(/_/g, " ") };
-  return { channel: "direto", detail: ORIGIN_LABELS[origin] ?? (origin || "Direto") };
-}
+// ─── Canal (contabilidade): Direto / Parceiro / Marketplace ────────────────
+// As regras vivem em shared/multiparkParks.ts (um só classificador).
+export {
+  BOOKING_CHANNELS, BOOKING_CHANNEL_LABELS, ORIGIN_LABELS, PARTNER_TYPE_LABELS, classifyBookingChannel,
+  type BookingChannel, type BookingChannelInfo,
+} from "./multiparkParks";
 
 // ─── Linhas ─────────────────────────────────────────────────────────────────
 
@@ -167,7 +117,12 @@ export interface DayBooking {
   partnerName: string | null;
   partnerType: string | null;
   channel: BookingChannel;
+  /** Porquê / quem ("Parkos (agregador)", "Parque de terceiros"). */
   channelDetail: string;
+  /** Texto do distintivo: "Direto", "Parceiro · Parkos", "Marketplace". */
+  channelBadge: string;
+  /** Tipo do parceiro em texto ("agência", "agregador", "parceiro"). */
+  partnerTypeLabel: string | null;
   garage: string | null;
   spot: string | null;
   price: number | null;
@@ -235,6 +190,8 @@ export interface DayFilters {
   parkId?: string;
   /** "ativas" (sem canceladas), "todas" ou um estado. */
   state?: string;
+  /** Canal (contabilidade) ou "" (todos). */
+  channel?: BookingChannel | "";
   search?: string;
 }
 
@@ -252,6 +209,7 @@ export function filterMovements(rows: DayMovement[], f: DayFilters): DayMovement
     const b = m.booking;
     if (f.kind && f.kind !== "todas" && m.kind !== f.kind) return false;
     if (f.parkId && b.parkId !== f.parkId) return false;
+    if (f.channel && b.channel !== f.channel) return false;
     if (state === "ativas" && b.status === "CANCELLED") return false;
     if (state !== "ativas" && state !== "todas" && b.status !== state) return false;
     if (q) {
@@ -266,6 +224,7 @@ export function filterMovements(rows: DayMovement[], f: DayFilters): DayMovement
 }
 
 export interface DayGroupCount { key: string; label: string; ours: boolean; entradas: number; saidas: number }
+export interface DayChannelCount { channel: BookingChannel; label: string; entradas: number; saidas: number }
 export interface DaySummary {
   entradas: number;
   saidas: number;
@@ -275,19 +234,25 @@ export interface DaySummary {
   entradasPorFazer: number;
   saidasPorFazer: number;
   groups: DayGroupCount[];
+  /** Por canal (contabilidade), sem as canceladas. */
+  channels: DayChannelCount[];
 }
 
 /** Contagens do dia (as canceladas não contam como entradas/saídas). PURA. */
 export function summarizeDay(rows: DayMovement[]): DaySummary {
   const groups = new Map<string, DayGroupCount>();
   for (const g of allParkGroups()) groups.set(g.key, { key: g.key, label: g.label, ours: g.ours, entradas: 0, saidas: 0 });
+  const channels = new Map<BookingChannel, DayChannelCount>(
+    BOOKING_CHANNELS.map((c) => [c, { channel: c, label: BOOKING_CHANNEL_LABELS[c], entradas: 0, saidas: 0 }]),
+  );
   const cancelled = new Set<string>();
   let entradas = 0, saidas = 0, entradasPorFazer = 0, saidasPorFazer = 0;
   for (const m of rows) {
     if (m.booking.status === "CANCELLED") { cancelled.add(m.booking.id); continue; }
     const g = groups.get(m.booking.groupKey) ?? groups.get(MARKETPLACE_GROUP_KEY)!;
-    if (m.kind === "entrada") { entradas++; g.entradas++; if (!m.done) entradasPorFazer++; }
-    else { saidas++; g.saidas++; if (!m.done) saidasPorFazer++; }
+    const c = channels.get(m.booking.channel) ?? channels.get("marketplace")!;
+    if (m.kind === "entrada") { entradas++; g.entradas++; c.entradas++; if (!m.done) entradasPorFazer++; }
+    else { saidas++; g.saidas++; c.saidas++; if (!m.done) saidasPorFazer++; }
   }
-  return { entradas, saidas, canceladas: cancelled.size, entradasPorFazer, saidasPorFazer, groups: [...groups.values()] };
+  return { entradas, saidas, canceladas: cancelled.size, entradasPorFazer, saidasPorFazer, groups: [...groups.values()], channels: [...channels.values()] };
 }
