@@ -40,7 +40,6 @@ import IncidentsPage from "./pages/IncidentsPage";
 import AvaliacaoPage from "./pages/AvaliacaoPage";
 import InvoicesPage from "./pages/InvoicesPage";
 import PartnershipsPage from "./pages/PartnershipsPage";
-import PartnerInferPage from "./pages/PartnerInferPage";
 import PartnerTypePage from "./pages/PartnerTypePage";
 import BillingDiagnosePage from "./pages/BillingDiagnosePage";
 import AnnualPage from "./pages/AnnualPage";
@@ -225,8 +224,9 @@ function Router() {
       <Route path="/parcerias">
         {() => (<DashboardLayout><PartnershipsPage /></DashboardLayout>)}
       </Route>
+      {/* A inferência de parceiros saiu: os parceiros vêm ao vivo da BD da Multipark */}
       <Route path="/parcerias/inferir">
-        {() => (<DashboardLayout><PartnerInferPage /></DashboardLayout>)}
+        {() => <Redirect to="/parcerias" replace />}
       </Route>
       <Route path="/parcerias/tipo/:typeId">
         {() => (<DashboardLayout><PartnerTypePage /></DashboardLayout>)}

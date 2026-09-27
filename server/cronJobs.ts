@@ -99,29 +99,17 @@ export async function multiparkSyncCron(o: { deadlineAt: number }): Promise<Cron
       // Outro sync (botão, MCP) tem o trinco: não é falha, repete na hora seguinte.
       return { httpStatus: 200, body: { ok: true, skipped: "busy", message: "Sincronização já a correr", ranAt: ranAt() }, done: true };
     }
-    // Descoberta automática de parceiros (partnerIds novos → partnership +
-    // alias; campanhas "Pro X" → empresa Pro). Melhor esforço: nunca parte o
-    // sync. Os parceiros novos nascem "Por configurar" (Gestão das Parcerias).
-    let partners: Record<string, unknown> | { error: string } | undefined;
-    try {
-      const { syncPartnersFromApi } = await import("./partnerSync");
-      const r = await syncPartnersFromApi({ maxLookups: 5 });
-      partners = { created: r.created, linkedToExisting: r.linkedToExisting, proCreated: r.proCreated, unresolved: r.unresolved.length };
-      console.log("[cron multipark-sync] parceiros:", JSON.stringify(partners));
-    } catch (err: any) {
-      partners = { error: await errCode(err) };
-      console.warn("[cron multipark-sync] sincronização de parceiros falhou:", partners.error);
-    }
+    // (A descoberta de parceiros saiu daqui: as Parcerias leem os parceiros
+    // ao vivo da BD da Multipark — server/multiparkDb/partnerships.ts.)
     const { recentSyncVerdict } = await import("./syncRules");
     // ok:false quando há parques cujo report falhou (a cobertura deles não
-    // avançou e o próximo ciclo repete) ou quando a descoberta de parceiros falhou.
+    // avançou e o próximo ciclo repete).
     const verdict = recentSyncVerdict({
       parkErrors: result.parkErrors,
       errors: result.report.errors,
-      partnersError: partners && "error" in partners ? String(partners.error) : null,
     });
     if (!verdict.ok) console.warn("[cron multipark-sync]", verdict.error);
-    return { httpStatus: 200, body: { ...verdict, ranAt: ranAt(), ...result, report: { ...result.report, errors: result.report.errors.slice(0, 20) }, partners }, done: true };
+    return { httpStatus: 200, body: { ...verdict, ranAt: ranAt(), ...result, report: { ...result.report, errors: result.report.errors.slice(0, 20) } }, done: true };
   } catch (err: any) {
     console.error("[cron multipark-sync] falhou:", await errCode(err));
     return { httpStatus: 500, body: { ok: false, error: `sync recente falhou (${await errCode(err)})` } };

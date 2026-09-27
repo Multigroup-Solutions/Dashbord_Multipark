@@ -18,7 +18,6 @@
  *     resumo na reserva (agente do check-in/out, garagem, lugar, km) +
  *     anexar agentes às fichas por email;
  *   - drivers (de hora a hora): condutores → multipark_agents + anexar por email;
- *   - partners (de hora a hora): descoberta de parceiros (como o multipark-sync).
  *
  * Retomável dentro do orçamento do tick: grava o cursor depois de cada
  * página; se ainda houver páginas, devolve done:false e o agendador volta a
@@ -298,26 +297,13 @@ async function runUnlocked(o: { deadlineAt: number; source?: MultiparkSource }, 
     try { await saveCursor("drivers", { status: "error", error: drivers.error }); } catch { /* registo */ }
   }
 
-  // 4) Descoberta de parceiros (de hora a hora; era feita pelo multipark-sync).
-  let partners: Record<string, unknown> | null = null;
-  try {
-    if (hasTime() && dueHourly((await loadCursor("partners")).lastRunAt, Date.now())) {
-      const { syncPartnersFromApi } = await import("../partnerSync");
-      const r = await syncPartnersFromApi({ maxLookups: 5 });
-      partners = { created: r.created, linkedToExisting: r.linkedToExisting, proCreated: r.proCreated, unresolved: r.unresolved.length };
-      await saveCursor("partners", { status: "ok" });
-    }
-  } catch (err) {
-    partners = { error: errText(err) };
-    try { await saveCursor("partners", { status: "error", error: errText(err) }); } catch { /* registo */ }
-  }
-
   return {
     done: bookings.done && movements.done,
     bookings,
     movements,
     drivers,
-    partners,
+    // descoberta de parceiros retirada (as Parcerias leem os parceiros ao vivo)
+    partners: null,
     streamErrors,
     itemErrors: itemErrors.slice(0, 50),
     durationMs: Date.now() - t0,

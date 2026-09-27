@@ -265,9 +265,8 @@ import {
   // Partnerships
   createPartnership,
   getPartnerships,
-  inferPartnersFromBookings,
-  addPartnerAlias,
   updatePartnership,
+  setPartnershipMultiparkId,
   deletePartnership,
   partnershipNameExists,
   // Annual Reports
@@ -6663,6 +6662,8 @@ export const appRouter = router({
       nif: z.string().optional(),
       billingAgreement: z.string().optional(),
       notes: z.string().optional(),
+      // id do parceiro na BD da Multipark ("Partner".userId) — liga o registo à tab Parceiros
+      multiparkPartnerId: z.string().trim().max(128).optional(),
     })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "parcerias", "manage");
       const name = input.name.trim();
@@ -6673,7 +6674,9 @@ export const appRouter = router({
       // Criado pelo formulário completo (envia comissão/avença) = configurado.
       // Criado só com nome e tipo (Associar métodos de pagamento) fica "Por configurar".
       const configured = input.commissionRate !== undefined || input.monthlyFee !== undefined;
-      const id = await createPartnership({ ...rest, name, partnerNif: nif, ...(configured ? { configuredAt: new Date().toISOString().slice(0, 19).replace("T", " ") } : {}) });
+      const id = await createPartnership({ ...rest, multiparkPartnerId: rest.multiparkPartnerId || null, name, partnerNif: nif, ...(configured ? { configuredAt: new Date().toISOString().slice(0, 19).replace("T", " ") } : {}) });
+      // um id da Multipark só num registo (sai de outro que o tivesse)
+      if (id && rest.multiparkPartnerId) await setPartnershipMultiparkId(id, rest.multiparkPartnerId);
       await logActivity({ userId: ctx.user.id, action: "create", entity: "partnership", entityId: id || 0, details: `Parceria: ${input.name}` });
       return { id };
     }),
@@ -6694,6 +6697,7 @@ export const appRouter = router({
       billingAgreement: z.string().optional(),
       partnerStatus: z.enum(["active", "inactive", "pending"]).optional(),
       notes: z.string().optional(),
+      multiparkPartnerId: z.string().trim().max(128).optional(),
     })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "parcerias", "manage");
       const { id, nif, ...rest } = input;
@@ -6705,56 +6709,69 @@ export const appRouter = router({
       }
       // Gravar no ecrã tira o parceiro da fila "Por configurar" (0% passa a ser
       // uma taxa confirmada e não "em falta" nas finanças).
+      if (rest.multiparkPartnerId !== undefined) (rest as { multiparkPartnerId?: string | null }).multiparkPartnerId = rest.multiparkPartnerId || null;
       await updatePartnership(id, { ...rest, ...(nif !== undefined ? { partnerNif: nif } : {}), configuredAt: new Date().toISOString().slice(0, 19).replace("T", " ") });
+      if (rest.multiparkPartnerId) await setPartnershipMultiparkId(id, rest.multiparkPartnerId);
       await logActivity({ userId: ctx.user.id, action: "update", entity: "partnership", entityId: id });
       return { success: true };
     }),
+
+    // ── Parceiros e parques AO VIVO da BD da Multipark (tabs Parceiros/Parques) ──
+    // Cada parceiro liga-se ao nosso registo (contrato/notas) SÓ pelo id da
+    // Multipark gravado em partnerships.multiparkPartnerId (sem aliases).
+    live: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "parcerias", "view");
+      const canSeeTotals = await canSeeFinanceTotals(ctx.user);
+      const { readPartnershipsLive, hideLiveMoney, linkRecords } = await import("./multiparkDb/partnerships");
+      const r = await readPartnershipsLive(scopedCityNames());
+      if (!r.available) return { available: false as const, reason: r.reason };
+      const records = (await getPartnerships()).map((p: any) => ({
+        id: p.id, name: p.name, partnerType: p.partnerType ?? null, partnerStatus: p.partnerStatus ?? null, multiparkPartnerId: p.multiparkPartnerId ?? null,
+      }));
+      const d = hideLiveMoney(r.data, canSeeTotals);
+      return { available: true as const, canSeeTotals, periods: d.periods, marketplaceRate: d.marketplaceRate, parks: d.parks, partners: linkRecords(d.partners, records) };
+    }),
+
+    // Tab "Pró e avenças": SÓ informativa (a conta corrente é do CRM Pro).
+    proLive: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "parcerias", "view");
+      const canSeeTotals = await canSeeFinanceTotals(ctx.user);
+      const { readProLive, hideProMoney } = await import("./multiparkDb/partnershipsPro");
+      const r = await readProLive(scopedCityNames());
+      if (!r.available) return { available: false as const, reason: r.reason };
+      // Ficha do CRM de cada conta Pro (crm_pro_accounts: "Client".id → ficha), só leitura.
+      const crmByMp = new Map<string, number>();
+      const mpIds = [...new Set(r.data.rows.map((x) => x.mpClientId).filter((x): x is string => !!x))];
+      if (mpIds.length) {
+        try {
+          const { sql } = await import("drizzle-orm");
+          const db = await crmDb();
+          const res: any = await db.execute(sql`SELECT mpClientId, crmClientId FROM crm_pro_accounts WHERE crmClientId IS NOT NULL AND mpClientId IN (${sql.join(mpIds.map((id) => sql`${id}`), sql`, `)})`);
+          const rows: any[] = Array.isArray(res) ? (Array.isArray(res[0]) ? res[0] : res) : [];
+          for (const x of rows) crmByMp.set(String(x.mpClientId), Number(x.crmClientId));
+        } catch { /* sem ligação ao CRM: as linhas ficam sem atalho */ }
+      }
+      return {
+        available: true as const, canSeeTotals, periods: r.data.periods,
+        rows: hideProMoney(r.data.rows, canSeeTotals).map((x) => ({ ...x, crmClientId: x.mpClientId ? crmByMp.get(x.mpClientId) ?? null : null })),
+      };
+    }),
+
+    // Liga (ou desliga, null) um registo das Parcerias a um parceiro da Multipark.
+    linkMultipark: protectedProcedure
+      .input(z.object({ id: z.number().int().positive(), multiparkPartnerId: z.string().trim().min(1).max(128).nullable() }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "parcerias", "manage");
+        await setPartnershipMultiparkId(input.id, input.multiparkPartnerId);
+        await logActivity({ userId: ctx.user.id, action: "update", entity: "partnership", entityId: input.id, details: `Parceiro Multipark: ${input.multiparkPartnerId ?? "(sem ligação)"}` });
+        return { success: true };
+      }),
 
     delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "parcerias", "manage");
       await deletePartnership(input.id);
       await logActivity({ userId: ctx.user.id, action: "delete", entity: "partnership", entityId: input.id });
       return { success: true };
-    }),
-
-    // ── Inferência de parceiros a partir das reservas Multipark ──────────────
-    inferList: protectedProcedure.query(async ({ ctx }) => {
-      requireAccess(ctx.user, "parcerias", "manage");
-      return inferPartnersFromBookings();
-    }),
-
-    addAlias: protectedProcedure
-      .input(z.object({
-        partnershipId: z.number(),
-        aliasType: z.enum(["multipark_partner_id", "payment_method"]),
-        aliasValue: z.string().min(1).max(128),
-        applyToBookings: z.boolean().default(true),
-      }))
-      .mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "parcerias", "manage");
-        const updated = await addPartnerAlias(
-          input.partnershipId,
-          input.aliasType,
-          input.aliasValue,
-          input.applyToBookings,
-        );
-        await logActivity({
-          userId: ctx.user.id,
-          action: "alias_add",
-          entity: "partnership",
-          entityId: input.partnershipId,
-          details: `${input.aliasType}=${input.aliasValue} (${updated} reservas actualizadas)`,
-        });
-        return { updated };
-      }),
-
-    // Aliases agregados por parceiro — mostra quantos códigos cada parceiro
-    // já tem associados (cada parceiro tem normalmente 1 código por
-    // cidade × marca, logo vários).
-    aliasCounts: protectedProcedure.query(async ({ ctx }) => {
-      requireAccess(ctx.user, "parcerias", "view");
-      const { aliasCountsByPartner } = await import("./db");
-      return aliasCountsByPartner();
     }),
 
     // Sumário de faturação por parceiro: reservas, receita e valor a faturar
@@ -6786,20 +6803,6 @@ export const appRouter = router({
         return getPartnerInvoicingDetailByType(input);
       }),
 
-    // Sincroniza parceiros a partir dos dados EXPLÍCITOS da API: resolve os
-    // partnerIds mascarados (nome real via detalhe), cria empresas Pro das
-    // campanhas "Pro <empresa>" e normaliza tipos legados. Substitui a
-    // inferência por heurísticas. Idempotente.
-    syncFromApi: protectedProcedure.mutation(async ({ ctx }) => {
-      requireAccess(ctx.user, "parcerias", "manage");
-      const { syncPartnersFromApi } = await import("./partnerSync");
-      const r = await syncPartnersFromApi();
-      await logActivity({
-        userId: ctx.user.id, action: "sync", entity: "partnership", entityId: 0,
-        details: `Parceiros da API: ${r.created} criados, ${r.linkedToExisting} ligados, ${r.proCreated} Pro criados, ${r.unresolved.length} por resolver`,
-      });
-      return r;
-    }),
   }),
 
   // ─── ANUAL ───────────────────────────────────────────────────────────────

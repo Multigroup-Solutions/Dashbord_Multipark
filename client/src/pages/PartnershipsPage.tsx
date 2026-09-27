@@ -20,9 +20,10 @@ import {
 import { Fragment, useState, useMemo } from "react";
 import {
   Handshake, Euro, Crown, ArrowRightLeft,
-  Plus, Pencil, Trash2, Settings, Link2, AlertTriangle, Wallet,
+  Plus, Pencil, Trash2, Settings, AlertTriangle, Wallet, Building2,
 } from "lucide-react";
-import { Link, useLocation } from "wouter";
+import { useLocation } from "wouter";
+import { PartnersLiveTab, ParksLiveTab, ProLiveTab, type PartnershipRecord } from "@/components/partnerships/LiveTabs";
 import { PARTNER_TYPES, PARTNER_CATEGORIES, getPartnerType, partnerCategoryOf, parsePartnerConfig, serializePartnerConfig, partnerFormFields } from "@shared/partnerTypes";
 import { isPartnerUnconfigured, monthBoundsOf } from "@shared/partnerRules";
 import { lisbonToday } from "@shared/expensePeriods";
@@ -36,13 +37,14 @@ function PartnerDialog({ open, onClose, partner, prefill, campaignOptions }: {
   open: boolean;
   onClose: () => void;
   partner?: any;
-  /** Novo parceiro já preenchido (ex.: "Configurar" numa campanha da Análise). */
-  prefill?: { name: string; campaignKey: string } | null;
+  /** Novo parceiro já preenchido ("Configurar" numa campanha da Análise, "Criar" na tab Parceiros). */
+  prefill?: PartnerPrefill | null;
   campaignOptions: string[];
 }) {
   const utils = trpc.useUtils();
   const onSaved = () => {
     utils.partnerships.list.invalidate();
+    utils.partnerships.live.invalidate();
     utils.partnerships.invoicingSummary.invalidate();
     onClose();
   };
@@ -59,7 +61,8 @@ function PartnerDialog({ open, onClose, partner, prefill, campaignOptions }: {
   const [form, setForm] = useState({
     name: partner?.name ?? prefill?.name ?? "",
     campaignKey: partner?.campaignKey ?? prefill?.campaignKey ?? "",
-    partnerType: partner?.partnerType ?? "outro",
+    partnerType: partner?.partnerType ?? prefill?.partnerType ?? "outro",
+    multiparkPartnerId: partner?.multiparkPartnerId ?? prefill?.multiparkPartnerId ?? "",
     contactName: partner?.contactName ?? "",
     contactEmail: partner?.contactEmail ?? "",
     contactPhone: partner?.contactPhone ?? "",
@@ -234,6 +237,10 @@ function PartnerDialog({ open, onClose, partner, prefill, campaignOptions }: {
             <Input value={form.contactPhone} onChange={e => set("contactPhone", e.target.value)} />
           </div>
           <div className="col-span-2">
+            <Label className="text-xs">ID do parceiro na Multipark</Label>
+            <Input value={form.multiparkPartnerId} onChange={e => set("multiparkPartnerId", e.target.value)} placeholder="liga este registo à tab Parceiros (preenchido ao criar a partir de lá)" />
+          </div>
+          <div className="col-span-2">
             <Label className="text-xs">Acordo de Faturação</Label>
             <Input value={form.billingAgreement} onChange={e => set("billingAgreement", e.target.value)} placeholder="Descrição do acordo..." />
           </div>
@@ -307,6 +314,8 @@ function PartnerDialog({ open, onClose, partner, prefill, campaignOptions }: {
   );
 }
 
+type PartnerPrefill = { name: string; campaignKey?: string; partnerType?: string; multiparkPartnerId?: string };
+
 // ── Main Page ────────────────────────────────────────────────────────────────
 
 export default function PartnershipsPage() {
@@ -322,9 +331,9 @@ export default function PartnershipsPage() {
   const [billingTo, setBillingTo] = useState(monthEnd);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editPartner, setEditPartner] = useState<any>(null);
-  const [prefill, setPrefill] = useState<{ name: string; campaignKey: string } | null>(null);
+  const [prefill, setPrefill] = useState<PartnerPrefill | null>(null);
   const openEdit = (p: any) => { setPrefill(null); setEditPartner(p); setDialogOpen(true); };
-  const openNew = (pre: { name: string; campaignKey: string } | null = null) => { setEditPartner(null); setPrefill(pre); setDialogOpen(true); };
+  const openNew = (pre: PartnerPrefill | null = null) => { setEditPartner(null); setPrefill(pre); setDialogOpen(true); };
   const [mgmtType, setMgmtType] = useState<string>("all"); // segmentação da tab Gestão por tipo
 
   const projectId = useMemo(() => {
@@ -338,20 +347,6 @@ export default function PartnershipsPage() {
   const { data: partnerList = [] } = trpc.partnerships.list.useQuery({ projectId });
   const utils = trpc.useUtils();
   const deleteMut = trpc.partnerships.delete.useMutation({ onSuccess: () => utils.partnerships.list.invalidate() });
-  const syncApiMut = trpc.partnerships.syncFromApi.useMutation({
-    onSuccess: (r) => {
-      toast.success(
-        `Parceiros sincronizados: ${r.created} criados, ${r.linkedToExisting} ligados a existentes, ` +
-        `${r.proCreated} empresas Pro criadas, ${r.legacyTypesFixed} tipos corrigidos` +
-        (r.unresolved.length ? ` — ${r.unresolved.length} por resolver` : ""),
-      );
-      utils.partnerships.list.invalidate();
-      utils.partnerships.analytics.invalidate();
-      utils.partnerships.invoicingSummary.invalidate();
-    },
-    onError: (e) => toast.error(e.message || "Erro na sincronização de parceiros"),
-  });
-
   const partners = analyticsData?.partners ?? [];
   const proBookings = analyticsData?.proBookings ?? [];
   const totals = analyticsData?.totals ?? { partnerBookings: 0, partnerRevenue: 0, directBookings: 0, directRevenue: 0, proBookings: 0, proRevenue: 0 };
@@ -415,17 +410,39 @@ export default function PartnershipsPage() {
 
   return (
     <div className="space-y-6">
-      <p className="text-muted-foreground">Parceiros, afiliados e reservas Pro da Multipark</p>
+      <p className="text-muted-foreground">Agências, agregadores e parques (ao vivo da BD da Multipark), Pró e avenças, e os nossos registos (contratos, notas e contactos)</p>
 
-      <Tabs defaultValue="summary">
+      <Tabs defaultValue="partners">
         <TabsList className={TABS_SCROLL}>
-          <TabsTrigger value="summary"><Wallet className="w-3 h-3 mr-1" /> Resumo</TabsTrigger>
+          <TabsTrigger value="partners"><Handshake className="w-3 h-3 mr-1" /> Parceiros</TabsTrigger>
+          <TabsTrigger value="parks"><Building2 className="w-3 h-3 mr-1" /> Parques</TabsTrigger>
+          <TabsTrigger value="pro"><Crown className="w-3 h-3 mr-1" /> Pró e avenças</TabsTrigger>
+          <TabsTrigger value="summary"><Wallet className="w-3 h-3 mr-1" /> Faturação</TabsTrigger>
           <TabsTrigger value="analytics">Análise</TabsTrigger>
           <TabsTrigger value="management">
-            <Settings className="w-3 h-3 mr-1" /> Gestão
+            <Settings className="w-3 h-3 mr-1" /> Registos
             {unconfigured.length > 0 && <Badge variant="destructive" className="ml-1 h-4 px-1 text-[11px]">{unconfigured.length}</Badge>}
           </TabsTrigger>
         </TabsList>
+
+        {/* ── TAB: PARCEIROS (agências + agregadores, ao vivo) ────────────── */}
+        <TabsContent value="partners" className="space-y-4">
+          <PartnersLiveTab
+            records={partnerList as PartnershipRecord[]}
+            onEdit={(r) => openEdit(r)}
+            onCreate={(pre) => openNew(pre)}
+          />
+        </TabsContent>
+
+        {/* ── TAB: PARQUES (nossos e de terceiros/marketplace, ao vivo) ───── */}
+        <TabsContent value="parks" className="space-y-4">
+          <ParksLiveTab />
+        </TabsContent>
+
+        {/* ── TAB: PRÓ E AVENÇAS (só informativo) ─────────────────────────── */}
+        <TabsContent value="pro" className="space-y-4">
+          <ProLiveTab />
+        </TabsContent>
 
         {/* ── TAB: RESUMO DE FATURAÇÃO POR PARCEIRO ─────────────────────────── */}
         <TabsContent value="summary" className="space-y-4">
@@ -618,22 +635,8 @@ export default function PartnershipsPage() {
         {/* ── TAB: GESTÃO ──────────────────────────────────────────────────── */}
         <TabsContent value="management" className="space-y-4">
           <div className="flex items-center justify-between flex-wrap gap-2">
-            <p className="text-sm text-muted-foreground">Configurar parceiros: campaign key, comissão, NIF e dados de contacto</p>
+            <p className="text-sm text-muted-foreground">Os nossos registos: contrato (acordo de faturação), comissão, NIF, notas e contactos</p>
             <div className="flex gap-2 flex-wrap">
-              <Button
-                size="sm" variant="outline"
-                disabled={syncApiMut.isPending}
-                title="Resolve os parceiros mascarados da API (nome real via detalhe), cria as empresas Pro das campanhas 'Pro X' e normaliza tipos antigos"
-                onClick={() => syncApiMut.mutate()}
-              >
-                <Link2 className={`w-4 h-4 mr-1 ${syncApiMut.isPending ? "animate-pulse" : ""}`} />
-                {syncApiMut.isPending ? "A sincronizar…" : "Sincronizar parceiros da API"}
-              </Button>
-              <Link href="/parcerias/inferir">
-                <Button size="sm" variant="ghost" title="Associar partnerIds e métodos de pagamento das reservas a parceiros">
-                  Associar métodos de pagamento
-                </Button>
-              </Link>
               <Button size="sm" onClick={() => openNew()}>
                 <Plus className="w-4 h-4 mr-1" /> Novo Parceiro
               </Button>
@@ -648,7 +651,7 @@ export default function PartnershipsPage() {
                 <h3 className="font-semibold text-sm">Por configurar ({unconfigured.length})</h3>
               </div>
               <p className="text-xs text-muted-foreground mb-3">
-                Parceiros criados automaticamente (ou sem dados gravados). Até serem configurados, a comissão conta como
+                Registos sem dados gravados (ex.: criados pela antiga sincronização automática). Até serem configurados, a comissão conta como
                 "taxa em falta" nas finanças. Confirma o tipo, a comissão (mesmo que seja 0%) ou a avença.
               </p>
               <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
@@ -690,7 +693,7 @@ export default function PartnershipsPage() {
 
           {partnerList.length === 0 ? (
             <Card className="p-8 text-center text-muted-foreground">
-              Nenhum parceiro configurado. Usa "Sincronizar parceiros da API" ou cria um novo.
+              Nenhum registo. Cria um aqui ou a partir da tab Parceiros.
             </Card>
           ) : (
             <div className="grid gap-3">
