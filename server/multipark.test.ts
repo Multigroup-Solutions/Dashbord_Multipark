@@ -65,3 +65,27 @@ describe("multipark.reservasDoDia", () => {
     await expect(caller.multipark.reservasDoDia({ day: "27/09/2026" })).rejects.toThrow();
   });
 });
+
+describe("multipark.opsList (listas por período)", () => {
+  it("sem BD da Multipark configurada → aviso, sem lançar", async () => {
+    const saved = process.env.DATABASE_URL_MULTIPARK;
+    delete process.env.DATABASE_URL_MULTIPARK;
+    try {
+      const caller = appRouter.createCaller(createAdminContext());
+      for (const kind of ["reservas", "entradas", "saidas", "cancelados"] as const) {
+        const r = await caller.multipark.opsList({ kind, from: "2026-09-27", to: "2026-09-27", state: "qualquer" });
+        expect(r).toMatchObject({ available: false, code: "NOT_CONFIGURED" });
+      }
+    } finally {
+      if (saved !== undefined) process.env.DATABASE_URL_MULTIPARK = saved;
+    }
+  });
+
+  it("recusa períodos com mais de 62 dias, invertidos ou mal escritos", async () => {
+    const caller = appRouter.createCaller(createAdminContext());
+    await expect(caller.multipark.opsList({ kind: "reservas", from: "2026-01-01", to: "2026-03-31" })).rejects.toThrow(/62/);
+    await expect(caller.multipark.opsList({ kind: "reservas", from: "2026-09-30", to: "2026-09-01" })).rejects.toThrow();
+    await expect(caller.multipark.opsList({ kind: "reservas", from: "27/09/2026", to: "2026-09-27" })).rejects.toThrow();
+    await expect(caller.multipark.opsList({ kind: "outra" as any, from: "2026-09-27", to: "2026-09-27" })).rejects.toThrow();
+  });
+});
