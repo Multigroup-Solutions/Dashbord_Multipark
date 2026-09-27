@@ -62,6 +62,9 @@ import {
   PauseCircle,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PressureTab, TightHourBadge } from "./extrasDia/PressureTab";
+import { extraCityGroupKey, tightHoursForDay, type PressureSlot, type TightReason } from "@shared/extrasPressure";
 import { describeGap } from "@shared/extrasSchedule";
 import { AvailabilityDayFields, isDayMarked, type AvailabilityDayState } from "@/components/AvailabilityDayFields";
 import {
@@ -199,8 +202,17 @@ export default function ExtrasDiaPage() {
   // baseDate + 1 (previsão do dia seguinte), por isso baseDate = dia − 1.
   const [baseDate, setBaseDate] = useState(() => baseDateFromUrl() ?? todayISO());
 
+  const [tab, setTab] = usePersistedState<"dia" | "pressao">("extrasdia.tab", "dia");
   const { data, isLoading, error } = trpc.extrasDia.forecast.useQuery({ baseDate, city }, { enabled: !globalFilters.isLoading && allowedCities.length > 0 });
   const targetDate = data?.targetDate ?? "";
+  // "hora apertada": histórico de 60 dias (trabalho extras-pressure) da cidade.
+  const pressureQ = trpc.extrasDia.pressure.useQuery(undefined, { staleTime: 10 * 60_000 });
+  const tightHours = useMemo(() => {
+    if (!data || !pressureQ.data?.available) return new Map<number, TightReason>();
+    const key = extraCityGroupKey(city);
+    const slots = (pressureQ.data.slots as PressureSlot[]).filter((s) => s.group === key);
+    return tightHoursForDay(slots, data.targetDate, data.hourly.map((h) => h.hour));
+  }, [data, pressureQ.data, city]);
   const assignmentsQ = trpc.extrasDia.assignments.useQuery(
     { date: targetDate, city },
     { enabled: !!targetDate },
@@ -259,14 +271,23 @@ export default function ExtrasDiaPage() {
         </div>
       </div>
 
-      {isLoading && (
+      <Tabs value={tab} onValueChange={(v) => setTab(v as "dia" | "pressao")}>
+        <TabsList>
+          <TabsTrigger value="dia">Dia</TabsTrigger>
+          <TabsTrigger value="pressao">Pressão</TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {tab === "pressao" && <PressureTab city={city} />}
+
+      {tab === "dia" && isLoading && (
         <div className="text-sm text-muted-foreground">A carregar previsão...</div>
       )}
-      {error && (
+      {tab === "dia" && error && (
         <div className="text-sm text-red-600">Erro: {error.message}</div>
       )}
 
-      {data && (
+      {tab === "dia" && data && (
         <>
           <div className="text-sm text-muted-foreground">
             A mostrar previsão para <strong>{fmtDate(data.targetDate)}</strong>
@@ -296,10 +317,18 @@ export default function ExtrasDiaPage() {
             </div>
           )}
 
+          {data.bookingSource === "copy" && (
+            <div className="rounded-md border border-amber-300 bg-amber-50/60 p-3 text-sm text-amber-900">
+              <AlertTriangle className="inline h-4 w-4 mr-1 align-text-bottom" />
+              Reservas da cópia local, não da BD da Multipark ao vivo. {data.bookingSourceNotice}
+            </div>
+          )}
+
           {data.parksQueried.length === 0 && (
             <div className="rounded-md border border-red-300 bg-red-50/60 p-3 text-sm">
-              Nenhuma chave de API Lisboa configurada. Define{" "}
-              <code className="font-mono">MULTIPARK_API_KEY_LISBON_*</code> nas env vars.
+              {data.bookingSource === "multipark-db"
+                ? "A BD da Multipark não tem parques nossos nesta cidade (ver Operações → Classificação dos parques)."
+                : "Sem reservas desta cidade na cópia local."}
             </div>
           )}
 
@@ -377,6 +406,7 @@ export default function ExtrasDiaPage() {
                           row={row}
                           targetDate={data.targetDate}
                           isPeak={peakHour?.hour === row.hour}
+                          tight={tightHours.get(row.hour) ?? null}
                         />
                       ))}
                     {data.hourly.every(h => h.checkins + h.checkouts === 0) && (
@@ -1387,7 +1417,9 @@ function HourRow({
   row,
   targetDate,
   isPeak,
+  tight,
 }: {
+  tight?: TightReason | null;
   row: {
     hour: number;
     checkins: number;
@@ -1419,7 +1451,7 @@ function HourRow({
         <td className="py-1.5 px-2 text-muted-foreground">
           {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
         </td>
-        <td className="py-1.5 px-2 font-mono">{fmtHour(row.hour)}</td>
+        <td className="py-1.5 px-2 font-mono whitespace-nowrap">{fmtHour(row.hour)}{tight && <TightHourBadge reason={tight} />}</td>
         <td className="py-1.5 px-2 text-right text-emerald-700">{row.checkins || ""}</td>
         <td className="py-1.5 px-2 text-right text-orange-700">{row.checkouts || ""}</td>
         <td className="py-1.5 px-2 text-right font-semibold">{total}</td>
