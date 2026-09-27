@@ -234,23 +234,23 @@ app.get("/api/cron/multipark-db-probe", async (req, res) => {
   }
 });
 
-// Relatório de cancelamentos: nossa BD × BD da Multipark num período de dias
-// (hora de Lisboa) — quando foram canceladas, para quando eram, quem cancelou e
-// as que desapareceram do lado deles. SÓ LÊ; sem dados pessoais do cliente.
-// ?from=AAAA-MM-DD&to=AAAA-MM-DD (máx 62 dias). Workflow multipark-db-schema.yml (modo "cancelamentos").
-app.get("/api/cron/multipark-db-cancelamentos", async (req, res) => {
+// Diferenças nossa BD × BD da Multipark (a deles é a referência): lê as duas
+// por inteiro, compara reserva a reserva (com o porquê e onde) e devolve o
+// resultado. SÓ LÊ as duas BD; sem dados pessoais do cliente.
+// ?foco=AAAA-MM-DD (lista tudo o que foi cancelado nesse dia).
+// Workflow multipark-db-schema.yml (modo "diferencas").
+app.get("/api/cron/multipark-db-diff", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
   const { isMultiparkDbConfigured, redactSecrets } = await import("../multiparkDb/client");
   if (!isMultiparkDbConfigured()) {
     return res.status(503).json({ ok: false, error: "DATABASE_URL_MULTIPARK não está definida neste ambiente." });
   }
   try {
-    const { runMultiparkDbCancellations } = await import("../multiparkDb/cancellations");
-    const from = typeof req.query?.from === "string" ? req.query.from : undefined;
-    const to = typeof req.query?.to === "string" ? req.query.to : undefined;
-    res.status(200).json(await runMultiparkDbCancellations({ from, to }));
+    const { runMultiparkDbDiff } = await import("../multiparkDb/diff");
+    const focus = typeof req.query?.foco === "string" ? req.query.foco : null;
+    res.status(200).json(await runMultiparkDbDiff({ focus }));
   } catch (err) {
-    console.error("[multipark-db-cancelamentos] falhou:", redactSecrets(err));
+    console.error("[multipark-db-diff] falhou:", redactSecrets(err));
     res.status(500).json({ ok: false, error: redactSecrets(err).slice(0, 500) });
   }
 });
