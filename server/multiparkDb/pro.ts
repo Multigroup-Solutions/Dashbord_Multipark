@@ -51,7 +51,7 @@ export function buildProBookingsSql(limit = PRO_BOOKINGS_LIMIT): { sql: string; 
   const lim = p.add(Math.min(Math.max(Math.floor(limit), 1), PRO_BOOKINGS_LIMIT + 1));
   return {
     sql: [
-      `WITH pb AS (SELECT b."id" FROM "Booking" b WHERE ${PRO_BOOKING} ORDER BY b."createdAt" LIMIT ${lim}),`,
+      `WITH pb AS (SELECT b."id" FROM "Booking" b WHERE ${PRO_BOOKING} ORDER BY b."createdAt" DESC LIMIT ${lim}),`,
       `pr AS (SELECT y."bookingId" AS booking_id, count(*) AS lines, SUM(y."total") AS total, SUM(y."amountPaid") AS paid,`,
       `  MAX(y."updatedAt") FILTER (WHERE y."amountPaid" > 0) AS paid_updated_at`,
       `  FROM "BookingPricing" y WHERE y."bookingId" IN (SELECT pb."id" FROM pb) GROUP BY y."bookingId")`,
@@ -61,10 +61,13 @@ export function buildProBookingsSql(limit = PRO_BOOKINGS_LIMIT): { sql: string; 
       `  b."bookingPrice" AS booking_price, b."discountAmount" AS discount_amount,`,
       `  COALESCE(pr.lines, 0) AS pricing_lines, pr.total AS pricing_total, COALESCE(pr.paid, 0) AS paid, ${ts(`pr.paid_updated_at`)} AS paid_updated_at,`,
       `  NULLIF(v."licensePlate", '') AS plate,`,
-      `  NULLIF(TRIM(CONCAT(tc."firstName", ' ', tc."lastName")), '') AS traveler_name`,
+      `  NULLIF(TRIM(CONCAT(tc."firstName", ' ', tc."lastName")), '') AS traveler_name,`,
+      // parque REAL da reserva (a cidade decide quem a vê)
+      `  bpk."name" AS park_name, bpk."city" AS park_city`,
       `FROM pb`,
       `JOIN "Booking" b ON b."id" = pb."id"`,
       `LEFT JOIN pr ON pr.booking_id = b."id"`,
+      `LEFT JOIN "Park" bpk ON bpk."id" = b."parkId"`,
       `LEFT JOIN "BookingVehicle" v ON v."id" = b."vehicleId"`,
       `LEFT JOIN "Client" tc ON tc."id" = COALESCE(b."customerId", b."clientId")`,
     ].join("\n"),
@@ -82,7 +85,7 @@ export function buildProPricingPaymentsSql(): { sql: string; params: SqlParam[] 
       `JOIN "BookingPricing" y ON y."id" = pp."pricingId"`,
       `JOIN "Booking" b ON b."id" = y."bookingId"`,
       `WHERE ${PRO_BOOKING}`,
-      `ORDER BY pp."recordedAt"`,
+      `ORDER BY pp."recordedAt" DESC`,
       `LIMIT ${lim}`,
     ].join("\n"),
     params: p.values,
@@ -96,10 +99,12 @@ export function buildProSettlementsSql(): { sql: string; params: SqlParam[] } {
   return {
     sql: [
       `SELECT s."id" AS id, s."entityId" AS entity_id, s."parkId" AS park_id, s."scopeKey" AS scope_key, s."periodKey" AS period_key,`,
-      `  ${ts(`s."paidAt"`)} AS paid_at, NULLIF(s."method", '') AS method, s."amount" AS amount, s."source"::text AS source`,
+      `  ${ts(`s."paidAt"`)} AS paid_at, NULLIF(s."method", '') AS method, s."amount" AS amount, s."source"::text AS source,`,
+      `  spk."name" AS park_name, spk."city" AS park_city`,
       `FROM "EntitySettlement" s`,
+      `LEFT JOIN "Park" spk ON spk."id" = s."parkId"`,
       `WHERE s."entityType"::text = ${type}`,
-      `ORDER BY s."paidAt"`,
+      `ORDER BY s."paidAt" DESC`,
       `LIMIT ${lim}`,
     ].join("\n"),
     params: p.values,
@@ -115,7 +120,7 @@ export function buildProOnlinePaymentsSql(): { sql: string; params: SqlParam[] }
       `  ${ts(`pp."periodStart"`)} AS period_start, ${ts(`pp."periodEnd"`)} AS period_end, ${ts(`pp."createdAt"`)} AS created_at,`,
       `  pp."isMitCharge" AS mit`,
       `FROM "ProPayment" pp`,
-      `ORDER BY pp."createdAt"`,
+      `ORDER BY pp."createdAt" DESC`,
       `LIMIT ${lim}`,
     ].join("\n"),
     params: p.values,
@@ -221,18 +226,21 @@ export function mapProSnapshot(input: {
     const paid = round(num(r.paid) ?? 0);
     const lines = num(r.pricing_lines) ?? 0, total = num(r.pricing_total), price = num(r.booking_price);
     if (lines > 0 && total != null && price != null && Math.abs(total - price) > 0.01) diag.pricingDiffersFromPrice++;
-    const parkId = str(r.park_id), park = parkId ? parkOfId.get(parkId) : undefined;
+    const parkId = str(r.park_id);
+    // parque real da reserva (junção a "Park"); recurso: os parques do ProClient
+    const park = { name: str(r.park_name) ?? (parkId ? parkOfId.get(parkId)?.name ?? null : null), city: str(r.park_city) ?? (parkId ? parkOfId.get(parkId)?.city ?? null : null) };
     const code = str(r.code);
     ledger.push({
-      ...base, mpClientId: account, kind: "booking", sourceId: id, entryAt, periodKey, parkId, parkName: park?.name ?? null, city: park?.city ?? null,
+      ...base, mpClientId: account, kind: "booking", sourceId: id, entryAt, periodKey, parkId, parkName: park.name, city: park.city,
       bookingExternalId: id, bookingCode: code, checkIn, checkOut: str(r.check_out), plate: str(r.plate), travelerName: str(r.traveler_name),
       debit: bookingOwed({ pricingLines: lines, pricingTotal: total == null ? null : round(total), bookingPrice: price, paid, cancelled }),
       paidAmount: paid, listPrice: price == null ? null : round(price), discountAmount: num(r.discount_amount) == null ? null : round(num(r.discount_amount)!),
       status, description: code ? `Reserva ${code}` : "Reserva",
     });
     bookingInfo.set(id, {
-      account, periodKey, parkId, parkName: park?.name ?? null, city: park?.city ?? null, code, paid,
-      paidUpdatedAt: str(r.paid_updated_at) ?? str(r.check_out) ?? entryAt,
+      account, periodKey, parkId, parkName: park.name, city: park.city, code, paid,
+      // data ESTÁVEL (a última alteração das linhas mudava com qualquer edição e passava o valor de ano)
+      paidUpdatedAt: str(r.check_out) ?? entryAt,
     });
     diag.bookings++;
   }
@@ -252,13 +260,17 @@ export function mapProSnapshot(input: {
     });
     diag.payments++;
   }
+  // o crédito total de cada reserva bate SEMPRE com o pago dela ("amountPaid"):
+  // o que falta sem data entra como "pago (sem data)"; o que sobra (pago
+  // corrigido para baixo, reembolso sem pagamento negativo) entra como correção
   for (const [bookingId, b] of bookingInfo) {
     const rest = round(b.paid - (datedByBooking.get(bookingId) ?? 0));
-    if (rest <= 0.005) continue;
+    if (Math.abs(rest) <= 0.005) continue;
+    const label = rest > 0 ? "sem data do pagamento" : "pago corrigido na Multipark";
     ledger.push({
       ...base, mpClientId: b.account, kind: "paid_undated", sourceId: bookingId, entryAt: b.paidUpdatedAt, periodKey: b.periodKey,
       parkId: b.parkId, parkName: b.parkName, city: b.city, bookingExternalId: bookingId, bookingCode: b.code, credit: rest,
-      description: b.code ? `Pago na reserva ${b.code} (sem data do pagamento)` : "Pago (sem data do pagamento)",
+      description: b.code ? `Pago na reserva ${b.code} (${label})` : `Pago (${label})`,
     });
     diag.undatedPaid++;
   }
@@ -275,10 +287,11 @@ export function mapProSnapshot(input: {
     if (!account) { diag.settlementsWithoutAccount++; continue; }
     const pk = parseMpPeriodKey(raw);
     if (!pk) diag.settlementPeriodUnparsed++;
-    const parkId = str(r.park_id), park = parkId ? parkOfId.get(parkId) : undefined;
+    const parkId = str(r.park_id);
+    const park = { name: str(r.park_name) ?? (parkId ? parkOfId.get(parkId)?.name ?? null : null), city: str(r.park_city) ?? (parkId ? parkOfId.get(parkId)?.city ?? null : null) };
     ledger.push({
       ...base, mpClientId: account, kind: "settlement", sourceId: id, entryAt: at, periodKey: pk ?? "", mpPeriodKey: raw,
-      parkId, parkName: park?.name ?? null, city: park?.city ?? null, infoAmount: num(r.amount) == null ? null : round(num(r.amount)!),
+      parkId, parkName: park.name, city: park.city, infoAmount: num(r.amount) == null ? null : round(num(r.amount)!),
       method: str(r.method), status: str(r.source), description: `Período ${raw ?? "?"} registado como pago na Multipark`,
     });
   }

@@ -62,13 +62,13 @@ describe("migração 0220 (CRM Pro)", () => {
     expect(all).toContain("UNIQUE KEY `uq_crm_pro_ledger_source` (`kind`, `sourceId`)");
     expect(all).toContain("UNIQUE KEY `uq_crm_pro_mp_client` (`mpClientId`)");
   });
-  it("o passo da collation apanha todas as crm_* (também as crm_pro_*)", async () => {
+  it("o passo da collation apanha as crm_pro_* (e só tabelas da lista)", async () => {
     const run: string[] = [];
     const db = {
       execute: async (q: any) => {
         const text = new MySqlDialect().sqlToQuery(q).sql;
         if (text.includes("information_schema.COLUMNS")) return [[{ cs: "utf8mb4", coll: "utf8mb4_0900_ai_ci" }]];
-        if (text.includes("information_schema.TABLES")) return [[{ t: "crm_pro_ledger", c: "utf8mb4_general_ci" }, { t: "crm_x; DROP", c: "latin1_swedish_ci" }]];
+        if (text.includes("information_schema.TABLES")) return [[{ t: "crm_pro_ledger", c: "utf8mb4_general_ci" }, { t: "crm_contacts", c: "latin1_swedish_ci" }, { t: "crm_x; DROP", c: "latin1_swedish_ci" }]];
         run.push(text);
         return [[]];
       },

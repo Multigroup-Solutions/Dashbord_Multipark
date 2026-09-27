@@ -1,17 +1,22 @@
 /**
  * CRM fase 2 — clientes Pro e CONTA CORRENTE (Jorge, 27 set 2026). PURO.
  *
- * Os Pro pagam no fim do mês. Quem manda é a Multipark: a regra do saldo é a
- * da página Pro deles (pendente = preço − pago, por reserva), por isso o saldo
- * daqui bate com o deles.
- *   - débito de uma reserva = soma das linhas de preço ("BookingPricing.total",
- *     já com o desconto); sem linhas, "bookingPrice";
- *   - pago = soma de "amountPaid"; as datas vêm dos pagamentos
- *     ("BookingPricingPayment.recordedAt"); o pago sem pagamento datado
- *     (registos antigos) entra como "pago (sem data)";
+ * Os Pro pagam no fim do mês. Quem manda é a Multipark (Jorge: "fica pago
+ * quando a Multipark regista"). Por reserva, pendente = o que cobra − o pago:
+ *   - débito = o que a reserva cobra: soma das linhas de preço
+ *     ("BookingPricing.total", líquido, já com o desconto Pro); sem linhas,
+ *     "bookingPrice". (A página Pro da Multipark mostra "bookingPrice − pago";
+ *     se o preço base não trouxer o desconto, os valores diferem nessas
+ *     reservas — contado no diagnóstico "pricingDiffersFromPrice", a confirmar);
+ *   - pago = soma de "amountPaid" (o crédito total bate SEMPRE com ele): as
+ *     datas vêm dos pagamentos ("BookingPricingPayment.recordedAt"); a
+ *     diferença sem pagamento datado entra como "pago (sem data)" — também
+ *     negativa, se o pago foi corrigido para baixo;
  *   - reserva cancelada: não deixa dívida (débito = o que foi pago);
- *   - acertos ("EntitySettlement") e pagamentos online ("ProPayment") são
- *     MARCAS ("período pago", "cobrança online"): mostram-se, não contam.
+ *   - acertos ("EntitySettlement") e cobranças online concluídas ("ProPayment")
+ *     são MARCAS que não mexem no saldo, mas dão o MÊS como pago: um mês que a
+ *     Multipark deu como pago não conta como dívida, mesmo que as reservas
+ *     ainda não tenham o pago atualizado (mostra-se a diferença).
  * Mês de uma reserva = mês (Lisboa) da entrada. Meses já acabados e por pagar
  * = saldo em dívida; o mês corrente está "em curso".
  */
@@ -91,9 +96,11 @@ export interface MonthSummary {
   pending: number;
   bookings: number;
   status: MonthStatus;
-  /** acerto da Multipark para este mês (período pago) */
+  /** a Multipark deu o mês como pago (acerto ou cobrança online concluída) */
   settledAt: string | null;
   settledMethod: string | null;
+  /** mês dado como pago pela Multipark mas com valor ainda por pagar nas reservas */
+  settledGap: number;
 }
 
 export interface AccountSummary {
@@ -122,18 +129,20 @@ export function summarizeLedger(rows: LedgerRowIn[], now = new Date()): AccountS
   const months = new Map<string, MonthSummary>();
   const month = (k: string) => {
     let m = months.get(k);
-    if (!m) { m = { periodKey: k, debit: 0, credit: 0, pending: 0, bookings: 0, status: "open", settledAt: null, settledMethod: null }; months.set(k, m); }
+    if (!m) { m = { periodKey: k, debit: 0, credit: 0, pending: 0, bookings: 0, status: "open", settledAt: null, settledMethod: null, settledGap: 0 }; months.set(k, m); }
     return m;
+  };
+  const settle = (k: string | null, at: string, method: string | null) => {
+    if (!k) return;
+    const m = month(k);
+    if (!m.settledAt || at > m.settledAt) { m.settledAt = at; m.settledMethod = method; }
   };
   let balance = 0, paidThisYear = 0, lastPaidAt: string | null = null;
   let payWeighted = 0, payWeight = 0;
   for (const r of live) {
-    if (r.kind === "settlement") {
-      const k = parseMpPeriodKey(r.mpPeriodKey) ?? (r.periodKey || null);
-      if (k) {
-        const m = month(k);
-        if (!m.settledAt || r.entryAt > m.settledAt) { m.settledAt = r.entryAt; m.settledMethod = r.method ?? null; }
-      }
+    if (r.kind === "settlement") { settle(parseMpPeriodKey(r.mpPeriodKey) ?? (r.periodKey || null), r.entryAt, r.method ?? null); continue; }
+    if (r.kind === "online") {
+      if (String(r.status ?? "").toUpperCase() === "COMPLETED") settle(r.periodKey || null, r.entryAt, r.method ?? "cobrança online");
       continue;
     }
     if (!BALANCE_KINDS.has(r.kind) || !r.periodKey) continue;
@@ -142,8 +151,9 @@ export function summarizeLedger(rows: LedgerRowIn[], now = new Date()): AccountS
     m.credit += r.credit;
     if (r.kind === "booking") m.bookings += 1;
     balance += r.debit - r.credit;
+    // correções para baixo (crédito negativo) também contam no pago do ano
+    if (r.credit !== 0 && r.entryAt.slice(0, 4) === year) paidThisYear += r.credit;
     if (r.credit > 0) {
-      if (r.entryAt.slice(0, 4) === year) paidThisYear += r.credit;
       if (r.kind === "payment") {
         if (!lastPaidAt || r.entryAt > lastPaidAt) lastPaidAt = r.entryAt;
         const t = Date.UTC(+r.entryAt.slice(0, 4), +r.entryAt.slice(5, 7) - 1, +r.entryAt.slice(8, 10));
@@ -158,7 +168,11 @@ export function summarizeLedger(rows: LedgerRowIn[], now = new Date()): AccountS
     m.debit = cents(m.debit);
     m.credit = cents(m.credit);
     m.pending = cents(m.debit - m.credit);
-    if (m.periodKey >= nowMonth) m.status = "open";
+    if (m.settledAt) {
+      // a Multipark deu o mês como pago: não é dívida (mostra-se o que falta nas reservas)
+      m.status = m.pending < -0.005 ? "credit" : "paid";
+      m.settledGap = m.pending > 0.005 ? m.pending : 0;
+    } else if (m.periodKey >= nowMonth) m.status = "open";
     else if (m.pending > 0.005) m.status = "due";
     else if (m.pending < -0.005) m.status = "credit";
     else m.status = "paid";

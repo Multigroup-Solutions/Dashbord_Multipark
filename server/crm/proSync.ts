@@ -16,7 +16,7 @@
 import { sql } from "drizzle-orm";
 import { readMultiparkPro, type ProAccountOut, type ProDiagnostics, type ProLedgerOut } from "../multiparkDb/pro";
 import { multiparkProUrl } from "../../shared/crmPro";
-import { emailKey, nifKey, phoneKey } from "../../shared/crmIdentity";
+import { emailKey, namesMatch, nifKey, phoneKey } from "../../shared/crmIdentity";
 
 const rowsOf = (res: unknown): any[] => {
   const r = Array.isArray(res) ? res[0] : (res as any)?.rows ?? res;
@@ -69,8 +69,14 @@ export async function runProSync(o: { deadlineAt: number }): Promise<ProSyncResu
       ON DUPLICATE KEY UPDATE name = VALUES(name), email = VALUES(email), phone = VALUES(phone), nif = VALUES(nif), taxName = VALUES(taxName),
         autoBilling = VALUES(autoBilling), active = VALUES(active), syncedAt = VALUES(syncedAt)`);
   }
-  if (complete) await db.execute(sql`UPDATE crm_pro_accounts SET active = 0 WHERE syncedAt IS NULL OR syncedAt < ${runAt}`);
-  const accountRows = rowsOf(await db.execute(sql`SELECT id, mpClientId, crmClientId FROM crm_pro_accounts`));
+  // contas que deixaram de ser Pro na Multipark: pela diferença de chaves (não pela
+  // hora — duas corridas ao mesmo tempo não se estragam uma à outra)
+  const accountRows = rowsOf(await db.execute(sql`SELECT id, mpClientId, crmClientId, active FROM crm_pro_accounts`));
+  if (complete) {
+    const now = new Set(snap.accounts.map((a) => a.mpClientId));
+    const off = accountRows.filter((r) => Number(r.active) === 1 && !now.has(String(r.mpClientId))).map((r) => Number(r.id));
+    for (const part of chunks(off, 500)) await db.execute(sql`UPDATE crm_pro_accounts SET active = 0 WHERE id IN (${inList(part)})`);
+  }
   const accountId = new Map<string, number>(accountRows.map((r) => [String(r.mpClientId), Number(r.id)]));
   res.accounts = snap.accounts.length;
 
@@ -104,14 +110,26 @@ export async function runProSync(o: { deadlineAt: number }): Promise<ProSyncResu
   }
   res.ledgerRows = ledger.length;
   if (complete) {
-    const gone: any = await db.execute(sql`UPDATE crm_pro_ledger SET goneAt = UTC_TIMESTAMP() WHERE goneAt IS NULL AND (syncedAt IS NULL OR syncedAt < ${runAt})`);
-    res.goneRows = Number((Array.isArray(gone) ? gone[0] : gone)?.affectedRows ?? 0);
+    // o que deixou de vir da Multipark (pela diferença de chaves): goneAt, nunca apagar
+    const keep = new Set(ledger.map((l) => `${l.kind}|${l.sourceId}`));
+    const live = rowsOf(await db.execute(sql`SELECT id, kind, sourceId, bookingExternalId FROM crm_pro_ledger WHERE goneAt IS NULL`));
+    const gone = live.filter((r) => !keep.has(`${r.kind}|${r.sourceId}`));
+    for (const part of chunks(gone.map((r) => Number(r.id)), 500)) await db.execute(sql`UPDATE crm_pro_ledger SET goneAt = UTC_TIMESTAMP() WHERE id IN (${inList(part)})`);
+    res.goneRows = gone.length;
+    // reservas que deixaram de ser Pro: a ficha da conta deixa de ser quem paga
+    const goneBookings = gone.filter((r) => r.kind === "booking" && r.bookingExternalId).map((r) => String(r.bookingExternalId));
+    for (const part of chunks(goneBookings, 500)) {
+      await db.execute(sql`DELETE FROM crm_booking_links WHERE role = 'payer' AND rule = 'pro' AND bookingExternalId IN (${inList(part)})`);
+    }
   }
 
   // 4) ficha do CRM de cada conta + quem paga
-  if (Date.now() < o.deadlineAt - 5_000) {
+  {
     const byMp = new Map(snap.accounts.map((a) => [a.mpClientId, a]));
-    for (const r of accountRows) {
+    const current = rowsOf(await db.execute(sql`SELECT id, mpClientId, crmClientId FROM crm_pro_accounts`));
+    for (const r of current) {
+      // o que ficar por fazer faz-se na próxima corrida (de 30 em 30 min)
+      if (Date.now() > o.deadlineAt - 5_000) break;
       const a = byMp.get(String(r.mpClientId));
       if (!a) continue;
       const { clientId, created } = await resolveFicha(db, a, r.crmClientId == null ? null : Number(r.crmClientId));
@@ -159,26 +177,38 @@ async function resolveFicha(db: any, a: ProAccountOut, current: number | null): 
   const [ext] = rowsOf(await db.execute(sql`SELECT clientId FROM crm_client_external_ids WHERE \`system\` = 'multipark_client' AND externalId = ${a.mpClientId} LIMIT 1`));
   const byExt = await activeFicha(db, ext ? Number(ext.clientId) : null);
   if (byExt) return { clientId: byExt, created: false };
-  // email EXATO da conta Multipark (só se uma única ficha ativa o tiver)
+  // email EXATO da conta Multipark — mas, como nas regras de identidade, o
+  // email sozinho não liga: tem de bater também o telefone, o NIF ou o nome
+  // (senão cria-se a ficha e as sugestões diárias propõem juntar)
   const email = a.email ? emailKey(a.email) : "";
-  if (email) {
-    const hits = rowsOf(await db.execute(sql`SELECT DISTINCT c.id FROM crm_client_emails e JOIN crm_clients c ON c.id = e.clientId
-      WHERE e.email = ${email} AND e.generic = 0 AND c.status = 'active' LIMIT 2`));
-    if (hits.length === 1) return { clientId: Number(hits[0].id), created: false };
-  }
-  // cria a ficha (idempotente pela syncKey)
   const phone = a.phone ? phoneKey(a.phone) : "";
   const nif = a.nif ? nifKey(a.nif) : "";
+  if (email) {
+    const hits = rowsOf(await db.execute(sql`SELECT DISTINCT c.id, c.displayName, c.nif FROM crm_client_emails e JOIN crm_clients c ON c.id = e.clientId
+      WHERE e.email = ${email} AND e.generic = 0 AND c.status = 'active' LIMIT 2`));
+    if (hits.length === 1) {
+      const h = hits[0];
+      const phones = phone ? rowsOf(await db.execute(sql`SELECT 1 AS ok FROM crm_client_phones WHERE clientId = ${Number(h.id)} AND phone = ${phone} LIMIT 1`)) : [];
+      const agrees = phones.length > 0 || (!!nif && nifKey(h.nif) === nif) || (!!a.name && namesMatch(String(h.displayName ?? ""), a.name));
+      if (agrees) return { clientId: Number(h.id), created: false };
+    }
+  }
+  // cria a ficha (idempotente pela syncKey)
   const kind = looksLikeCompany(a.name, a.taxName) ? "company" : "person";
   const syncKey = `pro:${a.mpClientId}`;
   const ins: any = await db.execute(sql`INSERT INTO crm_clients (syncKey, kind, source, displayName, primaryEmail, primaryPhone, nif, taxName, isPro, noEmail, lastSeenAt)
     VALUES (${syncKey}, ${kind}, 'multipark_pro', ${a.name ?? "Cliente Pro"}, ${email || null}, ${phone || null}, ${nif || null}, ${a.taxName}, ${a.active ? 1 : 0}, ${email ? 0 : 1}, UTC_TIMESTAMP())
     ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)`);
-  const id = insertId(ins);
+  const raw = insertId(ins);
+  // 1 = nova; 2 = já existia (ON DUPLICATE) — nesse caso pode ter sido junta a outra
+  const created = Number((Array.isArray(ins) ? ins[0] : ins)?.affectedRows ?? 0) === 1;
+  const id = await activeFicha(db, raw || null);
   if (!id) return { clientId: null, created: false };
-  if (email) await db.execute(sql`INSERT IGNORE INTO crm_client_emails (clientId, email, isPrimary, source, firstSeenAt, lastSeenAt) VALUES (${id}, ${email}, 1, 'multipark_pro', UTC_TIMESTAMP(), UTC_TIMESTAMP())`);
-  if (phone) await db.execute(sql`INSERT IGNORE INTO crm_client_phones (clientId, phone, isPrimary, source, firstSeenAt, lastSeenAt) VALUES (${id}, ${phone}, 1, 'multipark_pro', UTC_TIMESTAMP(), UTC_TIMESTAMP())`);
-  return { clientId: id, created: true };
+  if (created) {
+    if (email) await db.execute(sql`INSERT IGNORE INTO crm_client_emails (clientId, email, isPrimary, source, firstSeenAt, lastSeenAt) VALUES (${id}, ${email}, 1, 'multipark_pro', UTC_TIMESTAMP(), UTC_TIMESTAMP())`);
+    if (phone) await db.execute(sql`INSERT IGNORE INTO crm_client_phones (clientId, phone, isPrimary, source, firstSeenAt, lastSeenAt) VALUES (${id}, ${phone}, 1, 'multipark_pro', UTC_TIMESTAMP(), UTC_TIMESTAMP())`);
+  }
+  return { clientId: id, created };
 }
 
 export type { ProLedgerOut };

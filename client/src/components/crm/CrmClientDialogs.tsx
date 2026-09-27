@@ -203,34 +203,47 @@ const REL_OPTIONS = [
   { id: "other", label: "Outra ligação" },
 ] as const;
 
-export function RelationDialog({ clientId, open, onOpenChange, onSaved }: { clientId: number; open: boolean; onOpenChange: (o: boolean) => void; onSaved: () => void }) {
+/** Vistos a partir da EMPRESA: a pessoa escolhida é que trabalha nela / a gere. */
+const REL_OPTIONS_COMPANY = [
+  { id: "employee", label: "Trabalha nesta empresa" },
+  { id: "manager", label: "Gere esta conta" },
+] as const;
+
+/**
+ * Ligar fichas. `asCompany`: a ficha aberta é a EMPRESA e escolhe-se a pessoa
+ * (grava pessoa → empresa, como quando se liga a partir da ficha da pessoa).
+ */
+export function RelationDialog({ clientId, open, onOpenChange, onSaved, asCompany = false }: { clientId: number; open: boolean; onOpenChange: (o: boolean) => void; onSaved: () => void; asCompany?: boolean }) {
   const [other, setOther] = useState<{ id: number; name: string | null } | null>(null);
   const [kind, setKind] = useState<(typeof REL_OPTIONS)[number]["id"]>("employee");
   const [label, setLabel] = useState("");
   const [pays, setPays] = useState(false);
-  useEffect(() => { if (open) { setOther(null); setKind("employee"); setLabel(""); setPays(false); } }, [open]);
+  useEffect(() => { if (open) { setOther(null); setKind("employee"); setLabel(""); setPays(asCompany); } }, [open, asCompany]);
   const save = trpc.crm.relation.useMutation({ onSuccess: () => { toast.success("Ligação guardada"); onOpenChange(false); onSaved(); }, onError: (e) => toast.error(e.message) });
+  const options = asCompany ? REL_OPTIONS_COMPANY : REL_OPTIONS;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Ligar a outra ficha</DialogTitle>
+          <DialogTitle>{asCompany ? "Ligar pessoa a esta conta" : "Ligar a outra ficha"}</DialogTitle>
           <DialogDescription>Pessoa e empresa ficam em fichas separadas, ligadas. Fichas ligadas nunca são sugeridas para juntar.</DialogDescription>
         </DialogHeader>
         <div className="grid gap-3">
           <Field label="Tipo de ligação">
             <Select value={kind} onValueChange={(v) => setKind(v as typeof kind)}>
               <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-              <SelectContent>{REL_OPTIONS.map((o) => <SelectItem key={o.id} value={o.id}>{o.label}</SelectItem>)}</SelectContent>
+              <SelectContent>{options.map((o) => <SelectItem key={o.id} value={o.id}>{o.label}</SelectItem>)}</SelectContent>
             </Select>
           </Field>
-          <Field label="Outra ficha"><ClientPicker excludeId={clientId} value={other} onChange={setOther} /></Field>
+          <Field label={asCompany ? "Pessoa" : "Outra ficha"}><ClientPicker excludeId={clientId} value={other} onChange={setOther} /></Field>
           {(kind === "family" || kind === "other") && <Field label="Descrição"><Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder={kind === "family" ? "irmão, mãe…" : ""} /></Field>}
           {(kind === "employee" || kind === "manager") && <label className="flex items-center gap-2 text-sm"><Switch checked={pays} onCheckedChange={setPays} />A empresa paga as reservas</label>}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
-          <Button disabled={!other || save.isPending} onClick={() => other && save.mutate({ op: "add", clientId, relatedClientId: other.id, kind, label: label.trim() || null, pays })}>Ligar</Button>
+          <Button disabled={!other || save.isPending} onClick={() => other && save.mutate(asCompany
+            ? { op: "add", clientId: other.id, relatedClientId: clientId, kind, label: label.trim() || null, pays }
+            : { op: "add", clientId, relatedClientId: other.id, kind, label: label.trim() || null, pays })}>Ligar</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

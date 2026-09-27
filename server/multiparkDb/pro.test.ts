@@ -5,6 +5,7 @@ import {
   mapProSnapshot, periodShape, readMultiparkPro,
 } from "./pro";
 import { looksLikeCompany } from "../crm/proSync";
+import { cityInScope, hideMoney } from "../crm/proQueries";
 import { summarizeLedger } from "../../shared/crmPro";
 
 describe("Pro na BD Multipark — SQL", () => {
@@ -67,8 +68,28 @@ describe("Pro na BD Multipark — conta corrente", () => {
   });
   it("pagamentos datados a crédito no mês da reserva; pago sem data como movimento próprio", () => {
     expect(led("payment", "pp1")).toMatchObject({ credit: 85, periodKey: "2026-07", entryAt: "2026-08-22 10:00:00", method: "TRANSFER" });
-    expect(led("paid_undated", "bk3")).toMatchObject({ credit: 40, periodKey: "2026-06", entryAt: "2026-07-10 09:00:00" });
+    // data estável: a saída (ou a entrada), não a última edição das linhas de preço
+    expect(led("paid_undated", "bk3")).toMatchObject({ credit: 40, periodKey: "2026-06", entryAt: "2026-06-02 08:00:00" });
     expect(s.ledger.find((l) => l.kind === "paid_undated" && l.sourceId === "bk1")).toBeUndefined();
+  });
+  it("pago corrigido para baixo: correção negativa (o crédito total bate com o pago)", () => {
+    const x = mapProSnapshot({
+      proClients, settlements: [], online: [],
+      bookings: [{ id: "bk7", code: "7", status: "CHECKED_OUT", check_in: "2026-07-01 08:00:00", check_out: "2026-07-03 08:00:00", park_id: "pk1", client_id: "cl-a", pro_client_id: "pc-a1", pricing_lines: 1, pricing_total: 50, paid: 30, booking_price: 50 }],
+      payments: [{ id: "p7", booking_id: "bk7", amount: 50, method: "CARD", recorded_at: "2026-07-05 10:00:00" }],
+    });
+    const corr = x.ledger.find((l) => l.kind === "paid_undated" && l.sourceId === "bk7")!;
+    expect(corr).toMatchObject({ credit: -20, entryAt: "2026-07-03 08:00:00" });
+    expect(corr.description).toContain("corrigido");
+    const credit = x.ledger.filter((l) => l.sourceId === "bk7" || l.sourceId === "p7").reduce((t, l) => t + l.credit, 0);
+    expect(credit).toBe(30);
+  });
+  it("parque e cidade REAIS da reserva (não só os parques do ProClient)", () => {
+    const x = mapProSnapshot({
+      proClients, payments: [], settlements: [], online: [],
+      bookings: [{ id: "bk8", status: "BOOKED", check_in: "2026-09-01 08:00:00", park_id: "pk-faro", park_name: "Airpark Faro", park_city: "faro", client_id: "cl-a", pro_client_id: "pc-a1", booking_price: 30, paid: 0 }],
+    });
+    expect(x.ledger[0]).toMatchObject({ parkName: "Airpark Faro", city: "faro" });
   });
   it("acertos (por ProClient ou Client) e cobranças online são marcas; período guardado tal e qual", () => {
     expect(led("settlement", "es1")).toMatchObject({ mpClientId: "cl-a", periodKey: "2026-07", mpPeriodKey: "2026-07", debit: 0, credit: 0 });
@@ -115,6 +136,21 @@ describe("Pro na BD Multipark — leitura", () => {
     } finally {
       if (prev === undefined) delete process.env.DATABASE_URL_MULTIPARK; else process.env.DATABASE_URL_MULTIPARK = prev;
     }
+  });
+});
+
+describe("Pro — âmbito de cidade", () => {
+  it("sem cidade só para quem vê todas; cidades por nome ou alias", () => {
+    expect(cityInScope(null, undefined)).toBe(true);
+    expect(cityInScope(null, ["Lisboa"])).toBe(false);
+    expect(cityInScope("lisbon", ["Lisboa"])).toBe(true);
+    expect(cityInScope("porto", ["Lisboa"])).toBe(false);
+  });
+  it("sem euros para quem não vê totais (também a diferença dos meses dados como pagos)", () => {
+    const s = summarizeLedger([{ kind: "booking", entryAt: "2026-06-02 08:00:00", periodKey: "2026-06", debit: 10, credit: 0 }], new Date("2026-09-27T10:00:00Z"));
+    const h = hideMoney(s);
+    expect(h).toMatchObject({ balance: null, due: null, paidThisYear: null, currentMonthDebit: null, dueMonths: 1, oldestDue: "2026-06" });
+    expect(h.months[0]).toMatchObject({ debit: null, credit: null, pending: null, settledGap: null, status: "due" });
   });
 });
 

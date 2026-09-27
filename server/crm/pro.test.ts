@@ -74,6 +74,35 @@ describe("Pro — resumo da conta corrente", () => {
     expect(by["2026-06"]).toBeUndefined();
     expect(s.months.map((m) => m.periodKey)).toEqual(["2026-09", "2026-08", "2026-07"]);
   });
+  it("mês dado como pago pela Multipark não é dívida, mesmo com valor por lançar nas reservas", () => {
+    const c = summarizeLedger([
+      { kind: "booking", entryAt: "2026-06-02 08:00:00", periodKey: "2026-06", debit: 300, credit: 0 },
+      { kind: "payment", entryAt: "2026-07-05 08:00:00", periodKey: "2026-06", debit: 0, credit: 250 },
+      { kind: "settlement", entryAt: "2026-07-05 08:00:00", periodKey: "", mpPeriodKey: "2026-06", debit: 0, credit: 0, method: "TRANSFER" },
+      // cobrança online concluída também dá o mês como pago
+      { kind: "booking", entryAt: "2026-05-02 08:00:00", periodKey: "2026-05", debit: 80, credit: 0 },
+      { kind: "online", entryAt: "2026-06-01 09:00:00", periodKey: "2026-05", debit: 0, credit: 0, infoAmount: 80, status: "COMPLETED" },
+      // cobrança online falhada não
+      { kind: "booking", entryAt: "2026-04-02 08:00:00", periodKey: "2026-04", debit: 40, credit: 0 },
+      { kind: "online", entryAt: "2026-05-01 09:00:00", periodKey: "2026-04", debit: 0, credit: 0, infoAmount: 40, status: "FAILED" },
+    ], now);
+    const by = Object.fromEntries(c.months.map((m) => [m.periodKey, m]));
+    expect(by["2026-06"]).toMatchObject({ status: "paid", settledGap: 50, pending: 50 });
+    expect(by["2026-05"]).toMatchObject({ status: "paid", settledGap: 80, settledMethod: "cobrança online" });
+    expect(by["2026-04"]).toMatchObject({ status: "due", settledAt: null });
+    expect(c.due).toBe(40);
+    expect(c.balance).toBe(170); // o saldo bruto não muda
+  });
+  it("correção negativa do pago entra no pago do ano, não no último pagamento", () => {
+    const c = summarizeLedger([
+      { kind: "booking", entryAt: "2026-07-01 08:00:00", periodKey: "2026-07", debit: 50, credit: 0 },
+      { kind: "payment", entryAt: "2026-07-05 08:00:00", periodKey: "2026-07", debit: 0, credit: 50 },
+      { kind: "paid_undated", entryAt: "2026-07-03 08:00:00", periodKey: "2026-07", debit: 0, credit: -20 },
+    ], now);
+    expect(c.paidThisYear).toBe(30);
+    expect(c.lastPaidAt).toBe("2026-07-05 08:00:00");
+    expect(c.due).toBe(20);
+  });
   it("pago a mais fica como crédito", () => {
     const c = summarizeLedger([
       { kind: "booking", entryAt: "2026-05-02 08:00:00", periodKey: "2026-05", debit: 100, credit: 0 },

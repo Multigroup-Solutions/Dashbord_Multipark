@@ -72,6 +72,7 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
   const [editOpen, setEditOpen] = useState(false);
   const [vehicle, setVehicle] = useState<VehicleForm | null | undefined>(undefined);
   const [relOpen, setRelOpen] = useState(false);
+  const [personOpen, setPersonOpen] = useState(false);
   const [merge, setMerge] = useState<{ id: number; name: string | null } | null | undefined>(undefined);
   const [ibanOpen, setIbanOpen] = useState(false);
   const tabsRef = useRef<HTMLDivElement>(null);
@@ -303,7 +304,7 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
       </div>
 
       {/* conta corrente Pro (fase 2) */}
-      {pro.data && <ProAccountSection a={pro.data} onLinkPerson={c.canEdit ? () => setRelOpen(true) : undefined} />}
+      {pro.data && <ProAccountSection a={pro.data} onLinkPerson={c.canEdit ? () => setPersonOpen(true) : undefined} />}
 
       {/* indicadores */}
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 xl:grid-cols-8">
@@ -425,6 +426,7 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
       <EditClientDialog c={c} open={editOpen} onOpenChange={setEditOpen} onSaved={reload} />
       <VehicleDialog clientId={c.id} vehicle={vehicle ?? null} open={vehicle !== undefined} onOpenChange={(o) => { if (!o) setVehicle(undefined); }} onSaved={reload} />
       <RelationDialog clientId={c.id} open={relOpen} onOpenChange={setRelOpen} onSaved={reload} />
+      <RelationDialog asCompany clientId={c.id} open={personOpen} onOpenChange={setPersonOpen} onSaved={() => { reload(); pro.refetch(); }} />
       <MergeDialog clientId={c.id} clientName={c.displayName} preset={merge ?? null} open={merge !== undefined}
         onOpenChange={(o) => { if (!o) setMerge(undefined); }}
         onMerged={(sid) => { utils.crm.invalidate(); if (sid !== c.id) navigate(`/clientes/${sid}`); else reload(); }} />

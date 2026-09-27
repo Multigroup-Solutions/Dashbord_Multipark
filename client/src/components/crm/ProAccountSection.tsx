@@ -56,8 +56,11 @@ export function ProAccountSection({ a, onLinkPerson }: { a: CrmProAccount; onLin
       bal += (r.debit ?? 0) - (r.credit ?? 0);
       balOf.set(r.id, Math.round(bal * 100) / 100);
     }
-    return list.map((r) => ({ ...r, balance: balOf.get(r.id) ?? null }));
+    // o saldo corrido só faz sentido com tudo (com filtros recomeçaria do zero)
+    const showBalance = month === "all" && kind === "all";
+    return list.map((r) => ({ ...r, balance: showBalance ? balOf.get(r.id) ?? null : null }));
   }, [a.ledger, month, kind]);
+  const showBalance = month === "all" && kind === "all";
 
   const monthTotal = month === "all" ? null : s.months.find((m) => m.periodKey === month) ?? null;
 
@@ -121,8 +124,13 @@ export function ProAccountSection({ a, onLinkPerson }: { a: CrmProAccount; onLin
             <button key={m.periodKey} type="button" onClick={() => setMonth(month === m.periodKey ? "all" : m.periodKey)}
               className={cn("flex min-w-[132px] shrink-0 flex-col gap-1 rounded-[10px] border bg-card p-2.5 text-left", month === m.periodKey && "border-primary ring-1 ring-primary")}>
               <span className="text-xs font-semibold capitalize">{monthLabel(m.periodKey)}</span>
-              <Pill className={cn("self-start", STATUS[m.status]?.cls)}>{STATUS[m.status]?.label ?? m.status}</Pill>
-              <span className="text-xs text-muted-foreground">{num(m.bookings)} {m.bookings === 1 ? "reserva" : "reservas"}{m.pending != null && m.pending > 0.005 ? ` · falta ${eur(m.pending, 2)}` : m.debit != null ? ` · ${eur(m.debit, 2)}` : ""}</span>
+              <Pill className={cn("self-start", STATUS[m.status]?.cls)}>{STATUS[m.status]?.label ?? m.status}{m.settledAt ? " (Multipark)" : ""}</Pill>
+              <span className="text-xs text-muted-foreground">
+                {num(m.bookings)} {m.bookings === 1 ? "reserva" : "reservas"}
+                {m.settledAt
+                  ? (m.settledGap ? ` · faltam ${eur(m.settledGap, 2)} nas reservas` : m.debit != null ? ` · ${eur(m.debit, 2)}` : "")
+                  : m.pending != null && m.pending > 0.005 ? ` · falta ${eur(m.pending, 2)}` : m.debit != null ? ` · ${eur(m.debit, 2)}` : ""}
+              </span>
             </button>
           ))}
         </div>
@@ -155,7 +163,7 @@ export function ProAccountSection({ a, onLinkPerson }: { a: CrmProAccount; onLin
               <thead>
                 <tr className="bg-muted text-left text-[11px] font-bold uppercase text-muted-foreground">
                   <th className="px-3 py-2">Data</th><th className="px-3 py-2">Movimento</th><th className="px-3 py-2">Quem viajou</th><th className="px-3 py-2">Parque</th>
-                  <th className="px-3 py-2 text-right">Débito</th><th className="px-3 py-2 text-right">Crédito</th><th className="px-3 py-2 text-right">Saldo</th>
+                  <th className="px-3 py-2 text-right">Débito</th><th className="px-3 py-2 text-right">Crédito</th><th className="px-3 py-2 text-right">{showBalance ? "Saldo" : ""}</th>
                 </tr>
               </thead>
               <tbody>

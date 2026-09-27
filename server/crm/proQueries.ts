@@ -21,10 +21,13 @@ const nn = (v: unknown) => (v == null ? null : Number(v));
 
 type Opts = { cities: string[] | undefined; canSeeTotals: boolean };
 
-/** Cidade do parque dentro do âmbito? (undefined = todas). PURA. */
+/**
+ * Cidade do parque dentro do âmbito? (undefined = todas). Sem cidade (ex.:
+ * cobrança online da conta inteira) só para quem vê todas as cidades. PURA.
+ */
 export function cityInScope(city: string | null | undefined, cities: string[] | undefined): boolean {
   if (cities === undefined) return true;
-  if (!city) return true; // movimento sem parque (ex.: cobrança online): pertence à conta
+  if (!city) return false;
   return new Set(cityAliases(cities)).has(city.trim().toLowerCase());
 }
 
@@ -32,7 +35,7 @@ export function cityInScope(city: string | null | undefined, cities: string[] | 
 export function hideMoney(s: AccountSummary) {
   return {
     ...s, balance: null, due: null, currentMonthDebit: null, paidThisYear: null,
-    months: s.months.map((m) => ({ ...m, debit: null, credit: null, pending: null })),
+    months: s.months.map((m) => ({ ...m, debit: null, credit: null, pending: null, settledGap: null })),
   };
 }
 

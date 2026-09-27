@@ -11,7 +11,8 @@ import { ExternalLink, Loader2, Search } from "lucide-react";
 import { monthLabel } from "@shared/crmPro";
 import { ClientAvatar, Pill, eur, num, shortDate, shortDateTime } from "./crmUi";
 
-export function ProAccountsPanel() {
+/** `onShowProFichas`: abre a lista de fichas marcadas Pro (também as sem conta na Multipark). */
+export function ProAccountsPanel({ onShowProFichas }: { onShowProFichas?: () => void }) {
   const [, navigate] = useLocation();
   const [text, setText] = useState("");
   const [search, setSearch] = useState("");
@@ -88,7 +89,12 @@ export function ProAccountsPanel() {
           </table>
         </div>
       )}
-      {q.data?.lastSync && <p className="text-right text-xs text-muted-foreground">Lido da BD da Multipark · atualizado {shortDateTime(q.data.lastSync)}</p>}
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+        {onShowProFichas
+          ? <button type="button" onClick={onShowProFichas} className="font-semibold text-primary hover:underline">Ver todas as fichas marcadas Pro (também as que não têm conta na Multipark)</button>
+          : <span />}
+        {q.data?.lastSync && <span>Lido da BD da Multipark · atualizado {shortDateTime(q.data.lastSync)}</span>}
+      </div>
     </div>
   );
 }

@@ -248,7 +248,10 @@ export const CRM_TABLES_0215 = [
   "crm_client_relations", "crm_merge_suggestions", "crm_merge_events", "crm_saved_filters", "crm_blocked_identifiers",
 ] as const;
 
-const rowsOf = (res: unknown): any[] => {
+/** Tabelas a que o passo da collation se aplica (0215 + crm_pro_* da 0220). */
+export const CRM_COLLATION_TABLES = [...CRM_TABLES_0215, "crm_pro_accounts", "crm_pro_parks", "crm_pro_ledger"] as const;
+
+const rowsOf =(res: unknown): any[] => {
   const r = Array.isArray(res) ? res[0] : (res as any)?.rows ?? res;
   return Array.isArray(r) ? r : [];
 };
@@ -266,13 +269,14 @@ export async function runMigration0215Collation(db: { execute: (q: any) => Promi
     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'multipark_bookings' AND COLUMN_NAME = 'externalId'`));
   const cs = String(target?.cs ?? ""), coll = String(target?.coll ?? "");
   if (!/^[a-z0-9_]+$/i.test(cs) || !/^[a-z0-9_]+$/i.test(coll)) return [];
-  // todas as crm_* (as da fase 1 e as seguintes, ex.: crm_pro_* da 0220)
+  // lista EXPLÍCITA (as do CRM de clientes: fase 1 + crm_pro_* da 0220) — nunca
+  // outras crm_* (ex.: crm_contacts, de outro módulo)
   const tables = rowsOf(await db.execute(sql`SELECT TABLE_NAME AS t, TABLE_COLLATION AS c FROM information_schema.TABLES
-    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE 'crm\\_%'`));
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (${sql.join(CRM_COLLATION_TABLES.map((t) => sql`${t}`), sql`, `)})`));
   const out: string[] = [];
   for (const r of tables) {
     const t = String(r.t);
-    if (String(r.c) === coll || !/^crm_[a-z_]+$/.test(t)) continue;
+    if (String(r.c) === coll || !(CRM_COLLATION_TABLES as readonly string[]).includes(t)) continue;
     await db.execute(sql.raw(`ALTER TABLE \`${t}\` CONVERT TO CHARACTER SET ${cs} COLLATE ${coll}`));
     out.push(t);
   }

@@ -193,7 +193,7 @@ function CrmList({ initialSearch }: { initialSearch?: ViewState["search"] }) {
       </div>
 
       {/* separador Pro: contas Pro com a conta corrente (fase 2) */}
-      {s.tab === "pro" ? <ProAccountsPanel /> : (<>
+      {s.tab === "pro" ? <ProAccountsPanel onShowProFichas={() => patch({ tab: "clients", groups: { ...s.groups, kind: ["pro"] } })} /> : (<>
 
       {/* pesquisa e filtros */}
       <div className="flex flex-col gap-3 rounded-[10px] border bg-card p-3.5">
