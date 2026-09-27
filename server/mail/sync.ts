@@ -83,6 +83,8 @@ export interface SyncOptions {
   deadlineAt: number;
   backfillDays: number;
   brandDomains?: Record<string, string[]>;
+  /** Domínio principal + alternativos do Workspace (reclamacoes@skypark.pt = reclamacoes@multipark.pt). */
+  workspaceDomains?: readonly string[];
   onStored?: (e: StoredEvent) => Promise<void>;
   now?: () => number;
   /** Mensagens buscadas em paralelo (default 4). */
@@ -168,7 +170,7 @@ async function processIds(
       const classification = classifyMessage(
         { deliveredTo: parsed.deliveredTo, xOriginalTo: parsed.xOriginalTo, to: parsed.to, cc: parsed.cc, bcc: parsed.bcc, from: parsed.fromEmail },
         account.mailboxes,
-        { outbound: parsed.outbound, personalOwner: account.ownerUserId != null, brandDomains: opts.brandDomains, accountEmails: [account.email] },
+        { outbound: parsed.outbound, personalOwner: account.ownerUserId != null, brandDomains: opts.brandDomains, accountEmails: [account.email], workspaceDomains: opts.workspaceDomains },
       );
       const party = (() => {
         if (!parsed.outbound) {

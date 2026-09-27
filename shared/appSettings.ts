@@ -13,7 +13,7 @@
 import { z } from "zod";
 import { AI_FEATURE_IDS, AI_TIERS } from "./aiFeatures";
 import { DEFAULT_HOME_CITY_ONLY, NOTIFICATION_KIND_DEFS, NOTIFICATION_ROUTING_SETTING_KEY, notificationRoutingSchema } from "./notificationRouting";
-import { DEFAULT_BRAND_DOMAINS, DEFAULT_MAILBOX_SOURCE, MAIL_BRAND_IDS, MAIL_DEFAULT_BACKFILL_DAYS, MAIL_DEFAULT_RETENTION_YEARS, MAIL_DEFAULT_SLA_HOURS } from "./mail";
+import { DEFAULT_BRAND_DOMAINS, DEFAULT_MAIL_ALIAS_DOMAINS, DEFAULT_MAILBOX_SOURCE, MAIL_WORKSPACE_PRIMARY_DOMAIN, MAIL_BRAND_IDS, MAIL_DEFAULT_BACKFILL_DAYS, MAIL_DEFAULT_RETENTION_YEARS, MAIL_DEFAULT_SLA_HOURS } from "./mail";
 import { DEFAULT_SHARED_CALENDARS_CONFIG, sharedCalendarsConfigSchema } from "./googleSync";
 import { DEFAULT_CONTACTS_CONFIG, contactsConfigSchema } from "./contacts";
 import { DEFAULT_DRIVE_CONFIG, driveConfigSchema } from "./drive";
@@ -357,6 +357,15 @@ export const SETTINGS = {
     description: "Comunicação: domínio(s) de cada marca, para detetar a marca de um email pelo endereço de quem o recebeu (quando o endereço não está numa caixa). JSON: {\"multipark\": [\"multipark.pt\"], \"skypark\": [\"skypark.pt\"]}. Marcas: " + MAIL_BRAND_IDS.join(", ") + ".",
     schema: z.partialRecord(z.enum(MAIL_BRAND_IDS, { error: "Marca desconhecida." }), z.array(z.string().trim().toLowerCase().regex(/^[a-z0-9.-]+\.[a-z]{2,}$/, "Domínio inválido.")).max(10)),
     defaultValue: DEFAULT_BRAND_DOMAINS,
+    wiring: "live",
+  }),
+  "mail.aliasDomains": def({
+    key: "mail.aliasDomains",
+    group: "emails",
+    label: "Domínios alternativos do Google Workspace",
+    description: "Comunicação: domínios alternativos (\"alias domains\") do Workspace " + MAIL_WORKSPACE_PRIMARY_DOMAIN + ". Nestes domínios TODOS os endereços do domínio principal funcionam automaticamente — um email para reclamacoes@skypark.pt é encaminhado como o alias reclamacoes@" + MAIL_WORKSPACE_PRIMARY_DOMAIN + " (a marca vem do domínio para onde foi enviado). Um endereço escrito na tabela de aliases ganha sempre. Lista vazia = desligado.",
+    schema: z.array(z.string().trim().toLowerCase().regex(/^[a-z0-9.-]+\.[a-z]{2,}$/, "Domínio inválido.")).max(30),
+    defaultValue: [...DEFAULT_MAIL_ALIAS_DOMAINS],
     wiring: "live",
   }),
   "google.sharedCalendars": def({

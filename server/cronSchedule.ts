@@ -150,6 +150,8 @@ export const LEASE_GRACE_MS = 15_000;
 export const TICK_BUDGET_MS = 50_000;
 /** Margem antes do fim da função (gravar o estado e o registo de cada corrida). */
 export const TICK_END_MARGIN_MS = 8_000;
+/** Depois do orçamento, quanto se espera por um trabalho atrasado antes de o largar (< TICK_END_MARGIN_MS). */
+export const TICK_HARD_STOP_GRACE_MS = 3_000;
 
 export type JobStatus = "ok" | "error" | "partial";
 

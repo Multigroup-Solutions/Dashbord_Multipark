@@ -22,7 +22,7 @@ import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { fromMysqlMs, recordCronRun, toMysqlMs } from "./cronRuns";
 import {
-  LEASE_GRACE_MS, TICK_JOBS, activeTickJobs, applyOutcome, effectiveTickJobs, leaseFree, cursorForRun, describeCadence, emptyState, isDue, jobDeadline, mailPushHealthy, nextDueAt,
+  LEASE_GRACE_MS, TICK_HARD_STOP_GRACE_MS, TICK_JOBS, activeTickJobs, applyOutcome, effectiveTickJobs, leaseFree, cursorForRun, describeCadence, emptyState, isDue, jobDeadline, mailPushHealthy, nextDueAt,
   periodKeyFor, planTick, type DynamicCadence, type JobState, type JobStatus, type PlannedJob, type TickJobSpec,
 } from "./cronSchedule";
 import type { CronJobRun } from "./cronJobs";
@@ -218,7 +218,27 @@ export async function planDueJobs(now = Date.now()): Promise<TickPlan> {
 export const ABANDONED_ERROR = "a corrida anterior não terminou (função terminada pelo limite de tempo?)";
 
 /** Corre UM trabalho com o lease dele; nunca lança. */
-async function runOne(spec: TickJobSpec, plan: TickPlan, owner: string, deadlineAt: number): Promise<TickJobReport> {
+/**
+ * Corre o trabalho, mas nunca deixa o tick passar de `hardStopAt`: um
+ * trabalho que ignore o prazo (pedido externo lento, etc.) é largado e o
+ * tick responde a tempo (antes, o /api/cron/tick?wait=1 dava 504). O lease
+ * fica como está — o tick seguinte vê-o expirado e conta a corrida como
+ * falhada (ABANDONED_ERROR), como já acontecia quando a função morria. PURA
+ * quanto ao resultado: `null` = cortado.
+ */
+export async function raceHardStop<T>(work: Promise<T>, hardStopAt: number): Promise<T | null> {
+  const ms = Math.max(0, hardStopAt - Date.now());
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const stop = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), ms); });
+  try {
+    return await Promise.race([work, stop]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    work.catch(() => { /* a corrida largada pode falhar depois — já foi contada */ });
+  }
+}
+
+async function runOne(spec: TickJobSpec, plan: TickPlan, owner: string, deadlineAt: number, hardStopAt: number): Promise<TickJobReport> {
   const now = Date.now();
   // Estado fresco (outro tick pode tê-lo corrido depois do plano).
   let fresh: { state: JobState; owner: string | null } | undefined;
@@ -244,7 +264,13 @@ async function runOne(spec: TickJobSpec, plan: TickPlan, owner: string, deadline
   const runner = JOB_RUNNERS[spec.key];
   let run: CronJobRun;
   try {
-    run = await recordCronRun(spec.runName, runMeta(spec.key, cursor), () => runner({ deadlineAt, cursor }));
+    const raced = await raceHardStop(recordCronRun(spec.runName, runMeta(spec.key, cursor), () => runner({ deadlineAt, cursor })), hardStopAt);
+    if (raced == null) {
+      const overMs = Date.now() - deadlineAt;
+      console.warn(`[cron tick] ${spec.key}: passou o prazo (+${Math.round(overMs / 1000)} s) — largado; o próximo tick conta-o como falhado`);
+      return { key: spec.key, status: "error", durationMs: Date.now() - startedAt, error: `passou o prazo do tick (+${Math.round(overMs / 1000)} s) e foi largado`, done: false };
+    }
+    run = raced;
   } catch (err: any) {
     run = { httpStatus: 500, body: { ok: false, error: String(err?.message ?? err).slice(0, 300) } };
   }
@@ -267,14 +293,18 @@ export async function runTick(plan: TickPlan, budgetEndAt: number): Promise<Tick
   const owner = `tick-${plan.now.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const SPECS = new Map((plan.specs ?? TICK_JOBS).map((s) => [s.key, s]));
   const report: TickReport = { ok: true, startedAt: new Date(plan.now).toISOString(), budgetMs: budgetEndAt - plan.now, planned: plan.planned, jobs: [], errors: [] };
+  // Corte duro: um pouco depois do orçamento e sempre antes do fim da função
+  // (o orçamento já deixa TICK_END_MARGIN_MS para isto).
+  const hardStopAt = budgetEndAt + TICK_HARD_STOP_GRACE_MS;
   for (const p of plan.planned) {
     const spec = SPECS.get(p.key);
     if (!spec || !JOB_RUNNERS[p.key]) continue;
     const deadlineAt = jobDeadline(spec, Date.now(), budgetEndAt);
     if (deadlineAt == null) { report.jobs.push({ key: p.key, status: "skipped", reason: "sem tempo neste tick" }); continue; }
-    const r = await runOne(spec, plan, owner, deadlineAt);
+    const r = await runOne(spec, plan, owner, deadlineAt, hardStopAt);
     report.jobs.push(r);
     if (r.status === "error") report.errors.push(`${p.key}: ${r.error ?? "erro"}`);
+    if (Date.now() >= hardStopAt) break;
   }
   report.ok = report.errors.length === 0;
   return report;

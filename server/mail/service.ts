@@ -24,7 +24,7 @@ import type { InboundAlias } from "../emailParse";
 import { gmailThreadIdToImap } from "./parse";
 import { syncAccount, type AccountSyncResult, type StoredEvent } from "./sync";
 import {
-  addAutoLink, claimAccountLock, db, dbSyncStore, listSyncAccounts, loadBrandDomains, markAccount, releaseAccountLock, rowsOf,
+  addAutoLink, claimAccountLock, db, dbSyncStore, listSyncAccounts, loadBrandDomains, loadWorkspaceDomains, markAccount, releaseAccountLock, rowsOf,
   setMessagePipeline, setThreadProjectIfEmpty, type MailboxRow,
 } from "./store";
 import { proposeLinks, projectFromLinks, type AutoLinkDeps } from "./autolink";
@@ -263,6 +263,7 @@ export async function runMailSync(opts: { deadlineAt: number; onlyAccountKey?: s
   report.configured = accounts.length > 0;
   if (!accounts.length) return report;
   const brandDomains = await loadBrandDomains();
+  const workspaceDomains = await loadWorkspaceDomains();
   let backfillDays = 90;
   try {
     const { getSetting } = await import("../appSettings");
@@ -284,7 +285,7 @@ export async function runMailSync(opts: { deadlineAt: number; onlyAccountKey?: s
     try {
       const api = await gmailApiForAccount(acc.key);
       const r = await syncAccount(api, dbSyncStore, acc, {
-        deadlineAt: opts.deadlineAt - 2_000, backfillDays, brandDomains, onStored: makeOnStored(api, report, brandDomains),
+        deadlineAt: opts.deadlineAt - 2_000, backfillDays, brandDomains, workspaceDomains, onStored: makeOnStored(api, report, brandDomains),
       });
       report.stored += r.stored;
       if (r.partial) report.done = false;

@@ -183,6 +183,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0195").then(m => ({ s: m.MIGRATION_0195_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0195 })),
       import("./migrations/migration_0200").then(m => ({ s: m.MIGRATION_0200_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0200 })),
       import("./migrations/migration_0205").then(m => ({ s: m.MIGRATION_0205_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0205 })),
+      import("./migrations/migration_0210").then(m => ({ s: m.MIGRATION_0210_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0210 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -201,6 +202,14 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
     }
   } catch (err: any) {
     console.warn("[Schema ensure] falhou:", String(err?.message ?? err).slice(0, 160));
+  }
+  // Passos de DADOS (código, uma vez, guardados por marca) — depois do SQL.
+  try {
+    const { runMigration0210Data } = await import("./migrations/migration_0210");
+    const r = await runMigration0210Data(db as any);
+    if (r.status === "applied" && r.patches.length) console.log("[Schema ensure] 0210 caixas de email:", r.patches.map((p) => `${p.mailboxKey} (${p.changes.join("; ")})`).join(" · ").slice(0, 500));
+  } catch (err: any) {
+    console.warn("[Schema ensure] 0210 (dados das caixas de email) falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
   }
 }
 
