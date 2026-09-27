@@ -45,7 +45,7 @@ import AnnualPage from "./pages/AnnualPage";
 import OperacoesPage from "./pages/OperacoesPage";
 import ExtrasDiaPage from "./pages/ExtrasDiaPage";
 import AvaliacaoOperacionalPage from "./pages/AvaliacaoOperacionalPage";
-import MultiparkInspectPage from "./pages/MultiparkInspectPage";
+import BookingFilePage from "./pages/BookingFilePage";
 import InvitePage from "./pages/InvitePage";
 import DisponibilidadePage from "./pages/DisponibilidadePage";
 import WhatsAppInboxPage from "./pages/WhatsAppInboxPage";
@@ -231,9 +231,23 @@ function Router() {
         {() => (<DashboardLayout><OperacoesPage /></DashboardLayout>)}
       </Route>
       {/* Rotas exatas ANTES de /multipark/:section? — o Switch do wouter é
-          first-match-wins e o param opcional engoliria /multipark/inspect. */}
+          first-match-wins e o param opcional engoliria /multipark/inspect.
+          O antigo "Inspecionar reserva" passou a ser a ficha da reserva. */}
       <Route path="/multipark/inspect">
-        {() => (<DashboardLayout><MultiparkInspectPage /></DashboardLayout>)}
+        {() => {
+          const ref = new URLSearchParams(window.location.search).get("id") ?? new URLSearchParams(window.location.search).get("externalId");
+          return <Redirect to={ref ? `/reserva/${encodeURIComponent(ref)}` : "/reserva"} replace />;
+        }}
+      </Route>
+      {/* Ficha da reserva: tudo sobre uma reserva, lido ao vivo da BD Multipark. */}
+      <Route path="/reserva/:ref?">
+        {() => (<DashboardLayout><BookingFilePage /></DashboardLayout>)}
+      </Route>
+      {/* As listas antigas (/multipark/reservas, entradas, saídas…) passaram a
+          ser a lista única "Reservas do dia" nas Operações; a Sincronização
+          (estado) vive em Definições → Estado do sistema. */}
+      <Route path="/multipark/sync">
+        {() => <Redirect to="/definicoes?tab=estado" />}
       </Route>
       {/* As listas antigas (/multipark/reservas, entradas, saídas…) passaram a
           ser a lista única "Reservas do dia" nas Operações; a Sincronização

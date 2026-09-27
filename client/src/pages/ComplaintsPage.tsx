@@ -35,8 +35,9 @@ import {
   ChevronRight, ChevronLeft, Send, Eye, Trash2, Upload, Shield,
   BarChart3, AlertCircle, CheckCircle2, Hourglass, XCircle, Pencil,
   Mail, UserPlus, LinkIcon, X as XIcon, Download, RefreshCw, GripVertical, Package,
-  ExternalLink, Paperclip,
+  ExternalLink, Paperclip, FileSearch,
 } from "lucide-react";
+import { Link } from "wouter";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
   new: { label: "Novo", color: "bg-blue-100 text-blue-800 border-blue-200", icon: AlertCircle },
@@ -438,20 +439,6 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
     { plate: data?.complaint?.vehiclePlate || "", currentBookingRef: data?.complaint?.reservationRef || undefined },
     { enabled: !!data?.complaint?.vehiclePlate && (data?.complaint?.vehiclePlate?.length ?? 0) >= 2 }
   );
-  const refreshBookingMut = trpc.complaints.refreshBookingData.useMutation({
-    onSuccess: (r) => {
-      if (r.ok) {
-        toast.success(r.detail);
-        utils.complaints.bookingDossier.invalidate();
-        utils.complaints.bookingTimeline.invalidate();
-        utils.complaints.vehicleAgents.invalidate();
-        utils.complaints.getById.invalidate({ id });
-      } else {
-        toast.error(r.detail);
-      }
-    },
-    onError: () => toast.error("Erro ao contactar a API Multipark"),
-  });
   const autoLinkMut = trpc.complaints.autoLink.useMutation({
     onSuccess: (r) => {
       if (r.linked) {
@@ -681,14 +668,10 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                       {autoLinkMut.isPending ? "A procurar…" : "Ligar reserva automaticamente"}
                     </Button>
                   ) : (
-                    <Button
-                      size="sm" variant="outline"
-                      disabled={refreshBookingMut.isPending}
-                      title="Vai buscar à API Multipark a reserva completa e o histórico de condutores desta reserva"
-                      onClick={() => refreshBookingMut.mutate({ reservationRef: c.reservationRef! })}
-                    >
-                      <RefreshCw className={`w-3.5 h-3.5 mr-1 ${refreshBookingMut.isPending ? "animate-spin" : ""}`} />
-                      {refreshBookingMut.isPending ? "A atualizar…" : "Atualizar da API"}
+                    <Button size="sm" variant="outline" asChild title="Tudo sobre esta reserva, lido ao vivo da BD da Multipark">
+                      <Link href={`/reserva/${encodeURIComponent((dossier?.booking as any)?.externalId || c.reservationRef!)}`}>
+                        <FileSearch className="w-3.5 h-3.5 mr-1" /> Abrir ficha da reserva
+                      </Link>
                     </Button>
                   )}
                 </CardHeader>
