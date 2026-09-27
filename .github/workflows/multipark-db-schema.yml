@@ -8,16 +8,19 @@ name: BD Multipark — descobrir esquema (manual)
 #    (probe.json): compara reservas/movimentos recentes que já temos (da API)
 #    com a BD deles (datas nos dois modos, ids, preços). Dados pessoais só
 #    como igual/diferente.
+#  - modo "diferencas": compara as duas BD por inteiro (só leitura, não grava)
+#    → artefacto `multipark-db-diferencas` (diferencas.json). "foco" = um dia
+#    (Lisboa) com tudo o que foi cancelado. Sem dados pessoais do cliente.
 # Ver docs/multipark-db/README.md.
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "schema = descobrir esquema; probe = sonda do mapeamento"
+        description: "schema = descobrir esquema; probe = sonda do mapeamento; diferencas = comparar as duas BD (só leitura)"
         required: false
         default: "schema"
         type: choice
-        options: [schema, probe]
+        options: [schema, probe, diferencas]
       schema:
         description: "(schema) Esquemas a ler, separados por vírgula (vazio = todos)"
         required: false
@@ -26,6 +29,10 @@ on:
         description: "(probe) N.º de reservas a comparar (máx 20)"
         required: false
         default: "10"
+      foco:
+        description: "(diferencas) Dia AAAA-MM-DD (Lisboa) a detalhar os cancelamentos (vazio = nenhum)"
+        required: false
+        default: ""
 permissions:
   contents: read
 jobs:
@@ -40,6 +47,7 @@ jobs:
           MODE: ${{ inputs.mode }}
           SCHEMA: ${{ inputs.schema }}
           SAMPLE: ${{ inputs.sample }}
+          FOCO: ${{ inputs.foco }}
         run: |
           set -euo pipefail
           test -n "$CRON_SECRET"
@@ -47,6 +55,10 @@ jobs:
           if [ "$MODE" = "probe" ]; then
             file=out/probe.json
             url="$APP_URL/api/cron/multipark-db-probe?sample=$(printf '%s' "${SAMPLE:-10}" | tr -cd '0-9')"
+          elif [ "$MODE" = "diferencas" ]; then
+            file=out/diferencas.json
+            f=$(printf '%s' "${FOCO:-}" | tr -cd '0-9-')
+            url="$APP_URL/api/cron/multipark-db-diff?foco=$f"
           else
             file=out/schema.md
             q=""
@@ -61,7 +73,9 @@ jobs:
             cat "$file"; echo
             echo "::error::endpoint devolveu HTTP $code"; exit 1
           fi
-          if [ "$MODE" = "probe" ]; then jq '{source, verdict, tally, history: (.history | del(.examples)), queries}' "$file"; else head -n 40 "$file"; fi
+          if [ "$MODE" = "probe" ]; then jq '{source, verdict, tally, history: (.history | del(.examples)), queries}' "$file"
+          elif [ "$MODE" = "diferencas" ]; then jq '{tempos, linhas, ignoradas, diferencas, porTipo, desaparecidas, foco: (.foco | if . then del(.reservas) else . end)}' "$file"
+          else head -n 40 "$file"; fi
       - uses: actions/upload-artifact@v4
         with:
           name: multipark-db-${{ inputs.mode || 'schema' }}

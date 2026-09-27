@@ -234,6 +234,27 @@ app.get("/api/cron/multipark-db-probe", async (req, res) => {
   }
 });
 
+// Diferenças nossa BD × BD da Multipark (a deles é a referência): lê as duas
+// por inteiro, compara reserva a reserva (com o porquê e onde) e devolve o
+// resultado. SÓ LÊ as duas BD; sem dados pessoais do cliente.
+// ?foco=AAAA-MM-DD (lista tudo o que foi cancelado nesse dia).
+// Workflow multipark-db-schema.yml (modo "diferencas").
+app.get("/api/cron/multipark-db-diff", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { isMultiparkDbConfigured, redactSecrets } = await import("../multiparkDb/client");
+  if (!isMultiparkDbConfigured()) {
+    return res.status(503).json({ ok: false, error: "DATABASE_URL_MULTIPARK não está definida neste ambiente." });
+  }
+  try {
+    const { runMultiparkDbDiff } = await import("../multiparkDb/diff");
+    const focus = typeof req.query?.foco === "string" ? req.query.foco : null;
+    res.status(200).json(await runMultiparkDbDiff({ focus }));
+  } catch (err) {
+    console.error("[multipark-db-diff] falhou:", redactSecrets(err));
+    res.status(500).json({ ok: false, error: redactSecrets(err).slice(0, 500) });
+  }
+});
+
 // Ligações automáticas funcionário ↔ utilizador ↔ agente Multipark (Fase 1).
 // Conservador e idempotente — ver server/identityLink.ts.
 app.get("/api/cron/identity-sweep", async (req, res) => {
