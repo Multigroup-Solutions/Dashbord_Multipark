@@ -36,8 +36,8 @@ export default function CrmParkPage() {
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Kpi label="Este mês (entradas)" value={num(d.thisMonth.bookings - d.thisMonth.cancelled)} note={`${eur(d.thisMonth.value, 2)} · nossa comissão ${eur(d.thisMonth.commission, 2)}`} />
-        <Kpi label="Últimos 12 meses" value={num(d.last12.bookings - d.last12.cancelled)} note={`reservas · ${num(d.last12.cancelled)} canceladas`} />
+        <Kpi label="Este mês (entradas)" value={num(d.thisMonth.bookings)} note={`${eur(d.thisMonth.value, 2)} · nossa comissão ${eur(d.thisMonth.commission, 2)}`} />
+        <Kpi label="Últimos 12 meses" value={num(d.last12.bookings)} note={`reservas · ${num(d.last12.cancelled)} canceladas`} />
         <Kpi label="Valor (12 meses)" value={eur(d.last12.value, 2)} note="reservas que lhes levámos" />
         <Kpi label="Nossa comissão (12 meses)" value={eur(d.last12.commission, 2)} note="o que nos cabe" />
       </div>

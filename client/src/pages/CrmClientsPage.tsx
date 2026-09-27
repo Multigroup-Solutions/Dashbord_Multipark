@@ -74,7 +74,9 @@ function CrmList({ initialSearch }: { initialSearch?: ViewState["search"] }) {
   const { user } = useAuth();
   const [, navigate] = useLocation();
   const [st, setSt] = usePersistedState<ViewState>("crm.list", DEFAULT_VIEW);
-  const s: ViewState = { ...DEFAULT_VIEW, ...st };
+  const merged: ViewState = { ...DEFAULT_VIEW, ...st };
+  // separador guardado de uma versão antiga (ou inválido) → Clientes
+  const s: ViewState = (["clients", "pro", "partners", "parks"] as const).includes(merged.tab) ? merged : { ...merged, tab: "clients" };
   const patch = (p: Partial<ViewState>) => setSt((prev) => ({ ...DEFAULT_VIEW, ...prev, ...p }));
   const [offset, setOffset] = useState(0);
   const [rulesOpen, setRulesOpen] = useState(false);

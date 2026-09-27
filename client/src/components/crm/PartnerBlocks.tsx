@@ -54,8 +54,11 @@ export function MonthsTable({ months, mode }: { months: CrmMonthRow[]; mode: "pa
         <tbody>
           {months.map((m) => (
             <tr key={m.month} className="border-t">
-              <td className="px-4 py-2 font-semibold capitalize">{monthLabel(m.month)}</td>
-              <td className="px-3 py-2 text-right tabular-nums">{num(m.bookings - m.cancelled)}</td>
+              <td className="px-4 py-2 font-semibold capitalize">
+                {monthLabel(m.month)}
+                {mode === "partner" && m.incomplete > 0 && <div className="text-xs font-normal normal-case text-amber-700 dark:text-amber-300" title="Reservas sem o valor nosso nem a taxa gravados na Multipark">{num(m.incomplete)} sem valores</div>}
+              </td>
+              <td className="px-3 py-2 text-right tabular-nums">{num(m.bookings)}</td>
               <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{m.cancelled ? num(m.cancelled) : ""}</td>
               <td className="px-3 py-2 text-right tabular-nums">{eur(m.value, 2)}</td>
               {mode === "partner"
@@ -96,7 +99,7 @@ export function RecentTable({ rows, mode }: { rows: (Omit<CrmRecentBooking, "par
                 <td className="px-3 py-2">{b.client ? <Link href={`/clientes/${b.client.id}`} className="font-semibold text-primary hover:underline">{b.client.name ?? b.clientName ?? "Ficha"}</Link> : b.clientName ?? "—"}</td>
                 {mode === "partner" && <td className="px-3 py-2 text-muted-foreground">{b.parkName ?? ""}</td>}
                 <td className="px-3 py-2"><BookingStatusPill status={b.status} /></td>
-                <td className="px-3 py-2 text-right tabular-nums">{eur(b.value, 2)}{mode === "partner" && b.feePct != null && <div className="text-xs text-muted-foreground">{b.feePct} % deles</div>}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{eur(b.value, 2)}{mode === "partner" && b.feeValue != null && <div className="text-xs text-muted-foreground">{b.feeType === "FIXED" ? `${eur(b.feeValue, 2)} deles` : `${b.feeValue} % deles`}</div>}</td>
                 <td className="px-3 py-2 text-right font-semibold tabular-nums">{eur(mode === "partner" ? b.ours : b.marketplaceCommission, 2)}</td>
                 <td className="px-3 py-2 text-right"><a href={b.multiparkUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 whitespace-nowrap text-xs font-semibold text-primary hover:underline">Multipark<ExternalLink className="h-3 w-3" /></a></td>
               </tr>
@@ -128,18 +131,23 @@ export function TopClients({ rows }: { rows: { key: string; clientId: number | n
 type LinkData = { notes: string | null; contactName: string | null; contactEmail: string | null; contactPhone: string | null } | null;
 
 /** Cartão do CRM: contacto, notas e (parceiros) ligação ao registo nas Parcerias. */
-export function CrmNotesCard({ kind, mpId, link, canEdit, partnership, partnerships, onSaved }: {
+export function CrmNotesCard({ kind, mpId, link, canEdit, partnership, partnerships, partnershipOff = false, onSaved }: {
   kind: "partner" | "park"; mpId: string; link: LinkData; canEdit: boolean;
   partnership?: { id: number; name: string; how: string; contactName: string | null; contactEmail: string | null; contactPhone: string | null } | null;
+  /** vazio = sem acesso às Parcerias (não se escolhe a ligação) */
   partnerships?: { id: number; name: string }[];
+  /** "sem ligação" escolhido à mão */
+  partnershipOff?: boolean;
   onSaved: () => void;
 }) {
   const init = () => ({
     notes: link?.notes ?? "", contactName: link?.contactName ?? "", contactEmail: link?.contactEmail ?? "", contactPhone: link?.contactPhone ?? "",
-    partnershipId: partnership && partnership.how === "manual" ? String(partnership.id) : "auto",
+    partnershipId: partnershipOff ? "none" : partnership && partnership.how === "manual" ? String(partnership.id) : "auto",
   });
   const [f, setF] = useState(init);
-  useEffect(() => setF(init()), [link, partnership]); // eslint-disable-line react-hooks/exhaustive-deps
+  // só ao mudar de parceiro/parque (uma releitura não apaga o que se está a escrever)
+  useEffect(() => setF(init()), [mpId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const canLink = kind === "partner" && !!partnerships?.length;
   const save = trpc.crm.saveExternalLink.useMutation({ onSuccess: () => { toast.success("Guardado"); onSaved(); }, onError: (e) => toast.error(e.message) });
   const t = (s: string) => (s.trim() ? s.trim() : null);
   return (
@@ -154,13 +162,14 @@ export function CrmNotesCard({ kind, mpId, link, canEdit, partnership, partnersh
                   <div className="mt-0.5 text-xs text-muted-foreground">{[partnership.contactName, partnership.contactEmail, partnership.contactPhone].filter(Boolean).join(" · ")}</div>
                 )}
               </div>
-            : <div className="mt-1 text-xs text-muted-foreground">Sem registo ligado nas Parcerias.</div>}
-          {canEdit && partnerships && (
+            : <div className="mt-1 text-xs text-muted-foreground">{partnershipOff ? "Sem ligação (escolhido à mão)." : "Sem registo ligado nas Parcerias."}</div>}
+          {canEdit && canLink && (
             <Select value={f.partnershipId} onValueChange={(v) => setF({ ...f, partnershipId: v })}>
               <SelectTrigger className="mt-2 h-8"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="auto">Ligar sozinho (id da Multipark ou NIF)</SelectItem>
-                {partnerships.map((p) => <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>)}
+                <SelectItem value="none">Sem ligação</SelectItem>
+                {partnerships!.map((p) => <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>)}
               </SelectContent>
             </Select>
           )}
@@ -185,7 +194,9 @@ export function CrmNotesCard({ kind, mpId, link, canEdit, partnership, partnersh
       {canEdit && (
         <div className="flex justify-end">
           <Button size="sm" disabled={save.isPending} onClick={() => save.mutate({
-            kind, mpId, partnershipId: f.partnershipId === "auto" ? null : Number(f.partnershipId),
+            kind, mpId,
+            // sem acesso às Parcerias não se mexe na ligação (fica como está)
+            partnershipId: !canLink ? undefined : f.partnershipId === "auto" ? null : f.partnershipId === "none" ? 0 : Number(f.partnershipId),
             notes: t(f.notes), contactName: t(f.contactName), contactEmail: t(f.contactEmail), contactPhone: t(f.contactPhone),
           })}>Guardar</Button>
         </div>

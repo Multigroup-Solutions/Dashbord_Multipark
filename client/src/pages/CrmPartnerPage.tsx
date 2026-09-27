@@ -43,8 +43,8 @@ export default function CrmPartnerPage() {
       </p>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Kpi label="Este mês (entradas)" value={num(d.thisMonth.bookings - d.thisMonth.cancelled)} note={`${eur(d.thisMonth.value, 2)} · nosso ${eur(d.thisMonth.ours, 2)}`} />
-        <Kpi label="Últimos 12 meses" value={num(d.last12.bookings - d.last12.cancelled)} note={`reservas · ${num(d.last12.cancelled)} canceladas`} />
+        <Kpi label="Este mês (entradas)" value={num(d.thisMonth.bookings)} note={`${eur(d.thisMonth.value, 2)} · nosso ${eur(d.thisMonth.ours, 2)}`} />
+        <Kpi label="Últimos 12 meses" value={num(d.last12.bookings)} note={`reservas · ${num(d.last12.cancelled)} canceladas${d.last12.incomplete ? ` · ${num(d.last12.incomplete)} sem valores` : ""}`} />
         <Kpi label="Valor (12 meses)" value={eur(d.last12.value, 2)} note={`comissão deles ${eur(d.last12.commission, 2)}`} />
         <Kpi label="Nosso (12 meses)" value={eur(d.last12.ours, 2)} note={d.last12.paid ? `pago registado ${eur(d.last12.paid, 2)}` : "o que nos cabe"} />
       </div>
@@ -68,7 +68,7 @@ export default function CrmPartnerPage() {
             <div className="flex justify-between gap-3 text-[13px]"><span className="text-muted-foreground">NIF</span><strong>{p.taxNumber ?? "—"}</strong></div>
             {p.taxAddress && <div className="text-[13px] text-muted-foreground">{p.taxAddress}</div>}
           </Card>
-          <CrmNotesCard kind="partner" mpId={p.userId} link={d.link} canEdit={d.canEdit} partnership={d.partnership} partnerships={d.partnerships} onSaved={() => q.refetch()} />
+          <CrmNotesCard kind="partner" mpId={p.userId} link={d.link} canEdit={d.canEdit} partnership={d.partnership} partnerships={d.partnerships} partnershipOff={d.partnershipOff} onSaved={() => q.refetch()} />
           <Card title="Clientes que vieram por eles"><TopClients rows={d.topClients} /></Card>
         </div>
       </div>

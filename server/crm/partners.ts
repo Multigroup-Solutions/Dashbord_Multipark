@@ -19,8 +19,23 @@ const rowsOf = (res: unknown): any[] => {
 };
 const inList = (vals: (string | number)[]) => sql.join(vals.map((v) => sql`${v}`), sql`, `);
 
-type Opts = { cities: string[] | undefined; canSeeTotals: boolean };
+/** `canSeeParcerias`: acesso ao módulo Parcerias (contactos/NIF dos registos de lá). */
+type Opts = { cities: string[] | undefined; canSeeTotals: boolean; canSeeParcerias?: boolean };
 export type LinkKind = "partner" | "park";
+/** partnershipId gravado = 0: "sem ligação" (desliga a ligação automática). */
+export const NO_PARTNERSHIP = 0;
+
+/** Ligação às Parcerias: à mão (id), desligada (0) ou automática (null). PURA. */
+export function resolvePartnership(p: Pick<PartnerOut, "parks" | "taxNumber">, linkId: number | null | undefined, list: PartnershipRef[]) {
+  if (linkId === NO_PARTNERSHIP) return null;
+  if (linkId) { const ref = list.find((x) => x.id === linkId); return ref ? { ref, how: "manual" as const } : null; }
+  return matchPartnership(p, list);
+}
+
+/** Taxas dos parceiros são condições comerciais: só com totais financeiros. */
+function hideFees<T extends { feePct?: number | null; feeFixed?: number | null; feeType?: string | null }>(x: T, can: boolean): T {
+  return can ? x : { ...x, feePct: null, feeFixed: null, feeType: null };
+}
 
 // ─── Parcerias (registo nosso) ──────────────────────────────────────────────
 
@@ -69,7 +84,7 @@ const money = <T extends Record<string, unknown>>(o: T, keys: (keyof T)[], can: 
 };
 const MONTH_MONEY: (keyof MonthTotals)[] = ["value", "commission", "ours", "paid"];
 const hideMonth = (m: MonthTotals | Omit<MonthTotals, "month">, can: boolean) => money(m as any, MONTH_MONEY as any, can);
-const RECENT_MONEY: (keyof RecentBooking)[] = ["price", "value", "commission", "ours", "paid", "marketplaceCommission"];
+const RECENT_MONEY: (keyof RecentBooking)[] = ["price", "value", "commission", "ours", "paid", "marketplaceCommission", "feeType", "feeValue"];
 
 function periods(now = new Date()) {
   return { thisMonth: lisbonMonth(now)!, from12: monthsAgo(11, now).month };
@@ -89,17 +104,17 @@ export async function partnersList(db: any, o: Opts & { search?: string | null; 
   const rows = list.map((p) => {
     const months = r.data.months.get(p.userId) ?? [];
     const link = links.get(p.userId);
-    const manual = link?.partnershipId ? partnerships.find((x) => x.id === Number(link.partnershipId)) ?? null : null;
-    const auto = manual ? null : matchPartnership(p, partnerships);
-    const fees = [...new Set(p.parks.map((x) => x.feePct).filter((x): x is number => x != null))].sort((a, b) => a - b);
-    const lastMonth = months.find((m) => m.bookings > 0)?.month ?? null;
+    const ps = resolvePartnership(p, link?.partnershipId == null ? null : Number(link.partnershipId), partnerships);
+    const fees = o.canSeeTotals ? [...new Set(p.parks.map((x) => x.feePct).filter((x): x is number => x != null))].sort((a, b) => a - b) : [];
+    // só meses que já começaram (reservas futuras não contam)
+    const lastMonth = months.find((m) => m.month <= thisMonth && m.bookings > 0)?.month ?? null;
     return {
       userId: p.userId, name: p.name, type: p.type, active: p.active, taxNumber: p.taxNumber,
-      parks: p.parks.map((x) => ({ name: x.parkName, city: x.city, feePct: x.feePct, active: x.active })), fees,
+      parks: p.parks.map((x) => ({ name: x.parkName, city: x.city, active: x.active })), fees,
       thisMonth: hideMonth(totalsOf(months, thisMonth, thisMonth), o.canSeeTotals),
-      last12: hideMonth(totalsOf(months, from12), o.canSeeTotals),
+      last12: hideMonth(totalsOf(months, from12, thisMonth), o.canSeeTotals),
       lastMonth,
-      partnership: manual ? { id: manual.id, name: manual.name, how: "manual" as const } : auto ? { id: auto.ref.id, name: auto.ref.name, how: auto.how } : null,
+      partnership: ps ? { id: ps.ref.id, name: ps.ref.name, how: ps.how } : null,
     };
   });
   // mais reservas nos últimos 12 meses primeiro
@@ -140,17 +155,16 @@ export async function partnerDetail(db: any, userId: string, o: Opts) {
   const { thisMonth, from12 } = periods();
   const partnerships = await loadPartnerships(db);
   const [link] = [...(await loadLinks(db, "partner", [userId])).values()];
-  const manual = link?.partnershipId ? partnerships.find((x) => x.id === Number(link.partnershipId)) ?? null : null;
-  const auto = manual ? null : matchPartnership(partner, partnerships);
-  const ps = manual ?? auto?.ref ?? null;
+  const linkId = link?.partnershipId == null ? null : Number(link.partnershipId);
+  const resolved = resolvePartnership(partner, linkId, partnerships);
   const { ficha, top } = await clientsOf(db, recent);
   const parkName = new Map(partner.parks.map((x) => [x.partnerId, x.parkName]));
   return {
     available: true as const,
-    partner: { ...partner },
+    partner: { ...partner, parks: partner.parks.map((x) => hideFees(x, o.canSeeTotals)) },
     months: months.map((m) => hideMonth(m, o.canSeeTotals)),
     thisMonth: hideMonth(totalsOf(months, thisMonth, thisMonth), o.canSeeTotals),
-    last12: hideMonth(totalsOf(months, from12), o.canSeeTotals),
+    last12: hideMonth(totalsOf(months, from12, thisMonth), o.canSeeTotals),
     recent: recent.map((b) => ({
       ...money(b as any, RECENT_MONEY as any, o.canSeeTotals) as RecentBooking,
       parkName: b.partnerId ? parkName.get(b.partnerId) ?? null : null,
@@ -158,8 +172,16 @@ export async function partnerDetail(db: any, userId: string, o: Opts) {
       multiparkUrl: multiparkBookingUrl(b.id),
     })),
     topClients: top,
-    partnership: ps ? { ...ps, how: manual ? "manual" : auto!.how } : null,
-    partnerships: partnerships.map((x) => ({ id: x.id, name: x.name })).sort((a, b) => a.name.localeCompare(b.name, "pt")),
+    // contactos e NIF do registo das Parcerias só para quem tem acesso às Parcerias
+    partnership: resolved ? {
+      id: resolved.ref.id, name: resolved.ref.name, how: resolved.how,
+      contactName: o.canSeeParcerias ? resolved.ref.contactName : null,
+      contactEmail: o.canSeeParcerias ? resolved.ref.contactEmail : null,
+      contactPhone: o.canSeeParcerias ? resolved.ref.contactPhone : null,
+    } : null,
+    /** "sem ligação" escolhido à mão */
+    partnershipOff: linkId === NO_PARTNERSHIP,
+    partnerships: o.canSeeParcerias ? partnerships.map((x) => ({ id: x.id, name: x.name })).sort((a, b) => a.name.localeCompare(b.name, "pt")) : [],
     link: link ? { notes: link.notes ?? null, contactName: link.contactName ?? null, contactEmail: link.contactEmail ?? null, contactPhone: link.contactPhone ?? null } : null,
     canSeeTotals: o.canSeeTotals,
   };
@@ -180,8 +202,8 @@ export async function parksList(db: any, o: Opts & { search?: string | null }) {
       id: p.id, name: p.name, companyName: p.companyName, city: p.city, country: p.country, status: p.status, listingType: p.listingType,
       email: p.email, phone: p.phone,
       thisMonth: hideMonth(totalsOf(months, thisMonth, thisMonth), o.canSeeTotals),
-      last12: hideMonth(totalsOf(months, from12), o.canSeeTotals),
-      lastMonth: months.find((m) => m.bookings > 0)?.month ?? null,
+      last12: hideMonth(totalsOf(months, from12, thisMonth), o.canSeeTotals),
+      lastMonth: months.find((m) => m.month <= thisMonth && m.bookings > 0)?.month ?? null,
       hasNotes: !!links.get(p.id)?.notes,
     };
   });
@@ -202,7 +224,7 @@ export async function parkDetail(db: any, parkId: string, o: Opts) {
     park,
     months: months.map((m) => hideMonth(m, o.canSeeTotals)),
     thisMonth: hideMonth(totalsOf(months, thisMonth, thisMonth), o.canSeeTotals),
-    last12: hideMonth(totalsOf(months, from12), o.canSeeTotals),
+    last12: hideMonth(totalsOf(months, from12, thisMonth), o.canSeeTotals),
     recent: recent.map((b) => ({ ...money(b as any, RECENT_MONEY as any, o.canSeeTotals) as RecentBooking, client: ficha.get(b.id) ?? null, multiparkUrl: multiparkBookingUrl(b.id) })),
     topClients: top,
     link: link ? { notes: link.notes ?? null, contactName: link.contactName ?? null, contactEmail: link.contactEmail ?? null, contactPhone: link.contactPhone ?? null } : null,
@@ -217,9 +239,11 @@ export async function saveLink(db: any, userId: number, o: {
   contactName?: string | null; contactEmail?: string | null; contactPhone?: string | null;
 }) {
   const t = (s: string | null | undefined, n: number) => (s == null ? null : s.trim() ? s.trim().slice(0, n) : null);
+  // partnershipId não enviado (sem acesso às Parcerias) → a ligação fica como está
+  const keepPartnership = o.partnershipId === undefined;
   await db.execute(sql`INSERT INTO crm_partner_links (kind, mpId, partnershipId, notes, contactName, contactEmail, contactPhone, updatedBy)
     VALUES (${o.kind}, ${o.mpId}, ${o.partnershipId ?? null}, ${t(o.notes, 10_000)}, ${t(o.contactName, 255)}, ${t(o.contactEmail, 320)}, ${t(o.contactPhone, 40)}, ${userId})
-    ON DUPLICATE KEY UPDATE partnershipId = VALUES(partnershipId), notes = VALUES(notes), contactName = VALUES(contactName),
+    ON DUPLICATE KEY UPDATE partnershipId = ${keepPartnership ? sql`partnershipId` : sql`VALUES(partnershipId)`}, notes = VALUES(notes), contactName = VALUES(contactName),
       contactEmail = VALUES(contactEmail), contactPhone = VALUES(contactPhone), updatedBy = VALUES(updatedBy)`);
   const { logActivity } = await import("../db");
   await logActivity({ userId, action: `crm_${o.kind}_link`, entity: `crm_${o.kind}`, details: JSON.stringify({ mpId: o.mpId, partnershipId: o.partnershipId ?? null }) } as any);

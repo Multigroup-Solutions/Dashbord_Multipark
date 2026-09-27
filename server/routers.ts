@@ -8545,14 +8545,14 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "clientes", "view");
         const { partnersList } = await import("./crm/partners");
-        return partnersList(await crmDb(), { cities: scopedCityNames(), canSeeTotals: await canSeeFinanceTotals(ctx.user), search: input?.search ?? null, type: input?.type ?? null });
+        return partnersList(await crmDb(), { cities: scopedCityNames(), canSeeTotals: await canSeeFinanceTotals(ctx.user), canSeeParcerias: canAccess(ctx.user, "parcerias", "view"), search: input?.search ?? null, type: input?.type ?? null });
       }),
     partner: protectedProcedure
       .input(z.object({ userId: z.string().min(1).max(64) }))
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "clientes", "view");
         const { partnerDetail } = await import("./crm/partners");
-        const r = await partnerDetail(await crmDb(), input.userId, { cities: scopedCityNames(), canSeeTotals: await canSeeFinanceTotals(ctx.user) });
+        const r = await partnerDetail(await crmDb(), input.userId, { cities: scopedCityNames(), canSeeTotals: await canSeeFinanceTotals(ctx.user), canSeeParcerias: canAccess(ctx.user, "parcerias", "view") });
         if (!r) throw new TRPCError({ code: "NOT_FOUND", message: "Parceiro não encontrado" });
         return { ...r, canEdit: canAccess(ctx.user, "clientes", "edit") };
       }),
@@ -8574,7 +8574,8 @@ export const appRouter = router({
       }),
     saveExternalLink: protectedProcedure
       .input(z.object({
-        kind: z.enum(["partner", "park"]), mpId: z.string().min(1).max(64), partnershipId: z.number().int().positive().nullable().optional(),
+        // partnershipId: null = ligar sozinho; 0 = sem ligação; > 0 = registo escolhido
+        kind: z.enum(["partner", "park"]), mpId: z.string().min(1).max(64), partnershipId: z.number().int().min(0).nullable().optional(),
         notes: z.string().max(10_000).nullable().optional(), contactName: z.string().max(255).nullable().optional(),
         contactEmail: z.string().max(320).nullable().optional(), contactPhone: z.string().max(40).nullable().optional(),
       }))
@@ -8583,10 +8584,16 @@ export const appRouter = router({
         const db = await crmDb();
         // só quem vê o parceiro/parque (âmbito de cidade) o anota
         const p = await import("./crm/partners");
-        const opts = { cities: scopedCityNames(), canSeeTotals: false };
-        const seen = input.kind === "partner" ? await p.partnerDetail(db, input.mpId, opts) : await p.parkDetail(db, input.mpId, opts);
-        if (!seen) throw new TRPCError({ code: "NOT_FOUND", message: input.kind === "partner" ? "Parceiro não encontrado" : "Parque não encontrado" });
+        const live = await import("./multiparkDb/partners");
+        // verificação leve (só parques e parceiros), no âmbito de cidade de quem pede
+        const seen = input.kind === "partner" ? await live.readPartnerVisible(input.mpId, scopedCityNames()) : await live.readParkVisible(input.mpId, scopedCityNames());
         if (!seen.available) throw new TRPCError({ code: "PRECONDITION_FAILED", message: seen.reason });
+        if (!seen.data) throw new TRPCError({ code: "NOT_FOUND", message: input.kind === "partner" ? "Parceiro não encontrado" : "Parque não encontrado" });
+        if (input.partnershipId) {
+          if (!canAccess(ctx.user, "parcerias", "view")) throw new TRPCError({ code: "FORBIDDEN", message: "Ligar às Parcerias: é preciso acesso às Parcerias." });
+          const { sql } = await import("drizzle-orm");
+          if (!(await crmRow(sql`SELECT id FROM partnerships WHERE id = ${input.partnershipId}`))) throw new TRPCError({ code: "BAD_REQUEST", message: "Registo das Parcerias não encontrado." });
+        }
         await p.saveLink(db, ctx.user.id, input);
         return { ok: true };
       }),

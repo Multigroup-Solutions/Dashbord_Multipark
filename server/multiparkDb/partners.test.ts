@@ -6,7 +6,7 @@ import {
   buildParkMonthsSql, buildParksFullSql, buildPartnerMonthsSql, buildPartnersSql, buildRecentBookingsSql,
   groupPartners, inCities, mapParks, mapRecent, monthsAgo, readPartnersOverview, sumMonths, totalsOf,
 } from "./partners";
-import { matchPartnership } from "../crm/partners";
+import { NO_PARTNERSHIP, matchPartnership, resolvePartnership } from "../crm/partners";
 import { MIGRATION_0225_STATEMENTS } from "../migrations/migration_0225";
 
 const parkRows = [
@@ -28,11 +28,21 @@ describe("Parceiros na BD Multipark — SQL", () => {
       expect(b.sql).toMatch(/LIMIT (\$\d+|\d+)/);
     }
   });
-  it("mês = entrada do carro em Lisboa; comissão deles = contribuído − devido", () => {
+  it("mês = entrada do carro em Lisboa; o nosso = devido, senão pela taxa gravada; comissão = valor − nosso", () => {
     const s = buildPartnerMonthsSql("2025-09-30 00:00:00").sql;
     expect(s).toContain(`AT TIME ZONE 'Europe/Lisbon'`);
-    expect(s).toContain(`b."partnerContributedAmount" - b."partnerAmountDue"`);
-    expect(s).toContain(`SUM(CASE WHEN b."status"::text <> 'CANCELLED' THEN b."partnerAmountDue" END) AS ours`);
+    expect(s).toContain(`COALESCE(b."partnerAmountDue", CASE`);
+    expect(s).toContain(`(1 - b."partnerFeeValue" / 100.0)`);
+    expect(s).toContain(`AS incomplete`);
+    // canceladas e pendentes (compra online por acabar) não contam
+    expect(s).toContain(`b."status"::text NOT IN ('CANCELLED', 'PENDING')`);
+  });
+  it("parques que não são nossos: só as reservas que NÓS levámos; últimas reservas sem as futuras", () => {
+    expect(buildParkMonthsSql("2025-09-30 00:00:00", ["pk-x"]).sql).toContain(`b."origin"::text = 'MARKETPLACE' OR COALESCE(b."commissionAmount", 0) > 0`);
+    const r = buildRecentBookingsSql({ parkIds: ["pk-x"] }).sql;
+    expect(r).toContain(`b."origin"::text = 'MARKETPLACE'`);
+    expect(r).toContain(`b."checkIn" <= now()`);
+    expect(buildRecentBookingsSql({ partnerIds: ["p1"] }).sql).not.toContain(`MARKETPLACE`);
   });
   it("sem filtro nas últimas reservas não se lê nada", () => {
     expect(() => buildRecentBookingsSql({})).toThrow();
@@ -82,7 +92,8 @@ describe("Parques em que agregamos", () => {
 
 describe("Mês a mês e totais", () => {
   const monthRows = [
-    { partner_id: "p1", month: "2026-09", bookings: 5, cancelled: 1, value: 400, commission: 100, ours: 300, paid: 0 },
+    { partner_id: "p1", month: "2026-10", bookings: 4, cancelled: 0, value: 999, commission: 1, ours: 998, paid: 0 },
+    { partner_id: "p1", month: "2026-09", bookings: 5, cancelled: 1, value: 400, commission: 100, ours: 300, paid: 0, incomplete: 1 },
     { partner_id: "p2", month: "2026-09", bookings: 2, cancelled: 0, value: 100, commission: 20, ours: 80, paid: null },
     { partner_id: "p1", month: "2026-08", bookings: 3, cancelled: 0, value: 240.5, commission: 60.13, ours: 180.37, paid: 50 },
     { partner_id: "p9", month: "2026-08", bookings: 9, value: 1 },
@@ -91,28 +102,33 @@ describe("Mês a mês e totais", () => {
   const sums = sumMonths(monthRows, (r) => group.get(String(r.partner_id)) ?? null);
   it("soma as linhas dos parques da mesma empresa por mês (mais recente primeiro)", () => {
     expect([...sums.keys()]).toEqual(["u-parkos"]);
-    expect(sums.get("u-parkos")).toEqual([
-      { month: "2026-09", bookings: 7, cancelled: 1, value: 500, commission: 120, ours: 380, paid: 0 },
-      { month: "2026-08", bookings: 3, cancelled: 0, value: 240.5, commission: 60.13, ours: 180.37, paid: 50 },
+    expect(sums.get("u-parkos")!.slice(1)).toEqual([
+      { month: "2026-09", bookings: 7, cancelled: 1, value: 500, commission: 120, ours: 380, paid: 0, incomplete: 1 },
+      { month: "2026-08", bookings: 3, cancelled: 0, value: 240.5, commission: 60.13, ours: 180.37, paid: 50, incomplete: 0 },
     ]);
   });
-  it("totais de um intervalo", () => {
-    expect(totalsOf(sums.get("u-parkos")!, "2026-09", "2026-09")).toMatchObject({ bookings: 7, ours: 380 });
-    expect(totalsOf(sums.get("u-parkos")!, "2025-10")).toMatchObject({ bookings: 10, value: 740.5, ours: 560.37 });
+  it("totais de um intervalo; os 12 meses param no mês corrente (entradas futuras não contam)", () => {
+    expect(totalsOf(sums.get("u-parkos")!, "2026-09", "2026-09")).toMatchObject({ bookings: 7, ours: 380, incomplete: 1 });
+    expect(totalsOf(sums.get("u-parkos")!, "2025-10", "2026-09")).toMatchObject({ bookings: 10, value: 740.5, ours: 560.37 });
+    expect(totalsOf(sums.get("u-parkos")!, "2025-10")).toMatchObject({ bookings: 14 });
   });
-  it("12 meses atrás (1.º dia) com 1 dia de folga para Lisboa", () => {
+  it("12 meses atrás (1.º dia) com 1 dia de folga, a partir do mês de LISBOA", () => {
     expect(monthsAgo(11, new Date("2026-09-27T10:00:00Z"))).toEqual({ month: "2025-10", since: "2025-09-30 00:00:00" });
+    // 30 set 23:30 UTC já é 1 out em Lisboa
+    expect(monthsAgo(11, new Date("2026-09-30T23:30:00Z")).month).toBe("2025-11");
   });
 });
 
 describe("Últimas reservas", () => {
-  it("valor = contribuído (senão preço); comissão = contribuído − devido; nosso = devido", () => {
+  it("valor e nosso vêm do SQL; comissão = valor − nosso; taxa com o tipo (% ou €)", () => {
     const r = mapRecent([
-      { id: "b1", code: "10", status: "CHECKED_OUT", booking_price: 402, contributed: 402, due: 301.5, fee_value: 25, client_name: "Ana" },
-      { id: "b2", status: "BOOKED", booking_price: 60, contributed: null, due: null, commission_amount: 1.2 },
+      { id: "b1", code: "10", status: "CHECKED_OUT", booking_price: 402, value: 402, ours: 301.5, fee_type: "PERCENTAGE", fee_value: 25, client_name: "Ana" },
+      { id: "b2", status: "BOOKED", booking_price: 60, value: null, ours: null, commission_amount: 1.2 },
+      { id: "b3", status: "BOOKED", booking_price: 50, value: 50, ours: 45, fee_type: "FIXED", fee_value: 5 },
     ]);
-    expect(r[0]).toMatchObject({ value: 402, commission: 100.5, ours: 301.5, feePct: 25, clientName: "Ana" });
+    expect(r[0]).toMatchObject({ value: 402, commission: 100.5, ours: 301.5, feeType: "PERCENTAGE", feeValue: 25, clientName: "Ana" });
     expect(r[1]).toMatchObject({ value: 60, commission: null, ours: null, marketplaceCommission: 1.2 });
+    expect(r[2]).toMatchObject({ feeType: "FIXED", feeValue: 5, commission: 5 });
   });
 });
 
@@ -126,6 +142,12 @@ describe("Ligação às Parcerias", () => {
     expect(matchPartnership({ parks: parks1, taxNumber: null }, list)).toMatchObject({ ref: { id: 1 }, how: "id" });
     expect(matchPartnership({ parks: [{ ...parks1[0], partnerId: "pz" }], taxNumber: "509888888" }, list)).toMatchObject({ ref: { id: 2 }, how: "nif" });
     expect(matchPartnership({ parks: [{ ...parks1[0], partnerId: "pz" }], taxNumber: null }, list)).toBeNull();
+  });
+  it("à mão (id), sem ligação (0) ou sozinha (null)", () => {
+    expect(resolvePartnership({ parks: parks1, taxNumber: null }, 2, list)).toMatchObject({ ref: { id: 2 }, how: "manual" });
+    expect(resolvePartnership({ parks: parks1, taxNumber: null }, NO_PARTNERSHIP, list)).toBeNull();
+    expect(resolvePartnership({ parks: parks1, taxNumber: null }, null, list)).toMatchObject({ ref: { id: 1 }, how: "id" });
+    expect(resolvePartnership({ parks: parks1, taxNumber: null }, 999, list)).toBeNull();
   });
 });
 

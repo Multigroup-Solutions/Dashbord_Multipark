@@ -22,11 +22,26 @@
 import { multiparkDbQuery, type SqlParam } from "./client";
 import { ParamList, cityAliases, safeMultiparkRead, type MultiparkRead } from "./read";
 import { classifyPark } from "../../shared/multiparkParks";
+import { lisbonMonth } from "../../shared/crmPro";
 
 const ts = (expr: string) => `to_char(${expr}, 'YYYY-MM-DD HH24:MI:SS')`;
 /** Mês (Lisboa) da entrada — a BD grava UTC. */
 const MONTH = `to_char((b."checkIn" AT TIME ZONE 'UTC') AT TIME ZONE 'Europe/Lisbon', 'YYYY-MM')`;
-const LIVE = `b."status"::text <> 'CANCELLED'`;
+/** Reserva que conta: nem cancelada nem pendente (PENDING = compra online por acabar). */
+const LIVE = `b."status"::text NOT IN ('CANCELLED', 'PENDING')`;
+const CANCELLED = `b."status"::text = 'CANCELLED'`;
+/** Valor da reserva para o parceiro: o que ele recebeu; sem isso, o preço. */
+const VALUE = `COALESCE(b."partnerContributedAmount", b."bookingPrice")`;
+/**
+ * O NOSSO: o devido gravado; sem ele, pela taxa gravada na reserva
+ * (percentagem ou valor fixo). NULL = não se sabe (conta como incompleta).
+ */
+const OURS = `COALESCE(b."partnerAmountDue", CASE
+    WHEN b."partnerFeeType"::text = 'PERCENTAGE' AND b."partnerFeeValue" IS NOT NULL THEN ${VALUE} * (1 - b."partnerFeeValue" / 100.0)
+    WHEN b."partnerFeeType"::text = 'FIXED' AND b."partnerFeeValue" IS NOT NULL THEN ${VALUE} - b."partnerFeeValue"
+  END)`;
+/** Reservas que NÓS levámos a um parque que não é nosso (marketplace). */
+export const OUR_SALE = `(b."origin"::text = 'MARKETPLACE' OR COALESCE(b."commissionAmount", 0) > 0)`;
 export const PARTNER_ROWS_LIMIT = 5000;
 export const RECENT_LIMIT = 200;
 
@@ -72,10 +87,12 @@ export function buildPartnerMonthsSql(since: string, partnerIds?: string[]): { s
   const lim = p.add(50_000);
   return {
     sql: [
-      `SELECT b."partnerId" AS partner_id, ${MONTH} AS month, count(*) AS bookings, count(*) FILTER (WHERE NOT (${LIVE})) AS cancelled,`,
-      `  SUM(CASE WHEN ${LIVE} THEN COALESCE(b."partnerContributedAmount", b."bookingPrice") END) AS value,`,
-      `  SUM(CASE WHEN ${LIVE} AND b."partnerContributedAmount" IS NOT NULL AND b."partnerAmountDue" IS NOT NULL THEN b."partnerContributedAmount" - b."partnerAmountDue" END) AS commission,`,
-      `  SUM(CASE WHEN ${LIVE} THEN b."partnerAmountDue" END) AS ours,`,
+      `SELECT b."partnerId" AS partner_id, ${MONTH} AS month, count(*) FILTER (WHERE ${LIVE}) AS bookings, count(*) FILTER (WHERE ${CANCELLED}) AS cancelled,`,
+      `  SUM(CASE WHEN ${LIVE} THEN ${VALUE} END) AS value,`,
+      // comissão deles = valor − nosso (só onde o nosso se sabe)
+      `  SUM(CASE WHEN ${LIVE} AND ${OURS} IS NOT NULL THEN ${VALUE} - ${OURS} END) AS commission,`,
+      `  SUM(CASE WHEN ${LIVE} THEN ${OURS} END) AS ours,`,
+      `  count(*) FILTER (WHERE ${LIVE} AND ${OURS} IS NULL) AS incomplete,`,
       `  SUM(CASE WHEN ${LIVE} THEN b."partnerAmountPaid" END) AS paid`,
       `FROM "Booking" b`,
       `WHERE b."checkIn" >= ${s}::timestamp ${only}`,
@@ -95,11 +112,12 @@ export function buildParkMonthsSql(since: string, parkIds: string[]): { sql: str
   const lim = p.add(50_000);
   return {
     sql: [
-      `SELECT b."parkId" AS park_id, ${MONTH} AS month, count(*) AS bookings, count(*) FILTER (WHERE NOT (${LIVE})) AS cancelled,`,
+      `SELECT b."parkId" AS park_id, ${MONTH} AS month, count(*) FILTER (WHERE ${LIVE}) AS bookings, count(*) FILTER (WHERE ${CANCELLED}) AS cancelled,`,
       `  SUM(CASE WHEN ${LIVE} THEN b."bookingPrice" END) AS value,`,
       `  SUM(CASE WHEN ${LIVE} THEN b."commissionAmount" END) AS commission`,
       `FROM "Booking" b`,
-      `WHERE b."parkId" IN (${parks}) AND b."checkIn" >= ${s}::timestamp`,
+      // só as reservas que NÓS lhes levámos (o parque pode ter operação própria)
+      `WHERE b."parkId" IN (${parks}) AND b."checkIn" >= ${s}::timestamp AND ${OUR_SALE}`,
       `GROUP BY 1, 2`,
       `LIMIT ${lim}`,
     ].join("\n"),
@@ -112,15 +130,18 @@ export function buildRecentBookingsSql(by: { partnerIds?: string[]; parkIds?: st
   const p = new ParamList();
   const conds: string[] = [];
   if (by.partnerIds?.length) conds.push(`b."partnerId" IN (${by.partnerIds.map((id) => p.add(id)).join(", ")})`);
-  if (by.parkIds?.length) conds.push(`b."parkId" IN (${by.parkIds.map((id) => p.add(id)).join(", ")})`);
+  // parque que não é nosso: só as reservas que nós levámos
+  if (by.parkIds?.length) conds.push(`b."parkId" IN (${by.parkIds.map((id) => p.add(id)).join(", ")})`, OUR_SALE);
   if (!conds.length) throw new Error("Sem filtro.");
+  // "últimas" = já entraram (as futuras vinham primeiro)
+  conds.push(`b."checkIn" <= now()`);
   const lim = p.add(Math.min(Math.max(Math.floor(limit), 1), RECENT_LIMIT));
   return {
     sql: [
       `SELECT b."id" AS id, NULLIF(b."allocation", '') AS code, b."status"::text AS status,`,
       `  ${ts(`b."checkIn"`)} AS check_in, ${ts(`b."checkOut"`)} AS check_out, b."parkId" AS park_id, b."partnerId" AS partner_id,`,
-      `  b."bookingPrice" AS booking_price, b."partnerContributedAmount" AS contributed, b."partnerAmountDue" AS due, b."partnerAmountPaid" AS paid,`,
-      `  b."partnerFeeValue" AS fee_value, b."commissionAmount" AS commission_amount, b."origin"::text AS origin,`,
+      `  b."bookingPrice" AS booking_price, ${VALUE} AS value, ${OURS} AS ours, b."partnerAmountPaid" AS paid,`,
+      `  b."partnerFeeType"::text AS fee_type, b."partnerFeeValue" AS fee_value, b."commissionAmount" AS commission_amount, b."origin"::text AS origin,`,
       `  NULLIF(TRIM(CONCAT(c."firstName", ' ', c."lastName")), '') AS client_name, NULLIF(v."licensePlate", '') AS plate`,
       `FROM "Booking" b`,
       `LEFT JOIN "Client" c ON c."id" = COALESCE(b."customerId", b."clientId")`,
@@ -206,7 +227,8 @@ export function groupPartners(rows: Row[], parks: ParkOut[], cities: string[] | 
   }).sort((a, b) => a.name.localeCompare(b.name, "pt"));
 }
 
-export interface MonthTotals { month: string; bookings: number; cancelled: number; value: number; commission: number; ours: number; paid: number }
+/** `bookings` = as que contam (sem canceladas nem pendentes); `incomplete` = sem o nosso nem taxa gravados. */
+export interface MonthTotals { month: string; bookings: number; cancelled: number; value: number; commission: number; ours: number; paid: number; incomplete: number }
 
 /** Linhas mensais (por linha Partner ou parque) → somadas por grupo e mês. PURA. */
 export function sumMonths(rows: Row[], groupOf: (r: Row) => string | null): Map<string, MonthTotals[]> {
@@ -216,9 +238,10 @@ export function sumMonths(rows: Row[], groupOf: (r: Row) => string | null): Map<
     if (!g || !month) continue;
     const byMonth = acc.get(g) ?? new Map<string, MonthTotals>();
     acc.set(g, byMonth);
-    const m = byMonth.get(month) ?? { month, bookings: 0, cancelled: 0, value: 0, commission: 0, ours: 0, paid: 0 };
+    const m = byMonth.get(month) ?? { month, bookings: 0, cancelled: 0, value: 0, commission: 0, ours: 0, paid: 0, incomplete: 0 };
     m.bookings += num(r.bookings) ?? 0;
     m.cancelled += num(r.cancelled) ?? 0;
+    m.incomplete += num(r.incomplete) ?? 0;
     m.value = round(m.value + (num(r.value) ?? 0));
     m.commission = round(m.commission + (num(r.commission) ?? 0));
     m.ours = round(m.ours + (num(r.ours) ?? 0));
@@ -230,10 +253,10 @@ export function sumMonths(rows: Row[], groupOf: (r: Row) => string | null): Map<
 
 /** Totais de um conjunto de meses (este mês / últimos 12). PURA. */
 export function totalsOf(months: MonthTotals[], from: string, to?: string): Omit<MonthTotals, "month"> {
-  const t = { bookings: 0, cancelled: 0, value: 0, commission: 0, ours: 0, paid: 0 };
+  const t = { bookings: 0, cancelled: 0, value: 0, commission: 0, ours: 0, paid: 0, incomplete: 0 };
   for (const m of months) {
     if (m.month < from || (to && m.month > to)) continue;
-    t.bookings += m.bookings; t.cancelled += m.cancelled;
+    t.bookings += m.bookings; t.cancelled += m.cancelled; t.incomplete += m.incomplete;
     t.value = round(t.value + m.value); t.commission = round(t.commission + m.commission);
     t.ours = round(t.ours + m.ours); t.paid = round(t.paid + m.paid);
   }
@@ -243,17 +266,20 @@ export function totalsOf(months: MonthTotals[], from: string, to?: string): Omit
 export interface RecentBooking {
   id: string; code: string | null; status: string | null; checkIn: string | null; checkOut: string | null; parkId: string | null;
   partnerId: string | null; price: number | null; value: number | null; commission: number | null; ours: number | null; paid: number | null;
-  feePct: number | null; marketplaceCommission: number | null; origin: string | null; clientName: string | null; plate: string | null;
+  /** taxa do parceiro gravada na reserva: PERCENTAGE (%) ou FIXED (€) */
+  feeType: string | null; feeValue: number | null;
+  marketplaceCommission: number | null; origin: string | null; clientName: string | null; plate: string | null;
 }
 
 export function mapRecent(rows: Row[]): RecentBooking[] {
   return rows.filter((r) => str(r.id)).map((r) => {
-    const contributed = num(r.contributed), due = num(r.due);
+    const value = num(r.value) ?? num(r.booking_price), ours = num(r.ours);
     return {
       id: String(r.id), code: str(r.code), status: str(r.status), checkIn: str(r.check_in), checkOut: str(r.check_out),
       parkId: str(r.park_id), partnerId: str(r.partner_id), price: roundN(num(r.booking_price)),
-      value: roundN(contributed ?? num(r.booking_price)), commission: contributed != null && due != null ? round(contributed - due) : null,
-      ours: roundN(due), paid: roundN(num(r.paid)), feePct: num(r.fee_value), marketplaceCommission: roundN(num(r.commission_amount)),
+      value: roundN(value), commission: value != null && ours != null ? round(value - ours) : null,
+      ours: roundN(ours), paid: roundN(num(r.paid)), feeType: str(r.fee_type), feeValue: num(r.fee_value),
+      marketplaceCommission: roundN(num(r.commission_amount)),
       origin: str(r.origin), clientName: str(r.client_name), plate: str(r.plate),
     };
   });
@@ -263,15 +289,47 @@ export function mapRecent(rows: Row[]): RecentBooking[] {
 
 /** Mês "AAAA-MM" de Lisboa de há `n` meses (1.º dia) e o instante UTC para o filtro. PURA. */
 export function monthsAgo(n: number, now = new Date()): { month: string; since: string } {
-  const y = now.getUTCFullYear(), m = now.getUTCMonth() - n;
-  const d = new Date(Date.UTC(y, m, 1));
+  // a partir do mês de LISBOA (no fim do mês, a hora UTC ainda está no mês anterior)
+  const [ly, lm] = (lisbonMonth(now) ?? now.toISOString().slice(0, 7)).split("-").map(Number);
+  const d = new Date(Date.UTC(ly, lm - 1 - n, 1));
   const month = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
   // 1 dia de folga (Lisboa está à frente de UTC): o mês certo vem do agrupamento
   const since = new Date(d.getTime() - 86_400_000).toISOString().slice(0, 19).replace("T", " ");
   return { month, since };
 }
 
+/** Cache curta (90 s) das listas: cada tecla na procura voltava a ler a BD deles. */
+const CACHE_MS = 90_000;
+const cache = new Map<string, { at: number; value: unknown }>();
+async function cached<T>(key: string, query: Query, fn: () => Promise<MultiparkRead<T>>): Promise<MultiparkRead<T>> {
+  if (query !== multiparkDbQuery) return fn(); // testes
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_MS) return hit.value as MultiparkRead<T>;
+  const v = await fn();
+  if (v.available) cache.set(key, { at: Date.now(), value: v });
+  return v;
+}
+
+/** Parceiro visível a quem pede (âmbito de cidade)? — leitura leve, para autorizar. */
+export async function readPartnerVisible(userId: string, cities: string[] | undefined, query: Query = multiparkDbQuery) {
+  return safeMultiparkRead("parceiro (âmbito)", async () => {
+    const parks = mapParks(await query(buildParksFullSql().sql));
+    const pr = buildPartnersSql();
+    return groupPartners(await query(pr.sql, pr.params), parks, cities).some((p) => p.userId === userId);
+  });
+}
+
+/** Parque (que não é nosso) visível a quem pede? — leitura leve, para autorizar. */
+export async function readParkVisible(parkId: string, cities: string[] | undefined, query: Query = multiparkDbQuery) {
+  return safeMultiparkRead("parque (âmbito)", async () =>
+    mapParks(await query(buildParksFullSql().sql)).some((p) => p.id === parkId && !p.ours && inCities(p.city, cities)));
+}
+
 export async function readPartnersOverview(cities: string[] | undefined, query: Query = multiparkDbQuery) {
+  return cached(`partners|${JSON.stringify(cities ?? null)}`, query, () => readPartnersOverviewNow(cities, query));
+}
+
+async function readPartnersOverviewNow(cities: string[] | undefined, query: Query) {
   return safeMultiparkRead("parceiros", async () => {
     const parks = mapParks(await query(buildParksFullSql().sql));
     const pr = buildPartnersSql();
@@ -301,6 +359,10 @@ export async function readPartnerDetail(userId: string, cities: string[] | undef
 }
 
 export async function readParksOverview(cities: string[] | undefined, query: Query = multiparkDbQuery) {
+  return cached(`parks|${JSON.stringify(cities ?? null)}`, query, () => readParksOverviewNow(cities, query));
+}
+
+async function readParksOverviewNow(cities: string[] | undefined, query: Query) {
   return safeMultiparkRead("parques", async () => {
     const all = mapParks(await query(buildParksFullSql().sql));
     const parks = all.filter((p) => !p.ours && inCities(p.city, cities));

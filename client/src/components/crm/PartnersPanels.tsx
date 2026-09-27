@@ -82,8 +82,8 @@ export function PartnersPanel() {
                   </td>
                   <td className="px-3 py-2.5 text-xs text-muted-foreground">{r.parks.map((p) => p.name).join(", ")}</td>
                   <td className="px-3 py-2.5 text-right">{r.fees.length ? `${r.fees.join(" / ")} %` : "—"}</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums">{num(r.thisMonth.bookings - r.thisMonth.cancelled)}</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums">{num(r.last12.bookings - r.last12.cancelled)}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums">{num(r.thisMonth.bookings)}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums">{num(r.last12.bookings)}</td>
                   <td className="px-3 py-2.5 text-right tabular-nums">{eur(r.last12.value)}</td>
                   <td className="px-3 py-2.5 text-right font-semibold tabular-nums">{eur(r.last12.ours)}</td>
                   <td className="px-3 py-2.5 text-xs">{r.partnership ? r.partnership.name : <span className="text-muted-foreground">—</span>}</td>
@@ -130,8 +130,8 @@ export function ParksPanel() {
                   </td>
                   <td className="px-3 py-2.5">{[r.city, r.country].filter(Boolean).join(", ") || "—"}</td>
                   <td className="px-3 py-2.5 text-xs text-muted-foreground">{[r.email, r.phone].filter(Boolean).join(" · ") || "—"}</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums">{num(r.thisMonth.bookings - r.thisMonth.cancelled)}</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums">{num(r.last12.bookings - r.last12.cancelled)}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums">{num(r.thisMonth.bookings)}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums">{num(r.last12.bookings)}</td>
                   <td className="px-3 py-2.5 text-right tabular-nums">{eur(r.last12.value)}</td>
                   <td className="px-3 py-2.5 text-right font-semibold tabular-nums">{eur(r.last12.commission)}</td>
                 </tr>
