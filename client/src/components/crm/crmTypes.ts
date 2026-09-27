@@ -20,4 +20,15 @@ export type CrmProListRow = CrmProList["rows"][number];
 export type CrmProAccount = NonNullable<Out["proAccount"]>;
 export type CrmProLedgerRow = CrmProAccount["ledger"][number];
 
-export const isCrmFile =(d: Out["get"] | undefined): d is CrmFile => !!d && typeof (d as { id?: unknown }).id === "number";
+// fase 3: parceiros e parques (ao vivo da Multipark)
+type Avail<T> = Extract<T, { available: true }>;
+export type CrmPartnersList = Avail<Out["partnersList"]>;
+export type CrmPartnerRow = CrmPartnersList["rows"][number];
+export type CrmPartnerDetail = Avail<Out["partner"]>;
+export type CrmParksList = Avail<Out["parksList"]>;
+export type CrmParkRow = CrmParksList["rows"][number];
+export type CrmParkDetail = Avail<Out["park"]>;
+export type CrmMonthRow = CrmPartnerDetail["months"][number];
+export type CrmRecentBooking = CrmPartnerDetail["recent"][number];
+
+export const isCrmFile = (d: Out["get"] | undefined): d is CrmFile => !!d && typeof (d as { id?: unknown }).id === "number";
