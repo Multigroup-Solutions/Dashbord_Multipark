@@ -11,12 +11,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   LayoutDashboard, CalendarCheck, ArrowDownToLine, ArrowUpFromLine,
-  XCircle, Euro, Activity, MapPin, Building2, PieChart as PieIcon,
+  XCircle, Euro, Activity, MapPin, Building2, PieChart as PieIcon, CalendarDays,
 } from "lucide-react";
 import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip, Legend } from "recharts";
 import { QuickRangeBar, thisMonthRange, previousPeriod } from "@/components/QuickRangeBar";
 import DateRangeNav from "@/components/DateRangeNav";
 import ReservasDoDia from "@/components/operacoes/ReservasDoDia";
+import OpsList, { defaultOpsShared, type OpsListShared } from "@/components/operacoes/OpsList";
+import { OPS_LIST_KINDS, OPS_LIST_LABELS } from "@shared/opsLists";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { cohortCancelRate } from "@shared/operationsDaily";
 
@@ -59,19 +61,27 @@ function BookingAlerts() {
   return <AnomalyAlerts domain="bookings" enabled={!!user && can(user as any, "reservas_operacoes", "view")} />;
 }
 
-const OPERACOES_TABS = ["dashboard", "dia"];
-/** Abas antigas (uma lista por ação) → a lista única "Reservas do dia". */
-const LEGACY_LIST_TABS = ["reservas", "entradas", "saidas", "cancelados"];
+const OPERACOES_TABS = ["dashboard", "dia", ...OPS_LIST_KINDS];
 
 /**
- * Aba pedida no link (`?tab=dia`, pesquisa global, links antigos). A pesquisa
- * (`q`) e o dia (`de`) são lidos pela própria lista.
+ * Aba pedida no link (`?tab=dia`, `?tab=cancelados`, pesquisa global, links
+ * antigos). A pesquisa (`q`) e o dia (`de`) servem de semente às listas.
  */
 function tabFromUrl(): string | null {
   const tab = new URLSearchParams(window.location.search).get("tab");
   if (!tab) return null;
-  if (LEGACY_LIST_TABS.includes(tab)) return "dia";
   return OPERACOES_TABS.includes(tab) ? tab : null;
+}
+
+/** Semente das listas por período a partir do link (`?q=…&de=AAAA-MM-DD`). */
+function listSeedFromUrl(): OpsListShared {
+  try {
+    const p = new URLSearchParams(window.location.search);
+    const de = p.get("de");
+    return defaultOpsShared({ day: de && /^\d{4}-\d{2}-\d{2}$/.test(de) ? de : null, q: (p.get("q") ?? "").slice(0, 100) });
+  } catch {
+    return defaultOpsShared();
+  }
 }
 
 export default function OperacoesPage() {
@@ -80,21 +90,28 @@ export default function OperacoesPage() {
   const [storedTab, setTab] = usePersistedState("operacoes.tab", urlTab ?? "dashboard");
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (urlTab) setTab(urlTab); }, [urlTab]);
-  // Abas antigas guardadas (Reservas/Recolhas/Entregas/Cancelados) → a lista do dia;
   // "Serviços" saiu daqui (fica no menu, em /servicos) → Dashboard.
-  const tab = OPERACOES_TABS.includes(storedTab) ? storedTab : LEGACY_LIST_TABS.includes(storedTab) ? "dia" : "dashboard";
+  const tab = OPERACOES_TABS.includes(storedTab) ? storedTab : "dashboard";
+  // Filtros das listas por período, PARTILHADOS entre Reservas / Recolhas /
+  // Entregas / Cancelados (mudar de aba mantém o período). Abrem sempre em HOJE.
+  const [listShared, setListShared] = useState<OpsListShared>(listSeedFromUrl);
+  const patchShared = (patch: Partial<OpsListShared>) => setListShared((s) => ({ ...s, ...patch }));
   return (
     <div className="space-y-6 max-w-[1400px] mx-auto">
       <div>
         <p className="text-sm text-muted-foreground">
-          Reservas, recolhas, entregas e cancelamentos — dias de Lisboa, valores c/ IVA. A lista "Reservas do dia" lê a Multipark em tempo real.
+          Reservas, recolhas, entregas e cancelamentos — dias de Lisboa, valores c/ IVA. As listas e as "Reservas do dia" leem a Multipark em tempo real.
         </p>
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="flex-wrap h-auto">
           <TabsTrigger value="dashboard"><LayoutDashboard className="w-4 h-4 mr-1" />Dashboard</TabsTrigger>
-          <TabsTrigger value="dia"><CalendarCheck className="w-4 h-4 mr-1" />Reservas do dia</TabsTrigger>
+          <TabsTrigger value="dia"><CalendarDays className="w-4 h-4 mr-1" />Reservas do dia</TabsTrigger>
+          <TabsTrigger value="reservas"><CalendarCheck className="w-4 h-4 mr-1" />{OPS_LIST_LABELS.reservas}</TabsTrigger>
+          <TabsTrigger value="entradas"><ArrowDownToLine className="w-4 h-4 mr-1" />{OPS_LIST_LABELS.entradas}</TabsTrigger>
+          <TabsTrigger value="saidas"><ArrowUpFromLine className="w-4 h-4 mr-1" />{OPS_LIST_LABELS.saidas}</TabsTrigger>
+          <TabsTrigger value="cancelados"><XCircle className="w-4 h-4 mr-1" />{OPS_LIST_LABELS.cancelados}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="dashboard" className="mt-4 space-y-4">
@@ -104,6 +121,11 @@ export default function OperacoesPage() {
         <TabsContent value="dia" className="mt-4">
           <ReservasDoDia />
         </TabsContent>
+        {OPS_LIST_KINDS.map((k) => (
+          <TabsContent key={k} value={k} className="mt-4">
+            {tab === k && <OpsList kind={k} shared={listShared} onShared={patchShared} />}
+          </TabsContent>
+        ))}
       </Tabs>
     </div>
   );
@@ -209,14 +231,14 @@ function OperacoesDashboard({ onJump }: { onJump: (tab: string) => void }) {
           sub={`${stats.reservas} não canceladas · ${stats.criadas - stats.reservas} já canceladas`}
           extra={`${fmtEur(stats.reservasReceita)} c/ IVA (não canceladas)`}
           compareValue={compare ? prevStats.criadas : undefined}
-          onClick={() => onJump("dia")}
+          onClick={() => onJump("reservas")}
         />
         <KpiCard
           icon={<ArrowDownToLine className="w-5 h-5 text-emerald-600" />}
           label="Recolhas"
           value={stats.recolhas}
           compareValue={compare ? prevStats.recolhas : undefined}
-          onClick={() => onJump("dia")}
+          onClick={() => onJump("entradas")}
         />
         <KpiCard
           icon={<ArrowUpFromLine className="w-5 h-5 text-amber-600" />}
@@ -224,7 +246,7 @@ function OperacoesDashboard({ onJump }: { onJump: (tab: string) => void }) {
           value={stats.entregas}
           extra={`${fmtEur(stats.entregasReceita)} c/ IVA`}
           compareValue={compare ? prevStats.entregas : undefined}
-          onClick={() => onJump("dia")}
+          onClick={() => onJump("saidas")}
         />
         <KpiCard
           icon={<XCircle className="w-5 h-5 text-red-600" />}
@@ -233,7 +255,7 @@ function OperacoesDashboard({ onJump }: { onJump: (tab: string) => void }) {
           extra={`${fmtEur(stats.canceladosReceita)} c/ IVA`}
           compareValue={compare ? prevStats.cancelados : undefined}
           invertDelta
-          onClick={() => onJump("dia")}
+          onClick={() => onJump("cancelados")}
         />
       </div>
 
@@ -290,7 +312,7 @@ function OperacoesDashboard({ onJump }: { onJump: (tab: string) => void }) {
 
       <p className="text-xs text-muted-foreground flex items-center gap-1">
         <Activity className="w-3 h-3" />
-        Clica num cartão para abrir as Reservas do dia (hoje)
+        Clica num cartão para abrir a lista da secção (abre em hoje)
       </p>
     </div>
   );
