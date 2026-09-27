@@ -12,6 +12,7 @@ import {
 import { plateKey } from "../../shared/crmIdentity";
 import { RULE_FIELDS, segmentsOf, type CrmQuery, type CrmRule, type SearchField, type Segment } from "../../shared/crmFilters";
 import { clientVisibleSql } from "./scope";
+import { MULTIPARK_APP } from "../../shared/crmPro";
 
 const rowsOf = (res: unknown): any[] => {
   const r = Array.isArray(res) ? res[0] : (res as any)?.rows ?? res;
@@ -329,8 +330,8 @@ export async function filterOptions(db: any) {
 
 // ─── Ficha ──────────────────────────────────────────────────────────────────
 
-/** Link para abrir a reserva na app da Multipark (endereço a confirmar com o Rafael). */
-export const MULTIPARK_BOOKING_URL = "https://www.multipark.app/pt-PT/agent/booking/";
+/** Link para abrir a reserva na app de agentes da Multipark (multipark.pt, caminho da app web deles). */
+export const MULTIPARK_BOOKING_URL = `${MULTIPARK_APP}/agent/booking/`;
 
 export async function getClientFile(db: any, id: number, opts: { canSeeTotals: boolean; canSeeIban: boolean }) {
   const [c] = rowsOf(await db.execute(sql`SELECT *, ${DT("firstVisit")} AS firstVisitS, ${DT("lastVisit")} AS lastVisitS,

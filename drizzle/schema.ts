@@ -3013,7 +3013,7 @@ export const mailMessages = mysqlTable("mail_messages", {
 	labelIdsJson: varchar({ length: 1000 }),
 	sentAt: datetime({ mode: 'string' }),
 	isRead: tinyint().default(0).notNull(),
-	// 0 = pessoa, 1 = remetente automático, 2 = notificação automática de reserva (0180), 3 = envio automático da aplicação (0195/0220).
+	// 0 = pessoa, 1 = remetente automático, 2 = notificação automática de reserva (0180), 3 = envio automático da aplicação (0195/0230).
 	automated: tinyint().default(0).notNull(),
 	sentById: int(),
 	pipeline: varchar({ length: 40 }),
@@ -3028,7 +3028,7 @@ export const mailMessages = mysqlTable("mail_messages", {
 	index("idx_mail_messages_sent").on(table.sentAt),
 ]);
 
-// 0220: envios automáticos da aplicação a um colaborador/extra (pedidos e
+// 0230: envios automáticos da aplicação a um colaborador/extra (pedidos e
 // lembretes de disponibilidade, avisos de escala…) — ficha do extra →
 // "Comunicações automáticas". A conversa na Comunicação é (accountKey, gmailThreadId).
 export const mailAutoSends = mysqlTable("mail_auto_sends", {
@@ -3551,6 +3551,91 @@ export const crmBlockedIdentifiers = mysqlTable("crm_blocked_identifiers", {
 },
 (table) => [
 	uniqueIndex("uq_crm_blocked").on(table.clientId, table.kind, table.value),
+]);
+
+// ─── CRM fase 2: clientes Pro com conta corrente — migração 0220 ────────────
+// Alimentado pela BD da Multipark (só leitura). Regras: shared/crmPro.ts.
+
+export const crmProAccounts = mysqlTable("crm_pro_accounts", {
+	id: int().autoincrement().primaryKey(),
+	/** "Client".id na Multipark. */
+	mpClientId: varchar({ length: 64 }).notNull(),
+	crmClientId: int(),
+	name: varchar({ length: 255 }),
+	email: varchar({ length: 320 }),
+	phone: varchar({ length: 40 }),
+	nif: varchar({ length: 32 }),
+	taxName: varchar({ length: 255 }),
+	autoBilling: tinyint().default(0).notNull(),
+	active: tinyint().default(1).notNull(),
+	billingEmail: varchar({ length: 320 }),
+	notes: text(),
+	syncedAt: datetime({ mode: 'string' }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_crm_pro_mp_client").on(table.mpClientId),
+	index("idx_crm_pro_crm_client").on(table.crmClientId),
+]);
+
+export const crmProParks = mysqlTable("crm_pro_parks", {
+	/** "ProClient".id na Multipark (um por cliente e parque). */
+	proClientId: varchar({ length: 64 }).primaryKey(),
+	accountId: int().notNull(),
+	parkId: varchar({ length: 64 }),
+	parkName: varchar({ length: 128 }),
+	city: varchar({ length: 64 }),
+	name: varchar({ length: 255 }),
+	discount: decimal({ precision: 5, scale: 2 }),
+	active: tinyint().default(1).notNull(),
+	deactivatedAt: datetime({ mode: 'string' }),
+	mpCreatedAt: datetime({ mode: 'string' }),
+	goneAt: datetime({ mode: 'string' }),
+},
+(table) => [
+	index("idx_crm_pro_parks_account").on(table.accountId),
+]);
+
+export const crmProLedger = mysqlTable("crm_pro_ledger", {
+	id: int().autoincrement().primaryKey(),
+	accountId: int().notNull(),
+	/** booking | payment | paid_undated | settlement | online */
+	kind: varchar({ length: 16 }).notNull(),
+	sourceId: varchar({ length: 64 }).notNull(),
+	entryAt: datetime({ mode: 'string' }).notNull(),
+	/** Mês "AAAA-MM" (Lisboa) da entrada da reserva. */
+	periodKey: varchar({ length: 7 }).default('').notNull(),
+	mpPeriodKey: varchar({ length: 64 }),
+	parkId: varchar({ length: 64 }),
+	parkName: varchar({ length: 128 }),
+	city: varchar({ length: 64 }),
+	bookingExternalId: varchar({ length: 128 }),
+	bookingCode: varchar({ length: 64 }),
+	checkIn: datetime({ mode: 'string' }),
+	checkOut: datetime({ mode: 'string' }),
+	plate: varchar({ length: 32 }),
+	/** quem viajou (cliente da reserva na Multipark) */
+	travelerName: varchar({ length: 255 }),
+	description: varchar({ length: 255 }),
+	debit: decimal({ precision: 12, scale: 2 }).default('0').notNull(),
+	credit: decimal({ precision: 12, scale: 2 }).default('0').notNull(),
+	paidAmount: decimal({ precision: 12, scale: 2 }),
+	listPrice: decimal({ precision: 12, scale: 2 }),
+	discountAmount: decimal({ precision: 12, scale: 2 }),
+	infoAmount: decimal({ precision: 12, scale: 2 }),
+	status: varchar({ length: 24 }),
+	method: varchar({ length: 64 }),
+	goneAt: datetime({ mode: 'string' }),
+	syncedAt: datetime({ mode: 'string' }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_crm_pro_ledger_source").on(table.kind, table.sourceId),
+	index("idx_crm_pro_ledger_account").on(table.accountId, table.entryAt),
+	index("idx_crm_pro_ledger_period").on(table.accountId, table.periodKey),
+	index("idx_crm_pro_ledger_booking").on(table.bookingExternalId),
 ]);
 
 // ─── Google Drive / Docs / Sheets — migração 0160 ───────────────────────────

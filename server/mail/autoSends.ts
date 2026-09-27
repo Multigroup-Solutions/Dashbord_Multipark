@@ -1,6 +1,6 @@
 /**
  * Envios automáticos da aplicação ligados a um colaborador/extra
- * (`mail_auto_sends`, migração 0220): pedidos e lembretes de disponibilidade,
+ * (`mail_auto_sends`, migração 0230): pedidos e lembretes de disponibilidade,
  * avisos de escala, lembretes de formação… Não aparecem na caixa partilhada
  * (a conversa só com envios nossos fica automática/escondida) — ficam na
  * ficha do extra ("Comunicações automáticas"), com o estado enviado/respondido

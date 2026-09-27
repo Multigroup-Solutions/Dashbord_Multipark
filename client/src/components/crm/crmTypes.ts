@@ -15,4 +15,9 @@ export type CrmGenericEmails = Extract<Review, { tab: "generic" }>["generic"];
 export type CrmUpcomingNoEmail = Extract<Review, { tab: "noEmail" }>["upcoming"][number];
 export type CrmMergeEvent = Extract<Review, { tab: "merges" }>["merges"][number];
 
-export const isCrmFile = (d: Out["get"] | undefined): d is CrmFile => !!d && typeof (d as { id?: unknown }).id === "number";
+export type CrmProList = Out["proList"];
+export type CrmProListRow = CrmProList["rows"][number];
+export type CrmProAccount = NonNullable<Out["proAccount"]>;
+export type CrmProLedgerRow = CrmProAccount["ledger"][number];
+
+export const isCrmFile =(d: Out["get"] | undefined): d is CrmFile => !!d && typeof (d as { id?: unknown }).id === "number";

@@ -27,6 +27,7 @@ import { ALERTS, SEARCH_FIELDS, SEGMENTS, SORTS, type CrmGroups, type CrmSort, t
 import { FilterGroup, RulesEditor, SavedFiltersMenu, SelButton, ruleText, type Opt, type RulesState } from "@/components/crm/CrmFilters";
 import { ALERT_CLASS, ClientAvatar, ColorSwatch, Pill, SegmentPill, eur, mainSegment, num, shortDate } from "@/components/crm/crmUi";
 import type { CrmListRow } from "@/components/crm/crmTypes";
+import { ProAccountsPanel } from "@/components/crm/ProAccountsPanel";
 import LegacyClientsPage from "./ClientsPage";
 
 type ViewState = {
@@ -96,7 +97,7 @@ function CrmList({ initialSearch }: { initialSearch?: ViewState["search"] }) {
   useEffect(() => setOffset(0), [qKey]);
 
   const options = trpc.crm.options.useQuery(undefined, { staleTime: 5 * 60_000 });
-  const list = trpc.crm.list.useQuery({ ...query, offset }, { placeholderData: (p) => p });
+  const list = trpc.crm.list.useQuery({ ...query, offset }, { placeholderData: (p) => p, enabled: s.tab !== "pro" });
   const review = trpc.crm.review.useQuery({ tab: "suggestions", limit: 1 }, { staleTime: 60_000, retry: false });
   const facets = trpc.crm.facets.useQuery({ ...query, search: null, text: s.search?.text ?? "" }, {
     enabled: focus && (s.search?.text?.length ?? 0) >= 2, staleTime: 30_000, placeholderData: (p) => p,
@@ -186,10 +187,13 @@ function CrmList({ initialSearch }: { initialSearch?: ViewState["search"] }) {
           <button key={id} type="button" onClick={() => patch({ tab: id })}
             className={cn("-mb-px border-b-[3px] px-3.5 py-2.5 text-sm", s.tab === id ? "border-primary font-bold text-primary" : "border-transparent font-semibold text-foreground hover:text-primary")}>
             {label}
-            {s.tab === id && list.data && <span className="ml-1 font-medium text-muted-foreground">{num(total)}</span>}
+            {s.tab === id && id !== "pro" && list.data && <span className="ml-1 font-medium text-muted-foreground">{num(total)}</span>}
           </button>
         ))}
       </div>
+
+      {/* separador Pro: contas Pro com a conta corrente (fase 2) */}
+      {s.tab === "pro" ? <ProAccountsPanel onShowProFichas={() => patch({ tab: "clients", groups: { ...s.groups, kind: ["pro"] } })} /> : (<>
 
       {/* pesquisa e filtros */}
       <div className="flex flex-col gap-3 rounded-[10px] border bg-card p-3.5">
@@ -313,6 +317,7 @@ function CrmList({ initialSearch }: { initialSearch?: ViewState["search"] }) {
           </Button>
         </div>
       )}
+      </>)}
 
       <NewClientDialog open={newOpen} onOpenChange={setNewOpen} onCreated={(id) => navigate(`/clientes/${id}`)} />
     </div>

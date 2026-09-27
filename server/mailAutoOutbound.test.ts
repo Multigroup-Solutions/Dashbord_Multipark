@@ -1,5 +1,5 @@
 /**
- * Caixa sem os envios automáticos da aplicação (migração 0220): os pedidos e
+ * Caixa sem os envios automáticos da aplicação (migração 0230): os pedidos e
  * lembretes de disponibilidade que saem por recursos-humanos@ (e os outros
  * envios automáticos) ficam automáticos/escondidos na Comunicação até a pessoa
  * responder; os antigos são limpos pelo passo de dados. Sem rede nem BD.
@@ -17,8 +17,8 @@ import { parseGmailMessage } from "./mail/parse";
 import { syncAccount, type AccountSyncState, type GmailApiLike, type SyncAccount, type SyncStore } from "./mail/sync";
 import { clearSendAsCache, sendMailWith, type AutoSendRecord, type SenderApi, type SystemMailDeps } from "./mail/systemMail";
 import {
-  AUTO_SUBJECT_LIKE_0220, DATA_0220_ID, IDEMPOTENT_ERROR_CODES_0220, MIGRATION_0220_STATEMENTS, pickAutoOutbound0220, runMigration0220Data,
-} from "./migrations/migration_0220";
+  AUTO_SUBJECT_LIKE_0230, DATA_0230_ID, IDEMPOTENT_ERROR_CODES_0230, MIGRATION_0230_STATEMENTS, pickAutoOutbound0230, runMigration0230Data,
+} from "./migrations/migration_0230";
 
 const root = resolve(import.meta.dirname, "..");
 const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64url");
@@ -204,7 +204,7 @@ describe("envio automático por alias (recursos-humanos@)", () => {
   });
 });
 
-// ─── 4. Migração 0220 (limpeza dos antigos) ─────────────────────────────────
+// ─── 4. Migração 0230 (limpeza dos antigos) ─────────────────────────────────
 
 /** BD falsa: responde às consultas da migração pelo texto do SQL. */
 function fakeDb(o: { done?: boolean; messages?: any[]; employees?: any[] }) {
@@ -218,7 +218,7 @@ function fakeDb(o: { done?: boolean; messages?: any[]; employees?: any[] }) {
     async execute(q: any) {
       const t = text(q);
       log.push(t);
-      if (t.includes("FROM app_notification_maintenance")) return [o.done ? [{ id: DATA_0220_ID }] : []];
+      if (t.includes("FROM app_notification_maintenance")) return [o.done ? [{ id: DATA_0230_ID }] : []];
       if (t.includes("FROM app_settings")) return [[]];
       if (t.includes("FROM mail_messages") && t.includes("SELECT id, threadId")) { const r = served ? [] : o.messages ?? []; served = true; return [r]; }
       if (t.includes("FROM employees")) return [o.employees ?? []];
@@ -228,16 +228,16 @@ function fakeDb(o: { done?: boolean; messages?: any[]; employees?: any[] }) {
   return { db, log };
 }
 
-describe("migração 0220: limpa os pedidos de disponibilidade já sincronizados", () => {
+describe("migração 0230: limpa os pedidos de disponibilidade já sincronizados", () => {
   it("SQL idempotente: tabela mail_auto_sends com índices", () => {
-    const all = MIGRATION_0220_STATEMENTS.join("\n");
+    const all = MIGRATION_0230_STATEMENTS.join("\n");
     expect(all).toMatch(/CREATE TABLE IF NOT EXISTS `mail_auto_sends`/);
     expect(all).toMatch(/UNIQUE KEY `uq_mail_auto_sends_msg` \(`accountKey`, `gmailMessageId`\)/);
     expect(all).toMatch(/KEY `idx_mail_auto_sends_employee` \(`employeeId`, `sentAt`\)/);
-    expect(IDEMPOTENT_ERROR_CODES_0220.has("ER_TABLE_EXISTS_ERROR")).toBe(true);
+    expect(IDEMPOTENT_ERROR_CODES_0230.has("ER_TABLE_EXISTS_ERROR")).toBe(true);
     const db = readFileSync(resolve(root, "server/db.ts"), "utf8");
-    expect(db).toMatch(/migration_0220/);
-    expect(db).toMatch(/runMigration0220Data/);
+    expect(db).toMatch(/migration_0230/);
+    expect(db).toMatch(/runMigration0230Data/);
   });
   it("matcher do backfill: só os envios nossos (sem Re:, sem recebidas, sem humanos)", () => {
     const rows = [
@@ -247,10 +247,10 @@ describe("migração 0220: limpa os pedidos de disponibilidade já sincronizados
       { id: 4, threadId: 13, direction: "out", fromEmail: "reservas@multipark.pt", subject: "[TESTE] Olá" },
       { id: 5, threadId: 14, direction: "out", fromEmail: "notificacoes@multipark.pt", subject: "Escala Multipark — 29/09" },
     ];
-    expect(pickAutoOutbound0220(rows, ["recursos-humanos@multipark.pt", "reservas@multipark.pt"]).map((r) => [r.id, r.kind])).toEqual([[1, "availability_request"]]);
-    expect(pickAutoOutbound0220(rows, ["notificacoes@multipark.pt"]).map((r) => r.id)).toEqual([5]);
+    expect(pickAutoOutbound0230(rows, ["recursos-humanos@multipark.pt", "reservas@multipark.pt"]).map((r) => [r.id, r.kind])).toEqual([[1, "availability_request"]]);
+    expect(pickAutoOutbound0230(rows, ["notificacoes@multipark.pt"]).map((r) => r.id)).toEqual([5]);
     // O pré-filtro SQL cobre os assuntos de todas as automações.
-    expect(AUTO_SUBJECT_LIKE_0220.some((p) => p.startsWith("Disponibilidade"))).toBe(true);
+    expect(AUTO_SUBJECT_LIKE_0230.some((p) => p.startsWith("Disponibilidade"))).toBe(true);
   });
   it("corre uma vez: marca as mensagens, recalcula as conversas, liga ao extra e grava a marca no fim", async () => {
     const { db, log } = fakeDb({
@@ -260,7 +260,7 @@ describe("migração 0220: limpa os pedidos de disponibilidade já sincronizados
       ],
       employees: [{ id: 42, email: "extra@gmail.com" }],
     });
-    const r = await runMigration0220Data(db);
+    const r = await runMigration0230Data(db);
     expect(r).toEqual({ status: "applied", messages: 2, threads: 2, sends: 1 });
     expect(log.some((t) => t.startsWith("UPDATE mail_messages SET automated ="))).toBe(true);
     expect(log.some((t) => t.includes("UPDATE mail_threads t SET t.automated"))).toBe(true);
@@ -269,7 +269,7 @@ describe("migração 0220: limpa os pedidos de disponibilidade já sincronizados
   });
   it("já corrida → não faz nada", async () => {
     const { db, log } = fakeDb({ done: true });
-    expect(await runMigration0220Data(db)).toEqual({ status: "skipped", messages: 0, threads: 0, sends: 0 });
+    expect(await runMigration0230Data(db)).toEqual({ status: "skipped", messages: 0, threads: 0, sends: 0 });
     expect(log).toHaveLength(1);
   });
 });
