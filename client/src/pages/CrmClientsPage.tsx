@@ -28,10 +28,12 @@ import { FilterGroup, RulesEditor, SavedFiltersMenu, SelButton, ruleText, type O
 import { ALERT_CLASS, ClientAvatar, ColorSwatch, Pill, SegmentPill, eur, mainSegment, num, shortDate } from "@/components/crm/crmUi";
 import type { CrmListRow } from "@/components/crm/crmTypes";
 import { ProAccountsPanel } from "@/components/crm/ProAccountsPanel";
+import { ParksPanel, PartnersPanel } from "@/components/crm/PartnersPanels";
 import LegacyClientsPage from "./ClientsPage";
 
 type ViewState = {
-  tab: "clients" | "pro";
+  /** clients = fichas; pro = contas Pro (fase 2); partners / parks = parceiros e parques (fase 3, ao vivo) */
+  tab: "clients" | "pro" | "partners" | "parks";
   search: { text: string; field: SearchField } | null;
   groups: CrmGroups;
   rules: RulesState | null;
@@ -72,7 +74,9 @@ function CrmList({ initialSearch }: { initialSearch?: ViewState["search"] }) {
   const { user } = useAuth();
   const [, navigate] = useLocation();
   const [st, setSt] = usePersistedState<ViewState>("crm.list", DEFAULT_VIEW);
-  const s: ViewState = { ...DEFAULT_VIEW, ...st };
+  const merged: ViewState = { ...DEFAULT_VIEW, ...st };
+  // separador guardado de uma versão antiga (ou inválido) → Clientes
+  const s: ViewState = (["clients", "pro", "partners", "parks"] as const).includes(merged.tab) ? merged : { ...merged, tab: "clients" };
   const patch = (p: Partial<ViewState>) => setSt((prev) => ({ ...DEFAULT_VIEW, ...prev, ...p }));
   const [offset, setOffset] = useState(0);
   const [rulesOpen, setRulesOpen] = useState(false);
@@ -92,12 +96,12 @@ function CrmList({ initialSearch }: { initialSearch?: ViewState["search"] }) {
     return () => clearTimeout(t);
   }, [text, field]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const query = { tab: s.tab, search: s.search, groups: s.groups, rules: s.rules, sort: s.sort, dir: s.dir, limit: s.limit };
+  const query = { tab: "clients" as const, search: s.search, groups: s.groups, rules: s.rules, sort: s.sort, dir: s.dir, limit: s.limit };
   const qKey = JSON.stringify(query);
   useEffect(() => setOffset(0), [qKey]);
 
   const options = trpc.crm.options.useQuery(undefined, { staleTime: 5 * 60_000 });
-  const list = trpc.crm.list.useQuery({ ...query, offset }, { placeholderData: (p) => p, enabled: s.tab !== "pro" });
+  const list = trpc.crm.list.useQuery({ ...query, offset }, { placeholderData: (p) => p, enabled: s.tab === "clients" });
   const review = trpc.crm.review.useQuery({ tab: "suggestions", limit: 1 }, { staleTime: 60_000, retry: false });
   const facets = trpc.crm.facets.useQuery({ ...query, search: null, text: s.search?.text ?? "" }, {
     enabled: focus && (s.search?.text?.length ?? 0) >= 2, staleTime: 30_000, placeholderData: (p) => p,
@@ -183,17 +187,18 @@ function CrmList({ initialSearch }: { initialSearch?: ViewState["search"] }) {
 
       {/* separadores */}
       <div className="flex gap-1 border-b">
-        {([["clients", "Clientes"], ["pro", "Pro"]] as const).map(([id, label]) => (
+        {([["clients", "Clientes"], ["pro", "Pro"], ["partners", "Agregadores e agências"], ["parks", "Parcerias (nós agregamos)"]] as const).map(([id, label]) => (
           <button key={id} type="button" onClick={() => patch({ tab: id })}
             className={cn("-mb-px border-b-[3px] px-3.5 py-2.5 text-sm", s.tab === id ? "border-primary font-bold text-primary" : "border-transparent font-semibold text-foreground hover:text-primary")}>
             {label}
-            {s.tab === id && id !== "pro" && list.data && <span className="ml-1 font-medium text-muted-foreground">{num(total)}</span>}
+            {s.tab === id && id === "clients" && list.data && <span className="ml-1 font-medium text-muted-foreground">{num(total)}</span>}
           </button>
         ))}
       </div>
 
       {/* separador Pro: contas Pro com a conta corrente (fase 2) */}
-      {s.tab === "pro" ? <ProAccountsPanel onShowProFichas={() => patch({ tab: "clients", groups: { ...s.groups, kind: ["pro"] } })} /> : (<>
+      {s.tab === "partners" ? <PartnersPanel /> : s.tab === "parks" ? <ParksPanel /> :
+       s.tab === "pro" ? <ProAccountsPanel onShowProFichas={() => patch({ tab: "clients", groups: { ...s.groups, kind: ["pro"] } })} /> : (<>
 
       {/* pesquisa e filtros */}
       <div className="flex flex-col gap-3 rounded-[10px] border bg-card p-3.5">

@@ -61,8 +61,16 @@ export async function listProAccounts(db: any, o: Opts & { search?: string | nul
   const parks = rowsOf(await db.execute(sql`SELECT accountId, proClientId, parkName, city, discount, active FROM crm_pro_parks WHERE goneAt IS NULL`));
   const parksOf = new Map<number, any[]>();
   for (const p of parks) parksOf.set(Number(p.accountId), [...(parksOf.get(Number(p.accountId)) ?? []), p]);
-  const t = (o.search ?? "").trim().toLowerCase();
-  const searched = accounts.filter((a) => !t || [a.name, a.fichaName, a.email, a.nif].some((x) => String(x ?? "").toLowerCase().includes(t)));
+  // Pro antigos (sem ProClient): guardados só para comparar — FORA da lista e dos
+  // totais (Jorge, 27 set). Para os ver, escrever "antigo" na procura.
+  const raw = (o.search ?? "").trim().toLowerCase();
+  const legacyMode = isLegacySearch(raw);
+  const t = legacyMode ? stripLegacyWord(raw) : raw;
+  const isLegacy = (a: any) => (parksOf.get(Number(a.id)) ?? []).length === 0;
+  const legacyCount = accounts.filter(isLegacy).length;
+  const searched = accounts
+    .filter((a) => isLegacy(a) === legacyMode)
+    .filter((a) => !t || [a.name, a.fichaName, a.email, a.nif].some((x) => String(x ?? "").toLowerCase().includes(t)));
   const ledger = await loadLedger(db, searched.map((a) => Number(a.id)));
   const byAccount = new Map<number, LedgerRowIn[]>();
   for (const r of ledger) {
@@ -92,7 +100,16 @@ export async function listProAccounts(db: any, o: Opts & { search?: string | nul
   // em dívida primeiro (mais antigo primeiro), depois por nome
   out.sort((x, y) => Number(y.hasDue) - Number(x.hasDue) || String(x.summary.oldestDue ?? "9999").localeCompare(String(y.summary.oldestDue ?? "9999")) || String(x.name ?? "").localeCompare(String(y.name ?? ""), "pt"));
   const lastSync = rowsOf(await db.execute(sql`SELECT ${DT("MAX(syncedAt)")} AS at FROM crm_pro_accounts`))[0]?.at ?? null;
-  return { rows: out, lastSync, canSeeTotals: o.canSeeTotals };
+  return { rows: out, lastSync, canSeeTotals: o.canSeeTotals, legacyMode, legacyCount };
+}
+
+/** A procura pede os Pro antigos? ("antigo", "antigos", "pro antigo", "legacy"). PURA. */
+export function isLegacySearch(s: string): boolean {
+  return /(^|\s)(antigos?|legacy)(\s|$)/i.test(s.trim());
+}
+/** Tira a palavra dos Pro antigos da procura (o resto filtra por nome/email/NIF). PURA. */
+export function stripLegacyWord(s: string): string {
+  return s.replace(/(^|\s)(pro\s+)?(antigos?|legacy)(?=\s|$)/gi, " ").replace(/\s+/g, " ").trim();
 }
 
 /** Conta Pro de uma ficha (ou de uma ficha junta a esta), com os movimentos. null = a ficha não é Pro. */

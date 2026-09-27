@@ -3638,6 +3638,28 @@ export const crmProLedger = mysqlTable("crm_pro_ledger", {
 	index("idx_crm_pro_ledger_booking").on(table.bookingExternalId),
 ]);
 
+// ─── CRM fase 3: parceiros e parques (dados ao vivo da Multipark) — migração 0225 ──
+// Só o que é do CRM: ligação às Parcerias, notas e contacto.
+
+export const crmPartnerLinks = mysqlTable("crm_partner_links", {
+	id: int().autoincrement().primaryKey(),
+	/** partner ("Partner".userId) | park ("Park".id) */
+	kind: varchar({ length: 8 }).notNull(),
+	mpId: varchar({ length: 64 }).notNull(),
+	partnershipId: int(),
+	notes: text(),
+	contactName: varchar({ length: 255 }),
+	contactEmail: varchar({ length: 320 }),
+	contactPhone: varchar({ length: 40 }),
+	updatedBy: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_crm_partner_link").on(table.kind, table.mpId),
+	index("idx_crm_partner_link_partnership").on(table.partnershipId),
+]);
+
 // ─── Google Drive / Docs / Sheets — migração 0160 ───────────────────────────
 // Ficheiros do Drive ligados a um registo (só a referência, nunca o conteúdo).
 export const googleDriveLinks = mysqlTable("google_drive_links", {
