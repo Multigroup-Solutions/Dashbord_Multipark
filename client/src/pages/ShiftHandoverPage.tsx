@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { ClipboardCheck, History, BarChart3, Loader2, Sun, Moon, CheckCircle2, XCircle, AlertTriangle, Clock, RefreshCw } from "lucide-react";
+import { ClipboardCheck, History, BarChart3, Radio, Loader2, Sun, Moon, CheckCircle2, XCircle, AlertTriangle, Clock, RefreshCw } from "lucide-react";
 import { useTableSort, Th } from "@/components/SortableTable";
 import { fmtPTDate } from "@/lib/lisbonTime";
 import { Plus, Trash2 } from "lucide-react";
@@ -54,6 +54,7 @@ import {
 } from "@shared/shiftHandoverAuto";
 import { AiSummaryBox, OpenItemsEditor, ShiftHandoverDraftPanel } from "@/components/ShiftHandoverDraftPanel";
 import HandoverRepeatsCard from "@/components/aiOps/HandoverRepeatsCard";
+import { ShiftHandoverLiveState } from "@/components/ShiftHandoverLiveState";
 import { Checkbox } from "@/components/ui/checkbox";
 
 // ─── PASSAGEM DE TURNO (pedido do Jorge, 2026-08-06) ─────────────────────────
@@ -132,6 +133,7 @@ export default function ShiftHandoverPage() {
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="preencher"><ClipboardCheck className="w-4 h-4 mr-1" />Preencher</TabsTrigger>
+          <TabsTrigger value="aovivo"><Radio className="w-4 h-4 mr-1" />Estado do parque (ao vivo)</TabsTrigger>
           <TabsTrigger value="historico"><History className="w-4 h-4 mr-1" />Histórico</TabsTrigger>
           {isSupervisor && <TabsTrigger value="dashboard"><BarChart3 className="w-4 h-4 mr-1" />Resumo do dia</TabsTrigger>}
         </TabsList>
@@ -140,6 +142,12 @@ export default function ShiftHandoverPage() {
         ) : (
           <>
             <TabsContent value="preencher"><HandoverForm cityState={cityState as CityState} isSupervisor={isSupervisor} userId={user?.id ?? null} /></TabsContent>
+            <TabsContent value="aovivo">
+              <ShiftHandoverLiveState
+                city={(cityState as CityState).city}
+                citySelect={<div><Label className="text-xs mb-1 block">Cidade</Label><CitySelect city={cityState.city} allowed={cityState.allowed} onChange={cityState.setCity} /></div>}
+              />
+            </TabsContent>
             <TabsContent value="historico"><HandoverHistory cityState={cityState as CityState} userId={user?.id ?? null} /></TabsContent>
             {isSupervisor && <TabsContent value="dashboard"><SupervisorDashboard cityState={cityState as CityState} /></TabsContent>}
           </>

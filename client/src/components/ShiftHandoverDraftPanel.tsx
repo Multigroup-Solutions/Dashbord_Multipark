@@ -53,6 +53,17 @@ export function ShiftHandoverDraftPanel({ draft, loading, onRefresh }: { draft: 
           </Button>
         </div>
         <p className="text-[11px] text-muted-foreground">Só leitura — é guardado com a passagem. Próximo turno: {nextLabel}.</p>
+        {draft.source && !draft.source.live && (
+          <p className="text-[11px] text-amber-700">Sem BD da Multipark ao vivo ({draft.source.reason ?? "indisponível"}) — reservas, entregas pendentes, coberto e ocorrências vêm das cópias do dashboard.</p>
+        )}
+        {draft.liveSummary && (
+          <p className="text-[11px] text-muted-foreground">
+            Ao vivo (BD da Multipark): {draft.liveSummary.inPark} carros no parque · {draft.liveSummary.inProgress} operações em curso
+            {draft.liveSummary.overdue ? ` · ${draft.liveSummary.overdue} passaram a hora de saída` : ""}
+            {` · ${draft.liveSummary.cashNotClosed} com caixa por fechar`}
+            {draft.liveSummary.blocksTomorrow ? ` · ${draft.liveSummary.blocksTomorrow} bloqueio(s) amanhã` : ""} — detalhe no separador "Estado do parque (ao vivo)".
+          </p>
+        )}
       </CardHeader>
       <CardContent className="space-y-2">
         <Section title={`Equipa — agora (TL: ${tl(draft.people.current)}) · a seguir (TL: ${tl(draft.people.next)})`} count={draft.people.next.length} link="/extras-dia" linkLabel="escala">
@@ -92,7 +103,7 @@ export function ShiftHandoverDraftPanel({ draft, loading, onRefresh }: { draft: 
           {draft.lostFound.map((x) => <p key={x.id}>#{x.id} {x.clientName} — {x.description.slice(0, 100)} <span className="text-muted-foreground">({x.status})</span></p>)}
         </Section>
         <Section title="Ocorrências abertas" count={c.incidentsOpen} link="/ocorrencias" linkLabel="ocorrências" tone="warn">
-          {draft.incidents.map((x) => <p key={x.id}>#{x.id}{x.plate ? ` ${x.plate}` : ""} — {x.description.slice(0, 100)} <span className="text-muted-foreground">({x.severity})</span></p>)}
+          {draft.incidents.map((x) => <p key={x.id}>{typeof x.id === "number" ? `#${x.id}` : "•"}{x.plate ? ` ${x.plate}` : ""} — {x.description.slice(0, 100)} <span className="text-muted-foreground">({x.severity})</span></p>)}
         </Section>
         <Section title="WhatsApp por ler" count={c.whatsappUnread} link="/whatsapp" linkLabel="WhatsApp" tone="warn">
           {draft.whatsapp.map((x) => <p key={x.id}>{x.name} · {x.unreadCount} por ler</p>)}
