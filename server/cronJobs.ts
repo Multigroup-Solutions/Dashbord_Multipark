@@ -139,6 +139,24 @@ export async function crmSuggestionsCron(o: { deadlineAt: number }): Promise<Cro
   }
 }
 
+// ─── Serviços das reservas → tarefas ─────────────────────────────────────────
+
+/**
+ * Serviços extra das reservas (BD Multipark ao vivo) → tarefas, pelas regras
+ * de Definições → Parâmetros → "Serviços → tarefas" (server/serviceTasks.ts).
+ * Idempotente; sem BD da Multipark ou sem nenhum tipo ligado → nota (ok).
+ */
+export async function serviceTasksCron(o: { deadlineAt: number }): Promise<CronJobRun> {
+  try {
+    const { runServiceTasks } = await import("./serviceTasks");
+    const r = await runServiceTasks({ deadlineAt: o.deadlineAt - 2_000 });
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: r.done };
+  } catch (err) {
+    console.error("[cron services-tasks] falhou:", msg(err, 200));
+    return fail(err);
+  }
+}
+
 // ─── Manutenção diária + recolha GPS (daily-ops) ─────────────────────────────
 
 /** Folga mínima para arrancar um passo novo do daily-ops. */

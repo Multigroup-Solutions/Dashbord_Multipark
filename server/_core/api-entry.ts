@@ -288,6 +288,13 @@ app.get("/api/cron/crm-suggestions", async (req, res) => {
   sendCronRun(res, await crmSuggestionsCron({ deadlineAt: manualDeadline() }));
 });
 
+// Serviços extra das reservas → tarefas (Definições → Parâmetros → Serviços → tarefas).
+app.get("/api/cron/services-tasks", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { serviceTasksCron, sendCronRun } = await import("../cronJobs");
+  sendCronRun(res, await serviceTasksCron({ deadlineAt: manualDeadline() }));
+});
+
 // "Pressão" do Extras-Dia (60 dias da BD Multipark → ops_pressure_stats).
 // ?cursor=… retoma no grupo seguinte (vem na resposta quando done:false).
 app.get("/api/cron/extras-pressure", async (req, res) => {
