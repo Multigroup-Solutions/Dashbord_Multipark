@@ -6927,19 +6927,6 @@ export const appRouter = router({
         return getSyncLogs(input?.limit ?? 50, types);
       }),
 
-    // Buscar history de um agente (por nome) num dia (chama /agent/history
-    // por cada parque configurado e agrega resultados na DB).
-    fetchAgentHistory: protectedProcedure
-      .input(z.object({
-        agentName: z.string().min(1).max(256),
-        date: z.string(), // YYYY-MM-DD
-      }))
-      .mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "sincronizacao", "edit");
-        const { fetchAgentHistoryByName } = await import("./jobs/multiparkBookingSync");
-        return fetchAgentHistoryByName(input.agentName, input.date);
-      }),
-
     // Avaliação operacional do dia: por extra (com métricas) + agregado
     // por turno + agregado total. TL recebe também score da equipa.
     dayEvaluation: protectedProcedure
@@ -6947,7 +6934,9 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "avaliacao_operacional", "view");
         const { evaluateDay } = await import("./multiparkEvaluation");
-        return evaluateDay(input.date);
+        // Movimentos AO VIVO da BD da Multipark (cidades do utilizador); GPS,
+        // ponto e escala da nossa BD. Sem BD deles: cópia local + aviso.
+        return evaluateDay(input.date, { cities: scopedCityNames() });
       }),
 
     // Set multipark mapping para um empregado (nome curto + userId)
@@ -6970,41 +6959,31 @@ export const appRouter = router({
         return { success: true };
       }),
 
-    // Lista summary do que está guardado em multipark_booking_history para
-    // um agente num dia (após fetchAgentHistory).
+    // Movimentos de um agente num dia operacional, lidos AO VIVO da BD da
+    // Multipark ("History": quem, quando, que fase, que reserva). Pelos ids do
+    // agente (os da avaliação do dia); sem ids, procura-os pelo nome em "Agent".
+    // Nunca lança por falta de BD — devolve { available:false, reason }.
     agentHistorySummary: protectedProcedure
       .input(z.object({
-        agentName: z.string().min(1).max(256),
-        date: z.string(), projectId: z.number().optional(),
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        agentUserIds: z.array(z.string().min(1).max(128)).max(20).optional(),
+        agentName: z.string().max(256).optional(),
+        projectId: z.number().optional(),
       }))
       .query(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "rh", "view");
-        const { getDb } = await import("./db");
-        const db = await getDb(); if (!db) return null;
-        const { multiparkBookingHistory } = await import("../drizzle/schema");
-        const { sql: dsql, and: dand, eq: deq, gte: dgte, lt: dlt } = await import("drizzle-orm");
-        const start = `${input.date} 00:00:00`;
-        const end = new Date(input.date + "T00:00:00");
-        end.setDate(end.getDate() + 1);
-        const endStr = end.toISOString().slice(0, 19).replace("T", " ");
-        const rows = await db
-          .select()
-          .from(multiparkBookingHistory)
-          .where(
-            dand(
-              deq(multiparkBookingHistory.agentName, input.agentName),
-              bookingHistoryScope(multiparkBookingHistory.bookingExternalId),
-              dgte(multiparkBookingHistory.actionTime, start),
-              dlt(multiparkBookingHistory.actionTime, endStr),
-            ),
-          )
-          .orderBy(multiparkBookingHistory.actionTime);
-        const byType: Record<string, number> = {};
-        for (const r of rows) {
-          const k = r.changeType ?? "?";
-          byType[k] = (byType[k] ?? 0) + 1;
+        requireAccess(ctx.user, "avaliacao_operacional", "view");
+        const { findAgentIdsByName, getAgentDayMovements } = await import("./multiparkDb/movements");
+        let ids = input.agentUserIds ?? [];
+        if (ids.length === 0 && input.agentName?.trim()) {
+          const found = await findAgentIdsByName(input.agentName);
+          if (!found.available) return { available: false as const, reason: found.reason, code: found.code };
+          ids = found.data;
         }
-        return { total: rows.length, byType, items: rows };
+        const r = await getAgentDayMovements({ day: input.date, userIds: ids, cities: scopedCityNames() });
+        if (!r.available) return { available: false as const, reason: r.reason, code: r.code };
+        const byType: Record<string, number> = {};
+        for (const m of r.data.rows) byType[m.changeType] = (byType[m.changeType] ?? 0) + 1;
+        return { available: true as const, agentUserIds: ids, total: r.data.rows.length, truncated: r.data.truncated, byType, items: r.data.rows };
       }),
 
     // Liga (ou desliga) um nome de agente Multipark a um colaborador. Único:

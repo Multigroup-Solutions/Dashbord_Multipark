@@ -14,7 +14,7 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { protectedProcedure, router } from "./_core/trpc";
-import { assertEmployeeAccess } from "./cityScope";
+import { assertEmployeeAccess, cityScope } from "./cityScope";
 import { getEmployeeByUserId, logActivity } from "./db";
 import {
   createAdjustment,
@@ -73,6 +73,16 @@ async function employeeDetail(employeeId: number, from: string, to: string) {
   return { days, totals: totalsOf(days), disputes };
 }
 
+/** Cidades do pedido (Park.city). undefined = todas; [] = nenhuma. */
+function scopedCityNames(): string[] | undefined {
+  const a = cityScope.getStore();
+  if (!a || a.all) return undefined;
+  return a.cityNames ?? (a.cityName ? [a.cityName] : []);
+}
+
+/** Máximo de dias do resumo vivo (uma leitura agregada na BD da Multipark). */
+export const LIVE_MOVEMENTS_MAX_DAYS = 62;
+
 export const evaluationRouter = router({
   /** Ranking do período (soma dos dias) — frontoffice+, âmbito de cidade. */
   ranking: protectedProcedure.input(rangeSchema).query(async ({ ctx, input }) => {
@@ -101,6 +111,35 @@ export const evaluationRouter = router({
         openDisputes: openBy.get(employeeId) ?? 0,
       };
     }).sort((a, b) => b.score.totalPoints - a.score.totalPoints || a.employeeName.localeCompare(b.employeeName));
+  }),
+
+  /**
+   * Movimentos do período lidos AO VIVO da BD da Multipark, por pessoa (as
+   * várias contas de agente de uma ficha somam): fases, reservas, check-ins
+   * e check-outs assinados, ocorrências e avaliações dos clientes. Âmbito de
+   * cidade pelo parque (Park.city). Nunca lança por falta de BD.
+   */
+  liveMovements: protectedProcedure.input(rangeSchema).query(async ({ ctx, input }) => {
+    requireRole(ctx.user.role, "frontoffice");
+    if (daysInRange(input.from, input.to).length > LIVE_MOVEMENTS_MAX_DAYS) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: `No máximo ${LIVE_MOVEMENTS_MAX_DAYS} dias.` });
+    }
+    const { getAgentMovementSummaries, sumAgentSummaries } = await import("./multiparkDb/movements");
+    const r = await getAgentMovementSummaries({ startDay: input.from, endDay: input.to, byDay: false, cities: scopedCityNames() });
+    if (!r.available) return { available: false as const, reason: r.reason, code: r.code };
+    const { loadEvaluationIdentity } = await import("./evaluationIdentity");
+    const { identity } = await loadEvaluationIdentity();
+    const groups = new Map<string, { employeeId: number | null; name: string; kind: string; list: typeof r.data }>();
+    for (const s of r.data) {
+      const who = identity.agent(s.agentUserId, s.agentName);
+      if (who.kind === "ignorado") continue;
+      const g = groups.get(who.key) ?? { employeeId: who.employeeId, name: who.name, kind: who.kind, list: [] };
+      g.list.push(s);
+      groups.set(who.key, g);
+    }
+    const rows = Array.from(groups.entries()).map(([key, g]) => ({ key, employeeId: g.employeeId, name: g.name, kind: g.kind, ...sumAgentSummaries(g.list)! }))
+      .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
+    return { available: true as const, rows };
   }),
 
   /** Detalhe (gaveta): dias e métricas de uma pessoa. O próprio vê sempre os seus. */
@@ -166,17 +205,28 @@ export const evaluationRouter = router({
     requireRole(ctx.user.role, "supervisor");
     const today = currentOperationalDay();
     const to = input.to > today ? today : input.to;
-    if (input.from > to) return { days: 0, written: 0, removed: 0 };
+    if (input.from > to) return { days: 0, written: 0, removed: 0, source: "multipark" as const, notice: null, partial: false, until: to };
     const days = daysInRange(input.from, to);
     if (days.length > 93) throw new TRPCError({ code: "BAD_REQUEST", message: "No máximo 93 dias de cada vez." });
-    let written = 0, removed = 0;
+    // Cada fatia de 7 dias lê os movimentos AO VIVO da BD da Multipark (uma
+    // consulta agregada). Para caber na função (60 s), pára a tempo e diz até
+    // onde chegou — o cron diário faz o resto das 4 semanas.
+    const deadline = Date.now() + 40_000;
+    let written = 0, removed = 0, doneDays = 0;
+    let source: "multipark" | "copia" = "multipark";
+    let notice: string | null = null;
     for (let i = 0; i < days.length; i += 7) {
-      const r = await recomputeRange(days[i], days[Math.min(i + 6, days.length - 1)]);
+      if (i > 0 && Date.now() > deadline) break;
+      const end = Math.min(i + 6, days.length - 1);
+      const r = await recomputeRange(days[i], days[end]);
       written += r.written;
       removed += r.removed;
+      doneDays = end + 1;
+      if (r.source === "copia") { source = "copia"; notice = r.notice ?? notice; }
     }
-    await logActivity({ userId: ctx.user.id, action: "generate", entity: "employee_day_metrics", details: `Avaliação recalculada ${input.from} a ${to}: ${written} dia(s)` });
-    return { days: days.length, written, removed };
+    const partial = doneDays < days.length;
+    await logActivity({ userId: ctx.user.id, action: "generate", entity: "employee_day_metrics", details: `Avaliação recalculada ${input.from} a ${days[Math.max(0, doneDays - 1)]}: ${written} dia(s)${source === "copia" ? " (movimentos da cópia local)" : ""}` });
+    return { days: doneDays, written, removed, source, notice, partial, until: days[Math.max(0, doneDays - 1)] };
   }),
 
   /** Ajuste manual (delta sobre uma métrica de um dia) — supervisor+, com motivo. */

@@ -34,8 +34,8 @@
 | Disponibilidade (própria) | próprio VE | próprio VE | próprio VE | próprio VE | próprio VE | próprio VE | próprio VE | próprio VE | próprio VE |
 | **Pessoas** |  |  |  |  |  |  |  |  |  |
 | Formação | próprio VE | próprio VE | próprio VE | equipa (cidade) VE | cidade VE | nacional VE | nacional VE | nacional VEXG | nacional VEXG |
-| Avaliação Individual | — | próprio V | próprio V | equipa (cidade) V | cidade VE | nacional VE | nacional VE | nacional VEXG | nacional VEXG |
-| Avaliação Operacional | — | — | — | — | cidade V | nacional V | nacional V | nacional VX | nacional VX |
+| Avaliação (4 semanas e própria) | — | próprio V | próprio V | equipa (cidade) V | cidade VE | nacional VE | nacional VE | nacional VEXG | nacional VEXG |
+| Avaliação — Dia | — | — | — | — | cidade V | nacional V | nacional V | nacional VX | nacional VX |
 | Recursos Humanos | — | — | — | equipa (cidade) VE | cidade VE | nacional VE | nacional VE | nacional VEXG | nacional VEXG |
 | RH — ordenados e processamento | — | — | — | — | — | — | — | nacional VEXG | nacional VEXG |
 | Leads de Extras | — | — | — | cidade VE | cidade VE | nacional VE | nacional VE | nacional VEG | nacional VEG |

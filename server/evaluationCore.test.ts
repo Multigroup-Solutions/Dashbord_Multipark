@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  actionRowsToCounts,
   complaintIsConfirmed,
   computeEmployeeDays,
   incidentIsAccident,
@@ -140,6 +141,36 @@ describe("motor (dia operacional completo)", () => {
     });
     expect(m.weightedActions).toBe(5 + 2 + 3 + 3);
     expect(scoreOf(m).totalPoints).toBe(13 - 10);
+  });
+
+  it("contagens já agregadas (BD da Multipark) dão os mesmos números que as linhas soltas", () => {
+    const fromRows = computeEmployeeDays(base);
+    const counts = actionRowsToCounts(base.actions);
+    expect(counts.find((c) => c.changeType === "MOVEMENT" && c.parkingMoves === 1)).toBeTruthy();
+    const fromCounts = computeEmployeeDays({ ...base, actions: [], actionCounts: counts });
+    expect(fromCounts.rows[0].metrics).toEqual(fromRows.rows[0].metrics);
+    expect(fromCounts.rows[0].actionsByType).toEqual(fromRows.rows[0].actionsByType);
+    expect(fromCounts.unresolved.get("2026-09-24")?.get("agent:cliente")?.actions).toBe(1);
+  });
+
+  it("contagens vivas: dia/turno, levar ao parque e entregas atrasadas vêm da BD; ocorrências da app contam como reportadas", () => {
+    const out = computeEmployeeDays({
+      ...base, actions: [], ponto: [], assignments: [],
+      actionCounts: [
+        { agentUserId: "mp-1", agentName: "Gelson Sousa", day: "2026-09-24", shift: "morning", changeType: "MOVEMENT", n: 3, parkingMoves: 1, lateDeliveries: 0 },
+        { agentUserId: "mp-1", agentName: "Gelson Sousa", day: "2026-09-24", shift: "night", changeType: "CHECK_OUT", n: 2, parkingMoves: 0, lateDeliveries: 1 },
+        { agentUserId: "mp-1", agentName: "Gelson Sousa", day: "2026-09-25", shift: "morning", changeType: "CHECK_IN", n: 5, parkingMoves: 0, lateDeliveries: 0 }, // fora do intervalo
+        { agentUserId: "mp-2", agentName: "Outro Agente", day: "2026-09-24", shift: "night", changeType: "UPDATE", n: 4, parkingMoves: 0, lateDeliveries: 0 },
+      ],
+      agentOccurrences: [
+        { agentUserId: "mp-1", agentName: "Gelson Sousa", day: "2026-09-24", n: 2 },
+        { agentUserId: "mp-2", agentName: "Outro Agente", day: "2026-09-24", n: 9 }, // sem ficha: não conta
+      ],
+    });
+    expect(out.rows).toHaveLength(1);
+    expect(out.rows[0].metrics).toMatchObject({ actions: 5, actionsMorning: 3, actionsNight: 2, movements: 3, parkingMoves: 1, entregas: 2, lateServices: 1, delays: 1, incidentsReported: 2 });
+    expect(out.rows[0].actionsByType).toEqual({ MOVEMENT: 3, CHECK_OUT: 2 });
+    expect(out.unresolved.get("2026-09-24")?.get("agent:outro agente")).toMatchObject({ actions: 4, byType: { UPDATE: 4 } });
   });
 
   it("velocidade, reclamações confirmadas e acidentes vão para o dia certo", () => {

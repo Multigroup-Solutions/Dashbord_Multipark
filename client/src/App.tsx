@@ -35,7 +35,7 @@ import CrmReviewPage from "./pages/CrmReviewPage";
 import ContactsPage from "./pages/ContactsPage";
 import ServicesPage from "./pages/ServicesPage";
 import IncidentsPage from "./pages/IncidentsPage";
-import PerformancePage from "./pages/PerformancePage";
+import AvaliacaoPage from "./pages/AvaliacaoPage";
 import InvoicesPage from "./pages/InvoicesPage";
 import PartnershipsPage from "./pages/PartnershipsPage";
 import PartnerInferPage from "./pages/PartnerInferPage";
@@ -44,7 +44,6 @@ import BillingDiagnosePage from "./pages/BillingDiagnosePage";
 import AnnualPage from "./pages/AnnualPage";
 import OperacoesPage from "./pages/OperacoesPage";
 import ExtrasDiaPage from "./pages/ExtrasDiaPage";
-import AvaliacaoOperacionalPage from "./pages/AvaliacaoOperacionalPage";
 import BookingFilePage from "./pages/BookingFilePage";
 import InvitePage from "./pages/InvitePage";
 import DisponibilidadePage from "./pages/DisponibilidadePage";
@@ -207,7 +206,7 @@ function Router() {
         {() => (<DashboardLayout><IncidentsPage /></DashboardLayout>)}
       </Route>
       <Route path="/avaliacao">
-        {() => (<DashboardLayout><PerformancePage /></DashboardLayout>)}
+        {() => (<DashboardLayout><AvaliacaoPage /></DashboardLayout>)}
       </Route>
       <Route path="/faturacao">
         {() => (<DashboardLayout><InvoicesPage /></DashboardLayout>)}
@@ -280,7 +279,7 @@ function Router() {
         {() => (<DashboardLayout><ShiftHandoverPage /></DashboardLayout>)}
       </Route>
       <Route path="/avaliacao-operacional">
-        {() => (<DashboardLayout><AvaliacaoOperacionalPage /></DashboardLayout>)}
+        {() => <Redirect to="/avaliacao?tab=dia" replace />}
       </Route>
       <Route path="/api-keys">
         {() => (<DashboardLayout><ApiKeysPage /></DashboardLayout>)}

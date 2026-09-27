@@ -12,10 +12,17 @@
  *  - Por turno e total do dia.
  *
  * Abrir o dia recalcula-o e grava-o (é o mesmo cálculo do cron diário).
+ *
+ * Fontes (plano-duas-bd.md, B5): os MOVIMENTOS (quem mexeu em que reserva,
+ * quando, em que fase) vêm AO VIVO da BD da Multipark ("History", "Booking",
+ * "Occurrence", "BookingReview" — server/multiparkDb/movements.ts); o GPS
+ * (Zello), o ponto e a escala vêm da nossa BD. Sem a BD da Multipark, o dia
+ * calcula-se na mesma com a cópia local e a página mostra o aviso.
  */
 import { listAssignments } from "./extrasDia";
 import { agentKeyOf, loadEvaluationIdentity, shortNameOf } from "./evaluationIdentity";
-import { loadEvaluatedDays, recomputeRange } from "./evaluationEngine";
+import { loadEvaluatedDays, recomputeRange, type MovementSource } from "./evaluationEngine";
+import type { AgentMovementSummary } from "./multiparkDb/movements";
 import {
   actionPoints,
   emptyDayMetrics,
@@ -57,6 +64,12 @@ export interface PersonEvaluation {
   weightedPerHour: number | null;
   costPerAction: number; // 0 se totalActions === 0
   hasAdjustments: boolean;
+  /**
+   * Resumo AO VIVO da BD da Multipark (todas as contas de agente desta
+   * pessoa): fases, reservas, 1.ª/última ação, check-ins/outs assinados,
+   * ocorrências e avaliações dos clientes. null = sem movimentos ou sem BD.
+   */
+  live: (AgentMovementSummary & { agentUserIds: string[] }) | null;
   // Apenas para TLs: agregado dos seus drivers (mesmo turno)
   teamAggregate?: {
     drivers: number;
@@ -82,6 +95,10 @@ export interface ShiftEvaluation {
 
 export interface DayEvaluation {
   date: string;
+  /** De onde vieram os movimentos (BD da Multipark ao vivo ou cópia local). */
+  source: MovementSource;
+  /** Aviso quando a BD da Multipark não respondeu. */
+  notice: string | null;
   shifts: ShiftEvaluation[];
   totals: {
     people: number;
@@ -97,16 +114,33 @@ const addByType = (into: Record<string, number>, from: Record<string, number>) =
   for (const [k, v] of Object.entries(from)) into[k] = (into[k] ?? 0) + v;
 };
 
-export async function evaluateDay(date: string): Promise<DayEvaluation> {
+export async function evaluateDay(date: string, opts: { cities?: string[] } = {}): Promise<DayEvaluation> {
   const assignments = await listAssignments(date);
   if (assignments.length === 0) {
-    return { date, shifts: [], totals: { people: 0, totalActions: 0, weightedActions: 0, totalCost: 0, byType: {}, costPerAction: 0 } };
+    return { date, source: "multipark", notice: null, shifts: [], totals: { people: 0, totalActions: 0, weightedActions: 0, totalCost: 0, byType: {}, costPerAction: 0 } };
   }
 
   // Mesmo cálculo do cron (grava o dia) + ajustes manuais por cima
   const computed = await recomputeRange(date, date);
   // Mesma identidade do motor: a linha da escala sem ficha liga-se pelo nome completo
   const { identity } = await loadEvaluationIdentity();
+
+  // Resumo vivo por agente (só quando a BD da Multipark respondeu ao motor)
+  const liveByKey = new Map<string, AgentMovementSummary[]>();
+  if (computed.source === "multipark") {
+    const { getAgentMovementSummaries } = await import("./multiparkDb/movements");
+    const r = await getAgentMovementSummaries({ startDay: date, byDay: false, cities: opts.cities });
+    if (r.available) {
+      for (const s of r.data) {
+        const who = identity.agent(s.agentUserId, s.agentName);
+        if (who.kind === "ignorado") continue;
+        const list = liveByKey.get(who.key) ?? [];
+        list.push(s);
+        liveByKey.set(who.key, list);
+      }
+    }
+  }
+  const { sumAgentSummaries } = await import("./multiparkDb/movements");
   const resolved = assignments.map((a) => ({ ...a, employeeId: identity.assignment({ employeeId: a.employeeId, personName: a.personName }).employeeId }));
   const empIds = Array.from(new Set(resolved.map((a) => a.employeeId).filter((x): x is number => x != null)));
   // a escala já vem filtrada pela cidade (listAssignments → cityNameScope)
@@ -150,6 +184,8 @@ export async function evaluateDay(date: string): Promise<DayEvaluation> {
     }
     const score = scoreOf(m);
     const ph = perHourMetrics(m, score);
+    const liveKey = a.employeeId != null ? `emp:${a.employeeId}` : agentKeyOf(shortName);
+    const live = first || a.employeeId == null ? sumAgentSummaries(liveByKey.get(liveKey) ?? []) : null;
     return {
       assignmentId: a.id,
       employeeId: a.employeeId,
@@ -178,6 +214,7 @@ export async function evaluateDay(date: string): Promise<DayEvaluation> {
       weightedPerHour: ph.weightedPerHour,
       costPerAction: m.actions > 0 ? round2(cost / m.actions) : 0,
       hasAdjustments,
+      live,
     };
   });
 
@@ -212,6 +249,8 @@ export async function evaluateDay(date: string): Promise<DayEvaluation> {
   for (const p of people) addByType(dayByType, p.byType);
   return {
     date,
+    source: computed.source,
+    notice: computed.notice,
     shifts,
     totals: {
       people: people.length,

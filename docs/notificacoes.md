@@ -63,7 +63,7 @@ O Super Admin entra sempre; o Admin entra sozinho quando a matriz lhe dá o mód
 | Formação em atraso (equipa) | `training_overdue` | Formação (view) | por cidade | Team Leader, Supervisor, Admin, Super Admin | — | não | Formação obrigatória em atraso escalada às chefias. |
 | Promoções por aprovar | `training_promotion` | Formação (edit) | por cidade | Supervisor, Backoffice, Admin, Super Admin | — | não | Exame de carreira aprovado → promoção por aprovar. |
 | A tua formação | `my_training` | Formação (view) | a pessoa | Pessoal | — | não | Lembrete de formação por concluir; promoção aprovada. |
-| Contestações da avaliação | `evaluation_dispute` | Avaliação Individual (edit) | por cidade | Supervisor, Admin, Super Admin | — | não | Colaborador contesta um dia/métrica da avaliação. |
+| Contestações da avaliação | `evaluation_dispute` | Avaliação (4 semanas e própria) (edit) | por cidade | Supervisor, Admin, Super Admin | — | não | Colaborador contesta um dia/métrica da avaliação. |
 | A tua avaliação | `my_evaluation` | Minha ficha (view) | a pessoa | Pessoal | — | não | Contestação aceite ou recusada. |
 
 ### Financeiro

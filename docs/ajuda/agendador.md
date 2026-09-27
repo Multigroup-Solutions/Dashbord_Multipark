@@ -40,7 +40,7 @@ Pronto. Não é preciso mais nada no GitHub.
 | Manutenção diária + recolha GPS do Zello final (D-2) | 1×/dia a partir das 04:30 |
 | RH — regra documental dos extras (documentos em falta) | 1×/semana, segunda a partir das 04:45 |
 | Briefing diário e relatórios de segunda | 1×/dia a partir das 07:30 |
-| Avaliação (4 semanas) | 1×/dia, depois da manutenção diária (o mais tardar às 06:00) |
+| Avaliação (4 semanas; lê os movimentos em tempo real da BD da Multipark) | 1×/dia, depois da manutenção diária (o mais tardar às 06:00) |
 | Google Ads e Meta Ads | 1×/dia a partir das 05:45 (última semana) e no dia 2 de cada mês (mês anterior) |
 | Web & SEO | 1×/dia a partir das 09:00 (ou da hora escolhida nas Definições, se for mais tarde) |
 

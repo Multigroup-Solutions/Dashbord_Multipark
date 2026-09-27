@@ -1,10 +1,18 @@
 /**
  * Motor da avaliação — parte com BD.
  *
- *  - `recomputeRange(start, end)`: lê as fontes (ações Multipark, ponto,
- *    escala, ocorrências, reclamações, alertas de velocidade, penalizações),
- *    calcula (evaluationCore) e grava em `employee_day_metrics` (upsert +
- *    limpeza das linhas desse intervalo que deixaram de existir).
+ *  - `recomputeRange(start, end)`: lê as fontes, calcula (evaluationCore) e
+ *    grava em `employee_day_metrics` (upsert + limpeza das linhas desse
+ *    intervalo que deixaram de existir). Fontes:
+ *      · BD da Multipark AO VIVO (server/multiparkDb/movements.ts): os
+ *        movimentos de cada agente ("History", já agregados no Postgres com
+ *        as regras de "levar ao parque" e entregas atrasadas) e as
+ *        ocorrências que criou na app ("Occurrence");
+ *      · a nossa BD: ponto, escala, ocorrências/reclamações nossas, alertas
+ *        de velocidade (GPS Zello) e penalizações.
+ *    Se a BD da Multipark não responder, os movimentos vêm da cópia local
+ *    (multipark_booking_history) e o resultado diz `source: "copia"` com o
+ *    motivo — nunca rebenta.
  *  - `runEvaluationRecompute`: o cron diário — últimas 4 semanas, em fatias
  *    de 7 dias dentro do prazo (done/nextOffset, como o multipark-future).
  *  - `loadEvaluatedDays`: lê os dias guardados + ajustes manuais por cima
@@ -23,7 +31,14 @@ import {
   employees,
 } from "../drizzle/schema";
 import { employeeScope } from "./cityScope";
-import { computeEmployeeDays, type EmployeeDayRow, type EngineEmployee, type EngineOutput } from "./evaluationCore";
+import {
+  computeEmployeeDays,
+  type ActionCountRow,
+  type AgentOccurrenceCount,
+  type EmployeeDayRow,
+  type EngineEmployee,
+  type EngineOutput,
+} from "./evaluationCore";
 import { loadEvaluationIdentity } from "./evaluationIdentity";
 import {
   METRIC_KEYS,
@@ -56,12 +71,33 @@ export function currentOperationalDay(now: Date = new Date()): string {
 
 // ─── Cálculo ─────────────────────────────────────────────────────────────────
 
-/** Lê as fontes e calcula (sem gravar). */
-export async function computeRange(startDay: string, endDay: string): Promise<EngineOutput> {
+/** De onde vieram os movimentos: BD da Multipark ao vivo ou a nossa cópia. */
+export type MovementSource = "multipark" | "copia";
+
+export interface ComputeResult extends EngineOutput {
+  source: MovementSource;
+  /** Aviso para a página quando a BD da Multipark não respondeu. */
+  notice: string | null;
+}
+
+type LiveInputsReader = (startDay: string, endDay: string) => Promise<
+  | { available: true; data: { actions: ActionCountRow[]; occurrences: AgentOccurrenceCount[] } }
+  | { available: false; reason: string }
+>;
+
+const defaultLiveReader: LiveInputsReader = async (s, e) => (await import("./multiparkDb/movements")).getEngineLiveInputs(s, e);
+
+/** Lê as fontes e calcula (sem gravar). `readLive` só muda nos testes. */
+export async function computeRange(startDay: string, endDay: string, readLive: LiveInputsReader = defaultLiveReader): Promise<ComputeResult> {
   if (!DAY_RE.test(startDay) || !DAY_RE.test(endDay) || endDay < startDay) throw new Error("Intervalo inválido");
   const db = await getDb();
-  const empty: EngineOutput = { rows: [], unresolved: new Map() };
+  const empty: ComputeResult = { rows: [], unresolved: new Map(), source: "copia", notice: null };
   if (!db) return empty;
+
+  // Movimentos + ocorrências da app: AO VIVO; sem BD deles, a cópia local.
+  const live = await readLive(startDay, endDay).catch((err) => ({ available: false as const, reason: String(err?.message ?? err) }));
+  const source: MovementSource = live.available ? "multipark" : "copia";
+  const notice = live.available ? null : `${live.reason} Os movimentos vêm da cópia local (pode estar incompleta).`;
 
   const range = operationalDayRangeUtc(startDay, endDay);
   // Recolhas até 3 dias antes: um "levar ao parque" pode vir de uma recolha anterior
@@ -80,7 +116,9 @@ export async function computeRange(startDay: string, endDay: string): Promise<En
   }]));
 
   const [actions, ponto, assignments, incidents, speed, penalties] = await Promise.all([
-    db.execute(sql`SELECT bookingExternalId, historyId, changeType, actionTime, agentUserId, agentName
+    live.available
+      ? Promise.resolve([] as any[])
+      : db.execute(sql`SELECT bookingExternalId, historyId, changeType, actionTime, agentUserId, agentName
                      FROM multipark_booking_history
                     WHERE actionTime >= ${lookback} AND actionTime < ${range.end}`),
     db.execute(sql`SELECT id, employeeId, type, recordedAt, hoursWorked, notes, reviewStatus
@@ -110,8 +148,10 @@ export async function computeRange(startDay: string, endDay: string): Promise<En
   const { TL_WORKING_DAYS_PER_MONTH } = await import("./extrasDia");
   const rates = await loadExtraRates();
 
-  return computeEmployeeDays({
+  const out = computeEmployeeDays({
     startDay, endDay, identity, employees: emps,
+    actionCounts: live.available ? live.data.actions : undefined,
+    agentOccurrences: live.available ? live.data.occurrences : undefined,
     actions: rowsOf(actions).map((r) => ({
       bookingExternalId: String(r.bookingExternalId), historyId: r.historyId != null ? String(r.historyId) : null,
       changeType: r.changeType ?? null, actionTime: toUtcStr(r.actionTime),
@@ -144,6 +184,7 @@ export async function computeRange(startDay: string, endDay: string): Promise<En
     rate: (level) => rateFor(rates, level),
     tlWorkingDaysPerMonth: TL_WORKING_DAYS_PER_MONTH,
   });
+  return { ...out, source, notice };
 }
 
 function metricsRow(r: EmployeeDayRow, stamp: string) {
@@ -191,30 +232,39 @@ export async function persistRows(rows: EmployeeDayRow[], startDay: string, endD
 }
 
 /** Recalcula e grava [start, end]. Devolve também as ações por ligar (operacional). */
-export async function recomputeRange(startDay: string, endDay: string): Promise<EngineOutput & { written: number; removed: number }> {
-  const out = await computeRange(startDay, endDay);
+export async function recomputeRange(startDay: string, endDay: string, readLive?: LiveInputsReader): Promise<ComputeResult & { written: number; removed: number }> {
+  const out = await computeRange(startDay, endDay, readLive);
   const p = await persistRows(out.rows, startDay, endDay);
   return { ...out, ...p };
 }
 
 /**
- * Cron diário: recalcula as últimas 4 semanas (até hoje), em fatias de 7 dias
- * a partir de `offsetDays`, enquanto houver prazo. done:false + nextOffset →
- * o workflow chama outra vez.
+ * Uma fatia do cron pode demorar: a leitura viva (até 15 s de limite na BD da
+ * Multipark) + o cálculo + a gravação. Não arranca outra com menos do que isto.
  */
-export async function runEvaluationRecompute(opts: { offsetDays?: number; deadlineAt: number; now?: Date }): Promise<{
-  window: { start: string; end: string }; done: boolean; nextOffset: number | null; slices: Array<{ start: string; end: string; written: number; removed: number }>;
+export const RECOMPUTE_SLICE_BUDGET_MS = 25_000;
+
+type SliceReport = { start: string; end: string; written: number; removed: number; source: MovementSource; notice: string | null };
+
+/**
+ * Cron diário: recalcula as últimas 4 semanas (até hoje), em fatias de 7 dias
+ * a partir de `offsetDays`, enquanto houver prazo. Cada fatia lê os
+ * movimentos AO VIVO da BD da Multipark (uma consulta agregada). done:false +
+ * nextOffset → o agendador chama outra vez.
+ */
+export async function runEvaluationRecompute(opts: { offsetDays?: number; deadlineAt: number; now?: Date; readLive?: LiveInputsReader }): Promise<{
+  window: { start: string; end: string }; done: boolean; nextOffset: number | null; slices: SliceReport[];
 }> {
   const today = currentOperationalDay(opts.now);
   const start = addDays(today, -(RECOMPUTE_WINDOW_DAYS - 1));
-  const slices: Array<{ start: string; end: string; written: number; removed: number }> = [];
+  const slices: SliceReport[] = [];
   let offset = Math.max(0, opts.offsetDays ?? 0);
   while (offset < RECOMPUTE_WINDOW_DAYS) {
-    if (slices.length > 0 && Date.now() > opts.deadlineAt) break;
+    if (slices.length > 0 && Date.now() + RECOMPUTE_SLICE_BUDGET_MS > opts.deadlineAt) break;
     const s = addDays(start, offset);
     const e = addDays(start, Math.min(offset + 6, RECOMPUTE_WINDOW_DAYS - 1));
-    const r = await recomputeRange(s, e);
-    slices.push({ start: s, end: e, written: r.written, removed: r.removed });
+    const r = await recomputeRange(s, e, opts.readLive);
+    slices.push({ start: s, end: e, written: r.written, removed: r.removed, source: r.source, notice: r.notice });
     offset += 7;
   }
   const done = offset >= RECOMPUTE_WINDOW_DAYS;
