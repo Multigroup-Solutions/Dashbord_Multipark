@@ -79,7 +79,6 @@ import { webAnalyticsRouter } from "./webAnalytics/router";
 import { gbpRouter } from "./integrations/googleBusiness/profileRouter";
 import { whatsappCallsRouter } from "./whatsappCallsRouter";
 import { getBookingHistory, getBookingsReport, getBookingTryAllParks } from "./multipark";
-import { deliveryErrorCode } from "./bookingDeliveryQueue";
 import {
   getExtrasDiaForecast,
   listAssignments,
@@ -281,7 +280,6 @@ import {
   getMultiparkBookingByExternalId,
   upsertMultiparkBooking,
   getMultiparkBookingStats,
-  createSyncLog,
   getSyncLogs,
   // MultiPark KPIs
   // Invites
@@ -347,7 +345,6 @@ import {
   healthCheck as mpHealthCheck,
   checkAvailability as mpCheckAvailability,
   listParks as mpListParks,
-  testConnection as mpTestConnection,
   getBookingsReportAllParks,
   type ParkingType,
   type VehicleType,
@@ -834,14 +831,6 @@ async function getLostDriverLink(id: number) {
   const [link] = await db.select().from(lostFoundAttachedDrivers).where(eq(lostFoundAttachedDrivers.id, id)).limit(1);
   if (!link) throw new TRPCError({ code: "NOT_FOUND", message: "Condutor não encontrado" });
   return link;
-}
-
-/** Ações da sincronização (reparar, etc.): só quem tem alcance NACIONAL no
- *  módulo — um supervisor de cidade vê a página mas não lança syncs. */
-function requireNationalSync(user: { id?: number; role: string }) {
-  if (requireAccess(user, "sincronizacao", "edit") !== "national") {
-    throw new TRPCError({ code: "FORBIDDEN", message: "Só quem tem âmbito nacional pode lançar a sincronização." });
-  }
 }
 
 /** A reserva (externalId ou nº) pertence às cidades do utilizador? */
@@ -6858,13 +6847,6 @@ export const appRouter = router({
         }
       }),
 
-    // Teste por parque: report mínimo (1 dia, 1 ação) com cada chave. Pedido
-    // à API por parque — a UI só o chama quando alguém carrega no botão.
-    testConnection: protectedProcedure.query(async ({ ctx }) => {
-      requireAccess(ctx.user, "sincronizacao", "manage");
-      return mpTestConnection();
-    }),
-
     // Inspect raw booking JSON from API (tries all parks). Admin-only debug tool.
     inspectBooking: protectedProcedure
       .input(z.object({ externalId: z.string().min(1) }))
@@ -6908,14 +6890,6 @@ export const appRouter = router({
       return mpListParks();
     }),
 
-    // Cobertura (chaves por parque) + totais da fila
-    syncCoverage: protectedProcedure.query(async ({ ctx }) => {
-      requireAccess(ctx.user, "sincronizacao", "view");
-      const { parkCoverage } = await import("./multipark");
-      const { getDeliveryHealth } = await import("./bookingDeliveryQueue");
-      return { parks: parkCoverage(), queue: await getDeliveryHealth() };
-    }),
-
     // Saúde dos dados (Sincronização + Definições → Estado do sistema). Só
     // totais e códigos, sem dados de clientes.
     dataHealth: protectedProcedure.query(async ({ ctx }) => {
@@ -6941,50 +6915,6 @@ export const appRouter = router({
           manual: ["manual", "api_sync_recovery", "excel_import"],
         }[input?.type ?? "all"];
         return getSyncLogs(input?.limit ?? 50, types);
-      }),
-
-    // "Reparar período": report de até 3 dias, com prazo (45s) e trinco
-    // partilhado com o cron e o MCP. Só âmbito nacional (um supervisor de
-    // cidade não lança um sync de todos os parques).
-    triggerSync: protectedProcedure
-      .input(z.object({
-        startDate: z.string(),
-        endDate: z.string(),
-      }))
-      .mutation(async ({ ctx, input }) => {
-        requireNationalSync(ctx.user);
-        const { runRepairSync, REPAIR_MAX_DAYS } = await import("./jobs/multiparkBookingSync");
-        {
-          const { syncRangeError } = await import("./opsRules");
-          const err = syncRangeError(input.startDate, input.endDate, REPAIR_MAX_DAYS);
-          if (err) throw new TRPCError({ code: "BAD_REQUEST", message: err });
-        }
-        try {
-          const r = await runRepairSync({ startDate: input.startDate, endDate: input.endDate, triggeredById: ctx.user.id, owner: "manual" });
-          if (r.busy) {
-            const { SYNC_BUSY_MESSAGE } = await import("./syncLock");
-            throw new TRPCError({ code: "CONFLICT", message: SYNC_BUSY_MESSAGE });
-          }
-          const { enrichTargets: _targets, parkStatus: _status, ...result } = r.result;
-          await logActivity({
-            userId: ctx.user.id,
-            action: "sync",
-            entity: "multipark",
-            details: `Reparar período ${input.startDate}→${input.endDate}: ${result.processed} processadas, ${result.created} novas, ${result.updated} atualizadas${result.partial ? ` (parcial: ${result.skippedJobs} por fazer)` : ""}`,
-          });
-          return result;
-        } catch (error: any) {
-          if (error instanceof TRPCError) throw error;
-          console.error("[triggerSync]", deliveryErrorCode(error));
-          await createSyncLog({
-            syncType: "manual",
-            status: "error",
-            errorMessage: deliveryErrorCode(error),
-            triggeredById: ctx.user.id,
-            completedAt: new Date(),
-          });
-          return { success: false, processed: 0, created: 0, updated: 0, errors: [deliveryErrorCode(error)], partial: false, skippedJobs: 0, parkErrors: [], totalMismatches: [] };
-        }
       }),
 
     // Buscar history de um agente (por nome) num dia (chama /agent/history
@@ -7151,67 +7081,17 @@ export const appRouter = router({
         return getMultiparkBookingStats(input ?? undefined);
       }),
 
-    // Query LOCAL DB by actionType + date range
-    localBookingsByAction: protectedProcedure
-      .input(z.object({
-        startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-        endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-        actionType: z.enum(["creation", "checkin", "checkout", "cancelation"]),
-        projectId: z.number().optional(),
-        // Filtros no SERVIDOR (grupo Lisboa/Porto/Faro/Marketplace, canal, estado, pesquisa)
-        group: z.enum(["all", "lisboa", "porto", "faro", "marketplace", "sem_cidade"]).optional(),
-        channel: z.string().max(32).optional(),
-        state: z.enum(["all", "active", "cancelled", "done", "pending"]).optional(),
-        search: z.string().max(100).optional(),
-        limit: z.number().int().min(1).max(20000).optional(),
-        offset: z.number().int().min(0).optional(),
-      }))
+    // "Reservas do dia": entradas e saídas de UM dia de Lisboa, lidas AO VIVO
+    // da BD da Multipark (só leitura). Só os parques das cidades do utilizador.
+    // Nunca lança por falta de BD — devolve { available:false, reason }.
+    reservasDoDia: protectedProcedure
+      .input(z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "reservas_operacoes", "view");
-        const { getOperationsBookings, rangeTooLong } = await import("./operationsBookings");
-        if (input.endDate < input.startDate || rangeTooLong(input.startDate, input.endDate)) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Intervalo inválido (máx. 366 dias)." });
-        }
-        const r = await getOperationsBookings(input);
-        return { ...r, actionType: input.actionType, period: { startDate: input.startDate, endDate: input.endDate } };
-      }),
-
-    // Custo dos extras por dia (de Lisboa) × cidade — real (ponto), previsto
-    // (escala) e o que conta. Mesma regra do motor financeiro. Só com o gate
-    // de totais financeiros; sem ele devolve allowed=false (a UI esconde).
-    extrasCostDaily: protectedProcedure
-      .input(z.object({
-        startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-        endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-        projectId: z.number().optional(),
-      }))
-      .query(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "dashboards", "view");
-        if (!(await canSeeFinanceTotals(ctx.user))) return { allowed: false as const, today: "", rows: [] };
-        const { getExtrasCostDaily, rangeTooLong } = await import("./operationsBookings");
-        if (input.endDate < input.startDate || rangeTooLong(input.startDate, input.endDate)) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Intervalo inválido (máx. 366 dias)." });
-        }
-        return { allowed: true as const, ...(await getExtrasCostDaily(input)) };
-      }),
-
-    // Gasto em publicidade por dia × cidade (Lisboa/Porto/Faro) + "por atribuir"
-    // (sem cidade / nacional), numa só chamada à fonte única do Marketing.
-    // Mesmo gate dos totais financeiros.
-    adSpendDaily: protectedProcedure
-      .input(z.object({
-        startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-        endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-        projectId: z.number().optional(),
-      }))
-      .query(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "dashboards", "view");
-        if (!(await canSeeFinanceTotals(ctx.user))) return { allowed: false as const, cities: [], rows: [], unassigned: [], total: 0 };
-        const { getAdSpendDaily, rangeTooLong } = await import("./operationsBookings");
-        if (input.endDate < input.startDate || rangeTooLong(input.startDate, input.endDate)) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Intervalo inválido (máx. 366 dias)." });
-        }
-        return { allowed: true as const, ...(await getAdSpendDaily(input)) };
+        const { getMultiparkDayBookings } = await import("./multiparkDb/dayBookings");
+        const r = await getMultiparkDayBookings(input.day, scopedCityNames());
+        if (!r.available) return { available: false as const, reason: r.reason, code: r.code };
+        return { available: true as const, ...r.data };
       }),
 
     // Atividade consolidada de um dia: ações + km/GPS por pessoa (visão Jorge)

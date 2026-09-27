@@ -38,7 +38,8 @@ type Tab = (typeof TABS)[number];
 function useStoredTab(): [Tab, (t: Tab) => void] {
   const [tab, setTab] = useState<Tab>(() => {
     try {
-      const v = sessionStorage.getItem("mp.definicoes.tab");
+      // Link direto (?tab=estado — p. ex. os alertas da sincronização) antes do guardado.
+      const v = new URLSearchParams(window.location.search).get("tab") ?? sessionStorage.getItem("mp.definicoes.tab");
       return (TABS as readonly string[]).includes(v ?? "") ? (v as Tab) : "estado";
     } catch { return "estado"; }
   });

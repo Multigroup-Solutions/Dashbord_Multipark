@@ -40,7 +40,6 @@ import PartnerInferPage from "./pages/PartnerInferPage";
 import PartnerTypePage from "./pages/PartnerTypePage";
 import BillingDiagnosePage from "./pages/BillingDiagnosePage";
 import AnnualPage from "./pages/AnnualPage";
-import MultiparkPage from "./pages/MultiparkPage";
 import OperacoesPage from "./pages/OperacoesPage";
 import ExtrasDiaPage from "./pages/ExtrasDiaPage";
 import AvaliacaoOperacionalPage from "./pages/AvaliacaoOperacionalPage";
@@ -228,8 +227,14 @@ function Router() {
       <Route path="/multipark/inspect">
         {() => (<DashboardLayout><MultiparkInspectPage /></DashboardLayout>)}
       </Route>
+      {/* As listas antigas (/multipark/reservas, entradas, saídas…) passaram a
+          ser a lista única "Reservas do dia" nas Operações; a Sincronização
+          (estado) vive em Definições → Estado do sistema. */}
+      <Route path="/multipark/sync">
+        {() => <Redirect to="/definicoes?tab=estado" />}
+      </Route>
       <Route path="/multipark/:section?">
-        {() => (<DashboardLayout><MultiparkPage /></DashboardLayout>)}
+        {(params) => <Redirect to={`/operacoes?tab=${params.section === "entradas" || params.section === "saidas" ? params.section : "dia"}`} />}
       </Route>
       <Route path="/servicos">
         {() => (<DashboardLayout><ServicesPage /></DashboardLayout>)}

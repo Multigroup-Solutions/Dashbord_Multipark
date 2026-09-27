@@ -40,10 +40,10 @@ describe("pesquisa global — acesso e cidade por fonte", () => {
     expect(find(queries, "FROM whatsapp_conversations")[0].sql).toContain("vis_lead");
     expect(find(queries, "FROM users u")[0].sql).toContain("city_employee.userId = u.id");
     expect(find(queries, "FROM mail_threads t")[0].sql).toContain("t.ownerUserId = ?");
-    // Resultado: reserva com link filtrado e o dia de criação.
+    // Resultado: reserva com link filtrado e o dia (Lisboa) da entrada.
     const g = r.groups.find((x) => x.group === "reservas")!;
     expect(g.items[0]).toMatchObject({ title: "MP12345 · Ana Silva", score: 100 });
-    expect(g.items[0].href).toBe("/operacoes?tab=reservas&q=MP12345&de=2026-09-01");
+    expect(g.items[0].href).toBe("/operacoes?tab=dia&q=MP12345&de=2026-09-20");
     expect(r.groups[0].group).toBe("reservas"); // correspondência exata primeiro
   });
 
@@ -164,7 +164,7 @@ describe("paleta — leitura, pontuação, ordem e grupos", () => {
   });
 
   it("'ver todos' abre a página já filtrada", () => {
-    expect(seeAllHref("reservas", "AA 00")).toBe("/operacoes?tab=reservas&q=AA%2000");
+    expect(seeAllHref("reservas", "AA 00")).toBe("/operacoes?tab=dia&q=AA%2000");
     expect(seeAllHref("tarefas", "x")).toBe("/tarefas?q=x");
     expect(seeAllHref("conhecimento", "x")).toBeNull();
   });

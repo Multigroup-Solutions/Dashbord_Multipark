@@ -110,7 +110,7 @@ const DEFS: Def[] = [
   { id: "llm", label: "IA (Gemini)", description: "Faturas, críticas, rádio, passagem de turno, WhatsApp e formação (server/_core/ai).", require: [["GEMINI_API_KEY", "GOOGLE_CLOUD_PROJECT", "LLM_API_KEY", "OPENAI_API_KEY"]], testable: true, group: "main",
     links: [{ label: "Interruptores e custo (Definições)", href: "/definicoes" }] },
   { id: "multipark", label: "API Multipark", description: "Reservas dos parques (chave geral ou por parque).", require: [["MULTIPARK_API_KEY", "MULTIPARK_API_KEY_LISBON_AIRPARK", "MULTIPARK_API_KEY_FARO_AIRPARK", "MULTIPARK_API_KEY_LISBON_REDPARK", "MULTIPARK_API_KEY_LISBON_SKYPARK"]], cron: "multipark-sync", group: "main",
-    links: [{ label: "Sincronização", href: "/multipark/sync" }] },
+    links: [{ label: "Estado da sincronização", href: "/definicoes?tab=estado" }] },
   { id: "multipark_db", label: "BD Multipark (só leitura)", description: "Ligação direta à base de dados da aplicação Multipark (reservas, movimentos, condutores), a usar em vez da API quando o interruptor \"Reservas: ler da BD da Multipark\" estiver ligado. Deve ser um utilizador SÓ DE LEITURA. O Testar (só super admin) diz se liga, o motor e versão, se a sessão ficou só de leitura, a latência e o n.º de tabelas.", require: [["DATABASE_URL_MULTIPARK"]], testable: true, group: "main",
     links: [{ label: "Interruptor da fonte (Definições → Automações)", href: "/definicoes" }] },
   { id: "storage", label: "Armazenamento de ficheiros", description: "S3 ou Vercel Blob.", require: [["BLOB_READ_WRITE_TOKEN", "AWS_S3_BUCKET_NAME"]], group: "main", links: [] },

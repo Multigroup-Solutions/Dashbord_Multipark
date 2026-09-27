@@ -168,7 +168,7 @@ async function alertIsActive(key: string): Promise<boolean> {
  * alcance nacional — super_admin e admin por omissão; ver
  * shared/notificationRouting.ts). Devolve quantas pessoas receberam.
  */
-export async function notifySyncAlert(title: string, body: string, link = "/multipark/sync", entityId?: string): Promise<number> {
+export async function notifySyncAlert(title: string, body: string, link = "/definicoes?tab=estado", entityId?: string): Promise<number> {
   const { notify } = await import("./notify");
   const r = await notify({ kind: "sync_alert", title, body, link, entity: entityId ? { type: "sync_alert", id: entityId } : null });
   return r.recipients.length;
