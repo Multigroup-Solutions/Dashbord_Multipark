@@ -41,13 +41,52 @@ export const MAIL_BRAND_LABELS: Record<MailBrand, string> = {
  * dizer a marca explicitamente — isso ganha sempre ao domínio.
  */
 export const DEFAULT_BRAND_DOMAINS: Record<MailBrand, string[]> = {
-  multipark: ["multipark.pt"],
-  multibags: ["multibags.pt"],
+  // multivalet.pt é da Multipark (não há marca Multivalet).
+  multipark: ["multipark.pt", "multipark.app", "multivalet.pt"],
+  multibags: ["multibags.pt", "multibags.app"],
   redpark: ["redpark.pt"],
   skypark: ["skypark.pt"],
+  // airpark.pt e multidriver.pt ainda não estão no Workspace (ficam para quando entrarem).
   airpark: ["airpark.pt"],
   multidriver: ["multidriver.pt"],
 };
+
+/**
+ * Google Workspace da empresa (dono, 27 set 2026): domínio principal
+ * multipark.pt + "domínios alternativos" (alias domains). Num domínio
+ * alternativo, TODOS os endereços do domínio principal (utilizadores e
+ * aliases de utilizador) funcionam automaticamente — reclamacoes@skypark.pt
+ * chega à conta dona de reclamacoes@multipark.pt sem configurar nada.
+ * A lista é sobreponível em Definições → Parâmetros (`mail.aliasDomains`).
+ */
+export const MAIL_WORKSPACE_PRIMARY_DOMAIN = "multipark.pt";
+export const DEFAULT_MAIL_ALIAS_DOMAINS: readonly string[] = ["skypark.pt", "redpark.pt", "multibags.pt", "multivalet.pt", "multibags.app", "multipark.app"];
+
+/** Domínios equivalentes do Workspace: o principal + os alternativos (sem repetidos, minúsculas). PURA. */
+export function workspaceDomainsOf(aliasDomains: readonly string[] | null | undefined = DEFAULT_MAIL_ALIAS_DOMAINS, primary: string = MAIL_WORKSPACE_PRIMARY_DOMAIN): string[] {
+  const out: string[] = [];
+  for (const d of [primary, ...(aliasDomains ?? [])]) {
+    const x = String(d ?? "").trim().toLowerCase().replace(/^@/, "");
+    if (x && !out.includes(x)) out.push(x);
+  }
+  return out;
+}
+
+/**
+ * O mesmo endereço nos outros domínios do Workspace (reclamacoes@skypark.pt →
+ * reclamacoes@multipark.pt, reclamacoes@redpark.pt…), o principal primeiro.
+ * Vazio se o domínio não for do Workspace. PURA.
+ */
+export function domainAliasVariants(address: string | null | undefined, workspaceDomains: readonly string[] | null | undefined): string[] {
+  const a = normalizeAddress(address);
+  const at = a.lastIndexOf("@");
+  if (at <= 0 || !workspaceDomains?.length) return [];
+  const local = a.slice(0, at);
+  const domain = a.slice(at + 1);
+  const domains = workspaceDomains.map((d) => String(d ?? "").trim().toLowerCase()).filter(Boolean);
+  if (!domains.includes(domain)) return [];
+  return domains.filter((d) => d !== domain).map((d) => `${local}@${d}`);
+}
 
 export const isMailBrand = (v: unknown): v is MailBrand => typeof v === "string" && (MAIL_BRAND_IDS as readonly string[]).includes(v);
 
@@ -377,6 +416,12 @@ export interface AliasResolution {
   alias: MailboxAddress | null;
   matchedAddress: string | null;
   via: AliasHeader | null;
+  /**
+   * Linha encontrada pelo domínio alternativo do Workspace (o endereço
+   * configurado na tabela — ex.: reclamacoes@multipark.pt — quando o email
+   * chegou a reclamacoes@skypark.pt); null = correspondência exata.
+   */
+  domainAliasOf?: string | null;
 }
 
 /**
@@ -386,36 +431,68 @@ export interface AliasResolution {
  * qualquer domínio. O Delivered-To igual à própria conta de origem
  * (reservas@/info@) não diz nada — no Google Workspace é sempre o endereço
  * principal da caixa — e é saltado; o alias vem nos cabeçalhos seguintes.
- * Um endereço que esteja em duas caixas conta na primeira (ordem da lista). PURA.
+ * Um endereço que esteja em duas caixas conta na primeira (ordem da lista).
+ *
+ * Domínios alternativos do Workspace (`workspaceDomains` = principal +
+ * alternativos; vazio = desligado): um endereço que não está na tabela mas
+ * cujo nome local existe noutro domínio do Workspace (reclamacoes@skypark.pt
+ * ↔ reclamacoes@multipark.pt) conta como esse alias. A correspondência
+ * EXATA ganha sempre: em cada cabeçalho procuram-se primeiro os endereços
+ * exatos e só depois os equivalentes por domínio (e um cabeçalho mais fiável
+ * ganha a um menos fiável, como antes). A marca vem do domínio para onde o
+ * email foi mesmo enviado (`brandOfAddress`), senão a do alias; o resto
+ * (caixa, destino, responsável, cidade, etiqueta) é o do alias. Um endereço
+ * que está na tabela mas inativo NÃO é reencaminhado pelo domínio
+ * alternativo (foi desligado de propósito → "Por classificar"). PURA.
  */
 export function resolveAlias(
   r: MessageRecipients,
   mailboxes: readonly Pick<MailboxConfig, "key" | "addresses" | "active">[],
-  opts: { outbound?: boolean; accountEmails?: readonly (string | null | undefined)[] } = {},
+  opts: { outbound?: boolean; accountEmails?: readonly (string | null | undefined)[]; workspaceDomains?: readonly string[] | null; brandDomains?: Record<string, string[]> } = {},
 ): AliasResolution {
   const index = new Map<string, { key: string; alias: MailboxAddress }>();
+  // Endereços escritos na tabela (mesmo inativos / de caixas inativas): um
+  // alias desligado de propósito nunca volta a encaminhar pelo domínio alternativo.
+  const configured = new Set<string>();
   for (const m of mailboxes) {
-    if (!m.active) continue;
     for (const a of m.addresses) {
-      if (a.active === false) continue;
       const k = normalizeAddress(a.address);
-      if (k && !index.has(k)) index.set(k, { key: m.key, alias: a as MailboxAddress });
+      if (!k) continue;
+      configured.add(k);
+      if (!m.active || a.active === false) continue;
+      if (!index.has(k)) index.set(k, { key: m.key, alias: a as MailboxAddress });
     }
   }
-  const accounts = new Set((opts.accountEmails ?? []).map(normalizeAddress).filter(Boolean));
+  const ws = opts.workspaceDomains ?? [];
+  const accounts = new Set<string>();
+  for (const e of opts.accountEmails ?? []) {
+    const a = normalizeAddress(e);
+    if (!a) continue;
+    accounts.add(a);
+    // A própria conta num domínio alternativo (reservas@multivalet.pt) também é "a conta".
+    for (const v of domainAliasVariants(a, ws)) accounts.add(v);
+  }
   const ordered: Array<[AliasHeader, readonly string[] | undefined]> = opts.outbound
     ? [["from", r.from ? [r.from] : []]]
     : [["delivered-to", r.deliveredTo], ["x-original-to", r.xOriginalTo], ["to", r.to], ["cc", r.cc], ["bcc", r.bcc]];
   for (const [via, list] of ordered) {
-    for (const raw of list ?? []) {
-      const addr = normalizeAddress(raw);
-      if (!addr) continue;
-      if (via === "delivered-to" && accounts.has(addr)) continue;
+    const addrs = (list ?? []).map(normalizeAddress).filter((a) => a && !(via === "delivered-to" && accounts.has(a)));
+    for (const addr of addrs) {
       const hit = index.get(addr);
-      if (hit) return { mailboxKey: hit.key, alias: hit.alias, matchedAddress: addr, via };
+      if (hit) return { mailboxKey: hit.key, alias: hit.alias, matchedAddress: addr, via, domainAliasOf: null };
+    }
+    if (!ws.length) continue;
+    for (const addr of addrs) {
+      if (configured.has(addr)) continue;
+      for (const v of domainAliasVariants(addr, ws)) {
+        const hit = index.get(v);
+        if (!hit) continue;
+        const brand = brandOfAddress(addr, opts.brandDomains) ?? hit.alias.brand;
+        return { mailboxKey: hit.key, alias: { ...hit.alias, brand }, matchedAddress: addr, via, domainAliasOf: normalizeAddress(hit.alias.address) };
+      }
     }
   }
-  return { mailboxKey: null, alias: null, matchedAddress: null, via: null };
+  return { mailboxKey: null, alias: null, matchedAddress: null, via: null, domainAliasOf: null };
 }
 
 /**
@@ -427,9 +504,13 @@ export function resolveAlias(
 export function classifyMessage(
   r: MessageRecipients,
   mailboxes: readonly Pick<MailboxConfig, "key" | "addresses" | "catchAll" | "active">[],
-  opts: { outbound?: boolean; personalOwner?: boolean; brandDomains?: Record<string, string[]>; accountEmails?: readonly (string | null | undefined)[] } = {},
+  opts: {
+    outbound?: boolean; personalOwner?: boolean; brandDomains?: Record<string, string[]>; accountEmails?: readonly (string | null | undefined)[];
+    /** Domínios equivalentes do Workspace (`workspaceDomainsOf`); vazio = sem correspondência por domínio alternativo. */
+    workspaceDomains?: readonly string[] | null;
+  } = {},
 ): Classification {
-  const hit = resolveAlias(r, mailboxes, { outbound: opts.outbound, accountEmails: opts.accountEmails });
+  const hit = resolveAlias(r, mailboxes, { outbound: opts.outbound, accountEmails: opts.accountEmails, workspaceDomains: opts.workspaceDomains, brandDomains: opts.brandDomains });
   if (hit.mailboxKey && hit.alias) {
     return { mailboxKey: hit.mailboxKey, brand: hit.alias.brand, matchedAddress: hit.matchedAddress, personal: false, alias: hit.alias, via: hit.via, triage: false };
   }

@@ -6,7 +6,7 @@
 import { sql, type SQL } from "drizzle-orm";
 import { getDb } from "../db";
 import {
-  MAIL_AUTOMATED_RESERVATION, MAIL_AUTOMATED_SYSTEM, MAIL_DEFAULT_BACKFILL_DAYS, DEFAULT_BRAND_DOMAINS, hasFeatureScopes, mailboxConfigSchema, normalizeAddress, personalAccountKey,
+  MAIL_AUTOMATED_RESERVATION, MAIL_AUTOMATED_SYSTEM, MAIL_DEFAULT_BACKFILL_DAYS, DEFAULT_BRAND_DOMAINS, DEFAULT_MAIL_ALIAS_DOMAINS, workspaceDomainsOf, hasFeatureScopes, mailboxConfigSchema, normalizeAddress, personalAccountKey,
   sourceAccountKey, userIdOfAccountKey, type Classification, type MailboxConfig, type MailLinkType,
 } from "../../shared/mail";
 import type { AccountSyncState, StoreMessageResult, SyncAccount, SyncStore } from "./sync";
@@ -102,6 +102,14 @@ export async function loadBrandDomains(): Promise<Record<string, string[]>> {
     const { getSetting } = await import("../appSettings");
     return ((await getSetting("mail.brandDomains")) as Record<string, string[]> | null) ?? DEFAULT_BRAND_DOMAINS;
   } catch { return DEFAULT_BRAND_DOMAINS; }
+}
+
+/** Domínios equivalentes do Workspace (principal + `mail.aliasDomains`) para o encaminhamento por alias. */
+export async function loadWorkspaceDomains(): Promise<string[]> {
+  try {
+    const { getSetting } = await import("../appSettings");
+    return workspaceDomainsOf(((await getSetting("mail.aliasDomains")) as string[] | null) ?? DEFAULT_MAIL_ALIAS_DOMAINS);
+  } catch { return workspaceDomainsOf(DEFAULT_MAIL_ALIAS_DOMAINS); }
 }
 
 // ─── Contas de sincronização ────────────────────────────────────────────────
