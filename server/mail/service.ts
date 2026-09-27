@@ -262,6 +262,10 @@ export async function runMailSync(opts: { deadlineAt: number; onlyAccountKey?: s
   const accounts = (await listSyncAccounts({ dwdAvailable: dwdConfigured() })).filter((a) => !opts.onlyAccountKey || a.key === opts.onlyAccountKey);
   report.configured = accounts.length > 0;
   if (!accounts.length) return report;
+  // Push (Pub/Sub): o watch vem ANTES da importação — é rápido e, se ficasse
+  // para o fim, uma caixa com muito email por importar comia o prazo todo e o
+  // Gmail nunca começava a avisar (27 set 2026). Só renova o que expira em < 24 h.
+  try { report.watchRenewed = await renewWatches(accounts.map((a) => a.key), Math.min(opts.deadlineAt, Date.now() + 10_000)); } catch { /* opcional */ }
   const brandDomains = await loadBrandDomains();
   const workspaceDomains = await loadWorkspaceDomains();
   let backfillDays = 90;
@@ -316,9 +320,9 @@ export async function runMailSync(opts: { deadlineAt: number; onlyAccountKey?: s
       console.warn("[mail] triagem IA falhou:", String(err?.message ?? err).slice(0, 160));
     }
   }
-  // Push (Pub/Sub): renova o watch das contas quando o interruptor está ligado.
+  // Push: 2.ª tentativa no fim, para as contas que não couberam no início.
   if (Date.now() + 8_000 < opts.deadlineAt) {
-    try { report.watchRenewed = await renewWatches(accounts.map((a) => a.key), opts.deadlineAt); } catch { /* opcional */ }
+    try { report.watchRenewed = (report.watchRenewed ?? 0) + await renewWatches(accounts.map((a) => a.key), opts.deadlineAt); } catch { /* opcional */ }
   }
   return report;
 }
