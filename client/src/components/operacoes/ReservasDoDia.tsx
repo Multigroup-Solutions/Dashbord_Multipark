@@ -7,24 +7,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import BookingDetailDialog from "@/components/BookingDetailDialog";
-import ParkClassificationDialog from "@/components/operacoes/ParkClassificationDialog";
 import { fmtPTTime } from "@/lib/lisbonTime";
 import { addDays, lisbonDayOf } from "@shared/lisbonDay";
 import {
-  BOOKING_CHANNEL_LABELS, BOOKING_STATUSES, BOOKING_STATUS_COLORS, filterMovements, phaseLabel, statusLabel, summarizeDay,
-  type BookingChannel, type BookingStatus, type DayMovement, type MovementKind,
+  BOOKING_STATUSES, BOOKING_STATUS_COLORS, compareGroups, filterMovements, groupMovements, phaseLabel, statusLabel, summarizeDay,
+  type BookingStatus, type DayMovement, type MovementKind,
 } from "@shared/reservasDoDia";
-import { MARKETPLACE_GROUP_KEY, allParkGroups } from "@shared/multiparkParks";
+import { ORIGIN_LABELS } from "@shared/multiparkParks";
 import {
-  ArrowDownToLine, ArrowUpFromLine, CalendarDays, ChevronLeft, ChevronRight, Plane, RefreshCw, Search, XCircle, AlertTriangle, Tags,
+  ArrowDownToLine, ArrowUpFromLine, CalendarDays, ChevronLeft, ChevronRight, Plane, RefreshCw, Search, XCircle, AlertTriangle,
 } from "lucide-react";
-
-/** Cores do distintivo do canal (contabilidade). */
-const CHANNEL_BADGE: Record<BookingChannel, string> = {
-  direto: "border-sky-200 text-sky-700",
-  parceiro: "border-violet-200 text-violet-700",
-  marketplace: "border-rose-200 text-rose-700",
-};
 
 const fmtEur = (v: number | null | undefined) =>
   v == null ? "—" : v.toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
@@ -55,7 +47,8 @@ function seedFromUrl(): { day: string | null; q: string; kind: "todas" | Movemen
 /**
  * "Reservas do dia": as entradas e saídas de UM dia (Lisboa), lidas ao vivo da
  * BD da Multipark. Abre sempre em hoje; os filtros correm aqui (o dia já está
- * todo carregado).
+ * todo carregado). Só operação: um bloco por parque (as marcas nossas por
+ * marca + cidade primeiro), sem o canal da contabilidade.
  */
 export default function ReservasDoDia() {
   const [seed] = useState(seedFromUrl);
@@ -63,8 +56,6 @@ export default function ReservasDoDia() {
   const [kind, setKind] = useState<"todas" | MovementKind>(seed.kind);
   const [parkId, setParkId] = useState<string>("");
   const [state, setState] = useState<string>("ativas");
-  const [channel, setChannel] = useState<BookingChannel | "">("");
-  const [showParks, setShowParks] = useState(false);
   const [search, setSearch] = useState(seed.q);
   const [open, setOpen] = useState<DayMovement | null>(null);
 
@@ -82,24 +73,18 @@ export default function ReservasDoDia() {
   }, [data, parkId]);
 
   const summary = useMemo(() => summarizeDay(movements), [movements]);
-  const filtered = useMemo(() => filterMovements(movements, { kind, parkId, state, search, channel }), [movements, kind, parkId, state, search, channel]);
+  const filtered = useMemo(() => filterMovements(movements, { kind, parkId, state, search }), [movements, kind, parkId, state, search]);
+  const sections = useMemo(() => groupMovements(filtered), [filtered]);
 
-  const sections = useMemo(() => {
-    const groups = allParkGroups();
-    const byKey = new Map<string, DayMovement[]>();
-    for (const m of filtered) {
-      const k = groups.some((g) => g.key === m.booking.groupKey) ? m.booking.groupKey : MARKETPLACE_GROUP_KEY;
-      (byKey.get(k) ?? byKey.set(k, []).get(k)!).push(m);
-    }
-    return groups.map((g) => ({ ...g, rows: byKey.get(g.key) ?? [] })).filter((g) => g.rows.length > 0);
-  }, [filtered]);
-  const ourSections = sections.filter((s) => s.ours);
-  const marketSections = sections.filter((s) => !s.ours);
-
+  // Lista de parques do filtro: agrupada como a página (marcas nossas primeiro).
   const parksByGroup = useMemo(() => {
-    const out = new Map<string, Array<{ id: string; name: string; cityName: string | null }>>();
-    for (const p of data?.parks ?? []) (out.get(p.label) ?? out.set(p.label, []).get(p.label)!).push(p);
-    return [...out.entries()];
+    const out = new Map<string, { label: string; order: number; parks: Array<{ id: string; name: string; cityName: string | null }> }>();
+    for (const p of data?.parks ?? []) {
+      let g = out.get(p.groupKey);
+      if (!g) out.set(p.groupKey, (g = { label: p.groupLabel, order: p.groupOrder, parks: [] }));
+      g.parks.push(p);
+    }
+    return [...out.values()].sort(compareGroups);
   }, [data]);
 
   return (
@@ -128,10 +113,7 @@ export default function ReservasDoDia() {
             <span className="truncate first-letter:uppercase">{longDay(day)}</span>
             {isToday && <Badge variant="outline" className="text-[11px]">hoje</Badge>}
           </span>
-          <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setShowParks(true)} title="Como cada parque é classificado (nosso / Marketplace)">
-            <Tags className="w-4 h-4 mr-1" /> Classificação dos parques
-          </Button>
-          <Button variant="ghost" size="sm" onClick={() => q.refetch()} disabled={q.isFetching}>
+          <Button variant="ghost" size="sm" className="ml-auto" onClick={() => q.refetch()} disabled={q.isFetching}>
             <RefreshCw className={`w-4 h-4 mr-1 ${q.isFetching ? "animate-spin" : ""}`} /> Atualizar
           </Button>
         </CardContent>
@@ -158,26 +140,9 @@ export default function ReservasDoDia() {
             <Counter icon={<ArrowUpFromLine className="w-4 h-4 text-amber-600" />} label="Saídas" value={summary.saidas} sub={summary.saidasPorFazer ? `${summary.saidasPorFazer} por fazer` : undefined} onClick={() => setKind(kind === "saida" ? "todas" : "saida")} active={kind === "saida"} />
             <Counter icon={<XCircle className="w-4 h-4 text-red-600" />} label="Canceladas" value={summary.canceladas} onClick={() => setState(state === "CANCELLED" ? "ativas" : "CANCELLED")} active={state === "CANCELLED"} />
           </div>
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-xs text-muted-foreground mr-0.5">Canal:</span>
-            {summary.channels.map((c) => (
-              <button
-                key={c.channel}
-                type="button"
-                onClick={() => setChannel(channel === c.channel ? "" : c.channel)}
-                aria-pressed={channel === c.channel}
-                className={`inline-flex items-center rounded-md border text-xs py-1 px-2 transition-colors ${CHANNEL_BADGE[c.channel]} ${channel === c.channel ? "bg-primary/10 ring-1 ring-primary" : "bg-background hover:bg-muted"}`}
-              >
-                <span className="font-medium mr-1.5">{c.label}</span>
-                <span className="tabular-nums">↓{c.entradas}</span>
-                <span className="tabular-nums ml-1.5">↑{c.saidas}</span>
-              </button>
-            ))}
-            {channel && <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setChannel("")}>Todos os canais</Button>}
-          </div>
           <div className="flex flex-wrap gap-1.5">
-            {summary.groups.filter((g) => g.entradas + g.saidas > 0).map((g) => (
-              <Badge key={g.key} variant="outline" className={`text-xs py-1 px-2 font-normal ${g.ours ? "" : "border-dashed"}`}>
+            {summary.groups.map((g) => (
+              <Badge key={g.key} variant="outline" className="text-xs py-1 px-2 font-normal">
                 <span className="font-medium mr-1.5">{g.label}</span>
                 <span className="text-emerald-700 tabular-nums">↓{g.entradas}</span>
                 <span className="text-amber-700 tabular-nums ml-1.5">↑{g.saidas}</span>
@@ -211,7 +176,7 @@ export default function ReservasDoDia() {
             <SelectTrigger className="w-52 max-w-full"><SelectValue placeholder="Todos" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Todos os parques</SelectItem>
-              {parksByGroup.map(([label, parks]) => (
+              {parksByGroup.map(({ label, parks }) => (
                 <SelectGroup key={label}>
                   <SelectLabel>{label}</SelectLabel>
                   {parks.map((p) => (
@@ -242,6 +207,12 @@ export default function ReservasDoDia() {
         </div>
       </div>
 
+      {data && data.excludedParks > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {data.excludedParks === 1 ? "1 parque não aparece" : `${data.excludedParks} parques não aparecem`} (a operação não os faz — Definições → Parâmetros → Operações).
+        </p>
+      )}
+
       {data?.truncated && (
         <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
           O dia tem mais de {data.limit} reservas — só aparecem as primeiras {data.limit}. Usa o filtro de parque.
@@ -255,19 +226,9 @@ export default function ReservasDoDia() {
           {movements.length === 0 ? "Sem entradas nem saídas neste dia." : "Nenhuma reserva com estes filtros."}
         </CardContent></Card>
       ) : data ? (
-        <div className="space-y-5">
-          {ourSections.length > 0 && (
-            <div className="space-y-3">
-              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Parques nossos</h3>
-              {ourSections.map((s) => <GroupTable key={s.key} label={s.label} rows={s.rows} onOpen={setOpen} />)}
-            </div>
-          )}
-          {marketSections.map((s) => (
-            <div key={s.key} className="space-y-3">
-              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Marketplace</h3>
-              <GroupTable label={s.label} rows={s.rows} onOpen={setOpen} showPark />
-            </div>
-          ))}
+        <div className="space-y-3">
+          {/* Marcas nossas agrupam vários parques: mostra-se a coluna Parque. */}
+          {sections.map((s) => <GroupTable key={s.key} label={s.label} rows={s.rows} onOpen={setOpen} showPark={s.ours} />)}
         </div>
       ) : null}
 
@@ -298,7 +259,7 @@ export default function ReservasDoDia() {
             totalPaid: open.booking.paid,
             remainingToPay: open.booking.toPay,
             paymentMethod: open.booking.paymentMethod,
-            origin: `${BOOKING_CHANNEL_LABELS[open.booking.channel]} · ${open.booking.channelDetail}`,
+            origin: open.booking.origin ? ORIGIN_LABELS[open.booking.origin] ?? open.booking.origin : null,
             partnerName: open.booking.partnerName,
             checkinAgentName: open.booking.checkInDriverName,
             checkoutAgentName: open.booking.checkOutDriverName,
@@ -308,7 +269,6 @@ export default function ReservasDoDia() {
           onClose={() => setOpen(null)}
         />
       )}
-      <ParkClassificationDialog open={showParks} onOpenChange={setShowParks} />
     </div>
   );
 }
@@ -349,7 +309,6 @@ function GroupTable({ label, rows, onOpen, showPark }: { label: string; rows: Da
               <th className="p-2 font-medium">Estado</th>
               <th className="p-2 font-medium">Voo</th>
               <th className="p-2 font-medium">Entrega</th>
-              <th className="p-2 font-medium">Canal</th>
               <th className="p-2 font-medium">Lugar</th>
               <th className="p-2 font-medium text-right">Valor</th>
             </tr>
@@ -396,12 +355,6 @@ function GroupTable({ label, rows, onOpen, showPark }: { label: string; rows: Da
                   <td className="p-2 text-xs max-w-[140px]">
                     <span className="truncate block" title={b.deliveryType ?? undefined}>{b.deliveryType ?? "—"}</span>
                     {b.extrasCount > 0 && <span className="block text-[11px] text-muted-foreground">{b.extrasCount} extra{b.extrasCount > 1 ? "s" : ""}{b.extrasPending ? ` · ${b.extrasPending} por fazer` : ""}</span>}
-                  </td>
-                  <td className="p-2 text-xs max-w-[160px]">
-                    <Badge variant="outline" className={`text-[11px] max-w-full ${CHANNEL_BADGE[b.channel]}`} title={b.channelBadge}>
-                      <span className="truncate">{b.channelBadge}</span>
-                    </Badge>
-                    <span className="truncate block text-[11px] text-muted-foreground" title={b.channelDetail}>{b.channelDetail}</span>
                   </td>
                   <td className="p-2 text-xs whitespace-nowrap">{[b.garage, b.spot].filter(Boolean).join(" · ") || "—"}</td>
                   <td className="p-2 text-xs text-right whitespace-nowrap tabular-nums">

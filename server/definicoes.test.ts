@@ -10,6 +10,7 @@ import {
   flagSettingKey,
   isFlagSettingKey,
   parseNotificationPrefs,
+  SETTINGS,
   staleThresholdMinutes,
   validateSetting,
   wantsNotification,
@@ -136,6 +137,15 @@ describe("definições: validação", () => {
     expect(validateSetting("availability.assigneeEmail", "")).toEqual({ ok: true, value: "" });
     expect(validateSetting("availability.assigneeEmail", "RH@Multipark.pt")).toEqual({ ok: true, value: "rh@multipark.pt" });
     expect(validateSetting("availability.assigneeEmail", "rh").ok).toBe(false);
+  });
+
+  it("parques que a operação não faz: ids sem repetidos; omissão vazia", () => {
+    expect(SETTINGS["operations.excludedParks"].defaultValue).toEqual([]);
+    expect(validateSetting("operations.excludedParks", [" p1 ", "p2", "p1"])).toEqual({ ok: true, value: ["p1", "p2"] });
+    expect(validateSetting("operations.excludedParks", []).ok).toBe(true);
+    expect(validateSetting("operations.excludedParks", [""]).ok).toBe(false);
+    expect(validateSetting("operations.excludedParks", "p1").ok).toBe(false);
+    expect(validateSetting("operations.excludedParks", [42]).ok).toBe(false);
   });
 
   it("chaves desconhecidas recusadas", () => {

@@ -31,4 +31,4 @@ Tudo sobre uma reserva num só sítio, lido **em tempo real** da base de dados d
 
 Tem acesso quem vê as reservas (Reservas & Operações), e cada um só vê as reservas dos parques das suas cidades. As reclamações e os perdidos só aparecem a quem tem acesso a esses módulos.
 
-As regras do canal e dos parques nossos são as mesmas das **Reservas do dia** (ver essa ajuda e o botão **Classificação dos parques**).
+Os parques nossos (marca + cidade) são reconhecidos com as mesmas regras que agrupam as **Reservas do dia**. O canal (Direto / Parceiro / Marketplace) é da contabilidade e não aparece na lista Reservas do dia.

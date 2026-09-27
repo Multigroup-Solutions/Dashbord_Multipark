@@ -6,8 +6,12 @@
  * Cada linha da lista é um MOVIMENTO do dia: a Entrada (check-in nesse dia) ou
  * a Saída (check-out nesse dia) de uma reserva. Uma reserva que entra e sai no
  * mesmo dia dá duas linhas.
+ *
+ * A lista é só OPERACIONAL (recolher/entregar os carros de TODOS os parques da
+ * BD da Multipark, menos os de "Parques que a operação não faz" nas
+ * Definições). O canal Direto / Parceiro / Marketplace é da contabilidade e NÃO
+ * entra aqui (vive em shared/multiparkParks.ts, usado pela ficha da reserva).
  */
-import { BOOKING_CHANNELS, BOOKING_CHANNEL_LABELS, MARKETPLACE_GROUP_KEY, allParkGroups, type BookingChannel } from "./multiparkParks";
 
 // ─── Estados e fases ────────────────────────────────────────────────────────
 
@@ -67,12 +71,35 @@ export function phaseLabel(b: Pick<DayBooking, "status" | "phases">): string | n
   return null;
 }
 
-// ─── Canal (contabilidade): Direto / Parceiro / Marketplace ────────────────
-// As regras vivem em shared/multiparkParks.ts (um só classificador).
-export {
-  BOOKING_CHANNELS, BOOKING_CHANNEL_LABELS, ORIGIN_LABELS, PARTNER_TYPE_LABELS, classifyBookingChannel,
-  type BookingChannel, type BookingChannelInfo,
-} from "./multiparkParks";
+// ─── Grupos (operação): um por parque ───────────────────────────────────────
+
+/** Ordem dos grupos que não são marca nossa + cidade (vêm depois, por nome). */
+export const OTHER_PARK_GROUP_ORDER = 1000;
+
+export interface OperationalGroup {
+  /** "airpark_lisboa" (marca nossa + cidade) ou "park:<Park.id>". */
+  key: string;
+  /** "Airpark Lisboa" ou o nome do parque. */
+  label: string;
+  /** Marca nossa (Airpark / Redpark / Skypark) em Lisboa, Porto ou Faro. */
+  ours: boolean;
+  order: number;
+}
+
+/**
+ * Grupo operacional de um parque: marca nossa + cidade quando se reconhece
+ * ("Airpark Lisboa", pela classificação de shared/multiparkParks.ts); senão o
+ * próprio parque, pelo nome. Sem bloco "Marketplace". PURA.
+ */
+export function operationalParkGroup(p: { id: string; name: string | null; key: string; label: string; ours: boolean; order?: number }): OperationalGroup {
+  if (p.ours) return { key: p.key, label: p.label, ours: true, order: p.order ?? 0 };
+  return { key: `park:${p.id}`, label: p.name || p.id, ours: false, order: OTHER_PARK_GROUP_ORDER };
+}
+
+/** Ordena grupos: marcas nossas (Lisboa, Porto, Faro × Airpark, Redpark, Skypark) e depois os outros por nome. PURA. */
+export function compareGroups(a: Pick<OperationalGroup, "label" | "order">, b: Pick<OperationalGroup, "label" | "order">): number {
+  return a.order - b.order || a.label.localeCompare(b.label, "pt", { sensitivity: "base" });
+}
 
 // ─── Linhas ─────────────────────────────────────────────────────────────────
 
@@ -92,8 +119,10 @@ export interface DayBooking {
   parkId: string;
   parkName: string | null;
   parkCity: string | null;
+  /** Grupo operacional (operationalParkGroup). */
   groupKey: string;
   groupLabel: string;
+  groupOrder: number;
   ours: boolean;
   clientName: string | null;
   clientEmail: string | null;
@@ -116,13 +145,6 @@ export interface DayBooking {
   partnerId: string | null;
   partnerName: string | null;
   partnerType: string | null;
-  channel: BookingChannel;
-  /** Porquê / quem ("Parkos (agregador)", "Parque de terceiros"). */
-  channelDetail: string;
-  /** Texto do distintivo: "Direto", "Parceiro · Parkos", "Marketplace". */
-  channelBadge: string;
-  /** Tipo do parceiro em texto ("agência", "agregador", "parceiro"). */
-  partnerTypeLabel: string | null;
   garage: string | null;
   spot: string | null;
   price: number | null;
@@ -190,8 +212,6 @@ export interface DayFilters {
   parkId?: string;
   /** "ativas" (sem canceladas), "todas" ou um estado. */
   state?: string;
-  /** Canal (contabilidade) ou "" (todos). */
-  channel?: BookingChannel | "";
   search?: string;
 }
 
@@ -209,7 +229,6 @@ export function filterMovements(rows: DayMovement[], f: DayFilters): DayMovement
     const b = m.booking;
     if (f.kind && f.kind !== "todas" && m.kind !== f.kind) return false;
     if (f.parkId && b.parkId !== f.parkId) return false;
-    if (f.channel && b.channel !== f.channel) return false;
     if (state === "ativas" && b.status === "CANCELLED") return false;
     if (state !== "ativas" && state !== "todas" && b.status !== state) return false;
     if (q) {
@@ -223,8 +242,7 @@ export function filterMovements(rows: DayMovement[], f: DayFilters): DayMovement
   });
 }
 
-export interface DayGroupCount { key: string; label: string; ours: boolean; entradas: number; saidas: number }
-export interface DayChannelCount { channel: BookingChannel; label: string; entradas: number; saidas: number }
+export interface DayGroupCount { key: string; label: string; ours: boolean; order: number; entradas: number; saidas: number }
 export interface DaySummary {
   entradas: number;
   saidas: number;
@@ -233,26 +251,43 @@ export interface DaySummary {
   /** Por fazer (não canceladas). */
   entradasPorFazer: number;
   saidasPorFazer: number;
+  /** Por parque (grupo operacional), só os que têm movimentos, pela ordem da página. */
   groups: DayGroupCount[];
-  /** Por canal (contabilidade), sem as canceladas. */
-  channels: DayChannelCount[];
 }
 
 /** Contagens do dia (as canceladas não contam como entradas/saídas). PURA. */
 export function summarizeDay(rows: DayMovement[]): DaySummary {
   const groups = new Map<string, DayGroupCount>();
-  for (const g of allParkGroups()) groups.set(g.key, { key: g.key, label: g.label, ours: g.ours, entradas: 0, saidas: 0 });
-  const channels = new Map<BookingChannel, DayChannelCount>(
-    BOOKING_CHANNELS.map((c) => [c, { channel: c, label: BOOKING_CHANNEL_LABELS[c], entradas: 0, saidas: 0 }]),
-  );
   const cancelled = new Set<string>();
   let entradas = 0, saidas = 0, entradasPorFazer = 0, saidasPorFazer = 0;
   for (const m of rows) {
     if (m.booking.status === "CANCELLED") { cancelled.add(m.booking.id); continue; }
-    const g = groups.get(m.booking.groupKey) ?? groups.get(MARKETPLACE_GROUP_KEY)!;
-    const c = channels.get(m.booking.channel) ?? channels.get("marketplace")!;
-    if (m.kind === "entrada") { entradas++; g.entradas++; c.entradas++; if (!m.done) entradasPorFazer++; }
-    else { saidas++; g.saidas++; c.saidas++; if (!m.done) saidasPorFazer++; }
+    const b = m.booking;
+    let g = groups.get(b.groupKey);
+    if (!g) groups.set(b.groupKey, (g = { key: b.groupKey, label: b.groupLabel, ours: b.ours, order: b.groupOrder, entradas: 0, saidas: 0 }));
+    if (m.kind === "entrada") { entradas++; g.entradas++; if (!m.done) entradasPorFazer++; }
+    else { saidas++; g.saidas++; if (!m.done) saidasPorFazer++; }
   }
-  return { entradas, saidas, canceladas: cancelled.size, entradasPorFazer, saidasPorFazer, groups: [...groups.values()], channels: [...channels.values()] };
+  return { entradas, saidas, canceladas: cancelled.size, entradasPorFazer, saidasPorFazer, groups: [...groups.values()].sort(compareGroups) };
+}
+
+export interface DayGroupSection extends OperationalGroup { rows: DayMovement[] }
+
+/** Movimentos → um bloco por grupo (parque), pela ordem da página. PURA. */
+export function groupMovements(rows: DayMovement[]): DayGroupSection[] {
+  const out = new Map<string, DayGroupSection>();
+  for (const m of rows) {
+    const b = m.booking;
+    let g = out.get(b.groupKey);
+    if (!g) out.set(b.groupKey, (g = { key: b.groupKey, label: b.groupLabel, ours: b.ours, order: b.groupOrder, rows: [] }));
+    g.rows.push(m);
+  }
+  return [...out.values()].sort(compareGroups);
+}
+
+/** Tira os parques que a operação não faz (Definições). PURA. */
+export function excludeParks<T extends { id: string }>(parks: T[], excludedIds: readonly string[] | null | undefined): T[] {
+  if (!excludedIds?.length) return parks;
+  const ex = new Set(excludedIds);
+  return parks.filter((p) => !ex.has(p.id));
 }

@@ -7091,15 +7091,19 @@ export const appRouter = router({
         return getMultiparkBookingStats(input ?? undefined);
       }),
 
-    // "Reservas do dia": entradas e saídas de UM dia de Lisboa, lidas AO VIVO
-    // da BD da Multipark (só leitura). Só os parques das cidades do utilizador.
-    // Nunca lança por falta de BD — devolve { available:false, reason }.
+    // "Reservas do dia" (operacional): entradas e saídas de UM dia de Lisboa,
+    // lidas AO VIVO da BD da Multipark (só leitura), de todos os parques das
+    // cidades do utilizador MENOS os "Parques que a operação não faz"
+    // (Definições → operations.excludedParks). Nunca lança por falta de BD —
+    // devolve { available:false, reason }.
     reservasDoDia: protectedProcedure
       .input(z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "reservas_operacoes", "view");
         const { getMultiparkDayBookings } = await import("./multiparkDb/dayBookings");
-        const r = await getMultiparkDayBookings(input.day, scopedCityNames());
+        const { getSetting } = await import("./appSettings");
+        const excluded = (await getSetting("operations.excludedParks")) ?? [];
+        const r = await getMultiparkDayBookings(input.day, scopedCityNames(), excluded);
         if (!r.available) return { available: false as const, reason: r.reason, code: r.code };
         return { available: true as const, ...r.data };
       }),

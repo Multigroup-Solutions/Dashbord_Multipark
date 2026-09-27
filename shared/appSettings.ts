@@ -82,7 +82,17 @@ export const aiFeatureTiersSchema = z.record(
   z.enum(AI_TIERS as unknown as ["lite", "fast", "smart"], { error: "Nível inválido (lite, fast ou smart)." }),
 );
 
-export type SettingGroup = "financeiro" | "sla" | "emails" | "disponibilidade" | "ia" | "extras" | "notificacoes" | "marketing";
+export type SettingGroup = "financeiro" | "sla" | "emails" | "disponibilidade" | "ia" | "extras" | "notificacoes" | "marketing" | "operacoes";
+
+// ─── Operações ──────────────────────────────────────────────────────────────
+
+export const EXCLUDED_PARKS_SETTING_KEY = "operations.excludedParks";
+
+/** Ids de parques ("Park".id da BD da Multipark), sem repetidos. */
+export const parkIdListSchema = z
+  .array(z.string({ error: "Id de parque inválido." }).trim().min(1, "Id de parque vazio.").max(64, "Id de parque demasiado longo."), { error: "Indica uma lista de parques." })
+  .max(300, "No máximo 300 parques.")
+  .transform((list) => Array.from(new Set(list)));
 
 // ─── Extras-dia (escala automática) ─────────────────────────────────────────
 
@@ -420,6 +430,15 @@ export const SETTINGS = {
     description: "Pastas do Shared Drive sincronizadas para a base de conhecimento (e quem vê cada uma), índice por embeddings e se o assistente/tutor a usam. Editável em Formação → Base de conhecimento (admin).",
     schema: knowledgeConfigSchema,
     defaultValue: DEFAULT_KNOWLEDGE_CONFIG,
+    wiring: "live",
+  }),
+  [EXCLUDED_PARKS_SETTING_KEY]: def({
+    key: EXCLUDED_PARKS_SETTING_KEY,
+    group: "operacoes",
+    label: "Parques que a operação não faz",
+    description: "Parques da BD da Multipark cujas entradas e saídas NÃO aparecem em Operações → Reservas do dia (a operação não recolhe nem entrega esses carros). Vazio = todos os parques.",
+    schema: parkIdListSchema,
+    defaultValue: [],
     wiring: "live",
   }),
   [NOTIFICATION_ROUTING_SETTING_KEY]: def({
