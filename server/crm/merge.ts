@@ -116,7 +116,10 @@ export async function mergeClients(db: any, o: { survivorId: number; mergedId: n
     snap.filled = fill;
     const sets = Object.entries(fill).map(([k, v]) => sql`${sql.raw("`" + k + "`")} = ${v as any}`);
     if (sets.length) await tx.execute(sql`UPDATE crm_clients SET ${sql.join(sets, sql`, `)} WHERE id = ${o.survivorId}`);
-    await tx.execute(sql`UPDATE crm_clients SET isPro = GREATEST(isPro, ${Number(m.isPro) ? 1 : 0}) WHERE id = ${o.survivorId}`);
+    await tx.execute(sql`UPDATE crm_clients SET isPro = IF(proManual = 1, isPro, GREATEST(isPro, ${Number(m.isPro) ? 1 : 0})) WHERE id = ${o.survivorId}`);
+    // o que foi retirado à mão da absorvida também não volta à que fica
+    await tx.execute(sql`INSERT IGNORE INTO crm_blocked_identifiers (clientId, kind, value, blockedBy, createdAt)
+      SELECT ${o.survivorId}, kind, value, blockedBy, createdAt FROM crm_blocked_identifiers WHERE clientId = ${o.mergedId}`);
     await tx.execute(sql`UPDATE crm_clients SET status = 'merged', mergedInto = ${o.survivorId} WHERE id = ${o.mergedId}`);
 
     const [a, b] = o.survivorId < o.mergedId ? [o.survivorId, o.mergedId] : [o.mergedId, o.survivorId];
@@ -137,6 +140,12 @@ export async function splitMerge(db: any, o: { eventId: number; userId: number }
     if (!ev) throw new Error("Fusão não encontrada.");
     if (ev.undoneAt) throw new Error("Esta fusão já foi separada.");
     const s = Number(ev.survivorId), m = Number(ev.mergedId);
+    // trinco nas duas fichas (a carga, ao arrumar sobras de fusões, tranca a absorvida)
+    const locked = rowsOf(await tx.execute(sql`SELECT id, status, mergedInto FROM crm_clients WHERE id IN (${s}, ${m}) FOR UPDATE`));
+    const sRow = locked.find((r) => Number(r.id) === s), mRow = locked.find((r) => Number(r.id) === m);
+    // fusões em cadeia (M→S e depois S→T): as linhas já estão noutra ficha — separar primeiro a mais recente
+    if (!sRow || sRow.status !== "active") throw new Error("A ficha que ficou foi entretanto junta a outra: separe primeiro essa junção (a mais recente).");
+    if (!mRow || mRow.status !== "merged" || Number(mRow.mergedInto) !== s) throw new Error("A ficha absorvida já não está junta a esta.");
     const snap = JSON.parse(String(ev.snapshotJson)) as MergeSnapshot;
     const back = async (table: string, ids: number[]) => {
       for (const part of chunks(ids, 800)) await tx.execute(sql`UPDATE ${sql.raw(table)} SET clientId = ${m} WHERE clientId = ${s} AND id IN (${inList(part)})`);
@@ -151,12 +160,13 @@ export async function splitMerge(db: any, o: { eventId: number; userId: number }
         clientId = IF(clientId = ${s}, ${m}, clientId), relatedClientId = IF(relatedClientId = ${s}, ${m}, relatedClientId)
         WHERE id = ${id}`);
     }
-    // linhas retiradas voltam à absorvida (com o id original, se ainda estiver livre)
+    // linhas retiradas voltam tal e qual estavam (id e valores originais; emails,
+    // telefones e carros já tinham clientId = absorvida; ligações ficam com os dois lados originais)
     const reinsert = async (table: string, rows: any[]) => {
       for (const r of rows) {
         const cols = Object.keys(r);
         await tx.execute(sql`INSERT IGNORE INTO ${sql.raw(table)} (${sql.raw(cols.map((c) => "`" + c + "`").join(", "))})
-          VALUES (${sql.join(cols.map((c) => sql`${(c === "clientId" ? m : toSqlValue(r[c])) as any}`), sql`, `)})`);
+          VALUES (${sql.join(cols.map((c) => sql`${toSqlValue(r[c]) as any}`), sql`, `)})`);
       }
     };
     await reinsert("crm_client_emails", snap.dropped.emails);

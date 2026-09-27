@@ -4,8 +4,9 @@
  * de clientes sem email (pedir o email antes de o cliente se ir embora).
  */
 import { sql } from "drizzle-orm";
-import { projectScope, scopedProjectIds } from "../cityScope";
+import { projectScope } from "../cityScope";
 import { REASON_LABELS, type SuggestionReason } from "../../shared/crmIdentity";
+import { clientVisibleSql } from "./scope";
 
 const rowsOf = (res: unknown): any[] => {
   const r = Array.isArray(res) ? res[0] : (res as any)?.rows ?? res;
@@ -14,9 +15,19 @@ const rowsOf = (res: unknown): any[] => {
 const inList = (vals: (string | number)[]) => sql.join(vals.map((v) => sql`${v}`), sql`, `);
 const DT = (c: string) => sql.raw(`DATE_FORMAT(${c}, '%Y-%m-%d %H:%i:%s')`);
 
-/** Só fichas com reservas nos projetos que o utilizador vê. */
-const clientInScope = (col: string) => scopedProjectIds() === undefined ? sql`1 = 1` : sql`EXISTS (SELECT 1 FROM crm_booking_links sl
-  JOIN multipark_bookings sb ON sb.externalId = sl.bookingExternalId WHERE sl.clientId = ${sql.raw(col)} AND ${projectScope(sql`sb.projectId`)})`;
+/** Só fichas que o utilizador vê (server/crm/scope.ts). */
+const clientInScope = (col: string) => clientVisibleSql(sql.raw(col));
+
+/** Contagens dos separadores de "Rever fichas" (no âmbito de quem pede). */
+export async function reviewCounts(db: any) {
+  const [row] = rowsOf(await db.execute(sql`SELECT
+    (SELECT COUNT(*) FROM crm_merge_suggestions s WHERE s.status = 'pending' AND ${clientInScope("s.clientA")} AND ${clientInScope("s.clientB")}) AS suggestions,
+    (SELECT COUNT(*) FROM crm_clients c WHERE c.status = 'active' AND c.genericEmailOnly = 1 AND ${clientInScope("c.id")}) AS generic,
+    (SELECT COUNT(DISTINCT c.id) FROM crm_clients c JOIN crm_booking_links l ON l.clientId = c.id JOIN multipark_bookings b ON b.externalId = l.bookingExternalId
+      WHERE c.status = 'active' AND c.noEmail = 1 AND b.checkIn >= UTC_TIMESTAMP() AND b.checkIn < DATE_ADD(UTC_TIMESTAMP(), INTERVAL 3 DAY)
+        AND UPPER(COALESCE(b.status, '')) NOT LIKE '%CANCEL%' AND ${projectScope(sql`b.projectId`)}) AS noEmail`));
+  return { suggestions: Number(row?.suggestions ?? 0), generic: Number(row?.generic ?? 0), noEmail: Number(row?.noEmail ?? 0) };
+}
 
 async function sidesFor(db: any, ids: number[]) {
   const out = new Map<number, any>();
@@ -37,7 +48,8 @@ export async function listSuggestions(db: any, o: { offset?: number; limit?: num
   const limit = Math.max(1, Math.min(50, o.limit ?? 10));
   const offset = Math.max(0, o.offset ?? 0);
   const min = Math.max(0, o.minScore ?? 0);
-  const where = sql`s.status = 'pending' AND s.score >= ${min} AND ${clientInScope("s.clientA")}`;
+  // as DUAS fichas visíveis (a comparação mostra emails, telefones e matrículas de ambas)
+  const where = sql`s.status = 'pending' AND s.score >= ${min} AND ${clientInScope("s.clientA")} AND ${clientInScope("s.clientB")}`;
   const [cnt] = rowsOf(await db.execute(sql`SELECT COUNT(*) AS n FROM crm_merge_suggestions s WHERE ${where}`));
   const rows = rowsOf(await db.execute(sql`SELECT s.id, s.clientA, s.clientB, s.score, s.reasons FROM crm_merge_suggestions s
     WHERE ${where} ORDER BY s.score DESC, s.id LIMIT ${sql.raw(String(limit))} OFFSET ${sql.raw(String(offset))}`));

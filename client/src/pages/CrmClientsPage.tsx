@@ -57,11 +57,13 @@ export default function CrmClientsPage() {
 /** Ligações antigas `/clientes?email=` → ficha nova (ou a antiga, se ainda não existir). */
 function OpenByEmail({ email }: { email: string }) {
   const [, navigate] = useLocation();
-  const q = trpc.crm.list.useQuery({ search: { text: email, field: "email" }, limit: 2 }, { retry: false });
-  const id = q.data?.rows.length === 1 ? q.data.rows[0].id : null;
+  // email EXATO (a pesquisa da lista é "contém": ana@x.pt também apanhava joana@x.pt)
+  const q = trpc.crm.byEmail.useQuery({ email }, { retry: false });
+  const ids = q.data?.ids ?? [];
+  const id = ids.length === 1 ? ids[0] : null;
   useEffect(() => { if (id) navigate(`/clientes/${id}`, { replace: true }); }, [id, navigate]);
   if (q.isLoading || id) return <div className="flex justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>;
-  if (q.data && q.data.rows.length > 1) return <CrmList initialSearch={{ text: email, field: "email" }} />;
+  if (ids.length > 1) return <CrmList initialSearch={{ text: email, field: "email" }} />;
   return <LegacyClientsPage />;
 }
 

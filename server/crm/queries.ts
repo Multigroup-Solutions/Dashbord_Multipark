@@ -10,7 +10,8 @@ import {
   cityAliases, cityLabel, citiesOfCountry, citiesOfRegion, CITY_INFO, COUNTRY_NAMES, parseParks, regionsList,
 } from "../../shared/crmGeo";
 import { plateKey } from "../../shared/crmIdentity";
-import { RULE_FIELDS, segmentsOf, type CrmQuery, type CrmRule, type Segment } from "../../shared/crmFilters";
+import { RULE_FIELDS, segmentsOf, type CrmQuery, type CrmRule, type SearchField, type Segment } from "../../shared/crmFilters";
+import { clientVisibleSql } from "./scope";
 
 const rowsOf = (res: unknown): any[] => {
   const r = Array.isArray(res) ? res[0] : (res as any)?.rows ?? res;
@@ -133,35 +134,38 @@ function segmentSql(s: Segment, vip: number | null): SQL {
   }
 }
 
-export function buildWhere(q: CrmQuery, opts: { vipThreshold: number | null; canSeeTotals: boolean }): SQL {
-  const parts: SQL[] = [sql`c.status = 'active'`];
-  if (q.tab === "pro") parts.push(sql`(c.isPro = 1 OR c.kind = 'company')`);
-  if (scopedProjectIds() !== undefined) parts.push(bookingExists(projectScope(sql`b.projectId`)));
-
-  const s = q.search;
-  const t = s?.text?.trim() ?? "";
-  if (t) {
-    const digits = t.replace(/\D/g, "");
-    const byField: Record<string, () => SQL | null> = {
-      name: () => sql`c.displayName LIKE ${like(t)}`,
-      email: () => sql`EXISTS (SELECT 1 FROM crm_client_emails e WHERE e.clientId = c.id AND e.email LIKE ${like(t.toLowerCase())})`,
-      phone: () => (digits.length >= 3 ? sql`EXISTS (SELECT 1 FROM crm_client_phones p WHERE p.clientId = c.id AND p.phone LIKE ${like(digits)})` : null),
-      plate: () => { const k = plateKey(t) || t.replace(/[\s.\-]/g, "").toUpperCase(); return k ? vehicleExists(sql`v.plate LIKE ${like(k)}`) : null; },
-      nif: () => (digits.length >= 3 ? sql`c.nif LIKE ${like(digits)}` : null),
-      number: () => (/^\d+$/.test(digits) && digits.length ? sql`c.id = ${Number(digits)}` : null),
-      booking: () => bookingExists(sql`(b.bookingNumber = ${t} OR b.externalId = ${t})`),
-      carColor: () => colorCond("contains", t),
-      carModel: () => vehicleExists(sql`CONCAT(COALESCE(v.brand, ''), ' ', COALESCE(v.model, '')) LIKE ${like(t)}`),
-      tags: () => sql`CONCAT(COALESCE(c.tagsJson, ''), ' ', COALESCE(c.notes, '')) LIKE ${like(t)}`,
-    };
-    if (!s!.field || s!.field === "all") {
-      const any = ["name", "email", "phone", "plate", "nif", "number"].map((k) => byField[k]()).filter(Boolean) as SQL[];
-      parts.push(sql`(${sql.join(any, sql` OR `)})`);
-    } else {
-      const one = byField[s!.field]?.();
-      parts.push(one ?? sql`1 = 0`);
+/** Condição da pesquisa num campo (null = o texto não serve para esse campo). */
+export function searchCond(field: SearchField, raw: string): SQL | null {
+  const t = raw.trim();
+  if (!t) return null;
+  const digits = t.replace(/\D/g, "");
+  switch (field) {
+    case "name": return sql`c.displayName LIKE ${like(t)}`;
+    case "email": return sql`EXISTS (SELECT 1 FROM crm_client_emails e WHERE e.clientId = c.id AND e.email LIKE ${like(t.toLowerCase())})`;
+    case "phone": return digits.length >= 3 ? sql`EXISTS (SELECT 1 FROM crm_client_phones p WHERE p.clientId = c.id AND p.phone LIKE ${like(digits)})` : null;
+    case "plate": { const k = plateKey(t) || t.replace(/[\s.\-_/]/g, "").toUpperCase(); return k ? vehicleExists(sql`v.plate LIKE ${like(k)}`) : null; }
+    case "nif": return digits.length >= 3 ? sql`c.nif LIKE ${like(digits)}` : null;
+    case "number": return /^\d+$/.test(digits) && digits.length ? sql`c.id = ${Number(digits)}` : null;
+    case "booking": return bookingExists(sql`(b.bookingNumber = ${t} OR b.externalId = ${t})`);
+    case "carColor": return colorCond("contains", t);
+    case "carModel": return vehicleExists(sql`CONCAT(COALESCE(v.brand, ''), ' ', COALESCE(v.model, '')) LIKE ${like(t)}`);
+    case "tags": return sql`CONCAT(COALESCE(c.tagsJson, ''), ' ', COALESCE(c.notes, '')) LIKE ${like(t)}`;
+    case "all": {
+      const any = (["name", "email", "phone", "plate", "nif", "number"] as const).map((k) => searchCond(k, t)).filter(Boolean) as SQL[];
+      return any.length ? sql`(${sql.join(any, sql` OR `)})` : null;
     }
   }
+  return null;
+}
+
+export function buildWhere(q: CrmQuery, opts: { vipThreshold: number | null; canSeeTotals: boolean }): SQL {
+  // fichas sem reservas só se foram criadas à mão (as da carga sem ligações são restos de um lote interrompido)
+  const parts: SQL[] = [sql`c.status = 'active'`, sql`(c.bookings > 0 OR c.source <> 'bookings')`];
+  if (q.tab === "pro") parts.push(sql`(c.isPro = 1 OR c.kind = 'company')`);
+  if (scopedProjectIds() !== undefined) parts.push(clientVisibleSql(sql`c.id`));
+
+  const s = q.search;
+  if (s?.text?.trim()) parts.push(searchCond(s.field || "all", s.text) ?? sql`1 = 0`);
 
   const g = q.groups ?? {};
   if (g.segment?.length) parts.push(sql`(${sql.join(g.segment.map((x) => segmentSql(x, opts.vipThreshold)), sql` OR `)})`);
@@ -225,7 +229,8 @@ export interface CrmListRow {
 }
 
 export async function listClients(db: any, q: CrmQuery, opts: { canSeeTotals: boolean }) {
-  const vip = await vipThreshold(db);
+  // o limiar VIP é gasto: quem não vê totais não pode filtrar por ele (revelava quem mais gasta)
+  const vip = opts.canSeeTotals ? await vipThreshold(db) : null;
   const where = buildWhere(q, { vipThreshold: vip, canSeeTotals: opts.canSeeTotals });
   const limit = Math.max(1, Math.min(200, Math.trunc(q.limit ?? 24)));
   const offset = Math.max(0, Math.trunc(q.offset ?? 0));
@@ -265,23 +270,34 @@ export async function listClients(db: any, q: CrmQuery, opts: { canSeeTotals: bo
       firstVisit: r.firstVisit ?? null, lastVisit: r.lastVisit ?? null, nextCheckIn: r.nextCheckIn ?? null,
       preferredPark: r.preferredPark ?? null, parks: parseParks(r.parksJson),
       cities: String(r.cities ?? "").split(",").map((x) => cityLabel(x)).filter(Boolean) as string[],
-      segments: segmentsOf(m, opts.canSeeTotals ? vip : null), alerts,
+      segments: segmentsOf(m, vip), alerts,
       vehicle: v ? { plate: v.plateDisplay || v.plate, brand: v.brand ?? null, model: v.model ?? null, color: v.color ?? null, photoUrl: v.photoUrl ?? null } : null,
     };
   });
-  return { total: Number(cnt?.n ?? 0), offset, limit, rows: out, vipThreshold: opts.canSeeTotals ? vip : null };
+  return { total: Number(cnt?.n ?? 0), offset, limit, rows: out, vipThreshold: vip };
 }
 
-/** Quantos clientes cada campo da pesquisa encontra (o menu "procurar em…"). */
+export const FACET_FIELDS = ["name", "email", "phone", "plate", "nif", "number", "booking", "carColor", "carModel", "tags"] as const;
+
+/** Quantos clientes cada campo da pesquisa encontra (o menu "procurar em…") — uma só passagem. */
 export async function searchFacets(db: any, q: CrmQuery, text: string, opts: { canSeeTotals: boolean }) {
-  const vip = await vipThreshold(db);
-  const out: Record<string, number> = {};
-  for (const field of ["name", "email", "phone", "plate", "nif", "number", "booking", "carColor", "carModel", "tags"] as const) {
-    const where = buildWhere({ ...q, search: { text, field } }, { vipThreshold: vip, canSeeTotals: opts.canSeeTotals });
-    const [r] = rowsOf(await db.execute(sql`SELECT COUNT(*) AS n FROM crm_clients c WHERE ${where}`));
-    out[field] = Number(r?.n ?? 0);
-  }
-  return out;
+  const vip = opts.canSeeTotals ? await vipThreshold(db) : null;
+  const where = buildWhere({ ...q, search: null }, { vipThreshold: vip, canSeeTotals: opts.canSeeTotals });
+  const cols = FACET_FIELDS.map((f) => {
+    const cond = searchCond(f, text);
+    return cond ? sql`SUM(CASE WHEN ${cond} THEN 1 ELSE 0 END) AS ${sql.raw(f)}` : sql`0 AS ${sql.raw(f)}`;
+  });
+  const [r] = rowsOf(await db.execute(sql`SELECT ${sql.join(cols, sql`, `)} FROM crm_clients c WHERE ${where}`));
+  return Object.fromEntries(FACET_FIELDS.map((f) => [f, Number(r?.[f] ?? 0)])) as Record<(typeof FACET_FIELDS)[number], number>;
+}
+
+/** Fichas com este email exato (ligações antigas `/clientes?email=`). */
+export async function clientIdsByEmail(db: any, email: string): Promise<number[]> {
+  const e = email.trim().toLowerCase();
+  if (!e.includes("@")) return [];
+  const rows = rowsOf(await db.execute(sql`SELECT DISTINCT c.id FROM crm_client_emails ce JOIN crm_clients c ON c.id = ce.clientId
+    WHERE ce.email = ${e} AND c.status = 'active' AND ${clientVisibleSql(sql`c.id`)} ORDER BY c.id LIMIT 5`));
+  return rows.map((r) => Number(r.id));
 }
 
 /** Valores para os filtros de grupo (só o que existe nas reservas). */
@@ -321,12 +337,11 @@ export async function getClientFile(db: any, id: number, opts: { canSeeTotals: b
     ${DT("nextCheckIn")} AS nextCheckInS, ${DT("lastSeenAt")} AS lastSeenAtS, DATE_FORMAT(birthDate, '%Y-%m-%d') AS birthDateS,
     ${DT("createdAt")} AS createdAtS FROM crm_clients WHERE id = ${id}`));
   if (!c) return null;
-  if (c.status === "merged") return { redirectTo: Number(c.mergedInto) || null };
   if (scopedProjectIds() !== undefined) {
-    const [ok] = rowsOf(await db.execute(sql`SELECT 1 AS ok FROM crm_booking_links l JOIN multipark_bookings b ON b.externalId = l.bookingExternalId
-      WHERE l.clientId = ${id} AND ${projectScope(sql`b.projectId`)} LIMIT 1`));
+    const [ok] = rowsOf(await db.execute(sql`SELECT 1 AS ok FROM crm_clients c WHERE c.id = ${id} AND ${clientVisibleSql(sql`c.id`)}`));
     if (!ok) return null;
   }
+  if (c.status === "merged") return { redirectTo: Number(c.mergedInto) || null };
   const emails = rowsOf(await db.execute(sql`SELECT id, email, isPrimary, generic, verified, source, ${DT("firstSeenAt")} AS firstSeenAt, ${DT("lastSeenAt")} AS lastSeenAt
     FROM crm_client_emails WHERE clientId = ${id} ORDER BY isPrimary DESC, generic ASC, lastSeenAt DESC`));
   const phones = rowsOf(await db.execute(sql`SELECT id, phone, isPrimary, whatsapp, label, source, ${DT("lastSeenAt")} AS lastSeenAt
@@ -353,7 +368,8 @@ export async function getClientFile(db: any, id: number, opts: { canSeeTotals: b
   const suggestions = rowsOf(await db.execute(sql`
     SELECT s.id, s.score, s.reasons, IF(s.clientA = ${id}, s.clientB, s.clientA) AS otherId, o.displayName AS otherName
     FROM crm_merge_suggestions s JOIN crm_clients o ON o.id = IF(s.clientA = ${id}, s.clientB, s.clientA)
-    WHERE s.status = 'pending' AND (s.clientA = ${id} OR s.clientB = ${id}) ORDER BY s.score DESC LIMIT 10`));
+    WHERE s.status = 'pending' AND (s.clientA = ${id} OR s.clientB = ${id}) AND ${clientVisibleSql(sql`o.id`)}
+    ORDER BY s.score DESC LIMIT 10`));
   const merges = rowsOf(await db.execute(sql`
     SELECT e.id, e.mergedId, ${DT("e.mergedAt")} AS mergedAt, e.reason, u.name AS byName, o.displayName AS mergedName
     FROM crm_merge_events e LEFT JOIN users u ON u.id = e.mergedBy LEFT JOIN crm_clients o ON o.id = e.mergedId

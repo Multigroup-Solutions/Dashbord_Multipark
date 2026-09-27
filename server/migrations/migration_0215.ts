@@ -23,10 +23,14 @@
 // `parksJson` = parques usados e n.º de reservas em cada um.
 //
 // Idempotente (corre em cada arranque via ensureRecentSchema).
+//
+// SEM charset/collation explícitos: as tabelas ficam com os da BD, iguais aos
+// de `multipark_bookings` (criada pelo drizzle) — as ligações por
+// `externalId`/matrícula não podem misturar collations (ver PR #85).
 
 export const MIGRATION_0215_NAME = "0215_crm_clients";
 
-const T = " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci";
+const T = " ENGINE=InnoDB";
 
 export const MIGRATION_0215_STATEMENTS: string[] = [
   "CREATE TABLE IF NOT EXISTS `crm_clients` (" +
@@ -51,6 +55,8 @@ export const MIGRATION_0215_STATEMENTS: string[] = [
     "`language` VARCHAR(8) NULL, " +
     "`ibanEnc` VARCHAR(512) NULL, " +
     "`isPro` TINYINT NOT NULL DEFAULT 0, " +
+    // 1 = Pro decidido à mão na ficha: a carga deixa de o mudar
+    "`proManual` TINYINT NOT NULL DEFAULT 0, " +
     "`proDiscount` DECIMAL(5,2) NULL, " +
     "`originPartnerId` VARCHAR(128) NULL, " +
     "`originPartnerName` VARCHAR(255) NULL, " +
@@ -185,7 +191,9 @@ export const MIGRATION_0215_STATEMENTS: string[] = [
     "`updatedAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, " +
     "PRIMARY KEY (`id`), " +
     "UNIQUE KEY `uq_crm_suggestion_pair` (`clientA`, `clientB`), " +
-    "KEY `idx_crm_suggestion_status` (`status`, `score`)" +
+    "KEY `idx_crm_suggestion_status` (`status`, `score`), " +
+    "KEY `idx_crm_suggestion_a` (`clientA`, `status`), " +
+    "KEY `idx_crm_suggestion_b` (`clientB`, `status`)" +
     ")" + T,
   "CREATE TABLE IF NOT EXISTS `crm_merge_events` (" +
     "`id` INT NOT NULL AUTO_INCREMENT, " +
@@ -214,6 +222,19 @@ export const MIGRATION_0215_STATEMENTS: string[] = [
     "KEY `idx_crm_filters_user` (`userId`), " +
     "KEY `idx_crm_filters_shared` (`shared`)" +
     ")" + T,
+  // Email/telefone/matrícula retirados à mão de uma ficha: a carga não os volta a pôr.
+  "CREATE TABLE IF NOT EXISTS `crm_blocked_identifiers` (" +
+    "`id` INT NOT NULL AUTO_INCREMENT, " +
+    "`clientId` INT NOT NULL, " +
+    "`kind` VARCHAR(8) NOT NULL, " +
+    "`value` VARCHAR(320) NOT NULL, " +
+    "`blockedBy` INT NULL, " +
+    "`createdAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
+    "PRIMARY KEY (`id`), " +
+    "UNIQUE KEY `uq_crm_blocked` (`clientId`, `kind`, `value`)" +
+    ")" + T,
+  // Cursor da carga (updatedAt, id): sem índice, cada lote ordena a tabela toda.
+  "ALTER TABLE `multipark_bookings` ADD INDEX `idx_mb_updated_id` (`updatedAt`, `id`)",
 ];
 
 export const IDEMPOTENT_ERROR_CODES_0215 = new Set<string>(["ER_TABLE_EXISTS_ERROR", "ER_DUP_KEYNAME"]);

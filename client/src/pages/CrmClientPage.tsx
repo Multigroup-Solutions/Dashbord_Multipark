@@ -606,7 +606,7 @@ function logDetail(action: string, raw: unknown): string | null {
   if (d.plate) return String(d.plate);
   if (action === "crm_client_update") return Object.keys(d).map((k) => FIELD_LABEL[k] ?? k).join(", ");
   if (action === "crm_relation_add" || action === "crm_relation_remove") return REL_LABEL[String(d.kind)] ?? null;
-  if (action === "crm_iban") return d.set ? `termina em ${d.last4}` : "apagado";
+  if (action === "crm_iban") return d.set ? "guardado" : "apagado";
   if (d.mergedId) return `ficha N.º ${d.mergedId}${d.reason ? ` · ${d.reason}` : ""}`;
   if (d.survivorId) return `ficha N.º ${d.survivorId}`;
   return null;

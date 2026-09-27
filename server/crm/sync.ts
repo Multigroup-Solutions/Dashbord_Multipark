@@ -31,8 +31,16 @@ export function parseCursor(c: string | null | undefined): { at: string; id: num
   return m ? { at: m[1], id: Number(m[2]) } : { at: "1970-01-01 00:00:00", id: 0 };
 }
 
-/** Emails usados por muitos nomes diferentes (balcão, agregadores) + domínios da casa. */
+/** Emails usados por muitos nomes diferentes (balcão, agregadores) + domínios da casa. Cache 1 h. */
+let genericCache: { at: number; set: Set<string> } | null = null;
 export async function loadGenericEmails(db: any): Promise<Set<string>> {
+  if (genericCache && Date.now() - genericCache.at < 60 * 60_000) return genericCache.set;
+  const set = await queryGenericEmails(db);
+  genericCache = { at: Date.now(), set };
+  return set;
+}
+
+async function queryGenericEmails(db: any): Promise<Set<string>> {
   const r = rowsOf(await db.execute(sql`
     SELECT LOWER(TRIM(clientEmail)) AS e
     FROM multipark_bookings
@@ -54,7 +62,9 @@ async function loadBatch(db: any, cursor: { at: string; id: number }, limit: num
       vehicleBrand, vehicleModel, vehicleColor, vehicleType, partnerId, partnerName, pro, origin,
       ${f("COALESCE(bookingCreatedAt, checkIn)")} AS seenAt, ${f("updatedAt")} AS cursorAt
     FROM multipark_bookings
-    WHERE (updatedAt > ${cursor.at}) OR (updatedAt = ${cursor.at} AND id > ${cursor.id})
+    WHERE ((updatedAt > ${cursor.at}) OR (updatedAt = ${cursor.at} AND id > ${cursor.id}))
+      -- 2 min de folga: uma transação que ainda não gravou não fica para trás do cursor
+      AND updatedAt < NOW() - INTERVAL 2 MINUTE
     ORDER BY updatedAt, id
     LIMIT ${sql.raw(String(Math.trunc(limit)))}`));
 }
@@ -132,27 +142,31 @@ export async function recomputeMetrics(db: any, clientIds: number[]): Promise<vo
       return list.length ? json : null;
     };
     const flags = rowsOf(await db.execute(sql`
-      SELECT c.id, c.primaryPhone,
-        (SELECT p.phone FROM crm_client_phones p WHERE p.clientId = c.id ORDER BY p.isPrimary DESC, p.lastSeenAt DESC LIMIT 1) AS anyPhone,
+      SELECT c.id,
+        (SELECT p.phone FROM crm_client_phones p WHERE p.clientId = c.id ORDER BY p.isPrimary DESC, p.lastSeenAt DESC LIMIT 1) AS bestPhone,
+        (SELECT e.email FROM crm_client_emails e WHERE e.clientId = c.id AND e.generic = 0 ORDER BY e.isPrimary DESC, e.lastSeenAt DESC LIMIT 1) AS bestEmail,
         (SELECT COUNT(*) FROM crm_client_emails e WHERE e.clientId = c.id AND e.generic = 0) AS goodEmails,
         (SELECT COUNT(*) FROM crm_client_emails e WHERE e.clientId = c.id AND e.generic = 1) AS genericEmails
       FROM crm_clients c WHERE c.id IN (${inList(part)})`));
     const flagOf = new Map(flags.map((f) => [Number(f.id), f]));
     const aggOf = new Map(agg.map((a) => [Number(a.clientId), a]));
-    const values = part.map((id) => {
+    // só fichas que existem (o INSERT … ON DUPLICATE criaria uma ficha fantasma)
+    const existing = part.filter((id) => flagOf.has(id));
+    if (!existing.length) continue;
+    const values = existing.map((id) => {
       const a = aggOf.get(id) ?? {};
       const f = flagOf.get(id) ?? {};
       const good = Number(f.goodEmails ?? 0), gen = Number(f.genericEmails ?? 0);
       const top = (parksOf.get(id) ?? []).sort((x, y) => y.bookings - x.bookings)[0]?.park ?? null;
-      const country = countryFromPhone(f.primaryPhone ?? f.anyPhone ?? null);
+      const country = countryFromPhone(f.bestPhone ?? null);
       return sql`(${id}, ${Number(a.bookings ?? 0)}, ${Number(a.cancelled ?? 0)}, ${Number(a.completed ?? 0)}, ${Number(a.upcoming ?? 0)},
         ${Number(a.partnerBookings ?? 0)}, ${a.totalSpent == null ? null : Number(a.totalSpent)}, ${v(a.firstVisit)}, ${v(a.lastVisit)},
         ${v(a.nextCheckIn)}, ${top ? top.slice(0, 128) : null}, ${parksJsonOf(id)}, ${v(a.cities)}, ${country}, ${good === 0 ? 1 : 0}, ${good === 0 && gen > 0 ? 1 : 0},
-        ${Number(a.anyPro ?? 0) === 1 ? 1 : 0}, UTC_TIMESTAMP())`;
+        ${Number(a.anyPro ?? 0) === 1 ? 1 : 0}, ${v(f.bestEmail)}, ${v(f.bestPhone)}, UTC_TIMESTAMP())`;
     });
     await db.execute(sql`
       INSERT INTO crm_clients (id, bookings, cancelled, completed, upcoming, partnerBookings, totalSpent, firstVisit, lastVisit,
-        nextCheckIn, preferredPark, parksJson, cities, country, noEmail, genericEmailOnly, isPro, metricsAt)
+        nextCheckIn, preferredPark, parksJson, cities, country, noEmail, genericEmailOnly, isPro, primaryEmail, primaryPhone, metricsAt)
       VALUES ${sql.join(values, sql`, `)}
       ON DUPLICATE KEY UPDATE
         bookings = VALUES(bookings), cancelled = VALUES(cancelled), completed = VALUES(completed), upcoming = VALUES(upcoming),
@@ -160,8 +174,26 @@ export async function recomputeMetrics(db: any, clientIds: number[]): Promise<vo
         lastVisit = VALUES(lastVisit), nextCheckIn = VALUES(nextCheckIn), preferredPark = VALUES(preferredPark),
         parksJson = VALUES(parksJson), cities = VALUES(cities), country = COALESCE(VALUES(country), country),
         noEmail = VALUES(noEmail), genericEmailOnly = VALUES(genericEmailOnly),
-        isPro = GREATEST(isPro, VALUES(isPro)), metricsAt = VALUES(metricsAt)`);
+        isPro = IF(proManual = 1, isPro, GREATEST(isPro, VALUES(isPro))),
+        primaryEmail = VALUES(primaryEmail), primaryPhone = VALUES(primaryPhone), metricsAt = VALUES(metricsAt)`);
   }
+}
+
+/**
+ * `upcoming`/`nextCheckIn` só mudam quando uma reserva muda: uma "próxima
+ * reserva" que já passou sem mexer (não veio) fica para trás. Uma vez por
+ * dia (crm-suggestions) recalcula essas fichas. Devolve quantas.
+ */
+export async function recomputeStaleUpcoming(db: any, o: { deadlineAt: number }): Promise<number> {
+  const ids = rowsOf(await db.execute(sql`SELECT id FROM crm_clients
+    WHERE status = 'active' AND upcoming > 0 AND nextCheckIn IS NOT NULL AND nextCheckIn < UTC_TIMESTAMP() LIMIT 20000`)).map((r) => Number(r.id));
+  let n = 0;
+  for (const part of chunks(ids, 500)) {
+    if (Date.now() > o.deadlineAt) break;
+    await recomputeMetrics(db, part);
+    n += part.length;
+  }
+  return n;
 }
 
 export interface CrmSyncResult {
@@ -175,6 +207,56 @@ export interface CrmSyncResult {
   cursor: string | null;
   done: boolean;
   ms: number;
+}
+
+/** Identificadores retirados à mão destas fichas ("id|kind|valor"). */
+async function loadBlocked(db: any, clientIds: number[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  for (const part of chunks(clientIds, 800)) {
+    for (const b of rowsOf(await db.execute(sql`SELECT clientId, kind, value FROM crm_blocked_identifiers WHERE clientId IN (${inList(part)})`))) {
+      out.add(`${Number(b.clientId)}|${b.kind}|${b.value}`);
+    }
+  }
+  return out;
+}
+
+/**
+ * Sem trinco entre a carga e as fusões: se uma fusão acabar entre a leitura
+ * das fichas e a escrita do lote, ligações/emails/telefones/carros podem cair
+ * na ficha absorvida. Passam para a que ficou (segue fusões em cadeia).
+ * Devolve as fichas que receberam alguma coisa (para recalcular).
+ */
+export async function healMergedLeftovers(db: any): Promise<number[]> {
+  const merged = rowsOf(await db.execute(sql`SELECT c.id, c.mergedInto FROM crm_clients c
+    WHERE c.status = 'merged' AND c.mergedInto IS NOT NULL AND (
+      EXISTS (SELECT 1 FROM crm_booking_links l WHERE l.clientId = c.id)
+      OR EXISTS (SELECT 1 FROM crm_client_emails e WHERE e.clientId = c.id)
+      OR EXISTS (SELECT 1 FROM crm_client_phones p WHERE p.clientId = c.id)
+      OR EXISTS (SELECT 1 FROM crm_client_vehicles v WHERE v.clientId = c.id))`));
+  if (!merged.length) return [];
+  const into = new Map<number, number>();
+  for (const r of rowsOf(await db.execute(sql`SELECT id, mergedInto FROM crm_clients WHERE status = 'merged' AND mergedInto IS NOT NULL`))) {
+    into.set(Number(r.id), Number(r.mergedInto));
+  }
+  const finalOf = (id: number) => { let x = id; for (let i = 0; i < 20 && into.has(x); i++) x = into.get(x)!; return x; };
+  const out = new Set<number>();
+  for (const r of merged) {
+    const m = Number(r.id), s = finalOf(m);
+    if (!s || s === m) continue;
+    // trinco na linha da absorvida: uma separação (que também a tranca) não corre ao mesmo tempo
+    await db.transaction(async (tx: any) => {
+      const [cur] = rowsOf(await tx.execute(sql`SELECT status, mergedInto FROM crm_clients WHERE id = ${m} FOR UPDATE`));
+      if (!cur || cur.status !== "merged") return; // entretanto separada: fica como está
+      await tx.execute(sql`UPDATE crm_booking_links SET clientId = ${s} WHERE clientId = ${m}`);
+      for (const t of ["crm_client_emails", "crm_client_phones", "crm_client_vehicles"]) {
+        // o que a que ficou ainda não tem muda; o repetido (já lá está) sai da absorvida
+        await tx.execute(sql`UPDATE IGNORE ${sql.raw(t)} SET clientId = ${s}${t === "crm_client_vehicles" ? sql`` : sql`, isPrimary = 0`} WHERE clientId = ${m}`);
+        await tx.execute(sql`DELETE FROM ${sql.raw(t)} WHERE clientId = ${m}`);
+      }
+      out.add(s);
+    });
+  }
+  return [...out];
 }
 
 /** Um lote: decide e grava. Devolve o novo cursor (ou null se não havia nada). */
@@ -226,13 +308,15 @@ async function runOneBatch(db: any, cursor: { at: string; id: number }, generic:
         ON DUPLICATE KEY UPDATE
           displayName = COALESCE(displayName, VALUES(displayName)), firstName = COALESCE(firstName, VALUES(firstName)),
           lastName = COALESCE(lastName, VALUES(lastName)), nif = COALESCE(nif, VALUES(nif)),
-          isPro = GREATEST(isPro, VALUES(isPro)),
+          isPro = IF(proManual = 1, isPro, GREATEST(isPro, VALUES(isPro))),
           lastSeenAt = IF(lastSeenAt IS NULL OR VALUES(lastSeenAt) > lastSeenAt, VALUES(lastSeenAt), lastSeenAt)`);
     }
   }
 
-  // 3) emails, telefones, carros, ligações
-  const emailsRows = plan.emails.map((e) => ({ ...e, clientId: real(e.clientId) })).filter((e) => e.clientId);
+  // 3) emails, telefones, carros, ligações — menos o que foi retirado à mão da ficha
+  const blocked = await loadBlocked(db, [...new Set([...plan.emails, ...plan.phones, ...plan.vehicles].map((x) => x.clientId).filter((id) => id > 0))]);
+  const ok = (clientId: number, kind: string, value: string) => !blocked.has(`${clientId}|${kind}|${value}`);
+  const emailsRows = plan.emails.filter((e) => ok(e.clientId, "email", e.email)).map((e) => ({ ...e, clientId: real(e.clientId) })).filter((e) => e.clientId);
   for (const part of chunks(emailsRows, 500)) {
     await db.execute(sql`
       INSERT INTO crm_client_emails (clientId, email, generic, source, firstSeenAt, lastSeenAt)
@@ -241,7 +325,7 @@ async function runOneBatch(db: any, cursor: { at: string; id: number }, generic:
         firstSeenAt = IF(firstSeenAt IS NULL OR VALUES(firstSeenAt) < firstSeenAt, VALUES(firstSeenAt), firstSeenAt),
         lastSeenAt = IF(lastSeenAt IS NULL OR VALUES(lastSeenAt) > lastSeenAt, VALUES(lastSeenAt), lastSeenAt)`);
   }
-  const phoneRows = plan.phones.map((p) => ({ ...p, clientId: real(p.clientId) })).filter((p) => p.clientId);
+  const phoneRows = plan.phones.filter((p) => ok(p.clientId, "phone", p.phone)).map((p) => ({ ...p, clientId: real(p.clientId) })).filter((p) => p.clientId);
   for (const part of chunks(phoneRows, 500)) {
     await db.execute(sql`
       INSERT INTO crm_client_phones (clientId, phone, source, firstSeenAt, lastSeenAt)
@@ -250,7 +334,7 @@ async function runOneBatch(db: any, cursor: { at: string; id: number }, generic:
         firstSeenAt = IF(firstSeenAt IS NULL OR VALUES(firstSeenAt) < firstSeenAt, VALUES(firstSeenAt), firstSeenAt),
         lastSeenAt = IF(lastSeenAt IS NULL OR VALUES(lastSeenAt) > lastSeenAt, VALUES(lastSeenAt), lastSeenAt)`);
   }
-  const vehRows = plan.vehicles.map((x) => ({ ...x, clientId: real(x.clientId) })).filter((x) => x.clientId);
+  const vehRows = plan.vehicles.filter((x) => ok(x.clientId, "plate", x.plate)).map((x) => ({ ...x, clientId: real(x.clientId) })).filter((x) => x.clientId);
   for (const part of chunks(vehRows, 400)) {
     await db.execute(sql`
       INSERT INTO crm_client_vehicles (clientId, plate, plateDisplay, brand, model, color, vehicleType, firstSeenAt, lastSeenAt)
@@ -269,13 +353,17 @@ async function runOneBatch(db: any, cursor: { at: string; id: number }, generic:
       ON DUPLICATE KEY UPDATE clientId = clientId`);
   }
 
-  // 4) métricas das fichas tocadas (+ contagem de reservas por carro)
-  const touchedIds = [...new Set(plan.links.map((l) => real(l.clientId)).filter(Boolean))];
+  // 4) o que caiu numa ficha entretanto junta a outra (corrida com uma fusão) passa para a que ficou
+  const healed = await healMergedLeftovers(db);
+
+  // 5) métricas das fichas tocadas (+ contagem de reservas por carro)
+  const touchedIds = [...new Set([...plan.links.map((l) => real(l.clientId)), ...healed].filter(Boolean))];
   await recomputeMetrics(db, touchedIds);
   for (const part of chunks(touchedIds, 500)) {
+    // mesma limpeza que plateKey (espaços . - _ /)
     await db.execute(sql`
       UPDATE crm_client_vehicles v
-      JOIN (SELECT l.clientId, UPPER(REPLACE(REPLACE(REPLACE(b.licensePlate, '-', ''), ' ', ''), '.', '')) AS plate, COUNT(*) AS n
+      JOIN (SELECT l.clientId, UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(b.licensePlate, '-', ''), ' ', ''), '.', ''), '_', ''), '/', '')) AS plate, COUNT(*) AS n
             FROM crm_booking_links l JOIN multipark_bookings b ON b.externalId = l.bookingExternalId
             WHERE l.role = 'traveler' AND l.clientId IN (${inList(part)}) AND b.licensePlate IS NOT NULL
             GROUP BY l.clientId, plate) x ON x.clientId = v.clientId AND x.plate = v.plate

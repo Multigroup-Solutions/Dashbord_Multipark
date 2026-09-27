@@ -225,9 +225,12 @@ export async function crmSuggestionsCron(o: { deadlineAt: number }): Promise<Cro
     const { getDb } = await import("./db");
     const db = await getDb();
     if (!db) return { httpStatus: 503, body: { ok: false, error: "BD indisponível" } };
+    // "próxima reserva" que já passou (não veio / sem mudança na reserva): recalcular
+    const { recomputeStaleUpcoming } = await import("./crm/sync");
+    const stale = await recomputeStaleUpcoming(db, { deadlineAt: o.deadlineAt - 30_000 });
     const { refreshSuggestions } = await import("./crm/merge");
     const r = await refreshSuggestions(db, { deadlineAt: o.deadlineAt });
-    return { httpStatus: 200, body: { ok: true, ranAt: ranAt(), ...r }, done: true };
+    return { httpStatus: 200, body: { ok: true, ranAt: ranAt(), staleRecomputed: stale, ...r }, done: true };
   } catch (err) {
     console.error("[cron crm-suggestions] falhou:", msg(err, 200));
     return fail(err);

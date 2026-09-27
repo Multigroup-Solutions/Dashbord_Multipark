@@ -45,6 +45,8 @@ export async function updateClient(db: any, userId: number, id: number, patch: P
     if (json !== (before.tagsJson ?? "[]")) { changes.tags = { from: before.tagsJson ?? null, to: json }; sets.push(sql`tagsJson = ${json}`); }
   }
   if (!sets.length) return { changed: 0 };
+  // Pro decidido à mão: a carga das reservas deixa de o mudar
+  if (changes.isPro) sets.push(sql`proManual = 1`);
   await db.execute(sql`UPDATE crm_clients SET ${sql.join(sets, sql`, `)} WHERE id = ${id}`);
   await logCrm(userId, id, "crm_client_update", changes);
   return { changed: Object.keys(changes).length };
@@ -65,6 +67,15 @@ export async function createClient(db: any, userId: number, o: { displayName: st
 
 // ─── Emails / telefones ─────────────────────────────────────────────────────
 
+/** Retirado à mão → a carga das reservas não o volta a pôr nesta ficha. */
+async function block(db: any, userId: number, clientId: number, kind: "email" | "phone" | "plate", value: string) {
+  await db.execute(sql`INSERT IGNORE INTO crm_blocked_identifiers (clientId, kind, value, blockedBy) VALUES (${clientId}, ${kind}, ${value}, ${userId})`);
+}
+/** Acrescentado à mão → deixa de estar bloqueado. */
+async function unblock(db: any, clientId: number, kind: "email" | "phone" | "plate", value: string) {
+  await db.execute(sql`DELETE FROM crm_blocked_identifiers WHERE clientId = ${clientId} AND kind = ${kind} AND value = ${value}`);
+}
+
 async function refreshPrimary(db: any, clientId: number) {
   await db.execute(sql`UPDATE crm_clients c SET
     primaryEmail = (SELECT e.email FROM crm_client_emails e WHERE e.clientId = c.id AND e.generic = 0 ORDER BY e.isPrimary DESC, e.lastSeenAt DESC LIMIT 1),
@@ -82,6 +93,7 @@ export async function addEmail(db: any, userId: number, clientId: number, raw: s
   await db.execute(sql`INSERT INTO crm_client_emails (clientId, email, isPrimary, verified, source, firstSeenAt, lastSeenAt)
     VALUES (${clientId}, ${email}, ${primary ? 1 : 0}, 1, 'manual', UTC_TIMESTAMP(), UTC_TIMESTAMP())
     ON DUPLICATE KEY UPDATE isPrimary = GREATEST(isPrimary, VALUES(isPrimary)), generic = 0, verified = 1`);
+  await unblock(db, clientId, "email", email);
   await refreshPrimary(db, clientId);
   await logCrm(userId, clientId, "crm_email_add", { email, primary });
 }
@@ -89,7 +101,8 @@ export async function addEmail(db: any, userId: number, clientId: number, raw: s
 export async function removeEmail(db: any, userId: number, clientId: number, emailId: number, reason?: string | null) {
   const [e] = rowsOf(await db.execute(sql`SELECT email FROM crm_client_emails WHERE id = ${emailId} AND clientId = ${clientId}`));
   if (!e) throw new Error("Email não encontrado.");
-  await db.execute(sql`DELETE FROM crm_client_emails WHERE id = ${emailId}`);
+  await db.execute(sql`DELETE FROM crm_client_emails WHERE id = ${emailId} AND clientId = ${clientId}`);
+  await block(db, userId, clientId, "email", String(e.email));
   await refreshPrimary(db, clientId);
   await logCrm(userId, clientId, "crm_email_remove", { email: e.email, reason: reason ?? null });
 }
@@ -107,6 +120,7 @@ export async function addPhone(db: any, userId: number, clientId: number, raw: s
   await db.execute(sql`INSERT INTO crm_client_phones (clientId, phone, isPrimary, whatsapp, label, source, firstSeenAt, lastSeenAt)
     VALUES (${clientId}, ${phone}, ${o.primary ? 1 : 0}, ${o.whatsapp ? 1 : 0}, ${o.label ?? null}, 'manual', UTC_TIMESTAMP(), UTC_TIMESTAMP())
     ON DUPLICATE KEY UPDATE isPrimary = GREATEST(isPrimary, VALUES(isPrimary)), whatsapp = GREATEST(whatsapp, VALUES(whatsapp)), label = COALESCE(VALUES(label), label)`);
+  await unblock(db, clientId, "phone", phone);
   await refreshPrimary(db, clientId);
   await db.execute(sql`UPDATE crm_clients SET country = COALESCE(country, ${countryFromPhone(phone)}) WHERE id = ${clientId}`);
   await logCrm(userId, clientId, "crm_phone_add", { phone, ...o });
@@ -115,7 +129,8 @@ export async function addPhone(db: any, userId: number, clientId: number, raw: s
 export async function removePhone(db: any, userId: number, clientId: number, phoneId: number) {
   const [p] = rowsOf(await db.execute(sql`SELECT phone FROM crm_client_phones WHERE id = ${phoneId} AND clientId = ${clientId}`));
   if (!p) throw new Error("Telefone não encontrado.");
-  await db.execute(sql`DELETE FROM crm_client_phones WHERE id = ${phoneId}`);
+  await db.execute(sql`DELETE FROM crm_client_phones WHERE id = ${phoneId} AND clientId = ${clientId}`);
+  await block(db, userId, clientId, "phone", String(p.phone));
   await refreshPrimary(db, clientId);
   await logCrm(userId, clientId, "crm_phone_remove", { phone: p.phone });
 }
@@ -141,13 +156,15 @@ export async function upsertVehicle(db: any, userId: number, clientId: number, v
       VALUES (${clientId}, ${key}, ${v.plate.trim().slice(0, 32)}, ${clean(v.brand)}, ${clean(v.model)}, ${clean(v.color)}, ${clean(v.vehicleType)}, UTC_TIMESTAMP(), UTC_TIMESTAMP())
       ON DUPLICATE KEY UPDATE brand = COALESCE(VALUES(brand), brand), model = COALESCE(VALUES(model), model), color = COALESCE(VALUES(color), color)`);
   }
+  await unblock(db, clientId, "plate", key);
   await logCrm(userId, clientId, v.id ? "crm_vehicle_update" : "crm_vehicle_add", v);
 }
 
 export async function removeVehicle(db: any, userId: number, clientId: number, vehicleId: number) {
   const [v] = rowsOf(await db.execute(sql`SELECT plateDisplay, plate FROM crm_client_vehicles WHERE id = ${vehicleId} AND clientId = ${clientId}`));
   if (!v) throw new Error("Carro não encontrado.");
-  await db.execute(sql`DELETE FROM crm_client_vehicles WHERE id = ${vehicleId}`);
+  await db.execute(sql`DELETE FROM crm_client_vehicles WHERE id = ${vehicleId} AND clientId = ${clientId}`);
+  await block(db, userId, clientId, "plate", String(v.plate));
   await logCrm(userId, clientId, "crm_vehicle_remove", { plate: v.plateDisplay || v.plate });
 }
 
@@ -165,7 +182,8 @@ export async function setIban(db: any, userId: number, clientId: number, iban: s
   const clean = iban ? iban.replace(/\s+/g, "").toUpperCase() : "";
   if (clean && !/^[A-Z]{2}\d{2}[A-Z0-9]{10,30}$/.test(clean)) throw new Error("IBAN inválido.");
   await db.execute(sql`UPDATE crm_clients SET ibanEnc = ${clean ? encryptSecret(clean) : null} WHERE id = ${clientId}`);
-  await logCrm(userId, clientId, "crm_iban", { set: !!clean, last4: clean ? clean.slice(-4) : null });
+  // sem dígitos no registo: o registo da ficha é visível a quem não vê finanças
+  await logCrm(userId, clientId, "crm_iban", { set: !!clean });
 }
 
 // ─── Ligações (pessoa ↔ empresa, familiar) ─────────────────────────────────

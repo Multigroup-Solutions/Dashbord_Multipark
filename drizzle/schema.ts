@@ -3331,6 +3331,8 @@ export const crmClients = mysqlTable("crm_clients", {
 	language: varchar({ length: 8 }),
 	ibanEnc: varchar({ length: 512 }),
 	isPro: tinyint().default(0).notNull(),
+	/** 1 = Pro decidido à mão na ficha (a carga deixa de o mudar). */
+	proManual: tinyint().default(0).notNull(),
 	proDiscount: decimal({ precision: 5, scale: 2 }),
 	originPartnerId: varchar({ length: 128 }),
 	originPartnerName: varchar({ length: 255 }),
@@ -3481,6 +3483,8 @@ export const crmMergeSuggestions = mysqlTable("crm_merge_suggestions", {
 (table) => [
 	uniqueIndex("uq_crm_suggestion_pair").on(table.clientA, table.clientB),
 	index("idx_crm_suggestion_status").on(table.status, table.score),
+	index("idx_crm_suggestion_a").on(table.clientA, table.status),
+	index("idx_crm_suggestion_b").on(table.clientB, table.status),
 ]);
 
 export const crmMergeEvents = mysqlTable("crm_merge_events", {
@@ -3512,6 +3516,19 @@ export const crmSavedFilters = mysqlTable("crm_saved_filters", {
 (table) => [
 	index("idx_crm_filters_user").on(table.userId),
 	index("idx_crm_filters_shared").on(table.shared),
+]);
+
+/** Email/telefone/matrícula retirados à mão de uma ficha: a carga não os volta a pôr. */
+export const crmBlockedIdentifiers = mysqlTable("crm_blocked_identifiers", {
+	id: int().autoincrement().primaryKey(),
+	clientId: int().notNull(),
+	kind: varchar({ length: 8 }).notNull(), // email | phone | plate
+	value: varchar({ length: 320 }).notNull(),
+	blockedBy: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_crm_blocked").on(table.clientId, table.kind, table.value),
 ]);
 
 // ─── Google Drive / Docs / Sheets — migração 0160 ───────────────────────────

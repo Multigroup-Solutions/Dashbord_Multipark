@@ -439,28 +439,17 @@ function canMergeCrm(user: { role: string }): boolean {
   return ["backoffice", "admin", "super_admin"].includes(user.role);
 }
 
-/** Uma ficha fora da cidade do utilizador não se edita (nem se revela que existe). */
-async function crmAssertInScope(clientId: number): Promise<void> {
-  const { scopedProjectIds, projectScope } = await import("./cityScope");
-  if (scopedProjectIds() === undefined) return;
-  const { sql } = await import("drizzle-orm");
-  const db = await crmDb();
-  const r: any = await db.execute(sql`SELECT 1 AS ok FROM crm_booking_links l JOIN multipark_bookings b ON b.externalId = l.bookingExternalId
-    WHERE l.clientId = ${clientId} AND ${projectScope(sql`b.projectId`)} LIMIT 1`);
-  const rows = Array.isArray(r) && Array.isArray(r[0]) ? r[0] : r;
-  if (!rows?.length) throw new TRPCError({ code: "NOT_FOUND", message: "Cliente não encontrado" });
+/** Fichas fora da cidade do utilizador não se editam (nem se revela que existem). Regra: server/crm/scope.ts. */
+async function crmAssertInScope(...clientIds: number[]): Promise<void> {
+  const { visibleClientIds } = await import("./crm/scope");
+  const ok = await visibleClientIds(await crmDb(), clientIds);
+  if (clientIds.some((id) => !ok.has(id))) throw new TRPCError({ code: "NOT_FOUND", message: "Cliente não encontrado" });
 }
 
-async function crmReviewCounts(db: any) {
-  const { sql } = await import("drizzle-orm");
-  const r: any = await db.execute(sql`SELECT
-    (SELECT COUNT(*) FROM crm_merge_suggestions WHERE status = 'pending') AS suggestions,
-    (SELECT COUNT(*) FROM crm_clients WHERE status = 'active' AND genericEmailOnly = 1) AS generic,
-    (SELECT COUNT(DISTINCT c.id) FROM crm_clients c JOIN crm_booking_links l ON l.clientId = c.id JOIN multipark_bookings b ON b.externalId = l.bookingExternalId
-      WHERE c.status = 'active' AND c.noEmail = 1 AND b.checkIn >= UTC_TIMESTAMP() AND b.checkIn < DATE_ADD(UTC_TIMESTAMP(), INTERVAL 3 DAY)
-        AND UPPER(COALESCE(b.status, '')) NOT LIKE '%CANCEL%') AS noEmail`);
-  const row = (Array.isArray(r) && Array.isArray(r[0]) ? r[0] : r)?.[0] ?? {};
-  return { suggestions: Number(row.suggestions ?? 0), generic: Number(row.generic ?? 0), noEmail: Number(row.noEmail ?? 0) };
+/** Linha única de um SELECT (ou undefined). */
+async function crmRow(q: import("drizzle-orm").SQL): Promise<any> {
+  const r: any = await (await crmDb()).execute(q);
+  return (Array.isArray(r) && Array.isArray(r[0]) ? r[0] : r)?.[0];
 }
 
 /** Admins de cidade não mexem nos nós estruturais (Grupo/Cidade): só no que
@@ -8636,12 +8625,32 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "clientes", "edit");
         const db = await crmDb();
+        const { sql } = await import("drizzle-orm");
         const { addRelation, removeRelation } = await import("./crm/edit");
+        if (input.op === "add") {
+          await crmAssertInScope(input.clientId, input.relatedClientId);
+          const other = await crmRow(sql`SELECT status FROM crm_clients WHERE id = ${input.relatedClientId}`);
+          if (other?.status !== "active") throw new TRPCError({ code: "BAD_REQUEST", message: "A outra ficha não está ativa." });
+        } else {
+          // só quem vê pelo menos uma das fichas ligadas (a ligação aparece nessa ficha)
+          const rel = await crmRow(sql`SELECT clientId, relatedClientId FROM crm_client_relations WHERE id = ${input.relationId}`);
+          if (!rel) throw new TRPCError({ code: "NOT_FOUND", message: "Ligação não encontrada." });
+          const { visibleClientIds } = await import("./crm/scope");
+          if (!(await visibleClientIds(db, [Number(rel.clientId), Number(rel.relatedClientId)])).size) throw new TRPCError({ code: "NOT_FOUND", message: "Ligação não encontrada." });
+        }
         try {
-          if (input.op === "add") { await crmAssertInScope(input.clientId); await addRelation(db, ctx.user.id, input); }
+          if (input.op === "add") await addRelation(db, ctx.user.id, input);
           else await removeRelation(db, ctx.user.id, input.relationId);
         } catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: String(err?.message ?? err) }); }
         return { ok: true };
+      }),
+    /** Ligações antigas `/clientes?email=`: fichas com este email EXATO. */
+    byEmail: protectedProcedure
+      .input(z.object({ email: z.string().min(3).max(320) }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "clientes", "view");
+        const { clientIdsByEmail } = await import("./crm/queries");
+        return { ids: await clientIdsByEmail(await crmDb(), input.email) };
       }),
     pick: protectedProcedure
       .input(z.object({ text: z.string().min(2).max(120), excludeId: z.number().int().optional() }))
@@ -8673,6 +8682,10 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "clientes", "edit");
         if (!canMergeCrm(ctx.user)) throw new TRPCError({ code: "FORBIDDEN", message: "Separar fichas: backoffice, administração." });
+        const { sql } = await import("drizzle-orm");
+        const ev = await crmRow(sql`SELECT survivorId FROM crm_merge_events WHERE id = ${input.eventId}`);
+        if (!ev) throw new TRPCError({ code: "NOT_FOUND", message: "Fusão não encontrada." });
+        await crmAssertInScope(Number(ev.survivorId));
         const db = await crmDb();
         const { splitMerge } = await import("./crm/merge");
         const { logCrm } = await import("./crm/edit");
@@ -8687,6 +8700,10 @@ export const appRouter = router({
       .input(z.object({ id: z.number().int() }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "clientes", "edit");
+        const { sql } = await import("drizzle-orm");
+        const s = await crmRow(sql`SELECT clientA, clientB FROM crm_merge_suggestions WHERE id = ${input.id}`);
+        if (!s) throw new TRPCError({ code: "NOT_FOUND", message: "Sugestão não encontrada." });
+        await crmAssertInScope(Number(s.clientA), Number(s.clientB));
         const { dismissSuggestion } = await import("./crm/edit");
         await dismissSuggestion(await crmDb(), ctx.user.id, input.id);
         return { ok: true };
@@ -8697,7 +8714,7 @@ export const appRouter = router({
         requireAccess(ctx.user, "clientes", "view");
         const db = await crmDb();
         const r = await import("./crm/review");
-        const counts = await crmReviewCounts(db);
+        const counts = await r.reviewCounts(db);
         if (input.tab === "suggestions") return { tab: "suggestions" as const, counts, suggestions: await r.listSuggestions(db, input) };
         if (input.tab === "generic") return { tab: "generic" as const, counts, generic: await r.genericEmailClients(db, input) };
         if (input.tab === "noEmail") return { tab: "noEmail" as const, counts, upcoming: await r.upcomingWithoutEmail(db, { days: 3 }) };

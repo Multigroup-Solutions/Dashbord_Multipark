@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import type { SQL } from "drizzle-orm";
-import { buildWhere, colorVariants, ruleSql } from "./queries";
+import { buildWhere, colorVariants, ruleSql, searchCond } from "./queries";
 import { cityScope } from "../cityScope";
 import { citiesOfCountry, citiesOfRegion, cityAliases, countryFromPhone, parseParks } from "../../shared/crmGeo";
 
@@ -55,11 +55,26 @@ describe("CRM — filtros de grupo e pesquisa", () => {
   it("separador Pro inclui empresas", () => {
     expect(compile(buildWhere({ tab: "pro" }, opts)).sql).toContain("c.isPro = 1 OR c.kind = 'company'");
   });
-  it("utilizador de cidade só vê fichas com reservas nos seus projetos", () => {
+  it("utilizador de cidade só vê fichas com reservas nos seus projetos (ou sem reservas: criadas à mão)", () => {
     const q = cityScope.run({ all: false, projectIds: [50, 65] } as any, () => compile(buildWhere({}, opts)));
     expect(q.sql).toContain("crm_booking_links");
+    expect(q.sql).toContain("NOT EXISTS (SELECT 1 FROM crm_booking_links sl2");
     expect(q.params).toEqual(expect.arrayContaining([50, 65]));
     expect(compile(buildWhere({}, opts)).sql).not.toContain("crm_booking_links");
+  });
+  it("fichas da carga sem reservas (lote interrompido) não aparecem", () => {
+    expect(compile(buildWhere({}, opts)).sql).toContain("(c.bookings > 0 OR c.source <> 'bookings')");
+  });
+  it("VIP sem limiar (quem não vê totais) não filtra nada", () => {
+    expect(compile(buildWhere({ groups: { segment: ["vip"] } }, { vipThreshold: null, canSeeTotals: false })).sql).toContain("1 = 0");
+  });
+  it("qualquer campo junta nome, email, telefone, matrícula, NIF e n.º", () => {
+    const c = searchCond("all", "912345678")!;
+    const q = compile(c);
+    expect(q.sql).toContain("crm_client_phones");
+    expect(q.sql).toContain("c.id = ?");
+    expect(searchCond("phone", "ab")).toBeNull();
+    expect(searchCond("name", "   ")).toBeNull();
   });
 });
 
