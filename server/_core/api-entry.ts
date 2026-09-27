@@ -269,7 +269,7 @@ app.get("/api/cron/multipark-db-profile", async (req, res) => {
   try {
     const { runMultiparkDbProfile } = await import("../multiparkDb/profile");
     const tables = typeof req.query?.tables === "string" && req.query.tables ? req.query.tables.split(",").map((s: string) => s.trim()).filter(Boolean).slice(0, 100) : undefined;
-    res.status(200).json(await runMultiparkDbProfile({ tables, withCatalogs: req.query?.catalogos === "1" }));
+    res.status(200).json(await runMultiparkDbProfile({ tables, withCatalogs: req.query?.catalogos === "1", listOnly: req.query?.lista === "1" }));
   } catch (err) {
     console.error("[multipark-db-profile] falhou:", redactSecrets(err));
     res.status(500).json({ ok: false, error: redactSecrets(err).slice(0, 500) });
