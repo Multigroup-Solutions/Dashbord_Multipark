@@ -86,16 +86,37 @@ async function profileTable(table: string, cols: Col[], deadline: number) {
     for (const i of distinctCols) out.colunas[cols[i].column].distintos = Number(d[0]?.[`d${i}`] ?? 0);
   }
 
-  // 3) Valores de categoria, JSON, arrays e URLs.
+  // 3a) Valores de categoria de TODAS as colunas da tabela numa só consulta
+  //     (cada consulta custa várias idas e voltas Vercel ↔ BD deles).
+  const isCategory = (c: Col) => {
+    const k = kindOf(c), info = out.colunas[c.column];
+    return info.preenchida > 0 && !isSensitiveColumn(table, c.column)
+      && (k === "enum" || (k === "text" && info.distintos <= 40 && info.distintos * 3 <= n * info.preenchida / 100));
+  };
+  const catCols = cols.filter(isCategory);
+  if (catCols.length && Date.now() <= deadline) {
+    const lit = (s: string) => `'${s.replace(/'/g, "''")}'`;
+    try {
+      const r = await multiparkDbQuery<any>(catCols.map((c) => `(SELECT ${lit(c.column)} AS col, ${q(c.column)}::text AS v, count(*) AS c FROM ${T}
+          WHERE ${q(c.column)} IS NOT NULL GROUP BY 2 ORDER BY 3 DESC LIMIT 40)`).join(" UNION ALL "));
+      for (const x of r) {
+        const info = out.colunas[x.col];
+        (info.valores = typeof info.valores === "object" ? info.valores : {})[x.v === "" ? "(vazio)" : x.v] = Number(x.c);
+      }
+    } catch (err: any) {
+      out.erroValores = String(err?.message ?? err).slice(0, 160);
+    }
+  }
+
+  // 3b) Rótulos repetidos, JSON, arrays e URLs (poucas colunas por tabela).
   for (const c of cols) {
     if (Date.now() > deadline) { out.parcial = true; break; }
     const k = kindOf(c), C = q(c.column), info = out.colunas[c.column];
     if (!info.preenchida) continue;
     const sensitive = isSensitiveColumn(table, c.column);
     try {
-      if (!sensitive && (k === "enum" || (k === "text" && info.distintos <= 40 && info.distintos * 3 <= n * info.preenchida / 100))) {
-        const r = await multiparkDbQuery<any>(`SELECT ${C}::text AS v, count(*) AS c FROM ${T} WHERE ${C} IS NOT NULL GROUP BY 1 ORDER BY 2 DESC LIMIT 40`);
-        info.valores = Object.fromEntries(r.map((x) => [x.v === "" ? "(vazio)" : x.v, Number(x.c)]));
+      if (isCategory(c)) {
+        // já tratado em 3a
       } else if (!sensitive && k === "text" && ["BookingPricing.description", "BookingExtraService.name", "Occurrence.title", "Cancellation.cancellationType", "History.modifiedFields", "Billing.provider", "Billing.description"].includes(`${table}.${c.column}`)) {
         // Rótulos com muitas variantes: só os repetidos (≥ 5), nunca os únicos.
         const tok = c.column === "modifiedFields";
@@ -105,10 +126,10 @@ async function profileTable(table: string, cols: Col[], deadline: number) {
         info.valoresRepetidos = Object.fromEntries(r.map((x) => [x.v === "" ? "(vazio)" : x.v, Number(x.c)]));
       }
       if (k === "json") {
-        const r = await multiparkDbQuery<any>(`SELECT k, count(*) AS c FROM (SELECT jsonb_object_keys(${C}::jsonb) AS k FROM (SELECT ${C} FROM ${T} WHERE ${C} IS NOT NULL AND jsonb_typeof(${C}::jsonb) = 'object' LIMIT 20000) s0) s GROUP BY 1 ORDER BY 2 DESC LIMIT 80`);
+        // Chaves de topo numa amostra de 5 000 linhas (os snapshots são grandes).
+        const r = await multiparkDbQuery<any>(`SELECT k, count(*) AS c FROM (SELECT jsonb_object_keys(${C}::jsonb) AS k FROM (SELECT ${C} FROM ${T} WHERE ${C} IS NOT NULL AND jsonb_typeof(${C}::jsonb) = 'object' LIMIT 5000) s0) s GROUP BY 1 ORDER BY 2 DESC LIMIT 80`);
         info.chavesJson = Object.fromEntries(r.map((x) => [x.k, Number(x.c)]));
-        const t = await multiparkDbQuery<any>(`SELECT jsonb_typeof(${C}::jsonb) AS t, count(*) AS c FROM ${T} WHERE ${C} IS NOT NULL GROUP BY 1`);
-        info.tiposJson = Object.fromEntries(t.map((x) => [x.t, Number(x.c)]));
+        info.chavesJsonAmostra = 5000;
       }
       if (k === "array" && !sensitive) {
         const r = await multiparkDbQuery<any>(`SELECT v::text AS v, count(*) AS c FROM (SELECT unnest(${C}) AS v FROM ${T}) s GROUP BY 1 ORDER BY 2 DESC LIMIT 40`);
@@ -182,7 +203,7 @@ export interface ProfileOptions { tables?: string[]; budgetMs?: number; withCata
 
 export async function runMultiparkDbProfile(opts: ProfileOptions = {}) {
   const t0 = Date.now();
-  const budget = Math.max(5_000, Math.min(35_000, opts.budgetMs ?? 30_000));
+  const budget = Math.max(5_000, Math.min(25_000, opts.budgetMs ?? 20_000));
   const rows = await multiparkDbQuery<any>(`SELECT table_name AS t, column_name AS c, data_type AS d, udt_name AS u
     FROM information_schema.columns WHERE table_schema = 'public' AND table_name <> '_prisma_migrations' ORDER BY table_name, ordinal_position`);
   const byTable = new Map<string, Col[]>();
@@ -200,7 +221,7 @@ export async function runMultiparkDbProfile(opts: ProfileOptions = {}) {
   const pendentes: string[] = [];
   // Não começa uma tabela nova depois do orçamento; dentro de cada tabela pára
   // os extras (distintos, valores, JSON) ao chegar ao limite duro (marca `parcial`).
-  const hardDeadline = t0 + Math.min(52_000, budget + 17_000);
+  const hardDeadline = t0 + Math.min(38_000, budget + 18_000);
   for (const t of wanted) {
     if (Date.now() - t0 > budget) { pendentes.push(t); continue; }
     try { tabelas[t] = await profileTable(t, byTable.get(t)!, hardDeadline); }
