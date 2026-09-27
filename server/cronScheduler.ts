@@ -53,6 +53,7 @@ export const JOB_RUNNERS: Record<string, JobRunner> = {
   "crm-sync": async (o) => (await import("./cronJobs")).crmSyncCron(o),
   "crm-suggestions": async (o) => (await import("./cronJobs")).crmSuggestionsCron(o),
   "crm-pro-sync": async (o) => (await import("./cronJobs")).crmProSyncCron(o),
+  "services-tasks": async (o) => (await import("./cronJobs")).serviceTasksCron(o),
   "zello-sameday": async (o) => (await import("./cronJobs")).zelloSameDayCron(o),
   "extras-pressure": async (o) => (await import("./cronJobs")).extrasPressureCron(o),
   "rh-docs-weekly": async () => (await import("./cronJobs")).rhDocsWeeklyCron(),

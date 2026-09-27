@@ -6225,6 +6225,17 @@ export const appRouter = router({
       return { success: true };
     }),
 
+    // Tarefas geradas pelos serviços (trabalho services-tasks): link na página /servicos.
+    // Mesmo período da lista (prazo da tarefa = saída do carro, dias de Lisboa).
+    generatedTasks: protectedProcedure.input(z.object({
+      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    })).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "servicos", "view");
+      const { serviceTasksInRange } = await import("./serviceTasks");
+      return serviceTasksInRange(input.startDate, input.endDate);
+    }),
+
     // Serviços extra das reservas — FONTE: BD local (multipark_booking_extras,
     // sincronizada do /report a cada 15min). FIX 2026-08-06: antes chamava a
     // API ao vivo com UMA chave (= só um parque, lento, incompleto) e mostrava
@@ -6252,6 +6263,7 @@ export const appRouter = router({
         .select({
           id: multiparkBookingExtras.id,
           bookingId: multiparkBookingExtras.bookingExternalId,
+          extraId: multiparkBookingExtras.extraId,
           bookingNumber: multiparkBookings.bookingNumber,
           licensePlate: multiparkBookings.licensePlate,
           clientFirstName: multiparkBookings.clientFirstName,
@@ -6278,6 +6290,7 @@ export const appRouter = router({
       const services = rows.map((r) => ({
         id: r.id,
         bookingId: r.bookingId,
+        extraId: r.extraId ?? null,
         bookingNumber: r.bookingNumber,
         licensePlate: r.licensePlate ?? "",
         clientName: `${r.clientFirstName ?? ""} ${r.clientLastName ?? ""}`.trim(),

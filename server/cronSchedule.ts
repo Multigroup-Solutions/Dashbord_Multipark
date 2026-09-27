@@ -78,6 +78,8 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   { key: "extras-auto", runName: "extras-auto", label: "Automação dos extras", cadence: { kind: "interval", minutes: 60 }, priority: 70, minMs: 12 * S, maxMs: 40 * S },
   { key: "identity-sweep", runName: "identity-sweep", label: "Ligações funcionário ↔ utilizador", cadence: { kind: "interval", minutes: 60 }, priority: 80, minMs: 10 * S, maxMs: 30 * S },
   { key: "crm-sync", runName: "crm-sync", label: "CRM: fichas de cliente a partir das reservas", cadence: { kind: "interval", minutes: 15 }, priority: 82, minMs: 20 * S, maxMs: 45 * S },
+  // Serviços extra das reservas → tarefas (BD Multipark ao vivo; saídas nas próximas 48 h).
+  { key: "services-tasks", runName: "services-tasks", label: "Serviços das reservas → tarefas", cadence: { kind: "interval", minutes: 15 }, priority: 83, minMs: 10 * S, maxMs: 30 * S },
   { key: "crm-suggestions", runName: "crm-suggestions", label: "CRM: sugestões para juntar fichas", cadence: { kind: "daily", from: "05:15" }, priority: 84, minMs: 15 * S, maxMs: 45 * S },
   { key: "crm-pro-sync", runName: "crm-pro-sync", label: "CRM: conta corrente dos clientes Pro (BD Multipark)", cadence: { kind: "interval", minutes: 30 }, priority: 81, minMs: 15 * S, maxMs: 45 * S },
   { key: "zello-sameday", runName: "zello-sameday", label: "GPS do Zello — recolha provisória do dia", cadence: { kind: "daily", from: ZELLO_SAMEDAY_WINDOW.from, until: ZELLO_SAMEDAY_WINDOW.until }, priority: 95, minMs: 15 * S, maxMs: 45 * S },

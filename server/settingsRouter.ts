@@ -69,6 +69,18 @@ export const settingsRouter = router({
     return { ...(await aiUsageSummary()), provider: st.provider, mode: st.mode, models: st.models, warnings: st.warnings };
   }),
 
+  /**
+   * "Serviços → tarefas": tipos de serviço do catálogo Multipark (ExtraService
+   * dos parques nossos) e pessoas de cada cidade para o responsável. A regra
+   * grava-se com values.set("services.taskRules").
+   */
+  serviceTasks: router({
+    catalog: adminOnly.query(async () => {
+      const { loadServiceTaskCatalog } = await import("./serviceTasks");
+      return loadServiceTaskCatalog();
+    }),
+  }),
+
   flags: router({
     list: adminOnly.query(async () => {
       const { listAutomationFlags } = await import("./appSettings");

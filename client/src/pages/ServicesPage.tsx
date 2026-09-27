@@ -15,9 +15,11 @@ import DateRangeNav from "@/components/DateRangeNav";
 import BookingDetailDialog from "@/components/BookingDetailDialog";
 import { toast } from "sonner";
 import { StatValue } from "@/components/StatValue";
+import { Link } from "wouter";
+import { serviceTypeOf } from "@shared/serviceTasks";
 
 import {
-  Sparkles, Euro, TrendingUp, CheckCircle2, Clock, Droplets, Zap, Car, Package, Download,
+  Sparkles, Euro, TrendingUp, CheckCircle2, Clock, Droplets, Zap, Car, Package, Download, ListChecks,
 } from "lucide-react";
 
 const fmtN = (n: number) => n.toLocaleString("pt-PT");
@@ -76,6 +78,20 @@ export default function ServicesPage() {
     onSuccess: () => { utils.services.multiparkExtras.invalidate(); },
     onError: (e) => toast.error(e.message),
   });
+
+  // Tarefas geradas pelos serviços (Definições → Parâmetros → Serviços → tarefas).
+  const tasksQ = trpc.services.generatedTasks.useQuery({ startDate, endDate });
+  const taskFor = useMemo(() => {
+    const byLine = new Map<string, { taskId: number; status: string }>();
+    const byType = new Map<string, { taskId: number; status: string }>();
+    for (const t of tasksQ.data ?? []) {
+      byLine.set(`${t.bookingId}:${t.lineId}`, t);
+      const k = serviceTypeOf(t.serviceName)?.key;
+      if (k) byType.set(`${t.bookingId}:${k}`, t);
+    }
+    return (s: any) => byLine.get(`${s.bookingId}:${s.extraId}`)
+      ?? byType.get(`${s.bookingId}:${serviceTypeOf(s.serviceName)?.key ?? ""}`) ?? null;
+  }, [tasksQ.data]);
 
   // Normaliza nomes e separa flags operacionais (fora por defeito)
   const services = useMemo(() => {
@@ -324,6 +340,16 @@ export default function ServicesPage() {
                     <td className="p-2 font-medium min-w-[12rem]">
                       {s.serviceName}
                       {s.isFlag && <Badge variant="outline" className="ml-1 text-[11px] text-muted-foreground">flag</Badge>}
+                      {(() => {
+                        const t = taskFor(s);
+                        return t ? (
+                          <Link href={`/tarefas?focus=${t.taskId}`} onClick={(e: any) => e.stopPropagation()} title="Tarefa gerada por este serviço">
+                            <Badge variant="outline" className="ml-1 text-[11px] gap-1 border-sky-300 text-sky-800 cursor-pointer">
+                              <ListChecks className="h-3 w-3" />{t.status === "done" ? "Tarefa ✓" : "Tarefa"}
+                            </Badge>
+                          </Link>
+                        ) : null;
+                      })()}
                     </td>
                     <td className="p-2 text-xs">{(s as any).clientName || "—"}</td>
                     <td className="p-2 font-mono text-xs whitespace-nowrap">{s.licensePlate || "—"}</td>
