@@ -166,7 +166,7 @@ describe("custo dos extras (fonte única com o motor)", () => {
 describe("âmbito de cidade", () => {
   it("as novas consultas e os Serviços recebem a cidade do utilizador", () => {
     const access = { all: false, defaultCityId: 7, cityIds: [7], projectIds: [7, 8], missingCostCenter: false, cityName: "Porto" };
-    for (const path of ["multipark.extrasCostDaily", "multipark.adSpendDaily", "services.multiparkExtras", "multipark.localBookingsByAction"]) {
+    for (const path of ["multipark.operationsSummary", "services.multiparkExtras"]) {
       expect((scopeCityQuery(path, access, { startDate: "2026-09-01" }) as any).projectId).toBe(7);
     }
   });

@@ -26,6 +26,18 @@ import type { KbViewer } from "../shared/knowledge";
 import { requireAccess } from "./_core/access";
 import { cityScope, partnerScope, projectScope, scopedProjectIds, userScope } from "./cityScope";
 import type { CityAccess } from "./cityAccess";
+import { lisbonDayOf } from "../shared/lisbonDay";
+
+/** Dia de Lisboa de um checkIn (UTC) guardado, ou null. */
+function checkInDay(v: unknown): string | null {
+  if (v == null || v === "") return null;
+  try {
+    const d = lisbonDayOf(v instanceof Date ? v : String(v));
+    return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null;
+  } catch {
+    return null;
+  }
+}
 
 type Db = { execute: (q: SQL) => Promise<any> };
 export interface SearchViewer { id: number; role: string; name?: string | null; accessOverrides?: AccessOverrides | null }
@@ -93,8 +105,8 @@ const reservations: SearchSource = {
         key: `reservas:${r.id}`, group: "reservas" as const,
         title: `${code}${name ? ` · ${name}` : ""}`,
         subtitle: [str(r.licensePlate), str(r.parkName), str(r.checkIn)?.slice(0, 10), str(r.status)].filter(Boolean).join(" · ") || null,
-        // `de` = dia em que a reserva foi feita (a lista das Reservas filtra por esse dia).
-        href: `/operacoes?tab=reservas&q=${encodeURIComponent(code)}${str(r.bookingCreatedAt) ? `&de=${String(r.bookingCreatedAt).slice(0, 10)}` : ""}`,
+        // `de` = dia de Lisboa da entrada (a lista "Reservas do dia" mostra esse dia).
+        href: `/operacoes?tab=dia&q=${encodeURIComponent(code)}${checkInDay(r.checkIn) ? `&de=${checkInDay(r.checkIn)}` : ""}`,
         score: matchScore(q.raw, code, String(r.externalId), str(r.licensePlate)?.replace(/-/g, ""), str(r.clientEmail), name) || 20,
       };
     });

@@ -29,7 +29,9 @@ import GoogleReviewsPage from "./pages/GoogleReviewsPage";
 import TrainingPage from "./pages/TrainingPage";
 import KnowledgeBasePage from "./pages/KnowledgeBasePage";
 import LostFoundPage from "./pages/LostFoundPage";
-import ClientsPage from "./pages/ClientsPage";
+import CrmClientsPage from "./pages/CrmClientsPage";
+import CrmClientPage from "./pages/CrmClientPage";
+import CrmReviewPage from "./pages/CrmReviewPage";
 import ContactsPage from "./pages/ContactsPage";
 import ServicesPage from "./pages/ServicesPage";
 import IncidentsPage from "./pages/IncidentsPage";
@@ -40,7 +42,6 @@ import PartnerInferPage from "./pages/PartnerInferPage";
 import PartnerTypePage from "./pages/PartnerTypePage";
 import BillingDiagnosePage from "./pages/BillingDiagnosePage";
 import AnnualPage from "./pages/AnnualPage";
-import MultiparkPage from "./pages/MultiparkPage";
 import OperacoesPage from "./pages/OperacoesPage";
 import ExtrasDiaPage from "./pages/ExtrasDiaPage";
 import AvaliacaoOperacionalPage from "./pages/AvaliacaoOperacionalPage";
@@ -175,8 +176,14 @@ function Router() {
       <Route path="/criticas">
         {() => (<DashboardLayout><GoogleReviewsPage /></DashboardLayout>)}
       </Route>
+      <Route path="/clientes/rever">
+        {() => (<DashboardLayout><CrmReviewPage /></DashboardLayout>)}
+      </Route>
+      <Route path="/clientes/:id">
+        {() => (<DashboardLayout><CrmClientPage /></DashboardLayout>)}
+      </Route>
       <Route path="/clientes">
-        {() => (<DashboardLayout><ClientsPage /></DashboardLayout>)}
+        {() => (<DashboardLayout><CrmClientsPage /></DashboardLayout>)}
       </Route>
       <Route path="/contactos">
         {() => (<DashboardLayout><ContactsPage /></DashboardLayout>)}
@@ -236,8 +243,14 @@ function Router() {
       <Route path="/reserva/:ref?">
         {() => (<DashboardLayout><BookingFilePage /></DashboardLayout>)}
       </Route>
+      {/* As listas antigas (/multipark/reservas, entradas, saídas…) passaram a
+          ser a lista única "Reservas do dia" nas Operações; a Sincronização
+          (estado) vive em Definições → Estado do sistema. */}
+      <Route path="/multipark/sync">
+        {() => <Redirect to="/definicoes?tab=estado" />}
+      </Route>
       <Route path="/multipark/:section?">
-        {() => (<DashboardLayout><MultiparkPage /></DashboardLayout>)}
+        {(params) => <Redirect to={`/operacoes?tab=${params.section === "entradas" || params.section === "saidas" ? params.section : "dia"}`} />}
       </Route>
       <Route path="/servicos">
         {() => (<DashboardLayout><ServicesPage /></DashboardLayout>)}

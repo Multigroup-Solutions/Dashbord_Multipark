@@ -36,6 +36,13 @@ export function requireAccess(user: U | null | undefined, module: ModuleId, acti
   return g.access;
 }
 
+/** Tem esta ação no módulo? (sem erro nem efeitos — para mostrar/esconder botões). */
+export function canAccess(user: U | null | undefined, module: ModuleId, action: Action = "view"): boolean {
+  const u = user ? withOverrides(user) : null;
+  const g = grantFor(u, module);
+  return !!u && g.access !== "none" && g.access !== "own" && g.actions.includes(action);
+}
+
 /** Só o próprio (alcance "own") — o chamador filtra pelo que é dele. */
 export function isOwnOnly(user: U, module: ModuleId): boolean {
   return scopeFor(withOverrides(user), module) === "own";

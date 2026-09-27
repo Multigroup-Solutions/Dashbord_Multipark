@@ -284,6 +284,19 @@ app.get("/api/cron/identity-sweep", async (req, res) => {
   sendCronRun(res, await identitySweepCron());
 });
 
+// CRM: fichas de cliente a partir das reservas (por lotes; ?restart=1 recomeça
+// do princípio sem desfazer ligações) e sugestões para juntar fichas.
+app.get("/api/cron/crm-sync", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { crmSyncCron, sendCronRun } = await import("../cronJobs");
+  sendCronRun(res, await crmSyncCron({ deadlineAt: manualDeadline(), restart: req.query?.restart === "1" }));
+});
+app.get("/api/cron/crm-suggestions", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { crmSuggestionsCron, sendCronRun } = await import("../cronJobs");
+  sendCronRun(res, await crmSuggestionsCron({ deadlineAt: manualDeadline() }));
+});
+
 // ?offsetDays=N retoma a varredura a partir desse dia da janela — a janela
 // completa não cabe nos 60 s do Vercel; a resposta traz done/nextOffset.
 app.get("/api/cron/multipark-future", async (req, res) => {

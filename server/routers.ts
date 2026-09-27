@@ -16,7 +16,7 @@ import { ACCESS_DENIED_MSG, COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
-import { requireAccess, isOwnOnly, userIdsAtOrBelowInCity, employeeBelowCondition } from "./_core/access";
+import { requireAccess, canAccess, isOwnOnly, userIdsAtOrBelowInCity, employeeBelowCondition } from "./_core/access";
 import { ROLE_RANK as ACCESS_ROLE_RANK, MODULE_IDS, can, scopeFor, canSeeFinanceTotalsFor, canManageUserRole, canGrantPermissionsTo, canTouchPermission, assignableRoles, isNationalRole, seesBeyondOwn, type ModuleId, type Action as AccessAction } from "../shared/access";
 import { normalizeEmail } from "@shared/email";
 import { USER_ROLES, superAdminGuard, inviteCompletionError } from "./userAdminRules";
@@ -80,7 +80,6 @@ import { webAnalyticsRouter } from "./webAnalytics/router";
 import { gbpRouter } from "./integrations/googleBusiness/profileRouter";
 import { whatsappCallsRouter } from "./whatsappCallsRouter";
 import { getBookingHistory, getBookingsReport } from "./multipark";
-import { deliveryErrorCode } from "./bookingDeliveryQueue";
 import {
   getExtrasDiaForecast,
   listAssignments,
@@ -282,7 +281,6 @@ import {
   getMultiparkBookingByExternalId,
   upsertMultiparkBooking,
   getMultiparkBookingStats,
-  createSyncLog,
   getSyncLogs,
   // MultiPark KPIs
   // Invites
@@ -348,7 +346,6 @@ import {
   healthCheck as mpHealthCheck,
   checkAvailability as mpCheckAvailability,
   listParks as mpListParks,
-  testConnection as mpTestConnection,
   getBookingsReportAllParks,
   type ParkingType,
   type VehicleType,
@@ -406,6 +403,51 @@ async function requireFinanceTotals(user: { id: number; role: string }, module: 
   if (!(await canSeeFinanceTotals(user))) {
     throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para ver totais financeiros." });
   }
+}
+
+// ─── CRM: auxiliares do router `crm` ────────────────────────────────────────
+
+const crmRule = z.object({ field: z.string().max(40), op: z.enum(["is", "is_not", "contains", "gte", "lte", "before", "after", "on", "within_days", "older_than_days", "yes", "no"]), value: z.union([z.string().max(200), z.number()]).nullable().optional() });
+const crmList = (max = 60) => z.array(z.string().max(160)).max(max).optional();
+const crmQueryInput = z.object({
+  tab: z.enum(["clients", "pro"]).optional(),
+  search: z.object({ text: z.string().max(200), field: z.enum(["all", "name", "email", "phone", "plate", "nif", "number", "booking", "carColor", "carModel", "tags"]) }).nullable().optional(),
+  groups: z.object({
+    segment: z.array(z.enum(["new", "recurring", "vip", "at_risk", "partner"])).optional(),
+    city: crmList(), region: crmList(), country: crmList(), park: crmList(200), clientCountry: crmList(), channel: crmList(), partner: crmList(200),
+    kind: z.array(z.enum(["pro", "private"])).optional(),
+    alerts: z.array(z.enum(["noEmail", "genericEmail", "duplicate"])).optional(),
+  }).optional(),
+  rules: z.object({ match: z.enum(["all", "any"]), items: z.array(crmRule).max(20) }).nullable().optional(),
+  sort: z.enum(["lastVisit", "firstVisit", "bookings", "totalSpent", "name", "number", "nextCheckIn"]).optional(),
+  dir: z.enum(["asc", "desc"]).optional(),
+  offset: z.number().int().min(0).max(1_000_000).optional(),
+  limit: z.number().int().min(1).max(200).optional(),
+});
+
+async function crmDb() {
+  const { getDb } = await import("./db");
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
+  return db;
+}
+
+/** Juntar/separar fichas (plano do CRM): backoffice, admin, super admin. */
+function canMergeCrm(user: { role: string }): boolean {
+  return ["backoffice", "admin", "super_admin"].includes(user.role);
+}
+
+/** Fichas fora da cidade do utilizador não se editam (nem se revela que existem). Regra: server/crm/scope.ts. */
+async function crmAssertInScope(...clientIds: number[]): Promise<void> {
+  const { visibleClientIds } = await import("./crm/scope");
+  const ok = await visibleClientIds(await crmDb(), clientIds);
+  if (clientIds.some((id) => !ok.has(id))) throw new TRPCError({ code: "NOT_FOUND", message: "Cliente não encontrado" });
+}
+
+/** Linha única de um SELECT (ou undefined). */
+async function crmRow(q: import("drizzle-orm").SQL): Promise<any> {
+  const r: any = await (await crmDb()).execute(q);
+  return (Array.isArray(r) && Array.isArray(r[0]) ? r[0] : r)?.[0];
 }
 
 /** Admins de cidade não mexem nos nós estruturais (Grupo/Cidade): só no que
@@ -835,14 +877,6 @@ async function getLostDriverLink(id: number) {
   const [link] = await db.select().from(lostFoundAttachedDrivers).where(eq(lostFoundAttachedDrivers.id, id)).limit(1);
   if (!link) throw new TRPCError({ code: "NOT_FOUND", message: "Condutor não encontrado" });
   return link;
-}
-
-/** Ações da sincronização (reparar, etc.): só quem tem alcance NACIONAL no
- *  módulo — um supervisor de cidade vê a página mas não lança syncs. */
-function requireNationalSync(user: { id?: number; role: string }) {
-  if (requireAccess(user, "sincronizacao", "edit") !== "national") {
-    throw new TRPCError({ code: "FORBIDDEN", message: "Só quem tem âmbito nacional pode lançar a sincronização." });
-  }
 }
 
 /** A reserva (externalId ou nº) pertence às cidades do utilizador? */
@@ -6841,12 +6875,6 @@ export const appRouter = router({
         }
       }),
 
-    // Teste por parque: report mínimo (1 dia, 1 ação) com cada chave. Pedido
-    // à API por parque — a UI só o chama quando alguém carrega no botão.
-    testConnection: protectedProcedure.query(async ({ ctx }) => {
-      requireAccess(ctx.user, "sincronizacao", "manage");
-      return mpTestConnection();
-    }),
 
     // Check availability
     checkAvailability: protectedProcedure
@@ -6870,14 +6898,6 @@ export const appRouter = router({
     listParks: protectedProcedure.query(async ({ ctx }) => {
       requireAccess(ctx.user, "reservas_operacoes", "view");
       return mpListParks();
-    }),
-
-    // Cobertura (chaves por parque) + totais da fila
-    syncCoverage: protectedProcedure.query(async ({ ctx }) => {
-      requireAccess(ctx.user, "sincronizacao", "view");
-      const { parkCoverage } = await import("./multipark");
-      const { getDeliveryHealth } = await import("./bookingDeliveryQueue");
-      return { parks: parkCoverage(), queue: await getDeliveryHealth() };
     }),
 
     // Saúde dos dados (Sincronização + Definições → Estado do sistema). Só
@@ -6905,50 +6925,6 @@ export const appRouter = router({
           manual: ["manual", "api_sync_recovery", "excel_import"],
         }[input?.type ?? "all"];
         return getSyncLogs(input?.limit ?? 50, types);
-      }),
-
-    // "Reparar período": report de até 3 dias, com prazo (45s) e trinco
-    // partilhado com o cron e o MCP. Só âmbito nacional (um supervisor de
-    // cidade não lança um sync de todos os parques).
-    triggerSync: protectedProcedure
-      .input(z.object({
-        startDate: z.string(),
-        endDate: z.string(),
-      }))
-      .mutation(async ({ ctx, input }) => {
-        requireNationalSync(ctx.user);
-        const { runRepairSync, REPAIR_MAX_DAYS } = await import("./jobs/multiparkBookingSync");
-        {
-          const { syncRangeError } = await import("./opsRules");
-          const err = syncRangeError(input.startDate, input.endDate, REPAIR_MAX_DAYS);
-          if (err) throw new TRPCError({ code: "BAD_REQUEST", message: err });
-        }
-        try {
-          const r = await runRepairSync({ startDate: input.startDate, endDate: input.endDate, triggeredById: ctx.user.id, owner: "manual" });
-          if (r.busy) {
-            const { SYNC_BUSY_MESSAGE } = await import("./syncLock");
-            throw new TRPCError({ code: "CONFLICT", message: SYNC_BUSY_MESSAGE });
-          }
-          const { enrichTargets: _targets, parkStatus: _status, ...result } = r.result;
-          await logActivity({
-            userId: ctx.user.id,
-            action: "sync",
-            entity: "multipark",
-            details: `Reparar período ${input.startDate}→${input.endDate}: ${result.processed} processadas, ${result.created} novas, ${result.updated} atualizadas${result.partial ? ` (parcial: ${result.skippedJobs} por fazer)` : ""}`,
-          });
-          return result;
-        } catch (error: any) {
-          if (error instanceof TRPCError) throw error;
-          console.error("[triggerSync]", deliveryErrorCode(error));
-          await createSyncLog({
-            syncType: "manual",
-            status: "error",
-            errorMessage: deliveryErrorCode(error),
-            triggeredById: ctx.user.id,
-            completedAt: new Date(),
-          });
-          return { success: false, processed: 0, created: 0, updated: 0, errors: [deliveryErrorCode(error)], partial: false, skippedJobs: 0, parkErrors: [], totalMismatches: [] };
-        }
       }),
 
     // Buscar history de um agente (por nome) num dia (chama /agent/history
@@ -7115,67 +7091,29 @@ export const appRouter = router({
         return getMultiparkBookingStats(input ?? undefined);
       }),
 
-    // Query LOCAL DB by actionType + date range
-    localBookingsByAction: protectedProcedure
-      .input(z.object({
-        startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-        endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-        actionType: z.enum(["creation", "checkin", "checkout", "cancelation"]),
-        projectId: z.number().optional(),
-        // Filtros no SERVIDOR (grupo Lisboa/Porto/Faro/Marketplace, canal, estado, pesquisa)
-        group: z.enum(["all", "lisboa", "porto", "faro", "marketplace", "sem_cidade"]).optional(),
-        channel: z.string().max(32).optional(),
-        state: z.enum(["all", "active", "cancelled", "done", "pending"]).optional(),
-        search: z.string().max(100).optional(),
-        limit: z.number().int().min(1).max(20000).optional(),
-        offset: z.number().int().min(0).optional(),
-      }))
+    // "Reservas do dia": entradas e saídas de UM dia de Lisboa, lidas AO VIVO
+    // da BD da Multipark (só leitura). Só os parques das cidades do utilizador.
+    // Nunca lança por falta de BD — devolve { available:false, reason }.
+    reservasDoDia: protectedProcedure
+      .input(z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "reservas_operacoes", "view");
-        const { getOperationsBookings, rangeTooLong } = await import("./operationsBookings");
-        if (input.endDate < input.startDate || rangeTooLong(input.startDate, input.endDate)) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Intervalo inválido (máx. 366 dias)." });
-        }
-        const r = await getOperationsBookings(input);
-        return { ...r, actionType: input.actionType, period: { startDate: input.startDate, endDate: input.endDate } };
+        const { getMultiparkDayBookings } = await import("./multiparkDb/dayBookings");
+        const r = await getMultiparkDayBookings(input.day, scopedCityNames());
+        if (!r.available) return { available: false as const, reason: r.reason, code: r.code };
+        return { available: true as const, ...r.data };
       }),
 
-    // Custo dos extras por dia (de Lisboa) × cidade — real (ponto), previsto
-    // (escala) e o que conta. Mesma regra do motor financeiro. Só com o gate
-    // de totais financeiros; sem ele devolve allowed=false (a UI esconde).
-    extrasCostDaily: protectedProcedure
-      .input(z.object({
-        startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-        endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-        projectId: z.number().optional(),
-      }))
-      .query(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "dashboards", "view");
-        if (!(await canSeeFinanceTotals(ctx.user))) return { allowed: false as const, today: "", rows: [] };
-        const { getExtrasCostDaily, rangeTooLong } = await import("./operationsBookings");
-        if (input.endDate < input.startDate || rangeTooLong(input.startDate, input.endDate)) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Intervalo inválido (máx. 366 dias)." });
-        }
-        return { allowed: true as const, ...(await getExtrasCostDaily(input)) };
-      }),
-
-    // Gasto em publicidade por dia × cidade (Lisboa/Porto/Faro) + "por atribuir"
-    // (sem cidade / nacional), numa só chamada à fonte única do Marketing.
-    // Mesmo gate dos totais financeiros.
-    adSpendDaily: protectedProcedure
-      .input(z.object({
-        startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-        endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-        projectId: z.number().optional(),
-      }))
-      .query(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "dashboards", "view");
-        if (!(await canSeeFinanceTotals(ctx.user))) return { allowed: false as const, cities: [], rows: [], unassigned: [], total: 0 };
-        const { getAdSpendDaily, rangeTooLong } = await import("./operationsBookings");
-        if (input.endDate < input.startDate || rangeTooLong(input.startDate, input.endDate)) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Intervalo inválido (máx. 366 dias)." });
-        }
-        return { allowed: true as const, ...(await getAdSpendDaily(input)) };
+    // "Classificação dos parques": cada Park (marca, cidade, listingType,
+    // estado) e a classificação calculada (nosso marca+cidade / Marketplace),
+    // lida ao vivo. Mesma permissão e âmbito de cidade das Reservas do dia.
+    parkClassification: protectedProcedure
+      .query(async ({ ctx }) => {
+        requireAccess(ctx.user, "reservas_operacoes", "view");
+        const { getMultiparkParkClassification } = await import("./multiparkDb/dayBookings");
+        const r = await getMultiparkParkClassification(scopedCityNames());
+        if (!r.available) return { available: false as const, reason: r.reason, code: r.code };
+        return { available: true as const, ...r.data };
       }),
 
     // Atividade consolidada de um dia: ações + km/GPS por pessoa (visão Jorge)
@@ -8436,6 +8374,265 @@ export const appRouter = router({
         const r = await aiAssist(input.conversationId, input.mode, { userId: ctx.user.id });
         if (!r.ok || !r.text) throw new TRPCError({ code: "BAD_REQUEST", message: r.error || "A IA falhou" });
         return { text: r.text };
+      }),
+  }),
+
+  // ── CRM DE CLIENTES (Jorge, 27 set 2026 — docs/crm/desenho-crm.md) ───────
+  //    Fichas na nossa BD (server/crm/*): lista com filtros, ficha, editar,
+  //    juntar/separar, sugestões, alertas, filtros guardados. Totais (gasto)
+  //    e IBAN só com finance.view_totals; juntar/separar: backoffice+.
+  crm: router({
+    list: protectedProcedure
+      .input(crmQueryInput)
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "clientes", "view");
+        const db = await crmDb();
+        const canSeeTotals = await canSeeFinanceTotals(ctx.user);
+        const { listClients } = await import("./crm/queries");
+        return { ...(await listClients(db, input, { canSeeTotals })), canSeeTotals };
+      }),
+    facets: protectedProcedure
+      .input(crmQueryInput.extend({ text: z.string().min(1).max(200) }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "clientes", "view");
+        const db = await crmDb();
+        const { searchFacets } = await import("./crm/queries");
+        return searchFacets(db, input, input.text, { canSeeTotals: await canSeeFinanceTotals(ctx.user) });
+      }),
+    options: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "clientes", "view");
+      const db = await crmDb();
+      const { filterOptions, ruleFieldsFor } = await import("./crm/queries");
+      const canSeeTotals = await canSeeFinanceTotals(ctx.user);
+      return { ...(await filterOptions(db)), ruleFields: ruleFieldsFor(canSeeTotals), canSeeTotals, canMerge: canMergeCrm(ctx.user) };
+    }),
+    get: protectedProcedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "clientes", "view");
+        const db = await crmDb();
+        const canSeeTotals = await canSeeFinanceTotals(ctx.user);
+        const { getClientFile } = await import("./crm/queries");
+        const f = await getClientFile(db, input.id, { canSeeTotals, canSeeIban: canSeeTotals });
+        if (!f) throw new TRPCError({ code: "NOT_FOUND", message: "Cliente não encontrado" });
+        return { ...f, canSeeTotals, canMerge: canMergeCrm(ctx.user), canEdit: canAccess(ctx.user, "clientes", "edit") };
+      }),
+    create: protectedProcedure
+      .input(z.object({ displayName: z.string().min(2).max(255), kind: z.enum(["person", "company"]).optional(), email: z.string().max(320).nullable().optional(), phone: z.string().max(40).nullable().optional(), nif: z.string().max(20).nullable().optional() }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "clientes", "edit");
+        const { createClient } = await import("./crm/edit");
+        return createClient(await crmDb(), ctx.user.id, input);
+      }),
+    update: protectedProcedure
+      .input(z.object({
+        id: z.number().int().positive(),
+        patch: z.object({
+          displayName: z.string().max(255).nullable().optional(), firstName: z.string().max(128).nullable().optional(), lastName: z.string().max(128).nullable().optional(),
+          kind: z.enum(["person", "company"]).optional(), nif: z.string().max(20).nullable().optional(), taxName: z.string().max(255).nullable().optional(),
+          taxAddress: z.string().max(500).nullable().optional(), address: z.string().max(500).nullable().optional(), zone: z.string().max(128).nullable().optional(),
+          gender: z.enum(["F", "M", "O"]).nullable().optional(), ageBand: z.enum(["<25", "25-34", "35-44", "45-54", "55-64", "65+"]).nullable().optional(),
+          birthDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(), language: z.string().max(8).nullable().optional(),
+          isPro: z.boolean().optional(), proDiscount: z.number().min(0).max(100).nullable().optional(),
+          consentEmail: z.boolean().nullable().optional(), consentWhatsapp: z.boolean().nullable().optional(), consentSms: z.boolean().nullable().optional(),
+          notes: z.string().max(10_000).nullable().optional(), originChannel: z.string().max(64).nullable().optional(),
+          tags: z.array(z.string().max(48)).max(40).optional(),
+        }),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "clientes", "edit");
+        await crmAssertInScope(input.id);
+        const { updateClient } = await import("./crm/edit");
+        return updateClient(await crmDb(), ctx.user.id, input.id, input.patch as any);
+      }),
+    contact: protectedProcedure
+      .input(z.discriminatedUnion("op", [
+        z.object({ op: z.literal("addEmail"), clientId: z.number().int(), value: z.string().max(320), primary: z.boolean().optional() }),
+        z.object({ op: z.literal("removeEmail"), clientId: z.number().int(), itemId: z.number().int(), reason: z.string().max(200).nullable().optional() }),
+        z.object({ op: z.literal("primaryEmail"), clientId: z.number().int(), itemId: z.number().int() }),
+        z.object({ op: z.literal("addPhone"), clientId: z.number().int(), value: z.string().max(40), primary: z.boolean().optional(), whatsapp: z.boolean().optional(), label: z.string().max(64).nullable().optional() }),
+        z.object({ op: z.literal("removePhone"), clientId: z.number().int(), itemId: z.number().int() }),
+        z.object({ op: z.literal("primaryPhone"), clientId: z.number().int(), itemId: z.number().int(), whatsapp: z.boolean().optional() }),
+        z.object({ op: z.literal("saveVehicle"), clientId: z.number().int(), itemId: z.number().int().optional(), plate: z.string().max(32), brand: z.string().max(64).nullable().optional(), model: z.string().max(96).nullable().optional(), color: z.string().max(48).nullable().optional(), vehicleType: z.string().max(24).nullable().optional() }),
+        z.object({ op: z.literal("removeVehicle"), clientId: z.number().int(), itemId: z.number().int() }),
+      ]))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "clientes", "edit");
+        await crmAssertInScope(input.clientId);
+        const db = await crmDb();
+        const e = await import("./crm/edit");
+        const u = ctx.user.id;
+        try {
+          switch (input.op) {
+            case "addEmail": await e.addEmail(db, u, input.clientId, input.value, input.primary); break;
+            case "removeEmail": await e.removeEmail(db, u, input.clientId, input.itemId, input.reason); break;
+            case "primaryEmail": await e.setPrimaryEmail(db, u, input.clientId, input.itemId); break;
+            case "addPhone": await e.addPhone(db, u, input.clientId, input.value, { primary: input.primary, whatsapp: input.whatsapp, label: input.label }); break;
+            case "removePhone": await e.removePhone(db, u, input.clientId, input.itemId); break;
+            case "primaryPhone": await e.setPrimaryPhone(db, u, input.clientId, input.itemId, input.whatsapp); break;
+            case "saveVehicle": await e.upsertVehicle(db, u, input.clientId, { id: input.itemId, plate: input.plate, brand: input.brand, model: input.model, color: input.color, vehicleType: input.vehicleType }); break;
+            case "removeVehicle": await e.removeVehicle(db, u, input.clientId, input.itemId); break;
+          }
+        } catch (err: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: String(err?.message ?? err) });
+        }
+        return { ok: true };
+      }),
+    uploadPhoto: protectedProcedure
+      .input(z.object({ clientId: z.number().int(), vehicleId: z.number().int().nullable().optional(), fileBase64: z.string().max(12_000_000), mimeType: z.string().regex(/^image\/(jpeg|png|webp)$/) }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "clientes", "edit");
+        await crmAssertInScope(input.clientId);
+        const { storagePut } = await import("./storage");
+        const buffer = Buffer.from(input.fileBase64, "base64");
+        const ext = input.mimeType.split("/")[1] ?? "jpg";
+        const key = `crm/${input.clientId}/${input.vehicleId ? `vehicle-${input.vehicleId}` : "photo"}-${Date.now()}.${ext}`;
+        const { url } = await storagePut(key, buffer, input.mimeType);
+        const { setPhoto } = await import("./crm/edit");
+        await setPhoto(await crmDb(), ctx.user.id, { clientId: input.clientId, vehicleId: input.vehicleId ?? null, url });
+        return { url };
+      }),
+    setIban: protectedProcedure
+      .input(z.object({ clientId: z.number().int(), iban: z.string().max(40).nullable() }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "clientes", "edit");
+        if (!(await canSeeFinanceTotals(ctx.user))) throw new TRPCError({ code: "FORBIDDEN", message: "O IBAN é só para o backoffice financeiro." });
+        await crmAssertInScope(input.clientId);
+        const { setIban } = await import("./crm/edit");
+        try { await setIban(await crmDb(), ctx.user.id, input.clientId, input.iban); }
+        catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: String(err?.message ?? err) }); }
+        return { ok: true };
+      }),
+    relation: protectedProcedure
+      .input(z.discriminatedUnion("op", [
+        z.object({ op: z.literal("add"), clientId: z.number().int(), relatedClientId: z.number().int(), kind: z.enum(["employee", "manager", "family", "other"]), label: z.string().max(64).nullable().optional(), pays: z.boolean().optional() }),
+        z.object({ op: z.literal("remove"), relationId: z.number().int() }),
+      ]))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "clientes", "edit");
+        const db = await crmDb();
+        const { sql } = await import("drizzle-orm");
+        const { addRelation, removeRelation } = await import("./crm/edit");
+        if (input.op === "add") {
+          await crmAssertInScope(input.clientId, input.relatedClientId);
+          const st = await crmRow(sql`SELECT SUM(status = 'active') AS n FROM crm_clients WHERE id IN (${input.clientId}, ${input.relatedClientId})`);
+          if (Number(st?.n ?? 0) < 2) throw new TRPCError({ code: "BAD_REQUEST", message: "Só se ligam fichas ativas." });
+        } else {
+          // só quem vê pelo menos uma das fichas ligadas (a ligação aparece nessa ficha)
+          const rel = await crmRow(sql`SELECT clientId, relatedClientId FROM crm_client_relations WHERE id = ${input.relationId}`);
+          if (!rel) throw new TRPCError({ code: "NOT_FOUND", message: "Ligação não encontrada." });
+          const { visibleClientIds } = await import("./crm/scope");
+          if (!(await visibleClientIds(db, [Number(rel.clientId), Number(rel.relatedClientId)])).size) throw new TRPCError({ code: "NOT_FOUND", message: "Ligação não encontrada." });
+        }
+        try {
+          if (input.op === "add") await addRelation(db, ctx.user.id, input);
+          else await removeRelation(db, ctx.user.id, input.relationId);
+        } catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: String(err?.message ?? err) }); }
+        return { ok: true };
+      }),
+    /** Ligações antigas `/clientes?email=`: fichas com este email EXATO. */
+    byEmail: protectedProcedure
+      .input(z.object({ email: z.string().min(3).max(320) }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "clientes", "view");
+        const { clientIdsByEmail } = await import("./crm/queries");
+        return { ids: await clientIdsByEmail(await crmDb(), input.email) };
+      }),
+    pick: protectedProcedure
+      .input(z.object({ text: z.string().min(2).max(120), excludeId: z.number().int().optional() }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "clientes", "view");
+        const { listClients } = await import("./crm/queries");
+        const r = await listClients(await crmDb(), { search: { text: input.text, field: "all" }, limit: 8 }, { canSeeTotals: false });
+        return r.rows.filter((x) => x.id !== input.excludeId).map((x) => ({ id: x.id, name: x.displayName, email: x.primaryEmail, isPro: x.isPro, kind: x.kind }));
+      }),
+    merge: protectedProcedure
+      .input(z.object({ survivorId: z.number().int(), mergedId: z.number().int(), reason: z.string().max(255).nullable().optional() }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "clientes", "edit");
+        if (!canMergeCrm(ctx.user)) throw new TRPCError({ code: "FORBIDDEN", message: "Juntar fichas: backoffice, administração." });
+        await crmAssertInScope(input.survivorId);
+        await crmAssertInScope(input.mergedId);
+        const db = await crmDb();
+        const { mergeClients } = await import("./crm/merge");
+        const { logCrm } = await import("./crm/edit");
+        try {
+          const r = await mergeClients(db, { ...input, userId: ctx.user.id });
+          await logCrm(ctx.user.id, input.survivorId, "crm_merge", { mergedId: input.mergedId, eventId: r.eventId, reason: input.reason ?? null });
+          await logCrm(ctx.user.id, input.mergedId, "crm_merged_into", { survivorId: input.survivorId, eventId: r.eventId });
+          return r;
+        } catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: String(err?.message ?? err) }); }
+      }),
+    split: protectedProcedure
+      .input(z.object({ eventId: z.number().int() }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "clientes", "edit");
+        if (!canMergeCrm(ctx.user)) throw new TRPCError({ code: "FORBIDDEN", message: "Separar fichas: backoffice, administração." });
+        const { sql } = await import("drizzle-orm");
+        const ev = await crmRow(sql`SELECT survivorId FROM crm_merge_events WHERE id = ${input.eventId}`);
+        if (!ev) throw new TRPCError({ code: "NOT_FOUND", message: "Fusão não encontrada." });
+        await crmAssertInScope(Number(ev.survivorId));
+        const db = await crmDb();
+        const { splitMerge } = await import("./crm/merge");
+        const { logCrm } = await import("./crm/edit");
+        try {
+          const r = await splitMerge(db, { eventId: input.eventId, userId: ctx.user.id });
+          await logCrm(ctx.user.id, r.survivorId, "crm_split", { mergedId: r.mergedId, eventId: input.eventId });
+          await logCrm(ctx.user.id, r.mergedId, "crm_split", { survivorId: r.survivorId, eventId: input.eventId });
+          return r;
+        } catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: String(err?.message ?? err) }); }
+      }),
+    dismissSuggestion: protectedProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "clientes", "edit");
+        const { sql } = await import("drizzle-orm");
+        const s = await crmRow(sql`SELECT clientA, clientB FROM crm_merge_suggestions WHERE id = ${input.id}`);
+        if (!s) throw new TRPCError({ code: "NOT_FOUND", message: "Sugestão não encontrada." });
+        await crmAssertInScope(Number(s.clientA), Number(s.clientB));
+        const { dismissSuggestion } = await import("./crm/edit");
+        await dismissSuggestion(await crmDb(), ctx.user.id, input.id);
+        return { ok: true };
+      }),
+    review: protectedProcedure
+      .input(z.object({ tab: z.enum(["suggestions", "generic", "noEmail", "merges"]), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional(), minScore: z.number().int().min(0).max(100).optional() }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "clientes", "view");
+        const db = await crmDb();
+        const r = await import("./crm/review");
+        const counts = await r.reviewCounts(db);
+        if (input.tab === "suggestions") return { tab: "suggestions" as const, counts, suggestions: await r.listSuggestions(db, input) };
+        if (input.tab === "generic") return { tab: "generic" as const, counts, generic: await r.genericEmailClients(db, input) };
+        if (input.tab === "noEmail") return { tab: "noEmail" as const, counts, upcoming: await r.upcomingWithoutEmail(db, { days: 3 }) };
+        return { tab: "merges" as const, counts, merges: await r.recentMerges(db, input) };
+      }),
+    findEmail: protectedProcedure
+      .input(z.object({ clientId: z.number().int() }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "clientes", "view");
+        await crmAssertInScope(input.clientId);
+        const { findEmailInMailbox } = await import("./crm/review");
+        return findEmailInMailbox(await crmDb(), input.clientId);
+      }),
+    savedFilters: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "clientes", "view");
+      const { listSavedFilters } = await import("./crm/edit");
+      return listSavedFilters(await crmDb(), ctx.user.id);
+    }),
+    saveFilter: protectedProcedure
+      .input(z.object({ id: z.number().int().optional(), name: z.string().min(1).max(128), payload: z.any(), shared: z.boolean(), isDefault: z.boolean() }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "clientes", "view");
+        const { saveFilter } = await import("./crm/edit");
+        return saveFilter(await crmDb(), ctx.user.id, input);
+      }),
+    deleteFilter: protectedProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "clientes", "view");
+        const { deleteFilter } = await import("./crm/edit");
+        await deleteFilter(await crmDb(), ctx.user.id, input.id);
+        return { ok: true };
       }),
   }),
 

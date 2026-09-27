@@ -22,13 +22,6 @@ vi.mock("./multipark", () => ({
       { id: "park1", name: "Skypark - Porto", address: "Av. do Aeroporto 294", lat: 41.238, lng: -8.667, featured: false },
     ],
   }),
-  testConnection: vi.fn().mockResolvedValue({ ok: true, message: "API OK (v1.0.0)", version: "1.0.0" }),
-}));
-
-const repair = vi.hoisted(() => ({ run: vi.fn() }));
-vi.mock("./jobs/multiparkBookingSync", () => ({
-  REPAIR_MAX_DAYS: 3,
-  runRepairSync: repair.run,
 }));
 
 // ─── Mock db functions ─────────────────────────────────────────────────────
@@ -91,19 +84,6 @@ function createRegularContext(): TrpcContext {
 
 // ─── Tests ─────────────────────────────────────────────────────────────────
 
-describe("multipark.testConnection", () => {
-  it("returns connection status for admin users", async () => {
-    const caller = appRouter.createCaller(createAdminContext());
-    const result = await caller.multipark.testConnection();
-    expect(result).toEqual({ ok: true, message: "API OK (v1.0.0)", version: "1.0.0" });
-  });
-
-  it("rejects non-admin users", async () => {
-    const caller = appRouter.createCaller(createRegularContext());
-    await expect(caller.multipark.testConnection()).rejects.toThrow();
-  });
-});
-
 describe("multipark.checkAvailability", () => {
   it("returns availability data with correct params", async () => {
     const caller = appRouter.createCaller(createAdminContext());
@@ -138,36 +118,21 @@ describe("multipark.syncLogs", () => {
   });
 });
 
-describe("multipark.triggerSync (Reparar período)", () => {
-  const okResult = { success: true, processed: 4, created: 1, updated: 3, errors: [], enrichTargets: ["x"], partial: false,
-    skippedJobs: 0, parkStatus: {}, parkErrors: [], totalMismatches: [] };
-
-  it("repara até 3 dias e não devolve a lista de ids", async () => {
-    repair.run.mockResolvedValueOnce({ busy: false, result: okResult, enriched: 0, historyFetched: 0 });
-    const caller = appRouter.createCaller(createAdminContext());
-    const result = await caller.multipark.triggerSync({ startDate: "2026-09-08", endDate: "2026-09-10" });
-    expect(result.success).toBe(true);
-    expect(result.processed).toBe(4);
-    expect(result.updated).toBe(3);
-    expect(result).not.toHaveProperty("enrichTargets");
-    expect(repair.run).toHaveBeenCalledWith(expect.objectContaining({ startDate: "2026-09-08", endDate: "2026-09-10", owner: "manual" }));
+describe("multipark.reservasDoDia", () => {
+  it("sem BD da Multipark configurada → aviso, sem lançar", async () => {
+    const saved = process.env.DATABASE_URL_MULTIPARK;
+    delete process.env.DATABASE_URL_MULTIPARK;
+    try {
+      const caller = appRouter.createCaller(createAdminContext());
+      const r = await caller.multipark.reservasDoDia({ day: "2026-09-27" });
+      expect(r).toMatchObject({ available: false, code: "NOT_CONFIGURED" });
+    } finally {
+      if (saved !== undefined) process.env.DATABASE_URL_MULTIPARK = saved;
+    }
   });
 
-  it("recusa mais de 3 dias", async () => {
+  it("recusa um dia mal escrito", async () => {
     const caller = appRouter.createCaller(createAdminContext());
-    await expect(caller.multipark.triggerSync({ startDate: "2026-09-01", endDate: "2026-09-10" })).rejects.toThrow();
-  });
-
-  it("devolve 'já a correr' quando o trinco está ocupado", async () => {
-    repair.run.mockResolvedValueOnce({ busy: true });
-    const caller = appRouter.createCaller(createAdminContext());
-    await expect(caller.multipark.triggerSync({ startDate: "2026-09-09", endDate: "2026-09-10" })).rejects.toThrow(/já a correr/);
-  });
-
-  it("recusa quem não tem acesso e o supervisor de cidade", async () => {
-    await expect(appRouter.createCaller(createRegularContext()).multipark.triggerSync({ startDate: "2026-09-09", endDate: "2026-09-10" })).rejects.toThrow();
-    const sup = createRegularContext();
-    sup.user = { ...sup.user!, role: "supervisor" };
-    await expect(appRouter.createCaller(sup).multipark.triggerSync({ startDate: "2026-09-09", endDate: "2026-09-10" })).rejects.toThrow(/nacional/);
+    await expect(caller.multipark.reservasDoDia({ day: "27/09/2026" })).rejects.toThrow();
   });
 });
