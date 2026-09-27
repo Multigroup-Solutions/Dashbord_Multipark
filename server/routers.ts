@@ -5881,9 +5881,6 @@ export const appRouter = router({
       employeeId: z.number().optional(),
       projectId: z.number().optional(),
       noProject: z.boolean().optional(),
-      // Esconde as criadas pelo antigo parser das notas (sourceEmailId "mp:…")
-      // quando as ocorrências da BD Multipark estão disponíveis (duplicados).
-      hideLegacyMultipark: z.boolean().optional(),
     }).optional()).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "ocorrencias", "view", { allowOwn: true });
       return filterOwnCases(ctx.user, "ocorrencias", "incident", await getIncidents(input));
@@ -6039,7 +6036,6 @@ export const appRouter = router({
     stats: protectedProcedure.input(z.object({
       projectId: z.number().optional(),
       noProject: z.boolean().optional(),
-      hideLegacyMultipark: z.boolean().optional(),
     }).optional()).query(({ ctx, input }) => {
       requireAccess(ctx.user, "ocorrencias", "view");
       return getIncidentStats(input);

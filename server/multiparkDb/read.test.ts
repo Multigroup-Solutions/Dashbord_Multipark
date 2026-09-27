@@ -13,7 +13,6 @@ import {
   listMultiparkOccurrences, mapOccurrenceRow, mapOccurrenceStatsRow, normalizePlate, ParamList, toIsoUtc,
   OCCURRENCE_LIST_MAX_LIMIT,
 } from "./read";
-import { incidentOrigin, isLegacyMultiparkIncident } from "../../shared/incidentOrigin";
 
 // Meia-noite de Lisboa → UTC (verão: -1h), determinística para os testes.
 const midnight = (day: string) => `${day} 00:00:00(L)`;
@@ -202,15 +201,5 @@ describe("ocorrências — leituras com degradação (multiparkDbQuery simulado)
   it("motivos por tipo de erro", () => {
     expect(describeReadFailure(new MultiparkDbError("x", "NOT_CONFIGURED")).code).toBe("NOT_CONFIGURED");
     expect(describeReadFailure(new Error("boom")).code).toBe("QUERY_FAILED");
-  });
-});
-
-describe("origem das nossas ocorrências", () => {
-  it("parser antigo, API, email, manual", () => {
-    expect(incidentOrigin({ sourceEmailId: "mp:123", importedAt: "2026-09-01 10:00:00" })).toBe("multipark_legacy");
-    expect(isLegacyMultiparkIncident({ sourceEmailId: "mp:1" })).toBe(true);
-    expect(incidentOrigin({ sourceEmailId: "abc", importedAt: "2026-09-01 10:00:00" })).toBe("api");
-    expect(incidentOrigin({ sourceEmailId: "<msg@mail>", importedAt: null })).toBe("email");
-    expect(incidentOrigin({})).toBe("manual");
   });
 });

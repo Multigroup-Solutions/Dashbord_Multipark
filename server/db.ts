@@ -2699,17 +2699,10 @@ export async function createIncident(data: any) {
   return result?.id;
 }
 
-/** Esconde as ocorrências criadas pelo antigo parser das notas do histórico
- * Multipark (sourceEmailId "mp:…") — as da BD Multipark substituem-nas. */
-function notLegacyMultiparkIncident() {
-  return sql`(${incidents.sourceEmailId} IS NULL OR ${incidents.sourceEmailId} NOT LIKE 'mp:%')`;
-}
-
-export async function getIncidents(filters?: { status?: string; severity?: string; employeeId?: number; projectId?: number; noProject?: boolean; hideLegacyMultipark?: boolean }) {
+export async function getIncidents(filters?: { status?: string; severity?: string; employeeId?: number; projectId?: number; noProject?: boolean }) {
   const db = await getDb(); if (!db) return [];
   const conditions: any[] = await projectFilterConds(incidents.projectId, filters?.noProject ? undefined : filters?.projectId);
   if (filters?.noProject) conditions.push(scopedProjectIds() === undefined ? isNull(incidents.projectId) : sql`1 = 0`);
-  if (filters?.hideLegacyMultipark) conditions.push(notLegacyMultiparkIncident());
   if (filters?.status) conditions.push(eq(incidents.status, filters.status as any));
   if (filters?.severity) conditions.push(eq(incidents.severity, filters.severity as any));
   if (filters?.employeeId) conditions.push(eq(incidents.employeeId, filters.employeeId));
@@ -2734,11 +2727,10 @@ export async function deleteIncident(id: number) {
   await db.delete(incidents).where(eq(incidents.id, id));
 }
 
-export async function getIncidentStats(filters?: { projectId?: number; noProject?: boolean; hideLegacyMultipark?: boolean }) {
+export async function getIncidentStats(filters?: { projectId?: number; noProject?: boolean }) {
   const db = await getDb(); if (!db) return { total: 0, open: 0, resolved: 0, critical: 0, byType: {} as Record<string, number> };
   const conditions: any[] = await projectFilterConds(incidents.projectId, filters?.noProject ? undefined : filters?.projectId);
   if (filters?.noProject) conditions.push(scopedProjectIds() === undefined ? isNull(incidents.projectId) : sql`1 = 0`);
-  if (filters?.hideLegacyMultipark) conditions.push(notLegacyMultiparkIncident());
   // Convertidas vivem noutro módulo — não contam aqui.
   conditions.push(sql`${incidents.status} <> 'converted'`);
   const rows = await db.select({

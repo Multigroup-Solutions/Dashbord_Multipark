@@ -115,6 +115,10 @@ Top Parking 40 %, Parkos 20 %, Parkvia 23 %, Parkivado 25 %, agências 10–20 %
 - **41 campanhas de link direto** herdadas do Firebase (ACP, Ordem dos Engenheiros, Clientes Fiéis…), todas com 0 reservas. Retirar.
 - 50 mil movimentos marcados `firebase-migration`. É só informação: marcam as reservas migradas.
 - Utilizador só de leitura para o dashboard e índices em `History(actionTime)` e `History(bookingId)`.
+- **Endpoint para resolver ocorrências.** A página Ocorrências já lê a `Occurrence` diretamente, mas a nossa ligação à BD é só de leitura
+  e a API deles não tem nenhum endpoint de ocorrências (só reservas, histórico, agentes e parques). Pedir um endpoint (por exemplo
+  `PUT /occurrences/:id/resolve` com quem resolveu e uma nota) que preencha `resolved`, `resolvedAt`, `resolvedById` e `resolvedByName`.
+  Até lá o botão **Resolver** do dashboard fica desligado ("a aguardar endpoint da Multipark").
 
 ## E. Perguntas em aberto
 
