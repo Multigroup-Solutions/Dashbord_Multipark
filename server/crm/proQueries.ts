@@ -62,18 +62,17 @@ export async function listProAccounts(db: any, o: Opts & { search?: string | nul
   const parksOf = new Map<number, any[]>();
   for (const p of parks) parksOf.set(Number(p.accountId), [...(parksOf.get(Number(p.accountId)) ?? []), p]);
   const t = (o.search ?? "").trim().toLowerCase();
-  const visible = accounts.filter((a) => {
-    const ps = parksOf.get(Number(a.id)) ?? [];
-    if (o.cities !== undefined && !ps.some((p) => cityInScope(p.city, o.cities) && p.city)) return false;
-    if (t && ![a.name, a.fichaName, a.email, a.nif].some((x) => String(x ?? "").toLowerCase().includes(t))) return false;
-    return true;
-  });
-  const ledger = await loadLedger(db, visible.map((a) => Number(a.id)));
+  const searched = accounts.filter((a) => !t || [a.name, a.fichaName, a.email, a.nif].some((x) => String(x ?? "").toLowerCase().includes(t)));
+  const ledger = await loadLedger(db, searched.map((a) => Number(a.id)));
   const byAccount = new Map<number, LedgerRowIn[]>();
   for (const r of ledger) {
     if (!cityInScope(r.city, o.cities)) continue;
     byAccount.set(Number(r.accountId), [...(byAccount.get(Number(r.accountId)) ?? []), toIn(r)]);
   }
+  // âmbito: parque Pro na cidade OU movimentos na cidade (os Pro antigos não têm parques Pro)
+  const visible = searched.filter((a) => o.cities === undefined
+    || (parksOf.get(Number(a.id)) ?? []).some((p) => cityInScope(p.city, o.cities))
+    || (byAccount.get(Number(a.id)) ?? []).length > 0);
   const rows = visible.map((a) => {
     const s = summarizeLedger(byAccount.get(Number(a.id)) ?? []);
     const summary = o.canSeeTotals ? { ...s, months: undefined } : { ...hideMoney(s), months: undefined };
@@ -83,6 +82,8 @@ export async function listProAccounts(db: any, o: Opts & { search?: string | nul
       active: Number(a.active) === 1, autoBilling: Number(a.autoBilling) === 1, syncedAt: a.syncedAt ?? null,
       parks: (parksOf.get(Number(a.id)) ?? []).filter((p) => cityInScope(p.city, o.cities)).map((p) => ({ name: p.parkName ?? null, city: p.city ?? null, discount: nn(p.discount), active: Number(p.active) === 1 })),
       summary, multiparkUrl: multiparkProUrl(String(a.mpClientId)),
+      /** sem ProClient na Multipark: Pro do modelo antigo (reservas/cobranças soltas) */
+      legacy: (parksOf.get(Number(a.id)) ?? []).length === 0,
       // para ordenar/filtrar mesmo sem euros visíveis
       hasDue: s.due > 0.005,
     };
@@ -102,10 +103,12 @@ export async function getProAccountForClient(db: any, crmClientId: number, o: Op
     ORDER BY a.crmClientId = ${crmClientId} DESC LIMIT 1`));
   if (!a) return null;
   const accountId = Number(a.id);
-  const parks = rowsOf(await db.execute(sql`SELECT proClientId, parkName, city, name, discount, active, ${DT("deactivatedAt")} AS deactivatedAt
-    FROM crm_pro_parks WHERE accountId = ${accountId} AND goneAt IS NULL ORDER BY parkName`)).filter((p) => cityInScope(p.city, o.cities));
-  if (o.cities !== undefined && !parks.some((p) => p.city)) return null;
+  const allParks = rowsOf(await db.execute(sql`SELECT proClientId, parkName, city, name, discount, active, ${DT("deactivatedAt")} AS deactivatedAt
+    FROM crm_pro_parks WHERE accountId = ${accountId} AND goneAt IS NULL ORDER BY parkName`));
+  const parks = allParks.filter((p) => cityInScope(p.city, o.cities));
   const ledger = (await loadLedger(db, [accountId])).filter((r) => cityInScope(r.city, o.cities));
+  // âmbito: parque Pro na cidade OU movimentos na cidade (os Pro antigos não têm parques Pro)
+  if (o.cities !== undefined && !parks.length && !ledger.length) return null;
   const summary = summarizeLedger(ledger.map(toIn));
   const money = (v: unknown) => (o.canSeeTotals ? nn(v) : null);
   // pessoas: fichas ligadas à empresa (trabalha em / gere) + quem viajou nas reservas
@@ -119,6 +122,7 @@ export async function getProAccountForClient(db: any, crmClientId: number, o: Op
     id: accountId, mpClientId: String(a.mpClientId), crmClientId: a.crmClientId == null ? null : Number(a.crmClientId),
     name: a.name ?? null, email: a.email ?? null, phone: a.phone ?? null, nif: a.nif ?? null, taxName: a.taxName ?? null,
     active: Number(a.active) === 1, autoBilling: Number(a.autoBilling) === 1, billingEmail: a.billingEmail ?? null, syncedAt: a.syncedAtS ?? null,
+    legacy: allParks.length === 0,
     parks: parks.map((p) => ({ proClientId: String(p.proClientId), name: p.parkName ?? null, city: p.city ?? null, discount: nn(p.discount), active: Number(p.active) === 1, deactivatedAt: p.deactivatedAt ?? null })),
     summary: o.canSeeTotals ? summary : hideMoney(summary),
     ledger: ledger.slice(0, 3000).map((r) => ({

@@ -36,8 +36,10 @@ const bookings = [
   { id: "bk3", code: "1003", status: "CHECKED_OUT", check_in: "2026-06-02 08:00:00", park_id: "pk1", client_id: "cl-a", pro_client_id: "pc-a1", pro: true, booking_price: 40, pricing_lines: 1, pricing_total: 40, paid: 40, paid_updated_at: "2026-07-10 09:00:00" },
   // cancelada sem pagamento: não deixa dívida
   { id: "bk4", code: "1004", status: "CANCELLED", check_in: "2026-08-02 08:00:00", park_id: "pk1", client_id: "cl-a", pro_client_id: "pc-a1", pro: true, booking_price: 70, pricing_lines: 1, pricing_total: 70, paid: 0 },
-  // Pro sem conta conhecida
-  { id: "bk9", status: "BOOKED", check_in: "2026-09-01 08:00:00", park_id: "pk1", client_id: "cl-z", pro_client_id: "pc-z", pro: true, booking_price: 10, paid: 0 },
+  // Pro antigo: cliente sem ProClient hoje → conta própria (não se perde a dívida)
+  { id: "bk9", status: "BOOKED", check_in: "2026-09-01 08:00:00", park_id: "pk1", client_id: "cl-z", pro_client_id: "pc-z", pro: true, booking_price: 10, paid: 0, owner_name: "Zé Antigo", owner_email: "ze@exemplo.pt" },
+  // sem cliente nenhum: fica de fora (contado no diagnóstico)
+  { id: "bk10", status: "BOOKED", check_in: "2026-09-01 08:00:00", park_id: "pk1", client_id: null, pro_client_id: null, pro: true, booking_price: 10, paid: 0 },
 ];
 const payments = [{ id: "pp1", booking_id: "bk1", amount: 85, method: "TRANSFER", recorded_at: "2026-08-22 10:00:00" }];
 const settlements = [
@@ -53,8 +55,8 @@ describe("Pro na BD Multipark — conta corrente", () => {
   const led = (k: string, id: string) => s.ledger.find((l) => l.kind === k && l.sourceId === id)!;
 
   it("uma conta por cliente, com os parques; nome da empresa; anonimizado sem dados pessoais", () => {
-    expect(s.accounts).toHaveLength(2);
-    expect(a).toMatchObject({ name: "Pinto & Filhos, Lda", email: "conta@exemplo.pt", active: true });
+    expect(s.accounts).toHaveLength(3);
+    expect(a).toMatchObject({ name: "Pinto & Filhos, Lda", email: "conta@exemplo.pt", active: true, legacy: false });
     expect(a.parks.map((p) => p.proClientId)).toEqual(["pc-a1", "pc-a2"]);
     const b = s.accounts.find((x) => x.mpClientId === "cl-b")!;
     expect(b).toMatchObject({ name: null, email: null, phone: null });
@@ -63,7 +65,10 @@ describe("Pro na BD Multipark — conta corrente", () => {
     expect(led("booking", "bk1")).toMatchObject({ mpClientId: "cl-a", debit: 85, paidAmount: 85, listPrice: 100, periodKey: "2026-07", parkName: "Airpark Lisboa", city: "lisbon", travelerName: "Rui Costa" });
     expect(led("booking", "bk2")).toMatchObject({ mpClientId: "cl-a", debit: 60, periodKey: "2026-09", parkName: "Airpark Porto" });
     expect(led("booking", "bk4")).toMatchObject({ debit: 0, status: "CANCELLED" });
-    expect(s.diagnostics.bookingsWithoutAccount).toBe(1);
+    // Pro antigo: conta própria, inativa, com os dados do dono da reserva
+    expect(s.accounts.find((x) => x.mpClientId === "cl-z")).toMatchObject({ legacy: true, active: false, name: "Zé Antigo", email: "ze@exemplo.pt", parks: [] });
+    expect(led("booking", "bk9")).toMatchObject({ mpClientId: "cl-z", debit: 10 });
+    expect(s.diagnostics).toMatchObject({ bookingsWithoutAccount: 1, legacyAccounts: 1, accounts: 3 });
     expect(s.diagnostics.pricingDiffersFromPrice).toBe(1);
   });
   it("pagamentos datados a crédito no mês da reserva; pago sem data como movimento próprio", () => {
@@ -107,6 +112,18 @@ describe("Pro na BD Multipark — conta corrente", () => {
     expect(sum.currentMonthDebit).toBe(60);
     expect(sum.months.find((m) => m.periodKey === "2026-07")).toMatchObject({ status: "paid", settledAt: "2026-08-22 10:00:00" });
   });
+  it("cobrança online de cliente sem ProClient: conta Pro antigo se o cliente existir", () => {
+    const x = mapProSnapshot({
+      proClients, bookings: [], payments: [], settlements: [],
+      online: [
+        { id: "o1", client_id: "cl-old", amount: 30, status: "COMPLETED", period_start: "2026-03-01 00:00:00", period_end: "2026-03-23 00:00:00", created_at: "2026-03-23 13:00:00", client_found: true, client_name: "Maria Velha", client_email: "m@exemplo.pt" },
+        { id: "o2", client_id: "nao-existe", amount: 10, status: "COMPLETED", period_start: "2026-03-01 00:00:00", created_at: "2026-03-23 13:00:00", client_found: false },
+      ],
+    });
+    expect(x.accounts.find((a) => a.mpClientId === "cl-old")).toMatchObject({ legacy: true, name: "Maria Velha" });
+    expect(x.ledger.find((l) => l.sourceId === "o1")).toMatchObject({ mpClientId: "cl-old", kind: "online", periodKey: "2026-03" });
+    expect(x.diagnostics).toMatchObject({ online: 2, onlineWithoutAccount: 1, legacyAccounts: 1 });
+  });
   it("forma dos períodos sem valores", () => {
     expect(periodShape("2026-07")).toBe("9999-99");
     expect(periodShape(null)).toBe("(vazio)");
@@ -132,7 +149,7 @@ describe("Pro na BD Multipark — leitura", () => {
       let i = 0;
       const r = await readMultiparkPro(async () => answers[i++] as any);
       expect(r.available).toBe(true);
-      if (r.available) expect(r.data.accounts).toHaveLength(2);
+      if (r.available) expect(r.data.accounts).toHaveLength(3);
     } finally {
       if (prev === undefined) delete process.env.DATABASE_URL_MULTIPARK; else process.env.DATABASE_URL_MULTIPARK = prev;
     }
