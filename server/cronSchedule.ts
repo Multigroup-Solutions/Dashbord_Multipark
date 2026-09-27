@@ -42,12 +42,6 @@ export interface TickJobSpec {
   minMs: number;
   /** Teto (ms) desta corrida dentro do tick (os outros também precisam de tempo). */
   maxMs: number;
-  /**
-   * Só entra no plano com esta fonte das reservas (interruptor
-   * MULTIPARK_SOURCE): "api" = sync pela API (hoje); "db" = BD Multipark.
-   * Omissão: corre sempre.
-   */
-  source?: "api" | "db";
 }
 
 const S = 1000;
@@ -67,9 +61,9 @@ export const ZELLO_SAMEDAY_WINDOW = { from: "23:15", until: "23:55" } as const;
  * até a Google aprovar o acesso à API).
  */
 // Reservas (Jorge, 27 set 2026): nada vai buscar reservas à Multipark por
-// iniciativa própria — nem à API (sync recente/futuras) nem à BD deles (a
-// ficha lê-a diretamente). Fica só o que a Multipark nos manda (webhook →
-// multipark-deliveries). Os endpoints manuais continuam para uso à mão.
+// iniciativa própria — as páginas leem a BD deles ao vivo (server/multiparkDb).
+// Fica só o que a Multipark nos manda (webhook → multipark-deliveries), que
+// alimenta a cópia financeira (multipark_bookings) e o CRM.
 export const TICK_JOBS: readonly TickJobSpec[] = [
   { key: "mail-sync", runName: "mail-sync", label: "Comunicação: sincronização do Gmail", cadence: { kind: "interval", minutes: 5 }, priority: 10, minMs: 10 * S, maxMs: 25 * S },
   { key: "multipark-deliveries", runName: "multipark-deliveries", label: "Fila do webhook Multipark", cadence: { kind: "interval", minutes: 15 }, priority: 20, minMs: 15 * S, maxMs: 30 * S },
@@ -133,14 +127,6 @@ export function effectiveTickJobs(specs: readonly TickJobSpec[], d: DynamicCaden
     ? { ...s, cadence: { kind: "interval", minutes: d.mailPushHealthy ? MAIL_SYNC_SAFETY_NET_MINUTES : MAIL_SYNC_MINUTES } as JobCadence,
         label: d.mailPushHealthy ? "Comunicação: sincronização do Gmail (rede de segurança — push ativo)" : s.label }
     : s));
-}
-
-/**
- * Trabalhos ativos para a fonte das reservas em vigor (mesma ordem). Com
- * "api" é a lista de sempre (sem o multipark-db-sync). PURA.
- */
-export function activeTickJobs(specs: readonly TickJobSpec[], source: "api" | "db"): TickJobSpec[] {
-  return specs.filter((s) => !s.source || s.source === source);
 }
 
 /** Dias depois do dia D em que um mensal falhado ainda é apanhado. */

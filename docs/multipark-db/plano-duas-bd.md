@@ -104,13 +104,13 @@ Top Parking 40 %, Parkos 20 %, Parkvia 23 %, Parkivado 25 %, agências 10–20 %
 
 | Hoje | Passa a |
 |---|---|
-| Importar o histórico de cada reserva (`multipark_booking_history`) | Ler da BD 2. **Guardar o que já temos de antes de 2 mar 2026**: lá esse período só tem o retrato da migração |
-| Garagem, lugar e km tirados do histórico | Ler da BD 2 |
+| Importar o histórico de cada reserva (`multipark_booking_history`) | **Feito (27 set):** deixou de se importar (fase "histórico" do `multipark-deliveries` retirada). Lê-se da BD 2; a tabela e as linhas antigas **ficam** (antes de 2 mar 2026 só lá há o retrato da migração) e servem de recurso nas Reclamações/Perdidos e na Avaliação |
+| Garagem, lugar e km tirados do histórico | **Feito (27 set):** já não se extraem (a cópia do histórico saiu); lidos da BD 2 na ficha da reserva |
 | Listas de reservas por ação (/multipark/reservas, entradas, saídas…) sobre `multipark_bookings` | **Feito (27 set):** uma só lista "Reservas do dia" (Operações), lida da BD 2 dia a dia (`server/multiparkDb/dayBookings.ts`); parques nossos em `shared/multiparkParks.ts` |
-| Página Sincronização e "Reparar período" | **Retiradas da interface (27 set).** O estado fica em Definições → Estado do sistema |
+| Página Sincronização e "Reparar período" | **Feito (27 set):** retiradas da interface e do servidor. O estado fica em Definições → Estado do sistema |
 | Ocorrências a partir das notas do histórico (`incidents` via parser) | Ler `Occurrence` da BD 2 |
-| Colunas operacionais de `multipark_bookings` (fases, agentes, garagem) | Deixar de atualizar. Fica a cópia financeira (B2) e o cliente (B1) |
-| Três redes de segurança do sync (hora a hora, janela futura, reconciliação diária) | Podem ficar mais leves. Mantém-se a API e o webhook para a cópia financeira, mais a comparação com a BD 2 |
+| Colunas operacionais de `multipark_bookings` (fases, agentes, garagem) | **Feito (27 set):** agentes, garagem e km deixaram de ser atualizados. Fica a cópia financeira (B2) e o cliente (B1), pelo webhook |
+| Três redes de segurança do sync (hora a hora, janela futura, reconciliação diária) | **Feito (27 set):** retiradas (`multipark-sync`, `multipark-future`, `multipark-db-sync`, reconciliação do `daily-ops`, "Reparar período", ferramentas MCP de sync, interruptor `MULTIPARK_SOURCE`, painel "Saúde dos dados" e cartão "API Multipark"). Mantém-se o webhook + fila (`multipark-deliveries`, detalhe pela API) para a cópia financeira e o CRM, mais a comparação com a BD 2 (`multipark-db-diff`) |
 
 ## D. Limpezas a fazer do lado deles (pedir ao Rafael)
 
@@ -141,4 +141,4 @@ Top Parking 40 %, Parkos 20 %, Parkvia 23 %, Parkivado 25 %, agências 10–20 %
 5. **Conferência de caixa com alertas (B2)** para o back office.
 6. **Avaliação dos funcionários a ler os movimentos da BD 2 (B5).**
    Feito: `server/multiparkDb/movements.ts` (History, Booking check-in/out, Occurrence, BookingReview, agregados no Postgres) alimenta o motor (`evaluationEngine.ts`, cron `evaluation-recompute`) e a página única `/avaliacao` (separadores Dia e 4 semanas). Sem BD 2, usa a cópia `multipark_booking_history` com aviso. Saíram os botões "Buscar histórico" e `multipark.fetchAgentHistory`.
-7. Desligar o que deixa de ser preciso (C), depois de confirmado o histórico anterior a março.
+7. Desligar o que deixa de ser preciso (C), depois de confirmado o histórico anterior a março. **Feito (27 set)** — ver a tabela C; variáveis de ambiente em `docs/limpeza-variaveis.md`.

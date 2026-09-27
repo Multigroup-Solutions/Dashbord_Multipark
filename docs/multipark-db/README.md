@@ -1,5 +1,17 @@
 # BD da Multipark como fonte das reservas
 
+> **Atualização 27 set 2026 — limpeza final.** As páginas leem a BD da Multipark
+> **ao vivo** (`server/multiparkDb/*`: `read.ts`, `dayBookings.ts`, `bookingFile.ts`,
+> `movements.ts`, `shiftState.ts`, `extrasBookings.ts`, `pressure.ts`,
+> `partnerships*.ts`). Saíram: o interruptor `MULTIPARK_SOURCE`, o
+> `multipark-db-sync` (`dbSync.ts`/`source.ts`), o `multipark-sync`, o
+> `multipark-future`, a reconciliação diária, o "Reparar período", as ferramentas
+> MCP de sync e a cópia do histórico (`multipark_booking_history` fica com as
+> linhas antigas, só leitura). Ficam o webhook + fila (`multipark-deliveries`,
+> cópia financeira e CRM), a comparação `multipark-db-diff` e os diagnósticos
+> (`schema`, `probe`, `profile`) do workflow manual. As secções abaixo sobre o
+> interruptor e o `multipark-db-sync` são **históricas**.
+
 Estado (26 set 2026): **mapeado e confirmado, interruptor DESLIGADO.** O esquema
 real está em `schema.md` e as consultas em `server/multiparkDb/queries.ts`. A
 sonda (workflow em modo `probe`) confirmou: datas em UTC (`DATE_MODE = "utc"`),
@@ -87,7 +99,7 @@ em `multipark_bookings` (+ `multipark_booking_history`, `multipark_booking_extra
 - **Disponibilidade**: se a BD deles (ou a rede) falhar, o dashboard continua a
   funcionar com a cópia local, só um pouco atrasado.
 
-## Como funciona o interruptor `MULTIPARK_SOURCE`
+## (Histórico — retirado a 27 set 2026) Como funcionava o interruptor `MULTIPARK_SOURCE`
 
 Definições → Automações → **"Reservas: ler da BD da Multipark (em vez da API)"**
 (só o super admin muda; env `MULTIPARK_SOURCE=api|db`; a escolha nas Definições
@@ -137,10 +149,8 @@ Migração **0205**: `multipark_agents` e `multipark_db_cursors`. Os movimentos
 |---|---|
 | `server/multiparkDb/client.ts` | ligação só de leitura (pg / mysql2), guarda, redação, teste de ligação |
 | `server/multiparkDb/queries.ts` | **o único sítio com o esquema deles**: consultas + tabela "nosso campo ← tabela.coluna" (TODO) |
-| `server/multiparkDb/source.ts` | interface `MultiparkSource`, `ApiSource` (sobre a API atual), `DbSource`, interruptor |
-| `server/multiparkDb/dbSync.ts` | trabalho `multipark-db-sync` |
 | `server/multiparkDb/schemaDoc.ts` + `scripts/multipark-db-schema.ts` | descoberta do esquema (só estrutura) |
-| `server/multiparkDb/multiparkDb.test.ts` | guarda, URL/redação, mapeamento com linhas-exemplo, interruptor |
+| `server/multiparkDb/multiparkDb.test.ts` | guarda, URL/redação, mapeamento com linhas-exemplo |
 
 Integrações → cartão **"BD Multipark (só leitura)"** → **Testar** (só super
 admin): diz só se liga, motor e versão, se a sessão ficou só de leitura, a

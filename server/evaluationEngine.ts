@@ -14,7 +14,7 @@
  *    (multipark_booking_history) e o resultado diz `source: "copia"` com o
  *    motivo — nunca rebenta.
  *  - `runEvaluationRecompute`: o cron diário — últimas 4 semanas, em fatias
- *    de 7 dias dentro do prazo (done/nextOffset, como o multipark-future).
+ *    de 7 dias dentro do prazo (done/nextOffset).
  *  - `loadEvaluatedDays`: lê os dias guardados + ajustes manuais por cima
  *    (nunca gravados no calculado) + pontuação por regra + por hora.
  *  - ajustes e contestações.

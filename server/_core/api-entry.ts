@@ -161,26 +161,12 @@ app.get("/api/cron/tick", async (req, res) => {
   }
 });
 
-// Fila de notificações + detalhe + histórico (tick: de 15 em 15 min). Falhas
+// Fila de notificações + detalhe (tick: de 15 em 15 min). Falhas
 // de itens vão em `warnings` e o cron fica verde; 503 só se uma fase falhar.
 app.get("/api/cron/multipark-deliveries", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
   const { multiparkDeliveriesCron, sendCronRun } = await import("../cronJobs");
   sendCronRun(res, await multiparkDeliveriesCron({ deadlineAt: manualDeadline() }));
-});
-
-app.get("/api/cron/multipark-sync", async (req, res) => {
-  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
-  const { multiparkSyncCron, sendCronRun } = await import("../cronJobs");
-  sendCronRun(res, await multiparkSyncCron({ deadlineAt: manualDeadline() }));
-});
-
-// BD Multipark (só com o interruptor MULTIPARK_SOURCE = BD; tick: de 5 em 5
-// min). Com a fonte = API responde "saltado". done:false → chamar outra vez.
-app.get("/api/cron/multipark-db-sync", async (req, res) => {
-  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
-  const { multiparkDbSyncCron, sendCronRun } = await import("../cronJobs");
-  sendCronRun(res, await multiparkDbSyncCron({ deadlineAt: manualDeadline() }));
 });
 
 // Descoberta do esquema da BD Multipark A PARTIR DA VERCEL (é onde está a
@@ -311,22 +297,14 @@ app.get("/api/cron/extras-pressure", async (req, res) => {
   sendCronRun(res, await extrasPressureCron({ deadlineAt: manualDeadline(), cursor }));
 });
 
-// ?offsetDays=N retoma a varredura a partir desse dia da janela — a janela
-// completa não cabe nos 60 s do Vercel; a resposta traz done/nextOffset.
-app.get("/api/cron/multipark-future", async (req, res) => {
-  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
-  const { multiparkFutureCron, offsetParam, sendCronRun } = await import("../cronJobs");
-  sendCronRun(res, await multiparkFutureCron({ deadlineAt: manualDeadline(), offsetDays: offsetParam(req.query?.offsetDays) }));
-});
-
-// Manutenção diária + reconciliação + recolha GPS FINAL do Zello (D-2 e dias
+// Manutenção diária + recolha GPS FINAL do Zello (D-2 e dias
 // em falta), tudo dentro do prazo e retomável (done:false → chamar outra vez).
 // ?collectOnly=1 salta a manutenção; ?date=YYYY-MM-DD recolhe esse dia.
 app.get("/api/cron/daily-ops", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
   const { dailyOpsCron, sendCronRun } = await import("../cronJobs");
   const date = typeof req.query?.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? req.query.date : null;
-  sendCronRun(res, await dailyOpsCron({ deadlineAt: manualDeadline(), collectOnly: req.query?.collectOnly === "1", date, reconcile: req.query?.reconcile === "1" }));
+  sendCronRun(res, await dailyOpsCron({ deadlineAt: manualDeadline(), collectOnly: req.query?.collectOnly === "1", date }));
 });
 
 // GPS do Zello — passagem provisória do dia de hoje (tick: 23:15–23:55 de

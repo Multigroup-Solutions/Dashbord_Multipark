@@ -45,7 +45,7 @@ Pronto. Não é preciso mais nada no GitHub.
 | Google Ads e Meta Ads | 1×/dia a partir das 05:45 (última semana) e no dia 2 de cada mês (mês anterior) |
 | Web & SEO | 1×/dia a partir das 09:00 (ou da hora escolhida nas Definições, se for mais tarde) |
 
-**Reservas**: já não se vai buscar nada à Multipark por iniciativa própria (nem à API nem à BD deles). Entram só pelo **webhook** da Multipark (fila de 15 em 15 min para repetir o que falhou). A sincronização de reservas recentes/futuras, a da BD Multipark e a reconciliação ficam só para correr à mão. O **Extras-Dia** já lê as reservas ao vivo da BD da Multipark, por isso deixou de precisar da sincronização das futuras.
+**Reservas**: as páginas (Reservas do dia, ficha da reserva, Ocorrências, Avaliação, Extras-Dia, Parcerias) leem a BD da Multipark **ao vivo** — nada é copiado por iniciativa própria. Para a nossa cópia financeira (`multipark_bookings`) e o CRM entram só pelo **webhook** da Multipark; a **Fila do webhook Multipark** (de 15 em 15 min) repete o que falhou e completa o detalhe de cada reserva. A sincronização de reservas recentes/futuras, a da BD Multipark, a reconciliação diária e a cópia do histórico de cada reserva **foram retiradas** (27 set 2026); o histórico antigo (anterior a 2 mar 2026) continua guardado e é mostrado quando a BD da Multipark não tem nada.
 
 Fora da agenda: **Base de conhecimento** (atualiza-se quando a Google avisa que um ficheiro das pastas mudou e na verificação de 4 em 4 horas do Google; o botão **Sincronizar agora** continua) e **Google Business Profile** (só à mão, em pausa até a Google aprovar o acesso).
 
@@ -70,5 +70,5 @@ O cartão **Estado do sistema** (por cima) continua a mostrar o histórico de co
 ## Corridas manuais
 
 - **GitHub → Actions → "Agendador — rede de segurança (tick)" → Run workflow**: corre um tick completo e mostra o relatório (vermelho se alguma tarefa falhou).
-- **GitHub → Actions → "Multipark Sync Cron" (e os outros workflows) → Run workflow**: corre cada tarefa à mão, como antes.
+- **GitHub → Actions → "Multipark Sync Cron" (e os outros workflows) → Run workflow**: corre cada tarefa à mão (extras, escala, ligações, manutenção diária, avaliação, anúncios e briefing — já sem sync de reservas).
 - Chamar o tick duas vezes ao mesmo tempo não faz mal: cada tarefa só corre numa chamada de cada vez.

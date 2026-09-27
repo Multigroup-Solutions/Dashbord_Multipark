@@ -25,7 +25,7 @@ export type FoundBooking = {
 
 export type BookingSearchFieldProps = {
   /** Callback quando o utilizador escolhe uma reserva. */
-  onSelect: (b: FoundBooking, details: any | null) => void;
+  onSelect: (b: FoundBooking) => void;
   /** Label do campo. Default: "Buscar reserva (nº reserva, matrícula, email, nome)" */
   label?: string;
   /** Placeholder. */
@@ -47,7 +47,7 @@ const ACCENTS: Record<NonNullable<BookingSearchFieldProps["accent"]>, { bg: stri
  * Campo de pesquisa universal de reservas Multipark.
  * Procura por nº reserva, matrícula, email ou nome (DB local).
  * Mostra resultados clicáveis; ao escolher um, chama onSelect com os
- * dados da reserva e, se disponível, os detalhes completos via API.
+ * dados da reserva (cópia local, já completa pelo webhook — sem chamadas à API).
  */
 export default function BookingSearchField({
   onSelect,
@@ -57,25 +57,15 @@ export default function BookingSearchField({
   accent = "blue",
 }: BookingSearchFieldProps) {
   const [query, setQuery] = useState("");
-  const [loadingDetails, setLoadingDetails] = useState(false);
   const accentCfg = ACCENTS[accent];
 
   const { data: results = [] } = trpc.multipark.searchBooking.useQuery(
     { search: query },
     { enabled: query.trim().length >= 2 },
   );
-  const utils = trpc.useUtils();
 
-  const handleChoose = async (b: FoundBooking) => {
-    let details: any | null = null;
-    if (b.externalId) {
-      setLoadingDetails(true);
-      try {
-        details = await utils.multipark.fetchBookingDetails.fetch({ externalId: b.externalId });
-      } catch { /* API pode não devolver para todas as reservas */ }
-      setLoadingDetails(false);
-    }
-    onSelect(b, details);
+  const handleChoose = (b: FoundBooking) => {
+    onSelect(b);
     setQuery("");
   };
 
@@ -93,9 +83,6 @@ export default function BookingSearchField({
             className="pl-8"
           />
         </div>
-        {loadingDetails && (
-          <span className="text-xs text-muted-foreground animate-pulse">A carregar detalhes...</span>
-        )}
       </div>
       {results.length > 0 && (
         <div className="mt-2 space-y-1 max-h-40 overflow-y-auto">

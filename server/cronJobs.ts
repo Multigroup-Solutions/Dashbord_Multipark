@@ -38,10 +38,12 @@ const fail = (err: any, extra: Record<string, unknown> = {}): CronJobRun => ({ h
 // ─── Multipark ──────────────────────────────────────────────────────────────
 
 /**
- * Fila de notificações + detalhe + histórico. Falhas de itens (reserva ainda
- * incompleta, histórico que falhou) são repetidas pela fila com backoff → vão
- * em `warnings` e o cron fica verde. 503 só quando uma fase inteira falha.
- * As 3 fases dividem o prazo (antes fixo: 20 s / 32 s / 45 s).
+ * Fila de notificações + detalhe (cópia financeira em multipark_bookings e
+ * CRM). Falhas de itens (reserva ainda incompleta) são repetidas pela fila
+ * com backoff → vão em `warnings` e o cron fica verde. 503 só quando uma fase
+ * inteira falha. As 2 fases dividem o prazo. O histórico já não é copiado
+ * (multipark_booking_history fica só com o que já lá estava): lê-se da BD da
+ * Multipark ao vivo (server/multiparkDb).
  */
 export async function multiparkDeliveriesCron(o: { deadlineAt: number }): Promise<CronJobRun> {
   const startedAt = Date.now();
@@ -50,33 +52,21 @@ export async function multiparkDeliveriesCron(o: { deadlineAt: number }): Promis
   const { retryMultiparkDeliveries } = await import("./multiparkWebhook");
   let queue: Awaited<ReturnType<typeof retryMultiparkDeliveries>> | null = null;
   let details: { scanned: number; enriched: number; errors: number; noKey: number; closed?: number } | null = null;
-  let history: { scanned: number; fetched: number; errors: number; noKey: number; closed?: number } | null = null;
   let alert: unknown = null;
   try {
-    queue = await retryMultiparkDeliveries(startedAt + Math.round(total * 0.44));
+    queue = await retryMultiparkDeliveries(startedAt + Math.round(total * 0.6));
   } catch (err) {
     console.error("[cron multipark-deliveries] fila:", await errCode(err));
     phaseErrors.push(`fila indisponível (${await errCode(err)})`);
   }
   try {
-    const { enrichBookingsBatch, syncBookingHistoryBatch } = await import("./jobs/multiparkBookingSync");
+    const { enrichBookingsBatch } = await import("./jobs/multiparkBookingSync");
     // O detalhe tem um ciclo próprio: um report demorado não pode impedir
     // para sempre a atualização de matrículas, clientes e campanhas.
-    try {
-      details = await enrichBookingsBatch({ limit: 40, deadlineAt: startedAt + Math.round(total * 0.71) });
-    } catch (err) {
-      console.error("[cron multipark-deliveries] detalhe:", await errCode(err));
-      phaseErrors.push(`detalhe falhou (${await errCode(err)})`);
-    }
-    try {
-      history = await syncBookingHistoryBatch(20, o.deadlineAt);
-    } catch (err) {
-      console.error("[cron multipark-deliveries] histórico:", await errCode(err));
-      phaseErrors.push(`histórico falhou (${await errCode(err)})`);
-    }
+    details = await enrichBookingsBatch({ limit: 40, deadlineAt: o.deadlineAt });
   } catch (err) {
-    console.error("[cron multipark-deliveries] módulo:", await errCode(err));
-    phaseErrors.push(`sync indisponível (${await errCode(err)})`);
+    console.error("[cron multipark-deliveries] detalhe:", await errCode(err));
+    phaseErrors.push(`detalhe falhou (${await errCode(err)})`);
   }
   // Alerta "sem webhooks em horário de operação" (1 aviso por transição).
   try {
@@ -86,98 +76,8 @@ export async function multiparkDeliveriesCron(o: { deadlineAt: number }): Promis
     console.warn("[cron multipark-deliveries] alerta webhooks:", await errCode(err));
   }
   const { deliveriesVerdict } = await import("./syncRules");
-  const verdict = deliveriesVerdict({ phaseErrors, queue, details, history });
-  return { httpStatus: verdict.ok ? 200 : 503, body: { ...verdict, ranAt: ranAt(), ...(queue ?? {}), queue, details, history, alert }, done: true };
-}
-
-/** Sync recente (report por parque + enrich + histórico) + descoberta de parceiros. */
-export async function multiparkSyncCron(o: { deadlineAt: number }): Promise<CronJobRun> {
-  try {
-    const { runRecentCronSync } = await import("./jobs/multiparkBookingSync");
-    const result = await runRecentCronSync(30, { deadlineAt: o.deadlineAt });
-    if (result.busy) {
-      // Outro sync (botão, MCP) tem o trinco: não é falha, repete na hora seguinte.
-      return { httpStatus: 200, body: { ok: true, skipped: "busy", message: "Sincronização já a correr", ranAt: ranAt() }, done: true };
-    }
-    // (A descoberta de parceiros saiu daqui: as Parcerias leem os parceiros
-    // ao vivo da BD da Multipark — server/multiparkDb/partnerships.ts.)
-    const { recentSyncVerdict } = await import("./syncRules");
-    // ok:false quando há parques cujo report falhou (a cobertura deles não
-    // avançou e o próximo ciclo repete).
-    const verdict = recentSyncVerdict({
-      parkErrors: result.parkErrors,
-      errors: result.report.errors,
-    });
-    if (!verdict.ok) console.warn("[cron multipark-sync]", verdict.error);
-    return { httpStatus: 200, body: { ...verdict, ranAt: ranAt(), ...result, report: { ...result.report, errors: result.report.errors.slice(0, 20) } }, done: true };
-  } catch (err: any) {
-    console.error("[cron multipark-sync] falhou:", await errCode(err));
-    return { httpStatus: 500, body: { ok: false, error: `sync recente falhou (${await errCode(err)})` } };
-  }
-}
-
-/** Janela futura (4 semanas) em fatias de 7 dias; `offsetDays` retoma a varredura. */
-export async function multiparkFutureCron(o: { deadlineAt: number; offsetDays: number }): Promise<CronJobRun> {
-  try {
-    const { runFutureCronSync } = await import("./jobs/multiparkBookingSync");
-    const result = await runFutureCronSync(4, { offsetDays: o.offsetDays, deadlineAt: o.deadlineAt });
-    if (result.busy) {
-      // Trinco ocupado: não é falha. done:true para não ciclar; a janela
-      // futura é refeita no ciclo seguinte (2 h).
-      return { httpStatus: 200, body: { ok: true, skipped: "busy", message: "Sincronização já a correr", done: true, ranAt: ranAt() }, done: true };
-    }
-    const { futureSyncVerdict } = await import("./syncRules");
-    // ok:false só quando não acabou E não avançou — avançar uma fatia já é progresso.
-    const verdict = futureSyncVerdict(result);
-    if (!verdict.ok) console.warn("[cron multipark-future]", verdict.error);
-    const done = result.done !== false;
-    return {
-      httpStatus: 200,
-      body: { ...verdict, ranAt: ranAt(), ...result, report: { ...result.report, errors: result.report.errors.slice(0, 20) } },
-      done, cursor: !done && result.nextOffset != null ? String(result.nextOffset) : null,
-    };
-  } catch (err: any) {
-    console.error("[cron multipark-future] falhou:", await errCode(err));
-    return { httpStatus: 500, body: { ok: false, error: `sync futuro falhou (${await errCode(err)})` } };
-  }
-}
-
-/**
- * BD Multipark (só com o interruptor MULTIPARK_SOURCE = BD): reservas,
- * movimentos e condutores por cursor, retomável (done:false → o agendador
- * volta no tick seguinte). Com a fonte = API não faz nada (e nem entra no
- * plano do agendador). Erros de itens → aviso; um fluxo inteiro a falhar
- * (ex.: "por mapear", BD indisponível) → vermelho.
- */
-export async function multiparkDbSyncCron(o: { deadlineAt: number }): Promise<CronJobRun> {
-  try {
-    const { dbSourceReadiness, effectiveMultiparkSource, requestedMultiparkSource } = await import("./multiparkDb/source");
-    const eff = effectiveMultiparkSource(await requestedMultiparkSource(), dbSourceReadiness(process.env));
-    if (eff.source !== "db") {
-      const reason = eff.reason ?? "Interruptor \"Reservas: ler da BD da Multipark\" desligado.";
-      return { httpStatus: 200, body: { ok: true, skipped: "fonte=api", reason, ranAt: ranAt() }, done: true };
-    }
-    const { runMultiparkDbSync } = await import("./multiparkDb/dbSync");
-    const r = await runMultiparkDbSync({ deadlineAt: o.deadlineAt });
-    if (r.busy) {
-      return { httpStatus: 200, body: { ok: true, skipped: "busy", message: "Sincronização já a correr", ranAt: ranAt() }, done: true };
-    }
-    const ok = r.streamErrors.length === 0;
-    const { redactSecrets } = await import("./multiparkDb/client");
-    const streamErrors = r.streamErrors.map((e) => redactSecrets(e));
-    return {
-      httpStatus: 200,
-      body: {
-        ok, ranAt: ranAt(), ...r, streamErrors,
-        ...(ok ? {} : { error: streamErrors.join(" | ").slice(0, 500) }),
-        warnings: r.itemErrors.slice(0, 10),
-      },
-      done: ok ? r.done : true,
-    };
-  } catch (err: any) {
-    console.error("[cron multipark-db-sync] falhou:", await errCode(err));
-    return { httpStatus: 500, body: { ok: false, error: `sync da BD Multipark falhou (${await errCode(err)})` } };
-  }
+  const verdict = deliveriesVerdict({ phaseErrors, queue, details });
+  return { httpStatus: verdict.ok ? 200 : 503, body: { ...verdict, ranAt: ranAt(), ...(queue ?? {}), queue, details, alert }, done: true };
 }
 
 /** Ligações automáticas funcionário ↔ utilizador ↔ agente Multipark (conservador e idempotente). */
@@ -260,7 +160,7 @@ const noonUtc = (day: string) => new Date(`${day}T12:00:00Z`);
 
 /**
  * Manutenção diária (despesas, avaliação semanal, tarefas, ponto, possíveis
- * faltas, retenções), reconciliação Multipark e
+ * faltas, retenções) e
  * recolha GPS FINAL do Zello, TUDO dentro de
  * `deadlineAt`: cada passo só arranca com tempo (≥ 8 s) e os que ficarem de
  * fora seguem na chamada seguinte (`done:false`; o agendador guarda no cursor
@@ -274,7 +174,7 @@ const noonUtc = (day: string) => new Date(`${day}T12:00:00Z`);
  * cursor e só pintam a corrida de vermelho no fim (done:true) — senão um
  * passo falhado atrasava a retoma da recolha GPS.
  */
-export async function dailyOpsCron(o: { deadlineAt: number; collectOnly?: boolean; date?: string | null; cursor?: string | null; deferStepErrors?: boolean; reconcile?: boolean }): Promise<CronJobRun> {
+export async function dailyOpsCron(o: { deadlineAt: number; collectOnly?: boolean; date?: string | null; cursor?: string | null; deferStepErrors?: boolean }): Promise<CronJobRun> {
   try {
     const cur = parseDailyOpsCursor(o.cursor);
     const stepsDone = new Set(cur.s);
@@ -372,32 +272,7 @@ export async function dailyOpsCron(o: { deadlineAt: number; collectOnly?: boolea
       });
     }
 
-    // Reconciliação Multipark (report D-1/D-2 vs BD). Retomável: corre em
-    // todas as chamadas (também collectOnly) até verificar tudo.
-    let reconciliation: { done: boolean; checked: number; remaining: number; errors: number; summary: unknown } | null = null;
-    let reconciliationPending = false;
-    // Reservas (Jorge, 27 set 2026): já não se vai à Multipark por iniciativa
-    // própria — a reconciliação só corre à mão (daily-ops?reconcile=1).
-    if (!stepsDone.has("reconciliation") && !o.reconcile) {
-      reconciliation = { done: true, checked: 0, remaining: 0, errors: 0, summary: "desligada: reservas só pelo webhook (correr à mão com ?reconcile=1)" };
-      stepsDone.add("reconciliation");
-    }
-    if (!stepsDone.has("reconciliation")) {
-      if (hasTime()) {
-        try {
-          const { runDailyReconciliation } = await import("./jobs/multiparkReconciliation");
-          const r = await runDailyReconciliation({ deadlineAt: cap(12_000) });
-          reconciliation = { done: r.done, checked: r.checked, remaining: r.remaining, errors: r.errors, summary: r.summary };
-          if (r.done) stepsDone.add("reconciliation");
-        } catch (err) {
-          console.warn("[daily-ops] reconciliação Multipark:", await errCode(err));
-          stepErrors.push(`reconciliação Multipark: ${await errCode(err)}`);
-          stepsDone.add("reconciliation");
-        }
-      } else reconciliationPending = true;
-    }
-    const reconciliationDone = stepsDone.has("reconciliation");
-    const maintenanceDone = pending.length === 0 && !reconciliationPending && reconciliationDone;
+    const maintenanceDone = pending.length === 0;
     const cursorOut = () => JSON.stringify({ s: Array.from(stepsDone), d: Array.from(daysDone), e: stepErrors.map((e) => e.slice(0, 120)).slice(0, 5) });
     /** Erros dos passos na resposta: já (manual) ou só no fim (agendador; a meio vão como aviso). */
     const errorsFor = (finished: boolean) => (!o.deferStepErrors || finished ? { stepErrors } : { stepErrors: [] as string[], warnings: stepErrors.map((e) => `passo falhado (conta no fim): ${e}`) });
@@ -409,7 +284,7 @@ export async function dailyOpsCron(o: { deadlineAt: number; collectOnly?: boolea
       return {
         httpStatus: 200,
         body: {
-          ok: false, ranAt: ranAt(), done: maintenanceDone, stepErrors, reconciliation, pendingSteps: pending, skipped: "zello_not_configured",
+          ok: false, ranAt: ranAt(), done: maintenanceDone, stepErrors, pendingSteps: pending, skipped: "zello_not_configured",
           error: "Zello não configurado (ZELLO_API_KEY/ZELLO_USERNAME/ZELLO_PASSWORD): recolha GPS diária não correu.",
           warnings: ["Recolha GPS saltada: Zello não configurado."],
         },
@@ -450,7 +325,7 @@ export async function dailyOpsCron(o: { deadlineAt: number; collectOnly?: boolea
         ok: success, ranAt: ranAt(), date: collected[collected.length - 1]?.date ?? latest, dates: collected, ...errorsFor(done), pendingSteps: pending,
         success, driversProcessed: collected.reduce((s, c) => s + c.driversProcessed, 0), errors,
         ...(success ? {} : { error: `Recolha Zello falhou: ${String(errors[errors.length - 1] ?? "sem detalhe").slice(0, 300)}` }),
-        reconciliation, done,
+        done,
       },
       done, cursor: cursorOut(),
     };

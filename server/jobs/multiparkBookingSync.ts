@@ -1,49 +1,29 @@
 /**
- * MultiPark Booking Sync Job
+ * Detalhe das reservas Multipark para a cópia financeira (multipark_bookings)
+ * e o CRM. Alimentado pelo webhook (server/multiparkWebhook.ts) e pela fila
+ * multipark-deliveries (agendador /api/cron/tick): cada reserva nova ou
+ * alterada é completada com o /bookings/:id da API Multipark (cliente,
+ * matrícula, campanha, parceiro, origem, entrega, voos).
  *
- * Vai buscar reservas ao /bookings/report da API MultiPark e guarda-as na BD.
- * Corre pelo agendador único /api/cron/tick (server/cronScheduler.ts):
- *  - sync recente de hora a hora (trabalho multipark-sync), com janela por
- *    parque a partir da última cobertura completa desse parque (máx. 3 dias);
- *  - janela futura de 2 em 2 horas (multipark-future), retomável;
- *  - fila de notificações/detalhe/histórico de 15 em 15 min
- *    (multipark-deliveries; o webhook também a despacha em tempo real).
- * Os endpoints /api/cron/<nome> ficam para uso manual.
- * Ações: creation, checkin, checkout, cancelation.
- *
- * Também serve o "Reparar período" manual (máx. 3 dias, com prazo) e o MCP.
- * Todos partilham o trinco de server/syncLock.ts.
+ * Já não há sync por report (recente/futuro), reparação de períodos nem
+ * cópia do histórico (multipark_booking_history fica só com o que já lá
+ * estava): as páginas leem a BD da Multipark ao vivo (server/multiparkDb).
  */
 
 import {
-  getBookingsReport,
   getBooking,
-  getBookingHistory,
-  isMultiparkConfigured,
-  getConfiguredParks,
   getParkApiKey,
   matchParkConfig,
   PARK_CONFIGS,
   type MultiparkBooking,
-  type BookingActionType,
-  type ParkConfig,
 } from "../multipark";
-import {
-  upsertMultiparkBooking,
-  upsertBookingExtras,
-  createSyncLog,
-  getProjects,
-  getDb,
-  getLastSyncSuccessAt,
-} from "../db";
-import { chunkNeedsRetry, computeRecentWindows, mysqlToMs, utcDay, utcMysql } from "../syncRules";
+import { getProjects, getDb, upsertBookingExtras } from "../db";
 import { eq, and, or, sql, isNull, lte } from "drizzle-orm";
-import { multiparkBookings, multiparkBookingHistory, multiparkSyncCoverage } from "../../drizzle/schema";
-import { withSyncLock, type SyncLockOwner } from "../syncLock";
+import { multiparkBookings } from "../../drizzle/schema";
 import { parseBookingDate, bookingDetailCore } from "../bookingRefresh";
 import { deliveryErrorCode, retryDelaySeconds } from "../bookingDeliveryQueue";
 import { classifyAllocation } from "../spotClassification";
-import { autoAttachAgentsByEmail, type SeenAgent } from "../identityReconcile";
+import { runConcurrent } from "../_core/concurrency";
 import { bookingCampaignFallback } from "../../shared/partnerRules";
 import { createParkMatcher } from "../../shared/projectTree";
 
@@ -232,13 +212,6 @@ function bookingToRecord(
 
 const ENRICH_CONCURRENCY = 5;
 
-// Max simultaneous /bookings/report calls in the sync fan-out. Each report
-// request holds several be-multipark Prisma connections for its duration;
-// firing all parks×actionTypes (~108) at once via Promise.allSettled saturated
-// the 25→40-slot pool and produced P2024 cascades. Cap the fan-out so the pool
-// drains comfortably (tunable 6–8). See memory/p2024-regression-sync-burst.md.
-const REPORT_CONCURRENCY = 6;
-
 function nowMysql(): string {
   return new Date().toISOString().slice(0, 19).replace("T", " ");
 }
@@ -264,9 +237,8 @@ type SyncDb = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
 /**
  * Grava o detalhe de uma reserva (formato /bookings/:id) na linha de
- * multipark_bookings. Partilhado pelo enriquecimento pela API (acima) e pelo
- * multipark-db-sync (BD Multipark, server/multiparkDb). Lança em erro — quem
- * chama decide o que fazer (a API reagenda com deferBookingDetail).
+ * multipark_bookings. Lança em erro — quem chama decide o que fazer (o
+ * enriquecimento reagenda com deferBookingDetail).
  */
 export async function applyBookingDetail(db: SyncDb, externalId: string, detailed: MultiparkBooking,
   context?: { parkName: string | null; city: string | null }): Promise<void> {
@@ -277,11 +249,6 @@ export async function applyBookingDetail(db: SyncDb, externalId: string, detaile
     // Cliente + veículo só são preenchidos se vierem (o report mascara estes
     // campos para reservas de parceiros; o /bookings/:id devolve-os reais).
     const update: Record<string, any> = {
-      // MySQL avalia SET da esquerda para a direita: comparar antes de alterar status.
-      ...(typeof b.status === 'string' && b.status ? {
-        historyFetchedAt: sql`CASE WHEN status <> ${b.status} THEN NULL ELSE historyFetchedAt END`,
-        historyRetryAt: sql`CASE WHEN status <> ${b.status} THEN NULL ELSE historyRetryAt END`,
-      } : {}),
       ...bookingDetailCore(b),
       detailRetryAt: null, detailAttempts: 0, detailErrorCode: null,
       deliveryType: typeof b.deliveryType === "string" && b.deliveryType ? b.deliveryType : null,
@@ -327,22 +294,9 @@ export async function applyBookingDetail(db: SyncDb, externalId: string, detaile
       eq(multiparkBookings.externalId, externalId),
       version ? or(isNull(multiparkBookings.sourceUpdatedAt), lte(multiparkBookings.sourceUpdatedAt, version)) : undefined,
     ));
-}
-
-/**
- * Uma reserva vinda da BD Multipark (já no formato da API): mesmo caminho do
- * sync pela API — bookingToRecord + upsert + extras — e logo a seguir o
- * detalhe (applyBookingDetail), porque a BD já traz tudo (sem /bookings/:id).
- */
-export async function saveBookingFromSource(booking: MultiparkBooking): Promise<{ action: "created" | "updated"; statusChanged: boolean }> {
-  const db = await getDb();
-  if (!db) throw new Error("Base de dados indisponível");
-  const projectMap = await getProjectMap();
-  const record = bookingToRecord(booking, projectMap, await getAliasResolver());
-  const result = await upsertMultiparkBooking(record);
-  await upsertBookingExtras(booking.id, (booking as any).extraServices);
-  await applyBookingDetail(db, booking.id, booking, { parkName: record.parkName, city: record.city });
-  return { action: result?.action ?? "updated", statusChanged: !!result?.statusChanged };
+    // Serviços extra itemizados (antes vinham do sync por report, que saiu).
+    // Sem lista no detalhe não mexe (upsertBookingExtras ignora vazio/ausente).
+    if (Array.isArray(b.extraServices)) await upsertBookingExtras(externalId, b.extraServices);
 }
 
 /** Enriquecimento só volta a rodar semanalmente em reservas vivas: não
@@ -353,12 +307,10 @@ const TERMINAL_STATUSES_SQL = sql`('CHECKED_OUT', 'CANCELLED')`;
 export const PARK_CLOSED_CODE = "PARK_CLOSED";
 
 /** Parque fechado (closed:true): marca e NÃO reagenda (sem retryAt). */
-async function markParkClosed(externalId: string, kind: "detail" | "history") {
+async function markParkClosed(externalId: string) {
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível");
-  await db.update(multiparkBookings).set(kind === "detail"
-    ? { detailErrorCode: PARK_CLOSED_CODE, detailRetryAt: null }
-    : { historyErrorCode: PARK_CLOSED_CODE, historyRetryAt: null })
+  await db.update(multiparkBookings).set({ detailErrorCode: PARK_CLOSED_CODE, detailRetryAt: null })
     .where(eq(multiparkBookings.externalId, externalId));
 }
 
@@ -373,143 +325,6 @@ async function deferBookingDetail(externalId: string, code: string) {
   }).where(eq(multiparkBookings.externalId, externalId));
 }
 
-/** Corre N tarefas em paralelo com limite de concorrência.
- *  Se deadlineAt for passado, deixa de pegar em itens novos quando o tempo
- *  esgota — os restantes ficam por processar (apanhados em ciclos seguintes). */
-async function runConcurrent<T>(items: T[], limit: number, fn: (item: T) => Promise<void>, deadlineAt?: number): Promise<void> {
-  let idx = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, async () => {
-      while (idx < items.length) {
-        if (deadlineAt && Date.now() >= deadlineAt) break;
-        const i = idx++;
-        try { await fn(items[i]); } catch {}
-      }
-    }),
-  );
-}
-
-/**
- * Vai buscar a timeline de uma reserva (GET /bookings/:id/history) e
- * persiste na tabela multipark_booking_history. Também extrai resumos
- * (currentGarage/Spot, agente de check-in/out, última quilometragem)
- * para a tabela principal.
- */
-function parseMpDate(s: string | null | undefined): string | null {
-  return typeof s === 'string' ? parseBookingDate(s) : null;
-}
-
-export async function syncBookingHistory(externalId: string, apiKey: string): Promise<boolean> {
-  const db = await getDb();
-  if (!db) return false;
-  try {
-    const response = await getBookingHistory(externalId, apiKey, { maxAttempts: 1, timeoutMs: 8000 });
-    if (!Array.isArray(response?.history) || (response.bookingId && response.bookingId !== externalId)
-      || (typeof response.total === 'number' && response.total > response.history.length)) {
-      throw Object.assign(new Error('Histórico incompleto ou inválido'), { code: 'HISTORY_INCOMPLETE' });
-    }
-    const items = response.history.map(item => {
-      if (!item?.id || String(item.id).length > 128 || !parseMpDate(item.actionTime)) {
-        throw Object.assign(new Error('Evento sem identidade ou data válida'), { code: 'HISTORY_EVENT_INVALID' });
-      }
-      return item;
-    }).sort((a, b) => parseMpDate(a.actionTime)!.localeCompare(parseMpDate(b.actionTime)!) || String(a.id).localeCompare(String(b.id)));
-
-    const seenAgents: SeenAgent[] = [];
-    await db.transaction(async tx => {
-
-    let checkinAgentName: string | null = null;
-    let checkinAgentUserId: string | null = null;
-    let checkoutAgentName: string | null = null;
-    let checkoutAgentUserId: string | null = null;
-    let currentGarage: string | null = null;
-    let currentSpot: string | null = null;
-    let lastKnownMileage: number | null = null;
-
-    for (const item of items as any[]) {
-      const historyId = item.id ?? null;
-      if (!historyId) continue;
-      const actionTime = parseMpDate(item.actionTime);
-      const agentName = item.agentName ?? null;
-      const agentUserId = item.userId ?? item.user?.id ?? null;
-      const agentEmail = item.user?.email ?? null;
-      if (agentUserId) seenAgents.push({ agentUserId: String(agentUserId), agentName, agentEmail });
-      const modifiedFields = item.modifiedFields
-        ? typeof item.modifiedFields === 'string' ? item.modifiedFields : JSON.stringify(item.modifiedFields)
-        : null;
-      const changeType = item.changeType ?? null;
-      const platform = item.platform ?? null;
-      const remarks = item.remarks ?? null;
-
-      // Os eventos e o resumo são guardados na mesma transação.
-      const values = {
-          bookingExternalId: externalId,
-          historyId: String(historyId).slice(0, 128),
-          changeType: changeType ? String(changeType).slice(0, 32) : null,
-          actionTime,
-          remarks,
-          agentName: agentName ? String(agentName).slice(0, 256) : null,
-          agentUserId: agentUserId ? String(agentUserId).slice(0, 128) : null,
-          agentEmail,
-          modifiedFields,
-          platform: platform ? String(platform).slice(0, 32) : null,
-      };
-      await tx.insert(multiparkBookingHistory).values(values).onDuplicateKeyUpdate({ set: values });
-
-      // Extrair resumos
-      if (changeType === "CHECK_IN") {
-        if (agentName) checkinAgentName = agentName;
-        if (agentUserId) checkinAgentUserId = agentUserId;
-      } else if (changeType === "CHECK_OUT") {
-        if (agentName) checkoutAgentName = agentName;
-        if (agentUserId) checkoutAgentUserId = agentUserId;
-      }
-      if (modifiedFields) {
-        try {
-          const mf = JSON.parse(modifiedFields);
-          if (mf.garagem) currentGarage = String(mf.garagem).slice(0, 64);
-          if (mf.lugar) currentSpot = String(mf.lugar).slice(0, 64);
-          if (mf.km !== undefined) {
-            const km = parseInt(String(mf.km), 10);
-            if (Number.isFinite(km)) lastKnownMileage = km;
-          }
-        } catch {}
-      }
-    }
-
-    const update: Record<string, any> = { historyFetchedAt: nowMysql(),
-      historyRetryAt: null, historyAttempts: 0, historyErrorCode: null };
-    if (checkinAgentName) update.checkinAgentName = checkinAgentName;
-    if (checkinAgentUserId) update.checkinAgentUserId = checkinAgentUserId;
-    if (checkoutAgentName) update.checkoutAgentName = checkoutAgentName;
-    if (checkoutAgentUserId) update.checkoutAgentUserId = checkoutAgentUserId;
-    if (currentGarage) update.currentGarage = currentGarage;
-    if (currentSpot) update.currentSpot = currentSpot;
-    if (lastKnownMileage !== null) update.lastKnownMileage = lastKnownMileage;
-
-    await tx.update(multiparkBookings)
-      .set(update)
-      .where(eq(multiparkBookings.externalId, externalId));
-    });
-    if (seenAgents.length) {
-      try { await autoAttachAgentsByEmail(db, seenAgents); } catch {}
-    }
-    return true;
-  } catch (error) {
-    await deferBookingHistory(externalId, deliveryErrorCode(error));
-    return false;
-  }
-}
-
-async function deferBookingHistory(externalId: string, code: string) {
-  const db = await getDb();
-  if (!db) throw new Error('Base de dados indisponível');
-  await db.update(multiparkBookings).set({
-    historyErrorCode: code,
-    historyRetryAt: sql`DATE_ADD(UTC_TIMESTAMP(), INTERVAL LEAST(21600, 60 * POW(2, LEAST(historyAttempts, 9))) SECOND)`,
-    historyAttempts: sql`historyAttempts + 1`,
-  }).where(eq(multiparkBookings.externalId, externalId));
-}
 
 /**
  * Endpoint separado que enriquece um lote de reservas (deliveryType, flights,
@@ -553,7 +368,7 @@ export async function enrichBookingsBatch(
   const whereCond = and(targetIds ? inArray(multiparkBookings.externalId, targetIds) : undefined,
     auto ? due : undefined, auto ? stale : undefined, auto ? notClosed : undefined);
 
-  // Prioridade igual à do histórico: reservas recentes/ativas primeiro, depois
+  // Prioridade: reservas recentes/ativas primeiro, depois
   // as nunca enriquecidas, depois as mais antigas.
   const pending = await db
     .select({
@@ -580,7 +395,7 @@ export async function enrichBookingsBatch(
     const park = matchParkConfig({ parkName: p.parkName, city: p.city });
     if (park?.closed) {
       closed++;
-      await markParkClosed(p.externalId, "detail");
+      await markParkClosed(p.externalId);
       return;
     }
     const apiKey = park ? getParkApiKey(park) : undefined;
@@ -594,472 +409,4 @@ export async function enrichBookingsBatch(
   }, deadlineAt);
 
   return { scanned: pending.length, enriched, errors: errs, noKey, closed };
-}
-
-/**
- * Vai buscar history das reservas que ainda não tinham. Mesma estratégia
- * do enrich: lote pequeno por execução para caber no timeout do Vercel.
- */
-export async function syncBookingHistoryBatch(
-  arg: number | { limit?: number; externalIds?: string[]; force?: boolean } = 50,
-  deadlineAt?: number,
-): Promise<{ scanned: number; fetched: number; errors: number; noKey: number; closed?: number }> {
-  const db = await getDb();
-  if (!db) throw new Error('Base de dados indisponível');
-  const opts = typeof arg === 'number' ? { limit: arg } : arg;
-  if (opts.externalIds?.length === 0) return { scanned: 0, fetched: 0, errors: 0, noKey: 0, closed: 0 };
-  const { inArray } = await import('drizzle-orm');
-  const forced = opts.force && opts.externalIds;
-  const pending = await db.select({ externalId: multiparkBookings.externalId,
-    parkId: multiparkBookings.parkId, parkName: multiparkBookings.parkName, city: multiparkBookings.city,
-  }).from(multiparkBookings).where(and(
-    opts.externalIds ? inArray(multiparkBookings.externalId, opts.externalIds) : undefined,
-    forced ? undefined : sql`(historyRetryAt IS NULL OR historyRetryAt <= UTC_TIMESTAMP())`,
-    forced ? undefined : sql`COALESCE(checkIn, bookingCreatedAt) <= DATE_ADD(UTC_TIMESTAMP(), INTERVAL 30 DAY)`,
-    forced ? undefined : sql`(historyErrorCode IS NULL OR historyErrorCode <> ${PARK_CLOSED_CODE})`,
-    forced ? undefined : sql`(historyFetchedAt IS NULL OR historyErrorCode IS NOT NULL
-      OR (historyFetchedAt < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 7 DAY)
-        AND (status IS NULL OR status NOT IN ${TERMINAL_STATUSES_SQL}
-          OR checkOut >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL ${ROTATION_MAX_AGE_DAYS} DAY)))
-      OR (COALESCE(checkOut, checkIn, bookingCreatedAt) >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 7 DAY)
-        AND historyFetchedAt < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 6 HOUR)))`,
-  )).orderBy(
-    sql`(COALESCE(checkOut, checkIn, bookingCreatedAt) >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 7 DAY)) DESC`,
-    sql`COALESCE(historyRetryAt, historyFetchedAt, bookingCreatedAt) ASC`,
-  ).limit(opts.limit ?? 50);
-
-  let scanned = 0, fetched = 0, errors = 0, noKey = 0, closed = 0;
-  await runConcurrent(pending, ENRICH_CONCURRENCY, async p => {
-    scanned++;
-    try {
-      const park = matchParkConfig(p);
-      if (park?.closed) {
-        closed++;
-        await markParkClosed(p.externalId, 'history');
-        return;
-      }
-      const key = park ? getParkApiKey(park) : undefined;
-      if (!key) {
-        noKey++;
-        await deferBookingHistory(p.externalId, 'PARK_ACCESS_MISSING');
-        return;
-      }
-      if (await syncBookingHistory(p.externalId, key)) fetched++; else errors++;
-    } catch { errors++; }
-  }, deadlineAt);
-  return { scanned, fetched, errors, noKey, closed };
-}
-
-// ─── Core sync function ──────────────────────────────────────────────────────
-
-/** Tipo gravado em multipark_sync_logs. Linhas antigas: "api_sync" (recente e
- *  futuro misturados), "api_sync_recovery" e "excel_import" — continuam a ser
- *  lidas/mostradas, mas já não são escritas. */
-export type SyncLogType = "api_sync_recent" | "api_sync_future" | "manual";
-
-export type ParkRunState = "ok" | "error" | "incomplete";
-
-export interface SyncBookingsResult {
-  success: boolean;
-  processed: number;
-  created: number;
-  updated: number;
-  errors: string[];
-  enrichTargets: string[];
-  /** Houve trabalhos (parque × ação) que ficaram por fazer por falta de tempo. */
-  partial: boolean;
-  skippedJobs: number;
-  /** Estado de cada parque nesta corrida (id da config; "global" sem chaves por parque). */
-  parkStatus: Record<string, { state: ParkRunState; errorCode?: string }>;
-  /** Ids dos parques cujo report falhou (precisam de repetição). */
-  parkErrors: string[];
-  /** Reports cujo `total` não bate com a lista devolvida. */
-  totalMismatches: Array<{ parkId: string; actionType: BookingActionType; total: number; length: number }>;
-}
-
-export async function syncBookings(opts: {
-  startDate: string;
-  endDate: string;
-  actionTypes?: BookingActionType[];
-  triggeredById?: number;
-  /** Início por parque (YYYY-MM-DD), sobrepõe-se a startDate. */
-  parkStartDates?: Record<string, string>;
-  /** Deixa de pegar em trabalhos novos a partir daqui (a corrida fica parcial). */
-  deadlineAt?: number;
-  syncType?: SyncLogType;
-  /** Janela para o log (DATETIME UTC); omissão = startDate/endDate. */
-  windowStart?: string;
-  windowEnd?: string;
-}): Promise<SyncBookingsResult> {
-  const actionTypes = opts.actionTypes || ["creation", "checkin", "checkout", "cancelation"];
-  const projectMap = await getProjectMap();
-  const aliasResolver = await getAliasResolver();
-
-  const errors: string[] = [];
-
-  const parks = getConfiguredParks();
-  const parksToSync = parks.length > 0 ? parks : [null]; // null = use global key
-  const idOf = (park: ParkConfig | null) => park?.id ?? "global";
-
-  // Fan-out limitado (parque × actionType). Cada job regista se chegou a
-  // correr: com prazo, os que não arrancarem ficam "incompletos".
-  type Job = { park: ParkConfig | null; actionType: BookingActionType; startDate: string; started: boolean };
-  const jobs: Job[] = [];
-  for (const park of parksToSync) {
-    const startDate = (park && opts.parkStartDates?.[park.id]) || opts.startDate;
-    for (const actionType of actionTypes) {
-      jobs.push({ park, actionType, startDate, started: false });
-    }
-  }
-
-  let totalProcessed = 0;
-  let totalCreated = 0;
-  let totalUpdated = 0;
-  const enrichTargets = new Set<string>();
-  const parkStatus: SyncBookingsResult["parkStatus"] = {};
-  for (const park of parksToSync) parkStatus[idOf(park)] = { state: "ok" };
-  const totalMismatches: SyncBookingsResult["totalMismatches"] = [];
-
-  // Bounded fan-out (was Promise.allSettled = unbounded ~108-wide burst). Up to
-  // REPORT_CONCURRENCY report calls run at once; the rest queue. JS is
-  // single-threaded, so the synchronous accumulations below are race-free
-  // across the concurrent workers.
-  await runConcurrent(jobs, REPORT_CONCURRENCY, async (job) => {
-    job.started = true;
-    const { park, actionType } = job;
-    const apiKey = park ? getParkApiKey(park) : undefined;
-    const parkLabel = park ? `${park.name} ${park.city}` : "global";
-    const parkErrors: string[] = [];
-
-    try {
-      const report = await getBookingsReport(job.startDate, opts.endDate, actionType, apiKey);
-      const list = Array.isArray(report?.bookings) ? report.bookings : [];
-      // O report não pagina: um total diferente da lista = dados em falta.
-      if (typeof report?.total === "number" && report.total !== list.length) {
-        totalMismatches.push({ parkId: idOf(park), actionType, total: report.total, length: list.length });
-        console.warn(`[BookingSync] total≠lista ${parkLabel}/${actionType} ${job.startDate}→${opts.endDate}: total=${report.total} lista=${list.length}`);
-      }
-      for (const booking of list) {
-        try {
-          const record = bookingToRecord(booking, projectMap, aliasResolver);
-          const result = await upsertMultiparkBooking(record);
-          await upsertBookingExtras(booking.id, (booking as any).extraServices);
-          totalProcessed++;
-          if (result?.action === "created") totalCreated++;
-          else totalUpdated++;
-          // Marca para enriquecimento imediato: novas, ou as que mudaram de
-          // estado (o detalhe foi reaberto via enrichedAt=null no upsert).
-          if (result?.action === "created" || result?.statusChanged) {
-            enrichTargets.add(booking.id);
-          }
-        } catch (err: any) {
-          parkErrors.push(`Booking ${booking.id}: ${err.message}`);
-        }
-      }
-    } catch (err: any) {
-      parkErrors.push(`${parkLabel}/${actionType}: ${err.message}`);
-      parkStatus[idOf(park)] = { state: "error", errorCode: deliveryErrorCode(err) };
-    }
-    if (parkErrors.length) errors.push(...parkErrors);
-  }, opts.deadlineAt);
-
-  const skipped = jobs.filter((j) => !j.started);
-  for (const j of skipped) {
-    const id = idOf(j.park);
-    if (parkStatus[id]?.state === "ok") parkStatus[id] = { state: "incomplete" };
-  }
-  const parkErrors = Object.entries(parkStatus).filter(([, v]) => v.state === "error").map(([k]) => k);
-  const partial = skipped.length > 0;
-
-  // Nota: o enriquecimento (/bookings/:id) corre à parte (runRecentCronSync e
-  // cron multipark-deliveries) para caber no prazo.
-  try {
-    await createSyncLog({
-      syncType: opts.syncType ?? "manual",
-      status: errors.length === 0 && !partial ? "success" : "partial",
-      recordsProcessed: totalProcessed,
-      recordsCreated: totalCreated,
-      recordsUpdated: totalUpdated,
-      errorMessage: errors.length > 0
-        ? errors.slice(0, 50).join("; ").slice(0, 8000)
-        : partial ? `${skipped.length} trabalho(s) por fazer — prazo esgotado` : undefined,
-      triggeredById: opts.triggeredById ?? undefined,
-      completedAt: new Date(),
-      windowStart: opts.windowStart ?? `${opts.startDate} 00:00:00`,
-      windowEnd: opts.windowEnd ?? `${opts.endDate} 23:59:59`,
-      meta: JSON.stringify({ parkErrors, skippedJobs: skipped.length, totalMismatches }),
-    });
-  } catch (err) {
-    console.error("[BookingSync] registo do log falhou:", deliveryErrorCode(err));
-  }
-
-  return {
-    success: errors.length === 0 && !partial,
-    processed: totalProcessed,
-    created: totalCreated,
-    updated: totalUpdated,
-    errors,
-    enrichTargets: Array.from(enrichTargets),
-    partial,
-    skippedJobs: skipped.length,
-    parkStatus,
-    parkErrors,
-    totalMismatches,
-  };
-}
-
-// ─── Cron wrappers (agendador /api/cron/tick e endpoints manuais) ────────────
-
-/** Orçamento de tempo do cron: tem de caber DENTRO do maxDuration do Vercel
- *  (60s em vercel.json) com margem para a resposta HTTP sair. Sem isto, um
- *  ciclo mais pesado é morto aos 60s → 504. O tick passa sempre o seu prazo;
- *  isto é só o valor por omissão (chamadas sem prazo). */
-const CRON_BUDGET_MS = Number(process.env.CRON_BUDGET_MS || 50_000);
-/** Os reports param de arrancar aqui, para sobrar tempo ao enriquecimento. */
-const REPORT_RESERVE_MS = 12_000;
-
-/** Última cobertura completa do sync recente, por parque (epoch ms). */
-async function loadRecentCoverage(): Promise<Map<string, number | null>> {
-  const db = await getDb();
-  const out = new Map<string, number | null>();
-  if (!db) return out;
-  const rows = await db.select({ parkId: multiparkSyncCoverage.parkId, at: multiparkSyncCoverage.recentCoveredAt })
-    .from(multiparkSyncCoverage);
-  for (const r of rows) out.set(r.parkId, mysqlToMs(r.at));
-  return out;
-}
-
-/** Grava o resultado por parque: só um parque "ok" avança a cobertura. */
-async function saveRecentCoverage(runStartedAt: number, status: SyncBookingsResult["parkStatus"]) {
-  const db = await getDb();
-  if (!db) return;
-  const now = utcMysql(Date.now());
-  const covered = utcMysql(runStartedAt);
-  for (const [parkId, st] of Object.entries(status)) {
-    const set = {
-      lastRunAt: now,
-      lastStatus: st.state,
-      lastErrorCode: st.state === "error" ? (st.errorCode ?? "REPORT_FAILED").slice(0, 64) : null,
-      ...(st.state === "ok" ? { recentCoveredAt: covered } : {}),
-    };
-    await db.insert(multiparkSyncCoverage).values({ parkId, ...set }).onDuplicateKeyUpdate({ set });
-  }
-}
-
-export interface RecentCronResult {
-  busy?: boolean;
-  report: { processed: number; created: number; updated: number; errors: string[] };
-  parkErrors: string[];
-  enriched: number;
-  historyFetched: number;
-  durationMs: number;
-  windowStart: string;
-  partial: boolean;
-  totalMismatches: SyncBookingsResult["totalMismatches"];
-}
-
-/** Sync recente: report por parque + enrich + history, com trinco e prazo.
- *  Chamado pelo agendador de hora a hora — se uma corrida falhar ou atrasar,
- *  a janela de CADA parque alarga até à última cobertura completa desse
- *  parque (clamp: 3 dias).
- *
- *  Todas as fases respeitam o prazo: o que não couber fica para os ciclos
- *  seguintes (enrichedAt/historyFetchedAt NULL = fila persistente; parque
- *  incompleto ou com erro = a cobertura dele não avança). */
-export async function runRecentCronSync(windowMinutes = 30, opts: { deadlineAt?: number; owner?: SyncLockOwner } = {}): Promise<RecentCronResult> {
-  const t0 = Date.now();
-  const deadlineAt = opts.deadlineAt ?? t0 + CRON_BUDGET_MS;
-  const locked = await withSyncLock(opts.owner ?? "cron_recent", () => runRecentCronSyncUnlocked(windowMinutes, t0, deadlineAt));
-  if (locked.busy) {
-    return { busy: true, report: { processed: 0, created: 0, updated: 0, errors: [] }, parkErrors: [], enriched: 0,
-      historyFetched: 0, durationMs: Date.now() - t0, windowStart: utcDay(t0), partial: false, totalMismatches: [] };
-  }
-  return locked.value;
-}
-
-async function runRecentCronSyncUnlocked(windowMinutes: number, t0: number, deadlineAt: number): Promise<RecentCronResult> {
-  const parks = getConfiguredParks();
-  const parkIds = parks.length ? parks.map((p) => p.id) : ["global"];
-
-  let coverage = new Map<string, number | null>();
-  let fallback: number | null = null;
-  try {
-    coverage = await loadRecentCoverage();
-    // Compatibilidade: antes da 0101 o recente e o futuro gravavam os dois
-    // "api_sync" — um sucesso do futuro podia encolher a janela. Por isso o
-    // legado entra com 2 h de folga extra e só para parques sem cobertura.
-    const recent = mysqlToMs(await getLastSyncSuccessAt("api_sync_recent"));
-    const legacy = recent == null ? mysqlToMs(await getLastSyncSuccessAt("api_sync")) : null;
-    fallback = recent ?? (legacy != null ? legacy - 2 * 3_600_000 : null);
-  } catch (err) {
-    console.warn("[BookingSync] cobertura indisponível — janela máxima:", deliveryErrorCode(err));
-  }
-  const windows = computeRecentWindows({ now: t0, windowMinutes, parkIds, coverage, fallback });
-  const starts = Array.from(windows.values());
-  const minStart = starts.length ? Math.min(...starts) : t0 - windowMinutes * 60_000;
-  const parkStartDates = Object.fromEntries(Array.from(windows.entries()).map(([id, ms]) => [id, utcDay(ms)]));
-
-  // Fase 1: report (puxa o que estiver novo/alterado). Deixa de arrancar
-  // trabalhos novos antes do fim para sobrar tempo ao enriquecimento.
-  const report = await syncBookings({
-    startDate: utcDay(minStart),
-    endDate: utcDay(t0),
-    parkStartDates,
-    deadlineAt: deadlineAt - REPORT_RESERVE_MS,
-    syncType: "api_sync_recent",
-    windowStart: utcMysql(minStart),
-    windowEnd: utcMysql(t0),
-  });
-  try {
-    await saveRecentCoverage(t0, report.parkStatus);
-  } catch (err) {
-    console.error("[BookingSync] gravar cobertura falhou:", deliveryErrorCode(err));
-  }
-
-  // Fase 2a: enrichment IMEDIATO e direcionado às reservas que acabaram de
-  // entrar/mudar neste ciclo (origem, nome real do parceiro, pagamento).
-  const targeted = Date.now() < deadlineAt - 5_000
-    ? await enrichBookingsBatch({
-        externalIds: report.enrichTargets,
-        limit: Math.min(Math.max(report.enrichTargets.length, 1), 120),
-        deadlineAt,
-      })
-    : { scanned: 0, enriched: 0, errors: 0, noKey: 0 };
-
-  // Fase 2b + 3 em paralelo: resto do backlog + history, se sobrar orçamento.
-  let backlogEnriched = 0;
-  let historyFetched = 0;
-  if (Date.now() < deadlineAt - 5_000) {
-    const [backlogResult, historyResult] = await Promise.allSettled([
-      enrichBookingsBatch({ limit: 20, deadlineAt }),
-      syncBookingHistoryBatch(30, deadlineAt),
-    ]);
-    backlogEnriched = backlogResult.status === "fulfilled" ? backlogResult.value.enriched : 0;
-    historyFetched = historyResult.status === "fulfilled" ? historyResult.value.fetched : 0;
-  }
-
-  return {
-    report: { processed: report.processed, created: report.created, updated: report.updated, errors: report.errors },
-    parkErrors: report.parkErrors,
-    enriched: targeted.enriched + backlogEnriched,
-    historyFetched,
-    durationMs: Date.now() - t0,
-    windowStart: utcDay(minStart),
-    partial: report.partial || Date.now() >= deadlineAt - 5_000,
-    totalMismatches: report.totalMismatches,
-  };
-}
-
-/** Sync de janela futura (próximas 4 semanas) para Extras Dia planear.
- *  Mais leve — só checkin/checkout, sem enrich/history.
- *
- *  A janela completa (4 semanas × parques × 2 actionTypes) não cabe nos 60s
- *  do Vercel, por isso é RETOMÁVEL: processa fatias de FUTURE_CHUNK_DAYS a
- *  partir de offsetDays enquanto houver orçamento, e devolve done:false +
- *  nextOffset quando faltarem fatias — o chamador repete com esse offset.
- *  Grava "api_sync_future": nunca mexe na janela do sync recente. */
-const FUTURE_CHUNK_DAYS = 7;
-
-export { chunkNeedsRetry };
-
-export interface FutureCronResult {
-  busy?: boolean;
-  report: { processed: number; created: number; updated: number; errors: string[] };
-  parkErrors: string[];
-  durationMs: number;
-  done: boolean;
-  nextOffset?: number;
-  startOffset: number;
-  /** A fatia parou por falha de um report (não por falta de tempo). */
-  needsRetry: boolean;
-}
-
-export async function runFutureCronSync(
-  weeksAhead = 4,
-  opts: { offsetDays?: number; deadlineAt?: number; owner?: SyncLockOwner } = {},
-): Promise<FutureCronResult> {
-  const t0 = Date.now();
-  const deadlineAt = opts.deadlineAt ?? t0 + CRON_BUDGET_MS;
-  const totalDays = weeksAhead * 7;
-  const startOffset = Math.min(Math.max(0, Math.trunc(opts.offsetDays ?? 0)), totalDays);
-  const locked = await withSyncLock(opts.owner ?? "cron_future", async () => {
-    const agg = { processed: 0, created: 0, updated: 0, errors: [] as string[] };
-    const parkErrors = new Set<string>();
-    let offset = startOffset;
-    let needsRetry = false;
-    while (offset < totalDays) {
-      // A 1ª fatia corre sempre; as seguintes só se sobrar margem.
-      if (offset > startOffset && Date.now() >= deadlineAt - 20_000) break;
-      const chunkStart = t0 + offset * 86_400_000;
-      const chunkEnd = t0 + Math.min(offset + FUTURE_CHUNK_DAYS, totalDays) * 86_400_000;
-      const report = await syncBookings({
-        startDate: utcDay(chunkStart),
-        endDate: utcDay(chunkEnd),
-        actionTypes: ["checkin", "checkout"],
-        deadlineAt,
-        syncType: "api_sync_future",
-      });
-      agg.processed += report.processed;
-      agg.created += report.created;
-      agg.updated += report.updated;
-      agg.errors.push(...report.errors);
-      report.parkErrors.forEach((id) => parkErrors.add(id));
-      // Só uma fatia INCOMPLETA (report falhado ou por fazer) é repetida sem
-      // avançar o marcador. Erros de reservas individuais ("Booking X: …") já
-      // ficaram registados e não podem prender o sync futuro na mesma fatia.
-      if (chunkNeedsRetry(report.errors)) { needsRetry = true; break; }
-      if (report.partial) break;
-      offset += FUTURE_CHUNK_DAYS;
-    }
-    return { agg, parkErrors: Array.from(parkErrors), offset, needsRetry };
-  });
-  if (locked.busy) {
-    return { busy: true, report: { processed: 0, created: 0, updated: 0, errors: [] }, parkErrors: [],
-      durationMs: Date.now() - t0, done: false, nextOffset: startOffset, startOffset, needsRetry: false };
-  }
-  const { agg, parkErrors, offset, needsRetry } = locked.value;
-  const done = offset >= totalDays;
-  return {
-    report: agg,
-    parkErrors,
-    durationMs: Date.now() - t0,
-    done,
-    startOffset,
-    needsRetry,
-    ...(done ? {} : { nextOffset: offset }),
-  };
-}
-
-/** "Reparar período" (botão e MCP /sync/day): no máximo 3 dias, com prazo e
- *  trinco. O que não couber fica marcado como parcial para repetir. */
-export const REPAIR_MAX_DAYS = 3;
-export async function runRepairSync(opts: {
-  startDate: string;
-  endDate: string;
-  triggeredById?: number;
-  owner?: SyncLockOwner;
-  deadlineAt?: number;
-  enrich?: boolean;
-}): Promise<{ busy: true } | { busy: false; result: SyncBookingsResult; enriched: number; historyFetched: number }> {
-  const deadlineAt = opts.deadlineAt ?? Date.now() + 45_000;
-  const locked = await withSyncLock(opts.owner ?? "manual", async () => {
-    const result = await syncBookings({
-      startDate: opts.startDate,
-      endDate: opts.endDate,
-      triggeredById: opts.triggeredById,
-      deadlineAt: deadlineAt - (opts.enrich ? 10_000 : 0),
-      syncType: "manual",
-    });
-    let enriched = 0, historyFetched = 0;
-    if (opts.enrich && Date.now() < deadlineAt - 5_000) {
-      const [e, h] = await Promise.allSettled([
-        enrichBookingsBatch({ externalIds: result.enrichTargets, limit: Math.min(Math.max(result.enrichTargets.length, 1), 100), deadlineAt }),
-        syncBookingHistoryBatch(30, deadlineAt),
-      ]);
-      enriched = e.status === "fulfilled" ? e.value.enriched : 0;
-      historyFetched = h.status === "fulfilled" ? h.value.fetched : 0;
-    }
-    return { result, enriched, historyFetched };
-  });
-  return locked.busy ? { busy: true } : { busy: false, ...locked.value };
 }

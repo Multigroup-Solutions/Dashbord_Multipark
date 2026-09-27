@@ -79,7 +79,6 @@ import { knowledgeRouter } from "./knowledge/router";
 import { webAnalyticsRouter } from "./webAnalytics/router";
 import { gbpRouter } from "./integrations/googleBusiness/profileRouter";
 import { whatsappCallsRouter } from "./whatsappCallsRouter";
-import { getBookingHistory, getBookingsReport } from "./multipark";
 import {
   getExtrasDiaForecast,
   listAssignments,
@@ -280,7 +279,6 @@ import {
   getMultiparkBookingByExternalId,
   upsertMultiparkBooking,
   getMultiparkBookingStats,
-  getSyncLogs,
   // MultiPark KPIs
   // Invites
   createInviteToken,
@@ -341,15 +339,6 @@ import {
 import { generatePayrollPdf } from "./payrollPdf";
 import { generatePayslipPdf, generateAllPayslipsPdf } from "./payslipPdf";
 
-import {
-  healthCheck as mpHealthCheck,
-  checkAvailability as mpCheckAvailability,
-  listParks as mpListParks,
-  getBookingsReportAllParks,
-  type ParkingType,
-  type VehicleType,
-  type BookingActionType,
-} from "./multipark";
 
 import {
   getZelloUsers,
@@ -4707,17 +4696,6 @@ export const appRouter = router({
         requireAccess(ctx.user, "reclamacoes", "edit");
         return searchBookingByRef(input.search);
       }),
-    fetchBookingDetails: protectedProcedure
-      .input(z.object({ externalId: z.string() }))
-      .query(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "reclamacoes", "edit");
-        const { getBooking } = await import("./multipark");
-        try {
-          return await getBooking(input.externalId);
-        } catch {
-          return null;
-        }
-      }),
     list: protectedProcedure.input(z.object({
       status: z.string().optional(),
       type: z.string().optional(),
@@ -5064,40 +5042,17 @@ export const appRouter = router({
       requireAccess(ctx.user, "reclamacoes", "view");
       return getVehicleDriverHistory(input.vehicleId);
     }),
-    // Booking timeline — BD local primeiro (o fetch live usava a chave GLOBAL
-    // e falhava em parques com chave própria); on-demand fetch na 1ª abertura.
+    // Histórico da reserva — ao vivo da BD da Multipark; cópia antiga como recurso.
     bookingTimeline: protectedProcedure.input(z.object({
       bookingId: z.string(),
     })).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "reclamacoes", "view");
-      const { getComplaintBookingDossier } = await import("./complaintDossier");
-      const d = await getComplaintBookingDossier(input.bookingId);
-      if (d.history.length) {
-        return {
-          bookingId: input.bookingId,
-          total: d.history.length,
-          history: d.history.map((h) => ({
-            id: h.historyId,
-            changeType: h.changeType,
-            actionTime: h.actionTime,
-            remarks: h.remarks,
-            agentName: h.agentName,
-            userId: h.agentUserId,
-            modifiedFields: h.modifiedFields,
-            platform: h.platform,
-          })),
-        };
-      }
-      // Fallback: API live (reserva ainda não sincronizada localmente)
-      try {
-        return await getBookingHistory(input.bookingId);
-      } catch {
-        return { bookingId: input.bookingId, total: 0, history: [] };
-      }
+      const { getBookingTimeline } = await import("./complaintDossier");
+      return getBookingTimeline(input.bookingId);
     }),
 
-    // Dossier completo da reserva ligada: detalhe + extras + histórico de
-    // condutores (BD local, fetch on-demand). Alimenta o card "Reserva" do
+    // Dossier da reserva ligada: detalhe + extras (cópia local) + histórico
+    // antigo. Alimenta o card "Reserva" do
     // detalhe da reclamação sem passos manuais.
     bookingDossier: protectedProcedure.input(z.object({
       reservationRef: z.string().min(1),
@@ -5835,36 +5790,15 @@ export const appRouter = router({
         return getAgentMovements(input);
       }),
 
-    // Booking timeline — BD local primeiro; on-demand fetch na 1ª abertura.
-    // Só reservas das cidades do utilizador.
+    // Histórico da reserva — ao vivo da BD da Multipark; cópia antiga como
+    // recurso. Só reservas das cidades do utilizador.
     bookingTimeline: protectedProcedure.input(z.object({
       bookingId: z.string().max(128),
     })).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "perdidos", "view");
       if (!(await bookingRefInScope(input.bookingId))) return { bookingId: input.bookingId, total: 0, history: [] };
-      const { getComplaintBookingDossier } = await import("./complaintDossier");
-      const d = await getComplaintBookingDossier(input.bookingId);
-      if (d.history.length) {
-        return {
-          bookingId: input.bookingId,
-          total: d.history.length,
-          history: d.history.map((h) => ({
-            id: h.historyId,
-            changeType: h.changeType,
-            actionTime: h.actionTime,
-            remarks: h.remarks,
-            agentName: h.agentName,
-            userId: h.agentUserId,
-            modifiedFields: h.modifiedFields,
-            platform: h.platform,
-          })),
-        };
-      }
-      try {
-        return await getBookingHistory(input.bookingId);
-      } catch {
-        return { bookingId: input.bookingId, total: 0, history: [] };
-      }
+      const { getBookingTimeline } = await import("./complaintDossier");
+      return getBookingTimeline(input.bookingId, scopedCityNames());
     }),
 
     // Dossier completo da reserva ligada (mesma peça das Reclamações).
@@ -6266,7 +6200,7 @@ export const appRouter = router({
     //  sobre a tabela `services` — foi removido a 2026-08-06: nunca teve UI.
     //  Os serviços reais vêm das reservas Multipark, abaixo.)
 
-    // Dá baixa / reabre um serviço na app. O sync preserva o done local
+    // Dá baixa / reabre um serviço na app. O detalhe (webhook) preserva o done local
     // (upsertBookingExtras faz OR com o que a API mandar).
     setExtraDone: protectedProcedure.input(z.object({
       id: z.number(),
@@ -6904,70 +6838,6 @@ export const appRouter = router({
         requireAccess(ctx.user, "reservas_operacoes", "view");
         return searchBookingByRef(input.search);
       }),
-    // Detalhe de uma reserva específica via API Multipark
-    fetchBookingDetails: protectedProcedure
-      .input(z.object({ externalId: z.string() }))
-      .query(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "reservas_operacoes", "view");
-        const { getBooking } = await import("./multipark");
-        try {
-          return await getBooking(input.externalId);
-        } catch {
-          return null;
-        }
-      }),
-
-
-    // Check availability
-    checkAvailability: protectedProcedure
-      .input(z.object({
-        checkIn: z.string(),
-        checkOut: z.string(),
-        vehicleType: z.enum(["MOTORCYCLE", "CAR", "VAN", "TRUCK"]).default("CAR"),
-        parkingType: z.enum(["COVERED", "UNCOVERED", "INDOOR", "VIP"]).default("COVERED"),
-      }))
-      .query(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "reservas_operacoes", "view");
-        return mpCheckAvailability(
-          input.checkIn,
-          input.checkOut,
-          input.vehicleType as VehicleType,
-          input.parkingType as ParkingType,
-        );
-      }),
-
-    // List parks
-    listParks: protectedProcedure.query(async ({ ctx }) => {
-      requireAccess(ctx.user, "reservas_operacoes", "view");
-      return mpListParks();
-    }),
-
-    // Saúde dos dados (Sincronização + Definições → Estado do sistema). Só
-    // totais e códigos, sem dados de clientes.
-    dataHealth: protectedProcedure.query(async ({ ctx }) => {
-      requireAccess(ctx.user, "sincronizacao", "view");
-      const { getSyncHealth } = await import("./syncHealth");
-      return getSyncHealth();
-    }),
-
-    // Logs da sincronização, filtráveis por tipo. As linhas antigas "api_sync"
-    // (antes da 0101 o recente e o futuro gravavam os dois isso) aparecem nos
-    // filtros "recente" e "futuro".
-    syncLogs: protectedProcedure
-      .input(z.object({
-        type: z.enum(["all", "recent", "future", "manual"]).default("all"),
-        limit: z.number().int().min(1).max(200).default(50),
-      }).optional())
-      .query(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "sincronizacao", "view");
-        const types = {
-          all: undefined,
-          recent: ["api_sync_recent", "api_sync"],
-          future: ["api_sync_future", "api_sync"],
-          manual: ["manual", "api_sync_recovery", "excel_import"],
-        }[input?.type ?? "all"];
-        return getSyncLogs(input?.limit ?? 50, types);
-      }),
 
     // Avaliação operacional do dia: por extra (com métricas) + agregado
     // por turno + agregado total. TL recebe também score da equipa.
@@ -7331,41 +7201,6 @@ export const appRouter = router({
         requireAccess(ctx.user, "reservas_operacoes", "view");
         const { getOperationsSummary } = await import("./db");
         return getOperationsSummary(input);
-      }),
-
-    // Query API directly by actionType + date range (all parks)
-    reportByAction: protectedProcedure
-      .input(z.object({
-        startDate: z.string(),
-        endDate: z.string(),
-        actionType: z.enum(["creation", "checkin", "checkout", "cancelation"]),
-      }))
-      .query(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "reservas_operacoes", "view");
-        const results = await getBookingsReportAllParks(
-          input.startDate,
-          input.endDate,
-          input.actionType as BookingActionType,
-        );
-        // Flatten all bookings from all parks, tag each with park info
-        let bookings = results.flatMap(r =>
-          r.report.bookings.map(b => ({
-            ...b,
-            _parkName: r.park.name,
-            _parkCity: r.park.city,
-            _parkId: r.park.id,
-          }))
-        );
-        // For checkin/checkout, exclude cancelled bookings
-        if (input.actionType === "checkin" || input.actionType === "checkout") {
-          bookings = bookings.filter((b: any) => b.status !== "CANCELLED");
-        }
-        return {
-          total: bookings.length,
-          actionType: input.actionType,
-          period: { startDate: input.startDate, endDate: input.endDate },
-          bookings,
-        };
       }),
   }),
 
