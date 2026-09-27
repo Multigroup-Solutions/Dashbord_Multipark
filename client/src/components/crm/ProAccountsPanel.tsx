@@ -32,10 +32,15 @@ export function ProAccountsPanel({ onShowProFichas }: { onShowProFichas?: () => 
         </div>
         <label className="flex items-center gap-2 text-[13px]"><Switch checked={onlyDue} onCheckedChange={setOnlyDue} />Só com saldo em dívida</label>
         <div className="text-[13px]">
-          <strong>{num(rows.length)} {rows.length === 1 ? "conta" : "contas"}</strong>
+          <strong>{num(rows.length)} {q.data?.legacyMode ? (rows.length === 1 ? "Pro antigo" : "Pro antigos") : rows.length === 1 ? "conta" : "contas"}</strong>
           {withDue > 0 && <span className="text-muted-foreground"> · {num(withDue)} com dívida{totalDue != null ? ` (${eur(totalDue, 2)})` : ""}</span>}
         </div>
       </div>
+      {q.data?.legacyMode ? (
+        <p className="text-xs text-amber-800 dark:text-amber-200">Pro antigos (antes de abril de 2026, sem cliente Pro nos parques da Multipark): guardados só para comparar — não entram na lista Pro nem nos totais.</p>
+      ) : (q.data?.legacyCount ?? 0) > 0 ? (
+        <p className="text-xs text-muted-foreground">Há {num(q.data!.legacyCount)} Pro antigos guardados para comparar, fora das contas. Para os ver, escreve <strong>antigo</strong> na procura.</p>
+      ) : null}
 
       {q.isLoading && <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>}
       {q.error && <p className="text-sm text-destructive">{q.error.message}</p>}
