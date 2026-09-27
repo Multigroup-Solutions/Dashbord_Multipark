@@ -19,12 +19,15 @@ const q = (s: string) => `"${s.replace(/"/g, '""')}"`;
 
 /** Colunas cujos VALORES nunca saem (dados pessoais, texto livre, segredos). PURA. */
 export function isSensitiveColumn(table: string, column: string): boolean {
+  // Colunas de TIPO/categoria nunca são pessoais (ex.: EntityEmailLog.emailType).
+  if (/Type$|^category$|^status$|^role$|^provider$|^source$/.test(column) && !/^(tax|mitPayment)/i.test(column)) return false;
   if (/(e)?mail|phone|firstname|lastname|fullname|nif|iban|bic|tax|address|plate|password|token|secret|hash|keyprefix|^ip$|lastusedip|ipwhitelist|useragent|requestedip|remarks|obs$|comment|content|body|message|subject|snippet|summary|draft|note|signature|^lat$|^lng$|birth|payload|quote|invoice|transactionid|paymentintent|chargeid|mitpaymentmethod|externalreference|idempotency|firebaseid|odooid|allocation$|^url$|originurl|video|attachment|logo|images|banner|certificate|terms|website|maplink|reference|clientname|sendername|authorname|username|agentname|drivername|byname|markedbyname|actordisplayname|actoremail|pendingemail|ownerEmail/i.test(column)) {
     // Excepções: nomes de catálogo (serviços, parques, campanhas…) não são pessoais.
     return !(column === "name" && CATALOG_NAME_TABLES.has(table));
   }
   if (column === "name" && !CATALOG_NAME_TABLES.has(table)) return true;
-  if (column === "description" && !["ExtraService", "Campaign", "Allowance"].includes(table)) return true;
+  // BookingPricing.description = rótulo da linha (Estacionamento, Valet, taxas…); só saem os repetidos ≥ 5.
+  if (column === "description" && !["ExtraService", "Campaign", "Allowance", "BookingPricing"].includes(table)) return true;
   if (column === "title" && !["Occurrence", "Procedures"].includes(table)) return true;
   return false;
 }
@@ -101,8 +104,9 @@ async function profileTable(table: string, cols: Col[], deadline: number) {
   if (catCols.length && Date.now() <= deadline) {
     const lit = (s: string) => `'${s.replace(/'/g, "''")}'`;
     try {
-      const r = await multiparkDbQuery<any>(catCols.map((c) => `(SELECT ${lit(c.column)} AS col, ${q(c.column)}::text AS v, count(*) AS c FROM ${T}
-          WHERE ${q(c.column)} IS NOT NULL GROUP BY 2 ORDER BY 3 DESC LIMIT 40)`).join(" UNION ALL "));
+      // Começa por SELECT: a guarda só de leitura do client.ts recusa "(".
+      const r = await multiparkDbQuery<any>("SELECT * FROM (" + catCols.map((c) => `(SELECT ${lit(c.column)}::text AS col, ${q(c.column)}::text AS v, count(*) AS c FROM ${T}
+          WHERE ${q(c.column)} IS NOT NULL GROUP BY 2 ORDER BY 3 DESC LIMIT 40)`).join(" UNION ALL ") + ") u");
       for (const x of r) {
         const info = out.colunas[x.col];
         (info.valores = typeof info.valores === "object" ? info.valores : {})[x.v === "" ? "(vazio)" : x.v] = Number(x.c);

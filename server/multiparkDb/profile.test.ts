@@ -18,6 +18,7 @@ describe("perfil — colunas cujos valores nunca saem", () => {
       ["Booking", "status"], ["Booking", "paymentMethod"], ["Booking", "deliveryType"], ["Booking", "origin"], ["History", "changeType"],
       ["Park", "name"], ["Partner", "name"], ["Campaign", "name"], ["ExtraService", "name"], ["BookingExtraService", "name"],
       ["Occurrence", "title"], ["Cancellation", "cancellationType"], ["History", "modifiedFields"], ["BookingPricing", "category"],
+      ["EntityEmailLog", "emailType"], ["BookingPricing", "description"], ["AiEmailMessage", "category"], ["Agent", "role"],
     ]) {
       expect(isSensitiveColumn(t, c), `${t}.${c}`).toBe(false);
     }
