@@ -327,8 +327,10 @@ export async function ensureBookingHistory(externalId: string, force = false): P
 
 /**
  * Vai buscar a reserva + histórico DIRETAMENTE à API Multipark e grava tudo
- * na BD local — para o botão "Atualizar da API" dos detalhes e para o caso
- * de a reserva nem existir localmente (ex.: histórica, anterior ao sync).
+ * na BD local — para o caso de a reserva nem existir localmente (ex.:
+ * histórica, anterior ao sync). O antigo botão "Atualizar da API" saiu: os
+ * detalhes ligam agora à ficha da reserva (/reserva/:id), lida ao vivo da BD
+ * da Multipark.
  */
 export async function refreshBookingFromApi(reservationRef: string): Promise<{
   ok: boolean;

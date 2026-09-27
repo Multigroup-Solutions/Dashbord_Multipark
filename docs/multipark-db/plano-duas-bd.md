@@ -137,6 +137,7 @@ Top Parking 40 %, Parkos 20 %, Parkvia 23 %, Parkivado 25 %, agências 10–20 %
 2. **Cópia financeira (B2)**: preço, pago e método na criação, entrada e saída, mais o registo de alterações.
 3. **Catálogo de parques e serviços (B3)**, com a marca nosso/terceiro.
 4. **Ficha da reserva a ler a BD 2**: vídeo, assinaturas, histórico com GPS, ocorrências e chat.
+   Feito: página `/reserva/:id` (`server/multiparkDb/bookingFile.ts` + `server/bookingFileRouter.ts`); substitui o "Atualizar da API" das reclamações e dos perdidos e o `/multipark/inspect`.
 5. **Conferência de caixa com alertas (B2)** para o back office.
 6. **Avaliação dos funcionários a ler os movimentos da BD 2 (B5).**
 7. Desligar o que deixa de ser preciso (C), depois de confirmado o histórico anterior a março.

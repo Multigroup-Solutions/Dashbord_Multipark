@@ -23,7 +23,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { useState, useMemo } from "react";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import BookingSearchField from "@/components/BookingSearchField";
 import ClientHistoryCard from "@/components/ClientHistoryCard";
 import CaseAssignmentCard from "@/components/CaseAssignmentCard";
@@ -33,7 +33,7 @@ import {
   ChevronRight, ChevronLeft, Send, Eye, Trash2, Upload, Pencil,
   BarChart3, AlertCircle, CheckCircle2, Hourglass, XCircle,
   Package, DollarSign, Smartphone, Shirt, FileText, Glasses,
-  HelpCircle, TrendingUp, ShieldAlert, Flag, Mail, Download, Truck, GripVertical, MessageSquareWarning, RefreshCw, ExternalLink } from "lucide-react";
+  HelpCircle, TrendingUp, ShieldAlert, Flag, Mail, Download, Truck, GripVertical, MessageSquareWarning, ExternalLink, FileSearch } from "lucide-react";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { STATUS_CONFIG, TYPE_CONFIG, PRIORITY_CONFIG, KANBAN_COLUMNS, BASE_PATH, CHANGE_TYPE_CONFIG } from "./config";
 import { ReturnPanel } from "./ReturnPanel";
@@ -59,20 +59,6 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
     { reservationRef: item?.bookingRef || "" },
     { enabled: !!item?.bookingRef }
   );
-  const refreshBookingMut = trpc.lostFound.refreshBookingData.useMutation({
-    onSuccess: (r) => {
-      if (r.ok) {
-        toast.success(r.detail);
-        utils.lostFound.bookingDossier.invalidate();
-        utils.lostFound.bookingTimeline.invalidate();
-        utils.lostFound.vehicleAgents.invalidate();
-        utils.lostFound.getById.invalidate({ id });
-      } else {
-        toast.error(r.detail);
-      }
-    },
-    onError: () => toast.error("Erro ao contactar a API Multipark"),
-  });
   const autoLinkMut = trpc.lostFound.autoLink.useMutation({
     onSuccess: (r) => {
       if (r.linked) {
@@ -339,14 +325,10 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
                       {autoLinkMut.isPending ? "A procurar…" : "Ligar reserva automaticamente"}
                     </Button>
                   ) : (
-                    <Button
-                      size="sm" variant="outline"
-                      disabled={refreshBookingMut.isPending}
-                      title="Vai buscar à API Multipark a reserva completa e o histórico de condutores desta reserva"
-                      onClick={() => refreshBookingMut.mutate({ reservationRef: item.bookingRef! })}
-                    >
-                      <RefreshCw className={`w-3.5 h-3.5 mr-1 ${refreshBookingMut.isPending ? "animate-spin" : ""}`} />
-                      {refreshBookingMut.isPending ? "A atualizar…" : "Atualizar da API"}
+                    <Button size="sm" variant="outline" asChild title="Tudo sobre esta reserva, lido ao vivo da BD da Multipark">
+                      <Link href={`/reserva/${encodeURIComponent((dossier?.booking as any)?.externalId || item.bookingRef!)}`}>
+                        <FileSearch className="w-3.5 h-3.5 mr-1" /> Abrir ficha da reserva
+                      </Link>
                     </Button>
                   )}
                 </CardHeader>

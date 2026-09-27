@@ -18,6 +18,7 @@ Casos de clientes insatisfeitos (danos, sujidade, atraso, cobrança, staff…).
 - No caso: separadores **Detalhes**, **Mensagens**, **Fotos**, **Histórico**, **Viatura** e **Em serviço** (quem mexeu no carro — ajuda a ligar o condutor envolvido).
 - **Enviar email ao cliente** (há modelos de resposta). Fica registado nas mensagens.
 - Se afinal é um objeto perdido, usa **Converter em Perdido**.
+- No cartão "Dados da Reserva", **Abrir ficha da reserva** mostra tudo sobre a reserva, lido em tempo real da Multipark: vídeo, assinaturas, linha do tempo, lugar, contas e chat (ver "Ficha da reserva").
 - O **SLA** mostra o prazo; casos fora do prazo ficam marcados.
 
 Condutores e extras só veem as reclamações em que estão envolvidos.
