@@ -1116,7 +1116,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
   );
 }
 
-// ─── RESERVATION PREVIEW (auto-fetches timeline from API) ────────────────────
+// ─── RESERVATION PREVIEW (histórico da reserva, BD Multipark) ────────────────────
 
 function ReservationPreview({ bookingId }: { bookingId: string }) {
   const { data, isLoading } = trpc.complaints.bookingTimeline.useQuery(
@@ -1127,7 +1127,7 @@ function ReservationPreview({ bookingId }: { bookingId: string }) {
   if (!bookingId || bookingId.length < 4) return null;
 
   if (isLoading) {
-    return <p className="text-xs text-muted-foreground mt-2 animate-pulse">A carregar histórico da API...</p>;
+    return <p className="text-xs text-muted-foreground mt-2 animate-pulse">A carregar histórico...</p>;
   }
 
   const history = data?.history || [];
@@ -1174,15 +1174,13 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
 
   // Booking search
   const [bookingSearch, setBookingSearch] = useState("");
-  const [loadingDetails, setLoadingDetails] = useState(false);
   const { data: foundBookings = [] } = trpc.complaints.searchBooking.useQuery(
     { search: bookingSearch },
     { enabled: bookingSearch.length >= 2 }
   );
-  const detailsQuery = trpc.complaints.fetchBookingDetails;
 
-  const fillFromBooking = async (b: any) => {
-    // First fill what we have from local DB
+  const fillFromBooking = (b: any) => {
+    // Cópia local (já completa pelo webhook: cliente, matrícula, datas)
     setForm(f => ({
       ...f,
       reservationRef: b.externalId || b.bookingNumber || f.reservationRef,
@@ -1195,25 +1193,7 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
       vehiclePlate: b.licensePlate || f.vehiclePlate,
     }));
 
-    // Then try to fetch full details from API (has client data + vehicle)
-    if (b.externalId) {
-      setLoadingDetails(true);
-      try {
-        const details = await utils.complaints.fetchBookingDetails.fetch({ externalId: b.externalId });
-        if (details) {
-          const client = details.customer || details.client;
-          setForm(f => ({
-            ...f,
-            clientName: [client?.firstName, client?.lastName].filter(Boolean).join(" ") || f.clientName,
-            clientEmail: client?.email || f.clientEmail,
-            clientPhone: client?.phoneNumber || f.clientPhone,
-            vehiclePlate: details.vehicle?.licensePlate || f.vehiclePlate,
-            title: f.title || `Reclamação — ${details.vehicle?.licensePlate || ""} — ${b.bookingNumber || ""}`.trim(),
-          }));
-        }
-      } catch { /* API might not return details for all bookings */ }
-      setLoadingDetails(false);
-    }
+    if (b.licensePlate) setForm(f => ({ ...f, title: f.title || `Reclamação — ${b.licensePlate} — ${b.bookingNumber || ""}`.trim() }));
 
     toast.success("Dados da reserva preenchidos");
   };
@@ -1336,7 +1316,6 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
                 onChange={e => setBookingSearch(e.target.value)}
                 className="flex-1"
               />
-              {loadingDetails && <span className="text-xs text-muted-foreground animate-pulse">A carregar detalhes...</span>}
             </div>
             {foundBookings.length > 0 && (
               <div className="mt-2 space-y-1 max-h-40 overflow-y-auto">

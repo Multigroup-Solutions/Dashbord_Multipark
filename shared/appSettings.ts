@@ -468,7 +468,7 @@ export interface AutomationFlag {
   group?: "ia";
   /** Só o super_admin o pode mudar (os admins veem-no, mas não mexem). */
   superAdminOnly?: boolean;
-  /** Valores próprios da env além de on/off (ex.: MULTIPARK_SOURCE=db → ligado). */
+  /** Valores próprios da env além de on/off (ex.: X=db → ligado). */
   envAliases?: Record<string, boolean>;
 }
 
@@ -487,11 +487,6 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "WEEKLY_REPORTS", label: "Relatórios semanais", description: "À segunda de manhã: direção, marketing, operações e RH por email a quem tem acesso nacional ao módulo; resumo semanal da passagem de turno." },
   { name: "WHATSAPP_CALLS", label: "Chamadas de voz do WhatsApp", description: "Toque no dashboard, atender no browser e \"Ligar\" nas conversas. Desligado por omissão: liga só depois de ativar as chamadas no número na Meta (e subscrever o campo `calls` do webhook).", defaultEnabled: false },
   { name: "MAIL_PUSH", label: "Gmail: notificações push (Pub/Sub)", description: "O Gmail avisa a app logo que chega um email (precisa do tópico Pub/Sub configurado: GMAIL_PUSH_TOPIC). Com o push a chegar (últimas 6 h), a sincronização agendada passa de 5 em 5 min a de hora a hora (rede de segurança); sem push volta sozinha aos 5 min. Desligado por omissão.", defaultEnabled: false },
-  // Fonte das reservas: desligado = API (hoje, sem mudanças); ligado = BD da
-  // aplicação Multipark (DATABASE_URL_MULTIPARK, só leitura) pelo trabalho
-  // multipark-db-sync, que substitui multipark-sync/multipark-future/reconciliação.
-  // Ver docs/multipark-db/README.md. Env: MULTIPARK_SOURCE=api|db.
-  { name: "MULTIPARK_SOURCE", label: "Reservas: ler da BD da Multipark (em vez da API)", description: "Desligado = API Multipark (sincronização de hora a hora, janela futura e reconciliação, como sempre). Ligado = lê reservas, movimentos e condutores diretamente da BD da Multipark (DATABASE_URL_MULTIPARK, só leitura) de 5 em 5 min. A fila do webhook continua ligada. Só tem efeito com DATABASE_URL_MULTIPARK definida e as consultas mapeadas (senão continua na API). Só o super admin; ligar primeiro numa preview.", defaultEnabled: false, superAdminOnly: true, envAliases: { db: true, api: false } },
   { name: "OPS_ANOMALIES", label: "Deteção de anomalias", description: "Todos os dias: reservas por parque/canal, despesas (valores fora do normal e duplicados) e gasto/ROAS do marketing." },
   // ── IA (server/_core/ai) — AI_ENABLED desliga tudo de uma vez ──
   { name: "AI_ENABLED", label: "IA (interruptor geral)", description: "Desligado = nenhuma funcionalidade de IA faz pedidos ao fornecedor.", group: "ia" },
@@ -530,7 +525,7 @@ export function automationFlagDefault(name: string): boolean {
 
 /**
  * Valor da env de um interruptor já traduzido para on/off quando o catálogo
- * tem valores próprios (ex.: MULTIPARK_SOURCE=db → "on"). PURA.
+ * tem valores próprios (ex.: X=db → "on"). PURA.
  */
 export function normalizeFlagEnv(name: string, raw: string | undefined | null): string | undefined {
   if (raw == null) return undefined;
@@ -579,7 +574,6 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "google-pending", label: "Google: alterações por enviar/receber (repetição)", intervalMinutes: 15, workflow: "tick" },
   { name: "google-sync", label: "Google Tarefas, Calendário, Contactos e Drive (rede de segurança)", intervalMinutes: 240, workflow: "tick" },
   { name: "google-watch-renew", label: "Google: renovar canais de notificação (Calendário/Drive)", intervalMinutes: 1440, workflow: "tick" },
-  { name: "multipark-sync", label: "Sincronização de reservas (recente)", intervalMinutes: null, workflow: "manual" },
   { name: "extras-auto", label: "Automação dos extras", intervalMinutes: 60, workflow: "tick" },
   // De hora a hora entre as 08h e as 23h (Lisboa); 300 min para a pausa da
   // noite (~9 h) não aparecer como "parado".
@@ -589,10 +583,6 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "crm-sync", label: "CRM: fichas de cliente a partir das reservas", intervalMinutes: 15, workflow: "tick" },
   { name: "crm-suggestions", label: "CRM: sugestões para juntar fichas", intervalMinutes: 1440, workflow: "tick" },
   { name: "crm-pro-sync", label: "CRM: conta corrente dos clientes Pro (BD Multipark)", intervalMinutes: 30, workflow: "tick" },
-  // Reservas só pelo webhook (27 set 2026): estes três já não estão na agenda —
-  // ficam para correr à mão, sem intervalo (nunca aparecem "parados").
-  { name: "multipark-future", label: "Sincronização de reservas (futuras)", intervalMinutes: null, workflow: "manual" },
-  { name: "multipark-db-sync", label: "Reservas, movimentos e condutores da BD Multipark", intervalMinutes: null, workflow: "manual" },
   { name: "daily-ops", label: "Manutenção diária + recolha GPS final (D-2)", intervalMinutes: 1440, workflow: "tick" },
   { name: "zello-sameday", label: "GPS do Zello — recolha provisória do dia (23:15–23:55)", intervalMinutes: 1440, workflow: "tick" },
   { name: "extras-pressure", label: "Extras-Dia: pressão (60 dias da BD Multipark)", intervalMinutes: 1440, workflow: "tick" },
@@ -608,18 +598,9 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "google-business", label: "Google Business Profile (críticas, desempenho e pesquisas)", intervalMinutes: null, workflow: "manual (em pausa)" },
 ];
 
-/**
- * Crons esperados (interruptor MULTIPARK_SOURCE já não muda a agenda: as
- * reservas só entram pelo webhook). PURA.
- */
-export function cronJobsForSource(_source: "api" | "db"): readonly CronJob[] {
-  // Reservas só pelo webhook: nenhum sync de reservas na agenda, seja qual for a fonte.
-  return CRON_JOBS;
-}
-
 const CRON_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
-/** "/multipark-sync" ou "/api/cron/multipark-sync" → "multipark-sync"; `null` se inválido. PURA. */
+/** "/mail-sync" ou "/api/cron/mail-sync" → "mail-sync"; `null` se inválido. PURA. */
 export function cronNameFromPath(path: string): string | null {
   const seg = String(path ?? "").replace(/^\/api\/cron/, "").replace(/^\/+/, "").split(/[/?#]/)[0] ?? "";
   return CRON_NAME.test(seg) ? seg : null;

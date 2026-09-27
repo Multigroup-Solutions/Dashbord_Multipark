@@ -29,7 +29,6 @@ import { GoogleContactsSettings } from "@/components/google/GoogleContactsSettin
 import { GoogleDriveSettings } from "@/components/google/GoogleDriveSettings";
 import { WebAnalyticsSettings } from "@/components/marketing/WebAnalyticsSettings";
 import { validateSetting, type RateEntry } from "@shared/appSettings";
-import { SyncHealthPanel } from "@/components/operacoes/SyncHealthPanel";
 import { NotificationRoutingCard } from "@/components/NotificationRoutingCard";
 
 const TABS = ["estado", "automacoes", "integracoes", "comunicacao", "parametros", "notificacoes", "seguranca"] as const;
@@ -72,7 +71,7 @@ export default function DefinicoesPage() {
             <TabsTrigger value="seguranca"><ShieldCheck className="h-4 w-4 mr-1" />Segurança</TabsTrigger>
           </TabsList>
         </div>
-        <TabsContent value="estado" className="space-y-4"><SystemStatusCard />{user.role === "super_admin" && <SchedulerCard />}<AiUsageCard /><SyncHealthPanel compact /></TabsContent>
+        <TabsContent value="estado" className="space-y-4"><SystemStatusCard />{user.role === "super_admin" && <SchedulerCard />}<AiUsageCard /></TabsContent>
         <TabsContent value="automacoes"><AutomationsCard /></TabsContent>
         <TabsContent value="integracoes" className="space-y-4"><IntegrationsCard /><WebAnalyticsSettings /></TabsContent>
         <TabsContent value="comunicacao" className="space-y-4"><MailboxesSettings /><SharedCalendarsSettings /><GooglePushSettings /><GoogleContactsSettings /><GoogleDriveSettings /></TabsContent>

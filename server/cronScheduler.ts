@@ -22,7 +22,7 @@ import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { fromMysqlMs, recordCronRun, toMysqlMs } from "./cronRuns";
 import {
-  LEASE_GRACE_MS, TICK_HARD_STOP_GRACE_MS, TICK_JOBS, activeTickJobs, applyOutcome, effectiveTickJobs, leaseFree, cursorForRun, describeCadence, emptyState, isDue, jobDeadline, mailPushHealthy, nextDueAt,
+  LEASE_GRACE_MS, TICK_HARD_STOP_GRACE_MS, TICK_JOBS, applyOutcome, effectiveTickJobs, leaseFree, cursorForRun, describeCadence, emptyState, isDue, jobDeadline, mailPushHealthy, nextDueAt,
   periodKeyFor, planTick, type DynamicCadence, type JobState, type JobStatus, type PlannedJob, type TickJobSpec,
 } from "./cronSchedule";
 import type { CronJobRun } from "./cronJobs";
@@ -42,20 +42,17 @@ const offset = (c: string | null) => (c && /^\d{1,4}$/.test(c) ? Number(c) : 0);
 /** Cada chave de TICK_JOBS → a função partilhada com o endpoint manual. */
 export const JOB_RUNNERS: Record<string, JobRunner> = {
   "mail-sync": async (o) => (await import("./cronJobs")).mailSyncCron(o),
-  "multipark-db-sync": async (o) => (await import("./cronJobs")).multiparkDbSyncCron(o),
   "multipark-deliveries": async (o) => (await import("./cronJobs")).multiparkDeliveriesCron(o),
   "ai-comms": async (o) => (await import("./cronJobs")).aiCommsCron(o),
   "google-pending": async (o) => (await import("./cronJobs")).googlePendingCron(o),
   "google-sync": async (o) => (await import("./cronJobs")).googleSyncCron(o),
   "google-watch-renew": async (o) => (await import("./cronJobs")).googleWatchRenewCron(o),
   "extras-schedule": async () => (await import("./cronJobs")).extrasScheduleCron(),
-  "multipark-sync": async (o) => (await import("./cronJobs")).multiparkSyncCron(o),
   "extras-auto": async (o) => (await import("./cronJobs")).extrasAutoCron({ deadlineAt: o.deadlineAt, from: o.cursor || null }),
   "identity-sweep": async () => (await import("./cronJobs")).identitySweepCron(),
   "crm-sync": async (o) => (await import("./cronJobs")).crmSyncCron(o),
   "crm-suggestions": async (o) => (await import("./cronJobs")).crmSuggestionsCron(o),
   "crm-pro-sync": async (o) => (await import("./cronJobs")).crmProSyncCron(o),
-  "multipark-future": async (o) => (await import("./cronJobs")).multiparkFutureCron({ deadlineAt: o.deadlineAt, offsetDays: offset(o.cursor) }),
   "zello-sameday": async (o) => (await import("./cronJobs")).zelloSameDayCron(o),
   "extras-pressure": async (o) => (await import("./cronJobs")).extrasPressureCron(o),
   "rh-docs-weekly": async () => (await import("./cronJobs")).rhDocsWeeklyCron(),
@@ -199,22 +196,11 @@ export interface TickReport {
 
 export interface TickPlan { now: number; states: Map<string, JobState>; overrides: Map<string, number | null>; planned: PlannedJob[]; specs?: TickJobSpec[] }
 
-/** Fonte das reservas em vigor (interruptor MULTIPARK_SOURCE; em dúvida, "api"). */
-async function reservationSource(): Promise<"api" | "db"> {
-  try {
-    return await (await import("./multiparkDb/source")).getMultiparkSourceKind();
-  } catch {
-    return "api";
-  }
-}
-
 /** O que está na altura agora (lê o estado; não reserva nada). */
 export async function planDueJobs(now = Date.now()): Promise<TickPlan> {
   const states = await loadJobStates();
   const overrides = await fromOverrides().catch(() => new Map<string, number | null>());
-  // Com a fonte "api" (omissão) é a lista de sempre; com "db" o
-  // multipark-db-sync substitui multipark-sync e multipark-future.
-  const specs = effectiveTickJobs(activeTickJobs(TICK_JOBS, await reservationSource()), await loadDynamicCadence(now));
+  const specs = effectiveTickJobs(TICK_JOBS, await loadDynamicCadence(now));
   return { now, states, overrides, planned: planTick(specs, states, now, overrides), specs };
 }
 
@@ -341,15 +327,13 @@ export interface SchedulerJobView {
 export async function schedulerStatus(now = Date.now()): Promise<{ now: number; jobs: SchedulerJobView[] }> {
   const states = await loadJobStates();
   const overrides = await fromOverrides().catch(() => new Map<string, number | null>());
-  const active = new Set(activeTickJobs(TICK_JOBS, await reservationSource()).map((s) => s.key));
   const owners = new Map<string, string>();
   const db = await getDb();
   if (db) for (const r of rowsOf(await db.execute(sql`SELECT jobKey, leaseOwner FROM cron_job_state WHERE leaseOwner IS NOT NULL`))) owners.set(String(r.jobKey), String(r.leaseOwner));
   const specs = effectiveTickJobs(TICK_JOBS, await loadDynamicCadence(now));
   const jobs = specs.map((spec) => {
     const st = states.get(spec.key) ?? emptyState(spec.key);
-    const on = active.has(spec.key);
-    const due = on ? isDue(spec, st, now, states, overrides.get(spec.key)) : { due: false, resume: false, reason: `inativo (fonte das reservas = ${spec.source === "db" ? "API" : "BD Multipark"})` };
+    const due = isDue(spec, st, now, states, overrides.get(spec.key));
     const period = periodKeyFor(spec.cadence, now);
     return {
       key: spec.key, label: spec.label, runName: spec.runName, cadence: describeCadence(spec.cadence),
@@ -360,7 +344,7 @@ export async function schedulerStatus(now = Date.now()): Promise<{ now: number; 
       resuming: st.lastStatus === "partial",
       periodDone: period != null && st.periodKey === period,
       attempts: st.attempts,
-      nextDueAt: on ? nextDueAt(spec, st, now, states, overrides.get(spec.key)) : null,
+      nextDueAt: nextDueAt(spec, st, now, states, overrides.get(spec.key)),
       dueNow: due.due,
       dueReason: due.reason,
     };

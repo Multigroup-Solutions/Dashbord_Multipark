@@ -70,7 +70,6 @@ import {
   annualReports,
   multiparkBookings,
   multiparkBookingExtras,
-  multiparkSyncLogs,
   InsertMultiparkBooking,
   inviteTokens,
   InsertInviteToken,
@@ -5210,59 +5209,6 @@ export async function getMultiparkBookingStats(filters?: { from?: string; to?: s
     byBrand: byBrandRows.map(r => ({ name: r.name ?? "Desconhecido", bookings: r.bookings, revenue: parseFloat(String(r.revenue ?? 0)) })),
   };
 }
-
-// ─── MULTIPARK SYNC LOGS ─────────────────────────────────────────────────────
-
-export async function createSyncLog(data: {
-  syncType: string;
-  status: string;
-  recordsProcessed?: number;
-  recordsCreated?: number;
-  recordsUpdated?: number;
-  errorMessage?: string;
-  triggeredById?: number;
-  completedAt?: Date;
-  /** Janela pedida (DATETIME UTC) e meta JSON — migração 0101. */
-  windowStart?: string;
-  windowEnd?: string;
-  meta?: string;
-}) {
-  const db = await getDb();
-  if (!db) return;
-  const { completedAt, ...rest } = data;
-  await db.insert(multiparkSyncLogs).values({
-    ...rest,
-    ...(completedAt ? { completedAt: completedAt.toISOString().slice(0, 19).replace("T", " ") } : {}),
-  } as any);
-}
-
-/** Últimos logs; `types` filtra por syncType (os legados "api_sync" contam
- *  como recente E futuro, porque antes da 0101 os dois gravavam isso). */
-export async function getSyncLogs(limit = 20, types?: string[]) {
-  const db = await getDb();
-  if (!db) return [];
-  const where = types && types.length ? inArray(multiparkSyncLogs.syncType, types) : undefined;
-  return db.select().from(multiparkSyncLogs).where(where).orderBy(desc(multiparkSyncLogs.startedAt)).limit(limit);
-}
-
-/** Quando começou o último sync deste tipo que acabou com sucesso. Usado
- *  como recurso da janela do sync recente (a cobertura por parque vive em
- *  multipark_sync_coverage) e no painel de saúde. */
-export async function getLastSyncSuccessAt(syncType = "api_sync"): Promise<string | null> {
-  const db = await getDb();
-  if (!db) return null;
-  const rows = await db
-    .select({ startedAt: multiparkSyncLogs.startedAt })
-    .from(multiparkSyncLogs)
-    .where(and(
-      eq(multiparkSyncLogs.syncType, syncType),
-      eq(multiparkSyncLogs.status, "success"),
-    ))
-    .orderBy(desc(multiparkSyncLogs.startedAt))
-    .limit(1);
-  return rows[0]?.startedAt ?? null;
-}
-
 
 // ─── INVITE TOKENS ──────────────────────────────────────────────────────────
 import crypto from "crypto";

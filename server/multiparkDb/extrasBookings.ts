@@ -2,8 +2,8 @@
  * Reservas do Extras-Dia lidas AO VIVO da BD da Multipark (BD 2): a previsão
  * (`getExtrasDiaForecast`) e o detalhe de um bloco de 20 min
  * (`getBookingsInSlot`) deixam de depender da nossa cópia `multipark_bookings`
- * (que só se enchia com o sync das futuras, `multipark-future`, que já não
- * corre sozinho). Segue as regras de read.ts / dayBookings.ts: SQL
+ * (que só se enchia com o sync das futuras, `multipark-future`, entretanto
+ * retirado). Segue as regras de read.ts / dayBookings.ts: SQL
  * parametrizado, construtores e mapeadores PUROS, LIMIT sempre e nunca lança
  * (`{ available:false, reason }` → o Extras-Dia volta à cópia e mostra aviso).
  *

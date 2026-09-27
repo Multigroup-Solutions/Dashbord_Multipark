@@ -84,7 +84,7 @@ export function createMcpApiRouter(): Router {
         ],
         write: [
           "POST /complaints", "PATCH /complaints/:id", "POST /complaints/:id/messages",
-          "POST /reviews", "POST /sync/recent", "POST /sync/future", "POST /sync/day",
+          "POST /reviews",
           "POST /availability-form/submit",
           "POST /driver-applications",
           "POST /extras-availability/submit-by-email",
@@ -280,12 +280,14 @@ export function createMcpApiRouter(): Router {
     const local = await getMultiparkBookingByExternalId(ext);
     let live: any = null;
     let park: any = null;
-    try {
-      const { getBookingTryAllParks } = await import("./multipark");
-      const found = await getBookingTryAllParks(ext);
-      if (found) { live = found.booking; park = { id: found.parkConfig.id, name: found.parkConfig.name, city: found.parkConfig.city }; }
-    } catch { /* API pode falhar; devolvemos o local na mesma */ }
-    if (!local && !live) return res.status(404).json({ error: "Reserva não encontrada (local nem API)" });
+    // Ao vivo da BD da Multipark (ficha da reserva); nunca lança — sem BD, só a cópia local.
+    const { getBookingFileMain } = await import("./multiparkDb/bookingFile");
+    const main = await getBookingFileMain(ext, undefined);
+    if (main.available && main.data.data.core) {
+      live = main.data.data.core;
+      park = { id: live.park?.id ?? null, name: live.park?.name ?? null, city: live.park?.city ?? null };
+    }
+    if (!local && !live) return res.status(404).json({ error: "Reserva não encontrada (cópia local nem BD Multipark)" });
     res.json({ success: true, local: local ?? null, live, park });
   }));
 
@@ -421,43 +423,6 @@ export function createMcpApiRouter(): Router {
   r.get("/employees", requireScope("read"), h(async (_req, res) => {
     const list = await getAllEmployees();
     res.json({ success: true, count: list.length, data: list.map((e: any) => ({ id: e.employee.id, fullName: e.employee.fullName, position: e.employee.position, projectId: e.employee.projectId })) });
-  }));
-
-  // ── SYNC (controlar a sincronização) ────────────────────────────────────────
-  // Todas partilham o trinco do cron e do botão "Reparar período": se já
-  // houver um sync a correr → 409 "já a correr" (sem chamar a API Multipark).
-  r.post("/sync/recent", requireScope("write"), h(async (req, res) => {
-    const { runRecentCronSync } = await import("./jobs/multiparkBookingSync");
-    const { SYNC_BUSY_MESSAGE } = await import("./syncLock");
-    const windowMinutes = Math.min(Math.max(Number(req.body?.windowMinutes) || 30, 5), 3 * 24 * 60);
-    const result = await runRecentCronSync(windowMinutes, { owner: "mcp_recent" });
-    if (result.busy) return res.status(409).json({ success: false, busy: true, error: SYNC_BUSY_MESSAGE });
-    await logApiKeyAction(req, { action: "sync", entity: "multipark", asKeyEvent: true, details: `[MCP] sync recente (${windowMinutes} min)` });
-    res.json({ success: result.parkErrors.length === 0, ...result });
-  }));
-
-  r.post("/sync/future", requireScope("write"), h(async (req, res) => {
-    const { runFutureCronSync } = await import("./jobs/multiparkBookingSync");
-    const { SYNC_BUSY_MESSAGE } = await import("./syncLock");
-    const weeks = Math.min(Math.max(Number(req.body?.weeksAhead) || 4, 1), 8);
-    const offsetDays = Math.max(0, Math.trunc(Number(req.body?.offsetDays) || 0));
-    const result = await runFutureCronSync(weeks, { offsetDays, owner: "mcp_future" });
-    if (result.busy) return res.status(409).json({ success: false, busy: true, error: SYNC_BUSY_MESSAGE });
-    await logApiKeyAction(req, { action: "sync", entity: "multipark", asKeyEvent: true, details: `[MCP] sync futuro (${weeks} semanas, offset ${offsetDays})` });
-    res.json({ success: !result.needsRetry, ...result });
-  }));
-
-  // Repara um dia específico (report + enrich + history), com prazo.
-  r.post("/sync/day", requireScope("write"), h(async (req, res) => {
-    const date = String(req.body?.date ?? "").slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "date (YYYY-MM-DD) é obrigatório" });
-    const { runRepairSync } = await import("./jobs/multiparkBookingSync");
-    const { SYNC_BUSY_MESSAGE } = await import("./syncLock");
-    const r = await runRepairSync({ startDate: date, endDate: date, owner: "mcp_day", enrich: true });
-    if (r.busy) return res.status(409).json({ success: false, busy: true, error: SYNC_BUSY_MESSAGE });
-    await logApiKeyAction(req, { action: "sync", entity: "multipark", asKeyEvent: true, details: `[MCP] sync do dia ${date}` });
-    const { enrichTargets: _t, parkStatus: _p, ...report } = r.result;
-    res.json({ success: report.success, date, report, enriched: r.enriched, historyFetched: r.historyFetched });
   }));
 
   // ── ADMIN (destrutivo) ──────────────────────────────────────────────────────

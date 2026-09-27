@@ -3,10 +3,8 @@
  * `limit` execuções em paralelo. Opcionalmente para quando `deadlineAt`
  * (epoch ms) é atingido — útil em jobs com budget de tempo.
  *
- * Réplica do `runConcurrent` que já vivia acoplado a
- * `server/jobs/multiparkBookingSync.ts` (mantido lá para não mexer no sync);
- * extraído para aqui para poder ser reutilizado pelo broadcast de WhatsApp e
- * por futuros consumidores. Erros de `fn` são engolidos por item (cada item é
+ * Usado pelo detalhe das reservas Multipark (server/jobs/multiparkBookingSync.ts)
+ * e pelo broadcast de WhatsApp. Erros de `fn` são engolidos por item (cada item é
  * independente) — o chamador é responsável por registar o resultado por item.
  */
 export async function runConcurrent<T>(

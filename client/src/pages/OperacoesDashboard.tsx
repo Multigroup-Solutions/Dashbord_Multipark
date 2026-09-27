@@ -1,12 +1,11 @@
 import { useMemo } from "react";
 import { useIsMobile } from "@/hooks/useMobile";
 import { trpc } from "@/lib/trpc";
-import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
+import { fmtPTDate } from "@/lib/lisbonTime";
 import { addDays, lisbonDayOf } from "@shared/lisbonDay";
 import { useDashboardFilters, DashboardFilterBar } from "@/components/DashboardFilterBar";
 import { StatValue } from "@/components/StatValue";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   AreaChart,
@@ -28,28 +27,14 @@ import {
   XCircle,
   Car,
   Shield,
-  RefreshCw,
-  CheckCircle2,
-  AlertCircle,
   Loader2,
 } from "lucide-react";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const fmtNum = (n: number) => n.toLocaleString("pt-PT");
-const fmtDateTime = (d: string | null | undefined) =>
-  d ? fmtPTDateTime(d) : "—";
 
 const DONUT_COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899"];
-
-const SYNC_STATUS_MAP: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
-  success: { label: "OK", variant: "default" },
-  completed: { label: "OK", variant: "default" },
-  error: { label: "Erro", variant: "destructive" },
-  failed: { label: "Falhou", variant: "destructive" },
-  running: { label: "A correr", variant: "secondary" },
-  pending: { label: "Pendente", variant: "outline" },
-};
 
 const FLEET_STATUS_LABELS: Record<string, string> = {
   active: "Ativas",
@@ -148,8 +133,6 @@ export default function OperacoesDashboard() {
   const { data: gpsYesterday = [], isLoading: gpsLoading } =
     trpc.operational.driverHistory.byDate.useQuery({ date: yesterdayStr });
 
-  const { data: syncLogs, isLoading: syncLoading } = trpc.multipark.syncLogs.useQuery();
-
   // ── Derived data ──
 
   // Area chart: reservas by day from bookingStats
@@ -186,12 +169,6 @@ export default function OperacoesDashboard() {
       .slice(0, 12);
     return { km, vmax, drivers, perDriver };
   }, [gpsYesterday]);
-
-  // Sync logs (last 8)
-  const recentSyncLogs = useMemo(() => {
-    if (!syncLogs?.length) return [];
-    return syncLogs.slice(0, 8);
-  }, [syncLogs]);
 
   // ── Render ──
 
@@ -344,7 +321,7 @@ export default function OperacoesDashboard() {
       </div>
 
       {/* Bottom row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 gap-6">
         {/* Km por condutor — ontem (GPS Zello) */}
         <Card>
           <CardHeader>
@@ -382,68 +359,6 @@ export default function OperacoesDashboard() {
           </CardContent>
         </Card>
 
-        {/* Sync logs table */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
-              <RefreshCw className="w-4 h-4" />
-              Últimos sync logs
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {syncLoading ? (
-              <div className="space-y-3">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <Skeleton key={i} className="h-8 w-full" />
-                ))}
-              </div>
-            ) : recentSyncLogs.length === 0 ? (
-              <p className="text-muted-foreground text-center py-8">Sem registos de sincronização.</p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b text-left">
-                      <th className="pb-2 font-medium text-muted-foreground">Tipo</th>
-                      <th className="pb-2 font-medium text-muted-foreground">Estado</th>
-                      <th className="pb-2 font-medium text-muted-foreground">Registos</th>
-                      <th className="pb-2 font-medium text-muted-foreground">Data</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {recentSyncLogs.map((log: any) => {
-                      const statusInfo = SYNC_STATUS_MAP[log.status] || {
-                        label: log.status,
-                        variant: "outline" as const,
-                      };
-                      return (
-                        <tr key={log.id} className="border-b last:border-0">
-                          <td className="py-2 font-medium">{log.syncType || "—"}</td>
-                          <td className="py-2">
-                            <Badge variant={statusInfo.variant} className="text-xs">
-                              {log.status === "success" || log.status === "completed" ? (
-                                <CheckCircle2 className="w-3 h-3 mr-1" />
-                              ) : log.status === "error" || log.status === "failed" ? (
-                                <AlertCircle className="w-3 h-3 mr-1" />
-                              ) : null}
-                              {statusInfo.label}
-                            </Badge>
-                          </td>
-                          <td className="py-2 text-muted-foreground">
-                            {log.recordsProcessed != null ? fmtNum(log.recordsProcessed) : "—"}
-                          </td>
-                          <td className="py-2 text-muted-foreground text-xs">
-                            {fmtDateTime(log.startedAt)}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </CardContent>
-        </Card>
       </div>
     </div>
   );

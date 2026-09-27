@@ -12,16 +12,9 @@ import {
   mapBookingRow, mapDriverRow, mapMovementRow, toApiDate, toMysqlUtc,
   type BookingRow, type MovementRow,
 } from "./queries";
-import {
-  apiHistoryToMovement, createApiSource, createDbSource, dbSourceReadiness, effectiveMultiparkSource, getMultiparkSourceKind, initialCursor, requestedMultiparkSource,
-  MultiparkDbNotMappedError, MultiparkSourceUnsupportedError, resolveMultiparkSource,
-} from "./source";
-import { summarizeMovements } from "./dbSync";
 import { parseBookingDate } from "../bookingRefresh";
-import {
-  AUTOMATION_FLAGS, CRON_JOBS, automationFlagDefault, automationFlagSuperAdminOnly, cronJobsForSource, normalizeFlagEnv,
-} from "../../shared/appSettings";
-import { TICK_JOBS, activeTickJobs } from "../cronSchedule";
+import { AUTOMATION_FLAGS, CRON_JOBS, automationFlagSuperAdminOnly } from "../../shared/appSettings";
+import { TICK_JOBS } from "../cronSchedule";
 import { integrationTestSuperAdminOnly } from "../integrationsStatus";
 import { MIGRATION_0205_STATEMENTS } from "../migrations/migration_0205";
 
@@ -299,101 +292,23 @@ describe("mapeamento (queries.ts) com linhas-exemplo", () => {
     expect(toMysqlUtc("não é data")).toBeNull();
     expect(toMysqlUtc(null)).toBeNull();
   });
-  it("resumo dos movimentos: último check-in/out e garagem/lugar/km (como o histórico da API)", () => {
-    const base = { bookingId: "b", remarks: null, platform: null, agentEmail: null };
-    const s = summarizeMovements([
-      { ...base, id: "3", changeType: "CHECK_OUT", actionTime: "2026-07-17 21:00:00", agentUserId: "u2", agentName: "Bia", modifiedFields: '{"km": "45300"}' },
-      { ...base, id: "1", changeType: "CHECK_IN", actionTime: "2026-07-10 08:30:00", agentUserId: "u1", agentName: "Rui", modifiedFields: '{"garagem":"G2","lugar":"114","km":"45210"}' },
-      { ...base, id: "2", changeType: "MOVEMENT", actionTime: "2026-07-11 10:00:00", agentUserId: "u3", agentName: "Zé", modifiedFields: "não-json" },
-    ]);
-    expect(s).toEqual({ checkinAgentName: "Rui", checkinAgentUserId: "u1", checkoutAgentName: "Bia", checkoutAgentUserId: "u2", currentGarage: "G2", currentSpot: "114", lastKnownMileage: 45300 });
-    expect(summarizeMovements([])).toEqual({});
-  });
 });
 
-describe("fontes (source.ts)", () => {
+describe("consultas mapeadas e reservas só pelo webhook", () => {
   it("mapeado (26 set 2026): reservas, movimentos e agentes", () => {
     expect(MULTIPARK_DB_MAPPED).toEqual({ bookings: true, movements: true, drivers: true });
   });
-  it.skip("DbSource recusa-se a correr enquanto estiver por mapear (só com MAPPED a false)", async () => {
-    let calls = 0;
-    const src = createDbSource(async () => { calls++; return fakeClient("postgres"); });
-    await expect(src.listBookingsChangedSince({ at: "2026-01-01 00:00:00", id: "" }, 10)).rejects.toThrow(MultiparkDbNotMappedError);
-    await expect(src.listMovements({ at: "2026-01-01 00:00:00", id: "" }, 10)).rejects.toThrow(/por mapear/);
-    await expect(src.listDrivers()).rejects.toThrow(/por mapear/);
-    await expect(src.getBooking("x")).rejects.toThrow(/por mapear/);
-    await expect(src.listBookingsByPeriod("2026-01-01", "2026-01-02", "creation")).rejects.toThrow(/por mapear/);
-    expect(calls).toBe(0); // nem sequer abre a ligação
-  });
-  it("ApiSource: o que a API não tem lança SOURCE_UNSUPPORTED", async () => {
-    const api = createApiSource();
-    expect(api.kind).toBe("api");
-    await expect(api.listBookingsChangedSince({ at: "", id: "" }, 1)).rejects.toThrow(MultiparkSourceUnsupportedError);
-    await expect(api.listMovements({ at: "", id: "" }, 1)).rejects.toThrow(MultiparkSourceUnsupportedError);
-    await expect(api.listDrivers()).rejects.toThrow(MultiparkSourceUnsupportedError);
-  });
-  it("histórico da API → movimento (mesmo formato do DbSource)", () => {
-    expect(apiHistoryToMovement("b1", { id: "h1", changeType: "CHECK_OUT", actionTime: "17/07/2026, 21:00", agentName: "Bia", userId: "u2", user: { id: "u2", firstName: "B", lastName: "C", email: "Bia@X.pt" }, modifiedFields: '{"km":1}', platform: "PDA" }))
-      .toEqual({ id: "h1", bookingId: "b1", changeType: "CHECK_OUT", actionTime: "2026-07-17 21:00:00", agentUserId: "u2", agentName: "Bia", agentEmail: "bia@x.pt", remarks: null, modifiedFields: '{"km":1}', platform: "PDA" });
-    expect(apiHistoryToMovement("b1", {} as any)).toBeNull();
-  });
-  it("cursor inicial: N dias para trás, texto UTC com µs", () => {
-    expect(initialCursor(Date.parse("2026-09-26T12:00:00Z"), 3)).toEqual({ at: "2026-09-23 12:00:00.000000", id: "" });
-  });
-});
-
-describe("interruptor MULTIPARK_SOURCE (omissão = API → nada muda em produção)", () => {
-  it("omissão: api", async () => {
-    expect(resolveMultiparkSource(undefined, null)).toBe("api");
-    expect(resolveMultiparkSource("", undefined)).toBe("api");
-    expect(resolveMultiparkSource("qualquer", null)).toBe("api");
-    expect(await getMultiparkSourceKind({})).toBe("api");
-    expect(automationFlagDefault("MULTIPARK_SOURCE")).toBe(false);
-  });
-  it("env db/api e sobreposição das Definições (que ganha)", async () => {
-    expect(resolveMultiparkSource("db", null)).toBe("db");
-    expect(resolveMultiparkSource("DB", null)).toBe("db");
-    expect(resolveMultiparkSource("on", null)).toBe("db");
-    expect(resolveMultiparkSource("api", null)).toBe("api");
-    expect(resolveMultiparkSource("db", false)).toBe("api");
-    expect(resolveMultiparkSource("api", true)).toBe("db");
-    expect(await requestedMultiparkSource({ MULTIPARK_SOURCE: "db" })).toBe("db");
-    expect(await requestedMultiparkSource({ MULTIPARK_SOURCE: "api" })).toBe("api");
-  });
-  it("pedir a BD sem env ou por mapear continua na API (nunca desliga o sync sem substituto)", async () => {
-    expect(await getMultiparkSourceKind({ MULTIPARK_SOURCE: "db" })).toBe("api");
-    expect(dbSourceReadiness({})).toMatch(/DATABASE_URL_MULTIPARK/);
-    expect(dbSourceReadiness({ DATABASE_URL_MULTIPARK: PG_URL }, { bookings: false, movements: true })).toMatch(/por mapear/);
-    expect(dbSourceReadiness({ DATABASE_URL_MULTIPARK: PG_URL })).toBeNull();
-    expect(dbSourceReadiness({ DATABASE_URL_MULTIPARK: PG_URL }, { bookings: true, movements: true })).toBeNull();
-    expect(effectiveMultiparkSource("db", null)).toEqual({ source: "db", reason: null });
-    expect(effectiveMultiparkSource("db", "x")).toMatchObject({ source: "api" });
-    expect(effectiveMultiparkSource("api", null)).toEqual({ source: "api", reason: null });
-  });
-  it("no catálogo das automações: desligado por omissão e só super_admin", () => {
-    const f = AUTOMATION_FLAGS.find((x) => x.name === "MULTIPARK_SOURCE");
-    expect(f).toMatchObject({ defaultEnabled: false, superAdminOnly: true });
-    expect(automationFlagSuperAdminOnly("MULTIPARK_SOURCE")).toBe(true);
+  it("o interruptor MULTIPARK_SOURCE saiu do catálogo", () => {
+    expect(AUTOMATION_FLAGS.find((x) => x.name === "MULTIPARK_SOURCE")).toBeUndefined();
     expect(automationFlagSuperAdminOnly("EXTRAS_AUTOMATION")).toBe(false);
-    expect(normalizeFlagEnv("MULTIPARK_SOURCE", "db")).toBe("on");
-    expect(normalizeFlagEnv("MULTIPARK_SOURCE", "api")).toBe("off");
-    expect(normalizeFlagEnv("EXTRAS_AUTOMATION", "db")).toBe("db");
-    expect(normalizeFlagEnv("MULTIPARK_SOURCE", undefined)).toBeUndefined();
   });
-  it("agendador: nada vai buscar reservas à Multipark, seja qual for a fonte", () => {
-    for (const src of ["api", "db"] as const) {
-      const keys = activeTickJobs(TICK_JOBS, src).map((j) => j.key);
-      expect(keys).not.toContain("multipark-sync");
-      expect(keys).not.toContain("multipark-future");
-      expect(keys).not.toContain("multipark-db-sync");
-      expect(keys).toContain("multipark-deliveries"); // fica só o que a Multipark manda (webhook)
-    }
+  it("agendador: nada vai buscar reservas à Multipark (fica só o webhook)", () => {
+    const keys = TICK_JOBS.map((j) => j.key);
+    for (const k of ["multipark-sync", "multipark-future", "multipark-db-sync"]) expect(keys).not.toContain(k);
+    expect(keys).toContain("multipark-deliveries");
   });
-  it("Estado do sistema: nenhum sync de reservas é esperado (nunca aparecem \"parados\")", () => {
-    for (const src of ["api", "db"] as const) {
-      const jobs = cronJobsForSource(src);
-      for (const k of ["multipark-sync", "multipark-future", "multipark-db-sync"]) expect(jobs.find((j) => j.name === k)?.intervalMinutes).toBeNull();
-    }
+  it("Estado do sistema: os syncs de reservas saíram da lista de crons", () => {
+    for (const k of ["multipark-sync", "multipark-future", "multipark-db-sync"]) expect(CRON_JOBS.find((j) => j.name === k)).toBeUndefined();
   });
   it("teste de ligação só para super_admin", () => {
     expect(integrationTestSuperAdminOnly("multipark_db")).toBe(true);

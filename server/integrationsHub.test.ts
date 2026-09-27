@@ -47,7 +47,7 @@ describe("cronOutcome lê reason, errors[] e warnings", () => {
   });
   it("todos os /api/cron/* agendados têm entrada com intervalo (incl. evaluation-recompute)", () => {
     const names = CRON_JOBS.map((j) => j.name);
-    for (const n of ["evaluation-recompute", "daily-ops", "google-ads", "meta-ads", "google-business", "mail-sync", "extras-auto", "identity-sweep", "multipark-sync", "multipark-future", "multipark-deliveries"]) {
+    for (const n of ["evaluation-recompute", "daily-ops", "google-ads", "meta-ads", "google-business", "mail-sync", "extras-auto", "identity-sweep", "multipark-deliveries"]) {
       expect(names).toContain(n);
     }
     expect(CRON_JOBS.find((j) => j.name === "evaluation-recompute")?.intervalMinutes).toBe(1440);
@@ -102,12 +102,12 @@ describe("hub: cartões por fornecedor", () => {
   it("um cartão principal por fornecedor, sem Google Maps, com testes baratos", () => {
     const list = integrationStatusesFromEnv({});
     const main = list.filter((i) => i.group === "main").map((i) => i.id);
-    expect(main).toEqual(["google_ads", "meta_ads", "google_business", "whatsapp", "whatsapp_calls", "gmail", "google_sync", "google_contacts", "google_drive", "knowledge_base", "google_analytics", "search_console", "pagespeed", "crux", "google_account", "gmail_send", "zello", "llm", "multipark", "multipark_db", "storage"]);
+    expect(main).toEqual(["google_ads", "meta_ads", "google_business", "whatsapp", "whatsapp_calls", "gmail", "google_sync", "google_contacts", "google_drive", "knowledge_base", "google_analytics", "search_console", "pagespeed", "crux", "google_account", "gmail_send", "zello", "llm", "multipark_db", "storage"]);
     expect(list.some((i) => i.id === "google_maps")).toBe(false);
     for (const id of ["google_ads", "google_business", "zello", "llm", "google_analytics", "search_console", "pagespeed"]) expect(list.find((i) => i.id === id)?.testable).toBe(true);
     // PageSpeed funciona sem chave (quota baixa) → configurada sem variáveis.
     expect(list.find((i) => i.id === "pagespeed")?.configured).toBe(true);
-    expect(list.find((i) => i.id === "multipark")?.testable).toBe(false);
+    expect(list.some((i) => i.id === "multipark")).toBe(false); // cartão "API Multipark" saiu (sync pela API retirado)
     // BD Multipark (só leitura): tem Testar (só super_admin); sem a env → não configurada.
     expect(list.find((i) => i.id === "multipark_db")).toMatchObject({ testable: true, configured: false, missing: ["DATABASE_URL_MULTIPARK"] });
     expect(list.find((i) => i.id === "google_ads")?.links.map((l) => l.href)).toContain("/integracoes/google-ads");

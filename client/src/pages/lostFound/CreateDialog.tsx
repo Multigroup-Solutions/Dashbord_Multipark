@@ -37,7 +37,7 @@ import { STATUS_CONFIG, TYPE_CONFIG, PRIORITY_CONFIG, KANBAN_COLUMNS, BASE_PATH,
 
 // ─── CREATE DIALOG ────────────────────────────────────────────────────────────
 
-// ─── RESERVATION PREVIEW (auto-fetches timeline from API) ────────────────────
+// ─── RESERVATION PREVIEW (histórico da reserva, BD Multipark) ────────────────────
 
 export function LostFoundReservationPreview({ bookingId }: { bookingId: string }) {
   const { data, isLoading } = trpc.lostFound.bookingTimeline.useQuery(
@@ -46,7 +46,7 @@ export function LostFoundReservationPreview({ bookingId }: { bookingId: string }
   );
 
   if (!bookingId || bookingId.length < 4) return null;
-  if (isLoading) return <p className="text-xs text-muted-foreground mt-2 animate-pulse">A carregar histórico da API...</p>;
+  if (isLoading) return <p className="text-xs text-muted-foreground mt-2 animate-pulse">A carregar histórico...</p>;
 
   const history = data?.history || [];
   if (history.length === 0) return <p className="text-xs text-amber-600 mt-2">Nenhum histórico encontrado para este ID.</p>;
@@ -142,16 +142,15 @@ export function CreateDialog({ user, onClose }: { user: any; onClose: () => void
                 accent="emerald"
                 label="Buscar reserva (nº reserva, matrícula, email, nome) *"
                 hint="Escolhe uma reserva e os dados do cliente / matrícula são preenchidos automaticamente"
-                onSelect={(b, details) => {
+                onSelect={(b) => {
                   const ref = b.externalId || b.bookingNumber || "";
-                  const client = details?.customer || details?.client;
                   setForm(f => ({
                     ...f,
                     bookingRef: ref,
-                    clientName: f.clientName || [client?.firstName, client?.lastName, b.clientFirstName, b.clientLastName].filter(Boolean).slice(0, 2).join(" "),
-                    clientEmail: f.clientEmail || client?.email || b.clientEmail || "",
-                    clientPhone: f.clientPhone || client?.phoneNumber || b.clientPhone || "",
-                    vehiclePlate: f.vehiclePlate || details?.vehicle?.licensePlate || b.licensePlate || "",
+                    clientName: f.clientName || [b.clientFirstName, b.clientLastName].filter(Boolean).join(" "),
+                    clientEmail: f.clientEmail || b.clientEmail || "",
+                    clientPhone: f.clientPhone || b.clientPhone || "",
+                    vehiclePlate: f.vehiclePlate || b.licensePlate || "",
                   }));
                 }}
               />

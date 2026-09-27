@@ -472,15 +472,14 @@ function CreateReviewDialog({ onClose }: { onClose: () => void }) {
           <BookingSearchField
             accent="violet"
             hint="Opcional — escolhe a reserva e o nome/email/matrícula são preenchidos automaticamente"
-            onSelect={(b, details) => {
-              const client = details?.customer || details?.client;
-              const fullName = [client?.firstName, client?.lastName, b.clientFirstName, b.clientLastName].filter(Boolean).slice(0, 2).join(" ");
+            onSelect={(b) => {
+              const fullName = [b.clientFirstName, b.clientLastName].filter(Boolean).join(" ");
               setForm(f => ({
                 ...f,
                 bookingRef: b.externalId || b.bookingNumber || f.bookingRef,
                 reviewerName: f.reviewerName || fullName,
-                reviewerEmail: f.reviewerEmail || client?.email || b.clientEmail || "",
-                vehiclePlate: f.vehiclePlate || details?.vehicle?.licensePlate || b.licensePlate || "",
+                reviewerEmail: f.reviewerEmail || b.clientEmail || "",
+                vehiclePlate: f.vehiclePlate || b.licensePlate || "",
                 projectId: f.projectId || (b.projectId ? String(b.projectId) : ""),
               }));
             }}

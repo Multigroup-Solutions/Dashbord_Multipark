@@ -5,8 +5,7 @@
  * ESTADO: MAPEADO (26 set 2026) sobre o esquema real — docs/multipark-db/schema.md,
  * obtido online pelo workflow "BD Multipark — descobrir esquema". Falta
  * confirmar datas e ids com a sonda (/api/cron/multipark-db-probe) antes de
- * pôr as entidades a true. Enquanto `MULTIPARK_DB_MAPPED.<entidade>` for false, o DbSource recusa-se a
- * correr (erro "por mapear") — nada lê nem escreve.
+ * pôr as entidades a true.
  *
  * Como preencher (sessão seguinte — ver docs/multipark-db/README.md):
  *   1. `pnpm tsx scripts/multipark-db-schema.ts` → docs/multipark-db/schema.md;
@@ -24,9 +23,9 @@
  *
  * As funções `map*Row` trabalham sobre os ALIASES (nomes nossos, estáveis):
  * mudar o esquema deles só mexe nas expressões SQL, não no mapeamento.
- * O `mapBookingRow` devolve o MESMO formato da API (/bookings/:id), por isso
- * a gravação em multipark_bookings reutiliza bookingToRecord +
- * applyBookingDetail de server/jobs/multiparkBookingSync.ts sem alterações.
+ * O `mapBookingRow` devolve o MESMO formato da API (/bookings/:id). Hoje só a
+ * sonda (probe.ts) usa estas consultas: o `multipark-db-sync` que gravava em
+ * multipark_bookings saiu (27 set 2026) — as páginas leem a BD 2 ao vivo.
  */
 import type { BookingActionType, MultiparkBooking } from "../multipark";
 import type { MultiparkDbEngine, SqlParam } from "./client";
@@ -41,7 +40,6 @@ export const MULTIPARK_DB_MAPPED = {
   drivers: true,    // 176 agentes; o email pode faltar (só existe nos convites)
 } as const;
 
-export type MappedEntity = keyof typeof MULTIPARK_DB_MAPPED;
 
 /**
  * Como interpretar as datas da BD deles ao gravar em multipark_bookings:

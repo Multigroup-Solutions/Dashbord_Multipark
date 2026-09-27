@@ -6,7 +6,8 @@
  * canceladas). Se a BD não estiver configurada/disponível, volta à cópia
  * `multipark_bookings` (como antes) e a página mostra um aviso
  * (`bookingSource` / `bookingSourceNotice`). Com a leitura ao vivo o trabalho
- * `multipark-future` deixa de ser preciso para esta página.
+ * `multipark-future` saiu. Sem chamadas à API da Multipark: o detalhe da cópia
+ * local vem do webhook (multipark-deliveries).
  *
  *   - Hourly check-ins / check-outs for tomorrow (or chosen base date + 1)
  *   - Lavagem (wash) counts for context days
@@ -22,7 +23,6 @@ import { and, asc, eq, gte, lte, inArray, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { DEFAULT_EXTRA_RATES, loadExtraRates, rateFor, type ExtraRates } from "./extraRates";
 import { multiparkBookings, extrasDiaAssignments, employees, projects } from "../drizzle/schema";
-import { getBookingTryAllParks } from "./multipark";
 import { DEFAULT_CARS_PER_HOUR } from "../shared/appSettings";
 import { FALLBACK_CARS_PER_HOUR, MAX_SHIFT_HOURS as SHIFT_MAX, MIN_SHIFT_HOURS as SHIFT_MIN, carsPerHourFor, driversNeededFor } from "../shared/extrasSchedule";
 import { lisbonWallTimeUtcMs } from "../shared/lisbonDay";
@@ -953,53 +953,7 @@ export async function getBookingsInSlot(
     });
   }
 
-  // Enriquece em paralelo as reservas que ainda não foram enriquecidas
-  // (chama /bookings/:id que tem deliveryType, returnFlight, etc.) e persiste.
-  const toEnrich = pendings.filter(p => !p.row.enrichedAt);
-  if (toEnrich.length > 0) {
-    await Promise.allSettled(toEnrich.map(async p => {
-      const enriched = await enrichBookingFromApi(p.row.externalId);
-      if (enriched?.deliveryType) p.summary.deliveryType = enriched.deliveryType;
-    }));
-  }
-
   return pendings.map(p => p.summary).sort((a, b) => a.time.localeCompare(b.time));
-}
-
-/**
- * Chama /bookings/:id na API Multipark e persiste deliveryType/returnFlight/
- * departingFlight/remarks na DB. Set enrichedAt=now para evitar repetir.
- */
-async function enrichBookingFromApi(externalId: string): Promise<{
-  deliveryType: string | null;
-  returnFlight: string | null;
-  departingFlight: string | null;
-  remarks: string | null;
-} | null> {
-  try {
-    const found = await getBookingTryAllParks(externalId);
-    if (!found) return null;
-    const b: any = found.booking;
-    const deliveryType = typeof b.deliveryType === "string" ? b.deliveryType : null;
-    const returnFlight = typeof b.returnFlight === "string" && b.returnFlight ? b.returnFlight : null;
-    const departingFlight = typeof b.departingFlight === "string" && b.departingFlight ? b.departingFlight : null;
-    const remarks = typeof b.remarks === "string" && b.remarks ? b.remarks.slice(0, 512) : null;
-
-    const db = await getDb();
-    if (db) {
-      await db.update(multiparkBookings).set({
-        deliveryType,
-        returnFlight,
-        departingFlight,
-        remarks,
-        enrichedAt: new Date().toISOString().slice(0, 19).replace("T", " "),
-      }).where(eq(multiparkBookings.externalId, externalId));
-    }
-
-    return { deliveryType, returnFlight, departingFlight, remarks };
-  } catch {
-    return null;
-  }
 }
 
 // ─── Driver candidates (para dropdown na UI) ─────────────────────────────────

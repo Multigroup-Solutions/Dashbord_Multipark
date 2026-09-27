@@ -85,7 +85,7 @@ const tools = [
   },
   {
     name: "get_booking",
-    description: "Detalhe de uma reserva pelo externalId (local + ao vivo da API Multipark, tentando todos os parques).",
+    description: "Detalhe de uma reserva pelo externalId (cópia local + ao vivo da BD Multipark).",
     inputSchema: { type: "object", properties: { externalId: { type: "string" } }, required: ["externalId"] },
     run: (a) => api("GET", `/bookings/${encodeURIComponent(a.externalId)}`),
   },
@@ -195,24 +195,6 @@ const tools = [
     description: "Lista os colaboradores (RH).",
     inputSchema: { type: "object", properties: {} },
     run: () => api("GET", "/employees"),
-  },
-  {
-    name: "sync_recent",
-    description: "Dispara a sincronização recente de reservas (report + enrich + history). Opcional: windowMinutes (default 30).",
-    inputSchema: { type: "object", properties: { windowMinutes: { type: "number" } } },
-    run: (a) => api("POST", "/sync/recent", { body: a }),
-  },
-  {
-    name: "sync_future",
-    description: "Sincroniza a janela futura de reservas. Opcional: weeksAhead (default 4).",
-    inputSchema: { type: "object", properties: { weeksAhead: { type: "number" } } },
-    run: (a) => api("POST", "/sync/future", { body: a }),
-  },
-  {
-    name: "sync_day",
-    description: "Sincroniza um dia específico (report + enrich + history) — útil para backfill histórico. date obrigatório (YYYY-MM-DD).",
-    inputSchema: { type: "object", properties: { date: { type: "string" } }, required: ["date"] },
-    run: (a) => api("POST", "/sync/day", { body: a }),
   },
 ];
 

@@ -133,30 +133,6 @@ export async function createDeliveryStore(): Promise<DeliveryStore> {
   };
 }
 
-/** Só totais operacionais: não devolve o payload nem dados de clientes. */
-export async function getDeliveryHealth() {
-  const { getDb } = await import('./db');
-  const { sql } = await import('drizzle-orm');
-  const db = await getDb();
-  if (!db) throw new Error('Base de dados indisponível');
-  const result = await db.execute(sql`SELECT
-    COALESCE(SUM(state = 'pending'), 0) AS pending,
-    COALESCE(SUM(state = 'processing'), 0) AS processing,
-    COALESCE(SUM(state = 'failed'), 0) AS failed,
-    COALESCE(SUM(state = 'dead'), 0) AS dead,
-    MAX(completedAt) AS lastCompletedAt
-    FROM multipark_webhook_jobs`);
-  const row = (result as any)[0]?.[0];
-  const detailResult = await db.execute(sql`SELECT
-    COALESCE(SUM(detailErrorCode IS NOT NULL AND detailErrorCode <> 'PARK_CLOSED'), 0) AS failures,
-    COALESCE(SUM(historyErrorCode IS NOT NULL AND historyErrorCode <> 'PARK_CLOSED'), 0) AS historyFailures FROM multipark_bookings`);
-  return { pending: Number(row?.pending ?? 0), processing: Number(row?.processing ?? 0),
-    failed: Number(row?.failed ?? 0), dead: Number(row?.dead ?? 0),
-    detailFailures: Number((detailResult as any)[0]?.[0]?.failures ?? 0),
-    historyFailures: Number((detailResult as any)[0]?.[0]?.historyFailures ?? 0),
-    lastCompletedAt: row?.lastCompletedAt ? String(row.lastCompletedAt) : null };
-}
-
 /** Limpeza diária: apaga trabalhos concluídos há mais de `days` dias, em
  *  lotes (DELETE … LIMIT, sem subquery) e com prazo. */
 export async function purgeCompletedDeliveries(opts: { days?: number; batch?: number; deadlineAt?: number } = {}) {
