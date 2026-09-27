@@ -8589,8 +8589,11 @@ export const appRouter = router({
         const seen = input.kind === "partner" ? await live.readPartnerVisible(input.mpId, scopedCityNames()) : await live.readParkVisible(input.mpId, scopedCityNames());
         if (!seen.available) throw new TRPCError({ code: "PRECONDITION_FAILED", message: seen.reason });
         if (!seen.data) throw new TRPCError({ code: "NOT_FOUND", message: input.kind === "partner" ? "Parceiro não encontrado" : "Parque não encontrado" });
+        // qualquer mudança da ligação (registo, automática ou "sem ligação") pede acesso às Parcerias
+        if (input.partnershipId !== undefined && !canAccess(ctx.user, "parcerias", "view")) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Ligar às Parcerias: é preciso acesso às Parcerias." });
+        }
         if (input.partnershipId) {
-          if (!canAccess(ctx.user, "parcerias", "view")) throw new TRPCError({ code: "FORBIDDEN", message: "Ligar às Parcerias: é preciso acesso às Parcerias." });
           const { sql } = await import("drizzle-orm");
           if (!(await crmRow(sql`SELECT id FROM partnerships WHERE id = ${input.partnershipId}`))) throw new TRPCError({ code: "BAD_REQUEST", message: "Registo das Parcerias não encontrado." });
         }

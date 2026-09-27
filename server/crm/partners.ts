@@ -28,7 +28,11 @@ export const NO_PARTNERSHIP = 0;
 /** Ligação às Parcerias: à mão (id), desligada (0) ou automática (null). PURA. */
 export function resolvePartnership(p: Pick<PartnerOut, "parks" | "taxNumber">, linkId: number | null | undefined, list: PartnershipRef[]) {
   if (linkId === NO_PARTNERSHIP) return null;
-  if (linkId) { const ref = list.find((x) => x.id === linkId); return ref ? { ref, how: "manual" as const } : null; }
+  if (linkId) {
+    const ref = list.find((x) => x.id === linkId);
+    if (ref) return { ref, how: "manual" as const };
+    // registo ligado à mão entretanto apagado: volta à ligação automática
+  }
   return matchPartnership(p, list);
 }
 

@@ -41,7 +41,7 @@ describe("Parceiros na BD Multipark — SQL", () => {
     expect(buildParkMonthsSql("2025-09-30 00:00:00", ["pk-x"]).sql).toContain(`b."origin"::text = 'MARKETPLACE' OR COALESCE(b."commissionAmount", 0) > 0`);
     const r = buildRecentBookingsSql({ parkIds: ["pk-x"] }).sql;
     expect(r).toContain(`b."origin"::text = 'MARKETPLACE'`);
-    expect(r).toContain(`b."checkIn" <= now()`);
+    expect(r).toContain(`b."checkIn" <= (now() AT TIME ZONE 'UTC')`);
     expect(buildRecentBookingsSql({ partnerIds: ["p1"] }).sql).not.toContain(`MARKETPLACE`);
   });
   it("sem filtro nas últimas reservas não se lê nada", () => {
@@ -147,7 +147,8 @@ describe("Ligação às Parcerias", () => {
     expect(resolvePartnership({ parks: parks1, taxNumber: null }, 2, list)).toMatchObject({ ref: { id: 2 }, how: "manual" });
     expect(resolvePartnership({ parks: parks1, taxNumber: null }, NO_PARTNERSHIP, list)).toBeNull();
     expect(resolvePartnership({ parks: parks1, taxNumber: null }, null, list)).toMatchObject({ ref: { id: 1 }, how: "id" });
-    expect(resolvePartnership({ parks: parks1, taxNumber: null }, 999, list)).toBeNull();
+    // registo manual apagado → volta à ligação automática
+    expect(resolvePartnership({ parks: parks1, taxNumber: null }, 999, list)).toMatchObject({ ref: { id: 1 }, how: "id" });
   });
 });
 

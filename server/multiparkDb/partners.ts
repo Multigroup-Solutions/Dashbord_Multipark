@@ -134,7 +134,8 @@ export function buildRecentBookingsSql(by: { partnerIds?: string[]; parkIds?: st
   if (by.parkIds?.length) conds.push(`b."parkId" IN (${by.parkIds.map((id) => p.add(id)).join(", ")})`, OUR_SALE);
   if (!conds.length) throw new Error("Sem filtro.");
   // "últimas" = já entraram (as futuras vinham primeiro)
-  conds.push(`b."checkIn" <= now()`);
+  // checkIn é UTC sem fuso: comparar com a hora UTC explícita (não depende do fuso da sessão)
+  conds.push(`b."checkIn" <= (now() AT TIME ZONE 'UTC')`);
   const lim = p.add(Math.min(Math.max(Math.floor(limit), 1), RECENT_LIMIT));
   return {
     sql: [
