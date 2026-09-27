@@ -236,7 +236,7 @@ const noonUtc = (day: string) => new Date(`${day}T12:00:00Z`);
  * cursor e só pintam a corrida de vermelho no fim (done:true) — senão um
  * passo falhado atrasava a retoma da recolha GPS.
  */
-export async function dailyOpsCron(o: { deadlineAt: number; collectOnly?: boolean; date?: string | null; cursor?: string | null; deferStepErrors?: boolean }): Promise<CronJobRun> {
+export async function dailyOpsCron(o: { deadlineAt: number; collectOnly?: boolean; date?: string | null; cursor?: string | null; deferStepErrors?: boolean; reconcile?: boolean }): Promise<CronJobRun> {
   try {
     const cur = parseDailyOpsCursor(o.cursor);
     const stepsDone = new Set(cur.s);
@@ -338,14 +338,11 @@ export async function dailyOpsCron(o: { deadlineAt: number; collectOnly?: boolea
     // todas as chamadas (também collectOnly) até verificar tudo.
     let reconciliation: { done: boolean; checked: number; remaining: number; errors: number; summary: unknown } | null = null;
     let reconciliationPending = false;
-    // Com a fonte = BD Multipark não há API a reconciliar (a BD é a origem).
-    if (!stepsDone.has("reconciliation")) {
-      let sourceIsDb = false;
-      try { sourceIsDb = (await (await import("./multiparkDb/source")).getMultiparkSourceKind()) === "db"; } catch { /* em dúvida, API */ }
-      if (sourceIsDb) {
-        reconciliation = { done: true, checked: 0, remaining: 0, errors: 0, summary: "saltada: fonte das reservas = BD Multipark" };
-        stepsDone.add("reconciliation");
-      }
+    // Reservas (Jorge, 27 set 2026): já não se vai à Multipark por iniciativa
+    // própria — a reconciliação só corre à mão (daily-ops?reconcile=1).
+    if (!stepsDone.has("reconciliation") && !o.reconcile) {
+      reconciliation = { done: true, checked: 0, remaining: 0, errors: 0, summary: "desligada: reservas só pelo webhook (correr à mão com ?reconcile=1)" };
+      stepsDone.add("reconciliation");
     }
     if (!stepsDone.has("reconciliation")) {
       if (hasTime()) {

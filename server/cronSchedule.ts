@@ -66,10 +66,12 @@ export const ZELLO_SAMEDAY_WINDOW = { from: "23:15", until: "23:55" } as const;
  * processamento imediato de cada carregamento) e google-business (em pausa
  * até a Google aprovar o acesso à API).
  */
+// Reservas (Jorge, 27 set 2026): nada vai buscar reservas à Multipark por
+// iniciativa própria — nem à API (sync recente/futuras) nem à BD deles (a
+// ficha lê-a diretamente). Fica só o que a Multipark nos manda (webhook →
+// multipark-deliveries). Os endpoints manuais continuam para uso à mão.
 export const TICK_JOBS: readonly TickJobSpec[] = [
   { key: "mail-sync", runName: "mail-sync", label: "Comunicação: sincronização do Gmail", cadence: { kind: "interval", minutes: 5 }, priority: 10, minMs: 10 * S, maxMs: 25 * S },
-  // Só com MULTIPARK_SOURCE = BD (substitui multipark-sync + multipark-future + reconciliação).
-  { key: "multipark-db-sync", runName: "multipark-db-sync", label: "Reservas, movimentos e condutores da BD Multipark", cadence: { kind: "interval", minutes: 5 }, priority: 15, minMs: 15 * S, maxMs: 40 * S, source: "db" },
   { key: "multipark-deliveries", runName: "multipark-deliveries", label: "Fila do webhook Multipark", cadence: { kind: "interval", minutes: 15 }, priority: 20, minMs: 15 * S, maxMs: 30 * S },
   { key: "ai-comms", runName: "ai-comms", label: "IA na comunicação com clientes", cadence: { kind: "interval", minutes: 15 }, priority: 30, minMs: 20 * S, maxMs: 30 * S },
   // Google por eventos (26 set 2026): o que muda vai/vem logo (push da Google,
@@ -79,10 +81,8 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   { key: "google-pending", runName: "google-pending", label: "Google: alterações por enviar/receber (repetição)", cadence: { kind: "interval", minutes: 15 }, priority: 38, minMs: 10 * S, maxMs: 25 * S },
   { key: "google-sync", runName: "google-sync", label: "Google Tarefas, Calendário, Contactos e Drive (rede de segurança)", cadence: { kind: "interval", minutes: 240 }, priority: 40, minMs: 12 * S, maxMs: 25 * S },
   { key: "extras-schedule", runName: "extras-schedule", label: "Escala automática dos extras (propor/confirmar/avisar)", cadence: { kind: "interval", minutes: 60, window: { fromHour: 8, toHour: 23 } }, priority: 45, minMs: 15 * S, maxMs: 45 * S },
-  { key: "multipark-sync", runName: "multipark-sync", label: "Sincronização de reservas (recente)", cadence: { kind: "interval", minutes: 60 }, priority: 50, minMs: 25 * S, maxMs: 45 * S, source: "api" },
   { key: "extras-auto", runName: "extras-auto", label: "Automação dos extras", cadence: { kind: "interval", minutes: 60 }, priority: 70, minMs: 12 * S, maxMs: 40 * S },
   { key: "identity-sweep", runName: "identity-sweep", label: "Ligações funcionário ↔ utilizador", cadence: { kind: "interval", minutes: 60 }, priority: 80, minMs: 10 * S, maxMs: 30 * S },
-  { key: "multipark-future", runName: "multipark-future", label: "Sincronização de reservas (futuras)", cadence: { kind: "interval", minutes: 120 }, priority: 90, minMs: 25 * S, maxMs: 45 * S, source: "api" },
   { key: "zello-sameday", runName: "zello-sameday", label: "GPS do Zello — recolha provisória do dia", cadence: { kind: "daily", from: ZELLO_SAMEDAY_WINDOW.from, until: ZELLO_SAMEDAY_WINDOW.until }, priority: 95, minMs: 15 * S, maxMs: 45 * S },
   { key: "google-watch-renew", runName: "google-watch-renew", label: "Google: renovar canais de notificação (Calendário/Drive)", cadence: { kind: "daily", from: "03:40" }, priority: 98, minMs: 15 * S, maxMs: 40 * S },
   { key: "daily-ops", runName: "daily-ops", label: "Manutenção diária + recolha GPS final (D-2)", cadence: { kind: "daily", from: "04:30" }, priority: 100, minMs: 20 * S, maxMs: 45 * S },
@@ -99,11 +99,11 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
 // ─── Cadência do mail-sync com o push do Gmail ──────────────────────────────
 
 /** Um push do Gmail nestas últimas horas = push saudável. */
-export const MAIL_PUSH_HEALTHY_HOURS = 6;
+export const MAIL_PUSH_HEALTHY_HOURS = 24;
 /** mail-sync sem push saudável (é ele que traz o email). */
 export const MAIL_SYNC_MINUTES = 5;
-/** mail-sync com push saudável: só rede de segurança (e renovação do watch, que expira aos 7 dias). */
-export const MAIL_SYNC_SAFETY_NET_MINUTES = 60;
+/** mail-sync com push saudável: 1×/dia, só rede de segurança e renovação do watch (expira aos 7 dias; renova-se com < 24 h). */
+export const MAIL_SYNC_SAFETY_NET_MINUTES = 24 * 60;
 
 /**
  * O push do Gmail está saudável? Interruptor MAIL_PUSH ligado, tópico

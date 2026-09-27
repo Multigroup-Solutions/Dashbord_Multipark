@@ -37,9 +37,9 @@ describe("intervalos", () => {
     const ran = st("mail-sync", { lastStartedAt: at("2026-09-26T10:00:05Z"), lastStatus: "ok" });
     expect(isDue(s, ran, at("2026-09-26T10:04:59Z")).due).toBe(false);
     expect(isDue(s, ran, at("2026-09-26T10:05:01Z")).due).toBe(true);
-    const hourly = st("multipark-sync", { lastStartedAt: at("2026-09-26T10:59:00Z"), lastStatus: "ok" });
-    expect(isDue(spec("multipark-sync"), hourly, at("2026-09-26T11:00:30Z")).due).toBe(true);
-    expect(isDue(spec("multipark-sync"), hourly, at("2026-09-26T10:59:50Z")).due).toBe(false);
+    const hourly = st("extras-auto", { lastStartedAt: at("2026-09-26T10:59:00Z"), lastStatus: "ok" });
+    expect(isDue(spec("extras-auto"), hourly, at("2026-09-26T11:00:30Z")).due).toBe(true);
+    expect(isDue(spec("extras-auto"), hourly, at("2026-09-26T10:59:50Z")).due).toBe(false);
   });
   it("extras-schedule: de hora a hora só entre as 08h e as 23h de Lisboa (verão e inverno)", () => {
     const s = spec("extras-schedule");
@@ -252,12 +252,12 @@ describe("plano do tick, orçamento e lease", () => {
   it("primeiro os que retomam, depois por prioridade", () => {
     const t = at("2026-09-26T10:00:30Z");
     const states = new Map<string, JobState>([
-      ["multipark-future", st("multipark-future", { lastStatus: "partial", lastStartedAt: t - 5 * MIN, resumeCursor: wrapCursor(null, "14") })],
+      ["extras-auto", st("extras-auto", { lastStatus: "partial", lastStartedAt: t - 5 * MIN, resumeCursor: wrapCursor(null, "14") })],
     ]);
     const plan = planTick(TICK_JOBS, states, t);
-    expect(plan[0]).toMatchObject({ key: "multipark-future", resume: true });
+    expect(plan[0]).toMatchObject({ key: "extras-auto", resume: true });
     const rest = plan.slice(1).map((p) => p.key);
-    expect(rest.indexOf("mail-sync")).toBeLessThan(rest.indexOf("multipark-sync"));
+    expect(rest.indexOf("mail-sync")).toBeLessThan(rest.indexOf("identity-sweep"));
     expect(rest).not.toContain("knowledge-sync");
     expect(rest).not.toContain("google-business");
   });
@@ -287,14 +287,16 @@ describe("registo dos trabalhos", () => {
     const c = Object.fromEntries(TICK_JOBS.map((j) => [j.key, describeCadence(j.cadence)]));
     expect(c).toMatchObject({
       "mail-sync": "a cada 5 min", "multipark-deliveries": "a cada 15 min", "ai-comms": "a cada 15 min", "google-sync": "a cada 4 h", "google-pending": "a cada 15 min", "google-watch-renew": "diário a partir das 03:40",
-      "multipark-sync": "de hora a hora", "extras-auto": "de hora a hora", "identity-sweep": "de hora a hora",
-      "extras-schedule": "de hora a hora (08h–23h)", "multipark-future": "a cada 2 h",
+      "extras-auto": "de hora a hora", "identity-sweep": "de hora a hora",
+      "extras-schedule": "de hora a hora (08h–23h)",
       "daily-ops": "diário a partir das 04:30", "zello-sameday": "diário das 23:15 às 23:55", "rh-docs-weekly": "semanal, segunda a partir das 04:45", "ops-briefing": "diário a partir das 07:30", "web-analytics": "diário a partir das 09:00",
       "google-ads": "diário a partir das 05:45", "meta-ads": "diário a partir das 05:45",
       "google-ads-monthly": "mensal, dia 2 a partir das 05:45", "meta-ads-monthly": "mensal, dia 2 a partir das 05:45",
     });
     expect(c["evaluation-recompute"]).toContain("depois de daily-ops");
     expect(TICK_JOBS.map((j) => j.key)).not.toEqual(expect.arrayContaining(["knowledge-sync"]));
+    // Reservas só pelo webhook: nada vai buscar reservas à Multipark (API ou BD).
+    for (const k of ["multipark-sync", "multipark-future", "multipark-db-sync"]) expect(TICK_JOBS.map((j) => j.key)).not.toContain(k);
     // Sem IMAP: todo o email entra pela sincronização do Gmail.
     expect(TICK_JOBS.map((j) => j.key)).not.toContain("email-inbound");
   });

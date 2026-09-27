@@ -251,25 +251,26 @@ describe("envio de email pela API do Gmail (serviço único)", () => {
 
 describe("cadência do mail-sync com o push do Gmail", () => {
   const now = Date.UTC(2026, 8, 26, 10, 20);
-  it("push saudável = interruptor + tópico + push nas últimas 6 h", () => {
+  it("push saudável = interruptor + tópico + push nas últimas 24 h", () => {
     expect(mailPushHealthy({ flagOn: true, topicConfigured: true, lastPushAt: now - 30 * 60_000, now })).toBe(true);
     expect(mailPushHealthy({ flagOn: false, topicConfigured: true, lastPushAt: now - 60_000, now })).toBe(false);
     expect(mailPushHealthy({ flagOn: true, topicConfigured: false, lastPushAt: now - 60_000, now })).toBe(false);
     expect(mailPushHealthy({ flagOn: true, topicConfigured: true, lastPushAt: null, now })).toBe(false);
-    expect(mailPushHealthy({ flagOn: true, topicConfigured: true, lastPushAt: now - 7 * 3_600_000, now })).toBe(false);
+    expect(mailPushHealthy({ flagOn: true, topicConfigured: true, lastPushAt: now - 25 * 3_600_000, now })).toBe(false);
+    expect(mailPushHealthy({ flagOn: true, topicConfigured: true, lastPushAt: now - 7 * 3_600_000, now })).toBe(true);
     // Uma conta sem watch em dia só seria lida pelo agendador → mantém os 5 min.
     expect(mailPushHealthy({ flagOn: true, topicConfigured: true, lastPushAt: now - 60_000, now, allWatched: false })).toBe(false);
   });
-  it("5 min sem push; de hora a hora com push (e volta aos 5 min quando o push cala)", () => {
+  it("5 min sem push; 1×/dia com push (e volta aos 5 min quando o push cala)", () => {
     const off = effectiveTickJobs(TICK_JOBS, { mailPushHealthy: false }).find((j) => j.key === "mail-sync")!;
     const on = effectiveTickJobs(TICK_JOBS, { mailPushHealthy: true }).find((j) => j.key === "mail-sync")!;
     expect(describeCadence(off.cadence)).toBe(`a cada ${MAIL_SYNC_MINUTES} min`);
-    expect(describeCadence(on.cadence)).toBe("de hora a hora");
-    expect(MAIL_SYNC_SAFETY_NET_MINUTES).toBe(60);
+    expect(describeCadence(on.cadence)).toBe("a cada 24 h");
+    expect(MAIL_SYNC_SAFETY_NET_MINUTES).toBe(24 * 60);
     const st = { ...emptyState("mail-sync"), lastStartedAt: now - 10 * 60_000, lastStatus: "ok" as const };
     expect(isDue(off, st, now).due).toBe(true);   // outra fatia de 5 min
-    expect(isDue(on, st, now).due).toBe(false);   // mesma hora
-    expect(isDue(on, { ...st, lastStartedAt: now - 61 * 60_000 }, now).due).toBe(true);
+    expect(isDue(on, st, now).due).toBe(false);   // mesmo dia
+    expect(isDue(on, { ...st, lastStartedAt: now - 25 * 3_600_000 }, now).due).toBe(true);
     // Os outros trabalhos não mudam.
     expect(effectiveTickJobs(TICK_JOBS, { mailPushHealthy: true }).filter((j) => j.key !== "mail-sync")).toEqual(TICK_JOBS.filter((j) => j.key !== "mail-sync"));
   });

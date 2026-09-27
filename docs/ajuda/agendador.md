@@ -30,13 +30,12 @@ Pronto. Não é preciso mais nada no GitHub.
 
 | Tarefa | Quando |
 | --- | --- |
-| Gmail (Comunicação — todo o email recebido, pipelines por alias, renovação do push) | de 5 em 5 min; **de hora a hora** (rede de segurança) quando o push do Gmail está ligado (MAIL_PUSH) e chegou um push nas últimas 6 h — sem push volta sozinho aos 5 min |
+| Gmail (Comunicação — todo o email recebido, pipelines por alias, renovação do push) | de 5 em 5 min; **1× por dia** (rede de segurança e renovação do push) quando o push do Gmail está ligado (MAIL_PUSH) e chegou um push nas últimas 24 h — sem push volta sozinho aos 5 min |
 | Fila do webhook Multipark · IA na comunicação · Google: alterações por enviar/receber que falharam (repetição) | de 15 em 15 min |
 | Google Tarefas/Calendário/Contactos/Drive — sincronização completa (rede de segurança; o resto é em tempo real, ver Ajuda → Google em tempo real) | de 4 em 4 horas |
 | Google: renovar os canais de notificação (Calendário e Drive) | 1×/dia a partir das 03:40 |
-| Reservas recentes · automação dos extras · ligações funcionário ↔ utilizador | de hora a hora |
+| Automação dos extras · ligações funcionário ↔ utilizador | de hora a hora |
 | Escala automática dos extras (propor às 14h, confirmar às 18h, por omissão) | de hora a hora, das 08h às 23h |
-| Reservas futuras | de 2 em 2 horas |
 | GPS do Zello — recolha provisória do próprio dia | 1×/dia entre as 23:15 e as 23:55 (se falhar, fica para a final) |
 | Manutenção diária + recolha GPS do Zello final (D-2) | 1×/dia a partir das 04:30 |
 | RH — regra documental dos extras (documentos em falta) | 1×/semana, segunda a partir das 04:45 |
@@ -44,6 +43,8 @@ Pronto. Não é preciso mais nada no GitHub.
 | Avaliação (4 semanas) | 1×/dia, depois da manutenção diária (o mais tardar às 06:00) |
 | Google Ads e Meta Ads | 1×/dia a partir das 05:45 (última semana) e no dia 2 de cada mês (mês anterior) |
 | Web & SEO | 1×/dia a partir das 09:00 (ou da hora escolhida nas Definições, se for mais tarde) |
+
+**Reservas**: já não se vai buscar nada à Multipark por iniciativa própria (nem à API nem à BD deles). Entram só pelo **webhook** da Multipark (fila de 15 em 15 min para repetir o que falhou). A sincronização de reservas recentes/futuras, a da BD Multipark e a reconciliação ficam só para correr à mão.
 
 Fora da agenda: **Base de conhecimento** (atualiza-se quando a Google avisa que um ficheiro das pastas mudou e na verificação de 4 em 4 horas do Google; o botão **Sincronizar agora** continua) e **Google Business Profile** (só à mão, em pausa até a Google aprovar o acesso).
 

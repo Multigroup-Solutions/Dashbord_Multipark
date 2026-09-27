@@ -380,24 +380,20 @@ describe("interruptor MULTIPARK_SOURCE (omissão = API → nada muda em produç�
     expect(normalizeFlagEnv("EXTRAS_AUTOMATION", "db")).toBe("db");
     expect(normalizeFlagEnv("MULTIPARK_SOURCE", undefined)).toBeUndefined();
   });
-  it("agendador com a fonte = API: exatamente os trabalhos de antes", () => {
-    const before = ["mail-sync", "multipark-deliveries", "ai-comms", "google-pending", "google-sync", "extras-schedule", "multipark-sync", "extras-auto", "identity-sweep", "multipark-future", "zello-sameday", "google-watch-renew", "daily-ops", "rh-docs-weekly", "ops-briefing", "evaluation-recompute", "google-ads", "google-ads-monthly", "meta-ads", "meta-ads-monthly", "web-analytics"];
-    expect(activeTickJobs(TICK_JOBS, "api").map((j) => j.key)).toEqual(before);
-    const db = activeTickJobs(TICK_JOBS, "db").map((j) => j.key);
-    expect(db).toContain("multipark-db-sync");
-    expect(db).toContain("multipark-deliveries"); // a fila do webhook fica até o Jorge a desligar
-    expect(db).not.toContain("multipark-sync");
-    expect(db).not.toContain("multipark-future");
-    const spec = TICK_JOBS.find((j) => j.key === "multipark-db-sync")!;
-    expect(spec.cadence).toEqual({ kind: "interval", minutes: 5 });
-    expect(spec.maxMs).toBeLessThan(50_000);
+  it("agendador: nada vai buscar reservas à Multipark, seja qual for a fonte", () => {
+    for (const src of ["api", "db"] as const) {
+      const keys = activeTickJobs(TICK_JOBS, src).map((j) => j.key);
+      expect(keys).not.toContain("multipark-sync");
+      expect(keys).not.toContain("multipark-future");
+      expect(keys).not.toContain("multipark-db-sync");
+      expect(keys).toContain("multipark-deliveries"); // fica só o que a Multipark manda (webhook)
+    }
   });
-  it("Estado do sistema: com a API, a lista de crons é a mesma", () => {
-    expect(cronJobsForSource("api")).toBe(CRON_JOBS);
-    const db = cronJobsForSource("db");
-    expect(db.find((j) => j.name === "multipark-db-sync")?.intervalMinutes).toBe(5);
-    expect(db.find((j) => j.name === "multipark-sync")?.intervalMinutes).toBeNull();
-    expect(CRON_JOBS.find((j) => j.name === "multipark-db-sync")?.intervalMinutes).toBeNull();
+  it("Estado do sistema: nenhum sync de reservas é esperado (nunca aparecem \"parados\")", () => {
+    for (const src of ["api", "db"] as const) {
+      const jobs = cronJobsForSource(src);
+      for (const k of ["multipark-sync", "multipark-future", "multipark-db-sync"]) expect(jobs.find((j) => j.name === k)?.intervalMinutes).toBeNull();
+    }
   });
   it("teste de ligação só para super_admin", () => {
     expect(integrationTestSuperAdminOnly("multipark_db")).toBe(true);
