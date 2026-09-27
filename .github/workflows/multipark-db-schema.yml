@@ -11,16 +11,19 @@ name: BD Multipark — descobrir esquema (manual)
 #  - modo "diferencas": compara as duas BD por inteiro (só leitura, não grava)
 #    → artefacto `multipark-db-diferencas` (diferencas.json). "foco" = um dia
 #    (Lisboa) com tudo o que foi cancelado. Sem dados pessoais do cliente.
+#  - modo "perfil": o que cada tabela/coluna guarda de facto + catálogos de
+#    negócio → artefacto `multipark-db-perfil` (perfil.json). Chama o endpoint
+#    várias vezes até cobrir todas as tabelas. Valores pessoais nunca saem.
 # Ver docs/multipark-db/README.md.
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "schema = descobrir esquema; probe = sonda do mapeamento; diferencas = comparar as duas BD (só leitura)"
+        description: "schema = descobrir esquema; probe = sonda do mapeamento; diferencas = comparar as duas BD (só leitura); perfil = o que cada coluna guarda"
         required: false
         default: "schema"
         type: choice
-        options: [schema, probe, diferencas]
+        options: [schema, probe, diferencas, perfil]
       schema:
         description: "(schema) Esquemas a ler, separados por vírgula (vazio = todos)"
         required: false
@@ -38,7 +41,7 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 12
     steps:
       - name: Chamar o endpoint
         env:
@@ -52,6 +55,26 @@ jobs:
           set -euo pipefail
           test -n "$CRON_SECRET"
           mkdir -p out
+          if [ "$MODE" = "perfil" ]; then
+            # Várias chamadas (cada uma com ~45 s de orçamento) até não sobrarem tabelas.
+            call() {
+              c=$(curl -sS -m 90 -w '%{http_code}' -o "$2" -H "Authorization: Bearer $CRON_SECRET" "$1") || { echo "::error::curl falhou"; exit 1; }
+              if [ "$c" -lt 200 ] || [ "$c" -ge 300 ]; then cat "$2"; echo "::error::endpoint devolveu HTTP $c"; exit 1; fi
+            }
+            call "$APP_URL/api/cron/multipark-db-profile?catalogos=1" out/p0.json
+            cp out/p0.json out/perfil.json
+            i=0
+            while [ "$(jq '.pendentes | length' out/perfil.json)" -gt 0 ] && [ $i -lt 15 ]; do
+              i=$((i+1))
+              t=$(jq -r '.pendentes | join(",")' out/perfil.json | jq -sRr @uri)
+              call "$APP_URL/api/cron/multipark-db-profile?tables=$t" out/p$i.json
+              jq -s '.[0] * {tabelas: (.[0].tabelas + .[1].tabelas), pendentes: .[1].pendentes}' out/perfil.json out/p$i.json > out/m.json
+              mv out/m.json out/perfil.json
+            done
+            rm -f out/p*.json
+            jq '{tabelas: (.tabelas | length), pendentes, erros: [.tabelas | to_entries[] | select(.value.erro) | .key]}' out/perfil.json
+            exit 0
+          fi
           if [ "$MODE" = "probe" ]; then
             file=out/probe.json
             url="$APP_URL/api/cron/multipark-db-probe?sample=$(printf '%s' "${SAMPLE:-10}" | tr -cd '0-9')"
