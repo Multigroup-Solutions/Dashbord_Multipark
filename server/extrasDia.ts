@@ -1,9 +1,12 @@
 /**
  * Extras Dia — Daily Forecast & Driver Allocation
  *
- * Lisbon-only forecast based on whatever bookings are currently in the
- * `multipark_bookings` table (no live API calls). City filter is permissive
- * (LIKE '%lisb%') so it matches "Lisboa", "Lisbon", "LISBON" etc.
+ * Fonte das reservas (fase 5B): LIDAS AO VIVO da BD da Multipark
+ * (server/multiparkDb/extrasBookings.ts — parques nossos da cidade, sem
+ * canceladas). Se a BD não estiver configurada/disponível, volta à cópia
+ * `multipark_bookings` (como antes) e a página mostra um aviso
+ * (`bookingSource` / `bookingSourceNotice`). Com a leitura ao vivo o trabalho
+ * `multipark-future` deixa de ser preciso para esta página.
  *
  *   - Hourly check-ins / check-outs for tomorrow (or chosen base date + 1)
  *   - Lavagem (wash) counts for context days
@@ -22,6 +25,8 @@ import { multiparkBookings, extrasDiaAssignments, employees, projects } from "..
 import { getBookingTryAllParks } from "./multipark";
 import { DEFAULT_CARS_PER_HOUR } from "../shared/appSettings";
 import { FALLBACK_CARS_PER_HOUR, MAX_SHIFT_HOURS as SHIFT_MAX, MIN_SHIFT_HOURS as SHIFT_MIN, carsPerHourFor, driversNeededFor } from "../shared/extrasSchedule";
+import { lisbonWallTimeUtcMs } from "../shared/lisbonDay";
+import type { LiveExtrasBooking } from "./multiparkDb/extrasBookings";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -338,7 +343,11 @@ export interface ExtrasDiaForecast {
   /** Capacidade usada nesta previsão (carros/hora por condutor, da cidade). */
   carsPerHourPerDriver: number;
   source: "db";
-  parksQueried: string[]; // distinct parkName values found
+  /** De onde vieram as reservas: BD da Multipark ao vivo, ou a nossa cópia (recurso). */
+  bookingSource: BookingSource;
+  /** Aviso quando se usou a cópia (BD da Multipark indisponível / não configurada). */
+  bookingSourceNotice: string | null;
+  parksQueried: string[]; // parques da cidade (ao vivo) ou distinct parkName (cópia)
   parksFailed: { park: string; error: string }[]; // always empty for DB mode (kept for UI compat)
   hourly: HourlyRow[];
   totals: {
@@ -376,7 +385,7 @@ export interface ExtrasDiaForecast {
   };
 }
 
-type BookingRow = {
+export type BookingRow = {
   id: number;
   externalId: string;
   bookingNumber: string | null;
@@ -469,6 +478,72 @@ async function fetchBookingsInRange(
     checkInTime: null,
     checkOutTime: null,
   }));
+}
+
+// ─── Reservas ao vivo (BD da Multipark) com recurso à cópia ──────────────────
+
+export type BookingSource = "multipark-db" | "copy";
+
+/** "AAAA-MM-DD HH:MM:SS" (hora de parede de Lisboa) → instante UTC (ms). PURA. */
+export function lisbonWallToUtcMs(wall: string): number {
+  const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/.exec(wall);
+  if (!m) throw new Error(`Hora inválida: ${wall}`);
+  return lisbonWallTimeUtcMs(m[1], Number(m[2])) + Number(m[3]) * 60_000 + Number(m[4] ?? 0) * 1000;
+}
+
+/**
+ * Reserva lida ao vivo → a linha que o resto deste módulo já sabe tratar
+ * (horas em hora de parede de Lisboa, extras em rawJson para as lavagens).
+ * `enrichedAt` preenchido: o tipo de entrega já vem da BD (não se vai à API). PURA.
+ */
+export function liveToBookingRow(b: LiveExtrasBooking, index: number): BookingRow {
+  return {
+    id: -(index + 1),
+    externalId: b.externalId,
+    bookingNumber: b.bookingNumber,
+    clientFirstName: b.clientFirstName,
+    clientLastName: b.clientLastName,
+    licensePlate: b.licensePlate,
+    checkIn: utcToLocal(b.checkInUtc),
+    checkOut: utcToLocal(b.checkOutUtc),
+    checkInTime: null,
+    checkOutTime: null,
+    rawJson: JSON.stringify({ extraServices: b.extraNames.map((name) => ({ name })) }),
+    parkName: b.parkName,
+    city: b.city,
+    deliveryType: b.deliveryType,
+    enrichedAt: "bd-multipark",
+    spotType: b.spotType,
+    extrasTotal: b.extrasTotal ? String(b.extrasTotal) : null,
+  };
+}
+
+/** Linhas com a entrada/saída (hora de Lisboa) em [start, end). PURA. */
+export function filterRowsByField(rows: BookingRow[], field: "checkIn" | "checkOut", startInclusive: Date, endExclusive: Date): BookingRow[] {
+  const s = toMysqlDateTime(startInclusive);
+  const e = toMysqlDateTime(endExclusive);
+  return rows.filter((r) => {
+    const v = field === "checkIn" ? r.checkIn : r.checkOut;
+    return v != null && v >= s && v < e;
+  });
+}
+
+type LiveWindow = { ok: true; rows: BookingRow[]; parks: string[] } | { ok: false; notice: string };
+
+/**
+ * Reservas da cidade com entrada ou saída na janela [start, end) (horas de
+ * parede de Lisboa), lidas ao vivo. `ok:false` → usar a cópia (com aviso).
+ */
+async function liveBookingsInWindow(startInclusive: Date, endExclusive: Date, city: ExtraCity): Promise<LiveWindow> {
+  try {
+    const { getLiveExtrasBookings } = await import("./multiparkDb/extrasBookings");
+    const r = await getLiveExtrasBookings(city, lisbonWallToUtcMs(toMysqlDateTime(startInclusive)), lisbonWallToUtcMs(toMysqlDateTime(endExclusive)));
+    if (!r.available) return { ok: false, notice: `${r.reason} A usar a cópia das reservas (pode estar desatualizada).` };
+    if (r.data.truncated) console.warn(`[extrasDia] leitura ao vivo cortada (${r.data.bookings.length} reservas) — ${city}`);
+    return { ok: true, rows: r.data.bookings.map(liveToBookingRow), parks: r.data.parks };
+  } catch (err: any) {
+    return { ok: false, notice: `Leitura ao vivo falhou (${String(err?.message ?? err).slice(0, 80)}). A usar a cópia das reservas.` };
+  }
 }
 
 // ─── Assignments (gestor escala pessoas a turnos) ────────────────────────────
@@ -847,7 +922,8 @@ export async function getBookingsInSlot(
   const dayEnd = addDays(dayStart, 1);
   const hourLocal = hour % 24;
   const field = type === "checkin" ? "checkIn" : "checkOut";
-  const rows = await fetchBookingsInRange(field, dayStart, dayEnd, city);
+  const live = await liveBookingsInWindow(dayStart, dayEnd, city);
+  const rows = live.ok ? filterRowsByField(live.rows, field, dayStart, dayEnd) : await fetchBookingsInRange(field, dayStart, dayEnd, city);
 
   const slotStart = slot * SLOT_MINUTES;
   const slotEnd = slotStart + SLOT_MINUTES;
@@ -1033,12 +1109,22 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
   // para o turno da noite cobrir até às 03:00 do dia seguinte.
   const targetEndPlus3h = new Date(targetStart.getTime() + FORECAST_HOURS * 60 * 60 * 1000);
 
-  const [targetCheckins, baseCheckouts, targetCheckouts, nextCheckouts] = await Promise.all([
-    fetchBookingsInRange("checkIn", targetStart, targetEndPlus3h, city),
-    fetchBookingsInRange("checkOut", baseStart, targetStart, city),
-    fetchBookingsInRange("checkOut", targetStart, targetEndPlus3h, city),
-    fetchBookingsInRange("checkOut", nextStart, nextEnd, city),
-  ]);
+  // Uma só leitura ao vivo cobre as 3 janelas (dia base → fim do dia D+2);
+  // sem a BD da Multipark, as 4 leituras de sempre na cópia.
+  const live = await liveBookingsInWindow(baseStart, nextEnd, city);
+  const [targetCheckins, baseCheckouts, targetCheckouts, nextCheckouts] = live.ok
+    ? [
+        filterRowsByField(live.rows, "checkIn", targetStart, targetEndPlus3h),
+        filterRowsByField(live.rows, "checkOut", baseStart, targetStart),
+        filterRowsByField(live.rows, "checkOut", targetStart, targetEndPlus3h),
+        filterRowsByField(live.rows, "checkOut", nextStart, nextEnd),
+      ]
+    : await Promise.all([
+        fetchBookingsInRange("checkIn", targetStart, targetEndPlus3h, city),
+        fetchBookingsInRange("checkOut", baseStart, targetStart, city),
+        fetchBookingsInRange("checkOut", targetStart, targetEndPlus3h, city),
+        fetchBookingsInRange("checkOut", nextStart, nextEnd, city),
+      ]);
 
   const hourly: HourlyRow[] = Array.from({ length: FORECAST_HOURS }, (_, h) => ({
     hour: h,
@@ -1211,7 +1297,9 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
     cityId: city,
     carsPerHourPerDriver: carsPerHour,
     source: "db",
-    parksQueried: Array.from(allParks).sort(),
+    bookingSource: live.ok ? "multipark-db" : "copy",
+    bookingSourceNotice: live.ok ? null : live.notice,
+    parksQueried: live.ok ? live.parks : Array.from(allParks).sort(),
     parksFailed: [],
     hourly,
     totals: {

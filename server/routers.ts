@@ -7604,6 +7604,18 @@ export const appRouter = router({
         requireAccess(ctx.user, "extras_dia", "view");
         return getBookingsInSlot(input.date, input.hour, input.slot, input.type, input.city ?? "lisbon");
       }),
+
+    // "Pressão": 60 dias da BD Multipark agregados pelo trabalho extras-pressure
+    // (ops_pressure_stats). Só lê a nossa BD; âmbito de cidade do utilizador.
+    pressure: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "extras_dia", "view");
+      const { getPressureView } = await import("./extrasPressure");
+      const { groupAllowedForCities } = await import("../shared/extrasPressure");
+      const { matchCityKey } = await import("../shared/city");
+      const names = scopedCityNames();
+      const keys = names === undefined ? null : names.map((n) => matchCityKey(n)).filter((k): k is NonNullable<typeof k> => !!k);
+      return getPressureView((key) => groupAllowedForCities(key, keys));
+    }),
   }),
 
   // ── DISPONIBILIDADE SEMANAL DOS EXTRAS ────────────────────────────────────

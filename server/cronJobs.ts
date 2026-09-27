@@ -531,6 +531,22 @@ export async function extrasAutoCron(o: { deadlineAt: number; from?: string | nu
   } catch (err) { return fail(err); }
 }
 
+/**
+ * "Pressão" do Extras-Dia: 60 dias da BD Multipark agregados por grupo de
+ * parques (um grupo de cada vez; `cursor` retoma no grupo seguinte). Sem
+ * DATABASE_URL_MULTIPARK → nota (ok, saltado); grupos que falham → vermelho.
+ */
+export async function extrasPressureCron(o: { deadlineAt: number; cursor?: string | null }): Promise<CronJobRun> {
+  try {
+    const { runExtrasPressure } = await import("./extrasPressure");
+    const r = await runExtrasPressure({ deadlineAt: o.deadlineAt - 3_000, cursor: o.cursor ?? null });
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: r.done, cursor: r.cursor };
+  } catch (err) {
+    console.error("[cron extras-pressure] falhou:", msg(err, 200));
+    return fail(err);
+  }
+}
+
 /** Briefing diário por cidade, anomalias e (à segunda) relatórios semanais. Idempotente. */
 export async function opsBriefingCron(o: { deadlineAt: number; force?: boolean }): Promise<CronJobRun> {
   try {

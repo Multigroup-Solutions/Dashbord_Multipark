@@ -39,12 +39,13 @@ Pronto. Não é preciso mais nada no GitHub.
 | GPS do Zello — recolha provisória do próprio dia | 1×/dia entre as 23:15 e as 23:55 (se falhar, fica para a final) |
 | Manutenção diária + recolha GPS do Zello final (D-2) | 1×/dia a partir das 04:30 |
 | RH — regra documental dos extras (documentos em falta) | 1×/semana, segunda a partir das 04:45 |
+| Extras-Dia: pressão (últimos 60 dias da BD da Multipark, por grupo de parques × dia da semana × hora; guarda o resultado na nossa BD para o separador **Pressão**) | 1×/dia a partir das 04:45 (um grupo de cada vez; se não couber, continua no tick seguinte). À mão: `/api/cron/extras-pressure` |
 | Briefing diário e relatórios de segunda | 1×/dia a partir das 07:30 |
 | Avaliação (4 semanas; lê os movimentos em tempo real da BD da Multipark) | 1×/dia, depois da manutenção diária (o mais tardar às 06:00) |
 | Google Ads e Meta Ads | 1×/dia a partir das 05:45 (última semana) e no dia 2 de cada mês (mês anterior) |
 | Web & SEO | 1×/dia a partir das 09:00 (ou da hora escolhida nas Definições, se for mais tarde) |
 
-**Reservas**: já não se vai buscar nada à Multipark por iniciativa própria (nem à API nem à BD deles). Entram só pelo **webhook** da Multipark (fila de 15 em 15 min para repetir o que falhou). A sincronização de reservas recentes/futuras, a da BD Multipark e a reconciliação ficam só para correr à mão.
+**Reservas**: já não se vai buscar nada à Multipark por iniciativa própria (nem à API nem à BD deles). Entram só pelo **webhook** da Multipark (fila de 15 em 15 min para repetir o que falhou). A sincronização de reservas recentes/futuras, a da BD Multipark e a reconciliação ficam só para correr à mão. O **Extras-Dia** já lê as reservas ao vivo da BD da Multipark, por isso deixou de precisar da sincronização das futuras.
 
 Fora da agenda: **Base de conhecimento** (atualiza-se quando a Google avisa que um ficheiro das pastas mudou e na verificação de 4 em 4 horas do Google; o botão **Sincronizar agora** continua) e **Google Business Profile** (só à mão, em pausa até a Google aprovar o acesso).
 

@@ -57,6 +57,7 @@ export const JOB_RUNNERS: Record<string, JobRunner> = {
   "crm-pro-sync": async (o) => (await import("./cronJobs")).crmProSyncCron(o),
   "multipark-future": async (o) => (await import("./cronJobs")).multiparkFutureCron({ deadlineAt: o.deadlineAt, offsetDays: offset(o.cursor) }),
   "zello-sameday": async (o) => (await import("./cronJobs")).zelloSameDayCron(o),
+  "extras-pressure": async (o) => (await import("./cronJobs")).extrasPressureCron(o),
   "rh-docs-weekly": async () => (await import("./cronJobs")).rhDocsWeeklyCron(),
   "daily-ops": async (o) => (await import("./cronJobs")).dailyOpsCron({ deadlineAt: o.deadlineAt, cursor: o.cursor, deferStepErrors: true }),
   "ops-briefing": async (o) => (await import("./cronJobs")).opsBriefingCron(o),
