@@ -201,6 +201,42 @@ export async function identitySweepCron(): Promise<CronJobRun> {
   } catch (err) { return fail(err); }
 }
 
+// ─── CRM (fichas de cliente) ─────────────────────────────────────────────────
+
+/**
+ * Fichas de cliente a partir das reservas, por lotes (cursor próprio em
+ * multipark_db_cursors, stream "crm-bookings"). A 1.ª carga leva várias
+ * passagens; `done:false` pede ao agendador para continuar logo.
+ */
+export async function crmSyncCron(o: { deadlineAt: number; restart?: boolean }): Promise<CronJobRun> {
+  try {
+    const { runCrmSync } = await import("./crm/sync");
+    const r = await runCrmSync({ deadlineAt: o.deadlineAt, restart: o.restart });
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: r.done, cursor: r.done ? null : "continuar" };
+  } catch (err) {
+    console.error("[cron crm-sync] falhou:", msg(err, 200));
+    return fail(err);
+  }
+}
+
+/** Sugestões para juntar fichas (telefone, matrícula, NIF, email partilhados). */
+export async function crmSuggestionsCron(o: { deadlineAt: number }): Promise<CronJobRun> {
+  try {
+    const { getDb } = await import("./db");
+    const db = await getDb();
+    if (!db) return { httpStatus: 503, body: { ok: false, error: "BD indisponível" } };
+    // "próxima reserva" que já passou (não veio / sem mudança na reserva): recalcular
+    const { recomputeStaleUpcoming } = await import("./crm/sync");
+    const stale = await recomputeStaleUpcoming(db, { deadlineAt: o.deadlineAt - 30_000 });
+    const { refreshSuggestions } = await import("./crm/merge");
+    const r = await refreshSuggestions(db, { deadlineAt: o.deadlineAt });
+    return { httpStatus: 200, body: { ok: true, ranAt: ranAt(), staleRecomputed: stale, ...r }, done: true };
+  } catch (err) {
+    console.error("[cron crm-suggestions] falhou:", msg(err, 200));
+    return fail(err);
+  }
+}
+
 // ─── Manutenção diária + recolha GPS (daily-ops) ─────────────────────────────
 
 /** Folga mínima para arrancar um passo novo do daily-ops. */

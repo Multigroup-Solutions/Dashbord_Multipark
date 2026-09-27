@@ -184,6 +184,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0200").then(m => ({ s: m.MIGRATION_0200_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0200 })),
       import("./migrations/migration_0205").then(m => ({ s: m.MIGRATION_0205_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0205 })),
       import("./migrations/migration_0210").then(m => ({ s: m.MIGRATION_0210_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0210 })),
+      import("./migrations/migration_0215").then(m => ({ s: m.MIGRATION_0215_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0215 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -210,6 +211,13 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
     if (r.status === "applied" && r.patches.length) console.log("[Schema ensure] 0210 caixas de email:", r.patches.map((p) => `${p.mailboxKey} (${p.changes.join("; ")})`).join(" · ").slice(0, 500));
   } catch (err: any) {
     console.warn("[Schema ensure] 0210 (dados das caixas de email) falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+  }
+  try {
+    const { runMigration0215Collation } = await import("./migrations/migration_0215");
+    const converted = await runMigration0215Collation(db as any);
+    if (converted.length) console.log("[Schema ensure] 0215 CRM: collation igual à de multipark_bookings em", converted.join(", "));
+  } catch (err: any) {
+    console.warn("[Schema ensure] 0215 (collation do CRM) falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
   }
 }
 
