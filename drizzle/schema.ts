@@ -1,4 +1,4 @@
-import { mysqlTable, mysqlSchema, AnyMySqlColumn, bigint, int, varchar, text, timestamp, datetime, index, uniqueIndex, decimal, mysqlEnum, tinyint, boolean, date, json, mediumtext, primaryKey, char } from "drizzle-orm/mysql-core"
+import { mysqlTable, mysqlSchema, AnyMySqlColumn, bigint, int, varchar, text, timestamp, datetime, index, uniqueIndex, decimal, mysqlEnum, tinyint, boolean, date, json, mediumtext, longtext, primaryKey, char } from "drizzle-orm/mysql-core"
 import { sql } from "drizzle-orm"
 
 export const activityLogs = mysqlTable("activity_logs", {
@@ -3305,6 +3305,213 @@ export const crmContacts = mysqlTable("crm_contacts", {
 	index("idx_crm_contacts_email").on(table.email),
 	index("idx_crm_contacts_phone").on(table.phoneE164),
 	index("idx_crm_contacts_project").on(table.projectId),
+]);
+
+// Migração 0215 — CRM de clientes, fase 1 (server/crm/*, docs/crm/desenho-crm.md).
+// `crm_clients.id` é o nosso número de cliente.
+export const crmClients = mysqlTable("crm_clients", {
+	id: int().autoincrement().primaryKey(),
+	kind: varchar({ length: 16 }).default('person').notNull(),
+	status: varchar({ length: 16 }).default('active').notNull(),
+	mergedInto: int(),
+	displayName: varchar({ length: 255 }),
+	firstName: varchar({ length: 128 }),
+	lastName: varchar({ length: 128 }),
+	photoUrl: varchar({ length: 1024 }),
+	primaryEmail: varchar({ length: 320 }),
+	primaryPhone: varchar({ length: 32 }),
+	nif: varchar({ length: 16 }),
+	taxName: varchar({ length: 255 }),
+	taxAddress: varchar({ length: 500 }),
+	address: varchar({ length: 500 }),
+	zone: varchar({ length: 128 }),
+	gender: varchar({ length: 16 }),
+	ageBand: varchar({ length: 16 }),
+	birthDate: date({ mode: 'string' }),
+	language: varchar({ length: 8 }),
+	ibanEnc: varchar({ length: 512 }),
+	isPro: tinyint().default(0).notNull(),
+	proDiscount: decimal({ precision: 5, scale: 2 }),
+	originPartnerId: varchar({ length: 128 }),
+	originPartnerName: varchar({ length: 255 }),
+	originChannel: varchar({ length: 64 }),
+	consentEmail: tinyint(),
+	consentWhatsapp: tinyint(),
+	consentSms: tinyint(),
+	tagsJson: varchar({ length: 2000 }),
+	notes: text(),
+	source: varchar({ length: 32 }).default('bookings').notNull(),
+	syncKey: varchar({ length: 160 }),
+	bookings: int().default(0).notNull(),
+	completed: int().default(0).notNull(),
+	cancelled: int().default(0).notNull(),
+	upcoming: int().default(0).notNull(),
+	partnerBookings: int().default(0).notNull(),
+	totalSpent: decimal({ precision: 12, scale: 2 }),
+	firstVisit: datetime({ mode: 'string' }),
+	lastVisit: datetime({ mode: 'string' }),
+	nextCheckIn: datetime({ mode: 'string' }),
+	preferredPark: varchar({ length: 128 }),
+	parksJson: varchar({ length: 2000 }),
+	cities: varchar({ length: 128 }),
+	country: varchar({ length: 2 }),
+	noEmail: tinyint().default(0).notNull(),
+	genericEmailOnly: tinyint().default(0).notNull(),
+	metricsAt: datetime({ mode: 'string' }),
+	lastSeenAt: datetime({ mode: 'string' }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_crm_clients_syncKey").on(table.syncKey),
+	index("idx_crm_clients_status_last").on(table.status, table.lastVisit),
+	index("idx_crm_clients_name").on(table.displayName),
+	index("idx_crm_clients_nif").on(table.nif),
+	index("idx_crm_clients_pro").on(table.isPro),
+	index("idx_crm_clients_country").on(table.country),
+]);
+
+export const crmClientEmails = mysqlTable("crm_client_emails", {
+	id: int().autoincrement().primaryKey(),
+	clientId: int().notNull(),
+	email: varchar({ length: 320 }).notNull(),
+	isPrimary: tinyint().default(0).notNull(),
+	generic: tinyint().default(0).notNull(),
+	verified: tinyint().default(0).notNull(),
+	source: varchar({ length: 32 }),
+	firstSeenAt: datetime({ mode: 'string' }),
+	lastSeenAt: datetime({ mode: 'string' }),
+},
+(table) => [
+	uniqueIndex("uq_crm_email_client").on(table.clientId, table.email),
+	index("idx_crm_email").on(table.email),
+]);
+
+export const crmClientPhones = mysqlTable("crm_client_phones", {
+	id: int().autoincrement().primaryKey(),
+	clientId: int().notNull(),
+	phone: varchar({ length: 32 }).notNull(),
+	isPrimary: tinyint().default(0).notNull(),
+	whatsapp: tinyint().default(0).notNull(),
+	label: varchar({ length: 64 }),
+	source: varchar({ length: 32 }),
+	firstSeenAt: datetime({ mode: 'string' }),
+	lastSeenAt: datetime({ mode: 'string' }),
+},
+(table) => [
+	uniqueIndex("uq_crm_phone_client").on(table.clientId, table.phone),
+	index("idx_crm_phone").on(table.phone),
+]);
+
+export const crmClientVehicles = mysqlTable("crm_client_vehicles", {
+	id: int().autoincrement().primaryKey(),
+	clientId: int().notNull(),
+	plate: varchar({ length: 32 }).notNull(),
+	plateDisplay: varchar({ length: 32 }),
+	brand: varchar({ length: 64 }),
+	model: varchar({ length: 96 }),
+	color: varchar({ length: 48 }),
+	vehicleType: varchar({ length: 24 }),
+	photoUrl: varchar({ length: 1024 }),
+	lastKm: int(),
+	bookings: int().default(0).notNull(),
+	firstSeenAt: datetime({ mode: 'string' }),
+	lastSeenAt: datetime({ mode: 'string' }),
+},
+(table) => [
+	uniqueIndex("uq_crm_vehicle_client").on(table.clientId, table.plate),
+	index("idx_crm_vehicle_plate").on(table.plate),
+]);
+
+export const crmClientExternalIds = mysqlTable("crm_client_external_ids", {
+	id: int().autoincrement().primaryKey(),
+	clientId: int().notNull(),
+	system: varchar({ length: 32 }).notNull(),
+	externalId: varchar({ length: 128 }).notNull(),
+	url: varchar({ length: 1024 }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_crm_ext").on(table.system, table.externalId),
+	index("idx_crm_ext_client").on(table.clientId),
+]);
+
+export const crmBookingLinks = mysqlTable("crm_booking_links", {
+	id: int().autoincrement().primaryKey(),
+	bookingExternalId: varchar({ length: 128 }).notNull(),
+	clientId: int().notNull(),
+	role: varchar({ length: 16 }).default('traveler').notNull(),
+	rule: varchar({ length: 24 }),
+	linkedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_crm_booking_role").on(table.bookingExternalId, table.role),
+	index("idx_crm_booking_client").on(table.clientId),
+]);
+
+export const crmClientRelations = mysqlTable("crm_client_relations", {
+	id: int().autoincrement().primaryKey(),
+	clientId: int().notNull(),
+	relatedClientId: int().notNull(),
+	kind: varchar({ length: 16 }).notNull(),
+	label: varchar({ length: 64 }),
+	pays: tinyint().default(0).notNull(),
+	since: date({ mode: 'string' }),
+	until: date({ mode: 'string' }),
+	createdBy: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_crm_relation").on(table.clientId, table.relatedClientId, table.kind),
+	index("idx_crm_relation_related").on(table.relatedClientId),
+]);
+
+export const crmMergeSuggestions = mysqlTable("crm_merge_suggestions", {
+	id: int().autoincrement().primaryKey(),
+	clientA: int().notNull(),
+	clientB: int().notNull(),
+	score: int().notNull(),
+	reasons: varchar({ length: 255 }).notNull(),
+	status: varchar({ length: 16 }).default('pending').notNull(),
+	decidedBy: int(),
+	decidedAt: datetime({ mode: 'string' }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_crm_suggestion_pair").on(table.clientA, table.clientB),
+	index("idx_crm_suggestion_status").on(table.status, table.score),
+]);
+
+export const crmMergeEvents = mysqlTable("crm_merge_events", {
+	id: int().autoincrement().primaryKey(),
+	survivorId: int().notNull(),
+	mergedId: int().notNull(),
+	snapshotJson: longtext().notNull(),
+	reason: varchar({ length: 255 }),
+	mergedBy: int(),
+	mergedAt: datetime({ mode: 'string' }).notNull(),
+	undoneAt: datetime({ mode: 'string' }),
+	undoneBy: int(),
+},
+(table) => [
+	index("idx_crm_merge_survivor").on(table.survivorId),
+	index("idx_crm_merge_merged").on(table.mergedId),
+]);
+
+export const crmSavedFilters = mysqlTable("crm_saved_filters", {
+	id: int().autoincrement().primaryKey(),
+	userId: int().notNull(),
+	name: varchar({ length: 128 }).notNull(),
+	payloadJson: text().notNull(),
+	shared: tinyint().default(0).notNull(),
+	isDefault: tinyint().default(0).notNull(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	index("idx_crm_filters_user").on(table.userId),
+	index("idx_crm_filters_shared").on(table.shared),
 ]);
 
 // ─── Google Drive / Docs / Sheets — migração 0160 ───────────────────────────

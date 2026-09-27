@@ -184,6 +184,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0200").then(m => ({ s: m.MIGRATION_0200_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0200 })),
       import("./migrations/migration_0205").then(m => ({ s: m.MIGRATION_0205_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0205 })),
       import("./migrations/migration_0210").then(m => ({ s: m.MIGRATION_0210_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0210 })),
+      import("./migrations/migration_0215").then(m => ({ s: m.MIGRATION_0215_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0215 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
