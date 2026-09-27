@@ -585,6 +585,9 @@ export const CRON_JOBS: readonly CronJob[] = [
   // noite (~9 h) não aparecer como "parado".
   { name: "extras-schedule", label: "Escala automática dos extras (propor/confirmar/avisar)", intervalMinutes: 300, workflow: "tick" },
   { name: "identity-sweep", label: "Ligações funcionário ↔ utilizador", intervalMinutes: 60, workflow: "tick" },
+  // CRM (27 set 2026): fichas de cliente a partir das reservas + sugestões de fusão.
+  { name: "crm-sync", label: "CRM: fichas de cliente a partir das reservas", intervalMinutes: 15, workflow: "tick" },
+  { name: "crm-suggestions", label: "CRM: sugestões para juntar fichas", intervalMinutes: 1440, workflow: "tick" },
   // Reservas só pelo webhook (27 set 2026): estes três já não estão na agenda —
   // ficam para correr à mão, sem intervalo (nunca aparecem "parados").
   { name: "multipark-future", label: "Sincronização de reservas (futuras)", intervalMinutes: null, workflow: "manual" },

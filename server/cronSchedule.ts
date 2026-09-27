@@ -83,6 +83,8 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   { key: "extras-schedule", runName: "extras-schedule", label: "Escala automática dos extras (propor/confirmar/avisar)", cadence: { kind: "interval", minutes: 60, window: { fromHour: 8, toHour: 23 } }, priority: 45, minMs: 15 * S, maxMs: 45 * S },
   { key: "extras-auto", runName: "extras-auto", label: "Automação dos extras", cadence: { kind: "interval", minutes: 60 }, priority: 70, minMs: 12 * S, maxMs: 40 * S },
   { key: "identity-sweep", runName: "identity-sweep", label: "Ligações funcionário ↔ utilizador", cadence: { kind: "interval", minutes: 60 }, priority: 80, minMs: 10 * S, maxMs: 30 * S },
+  { key: "crm-sync", runName: "crm-sync", label: "CRM: fichas de cliente a partir das reservas", cadence: { kind: "interval", minutes: 15 }, priority: 82, minMs: 20 * S, maxMs: 45 * S },
+  { key: "crm-suggestions", runName: "crm-suggestions", label: "CRM: sugestões para juntar fichas", cadence: { kind: "daily", from: "05:15" }, priority: 84, minMs: 15 * S, maxMs: 45 * S },
   { key: "zello-sameday", runName: "zello-sameday", label: "GPS do Zello — recolha provisória do dia", cadence: { kind: "daily", from: ZELLO_SAMEDAY_WINDOW.from, until: ZELLO_SAMEDAY_WINDOW.until }, priority: 95, minMs: 15 * S, maxMs: 45 * S },
   { key: "google-watch-renew", runName: "google-watch-renew", label: "Google: renovar canais de notificação (Calendário/Drive)", cadence: { kind: "daily", from: "03:40" }, priority: 98, minMs: 15 * S, maxMs: 40 * S },
   { key: "daily-ops", runName: "daily-ops", label: "Manutenção diária + recolha GPS final (D-2)", cadence: { kind: "daily", from: "04:30" }, priority: 100, minMs: 20 * S, maxMs: 45 * S },
