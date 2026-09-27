@@ -210,3 +210,27 @@ O Jorge vai explicar como quer guardar as avaliações dos outros parques.
 5. **Ocorrências lidas diretamente**, com GPS e anexo.
 6. **Voos com ETA** e taxas de atraso cobradas (linhas FEE e `BookingFee`).
 7. **Estatísticas operacionais exatas** a partir das horas das fases e do histórico.
+
+---
+
+## Anexo — o que está de facto preenchido (perfil de 27 set 2026)
+
+| O quê | Valor real |
+|---|---|
+| Início do sistema | Histórico, clientes e ocorrências desde **2 mar 2026**; reservas importadas desde 2023 |
+| Clientes | 46 418 fichas, 35 727 emails distintos; telefone 100 %, NIF ~25 %, IBAN 0 % |
+| Estado das reservas | CHECKED_OUT 61 300 · CANCELLED 5 483 · BOOKED 587 · CHECKED_IN 450 |
+| Origem | API 58 898 · formulário 4 520 · manual 3 199 · marketplace 624 · painel de parceiro 388 · importada 175 · avença 19 |
+| Vídeo / assinaturas | vídeo em 23 % (caminhos internos, Firebase Storage, S3); assinaturas em 16 % (imagem PNG na BD) |
+| Histórico | UPDATE 91 506 · CREATED 67 823 · MOVEMENT 52 641 · CHECK_IN 16 732 · CHECK_OUT 15 347 · CANCEL 1 159; GPS em 25 %; `modifiedFields` guarda cada campo com `from` → `to` |
+| Plataforma das ações | PDA Android 66 863 · web 17 951 · Windows 9 749 · iPhone 4 472 |
+| Linhas de preço | PARKING 14 549 · VALET 14 533 · SERVICE 5 719 · FEE 1 392 · DISCOUNT 371 · ADJUSTMENT 41 (Flexível, Express, Noturno, lavagens, carregamento, Kiss&Fly, "Alteração serviços (+X€)") |
+| Caixa | dinheiro conferido em 33 % das reservas, condutor validado 28 %, caixa fechada 24 % (desde nov 2025/mar 2026) |
+| Voos | voo de regresso 70 %, ida 25 %; hora prevista atualizada em 9 % / 2 % |
+| Cancelamentos | por email 366 · duplicado 154 · outro 118 · cliente cancelou 92 · no show 82 · erro na reserva 68 · não compareceu 64 … |
+| Ocorrências | Outro(s) 1 171 · Pagamento 296 · Erro de sistema 162 · Reclamação 65 · Fatura 32 · carro/chaves mal arrumados 31 · reembolso 16 …; resolvidas só 2,8 % |
+| Emails enviados pela app | serviços extra 3 282 · fatura 2 673 · info de voo 532 · confirmação 530 · link de pagamento 60 |
+| Parceiros | 465: agências 348, agregadores 113; % mais comuns 20 % (160), 15 % (138), 10 % (109); Top Parking 40 %, Parkos 20 %, Parkvia 23 % |
+| Campanhas | 43, das quais 41 de link direto (Firebase) sem reservas e 2 com código |
+| Agentes | DRIVER 1 412 · ADMIN 304 · PARTNER 201 · SUPERVISOR 156 · LEADER 155 |
+| Parques | 56; os que têm volume são Airpark, Redpark e Skypark (Lisboa, Porto e Faro) e Top-Parking Lisboa (parado desde 11 ago) |
