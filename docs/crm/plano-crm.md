@@ -1,7 +1,8 @@
 # Plano — CRM Multipark (ficha do cliente 360°)
 
 27 set 2026. Complementa `docs/multipark-db/plano-duas-bd.md` (o que fica em cada base de dados).
-Para o Jorge, o Rafael e as sessões do Claude (nuvem e PC).
+Para o Jorge, o Rafael e as sessões do Claude (nuvem e PC). Unifica o desenho da sessão do PC
+(`docs/crm/desenho-pc-2026-09-27.md`, guardado tal e qual) com a proposta da sessão na nuvem.
 
 ## 1. Objetivo (palavras do Jorge)
 
@@ -30,45 +31,57 @@ Um CRM **potente e agradável de usar**, onde:
 vista e a dashboard não parte. Mais um utilizador **só de leitura** e os índices `History(actionTime)`,
 `History(bookingId)`.
 
-## 3. Modelo de dados (BD nossa)
+## 3. Modelo de dados (BD nossa) — versão unificada
 
-```
-crm_customers            1 pessoa (id, nome, foto, língua, tipo particular/empresa/pro, estado, notas, criado/atualizado)
-crm_customer_emails      N por cliente (email normalizado, principal?, verificado?, origem)       UNIQUE(email)
-crm_customer_phones      N por cliente (telefone E.164, principal?, WhatsApp?, origem)            UNIQUE(phone)
-crm_vehicles             N por cliente (matrícula normalizada, marca, modelo, cor, tipo, foto, km/autonomia último conhecido)
-crm_customer_links       ligação às fichas da BD Multipark (Client.id) e às nossas reservas     UNIQUE(source, externalId)
-crm_consents             RGPD: marketing email/WhatsApp/SMS, data e origem do consentimento
-crm_tags / crm_customer_tags   etiquetas livres + segmentos automáticos (novo, recorrente, VIP, em risco, pro…)
-crm_merge_suggestions    pares suspeitos (clienteA, clienteB, pontuação, motivos, estado: pendente/aceite/rejeitada)
-crm_merge_events         cada junção com a "fotografia" de antes (JSON) → permite SEPARAR
-```
+Junta o desenho da sessão do PC (`docs/crm/desenho-pc-2026-09-27.md`) com este plano. Onde divergiam, fica o
+que está indicado na última coluna.
 
-Fotos (cliente e carros) no armazenamento que já usamos (S3), com a ligação na tabela.
+| Tabela | Para quê | Campos principais |
+|---|---|---|
+| `crm_clients` | A ficha | nome, **foto**, email e telefone principais, NIF, nome e morada fiscal, morada, IBAN (**cifrado**, só backoffice financeiro), língua, data de nascimento (opcional), tipo (particular / empresa / pro) e desconto, parceiro ou agência de origem, notas, origem da ficha, **métricas em cache** (reservas, estadias, gasto, primeira e última vinda, parque preferido), segmento |
+| `crm_client_emails` | Vários emails | email normalizado (**único**), principal, verificado, origem, visto 1.ª/última vez, **genérico** (sim/não) |
+| `crm_client_phones` | Vários telefones | telefone E.164 (único), principal, tem WhatsApp |
+| `crm_client_vehicles` | Vários carros | matrícula normalizada, marca, modelo, cor, tipo, **foto**, último km/autonomia, visto 1.ª/última vez. A mesma matrícula **pode** estar em mais de um cliente (família, empresa) mas não se repete no mesmo cliente |
+| `crm_client_external_ids` | Ligação às outras bases | sistema (ficha Multipark, Odoo, contacto Google…) + id externo (único por sistema) |
+| `crm_consents` | RGPD | canal (email, WhatsApp, SMS), estado, data, origem e texto aceite — tabela própria (e não só campos na ficha) para guardar o histórico |
+| `crm_tags` / `crm_client_tags` | Etiquetas | livres + segmentos automáticos (novo, recorrente, VIP, em risco, pro) |
+| `crm_merge_suggestions` | "Quer juntar?" | cliente A, cliente B, pontuação, motivos, estado (pendente, aceite, recusada), quem decidiu e quando. Recusadas não voltam |
+| `crm_merge_events` | Juntar e **separar** | cliente que fica, cliente absorvido, retrato dos identificadores movidos (emails, telefones, carros, ids externos, reservas), quem, quando, motivo, `undoneAt` |
+| `crm_interactions` | Linha do tempo | canal (reserva, chamada, email, WhatsApp, nota, avaliação, reclamação), sentido, referência, data, resumo |
+| `crm_saved_filters` | Filtros guardados | nome, filtros, agrupamentos, privado/partilhado, por omissão |
 
-**A chave não é o nome.** A identidade assenta em email, telefone e matrícula normalizados. A BD da Multipark
-tem 46 418 fichas para 35 727 emails: cada ficha deles liga-se a **um** cliente nosso (`crm_customer_links`),
-e várias fichas podem apontar para o mesmo cliente.
+Fotos no armazenamento que já usamos (S3); na BD fica só o link.
 
-## 4. Duplicados: sugerir, juntar, separar
+## 4. Identidade: ligar, sugerir, juntar, separar
 
-**Pontuação** entre dois clientes (exemplo, a afinar com dados reais):
+1. **Liga sozinho** só com um identificador forte e exato: o mesmo email normalizado (se não for genérico)
+   ou o mesmo id de cliente da Multipark.
+2. **Sugere juntar** por pontuação (a afinar com os dados reais):
 
-| Sinal | Pontos |
-|---|---|
-| Mesmo telefone (E.164) | +50 |
-| Mesma matrícula | +40 |
-| Mesmo email | junção automática (é a mesma chave) |
-| Nome muito parecido (sem acentos, ordem das palavras, distância pequena) | +20 |
-| Mesmo NIF | +50 |
-| Apelido igual + mesma cidade de estadias | +10 |
+   | Sinal | Pontos |
+   |---|---|
+   | Mesmo telefone (E.164) | +50 |
+   | Mesmo NIF | +50 |
+   | Mesma matrícula **e** nome parecido | +40 |
+   | Nome muito parecido (sem acentos, ordem das palavras) **e** mais um sinal (cidade, carro) | +20 |
 
-- **≥ 90** → sugestão "forte" no topo; **60–89** → sugestão normal; **< 60** → não sugere.
-- Nunca junta sozinho (exceto o mesmo email). Junta quem tem permissão (backoffice+), com um clique.
-- **Juntar** = move emails, telefones, carros, ligações e histórico para o cliente que fica; grava em
-  `crm_merge_events` o estado anterior completo.
-- **Separar** = repõe a partir desse registo (e o que entrou depois da junção fica no cliente principal, com aviso).
-- Rejeitar uma sugestão fica guardado, para não voltar a aparecer.
+   ≥ 90 → sugestão forte; 60–89 → normal; < 60 → não sugere. A sugestão mostra os motivos.
+3. **Nunca** junta só pelo nome.
+4. **Emails genéricos** (o do balcão, de agências, com milhares de reservas e muitos nomes) ficam marcados e
+   **não** servem para ligar pessoas. Detetados automaticamente (muitos nomes diferentes no mesmo email) e
+   editáveis à mão.
+5. Juntar e separar ficam registados (quem, quando, motivo). Separar repõe exatamente o retrato de antes; o
+   que entrou depois da junção fica no cliente principal, com aviso.
+6. Juntar: backoffice, admin e super admin (proposta).
+
+**Nota:** no Odoo juntar contactos é irreversível; aqui não.
+
+## 4b. Carga inicial
+
+1. Fichas da Multipark (`Client`): nome, email, telefone, NIF, nome fiscal, carros guardados (`Vehicle`), pro (`ProClient`).
+2. Carros de cada reserva deles (`BookingVehicle`).
+3. As nossas reservas antigas (antes de março de 2026 a BD deles não tem clientes) e os contactos Google já no CRM.
+4. Junção automática por email (não genérico); depois as sugestões para rever (telefone, NIF, matrícula).
 
 ## 5. Identificação instantânea ("já sei quem é")
 
@@ -89,7 +102,10 @@ Um só serviço `identifyCustomer({ phone?, email?, plate?, name? })`, com índi
   taxa de cancelamento, no-shows.
 - Ações: enviar email/WhatsApp, criar tarefa, nota, reclamação, juntar/separar, editar contactos e carros.
 
-## 7. Pesquisa, filtros e insights (inspiração Odoo/HubSpot)
+## 7. Pesquisa, filtros e insights (inspiração Odoo 18 — ver também o desenho do PC)
+
+- **Barra única com facetas**: escreve-se "AA-12-BB" e propõe "procurar em Matrícula / Email / Telefone / NIF / Nome"; cada escolha vira um chip.
+- **Filtros em grupos** (OU dentro do grupo, E entre grupos), **filtro personalizado com regras**, **agrupar por** em vários níveis, **comparar períodos**.
 
 - **Filtros combináveis e guardáveis**: cidade, parque, nosso/terceiro, segmento, n.º de estadias, gasto,
   última vinda, parceiro, canal de origem, língua, consentimento, tem reserva futura, carro elétrico…
@@ -127,6 +143,9 @@ Com o catálogo de parques e serviços (B3 do plano das duas BD):
 ## Perguntas em aberto
 
 1. Quem pode juntar/separar clientes? (proposta: backoffice, admin, super admin)
-2. Fotos dos clientes: só as que o cliente carrega no registo, ou também tiradas no check-in?
+2. Fotos: quando o cliente criar conta (lado Multipark), a foto e os carros vêm de lá ou são carregados cá? E fotos tiradas no check-in?
 3. Empresas (clientes pro/avença): uma ficha de empresa com várias pessoas?
 4. Consentimentos: o que já existe do lado da Multipark para importar?
+5. Telefone: a central (Vodafone) consegue dar-nos o número de quem liga? (para o cartão ao tocar)
+6. IBAN: quem pode ver e editar (proposta: só o backoffice financeiro, cifrado).
+7. Odoo: que módulos estão instalados e como o contacto liga a vendas/faturas/pagamentos (a ver com o conector).
