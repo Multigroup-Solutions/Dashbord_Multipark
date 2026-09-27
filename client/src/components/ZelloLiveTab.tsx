@@ -144,7 +144,7 @@ export function ZelloLiveTab() {
   );
 
   const unmappedCount = (zelloUsers as any[]).filter(
-    (u: any) => !u.admin && !mapByZello.has(String(u.name).toLowerCase()) && !pdaByZello.has(String(u.name).toLowerCase())
+    (u: any) => !u.gpsExcluded && !mapByZello.has(String(u.name).toLowerCase()) && !pdaByZello.has(String(u.name).toLowerCase())
   ).length;
 
   return (
@@ -198,7 +198,7 @@ export function ZelloLiveTab() {
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             {(zelloUsers as any[])
-              .filter((u: any) => !u.admin)
+              .filter((u: any) => !u.gpsExcluded)
               .sort((a: any, b: any) => {
                 const rank = (u: any) => {
                   const k = String(u.name).toLowerCase();

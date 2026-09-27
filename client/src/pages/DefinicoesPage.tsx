@@ -447,7 +447,7 @@ function IntegrationsCard() {
 
 // ─── Parâmetros ─────────────────────────────────────────────────────────────
 
-const GROUP_LABEL: Record<string, string> = { financeiro: "Financeiro", sla: "Prazos (SLA)", emails: "Email (destinatários e Comunicação)", disponibilidade: "Disponibilidades", ia: "Inteligência artificial", extras: "Extras-dia (escala automática)" };
+const GROUP_LABEL: Record<string, string> = { financeiro: "Financeiro", sla: "Prazos (SLA)", emails: "Email (destinatários e Comunicação)", disponibilidade: "Disponibilidades", ia: "Inteligência artificial", extras: "Extras-dia (escala automática)", operacao: "Operação (GPS / Zello)" };
 
 const CITY_FIELDS: { id: "lisbon" | "porto" | "faro"; label: string }[] = [
   { id: "lisbon", label: "Lisboa" },
@@ -522,7 +522,8 @@ function pct(rate: number): string {
 function SettingEditor({ item, saving, onSave, codeValue }: { item: SettingItem; saving: boolean; onSave: (v: unknown) => void; codeValue?: number }) {
   const current = item.isSet ? item.value : item.defaultValue;
   const isRate = item.key === "finance.vat" || item.key === "finance.tsu";
-  const isEmails = item.key === "emails.handoverCc";
+  const isZelloList = item.key === "zello.gpsExcludedUsers";
+  const isEmails = item.key === "emails.handoverCc" || isZelloList;
   const isNumber = typeof item.defaultValue === "number";
   const isBool = typeof item.defaultValue === "boolean";
   // Mapa por cidade (ex.: carros/hora por condutor, ponto de encontro).
@@ -616,7 +617,7 @@ function SettingEditor({ item, saving, onSave, codeValue }: { item: SettingItem;
           </Button>
         </div>
       ) : isEmails ? (
-        <Textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder="um email por linha" />
+        <Textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={isZelloList ? "um utilizador Zello por linha (vazio = ninguém excluído)" : "um email por linha"} />
       ) : isCityMap ? (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 max-w-2xl">
           {CITY_FIELDS.map((c) => (

@@ -121,11 +121,19 @@ export async function linkEmployeeToUser(employeeId: number, userId: number): Pr
 export async function linkAgentToEmployee(agentUserId: string, employeeId: number): Promise<string> {
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível");
-  const top = ((await db.execute(sql`
-    SELECT agentName, COUNT(*) AS n FROM multipark_booking_history
-     WHERE agentUserId = ${agentUserId} AND agentName IS NOT NULL AND agentName <> ''
-     GROUP BY agentName ORDER BY n DESC LIMIT 1`)) as any)[0] as any[];
-  const agentName = top?.[0]?.agentName ? String(top[0].agentName) : agentUserId;
+  // Nome canónico AO VIVO (BD da Multipark); a cópia local só se a BD deles falhar
+  let agentName: string | null = null;
+  const { getAgentNamesLive } = await import("./multiparkDb/activityLive");
+  const live = await getAgentNamesLive([agentUserId]);
+  if (live.available) agentName = live.data.get(agentUserId) ?? null;
+  else {
+    const top = ((await db.execute(sql`
+      SELECT agentName, COUNT(*) AS n FROM multipark_booking_history
+       WHERE agentUserId = ${agentUserId} AND agentName IS NOT NULL AND agentName <> ''
+       GROUP BY agentName ORDER BY n DESC LIMIT 1`)) as any)[0] as any[];
+    agentName = top?.[0]?.agentName ? String(top[0].agentName) : null;
+  }
+  agentName = agentName ?? agentUserId;
   const [emp] = ((await db.execute(sql`SELECT multiparkAgentUserId FROM employees WHERE id = ${employeeId} LIMIT 1`)) as any)[0] as any[];
   const current = emp?.multiparkAgentUserId ? String(emp.multiparkAgentUserId).trim() : "";
   if (current && current !== agentUserId) {

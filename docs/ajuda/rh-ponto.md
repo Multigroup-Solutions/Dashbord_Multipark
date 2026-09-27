@@ -18,6 +18,8 @@ palavras: rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar e
 
 **Gestão** (Team Leader e acima, na sua cidade)
 - **Pessoas → Recursos Humanos** lista os colaboradores (separadores Colaboradores, Extras, Agentes, Recrutamento).
+- O separador **Agentes** ("Agentes por ligar") lê os agentes **ao vivo** da BD da Multipark: os ativos e os que tiveram ações nos últimos 180 dias e ainda não estão ligados a uma ficha, a um parceiro nem marcados como "não é funcionário". A ligação automática de hora a hora (por email e por nome) usa a mesma leitura. Se a BD da Multipark não responder, aparece um aviso e a lista vem da cópia antiga (sem os agentes novos).
+- Num **PDA registado**, ao entrar na app o aparelho fica ligado a ti (e ao Zello do PDA) até saíres ou outra pessoa entrar. Se essa ligação falhar, aparece um aviso — fala com a chefia.
 - **Novo Colaborador** cria uma ficha; cada ficha precisa de centro de custos (cidade).
 - Correções de ponto: na ficha, separador Ponto, revê e corrige as horas.
 - Ordenados, recibos e folha para o contabilista só para admin.

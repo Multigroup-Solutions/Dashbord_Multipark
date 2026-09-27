@@ -3366,7 +3366,7 @@ export const appRouter = router({
                 await logActivity({ userId: ctx.user.id, action: "create", entity: "pda_checkin", entityId: att.pdaId, details: `Auto: ponto→PDA ${att.pdaName}${att.replacedName ? ` (substituiu ${att.replacedName})` : ""}` });
               }
             } catch (err) {
-              console.warn("[checkIn] ponto→PDA automático falhou:", err);
+              console.warn("[pda] ponto→PDA automático (check-in) falhou:", err);
             }
           }
           return { success: true, warning: missingAgentWarning, outsideGeofence: !!geoNoteIn, pdaAttached };
@@ -3476,7 +3476,7 @@ export const appRouter = router({
             const { closePdaCheckinsForEmployee } = await import("./db");
             await closePdaCheckinsForEmployee(input.employeeId, outAt);
           } catch (err) {
-            console.warn("[checkOut] fecho de PDA falhou:", err);
+            console.warn("[pda] fecho do PDA no check-out do ponto falhou:", err);
           }
           await logActivity({ userId: ctx.user.id, action: "check_out", entity: "time_record", entityId: input.employeeId, details: `Check-out: ${hoursWorked}h${zello ? ` · ${zello.km}km GPS · ${zello.offlineMinutes}min offline` : ""}` });
           return { success: true, hoursWorked, zello };
@@ -4115,7 +4115,11 @@ export const appRouter = router({
     zello: router({
       users: protectedProcedure.query(async ({ ctx }) => {
         requireAccess(ctx.user, "atividade_diaria", "view");
-        return getZelloUsers();
+        const [users, { loadZelloGpsExclusions }, { isZelloGpsExcluded }] = await Promise.all([
+          getZelloUsers(), import("./zello"), import("../shared/appSettings"),
+        ]);
+        const excluded = await loadZelloGpsExclusions();
+        return users.map((u) => ({ ...u, gpsExcluded: isZelloGpsExcluded(u.name, excluded) }));
       }),
       // Resolução Zello→pessoa para o mapa ao vivo: check-ins de PDA ativos
       // primeiro (os "Extra NNN" vivem nos PDAs e cada dia é uma pessoa
@@ -4417,7 +4421,14 @@ export const appRouter = router({
         const me = await getEmployeeByUserId(ctx.user.id);
         if (!me) return { attached: false as const, reason: "sem ficha" };
         const { attachPdaByDeviceToken } = await import("./db");
-        const att = await attachPdaByDeviceToken(input.token, me.employee.id);
+        let att: Awaited<ReturnType<typeof attachPdaByDeviceToken>>;
+        try {
+          att = await attachPdaByDeviceToken(input.token, me.employee.id);
+        } catch (err) {
+          // Nunca em silêncio: foi assim que o nome de coluna errado (checkin_status) passou semanas despercebido
+          console.warn("[pda] login→PDA falhou:", err);
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível ligar este aparelho a ti (PDA). Avisa a chefia." });
+        }
         if (!att) return { attached: false as const, reason: "aparelho não registado" };
         if (att.changed) {
           await logActivity({ userId: ctx.user.id, action: "create", entity: "pda_checkin", entityId: att.pdaId, details: `Auto: login→PDA ${att.pdaName}${att.replacedName ? ` (substituiu ${att.replacedName})` : ""}` });
@@ -4428,7 +4439,13 @@ export const appRouter = router({
         const me = await getEmployeeByUserId(ctx.user.id);
         if (!me) return { released: 0 };
         const { releasePdaByDeviceToken } = await import("./db");
-        const released = await releasePdaByDeviceToken(input.token, me.employee.id);
+        let released = 0;
+        try {
+          released = await releasePdaByDeviceToken(input.token, me.employee.id);
+        } catch (err) {
+          console.warn("[pda] logout→soltar PDA falhou:", err);
+          return { released: 0, error: true as const };
+        }
         if (released) await logActivity({ userId: ctx.user.id, action: "update", entity: "pda_checkin", details: "Auto: logout soltou o PDA" });
         return { released };
       }),
@@ -4580,10 +4597,11 @@ export const appRouter = router({
       /** Check all users and create alerts for disabled GPS/Zello */
       checkNow: protectedProcedure.mutation(async ({ ctx }) => {
         requireAccess(ctx.user, "atividade_diaria", "edit");
-        const users = await getZelloUsers();
+        // Todos menos a lista explícita (Definições → "Contas Zello excluídas do GPS")
+        const { getZelloGpsUsers } = await import("./zello");
+        const users = await getZelloGpsUsers();
         let alertsCreated = 0;
         for (const user of users) {
-          if (user.admin) continue; // skip admins
           if (user.geotrackingOff) {
             await createGpsAlert({
               zelloUsername: user.name,
@@ -7072,27 +7090,43 @@ export const appRouter = router({
       return listIgnoredAgents();
     }),
 
-    // Agentes do histórico SEM funcionário nem parceiro (aba RH "Agentes")
+    // Agentes SEM funcionário nem parceiro (aba RH "Agentes"). AO VIVO da BD
+    // da Multipark ("Agent" + "History" dos últimos 180 dias); a cópia local
+    // (já não alimentada desde o PR #141) só se a BD deles não responder.
     unlinkedAgents: protectedProcedure.query(async ({ ctx }) => {
       requireAccess(ctx.user, "rh", "view");
       const { getDb, listAgentPartners } = await import("./db");
       const db = await getDb();
-      if (!db) return [];
+      const empty = { rows: [] as Array<{ agentName: string; agentUserId: string | null; total: number; checkins: number; checkouts: number; movements: number; firstSeen: string | null; lastSeen: string | null }>, source: "multipark" as "multipark" | "copia", notice: null as string | null };
+      if (!db) return empty;
       const { sql } = await import("drizzle-orm");
-      const [rows] = await db.execute(sql`
-        SELECT agentName,
-          MAX(agentUserId) AS agentUserId,
-          COUNT(*) AS total,
-          SUM(changeType IN ('CHECK_IN','CHECKIN')) AS checkins,
-          SUM(changeType IN ('CHECK_OUT','CHECKOUT')) AS checkouts,
-          SUM(changeType IN ('MOVEMENT','MOVE')) AS movements,
-          MIN(actionTime) AS firstSeen,
-          MAX(actionTime) AS lastSeen
-        FROM multipark_booking_history
-        WHERE agentName IS NOT NULL AND agentName != ''
-        GROUP BY agentName`) as any;
+      const { listLiveAgents } = await import("./multiparkDb/activityLive");
+      const live = await listLiveAgents();
+      let rows: any[];
+      let source: "multipark" | "copia" = "multipark";
+      let notice: string | null = null;
+      if (live.available) {
+        rows = live.data.filter((a) => a.agentName).map((a) => ({
+          agentName: a.agentName, agentUserId: a.agentUserId, total: a.total, checkins: a.checkins, checkouts: a.checkouts,
+          movements: a.movements, firstSeen: a.firstSeen, lastSeen: a.lastSeen,
+        }));
+      } else {
+        source = "copia";
+        notice = `${live.reason} Lista da cópia local (deixou de ser atualizada — agentes novos não aparecem).`;
+        [rows] = await db.execute(sql`
+          SELECT agentName,
+            MAX(agentUserId) AS agentUserId,
+            COUNT(*) AS total,
+            SUM(changeType IN ('CHECK_IN','CHECKIN')) AS checkins,
+            SUM(changeType IN ('CHECK_OUT','CHECKOUT')) AS checkouts,
+            SUM(changeType IN ('MOVEMENT','MOVE')) AS movements,
+            MIN(actionTime) AS firstSeen,
+            MAX(actionTime) AS lastSeen
+          FROM multipark_booking_history
+          WHERE agentName IS NOT NULL AND agentName != ''
+          GROUP BY agentName`) as any;
+      }
       const { employees } = await import("../drizzle/schema");
-      const { isNotNull } = await import("drizzle-orm");
       const linkedEmps = await db.select({ n: employees.multiparkAgentName, id: employees.multiparkAgentUserId }).from(employees);
       const linked = new Set(linkedEmps.map((e) => (e.n ?? "").trim().toLowerCase()).filter(Boolean));
       // Fase 1: um agente ligado só pelo ID (outro nome na ficha) também está ligado
@@ -7106,22 +7140,24 @@ export const appRouter = router({
       const partners = new Set((await listAgentPartners()).map((p) => p.agentName.trim().toLowerCase()));
       const { listIgnoredAgents } = await import("./db");
       const ignored = new Set((await listIgnoredAgents()).map((n) => n.trim().toLowerCase()));
-      return (rows as any[])
+      const list = (rows as any[])
         .filter((r) => {
           const key = String(r.agentName).trim().toLowerCase();
           const id = String(r.agentUserId ?? "").trim();
           return !linked.has(key) && !(id && linkedIds.has(id)) && !partners.has(key) && !ignored.has(key);
         })
         .map((r) => ({
-          agentName: r.agentName,
+          agentName: String(r.agentName),
+          agentUserId: r.agentUserId ? String(r.agentUserId) : null,
           total: Number(r.total),
           checkins: Number(r.checkins ?? 0),
           checkouts: Number(r.checkouts ?? 0),
           movements: Number(r.movements ?? 0),
-          firstSeen: r.firstSeen,
-          lastSeen: r.lastSeen,
+          firstSeen: r.firstSeen == null ? null : String(r.firstSeen instanceof Date ? r.firstSeen.toISOString() : r.firstSeen),
+          lastSeen: r.lastSeen == null ? null : String(r.lastSeen instanceof Date ? r.lastSeen.toISOString() : r.lastSeen),
         }))
         .sort((a, b) => b.total - a.total);
+      return { rows: list, source, notice };
     }),
 
     // Cria um funcionário-extra a partir de um agente órfão (aba RH)

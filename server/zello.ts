@@ -145,6 +145,28 @@ export async function getZelloUsers(): Promise<ZelloUser[]> {
   }));
 }
 
+/**
+ * Contas Zello excluídas do GPS (Definições → "Contas Zello excluídas do GPS").
+ * Nunca lança: sem definição (ou erro) → ninguém excluído.
+ */
+export async function loadZelloGpsExclusions(): Promise<Set<string>> {
+  try {
+    const { getSetting } = await import("./appSettings");
+    const { ZELLO_GPS_EXCLUDED_KEY, zelloExclusionSet } = await import("../shared/appSettings");
+    return zelloExclusionSet(await getSetting(ZELLO_GPS_EXCLUDED_KEY));
+  } catch (err) {
+    console.warn("[zello] ler as contas excluídas do GPS falhou (ninguém excluído):", err);
+    return new Set();
+  }
+}
+
+/** Utilizadores Zello que entram no GPS (fora só os da lista explícita). */
+export async function getZelloGpsUsers(): Promise<ZelloUser[]> {
+  const [users, excluded] = await Promise.all([getZelloUsers(), loadZelloGpsExclusions()]);
+  const { isZelloGpsExcluded } = await import("../shared/appSettings");
+  return users.filter((u) => !isZelloGpsExcluded(u.name, excluded));
+}
+
 /** Get all channels */
 export async function getZelloChannels(): Promise<ZelloChannel[]> {
   if (!isZelloConfigured()) return [];

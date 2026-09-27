@@ -128,10 +128,15 @@ function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory: (t: SpeedT
         </CardContent>
       </Card>
 
+      {data?.actionsNotice && (
+        <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+          {data.actionsNotice}
+        </p>
+      )}
       {data && data.gpsMissingDays.length > 0 && (
         <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
           Ainda sem recolha GPS para {data.gpsMissingDays.length === 1 ? data.gpsMissingDays[0] : `${data.gpsMissingDays.length} dias`} — a recolha corre {GPS_COLLECTION_TEXT}.
-          Os km desses dias vêm do check-out do ponto e aparecem como <b>provisório</b>. As ações estão em tempo quase-real.
+          Os km desses dias vêm do check-out do ponto e aparecem como <b>provisório</b>. As ações vêm ao vivo da BD da Multipark.
         </p>
       )}
 
@@ -327,6 +332,7 @@ function PersonDayDrawer({ person, defaultDate, minDate, maxDate, onClose, onOpe
             <>
               <section>
                 <h3 className="text-sm font-semibold mb-1">Ações ({d.actions.length})</h3>
+                {d.actionsNotice && <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-1">{d.actionsNotice}</p>}
                 {d.actions.length === 0 ? <p className="text-xs text-muted-foreground">Sem ações neste dia.</p> : (
                   <table className="w-full text-xs">
                     <thead><tr className="border-b text-left text-muted-foreground"><th className="p-1">Hora</th><th className="p-1">Ação</th><th className="p-1">Matrícula</th><th className="p-1">Reserva</th><th className="p-1">Parque</th></tr></thead>
@@ -1188,7 +1194,7 @@ function CheckinDialog({ pdaId, onClose }: { pdaId: number; onClose: () => void 
             <Select value={zelloUsername} onValueChange={setZelloUsername}>
               <SelectTrigger><SelectValue placeholder="Selecionar utilizador..." /></SelectTrigger>
               <SelectContent>
-                {(zelloUsers || []).filter((u: any) => !u.admin).map((u: any) => (
+                {(zelloUsers || []).filter((u: any) => !u.gpsExcluded).map((u: any) => (
                   <SelectItem key={u.name} value={u.name}>{u.fullName || u.name}</SelectItem>
                 ))}
               </SelectContent>

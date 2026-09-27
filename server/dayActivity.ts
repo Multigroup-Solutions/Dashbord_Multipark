@@ -6,12 +6,14 @@
  * extras (só com o gate de totais financeiros), km/velocidades do GPS (com os
  * PDAs partilhados partidos por quem os tinha) e o ponto.
  *
- * FUSOS (B5): tudo o que está na BD é UTC — incluindo
- * `multipark_booking_history.actionTime`: o sync (server/jobs/
- * multiparkBookingSync.ts → parseBookingDate em server/bookingRefresh.ts)
- * grava a hora da API em UTC ("dd/mm/aaaa, hh:mm" é tratado como UTC e ISO
- * com offset é convertido para UTC; o cliente mostra-a com fmtPTDateTime,
- * UTC→Lisboa). Por isso os dias de Lisboa são convertidos em intervalos UTC
+ * AÇÕES: lidas AO VIVO da BD da Multipark ("History", server/multiparkDb/
+ * activityLive.ts) — desde o PR #141 a cópia local `multipark_booking_history`
+ * deixou de ser alimentada. A cópia só serve de recurso para os dias antes de
+ * LIVE_ACTIONS_SINCE ou quando a BD da Multipark não responde (com aviso em
+ * `actionsNotice`).
+ *
+ * FUSOS (B5): tudo é UTC — a nossa BD e a "History" da Multipark (timestamp
+ * sem fuso, UTC). Por isso os dias de Lisboa são convertidos em intervalos UTC
  * [início, fim) com `lisbonDayRangeUtc` para ações, ponto, check-ins de PDA e
  * GPS. As linhas do GPS (`daily_driver_history.date`, `driver_day_shares.day`)
  * guardam o DIA de Lisboa a que pertencem e comparam-se como dia.
@@ -19,7 +21,12 @@
 import { and, gte, lte, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { employees, extrasDiaAssignments } from "../drizzle/schema";
-import { bookingHistoryScope, cityNameScope, employeeScope, gpsRowOwnScope, gpsRowScope, projectScope } from "./cityScope";
+import { bookingHistoryScope, cityNameScope, cityScope, employeeScope, gpsRowOwnScope, gpsRowScope, projectScope } from "./cityScope";
+import {
+  LIVE_ACTIONS_SINCE, getActivityActionsLive, getActivityDetailLive,
+  type ActivityActionRow, type ActivityDetailRow,
+} from "./multiparkDb/activityLive";
+import type { MultiparkRead } from "./multiparkDb/read";
 import { addDays, daysInRange, lisbonDayOf, lisbonDayRangeUtc, lisbonHoursSince } from "../shared/lisbonDay";
 import { lisbonToday } from "../shared/expensePeriods";
 import { aggregateSpeedHistory, buildIdentityResolver, classifyActionShift, leftoverFromShares, type ShiftWindow, type SpeedEntry } from "./activityHelpers";
@@ -63,6 +70,82 @@ export interface ActivityRange {
   };
   /** dias do intervalo (até hoje) sem recolha GPS; os km destes são provisórios/ausentes */
   gpsMissingDays: string[];
+  /** De onde vêm as ações: BD da Multipark ao vivo, cópia local, ou as duas (intervalo antes/depois de LIVE_ACTIONS_SINCE). */
+  actionsSource: ActionsSource;
+  /** Aviso para a página (BD da Multipark indisponível, lista cortada…). */
+  actionsNotice: string | null;
+}
+
+export type ActionsSource = "multipark" | "copia" | "misto";
+
+// ─── Ações: ao vivo (BD Multipark) com a cópia local como recurso ────────────
+
+/** Cidades do pedido para filtrar "Park.city" (undefined = todas). */
+export function scopedCityNames(): string[] | undefined {
+  const a = cityScope.getStore();
+  if (!a || a.all) return undefined;
+  return a.cityNames ?? (a.cityName ? [a.cityName] : []);
+}
+
+/**
+ * Parte a janela UTC [from, to) no troço da cópia local (antes do início de
+ * LIVE_ACTIONS_SINCE em Lisboa) e no troço ao vivo. PURA.
+ */
+export function splitActionWindow(from: string, to: string, since: string = LIVE_ACTIONS_SINCE): {
+  legacy: { from: string; to: string } | null;
+  live: { from: string; to: string } | null;
+} {
+  const cut = lisbonDayRangeUtc(since).start;
+  if (to <= cut) return { legacy: { from, to }, live: null };
+  if (from >= cut) return { legacy: null, live: { from, to } };
+  return { legacy: { from, to: cut }, live: { from: cut, to } };
+}
+
+export interface ActionReaders {
+  live: (w: { from: string; to: string; cities?: string[] }) => Promise<MultiparkRead<{ rows: ActivityActionRow[]; truncated: boolean }>>;
+  legacy: (w: { from: string; to: string }) => Promise<ActivityActionRow[]>;
+}
+
+/** Ações da cópia local (só leitura — já não é alimentada). */
+async function legacyActionRows(w: { from: string; to: string }): Promise<ActivityActionRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return rowsOf(await db.execute(sql`
+    SELECT agentUserId, agentName, changeType, actionTime FROM multipark_booking_history
+     WHERE actionTime >= ${w.from} AND actionTime < ${w.to}
+       AND agentName IS NOT NULL AND agentName != ''
+       AND ${bookingHistoryScope(sql`multipark_booking_history.bookingExternalId`)}`)).map((r) => ({
+    agentUserId: r.agentUserId != null ? String(r.agentUserId) : null,
+    agentName: r.agentName != null ? String(r.agentName) : null,
+    changeType: String(r.changeType ?? "").toUpperCase(),
+    actionTime: r.actionTime instanceof Date ? r.actionTime.toISOString() : String(r.actionTime),
+    n: 1,
+  }));
+}
+
+const DEFAULT_READERS: ActionReaders = { live: (w) => getActivityActionsLive(w), legacy: legacyActionRows };
+
+/**
+ * Ações de [from, to): ao vivo desde LIVE_ACTIONS_SINCE, cópia local antes
+ * disso; BD da Multipark indisponível → cópia local para tudo + aviso.
+ */
+export async function loadActivityActions(
+  w: { from: string; to: string; cities?: string[] },
+  readers: ActionReaders = DEFAULT_READERS,
+): Promise<{ rows: ActivityActionRow[]; source: ActionsSource; notice: string | null }> {
+  const parts = splitActionWindow(w.from, w.to);
+  if (!parts.live) return { rows: await readers.legacy(parts.legacy!), source: "copia", notice: null };
+  const live = await readers.live({ ...parts.live, cities: w.cities });
+  if (!live.available) {
+    return {
+      rows: await readers.legacy({ from: w.from, to: w.to }),
+      source: "copia",
+      notice: `${live.reason} As ações vêm da cópia local, que deixou de ser atualizada — os dias recentes podem aparecer sem ações.`,
+    };
+  }
+  const notice = live.data.truncated ? "Demasiadas ações neste intervalo — a lista foi cortada. Escolhe um intervalo mais curto." : null;
+  if (!parts.legacy) return { rows: live.data.rows, source: "multipark", notice };
+  return { rows: [...(await readers.legacy(parts.legacy)), ...live.data.rows], source: "misto", notice };
 }
 
 const CT: Record<string, "checkins" | "checkouts" | "movements" | "cancels"> = {
@@ -102,7 +185,7 @@ export async function getActivityRange(opts: { startDate: string; endDate?: stri
   const days = daysInRange(startDate, endDate).slice(0, MAX_RANGE_DAYS);
   const lastDay = days[days.length - 1] ?? startDate;
   const emptyTotals = { checkins: 0, checkouts: 0, movements: 0, cancels: 0, other: 0, totalActions: 0, totalKm: 0, activePeople: 0, violations: 0, inShift: 0, outOfShift: 0, scheduledPeople: 0, totalCost: canSeeCost ? 0 : null, costPerAction: null };
-  const out: ActivityRange = { startDate, endDate: lastDay, canSeeCost, people: [], daily: [], totals: emptyTotals, gpsMissingDays: [] };
+  const out: ActivityRange = { startDate, endDate: lastDay, canSeeCost, people: [], daily: [], totals: emptyTotals, gpsMissingDays: [], actionsSource: "multipark", actionsNotice: null };
   const db = await getDb();
   if (!db) return out;
   const inRange = (d: string) => d >= startDate && d <= lastDay;
@@ -183,14 +266,16 @@ export async function getActivityRange(opts: { startDate: string; endDate?: stri
   }
 
   // ── Ações: linha a linha (dia do turno), janela até D+2 para a noite do último dia
-  const actionRows = rowsOf(await db.execute(sql`
-    SELECT agentUserId, agentName, changeType, actionTime FROM multipark_booking_history
-     WHERE actionTime >= ${range.start} AND actionTime < ${lisbonDayRangeUtc(addDays(lastDay, 1)).end}
-       AND agentName IS NOT NULL AND agentName != ''
-       AND ${bookingHistoryScope(sql`multipark_booking_history.bookingExternalId`)}`));
-  for (const r of actionRows) {
+  // (ao vivo da BD da Multipark; a cópia local só antes de LIVE_ACTIONS_SINCE ou sem BD deles)
+  const actions = await loadActivityActions({ from: range.start, to: lisbonDayRangeUtc(addDays(lastDay, 1)).end, cities: scopedCityNames() });
+  out.actionsSource = actions.source;
+  out.actionsNotice = actions.notice;
+  for (const r of actions.rows) {
     const who = resolve(r.agentUserId, r.agentName);
     if (who.kind === "ignorado") continue;
+    // Sem nome e sem ficha pelo id: não há a quem atribuir (como na cópia local)
+    if (who.kind !== "colaborador" && !String(r.agentName ?? "").trim()) continue;
+    const w = r.n;
     const cal = lisbonDayOf(r.actionTime);
     let bucket = { day: cal, inShift: false };
     const shifts = who.employeeId != null ? shiftsByEmp.get(who.employeeId) : undefined;
@@ -202,13 +287,13 @@ export async function getActivityRange(opts: { startDate: string; endDate?: stri
     const p = who.kind === "colaborador" ? personForEmployee(who.employeeId)
       : get(who.key, () => blank(who.key, who.name, who.kind, null, who.kind === "parceiro" ? who.partnerName : null));
     const col = CT[String(r.changeType ?? "").toUpperCase()] ?? "other";
-    p[col]++;
-    p.totalActions++;
+    p[col] += w;
+    p.totalActions += w;
     const d = daily.get(bucket.day)!;
-    d.actions++;
+    d.actions += w;
     if (who.employeeId != null && scheduledEmps.has(who.employeeId)) {
       p.inShift ??= 0; p.outOfShift ??= 0;
-      if (bucket.inShift) { p.inShift++; d.inShift++; } else { p.outOfShift++; d.outOfShift++; }
+      if (bucket.inShift) { p.inShift += w; d.inShift += w; } else { p.outOfShift += w; d.outOfShift += w; }
     }
   }
 
@@ -361,7 +446,7 @@ export async function getActivityRange(opts: { startDate: string; endDate?: stri
 
 export async function getPersonDay(date: string, key: string) {
   const db = await getDb();
-  const empty = { date, key, name: key, actions: [] as any[], gps: [] as any[], pda: [] as any[], ponto: [] as any[] };
+  const empty = { date, key, name: key, actions: [] as any[], gps: [] as any[], pda: [] as any[], ponto: [] as any[], actionsSource: "multipark" as ActionsSource, actionsNotice: null as string | null };
   if (!db) return empty;
   const range = lisbonDayRangeUtc(date);
   const [kind, ...rest] = key.split(":");
@@ -373,10 +458,7 @@ export async function getPersonDay(date: string, key: string) {
     const e = emps.find((x) => x.id === empId);
     const ids = [e?.multiparkAgentUserId, ...aliases.filter((a) => a.employeeId === empId).map((a) => a.agentUserId)].filter((x): x is string => !!x && !!String(x).trim());
     const names = [e?.multiparkAgentName, ...aliases.filter((a) => a.employeeId === empId).map((a) => a.agentName)].filter((x): x is string => !!x && !!String(x).trim()).map((n) => n.trim().toLowerCase());
-    const who: any[] = [];
-    if (ids.length) who.push(sql`h.agentUserId IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})`);
-    if (names.length) who.push(sql`LOWER(TRIM(h.agentName)) IN (${sql.join(names.map((n) => sql`${n}`), sql`, `)})`);
-    const actions = who.length ? await actionsOf(db, range, sql`(${sql.join(who, sql` OR `)})`) : [];
+    const act = await personDayActions(date, { userIds: ids, names });
     const gps = rowsOf(await db.execute(sql`
       SELECT 'parte' AS src, s.zelloUsername, s.km, s.minutes, s.movingMinutes, s.maxSpeed, s.avgSpeed, s.violations, h.geoJsonUrl
         FROM driver_day_shares s LEFT JOIN daily_driver_history h ON h.id = s.historyId
@@ -395,11 +477,11 @@ export async function getPersonDay(date: string, key: string) {
       SELECT type, recordedAt, hoursWorked, reviewStatus, zelloKm, zelloMaxSpeed FROM time_records
        WHERE employeeId = ${empId} AND recordedAt >= ${range.start} AND recordedAt < ${range.end}
          AND ${employeeScope(sql`time_records.employeeId`)} ORDER BY recordedAt`));
-    return { date, key, name: e?.fullName ?? `#${empId}`, employeeId: empId, actions, gps: gps.map(normGps), pda, ponto };
+    return { ...empty, name: e?.fullName ?? `#${empId}`, employeeId: empId, actions: act.rows, actionsSource: act.source, actionsNotice: act.notice, gps: gps.map(normGps), pda, ponto };
   }
   if (kind === "agent") {
-    const actions = await actionsOf(db, range, sql`LOWER(TRIM(h.agentName)) = ${ref}`);
-    return { ...empty, name: actions[0]?.agentName ?? ref, actions };
+    const act = await personDayActions(date, { names: [ref] });
+    return { ...empty, name: act.rows[0]?.agentName ?? ref, actions: act.rows, actionsSource: act.source, actionsNotice: act.notice };
   }
   if (kind === "gpsu") {
     const gps = rowsOf(await db.execute(sql`
@@ -425,6 +507,37 @@ function normGps(g: any) {
     maxSpeed: Number(g.maxSpeed ?? 0), avgSpeed: Number(g.avgSpeed ?? 0), violations: Number(g.violations ?? 0),
     geoJsonUrl: g.geoJsonUrl ? String(g.geoJsonUrl) : null,
   };
+}
+
+/** Ações de uma pessoa num dia de Lisboa: ao vivo; cópia local antes de LIVE_ACTIONS_SINCE ou sem BD deles. */
+export async function personDayActions(
+  date: string,
+  who: { userIds?: string[]; names?: string[] },
+  readers: {
+    live: typeof getActivityDetailLive;
+    legacy: (range: { start: string; end: string }, who: { userIds?: string[]; names?: string[] }) => Promise<ActivityDetailRow[]>;
+  } = { live: (o) => getActivityDetailLive(o), legacy: legacyDetail },
+): Promise<{ rows: ActivityDetailRow[]; source: ActionsSource; notice: string | null }> {
+  const range = lisbonDayRangeUtc(date);
+  const legacySource: ActionsSource = "copia";
+  if (!(who.userIds?.length || who.names?.length)) return { rows: [], source: date < LIVE_ACTIONS_SINCE ? legacySource : "multipark", notice: null };
+  if (date < LIVE_ACTIONS_SINCE) return { rows: await readers.legacy(range, who), source: legacySource, notice: null };
+  const live = await readers.live({ from: range.start, to: range.end, userIds: who.userIds, names: who.names, cities: scopedCityNames() });
+  if (live.available) return { rows: live.data, source: "multipark", notice: null };
+  return {
+    rows: await readers.legacy(range, who), source: legacySource,
+    notice: `${live.reason} As ações vêm da cópia local, que deixou de ser atualizada.`,
+  };
+}
+
+async function legacyDetail(range: { start: string; end: string }, w: { userIds?: string[]; names?: string[] }): Promise<ActivityDetailRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const conds: ReturnType<typeof sql>[] = [];
+  if (w.userIds?.length) conds.push(sql`h.agentUserId IN (${sql.join(w.userIds.map((i) => sql`${i}`), sql`, `)})`);
+  if (w.names?.length) conds.push(sql`LOWER(TRIM(h.agentName)) IN (${sql.join(w.names.map((n) => sql`${n}`), sql`, `)})`);
+  if (!conds.length) return [];
+  return actionsOf(db, range, sql`(${sql.join(conds, sql` OR `)})`);
 }
 
 async function actionsOf(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, range: { start: string; end: string }, who: ReturnType<typeof sql>) {

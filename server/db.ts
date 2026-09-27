@@ -998,7 +998,7 @@ export async function getZelloLiveMappings(): Promise<Array<{ zelloUsername: str
     FROM pda_checkins c
     JOIN employees e ON e.id = c.employeeId
     LEFT JOIN pdas p ON p.id = c.pdaId
-    WHERE c.checkinStatus = 'checked_in'
+    WHERE c.checkin_status = 'checked_in'
       AND COALESCE(p.zelloUsername, c.zelloUsername) IS NOT NULL`) as any;
   const out: Array<{ zelloUsername: string; employeeId: number; fullName: string; source: "pda" | "fixed"; pdaName: string | null }> = [];
   for (const r of (fixed as any[]) ?? []) {
@@ -5948,16 +5948,16 @@ export async function attachPdaByDeviceToken(deviceToken: string, employeeId: nu
   const [activeRows] = await db.execute(sql`
     SELECT c.id, c.employeeId, e.fullName FROM pda_checkins c
     LEFT JOIN employees e ON e.id = c.employeeId
-    WHERE c.pdaId = ${pda.id} AND c.checkinStatus = 'checked_in'`) as any;
+    WHERE c.pdaId = ${pda.id} AND c.checkin_status = 'checked_in'`) as any;
   let replacedName: string | null = null;
   let alreadyMine = false;
   for (const a of (activeRows as any[]) ?? []) {
     if (Number(a.employeeId) === employeeId) { alreadyMine = true; continue; }
-    await db.execute(sql`UPDATE pda_checkins SET checkoutAt = ${now}, checkinStatus = 'checked_out', notes = CONCAT(COALESCE(notes,''), ' · fechado automaticamente: outro colaborador fez check-in neste PDA') WHERE id = ${a.id}`);
+    await db.execute(sql`UPDATE pda_checkins SET checkoutAt = ${now}, checkin_status = 'checked_out', notes = CONCAT(COALESCE(notes,''), ' · fechado automaticamente: outro colaborador fez check-in neste PDA') WHERE id = ${a.id}`);
     replacedName = a.fullName ? String(a.fullName) : replacedName;
   }
   // A pessoa só pode estar num PDA de cada vez — fecha check-ins dela noutros
-  await db.execute(sql`UPDATE pda_checkins SET checkoutAt = ${now}, checkinStatus = 'checked_out' WHERE employeeId = ${employeeId} AND checkinStatus = 'checked_in' AND pdaId != ${pda.id}`);
+  await db.execute(sql`UPDATE pda_checkins SET checkoutAt = ${now}, checkin_status = 'checked_out' WHERE employeeId = ${employeeId} AND checkin_status = 'checked_in' AND pdaId != ${pda.id}`);
   if (!alreadyMine) {
     await db.insert(pdaCheckins).values({
       pdaId: Number(pda.id),
@@ -5974,9 +5974,9 @@ export async function releasePdaByDeviceToken(deviceToken: string, employeeId: n
   const db = await getDb(); if (!db) return 0;
   const [res] = await db.execute(sql`
     UPDATE pda_checkins c JOIN pdas p ON p.id = c.pdaId
-       SET c.checkoutAt = ${toMysqlDateTime(new Date())}, c.checkinStatus = 'checked_out',
+       SET c.checkoutAt = ${toMysqlDateTime(new Date())}, c.checkin_status = 'checked_out',
            c.notes = CONCAT(COALESCE(c.notes,''), ' · fechado no logout')
-     WHERE p.deviceToken = ${deviceToken} AND c.employeeId = ${employeeId} AND c.checkinStatus = 'checked_in'`) as any;
+     WHERE p.deviceToken = ${deviceToken} AND c.employeeId = ${employeeId} AND c.checkin_status = 'checked_in'`) as any;
   return Number((res as any)?.affectedRows ?? 0);
 }
 
@@ -6005,8 +6005,8 @@ export async function verifyPdaQrCode(pdaId: number, code: string): Promise<{ na
 export async function closePdaCheckinsForEmployee(employeeId: number, at: Date): Promise<number> {
   const db = await getDb(); if (!db) return 0;
   const [res] = await db.execute(sql`
-    UPDATE pda_checkins SET checkoutAt = ${toMysqlDateTime(at)}, checkinStatus = 'checked_out'
-    WHERE employeeId = ${employeeId} AND checkinStatus = 'checked_in'`) as any;
+    UPDATE pda_checkins SET checkoutAt = ${toMysqlDateTime(at)}, checkin_status = 'checked_out'
+    WHERE employeeId = ${employeeId} AND checkin_status = 'checked_in'`) as any;
   return Number((res as any)?.affectedRows ?? 0);
 }
 
@@ -6024,7 +6024,7 @@ export async function getPdaByDeviceToken(deviceToken: string) {
   const [rows] = await db.execute(sql`
     SELECT p.id, p.name, p.zelloUsername,
            (SELECT e.fullName FROM pda_checkins c LEFT JOIN employees e ON e.id = c.employeeId
-            WHERE c.pdaId = p.id AND c.checkinStatus = 'checked_in' ORDER BY c.checkinAt DESC LIMIT 1) AS currentHolder
+            WHERE c.pdaId = p.id AND c.checkin_status = 'checked_in' ORDER BY c.checkinAt DESC LIMIT 1) AS currentHolder
     FROM pdas p WHERE p.deviceToken = ${deviceToken} LIMIT 1`) as any;
   const r = (rows as any[])?.[0];
   return r ? { pdaId: Number(r.id), name: String(r.name), zelloUsername: r.zelloUsername ? String(r.zelloUsername) : null, currentHolder: r.currentHolder ? String(r.currentHolder) : null } : null;
