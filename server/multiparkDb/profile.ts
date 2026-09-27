@@ -62,6 +62,8 @@ async function profileTable(table: string, cols: Col[], deadline: number) {
     if (k === "bool") parts.push(`count(*) FILTER (WHERE ${C}) AS t${i}`);
     if (k === "text") parts.push(`count(*) FILTER (WHERE ${C} = '') AS e${i}`);
   });
+  const s0 = Date.now();
+  const step = (s: string) => console.log(`[multipark-db-profile] ${table} ${s} ${Date.now() - s0} ms`);
   const [base] = await multiparkDbQuery<any>(`SELECT ${parts.join(", ")} FROM ${T}`);
   const n = Number(base?.n ?? 0);
   const out: any = { linhas: n, colunas: {} as Record<string, any> };
@@ -80,12 +82,14 @@ async function profileTable(table: string, cols: Col[], deadline: number) {
   if (!n) return out;
   if (Date.now() > deadline) { out.parcial = true; return out; }
 
+  step("contagens");
   // 2) Distintos (texto/enum) numa segunda passagem.
   if (distinctCols.length) {
     const d = await multiparkDbQuery<any>(`SELECT ${distinctCols.map((i) => `count(DISTINCT ${q(cols[i].column)}) AS d${i}`).join(", ")} FROM ${T}`);
     for (const i of distinctCols) out.colunas[cols[i].column].distintos = Number(d[0]?.[`d${i}`] ?? 0);
   }
 
+  step("distintos");
   // 3a) Valores de categoria de TODAS as colunas da tabela numa só consulta
   //     (cada consulta custa várias idas e voltas Vercel ↔ BD deles).
   const isCategory = (c: Col) => {
@@ -108,6 +112,7 @@ async function profileTable(table: string, cols: Col[], deadline: number) {
     }
   }
 
+  step("valores");
   // 3b) Rótulos repetidos, JSON, arrays e URLs (poucas colunas por tabela).
   for (const c of cols) {
     if (Date.now() > deadline) { out.parcial = true; break; }
@@ -199,7 +204,7 @@ async function catalogs() {
   };
 }
 
-export interface ProfileOptions { tables?: string[]; budgetMs?: number; withCatalogs?: boolean }
+export interface ProfileOptions { tables?: string[]; budgetMs?: number; withCatalogs?: boolean; listOnly?: boolean }
 
 export async function runMultiparkDbProfile(opts: ProfileOptions = {}) {
   const t0 = Date.now();
@@ -211,6 +216,10 @@ export async function runMultiparkDbProfile(opts: ProfileOptions = {}) {
     const list = byTable.get(r.t) ?? [];
     list.push({ table: r.t, column: r.c, dataType: r.d, udt: r.u });
     byTable.set(r.t, list);
+  }
+  // Só a lista das tabelas (o workflow chama depois uma tabela de cada vez).
+  if (opts.listOnly) {
+    return { ok: true, ranAt: new Date().toISOString(), ms: Date.now() - t0, lista: [...byTable.keys()] };
   }
   // Catálogos numa chamada própria (sem tabelas), para caber nos 60 s da Vercel.
   if (opts.withCatalogs) {
@@ -224,8 +233,11 @@ export async function runMultiparkDbProfile(opts: ProfileOptions = {}) {
   const hardDeadline = t0 + Math.min(38_000, budget + 18_000);
   for (const t of wanted) {
     if (Date.now() - t0 > budget) { pendentes.push(t); continue; }
+    const ts = Date.now();
     try { tabelas[t] = await profileTable(t, byTable.get(t)!, hardDeadline); }
     catch (err: any) { tabelas[t] = { erro: String(err?.message ?? err).slice(0, 200) }; }
+    tabelas[t].ms = Date.now() - ts;
+    console.log(`[multipark-db-profile] ${t} ${tabelas[t].ms} ms (total ${Date.now() - t0} ms)`);
   }
   return { ok: true, ranAt: new Date().toISOString(), ms: Date.now() - t0, tabelas, pendentes, catalogos: null };
 }

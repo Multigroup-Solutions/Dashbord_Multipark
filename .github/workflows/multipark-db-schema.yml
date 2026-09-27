@@ -41,7 +41,7 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 40
     steps:
       - name: Chamar o endpoint
         env:
@@ -56,26 +56,33 @@ jobs:
           test -n "$CRON_SECRET"
           mkdir -p out
           if [ "$MODE" = "perfil" ]; then
-            # Várias chamadas (~30 s de orçamento cada) até não sobrarem tabelas;
-            # os catálogos vêm numa chamada à parte no fim.
+            # Uma tabela por chamada; uma tabela que falhe fica registada com o
+            # erro e o resto continua. Os catálogos vêm numa chamada à parte.
             mkdir -p parts
-            call() {
-              c=$(curl -sS -m 90 -w '%{http_code}' -o "$2" -H "Authorization: Bearer $CRON_SECRET" "$1") || { echo "::error::curl falhou"; exit 1; }
-              echo "HTTP $c ($1)"
-              if [ "$c" -lt 200 ] || [ "$c" -ge 300 ]; then cat "$2"; echo "::error::endpoint devolveu HTTP $c"; exit 1; fi
+            call() { # $1=url $2=ficheiro → devolve o código HTTP (000 se o curl falhar)
+              curl -sS -m 90 -w '%{http_code}' -o "$2" -H "Authorization: Bearer $CRON_SECRET" "$1" || echo "000"
             }
-            call "$APP_URL/api/cron/multipark-db-profile" parts/t0.json
-            cp parts/t0.json out/perfil.json
-            i=0
-            while [ "$(jq '.pendentes | length' out/perfil.json)" -gt 0 ] && [ $i -lt 30 ]; do
-              i=$((i+1))
-              t=$(jq -r '.pendentes | join(",")' out/perfil.json | jq -sRr @uri)
-              call "$APP_URL/api/cron/multipark-db-profile?tables=$t" parts/t$i.json
-              jq -s '.[0] * {tabelas: (.[0].tabelas + .[1].tabelas), pendentes: .[1].pendentes}' out/perfil.json parts/t$i.json > parts/m.json
+            c=$(call "$APP_URL/api/cron/multipark-db-profile?lista=1" parts/lista.json)
+            echo "lista: HTTP $c"
+            if [ "$c" != "200" ]; then cat parts/lista.json; echo "::error::lista falhou (HTTP $c)"; exit 1; fi
+            echo '{"tabelas":{},"pendentes":[]}' > out/perfil.json
+            for t in $(jq -r '.lista[]' parts/lista.json); do
+              c=$(call "$APP_URL/api/cron/multipark-db-profile?tables=$(printf '%s' "$t" | jq -sRr @uri)" parts/t.json)
+              echo "$t: HTTP $c"
+              if [ "$c" = "200" ]; then
+                jq -s '.[0] * {tabelas: (.[0].tabelas + .[1].tabelas)}' out/perfil.json parts/t.json > parts/m.json
+              else
+                jq --arg t "$t" --arg c "$c" '.tabelas[$t] = {erro: ("HTTP " + $c)}' out/perfil.json > parts/m.json
+              fi
               mv parts/m.json out/perfil.json
             done
-            call "$APP_URL/api/cron/multipark-db-profile?catalogos=1" parts/cat.json
-            jq -s '.[0] * {catalogos: .[1].catalogos}' out/perfil.json parts/cat.json > parts/m.json
+            c=$(call "$APP_URL/api/cron/multipark-db-profile?catalogos=1" parts/cat.json)
+            echo "catalogos: HTTP $c"
+            if [ "$c" = "200" ]; then
+              jq -s '.[0] * {catalogos: .[1].catalogos}' out/perfil.json parts/cat.json > parts/m.json
+            else
+              jq --arg c "$c" '.catalogos = {erro: ("HTTP " + $c)}' out/perfil.json > parts/m.json
+            fi
             mv parts/m.json out/perfil.json
             jq '{tabelas: (.tabelas | length), pendentes, parciais: [.tabelas | to_entries[] | select(.value.parcial) | .key], erros: [.tabelas | to_entries[] | select(.value.erro) | .key], clientes: .catalogos.clientes}' out/perfil.json
             exit 0
