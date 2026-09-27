@@ -24,10 +24,8 @@ Os dados de origem vêm da BD da Multipark (`Client`, `BookingVehicle`, `Vehicle
 | `crm_client_external_ids` | Ligação às outras bases | sistema (ficha Multipark, Odoo, contacto Google…) + id externo. Liga as 46 418 fichas da Multipark às nossas |
 | `crm_merge_suggestions` | "Quer juntar?" | cliente A, cliente B, pontuação, motivos (mesma matrícula, mesmo telefone, mesmo NIF, nome parecido), estado (pendente, aceite, recusada), quem decidiu e quando |
 | `crm_merge_events` | Juntar e **separar** | cliente que fica, cliente absorvido, **retrato dos identificadores movidos** (emails, telefones, carros, ids externos, reservas), quem, quando, motivo, `undoneAt`. Separar = repor esse retrato |
-| `crm_interactions` | Linha do tempo | canal (reserva, chamada, email, WhatsApp, nota, avaliação, **alteração de dados**, **fusão/separação**), sentido, referência (id da reserva, da conversa…), data, resumo, autor. Nas alterações de dados guarda o campo, o valor antigo e o novo |
-| `crm_activities` | Tarefas sobre o cliente | tipo (ligar, email, WhatsApp, oferta…), prazo, responsável, estado (atrasada, hoje, futura, feita), nota, plano de origem |
-| `crm_activity_plans` | Sequências de tarefas | nome (ex.: "cliente com reclamação"), passos com intervalo em dias e responsável fixo ou escolhido no início |
-| `crm_saved_views` | Filtros guardados | nome, filtros, agrupamentos, vista (lista, kanban, gráfico, pivot, coorte), privado ou partilhado, por omissão sim/não |
+| `crm_interactions` | Linha do tempo | canal (reserva, chamada, email, WhatsApp, nota, avaliação), sentido, referência (id da reserva, da conversa…), data, resumo |
+| `crm_saved_filters` | Filtros guardados | nome, filtros, agrupamentos, privado ou partilhado, por omissão sim/não |
 
 As fotos ficam no armazenamento que já usamos (S3). Na BD fica só o link.
 
@@ -64,13 +62,14 @@ Um só serviço "quem é?" recebe um email, um telefone ou uma matrícula e devo
 3. As nossas reservas antigas (antes de março de 2026 a BD deles não tem clientes) e os contactos Google já no CRM.
 4. Junção automática por email, seguida das sugestões para rever (telefone, NIF, matrícula).
 
-## Ideias do Odoo 18 (documentação oficial)
+## Do Odoo: só os filtros e a forma como a informação se liga
 
-O conector do Odoo (`multipark.thinkopen.solutions`) está em baixo, com erro 502. Estas ideias vêm da documentação oficial do Odoo 18.
-**Diferença importante:** no Odoo, juntar contactos é **irreversível** (Contacts, CRM e Data Cleaning dizem-no).
-O nosso CRM guarda o retrato de cada fusão e deixa separar, o que é uma vantagem sobre o Odoo.
+O Jorge quer do Odoo só estas duas coisas. O desenho, os ecrãs e o resto do CRM são nossos e ficam como estão.
 
-### Pesquisa e filtros
+**Nota:** no Odoo, juntar contactos é **irreversível** (dizem-no as secções Contacts, CRM e Data Cleaning da documentação).
+O nosso CRM guarda o retrato de cada fusão e deixa separar.
+
+### Pesquisa e filtros (documentação oficial do Odoo 18)
 - **Barra única com facetas.** Escreve-se "AA-12-BB" e o CRM propõe "procurar em Matrícula / Email / Telefone / NIF / Nome". Cada escolha vira um chip que se pode remover.
 - **Filtros em grupos.** Dentro do mesmo grupo combinam com OU e entre grupos com E. Grupos: Segmento (novo, recorrente, VIP, em risco), Aeroporto (Lisboa, Porto, Faro), Canal de origem, Parceiro, Pro/particular, Língua.
 - **Filtro personalizado com regras.** Por exemplo, "n.º de reservas ≥ 5 E última reserva há mais de 180 dias".
@@ -79,71 +78,11 @@ O nosso CRM guarda o retrato de cada fusão e deixa separar, o que é uma vantag
 - **Comparar períodos**: este período contra o anterior ou contra o mesmo período do ano passado.
 - Documentação: https://www.odoo.com/documentation/18.0/applications/essentials/search.html
 
-### Vistas (o filtro mantém-se ao trocar)
-- **Lista** com colunas que se mostram ou escondem e cores por estado.
-- **Kanban** por segmento, com a barra de atividades em atraso, de hoje e futuras.
-- **Gráfico** de barras, linhas ou circular, com a medida à escolha.
-- **Pivot** com exportação para Excel.
-- **Coorte**: dos clientes que vieram pela primeira vez num mês, quantos voltaram N meses depois.
-- **Mapa** da origem dos clientes.
-- Documentação: https://www.odoo.com/documentation/18.0/applications/essentials/reporting.html
+### Que informação o Odoo tem e como se liga (por ver)
 
-### Ficha do cliente
-- **Botões com contadores** no topo, que abrem a lista respetiva: Reservas 23 · Gasto 1 840 € · Carros 2 · Reclamações 1 · Ocorrências · Mensagens.
-- **Separador "Contactos e carros"**: emails, telefones e carros, cada um com tipo, "principal" e foto do carro.
-- **Particular ou empresa.** Nas empresas, preencher os dados a partir do NIF.
-- **Barra "% ficha completa"**: foto, NIF, carro, telefone, morada.
-- Documentação: https://www.odoo.com/documentation/18.0/applications/essentials/contacts.html
-
-### Linha do tempo (o "chatter" do Odoo)
-- Tudo num só sítio: reservas, emails, WhatsApp, chamadas, notas internas com @menções, anexos e alterações de dados (valor antigo e novo).
-- As fusões e separações também ficam lá.
-- Documentação: https://www.odoo.com/documentation/18.0/applications/productivity/discuss/chatter.html
-
-### Atividades
-- Cores: vermelho em atraso, laranja hoje, verde futuro.
-- "Feito e agendar a próxima".
-- Um contador no topo da aplicação com as atividades em atraso, de hoje e futuras.
-- **Planos**, por exemplo "cliente com reclamação": ligar ao fim de 1 dia, email ao fim de 3, oferta ao fim de 30.
-- Documentação: https://www.odoo.com/documentation/18.0/applications/essentials/activities.html
-
-### Duplicados (inspirado na app Data Cleaning)
-- **Fila "Sugestões de fusão"** com a percentagem de semelhança e os motivos: mesma matrícula, telefone, NIF, nome parecido.
-- Botões **Fundir** e **Descartar**. Uma sugestão descartada não volta a aparecer.
-- A verificação corre todas as noites.
-- Na ficha aparece um aviso "possível duplicado" com o motivo.
-- Limpeza automática dos campos: telefone no formato internacional, maiúsculas, espaços.
-- Ao fundir, o cliente absorvido é arquivado e não apagado, e fica um retrato do que foi movido. É isso que permite **separar**.
-- Documentação: https://www.odoo.com/documentation/18.0/applications/productivity/data_cleaning.html
-
-### Reconhecer o cliente (VoIP, WhatsApp e email no Odoo)
-- **Janela ao tocar o telefone**: "Cliente X · 12 reservas · VIP · AA-12-BB · reserva ativa amanhã", com um botão para abrir a ficha. A chamada fica na linha do tempo.
-- **WhatsApp** liga a conversa ao cliente pelo número de telefone.
-- **Email**: cartão do cliente ao lado da conversa, com a opção de registar o email na linha do tempo.
-- Documentação: https://www.odoo.com/documentation/18.0/applications/productivity/voip.html
-
-### Insights
-- **Pontuação "probabilidade de voltar" e "risco de perder o cliente"**, ao estilo do lead scoring preditivo do Odoo.
-- A nossa segmentação por recência, frequência e valor já vai além do que o Odoo traz de origem.
-- **Painel com filtros globais** (período, aeroporto, parque, canal) e clique até à lista de clientes.
-- Documentação: https://www.odoo.com/documentation/18.0/applications/sales/crm/track_leads/lead_scoring.html
-
-### Tornar o CRM agradável de usar
-- **Desafios e medalhas para a equipa**: mais duplicados resolvidos, mais fichas completas.
-- Uma pequena celebração ao fechar um objetivo.
-- Documentação: https://www.odoo.com/documentation/18.0/applications/sales/crm/optimize/gamification.html
-
-### Prioridade proposta
-1. Barra de pesquisa com facetas e chips.
-2. Filtros em grupos, agrupar por e filtros guardados.
-3. Ficha com os botões de contadores e o separador de contactos e carros com fotos.
-4. Fila de sugestões de fusão, com Fundir, Descartar e **Separar**.
-5. Linha do tempo única.
-6. Janela de reconhecimento na reserva, no WhatsApp e no email (o telefone depende da central).
-7. Vistas de gráfico e pivot sobre o mesmo filtro, com comparação de períodos.
-8. Atividades com cores e planos.
-9. Coorte de retenção.
-10. Pontuação de regresso e de risco. Desafios para a equipa.
+Vamos analisar isto no Odoo real, pelo conector, que o Jorge vai voltar a abrir.
+Pontos a levantar: que módulos estão instalados (CRM, Vendas, Faturação, Contactos, Frota…); como o contacto liga às vendas,
+às faturas, aos pagamentos, às atividades e aos emails; que campos o Odoo guarda no contacto que nós não temos.
 
 ## Por decidir
 
