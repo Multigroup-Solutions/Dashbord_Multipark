@@ -3,6 +3,9 @@
 27 set 2026 · análise só de leitura do código (ramo `claude/caixa-auditoria`, a partir de `origin/main` e8eab2e).
 Não foram lidos dados de produção. Referências: `docs/multipark-db/plano-duas-bd.md` (B2), `mapeamento.md` (§1–3) e `schema.md`.
 
+> **Ver também [`caixa-furos.md`](caixa-furos.md)**: todos os sítios por onde o dinheiro pode fugir (não só o preço), o que
+> se pode cruzar com o quê, as regras novas R12–R29, as prioridades e o caminho por fases, que continua os PR deste documento.
+
 ## O teste do dono
 
 Pegou numa reserva que já tínhamos (pela API ou pelo webhook) e, no Multipark, tirou o preço, pôs um preço, voltou a tirá-lo e
@@ -262,6 +265,8 @@ alteração sem rasto também abre caso.
 | 6 | **Alertas** | R3/R6/R8 no momento, resumo diário e saúde R10 pelos canais existentes | 0,5–1 d |
 | 7 | **Pequenas correções na cópia atual** | Voltar a gravar `cashValidated`/`driverValidated`/`cashierClosed` (bool + At + ByName) e `originalBookingPrice`, `discountAmount`, `paymentSource` em `applyBookingDetail`. `upsertBookingExtras` passa a aceitar lista vazia (linhas retiradas). O `multipark-db-diff` passa a agendado e a gravar | 0,5–1 d |
 | 8 | **Retratos de trás** (opcional) | Reconstruir os retratos de criação e check-in a partir de `History.snapshot` e `originalBookingPrice` desde 2 mar 2026, para os parques nossos | 1 d |
+
+Os PR 9 a 15 (outros furos, contagem da caixa e gastos, cruzamentos externos) estão em [`caixa-furos.md`](caixa-furos.md) §6.
 
 **Total:** cerca de 9–12 dias. Os PR 1 e 7 podem entrar já: deixam de se perder dados e não mudam nenhum ecrã.
 Os PR 2 a 4 dão a deteção, o 5 e o 6 o ecrã e os alertas.
