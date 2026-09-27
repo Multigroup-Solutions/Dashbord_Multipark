@@ -255,6 +255,27 @@ app.get("/api/cron/multipark-db-diff", async (req, res) => {
   }
 });
 
+// Perfil da BD da Multipark: o que cada tabela/coluna guarda de facto
+// (% preenchida, datas, valores de categoria, chaves JSON, servidores dos
+// URLs) + catálogos de negócio. SÓ LÊ; valores pessoais nunca saem.
+// ?tables=A,B (vazio = todas) &catalogos=1. Devolve `pendentes` se não couber
+// tudo numa chamada. Workflow multipark-db-schema.yml (modo "perfil").
+app.get("/api/cron/multipark-db-profile", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { isMultiparkDbConfigured, redactSecrets } = await import("../multiparkDb/client");
+  if (!isMultiparkDbConfigured()) {
+    return res.status(503).json({ ok: false, error: "DATABASE_URL_MULTIPARK não está definida neste ambiente." });
+  }
+  try {
+    const { runMultiparkDbProfile } = await import("../multiparkDb/profile");
+    const tables = typeof req.query?.tables === "string" && req.query.tables ? req.query.tables.split(",").map((s: string) => s.trim()).filter(Boolean).slice(0, 100) : undefined;
+    res.status(200).json(await runMultiparkDbProfile({ tables, withCatalogs: req.query?.catalogos === "1" }));
+  } catch (err) {
+    console.error("[multipark-db-profile] falhou:", redactSecrets(err));
+    res.status(500).json({ ok: false, error: redactSecrets(err).slice(0, 500) });
+  }
+});
+
 // Ligações automáticas funcionário ↔ utilizador ↔ agente Multipark (Fase 1).
 // Conservador e idempotente — ver server/identityLink.ts.
 app.get("/api/cron/identity-sweep", async (req, res) => {
