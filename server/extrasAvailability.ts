@@ -693,6 +693,8 @@ export async function sendWeeklyAvailabilityRequest(opts: {
   testEmail?: string | null;     // se vier, envia SÓ a este endereço (teste)
   // Mensagem-tipo (default: semana clássica); targetDate = dia ISO do pedido
   message?: (Omit<AvailabilityMessageParams, "note" | "weekLabel"> & { targetDate?: string | null }) | null;
+  /** Tipo do envio automático (X-Multipark-Auto): pedido (omissão) ou lembrete. */
+  autoKind?: "availability_request" | "availability_reminder";
 }): Promise<SendResult> {
   if (!parseIsoDate(opts.weekStart)) {
     throw new Error("weekStart inválido (esperado YYYY-MM-DD)");
@@ -723,6 +725,8 @@ export async function sendWeeklyAvailabilityRequest(opts: {
       html,
       from: "recursos-humanos@multipark.pt",
       fromName: "Multipark Operações",
+      // Envio automático: fora da caixa partilhada até alguém responder.
+      auto: { kind: "availability_test" },
     });
     return {
       total: 1,
@@ -753,6 +757,8 @@ export async function sendWeeklyAvailabilityRequest(opts: {
       html,
       from: "recursos-humanos@multipark.pt",
       fromName: "Multipark Operações",
+      // Envio automático: fora da caixa partilhada até o extra responder; fica na ficha do extra.
+      auto: { kind: opts.autoKind ?? "availability_request", employeeId: e.id },
     });
     if (ok) result.sent++;
     else result.failed++;

@@ -29,6 +29,7 @@ import {
 } from "@/components/crm/crmUi";
 import { EditClientDialog, IbanDialog, MergeDialog, RelationDialog, VehicleDialog, type VehicleForm } from "@/components/crm/CrmClientDialogs";
 import { FindEmailButton } from "@/components/crm/FindEmail";
+import { ProAccountSection } from "@/components/crm/ProAccountSection";
 import { isCrmFile, type CrmBooking, type CrmFile } from "@/components/crm/crmTypes";
 
 /** Sistema antigo (Firebase): endereço por confirmar com o Rafael. */
@@ -71,6 +72,7 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
   const [editOpen, setEditOpen] = useState(false);
   const [vehicle, setVehicle] = useState<VehicleForm | null | undefined>(undefined);
   const [relOpen, setRelOpen] = useState(false);
+  const [personOpen, setPersonOpen] = useState(false);
   const [merge, setMerge] = useState<{ id: number; name: string | null } | null | undefined>(undefined);
   const [ibanOpen, setIbanOpen] = useState(false);
   const tabsRef = useRef<HTMLDivElement>(null);
@@ -81,6 +83,8 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
     { enabled: !!(c.primaryEmail || c.primaryPhone || primaryPlate), retry: false, staleTime: 60_000 },
   );
   const mail = trpc.mail.timeline.useQuery({ type: "client", id: c.primaryEmail ?? "" }, { enabled: !!c.primaryEmail, retry: false, staleTime: 60_000 });
+  // fase 2: conta corrente Pro (null = a ficha não é uma conta Pro da Multipark)
+  const pro = trpc.crm.proAccount.useQuery({ clientId: c.id }, { retry: false, staleTime: 60_000 });
 
   const contact = trpc.crm.contact.useMutation({ onSuccess: reload, onError: (e) => toast.error(e.message) });
   const removeRel = trpc.crm.relation.useMutation({ onSuccess: reload, onError: (e) => toast.error(e.message) });
@@ -299,6 +303,9 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
         </div>
       </div>
 
+      {/* conta corrente Pro (fase 2) */}
+      {pro.data && <ProAccountSection a={pro.data} onLinkPerson={c.canEdit ? () => setPersonOpen(true) : undefined} />}
+
       {/* indicadores */}
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 xl:grid-cols-8">
         {kpis.map((k) => (
@@ -419,6 +426,7 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
       <EditClientDialog c={c} open={editOpen} onOpenChange={setEditOpen} onSaved={reload} />
       <VehicleDialog clientId={c.id} vehicle={vehicle ?? null} open={vehicle !== undefined} onOpenChange={(o) => { if (!o) setVehicle(undefined); }} onSaved={reload} />
       <RelationDialog clientId={c.id} open={relOpen} onOpenChange={setRelOpen} onSaved={reload} />
+      <RelationDialog asCompany clientId={c.id} open={personOpen} onOpenChange={setPersonOpen} onSaved={() => { reload(); pro.refetch(); }} />
       <MergeDialog clientId={c.id} clientName={c.displayName} preset={merge ?? null} open={merge !== undefined}
         onOpenChange={(o) => { if (!o) setMerge(undefined); }}
         onMerged={(sid) => { utils.crm.invalidate(); if (sid !== c.id) navigate(`/clientes/${sid}`); else reload(); }} />

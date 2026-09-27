@@ -561,6 +561,7 @@ export async function sendScheduleEmails(date: string, city: ScheduleCity, opts:
       subject: `Escala Multipark — ${text.split(" · ")[0]}`,
       text: `Olá ${first},\n\nEstás escalado(a): ${text}.\n\nSe não puderes ir, avisa-nos o quanto antes (responde a este email ou pelo WhatsApp).\n\nObrigado,\nMultipark`,
       html: `<p>Olá ${esc(first)},</p><p>Estás escalado(a): <strong>${esc(text)}</strong>.</p><p>Se não puderes ir, avisa-nos o quanto antes (responde a este email ou pelo WhatsApp).</p><p>Obrigado,<br/>Multipark</p>`,
+      auto: { kind: "schedule_notice", employeeId: empId },
     } as any);
     for (const a of claimed) await finishNotification(a, "scheduled", "email", ok ? "sent" : "failed", ok ? null : "falhou o envio do email");
     if (ok) out.sent += claimed.length;
@@ -695,6 +696,7 @@ async function notifyRemoval(row: AssignmentRow, userId: number | null): Promise
         subject: `Escala Multipark — turno cancelado (${text.split(" · ")[0]})`,
         text: `${msg}\n\nMultipark`,
         html: `<p>${esc(msg)}</p><p>Multipark</p>`,
+        auto: { kind: "schedule_cancel", employeeId: row.employeeId ?? null },
       } as any);
       await finishNotification(row, "removed", "email", ok ? "sent" : "failed", ok ? null : "falhou o envio do email");
       out.email = ok ? "sent" : "failed";

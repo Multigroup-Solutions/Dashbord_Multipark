@@ -171,6 +171,110 @@ export const SYSTEM_MAIL_HEADER = "X-Multipark-System";
 /** Valores de mail_messages.automated que tornam a conversa "automática" (escondida por omissão). */
 export const MAIL_HIDDEN_AUTOMATED_VALUES: readonly number[] = [MAIL_AUTOMATED_RESERVATION, MAIL_AUTOMATED_SYSTEM];
 
+// ─── Envios automáticos da aplicação (set 2026) ─────────────────────────────
+//
+// TODOS os emails que a aplicação envia sozinha (pedidos e lembretes de
+// disponibilidade aos extras, avisos de escala, lembretes de formação,
+// notificações…) levam `X-Multipark-System: 1` + `X-Multipark-Auto: <tipo>`
+// + `Auto-Submitted: auto-generated`, mesmo quando saem por um alias
+// (recursos-humanos@). A sincronização guarda-os como automáticos (3): a
+// conversa só com envios nossos fica escondida na Comunicação (fora das
+// contagens de não lidas / por responder / abertas). Se a pessoa responder,
+// a resposta (humana) torna a conversa normal. Os envios ligados a um
+// colaborador/extra ficam também em `mail_auto_sends` (ficha do extra →
+// "Comunicações automáticas").
+
+/** Cabeçalho com o tipo do envio automático (ver AUTO_MAIL_KIND_LABELS). */
+export const AUTO_MAIL_HEADER = "X-Multipark-Auto";
+
+export const AUTO_MAIL_KIND_LABELS: Record<string, string> = {
+  availability_request: "Pedido de disponibilidade",
+  availability_reminder: "Lembrete de disponibilidade",
+  availability_test: "Pedido de disponibilidade (teste)",
+  schedule_notice: "Aviso de escala",
+  schedule_cancel: "Turno cancelado",
+  training_reminder: "Lembrete de formação",
+  task_notice: "Aviso de tarefa",
+  handover: "Passagem de turno",
+  report: "Relatório",
+  notification: "Notificação",
+  owner_alert: "Alerta ao dono",
+  system: "Email de sistema",
+};
+
+export function autoMailKindLabel(kind: string | null | undefined): string {
+  const k = String(kind ?? "").trim();
+  return AUTO_MAIL_KIND_LABELS[k] ?? (k || "Automático");
+}
+
+/** Tipo do envio automático guardado no cabeçalho (só letras, dígitos e _; máx. 40). PURA. */
+export function normalizeAutoMailKind(v: string | null | undefined): string | null {
+  const k = String(v ?? "").trim().toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40);
+  return k || null;
+}
+
+/**
+ * Assuntos das automações (para os emails antigos, enviados antes do
+ * cabeçalho existir). Só assuntos gerados pelo código — nunca Re:/Fwd:.
+ */
+const AUTO_SUBJECTS: ReadonlyArray<{ re: RegExp; kind: string }> = [
+  { re: /^\[TESTE\]\s*(Disponibilidade\s*[—–-]\s*semana de |Estás disponível .+ no turno |Que horas podes fazer |Preciso de um condutor )/i, kind: "availability_test" },
+  { re: /^Disponibilidade\s*[—–-]\s*semana de /i, kind: "availability_request" },
+  { re: /^Estás disponível .+ no turno .+\?$/i, kind: "availability_request" },
+  { re: /^Que horas podes fazer .+\?$/i, kind: "availability_request" },
+  { re: /^Preciso de um condutor .+ das \d{1,2}h às \d{1,2}h$/i, kind: "availability_request" },
+  { re: /^Escala Multipark\s*[—–-]\s*turno cancelado/i, kind: "schedule_cancel" },
+  { re: /^Escala Multipark\s*[—–-]\s*/i, kind: "schedule_notice" },
+  { re: /^Formação por concluir\s*[—–-]\s*/i, kind: "training_reminder" },
+  { re: /^\[Dashboard Multipark\]\s/i, kind: "notification" },
+];
+
+/** Remetentes das automações (além do remetente de sistema configurado). */
+export const AUTO_MAIL_SENDERS: readonly string[] = ["recursos-humanos@multipark.pt", "reservas@multipark.pt"];
+
+/**
+ * Envio automático da aplicação? Pelo cabeçalho (X-Multipark-System /
+ * X-Multipark-Auto) ou, para os antigos, por um remetente das automações +
+ * assunto conhecido. Só mensagens ENVIADAS por nós. Devolve o tipo ou null.
+ * PURA.
+ */
+export function automaticOutboundKind(
+  m: { outbound: boolean; fromEmail?: string | null; subject?: string | null; systemHeader?: boolean; autoKind?: string | null },
+  senders: readonly string[] = AUTO_MAIL_SENDERS,
+): string | null {
+  const headerKind = normalizeAutoMailKind(m.autoKind);
+  if (headerKind) return headerKind;
+  if (m.systemHeader) return "system";
+  if (!m.outbound) return null;
+  const from = normalizeAddress(m.fromEmail);
+  if (!from || !senders.some((s) => normalizeAddress(s) === from)) return null;
+  const subject = String(m.subject ?? "").trim();
+  if (!subject || REPLY_OR_FORWARD.test(subject)) return null;
+  for (const s of AUTO_SUBJECTS) if (s.re.test(subject)) return s.kind;
+  return null;
+}
+
+/**
+ * Conversa automática (escondida)? Só quando TODAS as mensagens são
+ * automáticas escondidas (notificação de reserva ou envio da aplicação). Uma
+ * resposta de uma pessoa (0) torna-a normal. Mesma regra que o SQL de
+ * server/mail/store.ts recomputeThread e da migração 0220. PURA.
+ */
+export function threadIsAutomatic(messageAutomated: readonly number[]): boolean {
+  return messageAutomated.length > 0 && messageAutomated.every((v) => MAIL_HIDDEN_AUTOMATED_VALUES.includes(Number(v)));
+}
+
+/**
+ * Estado de um envio automático na ficha do extra: "respondido" quando a
+ * conversa já tem uma mensagem recebida de uma pessoa (deixou de ser
+ * automática); senão "enviado". PURA.
+ */
+export function autoSendStatus(t: { threadAutomated?: number | boolean | null; lastInboundAt?: string | null } | null | undefined): "enviado" | "respondido" {
+  if (!t) return "enviado";
+  const automated = t.threadAutomated == null ? null : Number(t.threadAutomated) === 1;
+  return automated === false && !!t.lastInboundAt ? "respondido" : "enviado";
+}
+
 const RESERVATION_NOTICE_SUBJECT = /nova reserva/i;
 const REPLY_OR_FORWARD = /^\s*(re|res|fw|fwd|enc|reenc|tr)\s*:/i;
 const INTERNAL_SENDER = /@(multipark|skypark)\.(pt|app)$/;

@@ -7,6 +7,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { RecruitmentSection } from "@/components/RecruitmentSection";
 import { IdentityLinksSection } from "@/components/IdentityLinksSection";
 import { EmployeeAccessAvailability } from '@/components/EmployeeAccessAvailability';
+import { EmployeeAutoMail } from '@/components/EmployeeAutoMail';
 import { trpc } from "@/lib/trpc";
 import { fmtPTDateTime, fmtPTDate } from "@/lib/lisbonTime";
 import { DeactivationDialog } from "@/components/DeactivationDialog";
@@ -1755,6 +1756,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
       )}
 
       <EmployeeAccessAvailability employeeId={employeeId} />
+      <EmployeeAutoMail employeeId={employeeId} />
 
       {/* Tabs */}
       <Tabs defaultValue={(() => {

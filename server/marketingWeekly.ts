@@ -121,7 +121,7 @@ export async function maybeSendMarketingWeekly(clock: { date: string; dow: numbe
     const report = await buildWeeklyReport(clock.date);
     const origin = (process.env.APP_URL || process.env.PUBLIC_APP_URL || "https://dashboard.multipark.pt").replace(/\/+$/, "");
     const mail = renderWeeklyEmail(report, origin);
-    const ok = await sendEmail({ to: to.join(", "), subject: mail.subject, html: mail.html, text: mail.text, fromName: "Dashboard Multipark" });
+    const ok = await sendEmail({ to: to.join(", "), subject: mail.subject, html: mail.html, text: mail.text, fromName: "Dashboard Multipark", auto: { kind: "report" } });
     if (!ok) throw new Error("envio do email falhou");
     return { sentTo: to.length, spend: Math.round(report.total.spend), bookings: report.total.bookings };
   });

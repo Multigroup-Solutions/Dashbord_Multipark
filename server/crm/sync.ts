@@ -89,7 +89,9 @@ async function loadCandidates(db: any, emails: string[], phones: string[], plate
   const list = [...ids];
   const out = new Map<number, ExistingClient>();
   for (const part of chunks(list, 800)) {
-    for (const c of rowsOf(await db.execute(sql`SELECT id, displayName, firstName, lastName, DATE_FORMAT(lastSeenAt, '%Y-%m-%d %H:%i:%s') AS lastSeenAt FROM crm_clients WHERE status = 'active' AND id IN (${inList(part)})`))) {
+    // empresas nunca são "quem viajou": funcionários que reservam com o email e o
+    // telefone da empresa (conta Pro) ficam com ficha própria, não na da empresa
+    for (const c of rowsOf(await db.execute(sql`SELECT id, displayName, firstName, lastName, DATE_FORMAT(lastSeenAt, '%Y-%m-%d %H:%i:%s') AS lastSeenAt FROM crm_clients WHERE status = 'active' AND kind <> 'company' AND id IN (${inList(part)})`))) {
       const names = [c.displayName, [c.firstName, c.lastName].filter(Boolean).join(" ")].filter((n) => n && String(n).trim()) as string[];
       out.set(Number(c.id), { id: Number(c.id), displayName: c.displayName ?? null, names: [...new Set(names)], emails: [], phones: [], plates: [], lastSeen: c.lastSeenAt ?? null });
     }

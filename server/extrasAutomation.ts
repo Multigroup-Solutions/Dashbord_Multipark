@@ -283,12 +283,12 @@ export function userSeesProject(access: { all: boolean; projectIds: number[] }, 
 
 export interface RequestRunResult { emailSent: number; whatsappSent: number; targets: number }
 
-export async function sendAvailabilityRequest(weekStart: string, employeeIds: number[] | null, note: string | null): Promise<RequestRunResult> {
+export async function sendAvailabilityRequest(weekStart: string, employeeIds: number[] | null, note: string | null, autoKind: "availability_request" | "availability_reminder" = "availability_request"): Promise<RequestRunResult> {
   const { sendWeeklyAvailabilityRequest } = await import("./extrasAvailability");
   const out: RequestRunResult = { emailSent: 0, whatsappSent: 0, targets: 0 };
   if (employeeIds && employeeIds.length === 0) return out;
 
-  const email = await sendWeeklyAvailabilityRequest({ weekStart, origin: appOrigin(), note, employeeIds });
+  const email = await sendWeeklyAvailabilityRequest({ weekStart, origin: appOrigin(), note, employeeIds, autoKind });
   out.emailSent = email.sent;
   out.targets = email.total;
 
@@ -325,7 +325,7 @@ export async function runReminder(weekStart: string): Promise<RequestRunResult> 
   const { getWeekOverview } = await import("./extrasAvailability");
   const ov = await getWeekOverview(weekStart);
   const pending = ov.extras.filter((e) => !e.responded).map((e) => e.employeeId);
-  return sendAvailabilityRequest(weekStart, pending, "Lembrete: ainda não indicaste a tua disponibilidade");
+  return sendAvailabilityRequest(weekStart, pending, "Lembrete: ainda não indicaste a tua disponibilidade", "availability_reminder");
 }
 
 // ─── 7. Aviso de escala por WhatsApp ────────────────────────────────────────

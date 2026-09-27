@@ -273,6 +273,11 @@ export async function runMailSync(opts: { deadlineAt: number; onlyAccountKey?: s
     const { getSetting } = await import("../appSettings");
     backfillDays = (await getSetting("mail.backfillDays")) ?? 90;
   } catch { /* omissão */ }
+  let autoSenders: string[] = [];
+  try {
+    const { systemSenderAddress } = await import("./systemMail");
+    autoSenders = [await systemSenderAddress()];
+  } catch { /* omissão: AUTO_MAIL_SENDERS */ }
 
   for (const acc of accounts) {
     if (Date.now() > opts.deadlineAt - 3_000) { report.done = false; break; }
@@ -289,7 +294,7 @@ export async function runMailSync(opts: { deadlineAt: number; onlyAccountKey?: s
     try {
       const api = await gmailApiForAccount(acc.key);
       const r = await syncAccount(api, dbSyncStore, acc, {
-        deadlineAt: opts.deadlineAt - 2_000, backfillDays, brandDomains, workspaceDomains, onStored: makeOnStored(api, report, brandDomains),
+        deadlineAt: opts.deadlineAt - 2_000, backfillDays, brandDomains, workspaceDomains, autoSenders, onStored: makeOnStored(api, report, brandDomains),
       });
       report.stored += r.stored;
       if (r.partial) report.done = false;

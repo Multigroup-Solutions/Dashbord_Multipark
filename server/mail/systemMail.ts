@@ -19,7 +19,7 @@
  */
 import { randomUUID } from "node:crypto";
 import {
-  DEFAULT_MAILBOX_SOURCE, SYSTEM_MAIL_HEADER, checkSendAs, extractAddresses, normalizeAddress, sourceAccountKey,
+  AUTO_MAIL_HEADER, DEFAULT_MAILBOX_SOURCE, SYSTEM_MAIL_HEADER, checkSendAs, normalizeAutoMailKind, extractAddresses, normalizeAddress, sourceAccountKey,
   type MailboxConfig, type SendAsEntry,
 } from "../../shared/mail";
 import { parseServiceAccount } from "../_core/ai/client";
@@ -44,9 +44,28 @@ export type SendEmailOptions = {
   references?: string | string[];
   /** "system" (omissão sem `from`): marcado como automático; "client" (omissão com `from`): conversa normal. */
   kind?: "system" | "client";
+  /**
+   * Envio AUTOMÁTICO da aplicação (pedido/lembrete de disponibilidade, aviso
+   * de escala, lembrete de formação…): mesmo saindo por um alias
+   * (recursos-humanos@), leva X-Multipark-System + X-Multipark-Auto: <kind>
+   * + Auto-Submitted — a conversa fica escondida na Comunicação até a pessoa
+   * responder. Com `employeeId`, o envio fica em `mail_auto_sends` (ficha do
+   * extra → "Comunicações automáticas").
+   */
+  auto?: { kind: string; employeeId?: number | null };
 };
 
-export interface SendResult { ok: boolean; messageId?: string; from?: string; accountKey?: string; error?: string }
+export interface SendResult {
+  ok: boolean; messageId?: string; from?: string; accountKey?: string; error?: string;
+  /** Ids do Gmail do email enviado (conversa na Comunicação). */
+  gmailMessageId?: string; gmailThreadId?: string | null;
+}
+
+/** Envio automático a registar (mail_auto_sends). */
+export interface AutoSendRecord {
+  accountKey: string; gmailMessageId: string; gmailThreadId: string | null; rfcMessageId: string;
+  kind: string; employeeId: number | null; toEmail: string | null; subject: string;
+}
 
 /** O que o envio usa da API Gmail (gmailApi.ts). */
 export interface SenderApi {
@@ -64,6 +83,8 @@ export interface SystemMailDeps {
   /** Conta de serviço com delegação configurada? */
   dwdAvailable(): boolean;
   log?(msg: string): void;
+  /** Regista um envio automático (best-effort; nunca impede o envio). */
+  recordAutoSend?(r: AutoSendRecord): Promise<void>;
 }
 
 const SEND_AS_TTL_MS = 10 * 60_000;
@@ -103,6 +124,7 @@ export async function sendMailWith(deps: SystemMailDeps, o: SendEmailOptions): P
     return { ok: false, error: "Conta de serviço Google (delegação) em falta — sem envio de email." };
   }
   const kind = o.kind ?? (o.from ? "client" : "system");
+  const autoKind = o.auto ? normalizeAutoMailKind(o.auto.kind) ?? "system" : null;
   const system = normalizeAddress(await deps.systemSender().catch(() => DEFAULT_MAILBOX_SOURCE)) || DEFAULT_MAILBOX_SOURCE;
   const requested = normalizeAddress(o.from);
 
@@ -140,12 +162,23 @@ export async function sendMailWith(deps: SystemMailDeps, o: SendEmailOptions): P
       inReplyTo: o.inReplyTo ?? null,
       references: refs.filter(Boolean),
       attachments: (o.attachments ?? []).map((a) => ({ filename: a.filename, contentType: a.contentType || undefined, content: a.content })),
-      headers: kind === "system" ? { [SYSTEM_MAIL_HEADER]: "1", "Auto-Submitted": "auto-generated" } : {},
+      headers: kind === "system" || autoKind ? { [SYSTEM_MAIL_HEADER]: "1", [AUTO_MAIL_HEADER]: autoKind ?? "system", "Auto-Submitted": "auto-generated" } : {},
       messageId,
       replyTo,
     });
-    await api.sendRaw(raw, null);
-    return { ok: true, messageId, from: fromAddress, accountKey };
+    const sent = await api.sendRaw(raw, null);
+    const gmailMessageId = sent?.id ? String(sent.id) : undefined;
+    const gmailThreadId = sent?.threadId ? String(sent.threadId) : null;
+    if (autoKind && gmailMessageId && o.auto?.employeeId != null && deps.recordAutoSend) {
+      try {
+        await deps.recordAutoSend({
+          accountKey, gmailMessageId, gmailThreadId, rfcMessageId: messageId, kind: autoKind,
+          employeeId: o.auto?.employeeId ?? null, toEmail: to[0] ?? cc[0] ?? null,
+          subject: String(o.subject ?? "").replace(/[\r\n]+/g, " ").slice(0, 500),
+        });
+      } catch (err: any) { deps.log?.(`[email] Registo do envio automático falhou: ${String(err?.message ?? err).slice(0, 160)}`); }
+    }
+    return { ok: true, messageId, from: fromAddress, accountKey, gmailMessageId, gmailThreadId };
   } catch (err: any) {
     const msg = String(err?.message ?? err).slice(0, 300);
     deps.log?.(`[email] Falhou o envio (${accountKey}): ${msg}`);
@@ -179,6 +212,10 @@ export const dbSystemMailDeps: SystemMailDeps = {
     return isEmailSendConfigured();
   },
   log: (m) => console.warn(m),
+  async recordAutoSend(r) {
+    const { recordAutoSend } = await import("./autoSends");
+    await recordAutoSend(r);
+  },
 };
 
 /**

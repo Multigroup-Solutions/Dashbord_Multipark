@@ -433,6 +433,7 @@ export async function runTrainingAutomation(now: Date, hour: number): Promise<Tr
           to, subject: `Formação por concluir — ${a.pathName}`,
           text: `Olá ${a.fullName.split(" ")[0]},\n\n${body}\n\nObrigado,\nMultipark`,
           html: `<p>Olá ${escapeHtml(a.fullName.split(" ")[0])},</p><p>${escapeHtml(body.replace(` Conclui-a em ${link}`, ""))}</p><p><a href="${link}">Abrir a Formação</a></p><p>Obrigado,<br>Multipark</p>`,
+          auto: { kind: "training_reminder", employeeId: a.employeeId ?? null },
         });
         if (ok) report.emailed++;
       } catch { /* segue */ }
