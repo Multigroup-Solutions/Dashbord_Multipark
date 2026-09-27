@@ -845,6 +845,17 @@ function defaultScopedProjectId(): number | null {
   return a && !a.all ? a.defaultCityId ?? null : null;
 }
 
+/**
+ * Cidades a que o pedido está limitado (para filtrar "Park.city" nas leituras
+ * da BD Multipark). undefined = todas; [] = nenhuma. Já inclui o filtro de
+ * projeto/cidade do pedido (selectedCityAccess no middleware).
+ */
+function scopedCityNames(): string[] | undefined {
+  const a = cityScopeStore.getStore();
+  if (!a || a.all) return undefined;
+  return a.cityNames ?? (a.cityName ? [a.cityName] : []);
+}
+
 async function loadLostInScope(id: number) {
   const item = await getLostFoundItemById(id);
   if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Caso não encontrado" });
@@ -5920,6 +5931,43 @@ export const appRouter = router({
       return filterOwnCases(ctx.user, "ocorrencias", "incident", await getIncidents(input));
     }),
 
+    // Ocorrências da app Multipark, lidas AO VIVO da BD deles ("Occurrence").
+    // Só leitura: resolvem-se na app Multipark. Nunca lança por falta de BD —
+    // devolve { available:false, reason } e a página mostra um aviso.
+    multipark: protectedProcedure.input(z.object({
+      projectId: z.number().optional(),
+      dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      parkId: z.string().max(64).optional(),
+      type: z.string().max(200).optional(),
+      priority: z.enum(["LOW", "MEDIUM", "HIGH"]).optional(),
+      resolved: z.boolean().optional(),
+      search: z.string().max(100).optional(),
+      limit: z.number().int().min(1).max(200).optional(),
+      offset: z.number().int().min(0).max(5000).optional(),
+    }).optional()).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "ocorrencias", "view");
+      const { listMultiparkOccurrences, getMultiparkOccurrenceStats } = await import("./multiparkDb/read");
+      const { projectId: _p, limit, offset, ...filters } = input ?? {};
+      const f = { ...filters, cities: scopedCityNames() };
+      const list = await listMultiparkOccurrences({ ...f, limit, offset });
+      if (!list.available) return { available: false as const, reason: list.reason, code: list.code };
+      const stats = await getMultiparkOccurrenceStats(f);
+      return {
+        available: true as const,
+        ...list.data,
+        stats: stats.available ? stats.data : null,
+      };
+    }),
+
+    multiparkById: protectedProcedure.input(z.object({ id: z.string().min(1).max(64), projectId: z.number().optional() })).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "ocorrencias", "view");
+      const { getMultiparkOccurrence } = await import("./multiparkDb/read");
+      const r = await getMultiparkOccurrence(input.id, scopedCityNames());
+      if (!r.available) return { available: false as const, reason: r.reason, code: r.code };
+      return { available: true as const, occurrence: r.data };
+    }),
+
     getById: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "ocorrencias", "view", { allowOwn: true });
       await assertOwnCase(ctx.user, "ocorrencias", "incident", input.id);
@@ -6090,25 +6138,6 @@ export const appRouter = router({
         totalPrice: b.totalPrice,
       };
     }),
-
-    // Sincroniza ocorrências a partir do multipark_booking_history (remarks
-    // dos agentes nos check-in/out/movements). Dedup por sourceEmailId e por
-    // matrícula+reserva±2h (vira nota na ocorrência existente).
-    syncFromMultipark: protectedProcedure
-      .input(z.object({ lookbackDays: z.number().int().min(1).max(180).optional() }).optional())
-      .mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "ocorrencias", "edit");
-        const { syncIncidentsFromMultiparkHistory } = await import("./db");
-        const r = await syncIncidentsFromMultiparkHistory({
-          lookbackDays: input?.lookbackDays ?? 30,
-          reportedById: ctx.user.id,
-        });
-        await logActivity({
-          userId: ctx.user.id, action: "sync", entity: "incident", entityId: 0,
-          details: `Multipark sync: ${r.imported} importadas, ${r.skipped} já existiam/duplicadas, ${r.scanned} analisadas`,
-        });
-        return r;
-      }),
 
     // Conversões NÃO destrutivas: cria o registo novo e fecha esta ocorrência
     // como 'converted', ligada nos dois sentidos. Admin+.

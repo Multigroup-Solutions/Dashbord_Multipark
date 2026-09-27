@@ -7,7 +7,8 @@
 //   recursos-humanos@→ inbound_emails (aba Recrutamento; os Leads de Extras
 //                      tratam-nos). Só respostas de disponibilidade que
 //                      precisam de decisão humana viram tarefa (1 por pessoa × semana).
-//   campanhas@ / ocorrencias@ → inbound_emails / Ocorrências.
+//   campanhas@ / ocorrencias@ → só inbound_emails (as ocorrências vêm da BD
+//                      Multipark, ver server/multiparkDb/read.ts).
 //
 // A ÚNICA fonte é a sincronização da API do Gmail (server/mail/service.ts):
 // o alias pelo qual o email entrou (tabela de aliases em Definições →
@@ -283,104 +284,11 @@ async function routeToModule(
     return { targetModule: "lostfound", targetId: id ?? undefined };
   }
 
-  // ocorrencias → OCORRÊNCIA a partir do email do painel Multipark (o Jorge
-  // reencaminha; futuramente alias + regra automática). O corpo completo fica
-  // em inbound_emails para afinar o parser ao formato real.
+  // ocorrencias → já NÃO cria ocorrências (incidents). As ocorrências vivem
+  // na app Multipark e a página /ocorrencias lê-as diretamente da BD deles
+  // ("Occurrence"). O email fica só em inbound_emails (consulta/auditoria).
   if (alias === "ocorrencias") {
-    // Formato REAL do email do painel (visto 6 ago):
-    //   De: Sky Park <info@multipark.pt>
-    //   Date: sexta, 31/07/2026 à(s) 10:37
-    //   Tipo de ocorrência: *Outros*
-    //   *Localização do carro:* https://…maps…query=41.23,-8.67
-    //   *Matricula do carro:* 0173NFM
-    //   Observações: …
-    const body = ctx.bodyText;
-    const typeM = body.match(/Tipo de ocorr[êe]ncia:\s*\*?\s*([^*\n]+?)\s*\*?\s*$/im);
-    const rawType = (typeM?.[1] ?? "").trim().toLowerCase();
-    const TYPE_MAP: Record<string, { t: string; s: string }> = {
-      "outros": { t: "outro", s: "medium" },
-      "outro": { t: "outro", s: "medium" },
-      "dano": { t: "dano", s: "high" },
-      "danos": { t: "dano", s: "high" },
-      "vidro": { t: "vidro_aberto", s: "medium" },
-      "vidro aberto": { t: "vidro_aberto", s: "medium" },
-      "mal estacionado": { t: "mal_estacionado", s: "medium" },
-      "chave": { t: "chave_errada", s: "medium" },
-      "chave errada": { t: "chave_errada", s: "medium" },
-      "combustivel": { t: "combustivel", s: "medium" },
-      "combustível": { t: "combustivel", s: "medium" },
-      "limpeza": { t: "limpeza", s: "low" },
-      "documentos": { t: "documentos", s: "low" },
-    };
-    let mapped = TYPE_MAP[rawType];
-    // Sem tipo útil ("Outros") tenta classificar pelas observações
-    const obsM = body.match(/Observa[çc][õo]es:\s*([\s\S]*?)(?:\n{3,}|$)/i);
-    const obs = (obsM?.[1] ?? "").trim();
-    if ((!mapped || mapped.t === "outro") && obs) {
-      const low = obs.toLowerCase();
-      if (/dano|amassad|risc|batid|embat|colis|raspad|partid/.test(low)) mapped = { t: "dano", s: "high" };
-      else if (/vidro|janela/.test(low)) mapped = { t: "vidro_aberto", s: "medium" };
-      else if (/chav/.test(low)) mapped = { t: "chave_errada", s: "medium" };
-      else if (/combust|gasolina|gas[oó]leo/.test(low)) mapped = { t: "combustivel", s: "medium" };
-      else if (/suj|limpez|nodoa|mancha/.test(low)) mapped = { t: "limpeza", s: "low" };
-    }
-    const plateM = body.match(/Matr[ií]cula do carro:\s*\*?\s*([A-Z0-9-]{4,10})/i)
-      ?? body.toUpperCase().match(/([A-Z]{2}-\d{2}-[A-Z0-9]{2}|\d{2}-[A-Z]{2}-\d{2}|\d{2}-\d{2}-[A-Z]{2})/);
-    const gpsM = body.match(/query=(-?\d+\.\d+),(-?\d+\.\d+)/);
-    const parkM = body.match(/^\s*De:\s*([^<\n]+?)\s*</im);
-    // Data REAL da ocorrência (linha Date do forward): "sexta, 31/07/2026 à(s) 10:37"
-    const dateM = body.match(/(\d{2})\/(\d{2})\/(\d{4})[^\d]{1,8}(\d{1,2}):(\d{2})/);
-    const srcDate = dateM
-      ? `${dateM[3]}-${dateM[2]}-${dateM[1]} ${dateM[4].padStart(2, "0")}:${dateM[5]}:00`
-      : undefined;
-    const cuidM = body.match(/c[a-z0-9]{20,30}/);
-    const descParts = [
-      obs || ctx.subject,
-      parkM ? `Parque: ${parkM[1].trim()}` : null,
-      rawType && !TYPE_MAP[rawType] ? `Tipo (Multipark): ${typeM![1].trim()}` : null,
-    ].filter(Boolean);
-    const { createIncident } = await import("../db");
-    const { lisbonLocalToUtc } = await import("../../shared/caseRules");
-    // A linha "Date" do forward é hora de LISBOA → grava-se em UTC.
-    const srcDateUtc = srcDate ? lisbonLocalToUtc(srcDate) ?? undefined : undefined;
-    const plate = plateM ? plateM[1].toUpperCase() : undefined;
-    const bookingRefOcc = cuidM ? cuidM[0] : undefined;
-    const { findDuplicateIncident, appendIncidentNote, deriveBookingForCase } = await import("../caseOps");
-    // Dedup por CONTEÚDO (o mesmo email reencaminhado 2x tem messageId novo) e
-    // contra a sincronização dos remarks Multipark: mesma matrícula + reserva
-    // compatível + ±2h → fica como NOTA na ocorrência existente.
-    if (plate && srcDateUtc) {
-      const dup = await findDuplicateIncident({ plate, bookingRef: bookingRefOcc, atUtc: srcDateUtc });
-      if (dup) {
-        try {
-          const { getIncidentById } = await import("../db");
-          const cur = await getIncidentById(dup.id);
-          const marker = `(email ${String(ctx.messageId).slice(0, 60)})`;
-          const sameText = (cur?.description ?? "").trim() === descParts.join("\n").slice(0, 5000).trim();
-          if (!sameText && !(cur?.resolution ?? "").includes(marker)) {
-            await appendIncidentNote(dup.id, "Email", `${descParts.join(" · ").slice(0, 1500)} ${marker}`);
-          }
-        } catch { /* best-effort */ }
-        return { targetModule: "incident_dup", targetId: dup.id };
-      }
-    }
-    // Cidade da ocorrência = cidade da reserva (ref do email ou matrícula+data).
-    const occBooking = await deriveBookingForCase({ bookingRef: bookingRefOcc, plate, atUtc: srcDateUtc ?? null });
-    const id = await createIncident({
-      incidentType: (mapped?.t ?? "outro") as any,
-      severity: (mapped?.s ?? "medium") as any,
-      description: descParts.join("\n").slice(0, 5000),
-      vehiclePlate: plate,
-      reservationLink: occBooking?.externalId ?? bookingRefOcc,
-      projectId: occBooking?.projectId ?? undefined,
-      gpsLatitude: gpsM ? gpsM[1] : undefined,
-      gpsLongitude: gpsM ? gpsM[2] : undefined,
-      status: "open",
-      reportedBy: await getSystemUserId(),
-      sourceEmailId: ctx.messageId?.slice(0, 100),
-      ...(srcDateUtc ? { sourceEmailDate: srcDateUtc } : {}),
-    } as any);
-    return { targetModule: "incident", targetId: id ?? undefined };
+    return { targetModule: "multipark_occurrence" };
   }
 
   // ── "SIM" automático (pedido Jorge): resposta de um extra ao pedido de
