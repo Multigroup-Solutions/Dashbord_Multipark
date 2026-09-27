@@ -73,12 +73,13 @@ import { mailRouter, googleAccountRouter } from "./mail/router";
 import { googleCalendarRouter } from "./google/router";
 import { googleDriveRouter } from "./google/driveRouter";
 import { contactsRouter } from "./contactsRouter";
+import { bookingFileRouter } from "./bookingFileRouter";
 import { searchRouter } from "./globalSearchRouter";
 import { knowledgeRouter } from "./knowledge/router";
 import { webAnalyticsRouter } from "./webAnalytics/router";
 import { gbpRouter } from "./integrations/googleBusiness/profileRouter";
 import { whatsappCallsRouter } from "./whatsappCallsRouter";
-import { getBookingHistory, getBookingsReport, getBookingTryAllParks } from "./multipark";
+import { getBookingHistory, getBookingsReport } from "./multipark";
 import { deliveryErrorCode } from "./bookingDeliveryQueue";
 import {
   getExtrasDiaForecast,
@@ -1539,6 +1540,8 @@ export const appRouter = router({
   googleCalendar: googleCalendarRouter,
   googleDrive: googleDriveRouter,
   contacts: contactsRouter,
+  // Ficha da reserva (/reserva/:id), lida ao vivo da BD Multipark.
+  bookingFile: bookingFileRouter,
   assistant: assistantRouter,
   search: searchRouter,
   knowledge: knowledgeRouter,
@@ -5067,16 +5070,6 @@ export const appRouter = router({
       return autoLinkComplaintBooking(input.id);
     }),
 
-    // Botão "Atualizar da API": puxa a reserva completa + histórico direto da
-    // API Multipark e grava na BD local (para reservas antigas/histórico só
-    // com a criação).
-    refreshBookingData: protectedProcedure.input(z.object({
-      reservationRef: z.string().min(1),
-    })).mutation(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "reclamacoes", "edit");
-      const { refreshBookingFromApi } = await import("./complaintDossier");
-      return refreshBookingFromApi(input.reservationRef);
-    }),
 
     // Agentes Multipark que mexeram na matrícula (mesma peça dos Perdidos).
     vehicleAgents: protectedProcedure.input(z.object({
@@ -5861,16 +5854,6 @@ export const appRouter = router({
       return autoLinkLostFoundBooking(input.id);
     }),
 
-    // Botão "Atualizar da API": puxa a reserva completa + histórico direto da
-    // API Multipark e grava na BD local.
-    refreshBookingData: protectedProcedure.input(z.object({
-      reservationRef: z.string().min(1).max(128),
-    })).mutation(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "perdidos", "edit");
-      if (!(await bookingRefInScope(input.reservationRef))) throw new TRPCError({ code: "FORBIDDEN", message: "Reserva fora das tuas cidades." });
-      const { refreshBookingFromApi } = await import("./complaintDossier");
-      return refreshBookingFromApi(input.reservationRef);
-    }),
   }),
 
   // ─── OCORRÊNCIAS (INCIDENTS) ──────────────────────────────────────────────
@@ -6864,25 +6847,6 @@ export const appRouter = router({
       requireAccess(ctx.user, "sincronizacao", "manage");
       return mpTestConnection();
     }),
-
-    // Inspect raw booking JSON from API (tries all parks). Admin-only debug tool.
-    inspectBooking: protectedProcedure
-      .input(z.object({ externalId: z.string().min(1) }))
-      .query(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "sincronizacao", "manage");
-        const found = await getBookingTryAllParks(input.externalId);
-        if (!found) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Reserva não encontrada em nenhum parque (ou chaves de API em falta).",
-          });
-        }
-        return {
-          park: `${found.parkConfig.name} (${found.parkConfig.city})`,
-          parkId: found.parkConfig.id,
-          booking: found.booking,
-        };
-      }),
 
     // Check availability
     checkAvailability: protectedProcedure

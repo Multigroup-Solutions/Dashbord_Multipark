@@ -1,0 +1,32 @@
+---
+modulo: reservas_operacoes
+titulo: Ficha da reserva
+rotas: /reserva
+palavras: ficha da reserva, detalhe da reserva, estado da reserva, fases, check-in, check-out, voo, ETA, vídeo, assinatura, anexos, histórico, linha do tempo, GPS, lugar, garagem, alocação, caixa, pagamentos, fatura, cancelamento, reembolso, serviços extra, chat, emails, ocorrências, avaliação, marketplace, parceiro, direto
+---
+# Ficha da reserva
+
+Tudo sobre uma reserva num só sítio, lido **em tempo real** da base de dados da Multipark. Nada é copiado para o dashboard: o que muda na app Multipark aparece logo aqui.
+
+**Abrir**
+- Em **Reclamações** e **Perdidos e Achados**, no cartão "Dados da Reserva", carrega em **Abrir ficha da reserva**.
+- Ou vai a **/reserva** e escreve o **n.º da reserva** (ex.: 29484), o id da Multipark ou a referência do parceiro.
+- O mesmo n.º pode existir em parques diferentes: nesse caso aparece a lista para escolheres a reserva certa.
+- O antigo "Inspecionar reserva" (/multipark/inspect) abre agora esta ficha.
+
+**O que mostra**
+- **Cabeçalho**: n.º, estado, parque, entrada e saída, voos com a hora prevista atualizada (ETA), tipo de entrega, origem (**Direto** ou **Marketplace**, com o parceiro e a comissão), preço (e o preço na criação, se mudou), valor pago e método. Por baixo, a hora de cada fase: a entrar, em movimento, à espera de saída, à espera da bagagem, a sair.
+- **Cliente**: nome, email, telefone, NIF e língua. Se o email existir nos nossos Clientes aparece **Ver ficha do cliente (CRM)**.
+- **Viatura**: matrícula, marca, modelo, cor, km, autonomia e quem fez a entrada e a saída.
+- **Provas**: vídeo do check-in, assinaturas de entrada e saída e anexos. Os vídeos e anexos com link abrem diretamente. Os que estão guardados dentro da app mostram **abrir na app Multipark**. As assinaturas só são carregadas quando carregas em **Mostrar assinaturas**.
+- **Linha do tempo** (abre ao clicar): cada ação sobre a reserva, com quem, quando, em que aparelho, o que mudou (**antes → depois**) e o estado nesse momento. Quando a ação tem GPS aparece o link **mapa**. O percurso real dos condutores está nos dados do Zello. O histórico da Multipark só existe desde 2 mar 2026.
+- **Onde está o carro**: n.º, alocação, garagem (com o mapa, se existir) e lugar.
+- **Contas**: as linhas da conta (estacionamento, valet, serviços, taxas, descontos), cada pagamento com a hora e o método, as faturas (InvoiceExpress, emitida ou não), o cancelamento com o motivo e o reembolso, e a caixa: condutor validou, dinheiro conferido e caixa fechada, com quem e quando.
+- **Serviços extra**: nome, preço, se já foi feito e o preço da tabela do parque quando é diferente.
+- **Comunicação** (abre ao clicar): o chat da app com o cliente e os emails enviados pela app Multipark.
+- **Ocorrências e avaliação**: as ocorrências registadas na app para esta reserva (abrem em Ocorrências) e a avaliação do cliente.
+- **Os nossos casos**: as reclamações e os perdidos e achados do dashboard ligados a esta reserva, com link para cada um.
+
+**Se aparecer um aviso amarelo**, a base de dados da Multipark não respondeu ou falta uma parte (por exemplo, a lista de pagamentos). O resto da ficha continua visível. Tenta de novo daqui a pouco.
+
+Tem acesso quem vê as reservas (Reservas & Operações), e cada um só vê as reservas dos parques das suas cidades. As reclamações e os perdidos só aparecem a quem tem acesso a esses módulos.

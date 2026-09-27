@@ -44,7 +44,7 @@ import MultiparkPage from "./pages/MultiparkPage";
 import OperacoesPage from "./pages/OperacoesPage";
 import ExtrasDiaPage from "./pages/ExtrasDiaPage";
 import AvaliacaoOperacionalPage from "./pages/AvaliacaoOperacionalPage";
-import MultiparkInspectPage from "./pages/MultiparkInspectPage";
+import BookingFilePage from "./pages/BookingFilePage";
 import InvitePage from "./pages/InvitePage";
 import DisponibilidadePage from "./pages/DisponibilidadePage";
 import WhatsAppInboxPage from "./pages/WhatsAppInboxPage";
@@ -224,9 +224,17 @@ function Router() {
         {() => (<DashboardLayout><OperacoesPage /></DashboardLayout>)}
       </Route>
       {/* Rotas exatas ANTES de /multipark/:section? — o Switch do wouter é
-          first-match-wins e o param opcional engoliria /multipark/inspect. */}
+          first-match-wins e o param opcional engoliria /multipark/inspect.
+          O antigo "Inspecionar reserva" passou a ser a ficha da reserva. */}
       <Route path="/multipark/inspect">
-        {() => (<DashboardLayout><MultiparkInspectPage /></DashboardLayout>)}
+        {() => {
+          const ref = new URLSearchParams(window.location.search).get("id") ?? new URLSearchParams(window.location.search).get("externalId");
+          return <Redirect to={ref ? `/reserva/${encodeURIComponent(ref)}` : "/reserva"} replace />;
+        }}
+      </Route>
+      {/* Ficha da reserva: tudo sobre uma reserva, lido ao vivo da BD Multipark. */}
+      <Route path="/reserva/:ref?">
+        {() => (<DashboardLayout><BookingFilePage /></DashboardLayout>)}
       </Route>
       <Route path="/multipark/:section?">
         {() => (<DashboardLayout><MultiparkPage /></DashboardLayout>)}
