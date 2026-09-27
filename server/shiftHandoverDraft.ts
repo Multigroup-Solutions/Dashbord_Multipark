@@ -8,6 +8,13 @@
  * PDAs ainda com check-in, picagens sem saída, alertas de velocidade/GPS e
  * quem está de turno agora vs a seguir (com team leader).
  *
+ * FONTE DAS RESERVAS E OCORRÊNCIAS: a BD da Multipark AO VIVO
+ * (server/multiparkDb/shiftState.ts) — recolhas/entregas do próximo turno,
+ * entregas pendentes, carros p/ coberto e ocorrências por resolver. Se a BD
+ * da Multipark não estiver disponível, volta às nossas cópias
+ * (multipark_bookings / multipark_booking_history / incidents) e o rascunho
+ * diz isso em `source` (a página mostra um aviso).
+ *
  * Regras: SQL sempre parametrizado (drizzle `sql`); cidade SEMPRE explícita
  * (projectos da árvore da cidade) E o âmbito do utilizador (projectScope…);
  * ONLY_FULL_GROUP_BY — só agregados ou colunas agrupadas.
@@ -34,6 +41,7 @@ import {
   type OpenItem,
   type ShiftRef,
 } from "../shared/shiftHandoverAuto";
+import type { LiveUpcoming, ShiftState } from "./multiparkDb/shiftState";
 
 // ─── Helpers puros ───────────────────────────────────────────────────────────
 
@@ -76,7 +84,7 @@ export function draftOpenItems(d: {
   complaints: Array<{ id: number; title: string }>;
   lostFound: Array<{ id: number; clientName: string; description: string }>;
   pdas: Array<{ id: number; pdaName: string | null; employeeName: string | null }>;
-  incidents: Array<{ id: number; description: string; plate: string | null }>;
+  incidents: Array<{ id: number | string; description: string; plate: string | null }>;
   pendingDeliveries: Array<{ externalId: string; bookingNumber: string | null; plate: string | null }>;
 }, since: string): OpenItem[] {
   const item = (kind: OpenItem["kind"], refId: number | string, text: string): OpenItem =>
@@ -84,7 +92,7 @@ export function draftOpenItems(d: {
   return [
     ...d.complaints.map((c) => item("complaint", c.id, `#${c.id} ${c.title}`)),
     ...d.lostFound.map((l) => item("lost_found", l.id, `#${l.id} ${l.clientName} — ${l.description.slice(0, 120)}`)),
-    ...d.incidents.map((i) => item("incident", i.id, `#${i.id}${i.plate ? ` ${i.plate}` : ""} — ${i.description.slice(0, 120)}`)),
+    ...d.incidents.map((i) => item("incident", i.id, `${typeof i.id === "number" ? `#${i.id}` : "Ocorrência"}${i.plate ? ` ${i.plate}` : ""} — ${i.description.slice(0, 120)}`)),
     ...d.pdas.map((p) => item("pda", p.id, `${p.pdaName ?? "PDA"} com check-in de ${p.employeeName ?? "?"}`)),
     ...d.pendingDeliveries.map((b) => item("delivery", b.externalId, `Entrega pendente ${b.bookingNumber ?? b.externalId}${b.plate ? ` (${b.plate})` : ""}`)),
   ];
@@ -110,7 +118,8 @@ export interface HandoverDraft {
   pendingDeliveries: Array<{ externalId: string; bookingNumber: string | null; plate: string | null; clientName: string; since: string }>;
   complaints: Array<{ id: number; title: string; status: string; priority: string; createdAt: string; isNew: boolean }>;
   lostFound: Array<{ id: number; clientName: string; description: string; status: string }>;
-  incidents: Array<{ id: number; type: string; severity: string; description: string; plate: string | null }>;
+  /** Ocorrências abertas: ao vivo ("Occurrence", id texto) ou, sem BD Multipark, a nossa tabela `incidents` (id numérico). */
+  incidents: Array<{ id: number | string; type: string; severity: string; description: string; plate: string | null }>;
   whatsapp: Array<{ id: number; name: string; unreadCount: number }>;
   pdas: Array<{ id: number; pdaName: string | null; employeeName: string | null; since: string }>;
   clockIns: Array<{ employeeId: number; name: string; since: string }>;
@@ -123,6 +132,75 @@ export interface HandoverDraft {
     ackByName: string | null; acked: boolean;
   } | null;
   carryOver: OpenItem[];
+  /** De onde vieram reservas/ocorrências: BD da Multipark ao vivo ou as nossas cópias (com o motivo). */
+  source: { live: boolean; reason: string | null };
+  /** Resumo do "Estado do parque (ao vivo)" — null sem BD da Multipark. */
+  liveSummary: LiveSummary | null;
+}
+
+export interface LiveSummary {
+  inPark: number;
+  inProgress: number;
+  overdue: number;
+  cashNotClosed: number;
+  occurrencesOpen: number;
+  /** null = não foi possível ler os bloqueios. */
+  blocksTomorrow: number | null;
+}
+
+/** Janela da caixa do turno: do início até agora (nunca depois do fim). PURA. */
+export function cashWindowOf(win: { startMs: number; endMs: number }, nowMs: number): { startMs: number; endMs: number } {
+  return { startMs: win.startMs, endMs: Math.max(win.startMs, Math.min(nowMs, win.endMs)) };
+}
+
+/** Estado ao vivo → partes do rascunho (recolhas/entregas, pendentes, coberto, ocorrências). PURA. */
+export function draftPartsFromLive(st: ShiftState): {
+  ciRows: Array<{ row: DraftBookingRow; ms: number }>;
+  coRows: Array<{ row: DraftBookingRow; ms: number }>;
+  pendingDeliveries: HandoverDraft["pendingDeliveries"];
+  covered: CoveredCarCandidate[];
+  incidents: HandoverDraft["incidents"];
+  summary: LiveSummary;
+} {
+  const up = (u: LiveUpcoming) => {
+    const ms = u.at ? Date.parse(u.at) : NaN;
+    return {
+      ms: Number.isFinite(ms) ? ms : 0,
+      row: {
+        externalId: u.id, bookingNumber: u.code, time: Number.isFinite(ms) ? lisbonHHMM(ms) : "",
+        clientName: u.clientName ?? "—", plate: u.plate,
+        flight: u.flight ? `${u.flight}${u.flightEta ? ` (ETA ${lisbonHHMM(Date.parse(u.flightEta))})` : ""}` : null,
+        remainingToPay: u.toPay, spotType: u.covered ? "covered" : null, deliveryType: u.deliveryType,
+      } satisfies DraftBookingRow,
+    };
+  };
+  const pendingPhases = new Set(["pending_checkout", "baggage_waiting", "at_delivery"]);
+  return {
+    ciRows: st.upcoming.checkins.map(up),
+    coRows: st.upcoming.checkouts.map(up),
+    pendingDeliveries: st.inProgress.filter((c) => pendingPhases.has(c.phase)).map((c) => ({
+      externalId: c.id, bookingNumber: c.code, plate: c.plate, clientName: c.clientName ?? "—",
+      since: c.phaseSince ? lisbonHHMM(Date.parse(c.phaseSince)) : "",
+    })),
+    covered: st.inPark.cars.map((c): CoveredCarCandidate => ({
+      externalId: c.id, bookingNumber: c.code, plate: c.plate, parkName: c.parkName, status: c.status,
+      spotType: c.covered ? "covered" : null, parkingType: null,
+      checkInMs: c.checkIn ? Date.parse(c.checkIn) : null, lastMoveMs: c.movingAt ? Date.parse(c.movingAt) : null,
+    })),
+    incidents: st.occurrences.list.map((o) => ({
+      id: o.id, type: o.title, severity: (o.priority ?? "MEDIUM").toLowerCase(),
+      description: [o.title, o.parkName, o.bookingCode ? `reserva ${o.bookingCode}` : null, o.remarks].filter(Boolean).join(" — "),
+      plate: o.plate,
+    })),
+    summary: {
+      inPark: st.inPark.total,
+      inProgress: st.inProgress.length,
+      overdue: st.inPark.overdue,
+      cashNotClosed: st.cash.notCashierClosed,
+      occurrencesOpen: st.occurrences.list.length,
+      blocksTomorrow: st.blocks == null ? null : st.blocks.length,
+    },
+  };
 }
 
 const LIST_LIMIT = 80;
@@ -157,8 +235,20 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
     }
   };
 
+  // BD da Multipark AO VIVO (reservas, pendentes, coberto, ocorrências).
+  // Sem ela → as nossas cópias, como antes (e o aviso em `source`).
+  const live = await safe("multipark ao vivo", async () => {
+    const { getMultiparkShiftState } = await import("./multiparkDb/shiftState");
+    return getMultiparkShiftState({
+      cities: [key.city], nowMs,
+      upcoming: { startMs: nwin.startMs, endMs: nwin.endMs },
+      cash: cashWindowOf(win, nowMs),
+    });
+  }, { available: false as const, code: "QUERY_FAILED" as const, reason: "Não foi possível ler a BD da Multipark neste momento." });
+  const liveParts = live.available ? draftPartsFromLive(live.data) : null;
+
   // Recolhas (checkIn) e entregas (checkOut) do turno seguinte
-  const bookingsIn = (field: "checkIn" | "checkOut") => safe(`bookings ${field}`, async () => rowsOf(await db.execute(sql`
+  const bookingsIn = (field: "checkIn" | "checkOut") => liveParts ? Promise.resolve([] as any[]) : safe(`bookings ${field}`, async () => rowsOf(await db.execute(sql`
     SELECT b.externalId, b.bookingNumber, b.clientFirstName, b.clientLastName, b.licensePlate,
       UNIX_TIMESTAMP(${sql.identifier(field)}) AS t, b.remainingToPay, b.spotType, b.deliveryType,
       ${field === "checkIn" ? sql`COALESCE(NULLIF(b.departingFlight, ''), b.departureFlight)` : sql`COALESCE(NULLIF(b.returnFlight, ''), b.arrivalFlight)`} AS flight
@@ -176,7 +266,7 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
 
   // Entregas pendentes: PENDING_CHECKOUT sem CHECK_OUT posterior (últimas 24h do turno)
   const pendingSince = new Date(win.startMs - 12 * 3_600_000).toISOString().slice(0, 19).replace("T", " ");
-  const pending = await safe("pending deliveries", async () => rowsOf(await db.execute(sql`
+  const pending = liveParts ? [] as any[] : await safe("pending deliveries", async () => rowsOf(await db.execute(sql`
     SELECT h.bookingExternalId AS externalId, UNIX_TIMESTAMP(MIN(h.actionTime)) AS t,
       b.bookingNumber, b.licensePlate, b.clientFirstName, b.clientLastName
     FROM multipark_booking_history h
@@ -193,7 +283,7 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
   // recebidas nos últimos 60 dias) — o filtro "sem movimento depois do
   // check-in" é o helper puro `coveredCarsPending`.
   const coveredSince = new Date(nowMs - 60 * 86_400_000).toISOString().slice(0, 19).replace("T", " ");
-  const coveredRows = await safe("covered cars", async () => rowsOf(await db.execute(sql`
+  const coveredRows = liveParts ? [] as any[] : await safe("covered cars", async () => rowsOf(await db.execute(sql`
     SELECT b.externalId, b.bookingNumber, b.licensePlate, b.parkName, b.status, b.spotType, b.parkingType,
       UNIX_TIMESTAMP(COALESCE(
         (SELECT MAX(h.actionTime) FROM multipark_booking_history h WHERE h.bookingExternalId = b.externalId AND h.changeType IN ('CHECK_IN', 'CHECKIN')),
@@ -205,7 +295,7 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
       AND b.checkIn >= ${coveredSince}
       AND ${inCity(sql`b.projectId`)}
     ORDER BY b.checkIn LIMIT 500`)), [] as any[]);
-  const coveredPending = coveredCarsPending(coveredRows.map((r): CoveredCarCandidate => ({
+  const coveredPending = liveParts ? coveredCarsPending(liveParts.covered, nowMs) : coveredCarsPending(coveredRows.map((r): CoveredCarCandidate => ({
     externalId: String(r.externalId), bookingNumber: r.bookingNumber ?? null, plate: r.licensePlate ?? null, parkName: r.parkName ?? null,
     status: r.status ?? null, spotType: r.spotType ?? null, parkingType: r.parkingType ?? null,
     checkInMs: r.ciT == null ? null : num(r.ciT) * 1000, lastMoveMs: r.mvT == null ? null : num(r.mvT) * 1000,
@@ -225,7 +315,7 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
     WHERE status IN ('new', 'investigating', 'found') AND ${inCity(sql`lost_found_items.projectId`)}
     ORDER BY createdAt DESC LIMIT 200`)), [] as any[]);
 
-  const incidentRows = await safe("incidents", async () => rowsOf(await db.execute(sql`
+  const incidentRows = liveParts ? [] as any[] : await safe("incidents", async () => rowsOf(await db.execute(sql`
     SELECT id, incidentType, severity, description, vehiclePlate FROM incidents
     WHERE status IN ('open', 'investigating') AND ${inCity(sql`incidents.projectId`)}
     ORDER BY createdAt DESC LIMIT 200`)), [] as any[]);
@@ -308,17 +398,19 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
     };
   }, null as HandoverDraft["previous"]);
 
-  const checkins = ciRows.map(toBooking);
-  const checkouts = coRows.map(toBooking);
+  const checkins = liveParts ? liveParts.ciRows.map((x) => x.row) : ciRows.map(toBooking);
+  const checkouts = liveParts ? liveParts.coRows.map((x) => x.row) : coRows.map(toBooking);
+  const checkinMs = liveParts ? liveParts.ciRows.map((x) => x.ms) : ciRows.map((r) => num(r.t) * 1000);
+  const checkoutMs = liveParts ? liveParts.coRows.map((x) => x.ms) : coRows.map((r) => num(r.t) * 1000);
   const complaints = complaintsRows.map((r) => ({
     id: Number(r.id), title: String(r.title ?? ""), status: String(r.status), priority: String(r.priority),
     createdAt: tsHHMM(r.t), isNew: Number(r.isNew) === 1,
   }));
   const openComplaints = complaints.filter((c) => ["new", "analyzing", "waiting_client"].includes(c.status));
   const lostFound = lostRows.map((r) => ({ id: Number(r.id), clientName: String(r.clientName ?? ""), description: String(r.description ?? ""), status: String(r.status) }));
-  const incidents = incidentRows.map((r) => ({ id: Number(r.id), type: String(r.incidentType), severity: String(r.severity), description: String(r.description ?? ""), plate: r.vehiclePlate ?? null }));
+  const incidents: HandoverDraft["incidents"] = liveParts ? liveParts.incidents : incidentRows.map((r) => ({ id: Number(r.id), type: String(r.incidentType), severity: String(r.severity), description: String(r.description ?? ""), plate: r.vehiclePlate ?? null }));
   const pdas = pdaRows.map((r) => ({ id: Number(r.id), pdaName: r.pdaName ?? null, employeeName: r.employeeName ?? null, since: tsHHMM(r.t) }));
-  const pendingDeliveries = pending.map((r) => ({
+  const pendingDeliveries = liveParts ? liveParts.pendingDeliveries : pending.map((r) => ({
     externalId: String(r.externalId), bookingNumber: r.bookingNumber ?? null, plate: r.licensePlate ?? null,
     clientName: fullName(r.clientFirstName, r.clientLastName), since: tsHHMM(r.t),
   }));
@@ -350,7 +442,7 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
     nextWindow: { start: nwin.start, end: nwin.end },
     generatedAt: new Date(nowMs).toISOString(),
     counts,
-    byHour: bucketByHour(next, ciRows.map((r) => num(r.t) * 1000), coRows.map((r) => num(r.t) * 1000)),
+    byHour: bucketByHour(next, checkinMs, checkoutMs),
     checkins: checkins.slice(0, LIST_LIMIT),
     checkouts: checkouts.slice(0, LIST_LIMIT),
     coveredCheckinsNext: checkins.filter((b) => b.spotType === "covered").length,
@@ -373,6 +465,8 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
     people,
     previous,
     carryOver,
+    source: live.available ? { live: true, reason: null } : { live: false, reason: live.reason },
+    liveSummary: liveParts?.summary ?? null,
   };
 }
 
@@ -392,5 +486,7 @@ export function draftSnapshot(d: HandoverDraft): string {
     lostFound: d.lostFound.slice(0, 40),
     pdas: d.pdas.slice(0, 40),
     clockIns: d.clockIns.slice(0, 40),
+    source: d.source,
+    liveSummary: d.liveSummary,
   });
 }
