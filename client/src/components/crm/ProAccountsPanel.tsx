@@ -65,7 +65,9 @@ export function ProAccountsPanel({ onShowProFichas }: { onShowProFichas?: () => 
                       <div className="flex items-center gap-2.5">
                         <ClientAvatar name={r.name} photoUrl={r.photoUrl} size={32} />
                         <div className="min-w-0">
-                          <div className="flex items-center gap-1.5"><strong className="truncate">{r.name ?? "Sem nome"}</strong>{!r.active && <Pill className="bg-muted text-muted-foreground">desativado</Pill>}</div>
+                          <div className="flex items-center gap-1.5"><strong className="truncate">{r.name ?? "Sem nome"}</strong>{r.legacy
+                            ? <Pill className="bg-muted text-muted-foreground" title="Tem reservas Pro ou cobranças online, mas hoje não é Pro em nenhum parque na Multipark">Pro antigo</Pill>
+                            : !r.active && <Pill className="bg-muted text-muted-foreground">desativado</Pill>}</div>
                           <div className="truncate text-xs text-muted-foreground">{[r.email, r.nif ? `NIF ${r.nif}` : null].filter(Boolean).join(" · ")}</div>
                         </div>
                       </div>
