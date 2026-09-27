@@ -250,20 +250,14 @@ function Router() {
       <Route path="/reserva/:ref?">
         {() => (<DashboardLayout><BookingFilePage /></DashboardLayout>)}
       </Route>
-      {/* As listas antigas (/multipark/reservas, entradas, saídas…) passaram a
-          ser a lista única "Reservas do dia" nas Operações; a Sincronização
-          (estado) vive em Definições → Estado do sistema. */}
       <Route path="/multipark/sync">
         {() => <Redirect to="/definicoes?tab=estado" />}
       </Route>
-      {/* As listas antigas (/multipark/reservas, entradas, saídas…) passaram a
-          ser a lista única "Reservas do dia" nas Operações; a Sincronização
-          (estado) vive em Definições → Estado do sistema. */}
-      <Route path="/multipark/sync">
-        {() => <Redirect to="/definicoes?tab=estado" />}
-      </Route>
+      {/* As listas antigas (/multipark/reservas, entradas, saidas, cancelados)
+          abrem as abas com o mesmo nome nas Operações; o resto, as "Reservas do
+          dia". A Sincronização (estado) vive em Definições → Estado do sistema. */}
       <Route path="/multipark/:section?">
-        {(params) => <Redirect to={`/operacoes?tab=${params.section === "entradas" || params.section === "saidas" ? params.section : "dia"}`} />}
+        {(params) => <Redirect to={`/operacoes?tab=${["reservas", "entradas", "saidas", "cancelados"].includes(params.section ?? "") ? params.section : "dia"}`} />}
       </Route>
       <Route path="/servicos">
         {() => (<DashboardLayout><ServicesPage /></DashboardLayout>)}

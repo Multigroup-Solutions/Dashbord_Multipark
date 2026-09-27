@@ -10,7 +10,7 @@ Uma só lista com as **entradas** (check-in) e as **saídas** (check-out) de **u
 
 **Onde**
 - Menu **Operações → Reservas & Operações**, aba **Reservas do dia**.
-- Os endereços antigos (`/multipark/reservas`, `/multipark/entradas`, `/multipark/saidas`…) e as abas antigas Reservas, Recolhas, Entregas e Cancelados abrem esta lista.
+- Ao lado ficam as listas por período **Reservas**, **Recolhas**, **Entregas** e **Cancelados** (ver a ajuda "Reservas, Recolhas, Entregas e Cancelados").
 
 **O dia**
 - Abre **sempre no dia de hoje** (hora de Lisboa) e carrega só esse dia, por isso é rápida.
