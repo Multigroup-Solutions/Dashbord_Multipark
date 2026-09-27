@@ -185,6 +185,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0205").then(m => ({ s: m.MIGRATION_0205_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0205 })),
       import("./migrations/migration_0210").then(m => ({ s: m.MIGRATION_0210_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0210 })),
       import("./migrations/migration_0215").then(m => ({ s: m.MIGRATION_0215_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0215 })),
+      import("./migrations/migration_0220").then(m => ({ s: m.MIGRATION_0220_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0220 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -218,6 +219,15 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
     if (converted.length) console.log("[Schema ensure] 0215 CRM: collation igual à de multipark_bookings em", converted.join(", "));
   } catch (err: any) {
     console.warn("[Schema ensure] 0215 (collation do CRM) falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+  }
+  try {
+    // (Remetente de sistema lido pela própria migração — getSetting usaria
+    // getDb(), que espera por ESTE ensureRecentSchema.)
+    const { runMigration0220Data } = await import("./migrations/migration_0220");
+    const r = await runMigration0220Data(db as any);
+    if (r.status === "applied" && r.messages) console.log(`[Schema ensure] 0220 envios automáticos: ${r.messages} mensagem(ns), ${r.threads} conversa(s) escondida(s)/recalculada(s), ${r.sends} envio(s) na ficha dos extras`);
+  } catch (err: any) {
+    console.warn("[Schema ensure] 0220 (envios automáticos na Comunicação) falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
   }
 }
 

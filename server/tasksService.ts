@@ -191,7 +191,7 @@ async function emailUser(userId: number, subject: string, text: string): Promise
   const [u] = await db.select({ email: users.email, name: users.name, isActive: users.isActive }).from(users).where(eq(users.id, userId)).limit(1);
   if (!u?.email || !u.isActive) return;
   const { sendEmail } = await import("./mail/systemMail");
-  await sendEmail({ to: u.email, subject, text: `Olá ${u.name ?? ""},\n\n${text}` });
+  await sendEmail({ to: u.email, subject, text: `Olá ${u.name ?? ""},\n\n${text}`, auto: { kind: "task_notice" } });
 }
 
 /**

@@ -19,7 +19,7 @@
  * notificações) ficam fora: `onStored` (server/mail/service.ts).
  */
 import type { gmail_v1 } from "@googleapis/gmail";
-import { classifyMessage, isAutomatedSender, isCompanyAddress, isReservationNotificationEmail, type Classification, type MailboxConfig } from "../../shared/mail";
+import { AUTO_MAIL_SENDERS, automaticOutboundKind, classifyMessage, isAutomatedSender, isCompanyAddress, isReservationNotificationEmail, type Classification, type MailboxConfig } from "../../shared/mail";
 import { parseGmailMessage, type ParsedGmailMessage } from "./parse";
 
 // ─── Dependências ───────────────────────────────────────────────────────────
@@ -85,6 +85,8 @@ export interface SyncOptions {
   brandDomains?: Record<string, string[]>;
   /** Domínio principal + alternativos do Workspace (reclamacoes@skypark.pt = reclamacoes@multipark.pt). */
   workspaceDomains?: readonly string[];
+  /** Remetentes das automações (além de AUTO_MAIL_SENDERS), ex.: o remetente de sistema configurado. */
+  autoSenders?: readonly string[];
   onStored?: (e: StoredEvent) => Promise<void>;
   now?: () => number;
   /** Mensagens buscadas em paralelo (default 4). */
@@ -149,6 +151,7 @@ async function processIds(
 ): Promise<boolean> {
   const now = opts.now ?? Date.now;
   const known = ids.length ? await store.knownMessageIds(account.key, ids) : new Set<string>();
+  const autoSenders = [...AUTO_MAIL_SENDERS, ...(opts.autoSenders ?? [])];
   const todo = ids.filter((id) => !known.has(id));
   res.duplicates += ids.length - todo.length;
   const batch = Math.max(1, opts.concurrency ?? 4);
@@ -182,7 +185,14 @@ async function processIds(
       })();
       const reservationNotice = isReservationNotificationEmail(
         { fromEmail: parsed.fromEmail, fromName: parsed.fromName, subject: parsed.subject, outbound: parsed.outbound }, opts.brandDomains);
-      const systemMail = parsed.systemMail;
+      // Envio automático nosso (cabeçalho; ou, nos antigos, remetente das
+      // automações + assunto conhecido) → automático (3), conversa escondida
+      // até alguém responder.
+      const autoKind = automaticOutboundKind(
+        { outbound: parsed.outbound, fromEmail: parsed.fromEmail, subject: parsed.subject, systemHeader: parsed.systemMail, autoKind: parsed.autoKind },
+        autoSenders,
+      );
+      const systemMail = !!autoKind;
       const automated = systemMail || reservationNotice || (!parsed.outbound && isAutomatedSender(parsed.fromEmail, { autoSubmitted: parsed.autoSubmitted, precedence: parsed.precedence }));
       const result = await store.storeMessage(account.key, parsed, classification, {
         ownerUserId: classification.personal ? account.ownerUserId : null,
