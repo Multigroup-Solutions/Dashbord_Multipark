@@ -1,12 +1,18 @@
 /**
- * Avaliação individual — sobre o motor ÚNICO (employee_day_metrics +
- * ajustes manuais + contestações), com as regras de shared/evaluationRules.ts.
+ * Avaliação — UMA página com dois separadores principais:
+ *  - "Dia" (antiga Avaliação operacional): a escala do Extras Dia × os
+ *    movimentos lidos AO VIVO da BD da Multipark, por pessoa, com a lista de
+ *    movimentos e o GPS do Zello (components/evaluation/DayEvaluationTab);
+ *  - "4 semanas" (antiga Avaliação individual): ranking do período sobre o
+ *    motor único (employee_day_metrics + ajustes + contestações), o resumo
+ *    vivo dos movimentos por pessoa e "Recalcular".
+ * Mais "A minha avaliação" e "Contestações" (gestão).
  *
- *  - Ranking do período (Dia/Semana/Mês/Ano), com vista "Por hora" secundária;
- *    clicar na pontuação abre a gaveta com as regras, métricas e dias.
- *  - "A minha avaliação": só os dados da própria ficha (o servidor decide quem é).
- *  - Contestações (gestão): aceitar com correção ou recusar.
- * O âmbito de cidade é aplicado no servidor.
+ * O motor lê os movimentos da BD da Multipark sozinho (cron diário das
+ * últimas 4 semanas e ao abrir um dia) — não há botões para ir buscar
+ * histórico. O âmbito de cidade é aplicado no servidor.
+ * Rotas: /avaliacao?tab=dia|semanas|minha|contestacoes (/avaliacao-operacional
+ * redireciona para ?tab=dia).
  */
 import EvaluationExplanation from "@/components/aiOps/EvaluationExplanation";
 import { ExportToSheetsButton } from "@/components/google/DriveActions";
@@ -19,8 +25,13 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Award, Clock, Download, RefreshCw, Trophy, Zap } from "lucide-react";
-import DateRangeNav, { rangeFor, type DateGran } from "@/components/DateRangeNav";
+import DateRangeNav, { type DateGran } from "@/components/DateRangeNav";
 import { useOpenEmployee } from "@/hooks/useOpenEmployee";
+import { can } from "@shared/access";
+import { addDays, operationalDayOf } from "@shared/lisbonDay";
+import { RECOMPUTE_WINDOW_DAYS } from "@shared/evaluationRules";
+import { fmtPTDateTime } from "@/lib/lisbonTime";
+import DayEvaluationTab, { MovementSourceNotice } from "@/components/evaluation/DayEvaluationTab";
 import {
   DisputeList,
   EmployeeEvaluationDetail,
@@ -37,53 +48,90 @@ const ROLE_LEVEL: Record<string, number> = { super_admin: 7, admin: 6, superviso
 const roleAtLeast = (role: string | undefined, min: string) => (ROLE_LEVEL[role ?? ""] ?? -1) >= ROLE_LEVEL[min];
 
 type View = "totals" | "perHour";
+type TabKey = "dia" | "semanas" | "minha" | "contestacoes";
 
-export default function PerformancePage() {
+/** As últimas 4 semanas (a janela do recálculo automático), até hoje. */
+function lastFourWeeks(): { start: string; end: string; gran: DateGran } {
+  const today = operationalDayOf(Date.now());
+  return { start: addDays(today, -(RECOMPUTE_WINDOW_DAYS - 1)), end: today, gran: "custom" };
+}
+
+export default function AvaliacaoPage() {
   const { user } = useAuth();
   // só para mostrar/esconder — quem decide é o servidor
+  const canDay = !!user && can(user as any, "avaliacao_operacional", "view");
   const canRank = roleAtLeast(user?.role, "frontoffice");
   const isSupervisor = roleAtLeast(user?.role, "supervisor");
-  const [tab, setTab] = useState<string>(canRank ? "ranking" : "mine");
+  const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
+  const allowed: TabKey[] = [
+    ...(canDay ? ["dia" as const] : []),
+    ...(canRank ? ["semanas" as const] : []),
+    "minha",
+    ...(isSupervisor ? ["contestacoes" as const] : []),
+  ];
+  const asked = params.get("tab") as TabKey | null;
+  const [tab, setTabState] = useState<TabKey>(asked && allowed.includes(asked) ? asked : allowed[0]);
+  const setTab = (t: string) => {
+    setTabState(t as TabKey);
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.set("tab", t);
+      u.searchParams.delete("date");
+      window.history.replaceState({}, "", u.pathname + u.search);
+    } catch { /* sem URL (testes) */ }
+  };
 
-  const [range, setRange] = useState(() => {
-    const r = rangeFor("week", new Date());
-    return { start: r.start, end: r.end, gran: "week" as DateGran };
-  });
+  const [range, setRange] = useState(lastFourWeeks);
   const hasRange = !!range.start && !!range.end;
+  const periodNav = (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button size="sm" variant="outline" onClick={() => setRange(lastFourWeeks())}>Últimas 4 semanas</Button>
+      <DateRangeNav start={range.start} end={range.end} gran={range.gran} showAll={false}
+        onChange={(s, e, g) => setRange({ start: s, end: e, gran: g })} />
+    </div>
+  );
 
   return (
     <div className="space-y-4 max-w-7xl mx-auto w-full">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <p className="text-muted-foreground text-sm">Pontuação por dia operacional (03h→03h), com o detalhe de cada regra.</p>
-        <DateRangeNav start={range.start} end={range.end} gran={range.gran} showAll={false}
-          onChange={(s, e, g) => setRange({ start: s, end: e, gran: g })} />
+      <div>
+        <h1 className="text-2xl font-bold flex items-center gap-2"><Trophy className="h-6 w-6 text-purple-600" /> Avaliação</h1>
+        <p className="text-muted-foreground text-sm mt-1">
+          Pontuação por dia operacional (03h→03h). Os movimentos vêm em tempo real da BD da Multipark; o GPS, o ponto e a escala vêm do dashboard.
+        </p>
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="flex-wrap h-auto">
-          {canRank && <TabsTrigger value="ranking">Ranking</TabsTrigger>}
-          <TabsTrigger value="mine">A minha avaliação</TabsTrigger>
-          {isSupervisor && <TabsTrigger value="disputes">Contestações</TabsTrigger>}
+          {canDay && <TabsTrigger value="dia">Dia</TabsTrigger>}
+          {canRank && <TabsTrigger value="semanas">4 semanas</TabsTrigger>}
+          <TabsTrigger value="minha">A minha avaliação</TabsTrigger>
+          {isSupervisor && <TabsTrigger value="contestacoes">Contestações</TabsTrigger>}
         </TabsList>
-        {canRank && (
-          <TabsContent value="ranking" className="mt-4">
-            {hasRange && <RankingView from={range.start} to={range.end} isSupervisor={isSupervisor} />}
+        {canDay && (
+          <TabsContent value="dia" className="mt-4">
+            {tab === "dia" && <DayEvaluationTab initialDate={params.get("date") ?? undefined} />}
           </TabsContent>
         )}
-        <TabsContent value="mine" className="mt-4">
-          {hasRange && <MineView from={range.start} to={range.end} />}
+        {canRank && (
+          <TabsContent value="semanas" className="mt-4 space-y-4">
+            {periodNav}
+            {hasRange && tab === "semanas" && <RankingView from={range.start} to={range.end} isSupervisor={isSupervisor} />}
+            <Card>
+              <CardHeader><CardTitle className="text-base">Sistema de pontos</CardTitle></CardHeader>
+              <CardContent><RulesLegend /></CardContent>
+            </Card>
+          </TabsContent>
+        )}
+        <TabsContent value="minha" className="mt-4 space-y-4">
+          {periodNav}
+          {hasRange && tab === "minha" && <MineView from={range.start} to={range.end} />}
         </TabsContent>
         {isSupervisor && (
-          <TabsContent value="disputes" className="mt-4">
-            <DisputesView />
+          <TabsContent value="contestacoes" className="mt-4">
+            {tab === "contestacoes" && <DisputesView />}
           </TabsContent>
         )}
       </Tabs>
-
-      <Card>
-        <CardHeader><CardTitle className="text-base">Sistema de pontos</CardTitle></CardHeader>
-        <CardContent><RulesLegend /></CardContent>
-      </Card>
     </div>
   );
 }
@@ -97,7 +145,12 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
   const openEmployee = useOpenEmployee();
   const q = trpc.evaluation.ranking.useQuery({ from, to });
   const recompute = trpc.evaluation.recompute.useMutation({
-    onSuccess: (r) => { toast.success(`Recalculado: ${r.written} dia(s) de colaboradores`); utils.evaluation.invalidate(); },
+    onSuccess: (r) => {
+      const msg = `Recalculado: ${r.written} dia(s) de colaboradores${r.partial ? ` (até ${fmtDay(r.until)} — o resto fica para o recálculo automático)` : ""}`;
+      if (r.source === "copia") toast.warning(`${msg}. ${r.notice ?? "BD da Multipark indisponível: movimentos da cópia local."}`);
+      else toast.success(msg);
+      utils.evaluation.invalidate();
+    },
     onError: (e) => toast.error(e.message),
   });
   const [view, setView] = useState<View>("totals");
@@ -269,9 +322,84 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
         </Card>
       )}
 
+      <LiveMovementsCard from={from} to={to} />
+
       <EvaluationDrawer employeeId={drawer?.id ?? null} employeeName={drawer?.name ?? ""} from={from} to={to}
         canAdjust={isSupervisor} onOpenChange={(o) => !o && setDrawer(null)} />
     </div>
+  );
+}
+
+// ─── Movimentos do período (BD da Multipark, ao vivo) ────────────────────────
+
+const LIVE_MAX_DAYS = 62;
+
+function LiveMovementsCard({ from, to }: { from: string; to: string }) {
+  const openEmployee = useOpenEmployee();
+  const tooLong = useMemo(() => {
+    const d = (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000 + 1;
+    return d > LIVE_MAX_DAYS;
+  }, [from, to]);
+  const q = trpc.evaluation.liveMovements.useQuery({ from, to }, { enabled: !tooLong, refetchOnWindowFocus: false });
+  const d = q.data;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Movimentos na BD da Multipark</CardTitle>
+        <p className="text-xs text-muted-foreground">
+          Lido agora da app Multipark: quem mexeu em que reservas, em que fase, check-ins e check-outs assinados, ocorrências e as avaliações dos clientes nas reservas de cada um.
+        </p>
+      </CardHeader>
+      <CardContent className="px-2 sm:px-6">
+        {tooLong ? <p className="text-sm text-muted-foreground">Escolhe no máximo {LIVE_MAX_DAYS} dias para ver os movimentos.</p>
+          : q.isLoading ? <p className="text-sm text-muted-foreground">A ler a BD da Multipark...</p>
+          : q.error ? <p className="text-sm text-red-700">{q.error.message}</p>
+          : !d ? null
+          : !d.available ? <MovementSourceNotice notice={`Movimentos indisponíveis: ${d.reason}`} />
+          : d.rows.length === 0 ? <p className="text-sm text-muted-foreground">Sem movimentos neste período.</p>
+          : (
+            <div className="overflow-x-auto max-h-[480px] overflow-y-auto">
+              <table className="w-full text-sm min-w-[760px]">
+                <thead>
+                  <tr className="border-b text-left text-muted-foreground">
+                    <th className="p-2">Pessoa / agente</th>
+                    <th className="p-2 text-right" title="Todas as ações registadas">Ações</th>
+                    <th className="p-2 text-right" title="Recolhas (check-in) · início da recolha">Check-in</th>
+                    <th className="p-2 text-right">Movimentos</th>
+                    <th className="p-2 text-right" title="Entregas (check-out) · pedidos de entrega">Check-out</th>
+                    <th className="p-2 text-right" title="Reservas diferentes">Reservas</th>
+                    <th className="p-2 text-right" title="Reservas com o seu id no check-in / check-out">Assinados</th>
+                    <th className="p-2 text-right" title="Ocorrências criadas / resolvidas">Ocorr.</th>
+                    <th className="p-2 text-right" title="Avaliações dos clientes nas reservas que fez">Avaliações</th>
+                    <th className="p-2">Última ação</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {d.rows.map((r) => (
+                    <tr key={r.key} className="border-b hover:bg-muted/40">
+                      <td className="p-2 min-w-[160px]">
+                        {r.employeeId != null
+                          ? <button type="button" className="hover:underline text-left font-medium" onClick={() => openEmployee(r.employeeId!)}>{r.name}</button>
+                          : <span className="font-medium">{r.name}</span>}
+                        {r.kind !== "colaborador" && <Badge variant="outline" className="ml-1 text-[11px]">{r.kind === "parceiro" ? "parceiro" : "sem ficha"}</Badge>}
+                      </td>
+                      <td className="p-2 text-right tabular-nums">{r.total}</td>
+                      <td className="p-2 text-right tabular-nums">{r.recolhas}{(r.byType.CHECKING_IN ?? 0) > 0 && <span className="text-muted-foreground"> · {r.byType.CHECKING_IN}</span>}</td>
+                      <td className="p-2 text-right tabular-nums">{r.movements}</td>
+                      <td className="p-2 text-right tabular-nums">{r.entregas}{(r.byType.PENDING_CHECKOUT ?? 0) > 0 && <span className="text-muted-foreground"> · {r.byType.PENDING_CHECKOUT}</span>}</td>
+                      <td className="p-2 text-right tabular-nums">{r.bookings}</td>
+                      <td className="p-2 text-right tabular-nums">{r.checkInsSigned}/{r.checkOutsSigned}</td>
+                      <td className="p-2 text-right tabular-nums">{r.occurrencesCreated}/{r.occurrencesResolved}</td>
+                      <td className="p-2 text-right tabular-nums">{r.reviews > 0 ? `${r.reviews} · ${fmtNum(r.reviewAvg, 1)}★` : "—"}</td>
+                      <td className="p-2 whitespace-nowrap text-muted-foreground">{r.lastAt ? fmtPTDateTime(r.lastAt) : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+      </CardContent>
+    </Card>
   );
 }
 

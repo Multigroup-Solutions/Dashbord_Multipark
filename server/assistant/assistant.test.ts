@@ -305,7 +305,7 @@ describe("ajuda: escolha do ficheiro", () => {
 
   it("tem um ficheiro por módulo pedido", () => {
     expect(docs.map((d) => d.file).sort()).toEqual([
-      "agendador.md", "clientes.md", "comunicacao.md", "contactos.md", "definicoes.md", "despesas.md", "disponibilidade.md", "drive.md", "email-aliases.md", "extras-dia.md", "faturacao.md", "ficha-reserva.md", "formacao.md", "google-business.md", "google-tempo-real.md", "marketing.md",
+      "agendador.md", "avaliacao.md", "clientes.md", "comunicacao.md", "contactos.md", "definicoes.md", "despesas.md", "disponibilidade.md", "drive.md", "email-aliases.md", "extras-dia.md", "faturacao.md", "ficha-reserva.md", "formacao.md", "google-business.md", "google-tempo-real.md", "marketing.md",
       "ocorrencias.md", "passagem-turno.md", "perdidos.md", "permissoes.md", "pesquisa-e-conhecimento.md", "reclamacoes.md", "reservas-do-dia.md", "rh-ponto.md", "tarefas.md", "web-analytics.md", "whatsapp-chamadas.md", "whatsapp.md",
     ]);
   });
@@ -329,6 +329,7 @@ describe("ajuda: escolha do ficheiro", () => {
     ["Como devolvo um objeto perdido ao cliente?", "perdidos.md"],
     ["O que é o fecho previsto?", "faturacao.md"],
     ["Como dou acesso a um módulo a uma pessoa?", "permissoes.md"],
+    ["Onde vejo a avaliação do dia de um condutor?", "avaliacao.md"],
     ["Como faço o exame de carreira?", "formacao.md"],
     ["Como escalo o team leader no extras dia?", "extras-dia.md"],
     ["Como uso a pesquisa global com Ctrl K?", "pesquisa-e-conhecimento.md"],

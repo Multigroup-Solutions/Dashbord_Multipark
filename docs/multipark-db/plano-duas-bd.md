@@ -140,4 +140,5 @@ Top Parking 40 %, Parkos 20 %, Parkvia 23 %, Parkivado 25 %, agências 10–20 %
    Feito: página `/reserva/:id` (`server/multiparkDb/bookingFile.ts` + `server/bookingFileRouter.ts`); substitui o "Atualizar da API" das reclamações e dos perdidos e o `/multipark/inspect`.
 5. **Conferência de caixa com alertas (B2)** para o back office.
 6. **Avaliação dos funcionários a ler os movimentos da BD 2 (B5).**
+   Feito: `server/multiparkDb/movements.ts` (History, Booking check-in/out, Occurrence, BookingReview, agregados no Postgres) alimenta o motor (`evaluationEngine.ts`, cron `evaluation-recompute`) e a página única `/avaliacao` (separadores Dia e 4 semanas). Sem BD 2, usa a cópia `multipark_booking_history` com aviso. Saíram os botões "Buscar histórico" e `multipark.fetchAgentHistory`.
 7. Desligar o que deixa de ser preciso (C), depois de confirmado o histórico anterior a março.

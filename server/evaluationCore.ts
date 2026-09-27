@@ -177,6 +177,54 @@ export function markLateDeliveries(rows: ActionRow[], thresholdMinutes = LATE_SE
   return out;
 }
 
+/**
+ * Ações agregadas por (agente, dia operacional, turno, tipo) — a forma em que
+ * chegam da BD da Multipark. `parkingMoves`/`lateDeliveries` = quantas dessas
+ * `n` ações foram "levar ao parque" / entregas atrasadas.
+ */
+export interface ActionCountRow {
+  agentUserId: string | null;
+  agentName: string | null;
+  day: string;
+  shift: "morning" | "night";
+  changeType: string;
+  n: number;
+  parkingMoves: number;
+  lateDeliveries: number;
+}
+
+export interface AgentOccurrenceCount {
+  agentUserId: string | null;
+  agentName: string | null;
+  day: string;
+  n: number;
+}
+
+/**
+ * Linhas soltas → contagens (mesmas regras: markParkingMoves e
+ * markLateDeliveries sobre TODAS as linhas, incluindo as de antes do
+ * intervalo). PURA.
+ */
+export function actionRowsToCounts(rows: ActionRow[]): ActionCountRow[] {
+  const parking = markParkingMoves(rows);
+  const late = markLateDeliveries(rows);
+  const out = new Map<string, ActionCountRow>();
+  rows.forEach((a, i) => {
+    const slot = operationalSlotOf(a.actionTime);
+    const type = String(a.changeType ?? "?").toUpperCase();
+    const k = `${a.agentUserId ?? ""}|${a.agentName ?? ""}|${slot.day}|${slot.shift}|${type}`;
+    let c = out.get(k);
+    if (!c) {
+      c = { agentUserId: a.agentUserId, agentName: a.agentName, day: slot.day, shift: slot.shift, changeType: type, n: 0, parkingMoves: 0, lateDeliveries: 0 };
+      out.set(k, c);
+    }
+    c.n += 1;
+    if (parking.has(i)) c.parkingMoves += 1;
+    if (late.has(i)) c.lateDeliveries += 1;
+  });
+  return Array.from(out.values());
+}
+
 // ─── Entradas do motor ───────────────────────────────────────────────────────
 
 export interface EngineAssignment {
@@ -228,7 +276,12 @@ export interface EngineInput {
   endDay: string;
   identity: EvaluationIdentity;
   employees: Map<number, EngineEmployee>;
+  /** Ações soltas (cópia local multipark_booking_history). */
   actions: ActionRow[];
+  /** Ações já agregadas (BD da Multipark ao vivo). Somam às soltas. */
+  actionCounts?: ActionCountRow[];
+  /** Ocorrências criadas na app Multipark, por agente e dia operacional. */
+  agentOccurrences?: AgentOccurrenceCount[];
   ponto: PontoRecord[];
   assignments: EngineAssignment[];
   incidents: EngineIncident[];
@@ -304,38 +357,44 @@ export function computeEmployeeDays(input: EngineInput): EngineOutput {
     return r;
   };
 
-  // ── Ações (dia/turno operacional; 1.º movimento após recolha pela reserva)
-  const parking = markParkingMoves(input.actions);
-  const lateDeliveries = markLateDeliveries(input.actions);
-  input.actions.forEach((a, i) => {
-    const slot = operationalSlotOf(a.actionTime);
-    if (!inRange(slot.day, startDay, endDay)) return;
+  // ── Ações (dia/turno operacional; 1.º movimento após recolha pela reserva).
+  // Linhas soltas (cópia local) → contagens; as contagens já vêm agregadas
+  // da BD da Multipark (server/multiparkDb/movements.ts) com as mesmas regras.
+  const counts = [...actionRowsToCounts(input.actions), ...(input.actionCounts ?? [])];
+  for (const a of counts) {
+    if (!inRange(a.day, startDay, endDay) || a.n <= 0) continue;
     const who = identity.agent(a.agentUserId, a.agentName);
-    if (who.kind === "ignorado") return;
+    if (who.kind === "ignorado") continue;
     const type = String(a.changeType ?? "?").toUpperCase();
     const cat = actionCategory(type);
-    const isPark = parking.has(i);
     const target = who.kind === "colaborador"
       ? (() => {
-          const r = row(who.employeeId, slot.day);
-          r.actionsByType[type] = (r.actionsByType[type] ?? 0) + 1;
-          if (lateDeliveries.has(i)) { r.metrics.lateServices += 1; r.metrics.delays += 1; }
+          const r = row(who.employeeId, a.day);
+          r.actionsByType[type] = (r.actionsByType[type] ?? 0) + a.n;
+          if (a.lateDeliveries > 0) { r.metrics.lateServices += a.lateDeliveries; r.metrics.delays += a.lateDeliveries; }
           return r.metrics;
         })()
       : (() => {
-          let byDay = unresolved.get(slot.day);
-          if (!byDay) { byDay = new Map(); unresolved.set(slot.day, byDay); }
+          let byDay = unresolved.get(a.day);
+          if (!byDay) { byDay = new Map(); unresolved.set(a.day, byDay); }
           let u = byDay.get(who.key);
           if (!u) { u = { key: who.key, name: who.name, actions: 0, actionsMorning: 0, actionsNight: 0, recolhas: 0, entregas: 0, movements: 0, parkingMoves: 0, byType: {} }; byDay.set(who.key, u); }
-          u.byType[type] = (u.byType[type] ?? 0) + 1;
+          u.byType[type] = (u.byType[type] ?? 0) + a.n;
           return u;
         })();
-    target.actions += 1;
-    if (slot.shift === "morning") target.actionsMorning += 1; else target.actionsNight += 1;
-    if (cat === "recolhas" || cat === "entregas" || cat === "movements") target[cat] += 1;
-    else if (who.kind === "colaborador") (target as DayMetrics)[cat] += 1;
-    if (isPark) target.parkingMoves += 1;
-  });
+    target.actions += a.n;
+    if (a.shift === "morning") target.actionsMorning += a.n; else target.actionsNight += a.n;
+    if (cat === "recolhas" || cat === "entregas" || cat === "movements") target[cat] += a.n;
+    else if (who.kind === "colaborador") (target as DayMetrics)[cat] += a.n;
+    if (a.parkingMoves > 0) target.parkingMoves += a.parkingMoves;
+  }
+
+  // ── Ocorrências criadas na app Multipark pelo agente (informativo)
+  for (const o of input.agentOccurrences ?? []) {
+    if (!inRange(o.day, startDay, endDay) || o.n <= 0) continue;
+    const who = identity.agent(o.agentUserId, o.agentName);
+    if (who.kind === "colaborador") row(who.employeeId, o.day).metrics.incidentsReported += o.n;
+  }
 
   // ── Ponto (turnos pela ENTRADA; [SUSPEITO] fora das horas)
   const byEmp = new Map<number, PontoRecord[]>();

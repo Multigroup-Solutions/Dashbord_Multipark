@@ -541,29 +541,6 @@ export async function getBookingHistory(
   });
 }
 
-/** Get agent history (all actions by a specific agent in a period) */
-export async function getAgentHistory(opts: {
-  startDate: string;
-  endDate: string;
-  agentName?: string;
-  userId?: string;
-  apiKey?: string;
-}): Promise<{ total: number; period: { startDate: string; endDate: string }; agentName: string; agentUserId: string; history: BookingHistoryEntry[] }> {
-  const params: Record<string, string> = {
-    startDate: opts.startDate,
-    endDate: opts.endDate,
-  };
-  if (opts.userId) params.userId = opts.userId;
-  else if (opts.agentName) params.agentName = opts.agentName;
-  else throw new Error("Either userId or agentName must be provided");
-
-  return multiparkRequest({
-    path: "/agent/history",
-    params,
-    apiKey: opts.apiKey,
-  });
-}
-
 /** Get checkout drivers ranking for a period */
 export async function getCheckoutDrivers(
   startDate: string,

@@ -19,7 +19,6 @@ import {
   getBookingsReport,
   getBooking,
   getBookingHistory,
-  getAgentHistory,
   isMultiparkConfigured,
   getConfiguredParks,
   getParkApiKey,
@@ -595,81 +594,6 @@ export async function enrichBookingsBatch(
   }, deadlineAt);
 
   return { scanned: pending.length, enriched, errors: errs, noKey, closed };
-}
-
-/**
- * Vai buscar history de um agente (por nome) num dia, para CADA parque
- * configurado. Persiste em multipark_booking_history. Útil para avaliar
- * a atividade de um extra num dia específico.
- */
-export async function fetchAgentHistoryByName(
-  agentName: string,
-  date: string, // YYYY-MM-DD
-): Promise<{
-  parks: number;
-  totalEntries: number;
-  byType: Record<string, number>;
-  perPark: Array<{ park: string; entries: number }>;
-}> {
-  const db = await getDb();
-  const parks = getConfiguredParks();
-  const byType: Record<string, number> = {};
-  let totalEntries = 0;
-  const perPark: Array<{ park: string; entries: number }> = [];
-
-  await runConcurrent(parks, ENRICH_CONCURRENCY, async (park) => {
-    const apiKey = getParkApiKey(park);
-    if (!apiKey) return;
-    try {
-      const response = await getAgentHistory({
-        agentName,
-        startDate: date,
-        endDate: date,
-        apiKey,
-      });
-      const items = (response?.history ?? []) as any[];
-      perPark.push({ park: `${park.name} ${park.city}`, entries: items.length });
-      totalEntries += items.length;
-      if (!db || items.length === 0) return;
-
-      for (const item of items) {
-        const historyId = item.id ?? null;
-        const bookingExternalId = item.booking?.id ?? null;
-        if (!historyId || !bookingExternalId) continue;
-        const changeType = item.changeType ?? null;
-        if (changeType) byType[changeType] = (byType[changeType] ?? 0) + 1;
-        try {
-          await db.insert(multiparkBookingHistory).values({
-            bookingExternalId: String(bookingExternalId).slice(0, 128),
-            historyId: String(historyId).slice(0, 128),
-            changeType: changeType ? String(changeType).slice(0, 32) : null,
-            actionTime: parseMpDate(item.actionTime),
-            remarks: item.remarks ?? null,
-            agentName: item.agentName ?? agentName,
-            agentUserId: item.userId ?? item.user?.id ?? null,
-            agentEmail: item.user?.email ?? null,
-            modifiedFields: item.modifiedFields ? String(item.modifiedFields) : null,
-            platform: item.platform ?? null,
-          });
-        } catch (err: any) {
-          if (!String(err.message).includes("Duplicate")) throw err;
-        }
-      }
-      // Mesmo email = mesma pessoa → anexa o agente à ficha (best-effort).
-      try {
-        await autoAttachAgentsByEmail(
-          db,
-          items
-            .filter((it) => it.userId ?? it.user?.id)
-            .map((it) => ({ agentUserId: String(it.userId ?? it.user?.id), agentName: it.agentName ?? agentName, agentEmail: it.user?.email ?? null })),
-        );
-      } catch {}
-    } catch {
-      perPark.push({ park: `${park.name} ${park.city}`, entries: 0 });
-    }
-  });
-
-  return { parks: parks.length, totalEntries, byType, perPark };
 }
 
 /**
