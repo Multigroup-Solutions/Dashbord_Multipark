@@ -98,6 +98,13 @@ export function ProAccountSection({ a, onLinkPerson }: { a: CrmProAccount; onLin
         </Button>
       </div>
 
+      {a.legacy && (
+        <div className="rounded-[10px] border border-amber-300 bg-amber-50 px-3.5 py-2.5 text-[13px] dark:border-amber-800 dark:bg-amber-950/40">
+          <strong>Pro antigo — só para comparar.</strong> Estas reservas e cobranças são do modelo Pro antes de abril de 2026; o cliente já não é Pro em nenhum parque da Multipark.
+          Não entram na lista Pro nem nos totais (as reservas continuam no histórico normal do cliente).
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Kpi label="Saldo em dívida" value={eur(s.due, 2)} tone={(s.dueMonths ?? 0) > 0 ? "amber" : undefined}
           note={s.oldestDue ? `${s.dueMonths === 1 ? monthLabel(s.oldestDue) : `${s.dueMonths} meses, desde ${monthLabel(s.oldestDue)}`} por pagar` : "nada em atraso"} />

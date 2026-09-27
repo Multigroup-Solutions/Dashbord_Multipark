@@ -5,7 +5,7 @@ import {
   mapProSnapshot, periodShape, readMultiparkPro,
 } from "./pro";
 import { looksLikeCompany } from "../crm/proSync";
-import { cityInScope, hideMoney } from "../crm/proQueries";
+import { cityInScope, hideMoney, isLegacySearch, stripLegacyWord } from "../crm/proQueries";
 import { summarizeLedger } from "../../shared/crmPro";
 
 describe("Pro na BD Multipark — SQL", () => {
@@ -153,6 +153,18 @@ describe("Pro na BD Multipark — leitura", () => {
     } finally {
       if (prev === undefined) delete process.env.DATABASE_URL_MULTIPARK; else process.env.DATABASE_URL_MULTIPARK = prev;
     }
+  });
+});
+
+describe("Pro antigos — fora das contas, à vista com a palavra 'antigo'", () => {
+  it("reconhece a palavra e tira-a da procura", () => {
+    expect(isLegacySearch("antigo")).toBe(true);
+    expect(isLegacySearch("pro antigos")).toBe(true);
+    expect(isLegacySearch("Silva antigo")).toBe(true);
+    expect(isLegacySearch("antiguidades")).toBe(false);
+    expect(isLegacySearch("silva")).toBe(false);
+    expect(stripLegacyWord("pro antigo silva")).toBe("silva");
+    expect(stripLegacyWord("antigos")).toBe("");
   });
 });
 
