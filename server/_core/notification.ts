@@ -77,6 +77,7 @@ export async function notifyOwner(
     html: `<h2>${escapeHtml(title)}</h2><p>${escapeHtml(content).replace(/\n/g, "<br>")}</p>`,
     fromName: "Dashboard Multipark",
     kind: "system",
+    auto: { kind: "owner_alert" },
   });
   if (!r.ok) console.warn(`[Notification] Não enviado (${r.error ?? "falhou"}): ${title}`);
   return r.ok;

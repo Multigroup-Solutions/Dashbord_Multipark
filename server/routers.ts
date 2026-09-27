@@ -2512,6 +2512,20 @@ export const appRouter = router({
   }),
 
   rh: router({
+    // Envios automáticos da aplicação a este colaborador/extra (pedidos e
+    // lembretes de disponibilidade, avisos de escala…) — não aparecem na caixa
+    // partilhada; ficam aqui, com o estado enviado/respondido.
+    autoMail: protectedProcedure
+      .input(z.object({ employeeId: z.number() }))
+      .query(async ({ ctx, input }) => {
+        const viewer = await rhViewer(ctx.user);
+        const person = await getEmployeeById(input.employeeId);
+        if (!person) throw new TRPCError({ code: 'NOT_FOUND' });
+        await assertEmployeeAccess(input.employeeId);
+        if (!canViewEmployee(viewer, person.employee)) throw new TRPCError({ code: 'FORBIDDEN' });
+        const { listAutoSendsForEmployee } = await import("./mail/autoSends");
+        return listAutoSendsForEmployee(input.employeeId, 30);
+      }),
     accountSummary: protectedProcedure
       .input(z.object({ employeeId: z.number() }))
       .query(async ({ ctx, input }) => {

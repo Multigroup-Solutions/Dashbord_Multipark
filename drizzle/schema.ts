@@ -3013,7 +3013,7 @@ export const mailMessages = mysqlTable("mail_messages", {
 	labelIdsJson: varchar({ length: 1000 }),
 	sentAt: datetime({ mode: 'string' }),
 	isRead: tinyint().default(0).notNull(),
-	// 0 = pessoa, 1 = remetente automático, 2 = notificação automática de reserva (0180).
+	// 0 = pessoa, 1 = remetente automático, 2 = notificação automática de reserva (0180), 3 = envio automático da aplicação (0195/0230).
 	automated: tinyint().default(0).notNull(),
 	sentById: int(),
 	pipeline: varchar({ length: 40 }),
@@ -3026,6 +3026,28 @@ export const mailMessages = mysqlTable("mail_messages", {
 	index("idx_mail_messages_rfc").on(table.rfcMessageId),
 	index("idx_mail_messages_from").on(table.fromEmail),
 	index("idx_mail_messages_sent").on(table.sentAt),
+]);
+
+// 0230: envios automáticos da aplicação a um colaborador/extra (pedidos e
+// lembretes de disponibilidade, avisos de escala…) — ficha do extra →
+// "Comunicações automáticas". A conversa na Comunicação é (accountKey, gmailThreadId).
+export const mailAutoSends = mysqlTable("mail_auto_sends", {
+	id: int().autoincrement().primaryKey(),
+	accountKey: varchar({ length: 360 }).notNull(),
+	gmailMessageId: varchar({ length: 32 }).notNull(),
+	gmailThreadId: varchar({ length: 32 }),
+	rfcMessageId: varchar({ length: 255 }),
+	kind: varchar({ length: 40 }).notNull(),
+	employeeId: int(),
+	toEmail: varchar({ length: 320 }),
+	subject: varchar({ length: 500 }),
+	sentAt: datetime({ mode: 'string' }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_mail_auto_sends_msg").on(table.accountKey, table.gmailMessageId),
+	index("idx_mail_auto_sends_employee").on(table.employeeId, table.sentAt),
+	index("idx_mail_auto_sends_thread").on(table.accountKey, table.gmailThreadId),
 ]);
 
 export const mailLinks = mysqlTable("mail_links", {

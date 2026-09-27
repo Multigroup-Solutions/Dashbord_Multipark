@@ -250,6 +250,7 @@ export async function afterHandoverSave(input: {
           to: recipients.join(", "),
           ...(to.length && cc.length ? { cc: cc.join(", ") } : {}),
           subject: mail.subject, text: mail.text, html: mail.html,
+          auto: { kind: "handover" },
         });
         if (ok) out.emailed = recipients.length + (to.length ? cc.length : 0);
         else {

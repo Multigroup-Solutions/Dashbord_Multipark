@@ -260,7 +260,7 @@ const dbDeps: NotifyDeps = {
   emailOf: (userId) => candCache?.emails.get(userId) ?? null,
   async sendEmail(to, subject, text, html) {
     const { sendEmail } = await import("./mail/systemMail");
-    return sendEmail({ to, subject, text, html, fromName: "Dashboard Multipark" });
+    return sendEmail({ to, subject, text, html, fromName: "Dashboard Multipark", auto: { kind: "notification" } });
   },
 };
 

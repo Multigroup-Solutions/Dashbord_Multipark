@@ -154,7 +154,7 @@ async function briefingForCity(tree: CityTree, day: string, cap: AiCallCap, repo
   const failed: string[] = [];
   for (const r of to) {
     const mail = renderBriefingEmail(filterBriefingFor(data, viewerPerms(r)), String(row.summary ?? ""), appUrl());
-    const ok = await sendEmail({ to: r.email, subject: mail.subject, html: mail.html, text: mail.text, fromName: "Dashboard Multipark" });
+    const ok = await sendEmail({ to: r.email, subject: mail.subject, html: mail.html, text: mail.text, fromName: "Dashboard Multipark", auto: { kind: "report" } });
     if (ok) sent++; else failed.push(String(r.userId));
   }
   await db.execute(sql`UPDATE ops_briefings SET emailRecipients = ${sent} WHERE id = ${Number(row.id)}`);
@@ -188,7 +188,7 @@ async function claimAndSend(id: number, recipients: Array<{ email: string }>, ma
   if (Number((Array.isArray(claim) ? (claim[0] as any) : (claim as any))?.affectedRows ?? 0) === 0) return 0;
   const { sendEmail } = await import("../mail/systemMail");
   let sent = 0;
-  for (const r of recipients) if (await sendEmail({ to: r.email, subject: mail.subject, html: mail.html, text: mail.text, fromName: "Dashboard Multipark" })) sent++;
+  for (const r of recipients) if (await sendEmail({ to: r.email, subject: mail.subject, html: mail.html, text: mail.text, fromName: "Dashboard Multipark", auto: { kind: "report" } })) sent++;
   await db.execute(sql`UPDATE ai_weekly_reports SET emailRecipients = ${sent} WHERE id = ${id}`);
   if (sent < recipients.length) throw new Error(`email falhou para ${recipients.length - sent} de ${recipients.length} destinatário(s)`);
   return sent;
