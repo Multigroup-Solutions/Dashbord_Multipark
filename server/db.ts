@@ -212,6 +212,13 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
   } catch (err: any) {
     console.warn("[Schema ensure] 0210 (dados das caixas de email) falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
   }
+  try {
+    const { runMigration0215Collation } = await import("./migrations/migration_0215");
+    const converted = await runMigration0215Collation(db as any);
+    if (converted.length) console.log("[Schema ensure] 0215 CRM: collation igual à de multipark_bookings em", converted.join(", "));
+  } catch (err: any) {
+    console.warn("[Schema ensure] 0215 (collation do CRM) falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+  }
 }
 
 // MySQL timestamp(mode:string) helper — converte Date para "YYYY-MM-DD HH:MM:SS"

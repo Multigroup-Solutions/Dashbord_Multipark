@@ -59,8 +59,10 @@ export async function mergeClients(db: any, o: { survivorId: number; mergedId: n
   if (o.survivorId === o.mergedId) throw new Error("Não se junta uma ficha consigo própria.");
   let eventId = 0;
   await db.transaction(async (tx: any) => {
-    const [s] = rowsOf(await tx.execute(sql`SELECT * FROM crm_clients WHERE id = ${o.survivorId} FOR UPDATE`));
-    const [m] = rowsOf(await tx.execute(sql`SELECT * FROM crm_clients WHERE id = ${o.mergedId} FOR UPDATE`));
+    // trinco nas duas por ordem de id (a separação tranca da mesma forma: sem ciclos)
+    const both = rowsOf(await tx.execute(sql`SELECT * FROM crm_clients WHERE id IN (${o.survivorId}, ${o.mergedId}) ORDER BY id FOR UPDATE`));
+    const s = both.find((r) => Number(r.id) === o.survivorId);
+    const m = both.find((r) => Number(r.id) === o.mergedId);
     if (!s || !m) throw new Error("Ficha não encontrada.");
     if (s.status !== "active" || m.status !== "active") throw new Error("Só se juntam fichas ativas.");
     const snap: MergeSnapshot = { moved: { emails: [], phones: [], vehicles: [], externalIds: [], links: [], relations: [] }, dropped: { emails: [], phones: [], vehicles: [], relations: [] }, filled: {}, mergedStatus: String(m.status) };
@@ -141,7 +143,7 @@ export async function splitMerge(db: any, o: { eventId: number; userId: number }
     if (ev.undoneAt) throw new Error("Esta fusão já foi separada.");
     const s = Number(ev.survivorId), m = Number(ev.mergedId);
     // trinco nas duas fichas (a carga, ao arrumar sobras de fusões, tranca a absorvida)
-    const locked = rowsOf(await tx.execute(sql`SELECT id, status, mergedInto FROM crm_clients WHERE id IN (${s}, ${m}) FOR UPDATE`));
+    const locked = rowsOf(await tx.execute(sql`SELECT id, status, mergedInto FROM crm_clients WHERE id IN (${s}, ${m}) ORDER BY id FOR UPDATE`));
     const sRow = locked.find((r) => Number(r.id) === s), mRow = locked.find((r) => Number(r.id) === m);
     // fusões em cadeia (M→S e depois S→T): as linhas já estão noutra ficha — separar primeiro a mais recente
     if (!sRow || sRow.status !== "active") throw new Error("A ficha que ficou foi entretanto junta a outra: separe primeiro essa junção (a mais recente).");

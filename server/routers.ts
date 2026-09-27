@@ -8629,8 +8629,8 @@ export const appRouter = router({
         const { addRelation, removeRelation } = await import("./crm/edit");
         if (input.op === "add") {
           await crmAssertInScope(input.clientId, input.relatedClientId);
-          const other = await crmRow(sql`SELECT status FROM crm_clients WHERE id = ${input.relatedClientId}`);
-          if (other?.status !== "active") throw new TRPCError({ code: "BAD_REQUEST", message: "A outra ficha não está ativa." });
+          const st = await crmRow(sql`SELECT SUM(status = 'active') AS n FROM crm_clients WHERE id IN (${input.clientId}, ${input.relatedClientId})`);
+          if (Number(st?.n ?? 0) < 2) throw new TRPCError({ code: "BAD_REQUEST", message: "Só se ligam fichas ativas." });
         } else {
           // só quem vê pelo menos uma das fichas ligadas (a ligação aparece nessa ficha)
           const rel = await crmRow(sql`SELECT clientId, relatedClientId FROM crm_client_relations WHERE id = ${input.relationId}`);

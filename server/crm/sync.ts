@@ -234,27 +234,46 @@ export async function healMergedLeftovers(db: any): Promise<number[]> {
       OR EXISTS (SELECT 1 FROM crm_client_phones p WHERE p.clientId = c.id)
       OR EXISTS (SELECT 1 FROM crm_client_vehicles v WHERE v.clientId = c.id))`));
   if (!merged.length) return [];
-  const into = new Map<number, number>();
-  for (const r of rowsOf(await db.execute(sql`SELECT id, mergedInto FROM crm_clients WHERE status = 'merged' AND mergedInto IS NOT NULL`))) {
-    into.set(Number(r.id), Number(r.mergedInto));
-  }
-  const finalOf = (id: number) => { let x = id; for (let i = 0; i < 20 && into.has(x); i++) x = into.get(x)!; return x; };
+  const TABLES = [
+    { t: "crm_client_emails", kind: "email", col: "email", primary: true },
+    { t: "crm_client_phones", kind: "phone", col: "phone", primary: true },
+    { t: "crm_client_vehicles", kind: "plate", col: "plate", primary: false },
+  ] as const;
   const out = new Set<number>();
   for (const r of merged) {
-    const m = Number(r.id), s = finalOf(m);
-    if (!s || s === m) continue;
-    // trinco na linha da absorvida: uma separação (que também a tranca) não corre ao mesmo tempo
-    await db.transaction(async (tx: any) => {
-      const [cur] = rowsOf(await tx.execute(sql`SELECT status, mergedInto FROM crm_clients WHERE id = ${m} FOR UPDATE`));
-      if (!cur || cur.status !== "merged") return; // entretanto separada: fica como está
-      await tx.execute(sql`UPDATE crm_booking_links SET clientId = ${s} WHERE clientId = ${m}`);
-      for (const t of ["crm_client_emails", "crm_client_phones", "crm_client_vehicles"]) {
-        // o que a que ficou ainda não tem muda; o repetido (já lá está) sai da absorvida
-        await tx.execute(sql`UPDATE IGNORE ${sql.raw(t)} SET clientId = ${s}${t === "crm_client_vehicles" ? sql`` : sql`, isPrimary = 0`} WHERE clientId = ${m}`);
-        await tx.execute(sql`DELETE FROM ${sql.raw(t)} WHERE clientId = ${m}`);
-      }
-      out.add(s);
-    });
+    const m = Number(r.id);
+    try {
+      // trinco na linha da absorvida: uma separação (que também a tranca) não corre ao mesmo tempo
+      await db.transaction(async (tx: any) => {
+        const [cur] = rowsOf(await tx.execute(sql`SELECT status, mergedInto FROM crm_clients WHERE id = ${m} FOR UPDATE`));
+        if (!cur || cur.status !== "merged" || !cur.mergedInto) return; // entretanto separada: fica como está
+        // destino lido agora (segue fusões em cadeia até uma ficha ativa)
+        let s = Number(cur.mergedInto);
+        for (let i = 0; i < 20; i++) {
+          const [n] = rowsOf(await tx.execute(sql`SELECT status, mergedInto FROM crm_clients WHERE id = ${s}`));
+          if (!n) return;
+          if (n.status === "active") break;
+          if (n.status !== "merged" || !n.mergedInto) return;
+          s = Number(n.mergedInto);
+        }
+        if (s === m) return;
+        // mesma ordem que a fusão (emails, telefones, carros, depois reservas)
+        for (const x of TABLES) {
+          const t = sql.raw(x.t), col = sql.raw(x.col);
+          // o que foi retirado à mão da que ficou não volta por aqui
+          await tx.execute(sql`DELETE ${t} FROM ${t} JOIN crm_blocked_identifiers b ON b.clientId = ${s} AND b.kind = ${x.kind} AND b.value = ${t}.${col}
+            WHERE ${t}.clientId = ${m}`);
+          // o que a que ficou ainda não tem muda; o repetido (já lá está) sai da absorvida
+          await tx.execute(sql`UPDATE IGNORE ${t} SET clientId = ${s}${x.primary ? sql`, isPrimary = 0` : sql``} WHERE clientId = ${m}`);
+          await tx.execute(sql`DELETE FROM ${t} WHERE clientId = ${m}`);
+        }
+        await tx.execute(sql`UPDATE crm_booking_links SET clientId = ${s} WHERE clientId = ${m}`);
+        out.add(s);
+      });
+    } catch (err: any) {
+      // ex.: deadlock com uma fusão ao mesmo tempo — fica para o próximo lote, a carga continua
+      console.warn(`[crm-sync] arrumar sobras da ficha ${m} ficou para depois:`, String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+    }
   }
   return [...out];
 }

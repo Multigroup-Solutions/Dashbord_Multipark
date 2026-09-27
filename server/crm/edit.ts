@@ -149,6 +149,10 @@ export async function upsertVehicle(db: any, userId: number, clientId: number, v
   if (!key) throw new Error("Matrícula inválida.");
   const clean = (s?: string | null) => (s && s.trim() ? s.trim().slice(0, 96) : null);
   if (v.id) {
+    // matrícula corrigida: a antiga não volta com a carga das reservas
+    const [old] = rowsOf(await db.execute(sql`SELECT plate FROM crm_client_vehicles WHERE id = ${v.id} AND clientId = ${clientId}`));
+    if (!old) throw new Error("Carro não encontrado.");
+    if (String(old.plate) !== key) await block(db, userId, clientId, "plate", String(old.plate));
     await db.execute(sql`UPDATE crm_client_vehicles SET plate = ${key}, plateDisplay = ${v.plate.trim().slice(0, 32)}, brand = ${clean(v.brand)},
       model = ${clean(v.model)}, color = ${clean(v.color)}, vehicleType = ${clean(v.vehicleType)} WHERE id = ${v.id} AND clientId = ${clientId}`);
   } else {

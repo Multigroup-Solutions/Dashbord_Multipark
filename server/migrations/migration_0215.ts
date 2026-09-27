@@ -235,6 +235,45 @@ export const MIGRATION_0215_STATEMENTS: string[] = [
     ")" + T,
   // Cursor da carga (updatedAt, id): sem índice, cada lote ordena a tabela toda.
   "ALTER TABLE `multipark_bookings` ADD INDEX `idx_mb_updated_id` (`updatedAt`, `id`)",
+  // Tabelas criadas pela 1.ª versão desta migração (sem estas colunas/índices):
+  "ALTER TABLE `crm_clients` ADD COLUMN `proManual` TINYINT NOT NULL DEFAULT 0 AFTER `isPro`",
+  "ALTER TABLE `crm_merge_suggestions` ADD INDEX `idx_crm_suggestion_a` (`clientA`, `status`)",
+  "ALTER TABLE `crm_merge_suggestions` ADD INDEX `idx_crm_suggestion_b` (`clientB`, `status`)",
 ];
 
-export const IDEMPOTENT_ERROR_CODES_0215 = new Set<string>(["ER_TABLE_EXISTS_ERROR", "ER_DUP_KEYNAME"]);
+export const IDEMPOTENT_ERROR_CODES_0215 = new Set<string>(["ER_TABLE_EXISTS_ERROR", "ER_DUP_KEYNAME", "ER_DUP_FIELDNAME"]);
+
+export const CRM_TABLES_0215 = [
+  "crm_clients", "crm_client_emails", "crm_client_phones", "crm_client_vehicles", "crm_client_external_ids", "crm_booking_links",
+  "crm_client_relations", "crm_merge_suggestions", "crm_merge_events", "crm_saved_filters", "crm_blocked_identifiers",
+] as const;
+
+const rowsOf = (res: unknown): any[] => {
+  const r = Array.isArray(res) ? res[0] : (res as any)?.rows ?? res;
+  return Array.isArray(r) ? r : [];
+};
+
+/**
+ * Passo em código (depois do SQL): as tabelas crm_* ficam com o charset e a
+ * collation de `multipark_bookings.externalId` — lidos da própria BD. Cobre
+ * tabelas criadas pela 1.ª versão (utf8mb4_unicode_ci) e uma BD cujo padrão
+ * não seja o de `multipark_bookings`. Sem diferença, não faz nada.
+ * Devolve as tabelas convertidas.
+ */
+export async function runMigration0215Collation(db: { execute: (q: any) => Promise<unknown> }): Promise<string[]> {
+  const { sql } = await import("drizzle-orm");
+  const [target] = rowsOf(await db.execute(sql`SELECT CHARACTER_SET_NAME AS cs, COLLATION_NAME AS coll FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'multipark_bookings' AND COLUMN_NAME = 'externalId'`));
+  const cs = String(target?.cs ?? ""), coll = String(target?.coll ?? "");
+  if (!/^[a-z0-9_]+$/i.test(cs) || !/^[a-z0-9_]+$/i.test(coll)) return [];
+  const tables = rowsOf(await db.execute(sql`SELECT TABLE_NAME AS t, TABLE_COLLATION AS c FROM information_schema.TABLES
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (${sql.join(CRM_TABLES_0215.map((t) => sql`${t}`), sql`, `)})`));
+  const out: string[] = [];
+  for (const r of tables) {
+    const t = String(r.t);
+    if (String(r.c) === coll || !(CRM_TABLES_0215 as readonly string[]).includes(t)) continue;
+    await db.execute(sql.raw(`ALTER TABLE \`${t}\` CONVERT TO CHARACTER SET ${cs} COLLATE ${coll}`));
+    out.push(t);
+  }
+  return out;
+}

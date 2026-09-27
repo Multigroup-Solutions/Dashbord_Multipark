@@ -337,11 +337,12 @@ export async function getClientFile(db: any, id: number, opts: { canSeeTotals: b
     ${DT("nextCheckIn")} AS nextCheckInS, ${DT("lastSeenAt")} AS lastSeenAtS, DATE_FORMAT(birthDate, '%Y-%m-%d') AS birthDateS,
     ${DT("createdAt")} AS createdAtS FROM crm_clients WHERE id = ${id}`));
   if (!c) return null;
+  // junta a outra: segue para a que ficou (essa verifica o âmbito ao abrir)
+  if (c.status === "merged") return { redirectTo: Number(c.mergedInto) || null };
   if (scopedProjectIds() !== undefined) {
     const [ok] = rowsOf(await db.execute(sql`SELECT 1 AS ok FROM crm_clients c WHERE c.id = ${id} AND ${clientVisibleSql(sql`c.id`)}`));
     if (!ok) return null;
   }
-  if (c.status === "merged") return { redirectTo: Number(c.mergedInto) || null };
   const emails = rowsOf(await db.execute(sql`SELECT id, email, isPrimary, generic, verified, source, ${DT("firstSeenAt")} AS firstSeenAt, ${DT("lastSeenAt")} AS lastSeenAt
     FROM crm_client_emails WHERE clientId = ${id} ORDER BY isPrimary DESC, generic ASC, lastSeenAt DESC`));
   const phones = rowsOf(await db.execute(sql`SELECT id, phone, isPrimary, whatsapp, label, source, ${DT("lastSeenAt")} AS lastSeenAt
