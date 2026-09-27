@@ -13,7 +13,7 @@ import {
   diffSnapshots, formatChange, formatDiffValue, getBookingFileAccounts, getBookingFileMain, getBookingFileTimeline,
   mapActivityRow, mapAttachmentRow, mapBillingRow, mapCancellationRow, mapCoreRow, mapExtraRow, mapHistoryRow,
   mapLink, mapLocationRow, mapPaymentRow, mapPricingRow, mapReviewRow, mergeTimeline, normalizeRef, normalizeSignature,
-  openableUrl, originBadge, parseModifiedFields, pickResolution, resolveBookingRef, summarizeSnapshot, type ChildKey,
+  openableUrl, parseModifiedFields, pickResolution, resolveBookingRef, summarizeSnapshot, type ChildKey,
 } from "./bookingFile";
 
 const ENV = "DATABASE_URL_MULTIPARK";
@@ -179,10 +179,10 @@ describe("ficha — mapeadores", () => {
     const m = mapCoreRow(core);
     expect(m).toMatchObject({
       id: "cm1", code: "29484", status: "CHECKED_IN", statusLabel: "No parque",
-      park: { name: "Airpark Lisboa", city: "Lisboa" },
       checkIn: { day: "2026-09-10", time: "08:00", at: "2026-09-10T08:05:00.000Z" },
       flights: { return: { flight: "TP1234", eta: "2026-09-15T21:40:00.000Z" } },
-      origin: { badge: "Marketplace", partnerName: "Parkos", partnerFee: "20 %", label: "Marketplace" },
+      park: { name: "Airpark Lisboa", city: "Lisboa", ours: true, groupLabel: "Airpark Lisboa", listingType: "ON_PLATFORM" },
+      origin: { channel: "marketplace", badge: "Marketplace", channelDetail: "Origem Marketplace · Parkos (agregador)", partnerName: "Parkos", partnerTypeLabel: "agregador", partnerFee: "20 %", label: "Marketplace" },
       price: { bookingPrice: 60, originalBookingPrice: 55, paymentMethod: "Dinheiro" },
       client: { name: "Maria Silva", email: "maria@example.com", nif: "123456789", language: "pt", anonymized: false },
       vehicle: { plate: "AA-00-BB", brand: "VW", kms: "52000" },
@@ -197,15 +197,23 @@ describe("ficha — mapeadores", () => {
   it("linha vazia não rebenta (colunas em falta)", () => {
     const m = mapCoreRow({ booking: { id: "x" } });
     expect(m.statusLabel).toBe("—");
-    expect(m.origin.badge).toBe("Direto");
+    expect(m.park.ours).toBe(false);
+    expect(m.origin.channel).toBe("marketplace");
     expect(m.evidence.video).toBeNull();
   });
 
-  it("origem Direto / Marketplace", () => {
-    expect(originBadge("API", null)).toBe("Direto");
-    expect(originBadge("GENERAL_FORM", null)).toBe("Direto");
-    expect(originBadge("PARTNER_API", null)).toBe("Marketplace");
-    expect(originBadge("API", "pa1")).toBe("Marketplace");
+  it("canal pelo classificador único (Direto / Parceiro / Marketplace)", () => {
+    const withB = (booking: Record<string, unknown>, park: Record<string, unknown> = core.park, partner: Record<string, unknown> | undefined = undefined) =>
+      mapCoreRow({ ...core, booking: { ...core.booking, partnerId: null, ...booking }, park, partner });
+    expect(withB({ origin: "API" }).origin).toMatchObject({ channel: "direto", badge: "Direto" });
+    expect(withB({ origin: "PARTNER_API" }).origin).toMatchObject({ channel: "parceiro", channelDetail: "API de parceiro" });
+    expect(withB({ origin: "API", partnerId: "pa1" }, core.park, { name: "Viagens Lda", partnerType: "AGENCY" }).origin)
+      .toMatchObject({ channel: "parceiro", badge: "Parceiro · Viagens Lda", partnerTypeLabel: "agência" });
+    expect(withB({ origin: "API", paymentSource: "PARKOS" }).origin.badge).toBe("Parceiro · Parkos");
+    // firebaseBrand manda na marca: parque de outra marca → Marketplace.
+    const other = withB({ origin: "API" }, { ...core.park, firebaseBrand: "TopParking" });
+    expect(other.park).toMatchObject({ ours: false, groupLabel: "Marketplace", firebaseBrand: "TopParking" });
+    expect(other.origin).toMatchObject({ channel: "marketplace", channelDetail: "Parque de terceiros" });
   });
 
   it("links: só http(s) abre; GPS inválido não dá mapa", () => {

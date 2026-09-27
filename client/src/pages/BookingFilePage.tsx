@@ -231,6 +231,13 @@ function FoundFile({ data, scope }: { data: MainFound; scope: { projectId?: numb
   );
 }
 
+/** Cores do canal (contabilidade) — as mesmas das Reservas do dia. */
+const CHANNEL_TONE: Record<string, string> = {
+  direto: "border-sky-300 text-sky-700",
+  parceiro: "border-violet-300 text-violet-700",
+  marketplace: "border-rose-300 text-rose-700",
+};
+
 function Header({ data, paid }: { data: MainFound; paid: number | null }) {
   const b = data.core;
   const cur = b.price.currency || "EUR";
@@ -242,11 +249,15 @@ function Header({ data, paid }: { data: MainFound; paid: number | null }) {
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-2xl font-bold">#{b.code ?? b.id}</span>
           <Badge className={STATUS_TONE[b.status ?? ""] ?? ""}>{b.statusLabel}</Badge>
-          <Badge variant="outline" className={b.origin.badge === "Marketplace" ? "border-violet-400 text-violet-700" : "border-emerald-400 text-emerald-700"}>
-            {b.origin.badge}{b.origin.partnerName ? ` · ${b.origin.partnerName}` : ""}
+          <Badge variant="outline" className={CHANNEL_TONE[b.origin.channel] ?? ""} title={b.origin.channelDetail}>
+            {b.origin.badge}{b.origin.channel === "parceiro" && b.origin.partnerTypeLabel ? ` (${b.origin.partnerTypeLabel})` : ""}
           </Badge>
           {b.pro && <Badge variant="outline">Pro</Badge>}
           <span className="text-sm text-muted-foreground">{b.park.name ?? "—"}{b.park.city ? ` · ${b.park.city}` : ""}</span>
+          <Badge variant="outline" className={b.park.ours ? "text-xs font-normal" : "text-xs font-normal border-dashed"} title={b.park.reason}>
+            {b.park.ours ? `Parque nosso · ${b.park.groupLabel}` : "Parque Marketplace"}
+            {b.park.listingType ? ` · ${b.park.listingType === "DIRECTORY" ? "diretório" : b.park.listingType === "ON_PLATFORM" ? "na plataforma" : b.park.listingType}` : ""}
+          </Badge>
           <a href={multiparkBookingUrl(b.id)} target="_blank" rel="noopener noreferrer" className="ml-auto inline-flex items-center gap-1 text-xs text-primary underline">
             Ver na Multipark <ExternalLink className="w-3 h-3" />
           </a>
@@ -257,6 +268,7 @@ function Header({ data, paid }: { data: MainFound; paid: number | null }) {
           <Field label="Voo de ida">{b.flights.departing.flight ?? "—"}{b.flights.departing.eta ? ` · ETA ${dt(b.flights.departing.eta)}` : ""}</Field>
           <Field label="Voo de regresso">{b.flights.return.flight ?? "—"}{b.flights.return.eta ? ` · ETA ${dt(b.flights.return.eta)}` : ""}</Field>
           <Field label="Entrega">{[b.delivery.type, b.delivery.location].filter(Boolean).join(" · ") || "—"}</Field>
+          <Field label="Canal">{b.origin.channelLabel} · {b.origin.channelDetail}</Field>
           <Field label="Origem">{b.origin.label}{b.origin.externalReference ? ` · ref. ${b.origin.externalReference}` : ""}{b.origin.partnerFee ? ` · comissão ${b.origin.partnerFee}` : ""}</Field>
           <Field label="Preço">
             {eur(b.price.bookingPrice, cur)}

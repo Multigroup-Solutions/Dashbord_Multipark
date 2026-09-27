@@ -21,7 +21,7 @@
  *   Booking (quase todas: estado, fases *At, datas, voos + ETA, entrega,
  *            origem, parceiro, preços, pagamento, caixa, condutores, vídeo,
  *            assinaturas, km/autonomia, língua, NIF, lugar/garagem/alocação)
- *   Park (id, name, city, listingType), BookingVehicle, Client, Partner,
+ *   Park (id, name, city, firebaseBrand, listingType, status), BookingVehicle, Client, Partner,
  *   Driver, Spot, Garage, Allocation, Attachment, History, ActivityEvent,
  *   Agent (name), BookingPricing, BookingPricingPayment, Billing,
  *   Cancellation, BookingExtraService, ExtraService, ChatMessage,
@@ -29,6 +29,12 @@
  */
 import { multiparkDbQuery, type SqlParam } from "./client";
 import { cityAliases, ParamList, safeMultiparkRead, toIsoUtc, type MultiparkRead, type MultiparkReadUnavailableCode } from "./read";
+import {
+  BOOKING_CHANNEL_LABELS, ORIGIN_LABELS, classifyBookingChannel, classifyPark, type BookingChannel,
+} from "../../shared/multiparkParks";
+
+// Etiquetas das origens: as mesmas das Reservas do dia (classificador único).
+export { ORIGIN_LABELS };
 
 type Query = <T = Record<string, unknown>>(sql: string, params?: SqlParam[]) => Promise<T[]>;
 type J = Record<string, any>;
@@ -193,18 +199,6 @@ export const CHANGE_TYPE_LABELS: Record<string, string> = {
   CHECKING_OUT: "A sair",
   CHECK_OUT: "Check-out",
   CANCEL: "Cancelamento",
-};
-
-export const ORIGIN_LABELS: Record<string, string> = {
-  GENERAL_FORM: "Formulário",
-  MANUAL: "Manual",
-  MARKETPLACE: "Marketplace",
-  IMPORTED: "Importada",
-  API: "API",
-  MOBILE_APP: "App",
-  PARTNER_API: "API de parceiro",
-  PARTNER_DASHBOARD: "Painel de parceiro",
-  CLIENT_PLAN: "Avença",
 };
 
 /** Campos da reserva em PT-PT (histórico e diferenças). */
@@ -415,7 +409,20 @@ export interface BookingFileCore {
   updatedAt: string | null;
   phases: BookingPhase[];
   customerCheckinEtaMin: number | null;
-  park: { id: string | null; name: string | null; city: string | null; listingType: string | null };
+  park: {
+    id: string | null;
+    name: string | null;
+    city: string | null;
+    firebaseBrand: string | null;
+    listingType: string | null;
+    status: string | null;
+    /** Classificação (shared/multiparkParks.ts): nosso (marca + cidade) ou Marketplace. */
+    ours: boolean;
+    /** "Airpark Lisboa" ou "Marketplace". */
+    groupLabel: string;
+    /** Porquê, em texto curto. */
+    reason: string;
+  };
   checkIn: { day: string | null; time: string | null; at: string | null };
   checkOut: { day: string | null; time: string | null; at: string | null };
   flights: {
@@ -427,9 +434,17 @@ export interface BookingFileCore {
   origin: {
     code: string | null;
     label: string;
-    badge: "Direto" | "Marketplace";
+    /** Canal para a contabilidade (Direto / Parceiro / Marketplace). */
+    channel: BookingChannel;
+    channelLabel: string;
+    /** Porquê / quem ("Parkos (agregador)", "Parque de terceiros"). */
+    channelDetail: string;
+    /** Texto do distintivo: "Direto", "Parceiro · Parkos", "Marketplace". */
+    badge: string;
     partnerName: string | null;
     partnerType: string | null;
+    /** "agência" / "agregador" / "parceiro". */
+    partnerTypeLabel: string | null;
     partnerFee: string | null;
     partnerAmountDue: number | null;
     partnerAmountPaid: number | null;
@@ -490,13 +505,6 @@ const PHASES: Array<[string, string]> = [
   ["cashierClosedAt", "Caixa fechada"],
 ];
 
-const MARKETPLACE_ORIGINS = new Set(["MARKETPLACE", "PARTNER_API", "PARTNER_DASHBOARD"]);
-
-/** Direto ou Marketplace (parceiro/agregador). PURA. */
-export function originBadge(origin: string | null, partnerId: string | null): "Direto" | "Marketplace" {
-  return partnerId || (origin && MARKETPLACE_ORIGINS.has(origin.toUpperCase())) ? "Marketplace" : "Direto";
-}
-
 function validation(b: J, key: "driverValidated" | "cashValidated" | "cashierClosed"): Validation {
   return { done: bool(b[key]), at: iso(b[`${key}At`]), by: str(b[`${key}ByName`]) ?? str(b[`${key}ById`]) };
 }
@@ -526,6 +534,10 @@ export function mapCoreRow(r: CoreRow): BookingFileCore {
   const feeValue = num(b.partnerFeeValue) ?? (feeType === "FIXED" ? num(pa.feeFixedValue) : num(pa.feePercentage));
   const video = str(b.checkinVideo);
   const name = [str(c.firstName), str(c.lastName)].filter(Boolean).join(" ") || null;
+  const parkCls = classifyPark({ name: str(p.name), city: str(p.city), firebaseBrand: str(p.firebaseBrand), listingType: str(p.listingType) });
+  const ch = classifyBookingChannel({
+    parkOurs: parkCls.ours, origin, partnerId, partnerName: str(pa.name), partnerType: str(pa.partnerType), paymentSource: str(b.paymentSource),
+  });
   return {
     id: String(b.id ?? ""),
     code: str(b.allocation),
@@ -535,7 +547,11 @@ export function mapCoreRow(r: CoreRow): BookingFileCore {
     updatedAt: iso(b.updatedAt),
     phases,
     customerCheckinEtaMin: num(b.customerCheckinEta),
-    park: { id: str(b.parkId) ?? str(p.id), name: str(p.name), city: str(p.city), listingType: str(p.listingType) },
+    park: {
+      id: str(b.parkId) ?? str(p.id), name: str(p.name), city: str(p.city),
+      firebaseBrand: str(p.firebaseBrand), listingType: parkCls.listingType, status: str(p.status),
+      ours: parkCls.ours, groupLabel: parkCls.label, reason: parkCls.reason,
+    },
     checkIn: { day: dayOf(b.checkInDate), time: str(b.checkInTime), at: iso(b.checkIn) },
     checkOut: { day: dayOf(b.checkOutDate), time: str(b.checkOutTime), at: iso(b.checkOut) },
     flights: {
@@ -547,9 +563,13 @@ export function mapCoreRow(r: CoreRow): BookingFileCore {
     origin: {
       code: origin,
       label: origin ? ORIGIN_LABELS[origin] ?? origin : "—",
-      badge: originBadge(origin, partnerId),
+      channel: ch.channel,
+      channelLabel: BOOKING_CHANNEL_LABELS[ch.channel],
+      channelDetail: ch.detail,
+      badge: ch.badge,
       partnerName: str(pa.name),
       partnerType: str(pa.partnerType),
+      partnerTypeLabel: ch.partnerTypeLabel,
       partnerFee: feeType && feeValue != null ? (feeType === "FIXED" ? `${feeValue} €` : `${feeValue} %`) : null,
       partnerAmountDue: num(b.partnerAmountDue),
       partnerAmountPaid: num(b.partnerAmountPaid),

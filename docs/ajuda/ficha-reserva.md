@@ -2,7 +2,7 @@
 modulo: reservas_operacoes
 titulo: Ficha da reserva
 rotas: /reserva
-palavras: ficha da reserva, detalhe da reserva, estado da reserva, fases, check-in, check-out, voo, ETA, vídeo, assinatura, anexos, histórico, linha do tempo, GPS, lugar, garagem, alocação, caixa, pagamentos, fatura, cancelamento, reembolso, serviços extra, chat, emails, ocorrências, avaliação, marketplace, parceiro, direto
+palavras: ficha da reserva, detalhe da reserva, estado da reserva, fases, check-in, check-out, voo, ETA, vídeo, assinatura, anexos, histórico, linha do tempo, GPS, lugar, garagem, alocação, caixa, pagamentos, fatura, cancelamento, reembolso, serviços extra, chat, emails, ocorrências, avaliação, marketplace, parceiro, direto, canal, agência, agregador, parque nosso
 ---
 # Ficha da reserva
 
@@ -15,7 +15,7 @@ Tudo sobre uma reserva num só sítio, lido **em tempo real** da base de dados d
 - O antigo "Inspecionar reserva" (/multipark/inspect) abre agora esta ficha.
 
 **O que mostra**
-- **Cabeçalho**: n.º, estado, parque, entrada e saída, voos com a hora prevista atualizada (ETA), tipo de entrega, origem (**Direto** ou **Marketplace**, com o parceiro e a comissão), preço (e o preço na criação, se mudou), valor pago e método. Por baixo, a hora de cada fase: a entrar, em movimento, à espera de saída, à espera da bagagem, a sair.
+- **Cabeçalho**: n.º, estado, parque, entrada e saída, voos com a hora prevista atualizada (ETA), tipo de entrega, o **canal** para a contabilidade (**Direto**, **Parceiro · nome do parceiro** com o tipo — agência, agregador ou parceiro — ou **Marketplace**) e a origem (com a comissão do parceiro), a classificação do parque (**Parque nosso · marca + cidade** ou **Parque Marketplace**, e o tipo de listagem), preço (e o preço na criação, se mudou), valor pago e método. Por baixo, a hora de cada fase: a entrar, em movimento, à espera de saída, à espera da bagagem, a sair.
 - **Cliente**: nome, email, telefone, NIF e língua. Se o email existir nos nossos Clientes aparece **Ver ficha do cliente (CRM)**.
 - **Viatura**: matrícula, marca, modelo, cor, km, autonomia e quem fez a entrada e a saída.
 - **Provas**: vídeo do check-in, assinaturas de entrada e saída e anexos. Os vídeos e anexos com link abrem diretamente. Os que estão guardados dentro da app mostram **abrir na app Multipark**. As assinaturas só são carregadas quando carregas em **Mostrar assinaturas**.
@@ -30,3 +30,5 @@ Tudo sobre uma reserva num só sítio, lido **em tempo real** da base de dados d
 **Se aparecer um aviso amarelo**, a base de dados da Multipark não respondeu ou falta uma parte (por exemplo, a lista de pagamentos). O resto da ficha continua visível. Tenta de novo daqui a pouco.
 
 Tem acesso quem vê as reservas (Reservas & Operações), e cada um só vê as reservas dos parques das suas cidades. As reclamações e os perdidos só aparecem a quem tem acesso a esses módulos.
+
+As regras do canal e dos parques nossos são as mesmas das **Reservas do dia** (ver essa ajuda e o botão **Classificação dos parques**).
