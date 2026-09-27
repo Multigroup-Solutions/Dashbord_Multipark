@@ -87,7 +87,9 @@ export function ProAccountSection({ a, onLinkPerson }: { a: CrmProAccount; onLin
         <span className="font-display text-lg font-bold">Conta corrente</span>
         <Pill className="bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200">Pro · paga ao fim do mês</Pill>
         {discounts.map((d) => <Pill key={d} className="bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200">Desconto {d} %</Pill>)}
-        {!a.active && <Pill className="bg-muted text-muted-foreground">Pro desativado</Pill>}
+        {a.legacy
+          ? <Pill className="bg-muted text-muted-foreground" title="Tem reservas Pro ou cobranças online, mas hoje não é Pro em nenhum parque na Multipark">Pro antigo</Pill>
+          : !a.active && <Pill className="bg-muted text-muted-foreground">Pro desativado</Pill>}
         {a.autoBilling && <Pill className="bg-secondary text-secondary-foreground">Cobrança automática</Pill>}
         <div className="flex-1" />
         <Button variant="outline" asChild><a href={a.multiparkUrl} target="_blank" rel="noreferrer">Abrir na Multipark<ExternalLink className="h-3.5 w-3.5" /></a></Button>

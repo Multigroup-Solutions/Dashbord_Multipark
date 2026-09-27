@@ -6535,6 +6535,31 @@ export const appRouter = router({
       return buildHandoverDraft({ date: input.date, shift: input.shift, city: input.city });
     }),
 
+    // "Estado do parque (ao vivo)": carros no parque por garagem/lugar,
+    // operações em curso, próximas recolhas/entregas, ocorrências por resolver,
+    // caixa por fechar e bloqueios de amanhã — lidos AO VIVO da BD da
+    // Multipark (só leitura), só dos parques da cidade escolhida. Nunca lança
+    // por falta de BD — devolve { available:false, reason }.
+    liveState: protectedProcedure.input(z.object({
+      city: z.enum(HANDOVER_CITIES),
+      windowHours: z.number().int().min(1).max(24).optional(),
+    })).query(async ({ ctx, input }) => {
+      // A cidade passa pelo filtro de cidades do middleware (como o `draft`).
+      requireAccess(ctx.user, "passagem_turno", "view");
+      const { getMultiparkShiftState } = await import("./multiparkDb/shiftState");
+      const { shiftWindowUtc } = await import("../shared/shiftHandoverAuto");
+      const { operationalShift } = await import("../shared/shiftHandover");
+      const nowMs = Date.now();
+      const win = shiftWindowUtc(operationalShift(nowMs));
+      const r = await getMultiparkShiftState({
+        cities: [input.city], nowMs,
+        upcoming: { startMs: nowMs, endMs: nowMs + (input.windowHours ?? 8) * 3_600_000 },
+        cash: { startMs: win.startMs, endMs: Math.max(win.startMs, Math.min(nowMs, win.endMs)) },
+      });
+      if (!r.available) return { available: false as const, reason: r.reason, code: r.code };
+      return { available: true as const, ...r.data };
+    }),
+
     // Resumo por IA a pedido (5 pontos PT-PT); guarda-o se a passagem já existir.
     aiSummary: protectedProcedure.input(z.object({
       date: handoverDaySchema,
@@ -7579,6 +7604,18 @@ export const appRouter = router({
         requireAccess(ctx.user, "extras_dia", "view");
         return getBookingsInSlot(input.date, input.hour, input.slot, input.type, input.city ?? "lisbon");
       }),
+
+    // "Pressão": 60 dias da BD Multipark agregados pelo trabalho extras-pressure
+    // (ops_pressure_stats). Só lê a nossa BD; âmbito de cidade do utilizador.
+    pressure: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "extras_dia", "view");
+      const { getPressureView } = await import("./extrasPressure");
+      const { groupAllowedForCities } = await import("../shared/extrasPressure");
+      const { matchCityKey } = await import("../shared/city");
+      const names = scopedCityNames();
+      const keys = names === undefined ? null : names.map((n) => matchCityKey(n)).filter((k): k is NonNullable<typeof k> => !!k);
+      return getPressureView((key) => groupAllowedForCities(key, keys));
+    }),
   }),
 
   // ── DISPONIBILIDADE SEMANAL DOS EXTRAS ────────────────────────────────────

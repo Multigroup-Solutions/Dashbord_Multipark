@@ -63,11 +63,15 @@ export function buildProBookingsSql(limit = PRO_BOOKINGS_LIMIT): { sql: string; 
       `  NULLIF(v."licensePlate", '') AS plate,`,
       `  NULLIF(TRIM(CONCAT(tc."firstName", ' ', tc."lastName")), '') AS traveler_name,`,
       // parque REAL da reserva (a cidade decide quem a vê)
-      `  bpk."name" AS park_name, bpk."city" AS park_city`,
+      `  bpk."name" AS park_name, bpk."city" AS park_city,`,
+      // dono da reserva (a conta): para os Pro antigos, sem ProClient
+      `  NULLIF(TRIM(CONCAT(oc."firstName", ' ', oc."lastName")), '') AS owner_name, NULLIF(oc."email", '') AS owner_email,`,
+      `  NULLIF(oc."phoneNumber", '') AS owner_phone, NULLIF(oc."nif", '') AS owner_nif, (oc."anonymizedAt" IS NOT NULL) AS owner_anonymized`,
       `FROM pb`,
       `JOIN "Booking" b ON b."id" = pb."id"`,
       `LEFT JOIN pr ON pr.booking_id = b."id"`,
       `LEFT JOIN "Park" bpk ON bpk."id" = b."parkId"`,
+      `LEFT JOIN "Client" oc ON oc."id" = b."clientId"`,
       `LEFT JOIN "BookingVehicle" v ON v."id" = b."vehicleId"`,
       `LEFT JOIN "Client" tc ON tc."id" = COALESCE(b."customerId", b."clientId")`,
     ].join("\n"),
@@ -118,8 +122,13 @@ export function buildProOnlinePaymentsSql(): { sql: string; params: SqlParam[] }
     sql: [
       `SELECT pp."id" AS id, pp."clientId" AS client_id, pp."amount" AS amount, pp."status"::text AS status, NULLIF(pp."paymentMethod", '') AS method,`,
       `  ${ts(`pp."periodStart"`)} AS period_start, ${ts(`pp."periodEnd"`)} AS period_end, ${ts(`pp."createdAt"`)} AS created_at,`,
-      `  pp."isMitCharge" AS mit`,
+      `  pp."isMitCharge" AS mit,`,
+      // cliente da cobrança (Pro antigo, sem ProClient): conta própria
+      `  (c."id" IS NOT NULL) AS client_found, NULLIF(TRIM(CONCAT(c."firstName", ' ', c."lastName")), '') AS client_name,`,
+      `  NULLIF(c."email", '') AS client_email, NULLIF(c."phoneNumber", '') AS client_phone, NULLIF(c."nif", '') AS client_nif,`,
+      `  (c."anonymizedAt" IS NOT NULL) AS client_anonymized`,
       `FROM "ProPayment" pp`,
+      `LEFT JOIN "Client" c ON c."id" = pp."clientId"`,
       `ORDER BY pp."createdAt" DESC`,
       `LIMIT ${lim}`,
     ].join("\n"),
@@ -136,6 +145,8 @@ export interface ProParkOut {
 export interface ProAccountOut {
   mpClientId: string; name: string | null; email: string | null; phone: string | null; nif: string | null; taxName: string | null;
   autoBilling: boolean; active: boolean; parks: ProParkOut[];
+  /** Pro antigo: tem reservas Pro ou cobranças online mas nenhum ProClient hoje (modelo anterior a abril 2026) */
+  legacy: boolean;
 }
 export interface ProLedgerOut {
   mpClientId: string; kind: "booking" | "payment" | "paid_undated" | "settlement" | "online"; sourceId: string;
@@ -149,6 +160,8 @@ export interface ProDiagnostics {
   proClients: number; accounts: number; bookings: number; bookingsWithoutAccount: number; payments: number; undatedPaid: number;
   settlements: number; settlementsWithoutAccount: number; settlementPeriodShapes: Record<string, number>; settlementPeriodUnparsed: number;
   online: number; onlineWithoutAccount: number; pricingDiffersFromPrice: number; truncated: boolean;
+  /** contas "Pro antigo" criadas a partir de reservas/cobranças sem ProClient */
+  legacyAccounts: number;
 }
 export interface ProSnapshot { accounts: ProAccountOut[]; ledger: ProLedgerOut[]; diagnostics: ProDiagnostics }
 
@@ -178,7 +191,7 @@ export function mapProSnapshot(input: {
       const person = anonymized ? null : str([r.first_name, r.last_name].map((x) => str(x) ?? "").join(" "));
       a = {
         mpClientId: clientId, name: str(r.pro_name) ?? person, email: anonymized ? null : str(r.email), phone: anonymized ? null : str(r.phone),
-        nif: str(r.pc_tax_number) ?? str(r.nif), taxName: str(r.pc_tax_name) ?? str(r.tax_name), autoBilling: bool(r.auto_billing), active: false, parks: [],
+        nif: str(r.pc_tax_number) ?? str(r.nif), taxName: str(r.pc_tax_name) ?? str(r.tax_name), autoBilling: bool(r.auto_billing), active: false, parks: [], legacy: false,
       };
       accounts.set(clientId, a);
     } else {
@@ -201,7 +214,21 @@ export function mapProSnapshot(input: {
   const diag: ProDiagnostics = {
     proClients: input.proClients.length, accounts: accounts.size, bookings: 0, bookingsWithoutAccount: 0, payments: 0, undatedPaid: 0,
     settlements: 0, settlementsWithoutAccount: 0, settlementPeriodShapes: {}, settlementPeriodUnparsed: 0,
-    online: 0, onlineWithoutAccount: 0, pricingDiffersFromPrice: 0, truncated: !!input.truncated,
+    online: 0, onlineWithoutAccount: 0, pricingDiffersFromPrice: 0, truncated: !!input.truncated, legacyAccounts: 0,
+  };
+  /** Conta "Pro antigo" (cliente sem ProClient hoje): não se perdem reservas nem dívida. */
+  const legacyAccount = (clientId: string, c: { name: unknown; email: unknown; phone: unknown; nif: unknown; anonymized: unknown }) => {
+    let a = accounts.get(clientId);
+    if (!a) {
+      const anon = bool(c.anonymized);
+      a = {
+        mpClientId: clientId, name: anon ? null : str(c.name), email: anon ? null : str(c.email), phone: anon ? null : str(c.phone),
+        nif: str(c.nif), taxName: null, autoBilling: false, active: false, parks: [], legacy: true,
+      };
+      accounts.set(clientId, a);
+      diag.legacyAccounts++;
+    }
+    return clientId;
   };
   const base = { mpPeriodKey: null, parkId: null, parkName: null, city: null, bookingExternalId: null, bookingCode: null, checkIn: null, checkOut: null,
     plate: null, travelerName: null, description: null, debit: 0, credit: 0, paidAmount: null, listPrice: null, discountAmount: null, infoAmount: null, status: null, method: null };
@@ -215,7 +242,9 @@ export function mapProSnapshot(input: {
   for (const r of input.bookings) {
     const id = str(r.id);
     if (!id) continue;
-    const account = accountFor(str(r.pro_client_id), bool(r.pro) ? str(r.client_id) : null);
+    const ownerId = str(r.client_id);
+    const account = accountFor(str(r.pro_client_id), bool(r.pro) ? ownerId : null)
+      ?? (ownerId ? legacyAccount(ownerId, { name: r.owner_name, email: r.owner_email, phone: r.owner_phone, nif: r.owner_nif, anonymized: r.owner_anonymized }) : null);
     if (!account) { diag.bookingsWithoutAccount++; continue; }
     const checkIn = str(r.check_in), created = str(r.created_at);
     const entryAt = checkIn ?? created;
@@ -301,7 +330,9 @@ export function mapProSnapshot(input: {
     const id = str(r.id), at = str(r.created_at);
     if (!id || !at) continue;
     diag.online++;
-    const account = accountFor(str(r.client_id), str(r.client_id));
+    const cid = str(r.client_id);
+    const account = accountFor(cid, cid)
+      ?? (cid && bool(r.client_found) ? legacyAccount(cid, { name: r.client_name, email: r.client_email, phone: r.client_phone, nif: r.client_nif, anonymized: r.client_anonymized }) : null);
     if (!account) { diag.onlineWithoutAccount++; continue; }
     const start = str(r.period_start), end = str(r.period_end);
     ledger.push({
@@ -311,6 +342,7 @@ export function mapProSnapshot(input: {
     });
   }
 
+  diag.accounts = accounts.size;
   return { accounts: [...accounts.values()], ledger, diagnostics: diag };
 }
 

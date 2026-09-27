@@ -302,6 +302,15 @@ app.get("/api/cron/crm-suggestions", async (req, res) => {
   sendCronRun(res, await crmSuggestionsCron({ deadlineAt: manualDeadline() }));
 });
 
+// "Pressão" do Extras-Dia (60 dias da BD Multipark → ops_pressure_stats).
+// ?cursor=… retoma no grupo seguinte (vem na resposta quando done:false).
+app.get("/api/cron/extras-pressure", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { extrasPressureCron, sendCronRun } = await import("../cronJobs");
+  const cursor = typeof req.query?.cursor === "string" ? req.query.cursor.slice(0, 200) : null;
+  sendCronRun(res, await extrasPressureCron({ deadlineAt: manualDeadline(), cursor }));
+});
+
 // ?offsetDays=N retoma a varredura a partir desse dia da janela — a janela
 // completa não cabe nos 60 s do Vercel; a resposta traz done/nextOffset.
 app.get("/api/cron/multipark-future", async (req, res) => {

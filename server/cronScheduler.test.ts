@@ -290,7 +290,7 @@ describe("registo dos trabalhos", () => {
       "extras-auto": "de hora a hora", "identity-sweep": "de hora a hora",
       "crm-sync": "a cada 15 min", "crm-suggestions": "diário a partir das 05:15", "crm-pro-sync": "a cada 30 min",
       "extras-schedule": "de hora a hora (08h–23h)",
-      "daily-ops": "diário a partir das 04:30", "zello-sameday": "diário das 23:15 às 23:55", "rh-docs-weekly": "semanal, segunda a partir das 04:45", "ops-briefing": "diário a partir das 07:30", "web-analytics": "diário a partir das 09:00",
+      "daily-ops": "diário a partir das 04:30", "zello-sameday": "diário das 23:15 às 23:55", "rh-docs-weekly": "semanal, segunda a partir das 04:45", "extras-pressure": "diário a partir das 04:45", "ops-briefing": "diário a partir das 07:30", "web-analytics": "diário a partir das 09:00",
       "google-ads": "diário a partir das 05:45", "meta-ads": "diário a partir das 05:45",
       "google-ads-monthly": "mensal, dia 2 a partir das 05:45", "meta-ads-monthly": "mensal, dia 2 a partir das 05:45",
     });
