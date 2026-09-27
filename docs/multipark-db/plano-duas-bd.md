@@ -106,6 +106,8 @@ Top Parking 40 %, Parkos 20 %, Parkvia 23 %, Parkivado 25 %, agências 10–20 %
 |---|---|
 | Importar o histórico de cada reserva (`multipark_booking_history`) | Ler da BD 2. **Guardar o que já temos de antes de 2 mar 2026**: lá esse período só tem o retrato da migração |
 | Garagem, lugar e km tirados do histórico | Ler da BD 2 |
+| Listas de reservas por ação (/multipark/reservas, entradas, saídas…) sobre `multipark_bookings` | **Feito (27 set):** uma só lista "Reservas do dia" (Operações), lida da BD 2 dia a dia (`server/multiparkDb/dayBookings.ts`); parques nossos em `shared/multiparkParks.ts` |
+| Página Sincronização e "Reparar período" | **Retiradas da interface (27 set).** O estado fica em Definições → Estado do sistema |
 | Ocorrências a partir das notas do histórico (`incidents` via parser) | Ler `Occurrence` da BD 2 |
 | Colunas operacionais de `multipark_bookings` (fases, agentes, garagem) | Deixar de atualizar. Fica a cópia financeira (B2) e o cliente (B1) |
 | Três redes de segurança do sync (hora a hora, janela futura, reconciliação diária) | Podem ficar mais leves. Mantém-se a API e o webhook para a cópia financeira, mais a comparação com a BD 2 |

@@ -144,7 +144,7 @@ export interface NavEntry {
 export const NAV_ENTRIES: readonly NavEntry[] = [
   { id: "dashboard", label: "Dashboard", path: "/", modules: [], keywords: ["inicio", "home", "painel"], kind: "page" },
   { id: "operacoes", label: "Reservas & Operações", path: "/operacoes", modules: ["reservas_operacoes"], keywords: ["reservas", "operacoes", "recolhas", "entregas", "cancelados"], kind: "page" },
-  { id: "reservas-hoje", label: "Reservas (lista)", path: "/operacoes?tab=reservas", modules: ["reservas_operacoes"], keywords: ["reservas", "lista de reservas"], kind: "page" },
+  { id: "reservas-hoje", label: "Reservas do dia", path: "/operacoes?tab=dia", modules: ["reservas_operacoes"], keywords: ["reservas", "lista de reservas", "reservas do dia", "entradas", "saidas", "hoje"], kind: "page" },
   { id: "servicos", label: "Serviços", path: "/servicos", modules: ["servicos"], keywords: ["servicos", "lavagem", "extras"], kind: "page" },
   { id: "tarefas", label: "Tarefas", path: "/tarefas", modules: ["tarefas"], keywords: ["tarefas", "kanban", "checklist"], kind: "page" },
   { id: "nova-tarefa", label: "Nova tarefa", path: "/tarefas?new=1", modules: ["tarefas"], action: "edit", keywords: ["criar tarefa", "nova tarefa", "tarefa"], kind: "action" },
@@ -203,7 +203,7 @@ export function matchNavigation(query: string, user: Subject, max = SEARCH_MAX_P
 export function seeAllHref(group: SearchGroup, query: string): string | null {
   const q = encodeURIComponent(String(query ?? "").trim());
   switch (group) {
-    case "reservas": return `/operacoes?tab=reservas&q=${q}`;
+    case "reservas": return `/operacoes?tab=dia&q=${q}`;
     case "contactos": return `/contactos?q=${q}`;
     case "reclamacoes": return `/reclamacoes?q=${q}`;
     case "tarefas": return `/tarefas?q=${q}`;

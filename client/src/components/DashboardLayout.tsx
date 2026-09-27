@@ -217,7 +217,6 @@ export const menuGroups: MenuGroup[] = [
     items: [
       { icon: Users, label: "Utilizadores", path: "/utilizadores", module: "utilizadores" },
       { icon: ShieldCheck, label: "Permissões", path: "/permissoes", module: "permissoes" },
-      { icon: RefreshCw, label: "Sincronização", path: "/multipark/sync", module: "sincronizacao" },
       { icon: Key, label: "API Keys", path: "/api-keys", module: "api_keys" },
       { icon: Plug, label: "Integrações", path: "/integracoes", module: "integracoes" },
       { icon: ScrollText, label: "Logs", path: "/logs", module: "logs" },
