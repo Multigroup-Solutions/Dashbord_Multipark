@@ -291,6 +291,11 @@ app.get("/api/cron/crm-sync", async (req, res) => {
   const { crmSyncCron, sendCronRun } = await import("../cronJobs");
   sendCronRun(res, await crmSyncCron({ deadlineAt: manualDeadline(), restart: req.query?.restart === "1" }));
 });
+app.get("/api/cron/crm-pro-sync", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { crmProSyncCron, sendCronRun } = await import("../cronJobs");
+  sendCronRun(res, await crmProSyncCron({ deadlineAt: manualDeadline() }));
+});
 app.get("/api/cron/crm-suggestions", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
   const { crmSuggestionsCron, sendCronRun } = await import("../cronJobs");

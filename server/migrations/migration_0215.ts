@@ -266,12 +266,13 @@ export async function runMigration0215Collation(db: { execute: (q: any) => Promi
     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'multipark_bookings' AND COLUMN_NAME = 'externalId'`));
   const cs = String(target?.cs ?? ""), coll = String(target?.coll ?? "");
   if (!/^[a-z0-9_]+$/i.test(cs) || !/^[a-z0-9_]+$/i.test(coll)) return [];
+  // todas as crm_* (as da fase 1 e as seguintes, ex.: crm_pro_* da 0220)
   const tables = rowsOf(await db.execute(sql`SELECT TABLE_NAME AS t, TABLE_COLLATION AS c FROM information_schema.TABLES
-    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (${sql.join(CRM_TABLES_0215.map((t) => sql`${t}`), sql`, `)})`));
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE 'crm\\_%'`));
   const out: string[] = [];
   for (const r of tables) {
     const t = String(r.t);
-    if (String(r.c) === coll || !(CRM_TABLES_0215 as readonly string[]).includes(t)) continue;
+    if (String(r.c) === coll || !/^crm_[a-z_]+$/.test(t)) continue;
     await db.execute(sql.raw(`ALTER TABLE \`${t}\` CONVERT TO CHARACTER SET ${cs} COLLATE ${coll}`));
     out.push(t);
   }

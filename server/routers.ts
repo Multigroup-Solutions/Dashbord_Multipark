@@ -8565,6 +8565,22 @@ export const appRouter = router({
         } catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: String(err?.message ?? err) }); }
         return { ok: true };
       }),
+    // ── Fase 2: clientes Pro e conta corrente (lida da BD Multipark por crm-pro-sync) ──
+    proList: protectedProcedure
+      .input(z.object({ search: z.string().max(120).nullable().optional(), onlyDue: z.boolean().optional() }).optional())
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "clientes", "view");
+        const { listProAccounts } = await import("./crm/proQueries");
+        return listProAccounts(await crmDb(), { cities: scopedCityNames(), canSeeTotals: await canSeeFinanceTotals(ctx.user), search: input?.search ?? null, onlyDue: input?.onlyDue });
+      }),
+    proAccount: protectedProcedure
+      .input(z.object({ clientId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "clientes", "view");
+        await crmAssertInScope(input.clientId);
+        const { getProAccountForClient } = await import("./crm/proQueries");
+        return getProAccountForClient(await crmDb(), input.clientId, { cities: scopedCityNames(), canSeeTotals: await canSeeFinanceTotals(ctx.user) });
+      }),
     /** Ligações antigas `/clientes?email=`: fichas com este email EXATO. */
     byEmail: protectedProcedure
       .input(z.object({ email: z.string().min(3).max(320) }))

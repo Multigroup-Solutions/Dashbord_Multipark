@@ -588,6 +588,7 @@ export const CRON_JOBS: readonly CronJob[] = [
   // CRM (27 set 2026): fichas de cliente a partir das reservas + sugestões de fusão.
   { name: "crm-sync", label: "CRM: fichas de cliente a partir das reservas", intervalMinutes: 15, workflow: "tick" },
   { name: "crm-suggestions", label: "CRM: sugestões para juntar fichas", intervalMinutes: 1440, workflow: "tick" },
+  { name: "crm-pro-sync", label: "CRM: conta corrente dos clientes Pro (BD Multipark)", intervalMinutes: 30, workflow: "tick" },
   // Reservas só pelo webhook (27 set 2026): estes três já não estão na agenda —
   // ficam para correr à mão, sem intervalo (nunca aparecem "parados").
   { name: "multipark-future", label: "Sincronização de reservas (futuras)", intervalMinutes: null, workflow: "manual" },

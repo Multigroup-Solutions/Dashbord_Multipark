@@ -219,6 +219,20 @@ export async function crmSyncCron(o: { deadlineAt: number; restart?: boolean }):
   }
 }
 
+/** Conta corrente dos clientes Pro, lida da BD da Multipark (server/crm/proSync.ts). */
+export async function crmProSyncCron(o: { deadlineAt: number }): Promise<CronJobRun> {
+  try {
+    const { runProSync } = await import("./crm/proSync");
+    const r = await runProSync({ deadlineAt: o.deadlineAt });
+    if (r.diagnostics) console.log("[cron crm-pro-sync]", JSON.stringify({ ...r.diagnostics, accounts: r.accounts, ledgerRows: r.ledgerRows, goneRows: r.goneRows, linked: r.linked }).slice(0, 900));
+    // sem BD da Multipark (r.ok = false): não é erro nosso — fica registado e tenta na próxima vez
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: true };
+  } catch (err) {
+    console.error("[cron crm-pro-sync] falhou:", msg(err, 200));
+    return fail(err);
+  }
+}
+
 /** Sugestões para juntar fichas (telefone, matrícula, NIF, email partilhados). */
 export async function crmSuggestionsCron(o: { deadlineAt: number }): Promise<CronJobRun> {
   try {
