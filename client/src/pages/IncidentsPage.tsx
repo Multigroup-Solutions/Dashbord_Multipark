@@ -13,12 +13,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+import { keepPreviousData } from "@tanstack/react-query";
 import {
   AlertTriangle, Plus, Clock, User, Car, Trash2, Pencil,
   BarChart3, AlertCircle, CheckCircle2, ShieldAlert,
-  RefreshCw, Loader2, Bot, MapPin, Download, ExternalLink,
+  Bot, MapPin, Download, ExternalLink, Search, Paperclip, Info, Lock,
 } from "lucide-react";
+import { INCIDENT_ORIGIN_LABEL, incidentOrigin, type IncidentOrigin } from "@shared/incidentOrigin";
 import BookingSearchField from "@/components/BookingSearchField";
 import CaseDashboardCard from "@/components/CaseDashboardCard";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
@@ -65,6 +67,42 @@ function categoryOf(inc: any): string {
   return inc.incidentType || "outro";
 }
 
+const ORIGIN_COLOR: Record<IncidentOrigin, string> = {
+  multipark: "bg-indigo-100 text-indigo-800",
+  email: "bg-sky-100 text-sky-800",
+  api: "bg-teal-100 text-teal-800",
+  manual: "bg-stone-100 text-stone-800",
+  multipark_legacy: "bg-indigo-50 text-indigo-700",
+};
+
+function OriginBadge({ origin }: { origin: IncidentOrigin }) {
+  return <Badge variant="outline" className={`text-xs border-transparent ${ORIGIN_COLOR[origin]}`}>{INCIDENT_ORIGIN_LABEL[origin]}</Badge>;
+}
+
+// Ocorrências da app Multipark (BD deles, só leitura).
+const MP_PRIORITY: Record<string, { label: string; color: string }> = {
+  LOW: { label: "Baixa", color: "bg-slate-100 text-slate-700" },
+  MEDIUM: { label: "Média", color: "bg-blue-100 text-blue-700" },
+  HIGH: { label: "Alta", color: "bg-orange-100 text-orange-700" },
+};
+const SEVERITY_TO_MP: Record<string, "LOW" | "MEDIUM" | "HIGH" | undefined> = { low: "LOW", medium: "MEDIUM", high: "HIGH" };
+const MP_PAGE = 50;
+
+type MpOccurrence = {
+  id: string; title: string; priority: "LOW" | "MEDIUM" | "HIGH" | null; resolved: boolean;
+  createdAt: string | null; resolvedAt: string | null; createdByName: string | null; resolvedByName: string | null;
+  remarks: string | null; lat: number | null; lng: number | null; attachment: string | null; attachmentUrl: string | null;
+  bookingId: string | null; bookingCode: string | null; plate: string | null; parkName: string | null; parkCity: string | null;
+};
+
+const normTxt = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+/** Tipo da Multipark ("Vidro Aberto", "Acidente"…) → a categoria de triagem das abas. */
+function mpCategoryOf(o: MpOccurrence): string {
+  const t = normTxt(o.title);
+  const hit = Object.entries(TYPE_CONFIG).find(([, label]) => normTxt(label) === t);
+  return categoryOf({ description: `${o.title} ${o.remarks ?? ""}`, incidentType: hit?.[0] ?? "outro" });
+}
+
 const CATEGORY_TABS: Array<{ id: string; label: string; className?: string }> = [
   { id: "all", label: "Todas" },
   { id: "acidente", label: "⚠ Acidentes", className: "data-[state=active]:bg-red-600 data-[state=active]:text-white" },
@@ -81,7 +119,17 @@ export default function IncidentsPage() {
   const [filterSeverity, setFilterSeverity] = useState("all");
   const [activeTab, setActiveTab] = useState("all");
   const [detailId, setDetailId] = useState<number | null>(() => Number(new URLSearchParams(window.location.search).get("id")) || null);
+  const [mpDetailId, setMpDetailId] = useState<string | null>(() => new URLSearchParams(window.location.search).get("mp") || null);
   const [noProject, setNoProject] = useState(false);
+  const [filterOrigin, setFilterOrigin] = useState<"all" | IncidentOrigin>("all");
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+  useEffect(() => { const t = setTimeout(() => setSearch(searchInput), 350); return () => clearTimeout(t); }, [searchInput]);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [mpPark, setMpPark] = useState("all");
+  const [mpType, setMpType] = useState("all");
+  const [mpLimit, setMpLimit] = useState(MP_PAGE);
   const globalFilters = useGlobalFilters();
   const [, setLocation] = useLocation();
   const isLeader = roleRank(user?.role) >= roleRank("team_leader") && can(user, "ocorrencias", "edit");
@@ -89,15 +137,71 @@ export default function IncidentsPage() {
   const scopeInput = useMemo(() => (
     noProject ? { noProject: true } : globalFilters.projectId !== undefined ? { projectId: globalFilters.projectId } : {}
   ), [noProject, globalFilters.projectId]);
+
+  // ── Multipark (BD deles, ao vivo, só leitura) ──
+  // Não há Multipark "sem cidade", "descartada", "convertida" nem "crítica";
+  // nem quando se filtra por uma origem nossa.
+  const searchTrim = search.trim();
+  // Filtros novos → volta à 1.ª página da Multipark.
+  useEffect(() => { setMpLimit(MP_PAGE); }, [globalFilters.projectId, filterStatus, filterSeverity, dateFrom, dateTo, mpPark, mpType, searchTrim]);
+  const mpApplies = seesBeyondOwn(user, "ocorrencias") && !noProject
+    && !["dismissed", "converted"].includes(filterStatus) && filterSeverity !== "critical"
+    && (filterOrigin === "all" || filterOrigin === "multipark");
+  const mpInput = useMemo(() => {
+    const input: any = { limit: mpLimit };
+    if (globalFilters.projectId !== undefined) input.projectId = globalFilters.projectId;
+    if (filterStatus === "open" || filterStatus === "investigating") input.resolved = false;
+    if (filterStatus === "resolved") input.resolved = true;
+    if (SEVERITY_TO_MP[filterSeverity]) input.priority = SEVERITY_TO_MP[filterSeverity];
+    if (dateFrom) input.dateFrom = dateFrom;
+    if (dateTo) input.dateTo = dateTo;
+    if (mpPark !== "all") input.parkId = mpPark;
+    if (mpType !== "all") input.type = mpType;
+    if (searchTrim) input.search = searchTrim.slice(0, 100);
+    return input;
+  }, [mpLimit, globalFilters.projectId, filterStatus, filterSeverity, dateFrom, dateTo, mpPark, mpType, searchTrim]);
+  const mpQuery = trpc.incidents.multipark.useQuery(mpInput, { enabled: mpApplies, staleTime: 60_000, placeholderData: keepPreviousData });
+  const mp = mpApplies ? mpQuery.data : undefined;
+  const mpAvailable = mp?.available === true;
+  const mpRows: MpOccurrence[] = mpAvailable ? (mp as any).rows : [];
+  const mpStats = mpAvailable ? (mp as any).stats : null;
+
   const queryInput = useMemo(() => {
     const input: any = { ...scopeInput };
     if (filterStatus !== "all") input.status = filterStatus;
     if (filterSeverity !== "all") input.severity = filterSeverity;
+    if (mpAvailable) input.hideLegacyMultipark = true;
     return Object.keys(input).length > 0 ? input : undefined;
-  }, [filterStatus, filterSeverity, scopeInput]);
+  }, [filterStatus, filterSeverity, scopeInput, mpAvailable]);
+  const statsInput = useMemo(() => {
+    const input: any = { ...scopeInput };
+    if (mpAvailable) input.hideLegacyMultipark = true;
+    return Object.keys(input).length ? input : undefined;
+  }, [scopeInput, mpAvailable]);
 
-  const { data: incidents = [], isLoading } = trpc.incidents.list.useQuery(queryInput);
-  const { data: stats } = trpc.incidents.stats.useQuery(Object.keys(scopeInput).length ? scopeInput : undefined);
+  const { data: allOurs = [], isLoading } = trpc.incidents.list.useQuery(queryInput);
+  const { data: stats } = trpc.incidents.stats.useQuery(statsInput);
+  // As nossas: filtros que a lista do servidor não tem (origem, datas, pesquisa).
+  // Filtros só da Multipark (parque/tipo) escondem as nossas.
+  const incidents = useMemo(() => {
+    if (filterOrigin === "multipark" || mpPark !== "all" || mpType !== "all") return [];
+    const q = normTxt(searchTrim);
+    const qPlate = searchTrim.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const fromMs = dateFrom ? Date.parse(`${dateFrom}T00:00:00`) : null;
+    const toMs = dateTo ? Date.parse(`${dateTo}T23:59:59`) : null;
+    return (allOurs as any[]).filter(inc => {
+      if (filterOrigin !== "all" && incidentOrigin(inc) !== filterOrigin) return false;
+      const at = utcMs(inc.createdAt);
+      if (fromMs != null && at < fromMs) return false;
+      if (toMs != null && at > toMs) return false;
+      if (q) {
+        const plate = String(inc.vehiclePlate ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+        const hay = normTxt(`${inc.reservationLink ?? ""} ${inc.description ?? ""} ${inc.vehiclePlate ?? ""}`);
+        if (!hay.includes(q) && !(qPlate.length >= 3 && plate.includes(qPlate))) return false;
+      }
+      return true;
+    });
+  }, [allOurs, filterOrigin, mpPark, mpType, searchTrim, dateFrom, dateTo]);
   const { data: dashboard } = trpc.incidents.dashboard.useQuery(Object.keys(scopeInput).length ? scopeInput : undefined);
   const { data: allProjects = [] } = trpc.projects.list.useQuery();
   const cities = useMemo(() => (allProjects as any[]).filter(p => p.level === "city").map(p => ({ id: p.id as number, name: p.name as string })), [allProjects]);
@@ -113,18 +217,25 @@ export default function IncidentsPage() {
   });
   const utils = trpc.useUtils();
 
+  // Lista única (nossas + Multipark), mais recentes primeiro. As da
+  // Multipark contam só a página carregada ("Carregar mais" traz o resto).
+  type Item = { kind: "ours"; at: number; cat: string; inc: any } | { kind: "mp"; at: number; cat: string; occ: MpOccurrence };
+  const items = useMemo<Item[]>(() => {
+    const out: Item[] = [
+      ...(incidents as any[]).map(inc => ({ kind: "ours" as const, at: utcMs(inc.createdAt), cat: categoryOf(inc), inc })),
+      ...mpRows.map(occ => ({ kind: "mp" as const, at: occ.createdAt ? utcMs(occ.createdAt) : 0, cat: mpCategoryOf(occ), occ })),
+    ];
+    return out.sort((a, b) => b.at - a.at);
+  }, [incidents, mpRows]);
   // Contagens por categoria de triagem + lista filtrada pela aba ativa.
   const tabCounts = useMemo(() => {
-    const counts: Record<string, number> = { all: incidents.length };
-    for (const inc of incidents as any[]) {
-      const cat = categoryOf(inc);
-      counts[cat] = (counts[cat] ?? 0) + 1;
-    }
+    const counts: Record<string, number> = { all: items.length };
+    for (const it of items) counts[it.cat] = (counts[it.cat] ?? 0) + 1;
     return counts;
-  }, [incidents]);
-  const visibleIncidents = useMemo(
-    () => activeTab === "all" ? incidents : (incidents as any[]).filter(inc => categoryOf(inc) === activeTab),
-    [incidents, activeTab],
+  }, [items]);
+  const visibleItems = useMemo(
+    () => activeTab === "all" ? items : items.filter(it => it.cat === activeTab),
+    [items, activeTab],
   );
   const { data: employees = [] } = trpc.rh.list.useQuery();
 
@@ -159,19 +270,6 @@ export default function IncidentsPage() {
     toast.success("Ocorrência eliminada");
   };
 
-  const syncMultipark = trpc.incidents.syncFromMultipark.useMutation({
-    onSuccess: (data: any) => {
-      utils.incidents.list.invalidate();
-      utils.incidents.stats.invalidate();
-      if (data.imported === 0 && data.scanned === 0) {
-        toast.info("Sem novas ocorrências para importar");
-      } else {
-        toast.success(`${data.imported} ocorrências importadas (${data.skipped} já existiam, ${data.scanned} analisadas)`);
-      }
-    },
-    onError: (err) => toast.error("Erro no sync: " + err.message),
-  });
-
   return (
     <>
       <div className="space-y-6">
@@ -183,23 +281,42 @@ export default function IncidentsPage() {
           <div className="flex gap-2 flex-wrap">
             <Button
               variant="outline"
-              disabled={incidents.length === 0}
+              disabled={items.length === 0}
               onClick={() => {
-                const headers = ["ID","Data","Tipo","Estado","Gravidade","Matrícula","Condutor","Descrição","Resolução","Resolvido"];
-                const rows = (incidents as any[]).map(i => [
-                  i.id,
-                  i.createdAt ? new Date(i.createdAt).toISOString().slice(0, 16) : "",
-                  TYPE_CONFIG[i.incidentType] ?? i.incidentType,
-                  STATUS_CONFIG[i.status]?.label ?? i.status,
-                  SEVERITY_CONFIG[i.severity]?.label ?? i.severity,
-                  i.vehiclePlate ?? "",
-                  i.employeeId ? (employeeMap.get(i.employeeId) ?? `#${i.employeeId}`) : "",
-                  (i.description ?? "").replace(/[;\n\r]/g, " "),
-                  (i.resolution ?? "").replace(/[;\n\r]/g, " "),
-                  i.resolvedAt ? new Date(i.resolvedAt).toISOString().slice(0, 16) : "",
+                const cell = (v: unknown) => String(v ?? "").replace(/[;\n\r]/g, " ");
+                const iso = (v: string | null | undefined) => v ? new Date(utcMs(v)).toISOString().slice(0, 16) : "";
+                const headers = ["Origem","ID","Data","Tipo","Estado","Gravidade","Matrícula","Reserva","Parque","Condutor/Agente","Descrição","Resolução","Resolvido"];
+                const rows = items.map(it => it.kind === "ours" ? [
+                  INCIDENT_ORIGIN_LABEL[incidentOrigin(it.inc)],
+                  it.inc.id,
+                  iso(it.inc.createdAt),
+                  TYPE_CONFIG[it.inc.incidentType] ?? it.inc.incidentType,
+                  STATUS_CONFIG[it.inc.status]?.label ?? it.inc.status,
+                  SEVERITY_CONFIG[it.inc.severity]?.label ?? it.inc.severity,
+                  it.inc.vehiclePlate ?? "",
+                  it.inc.reservationLink ?? "",
+                  "",
+                  it.inc.employeeId ? (employeeMap.get(it.inc.employeeId) ?? `#${it.inc.employeeId}`) : "",
+                  it.inc.description ?? "",
+                  it.inc.resolution ?? "",
+                  iso(it.inc.resolvedAt),
+                ] : [
+                  "Multipark",
+                  it.occ.id,
+                  iso(it.occ.createdAt),
+                  it.occ.title,
+                  it.occ.resolved ? "Resolvida" : "Aberta",
+                  it.occ.priority ? MP_PRIORITY[it.occ.priority]?.label ?? it.occ.priority : "",
+                  it.occ.plate ?? "",
+                  it.occ.bookingCode ?? it.occ.bookingId ?? "",
+                  it.occ.parkName ?? "",
+                  it.occ.createdByName ?? "",
+                  it.occ.remarks ?? "",
+                  it.occ.resolvedByName ? `Resolvida por ${it.occ.resolvedByName}` : "",
+                  iso(it.occ.resolvedAt),
                 ]);
-                const csv = [headers.join(";"), ...rows.map(r => r.join(";"))].join("\n");
-                const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+                const csv = [headers.join(";"), ...rows.map(r => r.map(cell).join(";"))].join("\n");
+                const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement("a");
                 a.href = url; a.download = `ocorrencias_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
@@ -207,10 +324,6 @@ export default function IncidentsPage() {
               }}
             >
               <Download className="w-4 h-4 mr-2" /> CSV
-            </Button>
-            <Button variant="outline" onClick={() => syncMultipark.mutate(undefined)} disabled={syncMultipark.isPending}>
-              {syncMultipark.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
-              {syncMultipark.isPending ? "A sincronizar..." : "Sincronizar Multipark"}
             </Button>
             {isLeader && (
               <Button variant="outline" onClick={() => setLocation("/perdidos-achados/cruzamento")}>
@@ -221,24 +334,40 @@ export default function IncidentsPage() {
           </div>
         </div>
 
-        {/* Stats */}
-        {stats && (
+        {/* Aviso: Multipark indisponível */}
+        {mpApplies && mp && mp.available === false && (
+          <Card className="p-3 border-amber-300 bg-amber-50 text-amber-900">
+            <div className="flex items-start gap-2 text-sm">
+              <Info className="w-4 h-4 mt-0.5 shrink-0" />
+              <span>
+                <span className="font-medium">Ocorrências da app Multipark indisponíveis.</span> {(mp as any).reason} A mostrar só as registadas no dashboard.
+              </span>
+            </div>
+          </Card>
+        )}
+
+        {/* Stats (nossas + Multipark) */}
+        {(stats || mpStats) && (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <Card className="p-3">
               <div className="flex items-center gap-2"><BarChart3 className="w-4 h-4" /><span className="text-xs text-muted-foreground">Total</span></div>
-              <p className="text-xl font-bold mt-1">{stats.total}</p>
+              <p className="text-xl font-bold mt-1">{(stats?.total ?? 0) + (mpStats?.total ?? 0)}</p>
+              {mpStats && <p className="text-[11px] text-muted-foreground">{stats?.total ?? 0} dashboard · {mpStats.total} Multipark</p>}
             </Card>
             <Card className="p-3">
               <div className="flex items-center gap-2"><AlertCircle className="w-4 h-4 text-red-600" /><span className="text-xs text-muted-foreground">Abertas</span></div>
-              <p className="text-xl font-bold mt-1 text-red-600">{stats.open}</p>
+              <p className="text-xl font-bold mt-1 text-red-600">{(stats?.open ?? 0) + (mpStats?.open ?? 0)}</p>
+              {mpStats && <p className="text-[11px] text-muted-foreground">{stats?.open ?? 0} dashboard · {mpStats.open} Multipark</p>}
             </Card>
             <Card className="p-3">
               <div className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-green-600" /><span className="text-xs text-muted-foreground">Resolvidas</span></div>
-              <p className="text-xl font-bold mt-1 text-green-600">{stats.resolved}</p>
+              <p className="text-xl font-bold mt-1 text-green-600">{(stats?.resolved ?? 0) + (mpStats?.resolved ?? 0)}</p>
+              {mpStats && <p className="text-[11px] text-muted-foreground">{stats?.resolved ?? 0} dashboard · {mpStats.resolved} Multipark</p>}
             </Card>
             <Card className="p-3">
-              <div className="flex items-center gap-2"><ShieldAlert className="w-4 h-4 text-red-600" /><span className="text-xs text-muted-foreground">Críticas</span></div>
-              <p className="text-xl font-bold mt-1 text-red-600">{stats.critical}</p>
+              <div className="flex items-center gap-2"><ShieldAlert className="w-4 h-4 text-red-600" /><span className="text-xs text-muted-foreground">Críticas / alta prioridade</span></div>
+              <p className="text-xl font-bold mt-1 text-red-600">{(stats?.critical ?? 0) + (mpStats?.highOpen ?? 0)}</p>
+              {mpStats && <p className="text-[11px] text-muted-foreground">{stats?.critical ?? 0} críticas · {mpStats.highOpen} altas abertas Multipark</p>}
             </Card>
           </div>
         )}
@@ -260,6 +389,23 @@ export default function IncidentsPage() {
                     <span className="text-sm">{TYPE_CONFIG[type] || type}</span>
                     <Badge variant="secondary">{count as number}</Badge>
                   </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {mpStats && mpStats.byType.length > 0 && (
+          <Card>
+            <CardHeader><CardTitle className="text-base">Por tipo — app Multipark</CardTitle></CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {mpStats.byType.map((g: any) => (
+                  <button key={g.key} type="button" className={`flex items-center justify-between p-2 rounded text-left ${mpType === g.key ? "bg-indigo-100" : "bg-muted hover:bg-muted/70"}`}
+                    onClick={() => setMpType(mpType === g.key ? "all" : g.key)}>
+                    <span className="text-sm">{g.label}</span>
+                    <Badge variant="secondary">{g.count}</Badge>
+                  </button>
                 ))}
               </div>
             </CardContent>
@@ -295,6 +441,49 @@ export default function IncidentsPage() {
               </SelectContent>
             </Select>
           </div>
+          <div className="flex items-center gap-2">
+            <Label>Origem:</Label>
+            <Select value={filterOrigin} onValueChange={(v) => setFilterOrigin(v as any)}>
+              <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todas</SelectItem>
+                <SelectItem value="multipark">Multipark (app)</SelectItem>
+                <SelectItem value="email">Email</SelectItem>
+                <SelectItem value="manual">Manual</SelectItem>
+                <SelectItem value="api">API</SelectItem>
+                {!mpAvailable && <SelectItem value="multipark_legacy">Multipark (antigo)</SelectItem>}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="relative">
+            <Search className="w-4 h-4 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input className="pl-8 w-56" placeholder="Reserva ou matrícula…" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} />
+          </div>
+          <div className="flex items-center gap-1">
+            <Label className="text-xs">De</Label>
+            <Input type="date" className="w-36" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            <Label className="text-xs">a</Label>
+            <Input type="date" className="w-36" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          </div>
+          {mpStats && mpStats.byPark.length > 0 && (
+            <div className="flex items-center gap-2">
+              <Label>Parque:</Label>
+              <Select value={mpPark} onValueChange={setMpPark}>
+                <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos</SelectItem>
+                  {mpStats.byPark.map((g: any) => (
+                    <SelectItem key={g.key} value={g.key}>{g.label}{g.city ? ` (${g.city})` : ""} · {g.count}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          {(mpPark !== "all" || mpType !== "all") && (
+            <Button size="sm" variant="ghost" onClick={() => { setMpPark("all"); setMpType("all"); }}>
+              Limpar parque/tipo (só Multipark)
+            </Button>
+          )}
         </div>
 
         {/* Abas por tipo (Acidentes e Reclamações detetadas pelo texto) */}
@@ -316,14 +505,18 @@ export default function IncidentsPage() {
         {/* List */}
         {isLoading ? (
           <div className="flex justify-center py-20"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>
-        ) : visibleIncidents.length === 0 ? (
+        ) : visibleItems.length === 0 ? (
           <Card className="p-10 text-center">
             <AlertTriangle className="w-12 h-12 mx-auto text-muted-foreground mb-3" />
-            <p className="text-muted-foreground">Sem ocorrências {activeTab === "all" ? "registadas" : "nesta categoria"}</p>
+            <p className="text-muted-foreground">
+              {mpApplies && mpQuery.isLoading ? "A ler as ocorrências da Multipark…" : `Sem ocorrências ${activeTab === "all" ? "registadas" : "nesta categoria"}`}
+            </p>
           </Card>
         ) : (
           <div className="space-y-2">
-            {visibleIncidents.map((inc: any) => {
+            {visibleItems.map((it) => {
+              if (it.kind === "mp") return <MultiparkOccurrenceCard key={`mp-${it.occ.id}`} occ={it.occ} category={it.cat} onOpen={() => setMpDetailId(it.occ.id)} />;
+              const inc = it.inc;
               const overdue = isOverdue(inc);
               return (
                 <Card
@@ -348,7 +541,7 @@ export default function IncidentsPage() {
                           {inc.status === "converted" && inc.convertedToId && (
                             <Badge variant="outline" className="text-violet-700 border-violet-300">→ {inc.convertedToType === "complaint" ? "Reclamação" : "Perdido"} #{inc.convertedToId}</Badge>
                           )}
-                          {(inc as any).sourceEmailId && <Badge variant="outline" className="text-xs"><Bot className="w-3 h-3 mr-1" />Gmail</Badge>}
+                          <OriginBadge origin={incidentOrigin(inc)} />
                         </div>
                         <p className="text-sm text-muted-foreground line-clamp-3 break-words">{inc.description}</p>
                         {(inc as any).aiClassification && (
@@ -417,10 +610,18 @@ export default function IncidentsPage() {
                 </Card>
               );
             })}
+            {mpAvailable && (mp as any).hasMore && (
+              <div className="flex justify-center pt-2">
+                <Button variant="outline" size="sm" disabled={mpQuery.isFetching || mpLimit >= 200} onClick={() => setMpLimit(l => Math.min(l + MP_PAGE, 200))}>
+                  {mpLimit >= 200 ? "Máximo de 200 da Multipark — refina os filtros" : mpQuery.isFetching ? "A carregar…" : "Carregar mais da Multipark"}
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </div>
 
+      {mpDetailId && <MultiparkOccurrenceDialog id={mpDetailId} projectId={globalFilters.projectId} onClose={() => setMpDetailId(null)} />}
       {showCreate && <CreateIncidentDialog employees={employees} canSetDriver={isLeader} onClose={() => setShowCreate(false)} />}
       {selectedId && <ResolveDialog id={selectedId} onResolve={handleResolve} onClose={() => setSelectedId(null)} />}
       {editInc && <EditIncidentDialog incident={editInc} employees={employees} canSetDriver={isLeader} onClose={() => setEditInc(null)} />}
@@ -849,6 +1050,110 @@ function EditIncidentDialog({ incident, employees, canSetDriver, onClose }: { in
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
           <Button onClick={handleSubmit} disabled={updateMut.isPending}>Guardar</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Cartão de uma ocorrência da app Multipark (só leitura). */
+function MultiparkOccurrenceCard({ occ, category, onOpen }: { occ: MpOccurrence; category: string; onOpen: () => void }) {
+  return (
+    <Card className="cursor-pointer hover:shadow-md transition-shadow border-indigo-200" onClick={onOpen}>
+      <CardContent className="p-4">
+        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 sm:gap-4">
+          <div className="flex-1 min-w-0 space-y-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-medium">{occ.title}</span>
+              {category === "acidente" && <Badge className="bg-red-600 text-white">⚠ Acidente</Badge>}
+              <Badge className={occ.resolved ? STATUS_CONFIG.resolved.color : STATUS_CONFIG.open.color}>{occ.resolved ? "Resolvida" : "Aberta"}</Badge>
+              {occ.priority && <Badge className={MP_PRIORITY[occ.priority]?.color}>{MP_PRIORITY[occ.priority]?.label}</Badge>}
+              <OriginBadge origin="multipark" />
+            </div>
+            {occ.remarks && <p className="text-sm text-muted-foreground line-clamp-3 break-words">{occ.remarks}</p>}
+            <div className="flex items-center gap-x-4 gap-y-1 flex-wrap text-xs text-muted-foreground">
+              {occ.plate && <span className="flex items-center gap-1"><Car className="w-3 h-3" /> {occ.plate}</span>}
+              {(occ.bookingCode || occ.bookingId) && <span>Reserva #{occ.bookingCode ?? occ.bookingId?.slice(-8)}</span>}
+              {occ.parkName && <span>{occ.parkName}{occ.parkCity ? ` (${occ.parkCity})` : ""}</span>}
+              {occ.createdByName && <span className="flex items-center gap-1"><User className="w-3 h-3" /> {occ.createdByName}</span>}
+              {occ.createdAt && <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> {fmtPTDateTime(occ.createdAt)}</span>}
+              {occ.lat != null && occ.lng != null && (
+                <a href={`https://www.google.com/maps?q=${occ.lat},${occ.lng}`} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()} className="flex items-center gap-1 text-blue-700 hover:underline">
+                  <MapPin className="w-3 h-3" /> Ver no mapa
+                </a>
+              )}
+              {occ.attachment && <span className="flex items-center gap-1"><Paperclip className="w-3 h-3" /> anexo</span>}
+            </div>
+            {occ.resolved && occ.resolvedByName && <p className="text-xs text-green-700 mt-1">Resolvida por {occ.resolvedByName}{occ.resolvedAt ? ` · ${fmtPTDateTime(occ.resolvedAt)}` : ""}</p>}
+          </div>
+          <div className="flex flex-col items-start sm:items-end gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+            {occ.bookingId && (
+              <Button size="sm" variant="outline" className="text-xs" onClick={() => openInMultipark(occ.bookingId)}>
+                <ExternalLink className="w-3 h-3 mr-1" /> Ver na Multipark
+              </Button>
+            )}
+            {!occ.resolved && <span className="text-[11px] text-muted-foreground flex items-center gap-1"><Lock className="w-3 h-3" /> Resolver na app Multipark</span>}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Detalhe de uma ocorrência da app Multipark (lida ao vivo; só leitura). */
+function MultiparkOccurrenceDialog({ id, projectId, onClose }: { id: string; projectId?: number; onClose: () => void }) {
+  const { data, isLoading } = trpc.incidents.multiparkById.useQuery(projectId !== undefined ? { id, projectId } : { id }, { retry: false });
+  const occ: MpOccurrence | null = data?.available ? (data.occurrence as MpOccurrence | null) : null;
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 flex-wrap">
+            {occ ? occ.title : "Ocorrência Multipark"}
+            <OriginBadge origin="multipark" />
+            {occ && <Badge className={occ.resolved ? STATUS_CONFIG.resolved.color : STATUS_CONFIG.open.color}>{occ.resolved ? "Resolvida" : "Aberta"}</Badge>}
+            {occ?.priority && <Badge className={MP_PRIORITY[occ.priority]?.color}>{MP_PRIORITY[occ.priority]?.label}</Badge>}
+          </DialogTitle>
+        </DialogHeader>
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground">A ler da BD da Multipark…</p>
+        ) : data && !data.available ? (
+          <p className="text-sm text-amber-800">{data.reason}</p>
+        ) : !occ ? (
+          <p className="text-sm text-muted-foreground">Ocorrência não encontrada (ou fora da tua cidade).</p>
+        ) : (
+          <div className="space-y-4">
+            <div>
+              <p className="text-xs font-medium text-muted-foreground mb-1">Notas</p>
+              <div className="max-h-[30vh] overflow-y-auto rounded bg-muted p-3 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">{occ.remarks || "(sem notas)"}</div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-muted-foreground">
+              <div>Criada: <span className="font-medium text-foreground">{occ.createdAt ? fmtPTDateTime(occ.createdAt) : "—"}</span></div>
+              <div>Por: <span className="font-medium text-foreground">{occ.createdByName ?? "—"}</span></div>
+              <div>Parque: <span className="font-medium text-foreground">{occ.parkName ?? "—"}{occ.parkCity ? ` (${occ.parkCity})` : ""}</span></div>
+              <div>Matrícula: <span className="font-medium text-foreground">{occ.plate ?? "—"}</span></div>
+              <div>Reserva: <span className="font-medium text-foreground">{occ.bookingCode ? `#${occ.bookingCode}` : occ.bookingId ?? "—"}</span></div>
+              {occ.resolved && <div>Resolvida: <span className="font-medium text-foreground">{occ.resolvedAt ? fmtPTDateTime(occ.resolvedAt) : "—"}{occ.resolvedByName ? ` · ${occ.resolvedByName}` : ""}</span></div>}
+              {occ.lat != null && occ.lng != null && (
+                <a href={`https://www.google.com/maps?q=${occ.lat},${occ.lng}`} target="_blank" rel="noopener" className="text-blue-700 hover:underline"><MapPin className="w-3 h-3 inline mr-1" />Ver no mapa ({occ.lat.toFixed(5)}, {occ.lng.toFixed(5)})</a>
+              )}
+              {occ.attachmentUrl ? (
+                <a href={occ.attachmentUrl} target="_blank" rel="noopener noreferrer" className="text-blue-700 hover:underline"><Paperclip className="w-3 h-3 inline mr-1" />Abrir anexo</a>
+              ) : occ.attachment ? (
+                <span><Paperclip className="w-3 h-3 inline mr-1" />Tem anexo — abrir na app Multipark</span>
+              ) : null}
+            </div>
+            <div className="rounded border border-indigo-200 bg-indigo-50 p-3 text-xs text-indigo-900 flex items-start gap-2">
+              <Lock className="w-4 h-4 shrink-0" />
+              <span>Esta ocorrência vem da app Multipark e aqui é só de leitura. Para a resolver ou editar, abre-a na app Multipark.</span>
+            </div>
+          </div>
+        )}
+        <DialogFooter className="flex-wrap gap-2">
+          {occ?.bookingId && (
+            <Button size="sm" variant="outline" onClick={() => openInMultipark(occ.bookingId)}><ExternalLink className="w-4 h-4 mr-1" /> Ver reserva na Multipark</Button>
+          )}
+          <Button size="sm" onClick={onClose}>Fechar</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
