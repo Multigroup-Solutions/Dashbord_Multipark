@@ -51,7 +51,7 @@ export function kindOf(c: Pick<Col, "dataType" | "udt">): "bool" | "num" | "time
 
 const pct = (a: number, n: number) => (n ? Math.round((a / n) * 1000) / 10 : 0);
 
-async function profileTable(table: string, cols: Col[]) {
+async function profileTable(table: string, cols: Col[], deadline: number) {
   const T = q(table);
   // 1) Uma passagem: contagem, preenchimento, mín/máx, verdadeiros.
   const parts: string[] = ["count(*) AS n"];
@@ -74,9 +74,11 @@ async function profileTable(table: string, cols: Col[]) {
     if (k === "text" && Number(base[`e${i}`] ?? 0)) info.vazia = pct(Number(base[`e${i}`]), n);
     if (isSensitiveColumn(table, c.column)) info.valores = "(não mostrados: dados pessoais/texto livre)";
     out.colunas[c.column] = info;
-    if ((k === "text" || k === "enum") && filled > 0) distinctCols.push(i);
+    // Distintos só onde podem vir a mostrar-se valores (as pessoais nunca mostram).
+    if ((k === "text" || k === "enum") && filled > 0 && !isSensitiveColumn(table, c.column)) distinctCols.push(i);
   });
   if (!n) return out;
+  if (Date.now() > deadline) { out.parcial = true; return out; }
 
   // 2) Distintos (texto/enum) numa segunda passagem.
   if (distinctCols.length) {
@@ -86,6 +88,7 @@ async function profileTable(table: string, cols: Col[]) {
 
   // 3) Valores de categoria, JSON, arrays e URLs.
   for (const c of cols) {
+    if (Date.now() > deadline) { out.parcial = true; break; }
     const k = kindOf(c), C = q(c.column), info = out.colunas[c.column];
     if (!info.preenchida) continue;
     const sensitive = isSensitiveColumn(table, c.column);
@@ -134,12 +137,23 @@ async function catalogs() {
         p."totalSpots", p."backofficeViewType"::text AS "viewType", p."paymentMethods", p."paymentMethodsOnCheckout", p."occurrenceTypes", p."cancellationTypes",
         p."checkinRequireVideo", p."checkinRequireSignature", p."checkoutRequireSignature", p."checkinRequireVehicleKms", p."requireLocationForBookingActions",
         p."syncToFirebase", p."firebaseBrand", p."autoEmitInvoices", p."timezone",
-        (SELECT count(*) FROM "Booking" b WHERE b."parkId" = p."id") AS reservas,
-        (SELECT max(b."createdAt")::text FROM "Booking" b WHERE b."parkId" = p."id") AS "ultimaReserva"
-      FROM "Park" p ORDER BY reservas DESC`),
+        COALESCE(bk.n, 0) AS reservas, bk.ultima AS "ultimaReserva"
+      FROM "Park" p LEFT JOIN (SELECT "parkId", count(*) AS n, max("createdAt")::text AS ultima FROM "Booking" GROUP BY 1) bk ON bk."parkId" = p."id"
+      ORDER BY reservas DESC`),
     parceiros: await run(`SELECT pa."name", pk."name" AS parque, pa."partnerType"::text AS tipo, pa."feeType"::text AS "feeType", pa."feePercentage", pa."feeFixedValue", pa."isActive",
-        (SELECT count(*) FROM "Booking" b WHERE b."partnerId" = pa."id") AS reservas
-      FROM "Partner" pa LEFT JOIN "Park" pk ON pk."id" = pa."parkId" ORDER BY reservas DESC LIMIT 500`),
+        COALESCE(bk.n, 0) AS reservas
+      FROM "Partner" pa LEFT JOIN "Park" pk ON pk."id" = pa."parkId"
+      LEFT JOIN (SELECT "partnerId", count(*) AS n FROM "Booking" WHERE "partnerId" IS NOT NULL GROUP BY 1) bk ON bk."partnerId" = pa."id"
+      ORDER BY reservas DESC LIMIT 500`),
+    clientes: await run(`SELECT count(*) AS total, count(DISTINCT lower(btrim("email"))) AS "emailsDistintos",
+        count(*) FILTER (WHERE "anonymizedAt" IS NOT NULL) AS anonimizados,
+        count(*) FILTER (WHERE COALESCE("nif", '') <> '') AS "comNif", count(*) FILTER (WHERE COALESCE("iban", '') <> '') AS "comIban",
+        count(*) FILTER (WHERE COALESCE("taxName", '') <> '') AS "comNomeFiscal", count(*) FILTER (WHERE COALESCE("phoneNumber", '') <> '') AS "comTelefone",
+        count(*) FILTER (WHERE "autoBillingEnabled") AS "cobrancaAutomatica", min("createdAt")::text AS "primeiro", max("createdAt")::text AS "ultimo",
+        (SELECT count(DISTINCT "clientId") FROM "Booking") AS "comReservas",
+        (SELECT count(DISTINCT "ownerId") FROM "Vehicle" WHERE NOT "isDeleted") AS "comCarroGuardado",
+        (SELECT count(DISTINCT "clientId") FROM "ProClient") AS "pro"
+      FROM "Client"`),
     campanhas: await run(`SELECT c."name", pk."name" AS parque, c."status"::text AS status, c."accessType"::text AS acesso, c."discountType"::text AS "discountType", c."discountValue",
         c."discountCode", c."bookingCount", c."revenue", c."currentUses", c."maxUses", c."startDate"::text AS inicio, c."endDate"::text AS fim
       FROM "Campaign" c LEFT JOIN "Park" pk ON pk."id" = c."parkId" ORDER BY c."bookingCount" DESC`),
@@ -148,12 +162,13 @@ async function catalogs() {
     entregas: await run(`SELECT d."name", pk."name" AS parque, d."price", d."callBeforeMinutes", d."checkoutAt" FROM "DeliveryType" d LEFT JOIN "Park" pk ON pk."id" = d."parkId" ORDER BY pk."name", d."sortOrder"`),
     precos: await run(`SELECT pk."name" AS parque, pr."parkingType"::text AS lugar, pr."vehicleType"::text AS veiculo, pr."pricingType"::text AS unidade, pr."price" FROM "Pricing" pr LEFT JOIN "Park" pk ON pk."id" = pr."parkId" ORDER BY 1, 2, 3, 4`),
     alocacoes: await run(`SELECT a."name", pk."name" AS parque, a."parkingType"::text AS lugar, a."prefix", a."minAllocation", a."maxAllocation" FROM "Allocation" a LEFT JOIN "Park" pk ON pk."id" = a."parkId" ORDER BY 2, 1`),
-    garagens: await run(`SELECT g."name", pk."name" AS parque, g."parkingType"::text AS lugar, g."totalSpots", (SELECT count(*) FROM "Spot" s WHERE s."garageId" = g."id") AS lugares FROM "Garage" g LEFT JOIN "Park" pk ON pk."id" = g."parkId"`),
+    garagens: await run(`SELECT g."name", pk."name" AS parque, g."parkingType"::text AS lugar, g."totalSpots", COALESCE(sp.n, 0) AS lugares
+      FROM "Garage" g LEFT JOIN "Park" pk ON pk."id" = g."parkId" LEFT JOIN (SELECT "garageId", count(*) AS n FROM "Spot" GROUP BY 1) sp ON sp."garageId" = g."id"`),
     conexoes: await run(`SELECT e."name", pk."name" AS parque, e."provider"::text AS provider, e."direction"::text AS direcao, e."eventType"::text AS evento, e."enabled",
-        substring(e."url" from '^https?://([^/]+)') AS servidor,
-        (SELECT count(*) FROM "ConnectionDelivery" d WHERE d."endpointId" = e."id") AS envios,
-        (SELECT count(*) FROM "ConnectionDelivery" d WHERE d."endpointId" = e."id" AND d."status" = 'DEAD') AS falhados
-      FROM "ConnectionEndpoint" e LEFT JOIN "Park" pk ON pk."id" = e."parkId" ORDER BY envios DESC`),
+        substring(e."url" from '^https?://([^/]+)') AS servidor, COALESCE(dl.n, 0) AS envios, COALESCE(dl.dead, 0) AS falhados
+      FROM "ConnectionEndpoint" e LEFT JOIN "Park" pk ON pk."id" = e."parkId"
+      LEFT JOIN (SELECT "endpointId", count(*) AS n, count(*) FILTER (WHERE "status" = 'DEAD') AS dead FROM "ConnectionDelivery" GROUP BY 1) dl ON dl."endpointId" = e."id"
+      ORDER BY envios DESC`),
     chavesApi: await run(`SELECT k."name", pk."name" AS parque, pa."name" AS parceiro, k."status"::text AS status, k."rateLimit", k."requestCount", k."lastUsedAt"::text AS "ultimoUso", k."expiresAt"::text AS expira
       FROM "ApiKey" k LEFT JOIN "Park" pk ON pk."id" = k."parkId" LEFT JOIN "Partner" pa ON pa."id" = k."partnerId" ORDER BY k."requestCount" DESC`),
     templatesEmail: await run(`SELECT t."name", pk."name" AS parque, t."type"::text AS tipo, t."language", t."active", length(t."content") AS tamanho FROM "EmailTemplate" t LEFT JOIN "Park" pk ON pk."id" = t."parkId" ORDER BY 2, 3`),
@@ -167,7 +182,7 @@ export interface ProfileOptions { tables?: string[]; budgetMs?: number; withCata
 
 export async function runMultiparkDbProfile(opts: ProfileOptions = {}) {
   const t0 = Date.now();
-  const budget = Math.max(5_000, Math.min(50_000, opts.budgetMs ?? 45_000));
+  const budget = Math.max(5_000, Math.min(35_000, opts.budgetMs ?? 30_000));
   const rows = await multiparkDbQuery<any>(`SELECT table_name AS t, column_name AS c, data_type AS d, udt_name AS u
     FROM information_schema.columns WHERE table_schema = 'public' AND table_name <> '_prisma_migrations' ORDER BY table_name, ordinal_position`);
   const byTable = new Map<string, Col[]>();
@@ -176,14 +191,20 @@ export async function runMultiparkDbProfile(opts: ProfileOptions = {}) {
     list.push({ table: r.t, column: r.c, dataType: r.d, udt: r.u });
     byTable.set(r.t, list);
   }
+  // Catálogos numa chamada própria (sem tabelas), para caber nos 60 s da Vercel.
+  if (opts.withCatalogs) {
+    return { ok: true, ranAt: new Date().toISOString(), ms: Date.now() - t0, tabelas: {}, pendentes: [], catalogos: await catalogs() };
+  }
   const wanted = opts.tables?.length ? opts.tables.filter((t) => byTable.has(t)) : [...byTable.keys()];
   const tabelas: Record<string, any> = {};
   const pendentes: string[] = [];
+  // Não começa uma tabela nova depois do orçamento; dentro de cada tabela pára
+  // os extras (distintos, valores, JSON) ao chegar ao limite duro (marca `parcial`).
+  const hardDeadline = t0 + Math.min(52_000, budget + 17_000);
   for (const t of wanted) {
     if (Date.now() - t0 > budget) { pendentes.push(t); continue; }
-    try { tabelas[t] = await profileTable(t, byTable.get(t)!); }
+    try { tabelas[t] = await profileTable(t, byTable.get(t)!, hardDeadline); }
     catch (err: any) { tabelas[t] = { erro: String(err?.message ?? err).slice(0, 200) }; }
   }
-  const catalogos = opts.withCatalogs && Date.now() - t0 < budget ? await catalogs() : null;
-  return { ok: true, ranAt: new Date().toISOString(), ms: Date.now() - t0, tabelas, pendentes, catalogos };
+  return { ok: true, ranAt: new Date().toISOString(), ms: Date.now() - t0, tabelas, pendentes, catalogos: null };
 }
