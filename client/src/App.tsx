@@ -32,6 +32,8 @@ import LostFoundPage from "./pages/LostFoundPage";
 import CrmClientsPage from "./pages/CrmClientsPage";
 import CrmClientPage from "./pages/CrmClientPage";
 import CrmReviewPage from "./pages/CrmReviewPage";
+import CrmPartnerPage from "./pages/CrmPartnerPage";
+import CrmParkPage from "./pages/CrmParkPage";
 import ContactsPage from "./pages/ContactsPage";
 import ServicesPage from "./pages/ServicesPage";
 import IncidentsPage from "./pages/IncidentsPage";
@@ -174,6 +176,12 @@ function Router() {
       </Route>
       <Route path="/criticas">
         {() => (<DashboardLayout><GoogleReviewsPage /></DashboardLayout>)}
+      </Route>
+      <Route path="/clientes/parceiros/:id">
+        {() => (<DashboardLayout><CrmPartnerPage /></DashboardLayout>)}
+      </Route>
+      <Route path="/clientes/parques/:id">
+        {() => (<DashboardLayout><CrmParkPage /></DashboardLayout>)}
       </Route>
       <Route path="/clientes/rever">
         {() => (<DashboardLayout><CrmReviewPage /></DashboardLayout>)}
