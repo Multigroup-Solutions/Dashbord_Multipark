@@ -402,3 +402,22 @@ describe("migração 0190, schema e acessos", () => {
     }
   });
 });
+
+describe("corte duro do tick (raceHardStop)", () => {
+  it("devolve o resultado quando o trabalho acaba a tempo", async () => {
+    const { raceHardStop } = await import("./cronScheduler");
+    expect(await raceHardStop(Promise.resolve("ok"), Date.now() + 1_000)).toBe("ok");
+  });
+  it("larga o trabalho que passa do corte (null) sem rebentar se falhar depois", async () => {
+    const { raceHardStop } = await import("./cronScheduler");
+    const slow = new Promise<string>((_, reject) => setTimeout(() => reject(new Error("tarde")), 80));
+    const t0 = Date.now();
+    expect(await raceHardStop(slow, Date.now() + 20)).toBeNull();
+    expect(Date.now() - t0).toBeLessThan(70);
+    await new Promise((r) => setTimeout(r, 100));
+  });
+  it("o corte fica dentro da margem do fim da função", async () => {
+    const { TICK_HARD_STOP_GRACE_MS, TICK_END_MARGIN_MS } = await import("./cronSchedule");
+    expect(TICK_HARD_STOP_GRACE_MS).toBeLessThan(TICK_END_MARGIN_MS);
+  });
+});
