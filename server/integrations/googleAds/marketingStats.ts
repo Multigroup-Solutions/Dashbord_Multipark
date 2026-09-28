@@ -61,51 +61,32 @@ export async function getMarketingStats(f: MarketingStatsFilters, preloadedAds?:
   /** reservas ligadas por ID externo da campanha (Google ou Meta) */
   const attributedByCampaign: Record<string, number> = {};
   const attributionQuality = { siteBookings: 0, withOriginUrl: 0, withClickId: 0, attributed: 0 };
-  if (db) {
-    const conds: any[] = [
-      notCancelledSql(multiparkBookings.status),
-      inLisbonDaysSql(multiparkBookings.bookingCreatedAt, f.from, f.to),
-      projectScope(multiparkBookings.projectId),
-    ];
-    if (projectIds) conds.push(projectIds.length ? inArray(multiparkBookings.projectId, projectIds) : sql`1 = 0`);
-    const rows = await db.select({
-      attr: multiparkBookings.adAttribution,
-      n: sql<number>`COUNT(*)`,
-      rev: sql<string>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    }).from(multiparkBookings).where(and(...conds)).groupBy(multiparkBookings.adAttribution);
-    for (const r of rows) {
-      const n = Number(r.n), rev = Number(r.rev);
-      bookingsTotal += n; revenueTotal += rev;
-      if (r.attr && PAID.includes(r.attr)) { bookingsAttributed += n; revenueAttributed += rev; }
-      if (r.attr === "google_paid") bookingsGoogle += n;
-      if (r.attr === "meta_paid") bookingsMeta += n;
-    }
-    // Por dia de LISBOA (a coluna está em UTC) — para o gráfico.
-    const dayExpr = sql.raw(lisbonDaySql("multipark_bookings.bookingCreatedAt", f.from, f.to));
-    const dayRows = await db.select({
-      date: sql<string>`${dayExpr}`,
-      n: sql<number>`COUNT(*)`,
-      attributed: sql<number>`SUM(CASE WHEN ${multiparkBookings.adAttribution} IN ('google_paid', 'meta_paid') THEN 1 ELSE 0 END)`,
-    }).from(multiparkBookings).where(and(...conds)).groupBy(sql`1`).orderBy(sql`1`);
-    bookingsByDay = dayRows.map((r) => ({ date: String((r.date as any) instanceof Date ? (r.date as any).toISOString() : r.date).slice(0, 10), total: Number(r.n ?? 0), attributed: Number(r.attributed ?? 0) }));
+  // Reservas AO VIVO da BD da Multipark (server/marketingLive.ts): criadas no
+  // período, sem canceladas, atribuição Google/Meta a partir do link de origem.
+  const { loadMarketingBookings } = await import("../../marketingLive");
+  const bookings = await loadMarketingBookings(f.from, f.to, projectIds);
+  const byDay = new Map<string, { total: number; attributed: number }>();
+  for (const b of bookings) {
+    const paid = PAID.includes(b.adAttribution);
+    bookingsTotal++; revenueTotal += b.total;
+    if (paid) { bookingsAttributed++; revenueAttributed += b.total; }
+    if (b.adAttribution === "google_paid") bookingsGoogle++;
+    if (b.adAttribution === "meta_paid") bookingsMeta++;
+    const d = byDay.get(b.day) ?? { total: 0, attributed: 0 };
+    d.total++; if (paid) d.attributed++;
+    byDay.set(b.day, d);
     // Qualidade da atribuição (Google): das reservas feitas no SITE, quantas têm
     // link de origem, quantas trazem o clique do Google e quantas ficaram atribuídas.
-    const [q] = await db.select({
-      site: sql<number>`COUNT(*)`,
-      withUrl: sql<number>`SUM(CASE WHEN NULLIF(TRIM(${multiparkBookings.originUrl}), '') IS NOT NULL THEN 1 ELSE 0 END)`,
-      withClick: sql<number>`SUM(CASE WHEN COALESCE(${multiparkBookings.gclid}, ${multiparkBookings.gbraid}, ${multiparkBookings.wbraid}) IS NOT NULL THEN 1 ELSE 0 END)`,
-      attributed: sql<number>`SUM(CASE WHEN ${multiparkBookings.adAttribution} = 'google_paid' THEN 1 ELSE 0 END)`,
-    }).from(multiparkBookings).where(and(...conds, inArray(multiparkBookings.origin, SITE_ORIGINS)));
-    attributionQuality.siteBookings = Number(q?.site ?? 0);
-    attributionQuality.withOriginUrl = Number(q?.withUrl ?? 0);
-    attributionQuality.withClickId = Number(q?.withClick ?? 0);
-    attributionQuality.attributed = Number(q?.attributed ?? 0);
-    const campRows = await db.select({
-      ext: multiparkBookings.adCampaignExternalId,
-      n: sql<number>`COUNT(*)`,
-    }).from(multiparkBookings).where(and(...conds, inArray(multiparkBookings.adAttribution, PAID as any), sql`${multiparkBookings.adCampaignExternalId} IS NOT NULL`))
-      .groupBy(multiparkBookings.adCampaignExternalId);
-    for (const r of campRows) if (r.ext) attributedByCampaign[String(r.ext)] = Number(r.n ?? 0);
+    if (b.origin && SITE_ORIGINS.includes(b.origin)) {
+      attributionQuality.siteBookings++;
+      if (b.hasOriginUrl) attributionQuality.withOriginUrl++;
+      if (b.hasClickId) attributionQuality.withClickId++;
+      if (b.adAttribution === "google_paid") attributionQuality.attributed++;
+    }
+    if (paid && b.adCampaignExternalId) attributedByCampaign[b.adCampaignExternalId] = (attributedByCampaign[b.adCampaignExternalId] ?? 0) + 1;
+  }
+  bookingsByDay = [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, v]) => ({ date, ...v }));
+  if (db) {
     mktExpenses = await marketingCategoryExpenses(db, f.from, f.to, projectIds);
   }
 
@@ -201,19 +182,17 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string; 
   const accountProject = new Map(accounts.map((a) => [a.id, a.projectId]));
   const ads = preloadedAds ?? await getAdMetrics({ from: f.from, to: f.to, projectIds });
 
-  const bookingConds: any[] = [
-    projectScope(multiparkBookings.projectId),
-    notCancelledSql(multiparkBookings.status),
-    inLisbonDaysSql(multiparkBookings.bookingCreatedAt, f.from, f.to),
-  ];
-  if (projectIds) bookingConds.push(projectIds.length ? inArray(multiparkBookings.projectId, projectIds) : sql`1 = 0`);
-  const bookingRows = await db.select({
-    projectId: multiparkBookings.projectId,
-    n: sql<number>`COUNT(*)`,
-    attributed: sql<number>`SUM(CASE WHEN ${multiparkBookings.adAttribution} IN ('google_paid', 'meta_paid') THEN 1 ELSE 0 END)`,
-    rev: sql<string>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    revAttributed: sql<string>`COALESCE(SUM(CASE WHEN ${multiparkBookings.adAttribution} IN ('google_paid', 'meta_paid') THEN ${multiparkBookings.totalPrice} ELSE 0 END), 0)`,
-  }).from(multiparkBookings).where(and(...bookingConds)).groupBy(multiparkBookings.projectId);
+  // Reservas AO VIVO da BD da Multipark (server/marketingLive.ts), somadas por centro.
+  const { loadMarketingBookings } = await import("../../marketingLive");
+  const byProject = new Map<number | null, { projectId: number | null; n: number; attributed: number; rev: number; revAttributed: number }>();
+  for (const b of await loadMarketingBookings(f.from, f.to, projectIds)) {
+    const r = byProject.get(b.projectId) ?? { projectId: b.projectId, n: 0, attributed: 0, rev: 0, revAttributed: 0 };
+    const paid = b.adAttribution === "google_paid" || b.adAttribution === "meta_paid";
+    r.n++; r.rev += b.total;
+    if (paid) { r.attributed++; r.revAttributed += b.total; }
+    byProject.set(b.projectId, r);
+  }
+  const bookingRows = [...byProject.values()];
 
   const key = (name: string) => name.trim().toLowerCase();
   const brands = new Map<string, BrandRow>();

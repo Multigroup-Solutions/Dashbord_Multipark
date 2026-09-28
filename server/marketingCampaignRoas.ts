@@ -25,7 +25,7 @@ const rowsOf = <T = any>(r: any): T[] => (Array.isArray(r) && Array.isArray(r[0]
 const norm = (v: unknown) => String(v ?? "").trim().toLowerCase();
 
 export interface CampaignLinkKey { id: number; adCampaignId: number; keyType: "utm_campaign" | "discount_code"; keyValue: string }
-export interface BookingForMatch { id: number; adAttribution: string | null; ext: string | null; utmCampaign: string | null; code: string | null; codeName: string | null; totalPrice: number }
+export interface BookingForMatch { id: number | string; adAttribution: string | null; ext: string | null; utmCampaign: string | null; code: string | null; codeName: string | null; totalPrice: number }
 export interface CampaignRef { key: string; provider: string; externalId: string | null; campaignId: number | null }
 
 /**
@@ -81,15 +81,14 @@ export async function getCampaignRoas(f: { from: string; to: string; projectId?:
   const links = await listCampaignLinks();
   const utmKeys = links.filter((l) => l.keyType === "utm_campaign").map((l) => norm(l.keyValue));
   const codeKeys = links.filter((l) => l.keyType === "discount_code").map((l) => norm(l.keyValue));
-  const inList = (col: any, vals: string[]) => vals.length ? sql` OR LOWER(TRIM(${col})) IN (${sql.join(vals.map((v) => sql`${v}`), sql`, `)})` : sql``;
-  const proj = projectIds ? (projectIds.length ? sql` AND b.projectId IN (${sql.join(projectIds.map((id) => sql`${id}`), sql`, `)})` : sql` AND 1 = 0`) : sql``;
-  const bookings: BookingForMatch[] = rowsOf<any>(await db.execute(sql`
-    SELECT b.id, b.adAttribution, b.adCampaignExternalId AS ext, b.utmCampaign, b.campaign AS code, b.campaignName AS codeName, b.totalPrice
-    FROM multipark_bookings b
-    WHERE ${notCancelledSql(sql`b.status`)} AND ${inLisbonDaysSql(sql`b.bookingCreatedAt`, f.from, f.to)}
-      AND ${projectScope(sql`b.projectId`)}${proj}
-      AND (b.adCampaignExternalId IS NOT NULL${inList(sql`b.utmCampaign`, utmKeys)}${inList(sql`b.campaign`, codeKeys)}${inList(sql`b.campaignName`, codeKeys)})`))
-    .map((r) => ({ id: Number(r.id), adAttribution: r.adAttribution ?? null, ext: r.ext ?? null, utmCampaign: r.utmCampaign ?? null, code: r.code ?? null, codeName: r.codeName ?? null, totalPrice: Number(r.totalPrice ?? 0) }));
+  // Reservas AO VIVO da BD da Multipark (server/marketingLive.ts): as que têm
+  // campanha de anúncio, utm_campaign ou código ligado a uma campanha.
+  const utmSet = new Set(utmKeys), codeSet = new Set(codeKeys);
+  const { loadMarketingBookings } = await import("./marketingLive");
+  const bookings: BookingForMatch[] = (await loadMarketingBookings(f.from, f.to, projectIds))
+    .filter((b) => b.adCampaignExternalId != null || (b.utmCampaign != null && utmSet.has(norm(b.utmCampaign)))
+      || (b.campaign != null && codeSet.has(norm(b.campaign))) || (b.campaignName != null && codeSet.has(norm(b.campaignName))))
+    .map((b) => ({ id: b.id, adAttribution: b.adAttribution, ext: b.adCampaignExternalId, utmCampaign: b.utmCampaign, code: b.campaign, codeName: b.campaignName, totalPrice: b.total }));
   const matched = matchBookingsToCampaigns(bookings, apiCampaigns.map((c) => ({ key: c.key, provider: c.provider, externalId: c.externalId, campaignId: c.campaignId })), links);
 
   // Conversões por ação (Google: ação de conversão; Meta: tipo de ação)

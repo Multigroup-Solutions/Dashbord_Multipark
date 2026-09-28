@@ -265,24 +265,18 @@ async function brandOfProjectFn(): Promise<(projectId: number | null) => string 
 export interface BookingDayAgg { bookings: number; siteBookings: number; revenue: number; siteRevenue: number }
 
 export async function bookingsByDay(from: string, to: string, brand: string | null): Promise<Map<string, BookingDayAgg>> {
-  const d = await db();
-  const dayExpr = sql.raw(lisbonDaySql("b.bookingCreatedAt", from, to));
-  const origins = sql.join(SITE_BOOKING_ORIGINS.map((o) => sql`${o}`), sql`, `);
-  const rows = rowsOf(await d.execute(sql`SELECT ${dayExpr} AS d, b.projectId AS projectId, COUNT(*) AS n,
-      SUM(CASE WHEN b.origin IN (${origins}) THEN 1 ELSE 0 END) AS site,
-      COALESCE(SUM(b.totalPrice), 0) AS rev,
-      COALESCE(SUM(CASE WHEN b.origin IN (${origins}) THEN b.totalPrice ELSE 0 END), 0) AS siteRev
-    FROM multipark_bookings b
-    WHERE ${notCancelledSql(sql`b.status`)} AND ${inLisbonDaysSql(sql`b.bookingCreatedAt`, from, to)} AND ${projectScope(sql`b.projectId`)}
-    GROUP BY d, b.projectId`));
+  // Reservas AO VIVO da BD da Multipark (server/marketingLive.ts): criadas no dia, sem canceladas.
+  const { loadMarketingBookings } = await import("../marketingLive");
+  const bookings = await loadMarketingBookings(from, to);
   const brandOf = brand ? await brandOfProjectFn() : null;
   const out = new Map<string, BookingDayAgg>();
-  for (const r of rows) {
-    if (brandOf && brandOf(r.projectId == null ? null : n(r.projectId)) !== brand) continue;
-    const day = dayStr(r.d);
-    const e = out.get(day) ?? { bookings: 0, siteBookings: 0, revenue: 0, siteRevenue: 0 };
-    e.bookings += n(r.n); e.siteBookings += n(r.site); e.revenue += n(r.rev); e.siteRevenue += n(r.siteRev);
-    out.set(day, e);
+  for (const b of bookings) {
+    if (brandOf && brandOf(b.projectId) !== brand) continue;
+    const site = !!b.origin && (SITE_BOOKING_ORIGINS as readonly string[]).includes(b.origin);
+    const e = out.get(b.day) ?? { bookings: 0, siteBookings: 0, revenue: 0, siteRevenue: 0 };
+    e.bookings++; e.revenue += b.total;
+    if (site) { e.siteBookings++; e.siteRevenue += b.total; }
+    out.set(b.day, e);
   }
   return out;
 }

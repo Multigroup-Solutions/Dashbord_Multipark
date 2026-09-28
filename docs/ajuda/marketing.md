@@ -2,11 +2,15 @@
 modulo: marketing
 titulo: Marketing
 rotas: /marketing, /marketing/google-ads, /marketing/canais, /marketing/orcamentos, /marketing/web
-palavras: marketing, anúncios, google ads, meta, facebook, campanha, campanhas, roas, gasto, canais, clientes, orçamento, orçamentos
+palavras: ao vivo, base da multipark, atribuição, marketing, anúncios, google ads, meta, facebook, campanha, campanhas, roas, gasto, canais, clientes, orçamento, orçamentos
 ---
 # Marketing
 
-Só super admin. Separadores:
+Só super admin.
+
+As reservas (quantas, valor, de onde vieram, cliente novo ou não e se vieram de um anúncio) são lidas **ao vivo da base de dados da Multipark**, só dos nossos parques. A atribuição Google/Meta sai do link de origem da reserva (gclid, fbclid, utm), com a mesma regra de antes. Os gastos em anúncios continuam a vir do Google Ads e da Meta.
+
+Separadores:
 
 - **Dashboard**: visão geral do marketing no período.
 - **Anúncios**: gasto por marca e por campanha (Google Ads e Meta) e ROAS por campanha (sem IVA).

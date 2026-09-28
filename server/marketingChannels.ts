@@ -168,6 +168,20 @@ export function buildChannels(
   };
 }
 
+/** Reservas (ao vivo) → linhas do mix por origem × pago Google × campanha × cliente novo. PURA. */
+export function mixFromBookings(bookings: Array<{ origin: string | null; adAttribution: string; campaign: string | null; newClient: boolean; hasEmail: boolean; total: number }>): MixRow[] {
+  const m = new Map<string, MixRow>();
+  for (const b of bookings) {
+    const campaign = b.campaign?.trim() || null;
+    const googlePaid = b.adAttribution === "google_paid";
+    const k = JSON.stringify([b.origin, googlePaid, campaign, b.newClient]);
+    const r = m.get(k) ?? { origin: b.origin, googlePaid, campaign, bookings: 0, revenue: 0, withEmail: 0, newClient: b.newClient };
+    r.bookings++; r.revenue += b.total; if (b.hasEmail) r.withEmail++;
+    m.set(k, r);
+  }
+  return [...m.values()];
+}
+
 // ─── Queries ─────────────────────────────────────────────────────────────────
 function scopeWhere(projectIds?: number[] | null): SQL {
   const proj = projectIds && projectIds.length
@@ -230,20 +244,15 @@ export async function getChannels(db: any, f: { from: string; to: string; projec
   const key = JSON.stringify({ s: scopedProjectIds() ?? "all", p: f.projectIds ?? null, from: f.from, to: f.to, spend: f.adSpend, conv: f.adConversions ?? 0 });
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
+  // Reservas e clientes AO VIVO da BD da Multipark (server/marketingLive.ts).
   const { buildPartnerByCampaignMap } = await import("./db");
-  const [mixRaw, clientsRaw, partnerMap] = await Promise.all([
-    db.execute(mixSql(f.from, f.to, f.projectIds)),
-    db.execute(clientsSql(f.from, f.to, f.projectIds)),
+  const { loadMarketingBookings, loadMarketingClients } = await import("./marketingLive");
+  const [bookings, clients, partnerMap] = await Promise.all([
+    loadMarketingBookings(f.from, f.to, f.projectIds),
+    loadMarketingClients(f.from, f.to, f.projectIds),
     buildPartnerByCampaignMap(),
   ]);
-  const mix: MixRow[] = rows(mixRaw).map((r) => ({
-    origin: r.origin ?? null, googlePaid: Number(r.googlePaid ?? 0) === 1, campaign: r.campaign ?? null,
-    bookings: Number(r.bookings ?? 0), revenue: Number(r.revenue ?? 0), withEmail: Number(r.withEmail ?? 0),
-    newClient: Number(r.newClient ?? 1) === 1,
-  }));
-  const clients: ClientRowAgg[] = rows(clientsRaw).map((r) => ({
-    first: r.first ?? null, bookings: Number(r.bookings ?? 0), periodBookings: Number(r.periodBookings ?? 0), value: Number(r.value ?? 0),
-  }));
+  const mix = mixFromBookings(bookings);
   const partnerFor = (c: string): PartnerLite | undefined => {
     const p = partnerMap.get(c.trim().toLowerCase());
     return p ? { id: p.id, name: p.name, commissionRate: Number(p.commissionRate ?? 0) } : undefined;

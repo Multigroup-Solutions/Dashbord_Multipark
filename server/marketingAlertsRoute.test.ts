@@ -17,6 +17,10 @@ vi.mock("./integrations/googleAds/marketingStats", () => ({
 vi.mock("./integrations/googleAds/adMetrics", () => ({ getAdMetrics: async () => ({ totals: { cost: 100 }, unmappedCampaigns: 0 }) }));
 vi.mock("./marketingBudgets", () => ({ listBudgetsWithPacing: async () => [] }));
 vi.mock("./integrations/googleAds/oauth", () => ({ getConnection: async () => null }));
+// Reservas AO VIVO da BD da Multipark: 4 atribuídas à campanha 222.
+vi.mock("./marketingLive", () => ({
+  loadMarketingBookings: async () => Array.from({ length: 4 }, (_, i) => ({ id: `b${i}`, adAttribution: "google_paid", adCampaignExternalId: "222" })),
+}));
 
 import { appRouter } from "./routers";
 // Marketing: só super_admin (correção do dono, 24 set 2026).
@@ -26,7 +30,7 @@ const caller = (role = "super_admin") =>
 beforeEach(() => {
   vi.clearAllMocks();
   f.load.mockResolvedValue({ all: true, defaultCityId: null, cityIds: [], projectIds: [], missingCostCenter: false });
-  f.execute.mockResolvedValue([[{ ext: "222", n: 4 }], []]);
+  f.execute.mockResolvedValue([[], []]);
 });
 
 describe("marketing.alerts", () => {

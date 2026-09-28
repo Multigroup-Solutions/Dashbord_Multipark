@@ -179,20 +179,16 @@ export async function unansweredByLocation(ids: readonly number[], maxAgeDays = 
 // ─── Negócio: reservas por cidade × dia ─────────────────────────────────────
 
 export async function bookingsByCityDay(from: string, to: string): Promise<Map<CityKey, Map<string, number>>> {
-  const d = await db();
-  const dayExpr = sql.raw(lisbonDaySql("b.bookingCreatedAt", from, to));
-  const rows = rowsOf(await d.execute(sql`SELECT ${dayExpr} AS d, b.projectId AS projectId, COUNT(*) AS c
-    FROM multipark_bookings b
-    WHERE ${notCancelledSql(sql`b.status`)} AND ${inLisbonDaysSql(sql`b.bookingCreatedAt`, from, to)} AND ${projectScope(sql`b.projectId`)}
-    GROUP BY d, b.projectId`));
+  // Reservas AO VIVO da BD da Multipark (server/marketingLive.ts): criadas no dia, sem canceladas.
+  const { loadMarketingBookings } = await import("../../marketingLive");
+  const bookings = await loadMarketingBookings(from, to);
   const pm = await projectCityBrand();
   const out = new Map<CityKey, Map<string, number>>();
-  for (const r of rows) {
-    const city = pm.cityOf(r.projectId == null ? null : n(r.projectId));
+  for (const b of bookings) {
+    const city = pm.cityOf(b.projectId);
     if (!city) continue;
     const m = out.get(city) ?? new Map<string, number>();
-    const day = dayStr(r.d);
-    m.set(day, (m.get(day) ?? 0) + n(r.c));
+    m.set(b.day, (m.get(b.day) ?? 0) + 1);
     out.set(city, m);
   }
   return out;
