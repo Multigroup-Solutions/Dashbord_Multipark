@@ -13,6 +13,10 @@
  *     dos dois lados
  * Tudo conservador: nada é sobrescrito; os casos ambíguos ficam para o ecrã
  * de Ligações (Fase 4).
+ *
+ * Os agentes (ids, nomes, emails) são lidos AO VIVO da BD da Multipark
+ * (server/multiparkDb/activityLive.ts): a cópia `multipark_booking_history`
+ * deixou de ser alimentada no PR #141 e só serve quando a BD deles falha.
  */
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
@@ -97,8 +101,21 @@ export function planNameAttach(agents: AgentSeen[], emps: EmpLite[]): { employee
 
 const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r) as any[]) ?? [];
 
-/** Id do agente Multipark para um nome (o mais usado nos últimos 180 dias). */
+/**
+ * Id do agente Multipark para um nome (o mais usado nos últimos 180 dias),
+ * lido AO VIVO da BD da Multipark ("History" + "Agent"). A cópia local
+ * `multipark_booking_history` (já não alimentada desde o PR #141) só serve
+ * quando a BD da Multipark não responde.
+ */
 export async function agentIdForName(name: string): Promise<string | null> {
+  const { findAgentIdForNameLive } = await import("./multiparkDb/activityLive");
+  const live = await findAgentIdForNameLive(name);
+  if (live.available) return live.data;
+  console.warn(`[identityLink] id do agente pelo nome: BD da Multipark indisponível (${live.code}) — a usar a cópia local.`);
+  return agentIdForNameLegacy(name);
+}
+
+async function agentIdForNameLegacy(name: string): Promise<string | null> {
   const db = await getDb();
   if (!db) return null;
   const [r] = rowsOf(await db.execute(sql`
@@ -115,7 +132,40 @@ async function logLink(action: string, entityId: number, details: string) {
   } catch { /* segue */ }
 }
 
-export interface SweepReport { usersLinked: number; usersCreated: number; employeesLinkedToUsers: number; agentIdsFilled: number; agentsByEmail: number; agentsByName: number; agentAliases: number; errors: string[] }
+export interface SweepReport { usersLinked: number; usersCreated: number; employeesLinkedToUsers: number; agentIdsFilled: number; agentsByEmail: number; agentsByName: number; agentAliases: number; errors: string[]; agentsSource?: "multipark" | "copia"; agentsNotice?: string | null }
+
+export interface AgentEmailSeen { agentUserId: string; agentName: string | null; agentEmail: string }
+
+/**
+ * Agentes vistos nos últimos 180 dias (e emails), AO VIVO da BD da Multipark;
+ * a cópia local `multipark_booking_history` só quando a BD deles não responde.
+ */
+export async function loadAgentsSeen(): Promise<{ agents: AgentSeen[]; emails: AgentEmailSeen[]; source: "multipark" | "copia"; notice: string | null }> {
+  const { listLiveAgents } = await import("./multiparkDb/activityLive");
+  const live = await listLiveAgents();
+  if (live.available) {
+    const agents: AgentSeen[] = [];
+    const emails: AgentEmailSeen[] = [];
+    for (const a of live.data) {
+      // um AgentSeen por nome (o mesmo agente pode ter mais de um), como na cópia local
+      for (const n of a.agentNames.length ? a.agentNames : [null]) agents.push({ id: a.agentUserId, name: n, count: a.total });
+      if (a.email) emails.push({ agentUserId: a.agentUserId, agentName: a.agentName, agentEmail: a.email });
+    }
+    return { agents, emails, source: "multipark", notice: null };
+  }
+  const db = await getDb();
+  if (!db) return { agents: [], emails: [], source: "copia", notice: live.reason };
+  const agents = rowsOf(await db.execute(sql`
+    SELECT agentUserId AS id, agentName AS name, COUNT(*) AS n FROM multipark_booking_history
+     WHERE agentUserId IS NOT NULL AND agentUserId <> '' AND actionTime >= NOW() - INTERVAL 180 DAY
+     GROUP BY agentUserId, agentName`)).map((r) => ({ id: String(r.id), name: r.name ? String(r.name) : null, count: Number(r.n) }));
+  const emails = rowsOf(await db.execute(sql`
+    SELECT agentUserId, MAX(agentName) AS agentName, MAX(agentEmail) AS agentEmail FROM multipark_booking_history
+     WHERE agentUserId IS NOT NULL AND agentUserId <> '' AND agentEmail IS NOT NULL AND agentEmail <> ''
+       AND actionTime >= NOW() - INTERVAL 180 DAY
+     GROUP BY agentUserId`)).map((r) => ({ agentUserId: String(r.agentUserId), agentName: r.agentName ? String(r.agentName) : null, agentEmail: String(r.agentEmail) }));
+  return { agents, emails, source: "copia", notice: `${live.reason} Agentes da cópia local (deixou de ser atualizada — agentes novos não aparecem).` };
+}
 
 export async function runIdentitySweep(): Promise<SweepReport> {
   const rep: SweepReport = { usersLinked: 0, usersCreated: 0, employeesLinkedToUsers: 0, agentIdsFilled: 0, agentsByEmail: 0, agentsByName: 0, agentAliases: 0, errors: [] };
@@ -166,12 +216,14 @@ export async function runIdentitySweep(): Promise<SweepReport> {
       agentUserId: r.multiparkAgentUserId ? String(r.multiparkAgentUserId).trim() || null : null,
     }));
   };
+  let agentEmails: AgentEmailSeen[] = [];
   try {
-    agents = rowsOf(await db.execute(sql`
-      SELECT agentUserId AS id, agentName AS name, COUNT(*) AS n FROM multipark_booking_history
-       WHERE agentUserId IS NOT NULL AND agentUserId <> '' AND actionTime >= NOW() - INTERVAL 180 DAY
-       GROUP BY agentUserId, agentName`)).map((r) => ({ id: String(r.id), name: r.name ? String(r.name) : null, count: Number(r.n) }))
-      .filter((a) => !aliasAgentIds.has(a.id)); // agentes EXTRA já estão ligados
+    const seen = await loadAgentsSeen();
+    rep.agentsSource = seen.source;
+    rep.agentsNotice = seen.notice;
+    if (seen.notice) console.warn(`[identityLink] ${seen.notice}`);
+    agents = seen.agents.filter((a) => !aliasAgentIds.has(a.id)); // agentes EXTRA já estão ligados
+    agentEmails = seen.emails;
     await loadEmps();
   } catch (err: any) { rep.errors.push(`carregar agentes: ${err?.message ?? err}`); return rep; }
 
@@ -187,11 +239,7 @@ export async function runIdentitySweep(): Promise<SweepReport> {
 
   // 4. Por email (trabalho ou pessoal)
   try {
-    const seen = rowsOf(await db.execute(sql`
-      SELECT agentUserId, MAX(agentName) AS agentName, MAX(agentEmail) AS agentEmail FROM multipark_booking_history
-       WHERE agentUserId IS NOT NULL AND agentUserId <> '' AND agentEmail IS NOT NULL AND agentEmail <> ''
-         AND actionTime >= NOW() - INTERVAL 180 DAY
-       GROUP BY agentUserId`)).map((r) => ({ agentUserId: String(r.agentUserId), agentName: r.agentName ? String(r.agentName) : null, agentEmail: String(r.agentEmail) }));
+    const seen = agentEmails;
     const { autoAttachAgentsByEmail } = await import("./identityReconcile");
     rep.agentsByEmail = await autoAttachAgentsByEmail(db as any, seen.filter((s) => !aliasAgentIds.has(s.agentUserId)) as any);
 

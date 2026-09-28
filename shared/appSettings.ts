@@ -83,7 +83,31 @@ export const aiFeatureTiersSchema = z.record(
   z.enum(AI_TIERS as unknown as ["lite", "fast", "smart"], { error: "Nível inválido (lite, fast ou smart)." }),
 );
 
-export type SettingGroup = "financeiro" | "sla" | "emails" | "disponibilidade" | "ia" | "extras" | "notificacoes" | "marketing" | "servicos";
+export type SettingGroup = "financeiro" | "sla" | "emails" | "disponibilidade" | "ia" | "extras" | "notificacoes" | "marketing" | "operacao" | "servicos";
+
+// ─── Zello (GPS) ────────────────────────────────────────────────────────────
+
+/**
+ * Contas Zello que NÃO entram na recolha GPS nem nos alertas de GPS (consolas
+ * de despacho, contas de teste). Lista explícita — a flag "admin" do Zello já
+ * não exclui ninguém (auditoria PDA/Zello, B5).
+ */
+export const ZELLO_GPS_EXCLUDED_KEY = "zello.gpsExcludedUsers" as const;
+export const zelloUsernameListSchema = z
+  .array(z.string().trim().min(1, "Utilizador Zello vazio.").max(255, "Utilizador Zello demasiado longo."))
+  .max(200, "No máximo 200 contas.")
+  .transform((list) => Array.from(new Set(list)));
+
+/** Lista gravada → conjunto para comparar (sem distinguir maiúsculas). PURA. */
+export function zelloExclusionSet(list: readonly string[] | null | undefined): Set<string> {
+  return new Set((list ?? []).map((u) => String(u ?? "").trim().toLowerCase()).filter(Boolean));
+}
+
+/** Esta conta Zello está na lista de exclusão do GPS? PURA. */
+export function isZelloGpsExcluded(username: string | null | undefined, excluded: ReadonlySet<string>): boolean {
+  const k = String(username ?? "").trim().toLowerCase();
+  return !!k && excluded.has(k);
+}
 
 // ─── Extras-dia (escala automática) ─────────────────────────────────────────
 
@@ -196,6 +220,15 @@ export const SETTINGS = {
     description: "Se não chegar nenhum webhook da Multipark durante este número de horas, em horário de operação (07h–23h, Lisboa), os admins recebem um aviso na app (uma vez, e outra quando voltarem).",
     schema: z.number({ error: "Indica um número de horas." }).int("Número inteiro de horas.").min(1, "Mínimo 1 hora.").max(48, "Máximo 48 horas."),
     defaultValue: 3,
+    wiring: "live",
+  }),
+  [ZELLO_GPS_EXCLUDED_KEY]: def({
+    key: ZELLO_GPS_EXCLUDED_KEY,
+    group: "operacao",
+    label: "Contas Zello excluídas do GPS",
+    description: "Utilizadores Zello (um por linha) que ficam fora da recolha GPS diária, dos alertas de GPS desligado e da lista \"Zello por ligar\" — consolas de despacho, contas de teste. Vazio = recolhe todos (a conta ser \"admin\" no Zello já não exclui ninguém).",
+    schema: zelloUsernameListSchema,
+    defaultValue: [],
     wiring: "live",
   }),
   "emails.handoverCc": def({

@@ -13,6 +13,7 @@ A avaliação dos condutores e extras está numa só página: menu **Pessoas →
 - **GPS** (onde deixaram os carros e por onde andaram): continua a vir do **Zello**, guardado no dashboard.
 - **Ponto, escala do Extras Dia, reclamações, alertas de velocidade e penalizações**: vêm do dashboard.
 - A ligação entre o agente da app Multipark e a ficha do colaborador é a do RH (o agente ligado à ficha).
+- A **Atividade do Dia** (menu Operacional, `/operacional`) lê as ações da mesma forma, **ao vivo** da BD da Multipark (dia civil de Lisboa, 00h–24h). Só os dias antes de 2 de março de 2026 vêm da cópia antiga guardada no dashboard. Se a BD da Multipark não responder, a página mostra um aviso amarelo e usa essa cópia antiga, que já não é atualizada (os dias recentes aparecem sem ações).
 
 **Não há nada para ir buscar à mão.** Os botões "Buscar histórico" e "Buscar" desapareceram: abrir um dia calcula-o logo, e todas as noites o dashboard recalcula sozinho as últimas 4 semanas.
 

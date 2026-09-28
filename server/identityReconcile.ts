@@ -84,6 +84,55 @@ export async function loadIdentitySnapshot(db: Db): Promise<IdentitySnapshot> {
       SELECT id, fullName, email, NULL AS personalEmail, phone, position, isActive, userId, multiparkAgentName, multiparkAgentUserId
       FROM employees ORDER BY id`)) as any;
   }
+  const str = (v: unknown): string | null => (v == null ? null : String(v));
+  const split = (v: unknown): string[] =>
+    String(v ?? "")
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  const users = (u as any[]).map((r) => ({
+    id: Number(r.id),
+    openId: String(r.openId),
+    name: str(r.name),
+    email: str(r.email),
+    role: String(r.role),
+    isActive: Number(r.isActive),
+    loginMethod: str(r.loginMethod),
+    lastSignedIn: str(r.lastSignedIn),
+  }));
+  const employees = (e as any[]).map((r) => ({
+    id: Number(r.id),
+    fullName: String(r.fullName),
+    email: str(r.email),
+    personalEmail: str(r.personalEmail),
+    phone: str(r.phone),
+    position: String(r.position),
+    isActive: Number(r.isActive),
+    userId: r.userId == null ? null : Number(r.userId),
+    multiparkAgentName: str(r.multiparkAgentName),
+    multiparkAgentUserId: str(r.multiparkAgentUserId),
+  }));
+
+  // Agentes: AO VIVO da BD da Multipark ("Agent" + "History" dos últimos 180
+  // dias). A cópia multipark_booking_history deixou de ser alimentada no PR
+  // #141 — só serve quando a BD deles não responde.
+  const { listLiveAgents } = await import("./multiparkDb/activityLive");
+  const live = await listLiveAgents();
+  if (live.available) {
+    return {
+      users,
+      employees,
+      agents: live.data.map((x) => ({
+        agentUserId: x.agentUserId,
+        agentNames: x.agentNames,
+        agentEmails: x.email ? [normalizeEmail(x.email)].filter(Boolean) : [],
+        actions: x.total,
+        firstAction: x.firstSeen,
+        lastAction: x.lastSeen,
+      })),
+    };
+  }
+  console.warn(`[identityReconcile] agentes: BD da Multipark indisponível (${live.code}) — a usar a cópia local.`);
   const [a] = (await db.execute(sql`
     SELECT agentUserId,
            GROUP_CONCAT(DISTINCT agentEmail ORDER BY agentEmail SEPARATOR '\n') AS emails,
@@ -104,36 +153,9 @@ export async function loadIdentitySnapshot(db: Db): Promise<IdentitySnapshot> {
     namesByAgent.set(k, [...(namesByAgent.get(k) ?? []), String(r.agentName).trim()]);
   }
 
-  const str = (v: unknown): string | null => (v == null ? null : String(v));
-  const split = (v: unknown): string[] =>
-    String(v ?? "")
-      .split("\n")
-      .map((s) => s.trim())
-      .filter(Boolean);
-
   return {
-    users: (u as any[]).map((r) => ({
-      id: Number(r.id),
-      openId: String(r.openId),
-      name: str(r.name),
-      email: str(r.email),
-      role: String(r.role),
-      isActive: Number(r.isActive),
-      loginMethod: str(r.loginMethod),
-      lastSignedIn: str(r.lastSignedIn),
-    })),
-    employees: (e as any[]).map((r) => ({
-      id: Number(r.id),
-      fullName: String(r.fullName),
-      email: str(r.email),
-      personalEmail: str(r.personalEmail),
-      phone: str(r.phone),
-      position: String(r.position),
-      isActive: Number(r.isActive),
-      userId: r.userId == null ? null : Number(r.userId),
-      multiparkAgentName: str(r.multiparkAgentName),
-      multiparkAgentUserId: str(r.multiparkAgentUserId),
-    })),
+    users,
+    employees,
     agents: (a as any[]).map((r) => ({
       agentUserId: String(r.agentUserId),
       agentNames: namesByAgent.get(String(r.agentUserId)) ?? [],

@@ -33,7 +33,12 @@ export function PdaDeviceBinder({ userId }: { userId: number | null | undefined 
             toast.success(`Este aparelho (${r.pdaName}) ficou contigo${r.zelloUsername ? ` · Zello ${r.zelloUsername}` : ""}${r.replacedName ? ` — estava com ${r.replacedName}` : ""}.`);
           }
         },
-        onError: () => markClaimed(null),
+        onError: (e) => {
+          // Não engolir: sem esta ligação o GPS do aparelho fica sem pessoa
+          console.warn("[pda] login→PDA falhou:", e);
+          toast.warning(e.message || "Não foi possível ligar este aparelho a ti (PDA).");
+          markClaimed(null);
+        },
       },
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps

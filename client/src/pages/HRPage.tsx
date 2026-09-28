@@ -2829,14 +2829,16 @@ function ImportExtrasDialog({ open, onClose }: { open: boolean; onClose: () => v
 // colaborador nem parceiro. Daqui liga-se a um colaborador existente, a um
 // parceiro (agências que marcam pelo portal), ou cria-se o funcionário.
 function UnlinkedAgentsBadge() {
-  const { data = [] } = trpc.multipark.unlinkedAgents.useQuery();
-  if (data.length === 0) return null;
-  return <Badge variant="secondary" className="ml-2">{data.length}</Badge>;
+  const { data } = trpc.multipark.unlinkedAgents.useQuery();
+  const n = data?.rows.length ?? 0;
+  if (n === 0) return null;
+  return <Badge variant="secondary" className="ml-2">{n}</Badge>;
 }
 
 function UnlinkedAgentsSection() {
   const utils = trpc.useUtils();
-  const { data: agents = [], isLoading } = trpc.multipark.unlinkedAgents.useQuery();
+  const { data: unlinked, isLoading } = trpc.multipark.unlinkedAgents.useQuery();
+  const agents = unlinked?.rows ?? [];
   const { data: employees = [] } = trpc.multipark.employeesForMapping.useQuery();
   const { data: partnershipsList = [] } = trpc.partnerships.list.useQuery({} as any);
   const refresh = () => { utils.multipark.unlinkedAgents.invalidate(); utils.multipark.employeesForMapping.invalidate(); };
@@ -2866,11 +2868,14 @@ function UnlinkedAgentsSection() {
     <div className="space-y-3">
       <Card className="border-amber-200 bg-amber-50/40">
         <CardContent className="p-3 text-sm text-amber-900">
-          Estes agentes têm atividade na Multipark mas não estão ligados a ninguém.
+          Estes agentes estão na Multipark (ativos ou com atividade nos últimos 180 dias, lidos ao vivo) mas não estão ligados a ninguém.
           Liga cada um a um <strong>colaborador</strong>, a um <strong>parceiro</strong> (agências que marcam pelo portal),
           cria o funcionário — ou marca <strong>"não é funcionário"</strong> (testes, integrações, reservas de sistema) para o tirar da lista.
         </CardContent>
       </Card>
+      {unlinked?.notice && (
+        <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">{unlinked.notice}</p>
+      )}
       {isLoading ? (
         <p className="text-sm text-muted-foreground">A carregar…</p>
       ) : agents.length === 0 ? (

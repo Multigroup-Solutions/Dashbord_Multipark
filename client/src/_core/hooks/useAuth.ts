@@ -31,7 +31,7 @@ export function useAuth(options?: UseAuthOptions) {
   const logout = useCallback(async () => {
     const pdaToken = getPdaToken();
     if (pdaToken) {
-      try { await releasePda.mutateAsync({ token: pdaToken }); } catch { /* não impede o logout */ }
+      try { await releasePda.mutateAsync({ token: pdaToken }); } catch (err) { console.warn("[pda] soltar o PDA no logout falhou:", err); /* não impede o logout */ }
     }
     markClaimed(null);
     try {

@@ -18,7 +18,7 @@
  * Also checks for GPS/Zello disabled alerts.
  */
 
-import { getZelloUsers, getZelloUserHistory, getZelloLocations } from "../zello";
+import { getZelloGpsUsers, getZelloUserHistory, getZelloLocations } from "../zello";
 import {
   createDailyDriverHistory,
   createGpsAlert,
@@ -352,9 +352,9 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
     const passStartedAt = opts?.passStartedAt ?? Date.now() - 15 * 60_000;
     const existing = await existingRowsForDay(dateStr);
 
-    // Get all Zello users
-    const users = await getZelloUsers();
-    const allNonAdmin = users.filter(u => !u.admin);
+    // Utilizadores Zello — todos, menos a lista explícita de Definições
+    // ("Contas Zello excluídas do GPS"); a flag admin do Zello já não exclui.
+    const allNonAdmin = await getZelloGpsUsers();
     const todo = new Set(usersToCollect(allNonAdmin.map((u) => u.name), existing, pass, passStartedAt, { retryEmpty: opts?.retryEmpty }));
     const nonAdminUsers = allNonAdmin.filter((u) => todo.has(u.name));
     if (allNonAdmin.length > 0 && nonAdminUsers.length === 0) {
@@ -539,7 +539,7 @@ export function pickIncompleteDays(latestDay: string, counts: ReadonlyMap<string
 
 /**
  * Dias incompletos dos últimos 7 (até D-2): conta os registos FINAIS por dia
- * (os provisórios não contam) e compara com os condutores Zello atuais (não admin). A recolha é por
+ * (os provisórios não contam) e compara com os condutores Zello atuais (menos os excluídos em Definições). A recolha é por
  * condutor sem registo, por isso voltar a um dia só busca os que faltam.
  */
 export async function incompleteCollectionDays(latestDay: string, lookbackDays = 7): Promise<string[]> {
@@ -554,6 +554,6 @@ export async function incompleteCollectionDays(latestDay: string, lookbackDays =
      GROUP BY DATE_FORMAT(date, '%Y-%m-%d')`);
   const rows = ((Array.isArray(res) ? res[0] : res) as unknown as any[]) ?? [];
   const counts = new Map<string, number>(rows.map((r: any) => [String(r.d), Number(r.n)]));
-  const expected = (await getZelloUsers()).filter((u) => !u.admin).length;
+  const expected = (await getZelloGpsUsers()).length;
   return pickIncompleteDays(latestDay, counts, expected, lookbackDays);
 }
