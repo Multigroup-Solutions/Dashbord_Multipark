@@ -23,8 +23,11 @@ export interface MarketingBooking {
   /** dia de Lisboa da criação */
   day: string;
   projectId: number | null;
+  parkId: string;
   status: string | null;
   origin: string | null;
+  /** reserva de um parceiro da Multipark (partnerId/nome) */
+  hasPartner: boolean;
   hasOriginUrl: boolean;
   /** gclid / gbraid / wbraid no link */
   hasClickId: boolean;
@@ -45,7 +48,8 @@ export function toMarketingBooking(r: MarketingBookingRow, ctx: LiveContext): Ma
   if (!ctx.ourParks.has(r.parkId)) return null;
   const a = attributionFromUrl(r.originUrl);
   return {
-    id: r.id, createdAt: r.createdAt, day: r.day, projectId: ctx.ourParks.get(r.parkId) ?? null, status: r.status, origin: r.origin,
+    id: r.id, createdAt: r.createdAt, day: r.day, projectId: ctx.ourParks.get(r.parkId) ?? null, parkId: r.parkId, status: r.status, origin: r.origin,
+    hasPartner: !!(r.partnerId || (r.partnerName && !/unknown/i.test(r.partnerName))),
     hasOriginUrl: !!r.originUrl, hasClickId: !!(a.gclid || a.gbraid || a.wbraid),
     adAttribution: a.adAttribution, adCampaignExternalId: a.adCampaignExternalId, utmCampaign: a.utmCampaign,
     campaign: campaignOf(r, ctx.aliases), campaignName: r.campaignName, total: r.total, hasEmail: r.hasEmail, newClient: r.newClient,

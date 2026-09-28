@@ -147,12 +147,11 @@ async function operacoes(cur: Range, prev: Range): Promise<Pick<WeeklyReportData
   if (!db) return { metrics: [], notes: [] };
   const counts = async (r: Range) => {
     const u = lisbonDayRangeUtc(r.from, r.to);
-    const b = rowsOf(await db.execute(sql`
-      SELECT SUM(CASE WHEN checkIn >= ${u.start} AND checkIn < ${u.end} THEN 1 ELSE 0 END) AS ins,
-             SUM(CASE WHEN checkOut >= ${u.start} AND checkOut < ${u.end} THEN 1 ELSE 0 END) AS outs
-        FROM multipark_bookings
-       WHERE (status IS NULL OR status <> 'CANCELLED')
-         AND ((checkIn >= ${u.start} AND checkIn < ${u.end}) OR (checkOut >= ${u.start} AND checkOut < ${u.end}))`))[0] ?? {};
+    // Entradas e saídas previstas (sem canceladas) AO VIVO da BD da Multipark.
+    const { loadLiveBookingAgg } = await import("../finance/liveBookings");
+    const [inRows, outRows] = await Promise.all([loadLiveBookingAgg("checkin_any", u), loadLiveBookingAgg("checkout_any", u)]);
+    const notCancelled = (rows: typeof inRows) => rows.filter((x) => x.status !== "CANCELLED").reduce((t, x) => t + x.count, 0);
+    const b = { ins: notCancelled(inRows), outs: notCancelled(outRows) };
     const c = rowsOf(await db.execute(sql`SELECT COUNT(*) AS n FROM complaints WHERE createdAt >= ${u.start} AND createdAt < ${u.end}`))[0] ?? {};
     const i = rowsOf(await db.execute(sql`SELECT COUNT(*) AS n FROM incidents WHERE createdAt >= ${u.start} AND createdAt < ${u.end}`))[0] ?? {};
     const late = rowsOf(await db.execute(sql`

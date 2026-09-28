@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildFinanceAggSql, mapFinanceAggRow, readFinanceAgg, type FinanceAggRow } from "../multiparkDb/financeAgg";
+import { buildFinanceAggSql, buildTopDeliveredSql, mapFinanceAggRow, readFinanceAgg, type FinanceAggRow } from "../multiparkDb/financeAgg";
 import { assertReadOnlySql } from "../multiparkDb/client";
 import { buildOurParks, campaignOf, toLiveBookingAgg } from "./liveBookings";
 
@@ -36,12 +36,28 @@ describe("financeiro ao vivo: SQL na BD da Multipark", () => {
     expect(x.sql).toContain(`cx.at >= `);
     expect(() => assertReadOnlySql(x.sql)).not.toThrow();
   });
+  it("qualquer estado com saída/entrada no período (Diagnóstico e relatório semanal); agrupa por estado e pro", () => {
+    const o = buildFinanceAggSql({ kind: "checkout_any", ...range, parkIds: ["pA"] });
+    expect(o.sql).toContain(`b."checkOut" >= `);
+    expect(o.sql).not.toContain(`b."status"::text IN`);
+    expect(o.sql).toContain("GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9");
+    expect(o.sql).toContain(`COALESCE(b."discountApplied", b."discountAmount", 0) AS discount`);
+    const i = buildFinanceAggSql({ kind: "checkin_any", ...range, parkIds: ["pA"] });
+    expect(i.sql).toContain(`b."checkIn" >= `);
+    expect(() => assertReadOnlySql(i.sql)).not.toThrow();
+  });
+  it("maiores reservas entregues: só leitura, LIMIT 20, parques pedidos", () => {
+    const t = buildTopDeliveredSql({ ...range, parkIds: ["pA"] });
+    expect(() => assertReadOnlySql(t.sql)).not.toThrow();
+    expect(t.params).toEqual(expect.arrayContaining(["pA", "CHECKED_OUT", 20]));
+    expect(() => buildTopDeliveredSql({ ...range, parkIds: [] })).toThrow();
+  });
   it("sem parques não há leitura (nunca 'todos')", () => {
     expect(() => buildFinanceAggSql({ kind: "delivered", ...range, parkIds: [] })).toThrow();
   });
   it("mapeia a linha (números arredondados ao cêntimo, vazios a null)", async () => {
-    const raw = { day: "2026-08-10", park_id: "pA", partner_id: "", partner_name: null, payment_method: "MB Way", campaign_name: "Verão", discount_code: "", n: "3", total: "150.004", parking: 120, delivery: 30, extras: null, paid: "100", remaining: "50", owing_n: "1" };
-    expect(mapFinanceAggRow(raw)).toEqual({ day: "2026-08-10", parkId: "pA", partnerId: null, partnerName: null, paymentMethod: "MB Way", campaignName: "Verão", discountCode: null, count: 3, total: 150, parking: 120, delivery: 30, extras: 0, paid: 100, remaining: 50, owingCount: 1 });
+    const raw = { day: "2026-08-10", park_id: "pA", partner_id: "", partner_name: null, payment_method: "MB Way", campaign_name: "Verão", discount_code: "", n: "3", total: "150.004", parking: 120, delivery: 30, extras: null, paid: "100", remaining: "50", owing_n: "1", status: "CHECKED_OUT", pro: "t", discount: "5" };
+    expect(mapFinanceAggRow(raw)).toEqual({ day: "2026-08-10", parkId: "pA", partnerId: null, partnerName: null, paymentMethod: "MB Way", campaignName: "Verão", discountCode: null, count: 3, total: 150, parking: 120, delivery: 30, extras: 0, paid: 100, remaining: 50, owingCount: 1, status: "CHECKED_OUT", pro: true, discount: 5 });
     const query = vi.fn(async () => [raw]) as any;
     expect(await readFinanceAgg({ kind: "delivered", ...range, parkIds: ["pA"] }, query)).toHaveLength(1);
   });
@@ -58,7 +74,7 @@ describe("financeiro ao vivo: parques, centros e campanha", () => {
     const m = buildOurParks(parks, matcher);
     expect([...m.entries()]).toEqual([["pA", 10], ["pB", null]]);
   });
-  const row = (o: Partial<FinanceAggRow>): FinanceAggRow => ({ day: "2026-08-10", parkId: "pA", partnerId: null, partnerName: null, paymentMethod: null, campaignName: null, discountCode: null, count: 1, total: 10, parking: 10, delivery: 0, extras: 0, paid: 10, remaining: 0, owingCount: 0, ...o });
+  const row = (o: Partial<FinanceAggRow>): FinanceAggRow => ({ day: "2026-08-10", parkId: "pA", partnerId: null, partnerName: null, paymentMethod: null, campaignName: null, discountCode: null, count: 1, total: 10, parking: 10, delivery: 0, extras: 0, paid: 10, remaining: 0, owingCount: 0, status: "CHECKED_OUT", pro: false, discount: 0, ...o });
   it("campanha: alias do parceiro, depois do método, senão nome do parceiro / código / campanha", () => {
     const aliases = new Map([["multipark_partner_id:p-1", "Agência X"], ["payment_method:parkvia", "Parkvia"]]);
     expect(campaignOf(row({ partnerId: "P-1" }), aliases)).toBe("Agência X");

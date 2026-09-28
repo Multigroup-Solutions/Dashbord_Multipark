@@ -92,20 +92,19 @@ export async function detectBookingAnomalies(day: string, trees: CityTree[]): Pr
   const db = await getDb();
   if (!db) return [];
   const from = addDays(day, -7 * HISTORY_WEEKS);
-  const r = lisbonDayRangeUtc(from, day);
-  const d = sql.raw(lisbonDaySql("`bookingCreatedAt`", from, day));
-  const partner = sql.raw("(CASE WHEN `partnerName` IS NOT NULL AND `partnerName` <> '' THEN 1 ELSE 0 END)");
-  const campaign = sql.raw("(CASE WHEN `campaign` IS NOT NULL AND `campaign` <> '' THEN 1 ELSE 0 END)");
-  const rows = rowsOf(await db.execute(sql`
-    SELECT ${d} AS day, parkName, city, projectId, origin, ${partner} AS hasPartner, ${campaign} AS hasCampaign, COUNT(*) AS n
-      FROM multipark_bookings
-     WHERE bookingCreatedAt >= ${r.start} AND bookingCreatedAt < ${r.end}
-       AND (status IS NULL OR status <> 'CANCELLED')
-     GROUP BY ${d}, parkName, city, projectId, origin, ${partner}, ${campaign}`));
-  const counts: BookingCountRow[] = rows.map((x) => ({
-    day: String(x.day).slice(0, 10), parkName: x.parkName ?? null, city: x.city ?? null, projectId: x.projectId == null ? null : Number(x.projectId),
-    origin: x.origin ?? null, hasPartner: Number(x.hasPartner ?? 0), hasCampaign: Number(x.hasCampaign ?? 0), n: Number(x.n ?? 0),
-  }));
+  // Reservas criadas (sem canceladas) AO VIVO da BD da Multipark, por dia × parque × origem.
+  const [{ loadMarketingBookings }, { loadLiveContext }] = await Promise.all([import("../marketingLive"), import("../finance/liveBookings")]);
+  const [bookings, ctx] = await Promise.all([loadMarketingBookings(from, day), loadLiveContext()]);
+  const agg = new Map<string, BookingCountRow>();
+  for (const b of bookings) {
+    const pk = ctx.parkInfo?.get(b.parkId);
+    const hasPartner = b.hasPartner ? 1 : 0, hasCampaign = b.campaign && b.campaign.trim() ? 1 : 0;
+    const k = JSON.stringify([b.day, b.parkId, b.origin, hasPartner, hasCampaign]);
+    const e = agg.get(k) ?? { day: b.day, parkName: pk?.name ?? null, city: pk?.city ?? null, projectId: b.projectId, origin: b.origin, hasPartner, hasCampaign, n: 0 };
+    e.n++;
+    agg.set(k, e);
+  }
+  const counts: BookingCountRow[] = [...agg.values()];
   const { parks, channels } = bookingSeries(counts, trees);
   const out: AnomalyRecord[] = [];
   const opts = { fillMissing: true, counts: true, minMagnitude: 5 };

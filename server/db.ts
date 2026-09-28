@@ -3231,140 +3231,62 @@ export async function diagnoseBilling(filters: {
   // Top bookings para o utilizador olhar
   topBookings: Array<{ id: number; externalId: string; bookingNumber: string | null; projectName: string | null; campaign: string | null; status: string | null; totalPrice: number; checkOut: string | null; cancelledAt: string | null }>;
 }> {
-  const db = await getDb();
-  if (!db) throw new Error("DB unavailable");
-
   let projectIds: number[] | null = null;
   if (filters.projectId) projectIds = await resolveProjectIds(filters.projectId);
-  const { deliveredConditions } = await import("./finance/engine");
-  const period = partnerCheckoutPeriod(filters.from, filters.to);
-  const countSum = { count: sql<number>`COUNT(*)`, sum: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)` };
-
-  // ── 1. tudo com saída no período (dia de Lisboa), qualquer estado ──
-  const [a1] = await db.select(countSum).from(multiparkBookings).where(and(...period));
-  // ── 2. + checkOut preenchido (redundante, mas mostra reservas sem data) ──
-  const [a2] = await db.select(countSum).from(multiparkBookings).where(and(...period, isNotNull(multiparkBookings.checkOut)));
-  // ── 3. + status = 'CHECKED_OUT' (receita realizada, sem filtro de centro) ──
-  const [a3] = await db.select(countSum).from(multiparkBookings).where(and(...deliveredConditions(filters.from, filters.to)));
-  // ── 4. + filtro de centro = EXATAMENTE o motor financeiro ──
-  const filteredConds: SQL[] = deliveredConditions(filters.from, filters.to, projectIds);
-  const [a4] = await db.select(countSum).from(multiparkBookings).where(and(...filteredConds));
-
-  // ── Duplicados ──
-  const distinctRow = await db
-    .select({
-      total: sql<number>`COUNT(*)`,
-      distinct: sql<number>`COUNT(DISTINCT ${multiparkBookings.externalId})`,
-    })
-    .from(multiparkBookings)
-    .where(and(...filteredConds));
-  const dup = distinctRow[0];
-
-  // Top duplicados (se houver)
-  const duplicates = await db
-    .select({
-      externalId: multiparkBookings.externalId,
-      count: sql<number>`COUNT(*)`,
-    })
-    .from(multiparkBookings)
-    .where(and(...filteredConds))
-    .groupBy(multiparkBookings.externalId)
-    .having(sql`COUNT(*) > 1`)
-    .orderBy(desc(sql`COUNT(*)`))
-    .limit(20);
-
-  // ── By project ──
-  const byProj = await db
-    .select({
-      projectId: multiparkBookings.projectId,
-      projectName: projects.name,
-      count: sql<number>`COUNT(*)`,
-      sum: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    })
-    .from(multiparkBookings)
-    .leftJoin(projects, eq(projects.id, multiparkBookings.projectId))
-    .where(and(...filteredConds))
-    .groupBy(multiparkBookings.projectId, projects.name)
-    .orderBy(desc(sql`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`));
-
-  // ── By campaign ──
-  const byCamp = await db
-    .select({
-      campaign: multiparkBookings.campaign,
-      count: sql<number>`COUNT(*)`,
-      sum: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    })
-    .from(multiparkBookings)
-    .where(and(...filteredConds))
-    .groupBy(multiparkBookings.campaign)
-    .orderBy(desc(sql`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`));
-
-  // ── By status ──
-  const byStatus = await db
-    .select({
-      status: multiparkBookings.status,
-      count: sql<number>`COUNT(*)`,
-      sum: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    })
-    .from(multiparkBookings)
-    .where(and(...filteredConds))
-    .groupBy(multiparkBookings.status);
-
-  // ── Cancelled (sem filtro de cancelledAt mas com resto igual) ──
-  const cancelConds: SQL[] = [...period, isNotNull(multiparkBookings.cancelledAt)];
-  if (projectIds) cancelConds.push(inArray(multiparkBookings.projectId, projectIds));
-  const [cancelled] = await db
-    .select({
-      count: sql<number>`COUNT(*)`,
-      sum: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    })
-    .from(multiparkBookings)
-    .where(and(...cancelConds));
-
-  // ── Top bookings por valor ──
-  const top = await db
-    .select({
-      id: multiparkBookings.id,
-      externalId: multiparkBookings.externalId,
-      bookingNumber: multiparkBookings.bookingNumber,
-      projectName: projects.name,
-      campaign: multiparkBookings.campaign,
-      status: multiparkBookings.status,
-      totalPrice: multiparkBookings.totalPrice,
-      checkOut: multiparkBookings.checkOut,
-      cancelledAt: multiparkBookings.cancelledAt,
-    })
-    .from(multiparkBookings)
-    .leftJoin(projects, eq(projects.id, multiparkBookings.projectId))
-    .where(and(...filteredConds))
-    .orderBy(desc(multiparkBookings.totalPrice))
-    .limit(20);
+  // AO VIVO da BD da Multipark (só os nossos parques) — as MESMAS leituras do
+  // motor financeiro (server/finance/liveBookings.ts).
+  const { loadLiveBookingAgg, loadLiveContext, parkIdsFor } = await import("./finance/liveBookings");
+  const { readTopDelivered } = await import("./multiparkDb/financeAgg");
+  const utc = lisbonDayRangeUtc(filters.from, filters.to);
+  const ctx = await loadLiveContext();
+  const filteredParks = parkIdsFor(ctx, projectIds);
+  const [anyStatus, delivered, deliveredFiltered, top] = await Promise.all([
+    loadLiveBookingAgg("checkout_any", utc),
+    loadLiveBookingAgg("delivered", utc),
+    loadLiveBookingAgg("delivered", utc, projectIds),
+    filteredParks.length ? readTopDelivered({ start: utc.start, end: utc.end, parkIds: filteredParks }) : Promise.resolve([]),
+  ]);
+  type Agg = (typeof anyStatus)[number];
+  const cs = (rows: Agg[]) => ({ count: rows.reduce((t, r) => t + r.count, 0), sum: rows.reduce((t, r) => t + r.total, 0) });
+  const groupBy = <K,>(rows: Agg[], key: (r: Agg) => K) => {
+    const m = new Map<K, { count: number; sum: number }>();
+    for (const r of rows) { const e = m.get(key(r)) ?? { count: 0, sum: 0 }; e.count += r.count; e.sum += r.total; m.set(key(r), e); }
+    return [...m.entries()].sort((a, b) => b[1].sum - a[1].sum);
+  };
+  const projNames = new Map<number, string>();
+  const pdb = await getDb();
+  if (pdb) for (const p of await pdb.select({ id: projects.id, name: projects.name }).from(projects)) projNames.set(p.id, p.name);
+  const nameOf = (pid: number | null) => (pid == null ? null : projNames.get(pid) ?? null);
+  const inFilter = (r: Agg) => !projectIds || (r.projectId != null && projectIds.includes(r.projectId));
+  const cancelled = cs(anyStatus.filter((r) => r.status === "CANCELLED" && inFilter(r)));
+  const periodAll = cs(anyStatus);
+  const f = cs(deliveredFiltered);
 
   return {
     range: { from: filters.from, to: filters.to },
     projectIds,
-    sumByCheckoutPeriod: { count: Number(a1?.count ?? 0), sum: Number(a1?.sum ?? 0) },
-    sumWithCheckoutNotNull: { count: Number(a2?.count ?? 0), sum: Number(a2?.sum ?? 0) },
-    sumExcludingCancelled: { count: Number(a3?.count ?? 0), sum: Number(a3?.sum ?? 0) },
-    sumWithProjectFilter: { count: Number(a4?.count ?? 0), sum: Number(a4?.sum ?? 0) },
-    rowsCount: Number(dup?.total ?? 0),
-    distinctExternalIds: Number(dup?.distinct ?? 0),
-    duplicatedExternalIds: duplicates.map((d) => ({ externalId: d.externalId, count: Number(d.count ?? 0) })),
-    byProject: byProj.map((p) => ({ projectId: p.projectId, projectName: p.projectName, count: Number(p.count ?? 0), sum: Number(p.sum ?? 0) })),
-    byCampaign: byCamp.map((c) => ({ campaign: c.campaign, count: Number(c.count ?? 0), sum: Number(c.sum ?? 0) })),
-    byStatus: byStatus.map((s) => ({ status: s.status, count: Number(s.count ?? 0), sum: Number(s.sum ?? 0) })),
-    cancelledCount: Number(cancelled?.count ?? 0),
-    cancelledSum: Number(cancelled?.sum ?? 0),
-    topBookings: top.map((t) => ({
-      id: t.id,
-      externalId: t.externalId,
-      bookingNumber: t.bookingNumber,
-      projectName: t.projectName,
-      campaign: t.campaign,
+    sumByCheckoutPeriod: periodAll,
+    sumWithCheckoutNotNull: periodAll,   // na BD da Multipark a saída é obrigatória
+    sumExcludingCancelled: cs(delivered),
+    sumWithProjectFilter: f,
+    rowsCount: f.count,
+    distinctExternalIds: f.count,          // leitura direta: sem cópias duplicadas
+    duplicatedExternalIds: [],
+    byProject: groupBy(deliveredFiltered, (r) => r.projectId).map(([projectId, v]) => ({ projectId, projectName: nameOf(projectId), ...v })),
+    byCampaign: groupBy(deliveredFiltered, (r) => r.campaign).map(([campaign, v]) => ({ campaign, ...v })),
+    byStatus: groupBy(anyStatus.filter(inFilter), (r) => r.status).map(([status, v]) => ({ status, ...v })),
+    cancelledCount: cancelled.count,
+    cancelledSum: cancelled.sum,
+    topBookings: top.map((t, i) => ({
+      id: i + 1,
+      externalId: t.id,
+      bookingNumber: t.code,
+      projectName: nameOf(ctx.ourParks.get(t.parkId) ?? null),
+      campaign: null,
       status: t.status,
-      totalPrice: Number(t.totalPrice ?? 0),
+      totalPrice: t.total,
       checkOut: t.checkOut,
-      cancelledAt: t.cancelledAt,
+      cancelledAt: null,
     })),
   };
 }
@@ -3372,22 +3294,27 @@ export async function diagnoseBilling(filters: {
 // Regras comuns às vistas de Parcerias (Análise, Resumo, detalhe por tipo):
 //  - só reservas CONCLUÍDAS (CHECKED_OUT) pela data de saída — a mesma regra da
 //    receita realizada no motor financeiro; canceladas e em curso ficam fora;
-//  - "tem parceiro" = campaign não nula E não vazia (linhas e totais iguais).
-const partnerBookingDone = () => sql`${multiparkBookings.status} = 'CHECKED_OUT'`;
-const bookingHasCampaign = () => sql`(${multiparkBookings.campaign} IS NOT NULL AND ${multiparkBookings.campaign} <> '')`;
-/** Saída no período de LISBOA (mesma janela do motor financeiro). */
-const partnerCheckoutPeriod = (from: string, to: string): SQL[] => {
-  const r = lisbonDayRangeUtc(from, to);
-  return [gte(multiparkBookings.checkOut, r.start), lt(multiparkBookings.checkOut, r.end)];
-};
-/** SUM(valor SEM IVA) com a taxa em vigor no dia (Lisboa) da saída — base das comissões. */
-async function netRevenueSumSql(from: string, to: string) {
-  const { resolveFinanceRates, rateCaseSql } = await import("./finance/rates");
-  const { FINANCE_PARAMS } = await import("./finance/rules");
-  const fr = await resolveFinanceRates(from, to);
-  const rate = rateCaseSql(sql`${multiparkBookings.checkOut}`, fr.vatPeriods, FINANCE_PARAMS.vatRate, (d) => lisbonDayRangeUtc(d).start);
-  return sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice} / (1 + ${rate})), 0)`;
+//  - "tem parceiro" = campanha não vazia (linhas e totais iguais).
+/**
+ * Reservas CONCLUÍDAS (CHECKED_OUT) com saída no período de Lisboa, AO VIVO da
+ * BD da Multipark (server/finance/liveBookings.ts — só os nossos parques, com
+ * centro e campanha), cortadas pelo âmbito de cidade do utilizador e pelo
+ * filtro de centro. `net` = valor sem IVA à taxa do dia da saída (a base das
+ * comissões), como o antigo netRevenueSumSql.
+ */
+async function livePartnerDelivered(from: string, to: string, projectIds?: number[]) {
+  const { loadLiveBookingAgg, loadLiveContext } = await import("./finance/liveBookings");
+  const { resolveFinanceRates } = await import("./finance/rates");
+  const scoped = scopedProjectIds();
+  let ids: number[] | undefined = projectIds;
+  if (scoped !== undefined) ids = ids ? ids.filter((id) => scoped.includes(id)) : scoped;
+  const [ctx, fr, rows] = await Promise.all([
+    loadLiveContext(), resolveFinanceRates(from, to), loadLiveBookingAgg("delivered", lisbonDayRangeUtc(from, to), ids),
+  ]);
+  return { ctx, rows: rows.map((r) => ({ ...r, net: r.total / (1 + fr.rates.vatOn(r.day)) })) };
 }
+const hasCampaign = (c: string | null | undefined) => !!c && c.trim() !== "";
+
 /** Comissão sobre a base do parceiro (SEM IVA por omissão; 'gross' = exceção). */
 const partnerCommissionAmount = (p: { commissionBase?: string | null }, rev: { revenue: number; revenueNet: number }, rate: number) =>
   ((p.commissionBase === "gross" ? rev.revenue : rev.revenueNet) * rate) / 100;
@@ -3399,58 +3326,41 @@ export async function getPartnershipAnalytics(filters: { from: string; to: strin
   let projectIds: number[] | undefined;
   if (filters.projectId) projectIds = await resolveProjectIds(filters.projectId);
 
-  // Base conditions: checkouts in period
-  const baseConds: any[] = [projectScope(multiparkBookings.projectId),
-    partnerBookingDone(),
-    isNotNull(multiparkBookings.checkOut),
-    ...partnerCheckoutPeriod(filters.from, filters.to),
-  ];
-  if (projectIds) baseConds.push(inArray(multiparkBookings.projectId, projectIds));
+  // Reservas concluídas no período, AO VIVO da BD da Multipark.
+  const { ctx, rows } = await livePartnerDelivered(filters.from, filters.to, projectIds);
+  const parkOf = (id: string) => ctx.parkInfo?.get(id) ?? { name: null as string | null, city: null as string | null };
 
-  // 1. Partner bookings (campaign preenchida = veio de parceiro/afiliado)
-  const partnerRows = await db
-    .select({
-      campaign: multiparkBookings.campaign,
-      city: multiparkBookings.city,
-      parkName: multiparkBookings.parkName,
-      count: sql<number>`COUNT(*)`,
-      totalRevenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-      avgPrice: sql<number>`COALESCE(AVG(${multiparkBookings.totalPrice}), 0)`,
-      totalDiscount: sql<number>`COALESCE(SUM(${multiparkBookings.discount}), 0)`,
-    })
-    .from(multiparkBookings)
-    .where(and(...baseConds, bookingHasCampaign()))
-    .groupBy(multiparkBookings.campaign, multiparkBookings.city, multiparkBookings.parkName);
+  // 1. Reservas de parceiro (campanha preenchida = veio de parceiro/afiliado), por campanha × cidade × parque
+  const byPartner = new Map<string, { campaign: string | null; city: string | null; parkName: string | null; count: number; totalRevenue: number; totalDiscount: number }>();
+  for (const r of rows) {
+    if (!hasCampaign(r.campaign)) continue;
+    const pk = parkOf(r.parkId);
+    const k = JSON.stringify([r.campaign, pk.city, pk.name]);
+    const e = byPartner.get(k) ?? { campaign: r.campaign, city: pk.city, parkName: pk.name, count: 0, totalRevenue: 0, totalDiscount: 0 };
+    e.count += r.count; e.totalRevenue += r.total; e.totalDiscount += r.discount;
+    byPartner.set(k, e);
+  }
+  const partnerRows = [...byPartner.values()].map((e) => ({ ...e, avgPrice: e.count ? e.totalRevenue / e.count : 0 }));
 
-  // 2. All bookings for totals (partner vs direct)
-  //    (somas condicionais sem GROUP BY: agrupar por uma expressão CASE
-  //    falha no MariaDB com ONLY_FULL_GROUP_BY)
-  const [allTotals] = await db
-    .select({
-      partnerCount: sql<number>`COALESCE(SUM(CASE WHEN ${bookingHasCampaign()} THEN 1 ELSE 0 END), 0)`,
-      partnerRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${bookingHasCampaign()} THEN ${multiparkBookings.totalPrice} ELSE 0 END), 0)`,
-      count: sql<number>`COUNT(*)`,
-      totalRevenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    })
-    .from(multiparkBookings)
-    .where(and(...baseConds));
+  // 2. Totais (parceiro vs direto)
+  const allTotals = {
+    partnerCount: rows.filter((r) => hasCampaign(r.campaign)).reduce((t, r) => t + r.count, 0),
+    partnerRevenue: rows.filter((r) => hasCampaign(r.campaign)).reduce((t, r) => t + r.total, 0),
+    count: rows.reduce((t, r) => t + r.count, 0),
+    totalRevenue: rows.reduce((t, r) => t + r.total, 0),
+  };
 
-  // 3. Reservas Pro — usa a coluna `pro` explícita da API (o antigo
-  // JSON_EXTRACT de park.isPro media "o PARQUE aceita Pro", não "a reserva
-  // é Pro" — inflacionava os números).
-  const proRows = await db
-    .select({
-      parkName: multiparkBookings.parkName,
-      city: multiparkBookings.city,
-      count: sql<number>`COUNT(*)`,
-      totalRevenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    })
-    .from(multiparkBookings)
-    .where(and(
-      ...baseConds,
-      eq(multiparkBookings.pro, 1),
-    ))
-    .groupBy(multiparkBookings.parkName, multiparkBookings.city);
+  // 3. Reservas Pro (a reserva é Pro — "Booking".pro), por parque × cidade
+  const byPro = new Map<string, { parkName: string | null; city: string | null; count: number; totalRevenue: number }>();
+  for (const r of rows) {
+    if (!r.pro) continue;
+    const pk = parkOf(r.parkId);
+    const k = JSON.stringify([pk.name, pk.city]);
+    const e = byPro.get(k) ?? { parkName: pk.name, city: pk.city, count: 0, totalRevenue: 0 };
+    e.count += r.count; e.totalRevenue += r.total;
+    byPro.set(k, e);
+  }
+  const proRows = [...byPro.values()];
 
   // Calculate totals
   const partnerBookings = Number(allTotals?.partnerCount ?? 0), partnerRevenue = Number(allTotals?.partnerRevenue ?? 0);
@@ -3536,9 +3446,6 @@ export async function getPartnerInvoicingSummary(filters: {
   // Avenças são globais (sem cidade): só se mostram sem filtro/limite de cidade.
   const billingAvailable = scopedProjectIds() === undefined && !filters.projectId;
   const projectIds = filters.projectId ? await resolveProjectIds(filters.projectId) : undefined;
-  const projectFilter = projectIds ? inArray(multiparkBookings.projectId, projectIds) : undefined;
-  const period = partnerCheckoutPeriod(filters.from, filters.to);
-  const revenueNetSql = await netRevenueSumSql(filters.from, filters.to);
   const { partnerFeeForPeriod } = await import("../shared/partnerRules");
 
   // 1) Parcerias (com filtro opcional de tipo). Inclui notes para extrair
@@ -3566,25 +3473,16 @@ export async function getPartnerInvoicingSummary(filters: {
   const { loadPartnerIndex, partnerForCampaign } = await import("./finance/partners");
   const { index: partnerIndex } = await loadPartnerIndex(db);
 
-  // 3) Reservas concluídas (checkout no período), agrupadas por campaign
-  const bookingRows = await db
-    .select({
-      campaign: multiparkBookings.campaign,
-      bookingsCount: sql<number>`COUNT(*)`,
-      revenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-      revenueNet: revenueNetSql,
-    })
-    .from(multiparkBookings)
-    .where(
-      and(
-        bookingHasCampaign(),
-        partnerBookingDone(),
-        projectScope(multiparkBookings.projectId),
-        projectFilter,
-        ...period,
-      ),
-    )
-    .groupBy(multiparkBookings.campaign);
+  // 3) Reservas concluídas (checkout no período), AO VIVO da BD da Multipark, por campanha
+  const { rows: liveRows } = await livePartnerDelivered(filters.from, filters.to, projectIds);
+  const byCampaign = new Map<string, { campaign: string; bookingsCount: number; revenue: number; revenueNet: number }>();
+  for (const r of liveRows) {
+    if (!hasCampaign(r.campaign)) continue;
+    const e = byCampaign.get(r.campaign!) ?? { campaign: r.campaign!, bookingsCount: 0, revenue: 0, revenueNet: 0 };
+    e.bookingsCount += r.count; e.revenue += r.total; e.revenueNet += r.net;
+    byCampaign.set(r.campaign!, e);
+  }
+  const bookingRows = [...byCampaign.values()];
 
   // 4) Acumula bookings por parceiro
   const bookingsByPartner = new Map<number, { count: number; revenue: number; revenueNet: number }>();
@@ -3626,24 +3524,11 @@ export async function getPartnerInvoicingSummary(filters: {
     }
 
     if (expanded.size > 0) {
-      const opBookings = await db
-        .select({
-          projectId: multiparkBookings.projectId,
-          count: sql<number>`COUNT(*)`,
-          revenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-          revenueNet: revenueNetSql,
-        })
-        .from(multiparkBookings)
-        .where(
-          and(
-            partnerBookingDone(),
-            projectScope(multiparkBookings.projectId),
-            projectFilter,
-            ...period,
-            inArray(multiparkBookings.projectId, Array.from(expanded)),
-          ),
-        )
-        .groupBy(multiparkBookings.projectId);
+      const opBookings = [...liveRows.filter((r) => r.projectId != null && expanded.has(r.projectId)).reduce((m, r) => {
+        const e = m.get(r.projectId!) ?? { projectId: r.projectId, count: 0, revenue: 0, revenueNet: 0 };
+        e.count += r.count; e.revenue += r.total; e.revenueNet += r.net;
+        return m.set(r.projectId!, e);
+      }, new Map<number, { projectId: number | null; count: number; revenue: number; revenueNet: number }>()).values()];
 
       const revenueByProject = new Map<number, { count: number; revenue: number; revenueNet: number }>();
       for (const r of opBookings) {
@@ -3772,10 +3657,7 @@ export async function getPartnerInvoicingDetailByType(filters: {
   const db = await getDb();
   if (!db) return { partnerType: filters.partnerType, partners: [] };
 
-  const period = partnerCheckoutPeriod(filters.from, filters.to);
-  const revenueNetSql = await netRevenueSumSql(filters.from, filters.to);
   const projectIds = filters.projectId ? await resolveProjectIds(filters.projectId) : undefined;
-  const projectFilter = projectIds ? inArray(multiparkBookings.projectId, projectIds) : undefined;
 
   const { parsePartnerConfig } = await import("../shared/partnerTypes");
   const { partnerFeeForPeriod } = await import("../shared/partnerRules");
@@ -3800,28 +3682,10 @@ export async function getPartnerInvoicingDetailByType(filters: {
   const { loadPartnerIndex, partnerForCampaign } = await import("./finance/partners");
   const { index: partnerIndex } = await loadPartnerIndex(db);
 
-  // Reservas concluídas (CHECKED_OUT) agrupadas por campaign (campanha → parceiro).
-  const bookingRows = await db
-    .select({
-      campaign: multiparkBookings.campaign,
-      projectId: multiparkBookings.projectId,
-      count: sql<number>`COUNT(*)`,
-      revenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-      revenueNet: revenueNetSql,
-      discount: sql<number>`COALESCE(SUM(${multiparkBookings.discount}), 0)`,
-      extras: sql<number>`COALESCE(SUM(${multiparkBookings.extrasTotal}), 0)`,
-    })
-    .from(multiparkBookings)
-    .where(
-      and(
-        bookingHasCampaign(),
-        partnerBookingDone(),
-        projectScope(multiparkBookings.projectId),
-        projectFilter,
-        ...period,
-      ),
-    )
-    .groupBy(multiparkBookings.campaign, multiparkBookings.projectId);
+  // Reservas concluídas (CHECKED_OUT), AO VIVO da BD da Multipark, por campanha (campanha → parceiro).
+  const { rows: liveRows } = await livePartnerDelivered(filters.from, filters.to, projectIds);
+  const bookingRows = liveRows.filter((r) => hasCampaign(r.campaign))
+    .map((r) => ({ campaign: r.campaign, count: r.count, revenue: r.total, revenueNet: r.net, discount: r.discount, extras: r.extras }));
 
   const byPartner = new Map<number, { count: number; revenue: number; revenueNet: number; discount: number; extras: number }>();
   for (const b of bookingRows) {
@@ -3849,22 +3713,8 @@ export async function getPartnerInvoicingDetailByType(filters: {
         for (const pid of ids) expanded.add(pid);
       }
       if (expanded.size === 0) continue;
-      const rows = await db
-        .select({
-          count: sql<number>`COUNT(*)`,
-          revenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-          revenueNet: revenueNetSql,
-        })
-        .from(multiparkBookings)
-        .where(
-          and(
-            partnerBookingDone(),
-            projectScope(multiparkBookings.projectId),
-            projectFilter,
-            ...period,
-            inArray(multiparkBookings.projectId, Array.from(expanded)),
-          ),
-        );
+      const covered = liveRows.filter((r) => r.projectId != null && expanded.has(r.projectId));
+      const rows = [{ count: covered.reduce((t, r) => t + r.count, 0), revenue: covered.reduce((t, r) => t + r.total, 0), revenueNet: covered.reduce((t, r) => t + r.net, 0) }];
       operationalRevenueByPartner.set(p.id, {
         count: Number(rows[0]?.count ?? 0),
         revenue: Number(rows[0]?.revenue ?? 0),

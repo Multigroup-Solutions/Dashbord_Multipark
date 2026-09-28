@@ -32,11 +32,16 @@ export interface LiveBookingAgg {
   paid: number;
   remaining: number;
   owingCount: number;
+  status: string | null;
+  pro: boolean;
+  discount: number;
 }
 
 export interface LiveContext {
   /** parques nossos: id → centro (null = sem centro) */
   ourParks: Map<string, number | null>;
+  /** nome e cidade dos parques nossos (Parcerias mostra por parque) */
+  parkInfo?: Map<string, { name: string; city: string | null }>;
   /** "multipark_partner_id:<id>" / "payment_method:<método>" → nome do parceiro */
   aliases: Map<string, string>;
 }
@@ -73,6 +78,7 @@ export function toLiveBookingAgg(rows: FinanceAggRow[], ctx: LiveContext): LiveB
       day: r.day, projectId: ctx.ourParks.get(r.parkId) ?? null, parkId: r.parkId, campaign: campaignOf(r, ctx.aliases),
       paymentMethod: r.paymentMethod, count: r.count, total: r.total, parking: r.parking, delivery: r.delivery,
       extras: r.extras, paid: r.paid, remaining: r.remaining, owingCount: r.owingCount,
+      status: r.status, pro: r.pro, discount: r.discount,
     });
   }
   return out;
@@ -110,7 +116,9 @@ export async function loadLiveContext(): Promise<LiveContext> {
   ]);
   const [parks, projects, aliases] = await Promise.all([readParks(), getProjects(), loadAliases()]);
   const matcher = createParkMatcher(projects as any, PARK_CONFIGS);
-  const ctx: LiveContext = { ourParks: buildOurParks(parks, matcher), aliases };
+  const ourParks = buildOurParks(parks, matcher);
+  const parkInfo = new Map(parks.filter((p) => ourParks.has(p.id)).map((p) => [p.id, { name: p.name, city: p.city }]));
+  const ctx: LiveContext = { ourParks, parkInfo, aliases };
   ctxCache = { at: Date.now(), ctx };
   return ctx;
 }
@@ -121,13 +129,19 @@ export async function loadLiveContext(): Promise<LiveContext> {
  * centro e campanha. `projectIds` filtra pelo centro (sem centro fica fora,
  * como antes). Lança se a BD da Multipark não responder.
  */
-export async function loadLiveBookingAgg(kind: FinanceAggKind, range: { start: string; end: string; todayStart?: string }, projectIds?: number[] | null): Promise<LiveBookingAgg[]> {
-  const ctx = await loadLiveContext();
+/** Parques nossos cortados pelo filtro de centro (sem centro fica fora quando há filtro). PURA. */
+export function parkIdsFor(ctx: LiveContext, projectIds?: number[] | null): string[] {
   let parkIds = [...ctx.ourParks.keys()];
   if (projectIds) {
     const set = new Set(projectIds);
     parkIds = parkIds.filter((id) => { const pid = ctx.ourParks.get(id); return pid != null && set.has(pid); });
   }
+  return parkIds;
+}
+
+export async function loadLiveBookingAgg(kind: FinanceAggKind, range: { start: string; end: string; todayStart?: string }, projectIds?: number[] | null): Promise<LiveBookingAgg[]> {
+  const ctx = await loadLiveContext();
+  const parkIds = parkIdsFor(ctx, projectIds);
   if (!parkIds.length) return [];
   const { readFinanceAgg } = await import("../multiparkDb/financeAgg");
   const rows = await readFinanceAgg({ kind, start: range.start, end: range.end, todayStart: range.todayStart, parkIds });
