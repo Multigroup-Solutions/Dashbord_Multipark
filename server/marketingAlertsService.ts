@@ -59,15 +59,11 @@ export async function computeAlertsFor(projectId?: number) {
   ]);
   // Reservas ligadas por campanha (ID externo) na janela — mesma regra de cancelada/dia.
   const byExt = new Map<string, number>();
-  const proj = projectIds ? (projectIds.length ? sql` AND b.projectId IN (${sql.join(projectIds.map((id) => sql`${id}`), sql`, `)})` : sql` AND 1 = 0`) : sql``;
-  const raw: any = await db.execute(sql`
-    SELECT b.adCampaignExternalId AS ext, COUNT(*) AS n FROM multipark_bookings b
-    WHERE b.adAttribution IN ('google_paid', 'meta_paid') AND b.adCampaignExternalId IS NOT NULL
-      AND ${notCancelledSql(sql`b.status`)}
-      AND ${inLisbonDaysSql(sql`b.bookingCreatedAt`, windowFrom, today)}
-      AND ${projectScope(sql`b.projectId`)}${proj}
-    GROUP BY b.adCampaignExternalId`);
-  for (const r of rowsOf<any>(raw)) byExt.set(String(r.ext), Number(r.n ?? 0));
+  // Reservas AO VIVO da BD da Multipark (server/marketingLive.ts).
+  const { loadMarketingBookings } = await import("./marketingLive");
+  for (const b of await loadMarketingBookings(windowFrom, today, projectIds)) {
+    if ((b.adAttribution === "google_paid" || b.adAttribution === "meta_paid") && b.adCampaignExternalId) byExt.set(b.adCampaignExternalId, (byExt.get(b.adCampaignExternalId) ?? 0) + 1);
+  }
   const windowCampaigns = win.byCampaign.filter((c) => c.source === "api").map((c) => ({
     name: String(c.name), accountName: c.accountName ?? null, cost: Number(c.cost ?? 0), conversions: Number(c.conversions ?? 0),
     attributedBookings: c.externalId ? byExt.get(c.externalId) ?? 0 : 0,

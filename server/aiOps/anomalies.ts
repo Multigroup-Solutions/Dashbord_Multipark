@@ -204,16 +204,14 @@ export async function detectMarketingAnomalies(day: string): Promise<AnomalyReco
        AND m.date >= ${from} AND m.date <= ${day}
      GROUP BY DATE_FORMAT(m.date, '%Y-%m-%d'), m.provider`));
   if (!spendRows.length) return [];
-  const r = lisbonDayRangeUtc(from, day);
-  const d = sql.raw(lisbonDaySql("`bookingCreatedAt`", from, day));
-  const revRows = rowsOf(await db.execute(sql`
-    SELECT ${d} AS day, adAttribution AS attribution, COALESCE(SUM(totalPrice), 0) AS revenue
-      FROM multipark_bookings
-     WHERE bookingCreatedAt >= ${r.start} AND bookingCreatedAt < ${r.end}
-       AND (status IS NULL OR status <> 'CANCELLED')
-       AND adAttribution IN ('google_paid', 'meta_paid')
-     GROUP BY ${d}, adAttribution`));
-  const rev = new Map(revRows.map((x) => [`${String(x.day).slice(0, 10)}|${x.attribution === "meta_paid" ? "meta" : "google_ads"}`, Number(x.revenue ?? 0)]));
+  // Receita atribuída por dia AO VIVO da BD da Multipark (server/marketingLive.ts).
+  const { loadMarketingBookings } = await import("../marketingLive");
+  const rev = new Map<string, number>();
+  for (const b of await loadMarketingBookings(from, day)) {
+    if (b.adAttribution !== "google_paid" && b.adAttribution !== "meta_paid") continue;
+    const k = `${b.day}|${b.adAttribution === "meta_paid" ? "meta" : "google_ads"}`;
+    rev.set(k, (rev.get(k) ?? 0) + b.total);
+  }
   const rows: MarketingDayRow[] = spendRows.map((x) => ({
     day: String(x.day), provider: String(x.provider), spend: Number(x.cost ?? 0) / 1_000_000,
     revenue: rev.get(`${String(x.day)}|${String(x.provider)}`) ?? 0,
