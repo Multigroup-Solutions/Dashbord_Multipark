@@ -2,7 +2,7 @@
 modulo: reservas_operacoes
 titulo: Ficha da reserva
 rotas: /reserva
-palavras: ficha da reserva, detalhe da reserva, estado da reserva, fases, check-in, check-out, voo, ETA, vídeo, assinatura, anexos, histórico, linha do tempo, GPS, lugar, garagem, alocação, caixa, pagamentos, fatura, cancelamento, reembolso, serviços extra, chat, emails, ocorrências, avaliação, marketplace, parceiro, direto, canal, agência, agregador, parque nosso
+palavras: ficha da reserva, detalhe da reserva, estado da reserva, fases, check-in, check-out, voo, ETA, vídeo, assinatura, anexos, histórico, linha do tempo, GPS, lugar, garagem, alocação, caixa, pagamentos, fatura, cancelamento, reembolso, serviços extra, chat, emails, ocorrências, avaliação, marketplace, parceiro, direto, canal, agência, agregador, parque nosso, conferência, era, é, webhook, preço mudou, correção de caixa
 ---
 # Ficha da reserva
 
@@ -22,6 +22,7 @@ Tudo sobre uma reserva num só sítio, lido **em tempo real** da base de dados d
 - **Linha do tempo** (abre ao clicar): cada ação sobre a reserva, com quem, quando, em que aparelho, o que mudou (**antes → depois**) e o estado nesse momento. Quando a ação tem GPS aparece o link **mapa**. O percurso real dos condutores está nos dados do Zello. O histórico da Multipark só existe desde 2 mar 2026.
 - **Onde está o carro**: n.º, alocação, garagem (com o mapa, se existir) e lugar.
 - **Contas**: as linhas da conta (estacionamento, valet, serviços, taxas, descontos), cada pagamento com a hora e o método, as faturas (InvoiceExpress, emitida ou não), o cancelamento com o motivo e o reembolso, e a caixa: condutor validou, dinheiro conferido e caixa fechada, com quem e quando.
+- **Conferência (era / é)** (abre ao clicar; só para quem tem a Faturação e vê os totais financeiros): lado a lado, o **1.º webhook**, o **último webhook** e a **Multipark agora** para o estado, entrada e saída, preço, preço original, soma das linhas, pago, pagamentos, métodos, origem do pagamento, desconto, campanha, parceiro (devido e pago), pro e caixa. O que mudou fica a vermelho. Por cima, as divergências com o motivo (as mesmas da **Faturação → Correção de caixa**). Por baixo, os webhooks recebidos e as alterações de dinheiro da História da Multipark (quem, quando, **antes → depois**). Hoje o webhook só traz o estado, as datas, o preço e o método: os outros campos aparecem como "não vem no webhook". O "era" só existe para reservas com webhooks desde 28 set 2026.
 - **Serviços extra**: nome, preço, se já foi feito e o preço da tabela do parque quando é diferente.
 - **Comunicação** (abre ao clicar): o chat da app com o cliente e os emails enviados pela app Multipark.
 - **Ocorrências e avaliação**: as ocorrências registadas na app para esta reserva (abrem em Ocorrências) e a avaliação do cliente.

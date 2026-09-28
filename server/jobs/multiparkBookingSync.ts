@@ -300,7 +300,14 @@ export async function applyBookingDetail(db: SyncDb, externalId: string, detaile
 }
 
 /** Enriquecimento só volta a rodar semanalmente em reservas vivas: não
- *  terminadas, ou com check-out há menos de ROTATION_MAX_AGE_DAYS dias. */
+ *  terminadas, ou com check-out há menos de ROTATION_MAX_AGE_DAYS dias.
+ *
+ *  Caixa (28 set 2026): esta releitura reescreve os valores de dinheiro de
+ *  `multipark_bookings`, que é só "o último valor" para o Financeiro, a
+ *  Caixa, o CRM e o Marketing (que ainda a leem). NÃO é histórico: a memória
+ *  do que a Multipark disse é `multipark_webhook_snapshots` (só acréscimo,
+ *  server/webhookMemory.ts) e a verdade atual é a BD da Multipark ao vivo.
+ *  A releitura sai quando esses módulos passarem a ler a BD da Multipark. */
 const ROTATION_MAX_AGE_DAYS = 30;
 const TERMINAL_STATUSES_SQL = sql`('CHECKED_OUT', 'CANCELLED')`;
 /** Código guardado quando o parque está fechado: não volta a ser agendado. */

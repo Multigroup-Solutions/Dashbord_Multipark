@@ -1,0 +1,276 @@
+/**
+ * tRPC — Conferência de caixa (era / é), SÓ A PEDIDO.
+ *
+ * "Era" = memória do webhook (`multipark_webhook_snapshots`, na nossa BD, só
+ * acréscimo). "É" = BD da Multipark ao vivo. Nada corre sozinho: cada
+ * comparação é feita quando alguém a pede (ficha da reserva ou Faturação →
+ * "Correção de caixa"). Só leitura; não abre casos nem grava nada.
+ *
+ * Acesso: a porta da Faturação → Caixa (módulo "faturacao" ver + totais
+ * financeiros), ver server/cashCheck/access.ts. Âmbito de cidade por
+ * Park.city em todas as leituras da Multipark.
+ *
+ * Orçamento (Vercel 60 s): a página do dia lê no máximo 200 saídas por
+ * pedido (paginado por id); a "só na memória" lê no máximo 300 reservas.
+ */
+import { z } from "zod";
+import { TRPCError } from "@trpc/server";
+import { protectedProcedure, router } from "./_core/trpc";
+import { requireAccess } from "./_core/access";
+import { scopedCityNames } from "./bookingFileRouter";
+import { cashCheckAllowed } from "./cashCheck/access";
+import {
+  compareBooking, eraRows, memoryMoments, worstSeverity, severityRank, expectedAmount, paidAmount,
+  MONEY_HISTORY_FIELDS, type Divergence, type LiveFinance,
+} from "./cashCheck/rules";
+import type { MemorySnapshot } from "./webhookMemory";
+
+const DAY = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+export const ONLY_MEMORY_MAX = 300;
+
+async function permissionOverrides(userId: number): Promise<Record<string, string>> {
+  try {
+    const { getUserPermissionOverrides } = await import("./db");
+    return await getUserPermissionOverrides(userId);
+  } catch {
+    return {};
+  }
+}
+
+/** Porta: Faturação (ver) + totais financeiros. */
+export async function requireCashCheck(user: { id: number; role: string }) {
+  requireAccess(user, "faturacao", "view");
+  if (!cashCheckAllowed(user, await permissionOverrides(user.id))) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para ver totais financeiros." });
+  }
+}
+
+type Unavailable = { available: false; reason: string };
+
+function snapshotOut(s: MemorySnapshot) {
+  return {
+    id: s.id, eventType: s.eventType, receivedAt: s.receivedAt, sourceUpdatedAt: s.sourceUpdatedAt, status: s.status,
+    checkIn: s.checkIn, checkOut: s.checkOut, bookingPrice: s.bookingPrice, paymentMethod: s.paymentMethod,
+  };
+}
+
+export interface DayDivergentRow {
+  id: string;
+  code: string | null;
+  parkId: string | null;
+  parkName: string | null;
+  status: string | null;
+  checkOut: string | null;
+  webhooks: number;
+  priceFirst: number | null;
+  priceCheckin: number | null;
+  priceLast: number | null;
+  priceNow: number | null;
+  expected: number | null;
+  paid: number | null;
+  methodEra: string | null;
+  methodNow: string | null;
+  paymentMethods: string[];
+  cashierClosed: boolean;
+  severity: Divergence["severity"] | null;
+  divergences: Divergence[];
+}
+
+/** Linha da lista "Correção de caixa". PURA. */
+export function dayRow(live: LiveFinance | null, memory: readonly MemorySnapshot[], divergences: Divergence[], fallback?: { id: string; parkName?: string | null }): DayDivergentRow {
+  const m = memoryMoments(memory);
+  return {
+    id: live?.id ?? fallback?.id ?? m.last?.bookingId ?? "",
+    code: live?.code ?? null,
+    parkId: live?.parkId ?? m.last?.parkId ?? null,
+    parkName: live?.parkName ?? fallback?.parkName ?? null,
+    status: live?.status ?? m.last?.status ?? null,
+    checkOut: live?.checkOut ?? m.last?.checkOut ?? null,
+    webhooks: m.count,
+    priceFirst: m.first?.bookingPrice ?? null,
+    priceCheckin: m.checkin?.bookingPrice ?? null,
+    priceLast: m.last?.bookingPrice ?? null,
+    priceNow: live?.bookingPrice ?? null,
+    expected: live ? expectedAmount(live) : null,
+    paid: live ? paidAmount(live) : null,
+    methodEra: m.lastMethod,
+    methodNow: live?.paymentMethod ?? null,
+    paymentMethods: live?.paymentMethods ?? [],
+    cashierClosed: live?.cashierClosed.done ?? false,
+    severity: worstSeverity(divergences),
+    divergences,
+  };
+}
+
+/** A última saída que a memória conhece (último retrato com saída). PURA. */
+export function memoryCheckout(memory: readonly MemorySnapshot[]): string | null {
+  const withOut = [...memory].filter((s) => s.checkOut).sort((a, b) => (a.receivedAt ?? "").localeCompare(b.receivedAt ?? "") || a.id - b.id);
+  return withOut.length ? withOut[withOut.length - 1].checkOut : null;
+}
+
+/** "Só na memória": motivo com o que a Multipark diz agora. PURA. */
+export function onlyMemoryDivergence(live: LiveFinance | null, memCount: number, ctx: { startMs: number; endMs: number; allowedParkIds: ReadonlySet<string> }): Divergence | null {
+  if (!live) {
+    return { code: "only_memory", severity: "medium", label: "Só na memória do webhook", detail: `A memória tem ${memCount} webhook(s) com saída neste dia, mas a Multipark já não devolve a reserva (apagada ou fora das tuas cidades).` };
+  }
+  const outMs = live.checkOut ? Date.parse(live.checkOut) : NaN;
+  const inDay = Number.isFinite(outMs) && outMs >= ctx.startMs && outMs < ctx.endMs;
+  const inParks = live.parkId != null && ctx.allowedParkIds.has(live.parkId);
+  if (inDay && inParks) return null; // está na lista do dia: comparada lá
+  const why = [
+    !inDay ? `a saída agora é ${live.checkOut ? live.checkOut.slice(0, 16).replace("T", " ") + " UTC" : "sem data"}` : null,
+    !inParks ? `o parque agora é ${live.parkName ?? live.parkId ?? "?"}` : null,
+    live.status ? `estado ${live.status}` : null,
+  ].filter(Boolean).join("; ");
+  return { code: "only_memory", severity: "medium", label: "Só na memória do webhook", detail: `O webhook deu saída neste dia, mas na Multipark ${why}.` };
+}
+
+export const cashCheckRouter = router({
+  /** Pode ver a conferência? (para a ficha mostrar ou esconder a secção) */
+  access: protectedProcedure.query(async ({ ctx }) => {
+    try {
+      await requireCashCheck(ctx.user);
+      return { allowed: true };
+    } catch {
+      return { allowed: false };
+    }
+  }),
+
+  /** Parques do âmbito (para escolher na "Correção de caixa"). */
+  parks: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx }) => {
+    await requireCashCheck(ctx.user);
+    const { getMultiparkParkClassification } = await import("./multiparkDb/dayBookings");
+    const r = await getMultiparkParkClassification(scopedCityNames());
+    if (!r.available) return { available: false as const, reason: r.reason };
+    return {
+      available: true as const,
+      parks: r.data.parks.map((p) => ({ id: p.id, name: p.name, city: p.cityName, ours: p.ours, groupLabel: p.groupLabel })),
+    };
+  }),
+
+  /** Ficha da reserva → "Conferência (era / é)". */
+  booking: protectedProcedure.input(z.object({ id: z.string().trim().min(1).max(64), projectId: z.number().optional() })).query(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    const cities = scopedCityNames();
+    const { safeMultiparkRead } = await import("./multiparkDb/read");
+    const { readLiveFinanceByIds } = await import("./multiparkDb/cashCheck");
+    const { getBookingFileTimeline } = await import("./multiparkDb/bookingFile");
+    const { listMemoryForBookings } = await import("./webhookMemory");
+
+    const liveR = await safeMultiparkRead("caixa/reserva", async () => (await readLiveFinanceByIds([input.id], cities))[0] ?? null);
+    let memory: MemorySnapshot[] = [];
+    let memoryError: string | null = null;
+    try {
+      memory = (await listMemoryForBookings([input.id])).get(input.id) ?? [];
+    } catch {
+      memoryError = "Não foi possível ler a memória do webhook (BD do dashboard).";
+    }
+    const live = liveR.available ? liveR.data : null;
+    // Âmbito: sem a reserva confirmada nas cidades da pessoa, não se mostra a memória.
+    if (cities !== undefined && !live) memory = [];
+
+    const tl = await getBookingFileTimeline(input.id, cities);
+    const history = tl.available
+      ? tl.data.entries
+        .map((e) => ({ id: e.id, at: e.at, who: e.who, kindLabel: e.kindLabel, platform: e.platform, source: e.source, changes: e.changes.filter((c) => MONEY_HISTORY_FIELDS.has(c.field)) }))
+        .filter((e) => e.changes.length > 0)
+      : [];
+
+    return {
+      live: liveR.available ? (live ? { available: true as const, found: true as const, data: live } : { available: true as const, found: false as const }) : ({ available: false, reason: liveR.reason } as Unavailable),
+      memory: memory.map(snapshotOut),
+      memoryError,
+      rows: eraRows(memory, live),
+      divergences: liveR.available ? compareBooking(memory, live) : [],
+      history,
+      historyUnavailable: tl.available ? null : tl.reason,
+    };
+  }),
+
+  /**
+   * Faturação → "Correção de caixa": parque(s) + dia de Lisboa. Compara as
+   * saídas desse dia (memória vs Multipark ao vivo) e devolve SÓ as
+   * divergências. Paginado: `cursor` = último id da página anterior.
+   */
+  day: protectedProcedure.input(z.object({
+    parkIds: z.array(z.string().trim().min(1).max(128)).min(1).max(100),
+    day: DAY,
+    cursor: z.string().max(128).nullable().optional(),
+    pageSize: z.number().int().min(10).max(200).optional(),
+    projectId: z.number().optional(),
+  })).query(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    const cities = scopedCityNames();
+    const { safeMultiparkRead } = await import("./multiparkDb/read");
+    const { lisbonDayBounds, buildParksSql, mapParks } = await import("./multiparkDb/dayBookings");
+    const { multiparkDbQuery } = await import("./multiparkDb/client");
+    const { readLiveCheckoutPage, readLiveFinanceByIds } = await import("./multiparkDb/cashCheck");
+    const { listMemoryForBookings, listMemoryBookingIdsByCheckout } = await import("./webhookMemory");
+    const bounds = lisbonDayBounds(input.day);
+
+    const r = await safeMultiparkRead("caixa/dia", async () => {
+      const ps = buildParksSql();
+      const inScope = mapParks(await multiparkDbQuery(ps.sql, ps.params), cities);
+      const wanted = new Set(input.parkIds);
+      const parks = inScope.filter((p) => wanted.has(p.id));
+      if (!parks.length) return { parks: [], page: { rows: [] as LiveFinance[], nextCursor: null as string | null }, onlyMemoryLive: null as LiveFinance[] | null, onlyMemoryIds: [] as string[] };
+      const parkIds = parks.map((p) => p.id);
+      const page = await readLiveCheckoutPage(bounds, parkIds, input.cursor ?? null, input.pageSize ?? 100, cities);
+      // "Só na memória" só na 1.ª página (não depende da paginação da Multipark).
+      let onlyMemoryIds: string[] = [];
+      let onlyMemoryLive: LiveFinance[] | null = null;
+      if (!input.cursor) {
+        onlyMemoryIds = await listMemoryBookingIdsByCheckout(parkIds, bounds.start, bounds.end, ONLY_MEMORY_MAX + 1);
+        onlyMemoryLive = onlyMemoryIds.length ? await readLiveFinanceByIds(onlyMemoryIds.slice(0, ONLY_MEMORY_MAX), cities) : [];
+      }
+      return { parks, page, onlyMemoryLive, onlyMemoryIds };
+    });
+    if (!r.available) return { available: false as const, reason: r.reason };
+    const { parks, page, onlyMemoryLive, onlyMemoryIds } = r.data;
+    const allowed = new Set(parks.map((p) => p.id));
+    const parkName = new Map(parks.map((p) => [p.id, p.name]));
+
+    let memory = new Map<string, MemorySnapshot[]>();
+    let memoryError: string | null = null;
+    try {
+      memory = await listMemoryForBookings([...page.rows.map((x) => x.id), ...onlyMemoryIds.slice(0, ONLY_MEMORY_MAX)]);
+    } catch {
+      memoryError = "Não foi possível ler a memória do webhook (BD do dashboard): a lista mostra só o que se vê na Multipark.";
+    }
+
+    const rows: DayDivergentRow[] = [];
+    for (const live of page.rows) {
+      const mem = memory.get(live.id) ?? [];
+      const divs = memoryError ? compareBooking([], live).filter((d) => d.code !== "only_live") : compareBooking(mem, live);
+      if (divs.length) rows.push(dayRow(live, mem, divs));
+    }
+
+    let onlyMemory: DayDivergentRow[] | null = null;
+    if (onlyMemoryLive && !memoryError) {
+      onlyMemory = [];
+      const liveById = new Map(onlyMemoryLive.map((x) => [x.id, x]));
+      for (const id of onlyMemoryIds.slice(0, ONLY_MEMORY_MAX)) {
+        const mem = memory.get(id) ?? [];
+        const out = memoryCheckout(mem);
+        const outMs = out ? Date.parse(out) : NaN;
+        // A última saída que a memória conhece tem de ser neste dia.
+        if (!(Number.isFinite(outMs) && outMs >= bounds.startMs && outMs < bounds.endMs)) continue;
+        const d = onlyMemoryDivergence(liveById.get(id) ?? null, mem.length, { startMs: bounds.startMs, endMs: bounds.endMs, allowedParkIds: allowed });
+        if (d) onlyMemory.push(dayRow(liveById.get(id) ?? null, mem, [d], { id, parkName: parkName.get(mem[mem.length - 1]?.parkId ?? "") ?? null }));
+      }
+    }
+
+    rows.sort((a, b) => severityRank(b.severity) - severityRank(a.severity) || (a.checkOut ?? "").localeCompare(b.checkOut ?? ""));
+    return {
+      available: true as const,
+      day: input.day,
+      parks: parks.map((p) => ({ id: p.id, name: p.name })),
+      scanned: page.rows.length,
+      nextCursor: page.nextCursor,
+      rows,
+      onlyMemory,
+      onlyMemoryTruncated: onlyMemoryIds.length > ONLY_MEMORY_MAX,
+      memoryError,
+    };
+  }),
+});

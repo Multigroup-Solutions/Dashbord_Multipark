@@ -74,6 +74,7 @@ import { googleCalendarRouter } from "./google/router";
 import { googleDriveRouter } from "./google/driveRouter";
 import { contactsRouter } from "./contactsRouter";
 import { bookingFileRouter } from "./bookingFileRouter";
+import { cashCheckRouter } from "./cashCheckRouter";
 import { searchRouter } from "./globalSearchRouter";
 import { knowledgeRouter } from "./knowledge/router";
 import { webAnalyticsRouter } from "./webAnalytics/router";
@@ -1565,6 +1566,7 @@ export const appRouter = router({
   contacts: contactsRouter,
   // Ficha da reserva (/reserva/:id), lida ao vivo da BD Multipark.
   bookingFile: bookingFileRouter,
+  cashCheck: cashCheckRouter,
   assistant: assistantRouter,
   search: searchRouter,
   knowledge: knowledgeRouter,

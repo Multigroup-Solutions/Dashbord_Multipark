@@ -13,6 +13,7 @@ import {
   Building2, FolderTree, Users as UsersIcon, Handshake, LogIn, AlertTriangle, Wallet, Target,
 } from "lucide-react";
 import FinanceExportButtons from "@/components/FinanceExportButtons";
+import CashCorrectionPanel from "@/components/cashCheck/CashCorrectionPanel";
 import FitAmount from "@/components/finance/FitAmount";
 import { STICKY_FIRST_COL, TABS_SCROLL } from "@/components/finance/layoutClasses";
 import { AXIS_TICK, CHART_TOOLTIP_STYLE, CHART_TOOLTIP_ITEM, eurAxis } from "@/lib/financeFormat";
@@ -274,6 +275,7 @@ export default function InvoicesPage() {
               <TabsTrigger value="costs">Custos detalhados</TabsTrigger>
               <TabsTrigger value="forecast">Previsão</TabsTrigger>
               <TabsTrigger value="cash">Caixa</TabsTrigger>
+              <TabsTrigger value="cash-check">Correção de caixa</TabsTrigger>
             </TabsList>
 
             <TabsContent value="real" className="space-y-4">
@@ -682,6 +684,10 @@ export default function InvoicesPage() {
 
             <TabsContent value="cash" className="space-y-4">
               <CashPanel cash={cash} loading={cashLoading} />
+            </TabsContent>
+
+            <TabsContent value="cash-check" className="space-y-4">
+              {tab === "cash-check" && <CashCorrectionPanel projectId={projectId} />}
             </TabsContent>
           </Tabs>
         </>
