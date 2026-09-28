@@ -8,15 +8,24 @@
  * SELECT. Não há UPDATE nem DELETE desta tabela em nenhum sítio do código —
  * `server/webhookMemory.test.ts` procura-os em todo o servidor.
  *
- * O que o payload traz hoje (server/multiparkWebhook.ts):
- *   { id, event, createdAt, data: { id, parkId, status, licensePlate,
- *     checkIn, checkOut, bookingPrice, paymentMethod, createdAt, updatedAt } }
- * Os outros campos de dinheiro (preço original, pago, desconto, campanha,
- * parceiro, pro, caixa…) ficam preparados: se a Multipark os passar a mandar,
- * são guardados sem mudar nada aqui. O payload inteiro também fica, mas SEM
- * dados pessoais (email, telefone, nomes, NIF, morada, matrícula…).
+ * O webhook é só o AVISO (Jorge, 28 set 2026): quando chega, vamos logo à BD
+ * da Multipark (só leitura, server/multiparkDb/cashCheck.ts →
+ * readMultiparkSnapshot) buscar a reserva toda — preços, desconto, campanha,
+ * parceiro, pro, estado da caixa, linhas de preço e pagamentos — e gravamos
+ * tudo numa linha NOVA (`source = "multipark_db"`). O webhook seguinte faz o
+ * mesmo noutra linha. Não dependemos do que o payload traz nem da API.
+ *
+ * Se a BD da Multipark não responder a tempo, a linha fica só com o payload
+ * (`source = "payload"`, `dbReadError` com o motivo) e o trabalho
+ * multipark-deliveries tenta outra vez nas 48 h seguintes, gravando uma linha
+ * irmã (`deliveryId#db`, `source = "db_retry"`) — sem nunca mexer na primeira.
+ * `dbReadAt` diz a que horas a Multipark foi lida.
+ *
+ * O payload inteiro também fica, mas SEM dados pessoais (email, telefone,
+ * nomes, NIF, morada, matrícula…); o mesmo para as linhas e pagamentos.
  */
 import crypto from "node:crypto";
+import type { LiveFinance } from "./cashCheck/rules";
 
 // ─── Tipos ──────────────────────────────────────────────────────────────────
 
@@ -54,9 +63,26 @@ export interface WebhookSnapshotRow {
   cashierClosed: boolean | null;
   cashValidated: boolean | null;
   driverValidated: boolean | null;
+  /** "multipark_db" (lido da BD deles), "payload" (só o que o webhook trouxe) ou "db_retry". */
+  source: SnapshotSource;
+  /** Quando a BD da Multipark foi lida ("YYYY-MM-DD HH:MM:SS.mmm" UTC). */
+  dbReadAt: string | null;
+  /** Porque não foi lida (código curto), se não foi. */
+  dbReadError: string | null;
+  linesCount: number | null;
+  linesTotal: number | null;
+  linesPaid: number | null;
+  paymentsCount: number | null;
+  paymentsTotal: number | null;
+  /** Métodos distintos dos pagamentos, separados por "|". */
+  paymentMethods: string | null;
+  /** Linhas de preço e pagamentos tal como estavam (JSON sem dados pessoais). */
+  detailJson: string | null;
   payloadHash: string;
   payloadJson: string;
 }
+
+export type SnapshotSource = "multipark_db" | "payload" | "db_retry";
 
 /** Retrato lido da memória (datas em ISO UTC). */
 export interface MemorySnapshot {
@@ -90,6 +116,14 @@ export interface MemorySnapshot {
   cashierClosed: boolean | null;
   cashValidated: boolean | null;
   driverValidated: boolean | null;
+  source: string;
+  dbReadAt: string | null;
+  linesCount: number | null;
+  linesTotal: number | null;
+  linesPaid: number | null;
+  paymentsCount: number | null;
+  paymentsTotal: number | null;
+  paymentMethods: string[];
 }
 
 // ─── Ajudantes puros ────────────────────────────────────────────────────────
@@ -237,9 +271,117 @@ export function buildWebhookSnapshot(body: unknown, meta: { receivedAt: Date; si
     cashierClosed: flag(pick(data, "cashierClosed") ?? cashier.cashierClosed),
     cashValidated: flag(pick(data, "cashValidated") ?? cashier.cashValidated),
     driverValidated: flag(pick(data, "driverValidated") ?? cashier.driverValidated),
+    source: "payload",
+    dbReadAt: null,
+    dbReadError: null,
+    linesCount: null,
+    linesTotal: null,
+    linesPaid: null,
+    paymentsCount: null,
+    paymentsTotal: null,
+    paymentMethods: null,
+    detailJson: null,
     payloadHash: crypto.createHash("sha256").update(raw).digest("hex"),
     payloadJson: redactedPayloadJson(body),
   };
+}
+
+// ─── BD da Multipark → linha ────────────────────────────────────────────────
+
+/** O que a leitura da BD da Multipark devolve (cashCheck.readMultiparkSnapshot). */
+export interface MultiparkRead {
+  live: LiveFinance | null;
+  lines: unknown[];
+  payments: unknown[];
+}
+
+export const DETAIL_MAX_CHARS = 60_000;
+
+/** Linhas + pagamentos → JSON sem dados pessoais (se for grande de mais, só as contagens). PURA. */
+export function detailJsonOf(lines: unknown[], payments: unknown[]): string {
+  const json = JSON.stringify({ lines: redactPayload(lines), payments: redactPayload(payments) });
+  if (json.length <= DETAIL_MAX_CHARS) return json;
+  return JSON.stringify({ truncated: true, lines: lines.length, payments: payments.length });
+}
+
+const mysqlMs = (d: Date) => d.toISOString().slice(0, 23).replace("T", " ");
+
+/**
+ * Linha do payload + o que a BD da Multipark diz agora → linha a gravar. O que
+ * a BD diz ganha; o payload só fica onde a BD não tem valor. PURA.
+ */
+export function mergeMultiparkRead(row: WebhookSnapshotRow, read: MultiparkRead, readAt: Date, source: "multipark_db" | "db_retry" = "multipark_db"): WebhookSnapshotRow {
+  const x = read.live;
+  if (!x) return { ...row, source, dbReadAt: mysqlMs(readAt), dbReadError: "NOT_FOUND" };
+  const or = <T,>(a: T | null | undefined, b: T | null): T | null => (a === null || a === undefined ? b : a);
+  return {
+    ...row,
+    sourceUpdatedAt: or(toMysqlUtc(x.updatedAt), row.sourceUpdatedAt),
+    parkId: or(x.parkId, row.parkId),
+    status: or(x.status, row.status),
+    checkIn: or(toMysqlUtc(x.checkIn), row.checkIn),
+    checkOut: or(toMysqlUtc(x.checkOut), row.checkOut),
+    bookingPrice: or(x.bookingPrice, row.bookingPrice),
+    originalBookingPrice: or(x.originalBookingPrice, row.originalBookingPrice),
+    parkingPrice: or(x.parkingPrice, row.parkingPrice),
+    deliveryPrice: or(x.deliveryPrice, row.deliveryPrice),
+    discountAmount: or(x.discountAmount, row.discountAmount),
+    discountApplied: or(x.discountApplied, row.discountApplied),
+    paidAmount: x.paymentsCount > 0 && x.paymentsTotal != null ? x.paymentsTotal : or(x.linesPaid, row.paidAmount),
+    paymentMethod: or(x.paymentMethod, row.paymentMethod),
+    paymentSource: or(x.paymentSource, row.paymentSource),
+    paymentBy: or(x.paymentBy, row.paymentBy),
+    campaignId: or(x.campaignId, row.campaignId),
+    partnerId: or(x.partnerId, row.partnerId),
+    partnerAmountDue: or(x.partnerAmountDue, row.partnerAmountDue),
+    partnerAmountPaid: or(x.partnerAmountPaid, row.partnerAmountPaid),
+    partnerContributedAmount: or(x.partnerContributedAmount, row.partnerContributedAmount),
+    pro: x.pro,
+    proClientId: or(x.proClientId, row.proClientId),
+    cashierClosed: x.cashierClosed.done,
+    cashValidated: x.cashValidated.done,
+    driverValidated: x.driverValidated.done,
+    source,
+    dbReadAt: mysqlMs(readAt),
+    dbReadError: null,
+    linesCount: x.linesCount,
+    linesTotal: x.linesTotal,
+    linesPaid: x.linesPaid,
+    paymentsCount: x.paymentsCount,
+    paymentsTotal: x.paymentsTotal,
+    paymentMethods: x.paymentMethods.length ? x.paymentMethods.join("|").slice(0, 255) : null,
+    detailJson: detailJsonOf(read.lines, read.payments),
+  };
+}
+
+/** Tempo máximo à espera da BD da Multipark dentro do webhook (depois grava só o payload). */
+export const WEBHOOK_DB_READ_TIMEOUT_MS = 6_000;
+/** Erros que não vale a pena repetir (configuração, não a BD em baixo). */
+export const DB_READ_NO_RETRY = ["NOT_CONFIGURED", "BAD_URL", "NOT_READ_ONLY"] as const;
+
+function readErrorCode(err: unknown): string {
+  const code = (err as any)?.code;
+  return typeof code === "string" && /^[A-Z_]{2,40}$/.test(code) ? code : "READ_FAILED";
+}
+
+type Reader = (bookingId: string) => Promise<MultiparkRead>;
+
+async function defaultReader(bookingId: string): Promise<MultiparkRead> {
+  const { readMultiparkSnapshot } = await import("./multiparkDb/cashCheck");
+  return readMultiparkSnapshot(bookingId);
+}
+
+/** Lê a BD da Multipark com prazo. Nunca lança: devolve a leitura ou o código do erro. */
+export async function readWithTimeout(bookingId: string, timeoutMs: number, reader: Reader = defaultReader): Promise<{ read: MultiparkRead } | { error: string }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timeout = new Promise<never>((_, rej) => { timer = setTimeout(() => rej(Object.assign(new Error("timeout"), { code: "TIMEOUT" })), timeoutMs); });
+    return { read: await Promise.race([reader(bookingId), timeout]) };
+  } catch (err) {
+    return { error: readErrorCode(err) };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 // ─── Gravar (só INSERT) ─────────────────────────────────────────────────────
@@ -250,7 +392,8 @@ const SNAPSHOT_COLUMNS = [
   "parkId", "status", "checkIn", "checkOut", "bookingPrice", "originalBookingPrice", "parkingPrice", "deliveryPrice",
   "discountAmount", "discountApplied", "paidAmount", "paymentMethod", "paymentSource", "paymentBy", "campaignId", "partnerId",
   "partnerAmountDue", "partnerAmountPaid", "partnerContributedAmount", "pro", "proClientId", "cashierClosed", "cashValidated",
-  "driverValidated", "payloadHash", "payloadJson",
+  "driverValidated", "source", "dbReadAt", "dbReadError", "linesCount", "linesTotal", "linesPaid", "paymentsCount",
+  "paymentsTotal", "paymentMethods", "detailJson", "payloadHash", "payloadJson",
 ] as const satisfies ReadonlyArray<keyof WebhookSnapshotRow>;
 
 function isDuplicate(err: unknown): boolean {
@@ -283,14 +426,62 @@ export async function insertWebhookSnapshot(db: Exec, row: WebhookSnapshotRow): 
   }
 }
 
-/** Grava o payload autenticado na memória (antes de tudo o resto no webhook). */
-export async function recordWebhookSnapshot(body: unknown, meta: { signatureValid: boolean; rawBody?: Buffer | string; receivedAt?: Date }): Promise<"stored" | "duplicate" | "skipped"> {
-  const row = buildWebhookSnapshot(body, { receivedAt: meta.receivedAt ?? new Date(), signatureValid: meta.signatureValid, rawBody: meta.rawBody });
-  if (!row) return "skipped";
+/**
+ * Chegou um webhook: lê a reserva toda na BD da Multipark e grava uma linha
+ * nova (antes de tudo o resto no webhook). Se a BD deles não responder a
+ * tempo, grava o payload e o motivo (o cron repete a leitura).
+ */
+export async function recordWebhookSnapshot(body: unknown, meta: { signatureValid: boolean; rawBody?: Buffer | string; receivedAt?: Date; reader?: Reader; timeoutMs?: number; db?: Exec }): Promise<"stored" | "duplicate" | "skipped"> {
+  const payloadRow = buildWebhookSnapshot(body, { receivedAt: meta.receivedAt ?? new Date(), signatureValid: meta.signatureValid, rawBody: meta.rawBody });
+  if (!payloadRow) return "skipped";
+  const r = await readWithTimeout(payloadRow.bookingId, meta.timeoutMs ?? WEBHOOK_DB_READ_TIMEOUT_MS, meta.reader);
+  const row = "read" in r ? mergeMultiparkRead(payloadRow, r.read, new Date()) : { ...payloadRow, dbReadError: r.error };
+  if ("error" in r) console.warn(`[webhookMemory] BD Multipark não lida (${r.error}); fica o payload e o cron repete.`);
+  return insertWebhookSnapshot(meta.db ?? (await dbOrThrow()), row);
+}
+
+async function dbOrThrow(): Promise<Exec> {
   const { getDb } = await import("./db");
   const db = await getDb();
   if (!db) throw Object.assign(new Error("Base de dados indisponível"), { code: "DATABASE_UNAVAILABLE" });
-  return insertWebhookSnapshot(db as unknown as Exec, row);
+  return db as unknown as Exec;
+}
+
+/** Janela em que ainda vale a pena repetir a leitura da BD da Multipark. */
+export const DB_RETRY_WINDOW_HOURS = 48;
+export const DB_RETRY_SUFFIX = "#db";
+
+/**
+ * Repete a leitura da BD da Multipark para as linhas que ficaram só com o
+ * payload (últimas 48 h, sem linha irmã `#db`). Cada sucesso é uma linha
+ * NOVA `deliveryId#db` (source "db_retry"); a linha original não é tocada.
+ * Uma falha não grava nada (tenta no próximo ciclo).
+ */
+export async function retryWebhookMemoryReads(o: { deadlineAt: number; limit?: number; reader?: Reader; db?: Exec }): Promise<{ scanned: number; stored: number; failed: number }> {
+  const { sql } = await import("drizzle-orm");
+  const db = o.db ?? (await dbOrThrow());
+  const noRetry = sql.join(DB_READ_NO_RETRY.map((c) => sql`${c}`), sql`, `);
+  const res = await db.execute(sql`SELECT s.deliveryId, s.receivedAt, s.signatureValid, s.payloadHash, s.payloadJson
+    FROM multipark_webhook_snapshots s
+    WHERE s.source = 'payload' AND s.dbReadError IS NOT NULL AND s.dbReadError NOT IN (${noRetry})
+      AND s.receivedAt >= (UTC_TIMESTAMP() - INTERVAL ${DB_RETRY_WINDOW_HOURS} HOUR)
+      AND NOT EXISTS (SELECT 1 FROM multipark_webhook_snapshots r WHERE r.deliveryId = CONCAT(s.deliveryId, ${DB_RETRY_SUFFIX}))
+    ORDER BY s.receivedAt, s.id LIMIT ${Math.max(1, Math.min(o.limit ?? 30, 200))}`);
+  const rows = rowsOf(res);
+  let stored = 0, failed = 0;
+  for (const r of rows) {
+    if (Date.now() > o.deadlineAt - WEBHOOK_DB_READ_TIMEOUT_MS) break;
+    let body: unknown;
+    try { body = JSON.parse(String(r.payloadJson ?? "null")); } catch { failed++; continue; }
+    const receivedAt = new Date(isoOrNull(r.receivedAt) ?? Date.now());
+    const base = buildWebhookSnapshot(body, { receivedAt, signatureValid: boolOrNull(r.signatureValid) === true });
+    if (!base) { failed++; continue; }
+    const read = await readWithTimeout(base.bookingId, WEBHOOK_DB_READ_TIMEOUT_MS, o.reader);
+    if ("error" in read) { failed++; continue; }
+    const row = mergeMultiparkRead({ ...base, deliveryId: `${String(r.deliveryId)}${DB_RETRY_SUFFIX}`, payloadHash: String(r.payloadHash ?? base.payloadHash), payloadJson: String(r.payloadJson) }, read.read, new Date(), "db_retry");
+    if ((await insertWebhookSnapshot(db, row)) === "stored") stored++;
+  }
+  return { scanned: rows.length, stored, failed };
 }
 
 // ─── Ler ────────────────────────────────────────────────────────────────────
@@ -341,10 +532,19 @@ export function mapMemoryRow(r: Record<string, unknown>): MemorySnapshot {
     cashierClosed: boolOrNull(r.cashierClosed),
     cashValidated: boolOrNull(r.cashValidated),
     driverValidated: boolOrNull(r.driverValidated),
+    source: String(r.source ?? "payload"),
+    dbReadAt: isoOrNull(r.dbReadAt),
+    linesCount: numOrNull(r.linesCount),
+    linesTotal: numOrNull(r.linesTotal),
+    linesPaid: numOrNull(r.linesPaid),
+    paymentsCount: numOrNull(r.paymentsCount),
+    paymentsTotal: numOrNull(r.paymentsTotal),
+    paymentMethods: String(r.paymentMethods ?? "").split("|").map((x) => x.trim()).filter(Boolean),
   };
 }
 
-const READ_COLUMNS = ["id", ...SNAPSHOT_COLUMNS.filter((c) => c !== "payloadJson" && c !== "payloadHash" && c !== "signatureValid" && c !== "eventCreatedAt" && c !== "sourceCreatedAt")];
+const NOT_READ = new Set<string>(["payloadJson", "payloadHash", "signatureValid", "eventCreatedAt", "sourceCreatedAt", "dbReadError", "detailJson"]);
+const READ_COLUMNS = ["id", ...SNAPSHOT_COLUMNS.filter((c) => !NOT_READ.has(c))];
 
 const rowsOf = (r: any): Record<string, unknown>[] => (Array.isArray(r?.[0]) ? r[0] : Array.isArray(r) ? r : []);
 

@@ -3,8 +3,12 @@
 // Decisão do dono: o que nos chega pelo WEBHOOK da Multipark fica guardado na
 // nossa BD e NUNCA é reescrito nem apagado (memória só de acréscimo). Uma
 // linha por entrega (`deliveryId` único: as repetições da mesma entrega não
-// duplicam), com os campos de dinheiro tal como vieram e o payload em JSON
-// SEM dados pessoais (sem email, telefone, nome, NIF nem matrícula).
+// duplicam). O webhook é só o aviso: em cada um lemos a reserva toda na BD da
+// Multipark (preços, desconto, campanha, parceiro, pro, caixa, linhas de
+// preço e pagamentos) e gravamos isso (`source`, `dbReadAt`); se a BD deles
+// falhar fica o payload e o motivo (`dbReadError`). Payload, linhas e
+// pagamentos em JSON SEM dados pessoais (sem email, telefone, nome, NIF nem
+// matrícula).
 //
 // Serve para a "Conferência (era / é)" da ficha da reserva e para a
 // "Correção de caixa" da Faturação: o "era" vem daqui, o "é" vem da BD da
@@ -50,13 +54,39 @@ export const MIGRATION_0240_STATEMENTS: string[] = [
     "`cashierClosed` TINYINT(1) NULL, " +
     "`cashValidated` TINYINT(1) NULL, " +
     "`driverValidated` TINYINT(1) NULL, " +
+    "`source` VARCHAR(16) NOT NULL DEFAULT 'payload', " +
+    "`dbReadAt` DATETIME(3) NULL, " +
+    "`dbReadError` VARCHAR(40) NULL, " +
+    "`linesCount` INT NULL, " +
+    "`linesTotal` DECIMAL(12,2) NULL, " +
+    "`linesPaid` DECIMAL(12,2) NULL, " +
+    "`paymentsCount` INT NULL, " +
+    "`paymentsTotal` DECIMAL(12,2) NULL, " +
+    "`paymentMethods` VARCHAR(255) NULL, " +
+    "`detailJson` MEDIUMTEXT NULL, " +
     "`payloadHash` CHAR(64) NOT NULL, " +
     "`payloadJson` MEDIUMTEXT NOT NULL, " +
     "PRIMARY KEY (`id`), " +
     "UNIQUE KEY `uq_mp_webhook_snap_delivery` (`deliveryId`), " +
     "KEY `idx_mp_webhook_snap_booking` (`bookingId`, `receivedAt`), " +
-    "KEY `idx_mp_webhook_snap_checkout` (`parkId`, `checkOut`)" +
+    "KEY `idx_mp_webhook_snap_checkout` (`parkId`, `checkOut`), " +
+    "KEY `idx_mp_webhook_snap_retry` (`source`, `receivedAt`)" +
     ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+  // Colunas da leitura da BD da Multipark, para o caso de a tabela já ter sido
+  // criada sem elas (só acrescenta; ER_DUP_FIELDNAME = já existe).
+  ...([
+    ["source", "VARCHAR(16) NOT NULL DEFAULT 'payload'"],
+    ["dbReadAt", "DATETIME(3) NULL"],
+    ["dbReadError", "VARCHAR(40) NULL"],
+    ["linesCount", "INT NULL"],
+    ["linesTotal", "DECIMAL(12,2) NULL"],
+    ["linesPaid", "DECIMAL(12,2) NULL"],
+    ["paymentsCount", "INT NULL"],
+    ["paymentsTotal", "DECIMAL(12,2) NULL"],
+    ["paymentMethods", "VARCHAR(255) NULL"],
+    ["detailJson", "MEDIUMTEXT NULL"],
+  ] as const).map(([c, t]) => `ALTER TABLE \`multipark_webhook_snapshots\` ADD COLUMN \`${c}\` ${t}`),
+  "ALTER TABLE `multipark_webhook_snapshots` ADD KEY `idx_mp_webhook_snap_retry` (`source`, `receivedAt`)",
 ];
 
-export const IDEMPOTENT_ERROR_CODES_0240 = new Set<string>(["ER_TABLE_EXISTS_ERROR", "ER_DUP_KEYNAME"]);
+export const IDEMPOTENT_ERROR_CODES_0240 = new Set<string>(["ER_TABLE_EXISTS_ERROR", "ER_DUP_KEYNAME", "ER_DUP_FIELDNAME"]);

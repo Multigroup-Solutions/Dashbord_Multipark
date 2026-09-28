@@ -23,7 +23,7 @@ Receita, custos e margem por período (só super admin; o dashboard Financeiro �
 2. Carrega em **Comparar**. São comparadas as reservas com **saída** nesse dia. Só aparecem as que têm divergência, as mais graves primeiro:
    - **Preço zerado**: o webhook disse um preço e agora é 0 € (ou as linhas somam 0 €).
    - **Preço mudou depois do check-in** ou **depois da criação**: era X €, agora é Y €. Diz também se nenhum webhook avisou da última alteração.
-   - **Linhas de preço retiradas ou baixadas**: a soma das linhas é menor do que o preço que o webhook disse, ou a reserva saiu sem linhas.
+   - **Linhas de preço retiradas ou baixadas**: a soma das linhas já foi maior num retrato de um webhook (ou é menor do que o preço que o webhook disse), ou a reserva saiu sem linhas.
    - **Método de pagamento mudou**: por exemplo, era Dinheiro e agora é Multibanco, ou ficou vazio.
    - **Pago ≠ esperado**: depois da saída, o que foi pago não bate com a soma das linhas (as Pro faturam ao mês e não entram).
    - **Cancelada depois de entrar**.
@@ -33,6 +33,6 @@ Receita, custos e margem por período (só super admin; o dashboard Financeiro �
 3. Cada linha mostra era / é, o esperado e o pago, o método antes → depois e abre a **ficha da reserva**, onde está a **Conferência (era / é)** completa com quem mudou e quando.
 4. São comparadas até 200 saídas de cada vez. Se houver mais, carrega em **Comparar as seguintes**.
 
-A comparação não corre sozinha e não grava nada: é só leitura. O "era" é a memória do webhook, que o dashboard guarda desde 28 set 2026 e **nunca reescreve nem apaga**. Reservas mais antigas aparecem como "Só na Multipark". Vê quem tem a Faturação e pode ver os totais financeiros.
+A comparação não corre sozinha e não grava nada: é só leitura. O "era" é a memória do webhook, que o dashboard guarda desde 28 set 2026 e **nunca reescreve nem apaga**: em cada webhook (criação, alteração, entrada, saída…) lê a reserva toda na base de dados da Multipark e guarda uma linha nova. Reservas mais antigas aparecem como "Só na Multipark". Vê quem tem a Faturação e pode ver os totais financeiros.
 
 **Anual** mostra o ano mês a mês. As taxas de IVA e TSU mudam-se em **Definições → Parâmetros**.

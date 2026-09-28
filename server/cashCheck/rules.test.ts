@@ -11,6 +11,7 @@ function snap(p: Partial<MemorySnapshot>): MemorySnapshot {
     bookingPrice: null, originalBookingPrice: null, parkingPrice: null, deliveryPrice: null, discountAmount: null, discountApplied: null,
     paidAmount: null, paymentMethod: null, paymentSource: null, paymentBy: null, campaignId: null, partnerId: null, partnerAmountDue: null,
     partnerAmountPaid: null, partnerContributedAmount: null, pro: null, proClientId: null, cashierClosed: null, cashValidated: null, driverValidated: null,
+    source: "payload", dbReadAt: null, linesCount: null, linesTotal: null, linesPaid: null, paymentsCount: null, paymentsTotal: null, paymentMethods: [],
     ...p,
   };
 }
@@ -112,5 +113,16 @@ describe("regras de divergência (era / é)", () => {
     expect(by.paymentMethod.changed).toBe(false);
     expect(by.discountAmount.notInWebhook).toBe(true);
     expect(by.discountAmount.changed).toBe(false);
+  });
+
+  it("retratos lidos da BD da Multipark: linhas que já somaram mais e agora somam menos", () => {
+    const fromDb = snap({ source: "multipark_db", status: "CHECKED_IN", bookingPrice: 30, linesCount: 2, linesTotal: 60, paymentsCount: 0, paymentsTotal: null });
+    const d = compareBooking([fromDb], live({ bookingPrice: 30, linesCount: 1, linesTotal: 30, linesPaid: 30, paymentsTotal: 30 }));
+    expect(codes(d)).toContain("lines_below");
+    expect(d.find((x) => x.code === "lines_below")!.detail).toContain("60,00 €");
+    const rows = Object.fromEntries(eraRows([fromDb], live({ linesCount: 1, linesTotal: 30 })).map((r) => [r.key, r]));
+    expect(rows.linesTotal.first).toBe("60,00 € (2)");
+    expect(rows.linesTotal.notInWebhook).toBe(false);
+    expect(rows.paymentsTotal.first).toBe("nenhum");
   });
 });

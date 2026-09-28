@@ -195,9 +195,14 @@ export function compareBooking(memory: readonly MemorySnapshot[], live: LiveFina
     push(out, "price_after_creation", `O último webhook dizia ${eurText(lastP)}, agora é ${eurText(now)}.${silent}`);
   }
 
-  // Linhas: a soma das linhas (BookingPricing) abaixo do preço que a memória conhece.
+  // Linhas: a soma das linhas (BookingPricing) abaixo do que a memória já viu
+  // nas linhas (lidas da BD da Multipark em cada webhook) ou do preço.
   const reference = lastP ?? checkinP ?? firstP;
-  if (live.linesCount > 0 && live.linesTotal != null && reference != null && live.linesTotal < reference - MONEY_TOLERANCE && !out.some((d) => d.code === "price_zeroed")) {
+  const memLines = sortMemory(memory).filter((x) => x.linesCount != null && x.linesCount > 0 && x.linesTotal != null);
+  const maxLines = memLines.length ? Math.max(...memLines.map((x) => x.linesTotal as number)) : null;
+  if (maxLines != null && live.linesTotal != null && live.linesTotal < maxLines - MONEY_TOLERANCE && !out.some((d) => d.code === "price_zeroed")) {
+    push(out, "lines_below", `As linhas de preço já somaram ${eurText(maxLines)} (retrato de um webhook) e agora somam ${eurText(live.linesTotal)} (${live.linesCount} linha(s)).`);
+  } else if (live.linesCount > 0 && live.linesTotal != null && reference != null && live.linesTotal < reference - MONEY_TOLERANCE && !out.some((d) => d.code === "price_zeroed")) {
     push(out, "lines_below", `As linhas de preço somam ${eurText(live.linesTotal)} (${live.linesCount} linha(s)), abaixo dos ${eurText(reference)} que o webhook disse.`);
   } else if (live.linesCount === 0 && reference != null && reference > MONEY_TOLERANCE && live.status === "CHECKED_OUT") {
     push(out, "lines_below", `A reserva saiu sem nenhuma linha de preço; o webhook disse ${eurText(reference)}.`);
@@ -277,11 +282,11 @@ export function eraRows(memory: readonly MemorySnapshot[], live: LiveFinance | n
     { key: "checkOut", label: "Saída", mem: (s) => txt(s.checkOut), live: (x) => txt(x.checkOut) },
     { key: "bookingPrice", label: "Preço (bookingPrice)", mem: (s) => (s.bookingPrice == null ? null : eurText(s.bookingPrice)), live: (x) => (x.bookingPrice == null ? null : eurText(x.bookingPrice)), money: (s) => s?.bookingPrice ?? null, liveMoney: (x) => x.bookingPrice },
     { key: "originalBookingPrice", label: "Preço original", mem: (s) => (s.originalBookingPrice == null ? null : eurText(s.originalBookingPrice)), live: (x) => (x.originalBookingPrice == null ? null : eurText(x.originalBookingPrice)), money: (s) => s?.originalBookingPrice ?? null, liveMoney: (x) => x.originalBookingPrice },
-    { key: "linesTotal", label: "Soma das linhas (BookingPricing)", mem: () => null, live: (x) => (x.linesCount ? `${eurText(x.linesTotal)} (${x.linesCount})` : "sem linhas") },
+    { key: "linesTotal", label: "Soma das linhas (BookingPricing)", mem: (s) => (s.linesCount == null ? null : s.linesCount ? `${eurText(s.linesTotal)} (${s.linesCount})` : "sem linhas"), live: (x) => (x.linesCount ? `${eurText(x.linesTotal)} (${x.linesCount})` : "sem linhas") },
     { key: "linesPaid", label: "Pago nas linhas", mem: (s) => (s.paidAmount == null ? null : eurText(s.paidAmount)), live: (x) => (x.linesPaid == null ? null : eurText(x.linesPaid)), money: (s) => s?.paidAmount ?? null, liveMoney: (x) => x.linesPaid },
-    { key: "paymentsTotal", label: "Pagamentos registados", mem: () => null, live: (x) => (x.paymentsCount ? `${eurText(x.paymentsTotal)} (${x.paymentsCount})` : "nenhum") },
+    { key: "paymentsTotal", label: "Pagamentos registados", mem: (s) => (s.paymentsCount == null ? null : s.paymentsCount ? `${eurText(s.paymentsTotal)} (${s.paymentsCount})` : "nenhum"), live: (x) => (x.paymentsCount ? `${eurText(x.paymentsTotal)} (${x.paymentsCount})` : "nenhum") },
     { key: "paymentMethod", label: "Método de pagamento", mem: (s) => txt(s.paymentMethod), live: (x) => txt(x.paymentMethod) },
-    { key: "paymentMethods", label: "Métodos dos pagamentos", mem: () => null, live: (x) => (x.paymentMethods.length ? x.paymentMethods.join(", ") : null) },
+    { key: "paymentMethods", label: "Métodos dos pagamentos", mem: (s) => (s.paymentMethods?.length ? s.paymentMethods.join(", ") : null), live: (x) => (x.paymentMethods.length ? x.paymentMethods.join(", ") : null) },
     { key: "paymentSource", label: "Origem do pagamento", mem: (s) => txt(s.paymentSource), live: (x) => txt(x.paymentSource) },
     { key: "discountAmount", label: "Desconto", mem: (s) => (s.discountAmount == null ? null : eurText(s.discountAmount)), live: (x) => (x.discountAmount == null ? null : eurText(x.discountAmount)), money: (s) => s?.discountAmount ?? null, liveMoney: (x) => x.discountAmount },
     { key: "campaignId", label: "Campanha", mem: (s) => txt(s.campaignId), live: (x) => txt(x.campaignId) },

@@ -182,3 +182,51 @@ export async function readLiveCheckoutPage(bounds: DayBounds, parkIds: string[],
   const rows = all.slice(0, size);
   return { rows, nextCursor: all.length > size ? rows[rows.length - 1]?.id ?? null : null };
 }
+
+// ─── Retrato completo para a memória do webhook ─────────────────────────────
+
+export const SNAPSHOT_LINES_MAX = 100;
+export const SNAPSHOT_PAYMENTS_MAX = 200;
+
+/**
+ * Linhas de preço e pagamentos de UMA reserva (JSON cru, uma ida à BD), para
+ * o retrato da memória do webhook. Quem guarda tira os dados pessoais. PURA.
+ */
+export function buildSnapshotDetailSql(bookingId: string): { sql: string; params: SqlParam[] } {
+  const p = new ParamList();
+  const id = p.add(bookingId);
+  const sql = [
+    `SELECT`,
+    `  (SELECT coalesce(json_agg(x.l), '[]'::json) FROM (SELECT to_jsonb(bp) AS l FROM "BookingPricing" bp WHERE bp."bookingId" = ${id}`,
+    `    ORDER BY bp."createdAt" ASC, bp."id" LIMIT ${p.add(SNAPSHOT_LINES_MAX)}) x) AS lines,`,
+    `  (SELECT coalesce(json_agg(y.pay), '[]'::json) FROM (SELECT to_jsonb(pp) AS pay FROM "BookingPricingPayment" pp JOIN "BookingPricing" bp ON bp."id" = pp."pricingId"`,
+    `    WHERE bp."bookingId" = ${id} ORDER BY pp."recordedAt" ASC LIMIT ${p.add(SNAPSHOT_PAYMENTS_MAX)}) y) AS payments`,
+  ].join("\n");
+  return { sql, params: p.values };
+}
+
+export interface MultiparkSnapshotRead {
+  live: LiveFinance | null;
+  lines: unknown[];
+  payments: unknown[];
+}
+
+const arr = (v: unknown): unknown[] => {
+  if (Array.isArray(v)) return v;
+  if (typeof v === "string") { try { const a = JSON.parse(v); return Array.isArray(a) ? a : []; } catch { return []; } }
+  return [];
+};
+
+/**
+ * Estado completo da reserva na BD da Multipark agora (dinheiro + linhas +
+ * pagamentos), para gravar na memória quando chega um webhook. `live = null`
+ * = a Multipark não devolve a reserva. Lança — quem chama decide.
+ */
+export async function readMultiparkSnapshot(bookingId: string, query: Query = multiparkDbQuery): Promise<MultiparkSnapshotRead> {
+  const { sql, params } = buildSnapshotDetailSql(bookingId);
+  const [live, detail] = await Promise.all([
+    readLiveFinanceByIds([bookingId], undefined, query),
+    query<J>(sql, params),
+  ]);
+  return { live: live[0] ?? null, lines: arr(detail[0]?.lines), payments: arr(detail[0]?.payments) };
+}

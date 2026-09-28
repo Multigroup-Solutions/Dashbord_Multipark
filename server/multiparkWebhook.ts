@@ -206,10 +206,11 @@ export function createMultiparkWebhookRouter(opts: { afterReceive?: () => void }
         return res.status(400).json({ error: "JSON inválido" });
       }
 
-      // MEMÓRIA primeiro (decisão do dono, 28 set 2026): o que chega fica
-      // guardado, só por acréscimo, antes de qualquer outro passo — mesmo que
-      // a fila ou o processamento falhem depois. A mesma entrega repetida não
-      // duplica. Se não conseguirmos guardar, 500 para a Multipark repetir.
+      // MEMÓRIA primeiro (decisão do dono, 28 set 2026): em cada webhook
+      // lemos a reserva toda na BD da Multipark (até 6 s; se falhar fica o
+      // payload e o cron repete) e gravamos uma linha NOVA, só por acréscimo,
+      // antes de qualquer outro passo. A mesma entrega repetida não duplica.
+      // Se não conseguirmos guardar, 500 para a Multipark repetir.
       try {
         await (await import("./webhookMemory")).recordWebhookSnapshot(parsed, { signatureValid: sigOk, rawBody: raw });
       } catch (err) {
