@@ -164,6 +164,14 @@ describe("pressão — cursor e retoma", () => {
     expect(r.error).toContain("demorou demasiado");
     expect(m.groups).toHaveLength(4);
   });
+  it("parques que a operação não faz: ficam fora de todos os pedaços", async () => {
+    const q = vi.fn(async (sql: string) => answer(sql));
+    const m = memStore();
+    const r = await runExtrasPressure({ deadlineAt: Date.now() + 60_000, windowEnd: "2026-09-26", query: q as any, store: m.store, isConfigured: () => true, excludedParkIds: ["p3"] });
+    expect(r).toMatchObject({ ok: true, done: true, chunks: 4 });
+    expect(m.groups).toEqual(["cidade_lisboa", "airpark_lisboa", "redpark_lisboa", "marketplace"]);
+    expect(q.mock.calls.every(([, params]) => !(params ?? []).includes("p3"))).toBe(true);
+  });
   it("sem BD da Multipark configurada: saltado, sem erro", async () => {
     const r = await runExtrasPressure({ deadlineAt: Date.now() + 60_000, windowEnd: "2026-09-26", query: vi.fn() as any, store: memStore().store, isConfigured: () => false });
     expect(r).toMatchObject({ ok: true, done: true });
@@ -264,6 +272,12 @@ describe("Extras-Dia — reservas ao vivo da BD Multipark", () => {
     expect(cityParks(parks, "lisbon").map((p) => p.id).sort()).toEqual(["p1", "p2"]);
     expect(cityParks(parks, "faro")).toEqual([]);
   });
+  it("sem os parques que a operação não faz (Definições)", () => {
+    const parks = mapParks(PARK_ROWS);
+    expect(cityParks(parks, "lisbon", ["p2"]).map((p) => p.id)).toEqual(["p1"]);
+    expect(cityParks(parks, "porto", ["p3"])).toEqual([]);
+    expect(cityParks(parks, "porto", []).map((p) => p.id)).toEqual(["p3"]);
+  });
   it("linha → reserva → linha do Extras-Dia (hora de Lisboa, lavagens, lugar)", () => {
     const b = mapExtrasBookingRow({ id: "bk1", code: "15123", check_in: "2026-09-27 16:40:00", check_out: "2026-10-03 07:05:00", delivery_type: "Terminal 2", client_first_name: "Ana", client_last_name: "Silva", plate: "AA-00-BB", extra_names: "Lavagem exterior | Carregamento", extras_total: "25.5" }, { name: "Airpark Lisboa", cityName: "Lisboa" });
     expect(b).toMatchObject({ externalId: "bk1", spotType: "covered", extrasTotal: 25.5, extraNames: ["Lavagem exterior", "Carregamento"], parkName: "Airpark Lisboa" });
@@ -298,6 +312,23 @@ describe("Extras-Dia — reservas ao vivo da BD Multipark", () => {
     const again = await getLiveExtrasBookings("lisbon", now, now + 1, undefined, now + 30_000);
     expect(again.available).toBe(false);
     expect(queryMock).not.toHaveBeenCalled();
+  });
+  it("leitura: um parque excluído não entra no SQL; todos excluídos → sem leitura de reservas", async () => {
+    process.env[ENV] = "postgres://u:p@h/db";
+    resetExtrasLiveState();
+    queryMock.mockReset();
+    queryMock.mockImplementation(async (sql: string) => (sql.includes('FROM "Park"') ? PARK_ROWS : []));
+    const now = Date.parse("2026-09-27T10:00:00Z");
+    const r = await getLiveExtrasBookings("lisbon", now, now + 86_400_000, undefined, now, ["p2"]);
+    expect(r.available && r.data.parks).toEqual(["Airpark Lisboa / Lisboa"]);
+    const bookingsCall = queryMock.mock.calls.find(([sql]) => !String(sql).includes('FROM "Park"'));
+    expect(bookingsCall?.[1]).toContain("p1");
+    expect(bookingsCall?.[1]).not.toContain("p2");
+    queryMock.mockClear();
+    const porto = await getLiveExtrasBookings("porto", now, now + 86_400_000, undefined, now, ["p3"]);
+    expect(porto.available && porto.data).toEqual({ bookings: [], parks: [], truncated: false });
+    expect(queryMock.mock.calls.every(([sql]) => String(sql).includes('FROM "Park"'))).toBe(true);
+    resetExtrasLiveState();
   });
   it("sem DATABASE_URL_MULTIPARK → indisponível (a página usa a cópia)", async () => {
     delete process.env[ENV];

@@ -7,6 +7,9 @@
  * (ops_pressure_stats, migração 0235). Retomável: o cursor diz a janela
  * (dia final) e o próximo pedaço; um pedaço só arranca com tempo.
  *
+ * Os "Parques que a operação não faz" (Definições → operations.excludedParks,
+ * passados pelo cron) ficam fora de todos os grupos.
+ *
  * A página lê sempre a última janela COMPLETA (a que tem a linha-marca
  * `_done`), por isso uma corrida a meio nunca mostra dados misturados.
  */
@@ -14,6 +17,7 @@ import { sql } from "drizzle-orm";
 import { multiparkDbQuery, redactSecrets, type SqlParam } from "./multiparkDb/client";
 import { describeReadFailure } from "./multiparkDb/read";
 import { buildParksSql, mapParks } from "./multiparkDb/dayBookings";
+import { excludeParks } from "../shared/reservasDoDia";
 import {
   buildPressureChunks, buildPressureLoadSql, buildPressureSlotsSql, mapPressureLoadRow, mapPressureSlotRow, pressureWindow,
   type PressureChunk, type PressureWindow,
@@ -137,6 +141,8 @@ export async function runExtrasPressure(o: {
   query?: Query;
   store?: PressureStore;
   isConfigured?: () => boolean;
+  /** "Parques que a operação não faz" (Definições): ficam fora de todos os grupos. */
+  excludedParkIds?: readonly string[];
 }): Promise<PressureRunResult> {
   const t0 = Date.now();
   const now = o.now ?? t0;
@@ -151,7 +157,7 @@ export async function runExtrasPressure(o: {
   let chunks: PressureChunk[];
   try {
     const ps = buildParksSql();
-    chunks = buildPressureChunks(mapParks(await query(ps.sql, ps.params)));
+    chunks = buildPressureChunks(excludeParks(mapParks(await query(ps.sql, ps.params)), o.excludedParkIds));
   } catch (err) {
     const f = describeReadFailure(err);
     console.warn("[extras-pressure] parques:", redactSecrets(err).slice(0, 200));

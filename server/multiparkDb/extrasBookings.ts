@@ -9,8 +9,8 @@
  *
  * Que reservas: as dos parques NOSSOS da cidade (shared/multiparkParks.ts —
  * marca Airpark/Redpark/Skypark + Lisboa/Porto/Faro), com entrada ou saída
- * dentro da janela, estado ≠ CANCELLED. (Não existe em main uma definição
- * "Parques que a operação não faz"; se vier a existir, filtra-se aqui.)
+ * dentro da janela, estado ≠ CANCELLED, SEM os "Parques que a operação não
+ * faz" (Definições → operations.excludedParks; o chamador passa a lista).
  *
  * Horas: "checkIn"/"checkOut" (hora do movimento, UTC na BD) → hora de parede
  * de Lisboa no Extras-Dia (como a cópia fazia com utcToLocal). O pré-filtro
@@ -26,6 +26,7 @@
 import { multiparkDbQuery, type SqlParam } from "./client";
 import { ParamList, safeMultiparkRead, toIsoUtc, type MultiparkRead } from "./read";
 import { buildParksSql, mapParks, type DayPark } from "./dayBookings";
+import { excludeParks } from "../../shared/reservasDoDia";
 import { classifyAllocation, type SpotType } from "../spotClassification";
 
 export const EXTRAS_LIVE_LIMIT = 5000;
@@ -41,10 +42,10 @@ export const EXTRA_CITY_KEY: Record<"lisbon" | "porto" | "faro", "lisboa" | "por
 
 const sqlTs = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
 
-/** Parques NOSSOS de uma cidade (classificação única). PURA. */
-export function cityParks(parks: DayPark[], city: "lisbon" | "porto" | "faro"): DayPark[] {
+/** Parques NOSSOS de uma cidade (classificação única), sem os excluídos nas Definições. PURA. */
+export function cityParks(parks: DayPark[], city: "lisbon" | "porto" | "faro", excludedParkIds: readonly string[] = []): DayPark[] {
   const key = EXTRA_CITY_KEY[city];
-  return parks.filter((p) => p.ours && p.city === key);
+  return excludeParks(parks.filter((p) => p.ours && p.city === key), excludedParkIds);
 }
 
 /**
@@ -166,8 +167,8 @@ export interface LiveExtrasResult {
 }
 
 /**
- * Reservas dos parques nossos da cidade com entrada ou saída em
- * [startMs, endMs). Nunca lança. Depois de uma falha, durante LIVE_BREAKER_MS
+ * Reservas dos parques nossos da cidade (menos `excludedParkIds`) com entrada
+ * ou saída em [startMs, endMs). Nunca lança. Depois de uma falha, durante LIVE_BREAKER_MS
  * responde logo "indisponível" (o Extras-Dia usa a cópia).
  */
 export async function getLiveExtrasBookings(
@@ -176,12 +177,13 @@ export async function getLiveExtrasBookings(
   endMs: number,
   query: Query = multiparkDbQuery,
   now = Date.now(),
+  excludedParkIds: readonly string[] = [],
 ): Promise<MultiparkRead<LiveExtrasResult>> {
   if (query === multiparkDbQuery && now < breakerUntil) {
     return { available: false, code: "CONNECT_FAILED", reason: breakerReason || "BD da Multipark indisponível há pouco." };
   }
   const r = await safeMultiparkRead("reservas do Extras-Dia", async () => {
-    const parks = cityParks(await loadParks(query, now), city);
+    const parks = cityParks(await loadParks(query, now), city, excludedParkIds);
     if (!parks.length) return { bookings: [], parks: [], truncated: false };
     const { sql, params } = buildExtrasBookingsSql(startMs, endMs, parks.map((p) => p.id), EXTRAS_LIVE_LIMIT + 1);
     const rows = await query(sql, params);

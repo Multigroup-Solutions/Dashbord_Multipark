@@ -239,8 +239,10 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
   // Sem ela → as nossas cópias, como antes (e o aviso em `source`).
   const live = await safe("multipark ao vivo", async () => {
     const { getMultiparkShiftState } = await import("./multiparkDb/shiftState");
+    const { getSetting } = await import("./appSettings");
     return getMultiparkShiftState({
       cities: [key.city], nowMs,
+      excludedParkIds: (await getSetting("operations.excludedParks")) ?? [],
       upcoming: { startMs: nwin.startMs, endMs: nwin.endMs },
       cash: cashWindowOf(win, nowMs),
     });

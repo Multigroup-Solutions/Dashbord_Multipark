@@ -10,9 +10,9 @@ import { assertReadOnlySql } from "./client";
 import {
   DAY_BOOKINGS_LIMIT, buildDayBookingsSql, buildParksSql, getMultiparkDayBookings, getMultiparkParkClassification, lisbonDayBounds, mapDayBookingRow, mapParks,
 } from "./dayBookings";
-import { allParkGroups, classifyPark, ourBrandOf } from "../../shared/multiparkParks";
+import { allParkGroups, classifyBookingChannel, classifyPark, ourBrandOf } from "../../shared/multiparkParks";
 import {
-  classifyBookingChannel, filterMovements, movementDone, phaseLabel, summarizeDay, toDayMovements, type DayBooking,
+  excludeParks, filterMovements, groupMovements, movementDone, operationalParkGroup, phaseLabel, summarizeDay, toDayMovements, type DayBooking,
 } from "../../shared/reservasDoDia";
 
 const ENV = "DATABASE_URL_MULTIPARK";
@@ -185,27 +185,33 @@ const ROW = {
   checking_in_at: "2026-09-27 07:20:00", moving_at: null, pending_checkout_at: null, checking_out_at: null,
   arrived_at_delivery_at: null, baggage_waiting_at: null, extras_count: "2", extras_pending: 1,
 };
-const PARK = { name: "Airpark", cityName: "Lisboa", key: "airpark_lisboa", label: "Airpark Lisboa", ours: true };
+const PARK = { id: "p1", name: "Airpark", cityName: "Lisboa", key: "airpark_lisboa", label: "Airpark Lisboa", ours: true, order: 0 };
 
 describe("mapeamento da linha", () => {
-  it("linha → reserva (datas ISO UTC, números, grupo, canal)", () => {
+  it("linha → reserva (datas ISO UTC, números, grupo operacional; sem canal)", () => {
     const b = mapDayBookingRow(ROW, PARK);
     expect(b).toMatchObject({
       id: "cm1", code: "29484", status: "CHECKED_IN",
       checkIn: "2026-09-27T07:30:00.000Z", checkOut: "2026-10-02T18:00:00.000Z", checkInTime: "08:30", checkOutTime: null,
-      parkName: "Airpark", parkCity: "Lisboa", groupKey: "airpark_lisboa", groupLabel: "Airpark Lisboa", ours: true,
+      parkName: "Airpark", parkCity: "Lisboa", groupKey: "airpark_lisboa", groupLabel: "Airpark Lisboa", groupOrder: 0, ours: true,
       clientName: "Ana Silva", plate: "AA-00-BB", vehicleBrand: "Renault",
       departingFlightEta: "2026-09-27T10:05:00.000Z", returnFlightEta: null,
-      channel: "parceiro", channelDetail: "Parkvia (cobrado pelo agregador)", channelBadge: "Parceiro · Parkvia",
+      origin: "API", paymentSource: "PARKVIA",
       garage: "Garagem A", spot: "B 12", price: 49.9, paid: 20, toPay: 29.9, pro: false,
       extrasCount: 2, extrasPending: 1, customerCheckinEta: 15,
     });
     expect(b.phases.checkingInAt).toBe("2026-09-27T07:20:00.000Z");
+    expect(b).not.toHaveProperty("channel");
+    expect(b).not.toHaveProperty("channelBadge");
   });
-  it("parque desconhecido → Marketplace; preço em falta → sem 'falta pagar'", () => {
+  it("parque de terceiros → o seu próprio grupo (nome do parque), sem Marketplace", () => {
+    const other = { id: "p7", name: "Top-Parking Lisboa", cityName: "Lisboa", ...classifyPark({ name: "Top-Parking Lisboa", city: "Lisboa" }) };
+    const b = mapDayBookingRow({ ...ROW, park_id: "p7" }, other);
+    expect(b).toMatchObject({ groupKey: "park:p7", groupLabel: "Top-Parking Lisboa", ours: false, groupOrder: 1000 });
+  });
+  it("parque desconhecido → grupo próprio; preço em falta → sem 'falta pagar'", () => {
     const b = mapDayBookingRow({ ...ROW, price: null, paid: null, client_first_name: null, client_last_name: null }, undefined);
-    expect(b.groupKey).toBe("marketplace");
-    expect(b.channel).toBe("marketplace");
+    expect(b).toMatchObject({ groupKey: "park:p1", groupLabel: "Parque desconhecido", ours: false });
     expect(b.toPay).toBeNull();
     expect(b.clientName).toBeNull();
   });
@@ -250,21 +256,57 @@ describe("movimentos, filtros e contagens", () => {
     expect(filterMovements(rows, { search: "cc22" }).map((m) => m.booking.id)).toEqual(["b"]);
     expect(filterMovements(rows, { search: "joao" }).map((m) => m.booking.id)).toEqual(["b"]);
     expect(filterMovements(rows, { search: "100" }).map((m) => m.booking.id)).toEqual(["a"]);
-    expect(filterMovements(rows, { channel: "parceiro" }).map((m) => m.booking.id)).toEqual(["a", "b"]);
-    expect(filterMovements(rows, { channel: "direto" })).toEqual([]);
   });
   it("contagens: entradas, saídas, por grupo, canceladas à parte", () => {
     const rows = toDayMovements([
       mk({ id: "a", status: "BOOKED", checkIn: "2026-09-27T08:00:00.000Z" }),
-      mk({ id: "b", status: "CHECKED_OUT", groupKey: "marketplace", checkIn: "2026-09-20T08:00:00.000Z", checkOut: "2026-09-27T09:00:00.000Z" }),
+      mk({ id: "b", status: "CHECKED_OUT", groupKey: "park:p7", groupLabel: "Top-Parking", groupOrder: 1000, ours: false, checkIn: "2026-09-20T08:00:00.000Z", checkOut: "2026-09-27T09:00:00.000Z" }),
       mk({ id: "c", status: "CANCELLED", checkIn: "2026-09-27T10:00:00.000Z", checkOut: "2026-09-27T12:00:00.000Z" }),
     ], day.startMs, day.endMs);
     const s = summarizeDay(rows);
     expect(s).toMatchObject({ entradas: 1, saidas: 1, canceladas: 1, entradasPorFazer: 1, saidasPorFazer: 0 });
     expect(s.groups.find((g) => g.key === "airpark_lisboa")).toMatchObject({ entradas: 1, saidas: 0 });
-    expect(s.groups.find((g) => g.key === "marketplace")).toMatchObject({ entradas: 0, saidas: 1 });
-    expect(s.channels.map((c) => c.channel)).toEqual(["direto", "parceiro", "marketplace"]);
-    expect(s.channels.find((c) => c.channel === "parceiro")).toMatchObject({ entradas: 1, saidas: 1 });
+    expect(s.groups.find((g) => g.key === "park:p7")).toMatchObject({ entradas: 0, saidas: 1 });
+    expect(s.groups.map((g) => g.key)).toEqual(["airpark_lisboa", "park:p7"]);
+    expect(s).not.toHaveProperty("channels");
+  });
+});
+
+describe("grupos operacionais (um por parque)", () => {
+  const cls = (id: string, name: string, city: string) => ({ id, name, ...classifyPark({ name, city }) });
+  it("marca nossa + cidade → grupo da marca; outro parque → o próprio parque", () => {
+    expect(operationalParkGroup(cls("a", "Airpark", "Porto"))).toEqual({ key: "airpark_porto", label: "Airpark Porto", ours: true, order: 3 });
+    expect(operationalParkGroup(cls("x", "Parkvia Faro", "Faro"))).toEqual({ key: "park:x", label: "Parkvia Faro", ours: false, order: 1000 });
+    expect(operationalParkGroup({ id: "y", name: null, key: "marketplace", label: "Marketplace", ours: false }).label).toBe("y");
+  });
+  it("ordem: marcas nossas (Lisboa, Porto, Faro × Airpark, Redpark, Skypark) e depois os outros por nome", () => {
+    const parks = [
+      cls("z", "Zeta Parking", "Lisboa"), cls("s", "Skypark", "Lisboa"), cls("f", "Airpark", "Faro"),
+      cls("b", "boardingpark", "Porto"), cls("a", "Airpark", "Lisboa"), cls("r", "Redpark", "Porto"), cls("c", "Ávila Park", "Faro"),
+    ];
+    const rows = toDayMovements(
+      parks.map((p, i) => mapDayBookingRow({ ...ROW, id: `b${i}`, park_id: p.id, check_in: `2026-09-27 ${String(8 + i).padStart(2, "0")}:00:00` }, p)),
+      day.startMs, day.endMs,
+    );
+    const sections = groupMovements(rows);
+    expect(sections.map((g) => g.label)).toEqual([
+      "Airpark Lisboa", "Skypark Lisboa", "Redpark Porto", "Airpark Faro", "Ávila Park", "boardingpark", "Zeta Parking",
+    ]);
+    expect(sections.every((g) => g.rows.length === 1)).toBe(true);
+    expect(sections.some((g) => g.label === "Marketplace")).toBe(false);
+    expect(summarizeDay(rows).groups.map((g) => g.label)).toEqual(sections.map((g) => g.label));
+  });
+  it("dois parques da mesma marca + cidade ficam no mesmo bloco", () => {
+    const p1 = cls("a1", "Airpark", "Lisboa");
+    const p2 = cls("a2", "Airpark Premium", "Lisboa");
+    const rows = toDayMovements([mapDayBookingRow({ ...ROW, id: "x1", park_id: "a1" }, p1), mapDayBookingRow({ ...ROW, id: "x2", park_id: "a2" }, p2)], day.startMs, day.endMs);
+    expect(groupMovements(rows).map((g) => [g.key, g.rows.length])).toEqual([["airpark_lisboa", 2]]);
+  });
+  it("excludeParks: tira os ids da lista; lista vazia não muda nada", () => {
+    const ps = [{ id: "a" }, { id: "b" }, { id: "c" }];
+    expect(excludeParks(ps, ["b", "zz"]).map((p) => p.id)).toEqual(["a", "c"]);
+    expect(excludeParks(ps, [])).toBe(ps);
+    expect(excludeParks(ps, null)).toBe(ps);
   });
 });
 
@@ -289,6 +331,34 @@ describe("leitura (com a BD simulada)", () => {
     expect(r.data.movements.map((m) => m.key)).toEqual(["cm1:entrada"]);
     expect(r.data.movements[0].booking.groupLabel).toBe("Airpark Lisboa");
     expect(r.data.truncated).toBe(false);
+    expect(r.data.excludedParks).toBe(0);
+  });
+  it("todos os parques (também os de terceiros) menos os que a operação não faz", async () => {
+    process.env[ENV] = "postgres://ro:x@db.example.com:5432/mp";
+    queryMock
+      .mockResolvedValueOnce([
+        { id: "p1", name: "Airpark", city: "Lisboa" },
+        { id: "p5", name: "Top-Parking", city: "Lisboa" },
+        { id: "p6", name: "Parque Não Operado", city: "Lisboa" },
+      ])
+      .mockResolvedValueOnce([ROW, { ...ROW, id: "cm5", park_id: "p5" }]);
+    const r = await getMultiparkDayBookings("2026-09-27", undefined, ["p6"]);
+    expect(r.available).toBe(true);
+    if (!r.available) return;
+    // A leitura das reservas só pede os parques operados (p6 fica de fora no SQL).
+    expect(queryMock.mock.calls[1][1].slice(0, 2)).toEqual(["p1", "p5"]);
+    expect(queryMock.mock.calls[1][0]).toContain(`b."parkId" IN ($1, $2)`);
+    expect(r.data.parks.map((p) => p.id)).toEqual(["p1", "p5"]);
+    expect(r.data.parks.map((p) => p.groupLabel)).toEqual(["Airpark Lisboa", "Top-Parking"]);
+    expect(r.data.excludedParks).toBe(1);
+    expect(r.data.movements.map((m) => m.booking.groupLabel)).toEqual(["Airpark Lisboa", "Top-Parking"]);
+  });
+  it("todos os parques excluídos → lista vazia sem ler as reservas", async () => {
+    process.env[ENV] = "postgres://ro:x@db.example.com:5432/mp";
+    queryMock.mockResolvedValueOnce([{ id: "p1", name: "Airpark", city: "Lisboa" }]);
+    const r = await getMultiparkDayBookings("2026-09-27", undefined, ["p1"]);
+    expect(r).toMatchObject({ available: true, data: { movements: [], parks: [], excludedParks: 1 } });
+    expect(queryMock).toHaveBeenCalledTimes(1);
   });
   it("sem parques no âmbito → lista vazia sem ler as reservas", async () => {
     process.env[ENV] = "postgres://ro:x@db.example.com:5432/mp";

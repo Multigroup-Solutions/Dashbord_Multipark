@@ -19,7 +19,7 @@ Checklist de fim de turno dos team leaders e resumo do dia para a supervisão.
 - Se a BD da Multipark não responder, aparece um aviso a laranja e o resumo usa as cópias do dashboard (como antes). O resto da passagem funciona igual.
 
 **Estado do parque (ao vivo)**
-Separador com o estado atual dos parques da cidade, lido diretamente da BD da Multipark (só leitura):
+Separador com o estado atual dos parques da cidade (sem os **Parques que a operação não faz** das Definições — o mesmo vale para o resumo da passagem), lido diretamente da BD da Multipark (só leitura):
 - **Carros no parque** por parque e garagem (com lugar, hora de saída e voo de regresso) e os que já passaram a hora de saída.
 - **Operações em curso**: a fazer check-in, em movimento, entrega pendente, à espera das malas, no local de entrega, a fazer check-out.
 - **Próximas entregas e recolhas** (4, 8, 12 ou 24 h) com voo e ETA do voo.

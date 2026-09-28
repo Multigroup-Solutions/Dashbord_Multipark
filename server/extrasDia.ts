@@ -537,7 +537,10 @@ type LiveWindow = { ok: true; rows: BookingRow[]; parks: string[] } | { ok: fals
 async function liveBookingsInWindow(startInclusive: Date, endExclusive: Date, city: ExtraCity): Promise<LiveWindow> {
   try {
     const { getLiveExtrasBookings } = await import("./multiparkDb/extrasBookings");
-    const r = await getLiveExtrasBookings(city, lisbonWallToUtcMs(toMysqlDateTime(startInclusive)), lisbonWallToUtcMs(toMysqlDateTime(endExclusive)));
+    const { getSetting } = await import("./appSettings");
+    // "Parques que a operação não faz" (Definições) ficam fora da previsão e dos blocos.
+    const excluded = (await getSetting("operations.excludedParks")) ?? [];
+    const r = await getLiveExtrasBookings(city, lisbonWallToUtcMs(toMysqlDateTime(startInclusive)), lisbonWallToUtcMs(toMysqlDateTime(endExclusive)), undefined, undefined, excluded);
     if (!r.available) return { ok: false, notice: `${r.reason} A usar a cópia das reservas (pode estar desatualizada).` };
     if (r.data.truncated) console.warn(`[extrasDia] leitura ao vivo cortada (${r.data.bookings.length} reservas) — ${city}`);
     return { ok: true, rows: r.data.bookings.map(liveToBookingRow), parks: r.data.parks };
