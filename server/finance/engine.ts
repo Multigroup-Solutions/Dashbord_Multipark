@@ -55,6 +55,7 @@ import { lisbonDayOf, lisbonDayRangeUtc, lisbonDaySql } from "../../shared/lisbo
 import * as R from "./rules";
 import { resolveFinanceRates, rateCaseSql, type FinanceRates, type RatePeriod } from "./rates";
 import { loadPartnerIndex, operatedLeavesByPartner, partnerForCampaign } from "./partners";
+import { groupAgg, loadLiveBookingAgg, sumOf, type LiveBookingAgg } from "./liveBookings";
 
 export interface FinanceFilters {
   from: string;                 // YYYY-MM-DD (dia de Lisboa)
@@ -311,41 +312,29 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   out.scope = { projectId: filters.projectId ?? null, projectIds: projectIds ?? null, cities };
 
   // ─── 1. Entregues (por dia de Lisboa × centro) e por campanha ─────────────
-  const deliveryConds = deliveredConditions(from, to, projectIds);
-  const dayExpr = bookingLisbonDay("checkOut", from, to);
-  const deliveryRows = await db
-    .select({
-      day: dayExpr, projectId: multiparkBookings.projectId, projectName: projects.name,
-      count: sql<number>`COUNT(*)`, totalRevenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-      parkingRevenue: sql<number>`COALESCE(SUM(${multiparkBookings.parkingPrice}), 0)`,
-      deliveryCharges: sql<number>`COALESCE(SUM(${multiparkBookings.deliveryCharges}), 0)`,
-      extrasRevenue: sql<number>`COALESCE(SUM(${multiparkBookings.extrasTotal}), 0)`,
-    })
-    .from(multiparkBookings)
-    .leftJoin(projects, eq(multiparkBookings.projectId, projects.id))
-    .where(and(...deliveryConds))
-    .groupBy(dayExpr, multiparkBookings.projectId, projects.name);
-
-  const campaignRows = await db
-    .select({
-      day: dayExpr, projectId: multiparkBookings.projectId, projectName: projects.name, campaign: multiparkBookings.campaign,
-      count: sql<number>`COUNT(*)`, totalRevenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    })
-    .from(multiparkBookings)
-    .leftJoin(projects, eq(multiparkBookings.projectId, projects.id))
-    .where(and(...deliveryConds, isNotNull(multiparkBookings.campaign), sql`${multiparkBookings.campaign} <> ''`))
-    .groupBy(dayExpr, multiparkBookings.projectId, projects.name, multiparkBookings.campaign);
+  // Reservas AO VIVO da BD da Multipark (./liveBookings.ts), só os nossos
+  // parques; a cópia multipark_bookings deixou de contar (28 set 2026).
+  const projectNameOf = (pid: number | null) => (pid == null ? null : projById.get(pid)?.name ?? null);
+  const [liveDelivered, liveCollected, liveForecast] = await Promise.all([
+    loadLiveBookingAgg("delivered", utc, projectIds),
+    loadLiveBookingAgg("collected", utc, projectIds),
+    // Receita esperada (7.): só com o período em curso/futuro.
+    to >= today ? loadLiveBookingAgg("forecast", { ...utc, todayStart: lisbonDayRangeUtc(today).start }, projectIds) : Promise.resolve([] as LiveBookingAgg[]),
+  ]);
+  const byDayProject = (rows: LiveBookingAgg[]) => Array.from(groupAgg(rows, (r) => `${r.day}|${r.projectId ?? "null"}`).values()).map((g) => ({
+    day: g[0].day, projectId: g[0].projectId, projectName: projectNameOf(g[0].projectId),
+    count: sumOf(g, (r) => r.count), totalRevenue: sumOf(g, (r) => r.total), parkingRevenue: sumOf(g, (r) => r.parking),
+    deliveryCharges: sumOf(g, (r) => r.delivery), extrasRevenue: sumOf(g, (r) => r.extras),
+  }));
+  const byDayProjectCampaign = (rows: LiveBookingAgg[]) => Array.from(groupAgg(rows, (r) => `${r.day}|${r.projectId ?? "null"}|${r.campaign ?? ""}`).values()).map((g) => ({
+    day: g[0].day, projectId: g[0].projectId, projectName: projectNameOf(g[0].projectId), campaign: g[0].campaign,
+    count: sumOf(g, (r) => r.count), totalRevenue: sumOf(g, (r) => r.total),
+  }));
+  const deliveryRows = byDayProject(liveDelivered);
+  const campaignRows = byDayProjectCampaign(liveDelivered.filter((r) => r.campaign && r.campaign.trim() !== ""));
 
   // ─── 2. Recolhidos (por dia de Lisboa × centro) ───────────────────────────
-  const collectedConds: SQL[] = [gte(multiparkBookings.checkIn, utc.start), lt(multiparkBookings.checkIn, utc.end), inArray(multiparkBookings.status, COLLECTED_STATUSES)];
-  if (projectIds) collectedConds.push(inArray(multiparkBookings.projectId, projectIds));
-  const dayInExpr = bookingLisbonDay("checkIn", from, to);
-  const collectedRows = await db
-    .select({ day: dayInExpr, projectId: multiparkBookings.projectId, projectName: projects.name, count: sql<number>`COUNT(*)`, totalRevenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)` })
-    .from(multiparkBookings)
-    .leftJoin(projects, eq(multiparkBookings.projectId, projects.id))
-    .where(and(...collectedConds))
-    .groupBy(dayInExpr, multiparkBookings.projectId, projects.name);
+  const collectedRows = byDayProject(liveCollected);
 
   // ─── 3. Despesas (data da despesa, não canceladas) — contadas UMA vez ─────
   const expConds: SQL[] = [sql`${expenses.status} <> 'cancelled'`, gte(expenses.expenseDate, fromStr), lte(expenses.expenseDate, toStr)];
@@ -402,18 +391,7 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   // (check-in de hoje em diante) com saída no período. Só com o período em
   // curso/futuro; um período fechado não tem previsão.
   const fcFrom = R.maxDay(from, today);
-  const todayStartUtc = lisbonDayRangeUtc(today).start;
-  const forecastRows = to >= today ? await db
-    .select({ day: dayExpr, projectId: multiparkBookings.projectId, projectName: projects.name, campaign: multiparkBookings.campaign, count: sql<number>`COUNT(*)`, totalRevenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)` })
-    .from(multiparkBookings)
-    .leftJoin(projects, eq(multiparkBookings.projectId, projects.id))
-    .where(and(
-      gte(multiparkBookings.checkOut, utc.start), lt(multiparkBookings.checkOut, utc.end),
-      notInArray(multiparkBookings.status, ["CANCELLED", ...DELIVERED_STATUSES]),
-      or(inArray(multiparkBookings.status, PARKED_STATUSES), gte(multiparkBookings.checkIn, todayStartUtc))!,
-      ...(projectIds ? [inArray(multiparkBookings.projectId, projectIds)] : []),
-    ))
-    .groupBy(dayExpr, multiparkBookings.projectId, projects.name, multiparkBookings.campaign) : [];
+  const forecastRows = byDayProjectCampaign(liveForecast);
 
   // ─── 8. Marketing (EXCLUÍDO dos custos) — só a pedido ─────────────────────
   if (filters.includeMarketingCoverage) {

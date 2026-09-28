@@ -23,6 +23,12 @@ vi.mock("./extrasCost", async (orig) => {
   const m: any = await orig();
   return { ...m, loadExtrasCostRows: vi.fn(async () => ({ assignments: [], ponto: [] })) };
 });
+// Reservas AO VIVO (BD da Multipark): entregues a 10 e 20 de janeiro, uma recolhida a 20.
+vi.mock("./liveBookings", async (orig) => {
+  const m: any = await orig();
+  const a = (day: string) => ({ day, projectId: null, parkId: "pk", campaign: null, paymentMethod: null, count: 1, total: 1230, parking: 1230, delivery: 0, extras: 0, paid: 0, remaining: 0, owingCount: 0 });
+  return { ...m, loadLiveBookingAgg: vi.fn(async (kind: string) => (kind === "delivered" ? [a("2026-01-10"), a("2026-01-20")] : kind === "collected" ? [a("2026-01-20")] : [])) };
+});
 vi.mock("../integrations/googleAds/adMetrics", () => ({
   getAdMetrics: vi.fn(async () => ({ totals: { cost: 0 }, byCampaign: [] })),
 }));
@@ -132,16 +138,10 @@ describe("taxas gravadas — leitura, cache e período", () => {
 /** BD falsa: cada select devolve linhas conforme os campos pedidos. */
 function makeFakeDb() {
   const captured: { expenseFields?: any } = {};
-  let multiparkPlainSelects = 0;
   const respond = (fields: Record<string, unknown>): any[] => {
     const k = Object.keys(fields ?? {});
     const has = (n: string) => k.includes(n);
     if (has("level") && has("parentId")) return [];                          // projetos
-    if (has("parkingRevenue")) return [                                       // entregues
-      { day: "2026-01-10", projectId: null, projectName: null, count: 1, totalRevenue: 1230, parkingRevenue: 1230, deliveryCharges: 0, extrasRevenue: 0 },
-      { day: "2026-01-20", projectId: null, projectName: null, count: 1, totalRevenue: 1230, parkingRevenue: 1230, deliveryCharges: 0, extrasRevenue: 0 },
-    ];
-    if (has("campaign")) return [];
     if (has("totalNet")) { captured.expenseFields = fields; return []; }      // despesas
     if (has("supplier")) return [];                                           // pendentes
     if (has("campaignKey") || has("aliasValue")) return [];                   // parceiros
@@ -150,10 +150,6 @@ function makeFakeDb() {
     ];
     if (has("employeeId") && has("effectiveFrom")) return [];                 // histórico salarial
     if (has("total")) return [{ total: 0 }];                                  // marketing
-    if (has("day") && has("totalRevenue")) {                                  // recolhidos, depois previsão
-      multiparkPlainSelects++;
-      return multiparkPlainSelects === 1 ? [{ day: "2026-01-20", projectId: null, projectName: null, count: 1, totalRevenue: 1230 }] : [];
-    }
     return [];
   };
   const db = {
