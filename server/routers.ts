@@ -349,6 +349,7 @@ import {
 } from "./zello";
 import { collectDailyDriverData } from "./jobs/dailyDriverCollection";
 import { LEAD_STATUSES } from "../shared/extraLeadsFunnel";
+import * as opsListsShared from "../shared/opsLists";
 
 /** Estados dos leads de extras (inclui `replied` — "Respondeu"). */
 const LEAD_STATUS_ENUM = LEAD_STATUSES;
@@ -6243,6 +6244,17 @@ export const appRouter = router({
       return { success: true };
     }),
 
+    // Tarefas geradas pelos serviços (trabalho services-tasks): link na página /servicos.
+    // Mesmo período da lista (prazo da tarefa = saída do carro, dias de Lisboa).
+    generatedTasks: protectedProcedure.input(z.object({
+      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    })).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "servicos", "view");
+      const { serviceTasksInRange } = await import("./serviceTasks");
+      return serviceTasksInRange(input.startDate, input.endDate);
+    }),
+
     // Serviços extra das reservas — FONTE: BD local (multipark_booking_extras,
     // sincronizada do /report a cada 15min). FIX 2026-08-06: antes chamava a
     // API ao vivo com UMA chave (= só um parque, lento, incompleto) e mostrava
@@ -6270,6 +6282,7 @@ export const appRouter = router({
         .select({
           id: multiparkBookingExtras.id,
           bookingId: multiparkBookingExtras.bookingExternalId,
+          extraId: multiparkBookingExtras.extraId,
           bookingNumber: multiparkBookings.bookingNumber,
           licensePlate: multiparkBookings.licensePlate,
           clientFirstName: multiparkBookings.clientFirstName,
@@ -6296,6 +6309,7 @@ export const appRouter = router({
       const services = rows.map((r) => ({
         id: r.id,
         bookingId: r.bookingId,
+        extraId: r.extraId ?? null,
         bookingNumber: r.bookingNumber,
         licensePlate: r.licensePlate ?? "",
         clientName: `${r.clientFirstName ?? ""} ${r.clientLastName ?? ""}`.trim(),
@@ -7009,6 +7023,35 @@ export const appRouter = router({
         requireAccess(ctx.user, "reservas_operacoes", "view");
         const { getMultiparkDayBookings } = await import("./multiparkDb/dayBookings");
         const r = await getMultiparkDayBookings(input.day, scopedCityNames());
+        if (!r.available) return { available: false as const, reason: r.reason, code: r.code };
+        return { available: true as const, ...r.data };
+      }),
+
+    // Listas por período (Reservas criadas, Recolhas, Entregas, Cancelados),
+    // lidas AO VIVO da BD da Multipark: contadores agregados no SQL (com o
+    // período anterior para comparar) + uma página da lista. Máx. 62 dias.
+    // Só os parques das cidades do utilizador; nunca lança por falta de BD.
+    opsList: protectedProcedure
+      .input(z.object({
+        kind: z.enum(["reservas", "entradas", "saidas", "cancelados"]),
+        from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        parkId: z.string().max(64).optional(),
+        channel: z.enum(["", "direto", "parceiro", "marketplace"]).optional(),
+        state: z.string().max(20).optional(),
+        search: z.string().max(100).optional(),
+        limit: z.number().int().min(1).max(500).optional(),
+        offset: z.number().int().min(0).max(10_000).optional(),
+      }).refine((v) => {
+        const { rangeDays, OPS_LIST_MAX_DAYS } = opsListsShared;
+        const n = rangeDays(v.from, v.to);
+        return n >= 1 && n <= OPS_LIST_MAX_DAYS;
+      }, { message: "Período inválido (máximo 62 dias)." }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "reservas_operacoes", "view");
+        const { getMultiparkOpsList } = await import("./multiparkDb/opsLists");
+        const state = opsListsShared.isOpsListState(input.kind, input.state) ? input.state : "all";
+        const r = await getMultiparkOpsList({ ...input, state }, scopedCityNames());
         if (!r.available) return { available: false as const, reason: r.reason, code: r.code };
         return { available: true as const, ...r.data };
       }),

@@ -20,6 +20,7 @@ import { DEFAULT_DRIVE_CONFIG, driveConfigSchema } from "./drive";
 import { DEFAULT_WEB_ANALYTICS_CONFIG, WEB_ANALYTICS_SETTING_KEY, webAnalyticsConfigSchema } from "./webAnalytics";
 import { DEFAULT_GBP_CONFIG, GBP_SETTING_KEY, gbpConfigSchema } from "./googleBusinessProfile";
 import { DEFAULT_KNOWLEDGE_CONFIG, KNOWLEDGE_SETTING_KEY, knowledgeConfigSchema } from "./knowledge";
+import { DEFAULT_SERVICE_TASK_RULES, SERVICE_TASKS_SETTING_KEY, serviceTaskRulesSchema } from "./serviceTasks";
 
 // ─── Taxas com data de efeito (IVA / TSU) ───────────────────────────────────
 
@@ -82,7 +83,7 @@ export const aiFeatureTiersSchema = z.record(
   z.enum(AI_TIERS as unknown as ["lite", "fast", "smart"], { error: "Nível inválido (lite, fast ou smart)." }),
 );
 
-export type SettingGroup = "financeiro" | "sla" | "emails" | "disponibilidade" | "ia" | "extras" | "notificacoes" | "marketing" | "operacao";
+export type SettingGroup = "financeiro" | "sla" | "emails" | "disponibilidade" | "ia" | "extras" | "notificacoes" | "marketing" | "operacao" | "servicos";
 
 // ─── Zello (GPS) ────────────────────────────────────────────────────────────
 
@@ -455,6 +456,15 @@ export const SETTINGS = {
     defaultValue: DEFAULT_KNOWLEDGE_CONFIG,
     wiring: "live",
   }),
+  [SERVICE_TASKS_SETTING_KEY]: def({
+    key: SERVICE_TASKS_SETTING_KEY,
+    group: "servicos",
+    label: "Serviços → tarefas",
+    description: "Por cidade e por tipo de serviço extra (lavagem, carregamento elétrico…): se cada reserva com esse serviço gera uma tarefa (prazo: a saída do carro) e, opcionalmente, o responsável. Os team leaders do turno da saída e do turno anterior são sempre acrescentados. Editável em Definições → Parâmetros → Serviços → tarefas.",
+    schema: serviceTaskRulesSchema,
+    defaultValue: DEFAULT_SERVICE_TASK_RULES,
+    wiring: "live",
+  }),
   [NOTIFICATION_ROUTING_SETTING_KEY]: def({
     key: NOTIFICATION_ROUTING_SETTING_KEY,
     group: "notificacoes",
@@ -616,6 +626,8 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "crm-sync", label: "CRM: fichas de cliente a partir das reservas", intervalMinutes: 15, workflow: "tick" },
   { name: "crm-suggestions", label: "CRM: sugestões para juntar fichas", intervalMinutes: 1440, workflow: "tick" },
   { name: "crm-pro-sync", label: "CRM: conta corrente dos clientes Pro (BD Multipark)", intervalMinutes: 30, workflow: "tick" },
+  // Serviços extra das reservas → tarefas (BD Multipark ao vivo, saídas nas próximas 48 h).
+  { name: "services-tasks", label: "Serviços das reservas → tarefas", intervalMinutes: 15, workflow: "tick" },
   { name: "daily-ops", label: "Manutenção diária + recolha GPS final (D-2)", intervalMinutes: 1440, workflow: "tick" },
   { name: "zello-sameday", label: "GPS do Zello — recolha provisória do dia (23:15–23:55)", intervalMinutes: 1440, workflow: "tick" },
   { name: "extras-pressure", label: "Extras-Dia: pressão (60 dias da BD Multipark)", intervalMinutes: 1440, workflow: "tick" },

@@ -124,10 +124,10 @@ export function taskUpdateSideEffects(
 
 // ─── Origem (link para o registo) ───────────────────────────────────────────
 
-export const TASK_SOURCE_MODULES = ["manual", "availability", "complaint", "incident", "lost_found", "template", "google_tasks"] as const;
+export const TASK_SOURCE_MODULES = ["manual", "availability", "complaint", "incident", "lost_found", "template", "google_tasks", "service"] as const;
 export type TaskSourceModule = (typeof TASK_SOURCE_MODULES)[number];
 export const TASK_SOURCE_LABELS: Record<TaskSourceModule, string> = {
-  manual: "Manual", availability: "Disponibilidade", complaint: "Reclamação", incident: "Ocorrência", lost_found: "Perdidos e achados", template: "Checklist", google_tasks: "Google Tarefas",
+  manual: "Manual", availability: "Disponibilidade", complaint: "Reclamação", incident: "Ocorrência", lost_found: "Perdidos e achados", template: "Checklist", google_tasks: "Google Tarefas", service: "Serviço da reserva",
 };
 
 /** Link da origem (null quando não há página própria). */
@@ -141,6 +141,11 @@ export function taskSourceLink(module: string | null | undefined, id: number | n
     case "complaint": return id ? `/reclamacoes?id=${id}` : "/reclamacoes";
     case "incident": return "/ocorrencias";
     case "lost_found": return "/perdidos-achados";
+    // Serviço extra de uma reserva (sourceKey "svc:<reserva>:<linha>") → ficha da reserva.
+    case "service": {
+      const m = /^svc:([^:]+):/.exec(key ?? "");
+      return m ? `/reserva/${encodeURIComponent(m[1])}` : "/servicos";
+    }
     default: return null;
   }
 }

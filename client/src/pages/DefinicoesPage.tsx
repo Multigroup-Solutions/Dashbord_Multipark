@@ -30,6 +30,7 @@ import { GoogleDriveSettings } from "@/components/google/GoogleDriveSettings";
 import { WebAnalyticsSettings } from "@/components/marketing/WebAnalyticsSettings";
 import { validateSetting, type RateEntry } from "@shared/appSettings";
 import { NotificationRoutingCard } from "@/components/NotificationRoutingCard";
+import { ServiceTasksSettings } from "@/components/ServiceTasksSettings";
 
 const TABS = ["estado", "automacoes", "integracoes", "comunicacao", "parametros", "notificacoes", "seguranca"] as const;
 type Tab = (typeof TABS)[number];
@@ -75,7 +76,7 @@ export default function DefinicoesPage() {
         <TabsContent value="automacoes"><AutomationsCard /></TabsContent>
         <TabsContent value="integracoes" className="space-y-4"><IntegrationsCard /><WebAnalyticsSettings /></TabsContent>
         <TabsContent value="comunicacao" className="space-y-4"><MailboxesSettings /><SharedCalendarsSettings /><GooglePushSettings /><GoogleContactsSettings /><GoogleDriveSettings /></TabsContent>
-        <TabsContent value="parametros"><ParametersCard /></TabsContent>
+        <TabsContent value="parametros" className="space-y-4"><ServiceTasksSettings /><ParametersCard /></TabsContent>
         <TabsContent value="notificacoes"><NotificationRoutingCard /></TabsContent>
         <TabsContent value="seguranca"><SecurityCard isSuperAdmin={user.role === "super_admin"} /></TabsContent>
       </Tabs>
@@ -476,6 +477,7 @@ function ParametersCard() {
       if (s.key === "google.sharedCalendars" || s.key === "google.contacts" || s.key === "google.drive") continue; // cartões próprios (Comunicação)
       if (s.key === "marketing.webAnalytics") continue; // cartão próprio (Integrações → Web & SEO)
       if (s.key === "knowledge.config") continue; // cartão próprio (Formação → Base de conhecimento)
+      if (s.key === "services.taskRules") continue; // cartão próprio (Serviços → tarefas, acima)
       if (!m.has(s.group)) m.set(s.group, []);
       m.get(s.group)!.push(s);
     }
