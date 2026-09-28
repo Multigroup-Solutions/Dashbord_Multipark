@@ -2,11 +2,13 @@
 modulo: faturacao
 titulo: Faturação
 rotas: /faturacao, /financeiro, /anual
-palavras: faturação, faturacao, receita, margem, fecho previsto, previsão, realizado, custos detalhados, caixa, comissões, iva, receita esperada, no-shows, financeiro, anual, totais, correção de caixa, conferência, era, é, webhook, preço mudou, preço zerado, método de pagamento, divergência, caixa fechada
+palavras: ao vivo, base da multipark, faturação, faturacao, receita, margem, fecho previsto, previsão, realizado, custos detalhados, caixa, comissões, iva, receita esperada, no-shows, financeiro, anual, totais, correção de caixa, conferência, era, é, webhook, preço mudou, preço zerado, método de pagamento, divergência, caixa fechada
 ---
 # Faturação
 
 Receita, custos e margem por período (só super admin; o dashboard Financeiro é para admin e acima).
+
+As reservas (receita, entregues, recolhidas, receita esperada e caixa) são lidas **ao vivo da base de dados da Multipark**, só dos nossos parques (Airpark, Redpark e Skypark em Lisboa, Porto e Faro). Já não dependem de importações nem da cópia antiga. Se a base da Multipark não responder, a página mostra o erro em vez de números a zero.
 
 **Ler a página**
 1. Menu **Financeiro → Faturação**. Escolhe o período e, se quiseres, a marca/projeto.

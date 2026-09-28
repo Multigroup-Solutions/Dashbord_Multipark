@@ -26,6 +26,15 @@ vi.mock("./extrasCost", async (orig) => {
 });
 const adMetrics = vi.fn(async () => ({ totals: { cost: 50 }, byCampaign: [] }));
 vi.mock("../integrations/googleAds/adMetrics", () => ({ getAdMetrics: adMetrics }));
+// Reservas AO VIVO (BD da Multipark) — por tipo de leitura.
+const live: { delivered: any[]; collected: any[]; forecast: any[] } = { delivered: [], collected: [], forecast: [] };
+const liveCalls: Array<{ kind: string; range: any; projectIds: any }> = [];
+vi.mock("./liveBookings", async (orig) => {
+  const m: any = await orig();
+  return { ...m, loadLiveBookingAgg: vi.fn(async (kind: string, range: any, projectIds: any) => { liveCalls.push({ kind, range, projectIds }); return (live as any)[kind] ?? []; }) };
+});
+/** Agregado ao vivo (centro já resolvido). */
+const agg = (o: any) => ({ day: "2026-08-10", projectId: null, parkId: "pk", campaign: null, paymentMethod: null, count: 1, total: 0, parking: 0, delivery: 0, extras: 0, paid: 0, remaining: 0, owingCount: 0, ...o });
 
 import { computeFinance, deliveredConditions, bookingLisbonDay, monthlyRowsFromTimeseries } from "./engine";
 import { DEFAULT_FINANCE_RATES } from "./rates";
@@ -83,6 +92,7 @@ const emp = (o: any = {}) => ({ id: 1, fullName: "Pessoa", projectId: null, cont
 
 beforeEach(() => {
   extrasRows.assignments = []; extrasRows.ponto = []; extrasQuery.length = 0; payroll.length = 0;
+  live.delivered = []; live.collected = []; live.forecast = []; liveCalls.length = 0;
   adMetrics.mockClear();
 });
 
@@ -128,18 +138,15 @@ describe("comissões: base sem IVA e sem comissão a dobrar", () => {
     { id: 2, name: "Top Parking", campaignKey: "TOP", commissionRate: 20, partnerType: "operacional", commissionBase: "net", notes: JSON.stringify({ operatesProjects: [10] }), monthlyFee: 0, partnerStatus: "active", updatedAt: "2026-01-01", configuredAt: "2026-01-01" },
     { id: 3, name: "Bruto", campaignKey: "BR", commissionRate: 10, partnerType: "agregador", commissionBase: "gross", notes: null, monthlyFee: 0, partnerStatus: "active", updatedAt: "2026-01-01", configuredAt: "2026-01-01" },
   ];
-  const deliveries = [
-    { day: "2026-08-10", projectId: 10, projectName: "Porto A", count: 2, totalRevenue: 246, parkingRevenue: 246, deliveryCharges: 0, extrasRevenue: 0 },
-    { day: "2026-08-10", projectId: 11, projectName: "Porto B", count: 2, totalRevenue: 246, parkingRevenue: 246, deliveryCharges: 0, extrasRevenue: 0 },
-  ];
-  const campaigns = [
-    { day: "2026-08-10", projectId: 10, projectName: "Porto A", campaign: "top", count: 1, totalRevenue: 123 },  // operado pelo próprio → sem venda
-    { day: "2026-08-10", projectId: 11, projectName: "Porto B", campaign: "top", count: 1, totalRevenue: 123 },  // outro centro → cobra venda
-    { day: "2026-08-10", projectId: 11, projectName: "Porto B", campaign: "ag", count: 1, totalRevenue: 123 },
-    { day: "2026-08-10", projectId: 10, projectName: "Porto A", campaign: "br", count: 1, totalRevenue: 123 },
+  const delivered = [
+    agg({ projectId: 10, campaign: "top", total: 123, parking: 123 }),  // operado pelo próprio → sem venda
+    agg({ projectId: 11, campaign: "top", total: 123, parking: 123 }),  // outro centro → cobra venda
+    agg({ projectId: 11, campaign: "ag", total: 123, parking: 123 }),
+    agg({ projectId: 10, campaign: "br", total: 123, parking: 123 }),
   ];
   it("venda e operacional sobre o valor SEM IVA; operacional não cobra venda no centro que opera", async () => {
-    fakeDb = makeFakeDb({ deliveries, campaigns, partners }).db;
+    live.delivered = delivered;
+    fakeDb = makeFakeDb({ partners }).db;
     const r = await computeFinance({ from: "2026-08-01", to: "2026-08-31", today: "2026-09-10", rates: DEFAULT_FINANCE_RATES });
     // Operacional: 20% de 246/1,23 = 40 (antes: 20% de 246 = 49,20)
     expect(r.costs.operationalCommissions).toBeCloseTo(40, 6);
@@ -191,13 +198,12 @@ describe("pessoal", () => {
   });
 
   it("período em curso: realizado cortado em hoje; fecho previsto soma a receita esperada e os custos do mês inteiro", async () => {
-    const deliveries = [{ day: "2026-08-10", projectId: null, projectName: null, count: 1, totalRevenue: 1230, parkingRevenue: 1230, deliveryCharges: 0, extrasRevenue: 0 }];
-    const forecast = [
-      { day: "2026-08-20", projectId: null, projectName: null, campaign: null, count: 2, totalRevenue: 2460 },
-      { day: "2026-08-12", projectId: null, projectName: null, campaign: null, count: 1, totalRevenue: 123 },   // estacionado, saída atrasada → conta hoje
+    live.delivered = [agg({ total: 1230, parking: 1230 })];
+    live.forecast = [
+      agg({ day: "2026-08-20", count: 2, total: 2460 }),
+      agg({ day: "2026-08-12", total: 123 }),   // estacionado, saída atrasada → conta hoje
     ];
-    const { db, captured } = makeFakeDb({ deliveries, forecast, employees: [emp()] });
-    fakeDb = db;
+    fakeDb = makeFakeDb({ employees: [emp()] }).db;
     const r = await computeFinance({ from: "2026-08-01", to: "2026-08-31", today: "2026-08-15", granularity: "day", rates: DEFAULT_FINANCE_RATES });
     expect(r.quality.isCurrentPeriod).toBe(true);
     // Realizado até hoje: 15 de 31 dias de salário
@@ -218,16 +224,14 @@ describe("pessoal", () => {
     expect(future.totalCost).toBe(0);
     expect(future.costForecast).toBeCloseTo(perDay, 6);
     // previsão = saída prevista no período (não check-in), sem canceladas/entregues
-    const w = render(captured.forecastWhere);
-    expect(w.sql).toContain("`multipark_bookings`.`checkOut` >= ?");
-    expect(w.params).toEqual(expect.arrayContaining(["2026-07-31 23:00:00", "2026-08-31 23:00:00", "CANCELLED", "CHECKED_OUT", "CHECKED_IN", "2026-08-14 23:00:00"]));
+    const fc = liveCalls.find((c) => c.kind === "forecast")!;
+    expect(fc.range).toMatchObject({ start: "2026-07-31 23:00:00", end: "2026-08-31 23:00:00", todayStart: "2026-08-14 23:00:00" });
   });
 
   it("período fechado: sem previsão; Anual não mostra prejuízo em meses futuros", async () => {
-    const { db, captured } = makeFakeDb({ employees: [emp()] });
-    fakeDb = db;
+    fakeDb = makeFakeDb({ employees: [emp()] }).db;
     const closed = await computeFinance({ from: "2026-07-01", to: "2026-07-31", today: "2026-08-15", rates: DEFAULT_FINANCE_RATES });
-    expect(captured.forecastWhere).toBeUndefined();
+    expect(liveCalls.some((c) => c.kind === "forecast")).toBe(false);
     expect(closed.projection.applies).toBe(false);
     expect(closed.projection.margin).toBeCloseTo(closed.margin.margin, 6);
 
@@ -259,16 +263,13 @@ describe("pessoal", () => {
 // ─── 5. Qualidade ────────────────────────────────────────────────────────────
 describe("qualidade", () => {
   it("reservas sem centro (valor e contagem) e marketing só a pedido", async () => {
-    const deliveries = [
-      { day: "2026-08-10", projectId: null, projectName: null, count: 3, totalRevenue: 300, parkingRevenue: 300, deliveryCharges: 0, extrasRevenue: 0 },
-      { day: "2026-08-10", projectId: 10, projectName: "A", count: 1, totalRevenue: 100, parkingRevenue: 100, deliveryCharges: 0, extrasRevenue: 0 },
-    ];
-    fakeDb = makeFakeDb({ deliveries }).db;
+    live.delivered = [agg({ count: 3, total: 300 }), agg({ projectId: 10, total: 100 })];
+    fakeDb = makeFakeDb({}).db;
     const r = await computeFinance({ from: "2026-08-01", to: "2026-08-31", today: "2026-09-10", rates: DEFAULT_FINANCE_RATES });
     expect(r.quality.bookingsWithoutProject).toEqual({ count: 3, total: 300 });
     expect(r.quality.marketingExcluded).toBeNull();
     expect(adMetrics).not.toHaveBeenCalled();
-    fakeDb = makeFakeDb({ deliveries }).db;
+    fakeDb = makeFakeDb({}).db;
     const withMkt = await computeFinance({ from: "2026-08-01", to: "2026-08-31", today: "2026-09-10", rates: DEFAULT_FINANCE_RATES, includeMarketingCoverage: true });
     expect(withMkt.quality.marketingExcluded).toEqual({ adSpend: 50, marketingExpenses: 7 });
   });

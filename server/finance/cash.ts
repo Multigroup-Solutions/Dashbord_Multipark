@@ -1,28 +1,24 @@
 /**
  * CAIXA — o dinheiro, não a faturação (Faturação → separador "Caixa").
  *
- * O que as colunas de `multipark_bookings` permitem (e o que falta):
- *   - RECEBIDO = SUM(totalPaid) das reservas ENTREGUES (CHECKED_OUT) pelo dia
- *     de Lisboa da SAÍDA. Não há data de pagamento na BD (nem por pagamento
- *     parcial); a saída é a melhor data disponível: é aí que se cobra o que
- *     faltava, e um pré-pagamento online fica datado da entrega (não da
- *     compra). Por método de pagamento (`paymentMethod`, texto livre da
- *     Multipark).
- *   - POR COBRAR = SUM(remainingToPay) > 0 das reservas já entregues no
- *     período (carro saiu e ficou valor em dívida).
+ * Lê AO VIVO a BD da Multipark (./liveBookings.ts → multiparkDb/financeAgg.ts),
+ * só os nossos parques — já não a cópia `multipark_bookings` (28 set 2026).
+ *   - RECEBIDO = soma do pago das linhas ("BookingPricing".amountPaid) das
+ *     reservas ENTREGUES (CHECKED_OUT) pelo dia de Lisboa da SAÍDA. A saída é
+ *     a data usada (é aí que se cobra o que faltava; um pré-pagamento online
+ *     fica datado da entrega). Por método de pagamento (texto da Multipark).
+ *   - POR COBRAR = total − pago > 0 das reservas já entregues no período.
  *   - NO-SHOWS PRÉ-PAGOS = reservas BOOKED cujo check-in (dia de Lisboa) já
- *     passou e nunca entraram, com totalPaid > 0. Não há estado NO_SHOW na
+ *     passou e nunca entraram, com pago > 0. Não há estado NO_SHOW na
  *     Multipark; "BOOKED com check-in no passado" é a aproximação.
- *   - TAXAS DE CANCELAMENTO: NÃO existem na BD (nem taxa nem reembolso). Só se
- *     mostra, como informação, o valor pago de reservas canceladas no período
- *     (pode ter sido reembolsado) — NÃO conta como receita.
+ *   - TAXAS DE CANCELAMENTO: não há taxa nem reembolso na BD. Só se mostra,
+ *     como informação, o pago de reservas canceladas no período (data do
+ *     cancelamento) — NÃO conta como receita.
  * Mesmos dias de Lisboa e o mesmo filtro de centro do motor financeiro.
  */
-import { and, eq, gt, gte, inArray, lt, sql, type SQL } from "drizzle-orm";
-import { multiparkBookings } from "../../drizzle/schema";
-import { getDb, resolveProjectIds } from "../db";
+import { resolveProjectIds } from "../db";
 import { lisbonDayOf, lisbonDayRangeUtc } from "../../shared/lisbonDay";
-import { bookingLisbonDay, deliveredConditions } from "./engine";
+import { groupAgg, loadLiveBookingAgg, sumOf } from "./liveBookings";
 
 export interface CashResult {
   range: { from: string; to: string };
@@ -56,43 +52,28 @@ export async function computeCash(filters: { from: string; to: string; projectId
     cancellationFees: null,
     missing: CASH_MISSING_DATA,
   };
-  const db = await getDb();
-  if (!db) return out;
   const { from, to } = filters;
   const today = filters.today ?? lisbonDayOf(Date.now());
   const projectIds = filters.projectId ? await resolveProjectIds(filters.projectId) : undefined;
-  const scope: SQL[] = projectIds ? [inArray(multiparkBookings.projectId, projectIds)] : [];
   const utc = lisbonDayRangeUtc(from, to);
-  const delivered = deliveredConditions(from, to, projectIds);
-  const dayExpr = bookingLisbonDay("checkOut", from, to);
-
-  const byDay = await db.select({ day: dayExpr, count: sql<number>`COUNT(*)`, total: sql<number>`COALESCE(SUM(${multiparkBookings.totalPaid}), 0)` })
-    .from(multiparkBookings).where(and(...delivered)).groupBy(dayExpr);
-  // agrupa pela coluna (ONLY_FULL_GROUP_BY); vazios juntam-se em JS
-  const byMethod = await db.select({ method: multiparkBookings.paymentMethod, count: sql<number>`COUNT(*)`, total: sql<number>`COALESCE(SUM(${multiparkBookings.totalPaid}), 0)` })
-    .from(multiparkBookings).where(and(...delivered)).groupBy(multiparkBookings.paymentMethod);
-  const [toCollect] = await db.select({ count: sql<number>`COUNT(*)`, total: sql<number>`COALESCE(SUM(${multiparkBookings.remainingToPay}), 0)` })
-    .from(multiparkBookings).where(and(...delivered, gt(multiparkBookings.remainingToPay, "0")));
   // No-shows: check-in no período E antes de hoje (Lisboa), nunca entraram, com pagamento
-  const noShowEnd = lisbonDayRangeUtc(today).start < utc.end ? lisbonDayRangeUtc(today).start : utc.end;
-  const [noShows] = await db.select({ count: sql<number>`COUNT(*)`, total: sql<number>`COALESCE(SUM(${multiparkBookings.totalPaid}), 0)` })
-    .from(multiparkBookings).where(and(eq(multiparkBookings.status, "BOOKED"), gte(multiparkBookings.checkIn, utc.start), lt(multiparkBookings.checkIn, noShowEnd), gt(multiparkBookings.totalPaid, "0"), ...scope));
-  const [cancelled] = await db.select({ count: sql<number>`COUNT(*)`, total: sql<number>`COALESCE(SUM(${multiparkBookings.totalPaid}), 0)` })
-    .from(multiparkBookings).where(and(eq(multiparkBookings.status, "CANCELLED"), gte(multiparkBookings.cancelledAt, utc.start), lt(multiparkBookings.cancelledAt, utc.end), gt(multiparkBookings.totalPaid, "0"), ...scope));
+  const todayStart = lisbonDayRangeUtc(today).start;
+  const noShowEnd = todayStart < utc.end ? todayStart : utc.end;
+  const [delivered, noShows, cancelled] = await Promise.all([
+    loadLiveBookingAgg("delivered", utc, projectIds),
+    noShowEnd > utc.start ? loadLiveBookingAgg("noshow", { start: utc.start, end: noShowEnd }, projectIds) : Promise.resolve([]),
+    loadLiveBookingAgg("cancelled", utc, projectIds),
+  ]);
 
-  out.received.byDay = byDay.map((r) => ({ day: String(r.day ?? "").slice(0, 10), total: num(r.total) })).sort((a, b) => a.day.localeCompare(b.day));
-  out.received.total = byDay.reduce((s, r) => s + num(r.total), 0);
-  out.received.count = byDay.reduce((s, r) => s + num(r.count), 0);
-  const methods = new Map<string, { method: string; total: number; count: number }>();
-  for (const r of byMethod) {
-    const method = String(r.method ?? "").trim() || "Sem método";
-    const ex = methods.get(method) ?? { method, total: 0, count: 0 };
-    ex.total += num(r.total); ex.count += num(r.count);
-    methods.set(method, ex);
-  }
-  out.received.byMethod = Array.from(methods.values()).sort((a, b) => b.total - a.total);
-  out.toCollect = { total: num(toCollect?.total), count: num(toCollect?.count) };
-  out.prepaidNoShows = { total: num(noShows?.total), count: num(noShows?.count) };
-  out.cancelledPaid = { total: num(cancelled?.total), count: num(cancelled?.count) };
+  out.received.byDay = Array.from(groupAgg(delivered, (r) => r.day).entries())
+    .map(([day, g]) => ({ day, total: sumOf(g, (r) => r.paid) })).sort((a, b) => a.day.localeCompare(b.day));
+  out.received.total = sumOf(delivered, (r) => r.paid);
+  out.received.count = sumOf(delivered, (r) => r.count);
+  out.received.byMethod = Array.from(groupAgg(delivered, (r) => (r.paymentMethod ?? "").trim() || "Sem método").entries())
+    .map(([method, g]) => ({ method, total: sumOf(g, (r) => r.paid), count: sumOf(g, (r) => r.count) }))
+    .sort((a, b) => b.total - a.total);
+  out.toCollect = { total: sumOf(delivered, (r) => r.remaining), count: sumOf(delivered, (r) => r.owingCount) };
+  out.prepaidNoShows = { total: sumOf(noShows, (r) => r.paid), count: sumOf(noShows, (r) => r.count) };
+  out.cancelledPaid = { total: sumOf(cancelled, (r) => r.paid), count: sumOf(cancelled, (r) => r.count) };
   return out;
 }
