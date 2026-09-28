@@ -68,6 +68,15 @@ export async function multiparkDeliveriesCron(o: { deadlineAt: number }): Promis
     console.error("[cron multipark-deliveries] detalhe:", await errCode(err));
     phaseErrors.push(`detalhe falhou (${await errCode(err)})`);
   }
+  // Memória do webhook: repetir a leitura da BD da Multipark que falhou no
+  // momento do webhook (linha nova "#db"; a original não é tocada).
+  let memoryRetry: unknown = null;
+  try {
+    const { retryWebhookMemoryReads } = await import("./webhookMemory");
+    memoryRetry = await retryWebhookMemoryReads({ deadlineAt: o.deadlineAt, limit: 30 });
+  } catch (err) {
+    console.warn("[cron multipark-deliveries] memória do webhook:", await errCode(err));
+  }
   // Alerta "sem webhooks em horário de operação" (1 aviso por transição).
   try {
     const { checkWebhookStaleAlert } = await import("./syncHealth");
@@ -77,7 +86,7 @@ export async function multiparkDeliveriesCron(o: { deadlineAt: number }): Promis
   }
   const { deliveriesVerdict } = await import("./syncRules");
   const verdict = deliveriesVerdict({ phaseErrors, queue, details });
-  return { httpStatus: verdict.ok ? 200 : 503, body: { ...verdict, ranAt: ranAt(), ...(queue ?? {}), queue, details, alert }, done: true };
+  return { httpStatus: verdict.ok ? 200 : 503, body: { ...verdict, ranAt: ranAt(), ...(queue ?? {}), queue, details, memoryRetry, alert }, done: true };
 }
 
 /** Ligações automáticas funcionário ↔ utilizador ↔ agente Multipark (conservador e idempotente). */

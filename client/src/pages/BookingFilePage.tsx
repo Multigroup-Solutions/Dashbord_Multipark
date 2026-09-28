@@ -8,6 +8,7 @@ import { seesBeyondOwn } from "@shared/access";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { multiparkBookingUrl } from "@/lib/multiparkLinks";
+import BookingCashCheck from "@/components/cashCheck/BookingCashCheck";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -218,6 +219,7 @@ function FoundFile({ data, scope }: { data: MainFound; scope: { projectId?: numb
           <EvidenceSection data={data} scope={scope} />
           <TimelineSection id={id} scope={scope} />
           <AccountsSection core={b} accounts={accounts.data} loading={accounts.isLoading} currency={cur} />
+          <BookingCashCheck id={id} scope={scope} />
           <ExtrasSection id={id} scope={scope} currency={cur} />
           <CommunicationSection id={id} scope={scope} />
           <FeedbackSection id={id} scope={scope} />

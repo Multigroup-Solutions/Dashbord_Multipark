@@ -9,7 +9,10 @@
  * `X-Multipark-Delivery` (idempotência), `X-Multipark-Timestamp` e
  * `X-Multipark-Signature: t=<ts>,v1=<HMAC-SHA256(chave, "<ts>.<body>")>`.
  *
- * A receção é persistida antes do ACK. O processamento usa o detalhe atual
+ * Na receção, o payload fica PRIMEIRO na memória só de acréscimo
+ * (`multipark_webhook_snapshots`, server/webhookMemory.ts — nunca reescrita
+ * nem apagada) e depois na fila. A receção é persistida antes do ACK. O
+ * processamento usa o detalhe atual
  * da API, nunca o estado antigo do payload, e é retomado após falhas/crashes.
  * O cron da fila corre de cinco em cinco minutos; o sync periódico (de hora a
  * hora) continua necessário para movimentos que não produzem notificações.
@@ -147,7 +150,10 @@ export async function processMultiparkWebhookEvent(ev: MultiparkWebhookEvent): P
     : await getBookingTryAllParks(ev.bookingId, { deadlineAt: Date.now() + 12_000 });
   if (!found) return { ok: false, detail: "Parque ainda não resolvido" };
   // O payload pode ser antigo: só usamos o ID e o parque. Nenhum estado,
-  // preço ou matrícula do evento substitui dados mais recentes.
+  // preço ou matrícula do evento substitui dados mais recentes na cópia
+  // `multipark_bookings` (que guarda só o último valor). O payload em si —
+  // preço e método do momento — já ficou na memória só de acréscimo
+  // (`multipark_webhook_snapshots`, server/webhookMemory.ts) na receção.
   await upsertMultiparkBooking({
     externalId: ev.bookingId,
     historyFetchedAt: null,
@@ -199,6 +205,19 @@ export function createMultiparkWebhookRouter(opts: { afterReceive?: () => void }
       } catch {
         return res.status(400).json({ error: "JSON inválido" });
       }
+
+      // MEMÓRIA primeiro (decisão do dono, 28 set 2026): em cada webhook
+      // lemos a reserva toda na BD da Multipark (até 6 s; se falhar fica o
+      // payload e o cron repete) e gravamos uma linha NOVA, só por acréscimo,
+      // antes de qualquer outro passo. A mesma entrega repetida não duplica.
+      // Se não conseguirmos guardar, 500 para a Multipark repetir.
+      try {
+        await (await import("./webhookMemory")).recordWebhookSnapshot(parsed, { signatureValid: sigOk, rawBody: raw });
+      } catch (err) {
+        console.error("[MultiparkWebhook] memória do webhook falhou:", deliveryErrorCode(err));
+        return res.status(500).json({ error: "Erro interno ao guardar o evento" });
+      }
+
       const ev = parseMultiparkWebhook(parsed);
       if (!ev) {
         // Evento desconhecido/sem id — ack para não gerar retries inúteis,

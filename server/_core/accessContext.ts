@@ -105,6 +105,7 @@ const PATH_MODULE: Array<[string, ModuleId]> = [
   ["permissions.", "permissoes"],
   ["marketing.", "marketing"],
   ["invoices.", "faturacao"],
+  ["cashCheck.", "faturacao"],
   ["annual.", "anual"],
 ];
 

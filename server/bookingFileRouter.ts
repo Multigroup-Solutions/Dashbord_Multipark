@@ -18,7 +18,7 @@ import { seesBeyondOwn } from "../shared/access";
 const idInput = z.object({ id: z.string().trim().min(1).max(64), projectId: z.number().optional() });
 
 /** Cidades do pedido (Park.city). undefined = todas; [] = nenhuma. */
-function scopedCityNames(): string[] | undefined {
+export function scopedCityNames(): string[] | undefined {
   const a = cityScope.getStore();
   if (!a || a.all) return undefined;
   return a.cityNames ?? (a.cityName ? [a.cityName] : []);
