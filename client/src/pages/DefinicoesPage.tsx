@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
@@ -28,7 +29,7 @@ import { GooglePushSettings } from "@/components/google/GooglePushSettings";
 import { GoogleContactsSettings } from "@/components/google/GoogleContactsSettings";
 import { GoogleDriveSettings } from "@/components/google/GoogleDriveSettings";
 import { WebAnalyticsSettings } from "@/components/marketing/WebAnalyticsSettings";
-import { validateSetting, type RateEntry } from "@shared/appSettings";
+import { EXCLUDED_PARKS_SETTING_KEY, validateSetting, type RateEntry } from "@shared/appSettings";
 import { NotificationRoutingCard } from "@/components/NotificationRoutingCard";
 import { ServiceTasksSettings } from "@/components/ServiceTasksSettings";
 
@@ -448,7 +449,7 @@ function IntegrationsCard() {
 
 // ─── Parâmetros ─────────────────────────────────────────────────────────────
 
-const GROUP_LABEL: Record<string, string> = { financeiro: "Financeiro", sla: "Prazos (SLA)", emails: "Email (destinatários e Comunicação)", disponibilidade: "Disponibilidades", ia: "Inteligência artificial", extras: "Extras-dia (escala automática)", operacao: "Operação (GPS / Zello)" };
+const GROUP_LABEL: Record<string, string> = { financeiro: "Financeiro", sla: "Prazos (SLA)", emails: "Email (destinatários e Comunicação)", disponibilidade: "Disponibilidades", ia: "Inteligência artificial", extras: "Extras-dia (escala automática)", operacao: "Operação (GPS / Zello / parques)" };
 
 const CITY_FIELDS: { id: "lisbon" | "porto" | "faro"; label: string }[] = [
   { id: "lisbon", label: "Lisboa" },
@@ -526,6 +527,7 @@ function SettingEditor({ item, saving, onSave, codeValue }: { item: SettingItem;
   const isRate = item.key === "finance.vat" || item.key === "finance.tsu";
   const isZelloList = item.key === "zello.gpsExcludedUsers";
   const isEmails = item.key === "emails.handoverCc" || isZelloList;
+  const isParkList = item.key === EXCLUDED_PARKS_SETTING_KEY;
   const isNumber = typeof item.defaultValue === "number";
   const isBool = typeof item.defaultValue === "boolean";
   // Mapa por cidade (ex.: carros/hora por condutor, ponto de encontro).
@@ -539,11 +541,13 @@ function SettingEditor({ item, saving, onSave, codeValue }: { item: SettingItem;
   const [cityMap, setCityMap] = useState<Record<string, string>>({});
   const [bool, setBool] = useState(false);
   const [text, setText] = useState("");
+  const [parkSel, setParkSel] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     setError(null);
     if (isRate) setRates(((current as RateEntry[]) ?? []).map((r) => ({ pct: pct(r.rate), from: r.from })));
     else if (isEmails) setText(((current as string[]) ?? []).join("\n"));
+    else if (isParkList) setParkSel([...((current as string[]) ?? [])]);
     else if (isCityMap) setCityMap(Object.fromEntries(CITY_FIELDS.map((c) => [c.id, String((current as Record<string, unknown>)?.[c.id] ?? "").replace(".", ",")])));
     else if (isBool) setBool(!!current);
     else if (isJson) setText(current && Object.keys(current as object).length ? JSON.stringify(current, null, 2) : "");
@@ -554,6 +558,7 @@ function SettingEditor({ item, saving, onSave, codeValue }: { item: SettingItem;
   const build = (): unknown => {
     if (isRate) return rates.map((r) => ({ rate: Number(r.pct.replace(",", ".")) / 100, from: r.from.trim() }));
     if (isEmails) return text.split(/[\s,;]+/).map((e) => e.trim()).filter(Boolean);
+    if (isParkList) return parkSel;
     if (isCityMap) return Object.fromEntries(CITY_FIELDS.map((c) => {
       const raw = (cityMap[c.id] ?? "").trim();
       return [c.id, cityMapNumeric ? (raw === "" ? NaN : Number(raw.replace(",", "."))) : raw];
@@ -620,6 +625,8 @@ function SettingEditor({ item, saving, onSave, codeValue }: { item: SettingItem;
         </div>
       ) : isEmails ? (
         <Textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={isZelloList ? "um utilizador Zello por linha (vazio = ninguém excluído)" : "um email por linha"} />
+      ) : isParkList ? (
+        <ParkPicker selected={parkSel} onChange={setParkSel} />
       ) : isCityMap ? (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 max-w-2xl">
           {CITY_FIELDS.map((c) => (
@@ -653,6 +660,61 @@ function SettingEditor({ item, saving, onSave, codeValue }: { item: SettingItem;
           </Button>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Escolha de parques da BD da Multipark (lidos ao vivo): marcas nossas por
+ * marca + cidade primeiro, depois os outros por nome. Ids gravados que já não
+ * existem na BD continuam na lista (para se poderem tirar).
+ */
+function ParkPicker({ selected, onChange }: { selected: string[]; onChange: (ids: string[]) => void }) {
+  const q = trpc.settings.values.multiparkParks.useQuery(undefined, { staleTime: 5 * 60_000 });
+  const [filter, setFilter] = useState("");
+  const parks = q.data?.available ? q.data.parks : [];
+  const known = new Set(parks.map((p) => p.id));
+  const sel = new Set(selected);
+  const f = filter.trim().toLowerCase();
+  const rows = [...parks]
+    .sort((a, b) => a.groupOrder - b.groupOrder || a.groupLabel.localeCompare(b.groupLabel, "pt") || a.name.localeCompare(b.name, "pt"))
+    .filter((p) => !f || `${p.name} ${p.cityName ?? ""} ${p.groupLabel}`.toLowerCase().includes(f));
+  const missing = selected.filter((id) => !known.has(id));
+  const toggle = (id: string, on: boolean) => onChange(on ? [...selected.filter((x) => x !== id), id] : selected.filter((x) => x !== id));
+  return (
+    <div className="space-y-2 max-w-2xl">
+      {q.isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+      {q.data && !q.data.available && <p className="text-xs text-amber-800"><AlertTriangle className="inline h-3 w-3 mr-1" />Parques indisponíveis: {q.data.reason}</p>}
+      {q.error && <p className="text-xs text-destructive">Erro a ler os parques: {q.error.message}</p>}
+      {parks.length > 0 && (
+        <>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Input className="max-w-xs h-8" placeholder="Filtrar parques" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filtrar parques" />
+            <span className="text-xs text-muted-foreground">{selected.length} {selected.length === 1 ? "parque escolhido" : "parques escolhidos"} de {parks.length}</span>
+          </div>
+          <div className="border rounded-md max-h-72 overflow-y-auto divide-y">
+            {rows.map((p) => (
+              <label key={p.id} className="flex items-center gap-2 px-2 py-1.5 text-sm cursor-pointer hover:bg-muted/40">
+                <Checkbox checked={sel.has(p.id)} onCheckedChange={(v) => toggle(p.id, v === true)} aria-label={p.name} />
+                <span className="min-w-0 flex-1 truncate">{p.name}{p.cityName && !p.name.toLowerCase().includes(p.cityName.toLowerCase()) ? ` · ${p.cityName}` : ""}</span>
+                {p.ours && <Badge variant="outline" className="text-[10px]">{p.groupLabel}</Badge>}
+                {p.status && p.status !== "ACTIVE" && <span className="text-[11px] text-muted-foreground">{p.status === "INACTIVE" ? "inativo" : p.status === "PENDING" ? "pendente" : p.status}</span>}
+              </label>
+            ))}
+            {rows.length === 0 && <p className="px-2 py-1.5 text-xs text-muted-foreground">Nenhum parque com este filtro.</p>}
+          </div>
+        </>
+      )}
+      {missing.length > 0 && (
+        <div className="text-xs space-y-1">
+          <span className="text-muted-foreground">Gravados mas não encontrados na BD da Multipark:</span>
+          {missing.map((id) => (
+            <label key={id} className="flex items-center gap-2 font-mono">
+              <Checkbox checked onCheckedChange={() => toggle(id, false)} aria-label={id} />{id}
+            </label>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

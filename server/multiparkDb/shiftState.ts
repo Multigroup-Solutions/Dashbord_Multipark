@@ -37,6 +37,7 @@
 import { multiparkDbQuery, redactSecrets, type SqlParam } from "./client";
 import { ParamList, safeMultiparkRead, toIsoUtc, type MultiparkRead } from "./read";
 import { buildParksSql, mapParks, type DayPark } from "./dayBookings";
+import { excludeParks } from "../../shared/reservasDoDia";
 import { classifyAllocation } from "../spotClassification";
 import { addDays, lisbonDayOf } from "../../shared/lisbonDay";
 
@@ -309,6 +310,8 @@ export interface ParkInParkSummary { parkId: string; parkName: string; total: nu
 export interface ShiftStateOptions {
   /** Cidades (Park.city); undefined = todas. */
   cities?: string[];
+  /** "Parques que a operação não faz" (Definições → operations.excludedParks): ficam de fora. */
+  excludedParkIds?: readonly string[];
   nowMs?: number;
   /** Janela das próximas recolhas/entregas (omissão: agora → +8h). */
   upcoming?: { startMs: number; endMs: number };
@@ -541,7 +544,7 @@ const emptyState = (base: Pick<ShiftState, "generatedAt" | "upcomingWindow" | "c
   hours: [],
 });
 
-/** Estado do parque AO VIVO para a passagem de turno (só os parques das `cities`). */
+/** Estado do parque AO VIVO para a passagem de turno (só os parques das `cities`, sem os excluídos). */
 export async function getMultiparkShiftState(opts: ShiftStateOptions = {}, query: Query = multiparkDbQuery): Promise<MultiparkRead<ShiftState>> {
   return safeMultiparkRead("estado do parque (passagem de turno)", async () => {
     const nowMs = opts.nowMs ?? Date.now();
@@ -555,7 +558,7 @@ export async function getMultiparkShiftState(opts: ShiftStateOptions = {}, query
       blocksDay,
     };
     const ps = buildParksSql();
-    const parks = mapParks(await query(ps.sql, ps.params), opts.cities);
+    const parks = excludeParks(mapParks(await query(ps.sql, ps.params), opts.cities), opts.excludedParkIds);
     if (!parks.length) return emptyState(base);
     const ids = parks.map((p) => p.id);
     const byId = new Map(parks.map((p) => [p.id, p]));

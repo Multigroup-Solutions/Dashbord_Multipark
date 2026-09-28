@@ -6,9 +6,12 @@
  *
  * Duas leituras por dia:
  *   1. os parques ("Park": id, name, city, firebaseBrand, listingType, status
- *      — ~55 linhas), filtrados pelas cidades do utilizador e classificados
- *      (shared/multiparkParks.ts — o classificador único);
+ *      — ~55 linhas), filtrados pelas cidades do utilizador, SEM os "Parques
+ *      que a operação não faz" (Definições → operations.excludedParks) e
+ *      agrupados para a operação (marca nossa + cidade, ou o próprio parque);
  *   2. as reservas com entrada OU saída nesse dia de Lisboa, só desses parques.
+ * A lista é operacional: o canal Direto/Parceiro/Marketplace (contabilidade)
+ * não se calcula aqui.
  *
  * O dia: [00:00, 24:00) de Lisboa → instantes UTC (a BD grava UTC).
  *   - "checkIn"/"checkOut" = a hora do movimento (é o que a API manda como
@@ -37,8 +40,8 @@
  */
 import { multiparkDbQuery, type SqlParam } from "./client";
 import { ParamList, cityAliases, safeMultiparkRead, toIsoUtc, type MultiparkRead } from "./read";
-import { classifyBookingChannel, classifyPark, type ParkClassification } from "../../shared/multiparkParks";
-import { toDayMovements, type DayBooking, type DayMovement } from "../../shared/reservasDoDia";
+import { classifyPark, type ParkClassification } from "../../shared/multiparkParks";
+import { OTHER_PARK_GROUP_ORDER, excludeParks, operationalParkGroup, toDayMovements, type DayBooking, type DayMovement } from "../../shared/reservasDoDia";
 import { addDays, lisbonMidnightUtcMs } from "../../shared/lisbonDay";
 
 export const DAY_BOOKINGS_LIMIT = 1000;
@@ -87,13 +90,22 @@ export interface DayPark extends ParkClassification {
 }
 
 /** O que a página recebe de cada parque (lista de parques e "Classificação dos parques"). */
-export type DayParkOut = Pick<DayPark, "id" | "name" | "cityName" | "key" | "label" | "ours" | "firebaseBrand" | "listingType" | "status" | "brandSource" | "citySource" | "reason">;
+export type DayParkOut = Pick<DayPark, "id" | "name" | "cityName" | "key" | "label" | "ours" | "firebaseBrand" | "listingType" | "status" | "brandSource" | "citySource" | "reason"> & {
+  /** Grupo operacional (Reservas do dia): "Airpark Lisboa" ou o nome do parque. */
+  groupKey: string;
+  groupLabel: string;
+  groupOrder: number;
+};
 
-const parkOut = (p: DayPark): DayParkOut => ({
-  id: p.id, name: p.name, cityName: p.cityName, key: p.key, label: p.label, ours: p.ours,
-  firebaseBrand: p.firebaseBrand, listingType: p.listingType, status: p.status,
-  brandSource: p.brandSource, citySource: p.citySource, reason: p.reason,
-});
+const parkOut = (p: DayPark): DayParkOut => {
+  const g = operationalParkGroup(p);
+  return {
+    id: p.id, name: p.name, cityName: p.cityName, key: p.key, label: p.label, ours: p.ours,
+    firebaseBrand: p.firebaseBrand, listingType: p.listingType, status: p.status,
+    brandSource: p.brandSource, citySource: p.citySource, reason: p.reason,
+    groupKey: g.key, groupLabel: g.label, groupOrder: g.order,
+  };
+};
 
 /** SQL dos parques (tabela pequena). PURA. */
 export function buildParksSql(): { sql: string; params: SqlParam[] } {
@@ -224,17 +236,14 @@ export function buildDayBookingsSql(bounds: DayBounds, parkIds: string[], limit 
 
 export type DayBookingRow = Record<string, unknown>;
 
-/** Linha → reserva (com o grupo do parque e o canal Direto/Parceiro/Marketplace). PURA. */
-export function mapDayBookingRow(r: DayBookingRow, park: Pick<DayPark, "name" | "cityName" | "key" | "label" | "ours"> | undefined): DayBooking {
+/** Linha → reserva (com o grupo operacional do parque). PURA. */
+export function mapDayBookingRow(r: DayBookingRow, park: Pick<DayPark, "id" | "name" | "cityName" | "key" | "label" | "ours" | "order"> | undefined): DayBooking {
   const price = num(r.price);
   const paid = num(r.paid);
-  const partnerId = str(r.partner_id);
-  const partnerName = str(r.partner_name);
-  const partnerType = str(r.partner_type);
-  const origin = str(r.origin);
-  const paymentSource = str(r.payment_source);
-  const cls = park ?? { name: null, cityName: null, ...classifyPark({}) };
-  const ch = classifyBookingChannel({ parkOurs: cls.ours, partnerId, partnerName, partnerType, origin, paymentSource });
+  const parkId = String(r.park_id ?? "");
+  const group = park
+    ? operationalParkGroup(park)
+    : { key: `park:${parkId}`, label: "Parque desconhecido", ours: false, order: OTHER_PARK_GROUP_ORDER };
   const clientName = [str(r.client_first_name), str(r.client_last_name)].filter(Boolean).join(" ") || null;
   return {
     id: String(r.id ?? ""),
@@ -245,12 +254,13 @@ export function mapDayBookingRow(r: DayBookingRow, park: Pick<DayPark, "name" | 
     checkInTime: str(r.check_in_time),
     checkOutTime: str(r.check_out_time),
     createdAt: toIsoUtc(r.created_at),
-    parkId: String(r.park_id ?? ""),
-    parkName: cls.name,
-    parkCity: cls.cityName,
-    groupKey: cls.key,
-    groupLabel: cls.label,
-    ours: cls.ours,
+    parkId,
+    parkName: park?.name ?? null,
+    parkCity: park?.cityName ?? null,
+    groupKey: group.key,
+    groupLabel: group.label,
+    groupOrder: group.order,
+    ours: group.ours,
     clientName,
     clientEmail: str(r.client_email),
     clientPhone: str(r.client_phone),
@@ -267,15 +277,11 @@ export function mapDayBookingRow(r: DayBookingRow, park: Pick<DayPark, "name" | 
     deliveryLocation: str(r.delivery_location),
     extrasCount: num(r.extras_count) ?? 0,
     extrasPending: num(r.extras_pending) ?? 0,
-    origin,
-    paymentSource,
-    partnerId,
-    partnerName,
-    partnerType,
-    channel: ch.channel,
-    channelDetail: ch.detail,
-    channelBadge: ch.badge,
-    partnerTypeLabel: ch.partnerTypeLabel,
+    origin: str(r.origin),
+    paymentSource: str(r.payment_source),
+    partnerId: str(r.partner_id),
+    partnerName: str(r.partner_name),
+    partnerType: str(r.partner_type),
     garage: str(r.garage),
     spot: str(r.spot),
     price,
@@ -314,15 +320,21 @@ export interface DayBookingsResult {
   /** Houve mais reservas do que o limite (a lista está cortada). */
   truncated: boolean;
   limit: number;
+  /** Parques do âmbito tirados da lista ("Parques que a operação não faz"). */
+  excludedParks: number;
 }
 
-/** Reservas do dia de Lisboa `day`, só dos parques das cidades `cities` (undefined = todas). */
-export async function getMultiparkDayBookings(day: string, cities?: string[], query: Query = multiparkDbQuery): Promise<MultiparkRead<DayBookingsResult>> {
+/**
+ * Reservas do dia de Lisboa `day`, dos parques das cidades `cities`
+ * (undefined = todas), sem os parques de `excludedParkIds` (Definições).
+ */
+export async function getMultiparkDayBookings(day: string, cities?: string[], excludedParkIds: readonly string[] = [], query: Query = multiparkDbQuery): Promise<MultiparkRead<DayBookingsResult>> {
   return safeMultiparkRead("reservas do dia", async () => {
     const bounds = lisbonDayBounds(day);
     const ps = buildParksSql();
-    const parks = mapParks(await query(ps.sql, ps.params), cities);
-    const base = { day, startMs: bounds.startMs, endMs: bounds.endMs, limit: DAY_BOOKINGS_LIMIT };
+    const inScope = mapParks(await query(ps.sql, ps.params), cities);
+    const parks = excludeParks(inScope, excludedParkIds);
+    const base = { day, startMs: bounds.startMs, endMs: bounds.endMs, limit: DAY_BOOKINGS_LIMIT, excludedParks: inScope.length - parks.length };
     const parksOut = parks.map(parkOut);
     if (!parks.length) return { ...base, parks: parksOut, movements: [], truncated: false };
     const { sql, params } = buildDayBookingsSql(bounds, parks.map((p) => p.id), DAY_BOOKINGS_LIMIT + 1);

@@ -6516,8 +6516,10 @@ export const appRouter = router({
       const { operationalShift } = await import("../shared/shiftHandover");
       const nowMs = Date.now();
       const win = shiftWindowUtc(operationalShift(nowMs));
+      const { getSetting } = await import("./appSettings");
       const r = await getMultiparkShiftState({
         cities: [input.city], nowMs,
+        excludedParkIds: (await getSetting("operations.excludedParks")) ?? [],
         upcoming: { startMs: nowMs, endMs: nowMs + (input.windowHours ?? 8) * 3_600_000 },
         cash: { startMs: win.startMs, endMs: Math.max(win.startMs, Math.min(nowMs, win.endMs)) },
       });
@@ -7014,15 +7016,19 @@ export const appRouter = router({
         return getMultiparkBookingStats(input ?? undefined);
       }),
 
-    // "Reservas do dia": entradas e saídas de UM dia de Lisboa, lidas AO VIVO
-    // da BD da Multipark (só leitura). Só os parques das cidades do utilizador.
-    // Nunca lança por falta de BD — devolve { available:false, reason }.
+    // "Reservas do dia" (operacional): entradas e saídas de UM dia de Lisboa,
+    // lidas AO VIVO da BD da Multipark (só leitura), de todos os parques das
+    // cidades do utilizador MENOS os "Parques que a operação não faz"
+    // (Definições → operations.excludedParks). Nunca lança por falta de BD —
+    // devolve { available:false, reason }.
     reservasDoDia: protectedProcedure
       .input(z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "reservas_operacoes", "view");
         const { getMultiparkDayBookings } = await import("./multiparkDb/dayBookings");
-        const r = await getMultiparkDayBookings(input.day, scopedCityNames());
+        const { getSetting } = await import("./appSettings");
+        const excluded = (await getSetting("operations.excludedParks")) ?? [];
+        const r = await getMultiparkDayBookings(input.day, scopedCityNames(), excluded);
         if (!r.available) return { available: false as const, reason: r.reason, code: r.code };
         return { available: true as const, ...r.data };
       }),

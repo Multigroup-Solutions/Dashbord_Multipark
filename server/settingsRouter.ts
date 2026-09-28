@@ -154,6 +154,19 @@ export const settingsRouter = router({
         const { listSettingsAudit } = await import("./appSettings");
         return listSettingsAudit(input?.limit ?? 50);
       }),
+    /**
+     * Parques da BD da Multipark (ao vivo, todos, sem âmbito de cidade) para
+     * escolher os "Parques que a operação não faz". Só leitura.
+     */
+    multiparkParks: adminOnly.query(async () => {
+      const { getMultiparkParkClassification } = await import("./multiparkDb/dayBookings");
+      const r = await getMultiparkParkClassification(undefined);
+      if (!r.available) return { available: false as const, reason: r.reason };
+      return {
+        available: true as const,
+        parks: r.data.parks.map((p) => ({ id: p.id, name: p.name, cityName: p.cityName, status: p.status, groupLabel: p.groupLabel, groupOrder: p.groupOrder, ours: p.ours })),
+      };
+    }),
     /** IVA/TSU em vigor HOJE nos cálculos (Definições; sem nada gravado = constantes do código). */
     codeConstants: adminOnly.query(async () => {
       const { financeRatesAt, lisbonTodayIso } = await import("./finance/rates");

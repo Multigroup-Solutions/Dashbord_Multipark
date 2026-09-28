@@ -109,6 +109,16 @@ export function isZelloGpsExcluded(username: string | null | undefined, excluded
   return !!k && excluded.has(k);
 }
 
+// ─── Parques que a operação não faz ─────────────────────────────────────────
+
+export const EXCLUDED_PARKS_SETTING_KEY = "operations.excludedParks" as const;
+
+/** Ids de parques ("Park".id da BD da Multipark), sem repetidos. */
+export const parkIdListSchema = z
+  .array(z.string({ error: "Id de parque inválido." }).trim().min(1, "Id de parque vazio.").max(64, "Id de parque demasiado longo."), { error: "Indica uma lista de parques." })
+  .max(300, "No máximo 300 parques.")
+  .transform((list) => Array.from(new Set(list)));
+
 // ─── Extras-dia (escala automática) ─────────────────────────────────────────
 
 /** Cidades do Extras-dia (mesmos ids do servidor: server/extrasDia.ts). */
@@ -228,6 +238,15 @@ export const SETTINGS = {
     label: "Contas Zello excluídas do GPS",
     description: "Utilizadores Zello (um por linha) que ficam fora da recolha GPS diária, dos alertas de GPS desligado e da lista \"Zello por ligar\" — consolas de despacho, contas de teste. Vazio = recolhe todos (a conta ser \"admin\" no Zello já não exclui ninguém).",
     schema: zelloUsernameListSchema,
+    defaultValue: [],
+    wiring: "live",
+  }),
+  [EXCLUDED_PARKS_SETTING_KEY]: def({
+    key: EXCLUDED_PARKS_SETTING_KEY,
+    group: "operacao",
+    label: "Parques que a operação não faz",
+    description: "Parques da BD da Multipark cujas entradas e saídas a operação NÃO faz: saem de Operações → Reservas do dia, da previsão e dos blocos dos Extras do dia e do estado ao vivo da Pressão / Passagem de turno. Vazio = todos os parques.",
+    schema: parkIdListSchema,
     defaultValue: [],
     wiring: "live",
   }),

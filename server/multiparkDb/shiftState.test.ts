@@ -172,6 +172,14 @@ describe("leitura (mock do multiparkDbQuery)", () => {
     expect(r).toMatchObject({ available: false, code: "TIMEOUT" });
   });
 
+  it("parques que a operação não faz (Porto excluído) → estado vazio, só a leitura dos parques", async () => {
+    process.env[ENV] = "postgres://u:p@h:5432/db";
+    queryMock.mockResolvedValueOnce(PARKS);
+    const r = await getMultiparkShiftState({ cities: ["porto"], excludedParkIds: ["p9"], nowMs: NOW });
+    expect(r.available && r.data.parks).toEqual([]);
+    expect(queryMock).toHaveBeenCalledTimes(1);
+  });
+
   it("cidade sem parques → estado vazio, só a leitura dos parques", async () => {
     process.env[ENV] = "postgres://u:p@h:5432/db";
     queryMock.mockResolvedValueOnce(PARKS);

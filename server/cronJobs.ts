@@ -420,7 +420,9 @@ export async function extrasAutoCron(o: { deadlineAt: number; from?: string | nu
 export async function extrasPressureCron(o: { deadlineAt: number; cursor?: string | null }): Promise<CronJobRun> {
   try {
     const { runExtrasPressure } = await import("./extrasPressure");
-    const r = await runExtrasPressure({ deadlineAt: o.deadlineAt - 3_000, cursor: o.cursor ?? null });
+    const { getSetting } = await import("./appSettings");
+    const excludedParkIds = (await getSetting("operations.excludedParks")) ?? [];
+    const r = await runExtrasPressure({ deadlineAt: o.deadlineAt - 3_000, cursor: o.cursor ?? null, excludedParkIds });
     return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: r.done, cursor: r.cursor };
   } catch (err) {
     console.error("[cron extras-pressure] falhou:", msg(err, 200));
