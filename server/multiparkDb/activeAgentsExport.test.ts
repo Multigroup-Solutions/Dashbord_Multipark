@@ -6,6 +6,13 @@ import { ActiveAgentsCollector, AGENT_EXPORT_STAGES, agentExportPage, bookingDri
 const at = "2026-06-01T10:00:00.000Z";
 const period = makePeriod("2026-05-01", undefined, new Date(at));
 describe("active agents across cities", () => {
+  it("includes explicit historical agent roles even after the profile was removed", () => {
+    const c = new ActiveAgentsCollector();
+    c.add("activity", { id: "e1", user_id: "former-agent", role: "AGENT", name: "Former agent", email: "former@example.invalid", cities: ["porto"], at });
+    c.add("activity", { id: "e2", user_id: "customer", role: "CLIENT", at });
+    expect(c.finish().agents[0]).toMatchObject({ identificacao: "AGENTE_NO_HISTORICO", nome_agente: "Former agent", email: "former@example.invalid", cidade: "Porto" });
+    expect(c.finish().otherActors).toHaveLength(1);
+  });
   it("combines park records by account, includes inactive staff, and excludes accounts without activity", () => {
     const c = new ActiveAgentsCollector();
     c.add("agents", { id: "a1", user_id: "u1", name: "Ana", city: "lisbon", active: false });
@@ -69,6 +76,12 @@ describe("active agents across cities", () => {
 });
 
 describe("read-only queries", () => {
+  it("uses explicit invitation identity links independently of the current invitation status", () => {
+    const q = agentExportPage("invites", period, "", 1000);
+    expect(q.sql).toContain('i."createdAgentId" IS NOT NULL');
+    expect(q.sql).toContain('i."acceptedBy" IS NOT NULL');
+    expect(q.sql).not.toContain('i."status"');
+  });
   it("exports delivery and reception drivers in the prior reservation creation window", () => {
     const q = bookingDriversPage(period, "last-id", 1000);
     expect(() => assertReadOnlySql(q.sql)).not.toThrow();
