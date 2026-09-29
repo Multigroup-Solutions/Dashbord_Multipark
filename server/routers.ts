@@ -7130,9 +7130,9 @@ export const appRouter = router({
       let source: "multipark" | "copia" = "multipark";
       let notice: string | null = null;
       if (live.available) {
-        // Agentes só de parceiro (role PARTNER na Multipark) não são da equipa.
-        rows = live.data.filter((a) => a.agentName && !a.partnerOnly).map((a) => ({
-          agentName: a.agentName, agentUserId: a.agentUserId, email: a.email, total: a.total, checkins: a.checkins, checkouts: a.checkouts,
+        // Agentes só de parceiro (role PARTNER) ficam no grupo dos parceiros (ligam-se à parceria).
+        rows = live.data.filter((a) => a.agentName).map((a) => ({
+          agentName: a.agentName, agentUserId: a.agentUserId, email: a.email, partnerOnly: !!a.partnerOnly, total: a.total, checkins: a.checkins, checkouts: a.checkouts,
           movements: a.movements, firstSeen: a.firstSeen, lastSeen: a.lastSeen,
         }));
       } else {
@@ -7171,8 +7171,9 @@ export const appRouter = router({
         .filter((r) => {
           const key = matchKey(String(r.agentName));
           const id = String(r.agentUserId ?? "").trim();
+          // agências e parceiros NÃO saem: vão para o grupo "parceiros" (ligar à parceria)
           return !linked.has(key) && !(id && linkedIds.has(id)) && !partners.has(key) && !ignored.has(key) && !looksLikeTestAgent(String(r.agentName))
-            && !(id && isSystemAgentId(id)) && !isNonPersonAgentName(String(r.agentName));
+            && !(id && isSystemAgentId(id)) && !/(nome do respons|gest[aã]o das reservas)/i.test(String(r.agentName));
         })
         .map((r) => ({
           agentName: String(r.agentName),
@@ -7184,8 +7185,22 @@ export const appRouter = router({
           firstSeen: r.firstSeen == null ? null : String(r.firstSeen instanceof Date ? r.firstSeen.toISOString() : r.firstSeen),
           lastSeen: r.lastSeen == null ? null : String(r.lastSeen instanceof Date ? r.lastSeen.toISOString() : r.lastSeen),
           email: r.email ? String(r.email) : null,
+          partnerOnly: !!r.partnerOnly,
         }))
         .sort((a, b) => b.total - a.total);
+      // Sugestões: ficha (email/nome) para a equipa, parceria para agências e parceiros.
+      const rowsOfRaw = (r: any): any[] => { const x = Array.isArray(r) ? r[0] : r?.rows ?? r; return Array.isArray(x) ? x : []; };
+      const empRows = rowsOfRaw(await db.execute(sql`
+        SELECT e.id, e.fullName, e.multiparkAgentUserId AS agentId, LOWER(TRIM(e.email)) AS email, LOWER(TRIM(e.personalEmail)) AS personalEmail, LOWER(TRIM(u.email)) AS userEmail
+          FROM employees e LEFT JOIN users u ON u.id = e.userId WHERE e.isActive = 1`));
+      const partnershipRows = rowsOfRaw(await db.execute(sql`SELECT id, name, contactEmail FROM partnerships`).catch(() => [[]]));
+      const { suggestForAgents } = await import("./agentSuggestions");
+      const sugg = suggestForAgents(
+        list.map((a) => ({ agentName: a.agentName, email: a.email, partnerOnly: a.partnerOnly })),
+        empRows.map((e: any) => ({ id: Number(e.id), fullName: String(e.fullName ?? ""), emails: [e.email, e.personalEmail, e.userEmail].filter(Boolean), hasAgent: !!(e.agentId && String(e.agentId).trim()) })),
+        partnershipRows.map((p: any) => ({ id: Number(p.id), name: String(p.name ?? ""), contactEmail: p.contactEmail ?? null })),
+      );
+      list.forEach((a: any, i) => { a.group = sugg[i].group; a.suggestion = sugg[i].suggestion; });
       // Parados: sem movimentos nos últimos UNLINKED_ACTIVE_DAYS dias (ou nunca). Não saem da
       // Multipark, só ficam fora da lista principal (a UI mostra-os se pedires).
       const { UNLINKED_ACTIVE_DAYS, isStaleAgent } = await import("../shared/agentIdentity");

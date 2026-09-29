@@ -2840,8 +2840,13 @@ function UnlinkedAgentsSection() {
   const { data: unlinked, isLoading } = trpc.multipark.unlinkedAgents.useQuery();
   const [showStale, setShowStale] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(new Set());
-  const staleList = (unlinked as any)?.stale ?? [];
-  const agents = showStale ? [...(unlinked?.rows ?? []), ...staleList] : (unlinked?.rows ?? []);
+  const [group, setGroup] = useState<"equipa" | "parceiro">("equipa");
+  const staleList = ((unlinked as any)?.stale ?? []).filter((a: any) => (a.group ?? "equipa") === group);
+  const activeList = ((unlinked?.rows ?? []) as any[]).filter((a: any) => (a.group ?? "equipa") === group);
+  const agents = showStale ? [...activeList, ...staleList] : activeList;
+  const countOf = (g: string) => ((unlinked?.rows ?? []) as any[]).filter((a: any) => (a.group ?? "equipa") === g).length;
+  const withSuggestion = agents.filter((a: any) => a.suggestion && (a.suggestion.by === "email"));
+  const [accepting, setAccepting] = useState(false);
   const { data: employees = [] } = trpc.multipark.employeesForMapping.useQuery();
   const { data: partnershipsList = [] } = trpc.partnerships.list.useQuery({} as any);
   const refresh = () => { utils.multipark.unlinkedAgents.invalidate(); utils.multipark.employeesForMapping.invalidate(); };
@@ -2871,7 +2876,9 @@ function UnlinkedAgentsSection() {
     <div className="space-y-3">
       <Card className="border-amber-200 bg-amber-50/40">
         <CardContent className="p-3 text-sm text-amber-900">
-          Estes agentes mexeram em carros nos últimos {(unlinked as any)?.staleDays ?? 60} dias (lidos ao vivo da Multipark) e não estão ligados a ninguém. Os de parceiros, de sistema, de teste e as agências já não aparecem.
+          Estes agentes mexeram em carros nos últimos {(unlinked as any)?.staleDays ?? 60} dias (lidos ao vivo da Multipark) e não estão ligados a ninguém.
+          <strong> Equipa</strong>: liga à ficha da pessoa. <strong>Parceiros e agências</strong>: liga à parceria, para sabermos quando mexem em carros ou fazem reservas (não precisam de utilizador aqui).
+          Onde houver sugestão (mesmo email ou nome parecido), aceita com um clique. Os de sistema e de teste já não aparecem.
           Liga cada um a um <strong>colaborador</strong>, a um <strong>parceiro</strong> (agências que marcam pelo portal),
           cria o funcionário — ou marca <strong>"não é funcionário"</strong> (testes, integrações, reservas de sistema) para o tirar da lista.
         </CardContent>
@@ -2880,6 +2887,27 @@ function UnlinkedAgentsSection() {
         <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">{unlinked.notice}</p>
       )}
       <div className="flex flex-wrap items-center gap-2 text-xs">
+        <Button size="sm" variant={group === "equipa" ? "default" : "outline"} className="h-7 text-xs" onClick={() => setGroup("equipa")}>Equipa ({countOf("equipa")})</Button>
+        <Button size="sm" variant={group === "parceiro" ? "default" : "outline"} className="h-7 text-xs" onClick={() => setGroup("parceiro")}>Parceiros e agências ({countOf("parceiro")})</Button>
+        {withSuggestion.length > 0 && (
+          <Button size="sm" className="h-7 text-xs" disabled={accepting}
+            onClick={async () => {
+              if (!confirm(`Aceitar as ${withSuggestion.length} sugestão(ões) pelo email?`)) return;
+              setAccepting(true);
+              let n = 0;
+              for (const a of withSuggestion) {
+                try {
+                  if (a.suggestion.type === "ficha") await mapMut.mutateAsync({ agentName: a.agentName, employeeId: a.suggestion.employeeId });
+                  else await partnerMut.mutateAsync({ agentName: a.agentName, partnershipId: a.suggestion.partnershipId });
+                  n++;
+                } catch { /* o toast avisa */ }
+              }
+              setAccepting(false);
+              toast.success(`${n} agente(s) ligados pelo email.`);
+            }}>
+            ✓ Aceitar todas as sugestões pelo email ({withSuggestion.length})
+          </Button>
+        )}
         {staleList.length > 0 && (
           <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setShowStale((v) => !v)}>
             {showStale ? "Esconder" : "Mostrar também"} os parados há mais de {(unlinked as any)?.staleDays ?? 60} dias ({staleList.length})
@@ -2910,6 +2938,7 @@ function UnlinkedAgentsSection() {
                 <th className="p-2 text-right">Ações</th>
                 <th className="p-2 text-right">In / Out / Mov</th>
                 <th className="p-2">Última atividade</th>
+                <th className="p-2">Sugestão</th>
                 <th className="p-2">Ligar a</th>
               </tr>
             </thead>
@@ -2928,6 +2957,19 @@ function UnlinkedAgentsSection() {
                     <span className="text-emerald-700">{a.checkins}</span> / <span className="text-blue-700">{a.checkouts}</span> / {a.movements}
                   </td>
                   <td className="p-2 text-xs text-muted-foreground">{a.lastSeen ? fmtPTDate(a.lastSeen) : "—"}</td>
+                  <td className="p-2 text-xs">
+                    {a.suggestion ? (
+                      <div className="flex flex-col gap-1">
+                        <span>{a.suggestion.type === "ficha" ? "Ficha" : "Parceria"}: <strong>{a.suggestion.name}</strong> <span className="text-muted-foreground">({a.suggestion.by === "email" ? "mesmo email" : "nome parecido"})</span></span>
+                        <Button size="sm" variant="outline" className="h-7 text-xs w-fit" disabled={mapMut.isPending || partnerMut.isPending}
+                          onClick={() => a.suggestion.type === "ficha"
+                            ? mapMut.mutate({ agentName: a.agentName, employeeId: a.suggestion.employeeId })
+                            : partnerMut.mutate({ agentName: a.agentName, partnershipId: a.suggestion.partnershipId })}>
+                          ✓ Aceitar
+                        </Button>
+                      </div>
+                    ) : <span className="text-muted-foreground">—</span>}
+                  </td>
                   <td className="p-2">
                     <div className="flex flex-col gap-1">
                       <SearchableSelect

@@ -181,7 +181,8 @@ export async function getActivityDetailLive(
  * "Agent", email do convite, contagens desde `since`. Entram os que têm
  * ações desde `since` e os ativos no "Agent" (menos os só-parceiro). PURA.
  */
-export function buildLiveAgentsSql(opts: { since: string; limit?: number }): { sql: string; params: SqlParam[] } {
+export function buildLiveAgentsSql(opts: { since: string; limit?: number; activityEmails?: boolean }): { sql: string; params: SqlParam[] } {
+  const withAe = opts.activityEmails !== false;
   const params = new ParamList();
   const since = params.add(opts.since);
   const sql = [
@@ -204,14 +205,22 @@ export function buildLiveAgentsSql(opts: { since: string; limit?: number }): { s
     `         (array_agg(NULLIF(trim(a."name"), '') ORDER BY a."isActive" DESC, a."updatedAt" DESC))[1] AS name,`,
     `         bool_or(a."isActive") AS active, bool_and(a."role"::text = 'PARTNER') AS partner_only`,
     `    FROM "Agent" a GROUP BY a."userId"`,
+    ...(withAe ? [
+      `), ae AS (`,
+      // email de quem fez as ações (registo de atividade): a maioria dos agentes não tem convite
+      `  SELECT DISTINCT ON (e."actorId") e."actorId" AS uid, lower(trim(e."actorEmail")) AS email`,
+      `    FROM "ActivityEvent" e`,
+      `   WHERE e."timestamp" >= ${since}::timestamp AND e."actorEmail" LIKE '%@%'`,
+      `   ORDER BY e."actorId", e."timestamp" DESC`,
+    ] : []),
     `)`,
     `SELECT COALESCE(act.uid, ag.uid) AS user_id, act.names AS history_names, ag.name AS agent_name,`,
     `       COALESCE(ag.active, false) AS active, COALESCE(ag.partner_only, false) AS partner_only, COALESCE(act.total, 0) AS total, COALESCE(act.checkins, 0) AS checkins,`,
     `       COALESCE(act.checkouts, 0) AS checkouts, COALESCE(act.movements, 0) AS movements,`,
     `       ${ts("act.first_at")} AS first_at, ${ts("act.last_at")} AS last_at,`,
-    `       (SELECT i."email" FROM "AgentInvite" i LEFT JOIN "Agent" a2 ON a2."id" = i."createdAgentId"`,
+    `       COALESCE((SELECT i."email" FROM "AgentInvite" i LEFT JOIN "Agent" a2 ON a2."id" = i."createdAgentId"`,
     `         WHERE (a2."userId" = COALESCE(act.uid, ag.uid) OR i."acceptedBy" = COALESCE(act.uid, ag.uid)) AND i."email" <> ''`,
-    `         ORDER BY i."updatedAt" DESC LIMIT 1) AS email`,
+    `         ORDER BY i."updatedAt" DESC LIMIT 1), ${withAe ? `(SELECT ae.email FROM ae WHERE ae.uid = COALESCE(act.uid, ag.uid))` : "NULL"}) AS email`,
     `  FROM act FULL OUTER JOIN ag ON ag.uid = act.uid`,
     ` WHERE act.uid IS NOT NULL OR (ag.active AND NOT ag.partner_only)`,
     ` ORDER BY total DESC, user_id`,
@@ -274,8 +283,18 @@ export async function listLiveAgents(
   query: Query = multiparkDbQuery,
 ): Promise<MultiparkRead<LiveAgent[]>> {
   return safeMultiparkRead("agentes (catálogo)", async () => {
-    const { sql, params } = buildLiveAgentsSql({ since: sinceUtc(opts.days ?? AGENTS_SEEN_DAYS, opts.nowMs) });
-    return (await query(sql, params)).map(mapLiveAgentRow).filter((x): x is LiveAgent => !!x);
+    const since = sinceUtc(opts.days ?? AGENTS_SEEN_DAYS, opts.nowMs);
+    let rows: Record<string, unknown>[];
+    try {
+      const { sql, params } = buildLiveAgentsSql({ since });
+      rows = await query(sql, params);
+    } catch (err) {
+      // Sem acesso ao registo de atividade: os emails ficam só os dos convites.
+      console.warn("[agentes] emails do registo de atividade indisponíveis:", String((err as Error)?.message ?? err).slice(0, 160));
+      const { sql, params } = buildLiveAgentsSql({ since, activityEmails: false });
+      rows = await query(sql, params);
+    }
+    return rows.map(mapLiveAgentRow).filter((x): x is LiveAgent => !!x);
   });
 }
 
