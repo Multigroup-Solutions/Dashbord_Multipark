@@ -143,3 +143,39 @@ export async function liveBookingByRef(ref: string, o: { cities?: readonly strin
   const rows = await searchLiveBookings({ ref: r }, { cities, limit: 5 }, query);
   return rows.find((x) => x.id === r) ?? rows.find((x) => x.bookingNumber === r) ?? null;
 }
+
+/**
+ * Reservas não canceladas com entrada OU saída em [start, end) (UTC), com
+ * telefone, nos nossos parques das cidades dadas — para o grupo "Serviço" dos
+ * contactos Google (recolhas/entregas de hoje e amanhã). PURA.
+ */
+export function buildBookingsInWindowSql(o: { start: string; end: string; ourParkIds: readonly string[]; cities: readonly string[]; limit?: number }): { sql: string; params: SqlParam[] } {
+  if (!o.ourParkIds.length) throw new Error("Sem parques.");
+  const p = new ParamList();
+  const aliases = cityAliases([...o.cities]);
+  const city = aliases.length ? `lower(trim(pk."city")) IN (${aliases.map((a) => p.add(a)).join(", ")})` : "FALSE";
+  const s = p.add(o.start), e = p.add(o.end);
+  const sql = [
+    `SELECT b."id" AS id, NULLIF(b."allocation", '') AS code, b."status"::text AS status, b."parkId" AS park_id, pk."name" AS park_name, pk."city" AS city,`,
+    `       ${ts(`b."checkIn"`)} AS check_in, ${ts(`b."checkOut"`)} AS check_out, ${ts(`b."createdAt"`)} AS created_at, b."bookingPrice" AS total,`,
+    `       c."firstName" AS first_name, c."lastName" AS last_name, NULLIF(c."email", '') AS email, NULLIF(c."phoneNumber", '') AS phone, v."licensePlate" AS plate`,
+    `  FROM "Booking" b`,
+    `  JOIN "Park" pk ON pk."id" = b."parkId"`,
+    `  JOIN "Client" c ON c."id" = COALESCE(b."customerId", b."clientId")`,
+    `  LEFT JOIN "BookingVehicle" v ON v."id" = b."vehicleId"`,
+    ` WHERE b."parkId" IN (${o.ourParkIds.map((id) => p.add(id)).join(", ")}) AND ${city}`,
+    `   AND b."status"::text NOT IN ('CANCELLED', 'PENDING') AND NULLIF(c."phoneNumber", '') IS NOT NULL`,
+    `   AND ((b."checkIn" >= ${s}::timestamp AND b."checkIn" < ${e}::timestamp) OR (b."checkOut" >= ${s}::timestamp AND b."checkOut" < ${e}::timestamp))`,
+    ` LIMIT ${p.add(Math.max(1, Math.min(5000, Math.trunc(o.limit ?? 3000))))}`,
+  ].join("\n");
+  return { sql, params: p.values };
+}
+
+export async function readBookingsInWindow(o: { start: string; end: string; cities: readonly string[]; limit?: number }, query: Query = multiparkDbQuery): Promise<LiveBookingRow[]> {
+  const { loadLiveContext } = await import("../finance/liveBookings");
+  const ctx = await loadLiveContext();
+  const parks = [...ctx.ourParks.keys()];
+  if (!parks.length || !o.cities.length) return [];
+  const { sql, params } = buildBookingsInWindowSql({ ...o, ourParkIds: parks });
+  return (await query<Record<string, unknown>>(sql, params)).map((r) => mapLiveBookingRow(r, (id) => (id ? ctx.ourParks.get(id) ?? null : null)));
+}

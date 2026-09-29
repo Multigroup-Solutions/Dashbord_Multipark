@@ -12,10 +12,9 @@ import { Button } from "@/components/ui/button";
 import { QuickRangeBar, thisMonthRange } from "@/components/QuickRangeBar";
 import { useTableSort, Th } from "@/components/SortableTable";
 import DateRangeNav from "@/components/DateRangeNav";
-import BookingDetailDialog from "@/components/BookingDetailDialog";
 import { toast } from "sonner";
 import { StatValue } from "@/components/StatValue";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { serviceTypeOf } from "@shared/serviceTasks";
 
 import {
@@ -68,11 +67,8 @@ export default function ServicesPage() {
 
   const { data, isLoading } = trpc.services.multiparkExtras.useQuery({ startDate, endDate, projectId: globalFilters.projectId });
   const [showFlags, setShowFlags] = usePersistedState<boolean>("servicos.flags", false);
-  const [detailExternalId, setDetailExternalId] = useState<string | null>(null);
-  const detailQ = trpc.multipark.bookingByExternalId.useQuery(
-    { externalId: detailExternalId ?? "" },
-    { enabled: !!detailExternalId },
-  );
+  // Detalhe: a ficha da reserva (ao vivo da Multipark).
+  const [, navigate] = useLocation();
   const utils = trpc.useUtils();
   const setDoneMut = trpc.services.setExtraDone.useMutation({
     onSuccess: () => { utils.services.multiparkExtras.invalidate(); },
@@ -335,7 +331,7 @@ export default function ServicesPage() {
                   <tr
                     key={`${s.bookingId}-${i}`}
                     className="border-b hover:bg-muted/50 cursor-pointer"
-                    onClick={() => setDetailExternalId(s.bookingId)}
+                    onClick={() => navigate(`/reserva/${encodeURIComponent(s.bookingId)}`)}
                   >
                     <td className="p-2 font-medium min-w-[12rem]">
                       {s.serviceName}
@@ -360,7 +356,7 @@ export default function ServicesPage() {
                       {/* Clicar dá baixa / reabre (guardado na app; o sync respeita) */}
                       <button
                         type="button"
-                        onClick={(e) => { e.stopPropagation(); if (s.id) setDoneMut.mutate({ id: s.id, done: !s.done }); }}
+                        onClick={(e) => { e.stopPropagation(); if (s.id) setDoneMut.mutate({ bookingId: s.bookingId, lineId: s.id, done: !s.done }); }}
                         title={s.done ? "Clique para reabrir" : "Clique para dar baixa (feito)"}
                         disabled={setDoneMut.isPending}
                       >
@@ -378,9 +374,6 @@ export default function ServicesPage() {
             )}
           </div>
 
-          {detailExternalId && detailQ.data && (
-            <BookingDetailDialog booking={detailQ.data} onClose={() => setDetailExternalId(null)} />
-          )}
         </>
       )}
     </div>

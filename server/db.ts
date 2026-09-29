@@ -191,6 +191,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0240").then(m => ({ s: m.MIGRATION_0240_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0240 })),
       import("./migrations/migration_0245").then(m => ({ s: m.MIGRATION_0245_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0245 })),
       import("./migrations/migration_0250").then(m => ({ s: m.MIGRATION_0250_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0250 })),
+      import("./migrations/migration_0255").then(m => ({ s: m.MIGRATION_0255_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0255 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -4697,48 +4698,6 @@ export async function generateAnnualSummary(year: number, projectId?: number, sp
 
 // ─── MULTIPARK BOOKINGS ──────────────────────────────────────────────────────
 
-export async function getMultiparkBookings(filters?: {
-  status?: string;
-  parkingType?: string;
-  city?: string;
-  parkId?: string;
-  from?: Date;
-  to?: Date;
-  search?: string;
-  limit?: number;
-  offset?: number;
-}) {
-  const db = await getDb();
-  if (!db) return [];
-  const conditions: any[] = [];
-  if (filters?.status) conditions.push(eq(multiparkBookings.status, filters.status));
-  if (filters?.parkingType) conditions.push(eq(multiparkBookings.parkingType, filters.parkingType));
-  if (filters?.city) conditions.push(eq(multiparkBookings.city, filters.city));
-  if (filters?.parkId) conditions.push(eq(multiparkBookings.parkId, filters.parkId));
-  if (filters?.from) conditions.push(gte(multiparkBookings.checkIn, toMysqlDateTime(filters.from)));
-  if (filters?.to) conditions.push(lte(multiparkBookings.checkIn, toMysqlDateTime(filters.to)));
-  if (filters?.search) {
-    const s = `%${filters.search}%`;
-    conditions.push(
-      or(
-        like(multiparkBookings.clientFirstName, s),
-        like(multiparkBookings.clientLastName, s),
-        like(multiparkBookings.licensePlate, s),
-        like(multiparkBookings.bookingNumber, s),
-        like(multiparkBookings.clientEmail, s),
-      )
-    );
-  }
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
-  return db
-    .select()
-    .from(multiparkBookings)
-    .where(where)
-    .orderBy(desc(multiparkBookings.checkIn))
-    .limit(filters?.limit ?? 100)
-    .offset(filters?.offset ?? 0);
-}
-
 // Mapa central campanha→parceiro — a MESMA regra do motor financeiro
 // (R.buildPartnerIndex via ./finance/partners.ts). Cacheado 60s para não pesar
 // nas folhas operacionais.
@@ -4763,54 +4722,9 @@ export async function buildPartnerByCampaignMap() {
  *  distribuição por cidade/parque, calculado no SQL — substitui puxar até
  *  4×5.000 reservas completas só para contar. */
 export async function getOperationsSummary(filters: { startDate: string; endDate: string; projectId?: number }) {
-  const db = await getDb();
-  const empty = { actions: {} as Record<string, { count: number; revenue: number; byCity: Array<{ name: string; count: number; revenue: number }>; byPark: Array<{ name: string; count: number; revenue: number }> }> };
-  if (!db) return empty;
-  // Dias de LISBOA → intervalo UTC [início, fim) (as colunas estão em UTC)
-  const range = lisbonDayRangeUtc(filters.startDate, filters.endDate);
-  let projectCond = "";
-  if (filters.projectId) {
-    const ids = await resolveProjectIds(filters.projectId);
-    projectCond = ` AND projectId IN (${ids.join(",") || "0"})`;
-  }
-  const scoped = scopedProjectIds();
-  if (scoped !== undefined) projectCond += ` AND projectId IN (${scoped.join(",") || "0"})`;
-  const between = (col: string) => `${col} >= '${range.start}' AND ${col} < '${range.end}'`;
-  const DATE_COND: Record<string, string> = {
-    // criadas NÃO canceladas (valor previsto)
-    creation: `${between("bookingCreatedAt")} AND status != 'CANCELLED'`,
-    // TODAS as criadas no período (coorte da taxa de cancelamento)
-    createdAll: between("bookingCreatedAt"),
-    checkin: `${between("checkIn")} AND status != 'CANCELLED'`,
-    checkout: `${between("checkOut")} AND status != 'CANCELLED'`,
-    cancelation: `status = 'CANCELLED' AND ${between("COALESCE(cancelledAt, updatedAt)")}`,
-  };
-  const out: (typeof empty)["actions"] = {};
-  for (const [action, q] of Object.entries(DATE_COND)) {
-    const [rows] = await db.execute(sql.raw(
-      `SELECT COALESCE(city,'—') AS city, COALESCE(parkName,'—') AS parkName, COUNT(*) AS n, COALESCE(SUM(totalPrice),0) AS revenue
-       FROM multipark_bookings WHERE ${q}${projectCond}
-       GROUP BY city, parkName`,
-    )) as any;
-    const byCity = new Map<string, { count: number; revenue: number }>();
-    const byPark = new Map<string, { count: number; revenue: number }>();
-    let count = 0, revenue = 0;
-    for (const r of rows as any[]) {
-      const n = Number(r.n), v = Number(r.revenue);
-      count += n; revenue += v;
-      const c = byCity.get(r.city) ?? { count: 0, revenue: 0 };
-      c.count += n; c.revenue += v; byCity.set(r.city, c);
-      const parkKey = r.city && !String(r.parkName).includes(r.city) ? `${r.parkName} ${r.city}` : r.parkName;
-      const pk = byPark.get(parkKey) ?? { count: 0, revenue: 0 };
-      pk.count += n; pk.revenue += v; byPark.set(parkKey, pk);
-    }
-    out[action] = {
-      count, revenue,
-      byCity: Array.from(byCity, ([name, v]) => ({ name, ...v })).sort((a, b) => b.count - a.count),
-      byPark: Array.from(byPark, ([name, v]) => ({ name, ...v })).sort((a, b) => b.count - a.count),
-    };
-  }
-  return { actions: out };
+  // Ao vivo na BD da Multipark (reservas ao vivo, parte B): contagens por dia × parque.
+  const { liveOperationsSummary } = await import("./opsStatsLive");
+  return liveOperationsSummary(filters);
 }
 
 export async function searchBookingByRef(search: string) {
@@ -4824,12 +4738,6 @@ export async function searchBookingByRef(search: string) {
   }
 }
 
-export async function getMultiparkBookingByExternalId(externalId: string) {
-  const db = await getDb();
-  if (!db) return undefined;
-  const rows = await db.select().from(multiparkBookings).where(eq(multiparkBookings.externalId, externalId)).limit(1);
-  return rows[0];
-}
 
 export async function upsertMultiparkBooking(data: InsertMultiparkBooking) {
   const db = await getDb();
@@ -4924,144 +4832,9 @@ export async function upsertBookingExtras(
 }
 
 export async function getMultiparkBookingStats(filters?: { from?: string; to?: string; projectId?: number }) {
-  const db = await getDb();
-  const empty = { total: 0, reservasHoje: 0, checkinHoje: 0, checkoutHoje: 0, canceladosHoje: 0, reservasMes: 0, checkinMes: 0, checkoutMes: 0, canceladosMes: 0, receitaHoje: 0, receitaMes: 0, receitaPeriodo: 0, byCity: [] as { name: string; bookings: number; revenue: number }[], byDay: [] as { date: string; reservas: number; checkins: number; checkouts: number; cancelados: number; revenue: number }[], byBrand: [] as { name: string; bookings: number; revenue: number }[] };
-  if (!db) return empty;
-
-  // Resolve project hierarchy for filtering (via resolveProjectIds para
-  // suportar também marcas globais = IDs negativos)
-  let projectFilter: any = undefined;
-  if (filters?.projectId) {
-    const ids = await resolveProjectIds(filters.projectId);
-    projectFilter = sql`${multiparkBookings.projectId} IN (${sql.raw(ids.join(",") || "0")})`;
-  }
-
-  const now = new Date();
-  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-  const todayEnd = todayStr + " 23:59:59";
-  const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
-
-  const countQuery = (dateCol: any, start: string, end: string, excludeCancelled = true) => {
-    const conds: any[] = [gte(dateCol, start), lte(dateCol, end)];
-    if (excludeCancelled) conds.push(sql`${multiparkBookings.status} != 'CANCELLED'`);
-    if (projectFilter) conds.push(projectFilter);
-    return db.select({
-      count: sql<number>`COUNT(*)`,
-      revenue: sql<string>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    }).from(multiparkBookings).where(and(...conds));
-  };
-
-  // Period for byDay/byCity breakdown
-  const periodFrom = filters?.from || monthStart;
-  const periodTo = (filters?.to || todayStr) + " 23:59:59";
-
-  const [
-    [totalRow],
-    [resHoje], [resMonth],
-    [ciHoje], [ciMonth],
-    [coHoje], [coMonth],
-    [canHoje], [canMonth],
-    [periodRevRow],
-    byCityRows,
-    byDayRows,
-    byBrandRows,
-  ] = await Promise.all([
-    db.select({ count: sql<number>`COUNT(*)` }).from(multiparkBookings).where(projectFilter ? and(projectFilter) : undefined),
-    countQuery(multiparkBookings.bookingCreatedAt, todayStr, todayEnd),
-    countQuery(multiparkBookings.bookingCreatedAt, monthStart, todayEnd),
-    countQuery(multiparkBookings.checkIn, todayStr, todayEnd),
-    countQuery(multiparkBookings.checkIn, monthStart, todayEnd),
-    countQuery(multiparkBookings.checkOut, todayStr, todayEnd),
-    countQuery(multiparkBookings.checkOut, monthStart, todayEnd),
-    countQuery(multiparkBookings.cancelledAt, todayStr, todayEnd, false),
-    countQuery(multiparkBookings.cancelledAt, monthStart, todayEnd, false),
-    // Revenue for the full filter period
-    (() => {
-      const conds: any[] = [gte(multiparkBookings.checkIn, periodFrom), lte(multiparkBookings.checkIn, periodTo), sql`${multiparkBookings.status} != 'CANCELLED'`];
-      if (projectFilter) conds.push(projectFilter);
-      return db.select({ revenue: sql<string>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)` }).from(multiparkBookings).where(and(...conds));
-    })(),
-    // By city
-    (() => {
-      const conds: any[] = [gte(multiparkBookings.bookingCreatedAt, periodFrom), lte(multiparkBookings.bookingCreatedAt, periodTo), sql`${multiparkBookings.status} != 'CANCELLED'`];
-      if (projectFilter) conds.push(projectFilter);
-      return db.select({
-        name: multiparkBookings.city,
-        bookings: sql<number>`COUNT(*)`,
-        revenue: sql<string>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-      }).from(multiparkBookings).where(and(...conds)).groupBy(multiparkBookings.city);
-    })(),
-    // By day
-    (() => {
-      const conds: any[] = [gte(multiparkBookings.bookingCreatedAt, periodFrom), lte(multiparkBookings.bookingCreatedAt, periodTo), sql`${multiparkBookings.status} != 'CANCELLED'`];
-      if (projectFilter) conds.push(projectFilter);
-      return db.select({
-        date: sql<string>`DATE(${multiparkBookings.bookingCreatedAt})`,
-        reservas: sql<number>`COUNT(*)`,
-        revenue: sql<string>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-      }).from(multiparkBookings).where(and(...conds)).groupBy(sql`DATE(${multiparkBookings.bookingCreatedAt})`).orderBy(sql`DATE(${multiparkBookings.bookingCreatedAt})`);
-    })(),
-    // By brand (parkName)
-    (() => {
-      const conds: any[] = [gte(multiparkBookings.bookingCreatedAt, periodFrom), lte(multiparkBookings.bookingCreatedAt, periodTo), sql`${multiparkBookings.status} != 'CANCELLED'`];
-      if (projectFilter) conds.push(projectFilter);
-      return db.select({
-        name: multiparkBookings.parkName,
-        bookings: sql<number>`COUNT(*)`,
-        revenue: sql<string>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-      }).from(multiparkBookings).where(and(...conds)).groupBy(multiparkBookings.parkName);
-    })(),
-  ]);
-
-  // We need checkin/checkout/cancelation counts per day too for charts
-  const [ciByDay, coByDay, canByDay] = await Promise.all([
-    (() => {
-      const conds: any[] = [gte(multiparkBookings.checkIn, periodFrom), lte(multiparkBookings.checkIn, periodTo), sql`${multiparkBookings.status} != 'CANCELLED'`];
-      if (projectFilter) conds.push(projectFilter);
-      return db.select({ date: sql<string>`DATE(${multiparkBookings.checkIn})`, count: sql<number>`COUNT(*)` }).from(multiparkBookings).where(and(...conds)).groupBy(sql`DATE(${multiparkBookings.checkIn})`);
-    })(),
-    (() => {
-      const conds: any[] = [gte(multiparkBookings.checkOut, periodFrom), lte(multiparkBookings.checkOut, periodTo), sql`${multiparkBookings.status} != 'CANCELLED'`];
-      if (projectFilter) conds.push(projectFilter);
-      return db.select({ date: sql<string>`DATE(${multiparkBookings.checkOut})`, count: sql<number>`COUNT(*)` }).from(multiparkBookings).where(and(...conds)).groupBy(sql`DATE(${multiparkBookings.checkOut})`);
-    })(),
-    (() => {
-      const conds: any[] = [gte(multiparkBookings.cancelledAt, periodFrom), lte(multiparkBookings.cancelledAt, periodTo)];
-      if (projectFilter) conds.push(projectFilter);
-      return db.select({ date: sql<string>`DATE(${multiparkBookings.cancelledAt})`, count: sql<number>`COUNT(*)` }).from(multiparkBookings).where(and(...conds)).groupBy(sql`DATE(${multiparkBookings.cancelledAt})`);
-    })(),
-  ]);
-
-  // Merge daily data
-  const ciMap = new Map(ciByDay.map(r => [r.date, r.count]));
-  const coMap = new Map(coByDay.map(r => [r.date, r.count]));
-  const canMap = new Map(canByDay.map(r => [r.date, r.count]));
-  const byDay = byDayRows.map(r => ({
-    date: r.date,
-    reservas: r.reservas,
-    checkins: ciMap.get(r.date) ?? 0,
-    checkouts: coMap.get(r.date) ?? 0,
-    cancelados: canMap.get(r.date) ?? 0,
-    revenue: parseFloat(String(r.revenue ?? 0)),
-  }));
-
-  return {
-    total: totalRow?.count ?? 0,
-    reservasHoje: resHoje?.count ?? 0,
-    checkinHoje: ciHoje?.count ?? 0,
-    checkoutHoje: coHoje?.count ?? 0,
-    canceladosHoje: canHoje?.count ?? 0,
-    reservasMes: resMonth?.count ?? 0,
-    checkinMes: ciMonth?.count ?? 0,
-    checkoutMes: coMonth?.count ?? 0,
-    canceladosMes: canMonth?.count ?? 0,
-    receitaHoje: parseFloat(String(ciHoje?.revenue ?? 0)),
-    receitaMes: parseFloat(String(ciMonth?.revenue ?? 0)),
-    receitaPeriodo: parseFloat(String(periodRevRow?.revenue ?? 0)),
-    byCity: byCityRows.map(r => ({ name: r.name ?? "Desconhecido", bookings: r.bookings, revenue: parseFloat(String(r.revenue ?? 0)) })),
-    byDay,
-    byBrand: byBrandRows.map(r => ({ name: r.name ?? "Desconhecido", bookings: r.bookings, revenue: parseFloat(String(r.revenue ?? 0)) })),
-  };
+  // Ao vivo na BD da Multipark (reservas ao vivo, parte B), só dos parques das cidades de quem pede.
+  const { liveBookingStats } = await import("./opsStatsLive");
+  return liveBookingStats(filters);
 }
 
 // ─── INVITE TOKENS ──────────────────────────────────────────────────────────

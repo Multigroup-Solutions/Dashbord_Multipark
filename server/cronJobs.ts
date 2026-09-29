@@ -38,8 +38,8 @@ const fail = (err: any, extra: Record<string, unknown> = {}): CronJobRun => ({ h
 // ─── Multipark ──────────────────────────────────────────────────────────────
 
 /**
- * Fila de notificações + detalhe (cópia financeira em multipark_bookings e
- * CRM). Falhas de itens (reserva ainda incompleta) são repetidas pela fila
+ * Fila de notificações (cópia `multipark_bookings` gravada a cada webhook).
+ * A releitura periódica pela API está desligada: a app lê a Multipark ao vivo. Falhas de itens (reserva ainda incompleta) são repetidas pela fila
  * com backoff → vão em `warnings` e o cron fica verde. 503 só quando uma fase
  * inteira falha. As 2 fases dividem o prazo. O histórico já não é copiado
  * (multipark_booking_history fica só com o que já lá estava): lê-se da BD da
@@ -51,7 +51,7 @@ export async function multiparkDeliveriesCron(o: { deadlineAt: number }): Promis
   const phaseErrors: string[] = [];
   const { retryMultiparkDeliveries } = await import("./multiparkWebhook");
   let queue: Awaited<ReturnType<typeof retryMultiparkDeliveries>> | null = null;
-  let details: { scanned: number; enriched: number; errors: number; noKey: number; closed?: number } | null = null;
+  const details: { errors: number; noKey: number } | null = null;
   let alert: unknown = null;
   try {
     queue = await retryMultiparkDeliveries(startedAt + Math.round(total * 0.6));
@@ -59,15 +59,10 @@ export async function multiparkDeliveriesCron(o: { deadlineAt: number }): Promis
     console.error("[cron multipark-deliveries] fila:", await errCode(err));
     phaseErrors.push(`fila indisponível (${await errCode(err)})`);
   }
-  try {
-    const { enrichBookingsBatch } = await import("./jobs/multiparkBookingSync");
-    // O detalhe tem um ciclo próprio: um report demorado não pode impedir
-    // para sempre a atualização de matrículas, clientes e campanhas.
-    details = await enrichBookingsBatch({ limit: 40, deadlineAt: o.deadlineAt });
-  } catch (err) {
-    console.error("[cron multipark-deliveries] detalhe:", await errCode(err));
-    phaseErrors.push(`detalhe falhou (${await errCode(err)})`);
-  }
+  // Releitura periódica das reservas pela API: DESLIGADA (reservas ao vivo,
+  // parte B, 29 set 2026). Tudo o que a app mostra lê a BD da Multipark ao
+  // vivo; a cópia `multipark_bookings` continua a ser gravada quando chega um
+  // webhook (processMultiparkWebhookEvent) e nunca se apaga.
   // Memória do webhook: repetir a leitura da BD da Multipark que falhou no
   // momento do webhook (linha nova "#db"; a original não é tocada).
   let memoryRetry: unknown = null;

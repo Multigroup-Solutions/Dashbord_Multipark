@@ -6,10 +6,10 @@ palavras: serviços, servicos, serviços extra, lavagem, lavagens, carregamento 
 ---
 # Serviços
 
-Menu **Operações → Serviços**: os serviços extra das reservas (lavagens, carregamentos elétricos, valet…) no período escolhido, com totais por tipo e por parque.
+Menu **Operações → Serviços**: os serviços extra das reservas (lavagens, carregamentos elétricos, valet…) no período escolhido, com totais por tipo e por parque. Lidos **ao vivo** da base da Multipark (reservas não canceladas com saída no período, só das tuas cidades).
 
 1. Filtra por **tipo** e **estado** (Feito / Pendente). As marcas operacionais a 0 € (ex.: "No pay") ficam escondidas por omissão.
-2. Clica numa linha para ver a reserva. Clica no estado para **dar baixa** (ou reabrir).
+2. Clica numa linha para abrir a **ficha da reserva**. Clica no estado para **dar baixa** (ou reabrir): fica guardado na app; o serviço aparece feito se estiver feito na Multipark ou se lhe deres baixa aqui.
 3. Quando o serviço gerou uma tarefa, aparece o botão **Tarefa** ao lado do nome (**Tarefa ✓** se já está concluída): abre-a em **Tarefas**.
 
 **Tarefas automáticas dos serviços**
