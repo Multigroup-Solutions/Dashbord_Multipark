@@ -170,6 +170,11 @@ export const NOTIFICATION_KIND_DEFS = [
   K({ kind: "payroll_ready", group: "financeiro", label: "Folha de ordenados", description: "Folha de ordenados gerada, pronta a enviar ao contabilista.",
     module: "rh_salarios", action: "view", roles: [], cityScoped: false, personal: false, channels: WITH_EMAIL, emailDefault: true }),
 
+  K({ kind: "cash_case_alert", group: "financeiro", label: "Caixa: casos graves", description: "Correção de caixa: preço zerado, pago ≠ esperado, caixa fechada com divergência ou reaberta, reembolso por explicar, dinheiro do condutor por entregar e contagem ≠ esperado (1 aviso por caso).",
+    module: "faturacao", action: "view", roles: [], cityScoped: true, personal: false, channels: WITH_EMAIL, emailDefault: true }),
+  K({ kind: "cash_daily_digest", group: "financeiro", label: "Caixa: resumo diário", description: "Casos da Correção de caixa por explicar (por cidade), depois do fecho do dia.",
+    module: "faturacao", action: "view", roles: [], cityScoped: true, personal: false, channels: WITH_EMAIL, dedupeMinutes: 12 * 60 }),
+
   // ── Marketing ──
   K({ kind: "marketing_alert", group: "marketing", label: "Alertas de marketing", description: "Gasto ou ROAS fora do normal (só críticos).",
     module: "marketing", action: "view", roles: [], cityScoped: false, personal: false, channels: WITH_EMAIL }),

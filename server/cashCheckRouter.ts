@@ -26,6 +26,8 @@ import {
 import type { MemorySnapshot } from "./webhookMemory";
 
 const DAY = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+/** Motivos para fechar um caso (a explicação escrita é sempre obrigatória). */
+export const CLOSE_REASONS = ["desconto_autorizado", "erro_corrigido", "cortesia", "pago_noutro_canal", "parceiro_ou_pro", "perda", "outro"] as const;
 export const ONLY_MEMORY_MAX = 300;
 
 async function permissionOverrides(userId: number): Promise<Record<string, string>> {
@@ -273,4 +275,78 @@ export const cashCheckRouter = router({
       memoryError,
     };
   }),
+
+  // ─── Fase 3: casos da "Correção de caixa" (varredura automática) ─────────
+
+  /** Fila de casos, no âmbito de cidade de quem vê. */
+  cases: protectedProcedure.input(z.object({
+    view: z.enum(["abertos", "fechados", "todos"]).optional(),
+    severity: z.enum(["critical", "high", "medium"]).optional(),
+    code: z.string().max(40).optional(),
+    parkId: z.string().max(128).optional(),
+    day: DAY.optional(),
+    limit: z.number().int().min(10).max(200).optional(),
+    offset: z.number().int().min(0).max(100_000).optional(),
+    projectId: z.number().optional(),
+  }).optional()).query(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    const { listCases } = await import("./cashCheck/caseQueries");
+    return listCases(input ?? {});
+  }),
+
+  /** Detalhe de um caso: o caso, a história, e (reserva) o era/é e quem mexeu no dinheiro. */
+  caseDetail: protectedProcedure.input(z.object({ id: z.number().int().positive(), projectId: z.number().optional() })).query(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    const { getCaseDetail } = await import("./cashCheck/caseQueries");
+    const r = await getCaseDetail(input.id, scopedCityNames());
+    if (!r) throw new TRPCError({ code: "NOT_FOUND", message: "Caso não encontrado (ou fora das tuas cidades)." });
+    return { ...r, canManage: await canManageCases(ctx.user) };
+  }),
+
+  /** Mudar o estado: em análise · fechar (motivo + explicação obrigatórios) · reabrir · nota. */
+  caseAction: protectedProcedure.input(z.object({
+    id: z.number().int().positive(),
+    action: z.enum(["analise", "fechar", "reabrir", "nota"]),
+    reason: z.enum(CLOSE_REASONS).optional(),
+    explanation: z.string().trim().max(4000).optional(),
+    projectId: z.number().optional(),
+  })).mutation(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    if (!(await canManageCases(ctx.user))) throw new TRPCError({ code: "FORBIDDEN", message: "Só quem confere a caixa (Faturação → gerir) pode mudar os casos." });
+    const { applyCaseAction } = await import("./cashCheck/caseQueries");
+    const r = await applyCaseAction({ id: input.id, action: input.action, reason: input.reason ?? null, explanation: input.explanation ?? null, userId: ctx.user.id });
+    if (!r.ok) throw new TRPCError({ code: r.code, message: r.message });
+    return { success: true };
+  }),
+
+  // ─── Fase 3: contagem da caixa (R24) ─────────────────────────────────────
+
+  /** Parque + dia: recebido em dinheiro (Multipark ao vivo), gastos pagos da caixa e a contagem gravada. */
+  countDay: protectedProcedure.input(z.object({ parkId: z.string().trim().min(1).max(128), day: DAY, projectId: z.number().optional() })).query(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    const { getCountDay } = await import("./cashCheck/caseQueries");
+    return getCountDay(input.parkId, input.day);
+  }),
+
+  saveCount: protectedProcedure.input(z.object({
+    parkId: z.string().trim().min(1).max(128),
+    day: DAY,
+    counted: z.number().min(0).max(10_000_000),
+    note: z.string().trim().max(2000).optional(),
+    expenses: z.array(z.object({ description: z.string().trim().min(2).max(255), amount: z.number().min(0).max(1_000_000), receipt: z.string().trim().max(255).optional() })).max(100),
+    projectId: z.number().optional(),
+  })).mutation(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    requireAccess(ctx.user, "faturacao", "edit");
+    const { saveCount } = await import("./cashCheck/caseQueries");
+    const r = await saveCount({ ...input, userId: ctx.user.id });
+    if (!r.ok) throw new TRPCError({ code: r.code, message: r.message });
+    return r;
+  }),
 });
+
+/** Fechar/reabrir casos: Faturação → gerir (o papel de conferência de caixa). */
+async function canManageCases(user: { id: number; role: string; accessOverrides?: unknown }): Promise<boolean> {
+  const { canAccess } = await import("./_core/access");
+  return canAccess(user as any, "faturacao", "manage");
+}

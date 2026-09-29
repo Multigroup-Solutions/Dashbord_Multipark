@@ -16,8 +16,8 @@ import { sql } from "drizzle-orm";
 import type { LiveFinance } from "./cashCheck/rules";
 import type { SweepExtras } from "./multiparkDb/cashSweep";
 import {
-  agentPermsFinding, evaluateSweep, missingFinding, parkSilentFinding, snapFromLive, stateHash, SWEEP_LABELS,
-  type Finding, type SweepSnap,
+  agentPermsFinding, ALERT_CODES, evaluateSweep, missingFinding, parkSilentFinding, snapFromLive, stateHash, SWEEP_LABELS,
+  type Finding, type SweepCode, type SweepSnap,
 } from "./cashCheck/sweepRules";
 import { actionNote, planCaseActions, type CaseAction, type ExistingCase } from "./cashCheck/cases";
 
@@ -40,9 +40,9 @@ export const SWEEP_FIRST_WINDOW_MS = 30 * 60_000;
 export const PARK_SILENT_HOURS = 3;
 export const PARK_SILENT_MIN_MOVES = 3;
 /** Códigos avaliados para uma reserva encontrada (todos menos os de agente/parque). */
-const BOOKING_CODES = new Set(Object.keys(SWEEP_LABELS).filter((c) => c !== "agent_perms_changed" && c !== "park_webhook_silent"));
+const BOOKING_CODES = new Set(Object.keys(SWEEP_LABELS).filter((c) => c !== "agent_perms_changed" && c !== "park_webhook_silent" && c !== "count_mismatch"));
 
-async function database(): Promise<Db> {
+export async function database(): Promise<Db> {
   const { getDb } = await import("./db");
   const d = await getDb();
   if (!d) throw new Error("BD indisponível");
@@ -72,7 +72,7 @@ async function loadSnaps(d: Db, ids: readonly string[]): Promise<Map<string, Arr
   return out;
 }
 
-async function loadCases(d: Db, subjectType: string, ids: readonly string[]): Promise<Map<string, ExistingCase[]>> {
+export async function loadCases(d: Db, subjectType: string, ids: readonly string[]): Promise<Map<string, ExistingCase[]>> {
   const out = new Map<string, ExistingCase[]>();
   if (!ids.length) return out;
   const rows = rowsOf(await d.execute(sql`SELECT id, subjectId, code, state, detail, severity FROM cash_cases
@@ -85,10 +85,14 @@ async function loadCases(d: Db, subjectType: string, ids: readonly string[]): Pr
   return out;
 }
 
-export interface SubjectMeta { subjectType: "booking" | "agent" | "park"; subjectId: string; parkId: string | null; projectId: number | null; bookingCode: string | null; day: string | null }
+export interface SubjectMeta { subjectType: "booking" | "agent" | "park" | "count"; subjectId: string; parkId: string | null; projectId: number | null; bookingCode: string | null; day: string | null }
+
+export interface CaseAlert { caseId: number; meta: SubjectMeta; finding: Finding }
+/** Alertas por enviar desta corrida (casos graves abertos ou reabertos). */
+let pendingAlerts: CaseAlert[] = [];
 
 /** Aplica as ações de um sujeito (casos + eventos). Devolve contagens. */
-async function applyActions(d: Db, meta: SubjectMeta, actions: readonly CaseAction[], nowDb: string): Promise<{ opened: number; reopened: number; resolved: number }> {
+export async function applyActions(d: Db, meta: SubjectMeta, actions: readonly CaseAction[], nowDb: string): Promise<{ opened: number; reopened: number; resolved: number }> {
   let opened = 0, reopened = 0, resolved = 0;
   for (const a of actions) {
     let caseId: number;
@@ -115,6 +119,9 @@ async function applyActions(d: Db, meta: SubjectMeta, actions: readonly CaseActi
       await d.execute(sql`UPDATE cash_cases SET state = ${a.state}, resolvedAt = ${nowDb} WHERE id = ${caseId}`);
       resolved++;
     }
+    if (caseId && (a.kind === "open" || a.kind === "reopen") && (a.finding.severity === "critical" || ALERT_CODES.has(a.finding.code as SweepCode))) {
+      pendingAlerts.push({ caseId, meta, finding: a.finding });
+    }
     if (caseId) {
       const e = actionNote(a);
       await d.execute(sql`INSERT INTO cash_case_events (caseId, at, userId, action, note) VALUES (${caseId}, ${nowDb}, NULL, ${e.action}, ${e.note})`);
@@ -123,7 +130,7 @@ async function applyActions(d: Db, meta: SubjectMeta, actions: readonly CaseActi
   return { opened, reopened, resolved };
 }
 
-export interface SweepReport { mode: string; bookings: number; snapshots: number; missing: number; opened: number; reopened: number; resolved: number; partial: boolean; parksSilent?: number; agents?: number }
+export interface SweepReport { mode: string; bookings: number; snapshots: number; missing: number; opened: number; reopened: number; resolved: number; partial: boolean; parksSilent?: number; agents?: number; alerts?: number; digests?: number }
 
 /**
  * Processa reservas já lidas ao vivo (e as que desapareceram). Usado pela
@@ -177,6 +184,55 @@ async function processBookings(d: Db, o: {
   return rep;
 }
 
+export const ALERTS_PER_RUN = 25;
+
+/** Envia os alertas pendentes (1 por caso — `alertedAt`), no máximo ALERTS_PER_RUN. */
+export async function flushCaseAlerts(d: Db, nowDb: string): Promise<number> {
+  const list = pendingAlerts.splice(0, pendingAlerts.length);
+  if (!list.length) return 0;
+  const { notify } = await import("./notify");
+  let sent = 0;
+  for (const a of list.slice(0, ALERTS_PER_RUN)) {
+    try {
+      const subject = a.meta.subjectType === "booking" ? `reserva ${a.meta.bookingCode ?? a.meta.subjectId}` : a.meta.subjectType === "count" ? "contagem da caixa" : a.meta.subjectType;
+      await notify({
+        kind: "cash_case_alert", projectId: a.meta.projectId,
+        title: `Caixa: ${a.finding.label} (${subject})`, body: a.finding.detail.slice(0, 500),
+        link: `/faturacao?tab=cash-check&case=${a.caseId}`, entity: { type: "cash_case", id: a.caseId },
+      });
+      await d.execute(sql`UPDATE cash_cases SET alertedAt = ${nowDb} WHERE id = ${a.caseId}`);
+      sent++;
+    } catch (err) {
+      console.warn("[cash-sweep] alerta:", (err as Error)?.message);
+    }
+  }
+  return sent;
+}
+
+/** Resumo diário: casos por explicar, por centro (cidade). */
+export async function sendDailyDigest(d: Db): Promise<number> {
+  const rows = rowsOf(await d.execute(sql`SELECT projectId, COUNT(*) AS n,
+      SUM(severity = 'critical') AS crit, SUM(severity = 'high') AS high
+    FROM cash_cases WHERE state IN ('aberto', 'em_analise') GROUP BY projectId`));
+  if (!rows.length) return 0;
+  const { notify } = await import("./notify");
+  let sent = 0;
+  for (const r of rows) {
+    const n = Number(r.n), crit = Number(r.crit ?? 0), high = Number(r.high ?? 0);
+    try {
+      await notify({
+        kind: "cash_daily_digest", projectId: r.projectId == null ? null : Number(r.projectId),
+        title: `Caixa: ${n} caso(s) por explicar`, body: `${crit} crítico(s), ${high} grave(s). Faturação → Correção de caixa.`,
+        link: "/faturacao?tab=cash-check", entity: { type: "cash_digest", id: `${r.projectId ?? "all"}` },
+      });
+      sent++;
+    } catch (err) {
+      console.warn("[cash-close] resumo:", (err as Error)?.message);
+    }
+  }
+  return sent;
+}
+
 /** Lê ao vivo em blocos, respeitando o prazo; devolve o que leu e o que faltou/desapareceu. */
 async function readChunks(ids: readonly string[], deadlineAt: number) {
   const { readLiveFinanceByIds } = await import("./multiparkDb/cashCheck");
@@ -197,6 +253,7 @@ async function readChunks(ids: readonly string[], deadlineAt: number) {
 /** Varredura de 10 em 10 min: alteradas desde a última + ativas + saídas de 48 h + casos abertos. */
 export async function runCashSweep(o: { deadlineAt: number; nowMs?: number }): Promise<SweepReport> {
   const nowMs = o.nowMs ?? Date.now();
+  pendingAlerts = [];
   const d = await database();
   const [{ loadLiveContext }, { readSweepIds }] = await Promise.all([import("./finance/liveBookings"), import("./multiparkDb/cashSweep")]);
   const ctx = await loadLiveContext();
@@ -216,12 +273,14 @@ export async function runCashSweep(o: { deadlineAt: number; nowMs?: number }): P
   try { report.parksSilent = await checkParksSilent(d, ctx, nowMs); } catch (err) { console.warn("[cash-sweep] R27:", (err as Error)?.message); }
   // R26 — permissões dos agentes, 1× por dia.
   try { report.agents = await maybeSnapshotAgents(d, ctx, nowMs); } catch (err) { console.warn("[cash-sweep] R26:", (err as Error)?.message); }
+  report.alerts = await flushCaseAlerts(d, utc(nowMs));
   return report;
 }
 
 /** Fecho do dia (D-1 e D-2): todas as saídas desses dias nos parques nossos. */
 export async function runCashClose(o: { deadlineAt: number; nowMs?: number; days?: string[] }): Promise<SweepReport> {
   const nowMs = o.nowMs ?? Date.now();
+  pendingAlerts = [];
   const d = await database();
   const [{ loadLiveContext }, { lisbonDayBounds }, { readLiveCheckoutPage }] = await Promise.all([
     import("./finance/liveBookings"), import("./multiparkDb/dayBookings"), import("./multiparkDb/cashCheck"),
@@ -243,7 +302,9 @@ export async function runCashClose(o: { deadlineAt: number; nowMs?: number; days
   }
   const rep = await processBookings(d, { live, missingIds: [], ourParks: ctx.ourParks, nowMs });
   if (!partial) await setState(d, "close_at", `${days.join(",")}`.slice(0, 64));
-  return { mode: `fecho ${days.join(" e ")}`, ...rep, partial };
+  const alerts = await flushCaseAlerts(d, utc(nowMs));
+  const digests = await sendDailyDigest(d).catch(() => 0);
+  return { mode: `fecho ${days.join(" e ")}`, ...rep, partial, alerts, digests };
 }
 
 async function checkParksSilent(d: Db, ctx: { ourParks: Map<string, number | null>; parkInfo?: Map<string, { name: string; city: string | null }> }, nowMs: number): Promise<number> {

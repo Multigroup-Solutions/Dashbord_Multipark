@@ -6621,9 +6621,21 @@ export const appRouter = router({
       // Gravar no ecrã tira o parceiro da fila "Por configurar" (0% passa a ser
       // uma taxa confirmada e não "em falta" nas finanças).
       if (rest.multiparkPartnerId !== undefined) (rest as { multiparkPartnerId?: string | null }).multiparkPartnerId = rest.multiparkPartnerId || null;
-      await updatePartnership(id, { ...rest, ...(nif !== undefined ? { partnerNif: nif } : {}), configuredAt: new Date().toISOString().slice(0, 19).replace("T", " ") });
+      // R29: o antes → depois dos campos que mexem nas contas fica no registo.
+      const beforeRow = await (async () => {
+        const { getDb } = await import("./db");
+        const d = await getDb();
+        if (!d) return null;
+        const { partnerships } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        return (await d.select().from(partnerships).where(eq(partnerships.id, id)).limit(1))[0] as Record<string, unknown> | undefined ?? null;
+      })().catch(() => null);
+      const patch = { ...rest, ...(nif !== undefined ? { partnerNif: nif } : {}) };
+      await updatePartnership(id, { ...patch, configuredAt: new Date().toISOString().slice(0, 19).replace("T", " ") });
       if (rest.multiparkPartnerId) await setPartnershipMultiparkId(id, rest.multiparkPartnerId);
-      await logActivity({ userId: ctx.user.id, action: "update", entity: "partnership", entityId: id });
+      const { partnerAuditDiff } = await import("./partnerAudit");
+      const diff = partnerAuditDiff(beforeRow, patch);
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "partnership", entityId: id, ...(diff.text ? { details: diff.text } : {}) });
       return { success: true };
     }),
 

@@ -28,7 +28,7 @@ export type SweepCode =
   | "method_changed" | "paid_mismatch" | "cancelled_after_checkin" | "cashier_closed_with_divergence"
   | "discount_late" | "refund_issue" | "moved_after_close" | "missing" | "pro_late" | "partner_changed"
   | "extra_uncharged" | "invoice_missing" | "invoice_mismatch" | "online_payment" | "credit_used"
-  | "cash_reopened" | "driver_cash_pending" | "split_methods" | "agent_perms_changed" | "park_webhook_silent";
+  | "cash_reopened" | "driver_cash_pending" | "split_methods" | "agent_perms_changed" | "park_webhook_silent" | "count_mismatch";
 
 export interface Finding { code: SweepCode; severity: SweepSeverity; label: string; detail: string; rule: string }
 
@@ -59,7 +59,13 @@ export const SWEEP_LABELS: Record<SweepCode, { label: string; rule: string; seve
   split_methods: { label: "Pagamento dividido por vários métodos", rule: "R28", severity: "info" },
   agent_perms_changed: { label: "Permissões de dinheiro de um agente mudaram", rule: "R26", severity: "medium" },
   park_webhook_silent: { label: "Parque sem webhooks com movimento na Multipark", rule: "R27", severity: "medium" },
+  count_mismatch: { label: "Contagem da caixa ≠ esperado", rule: "R24", severity: "critical" },
 };
+
+/** Casos que avisam logo (notificação "Caixa: casos graves"). */
+export const ALERT_CODES: ReadonlySet<SweepCode> = new Set<SweepCode>([
+  "price_zeroed", "paid_mismatch", "cashier_closed_with_divergence", "refund_issue", "cash_reopened", "driver_cash_pending", "count_mismatch",
+]);
 
 export const SEVERITY_ORDER: Record<SweepSeverity, number> = { critical: 4, high: 3, medium: 2, info: 1 };
 
@@ -230,6 +236,14 @@ export function agentPermsFinding(o: { name: string | null; before: readonly str
   const lost = o.before.filter((p) => !o.after.includes(p));
   if (!gained.length && !lost.length) return null;
   return finding("agent_perms_changed", `${o.name ?? "Agente"}: ${gained.length ? `ganhou ${gained.join(", ")}` : ""}${gained.length && lost.length ? "; " : ""}${lost.length ? `perdeu ${lost.join(", ")}` : ""}.`);
+}
+
+/** R24: contagem ≠ recebido em dinheiro − gastos pagos da caixa. PURA. */
+export function countFinding(o: { parkName: string | null; day: string; shift: string; received: number; expenses: number; counted: number }): Finding | null {
+  const expected = Math.round((o.received - o.expenses) * 100) / 100;
+  const diff = Math.round((o.counted - expected) * 100) / 100;
+  if (Math.abs(diff) <= MONEY_TOLERANCE) return null;
+  return finding("count_mismatch", `${o.parkName ?? "Parque"}, ${o.day} (${o.shift}): recebido em dinheiro ${eurText(o.received)} − gastos ${eurText(o.expenses)} = esperado ${eurText(expected)}; contado ${eurText(o.counted)} → ${diff > 0 ? "sobra" : "falta"} ${eurText(Math.abs(diff))}.`);
 }
 
 /** R27: parque nosso com movimento na Multipark e nenhum webhook recebido no período. PURA. */
