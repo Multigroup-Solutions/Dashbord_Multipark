@@ -77,10 +77,9 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
   const [ibanOpen, setIbanOpen] = useState(false);
   const tabsRef = useRef<HTMLDivElement>(null);
 
-  const primaryPlate = c.vehicles[0]?.plate ?? null;
   const history = trpc.clients.history.useQuery(
-    { email: c.primaryEmail, phone: c.primaryPhone, plate: primaryPlate },
-    { enabled: !!(c.primaryEmail || c.primaryPhone || primaryPlate), retry: false, staleTime: 60_000 },
+    { clientId: c.id },
+    { retry: false, staleTime: 60_000 },
   );
   const mail = trpc.mail.timeline.useQuery({ type: "client", id: c.primaryEmail ?? "" }, { enabled: !!c.primaryEmail, retry: false, staleTime: 60_000 });
   // fase 2: conta corrente Pro (null = a ficha não é uma conta Pro da Multipark)

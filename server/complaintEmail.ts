@@ -15,7 +15,7 @@
 
 import { isFeatureEnabled } from "./_core/featureFlags";
 import { convert } from "html-to-text";
-import { INTERNAL_EMAIL_DOMAINS } from "./clientsCrm";
+import { INTERNAL_EMAIL_DOMAINS } from "../shared/crmIdentity";
 
 /** SLA por omissão de uma reclamação (igual ao valor por omissão do formulário manual). */
 export const COMPLAINT_DEFAULT_SLA_HOURS = 48;

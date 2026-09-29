@@ -77,9 +77,9 @@ async function meetingTarget(u: CtxUser, type: "client" | "complaint" | "partner
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new TRPCError({ code: "BAD_REQUEST", message: "Cliente sem email válido." });
     const { assertEntityInScope } = await import("../mail/inbox");
     await assertEntityInScope("client", email);
-    const r = rowsOf(await d.execute(sql`SELECT MAX(NULLIF(TRIM(CONCAT_WS(' ', clientFirstName, clientLastName)), '')) AS name
-      FROM multipark_bookings WHERE LOWER(TRIM(clientEmail)) = ${email}`))[0];
-    return { id: email, label: String(r?.name ?? email), email, path: `/clientes?email=${encodeURIComponent(email)}` };
+    const { crmClientByEmail } = await import("../crm/lookup");
+    const c = await crmClientByEmail(d, email);
+    return { id: email, label: c?.name ?? email, email, path: c ? `/clientes/${c.id}` : `/clientes?email=${encodeURIComponent(email)}` };
   }
   if (type === "complaint") {
     requireAccess(u, "reclamacoes", "view");

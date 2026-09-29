@@ -19,7 +19,8 @@
  */
 import { sql, type SQL } from "drizzle-orm";
 import { projectScope, scopedProjectIds } from "./cityScope";
-import { INTERNAL_EMAIL_DOMAINS, VISITED_STATUSES } from "./clientsCrm";
+import { INTERNAL_EMAIL_DOMAINS } from "../shared/crmIdentity";
+import { VISITED_STATUSES } from "./crm/summary";
 import { lisbonDayRangeUtc } from "../shared/lisbonDay";
 import { CANCELLED_STATUS } from "../shared/marketingRules";
 import { CHANNEL_LABEL, CHANNEL_ORDER, GROUP_LABEL, GROUP_ORDER, channelOf, groupOf, parseFirstBooking, type ChannelGroup, type ChannelKey } from "../shared/marketingChannels";

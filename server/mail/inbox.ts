@@ -665,7 +665,9 @@ export async function assertEntityInScope(type: MailLinkType, entityId: string):
   const inScope = ids.length ? sql`IN (${inList(ids)})` : sql`IN (NULL)`;
   let ok = false;
   if (type === "client") {
-    ok = rowsOf(await d.execute(sql`SELECT 1 AS x FROM multipark_bookings WHERE LOWER(TRIM(clientEmail)) = ${entityId} AND projectId ${inScope} LIMIT 1`)).length > 0;
+    // CRM fase 2: cliente = ficha do CRM com este email, visível nas cidades de quem pede.
+    const { crmClientByEmail } = await import("../crm/lookup");
+    ok = !!(await crmClientByEmail(d, entityId));
   } else if (type === "booking") {
     ok = rowsOf(await d.execute(sql`SELECT 1 AS x FROM multipark_bookings WHERE externalId = ${entityId} AND projectId ${inScope} LIMIT 1`)).length > 0;
   } else {
@@ -766,14 +768,14 @@ export async function contactSuggestions(viewer: MailViewer, q: string) {
   const like = `%${term.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
   const d = await db();
   const out = new Map<string, { email: string; name: string | null; source: "crm" | "email" }>();
-  // CRM (clientes das reservas) — só quem vê clientes ou a comunicação partilhada.
+  // Fichas do CRM (no âmbito de cidade) — só quem vê clientes ou a comunicação partilhada.
   if (can(viewer, "clientes", "view") || can(viewer, "comunicacao", "view")) {
-    const rows = rowsOf(await d.execute(sql`SELECT LOWER(TRIM(b.clientEmail)) AS email,
-        MAX(NULLIF(TRIM(CONCAT_WS(' ', b.clientFirstName, b.clientLastName)), '')) AS name, MAX(b.checkIn) AS lastAt
-      FROM multipark_bookings b
-      WHERE b.clientEmail IS NOT NULL AND b.clientEmail <> '' AND ${projectScope(sql`b.projectId`)}
-        AND (LOWER(b.clientEmail) LIKE ${like} OR LOWER(CONCAT_WS(' ', b.clientFirstName, b.clientLastName)) LIKE ${like})
-      GROUP BY LOWER(TRIM(b.clientEmail)) ORDER BY lastAt DESC LIMIT 8`));
+    const { clientVisibleSql } = await import("../crm/scope");
+    const rows = rowsOf(await d.execute(sql`SELECT ce.email, MAX(c.displayName) AS name, MAX(c.lastVisit) AS lastAt
+      FROM crm_client_emails ce JOIN crm_clients c ON c.id = ce.clientId
+      WHERE c.status = 'active' AND ce.generic = 0 AND ${clientVisibleSql(sql`c.id`)}
+        AND (ce.email LIKE ${like} OR LOWER(c.displayName) LIKE ${like})
+      GROUP BY ce.email ORDER BY lastAt DESC LIMIT 8`));
     for (const r of rows) out.set(String(r.email), { email: String(r.email), name: r.name ?? null, source: "crm" });
   }
   // Contactos das conversas que a pessoa já vê (a sua caixa pessoal + caixas partilhadas).

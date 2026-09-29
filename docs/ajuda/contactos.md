@@ -13,6 +13,7 @@ Uma só pesquisa para clientes, contactos do CRM, leads de extras, parceiros, fo
 2. Carrega num tipo (ex.: **Cliente**, **Parceiro**) ou em **Ver todos** para percorrer só esse tipo — a lista vai carregando à medida que desces.
 3. Só aparecem os tipos dos módulos que vês (ex.: fornecedores só com as Despesas da cidade) e só na tua cidade. O telefone encontra-se escrito de qualquer forma (+351, 00351, com espaços).
 4. Abre um contacto para ver as **reservas**, **reclamações**, **WhatsApp** e **emails** ligados (pelo email ou pelo telefone) e as comunicações do cliente.
+5. **Clientes** são as fichas do CRM (com o n.º de cliente): quem vê os Contactos vê o nome, o email e o telefone para poder ligar ao cliente. As reservas da ficha só aparecem a quem vê Clientes ou as Reservas, e só as das tuas cidades. Procura também pelo n.º de cliente ou pela matrícula.
 
 **Diretório**
 - Pessoas do Google Workspace da empresa: foto, cargo, departamento, telefone e email. É atualizado uma vez por dia.

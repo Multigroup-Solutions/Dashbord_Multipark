@@ -57,17 +57,29 @@ function matchCond(q: ParsedContactQuery, text: SQL[], phones: SQL[], emails: SQ
 
 interface KindQuery { q: ParsedContactQuery; raw: string; offset: number; limit: number; access: Access; viewer: ContactViewer }
 
-async function searchClients(d: Db, k: KindQuery): Promise<{ items: ContactItem[]; hasMore: boolean }> {
-  const { listClients } = await import("./clientsCrm");
-  const pageSize = Math.max(10, k.limit);
-  const page = Math.floor(k.offset / pageSize) + 1;
-  const r = await listClients(d, { search: k.raw || null, page, pageSize });
-  const items = r.rows.slice(0, k.limit).map((c): ContactItem => ({
-    ref: contactRef("client", c.email), kind: "client", id: c.email, name: c.name || c.email,
-    subtitle: `${c.bookings} reserva(s)${c.lastCheckIn ? ` · última ${String(c.lastCheckIn).slice(0, 10)}` : ""}${c.upcoming ? ` · ${c.upcoming} futura(s)` : ""}`,
-    email: c.email, phone: c.phone, photoUrl: null,
+/** Fichas do CRM (fase 2): nome, emails, telefones, matrículas e n.º de cliente, no âmbito de cidade. */
+async function searchClients(d: Db, k: KindQuery): Promise<ContactItem[]> {
+  const { clientVisibleSql } = await import("./crm/scope");
+  const q = k.q;
+  const parts: SQL[] = [];
+  if (q.text || q.digits) {
+    parts.push(sql`LOWER(c.displayName) LIKE ${q.like}`);
+    parts.push(sql`c.id IN (SELECT ce.clientId FROM crm_client_emails ce WHERE ce.email LIKE ${q.like})`);
+    if (q.phoneNeedle) parts.push(sql`c.id IN (SELECT cp.clientId FROM crm_client_phones cp WHERE cp.phone LIKE ${`%${q.phoneNeedle}%`})`);
+    const plate = k.raw.replace(/[\s.\-_/]/g, "").toUpperCase();
+    if (plate.length >= 4 && /\d/.test(plate) && /[A-Z]/.test(plate)) parts.push(sql`c.id IN (SELECT cv.clientId FROM crm_client_vehicles cv WHERE cv.plate LIKE ${`%${plate}%`})`);
+    if (/^\d{1,9}$/.test(q.digits) && q.digits === k.raw.replace(/^#/, "").trim()) parts.push(sql`c.id = ${Number(q.digits)}`);
+  }
+  const match = parts.length ? sql`(${sql.join(parts, sql` OR `)})` : sql`1 = 1`;
+  const rows = rowsOf(await d.execute(sql`SELECT c.id, c.displayName, c.primaryEmail, c.primaryPhone, c.photoUrl, c.bookings, c.upcoming,
+      DATE_FORMAT(c.lastVisit, '%Y-%m-%d') AS lastVisit
+    FROM crm_clients c WHERE c.status = 'active' AND ${match} AND ${clientVisibleSql(sql`c.id`)}
+    ORDER BY c.lastVisit DESC, c.id DESC LIMIT ${k.limit + 1} OFFSET ${k.offset}`));
+  return rows.map((r): ContactItem => ({
+    ref: contactRef("client", r.id), kind: "client", id: String(r.id), name: s(r.displayName) ?? s(r.primaryEmail) ?? `Cliente n.º ${r.id}`,
+    subtitle: `N.º ${r.id} · ${Number(r.bookings)} reserva(s)${r.lastVisit ? ` · última ${r.lastVisit}` : ""}${Number(r.upcoming) ? ` · ${Number(r.upcoming)} futura(s)` : ""}`,
+    email: s(r.primaryEmail), phone: s(r.primaryPhone), photoUrl: s(r.photoUrl),
   }));
-  return { items, hasMore: r.total > page * pageSize || r.rows.length > k.limit };
 }
 
 async function searchCrm(d: Db, k: KindQuery) {
@@ -201,7 +213,10 @@ export interface ContactDetail {
   /** Email a usar na timeline de Comunicações (cliente com reservas). */
   clientEmail: string | null;
   openHref: string | null;
-  bookings: Array<{ id: number; externalId: string; bookingNumber: string | null; status: string | null; parkName: string | null; checkIn: string | null; checkOut: string | null; licensePlate: string | null }> | null;
+  /** Ficha do CRM deste contacto (n.º de cliente), se houver. */
+  clientId: number | null;
+  bookingsError?: string | null;
+  bookings: Array<{ id: string; externalId: string; bookingNumber: string | null; status: string | null; parkName: string | null; checkIn: string | null; checkOut: string | null; licensePlate: string | null }> | null;
   complaints: Array<{ id: number; title: string; status: string; createdAt: string | null }> | null;
   whatsapp: Array<{ id: number; phone: string; lastMessageAt: string | null; unreadCount: number; status: string | null; name: string | null }> | null;
   mail: Array<{ id: number; subject: string | null; lastMessageAt: string | null; link: string; source: string }> | null;
@@ -216,12 +231,25 @@ async function baseRecord(d: Db, viewer: ContactViewer, kind: ContactKind, id: s
   const one = async (q: SQL) => rowsOf(await d.execute(q))[0] ?? null;
   switch (kind) {
     case "client": {
-      const email = emailKey(id);
-      if (!email) return null;
-      const r = await one(sql`SELECT MAX(NULLIF(TRIM(CONCAT_WS(' ', b.clientFirstName, b.clientLastName)), '')) AS name, MAX(NULLIF(TRIM(b.clientPhone), '')) AS phone, COUNT(*) AS n
-        FROM multipark_bookings b WHERE LOWER(TRIM(b.clientEmail)) = ${email} AND ${projectScope(sql`b.projectId`)}`);
-      if (!r || !Number(r.n)) return null;
-      return { name: s(r.name) ?? email, subtitle: `${Number(r.n)} reserva(s)`, emails: [email], phones: [s(r.phone)], photoUrl: null, clientEmail: email, openHref: `/clientes?email=${encodeURIComponent(email)}` };
+      // Ficha do CRM (fase 2). Ligações antigas traziam o email como id.
+      const { clientVisibleSql } = await import("./crm/scope");
+      let cid = /^\d+$/.test(id) ? Number(id) : 0;
+      if (!cid && emailKey(id)) {
+        const { findCrmClientIds } = await import("./crm/lookup");
+        cid = (await findCrmClientIds(d, { email: id }, { limit: 1 }))[0] ?? 0;
+      }
+      if (!cid) return null;
+      const r = await one(sql`SELECT c.id, c.displayName, c.primaryEmail, c.primaryPhone, c.photoUrl, c.bookings FROM crm_clients c
+        WHERE c.id = ${cid} AND c.status = 'active' AND ${clientVisibleSql(sql`c.id`)} LIMIT 1`);
+      if (!r) return null;
+      const emails = rowsOf(await d.execute(sql`SELECT email FROM crm_client_emails WHERE clientId = ${cid} AND generic = 0 ORDER BY isPrimary DESC, lastSeenAt DESC LIMIT 10`)).map((x) => s(x.email));
+      const phones = rowsOf(await d.execute(sql`SELECT phone FROM crm_client_phones WHERE clientId = ${cid} ORDER BY isPrimary DESC, lastSeenAt DESC LIMIT 10`)).map((x) => s(x.phone));
+      const main = emailKey(r.primaryEmail) || emailKey(emails[0]) || null;
+      return {
+        name: s(r.displayName) ?? main ?? `Cliente n.º ${cid}`, subtitle: `Cliente n.º ${cid} · ${Number(r.bookings)} reserva(s)`,
+        emails: [s(r.primaryEmail), ...emails], phones: [s(r.primaryPhone), ...phones], photoUrl: s(r.photoUrl),
+        clientEmail: main, openHref: beyondOwn(viewer, "clientes") ? `/clientes/${cid}` : null, clientId: cid,
+      };
     }
     case "crm": {
       const r = await one(sql`SELECT id, kind, name, email, phone, phoneE164, company FROM crm_contacts c WHERE c.id = ${Number(id)} AND ${projectScope(sql`c.projectId`)} LIMIT 1`);
@@ -291,21 +319,40 @@ export async function contactDetail(d: Db, viewer: ContactViewer, kind: ContactK
   const phones = uniqueStrings(base.phones.map((p) => phoneKey(p))).slice(0, 10);
   const out: ContactDetail = {
     ref: contactRef(kind, id), kind, id, name: base.name, subtitle: base.subtitle, emails, phones, photoUrl: base.photoUrl,
-    clientEmail: base.clientEmail, openHref: base.openHref, bookings: null, complaints: null, whatsapp: null, mail: null,
+    clientEmail: base.clientEmail, openHref: base.openHref, clientId: null, bookings: null, complaints: null, whatsapp: null, mail: null,
   };
-  // Cliente com reservas no âmbito também para os outros tipos (ex.: um parceiro que também reserva).
-  if (!out.clientEmail && emails.length && beyondOwn(viewer, "clientes")) {
-    const hit = rowsOf(await d.execute(sql`SELECT LOWER(TRIM(b.clientEmail)) AS email FROM multipark_bookings b
-      WHERE LOWER(TRIM(b.clientEmail)) IN (${inList(emails)}) AND ${projectScope(sql`b.projectId`)} LIMIT 1`))[0];
-    if (hit) out.clientEmail = String(hit.email);
+  // A ficha do CRM deste contacto (também para os outros tipos: ex.: um parceiro que também reserva).
+  let clientIds: number[] = (base as { clientId?: number }).clientId ? [(base as { clientId?: number }).clientId as number] : [];
+  if (!clientIds.length && (emails.length || phones.length) && beyondOwn(viewer, "clientes")) {
+    const { findCrmClientIds } = await import("./crm/lookup");
+    const found = new Set<number>();
+    for (const e of emails.slice(0, 3)) for (const x of await findCrmClientIds(d, { email: e }, { limit: 2 })) found.add(x);
+    for (const p of phones.slice(0, 3)) for (const x of await findCrmClientIds(d, { phone: p }, { limit: 2 })) found.add(x);
+    clientIds = [...found].slice(0, 5);
+    if (clientIds.length && !out.clientEmail) {
+      const hit = rowsOf(await d.execute(sql`SELECT email FROM crm_client_emails WHERE clientId IN (${inList(clientIds)}) AND generic = 0 ORDER BY isPrimary DESC LIMIT 1`))[0];
+      if (hit) out.clientEmail = String(hit.email);
+    }
+    if (clientIds.length) out.clientId = clientIds[0];
   }
-  if ((emails.length || phones.length) && (beyondOwn(viewer, "clientes") || beyondOwn(viewer, "reservas_operacoes"))) {
-    out.bookings = rowsOf(await d.execute(sql`SELECT b.id, b.externalId, b.bookingNumber, b.status, b.parkName, b.checkIn, b.checkOut, b.licensePlate
-      FROM multipark_bookings b WHERE ${personCond(sql`b.clientEmail`, sql`b.clientPhone`, emails, phones)} AND ${projectScope(sql`b.projectId`)}
-      ORDER BY b.checkIn DESC LIMIT 10`)).map((r) => ({
-      id: Number(r.id), externalId: String(r.externalId), bookingNumber: s(r.bookingNumber), status: s(r.status), parkName: s(r.parkName),
-      checkIn: s(r.checkIn), checkOut: s(r.checkOut), licensePlate: s(r.licensePlate),
-    }));
+  if (clientIds.length && (beyondOwn(viewer, "clientes") || beyondOwn(viewer, "reservas_operacoes"))) {
+    // Reservas das fichas, lidas ao vivo da Multipark (só as cidades de quem pede).
+    const { crmBookingIdsOf } = await import("./crm/lookup");
+    const ids = await crmBookingIdsOf(d, clientIds);
+    try {
+      const [{ readCrmBookingFacts }, { scopedCityNamesLive }, { cityAliases }] = await Promise.all([
+        import("./multiparkDb/crmLive"), import("./cityScope"), import("../shared/crmGeo"),
+      ]);
+      const scope = scopedCityNamesLive();
+      const allowed = scope === undefined ? null : new Set(cityAliases(scope));
+      const facts = ids.length ? await readCrmBookingFacts(ids) : [];
+      out.bookings = facts.filter((f) => !allowed || (!!f.city && allowed.has(f.city.trim().toLowerCase())))
+        .sort((a, b) => String(b.checkIn ?? "").localeCompare(String(a.checkIn ?? ""))).slice(0, 10)
+        .map((f) => ({ id: f.id, externalId: f.id, bookingNumber: f.code, status: f.status, parkName: f.parkName, checkIn: f.checkIn, checkOut: f.checkOut, licensePlate: f.plate }));
+    } catch {
+      out.bookings = [];
+      out.bookingsError = "Reservas indisponíveis (BD da Multipark sem resposta).";
+    }
   }
   if ((emails.length || phones.length) && beyondOwn(viewer, "reclamacoes")) {
     out.complaints = rowsOf(await d.execute(sql`SELECT c.id, c.title, c.complaint_status AS status, c.createdAt FROM complaints c

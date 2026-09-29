@@ -92,7 +92,8 @@ function revertPatch(field: SuggestionField, previous: string | null): Record<st
 }
 
 async function findDuplicate(db: any, c: any) {
-  const { plateKey } = await import("./clientsCrm");
+  // mesma forma que o SQL abaixo (sem espaços/hífens, maiúsculas)
+  const plateKey = (raw: unknown) => String(raw ?? "").replace(/[\s-]+/g, "").toUpperCase();
   const { isInternalEmail } = await import("./complaintEmail");
   const email = c.clientEmail && !isInternalEmail(c.clientEmail) ? String(c.clientEmail).trim().toLowerCase() : "";
   const ref = String(c.reservationRef ?? "").trim();

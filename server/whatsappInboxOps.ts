@@ -7,7 +7,7 @@
  * cidade das conversas é a de whatsappInbox (`visibilitySql` /
  * `conversationVisible`), chamada pelo router antes de cada operação.
  */
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { projectScope, scopedProjectIds } from "./cityScope";
 import {
@@ -272,14 +272,23 @@ export async function getConversationContext(conversationId: number) {
     conv.linkedClientEmail ? getClientHistory({ email: conv.linkedClientEmail }) : Promise.resolve(null),
     conv.linkedBookingId ? bookingInScope(conv.linkedBookingId) : Promise.resolve(null),
   ]);
-  const dedupe = <T extends { id: number }>(...lists: (T[] | undefined)[]): T[] => {
-    const seen = new Set<number>();
+  const dedupe = <T extends { id: number | string }>(...lists: (T[] | undefined)[]): T[] => {
+    const seen = new Set<number | string>();
     const out: T[] = [];
     for (const l of lists) for (const x of l ?? []) if (!seen.has(x.id)) { seen.add(x.id); out.push(x); }
     return out;
   };
-  const bookings = dedupe<any>(byEmail?.bookings, byPhone?.bookings).slice(0, 10).map((b: any) => ({
-    id: b.id as number,
+  // As reservas do histórico vêm da ficha do CRM (ids da Multipark); ligar a
+  // conversa a uma reserva ainda usa o id da cópia local (a cópia do webhook
+  // fica sempre) — as que ainda não lá estão não se podem ligar por aqui.
+  const liveBookings = dedupe<any>(byEmail?.bookings, byPhone?.bookings).slice(0, 10);
+  const extIds = liveBookings.map((b: any) => String(b.externalId)).filter(Boolean);
+  const localIds = new Map<string, number>(extIds.length
+    ? (await db.select({ id: multiparkBookings.id, externalId: multiparkBookings.externalId }).from(multiparkBookings)
+        .where(inArray(multiparkBookings.externalId, extIds))).map((r) => [String(r.externalId), Number(r.id)] as [string, number])
+    : []);
+  const bookings = liveBookings.filter((b: any) => localIds.has(String(b.externalId))).map((b: any) => ({
+    id: localIds.get(String(b.externalId)) as number,
     bookingNumber: (b.bookingNumber as string | null) ?? null,
     clientName: [b.clientFirstName, b.clientLastName].filter(Boolean).join(" ").trim() || "—",
     licensePlate: (b.licensePlate as string | null) ?? null,

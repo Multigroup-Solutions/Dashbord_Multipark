@@ -68,10 +68,9 @@ export async function assertDriveEntityAccess(user: DriveUser, type: DriveEntity
     requireAccess(u, "clientes", action);
     const { assertEntityInScope } = await import("../mail/inbox");
     await assertEntityInScope("client", id);
-    const d = await database();
-    const r = rowsOf(await d.execute(sql`SELECT MAX(NULLIF(TRIM(CONCAT_WS(' ', clientFirstName, clientLastName)), '')) AS name, COUNT(*) AS n
-      FROM multipark_bookings WHERE LOWER(TRIM(clientEmail)) = ${id}`))[0];
-    const name = r?.name ? String(r.name) : null;
+    // CRM fase 2: o nome vem da ficha do CRM com este email.
+    const { crmClientByEmail } = await import("../crm/lookup");
+    const name = (await crmClientByEmail(await database(), id))?.name ?? null;
     return { type, id, label: name ? `${name} (${id})` : id, folder: { kind: "client", name, email: id } };
   }
   if (type === "complaint") {
@@ -130,11 +129,9 @@ export async function loadEntityRecord(type: "employee" | "complaint" | "client"
     return { record: r, projectId: r.projectId != null ? Number(r.projectId) : null };
   }
   if (type === "client") {
-    const r = rowsOf(await d.execute(sql`SELECT LOWER(TRIM(clientEmail)) AS email,
-        MAX(NULLIF(TRIM(CONCAT_WS(' ', clientFirstName, clientLastName)), '')) AS name,
-        MAX(NULLIF(TRIM(clientPhone), '')) AS phone, COUNT(*) AS bookings,
-        MIN(checkIn) AS firstCheckIn, MAX(checkIn) AS lastCheckIn
-      FROM multipark_bookings WHERE LOWER(TRIM(clientEmail)) = ${id}`))[0];
+    const { crmClientByEmail } = await import("../crm/lookup");
+    const c = await crmClientByEmail(d, id);
+    const r = c ? { name: c.name, phone: c.phone, bookings: c.bookings, firstCheckIn: c.firstVisit, lastCheckIn: c.lastVisit, clientNumber: c.id } : null;
     return { record: { ...(r ?? {}), email: id, bookings: r?.bookings != null ? Number(r.bookings) : 0 }, projectId: null };
   }
   const r = rowsOf(await d.execute(sql`SELECT id, name, partner_nif AS partnerNif, contactName, contactEmail, contactPhone, commissionRate, monthlyFee

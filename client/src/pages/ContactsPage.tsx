@@ -324,11 +324,11 @@ function ContactSheet({ item, onClose }: { item: Item | null; onClose: () => voi
                 {d.emails.map((e) => <a key={e} href={`mailto:${e}`} className="flex items-center gap-2 text-primary break-all"><Mail className="h-4 w-4 shrink-0" />{e}</a>)}
                 {d.phones.map((p) => <a key={p} href={`tel:${p}`} className="flex items-center gap-2 text-primary"><Phone className="h-4 w-4 shrink-0" />{p}</a>)}
                 {d.openHref && <Link href={d.openHref} className="inline-flex items-center gap-1 text-xs text-primary underline">Abrir no módulo <ExternalLink className="h-3 w-3" /></Link>}
-                {d.clientEmail && d.kind !== "client" && <Link href={`/clientes?email=${encodeURIComponent(d.clientEmail)}`} className="block text-xs text-primary underline">Também é cliente — abrir ficha de cliente</Link>}
+                {d.clientId && d.kind !== "client" && <Link href={`/clientes/${d.clientId}`} className="block text-xs text-primary underline">Também é cliente (n.º {d.clientId}) — abrir ficha de cliente</Link>}
               </div>
               {d.bookings && (
                 <Section icon={<CalendarDays className="h-4 w-4 text-primary" />} title={`Reservas (${d.bookings.length}${d.bookings.length === 10 ? "+" : ""})`}>
-                  {d.bookings.length === 0 && <Empty />}
+                  {d.bookingsError ? <p className="text-xs text-amber-600">{d.bookingsError}</p> : d.bookings.length === 0 && <Empty />}
                   {d.bookings.map((b) => (
                     <div key={b.id} className="rounded-lg border px-3 py-1.5 text-xs flex flex-wrap gap-x-2">
                       <span className="font-medium">{b.bookingNumber ?? b.externalId}</span>

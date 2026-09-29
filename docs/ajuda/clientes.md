@@ -33,6 +33,12 @@ Cada cliente tem uma **ficha** com o nosso **n.º de cliente**. As fichas são c
 - **Linha do tempo** (reservas, cancelamentos, entregas, reclamações, críticas, perdidos e tudo o que foi alterado), **Reservas** com **Abrir na Multipark**, **Emails e WhatsApp**, **Notas** e **Registo** (quem mudou o quê e quando).
 - **IBAN**: só o backoffice financeiro o vê e o altera; fica guardado cifrado e mostra só os últimos 4 dígitos.
 
+**O cliente nas outras páginas**
+- O **Histórico do cliente** (Reclamações, Perdidos & Achados, Críticas, WhatsApp) encontra a ficha pelo email, telefone ou matrícula e mostra as reservas dela (lidas ao vivo), as reclamações, os perdidos e as críticas — também pelos outros emails, telefones e carros da ficha. **Abrir ficha de cliente** vai direto à ficha.
+- Os emails recebidos ligam-se sozinhos ao cliente quando o email (ou o telefone no texto) está numa ficha. O **Drive**, as **reuniões** e as **sugestões de destinatários** usam as fichas.
+- **Exportar para Google Sheets** (na lista): as fichas com a pesquisa escrita e o segmento escolhido.
+- Se a base da Multipark não responder, o histórico diz que as reservas estão indisponíveis (em vez de mostrar zero).
+
 **Clientes Pro e conta corrente** (separador **Pro**)
 - Os Pro pagam no fim do mês. As contas e os valores vêm da BD da Multipark e atualizam-se sozinhos de 30 em 30 minutos: reservas Pro a débito, pagamentos a crédito.
 - A lista mostra quem tem **saldo em dívida** (meses já acabados por pagar) primeiro, o que já gastou **este mês** e o **pago este ano**. Carrega numa conta para abrir a ficha.
