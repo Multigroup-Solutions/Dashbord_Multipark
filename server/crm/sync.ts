@@ -20,6 +20,7 @@ import { sql } from "drizzle-orm";
 import { GENERIC_EMAIL_MIN_NAMES, INTERNAL_EMAIL_DOMAINS } from "../../shared/crmIdentity";
 import { cityLabel, countryFromPhone, type ParkUse } from "../../shared/crmGeo";
 import { planBatch, type BookingRow, type ExistingClient } from "./plan";
+import { safeDateTime } from "./summary";
 
 export const CRM_SYNC_BATCH = 1500;
 
@@ -75,7 +76,7 @@ function toBookingRow(r: import("../multiparkDb/crmLive").CrmBatchRow): BookingR
     email: r.email, phone: r.phone, nif: r.nif, plate: r.plate,
     brand: r.brand, model: r.model, color: r.color, vehicleType: r.vehicleType,
     partnerId: r.partnerId, partnerName: r.partnerName, pro: r.pro, origin: r.origin,
-    seenAt: r.seenAt,
+    seenAt: safeDateTime(r.seenAt),
   };
 }
 
@@ -150,10 +151,10 @@ export async function recomputeMetrics(db: any, clientIds: number[]): Promise<vo
         ${country}, ${good === 0 ? 1 : 0}, ${good === 0 && gen > 0 ? 1 : 0},
         ${a.anyPro ? 1 : 0}, ${v(f.bestEmail)}, ${v(f.bestPhone)}, UTC_TIMESTAMP())`;
     });
-    await db.execute(sql`
+    const upsert = (vals: typeof values) => db.execute(sql`
       INSERT INTO crm_clients (id, bookings, cancelled, completed, upcoming, partnerBookings, totalSpent, firstVisit, lastVisit,
         nextCheckIn, preferredPark, parksJson, cities, cityKeys, channels, partners, country, noEmail, genericEmailOnly, isPro, primaryEmail, primaryPhone, metricsAt)
-      VALUES ${sql.join(values, sql`, `)}
+      VALUES ${sql.join(vals, sql`, `)}
       ON DUPLICATE KEY UPDATE
         bookings = VALUES(bookings), cancelled = VALUES(cancelled), completed = VALUES(completed), upcoming = VALUES(upcoming),
         partnerBookings = VALUES(partnerBookings), totalSpent = VALUES(totalSpent), firstVisit = VALUES(firstVisit),
@@ -163,6 +164,18 @@ export async function recomputeMetrics(db: any, clientIds: number[]): Promise<vo
         noEmail = VALUES(noEmail), genericEmailOnly = VALUES(genericEmailOnly),
         isPro = IF(proManual = 1, isPro, GREATEST(isPro, VALUES(isPro))),
         primaryEmail = VALUES(primaryEmail), primaryPhone = VALUES(primaryPhone), metricsAt = VALUES(metricsAt)`);
+    try {
+      await upsert(values);
+    } catch (err) {
+      // Uma ficha com um valor que o MySQL recusa não pode parar o lote todo
+      // (o cursor ficava preso e não entravam contactos novos): uma a uma,
+      // e as que falham ficam registadas e sem resumo (metricsAt vazio).
+      const { dbErrorReason } = await import("./proSync");
+      console.warn("[crm-sync] resumo em bloco falhou, a gravar uma a uma:", dbErrorReason(err));
+      for (let i = 0; i < values.length; i++) {
+        try { await upsert([values[i]]); } catch (e) { console.warn(`[crm-sync] resumo da ficha ${existing[i]} falhou:`, dbErrorReason(e)); }
+      }
+    }
     // reservas por carro (mesma chave que plateKey) — em bloco, só nos carros que já existem
     const plateRows = existing.flatMap((id) => [...sums.get(id)!.plates].map(([plate, nb]) => ({ id, plate, nb })));
     for (const pr of chunks(plateRows, 300)) {
