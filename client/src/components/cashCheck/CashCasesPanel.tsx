@@ -30,7 +30,7 @@ const REASONS: Array<[string, string]> = [
   ["desconto_autorizado", "Desconto autorizado"], ["erro_corrigido", "Erro de introdução corrigido"], ["cortesia", "Cortesia"],
   ["pago_noutro_canal", "Pago noutro canal"], ["parceiro_ou_pro", "Parceiro ou Pro (fatura à parte)"], ["perda", "Perda aceite"], ["outro", "Outro"],
 ];
-const SUBJECT: Record<string, string> = { booking: "Reserva", count: "Contagem", agent: "Agente", park: "Parque", tpa: "Terminal MB" };
+const SUBJECT: Record<string, string> = { booking: "Reserva", count: "Contagem", agent: "Agente", park: "Parque", mb_dia: "Multibanco do dia", mensal: "Recebimento mensal" };
 const show = (v: unknown) => (v == null || v === "" ? "—" : String(v));
 const eur = (v: number | null | undefined) => (v == null ? "—" : v.toLocaleString("pt-PT", { style: "currency", currency: "EUR" }));
 

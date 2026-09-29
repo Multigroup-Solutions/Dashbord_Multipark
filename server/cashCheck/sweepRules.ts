@@ -29,7 +29,7 @@ export type SweepCode =
   | "discount_late" | "refund_issue" | "moved_after_close" | "missing" | "pro_late" | "partner_changed"
   | "extra_uncharged" | "invoice_missing" | "invoice_mismatch" | "online_payment" | "credit_used"
   | "cash_reopened" | "driver_cash_pending" | "split_methods" | "agent_perms_changed" | "park_webhook_silent" | "count_mismatch"
-  | "invoice_external" | "stripe_external" | "tpa_mismatch" | "transfer_missing" | "partner_statement";
+  | "invoice_external" | "stripe_external" | "online_no_intent" | "mb_unconfirmed" | "monthly_receipt";
 
 export interface Finding { code: SweepCode; severity: SweepSeverity; label: string; detail: string; rule: string }
 
@@ -64,13 +64,13 @@ export const SWEEP_LABELS: Record<SweepCode, { label: string; rule: string; seve
   // Fase 4 — cruzar com o exterior (server/cashCheck/externalRules.ts).
   invoice_external: { label: "Fatura na InvoiceExpress não bate", rule: "R19", severity: "high" },
   stripe_external: { label: "Pagamento na Stripe não bate", rule: "R20", severity: "high" },
-  tpa_mismatch: { label: "Terminal multibanco ≠ Multipark", rule: "R30", severity: "high" },
-  transfer_missing: { label: "Transferência que não aparece no banco", rule: "R31", severity: "high" },
-  partner_statement: { label: "Extrato do parceiro ≠ devido", rule: "R17", severity: "high" },
+  online_no_intent: { label: "Pago online sem pagamento Stripe na Multipark", rule: "R20", severity: "high" },
+  mb_unconfirmed: { label: "Multibanco sem talão ou sem transação na Viva Wallet", rule: "R30", severity: "high" },
+  monthly_receipt: { label: "Recebimento mensal ≠ devido", rule: "R17", severity: "high" },
 };
 
 /** Códigos que só o cruzamento externo avalia (a varredura nunca os resolve). */
-export const EXTERNAL_CODES: ReadonlySet<SweepCode> = new Set<SweepCode>(["invoice_external", "stripe_external", "tpa_mismatch", "transfer_missing", "partner_statement"]);
+export const EXTERNAL_CODES: ReadonlySet<SweepCode> = new Set<SweepCode>(["invoice_external", "stripe_external", "online_no_intent", "mb_unconfirmed", "monthly_receipt"]);
 
 /** Casos que avisam logo (notificação "Caixa: casos graves"). */
 export const ALERT_CODES: ReadonlySet<SweepCode> = new Set<SweepCode>([

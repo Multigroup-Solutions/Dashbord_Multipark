@@ -1,22 +1,22 @@
 /**
- * Caixa, fase 4 — cruzar com o exterior (PURO, sem BD nem rede).
+ * Caixa, fase 4 — confirmar os pagamentos que não são dinheiro (PURO, sem BD
+ * nem rede).
  *
- *  R19 InvoiceExpress: a fatura que a Multipark diz ter emitido existe, não
- *      está anulada e tem o valor do `Billing`.
- *  R20 Stripe: o pagamento online foi cobrado, com o valor que a Multipark
- *      dá; reembolsos sem cancelamento e disputas.
- *  R30 Terminal multibanco: por parque e dia, o extrato do terminal = soma dos
- *      pagamentos por cartão/multibanco registados na Multipark.
- *  R31 Banco: cada transferência registada na Multipark aparece no extrato
- *      do banco (mesmo valor, até TRANSFER_DAYS dias depois).
- *  R17 Parceiros: por reserva, o valor no extrato do parceiro = `partnerAmountDue`.
- *
- * Mais o leitor de CSV dos extratos (separador, números à portuguesa,
- * cabeçalhos com nomes diferentes).
+ *  R19 InvoiceExpress (interruptor, desligado): a fatura existe, não está
+ *      anulada e tem o valor do `Billing`.
+ *  R20 Online: a Multipark tem o pagamento Stripe de uma reserva paga online
+ *      (sempre, só Multipark); e, com o interruptor, a Stripe confirma-o
+ *      (cobrado, valor, reembolsos sem cancelamento, disputas).
+ *  R30 Multibanco: cada pagamento por multibanco tem o talão (foto, conferida
+ *      à mão na contagem da caixa) ou, com o interruptor ou o CSV exportado, a
+ *      transação no terminal da Viva Wallet (mesmo dia ou seguinte, mesmo valor).
+ *  R17 Recebimentos mensais (Pro, agentes e agregadores pagam no fim do mês,
+ *      por transferência, conferida à mão): recebido = devido na Multipark.
  */
 import type { IxResult } from "../external/invoiceExpress";
 import type { StripeEvent, StripePayment } from "../external/stripe";
-import type { ExternalBooking, PartnerDueRow, RecordedPayment } from "../multiparkDb/cashExternal";
+import type { ExternalBooking, RecordedPayment } from "../multiparkDb/cashExternal";
+import type { VivaTxn } from "../external/vivaWallet";
 import { eurText, MONEY_TOLERANCE } from "./rules";
 import { finding, type Finding } from "./sweepRules";
 
@@ -125,19 +125,25 @@ export function stripeExternalFinding(
   return problems.length ? finding("stripe_external", `${problems.join("; ")}.`) : null;
 }
 
-// ─── Leitor de CSV dos extratos ────────────────────────────────────────────
+// ─── R20 Online sem pagamento Stripe na Multipark ──────────────────────────
 
-export interface StatementLine { lineNo: number; date: string; amount: number; reference: string | null; description: string | null }
-export interface ParsedStatement { lines: StatementLine[]; errors: string[]; delimiter: string }
+/**
+ * Reserva dada como paga online (método da reserva ou pagamentos "Online"/
+ * "Stripe") sem nenhum pagamento Stripe na Multipark: nem `paymentIntentId`
+ * na reserva ou nas faturas, nem link de pagamento pago. PURA.
+ */
+export function onlineNoIntentFinding(bk: Pick<ExternalBooking, "paymentMethod" | "onlinePaid" | "paymentIntentId" | "billing" | "links" | "cancelled">): Finding | null {
+  const online = (bk.onlinePaid ?? 0) > MONEY_TOLERANCE ? bk.onlinePaid! : null;
+  const methodOnline = methodKind(bk.paymentMethod) === "online";
+  if (!online && !methodOnline) return null;
+  if (intentsOf(bk).size > 0) return null;
+  if (!online && bk.cancelled) return null;
+  return finding("online_no_intent", online
+    ? `${eurText(online)} registados como pagos online, mas a Multipark não tem o pagamento Stripe (sem id de pagamento na reserva, nas faturas ou num link pago).`
+    : `Método "${bk.paymentMethod}", mas a Multipark não tem o pagamento Stripe (sem id de pagamento na reserva, nas faturas ou num link pago).`);
+}
 
-const HEADERS = {
-  date: ["data", "date", "data movimento", "data mov", "data valor", "data operacao", "data transacao", "booking date", "transaction date", "dia"],
-  amount: ["valor", "amount", "montante", "importancia", "total", "valor eur", "montante eur", "net", "liquido", "comissao a pagar", "commission", "a pagar"],
-  credit: ["credito", "credit", "entrada", "entradas"],
-  debit: ["debito", "debit", "saida", "saidas"],
-  reference: ["referencia", "reference", "ref", "booking", "reserva", "booking ref", "booking reference", "codigo", "id reserva", "n reserva", "order", "order id", "terminal", "tpa"],
-  description: ["descricao", "description", "descritivo", "movimento", "detalhe", "details", "observacoes", "nome", "cliente"],
-};
+// ─── Leitura de CSV (Viva Wallet exportado) ────────────────────────────────
 
 const norm = (h: string) => h.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
 
@@ -188,47 +194,59 @@ export function parseDate(raw: string | null | undefined): string | null {
   return null;
 }
 
-export const STATEMENT_MAX_LINES = 5000;
+export const VIVA_CSV_MAX_LINES = 10000;
+const VIVA_HEADERS = {
+  date: ["date", "data", "transaction date", "data transacao"],
+  time: ["time", "hora"],
+  amount: ["amount", "valor", "montante"],
+  channel: ["channel", "canal"],
+  id: ["transaction id", "transactionid", "id", "id transacao"],
+  terminal: ["terminal id", "terminalid", "terminal"],
+};
 
-/** CSV de um extrato → linhas. Nunca lança; o que não se lê vai para `errors`. PURA. */
-export function parseStatementCsv(text: string): ParsedStatement {
+/** Hora de Lisboa ("AAAA-MM-DD" + "HH:MM[:SS]") → instante UTC. PURA. */
+function lisbonLocalToIso(day: string, time: string | null): string {
+  const [hh, mm, ss] = (time ?? "12:00").split(":").map((x) => Number(x) || 0);
+  const guess = Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1, Number(day.slice(8, 10)), hh, mm, ss);
+  const lis = new Date(new Date(guess).toLocaleString("en-US", { timeZone: "Europe/Lisbon" }));
+  const utc = new Date(new Date(guess).toLocaleString("en-US", { timeZone: "UTC" }));
+  return new Date(guess - (lis.getTime() - utc.getTime())).toISOString();
+}
+
+/** CSV exportado da Viva Wallet (Date, Time, Amount, Channel…) → transações pagas. Nunca lança. PURA. */
+export function parseVivaCsv(text: string): { txns: VivaTxn[]; errors: string[] } {
   const raw = String(text ?? "").replace(/^﻿/, "").split(/\r?\n/).filter((l) => l.trim());
-  const errors: string[] = [];
-  if (!raw.length) return { lines: [], errors: ["Ficheiro vazio."], delimiter: ";" };
-  // Cabeçalho: a primeira das 10 primeiras linhas que tenha uma coluna de data e uma de valor.
-  const counts = (l: string) => ({ ";": l.split(";").length, ",": l.split(",").length, "\t": l.split("\t").length });
-  let headerIdx = -1, delimiter = ";";
-  let cols: { date: number; amount: number; credit: number; debit: number; reference: number; description: number } | null = null;
-  for (let i = 0; i < Math.min(raw.length, 10) && !cols; i++) {
-    const c = counts(raw[i]);
-    const d = (Object.entries(c).sort((a, b) => b[1] - a[1])[0][0]);
-    const hs = splitCsvLine(raw[i], d).map(norm);
-    const find = (names: string[]) => hs.findIndex((h) => names.includes(h));
-    const found = { date: find(HEADERS.date), amount: find(HEADERS.amount), credit: find(HEADERS.credit), debit: find(HEADERS.debit), reference: find(HEADERS.reference), description: find(HEADERS.description) };
-    if (found.date >= 0 && (found.amount >= 0 || found.credit >= 0)) { cols = found; headerIdx = i; delimiter = d; }
-  }
-  if (!cols) return { lines: [], errors: ["Não encontrei o cabeçalho (precisa de uma coluna de data e uma de valor, crédito ou montante)."], delimiter };
-  const lines: StatementLine[] = [];
-  for (let i = headerIdx + 1; i < raw.length; i++) {
-    if (lines.length >= STATEMENT_MAX_LINES) { errors.push(`Só li as primeiras ${STATEMENT_MAX_LINES} linhas.`); break; }
-    const f = splitCsvLine(raw[i], delimiter);
-    const date = parseDate(f[cols.date]);
-    let amount: number | null = null;
-    if (cols.amount >= 0) amount = parseAmount(f[cols.amount]);
-    if (amount == null && cols.credit >= 0) {
-      const cr = parseAmount(f[cols.credit]);
-      const db = cols.debit >= 0 ? parseAmount(f[cols.debit]) : null;
-      amount = cr != null && cr !== 0 ? Math.abs(cr) : db != null ? -Math.abs(db) : null;
+  if (!raw.length) return { txns: [], errors: ["Ficheiro vazio."] };
+  for (let h = 0; h < Math.min(raw.length, 10); h++) {
+    const d = [";", ",", "\t"].sort((a, b) => raw[h].split(b).length - raw[h].split(a).length)[0];
+    const hs = splitCsvLine(raw[h], d).map(norm);
+    const col = (names: string[]) => hs.findIndex((x) => names.includes(x));
+    const c = { date: col(VIVA_HEADERS.date), time: col(VIVA_HEADERS.time), amount: col(VIVA_HEADERS.amount), channel: col(VIVA_HEADERS.channel), id: col(VIVA_HEADERS.id), terminal: col(VIVA_HEADERS.terminal) };
+    if (c.date < 0 || c.amount < 0) continue;
+    const txns: VivaTxn[] = [];
+    const errors: string[] = [];
+    for (let i = h + 1; i < raw.length && txns.length < VIVA_CSV_MAX_LINES; i++) {
+      const f = splitCsvLine(raw[i], d);
+      const dateRaw = f[c.date] ?? "";
+      const day = parseDate(dateRaw);
+      const amount = parseAmount(f[c.amount]);
+      if (!day || amount == null) { errors.push(`Linha ${i + 1}: sem data ou valor legíveis.`); continue; }
+      if (amount <= 0) continue; // reembolsos
+      const time = c.time >= 0 ? f[c.time] || null : (dateRaw.match(/\d{1,2}:\d{2}(:\d{2})?/)?.[0] ?? null);
+      const terminalId = c.terminal >= 0 ? f[c.terminal] || null : null;
+      txns.push({ id: c.id >= 0 ? f[c.id] || `csv-${i + 1}` : `csv-${i + 1}`, at: lisbonLocalToIso(day, time), amount, channel: csvChannel(c.channel >= 0 ? f[c.channel] : "", terminalId), status: "F", terminalId, sourceCode: null });
     }
-    if (!date || amount == null) {
-      if (f.some((x) => x)) errors.push(`Linha ${i + 1}: sem data ou valor legíveis.`);
-      continue;
-    }
-    const ref = cols.reference >= 0 ? f[cols.reference] || null : null;
-    const desc = cols.description >= 0 ? f[cols.description] || null : null;
-    lines.push({ lineNo: i + 1, date, amount, reference: ref, description: desc });
+    return { txns, errors: errors.slice(0, 50) };
   }
-  return { lines, errors: errors.slice(0, 50), delimiter };
+  return { txns: [], errors: ["Não encontrei o cabeçalho (precisa das colunas Date e Amount do extrato da Viva Wallet)."] };
+}
+
+/** Canal do CSV (sem canal = terminal: o extrato do TPA). */
+function csvChannel(raw: unknown, terminalId?: unknown): VivaTxn["channel"] {
+  const t = String(raw ?? "").toLowerCase();
+  if (/card present|pos|terminal/.test(t) || (t === "" && terminalId)) return "terminal";
+  if (/smart checkout|checkout|link|ecommerce|native/.test(t)) return "link";
+  return t ? "other" : "terminal";
 }
 
 // ─── Dia de Lisboa ─────────────────────────────────────────────────────────
@@ -237,121 +255,107 @@ export function lisbonDayOf(iso: string | null | undefined): string | null {
   const t = iso ? Date.parse(iso) : NaN;
   return Number.isFinite(t) ? new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon" }).format(new Date(t)) : null;
 }
-
-// ─── R30 Terminal multibanco (por parque e dia) ────────────────────────────
-
-export interface TpaDay { day: string; statement: number; multipark: number; payments: number; finding: Finding | null }
-
-/**
- * Extrato do terminal de UM parque contra os pagamentos por cartão/multibanco
- * desse parque, dia a dia (dias de Lisboa, só os dias do extrato). PURA.
- */
-export function matchTpa(o: { parkName: string | null; lines: readonly StatementLine[]; payments: readonly RecordedPayment[] }): TpaDay[] {
-  const st = new Map<string, number>();
-  for (const l of o.lines) st.set(l.date, r2((st.get(l.date) ?? 0) + l.amount));
-  const mp = new Map<string, { sum: number; n: number }>();
-  for (const p of o.payments) {
-    if (methodKind(p.method) !== "card") continue;
-    const day = lisbonDayOf(p.recordedAt);
-    if (!day || !st.has(day)) continue;
-    const cur = mp.get(day) ?? { sum: 0, n: 0 };
-    mp.set(day, { sum: r2(cur.sum + p.amount), n: cur.n + 1 });
-  }
-  return [...st.keys()].sort().map((day) => {
-    const statement = st.get(day)!;
-    const m = mp.get(day) ?? { sum: 0, n: 0 };
-    const diff = r2(statement - m.sum);
-    const f = neq(statement, m.sum)
-      ? finding("tpa_mismatch", `${o.parkName ?? "Parque"}, ${day}: terminal ${eurText(statement)}, Multipark ${eurText(m.sum)} em ${m.n} pagamento(s) por cartão/multibanco → ${diff < 0 ? `a Multipark tem mais ${eurText(-diff)} do que o terminal recebeu` : `o terminal recebeu mais ${eurText(diff)} do que está registado`}.`)
-      : null;
-    return { day, statement, multipark: m.sum, payments: m.n, finding: f };
-  });
-}
-
-// ─── R31 Banco (transferências) ────────────────────────────────────────────
-
-export const TRANSFER_DAYS = 5;
-
-export interface BankMatch {
-  matched: Array<{ lineNo: number; bookingId: string; code: string | null; amount: number }>;
-  unmatchedLines: StatementLine[];
-  /** Transferências da Multipark sem entrada no banco (por reserva). */
-  missing: Map<string, { code: string | null; parkId: string | null; items: RecordedPayment[] }>;
-}
-
 const dayNum = (d: string) => Math.round(Date.parse(`${d}T12:00:00Z`) / 86_400_000);
 
+// ─── R30 Multibanco: Viva Wallet ───────────────────────────────────────────
+
+export interface VivaMatch {
+  matched: Array<{ bookingId: string; txnId: string; amount: number }>;
+  /** Pagamentos por multibanco da Multipark sem transação no terminal. */
+  missing: Map<string, { code: string | null; parkId: string | null; items: RecordedPayment[] }>;
+  /** Transações do terminal sem pagamento registado na Multipark. */
+  extra: VivaTxn[];
+}
+
 /**
- * Cada transferência registada na Multipark (dentro do período do extrato)
- * procura uma entrada no banco com o mesmo valor, do dia do registo até
- * TRANSFER_DAYS depois (ou até 2 dias antes). Um para um, a mais próxima. PURA.
+ * Cada pagamento por multibanco (dias `days`) procura uma transação do terminal
+ * com o mesmo valor, no mesmo dia (primeiro) ou no seguinte. Um para um. PURA.
  */
-export function matchBank(o: { lines: readonly StatementLine[]; payments: readonly RecordedPayment[]; periodStart: string; periodEnd: string }): BankMatch {
-  const credits = o.lines.filter((l) => l.amount > 0).map((l) => ({ l, used: false }));
-  const matched: BankMatch["matched"] = [];
-  const missing: BankMatch["missing"] = new Map();
-  const transfers = o.payments.filter((p) => methodKind(p.method) === "transfer" && p.amount > 0);
-  for (const p of transfers) {
+export function matchViva(o: { payments: readonly RecordedPayment[]; txns: readonly VivaTxn[]; days: readonly string[] }): VivaMatch {
+  const pool = o.txns.filter((t) => t.channel !== "link").map((t) => ({ t, day: lisbonDayOf(t.at), used: false }));
+  const matched: VivaMatch["matched"] = [];
+  const missing: VivaMatch["missing"] = new Map();
+  const want = new Set(o.days);
+  for (const p of o.payments) {
+    if (methodKind(p.method) !== "card" || p.amount <= 0) continue;
     const day = lisbonDayOf(p.recordedAt);
-    if (!day) continue;
+    if (!day || !want.has(day)) continue;
     const dn = dayNum(day);
-    let best: (typeof credits)[number] | null = null, bestGap = Infinity;
-    for (const c of credits) {
-      if (c.used || neq(c.l.amount, p.amount)) continue;
-      const gap = dayNum(c.l.date) - dn;
-      if (gap < -2 || gap > TRANSFER_DAYS) continue;
-      if (Math.abs(gap) < bestGap) { best = c; bestGap = Math.abs(gap); }
-    }
-    if (best) { best.used = true; matched.push({ lineNo: best.l.lineNo, bookingId: p.bookingId, code: p.code, amount: p.amount }); continue; }
-    // Só conta como em falta se o extrato cobre todos os dias em que devia ter entrado.
-    if (dayNum(o.periodEnd) - dn < TRANSFER_DAYS || dn - 2 < dayNum(o.periodStart)) continue;
+    const pick = (gap: number) => pool.find((x) => !x.used && x.day && dayNum(x.day) - dn === gap && !neq(x.t.amount, p.amount));
+    const hit = pick(0) ?? pick(1);
+    if (hit) { hit.used = true; matched.push({ bookingId: p.bookingId, txnId: hit.t.id, amount: p.amount }); continue; }
     const cur = missing.get(p.bookingId) ?? { code: p.code, parkId: p.parkId, items: [] };
     cur.items.push(p);
     missing.set(p.bookingId, cur);
   }
-  return { matched, unmatchedLines: credits.filter((c) => !c.used).map((c) => c.l), missing };
+  return { matched, missing, extra: pool.filter((x) => !x.used && x.day && want.has(x.day)).map((x) => x.t) };
 }
 
-export function transferMissingFinding(items: readonly RecordedPayment[]): Finding {
+export function vivaMissingFinding(items: readonly RecordedPayment[]): Finding {
   const total = r2(items.reduce((s, p) => s + p.amount, 0));
-  const days = [...new Set(items.map((p) => lisbonDayOf(p.recordedAt)).filter(Boolean))].join(", ");
-  return finding("transfer_missing", `${eurText(total)} registados como transferência (${days}) sem entrada com o mesmo valor no extrato do banco até ${TRANSFER_DAYS} dias depois.`);
+  return finding("mb_unconfirmed", `${eurText(total)} por multibanco (${[...new Set(items.map((p) => lisbonDayOf(p.recordedAt)))].join(", ")}) sem transação com o mesmo valor no terminal da Viva Wallet nesse dia ou no seguinte.`);
 }
 
-// ─── R17 Parceiros ─────────────────────────────────────────────────────────
+// ─── R30 Multibanco: talões (foto), conferidos à mão ───────────────────────
 
-export interface PartnerMatch {
-  findings: Array<{ booking: PartnerDueRow; finding: Finding }>;
-  ok: number;
-  notFound: StatementLine[];
-  noReference: number;
+export interface MbReceipt { id: number; amount: number; bookingId: string | null }
+export interface MbDayMatch {
+  /** Pagamento (índice na lista dada) → talão. */
+  byPayment: Map<number, number>;
+  unmatchedPayments: RecordedPayment[];
+  extraReceipts: MbReceipt[];
 }
 
-/** Linhas do extrato do parceiro (referência + valor) contra `partnerAmountDue`. PURA. */
-export function matchPartner(o: { partnerName: string | null; lines: readonly StatementLine[]; bookings: readonly PartnerDueRow[] }): PartnerMatch {
-  const byRef = new Map<string, PartnerDueRow>();
-  for (const b of o.bookings) {
-    if (b.externalReference) byRef.set(b.externalReference.trim().toUpperCase(), b);
-    if (b.code) byRef.set(b.code.trim().toUpperCase(), b);
+/**
+ * Talões do dia contra os pagamentos por multibanco do parque nesse dia. Um
+ * talão ligado à mão a uma reserva vai primeiro para um pagamento dessa
+ * reserva; o resto casa pelo valor. Um para um. PURA.
+ */
+export function matchMbReceipts(o: { payments: readonly RecordedPayment[]; receipts: readonly MbReceipt[] }): MbDayMatch {
+  const byPayment = new Map<number, number>();
+  const used = new Set<number>();
+  const mb = o.payments.map((p, i) => ({ p, i })).filter(({ p }) => methodKind(p.method) === "card" && p.amount > 0);
+  const receipts = [...o.receipts].sort((a, b) => Number(!!b.bookingId) - Number(!!a.bookingId) || a.id - b.id);
+  for (const r of receipts) {
+    const cand = mb.filter(({ i, p }) => !byPayment.has(i) && !neq(p.amount, r.amount));
+    const hit = (r.bookingId ? cand.find(({ p }) => p.bookingId === r.bookingId) : undefined) ?? cand[0];
+    if (hit) { byPayment.set(hit.i, r.id); used.add(r.id); }
   }
-  const sums = new Map<string, { b: PartnerDueRow; amount: number; lines: number[] }>();
-  const notFound: StatementLine[] = [];
-  let noReference = 0;
-  for (const l of o.lines) {
-    if (!l.reference) { noReference++; continue; }
-    const b = byRef.get(l.reference.trim().toUpperCase());
-    if (!b) { notFound.push(l); continue; }
-    const cur = sums.get(b.id) ?? { b, amount: 0, lines: [] };
-    cur.amount = r2(cur.amount + l.amount);
-    cur.lines.push(l.lineNo);
-    sums.set(b.id, cur);
+  return {
+    byPayment,
+    unmatchedPayments: mb.filter(({ i }) => !byPayment.has(i)).map(({ p }) => p),
+    extraReceipts: o.receipts.filter((r) => !used.has(r.id)),
+  };
+}
+
+/** Confirmar o multibanco de um parque e dia: tudo com talão, e sem talões a mais. PURA. */
+export function mbDayFinding(o: { parkName: string | null; day: string; unmatchedPayments: readonly RecordedPayment[]; extraReceipts: readonly MbReceipt[] }): Finding | null {
+  const parts: string[] = [];
+  if (o.unmatchedPayments.length) {
+    const total = r2(o.unmatchedPayments.reduce((s, p) => s + p.amount, 0));
+    parts.push(`${o.unmatchedPayments.length} pagamento(s) por multibanco sem talão (${eurText(total)}: ${o.unmatchedPayments.slice(0, 8).map((p) => `#${p.code ?? p.bookingId} ${eurText(p.amount)}`).join(", ")}${o.unmatchedPayments.length > 8 ? "…" : ""})`);
   }
-  const findings: PartnerMatch["findings"] = [];
-  let ok = 0;
-  for (const { b, amount } of sums.values()) {
-    const due = b.due ?? 0;
-    if (!neq(Math.abs(amount), Math.abs(due))) { ok++; continue; }
-    findings.push({ booking: b, finding: finding("partner_statement", `Extrato ${o.partnerName ?? "do parceiro"}: ${eurText(amount)}; na Multipark o devido é ${eurText(b.due)}${b.status ? ` (reserva ${b.status})` : ""}.`) });
+  if (o.extraReceipts.length) {
+    const total = r2(o.extraReceipts.reduce((s, r) => s + r.amount, 0));
+    parts.push(`${o.extraReceipts.length} talão(ões) sem pagamento registado na Multipark (${eurText(total)})`);
   }
-  return { findings, ok, notFound, noReference };
+  return parts.length ? finding("mb_unconfirmed", `${o.parkName ?? "Parque"}, ${o.day}: ${parts.join("; ")}.`) : null;
+}
+
+// ─── R17 Recebimentos mensais (Pro, agentes, agregadores) ──────────────────
+
+export const MONTHLY_KINDS = ["pro", "agente", "agregador"] as const;
+export type MonthlyKind = (typeof MONTHLY_KINDS)[number];
+export const MONTHLY_LABEL: Record<MonthlyKind, string> = { pro: "Cliente Pro", agente: "Agente", agregador: "Agregador" };
+
+/** Tipo de parceiro da Multipark → agente ou agregador. PURA. */
+export function monthlyKindOf(partnerType: string | null | undefined): MonthlyKind {
+  return String(partnerType ?? "").toUpperCase() === "AGGREGATOR" ? "agregador" : "agente";
+}
+
+/** Recebido (conferido à mão) contra o devido na Multipark nesse mês. PURA. */
+export function monthlyReceiptFinding(o: { kind: MonthlyKind; name: string; month: string; received: number; due: number | null }): Finding | null {
+  if (o.due == null || !neq(o.received, o.due)) return null;
+  const diff = r2(o.received - o.due);
+  return finding("monthly_receipt", `${MONTHLY_LABEL[o.kind]} ${o.name}, ${o.month}: recebido ${eurText(o.received)}, devido na Multipark ${eurText(o.due)} → ${diff < 0 ? `faltam ${eurText(-diff)}` : `a mais ${eurText(diff)}`}.`);
 }

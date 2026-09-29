@@ -85,7 +85,7 @@ export async function loadCases(d: Db, subjectType: string, ids: readonly string
   return out;
 }
 
-export interface SubjectMeta { subjectType: "booking" | "agent" | "park" | "count" | "tpa"; subjectId: string; parkId: string | null; projectId: number | null; bookingCode: string | null; day: string | null }
+export interface SubjectMeta { subjectType: "booking" | "agent" | "park" | "count" | "mb_dia" | "mensal"; subjectId: string; parkId: string | null; projectId: number | null; bookingCode: string | null; day: string | null }
 
 export interface CaseAlert { caseId: number; meta: SubjectMeta; finding: Finding }
 /** Alertas por enviar desta corrida (casos graves abertos ou reabertos). */
@@ -194,7 +194,7 @@ export async function flushCaseAlerts(d: Db, nowDb: string): Promise<number> {
   let sent = 0;
   for (const a of list.slice(0, ALERTS_PER_RUN)) {
     try {
-      const subject = a.meta.subjectType === "booking" ? `reserva ${a.meta.bookingCode ?? a.meta.subjectId}` : a.meta.subjectType === "count" ? "contagem da caixa" : a.meta.subjectType;
+      const subject = a.meta.subjectType === "booking" ? `reserva ${a.meta.bookingCode ?? a.meta.subjectId}` : a.meta.subjectType === "count" ? "contagem da caixa" : a.meta.subjectType === "mb_dia" ? `multibanco de ${a.meta.day}` : a.meta.subjectType === "mensal" ? "recebimento mensal" : a.meta.subjectType;
       await notify({
         kind: "cash_case_alert", projectId: a.meta.projectId,
         title: `Caixa: ${a.finding.label} (${subject})`, body: a.finding.detail.slice(0, 500),

@@ -84,7 +84,7 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   { key: "cash-sweep", runName: "cash-sweep", label: "Caixa: varredura do dinheiro (Correção de caixa)", cadence: { kind: "interval", minutes: 10 }, priority: 25, minMs: 15 * S, maxMs: 40 * S },
   { key: "cash-close", runName: "cash-close", label: "Caixa: fecho do dia (saídas de ontem e anteontem)", cadence: { kind: "daily", from: "06:15" }, priority: 104, minMs: 20 * S, maxMs: 45 * S },
   // Caixa, fase 4: cruzar as saídas de ontem e anteontem com a InvoiceExpress e a Stripe (chaves só de leitura).
-  { key: "cash-external", runName: "cash-external", label: "Caixa: cruzar com InvoiceExpress e Stripe", cadence: { kind: "daily", from: "07:00" }, priority: 106, minMs: 20 * S, maxMs: 45 * S },
+  { key: "cash-external", runName: "cash-external", label: "Caixa: confirmar pagamentos (online, Viva, faturas)", cadence: { kind: "daily", from: "07:00" }, priority: 106, minMs: 20 * S, maxMs: 45 * S },
   { key: "crm-suggestions", runName: "crm-suggestions", label: "CRM: sugestões para juntar fichas", cadence: { kind: "daily", from: "05:15" }, priority: 84, minMs: 15 * S, maxMs: 45 * S },
   { key: "crm-pro-sync", runName: "crm-pro-sync", label: "CRM: conta corrente dos clientes Pro (BD Multipark)", cadence: { kind: "interval", minutes: 30 }, priority: 81, minMs: 15 * S, maxMs: 45 * S },
   { key: "zello-sameday", runName: "zello-sameday", label: "GPS do Zello — recolha provisória do dia", cadence: { kind: "daily", from: ZELLO_SAMEDAY_WINDOW.from, until: ZELLO_SAMEDAY_WINDOW.until }, priority: 95, minMs: 15 * S, maxMs: 45 * S },

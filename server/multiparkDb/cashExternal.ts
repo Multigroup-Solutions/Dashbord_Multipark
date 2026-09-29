@@ -7,9 +7,10 @@
  *     os ids de pagamento online (`paymentIntentId` da reserva, das faturas e
  *     dos links) e o que a Multipark dá como pago.
  *  2. Reservas por `paymentIntentId` (reembolsos e disputas vistos na Stripe).
- *  3. Pagamentos registados num intervalo, por parque (extratos do terminal e
- *     do banco).
- *  4. Reservas por referência externa ou código (extratos dos parceiros).
+ *  3. Pagamentos registados num intervalo, por parque (multibanco do dia:
+ *     talões e Viva Wallet).
+ *  4. Devido de um mês por parceiro (agentes e agregadores) e por cliente Pro
+ *     (recebimentos mensais, conferidos à mão).
  */
 import { multiparkDbQuery, type SqlParam } from "./client";
 import { ParamList, toIsoUtc } from "./read";
@@ -36,6 +37,8 @@ export interface ExternalLink { paymentIntentId: string; amount: number | null; 
 export interface ExternalBooking {
   id: string; code: string | null; parkId: string | null; status: string | null; checkOut: string | null;
   bookingPrice: number | null; paid: number | null; paymentSource: string | null;
+  /** Método da reserva e o que os pagamentos registados dão como pago online (Stripe). */
+  paymentMethod: string | null; onlinePaid: number | null;
   paymentIntentId: string | null; stripeChargeId: string | null;
   cancelled: boolean; refundedAmount: number | null;
   billing: ExternalBilling[]; links: ExternalLink[];
@@ -43,7 +46,9 @@ export interface ExternalBooking {
 
 const EXTERNAL_SELECT = [
   `SELECT b."id" AS id, b."allocation" AS code, b."parkId" AS park_id, b."status"::text AS status, b."checkOut" AS check_out,`,
-  `  b."bookingPrice" AS booking_price, b."paymentSource"::text AS payment_source,`,
+  `  b."bookingPrice" AS booking_price, b."paymentSource"::text AS payment_source, NULLIF(b."paymentMethod", '') AS payment_method,`,
+  `  (SELECT SUM(z."amount") FROM "BookingPricingPayment" z JOIN "BookingPricing" y ON y."id" = z."pricingId" WHERE y."bookingId" = b."id"`,
+  `     AND (lower(z."paymentMethod") LIKE '%online%' OR lower(z."paymentMethod") LIKE '%stripe%')) AS online_paid,`,
   `  NULLIF(b."paymentIntentId", '') AS payment_intent_id, NULLIF(b."stripeChargeId", '') AS stripe_charge_id,`,
   `  (SELECT SUM(y."amountPaid") FROM "BookingPricing" y WHERE y."bookingId" = b."id") AS paid,`,
   `  cx.refunded_amount AS refunded_amount, (cx.id IS NOT NULL) AS cancelled,`,
@@ -91,6 +96,7 @@ export function mapExternalBookingRow(r: J): ExternalBooking {
   return {
     id: String(r.id ?? ""), code: s(r.code), parkId: s(r.park_id), status: s(r.status), checkOut: toIsoUtc(r.check_out),
     bookingPrice: n(r.booking_price), paid: n(r.paid), paymentSource: s(r.payment_source),
+    paymentMethod: s(r.payment_method), onlinePaid: n(r.online_paid),
     paymentIntentId: s(r.payment_intent_id), stripeChargeId: s(r.stripe_charge_id),
     cancelled: b(r.cancelled), refundedAmount: n(r.refunded_amount),
     billing: arr(r.billing).map((x) => ({
@@ -142,36 +148,40 @@ export async function readPaymentsInWindow(o: { parkIds: readonly string[]; star
   return (await query<J>(sql, params)).map(mapRecordedPaymentRow);
 }
 
-// ─── 4. Reservas por referência (extratos dos parceiros) ───────────────────
+// ─── 4. Devido do mês (recebimentos mensais) ───────────────────────────────
 
-export interface PartnerDueRow { id: string; code: string | null; externalReference: string | null; parkId: string | null; partnerId: string | null; status: string | null; due: number | null; paidToUs: number | null }
+export interface MonthDue { kind: "parceiro" | "pro"; entityId: string; name: string | null; partnerType: string | null; bookings: number; due: number }
 
-/** Por referência externa (a do parceiro) ou código (allocation). PURA. */
-export function buildPartnerDueSql(o: { parkIds: readonly string[]; refs: readonly string[] }): { sql: string; params: SqlParam[] } {
-  const refs = [...new Set(o.refs.map((x) => x.trim()).filter(Boolean))].slice(0, 2000);
+/**
+ * Por parceiro (nome + tipo: agência, agregador, parceiro) e por cliente Pro,
+ * as reservas com saída em [start, end) nos parques dados, sem canceladas:
+ * parceiros → soma de `partnerAmountDue`; Pro → soma de `bookingPrice` (o
+ * que o cliente Pro paga no fim do mês). PURA.
+ */
+export function buildMonthDuesSql(o: { parkIds: readonly string[]; start: string; end: string }): { sql: string; params: SqlParam[] } {
   if (!o.parkIds.length) throw new Error("Sem parques.");
-  if (!refs.length) throw new Error("Sem referências.");
   const p = new ParamList();
   const parks = o.parkIds.map((id) => p.add(id)).join(", ");
-  const list = refs.map((x) => p.add(x)).join(", ");
+  const start = p.add(o.start), end = p.add(o.end);
+  const where = `b."parkId" IN (${parks}) AND b."checkOut" >= ${start}::timestamp AND b."checkOut" < ${end}::timestamp AND b."status"::text NOT IN ('CANCELLED', 'CANCELED')`;
   const sql = [
-    `SELECT b."id" AS id, b."allocation" AS code, NULLIF(b."externalReference", '') AS external_reference, b."parkId" AS park_id, b."partnerId" AS partner_id,`,
-    `  b."status"::text AS status, b."partnerAmountDue" AS due, b."partnerAmountPaid" AS paid_to_us`,
-    `  FROM "Booking" b WHERE b."parkId" IN (${parks}) AND (b."externalReference" IN (${list}) OR b."allocation" IN (${list}))`,
-    ` LIMIT ${p.add(refs.length * 2)}`,
+    `SELECT 'parceiro' AS kind, COALESCE(NULLIF(pa."name", ''), pa."id") AS entity_id, max(pa."name") AS name, max(pa."partnerType"::text) AS partner_type,`,
+    `  count(*) AS n, SUM(COALESCE(b."partnerAmountDue", 0)) AS due`,
+    `  FROM "Booking" b JOIN "Partner" pa ON pa."id" = b."partnerId" WHERE ${where} GROUP BY 2`,
+    `UNION ALL`,
+    `SELECT 'pro' AS kind, pc."id" AS entity_id, max(pc."name") AS name, NULL AS partner_type, count(*) AS n, SUM(COALESCE(b."bookingPrice", 0)) AS due`,
+    `  FROM "Booking" b JOIN "ProClient" pc ON pc."id" = b."proClientId" WHERE ${where} GROUP BY 2`,
+    `LIMIT ${p.add(2000)}`,
   ].join("\n");
   return { sql, params: p.values };
 }
 
-export function mapPartnerDueRow(r: J): PartnerDueRow {
-  return {
-    id: String(r.id ?? ""), code: s(r.code), externalReference: s(r.external_reference), parkId: s(r.park_id), partnerId: s(r.partner_id),
-    status: s(r.status), due: n(r.due), paidToUs: n(r.paid_to_us),
-  };
+export function mapMonthDueRow(r: J): MonthDue {
+  return { kind: r.kind === "pro" ? "pro" : "parceiro", entityId: String(r.entity_id ?? ""), name: s(r.name), partnerType: s(r.partner_type), bookings: Math.round(Number(r.n ?? 0)) || 0, due: n(r.due) ?? 0 };
 }
 
-export async function readPartnerDue(o: { parkIds: readonly string[]; refs: readonly string[] }, query: Query = multiparkDbQuery): Promise<PartnerDueRow[]> {
-  if (!o.parkIds.length || !o.refs.some((x) => x.trim())) return [];
-  const { sql, params } = buildPartnerDueSql(o);
-  return (await query<J>(sql, params)).map(mapPartnerDueRow);
+export async function readMonthDues(o: { parkIds: readonly string[]; start: string; end: string }, query: Query = multiparkDbQuery): Promise<MonthDue[]> {
+  if (!o.parkIds.length) return [];
+  const { sql, params } = buildMonthDuesSql(o);
+  return (await query<J>(sql, params)).map(mapMonthDueRow);
 }

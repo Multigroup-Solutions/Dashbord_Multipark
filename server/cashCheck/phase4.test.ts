@@ -2,12 +2,15 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  invoiceExternalFinding, invoicesToRead, intentsOf, matchBank, matchPartner, matchTpa, methodKind, parseAmount, parseDate, parseStatementCsv, stripeExternalFinding,
+  invoiceExternalFinding, invoicesToRead, intentsOf, matchMbReceipts, matchViva, mbDayFinding, methodKind, monthlyKindOf, monthlyReceiptFinding,
+  onlineNoIntentFinding, parseAmount, parseDate, parseVivaCsv, stripeExternalFinding,
 } from "./externalRules";
 import { EXTERNAL_CODES, SWEEP_LABELS } from "./sweepRules";
 import { ixConfigured, ixGetDocument, ixPathFor, mapIxDocument } from "../external/invoiceExpress";
 import { mapPaymentIntent, stripeGetPayment, stripeKeyState, stripeRecentEvents } from "../external/stripe";
-import { buildBookingsByIntentSql, buildExternalCheckoutsSql, buildPartnerDueSql, buildPaymentsInWindowSql, mapExternalBookingRow } from "../multiparkDb/cashExternal";
+import { buildBookingsByIntentSql, buildExternalCheckoutsSql, buildMonthDuesSql, buildPaymentsInWindowSql, mapExternalBookingRow } from "../multiparkDb/cashExternal";
+import { mapVivaTransactions, vivaConfigured, vivaTransactionsOfDay } from "../external/vivaWallet";
+import { AUTOMATION_FLAGS, automationFlagDefault } from "../../shared/appSettings";
 import { assertReadOnlySql } from "../multiparkDb/client";
 import { MIGRATION_0275_STATEMENTS } from "../migrations/migration_0275";
 import type { ExternalBooking, RecordedPayment } from "../multiparkDb/cashExternal";
@@ -17,7 +20,7 @@ const read = (f: string) => readFileSync(join(root, f), "utf8");
 
 const bk = (o: Partial<ExternalBooking> = {}): ExternalBooking => ({
   id: "b1", code: "A1", parkId: "pA", status: "CHECKED_OUT", checkOut: "2026-09-28T10:00:00.000Z", bookingPrice: 50, paid: 50, paymentSource: "STRIPE",
-  paymentIntentId: null, stripeChargeId: null, cancelled: false, refundedAmount: null, billing: [], links: [], ...o,
+  paymentMethod: "Multibanco", onlinePaid: null, paymentIntentId: null, stripeChargeId: null, cancelled: false, refundedAmount: null, billing: [], links: [], ...o,
 });
 const jsonRes = (status: number, body: unknown) => ({ ok: status >= 200 && status < 300, status, json: async () => body }) as unknown as Response;
 
@@ -94,7 +97,7 @@ describe("caixa fase 4: leituras ao vivo (só leitura)", () => {
       buildExternalCheckoutsSql({ parkIds: ["pA"], start: "2026-09-26 23:00:00", end: "2026-09-28 23:00:00" }),
       buildBookingsByIntentSql({ parkIds: ["pA"], intents: ["pi_1"] }),
       buildPaymentsInWindowSql({ parkIds: ["pA"], start: "2026-09-26 23:00:00", end: "2026-09-28 23:00:00" }),
-      buildPartnerDueSql({ parkIds: ["pA"], refs: ["PK-1"] }),
+      buildMonthDuesSql({ parkIds: ["pA"], start: "2026-08-31 23:00:00", end: "2026-09-30 23:00:00" }),
     ]) {
       expect(() => assertReadOnlySql(q.sql)).not.toThrow();
       expect(q.sql).toMatch(/LIMIT \$\d+/);
@@ -106,66 +109,101 @@ describe("caixa fase 4: leituras ao vivo (só leitura)", () => {
   });
 });
 
-describe("caixa fase 4: extratos em CSV", () => {
-  it("números e datas à portuguesa", () => {
-    expect(parseAmount("1.234,56 €")).toBe(1234.56);
-    expect(parseAmount("1,234.56")).toBe(1234.56);
-    expect(parseAmount("(12,50)")).toBe(-12.5);
-    expect(parseAmount("12,5-")).toBe(-12.5);
-    expect(parseAmount("abc")).toBeNull();
-    expect(parseDate("29/09/2026")).toBe("2026-09-29");
-    expect(parseDate("2026-09-29 10:00")).toBe("2026-09-29");
-    expect(parseDate("29.09.26")).toBe("2026-09-29");
-    expect(parseDate("31/13/2026")).toBeNull();
+describe("caixa fase 4: online (R20, só Multipark)", () => {
+  it("pago online sem pagamento Stripe na Multipark → caso; com id → ok", () => {
+    expect(onlineNoIntentFinding(bk({ paymentMethod: "Online", onlinePaid: 45 }))).toMatchObject({ code: "online_no_intent", rule: "R20" });
+    expect(onlineNoIntentFinding(bk({ paymentMethod: "Stripe, Online", onlinePaid: null }))!.detail).toContain("Stripe, Online");
+    expect(onlineNoIntentFinding(bk({ paymentMethod: "Online", onlinePaid: 45, paymentIntentId: "pi_1" }))).toBeNull();
+    expect(onlineNoIntentFinding(bk({ paymentMethod: "Online", links: [{ paymentIntentId: "pi_2", amount: 45, received: 45, status: "SETTLED" }] }))).toBeNull();
+    expect(onlineNoIntentFinding(bk({ paymentMethod: "Multibanco" }))).toBeNull();
+    expect(onlineNoIntentFinding(bk({ paymentMethod: "Online", cancelled: true }))).toBeNull();
   });
-  it("separador, cabeçalhos com outros nomes, crédito/débito e linhas más", () => {
-    const p = parseStatementCsv("﻿Extrato conta 123\nData Movimento;Descrição;Débito;Crédito\n28/09/2026;TRF JOAO;;45,00\n28/09/2026;COMISSAO;1,50;\nlixo;;;\n");
-    expect(p.delimiter).toBe(";");
-    expect(p.lines).toEqual([
-      { lineNo: 3, date: "2026-09-28", amount: 45, reference: null, description: "TRF JOAO" },
-      { lineNo: 4, date: "2026-09-28", amount: -1.5, reference: null, description: "COMISSAO" },
-    ]);
-    expect(p.errors).toHaveLength(1);
-    const c = parseStatementCsv('date,booking reference,amount\n2026-09-28,"PK-1",12.50\n');
-    expect(c.lines[0]).toMatchObject({ reference: "PK-1", amount: 12.5 });
-    expect(parseStatementCsv("a;b\n1;2").errors[0]).toContain("cabeçalho");
-  });
-  it("métodos de pagamento", () => {
+  it("métodos de pagamento (os nomes da Multipark)", () => {
     expect(methodKind("Dinheiro")).toBe("cash");
-    expect(methodKind("Cartão")).toBe("card");
-    expect(methodKind("MULTIBANCO")).toBe("card");
+    expect(methodKind("Numerário")).toBe("cash");
+    expect(methodKind("Multibanco")).toBe("card");
     expect(methodKind("MB Way")).toBe("mbway");
     expect(methodKind("Transferência")).toBe("transfer");
-    expect(methodKind("Stripe")).toBe("online");
+    expect(methodKind("Stripe, Online")).toBe("online");
+    expect(methodKind("Online")).toBe("online");
   });
 });
 
-describe("caixa fase 4: cruzar extratos", () => {
-  const pay = (o: Partial<RecordedPayment>): RecordedPayment => ({ bookingId: "b1", code: "A1", parkId: "pA", amount: 10, method: "Cartão", recordedAt: "2026-09-28T10:00:00.000Z", ...o });
-  it("R30 terminal: soma do dia contra cartão/multibanco desse dia", () => {
-    const lines = [{ lineNo: 2, date: "2026-09-28", amount: 30, reference: null, description: null }, { lineNo: 3, date: "2026-09-29", amount: 10, reference: null, description: null }];
-    const out = matchTpa({ parkName: "Airpark", lines, payments: [pay({ amount: 20 }), pay({ amount: 10, method: "Multibanco" }), pay({ amount: 99, method: "Dinheiro" }), pay({ amount: 5, recordedAt: "2026-09-29T09:00:00.000Z" })] });
-    expect(out[0]).toMatchObject({ day: "2026-09-28", statement: 30, multipark: 30, payments: 2, finding: null });
-    expect(out[1].finding).toMatchObject({ code: "tpa_mismatch", rule: "R30" });
-    expect(out[1].finding!.detail).toContain("o terminal recebeu mais 5,00 €");
+describe("caixa fase 4: multibanco (R30)", () => {
+  const pay = (o: Partial<RecordedPayment>): RecordedPayment => ({ bookingId: "b1", code: "A1", parkId: "pA", amount: 10, method: "Multibanco", recordedAt: "2026-09-28T10:00:00.000Z", ...o });
+  it("talões: ligam pelo valor, o da reserva escolhida primeiro; o resto fica sem talão ou a mais", () => {
+    const pays = [pay({ bookingId: "b1", amount: 20 }), pay({ bookingId: "b2", code: "A2", amount: 20 }), pay({ bookingId: "b3", code: "A3", amount: 35 }), pay({ bookingId: "b4", amount: 99, method: "Dinheiro" })];
+    const m = matchMbReceipts({ payments: pays, receipts: [{ id: 1, amount: 20, bookingId: null }, { id: 2, amount: 20, bookingId: "b2" }, { id: 3, amount: 7, bookingId: null }] });
+    expect([...m.byPayment]).toEqual([[1, 2], [0, 1]]);
+    expect(m.unmatchedPayments.map((p) => p.bookingId)).toEqual(["b3"]);
+    expect(m.extraReceipts.map((r) => r.id)).toEqual([3]);
+    const f = mbDayFinding({ parkName: "Airpark", day: "2026-09-28", unmatchedPayments: m.unmatchedPayments, extraReceipts: m.extraReceipts })!;
+    expect(f).toMatchObject({ code: "mb_unconfirmed", rule: "R30" });
+    expect(f.detail).toContain("#A3 35,00 €");
+    expect(f.detail).toContain("1 talão(ões) sem pagamento");
+    expect(mbDayFinding({ parkName: null, day: "x", unmatchedPayments: [], extraReceipts: [] })).toBeNull();
   });
-  it("R31 banco: transferência casa com entrada do mesmo valor até 5 dias; senão fica em falta", () => {
-    const lines = [{ lineNo: 2, date: "2026-09-02", amount: 45, reference: null, description: "TRF" }, { lineNo: 3, date: "2026-09-03", amount: 99, reference: null, description: "?" }];
-    const m = matchBank({ lines, payments: [pay({ bookingId: "b1", amount: 45, method: "Transferência", recordedAt: "2026-09-01T10:00:00.000Z" }), pay({ bookingId: "b2", amount: 60, method: "Transferência", recordedAt: "2026-09-01T10:00:00.000Z" }), pay({ bookingId: "b3", amount: 70, method: "Transferência", recordedAt: "2026-09-09T10:00:00.000Z" }), pay({ bookingId: "b4", amount: 80, method: "Transferência", recordedAt: "2026-08-30T10:00:00.000Z" })], periodStart: "2026-08-30", periodEnd: "2026-09-10" });
-    expect(m.matched).toEqual([{ lineNo: 2, bookingId: "b1", code: "A1", amount: 45 }]);
-    expect(m.unmatchedLines.map((l) => l.lineNo)).toEqual([3]);
-    expect([...m.missing.keys()]).toEqual(["b2"]); // b3 ainda dentro do prazo; b4 podia ter entrado antes do extrato
+  it("Viva Wallet: mesmo dia primeiro, depois o seguinte; links não contam", () => {
+    const txns = [
+      { id: "t1", at: "2026-09-28T09:00:00.000Z", amount: 20, channel: "terminal" as const, status: "F", terminalId: "T", sourceCode: null },
+      { id: "t2", at: "2026-09-29T08:00:00.000Z", amount: 35, channel: "terminal" as const, status: "F", terminalId: "T", sourceCode: null },
+      { id: "t3", at: "2026-09-28T09:00:00.000Z", amount: 50, channel: "link" as const, status: "F", terminalId: null, sourceCode: null },
+      { id: "t4", at: "2026-09-28T11:00:00.000Z", amount: 5, channel: "terminal" as const, status: "F", terminalId: "T", sourceCode: null },
+    ];
+    const m = matchViva({ days: ["2026-09-28"], txns, payments: [pay({ bookingId: "b1", amount: 20 }), pay({ bookingId: "b2", amount: 35 }), pay({ bookingId: "b3", amount: 50 }), pay({ bookingId: "b5", amount: 12, method: "Dinheiro" })] });
+    expect(m.matched.map((x) => [x.bookingId, x.txnId])).toEqual([["b1", "t1"], ["b2", "t2"]]);
+    expect([...m.missing.keys()]).toEqual(["b3"]);
+    expect(m.extra.map((t) => t.id)).toEqual(["t4"]);
   });
-  it("R17 parceiro: referência + valor contra o devido", () => {
-    const rows = [{ id: "b1", code: "A1", externalReference: "PK-1", parkId: "pA", partnerId: "p", status: "CHECKED_OUT", due: 12, paidToUs: null },
-      { id: "b2", code: "A2", externalReference: "PK-2", parkId: "pA", partnerId: "p", status: "CHECKED_OUT", due: 8, paidToUs: null }];
-    const lines = [{ lineNo: 2, date: "2026-09-28", amount: 12, reference: "pk-1", description: null }, { lineNo: 3, date: "2026-09-28", amount: 5, reference: "A2", description: null },
-      { lineNo: 4, date: "2026-09-28", amount: 5, reference: "PK-9", description: null }, { lineNo: 5, date: "2026-09-28", amount: 1, reference: null, description: null }];
-    const m = matchPartner({ partnerName: "Parkos", lines, bookings: rows });
-    expect(m.ok).toBe(1);
-    expect(m.findings.map((f) => [f.booking.id, f.finding.code])).toEqual([["b2", "partner_statement"]]);
-    expect(m.notFound.map((l) => l.lineNo)).toEqual([4]);
-    expect(m.noReference).toBe(1);
+  it("CSV exportado da Viva (como o comparador antigo): Date, Time, Amount, Channel", () => {
+    const r = parseVivaCsv("Date;Time;Amount;Channel;Transaction Id\n28/09/2026;10:15:00;20,00;Card Present (VivaPayments Host);abc\n28/09/2026;11:00:00;-20,00;Card Present (VivaPayments Host);ref\n28/09/2026;12:00:00;15,50;Smart Checkout;lnk\nx;;;\n");
+    expect(r.txns.map((t) => [t.id, t.amount, t.channel])).toEqual([["abc", 20, "terminal"], ["lnk", 15.5, "link"]]);
+    expect(r.txns[0].at).toBe("2026-09-28T09:15:00.000Z");
+    expect(r.errors).toHaveLength(1);
+    expect(parseVivaCsv("a;b\n1;2").errors[0]).toContain("cabeçalho");
+    expect(parseAmount("1.234,56 €")).toBe(1234.56);
+    expect(parseDate("29.09.26")).toBe("2026-09-29");
+  });
+  it("API da Viva: só GET com autenticação básica; sem chaves não configurado; tira reembolsos e não finalizadas", async () => {
+    expect(vivaConfigured({})).toBe(false);
+    expect(await vivaTransactionsOfDay("2026-09-28", { env: {} })).toEqual({ ok: false, detail: "not_configured" });
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const env = { VIVA_MERCHANT_ID: "m", VIVA_API_KEY: "k" } as NodeJS.ProcessEnv;
+    const r = await vivaTransactionsOfDay("2026-09-28", { env, fetch: async (url, init) => { calls.push({ url, init }); return jsonRes(200, { Transactions: [
+      { TransactionId: "a", Amount: 20, InsDate: "2026-09-28T10:00:00+01:00", StatusId: "F", TransactionTypeId: 5, TerminalId: 123 },
+      { TransactionId: "b", Amount: 20, StatusId: "F", TransactionTypeId: 7 },
+      { TransactionId: "c", Amount: 9, StatusId: "E" },
+    ] }); } });
+    expect(r.ok && r.txns.map((t) => [t.id, t.channel])).toEqual([["a", "terminal"]]);
+    expect(calls[0].init?.method).toBe("GET");
+    expect(calls[0].url).toContain("date=2026-09-28");
+    expect(String((calls[0].init?.headers as Record<string, string>).Authorization)).toMatch(/^Basic /);
+    expect(mapVivaTransactions(null)).toEqual([]);
+  });
+});
+
+describe("caixa fase 4: recebimentos mensais (R17)", () => {
+  it("agregador vs agente pelo tipo da Multipark; recebido ≠ devido → caso", () => {
+    expect(monthlyKindOf("AGGREGATOR")).toBe("agregador");
+    expect(monthlyKindOf("AGENCY")).toBe("agente");
+    expect(monthlyReceiptFinding({ kind: "agregador", name: "Parkos", month: "2026-09", received: 100, due: 100 })).toBeNull();
+    const f = monthlyReceiptFinding({ kind: "agregador", name: "Parkos", month: "2026-09", received: 90, due: 100 })!;
+    expect(f).toMatchObject({ code: "monthly_receipt", rule: "R17" });
+    expect(f.detail).toContain("faltam 10,00 €");
+    expect(monthlyReceiptFinding({ kind: "pro", name: "X", month: "2026-09", received: 90, due: null })).toBeNull();
+  });
+});
+
+describe("caixa fase 4: interruptores", () => {
+  it("Stripe, Viva Wallet e InvoiceExpress: desligados por omissão e só o super admin muda", () => {
+    for (const n of ["CASH_STRIPE_CHECK", "CASH_VIVA_CHECK", "CASH_INVOICEXPRESS_CHECK"]) {
+      expect(automationFlagDefault(n)).toBe(false);
+      expect(AUTOMATION_FLAGS.find((f) => f.name === n)?.superAdminOnly).toBe(true);
+    }
+    const src = read("server/cashExternal.ts");
+    expect(src).toContain('on("CASH_STRIPE_CHECK")');
+    expect(src).toContain('on("CASH_VIVA_CHECK")');
+    expect(src).toContain('on("CASH_INVOICEXPRESS_CHECK")');
   });
 });
 
@@ -176,7 +214,7 @@ describe("caixa fase 4: ligações", () => {
   });
   it("migração 0275 só cria tabelas e está registada", () => {
     const all = MIGRATION_0275_STATEMENTS.join("\n");
-    for (const t of ["cash_statement_batches", "cash_statement_lines", "cash_external_runs"]) expect(all).toContain(`CREATE TABLE IF NOT EXISTS \`${t}\``);
+    for (const t of ["cash_external_runs", "cash_mb_receipts", "cash_mb_days", "cash_viva_imports", "cash_viva_txns", "cash_monthly_receipts"]) expect(all).toContain(`CREATE TABLE IF NOT EXISTS \`${t}\``);
     expect(all).not.toMatch(/DROP|DELETE|TRUNCATE/i);
     expect(read("server/db.ts")).toContain('import("./migrations/migration_0275")');
   });
@@ -188,7 +226,7 @@ describe("caixa fase 4: ligações", () => {
     expect(read("docs/ajuda/agendador.md")).toContain("cash-external");
   });
   it("nunca escreve fora: só GET nos clientes externos", () => {
-    for (const f of ["server/external/invoiceExpress.ts", "server/external/stripe.ts"]) {
+    for (const f of ["server/external/invoiceExpress.ts", "server/external/stripe.ts", "server/external/vivaWallet.ts"]) {
       const src = read(f);
       expect(src).not.toMatch(/method:\s*"(POST|PUT|PATCH|DELETE)"/);
     }
