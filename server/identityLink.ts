@@ -20,11 +20,13 @@
  */
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
+import { searchText } from "../shared/textKey";
 
 // ─── Puros ──────────────────────────────────────────────────────────────────
 
 export function normName(s: string | null | undefined): string {
-  return String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+  // Regra única (shared/textKey.ts): sem acentos, maiúsculas, apóstrofos nem traços.
+  return searchText(s);
 }
 
 /** Chaves de nome de uma ficha: completo e "primeiro + último" (formato da Multipark). */

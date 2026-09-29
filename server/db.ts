@@ -91,6 +91,7 @@ import {
   multiparkBookingHistory,
   extrasDiaAssignments,
 } from "../drizzle/schema";
+import { matchKey } from "../shared/textKey";
 import type { LostFoundItem, LostFoundPhoto, LostFoundMessage } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 import { lisbonToday } from "../shared/expensePeriods";
@@ -2921,12 +2922,12 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
     const byId = new Map<string, number>(), byName = new Map<string, number>();
     for (const a of byAgent) {
       if (a.agentUserId) byId.set(a.agentUserId, (byId.get(a.agentUserId) ?? 0) + a.total);
-      if (a.agentName) byName.set(a.agentName.trim().toLowerCase(), (byName.get(a.agentName.trim().toLowerCase()) ?? 0) + a.total);
+      if (a.agentName) byName.set(matchKey(a.agentName), (byName.get(matchKey(a.agentName)) ?? 0) + a.total);
     }
     const emps = await db.select({ id: employees.id, uid: employees.multiparkAgentUserId, name: employees.multiparkAgentName })
       .from(employees).where(inArray(employees.id, driverIds.length ? driverIds : [-1]));
     for (const e of emps) {
-      const n = (e.uid ? byId.get(e.uid) : undefined) ?? (e.name ? byName.get(e.name.trim().toLowerCase()) : undefined) ?? 0;
+      const n = (e.uid ? byId.get(e.uid) : undefined) ?? (e.name ? byName.get(matchKey(e.name)) : undefined) ?? 0;
       if (n) movMap.set(e.id, n);
     }
     try {
@@ -4497,14 +4498,14 @@ export async function getLastWorkedMap(): Promise<Record<number, string>> {
     for (const a of agents.data) {
       if (!a.lastSeen) continue;
       lastById.set(a.agentUserId, a.lastSeen);
-      for (const n of a.agentNames) { const k = n.trim().toLowerCase(); if (!lastByName.has(k) || a.lastSeen > lastByName.get(k)!) lastByName.set(k, a.lastSeen); }
+      for (const n of a.agentNames) { const k = matchKey(n); if (!lastByName.has(k) || a.lastSeen > lastByName.get(k)!) lastByName.set(k, a.lastSeen); }
     }
   }
   const [emps] = await db.execute(sql`SELECT id, multiparkAgentUserId, multiparkAgentName FROM employees
     WHERE (multiparkAgentUserId IS NOT NULL AND multiparkAgentUserId != '') OR (multiparkAgentName IS NOT NULL AND multiparkAgentName != '')`) as any;
   for (const e of (emps as any[]) ?? []) {
     if (e.multiparkAgentUserId) take(e.id, lastById.get(String(e.multiparkAgentUserId)));
-    if (e.multiparkAgentName) take(e.id, lastByName.get(String(e.multiparkAgentName).trim().toLowerCase()));
+    if (e.multiparkAgentName) take(e.id, lastByName.get(matchKey(String(e.multiparkAgentName))));
   }
   const [ponto] = await db.execute(sql`
     SELECT employeeId id, MAX(recordedAt) d FROM time_records GROUP BY employeeId`) as any;

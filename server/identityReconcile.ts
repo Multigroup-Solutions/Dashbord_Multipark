@@ -21,6 +21,7 @@
 import { sql } from "drizzle-orm";
 import type { MySql2Database } from "drizzle-orm/mysql2";
 import { isPlausibleEmail, normalizeEmail } from "../shared/email";
+import { matchKey, sameText } from "../shared/textKey";
 
 export type Db = MySql2Database<Record<string, never>> | MySql2Database<any>;
 
@@ -255,7 +256,7 @@ export interface IdentityAudit {
 }
 
 const norm = (s: string | null | undefined) => normalizeEmail(s);
-const nameKey = (s: string | null | undefined) => (s ?? "").trim().toLowerCase();
+const nameKey = (s: string | null | undefined) => matchKey(s);
 
 export function buildIdentityAudit(snap: IdentitySnapshot): IdentityAudit {
   const usersById = new Map(snap.users.map((u) => [u.id, u]));
@@ -636,7 +637,7 @@ export function planReconcile(snap: IdentitySnapshot, audit: IdentityAudit, opts
     }
     const agent = agentsById.get(a.agentUserId);
     const names = agent?.agentNames ?? a.agentNames;
-    const keepName = e.multiparkAgentName && names.some((n) => n.trim().toLowerCase() === e.multiparkAgentName!.trim().toLowerCase());
+    const keepName = e.multiparkAgentName && names.some((n) => sameText(n, e.multiparkAgentName));
     const agentName = keepName ? e.multiparkAgentName! : names[0] ?? e.multiparkAgentName ?? a.agentUserId;
     plan.attachAgents.push({
       employeeId: e.id,
@@ -816,12 +817,12 @@ export async function autoAttachAgentsByEmail(db: Db, seen: SeenAgent[]): Promis
     personalEmail: String(r.personalEmail ?? ""),
   }));
   const linkedAgentIds = new Set(emps.map((e) => e.agentUserId).filter(Boolean) as string[]);
-  const linkedNames = new Set(emps.map((e) => (e.agentName ?? "").trim().toLowerCase()).filter(Boolean));
+  const linkedNames = new Set(emps.map((e) => matchKey(e.agentName)).filter(Boolean));
 
   let attached = 0;
   for (const a of byId.values()) {
     if (linkedAgentIds.has(a.agentUserId)) continue;
-    if (a.agentName && linkedNames.has(a.agentName.toLowerCase())) continue; // já ligado por nome
+    if (a.agentName && linkedNames.has(matchKey(a.agentName))) continue; // já ligado por nome
     // email de trabalho (ou do utilizador) OU pessoal — Fase 1
     const matches = emps.filter((e) => e.isActive === 1 && (e.effectiveEmail === a.agentEmail || e.personalEmail === a.agentEmail));
     if (matches.length !== 1) continue;
@@ -830,7 +831,7 @@ export async function autoAttachAgentsByEmail(db: Db, seen: SeenAgent[]): Promis
     // Conservador: se a ficha já tem um nome de agente e não é o deste agente,
     // pode ser uma ligação legada por nome a OUTRO agente — não tocar (o
     // script de reconciliação, com o histórico completo, decide isso).
-    if (e.agentName && (!a.agentName || e.agentName.trim().toLowerCase() !== a.agentName.toLowerCase())) continue;
+    if (e.agentName && (!a.agentName || !sameText(e.agentName, a.agentName))) continue;
     const name = a.agentName ?? e.agentName ?? a.agentUserId;
     try {
       await db.execute(sql`UPDATE employees SET multiparkAgentUserId = ${a.agentUserId}, multiparkAgentName = ${name.slice(0, 256)} WHERE id = ${e.id} AND (multiparkAgentUserId IS NULL OR multiparkAgentUserId = '')`);
