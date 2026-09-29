@@ -37,7 +37,7 @@ export function agentExportPage(stage: AgentExportStage, period: Period, cursor:
   };
   if (stage === "invites") return {
     sql: `SELECT i."id", i."email", i."acceptedBy" AS accepted_by, i."createdAgentId" AS created_agent_id
-      FROM "AgentInvite" i WHERE i."status"::text = 'ACCEPTED' AND i."id" > $1
+      FROM "AgentInvite" i WHERE (i."acceptedBy" IS NOT NULL OR i."createdAgentId" IS NOT NULL) AND i."id" > $1
       ORDER BY i."id" LIMIT $2`, params: [cursor, limit],
   };
   if (stage === "history") return {
@@ -129,14 +129,15 @@ export class ActiveAgentsCollector {
     const rows = [...this.actors.values()].map(actor => {
       const profile = this.agents.get(actor.id);
       for (const address of this.inviteEmails.get(actor.id) ?? []) {
-        const sources = actor.emails.get(address) ?? new Set(); sources.add("AgentInvite aceite"); actor.emails.set(address, sources);
+        const sources = actor.emails.get(address) ?? new Set(); sources.add("AgentInvite ligado por ID"); actor.emails.set(address, sources);
       }
       const names = [...actor.names.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "pt"));
       const observed = join(actor.cities), assigned = join(profile?.cities ?? []);
+      const agentRole = [...actor.roles].some(role => ["AGENT", "ADMIN", "SUPERVISOR", "ACCOUNTANT", "DRIVER", "JUNIOR", "PARTNER", "LEADER"].includes(role.toUpperCase()));
       return {
         nome_agente: profile?.name || names[0]?.[0] || "", email: join(actor.emails.keys()),
         cidade: observed || assigned, agente_user_id: actor.id,
-        identificacao: profile ? "FICHA_AGENT" : "SEM_FICHA_AGENT",
+        identificacao: profile ? "FICHA_AGENT" : agentRole ? "AGENTE_NO_HISTORICO" : "SEM_FICHA_AGENT",
         estado_email: actor.emails.size === 0 ? "SEM_EMAIL" : actor.emails.size > 1 ? "VARIOS_EMAILS_REGISTADOS" : "EMAIL_ENCONTRADO",
         fonte_email: join([...actor.emails.values()].flatMap(s => [...s])),
         fonte_cidade: observed ? "HISTORICO_DAS_INTERACOES" : assigned ? "PARQUES_DA_FICHA_ATUAL" : "SEM_CIDADE",
@@ -147,7 +148,7 @@ export class ActiveAgentsCollector {
         perfis: join(profile?.roles ?? actor.roles), ficha_ativa_atualmente: profile ? (profile.active ? "sim" : "nao") : "",
       };
     }).sort((a, b) => a.nome_agente.localeCompare(b.nome_agente, "pt") || a.agente_user_id.localeCompare(b.agente_user_id));
-    return { agents: rows.filter(r => r.identificacao === "FICHA_AGENT"), otherActors: rows.filter(r => r.identificacao !== "FICHA_AGENT"),
+    return { agents: rows.filter(r => r.identificacao !== "SEM_FICHA_AGENT"), otherActors: rows.filter(r => r.identificacao === "SEM_FICHA_AGENT"),
       counts: this.counts, withoutActorId: this.withoutActorId, identityConflicts: this.conflicts };
   }
 }

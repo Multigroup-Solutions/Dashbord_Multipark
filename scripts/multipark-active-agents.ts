@@ -80,7 +80,7 @@ O filtro usa a DATA DA INTERAÇÃO. Não altera registos.`);
     bookingDrivers: { bookingsCreatedInPeriod: bookingDrivers.length, withCheckOutDriver: bookingDrivers.filter(b => b.check_out_driver_id || b.check_out_driver_name).length,
       withCheckInDriver: bookingDrivers.filter(b => b.check_in_driver_id || b.check_in_driver_name).length,
       filter: "Booking.createdAt no mesmo período, para cruzar com a exportação de preços. Campos atuais da reserva; não provam a data da entrega." },
-    scope: "Agentes identificados por Agent.userId/Agent.id, incluindo inativos e parceiros, com History.actionTime ou ActivityEvent.timestamp no período. Outros autores ficam num CSV separado.",
+    scope: "Agentes identificados por Agent.userId/Agent.id ou por papel explícito de agente em ActivityEvent, incluindo inativos e parceiros, com History.actionTime ou ActivityEvent.timestamp no período. Outros autores ficam num CSV separado.",
     limitations: "Não inclui consultas ou logins sem evento guardado, nem histórico apagado. Os dois históricos podem representar a mesma ação; as contagens de registos são separadas. Leitura paginada sem snapshot transacional único. Cidades são as dos parques dos eventos, não uma prova da localização física da pessoa.",
   };
   const parent = path.resolve(root, options.get("--out-dir") ?? "exports/active-agents");
