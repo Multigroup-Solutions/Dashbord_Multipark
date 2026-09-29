@@ -215,7 +215,10 @@ export function buildLiveAgentsSql(opts: { since: string; limit?: number; activi
     ] : []),
     `)`,
     `SELECT COALESCE(act.uid, ag.uid) AS user_id, act.names AS history_names, ag.name AS agent_name,`,
-    `       COALESCE(ag.active, false) AS active, COALESCE(ag.partner_only, false) AS partner_only, COALESCE(act.total, 0) AS total, COALESCE(act.checkins, 0) AS checkins,`,
+        // parceiro: só contas PARTNER no "Agent", ou o próprio utilizador de uma empresa parceira ("Partner".userId)
+    `       COALESCE(ag.active, false) AS active,`,
+    `       (COALESCE(ag.partner_only, false) OR EXISTS (SELECT 1 FROM "Partner" pp WHERE pp."userId" = COALESCE(act.uid, ag.uid))) AS partner_only,`,
+    `       COALESCE(act.total, 0) AS total, COALESCE(act.checkins, 0) AS checkins,`,
     `       COALESCE(act.checkouts, 0) AS checkouts, COALESCE(act.movements, 0) AS movements,`,
     `       ${ts("act.first_at")} AS first_at, ${ts("act.last_at")} AS last_at,`,
     `       COALESCE((SELECT i."email" FROM "AgentInvite" i LEFT JOIN "Agent" a2 ON a2."id" = i."createdAgentId"`,

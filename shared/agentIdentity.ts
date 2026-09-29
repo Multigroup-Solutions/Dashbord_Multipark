@@ -4,7 +4,8 @@
  *  - "system", "api", "API User"… são ações automáticas da Multipark: o nome
  *    que lá aparece é o de quem estava do outro lado, por isso o nome bate
  *    com meia equipa e ligava-se a fichas erradas. Nunca são pessoas.
- *  - Agentes de teste, agências e textos de formulário ("NOME DO RESPONSÁVEL
+ *  - Scripts ("migration-script", "firebase-migration-api"), agentes de teste,
+ *    agências e textos de formulário ("NOME DO RESPONSÁVEL
  *    PELA GESTÃO DAS RESERVAS") também não são pessoas.
  */
 import { agentListKind } from "./multiparkExports";
@@ -19,13 +20,21 @@ export function isSystemAgentId(id: string | null | undefined): boolean {
   return /\s/.test(s);
 }
 
+/** Scripts e integrações que aparecem como agente ("migration-script", "firebase-migration-api"). */
+const SCRIPT_RE = /(migration|script|firebase|webhook|\bcron\b|\bbot\b|integration|\bsync\b|importer|\bapi\b)/i;
+
+/** Agente que é um script/integração, não uma pessoa nem um parceiro. PURA. */
+export function isScriptAgentName(name: string | null | undefined): boolean {
+  return SCRIPT_RE.test(String(name ?? ""));
+}
+
 const PLACEHOLDER_RE = /(nome do respons[aá]vel|respons[aá]vel pela|gest[aã]o das reservas|preencher|nome do agente|sem nome|^n\/?a$)/i;
 
 /** Nome de agente que não é de uma pessoa (teste, agência, texto de formulário). PURA. */
 export function isNonPersonAgentName(name: string | null | undefined, email?: string | null): boolean {
   const n = String(name ?? "").replace(/\s+/g, " ").trim();
   if (!n) return false;
-  if (PLACEHOLDER_RE.test(n)) return true;
+  if (PLACEHOLDER_RE.test(n) || SCRIPT_RE.test(n)) return true;
   const kind = agentListKind({ name: n, email: email ? String(email).toLowerCase() : null, cities: [] });
   return kind === "teste" || kind === "agencia";
 }

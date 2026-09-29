@@ -6674,6 +6674,14 @@ export const appRouter = router({
         const { eq } = await import("drizzle-orm");
         return (await d.select().from(partnerships).where(eq(partnerships.id, id)).limit(1))[0] as Record<string, unknown> | undefined ?? null;
       })().catch(() => null);
+      // 0295: ligado à Multipark → tipo, comissão e avença vêm de lá (só leitura aqui)
+      if (["partner", "pro", "plan"].includes(String(beforeRow?.multiparkKind ?? ""))) {
+        delete (rest as Record<string, unknown>).partnerType;
+        delete (rest as Record<string, unknown>).commissionRate;
+        delete (rest as Record<string, unknown>).commissionBase;
+        delete (rest as Record<string, unknown>).monthlyFee;
+        delete (rest as Record<string, unknown>).multiparkPartnerId;
+      }
       const patch = { ...rest, ...(nif !== undefined ? { partnerNif: nif } : {}) };
       await updatePartnership(id, { ...patch, configuredAt: new Date().toISOString().slice(0, 19).replace("T", " ") });
       if (rest.multiparkPartnerId) await setPartnershipMultiparkId(id, rest.multiparkPartnerId);
@@ -6716,12 +6724,45 @@ export const appRouter = router({
           const res: any = await db.execute(sql`SELECT mpClientId, crmClientId FROM crm_pro_accounts WHERE crmClientId IS NOT NULL AND mpClientId IN (${sql.join(mpIds.map((id) => sql`${id}`), sql`, `)})`);
           const rows: any[] = Array.isArray(res) ? (Array.isArray(res[0]) ? res[0] : res) : [];
           for (const x of rows) crmByMp.set(String(x.mpClientId), Number(x.crmClientId));
+          // avenças (e Pros sem conta corrente): a ficha do cliente pelo id da Multipark
+          const rest = mpIds.filter((id) => !crmByMp.has(id));
+          if (rest.length) {
+            const ext: any = await db.execute(sql`SELECT externalId, clientId FROM crm_client_external_ids WHERE \`system\` = 'multipark_client' AND externalId IN (${sql.join(rest.map((id) => sql`${id}`), sql`, `)})`);
+            const extRows: any[] = Array.isArray(ext) ? (Array.isArray(ext[0]) ? ext[0] : ext) : [];
+            for (const x of extRows) crmByMp.set(String(x.externalId), Number(x.clientId));
+          }
         } catch { /* sem ligação ao CRM: as linhas ficam sem atalho */ }
       }
       return {
         available: true as const, canSeeTotals, periods: r.data.periods,
         rows: hideProMoney(r.data.rows, canSeeTotals).map((x) => ({ ...x, crmClientId: x.mpClientId ? crmByMp.get(x.mpClientId) ?? null : null })),
       };
+    }),
+
+    // ── Parcerias a partir da Multipark (0295): ver antes e aplicar ──
+    mpSyncPreview: protectedProcedure.mutation(async ({ ctx }) => {
+      requireAccess(ctx.user, "parcerias", "manage");
+      const { previewPartnerSync } = await import("./partnerMultiparkSync");
+      return previewPartnerSync();
+    }),
+    mpSyncApply: protectedProcedure
+      .input(z.object({ keepIds: z.array(z.number().int().positive()).max(2000).default([]) }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "parcerias", "manage");
+        if (!["admin", "super_admin"].includes(String(ctx.user.role))) throw new TRPCError({ code: "FORBIDDEN", message: "Só administradores aplicam a ligação à Multipark." });
+        const { applyPartnerSync } = await import("./partnerMultiparkSync");
+        return applyPartnerSync({ userId: ctx.user.id, keepIds: input.keepIds });
+      }),
+    /** Arquivados (sem par na Multipark): ver e repor. */
+    archived: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "parcerias", "view");
+      return (await getPartnerships({ includeArchived: true })).filter((p: any) => p.archivedAt);
+    }),
+    unarchive: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "parcerias", "manage");
+      await updatePartnership(input.id, { archivedAt: null, archivedReason: null, multiparkKind: "own" } as any);
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "partnership", entityId: input.id, details: "Reposto (tirado do arquivo)" });
+      return { success: true };
     }),
 
     // Liga (ou desliga, null) um registo das Parcerias a um parceiro da Multipark.
@@ -7165,7 +7206,7 @@ export const appRouter = router({
       const partners = new Set((await listAgentPartners()).map((p) => matchKey(p.agentName)));
       const { listIgnoredAgents } = await import("./db");
       const { looksLikeTestAgent } = await import("./personIdentity");
-      const { isSystemAgentId, isNonPersonAgentName } = await import("../shared/agentIdentity");
+      const { isSystemAgentId, isNonPersonAgentName, isScriptAgentName } = await import("../shared/agentIdentity");
       const ignored = new Set((await listIgnoredAgents()).map((n) => matchKey(n)));
       const list = (rows as any[])
         .filter((r) => {
@@ -7173,7 +7214,7 @@ export const appRouter = router({
           const id = String(r.agentUserId ?? "").trim();
           // agências e parceiros NÃO saem: vão para o grupo "parceiros" (ligar à parceria)
           return !linked.has(key) && !(id && linkedIds.has(id)) && !partners.has(key) && !ignored.has(key) && !looksLikeTestAgent(String(r.agentName))
-            && !(id && isSystemAgentId(id)) && !/(nome do respons|gest[aã]o das reservas)/i.test(String(r.agentName));
+            && !(id && isSystemAgentId(id)) && !isScriptAgentName(String(r.agentName)) && !/(nome do respons|gest[aã]o das reservas)/i.test(String(r.agentName));
         })
         .map((r) => ({
           agentName: String(r.agentName),

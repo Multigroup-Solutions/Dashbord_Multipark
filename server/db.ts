@@ -200,6 +200,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0280").then(m => ({ s: m.MIGRATION_0280_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0280 })),
       import("./migrations/migration_0285").then(m => ({ s: m.MIGRATION_0285_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0285 })),
       import("./migrations/migration_0290").then(m => ({ s: m.MIGRATION_0290_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0290 })),
+      import("./migrations/migration_0295").then(m => ({ s: m.MIGRATION_0295_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0295 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -3409,9 +3410,11 @@ export async function createPartnership(data: any) {
   return result?.id;
 }
 
-export async function getPartnerships(filters?: { partnerType?: string; status?: string }) {
+export async function getPartnerships(filters?: { partnerType?: string; status?: string; includeArchived?: boolean }) {
   const db = await getDb(); if (!db) return [];
   const conditions: any[] = [partnerScope(partnerships.id)];
+  // 0295: os arquivados (sem par na Multipark) saem das listas; nunca se apagam
+  if (!filters?.includeArchived) conditions.push(isNull(partnerships.archivedAt));
   if (filters?.partnerType) conditions.push(eq(partnerships.partnerType, filters.partnerType as any));
   if (filters?.status) conditions.push(eq(partnerships.partnerStatus, filters.status as any));
   const where = conditions.length > 0 ? and(...conditions) : undefined;
