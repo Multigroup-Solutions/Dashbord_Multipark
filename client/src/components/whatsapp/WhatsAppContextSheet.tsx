@@ -53,12 +53,12 @@ export function WhatsAppContextSheet({ conversationId, contactName, open, onOpen
   const d = ctx.data;
   const linkedId = d?.linkedBooking?.id ?? null;
 
-  function linkBooking(id: number) {
+  function linkBooking(id: string) {
     if (conversationId == null) return;
     link.mutate({ conversationId, bookingId: id }, { onSuccess: () => toast.success("Conversa ligada à reserva.") });
   }
 
-  function bookingRow(b: { id: number; bookingNumber: string | null; clientName: string; licensePlate: string | null; checkIn: string | null; checkOut: string | null; parkName: string | null; status: string | null }) {
+  function bookingRow(b: { id: string; bookingNumber: string | null; clientName: string; licensePlate: string | null; checkIn: string | null; checkOut: string | null; parkName: string | null; status: string | null }) {
     const isLinked = b.id === linkedId;
     return (
       <div key={b.id} className={`rounded-md border p-2 text-xs flex items-start gap-2 ${isLinked ? "border-green-500 bg-green-50 dark:bg-green-950/30" : ""}`}>

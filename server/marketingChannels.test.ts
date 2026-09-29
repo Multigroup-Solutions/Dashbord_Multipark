@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { cityScope } from "./cityScope";
-import { buildChannels, clientsSql, mixSql, type ClientRowAgg, type MixRow } from "./marketingChannels";
+import { buildChannels, type ClientRowAgg, type MixRow } from "./marketingChannels";
 import { channelOf, groupOf, parseFirstBooking } from "../shared/marketingChannels";
 
 const partners: Record<string, { id: number; name: string; commissionRate: number }> = {
@@ -79,18 +79,3 @@ describe("canais e clientes", () => {
   });
 });
 
-describe("âmbito de cidade nas queries", () => {
-  const dialect = new MySqlDialect();
-  const porto = { all: false, defaultCityId: 50, cityName: "Porto", cityIds: [50], projectIds: [50, 65], missingCostCenter: false };
-  it("mistura por canal e clientes filtram pelas cidades do utilizador", () => cityScope.run(porto, () => {
-    for (const q of [mixSql("2026-09-01", "2026-09-30"), clientsSql("2026-09-01", "2026-09-30")]) {
-      // a query principal (reservas "b") tem sempre o âmbito; o derivado "x" só dá a 1.ª data por email
-      const r = dialect.sqlToQuery(q);
-      expect(r.sql).toContain("b.projectId IN");
-      expect(r.params).toEqual(expect.arrayContaining([50, 65, "2026-08-31 23:00:00", "2026-09-30 23:00:00", "CANCELLED"]));
-    }
-  }));
-  it("projeto filtrado vazio → nada", () => {
-    expect(dialect.sqlToQuery(mixSql("2026-09-01", "2026-09-30", [])).sql).toContain("1 = 0");
-  });
-});

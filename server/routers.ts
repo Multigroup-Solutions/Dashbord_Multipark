@@ -869,18 +869,12 @@ async function getLostDriverLink(id: number) {
   return link;
 }
 
-/** A reserva (externalId ou nº) pertence às cidades do utilizador? */
+/** A reserva (id da Multipark ou nº) pertence às cidades do utilizador? Ao vivo na Multipark. */
 async function bookingRefInScope(ref: string): Promise<boolean> {
-  const ids = scopedProjectIds();
-  if (ids === undefined) return true;
-  const { getDb } = await import("./db");
-  const { multiparkBookings } = await import("../drizzle/schema");
-  const { eq, or } = await import("drizzle-orm");
-  const db = await getDb();
-  if (!db) return false;
-  const [b] = await db.select({ projectId: multiparkBookings.projectId }).from(multiparkBookings)
-    .where(or(eq(multiparkBookings.externalId, ref), eq(multiparkBookings.bookingNumber, ref))).limit(1);
-  return !!b?.projectId && ids.includes(b.projectId);
+  const cities = scopedCityNames();
+  if (cities === undefined) return true;
+  const { liveBookingByRef } = await import("./multiparkDb/bookingSearch");
+  return !!(await liveBookingByRef(ref, { cities }).catch(() => null));
 }
 
 const dayStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -5069,18 +5063,18 @@ export const appRouter = router({
     })).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "reclamacoes", "view");
       const { getBookingTimeline } = await import("./complaintDossier");
-      return getBookingTimeline(input.bookingId);
+      return getBookingTimeline(input.bookingId, scopedCityNames());
     }),
 
-    // Dossier da reserva ligada: detalhe + extras (cópia local) + histórico
-    // antigo. Alimenta o card "Reserva" do
+    // Dossier da reserva ligada: ficha + extras + histórico, ao vivo da
+    // Multipark (nas cidades de quem pede). Alimenta o card "Reserva" do
     // detalhe da reclamação sem passos manuais.
     bookingDossier: protectedProcedure.input(z.object({
       reservationRef: z.string().min(1),
     })).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "reclamacoes", "view");
       const { getComplaintBookingDossier } = await import("./complaintDossier");
-      return getComplaintBookingDossier(input.reservationRef);
+      return getComplaintBookingDossier(input.reservationRef, scopedCityNames());
     }),
 
     // Liga automaticamente a reserva à reclamação (ref → matrícula → email →
@@ -5819,9 +5813,8 @@ export const appRouter = router({
       reservationRef: z.string().min(1).max(128),
     })).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "perdidos", "view");
-      if (!(await bookingRefInScope(input.reservationRef))) throw new TRPCError({ code: "FORBIDDEN", message: "Reserva fora das tuas cidades." });
       const { getComplaintBookingDossier } = await import("./complaintDossier");
-      return getComplaintBookingDossier(input.reservationRef);
+      return getComplaintBookingDossier(input.reservationRef, scopedCityNames());
     }),
 
     // "Isto afinal é uma Reclamação" — cria a reclamação (dados, mensagens,
@@ -6037,38 +6030,6 @@ export const appRouter = router({
       const { appendIncidentNote } = await import("./caseOps");
       await appendIncidentNote(input.id, ctx.user.name ?? "—", input.note);
       return { success: true };
-    }),
-
-    // Reserva relacionada com a ocorrência (pela ref ligada ou pela matrícula,
-    // ancorada na data da ocorrência).
-    bookingPeek: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "ocorrencias", "view");
-      const inc = await loadIncidentInScope(input.id);
-      if (!inc.vehiclePlate && !inc.reservationLink) return null;
-      const { matchBookingForComplaint } = await import("./complaintDossier");
-      const match = await matchBookingForComplaint({
-        reservationRef: inc.reservationLink && /^[A-Za-z0-9_-]{4,128}$/.test(inc.reservationLink) ? inc.reservationLink : undefined,
-        vehiclePlate: inc.vehiclePlate ?? undefined,
-        anchorDate: inc.sourceEmailDate ?? inc.createdAt,
-      });
-      if (!match) return null;
-      const b = match.booking;
-      if (!(await bookingRefInScope(b.externalId))) return null;
-      return {
-        matchedBy: match.matchedBy,
-        externalId: b.externalId,
-        bookingNumber: b.bookingNumber,
-        status: b.status,
-        parkName: b.parkName,
-        city: b.city,
-        projectId: b.projectId,
-        checkIn: b.checkIn,
-        checkOut: b.checkOut,
-        clientName: `${b.clientFirstName ?? ""} ${b.clientLastName ?? ""}`.trim() || null,
-        clientEmail: b.clientEmail,
-        clientPhone: b.clientPhone,
-        totalPrice: b.totalPrice,
-      };
     }),
 
     // Conversões NÃO destrutivas: cria o registo novo e fecha esta ocorrência
@@ -8254,7 +8215,7 @@ export const appRouter = router({
       .input(
         z.object({
           conversationId: z.number().int().positive(),
-          bookingId: z.number().int().positive().nullable().optional(),
+          bookingId: z.string().trim().min(1).max(128).nullable().optional(),
           clientEmail: z.string().max(320).nullable().optional(),
         }),
       )

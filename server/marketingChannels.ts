@@ -192,51 +192,6 @@ function scopeWhere(projectIds?: number[] | null): SQL {
 }
 const NOT_CANCELLED = sql`COALESCE(b.status, '') <> ${CANCELLED_STATUS}`;
 const inPeriod = (from: string, to: string) => { const r = lisbonDayRangeUtc(from, to); return sql`(b.bookingCreatedAt >= ${r.start} AND b.bookingCreatedAt < ${r.end})`; };
-const HAS_EMAIL = sql`(b.clientEmail LIKE '%@%' AND SUBSTRING_INDEX(LOWER(TRIM(b.clientEmail)), '@', -1) NOT IN (${sql.join(INTERNAL_EMAIL_DOMAINS.map((d) => sql`${d}`), sql`, `)}))`;
-const VISITED = sql`UPPER(COALESCE(b.status, '')) IN (${sql.join(VISITED_STATUSES.map((v) => sql`${v}`), sql`, `)})`;
-
-/**
- * Reservas do período por canal e se são de cliente NOVO: a 1.ª reserva não
- * cancelada daquele email em TODA a base (um cliente de Lisboa que reserva no
- * Porto já é cliente) — o derivado só dá a data da 1.ª reserva por email, não
- * expõe dados de outras cidades. Sem email = não se sabe se é cliente → novo.
- */
-export function mixSql(from: string, to: string, projectIds?: number[] | null): SQL {
-  // Agrupa-se por COLUNAS de um derivado (e não por expressões com parâmetros),
-  // para o ONLY_FULL_GROUP_BY do MySQL aceitar.
-  return sql`
-    SELECT t.origin, t.googlePaid, t.campaign, t.newClient,
-           COUNT(*) AS bookings, COALESCE(SUM(t.totalPrice), 0) AS revenue, SUM(t.hasEmail) AS withEmail
-    FROM (
-      SELECT b.origin AS origin, (b.adAttribution = 'google_paid') AS googlePaid, NULLIF(TRIM(b.campaign), '') AS campaign,
-             (CASE WHEN NOT ${HAS_EMAIL} OR fb.firstAt IS NULL OR b.bookingCreatedAt <= fb.firstAt THEN 1 ELSE 0 END) AS newClient,
-             b.totalPrice AS totalPrice, (CASE WHEN ${HAS_EMAIL} THEN 1 ELSE 0 END) AS hasEmail
-      FROM multipark_bookings b
-      LEFT JOIN (
-        SELECT LOWER(TRIM(x.clientEmail)) AS email, MIN(x.bookingCreatedAt) AS firstAt
-        FROM multipark_bookings x
-        WHERE x.clientEmail LIKE '%@%' AND x.bookingCreatedAt IS NOT NULL AND COALESCE(x.status, '') <> ${CANCELLED_STATUS}
-        GROUP BY LOWER(TRIM(x.clientEmail))
-      ) fb ON fb.email = LOWER(TRIM(b.clientEmail))
-      WHERE ${NOT_CANCELLED} AND ${inPeriod(from, to)} AND ${scopeWhere(projectIds)}
-    ) t
-    GROUP BY t.origin, t.googlePaid, t.campaign, t.newClient`;
-}
-
-/** Um registo por cliente (email): a 1.ª reserva codificada, totais e reservas do período. */
-export function clientsSql(from: string, to: string, projectIds?: number[] | null): SQL {
-  return sql`
-    SELECT LOWER(TRIM(b.clientEmail)) AS email,
-           MIN(CONCAT(DATE_FORMAT(b.bookingCreatedAt, '%Y-%m-%d %H:%i:%s'), '|', COALESCE(b.origin, ''), '|',
-                      IF(b.adAttribution = 'google_paid', '1', '0'), '|', COALESCE(TRIM(b.campaign), ''))) AS first,
-           COUNT(*) AS bookings,
-           SUM(${inPeriod(from, to)}) AS periodBookings,
-           COALESCE(SUM(CASE WHEN ${VISITED} THEN b.totalPrice END), 0) AS value
-    FROM multipark_bookings b
-    WHERE ${NOT_CANCELLED} AND b.bookingCreatedAt IS NOT NULL AND ${HAS_EMAIL} AND ${scopeWhere(projectIds)}
-    GROUP BY LOWER(TRIM(b.clientEmail))`;
-}
-
 const cache = new Map<string, { at: number; value: ChannelsResult }>();
 export function invalidateChannelsCache(): void { cache.clear(); }
 

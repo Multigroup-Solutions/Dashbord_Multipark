@@ -3,19 +3,15 @@
  *  - matching reclamação → reserva Multipark por ref/matrícula/email/telefone/
  *    nome, ancorado na DATA da reclamação (a reserva "da queixa", não a mais
  *    recente do cliente)
- *  - dossier da reserva (detalhe + extras da cópia local; histórico ao vivo da
- *    BD da Multipark, com a cópia antiga como recurso) — sem chamadas à API
+ *  - dossier da reserva (ficha, extras e histórico)
+ * Tudo AO VIVO na BD da Multipark (29 set 2026: "pesquisas e ligações a
+ * reservas"); a cópia `multipark_bookings` já não é lida. Sem chamadas à API.
  */
 
-import { and, desc, eq, or, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { getDb, updateComplaint, updateLostFoundItem } from "./db";
-import {
-  complaints,
-  lostFoundItems,
-  multiparkBookingExtras,
-  multiparkBookingHistory,
-  multiparkBookings,
-} from "../drizzle/schema";
+import { complaints, lostFoundItems, multiparkBookingHistory } from "../drizzle/schema";
+import type { LiveBookingRow } from "./multiparkDb/bookingSearch";
 
 const normPlate = (p: string) => p.replace(/[\s-]/g, "").toUpperCase();
 const phoneDigits = (p: string) => p.replace(/\D/g, "");
@@ -38,7 +34,7 @@ export interface BookingMatchSignals {
 }
 
 export interface BookingMatch {
-  booking: typeof multiparkBookings.$inferSelect;
+  booking: LiveBookingRow;
   matchedBy: string[];
   score: number;
 }
@@ -52,44 +48,23 @@ export interface BookingMatch {
 export async function matchBookingForComplaint(
   s: BookingMatchSignals,
 ): Promise<BookingMatch | null> {
-  const db = await getDb();
-  if (!db) return null;
+  const { searchLiveBookings, liveBookingByRef } = await import("./multiparkDb/bookingSearch");
 
-  // 1) Referência explícita (externalId ou nº de reserva) — match direto.
+  // 1) Referência explícita (id da Multipark ou nº de reserva) — match direto.
   const ref = s.reservationRef?.trim();
   if (ref) {
-    const rows = await db
-      .select()
-      .from(multiparkBookings)
-      .where(or(eq(multiparkBookings.externalId, ref), eq(multiparkBookings.bookingNumber, ref)))
-      .limit(1);
-    if (rows[0]) return { booking: rows[0], matchedBy: ["ref"], score: 100 };
+    const b = await liveBookingByRef(ref);
+    if (b) return { booking: b, matchedBy: ["ref"], score: 100 };
   }
 
-  const conds: any[] = [];
   const plate = s.vehiclePlate ? normPlate(s.vehiclePlate) : null;
-  if (plate) conds.push(eq(multiparkBookings.licensePlate, plate));
   const email = s.clientEmail?.trim().toLowerCase() || null;
-  if (email) conds.push(sql`LOWER(${multiparkBookings.clientEmail}) = ${email}`);
   const phone = phoneKey(s.clientPhone);
-  if (phone) {
-    conds.push(
-      sql`RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(${multiparkBookings.clientPhone}, ' ', ''), '-', ''), '+', ''), '(', ''), ')', ''), 9) = ${phone}`,
-    );
-  }
   const name = s.clientName?.trim();
-  const nameOk = name && name.length >= 6 && !/desconhecido/i.test(name);
-  if (nameOk) {
-    conds.push(sql`CONCAT_WS(' ', ${multiparkBookings.clientFirstName}, ${multiparkBookings.clientLastName}) = ${name}`);
-  }
-  if (!conds.length) return null;
+  const nameOk = !!name && name.length >= 6 && !/desconhecido/i.test(name);
+  if (!plate && !email && !phone && !nameOk) return null;
 
-  const candidates = await db
-    .select()
-    .from(multiparkBookings)
-    .where(or(...conds))
-    .orderBy(desc(multiparkBookings.checkIn))
-    .limit(25);
+  const candidates = await searchLiveBookings({ plate, email, phone, name: nameOk ? name : null }, { limit: 25 });
   if (!candidates.length) return null;
 
   const anchor = s.anchorDate ? new Date(s.anchorDate) : new Date();
@@ -109,7 +84,7 @@ export async function matchBookingForComplaint(
     if (phone && b.clientPhone && phoneKey(b.clientPhone) === phone) {
       score += 25; matchedBy.push("telefone");
     }
-    if (nameOk && `${b.clientFirstName ?? ""} ${b.clientLastName ?? ""}`.trim() === name) {
+    if (nameOk && `${b.clientFirstName ?? ""} ${b.clientLastName ?? ""}`.trim().toLowerCase() === name!.toLowerCase()) {
       score += 10; matchedBy.push("nome");
     }
     if (!matchedBy.length) continue;
@@ -154,17 +129,14 @@ export async function autoLinkComplaintBooking(complaintId: number): Promise<{
 
   // Ref já válida? (aponta a uma reserva real) — mesmo assim completa os
   // campos em falta a partir dela.
-  let booking: typeof multiparkBookings.$inferSelect | null = null;
+  let booking: LiveBookingRow | null = null;
   let matchedBy: string[] = [];
   let alreadyLinked = false;
   if (c.reservationRef) {
-    const existing = await db
-      .select()
-      .from(multiparkBookings)
-      .where(or(eq(multiparkBookings.externalId, c.reservationRef), eq(multiparkBookings.bookingNumber, c.reservationRef)))
-      .limit(1);
-    if (existing[0]) {
-      booking = existing[0];
+    const { liveBookingByRef } = await import("./multiparkDb/bookingSearch");
+    const existing = await liveBookingByRef(c.reservationRef);
+    if (existing) {
+      booking = existing;
       matchedBy = ["ref"];
       alreadyLinked = true;
     }
@@ -223,17 +195,14 @@ export async function autoLinkLostFoundBooking(itemId: number): Promise<{
   const item = rows[0];
   if (!item) return { linked: false, alreadyLinked: false, matchedBy: [], booking: null };
 
-  let booking: typeof multiparkBookings.$inferSelect | null = null;
+  let booking: LiveBookingRow | null = null;
   let matchedBy: string[] = [];
   let alreadyLinked = false;
   if (item.bookingRef) {
-    const existing = await db
-      .select()
-      .from(multiparkBookings)
-      .where(or(eq(multiparkBookings.externalId, item.bookingRef), eq(multiparkBookings.bookingNumber, item.bookingRef)))
-      .limit(1);
-    if (existing[0]) {
-      booking = existing[0];
+    const { liveBookingByRef } = await import("./multiparkDb/bookingSearch");
+    const existing = await liveBookingByRef(item.bookingRef);
+    if (existing) {
+      booking = existing;
       matchedBy = ["ref"];
       alreadyLinked = true;
     }
@@ -308,7 +277,7 @@ export async function getBookingTimeline(ref: string, cities?: string[]): Promis
       }
     }
   } catch { /* BD da Multipark indisponível: usa a cópia antiga */ }
-  const d = await getComplaintBookingDossier(ref);
+  const d = await getComplaintBookingDossier(ref, cities);
   const history = d.history.map((h) => ({
     id: h.historyId, changeType: h.changeType, actionTime: h.actionTime, remarks: h.remarks,
     agentName: h.agentName, userId: h.agentUserId, modifiedFields: h.modifiedFields, platform: h.platform,
@@ -316,43 +285,68 @@ export async function getBookingTimeline(ref: string, cities?: string[]): Promis
   return { bookingId: ref, total: history.length, history };
 }
 
+/** Reserva do dossier, com os nomes de campos que as páginas Reclamações/Perdidos já usam. */
+export interface DossierBooking {
+  externalId: string; bookingNumber: string | null; status: string | null; bookingCreatedAt: string | null;
+  origin: string | null; partnerName: string | null; campaignName: string | null;
+  parkName: string | null; city: string | null; currentGarage: string | null; currentSpot: string | null;
+  checkIn: string | null; checkInTime: string | null; checkinAgentName: string | null;
+  checkOut: string | null; checkOutTime: string | null; checkoutAgentName: string | null;
+  paymentMethod: string | null; currency: string; totalPrice: number | null; totalPaid: number | null; remainingToPay: number | null;
+  deliveryType: string | null; deliveryAddress: string | null;
+  arrivalFlight: string | null; departureFlight: string | null; returnFlight: string | null;
+  vehicleBrand: string | null; vehicleModel: string | null; vehicleColor: string | null; licensePlate: string | null;
+  clientName: string | null; clientEmail: string | null; clientPhone: string | null;
+  cancelledAt: string | null; cancelReason: string | null; remarks: string | null;
+}
+
+type Core = import("./multiparkDb/bookingFile").BookingFileCore;
+type Location = import("./multiparkDb/bookingFile").BookingLocation | null;
+
+/** Ficha ao vivo → reserva do dossier. PURA. */
+export function dossierBookingFromCore(c: Core, loc?: Location): DossierBooking {
+  return {
+    externalId: c.id, bookingNumber: c.code, status: c.status, bookingCreatedAt: c.createdAt,
+    origin: c.origin.label || c.origin.code, partnerName: c.origin.partnerName, campaignName: c.origin.externalCampaign,
+    parkName: c.park.name, city: c.park.city,
+    currentGarage: loc?.garage?.name ?? loc?.external?.garage ?? null,
+    currentSpot: [loc?.spot?.row ?? loc?.external?.row, loc?.spot?.spot ?? loc?.external?.spot].filter(Boolean).join(" ") || null,
+    checkIn: c.checkIn.at ?? c.checkIn.day, checkInTime: c.checkIn.time, checkinAgentName: c.agents.checkIn,
+    checkOut: c.checkOut.at ?? c.checkOut.day, checkOutTime: c.checkOut.time, checkoutAgentName: c.agents.checkOut,
+    paymentMethod: c.price.paymentMethod, currency: c.price.currency || "EUR", totalPrice: c.price.bookingPrice, totalPaid: null, remainingToPay: null,
+    deliveryType: c.delivery.type, deliveryAddress: c.delivery.location,
+    arrivalFlight: null, departureFlight: c.flights.departing.flight, returnFlight: c.flights.return.flight,
+    vehicleBrand: c.vehicle.brand, vehicleModel: c.vehicle.model, vehicleColor: c.vehicle.color, licensePlate: c.vehicle.plate,
+    clientName: c.client.name, clientEmail: c.client.email, clientPhone: c.client.phone,
+    // o estado diz se foi cancelada; a data/motivo estão na ficha da reserva (/reserva/:id)
+    cancelledAt: null, cancelReason: null, remarks: c.remarks,
+  };
+}
+
 /**
- * Dossier completo de uma reserva para o detalhe da reclamação: detalhe da
- * reserva + extras itemizados (cópia financeira local, alimentada pelo
- * webhook) + histórico antigo de condutores (`multipark_booking_history`, já
- * não atualizado). A ficha completa e atual está em /reserva/:id (BD 2).
+ * Dossier completo de uma reserva para o detalhe da reclamação/perdido: a
+ * ficha, os extras e o histórico — tudo AO VIVO da BD da Multipark, nas
+ * cidades de quem pede. A ficha completa está em /reserva/:id.
  */
-export async function getComplaintBookingDossier(reservationRef: string): Promise<{
-  booking: typeof multiparkBookings.$inferSelect | null;
-  extras: Array<{ name: string | null; description: string | null; price: string | null; done: number | null }>;
+export async function getComplaintBookingDossier(reservationRef: string, cities?: string[]): Promise<{
+  booking: DossierBooking | null;
+  extras: Array<{ name: string | null; description: string | null; price: number | null; done: boolean }>;
   history: Array<typeof multiparkBookingHistory.$inferSelect>;
   historyFetched: boolean;
+  error?: string;
 }> {
-  const db = await getDb();
-  if (!db) return { booking: null, extras: [], history: [], historyFetched: false };
-
-  const rows = await db
-    .select()
-    .from(multiparkBookings)
-    .where(or(eq(multiparkBookings.externalId, reservationRef), eq(multiparkBookings.bookingNumber, reservationRef)))
-    .limit(1);
-  const booking = rows[0] ?? null;
-  if (!booking) return { booking: null, extras: [], history: [], historyFetched: false };
-
-  const [extras, history] = await Promise.all([
-    db
-      .select({
-        name: multiparkBookingExtras.name,
-        description: multiparkBookingExtras.description,
-        price: multiparkBookingExtras.price,
-        done: multiparkBookingExtras.done,
-      })
-      .from(multiparkBookingExtras)
-      .where(eq(multiparkBookingExtras.bookingExternalId, booking.externalId)),
-    // "History" AO VIVO da BD da Multipark (a cópia local está congelada desde o #141),
-    // no formato da cópia antiga (a página não muda).
+  const empty = { booking: null, extras: [], history: [], historyFetched: false };
+  const { resolveBookingRef, getBookingFileMain, getBookingFileExtras } = await import("./multiparkDb/bookingFile");
+  const resolved = await resolveBookingRef(reservationRef, cities);
+  if (!resolved.available) return { ...empty, error: "Reserva indisponível (BD da Multipark sem resposta)." };
+  if (resolved.data.kind !== "found") return empty;
+  const id = resolved.data.id;
+  const [main, extras, history] = await Promise.all([
+    getBookingFileMain(id, cities),
+    getBookingFileExtras(id, cities),
+    // "History" AO VIVO no formato da cópia antiga (a página não muda).
     import("./multiparkDb/historyLive")
-      .then(({ readLiveHistory }) => readLiveHistory({ bookingIds: [booking.externalId], limit: 500 }))
+      .then(({ readLiveHistory }) => readLiveHistory({ bookingIds: [id], cities, limit: 500 }))
       .then((rows) => rows.map((r, i) => ({
         id: i + 1, bookingExternalId: r.bookingExternalId, historyId: r.historyId, changeType: r.changeType, actionTime: r.actionTime,
         remarks: r.remarks, agentName: r.agentName, agentUserId: r.agentUserId, agentEmail: null, modifiedFields: r.modifiedFields,
@@ -360,6 +354,13 @@ export async function getComplaintBookingDossier(reservationRef: string): Promis
       }) as typeof multiparkBookingHistory.$inferSelect))
       .catch(() => [] as Array<typeof multiparkBookingHistory.$inferSelect>),
   ]);
-
-  return { booking, extras, history, historyFetched: history.length > 0 };
+  const core = main.available ? main.data.data.core : null;
+  if (!core) return { ...empty, error: main.available ? undefined : "Reserva indisponível (BD da Multipark sem resposta)." };
+  const extraRows = extras.available ? extras.data.data.extras : [];
+  return {
+    booking: dossierBookingFromCore(core, main.available ? main.data.data.location : null),
+    extras: extraRows.map((e) => ({ name: e.name, description: e.description, price: e.price, done: e.done })),
+    history,
+    historyFetched: history.length > 0,
+  };
 }

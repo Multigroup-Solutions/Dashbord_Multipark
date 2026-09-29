@@ -7,12 +7,11 @@
  * cidade das conversas é a de whatsappInbox (`visibilitySql` /
  * `conversationVisible`), chamada pelo router antes de cada operação.
  */
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { projectScope, scopedProjectIds } from "./cityScope";
+import { scopedProjectIds } from "./cityScope";
 import {
   employees,
-  multiparkBookings,
   users,
   whatsappConversations,
   whatsappMessages,
@@ -120,7 +119,8 @@ export async function inboxBadge(now: Date = new Date()): Promise<{ attention: n
 // ─── Ligação a reserva / cliente ────────────────────────────────────────────
 
 export interface LinkableBooking {
-  id: number;
+  /** id da reserva na Multipark */
+  id: string;
   bookingNumber: string | null;
   clientName: string;
   clientEmail: string | null;
@@ -131,25 +131,13 @@ export interface LinkableBooking {
   status: string | null;
 }
 
-const bookingCols = {
-  id: multiparkBookings.id,
-  bookingNumber: multiparkBookings.bookingNumber,
-  firstName: multiparkBookings.clientFirstName,
-  lastName: multiparkBookings.clientLastName,
-  clientEmail: multiparkBookings.clientEmail,
-  licensePlate: multiparkBookings.licensePlate,
-  checkIn: multiparkBookings.checkIn,
-  checkOut: multiparkBookings.checkOut,
-  parkName: multiparkBookings.parkName,
-  status: multiparkBookings.status,
-  projectId: multiparkBookings.projectId,
-};
+type LiveRow = import("./multiparkDb/bookingSearch").LiveBookingRow;
 
-function toLinkable(r: any): LinkableBooking {
+function toLinkable(r: LiveRow): LinkableBooking {
   return {
     id: r.id,
     bookingNumber: r.bookingNumber ?? null,
-    clientName: [r.firstName, r.lastName].filter(Boolean).join(" ").trim() || "—",
+    clientName: [r.clientFirstName, r.clientLastName].filter(Boolean).join(" ").trim() || "—",
     clientEmail: r.clientEmail ?? null,
     licensePlate: r.licensePlate ?? null,
     checkIn: r.checkIn ?? null,
@@ -159,49 +147,31 @@ function toLinkable(r: any): LinkableBooking {
   };
 }
 
-/** Reserva por id, dentro das cidades do utilizador (null se não vê). */
-async function bookingInScope(bookingId: number) {
-  const db = await getDb();
-  if (!db) return null;
-  const [r] = await db
-    .select(bookingCols)
-    .from(multiparkBookings)
-    .where(and(eq(multiparkBookings.id, bookingId), projectScope(multiparkBookings.projectId)))
-    .limit(1);
-  return r ?? null;
+/** "#n.º · nome" guardado na conversa (listas sem ler a Multipark). PURA. */
+export function bookingLabelOf(r: Pick<LiveRow, "id" | "bookingNumber" | "clientFirstName" | "clientLastName">): string {
+  const name = [r.clientFirstName, r.clientLastName].filter(Boolean).join(" ").trim() || "—";
+  return `#${r.bookingNumber || r.id} · ${name}`.slice(0, 255);
+}
+
+/** Reserva (id da Multipark), AO VIVO e dentro das cidades do utilizador (null se não vê). */
+async function bookingInScope(ref: string): Promise<LiveRow | null> {
+  const { liveBookingByRef } = await import("./multiparkDb/bookingSearch");
+  return liveBookingByRef(ref, { cities: "request" });
 }
 
 /**
  * Pesquisa de reservas para ligar à mão: nº da reserva, matrícula, email,
- * telefone (últimos 9 dígitos) ou nome. Só as cidades do utilizador.
+ * telefone (últimos 9 dígitos) ou nome — AO VIVO na Multipark, só as cidades do utilizador.
  */
 export async function searchLinkableBookings(q: string): Promise<LinkableBooking[]> {
-  const db = await getDb();
   const term = q.trim();
-  if (!db || term.length < 2) return [];
-  const like = `%${term.replace(/[\\%_]/g, (ch) => "\\" + ch)}%`;
-  const digits = term.replace(/\D/g, "");
-  const plate = term.replace(/[\s-]+/g, "").toUpperCase();
-  const conds = [
-    sql`${multiparkBookings.bookingNumber} LIKE ${like}`,
-    sql`${multiparkBookings.externalId} = ${term}`,
-    sql`UPPER(REPLACE(REPLACE(TRIM(${multiparkBookings.licensePlate}), ' ', ''), '-', '')) = ${plate}`,
-    sql`LOWER(TRIM(${multiparkBookings.clientEmail})) = ${term.toLowerCase()}`,
-    sql`CONCAT_WS(' ', ${multiparkBookings.clientFirstName}, ${multiparkBookings.clientLastName}) LIKE ${like}`,
-  ];
-  if (digits.length >= 9) {
-    conds.push(sql`RIGHT(REGEXP_REPLACE(COALESCE(${multiparkBookings.clientPhone}, ''), '[^0-9]', ''), 9) = ${digits.slice(-9)}`);
-  }
-  const rows = await db
-    .select(bookingCols)
-    .from(multiparkBookings)
-    .where(and(sql`(${sql.join(conds, sql` OR `)})`, projectScope(multiparkBookings.projectId)))
-    .orderBy(desc(multiparkBookings.checkIn))
-    .limit(15);
+  if (term.length < 2) return [];
+  const { searchLiveBookings, requestCities } = await import("./multiparkDb/bookingSearch");
+  const rows = await searchLiveBookings({ text: term }, { cities: await requestCities(), limit: 15 });
   return rows.map(toLinkable);
 }
 
-export type LinkTarget = { bookingId: number } | { clientEmail: string } | null;
+export type LinkTarget = { bookingId: string } | { clientEmail: string } | null;
 
 /**
  * Liga a conversa a uma reserva (e ao cliente dessa reserva, pelo email) ou só
@@ -214,7 +184,7 @@ export async function linkConversation(conversationId: number, target: LinkTarge
   if (target == null) {
     await db
       .update(whatsappConversations)
-      .set({ linkedBookingId: null, linkedClientEmail: null })
+      .set({ linkedBookingId: null, linkedBookingRef: null, linkedBookingLabel: null, linkedClientEmail: null })
       .where(eq(whatsappConversations.id, conversationId));
     return { ok: true };
   }
@@ -223,7 +193,7 @@ export async function linkConversation(conversationId: number, target: LinkTarge
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { ok: false, error: "Email inválido." };
     await db
       .update(whatsappConversations)
-      .set({ linkedBookingId: null, linkedClientEmail: email })
+      .set({ linkedBookingId: null, linkedBookingRef: null, linkedBookingLabel: null, linkedClientEmail: email })
       .where(eq(whatsappConversations.id, conversationId));
     return { ok: true };
   }
@@ -231,7 +201,7 @@ export async function linkConversation(conversationId: number, target: LinkTarge
   if (!b) return { ok: false, error: "Reserva não encontrada." };
   await db
     .update(whatsappConversations)
-    .set({ linkedBookingId: b.id, linkedClientEmail: b.clientEmail?.trim().toLowerCase() || null })
+    .set({ linkedBookingId: null, linkedBookingRef: b.id, linkedBookingLabel: bookingLabelOf(b), linkedClientEmail: b.clientEmail?.trim().toLowerCase() || null })
     .where(eq(whatsappConversations.id, conversationId));
   if (b.projectId != null) {
     await db
@@ -258,7 +228,7 @@ export async function getConversationContext(conversationId: number) {
   const [conv] = await db
     .select({
       phoneE164: whatsappConversations.phoneE164,
-      linkedBookingId: whatsappConversations.linkedBookingId,
+      linkedBookingRef: whatsappConversations.linkedBookingRef,
       linkedClientEmail: whatsappConversations.linkedClientEmail,
     })
     .from(whatsappConversations)
@@ -270,7 +240,7 @@ export async function getConversationContext(conversationId: number) {
   const [byPhone, byEmail, linked] = await Promise.all([
     hasPhone ? getClientHistory({ phone: conv.phoneE164 }) : Promise.resolve(null),
     conv.linkedClientEmail ? getClientHistory({ email: conv.linkedClientEmail }) : Promise.resolve(null),
-    conv.linkedBookingId ? bookingInScope(conv.linkedBookingId) : Promise.resolve(null),
+    conv.linkedBookingRef ? bookingInScope(conv.linkedBookingRef).catch(() => null) : Promise.resolve(null),
   ]);
   const dedupe = <T extends { id: number | string }>(...lists: (T[] | undefined)[]): T[] => {
     const seen = new Set<number | string>();
@@ -278,17 +248,9 @@ export async function getConversationContext(conversationId: number) {
     for (const l of lists) for (const x of l ?? []) if (!seen.has(x.id)) { seen.add(x.id); out.push(x); }
     return out;
   };
-  // As reservas do histórico vêm da ficha do CRM (ids da Multipark); ligar a
-  // conversa a uma reserva ainda usa o id da cópia local (a cópia do webhook
-  // fica sempre) — as que ainda não lá estão não se podem ligar por aqui.
-  const liveBookings = dedupe<any>(byEmail?.bookings, byPhone?.bookings).slice(0, 10);
-  const extIds = liveBookings.map((b: any) => String(b.externalId)).filter(Boolean);
-  const localIds = new Map<string, number>(extIds.length
-    ? (await db.select({ id: multiparkBookings.id, externalId: multiparkBookings.externalId }).from(multiparkBookings)
-        .where(inArray(multiparkBookings.externalId, extIds))).map((r) => [String(r.externalId), Number(r.id)] as [string, number])
-    : []);
-  const bookings = liveBookings.filter((b: any) => localIds.has(String(b.externalId))).map((b: any) => ({
-    id: localIds.get(String(b.externalId)) as number,
+  // As reservas do histórico vêm da ficha do CRM (ids da Multipark) e ligam-se por esse id.
+  const bookings = dedupe<any>(byEmail?.bookings, byPhone?.bookings).slice(0, 10).map((b: any) => ({
+    id: String(b.externalId ?? b.id),
     bookingNumber: (b.bookingNumber as string | null) ?? null,
     clientName: [b.clientFirstName, b.clientLastName].filter(Boolean).join(" ").trim() || "—",
     licensePlate: (b.licensePlate as string | null) ?? null,

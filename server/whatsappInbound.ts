@@ -581,13 +581,10 @@ export async function matchBookingCity(db: Db, conversationId: number, phoneE164
   try {
     let projectId: number | null = null;
     if (last9) {
-      const [rows] = (await db.execute(sql`
-        SELECT projectId FROM multipark_bookings
-         WHERE projectId IS NOT NULL AND clientPhone IS NOT NULL
-           AND RIGHT(REGEXP_REPLACE(clientPhone, '[^0-9]', ''), 9) = ${last9}
-         ORDER BY id DESC LIMIT 1`)) as any;
-      const r = (rows as any[])?.[0];
-      if (r?.projectId != null) projectId = Number(r.projectId);
+      // Ao vivo na Multipark: a reserva mais recente com este telefone → projeto do parque.
+      const { searchLiveBookings } = await import("./multiparkDb/bookingSearch");
+      const rows = await searchLiveBookings({ phone: last9 }, { limit: 5 });
+      projectId = rows.find((r) => r.projectId != null)?.projectId ?? null;
     }
     await db
       .update(whatsappConversations)

@@ -6,7 +6,8 @@ import { Label } from "@/components/ui/label";
 import { Search } from "lucide-react";
 
 export type FoundBooking = {
-  id: number;
+  /** id da Multipark (= externalId) — pesquisa ao vivo */
+  id: string;
   externalId: string;
   bookingNumber: string | null;
   status: string | null;
@@ -45,9 +46,9 @@ const ACCENTS: Record<NonNullable<BookingSearchFieldProps["accent"]>, { bg: stri
 
 /**
  * Campo de pesquisa universal de reservas Multipark.
- * Procura por nº reserva, matrícula, email ou nome (DB local).
- * Mostra resultados clicáveis; ao escolher um, chama onSelect com os
- * dados da reserva (cópia local, já completa pelo webhook — sem chamadas à API).
+ * Procura por nº reserva, matrícula, email, telefone ou nome — AO VIVO na BD
+ * da Multipark, só nas cidades de quem pesquisa. Ao escolher, chama onSelect
+ * com os dados da reserva.
  */
 export default function BookingSearchField({
   onSelect,

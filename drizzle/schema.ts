@@ -2253,6 +2253,9 @@ export const whatsappConversations = mysqlTable("whatsapp_conversations", {
 	windowAlertedAt: timestamp({ mode: 'string' }),
 	/** Ligação manual a uma reserva (multipark_bookings.id) / cliente (email). */
 	linkedBookingId: int(),
+	/** id da reserva na Multipark (migração 0250); linkedBookingId = cópia antiga */
+	linkedBookingRef: varchar({ length: 128 }),
+	linkedBookingLabel: varchar({ length: 255 }),
 	linkedClientEmail: varchar({ length: 320 }),
 	// Migração 0123 — triagem da IA (etiquetas do inbox + debounce por conversa)
 	aiIntent: varchar({ length: 24 }),

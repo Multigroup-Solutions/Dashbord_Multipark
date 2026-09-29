@@ -29,22 +29,6 @@ function unavailable(r: { code: string; reason: string }): Unavailable {
   return { available: false, code: r.code, reason: r.reason };
 }
 
-/** Ids da Multipark que a NOSSA BD associa a uma referência (desempate de n.º repetidos). */
-async function localHintIds(ref: string): Promise<string[]> {
-  try {
-    const { getDb } = await import("./db");
-    const { multiparkBookings } = await import("../drizzle/schema");
-    const { eq, or } = await import("drizzle-orm");
-    const db = await getDb();
-    if (!db) return [];
-    const rows = await db.select({ externalId: multiparkBookings.externalId }).from(multiparkBookings)
-      .where(or(eq(multiparkBookings.bookingNumber, ref), eq(multiparkBookings.externalId, ref))).limit(10);
-    return rows.map((r) => r.externalId).filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-
 export const bookingFileRouter = router({
   /** Resolve id / n.º e devolve o essencial (cabeçalho, cliente, viatura, lugar). */
   main: protectedProcedure
@@ -54,7 +38,7 @@ export const bookingFileRouter = router({
       const { resolveBookingRef, getBookingFileMain, normalizeRef } = await import("./multiparkDb/bookingFile");
       const cities = scopedCityNames();
       const ref = normalizeRef(input.ref);
-      const res = await resolveBookingRef(ref, cities, await localHintIds(ref));
+      const res = await resolveBookingRef(ref, cities);
       if (!res.available) return unavailable(res);
       const r = res.data;
       if (r.kind === "not_found") return { available: true as const, kind: "not_found" as const };
@@ -133,7 +117,7 @@ export const bookingFileRouter = router({
       requireAccess(ctx.user, "reservas_operacoes", "view");
       const user = withOverrides(ctx.user);
       const { getDb } = await import("./db");
-      const { complaints, lostFoundItems, multiparkBookings } = await import("../drizzle/schema");
+      const { complaints, lostFoundItems } = await import("../drizzle/schema");
       const { and, desc, eq, inArray, sql } = await import("drizzle-orm");
       const db = await getDb();
       const empty = { complaints: [] as Array<{ id: number; title: string; status: string; createdAt: string; ref: string | null }>, lostFound: [] as Array<{ id: number; title: string; status: string; createdAt: string; ref: string | null }>, crmEmail: null as string | null, canComplaints: false, canLost: false };
@@ -141,11 +125,6 @@ export const bookingFileRouter = router({
 
       const refs = new Set<string>([input.id]);
       if (input.code) refs.add(input.code);
-      try {
-        const local = await db.select({ externalId: multiparkBookings.externalId, bookingNumber: multiparkBookings.bookingNumber })
-          .from(multiparkBookings).where(eq(multiparkBookings.externalId, input.id)).limit(1);
-        if (local[0]?.bookingNumber) refs.add(local[0].bookingNumber);
-      } catch { /* a cópia local é só um extra */ }
       const refList = [...refs].filter(Boolean).slice(0, 5);
       const ids = scopedProjectIds();
       const inCities = (col: any) => (ids === undefined ? sql`1 = 1` : ids.length ? inArray(col, ids) : sql`1 = 0`);

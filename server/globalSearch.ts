@@ -77,32 +77,19 @@ function sourceAccess(viewer: SearchViewer, src: Pick<SearchSource, "modules" | 
 const reservations: SearchSource = {
   group: "reservas",
   modules: ["reservas_operacoes"],
-  async run({ d, q }) {
-    const conds: SQL[] = [];
-    const up = q.raw.toUpperCase();
-    if (q.isEmail) conds.push(sql`b.clientEmail LIKE ${q.prefix.toLowerCase()}`);
-    if (q.plate) conds.push(sql`b.licensePlate IN (${q.plate}, ${dashedPlate(q.plate)})`, sql`b.licensePlate LIKE ${`${q.plate}%`}`);
-    if (q.isCode || /^\d{3,}$/.test(q.raw)) conds.push(sql`b.bookingNumber LIKE ${q.prefix}`, sql`b.externalId = ${q.raw}`, sql`b.licensePlate LIKE ${`${up.replace(/[\\%_]/g, "")}%`}`);
-    if (!q.isEmail && !q.isPhone && /[a-zà-ÿ]/i.test(q.raw)) {
-      const words = q.raw.split(/\s+/).filter((w) => w.length >= 2);
-      const last = (words[words.length - 1] ?? q.raw).replace(/[\\%_]/g, "");
-      conds.push(sql`b.clientLastName LIKE ${`${last}%`}`);
-      if (words.length === 1) conds.push(sql`b.clientFirstName LIKE ${`${last}%`}`);
-    }
-    if (q.isPhone && q.digits.length >= 6) {
-      // Telefone: sem índice — só nos últimos 18 meses (checkIn indexado) e com LIMIT.
-      conds.push(sql`(b.checkIn >= DATE_SUB(NOW(), INTERVAL 18 MONTH) AND REGEXP_REPLACE(COALESCE(b.clientPhone, ''), '[^0-9]', '') LIKE ${`%${q.digits.slice(-9)}%`})`);
-    }
-    if (!conds.length) return [];
-    const rows = rowsOf(await d.execute(sql`SELECT /*+ MAX_EXECUTION_TIME(2000) */ b.id, b.externalId, b.bookingNumber, b.status, b.parkName, b.checkIn,
-        b.clientFirstName, b.clientLastName, b.clientEmail, b.licensePlate, b.bookingCreatedAt
-      FROM multipark_bookings b WHERE (${sql.join(conds, sql` OR `)}) AND ${projectScope(sql`b.projectId`)}
-      ORDER BY b.checkIn DESC LIMIT ${LIMIT}`));
+  // Ao vivo na BD da Multipark (29 set 2026), só nas cidades de quem pesquisa.
+  async run({ q }) {
+    const { searchLiveBookings, requestCities } = await import("./multiparkDb/bookingSearch");
+    const rows = await searchLiveBookings({
+      text: q.isEmail ? null : q.raw,
+      email: q.isEmail ? q.raw : null,
+      phone: q.isPhone && q.digits.length >= 9 ? q.digits : null,
+    }, { cities: await requestCities(), limit: LIMIT });
     return rows.map((r) => {
       const name = [str(r.clientFirstName), str(r.clientLastName)].filter(Boolean).join(" ");
       const code = str(r.bookingNumber) ?? String(r.externalId);
       return {
-        key: `reservas:${r.id}`, group: "reservas" as const,
+        key: `reservas:${r.externalId}`, group: "reservas" as const,
         title: `${code}${name ? ` · ${name}` : ""}`,
         subtitle: [str(r.licensePlate), str(r.parkName), str(r.checkIn)?.slice(0, 10), str(r.status)].filter(Boolean).join(" · ") || null,
         // `de` = dia de Lisboa da entrada (a lista "Reservas do dia" mostra esse dia).
