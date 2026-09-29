@@ -32,10 +32,17 @@ export async function getPersonIdentity(employeeId: number): Promise<PersonIdent
     SELECT u.id, u.name, u.email, u.role, u.isActive, DATE_FORMAT(u.lastSignedIn, '%Y-%m-%d %H:%i'), 0 FROM employee_accounts a JOIN users u ON u.id = a.userId WHERE a.employeeId = ${employeeId}`).catch(() => [[]]));
   const agentRows = rowsOf(await d.execute(sql`SELECT agentUserId, agentName FROM employee_agents WHERE employeeId = ${employeeId}`).catch(() => [[]]));
   const ids = [e.multiparkAgentUserId, ...agentRows.map((a) => a.agentUserId)].filter(Boolean).map(String);
+  // Emails dos agentes: ao vivo da Multipark; a cópia antiga só para os que lá não aparecem.
   const emails = new Map<string, string | null>();
   if (ids.length) {
-    for (const r of rowsOf(await d.execute(sql`SELECT agentUserId, email FROM multipark_agents WHERE agentUserId IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})`).catch(() => [[]]))) {
-      emails.set(String(r.agentUserId), r.email ?? null);
+    const { listLiveAgents } = await import("./multiparkDb/activityLive");
+    const live = await listLiveAgents().catch(() => ({ available: false as const }));
+    if (live.available) for (const a of (live as any).data as Array<{ agentUserId: string; email: string | null }>) if (ids.includes(a.agentUserId) && a.email) emails.set(a.agentUserId, a.email);
+    const missing = ids.filter((i) => !emails.has(i));
+    if (missing.length) {
+      for (const r of rowsOf(await d.execute(sql`SELECT agentUserId, email FROM multipark_agents WHERE agentUserId IN (${sql.join(missing.map((i) => sql`${i}`), sql`, `)})`).catch(() => [[]]))) {
+        if (r.email) emails.set(String(r.agentUserId), r.email);
+      }
     }
   }
   const agents: PersonIdentity["agents"] = [];

@@ -5814,9 +5814,9 @@ export async function importBookingHistory(rows: {
   return { imported, skipped };
 }
 
-// ─── Booking history (Multipark API, via DB local) ──────────────────────────
-// As funções a seguir devolvem o histórico de reservas Multipark já sincronizado
-// para a DB local (multipark_booking_history populado pelos crons de sincronização).
+// ─── Booking history (AO VIVO da BD da Multipark, readLiveHistory*) ─────────
+// As funções a seguir leem o histórico ao vivo; a cópia multipark_booking_history
+// está congelada e já não é lida aqui.
 // Shape mantido compatível com a UI antiga (que esperava colunas do Excel
 // import). Adicionado o campo `flagged: 1` nas linhas/condutores que tocaram
 // numa reserva que está ligada a um caso de Perdidos/Achados.

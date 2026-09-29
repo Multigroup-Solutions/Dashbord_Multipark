@@ -15,7 +15,6 @@ import {
   complaints,
   employees,
   extrasDiaAssignments,
-  multiparkBookingHistory,
 } from "../drizzle/schema";
 import { isEmailSendConfigured, sendEmailDetailed } from "./mail/systemMail";
 import {
