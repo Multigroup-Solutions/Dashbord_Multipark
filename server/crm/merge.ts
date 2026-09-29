@@ -290,3 +290,43 @@ export async function loadSides(db: any, ids: number[]): Promise<Map<number, Sug
   return out;
 }
 
+
+/**
+ * Junta sozinho as sugestões óbvias (shared/crmIdentity.ts autoMergeOk): o
+ * mesmo nome e o mesmo telefone, email ou NIF. Fica a ficha com mais reservas.
+ * Cada fusão fica em "Fusões recentes" (reason "automático") e separa-se lá.
+ * Corre até ao prazo; o que sobrar fica para a próxima corrida.
+ */
+export async function autoMergeConfident(db: any, o: { deadlineAt: number; userId: number; limit?: number }): Promise<{ checked: number; merged: number; skipped: number; errors: number }> {
+  const { autoMergeOk } = await import("../../shared/crmIdentity");
+  const rows = rowsOf(await db.execute(sql`SELECT s.clientA, s.clientB FROM crm_merge_suggestions s
+    JOIN crm_clients a ON a.id = s.clientA AND a.status = 'active'
+    JOIN crm_clients b ON b.id = s.clientB AND b.status = 'active'
+    WHERE s.status = 'pending' AND (FIND_IN_SET('same_phone', s.reasons) OR FIND_IN_SET('same_email', s.reasons) OR FIND_IN_SET('same_nif', s.reasons))
+    ORDER BY s.score DESC, s.id LIMIT ${Math.max(1, Math.min(5000, o.limit ?? 2000))}`));
+  const out = { checked: rows.length, merged: 0, skipped: 0, errors: 0 };
+  if (!rows.length) return out;
+  const ids = [...new Set(rows.flatMap((r) => [Number(r.clientA), Number(r.clientB)]))];
+  const sides = await loadSides(db, ids);
+  const meta = new Map<number, { kind: string | null; bookings: number }>();
+  for (const part of chunks(ids, 800)) {
+    for (const r of rowsOf(await db.execute(sql`SELECT id, kind, bookings FROM crm_clients WHERE id IN (${inList(part)})`))) meta.set(Number(r.id), { kind: r.kind ?? null, bookings: Number(r.bookings ?? 0) });
+  }
+  const gone = new Set<number>();
+  for (const r of rows) {
+    if (Date.now() > o.deadlineAt - 3_000) break;
+    const a = Number(r.clientA), b = Number(r.clientB);
+    if (gone.has(a) || gone.has(b)) { out.skipped++; continue; }
+    const sa = sides.get(a), sb = sides.get(b);
+    if (!sa || !sb || !autoMergeOk(sa, sb, { kindA: meta.get(a)?.kind, kindB: meta.get(b)?.kind })) { out.skipped++; continue; }
+    const [survivorId, mergedId] = (meta.get(a)?.bookings ?? 0) >= (meta.get(b)?.bookings ?? 0) ? [a, b] : [b, a];
+    try {
+      await mergeClients(db, { survivorId, mergedId, userId: o.userId, reason: "automático: mesmo nome e mesmo telefone/email/NIF" });
+      gone.add(mergedId);
+      out.merged++;
+    } catch {
+      out.errors++;
+    }
+  }
+  return out;
+}

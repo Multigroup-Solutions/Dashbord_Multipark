@@ -33,7 +33,7 @@ export default function CrmReviewPage() {
 
   const tabs: { id: Tab; label: string; badge?: { n: number; tone: "amber" | "red"; suffix?: string } }[] = [
     { id: "suggestions", label: "Sugestões para juntar", badge: counts ? { n: counts.suggestions, tone: "amber" } : undefined },
-    { id: "generic", label: "Emails estranhos", badge: counts ? { n: counts.generic, tone: "amber" } : undefined },
+    { id: "generic", label: "Sem email próprio" },
     { id: "noEmail", label: "Reservas sem email", badge: counts ? { n: counts.noEmail, tone: "red", suffix: "em 3 dias" } : undefined },
     { id: "merges", label: "Juntas recentemente" },
   ];
@@ -43,7 +43,8 @@ export default function CrmReviewPage() {
       <div>
         <Link href="/clientes" className="inline-flex items-center gap-1 text-[13px] text-primary hover:underline"><ChevronLeft className="h-3.5 w-3.5" />Clientes</Link>
         <h1 className="mt-1 font-display text-2xl font-bold tracking-[-0.02em]">Rever fichas</h1>
-        <p className="mt-1 text-[13px] text-muted-foreground">Nada se junta só pelo nome. Juntar e separar ficam no registo, com quem e quando.</p>
+        <p className="mt-1 text-[13px] text-muted-foreground">O CRM junta sozinho, de 30 em 30 minutos, as fichas com o mesmo nome e o mesmo telefone, email ou NIF. Aqui ficam só os casos duvidosos. Nada se junta só pelo nome; juntar e separar ficam no registo, com quem e quando.</p>
+        {canMerge && <AutoMergeButton onDone={() => q.refetch()} />}
       </div>
 
       <div className="flex gap-1 overflow-x-auto border-b">
@@ -194,7 +195,7 @@ function GenericEmails({ data, offset, setOffset, refetch }: { data: GenData; of
   if (!data.rows.length) return <Empty text="Não há fichas com emails estranhos." />;
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-[13px] text-muted-foreground">Fichas cujo único email é de balcão ou de agregador (partilhado por muitos clientes diferentes). Procure o email verdadeiro na nossa caixa; sem resultado, retire-o e a ficha fica só com telefone e carro.</p>
+      <p className="text-[13px] text-muted-foreground">Fichas cujo único email é de balcão ou de agregador (partilhado por muitos clientes diferentes). <strong>Não é preciso fazer nada</strong>: esse email já não liga reservas nem conta como email do cliente. Se quiseres, procura o email verdadeiro na nossa caixa.</p>
       {data.rows.map((r) => <GenericRow key={r.id} r={r} onDone={refetch} />)}
       <Pager total={data.total} offset={offset} size={PAGE} setOffset={setOffset} />
     </div>
@@ -268,5 +269,18 @@ function Merges({ rows, canMerge, refetch }: { rows: MergeRow[]; canMerge: boole
         </div>
       ))}
     </div>
+  );
+}
+
+function AutoMergeButton({ onDone }: { onDone: () => void }) {
+  const m = trpc.crm.autoMergeNow.useMutation({
+    onSuccess: (r) => { toast.success(r.merged ? `${r.merged} fichas juntas sozinhas (${r.skipped} ficam para rever).` : "Não havia casos óbvios para juntar."); onDone(); },
+    onError: (e) => toast.error(e.message),
+  });
+  return (
+    <button type="button" disabled={m.isPending} onClick={() => m.mutate()}
+      className="mt-2 inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[13px] font-semibold hover:bg-muted disabled:opacity-50">
+      {m.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}Juntar agora os óbvios
+    </button>
   );
 }

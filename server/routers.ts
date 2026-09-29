@@ -8724,6 +8724,16 @@ export const appRouter = router({
         await dismissSuggestion(await crmDb(), ctx.user.id, input.id);
         return { ok: true };
       }),
+    /** Juntar AGORA as sugestões óbvias (mesmo nome + telefone/email/NIF). Admin; o resto fica para a cron. */
+    autoMergeNow: protectedProcedure.mutation(async ({ ctx }) => {
+      requireAccess(ctx.user, "clientes", "edit");
+      if (!["admin", "super_admin"].includes(String(ctx.user.role))) throw new TRPCError({ code: "FORBIDDEN", message: "Só um administrador corre a junção automática." });
+      const db = await crmDb();
+      const { autoMergeConfident } = await import("./crm/merge");
+      const r = await autoMergeConfident(db, { deadlineAt: Date.now() + 40_000, userId: ctx.user.id });
+      await logActivity({ userId: ctx.user.id, action: "crm_auto_merge", entity: "crm", entityId: 0, details: `Junção automática à mão: ${r.merged} fichas juntas (${r.checked} vistas, ${r.skipped} ficaram para rever)` });
+      return r;
+    }),
     review: protectedProcedure
       .input(z.object({ tab: z.enum(["suggestions", "generic", "noEmail", "merges"]), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional(), minScore: z.number().int().min(0).max(100).optional() }))
       .query(async ({ ctx, input }) => {
