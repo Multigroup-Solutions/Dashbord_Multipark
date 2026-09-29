@@ -1592,6 +1592,8 @@ export const pdas = mysqlTable("pdas", {
 	photoUrl: text(),
 	simDataPlan: varchar({ length: 255 }),
 	notes: text(),
+	// Cidade fixa do PDA (migração 0280): nó `level='city'` de `projects`.
+	projectId: int(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 });

@@ -3359,6 +3359,7 @@ export const appRouter = router({
               const att = await attachPdaByDeviceToken(input.pdaDeviceToken, input.employeeId);
               if (att) {
                 pdaAttached = { pdaName: att.pdaName, zelloUsername: att.zelloUsername, replacedName: att.replacedName };
+                if (att.changed) { const { syncPdaZelloName } = await import("./pdaZelloName"); void syncPdaZelloName(att.pdaId); }
                 await logActivity({ userId: ctx.user.id, action: "create", entity: "pda_checkin", entityId: att.pdaId, details: `Auto: ponto→PDA ${att.pdaName}${att.replacedName ? ` (substituiu ${att.replacedName})` : ""}` });
               }
             } catch (err) {
@@ -3471,6 +3472,7 @@ export const appRouter = router({
           try {
             const { closePdaCheckinsForEmployee } = await import("./db");
             await closePdaCheckinsForEmployee(input.employeeId, outAt);
+            { const { syncPdaZelloNamesForEmployee } = await import("./pdaZelloName"); void syncPdaZelloNamesForEmployee(input.employeeId); }
           } catch (err) {
             console.warn("[pda] fecho do PDA no check-out do ponto falhou:", err);
           }
@@ -4384,6 +4386,8 @@ export const appRouter = router({
       // PONTO feito neste aparelho liga a pessoa ao PDA/Zello automaticamente.
       registerDevice: protectedProcedure.input(z.object({ pdaId: z.number() })).mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "pdas", "edit", { allowOwn: true });
+        // Decisão do dono (29 set 2026): o aparelho regista-se SÓ pelo QR colado no PDA.
+        if (input.pdaId > 0) throw new TRPCError({ code: "FORBIDDEN", message: "O PDA regista-se só pelo QR colado no aparelho: abre a câmara do PDA e lê o QR." });
         const { setPdaDeviceToken } = await import("./db");
         const token = await setPdaDeviceToken(input.pdaId);
         if (!token) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
@@ -4428,6 +4432,8 @@ export const appRouter = router({
         if (!att) return { attached: false as const, reason: "aparelho não registado" };
         if (att.changed) {
           await logActivity({ userId: ctx.user.id, action: "create", entity: "pda_checkin", entityId: att.pdaId, details: `Auto: login→PDA ${att.pdaName}${att.replacedName ? ` (substituiu ${att.replacedName})` : ""}` });
+          const { syncPdaZelloName } = await import("./pdaZelloName");
+          void syncPdaZelloName(att.pdaId);
         }
         return { attached: true as const, changed: att.changed, pdaName: att.pdaName, zelloUsername: att.zelloUsername, replacedName: att.replacedName };
       }),
@@ -4442,7 +4448,11 @@ export const appRouter = router({
           console.warn("[pda] logout→soltar PDA falhou:", err);
           return { released: 0, error: true as const };
         }
-        if (released) await logActivity({ userId: ctx.user.id, action: "update", entity: "pda_checkin", details: "Auto: logout soltou o PDA" });
+        if (released) {
+          await logActivity({ userId: ctx.user.id, action: "update", entity: "pda_checkin", details: "Auto: logout soltou o PDA" });
+          const { syncPdaZelloNameByToken } = await import("./pdaZelloName");
+          void syncPdaZelloNameByToken(input.token);
+        }
         return { released };
       }),
       // Info do aparelho atual (cartão "Este aparelho" na aba PDAs) — qualquer
@@ -4466,9 +4476,11 @@ export const appRouter = router({
         photoUrl: z.string().optional(),
         simDataPlan: z.string().optional(),
         notes: z.string().optional(),
+        projectId: z.number().int().positive().nullable().optional(),
       })).mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "pdas", "edit");
         const id = await createPda({
+          projectId: input.projectId ?? null,
           name: input.name,
           phoneNumber: input.phoneNumber ?? null,
           imei: input.imei ?? null,
@@ -4494,10 +4506,15 @@ export const appRouter = router({
           photoUrl: z.string().nullable().optional(),
           simDataPlan: z.string().nullable().optional(),
           notes: z.string().nullable().optional(),
+          projectId: z.number().int().positive().nullable().optional(),
         }),
       })).mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "pdas", "edit");
         await updatePda(input.id, input.data);
+        if (input.data.name !== undefined || input.data.zelloUsername !== undefined) {
+          const { syncPdaZelloName } = await import("./pdaZelloName");
+          void syncPdaZelloName(input.id);
+        }
         await logActivity({ userId: ctx.user.id, action: "update", entity: "pda", entityId: input.id, details: "PDA atualizado" });
         return { success: true };
       }),
@@ -4536,6 +4553,9 @@ export const appRouter = router({
           notes: z.string().optional(),
         })).mutation(async ({ ctx, input }) => {
           requireAccess(ctx.user, "pdas", "edit");
+          // Decisão do dono (29 set 2026): sem check-in manual — o PDA liga-se a
+          // quem faz login no próprio aparelho (registado pelo QR).
+          if (input.pdaId > 0) throw new TRPCError({ code: "FORBIDDEN", message: "Já não há check-in manual: a pessoa faz login no próprio PDA (registado pelo QR) e fica ligada sozinha." });
           const id = await createPdaCheckin({
             pdaId: input.pdaId,
             employeeId: input.employeeId,
@@ -4565,6 +4585,7 @@ export const appRouter = router({
             mobileDataMbEnd: input.mobileDataMbEnd,
             notes: input.notes,
           });
+          { const { syncPdaZelloNameByCheckin } = await import("./pdaZelloName"); void syncPdaZelloNameByCheckin(input.id); }
           await logActivity({ userId: ctx.user.id, action: "update", entity: "pda_checkin", entityId: input.id, details: "Check-out PDA" });
           return { success: true };
         }),

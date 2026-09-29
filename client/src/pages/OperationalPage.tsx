@@ -717,19 +717,10 @@ function SpeedHistoryCard({ target, onTarget, people, threshold }: {
 // troca sozinha quando entra outro). Pedido do Jorge 2026-08-06.
 function ThisDeviceCard({ pdaList, canRegister }: { pdaList: any[]; canRegister: boolean }) {
   const [token, setToken] = useState<string | null>(() => localStorage.getItem("mp.pda.deviceToken"));
-  const [selPda, setSelPda] = useState("");
   const { data: deviceInfo, isLoading } = trpc.operational.pdas.deviceInfo.useQuery(
     { token: token ?? "" },
     { enabled: !!token }
   );
-  const register = trpc.operational.pdas.registerDevice.useMutation({
-    onSuccess: (d) => {
-      localStorage.setItem("mp.pda.deviceToken", d.token);
-      setToken(d.token);
-      toast.success("Este aparelho ficou registado! A partir de agora, quem picar o ponto aqui fica logo com este PDA/Zello.");
-    },
-    onError: (e) => toast.error(e.message),
-  });
 
   return (
     <Card className={token && deviceInfo ? "border-green-300" : "border-dashed"}>
@@ -766,24 +757,6 @@ function ThisDeviceCard({ pdaList, canRegister }: { pdaList: any[]; canRegister:
                 </p>
               </div>
             </div>
-            {canRegister && (
-              <details className="text-xs">
-                <summary className="cursor-pointer text-muted-foreground">Sem QR à mão? Registar este aparelho pela lista (recurso)</summary>
-                <div className="flex items-center gap-2 mt-2">
-                  <Select value={selPda} onValueChange={setSelPda}>
-                    <SelectTrigger className="w-44"><SelectValue placeholder="Escolher PDA" /></SelectTrigger>
-                    <SelectContent>
-                      {pdaList.filter((p: any) => p.status === "active").map((p: any) => (
-                        <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Button size="sm" variant="outline" disabled={!selPda || register.isPending} onClick={() => register.mutate({ pdaId: Number(selPda) })}>
-                    Registar este aparelho
-                  </Button>
-                </div>
-              </details>
-            )}
           </div>
         )}
       </CardContent>
@@ -795,15 +768,15 @@ function PdasTab() {
   // Escrita: criar/editar/QR = team_leader+ (como o servidor); eliminar = admin.
   const canManage = useRoleAtLeast("team_leader");
   const canDelete = useRoleAtLeast("admin");
-  const [manualPda, setManualPda] = useState("");
   const [showCreate, setShowCreate] = useState(false);
-  const [showCheckin, setShowCheckin] = useState<number | null>(null);
   const [editPda, setEditPda] = useState<any | null>(null);
   const [viewPda, setViewPda] = useState<number | null>(null);
   const [qrPda, setQrPda] = useState<{ id: number; name: string } | null>(null);
   const utils = trpc.useUtils();
 
   const { data: pdaList, isLoading } = trpc.operational.pdas.list.useQuery();
+  const { data: allProjects } = trpc.projects.list.useQuery();
+  const cityName = new Map<number, string>(((allProjects as any[]) ?? []).filter((p) => p.level === "city").map((p) => [Number(p.id), String(p.name)]));
   const { data: activeCheckins } = trpc.operational.pdas.checkins.active.useQuery();
   const deleteMut = trpc.operational.pdas.delete.useMutation({
     onSuccess: () => { utils.operational.pdas.list.invalidate(); toast.success("PDA eliminado"); },
@@ -880,6 +853,7 @@ function PdasTab() {
                     <div className="flex items-center gap-2 min-w-0">
                       <Smartphone className="w-5 h-5 text-primary" />
                       <span className="font-bold truncate">{pda.name}</span>
+                      <span className={`text-xs ${pda.projectId ? "text-muted-foreground" : "text-amber-700"}`}>{pda.projectId ? cityName.get(Number(pda.projectId)) ?? "" : "sem cidade"}</span>
                     </div>
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${PDA_STATUS_COLORS[pda.status]}`}>
                       {PDA_STATUS_LABELS[pda.status]}
@@ -938,31 +912,9 @@ function PdasTab() {
         </div>
       )}
 
-      {/* Check-in manual: só quando o login no PDA (QR) não funcionou */}
-      {pdaList && pdaList.length > 0 && (
-        <details className="rounded-lg border p-3 text-sm">
-          <summary className="cursor-pointer font-medium">Check-in manual (recurso)</summary>
-          <p className="text-xs text-muted-foreground mt-1">O normal é a pessoa entrar no PDA registado (fica logo com ele). Usa isto só quando isso falhou.</p>
-          <div className="flex items-center gap-2 mt-2 flex-wrap">
-            <Select value={manualPda} onValueChange={setManualPda}>
-              <SelectTrigger className="w-48"><SelectValue placeholder="Escolher PDA livre" /></SelectTrigger>
-              <SelectContent>
-                {pdaList.filter((p: any) => p.status === "active" && !checkinByPda.has(p.id)).map((p: any) => (
-                  <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button size="sm" variant="outline" disabled={!manualPda} onClick={() => setShowCheckin(Number(manualPda))}>
-              <Camera className="w-3 h-3 mr-1" />Check-in manual
-            </Button>
-          </div>
-        </details>
-      )}
-
       {/* Dialogs */}
       {showCreate && <CreatePdaDialog onClose={() => setShowCreate(false)} />}
       {editPda && <EditPdaDialog pda={editPda} onClose={() => setEditPda(null)} />}
-      {showCheckin !== null && <CheckinDialog pdaId={showCheckin} onClose={() => setShowCheckin(null)} />}
       {viewPda !== null && <PdaHistoryDialog pdaId={viewPda} onClose={() => setViewPda(null)} />}
       {qrPda && <PdaQrDialog pda={qrPda} onClose={() => setQrPda(null)} />}
     </div>
@@ -1028,6 +980,21 @@ function CheckoutButton({ checkinId, pdaName }: { checkinId: number; pdaName: st
   );
 }
 
+// Cidade fixa do PDA (decisão do dono, 29 set 2026): Lisboa / Porto / Faro.
+function PdaCitySelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const { data: projects } = trpc.projects.list.useQuery();
+  const cities = ((projects as any[]) ?? []).filter((p) => p.level === "city").sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  return (
+    <div>
+      <Label>Cidade *</Label>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger><SelectValue placeholder="Escolher cidade" /></SelectTrigger>
+        <SelectContent>{cities.map((c) => <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>)}</SelectContent>
+      </Select>
+    </div>
+  );
+}
+
 function CreatePdaDialog({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
@@ -1036,6 +1003,7 @@ function CreatePdaDialog({ onClose }: { onClose: () => void }) {
   const [zelloUsername, setZelloUsername] = useState("");
   const [simDataPlan, setSimDataPlan] = useState("");
   const [notes, setNotes] = useState("");
+  const [cityId, setCityId] = useState("");
   const utils = trpc.useUtils();
 
   const createMut = trpc.operational.pdas.create.useMutation({
@@ -1048,7 +1016,8 @@ function CreatePdaDialog({ onClose }: { onClose: () => void }) {
       <DialogContent>
         <DialogHeader><DialogTitle>Novo PDA</DialogTitle></DialogHeader>
         <div className="space-y-3">
-          <div><Label>Nome *</Label><Input value={name} onChange={e => setName(e.target.value)} placeholder="Ex: PDA-001" /></div>
+          <div><Label>Etiqueta (nome ou número) *</Label><Input value={name} onChange={e => setName(e.target.value)} placeholder="Ex: PDA 12" /></div>
+          <PdaCitySelect value={cityId} onChange={setCityId} />
           <div><Label>Modelo</Label><Input value={model} onChange={e => setModel(e.target.value)} placeholder="Ex: Samsung Galaxy XCover" /></div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div><Label>Nº Telemóvel</Label><Input value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)} placeholder="Ex: 912345678" /></div>
@@ -1064,8 +1033,8 @@ function CreatePdaDialog({ onClose }: { onClose: () => void }) {
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button disabled={!name || createMut.isPending} onClick={() => createMut.mutate({
-            name, phoneNumber: phoneNumber || undefined, imei: imei || undefined,
+          <Button disabled={!name || !cityId || createMut.isPending} onClick={() => createMut.mutate({
+            name, projectId: Number(cityId), phoneNumber: phoneNumber || undefined, imei: imei || undefined,
             model: model || undefined, zelloUsername: zelloUsername || undefined,
             simDataPlan: simDataPlan || undefined, notes: notes || undefined,
           })}>{createMut.isPending ? "A criar..." : "Criar PDA"}</Button>
@@ -1084,6 +1053,7 @@ function EditPdaDialog({ pda, onClose }: { pda: any; onClose: () => void }) {
   const [simDataPlan, setSimDataPlan] = useState(pda.simDataPlan || "");
   const [status, setStatus] = useState(pda.status);
   const [notes, setNotes] = useState(pda.notes || "");
+  const [cityId, setCityId] = useState(pda.projectId ? String(pda.projectId) : "");
   const utils = trpc.useUtils();
 
   const updateMut = trpc.operational.pdas.update.useMutation({
@@ -1096,7 +1066,8 @@ function EditPdaDialog({ pda, onClose }: { pda: any; onClose: () => void }) {
       <DialogContent>
         <DialogHeader><DialogTitle>Editar PDA — {pda.name}</DialogTitle></DialogHeader>
         <div className="space-y-3">
-          <div><Label>Nome</Label><Input value={name} onChange={e => setName(e.target.value)} /></div>
+          <div><Label>Etiqueta (nome ou número)</Label><Input value={name} onChange={e => setName(e.target.value)} /></div>
+          <PdaCitySelect value={cityId} onChange={setCityId} />
           <div><Label>Modelo</Label><Input value={model} onChange={e => setModel(e.target.value)} /></div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div><Label>Nº Telemóvel</Label><Input value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)} /></div>
@@ -1122,128 +1093,8 @@ function EditPdaDialog({ pda, onClose }: { pda: any; onClose: () => void }) {
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
           <Button disabled={updateMut.isPending} onClick={() => updateMut.mutate({
             id: pda.id,
-            data: { name, phoneNumber: phoneNumber || null, imei: imei || null, model: model || null, zelloUsername: zelloUsername || null, simDataPlan: simDataPlan || null, status: status as any, notes: notes || null },
+            data: { name, projectId: cityId ? Number(cityId) : null, phoneNumber: phoneNumber || null, imei: imei || null, model: model || null, zelloUsername: zelloUsername || null, simDataPlan: simDataPlan || null, status: status as any, notes: notes || null },
           })}>{updateMut.isPending ? "A guardar..." : "Guardar"}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function CheckinDialog({ pdaId, onClose }: { pdaId: number; onClose: () => void }) {
-  const [zelloUsername, setZelloUsername] = useState("");
-  const [mobileDataMbStart, setMobileDataMbStart] = useState("");
-  const [notes, setNotes] = useState("");
-  const [photoEntryUrl, setPhotoEntryUrl] = useState("");
-  const [uploading, setUploading] = useState(false);
-  const utils = trpc.useUtils();
-
-  const { data: zelloUsers } = trpc.operational.zello.users.useQuery();
-  const { data: employees } = trpc.rh.list.useQuery();
-  const [employeeId, setEmployeeId] = useState("");
-  // Lista longa → combobox com pesquisa (mesmo componente do RH/Zello).
-  const employeeOptions = useMemo(
-    () => (employees || []).map((e: any) => ({ value: String(e.employee.id), label: e.employee.fullName })),
-    [employees],
-  );
-  // Pré-preenche com o utilizador Zello registado no próprio PDA.
-  const { data: pdaRecord } = trpc.operational.pdas.get.useQuery({ id: pdaId });
-  useEffect(() => {
-    if (pdaRecord?.zelloUsername && !zelloUsername) setZelloUsername(pdaRecord.zelloUsername);
-  }, [pdaRecord]);
-
-  const checkinMut = trpc.operational.pdas.checkins.checkin.useMutation({
-    onSuccess: () => {
-      utils.operational.pdas.checkins.active.invalidate();
-      toast.success("Check-in registado!");
-      onClose();
-    },
-    onError: (e) => toast.error(e.message),
-  });
-
-  const handlePhotoCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploading(true);
-    try {
-      // Fotos de PDA vêm com 8-12MB e o Vercel limita o body a ~4.5MB —
-      // redimensiona para 1600px/JPEG antes de enviar (também acelera no 4G).
-      const resized = await resizeImageFile(file, 1600, 0.85);
-      const formData = new FormData();
-      formData.append("file", resized, "checkin.jpg");
-      const resp = await fetch("/api/upload", { method: "POST", body: formData });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const { url, error } = await resp.json();
-      if (!url) throw new Error(error || "sem URL");
-      setPhotoEntryUrl(url);
-      toast.success("Foto carregada!");
-    } catch (err: any) {
-      toast.error(`Erro ao carregar foto: ${err?.message ?? "falha"}`);
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  return (
-    <Dialog open onOpenChange={onClose}>
-      <DialogContent>
-        <DialogHeader><DialogTitle>Check-in PDA #{pdaId}</DialogTitle></DialogHeader>
-        <div className="space-y-3">
-          <div>
-            <Label>Utilizador Zello</Label>
-            <Select value={zelloUsername} onValueChange={setZelloUsername}>
-              <SelectTrigger><SelectValue placeholder="Selecionar utilizador..." /></SelectTrigger>
-              <SelectContent>
-                {(zelloUsers || []).filter((u: any) => !u.gpsExcluded).map((u: any) => (
-                  <SelectItem key={u.name} value={u.name}>{u.fullName || u.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label>Funcionário *</Label>
-            <SearchableSelect
-              className="w-full"
-              value={employeeId}
-              onChange={setEmployeeId}
-              options={employeeOptions}
-              placeholder="Escolher funcionário..."
-              searchPlaceholder="Pesquisar por nome…"
-              emptyText="Nenhum funcionário com esse nome"
-            />
-            {!employeeId && <p className="text-xs text-muted-foreground mt-1">Obrigatório — o histórico de atividade fica associado a esta pessoa.</p>}
-          </div>
-          <div>
-            <Label>Dados Móveis (MB no início)</Label>
-            <Input type="number" value={mobileDataMbStart} onChange={e => setMobileDataMbStart(e.target.value)} placeholder="Ex: 2500" />
-          </div>
-          <div>
-            <Label>Foto de Entrada *</Label>
-            <div className="flex items-center gap-2">
-              <label className="cursor-pointer">
-                <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhotoCapture} />
-                <Button variant="outline" asChild><span><Camera className="w-4 h-4 mr-1" />{uploading ? "A carregar..." : photoEntryUrl ? "Repetir Foto" : "Tirar Foto"}</span></Button>
-              </label>
-              {photoEntryUrl && <Badge variant="outline" className="text-green-600">Foto OK</Badge>}
-            </div>
-            {/* Obrigatória (Jorge, 2026-09-09) — o servidor também recusa sem foto. */}
-            {!photoEntryUrl && !uploading && <p className="text-xs text-muted-foreground mt-1">Obrigatório — fotografa o PDA para registar o estado à entrada.</p>}
-          </div>
-          <div>
-            <Label>Notas</Label>
-            <Textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Observações..." />
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button disabled={checkinMut.isPending || uploading || !employeeId || employeeId === "none" || !photoEntryUrl} onClick={() => checkinMut.mutate({
-            pdaId,
-            zelloUsername: zelloUsername || undefined,
-            employeeId: Number(employeeId),
-            photoEntryUrl,
-            mobileDataMbStart: mobileDataMbStart ? Number(mobileDataMbStart) : undefined,
-            notes: notes || undefined,
-          })}>{checkinMut.isPending ? "A registar..." : "Registar Check-in"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -2,6 +2,10 @@
  * /pda/registar?pda=ID&c=CÓDIGO — aberto ao ler o QR colado no PDA (Fase 2).
  * Regista ESTE aparelho como esse PDA. A partir daí, quem fizer login aqui
  * fica com o PDA e o Zello até sair ou entrar outra pessoa.
+ *
+ * Decisão do dono (29 set 2026): só pelo QR, e o dashboard fica INSTALADO no
+ * PDA como app (PWA, sempre no mesmo browser, abre em ecrã inteiro) — a
+ * seguir ao registo aparece o botão "Instalar a app neste PDA".
  */
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
@@ -10,7 +14,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { CheckCircle2, Loader2, Smartphone, XCircle } from "lucide-react";
+import { CheckCircle2, Download, Loader2, Smartphone, XCircle } from "lucide-react";
 import { setPdaToken, setPendingQr, markClaimed } from "@/lib/pdaDevice";
 
 export default function PdaRegisterPage() {
@@ -20,6 +24,14 @@ export default function PdaRegisterPage() {
   const pdaId = Number(params.get("pda"));
   const code = params.get("c") ?? "";
   const [state, setState] = useState<{ ok: boolean; message: string } | null>(null);
+  // Instalação como app (PWA): o browser só oferece o pedido depois deste evento.
+  const [installEvt, setInstallEvt] = useState<any>(null);
+  const standalone = typeof window !== "undefined" && (window.matchMedia?.("(display-mode: standalone)").matches || (navigator as any).standalone === true);
+  useEffect(() => {
+    const onPrompt = (e: Event) => { e.preventDefault(); setInstallEvt(e); };
+    window.addEventListener("beforeinstallprompt", onPrompt);
+    return () => window.removeEventListener("beforeinstallprompt", onPrompt);
+  }, []);
   const register = trpc.operational.pdas.registerByQr.useMutation({
     onSuccess: (r) => {
       setPdaToken(r.token);
@@ -61,6 +73,17 @@ export default function PdaRegisterPage() {
               <XCircle className="h-5 w-5 shrink-0" /> {state.message}
             </p>
           )}
+          {state?.ok && (standalone ? (
+            <p className="text-xs text-muted-foreground">A app já está instalada neste PDA. 👌</p>
+          ) : installEvt ? (
+            <Button className="w-full" onClick={async () => { installEvt.prompt(); await installEvt.userChoice.catch(() => null); setInstallEvt(null); }}>
+              <Download className="h-4 w-4 mr-2" /> Instalar a app neste PDA
+            </Button>
+          ) : (
+            <p className="text-xs text-muted-foreground text-left">
+              Instala a app neste PDA para abrir sempre direto (sem outro browser): no Chrome, menu <b>⋮</b> → <b>Instalar app</b> (ou <b>Adicionar ao ecrã principal</b>). Depois usa sempre o ícone Multipark.
+            </p>
+          ))}
           <Button variant="outline" className="w-full" onClick={() => setLocation("/")}>Ir para a app</Button>
         </CardContent>
       </Card>
