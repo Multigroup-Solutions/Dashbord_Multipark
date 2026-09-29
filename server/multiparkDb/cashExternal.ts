@@ -185,3 +185,40 @@ export async function readMonthDues(o: { parkIds: readonly string[]; start: stri
   const { sql, params } = buildMonthDuesSql(o);
   return (await query<J>(sql, params)).map(mapMonthDueRow);
 }
+
+// ─── 5. Em atraso (meses anteriores ainda por pagar) ───────────────────────
+
+export const ARREARS_MONTHS = 12;
+export interface MonthArrears { kind: "parceiro" | "pro"; entityId: string; bookings: number; arrears: number }
+
+/**
+ * Saídas em [start, end) (os 12 meses antes do mês escolhido) ainda por pagar
+ * na Multipark: parceiros → `partnerAmountDue − partnerAmountPaid`; Pro →
+ * preço − pago nas linhas. Só as reservas com valor em falta. PURA.
+ */
+export function buildMonthArrearsSql(o: { parkIds: readonly string[]; start: string; end: string }): { sql: string; params: SqlParam[] } {
+  if (!o.parkIds.length) throw new Error("Sem parques.");
+  const p = new ParamList();
+  const parks = o.parkIds.map((id) => p.add(id)).join(", ");
+  const start = p.add(o.start), end = p.add(o.end);
+  const where = `b."parkId" IN (${parks}) AND b."checkOut" >= ${start}::timestamp AND b."checkOut" < ${end}::timestamp AND b."status"::text NOT IN ('CANCELLED', 'CANCELED')`;
+  const sql = [
+    `SELECT 'parceiro' AS kind, COALESCE(NULLIF(pa."name", ''), pa."id") AS entity_id, count(*) AS n,`,
+    `  SUM(COALESCE(b."partnerAmountDue", 0) - COALESCE(b."partnerAmountPaid", 0)) AS arrears`,
+    `  FROM "Booking" b JOIN "Partner" pa ON pa."id" = b."partnerId"`,
+    `  WHERE ${where} AND COALESCE(b."partnerAmountDue", 0) - COALESCE(b."partnerAmountPaid", 0) > 0.01 GROUP BY 2`,
+    `UNION ALL`,
+    `SELECT 'pro' AS kind, pc."id" AS entity_id, count(*) AS n, SUM(x.missing) AS arrears FROM (`,
+    `  SELECT b."proClientId" AS pro_id, COALESCE(b."bookingPrice", 0) - COALESCE((SELECT SUM(y."amountPaid") FROM "BookingPricing" y WHERE y."bookingId" = b."id"), 0) AS missing`,
+    `    FROM "Booking" b WHERE ${where} AND b."proClientId" IS NOT NULL) x`,
+    `  JOIN "ProClient" pc ON pc."id" = x.pro_id WHERE x.missing > 0.01 GROUP BY 2`,
+    `LIMIT ${p.add(2000)}`,
+  ].join("\n");
+  return { sql, params: p.values };
+}
+
+export async function readMonthArrears(o: { parkIds: readonly string[]; start: string; end: string }, query: Query = multiparkDbQuery): Promise<MonthArrears[]> {
+  if (!o.parkIds.length) return [];
+  const { sql, params } = buildMonthArrearsSql(o);
+  return (await query<J>(sql, params)).map((r) => ({ kind: r.kind === "pro" ? "pro" : "parceiro", entityId: String(r.entity_id ?? ""), bookings: Math.round(Number(r.n ?? 0)) || 0, arrears: n(r.arrears) ?? 0 }));
+}

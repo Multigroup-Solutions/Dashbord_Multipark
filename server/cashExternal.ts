@@ -437,21 +437,37 @@ export async function monthlyOverview(month: string) {
   const { first, last } = monthRangeDays(month);
   const range = lisbonDayRangeUtc(first, last);
   let dues: Awaited<ReturnType<typeof live.readMonthDues>> = [];
+  let arrearsList: Awaited<ReturnType<typeof live.readMonthArrears>> = [];
   let duesError: string | null = null;
-  try { dues = await live.readMonthDues({ parkIds: [...ctx.ourParks.keys()], start: range.start, end: range.end }); }
-  catch { duesError = "BD da Multipark sem resposta: não dá para calcular o devido do mês."; }
+  const parkIds = [...ctx.ourParks.keys()];
+  const [y, mo] = month.split("-").map(Number);
+  const back = new Date(Date.UTC(y, mo - 1 - live.ARREARS_MONTHS, 1)).toISOString().slice(0, 10);
+  try {
+    [dues, arrearsList] = await Promise.all([
+      live.readMonthDues({ parkIds, start: range.start, end: range.end }),
+      live.readMonthArrears({ parkIds, start: lisbonDayRangeUtc(back).start, end: range.start }),
+    ]);
+  } catch { duesError = "BD da Multipark sem resposta: não dá para calcular o devido do mês."; }
   const receipts = rowsOf(await d.execute(sql`SELECT r.id, r.kind, r.entityId, r.entityName, r.amount, DATE_FORMAT(r.receivedOn, '%Y-%m-%d') AS receivedOn, r.proofKey, r.proofUrl, r.note,
       DATE_FORMAT(r.createdAt, '%Y-%m-%d %H:%i:%s') AS at, u.name AS byName
     FROM cash_monthly_receipts r LEFT JOIN users u ON u.id = r.createdBy WHERE r.month = ${month} AND r.removedAt IS NULL ORDER BY r.id LIMIT 2000`));
   const key = (kind: string, id: string) => `${kind}|${id}`;
-  const rows = new Map<string, { kind: MonthlyKind; entityId: string; name: string; bookings: number; due: number | null; received: number; receipts: any[] }>();
+  const rows = new Map<string, { kind: MonthlyKind; entityId: string; name: string; bookings: number; due: number | null; arrears: number; arrearsBookings: number; received: number; receipts: any[] }>();
+  const partnerKind = new Map<string, MonthlyKind>();
   for (const x of dues) {
     const kind: MonthlyKind = x.kind === "pro" ? "pro" : monthlyKindOf(x.partnerType);
-    rows.set(key(kind, x.entityId), { kind, entityId: x.entityId, name: x.name ?? x.entityId, bookings: x.bookings, due: x.due, received: 0, receipts: [] });
+    if (x.kind !== "pro") partnerKind.set(x.entityId, kind);
+    rows.set(key(kind, x.entityId), { kind, entityId: x.entityId, name: x.name ?? x.entityId, bookings: x.bookings, due: x.due, arrears: 0, arrearsBookings: 0, received: 0, receipts: [] });
+  }
+  for (const a of arrearsList) {
+    const kind: MonthlyKind = a.kind === "pro" ? "pro" : partnerKind.get(a.entityId) ?? "agente";
+    const row = rows.get(key(kind, a.entityId)) ?? { kind, entityId: a.entityId, name: a.entityId, bookings: 0, due: 0, arrears: 0, arrearsBookings: 0, received: 0, receipts: [] };
+    row.arrears = r2(row.arrears + a.arrears); row.arrearsBookings += a.bookings;
+    rows.set(key(kind, a.entityId), row);
   }
   for (const r of receipts) {
     const k = key(String(r.kind), String(r.entityId));
-    const row = rows.get(k) ?? { kind: String(r.kind) as MonthlyKind, entityId: String(r.entityId), name: r.entityName ?? String(r.entityId), bookings: 0, due: null, received: 0, receipts: [] as any[] };
+    const row = rows.get(k) ?? { kind: String(r.kind) as MonthlyKind, entityId: String(r.entityId), name: r.entityName ?? String(r.entityId), bookings: 0, due: null, arrears: 0, arrearsBookings: 0, received: 0, receipts: [] as any[] };
     row.received = r2(row.received + Number(r.amount));
     row.receipts.push({ id: Number(r.id), amount: Number(r.amount), receivedOn: r.receivedOn ?? null, note: r.note ?? null, at: String(r.at), byName: r.byName ?? null, proofUrl: await fileUrl(r.proofKey ?? null, r.proofUrl ?? null) });
     rows.set(k, row);
@@ -465,7 +481,7 @@ async function evaluateMonthly(d: Db, o: { kind: MonthlyKind; entityId: string; 
   const overview = await monthlyOverview(o.month);
   if (!overview.available || overview.duesError) return false;
   const row = overview.rows.find((x) => x.kind === o.kind && x.entityId === o.entityId);
-  const f = row ? monthlyReceiptFinding({ kind: o.kind, name: row.name, month: o.month, received: row.received, due: row.due }) : null;
+  const f = row ? monthlyReceiptFinding({ kind: o.kind, name: row.name, month: o.month, received: row.received, due: row.due, arrears: row.arrears }) : null;
   const [sweep, { planCaseActions }] = await Promise.all([import("./cashSweep"), import("./cashCheck/cases")]);
   const subjectId = `${o.kind}:${o.entityId}:${o.month}`.slice(0, 191);
   const existing = (await sweep.loadCases(d, "mensal", [subjectId])).get(subjectId) ?? [];

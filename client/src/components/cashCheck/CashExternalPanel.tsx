@@ -123,7 +123,7 @@ export default function CashExternalPanel({ projectId }: { projectId?: number })
           {m && m.rows.length > 0 && (
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
-                <thead><tr className="text-left text-muted-foreground"><th className="py-1 pr-2">Quem</th><th className="pr-2">Reservas</th><th className="pr-2">Devido (Multipark)</th><th className="pr-2">Recebido</th><th className="pr-2">Diferença</th><th /></tr></thead>
+                <thead><tr className="text-left text-muted-foreground"><th className="py-1 pr-2">Quem</th><th className="pr-2">Reservas</th><th className="pr-2">Devido do mês (saídas)</th><th className="pr-2">Em atraso (12 meses antes)</th><th className="pr-2">Recebido</th><th className="pr-2">Diferença</th><th /></tr></thead>
                 <tbody>
                   {m.rows.map((row) => {
                     const key = `${row.kind}|${row.entityId}`;
@@ -140,6 +140,7 @@ export default function CashExternalPanel({ projectId }: { projectId?: number })
                         </td>
                         <td className="pr-2">{row.bookings}</td>
                         <td className="pr-2">{eur(row.due)}{row.kind === "pro" ? <div className="text-muted-foreground">preço das reservas</div> : null}</td>
+                        <td className="pr-2">{row.arrears > 0.01 ? <>{eur(row.arrears)}<div className="text-muted-foreground">{row.arrearsBookings} reserva(s)</div></> : "—"}</td>
                         <td className="pr-2">{eur(row.received)}</td>
                         <td className={`pr-2 ${row.difference != null && Math.abs(row.difference) > 0.01 ? "text-red-700 font-medium" : ""}`}>{eur(row.difference)}</td>
                         <td className="pr-1">

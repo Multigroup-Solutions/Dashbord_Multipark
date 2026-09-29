@@ -7,7 +7,7 @@ import {
   buildAgentPermsSql, buildParkMovementSql, buildSweepExtrasSql, buildSweepIdsSql, mapAgentPermsRow, mapSweepExtrasRow, MONEY_PERMISSIONS,
 } from "../multiparkDb/cashSweep";
 import { assertReadOnlySql } from "../multiparkDb/client";
-import { agentPermsFinding, evaluateSweep, missingFinding, parkSilentFinding, snapFromLive, stateHash, type SweepSnap } from "./sweepRules";
+import { agentPermsFinding, evaluateSweep, invoiceDeadlineMs, missingFinding, parkSilentFinding, snapFromLive, stateHash, type SweepSnap } from "./sweepRules";
 import { actionNote, planCaseActions, type ExistingCase } from "./cases";
 import { MIGRATION_0265_STATEMENTS } from "../migrations/migration_0265";
 
@@ -18,10 +18,10 @@ const live = (o: Partial<LiveFinance> = {}): LiveFinance => ({
   parkingPrice: 50, deliveryPrice: 0, discountAmount: 0, discountApplied: false, paymentMethod: "Dinheiro", paymentSource: null, paymentBy: null,
   campaignId: null, partnerId: null, partnerAmountDue: null, partnerAmountPaid: null, partnerContributedAmount: null, pro: false, proClientId: null,
   linesCount: 1, linesTotal: 50, linesPaid: 50, paymentsCount: 1, paymentsTotal: 50, paymentMethods: ["Dinheiro"],
-  cashierClosed: v(), cashValidated: v(), driverValidated: v(true), ...o,
+  cashierClosed: v(), cashValidated: v(true), driverValidated: v(true), ...o,
 });
 const extras = (o: Partial<SweepExtras> = {}): SweepExtras => ({
-  id: "bk1", clientPlanId: null, allowance: null, creditId: null, checkOutDriverName: "Rui", disputed: false, cancellation: null,
+  id: "bk1", clientPlanId: null, allowance: null, creditId: null, checkOutDriverName: "Rui", hasNif: false, disputed: false, cancellation: null,
   billing: { count: 1, emitted: 1, amount: 50, creditNotes: 0 }, credit: { count: 0, value: null },
   paymentLinks: { failed: 0, succeeded: 0, received: null }, extras: { done: 0, doneUncharged: 0 }, cash: { amount: 50, firstAt: "2026-09-25T10:00:00.000Z" }, ...o,
 });
@@ -86,11 +86,30 @@ describe("caixa fase 2: regras da varredura", () => {
   it("R18–R21, R23 e R28", () => {
     const f = codes(evaluateSweep({
       live: live({ paymentMethods: ["Dinheiro", "MB"], driverValidated: v(false) }),
-      extras: extras({ extras: { done: 1, doneUncharged: 1 }, billing: { count: 0, emitted: 0, amount: null, creditNotes: 0 }, disputed: true, creditId: "cr1",
+      extras: extras({ hasNif: true, extras: { done: 1, doneUncharged: 1 }, billing: { count: 0, emitted: 0, amount: null, creditNotes: 0 }, disputed: true, creditId: "cr1",
         cash: { amount: 20, firstAt: "2026-09-25T10:00:00.000Z" } }),
       era: [], nowIso: NOW,
     }));
     expect(f).toEqual(expect.arrayContaining(["extra_uncharged", "invoice_missing", "online_payment", "credit_used", "driver_cash_pending", "split_methods"]));
+  });
+  it("R19 (decisão do dono): com NIF 48 h; sem NIF só depois do fecho do mês", () => {
+    const noBill = { count: 0, emitted: 0, amount: null, creditNotes: 0 };
+    const out = "2026-09-20T10:00:00.000Z";
+    const run = (hasNif: boolean, nowIso: string) => codes(evaluateSweep({ live: live({ checkOut: out }), extras: extras({ hasNif, billing: noBill }), era: [], nowIso }));
+    expect(run(true, NOW)).toContain("invoice_missing");
+    expect(run(false, NOW)).not.toContain("invoice_missing");
+    expect(run(false, "2026-10-02T12:00:00.000Z")).not.toContain("invoice_missing");
+    expect(run(false, "2026-10-03T12:00:00.000Z")).toContain("invoice_missing");
+    expect(invoiceDeadlineMs("2026-12-15T10:00:00.000Z", false, 48)).toBe(Date.parse("2027-01-03T00:00:00.000Z"));
+  });
+  it("R23 (decisão do dono): condutor → líder no próprio dia; líder → back office no dia seguinte", () => {
+    const cash = { amount: 30, firstAt: "2026-09-27T15:00:00.000Z" };
+    const run = (o: Partial<LiveFinance>, nowIso: string) => evaluateSweep({ live: live(o), extras: extras({ cash }), era: [], nowIso }).find((f) => f.code === "driver_cash_pending");
+    expect(run({ driverValidated: v(false) }, "2026-09-28T04:00:00.000Z")).toBeUndefined();
+    expect(run({ driverValidated: v(false) }, "2026-09-28T06:00:00.000Z")!.detail).toContain("condutor ao líder");
+    expect(run({ driverValidated: v(true), cashValidated: v(false) }, "2026-09-28T22:00:00.000Z")).toBeUndefined();
+    expect(run({ driverValidated: v(true), cashValidated: v(false) }, "2026-09-29T00:30:00.000Z")!.detail).toContain("back office");
+    expect(run({ driverValidated: v(true), cashValidated: v(true) }, NOW)).toBeUndefined();
   });
   it("primeira vez que a varredura vê uma reserva (sem webhook nem retrato): nada de \"só na Multipark\"", () => {
     expect(codes(evaluateSweep({ live: live(), extras: extras(), era: [], nowIso: NOW }))).not.toContain("only_live");
