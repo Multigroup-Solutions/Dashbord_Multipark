@@ -19,6 +19,7 @@ import multer from "multer";
 import { requireSession } from "./requireSession";
 import { storagePut } from "../storage";
 import { cronRunRecorder } from "../cronRuns";
+import { registerInitialBookingPriceRoutes } from "../multiparkDb/initialBookingPriceRoutes";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -53,6 +54,7 @@ async function startServer() {
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+  registerInitialBookingPriceRoutes(app);
   // Registo das corridas de /api/cron/* (Definições → Estado do sistema).
   app.use("/api/cron", cronRunRecorder());
   // Serve local uploads when S3 is not configured
