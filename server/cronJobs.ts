@@ -195,6 +195,18 @@ export async function cashSweepCron(o: { deadlineAt: number }): Promise<CronJobR
   }
 }
 
+/** Operacional: quem trabalha sem PDA ou Zello ligado (alertas + sino + WhatsApp). */
+export async function opsPresenceCron(): Promise<CronJobRun> {
+  try {
+    const { runOpsPresence } = await import("./opsPresence");
+    const r = await runOpsPresence();
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: true };
+  } catch (err) {
+    console.error("[cron ops-presence] falhou:", msg(err, 200));
+    return fail(err);
+  }
+}
+
 /** Caixa: fecho do dia — todas as saídas de ontem e anteontem, com as mesmas regras. */
 export async function cashCloseCron(o: { deadlineAt: number }): Promise<CronJobRun> {
   try {

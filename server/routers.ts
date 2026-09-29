@@ -4359,6 +4359,28 @@ export const appRouter = router({
       }),
     }),
 
+    // ─── A trabalhar sem PDA ou Zello ligado (passo 4, server/opsPresence.ts) ──
+    opsPresence: router({
+      list: protectedProcedure.input(z.object({ hours: z.number().int().min(1).max(168).optional() }).optional()).query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "pdas", "view");
+        const { listPresenceAlerts } = await import("./opsPresence");
+        return listPresenceAlerts(input?.hours ?? 24);
+      }),
+      acknowledge: protectedProcedure.input(z.object({ id: z.number().int().positive(), note: z.string().trim().max(255).optional() })).mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "pdas", "edit");
+        const { acknowledgePresenceAlert, receivedPresenceAlert } = await import("./opsPresence");
+        // Team leader para cima, ou quem recebeu o aviso (o TL escalado pode ter papel de extra).
+        const received = await receivedPresenceAlert(input.id, ctx.user.id);
+        if ((ACCESS_ROLE_RANK[ctx.user.role as keyof typeof ACCESS_ROLE_RANK] ?? 0) < ACCESS_ROLE_RANK.team_leader && !received) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Só o team leader, o supervisor ou a administração dão \"Visto\"." });
+        }
+        const ok = await acknowledgePresenceAlert(input.id, ctx.user.id, input.note || null, received);
+        if (!ok) throw new TRPCError({ code: "NOT_FOUND", message: "Alerta já fechado, já visto ou fora da tua cidade." });
+        await logActivity({ userId: ctx.user.id, action: "update", entity: "ops_presence_alert", entityId: input.id, details: `Visto${input.note ? `: ${input.note}` : ""}` });
+        return { success: true };
+      }),
+    }),
+
     // ─── PDAs (DISPOSITIVOS) ──────────────────────────────────────────
     pdas: router({
       list: protectedProcedure.query(async ({ ctx }) => {

@@ -47,6 +47,7 @@ O Super Admin entra sempre; o Admin entra sozinho quando a matriz lhe dá o mód
 | Passagem de turno em falta | `handover_missing` | Passagem de Turno (view) | por cidade | Supervisor, Admin, Super Admin | — | não | Lembrete de passagem de turno em falta (supervisores da cidade). |
 | Excesso de velocidade | `speed_alert` | Histórico diário (GPS) (view) | por cidade | Team Leader, Supervisor, Admin, Super Admin | — | não | Alerta de velocidade (API GPS, registo manual, verificação Zello). |
 | GPS desligado | `gps_alert` | Histórico diário (GPS) (view) | por cidade | Team Leader, Supervisor, Admin, Super Admin | — | não | Condutor com GPS desligado no Zello. |
+| A trabalhar sem PDA ou Zello | `ops_presence` | PDAs (view) | a pessoa | Pessoal | — | não |  |
 | Relatório diário dos motoristas | `driver_daily_report` | Histórico diário (GPS) (view) | nacional | Admin, Super Admin | sim (desligado) | não | Fim da recolha diária do histórico GPS. |
 | Anomalias nas reservas | `anomaly_bookings` | Reservas & Operações (view) | por cidade | Supervisor, Admin, Super Admin | — | não | Deteção diária de anomalias nas reservas (só críticas). |
 | As tuas tarefas | `task` | Tarefas (view) | a pessoa | Pessoal | — | não | Tarefas: atraso, conclusão, comentários (criador, responsáveis, gestores da hierarquia). |
