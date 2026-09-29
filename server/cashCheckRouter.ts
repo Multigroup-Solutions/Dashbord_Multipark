@@ -343,6 +343,48 @@ export const cashCheckRouter = router({
     if (!r.ok) throw new TRPCError({ code: r.code, message: r.message });
     return r;
   }),
+
+  // ─── Fase 4: cruzar com o exterior ───────────────────────────────────────
+
+  /** Chaves da InvoiceExpress e da Stripe (só se configuradas, nunca os valores) e a última corrida diária. */
+  externalStatus: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx }) => {
+    await requireCashCheck(ctx.user);
+    const { externalStatus } = await import("./cashExternal");
+    return externalStatus();
+  }),
+
+  /** Importar um extrato em CSV: terminal multibanco (um parque), banco ou parceiro. */
+  importStatement: protectedProcedure.input(z.object({
+    kind: z.enum(["tpa", "banco", "parceiro"]),
+    csv: z.string().min(10).max(2_000_000),
+    fileName: z.string().trim().max(255).optional(),
+    parkId: z.string().trim().min(1).max(128).optional(),
+    partnerName: z.string().trim().max(128).optional(),
+    projectId: z.number().optional(),
+  })).mutation(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    // O terminal é de um parque (quem conta a caixa); banco e parceiros pedem quem confere a caixa.
+    if (input.kind === "tpa") requireAccess(ctx.user, "faturacao", "edit");
+    else if (!(await canManageCases(ctx.user))) throw new TRPCError({ code: "FORBIDDEN", message: "Extratos do banco e dos parceiros: só quem confere a caixa (Faturação → gerir)." });
+    const { importStatement } = await import("./cashExternal");
+    const r = await importStatement({ kind: input.kind, csv: input.csv, fileName: input.fileName ?? null, parkId: input.parkId ?? null, partnerName: input.partnerName ?? null, userId: ctx.user.id });
+    if (!r.ok) throw new TRPCError({ code: r.code, message: r.message });
+    return r;
+  }),
+
+  statements: protectedProcedure.input(z.object({ limit: z.number().int().min(1).max(100).optional(), projectId: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    const { listStatements } = await import("./cashExternal");
+    return listStatements(input?.limit ?? 30);
+  }),
+
+  statementLines: protectedProcedure.input(z.object({ id: z.number().int().positive(), projectId: z.number().optional() })).query(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    const { statementLines } = await import("./cashExternal");
+    const r = await statementLines(input.id);
+    if (!r) throw new TRPCError({ code: "NOT_FOUND", message: "Extrato não encontrado (ou fora das tuas cidades)." });
+    return r;
+  }),
 });
 
 /** Fechar/reabrir casos: Faturação → gerir (o papel de conferência de caixa). */

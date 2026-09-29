@@ -2,7 +2,7 @@
 modulo: faturacao
 titulo: Faturação
 rotas: /faturacao, /financeiro, /anual
-palavras: ao vivo, base da multipark, faturação, faturacao, receita, margem, fecho previsto, previsão, realizado, custos detalhados, caixa, comissões, iva, receita esperada, no-shows, financeiro, anual, totais, correção de caixa, conferência, era, é, webhook, preço mudou, preço zerado, método de pagamento, divergência, caixa fechada
+palavras: ao vivo, base da multipark, faturação, faturacao, receita, margem, fecho previsto, previsão, realizado, custos detalhados, caixa, comissões, iva, receita esperada, no-shows, financeiro, anual, totais, correção de caixa, conferência, era, é, webhook, preço mudou, preço zerado, método de pagamento, divergência, caixa fechada, invoicexpress, stripe, extrato, terminal multibanco, tpa, banco, transferência, parceiro, cruzamentos externos
 ---
 # Faturação
 
@@ -31,6 +31,15 @@ As reservas (receita, entregues, recolhidas, receita esperada e caixa) são lida
 1. Em **Contagem da caixa** escolhe o parque e o dia. Aparece o **recebido em dinheiro** nesse dia (pagamentos em dinheiro registados na Multipark).
 2. Acrescenta os **gastos pagos da caixa** (descrição, valor e n.º do recibo, se houver) e escreve o **valor contado**. O ecrã mostra o **esperado** (recebido − gastos) e a **diferença**.
 3. **Gravar contagem** (precisa de Faturação → editar). Se não bater (tolerância de 1 cêntimo), abre um caso **crítico** "Contagem ≠ esperado"; quando voltares a gravar e bater, resolve-se sozinho. Cada gravação fica registada (quem, quando, quanto).
+
+**Cruzamentos externos**
+1. Em **Cruzamentos externos** vês se a **InvoiceExpress** e a **Stripe** estão ligadas (chaves só de leitura, postas na Vercel pelo dono; a da Stripe tem de ser **restrita**, começada por `rk_`). Sem chave aparece "Por configurar" e nada falha.
+2. Todos os dias (a partir das 07:00) as saídas de ontem e anteontem são cruzadas: cada fatura emitida tem de existir na InvoiceExpress, não estar anulada e ter o valor da Multipark; cada pagamento online tem de estar cobrado na Stripe com o mesmo valor, e um reembolso na Stripe sem cancelamento na Multipark (ou uma disputa) abre caso.
+3. **Importar extrato** (CSV com uma coluna de data e uma de valor; os nomes das colunas podem variar e os números podem vir à portuguesa):
+   - **Terminal multibanco**: escolhe o parque. Por dia, o total do terminal tem de ser igual aos pagamentos por cartão/multibanco registados nesse parque. Precisa de Faturação → editar.
+   - **Banco**: cada transferência registada na Multipark tem de aparecer no extrato com o mesmo valor até 5 dias depois. As entradas do banco sem reserva ficam marcadas nas linhas. Precisa de Faturação → gerir.
+   - **Parceiro**: precisa de uma coluna de referência (a referência do parceiro ou o código da reserva). O valor de cada reserva tem de ser igual ao devido na Multipark. Precisa de Faturação → gerir.
+4. As diferenças abrem casos na fila de cima. Carrega em **Linhas** para ver o que bateu e o que não bateu. Os extratos nunca se apagam: um novo do mesmo período fica ao lado.
 
 **Correção de caixa — comparar um dia**
 1. Separador **Correção de caixa**. Escolhe um ou mais parques (por defeito, os nossos; **Só os nossos** e **Limpar** ajudam) e o **dia** (hora de Lisboa).

@@ -201,6 +201,18 @@ export async function cashCloseCron(o: { deadlineAt: number }): Promise<CronJobR
   }
 }
 
+/** Caixa, fase 4: saídas de ontem e anteontem contra a InvoiceExpress e a Stripe. */
+export async function cashExternalCron(o: { deadlineAt: number }): Promise<CronJobRun> {
+  try {
+    const { runCashExternal } = await import("./cashExternal");
+    const r = await runCashExternal({ deadlineAt: o.deadlineAt - 2_000 });
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: !r.partial };
+  } catch (err) {
+    console.error("[cron cash-external] falhou:", msg(err, 200));
+    return fail(err);
+  }
+}
+
 // ─── Manutenção diária + recolha GPS (daily-ops) ─────────────────────────────
 
 /** Folga mínima para arrancar um passo novo do daily-ops. */

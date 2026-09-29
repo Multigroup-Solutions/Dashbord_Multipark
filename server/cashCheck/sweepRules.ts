@@ -28,7 +28,8 @@ export type SweepCode =
   | "method_changed" | "paid_mismatch" | "cancelled_after_checkin" | "cashier_closed_with_divergence"
   | "discount_late" | "refund_issue" | "moved_after_close" | "missing" | "pro_late" | "partner_changed"
   | "extra_uncharged" | "invoice_missing" | "invoice_mismatch" | "online_payment" | "credit_used"
-  | "cash_reopened" | "driver_cash_pending" | "split_methods" | "agent_perms_changed" | "park_webhook_silent" | "count_mismatch";
+  | "cash_reopened" | "driver_cash_pending" | "split_methods" | "agent_perms_changed" | "park_webhook_silent" | "count_mismatch"
+  | "invoice_external" | "stripe_external" | "tpa_mismatch" | "transfer_missing" | "partner_statement";
 
 export interface Finding { code: SweepCode; severity: SweepSeverity; label: string; detail: string; rule: string }
 
@@ -60,7 +61,16 @@ export const SWEEP_LABELS: Record<SweepCode, { label: string; rule: string; seve
   agent_perms_changed: { label: "Permissões de dinheiro de um agente mudaram", rule: "R26", severity: "medium" },
   park_webhook_silent: { label: "Parque sem webhooks com movimento na Multipark", rule: "R27", severity: "medium" },
   count_mismatch: { label: "Contagem da caixa ≠ esperado", rule: "R24", severity: "critical" },
+  // Fase 4 — cruzar com o exterior (server/cashCheck/externalRules.ts).
+  invoice_external: { label: "Fatura na InvoiceExpress não bate", rule: "R19", severity: "high" },
+  stripe_external: { label: "Pagamento na Stripe não bate", rule: "R20", severity: "high" },
+  tpa_mismatch: { label: "Terminal multibanco ≠ Multipark", rule: "R30", severity: "high" },
+  transfer_missing: { label: "Transferência que não aparece no banco", rule: "R31", severity: "high" },
+  partner_statement: { label: "Extrato do parceiro ≠ devido", rule: "R17", severity: "high" },
 };
+
+/** Códigos que só o cruzamento externo avalia (a varredura nunca os resolve). */
+export const EXTERNAL_CODES: ReadonlySet<SweepCode> = new Set<SweepCode>(["invoice_external", "stripe_external", "tpa_mismatch", "transfer_missing", "partner_statement"]);
 
 /** Casos que avisam logo (notificação "Caixa: casos graves"). */
 export const ALERT_CODES: ReadonlySet<SweepCode> = new Set<SweepCode>([
@@ -73,7 +83,7 @@ export const SEVERITY_ORDER: Record<SweepSeverity, number> = { critical: 4, high
 export interface SweepParams { driverCashHours: number; invoiceHours: number }
 export const DEFAULT_SWEEP_PARAMS: SweepParams = { driverCashHours: 12, invoiceHours: 48 };
 
-function finding(code: SweepCode, detail: string): Finding {
+export function finding(code: SweepCode, detail: string): Finding {
   const l = SWEEP_LABELS[code];
   return { code, severity: l.severity, label: l.label, rule: l.rule, detail };
 }
