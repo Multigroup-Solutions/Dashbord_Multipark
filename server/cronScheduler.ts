@@ -56,6 +56,7 @@ export const JOB_RUNNERS: Record<string, JobRunner> = {
   "services-tasks": async (o) => (await import("./cronJobs")).serviceTasksCron(o),
   "cash-sweep": async (o) => (await import("./cronJobs")).cashSweepCron(o),
   "cash-close": async (o) => (await import("./cronJobs")).cashCloseCron(o),
+  "cash-external": async (o) => (await import("./cronJobs")).cashExternalCron(o),
   "zello-sameday": async (o) => (await import("./cronJobs")).zelloSameDayCron(o),
   "extras-pressure": async (o) => (await import("./cronJobs")).extrasPressureCron(o),
   "rh-docs-weekly": async () => (await import("./cronJobs")).rhDocsWeeklyCron(),

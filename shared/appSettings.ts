@@ -549,6 +549,10 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "WEEKLY_REPORTS", label: "Relatórios semanais", description: "À segunda de manhã: direção, marketing, operações e RH por email a quem tem acesso nacional ao módulo; resumo semanal da passagem de turno." },
   { name: "WHATSAPP_CALLS", label: "Chamadas de voz do WhatsApp", description: "Toque no dashboard, atender no browser e \"Ligar\" nas conversas. Desligado por omissão: liga só depois de ativar as chamadas no número na Meta (e subscrever o campo `calls` do webhook).", defaultEnabled: false },
   { name: "MAIL_PUSH", label: "Gmail: notificações push (Pub/Sub)", description: "O Gmail avisa a app logo que chega um email (precisa do tópico Pub/Sub configurado: GMAIL_PUSH_TOPIC). Com o push a chegar (últimas 6 h), a sincronização agendada passa de 5 em 5 min a de hora a hora (rede de segurança); sem push volta sozinha aos 5 min. Desligado por omissão.", defaultEnabled: false },
+  // ── Caixa, fase 4: cruzar com o exterior (desligados até haver chaves e decisão do dono; até lá confirma-se à mão) ──
+  { name: "CASH_STRIPE_CHECK", label: "Caixa: cruzar os pagamentos online com a Stripe", description: "Todos os dias (07:00), as saídas de ontem e anteontem pagas online são confirmadas na Stripe (cobrado, valor, reembolsos, disputas). Precisa da chave restrita STRIPE_READ_KEY na Vercel. Desligado: só se confirma na Multipark que o pagamento online existe.", defaultEnabled: false, superAdminOnly: true },
+  { name: "CASH_VIVA_CHECK", label: "Caixa: cruzar o multibanco com a Viva Wallet", description: "Todos os dias (07:00), os pagamentos por multibanco de ontem e anteontem são procurados nas transações da Viva Wallet (mesmo dia ou seguinte, mesmo valor). Precisa de VIVA_MERCHANT_ID e VIVA_API_KEY na Vercel. Desligado: confirma-se à mão com a foto do talão.", defaultEnabled: false, superAdminOnly: true },
+  { name: "CASH_INVOICEXPRESS_CHECK", label: "Caixa: confirmar as faturas na InvoiceExpress", description: "Todos os dias (07:00), cada fatura emitida das saídas de ontem e anteontem é lida na InvoiceExpress (existe, não anulada, mesmo valor). Precisa de INVOICEXPRESS_ACCOUNT e INVOICEXPRESS_API_KEY na Vercel.", defaultEnabled: false, superAdminOnly: true },
   { name: "OPS_ANOMALIES", label: "Deteção de anomalias", description: "Todos os dias: reservas por parque/canal, despesas (valores fora do normal e duplicados) e gasto/ROAS do marketing." },
   // ── IA (server/_core/ai) — AI_ENABLED desliga tudo de uma vez ──
   { name: "AI_ENABLED", label: "IA (interruptor geral)", description: "Desligado = nenhuma funcionalidade de IA faz pedidos ao fornecedor.", group: "ia" },
@@ -650,6 +654,7 @@ export const CRON_JOBS: readonly CronJob[] = [
   // Caixa, fase 2 (29 set 2026): varredura do dinheiro e fecho do dia → "Correção de caixa".
   { name: "cash-sweep", label: "Caixa: varredura do dinheiro (Correção de caixa)", intervalMinutes: 10, workflow: "tick" },
   { name: "cash-close", label: "Caixa: fecho do dia (saídas de ontem e anteontem)", intervalMinutes: 1440, workflow: "tick" },
+  { name: "cash-external", label: "Caixa: confirmar pagamentos (online, Viva, faturas)", intervalMinutes: 1440, workflow: "tick" },
   { name: "daily-ops", label: "Manutenção diária + recolha GPS final (D-2)", intervalMinutes: 1440, workflow: "tick" },
   { name: "zello-sameday", label: "GPS do Zello — recolha provisória do dia (23:15–23:55)", intervalMinutes: 1440, workflow: "tick" },
   { name: "extras-pressure", label: "Extras-Dia: pressão (60 dias da BD Multipark)", intervalMinutes: 1440, workflow: "tick" },

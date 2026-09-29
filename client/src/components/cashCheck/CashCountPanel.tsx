@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Calculator, Loader2, Plus, Trash2 } from "lucide-react";
+import CashMbDay from "./CashMbDay";
 
 /**
  * Faturação → Correção de caixa → "Contagem" (R24): por parque e dia,
@@ -104,6 +105,7 @@ export default function CashCountPanel({ projectId }: { projectId?: number }) {
             )}
           </>
         )}
+        {parkId && <CashMbDay parkId={parkId} day={day} projectId={projectId} />}
       </CardContent>
     </Card>
   );

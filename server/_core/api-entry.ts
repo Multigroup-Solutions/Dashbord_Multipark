@@ -306,6 +306,11 @@ app.get("/api/cron/cash-close", async (req, res) => {
   const { cashCloseCron, sendCronRun } = await import("../cronJobs");
   sendCronRun(res, await cashCloseCron({ deadlineAt: manualDeadline() }));
 });
+app.get("/api/cron/cash-external", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { cashExternalCron, sendCronRun } = await import("../cronJobs");
+  sendCronRun(res, await cashExternalCron({ deadlineAt: manualDeadline() }));
+});
 
 // "Pressão" do Extras-Dia (60 dias da BD Multipark → ops_pressure_stats).
 // ?cursor=… retoma no grupo seguinte (vem na resposta quando done:false).

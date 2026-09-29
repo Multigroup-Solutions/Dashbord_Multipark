@@ -200,7 +200,7 @@ export async function applyCaseAction(o: { id: number; action: CaseActionKind; r
 
 // ─── Contagem da caixa (R24) ────────────────────────────────────────────────
 
-async function parkInScope(parkId: string): Promise<{ ok: true; projectId: number | null; parkName: string | null } | { ok: false; message: string }> {
+export async function parkInScope(parkId: string): Promise<{ ok: true; projectId: number | null; parkName: string | null } | { ok: false; message: string }> {
   const [{ loadLiveContext }, { scopedProjectIds }] = await Promise.all([import("../finance/liveBookings"), import("../cityScope")]);
   const ctx = await loadLiveContext();
   if (!ctx.ourParks.has(parkId)) return { ok: false, message: "Esse parque não é nosso." };

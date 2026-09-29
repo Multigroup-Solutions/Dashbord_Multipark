@@ -16,7 +16,7 @@ import { sql } from "drizzle-orm";
 import type { LiveFinance } from "./cashCheck/rules";
 import type { SweepExtras } from "./multiparkDb/cashSweep";
 import {
-  agentPermsFinding, ALERT_CODES, evaluateSweep, missingFinding, parkSilentFinding, snapFromLive, stateHash, SWEEP_LABELS,
+  agentPermsFinding, ALERT_CODES, evaluateSweep, EXTERNAL_CODES, missingFinding, parkSilentFinding, snapFromLive, stateHash, SWEEP_LABELS,
   type Finding, type SweepCode, type SweepSnap,
 } from "./cashCheck/sweepRules";
 import { actionNote, planCaseActions, type CaseAction, type ExistingCase } from "./cashCheck/cases";
@@ -40,7 +40,7 @@ export const SWEEP_FIRST_WINDOW_MS = 30 * 60_000;
 export const PARK_SILENT_HOURS = 3;
 export const PARK_SILENT_MIN_MOVES = 3;
 /** Códigos avaliados para uma reserva encontrada (todos menos os de agente/parque). */
-const BOOKING_CODES = new Set(Object.keys(SWEEP_LABELS).filter((c) => c !== "agent_perms_changed" && c !== "park_webhook_silent" && c !== "count_mismatch"));
+const BOOKING_CODES = new Set(Object.keys(SWEEP_LABELS).filter((c) => c !== "agent_perms_changed" && c !== "park_webhook_silent" && c !== "count_mismatch" && !EXTERNAL_CODES.has(c as SweepCode)));
 
 export async function database(): Promise<Db> {
   const { getDb } = await import("./db");
@@ -85,7 +85,7 @@ export async function loadCases(d: Db, subjectType: string, ids: readonly string
   return out;
 }
 
-export interface SubjectMeta { subjectType: "booking" | "agent" | "park" | "count"; subjectId: string; parkId: string | null; projectId: number | null; bookingCode: string | null; day: string | null }
+export interface SubjectMeta { subjectType: "booking" | "agent" | "park" | "count" | "mb_dia" | "mensal"; subjectId: string; parkId: string | null; projectId: number | null; bookingCode: string | null; day: string | null }
 
 export interface CaseAlert { caseId: number; meta: SubjectMeta; finding: Finding }
 /** Alertas por enviar desta corrida (casos graves abertos ou reabertos). */
@@ -194,7 +194,7 @@ export async function flushCaseAlerts(d: Db, nowDb: string): Promise<number> {
   let sent = 0;
   for (const a of list.slice(0, ALERTS_PER_RUN)) {
     try {
-      const subject = a.meta.subjectType === "booking" ? `reserva ${a.meta.bookingCode ?? a.meta.subjectId}` : a.meta.subjectType === "count" ? "contagem da caixa" : a.meta.subjectType;
+      const subject = a.meta.subjectType === "booking" ? `reserva ${a.meta.bookingCode ?? a.meta.subjectId}` : a.meta.subjectType === "count" ? "contagem da caixa" : a.meta.subjectType === "mb_dia" ? `multibanco de ${a.meta.day}` : a.meta.subjectType === "mensal" ? "recebimento mensal" : a.meta.subjectType;
       await notify({
         kind: "cash_case_alert", projectId: a.meta.projectId,
         title: `Caixa: ${a.finding.label} (${subject})`, body: a.finding.detail.slice(0, 500),

@@ -376,6 +376,110 @@ export const cashCheckRouter = router({
     if (!r.ok) throw new TRPCError({ code: r.code, message: r.message });
     return r;
   }),
+
+  // ─── Fase 4: cruzar com o exterior ───────────────────────────────────────
+
+  /** Chaves da InvoiceExpress e da Stripe (só se configuradas, nunca os valores) e a última corrida diária. */
+  externalStatus: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx }) => {
+    await requireCashCheck(ctx.user);
+    const { externalStatus } = await import("./cashExternal");
+    return externalStatus();
+  }),
+
+  // Multibanco do dia (R30): talões fotografados na contagem da caixa.
+  mbDay: protectedProcedure.input(z.object({ parkId: z.string().trim().min(1).max(128), day: DAY, projectId: z.number().optional() })).query(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    const { getMbDay } = await import("./cashExternal");
+    return getMbDay(input.parkId, input.day);
+  }),
+
+  addMbReceipt: protectedProcedure.input(z.object({
+    parkId: z.string().trim().min(1).max(128),
+    day: DAY,
+    amount: z.number().positive().max(100_000),
+    bookingId: z.string().trim().max(128).optional(),
+    note: z.string().trim().max(500).optional(),
+    photoBase64: z.string().max(12_000_000).optional(),
+    mimeType: z.string().max(64).optional(),
+    projectId: z.number().optional(),
+  })).mutation(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    requireAccess(ctx.user, "faturacao", "edit");
+    const { addMbReceipt } = await import("./cashExternal");
+    const r = await addMbReceipt({ ...input, userId: ctx.user.id });
+    if (!r.ok) throw new TRPCError({ code: r.code, message: r.message });
+    return r;
+  }),
+
+  removeMbReceipt: protectedProcedure.input(z.object({ id: z.number().int().positive(), projectId: z.number().optional() })).mutation(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    requireAccess(ctx.user, "faturacao", "edit");
+    const { removeMbReceipt } = await import("./cashExternal");
+    const r = await removeMbReceipt({ id: input.id, userId: ctx.user.id });
+    if (!r.ok) throw new TRPCError({ code: r.code, message: r.message });
+    return r;
+  }),
+
+  confirmMbDay: protectedProcedure.input(z.object({ parkId: z.string().trim().min(1).max(128), day: DAY, projectId: z.number().optional() })).mutation(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    requireAccess(ctx.user, "faturacao", "edit");
+    const { confirmMbDay } = await import("./cashExternal");
+    const r = await confirmMbDay({ parkId: input.parkId, day: input.day, userId: ctx.user.id });
+    if (!r.ok) throw new TRPCError({ code: r.code, message: r.message });
+    return r;
+  }),
+
+  // Viva Wallet: CSV exportado (enquanto o cruzamento automático está desligado).
+  importVivaCsv: protectedProcedure.input(z.object({ csv: z.string().min(10).max(4_000_000), fileName: z.string().trim().max(255).optional(), projectId: z.number().optional() })).mutation(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    if (!(await canManageCases(ctx.user))) throw new TRPCError({ code: "FORBIDDEN", message: "Só quem confere a caixa (Faturação → gerir)." });
+    const { importVivaCsv } = await import("./cashExternal");
+    const r = await importVivaCsv({ csv: input.csv, fileName: input.fileName ?? null, userId: ctx.user.id });
+    if (!r.ok) throw new TRPCError({ code: r.code, message: r.message });
+    return r;
+  }),
+
+  vivaImports: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx }) => {
+    await requireCashCheck(ctx.user);
+    const { listVivaImports } = await import("./cashExternal");
+    return listVivaImports();
+  }),
+
+  // Recebimentos do fim do mês (Pro, agentes, agregadores), conferidos à mão.
+  monthly: protectedProcedure.input(z.object({ month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/), projectId: z.number().optional() })).query(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    const { monthlyOverview } = await import("./cashExternal");
+    return monthlyOverview(input.month);
+  }),
+
+  addMonthlyReceipt: protectedProcedure.input(z.object({
+    kind: z.enum(["pro", "agente", "agregador"]),
+    entityId: z.string().trim().min(1).max(191),
+    entityName: z.string().trim().min(1).max(255),
+    month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+    amount: z.number().positive().max(10_000_000),
+    receivedOn: DAY.optional(),
+    note: z.string().trim().max(500).optional(),
+    proofBase64: z.string().max(12_000_000).optional(),
+    mimeType: z.string().max(64).optional(),
+    projectId: z.number().optional(),
+  })).mutation(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    if (!(await canManageCases(ctx.user))) throw new TRPCError({ code: "FORBIDDEN", message: "Só quem confere a caixa (Faturação → gerir)." });
+    const { addMonthlyReceipt } = await import("./cashExternal");
+    const r = await addMonthlyReceipt({ ...input, userId: ctx.user.id });
+    if (!r.ok) throw new TRPCError({ code: r.code, message: r.message });
+    return r;
+  }),
+
+  removeMonthlyReceipt: protectedProcedure.input(z.object({ id: z.number().int().positive(), projectId: z.number().optional() })).mutation(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    if (!(await canManageCases(ctx.user))) throw new TRPCError({ code: "FORBIDDEN", message: "Só quem confere a caixa (Faturação → gerir)." });
+    const { removeMonthlyReceipt } = await import("./cashExternal");
+    const r = await removeMonthlyReceipt({ id: input.id, userId: ctx.user.id });
+    if (!r.ok) throw new TRPCError({ code: r.code, message: r.message });
+    return r;
+  }),
 });
 
 /** Fechar/reabrir casos: Faturação → gerir (o papel de conferência de caixa). */
