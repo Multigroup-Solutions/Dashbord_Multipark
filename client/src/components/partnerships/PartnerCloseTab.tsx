@@ -71,7 +71,7 @@ export function PartnerCloseTab() {
       <p className="text-xs text-muted-foreground">
         Reservas de parceiros <strong>concluídas com saída no mês</strong>: a <strong>Multipark</strong> (agora) contra a <strong>nossa memória do webhook</strong> (o último retrato de cada reserva que nos chegou).
         Compara-se o número de reservas, o valor, o <strong>nosso</strong> (devido) e as faturas emitidas; o que não bate aparece reserva a reserva. A comparação corre sozinha todas as manhãs;
-        <strong> Fechar</strong> congela o parceiro nesse mês (com diferenças, escreve porquê). A memória do webhook começa a 28/09/2026 19:23: as saídas antes disso não têm nada nosso para comparar.
+        <strong> Fechar</strong> congela o parceiro nesse mês (com diferenças, escreve porquê). O nosso lado é a memória do webhook (desde 28/09/2026 19:23) e, para as reservas de antes, o <strong>histórico carregado</strong> (o preço com que cada reserva nasceu) — aí compara-se o preço (o devido nosso só existe na memória). As <strong>faturas</strong> contam as das reservas e as mensais do parceiro (os agregadores faturam-se uma vez por mês).
       </p>
       {list.isLoading ? <p className="text-sm text-muted-foreground text-center py-8">A carregar...</p>
         : rows.length === 0 ? <Card className="p-6 text-center text-sm text-muted-foreground">Sem comparação para {month}. Carrega em <strong>Comparar agora</strong>.</Card>
@@ -94,7 +94,8 @@ export function PartnerCloseTab() {
                     const k = r.partnerKey;
                     const isOpen = open === k;
                     const mismatchN = r.mp.bookings - r.beforeMemory !== r.copy.bookings;
-                    const mismatchV = Math.abs(r.mp.ours - r.copy.ours) > 0.01 && r.beforeMemory === 0;
+                    const oursNote = r.copy.fromHistory > 0 ? " (o devido nosso só existe desde 28/09)" : "";
+                    const mismatchV = Math.abs(r.mp.ours - r.copy.ours) > 0.01 && r.beforeMemory === 0 && r.copy.fromHistory === 0;
                     return (
                       <Fragment key={k}>
                         <tr className="border-b hover:bg-muted/40 cursor-pointer" onClick={() => setOpen(isOpen ? null : k)}>
@@ -102,13 +103,14 @@ export function PartnerCloseTab() {
                             {isOpen ? <ChevronDown className="inline w-3 h-3 mr-1" /> : <ChevronRight className="inline w-3 h-3 mr-1" />}
                             {r.partnershipName ?? r.partnerName ?? r.partnerKey}
                             {r.partnershipName && r.partnerName && r.partnershipName !== r.partnerName && <span className="block text-[11px] font-normal text-muted-foreground">Multipark: {r.partnerName}</span>}
-                            {r.beforeMemory > 0 && <span className="block text-[11px] font-normal text-muted-foreground">{r.beforeMemory} antes da memória do webhook</span>}
+                            {r.copy.fromHistory > 0 && <span className="block text-[11px] font-normal text-muted-foreground">{r.copy.fromHistory} comparadas com o histórico (preço inicial)</span>}
+                            {r.beforeMemory > 0 && <span className="block text-[11px] font-normal text-amber-700">{r.beforeMemory} sem nada nosso (nem memória nem histórico)</span>}
                           </td>
                           <td className={`p-2 text-right tabular-nums ${mismatchN ? "text-amber-700 font-medium" : ""}`}>{r.mp.bookings} / {r.copy.bookings}</td>
-                          <td className={`p-2 text-right tabular-nums ${mismatchV ? "text-amber-700 font-medium" : ""}`}>{eur(r.mp.ours)} / {eur(r.copy.ours)}
+                          <td className={`p-2 text-right tabular-nums ${mismatchV ? "text-amber-700 font-medium" : ""}`} title={oursNote || undefined}>{eur(r.mp.ours)} / {r.copy.fromHistory > 0 && r.copy.ours === 0 ? "—" : eur(r.copy.ours)}
                             {r.mp.noDue > 0 && <span className="block text-[11px] text-amber-700">{r.mp.noDue} sem devido</span>}
                           </td>
-                          <td className="p-2 text-right tabular-nums">{r.mp.invoices}{r.mp.noInvoice > 0 && <span className="block text-[11px] text-amber-700">{r.mp.noInvoice} sem fatura</span>}</td>
+                          <td className="p-2 text-right tabular-nums">{r.mp.invoices}</td>
                           <td className="p-2 text-right tabular-nums">{r.diffs > 0 ? <Badge className="bg-amber-600">{r.diffs}</Badge> : <span className="text-emerald-700">0</span>}</td>
                           <td className="p-2 text-xs">
                             {r.state === "fechado"

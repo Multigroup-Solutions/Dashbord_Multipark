@@ -73,9 +73,19 @@ export async function computePartnerClose(month: string): Promise<PartnerCloseCo
   const stateRead = onlyOurs.length ? await readBookingsState(onlyOurs) : null;
   const mpState = stateRead?.available ? stateRead.data : new Map();
 
+  // antes da memória do webhook: o histórico carregado (preço com que cada reserva nasceu)
+  const history = new Map<string, { initialPrice: number | null }>();
+  const noSnap = bookings.filter((b) => !ours.has(b.id)).map((b) => b.id);
+  for (let i = 0; i < noSnap.length; i += 1000) {
+    const chunk = noSnap.slice(i, i + 1000);
+    const res = await d.execute(sql`SELECT bookingExternalId, initialPrice FROM booking_initial_prices
+      WHERE bookingExternalId IN (${sql.join(chunk.map((x) => sql`${x}`), sql`, `)})`).catch(() => [[]]);
+    for (const r of rowsOf(res)) history.set(String(r.bookingExternalId), { initialPrice: numOrNull(r.initialPrice) });
+  }
+
   const rows = comparePartnerMonth({
-    mp: bookings.map((b) => ({ id: b.id, code: b.code, partnerKey: b.partnerKey, partnerName: b.partnerName, value: b.value, ours: b.ours, dueMissing: b.dueMissing, checkOut: b.checkOut, invoices: b.invoices })),
-    ours, partnerOf, mpState, start, end,
+    mp: bookings.map((b) => ({ id: b.id, code: b.code, partnerKey: b.partnerKey, partnerName: b.partnerName, value: b.value, ours: b.ours, dueMissing: b.dueMissing, checkOut: b.checkOut, invoices: b.invoices, price: b.price })),
+    ours, partnerOf, mpState, history, monthlyInvoices: live.data.monthlyInvoices, start, end,
   });
   return { available: true, month, rows, truncated };
 }
@@ -94,12 +104,12 @@ export async function refreshPartnerClose(month: string): Promise<{ available: b
     if (ex && ex.state === "fechado") continue;
     const diffs = row.diffs.length;
     await d.execute(sql`INSERT INTO partner_month_closes
-        (month, partnerKey, partnerName, mpBookings, mpValue, mpOurs, mpInvoices, mpNoInvoice, mpNoDue, copyBookings, copyValue, copyOurs, beforeMemory, diffs, diffsJson, computedAt)
+        (month, partnerKey, partnerName, mpBookings, mpValue, mpOurs, mpInvoices, mpNoInvoice, mpNoDue, copyBookings, copyValue, copyOurs, copyFromHistory, beforeMemory, diffs, diffsJson, computedAt)
       VALUES (${month}, ${row.partnerKey}, ${row.partnerName}, ${row.mp.bookings}, ${row.mp.value}, ${row.mp.ours}, ${row.mp.invoices}, ${row.mp.noInvoice}, ${row.mp.noDue},
-        ${row.copy.bookings}, ${row.copy.value}, ${row.copy.ours}, ${row.beforeMemory}, ${diffs}, ${JSON.stringify(row.diffs.slice(0, 2000))}, ${now})
+        ${row.copy.bookings}, ${row.copy.value}, ${row.copy.ours}, ${row.copy.fromHistory}, ${row.beforeMemory}, ${diffs}, ${JSON.stringify(row.diffs.slice(0, 2000))}, ${now})
       ON DUPLICATE KEY UPDATE partnerName = VALUES(partnerName), mpBookings = VALUES(mpBookings), mpValue = VALUES(mpValue), mpOurs = VALUES(mpOurs),
         mpInvoices = VALUES(mpInvoices), mpNoInvoice = VALUES(mpNoInvoice), mpNoDue = VALUES(mpNoDue), copyBookings = VALUES(copyBookings),
-        copyValue = VALUES(copyValue), copyOurs = VALUES(copyOurs), beforeMemory = VALUES(beforeMemory), diffs = VALUES(diffs),
+        copyValue = VALUES(copyValue), copyOurs = VALUES(copyOurs), copyFromHistory = VALUES(copyFromHistory), beforeMemory = VALUES(beforeMemory), diffs = VALUES(diffs),
         diffsJson = VALUES(diffsJson), computedAt = VALUES(computedAt)`);
     if (diffs > Number(ex?.alertedDiffs ?? 0)) newDiffs.push({ partnerName: row.partnerName, diffs });
   }
@@ -127,7 +137,7 @@ export async function listPartnerClose(month: string) {
     return {
       partnerKey: String(r.partnerKey), partnerName: r.partnerName ?? null, partnershipId: r.partnershipId == null ? null : Number(r.partnershipId), partnershipName: r.partnershipName ?? null,
       mp: { bookings: Number(r.mpBookings), value: Number(r.mpValue), ours: Number(r.mpOurs), invoices: Number(r.mpInvoices), noInvoice: Number(r.mpNoInvoice), noDue: Number(r.mpNoDue) },
-      copy: { bookings: Number(r.copyBookings), value: Number(r.copyValue), ours: Number(r.copyOurs) },
+      copy: { bookings: Number(r.copyBookings), value: Number(r.copyValue), ours: Number(r.copyOurs), fromHistory: Number(r.copyFromHistory ?? 0) },
       beforeMemory: Number(r.beforeMemory), diffs: Number(r.diffs), diffList: diffs as Array<{ bookingId: string; code: string | null; codes: string[]; detail: string }>,
       computedAt: r.computedAtText ?? null, state: String(r.state), closedAt: r.closedAtText ?? null, closedByName: r.closedByName ?? null, closeNote: r.closeNote ?? null,
     };

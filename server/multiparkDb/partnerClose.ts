@@ -30,7 +30,7 @@ export function buildPartnerCloseSql(o: { parkIds: readonly string[]; start: str
   return {
     sql: [
       `SELECT b."id" AS id, b."allocation" AS code, b."parkId" AS park_id, b."partnerId" AS partner_id, pa."userId" AS partner_user_id,`,
-      `  NULLIF(pa."name", '') AS partner_name, ${VALUE} AS value, ${OURS} AS ours, (b."partnerAmountDue" IS NULL) AS due_missing,`,
+      `  NULLIF(pa."name", '') AS partner_name, ${VALUE} AS value, ${OURS} AS ours, (b."partnerAmountDue" IS NULL) AS due_missing, b."bookingPrice" AS price,`,
       `  to_char(b."checkOut", 'YYYY-MM-DD HH24:MI:SS') AS check_out,`,
       `  (SELECT count(*) FROM "Billing" y WHERE y."bookingId" = b."id" AND y."emited" = true`,
       `     AND upper(COALESCE(y."invoiceExpressType", '')) NOT LIKE '%CREDIT%') AS invoices`,
@@ -57,7 +57,7 @@ export function buildBookingsStateSql(ids: readonly string[]): { sql: string; pa
 export interface MpCloseBooking {
   id: string; code: string | null; parkId: string | null;
   partnerId: string; partnerKey: string; partnerName: string | null;
-  value: number; ours: number | null; dueMissing: boolean; checkOut: string | null; invoices: number;
+  value: number; ours: number | null; dueMissing: boolean; checkOut: string | null; invoices: number; price: number | null;
 }
 export interface MpPartnerRow { id: string; userId: string; name: string | null }
 export interface MpBookingState { id: string; status: string | null; checkOut: string | null; partnerId: string | null }
@@ -73,10 +73,29 @@ export function mapCloseBooking(r: Row): MpCloseBooking | null {
     id, code: str(r.code), parkId: str(r.park_id), partnerId, partnerKey: str(r.partner_user_id) ?? partnerId, partnerName: str(r.partner_name),
     value: Math.round(num(r.value) * 100) / 100, ours: r.ours == null ? null : Math.round(num(r.ours) * 100) / 100,
     dueMissing: bool(r.due_missing), checkOut: str(r.check_out), invoices: Math.round(num(r.invoices)),
+    price: r.price == null ? null : Math.round(num(r.price) * 100) / 100,
   };
 }
 
-export interface PartnerCloseLive { parkIds: string[]; bookings: MpCloseBooking[]; partners: MpPartnerRow[]; truncated: boolean }
+export interface PartnerCloseLive { parkIds: string[]; bookings: MpCloseBooking[]; partners: MpPartnerRow[]; truncated: boolean; monthlyInvoices: Map<string, number> }
+
+/**
+ * Faturas MENSAIS dos parceiros ("Billing" sem reserva, do utilizador da
+ * empresa): os agregadores/agências são faturados uma vez por mês, não reserva
+ * a reserva. Emitidas entre o início do mês e 25 dias depois do fim. PURA.
+ */
+export function buildMonthlyInvoicesSql(o: { start: string; end: string }): { sql: string; params: SqlParam[] } {
+  const p = new ParamList();
+  const start = p.add(o.start), end = p.add(o.end);
+  return {
+    sql: `SELECT y."userId" AS user_id, count(*) AS n FROM "Billing" y
+      WHERE y."bookingId" IS NULL AND y."emited" = true AND upper(COALESCE(y."invoiceExpressType", '')) NOT LIKE '%CREDIT%'
+        AND y."createdAt" >= ${start}::timestamp AND y."createdAt" < (${end}::timestamp + interval '25 days')
+        AND y."userId" IN (SELECT DISTINCT pa."userId" FROM "Partner" pa)
+      GROUP BY y."userId" LIMIT ${p.add(5000)}`,
+    params: p.values,
+  };
+}
 
 /** Lado da Multipark do mês (todas as cidades ou as do âmbito). Nunca lança. */
 export async function readPartnerCloseLive(o: { start: string; end: string; cities?: string[] }, query: Query = multiparkDbQuery): Promise<MultiparkRead<PartnerCloseLive>> {
@@ -86,10 +105,15 @@ export async function readPartnerCloseLive(o: { start: string; end: string; citi
     const partners = (await query(`SELECT pa."id" AS id, pa."userId" AS user_id, NULLIF(pa."name", '') AS name FROM "Partner" pa LIMIT 5000`))
       .map((r) => ({ id: String(r.id ?? ""), userId: String(r.user_id ?? r.id ?? ""), name: str(r.name) }))
       .filter((x) => x.id);
-    if (!parkIds.length) return { parkIds, bookings: [], partners, truncated: false };
+    const monthlyInvoices = new Map<string, number>();
+    try {
+      const mi = buildMonthlyInvoicesSql(o);
+      for (const r of await query(mi.sql, mi.params)) if (r.user_id) monthlyInvoices.set(String(r.user_id), Math.round(num(r.n)));
+    } catch { /* sem faturas mensais legíveis: ficam só as das reservas */ }
+    if (!parkIds.length) return { parkIds, bookings: [], partners, truncated: false, monthlyInvoices };
     const { sql, params } = buildPartnerCloseSql({ parkIds, start: o.start, end: o.end });
     const rows = await query(sql, params);
-    return { parkIds, bookings: rows.map(mapCloseBooking).filter((x): x is MpCloseBooking => !!x), partners, truncated: rows.length >= CLOSE_ROWS_LIMIT };
+    return { parkIds, bookings: rows.map(mapCloseBooking).filter((x): x is MpCloseBooking => !!x), partners, truncated: rows.length >= CLOSE_ROWS_LIMIT, monthlyInvoices };
   });
 }
 
