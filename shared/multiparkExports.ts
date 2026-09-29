@@ -139,7 +139,19 @@ export function copyVsInitial(initial: number | null, atExport: number | null, c
 
 // ─── Lista de agentes ───────────────────────────────────────────────────────
 
-export interface AgentListRow { name: string; email: string | null; cities: string[] }
+export interface AgentListRow {
+  name: string;
+  email: string | null;
+  cities: string[];
+  /** só na exportação xlsx ("Agentes"): */
+  phone?: string | null;
+  /** cargo principal na Multipark (Condutor, Supervisor, Parceiro…) */
+  role?: string | null;
+  /** Ativo / Inativo / Convite expirado… */
+  state?: string | null;
+  /** ID de utilizador da Multipark = id do agente */
+  agentUserId?: string | null;
+}
 
 /** `lista-agentes.csv` (nome_agente;email;cidade) → linhas. PURA. */
 export function parseAgentListCsv(text: string): { rows: AgentListRow[]; errors: string[] } {
@@ -160,6 +172,53 @@ export function parseAgentListCsv(text: string): { rows: AgentListRow[]; errors:
   return { rows: out, errors: [] };
 }
 
+const CITY_OF: Record<string, string> = { lisboa: "Lisboa", lisbon: "Lisboa", porto: "Porto", faro: "Faro", algarve: "Faro" };
+
+/**
+ * Folha "Agentes" da exportação xlsx da Multipark (Nome, Email, Telefone,
+ * Estado, Cargo principal, Parques ativos, ID utilizador…) → linhas. As
+ * cidades saem dos parques ("Airpark - Faro, Skypark - Lisboa"). PURA.
+ */
+export function parseAgentSheetRows(rows: readonly Record<string, unknown>[]): { rows: AgentListRow[]; errors: string[] } {
+  const first = rows[0] ?? {};
+  const pick = (r: Record<string, unknown>, ...keys: string[]) => {
+    for (const k of keys) { const v = r[k]; if (v != null && String(v).trim()) return String(v).replace(/\s+/g, " ").trim(); }
+    return "";
+  };
+  if (!("Nome" in first) && !("ID utilizador" in first)) return { rows: [], errors: ["Não encontrei a folha \"Agentes\" (colunas Nome, Email, ID utilizador). É a exportação de agentes?"] };
+  const out: AgentListRow[] = [];
+  for (const r of rows) {
+    const name = pick(r, "Nome");
+    const id = pick(r, "ID utilizador");
+    if (!name && !id) continue;
+    const email = pick(r, "Email").toLowerCase();
+    const parks = pick(r, "Parques ativos", "Parques inativos");
+    const cities = [...new Set(parks.split(",").map((p) => CITY_OF[(p.split(/[-–]/).pop() ?? "").trim().toLowerCase()]).filter((c): c is string => !!c))];
+    out.push({
+      name: (name || id).slice(0, 256),
+      email: /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) ? email.slice(0, 320) : null,
+      cities,
+      phone: pick(r, "Telefone").slice(0, 32) || null,
+      role: pick(r, "Cargo principal", "Cargo").slice(0, 64) || null,
+      state: pick(r, "Estado").slice(0, 32) || null,
+      agentUserId: id.slice(0, 64) || null,
+    });
+  }
+  return { rows: out, errors: [] };
+}
+
+/** Chave de telefone: os últimos 9 dígitos (ignora +351, espaços, 00…). PURA. */
+export function phoneKey(raw: string | null | undefined): string {
+  const d = String(raw ?? "").replace(/\D/g, "");
+  return d.length >= 9 ? d.slice(-9) : "";
+}
+
+/** Estado na Multipark que não é ativo (inativo, convite expirado/pendente). PURA. */
+export function isInactiveAgentState(state: string | null | undefined): boolean {
+  const s = String(state ?? "").trim().toLowerCase();
+  return !!s && s !== "ativo";
+}
+
 export type AgentListKind = "pessoa" | "agencia" | "teste" | "casa";
 
 const AGENCY_RE = /\b(viage(m|ns)|travel|tour(s|ismo)?|ag[eê]ncia|bestravel|lealtours|discover|total fun|click|caravelatur|destiny|definir datas|\w*park(ing)?|parque|valet|lda|unipessoal|geral|reservas|admin)\b/i;
@@ -169,6 +228,7 @@ const HOUSE_DOMAINS = ["multipark.pt", "airpark.pt", "multigroup.pt"];
 /** Pessoa, agência/parceiro, conta de teste ou conta da casa. PURA. */
 export function agentListKind(row: AgentListRow): AgentListKind {
   if (TEST_RE.test(row.name)) return "teste";
+  if (row.role && /parceir|ag[eê]ncia/i.test(row.role)) return "agencia";
   const domain = row.email?.split("@")[1] ?? "";
   if (/^(geral|reservas|info|checkinpark|iziparkporto)@/.test(row.email ?? "") || AGENCY_RE.test(row.name)) return "agencia";
   if (HOUSE_DOMAINS.includes(domain)) return "casa";

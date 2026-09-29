@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentListKind, agentNameKey, copyVsInitial, isoToUtcStamp, parseAgentListCsv, parseInitialPricesCsv, parseSemicolonCsv } from "../shared/multiparkExports";
+import { agentListKind, agentNameKey, copyVsInitial, isInactiveAgentState, isoToUtcStamp, parseAgentListCsv, parseAgentSheetRows, phoneKey, parseInitialPricesCsv, parseSemicolonCsv } from "../shared/multiparkExports";
 import { compareAgentRows } from "./multiparkExportsImport";
 import { compareWithInitialEra, dayRow, INITIAL_ERA_EVENT } from "./cashCheckRouter";
 import { copyRowToSnapshot } from "./webhookMemory";
@@ -77,11 +77,54 @@ describe("lista de agentes", () => {
     ];
     const r = compareAgentRows(rows, liveAgents, emps);
     expect(r[0]).toMatchObject({ agentUserId: "u1", agentMatch: "email", status: "sugestao_email", suggestion: { employeeId: 10, by: "email" } });
-    expect(r[1].status).toBe("fora");
+    expect(r[1].status).toBe("nao_encontrado"); // agência: não é "fora", é parceiro (aqui não está na Multipark)
     expect(r[2].status).toBe("fora");
     expect(r[3]).toMatchObject({ agentUserId: "u2", agentMatch: "nome", status: "ligado", linkedTo: { employeeId: 11 } });
     expect(r[4]).toMatchObject({ agentUserId: "u3", status: "sem_ficha", suggestion: null });
     expect(compareAgentRows([{ name: "Ninguém", email: null, cities: [] }], liveAgents, emps)[0].status).toBe("nao_encontrado");
+  });
+});
+
+describe("exportação xlsx de agentes (folha Agentes)", () => {
+  const sheet = [
+    { Nome: "", Email: "", Telefone: "", Estado: "Ativo", "Cargo principal": "Administrador", "Parques ativos": "Skypark - Lisboa", "ID utilizador": "api" },
+    { Nome: "ABOUT DESTINY", Email: "Reservas@QViagem.com", Telefone: "963781232", Estado: "Ativo", "Cargo principal": "Parceiro", "Parques ativos": "Airpark - Faro, Airpark - Lisboa", "ID utilizador": "cmpartner1" },
+    { Nome: "Bruno Meireles", Email: "bruno@gmail.com", Telefone: "", Estado: "Ativo", "Cargo principal": "Condutor", "Parques ativos": "Airpark - Porto", "ID utilizador": "cmbruno" },
+    { Nome: "Zé Telefone", Email: "ze.novo@gmail.com", Telefone: "+351 912 345 678", Estado: "Inativo", "Cargo principal": "Condutor", "Parques ativos": "", "Parques inativos": "Airpark - Lisboa", "ID utilizador": "cmze" },
+    { Nome: "Ana Ligada", Email: "ana@gmail.com", Telefone: "", Estado: "Ativo", "Cargo principal": "Supervisor", "Parques ativos": "", "ID utilizador": "cmana" },
+    { Nome: "Parceiro Novo", Email: "x@gmail.com", Telefone: "", Estado: "Convite expirado", "Cargo principal": "Parceiro", "Parques ativos": "", "ID utilizador": "cmp2" },
+  ];
+  const { rows, errors } = parseAgentSheetRows(sheet);
+  it("lê ID, telefone, cargo, estado e as cidades dos parques", () => {
+    expect(errors).toEqual([]);
+    expect(rows[1]).toMatchObject({ name: "ABOUT DESTINY", email: "reservas@qviagem.com", phone: "963781232", role: "Parceiro", agentUserId: "cmpartner1", cities: ["Faro", "Lisboa"] });
+    expect(rows[0].name).toBe("api");
+    expect(rows[3].cities).toEqual(["Lisboa"]);
+    expect(parseAgentSheetRows([{ Coisa: 1 }]).errors.length).toBe(1);
+  });
+  it("telefone e estado", () => {
+    expect(phoneKey("+351 912 345 678")).toBe(phoneKey("912345678"));
+    expect(phoneKey("123")).toBe("");
+    expect(isInactiveAgentState("Inativo")).toBe(true);
+    expect(isInactiveAgentState("Convite expirado")).toBe(true);
+    expect(isInactiveAgentState("Ativo")).toBe(false);
+  });
+  it("liga pelo ID do ficheiro; telefone quando o email não bate; parceiros vão para as parcerias", () => {
+    const emps = [
+      { id: 1, fullName: "Bruno Meireles", emails: ["bruno@gmail.com"], agentIds: [] },
+      { id: 2, fullName: "José Telefone Silva", emails: ["ze.antigo@gmail.com"], agentIds: [], phones: ["912345678"] },
+      { id: 3, fullName: "Ana Ligada", emails: [], agentIds: ["cmana"] },
+    ];
+    const partners = { partnerships: [{ id: 50, name: "QViagem", contactEmail: "geral@qviagem.com" }], mapped: new Map<string, { partnershipId: number; name: string }>() };
+    const r = compareAgentRows(rows, [], emps, partners);
+    expect(r[0].status).toBe("fora");
+    expect(r[1]).toMatchObject({ kind: "agencia", status: "parceiro", partnerSuggestion: { partnershipId: 50, by: "email" }, suggestion: null });
+    expect(r[2]).toMatchObject({ agentUserId: "cmbruno", agentMatch: "id", status: "sugestao_email", suggestion: { employeeId: 1 } });
+    expect(r[3]).toMatchObject({ agentUserId: "cmze", status: "sugestao_telefone", suggestion: { employeeId: 2, by: "telefone" }, inactive: true });
+    expect(r[4]).toMatchObject({ status: "ligado", linkedTo: { employeeId: 3 } });
+    expect(r[5]).toMatchObject({ status: "parceiro", partnerSuggestion: null, inactive: true });
+    const mapped = new Map([["ABOUT DESTINY", { partnershipId: 50, name: "QViagem" }]]);
+    expect(compareAgentRows(rows.slice(1, 2), [], emps, { ...partners, mapped })[0]).toMatchObject({ status: "ligado", partnerLinked: { partnershipId: 50 } });
   });
 });
 

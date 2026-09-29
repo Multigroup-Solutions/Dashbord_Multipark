@@ -8,8 +8,10 @@
  */
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { agentListKind, agentNameKey, copyVsInitial, type AgentListKind, type AgentListRow, type CopyVsInitial, type InitialPriceRow } from "../shared/multiparkExports";
+import { agentListKind, agentNameKey, copyVsInitial, isInactiveAgentState, phoneKey, type AgentListKind, type AgentListRow, type CopyVsInitial, type InitialPriceRow } from "../shared/multiparkExports";
 import { matchKey } from "../shared/textKey";
+import { isSystemAgentId } from "../shared/agentIdentity";
+import { suggestForAgents, type PartnershipForSuggest } from "./agentSuggestions";
 
 const rowsOf = (res: unknown): any[] => {
   const r = Array.isArray(res) ? res[0] : (res as any)?.rows ?? res;
@@ -99,29 +101,45 @@ export async function listInitialPricesForBookings(bookingIds: readonly string[]
 
 // ─── Lista de agentes ───────────────────────────────────────────────────────
 
-export type AgentListStatus = "ligado" | "sugestao_email" | "sugestao_nome" | "sem_ficha" | "nao_encontrado" | "fora";
+export type AgentListStatus = "ligado" | "sugestao_email" | "sugestao_telefone" | "sugestao_nome" | "sem_ficha" | "nao_encontrado" | "parceiro" | "fora";
 
 export interface AgentListResult {
   name: string;
   email: string | null;
+  phone: string | null;
+  role: string | null;
   cities: string[];
   kind: AgentListKind;
+  /** inativo / convite expirado na Multipark */
+  inactive: boolean;
   agentUserId: string | null;
+  /** nome com que o agente aparece nas reservas (a chave das parcerias) */
+  agentName: string | null;
   /** como se encontrou o agente na Multipark */
-  agentMatch: "email" | "nome" | null;
+  agentMatch: "id" | "email" | "nome" | null;
   linkedTo: { employeeId: number; fullName: string } | null;
-  suggestion: { employeeId: number; fullName: string; by: "email" | "nome" } | null;
+  suggestion: { employeeId: number; fullName: string; by: "email" | "telefone" | "nome" } | null;
+  /** agentes de parceiros/agências: a parceria onde já está ou a sugerida */
+  partnerLinked: { partnershipId: number; name: string } | null;
+  partnerSuggestion: { partnershipId: number; name: string; by: "email" | "nome" } | null;
   status: AgentListStatus;
 }
 
-export interface EmpForAgents { id: number; fullName: string; emails: string[]; agentIds: string[] }
+export interface EmpForAgents { id: number; fullName: string; emails: string[]; agentIds: string[]; phones?: string[] }
 export interface LiveAgentLite { agentUserId: string; names: string[]; email: string | null }
+export interface PartnerCtx {
+  partnerships: readonly PartnershipForSuggest[];
+  /** agent_partner_map: nome do agente → parceria */
+  mapped: ReadonlyMap<string, { partnershipId: number; name: string }>;
+}
 
 /** Decisão por linha. PURA. */
-export function compareAgentRows(rows: readonly AgentListRow[], live: readonly LiveAgentLite[], emps: readonly EmpForAgents[]): AgentListResult[] {
+export function compareAgentRows(rows: readonly AgentListRow[], live: readonly LiveAgentLite[], emps: readonly EmpForAgents[], partners: PartnerCtx = { partnerships: [], mapped: new Map() }): AgentListResult[] {
   const byEmail = new Map<string, string[]>();
   const byName = new Map<string, Set<string>>();
+  const liveById = new Map<string, LiveAgentLite>();
   for (const a of live) {
+    liveById.set(a.agentUserId, a);
     if (a.email) byEmail.set(a.email.toLowerCase(), [...(byEmail.get(a.email.toLowerCase()) ?? []), a.agentUserId]);
     for (const n of a.names) {
       const k = agentNameKey(n);
@@ -132,58 +150,87 @@ export function compareAgentRows(rows: readonly AgentListRow[], live: readonly L
   }
   const empByAgent = new Map<string, EmpForAgents>();
   const empsByEmail = new Map<string, EmpForAgents[]>();
+  const empsByPhone = new Map<string, EmpForAgents[]>();
   const empsByName = new Map<string, EmpForAgents[]>();
+  const add = <K>(m: Map<K, EmpForAgents[]>, k: K, e: EmpForAgents) => { const l = m.get(k) ?? []; if (!l.some((x) => x.id === e.id)) m.set(k, [...l, e]); };
   for (const e of emps) {
     for (const id of e.agentIds) empByAgent.set(id, e);
-    for (const m of e.emails) empsByEmail.set(m, [...(empsByEmail.get(m) ?? []), e]);
+    for (const m of e.emails) add(empsByEmail, m, e);
+    for (const p of e.phones ?? []) { const k = phoneKey(p); if (k) add(empsByPhone, k, e); }
     const k = matchKey(e.fullName);
-    if (k) empsByName.set(k, [...(empsByName.get(k) ?? []), e]);
+    if (k) add(empsByName, k, e);
   }
+  const mappedByKey = new Map<string, { partnershipId: number; name: string }>();
+  for (const [n, v] of partners.mapped) mappedByKey.set(agentNameKey(n), v);
+
   return rows.map((row) => {
     const kind = agentListKind(row);
     let agentUserId: string | null = null;
     let agentMatch: AgentListResult["agentMatch"] = null;
-    const viaEmail = row.email ? byEmail.get(row.email) ?? [] : [];
-    if (viaEmail.length === 1) { agentUserId = viaEmail[0]; agentMatch = "email"; }
-    else {
-      const viaName = byName.get(agentNameKey(row.name));
-      if (viaName && viaName.size === 1) { agentUserId = [...viaName][0]; agentMatch = "nome"; }
-    }
-    const linked = agentUserId ? empByAgent.get(agentUserId) ?? null : null;
-    let suggestion: AgentListResult["suggestion"] = null;
-    if (!linked) {
-      const e1 = row.email ? empsByEmail.get(row.email) ?? [] : [];
-      if (e1.length === 1) suggestion = { employeeId: e1[0].id, fullName: e1[0].fullName, by: "email" };
+    const fileId = String(row.agentUserId ?? "").trim();
+    const systemId = !!fileId && isSystemAgentId(fileId);
+    if (fileId && !systemId) { agentUserId = fileId; agentMatch = "id"; }
+    else if (!fileId) {
+      const viaEmail = row.email ? byEmail.get(row.email) ?? [] : [];
+      if (viaEmail.length === 1) { agentUserId = viaEmail[0]; agentMatch = "email"; }
       else {
-        const e2 = empsByName.get(agentNameKey(row.name)) ?? [];
-        if (e2.length === 1) suggestion = { employeeId: e2[0].id, fullName: e2[0].fullName, by: "nome" };
+        const viaName = byName.get(agentNameKey(row.name));
+        if (viaName && viaName.size === 1) { agentUserId = [...viaName][0]; agentMatch = "nome"; }
       }
     }
-    const status: AgentListStatus = kind === "agencia" || kind === "teste" ? "fora"
+    const liveNames = agentUserId ? liveById.get(agentUserId)?.names ?? [] : [];
+    const agentName = liveNames[0] ?? (agentUserId ? row.name : null);
+    const partnerish = kind === "agencia";
+    const linked = agentUserId && !partnerish ? empByAgent.get(agentUserId) ?? null : null;
+
+    let suggestion: AgentListResult["suggestion"] = null;
+    if (!linked && !partnerish) {
+      const one = (l: EmpForAgents[] | undefined) => (l && l.length === 1 ? l[0] : null);
+      const e1 = one(row.email ? empsByEmail.get(row.email) : undefined);
+      const pk = phoneKey(row.phone);
+      const e2 = e1 ? null : one(pk ? empsByPhone.get(pk) : undefined);
+      const e3 = e1 || e2 ? null : one(empsByName.get(agentNameKey(row.name)));
+      if (e1) suggestion = { employeeId: e1.id, fullName: e1.fullName, by: "email" };
+      else if (e2) suggestion = { employeeId: e2.id, fullName: e2.fullName, by: "telefone" };
+      else if (e3) suggestion = { employeeId: e3.id, fullName: e3.fullName, by: "nome" };
+    }
+
+    let partnerLinked: AgentListResult["partnerLinked"] = null;
+    let partnerSuggestion: AgentListResult["partnerSuggestion"] = null;
+    if (partnerish) {
+      for (const n of [...liveNames, row.name]) { const hit = mappedByKey.get(agentNameKey(n)); if (hit) { partnerLinked = hit; break; } }
+      if (!partnerLinked) {
+        const s = suggestForAgents([{ agentName: row.name, email: row.email, partnerOnly: true }], [], partners.partnerships)[0]?.suggestion;
+        if (s && s.type === "parceiro") partnerSuggestion = { partnershipId: s.partnershipId, name: s.name, by: s.by };
+      }
+    }
+
+    const status: AgentListStatus = systemId || kind === "teste" ? "fora"
+      : partnerish ? (partnerLinked ? "ligado" : agentUserId || fileId ? "parceiro" : "nao_encontrado")
       : !agentUserId ? "nao_encontrado"
       : linked ? "ligado"
-      : suggestion ? (suggestion.by === "email" ? "sugestao_email" : "sugestao_nome")
+      : suggestion ? (suggestion.by === "email" ? "sugestao_email" : suggestion.by === "telefone" ? "sugestao_telefone" : "sugestao_nome")
       : "sem_ficha";
     return {
-      name: row.name, email: row.email, cities: row.cities, kind, agentUserId, agentMatch,
+      name: row.name, email: row.email, phone: row.phone ?? null, role: row.role ?? null, cities: row.cities, kind,
+      inactive: isInactiveAgentState(row.state), agentUserId, agentName, agentMatch,
       linkedTo: linked ? { employeeId: linked.id, fullName: linked.fullName } : null,
-      suggestion, status,
+      suggestion, partnerLinked, partnerSuggestion, status,
     };
   });
 }
 
-/** Lista de agentes (CSV) contra os agentes ao vivo e as fichas. Só leitura. */
+/** Lista de agentes (CSV ou xlsx) contra os agentes ao vivo e as fichas. Só leitura. */
 export async function compareAgentList(rows: readonly AgentListRow[]): Promise<{ results: AgentListResult[]; liveAvailable: boolean }> {
   const db = await getDb();
   if (!db) throw new Error("BD indisponível.");
   const { listLiveAgents } = await import("./multiparkDb/activityLive");
   const liveRes = await listLiveAgents({ days: 400 });
-  const { isSystemAgentId } = await import("../shared/agentIdentity");
   const live: LiveAgentLite[] = liveRes.available
     ? liveRes.data.filter((a) => !isSystemAgentId(a.agentUserId)).map((a) => ({ agentUserId: a.agentUserId, names: [...new Set([a.agentName, ...a.agentNames].filter((n): n is string => !!n))], email: a.email }))
     : [];
   const empRows = rowsOf(await db.execute(sql`
-    SELECT e.id, e.fullName, e.multiparkAgentUserId AS agentId,
+    SELECT e.id, e.fullName, e.multiparkAgentUserId AS agentId, e.phone,
            LOWER(TRIM(e.email)) AS email, LOWER(TRIM(e.personalEmail)) AS personalEmail, LOWER(TRIM(u.email)) AS userEmail
       FROM employees e LEFT JOIN users u ON u.id = e.userId WHERE e.isActive = 1`));
   const extraAccounts = rowsOf(await db.execute(sql`
@@ -195,9 +242,14 @@ export async function compareAgentList(rows: readonly AgentListRow[]): Promise<{
       id: Number(r.id), fullName: String(r.fullName ?? ""),
       emails: [r.email, r.personalEmail, r.userEmail].filter((x): x is string => !!x),
       agentIds: r.agentId ? [String(r.agentId).trim()] : [],
+      phones: r.phone ? [String(r.phone)] : [],
     });
   }
   for (const a of extraAccounts) if (a.email) emps.get(Number(a.employeeId))?.emails.push(String(a.email));
   for (const a of aliases) emps.get(Number(a.employeeId))?.agentIds.push(String(a.agentUserId));
-  return { results: compareAgentRows(rows, live, [...emps.values()]), liveAvailable: liveRes.available };
+  const partnerships = rowsOf(await db.execute(sql`SELECT id, name, contactEmail FROM partnerships`).catch(() => [[]]))
+    .map((r) => ({ id: Number(r.id), name: String(r.name ?? ""), contactEmail: r.contactEmail ?? null }));
+  const { listAgentPartners } = await import("./db");
+  const mapped = new Map((await listAgentPartners().catch(() => [])).map((m) => [m.agentName, { partnershipId: m.partnershipId, name: m.partnerName ?? `#${m.partnershipId}` }]));
+  return { results: compareAgentRows(rows, live, [...emps.values()], { partnerships, mapped }), liveAvailable: liveRes.available };
 }

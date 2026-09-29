@@ -7908,20 +7908,24 @@ export const appRouter = router({
         return { success: true, ...p };
       }),
     linkAgent: protectedProcedure
-      .input(z.object({ employeeId: z.number().int().positive(), agentUserId: z.string().min(1).max(128) }))
+      .input(z.object({ employeeId: z.number().int().positive(), agentUserId: z.string().min(1).max(128), agentName: z.string().max(256).optional() }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "rh", "manage");
         await assertEmployeeAccess(input.employeeId);
         const { linkAgentToEmployee } = await import("./identityScreen");
-        const agentName = await linkAgentToEmployee(input.agentUserId, input.employeeId);
+        const agentName = await linkAgentToEmployee(input.agentUserId, input.employeeId, input.agentName ?? null);
         await logActivity({ userId: ctx.user.id, action: "agent_attach", entity: "employee", entityId: input.employeeId, details: `Agente Multipark ${input.agentUserId} "${agentName}" ligado (ecrã Ligações)` });
         return { success: true, agentName };
       }),
-    /** Lista de agentes exportada da Multipark (CSV) contra as fichas: quem está ligado e a quem ligar. Só leitura. */
-    compareAgentList: protectedProcedure.input(z.object({ csv: z.string().min(5).max(500_000) })).mutation(async ({ ctx, input }) => {
+    /** Lista de agentes exportada da Multipark (CSV ou folha "Agentes" do xlsx) contra as fichas: quem está ligado e a quem ligar. Só leitura. */
+    compareAgentList: protectedProcedure.input(z.union([
+      z.object({ csv: z.string().min(5).max(500_000) }),
+      // folha "Agentes" do xlsx, já lida no browser (linhas cabeçalho → valor)
+      z.object({ sheet: z.array(z.record(z.string().max(64), z.union([z.string().max(2000), z.number(), z.boolean(), z.null()]))).min(1).max(5000) }),
+    ])).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "rh", "manage");
-      const { parseAgentListCsv } = await import("../shared/multiparkExports");
-      const parsed = parseAgentListCsv(input.csv);
+      const { parseAgentListCsv, parseAgentSheetRows } = await import("../shared/multiparkExports");
+      const parsed = "csv" in input ? parseAgentListCsv(input.csv) : parseAgentSheetRows(input.sheet);
       if (parsed.errors.length) throw new TRPCError({ code: "BAD_REQUEST", message: parsed.errors.join(" ") });
       const { compareAgentList } = await import("./multiparkExportsImport");
       return compareAgentList(parsed.rows.slice(0, 2000));
