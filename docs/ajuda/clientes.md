@@ -45,7 +45,8 @@ Cada cliente tem uma **ficha** com o nosso **n.º de cliente**. As fichas são c
 
 **Rever fichas** (botão **Rever fichas** na lista)
 - **Sugestões para juntar**: as duas fichas lado a lado, com o que coincide (telefone, matrícula, NIF, email). **Juntar** (backoffice e administração), **Trocar qual fica** ou **Descartar** (não é a mesma pessoa).
-- **Emails estranhos**: fichas cujo email é de balcão ou de agregador. **Procurar na nossa caixa** propõe o email verdadeiro; sem resultado, **Retirar o email** e a ficha fica com telefone e carro.
+- **Emails estranhos**: fichas cujo email é de balcão, de agregador ou da casa (os domínios das nossas marcas — Multipark, Multivalet, Multibags, Multidriver, Airpark, Redpark, Skypark e Multigroup — nunca contam como cliente). **Procurar na nossa caixa** propõe o email verdadeiro: o super admin procura em todas as caixas de email; os outros só nas caixas que já veem na Comunicação e no próprio email. Sem resultado, **Retirar o email** e a ficha fica com telefone e carro.
+- Quando se **separa** uma junção, as outras sugestões dessa ficha voltam a aparecer.
 - **Reservas sem email**: clientes sem email que chegam nos próximos 3 dias — pedir o email à chegada e acrescentá-lo na ficha.
 - **Juntas recentemente**: **Separar** repõe as duas fichas como estavam (emails, telefones, carros e reservas).
 

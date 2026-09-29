@@ -125,8 +125,11 @@ export async function crmProSyncCron(o: { deadlineAt: number }): Promise<CronJob
     // sem BD da Multipark (r.ok = false): não é erro nosso — fica registado e tenta na próxima vez
     return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: true };
   } catch (err) {
-    console.error("[cron crm-pro-sync] falhou:", msg(err, 200));
-    return fail(err);
+    // o Drizzle só diz "Failed query: INSERT…"; o motivo real do MySQL vem no `cause`
+    const { dbErrorReason } = await import("./crm/proSync");
+    const reason = dbErrorReason(err);
+    console.error("[cron crm-pro-sync] falhou:", reason);
+    return { httpStatus: 500, body: { ok: false, error: reason } };
   }
 }
 

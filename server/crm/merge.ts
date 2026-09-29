@@ -183,6 +183,9 @@ export async function splitMerge(db: any, o: { eventId: number; userId: number }
     await tx.execute(sql`UPDATE crm_merge_events SET undoneAt = UTC_TIMESTAMP(), undoneBy = ${o.userId} WHERE id = ${o.eventId}`);
     const [a, b] = s < m ? [s, m] : [m, s];
     await tx.execute(sql`UPDATE crm_merge_suggestions SET status = 'dismissed', decidedBy = ${o.userId}, decidedAt = UTC_TIMESTAMP() WHERE clientA = ${a} AND clientB = ${b}`);
+    // As outras sugestões da ficha que volta (postas de lado pela junção) voltam a
+    // pendentes — se a outra ficha ainda estiver ativa. As decididas à mão ficam.
+    await tx.execute(sql`${restoreSuggestionsSql(m)}`);
     out = { survivorId: s, mergedId: m };
   });
   await recomputeMetrics(db, [out.survivorId, out.mergedId]);
@@ -190,6 +193,19 @@ export async function splitMerge(db: any, o: { eventId: number; userId: number }
 }
 
 // ─── Sugestões ──────────────────────────────────────────────────────────────
+
+/**
+ * Sugestões "obsoletas" de uma ficha que voltou a estar ativa (separação) →
+ * pendentes, quando a outra ficha também está ativa. Só mexe nas obsoletas:
+ * aceites e rejeitadas à mão ficam como estão.
+ */
+export function restoreSuggestionsSql(clientId: number) {
+  return sql`UPDATE crm_merge_suggestions s
+    JOIN crm_clients a ON a.id = s.clientA JOIN crm_clients b ON b.id = s.clientB
+    SET s.status = 'pending'
+    WHERE s.status = 'obsolete' AND (s.clientA = ${clientId} OR s.clientB = ${clientId})
+      AND a.status = 'active' AND b.status = 'active'`;
+}
 
 /** Um identificador partilhado por mais fichas do que isto é de empresa/balcão: não sugere. */
 export const MAX_SHARED = 6;
@@ -233,7 +249,8 @@ export async function refreshSuggestions(db: any, o: { deadlineAt: number }): Pr
     }
     if (values.length) {
       await db.execute(sql`INSERT INTO crm_merge_suggestions (clientA, clientB, score, reasons) VALUES ${sql.join(values, sql`, `)}
-        ON DUPLICATE KEY UPDATE score = VALUES(score), reasons = VALUES(reasons)`);
+        ON DUPLICATE KEY UPDATE score = VALUES(score), reasons = VALUES(reasons),
+          status = IF(status = 'obsolete', 'pending', status)`);
       saved += values.length;
     }
   }

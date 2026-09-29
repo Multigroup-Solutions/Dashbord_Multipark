@@ -3,7 +3,7 @@
  * lado), fusões recentes (para separar), emails estranhos e reservas próximas
  * de clientes sem email (pedir o email antes de o cliente se ir embora).
  */
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import { projectScope } from "../cityScope";
 import { REASON_LABELS, type SuggestionReason } from "../../shared/crmIdentity";
 import { clientVisibleSql } from "./scope";
@@ -92,8 +92,10 @@ export async function genericEmailClients(db: any, o: { limit?: number; offset?:
 /**
  * Procura na nossa caixa de email (Comunicação) mensagens deste cliente, pelo
  * nome, matrícula ou n.º das reservas, e propõe o email verdadeiro.
+ * `visible` = condição sobre `mail_threads t` das conversas que quem pede pode
+ * ver (mail/inbox.ts visibleThreadsCondition — o super admin vê todas).
  */
-export async function findEmailInMailbox(db: any, clientId: number) {
+export async function findEmailInMailbox(db: any, clientId: number, visible: SQL = sql`1 = 1`) {
   const [c] = rowsOf(await db.execute(sql`SELECT displayName FROM crm_clients WHERE id = ${clientId}`));
   if (!c) return [];
   const plates = rowsOf(await db.execute(sql`SELECT plateDisplay, plate FROM crm_client_vehicles WHERE clientId = ${clientId}`)).map((v) => String(v.plateDisplay || v.plate));
@@ -102,14 +104,16 @@ export async function findEmailInMailbox(db: any, clientId: number) {
   const generic = new Set(rowsOf(await db.execute(sql`SELECT email FROM crm_client_emails WHERE generic = 1 AND clientId = ${clientId}`)).map((e) => String(e.email)));
   const terms: any[] = [];
   const name = String(c.displayName ?? "").trim();
-  if (name.split(/\s+/).length >= 2) terms.push(sql`m.fromName LIKE ${"%" + name + "%"}`);
-  for (const p of plates) terms.push(sql`(m.subject LIKE ${"%" + p + "%"} OR m.snippet LIKE ${"%" + p + "%"})`);
-  for (const n of numbers) terms.push(sql`(m.subject LIKE ${"%" + n + "%"} OR m.snippet LIKE ${"%" + n + "%"})`);
+  const like = (v: string) => `%${v.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+  if (name.split(/\s+/).length >= 2) terms.push(sql`m.fromName LIKE ${like(name)}`);
+  for (const p of plates) terms.push(sql`(m.subject LIKE ${like(p)} OR m.snippet LIKE ${like(p)})`);
+  for (const n of numbers) terms.push(sql`(m.subject LIKE ${like(n)} OR m.snippet LIKE ${like(n)})`);
   if (!terms.length) return [];
   try {
     const rows = rowsOf(await db.execute(sql`SELECT LOWER(TRIM(m.fromEmail)) AS email, MAX(m.fromName) AS fromName, COUNT(*) AS n,
         DATE_FORMAT(MAX(m.sentAt), '%Y-%m-%d %H:%i:%s') AS lastAt, MAX(m.subject) AS subject
-      FROM mail_messages m WHERE (${sql.join(terms, sql` OR `)}) AND m.fromEmail IS NOT NULL
+      FROM mail_messages m JOIN mail_threads t ON t.id = m.threadId
+      WHERE (${sql.join(terms, sql` OR `)}) AND m.fromEmail IS NOT NULL AND ${visible}
       GROUP BY LOWER(TRIM(m.fromEmail)) ORDER BY n DESC LIMIT 5`));
     return rows.filter((r) => r.email && !generic.has(String(r.email))).map((r) => ({ email: String(r.email), fromName: r.fromName ?? null, messages: Number(r.n), lastAt: r.lastAt ?? null, subject: r.subject ?? null }));
   } catch {

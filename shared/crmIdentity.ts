@@ -19,9 +19,24 @@
  */
 import { normalizeEmail, isPlausibleEmail } from "./email";
 import { normalizePhoneE164 } from "./phone";
+import { DEFAULT_BRAND_DOMAINS, DEFAULT_MAIL_ALIAS_DOMAINS, MAIL_WORKSPACE_PRIMARY_DOMAIN } from "./mail";
 
-/** Domínios da casa: staff e contas de teste, nunca são clientes. */
-export const INTERNAL_EMAIL_DOMAINS = ["multipark.pt", "airpark.pt", "redpark.pt", "skypark.pt", "multigroup.pt"];
+/**
+ * Domínios da casa: staff e contas de teste, nunca são clientes. LISTA ÚNICA
+ * (CRM, Marketing, Reclamações…): os domínios das marcas e do Workspace da
+ * Comunicação (shared/mail.ts) + o do grupo. Um domínio novo das marcas
+ * entra lá e vale para todos.
+ */
+export const INTERNAL_EMAIL_DOMAINS: readonly string[] = Array.from(new Set(
+  [MAIL_WORKSPACE_PRIMARY_DOMAIN, ...Object.values(DEFAULT_BRAND_DOMAINS).flat(), ...DEFAULT_MAIL_ALIAS_DOMAINS, "multigroup.pt"]
+    .map((d) => d.trim().toLowerCase()).filter(Boolean),
+));
+
+/** Email de um domínio da casa (ou subdomínio dele, ex.: x@lisboa.multipark.pt). PURA. */
+export function isHouseEmail(email: string | null | undefined): boolean {
+  const d = emailDomain(String(email ?? "").trim().toLowerCase());
+  return !!d && INTERNAL_EMAIL_DOMAINS.some((x) => d === x || d.endsWith(`.${x}`));
+}
 /** Um email usado por tantos nomes diferentes é de balcão/agregador, não de uma pessoa. */
 export const GENERIC_EMAIL_MIN_NAMES = 5;
 /** Sem email: telefone + (nome | matrícula) liga sozinho. Desligar = só sugestões. */
@@ -113,7 +128,7 @@ export interface EmailUsage {
 /** Email que não identifica uma pessoa (domínio da casa ou usado por muitos nomes). */
 export function isGenericEmail(email: string, usage?: EmailUsage | null): boolean {
   if (!email) return true;
-  if (INTERNAL_EMAIL_DOMAINS.includes(emailDomain(email))) return true;
+  if (isHouseEmail(email)) return true;
   return (usage?.distinctNames ?? 0) >= GENERIC_EMAIL_MIN_NAMES;
 }
 
