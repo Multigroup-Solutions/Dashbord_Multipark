@@ -256,10 +256,8 @@ export interface BookingTimelineItem {
 
 /**
  * Histórico de uma reserva para Reclamações/Perdidos: AO VIVO da BD da
- * Multipark (History; ref = id ou n.º da reserva). Sem BD 2, ou sem nada lá
- * (reservas anteriores a 2 mar 2026 só têm o retrato da migração), usa a
- * cópia antiga `multipark_booking_history` (só leitura — já não é
- * atualizada). Nunca vai à API da Multipark.
+ * Multipark (History; ref = id ou n.º da reserva). Sem nada lá, usa o
+ * dossier (também ao vivo). Nunca vai à API da Multipark nem à cópia antiga.
  */
 export async function getBookingTimeline(ref: string, cities?: string[]): Promise<{ bookingId: string; total: number; history: BookingTimelineItem[] }> {
   try {
@@ -276,7 +274,7 @@ export async function getBookingTimeline(ref: string, cities?: string[]): Promis
         return { bookingId: ref, total: history.length, history };
       }
     }
-  } catch { /* BD da Multipark indisponível: usa a cópia antiga */ }
+  } catch { /* BD da Multipark indisponível: tenta o dossier */ }
   const d = await getComplaintBookingDossier(ref, cities);
   const history = d.history.map((h) => ({
     id: h.historyId, changeType: h.changeType, actionTime: h.actionTime, remarks: h.remarks,
