@@ -17,7 +17,9 @@ Neste modo, `DATABASE_URL_MULTIPARK` fica no servidor da Vercel. Cada pedido
 autenticado lê até 1000 registos (500 por omissão), evitando concentrar toda
 a exportação numa função de 60 segundos. O CSV e o resumo são guardados no PC.
 
-O comando usa `CRON_SECRET` do ambiente ou dos ficheiros de configuração.
+O comando usa `BOOKING_PRICE_EXPORT_SECRET` do ambiente ou dos ficheiros de
+configuração. Esta credencial só autoriza o endpoint da exportação. Por
+compatibilidade, também aceita `CRON_SECRET` quando a credencial dedicada não existe.
 `--env-file CAMINHO` permite usar um ficheiro de configuração privado já existente.
 Nunca passar o segredo como argumento nem guardá-lo no repositório.
 
@@ -28,8 +30,8 @@ de devolver o histórico. Não se publicam CSV ou dados operacionais como
 artefactos de GitHub Actions.
 
 Se a credencial só estiver disponível na automação, o workflow manual
-**BD Multipark — exportar preço inicial (cifrado)** usa o segredo existente
-do repositório. Recebe apenas a chave **pública** RSA do destinatário (SPKI DER
+**BD Multipark — exportar preço inicial (cifrado)** usa `BOOKING_PRICE_EXPORT_SECRET`
+configurado na Vercel e no repositório. Recebe apenas a chave **pública** RSA do destinatário (SPKI DER
 em base64). A chave privada fica no PC. O único artefacto publicado contém
 o CSV e o resumo cifrados com AES-256-GCM, com a chave protegida por
 RSA-OAEP-SHA256; expira ao fim de um dia. `openPriceExport`, em

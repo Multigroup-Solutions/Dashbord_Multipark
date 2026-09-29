@@ -34,14 +34,14 @@ jobs:
       - run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Ler preços no servidor e cifrar o resultado
         env:
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          BOOKING_PRICE_EXPORT_SECRET: ${{ secrets.BOOKING_PRICE_EXPORT_SECRET }}
           EXPORT_RECIPIENT_PUBLIC_KEY: ${{ inputs.recipient_public_key }}
           FROM_DAY: ${{ inputs.from }}
           TO_DAY: ${{ inputs.to }}
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$CRON_SECRET"
+          test -n "$BOOKING_PRICE_EXPORT_SECRET"
           args=(--remote https://dashboard.multipark.pt --from "$FROM_DAY" --out-dir exports/price-export-run)
           if [ -n "$TO_DAY" ]; then args+=(--to "$TO_DAY"); fi
           pnpm export:initial-booking-price "${args[@]}"

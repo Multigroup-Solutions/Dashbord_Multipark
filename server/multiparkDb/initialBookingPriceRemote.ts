@@ -6,7 +6,7 @@ export function createRemotePriceReader(origin: string, secret: string, period: 
   if (base.protocol !== "https:" || base.username || base.password || base.search || base.hash || base.pathname !== "/") {
     throw new Error("--remote exige a origem HTTPS da dashboard, sem caminho, credenciais ou parâmetros.");
   }
-  if (!secret.trim()) throw new Error("Falta CRON_SECRET para autenticar a exportação no servidor.");
+  if (!secret.trim()) throw new Error("Falta BOOKING_PRICE_EXPORT_SECRET (ou CRON_SECRET) para autenticar a exportação no servidor.");
   const url = new URL(endpointPath, base).href;
   async function page<T>(stage: "bookings" | "history", cursor: string, limit: number): Promise<T[]> {
     if (limit > 1000) throw new Error("O modo remoto admite no máximo 1000 registos por lote.");

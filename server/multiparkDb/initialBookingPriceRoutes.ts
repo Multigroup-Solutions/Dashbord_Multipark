@@ -1,5 +1,5 @@
 import type { Express, Request, Response } from "express";
-import { cronAuthOk } from "../cronAuth";
+import { bearerMatches, cronAuthOk } from "../cronAuth";
 import { getMultiparkDb, isMultiparkDbConfigured, redactSecrets } from "./client";
 import { bookingPage, historyPage, makePeriod, price, priceChanges, type HistoryRow } from "./initialBookingPrice";
 
@@ -22,7 +22,8 @@ export function parseExportPage(body: unknown, now = Date.now()) {
 export function registerInitialBookingPriceRoutes(app: Pick<Express, "post">) {
   app.post(INITIAL_PRICE_EXPORT_PATH, async (req: Request, res: Response) => {
     res.setHeader("Cache-Control", "private, no-store");
-    if (!cronAuthOk(req.headers.authorization)) return res.status(401).json({ ok: false, error: "Unauthorized" });
+    const authorized = bearerMatches(req.headers.authorization, process.env.BOOKING_PRICE_EXPORT_SECRET) || cronAuthOk(req.headers.authorization);
+    if (!authorized) return res.status(401).json({ ok: false, error: "Unauthorized" });
     let input: ReturnType<typeof parseExportPage>;
     try { input = parseExportPage(req.body); }
     catch (error) { return res.status(400).json({ ok: false, error: (error as Error).message }); }
