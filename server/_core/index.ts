@@ -20,6 +20,7 @@ import { requireSession } from "./requireSession";
 import { storagePut } from "../storage";
 import { cronRunRecorder } from "../cronRuns";
 import { registerInitialBookingPriceRoutes } from "../multiparkDb/initialBookingPriceRoutes";
+import { registerActiveAgentsExportRoutes } from "../multiparkDb/activeAgentsExportRoutes";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -55,6 +56,7 @@ async function startServer() {
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   registerInitialBookingPriceRoutes(app);
+  registerActiveAgentsExportRoutes(app);
   // Registo das corridas de /api/cron/* (Definições → Estado do sistema).
   app.use("/api/cron", cronRunRecorder());
   // Serve local uploads when S3 is not configured

@@ -20,6 +20,7 @@ import { requireSession } from "./requireSession";
 import { cronAuthOk as cronBearerAuthOk } from "../cronAuth";
 import { cronRunRecorder } from "../cronRuns";
 import { registerInitialBookingPriceRoutes } from "../multiparkDb/initialBookingPriceRoutes";
+import { registerActiveAgentsExportRoutes } from "../multiparkDb/activeAgentsExportRoutes";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -36,6 +37,7 @@ app.use("/api/multipark/webhook", createMultiparkWebhookRouter({
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 registerInitialBookingPriceRoutes(app);
+registerActiveAgentsExportRoutes(app);
 // Registo de TODAS as corridas de /api/cron/* (tabela cron_runs → Definições →
 // Estado do sistema). Montado antes das rotas; waitUntil mantém a função viva
 // até a linha final estar escrita.
