@@ -75,7 +75,7 @@ export function MultiparkSyncCard() {
                       <tr key={l.key} className="border-t align-top">
                         <td className="py-1 pr-2 [overflow-wrap:anywhere]">{l.recordName}</td>
                         <td className="pr-2 [overflow-wrap:anywhere]">{l.mpName} <span className="text-muted-foreground">· {KIND[l.kind]}</span></td>
-                        <td className="pr-2">{l.by === "id" ? "id" : "nome"}</td>
+                        <td className="pr-2">{l.by === "id" ? "id" : l.by === "nome" ? "nome" : <span className="text-amber-700 font-medium">parecido</span>}</td>
                         <td className="pr-2">{d.money[l.recordId]?.ours ?? "—"}</td>
                         <td>{d.money[l.recordId]?.mp ?? "—"}</td>
                       </tr>
@@ -97,7 +97,7 @@ export function MultiparkSyncCard() {
 
           {p.ambiguous.length > 0 && (
             <details open>
-              <summary className="cursor-pointer text-xs font-medium">À mão ({p.ambiguous.length}) — mais de um registo nosso com este nome: escolhe</summary>
+              <summary className="cursor-pointer text-xs font-medium">À mão ({p.ambiguous.length}) — nome repetido ou só parecido: escolhe o registo certo (ou nenhum, e fica para criar)</summary>
               <div className="mt-1 space-y-1">
                 {p.ambiguous.map((a) => (
                   <div key={a.key} className="flex flex-wrap items-center gap-2 text-xs">

@@ -44,7 +44,7 @@ export interface OurPartnerRecord {
 }
 
 export interface SyncPlan {
-  links: Array<{ recordId: number; recordName: string; key: string; kind: MpKind; mpName: string; by: "id" | "nome"; partnerType: string | null; active: boolean; snapshot: Record<string, unknown> }>;
+  links: Array<{ recordId: number; recordName: string; key: string; kind: MpKind; mpName: string; by: "id" | "nome" | "parecido"; partnerType: string | null; active: boolean; snapshot: Record<string, unknown> }>;
   creates: Array<{ key: string; kind: MpKind; name: string; partnerType: string; active: boolean; snapshot: Record<string, unknown> }>;
   ambiguous: Array<{ key: string; kind: MpKind; name: string; candidates: Array<{ id: number; name: string }> }>;
   archives: Array<{ recordId: number; name: string; partnerType: string | null; reason: string }>;
@@ -73,6 +73,37 @@ export function partnerNameKey(name: string | null | undefined): string {
   let s = String(name ?? "");
   for (let i = 0; i < 2; i++) s = s.replace(PREFIX_RE, "");
   return matchKey(s);
+}
+
+/** Parecido de certeza (liga sozinho) / talvez (fica à mão). */
+export const SIMILAR_SURE = 0.88;
+export const SIMILAR_MAYBE = 0.7;
+
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+/**
+ * Semelhança de duas chaves de nome (0–1): letras trocadas/em falta
+ * ("bestravel" ≈ "besttravel") ou um nome dentro do outro ("bestravel" em
+ * "bestravelcastelobranco" — conta menos, porque pode ser outra loja). PURA.
+ */
+export function nameSimilarity(a: string, b: string): number {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const lev = 1 - levenshtein(a, b) / Math.max(a.length, b.length);
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  const inside = short.length >= 6 && long.includes(short) ? 0.8 : 0;
+  return Math.max(lev, inside);
 }
 
 /** O registo pode ser desta entidade? (Pro só com Pro, avença só com avença, parceiro com o resto.) PURA. */
@@ -115,6 +146,7 @@ export function planPartnerSync(entities: readonly MpEntity[], records: readonly
     const k = partnerNameKey(r.name);
     if (k) nameIndex.set(k, [...(nameIndex.get(k) ?? []), r]);
   }
+  const noExact: MpEntity[] = [];
   for (const e of pending) {
     const k = partnerNameKey(e.name);
     const cands = (k ? nameIndex.get(k) ?? [] : []).filter((r) => !taken.has(r.id) && compatible(e.kind, r.partnerType));
@@ -124,9 +156,30 @@ export function planPartnerSync(entities: readonly MpEntity[], records: readonly
     } else if (cands.length > 1) {
       plan.ambiguous.push({ key: e.key, kind: e.kind, name: e.name, candidates: cands.map((c) => ({ id: c.id, name: c.name })) });
       for (const c of cands) taken.add(c.id); // não se arquivam enquanto não se escolher
+    } else noExact.push(e);
+  }
+
+  // 2b) nomes PARECIDOS ("Agência Bestravel Castelo Branco" ≈ "BestTravel Castelo
+  //     Branco"): liga só com um candidato claramente melhor; na dúvida fica à
+  //     mão (e o registo não se arquiva). Só depois disto se cria.
+  const free = live.filter((r) => !taken.has(r.id) && !String(r.multiparkPartnerId ?? "").trim());
+  for (const e of noExact) {
+    const k = partnerNameKey(e.name);
+    const scored = free
+      .filter((r) => !taken.has(r.id) && compatible(e.kind, r.partnerType))
+      .map((r) => ({ r, score: nameSimilarity(k, partnerNameKey(r.name)) }))
+      .filter((x) => x.score >= SIMILAR_MAYBE)
+      .sort((a, b) => b.score - a.score);
+    const [best, second] = scored;
+    if (best && best.score >= SIMILAR_SURE && (!second || second.score < best.score - 0.05)) {
+      taken.add(best.r.id);
+      plan.links.push({ recordId: best.r.id, recordName: best.r.name, key: e.key, kind: e.kind, mpName: e.name, by: "parecido", partnerType: e.partnerType, active: e.active, snapshot: e.snapshot });
+    } else if (best) {
+      const top = scored.slice(0, 3);
+      plan.ambiguous.push({ key: e.key, kind: e.kind, name: e.name, candidates: top.map((x) => ({ id: x.r.id, name: x.r.name })) });
+      for (const x of top) taken.add(x.r.id);
     } else {
-      const partnerType = e.partnerType ?? "outro";
-      plan.creates.push({ key: e.key, kind: e.kind, name: e.name, partnerType, active: e.active, snapshot: e.snapshot });
+      plan.creates.push({ key: e.key, kind: e.kind, name: e.name, partnerType: e.partnerType ?? "outro", active: e.active, snapshot: e.snapshot });
     }
   }
 
