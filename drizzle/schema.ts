@@ -1503,6 +1503,9 @@ export const partnerships = mysqlTable("partnerships", {
 	multiparkSyncedAt: timestamp({ mode: 'string' }),
 	archivedAt: timestamp({ mode: 'string' }),
 	archivedReason: varchar({ length: 255 }),
+	// 0310 — junto a outro registo (o que fica) e o que se mudou (para Separar).
+	mergedIntoId: int(),
+	mergeJson: text(),
 });
 
 export const multiparkBookingHistory = mysqlTable("multipark_booking_history", {

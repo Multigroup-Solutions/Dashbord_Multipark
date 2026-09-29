@@ -24,9 +24,11 @@ export async function loadPartnerIndex(db: any): Promise<{ partners: PartnerRow[
     commissionBase: partnerships.commissionBase, notes: partnerships.notes,
     monthlyFee: partnerships.monthlyFee, partnerStatus: partnerships.partnerStatus,
     updatedAt: partnerships.updatedAt, configuredAt: partnerships.configuredAt,
+    mergedIntoId: partnerships.mergedIntoId,
   }).from(partnerships);
-  const aliasRows = await db.select({ partnershipId: partnerAliases.partnershipId, aliasValue: partnerAliases.aliasValue }).from(partnerAliases);
-  const partners: PartnerRow[] = (rows as any[]).map((p) => ({
+  const aliasRows: Array<{ partnershipId: number; aliasValue: string }> = [...(await db.select({ partnershipId: partnerAliases.partnershipId, aliasValue: partnerAliases.aliasValue }).from(partnerAliases))];
+  redirectMerged(rows as any[], aliasRows);
+  const partners: PartnerRow[] = (rows as any[]).filter((p) => !p.mergedIntoId).map((p) => ({
     id: p.id, name: p.name, campaignKey: p.campaignKey ?? null,
     commissionRate: p.commissionRate == null ? null : Number(p.commissionRate),
     partnerType: p.partnerType ?? null, commissionBase: p.commissionBase ?? "net",
@@ -34,6 +36,27 @@ export async function loadPartnerIndex(db: any): Promise<{ partners: PartnerRow[
     updatedAt: p.updatedAt ?? "", configuredAt: p.configuredAt === undefined ? undefined : (p.configuredAt ?? null),
   }));
   return { partners, index: R.buildPartnerIndex(partners, aliasRows ?? []) };
+}
+
+/**
+ * Registos JUNTOS a outro (mergedIntoId): o nome e a chave de campanha deles
+ * passam a ser aliases do que ficou (as reservas vão lá parar) e todos os
+ * aliases apontam para o registo final da cadeia. Muda `aliasRows`. PURA.
+ */
+export function redirectMerged(rows: Array<{ id: number; name?: string | null; campaignKey?: string | null; mergedIntoId?: number | null }>, aliasRows: Array<{ partnershipId: number; aliasValue: string }>): void {
+  const byId = new Map(rows.map((p) => [Number(p.id), p]));
+  const rootOf = (id: number): number => {
+    let cur = id;
+    for (let i = 0; i < 10; i++) { const m = byId.get(cur)?.mergedIntoId; if (!m) break; cur = Number(m); }
+    return cur;
+  };
+  for (const p of rows) {
+    if (!p.mergedIntoId) continue;
+    const root = rootOf(Number(p.id));
+    if (p.name) aliasRows.push({ partnershipId: root, aliasValue: String(p.name) });
+    if (p.campaignKey) aliasRows.push({ partnershipId: root, aliasValue: String(p.campaignKey) });
+  }
+  for (const a of aliasRows) a.partnershipId = rootOf(Number(a.partnershipId));
 }
 
 /** Parceiro de uma campanha (chave sem espaços nem maiúsculas). */

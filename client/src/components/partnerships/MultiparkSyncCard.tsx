@@ -143,7 +143,7 @@ export function MultiparkSyncCard() {
           {(archived as any[]).map((a: any) => (
             <div key={a.id} className="flex items-center gap-2">
               <span className="flex-1 [overflow-wrap:anywhere]">{a.name} <span className="text-muted-foreground">· {a.archivedReason ?? "arquivado"}</span></span>
-              <Button size="sm" variant="outline" className="h-6 text-xs" disabled={unarchive.isPending} onClick={() => unarchive.mutate({ id: a.id })}>Repor</Button>
+              <Button size="sm" variant="outline" className="h-6 text-xs" disabled={unarchive.isPending} onClick={() => unarchive.mutate({ id: a.id })}>{a.mergedIntoId ? "Separar" : "Repor"}</Button>
             </div>
           ))}
         </div>

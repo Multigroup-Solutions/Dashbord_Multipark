@@ -6753,6 +6753,31 @@ export const appRouter = router({
         const { applyPartnerSync } = await import("./partnerMultiparkSync");
         return applyPartnerSync({ userId: ctx.user.id, keepIds: input.keepIds });
       }),
+    // ── Juntar registos (o mesmo parceiro em vários registos) ──
+    mergePreview: protectedProcedure
+      .input(z.object({ keepId: z.number().int().positive(), dropIds: z.array(z.number().int().positive()).min(1).max(50) }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "parcerias", "manage");
+        const { previewPartnershipMerge } = await import("./partnershipMerge");
+        return previewPartnershipMerge(input.keepId, input.dropIds);
+      }),
+    merge: protectedProcedure
+      .input(z.object({ keepId: z.number().int().positive(), dropIds: z.array(z.number().int().positive()).min(1).max(50) }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "parcerias", "manage");
+        const { mergePartnerships } = await import("./partnershipMerge");
+        const r = await mergePartnerships({ ...input, userId: ctx.user.id });
+        await logActivity({ userId: ctx.user.id, action: "merge", entity: "partnership", entityId: input.keepId, details: `Juntos a "${r.keep.name}": ${r.drops.map((x) => `#${x.id} ${x.name}`).join(", ")}`.slice(0, 1000) });
+        return r;
+      }),
+    unmerge: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "parcerias", "manage");
+      const { unmergePartnership } = await import("./partnershipMerge");
+      const r = await unmergePartnership(input.id);
+      await logActivity({ userId: ctx.user.id, action: "unmerge", entity: "partnership", entityId: input.id, details: `Separado de #${r.keepId}` });
+      return r;
+    }),
+
     /** Arquivados (sem par na Multipark): ver e repor. */
     archived: protectedProcedure.query(async ({ ctx }) => {
       requireAccess(ctx.user, "parcerias", "view");
@@ -6760,7 +6785,9 @@ export const appRouter = router({
     }),
     unarchive: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "parcerias", "manage");
-      await updatePartnership(input.id, { archivedAt: null, archivedReason: null, multiparkKind: "own" } as any);
+      const { isMergedPartnership, unmergePartnership } = await import("./partnershipMerge");
+      if (await isMergedPartnership(input.id)) await unmergePartnership(input.id);
+      else await updatePartnership(input.id, { archivedAt: null, archivedReason: null, multiparkKind: "own" } as any);
       await logActivity({ userId: ctx.user.id, action: "update", entity: "partnership", entityId: input.id, details: "Reposto (tirado do arquivo)" });
       return { success: true };
     }),
