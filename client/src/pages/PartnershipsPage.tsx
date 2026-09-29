@@ -29,6 +29,7 @@ import { isPartnerUnconfigured, monthBoundsOf } from "@shared/partnerRules";
 import { lisbonToday } from "@shared/expensePeriods";
 import { toast } from "sonner";
 import { MultiparkSyncCard } from "@/components/partnerships/MultiparkSyncCard";
+import { PartnerCloseTab } from "@/components/partnerships/PartnerCloseTab";
 
 const fmt = (v: number | null) => v == null ? "Indisponível" : new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR" }).format(v);
 
@@ -426,12 +427,13 @@ export default function PartnershipsPage() {
     <div className="space-y-6">
       <p className="text-muted-foreground">Agências, agregadores e parques (ao vivo da BD da Multipark), Pró e avenças, e os nossos registos (contratos, notas e contactos)</p>
 
-      <Tabs defaultValue="partners">
+      <Tabs defaultValue={(() => { try { const t = new URLSearchParams(window.location.search).get("tab"); return t && ["partners", "parks", "pro", "summary", "fecho", "analytics", "management"].includes(t) ? t : "partners"; } catch { return "partners"; } })()}>
         <TabsList className={TABS_SCROLL}>
           <TabsTrigger value="partners"><Handshake className="w-3 h-3 mr-1" /> Parceiros</TabsTrigger>
           <TabsTrigger value="parks"><Building2 className="w-3 h-3 mr-1" /> Parques</TabsTrigger>
           <TabsTrigger value="pro"><Crown className="w-3 h-3 mr-1" /> Pró e avenças</TabsTrigger>
           <TabsTrigger value="summary"><Wallet className="w-3 h-3 mr-1" /> Faturação</TabsTrigger>
+          <TabsTrigger value="fecho">Fecho do mês</TabsTrigger>
           <TabsTrigger value="analytics">Análise</TabsTrigger>
           <TabsTrigger value="management">
             <Settings className="w-3 h-3 mr-1" /> Registos
@@ -461,6 +463,11 @@ export default function PartnershipsPage() {
         {/* ── TAB: RESUMO DE FATURAÇÃO POR PARCEIRO ─────────────────────────── */}
         <TabsContent value="summary" className="space-y-4">
           <InvoicingSummaryTab from={billingFrom} to={billingTo} onChangeFrom={setBillingFrom} onChangeTo={setBillingTo} />
+        </TabsContent>
+
+        {/* ── TAB: FECHO DO MÊS (Multipark vs a nossa memória do webhook) ──── */}
+        <TabsContent value="fecho" className="space-y-4">
+          <PartnerCloseTab />
         </TabsContent>
 
         {/* ── TAB: ANÁLISE ─────────────────────────────────────────────────── */}

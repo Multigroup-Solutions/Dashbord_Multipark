@@ -207,6 +207,37 @@ export async function partnerMpSyncCron(): Promise<CronJobRun> {
   }
 }
 
+/**
+ * Fecho do mês de parceiros: compara o mês corrente e o anterior (só as linhas
+ * abertas) e, com PARTNER_CLOSE_ALERTS ligado, avisa das diferenças novas.
+ */
+export async function partnerCloseCron(): Promise<CronJobRun> {
+  try {
+    const { refreshPartnerClose, currentMonthLisbon, previousMonth, markAlerted } = await import("./partnerClose");
+    const cur = currentMonthLisbon();
+    const out: Record<string, unknown> = {};
+    const fresh: Array<{ month: string; partnerName: string | null; diffs: number }> = [];
+    for (const m of [previousMonth(cur), cur]) {
+      const r = await refreshPartnerClose(m);
+      out[m] = { available: r.available, partners: r.partners, diffs: r.diffs, reason: r.reason };
+      if (!r.available) return { httpStatus: 503, body: { ok: false, error: r.reason ?? "Multipark indisponível", ...out } };
+      for (const n of r.newDiffs) fresh.push({ month: m, ...n });
+    }
+    const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
+    await ensureFeatureFlagOverrides();
+    if (fresh.length && isFeatureEnabled("PARTNER_CLOSE_ALERTS", { defaultEnabled: automationFlagDefault("PARTNER_CLOSE_ALERTS") })) {
+      const { notify } = await import("./notify");
+      const lines = fresh.slice(0, 12).map((x) => `${x.month} · ${x.partnerName ?? "parceiro"}: ${x.diffs} diferença(s)`);
+      await notify({ kind: "partner_close_alert", title: `Parceiros: ${fresh.length} com diferenças novas no fecho`, body: lines.join("\n"), link: "/parcerias?tab=fecho", entity: { type: "partner_close", id: cur } } as any);
+      for (const m of [previousMonth(cur), cur]) await markAlerted(m);
+    }
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...out, newDiffs: fresh.length }, done: true };
+  } catch (err) {
+    console.error("[cron partner-close] falhou:", msg(err, 200));
+    return fail(err);
+  }
+}
+
 // ─── Serviços das reservas → tarefas ─────────────────────────────────────────
 
 /**
