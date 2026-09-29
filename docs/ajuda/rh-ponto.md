@@ -20,6 +20,9 @@ palavras: rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar e
 - **Pessoas → Recursos Humanos** lista os colaboradores (separadores Colaboradores, Extras, Agentes, Recrutamento).
 - O separador **Agentes** ("Agentes por ligar") lê os agentes **ao vivo** da BD da Multipark: os ativos e os que tiveram ações nos últimos 180 dias e ainda não estão ligados a uma ficha, a um parceiro nem marcados como "não é funcionário". A ligação automática de hora a hora (por email e por nome) usa a mesma leitura. Se a BD da Multipark não responder, aparece um aviso e a lista vem da cópia antiga (sem os agentes novos).
 - Num **PDA registado**, ao entrar na app o aparelho fica ligado a ti (e ao Zello do PDA) até saíres ou outra pessoa entrar. Se essa ligação falhar, aparece um aviso — fala com a chefia.
+- **PDAs só pelo QR**: cada PDA regista-se uma vez lendo, no próprio aparelho, o QR colado nele (Operacional → PDAs → botão QR). Já não há check-in manual nem registo pela lista. A seguir ao registo aparece **Instalar a app neste PDA**: o dashboard fica instalado e abre sempre direto, no mesmo browser.
+- Cada PDA tem uma **etiqueta** (nome ou número) e uma **cidade** fixa (Operacional → PDAs → editar).
+- Com o interruptor **"Zello: nome de quem tem o PDA no mapa"** ligado (Definições → Automações), o nome da conta Zello do PDA passa a "PDA 12 · Rui Santos" quando alguém entra, e volta a "PDA 12" quando sai.
 - **Novo Colaborador** cria uma ficha; cada ficha precisa de centro de custos (cidade).
 - Correções de ponto: na ficha, separador Ponto, revê e corrige as horas.
 - Ordenados, recibos e folha para o contabilista só para admin.

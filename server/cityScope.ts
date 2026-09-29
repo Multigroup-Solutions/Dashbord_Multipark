@@ -96,8 +96,11 @@ export async function assertEmployeeAccess(employeeId: number): Promise<void> {
  */
 export function pdaScope(pdaId: SQLWrapper): SQL {
   if (scopedProjectIds() === undefined) return sql`1 = 1`;
-  return sql`EXISTS (SELECT 1 FROM pda_checkins city_pc WHERE city_pc.pdaId = ${pdaId}
-    AND city_pc.employeeId IS NOT NULL AND ${employeeScope(sql`city_pc.employeeId`)})`;
+  // Cidade fixa do PDA (0280) manda; sem ela, a de quem fez check-in nele.
+  return sql`(EXISTS (SELECT 1 FROM pdas city_fix WHERE city_fix.id = ${pdaId} AND city_fix.projectId IS NOT NULL AND ${projectScope(sql`city_fix.projectId`)})
+    OR (NOT EXISTS (SELECT 1 FROM pdas city_nf WHERE city_nf.id = ${pdaId} AND city_nf.projectId IS NOT NULL)
+      AND EXISTS (SELECT 1 FROM pda_checkins city_pc WHERE city_pc.pdaId = ${pdaId}
+        AND city_pc.employeeId IS NOT NULL AND ${employeeScope(sql`city_pc.employeeId`)})))`;
 }
 
 /** Um utilizador Zello é da cidade do(s) PDA(s) onde está instalado. */

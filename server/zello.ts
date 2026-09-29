@@ -87,6 +87,25 @@ async function zelloGet(path: string, params?: Record<string, string>): Promise<
   return data;
 }
 
+/**
+ * Muda o nome que aparece (full_name) de um utilizador do Zello — é o nome que
+ * se vê no mapa e nos canais. Usado para o PDA mostrar quem o tem agora.
+ * POST user/save (só name + full_name: o resto do utilizador não muda).
+ */
+export async function setZelloUserFullName(username: string, fullName: string): Promise<void> {
+  const call = async (sid: string) => {
+    const res = await fetchWithTimeout(`${BASE_URL}/user/save?sid=${sid}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ name: username, full_name: fullName }).toString(),
+    });
+    return res.json();
+  };
+  let data = await call(await authenticate());
+  if (data?.code === "301") { currentSid = null; sidExpiresAt = 0; data = await call(await authenticate()); }
+  if (data?.status !== "OK") throw new Error(`Zello user/save falhou: ${data?.status ?? "?"}`);
+}
+
 // ============ PUBLIC API ============
 
 export interface ZelloUser {
