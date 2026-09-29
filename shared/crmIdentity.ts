@@ -239,3 +239,17 @@ export const REASON_LABELS: Record<SuggestionReason, string> = {
   same_nif: "mesmo NIF",
   similar_name: "nome parecido",
 };
+
+// ─── Juntar sozinho (decisão do dono, 29 set 2026) ─────────────────────────
+
+/**
+ * Pares que o sistema junta SEM perguntar: o mesmo nome (namesMatch) E o mesmo
+ * telefone, email (não genérico) ou NIF. Nunca empresas. A matrícula sozinha
+ * não chega (família e carros emprestados). Fica registado e pode separar-se. PURA.
+ */
+export function autoMergeOk(a: SuggestionSide, b: SuggestionSide, o: { kindA?: string | null; kindB?: string | null } = {}): boolean {
+  if (o.kindA === "company" || o.kindB === "company") return false;
+  if (!namesMatch(a.name, b.name)) return false;
+  const inter = (x: string[], y: string[]) => x.some((v) => v && y.includes(v));
+  return (!!a.nif && a.nif === b.nif) || inter(a.phones, b.phones) || inter(a.emails, b.emails);
+}

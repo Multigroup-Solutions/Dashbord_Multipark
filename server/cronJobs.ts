@@ -163,6 +163,29 @@ export async function crmSuggestionsCron(o: { deadlineAt: number }): Promise<Cro
   }
 }
 
+/**
+ * CRM: juntar sozinho as fichas óbvias (mesmo nome + mesmo telefone/email/NIF)
+ * e voltar a gerar as sugestões (as fusões criam pares novos com a que fica).
+ * Interruptor CRM_AUTO_MERGE (ligado por omissão; cada fusão separa-se em Rever fichas).
+ */
+export async function crmAutoMergeCron(o: { deadlineAt: number }): Promise<CronJobRun> {
+  try {
+    const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
+    await ensureFeatureFlagOverrides();
+    if (!isFeatureEnabled("CRM_AUTO_MERGE", { defaultEnabled: automationFlagDefault("CRM_AUTO_MERGE") })) return { httpStatus: 200, body: { ranAt: ranAt(), skipped: "CRM_AUTO_MERGE desligado" }, done: true };
+    const { getDb, getSystemUserId } = await import("./db");
+    const db = await getDb();
+    if (!db) return { httpStatus: 503, body: { ok: false, error: "BD indisponível" } };
+    const { autoMergeConfident, refreshSuggestions } = await import("./crm/merge");
+    const r = await autoMergeConfident(db, { deadlineAt: o.deadlineAt - 15_000, userId: await getSystemUserId() });
+    const s = r.merged && Date.now() < o.deadlineAt - 12_000 ? await refreshSuggestions(db, { deadlineAt: o.deadlineAt - 2_000 }) : null;
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...r, suggestions: s }, done: true };
+  } catch (err) {
+    console.error("[cron crm-auto-merge] falhou:", msg(err, 200));
+    return fail(err);
+  }
+}
+
 // ─── Serviços das reservas → tarefas ─────────────────────────────────────────
 
 /**
