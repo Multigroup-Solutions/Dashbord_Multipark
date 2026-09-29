@@ -190,6 +190,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0235").then(m => ({ s: m.MIGRATION_0235_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0235 })),
       import("./migrations/migration_0240").then(m => ({ s: m.MIGRATION_0240_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0240 })),
       import("./migrations/migration_0245").then(m => ({ s: m.MIGRATION_0245_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0245 })),
+      import("./migrations/migration_0250").then(m => ({ s: m.MIGRATION_0250_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0250 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -4813,38 +4814,14 @@ export async function getOperationsSummary(filters: { startDate: string; endDate
 }
 
 export async function searchBookingByRef(search: string) {
-  const db = await getDb();
-  if (!db) return [];
-  const s = `%${search.trim()}%`;
-  return db.select({
-    id: multiparkBookings.id,
-    externalId: multiparkBookings.externalId,
-    bookingNumber: multiparkBookings.bookingNumber,
-    status: multiparkBookings.status,
-    parkName: multiparkBookings.parkName,
-    city: multiparkBookings.city,
-    projectId: multiparkBookings.projectId,
-    checkIn: multiparkBookings.checkIn,
-    checkOut: multiparkBookings.checkOut,
-    totalPrice: multiparkBookings.totalPrice,
-    clientFirstName: multiparkBookings.clientFirstName,
-    clientLastName: multiparkBookings.clientLastName,
-    clientEmail: multiparkBookings.clientEmail,
-    clientPhone: multiparkBookings.clientPhone,
-    licensePlate: multiparkBookings.licensePlate,
-  })
-    .from(multiparkBookings)
-    .where(or(
-      like(multiparkBookings.bookingNumber, s),
-      like(multiparkBookings.externalId, s),
-      like(multiparkBookings.clientEmail, s),
-      like(multiparkBookings.licensePlate, s),
-      like(multiparkBookings.clientFirstName, s),
-      like(multiparkBookings.clientLastName, s),
-      like(multiparkBookings.clientPhone, s),
-    ))
-    .orderBy(desc(multiparkBookings.bookingCreatedAt))
-    .limit(10);
+  // Ao vivo na BD da Multipark (29 set 2026), só nas cidades de quem pede.
+  const { searchLiveBookings, requestCities } = await import("./multiparkDb/bookingSearch");
+  try {
+    return await searchLiveBookings({ text: search }, { cities: await requestCities(), limit: 10 });
+  } catch (err) {
+    console.warn("[searchBookingByRef] BD da Multipark:", (err as Error)?.message);
+    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Pesquisa de reservas indisponível (BD da Multipark sem resposta)." });
+  }
 }
 
 export async function getMultiparkBookingByExternalId(externalId: string) {
@@ -6793,34 +6770,6 @@ export async function findComplaintByClientSignals(
     .orderBy(desc(complaints.createdAt))
     .limit(1);
   return rows[0] ?? null;
-}
-
-/**
- * Reserva mais recente do cliente em multipark_bookings, por matrícula OU
- * email OU nome completo. Para auto-anexar a reserva a uma reclamação criada
- * por email (reservationRef = externalId → liga logo o histórico/condutores).
- */
-export async function findRecentBookingByClientSignals(
-  clientEmail?: string | null,
-  vehiclePlate?: string | null,
-  clientName?: string | null,
-) {
-  const db = await getDb();
-  if (!db) return null;
-  const conds: any[] = [];
-  const plate = vehiclePlate?.replace(/[\s-]/g, "").toUpperCase();
-  if (plate) conds.push(eq(multiparkBookings.licensePlate, plate));
-  if (clientEmail) conds.push(eq(multiparkBookings.clientEmail, clientEmail));
-  const name = clientName?.trim();
-  if (name && name.length >= 6) {
-    conds.push(sql`CONCAT_WS(' ', ${multiparkBookings.clientFirstName}, ${multiparkBookings.clientLastName}) = ${name}`);
-  }
-  if (!conds.length) return null;
-  const rows = await db.select().from(multiparkBookings)
-    .where(or(...conds))
-    .orderBy(desc(multiparkBookings.checkIn))
-    .limit(1);
-  return rows[0] || null;
 }
 
 export async function findOpenComplaintByClient(clientEmail?: string | null, vehiclePlate?: string | null) {

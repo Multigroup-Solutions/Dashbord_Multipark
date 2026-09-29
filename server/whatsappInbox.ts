@@ -74,7 +74,8 @@ export interface ConversationRow {
   assignedName: string | null;
   /** 1.ª mensagem recebida ainda sem resposta (SLA); null = respondida. */
   awaitingSince: string | null;
-  linkedBookingId: number | null;
+  linkedBookingRef: string | null;
+  linkedBookingLabel: string | null;
   linkedClientEmail: string | null;
   /** Triagem por IA (0123): intenção e urgência (null = por classificar). */
   aiIntent: string | null;
@@ -228,7 +229,8 @@ export async function listConversations(): Promise<ConversationRow[]> {
       assignedUserId: whatsappConversations.assignedUserId,
       assignedName: users.name,
       awaitingSince: whatsappConversations.awaitingSince,
-      linkedBookingId: whatsappConversations.linkedBookingId,
+      linkedBookingRef: whatsappConversations.linkedBookingRef,
+      linkedBookingLabel: whatsappConversations.linkedBookingLabel,
       linkedClientEmail: whatsappConversations.linkedClientEmail,
       aiIntent: whatsappConversations.aiIntent,
       aiUrgency: whatsappConversations.aiUrgency,
@@ -261,7 +263,8 @@ export async function listConversations(): Promise<ConversationRow[]> {
       assignedUserId: sql<number | null>`NULL`,
       assignedName: sql<string | null>`NULL`,
       awaitingSince: sql<string | null>`NULL`,
-      linkedBookingId: sql<number | null>`NULL`,
+      linkedBookingRef: sql<string | null>`NULL`,
+      linkedBookingLabel: sql<string | null>`NULL`,
       linkedClientEmail: sql<string | null>`NULL`,
       aiIntent: sql<string | null>`NULL`,
       aiUrgency: sql<string | null>`NULL`,
@@ -305,7 +308,8 @@ export async function listConversations(): Promise<ConversationRow[]> {
       assignedUserId: c.assignedUserId,
       assignedName: c.assignedName ?? null,
       awaitingSince: c.awaitingSince,
-      linkedBookingId: c.linkedBookingId,
+      linkedBookingRef: c.linkedBookingRef,
+      linkedBookingLabel: c.linkedBookingLabel,
       linkedClientEmail: c.linkedClientEmail,
       aiIntent: c.aiIntent ?? null,
       aiUrgency: c.aiUrgency ?? null,
@@ -360,7 +364,8 @@ export interface ConversationThread {
   assignedUserId: number | null;
   awaitingSince: string | null;
   unreadCount: number;
-  linkedBookingId: number | null;
+  linkedBookingRef: string | null;
+  linkedBookingLabel: string | null;
   linkedClientEmail: string | null;
   aiIntent: string | null;
   aiUrgency: string | null;
@@ -385,7 +390,8 @@ export async function getConversationThread(conversationId: number, limit = 100)
       assignedUserId: whatsappConversations.assignedUserId,
       awaitingSince: whatsappConversations.awaitingSince,
       unreadCount: whatsappConversations.unreadCount,
-      linkedBookingId: whatsappConversations.linkedBookingId,
+      linkedBookingRef: whatsappConversations.linkedBookingRef,
+      linkedBookingLabel: whatsappConversations.linkedBookingLabel,
       linkedClientEmail: whatsappConversations.linkedClientEmail,
       aiIntent: whatsappConversations.aiIntent,
       aiUrgency: whatsappConversations.aiUrgency,
@@ -435,7 +441,8 @@ export async function getConversationThread(conversationId: number, limit = 100)
     assignedUserId: conv.assignedUserId,
     awaitingSince: conv.awaitingSince,
     unreadCount: conv.unreadCount,
-    linkedBookingId: conv.linkedBookingId,
+    linkedBookingRef: conv.linkedBookingRef,
+    linkedBookingLabel: conv.linkedBookingLabel,
     linkedClientEmail: conv.linkedClientEmail,
     aiIntent: conv.aiIntent ?? null,
     aiUrgency: conv.aiUrgency ?? null,

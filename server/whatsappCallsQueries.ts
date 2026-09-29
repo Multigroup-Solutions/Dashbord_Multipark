@@ -54,12 +54,11 @@ export async function listIncomingCalls(scope: number[] | undefined, nowMs = Dat
   const [rows] = (await db.execute(sql`
     SELECT k.id, k.conversationId, k.status, k.phoneE164, k.startedAt, k.answeredByUserId,
            ${convNameSql} AS name, u.name AS answeredByName,
-           b.bookingNumber AS bookingNumber, TRIM(CONCAT(COALESCE(b.clientFirstName, ''), ' ', COALESCE(b.clientLastName, ''))) AS bookingClient
+           whatsapp_conversations.linkedBookingLabel AS bookingLabel
       FROM whatsapp_calls k
       JOIN whatsapp_conversations ON whatsapp_conversations.id = k.conversationId
       LEFT JOIN employees ON employees.id = whatsapp_conversations.employeeId
       LEFT JOIN users u ON u.id = k.answeredByUserId
-      LEFT JOIN multipark_bookings b ON b.id = whatsapp_conversations.linkedBookingId
      WHERE k.direction = 'in' AND k.startedAt >= ${since}
        AND k.status IN ('ringing','answering','connected','rejected')
        AND ${callScopeSql(scope)}
@@ -73,8 +72,7 @@ export async function listIncomingCalls(scope: number[] | undefined, nowMs = Dat
     startedAt: dbStr(r.startedAt)!,
     answeredByUserId: r.answeredByUserId == null ? null : Number(r.answeredByUserId),
     answeredByName: r.answeredByName ?? null,
-    bookingNumber: r.bookingNumber ?? null,
-    bookingClient: r.bookingClient && String(r.bookingClient).trim() ? String(r.bookingClient).trim() : null,
+    ...splitBookingLabel(r.bookingLabel),
   }));
 }
 
@@ -180,4 +178,12 @@ export async function conversationCallContext(conversationId: number): Promise<{
     .limit(1);
   if (!c) return null;
   return { phoneE164: c.phoneE164, projectId: await conversationProjectId(conversationId), lastInboundAt: c.lastInboundAt ?? null, optedOut: !!c.optedOutAt };
+}
+
+/** "#29484 · Ana Silva" (etiqueta guardada ao ligar a reserva) → n.º e cliente. PURA. */
+export function splitBookingLabel(label: unknown): { bookingNumber: string | null; bookingClient: string | null } {
+  const m = /^#(\S+)(?:\s+·\s+(.*))?$/.exec(String(label ?? "").trim());
+  if (!m) return { bookingNumber: null, bookingClient: null };
+  const client = (m[2] ?? "").trim();
+  return { bookingNumber: m[1], bookingClient: client && client !== "—" ? client : null };
 }

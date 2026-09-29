@@ -439,9 +439,11 @@ async function resolveEntity(type: MailLinkType, raw: string): Promise<string> {
     return id;
   }
   if (type === "booking") {
-    const r = rowsOf(await d.execute(sql`SELECT externalId FROM multipark_bookings WHERE externalId = ${id} OR bookingNumber = ${id} LIMIT 1`))[0];
+    // Ao vivo na Multipark (id ou n.º), nas cidades de quem liga.
+    const { liveBookingByRef } = await import("../multiparkDb/bookingSearch");
+    const r = await liveBookingByRef(id, { cities: "request" }).catch(() => { throw bad("Não foi possível confirmar a reserva (BD da Multipark sem resposta)."); });
     if (!r) throw bad("Reserva não encontrada (usa a referência ou o nº da reserva).");
-    return String(r.externalId);
+    return r.id;
   }
   const table = type === "complaint" ? sql`complaints` : type === "lost_found" ? sql`lost_found_items` : sql`incidents`;
   const r = rowsOf(await d.execute(sql`SELECT id FROM ${table} WHERE id = ${Number(id)} LIMIT 1`))[0];
@@ -669,7 +671,9 @@ export async function assertEntityInScope(type: MailLinkType, entityId: string):
     const { crmClientByEmail } = await import("../crm/lookup");
     ok = !!(await crmClientByEmail(d, entityId));
   } else if (type === "booking") {
-    ok = rowsOf(await d.execute(sql`SELECT 1 AS x FROM multipark_bookings WHERE externalId = ${entityId} AND projectId ${inScope} LIMIT 1`)).length > 0;
+    // A reserva (ao vivo) é de um parque das cidades de quem pede?
+    const { liveBookingByRef } = await import("../multiparkDb/bookingSearch");
+    ok = !!(await liveBookingByRef(entityId, { cities: "request" }).catch(() => null));
   } else {
     const table = type === "complaint" ? sql`complaints` : type === "lost_found" ? sql`lost_found_items` : sql`incidents`;
     ok = rowsOf(await d.execute(sql`SELECT 1 AS x FROM ${table} WHERE id = ${Number(entityId)} AND projectId ${inScope} LIMIT 1`)).length > 0;
@@ -723,7 +727,7 @@ export async function entityTimeline(viewer: MailViewer, type: MailLinkType, raw
   if ((type === "client" || type === "booking") && can(viewer, "whatsapp", "view")) {
     const cond = type === "client"
       ? sql`LOWER(TRIM(c.linkedClientEmail)) = ${entityId}`
-      : sql`c.linkedBookingId IN (SELECT b.id FROM multipark_bookings b WHERE b.externalId = ${entityId})`;
+      : sql`c.linkedBookingRef = ${entityId}`;
     const wa = rowsOf(await d.execute(sql`SELECT w.id, w.conversationId, w.direction, w.body, w.type, w.templateName, COALESCE(w.waTimestamp, w.createdAt) AS at, c.profileName
       FROM whatsapp_messages w JOIN whatsapp_conversations c ON c.id = w.conversationId WHERE ${cond} ORDER BY at DESC LIMIT 60`));
     for (const w of wa) {

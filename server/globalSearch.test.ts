@@ -1,4 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// Reservas: ao vivo na BD da Multipark (bookingSearch) — aqui guardamos o pedido.
+const live = vi.hoisted(() => ({ calls: [] as Array<{ c: any; o: any }> }));
+vi.mock("./multiparkDb/bookingSearch", async (orig) => ({
+  ...(await orig<object>()),
+  searchLiveBookings: vi.fn(async (c: any, o: any) => {
+    live.calls.push({ c, o });
+    return [{ id: "EXT1", externalId: "EXT1", bookingNumber: "MP12345", status: "CONFIRMED", parkName: "Airpark", city: "Porto", parkId: "p1", projectId: 50,
+      checkIn: "2026-09-20 10:00:00", checkOut: null, bookingCreatedAt: "2026-09-01 12:00:00", totalPrice: 10,
+      clientFirstName: "Ana", clientLastName: "Silva", clientEmail: "ana@x.pt", clientPhone: null, licensePlate: "AA-00-BB" }];
+  }),
+}));
 import { createFakeDb, type FakeQuery } from "./_core/ai/testUtils";
 import { cityScope } from "./cityScope";
 import { globalSearch, type SearchSource } from "./globalSearch";
@@ -14,27 +26,25 @@ const ALL = { all: true, defaultCityId: null, cityName: undefined, cityNames: ["
 
 function respond(q: FakeQuery): unknown {
   if (q.sql.startsWith("SELECT id FROM employees WHERE userId")) return [[{ id: 77 }]];
-  if (q.sql.includes("FROM multipark_bookings b WHERE (")) {
-    return [[{ id: 1, externalId: "EXT1", bookingNumber: "MP12345", status: "CONFIRMED", parkName: "Airpark", checkIn: "2026-09-20 10:00:00", clientFirstName: "Ana", clientLastName: "Silva", clientEmail: "ana@x.pt", licensePlate: "AA-00-BB", bookingCreatedAt: "2026-09-01 12:00:00" }]];
-  }
   return [[]];
 }
 
 async function search(role: string, access: typeof PORTO | typeof ALL, q = "MP12345", overrides: any = null) {
   const d = createFakeDb(respond);
+  live.calls = [];
   const r = await cityScope.run(access as any, () => globalSearch(d as any, { id: 5, role, accessOverrides: overrides }, { q }));
-  return { r, queries: d.queries };
+  return { r, queries: d.queries, live: [...live.calls] };
 }
 const find = (qs: FakeQuery[], needle: string) => qs.filter((q) => q.sql.includes(needle));
 
 describe("pesquisa global — acesso e cidade por fonte", () => {
   it("supervisor do Porto: todas as fontes da página filtram pelas cidades do Porto", async () => {
-    const { r, queries } = await search("supervisor", PORTO);
-    const bookings = find(queries, "FROM multipark_bookings b WHERE (");
-    expect(bookings).toHaveLength(1);
-    expect(bookings[0].sql).toContain("b.projectId IN");
-    expect(bookings[0].params).toEqual(expect.arrayContaining([50, 65]));
-    expect(bookings[0].params).not.toContain(10);
+    const { r, queries, live: calls } = await search("supervisor", PORTO);
+    // reservas ao vivo, só nas cidades de quem pesquisa; a cópia local não é lida
+    expect(calls).toHaveLength(1);
+    expect(calls[0].o.cities).toEqual(["Porto"]);
+    expect(calls[0].c.text).toBe("MP12345");
+    expect(find(queries, "FROM multipark_bookings b")).toHaveLength(0);
     expect(find(queries, "FROM complaints c")[0].sql).toContain("c.projectId IN");
     expect(find(queries, "FROM tasks t")[0].sql).toContain("(t.projectId IS NULL OR t.projectId IN");
     expect(find(queries, "FROM whatsapp_conversations")[0].sql).toContain("vis_lead");
@@ -48,15 +58,13 @@ describe("pesquisa global — acesso e cidade por fonte", () => {
   });
 
   it("admin (todas as cidades): sem restrição de projeto", async () => {
-    const { queries } = await search("admin", ALL);
-    const b = find(queries, "FROM multipark_bookings b WHERE (")[0];
-    expect(b.sql).not.toContain("b.projectId IN");
-    expect(b.sql).toContain("1 = 1");
+    const { live: calls } = await search("admin", ALL);
+    expect(calls[0].o.cities).toBeUndefined();
   });
 
   it("extra de Lisboa: sem reservas, reclamações (só as próprias), WhatsApp nem utilizadores; só as suas tarefas", async () => {
-    const { queries } = await search("extra", LISBOA, "cofre");
-    expect(find(queries, "multipark_bookings")).toHaveLength(0);
+    const { queries, live: calls } = await search("extra", LISBOA, "cofre");
+    expect(calls).toHaveLength(0);
     expect(find(queries, "FROM complaints")).toHaveLength(0);
     expect(find(queries, "FROM whatsapp_conversations")).toHaveLength(0);
     expect(find(queries, "FROM users u")).toHaveLength(0);
@@ -67,10 +75,8 @@ describe("pesquisa global — acesso e cidade por fonte", () => {
   });
 
   it("condutor de Faro: reservas de Faro (cidade), reclamações não (só as próprias)", async () => {
-    const { queries } = await search("condutor", FARO);
-    const b = find(queries, "FROM multipark_bookings b WHERE (")[0];
-    expect(b.params).toContain(90);
-    expect(b.params).not.toContain(50);
+    const { queries, live: calls } = await search("condutor", FARO);
+    expect(calls[0].o.cities).toEqual(["Faro"]);
     expect(find(queries, "FROM complaints")).toHaveLength(0);
   });
 
@@ -78,8 +84,7 @@ describe("pesquisa global — acesso e cidade por fonte", () => {
     const noComplaints = await search("supervisor", PORTO, "MP12345", { reclamacoes: { access: "none", actions: [] } });
     expect(find(noComplaints.queries, "FROM complaints")).toHaveLength(0);
     const extraWithBookings = await search("extra", LISBOA, "MP12345", { reservas_operacoes: { access: "city", actions: ["view"] } });
-    const b = find(extraWithBookings.queries, "FROM multipark_bookings b WHERE (")[0];
-    expect(b.params).toEqual(expect.arrayContaining([10, 11]));
+    expect(extraWithBookings.live[0].o.cities).toEqual(["Lisboa"]);
   });
 
   it("base de conhecimento: só documentos visíveis (papel + cidades), sem a ajuda", async () => {

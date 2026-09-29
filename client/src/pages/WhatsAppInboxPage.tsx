@@ -979,13 +979,13 @@ export default function WhatsAppInboxPage() {
               )}
               <Button
                 size="sm"
-                variant={t.linkedBookingId || t.linkedClientEmail ? "secondary" : "outline"}
+                variant={t.linkedBookingRef || t.linkedClientEmail ? "secondary" : "outline"}
                 className="h-8 text-xs"
                 title="Reservas, reclamações e perdidos deste número; ligar a uma reserva ou cliente"
                 onClick={() => setContextOpen(true)}
               >
                 <Link2 className="h-3.5 w-3.5 mr-1" />
-                {t.linkedBookingId ? "Reserva ligada" : t.linkedClientEmail ? "Cliente ligado" : "Contexto"}
+                {t.linkedBookingRef ? "Reserva ligada" : t.linkedClientEmail ? "Cliente ligado" : "Contexto"}
               </Button>
               {aiConfigured && (
                 <Button

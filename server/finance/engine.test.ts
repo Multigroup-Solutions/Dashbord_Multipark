@@ -36,7 +36,7 @@ vi.mock("./liveBookings", async (orig) => {
 /** Agregado ao vivo (centro já resolvido). */
 const agg = (o: any) => ({ day: "2026-08-10", projectId: null, parkId: "pk", campaign: null, paymentMethod: null, count: 1, total: 0, parking: 0, delivery: 0, extras: 0, paid: 0, remaining: 0, owingCount: 0, ...o });
 
-import { computeFinance, deliveredConditions, bookingLisbonDay, monthlyRowsFromTimeseries } from "./engine";
+import { computeFinance, monthlyRowsFromTimeseries } from "./engine";
 import { DEFAULT_FINANCE_RATES } from "./rates";
 import { lisbonDayOf, lisbonDayRangeUtc } from "../../shared/lisbonDay";
 
@@ -107,17 +107,6 @@ describe("dias de Lisboa no motor", () => {
     expect(at >= aug.start && at < aug.end).toBe(true);
     expect(at >= jul.start && at < jul.end).toBe(false);
     expect(lisbonDayOf(at)).toBe("2026-08-01");
-  });
-  it("filtro da receita realizada: CHECKED_OUT com saída em [início, fim) de Lisboa, parametrizado", () => {
-    const q = render(sqlAnd(deliveredConditions("2026-08-01", "2026-08-31", [5])));
-    expect(q.params).toEqual(expect.arrayContaining(["2026-07-31 23:00:00", "2026-08-31 23:00:00", "CHECKED_OUT", 5]));
-    expect(q.sql).toContain("< ?");
-    // dia de Lisboa no SQL: +1 h no verão (sem tabelas de fusos do MySQL)
-    const d = render(bookingLisbonDay("checkOut", "2026-08-01", "2026-08-31"));
-    expect(d.sql).toContain("INTERVAL 1 HOUR");
-    expect(d.params).toEqual([]);   // literais → mesmo texto no SELECT e no GROUP BY
-    // mudança de hora a meio (outubro): CASE por troço
-    expect(render(bookingLisbonDay("checkIn", "2026-10-01", "2026-10-31")).sql).toContain("CASE WHEN");
   });
   it("ponto dos extras em dias de Lisboa: 23:30 UTC de 31/07 conta a 1/08", async () => {
     extrasRows.ponto = [{ recordedAt: "2026-07-31 23:30:00", hours: 8, level: 1, employeeId: 3, projectId: null }];

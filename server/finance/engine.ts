@@ -44,7 +44,7 @@
  */
 import { and, eq, gte, lt, lte, sql, isNotNull, inArray, notInArray, or, isNull, type SQL } from "drizzle-orm";
 import {
-  multiparkBookings, projects, expenses, expenseCategories,
+  projects, expenses, expenseCategories,
   employees, employeeSalaryHistory, marketingExpenses,
 } from "../../drizzle/schema";
 import { DEFAULT_EXTRA_RATES, loadExtraRates } from "../extraRates";
@@ -193,25 +193,6 @@ const dayOf = (v: unknown) => String(v ?? "").slice(0, 10);
 function addTo(map: Map<string, number>, key: string, v: number) {
   if (!v) return;
   map.set(key, (map.get(key) ?? 0) + v);
-}
-
-/** Coluna TIMESTAMP (UTC) das reservas como SQL qualificado para lisbonDaySql. */
-const BOOKING_COL = { checkOut: "`multipark_bookings`.`checkOut`", checkIn: "`multipark_bookings`.`checkIn`" } as const;
-
-/** Dia de Lisboa de uma coluna das reservas (literais validados; sem parâmetros → igual no SELECT e no GROUP BY). */
-export function bookingLisbonDay(col: keyof typeof BOOKING_COL, from: string, to: string): SQL<string> {
-  return sql<string>`${sql.raw(lisbonDaySql(BOOKING_COL[col], from, to))}`;
-}
-
-/**
- * Condições da RECEITA REALIZADA — a mesma regra em todo o lado (motor,
- * Diagnóstico, Parcerias): CHECKED_OUT com saída no período de Lisboa.
- */
-export function deliveredConditions(from: string, to: string, projectIds?: number[] | null): SQL[] {
-  const r = lisbonDayRangeUtc(from, to);
-  const conds: SQL[] = [gte(multiparkBookings.checkOut, r.start), lt(multiparkBookings.checkOut, r.end), inArray(multiparkBookings.status, DELIVERED_STATUSES)];
-  if (projectIds) conds.push(inArray(multiparkBookings.projectId, projectIds));
-  return conds;
 }
 
 export function emptyFinanceResult(filters: FinanceFilters): FinanceResult {
