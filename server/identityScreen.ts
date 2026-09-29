@@ -8,6 +8,7 @@ import { getDb } from "./db";
 import { buildIdentityAudit, loadIdentitySnapshot } from "./identityReconcile";
 import { scopedProjectIds } from "./cityScope";
 import { looksLikeTestAgent } from "./personIdentity";
+import { isStaleAgent } from "../shared/agentIdentity";
 
 const LIMIT = 150;
 
@@ -73,7 +74,7 @@ export async function getLinksOverview(): Promise<LinksOverview> {
       .slice(0, LIMIT),
     agentsUnmatched: audit.agentsUnmatched
       // Agentes de teste saem da lista (decisão do dono); continuam na Multipark.
-      .filter((a) => a.actions > 0 && !aliasAgentIds.has(a.agentUserId) && !looksLikeTestAgent(a.agentNames[0], a.agentEmails[0]))
+      .filter((a) => a.actions > 0 && !aliasAgentIds.has(a.agentUserId) && !looksLikeTestAgent(a.agentNames[0], a.agentEmails[0]) && !isStaleAgent(a.actions, a.lastAction))
       .sort((a, b) => b.actions - a.actions)
       .slice(0, LIMIT)
       .map((a) => ({ agentUserId: a.agentUserId, agentName: a.agentNames[0] ?? a.agentUserId, email: a.agentEmails[0] ?? null, actions: a.actions, lastAction: a.lastAction })),

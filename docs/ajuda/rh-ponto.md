@@ -58,6 +58,7 @@ Em **RH → Ligações** (quem gere o RH) vês o que falta ligar entre as fichas
 **Agentes que não são pessoas**
 - "system", "api" e "API User" são ações automáticas da Multipark: nunca se ligam a fichas e deixam de aparecer nos conflitos. Agentes de teste, agências e textos de formulário ("NOME DO RESPONSÁVEL…") também não. A ligação de hora a hora (e **Reconciliar agora**) tira-os das fichas onde tivessem ficado presos, e fica registado.
 - Login com o email da casa (@multipark.pt…) e ficha com o email pessoal é o normal: já não aparece como conflito.
+- **Agentes por ligar** mostra só quem mexeu em carros nos últimos 60 dias; os parados ficam num botão à parte ("Mostrar também os parados"). Os agentes só de parceiro (portal das agências) não aparecem. Podes escolher vários e marcá-los de uma vez como "não é funcionário".
 
 **Agentes de teste**
 - Agentes cujo nome ou email diz "teste", "test", "demo" e parecidos não aparecem nos "por ligar". Continuam na Multipark.

@@ -86,7 +86,7 @@ describe("catálogo de agentes ao vivo", () => {
 
   it("linha → agente (nome mais usado primeiro, depois o do Agent; email em minúsculas)", () => {
     expect(mapLiveAgentRow({ user_id: "u1", history_names: ["Ana S", "Ana Silva"], agent_name: "Ana Silva", email: "Ana@X.pt", active: true, total: "7", checkins: 2, checkouts: 1, movements: 3, first_at: "2026-09-01 10:00:00", last_at: "2026-09-27 08:00:00" }))
-      .toEqual({ agentUserId: "u1", agentName: "Ana S", agentNames: ["Ana S", "Ana Silva"], email: "ana@x.pt", active: true, total: 7, checkins: 2, checkouts: 1, movements: 3, firstSeen: "2026-09-01T10:00:00.000Z", lastSeen: "2026-09-27T08:00:00.000Z" });
+      .toEqual({ agentUserId: "u1", agentName: "Ana S", agentNames: ["Ana S", "Ana Silva"], email: "ana@x.pt", active: true, partnerOnly: false, total: 7, checkins: 2, checkouts: 1, movements: 3, firstSeen: "2026-09-01T10:00:00.000Z", lastSeen: "2026-09-27T08:00:00.000Z" });
     // sem ações: só o nome do Agent; array em texto do Postgres
     expect(mapLiveAgentRow({ user_id: "u2", history_names: '{"Rui Costa",Rui}', agent_name: null, active: "t", total: 0 })).toMatchObject({ agentName: "Rui Costa", agentNames: ["Rui Costa", "Rui"], active: true, lastSeen: null });
     expect(mapLiveAgentRow({ user_id: null })).toBeNull();

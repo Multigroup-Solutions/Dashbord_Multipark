@@ -59,7 +59,11 @@ export function IdentityLinksSection() {
     onSuccess: (r) => {
       refresh();
       const n = r.usersLinked + r.usersCreated + r.employeesLinkedToUsers + r.agentIdsFilled + r.agentsByEmail + r.agentsByName + r.agentAliases;
-      toast.success(n ? `${n} ligação(ões) feitas automaticamente.` : "Nada de novo para ligar automaticamente.");
+      const cleaned = r.nonPersonAgentsRemoved ?? 0;
+      toast.success([
+        n ? `${n} ligação(ões) feitas automaticamente.` : "Nada de novo para ligar automaticamente.",
+        cleaned ? `${cleaned} agente(s) que não são pessoas (sistema, teste, agência) tirados das fichas.` : "",
+      ].filter(Boolean).join(" "));
       if (r.errors.length) toast.warning(r.errors.join(" · "));
     },
     onError: onErr,

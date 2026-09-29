@@ -7130,8 +7130,9 @@ export const appRouter = router({
       let source: "multipark" | "copia" = "multipark";
       let notice: string | null = null;
       if (live.available) {
-        rows = live.data.filter((a) => a.agentName).map((a) => ({
-          agentName: a.agentName, agentUserId: a.agentUserId, total: a.total, checkins: a.checkins, checkouts: a.checkouts,
+        // Agentes só de parceiro (role PARTNER na Multipark) não são da equipa.
+        rows = live.data.filter((a) => a.agentName && !a.partnerOnly).map((a) => ({
+          agentName: a.agentName, agentUserId: a.agentUserId, email: a.email, total: a.total, checkins: a.checkins, checkouts: a.checkouts,
           movements: a.movements, firstSeen: a.firstSeen, lastSeen: a.lastSeen,
         }));
       } else {
@@ -7182,9 +7183,15 @@ export const appRouter = router({
           movements: Number(r.movements ?? 0),
           firstSeen: r.firstSeen == null ? null : String(r.firstSeen instanceof Date ? r.firstSeen.toISOString() : r.firstSeen),
           lastSeen: r.lastSeen == null ? null : String(r.lastSeen instanceof Date ? r.lastSeen.toISOString() : r.lastSeen),
+          email: r.email ? String(r.email) : null,
         }))
         .sort((a, b) => b.total - a.total);
-      return { rows: list, source, notice };
+      // Parados: sem movimentos nos últimos UNLINKED_ACTIVE_DAYS dias (ou nunca). Não saem da
+      // Multipark, só ficam fora da lista principal (a UI mostra-os se pedires).
+      const { UNLINKED_ACTIVE_DAYS, isStaleAgent } = await import("../shared/agentIdentity");
+      const active = list.filter((a) => !isStaleAgent(a.total, a.lastSeen));
+      const stale = list.filter((a) => isStaleAgent(a.total, a.lastSeen));
+      return { rows: active, stale, staleDays: UNLINKED_ACTIVE_DAYS, source, notice };
     }),
 
     // Cria um funcionário-extra a partir de um agente órfão (aba RH)

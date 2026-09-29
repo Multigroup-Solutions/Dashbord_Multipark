@@ -45,3 +45,19 @@ describe("juntar fichas", () => {
     expect(DEACTIVATION_REASON_LABELS.ficha_duplicada).toMatch(/duplicada/);
   });
 });
+
+describe("agentes por ligar: só os que mexem em carros", () => {
+  it("parado = sem ações ou última ação há mais de 60 dias", async () => {
+    const { isStaleAgent } = await import("../shared/agentIdentity");
+    const now = Date.UTC(2026, 8, 29);
+    expect(isStaleAgent(0, null, now)).toBe(true);
+    expect(isStaleAgent(10, "2026-09-20T10:00:00.000Z", now)).toBe(false);
+    expect(isStaleAgent(10, "2026-07-01 10:00:00", now)).toBe(true);
+    expect(isStaleAgent(10, null, now)).toBe(false);
+  });
+  it("agentes só de parceiro vêm marcados da Multipark", async () => {
+    const { mapLiveAgentRow } = await import("./multiparkDb/activityLive");
+    expect(mapLiveAgentRow({ user_id: "u1", agent_name: "Guard Park", partner_only: true, total: 3 })?.partnerOnly).toBe(true);
+    expect(mapLiveAgentRow({ user_id: "u2", agent_name: "Ana", partner_only: false, total: 3 })?.partnerOnly).toBe(false);
+  });
+});

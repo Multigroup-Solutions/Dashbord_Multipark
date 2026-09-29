@@ -2838,7 +2838,10 @@ function UnlinkedAgentsBadge() {
 function UnlinkedAgentsSection() {
   const utils = trpc.useUtils();
   const { data: unlinked, isLoading } = trpc.multipark.unlinkedAgents.useQuery();
-  const agents = unlinked?.rows ?? [];
+  const [showStale, setShowStale] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const staleList = (unlinked as any)?.stale ?? [];
+  const agents = showStale ? [...(unlinked?.rows ?? []), ...staleList] : (unlinked?.rows ?? []);
   const { data: employees = [] } = trpc.multipark.employeesForMapping.useQuery();
   const { data: partnershipsList = [] } = trpc.partnerships.list.useQuery({} as any);
   const refresh = () => { utils.multipark.unlinkedAgents.invalidate(); utils.multipark.employeesForMapping.invalidate(); };
@@ -2868,7 +2871,7 @@ function UnlinkedAgentsSection() {
     <div className="space-y-3">
       <Card className="border-amber-200 bg-amber-50/40">
         <CardContent className="p-3 text-sm text-amber-900">
-          Estes agentes estão na Multipark (ativos ou com atividade nos últimos 180 dias, lidos ao vivo) mas não estão ligados a ninguém.
+          Estes agentes mexeram em carros nos últimos {(unlinked as any)?.staleDays ?? 60} dias (lidos ao vivo da Multipark) e não estão ligados a ninguém. Os de parceiros, de sistema, de teste e as agências já não aparecem.
           Liga cada um a um <strong>colaborador</strong>, a um <strong>parceiro</strong> (agências que marcam pelo portal),
           cria o funcionário — ou marca <strong>"não é funcionário"</strong> (testes, integrações, reservas de sistema) para o tirar da lista.
         </CardContent>
@@ -2876,6 +2879,23 @@ function UnlinkedAgentsSection() {
       {unlinked?.notice && (
         <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">{unlinked.notice}</p>
       )}
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        {staleList.length > 0 && (
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setShowStale((v) => !v)}>
+            {showStale ? "Esconder" : "Mostrar também"} os parados há mais de {(unlinked as any)?.staleDays ?? 60} dias ({staleList.length})
+          </Button>
+        )}
+        {picked.size > 0 && (
+          <Button size="sm" variant="destructive" className="h-7 text-xs" disabled={ignoreMut.isPending}
+            onClick={async () => {
+              if (!confirm(`Marcar ${picked.size} agente(s) como "não é funcionário"? Saem da lista (reversível).`)) return;
+              for (const name of picked) { try { await ignoreMut.mutateAsync({ agentName: name, ignored: true }); } catch { /* o toast avisa */ } }
+              setPicked(new Set());
+            }}>
+            🚫 Não é funcionário ({picked.size} selecionados)
+          </Button>
+        )}
+      </div>
       {isLoading ? (
         <p className="text-sm text-muted-foreground">A carregar…</p>
       ) : agents.length === 0 ? (
@@ -2885,6 +2905,7 @@ function UnlinkedAgentsSection() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b text-left text-xs text-muted-foreground">
+                <th className="p-2 w-6"></th>
                 <th className="p-2">Agente</th>
                 <th className="p-2 text-right">Ações</th>
                 <th className="p-2 text-right">In / Out / Mov</th>
@@ -2895,7 +2916,13 @@ function UnlinkedAgentsSection() {
             <tbody>
               {agents.map((a: any) => (
                 <tr key={a.agentName} className="border-b hover:bg-muted/30 align-top">
-                  <td className="p-2 font-medium max-w-[200px]">{a.agentName}</td>
+                  <td className="p-2">
+                    <input type="checkbox" checked={picked.has(a.agentName)} onChange={(e) => setPicked((prev) => { const n = new Set(prev); e.target.checked ? n.add(a.agentName) : n.delete(a.agentName); return n; })} />
+                  </td>
+                  <td className="p-2 font-medium max-w-[220px]">
+                    <div className="[overflow-wrap:anywhere]">{a.agentName}</div>
+                    {a.email && <div className="text-xs font-normal text-muted-foreground [overflow-wrap:anywhere]">{a.email}</div>}
+                  </td>
                   <td className="p-2 text-right font-semibold tabular-nums">{a.total}</td>
                   <td className="p-2 text-right text-xs tabular-nums">
                     <span className="text-emerald-700">{a.checkins}</span> / <span className="text-blue-700">{a.checkouts}</span> / {a.movements}
