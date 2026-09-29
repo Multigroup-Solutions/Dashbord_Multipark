@@ -29,6 +29,13 @@ export function cityNameScope(column: SQLWrapper): SQL {
   return aliases.length ? sql`LOWER(TRIM(${column})) IN (${sql.join(aliases.map(n => sql`${n}`), sql`, `)})` : sql`1 = 0`;
 }
 
+/** Cidades do pedido (Park.city) para as leituras ao vivo da BD da Multipark. undefined = todas; [] = nenhuma. */
+export function scopedCityNamesLive(): string[] | undefined {
+  const a = cityScope.getStore();
+  if (!a || a.all) return undefined;
+  return a.cityNames ?? (a.cityName ? [a.cityName] : []);
+}
+
 /** A history row belongs to the city of its booking, not to an inferred name. */
 export function bookingHistoryScope(externalId: SQLWrapper): SQL {
   if (scopedProjectIds() === undefined) return sql`1 = 1`;

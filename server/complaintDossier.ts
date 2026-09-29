@@ -349,12 +349,16 @@ export async function getComplaintBookingDossier(reservationRef: string): Promis
       })
       .from(multiparkBookingExtras)
       .where(eq(multiparkBookingExtras.bookingExternalId, booking.externalId)),
-    db
-      .select()
-      .from(multiparkBookingHistory)
-      .where(eq(multiparkBookingHistory.bookingExternalId, booking.externalId))
-      .orderBy(desc(multiparkBookingHistory.actionTime))
-      .limit(500),
+    // "History" AO VIVO da BD da Multipark (a cópia local está congelada desde o #141),
+    // no formato da cópia antiga (a página não muda).
+    import("./multiparkDb/historyLive")
+      .then(({ readLiveHistory }) => readLiveHistory({ bookingIds: [booking.externalId], limit: 500 }))
+      .then((rows) => rows.map((r, i) => ({
+        id: i + 1, bookingExternalId: r.bookingExternalId, historyId: r.historyId, changeType: r.changeType, actionTime: r.actionTime,
+        remarks: r.remarks, agentName: r.agentName, agentUserId: r.agentUserId, agentEmail: null, modifiedFields: r.modifiedFields,
+        platform: r.platform, fetchedAt: r.actionTime ?? "",
+      }) as typeof multiparkBookingHistory.$inferSelect))
+      .catch(() => [] as Array<typeof multiparkBookingHistory.$inferSelect>),
   ]);
 
   return { booking, extras, history, historyFetched: history.length > 0 };
