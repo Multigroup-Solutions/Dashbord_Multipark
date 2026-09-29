@@ -45,3 +45,16 @@ export function isStaleAgent(total: number, lastSeen: string | null | undefined,
   if (!Number.isFinite(t)) return false;
   return nowMs - t > UNLINKED_ACTIVE_DAYS * 86_400_000;
 }
+
+/**
+ * Nome do agente sem o que a Multipark lhe cola: cidade ("Bruno Meireles - PORTO",
+ * "Noemia Rodrigues (Porto)") e números no fim ("Luís Moraes1"). PURA.
+ */
+export function cleanAgentName(name: string | null | undefined): string {
+  return String(name ?? "")
+    .replace(/\s*[-–]\s*(porto|lisboa|lisbon|faro|algarve)\s*$/i, "")
+    .replace(/\s*\((porto|lisboa|lisbon|faro|algarve)\)\s*$/i, "")
+    .replace(/\d+\s*$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}

@@ -8,9 +8,20 @@ const emp = (id: number, fullName: string, o: Partial<EmpLite> = {}): EmpLite =>
 
 describe("nomes", () => {
   it("normaliza acentos, maiúsculas e pontuação", () => expect(normName("  João  Tercitano-Silva ")).toBe("joao tercitano silva"));
-  it("chaves: completo e primeiro + último", () => {
-    expect(nameKeys("Luís Miguel Tercitano")).toEqual(["luis miguel tercitano", "luis tercitano"]);
+  it("chaves: completo, primeiro + último e primeiro + cada apelido", () => {
+    expect(nameKeys("Luís Miguel Tercitano")).toEqual(["luis miguel tercitano", "luis tercitano", "luis miguel"]);
+    expect(nameKeys("Bruno Filipe da Silva Meireles")).toContain("bruno meireles");
+    expect(nameKeys("Bruno Filipe da Silva Meireles")).toContain("bruno silva");
+    expect(nameKeys("Bruno Filipe da Silva Meireles")).not.toContain("bruno da");
     expect(nameKeys("Ana Silva")).toEqual(["ana silva"]);
+  });
+  it("agente com a cidade ou números colados liga à ficha", async () => {
+    const { planNameAttach } = await import("./identityLink");
+    const r = planNameAttach(
+      [{ id: "a1", name: "Bruno Meireles - PORTO", count: 3 }, { id: "a1", name: "Bruno Meireles", count: 1 }, { id: "a2", name: "Luís Moraes1", count: 2 }],
+      [{ id: 1, fullName: "Bruno Filipe Meireles", active: true, agentName: null, agentUserId: null }, { id: 2, fullName: "Luis Moraes", active: true, agentName: null, agentUserId: null }],
+    );
+    expect(r.map((x) => [x.employeeId, x.agentUserId])).toEqual([[1, "a1"], [2, "a2"]]);
   });
 });
 

@@ -21,7 +21,7 @@
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { searchText } from "../shared/textKey";
-import { isLinkableAgent, isSystemAgentId } from "../shared/agentIdentity";
+import { cleanAgentName, isLinkableAgent, isSystemAgentId } from "../shared/agentIdentity";
 
 // ─── Puros ──────────────────────────────────────────────────────────────────
 
@@ -30,13 +30,21 @@ export function normName(s: string | null | undefined): string {
   return searchText(s);
 }
 
-/** Chaves de nome de uma ficha: completo e "primeiro + último" (formato da Multipark). */
+/**
+ * Chaves de nome de uma ficha: completo, "primeiro + último" e "primeiro +
+ * qualquer apelido" (na Multipark a pessoa escreve "Bruno Meireles" e a ficha
+ * é "Bruno Filipe Meireles Silva"). Só liga quando a chave é única dos dois lados.
+ */
 export function nameKeys(fullName: string): string[] {
   const n = normName(fullName);
   if (!n) return [];
-  const parts = n.split(" ");
-  const short = parts.length > 2 ? `${parts[0]} ${parts[parts.length - 1]}` : n;
-  return short === n ? [n] : [n, short];
+  const parts = n.split(" ").filter((p) => p.length > 1 || /\d/.test(p));
+  const keys = new Set<string>([n]);
+  if (parts.length > 2) {
+    keys.add(`${parts[0]} ${parts[parts.length - 1]}`);
+    for (const p of parts.slice(1)) if (!["da", "de", "do", "das", "dos", "e"].includes(p)) keys.add(`${parts[0]} ${p}`);
+  }
+  return [...keys];
 }
 
 export interface AgentSeen { id: string; name: string | null; count: number }
@@ -49,7 +57,7 @@ export interface EmpLite { id: number; fullName: string; active: boolean; agentN
 export function planAgentIdFill(emps: EmpLite[], agents: AgentSeen[]): { employeeId: number; agentUserId: string }[] {
   const idsByName = new Map<string, Set<string>>();
   for (const a of agents) {
-    const k = normName(a.name);
+    const k = normName(cleanAgentName(a.name));
     if (!k) continue;
     const s = idsByName.get(k) ?? new Set<string>();
     s.add(a.id);
@@ -59,7 +67,7 @@ export function planAgentIdFill(emps: EmpLite[], agents: AgentSeen[]): { employe
   const out: { employeeId: number; agentUserId: string }[] = [];
   for (const e of emps) {
     if (e.agentUserId || !e.agentName) continue;
-    const ids = idsByName.get(normName(e.agentName));
+    const ids = idsByName.get(normName(cleanAgentName(e.agentName)));
     if (!ids || ids.size !== 1) continue;
     const id = [...ids][0];
     if (linked.has(id)) continue;
@@ -76,11 +84,11 @@ export function planAgentIdFill(emps: EmpLite[], agents: AgentSeen[]): { employe
  */
 export function planNameAttach(agents: AgentSeen[], emps: EmpLite[]): { employeeId: number; agentUserId: string; agentName: string }[] {
   const linkedIds = new Set(emps.map((e) => e.agentUserId).filter(Boolean) as string[]);
-  const linkedNames = new Set(emps.map((e) => normName(e.agentName)).filter(Boolean));
-  const free = agents.filter((a) => a.name && !linkedIds.has(a.id) && !linkedNames.has(normName(a.name)));
+  const linkedNames = new Set(emps.map((e) => normName(cleanAgentName(e.agentName))).filter(Boolean));
+  const free = agents.filter((a) => a.name && !linkedIds.has(a.id) && !linkedNames.has(normName(cleanAgentName(a.name))));
   const agentsByKey = new Map<string, AgentSeen[]>();
   for (const a of free) {
-    const k = normName(a.name);
+    const k = normName(cleanAgentName(a.name));
     agentsByKey.set(k, [...(agentsByKey.get(k) ?? []), a]);
   }
   const empsByKey = new Map<string, EmpLite[]>();
@@ -90,7 +98,9 @@ export function planNameAttach(agents: AgentSeen[], emps: EmpLite[]): { employee
   }
   const out: { employeeId: number; agentUserId: string; agentName: string }[] = [];
   const usedEmp = new Set<number>();
-  for (const [k, list] of agentsByKey) {
+  for (const [k, all] of agentsByKey) {
+    // o mesmo agente pode vir com vários nomes que dão a mesma chave
+    const list = all.filter((a, i, arr) => arr.findIndex((x) => x.id === a.id) === i);
     if (list.length !== 1) continue;
     const cands = (empsByKey.get(k) ?? []).filter((e, i, arr) => arr.findIndex((x) => x.id === e.id) === i);
     if (cands.length !== 1 || usedEmp.has(cands[0].id)) continue;
