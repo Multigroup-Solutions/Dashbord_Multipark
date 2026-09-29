@@ -82,6 +82,8 @@ export interface SweepExtras {
   allowance: string | null;
   creditId: string | null;
   checkOutDriverName: string | null;
+  /** Pediu fatura com NIF (só sim/não; o NIF não sai daqui). */
+  hasNif: boolean;
   /** disputeEvents preenchido (só sim/não, nunca o conteúdo). */
   disputed: boolean;
   cancellation: { at: string | null; refund: boolean; refunded: boolean; refundedAmount: number | null; hasTransaction: boolean } | null;
@@ -101,7 +103,7 @@ export function buildSweepExtrasSql(ids: readonly string[]): { sql: string; para
   const sql = [
     `WITH d AS (SELECT b."id" FROM "Booking" b WHERE b."id" IN (${list}))`,
     `SELECT b."id" AS id, b."clientPlanId"::text AS client_plan_id, b."allowance"::text AS allowance, b."creditId"::text AS credit_id,`,
-    `  NULLIF(b."checkOutDriverName", '') AS checkout_driver,`,
+    `  NULLIF(b."checkOutDriverName", '') AS checkout_driver, (NULLIF(trim(COALESCE(b."taxNumber", '')), '') IS NOT NULL) AS has_nif,`,
     `  (b."disputeEvents" IS NOT NULL AND b."disputeEvents"::text NOT IN ('null', '[]', '{}', '')) AS disputed,`,
     `  cx.at AS cx_at, cx.refund AS cx_refund, cx.refunded AS cx_refunded, cx.refunded_amount AS cx_refunded_amount, cx.has_tx AS cx_has_tx,`,
     `  bl.n AS billing_n, bl.emitted AS billing_emitted, bl.amount AS billing_amount, bl.credit_notes AS billing_credit_notes,`,
@@ -140,7 +142,7 @@ const b = (v: unknown) => v === true || v === 1 || v === "1" || v === "t" || v =
 export function mapSweepExtrasRow(r: J): SweepExtras {
   return {
     id: String(r.id ?? ""),
-    clientPlanId: s(r.client_plan_id), allowance: s(r.allowance), creditId: s(r.credit_id), checkOutDriverName: s(r.checkout_driver),
+    clientPlanId: s(r.client_plan_id), allowance: s(r.allowance), creditId: s(r.credit_id), checkOutDriverName: s(r.checkout_driver), hasNif: b(r.has_nif),
     disputed: b(r.disputed),
     cancellation: r.cx_at == null && r.cx_refund == null ? null : {
       at: toIsoUtc(r.cx_at), refund: b(r.cx_refund), refunded: b(r.cx_refunded), refundedAmount: n(r.cx_refunded_amount), hasTransaction: b(r.cx_has_tx),

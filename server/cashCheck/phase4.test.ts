@@ -8,7 +8,7 @@ import {
 import { EXTERNAL_CODES, SWEEP_LABELS } from "./sweepRules";
 import { ixConfigured, ixGetDocument, ixPathFor, mapIxDocument } from "../external/invoiceExpress";
 import { mapPaymentIntent, stripeGetPayment, stripeKeyState, stripeRecentEvents } from "../external/stripe";
-import { buildBookingsByIntentSql, buildExternalCheckoutsSql, buildMonthDuesSql, buildPaymentsInWindowSql, mapExternalBookingRow } from "../multiparkDb/cashExternal";
+import { buildBookingsByIntentSql, buildExternalCheckoutsSql, buildMonthArrearsSql, buildMonthDuesSql, buildPaymentsInWindowSql, mapExternalBookingRow } from "../multiparkDb/cashExternal";
 import { mapVivaTransactions, vivaConfigured, vivaTransactionsOfDay } from "../external/vivaWallet";
 import { AUTOMATION_FLAGS, automationFlagDefault } from "../../shared/appSettings";
 import { assertReadOnlySql } from "../multiparkDb/client";
@@ -98,6 +98,7 @@ describe("caixa fase 4: leituras ao vivo (só leitura)", () => {
       buildBookingsByIntentSql({ parkIds: ["pA"], intents: ["pi_1"] }),
       buildPaymentsInWindowSql({ parkIds: ["pA"], start: "2026-09-26 23:00:00", end: "2026-09-28 23:00:00" }),
       buildMonthDuesSql({ parkIds: ["pA"], start: "2026-08-31 23:00:00", end: "2026-09-30 23:00:00" }),
+      buildMonthArrearsSql({ parkIds: ["pA"], start: "2025-08-31 23:00:00", end: "2026-08-31 23:00:00" }),
     ]) {
       expect(() => assertReadOnlySql(q.sql)).not.toThrow();
       expect(q.sql).toMatch(/LIMIT \$\d+/);
@@ -191,6 +192,10 @@ describe("caixa fase 4: recebimentos mensais (R17)", () => {
     expect(f).toMatchObject({ code: "monthly_receipt", rule: "R17" });
     expect(f.detail).toContain("faltam 10,00 €");
     expect(monthlyReceiptFinding({ kind: "pro", name: "X", month: "2026-09", received: 90, due: null })).toBeNull();
+    // Meses em atraso (decisão do dono): pagar a mais até ao que está em atraso não é diferença.
+    expect(monthlyReceiptFinding({ kind: "pro", name: "X", month: "2026-09", received: 150, due: 100, arrears: 60 })).toBeNull();
+    expect(monthlyReceiptFinding({ kind: "pro", name: "X", month: "2026-09", received: 170, due: 100, arrears: 60 })!.detail).toContain("a mais 10,00 €");
+    expect(monthlyReceiptFinding({ kind: "pro", name: "X", month: "2026-09", received: 80, due: 100, arrears: 60 })!.detail).toContain("60,00 € em atraso");
   });
 });
 

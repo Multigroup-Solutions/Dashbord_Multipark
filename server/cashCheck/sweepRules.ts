@@ -17,6 +17,7 @@
  * R9/R25 (quem mudou) leem a "History" — só no detalhe do caso (fase 3).
  */
 import { createHash } from "node:crypto";
+import { addDays, lisbonMidnightUtcMs } from "../../shared/lisbonDay";
 import type { MemorySnapshot } from "../webhookMemory";
 import type { SweepExtras } from "../multiparkDb/cashSweep";
 import { compareBooking, eurText, IN_OR_AFTER_CHECKIN, MONEY_TOLERANCE, paidAmount, sortMemory, type LiveFinance } from "./rules";
@@ -79,9 +80,17 @@ export const ALERT_CODES: ReadonlySet<SweepCode> = new Set<SweepCode>([
 
 export const SEVERITY_ORDER: Record<SweepSeverity, number> = { critical: 4, high: 3, medium: 2, info: 1 };
 
-/** Parâmetros (decisões do dono — valores por omissão, docs/auditoria/caixa-furos.md §8). */
-export interface SweepParams { driverCashHours: number; invoiceHours: number }
-export const DEFAULT_SWEEP_PARAMS: SweepParams = { driverCashHours: 12, invoiceHours: 48 };
+/**
+ * Parâmetros (decisões do dono, 29 set 2026):
+ *  - dinheiro: o condutor entrega ao líder no próprio dia (validação do
+ *    condutor até `driverGraceHours` depois da meia-noite, para os turnos da
+ *    noite) e o líder entrega ao back office no dia a seguir (dinheiro
+ *    conferido até ao fim do dia seguinte);
+ *  - fatura: 48 h para quem pediu fatura com NIF; as outras fazem-se no fim
+ *    do mês (prazo: fim do mês da saída + `invoiceHours`).
+ */
+export interface SweepParams { driverGraceHours: number; invoiceHours: number }
+export const DEFAULT_SWEEP_PARAMS: SweepParams = { driverGraceHours: 6, invoiceHours: 48 };
 
 export function finding(code: SweepCode, detail: string): Finding {
   const l = SWEEP_LABELS[code];
@@ -136,6 +145,18 @@ const lisbonDay = (iso: string | null | undefined) => {
 };
 const neq = (a: unknown, b: unknown) => (a ?? null) !== (b ?? null) && String(a ?? "").trim().toLowerCase() !== String(b ?? "").trim().toLowerCase();
 const moneyNeq = (a: number | null | undefined, b: number | null | undefined) => Math.abs((a ?? 0) - (b ?? 0)) > MONEY_TOLERANCE;
+
+/** Prazo da fatura: com NIF, saída + `hours`; sem NIF, fim do mês da saída (Lisboa) + `hours`. PURA. */
+export function invoiceDeadlineMs(checkOut: string | null | undefined, hasNif: boolean, hours: number): number | null {
+  const outMs = ms(checkOut);
+  if (!Number.isFinite(outMs)) return null;
+  if (hasNif) return outMs + hours * 3_600_000;
+  const day = lisbonDay(checkOut);
+  if (!day) return null;
+  const [y, m] = day.split("-").map(Number);
+  const firstNext = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, "0")}-01`;
+  return lisbonMidnightUtcMs(firstNext) + hours * 3_600_000;
+}
 
 /**
  * Todas as regras de uma reserva: R1–R8 (compareBooking, com a "era" =
@@ -197,9 +218,12 @@ export function evaluateSweep(o: {
     if (extras.extras.doneUncharged > 0) out.push(finding("extra_uncharged", `${extras.extras.doneUncharged} serviço(s) marcado(s) como feito(s) sem linha de preço cobrada.`));
 
     // R19 — paga e entregue sem fatura (passado o prazo), ou fatura ≠ pago.
+    // Com NIF: 48 h depois da saída. Sem NIF: fatura-se no fim do mês.
     const outMs = ms(live.checkOut);
-    if (live.status === "CHECKED_OUT" && !live.pro && paid > MONEY_TOLERANCE && Number.isFinite(outMs) && now - outMs > params.invoiceHours * 3_600_000) {
-      if (extras.billing.emitted === 0) out.push(finding("invoice_missing", `Saiu há mais de ${params.invoiceHours} h com ${eurText(paid)} pagos e sem fatura emitida.`));
+    const deadline = invoiceDeadlineMs(live.checkOut, extras.hasNif, params.invoiceHours);
+    if (live.status === "CHECKED_OUT" && !live.pro && paid > MONEY_TOLERANCE && Number.isFinite(outMs) && deadline != null && now > deadline) {
+      const why = extras.hasNif ? `Pediu fatura com NIF e saiu há mais de ${params.invoiceHours} h` : `Saiu em ${lisbonDay(live.checkOut)?.slice(0, 7)} e o mês já fechou`;
+      if (extras.billing.emitted === 0) out.push(finding("invoice_missing", `${why}: ${eurText(paid)} pagos e sem fatura emitida.`));
       else if (extras.billing.amount != null && moneyNeq(extras.billing.amount, paid)) out.push(finding("invoice_mismatch", `Faturado ${eurText(extras.billing.amount)}, pago ${eurText(paid)}.`));
     }
 
@@ -212,10 +236,16 @@ export function evaluateSweep(o: {
     // R21 — crédito usado.
     if (extras.creditId || (extras.credit.value ?? 0) > MONEY_TOLERANCE) out.push(finding("credit_used", `Pagou com crédito${extras.credit.value != null ? ` (${eurText(extras.credit.value)})` : ""}.`));
 
-    // R23 — dinheiro recebido há mais de N horas e o condutor ainda não validou.
-    const cashAt = ms(extras.cash.firstAt);
-    if ((extras.cash.amount ?? 0) > MONEY_TOLERANCE && !live.driverValidated.done && Number.isFinite(cashAt) && now - cashAt > params.driverCashHours * 3_600_000) {
-      out.push(finding("driver_cash_pending", `${eurText(extras.cash.amount)} em dinheiro registados há mais de ${params.driverCashHours} h${extras.checkOutDriverName ? ` (saída por ${extras.checkOutDriverName})` : ""} e o condutor ainda não validou a entrega.`));
+    // R23 — dinheiro: condutor → líder no próprio dia; líder → back office no dia a seguir.
+    const cashDay = lisbonDay(extras.cash.firstAt);
+    if ((extras.cash.amount ?? 0) > MONEY_TOLERANCE && cashDay) {
+      const nextMidnight = lisbonMidnightUtcMs(addDays(cashDay, 1));
+      const who = extras.checkOutDriverName ? ` (saída por ${extras.checkOutDriverName})` : "";
+      if (!live.driverValidated.done && now > nextMidnight + params.driverGraceHours * 3_600_000) {
+        out.push(finding("driver_cash_pending", `${eurText(extras.cash.amount)} em dinheiro recebidos a ${cashDay}${who} e a entrega do condutor ao líder ainda não foi validada (devia ser no próprio dia).`));
+      } else if (!live.cashValidated.done && now > lisbonMidnightUtcMs(addDays(cashDay, 2))) {
+        out.push(finding("driver_cash_pending", `${eurText(extras.cash.amount)} em dinheiro recebidos a ${cashDay}${who}: o condutor entregou, mas o back office ainda não conferiu o dinheiro (devia ser no dia seguinte).`));
+      }
     }
   }
 

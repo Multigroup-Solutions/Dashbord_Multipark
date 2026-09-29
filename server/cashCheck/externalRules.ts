@@ -353,9 +353,16 @@ export function monthlyKindOf(partnerType: string | null | undefined): MonthlyKi
   return String(partnerType ?? "").toUpperCase() === "AGGREGATOR" ? "agregador" : "agente";
 }
 
-/** Recebido (conferido à mão) contra o devido na Multipark nesse mês. PURA. */
-export function monthlyReceiptFinding(o: { kind: MonthlyKind; name: string; month: string; received: number; due: number | null }): Finding | null {
-  if (o.due == null || !neq(o.received, o.due)) return null;
-  const diff = r2(o.received - o.due);
-  return finding("monthly_receipt", `${MONTHLY_LABEL[o.kind]} ${o.name}, ${o.month}: recebido ${eurText(o.received)}, devido na Multipark ${eurText(o.due)} → ${diff < 0 ? `faltam ${eurText(-diff)}` : `a mais ${eurText(diff)}`}.`);
+/**
+ * Recebido (conferido à mão) contra o devido do mês na Multipark (saídas
+ * desse mês). Pode vir a mais se pagar meses em atraso: só é diferença se
+ * passar o devido + o que está em atraso. PURA.
+ */
+export function monthlyReceiptFinding(o: { kind: MonthlyKind; name: string; month: string; received: number; due: number | null; arrears?: number }): Finding | null {
+  if (o.due == null) return null;
+  const arrears = o.arrears ?? 0;
+  const head = `${MONTHLY_LABEL[o.kind]} ${o.name}, ${o.month}: recebido ${eurText(o.received)}, devido do mês ${eurText(o.due)}`;
+  if (o.received < o.due - MONEY_TOLERANCE) return finding("monthly_receipt", `${head} → faltam ${eurText(r2(o.due - o.received))}${arrears > MONEY_TOLERANCE ? ` (e há ${eurText(arrears)} em atraso de meses anteriores)` : ""}.`);
+  if (o.received > o.due + arrears + MONEY_TOLERANCE) return finding("monthly_receipt", `${head}${arrears > MONEY_TOLERANCE ? ` + ${eurText(arrears)} em atraso` : ""} → a mais ${eurText(r2(o.received - o.due - arrears))}.`);
+  return null;
 }
