@@ -23,7 +23,7 @@ import {
   compareBooking, eraRows, memoryMoments, worstSeverity, severityRank, expectedAmount, paidAmount,
   MONEY_HISTORY_FIELDS, type Divergence, type LiveFinance,
 } from "./cashCheck/rules";
-import type { MemorySnapshot } from "./webhookMemory";
+import { COPY_ERA_EVENT, type MemorySnapshot } from "./webhookMemory";
 
 const DAY = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 /** Motivos para fechar um caso (a explicação escrita é sempre obrigatória). */
@@ -64,6 +64,8 @@ export interface DayDivergentRow {
   status: string | null;
   checkOut: string | null;
   webhooks: number;
+  /** De onde vem o "era": webhooks guardados, a cópia antiga (antes de 28/09) ou nada. */
+  eraSource: "webhook" | "copia" | null;
   priceFirst: number | null;
   priceCheckin: number | null;
   priceLast: number | null;
@@ -81,6 +83,7 @@ export interface DayDivergentRow {
 /** Linha da lista "Correção de caixa". PURA. */
 export function dayRow(live: LiveFinance | null, memory: readonly MemorySnapshot[], divergences: Divergence[], fallback?: { id: string; parkName?: string | null }): DayDivergentRow {
   const m = memoryMoments(memory);
+  const fromCopy = memory.length > 0 && memory.every((s) => s.eventType === COPY_ERA_EVENT);
   return {
     id: live?.id ?? fallback?.id ?? m.last?.bookingId ?? "",
     code: live?.code ?? null,
@@ -88,7 +91,8 @@ export function dayRow(live: LiveFinance | null, memory: readonly MemorySnapshot
     parkName: live?.parkName ?? fallback?.parkName ?? null,
     status: live?.status ?? m.last?.status ?? null,
     checkOut: live?.checkOut ?? m.last?.checkOut ?? null,
-    webhooks: m.count,
+    webhooks: fromCopy ? 0 : m.count,
+    eraSource: fromCopy ? "copia" : m.count ? "webhook" : null,
     priceFirst: m.first?.bookingPrice ?? null,
     priceCheckin: m.checkin?.bookingPrice ?? null,
     priceLast: m.last?.bookingPrice ?? null,
@@ -102,6 +106,17 @@ export function dayRow(live: LiveFinance | null, memory: readonly MemorySnapshot
     severity: worstSeverity(divergences),
     divergences,
   };
+}
+
+/**
+ * Sem memória do webhook (reservas paradas desde antes de 28/09/2026 19:23),
+ * o "era" de recurso é a cópia antiga: compara-se com ela e cada divergência
+ * fica marcada "[cópia antiga]". PURA.
+ */
+export function compareWithCopyEra(memory: readonly MemorySnapshot[], copy: MemorySnapshot | null | undefined, live: LiveFinance | null): { era: MemorySnapshot[]; divergences: Divergence[] } {
+  if (memory.length || !copy) return { era: [...memory], divergences: compareBooking(memory, live) };
+  const divergences = compareBooking([copy], live).map((d) => ({ ...d, detail: `[cópia antiga, pode ter sido reescrita pelo sync] ${d.detail.replace(/\(webhook[^)]*\)|\(1\.º webhook\)/g, "(cópia)")}` }));
+  return { era: [copy], divergences };
 }
 
 /** A última saída que a memória conhece (último retrato com saída). PURA. */
@@ -170,6 +185,12 @@ export const cashCheckRouter = router({
     const live = liveR.available ? liveR.data : null;
     // Âmbito: sem a reserva confirmada nas cidades da pessoa, não se mostra a memória.
     if (cities !== undefined && !live) memory = [];
+    // Sem webhooks guardados: a cópia antiga como "era" de recurso.
+    let copy: MemorySnapshot | null = null;
+    if (!memory.length && !memoryError && live) {
+      try { copy = (await (await import("./webhookMemory")).listCopyEraForBookings([input.id])).get(input.id) ?? null; } catch { copy = null; }
+    }
+    const cmp = compareWithCopyEra(memory, copy, live);
 
     const tl = await getBookingFileTimeline(input.id, cities);
     const history = tl.available
@@ -182,8 +203,9 @@ export const cashCheckRouter = router({
       live: liveR.available ? (live ? { available: true as const, found: true as const, data: live } : { available: true as const, found: false as const }) : ({ available: false, reason: liveR.reason } as Unavailable),
       memory: memory.map(snapshotOut),
       memoryError,
-      rows: eraRows(memory, live),
-      divergences: liveR.available ? compareBooking(memory, live) : [],
+      rows: eraRows(cmp.era, live),
+      eraSource: memory.length ? ("webhook" as const) : copy ? ("copia" as const) : null,
+      divergences: liveR.available ? cmp.divergences : [],
       history,
       historyUnavailable: tl.available ? null : tl.reason,
     };
@@ -240,11 +262,22 @@ export const cashCheckRouter = router({
       memoryError = "Não foi possível ler a memória do webhook (BD do dashboard): a lista mostra só o que se vê na Multipark.";
     }
 
+    // Sem webhooks guardados: a cópia antiga como "era" de recurso.
+    let copies = new Map<string, MemorySnapshot>();
+    if (!memoryError) {
+      const missing = page.rows.filter((x) => !(memory.get(x.id)?.length)).map((x) => x.id);
+      if (missing.length) { try { copies = await (await import("./webhookMemory")).listCopyEraForBookings(missing); } catch { copies = new Map(); } }
+    }
     const rows: DayDivergentRow[] = [];
     for (const live of page.rows) {
       const mem = memory.get(live.id) ?? [];
-      const divs = memoryError ? compareBooking([], live).filter((d) => d.code !== "only_live") : compareBooking(mem, live);
-      if (divs.length) rows.push(dayRow(live, mem, divs));
+      if (memoryError) {
+        const divs = compareBooking([], live).filter((d) => d.code !== "only_live");
+        if (divs.length) rows.push(dayRow(live, mem, divs));
+        continue;
+      }
+      const cmp = compareWithCopyEra(mem, copies.get(live.id), live);
+      if (cmp.divergences.length) rows.push(dayRow(live, cmp.era, cmp.divergences));
     }
 
     let onlyMemory: DayDivergentRow[] | null = null;
