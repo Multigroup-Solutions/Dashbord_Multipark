@@ -21,6 +21,7 @@ import { DEFAULT_WEB_ANALYTICS_CONFIG, WEB_ANALYTICS_SETTING_KEY, webAnalyticsCo
 import { DEFAULT_GBP_CONFIG, GBP_SETTING_KEY, gbpConfigSchema } from "./googleBusinessProfile";
 import { DEFAULT_KNOWLEDGE_CONFIG, KNOWLEDGE_SETTING_KEY, knowledgeConfigSchema } from "./knowledge";
 import { DEFAULT_SERVICE_TASK_RULES, SERVICE_TASKS_SETTING_KEY, serviceTaskRulesSchema } from "./serviceTasks";
+import { matchKey } from "./textKey";
 
 // ─── Taxas com data de efeito (IVA / TSU) ───────────────────────────────────
 
@@ -100,12 +101,12 @@ export const zelloUsernameListSchema = z
 
 /** Lista gravada → conjunto para comparar (sem distinguir maiúsculas). PURA. */
 export function zelloExclusionSet(list: readonly string[] | null | undefined): Set<string> {
-  return new Set((list ?? []).map((u) => String(u ?? "").trim().toLowerCase()).filter(Boolean));
+  return new Set((list ?? []).map((u) => matchKey(u)).filter(Boolean));
 }
 
 /** Esta conta Zello está na lista de exclusão do GPS? PURA. */
 export function isZelloGpsExcluded(username: string | null | undefined, excluded: ReadonlySet<string>): boolean {
-  const k = String(username ?? "").trim().toLowerCase();
+  const k = matchKey(username);
   return !!k && excluded.has(k);
 }
 

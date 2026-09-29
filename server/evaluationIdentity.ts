@@ -22,6 +22,7 @@ import {
   type IdentityPartner,
   type ResolvedAgent,
 } from "./activityHelpers";
+import { matchKey } from "../shared/textKey";
 
 export interface EvaluationEmployee extends IdentityEmployee {
   userId: number | null;
@@ -44,8 +45,8 @@ export interface EvaluationIdentity {
   assignment(a: { employeeId: number | null; personName: string }): { employeeId: number | null; agentKey: string };
 }
 
-export const normName = (s: string | null | undefined): string =>
-  String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase().replace(/\s+/g, " ");
+/** Regra única de comparação (shared/textKey.ts): só letras e números. */
+export const normName = (s: string | null | undefined): string => matchKey(s);
 
 /** "Gelson Manuel Leão Sousa" → "Gelson Sousa" (igual a extrasDia.deriveShortName). */
 export function shortNameOf(fullName: string): string {
@@ -55,7 +56,7 @@ export function shortNameOf(fullName: string): string {
 }
 
 /** Chave estável de um agente sem ficha (igual à da Atividade: `agent:<nome>`). */
-export const agentKeyOf = (name: string | null | undefined): string => `agent:${String(name ?? "").trim().toLowerCase()}`;
+export const agentKeyOf = (name: string | null | undefined): string => `agent:${matchKey(name)}`;
 
 export function buildEvaluationIdentity(input: EvaluationIdentityInput): EvaluationIdentity {
   const base = buildIdentityResolver(
