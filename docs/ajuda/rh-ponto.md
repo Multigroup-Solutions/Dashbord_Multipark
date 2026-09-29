@@ -39,10 +39,12 @@ Em **RH → Ligações** (quem gere o RH) vês o que falta ligar entre as fichas
 2. **Anexar agente**: escreve o nome ou o email do agente e carrega em **Anexar**. Se o agente estava noutra ficha, passa para esta. Se a pessoa já tinha agente, este entra como agente extra.
 3. **Retirar**: tira o agente da ficha. Se era o principal e havia extras, o primeiro extra passa a principal.
 
-**Comparar a lista de agentes da Multipark (CSV)**
-1. Carrega o CSV exportado da Multipark (colunas nome_agente;email;cidade) no cartão **Comparar a lista de agentes da Multipark**.
-2. Cada agente é procurado na Multipark (pelo email, senão pelo nome) e comparado com as fichas: **Ligado**, **Ligar (mesmo email)**, **Ligar? (mesmo nome)**, **Sem ficha**, **Não está na Multipark** ou **Agência / teste** (agências, parques parceiros e contas de teste ficam de fora).
-3. Nada é ligado sozinho: carrega em **Ligar** em cada linha, ou em **Ligar todos os do mesmo email**. Os "Sem ficha" anexam-se à mão no cartão **Uma pessoa**.
+**Comparar a lista de agentes da Multipark (xlsx ou CSV)**
+1. Na Multipark exporta os agentes (xlsx) e carrega o ficheiro no cartão **Comparar a lista de agentes da Multipark**. É lida a folha **Agentes** (nome, email, telefone, cargo, estado e ID de utilizador). O CSV antigo (nome_agente;email;cidade) também serve.
+2. Com o xlsx, cada agente é identificado pelo **ID de utilizador** (sem adivinhas). A equipa (condutores, supervisores, chefes de turno…) é comparada com as fichas pelo **email**, depois pelo **telefone** e por fim pelo **nome**: **Ligado**, **Ligar (mesmo email)**, **Ligar (mesmo telefone)**, **Ligar? (mesmo nome)**, **Sem ficha** ou **Não está na Multipark**.
+3. Os agentes com cargo **Parceiro** (e as agências) vão para as **parcerias**, não para fichas: aparecem como **Parceiro por ligar**, com a parceria sugerida pelo domínio do email ou pelo nome, ou escolhes a parceria na lista.
+4. Contas de sistema ("api") e de teste ficam em **Sistema / teste**. Os inativos e os de convite expirado aparecem marcados **inativo** (há a opção **Esconder inativos**).
+5. Nada é ligado sozinho: carrega em **Ligar** em cada linha, ou em **Ligar os seguros** (os do mesmo email ou telefone e os parceiros encontrados pelo email). Os do mesmo nome vês um a um. Os "Sem ficha" anexam-se à mão no cartão **Uma pessoa**.
 
 **Juntar contas** (só administradores)
 - Caso típico: a ficha foi criada com um email (por exemplo do Outlook) e a pessoa entrou na app com outra conta Google, que ficou "perdida".
