@@ -19,6 +19,7 @@ async function request(authorization: string | undefined, input: unknown = body)
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv("CRON_SECRET", "test-secret");
+  vi.stubEnv("BOOKING_PRICE_EXPORT_SECRET", "");
   vi.mocked(getMultiparkDb).mockResolvedValue(db as any);
   vi.mocked(isMultiparkDbConfigured).mockReturnValue(true);
   db.readOnlyCheck.mockResolvedValue(true);
@@ -39,6 +40,13 @@ describe("protected remote export", () => {
     db.readOnlyCheck.mockResolvedValue(false);
     expect((await request("Bearer test-secret")).status).toHaveBeenCalledWith(409);
     expect(db.query).not.toHaveBeenCalled();
+  });
+  it("accepts the export-only credential without relying on the cron secret", async () => {
+    vi.stubEnv("BOOKING_PRICE_EXPORT_SECRET", "export-only-secret");
+    vi.stubEnv("CRON_SECRET", "unrelated-cron-secret");
+    const res = await request("Bearer export-only-secret");
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
+    expect(db.query).toHaveBeenCalledTimes(1);
   });
   it("returns only price changes from history and disables caching", async () => {
     db.query.mockResolvedValue([{ id: "h1", booking_id: "b1", change_type: "CREATED", action_time: body.asOf, snapshot_price: 0,

@@ -52,7 +52,7 @@ async function main() {
   dotenv.config({ path: path.join(root, ".env"), quiet: true });
   const progress = (stage: string, count: number) => console.log(`${stage}: ${count}`);
   const output = await (async () => {
-    if (remote) return collectPricesFromPages(createRemotePriceReader(remote, process.env.CRON_SECRET ?? "", period), pageSize, progress);
+    if (remote) return collectPricesFromPages(createRemotePriceReader(remote, process.env.BOOKING_PRICE_EXPORT_SECRET || process.env.CRON_SECRET || "", period), pageSize, progress);
     if (!process.env[MULTIPARK_DB_ENV]?.trim()) throw new Error(`${MULTIPARK_DB_ENV} não está definida localmente. Usa --remote para a ligação existente no servidor.`);
     const db = await getMultiparkDb();
     if (db.engine !== "postgres") throw new Error("Este script exige a base de dados PostgreSQL operacional da Multipark.");
