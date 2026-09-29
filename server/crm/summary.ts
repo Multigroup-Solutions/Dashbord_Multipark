@@ -41,6 +41,22 @@ const join = (vals: Iterable<string>, sep: string, max: number): string | null =
   return out ? out.slice(0, max) : null;
 };
 
+/**
+ * Data da Multipark utilizável numa coluna DATETIME: "AAAA-MM-DD HH:MM:SS"
+ * com um ano plausível. Datas escritas mal na Multipark (ano 20260, 0202…)
+ * partiam a gravação do lote inteiro no MySQL — ficam de fora. PURA.
+ */
+export function safeDateTime(v: string | null | undefined): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})/.exec(String(v ?? "").trim());
+  if (!m) return null;
+  const [y, mo, d, h, mi, se] = m.slice(1).map(Number);
+  if (y < 1990 || y > 2199 || mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59 || se > 59) return null;
+  return m[0];
+}
+
+/** Maior valor que cabe em DECIMAL(12,2). */
+export const MAX_TOTAL_SPENT = 9_999_999_999.99;
+
 /** Reservas (factos) → resumo. `nowUtc` = "YYYY-MM-DD HH:MM:SS". PURA. */
 export function summarizeBookings(facts: readonly CrmBookingFact[], nowUtc: string): ClientSummary {
   let cancelled = 0, completed = 0, upcoming = 0, partnerBookings = 0, spent = 0, anySpent = false, anyPro = false;
@@ -48,7 +64,8 @@ export function summarizeBookings(facts: readonly CrmBookingFact[], nowUtc: stri
   const cities = new Set<string>(), cityKeys = new Set<string>(), channels = new Set<string>(), partners = new Set<string>();
   const parks = new Map<string, ParkUse>();
   const plates = new Map<string, number>();
-  for (const f of facts) {
+  for (const f0 of facts) {
+    const f = { ...f0, checkIn: safeDateTime(f0.checkIn) };
     const st = String(f.status ?? "").toUpperCase();
     const isCancelled = st.includes("CANCEL");
     const visited = (VISITED_STATUSES as readonly string[]).includes(st);
@@ -82,7 +99,7 @@ export function summarizeBookings(facts: readonly CrmBookingFact[], nowUtc: stri
   const parkList = [...parks.values()].sort((a, b) => b.bookings - a.bookings || a.park.localeCompare(b.park));
   return {
     bookings: facts.length, cancelled, completed, upcoming, partnerBookings,
-    totalSpent: anySpent ? Math.round(spent * 100) / 100 : null,
+    totalSpent: anySpent && Number.isFinite(spent) && Math.abs(spent) <= MAX_TOTAL_SPENT ? Math.round(spent * 100) / 100 : null,
     firstVisit, lastVisit, nextCheckIn,
     cities: join(cities, ",", 128), cityKeys: join(cityKeys, ",", 255),
     parks: parkList, preferredPark: parkList[0]?.park ?? null,

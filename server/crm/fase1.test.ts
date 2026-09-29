@@ -6,7 +6,7 @@ import {
   buildUpcomingBookingsSql, mapCrmBatchRow, readCrmBookingFacts, type CrmBookingFact,
 } from "../multiparkDb/crmLive";
 import { assertReadOnlySql } from "../multiparkDb/client";
-import { parksJsonOf, summarizeBookings } from "./summary";
+import { parksJsonOf, safeDateTime, summarizeBookings } from "./summary";
 import { parseCursor } from "./sync";
 import { MIGRATION_0245_STATEMENTS } from "../migrations/migration_0245";
 
@@ -78,6 +78,17 @@ describe("CRM fase 1: resumo da ficha (nenhuma reserva copiada)", () => {
     });
     expect(s.plates.get("AA00BB")).toBe(4);
     expect(JSON.parse(parksJsonOf(s.parks)!)[0]).toEqual({ park: "Airpark Lisboa", city: "Lisboa", bookings: 3 });
+  });
+  it("datas mal escritas na Multipark e gastos absurdos não partem a gravação", () => {
+    expect(safeDateTime("2026-05-01 10:00:00")).toBe("2026-05-01 10:00:00");
+    expect(safeDateTime("2026-05-01 10:00:00.123")).toBe("2026-05-01 10:00:00");
+    for (const bad of ["20260-05-01 10:00:00", "0202-05-01 10:00:00", "2026-13-01 10:00:00", "", null]) expect(safeDateTime(bad as any)).toBeNull();
+    const s = summarizeBookings([
+      f({ id: "1", checkIn: "20260-01-10 08:00:00" }),
+      f({ id: "2", status: "BOOKED", checkIn: "0026-12-20 08:00:00" }),
+      f({ id: "3", checkIn: "2026-02-10 08:00:00", total: 1e13 }),
+    ], "2026-09-29 12:00:00");
+    expect(s).toMatchObject({ firstVisit: "2026-02-10 08:00:00", lastVisit: "2026-02-10 08:00:00", nextCheckIn: null, upcoming: 0, totalSpent: null });
   });
   it("sem reservas: tudo a zero", () => {
     expect(summarizeBookings([], "2026-09-29 12:00:00")).toMatchObject({ bookings: 0, totalSpent: null, cityKeys: null, preferredPark: null });

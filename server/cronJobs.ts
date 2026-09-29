@@ -121,7 +121,9 @@ export async function crmSyncCron(o: { deadlineAt: number; restart?: boolean }):
     const r = await runCrmSync({ deadlineAt: o.deadlineAt, restart: o.restart });
     return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: r.done, cursor: r.done ? null : "continuar" };
   } catch (err) {
-    console.error("[cron crm-sync] falhou:", msg(err, 200));
+    // o Drizzle só diz "Failed query: INSERT…"; o motivo real do MySQL vem no `cause`
+    const { dbErrorReason } = await import("./crm/proSync");
+    console.error("[cron crm-sync] falhou:", dbErrorReason(err));
     return fail(err);
   }
 }
