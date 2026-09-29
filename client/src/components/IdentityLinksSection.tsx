@@ -12,6 +12,7 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { AlertTriangle, Link2, Loader2, RefreshCw, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { PersonIdentityCard } from "./PersonIdentityCard";
+import { AgentListCompareCard } from "./AgentListCompareCard";
 import { useAuth } from "@/_core/hooks/useAuth";
 
 const dm = (s: string | null) => (s ? `${String(s).slice(8, 10)}/${String(s).slice(5, 7)}` : "—");
@@ -94,6 +95,8 @@ export function IdentityLinksSection() {
       </Card>
 
       <PersonIdentityCard employeeOptions={empOptions} orphanUsers={d.usersWithoutEmployee} canMerge={canMerge} />
+
+      <AgentListCompareCard />
 
       <Section title="Fichas sem utilizador" count={d.employeesWithoutUser.length} hint="Sem utilizador não há ponto nem app. Com email válido, cria-se (ou liga-se) num clique.">
         <table className="w-full text-sm">

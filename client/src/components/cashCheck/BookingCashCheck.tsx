@@ -53,7 +53,9 @@ export default function BookingCashCheck({ id, scope }: { id: string; scope: { p
               {"available" in d.live && d.live.available === false && <Note text={`Multipark indisponível: ${(d.live as any).reason}`} />}
               {d.live.available && !(d.live as any).found && <Note text="A Multipark não devolve esta reserva nas tuas cidades." />}
               {d.memoryError && <Note text={d.memoryError} />}
-              {d.memory.length === 0 && !d.memoryError && <Note text={d.eraSource === "copia"
+              {d.memory.length === 0 && !d.memoryError && <Note text={d.eraSource === "historico"
+                ? `Sem webhooks guardados. O “era” começa no preço inicial do histórico da Multipark (${d.initialPrice != null ? d.initialPrice.toLocaleString("pt-PT", { style: "currency", currency: "EUR" }) : "—"}), importado em Correção de caixa; o método e o estado vêm da cópia antiga.`
+                : d.eraSource === "copia"
                 ? "Sem webhooks guardados (a memória existe desde 28 set 2026 19:23). O “era” é a cópia antiga do dashboard: o último estado que lá ficou, que o sync pode ter reescrito antes de ser desligado."
                 : "Nunca nos chegou nenhum webhook desta reserva (ou chegou antes de a memória existir, a 28 set 2026): não há “era” para comparar."} />}
 

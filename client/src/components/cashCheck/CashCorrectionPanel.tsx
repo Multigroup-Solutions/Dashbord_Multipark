@@ -155,7 +155,7 @@ function RowList({ rows }: { rows: Row[] }) {
             <span>É: <strong>{eur(r.priceNow)}</strong></span>
             <span>Esperado {eur(r.expected)} · pago {eur(r.paid)}</span>
             <span>Método: {r.methodEra ?? "—"} → {r.methodNow ?? "—"}{r.paymentMethods.length ? ` (pagamentos: ${r.paymentMethods.join(", ")})` : ""}</span>
-            <span className="text-muted-foreground">{r.eraSource === "copia" ? "era = cópia antiga (antes de 28/09; pode ter sido reescrita)" : `${r.webhooks} webhook(s)`}</span>
+            <span className="text-muted-foreground">{r.eraSource === "copia" ? "era = cópia antiga (antes de 28/09; pode ter sido reescrita)" : r.eraSource === "historico" ? "era = preço inicial do histórico" : `${r.webhooks} webhook(s)`}</span>
           </div>
           <ul className="list-disc pl-5">
             {r.divergences.map((d, i) => <li key={i}><strong>{d.label}.</strong> {d.detail}</li>)}

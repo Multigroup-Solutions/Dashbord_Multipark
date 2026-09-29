@@ -64,8 +64,8 @@ export interface DayDivergentRow {
   status: string | null;
   checkOut: string | null;
   webhooks: number;
-  /** De onde vem o "era": webhooks guardados, a cópia antiga (antes de 28/09) ou nada. */
-  eraSource: "webhook" | "copia" | null;
+  /** De onde vem o "era": webhooks guardados, o preço inicial do histórico importado, a cópia antiga (antes de 28/09) ou nada. */
+  eraSource: "webhook" | "historico" | "copia" | null;
   priceFirst: number | null;
   priceCheckin: number | null;
   priceLast: number | null;
@@ -83,7 +83,10 @@ export interface DayDivergentRow {
 /** Linha da lista "Correção de caixa". PURA. */
 export function dayRow(live: LiveFinance | null, memory: readonly MemorySnapshot[], divergences: Divergence[], fallback?: { id: string; parkName?: string | null }): DayDivergentRow {
   const m = memoryMoments(memory);
-  const fromCopy = memory.length > 0 && memory.every((s) => s.eventType === COPY_ERA_EVENT);
+  const webhooks = memory.filter((s) => s.eventType !== COPY_ERA_EVENT && s.eventType !== INITIAL_ERA_EVENT).length;
+  const eraSource: DayDivergentRow["eraSource"] = webhooks ? "webhook"
+    : memory.some((s) => s.eventType === INITIAL_ERA_EVENT) ? "historico"
+    : memory.some((s) => s.eventType === COPY_ERA_EVENT) ? "copia" : null;
   return {
     id: live?.id ?? fallback?.id ?? m.last?.bookingId ?? "",
     code: live?.code ?? null,
@@ -91,8 +94,8 @@ export function dayRow(live: LiveFinance | null, memory: readonly MemorySnapshot
     parkName: live?.parkName ?? fallback?.parkName ?? null,
     status: live?.status ?? m.last?.status ?? null,
     checkOut: live?.checkOut ?? m.last?.checkOut ?? null,
-    webhooks: fromCopy ? 0 : m.count,
-    eraSource: fromCopy ? "copia" : m.count ? "webhook" : null,
+    webhooks,
+    eraSource,
     priceFirst: m.first?.bookingPrice ?? null,
     priceCheckin: m.checkin?.bookingPrice ?? null,
     priceLast: m.last?.bookingPrice ?? null,
@@ -117,6 +120,46 @@ export function compareWithCopyEra(memory: readonly MemorySnapshot[], copy: Memo
   if (memory.length || !copy) return { era: [...memory], divergences: compareBooking(memory, live) };
   const divergences = compareBooking([copy], live).map((d) => ({ ...d, detail: `[cópia antiga, pode ter sido reescrita pelo sync] ${d.detail.replace(/\(webhook[^)]*\)|\(1\.º webhook\)/g, "(cópia)")}` }));
   return { era: [copy], divergences };
+}
+
+/** Retrato sintético do preço inicial (histórico importado, booking_initial_prices). */
+export const INITIAL_ERA_EVENT = "PRECO_INICIAL";
+
+export interface InitialEra { initialPrice: number; createdAt: string | null }
+
+export function initialSnapshot(bookingId: string, initial: InitialEra): MemorySnapshot {
+  return {
+    id: -2, deliveryId: `inicial-${bookingId}`, bookingId, eventType: INITIAL_ERA_EVENT,
+    receivedAt: initial.createdAt, sourceUpdatedAt: initial.createdAt, parkId: null, status: null, checkIn: null, checkOut: null,
+    bookingPrice: initial.initialPrice, originalBookingPrice: null, parkingPrice: null, deliveryPrice: null, discountAmount: null, discountApplied: null,
+    paidAmount: null, paymentMethod: null, paymentSource: null, paymentBy: null,
+    campaignId: null, partnerId: null, partnerAmountDue: null, partnerAmountPaid: null, partnerContributedAmount: null,
+    pro: null, proClientId: null, cashierClosed: null, cashValidated: null, driverValidated: null,
+    source: "historico", dbReadAt: null, linesCount: null, linesTotal: null, linesPaid: null, paymentsCount: null, paymentsTotal: null, paymentMethods: [],
+  } as MemorySnapshot;
+}
+
+/**
+ * "Era" com o preço inicial do histórico importado (decisão do dono: a cópia
+ * foi escrita por cima; fica esta história). PURA.
+ *  - com webhooks: o preço inicial entra antes do 1.º webhook (se for anterior);
+ *  - sem webhooks: preço inicial + o resto da cópia antiga (método, estado),
+ *    sem o preço da cópia (esse foi reescrito);
+ *  - sem preço inicial: como antes (compareWithCopyEra).
+ */
+export function compareWithInitialEra(memory: readonly MemorySnapshot[], copy: MemorySnapshot | null | undefined, initial: InitialEra | null | undefined, live: LiveFinance | null): { era: MemorySnapshot[]; divergences: Divergence[] } {
+  if (!initial || !live) return compareWithCopyEra(memory, copy, live);
+  const ini = initialSnapshot(live.id, initial);
+  if (memory.length) {
+    const firstAt = [...memory].map((x) => x.receivedAt ?? "").sort()[0] ?? "";
+    const era = initial.createdAt && firstAt && initial.createdAt >= firstAt ? [...memory] : [ini, ...memory];
+    return { era, divergences: compareBooking(era, live) };
+  }
+  const era = copy ? [ini, { ...copy, bookingPrice: null }] : [ini];
+  const divergences = compareBooking(era, live)
+    .filter((d) => d.code !== "only_live")
+    .map((d) => ({ ...d, detail: `[preço inicial do histórico] ${d.detail.replace(/\(webhook[^)]*\)|\(1\.º webhook\)/g, "(histórico)")}` }));
+  return { era, divergences };
 }
 
 /** A última saída que a memória conhece (último retrato com saída). PURA. */
@@ -190,7 +233,11 @@ export const cashCheckRouter = router({
     if (!memory.length && !memoryError && live) {
       try { copy = (await (await import("./webhookMemory")).listCopyEraForBookings([input.id])).get(input.id) ?? null; } catch { copy = null; }
     }
-    const cmp = compareWithCopyEra(memory, copy, live);
+    let initial: InitialEra | null = null;
+    if (!memoryError && live) {
+      try { initial = (await (await import("./multiparkExportsImport")).listInitialPricesForBookings([live.id])).get(live.id) ?? null; } catch { initial = null; }
+    }
+    const cmp = compareWithInitialEra(memory, copy, initial, live);
 
     const tl = await getBookingFileTimeline(input.id, cities);
     const history = tl.available
@@ -204,7 +251,8 @@ export const cashCheckRouter = router({
       memory: memory.map(snapshotOut),
       memoryError,
       rows: eraRows(cmp.era, live),
-      eraSource: memory.length ? ("webhook" as const) : copy ? ("copia" as const) : null,
+      eraSource: memory.length ? ("webhook" as const) : initial ? ("historico" as const) : copy ? ("copia" as const) : null,
+      initialPrice: initial?.initialPrice ?? null,
       divergences: liveR.available ? cmp.divergences : [],
       history,
       historyUnavailable: tl.available ? null : tl.reason,
@@ -268,6 +316,10 @@ export const cashCheckRouter = router({
       const missing = page.rows.filter((x) => !(memory.get(x.id)?.length)).map((x) => x.id);
       if (missing.length) { try { copies = await (await import("./webhookMemory")).listCopyEraForBookings(missing); } catch { copies = new Map(); } }
     }
+    let initials = new Map<string, InitialEra>();
+    if (!memoryError && page.rows.length) {
+      try { initials = await (await import("./multiparkExportsImport")).listInitialPricesForBookings(page.rows.map((x) => x.id)); } catch { initials = new Map(); }
+    }
     const rows: DayDivergentRow[] = [];
     for (const live of page.rows) {
       const mem = memory.get(live.id) ?? [];
@@ -276,7 +328,7 @@ export const cashCheckRouter = router({
         if (divs.length) rows.push(dayRow(live, mem, divs));
         continue;
       }
-      const cmp = compareWithCopyEra(mem, copies.get(live.id), live);
+      const cmp = compareWithInitialEra(mem, copies.get(live.id), initials.get(live.id) ?? null, live);
       if (cmp.divergences.length) rows.push(dayRow(live, cmp.era, cmp.divergences));
     }
 
@@ -437,6 +489,41 @@ export const cashCheckRouter = router({
     const r = await importVivaCsv({ csv: input.csv, fileName: input.fileName ?? null, userId: ctx.user.id });
     if (!r.ok) throw new TRPCError({ code: r.code, message: r.message });
     return r;
+  }),
+
+  /**
+   * Preços iniciais das reservas (exportados do History da Multipark). O
+   * browser lê o CSV e manda em lotes de 1000; o relatório compara com a
+   * nossa cópia. Só quem confere a caixa (Faturação → gerir).
+   */
+  importInitialPrices: protectedProcedure.input(z.object({
+    rows: z.array(z.object({
+      bookingId: z.string().trim().min(1).max(64),
+      reference: z.string().max(32).nullable(),
+      parkId: z.string().max(64).nullable(),
+      parkName: z.string().max(128).nullable(),
+      city: z.string().max(32).nullable(),
+      createdAt: z.string().regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/).nullable(),
+      status: z.string().max(32).nullable(),
+      initialPrice: z.number().finite().nullable(),
+      verification: z.string().max(32).nullable(),
+      source: z.string().max(64).nullable(),
+      historyId: z.string().max(64).nullable(),
+      priceAtExport: z.number().finite().nullable(),
+      originalPriceField: z.number().finite().nullable(),
+    })).min(1).max(1000),
+    projectId: z.number().optional(),
+  })).mutation(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    if (!(await canManageCases(ctx.user))) throw new TRPCError({ code: "FORBIDDEN", message: "Só quem confere a caixa (Faturação → gerir)." });
+    const { importInitialPrices } = await import("./multiparkExportsImport");
+    return importInitialPrices(input.rows, ctx.user.id);
+  }),
+
+  initialPricesReport: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx }) => {
+    await requireCashCheck(ctx.user);
+    const { initialPricesReport } = await import("./multiparkExportsImport");
+    return initialPricesReport();
   }),
 
   vivaImports: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx }) => {

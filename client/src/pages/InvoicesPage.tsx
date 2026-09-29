@@ -17,6 +17,7 @@ import CashCorrectionPanel from "@/components/cashCheck/CashCorrectionPanel";
 import CashCasesPanel from "@/components/cashCheck/CashCasesPanel";
 import CashCountPanel from "@/components/cashCheck/CashCountPanel";
 import CashExternalPanel from "@/components/cashCheck/CashExternalPanel";
+import { InitialPricesPanel } from "@/components/cashCheck/InitialPricesPanel";
 import FitAmount from "@/components/finance/FitAmount";
 import { STICKY_FIRST_COL, TABS_SCROLL } from "@/components/finance/layoutClasses";
 import { AXIS_TICK, CHART_TOOLTIP_STYLE, CHART_TOOLTIP_ITEM, eurAxis } from "@/lib/financeFormat";
@@ -698,6 +699,7 @@ export default function InvoicesPage() {
                   <CashCasesPanel projectId={projectId} />
                   <CashCountPanel projectId={projectId} />
                   <CashExternalPanel projectId={projectId} />
+                  <InitialPricesPanel projectId={projectId} />
                   <CashCorrectionPanel projectId={projectId} />
                 </div>
               )}
