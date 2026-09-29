@@ -20,6 +20,7 @@
 import { normalizeEmail, isPlausibleEmail } from "./email";
 import { normalizePhoneE164 } from "./phone";
 import { DEFAULT_BRAND_DOMAINS, DEFAULT_MAIL_ALIAS_DOMAINS, MAIL_WORKSPACE_PRIMARY_DOMAIN } from "./mail";
+import { matchWords } from "./textKey";
 
 /**
  * Domínios da casa: staff e contas de teste, nunca são clientes. LISTA ÚNICA
@@ -77,10 +78,7 @@ const NAME_STOP = new Set(["de", "da", "do", "das", "dos", "e", "del", "la", "va
 
 /** Tokens do nome: sem acentos, minúsculas, sem partículas. */
 export function nameTokens(raw: string | null | undefined): string[] {
-  return String(raw ?? "")
-    .normalize("NFD").replace(/[̀-ͯ]/g, "")
-    .toLowerCase().replace(/[^a-z\s'-]/g, " ")
-    .split(/[\s'-]+/).filter((t) => t.length > 0 && !NAME_STOP.has(t));
+  return matchWords(raw).filter((t) => !/^\d+$/.test(t) && !NAME_STOP.has(t));
 }
 
 /** Chave do nome para comparações rápidas: 1.º e último token. */

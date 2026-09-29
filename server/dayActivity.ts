@@ -30,6 +30,7 @@ import type { MultiparkRead } from "./multiparkDb/read";
 import { addDays, daysInRange, lisbonDayOf, lisbonDayRangeUtc, lisbonHoursSince } from "../shared/lisbonDay";
 import { lisbonToday } from "../shared/expensePeriods";
 import { aggregateSpeedHistory, buildIdentityResolver, classifyActionShift, leftoverFromShares, type ShiftWindow, type SpeedEntry } from "./activityHelpers";
+import { matchKey } from "../shared/textKey";
 
 const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r) as any[]) ?? [];
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -195,7 +196,7 @@ export async function getActivityRange(opts: { startDate: string; endDate?: stri
   const empById = new Map(emps.map((e) => [e.id, e]));
   const empByFullName = new Map<string, number | null>();
   for (const e of emps) {
-    const k = e.fullName.trim().toLowerCase();
+    const k = matchKey(e.fullName);
     empByFullName.set(k, empByFullName.has(k) ? null : e.id); // homónimos → sem match
   }
 
@@ -238,7 +239,7 @@ export async function getActivityRange(opts: { startDate: string; endDate?: stri
     }
   }
   for (const a of assignments) {
-    const empId = a.employeeId ?? empByFullName.get(a.personName.trim().toLowerCase()) ?? null;
+    const empId = a.employeeId ?? empByFullName.get(matchKey(a.personName)) ?? null;
     const end = a.sentHomeHour ?? a.endHour;
     if (empId != null) {
       const byDate = shiftsByEmp.get(empId) ?? new Map<string, ShiftWindow[]>();
@@ -247,7 +248,7 @@ export async function getActivityRange(opts: { startDate: string; endDate?: stri
     }
     if (!inRange(a.assignmentDate)) continue; // véspera: só para o turno
     const p = empId != null ? personForEmployee(empId, a.personName)
-      : get(`sched:${a.personName.trim().toLowerCase()}`, () => blank(`sched:${a.personName.trim().toLowerCase()}`, a.personName, "por_ligar", null));
+      : get(`sched:${matchKey(a.personName)}`, () => blank(`sched:${matchKey(a.personName)}`, a.personName, "por_ligar", null));
     if (empId != null) scheduledEmps.add(empId);
     const hours = Math.max(0, end - a.startHour);
     p.daysScheduled++;
@@ -457,7 +458,7 @@ export async function getPersonDay(date: string, key: string) {
     const { emps, aliases } = await loadIdentityResolver();
     const e = emps.find((x) => x.id === empId);
     const ids = [e?.multiparkAgentUserId, ...aliases.filter((a) => a.employeeId === empId).map((a) => a.agentUserId)].filter((x): x is string => !!x && !!String(x).trim());
-    const names = [e?.multiparkAgentName, ...aliases.filter((a) => a.employeeId === empId).map((a) => a.agentName)].filter((x): x is string => !!x && !!String(x).trim()).map((n) => n.trim().toLowerCase());
+    const names = [e?.multiparkAgentName, ...aliases.filter((a) => a.employeeId === empId).map((a) => a.agentName)].filter((x): x is string => !!x && !!String(x).trim()).map((n) => n.trim().toLowerCase()); // vão para SQL (LOWER(TRIM(...)))
     const act = await personDayActions(date, { userIds: ids, names });
     const gps = rowsOf(await db.execute(sql`
       SELECT 'parte' AS src, s.zelloUsername, s.km, s.minutes, s.movingMinutes, s.maxSpeed, s.avgSpeed, s.violations, h.geoJsonUrl

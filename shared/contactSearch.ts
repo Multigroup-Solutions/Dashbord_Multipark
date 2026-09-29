@@ -9,14 +9,11 @@
  *   mesmo que "351912".
  * - Pesquisa vazia → tudo passa.
  */
+import { matchKey, searchText } from "./textKey";
 
 export function normalizeSearchText(raw: string | null | undefined): string {
-  return String(raw ?? "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim();
+  // Regra única (shared/textKey.ts): sem acentos, maiúsculas, apóstrofos nem traços.
+  return searchText(raw);
 }
 
 function digitsOnly(raw: string | null | undefined): string {
@@ -29,10 +26,12 @@ export interface SearchableContact {
 }
 
 export function matchesContactQuery(query: string, contact: SearchableContact): boolean {
+  if (!String(query ?? "").trim()) return true;
   const tokens = normalizeSearchText(query).split(" ").filter(Boolean);
-  if (!tokens.length) return true;
+  if (!tokens.length) return false; // só pontuação: nada a procurar
 
-  const name = normalizeSearchText(contact.name);
+  // Nome comparado pela chave compacta: "almeidasa" encontra "Almeida-Sá".
+  const name = matchKey(contact.name);
   const phoneDigits = digitsOnly(contact.phone);
 
   return tokens.every((tok) => {

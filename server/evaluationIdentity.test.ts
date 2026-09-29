@@ -17,10 +17,11 @@ const identity = () => buildEvaluationIdentity({
 
 describe("identidade da avaliação (condutor → ficha)", () => {
   it("nomes: sem acentos, minúsculas, espaços simples; nome curto = 1.º + último", () => {
-    expect(normName("  Gélson   SOUSA ")).toBe("gelson sousa");
+    expect(normName("  Gélson   SOUSA ")).toBe("gelsonsousa");
     expect(shortNameOf("Gelson Manuel Leão Sousa")).toBe("Gelson Sousa");
     expect(shortNameOf("Madonna")).toBe("Madonna");
-    expect(agentKeyOf(" Zé Ninguém ")).toBe("agent:zé ninguém");
+    expect(agentKeyOf(" Zé Ninguém ")).toBe("agent:zeninguem");
+    expect(agentKeyOf("Zé d'Ninguém-Sá")).toBe(agentKeyOf("ZE DNINGUEM SA"));
   });
 
   it("id do agente ganha ao nome; agentes extra (aliases) ligam à ficha", () => {
@@ -66,8 +67,8 @@ describe("identidade da avaliação (condutor → ficha)", () => {
 
   it("linha da escala: usa a ficha; sem ficha, liga pelo nome completo; chave do nome curto", () => {
     const id = identity();
-    expect(id.assignment({ employeeId: 2, personName: "Ana Rita Costa" })).toEqual({ employeeId: 2, agentKey: "agent:ana costa" });
-    expect(id.assignment({ employeeId: null, personName: "Rui Alves" })).toEqual({ employeeId: 5, agentKey: "agent:rui alves" });
-    expect(id.assignment({ employeeId: null, personName: "Extra Novo Sem Ficha" })).toEqual({ employeeId: null, agentKey: "agent:extra ficha" });
+    expect(id.assignment({ employeeId: 2, personName: "Ana Rita Costa" })).toEqual({ employeeId: 2, agentKey: "agent:anacosta" });
+    expect(id.assignment({ employeeId: null, personName: "Rui Alves" })).toEqual({ employeeId: 5, agentKey: "agent:ruialves" });
+    expect(id.assignment({ employeeId: null, personName: "Extra Novo Sem Ficha" })).toEqual({ employeeId: null, agentKey: "agent:extraficha" });
   });
 });

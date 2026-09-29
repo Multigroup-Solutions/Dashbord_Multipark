@@ -170,7 +170,7 @@ describe("motor (dia operacional completo)", () => {
     expect(out.rows).toHaveLength(1);
     expect(out.rows[0].metrics).toMatchObject({ actions: 5, actionsMorning: 3, actionsNight: 2, movements: 3, parkingMoves: 1, entregas: 2, lateServices: 1, delays: 1, incidentsReported: 2 });
     expect(out.rows[0].actionsByType).toEqual({ MOVEMENT: 3, CHECK_OUT: 2 });
-    expect(out.unresolved.get("2026-09-24")?.get("agent:outro agente")).toMatchObject({ actions: 4, byType: { UPDATE: 4 } });
+    expect(out.unresolved.get("2026-09-24")?.get("agent:outroagente")).toMatchObject({ actions: 4, byType: { UPDATE: 4 } });
   });
 
   it("velocidade, reclamações confirmadas e acidentes vão para o dia certo", () => {
@@ -197,6 +197,6 @@ describe("motor (dia operacional completo)", () => {
   it("agentes sem ficha ficam à parte (para a escala sem ficha no operacional)", () => {
     const out = computeEmployeeDays({ ...base, actions: [act("B9", "CHECK_OUT", "2026-09-24 10:00:00", "Zé Desconhecido")], ponto: [], assignments: [] });
     expect(out.rows).toHaveLength(0);
-    expect(out.unresolved.get("2026-09-24")?.get("agent:zé desconhecido")).toMatchObject({ actions: 1, entregas: 1 });
+    expect(out.unresolved.get("2026-09-24")?.get("agent:zedesconhecido")).toMatchObject({ actions: 1, entregas: 1 });
   });
 });

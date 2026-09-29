@@ -127,7 +127,8 @@ describe("paleta — leitura, pontuação, ordem e grupos", () => {
     expect(parseSearch("MP12345").isCode).toBe(true);
     expect(parseSearch("Ana Silva").isCode).toBe(false);
     expect(parseSearch("+351 912 345 678")).toMatchObject({ isPhone: true, digits: "351912345678" });
-    expect(parseSearch("50%_off").like).toBe("%50\\%\\_off%");
+    // Regra única (shared/textKey.ts): pontuação não conta — "%" e "_" separam palavras em vez de serem procurados.
+    expect(parseSearch("50%_off").like).toBe("%50%off%");
   });
 
   it("matchScore: igual > começa por > palavra começa por > contém", () => {

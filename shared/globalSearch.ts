@@ -8,6 +8,7 @@
  * (módulo + ação) e o mesmo âmbito de cidade da página correspondente.
  */
 import { can, type Action, type ModuleId, type AccessOverrides } from "./access";
+import { searchText } from "./textKey";
 
 export const SEARCH_GROUPS = [
   "navegacao", "reservas", "contactos", "reclamacoes", "tarefas", "email", "whatsapp",
@@ -80,7 +81,7 @@ export interface ParsedSearch {
 }
 
 export function normalizeSearch(s: string): string {
-  return String(s ?? "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim();
+  return searchText(s);
 }
 
 const escapeLike = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
@@ -94,7 +95,8 @@ export function parseSearch(input: string | null | undefined): ParsedSearch {
   return {
     raw,
     norm: normalizeSearch(raw),
-    like: `%${escapeLike(lower)}%`,
+    // Pontuação e espaços não contam (regra única, shared/textKey.ts): "almeida-sá" encontra "Almeida Sá".
+    like: `%${lower.split(/[^\p{L}\p{N}@.+]+/u).filter(Boolean).map(escapeLike).join("%") || escapeLike(lower)}%`,
     prefix: `${escapeLike(raw)}%`,
     digits,
     isEmail: /^[^\s@]+@[^\s@]+$/.test(raw),

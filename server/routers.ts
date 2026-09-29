@@ -78,6 +78,7 @@ import { cashCheckRouter } from "./cashCheckRouter";
 import { searchRouter } from "./globalSearchRouter";
 import { knowledgeRouter } from "./knowledge/router";
 import { webAnalyticsRouter } from "./webAnalytics/router";
+import { matchKey } from "../shared/textKey";
 import { gbpRouter } from "./integrations/googleBusiness/profileRouter";
 import { whatsappCallsRouter } from "./whatsappCallsRouter";
 import {
@@ -2768,7 +2769,7 @@ export const appRouter = router({
         const { eq, and } = await import("drizzle-orm");
         const dbDup = await getDbDup();
         if (dbDup) {
-          const norm = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+          const norm = (s: string) => matchKey(s);
           const all = await dbDup.select({ id: employees.id, fullName: employees.fullName, email: employees.email, nif: employees.nif })
             .from(employees).where(eq(employees.isActive, 1));
           const dup = all.find((e) =>
@@ -7108,21 +7109,21 @@ export const appRouter = router({
       }
       const { employees } = await import("../drizzle/schema");
       const linkedEmps = await db.select({ n: employees.multiparkAgentName, id: employees.multiparkAgentUserId }).from(employees);
-      const linked = new Set(linkedEmps.map((e) => (e.n ?? "").trim().toLowerCase()).filter(Boolean));
+      const linked = new Set(linkedEmps.map((e) => matchKey(e.n)).filter(Boolean));
       // Fase 1: um agente ligado só pelo ID (outro nome na ficha) também está ligado
       const linkedIds = new Set(linkedEmps.map((e) => (e.id ?? "").trim()).filter(Boolean));
       // agentes EXTRA (pessoa com várias contas Multipark) também estão ligados
       const { listAgentAliases } = await import("./employeeAliases");
       for (const a of await listAgentAliases()) {
         linkedIds.add(a.agentUserId);
-        if (a.agentName) linked.add(a.agentName.trim().toLowerCase());
+        if (a.agentName) linked.add(matchKey(a.agentName));
       }
-      const partners = new Set((await listAgentPartners()).map((p) => p.agentName.trim().toLowerCase()));
+      const partners = new Set((await listAgentPartners()).map((p) => matchKey(p.agentName)));
       const { listIgnoredAgents } = await import("./db");
-      const ignored = new Set((await listIgnoredAgents()).map((n) => n.trim().toLowerCase()));
+      const ignored = new Set((await listIgnoredAgents()).map((n) => matchKey(n)));
       const list = (rows as any[])
         .filter((r) => {
-          const key = String(r.agentName).trim().toLowerCase();
+          const key = matchKey(String(r.agentName));
           const id = String(r.agentUserId ?? "").trim();
           return !linked.has(key) && !(id && linkedIds.has(id)) && !partners.has(key) && !ignored.has(key);
         })
@@ -7153,7 +7154,7 @@ export const appRouter = router({
         // ── ANTI-DUPLICAÇÃO (regra do Jorge: uma pessoa é só uma pessoa) —
         // mesma verificação do rh.create: nome normalizado ou email já ativos
         {
-          const norm = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+          const norm = (s: string) => matchKey(s);
           const all = await db.select({ id: employees.id, fullName: employees.fullName, email: employees.email })
             .from(employees).where(eq(employees.isActive, 1));
           const dup = all.find((e) =>

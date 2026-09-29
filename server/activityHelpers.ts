@@ -9,6 +9,8 @@
  *  - histórico de velocidade por pessoa (agregação por dia).
  */
 
+import { matchKey } from "../shared/textKey";
+
 // ─── Identidade ──────────────────────────────────────────────────────────────
 
 export interface IdentityEmployee { id: number; fullName: string; multiparkAgentUserId: string | null; multiparkAgentName: string | null }
@@ -21,7 +23,8 @@ export type ResolvedAgent =
   | { kind: "por_ligar"; key: string; employeeId: null; name: string }
   | { kind: "ignorado" };
 
-const norm = (s: string | null | undefined) => String(s ?? "").trim().toLowerCase();
+/** Regra única de comparação (shared/textKey.ts): só letras e números. */
+const norm = (s: string | null | undefined) => matchKey(s);
 
 /**
  * Resolve (agentUserId, agentName) → pessoa. Prioridade: id do agente (ficha

@@ -8,6 +8,7 @@
  * Timestamps: SEMPRE UTC no formato das colunas ("YYYY-MM-DD HH:MM:SS").
  */
 import { lisbonDayOf, lisbonOffsetMs } from "./lisbonDay";
+import { searchText } from "./textKey";
 
 // ─── Estados ────────────────────────────────────────────────────────────────
 export const INCIDENT_STATUSES = ["open", "investigating", "resolved", "dismissed", "converted"] as const;
@@ -306,7 +307,7 @@ export function convertedOriginPatch(toType: CaseKind, toId: number) {
 
 // ─── Cruzamento de condutores ───────────────────────────────────────────────
 export function normName(s: string | null | undefined): string {
-  return String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase().replace(/\s+/g, " ");
+  return searchText(s);
 }
 export function driverKey(employeeId: number | null | undefined, name: string | null | undefined): string {
   return employeeId ? `e:${employeeId}` : `n:${normName(name)}`;
