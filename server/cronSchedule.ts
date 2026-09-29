@@ -80,6 +80,9 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   { key: "crm-sync", runName: "crm-sync", label: "CRM: fichas de cliente a partir das reservas", cadence: { kind: "interval", minutes: 15 }, priority: 82, minMs: 20 * S, maxMs: 45 * S },
   // Serviços extra das reservas → tarefas (BD Multipark ao vivo; saídas nas próximas 48 h).
   { key: "services-tasks", runName: "services-tasks", label: "Serviços das reservas → tarefas", cadence: { kind: "interval", minutes: 15 }, priority: 83, minMs: 10 * S, maxMs: 30 * S },
+  // Caixa, fase 2 (29 set 2026): varredura do dinheiro (BD Multipark ao vivo) → "Correção de caixa".
+  { key: "cash-sweep", runName: "cash-sweep", label: "Caixa: varredura do dinheiro (Correção de caixa)", cadence: { kind: "interval", minutes: 10 }, priority: 25, minMs: 15 * S, maxMs: 40 * S },
+  { key: "cash-close", runName: "cash-close", label: "Caixa: fecho do dia (saídas de ontem e anteontem)", cadence: { kind: "daily", from: "06:15" }, priority: 104, minMs: 20 * S, maxMs: 45 * S },
   { key: "crm-suggestions", runName: "crm-suggestions", label: "CRM: sugestões para juntar fichas", cadence: { kind: "daily", from: "05:15" }, priority: 84, minMs: 15 * S, maxMs: 45 * S },
   { key: "crm-pro-sync", runName: "crm-pro-sync", label: "CRM: conta corrente dos clientes Pro (BD Multipark)", cadence: { kind: "interval", minutes: 30 }, priority: 81, minMs: 15 * S, maxMs: 45 * S },
   { key: "zello-sameday", runName: "zello-sameday", label: "GPS do Zello — recolha provisória do dia", cadence: { kind: "daily", from: ZELLO_SAMEDAY_WINDOW.from, until: ZELLO_SAMEDAY_WINDOW.until }, priority: 95, minMs: 15 * S, maxMs: 45 * S },

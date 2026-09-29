@@ -2,7 +2,7 @@
 modulo: definicoes
 titulo: Agendador (tarefas automáticas)
 rotas: /definicoes
-palavras: agendador, tarefas automáticas, cron, crons, cron-job.org, tick, api/cron/tick, cron_secret, automático, sincronização automática, parado, falhou, a meio, retoma, próxima corrida, github actions, recolha diária, zello, gps, services-tasks, serviços, tarefas dos serviços
+palavras: agendador, tarefas automáticas, cron, crons, cron-job.org, tick, api/cron/tick, cron_secret, automático, sincronização automática, parado, falhou, a meio, retoma, próxima corrida, github actions, recolha diária, zello, gps, services-tasks, serviços, tarefas dos serviços, cash-sweep, cash-close, correção de caixa, varredura da caixa
 ---
 # Agendador (tarefas automáticas)
 
@@ -33,6 +33,8 @@ Pronto. Não é preciso mais nada no GitHub.
 | Gmail (Comunicação — todo o email recebido, pipelines por alias, renovação do push) | de 5 em 5 min; **1× por dia** (rede de segurança e renovação do push) quando o push do Gmail está ligado (MAIL_PUSH) e chegou um push nas últimas 24 h — sem push volta sozinho aos 5 min |
 | Fila do webhook Multipark · IA na comunicação · Google: alterações por enviar/receber que falharam (repetição) | de 15 em 15 min |
 | Serviços das reservas → tarefas (lê ao vivo da BD da Multipark as saídas das próximas 48 h com serviços extra e cria/atualiza/fecha as tarefas, pelas regras de Definições → Parâmetros → **Serviços → tarefas**). À mão: `/api/cron/services-tasks` (trabalho `services-tasks`) | de 15 em 15 min |
+| Caixa: varredura do dinheiro (lê ao vivo da BD da Multipark as reservas dos nossos parques alteradas, as que estão dentro e as que saíram nas últimas 48 h; guarda um retrato quando o dinheiro muda e abre, atualiza ou resolve os casos da **Correção de caixa**). À mão: `/api/cron/cash-sweep` (trabalho `cash-sweep`) | de 10 em 10 min |
+| Caixa: fecho do dia (todas as saídas de ontem e anteontem, com as mesmas regras). À mão: `/api/cron/cash-close` (trabalho `cash-close`) | diário, a partir das 06:15 |
 | Google Tarefas/Calendário/Contactos/Drive — sincronização completa (rede de segurança; o resto é em tempo real, ver Ajuda → Google em tempo real) | de 4 em 4 horas |
 | Google: renovar os canais de notificação (Calendário e Drive) | 1×/dia a partir das 03:40 |
 | Automação dos extras · ligações funcionário ↔ utilizador | de hora a hora |

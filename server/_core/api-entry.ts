@@ -295,6 +295,18 @@ app.get("/api/cron/services-tasks", async (req, res) => {
   sendCronRun(res, await serviceTasksCron({ deadlineAt: manualDeadline() }));
 });
 
+// Caixa, fase 2: varredura do dinheiro (10 em 10 min) e fecho do dia (D-1 e D-2).
+app.get("/api/cron/cash-sweep", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { cashSweepCron, sendCronRun } = await import("../cronJobs");
+  sendCronRun(res, await cashSweepCron({ deadlineAt: manualDeadline() }));
+});
+app.get("/api/cron/cash-close", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { cashCloseCron, sendCronRun } = await import("../cronJobs");
+  sendCronRun(res, await cashCloseCron({ deadlineAt: manualDeadline() }));
+});
+
 // "Pressão" do Extras-Dia (60 dias da BD Multipark → ops_pressure_stats).
 // ?cursor=… retoma no grupo seguinte (vem na resposta quando done:false).
 app.get("/api/cron/extras-pressure", async (req, res) => {

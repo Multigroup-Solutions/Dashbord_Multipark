@@ -173,6 +173,34 @@ export async function serviceTasksCron(o: { deadlineAt: number }): Promise<CronJ
   }
 }
 
+/**
+ * Caixa, fase 2 (detetar): varredura de 10 em 10 min — reservas alteradas,
+ * ativas e saídas de 48 h dos nossos parques, lidas ao vivo; retratos, regras
+ * e casos da "Correção de caixa" (server/cashSweep.ts). Sem BD da Multipark → 503.
+ */
+export async function cashSweepCron(o: { deadlineAt: number }): Promise<CronJobRun> {
+  try {
+    const { runCashSweep } = await import("./cashSweep");
+    const r = await runCashSweep({ deadlineAt: o.deadlineAt - 2_000 });
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: true };
+  } catch (err) {
+    console.error("[cron cash-sweep] falhou:", msg(err, 200));
+    return fail(err);
+  }
+}
+
+/** Caixa: fecho do dia — todas as saídas de ontem e anteontem, com as mesmas regras. */
+export async function cashCloseCron(o: { deadlineAt: number }): Promise<CronJobRun> {
+  try {
+    const { runCashClose } = await import("./cashSweep");
+    const r = await runCashClose({ deadlineAt: o.deadlineAt - 2_000 });
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: !r.partial };
+  } catch (err) {
+    console.error("[cron cash-close] falhou:", msg(err, 200));
+    return fail(err);
+  }
+}
+
 // ─── Manutenção diária + recolha GPS (daily-ops) ─────────────────────────────
 
 /** Folga mínima para arrancar um passo novo do daily-ops. */
