@@ -29,7 +29,7 @@ Para ligar, procurar ou juntar, só contam as letras e os números. Não contam 
 - Quando alguém faz login no PDA, o dashboard muda na conta Zello do PDA o **nome que aparece no mapa** para "PDA 12 · Nome da pessoa". No logout volta a "PDA 12". Tem um interruptor para ligar e desligar.
 - Há um só campo para o utilizador do Zello, em todo o lado.
 
-## 4. Alertas: a trabalhar sem PDA ou Zello ligado
+## 4. Alertas: a trabalhar sem PDA ou Zello ligado (PR do passo 4)
 
 - **Quem:** só as pessoas do **operacional**. O back office e o front office trabalham no computador e ficam de fora.
 - **Quando dispara:**
@@ -39,3 +39,15 @@ Para ligar, procurar ou juntar, só contam as letras e os números. Não contam 
   1. uma notificação na app ao **team leader de serviço nessa cidade** e ao **supervisor**. O team leader de serviço é o que está escalado nesse turno e também **todos os que têm o ponto aberto nessa cidade com papel de team leader**. Conta o papel do utilizador, por isso um extra sénior que esteja como team leader também recebe;
   2. se em **10 minutos** não houver ligação nem resposta, um WhatsApp aos **administradores da lista dessa cidade** (Lisboa, Porto, Faro, em Definições), com cópia ao Jorge.
 - **Grupo de WhatsApp:** a ideia é mandar para um grupo. As mensagens enviadas pela app fora da janela de 24 h têm de ser **modelos aprovados** pela Meta. Usa-se um modelo ("formulário"), aprovado uma vez.
+
+### Como ficou (passo 4)
+
+- Regras em `shared/opsPresence.ts`; leitura e envio em `server/opsPresence.ts`; cron `ops-presence` de 5 em 5 min; tabela `ops_presence_alerts` (migração 0285).
+- **Operacional** = posição da ficha `team_leader`, `senior_driver`, `driver` ou `extra`.
+- **Ponto aberto** = último registo de ponto é uma entrada, há menos de 16 h. **PDA** = check-in do PDA aberto. **Zello ligado** = a conta do PDA (ou a da ficha) reportou há 15 min ou menos. Contas excluídas do GPS não são vigiadas. Com o Zello ou a Multipark em baixo, só essa parte fica parada.
+- Tolerância de 10 min depois de abrir o ponto para ir buscar o PDA. Movimentos lidos ao vivo dos últimos 15 min (recolhas, entregas, movimentos e alterações), ligados à pessoa pelo agente (principal ou extra).
+- Um alerta por pessoa × tipo enquanto durar; fecha sozinho. Alertas de movimento sem resolução expiram em 12 h.
+- Sino (tipo pessoal `ops_presence`): TL escalado no turno e cidade (`extras_dia_assignments.isTeamLeader`) + utilizadores com papel `team_leader` e ponto aberto na cidade + supervisores da cidade, sem a própria pessoa.
+- WhatsApp: modelo `ops.presenceTemplate` (por omissão `alerta_operacional|pt_PT`, **tem de ser criado e aprovado na Meta**), com {{1}} = cidade e {{2}} = o alerta numa linha. Proposta de texto: "Alerta operacional em {{1}}: {{2}} Vê em Operacional → PDAs."
+- Interruptores `OPS_PRESENCE_ALERTS` e `OPS_PRESENCE_WHATSAPP`, ambos desligados por omissão. A lista em Operacional → PDAs funciona sempre.
+- Grupo de WhatsApp: a API da Meta não manda para grupos normais; por agora vai para a lista de números da cidade + cópia.

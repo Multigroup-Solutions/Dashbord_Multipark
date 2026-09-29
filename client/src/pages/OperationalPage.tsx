@@ -17,6 +17,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { useTableSort, Th } from "@/components/SortableTable";
 import { ZelloLiveTab } from "@/components/ZelloLiveTab";
+import { OpsPresencePanel } from "@/components/OpsPresencePanel";
 import { UniDateNav } from "@/components/DateRangeNav";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { lisbonToday } from "@shared/expensePeriods";
@@ -45,6 +46,11 @@ type TabKey = (typeof TABS)[number];
 export default function OperationalPage() {
   const [rawTab, setTab] = usePersistedState<string>("operacional.tab", "dia");
   const tab: TabKey = (TABS as readonly string[]).includes(rawTab) ? (rawTab as TabKey) : "dia";
+  // Links das notificações: /operacional?tab=pdas abre esse separador.
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get("tab");
+    if (t && (TABS as readonly string[]).includes(t)) setTab(t);
+  }, []);
   const [speedTarget, setSpeedTarget] = useState<SpeedTarget>(null);
   const openSpeedHistory = (t: SpeedTarget) => { setSpeedTarget(t); setTab("history"); };
   return (
@@ -795,6 +801,7 @@ function PdasTab() {
 
   return (
     <div className="space-y-4 mt-4">
+      <OpsPresencePanel />
       {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card>

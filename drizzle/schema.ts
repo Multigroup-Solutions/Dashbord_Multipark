@@ -1022,6 +1022,25 @@ export const googleReviews = mysqlTable("google_reviews", {
 	aiDraftAttemptedAt: timestamp({ mode: 'string' }),
 });
 
+/** 0285 — alertas "a trabalhar sem PDA ou Zello ligado" (shared/opsPresence.ts). */
+export const opsPresenceAlerts = mysqlTable("ops_presence_alerts", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	kind: varchar({ length: 32 }).notNull(),
+	city: varchar({ length: 16 }),
+	detail: varchar({ length: 500 }),
+	openedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	lastSeenAt: timestamp({ mode: 'string' }),
+	notifiedAt: timestamp({ mode: 'string' }),
+	escalatedAt: timestamp({ mode: 'string' }),
+	escalationResult: varchar({ length: 255 }),
+	acknowledgedById: int(),
+	acknowledgedAt: timestamp({ mode: 'string' }),
+	ackNote: varchar({ length: 255 }),
+	resolvedAt: timestamp({ mode: 'string' }),
+	resolution: varchar({ length: 16 }),
+});
+
 export const gpsAlerts = mysqlTable("gps_alerts", {
 	id: int().autoincrement().primaryKey(),
 	zelloUsername: varchar({ length: 255 }).notNull(),

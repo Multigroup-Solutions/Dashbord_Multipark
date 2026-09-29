@@ -23,6 +23,9 @@ palavras: rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar e
 - **PDAs só pelo QR**: cada PDA regista-se uma vez lendo, no próprio aparelho, o QR colado nele (Operacional → PDAs → botão QR). Já não há check-in manual nem registo pela lista. A seguir ao registo aparece **Instalar a app neste PDA**: o dashboard fica instalado e abre sempre direto, no mesmo browser.
 - Cada PDA tem uma **etiqueta** (nome ou número) e uma **cidade** fixa (Operacional → PDAs → editar).
 - Com o interruptor **"Zello: nome de quem tem o PDA no mapa"** ligado (Definições → Automações), o nome da conta Zello do PDA passa a "PDA 12 · Rui Santos" quando alguém entra, e volta a "PDA 12" quando sai.
+- **A trabalhar sem PDA ou Zello ligado** (Operacional → PDAs, em cima): de 5 em 5 minutos aparecem aqui as pessoas do operacional com o ponto aberto sem PDA (passados 10 min), com o Zello do PDA desligado, ou com movimentos na Multipark sem ponto aberto ou com o Zello desligado. O back office e o front office ficam de fora. Cada alerta fecha sozinho quando o problema desaparece.
+  - Com o interruptor **"Alertas: a trabalhar sem PDA ou Zello ligado"** ligado, avisa no sino o team leader escalado nesse turno e cidade, os team leaders com ponto aberto na cidade e o supervisor.
+  - Quem recebe carrega em **Visto** (com uma nota, se quiser). Sem ligação nem Visto em 10 min (Definições → Operação), e com o interruptor do WhatsApp ligado, vai um WhatsApp (modelo aprovado pela Meta) aos administradores da cidade e à cópia (Definições → Operação → "WhatsApp dos administradores").
 - **Novo Colaborador** cria uma ficha; cada ficha precisa de centro de custos (cidade).
 - Correções de ponto: na ficha, separador Ponto, revê e corrige as horas.
 - Ordenados, recibos e folha para o contabilista só para admin.

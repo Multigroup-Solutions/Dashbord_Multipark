@@ -81,6 +81,7 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   // Serviços extra das reservas → tarefas (BD Multipark ao vivo; saídas nas próximas 48 h).
   { key: "services-tasks", runName: "services-tasks", label: "Serviços das reservas → tarefas", cadence: { kind: "interval", minutes: 15 }, priority: 83, minMs: 10 * S, maxMs: 30 * S },
   // Caixa, fase 2 (29 set 2026): varredura do dinheiro (BD Multipark ao vivo) → "Correção de caixa".
+  { key: "ops-presence", runName: "ops-presence", label: "Operacional: a trabalhar sem PDA ou Zello ligado", cadence: { kind: "interval", minutes: 5 }, priority: 20, minMs: 10 * S, maxMs: 30 * S },
   { key: "cash-sweep", runName: "cash-sweep", label: "Caixa: varredura do dinheiro (Correção de caixa)", cadence: { kind: "interval", minutes: 10 }, priority: 25, minMs: 15 * S, maxMs: 40 * S },
   { key: "cash-close", runName: "cash-close", label: "Caixa: fecho do dia (saídas de ontem e anteontem)", cadence: { kind: "daily", from: "06:15" }, priority: 104, minMs: 20 * S, maxMs: 45 * S },
   // Caixa, fase 4: cruzar as saídas de ontem e anteontem com a InvoiceExpress e a Stripe (chaves só de leitura).

@@ -131,6 +131,8 @@ export const NOTIFICATION_KIND_DEFS = [
     module: "historico_diario", action: "view", roles: ["team_leader", "supervisor"], cityScoped: true, personal: false, channels: IN_APP }),
   K({ kind: "gps_alert", group: "operacoes", label: "GPS desligado", description: "Condutores com o GPS desligado no Zello.",
     module: "historico_diario", action: "view", roles: ["team_leader", "supervisor"], cityScoped: true, personal: false, channels: IN_APP }),
+  K({ kind: "ops_presence", group: "operacoes", label: "A trabalhar sem PDA ou Zello", description: "Alguém do operacional com o ponto aberto sem PDA ou com o Zello desligado, ou com movimentos na Multipark sem ponto aberto. Vai ao team leader de serviço na cidade e ao supervisor.",
+    module: "pdas", action: "view", roles: [], cityScoped: true, personal: true, channels: IN_APP, dedupeMinutes: 60 }),
   K({ kind: "driver_daily_report", group: "operacoes", label: "Relatório diário dos motoristas", description: "Resumo da recolha automática do histórico GPS.",
     module: "historico_diario", action: "view", roles: [], cityScoped: false, personal: false, channels: WITH_EMAIL }),
   K({ kind: "anomaly_bookings", group: "operacoes", label: "Anomalias nas reservas", description: "Quedas/picos fora do normal nas reservas (só críticas).",
