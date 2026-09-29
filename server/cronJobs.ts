@@ -186,6 +186,27 @@ export async function crmAutoMergeCron(o: { deadlineAt: number }): Promise<CronJ
   }
 }
 
+/**
+ * Parcerias ← Multipark (todas as madrugadas): liga, cria, arquiva e liga os
+ * agentes dos parceiros. Interruptor PARTNER_MP_SYNC (desligado até o dono
+ * aplicar a primeira vez no ecrã).
+ */
+export async function partnerMpSyncCron(): Promise<CronJobRun> {
+  try {
+    const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
+    await ensureFeatureFlagOverrides();
+    if (!isFeatureEnabled("PARTNER_MP_SYNC", { defaultEnabled: automationFlagDefault("PARTNER_MP_SYNC") })) return { httpStatus: 200, body: { ranAt: ranAt(), skipped: "PARTNER_MP_SYNC desligado" }, done: true };
+    const { getSystemUserId } = await import("./db");
+    const { applyPartnerSync } = await import("./partnerMultiparkSync");
+    const r = await applyPartnerSync({ userId: await getSystemUserId() });
+    if (!r.available) return { httpStatus: 503, body: { ok: false, error: r.reason ?? "Multipark indisponível" } };
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: true };
+  } catch (err) {
+    console.error("[cron partner-mp-sync] falhou:", msg(err, 200));
+    return fail(err);
+  }
+}
+
 // ─── Serviços das reservas → tarefas ─────────────────────────────────────────
 
 /**

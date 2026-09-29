@@ -1496,6 +1496,13 @@ export const partnerships = mysqlTable("partnerships", {
 	configuredAt: timestamp({ mode: 'string' }),
 	// 0110 — base da comissão: 'net' (sem IVA, regra do dono) | 'gross' (exceção).
 	commissionBase: varchar({ length: 8 }).default('net').notNull(),
+	// 0295 — preso à Multipark: 'partner' | 'pro' | 'plan'; o que lá está (taxas
+	// por parque, desconto, preço da avença) em JSON; arquivado = sem par lá.
+	multiparkKind: varchar({ length: 16 }),
+	multiparkSnapshot: text(),
+	multiparkSyncedAt: timestamp({ mode: 'string' }),
+	archivedAt: timestamp({ mode: 'string' }),
+	archivedReason: varchar({ length: 255 }),
 });
 
 export const multiparkBookingHistory = mysqlTable("multipark_booking_history", {

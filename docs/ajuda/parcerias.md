@@ -18,6 +18,15 @@ Menu **Financeiro → Parcerias**. Os parceiros, os parques e as reservas vêm *
 - **Análise** — reservas e receita por campanha no período.
 - **Registos** — os nossos registos: acordo de faturação (contrato), comissão, NIF, **notas** e **contacto** (nome, email, telefone — só para quem tem contacto). **Por configurar** = registos sem dados gravados.
 
+**Ligar à Multipark** (cartão no topo dos Registos; aplicar só administradores)
+- A Multipark é a fonte: **parceiros** (agências e agregadores, com a taxa por parque), **clientes Pro** e **avenças** ficam cada um preso a **um** registo nosso pelo id de lá.
+- **Ver o que muda** não grava nada. Mostra: **Ligar** (pelo id já gravado ou pelo nome, com a nossa taxa de hoje ao lado da da Multipark), **Criar** (existem lá e não temos registo), **À mão** (mais de um registo nosso com o mesmo nome — escolhe qual) e **Arquivar** (registos de agências, agregadores, Pros e avenças sem par na Multipark — desmarca os que são só nossos).
+- **Aplicar** liga, cria e arquiva. Arquivado **nunca é apagado**: fica em **Arquivados**, com **Repor**. O que desmarcaste (ou repuseste) fica marcado como "só nosso" e não volta a ser proposto.
+- Ligado à Multipark = etiqueta **Multipark**: o **tipo, a comissão e a avença deixam de se editar aqui** (mudam-se lá; o formulário mostra o que lá está). NIF, contactos, acordo de faturação e notas continuam nossos.
+- Os **agentes** de cada parceiro (o utilizador da empresa na Multipark) ficam ligados à parceria sozinhos — deixam de aparecer em RH → Ligações.
+- Depois da primeira vez, liga em **Definições → Automações** "Parcerias: manter ligadas à Multipark todos os dias" (05:40).
+- Por agora a **Faturação** ainda usa as nossas taxas; passa a usar os números da Multipark no passo seguinte.
+
 **Notas**
 - Os valores em euros e as taxas só aparecem a quem vê totais financeiros.
 - Quem tem acesso só a algumas cidades vê só os parques (e parceiros desses parques) dessas cidades.

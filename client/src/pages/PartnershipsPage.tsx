@@ -28,6 +28,7 @@ import { PARTNER_TYPES, PARTNER_CATEGORIES, getPartnerType, partnerCategoryOf, p
 import { isPartnerUnconfigured, monthBoundsOf } from "@shared/partnerRules";
 import { lisbonToday } from "@shared/expensePeriods";
 import { toast } from "sonner";
+import { MultiparkSyncCard } from "@/components/partnerships/MultiparkSyncCard";
 
 const fmt = (v: number | null) => v == null ? "Indisponível" : new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR" }).format(v);
 
@@ -91,6 +92,9 @@ function PartnerDialog({ open, onClose, partner, prefill, campaignOptions }: {
   const isOperational = form.partnerType === "operacional";
   const isOwnCampaign = form.partnerType === "campanha_propria";
   const fields = partnerFormFields(form.partnerType);
+  // 0295: ligado à Multipark → tipo, comissão e avença vêm de lá (só leitura)
+  const mpLocked = ["partner", "pro", "plan"].includes(String(partner?.multiparkKind ?? ""));
+  const mpSnap = useMemo(() => { try { return partner?.multiparkSnapshot ? JSON.parse(partner.multiparkSnapshot) : null; } catch { return null; } }, [partner?.multiparkSnapshot]);
 
   const toggleProject = (id: number) => {
     const has = form.operatesProjects.includes(id);
@@ -161,9 +165,18 @@ function PartnerDialog({ open, onClose, partner, prefill, campaignOptions }: {
               <Input className="mt-1" value={form.campaignKey} onChange={e => set("campaignKey", e.target.value)} placeholder="Escrever campaign key..." />
             )}
           </div>
+          {mpLocked && (
+            <div className="col-span-2 rounded border border-sky-200 bg-sky-50 dark:bg-sky-950/20 p-2 text-xs">
+              <strong>Vem da Multipark</strong> (só leitura aqui: muda-se lá). {mpSnap?.mpName ? <>Nome lá: <strong>{String(mpSnap.mpName)}</strong>. </> : null}
+              {mpSnap?.fee ? <>Taxa: <strong>{String(mpSnap.fee)}</strong>. </> : null}
+              {mpSnap?.price != null ? <>Avença: <strong>{String(mpSnap.price)} €</strong> ({String(mpSnap.cadence ?? "")}). </> : null}
+              {mpSnap?.detail ? <>{String(mpSnap.detail)}. </> : null}
+              NIF, contactos, acordo e notas continuam a ser nossos.
+            </div>
+          )}
           <div>
             <Label className="text-xs">Tipo</Label>
-            <Select value={form.partnerType} onValueChange={(v) => set("partnerType", v)}>
+            <Select value={form.partnerType} onValueChange={(v) => set("partnerType", v)} disabled={mpLocked}>
               <SelectTrigger><SelectValue placeholder="Selecionar tipo..." /></SelectTrigger>
               <SelectContent>
                 {PARTNER_TYPES.map((t) => (
@@ -184,7 +197,7 @@ function PartnerDialog({ open, onClose, partner, prefill, campaignOptions }: {
           {fields.commission && (
             <div>
               <Label className="text-xs">Comissão (%)</Label>
-              <Input type="number" value={form.commissionRate} onChange={e => set("commissionRate", e.target.value)} />
+              <Input type="number" value={form.commissionRate} onChange={e => set("commissionRate", e.target.value)} disabled={mpLocked} />
             </div>
           )}
           {fields.commission && (
@@ -195,6 +208,7 @@ function PartnerDialog({ open, onClose, partner, prefill, campaignOptions }: {
                 value={form.commissionBase}
                 onChange={e => set("commissionBase", e.target.value)}
                 aria-label="Base da comissão"
+                disabled={mpLocked}
               >
                 <option value="net">Valor sem IVA (regra)</option>
                 <option value="gross">Valor com IVA (exceção)</option>
@@ -210,7 +224,7 @@ function PartnerDialog({ open, onClose, partner, prefill, campaignOptions }: {
           {fields.monthlyFee && (
             <div>
               <Label className="text-xs">Valor da avença (€/mês)</Label>
-              <Input type="number" value={form.monthlyFee} onChange={e => set("monthlyFee", e.target.value)} />
+              <Input type="number" value={form.monthlyFee} onChange={e => set("monthlyFee", e.target.value)} disabled={mpLocked} />
             </div>
           )}
           {fields.avencaDate && (
@@ -643,6 +657,8 @@ export default function PartnershipsPage() {
             </div>
           </div>
 
+          <MultiparkSyncCard />
+
           {/* Fila "Por configurar" — parceiros novos (sincronização automática) sem taxa/avença confirmada */}
           {unconfigured.length > 0 && (
             <Card className="p-4 border-amber-300 bg-amber-50/60 dark:bg-amber-950/20">
@@ -709,6 +725,9 @@ export default function PartnershipsPage() {
                         <Badge variant="outline" className="text-[11px]">
                           {getPartnerType(p.partnerType).label}
                         </Badge>
+                        {["partner", "pro", "plan"].includes(String(p.multiparkKind ?? "")) && (
+                          <Badge variant="outline" className="text-[11px] border-sky-400 text-sky-700 dark:text-sky-400">Multipark</Badge>
+                        )}
                         {isPartnerUnconfigured(p) && (
                           <Badge variant="outline" className="text-[11px] border-amber-400 text-amber-700 dark:text-amber-400">Por configurar</Badge>
                         )}

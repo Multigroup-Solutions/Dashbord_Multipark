@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { isLinkableAgent, isNonPersonAgentName, isSystemAgentId } from "../shared/agentIdentity";
+import { isLinkableAgent, isNonPersonAgentName, isScriptAgentName, isSystemAgentId } from "../shared/agentIdentity";
 import { buildIdentityAudit, type EmployeeRow, type UserRow } from "./identityReconcile";
 import { DEACTIVATION_REASON_LABELS } from "../shared/deactivationReasons";
 
@@ -59,5 +59,15 @@ describe("agentes por ligar: só os que mexem em carros", () => {
     const { mapLiveAgentRow } = await import("./multiparkDb/activityLive");
     expect(mapLiveAgentRow({ user_id: "u1", agent_name: "Guard Park", partner_only: true, total: 3 })?.partnerOnly).toBe(true);
     expect(mapLiveAgentRow({ user_id: "u2", agent_name: "Ana", partner_only: false, total: 3 })?.partnerOnly).toBe(false);
+  });
+});
+
+describe("agentes que são scripts", () => {
+  it("migration-script e firebase-migration-api não são pessoas", () => {
+    expect(isScriptAgentName("migration-script")).toBe(true);
+    expect(isScriptAgentName("firebase-migration-api")).toBe(true);
+    expect(isScriptAgentName("Ana Silva")).toBe(false);
+    expect(isScriptAgentName("Rodrigo Teixeira")).toBe(false);
+    expect(isLinkableAgent("cmabc", "migration-script")).toBe(false);
   });
 });
