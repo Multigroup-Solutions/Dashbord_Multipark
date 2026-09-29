@@ -34,6 +34,7 @@ export const DEACTIVATION_REASON_CODES = [
   "documentos",
   "mudanca_funcao",
   "conta_duplicada",
+  "ficha_duplicada",
   "seguranca",
   "outro",
 ] as const;
@@ -55,6 +56,7 @@ export const DEACTIVATION_REASON_LABELS: Record<DeactivationReasonCode, string> 
   documentos: "Documentação em falta ou expirada",
   mudanca_funcao: "Mudança de função / equipa",
   conta_duplicada: "Conta duplicada",
+  ficha_duplicada: "Ficha duplicada (junta a outra)",
   seguranca: "Segurança (acesso comprometido)",
   outro: "Outro",
 };

@@ -22,6 +22,8 @@ import { sql } from "drizzle-orm";
 import type { MySql2Database } from "drizzle-orm/mysql2";
 import { isPlausibleEmail, normalizeEmail } from "../shared/email";
 import { matchKey, sameText } from "../shared/textKey";
+import { isLinkableAgent } from "../shared/agentIdentity";
+import { isHouseEmail } from "../shared/crmIdentity";
 
 export type Db = MySql2Database<Record<string, never>> | MySql2Database<any>;
 
@@ -123,7 +125,8 @@ export async function loadIdentitySnapshot(db: Db): Promise<IdentitySnapshot> {
     return {
       users,
       employees,
-      agents: live.data.map((x) => ({
+      // Agentes de sistema ("system", "api"…), de teste e agências não são pessoas.
+      agents: live.data.filter((x) => isLinkableAgent(x.agentUserId, x.agentName ?? x.agentNames[0], x.email)).map((x) => ({
         agentUserId: x.agentUserId,
         agentNames: x.agentNames,
         agentEmails: x.email ? [normalizeEmail(x.email)].filter(Boolean) : [],
@@ -157,7 +160,7 @@ export async function loadIdentitySnapshot(db: Db): Promise<IdentitySnapshot> {
   return {
     users,
     employees,
-    agents: (a as any[]).map((r) => ({
+    agents: (a as any[]).filter((r) => isLinkableAgent(String(r.agentUserId), namesByAgent.get(String(r.agentUserId))?.[0] ?? null)).map((r) => ({
       agentUserId: String(r.agentUserId),
       agentNames: namesByAgent.get(String(r.agentUserId)) ?? [],
       agentEmails: split(r.emails).map(normalizeEmail).filter(Boolean),
@@ -326,7 +329,8 @@ export function buildIdentityAudit(snap: IdentitySnapshot): IdentityAudit {
       const u = usersById.get(e.userId);
       if (!u) {
         employeesDanglingUser.push({ employeeId: e.id, fullName: e.fullName, userId: e.userId });
-      } else if (norm(e.email) && norm(u.email) !== norm(e.email)) {
+      } else if (norm(e.email) && norm(u.email) !== norm(e.email) && !isHouseEmail(u.email) && norm(u.email) !== norm(e.personalEmail)) {
+        // Login com o email da casa (@multipark.pt…) e ficha com o email pessoal é o normal: não é conflito.
         employeeUserEmailMismatch.push({
           employeeId: e.id,
           fullName: e.fullName,

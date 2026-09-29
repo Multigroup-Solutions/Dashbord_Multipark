@@ -50,6 +50,15 @@ Em **RH → Ligações** (quem gere o RH) vês o que falta ligar entre as fichas
 - Fica a conta que entra na app. Tudo o que era da pessoa passa para ela: a ficha, as permissões e cidades extra, as notificações, o Google, o email, o WhatsApp e os casos atribuídos. O papel fica o mais alto dos dois.
 - A outra conta fica **desativada** ("conta duplicada"), nunca apagada, e o email dela passa para a ficha como email pessoal. O registo de quem fez o quê fica como estava.
 
+**Juntar fichas da mesma pessoa** (só administradores)
+- Caso típico: a ficha do RH e outra criada sozinha a partir de um login ou de um agente (ex.: "ribeirohelio662", "Agent DRIVER").
+- No cartão **Uma pessoa**, escolhe a ficha que fica e, em **Ficha duplicada da mesma pessoa**, a outra. Carrega em **Juntar nesta ficha**: vês antes o que passa (ponto, PDAs, escalas, documentos…).
+- Tudo o que era da outra passa para esta, com o utilizador e o agente da Multipark (principal se esta não tiver, senão extra). A outra fica **desativada** ("ficha duplicada"), nunca apagada.
+
+**Agentes que não são pessoas**
+- "system", "api" e "API User" são ações automáticas da Multipark: nunca se ligam a fichas e deixam de aparecer nos conflitos. Agentes de teste, agências e textos de formulário ("NOME DO RESPONSÁVEL…") também não. A ligação de hora a hora (e **Reconciliar agora**) tira-os das fichas onde tivessem ficado presos, e fica registado.
+- Login com o email da casa (@multipark.pt…) e ficha com o email pessoal é o normal: já não aparece como conflito.
+
 **Agentes de teste**
 - Agentes cujo nome ou email diz "teste", "test", "demo" e parecidos não aparecem nos "por ligar". Continuam na Multipark.
 

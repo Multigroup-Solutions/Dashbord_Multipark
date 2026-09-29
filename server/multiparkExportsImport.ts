@@ -178,8 +178,9 @@ export async function compareAgentList(rows: readonly AgentListRow[]): Promise<{
   if (!db) throw new Error("BD indisponível.");
   const { listLiveAgents } = await import("./multiparkDb/activityLive");
   const liveRes = await listLiveAgents({ days: 400 });
+  const { isSystemAgentId } = await import("../shared/agentIdentity");
   const live: LiveAgentLite[] = liveRes.available
-    ? liveRes.data.map((a) => ({ agentUserId: a.agentUserId, names: [...new Set([a.agentName, ...a.agentNames].filter((n): n is string => !!n))], email: a.email }))
+    ? liveRes.data.filter((a) => !isSystemAgentId(a.agentUserId)).map((a) => ({ agentUserId: a.agentUserId, names: [...new Set([a.agentName, ...a.agentNames].filter((n): n is string => !!n))], email: a.email }))
     : [];
   const empRows = rowsOf(await db.execute(sql`
     SELECT e.id, e.fullName, e.multiparkAgentUserId AS agentId,

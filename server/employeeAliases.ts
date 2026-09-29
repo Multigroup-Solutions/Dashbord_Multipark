@@ -49,6 +49,8 @@ export async function removeAccountAlias(userId: number): Promise<void> {
 
 /** Junta um agente Multipark extra à ficha (tira-o de onde estivesse). */
 export async function addAgentAlias(employeeId: number, agentUserId: string, agentName: string | null): Promise<void> {
+  const { isSystemAgentId } = await import("../shared/agentIdentity");
+  if (isSystemAgentId(agentUserId)) throw new Error("Agente de sistema da Multipark: não se liga a fichas.");
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível");
   await db.execute(sql`INSERT INTO employee_agents (agentUserId, employeeId, agentName) VALUES (${agentUserId}, ${employeeId}, ${agentName})
