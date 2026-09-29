@@ -204,6 +204,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0295").then(m => ({ s: m.MIGRATION_0295_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0295 })),
       import("./migrations/migration_0300").then(m => ({ s: m.MIGRATION_0300_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0300 })),
       import("./migrations/migration_0305").then(m => ({ s: m.MIGRATION_0305_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0305 })),
+      import("./migrations/migration_0310").then(m => ({ s: m.MIGRATION_0310_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0310 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -4759,6 +4760,9 @@ export async function generateAnnualSummary(year: number, projectId?: number, sp
 // nas folhas operacionais.
 type CampaignPartner = { id: number; name: string; commissionRate: number; commissionBase: "net" | "gross"; partnerType: string | null; updatedAt: string };
 let partnerMapCache: { at: number; map: Map<string, CampaignPartner> } | null = null;
+/** Esquece a cache campanha → parceiro (depois de juntar/separar registos). */
+export function resetPartnerMapCache(): void { partnerMapCache = null; }
+
 export async function buildPartnerByCampaignMap() {
   if (partnerMapCache && Date.now() - partnerMapCache.at < 60_000) return partnerMapCache.map;
   const map = new Map<string, CampaignPartner>();

@@ -30,6 +30,7 @@ import { lisbonToday } from "@shared/expensePeriods";
 import { toast } from "sonner";
 import { MultiparkSyncCard } from "@/components/partnerships/MultiparkSyncCard";
 import { PartnerCloseTab } from "@/components/partnerships/PartnerCloseTab";
+import { MergePartnersDialog } from "@/components/partnerships/MergePartnersDialog";
 
 const fmt = (v: number | null) => v == null ? "Indisponível" : new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR" }).format(v);
 
@@ -393,6 +394,10 @@ export default function PartnershipsPage() {
   // Fila "Por configurar": parceiros que nenhum admin gravou (ex.: criados
   // pela sincronização automática com 0% e sem avença).
   const unconfigured = useMemo(() => (partnerList as any[]).filter(isPartnerUnconfigured), [partnerList]);
+  // Juntar registos (o mesmo parceiro em vários registos)
+  const [mergeSel, setMergeSel] = useState<Set<number>>(new Set());
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const toggleMerge = (id: number) => setMergeSel((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
   // Group partners by campaign name
   const partnerSummary = useMemo(() => {
@@ -666,6 +671,20 @@ export default function PartnershipsPage() {
 
           <MultiparkSyncCard />
 
+          {mergeSel.size > 0 && (
+            <div className="sticky top-2 z-10 flex flex-wrap items-center gap-2 rounded-md border border-sky-300 bg-sky-50 dark:bg-sky-950/40 p-2 text-sm shadow">
+              <span className="flex-1">{mergeSel.size} registo(s) selecionado(s) — o mesmo parceiro? Junta-os num só (as reservas vão com eles).</span>
+              <Button size="sm" disabled={mergeSel.size < 2} onClick={() => setMergeOpen(true)}>Juntar ({mergeSel.size})</Button>
+              <Button size="sm" variant="ghost" onClick={() => setMergeSel(new Set())}>Limpar</Button>
+            </div>
+          )}
+          {mergeOpen && (
+            <MergePartnersDialog
+              records={(partnerList as any[]).filter((p: any) => mergeSel.has(p.id))}
+              onClose={(done) => { setMergeOpen(false); if (done) setMergeSel(new Set()); }}
+            />
+          )}
+
           {/* Fila "Por configurar" — parceiros novos (sincronização automática) sem taxa/avença confirmada */}
           {unconfigured.length > 0 && (
             <Card className="p-4 border-amber-300 bg-amber-50/60 dark:bg-amber-950/20">
@@ -679,7 +698,8 @@ export default function PartnershipsPage() {
               </p>
               <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                 {unconfigured.map((p: any) => (
-                  <div key={p.id} className="flex items-center gap-2 rounded border bg-background px-2 py-1.5 text-sm min-w-0">
+                  <div key={p.id} className={`flex items-center gap-2 rounded border bg-background px-2 py-1.5 text-sm min-w-0 ${mergeSel.has(p.id) ? "ring-2 ring-sky-500" : ""}`}>
+                    <input type="checkbox" aria-label={`Selecionar ${p.name} para juntar`} checked={mergeSel.has(p.id)} onChange={() => toggleMerge(p.id)} className="shrink-0" />
                     <div className="min-w-0 flex-1">
                       <span className="font-medium block break-words leading-snug">{p.name}</span>
                       <Badge variant="outline" className="text-[11px] mt-0.5">{getPartnerType(p.partnerType).label}</Badge>
@@ -721,8 +741,9 @@ export default function PartnershipsPage() {
           ) : (
             <div className="grid gap-3">
               {(partnerList as any[]).filter((p: any) => mgmtType === "all" || partnerCategoryOf(p.partnerType) === mgmtType).map((p: any) => (
-                <Card key={p.id} className="p-4">
+                <Card key={p.id} className={`p-4 ${mergeSel.has(p.id) ? "ring-2 ring-sky-500" : ""}`}>
                   <div className="flex items-start justify-between gap-2">
+                    <input type="checkbox" aria-label={`Selecionar ${p.name} para juntar`} checked={mergeSel.has(p.id)} onChange={() => toggleMerge(p.id)} className="mt-1 shrink-0" />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <h3 className="font-semibold break-words min-w-0">{p.name}</h3>
