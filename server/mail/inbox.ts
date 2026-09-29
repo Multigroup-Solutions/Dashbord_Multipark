@@ -106,6 +106,19 @@ export async function threadAccess(viewer: MailViewer, threadId: number): Promis
 
 // ─── Caixas visíveis ────────────────────────────────────────────────────────
 
+/**
+ * Condição SQL (sobre `mail_threads t`) das conversas que este utilizador pode
+ * ver: as caixas partilhadas visíveis (com o filtro de cidade de cada uma) e o
+ * próprio email pessoal. O super admin vê tudo (IT / procurar o que se perdeu).
+ */
+export async function visibleThreadsCondition(viewer: MailViewer): Promise<SQL> {
+  if (viewer.role === "super_admin") return sql`1 = 1`;
+  const all = await listMailboxes();
+  const parts: SQL[] = all.filter((m) => canSeeMailbox(viewer, m)).map((m) => sql`(t.mailboxKey = ${m.key} AND ${cityCondition(viewer, m)})`);
+  parts.push(sql`(t.mailboxKey IS NULL AND t.ownerUserId = ${viewer.id})`);
+  return sql`(${sql.join(parts, sql` OR `)})`;
+}
+
 export async function visibleMailboxes(viewer: MailViewer) {
   const all = await listMailboxes();
   const visible = all.filter((m) => canSeeMailbox(viewer, m));

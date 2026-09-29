@@ -50,7 +50,7 @@ async function queryGenericEmails(db: any): Promise<Set<string>> {
   const set = new Set<string>(r.map((x) => String(x.e)));
   const dom = rowsOf(await db.execute(sql`
     SELECT DISTINCT LOWER(TRIM(clientEmail)) AS e FROM multipark_bookings
-    WHERE SUBSTRING_INDEX(LOWER(TRIM(clientEmail)), '@', -1) IN (${inList(INTERNAL_EMAIL_DOMAINS)})`));
+    WHERE SUBSTRING_INDEX(LOWER(TRIM(clientEmail)), '@', -1) IN (${inList([...INTERNAL_EMAIL_DOMAINS])})`));
   dom.forEach((x) => set.add(String(x.e)));
   return set;
 }
@@ -426,6 +426,9 @@ export async function runCrmSync(o: { deadlineAt: number; batchSize?: number; re
   if (!db) throw new Error("BD do dashboard indisponível.");
   const limit = Math.max(100, Math.min(3000, o.batchSize ?? CRM_SYNC_BATCH));
   const generic = await loadGenericEmails(db);
+  // Emails da casa que já estavam nas fichas (antes da lista única de domínios):
+  // passam a genéricos — deixam de ligar reservas e de contar como email do cliente.
+  await markHouseEmailsGeneric(db).catch((err) => console.warn("[crm-sync] emails da casa:", String(err?.message ?? err).slice(0, 160)));
   let cursorStr = o.restart ? null : await loadCrmCursor(db);
   const res: CrmSyncResult = { ok: true, batches: 0, rows: 0, created: 0, linked: 0, kept: 0, genericEmails: generic.size, cursor: cursorStr, done: false, ms: 0 };
   try {
@@ -452,3 +455,11 @@ export async function runCrmSync(o: { deadlineAt: number; batchSize?: number; re
   return res;
 }
 
+
+/** Emails de domínios da casa (e subdomínios) nas fichas → genéricos. Idempotente. */
+export async function markHouseEmailsGeneric(db: any): Promise<number> {
+  const doms = [...INTERNAL_EMAIL_DOMAINS];
+  const conds = sql.join(doms.map((d) => sql`(SUBSTRING_INDEX(email, '@', -1) = ${d} OR SUBSTRING_INDEX(email, '@', -1) LIKE ${`%.${d}`})`), sql` OR `);
+  const res: any = await db.execute(sql`UPDATE crm_client_emails SET generic = 1 WHERE generic = 0 AND (${conds})`);
+  return Number((Array.isArray(res) ? res[0] : res)?.affectedRows ?? 0);
+}

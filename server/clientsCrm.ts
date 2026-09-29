@@ -77,7 +77,9 @@ export const VIP_TOP_SHARE = 0.10;
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
 /** Domínios da casa: staff e contas de teste, não são clientes. */
-export const INTERNAL_EMAIL_DOMAINS = ["multipark.pt", "airpark.pt", "redpark.pt", "skypark.pt", "multigroup.pt"];
+/** Domínios da casa — a lista única do CRM (shared/crmIdentity.ts). */
+export { INTERNAL_EMAIL_DOMAINS } from "../shared/crmIdentity";
+import { INTERNAL_EMAIL_DOMAINS } from "../shared/crmIdentity";
 
 function rows<T = any>(r: any): T[] {
   return (Array.isArray(r) && Array.isArray(r[0]) ? r[0] : r) as T[];

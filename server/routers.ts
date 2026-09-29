@@ -8644,7 +8644,12 @@ export const appRouter = router({
         requireAccess(ctx.user, "clientes", "view");
         await crmAssertInScope(input.clientId);
         const { findEmailInMailbox } = await import("./crm/review");
-        return findEmailInMailbox(await crmDb(), input.clientId);
+        // super admin: todas as caixas; os outros: só as conversas que já podem ver na Comunicação
+        const { visibleThreadsCondition } = await import("./mail/inbox");
+        const { withOverrides } = await import("./_core/access");
+        const w = withOverrides(ctx.user as any);
+        const visible = await visibleThreadsCondition({ id: w.id, role: w.role, accessOverrides: w.accessOverrides ?? null });
+        return findEmailInMailbox(await crmDb(), input.clientId, visible);
       }),
     savedFilters: protectedProcedure.query(async ({ ctx }) => {
       requireAccess(ctx.user, "clientes", "view");

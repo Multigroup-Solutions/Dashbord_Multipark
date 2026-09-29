@@ -43,6 +43,8 @@ export interface ProSyncResult {
   linked: number;
   created: number;
   payerLinks: number;
+  /** contas cuja ficha não se conseguiu resolver nesta corrida */
+  fichaErrors?: number;
   diagnostics?: ProDiagnostics;
   ms: number;
 }
@@ -65,7 +67,7 @@ export async function runProSync(o: { deadlineAt: number }): Promise<ProSyncResu
   // 1) contas
   for (const part of chunks(snap.accounts, 200)) {
     await db.execute(sql`INSERT INTO crm_pro_accounts (mpClientId, name, email, phone, nif, taxName, autoBilling, active, syncedAt)
-      VALUES ${sql.join(part.map((a) => sql`(${a.mpClientId}, ${a.name}, ${a.email}, ${a.phone}, ${a.nif}, ${a.taxName}, ${a.autoBilling ? 1 : 0}, ${a.active ? 1 : 0}, ${runAt})`), sql`, `)}
+      VALUES ${sql.join(part.map((a) => { const c = clipAccount(a); return sql`(${c.mpClientId}, ${c.name}, ${c.email}, ${c.phone}, ${c.nif}, ${c.taxName}, ${a.autoBilling ? 1 : 0}, ${a.active ? 1 : 0}, ${runAt})`; }), sql`, `)}
       ON DUPLICATE KEY UPDATE name = VALUES(name), email = VALUES(email), phone = VALUES(phone), nif = VALUES(nif), taxName = VALUES(taxName),
         autoBilling = VALUES(autoBilling), active = VALUES(active), syncedAt = VALUES(syncedAt)`);
   }
@@ -84,7 +86,7 @@ export async function runProSync(o: { deadlineAt: number }): Promise<ProSyncResu
   const parks = snap.accounts.flatMap((a) => a.parks.map((p) => ({ ...p, accountId: accountId.get(a.mpClientId) ?? 0 }))).filter((p) => p.accountId);
   for (const part of chunks(parks, 200)) {
     await db.execute(sql`INSERT INTO crm_pro_parks (proClientId, accountId, parkId, parkName, city, name, discount, active, deactivatedAt, mpCreatedAt, goneAt)
-      VALUES ${sql.join(part.map((p) => sql`(${p.proClientId}, ${p.accountId}, ${p.parkId}, ${p.parkName}, ${p.city}, ${p.name}, ${p.discount}, ${p.active ? 1 : 0}, ${p.deactivatedAt}, ${p.mpCreatedAt}, NULL)`), sql`, `)}
+      VALUES ${sql.join(part.map((p) => sql`(${cut(p.proClientId, 64)}, ${p.accountId}, ${cut(p.parkId, 64)}, ${cut(p.parkName, 128)}, ${cut(p.city, 64)}, ${cut(p.name, 255)}, ${p.discount}, ${p.active ? 1 : 0}, ${p.deactivatedAt}, ${p.mpCreatedAt}, NULL)`), sql`, `)}
       ON DUPLICATE KEY UPDATE accountId = VALUES(accountId), parkId = VALUES(parkId), parkName = VALUES(parkName), city = VALUES(city), name = VALUES(name),
         discount = VALUES(discount), active = VALUES(active), deactivatedAt = VALUES(deactivatedAt), mpCreatedAt = VALUES(mpCreatedAt), goneAt = NULL`);
   }
@@ -99,8 +101,8 @@ export async function runProSync(o: { deadlineAt: number }): Promise<ProSyncResu
     await db.execute(sql`INSERT INTO crm_pro_ledger (accountId, kind, sourceId, entryAt, periodKey, mpPeriodKey, parkId, parkName, city,
         bookingExternalId, bookingCode, checkIn, checkOut, plate, travelerName, description, debit, credit, paidAmount, listPrice, discountAmount,
         infoAmount, status, method, goneAt, syncedAt)
-      VALUES ${sql.join(part.map((l) => sql`(${l.accountId}, ${l.kind}, ${l.sourceId}, ${l.entryAt}, ${l.periodKey}, ${cut(l.mpPeriodKey, 64)}, ${l.parkId}, ${l.parkName}, ${l.city},
-        ${l.bookingExternalId}, ${l.bookingCode}, ${l.checkIn}, ${l.checkOut}, ${cut(l.plate, 32)}, ${cut(l.travelerName, 255)}, ${cut(l.description, 255)},
+      VALUES ${sql.join(part.map((l) => sql`(${l.accountId}, ${l.kind}, ${l.sourceId}, ${l.entryAt}, ${l.periodKey}, ${cut(l.mpPeriodKey, 64)}, ${cut(l.parkId, 64)}, ${cut(l.parkName, 128)}, ${cut(l.city, 64)},
+        ${cut(l.bookingExternalId, 128)}, ${cut(l.bookingCode, 64)}, ${l.checkIn}, ${l.checkOut}, ${cut(l.plate, 32)}, ${cut(l.travelerName, 255)}, ${cut(l.description, 255)},
         ${l.debit}, ${l.credit}, ${l.paidAmount}, ${l.listPrice}, ${l.discountAmount}, ${l.infoAmount}, ${cut(l.status, 24)}, ${cut(l.method, 64)}, NULL, ${runAt})`), sql`, `)}
       ON DUPLICATE KEY UPDATE accountId = VALUES(accountId), entryAt = VALUES(entryAt), periodKey = VALUES(periodKey), mpPeriodKey = VALUES(mpPeriodKey),
         parkId = VALUES(parkId), parkName = VALUES(parkName), city = VALUES(city), bookingExternalId = VALUES(bookingExternalId), bookingCode = VALUES(bookingCode),
@@ -132,22 +134,28 @@ export async function runProSync(o: { deadlineAt: number }): Promise<ProSyncResu
       if (Date.now() > o.deadlineAt - 5_000) break;
       const a = byMp.get(String(r.mpClientId));
       if (!a) continue;
-      const { clientId, created } = await resolveFicha(db, a, r.crmClientId == null ? null : Number(r.crmClientId));
-      if (!clientId) continue;
-      if (created) res.created++;
-      if (Number(r.crmClientId) !== clientId) {
-        await db.execute(sql`UPDATE crm_pro_accounts SET crmClientId = ${clientId} WHERE id = ${Number(r.id)}`);
-        res.linked++;
-      }
-      await db.execute(sql`INSERT IGNORE INTO crm_client_external_ids (clientId, \`system\`, externalId, url)
-        VALUES (${clientId}, 'multipark_client', ${a.mpClientId}, ${multiparkProUrl(a.mpClientId)})`);
-      if (a.active) await db.execute(sql`UPDATE crm_clients SET isPro = IF(proManual = 1, isPro, 1) WHERE id = ${clientId}`);
-      const bookingIds = ledger.filter((l) => l.mpClientId === a.mpClientId && l.kind === "booking").map((l) => l.sourceId);
-      for (const part of chunks(bookingIds, 500)) {
-        await db.execute(sql`INSERT INTO crm_booking_links (bookingExternalId, clientId, role, rule)
-          VALUES ${sql.join(part.map((b) => sql`(${b}, ${clientId}, 'payer', 'pro')`), sql`, `)}
-          ON DUPLICATE KEY UPDATE clientId = VALUES(clientId), rule = VALUES(rule)`);
-        res.payerLinks += part.length;
+      // uma conta com dados estranhos não pode parar as outras: regista e segue
+      try {
+        const { clientId, created } = await resolveFicha(db, a, r.crmClientId == null ? null : Number(r.crmClientId));
+        if (!clientId) continue;
+        if (created) res.created++;
+        if (Number(r.crmClientId) !== clientId) {
+          await db.execute(sql`UPDATE crm_pro_accounts SET crmClientId = ${clientId} WHERE id = ${Number(r.id)}`);
+          res.linked++;
+        }
+        await db.execute(sql`INSERT IGNORE INTO crm_client_external_ids (clientId, \`system\`, externalId, url)
+          VALUES (${clientId}, 'multipark_client', ${a.mpClientId}, ${multiparkProUrl(a.mpClientId)})`);
+        if (a.active) await db.execute(sql`UPDATE crm_clients SET isPro = IF(proManual = 1, isPro, 1) WHERE id = ${clientId}`);
+        const bookingIds = ledger.filter((l) => l.mpClientId === a.mpClientId && l.kind === "booking").map((l) => l.sourceId);
+        for (const part of chunks(bookingIds, 500)) {
+          await db.execute(sql`INSERT INTO crm_booking_links (bookingExternalId, clientId, role, rule)
+            VALUES ${sql.join(part.map((b) => sql`(${b}, ${clientId}, 'payer', 'pro')`), sql`, `)}
+            ON DUPLICATE KEY UPDATE clientId = VALUES(clientId), rule = VALUES(rule)`);
+          res.payerLinks += part.length;
+        }
+      } catch (err) {
+        res.fichaErrors = (res.fichaErrors ?? 0) + 1;
+        console.warn("[crm-pro-sync] ficha da conta falhou:", dbErrorReason(err));
       }
     }
   }
@@ -155,7 +163,30 @@ export async function runProSync(o: { deadlineAt: number }): Promise<ProSyncResu
   return res;
 }
 
-const cut = (s: string | null, n: number) => (s == null ? null : s.slice(0, n));
+/**
+ * Texto cortado ao tamanho da coluna, sem carateres de 4 bytes (emoji): as
+ * tabelas crm_* seguem o charset da BD (passo da 0215), que pode ser utf8mb3,
+ * e aí um emoji num nome recusa o INSERT inteiro ("Incorrect string value").
+ */
+const cut = (s: string | null | undefined, n: number) => (s == null ? null : s.replace(/[\u{10000}-\u{10FFFF}]/gu, "").slice(0, n));
+
+/**
+ * Tamanhos das colunas de crm_pro_accounts (migração 0220). Os dados vêm de
+ * campos livres da Multipark (nome, NIF, telefone…) e, desde os "Pro
+ * antigos", de muitos mais clientes: sem cortar, o MySQL em modo estrito
+ * recusa o INSERT inteiro ("Data too long") e a conta corrente para.
+ */
+export const PRO_ACCOUNT_LIMITS = { mpClientId: 64, name: 255, email: 320, phone: 40, nif: 32, taxName: 255 } as const;
+
+/** Conta com os textos cortados ao tamanho das colunas. PURA. */
+export function clipAccount(a: Pick<ProAccountOut, "mpClientId" | "name" | "email" | "phone" | "nif" | "taxName">) {
+  const L = PRO_ACCOUNT_LIMITS;
+  return {
+    mpClientId: String(a.mpClientId).slice(0, L.mpClientId),
+    name: cut(a.name, L.name), email: cut(a.email, L.email), phone: cut(a.phone, L.phone),
+    nif: cut(a.nif, L.nif), taxName: cut(a.taxName, L.taxName),
+  };
+}
 
 /** Ficha ativa ao fim de fusões em cadeia (ou null). */
 async function activeFicha(db: any, id: number | null): Promise<number | null> {
@@ -197,7 +228,7 @@ async function resolveFicha(db: any, a: ProAccountOut, current: number | null): 
   const kind = looksLikeCompany(a.name, a.taxName) ? "company" : "person";
   const syncKey = `pro:${a.mpClientId}`;
   const ins: any = await db.execute(sql`INSERT INTO crm_clients (syncKey, kind, source, displayName, primaryEmail, primaryPhone, nif, taxName, isPro, noEmail, lastSeenAt)
-    VALUES (${syncKey}, ${kind}, 'multipark_pro', ${a.name ?? "Cliente Pro"}, ${email || null}, ${phone || null}, ${nif || null}, ${a.taxName}, ${a.active ? 1 : 0}, ${email ? 0 : 1}, UTC_TIMESTAMP())
+    VALUES (${cut(syncKey, 160)}, ${kind}, 'multipark_pro', ${cut(a.name, 255) ?? "Cliente Pro"}, ${cut(email || null, 320)}, ${cut(phone || null, 32)}, ${cut(nif || null, 16)}, ${cut(a.taxName, 255)}, ${a.active ? 1 : 0}, ${email ? 0 : 1}, UTC_TIMESTAMP())
     ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)`);
   const raw = insertId(ins);
   // 1 = nova; 2 = já existia (ON DUPLICATE) — nesse caso pode ter sido junta a outra
@@ -205,10 +236,22 @@ async function resolveFicha(db: any, a: ProAccountOut, current: number | null): 
   const id = await activeFicha(db, raw || null);
   if (!id) return { clientId: null, created: false };
   if (created) {
-    if (email) await db.execute(sql`INSERT IGNORE INTO crm_client_emails (clientId, email, isPrimary, source, firstSeenAt, lastSeenAt) VALUES (${id}, ${email}, 1, 'multipark_pro', UTC_TIMESTAMP(), UTC_TIMESTAMP())`);
-    if (phone) await db.execute(sql`INSERT IGNORE INTO crm_client_phones (clientId, phone, isPrimary, source, firstSeenAt, lastSeenAt) VALUES (${id}, ${phone}, 1, 'multipark_pro', UTC_TIMESTAMP(), UTC_TIMESTAMP())`);
+    if (email && email.length <= 320) await db.execute(sql`INSERT IGNORE INTO crm_client_emails (clientId, email, isPrimary, source, firstSeenAt, lastSeenAt) VALUES (${id}, ${email}, 1, 'multipark_pro', UTC_TIMESTAMP(), UTC_TIMESTAMP())`);
+    if (phone && phone.length <= 32) await db.execute(sql`INSERT IGNORE INTO crm_client_phones (clientId, phone, isPrimary, source, firstSeenAt, lastSeenAt) VALUES (${id}, ${phone}, 1, 'multipark_pro', UTC_TIMESTAMP(), UTC_TIMESTAMP())`);
   }
   return { clientId: id, created };
 }
 
 export type { ProLedgerOut };
+
+/**
+ * Motivo do erro da BD (código + mensagem do MySQL) sem os valores entre
+ * aspas — "Duplicate entry '…' for key" traria o email do cliente. PURA.
+ */
+export function dbErrorReason(err: unknown): string {
+  const e = err as any;
+  const c = e?.cause ?? e;
+  const code = c?.code ?? c?.errno ?? "ERRO";
+  const text = String(c?.sqlMessage ?? c?.message ?? "").replace(/'[^']*'/g, "'…'").replace(/\s+/g, " ").trim();
+  return `${code}${text ? `: ${text}` : ""}`.slice(0, 240);
+}
