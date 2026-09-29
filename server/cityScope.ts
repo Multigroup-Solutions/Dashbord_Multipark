@@ -55,18 +55,20 @@ export function userScope(userId: SQLWrapper): SQL {
     WHERE city_employee.userId = ${userId} AND ${projectScope(sql`city_employee.projectId`)})`;
 }
 
+/**
+ * Parceria visível nas cidades do pedido: opera um dos centros (notas da
+ * parceria) OU tem reservas nesses centros — pelo resumo `partner_city_presence`,
+ * calculado AO VIVO da BD da Multipark (server/partnerPresence.ts), já não
+ * pela cópia `multipark_bookings`.
+ */
 export function partnerScope(partnerId: SQLWrapper): SQL {
   if (scopedProjectIds() === undefined) return sql`1 = 1`;
   const ids = [...new Set([...scopedProjectIds()!, ...(cityScope.getStore()?.cityIds ?? [])])];
   const operated = ids.length ? sql.join(ids.map(id => sql`JSON_CONTAINS(
     IF(JSON_VALID(city_operator.notes), city_operator.notes, '{}'), ${JSON.stringify(id)}, '$.operatesProjects')`), sql` OR `) : sql`1 = 0`;
   return sql`(EXISTS (SELECT 1 FROM partnerships city_operator WHERE city_operator.id = ${partnerId}
-    AND (${operated})) OR EXISTS (SELECT 1 FROM multipark_bookings city_booking
-    JOIN partnerships city_partner ON city_partner.id = ${partnerId}
-    WHERE ${projectScope(sql`city_booking.projectId`)} AND (
-      city_booking.campaign = city_partner.campaignKey OR city_booking.campaign = city_partner.name
-      OR EXISTS (SELECT 1 FROM partner_aliases city_alias WHERE city_alias.partnershipId = city_partner.id
-        AND city_alias.aliasValue = city_booking.campaign))))`;
+    AND (${operated})) OR EXISTS (SELECT 1 FROM partner_city_presence city_presence
+    WHERE city_presence.partnershipId = ${partnerId} AND ${projectScope(sql`city_presence.projectId`)}))`;
 }
 
 export function requireGlobalCityAccess(): void {
