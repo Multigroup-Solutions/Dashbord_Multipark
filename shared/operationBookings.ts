@@ -36,7 +36,9 @@ export function summarizeOperationBookings(bookings: Record<string, any>[], acti
     const paid = Number(b.totalPaid) || 0;
     const method = String(b.paymentMethod ?? '').toLowerCase();
     if (paid > 0) {
-      if (method === 'online' || method.includes('viva wallet') || method.includes('transferencia') || method.includes('transferência')) paidOnline += paid;
+      // MB WAY (qualquer grafia, incl. "Online, MBWAY") e "Online, Card" são pagamentos online — nunca Multibanco.
+      const isMbWay = method.replace(/[^a-z0-9]/g, '').includes('mbway');
+      if (isMbWay || method === 'online' || method === 'online, card' || method.includes('viva wallet') || method.includes('transferencia') || method.includes('transferência')) paidOnline += paid;
       else if (method === 'multibanco') paidMB += paid;
       else if (method === 'dinheiro') paidCash += paid;
       else paidOther += paid;
