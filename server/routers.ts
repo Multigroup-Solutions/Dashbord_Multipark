@@ -7120,12 +7120,13 @@ export const appRouter = router({
       }
       const partners = new Set((await listAgentPartners()).map((p) => matchKey(p.agentName)));
       const { listIgnoredAgents } = await import("./db");
+      const { looksLikeTestAgent } = await import("./personIdentity");
       const ignored = new Set((await listIgnoredAgents()).map((n) => matchKey(n)));
       const list = (rows as any[])
         .filter((r) => {
           const key = matchKey(String(r.agentName));
           const id = String(r.agentUserId ?? "").trim();
-          return !linked.has(key) && !(id && linkedIds.has(id)) && !partners.has(key) && !ignored.has(key);
+          return !linked.has(key) && !(id && linkedIds.has(id)) && !partners.has(key) && !ignored.has(key) && !looksLikeTestAgent(String(r.agentName));
         })
         .map((r) => ({
           agentName: String(r.agentName),
@@ -7734,6 +7735,76 @@ export const appRouter = router({
         await removeAgentAlias(input.agentUserId);
         await logActivity({ userId: ctx.user.id, action: "agent_detach", entity: "employee", details: `Agente extra ${input.agentUserId} separado (ecrã Ligações)` });
         return { success: true };
+      }),
+    /** Uma pessoa: contas (principal + extra) e agentes da Multipark (principal + extra). */
+    person: protectedProcedure
+      .input(z.object({ employeeId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "rh", "manage");
+        await assertEmployeeAccess(input.employeeId);
+        const { getPersonIdentity } = await import("./personIdentity");
+        const r = await getPersonIdentity(input.employeeId);
+        if (!r) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha não encontrada" });
+        return r;
+      }),
+    searchAgents: protectedProcedure
+      .input(z.object({ q: z.string().trim().min(2).max(120) }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "rh", "manage");
+        const { searchAgents } = await import("./personIdentity");
+        return searchAgents(input.q);
+      }),
+    /** Retirar um agente da ficha (principal ou extra). */
+    detachAgent: protectedProcedure
+      .input(z.object({ employeeId: z.number().int().positive(), agentUserId: z.string().min(1).max(128) }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "rh", "manage");
+        await assertEmployeeAccess(input.employeeId);
+        const { detachAgent } = await import("./personIdentity");
+        try { await detachAgent(input.employeeId, input.agentUserId); } catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: err.message }); }
+        await logActivity({ userId: ctx.user.id, action: "agent_detach", entity: "employee", entityId: input.employeeId, details: `Agente Multipark ${input.agentUserId} retirado da ficha (ecrã Ligações)` });
+        return { success: true };
+      }),
+    /** Juntar duas contas da mesma pessoa: o que vai acontecer (sem mexer). */
+    previewMerge: protectedProcedure
+      .input(z.object({ keepUserId: z.number().int().positive(), dropUserId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "rh", "manage");
+        if (!["admin", "super_admin"].includes(String(ctx.user.role))) throw new TRPCError({ code: "FORBIDDEN", message: "Só um administrador junta contas." });
+        const { getDb } = await import("./db");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
+        const { previewUserMerge } = await import("./userMerge");
+        try { return await previewUserMerge(db as any, input.keepUserId, input.dropUserId); }
+        catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: err.message }); }
+      }),
+    /**
+     * Juntar: fica a conta que entra na app (principal da ficha); tudo o que é
+     * da pessoa passa para ela; a outra fica desativada (nunca apagada).
+     */
+    mergeUsers: protectedProcedure
+      .input(z.object({ keepUserId: z.number().int().positive(), dropUserId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "rh", "manage");
+        if (!["admin", "super_admin"].includes(String(ctx.user.role))) throw new TRPCError({ code: "FORBIDDEN", message: "Só um administrador junta contas." });
+        if (input.dropUserId === ctx.user.id) throw new TRPCError({ code: "BAD_REQUEST", message: "Não podes juntar (desativar) a tua própria conta." });
+        const { getDb } = await import("./db");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
+        const { mergeUserAccounts, previewUserMerge } = await import("./userMerge");
+        let p;
+        try {
+          p = await previewUserMerge(db as any, input.keepUserId, input.dropUserId);
+          if ((p.drop.role === "super_admin" || p.keep.role === "super_admin") && ctx.user.role !== "super_admin") throw new Error("Só um super admin junta contas de super admin.");
+          if (p.employee) await assertEmployeeAccess(p.employee.id);
+          p = await mergeUserAccounts(db as any, { keepId: input.keepUserId, dropId: input.dropUserId, byUserId: ctx.user.id, nowDb: new Date().toISOString().slice(0, 19).replace("T", " ") });
+        } catch (err: any) {
+          if (err instanceof TRPCError) throw err;
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        }
+        await logActivity({ userId: ctx.user.id, action: "users_merge", entity: "user", entityId: input.keepUserId,
+          details: `Conta #${input.dropUserId} (${p.drop.email ?? "sem email"}) junta a #${input.keepUserId} (${p.keep.email ?? "sem email"})${p.employee ? ` · ficha ${p.employee.fullName} #${p.employee.id}` : ""}; a #${input.dropUserId} ficou desativada` });
+        return { success: true, ...p };
       }),
     linkAgent: protectedProcedure
       .input(z.object({ employeeId: z.number().int().positive(), agentUserId: z.string().min(1).max(128) }))
