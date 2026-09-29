@@ -158,29 +158,42 @@ const fmt = (v: any): string | null => (v == null ? null : v instanceof Date ? u
  */
 async function fetchLinks(caseWhere: SQL): Promise<CrossRefLinkRow[]> {
   const d = await db();
-  const rows = rowsOf(await d.execute(sql`
-    SELECT x.caseId, x.via, x.employeeId, x.name, x.changeType, x.actionTime, x.parkName,
-           l2.description AS caseDescription, l2.status AS caseStatus, l2.createdAt AS caseCreatedAt,
-           l2.vehiclePlate AS casePlate, l2.bookingRef AS bookingRef, e.fullName AS employeeName
-    FROM (
-      SELECT l.id AS caseId, 'attached' AS via, COALESCE(ad.employeeId, am.empId) AS employeeId, ad.driverName AS name,
-             NULL AS changeType, NULL AS actionTime, NULL AS parkName
-      FROM lost_found_items l
-      JOIN lost_found_attached_drivers ad ON ad.itemId = l.id
-      LEFT JOIN ${AGENT_MAP} am ON am.n = ad.driverName
-      WHERE ${caseWhere}
-      UNION ALL
-      SELECT l.id, 'movement', am.empId, h.agentName, h.changeType, h.actionTime, b.parkName
-      FROM lost_found_items l
-      JOIN multipark_booking_history h ON h.bookingExternalId = l.bookingRef
-      LEFT JOIN multipark_bookings b ON b.externalId = h.bookingExternalId
-      LEFT JOIN ${AGENT_MAP} am ON am.n = h.agentName
-      WHERE ${caseWhere} AND l.bookingRef IS NOT NULL AND l.bookingRef <> ''
-        AND h.agentName IS NOT NULL AND h.agentName <> ''
-    ) x
-    JOIN lost_found_items l2 ON l2.id = x.caseId
-    LEFT JOIN employees e ON e.id = x.employeeId
+  // 1) condutores ANEXADOS aos casos
+  const attached = rowsOf(await d.execute(sql`
+    SELECT l.id AS caseId, COALESCE(ad.employeeId, am.empId) AS employeeId, ad.driverName AS name,
+           l.description AS caseDescription, l.status AS caseStatus, l.createdAt AS caseCreatedAt,
+           l.vehiclePlate AS casePlate, l.bookingRef AS bookingRef, e.fullName AS employeeName
+    FROM lost_found_items l
+    JOIN lost_found_attached_drivers ad ON ad.itemId = l.id
+    LEFT JOIN ${AGENT_MAP} am ON am.n = ad.driverName
+    LEFT JOIN employees e ON e.id = COALESCE(ad.employeeId, am.empId)
+    WHERE ${caseWhere}
     LIMIT 20000`));
+  // 2) agentes com ações no histórico da reserva de cada caso — "History" AO VIVO
+  //    (a cópia local está congelada desde o #141)
+  const cases = rowsOf(await d.execute(sql`
+    SELECT l.id AS caseId, l.description AS caseDescription, l.status AS caseStatus, l.createdAt AS caseCreatedAt,
+           l.vehiclePlate AS casePlate, l.bookingRef AS bookingRef
+    FROM lost_found_items l WHERE ${caseWhere} AND l.bookingRef IS NOT NULL AND l.bookingRef <> '' LIMIT 5000`));
+  const movement: any[] = [];
+  if (cases.length) {
+    const { readLiveHistory } = await import("./multiparkDb/historyLive");
+    const refs = Array.from(new Set(cases.map((c) => String(c.bookingRef))));
+    const hist = await readLiveHistory({ bookingIds: refs, limit: 5000 });
+    const agentMap = new Map(rowsOf(await d.execute(sql`SELECT am.n AS n, am.empId AS empId, e.fullName AS fullName FROM ${AGENT_MAP} am LEFT JOIN employees e ON e.id = am.empId`))
+      .map((r) => [String(r.n).trim().toLowerCase(), { empId: r.empId != null ? Number(r.empId) : null, fullName: r.fullName ?? null }]));
+    const casesByRef = new Map<string, any[]>();
+    for (const c of cases) { const k = String(c.bookingRef); casesByRef.set(k, [...(casesByRef.get(k) ?? []), c]); }
+    for (const h of hist) {
+      if (!h.agentName) continue;
+      const emp = agentMap.get(h.agentName.trim().toLowerCase());
+      for (const c of casesByRef.get(h.bookingExternalId) ?? []) {
+        movement.push({ ...c, via: "movement", employeeId: emp?.empId ?? null, name: h.agentName, employeeName: emp?.fullName ?? null,
+          changeType: h.changeType, actionTime: h.actionTime, parkName: h.parkName });
+      }
+    }
+  }
+  const rows = [...attached.map((r) => ({ ...r, via: "attached", changeType: null, actionTime: null, parkName: null })), ...movement];
   return rows.map((r) => ({
     caseId: Number(r.caseId),
     via: r.via === "attached" ? "attached" : "movement",
@@ -215,20 +228,22 @@ export async function getDriverCrossRef(input: CrossRefInput): Promise<{ rows: C
   const incScope = await caseScopeSql(sql`i.projectId`, input);
   const cScope = await caseScopeSql(sql`c.projectId`, input);
 
-  const movementTotals = rowsOf(await d.execute(sql`
-    SELECT h.agentName, am.empId AS employeeId, COUNT(*) AS total,
-           SUM(CASE WHEN cb.ref IS NOT NULL THEN 1 ELSE 0 END) AS inCase
-    FROM multipark_booking_history h
-    LEFT JOIN multipark_bookings b ON b.externalId = h.bookingExternalId
-    LEFT JOIN (SELECT DISTINCT l.bookingRef AS ref FROM lost_found_items l
-               WHERE ${where} AND l.bookingRef IS NOT NULL AND l.bookingRef <> '') cb ON cb.ref = h.bookingExternalId
-    LEFT JOIN ${AGENT_MAP} am ON am.n = h.agentName
-    WHERE h.actionTime >= ${start} AND h.actionTime < ${end}
-      AND h.agentName IS NOT NULL AND h.agentName <> ''
-      AND ${bookingScope}
-    GROUP BY h.agentName, am.empId`)).map((r) => ({
-    agentName: String(r.agentName), employeeId: r.employeeId != null ? Number(r.employeeId) : null,
-    total: Number(r.total) || 0, inCase: Number(r.inCase) || 0,
+  // Movimentos no período por agente — "History" AO VIVO (âmbito de cidade do utilizador);
+  // "inCase" = movimentos em reservas de casos do período.
+  const { readLiveHistory, readLiveHistoryByAgent } = await import("./multiparkDb/historyLive");
+  const { scopedCityNamesLive } = await import("./cityScope");
+  const cities = input.noProject ? undefined : scopedCityNamesLive();
+  const caseRefs = Array.from(new Set(links.map((l) => l.bookingRef).filter((x): x is string => !!x)));
+  const [byAgent, inCaseRows] = await Promise.all([
+    readLiveHistoryByAgent({ from: start, to: end, cities, limit: 5000 }),
+    caseRefs.length ? readLiveHistory({ bookingIds: caseRefs, from: start, to: end, cities, limit: 5000 }) : Promise.resolve([]),
+  ]);
+  const inCase = new Map<string, number>();
+  for (const h of inCaseRows) if (h.agentName) inCase.set(h.agentName, (inCase.get(h.agentName) ?? 0) + 1);
+  const agentMap = new Map(rowsOf(await d.execute(sql`SELECT n, empId FROM ${AGENT_MAP} am`)).map((r) => [String(r.n).trim().toLowerCase(), r.empId != null ? Number(r.empId) : null]));
+  const movementTotals = byAgent.filter((a) => a.agentName).map((a) => ({
+    agentName: a.agentName as string, employeeId: agentMap.get((a.agentName as string).trim().toLowerCase()) ?? null,
+    total: a.total, inCase: inCase.get(a.agentName as string) ?? 0,
   }));
 
   const incRows = rowsOf(await d.execute(sql`

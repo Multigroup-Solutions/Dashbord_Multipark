@@ -1,7 +1,7 @@
 /**
  * Funcionalidades adicionais às reclamações:
  *  - Identificar condutores em serviço quando a reserva ocorreu
- *    (cruzamento com extras_dia_assignments + multipark_booking_history)
+ *    (cruzamento com extras_dia_assignments + "History" da Multipark ao vivo)
  *  - Notificações in-app (criar / listar / marcar lida)
  *  - Envio de email ao cliente
  */
@@ -66,14 +66,10 @@ export async function findDriversOnDuty(complaintId: number): Promise<DutyDriver
 
   // 1) Quem mexeu na reserva (history) — fonte mais fiável
   if (c.reservationRef) {
-    const histRows = await db
-      .select({
-        agentName: multiparkBookingHistory.agentName,
-        agentEmail: multiparkBookingHistory.agentEmail,
-        changeType: multiparkBookingHistory.changeType,
-      })
-      .from(multiparkBookingHistory)
-      .where(eq(multiparkBookingHistory.bookingExternalId, c.reservationRef));
+    // "History" AO VIVO da BD da Multipark (a cópia local está congelada desde o #141).
+    const { readLiveHistory } = await import("./multiparkDb/historyLive");
+    const histRows: Array<{ agentName: string | null; agentEmail: string | null; changeType: string | null }> =
+      await readLiveHistory({ bookingIds: [c.reservationRef], limit: 500 }).catch(() => []);
 
     // Para cada agente único, tentar match a um empregado RH pelo email ou nome
     const grouped = new Map<string, { actions: string[]; email: string | null }>();

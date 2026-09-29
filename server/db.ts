@@ -2902,39 +2902,35 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
     if (d.userId != null) userToEmployee.set(Number(d.userId), d.id);
   }
 
-  // ── 2. Movimentações REAIS: ações no multipark_booking_history, ligadas ao
-  // colaborador via employees.multiparkAgentName. (A tabela vehicle_movements
-  // está vazia — a atividade real vem do sync Multipark.)
-  const movRows = await db
-    .select({
-      employeeId: employees.id,
-      count: sql<number>`COUNT(*)`,
-    })
-    .from(multiparkBookingHistory)
-    // Agente ↔ colaborador pelo ID do agente (fiável) OU pelo nome (legado).
-    .innerJoin(employees, or(
-      eq(employees.multiparkAgentUserId, multiparkBookingHistory.agentUserId),
-      eq(employees.multiparkAgentName, multiparkBookingHistory.agentName),
-    ))
-    .where(and(
-      inArray(employees.id, driverIds),
-      gte(multiparkBookingHistory.actionTime, startStr),
-      lte(multiparkBookingHistory.actionTime, endStr),
-    ))
-    .groupBy(employees.id);
-  const movMap = new Map(movRows.map(r => [Number(r.employeeId), Number(r.count)]));
-  // Agentes EXTRA da ficha (pessoa com várias contas Multipark)
-  try {
-    const [aliasRows] = await db.execute(sql`
-      SELECT a.employeeId, COUNT(*) AS n FROM multipark_booking_history h
-      JOIN employee_agents a ON a.agentUserId = h.agentUserId
-      WHERE h.actionTime >= ${startStr} AND h.actionTime <= ${endStr}
-      GROUP BY a.employeeId`) as any;
-    for (const r of (aliasRows as any[]) ?? []) {
-      const id = Number(r.employeeId);
-      if (driverIds.includes(id)) movMap.set(id, (movMap.get(id) ?? 0) + Number(r.n));
+  // ── 2. Movimentações REAIS: ações no "History" da Multipark AO VIVO (a
+  // cópia local está congelada desde o #141), ligadas ao colaborador pelo ID do
+  // agente (fiável), pelo nome (legado) ou pelas contas extra (employee_agents).
+  const movMap = new Map<number, number>();
+  {
+    const { readLiveHistoryByAgent } = await import("./multiparkDb/historyLive");
+    let byAgent: Awaited<ReturnType<typeof readLiveHistoryByAgent>> = [];
+    try { byAgent = await readLiveHistoryByAgent({ from: startStr, to: endStr, limit: 5000 }); }
+    catch (err) { console.warn("[avaliação semanal] histórico Multipark indisponível:", String((err as any)?.message ?? err).slice(0, 160)); }
+    const byId = new Map<string, number>(), byName = new Map<string, number>();
+    for (const a of byAgent) {
+      if (a.agentUserId) byId.set(a.agentUserId, (byId.get(a.agentUserId) ?? 0) + a.total);
+      if (a.agentName) byName.set(a.agentName.trim().toLowerCase(), (byName.get(a.agentName.trim().toLowerCase()) ?? 0) + a.total);
     }
-  } catch { /* tabela ainda não criada */ }
+    const emps = await db.select({ id: employees.id, uid: employees.multiparkAgentUserId, name: employees.multiparkAgentName })
+      .from(employees).where(inArray(employees.id, driverIds.length ? driverIds : [-1]));
+    for (const e of emps) {
+      const n = (e.uid ? byId.get(e.uid) : undefined) ?? (e.name ? byName.get(e.name.trim().toLowerCase()) : undefined) ?? 0;
+      if (n) movMap.set(e.id, n);
+    }
+    try {
+      const [aliasRows] = await db.execute(sql`SELECT employeeId, agentUserId FROM employee_agents`) as any;
+      for (const r of (aliasRows as any[]) ?? []) {
+        const id = Number(r.employeeId);
+        const n = byId.get(String(r.agentUserId)) ?? 0;
+        if (n && driverIds.includes(id)) movMap.set(id, (movMap.get(id) ?? 0) + n);
+      }
+    } catch { /* tabela ainda não criada */ }
+  }
 
   // ── 3. Speed alerts não reconhecidos com excesso (single query)
   const alertRows = await db
@@ -4047,6 +4043,44 @@ export async function listShiftHandovers(opts: { from?: string; to?: string; cit
   }));
 }
 
+/**
+ * Tempos do painel do supervisor a partir do histórico (ao vivo):
+ *  - pendente→entrega: 1.º PENDING_CHECKOUT no dia → 1.º CHECK_OUT (até 10 h depois);
+ *  - atraso na recolha: 1.º CHECK_IN no dia vs entrada PREVISTA da reserva (±10 h).
+ * Instantes UTC "YYYY-MM-DD HH:MM:SS". PURA.
+ */
+export function supervisorTimings(
+  rows: Array<{ bookingExternalId: string; changeType: string | null; actionTime: string | null; agentName: string | null; checkIn: string | null }>,
+  w: { start: string; end: string; checkoutEnd: string },
+): { deliveryTimes: Array<{ booking: string; mins: number; agent: string | null }>; pickupDelays: number[] } {
+  const ms = (t: string) => Date.parse(`${t.replace(" ", "T")}Z`);
+  const pend = new Map<string, string>(), out = new Map<string, { t: string; agent: string | null }>(), cin = new Map<string, { t: string; planned: string | null }>();
+  for (const r of rows) {
+    const t = r.actionTime; const b = r.bookingExternalId;
+    if (!t || !b) continue;
+    const ct = (r.changeType ?? "").toUpperCase();
+    if (ct === "PENDING_CHECKOUT" && t >= w.start && t < w.end) { if (!pend.has(b) || t < pend.get(b)!) pend.set(b, t); }
+    else if (ct === "CHECK_OUT" && t >= w.start && t < w.checkoutEnd) {
+      const e = out.get(b);
+      if (!e || t < e.t) out.set(b, { t, agent: r.agentName ?? e?.agent ?? null });
+    } else if (ct === "CHECK_IN" && t >= w.start && t < w.end) { if (!cin.has(b) || t < cin.get(b)!.t) cin.set(b, { t, planned: r.checkIn }); }
+  }
+  const deliveryTimes: Array<{ booking: string; mins: number; agent: string | null }> = [];
+  for (const [b, t1] of pend) {
+    const o = out.get(b);
+    if (!o || o.t < t1) continue;
+    const mins = Math.floor((ms(o.t) - ms(t1)) / 60_000);
+    if (mins < 600) deliveryTimes.push({ booking: b, mins, agent: o.agent });
+  }
+  const pickupDelays: number[] = [];
+  for (const { t, planned } of cin.values()) {
+    if (!planned) continue;
+    const mins = Math.trunc((ms(t) - ms(planned)) / 60_000);
+    if (Number.isFinite(mins) && Math.abs(mins) < 600) pickupDelays.push(mins);
+  }
+  return { deliveryTimes, pickupDelays };
+}
+
 /** Resumo do dia do supervisor: condutores por turno, carros
  *  recolhidos/entregues, TEMPOS pendente→entrega e atraso na recolha
  *  (previsto vs real), e reclamações do dia.
@@ -4061,31 +4095,14 @@ export async function getSupervisorDayDashboard(date: string) {
   // limite do TIMESTAMPDIFF < 600 abaixo) — limite superior explícito.
   const checkoutEnd = new Date(endMs + 600 * 60_000).toISOString().slice(0, 19).replace("T", " ");
 
-  // Tempos pendente→entrega (PENDING_CHECKOUT → CHECK_OUT, mesmo booking)
-  const [deliveryRows] = await db.execute(sql`
-    SELECT h1.bookingExternalId, TIMESTAMPDIFF(MINUTE, h1.t, h2.t) AS mins, h2.agentName
-    FROM (SELECT bookingExternalId, MIN(actionTime) t FROM multipark_booking_history
-          WHERE changeType='PENDING_CHECKOUT' AND actionTime >= ${start} AND actionTime < ${end}
-          GROUP BY bookingExternalId) h1
-    JOIN (SELECT bookingExternalId, MIN(actionTime) t, MAX(agentName) agentName FROM multipark_booking_history
-          WHERE changeType='CHECK_OUT' AND actionTime >= ${start} AND actionTime < ${checkoutEnd}
-          GROUP BY bookingExternalId) h2 ON h2.bookingExternalId = h1.bookingExternalId
-    WHERE h2.t >= h1.t AND TIMESTAMPDIFF(MINUTE, h1.t, h2.t) < 600
-      AND ${bookingHistoryScope(sql`h1.bookingExternalId`)}`) as any;
-  const deliveryTimes = (deliveryRows as any[]).map((r) => ({ booking: r.bookingExternalId, mins: Number(r.mins), agent: r.agentName ?? null }));
+  // Movimentos AO VIVO da BD da Multipark ("History"; a cópia local está congelada desde o #141).
+  const { readLiveHistory } = await import("./multiparkDb/historyLive");
+  const { scopedCityNamesLive } = await import("./cityScope");
+  const hist = await readLiveHistory({ changeTypes: ["PENDING_CHECKOUT", "CHECK_OUT", "CHECK_IN"], from: start, to: checkoutEnd, cities: scopedCityNamesLive(), limit: 5000, order: "asc" });
+  const { deliveryTimes, pickupDelays } = supervisorTimings(hist, { start, end, checkoutEnd });
   deliveryTimes.sort((a, b) => b.mins - a.mins);
   const dAvg = deliveryTimes.length ? Math.round(deliveryTimes.reduce((s, r) => s + r.mins, 0) / deliveryTimes.length) : 0;
 
-  // Atraso na recolha: checkIn PREVISTO da reserva vs CHECK_IN real
-  const [pickupRows] = await db.execute(sql`
-    SELECT h.bookingExternalId, TIMESTAMPDIFF(MINUTE, b.checkIn, h.t) AS mins
-    FROM (SELECT bookingExternalId, MIN(actionTime) t FROM multipark_booking_history
-          WHERE changeType='CHECK_IN' AND actionTime >= ${start} AND actionTime < ${end}
-          GROUP BY bookingExternalId) h
-    JOIN multipark_bookings b ON b.externalId = h.bookingExternalId
-    WHERE b.checkIn IS NOT NULL AND ABS(TIMESTAMPDIFF(MINUTE, b.checkIn, h.t)) < 600
-      AND ${projectScope(sql`b.projectId`)}`) as any;
-  const pickupDelays = (pickupRows as any[]).map((r) => Number(r.mins)).filter((m) => Number.isFinite(m));
   const late = pickupDelays.filter((m) => m > 15).length;
   const pAvg = pickupDelays.length ? Math.round(pickupDelays.reduce((s, m) => s + m, 0) / pickupDelays.length) : 0;
 
@@ -4465,13 +4482,23 @@ export async function getLastWorkedMap(): Promise<Record<number, string>> {
     if (!k || !s) return;
     if (!out[k] || s > out[k]) out[k] = s;
   };
-  const [hist] = await db.execute(sql`
-    SELECT e.id, MAX(h.actionTime) d
-    FROM employees e JOIN multipark_booking_history h
-      ON (e.multiparkAgentUserId IS NOT NULL AND e.multiparkAgentUserId != '' AND h.agentUserId = e.multiparkAgentUserId)
-      OR (e.multiparkAgentName IS NOT NULL AND e.multiparkAgentName != '' AND h.agentName = e.multiparkAgentName)
-    GROUP BY e.id`) as any;
-  for (const r of (hist as any[]) ?? []) take(r.id, r.d);
+  // Última ação de cada agente AO VIVO (BD da Multipark, últimos 180 dias).
+  const { listLiveAgents } = await import("./multiparkDb/activityLive");
+  const agents = await listLiveAgents();
+  const lastById = new Map<string, string>(), lastByName = new Map<string, string>();
+  if (agents.available) {
+    for (const a of agents.data) {
+      if (!a.lastSeen) continue;
+      lastById.set(a.agentUserId, a.lastSeen);
+      for (const n of a.agentNames) { const k = n.trim().toLowerCase(); if (!lastByName.has(k) || a.lastSeen > lastByName.get(k)!) lastByName.set(k, a.lastSeen); }
+    }
+  }
+  const [emps] = await db.execute(sql`SELECT id, multiparkAgentUserId, multiparkAgentName FROM employees
+    WHERE (multiparkAgentUserId IS NOT NULL AND multiparkAgentUserId != '') OR (multiparkAgentName IS NOT NULL AND multiparkAgentName != '')`) as any;
+  for (const e of (emps as any[]) ?? []) {
+    if (e.multiparkAgentUserId) take(e.id, lastById.get(String(e.multiparkAgentUserId)));
+    if (e.multiparkAgentName) take(e.id, lastByName.get(String(e.multiparkAgentName).trim().toLowerCase()));
+  }
   const [ponto] = await db.execute(sql`
     SELECT employeeId id, MAX(recordedAt) d FROM time_records GROUP BY employeeId`) as any;
   for (const r of (ponto as any[]) ?? []) take(r.id, r.d);
@@ -4480,10 +4507,8 @@ export async function getLastWorkedMap(): Promise<Record<number, string>> {
     WHERE employeeId IS NOT NULL GROUP BY employeeId`) as any;
   for (const r of (extras as any[]) ?? []) take(r.id, r.d);
   try {
-    const [aliasAgents] = await db.execute(sql`
-      SELECT a.employeeId id, MAX(h.actionTime) d FROM employee_agents a
-      JOIN multipark_booking_history h ON h.agentUserId = a.agentUserId GROUP BY a.employeeId`) as any;
-    for (const r of (aliasAgents as any[]) ?? []) take(r.id, r.d);
+    const [aliasAgents] = await db.execute(sql`SELECT employeeId id, agentUserId FROM employee_agents`) as any;
+    for (const r of (aliasAgents as any[]) ?? []) take(r.id, lastById.get(String(r.agentUserId)));
   } catch { /* tabela ainda não criada */ }
   return out;
 }
@@ -6078,7 +6103,7 @@ type HistoryRow = {
 
 async function mapMultiparkHistoryRows(
   rows: Array<{
-    id: number;
+    id?: number;
     historyId: string;
     bookingExternalId: string;
     changeType: string | null;
@@ -6092,10 +6117,10 @@ async function mapMultiparkHistoryRows(
   }>,
 ): Promise<HistoryRow[]> {
   const flaggedRefs = await getLostFoundBookingRefSet();
-  return rows.map((r) => {
+  return rows.map((r, i) => {
     const { first, last } = splitAgentName(r.agentName);
     return {
-      id: r.id,
+      id: r.id ?? i + 1,
       historyId: r.historyId,
       bookingId: r.bookingExternalId,
       changeType: r.changeType ?? "",
@@ -6113,83 +6138,26 @@ async function mapMultiparkHistoryRows(
 }
 
 export async function getBookingHistoryByBookingId(bookingId: string): Promise<HistoryRow[]> {
-  const db = await getDb();
-  if (!db) return [];
-  const rows = await db
-    .select({
-      id: multiparkBookingHistory.id,
-      historyId: multiparkBookingHistory.historyId,
-      bookingExternalId: multiparkBookingHistory.bookingExternalId,
-      changeType: multiparkBookingHistory.changeType,
-      actionTime: multiparkBookingHistory.actionTime,
-      remarks: multiparkBookingHistory.remarks,
-      agentName: multiparkBookingHistory.agentName,
-      agentEmail: multiparkBookingHistory.agentEmail,
-      parkName: multiparkBookings.parkName,
-      licensePlate: multiparkBookings.licensePlate,
-      bookingStatus: multiparkBookings.status,
-    })
-    .from(multiparkBookingHistory)
-    .leftJoin(multiparkBookings, eq(multiparkBookings.externalId, multiparkBookingHistory.bookingExternalId))
-    .where(eq(multiparkBookingHistory.bookingExternalId, bookingId))
-    .orderBy(desc(multiparkBookingHistory.actionTime))
-    .limit(500);
+  // AO VIVO da BD da Multipark ("History") — a cópia local está congelada desde o #141.
+  const { readLiveHistory } = await import("./multiparkDb/historyLive");
+  const { scopedCityNamesLive } = await import("./cityScope");
+  const rows = await readLiveHistory({ bookingIds: [bookingId], cities: scopedCityNamesLive(), limit: 500 });
   return mapMultiparkHistoryRows(rows);
 }
 
 export async function getBookingHistoryByPlate(plate: string): Promise<HistoryRow[]> {
-  const db = await getDb();
-  if (!db) return [];
-  const rows = await db
-    .select({
-      id: multiparkBookingHistory.id,
-      historyId: multiparkBookingHistory.historyId,
-      bookingExternalId: multiparkBookingHistory.bookingExternalId,
-      changeType: multiparkBookingHistory.changeType,
-      actionTime: multiparkBookingHistory.actionTime,
-      remarks: multiparkBookingHistory.remarks,
-      agentName: multiparkBookingHistory.agentName,
-      agentEmail: multiparkBookingHistory.agentEmail,
-      parkName: multiparkBookings.parkName,
-      licensePlate: multiparkBookings.licensePlate,
-      bookingStatus: multiparkBookings.status,
-    })
-    .from(multiparkBookingHistory)
-    .innerJoin(multiparkBookings, eq(multiparkBookings.externalId, multiparkBookingHistory.bookingExternalId))
-    .where(like(multiparkBookings.licensePlate, `%${plate}%`))
-    .orderBy(desc(multiparkBookingHistory.actionTime))
-    .limit(500);
+  // AO VIVO da BD da Multipark (matrícula "contém", sem hífenes/espaços).
+  const { readLiveHistory } = await import("./multiparkDb/historyLive");
+  const { scopedCityNamesLive } = await import("./cityScope");
+  const rows = await readLiveHistory({ plate: { contains: plate }, cities: scopedCityNamesLive(), limit: 500 });
   return mapMultiparkHistoryRows(rows);
 }
 
 export async function searchBookingHistory(search: string): Promise<HistoryRow[]> {
-  const db = await getDb();
-  if (!db) return [];
-  const s = `%${search}%`;
-  const rows = await db
-    .select({
-      id: multiparkBookingHistory.id,
-      historyId: multiparkBookingHistory.historyId,
-      bookingExternalId: multiparkBookingHistory.bookingExternalId,
-      changeType: multiparkBookingHistory.changeType,
-      actionTime: multiparkBookingHistory.actionTime,
-      remarks: multiparkBookingHistory.remarks,
-      agentName: multiparkBookingHistory.agentName,
-      agentEmail: multiparkBookingHistory.agentEmail,
-      parkName: multiparkBookings.parkName,
-      licensePlate: multiparkBookings.licensePlate,
-      bookingStatus: multiparkBookings.status,
-    })
-    .from(multiparkBookingHistory)
-    .leftJoin(multiparkBookings, eq(multiparkBookings.externalId, multiparkBookingHistory.bookingExternalId))
-    .where(or(
-      like(multiparkBookingHistory.bookingExternalId, s),
-      like(multiparkBookings.licensePlate, s),
-      like(multiparkBookingHistory.agentName, s),
-      like(multiparkBookingHistory.changeType, s),
-    ))
-    .orderBy(desc(multiparkBookingHistory.actionTime))
-    .limit(200);
+  // AO VIVO da BD da Multipark (reserva, matrícula, agente ou tipo).
+  const { readLiveHistory } = await import("./multiparkDb/historyLive");
+  const { scopedCityNamesLive } = await import("./cityScope");
+  const rows = await readLiveHistory({ text: search, cities: scopedCityNamesLive(), limit: 200 });
   return mapMultiparkHistoryRows(rows);
 }
 
@@ -6217,16 +6185,10 @@ export async function getBookingHistoryCrossReference(): Promise<
   if (flaggedRefs.size === 0) return [];
   const refs = Array.from(flaggedRefs);
 
-  const rows = await db
-    .select({
-      agentName: multiparkBookingHistory.agentName,
-      changeType: multiparkBookingHistory.changeType,
-      bookingExternalId: multiparkBookingHistory.bookingExternalId,
-      licensePlate: multiparkBookings.licensePlate,
-    })
-    .from(multiparkBookingHistory)
-    .leftJoin(multiparkBookings, eq(multiparkBookings.externalId, multiparkBookingHistory.bookingExternalId))
-    .where(inArray(multiparkBookingHistory.bookingExternalId, refs));
+  // AO VIVO da BD da Multipark ("History" das reservas com caso aberto).
+  const { readLiveHistory } = await import("./multiparkDb/historyLive");
+  const { scopedCityNamesLive } = await import("./cityScope");
+  const rows = await readLiveHistory({ bookingIds: refs, cities: scopedCityNamesLive(), limit: 5000 });
 
   const driverMap = new Map<string, { cases: Set<string>; plates: Set<string>; total: number; checkins: number; checkouts: number; movements: number }>();
   for (const r of rows) {
@@ -6274,17 +6236,11 @@ export async function getBookingHistoryDriverStats(): Promise<
   const db = await getDb();
   if (!db) return [];
 
-  const rows = await db
-    .select({
-      userName: multiparkBookingHistory.agentName,
-      total: sql<number>`COUNT(*)`,
-      checkins: sql<number>`SUM(CASE WHEN UPPER(${multiparkBookingHistory.changeType}) = 'CHECK_IN' THEN 1 ELSE 0 END)`,
-      checkouts: sql<number>`SUM(CASE WHEN UPPER(${multiparkBookingHistory.changeType}) = 'CHECK_OUT' THEN 1 ELSE 0 END)`,
-      movements: sql<number>`SUM(CASE WHEN UPPER(${multiparkBookingHistory.changeType}) = 'MOVEMENT' THEN 1 ELSE 0 END)`,
-    })
-    .from(multiparkBookingHistory)
-    .groupBy(multiparkBookingHistory.agentName)
-    .orderBy(desc(sql`COUNT(*)`));
+  // AO VIVO da BD da Multipark: contagens por agente em todo o histórico (âmbito de cidade).
+  const { readLiveHistoryByAgent } = await import("./multiparkDb/historyLive");
+  const { scopedCityNamesLive } = await import("./cityScope");
+  const rows = (await readLiveHistoryByAgent({ cities: scopedCityNamesLive(), limit: 2000 }))
+    .map((r) => ({ userName: r.agentName, total: r.total, checkins: r.checkins, checkouts: r.checkouts, movements: r.movements }));
 
   // Anota com caseCount (nº de casos distintos de Perdidos/Achados associados)
   const cross = await getBookingHistoryCrossReference();
@@ -6328,19 +6284,11 @@ export async function getVehicleAgentsByPlate(
   const db = await getDb();
   if (!db) return [];
 
-  const rows = await db
-    .select({
-      agentName: multiparkBookingHistory.agentName,
-      agentEmail: multiparkBookingHistory.agentEmail,
-      changeType: multiparkBookingHistory.changeType,
-      actionTime: multiparkBookingHistory.actionTime,
-      bookingExternalId: multiparkBookingHistory.bookingExternalId,
-    })
-    .from(multiparkBookingHistory)
-    .innerJoin(multiparkBookings, eq(multiparkBookings.externalId, multiparkBookingHistory.bookingExternalId))
-    .where(eq(multiparkBookings.licensePlate, plate))
-    .orderBy(desc(multiparkBookingHistory.actionTime))
-    .limit(2000);
+  // AO VIVO da BD da Multipark (matrícula exata, sem hífenes/espaços).
+  const { readLiveHistory } = await import("./multiparkDb/historyLive");
+  const { scopedCityNamesLive } = await import("./cityScope");
+  const rows: Array<{ agentName: string | null; agentEmail: string | null; changeType: string | null; actionTime: string | null; bookingExternalId: string }> =
+    await readLiveHistory({ plate: { exact: plate }, cities: scopedCityNamesLive(), limit: 2000 });
 
   const map = new Map<
     string,
@@ -6415,30 +6363,11 @@ export async function getAgentMovements(opts: {
   const empty = { movements: [], plates: [], totals: { actions: 0, checkins: 0, checkouts: 0, movements: 0, plates: 0, flaggedPlates: 0 } };
   if (!db) return empty;
 
-  const rows = await db
-    .select({
-      actionTime: multiparkBookingHistory.actionTime,
-      changeType: multiparkBookingHistory.changeType,
-      bookingExternalId: multiparkBookingHistory.bookingExternalId,
-      remarks: multiparkBookingHistory.remarks,
-      licensePlate: multiparkBookings.licensePlate,
-      parkName: multiparkBookings.parkName,
-      city: multiparkBookings.city,
-    })
-    .from(multiparkBookingHistory)
-    .leftJoin(multiparkBookings, eq(multiparkBookings.externalId, multiparkBookingHistory.bookingExternalId))
-    .where(
-      and(
-        eq(multiparkBookingHistory.agentName, opts.agentName),
-        // Dias de LISBOA → intervalo UTC (as colunas são UTC).
-        gte(multiparkBookingHistory.actionTime, lisbonDayRangeUtc(opts.from, opts.to).start),
-        lt(multiparkBookingHistory.actionTime, lisbonDayRangeUtc(opts.from, opts.to).end),
-        // Só reservas das cidades do utilizador (quem vê todas vê tudo).
-        scopedProjectIds() === undefined ? undefined : projectScope(multiparkBookings.projectId),
-      ),
-    )
-    .orderBy(desc(multiparkBookingHistory.actionTime))
-    .limit(2000);
+  // AO VIVO da BD da Multipark: dias de LISBOA → intervalo UTC; só as cidades do utilizador.
+  const { readLiveHistory } = await import("./multiparkDb/historyLive");
+  const { scopedCityNamesLive } = await import("./cityScope");
+  const range = lisbonDayRangeUtc(opts.from, opts.to);
+  const rows = await readLiveHistory({ agentName: { exact: opts.agentName }, from: range.start, to: range.end, cities: scopedCityNamesLive(), limit: 2000 });
 
   const caseRefs = await getLostFoundBookingRefSet();
   const normPlate = (p: string) => p.replace(/[\s-]/g, "").toUpperCase();
@@ -6497,28 +6426,12 @@ export async function getCheckoutDriversFromDb(
   const db = await getDb();
   if (!db) return { total: 0, period: { startDate, endDate }, drivers: [] };
 
-  const startStr = toMysqlDateTime(new Date(startDate));
-  const endStr = toMysqlDateTime(new Date(endDate + "T23:59:59"));
-
-  const rows = await db
-    .select({
-      agentName: multiparkBookingHistory.agentName,
-      agentUserId: multiparkBookingHistory.agentUserId,
-      count: sql<number>`COUNT(*)`,
-    })
-    .from(multiparkBookingHistory)
-    .where(
-      and(
-        sql`UPPER(${multiparkBookingHistory.changeType}) = 'CHECK_OUT'`,
-        gte(multiparkBookingHistory.actionTime, startStr),
-        lte(multiparkBookingHistory.actionTime, endStr),
-        isNotNull(multiparkBookingHistory.agentName),
-        // Âmbito de cidade: só movimentos de reservas das cidades autorizadas.
-        bookingHistoryScope(multiparkBookingHistory.bookingExternalId),
-      ),
-    )
-    .groupBy(multiparkBookingHistory.agentName, multiparkBookingHistory.agentUserId)
-    .orderBy(desc(sql`COUNT(*)`));
+  // AO VIVO da BD da Multipark: CHECK_OUT por agente nos dias de Lisboa; só as cidades do utilizador.
+  const { readLiveHistoryByAgent } = await import("./multiparkDb/historyLive");
+  const { scopedCityNamesLive } = await import("./cityScope");
+  const range = lisbonDayRangeUtc(startDate, endDate);
+  const rows = (await readLiveHistoryByAgent({ changeTypes: ["CHECK_OUT"], from: range.start, to: range.end, cities: scopedCityNamesLive(), limit: 2000 }))
+    .map((r) => ({ agentName: r.agentName, agentUserId: r.agentUserId, count: r.total }));
 
   const drivers = rows
     .filter((r) => r.agentName)
@@ -6575,43 +6488,19 @@ export async function getAgentHistoryFromDb(opts: {
   if (!db) return empty;
   if (!opts.agentName && !opts.userId) return empty;
 
-  const startStr = toMysqlDateTime(new Date(opts.startDate));
-  const endStr = toMysqlDateTime(new Date(opts.endDate + "T23:59:59"));
-
-  const conds: any[] = [
-    gte(multiparkBookingHistory.actionTime, startStr),
-    lte(multiparkBookingHistory.actionTime, endStr),
-    // Âmbito de cidade: só movimentos de reservas das cidades autorizadas.
-    bookingHistoryScope(multiparkBookingHistory.bookingExternalId),
-  ];
-  if (opts.userId) {
-    conds.push(eq(multiparkBookingHistory.agentUserId, opts.userId));
-  } else if (opts.agentName) {
-    conds.push(sql`LOWER(${multiparkBookingHistory.agentName}) LIKE LOWER(${"%" + opts.agentName + "%"})`);
-  }
-
-  const rows = await db
-    .select({
-      id: multiparkBookingHistory.historyId,
-      changeType: multiparkBookingHistory.changeType,
-      actionTime: multiparkBookingHistory.actionTime,
-      remarks: multiparkBookingHistory.remarks,
-      agentName: multiparkBookingHistory.agentName,
-      agentUserId: multiparkBookingHistory.agentUserId,
-      modifiedFields: multiparkBookingHistory.modifiedFields,
-      platform: multiparkBookingHistory.platform,
-      bookingExternalId: multiparkBookingHistory.bookingExternalId,
-      bookingStatus: multiparkBookings.status,
-      bookingCheckIn: multiparkBookings.checkIn,
-      bookingCheckOut: multiparkBookings.checkOut,
-      bookingParkName: multiparkBookings.parkName,
-      bookingLicensePlate: multiparkBookings.licensePlate,
-    })
-    .from(multiparkBookingHistory)
-    .leftJoin(multiparkBookings, eq(multiparkBookings.externalId, multiparkBookingHistory.bookingExternalId))
-    .where(and(...conds))
-    .orderBy(desc(multiparkBookingHistory.actionTime))
-    .limit(500);
+  // AO VIVO da BD da Multipark ("History"): dias de Lisboa; só as cidades do utilizador.
+  const { readLiveHistory } = await import("./multiparkDb/historyLive");
+  const { scopedCityNamesLive } = await import("./cityScope");
+  const range = lisbonDayRangeUtc(opts.startDate, opts.endDate);
+  const live = await readLiveHistory({
+    from: range.start, to: range.end, cities: scopedCityNamesLive(), limit: 500,
+    ...(opts.userId ? { userIds: [opts.userId] } : { agentName: { contains: opts.agentName! } }),
+  });
+  const rows = live.map((r) => ({
+    id: r.historyId, changeType: r.changeType, actionTime: r.actionTime, remarks: r.remarks, agentName: r.agentName,
+    agentUserId: r.agentUserId, modifiedFields: r.modifiedFields, platform: r.platform, bookingExternalId: r.bookingExternalId,
+    bookingStatus: r.bookingStatus, bookingCheckIn: r.checkIn, bookingCheckOut: r.checkOut, bookingParkName: r.parkName, bookingLicensePlate: r.licensePlate,
+  }));
 
   const history = rows.map((r) => ({
     id: r.id,

@@ -5784,21 +5784,13 @@ export const appRouter = router({
       .input(z.object({ from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "perdidos", "edit");
-        const { getDb } = await import("./db");
-        const { sql } = await import("drizzle-orm");
         const { lisbonDayRangeUtc } = await import("../shared/lisbonDay");
-        const db = await getDb();
-        if (!db) return [];
         const { start, end } = lisbonDayRangeUtc(input.from, input.to);
-        const rows = (r: any) => (Array.isArray(r[0]) ? r[0] : r) as any[];
-        const acts = rows(await db.execute(sql`
-          SELECT h.agentName, COUNT(*) AS total
-          FROM multipark_booking_history h
-          WHERE h.agentName IS NOT NULL AND h.agentName <> ''
-            AND h.actionTime >= ${start} AND h.actionTime < ${end}
-            AND ${bookingHistoryScope(sql`h.bookingExternalId`)}
-          GROUP BY h.agentName ORDER BY total DESC`));
-        return acts.map((a: any) => ({ agentName: a.agentName as string, total: Number(a.total) }));
+        // AO VIVO da BD da Multipark ("History"; a cópia local está congelada desde o #141).
+        const { readLiveHistoryByAgent } = await import("./multiparkDb/historyLive");
+        const { scopedCityNamesLive } = await import("./cityScope");
+        const acts = await readLiveHistoryByAgent({ from: start, to: end, cities: scopedCityNamesLive(), limit: 2000 });
+        return acts.filter((a) => a.agentName).map((a) => ({ agentName: a.agentName as string, total: a.total }));
       }),
 
     // Movimentos de UM condutor no período escolhido — que carros mexeu,
