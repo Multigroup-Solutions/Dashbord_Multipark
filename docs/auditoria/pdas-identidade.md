@@ -6,7 +6,7 @@ O centro de tudo é a **ficha do RH**. Cada ficha tem **uma cidade**, **um ou ma
 
 Para ligar, procurar ou juntar, só contam as letras e os números. Não contam acentos, maiúsculas, apóstrofos, traços, pontos nem espaços. Está em `shared/textKey.ts`.
 
-## 2. Identidade: uma pessoa, várias contas e vários agentes
+## 2. Identidade: uma pessoa, várias contas e vários agentes (PR #165)
 
 - **Vários agentes por pessoa.** Uma pessoa pode ter vários agentes da Multipark (emails antigos e novos). No ecrã da ficha dá para **anexar** um agente à pessoa (tira-o de onde estava) e **retirá-lo**, à mão.
 - **Juntar utilizadores.** Caso típico: a ficha foi criada com um email (por exemplo do Outlook) e a pessoa depois entrou com outra conta Google, o que criou um utilizador "perdido".
@@ -36,6 +36,6 @@ Para ligar, procurar ou juntar, só contam as letras e os números. Não contam 
   - quando a pessoa tem o **ponto aberto** e não tem PDA ou Zello ligado;
   - quando chega uma **movimentação da Multipark** feita por essa pessoa (check-in, saída, alteração, reserva recebida) e ela não tem o ponto aberto ou não tem o Zello ligado.
 - **Para quem:**
-  1. uma notificação na app ao **team leader de serviço nessa cidade** e ao **supervisor**;
+  1. uma notificação na app ao **team leader de serviço nessa cidade** e ao **supervisor**. O team leader de serviço é o que está escalado nesse turno e também **todos os que têm o ponto aberto nessa cidade com papel de team leader**. Conta o papel do utilizador, por isso um extra sénior que esteja como team leader também recebe;
   2. se em **10 minutos** não houver ligação nem resposta, um WhatsApp aos **administradores da lista dessa cidade** (Lisboa, Porto, Faro, em Definições), com cópia ao Jorge.
 - **Grupo de WhatsApp:** a ideia é mandar para um grupo. As mensagens enviadas pela app fora da janela de 24 h têm de ser **modelos aprovados** pela Meta. Usa-se um modelo ("formulário"), aprovado uma vez.

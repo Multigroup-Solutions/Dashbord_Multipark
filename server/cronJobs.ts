@@ -98,7 +98,13 @@ export async function identitySweepCron(): Promise<CronJobRun> {
   try {
     const { runIdentitySweep } = await import("./identityLink");
     const report = await runIdentitySweep();
-    return { httpStatus: 200, body: { ok: report.errors.length === 0, ranAt: ranAt(), ...report }, done: true };
+    // Fichas sem cidade: agente da Multipark → candidatura/morada → tarefa para o RH.
+    let cities: unknown = null;
+    try {
+      const { fixMissingEmployeeCities } = await import("./employeeCityFix");
+      cities = await fixMissingEmployeeCities();
+    } catch (err) { cities = { error: msg(err, 200) }; }
+    return { httpStatus: 200, body: { ok: report.errors.length === 0, ranAt: ranAt(), ...report, cities }, done: true };
   } catch (err) { return fail(err); }
 }
 
