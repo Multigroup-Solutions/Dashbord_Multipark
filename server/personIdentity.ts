@@ -68,6 +68,8 @@ export async function searchAgents(q: string, limit = 30) {
     agents = rowsOf(await d.execute(sql`SELECT agentUserId, agentName, email, active FROM multipark_agents LIMIT 10000`).catch(() => [[]]))
       .map((r) => ({ agentUserId: String(r.agentUserId), agentName: r.agentName ?? null, email: r.email ?? null, active: Number(r.active) === 1, total: 0, lastSeen: null }));
   }
+  const { isSystemAgentId } = await import("../shared/agentIdentity");
+  agents = agents.filter((a) => !isSystemAgentId(a.agentUserId));
   const hits = agents.filter((a) => textMatches(`${a.agentName ?? ""} ${a.email ?? ""}`, q)).sort((a, b) => b.total - a.total).slice(0, limit);
   const owners = new Map<string, { id: number; fullName: string }>();
   if (hits.length) {

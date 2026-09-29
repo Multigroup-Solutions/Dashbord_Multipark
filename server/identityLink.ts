@@ -21,6 +21,7 @@
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { searchText } from "../shared/textKey";
+import { isLinkableAgent, isSystemAgentId } from "../shared/agentIdentity";
 
 // ─── Puros ──────────────────────────────────────────────────────────────────
 
@@ -134,7 +135,7 @@ async function logLink(action: string, entityId: number, details: string) {
   } catch { /* segue */ }
 }
 
-export interface SweepReport { usersLinked: number; usersCreated: number; employeesLinkedToUsers: number; agentIdsFilled: number; agentsByEmail: number; agentsByName: number; agentAliases: number; errors: string[]; agentsSource?: "multipark" | "copia"; agentsNotice?: string | null }
+export interface SweepReport { nonPersonAgentsRemoved?: number; usersLinked: number; usersCreated: number; employeesLinkedToUsers: number; agentIdsFilled: number; agentsByEmail: number; agentsByName: number; agentAliases: number; errors: string[]; agentsSource?: "multipark" | "copia"; agentsNotice?: string | null }
 
 export interface AgentEmailSeen { agentUserId: string; agentName: string | null; agentEmail: string }
 
@@ -149,6 +150,7 @@ export async function loadAgentsSeen(): Promise<{ agents: AgentSeen[]; emails: A
     const agents: AgentSeen[] = [];
     const emails: AgentEmailSeen[] = [];
     for (const a of live.data) {
+      if (!isLinkableAgent(a.agentUserId, a.agentName ?? a.agentNames[0], a.email)) continue; // sistema, teste, agência
       // um AgentSeen por nome (o mesmo agente pode ter mais de um), como na cópia local
       for (const n of a.agentNames.length ? a.agentNames : [null]) agents.push({ id: a.agentUserId, name: n, count: a.total });
       if (a.email) emails.push({ agentUserId: a.agentUserId, agentName: a.agentName, agentEmail: a.email });
@@ -166,7 +168,36 @@ export async function loadAgentsSeen(): Promise<{ agents: AgentSeen[]; emails: A
      WHERE agentUserId IS NOT NULL AND agentUserId <> '' AND agentEmail IS NOT NULL AND agentEmail <> ''
        AND actionTime >= NOW() - INTERVAL 180 DAY
      GROUP BY agentUserId`)).map((r) => ({ agentUserId: String(r.agentUserId), agentName: r.agentName ? String(r.agentName) : null, agentEmail: String(r.agentEmail) }));
+  const keep = (id: string, name: string | null) => isLinkableAgent(id, name);
+  agents.splice(0, agents.length, ...agents.filter((a) => keep(a.id, a.name)));
+  emails.splice(0, emails.length, ...emails.filter((a) => keep(a.agentUserId, a.agentName)));
   return { agents, emails, source: "copia", notice: `${live.reason} Agentes da cópia local (deixou de ser atualizada — agentes novos não aparecem).` };
+}
+
+/**
+ * Agentes ligados a fichas que não são pessoas: ids de sistema ("system",
+ * "api", "API User"…) como principal ou extra, e extras de teste/agência/texto
+ * de formulário. Tira a ligação (a ficha e a Multipark ficam iguais) e regista.
+ */
+export async function removeNonPersonAgentLinks(db: any): Promise<number> {
+  const { isNonPersonAgentName } = await import("../shared/agentIdentity");
+  let n = 0;
+  const prim = rowsOf(await db.execute(sql`SELECT id, multiparkAgentUserId AS a, multiparkAgentName AS name FROM employees
+    WHERE multiparkAgentUserId IS NOT NULL AND multiparkAgentUserId <> ''`));
+  for (const e of prim) {
+    if (!isSystemAgentId(String(e.a))) continue;
+    await db.execute(sql`UPDATE employees SET multiparkAgentUserId = NULL, multiparkAgentName = NULL WHERE id = ${Number(e.id)} AND multiparkAgentUserId = ${String(e.a)}`);
+    await logLink("agent_detach", Number(e.id), `[Ligações] agente de sistema "${String(e.a)}" retirado da ficha (não é uma pessoa)`);
+    n++;
+  }
+  const extras = rowsOf(await db.execute(sql`SELECT employeeId, agentUserId, agentName FROM employee_agents`).catch(() => [[]]));
+  for (const x of extras) {
+    if (!isSystemAgentId(String(x.agentUserId)) && !isNonPersonAgentName(x.agentName)) continue;
+    await db.execute(sql`DELETE FROM employee_agents WHERE agentUserId = ${String(x.agentUserId)} AND employeeId = ${Number(x.employeeId)}`);
+    await logLink("agent_detach", Number(x.employeeId), `[Ligações] agente extra "${x.agentName ?? x.agentUserId}" retirado (sistema, teste ou agência — não é uma pessoa)`);
+    n++;
+  }
+  return n;
 }
 
 export async function runIdentitySweep(): Promise<SweepReport> {
@@ -205,6 +236,11 @@ export async function runIdentitySweep(): Promise<SweepReport> {
     }
     for (const u of orphans) rep.employeesLinkedToUsers += (await linkEmployeesToUserByEmail(db as any, Number(u.id), String(u.email))).length;
   } catch (err: any) { rep.errors.push(`utilizadores sem ficha: ${err?.message ?? err}`); }
+
+  // 0. Tirar das fichas os agentes que não são pessoas (sistema, teste, agências, textos de formulário)
+  try {
+    rep.nonPersonAgentsRemoved = await removeNonPersonAgentLinks(db);
+  } catch (err: any) { rep.errors.push(`agentes que não são pessoas: ${err?.message ?? err}`); }
 
   // Agentes vistos (últimos 180 dias) e fichas
   let agents: AgentSeen[] = [];

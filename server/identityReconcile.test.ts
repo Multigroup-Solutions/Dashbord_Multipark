@@ -105,12 +105,12 @@ describe("buildIdentityAudit", () => {
 
   it("ficha ligada a utilizador com email diferente → mismatch; userId inexistente → dangling", () => {
     const s = snap({
-      users: [user({ id: 10, email: "ana@multipark.pt" })],
+      users: [user({ id: 10, email: "ana@outlook.pt" })],
       employees: [emp({ id: 1, email: "ana@gmail.com", userId: 10 }), emp({ id: 2, email: "z@x.pt", userId: 999 })],
     });
     const a = buildIdentityAudit(s);
     expect(a.employeeUserEmailMismatch).toHaveLength(1);
-    expect(a.employeeUserEmailMismatch[0]).toMatchObject({ employeeId: 1, userId: 10, userEmail: "ana@multipark.pt" });
+    expect(a.employeeUserEmailMismatch[0]).toMatchObject({ employeeId: 1, userId: 10, userEmail: "ana@outlook.pt" });
     expect(a.employeesDanglingUser).toEqual([{ employeeId: 2, fullName: "Pessoa 2", userId: 999 }]);
   });
 

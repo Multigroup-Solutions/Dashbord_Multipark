@@ -121,6 +121,8 @@ export async function linkEmployeeToUser(employeeId: number, userId: number): Pr
  * mesma pessoa com duas contas Multipark).
  */
 export async function linkAgentToEmployee(agentUserId: string, employeeId: number): Promise<string> {
+  const { isSystemAgentId } = await import("../shared/agentIdentity");
+  if (isSystemAgentId(agentUserId)) throw new Error(`"${agentUserId}" é um agente de sistema da Multipark (ações automáticas), não uma pessoa: não se liga a fichas.`);
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível");
   // Nome canónico AO VIVO (BD da Multipark); a cópia local só se a BD deles falhar

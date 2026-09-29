@@ -30,6 +30,10 @@ export function PersonIdentityCard({ employeeOptions, orphanUsers, canMerge }: {
   const onErr = (e: { message: string }) => toast.error(e.message);
   const link = trpc.identityLinks.linkAgent.useMutation({ onSuccess: (r) => { refresh(); setQ(""); toast.success(`Agente "${r.agentName}" anexado.`); }, onError: onErr });
   const detach = trpc.identityLinks.detachAgent.useMutation({ onSuccess: () => { refresh(); toast.success("Agente retirado da ficha."); }, onError: onErr });
+  const [dupId, setDupId] = useState("");
+  const [empMerge, setEmpMerge] = useState<{ keepEmployeeId: number; dropEmployeeId: number } | null>(null);
+  const empPreview = trpc.identityLinks.previewEmployeeMerge.useQuery(empMerge ?? { keepEmployeeId: 0, dropEmployeeId: 0 }, { enabled: !!empMerge, retry: false });
+  const doEmpMerge = trpc.identityLinks.mergeEmployees.useMutation({ onSuccess: () => { refresh(); setEmpMerge(null); setDupId(""); toast.success("Fichas juntas. A duplicada ficou desativada."); }, onError: onErr });
   const doMerge = trpc.identityLinks.mergeUsers.useMutation({ onSuccess: () => { refresh(); setMerge(null); setOrphan(""); toast.success("Contas juntas. A antiga ficou desativada."); }, onError: onErr });
 
   const p = person.data;
@@ -109,9 +113,48 @@ export function PersonIdentityCard({ employeeOptions, orphanUsers, canMerge }: {
                 {search.data && search.data.length === 0 && <p className="text-xs text-muted-foreground">Nenhum agente com esse nome ou email.</p>}
               </div>
             </div>
+
+            {canMerge && (
+              <div>
+                <div className="text-xs font-medium text-muted-foreground mb-1">Ficha duplicada da mesma pessoa</div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <SearchableSelect value={dupId} onChange={setDupId} className="w-72" placeholder="A outra ficha (a que sai)…" searchPlaceholder="Procurar nome…"
+                    options={employeeOptions.filter((o) => o.value !== String(p.employee.id))} />
+                  <Button size="sm" variant="outline" disabled={!dupId} onClick={() => setEmpMerge({ keepEmployeeId: p.employee.id, dropEmployeeId: Number(dupId) })}>
+                    <Merge className="h-3.5 w-3.5 mr-1" /> Juntar nesta ficha
+                  </Button>
+                </div>
+              </div>
+            )}
           </>
         )}
       </CardContent>
+
+      <AlertDialog open={!!empMerge} onOpenChange={(o) => !o && setEmpMerge(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Juntar fichas</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm">
+                {empPreview.isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+                {empPreview.error && <p className="text-red-600">{empPreview.error.message}</p>}
+                {empPreview.data && (
+                  <>
+                    <p>Fica: <strong>{empPreview.data.keep.fullName}</strong> (#{empPreview.data.keep.id}).</p>
+                    <p>Sai: <strong>{empPreview.data.drop.fullName}</strong> (#{empPreview.data.drop.id}) — fica desativada ("ficha duplicada"), nunca apagada.</p>
+                    <p>Passa para a que fica: {empPreview.data.moves.length ? empPreview.data.moves.map((m) => `${m.table} (${m.rows})`).join(", ") : "nada registado na outra"}; e o utilizador e o agente da Multipark da outra.</p>
+                    {empPreview.data.warnings.map((w, i) => <p key={i} className="text-amber-700">{w}</p>)}
+                  </>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction disabled={!empPreview.data || doEmpMerge.isPending} onClick={(e) => { e.preventDefault(); if (empMerge) doEmpMerge.mutate(empMerge); }}>Juntar</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={!!merge} onOpenChange={(o) => !o && setMerge(null)}>
         <AlertDialogContent>

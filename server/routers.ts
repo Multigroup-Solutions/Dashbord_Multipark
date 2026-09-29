@@ -7164,12 +7164,14 @@ export const appRouter = router({
       const partners = new Set((await listAgentPartners()).map((p) => matchKey(p.agentName)));
       const { listIgnoredAgents } = await import("./db");
       const { looksLikeTestAgent } = await import("./personIdentity");
+      const { isSystemAgentId, isNonPersonAgentName } = await import("../shared/agentIdentity");
       const ignored = new Set((await listIgnoredAgents()).map((n) => matchKey(n)));
       const list = (rows as any[])
         .filter((r) => {
           const key = matchKey(String(r.agentName));
           const id = String(r.agentUserId ?? "").trim();
-          return !linked.has(key) && !(id && linkedIds.has(id)) && !partners.has(key) && !ignored.has(key) && !looksLikeTestAgent(String(r.agentName));
+          return !linked.has(key) && !(id && linkedIds.has(id)) && !partners.has(key) && !ignored.has(key) && !looksLikeTestAgent(String(r.agentName))
+            && !(id && isSystemAgentId(id)) && !isNonPersonAgentName(String(r.agentName));
         })
         .map((r) => ({
           agentName: String(r.agentName),
@@ -7820,6 +7822,40 @@ export const appRouter = router({
         const { previewUserMerge } = await import("./userMerge");
         try { return await previewUserMerge(db as any, input.keepUserId, input.dropUserId); }
         catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: err.message }); }
+      }),
+    /** Juntar duas FICHAS da mesma pessoa: pré-visualização (o que passa). Só administradores. */
+    previewEmployeeMerge: protectedProcedure
+      .input(z.object({ keepEmployeeId: z.number().int().positive(), dropEmployeeId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "rh", "manage");
+        if (!["admin", "super_admin"].includes(String(ctx.user.role))) throw new TRPCError({ code: "FORBIDDEN", message: "Só um administrador junta fichas." });
+        await assertEmployeeAccess(input.keepEmployeeId);
+        await assertEmployeeAccess(input.dropEmployeeId);
+        const { getDb } = await import("./db");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
+        const { previewEmployeeMerge } = await import("./employeeMerge");
+        try { return await previewEmployeeMerge(db as any, input.keepEmployeeId, input.dropEmployeeId); }
+        catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: err.message }); }
+      }),
+    /** Juntar: fica a ficha escolhida; tudo o que era da outra passa para ela; a outra fica desativada (nunca apagada). */
+    mergeEmployees: protectedProcedure
+      .input(z.object({ keepEmployeeId: z.number().int().positive(), dropEmployeeId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "rh", "manage");
+        if (!["admin", "super_admin"].includes(String(ctx.user.role))) throw new TRPCError({ code: "FORBIDDEN", message: "Só um administrador junta fichas." });
+        await assertEmployeeAccess(input.keepEmployeeId);
+        await assertEmployeeAccess(input.dropEmployeeId);
+        const { getDb } = await import("./db");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
+        const { mergeEmployees } = await import("./employeeMerge");
+        let p;
+        try { p = await mergeEmployees(db as any, { keepId: input.keepEmployeeId, dropId: input.dropEmployeeId }); }
+        catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: err.message }); }
+        await logActivity({ userId: ctx.user.id, action: "employees_merge", entity: "employee", entityId: input.keepEmployeeId,
+          details: `Ficha ${p.drop.fullName} #${p.drop.id} junta a ${p.keep.fullName} #${p.keep.id} (${p.moves.map((m) => `${m.table}: ${m.rows}`).join(", ") || "sem registos"}); a #${p.drop.id} ficou desativada` });
+        return { success: true, ...p };
       }),
     /**
      * Juntar: fica a conta que entra na app (principal da ficha); tudo o que é
