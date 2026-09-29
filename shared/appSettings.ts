@@ -647,6 +647,9 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "crm-pro-sync", label: "CRM: conta corrente dos clientes Pro (BD Multipark)", intervalMinutes: 30, workflow: "tick" },
   // Serviços extra das reservas → tarefas (BD Multipark ao vivo, saídas nas próximas 48 h).
   { name: "services-tasks", label: "Serviços das reservas → tarefas", intervalMinutes: 15, workflow: "tick" },
+  // Caixa, fase 2 (29 set 2026): varredura do dinheiro e fecho do dia → "Correção de caixa".
+  { name: "cash-sweep", label: "Caixa: varredura do dinheiro (Correção de caixa)", intervalMinutes: 10, workflow: "tick" },
+  { name: "cash-close", label: "Caixa: fecho do dia (saídas de ontem e anteontem)", intervalMinutes: 1440, workflow: "tick" },
   { name: "daily-ops", label: "Manutenção diária + recolha GPS final (D-2)", intervalMinutes: 1440, workflow: "tick" },
   { name: "zello-sameday", label: "GPS do Zello — recolha provisória do dia (23:15–23:55)", intervalMinutes: 1440, workflow: "tick" },
   { name: "extras-pressure", label: "Extras-Dia: pressão (60 dias da BD Multipark)", intervalMinutes: 1440, workflow: "tick" },
