@@ -24,7 +24,6 @@ import { multiparkDbQuery, type SqlParam } from "./client";
 import { ParamList, safeMultiparkRead, type MultiparkRead } from "./read";
 import { buildParksSql, mapParks, type DayPark } from "./dayBookings";
 import { lisbonDayOf, lisbonMidnightUtcMs } from "../../shared/lisbonDay";
-import { MARKETPLACE_COMMISSION, marketplaceSplit } from "../../shared/marketplace";
 
 type Row = Record<string, unknown>;
 type Query = <T = Record<string, unknown>>(sql: string, params?: SqlParam[]) => Promise<T[]>;
@@ -205,28 +204,31 @@ export interface LivePark {
   /** Nossos: das quais vieram de parceiros. */
   partnerBookings: number;
   /**
-   * Terceiros (somos o marketplace): divisão do valor pela regra única
-   * (MARKETPLACE_COMMISSION — 20 % nosso, 80 % do parque).
+   * Terceiros (somos o marketplace): o NOSSO = a comissão gravada em cada
+   * reserva na Multipark ("commissionAmount" — cada parque tem a sua: 25 %,
+   * menos nos parques de rua…); o parque fica com o resto. Acabou o 80/20 fixo.
    */
   ourShare: number | null;
   parkShare: number | null;
-  /** Terceiros: a comissão gravada nas reservas da Multipark ("commissionAmount"), só para comparar. */
+  /** Terceiros: a comissão gravada (= ourShare). */
   commission: number | null;
+  /** Terceiros: a nossa taxa efetiva no mês (comissão ÷ valor, %). */
+  rate: number | null;
 }
 
 /** Parques + totais do mês → linhas da tab "Parques". PURA. */
-export function mapLiveParks(parks: DayPark[], rows: Row[], rate: number = MARKETPLACE_COMMISSION): { ours: LivePark[]; third: LivePark[] } {
+export function mapLiveParks(parks: DayPark[], rows: Row[]): { ours: LivePark[]; third: LivePark[] } {
   const byPark = new Map(rows.map((r) => [str(r.park_id) ?? "", r]));
   const ours: LivePark[] = [], third: LivePark[] = [];
   for (const p of parks) {
     const r = byPark.get(p.id) ?? {};
     const base = { id: p.id, name: p.name, city: p.cityName, label: p.label, ours: p.ours, status: p.status, listingType: p.listingType };
     if (p.ours) {
-      ours.push({ ...base, bookings: num(r.bookings) ?? 0, value: round(num(r.value) ?? 0), partnerBookings: num(r.partner_bookings) ?? 0, ourShare: null, parkShare: null, commission: null });
+      ours.push({ ...base, bookings: num(r.bookings) ?? 0, value: round(num(r.value) ?? 0), partnerBookings: num(r.partner_bookings) ?? 0, ourShare: null, parkShare: null, commission: null, rate: null });
     } else {
       const value = round(num(r.sale_value) ?? 0);
-      const split = marketplaceSplit(value, rate);
-      third.push({ ...base, bookings: num(r.sale_bookings) ?? 0, value, partnerBookings: 0, ourShare: split.ours, parkShare: split.park, commission: round(num(r.sale_commission) ?? 0) });
+      const commission = round(num(r.sale_commission) ?? 0);
+      third.push({ ...base, bookings: num(r.sale_bookings) ?? 0, value, partnerBookings: 0, ourShare: commission, parkShare: round(value - commission), commission, rate: value > 0 ? Math.round((commission / value) * 1000) / 10 : null });
     }
   }
   third.sort((a, b) => b.bookings - a.bookings || a.name.localeCompare(b.name, "pt"));
@@ -258,7 +260,7 @@ export function linkRecords<T extends Pick<LivePartner, "userId" | "parks">>(par
 export function hideLiveMoney<D extends { partners: LivePartner[]; parks: { ours: LivePark[]; third: LivePark[] } }>(d: D, canSeeTotals: boolean): D {
   if (canSeeTotals) return d;
   const t = (x: LiveTotals): LiveTotals => ({ ...x, value: null, ours: null });
-  const pk = (x: LivePark): LivePark => ({ ...x, value: null, ourShare: null, parkShare: null, commission: null });
+  const pk = (x: LivePark): LivePark => ({ ...x, value: null, ourShare: null, parkShare: null, commission: null, rate: null });
   return {
     ...d,
     partners: d.partners.map((p) => ({ ...p, thisMonth: t(p.thisMonth), last12: t(p.last12), parks: p.parks.map((x) => ({ ...x, feeType: null, feePct: null, feeFixed: null })) })),
@@ -270,8 +272,6 @@ export function hideLiveMoney<D extends { partners: LivePartner[]; parks: { ours
 
 export interface PartnershipsLive {
   periods: Pick<LivePeriods, "thisMonth" | "from12">;
-  /** Nossa parte nos parques de terceiros (0–1). */
-  marketplaceRate: number;
   partners: LivePartner[];
   parks: { ours: LivePark[]; third: LivePark[] };
 }
@@ -292,7 +292,7 @@ export async function readPartnershipsLive(cities: string[] | undefined, query: 
       const q = buildParkTotalsSql(parks.map((p) => p.id), periods);
       parkRows = await query(q.sql, q.params);
     }
-    return { periods: { thisMonth: periods.thisMonth, from12: periods.from12 }, marketplaceRate: MARKETPLACE_COMMISSION, partners, parks: mapLiveParks(parks, parkRows) };
+    return { periods: { thisMonth: periods.thisMonth, from12: periods.from12 }, partners, parks: mapLiveParks(parks, parkRows) };
   });
 }
 
