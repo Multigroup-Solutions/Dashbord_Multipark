@@ -585,3 +585,55 @@ export async function listMemoryBookingIdsByCheckout(parkIds: readonly string[],
     ORDER BY bookingId LIMIT ${Math.max(1, Math.min(limit, 2000))}`);
   return rowsOf(res).map((r) => String(r.bookingId ?? "")).filter(Boolean);
 }
+
+// ─── "Era" de recurso: a cópia antiga (multipark_bookings) ─────────────────
+
+/** Evento dos retratos feitos a partir da cópia antiga (não são webhooks guardados). */
+export const COPY_ERA_EVENT = "COPIA_ANTIGA";
+
+const copyNum = (v: unknown) => { if (v == null || v === "" || v === "null") return null; const x = Number(String(v).replace(/^"|"$/g, "")); return Number.isFinite(x) ? Math.round(x * 100) / 100 : null; };
+const strOrNull = (v: unknown) => { if (v == null) return null; const s = String(v).replace(/^"|"$/g, ""); return s && s !== "null" ? s : null; };
+const tsIso = (v: unknown) => { const s = strOrNull(v); if (!s) return null; const t = Date.parse(s.includes("T") ? s : `${s.replace(" ", "T")}Z`); return Number.isFinite(t) ? new Date(t).toISOString() : null; };
+
+/**
+ * Linha da cópia antiga → um retrato "era". O preço vem do JSON original da
+ * reserva (`bookingPrice`) quando existe; senão do `totalPrice` da cópia.
+ * A cópia só é escrita pelos webhooks (o sync periódico que a reescrevia foi
+ * desligado), mas ANTES disso o sync reescrevia-a — por isso é "de recurso". PURA.
+ */
+export function copyRowToSnapshot(r: Record<string, unknown>): MemorySnapshot {
+  const at = tsIso(r.syncedAt) ?? tsIso(r.sourceUpdatedAt);
+  const raw = copyNum(r.rawBookingPrice);
+  return {
+    id: -1, deliveryId: `copia-${String(r.externalId ?? "")}`, bookingId: String(r.externalId ?? ""), eventType: COPY_ERA_EVENT,
+    receivedAt: at, sourceUpdatedAt: tsIso(r.sourceUpdatedAt), parkId: strOrNull(r.parkId), status: strOrNull(r.status),
+    checkIn: tsIso(r.checkIn), checkOut: tsIso(r.checkOut),
+    bookingPrice: raw ?? copyNum(r.totalPrice), originalBookingPrice: copyNum(r.rawOriginalBookingPrice),
+    parkingPrice: copyNum(r.parkingPrice), deliveryPrice: copyNum(r.deliveryCharges), discountAmount: copyNum(r.discount), discountApplied: null,
+    paidAmount: copyNum(r.totalPaid), paymentMethod: strOrNull(r.paymentMethod), paymentSource: null, paymentBy: null,
+    campaignId: null, partnerId: strOrNull(r.partnerId), partnerAmountDue: null, partnerAmountPaid: null, partnerContributedAmount: null,
+    pro: r.pro == null ? null : Number(r.pro) === 1, proClientId: null, cashierClosed: null, cashValidated: null, driverValidated: null,
+    source: "copia", dbReadAt: null, linesCount: null, linesTotal: null, linesPaid: null, paymentsCount: null, paymentsTotal: null, paymentMethods: [],
+  };
+}
+
+/**
+ * Para as reservas SEM memória do webhook (antes de 28/09/2026 19:23), o
+ * último estado da cópia antiga. Só leitura. Usado só na comparação a pedido
+ * (nunca na varredura automática, para não abrir casos com um "era" incerto).
+ */
+export async function listCopyEraForBookings(bookingIds: readonly string[], db?: Exec): Promise<Map<string, MemorySnapshot>> {
+  const out = new Map<string, MemorySnapshot>();
+  const ids = [...new Set(bookingIds.filter(Boolean))].slice(0, 1000);
+  if (!ids.length) return out;
+  const { sql } = await import("drizzle-orm");
+  const conn = db ?? ((await (await import("./db")).getDb()) as unknown as Exec | null);
+  if (!conn) throw Object.assign(new Error("Base de dados indisponível"), { code: "DATABASE_UNAVAILABLE" });
+  const res = await conn.execute(sql`SELECT externalId, status, parkId, checkIn, checkOut, totalPrice, parkingPrice, deliveryCharges, discount, totalPaid, paymentMethod, pro, partnerId,
+      DATE_FORMAT(syncedAt, '%Y-%m-%d %H:%i:%s') AS syncedAt, DATE_FORMAT(sourceUpdatedAt, '%Y-%m-%d %H:%i:%s') AS sourceUpdatedAt,
+      CASE WHEN JSON_VALID(rawJson) THEN JSON_EXTRACT(rawJson, '$.bookingPrice') END AS rawBookingPrice,
+      CASE WHEN JSON_VALID(rawJson) THEN JSON_EXTRACT(rawJson, '$.originalBookingPrice') END AS rawOriginalBookingPrice
+    FROM multipark_bookings WHERE externalId IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)}) LIMIT ${ids.length}`);
+  for (const r of rowsOf(res)) { const s = copyRowToSnapshot(r); if (s.bookingId) out.set(s.bookingId, s); }
+  return out;
+}
