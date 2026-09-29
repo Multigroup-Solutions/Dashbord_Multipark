@@ -5,11 +5,11 @@ import { bookingPage, historyPage, makePeriod, price, priceChanges, type History
 
 export const INITIAL_PRICE_EXPORT_PATH = "/api/exports/initial-booking-price";
 
-export function parseExportPage(body: unknown, now = Date.now()) {
+export function parseExportPage(body: unknown, now = Date.now(), stages: readonly string[] = ["bookings", "history"]) {
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("Pedido inválido.");
   const b = body as Record<string, unknown>;
   if (Object.keys(b).some(k => !["stage", "from", "to", "asOf", "cursor", "pageSize"].includes(k))) throw new Error("Parâmetro desconhecido.");
-  if (b.stage !== "bookings" && b.stage !== "history") throw new Error("Etapa inválida.");
+  if (typeof b.stage !== "string" || !stages.includes(b.stage)) throw new Error("Etapa inválida.");
   if (typeof b.from !== "string" || (b.to != null && typeof b.to !== "string")) throw new Error("Datas inválidas.");
   if (typeof b.asOf !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(b.asOf)) throw new Error("Instante inválido.");
   const asOf = new Date(b.asOf);

@@ -1,14 +1,13 @@
 import type { Period, PricePageReader, BookingRow, HistoryRow } from "./initialBookingPrice";
 
-const endpointPath = "/api/exports/initial-booking-price";
-export function createRemotePriceReader(origin: string, secret: string, period: Period, fetcher: typeof fetch = fetch): PricePageReader {
+export function createRemoteExportPageReader(origin: string, secret: string, period: Period, endpointPath: string, fetcher: typeof fetch = fetch) {
   const base = new URL(origin);
   if (base.protocol !== "https:" || base.username || base.password || base.search || base.hash || base.pathname !== "/") {
     throw new Error("--remote exige a origem HTTPS da dashboard, sem caminho, credenciais ou parâmetros.");
   }
   if (!secret.trim()) throw new Error("Falta BOOKING_PRICE_EXPORT_SECRET (ou CRON_SECRET) para autenticar a exportação no servidor.");
   const url = new URL(endpointPath, base).href;
-  async function page<T>(stage: "bookings" | "history", cursor: string, limit: number): Promise<T[]> {
+  async function page<T>(stage: string, cursor: string, limit: number): Promise<T[]> {
     if (limit > 1000) throw new Error("O modo remoto admite no máximo 1000 registos por lote.");
     for (let attempt = 0; attempt < 3; attempt++) {
       let response: Response;
@@ -39,5 +38,10 @@ export function createRemotePriceReader(origin: string, secret: string, period: 
     }
     throw new Error("Não foi possível obter o lote.");
   }
+  return page;
+}
+
+export function createRemotePriceReader(origin: string, secret: string, period: Period, fetcher: typeof fetch = fetch): PricePageReader {
+  const page = createRemoteExportPageReader(origin, secret, period, "/api/exports/initial-booking-price", fetcher);
   return { bookings: (cursor, limit) => page<BookingRow>("bookings", cursor, limit), history: (cursor, limit) => page<HistoryRow>("history", cursor, limit) };
 }
