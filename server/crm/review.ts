@@ -4,7 +4,8 @@
  * de clientes sem email (pedir o email antes de o cliente se ir embora).
  */
 import { sql, type SQL } from "drizzle-orm";
-import { projectScope } from "../cityScope";
+import { scopedCityNamesLive } from "../cityScope";
+import { cityAliases } from "../../shared/crmGeo";
 import { REASON_LABELS, type SuggestionReason } from "../../shared/crmIdentity";
 import { clientVisibleSql } from "./scope";
 
@@ -22,11 +23,10 @@ const clientInScope = (col: string) => clientVisibleSql(sql.raw(col));
 export async function reviewCounts(db: any) {
   const [row] = rowsOf(await db.execute(sql`SELECT
     (SELECT COUNT(*) FROM crm_merge_suggestions s WHERE s.status = 'pending' AND ${clientInScope("s.clientA")} AND ${clientInScope("s.clientB")}) AS suggestions,
-    (SELECT COUNT(*) FROM crm_clients c WHERE c.status = 'active' AND c.genericEmailOnly = 1 AND ${clientInScope("c.id")}) AS generic,
-    (SELECT COUNT(DISTINCT c.id) FROM crm_clients c JOIN crm_booking_links l ON l.clientId = c.id JOIN multipark_bookings b ON b.externalId = l.bookingExternalId
-      WHERE c.status = 'active' AND c.noEmail = 1 AND b.checkIn >= UTC_TIMESTAMP() AND b.checkIn < DATE_ADD(UTC_TIMESTAMP(), INTERVAL 3 DAY)
-        AND UPPER(COALESCE(b.status, '')) NOT LIKE '%CANCEL%' AND ${projectScope(sql`b.projectId`)}) AS noEmail`));
-  return { suggestions: Number(row?.suggestions ?? 0), generic: Number(row?.generic ?? 0), noEmail: Number(row?.noEmail ?? 0) };
+    (SELECT COUNT(*) FROM crm_clients c WHERE c.status = 'active' AND c.genericEmailOnly = 1 AND ${clientInScope("c.id")}) AS generic`));
+  // clientes sem email com reserva nos próximos 3 dias — reservas lidas ao vivo da Multipark
+  const noEmail = await upcomingWithoutEmail(db, { days: 3 }).then((r) => new Set(r.map((x) => x.id)).size).catch(() => 0);
+  return { suggestions: Number(row?.suggestions ?? 0), generic: Number(row?.generic ?? 0), noEmail };
 }
 
 async function sidesFor(db: any, ids: number[]) {
@@ -99,8 +99,10 @@ export async function findEmailInMailbox(db: any, clientId: number, visible: SQL
   const [c] = rowsOf(await db.execute(sql`SELECT displayName FROM crm_clients WHERE id = ${clientId}`));
   if (!c) return [];
   const plates = rowsOf(await db.execute(sql`SELECT plateDisplay, plate FROM crm_client_vehicles WHERE clientId = ${clientId}`)).map((v) => String(v.plateDisplay || v.plate));
-  const numbers = rowsOf(await db.execute(sql`SELECT b.bookingNumber FROM crm_booking_links l JOIN multipark_bookings b ON b.externalId = l.bookingExternalId
-    WHERE l.clientId = ${clientId} AND b.bookingNumber IS NOT NULL LIMIT 20`)).map((b) => String(b.bookingNumber));
+  // n.º das reservas da ficha (a "allocation" da Multipark), lidos ao vivo
+  const linkIds = rowsOf(await db.execute(sql`SELECT bookingExternalId FROM crm_booking_links WHERE clientId = ${clientId} LIMIT 50`)).map((l) => String(l.bookingExternalId));
+  const { readCrmBookingFacts } = await import("../multiparkDb/crmLive");
+  const numbers = linkIds.length ? (await readCrmBookingFacts(linkIds).catch(() => [])).map((f) => f.code).filter((c): c is string => !!c).slice(0, 20) : [];
   const generic = new Set(rowsOf(await db.execute(sql`SELECT email FROM crm_client_emails WHERE generic = 1 AND clientId = ${clientId}`)).map((e) => String(e.email)));
   const terms: any[] = [];
   const name = String(c.displayName ?? "").trim();
@@ -121,14 +123,26 @@ export async function findEmailInMailbox(db: any, clientId: number, visible: SQL
   }
 }
 
-/** Reservas nos próximos dias de clientes sem email: pedir o email à chegada. */
+/** Reservas nos próximos dias de clientes sem email: pedir o email à chegada (reservas ao vivo da Multipark). */
 export async function upcomingWithoutEmail(db: any, o: { days?: number }) {
   const days = Math.max(1, Math.min(14, o.days ?? 3));
-  const rows = rowsOf(await db.execute(sql`SELECT c.id, c.displayName, c.primaryPhone, b.externalId, b.bookingNumber, ${DT("b.checkIn")} AS checkIn, b.parkName, b.licensePlate
-    FROM crm_clients c JOIN crm_booking_links l ON l.clientId = c.id AND l.role = 'traveler'
-    JOIN multipark_bookings b ON b.externalId = l.bookingExternalId
-    WHERE c.status = 'active' AND c.noEmail = 1 AND b.checkIn >= UTC_TIMESTAMP() AND b.checkIn < DATE_ADD(UTC_TIMESTAMP(), INTERVAL ${days} DAY)
-      AND UPPER(COALESCE(b.status, '')) NOT LIKE '%CANCEL%' AND ${projectScope(sql`b.projectId`)}
-    ORDER BY b.checkIn LIMIT 200`));
-  return rows.map((r) => ({ id: Number(r.id), name: r.displayName ?? null, phone: r.primaryPhone ?? null, bookingId: String(r.externalId), bookingNumber: r.bookingNumber ?? null, checkIn: r.checkIn, park: r.parkName ?? null, plate: r.licensePlate ?? null }));
+  const [{ readUpcomingBookings }, { loadLiveContext }] = await Promise.all([import("../multiparkDb/crmLive"), import("../finance/liveBookings")]);
+  const scope = scopedCityNamesLive();
+  const cityOk = scope === undefined ? () => true : (c: string | null) => !!c && cityAliases(scope).includes(c.trim().toLowerCase());
+  const upcoming = (await readUpcomingBookings({ days, ourParkIds: [...(await loadLiveContext()).ourParks.keys()] })).filter((b) => cityOk(b.city));
+  if (!upcoming.length) return [];
+  const byId = new Map(upcoming.map((b) => [b.id, b]));
+  const out: Array<{ id: number; name: string | null; phone: string | null; bookingId: string; bookingNumber: string | null; checkIn: string | null; park: string | null; plate: string | null }> = [];
+  const ids = [...byId.keys()];
+  for (let i = 0; i < ids.length; i += 1000) {
+    const rows = rowsOf(await db.execute(sql`SELECT c.id, c.displayName, c.primaryPhone, l.bookingExternalId
+      FROM crm_booking_links l JOIN crm_clients c ON c.id = l.clientId
+      WHERE l.role = 'traveler' AND c.status = 'active' AND c.noEmail = 1 AND l.bookingExternalId IN (${inList(ids.slice(i, i + 1000))})`));
+    for (const r of rows) {
+      const b = byId.get(String(r.bookingExternalId));
+      if (!b) continue;
+      out.push({ id: Number(r.id), name: r.displayName ?? null, phone: r.primaryPhone ?? null, bookingId: b.id, bookingNumber: b.code, checkIn: b.checkIn, park: b.parkName, plate: b.plate });
+    }
+  }
+  return out.sort((a, b) => String(a.checkIn ?? "").localeCompare(String(b.checkIn ?? ""))).slice(0, 200);
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import type { SQL } from "drizzle-orm";
-import { buildWhere, colorVariants, ruleSql, searchCond } from "./queries";
+import { buildWhere, colorVariants, liveDateRange, ruleSql, searchCond } from "./queries";
 import { cityScope } from "../cityScope";
 import { citiesOfCountry, citiesOfRegion, cityAliases, countryFromPhone, parseParks } from "../../shared/crmGeo";
 
@@ -21,11 +21,19 @@ describe("CRM — regras", () => {
     expect(ruleSql({ field: "client.totalSpent", op: "gte", value: 100 }, { canSeeTotals: false })).toBeNull();
     expect(ruleSql({ field: "client.totalSpent", op: "gte", value: 100 }, { canSeeTotals: true })).not.toBeNull();
   });
-  it("saída num dia = intervalo de Lisboa em UTC", () => {
-    const q = compile(ruleSql({ field: "booking.checkOut", op: "on", value: "2026-09-10" }, { canSeeTotals: false })!);
-    expect(q.sql).toContain("b.checkOut >=");
-    expect(q.params).toContain("2026-09-09 23:00:00");
-    expect(q.params).toContain("2026-09-10 23:00:00");
+  it("saída num dia = intervalo de Lisboa em UTC; as fichas vêm da Multipark ao vivo", () => {
+    expect(liveDateRange("on", "2026-09-10")).toEqual({ from: "2026-09-09 23:00:00", to: "2026-09-10 23:00:00" });
+    expect(liveDateRange("before", "2026-09-10")).toEqual({ to: "2026-09-09 23:00:00" });
+    // sem resultado da leitura ao vivo → nenhuma ficha; com resultado → essas fichas
+    expect(compile(ruleSql({ field: "booking.checkOut", op: "on", value: "2026-09-10" }, { canSeeTotals: false })!).sql).toBe("1 = 0");
+    const q = compile(ruleSql({ field: "booking.checkOut", op: "on", value: "2026-09-10" }, { canSeeTotals: false }, [7, 9])!);
+    expect(q.sql).toBe("c.id IN (?, ?)");
+    expect(q.params).toEqual([7, 9]);
+  });
+  it("parque da reserva: pelo resumo da ficha (parksJson)", () => {
+    const q = compile(ruleSql({ field: "booking.park", op: "is", value: "Airpark Lisboa" }, { canSeeTotals: false })!);
+    expect(q.sql).toContain("c.parksJson LIKE ?");
+    expect(q.params[0]).toBe('%"park":"Airpark Lisboa"%');
   });
   it("valores inválidos não geram filtro", () => {
     expect(ruleSql({ field: "booking.checkIn", op: "on", value: "10/09" }, { canSeeTotals: false })).toBeNull();
@@ -40,8 +48,9 @@ describe("CRM — filtros de grupo e pesquisa", () => {
     expect(citiesOfRegion("Algarve")).toEqual(["faro"]);
     expect(citiesOfCountry("PT")).toEqual(expect.arrayContaining(["lisbon", "porto", "faro"]));
     const q = compile(buildWhere({ groups: { region: ["Norte"] } }, opts));
-    expect(q.params).toEqual(expect.arrayContaining(["porto", "oporto"]));
-    expect(q.params).not.toContain("faro");
+    expect(q.sql).toContain("CONCAT(',', COALESCE(c.cityKeys, ''), ',') LIKE ?");
+    expect(q.params).toEqual(expect.arrayContaining(["%,porto,%", "%,oporto,%"]));
+    expect(q.params).not.toContain("%,faro,%");
   });
   it("n.º de cliente pesquisa pelo id", () => {
     const q = compile(buildWhere({ search: { text: "10482", field: "number" } }, opts));
@@ -55,12 +64,20 @@ describe("CRM — filtros de grupo e pesquisa", () => {
   it("separador Pro inclui empresas", () => {
     expect(compile(buildWhere({ tab: "pro" }, opts)).sql).toContain("c.isPro = 1 OR c.kind = 'company'");
   });
-  it("utilizador de cidade só vê fichas com reservas nos seus projetos (ou sem reservas: criadas à mão)", () => {
-    const q = cityScope.run({ all: false, projectIds: [50, 65] } as any, () => compile(buildWhere({}, opts)));
-    expect(q.sql).toContain("crm_booking_links");
-    expect(q.sql).toContain("NOT EXISTS (SELECT 1 FROM crm_booking_links sl2");
-    expect(q.params).toEqual(expect.arrayContaining([50, 65]));
-    expect(compile(buildWhere({}, opts)).sql).not.toContain("crm_booking_links");
+  it("utilizador de cidade só vê fichas com reservas nas suas cidades (resumo cityKeys) ou criadas à mão sem reservas", () => {
+    const q = cityScope.run({ all: false, projectIds: [50, 65], cityNames: ["Porto"] } as any, () => compile(buildWhere({}, opts)));
+    expect(q.sql).toContain("sc.cityKeys");
+    expect(q.sql).toContain("sc.bookings = 0 AND sc.source <> 'bookings'");
+    expect(q.params).toEqual(expect.arrayContaining(["%,porto,%", "%,oporto,%"]));
+    expect(q.sql).not.toContain("multipark_bookings");
+    expect(compile(buildWhere({}, opts)).sql).not.toContain("sc.cityKeys");
+  });
+  it("canal e parceiro: pelo resumo da ficha; n.º de reserva: fichas vindas da Multipark", () => {
+    const q = compile(buildWhere({ groups: { channel: ["MARKETPLACE"], partner: ["Parkos"] } }, opts));
+    expect(q.params).toEqual(expect.arrayContaining(["%,MARKETPLACE,%", "%|Parkos|%"]));
+    expect(compile(buildWhere({ search: { text: "12345", field: "booking" } }, opts)).sql).toContain("1 = 0");
+    const r = compile(buildWhere({ search: { text: "12345", field: "booking" } }, { ...opts, live: { rules: new Map(), bookingSearch: [3] } }));
+    expect(r.params).toContain(3);
   });
   it("fichas da carga sem reservas (lote interrompido) não aparecem", () => {
     expect(compile(buildWhere({}, opts)).sql).toContain("(c.bookings > 0 OR c.source <> 'bookings')");

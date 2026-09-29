@@ -1,11 +1,16 @@
 /**
- * CRM — carga das fichas a partir das reservas (`multipark_bookings`), por
- * lotes, com cursor (trabalho `crm-sync` do agendador, de 15 em 15 min).
+ * CRM — carga das fichas a partir das reservas da BD da Multipark AO VIVO
+ * (server/multiparkDb/crmLive.ts), por lotes, com cursor (trabalho `crm-sync`
+ * do agendador, de 15 em 15 min). Fase 1 (29 set 2026): nada vem da cópia
+ * `multipark_bookings`; são os clientes de TODAS as reservas nossas (parques
+ * nossos + o que vendemos no marketplace).
  *
  * A 1.ª corrida percorre todas as reservas (várias passagens do agendador,
  * cada uma até ao prazo); depois só as que mudaram desde o cursor
- * (`updatedAt`, `id`). É idempotente: uma reserva já ligada não se volta a
- * decidir (fusões e separações mudam as ligações à mão).
+ * ("updatedAt", id da Multipark). É idempotente: uma reserva já ligada não se
+ * volta a decidir (fusões e separações mudam as ligações à mão).
+ * Na nossa BD fica só o CRM (fichas, contactos, carros, ligações) e um RESUMO
+ * por ficha (contagens, datas, cidades, parques, canais, parceiros).
  *
  * Regras: shared/crmIdentity.ts. Decisão do lote: server/crm/plan.ts.
  * Cada lote grava em poucas instruções (inserções em bloco) e recalcula as
@@ -25,10 +30,16 @@ const rowsOf = (res: unknown): any[] => {
 const inList = (vals: (string | number)[]) => sql.join(vals.map((v) => sql`${v}`), sql`, `);
 const chunks = <T,>(a: T[], n: number) => Array.from({ length: Math.ceil(a.length / n) }, (_, i) => a.slice(i * n, i * n + n));
 
-/** Cursor "AAAA-MM-DD HH:MM:SS|id" → partes (vazio = do princípio). */
-export function parseCursor(c: string | null | undefined): { at: string; id: number } {
-  const m = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\|(\d+)$/.exec(String(c ?? ""));
-  return m ? { at: m[1], id: Number(m[2]) } : { at: "1970-01-01 00:00:00", id: 0 };
+/** Cursor "AAAA-MM-DD HH:MM:SS[.mmm]|id" → partes (vazio = do princípio). O id é o da Multipark (texto). */
+export function parseCursor(c: string | null | undefined): { at: string; id: string } {
+  const m = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{1,6})?)\|(.+)$/.exec(String(c ?? ""));
+  return m ? { at: m[1], id: m[2] } : { at: "1970-01-01 00:00:00", id: "" };
+}
+
+/** Parques nossos (ids da Multipark) — os clientes do CRM são os das reservas nossas. */
+async function ourParkIds(): Promise<string[]> {
+  const { loadLiveContext } = await import("../finance/liveBookings");
+  return [...(await loadLiveContext()).ourParks.keys()];
 }
 
 /** Emails usados por muitos nomes diferentes (balcão, agregadores) + domínios da casa. Cache 1 h. */
@@ -41,41 +52,30 @@ export async function loadGenericEmails(db: any): Promise<Set<string>> {
 }
 
 async function queryGenericEmails(db: any): Promise<Set<string>> {
-  const r = rowsOf(await db.execute(sql`
-    SELECT LOWER(TRIM(clientEmail)) AS e
-    FROM multipark_bookings
-    WHERE clientEmail LIKE '%@%'
-    GROUP BY LOWER(TRIM(clientEmail))
-    HAVING COUNT(DISTINCT LOWER(TRIM(CONCAT(COALESCE(clientFirstName, ''), ' ', COALESCE(clientLastName, ''))))) >= ${GENERIC_EMAIL_MIN_NAMES}`));
-  const set = new Set<string>(r.map((x) => String(x.e)));
-  const dom = rowsOf(await db.execute(sql`
-    SELECT DISTINCT LOWER(TRIM(clientEmail)) AS e FROM multipark_bookings
-    WHERE SUBSTRING_INDEX(LOWER(TRIM(clientEmail)), '@', -1) IN (${inList([...INTERNAL_EMAIL_DOMAINS])})`));
+  // emails de reservas nossas com muitos nomes diferentes — BD da Multipark ao vivo
+  const [{ buildGenericEmailsSql }, { multiparkDbQuery }] = await Promise.all([import("../multiparkDb/crmLive"), import("../multiparkDb/client")]);
+  const { sql: q, params } = buildGenericEmailsSql({ minNames: GENERIC_EMAIL_MIN_NAMES, ourParkIds: await ourParkIds() });
+  const set = new Set<string>((await multiparkDbQuery<Record<string, unknown>>(q, params)).map((x) => String(x.email ?? "")).filter(Boolean));
+  // e os da casa que já estão nas fichas
+  const dom = rowsOf(await db.execute(sql`SELECT DISTINCT email AS e FROM crm_client_emails
+    WHERE SUBSTRING_INDEX(email, '@', -1) IN (${inList([...INTERNAL_EMAIL_DOMAINS])})`));
   dom.forEach((x) => set.add(String(x.e)));
   return set;
 }
 
-async function loadBatch(db: any, cursor: { at: string; id: number }, limit: number) {
-  const f = (c: string) => sql.raw(`DATE_FORMAT(${c}, '%Y-%m-%d %H:%i:%s')`);
-  return rowsOf(await db.execute(sql`
-    SELECT id, externalId, clientFirstName, clientLastName, clientEmail, clientPhone, clientNif, licensePlate,
-      vehicleBrand, vehicleModel, vehicleColor, vehicleType, partnerId, partnerName, pro, origin,
-      ${f("COALESCE(bookingCreatedAt, checkIn)")} AS seenAt, ${f("updatedAt")} AS cursorAt
-    FROM multipark_bookings
-    WHERE ((updatedAt > ${cursor.at}) OR (updatedAt = ${cursor.at} AND id > ${cursor.id}))
-      -- 2 min de folga: uma transação que ainda não gravou não fica para trás do cursor
-      AND updatedAt < NOW() - INTERVAL 2 MINUTE
-    ORDER BY updatedAt, id
-    LIMIT ${sql.raw(String(Math.trunc(limit)))}`));
+async function loadBatch(cursor: { at: string; id: string }, limit: number) {
+  const [{ buildCrmBatchSql, mapCrmBatchRow }, { multiparkDbQuery }] = await Promise.all([import("../multiparkDb/crmLive"), import("../multiparkDb/client")]);
+  const { sql: q, params } = buildCrmBatchSql({ cursor, limit, ourParkIds: await ourParkIds() });
+  return (await multiparkDbQuery<Record<string, unknown>>(q, params)).map(mapCrmBatchRow);
 }
 
-function toBookingRow(r: any): BookingRow {
+function toBookingRow(r: import("../multiparkDb/crmLive").CrmBatchRow): BookingRow {
   return {
-    externalId: String(r.externalId), firstName: r.clientFirstName ?? null, lastName: r.clientLastName ?? null,
-    email: r.clientEmail ?? null, phone: r.clientPhone ?? null, nif: r.clientNif ?? null, plate: r.licensePlate ?? null,
-    brand: r.vehicleBrand ?? null, model: r.vehicleModel ?? null, color: r.vehicleColor ?? null, vehicleType: r.vehicleType ?? null,
-    partnerId: r.partnerId ?? null, partnerName: r.partnerName ?? null, pro: Number(r.pro) === 1, origin: r.origin ?? null,
-    seenAt: r.seenAt ?? null,
+    externalId: r.id, firstName: r.firstName, lastName: r.lastName,
+    email: r.email, phone: r.phone, nif: r.nif, plate: r.plate,
+    brand: r.brand, model: r.model, color: r.color, vehicleType: r.vehicleType,
+    partnerId: r.partnerId, partnerName: r.partnerName, pro: r.pro, origin: r.origin,
+    seenAt: r.seenAt,
   };
 }
 
@@ -104,45 +104,29 @@ async function loadCandidates(db: any, emails: string[], phones: string[], plate
 
 const v = (x: unknown) => (x === undefined ? null : x);
 
-/** Recalcula as métricas em cache de um conjunto de fichas. */
+/**
+ * Recalcula o RESUMO em cache de um conjunto de fichas: as reservas de cada
+ * uma (ligações "traveler") lidas AO VIVO da Multipark (server/crm/summary.ts).
+ * Também atualiza as reservas por carro e os consentimentos por defeito.
+ */
 export async function recomputeMetrics(db: any, clientIds: number[]): Promise<void> {
   const ids = [...new Set(clientIds.filter((i) => i > 0))];
-  for (const part of chunks(ids, 500)) {
-    const agg = rowsOf(await db.execute(sql`
-      SELECT l.clientId,
-        COUNT(*) AS bookings,
-        SUM(UPPER(COALESCE(b.status, '')) LIKE '%CANCEL%') AS cancelled,
-        SUM(UPPER(COALESCE(b.status, '')) IN ('CHECKED_IN', 'CHECKING_OUT', 'PENDING_CHECKOUT', 'CHECKED_OUT')) AS completed,
-        SUM(UPPER(COALESCE(b.status, '')) NOT LIKE '%CANCEL%' AND b.checkIn > UTC_TIMESTAMP()) AS upcoming,
-        SUM(b.partnerId IS NOT NULL OR b.pro = 1) AS partnerBookings,
-        SUM(CASE WHEN UPPER(COALESCE(b.status, '')) IN ('CHECKED_IN', 'CHECKING_OUT', 'PENDING_CHECKOUT', 'CHECKED_OUT') THEN b.totalPrice END) AS totalSpent,
-        DATE_FORMAT(MIN(CASE WHEN UPPER(COALESCE(b.status, '')) IN ('CHECKED_IN', 'CHECKING_OUT', 'PENDING_CHECKOUT', 'CHECKED_OUT') THEN b.checkIn END), '%Y-%m-%d %H:%i:%s') AS firstVisit,
-        DATE_FORMAT(MAX(CASE WHEN UPPER(COALESCE(b.status, '')) IN ('CHECKED_IN', 'CHECKING_OUT', 'PENDING_CHECKOUT', 'CHECKED_OUT') THEN b.checkIn END), '%Y-%m-%d %H:%i:%s') AS lastVisit,
-        DATE_FORMAT(MIN(CASE WHEN UPPER(COALESCE(b.status, '')) NOT LIKE '%CANCEL%' AND b.checkIn > UTC_TIMESTAMP() THEN b.checkIn END), '%Y-%m-%d %H:%i:%s') AS nextCheckIn,
-        SUBSTRING(GROUP_CONCAT(DISTINCT b.city ORDER BY b.city SEPARATOR ','), 1, 128) AS cities,
-        MAX(b.pro) AS anyPro
-      FROM crm_booking_links l
-      JOIN multipark_bookings b ON b.externalId = l.bookingExternalId
-      WHERE l.role = 'traveler' AND l.clientId IN (${inList(part)})
-      GROUP BY l.clientId`));
-    // parques usados (vários por cliente), do mais usado para o menos
-    const parks = rowsOf(await db.execute(sql`
-      SELECT l.clientId, b.parkName, MAX(b.city) AS city, COUNT(*) AS n
-      FROM crm_booking_links l JOIN multipark_bookings b ON b.externalId = l.bookingExternalId
-      WHERE l.role = 'traveler' AND l.clientId IN (${inList(part)}) AND b.parkName IS NOT NULL
-      GROUP BY l.clientId, b.parkName`));
-    const parksOf = new Map<number, ParkUse[]>();
-    for (const p of parks) {
-      const list = parksOf.get(Number(p.clientId)) ?? [];
-      list.push({ park: String(p.parkName), city: cityLabel(p.city), bookings: Number(p.n) });
-      parksOf.set(Number(p.clientId), list);
+  const { readCrmBookingFacts } = await import("../multiparkDb/crmLive");
+  const { summarizeBookings, parksJsonOf } = await import("./summary");
+  const nowUtc = new Date().toISOString().slice(0, 19).replace("T", " ");
+  for (const part of chunks(ids, 300)) {
+    const links = rowsOf(await db.execute(sql`SELECT clientId, bookingExternalId FROM crm_booking_links
+      WHERE role = 'traveler' AND clientId IN (${inList(part)})`));
+    const factList = links.length ? await readCrmBookingFacts(links.map((l) => String(l.bookingExternalId))) : [];
+    const factOf = new Map(factList.map((f) => [f.id, f]));
+    const byClient = new Map<number, typeof factList>();
+    for (const l of links) {
+      const f = factOf.get(String(l.bookingExternalId));
+      if (!f) continue; // reserva que já não é nossa / não existe: não conta
+      const list = byClient.get(Number(l.clientId)) ?? [];
+      list.push(f);
+      byClient.set(Number(l.clientId), list);
     }
-    const parksJsonOf = (id: number) => {
-      const list = (parksOf.get(id) ?? []).sort((a, b) => b.bookings - a.bookings);
-      let json = JSON.stringify(list);
-      while (json.length > 1990 && list.length > 1) { list.pop(); json = JSON.stringify(list); }
-      return list.length ? json : null;
-    };
     const flags = rowsOf(await db.execute(sql`
       SELECT c.id,
         (SELECT p.phone FROM crm_client_phones p WHERE p.clientId = c.id ORDER BY p.isPrimary DESC, p.lastSeenAt DESC LIMIT 1) AS bestPhone,
@@ -151,33 +135,48 @@ export async function recomputeMetrics(db: any, clientIds: number[]): Promise<vo
         (SELECT COUNT(*) FROM crm_client_emails e WHERE e.clientId = c.id AND e.generic = 1) AS genericEmails
       FROM crm_clients c WHERE c.id IN (${inList(part)})`));
     const flagOf = new Map(flags.map((f) => [Number(f.id), f]));
-    const aggOf = new Map(agg.map((a) => [Number(a.clientId), a]));
     // só fichas que existem (o INSERT … ON DUPLICATE criaria uma ficha fantasma)
     const existing = part.filter((id) => flagOf.has(id));
     if (!existing.length) continue;
+    const sums = new Map(existing.map((id) => [id, summarizeBookings(byClient.get(id) ?? [], nowUtc)]));
     const values = existing.map((id) => {
-      const a = aggOf.get(id) ?? {};
+      const a = sums.get(id)!;
       const f = flagOf.get(id) ?? {};
       const good = Number(f.goodEmails ?? 0), gen = Number(f.genericEmails ?? 0);
-      const top = (parksOf.get(id) ?? []).sort((x, y) => y.bookings - x.bookings)[0]?.park ?? null;
       const country = countryFromPhone(f.bestPhone ?? null);
-      return sql`(${id}, ${Number(a.bookings ?? 0)}, ${Number(a.cancelled ?? 0)}, ${Number(a.completed ?? 0)}, ${Number(a.upcoming ?? 0)},
-        ${Number(a.partnerBookings ?? 0)}, ${a.totalSpent == null ? null : Number(a.totalSpent)}, ${v(a.firstVisit)}, ${v(a.lastVisit)},
-        ${v(a.nextCheckIn)}, ${top ? top.slice(0, 128) : null}, ${parksJsonOf(id)}, ${v(a.cities)}, ${country}, ${good === 0 ? 1 : 0}, ${good === 0 && gen > 0 ? 1 : 0},
-        ${Number(a.anyPro ?? 0) === 1 ? 1 : 0}, ${v(f.bestEmail)}, ${v(f.bestPhone)}, UTC_TIMESTAMP())`;
+      return sql`(${id}, ${a.bookings}, ${a.cancelled}, ${a.completed}, ${a.upcoming},
+        ${a.partnerBookings}, ${a.totalSpent}, ${a.firstVisit}, ${a.lastVisit},
+        ${a.nextCheckIn}, ${a.preferredPark ? a.preferredPark.slice(0, 128) : null}, ${parksJsonOf(a.parks)}, ${a.cities}, ${a.cityKeys}, ${a.channels}, ${a.partners},
+        ${country}, ${good === 0 ? 1 : 0}, ${good === 0 && gen > 0 ? 1 : 0},
+        ${a.anyPro ? 1 : 0}, ${v(f.bestEmail)}, ${v(f.bestPhone)}, UTC_TIMESTAMP())`;
     });
     await db.execute(sql`
       INSERT INTO crm_clients (id, bookings, cancelled, completed, upcoming, partnerBookings, totalSpent, firstVisit, lastVisit,
-        nextCheckIn, preferredPark, parksJson, cities, country, noEmail, genericEmailOnly, isPro, primaryEmail, primaryPhone, metricsAt)
+        nextCheckIn, preferredPark, parksJson, cities, cityKeys, channels, partners, country, noEmail, genericEmailOnly, isPro, primaryEmail, primaryPhone, metricsAt)
       VALUES ${sql.join(values, sql`, `)}
       ON DUPLICATE KEY UPDATE
         bookings = VALUES(bookings), cancelled = VALUES(cancelled), completed = VALUES(completed), upcoming = VALUES(upcoming),
         partnerBookings = VALUES(partnerBookings), totalSpent = VALUES(totalSpent), firstVisit = VALUES(firstVisit),
         lastVisit = VALUES(lastVisit), nextCheckIn = VALUES(nextCheckIn), preferredPark = VALUES(preferredPark),
-        parksJson = VALUES(parksJson), cities = VALUES(cities), country = COALESCE(VALUES(country), country),
+        parksJson = VALUES(parksJson), cities = VALUES(cities), cityKeys = VALUES(cityKeys), channels = VALUES(channels), partners = VALUES(partners),
+        country = COALESCE(VALUES(country), country),
         noEmail = VALUES(noEmail), genericEmailOnly = VALUES(genericEmailOnly),
         isPro = IF(proManual = 1, isPro, GREATEST(isPro, VALUES(isPro))),
         primaryEmail = VALUES(primaryEmail), primaryPhone = VALUES(primaryPhone), metricsAt = VALUES(metricsAt)`);
+    // reservas por carro (mesma chave que plateKey) — em bloco, só nos carros que já existem
+    const plateRows = existing.flatMap((id) => [...sums.get(id)!.plates].map(([plate, nb]) => ({ id, plate, nb })));
+    for (const pr of chunks(plateRows, 300)) {
+      const derived = sql.join(pr.map((x, i) => (i === 0
+        ? sql`SELECT ${x.id} AS clientId, ${x.plate} AS plate, ${x.nb} AS n`
+        : sql`SELECT ${x.id}, ${x.plate}, ${x.nb}`)), sql` UNION ALL `);
+      await db.execute(sql`UPDATE crm_client_vehicles v JOIN (${derived}) x ON x.clientId = v.clientId AND x.plate = v.plate SET v.bookings = x.n`);
+    }
+    // Consentimentos: ligados por defeito para quem tem reservas (termos e condições
+    // e o próprio serviço — recolha, entrega, fatura). Só onde ninguém decidiu (NULL):
+    // o que foi desligado à mão fica desligado.
+    await db.execute(sql`UPDATE crm_clients SET
+        consentEmail = COALESCE(consentEmail, 1), consentWhatsapp = COALESCE(consentWhatsapp, 1), consentSms = COALESCE(consentSms, 1)
+      WHERE id IN (${inList(existing)}) AND bookings > 0 AND (consentEmail IS NULL OR consentWhatsapp IS NULL OR consentSms IS NULL)`);
   }
 }
 
@@ -281,8 +280,8 @@ export async function healMergedLeftovers(db: any): Promise<number[]> {
 }
 
 /** Um lote: decide e grava. Devolve o novo cursor (ou null se não havia nada). */
-async function runOneBatch(db: any, cursor: { at: string; id: number }, generic: Set<string>, limit: number) {
-  const raw = await loadBatch(db, cursor, limit);
+async function runOneBatch(db: any, cursor: { at: string; id: string }, generic: Set<string>, limit: number) {
+  const raw = await loadBatch(cursor, limit);
   if (!raw.length) return null;
   const rows = raw.map(toBookingRow);
   const last = raw[raw.length - 1];
@@ -380,16 +379,6 @@ async function runOneBatch(db: any, cursor: { at: string; id: number }, generic:
   // 5) métricas das fichas tocadas (+ contagem de reservas por carro)
   const touchedIds = [...new Set([...plan.links.map((l) => real(l.clientId)), ...healed].filter(Boolean))];
   await recomputeMetrics(db, touchedIds);
-  for (const part of chunks(touchedIds, 500)) {
-    // mesma limpeza que plateKey (espaços . - _ /)
-    await db.execute(sql`
-      UPDATE crm_client_vehicles v
-      JOIN (SELECT l.clientId, UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(b.licensePlate, '-', ''), ' ', ''), '.', ''), '_', ''), '/', '')) AS plate, COUNT(*) AS n
-            FROM crm_booking_links l JOIN multipark_bookings b ON b.externalId = l.bookingExternalId
-            WHERE l.role = 'traveler' AND l.clientId IN (${inList(part)}) AND b.licensePlate IS NOT NULL
-            GROUP BY l.clientId, plate) x ON x.clientId = v.clientId AND x.plate = v.plate
-      SET v.bookings = x.n`);
-  }
   return { cursor: nextCursor, rows: rows.length, plan };
 }
 
@@ -398,11 +387,13 @@ async function runOneBatch(db: any, cursor: { at: string; id: number }, generic:
  * o do agendador só serve para retomar uma corrida a meio e apaga-se quando
  * ela acaba — aqui é preciso lembrar onde se ficou entre corridas.
  */
-export const CRM_CURSOR_STREAM = "crm-bookings";
+// Fase 1: novo cursor (ids e datas da BD da Multipark) — a 1.ª corrida revê
+// todas as reservas; as já ligadas ficam como estão (idempotente).
+export const CRM_CURSOR_STREAM = "crm-bookings-live";
 
 async function loadCrmCursor(db: any): Promise<string | null> {
   const r = rowsOf(await db.execute(sql`SELECT cursorAt, cursorId FROM multipark_db_cursors WHERE stream = ${CRM_CURSOR_STREAM} LIMIT 1`))[0];
-  return r?.cursorAt ? `${r.cursorAt}|${r.cursorId ?? 0}` : null;
+  return r?.cursorAt ? `${r.cursorAt}|${r.cursorId ?? ""}` : null;
 }
 
 async function saveCrmCursor(db: any, cursor: string | null, rows: number, status: "ok" | "partial" | "error", error?: string | null) {
@@ -429,6 +420,11 @@ export async function runCrmSync(o: { deadlineAt: number; batchSize?: number; re
   // Emails da casa que já estavam nas fichas (antes da lista única de domínios):
   // passam a genéricos — deixam de ligar reservas e de contar como email do cliente.
   await markHouseEmailsGeneric(db).catch((err) => console.warn("[crm-sync] emails da casa:", String(err?.message ?? err).slice(0, 160)));
+  // fichas com o resumo por fazer (ex.: a Multipark falhou depois de uma junção)
+  try {
+    const pending = rowsOf(await db.execute(sql`SELECT id FROM crm_clients WHERE status = 'active' AND metricsAt IS NULL LIMIT 500`)).map((r) => Number(r.id));
+    if (pending.length) await recomputeMetrics(db, pending);
+  } catch (err: any) { console.warn("[crm-sync] resumos por fazer:", String(err?.message ?? err).slice(0, 160)); }
   let cursorStr = o.restart ? null : await loadCrmCursor(db);
   const res: CrmSyncResult = { ok: true, batches: 0, rows: 0, created: 0, linked: 0, kept: 0, genericEmails: generic.size, cursor: cursorStr, done: false, ms: 0 };
   try {
