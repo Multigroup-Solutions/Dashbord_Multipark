@@ -90,7 +90,7 @@ describe("a cópia multipark_bookings deixa de ser lida nas pesquisas e ligaçõ
       expect(code(f), f).not.toMatch(/multipark_bookings|multiparkBookings/);
     }
     const db = code("server/db.ts");
-    const fn = db.slice(db.indexOf("export async function searchBookingByRef"), db.indexOf("export async function getMultiparkBookingByExternalId"));
+    const fn = db.slice(db.indexOf("export async function searchBookingByRef"), db.indexOf("\n}\n", db.indexOf("export async function searchBookingByRef")));
     expect(fn).toContain("searchLiveBookings");
     expect(fn).not.toMatch(/multiparkBookings/);
     const inbound = code("server/whatsappInbound.ts");

@@ -276,8 +276,6 @@ import {
   deleteAnnualReport,
   generateAnnualSummary,
   // MultiPark
-  getMultiparkBookings,
-  getMultiparkBookingByExternalId,
   upsertMultiparkBooking,
   getMultiparkBookingStats,
   // MultiPark KPIs
@@ -6176,26 +6174,27 @@ export const appRouter = router({
 
     // Dá baixa / reabre um serviço na app. O detalhe (webhook) preserva o done local
     // (upsertBookingExtras faz OR com o que a API mandar).
+    // "Feito" de um serviço extra: guardado cá (a BD da Multipark é só de leitura),
+    // por linha de serviço; só serviços de reservas das cidades de quem marca.
     setExtraDone: protectedProcedure.input(z.object({
-      id: z.number(),
+      bookingId: z.string().trim().min(1).max(128),
+      lineId: z.string().trim().min(1).max(128),
       done: z.boolean(),
     })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "servicos", "edit");
       const { getDb } = await import("./db");
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
-      const { multiparkBookingExtras, multiparkBookings } = await import("../drizzle/schema");
-      const { eq, and } = await import("drizzle-orm");
-      const { projectScope, scopedProjectIds } = await import("./cityScope");
-      if (scopedProjectIds() !== undefined) {
-        // Só serviços de reservas da(s) cidade(s) do utilizador
-        const own = await db.select({ id: multiparkBookingExtras.id }).from(multiparkBookingExtras)
-          .innerJoin(multiparkBookings, eq(multiparkBookings.externalId, multiparkBookingExtras.bookingExternalId))
-          .where(and(eq(multiparkBookingExtras.id, input.id), projectScope(multiparkBookings.projectId))).limit(1);
-        if (!own.length) throw new TRPCError({ code: "FORBIDDEN", message: "Este serviço pertence a outra cidade." });
+      const cities = scopedCityNames();
+      if (cities !== undefined) {
+        const { liveBookingByRef } = await import("./multiparkDb/bookingSearch");
+        const b = await liveBookingByRef(input.bookingId, { cities }).catch(() => { throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD da Multipark sem resposta." }); });
+        if (!b) throw new TRPCError({ code: "FORBIDDEN", message: "Este serviço pertence a outra cidade." });
       }
-      await db.update(multiparkBookingExtras).set({ done: input.done ? 1 : 0 }).where(eq(multiparkBookingExtras.id, input.id));
-      await logActivity({ userId: ctx.user.id, action: input.done ? "complete" : "reopen", entity: "booking_extra", entityId: input.id });
+      const { sql } = await import("drizzle-orm");
+      await db.execute(sql`INSERT INTO service_extra_done (bookingExternalId, lineId, done, userId) VALUES (${input.bookingId}, ${input.lineId}, ${input.done ? 1 : 0}, ${ctx.user.id})
+        ON DUPLICATE KEY UPDATE done = VALUES(done), userId = VALUES(userId), bookingExternalId = VALUES(bookingExternalId)`);
+      await logActivity({ userId: ctx.user.id, action: input.done ? "complete" : "reopen", entity: "booking_extra", details: `${input.bookingId}:${input.lineId}` } as any);
       return { success: true };
     }),
 
@@ -6210,70 +6209,59 @@ export const appRouter = router({
       return serviceTasksInRange(input.startDate, input.endDate);
     }),
 
-    // Serviços extra das reservas — FONTE: BD local (multipark_booking_extras,
-    // sincronizada do /report a cada 15min). FIX 2026-08-06: antes chamava a
-    // API ao vivo com UMA chave (= só um parque, lento, incompleto) e mostrava
-    // a ALOCAÇÃO como matrícula. Agora: todos os parques, instantâneo,
-    // matrícula/cliente reais via join à reserva.
+    // Serviços extra das reservas — AO VIVO da BD da Multipark (reservas ao
+    // vivo, parte B): reservas não canceladas com saída no período (dias de
+    // Lisboa), nos nossos parques do projeto pedido e das cidades de quem vê.
+    // O "feito" é o da Multipark ou o marcado cá (service_extra_done).
     multiparkExtras: protectedProcedure.input(z.object({
       startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
       endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-      // Âmbito de cidade como as outras consultas de reservas (scopeCityQuery
-      // preenche a cidade do utilizador; projectScope garante-a no SQL)
       projectId: z.number().optional(),
     })).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "servicos", "view");
-      const { getDb } = await import("./db");
-      const db = await getDb();
-      if (!db) return { total: 0, services: [] };
-      const { multiparkBookingExtras, multiparkBookings } = await import("../drizzle/schema");
-      const { and, gte, lt, eq, sql, inArray } = await import("drizzle-orm");
-      const { projectScope } = await import("./cityScope");
       const { lisbonDayRangeUtc } = await import("../shared/lisbonDay");
-      const { resolveProjectIds } = await import("./db");
+      const { liveParkScope } = await import("./opsStatsLive");
+      const { readServiceExtras } = await import("./multiparkDb/serviceExtras");
       const range = lisbonDayRangeUtc(input.startDate, input.endDate);
-      const projectIds = input.projectId ? await resolveProjectIds(input.projectId) : null;
-      const rows = await db
-        .select({
-          id: multiparkBookingExtras.id,
-          bookingId: multiparkBookingExtras.bookingExternalId,
-          extraId: multiparkBookingExtras.extraId,
-          bookingNumber: multiparkBookings.bookingNumber,
-          licensePlate: multiparkBookings.licensePlate,
-          clientFirstName: multiparkBookings.clientFirstName,
-          clientLastName: multiparkBookings.clientLastName,
-          parkName: multiparkBookings.parkName,
-          city: multiparkBookings.city,
-          checkOut: multiparkBookings.checkOut,
-          bookingStatus: multiparkBookings.status,
-          serviceName: multiparkBookingExtras.name,
-          price: multiparkBookingExtras.price,
-          done: multiparkBookingExtras.done,
-        })
-        .from(multiparkBookingExtras)
-        .innerJoin(multiparkBookings, eq(multiparkBookings.externalId, multiparkBookingExtras.bookingExternalId))
-        .where(and(
-          // Dias de Lisboa → intervalo UTC [início, fim)
-          gte(multiparkBookings.checkOut, range.start),
-          lt(multiparkBookings.checkOut, range.end),
-          sql`${multiparkBookings.status} != 'CANCELLED'`,
-          projectScope(multiparkBookings.projectId),
-          projectIds ? (projectIds.length ? inArray(multiparkBookings.projectId, projectIds) : sql`1 = 0`) : sql`1 = 1`,
-        ))
-        .limit(5000);
-      const services = rows.map((r) => ({
-        id: r.id,
-        bookingId: r.bookingId,
-        extraId: r.extraId ?? null,
-        bookingNumber: r.bookingNumber,
-        licensePlate: r.licensePlate ?? "",
-        clientName: `${r.clientFirstName ?? ""} ${r.clientLastName ?? ""}`.trim(),
-        parkName: r.city && r.parkName && !r.parkName.includes(r.city) ? `${r.parkName} ${r.city}` : (r.parkName ?? ""),
-        checkOut: r.checkOut ?? "",
-        serviceName: r.serviceName ?? "?",
-        price: Number(r.price ?? 0),
-        done: Boolean(r.done),
-      }));
+      const { parkIds, parkInfo } = await liveParkScope(input.projectId);
+      let lines;
+      try {
+        lines = await readServiceExtras({ start: range.start, end: range.end, parkIds });
+      } catch (err) {
+        console.warn("[services.multiparkExtras] BD da Multipark:", (err as Error)?.message);
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Serviços indisponíveis (BD da Multipark sem resposta)." });
+      }
+      const doneLocal = new Map<string, boolean>();
+      const ids = [...new Set(lines.map((l) => l.lineId))];
+      if (ids.length) {
+        const { getDb } = await import("./db");
+        const db = await getDb();
+        const { sql } = await import("drizzle-orm");
+        if (db) {
+          for (let i = 0; i < ids.length; i += 1000) {
+            const chunk = ids.slice(i, i + 1000);
+            const [rows] = (await db.execute(sql`SELECT lineId, done FROM service_extra_done WHERE lineId IN (${sql.join(chunk.map((x) => sql`${x}`), sql`, `)})`)) as any;
+            for (const r of rows as any[]) doneLocal.set(String(r.lineId), Number(r.done) === 1);
+          }
+        }
+      }
+      const services = lines.map((l) => {
+        const info = parkInfo.get(l.parkId);
+        const parkName = info?.name ?? "";
+        return {
+          id: l.lineId,
+          bookingId: l.bookingId,
+          extraId: l.lineId,
+          bookingNumber: l.bookingNumber,
+          licensePlate: l.plate ?? "",
+          clientName: l.clientName ?? "",
+          parkName: info?.city && parkName && !parkName.includes(info.city) ? `${parkName} ${info.city}` : parkName,
+          checkOut: l.checkOut ?? "",
+          serviceName: l.serviceName ?? "?",
+          price: l.price,
+          done: doneLocal.get(l.lineId) ?? l.done,
+        };
+      });
       return { total: services.length, services };
     }),
   }),
@@ -6933,30 +6921,6 @@ export const appRouter = router({
     }),
 
     // List synced bookings with filters
-    bookings: protectedProcedure
-      .input(z.object({
-        status: z.string().optional(),
-        parkingType: z.string().optional(),
-        city: z.string().optional(),
-        parkName: z.string().optional(),
-        projectId: z.number().optional(),
-        from: z.string().optional(),
-        to: z.string().optional(),
-        search: z.string().optional(),
-        limit: z.number().optional(),
-      }).optional())
-      .query(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "reservas_operacoes", "view");
-        return getMultiparkBookings({
-          city: input?.city,
-          status: input?.status,
-          parkingType: input?.parkingType,
-          from: input?.from ? new Date(input.from) : undefined,
-          to: input?.to ? new Date(input.to) : undefined,
-          search: input?.search,
-          limit: input?.limit,
-        });
-      }),
 
     // Booking stats (with optional filters)
     bookingStats: protectedProcedure
@@ -7215,19 +7179,6 @@ export const appRouter = router({
       }),
 
     // Reserva completa por externalId (detalhe ao clicar num serviço)
-    bookingByExternalId: protectedProcedure
-      .input(z.object({ externalId: z.string().min(1).max(128) }))
-      .query(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "reservas_operacoes", "view");
-        const { getDb } = await import("./db");
-        const db = await getDb();
-        if (!db) return null;
-        const { multiparkBookings } = await import("../drizzle/schema");
-        const { and, eq } = await import("drizzle-orm");
-        const { projectScope } = await import("./cityScope");
-        const rows = await db.select().from(multiparkBookings).where(and(eq(multiparkBookings.externalId, input.externalId), projectScope(multiparkBookings.projectId))).limit(1);
-        return rows[0] ?? null;
-      }),
 
     // Resumo agregado (dashboard Operações): contagens/somas no SQL em vez de
     // puxar milhares de reservas completas para o browser

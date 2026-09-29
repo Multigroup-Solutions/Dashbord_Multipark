@@ -30,7 +30,6 @@ export function scopeCityQuery(path: string, access: CityAccess, input: unknown)
     const name = access.cityName?.toLowerCase();
     return { ...raw, city: raw.city ?? (name === 'lisboa' ? 'lisbon' : name) };
   }
-  if (path === 'multipark.bookings') return { ...raw, city: raw.city ?? access.cityName };
   if (['multipark.bookingStats', 'multipark.operationsSummary', 'services.multiparkExtras', 'rh.list'].includes(path)) {
     return { ...raw, projectId: raw.projectId ?? access.defaultCityId };
   }

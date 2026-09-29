@@ -14,7 +14,7 @@ describe('acesso por centro de custos',()=>{
  it.each([50,55,65])('concede todos os projetos do Porto a partir do centro %s',id=>{expect(resolveCityAccess(id,nodes)).toEqual({all:false,defaultCityId:50,cityName:'Porto',cityIds:[50],projectIds:[50,55,65,66],missingCostCenter:false});});
  it.each([null,999])('bloqueia centro em falta ou inexistente: %s',id=>expect(resolveCityAccess(id,nodes)).toMatchObject({all:false,cityIds:[],projectIds:[],missingCostCenter:true}));
  it('bloqueia ciclos e grupos desconhecidos',()=>{expect(resolveCityAccess(1,[{id:1,name:'Outro',level:'group',parentId:1}]).missingCostCenter).toBe(true);});
- it('impõe a cidade quando o pedido omite os filtros',()=>{expect(scopeCityQuery('multipark.bookings',resolveCityAccess(50,nodes),undefined)).toEqual({city:'Porto'});expect(scopeCityQuery('rh.list',resolveCityAccess(50,nodes),{})).toEqual({projectId:50});});
+ it('impõe a cidade quando o pedido omite os filtros',()=>{expect(scopeCityQuery('multipark.bookingStats',resolveCityAccess(50,nodes),undefined)).toEqual({projectId:50});expect(scopeCityQuery('rh.list',resolveCityAccess(50,nodes),{})).toEqual({projectId:50});});
  it('rejeita outra cidade, listas mistas e marcas globais',()=>{
    const access=resolveCityAccess(50,nodes);
    for(const input of [{projectId:49},{cityId:51},{projectIds:[65,49]},{projectId:-55}]) expect(hasForeignCityFilter(access,input)).toBe(true);

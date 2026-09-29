@@ -14,11 +14,8 @@
 import { Router, Request, Response } from "express";
 import { and, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { multiparkBookings } from "../drizzle/schema";
 import { apiKeyMiddleware, requireScope, logApiKeyAction, apiKeyActorId, getApiKeyInfo } from "./apiKeyAuth";
 import {
-  getMultiparkBookings,
-  getMultiparkBookingByExternalId,
   getMultiparkBookingStats,
   getComplaints,
   getComplaintById,
@@ -249,20 +246,27 @@ export function createMcpApiRouter(): Router {
   });
 
   // ── RESERVAS (todos os parques/cidades) ──────────────────────────────────────
+  // Ao vivo na BD da Multipark (reservas ao vivo, parte B): lista de entradas
+  // no período (por omissão, os últimos 30 dias), com pesquisa e filtros.
   r.get("/bookings", requireScope("read"), h(async (req, res) => {
     const q = req.query;
-    const list = await getMultiparkBookings({
-      status: q.status ? String(q.status) : undefined,
-      parkingType: q.parkingType ? String(q.parkingType) : undefined,
-      city: q.city ? String(q.city) : undefined,
+    const { getMultiparkOpsList } = await import("./multiparkDb/opsLists");
+    const { lisbonDayOf } = await import("../shared/lisbonDay");
+    const day = (v: unknown) => { const d = parseDate(v); return d ? lisbonDayOf(d) : null; };
+    const to = day(q.to) ?? lisbonDayOf(Date.now());
+    const from = day(q.from) ?? lisbonDayOf(Date.now() - 30 * 86_400_000);
+    const r2 = await getMultiparkOpsList({
+      kind: "entradas", from, to,
       parkId: q.parkId ? String(q.parkId) : undefined,
-      from: parseDate(q.from),
-      to: parseDate(q.to),
       search: q.search ? String(q.search) : undefined,
       limit: q.limit ? Math.min(Number(q.limit), 500) : 100,
       offset: q.offset ? Number(q.offset) : 0,
-    });
-    res.json({ success: true, count: list.length, data: list });
+    }, q.city ? [String(q.city)] : undefined);
+    if (!r2.available) return res.status(503).json({ error: `BD da Multipark indisponível: ${r2.reason}` });
+    const status = q.status ? String(q.status).toUpperCase() : null;
+    const parkingType = q.parkingType ? String(q.parkingType).toUpperCase() : null;
+    const data = r2.data.rows.filter((b: any) => (!status || String(b.status).toUpperCase() === status) && (!parkingType || String(b.parkingType ?? "").toUpperCase() === parkingType));
+    res.json({ success: true, count: data.length, data });
   }));
 
   r.get("/bookings/stats", requireScope("read"), h(async (req, res) => {
@@ -277,18 +281,14 @@ export function createMcpApiRouter(): Router {
 
   r.get("/bookings/:externalId", requireScope("read"), h(async (req, res) => {
     const ext = req.params.externalId;
-    const local = await getMultiparkBookingByExternalId(ext);
-    let live: any = null;
-    let park: any = null;
-    // Ao vivo da BD da Multipark (ficha da reserva); nunca lança — sem BD, só a cópia local.
+    // Ao vivo da BD da Multipark (ficha da reserva). A cópia local já não é lida.
     const { getBookingFileMain } = await import("./multiparkDb/bookingFile");
     const main = await getBookingFileMain(ext, undefined);
-    if (main.available && main.data.data.core) {
-      live = main.data.data.core;
-      park = { id: live.park?.id ?? null, name: live.park?.name ?? null, city: live.park?.city ?? null };
-    }
-    if (!local && !live) return res.status(404).json({ error: "Reserva não encontrada (cópia local nem BD Multipark)" });
-    res.json({ success: true, local: local ?? null, live, park });
+    if (!main.available) return res.status(503).json({ error: `BD da Multipark indisponível: ${main.reason}` });
+    const live: any = main.data.data.core;
+    if (!live) return res.status(404).json({ error: "Reserva não encontrada na BD da Multipark" });
+    const park = { id: live.park?.id ?? null, name: live.park?.name ?? null, city: live.park?.city ?? null };
+    res.json({ success: true, local: null, live, park });
   }));
 
   // ── RECLAMAÇÕES ───────────────────────────────────────────────────────────────
@@ -479,17 +479,12 @@ export function createMcpApiRouter(): Router {
       getMultiparkBookingStats({ from, to }),
       getComplaintStats(),
     ]);
-    let byCity: any[] = [];
-    if (d) {
-      const conds: any[] = [];
-      if (from) conds.push(sql`${multiparkBookings.checkIn} >= ${from}`);
-      if (to) conds.push(sql`${multiparkBookings.checkIn} <= ${to}`);
-      byCity = await d
-        .select({ city: multiparkBookings.city, count: sql<number>`COUNT(*)`, revenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}),0)` })
-        .from(multiparkBookings)
-        .where(conds.length ? (and(...conds) as any) : undefined)
-        .groupBy(multiparkBookings.city);
-    }
+    // Entradas por cidade no período (ao vivo; por omissão, este mês).
+    const { lisbonDayOf } = await import("../shared/lisbonDay");
+    const today = lisbonDayOf(Date.now());
+    const { liveOperationsSummary } = await import("./opsStatsLive");
+    const ops = await liveOperationsSummary({ startDate: from?.slice(0, 10) || `${today.slice(0, 7)}-01`, endDate: to?.slice(0, 10) || today });
+    const byCity = (ops.actions.checkin?.byCity ?? []).map((c) => ({ city: c.name, count: c.count, revenue: c.revenue }));
     res.json({ success: true, bookings: bookingStats, complaints: complaintStats, byCity });
   }));
 

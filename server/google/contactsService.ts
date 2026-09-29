@@ -130,17 +130,13 @@ export async function desiredServiceFor(u: { userId: number; role: string; emplo
   const d = await db();
   const bookings: any[] = [];
   const all: ServiceWindow[] = [];
+  // Ao vivo na BD da Multipark (reservas ao vivo, parte B): recolhas/entregas da janela, com telefone.
+  const { readBookingsInWindow } = await import("../multiparkDb/bookingSearch");
   for (const [city, ws] of windows) {
     all.push(...ws);
-    const aliases = CITY_ALIASES[city] ?? [city];
     const from = new Date(Math.min(...ws.map((w) => w.fromMs))).toISOString().slice(0, 19).replace("T", " ");
     const to = new Date(Math.max(...ws.map((w) => w.toMs))).toISOString().slice(0, 19).replace("T", " ");
-    bookings.push(...rowsOf(await d.execute(sql`SELECT clientFirstName, clientLastName, clientPhone, licensePlate, status, checkIn, checkOut
-      FROM multipark_bookings
-      WHERE clientPhone IS NOT NULL AND clientPhone <> '' AND LOWER(TRIM(city)) IN (${inList(aliases)})
-        AND UPPER(COALESCE(status, '')) NOT LIKE '%CANCEL%'
-        AND ((checkIn >= ${from} AND checkIn < ${to}) OR (checkOut >= ${from} AND checkOut < ${to}))
-      LIMIT 3000`)));
+    bookings.push(...await readBookingsInWindow({ start: from, end: to, cities: CITY_ALIASES[city] ?? [city] }));
   }
   const toStr = (v: any) => (v == null ? null : v instanceof Date ? v.toISOString().slice(0, 19).replace("T", " ") : String(v));
   return desiredServiceContacts(bookings.map((b) => ({ ...b, checkIn: toStr(b.checkIn), checkOut: toStr(b.checkOut) })), all,
