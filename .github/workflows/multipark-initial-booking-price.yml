@@ -1,0 +1,54 @@
+name: BD Multipark — exportar preço inicial (cifrado)
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: Data de criação inicial (AAAA-MM-DD, Lisboa)
+        required: true
+        default: '2026-05-01'
+      to:
+        description: Data de criação final (vazio = agora)
+        required: false
+        default: ''
+      recipient_public_key:
+        description: Chave PÚBLICA RSA do destinatário, SPKI DER em base64 (nunca a chave privada)
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: multipark-initial-booking-price
+  cancel-in-progress: false
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.10.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Ler preços no servidor e cifrar o resultado
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          EXPORT_RECIPIENT_PUBLIC_KEY: ${{ inputs.recipient_public_key }}
+          FROM_DAY: ${{ inputs.from }}
+          TO_DAY: ${{ inputs.to }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CRON_SECRET"
+          args=(--remote https://dashboard.multipark.pt --from "$FROM_DAY" --out-dir exports/price-export-run)
+          if [ -n "$TO_DAY" ]; then args+=(--to "$TO_DAY"); fi
+          pnpm export:initial-booking-price "${args[@]}"
+          pnpm exec tsx scripts/seal-booking-price-export.ts exports/price-export-run exports/encrypted/booking-prices.enc.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: multipark-initial-booking-price-encrypted
+          path: exports/encrypted/booking-prices.enc.json
+          if-no-files-found: error
+          retention-days: 1

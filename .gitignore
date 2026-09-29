@@ -117,3 +117,6 @@ temp/
 
 # Vercel bundled API — keep api/index.js tracked for serverless detection
 .env*
+
+# Local operational exports (never publish booking data)
+/exports/
