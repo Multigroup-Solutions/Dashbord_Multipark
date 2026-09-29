@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compatible, feeSummary, ourTypeForPartner, ourTypeForPlan, partnerNameKey, planPartnerSync, type MpEntity, type OurPartnerRecord } from "../shared/partnerMultiparkSync";
+import { compatible, feeSummary, nameSimilarity, ourTypeForPartner, ourTypeForPlan, partnerNameKey, planPartnerSync, type MpEntity, type OurPartnerRecord } from "../shared/partnerMultiparkSync";
 import { monthlyFromPlan } from "./partnerMultiparkSync";
 
 const ent = (o: Partial<MpEntity> & Pick<MpEntity, "key" | "kind" | "name">): MpEntity => ({ altKeys: [], partnerType: null, active: true, snapshot: {}, ...o });
@@ -67,5 +67,30 @@ describe("parcerias ← Multipark: plano", () => {
   });
   it("sem a leitura completa não arquiva nada", () => {
     expect(planPartnerSync(entities, records, false).archives).toEqual([]);
+  });
+});
+
+describe("parcerias ← Multipark: nomes parecidos", () => {
+  it("Bestravel ≈ BestTravel (uma letra) liga; lojas diferentes não", () => {
+    expect(nameSimilarity(partnerNameKey("Agência Bestravel Castelo Branco"), partnerNameKey("BestTravel Castelo Branco"))).toBeGreaterThan(0.9);
+    expect(nameSimilarity(partnerNameKey("Agência Bestravel Castelo Branco"), partnerNameKey("Bestravel Maia"))).toBeLessThan(0.7);
+  });
+  it("liga o parecido em vez de criar um novo e arquivar o velho", () => {
+    const plan = planPartnerSync(
+      [ent({ key: "u-cb", kind: "partner", name: "Agência Bestravel Castelo Branco", partnerType: "agencia_viagem" })],
+      [rec({ id: 1, name: "BestTravel Castelo Branco", partnerType: "agencia_viagem" }), rec({ id: 2, name: "Bestravel Maia", partnerType: "agencia_viagem" })],
+    );
+    expect(plan.links).toMatchObject([{ recordId: 1, by: "parecido" }]);
+    expect(plan.creates).toEqual([]);
+    expect(plan.archives.map((a) => a.recordId)).toEqual([2]);
+  });
+  it("só parecido (um dentro do outro) fica à mão e não se arquiva", () => {
+    const plan = planPartnerSync(
+      [ent({ key: "u-x", kind: "partner", name: "Viagens Abreu Porto", partnerType: "agencia_viagem" })],
+      [rec({ id: 5, name: "Viagens Abreu", partnerType: "agencia_viagem" })],
+    );
+    expect(plan.ambiguous).toMatchObject([{ key: "u-x", candidates: [{ id: 5 }] }]);
+    expect(plan.archives).toEqual([]);
+    expect(plan.creates).toEqual([]);
   });
 });
