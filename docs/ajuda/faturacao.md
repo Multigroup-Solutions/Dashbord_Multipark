@@ -20,7 +20,19 @@ As reservas (receita, entregues, recolhidas, receita esperada e caixa) são lida
    - **Correção de caixa**: compara, quando carregas em **Comparar**, o que a Multipark nos disse pelo webhook (**era**) com a base de dados da Multipark agora (**é**). Ver abaixo.
 3. Os valores de margem são sem IVA. Despesas já contadas pelo RH/ponto não entram duas vezes.
 
-**Correção de caixa**
+**Correção de caixa — casos**
+1. No topo do separador **Correção de caixa** está a fila **Casos da varredura automática** (por explicar, por defeito), com as gravidades em cima. Filtra por **Fechados / resolvidos** ou **Todos** e pela gravidade.
+2. Carrega num caso para ver: o motivo, a tabela **era / é** (retratos do webhook e da varredura contra a Multipark agora), **quem mexeu no dinheiro** (História da Multipark) e o histórico do caso. Avisos a vermelho: **Mesma pessoa** (quem mudou o preço ou o método também validou ou fechou a caixa) e **Sem rasto na Multipark** (o dinheiro mudou sem nenhuma alteração registada).
+3. Quem confere a caixa (Faturação → gerir) pode: **Em análise** (vais corrigir na Multipark — quando a varredura confirmar, passa sozinho a **corrigido na Multipark**), **Fechar com explicação** (motivo + explicação de pelo menos 10 carateres; "Perda aceite" fica à parte), **Reabrir** e **Só juntar nota**. Tudo fica no histórico do caso, com quem e quando.
+4. Um caso fechado **reabre sozinho** se a divergência mudar; um resolvido reabre se voltar.
+5. Avisos: os casos graves (preço zerado, pago ≠ esperado, caixa fechada com divergência ou reaberta, reembolso por explicar, dinheiro do condutor por entregar, contagem ≠ esperado) mandam logo um aviso **Caixa: casos graves** (sino e email); todas as manhãs, depois do fecho do dia, chega o **Caixa: resumo diário** com o que falta explicar por cidade.
+
+**Contagem da caixa**
+1. Em **Contagem da caixa** escolhe o parque e o dia. Aparece o **recebido em dinheiro** nesse dia (pagamentos em dinheiro registados na Multipark).
+2. Acrescenta os **gastos pagos da caixa** (descrição, valor e n.º do recibo, se houver) e escreve o **valor contado**. O ecrã mostra o **esperado** (recebido − gastos) e a **diferença**.
+3. **Gravar contagem** (precisa de Faturação → editar). Se não bater (tolerância de 1 cêntimo), abre um caso **crítico** "Contagem ≠ esperado"; quando voltares a gravar e bater, resolve-se sozinho. Cada gravação fica registada (quem, quando, quanto).
+
+**Correção de caixa — comparar um dia**
 1. Separador **Correção de caixa**. Escolhe um ou mais parques (por defeito, os nossos; **Só os nossos** e **Limpar** ajudam) e o **dia** (hora de Lisboa).
 2. Carrega em **Comparar**. São comparadas as reservas com **saída** nesse dia. Só aparecem as que têm divergência, as mais graves primeiro:
    - **Preço zerado**: o webhook disse um preço e agora é 0 € (ou as linhas somam 0 €).

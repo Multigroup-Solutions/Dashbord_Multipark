@@ -14,6 +14,8 @@ import {
 } from "lucide-react";
 import FinanceExportButtons from "@/components/FinanceExportButtons";
 import CashCorrectionPanel from "@/components/cashCheck/CashCorrectionPanel";
+import CashCasesPanel from "@/components/cashCheck/CashCasesPanel";
+import CashCountPanel from "@/components/cashCheck/CashCountPanel";
 import FitAmount from "@/components/finance/FitAmount";
 import { STICKY_FIRST_COL, TABS_SCROLL } from "@/components/finance/layoutClasses";
 import { AXIS_TICK, CHART_TOOLTIP_STYLE, CHART_TOOLTIP_ITEM, eurAxis } from "@/lib/financeFormat";
@@ -48,7 +50,10 @@ export default function InvoicesPage() {
   }, [filters.cityId, filters.brandId]);
 
   const { data, isLoading } = trpc.invoices.billing.useQuery({ from, to, projectId, granularity });
-  const [tab, setTab] = useState("real");
+  // O alerta "Caixa: casos graves" abre /faturacao?tab=cash-check&case=N.
+  const [tab, setTab] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get("tab") === "cash-check" ? "cash-check" : "real"; } catch { return "real"; }
+  });
   const { data: cash, isLoading: cashLoading } = trpc.invoices.cash.useQuery({ from, to, projectId }, { enabled: tab === "cash" });
 
   const summary = data?.summary as any;
@@ -687,7 +692,13 @@ export default function InvoicesPage() {
             </TabsContent>
 
             <TabsContent value="cash-check" className="space-y-4">
-              {tab === "cash-check" && <CashCorrectionPanel projectId={projectId} />}
+              {tab === "cash-check" && (
+                <div className="space-y-4">
+                  <CashCasesPanel projectId={projectId} />
+                  <CashCountPanel projectId={projectId} />
+                  <CashCorrectionPanel projectId={projectId} />
+                </div>
+              )}
             </TabsContent>
           </Tabs>
         </>

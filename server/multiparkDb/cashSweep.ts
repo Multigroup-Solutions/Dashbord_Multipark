@@ -204,3 +204,26 @@ export async function readAgentPerms(parkIds: readonly string[], query: Query = 
   const { sql, params } = buildAgentPermsSql(parkIds);
   return (await query<J>(sql, params)).map(mapAgentPermsRow);
 }
+
+// ─── 4. Dinheiro recebido por parque (contagem da caixa, R24) ───────────────
+
+/** Pagamentos em dinheiro registados em [start, end) (UTC) nos parques dados, por parque. PURA. */
+export function buildCashReceivedSql(o: { parkIds: readonly string[]; start: string; end: string }): { sql: string; params: SqlParam[] } {
+  if (!o.parkIds.length) throw new Error("Sem parques.");
+  const p = new ParamList();
+  const sql = [
+    `SELECT b."parkId" AS park_id, SUM(z."amount") AS amount, count(*) AS n`,
+    `  FROM "BookingPricingPayment" z JOIN "BookingPricing" y ON y."id" = z."pricingId" JOIN "Booking" b ON b."id" = y."bookingId"`,
+    ` WHERE b."parkId" IN (${o.parkIds.map((id) => p.add(id)).join(", ")})`,
+    `   AND z."recordedAt" >= ${p.add(o.start)}::timestamp AND z."recordedAt" < ${p.add(o.end)}::timestamp`,
+    `   AND (lower(COALESCE(z."paymentMethod"::text, '')) LIKE '%cash%' OR lower(COALESCE(z."paymentMethod"::text, '')) LIKE '%dinheiro%' OR lower(COALESCE(z."paymentMethod"::text, '')) LIKE '%numer%')`,
+    ` GROUP BY 1 LIMIT ${p.add(o.parkIds.length)}`,
+  ].join("\n");
+  return { sql, params: p.values };
+}
+
+export async function readCashReceived(o: { parkIds: readonly string[]; start: string; end: string }, query: Query = multiparkDbQuery): Promise<Map<string, { amount: number; count: number }>> {
+  if (!o.parkIds.length) return new Map();
+  const { sql, params } = buildCashReceivedSql(o);
+  return new Map((await query<J>(sql, params)).map((r) => [String(r.park_id), { amount: n(r.amount) ?? 0, count: i(r.n) }]));
+}
