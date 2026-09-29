@@ -73,8 +73,9 @@ describe('autorizações adicionais e avisos na ficha', () => {
   });
   it('mostra a elevação real e identifica grants sem classificar todos como excessivos', () => {
     const result = userAccessSummary('extra', { 'extras_dia.team_leader': 'grant', 'city.extra.lisbon': 'grant', 'finance.view_totals': 'deny' });
-    expect(result.effectiveRole).toBe('team_leader');
-    expect(result.warnings).toHaveLength(3);
+    // o grant de TL só marca elegibilidade na escala — o papel não sobe
+    expect(result.effectiveRole).toBe('extra');
+    expect(result.warnings).toHaveLength(2);
     expect(result.permissions.find(p => p.id === 'finance.view_totals')?.enabled).toBe(false);
     expect(userAccessSummary('extra', {}).warnings).toEqual([]);
   });

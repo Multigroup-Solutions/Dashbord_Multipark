@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { can } from "@shared/access";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Loader2, CalendarCheck, CheckCircle2 } from "lucide-react";
@@ -7,7 +8,9 @@ import { toast } from "sonner";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { AvailabilitySection, CandidaturasSection } from "@/pages/ExtrasDiaPage";
 import { RecruitmentSection } from "@/components/RecruitmentSection";
-import { Mail } from "lucide-react";
+import { ExtrasMetricsSection } from "@/components/ExtrasMetricsSection";
+import { Mail, BarChart3, Users, ChevronDown, ChevronRight, CalendarDays } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 // Campos de cada dia partilhados com o diálogo do backoffice (ExtrasDiaPage →
 // AvailabilitySection): o extra e o backoffice marcam exatamente as mesmas coisas.
 import { AvailabilityDayFields, isDayMarked, type AvailabilityDayState as DayState } from "@/components/AvailabilityDayFields";
@@ -24,7 +27,6 @@ function useWeekParam(fallback: string): string {
 //   - backoffice e acima: hub de gestão — matriz de disponibilidades +
 //     envio email/WhatsApp + candidaturas do site (saíram da Extras Dia,
 //     que estava demasiado cheia). Quem é gestão não marca disponibilidade.
-const MANAGEMENT_ROLES = new Set(["backoffice", "team_leader", "supervisor", "admin", "super_admin"]);
 
 export default function DisponibilidadePage() {
   const { user, loading } = useAuth();
@@ -37,7 +39,7 @@ export default function DisponibilidadePage() {
     );
   }
 
-  if (MANAGEMENT_ROLES.has(user?.role ?? "")) {
+  if (can(user, "disponibilidade_extras", "view")) {
     return (
       <div className="space-y-6">
         <div>
@@ -50,19 +52,89 @@ export default function DisponibilidadePage() {
           </p>
         </div>
         <AvailabilitySection />
-        <CandidaturasSection />
-        <div>
-          <h2 className="text-lg font-semibold flex items-center gap-2 mb-3">
-            <Mail className="h-5 w-5 text-primary" />
-            Recrutamento (recursos-humanos@)
-          </h2>
+        {/* O resto do hub fica fechado por defeito (Jorge, set 2026: ao fazer
+            scroll aparecia tudo de uma vez). Fechado = não carrega nada. */}
+        <HubSection id="metricas" title="Métricas dos extras" icon={<BarChart3 className="h-5 w-5 text-primary" />}>
+          <ExtrasMetricsSection />
+        </HubSection>
+        <HubSection
+          id="candidaturas"
+          title="Candidaturas do site"
+          icon={<Users className="h-5 w-5 text-emerald-600" />}
+          badge={<NewApplicationsBadge />}
+        >
+          <CandidaturasSection />
+        </HubSection>
+        <HubSection id="recrutamento" title="Recrutamento (recursos-humanos@)" icon={<Mail className="h-5 w-5 text-primary" />}>
           <RecruitmentSection />
-        </div>
+        </HubSection>
       </div>
     );
   }
 
   return <MyAvailability />;
+}
+
+const HUB_OPEN_KEY = "mp.disponibilidade.sections.v1";
+
+function readOpenSections(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(HUB_OPEN_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Secção recolhível do hub; lembra-se de aberta/fechada neste browser. */
+function HubSection({
+  id,
+  title,
+  icon,
+  badge,
+  children,
+}: {
+  id: string;
+  title: string;
+  icon: React.ReactNode;
+  badge?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState<boolean>(() => readOpenSections()[id] ?? false);
+  function toggle() {
+    const next = !open;
+    setOpen(next);
+    try {
+      localStorage.setItem(HUB_OPEN_KEY, JSON.stringify({ ...readOpenSections(), [id]: next }));
+    } catch {
+      /* sem localStorage — só não fica lembrado */
+    }
+  }
+  return (
+    <section className="space-y-3">
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        className="w-full flex items-center gap-2 rounded-lg border bg-card px-3 py-3 text-left hover:bg-muted/40"
+      >
+        {open ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
+        {icon}
+        <span className="text-base font-semibold">{title}</span>
+        {badge}
+      </button>
+      {open && children}
+    </section>
+  );
+}
+
+/** "N novas" no cabeçalho das candidaturas, mesmo com a secção fechada. */
+function NewApplicationsBadge() {
+  const q = trpc.driverApplications.list.useQuery({ status: "new" }, { refetchInterval: 60_000 });
+  const n = q.data?.length ?? 0;
+  if (n === 0) return null;
+  return <Badge className="bg-blue-600 text-white hover:bg-blue-600">{n} nova{n > 1 ? "s" : ""}</Badge>;
 }
 
 function MyAvailability() {
@@ -77,6 +149,11 @@ function MyAvailability() {
 
   const [days, setDays] = useState<DayState[]>([]);
   const [savedOnce, setSavedOnce] = useState(false);
+  // Google Calendar (só leitura, livre/ocupado): ajuda a preencher — nada é marcado sozinho.
+  const busy = trpc.googleAccount.sync.busy.useQuery(
+    { fromDay: myWeek.data?.weekStart ?? weekStart, toDay: myWeek.data?.weekEnd ?? weekStart },
+    { enabled: !!myWeek.data?.weekStart && !!myWeek.data?.weekEnd, retry: false, staleTime: 5 * 60_000 },
+  );
 
   useEffect(() => {
     if (myWeek.data) setDays(myWeek.data.days);
@@ -130,6 +207,14 @@ function MyAvailability() {
             Semana de {myWeek.data?.weekStart} a {myWeek.data?.weekEnd}. Marca os dias e turnos
             em que podes trabalhar. Podes também indicar horas específicas.
           </CardDescription>
+          {busy.data?.enabled && (
+            <p className="text-[11.5px] text-muted-foreground">Mostramos as horas ocupadas no teu Google Calendar para te ajudar — a disponibilidade é sempre marcada por ti.</p>
+          )}
+          {busy.data?.reason === "scope_missing" && (
+            <p className="text-[11.5px] text-muted-foreground">
+              Queres ver aqui as horas ocupadas no teu Google Calendar? <a className="text-primary underline" href={`/api/google-account/oauth/start?features=calendar&returnTo=${encodeURIComponent("/disponibilidade")}`}>Ativar Calendário</a>
+            </p>
+          )}
         </CardHeader>
       </Card>
 
@@ -144,6 +229,12 @@ function MyAvailability() {
                   {savedOnce && active && <CheckCircle2 className="h-4 w-4 text-green-500" />}
                 </div>
                 <AvailabilityDayFields day={d} onChange={(p) => patch(idx, p)} />
+                {busy.data?.enabled && (busy.data.days[d.day]?.length ?? 0) > 0 && (
+                  <p className="text-[11.5px] text-muted-foreground flex items-start gap-1">
+                    <CalendarDays className="h-3.5 w-3.5 mt-0.5 shrink-0 text-primary" />
+                    <span>Ocupado no teu Google Calendar: {busy.data.days[d.day].map((b) => `${b.start}–${b.end}`).join(", ")}</span>
+                  </p>
+                )}
               </CardContent>
             </Card>
           );

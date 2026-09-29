@@ -49,6 +49,15 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 
 ## Changelog
 
+### 2026-09-21 — Fix: botões do diálogo desativados nos templates sem parâmetros
+**Type**: fix (NÃO deployado, sem migração)
+**Scope**: `client/src/pages/ExtrasDiaPage.tsx` (diálogo "Enviar WhatsApp" da tabela de disponibilidade)
+**What**:
+- "Enviar teste" e "Enviar a N extra(s)" estavam `disabled` por `!waParam2.trim()` — com "Morada e regras"/"Seja motorista" o campo não existe, logo nunca eram clicáveis (o `submitBroadcast` já tratava o caso; só os botões ficaram para trás no commit 2026-09-17 (c)).
+- Novo `waMissingParam = !!waTemplate.sharedParam && !waParam2.trim()` usado nos dois botões.
+**Why**: pedido do Jorge — impossível enviar a mensagem de morada e regras.
+**Notes**: RULE qualquer gate da UI sobre o campo partilhado tem de passar por `sharedParam` (null = template sem campo). Servidor (`noBodyParams`) já aceitava `bodyParam2` vazio.
+
 ### 2026-09-17 (c) — Templates sem parâmetros + página "Leads de Extras"
 **Type**: feature (**migração 0076** `extra_leads`, registada em `server/db.ts`; sem deploy)
 **Scope**: `shared/whatsappTemplate.ts`, `server/whatsappBroadcast.ts`, `server/extraLeads.ts` (+ test),

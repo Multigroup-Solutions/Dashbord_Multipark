@@ -1,4 +1,5 @@
 import { useAuth } from "@/_core/hooks/useAuth";
+import { PdaDeviceBinder } from "@/components/PdaDeviceBinder";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -56,12 +57,16 @@ import {
   Users,
   Trophy,
   GraduationCap,
+  BookOpen,
   Truck,
+  Radio,
   Megaphone,
   ParkingCircle,
   Wrench,
   MessageSquareWarning,
   MessageCircle,
+  Contact,
+  BookUser,
   Star,
   AlertTriangle,
   Package,
@@ -83,6 +88,8 @@ import {
   Bell,
   Calendar,
   X,
+  Mail as MailIcon,
+  Inbox,
 } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { CSSProperties, useEffect, useRef, useState } from "react";
@@ -94,118 +101,126 @@ import { Label } from "./ui/label";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { trpc } from "@/lib/trpc";
 import { MobileTabBar } from "@/components/MobileTabBar";
+import { AssistantWidget } from "@/components/assistant/AssistantWidget";
+import { GlobalSearch, GlobalSearchButton } from "@/components/GlobalSearch";
+import { WhatsAppCallManager } from "@/components/whatsapp/WhatsAppCallManager";
+import { GoogleOnlineSync } from "@/components/google/GoogleOnlineSync";
+import { can, roleRank, type AccessOverrides, type ModuleId } from "@shared/access";
+import { NOTIFICATION_KIND_DEFS, NOTIFY_CITY_LABELS, kindLabel, type NotifyCity } from "@shared/notificationRouting";
+
+/** Papel ou utilizador (com os overrides de módulo que vêm do auth.me). */
+export type AccessSubject = string | { role: string | null | undefined; accessOverrides?: AccessOverrides | null } | null | undefined;
 
 export type MenuItem = {
   icon: React.ElementType;
   label: string;
   path: string;
-  minRole?: string;
+  /** Módulo da matriz de acessos (shared/access.ts); visível com can(role, módulo, "view"). */
+  module?: ModuleId;
+  /** Alternativas: visível se QUALQUER destes módulos se vir (ex.: RH ou a própria ficha). */
+  anyOf?: ModuleId[];
 };
 
 export type MenuGroup = {
   label: string;
   items: MenuItem[];
-  minRole?: string;
   icon?: React.ElementType;
 };
 
-const ROLE_HIERARCHY: Record<string, number> = {
-  user: 0,
-  extra: 1,
-  frontoffice: 2,
-  backoffice: 3,
-  team_leader: 4,
-  supervisor: 5,
-  admin: 6,
-  super_admin: 7,
-};
-
-export function hasRole(userRole: string, minRole: string): boolean {
-  return (ROLE_HIERARCHY[userRole] ?? 0) >= (ROLE_HIERARCHY[minRole] ?? 0);
+/** O item é visível para a pessoa (papel + overrides)? (sem módulo = visível a qualquer sessão) */
+export function canSeeItem(userRole: AccessSubject, item: Pick<MenuItem, "module" | "anyOf">): boolean {
+  const mods = item.anyOf ?? (item.module ? [item.module] : []);
+  return mods.length === 0 || mods.some(m => can(userRole, m, "view"));
 }
 
-export function getFilteredMenuGroups(userRole: string): MenuGroup[] {
+export function getFilteredMenuGroups(userRole: AccessSubject): MenuGroup[] {
   return menuGroups
-    .filter(g => !g.minRole || hasRole(userRole, g.minRole))
-    .map(g => ({
-      ...g,
-      items: g.items.filter(i => !i.minRole || hasRole(userRole, i.minRole)),
-    }))
+    .map(g => ({ ...g, items: g.items.filter(i => canSeeItem(userRole, i)) }))
     .filter(g => g.items.length > 0);
 }
 
 // Itens fixos no topo, fora dos grupos — o mais usado nunca fica escondido
 // pelo acordeão.
 export const topLevelItems: MenuItem[] = [
-  // dashboards iniciais não aparecem ao frontoffice
-  { icon: BarChart3, label: "Dashboards", path: "/dashboards", minRole: "backoffice" },
+  { icon: BarChart3, label: "Dashboards", path: "/dashboards", module: "dashboards" },
 ];
 
+// Menu conduzido pela matriz de acessos (shared/access.ts) — o servidor aplica
+// a MESMA matriz (requireAccess), por isso o que aparece aqui é o que abre.
 export const menuGroups: MenuGroup[] = [
   {
     label: "Financeiro",
     icon: Receipt,
-    minRole: "frontoffice",
     items: [
-      { icon: Receipt, label: "Despesas", path: "/despesas" },
-      // Faturação / Projetos / Marketing escondidos do frontoffice
-      { icon: FileText, label: "Faturação", path: "/faturacao", minRole: "admin" },
-      { icon: Handshake, label: "Parcerias", path: "/parcerias" },
-      { icon: FolderTree, label: "Projetos", path: "/projetos", minRole: "backoffice" },
-      { icon: Megaphone, label: "Marketing", path: "/marketing", minRole: "backoffice" },
+      { icon: Receipt, label: "Despesas", path: "/despesas", module: "despesas" },
+      { icon: FileText, label: "Faturação", path: "/faturacao", module: "faturacao" },
+      { icon: Handshake, label: "Parcerias", path: "/parcerias", module: "parcerias" },
+      { icon: FolderTree, label: "Projetos", path: "/projetos", module: "projetos" },
+      { icon: Megaphone, label: "Marketing", path: "/marketing", module: "marketing" },
     ],
   },
   {
     label: "Pessoas",
     icon: Users,
     items: [
-      // RH visível a todos os roles (user/extra veem só o próprio perfil)
-      { icon: UserCheck, label: "Recursos Humanos", path: "/rh" },
-      { icon: UserPlus, label: "Leads de Extras", path: "/extras-leads", minRole: "backoffice" },
-      { icon: GraduationCap, label: "Formação", path: "/formacao", minRole: "extra" },
-      // extra vê a própria avaliação (última semana) — filtrado no servidor
-      { icon: Trophy, label: "Avaliação Individual", path: "/avaliacao", minRole: "extra" },
-      { icon: Trophy, label: "Avaliação Operacional", path: "/avaliacao-operacional", minRole: "backoffice" },
+      // RH: quem gere fichas vê a lista; os restantes veem só a própria ficha
+      { icon: UserCheck, label: "Recursos Humanos", path: "/rh", anyOf: ["rh", "ficha"] },
+      { icon: UserPlus, label: "Leads de Extras", path: "/extras-leads", module: "leads_extras" },
+      { icon: GraduationCap, label: "Formação", path: "/formacao", module: "formacao" },
+      // Base de conhecimento (manuais do Drive/carregados): gestão admin/super_admin.
+      { icon: BookOpen, label: "Base de conhecimento", path: "/formacao/conhecimento", module: "definicoes" },
+      // Avaliação: separadores "Dia" (avaliacao_operacional) e "4 semanas";
+      // extra/condutor veem a própria avaliação — filtrado no servidor
+      { icon: Trophy, label: "Avaliação", path: "/avaliacao", anyOf: ["avaliacao", "avaliacao_operacional"] },
     ],
   },
   {
     label: "Operações",
     icon: Truck,
-    // Operações escondidas do frontoffice (backoffice+); Tarefas/Disponibilidade
-    // são a exceção — extra+ vê (extra só as suas)
     items: [
-      { icon: LayoutDashboard, label: "Reservas & Operações", path: "/operacoes", minRole: "backoffice" },
-      { icon: Wrench, label: "Serviços", path: "/servicos", minRole: "backoffice" },
-      { icon: Truck, label: "Actividade Diária", path: "/operacional", minRole: "backoffice" },
-      { icon: ListTodo, label: "Tarefas", path: "/tarefas", minRole: "extra" },
-      { icon: CalendarDays, label: "Extras Dia", path: "/extras-dia", minRole: "backoffice" },
-      { icon: CalendarCheck, label: "Passagem de Turno", path: "/passagem-turno", minRole: "team_leader" },
-      { icon: CalendarCheck, label: "Disponibilidade", path: "/disponibilidade", minRole: "extra" },
-      { icon: MessageCircle, label: "WhatsApp", path: "/whatsapp", minRole: "backoffice" },
+      { icon: LayoutDashboard, label: "Reservas & Operações", path: "/operacoes", module: "reservas_operacoes" },
+      { icon: Wrench, label: "Serviços", path: "/servicos", module: "servicos" },
+      { icon: Truck, label: "Actividade Diária", path: "/operacional", anyOf: ["atividade_diaria", "historico_diario"] },
+      { icon: Radio, label: "Rádio", path: "/radio", module: "radio" },
+      { icon: ListTodo, label: "Tarefas", path: "/tarefas", module: "tarefas" },
+      { icon: CalendarDays, label: "Extras Dia", path: "/extras-dia", module: "extras_dia" },
+      { icon: CalendarCheck, label: "Passagem de Turno", path: "/passagem-turno", module: "passagem_turno" },
+      { icon: CalendarCheck, label: "Disponibilidade", path: "/disponibilidade", anyOf: ["disponibilidade", "disponibilidade_extras"] },
+      { icon: MessageCircle, label: "WhatsApp", path: "/whatsapp", module: "whatsapp" },
     ],
   },
   {
     label: "Suporte",
     icon: MessageSquareWarning,
-    minRole: "frontoffice",
     items: [
-      { icon: MessageSquareWarning, label: "Reclamações", path: "/reclamacoes" },
-      { icon: Star, label: "Críticas Google", path: "/criticas" },
-      { icon: AlertTriangle, label: "Ocorrências", path: "/ocorrencias" },
-      { icon: Package, label: "Perdidos e Achados", path: "/perdidos-achados" },
+      { icon: Contact, label: "Clientes", path: "/clientes", module: "clientes" },
+      { icon: BookUser, label: "Contactos", path: "/contactos", module: "contactos" },
+      { icon: MessageSquareWarning, label: "Reclamações", path: "/reclamacoes", module: "reclamacoes" },
+      { icon: Star, label: "Críticas Google", path: "/criticas", module: "criticas" },
+      { icon: AlertTriangle, label: "Ocorrências", path: "/ocorrencias", module: "ocorrencias" },
+      { icon: Package, label: "Perdidos e Achados", path: "/perdidos-achados", module: "perdidos" },
+    ],
+  },
+  {
+    label: "Comunicação",
+    icon: MailIcon,
+    items: [
+      // Caixas partilhadas: matriz (comunicacao) + regra de cada caixa no servidor.
+      { icon: Inbox, label: "Caixas partilhadas", path: "/comunicacao", module: "comunicacao" },
+      // O próprio email: qualquer pessoa (a ficha é de todos); liga a conta Google na página.
+      { icon: MailIcon, label: "O meu email", path: "/comunicacao/meu-email", anyOf: ["ficha"] },
     ],
   },
   {
     label: "Sistema",
     icon: SlidersHorizontal,
-    minRole: "admin",
     items: [
-      { icon: Users, label: "Utilizadores", path: "/utilizadores" },
-      { icon: ShieldCheck, label: "Permissões", path: "/permissoes" },
-      { icon: RefreshCw, label: "Sincronização", path: "/multipark/sync" },
-      { icon: Key, label: "API Keys", path: "/api-keys" },
-      { icon: Plug, label: "Integrações", path: "/integracoes/google-ads" },
-      { icon: ScrollText, label: "Logs", path: "/logs" },
+      { icon: Users, label: "Utilizadores", path: "/utilizadores", module: "utilizadores" },
+      { icon: ShieldCheck, label: "Permissões", path: "/permissoes", module: "permissoes" },
+      { icon: Key, label: "API Keys", path: "/api-keys", module: "api_keys" },
+      { icon: Plug, label: "Integrações", path: "/integracoes", module: "integracoes" },
+      { icon: ScrollText, label: "Logs", path: "/logs", module: "logs" },
+      { icon: SlidersHorizontal, label: "Definições", path: "/definicoes", module: "definicoes" },
     ],
   },
 ];
@@ -220,14 +235,15 @@ export const hubGroups: HubGroup[] = [
     id: "dashboards",
     label: "Dashboards",
     icon: BarChart3,
-    minRole: "backoffice",
     items: [
-      { icon: BarChart3, label: "Geral", path: "/dashboards" },
-      { icon: Receipt, label: "Financeiro", path: "/financeiro" },
-      { icon: Truck, label: "Operações", path: "/operacoes-dashboard" },
-      { icon: Users, label: "Pessoas", path: "/pessoas-dashboard" },
-      { icon: MessageSquareWarning, label: "Suporte", path: "/suporte-dashboard" },
-      { icon: Megaphone, label: "Marketing", path: "/marketing" },
+      { icon: BarChart3, label: "Geral", path: "/dashboards", module: "dashboards" },
+      { icon: Receipt, label: "Financeiro", path: "/financeiro", module: "financeiro" },
+      { icon: Truck, label: "Operações", path: "/operacoes-dashboard", module: "dashboards" },
+      { icon: Users, label: "Pessoas", path: "/pessoas-dashboard", module: "dashboards" },
+      { icon: MessageSquareWarning, label: "Suporte", path: "/suporte-dashboard", module: "dashboards" },
+      // Um só endereço para o Marketing (24 set 2026): /marketing-dashboard era
+      // uma cópia do mesmo dashboard e agora redireciona para /marketing.
+      { icon: Megaphone, label: "Marketing", path: "/marketing", module: "marketing" },
     ],
   },
   ...menuGroups.map(g => ({
@@ -235,10 +251,9 @@ export const hubGroups: HubGroup[] = [
     id: g.label.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase(),
   })),
 ];
-export function getFilteredHubGroups(userRole: string): HubGroup[] {
+export function getFilteredHubGroups(userRole: AccessSubject): HubGroup[] {
   return hubGroups
-    .filter(g => !g.minRole || hasRole(userRole, g.minRole))
-    .map(g => ({ ...g, items: g.items.filter(i => !i.minRole || hasRole(userRole, i.minRole)) }))
+    .map(g => ({ ...g, items: g.items.filter(i => canSeeItem(userRole, i)) }))
     .filter(g => g.items.length > 0);
 }
 
@@ -365,6 +380,12 @@ function DashboardLayoutContent({
   // Ponto rápido a partir do avatar: estado atual + entrada/saída com selfie+GPS
   // (mesmas regras do ponto na ficha de RH).
   const utils = trpc.useUtils();
+  // Interruptor WHATSAPP_CALLS (desligado por omissão): sem ele não há polling de chamadas.
+  const callsFlag = trpc.whatsapp.calls.enabled.useQuery(undefined, {
+    enabled: !!user && can(user as any, "whatsapp", "edit"),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
   const pontoQ = trpc.rh.timeRecords.myStatus.useQuery(undefined, {
     enabled: !!employee,
     refetchInterval: 120_000,
@@ -419,9 +440,24 @@ function DashboardLayoutContent({
     );
   };
   const pontoStatus = pontoQ.data?.employeeId ? pontoQ.data.status : null;
-  const filteredGroups = getFilteredHubGroups(userRole);
+  const filteredGroups = getFilteredHubGroups(user ?? userRole);
   const filteredItems = filteredGroups.flatMap(g => g.items);
   const activeMenuItem = allMenuItems.find(item => item.path === location);
+  // Badge do WhatsApp: conversas por ler/por responder (só para quem tem o item no menu).
+  const showWhatsappBadge = filteredItems.some(i => i.path === "/whatsapp");
+  const waBadgeQ = trpc.whatsapp.badge.useQuery(undefined, {
+    enabled: showWhatsappBadge,
+    refetchInterval: 60_000,
+    retry: false,
+  });
+  const waBadge = showWhatsappBadge ? waBadgeQ.data : undefined;
+  // Badge da Comunicação: conversas com emails por ler (caixas visíveis / pessoal).
+  const showMailBadge = filteredItems.some(i => i.path.startsWith("/comunicacao"));
+  const mailBadgeQ = trpc.mail.badge.useQuery(undefined, { enabled: showMailBadge, refetchInterval: 120_000, retry: false });
+  const mailBadgeFor = (path: string): number => {
+    if (!showMailBadge || !mailBadgeQ.data) return 0;
+    return path === "/comunicacao" ? mailBadgeQ.data.shared : path === "/comunicacao/meu-email" ? mailBadgeQ.data.personal : 0;
+  };
   const isMobile = useIsMobile();
 
   // Acordeão: um grupo aberto de cada vez. Segue a rota ativa (também quando a
@@ -446,9 +482,9 @@ function DashboardLayoutContent({
   useEffect(() => {
     if (!user) return;
     const allowedPaths = new Set(filteredItems.map(i => i.path));
-    const isLowRole = (ROLE_HIERARCHY[userRole] ?? 0) < ROLE_HIERARCHY["backoffice"];
+    const isLowRole = roleRank(userRole) < roleRank("team_leader");
     if (isLowRole) {
-      // user/extra/frontoffice: whitelist estrita — qualquer rota fora do
+      // user/extra/condutor: whitelist estrita — qualquer rota fora do
       // menu permitido (incl. /dashboard e /dashboards) cai na 1ª permitida
       const base = "/" + (location.split("/")[1] ?? "");
       if (!allowedPaths.has(location) && !allowedPaths.has(base)) {
@@ -500,6 +536,8 @@ function DashboardLayoutContent({
 
   return (
     <>
+      {/* Fase 2: login num PDA registado → o PDA fica com esta pessoa */}
+      <PdaDeviceBinder userId={user?.id} />
       {/* Segurança: sem localização precisa + permissão de câmara, a app não
           funciona (overlay bloqueante). */}
       <div className="relative" ref={sidebarRef}>
@@ -515,7 +553,7 @@ function DashboardLayoutContent({
                 className="h-8 w-8 flex items-center justify-center hover:bg-accent rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring shrink-0"
                 aria-label="Toggle navigation"
               >
-                <PanelLeft className="h-4 w-4 text-gray-500" />
+                <PanelLeft className="h-4 w-4 text-slate-600" />
               </button>
               {!isCollapsed ? (
                 <img
@@ -581,7 +619,7 @@ function DashboardLayoutContent({
                           <>
                             <span className="flex-1 text-left truncate">{group.label}</span>
                             <span className={`text-[11px] font-bold rounded-full px-2 py-0.5 ${
-                              groupActive || isOpen ? "bg-white/[.22] text-white" : "bg-slate-100 text-slate-500"
+                              groupActive || isOpen ? "bg-[#0046ad] text-white" : "bg-slate-100 text-slate-600"
                             }`}>{group.items.length}</span>
                             <ChevronDown className={`mpk-chev h-4 w-4 transition-transform duration-200 ${
                               groupActive || isOpen ? "text-white/80" : "text-slate-400"
@@ -605,6 +643,24 @@ function DashboardLayoutContent({
                                 >
                                   <item.icon className="h-4 w-4" />
                                   <span>{item.label}</span>
+                                  {mailBadgeFor(item.path) > 0 && (
+                                    <span className="ml-auto group-data-[collapsible=icon]:hidden min-w-5 h-5 px-1.5 rounded-full text-[11px] font-bold leading-5 text-center text-white bg-primary"
+                                      title={`${mailBadgeFor(item.path)} conversa(s) com emails por ler`}>
+                                      {mailBadgeFor(item.path) > 99 ? "99+" : mailBadgeFor(item.path)}
+                                    </span>
+                                  )}
+                                  {item.path === "/whatsapp" && waBadge && waBadge.attention > 0 && (
+                                    <span
+                                      className={`ml-auto group-data-[collapsible=icon]:hidden min-w-5 h-5 px-1.5 rounded-full text-[11px] font-bold leading-5 text-center text-white ${
+                                        waBadge.overdue > 0 ? "bg-red-600" : "bg-green-600"
+                                      }`}
+                                      title={waBadge.overdue > 0
+                                        ? `${waBadge.attention} conversas por tratar · ${waBadge.overdue} sem resposta há mais de ${waBadge.slaMinutes} min`
+                                        : `${waBadge.attention} conversas por ler/responder`}
+                                    >
+                                      {waBadge.attention > 99 ? "99+" : waBadge.attention}
+                                    </span>
+                                  )}
                                 </SidebarMenuButton>
                               </SidebarMenuItem>
                             );
@@ -631,23 +687,28 @@ function DashboardLayoutContent({
       <SidebarInset>
         {/* Topbar */}
         <div className="flex border-b h-16 items-center justify-between bg-white px-4 lg:px-6 sticky top-0 z-40">
-          <div className="flex items-center gap-3 min-w-0">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
             {isMobile && (
               <SidebarTrigger className="h-9 w-9 rounded-lg bg-background" />
             )}
-            <h1 className="text-xl lg:text-[22px] font-bold text-[#0c1f3f] truncate">
+            <h1
+              className="text-lg sm:text-xl lg:text-[22px] font-bold text-foreground truncate"
+              title={activeMenuItem?.label ?? undefined}
+            >
               {activeMenuItem?.label ?? (location === "/modulos" ? "Menu" : location === "/perfil" ? "Perfil" : "Dashboard")}
             </h1>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            {/* Pesquisa global (Ctrl/Cmd+K) */}
+            <GlobalSearchButton />
             {/* City filter */}
             <Select
               disabled={filters.cities.length <= 1}
               value={filters.cityId === null ? "all" : String(filters.cityId)}
               onValueChange={(v) => filters.setCityId(v === "all" ? null : Number(v))}
             >
-              <SelectTrigger className="hidden md:flex h-9 w-[130px]">
+              <SelectTrigger className="hidden md:flex h-9 w-[168px]" aria-label="Filtro de cidade">
                 <SelectValue placeholder="Cidade" />
               </SelectTrigger>
               <SelectContent>
@@ -660,16 +721,16 @@ function DashboardLayoutContent({
               </SelectContent>
             </Select>
 
-            {/* Brand/Park filter */}
+            {/* Filtro de Marca (nós level=brand; antes dizia "Parque") */}
             <Select
               value={filters.brandId === null ? "all" : String(filters.brandId)}
               onValueChange={(v) => filters.setBrandId(v === "all" ? null : Number(v))}
             >
-              <SelectTrigger className="hidden md:flex h-9 w-[140px]">
-                <SelectValue placeholder="Parque" />
+              <SelectTrigger className="hidden md:flex h-9 w-[168px]" aria-label="Filtro de marca">
+                <SelectValue placeholder="Marca" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">Todos os parques</SelectItem>
+                <SelectItem value="all">Todas as marcas</SelectItem>
                 {filters.brands.map((brand) => (
                   <SelectItem key={brand.id} value={String(brand.id)}>
                     {brand.name}
@@ -689,7 +750,8 @@ function DashboardLayoutContent({
                   variant={filters.cityId !== null || filters.brandId !== null ? "default" : "outline"}
                   size="icon"
                   className="md:hidden h-9 w-9"
-                  title="Cidade e parques"
+                  title="Cidade e marca"
+                  aria-label="Cidade e marca"
                 >
                   <MapPin className="h-4 w-4" />
                 </Button>
@@ -712,14 +774,14 @@ function DashboardLayoutContent({
                   </Select>
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-xs">Parque</Label>
+                  <Label className="text-xs">Marca</Label>
                   <Select
                     value={filters.brandId === null ? "all" : String(filters.brandId)}
                     onValueChange={(v) => filters.setBrandId(v === "all" ? null : Number(v))}
                   >
-                    <SelectTrigger className="w-full h-9"><SelectValue placeholder="Parque" /></SelectTrigger>
+                    <SelectTrigger className="w-full h-9"><SelectValue placeholder="Marca" /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="all">Todos os parques</SelectItem>
+                      <SelectItem value="all">Todas as marcas</SelectItem>
                       {filters.brands.map((brand) => (
                         <SelectItem key={brand.id} value={String(brand.id)}>{brand.name}</SelectItem>
                       ))}
@@ -736,7 +798,7 @@ function DashboardLayoutContent({
             {/* User Avatar with dropdown */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-full">
+                <button className="focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-full" aria-label="Menu da conta">
                   <Avatar className="h-9 w-9 border cursor-pointer">
                     {photoUrl && <AvatarImage src={photoUrl} alt={user?.name ?? ""} className="object-cover" />}
                     <AvatarFallback className="text-xs font-medium bg-primary text-primary-foreground">
@@ -814,7 +876,9 @@ function DashboardLayoutContent({
           </div>
         </div>
 
-        <main className="flex-1 p-4 lg:p-6 min-w-0 overflow-x-hidden pb-20 md:pb-6" style={{ backgroundColor: '#F0F4FF' }}>
+        {/* pb extra: a última linha da página não fica por baixo da tab bar
+            (mobile) nem do botão flutuante do assistente */}
+        <main className="flex-1 p-4 lg:p-6 min-w-0 overflow-x-hidden pb-40 md:pb-24 lg:pb-24 bg-background">
           {filters.isLoading ? <p>A verificar o acesso às cidades…</p> : filters.missingCostCenter && location !== '/perfil' ? (
             <div role="status" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
               <strong>Sem centro de custos atribuído.</strong> O acesso às cidades fica indisponível até à atribuição.
@@ -824,6 +888,14 @@ function DashboardLayoutContent({
         </main>
         {/* Tab bar mobile (design Multipark Mobile) — só em ecrãs pequenos */}
         <MobileTabBar />
+        {/* Assistente (chat): botão flutuante em todas as páginas */}
+        <AssistantWidget />
+        {/* Pesquisa global: paleta Ctrl/Cmd+K */}
+        <GlobalSearch />
+        {/* Google Tarefas/Contactos enquanto o dashboard está aberto (heartbeat de 5 min) */}
+        <GoogleOnlineSync enabled={!!user} />
+        {/* Chamadas de voz do WhatsApp: toque + chamada em curso em qualquer página */}
+        <WhatsAppCallManager enabled={!!user && can(user as any, "whatsapp", "edit") && !!callsFlag.data?.enabled} userId={user?.id ?? null} />
       </SidebarInset>
     </>
   );
@@ -833,7 +905,11 @@ function NotificationsBell() {
   const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
   const countQ = trpc.notifications.unreadCount.useQuery(undefined, { refetchInterval: 60_000 });
-  const listQ = trpc.notifications.list.useQuery({ limit: 20 });
+  // Filtro por tipo (só os tipos que a pessoa pode receber).
+  const [kindFilter, setKindFilter] = useState<string>("");
+  const prefsQ = trpc.notifications.prefs.useQuery(undefined, { staleTime: 5 * 60_000 });
+  const listQ = trpc.notifications.list.useQuery({ limit: 30, kind: kindFilter || null });
+  const kindOptions = NOTIFICATION_KIND_DEFS.filter((d) => (prefsQ.data?.kinds ?? []).includes(d.kind));
   const markRead = trpc.notifications.markRead.useMutation({
     onSuccess: () => {
       utils.notifications.list.invalidate();
@@ -871,10 +947,15 @@ function NotificationsBell() {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button variant="outline" size="icon" className="relative h-9 w-9">
+        <Button
+          variant="outline"
+          size="icon"
+          className="relative h-9 w-9"
+          aria-label={count > 0 ? `Notificações (${count} por ler)` : "Notificações"}
+        >
           <Bell className="h-4 w-4" />
           {count > 0 && (
-            <span className="absolute -top-1 -right-1 h-4 min-w-[16px] px-1 rounded-full bg-destructive text-[10px] font-bold text-white flex items-center justify-center">
+            <span className="absolute -top-1.5 -right-1.5 h-[18px] min-w-[18px] px-1 rounded-full bg-destructive text-[11px] leading-none font-bold text-white flex items-center justify-center tabular-nums ring-2 ring-white">
               {count > 99 ? "99+" : count}
             </span>
           )}
@@ -882,7 +963,7 @@ function NotificationsBell() {
       </PopoverTrigger>
       <PopoverContent className="w-[min(24rem,calc(100vw-2rem))]" align="end">
         <div className="space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <h4 className="font-medium text-sm">Notificações</h4>
             {count > 0 && (
               <Button
@@ -896,9 +977,20 @@ function NotificationsBell() {
               </Button>
             )}
           </div>
+          {kindOptions.length > 1 && (
+            <select
+              value={kindFilter}
+              onChange={(e) => setKindFilter(e.target.value)}
+              aria-label="Filtrar por tipo"
+              className="w-full h-8 rounded-md border border-input bg-background px-2 text-xs"
+            >
+              <option value="">Todos os tipos</option>
+              {kindOptions.map((d) => <option key={d.kind} value={d.kind}>{d.label}</option>)}
+            </select>
+          )}
           <div className="space-y-1 max-h-80 overflow-y-auto">
             {items.length === 0 ? (
-              <p className="text-xs text-muted-foreground text-center py-6">Sem notificações</p>
+              <p className="text-xs text-muted-foreground text-center py-6">{kindFilter ? "Sem notificações deste tipo" : "Sem notificações"}</p>
             ) : (
               items.map((n: any) => (
                 <button
@@ -908,9 +1000,16 @@ function NotificationsBell() {
                 >
                   <div className={`h-2 w-2 rounded-full mt-2 shrink-0 ${n.isRead ? "bg-muted-foreground" : "bg-blue-500"}`} />
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm truncate">{n.title}</p>
+                    <p className="text-sm font-medium line-clamp-2 break-words">{n.title}</p>
                     {n.body && <p className="text-xs text-muted-foreground line-clamp-2 break-words">{n.body}</p>}
-                    <p className="text-[10px] text-muted-foreground mt-0.5">{fmtTime(n.createdAt)}</p>
+                    <p className="text-[11px] text-muted-foreground mt-0.5 flex flex-wrap items-center gap-x-1.5">
+                      <span>{fmtTime(n.createdAt)}</span>
+                      <span aria-hidden>·</span>
+                      <span>{kindLabel(n.kind)}</span>
+                      {n.cityKey && NOTIFY_CITY_LABELS[n.cityKey as NotifyCity] && (
+                        <span className="rounded border border-border px-1 leading-4 text-foreground/80">{NOTIFY_CITY_LABELS[n.cityKey as NotifyCity]}</span>
+                      )}
+                    </p>
                   </div>
                 </button>
               ))

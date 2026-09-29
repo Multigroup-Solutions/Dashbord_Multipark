@@ -1,7 +1,13 @@
-import { projectScope, bookingHistoryScope, employeeScope, userScope, partnerScope, scopedProjectIds, requireGlobalCityAccess } from './cityScope';
-import { and, asc, desc, eq, gte, lte, like, or, sql, aliasedTable, isNotNull, isNull, inArray, notInArray, getTableColumns, type SQL } from "drizzle-orm";
+import { projectScope, bookingHistoryScope, employeeScope, userScope, partnerScope, scopedProjectIds, requireGlobalCityAccess, gpsRowScope, pdaScope, cityNameScope } from './cityScope';
+import { TRPCError } from '@trpc/server';
+import { buildHandoverCurrent, buildHandoverInsert, buildHandoverList, buildHandoverUpdate, handoverBoundValues, type HandoverInput, type HandoverKey } from './shiftHandoverSql';
+import { decideHandoverWrite, diffHandoverFields, HANDOVER_CONFLICT_MESSAGE, HANDOVER_EXISTS_MESSAGE, operationalDayWindowUtc } from '../shared/shiftHandover';
+import { mergeStoredOpenItems, parseMaterialExceptions, parseOpenItems, type OpenItem } from '../shared/shiftHandoverAuto';
+import { and, asc, desc, eq, gte, lte, lt, ne, like, or, sql, aliasedTable, isNotNull, isNull, inArray, notInArray, getTableColumns, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { normalizeEmail } from "../shared/email";
+import { ACCESS_VALUES, actionsToLetters, isModuleId, lettersToActions, moduleOverrideKey, normalizeGrant, overrideActive, type Access, type AccessOverrides, type ModuleId, type ModuleOverride } from "../shared/access";
+import { cachedPermissionRows, type PermissionRow } from "./_core/accessContext";
 import { parseClothingItems } from "../shared/clothing";
 import {
   users,
@@ -22,12 +28,6 @@ import {
   InsertProjectEmployee,
   InsertTask,
   InsertActivityLog,
-  campaigns,
-  campaignDailyStats,
-  marketingExpenses,
-  InsertCampaign,
-  InsertCampaignDailyStat,
-  InsertMarketingExpense,
   vehicles,
   vehicleMovements,
   speedAlerts,
@@ -70,10 +70,7 @@ import {
   annualReports,
   multiparkBookings,
   multiparkBookingExtras,
-  multiparkSyncLogs,
   InsertMultiparkBooking,
-  multiparkDailySnapshots,
-  InsertMultiparkDailySnapshot,
   inviteTokens,
   InsertInviteToken,
   payslipHistory,
@@ -96,6 +93,9 @@ import {
 } from "../drizzle/schema";
 import type { LostFoundItem, LostFoundPhoto, LostFoundMessage } from "../drizzle/schema";
 import { ENV } from "./_core/env";
+import { lisbonToday } from "../shared/expensePeriods";
+import { lisbonDayRangeUtc } from "../shared/lisbonDay";
+import { isoWeekYearLisbon, incidentSlaHours, addHoursUtc, utcNowStr as caseUtcNowStr, incidentCountsAgainstDriver } from "../shared/caseRules";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 let _schemaEnsure: Promise<void> | null = null;
@@ -136,6 +136,59 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0074").then(m => ({ s: m.MIGRATION_0074_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0074 })),
       import("./migrations/migration_0075").then(m => ({ s: m.MIGRATION_0075_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0075 })),
       import("./migrations/migration_0076").then(m => ({ s: m.MIGRATION_0076_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0076 })),
+      import("./migrations/migration_0077").then(m => ({ s: m.MIGRATION_0077_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0077 })),
+      import("./migrations/migration_0078").then(m => ({ s: m.MIGRATION_0078_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0078 })),
+      import("./migrations/migration_0079").then(m => ({ s: m.MIGRATION_0079_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0079 })),
+      import("./migrations/migration_0080").then(m => ({ s: m.MIGRATION_0080_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0080 })),
+      import("./migrations/migration_0081").then(m => ({ s: m.MIGRATION_0081_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0081 })),
+      import("./migrations/migration_0082").then(m => ({ s: m.MIGRATION_0082_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0082 })),
+      import("./migrations/migration_0083").then(m => ({ s: m.MIGRATION_0083_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0083 })),
+      import("./migrations/migration_0084").then(m => ({ s: m.MIGRATION_0084_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0084 })),
+      import("./migrations/migration_0085").then(m => ({ s: m.MIGRATION_0085_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0085 })),
+      import("./migrations/migration_0086").then(m => ({ s: m.MIGRATION_0086_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0086 })),
+      import("./migrations/migration_0087").then(m => ({ s: m.MIGRATION_0087_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0087 })),
+      import("./migrations/migration_0088").then(m => ({ s: m.MIGRATION_0088_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0088 })),
+      import("./migrations/migration_0090").then(m => ({ s: m.MIGRATION_0090_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0090 })),
+      import("./migrations/migration_0091").then(m => ({ s: m.MIGRATION_0091_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0091 })),
+      import("./migrations/migration_0092").then(m => ({ s: m.MIGRATION_0092_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0092 })),
+      import("./migrations/migration_0093").then(m => ({ s: m.MIGRATION_0093_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0093 })),
+      import("./migrations/migration_0094").then(m => ({ s: m.MIGRATION_0094_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0094 })),
+      import("./migrations/migration_0095").then(m => ({ s: m.MIGRATION_0095_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0095 })),
+      import("./migrations/migration_0096").then(m => ({ s: m.MIGRATION_0096_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0096 })),
+      import("./migrations/migration_0097").then(m => ({ s: m.MIGRATION_0097_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0097 })),
+      import("./migrations/migration_0098").then(m => ({ s: m.MIGRATION_0098_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0098 })),
+      import("./migrations/migration_0099").then(m => ({ s: m.MIGRATION_0099_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0099 })),
+      import("./migrations/migration_0100").then(m => ({ s: m.MIGRATION_0100_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0100 })),
+      import("./migrations/migration_0101").then(m => ({ s: m.MIGRATION_0101_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0101 })),
+      import("./migrations/migration_0105").then(m => ({ s: m.MIGRATION_0105_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0105 })),
+      import("./migrations/migration_0110").then(m => ({ s: m.MIGRATION_0110_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0110 })),
+      import("./migrations/migration_0111").then(m => ({ s: m.MIGRATION_0111_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0111 })),
+      import("./migrations/migration_0115").then(m => ({ s: m.MIGRATION_0115_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0115 })),
+      import("./migrations/migration_0123").then(m => ({ s: m.MIGRATION_0123_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0123 })),
+      import("./migrations/migration_0125").then(m => ({ s: m.MIGRATION_0125_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0125 })),
+      import("./migrations/migration_0130").then(m => ({ s: m.MIGRATION_0130_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0130 })),
+      import("./migrations/migration_0138").then(m => ({ s: m.MIGRATION_0138_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0138 })),
+      import("./migrations/migration_0140").then(m => ({ s: m.MIGRATION_0140_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0140 })),
+      import("./migrations/migration_0145").then(m => ({ s: m.MIGRATION_0145_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0145 })),
+      import("./migrations/migration_0150").then(m => ({ s: m.MIGRATION_0150_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0150 })),
+      import("./migrations/migration_0155").then(m => ({ s: m.MIGRATION_0155_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0155 })),
+      import("./migrations/migration_0160").then(m => ({ s: m.MIGRATION_0160_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0160 })),
+      import("./migrations/migration_0165").then(m => ({ s: m.MIGRATION_0165_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0165 })),
+      import("./migrations/migration_0170").then(m => ({ s: m.MIGRATION_0170_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0170 })),
+      import("./migrations/migration_0175").then(m => ({ s: m.MIGRATION_0175_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0175 })),
+      import("./migrations/migration_0180").then(m => ({ s: m.MIGRATION_0180_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0180 })),
+      import("./migrations/migration_0185").then(m => ({ s: m.MIGRATION_0185_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0185 })),
+      import("./migrations/migration_0190").then(m => ({ s: m.MIGRATION_0190_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0190 })),
+      import("./migrations/migration_0195").then(m => ({ s: m.MIGRATION_0195_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0195 })),
+      import("./migrations/migration_0200").then(m => ({ s: m.MIGRATION_0200_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0200 })),
+      import("./migrations/migration_0205").then(m => ({ s: m.MIGRATION_0205_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0205 })),
+      import("./migrations/migration_0210").then(m => ({ s: m.MIGRATION_0210_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0210 })),
+      import("./migrations/migration_0215").then(m => ({ s: m.MIGRATION_0215_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0215 })),
+      import("./migrations/migration_0220").then(m => ({ s: m.MIGRATION_0220_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0220 })),
+      import("./migrations/migration_0225").then(m => ({ s: m.MIGRATION_0225_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0225 })),
+      import("./migrations/migration_0230").then(m => ({ s: m.MIGRATION_0230_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0230 })),
+      import("./migrations/migration_0235").then(m => ({ s: m.MIGRATION_0235_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0235 })),
+      import("./migrations/migration_0240").then(m => ({ s: m.MIGRATION_0240_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0240 })),
     ]);
     for (const { s, ok } of mods) {
       for (const stmt of s) {
@@ -154,6 +207,30 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
     }
   } catch (err: any) {
     console.warn("[Schema ensure] falhou:", String(err?.message ?? err).slice(0, 160));
+  }
+  // Passos de DADOS (código, uma vez, guardados por marca) — depois do SQL.
+  try {
+    const { runMigration0210Data } = await import("./migrations/migration_0210");
+    const r = await runMigration0210Data(db as any);
+    if (r.status === "applied" && r.patches.length) console.log("[Schema ensure] 0210 caixas de email:", r.patches.map((p) => `${p.mailboxKey} (${p.changes.join("; ")})`).join(" · ").slice(0, 500));
+  } catch (err: any) {
+    console.warn("[Schema ensure] 0210 (dados das caixas de email) falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+  }
+  try {
+    const { runMigration0215Collation } = await import("./migrations/migration_0215");
+    const converted = await runMigration0215Collation(db as any);
+    if (converted.length) console.log("[Schema ensure] 0215 CRM: collation igual à de multipark_bookings em", converted.join(", "));
+  } catch (err: any) {
+    console.warn("[Schema ensure] 0215 (collation do CRM) falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+  }
+  try {
+    // (Remetente de sistema lido pela própria migração — getSetting usaria
+    // getDb(), que espera por ESTE ensureRecentSchema.)
+    const { runMigration0230Data } = await import("./migrations/migration_0230");
+    const r = await runMigration0230Data(db as any);
+    if (r.status === "applied" && r.messages) console.log(`[Schema ensure] 0230 envios automáticos: ${r.messages} mensagem(ns), ${r.threads} conversa(s) escondida(s)/recalculada(s), ${r.sends} envio(s) na ficha dos extras`);
+  } catch (err: any) {
+    console.warn("[Schema ensure] 0230 (envios automáticos na Comunicação) falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
   }
 }
 
@@ -307,7 +384,7 @@ export async function createManualUser(data: { name: string; email: string; role
   return result[0];
 }
 
-export async function updateUser(userId: number, data: { name?: string; email?: string; role?: string; department?: string | null; isActive?: boolean }) {
+export async function updateUser(userId: number, data: { name?: string; email?: string; role?: string; department?: string | null; isActive?: boolean }, opts: { relinkEmployees?: boolean } = {}) {
   const db = await getDb();
   if (!db) return;
   const updates: Record<string, any> = {};
@@ -324,6 +401,14 @@ export async function updateUser(userId: number, data: { name?: string; email?: 
   }
   if (Object.keys(updates).length > 0) {
     await db.update(users).set(updates).where(eq(users.id, userId));
+  }
+  // Fase 1: email novo → liga fichas com esse email que ainda não têm conta
+  // (nunca a partir de uma auto-edição — ver users.update).
+  if (updates.email && opts.relinkEmployees !== false) {
+    try {
+      const { linkEmployeesToUserByEmail } = await import("./identity");
+      await linkEmployeesToUserByEmail(db as any, userId, updates.email);
+    } catch (err) { console.warn("[updateUser] religar fichas:", err); }
   }
 }
 
@@ -549,7 +634,7 @@ export async function findPossibleDuplicateExpense(input: {
   let where: SQL = and(or(...conds), projectScope(expenses.projectId)) as SQL;
   if (input.excludeId) where = and(where, sql`${expenses.id} <> ${input.excludeId}`) as SQL;
   const rows = await db
-    .select({ id: expenses.id, supplier: expenses.supplier, amount: expenses.amount, expenseDate: expenses.expenseDate, documentNumber: expenses.documentNumber, status: expenses.status })
+    .select({ id: expenses.id, supplier: expenses.supplier, amount: expenses.amount, expenseDate: expenses.expenseDate, documentNumber: expenses.documentNumber, status: expenses.status, insertedById: expenses.insertedById, projectId: expenses.projectId })
     .from(expenses).where(where).orderBy(desc(expenses.id)).limit(1);
   return rows[0] ?? null;
 }
@@ -614,31 +699,39 @@ export async function getExpenseStats() {
   const db = await getDb();
   if (!db) return null;
 
-  const now = new Date();
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const startOfWeek = new Date(now);
-  startOfWeek.setDate(now.getDate() - now.getDay());
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  const startOfYear = new Date(now.getFullYear(), 0, 1);
+  // Dias de calendário em Lisboa; semana começa à segunda. Canceladas fora,
+  // como na lista, no Excel e nas Finanças (shared/expenseTotals).
+  const today = lisbonToday();
+  const [ty, tm, td] = today.split("-").map(Number);
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  const todayUtc = new Date(Date.UTC(ty, tm - 1, td));
+  const monday = new Date(todayUtc);
+  monday.setUTCDate(td - ((todayUtc.getUTCDay() + 6) % 7));
+  const startOfDay = `${today} 00:00:00`;
+  const startOfWeek = `${iso(monday)} 00:00:00`;
+  const startOfMonth = `${today.slice(0, 7)}-01 00:00:00`;
+  const startOfYear = `${ty}-01-01 00:00:00`;
+  const trendStart = `${iso(new Date(Date.UTC(ty, tm - 1 - 5, 1)))} 00:00:00`;
+  const live = ne(expenses.status, "cancelled");
 
-  const [daily, weekly, monthly, yearly, byCategory, byProject, byUser, pending, overdue] =
+  const [daily, weekly, monthly, yearly, byCategory, byProject, byUser, pending, overdue, paidYear] =
     await Promise.all([
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(and(projectScope(expenses.projectId), gte(expenses.expenseDate, toMysqlDateTime(startOfDay)))),
+        .where(and(projectScope(expenses.projectId), live, gte(expenses.expenseDate, startOfDay))),
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(and(projectScope(expenses.projectId), gte(expenses.expenseDate, toMysqlDateTime(startOfWeek)))),
+        .where(and(projectScope(expenses.projectId), live, gte(expenses.expenseDate, startOfWeek))),
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(and(projectScope(expenses.projectId), gte(expenses.expenseDate, toMysqlDateTime(startOfMonth)))),
+        .where(and(projectScope(expenses.projectId), live, gte(expenses.expenseDate, startOfMonth))),
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(and(projectScope(expenses.projectId), gte(expenses.expenseDate, toMysqlDateTime(startOfYear)))),
+        .where(and(projectScope(expenses.projectId), live, gte(expenses.expenseDate, startOfYear))),
       db
         .select({
           categoryId: expenses.categoryId,
@@ -649,7 +742,7 @@ export async function getExpenseStats() {
         })
         .from(expenses)
         .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
-        .where(and(projectScope(expenses.projectId), gte(expenses.expenseDate, toMysqlDateTime(startOfMonth))))
+        .where(and(projectScope(expenses.projectId), live, gte(expenses.expenseDate, startOfMonth)))
         .groupBy(expenses.categoryId, expenseCategories.name, expenseCategories.color)
         .orderBy(desc(sql`SUM(expenses.amount)`))
         .limit(8),
@@ -662,7 +755,7 @@ export async function getExpenseStats() {
         })
         .from(expenses)
         .leftJoin(projects, eq(expenses.projectId, projects.id))
-        .where(and(projectScope(expenses.projectId), gte(expenses.expenseDate, toMysqlDateTime(startOfMonth))))
+        .where(and(projectScope(expenses.projectId), live, gte(expenses.expenseDate, startOfMonth)))
         .groupBy(expenses.projectId, projects.name)
         .orderBy(desc(sql`SUM(expenses.amount)`))
         .limit(5),
@@ -675,7 +768,7 @@ export async function getExpenseStats() {
         })
         .from(expenses)
         .leftJoin(users, eq(expenses.insertedById, users.id))
-        .where(and(projectScope(expenses.projectId), gte(expenses.expenseDate, toMysqlDateTime(startOfMonth))))
+        .where(and(projectScope(expenses.projectId), live, gte(expenses.expenseDate, startOfMonth)))
         .groupBy(expenses.insertedById, users.name)
         .orderBy(desc(sql`SUM(expenses.amount)`))
         .limit(5),
@@ -687,6 +780,10 @@ export async function getExpenseStats() {
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
         .where(and(projectScope(expenses.projectId), eq(expenses.status, "overdue"))),
+      db
+        .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
+        .from(expenses)
+        .where(and(projectScope(expenses.projectId), eq(expenses.status, "paid"), gte(expenses.expenseDate, startOfYear))),
     ]);
 
   // Monthly trend (last 6 months)
@@ -697,7 +794,7 @@ export async function getExpenseStats() {
       count: sql<number>`COUNT(*)`,
     })
     .from(expenses)
-    .where(and(projectScope(expenses.projectId), gte(expenses.expenseDate, toMysqlDateTime(new Date(now.getFullYear(), now.getMonth() - 5, 1)))))
+    .where(and(projectScope(expenses.projectId), live, gte(expenses.expenseDate, trendStart)))
     .groupBy(sql`DATE_FORMAT(expenseDate, '%Y-%m')`)
     .orderBy(sql`DATE_FORMAT(expenseDate, '%Y-%m')`);
 
@@ -711,6 +808,7 @@ export async function getExpenseStats() {
     byUser: byUser.map((u) => ({ ...u, total: parseFloat(u.total || "0") })),
     pending: { total: parseFloat(pending[0]?.total || "0"), count: pending[0]?.count || 0 },
     overdue: { total: parseFloat(overdue[0]?.total || "0"), count: overdue[0]?.count || 0 },
+    paidYear: { total: parseFloat(paidYear[0]?.total || "0"), count: paidYear[0]?.count || 0 },
     monthlyTrend: monthlyTrend.map((m) => ({ ...m, total: parseFloat(m.total || "0") })),
   };
 }
@@ -718,9 +816,9 @@ export async function getExpenseStats() {
 export async function getUpcomingPayments(daysAhead = 7) {
   const db = await getDb();
   if (!db) return [];
-  const now = new Date();
-  const future = new Date();
-  future.setDate(future.getDate() + daysAhead);
+  const today = lisbonToday();
+  const end = new Date(`${today}T12:00:00Z`);
+  end.setUTCDate(end.getUTCDate() + daysAhead);
 
   return db
     .select({
@@ -735,8 +833,8 @@ export async function getUpcomingPayments(daysAhead = 7) {
       and(
         eq(expenses.status, "pending"),
         projectScope(expenses.projectId),
-        gte(expenses.paymentDueDate, toMysqlDateTime(now)),
-        lte(expenses.paymentDueDate, toMysqlDateTime(future))
+        gte(expenses.paymentDueDate, `${today} 00:00:00`),
+        lte(expenses.paymentDueDate, `${end.toISOString().slice(0, 10)} 23:59:59`)
       )
     )
     .orderBy(expenses.paymentDueDate);
@@ -745,22 +843,23 @@ export async function getUpcomingPayments(daysAhead = 7) {
 export async function getOverdueExpenses() {
   const db = await getDb();
   if (!db) return [];
-  const now = new Date();
+  const today = lisbonToday();
   return db
     .select({ expense: expenses, insertedBy: users })
     .from(expenses)
     .leftJoin(users, eq(expenses.insertedById, users.id))
-    .where(and(projectScope(expenses.projectId), eq(expenses.status, "pending"), lte(expenses.paymentDueDate, toMysqlDateTime(now))));
+    .where(and(projectScope(expenses.projectId), eq(expenses.status, "pending"), lt(expenses.paymentDueDate, `${today} 00:00:00`)));
 }
 
 export async function markOverdueExpenses() {
   const db = await getDb();
   if (!db) return;
-  const now = new Date();
+  // Vence hoje ≠ em atraso: só passa a atraso no dia seguinte (dia de Lisboa)
+  const today = lisbonToday();
   await db
     .update(expenses)
     .set({ status: "overdue" })
-    .where(and(projectScope(expenses.projectId), eq(expenses.status, "pending"), lte(expenses.paymentDueDate, toMysqlDateTime(now))));
+    .where(and(projectScope(expenses.projectId), eq(expenses.status, "pending"), lt(expenses.paymentDueDate, `${today} 00:00:00`)));
 }
 
 // ─── ACTIVITY LOGS ────────────────────────────────────────────────────────────
@@ -771,20 +870,64 @@ export async function logActivity(data: InsertActivityLog) {
   await db.insert(activityLogs).values(data);
 }
 
-export async function getActivityLogs(limit = 100, filters: { entity?: string; action?: string; userId?: number } = {}) {
+export async function getActivityLogs(limit = 100, filters: {
+  entity?: string; action?: string; userId?: number;
+  /** "YYYY-MM-DD HH:MM:SS" (UTC), inclusivo. */
+  from?: string;
+  /** "YYYY-MM-DD HH:MM:SS" (UTC), exclusivo. */
+  to?: string;
+  /** Pesquisa no servidor (LIKE parametrizado) em detalhes/ação/entidade/nome. */
+  search?: string;
+} = {}) {
   const db = await getDb();
   if (!db) return [];
   const conds: any[] = [];
   if (filters.entity) conds.push(eq(activityLogs.entity, filters.entity));
   if (filters.action) conds.push(eq(activityLogs.action, filters.action));
   if (filters.userId) conds.push(eq(activityLogs.userId, filters.userId));
+  if (filters.from) conds.push(gte(activityLogs.createdAt, filters.from));
+  if (filters.to) conds.push(lt(activityLogs.createdAt, filters.to));
+  const q = (filters.search ?? "").trim();
+  if (q) {
+    // Escapa os curingas do LIKE: a pesquisa é literal.
+    const pattern = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    conds.push(or(like(activityLogs.details, pattern), like(activityLogs.action, pattern), like(activityLogs.entity, pattern), like(users.name, pattern)));
+  }
+  // Só as colunas do utilizador que a página mostra (nunca o registo inteiro).
   return db
-    .select({ log: activityLogs, user: users })
+    .select({ log: activityLogs, user: { id: users.id, name: users.name, email: users.email } })
     .from(activityLogs)
     .leftJoin(users, eq(activityLogs.userId, users.id))
     .where(conds.length > 0 ? and(...conds) : undefined)
     .orderBy(desc(activityLogs.createdAt))
     .limit(Math.min(Math.max(limit, 1), 2000));
+}
+
+/** Entidades distintas presentes no registo (para o filtro da página de Logs). */
+export async function getActivityLogEntities(): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.selectDistinct({ entity: activityLogs.entity }).from(activityLogs).orderBy(asc(activityLogs.entity));
+  return rows.map((r) => r.entity).filter(Boolean);
+}
+
+/**
+ * Retenção: apaga registos com mais de 12 meses em lotes de 5000
+ * (`DELETE … WHERE createdAt < ? LIMIT n` — sem subquery sobre a própria
+ * tabela). Chamado pelo daily-ops; o que não couber no prazo fica para o dia
+ * seguinte.
+ */
+export async function purgeOldActivityLogs(opts: { deadlineAt?: number; now?: Date } = {}) {
+  const db = await getDb();
+  if (!db) return { deleted: 0, batches: 0, done: true, cutoff: null as string | null };
+  const { activityLogCutoff, purgeInBatches } = await import("./opsRules");
+  const { extractAffectedRows } = await import("./availabilityFormToken");
+  const cutoff = activityLogCutoff(opts.now ?? new Date());
+  const r = await purgeInBatches(async (limit) => {
+    const res = await db.execute(sql`DELETE FROM activity_logs WHERE createdAt < ${cutoff} LIMIT ${sql.raw(String(Math.max(1, Math.floor(limit))))}`);
+    return extractAffectedRows(res);
+  }, { deadlineAt: opts.deadlineAt });
+  return { ...r, cutoff };
 }
 
 // ─── RH: EMPLOYEES ────────────────────────────────────────────────────────────
@@ -856,7 +999,7 @@ export async function getZelloLiveMappings(): Promise<Array<{ zelloUsername: str
     FROM pda_checkins c
     JOIN employees e ON e.id = c.employeeId
     LEFT JOIN pdas p ON p.id = c.pdaId
-    WHERE c.checkinStatus = 'checked_in'
+    WHERE c.checkin_status = 'checked_in'
       AND COALESCE(p.zelloUsername, c.zelloUsername) IS NOT NULL`) as any;
   const out: Array<{ zelloUsername: string; employeeId: number; fullName: string; source: "pda" | "fixed"; pdaName: string | null }> = [];
   for (const r of (fixed as any[]) ?? []) {
@@ -883,7 +1026,15 @@ export async function getEmployeeByUserId(userId: number) {
   const result = await db.select({ employee: employees, project: projects }).from(employees)
     .leftJoin(projects, eq(employees.projectId, projects.id))
     .where(eq(employees.userId, userId)).limit(1);
-  return result[0];
+  if (result[0]) return result[0];
+  // Conta EXTRA (ex.: email pessoal além do profissional) → a mesma ficha
+  const { employeeIdForAliasUser } = await import("./employeeAliases");
+  const empId = await employeeIdForAliasUser(userId);
+  if (empId == null) return undefined;
+  const alias = await db.select({ employee: employees, project: projects }).from(employees)
+    .leftJoin(projects, eq(employees.projectId, projects.id))
+    .where(eq(employees.id, empId)).limit(1);
+  return alias[0];
 }
 
 export async function createEmployee(data: InsertEmployee) {
@@ -1505,12 +1656,13 @@ export async function seedExtraRates() {
   if (!db) return;
   const existing = await db.select().from(extraRates).limit(1);
   if (existing.length > 0) return;
+  // Os 4 níveis canónicos (= migração 0044 e server/extraRates.ts). Antes
+  // tinha 5 níveis com valores antigos e INVERTIDOS (nível 1 = 8,50 €).
   const defaults = [
-    { level: 1, hourlyRate: "8.50", label: "Extra Nível 1" },
-    { level: 2, hourlyRate: "7.00", label: "Extra Nível 2" },
-    { level: 3, hourlyRate: "6.00", label: "Extra Nível 3" },
-    { level: 4, hourlyRate: "5.00", label: "Extra Nível 4" },
-    { level: 5, hourlyRate: "4.00", label: "Extra Nível 5" },
+    { level: 1, levelName: "junior", hourlyRate: "4.50", label: "Extra Junior" },
+    { level: 2, levelName: "senior", hourlyRate: "5.00", label: "Extra Senior" },
+    { level: 3, levelName: "terminal", hourlyRate: "5.50", label: "Extra Terminal" },
+    { level: 4, levelName: "master", hourlyRate: "6.00", label: "Extra Master" },
   ];
   await db.insert(extraRates).values(defaults);
 }
@@ -1519,6 +1671,7 @@ export async function updateExtraRate(level: number, hourlyRate: string) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   await db.update(extraRates).set({ hourlyRate }).where(eq(extraRates.level, level));
+  (await import("./extraRates")).invalidateExtraRates();
 }
 
 // ─── RH: STATS ────────────────────────────────────────────────────────────────
@@ -1574,11 +1727,11 @@ export async function updateProject(id: number, data: Partial<InsertProject>) {
   await db.update(projects).set(data).where(eq(projects.id, id));
 }
 
+/** Apagar DEFINITIVAMENTE um único nó. Só é chamado depois de o router
+ * confirmar zero filhos e zero referências (ver shared/projectTree.ts). */
 export async function deleteProject(id: number) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  // Delete children first
-  await db.delete(projects).where(eq(projects.parentId, id));
   await db.delete(projects).where(eq(projects.id, id));
 }
 
@@ -1666,17 +1819,13 @@ export async function seedProjectHierarchy() {
 export async function moveProject(id: number, newParentId: number | null) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  // Prevent moving to self or to a descendant
+  // Não pode ir para si próprio nem para um descendente. Termina sempre,
+  // mesmo que a árvore já tenha um ciclo (visitados em shared/projectTree).
   if (newParentId === id) throw new Error("Não pode mover para si próprio");
-  if (newParentId !== null) {
-    let current = newParentId;
-    while (current) {
-      const [parent] = await db.select({ id: projects.id, parentId: projects.parentId })
-        .from(projects).where(eq(projects.id, current)).limit(1);
-      if (!parent) break;
-      if (parent.parentId === id) throw new Error("Não pode mover para um descendente");
-      current = parent.parentId!;
-    }
+  const { wouldCreateCycle } = await import("../shared/projectTree");
+  const all = await db.select({ id: projects.id, name: projects.name, level: projects.level, parentId: projects.parentId }).from(projects);
+  if (wouldCreateCycle(id, newParentId, new Map(all.map(p => [p.id, p])))) {
+    throw new Error("Não pode mover para um descendente");
   }
   await db.update(projects).set({ parentId: newParentId } as any).where(eq(projects.id, id));
 }
@@ -1715,6 +1864,18 @@ export async function removeEmployeeFromProject(projectId: number, employeeId: n
 // TASKS — KANBAN
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/** Filtro por projeto HIERÁRQUICO (nó + descendentes; id negativo = marca em
+ * todas as cidades) + âmbito de cidade do utilizador. `allowNull`: registos
+ * sem projeto continuam visíveis (ex.: tarefas transversais). */
+export async function projectFilterConds(column: any, projectId: number | undefined, opts: { allowNull?: boolean } = {}): Promise<any[]> {
+  const conds: any[] = [opts.allowNull ? sql`(${column} IS NULL OR ${projectScope(column)})` : projectScope(column)];
+  if (projectId) {
+    const ids = await resolveProjectIds(projectId);
+    conds.push(ids.length ? inArray(column, ids) : sql`1 = 0`);
+  }
+  return conds;
+}
+
 export async function getTasks(filters?: {
   projectId?: number;
   assigneeId?: number;
@@ -1722,8 +1883,7 @@ export async function getTasks(filters?: {
 }) {
   const db = await getDb();
   if (!db) return [];
-  const conds: any[] = [];
-  if (filters?.projectId) conds.push(eq(tasks.projectId, filters.projectId));
+  const conds: any[] = await projectFilterConds(tasks.projectId, filters?.projectId, { allowNull: true });
   if (filters?.assigneeId) conds.push(eq(tasks.assigneeId, filters.assigneeId));
   if (filters?.status) conds.push(eq(tasks.taskStatus, filters.status as any));
   return db.select().from(tasks)
@@ -1752,9 +1912,9 @@ export async function updateTask(id: number, data: Partial<InsertTask>) {
 }
 
 export async function deleteTask(id: number) {
-  const db = await getDb();
-  if (!db) throw new Error("DB not available");
-  await db.delete(tasks).where(eq(tasks.id, id));
+  // Apaga também os responsáveis e os comentários (antes ficavam órfãos).
+  const { deleteTaskCascade } = await import("./tasksService");
+  await deleteTaskCascade(id);
 }
 
 /**
@@ -1768,8 +1928,7 @@ export async function getTasksWithAssignees(filters?: {
 }): Promise<Array<any & { assignees: Array<{ id: number; fullName: string }>; projectName: string | null }>> {
   const db = await getDb();
   if (!db) return [];
-  const conds: any[] = [];
-  if (filters?.projectId) conds.push(eq(tasks.projectId, filters.projectId));
+  const conds: any[] = await projectFilterConds(tasks.projectId, filters?.projectId, { allowNull: true });
   if (filters?.status) conds.push(eq(tasks.taskStatus, filters.status as any));
 
   const taskRows = await db
@@ -1814,280 +1973,9 @@ export async function getTasksWithAssignees(filters?: {
 }
 
 export async function getTaskStats() {
-  const db = await getDb();
-  if (!db) return { total: 0, backlog: 0, todo: 0, inProgress: 0, review: 0, done: 0, overdue: 0 };
-  const all = await db.select().from(tasks);
-  const now = new Date();
-  return {
-    total: all.length,
-    backlog: all.filter(t => t.taskStatus === "backlog").length,
-    todo: all.filter(t => t.taskStatus === "todo").length,
-    inProgress: all.filter(t => t.taskStatus === "in_progress").length,
-    review: all.filter(t => t.taskStatus === "review").length,
-    done: all.filter(t => t.taskStatus === "done").length,
-    overdue: all.filter(t => t.dueDate && new Date(t.dueDate) < now && t.taskStatus !== "done").length,
-  };
-}
-
-// ─── MARKETING: CAMPAIGNS ────────────────────────────────────────────────────
-
-export async function getCampaigns(filters: { platform?: string; projectId?: number; status?: string } = {}) {
-  const db = await getDb();
-  if (!db) return [];
-  const conditions: any[] = [projectScope(campaigns.projectId)];
-  if (filters.platform) conditions.push(eq(campaigns.platform, filters.platform as any));
-  if (filters.projectId) {
-    // Include campaigns from child projects (e marcas globais via ID negativo)
-    const ids = await resolveProjectIds(filters.projectId);
-    conditions.push(sql`${campaigns.projectId} IN (${sql.raw(ids.join(",") || "0")})`);
-  }
-  if (filters.status) conditions.push(eq(campaigns.campaignStatus, filters.status as any));
-  const q = db.select({ campaign: campaigns, project: projects }).from(campaigns)
-    .leftJoin(projects, eq(campaigns.projectId, projects.id))
-    .orderBy(desc(campaigns.createdAt));
-  return conditions.length > 0 ? q.where(and(...conditions)) : q;
-}
-
-export async function getCampaignById(id: number) {
-  const db = await getDb();
-  if (!db) return undefined;
-  const result = await db.select().from(campaigns).where(and(eq(campaigns.id, id), projectScope(campaigns.projectId))).limit(1);
-  return result[0];
-}
-
-export async function createCampaign(data: InsertCampaign) {
-  const db = await getDb();
-  if (!db) throw new Error("DB unavailable");
-  const result = await db.insert(campaigns).values(data);
-  return result[0].insertId;
-}
-
-export async function updateCampaign(id: number, data: Partial<InsertCampaign>) {
-  const db = await getDb();
-  if (!db) throw new Error("DB unavailable");
-  await db.update(campaigns).set(data).where(eq(campaigns.id, id));
-}
-
-export async function deleteCampaign(id: number) {
-  const db = await getDb();
-  if (!db) throw new Error("DB unavailable");
-  await db.delete(campaignDailyStats).where(eq(campaignDailyStats.campaignId, id));
-  await db.delete(campaigns).where(eq(campaigns.id, id));
-}
-
-// ─── MARKETING: DAILY STATS ─────────────────────────────────────────────────
-
-export async function getCampaignStats(campaignId: number) {
-  const db = await getDb();
-  if (!db) return [];
-  return db.select().from(campaignDailyStats)
-    .where(and(eq(campaignDailyStats.campaignId, campaignId), sql`EXISTS (SELECT 1 FROM campaigns WHERE campaigns.id = ${campaignDailyStats.campaignId} AND ${projectScope(campaigns.projectId)})`))
-    .orderBy(desc(campaignDailyStats.date));
-}
-
-export async function getAllDailyStats(filters: { from?: Date; to?: Date; projectId?: number } = {}) {
-  const db = await getDb();
-  if (!db) return [];
-  const conditions: any[] = [projectScope(campaigns.projectId)];
-  if (filters.from) conditions.push(gte(campaignDailyStats.date, toMysqlDateTime(filters.from)));
-  if (filters.to) conditions.push(lte(campaignDailyStats.date, toMysqlDateTime(filters.to)));
-  if (filters.projectId) {
-    const ids = await resolveProjectIds(filters.projectId);
-    conditions.push(sql`${campaigns.projectId} IN (${sql.raw(ids.join(",") || "0")})`);
-  }
-  const q = db.select({ stat: campaignDailyStats, campaign: campaigns, project: projects })
-    .from(campaignDailyStats)
-    .leftJoin(campaigns, eq(campaignDailyStats.campaignId, campaigns.id))
-    .leftJoin(projects, eq(campaigns.projectId, projects.id))
-    .orderBy(desc(campaignDailyStats.date));
-  return conditions.length > 0 ? q.where(and(...conditions)) : q;
-}
-
-export async function importDailyStats(rows: InsertCampaignDailyStat[]) {
-  const db = await getDb();
-  if (!db) throw new Error("DB unavailable");
-  if (rows.length === 0) return;
-  await db.insert(campaignDailyStats).values(rows);
-}
-
-export async function deleteDailyStat(id: number) {
-  const db = await getDb();
-  if (!db) throw new Error("DB unavailable");
-  await db.delete(campaignDailyStats).where(eq(campaignDailyStats.id, id));
-}
-
-// ─── MARKETING: EXPENSES ─────────────────────────────────────────────────────
-
-export async function getMarketingExpenses(filters: { category?: string; projectId?: number; from?: Date; to?: Date } = {}) {
-  const db = await getDb();
-  if (!db) return [];
-  const conditions: any[] = [projectScope(marketingExpenses.projectId)];
-  if (filters.category) conditions.push(eq(marketingExpenses.mktCategory, filters.category as any));
-  if (filters.projectId) conditions.push(inArray(marketingExpenses.projectId, await resolveProjectIds(filters.projectId)));
-  if (filters.from) conditions.push(gte(marketingExpenses.date, toMysqlDateTime(filters.from)));
-  if (filters.to) conditions.push(lte(marketingExpenses.date, toMysqlDateTime(filters.to)));
-  const q = db.select({ expense: marketingExpenses, project: projects }).from(marketingExpenses)
-    .leftJoin(projects, eq(marketingExpenses.projectId, projects.id))
-    .orderBy(desc(marketingExpenses.date));
-  return conditions.length > 0 ? q.where(and(...conditions)) : q;
-}
-
-export async function createMarketingExpense(data: InsertMarketingExpense) {
-  const db = await getDb();
-  if (!db) throw new Error("DB unavailable");
-  const result = await db.insert(marketingExpenses).values(data);
-  return result[0].insertId;
-}
-
-export async function updateMarketingExpense(id: number, data: Partial<InsertMarketingExpense>) {
-  const db = await getDb();
-  if (!db) throw new Error("DB unavailable");
-  await db.update(marketingExpenses).set(data).where(eq(marketingExpenses.id, id));
-}
-
-export async function deleteMarketingExpense(id: number) {
-  const db = await getDb();
-  if (!db) throw new Error("DB unavailable");
-  await db.delete(marketingExpenses).where(eq(marketingExpenses.id, id));
-}
-
-// ─── MARKETING: DASHBOARD STATS ──────────────────────────────────────────────
-
-export async function getMarketingDashboardStats(filters: { from?: Date; to?: Date; projectId?: number } = {}) {
-  const db = await getDb();
-  if (!db) return { totalSpend: 0, totalReservations: 0, costPerReservation: 0, avgConversionValue: 0, totalMktExpenses: 0, campaignCount: 0 };
-
-  // Resolve project hierarchy if filtering (marcas globais incluídas)
-  let projectIds: Set<number> | null = null;
-  if (filters.projectId) {
-    projectIds = new Set<number>(await resolveProjectIds(filters.projectId));
-  }
-
-  // Stats from campaign daily stats (join campaigns to filter by projectId)
-  const conditions: any[] = [];
-  if (filters.from) conditions.push(gte(campaignDailyStats.date, toMysqlDateTime(filters.from)));
-  if (filters.to) conditions.push(lte(campaignDailyStats.date, toMysqlDateTime(filters.to)));
-  if (projectIds) conditions.push(sql`${campaigns.projectId} IN (${sql.raw(Array.from(projectIds).join(","))})`);
-
-  const statsQ = db.select({
-    totalSpend: sql<string>`COALESCE(SUM(${campaignDailyStats.spend}), 0)`,
-    totalReservations: sql<number>`COALESCE(SUM(${campaignDailyStats.conversions}), 0)`,
-    totalConversionValue: sql<string>`COALESCE(SUM(${campaignDailyStats.conversionValue}), 0)`,
-    totalImpressions: sql<number>`COALESCE(SUM(${campaignDailyStats.impressions}), 0)`,
-    totalClicks: sql<number>`COALESCE(SUM(${campaignDailyStats.clicks}), 0)`,
-  }).from(campaignDailyStats)
-    .innerJoin(campaigns, eq(campaignDailyStats.campaignId, campaigns.id));
-  const statsResult = conditions.length > 0 ? await statsQ.where(and(...conditions)) : await statsQ;
-  const s = statsResult[0];
-
-  // Marketing expenses
-  const mktConditions: any[] = [];
-  if (filters.from) mktConditions.push(gte(marketingExpenses.date, toMysqlDateTime(filters.from)));
-  if (filters.to) mktConditions.push(lte(marketingExpenses.date, toMysqlDateTime(filters.to)));
-  if (projectIds) mktConditions.push(sql`${marketingExpenses.projectId} IN (${sql.raw(Array.from(projectIds).join(","))})`);
-  const mktQ = db.select({
-    total: sql<string>`COALESCE(SUM(${marketingExpenses.amount}), 0)`,
-  }).from(marketingExpenses);
-  const mktResult = mktConditions.length > 0 ? await mktQ.where(and(...mktConditions)) : await mktQ;
-
-  // Campaign count
-  const campConditions: any[] = [];
-  if (projectIds) campConditions.push(sql`${campaigns.projectId} IN (${sql.raw(Array.from(projectIds).join(","))})`);
-  const campQ = db.select({ count: sql<number>`COUNT(*)` }).from(campaigns);
-  const campCount = campConditions.length > 0 ? await campQ.where(and(...campConditions)) : await campQ;
-
-  // ── Gasto estimado (orçamento diário × dias) + reservas REAIS por link ──
-  // O Dashboard deixa de depender só de campaign_daily_stats (que pode estar
-  // vazio): usa o orçamento das campanhas e atribui reservas reais via os links
-  // (internal_campaign_keys campaignType='ad').
-  const periodDays = filters.from && filters.to
-    ? Math.max(1, Math.floor((filters.to.getTime() - filters.from.getTime()) / 86400000) + 1)
-    : 30;
-  const campRowsQ = db.select({ id: campaigns.id, budget: campaigns.budget }).from(campaigns);
-  const campRows = campConditions.length > 0 ? await campRowsQ.where(and(...campConditions)) : await campRowsQ;
-  const campIdSet = new Set(campRows.map((c) => c.id));
-  const budgetSpend = campRows.reduce((acc, c) => acc + parseFloat((c.budget as any) || "0"), 0) * periodDays;
-
-  const keysRaw: any = await db.execute(sql`SELECT campaignId, keyType, keyValue FROM internal_campaign_keys WHERE campaignType = 'ad'`);
-  const keys = ((Array.isArray(keysRaw[0]) ? keysRaw[0] : keysRaw) as any[]).filter((k) => campIdSet.has(k.campaignId));
-  let linkReservations = 0, linkRevenue = 0;
-  if (keys.length) {
-    const conds: any[] = [];
-    const names = keys.filter((k) => k.keyType === "campaign_name").map((k) => k.keyValue);
-    if (names.length) conds.push(sql`campaignName IN (${sql.join(names.map((v: string) => sql`${v}`), sql`, `)})`);
-    for (const k of keys.filter((k) => k.keyType === "campaign_id")) conds.push(sql`originUrl LIKE ${"%campaignId=" + k.keyValue + "%"}`);
-    for (const k of keys.filter((k) => k.keyType === "url_pattern")) conds.push(sql`originUrl LIKE ${k.keyValue}`);
-    if (conds.length) {
-      const dateC = filters.from && filters.to ? sql` AND checkIn >= ${toMysqlDateTime(filters.from)} AND checkIn <= ${toMysqlDateTime(filters.to)}` : sql``;
-      const r: any = await db.execute(sql`SELECT COUNT(*) AS c, COALESCE(SUM(totalPrice),0) AS rev FROM multipark_bookings WHERE (${sql.join(conds, sql` OR `)})${dateC}`);
-      const row = (Array.isArray(r[0]) ? r[0] : r)[0];
-      linkReservations = Number(row?.c ?? 0); linkRevenue = Number(row?.rev ?? 0);
-    }
-  }
-
-  const realSpend = parseFloat(s.totalSpend || "0"); // de campaign_daily_stats (real, quando importado do Google Ads)
-  const totalSpend = realSpend > 0 ? realSpend : budgetSpend; // senão estima por orçamento
-  const totalReservations = linkReservations > 0 ? linkReservations : (s.totalReservations || 0);
-  const conversionValue = linkRevenue > 0 ? linkRevenue : parseFloat(s.totalConversionValue || "0");
-  const totalMktExpenses = parseFloat(mktResult[0].total || "0");
-
-  return {
-    totalSpend,
-    spendEstimated: realSpend === 0 && budgetSpend > 0,
-    totalReservations,
-    totalRevenue: conversionValue,
-    costPerReservation: totalReservations > 0 ? (totalSpend + totalMktExpenses) / totalReservations : 0,
-    avgConversionValue: totalReservations > 0 ? conversionValue / totalReservations : 0,
-    totalMktExpenses,
-    campaignCount: campCount[0].count,
-    totalImpressions: s.totalImpressions || 0,
-    totalClicks: s.totalClicks || 0,
-  };
-}
-
-export async function getBookingRevenueByProject(filters: { from?: string; to?: string; projectId?: number } = {}) {
-  const db = await getDb();
-  if (!db) return { total: 0, revenue: 0, byProject: [] as { projectId: number | null; parkName: string; count: number; revenue: number }[] };
-
-  const conditions: any[] = [projectScope(multiparkBookings.projectId),
-    sql`${multiparkBookings.status} != 'CANCELLED'`,
-  ];
-  if (filters.from) conditions.push(gte(multiparkBookings.bookingCreatedAt, filters.from));
-  if (filters.to) conditions.push(lte(multiparkBookings.bookingCreatedAt, filters.to + " 23:59:59"));
-  if (filters.projectId) {
-    // Also match children (e marcas globais via ID negativo)
-    const ids = await resolveProjectIds(filters.projectId);
-    conditions.push(sql`${multiparkBookings.projectId} IN (${sql.raw(ids.join(",") || "0")})`);
-  }
-
-  const rows = await db.select({
-    parkName: multiparkBookings.parkName,
-    city: multiparkBookings.city,
-    count: sql<number>`COUNT(*)`,
-    revenue: sql<string>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-  })
-    .from(multiparkBookings)
-    .where(and(...conditions))
-    .groupBy(multiparkBookings.parkName, multiparkBookings.city);
-
-  const byProject = rows.map(r => {
-    const name = r.parkName || "Desconhecido";
-    const city = r.city || "";
-    // If park name doesn't include city, append it
-    const displayName = city && !name.includes(city) ? `${name} ${city}` : name;
-    return {
-      projectId: null,
-      parkName: displayName,
-      count: r.count,
-      revenue: parseFloat(r.revenue || "0"),
-    };
-  });
-
-  return {
-    total: byProject.reduce((s, r) => s + r.count, 0),
-    revenue: byProject.reduce((s, r) => s + r.revenue, 0),
-    byProject,
-  };
+  // COUNT/GROUP BY em SQL (antes carregava a tabela inteira para memória).
+  const { taskStats } = await import("./tasksService");
+  return taskStats();
 }
 
 // ─── OPERACIONAL: VEHICLES ──────────────────────────────────────────────────
@@ -2096,9 +1984,8 @@ export async function getVehicles(filters?: { status?: string; projectId?: numbe
   const db = await getDb();
   if (!db) return [];
   let query = db.select().from(vehicles).orderBy(desc(vehicles.createdAt));
-  const conditions: any[] = [];
+  const conditions: any[] = await projectFilterConds(vehicles.projectId, filters?.projectId);
   if (filters?.status) conditions.push(eq(vehicles.vehicleStatus, filters.status as any));
-  if (filters?.projectId) conditions.push(eq(vehicles.projectId, filters.projectId));
   if (conditions.length > 0) query = query.where(and(...conditions) as any) as any;
   return query;
 }
@@ -2183,7 +2070,9 @@ export async function getRadioTranscriptions(filters?: { employeeId?: number; ve
   const db = await getDb();
   if (!db) return [];
   let query = db.select().from(radioTranscriptions).orderBy(desc(radioTranscriptions.createdAt));
-  const conditions: any[] = [];
+  // Cidade: a do condutor; sem condutor, a de quem transcreveu.
+  const conditions: any[] = [sql`((${radioTranscriptions.employeeId} IS NOT NULL AND ${employeeScope(radioTranscriptions.employeeId)})
+    OR (${radioTranscriptions.employeeId} IS NULL AND ${userScope(radioTranscriptions.createdById)}))`];
   if (filters?.employeeId) conditions.push(eq(radioTranscriptions.employeeId, filters.employeeId));
   if (filters?.vehicleId) conditions.push(eq(radioTranscriptions.vehicleId, filters.vehicleId));
   if (conditions.length > 0) query = query.where(and(...conditions) as any) as any;
@@ -2229,10 +2118,15 @@ export async function getVehicleDriverHistory(vehicleId: number) {
 
 // ─── API KEYS ────────────────────────────────────────────────────────────────
 
+/** Lista para a UI: NUNCA devolve a chave nem o hash — só o prefixo e metadados. */
 export async function getApiKeys() {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(apiKeys).orderBy(desc(apiKeys.createdAt));
+  return db.select({
+    id: apiKeys.id, name: apiKeys.name, keyPrefix: apiKeys.keyPrefix, permissions: apiKeys.permissions,
+    active: apiKeys.active, lastUsedAt: apiKeys.lastUsedAt, expiresAt: apiKeys.expiresAt,
+    createdById: apiKeys.createdById, createdAt: apiKeys.createdAt,
+  }).from(apiKeys).orderBy(desc(apiKeys.createdAt));
 }
 
 export async function createApiKey(data: Omit<InsertApiKey, "id" | "createdAt">) {
@@ -2248,6 +2142,13 @@ export async function toggleApiKey(id: number, active: boolean) {
   await db.update(apiKeys).set({ active: active ? 1 : 0 }).where(eq(apiKeys.id, id));
 }
 
+/** Validade de uma API key ("YYYY-MM-DD HH:MM:SS" UTC) ou null = sem expiração. */
+export async function setApiKeyExpiry(id: number, expiresAt: string | null) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.update(apiKeys).set({ expiresAt }).where(eq(apiKeys.id, id));
+}
+
 export async function deleteApiKey(id: number) {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
@@ -2259,12 +2160,11 @@ export async function deleteApiKey(id: number) {
 export async function getComplaints(filters?: { status?: string; type?: string; vehicleId?: number; assignedToId?: number; projectId?: number }) {
   const db = await getDb();
   if (!db) return [];
-  const conditions: any[] = [];
+  const conditions: any[] = await projectFilterConds(complaints.projectId, filters?.projectId);
   if (filters?.status) conditions.push(eq(complaints.complaintStatus, filters.status as any));
   if (filters?.type) conditions.push(eq(complaints.complaintType, filters.type as any));
   if (filters?.vehicleId) conditions.push(eq(complaints.vehicleId, filters.vehicleId));
   if (filters?.assignedToId) conditions.push(eq(complaints.assignedToId, filters.assignedToId));
-  if (filters?.projectId) conditions.push(eq(complaints.projectId, filters.projectId));
   return db
     .select({ ...getTableColumns(complaints), assignedToName: employees.fullName })
     .from(complaints)
@@ -2280,7 +2180,7 @@ export async function getComplaintById(id: number) {
     .select({ ...getTableColumns(complaints), assignedToName: employees.fullName })
     .from(complaints)
     .leftJoin(employees, eq(complaints.assignedToId, employees.id))
-    .where(eq(complaints.id, id))
+    .where(and(eq(complaints.id, id), projectScope(complaints.projectId)))
     .limit(1);
   return result[0];
 }
@@ -2296,6 +2196,16 @@ export async function updateComplaint(id: number, data: Partial<InsertComplaint>
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
   await db.update(complaints).set(data).where(eq(complaints.id, id));
+  await closeLinkedTasksIfResolved("complaint", id, (data as any).complaintStatus);
+}
+
+/** Origem resolvida → fecha as tarefas ligadas (sourceModule/sourceId). Nunca lança. */
+async function closeLinkedTasksIfResolved(module: "complaint" | "incident" | "lost_found", id: number, status: unknown): Promise<void> {
+  if (typeof status !== "string") return;
+  const { SOURCE_RESOLVED_STATUSES } = await import("../shared/taskRules");
+  if (!SOURCE_RESOLVED_STATUSES[module].includes(status)) return;
+  const { closeTasksForSource } = await import("./tasksService");
+  await closeTasksForSource(module, id);
 }
 
 export async function deleteComplaint(id: number) {
@@ -2329,6 +2239,8 @@ export async function addComplaintPhoto(data: Omit<InsertComplaintPhoto, "id" | 
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
   const result = await db.insert(complaintPhotos).values(data);
+  // Espelho no Shared Drive (se ligado) já, em segundo plano.
+  import("./google/pendingSync").then((m) => m.scheduleGoogleDriveMirror()).catch(() => undefined);
   return Number(result[0].insertId);
 }
 
@@ -2344,7 +2256,7 @@ export async function getComplaintStats(projectId?: number) {
   const all = await db
     .select()
     .from(complaints)
-    .where(projectId !== undefined ? eq(complaints.projectId, projectId) : undefined);
+    .where(and(...await projectFilterConds(complaints.projectId, projectId)));
   const now = new Date();
   return {
     total: all.length,
@@ -2487,10 +2399,11 @@ export async function deleteTrainingVideo(id: number) {
   await db.delete(trainingVideos).where(eq(trainingVideos.id, id));
 }
 
-export async function getTrainingManuals(categoryId?: number, type?: string) {
+export async function getTrainingManuals(categoryId?: number, type?: string, includeUnpublished = false) {
   const db = await getDb();
   if (!db) return [];
-  const conditions: any[] = [eq(trainingManuals.published, 1)];
+  // Admins veem também os não publicados (com badge); os restantes não.
+  const conditions: any[] = includeUnpublished ? [] : [eq(trainingManuals.published, 1)];
   if (categoryId) conditions.push(eq(trainingManuals.categoryId, categoryId));
   if (type) conditions.push(eq(trainingManuals.type, type as any));
   return db.select().from(trainingManuals).where(and(...conditions)).orderBy(desc(trainingManuals.createdAt));
@@ -2503,7 +2416,7 @@ export async function createTrainingManual(data: { categoryId?: number; title: s
   return result;
 }
 
-export async function updateTrainingManual(id: number, data: { title?: string; content?: string; type?: "manual" | "update" | "news" | "procedure"; published?: boolean; fileUrl?: string; fileKey?: string; fileName?: string; fileMimeType?: string }) {
+export async function updateTrainingManual(id: number, data: { title?: string; content?: string; type?: "manual" | "update" | "news" | "procedure" | "link"; published?: boolean; fileUrl?: string | null; fileKey?: string | null; fileName?: string | null; fileMimeType?: string | null; careerLevel?: string | null; categoryId?: number | null }) {
   const db = await getDb();
   if (!db) return;
   const { published, ...rest } = data;
@@ -2691,12 +2604,14 @@ export async function createLostFoundItem(data: Omit<LostFoundItem, "id" | "crea
   return result.id;
 }
 
-export async function getLostFoundItems(filters?: { status?: string; itemType?: string; projectId?: number; search?: string }) {
+export async function getLostFoundItems(filters?: { status?: string; itemType?: string; projectId?: number; noProject?: boolean; search?: string }) {
   const db = await getDb(); if (!db) return [];
-  const conditions: any[] = [];
+  // Quem vê todas as cidades vê também os casos "Sem cidade" (projectScope é
+  // 1=1); `noProject` mostra SÓ esses (e nada a quem está limitado a cidades).
+  const conditions: any[] = await projectFilterConds(lostFoundItems.projectId, filters?.noProject ? undefined : filters?.projectId);
+  if (filters?.noProject) conditions.push(scopedProjectIds() === undefined ? isNull(lostFoundItems.projectId) : sql`1 = 0`);
   if (filters?.status) conditions.push(eq(lostFoundItems.status, filters.status as any));
   if (filters?.itemType) conditions.push(eq(lostFoundItems.itemType, filters.itemType as any));
-  if (filters?.projectId) conditions.push(eq(lostFoundItems.projectId, filters.projectId));
   if (filters?.search) conditions.push(or(
     like(lostFoundItems.clientName, `%${filters.search}%`),
     like(lostFoundItems.description, `%${filters.search}%`),
@@ -2715,13 +2630,13 @@ export async function getLostFoundItemById(id: number) {
 export async function updateLostFoundItem(id: number, data: Partial<LostFoundItem>) {
   const db = await getDb(); if (!db) return;
   await db.update(lostFoundItems).set(data as any).where(eq(lostFoundItems.id, id));
+  await closeLinkedTasksIfResolved("lost_found", id, (data as any).status);
 }
 
+/** Apaga o caso, os ficheiros no storage, mensagens e condutores ligados. */
 export async function deleteLostFoundItem(id: number) {
-  const db = await getDb(); if (!db) return;
-  await db.delete(lostFoundPhotos).where(eq(lostFoundPhotos.itemId, id));
-  await db.delete(lostFoundMessages).where(eq(lostFoundMessages.itemId, id));
-  await db.delete(lostFoundItems).where(eq(lostFoundItems.id, id));
+  const { deleteLostCaseFully } = await import("./caseOps");
+  await deleteLostCaseFully(id);
 }
 
 export async function addLostFoundPhoto(data: Omit<LostFoundPhoto, "id" | "createdAt">) {
@@ -2761,9 +2676,13 @@ export async function attachLostFoundDriver(data: {
 
 export async function listLostFoundDrivers(itemId: number) {
   const db = await getDb(); if (!db) return [];
-  return db.select().from(lostFoundAttachedDrivers)
+  const rows = await db.select({ d: lostFoundAttachedDrivers, penaltyStatus: employeePenalties.status })
+    .from(lostFoundAttachedDrivers)
+    .leftJoin(employeePenalties, eq(employeePenalties.id, lostFoundAttachedDrivers.penaltyId))
     .where(eq(lostFoundAttachedDrivers.itemId, itemId))
     .orderBy(desc(lostFoundAttachedDrivers.createdAt));
+  // pointsConfirmed reflete a revisão do RH mesmo quando feita no ecrã do RH.
+  return rows.map(r => ({ ...r.d, penaltyStatus: r.penaltyStatus ?? null, pointsConfirmed: r.penaltyStatus === "confirmed" ? 1 : 0 }));
 }
 
 export async function detachLostFoundDriver(id: number) {
@@ -2776,78 +2695,40 @@ export async function getLostFoundMessages(itemId: number) {
   return db.select().from(lostFoundMessages).where(eq(lostFoundMessages.itemId, itemId)).orderBy(lostFoundMessages.createdAt);
 }
 
-// Cruzamento de dados: ranking de condutores envolvidos em carros com desaparecimentos
-export async function getLostFoundDriverRanking() {
-  const db = await getDb(); if (!db) return [];
-  // Get all lost_found items with vehicle plates
-  const items = await db.select().from(lostFoundItems).where(sql`${lostFoundItems.vehiclePlate} IS NOT NULL AND ${lostFoundItems.vehiclePlate} != ''`);
-  if (items.length === 0) return [];
-
-  const plates = items.map(i => i.vehiclePlate!);
-  // Get all movements for those plates
-  const allMovements = await db.select().from(vehicleMovements);
-  const relevantMovements = allMovements.filter(m => {
-    // Find vehicle plate for this movement
-    return true; // We'll join with vehicles below
-  });
-
-  // Get vehicles to map vehicleId -> plate
-  const allVehicles = await db.select().from(vehicles);
-  const vehiclePlateMap = new Map(allVehicles.map(v => [v.id, v.plate]));
-  const plateVehicleMap = new Map(allVehicles.map(v => [v.plate, v.id]));
-
-  // Get movements for affected vehicles
-  const affectedVehicleIds = plates.map(p => plateVehicleMap.get(p)).filter(Boolean) as number[];
-  const movements = allMovements.filter(m => affectedVehicleIds.includes(m.vehicleId));
-
-  // Get employees
-  const { employees } = await import("../drizzle/schema");
-  const allEmployees = await db.select().from(employees);
-  const employeeMap = new Map(allEmployees.map(e => [e.id, e.fullName]));
-
-  // Count how many incident vehicles each driver touched
-  const driverIncidents = new Map<number, { name: string; vehiclePlates: Set<string>; totalIncidents: number }>();
-  for (const mov of movements) {
-    const plate = vehiclePlateMap.get(mov.vehicleId);
-    if (!plate || !plates.includes(plate)) continue;
-    const incidentsForPlate = items.filter(i => i.vehiclePlate === plate).length;
-    const existing = driverIncidents.get(mov.employeeId) || { name: employeeMap.get(mov.employeeId) || "Desconhecido", vehiclePlates: new Set(), totalIncidents: 0 };
-    existing.vehiclePlates.add(plate);
-    existing.totalIncidents += incidentsForPlate;
-    driverIncidents.set(mov.employeeId, existing);
-  }
-
-  return Array.from(driverIncidents.entries())
-    .map(([employeeId, data]) => ({
-      employeeId,
-      employeeName: data.name,
-      vehicleCount: data.vehiclePlates.size,
-      incidentCount: data.totalIncidents,
-      plates: Array.from(data.vehiclePlates),
-    }))
-    .sort((a, b) => b.incidentCount - a.incidentCount);
-}
-
 
 // ─── OCORRÊNCIAS (INCIDENTS) ─────────────────────────────────────────────────
 export async function createIncident(data: any) {
   const db = await getDb(); if (!db) return null;
-  const now = new Date();
-  const weekNum = getWeekNumber(now);
-  const [result] = await db.insert(incidents).values({ ...data, weekNumber: data.weekNumber || weekNum, yearNumber: data.yearNumber || now.getFullYear() } as any).$returningId();
+  // Semana/ano ISO do DIA DE LISBOA da ocorrência (não do servidor/UTC).
+  const at = data.sourceEmailDate ? String(data.sourceEmailDate) : caseUtcNowStr();
+  const { week, year } = isoWeekYearLisbon(at.replace(" ", "T") + "Z");
+  // Prazo: Definições (sla.incidentHours) → INCIDENT_SLA_HOURS → 48h.
+  let slaHours = incidentSlaHours();
+  if (data.dueAt == null) {
+    try {
+      const { getSetting } = await import("./appSettings");
+      slaHours = (await getSetting("sla.incidentHours")) ?? slaHours;
+    } catch { /* fica o valor da env/omissão */ }
+  }
+  const [result] = await db.insert(incidents).values({
+    ...data,
+    driverConfirmed: data.driverConfirmed ? 1 : 0,
+    dueAt: data.dueAt ?? addHoursUtc(caseUtcNowStr(), slaHours),
+    weekNumber: data.weekNumber || week,
+    yearNumber: data.yearNumber || year,
+  } as any).$returningId();
   return result?.id;
 }
 
-export async function getIncidents(filters?: { status?: string; severity?: string; employeeId?: number; weekNumber?: number; yearNumber?: number }) {
+export async function getIncidents(filters?: { status?: string; severity?: string; employeeId?: number; projectId?: number; noProject?: boolean }) {
   const db = await getDb(); if (!db) return [];
-  const conditions: any[] = [];
+  const conditions: any[] = await projectFilterConds(incidents.projectId, filters?.noProject ? undefined : filters?.projectId);
+  if (filters?.noProject) conditions.push(scopedProjectIds() === undefined ? isNull(incidents.projectId) : sql`1 = 0`);
   if (filters?.status) conditions.push(eq(incidents.status, filters.status as any));
   if (filters?.severity) conditions.push(eq(incidents.severity, filters.severity as any));
   if (filters?.employeeId) conditions.push(eq(incidents.employeeId, filters.employeeId));
-  if (filters?.weekNumber) conditions.push(eq(incidents.weekNumber, filters.weekNumber));
-  if (filters?.yearNumber) conditions.push(eq(incidents.yearNumber, filters.yearNumber));
   const where = conditions.length > 0 ? and(...conditions) : undefined;
-  return db.select().from(incidents).where(where).orderBy(desc(incidents.createdAt));
+  return db.select().from(incidents).where(where).orderBy(desc(incidents.createdAt)).limit(2000);
 }
 
 export async function getIncidentById(id: number) {
@@ -2859,6 +2740,7 @@ export async function getIncidentById(id: number) {
 export async function updateIncident(id: number, data: any) {
   const db = await getDb(); if (!db) return;
   await db.update(incidents).set(data).where(eq(incidents.id, id));
+  await closeLinkedTasksIfResolved("incident", id, data?.status);
 }
 
 export async function deleteIncident(id: number) {
@@ -2866,35 +2748,26 @@ export async function deleteIncident(id: number) {
   await db.delete(incidents).where(eq(incidents.id, id));
 }
 
-export async function getIncidentStats(weekNumber?: number, yearNumber?: number) {
-  const db = await getDb(); if (!db) return { total: 0, open: 0, resolved: 0, critical: 0, byType: {} };
-  const conditions: any[] = [];
-  if (weekNumber) conditions.push(eq(incidents.weekNumber, weekNumber));
-  if (yearNumber) conditions.push(eq(incidents.yearNumber, yearNumber));
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
-  const all = await db.select().from(incidents).where(where);
+export async function getIncidentStats(filters?: { projectId?: number; noProject?: boolean }) {
+  const db = await getDb(); if (!db) return { total: 0, open: 0, resolved: 0, critical: 0, byType: {} as Record<string, number> };
+  const conditions: any[] = await projectFilterConds(incidents.projectId, filters?.noProject ? undefined : filters?.projectId);
+  if (filters?.noProject) conditions.push(scopedProjectIds() === undefined ? isNull(incidents.projectId) : sql`1 = 0`);
+  // Convertidas vivem noutro módulo — não contam aqui.
+  conditions.push(sql`${incidents.status} <> 'converted'`);
+  const rows = await db.select({
+    incidentType: incidents.incidentType,
+    total: sql<number>`COUNT(*)`,
+    open: sql<number>`SUM(CASE WHEN ${incidents.status} IN ('open','investigating') THEN 1 ELSE 0 END)`,
+    resolved: sql<number>`SUM(CASE WHEN ${incidents.status} = 'resolved' THEN 1 ELSE 0 END)`,
+    critical: sql<number>`SUM(CASE WHEN ${incidents.severity} = 'critical' THEN 1 ELSE 0 END)`,
+  }).from(incidents).where(and(...conditions)).groupBy(incidents.incidentType);
   const byType: Record<string, number> = {};
-  let open = 0, resolved = 0, critical = 0;
-  for (const i of all) {
-    byType[i.incidentType] = (byType[i.incidentType] || 0) + 1;
-    if (i.status === "open" || i.status === "investigating") open++;
-    if (i.status === "resolved") resolved++;
-    if (i.severity === "critical") critical++;
+  let total = 0, open = 0, resolved = 0, critical = 0;
+  for (const r of rows) {
+    byType[r.incidentType] = Number(r.total);
+    total += Number(r.total); open += Number(r.open); resolved += Number(r.resolved); critical += Number(r.critical);
   }
-  return { total: all.length, open, resolved, critical, byType };
-}
-
-export async function getIncidentsByEmployee(employeeId: number) {
-  const db = await getDb(); if (!db) return [];
-  return db.select().from(incidents).where(eq(incidents.employeeId, employeeId)).orderBy(desc(incidents.createdAt));
-}
-
-function getWeekNumber(d: Date): number {
-  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-  const dayNum = date.getUTCDay() || 7;
-  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
-  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
-  return Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return { total, open, resolved, critical, byType };
 }
 
 /** Devolve [Mon 00:00:00, Sun 23:59:59] da semana ISO indicada. */
@@ -2965,7 +2838,7 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
 
   // Só posições que conduzem (driver, senior_driver, extra)
   const drivers = await db
-    .select({ id: employees.id, fullName: employees.fullName, position: employees.position })
+    .select({ id: employees.id, fullName: employees.fullName, position: employees.position, extraLevel: employees.extraLevel })
     .from(employees)
     .where(and(
       eq(employees.isActive, 1),
@@ -2974,9 +2847,9 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
   if (drivers.length === 0) return [];
   const driverIds = drivers.map(d => d.id);
 
-  // ── 1. Horas trabalhadas: fixos = ponto (time_records); EXTRAS = horas da
-  // ESCALA do extras-dia (fix 2026-08-06 — extras não picam ponto e o Mov/h
-  // ficava vazio). Soma também o CUSTO semanal da escala (horas × tarifa).
+  // ── 1. Horas trabalhadas: todos pelo PONTO (time_records) — os extras picam
+  // ponto e recebem pelo ponto (Jorge, 24 set 2026). A escala do extras-dia só
+  // entra como recurso para quem ainda não tem ponto na semana.
   const hoursRows = await db
     .select({
       employeeId: timeRecords.employeeId,
@@ -2988,6 +2861,9 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
       eq(timeRecords.type, "check_out"),
       gte(timeRecords.recordedAt, startStr),
       lte(timeRecords.recordedAt, endStr),
+      // ponto [SUSPEITO] / por rever não conta horas (como no ordenado)
+      inArray(timeRecords.reviewStatus, ["ok", "approved"]),
+      sql`(${timeRecords.reviewStatus} = 'approved' OR COALESCE(${timeRecords.notes}, '') NOT LIKE '%[SUSPEITO]%')`,
     ))
     .groupBy(timeRecords.employeeId);
   const hoursMap = new Map(hoursRows.map(r => [r.employeeId, Number(r.hours)]));
@@ -3009,10 +2885,12 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
     .groupBy(extrasDiaAssignments.employeeId, extrasDiaAssignments.level);
   const scheduleHoursMap = new Map<number, number>();
   const scheduleCostMap = new Map<number, number>();
+  const { loadExtraRates, rateFor } = await import("./extraRates");
+  const liveRates = await loadExtraRates();
   for (const r of scheduleRows) {
     const empId = Number(r.employeeId);
     const hrs = Number(r.hours ?? 0);
-    const rate = EXTRAS_DIA_RATES[String(r.level ?? "junior")] ?? 4.5;
+    const rate = rateFor(liveRates, r.level ?? "junior");
     scheduleHoursMap.set(empId, (scheduleHoursMap.get(empId) ?? 0) + hrs);
     scheduleCostMap.set(empId, (scheduleCostMap.get(empId) ?? 0) + hrs * rate);
   }
@@ -3045,6 +2923,18 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
     ))
     .groupBy(employees.id);
   const movMap = new Map(movRows.map(r => [Number(r.employeeId), Number(r.count)]));
+  // Agentes EXTRA da ficha (pessoa com várias contas Multipark)
+  try {
+    const [aliasRows] = await db.execute(sql`
+      SELECT a.employeeId, COUNT(*) AS n FROM multipark_booking_history h
+      JOIN employee_agents a ON a.agentUserId = h.agentUserId
+      WHERE h.actionTime >= ${startStr} AND h.actionTime <= ${endStr}
+      GROUP BY a.employeeId`) as any;
+    for (const r of (aliasRows as any[]) ?? []) {
+      const id = Number(r.employeeId);
+      if (driverIds.includes(id)) movMap.set(id, (movMap.get(id) ?? 0) + Number(r.n));
+    }
+  } catch { /* tabela ainda não criada */ }
 
   // ── 3. Speed alerts não reconhecidos com excesso (single query)
   const alertRows = await db
@@ -3076,6 +2966,8 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
       reportedBy: incidents.reportedBy,
       employeeId: incidents.employeeId,
       severity: incidents.severity,
+      status: incidents.status,
+      driverConfirmed: incidents.driverConfirmed,
     })
     .from(incidents)
     .where(and(
@@ -3091,7 +2983,8 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
     if (reporterEmpId && driverIds.includes(reporterEmpId)) {
       posIncidents.set(reporterEmpId, (posIncidents.get(reporterEmpId) ?? 0) + 1);
     }
-    if (targetId && driverIds.includes(targetId)) {
+    // Pontos JUSTOS: só com envolvimento confirmado e não descartada/convertida.
+    if (targetId && driverIds.includes(targetId) && incidentCountsAgainstDriver(i)) {
       const sev = String(i.severity ?? "medium");
       const pts = INCIDENT_SEVERITY_POINTS[sev] ?? 5;
       const cur = negIncidents.get(targetId) ?? { count: 0, points: 0 };
@@ -3101,7 +2994,8 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
     }
   }
 
-  // ── 5. Penalizações abertas criadas na semana (employee_penalties)
+  // ── 5. Penalizações CONFIRMADAS criadas na semana (employee_penalties) —
+  // pendentes (ex.: falta automática ainda por rever) e anuladas não contam.
   const penaltyRows = await db
     .select({
       employeeId: employeePenalties.employeeId,
@@ -3110,6 +3004,7 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
     .from(employeePenalties)
     .where(and(
       inArray(employeePenalties.employeeId, driverIds),
+      eq(employeePenalties.status, "confirmed"),
       gte(employeePenalties.createdAt, startStr),
       lte(employeePenalties.createdAt, endStr),
     ))
@@ -3135,12 +3030,16 @@ export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: n
   const results: any[] = [];
 
   for (const emp of drivers) {
-    // Extras: horas da ESCALA (não picam ponto); fixos: ponto
-    const rawHours = emp.position === "extra"
-      ? (scheduleHoursMap.get(emp.id) ?? hoursMap.get(emp.id) ?? 0)
-      : (hoursMap.get(emp.id) ?? 0);
+    // Todos pelo ponto; extra sem ponto na semana → horas/custo da escala (estimativa)
+    const pontoHours = hoursMap.get(emp.id) ?? 0;
+    const isExtra = emp.position === "extra";
+    const useSchedule = isExtra && pontoHours <= 0;
+    const rawHours = useSchedule ? (scheduleHoursMap.get(emp.id) ?? 0) : pontoHours;
     const hoursWorked = Math.round(rawHours * 100) / 100;
-    const weeklyCost = Math.round((scheduleCostMap.get(emp.id) ?? 0) * 100) / 100;
+    const rawCost = !isExtra ? 0
+      : useSchedule ? (scheduleCostMap.get(emp.id) ?? 0)
+      : pontoHours * rateFor(liveRates, emp.extraLevel ?? 1);
+    const weeklyCost = Math.round(rawCost * 100) / 100;
     const movementsCount = movMap.get(emp.id) ?? 0;
     const movementsPerHour = hoursWorked > 0
       ? Math.round((movementsCount / hoursWorked) * 100) / 100
@@ -3195,10 +3094,9 @@ export async function createService(data: any) {
 
 export async function getServices(filters?: { serviceType?: string; employeeId?: number; projectId?: number; month?: number; year?: number }) {
   const db = await getDb(); if (!db) return [];
-  const conditions: any[] = [];
+  const conditions: any[] = await projectFilterConds(services.projectId, filters?.projectId);
   if (filters?.serviceType) conditions.push(eq(services.serviceType, filters.serviceType as any));
   if (filters?.employeeId) conditions.push(eq(services.employeeId, filters.employeeId));
-  if (filters?.projectId) conditions.push(eq(services.projectId, filters.projectId));
   const where = conditions.length > 0 ? and(...conditions) : undefined;
   const all = await db.select().from(services).where(where).orderBy(desc(services.serviceDate));
   if (filters?.month && filters?.year) {
@@ -3260,69 +3158,8 @@ export async function getServiceStats(month?: number, year?: number) {
 }
 
 // ─── FATURAÇÃO (BILLING) ─────────────────────────────────────────────────────
-export async function createInvoice(data: any) {
-  const db = await getDb(); if (!db) return null;
-  const [result] = await db.insert(invoices).values(data as any).$returningId();
-  return result?.id;
-}
-
-export async function getInvoices(filters?: { status?: string; projectId?: number; search?: string; month?: number; year?: number }) {
-  const db = await getDb(); if (!db) return [];
-  const conditions: any[] = [];
-  if (filters?.status) conditions.push(eq(invoices.status, filters.status as any));
-  if (filters?.projectId) conditions.push(eq(invoices.projectId, filters.projectId));
-  if (filters?.search) {
-    conditions.push(or(
-      like(invoices.invoiceNumber, `%${filters.search}%`),
-      like(invoices.clientName, `%${filters.search}%`),
-      like(invoices.clientNif, `%${filters.search}%`)
-    ));
-  }
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
-  const all = await db.select().from(invoices).where(where).orderBy(desc(invoices.issueDate));
-  if (filters?.month && filters?.year) {
-    return all.filter(i => {
-      const d = new Date(i.issueDate);
-      return d.getMonth() + 1 === filters.month && d.getFullYear() === filters.year;
-    });
-  }
-  return all;
-}
-
-export async function getInvoiceById(id: number) {
-  const db = await getDb(); if (!db) return null;
-  const rows = await db.select().from(invoices).where(eq(invoices.id, id)).limit(1);
-  return rows[0] || null;
-}
-
-export async function updateInvoice(id: number, data: any) {
-  const db = await getDb(); if (!db) return;
-  await db.update(invoices).set(data).where(eq(invoices.id, id));
-}
-
-export async function deleteInvoice(id: number) {
-  const db = await getDb(); if (!db) return;
-  await db.delete(invoices).where(eq(invoices.id, id));
-}
-
-export async function getInvoiceStats(month?: number, year?: number) {
-  const db = await getDb(); if (!db) return { total: 0, totalAmount: 0, paid: 0, overdue: 0, draft: 0 };
-  let all = await db.select().from(invoices).orderBy(desc(invoices.issueDate));
-  if (month && year) {
-    all = all.filter(i => {
-      const d = new Date(i.issueDate);
-      return d.getMonth() + 1 === month && d.getFullYear() === year;
-    });
-  }
-  let totalAmount = 0, paid = 0, overdue = 0, draft = 0;
-  for (const i of all) {
-    totalAmount += i.totalAmount || 0;
-    if (i.status === "paid") paid++;
-    if (i.status === "overdue") overdue++;
-    if (i.status === "draft") draft++;
-  }
-  return { total: all.length, totalAmount, paid, overdue, draft };
-}
+// O CRUD da tabela `invoices` saiu (nunca foi usado pela interface); a tabela
+// fica (o Anual antigo ainda a lê). A Faturação vem do motor financeiro.
 
 // ─── BILLING / FATURAÇÃO ────────────────────────────────────────────────────
 // Resolve um centro de custos para o conjunto de projetos (ele + descendentes).
@@ -3331,12 +3168,18 @@ export async function getInvoiceStats(month?: number, year?: number) {
 // os nós level='brand' com o MESMO nome (Airpark Lisboa/Porto/Faro) e os seus
 // descendentes. Funciona porque as marcas têm nome igual entre cidades e
 // porque TODOS os endpoints filtram via esta função — nada mais muda.
+//
+// INATIVOS: inclui de propósito os descendentes com isActive=0 — um parque
+// fechado continua a contar no histórico (relatórios, despesas, reservas).
+// Os seletores e o matcher de reservas é que ignoram nós inativos para
+// atribuições NOVAS. Seguro com ciclos na árvore (conjunto de visitados).
 export async function resolveProjectIds(projectId: number): Promise<number[]> {
   const db = await getDb();
   if (!db) return [Math.abs(projectId)];
-  const allProjects = await db.select().from(projects);
+  const allProjects = await db.select({ id: projects.id, parentId: projects.parentId, level: projects.level, name: projects.name }).from(projects);
   const ids = new Set<number>();
   const addChildren = (pid: number) => {
+    if (ids.has(pid)) return;
     ids.add(pid);
     for (const p of allProjects) {
       if (p.parentId === pid) addChildren(p.id);
@@ -3355,27 +3198,12 @@ export async function resolveProjectIds(projectId: number): Promise<number[]> {
   return Array.from(ids);
 }
 
-// Taxas €/hora para extras-dia (sincronizadas com server/extrasDia.ts)
-export const EXTRAS_DIA_RATES: Record<string, number> = {
-  junior: 4.5, senior: 5, terminal: 5.5, master: 6,
-};
-
-// SQL para formatar uma coluna timestamp para o bucket pretendido
-export function bucketSqlExpr(col: any, granularity: "day" | "week" | "month" | "year") {
-  switch (granularity) {
-    case "week":  return sql<string>`DATE_FORMAT(${col}, '%x-W%v')`;
-    case "month": return sql<string>`DATE_FORMAT(${col}, '%Y-%m')`;
-    case "year":  return sql<string>`DATE_FORMAT(${col}, '%Y')`;
-    default:      return sql<string>`DATE_FORMAT(${col}, '%Y-%m-%d')`;
-  }
-}
-
 /**
- * Diagnóstico cru de receita: para isolar onde está a discrepância entre
- * "Entregas" e outras vistas. Devolve o mesmo SUM(totalPrice) calculado de
- * várias formas diferentes para o mesmo período + filtro de projeto, de
- * forma a ser possível detectar se o bug está numa query específica ou na
- * fonte dos dados.
+ * Diagnóstico da receita realizada: as MESMAS regras do motor financeiro
+ * (deliveredConditions — CHECKED_OUT com saída no período de LISBOA, filtro
+ * de centro com a hierarquia), com os passos intermédios para isolar onde um
+ * número diverge. O último passo é, por construção, a receita "Entregues" da
+ * Faturação.
  */
 export async function diagnoseBilling(filters: {
   from: string;
@@ -3403,184 +3231,93 @@ export async function diagnoseBilling(filters: {
   // Top bookings para o utilizador olhar
   topBookings: Array<{ id: number; externalId: string; bookingNumber: string | null; projectName: string | null; campaign: string | null; status: string | null; totalPrice: number; checkOut: string | null; cancelledAt: string | null }>;
 }> {
-  const db = await getDb();
-  if (!db) throw new Error("DB unavailable");
-
-  const fromStr = toMysqlDateTime(new Date(filters.from));
-  const toStr = toMysqlDateTime(new Date(filters.to + "T23:59:59"));
-
   let projectIds: number[] | null = null;
   if (filters.projectId) projectIds = await resolveProjectIds(filters.projectId);
-
-  // ── 1. Sum 1: tudo com checkOut no período (sem mais filtros) ──
-  const [a1] = await db
-    .select({
-      count: sql<number>`COUNT(*)`,
-      sum: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    })
-    .from(multiparkBookings)
-    .where(and(gte(multiparkBookings.checkOut, fromStr), lte(multiparkBookings.checkOut, toStr)));
-
-  // ── 2. + isNotNull(checkOut) ──
-  const [a2] = await db
-    .select({
-      count: sql<number>`COUNT(*)`,
-      sum: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    })
-    .from(multiparkBookings)
-    .where(and(gte(multiparkBookings.checkOut, fromStr), lte(multiparkBookings.checkOut, toStr), isNotNull(multiparkBookings.checkOut)));
-
-  // ── 3. + status = 'CHECKED_OUT' (sem o filtro de projeto ainda) ──
-  const [a3] = await db
-    .select({
-      count: sql<number>`COUNT(*)`,
-      sum: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    })
-    .from(multiparkBookings)
-    .where(and(
-      gte(multiparkBookings.checkOut, fromStr),
-      lte(multiparkBookings.checkOut, toStr),
-      sql`${multiparkBookings.status} != 'CANCELLED'`,
-    ));
-
-  // ── 4. + inArray(projectId) se filtro ──
-  const filteredConds: any[] = [
-    gte(multiparkBookings.checkOut, fromStr),
-    lte(multiparkBookings.checkOut, toStr),
-    sql`${multiparkBookings.status} != 'CANCELLED'`,
-  ];
-  if (projectIds) filteredConds.push(inArray(multiparkBookings.projectId, projectIds));
-  const [a4] = await db
-    .select({
-      count: sql<number>`COUNT(*)`,
-      sum: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    })
-    .from(multiparkBookings)
-    .where(and(...filteredConds));
-
-  // ── Duplicados ──
-  const distinctRow = await db
-    .select({
-      total: sql<number>`COUNT(*)`,
-      distinct: sql<number>`COUNT(DISTINCT ${multiparkBookings.externalId})`,
-    })
-    .from(multiparkBookings)
-    .where(and(...filteredConds));
-  const dup = distinctRow[0];
-
-  // Top duplicados (se houver)
-  const duplicates = await db
-    .select({
-      externalId: multiparkBookings.externalId,
-      count: sql<number>`COUNT(*)`,
-    })
-    .from(multiparkBookings)
-    .where(and(...filteredConds))
-    .groupBy(multiparkBookings.externalId)
-    .having(sql`COUNT(*) > 1`)
-    .orderBy(desc(sql`COUNT(*)`))
-    .limit(20);
-
-  // ── By project ──
-  const byProj = await db
-    .select({
-      projectId: multiparkBookings.projectId,
-      projectName: projects.name,
-      count: sql<number>`COUNT(*)`,
-      sum: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    })
-    .from(multiparkBookings)
-    .leftJoin(projects, eq(projects.id, multiparkBookings.projectId))
-    .where(and(...filteredConds))
-    .groupBy(multiparkBookings.projectId, projects.name)
-    .orderBy(desc(sql`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`));
-
-  // ── By campaign ──
-  const byCamp = await db
-    .select({
-      campaign: multiparkBookings.campaign,
-      count: sql<number>`COUNT(*)`,
-      sum: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    })
-    .from(multiparkBookings)
-    .where(and(...filteredConds))
-    .groupBy(multiparkBookings.campaign)
-    .orderBy(desc(sql`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`));
-
-  // ── By status ──
-  const byStatus = await db
-    .select({
-      status: multiparkBookings.status,
-      count: sql<number>`COUNT(*)`,
-      sum: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    })
-    .from(multiparkBookings)
-    .where(and(...filteredConds))
-    .groupBy(multiparkBookings.status);
-
-  // ── Cancelled (sem filtro de cancelledAt mas com resto igual) ──
-  const cancelConds: any[] = [
-    gte(multiparkBookings.checkOut, fromStr),
-    lte(multiparkBookings.checkOut, toStr),
-    isNotNull(multiparkBookings.checkOut),
-    isNotNull(multiparkBookings.cancelledAt),
-  ];
-  if (projectIds) cancelConds.push(inArray(multiparkBookings.projectId, projectIds));
-  const [cancelled] = await db
-    .select({
-      count: sql<number>`COUNT(*)`,
-      sum: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    })
-    .from(multiparkBookings)
-    .where(and(...cancelConds));
-
-  // ── Top bookings por valor ──
-  const top = await db
-    .select({
-      id: multiparkBookings.id,
-      externalId: multiparkBookings.externalId,
-      bookingNumber: multiparkBookings.bookingNumber,
-      projectName: projects.name,
-      campaign: multiparkBookings.campaign,
-      status: multiparkBookings.status,
-      totalPrice: multiparkBookings.totalPrice,
-      checkOut: multiparkBookings.checkOut,
-      cancelledAt: multiparkBookings.cancelledAt,
-    })
-    .from(multiparkBookings)
-    .leftJoin(projects, eq(projects.id, multiparkBookings.projectId))
-    .where(and(...filteredConds))
-    .orderBy(desc(multiparkBookings.totalPrice))
-    .limit(20);
+  // AO VIVO da BD da Multipark (só os nossos parques) — as MESMAS leituras do
+  // motor financeiro (server/finance/liveBookings.ts).
+  const { loadLiveBookingAgg, loadLiveContext, parkIdsFor } = await import("./finance/liveBookings");
+  const { readTopDelivered } = await import("./multiparkDb/financeAgg");
+  const utc = lisbonDayRangeUtc(filters.from, filters.to);
+  const ctx = await loadLiveContext();
+  const filteredParks = parkIdsFor(ctx, projectIds);
+  const [anyStatus, delivered, deliveredFiltered, top] = await Promise.all([
+    loadLiveBookingAgg("checkout_any", utc),
+    loadLiveBookingAgg("delivered", utc),
+    loadLiveBookingAgg("delivered", utc, projectIds),
+    filteredParks.length ? readTopDelivered({ start: utc.start, end: utc.end, parkIds: filteredParks }) : Promise.resolve([]),
+  ]);
+  type Agg = (typeof anyStatus)[number];
+  const cs = (rows: Agg[]) => ({ count: rows.reduce((t, r) => t + r.count, 0), sum: rows.reduce((t, r) => t + r.total, 0) });
+  const groupBy = <K,>(rows: Agg[], key: (r: Agg) => K) => {
+    const m = new Map<K, { count: number; sum: number }>();
+    for (const r of rows) { const e = m.get(key(r)) ?? { count: 0, sum: 0 }; e.count += r.count; e.sum += r.total; m.set(key(r), e); }
+    return [...m.entries()].sort((a, b) => b[1].sum - a[1].sum);
+  };
+  const projNames = new Map<number, string>();
+  const pdb = await getDb();
+  if (pdb) for (const p of await pdb.select({ id: projects.id, name: projects.name }).from(projects)) projNames.set(p.id, p.name);
+  const nameOf = (pid: number | null) => (pid == null ? null : projNames.get(pid) ?? null);
+  const inFilter = (r: Agg) => !projectIds || (r.projectId != null && projectIds.includes(r.projectId));
+  const cancelled = cs(anyStatus.filter((r) => r.status === "CANCELLED" && inFilter(r)));
+  const periodAll = cs(anyStatus);
+  const f = cs(deliveredFiltered);
 
   return {
     range: { from: filters.from, to: filters.to },
     projectIds,
-    sumByCheckoutPeriod: { count: Number(a1?.count ?? 0), sum: Number(a1?.sum ?? 0) },
-    sumWithCheckoutNotNull: { count: Number(a2?.count ?? 0), sum: Number(a2?.sum ?? 0) },
-    sumExcludingCancelled: { count: Number(a3?.count ?? 0), sum: Number(a3?.sum ?? 0) },
-    sumWithProjectFilter: { count: Number(a4?.count ?? 0), sum: Number(a4?.sum ?? 0) },
-    rowsCount: Number(dup?.total ?? 0),
-    distinctExternalIds: Number(dup?.distinct ?? 0),
-    duplicatedExternalIds: duplicates.map((d) => ({ externalId: d.externalId, count: Number(d.count ?? 0) })),
-    byProject: byProj.map((p) => ({ projectId: p.projectId, projectName: p.projectName, count: Number(p.count ?? 0), sum: Number(p.sum ?? 0) })),
-    byCampaign: byCamp.map((c) => ({ campaign: c.campaign, count: Number(c.count ?? 0), sum: Number(c.sum ?? 0) })),
-    byStatus: byStatus.map((s) => ({ status: s.status, count: Number(s.count ?? 0), sum: Number(s.sum ?? 0) })),
-    cancelledCount: Number(cancelled?.count ?? 0),
-    cancelledSum: Number(cancelled?.sum ?? 0),
-    topBookings: top.map((t) => ({
-      id: t.id,
-      externalId: t.externalId,
-      bookingNumber: t.bookingNumber,
-      projectName: t.projectName,
-      campaign: t.campaign,
+    sumByCheckoutPeriod: periodAll,
+    sumWithCheckoutNotNull: periodAll,   // na BD da Multipark a saída é obrigatória
+    sumExcludingCancelled: cs(delivered),
+    sumWithProjectFilter: f,
+    rowsCount: f.count,
+    distinctExternalIds: f.count,          // leitura direta: sem cópias duplicadas
+    duplicatedExternalIds: [],
+    byProject: groupBy(deliveredFiltered, (r) => r.projectId).map(([projectId, v]) => ({ projectId, projectName: nameOf(projectId), ...v })),
+    byCampaign: groupBy(deliveredFiltered, (r) => r.campaign).map(([campaign, v]) => ({ campaign, ...v })),
+    byStatus: groupBy(anyStatus.filter(inFilter), (r) => r.status).map(([status, v]) => ({ status, ...v })),
+    cancelledCount: cancelled.count,
+    cancelledSum: cancelled.sum,
+    topBookings: top.map((t, i) => ({
+      id: i + 1,
+      externalId: t.id,
+      bookingNumber: t.code,
+      projectName: nameOf(ctx.ourParks.get(t.parkId) ?? null),
+      campaign: null,
       status: t.status,
-      totalPrice: Number(t.totalPrice ?? 0),
+      totalPrice: t.total,
       checkOut: t.checkOut,
-      cancelledAt: t.cancelledAt,
+      cancelledAt: null,
     })),
   };
 }
+
+// Regras comuns às vistas de Parcerias (Análise, Resumo, detalhe por tipo):
+//  - só reservas CONCLUÍDAS (CHECKED_OUT) pela data de saída — a mesma regra da
+//    receita realizada no motor financeiro; canceladas e em curso ficam fora;
+//  - "tem parceiro" = campanha não vazia (linhas e totais iguais).
+/**
+ * Reservas CONCLUÍDAS (CHECKED_OUT) com saída no período de Lisboa, AO VIVO da
+ * BD da Multipark (server/finance/liveBookings.ts — só os nossos parques, com
+ * centro e campanha), cortadas pelo âmbito de cidade do utilizador e pelo
+ * filtro de centro. `net` = valor sem IVA à taxa do dia da saída (a base das
+ * comissões), como o antigo netRevenueSumSql.
+ */
+async function livePartnerDelivered(from: string, to: string, projectIds?: number[]) {
+  const { loadLiveBookingAgg, loadLiveContext } = await import("./finance/liveBookings");
+  const { resolveFinanceRates } = await import("./finance/rates");
+  const scoped = scopedProjectIds();
+  let ids: number[] | undefined = projectIds;
+  if (scoped !== undefined) ids = ids ? ids.filter((id) => scoped.includes(id)) : scoped;
+  const [ctx, fr, rows] = await Promise.all([
+    loadLiveContext(), resolveFinanceRates(from, to), loadLiveBookingAgg("delivered", lisbonDayRangeUtc(from, to), ids),
+  ]);
+  return { ctx, rows: rows.map((r) => ({ ...r, net: r.total / (1 + fr.rates.vatOn(r.day)) })) };
+}
+const hasCampaign = (c: string | null | undefined) => !!c && c.trim() !== "";
+
+/** Comissão sobre a base do parceiro (SEM IVA por omissão; 'gross' = exceção). */
+const partnerCommissionAmount = (p: { commissionBase?: string | null }, rev: { revenue: number; revenueNet: number }, rate: number) =>
+  ((p.commissionBase === "gross" ? rev.revenue : rev.revenueNet) * rate) / 100;
 
 export async function getPartnershipAnalytics(filters: { from: string; to: string; projectId?: number }) {
   const db = await getDb();
@@ -3589,68 +3326,45 @@ export async function getPartnershipAnalytics(filters: { from: string; to: strin
   let projectIds: number[] | undefined;
   if (filters.projectId) projectIds = await resolveProjectIds(filters.projectId);
 
-  // Base conditions: checkouts in period
-  const baseConds: any[] = [projectScope(multiparkBookings.projectId),
-    isNotNull(multiparkBookings.checkOut),
-    gte(multiparkBookings.checkOut, toMysqlDateTime(new Date(filters.from))),
-    lte(multiparkBookings.checkOut, toMysqlDateTime(new Date(filters.to + "T23:59:59"))),
-  ];
-  if (projectIds) baseConds.push(inArray(multiparkBookings.projectId, projectIds));
+  // Reservas concluídas no período, AO VIVO da BD da Multipark.
+  const { ctx, rows } = await livePartnerDelivered(filters.from, filters.to, projectIds);
+  const parkOf = (id: string) => ctx.parkInfo?.get(id) ?? { name: null as string | null, city: null as string | null };
 
-  // 1. Partner bookings (campaign is not null = came from partner/affiliate)
-  const partnerRows = await db
-    .select({
-      campaign: multiparkBookings.campaign,
-      city: multiparkBookings.city,
-      parkName: multiparkBookings.parkName,
-      count: sql<number>`COUNT(*)`,
-      totalRevenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-      avgPrice: sql<number>`COALESCE(AVG(${multiparkBookings.totalPrice}), 0)`,
-      totalDiscount: sql<number>`COALESCE(SUM(${multiparkBookings.discount}), 0)`,
-    })
-    .from(multiparkBookings)
-    .where(and(...baseConds, isNotNull(multiparkBookings.campaign)))
-    .groupBy(multiparkBookings.campaign, multiparkBookings.city, multiparkBookings.parkName);
+  // 1. Reservas de parceiro (campanha preenchida = veio de parceiro/afiliado), por campanha × cidade × parque
+  const byPartner = new Map<string, { campaign: string | null; city: string | null; parkName: string | null; count: number; totalRevenue: number; totalDiscount: number }>();
+  for (const r of rows) {
+    if (!hasCampaign(r.campaign)) continue;
+    const pk = parkOf(r.parkId);
+    const k = JSON.stringify([r.campaign, pk.city, pk.name]);
+    const e = byPartner.get(k) ?? { campaign: r.campaign, city: pk.city, parkName: pk.name, count: 0, totalRevenue: 0, totalDiscount: 0 };
+    e.count += r.count; e.totalRevenue += r.total; e.totalDiscount += r.discount;
+    byPartner.set(k, e);
+  }
+  const partnerRows = [...byPartner.values()].map((e) => ({ ...e, avgPrice: e.count ? e.totalRevenue / e.count : 0 }));
 
-  // 2. All bookings for totals (partner vs direct)
-  const allRows = await db
-    .select({
-      hasPartner: sql<number>`CASE WHEN ${multiparkBookings.campaign} IS NOT NULL AND ${multiparkBookings.campaign} != '' THEN 1 ELSE 0 END`,
-      count: sql<number>`COUNT(*)`,
-      totalRevenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    })
-    .from(multiparkBookings)
-    .where(and(...baseConds))
-    .groupBy(sql`CASE WHEN ${multiparkBookings.campaign} IS NOT NULL AND ${multiparkBookings.campaign} != '' THEN 1 ELSE 0 END`);
+  // 2. Totais (parceiro vs direto)
+  const allTotals = {
+    partnerCount: rows.filter((r) => hasCampaign(r.campaign)).reduce((t, r) => t + r.count, 0),
+    partnerRevenue: rows.filter((r) => hasCampaign(r.campaign)).reduce((t, r) => t + r.total, 0),
+    count: rows.reduce((t, r) => t + r.count, 0),
+    totalRevenue: rows.reduce((t, r) => t + r.total, 0),
+  };
 
-  // 3. Reservas Pro — usa a coluna `pro` explícita da API (o antigo
-  // JSON_EXTRACT de park.isPro media "o PARQUE aceita Pro", não "a reserva
-  // é Pro" — inflacionava os números).
-  const proRows = await db
-    .select({
-      parkName: multiparkBookings.parkName,
-      city: multiparkBookings.city,
-      count: sql<number>`COUNT(*)`,
-      totalRevenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    })
-    .from(multiparkBookings)
-    .where(and(
-      ...baseConds,
-      eq(multiparkBookings.pro, 1),
-    ))
-    .groupBy(multiparkBookings.parkName, multiparkBookings.city);
+  // 3. Reservas Pro (a reserva é Pro — "Booking".pro), por parque × cidade
+  const byPro = new Map<string, { parkName: string | null; city: string | null; count: number; totalRevenue: number }>();
+  for (const r of rows) {
+    if (!r.pro) continue;
+    const pk = parkOf(r.parkId);
+    const k = JSON.stringify([pk.name, pk.city]);
+    const e = byPro.get(k) ?? { parkName: pk.name, city: pk.city, count: 0, totalRevenue: 0 };
+    e.count += r.count; e.totalRevenue += r.total;
+    byPro.set(k, e);
+  }
+  const proRows = [...byPro.values()];
 
   // Calculate totals
-  let partnerBookings = 0, partnerRevenue = 0, directBookings = 0, directRevenue = 0;
-  for (const r of allRows) {
-    if (Number(r.hasPartner) === 1) {
-      partnerBookings = Number(r.count);
-      partnerRevenue = Number(r.totalRevenue);
-    } else {
-      directBookings = Number(r.count);
-      directRevenue = Number(r.totalRevenue);
-    }
-  }
+  const partnerBookings = Number(allTotals?.partnerCount ?? 0), partnerRevenue = Number(allTotals?.partnerRevenue ?? 0);
+  const directBookings = Number(allTotals?.count ?? 0) - partnerBookings, directRevenue = Number(allTotals?.totalRevenue ?? 0) - partnerRevenue;
   const proBookingsTotal = proRows.reduce((s, r) => s + Number(r.count), 0);
   const proRevenueTotal = proRows.reduce((s, r) => s + Number(r.totalRevenue), 0);
 
@@ -3681,52 +3395,6 @@ export async function getPartnershipAnalytics(filters: { from: string; to: strin
   };
 }
 
-export async function getBookingsByCampaign(filters: { campaignKey: string; from: string; to: string; projectId?: number }) {
-  const db = await getDb();
-  if (!db) return [];
-
-  let projectIds: number[] | undefined;
-  if (filters.projectId) projectIds = await resolveProjectIds(filters.projectId);
-
-  const conds: any[] = [projectScope(multiparkBookings.projectId),
-    eq(multiparkBookings.campaign, filters.campaignKey),
-    isNotNull(multiparkBookings.checkOut),
-    gte(multiparkBookings.checkOut, toMysqlDateTime(new Date(filters.from))),
-    lte(multiparkBookings.checkOut, toMysqlDateTime(new Date(filters.to + "T23:59:59"))),
-  ];
-  if (projectIds) conds.push(inArray(multiparkBookings.projectId, projectIds));
-
-  const rows = await db
-    .select({
-      id: multiparkBookings.id,
-      bookingNumber: multiparkBookings.bookingNumber,
-      clientFirstName: multiparkBookings.clientFirstName,
-      clientLastName: multiparkBookings.clientLastName,
-      licensePlate: multiparkBookings.licensePlate,
-      checkIn: multiparkBookings.checkIn,
-      checkOut: multiparkBookings.checkOut,
-      parkName: multiparkBookings.parkName,
-      city: multiparkBookings.city,
-      totalPrice: multiparkBookings.totalPrice,
-      discount: multiparkBookings.discount,
-      parkingPrice: multiparkBookings.parkingPrice,
-      deliveryCharges: multiparkBookings.deliveryCharges,
-      extrasTotal: multiparkBookings.extrasTotal,
-    })
-    .from(multiparkBookings)
-    .where(and(...conds))
-    .orderBy(desc(multiparkBookings.checkOut));
-
-  return rows.map(r => ({
-    ...r,
-    totalPrice: Number(r.totalPrice ?? 0),
-    discount: Number(r.discount ?? 0),
-    parkingPrice: Number(r.parkingPrice ?? 0),
-    deliveryCharges: Number(r.deliveryCharges ?? 0),
-    extrasTotal: Number(r.extrasTotal ?? 0),
-  }));
-}
-
 // ─── PARCERIAS (PARTNERSHIPS) ────────────────────────────────────────────────
 export async function createPartnership(data: any) {
   const db = await getDb(); if (!db) return null;
@@ -3744,256 +3412,41 @@ export async function getPartnerships(filters?: { partnerType?: string; status?:
 }
 
 /**
- * Inferência de parceiros. Devolve dois tipos de grupos:
- *   • aliasType="multipark_partner_id" → reservas com partnerId real
- *   • aliasType="payment_method" → reservas SEM partnerId mas com
- *     paymentMethod identificador (Parkos, Looking4parking, etc.)
- * Um parceiro nosso pode ter vários aliases (vários partnerIds + vários
- * paymentMethods).
- */
-export async function inferPartnersFromBookings(): Promise<Array<{
-  aliasType: "multipark_partner_id" | "payment_method";
-  aliasValue: string;
-  suggestedName: string;
-  paymentMethod: string | null;
-  remarksSample: string | null;
-  bookings: number;
-  totalValue: number;
-  linkedPartnershipId: number | null;
-  linkedPartnershipName: string | null;
-}>> {
-  const db = await getDb(); if (!db) return [];
-
-  // Buscar TODAS as reservas (com ou sem partnerId) que tenham paymentMethod
-  // ou partnerId — para agrupar de duas formas:
-  //   (A) com partnerId → grupo "multipark_partner_id"
-  //   (B) sem partnerId mas paymentMethod identificador → grupo "payment_method"
-  const [rawRows] = await (db as any).execute(sql`
-    SELECT
-      JSON_UNQUOTE(JSON_EXTRACT(rawJson, '$.partnerId')) AS partnerId,
-      paymentMethod,
-      remarks,
-      totalPrice
-    FROM multipark_bookings
-    WHERE ${projectScope(sql`multipark_bookings.projectId`)} AND (rawJson LIKE '%partnerId%' AND JSON_EXTRACT(rawJson, '$.partnerId') IS NOT NULL)
-       OR paymentMethod IS NOT NULL
-  `);
-
-  type Agg = {
-    bookings: number;
-    totalValue: number;
-    paymentMethods: Map<string, number>;
-    remarksSample: string | null;
-  };
-  const byPartner = new Map<string, Agg>(); // key = partnerId
-  const byPaymentNoPartner = new Map<string, Agg>(); // key = paymentMethod (só quando partnerId é null)
-
-  for (const r of (rawRows as any[])) {
-    const pid: string | null = r.partnerId;
-    const tp = r.totalPrice ? parseFloat(String(r.totalPrice)) : 0;
-    const tpVal = Number.isFinite(tp) ? tp : 0;
-
-    if (pid) {
-      let agg = byPartner.get(pid);
-      if (!agg) {
-        agg = { bookings: 0, totalValue: 0, paymentMethods: new Map(), remarksSample: null };
-        byPartner.set(pid, agg);
-      }
-      agg.bookings++;
-      agg.totalValue += tpVal;
-      if (r.paymentMethod) {
-        agg.paymentMethods.set(r.paymentMethod, (agg.paymentMethods.get(r.paymentMethod) ?? 0) + 1);
-      }
-      if (!agg.remarksSample && r.remarks) agg.remarksSample = r.remarks;
-    } else if (r.paymentMethod) {
-      const key = r.paymentMethod;
-      let agg = byPaymentNoPartner.get(key);
-      if (!agg) {
-        agg = { bookings: 0, totalValue: 0, paymentMethods: new Map(), remarksSample: null };
-        byPaymentNoPartner.set(key, agg);
-      }
-      agg.bookings++;
-      agg.totalValue += tpVal;
-      if (!agg.remarksSample && r.remarks) agg.remarksSample = r.remarks;
-    }
-  }
-
-  // Aliases já associados (lista actual em partner_aliases)
-  const aliasIndex = new Map<string, { id: number; name: string }>();
-  const aliases = await db.select({
-    partnershipId: partnerAliases.partnershipId,
-    aliasType: partnerAliases.aliasType,
-    aliasValue: partnerAliases.aliasValue,
-  }).from(partnerAliases);
-  const partnersById = new Map<number, string>();
-  const partnersAll = await db.select({ id: partnerships.id, name: partnerships.name }).from(partnerships);
-  for (const p of partnersAll) partnersById.set(p.id, p.name);
-  for (const a of aliases) {
-    const key = `${a.aliasType}:${a.aliasValue}`;
-    const name = partnersById.get(a.partnershipId);
-    if (name) aliasIndex.set(key, { id: a.partnershipId, name });
-  }
-
-  function firstAlphaToken(s: string | null): string | null {
-    if (!s) return null;
-    const m = s.match(/^\s*([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ0-9_-]+)/);
-    return m ? m[1] : null;
-  }
-  function topPayment(m: Map<string, number>): string | null {
-    let best: [string, number] | null = null;
-    for (const [k, v] of m) if (!best || v > best[1]) best = [k, v];
-    return best ? best[0] : null;
-  }
-  const GENERIC = /^(online|multibanco|numerário|numerario|dinheiro|no pay|stripe|wallet|allowance|pro_plan|cash|multbanco|sibs|transferencia)/i;
-
-  type Row = {
-    aliasType: "multipark_partner_id" | "payment_method";
-    aliasValue: string;
-    suggestedName: string;
-    paymentMethod: string | null;
-    remarksSample: string | null;
-    bookings: number;
-    totalValue: number;
-    linkedPartnershipId: number | null;
-    linkedPartnershipName: string | null;
-  };
-
-  const result: Row[] = [];
-
-  // Grupos com partnerId
-  for (const [pid, agg] of byPartner) {
-    const top = topPayment(agg.paymentMethods);
-    const fromPayment = top && !GENERIC.test(top.trim()) ? top : null;
-    const fromRemarks = firstAlphaToken(agg.remarksSample);
-    const suggestedName = fromPayment ?? fromRemarks ?? "Desconhecido";
-    const linked = aliasIndex.get(`multipark_partner_id:${pid}`);
-    result.push({
-      aliasType: "multipark_partner_id",
-      aliasValue: pid,
-      suggestedName,
-      paymentMethod: top,
-      remarksSample: agg.remarksSample,
-      bookings: agg.bookings,
-      totalValue: Math.round(agg.totalValue * 100) / 100,
-      linkedPartnershipId: linked?.id ?? null,
-      linkedPartnershipName: linked?.name ?? null,
-    });
-  }
-
-  // Grupos só por paymentMethod (sem partnerId), apenas se o paymentMethod
-  // não for genérico (Online, Multibanco, etc.)
-  for (const [pm, agg] of byPaymentNoPartner) {
-    if (GENERIC.test(pm.trim())) continue;
-    const linked = aliasIndex.get(`payment_method:${pm}`);
-    result.push({
-      aliasType: "payment_method",
-      aliasValue: pm,
-      suggestedName: pm,
-      paymentMethod: pm,
-      remarksSample: agg.remarksSample,
-      bookings: agg.bookings,
-      totalValue: Math.round(agg.totalValue * 100) / 100,
-      linkedPartnershipId: linked?.id ?? null,
-      linkedPartnershipName: linked?.name ?? null,
-    });
-  }
-
-  result.sort((a, b) => b.bookings - a.bookings);
-  return result;
-}
-
-/**
- * Adiciona um alias (partnerId ou paymentMethod) a uma parceria.
- * Se applyToBookings, actualiza a coluna campaign das reservas que correspondem:
- *  - alias_type=multipark_partner_id: reservas com partnerId no rawJson
- *  - alias_type=payment_method: reservas com paymentMethod = alias_value E
- *    sem partnerId (para não duplicar com o caso anterior)
- */
-export async function addPartnerAlias(
-  partnershipId: number,
-  aliasType: "multipark_partner_id" | "payment_method",
-  aliasValue: string,
-  applyToBookings: boolean,
-): Promise<number> {
-  const db = await getDb(); if (!db) return 0;
-
-  // Insert (ignora se já existe — UNIQUE)
-  try {
-    await db.insert(partnerAliases).values({ partnershipId, aliasType, aliasValue });
-  } catch (err: any) {
-    if (!String(err.message).includes("Duplicate")) throw err;
-  }
-
-  if (!applyToBookings) return 0;
-
-  const [p] = await db.select({ name: partnerships.name })
-    .from(partnerships).where(eq(partnerships.id, partnershipId)).limit(1);
-  if (!p) return 0;
-
-  if (aliasType === "multipark_partner_id") {
-    const [r] = await (db as any).execute(sql`
-      UPDATE multipark_bookings
-      SET campaign = ${p.name}
-      WHERE JSON_UNQUOTE(JSON_EXTRACT(rawJson, '$.partnerId')) = ${aliasValue}
-    `);
-    return (r as any).affectedRows ?? 0;
-  } else {
-    const [r] = await (db as any).execute(sql`
-      UPDATE multipark_bookings
-      SET campaign = ${p.name}
-      WHERE paymentMethod = ${aliasValue}
-        AND (rawJson NOT LIKE '%partnerId%' OR JSON_EXTRACT(rawJson, '$.partnerId') IS NULL)
-    `);
-    return (r as any).affectedRows ?? 0;
-  }
-}
-
-/**
- * Sumário de faturação por parceiro. Para cada parceiro calcula:
- *  - aFaturar: comissão gerada no período (de bookings com checkout) +
- *              avença mensal/anual proporcional ao período se o
- *              chargeModel for monthly_fee / yearly_fee
- *  - faturado: somatório das partnership_invoices no período (excepto canceladas)
- *  - emAtraso: partnership_invoices com status='overdue'
- *  - pendente: max(0, aFaturar - faturado)
+ * Sumário de faturação por parceiro. Para cada parceiro calcula aFaturar:
+ * comissão das reservas concluídas no período (CHECKED_OUT pela data de
+ * saída) ou avença mensal/anual rateada pelos meses cobertos.
+ * (As colunas faturado/pendente/em atraso foram retiradas: nada na app cria
+ * partnership_invoices, por isso eram sempre zero.)
  *
  * O cálculo de comissão usa os mesmos aliases que getBillingData para
- * fazer match com as reservas.
+ * fazer match com as reservas. `projectId` (filtro global de cidade/marca)
+ * limita as reservas; as avenças não têm cidade e ficam indisponíveis.
  */
 export async function getPartnerInvoicingSummary(filters: {
   from: string;
   to: string;
+  projectId?: number;
   partnerType?: string;
 }): Promise<Array<{
   partnershipId: number;
   partnerName: string;
   partnerType: string;
   commissionRate: number;
+  commissionBase: "net" | "gross";
   monthlyFee: number;
   bookingsCount: number;
   revenueGross: number;
+  revenueNet: number;
   aFaturar: number | null;
   billingAvailable: boolean;
-  faturado: number | null;
-  emAtraso: number | null;
-  pendente: number | null;
-  faturasEmAtrasoCount: number;
 }>> {
   const db = await getDb();
   if (!db) return [];
 
-  const billingAvailable = scopedProjectIds() === undefined;
-  const fromStr = toMysqlDateTime(new Date(filters.from));
-  const toStr = toMysqlDateTime(new Date(filters.to + "T23:59:59"));
-
-  // Período em dias / fracção de mês — para avenças
-  const msPerDay = 1000 * 60 * 60 * 24;
-  const periodDays = Math.max(
-    1,
-    Math.floor((new Date(filters.to).getTime() - new Date(filters.from).getTime()) / msPerDay) + 1,
-  );
-  const monthFraction = periodDays / 30;
-  const yearFraction = periodDays / 365;
+  // Avenças são globais (sem cidade): só se mostram sem filtro/limite de cidade.
+  const billingAvailable = scopedProjectIds() === undefined && !filters.projectId;
+  const projectIds = filters.projectId ? await resolveProjectIds(filters.projectId) : undefined;
+  const { partnerFeeForPeriod } = await import("../shared/partnerRules");
 
   // 1) Parcerias (com filtro opcional de tipo). Inclui notes para extrair
   //    config JSON (operatesProjects, cashbackPercent, prizeBudget).
@@ -4003,6 +3456,7 @@ export async function getPartnerInvoicingSummary(filters: {
       name: partnerships.name,
       partnerType: partnerships.partnerType,
       commissionRate: partnerships.commissionRate,
+      commissionBase: partnerships.commissionBase,
       monthlyFee: partnerships.monthlyFee,
       campaignKey: partnerships.campaignKey,
       notes: partnerships.notes,
@@ -4014,94 +3468,37 @@ export async function getPartnerInvoicingSummary(filters: {
 
   const { parsePartnerConfig } = await import("../shared/partnerTypes");
 
-  // 2) Aliases para fazer match — mesmo padrão de getBillingData
-  const aliasRows = await db.select({
-    partnershipId: partnerAliases.partnershipId,
-    aliasValue: partnerAliases.aliasValue,
-  }).from(partnerAliases);
+  // 2) Correspondência campanha → parceiro: a MESMA do motor financeiro
+  //    (todos os parceiros + aliases; o mais recente ganha — ./finance/partners.ts)
+  const { loadPartnerIndex, partnerForCampaign } = await import("./finance/partners");
+  const { index: partnerIndex } = await loadPartnerIndex(db);
 
-  // 3) Bookings com checkout efectivo no período, agrupados por campaign
-  const bookingRows = await db
-    .select({
-      campaign: multiparkBookings.campaign,
-      bookingsCount: sql<number>`COUNT(*)`,
-      revenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-    })
-    .from(multiparkBookings)
-    .where(
-      and(
-        isNotNull(multiparkBookings.campaign),
-        sql`${multiparkBookings.status} != 'CANCELLED'`,
-        projectScope(multiparkBookings.projectId),
-        gte(multiparkBookings.checkOut, fromStr),
-        lte(multiparkBookings.checkOut, toStr),
-      ),
-    )
-    .groupBy(multiparkBookings.campaign);
+  // 3) Reservas concluídas (checkout no período), AO VIVO da BD da Multipark, por campanha
+  const { rows: liveRows } = await livePartnerDelivered(filters.from, filters.to, projectIds);
+  const byCampaign = new Map<string, { campaign: string; bookingsCount: number; revenue: number; revenueNet: number }>();
+  for (const r of liveRows) {
+    if (!hasCampaign(r.campaign)) continue;
+    const e = byCampaign.get(r.campaign!) ?? { campaign: r.campaign!, bookingsCount: 0, revenue: 0, revenueNet: 0 };
+    e.bookingsCount += r.count; e.revenue += r.total; e.revenueNet += r.net;
+    byCampaign.set(r.campaign!, e);
+  }
+  const bookingRows = [...byCampaign.values()];
 
-  // 4) Map campaign-key (lowercased) → partnershipId — regista campaignKey +
-  // name + aliases (unificado com getBillingData; antes faltava o campaignKey
-  // e um parceiro configurado só por key ficava a zeros nesta vista)
-  const keyToPartner = new Map<string, number>();
-  function reg(rawKey: string | null | undefined, partnerId: number) {
-    if (!rawKey) return;
-    const k = rawKey.trim().toLowerCase();
-    if (k && !keyToPartner.has(k)) keyToPartner.set(k, partnerId);
-  }
-  for (const p of partnerRows) {
-    reg(p.campaignKey, p.id);
-    reg(p.name, p.id);
-  }
-  for (const a of aliasRows) {
-    reg(a.aliasValue, a.partnershipId);
-  }
-
-  // 5) Acumula bookings por parceiro
-  const bookingsByPartner = new Map<number, { count: number; revenue: number }>();
+  // 4) Acumula bookings por parceiro
+  const bookingsByPartner = new Map<number, { count: number; revenue: number; revenueNet: number }>();
   for (const b of bookingRows) {
-    const k = (b.campaign ?? "").trim().toLowerCase();
-    const pid = keyToPartner.get(k);
+    const pid = partnerForCampaign(partnerIndex, b.campaign)?.id;
     if (!pid) continue;
-    const existing = bookingsByPartner.get(pid) ?? { count: 0, revenue: 0 };
+    const existing = bookingsByPartner.get(pid) ?? { count: 0, revenue: 0, revenueNet: 0 };
     existing.count += Number(b.bookingsCount ?? 0);
     existing.revenue += Number(b.revenue ?? 0);
+    existing.revenueNet += Number(b.revenueNet ?? 0);
     bookingsByPartner.set(pid, existing);
-  }
-
-  // 6) Partnership invoices no período — agrupadas por parceiro e estado
-  const invRows = await db
-    .select({
-      partnershipId: partnershipInvoices.partnershipId,
-      status: partnershipInvoices.invoiceStatus,
-      total: sql<number>`COALESCE(SUM(${partnershipInvoices.amount}), 0)`,
-      count: sql<number>`COUNT(*)`,
-    })
-    .from(partnershipInvoices)
-    .where(
-      and(
-        billingAvailable ? sql`1 = 1` : sql`1 = 0`,
-        gte(partnershipInvoices.sentAt, fromStr),
-        lte(partnershipInvoices.sentAt, toStr),
-        sql`${partnershipInvoices.invoiceStatus} != 'cancelled'`,
-      ),
-    )
-    .groupBy(partnershipInvoices.partnershipId, partnershipInvoices.invoiceStatus);
-
-  const invByPartner = new Map<number, { faturado: number; emAtraso: number; emAtrasoCount: number }>();
-  for (const r of invRows) {
-    const ex = invByPartner.get(r.partnershipId) ?? { faturado: 0, emAtraso: 0, emAtrasoCount: 0 };
-    const amount = Number(r.total ?? 0);
-    ex.faturado += amount;
-    if (r.status === "overdue") {
-      ex.emAtraso += amount;
-      ex.emAtrasoCount += Number(r.count ?? 0);
-    }
-    invByPartner.set(r.partnershipId, ex);
   }
 
   // 6b) Para parceiros tipo "operacional" com operatesProjects definidos,
   //     a comissão é calculada sobre TODAS as reservas dos projetos operados
-  //     (com checkout no período, não canceladas), expandindo a hierarquia
+  //     (concluídas, com checkout no período), expandindo a hierarquia
   //     para cobrir filhos. Independente do campo `campaign`, o que permite
   //     que uma mesma reserva acumule comissão de venda (via campaign) e
   //     comissão operacional (via operatesProjects).
@@ -4110,7 +3507,7 @@ export async function getPartnerInvoicingSummary(filters: {
     .map((p) => ({ p, cfg: parsePartnerConfig(p.notes ?? null) }))
     .filter(({ cfg }) => Array.isArray(cfg.operatesProjects) && cfg.operatesProjects!.length > 0);
 
-  const operationalRevenueByPartner = new Map<number, { count: number; revenue: number }>();
+  const operationalRevenueByPartner = new Map<number, { count: number; revenue: number; revenueNet: number }>();
 
   if (operationalPartners.length > 0) {
     // Reúne todos os projectIds (com hierarquia) que algum parceiro operacional cobre.
@@ -4127,30 +3524,19 @@ export async function getPartnerInvoicingSummary(filters: {
     }
 
     if (expanded.size > 0) {
-      const opBookings = await db
-        .select({
-          projectId: multiparkBookings.projectId,
-          count: sql<number>`COUNT(*)`,
-          revenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-        })
-        .from(multiparkBookings)
-        .where(
-          and(
-            sql`${multiparkBookings.status} != 'CANCELLED'`,
-            projectScope(multiparkBookings.projectId),
-        gte(multiparkBookings.checkOut, fromStr),
-            lte(multiparkBookings.checkOut, toStr),
-            inArray(multiparkBookings.projectId, Array.from(expanded)),
-          ),
-        )
-        .groupBy(multiparkBookings.projectId);
+      const opBookings = [...liveRows.filter((r) => r.projectId != null && expanded.has(r.projectId)).reduce((m, r) => {
+        const e = m.get(r.projectId!) ?? { projectId: r.projectId, count: 0, revenue: 0, revenueNet: 0 };
+        e.count += r.count; e.revenue += r.total; e.revenueNet += r.net;
+        return m.set(r.projectId!, e);
+      }, new Map<number, { projectId: number | null; count: number; revenue: number; revenueNet: number }>()).values()];
 
-      const revenueByProject = new Map<number, { count: number; revenue: number }>();
+      const revenueByProject = new Map<number, { count: number; revenue: number; revenueNet: number }>();
       for (const r of opBookings) {
         if (r.projectId == null) continue;
         revenueByProject.set(r.projectId, {
           count: Number(r.count ?? 0),
           revenue: Number(r.revenue ?? 0),
+          revenueNet: Number(r.revenueNet ?? 0),
         });
       }
 
@@ -4159,6 +3545,7 @@ export async function getPartnerInvoicingSummary(filters: {
       for (const { p, cfg } of operationalPartners) {
         let count = 0;
         let revenue = 0;
+        let revenueNet = 0;
         const cover = new Set<number>();
         for (const root of cfg.operatesProjects ?? []) {
           const ids = await resolveProjectIds(root);
@@ -4166,17 +3553,16 @@ export async function getPartnerInvoicingSummary(filters: {
         }
         for (const pid of cover) {
           const r = revenueByProject.get(pid);
-          if (r) { count += r.count; revenue += r.revenue; }
+          if (r) { count += r.count; revenue += r.revenue; revenueNet += r.revenueNet; }
         }
-        operationalRevenueByPartner.set(p.id, { count, revenue });
+        operationalRevenueByPartner.set(p.id, { count, revenue, revenueNet });
       }
     }
   }
 
   // 7) Constrói resultado
   return partnerRows.map((p) => {
-    const bk = bookingsByPartner.get(p.id) ?? { count: 0, revenue: 0 };
-    const inv = invByPartner.get(p.id) ?? { faturado: 0, emAtraso: 0, emAtrasoCount: 0 };
+    const bk = bookingsByPartner.get(p.id) ?? { count: 0, revenue: 0, revenueNet: 0 };
     const opRev = operationalRevenueByPartner.get(p.id);
 
     const commissionRate = Number(p.commissionRate ?? 0);
@@ -4187,18 +3573,18 @@ export async function getPartnerInvoicingSummary(filters: {
     let aFaturar = 0;
     let displayBookingsCount = bk.count;
     let displayRevenue = bk.revenue;
+    let displayRevenueNet = bk.revenueNet;
 
-    if (partnerType === "avenca_mensal") {
-      aFaturar = monthlyFee * monthFraction;
-    } else if (partnerType === "avenca_anual") {
-      aFaturar = monthlyFee * yearFraction;
+    if (partnerType === "avenca_mensal" || partnerType === "avenca_anual") {
+      aFaturar = partnerFeeForPeriod(partnerType, monthlyFee, filters.from, filters.to);
     } else if (partnerType === "operacional") {
       // Usa o cálculo via operatesProjects se configurado; senão usa o
       // campaign match (fallback). É legítimo um operacional ter ambos.
-      const revenue = opRev?.revenue ?? bk.revenue;
-      displayRevenue = revenue;
-      displayBookingsCount = opRev?.count ?? bk.count;
-      aFaturar = (revenue * commissionRate) / 100;
+      const rev = opRev ?? bk;
+      displayRevenue = rev.revenue;
+      displayRevenueNet = rev.revenueNet;
+      displayBookingsCount = rev.count;
+      aFaturar = partnerCommissionAmount(p, rev, commissionRate);
     } else if (
       partnerType === "agregador" ||
       partnerType === "agencia_viagem" ||
@@ -4206,7 +3592,7 @@ export async function getPartnerInvoicingSummary(filters: {
       partnerType === "companhia_aerea" ||
       partnerType === "afiliado"
     ) {
-      aFaturar = (bk.revenue * commissionRate) / 100;
+      aFaturar = partnerCommissionAmount(p, bk, commissionRate);
     } else if (partnerType === "cliente_pro") {
       // Cliente Pro: faturado no fim do mês com base nas reservas que ele
       // gerou. A receita já tem desconto aplicado.
@@ -4214,22 +3600,18 @@ export async function getPartnerInvoicingSummary(filters: {
     }
     // enterprise / campanha_propria / outro → não há a faturar automático
 
-    const pendente = Math.max(0, aFaturar - inv.faturado);
-
     return {
       partnershipId: p.id,
       partnerName: p.name,
       partnerType,
       commissionRate,
+      commissionBase: (p.commissionBase === "gross" ? "gross" : "net") as "net" | "gross",
       monthlyFee,
       bookingsCount: displayBookingsCount,
       revenueGross: displayRevenue,
+      revenueNet: displayRevenueNet,
       aFaturar: !billingAvailable && ['avenca_mensal', 'avenca_anual'].includes(partnerType) ? null : aFaturar,
       billingAvailable,
-      faturado: billingAvailable ? inv.faturado : null,
-      emAtraso: billingAvailable ? inv.emAtraso : null,
-      pendente: billingAvailable ? pendente : null,
-      faturasEmAtrasoCount: inv.emAtrasoCount,
     };
   })
     .sort((a, b) => (b.aFaturar ?? 0) - (a.aFaturar ?? 0));
@@ -4248,6 +3630,7 @@ export async function getPartnerInvoicingSummary(filters: {
 export async function getPartnerInvoicingDetailByType(filters: {
   from: string;
   to: string;
+  projectId?: number;
   partnerType: string;
 }): Promise<{
   partnerType: string;
@@ -4255,9 +3638,11 @@ export async function getPartnerInvoicingDetailByType(filters: {
     partnershipId: number;
     partnerName: string;
     commissionRate: number;
+    commissionBase: "net" | "gross";
     monthlyFee: number;
     bookingsCount: number;
     revenueGross: number;
+    revenueNet: number;
     discountTotal: number;
     extrasTotal: number;
     cashbackPercent: number;
@@ -4272,17 +3657,10 @@ export async function getPartnerInvoicingDetailByType(filters: {
   const db = await getDb();
   if (!db) return { partnerType: filters.partnerType, partners: [] };
 
-  const fromStr = toMysqlDateTime(new Date(filters.from));
-  const toStr = toMysqlDateTime(new Date(filters.to + "T23:59:59"));
-  const msPerDay = 1000 * 60 * 60 * 24;
-  const periodDays = Math.max(
-    1,
-    Math.floor((new Date(filters.to).getTime() - new Date(filters.from).getTime()) / msPerDay) + 1,
-  );
-  const monthFraction = periodDays / 30;
-  const yearFraction = periodDays / 365;
+  const projectIds = filters.projectId ? await resolveProjectIds(filters.projectId) : undefined;
 
   const { parsePartnerConfig } = await import("../shared/partnerTypes");
+  const { partnerFeeForPeriod } = await import("../shared/partnerRules");
 
   const partnerRows = await db
     .select({
@@ -4290,6 +3668,7 @@ export async function getPartnerInvoicingDetailByType(filters: {
       name: partnerships.name,
       partnerType: partnerships.partnerType,
       commissionRate: partnerships.commissionRate,
+      commissionBase: partnerships.commissionBase,
       monthlyFee: partnerships.monthlyFee,
       campaignKey: partnerships.campaignKey,
       notes: partnerships.notes,
@@ -4299,58 +3678,30 @@ export async function getPartnerInvoicingDetailByType(filters: {
 
   if (partnerRows.length === 0) return { partnerType: filters.partnerType, partners: [] };
 
-  // Aliases para o match de campaign
-  const aliasRows = await db.select({
-    partnershipId: partnerAliases.partnershipId,
-    aliasValue: partnerAliases.aliasValue,
-  }).from(partnerAliases);
+  // Correspondência campanha → parceiro: a MESMA do motor financeiro
+  const { loadPartnerIndex, partnerForCampaign } = await import("./finance/partners");
+  const { index: partnerIndex } = await loadPartnerIndex(db);
 
-  // campaignKey + name + aliases — unificado com getBillingData/summary
-  const keyToPartner = new Map<string, number>();
-  function reg(k: string | null | undefined, pid: number) {
-    if (!k) return; const x = k.trim().toLowerCase();
-    if (x && !keyToPartner.has(x)) keyToPartner.set(x, pid);
-  }
-  for (const p of partnerRows) { reg(p.campaignKey, p.id); reg(p.name, p.id); }
-  for (const a of aliasRows) reg(a.aliasValue, a.partnershipId);
+  // Reservas concluídas (CHECKED_OUT), AO VIVO da BD da Multipark, por campanha (campanha → parceiro).
+  const { rows: liveRows } = await livePartnerDelivered(filters.from, filters.to, projectIds);
+  const bookingRows = liveRows.filter((r) => hasCampaign(r.campaign))
+    .map((r) => ({ campaign: r.campaign, count: r.count, revenue: r.total, revenueNet: r.net, discount: r.discount, extras: r.extras }));
 
-  // Bookings agrupados por campaign (campanha → parceiro). Só CHECKED_OUT.
-  const bookingRows = await db
-    .select({
-      campaign: multiparkBookings.campaign,
-      projectId: multiparkBookings.projectId,
-      count: sql<number>`COUNT(*)`,
-      revenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-      discount: sql<number>`COALESCE(SUM(${multiparkBookings.discount}), 0)`,
-      extras: sql<number>`COALESCE(SUM(${multiparkBookings.extrasTotal}), 0)`,
-    })
-    .from(multiparkBookings)
-    .where(
-      and(
-        isNotNull(multiparkBookings.campaign),
-        sql`${multiparkBookings.status} != 'CANCELLED'`,
-        projectScope(multiparkBookings.projectId),
-        gte(multiparkBookings.checkOut, fromStr),
-        lte(multiparkBookings.checkOut, toStr),
-      ),
-    )
-    .groupBy(multiparkBookings.campaign, multiparkBookings.projectId);
-
-  const byPartner = new Map<number, { count: number; revenue: number; discount: number; extras: number }>();
+  const byPartner = new Map<number, { count: number; revenue: number; revenueNet: number; discount: number; extras: number }>();
   for (const b of bookingRows) {
-    const k = (b.campaign ?? "").trim().toLowerCase();
-    const pid = keyToPartner.get(k);
+    const pid = partnerForCampaign(partnerIndex, b.campaign)?.id;
     if (!pid) continue;
-    const ex = byPartner.get(pid) ?? { count: 0, revenue: 0, discount: 0, extras: 0 };
+    const ex = byPartner.get(pid) ?? { count: 0, revenue: 0, revenueNet: 0, discount: 0, extras: 0 };
     ex.count += Number(b.count ?? 0);
     ex.revenue += Number(b.revenue ?? 0);
+    ex.revenueNet += Number(b.revenueNet ?? 0);
     ex.discount += Number(b.discount ?? 0);
     ex.extras += Number(b.extras ?? 0);
     byPartner.set(pid, ex);
   }
 
   // Para operacional: agregação via projetos operados
-  const operationalRevenueByPartner = new Map<number, { count: number; revenue: number }>();
+  const operationalRevenueByPartner = new Map<number, { count: number; revenue: number; revenueNet: number }>();
   if (filters.partnerType === "operacional") {
     for (const p of partnerRows) {
       const cfg = parsePartnerConfig(p.notes ?? null);
@@ -4362,24 +3713,12 @@ export async function getPartnerInvoicingDetailByType(filters: {
         for (const pid of ids) expanded.add(pid);
       }
       if (expanded.size === 0) continue;
-      const rows = await db
-        .select({
-          count: sql<number>`COUNT(*)`,
-          revenue: sql<number>`COALESCE(SUM(${multiparkBookings.totalPrice}), 0)`,
-        })
-        .from(multiparkBookings)
-        .where(
-          and(
-            sql`${multiparkBookings.status} != 'CANCELLED'`,
-            projectScope(multiparkBookings.projectId),
-        gte(multiparkBookings.checkOut, fromStr),
-            lte(multiparkBookings.checkOut, toStr),
-            inArray(multiparkBookings.projectId, Array.from(expanded)),
-          ),
-        );
+      const covered = liveRows.filter((r) => r.projectId != null && expanded.has(r.projectId));
+      const rows = [{ count: covered.reduce((t, r) => t + r.count, 0), revenue: covered.reduce((t, r) => t + r.total, 0), revenueNet: covered.reduce((t, r) => t + r.net, 0) }];
       operationalRevenueByPartner.set(p.id, {
         count: Number(rows[0]?.count ?? 0),
         revenue: Number(rows[0]?.revenue ?? 0),
+        revenueNet: Number(rows[0]?.revenueNet ?? 0),
       });
     }
   }
@@ -4390,22 +3729,22 @@ export async function getPartnerInvoicingDetailByType(filters: {
     const prizeBudget = Number(cfg.prizeBudget ?? 0);
     const commissionRate = Number(p.commissionRate ?? 0);
     const monthlyFee = Number(p.monthlyFee ?? 0);
-    const bk = byPartner.get(p.id) ?? { count: 0, revenue: 0, discount: 0, extras: 0 };
+    const bk = byPartner.get(p.id) ?? { count: 0, revenue: 0, revenueNet: 0, discount: 0, extras: 0 };
     const opRev = operationalRevenueByPartner.get(p.id);
 
     let bookingsCount = bk.count;
     let revenueGross = bk.revenue;
+    let revenueNet = bk.revenueNet;
     let aFaturar = 0;
     const cashbackAmount = (bk.revenue * cashbackPercent) / 100;
 
     if (filters.partnerType === "operacional" && opRev) {
       bookingsCount = opRev.count;
       revenueGross = opRev.revenue;
-      aFaturar = (opRev.revenue * commissionRate) / 100;
-    } else if (filters.partnerType === "avenca_mensal") {
-      aFaturar = monthlyFee * monthFraction;
-    } else if (filters.partnerType === "avenca_anual") {
-      aFaturar = monthlyFee * yearFraction;
+      revenueNet = opRev.revenueNet;
+      aFaturar = partnerCommissionAmount(p, opRev, commissionRate);
+    } else if (filters.partnerType === "avenca_mensal" || filters.partnerType === "avenca_anual") {
+      aFaturar = partnerFeeForPeriod(filters.partnerType, monthlyFee, filters.from, filters.to);
     } else if (
       filters.partnerType === "agregador" ||
       filters.partnerType === "agencia_viagem" ||
@@ -4413,7 +3752,7 @@ export async function getPartnerInvoicingDetailByType(filters: {
       filters.partnerType === "companhia_aerea" ||
       filters.partnerType === "afiliado"
     ) {
-      aFaturar = (bk.revenue * commissionRate) / 100;
+      aFaturar = partnerCommissionAmount(p, bk, commissionRate);
     } else if (filters.partnerType === "cliente_pro") {
       aFaturar = bk.revenue;
     }
@@ -4422,9 +3761,11 @@ export async function getPartnerInvoicingDetailByType(filters: {
       partnershipId: p.id,
       partnerName: p.name,
       commissionRate,
+      commissionBase: (p.commissionBase === "gross" ? "gross" : "net") as "net" | "gross",
       monthlyFee,
       bookingsCount,
       revenueGross,
+      revenueNet,
       discountTotal: bk.discount,
       extrasTotal: bk.extras,
       cashbackPercent,
@@ -4439,92 +3780,15 @@ export async function getPartnerInvoicingDetailByType(filters: {
   return { partnerType: filters.partnerType, partners };
 }
 
-export async function listPartnerAliases(partnershipId: number) {
-  const db = await getDb(); if (!db) return [];
-  return db.select().from(partnerAliases).where(and(eq(partnerAliases.partnershipId, partnershipId), partnerScope(partnerAliases.partnershipId)));
-}
-
 /**
- * Para cada partnership, devolve o nº de aliases associados e a lista.
- * Útil para mostrar na UI quantos códigos cada parceiro tem (cada
- * parceiro normalmente tem vários — um por cidade × marca).
+ * Liga um registo das Parcerias a um parceiro da BD Multipark ("Partner".userId).
+ * Um id só pode estar num registo: sai de qualquer outro que o tivesse.
  */
-export async function aliasCountsByPartner(): Promise<Array<{
-  partnershipId: number;
-  partnershipName: string | null;
-  partnerIds: string[];
-  paymentMethods: string[];
-  total: number;
-}>> {
-  const db = await getDb();
-  if (!db) return [];
-  const rows = await db
-    .select({
-      partnershipId: partnerAliases.partnershipId,
-      aliasType: partnerAliases.aliasType,
-      aliasValue: partnerAliases.aliasValue,
-      partnershipName: partnerships.name,
-    })
-    .from(partnerAliases)
-    .leftJoin(partnerships, eq(partnerships.id, partnerAliases.partnershipId)).where(partnerScope(partnerAliases.partnershipId));
-
-  const map = new Map<number, { partnershipName: string | null; partnerIds: string[]; paymentMethods: string[] }>();
-  for (const r of rows) {
-    const entry = map.get(r.partnershipId) ?? { partnershipName: r.partnershipName, partnerIds: [], paymentMethods: [] };
-    if (r.aliasType === "multipark_partner_id") entry.partnerIds.push(r.aliasValue);
-    else entry.paymentMethods.push(r.aliasValue);
-    map.set(r.partnershipId, entry);
-  }
-  return Array.from(map.entries())
-    .map(([id, v]) => ({
-      partnershipId: id,
-      partnershipName: v.partnershipName,
-      partnerIds: v.partnerIds,
-      paymentMethods: v.paymentMethods,
-      total: v.partnerIds.length + v.paymentMethods.length,
-    }))
-    .sort((a, b) => b.total - a.total);
-}
-
-export async function deletePartnerAlias(id: number) {
+export async function setPartnershipMultiparkId(id: number, multiparkPartnerId: string | null): Promise<void> {
   const db = await getDb(); if (!db) return;
-  await db.delete(partnerAliases).where(eq(partnerAliases.id, id));
-}
-
-/**
- * Associa um partnerId da Multipark a uma parceria existente.
- * Opcionalmente actualiza a coluna `campaign` de todas as reservas com esse
- * partnerId para o nome do parceiro (substitui "Unknown User").
- */
-export async function linkMultiparkPartnerId(
-  partnershipId: number,
-  multiparkPartnerId: string,
-  applyToBookings: boolean,
-): Promise<number> {
-  const db = await getDb(); if (!db) return 0;
-
-  await db.update(partnerships)
-    .set({ multiparkPartnerId })
-    .where(eq(partnerships.id, partnershipId));
-
-  if (!applyToBookings) return 0;
-
-  const [p] = await db.select({ name: partnerships.name })
-    .from(partnerships).where(eq(partnerships.id, partnershipId)).limit(1);
-  if (!p) return 0;
-
-  const [result] = await (db as any).execute(sql`
-    UPDATE multipark_bookings
-    SET campaign = ${p.name}
-    WHERE JSON_UNQUOTE(JSON_EXTRACT(rawJson, '$.partnerId')) = ${multiparkPartnerId}
-  `);
-  return (result as any).affectedRows ?? 0;
-}
-
-export async function getPartnershipById(id: number) {
-  const db = await getDb(); if (!db) return null;
-  const rows = await db.select().from(partnerships).where(and(eq(partnerships.id, id), partnerScope(partnerships.id))).limit(1);
-  return rows[0] || null;
+  const mp = multiparkPartnerId?.trim() || null;
+  if (mp) await db.update(partnerships).set({ multiparkPartnerId: null }).where(and(eq(partnerships.multiparkPartnerId, mp), ne(partnerships.id, id)));
+  await db.update(partnerships).set({ multiparkPartnerId: mp }).where(eq(partnerships.id, id));
 }
 
 export async function updatePartnership(id: number, data: any) {
@@ -4532,116 +3796,26 @@ export async function updatePartnership(id: number, data: any) {
   await db.update(partnerships).set(data).where(eq(partnerships.id, id));
 }
 
+/** Apaga a parceria e tudo o que a referencia — sobretudo os aliases: o
+ * UNIQUE(aliasType, aliasValue) impedia voltar a ligar o partnerId/método de
+ * pagamento a outro parceiro, e a sincronização considerava-o "já ligado". */
 export async function deletePartnership(id: number) {
   const db = await getDb(); if (!db) return;
+  await db.delete(partnerAliases).where(eq(partnerAliases.partnershipId, id));
+  await db.delete(partnershipInvoices).where(eq(partnershipInvoices.partnershipId, id));
   await db.delete(partnershipTransactions).where(eq(partnershipTransactions.partnershipId, id));
   await db.delete(partnerships).where(eq(partnerships.id, id));
 }
 
-export async function createPartnershipTransaction(data: any) {
-  const db = await getDb(); if (!db) return null;
-  const [result] = await db.insert(partnershipTransactions).values(data as any).$returningId();
-  return result?.id;
-}
-
-export async function getPartnershipTransactions(partnershipId: number) {
-  const db = await getDb(); if (!db) return [];
-  return db.select().from(partnershipTransactions).where(and(eq(partnershipTransactions.partnershipId, partnershipId), projectScope(partnershipTransactions.projectId))).orderBy(desc(partnershipTransactions.transactionDate));
-}
-
-// ─── PARTNERSHIP INVOICES ────────────────────────────────────────────────
-export async function createPartnershipInvoice(data: any) {
-  const db = await getDb(); if (!db) return null;
-  const [result] = await db.insert(partnershipInvoices).values(data as any).$returningId();
-  return result?.id;
-}
-
-export async function getPartnershipInvoices(filters?: { partnershipId?: number; status?: string; year?: number; month?: number }) {
-  const db = await getDb(); if (!db) return [];
-  const conditions: any[] = [];
-  if (filters?.partnershipId) conditions.push(eq(partnershipInvoices.partnershipId, filters.partnershipId));
-  if (filters?.status) conditions.push(eq(partnershipInvoices.invoiceStatus, filters.status as any));
-  if (filters?.year) conditions.push(eq(partnershipInvoices.referenceYear, filters.year));
-  if (filters?.month) conditions.push(eq(partnershipInvoices.referenceMonth, filters.month));
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
-  return db.select().from(partnershipInvoices).where(where).orderBy(desc(partnershipInvoices.createdAt));
-}
-
-export async function updatePartnershipInvoice(id: number, data: any) {
-  const db = await getDb(); if (!db) return;
-  await db.update(partnershipInvoices).set(data).where(eq(partnershipInvoices.id, id));
-}
-
-export async function deletePartnershipInvoice(id: number) {
-  const db = await getDb(); if (!db) return;
-  await db.delete(partnershipInvoices).where(eq(partnershipInvoices.id, id));
-}
-
-export async function markOverduePartnershipInvoices() {
-  const db = await getDb(); if (!db) return 0;
-  const now = new Date();
-  const result = await db.update(partnershipInvoices)
-    .set({ invoiceStatus: "overdue" as any })
-    .where(
-      and(
-        eq(partnershipInvoices.invoiceStatus, "sent" as any),
-        sql`${partnershipInvoices.dueDate} < ${toMysqlDateTime(now)}`
-      )
-    );
-  return (result as any)[0]?.affectedRows || 0;
-}
-
-export async function getPartnershipDashboardStats() {
-  const db = await getDb(); if (!db) return null;
-  const allPartners = await db.select().from(partnerships);
-  const allInvoices = await db.select().from(partnershipInvoices);
-  const allTx = await db.select().from(partnershipTransactions);
-
-  const totalPartners = allPartners.length;
-  const activePartners = allPartners.filter(p => p.partnerStatus === "active").length;
-  const byType: Record<string, number> = {};
-  allPartners.forEach(p => { byType[p.partnerType] = (byType[p.partnerType] || 0) + 1; });
-
-  const pendingInvoices = allInvoices.filter(i => i.invoiceStatus === "sent");
-  const overdueInvoices = allInvoices.filter(i => i.invoiceStatus === "overdue");
-  const paidInvoices = allInvoices.filter(i => i.invoiceStatus === "paid");
-
-  const totalPending = pendingInvoices.reduce((s, i) => s + (i.amount || 0), 0);
-  const totalOverdue = overdueInvoices.reduce((s, i) => s + (i.amount || 0), 0);
-  const totalPaid = paidInvoices.reduce((s, i) => s + (i.amount || 0), 0);
-  const totalBookings = allTx.filter(t => t.transactionType === "booking").reduce((s, t) => s + (t.amount || 0), 0);
-
-  // Per-partner summary
-  const partnerSummaries = allPartners.map(p => {
-    const pInvoices = allInvoices.filter(i => i.partnershipId === p.id);
-    const pTx = allTx.filter(t => t.partnershipId === p.id);
-    const pending = pInvoices.filter(i => i.invoiceStatus === "sent").reduce((s, i) => s + (i.amount || 0), 0);
-    const overdue = pInvoices.filter(i => i.invoiceStatus === "overdue").reduce((s, i) => s + (i.amount || 0), 0);
-    const paid = pInvoices.filter(i => i.invoiceStatus === "paid").reduce((s, i) => s + (i.amount || 0), 0);
-    const bookings = pTx.filter(t => t.transactionType === "booking").reduce((s, t) => s + (t.amount || 0), 0);
-    return {
-      ...p,
-      invoicesPending: pending,
-      invoicesOverdue: overdue,
-      invoicesPaid: paid,
-      totalBookings: bookings,
-      invoiceCount: pInvoices.length,
-      hasOverdue: overdue > 0,
-    };
-  });
-
-  return {
-    totalPartners,
-    activePartners,
-    byType,
-    totalPending,
-    totalOverdue,
-    totalPaid,
-    totalBookings,
-    pendingCount: pendingInvoices.length,
-    overdueCount: overdueInvoices.length,
-    partnerSummaries,
-  };
+/** Já existe uma parceria com este nome (sem distinguir maiúsculas/espaços)? */
+export async function partnershipNameExists(name: string, exceptId?: number): Promise<boolean> {
+  const db = await getDb(); if (!db) return false;
+  const rows = await db.select({ id: partnerships.id }).from(partnerships)
+    .where(and(
+      sql`LOWER(TRIM(${partnerships.name})) = ${name.trim().toLowerCase()}`,
+      exceptId != null ? ne(partnerships.id, exceptId) : undefined,
+    )).limit(1);
+  return rows.length > 0;
 }
 
 // ─── ANUAL (ANNUAL REPORTS) ────────────────────────────────────────────────
@@ -4653,9 +3827,8 @@ export async function createAnnualReport(data: any) {
 
 export async function getAnnualReports(filters?: { year?: number; projectId?: number }) {
   const db = await getDb(); if (!db) return [];
-  const conditions: any[] = [];
+  const conditions: any[] = await projectFilterConds(annualReports.projectId, filters?.projectId);
   if (filters?.year) conditions.push(eq(annualReports.year, filters.year));
-  if (filters?.projectId) conditions.push(eq(annualReports.projectId, filters.projectId));
   const where = conditions.length > 0 ? and(...conditions) : undefined;
   return db.select().from(annualReports).where(where).orderBy(annualReports.month);
 }
@@ -4816,108 +3989,89 @@ export async function autoCloseStaleCheckIns(): Promise<{ closed: number }> {
 // canetas, bateria, PDAs, fardamento + notas. 1 registo por (dia, turno, cidade).
 // `clothingItems` (JSON, ver shared/clothing.ts) substitui `uniformsCount`
 // desde 2026-09-09; a coluna antiga fica para os registos anteriores.
-let shiftHandoverEnsured = false;
-async function ensureShiftHandoverTable() {
-  if (shiftHandoverEnsured) return;
-  const db = await getDb();
-  if (!db) return;
-  await db.execute(sql`CREATE TABLE IF NOT EXISTS \`shift_handovers\` (
-    \`id\` INT NOT NULL AUTO_INCREMENT,
-    \`handoverDate\` VARCHAR(10) NOT NULL,
-    \`shift\` VARCHAR(10) NOT NULL,
-    \`city\` VARCHAR(16) NOT NULL DEFAULT 'lisbon',
-    \`carsForCovered\` INT NULL,
-    \`chargedUntilDate\` VARCHAR(10) NULL,
-    \`cashClosedInSafe\` TINYINT NULL,
-    \`checkoutCashDone\` TINYINT NULL,
-    \`frontPouchValue\` DECIMAL(10,2) NULL,
-    \`terminalPouchValue\` DECIMAL(10,2) NULL,
-    \`ticketsExpensesPaid\` DECIMAL(10,2) NULL,
-    \`mbRolls\` INT NULL,
-    \`mbRollsInPouch\` INT NULL,
-    \`pensInPouch\` INT NULL,
-    \`mbBattery\` INT NULL,
-    \`pdasCharged\` TINYINT NULL,
-    \`uniformsCount\` INT NULL,
-    \`clothingItems\` TEXT NULL,
-    \`notes\` TEXT NULL,
-    \`filledById\` INT NULL,
-    \`filledByName\` VARCHAR(255) NULL,
-    \`createdAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    \`updatedAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    PRIMARY KEY (\`id\`),
-    UNIQUE INDEX \`shift_handover_unique\` (\`handoverDate\`, \`shift\`, \`city\`)
-  )`);
-  shiftHandoverEnsured = true;
-}
+// A tabela é criada pela migration 0087 (drizzle/schema.ts `shiftHandovers`);
+// todo o SQL está em server/shiftHandoverSql.ts, sempre parametrizado.
 
-export async function saveShiftHandover(data: Record<string, any>) {
+export async function saveShiftHandover(
+  key: HandoverKey,
+  data: HandoverInput,
+  opts: { expectedVersion: number | null | undefined; userId: number; userName: string | null; canEditOld: boolean },
+): Promise<{ mode: "insert" | "update"; changed: string[] }> {
   const db = await getDb();
   if (!db) throw new Error("BD indisponível");
-  await ensureShiftHandoverTable();
-  const esc = (v: any) => v == null ? "NULL" : typeof v === "number" ? String(v) : `'${String(v).replace(/'/g, "''").slice(0, 2000)}'`;
-  const cols: Array<[string, any]> = [
-    ["handoverDate", data.handoverDate], ["shift", data.shift], ["city", data.city ?? "lisbon"],
-    ["carsForCovered", data.carsForCovered], ["chargedUntilDate", data.chargedUntilDate],
-    ["cashClosedInSafe", data.cashClosedInSafe == null ? null : (data.cashClosedInSafe ? 1 : 0)],
-    ["checkoutCashDone", data.checkoutCashDone == null ? null : (data.checkoutCashDone ? 1 : 0)],
-    ["frontPouchValue", data.frontPouchValue], ["terminalPouchValue", data.terminalPouchValue],
-    ["ticketsExpensesPaid", data.ticketsExpensesPaid], ["mbRolls", data.mbRolls],
-    ["mbRollsInPouch", data.mbRollsInPouch], ["pensInPouch", data.pensInPouch],
-    ["mbBattery", data.mbBattery],
-    ["pdasCharged", data.pdasCharged == null ? null : (data.pdasCharged ? 1 : 0)],
-    ["uniformsCount", data.uniformsCount],
-    // Lista de peças (já validada no router); `null` limpa. JSON compacto —
-    // o `esc` corta a 2000 chars, e 30 peças ficam muito abaixo disso.
-    ["clothingItems", Array.isArray(data.clothingItems) ? JSON.stringify(data.clothingItems) : data.clothingItems ?? null],
-    ["notes", data.notes],
-    ["filledById", data.filledById], ["filledByName", data.filledByName],
-  ];
-  const updates = cols.filter(([c]) => !["handoverDate", "shift", "city"].includes(c))
-    .map(([c, v]) => `\`${c}\` = ${esc(v)}`).join(", ");
-  await db.execute(sql.raw(
-    `INSERT INTO \`shift_handovers\` (${cols.map(([c]) => `\`${c}\``).join(",")})
-     VALUES (${cols.map(([, v]) => esc(v)).join(",")})
-     ON DUPLICATE KEY UPDATE ${updates}`,
-  ));
+  const [curRows] = await db.execute(buildHandoverCurrent(key)) as any;
+  const cur = (curRows as any[])[0] ?? null;
+  const decision = decideHandoverWrite(
+    cur ? { version: Number(cur.version ?? 1), ageMinutes: Number(cur.ageMinutes ?? 0) } : null,
+    opts.expectedVersion,
+    opts.canEditOld,
+  );
+  if (!decision.ok) throw new TRPCError({ code: decision.code, message: decision.message });
+  // Pendentes: a resolução é monotónica (um item resolvido pela passagem
+  // seguinte não reabre por causa de um formulário antigo).
+  if (cur && Array.isArray(data.openItems)) {
+    data = { ...data, openItems: mergeStoredOpenItems(parseOpenItems(cur.openItems), data.openItems as OpenItem[]) };
+  }
+  const bound = handoverBoundValues(data);
+  const before = cur ? handoverBoundValues(cur) : null;
+  const changed = diffHandoverFields(before, bound);
+  const who = { id: opts.userId, name: opts.userName };
+  if (decision.mode === "insert") {
+    try {
+      await db.execute(buildHandoverInsert(key, data, who));
+    } catch (err: any) {
+      // Outra pessoa criou o mesmo (dia, turno, cidade) entre a leitura e a escrita.
+      if ((err?.code ?? err?.cause?.code) === "ER_DUP_ENTRY") throw new TRPCError({ code: "CONFLICT", message: HANDOVER_EXISTS_MESSAGE });
+      throw err;
+    }
+    return { mode: "insert", changed };
+  }
+  const [res] = await db.execute(buildHandoverUpdate(Number(cur.id), Number(opts.expectedVersion), data, who)) as any;
+  if (Number(res?.affectedRows ?? 0) === 0) throw new TRPCError({ code: "CONFLICT", message: HANDOVER_CONFLICT_MESSAGE });
+  return { mode: "update", changed };
 }
 
 export async function listShiftHandovers(opts: { from?: string; to?: string; city?: string } = {}) {
   const db = await getDb();
   if (!db) return [];
-  await ensureShiftHandoverTable();
-  const conds: string[] = [];
-  if (opts.from) conds.push(`handoverDate >= '${opts.from.slice(0, 10)}'`);
-  if (opts.to) conds.push(`handoverDate <= '${opts.to.slice(0, 10)}'`);
-  if (opts.city) conds.push(`city = '${opts.city.replace(/[^a-z]/g, "")}'`);
-  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
-  const [rows] = await db.execute(sql.raw(
-    `SELECT * FROM \`shift_handovers\` ${where} ORDER BY handoverDate DESC, shift, city LIMIT 200`,
-  )) as any;
+  const [rows] = await db.execute(buildHandoverList(opts, cityNameScope(sql`\`city\``))) as any;
   // `clothingItems` sai como JSON parseado e validado — o cliente nunca vê texto cru.
-  return (rows as any[]).map((r) => ({ ...r, clothingItems: parseClothingItems(r.clothingItems) }));
+  return (rows as any[]).map(({ autoSummary, ...r }) => ({
+    ...r,
+    version: Number(r.version ?? 1),
+    clothingItems: parseClothingItems(r.clothingItems),
+    openItems: parseOpenItems(r.openItems),
+    materialExceptions: parseMaterialExceptions(r.materialExceptions),
+    // A fotografia do resumo automático (JSON grande) não vai na lista.
+    hasAutoSummary: !!autoSummary,
+  }));
 }
 
-/** Dashboard do supervisor (por dia): condutores por turno, carros
+/** Resumo do dia do supervisor: condutores por turno, carros
  *  recolhidos/entregues, TEMPOS pendente→entrega e atraso na recolha
- *  (previsto vs real), e reclamações do dia. */
+ *  (previsto vs real), e reclamações do dia.
+ *  O "dia" é o dia OPERACIONAL de Lisboa: 03:00 → 03:00 do dia seguinte
+ *  (manhã + noite inteira), convertido para UTC (as colunas são UTC). Tudo
+ *  dentro das cidades do utilizador (ou da cidade pedida). */
 export async function getSupervisorDayDashboard(date: string) {
   const db = await getDb();
   if (!db) return null;
-  const start = `${date} 00:00:00`;
-  const end = `${date} 23:59:59`;
-  const nextEnd = `${date} 23:59:59`;
+  const { start, end, endMs } = operationalDayWindowUtc(date);
+  // Entregas: o CHECK_OUT pode acontecer até 10h depois do pendente (o mesmo
+  // limite do TIMESTAMPDIFF < 600 abaixo) — limite superior explícito.
+  const checkoutEnd = new Date(endMs + 600 * 60_000).toISOString().slice(0, 19).replace("T", " ");
 
   // Tempos pendente→entrega (PENDING_CHECKOUT → CHECK_OUT, mesmo booking)
   const [deliveryRows] = await db.execute(sql`
     SELECT h1.bookingExternalId, TIMESTAMPDIFF(MINUTE, h1.t, h2.t) AS mins, h2.agentName
     FROM (SELECT bookingExternalId, MIN(actionTime) t FROM multipark_booking_history
-          WHERE changeType='PENDING_CHECKOUT' AND actionTime >= ${start} AND actionTime <= ${end}
+          WHERE changeType='PENDING_CHECKOUT' AND actionTime >= ${start} AND actionTime < ${end}
           GROUP BY bookingExternalId) h1
     JOIN (SELECT bookingExternalId, MIN(actionTime) t, MAX(agentName) agentName FROM multipark_booking_history
-          WHERE changeType='CHECK_OUT' AND actionTime >= ${start}
-          GROUP BY bookingExternalId) h2 USING (bookingExternalId)
-    WHERE h2.t >= h1.t AND TIMESTAMPDIFF(MINUTE, h1.t, h2.t) < 600`) as any;
+          WHERE changeType='CHECK_OUT' AND actionTime >= ${start} AND actionTime < ${checkoutEnd}
+          GROUP BY bookingExternalId) h2 ON h2.bookingExternalId = h1.bookingExternalId
+    WHERE h2.t >= h1.t AND TIMESTAMPDIFF(MINUTE, h1.t, h2.t) < 600
+      AND ${bookingHistoryScope(sql`h1.bookingExternalId`)}`) as any;
   const deliveryTimes = (deliveryRows as any[]).map((r) => ({ booking: r.bookingExternalId, mins: Number(r.mins), agent: r.agentName ?? null }));
   deliveryTimes.sort((a, b) => b.mins - a.mins);
   const dAvg = deliveryTimes.length ? Math.round(deliveryTimes.reduce((s, r) => s + r.mins, 0) / deliveryTimes.length) : 0;
@@ -4926,16 +4080,18 @@ export async function getSupervisorDayDashboard(date: string) {
   const [pickupRows] = await db.execute(sql`
     SELECT h.bookingExternalId, TIMESTAMPDIFF(MINUTE, b.checkIn, h.t) AS mins
     FROM (SELECT bookingExternalId, MIN(actionTime) t FROM multipark_booking_history
-          WHERE changeType='CHECK_IN' AND actionTime >= ${start} AND actionTime <= ${nextEnd}
+          WHERE changeType='CHECK_IN' AND actionTime >= ${start} AND actionTime < ${end}
           GROUP BY bookingExternalId) h
     JOIN multipark_bookings b ON b.externalId = h.bookingExternalId
-    WHERE b.checkIn IS NOT NULL AND ABS(TIMESTAMPDIFF(MINUTE, b.checkIn, h.t)) < 600`) as any;
+    WHERE b.checkIn IS NOT NULL AND ABS(TIMESTAMPDIFF(MINUTE, b.checkIn, h.t)) < 600
+      AND ${projectScope(sql`b.projectId`)}`) as any;
   const pickupDelays = (pickupRows as any[]).map((r) => Number(r.mins)).filter((m) => Number.isFinite(m));
   const late = pickupDelays.filter((m) => m > 15).length;
   const pAvg = pickupDelays.length ? Math.round(pickupDelays.reduce((s, m) => s + m, 0) / pickupDelays.length) : 0;
 
-  // Reclamações criadas no dia
-  const [[compl]] = await db.execute(sql`SELECT COUNT(*) n FROM complaints WHERE createdAt >= ${start} AND createdAt <= ${end}`) as any;
+  // Reclamações criadas no mesmo dia operacional
+  const [[compl]] = await db.execute(sql`SELECT COUNT(*) n FROM complaints
+    WHERE createdAt >= ${start} AND createdAt < ${end} AND ${projectScope(sql`complaints.projectId`)}`) as any;
 
   // Condutores por turno (escala extras-dia do dia + ações)
   const dayActivity = await getDayActivity(date);
@@ -4947,10 +4103,11 @@ export async function getSupervisorDayDashboard(date: string) {
     startHour: extrasDiaAssignments.startHour,
     endHour: extrasDiaAssignments.endHour,
     isTeamLeader: extrasDiaAssignments.isTeamLeader,
-  }).from(extrasDiaAssignments).where(eq(extrasDiaAssignments.assignmentDate, date));
+  }).from(extrasDiaAssignments).where(and(eq(extrasDiaAssignments.assignmentDate, date), cityNameScope(extrasDiaAssignments.city)));
 
   return {
     date,
+    window: { start, end },
     totals: dayActivity.totals,
     people: dayActivity.people,
     shifts: assignments,
@@ -5012,7 +4169,10 @@ export async function listAgentPartners(): Promise<Array<{ agentName: string; pa
 
 // ─── PERMISSÕES POR UTILIZADOR (grant/deny além do role) ─────────────────────
 // Pedido Jorge 2026-08-06: "mais permissões ou menos permissões por utilizador".
-// Tabela on-demand; o catálogo vive em shared/permissions.ts.
+// O catálogo das permissões especiais vive em shared/permissions.ts; os
+// overrides de MÓDULO (chave `module.<id>`, migração 0100) na mesma tabela.
+// A tabela nasce pela migração 0100 (ensureRecentSchema); o CREATE aqui fica
+// como rede de segurança para bases antigas.
 let userPermsEnsured = false;
 async function ensureUserPermissionsTable() {
   if (userPermsEnsured) return;
@@ -5024,9 +4184,48 @@ async function ensureUserPermissionsTable() {
     \`mode\` ENUM('grant','deny') NOT NULL,
     \`grantedBy\` INT NULL,
     \`updatedAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    PRIMARY KEY (\`userId\`, \`permission\`)
+    \`scope\` VARCHAR(16) NULL,
+    \`actions\` VARCHAR(8) NULL,
+    \`expiresOn\` DATE NULL,
+    \`note\` VARCHAR(255) NULL,
+    \`createdAt\` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (\`userId\`, \`permission\`),
+    KEY \`idx_user_permissions_permission\` (\`permission\`)
   )`);
   userPermsEnsured = true;
+}
+
+/** DATE do mysql2 (Date ou string) → "YYYY-MM-DD" (a data "de calendário", sem fuso). */
+function dayString(v: unknown): string | null {
+  if (v == null || v === "") return null;
+  if (v instanceof Date) {
+    const y = v.getFullYear(), m = String(v.getMonth() + 1).padStart(2, "0"), d = String(v.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+  return String(v).slice(0, 10);
+}
+
+export function toPermissionRow(r: any): PermissionRow {
+  return {
+    permission: String(r.permission),
+    mode: r.mode === "deny" ? "deny" : "grant",
+    scope: r.scope == null ? null : String(r.scope),
+    actions: r.actions == null ? null : String(r.actions),
+    expiresOn: dayString(r.expiresOn),
+  };
+}
+
+/** Todas as linhas de user_permissions da pessoa (memorizadas por pedido). */
+export async function getUserPermissionRows(userId: number): Promise<PermissionRow[]> {
+  const load = async () => {
+    const db = await getDb();
+    if (!db) return [];
+    await ensureUserPermissionsTable();
+    const [rows] = await db.execute(sql`SELECT permission, mode, scope, actions, expiresOn
+      FROM \`user_permissions\` WHERE userId = ${userId}`) as any;
+    return ((rows as any[]) ?? []).map(toPermissionRow);
+  };
+  return cachedPermissionRows(userId, load) ?? load();
 }
 
 export async function setUserPermission(userId: number, permission: string, mode: "grant" | "deny" | null, grantedBy?: number) {
@@ -5042,23 +4241,153 @@ export async function setUserPermission(userId: number, permission: string, mode
   }
 }
 
+/** Permissões especiais (não os módulos) da pessoa, só as que ainda valem. */
 export async function getUserPermissionOverrides(userId: number): Promise<Record<string, "grant" | "deny">> {
-  const db = await getDb();
-  if (!db) return {};
-  await ensureUserPermissionsTable();
-  const [rows] = await db.execute(sql`SELECT permission, mode FROM \`user_permissions\` WHERE userId = ${userId}`) as any;
+  const today = lisbonToday();
   const out: Record<string, "grant" | "deny"> = {};
-  for (const r of (rows as any[]) ?? []) out[String(r.permission)] = r.mode === "deny" ? "deny" : "grant";
+  for (const r of await getUserPermissionRows(userId)) {
+    if (r.permission.startsWith("module.")) continue;
+    if (r.expiresOn && r.expiresOn < today) continue;
+    out[r.permission] = r.mode;
+  }
   return out;
+}
+
+/** Overrides de MÓDULO ativos da pessoa (os expirados não contam). */
+export async function getUserModuleOverrides(userId: number): Promise<AccessOverrides> {
+  return moduleOverridesFromRows(await getUserPermissionRows(userId), lisbonToday());
+}
+
+export function moduleOverridesFromRows(rows: PermissionRow[], today: string): AccessOverrides {
+  const out: AccessOverrides = {};
+  for (const r of rows) {
+    const o = moduleOverrideFromRow(r);
+    if (o && overrideActive(o.override, today)) out[o.module] = o.override;
+  }
+  return out;
+}
+
+export function moduleOverrideFromRow(r: Pick<PermissionRow, "permission" | "mode" | "scope" | "actions" | "expiresOn">): { module: ModuleId; override: ModuleOverride } | null {
+  if (!r.permission.startsWith("module.")) return null;
+  const module = r.permission.slice("module.".length);
+  if (!isModuleId(module)) return null;
+  const access = (ACCESS_VALUES as readonly string[]).includes(String(r.scope)) ? r.scope as Access : "none";
+  const override: ModuleOverride = r.mode === "deny" || access === "none"
+    ? { access: "none", actions: [], expiresOn: r.expiresOn }
+    : { access, actions: normalizeGrant({ access, actions: lettersToActions(r.actions) }).actions, expiresOn: r.expiresOn };
+  return { module, override };
+}
+
+export interface ModuleOverrideRecord {
+  module: ModuleId;
+  override: ModuleOverride;
+  note: string | null;
+  grantedBy: number | null;
+  grantedByName: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+/** Overrides de módulo da pessoa (incluindo expirados), com quem deu e quando. */
+export async function listModuleOverridesForUser(userId: number): Promise<ModuleOverrideRecord[]> {
+  const db = await getDb();
+  if (!db) return [];
+  await ensureUserPermissionsTable();
+  const [rows] = await db.execute(sql`
+    SELECT p.permission, p.mode, p.scope, p.actions, p.expiresOn, p.note, p.grantedBy, p.createdAt, p.updatedAt,
+      g.name AS grantedByName
+    FROM \`user_permissions\` p LEFT JOIN users g ON g.id = p.grantedBy
+    WHERE p.userId = ${userId} AND p.permission LIKE ${"module.%"}`) as any;
+  const out: ModuleOverrideRecord[] = [];
+  for (const r of (rows as any[]) ?? []) {
+    const o = moduleOverrideFromRow(toPermissionRow(r));
+    if (!o) continue;
+    out.push({
+      ...o,
+      note: r.note == null ? null : String(r.note),
+      grantedBy: r.grantedBy == null ? null : Number(r.grantedBy),
+      grantedByName: r.grantedByName == null ? null : String(r.grantedByName),
+      createdAt: r.createdAt == null ? null : toMysqlDateTime(r.createdAt),
+      updatedAt: r.updatedAt == null ? null : toMysqlDateTime(r.updatedAt),
+    });
+  }
+  return out;
+}
+
+/**
+ * Grava (ou apaga, com `value` null = repor o padrão) o override de um módulo.
+ * Devolve o que lá estava (para o registo de atividade).
+ */
+export async function setModuleOverride(userId: number, module: ModuleId, value: ModuleOverride | null, grantedBy: number, note?: string | null): Promise<ModuleOverride | null> {
+  const db = await getDb();
+  if (!db) return null;
+  await ensureUserPermissionsTable();
+  const key = moduleOverrideKey(module);
+  const [prevRows] = await db.execute(sql`SELECT permission, mode, scope, actions, expiresOn
+    FROM \`user_permissions\` WHERE userId = ${userId} AND permission = ${key}`) as any;
+  const prevRow = ((prevRows as any[]) ?? [])[0];
+  const prev = prevRow ? moduleOverrideFromRow(toPermissionRow(prevRow))?.override ?? null : null;
+  if (!value) {
+    await db.execute(sql`DELETE FROM \`user_permissions\` WHERE userId = ${userId} AND permission = ${key}`);
+    return prev;
+  }
+  const g = normalizeGrant(value);
+  const mode = g.access === "none" ? "deny" : "grant";
+  const letters = g.access === "none" ? "" : actionsToLetters(g.actions);
+  const expiresOn = value.expiresOn ? String(value.expiresOn).slice(0, 10) : null;
+  const cleanNote = note?.trim() ? note.trim().slice(0, 255) : null;
+  await db.execute(sql`INSERT INTO \`user_permissions\` (userId, permission, mode, grantedBy, scope, actions, expiresOn, note)
+    VALUES (${userId}, ${key}, ${mode}, ${grantedBy}, ${g.access}, ${letters}, ${expiresOn}, ${cleanNote})
+    ON DUPLICATE KEY UPDATE mode = VALUES(mode), grantedBy = VALUES(grantedBy), scope = VALUES(scope),
+      actions = VALUES(actions), expiresOn = VALUES(expiresOn), note = VALUES(note), createdAt = CURRENT_TIMESTAMP`);
+  return prev;
+}
+
+/**
+ * "Quem tem acesso a X": contas ativas (no âmbito de cidade do pedido) com o
+ * override desse módulo, se houver. O acesso efetivo calcula-se em JS
+ * (papel + override) — uma só consulta, sem GROUP BY.
+ */
+export async function listUsersWithModuleOverride(module: ModuleId): Promise<Array<{
+  id: number; name: string | null; email: string | null; role: string; override: ModuleOverride | null; overrideExpired: boolean;
+}>> {
+  const db = await getDb();
+  if (!db) return [];
+  await ensureUserPermissionsTable();
+  const key = moduleOverrideKey(module);
+  const today = lisbonToday();
+  const [rows] = await db.execute(sql`
+    SELECT u.id, u.name, u.email, u.role, p.permission, p.mode, p.scope, p.actions, p.expiresOn
+    FROM users u LEFT JOIN \`user_permissions\` p ON p.userId = u.id AND p.permission = ${key}
+    WHERE u.isActive = 1 AND ${userScope(sql`u.id`)}
+    ORDER BY u.name, u.id`) as any;
+  return ((rows as any[]) ?? []).map((r) => {
+    const o = r.permission ? moduleOverrideFromRow(toPermissionRow(r))?.override ?? null : null;
+    return {
+      id: Number(r.id), name: r.name ?? null, email: r.email ?? null, role: String(r.role ?? "user"),
+      override: o, overrideExpired: !!o && !overrideActive(o, today),
+    };
+  });
+}
+
+/** Contas ativas no âmbito de cidade do pedido (para escolher a quem dar acessos). */
+export async function listActiveUsersInScope(): Promise<Array<{ id: number; name: string | null; email: string | null; role: string }>> {
+  const db = await getDb();
+  if (!db) return [];
+  const [rows] = await db.execute(sql`SELECT u.id, u.name, u.email, u.role FROM users u
+    WHERE u.isActive = 1 AND ${userScope(sql`u.id`)} ORDER BY u.name, u.id`) as any;
+  return ((rows as any[]) ?? []).map((r) => ({ id: Number(r.id), name: r.name ?? null, email: r.email ?? null, role: String(r.role ?? "user") }));
 }
 
 export async function listPermissionAssignments(): Promise<Array<{ userId: number; permission: string; mode: "grant" | "deny"; userName: string | null; userEmail: string | null }>> {
   const db = await getDb();
   if (!db) return [];
   await ensureUserPermissionsTable();
+  // Só as permissões especiais — os overrides de módulo têm a sua vista.
   const [rows] = await db.execute(sql`
     SELECT p.userId, p.permission, p.mode, u.name AS userName, u.email AS userEmail
     FROM \`user_permissions\` p LEFT JOIN users u ON u.id = p.userId
+    WHERE p.permission NOT LIKE ${"module.%"}
     ORDER BY p.permission, u.name`) as any;
   return ((rows as any[]) ?? []).map((r) => ({
     userId: Number(r.userId),
@@ -5150,108 +4479,20 @@ export async function getLastWorkedMap(): Promise<Record<number, string>> {
     SELECT employeeId id, MAX(assignmentDate) d FROM extras_dia_assignments
     WHERE employeeId IS NOT NULL GROUP BY employeeId`) as any;
   for (const r of (extras as any[]) ?? []) take(r.id, r.d);
+  try {
+    const [aliasAgents] = await db.execute(sql`
+      SELECT a.employeeId id, MAX(h.actionTime) d FROM employee_agents a
+      JOIN multipark_booking_history h ON h.agentUserId = a.agentUserId GROUP BY a.employeeId`) as any;
+    for (const r of (aliasAgents as any[]) ?? []) take(r.id, r.d);
+  } catch { /* tabela ainda não criada */ }
   return out;
 }
 
-/** Atividade consolidada de UM dia (visão do Jorge): por pessoa/agente —
- *  ações nas reservas (recolhas/entregas/movimentos/cancelamentos) + km e
- *  horas do GPS (daily_driver_history, recolhido às 2h para o dia anterior). */
-export async function getDayActivity(date: string) {
-  const db = await getDb();
-  if (!db) return { people: [], totals: { checkins: 0, checkouts: 0, movements: 0, cancels: 0, other: 0, totalKm: 0, activePeople: 0 } };
-  const start = `${date} 00:00:00`;
-  const end = `${date} 23:59:59`;
-
-  // Ações por agente no dia
-  const [actionRows] = await db.execute(sql`
-    SELECT agentName, changeType, COUNT(*) AS n
-    FROM multipark_booking_history
-    WHERE actionTime >= ${start} AND actionTime <= ${end} AND agentName IS NOT NULL AND agentName != '' AND ${bookingHistoryScope(sql`multipark_booking_history.bookingExternalId`)}
-    GROUP BY agentName, changeType`) as any;
-
-  // Ligações agente→colaborador e agente→parceiro
-  const emps = await db.select({ id: employees.id, fullName: employees.fullName, multiparkAgentName: employees.multiparkAgentName })
-    .from(employees).where(and(isNotNull(employees.multiparkAgentName), projectScope(employees.projectId)));
-  const empByAgent = new Map(emps.map((e) => [(e.multiparkAgentName ?? "").trim().toLowerCase(), e]));
-  const partners = await listAgentPartners();
-  const partnerByAgent = new Map(partners.map((p) => [p.agentName.trim().toLowerCase(), p]));
-
-  // GPS do dia (por employeeId quando ligado)
-  const [gpsRows] = await db.execute(sql`
-    SELECT employeeId, zelloUsername, displayName, totalKm, hoursWorked, hoursStopped, totalHoursOnline, avgSpeed, maxSpeed, gpsPointsCount
-    FROM daily_driver_history WHERE DATE(date) = ${date} AND ${employeeScope(sql`daily_driver_history.employeeId`)}`) as any;
-  const gpsByEmp = new Map<number, any>();
-  const gpsUnlinked: any[] = [];
-  for (const g of gpsRows as any[]) {
-    if (g.employeeId != null) gpsByEmp.set(Number(g.employeeId), g);
-    else gpsUnlinked.push(g);
-  }
-
-  type Person = {
-    key: string; name: string; kind: "colaborador" | "parceiro" | "por_ligar";
-    employeeId: number | null; partnerName: string | null;
-    checkins: number; checkouts: number; movements: number; cancels: number; other: number; totalActions: number;
-    totalKm: number | null; hoursWorked: number | null; hoursOnline: number | null; maxSpeed: number | null;
-  };
-  const people = new Map<string, Person>();
-  const CT: Record<string, keyof Pick<Person, "checkins" | "checkouts" | "movements" | "cancels">> = {
-    CHECK_IN: "checkins", CHECKIN: "checkins",
-    CHECK_OUT: "checkouts", CHECKOUT: "checkouts",
-    MOVEMENT: "movements", MOVE: "movements",
-    CANCELLATION: "cancels", CANCEL: "cancels", CANCELLED: "cancels",
-  };
-  for (const r of actionRows as any[]) {
-    const key = String(r.agentName).trim().toLowerCase();
-    let p = people.get(key);
-    if (!p) {
-      const emp = empByAgent.get(key);
-      const par = partnerByAgent.get(key);
-      p = {
-        key, name: emp?.fullName ?? par?.partnerName ?? r.agentName,
-        kind: emp ? "colaborador" : par ? "parceiro" : "por_ligar",
-        employeeId: emp?.id ?? null, partnerName: par?.partnerName ?? null,
-        checkins: 0, checkouts: 0, movements: 0, cancels: 0, other: 0, totalActions: 0,
-        totalKm: null, hoursWorked: null, hoursOnline: null, maxSpeed: null,
-      };
-      if (emp) {
-        const g = gpsByEmp.get(emp.id);
-        if (g) { p.totalKm = Number(g.totalKm ?? 0); p.hoursWorked = Number(g.hoursWorked ?? 0); p.hoursOnline = Number(g.totalHoursOnline ?? 0); p.maxSpeed = Number(g.maxSpeed ?? 0); gpsByEmp.delete(emp.id); }
-      }
-      people.set(key, p);
-    }
-    const bucket = CT[String(r.changeType ?? "").toUpperCase()] ?? "other";
-    (p as any)[bucket] += Number(r.n);
-    p.totalActions += Number(r.n);
-  }
-  // Pessoas com GPS mas sem ações (estiveram online sem mexer em reservas)
-  for (const [empId, g] of gpsByEmp) {
-    const emp = emps.find((e) => e.id === empId);
-    const name = emp?.fullName ?? g.displayName ?? g.zelloUsername;
-    people.set(`gps:${empId}`, {
-      key: `gps:${empId}`, name, kind: "colaborador", employeeId: empId, partnerName: null,
-      checkins: 0, checkouts: 0, movements: 0, cancels: 0, other: 0, totalActions: 0,
-      totalKm: Number(g.totalKm ?? 0), hoursWorked: Number(g.hoursWorked ?? 0), hoursOnline: Number(g.totalHoursOnline ?? 0), maxSpeed: Number(g.maxSpeed ?? 0),
-    });
-  }
-  for (const g of gpsUnlinked) {
-    people.set(`gpsu:${g.zelloUsername}`, {
-      key: `gpsu:${g.zelloUsername}`, name: g.displayName ?? g.zelloUsername, kind: "por_ligar", employeeId: null, partnerName: null,
-      checkins: 0, checkouts: 0, movements: 0, cancels: 0, other: 0, totalActions: 0,
-      totalKm: Number(g.totalKm ?? 0), hoursWorked: Number(g.hoursWorked ?? 0), hoursOnline: Number(g.totalHoursOnline ?? 0), maxSpeed: Number(g.maxSpeed ?? 0),
-    });
-  }
-
-  const list = Array.from(people.values()).sort((a, b) => b.totalActions - a.totalActions || (b.totalKm ?? 0) - (a.totalKm ?? 0));
-  const totals = {
-    checkins: list.reduce((s, p) => s + p.checkins, 0),
-    checkouts: list.reduce((s, p) => s + p.checkouts, 0),
-    movements: list.reduce((s, p) => s + p.movements, 0),
-    cancels: list.reduce((s, p) => s + p.cancels, 0),
-    other: list.reduce((s, p) => s + p.other, 0),
-    totalKm: Math.round(list.reduce((s, p) => s + (p.totalKm ?? 0), 0) * 10) / 10,
-    activePeople: list.length,
-  };
-  return { people: list, totals };
+/** Atividade consolidada de um dia (ou intervalo) — ver server/dayActivity.ts.
+ *  Mantém-se aqui o nome (o painel do supervisor e os testes usam-no). */
+export async function getDayActivity(date: string, opts: { endDate?: string; canSeeCost?: boolean } = {}) {
+  const { getActivityRange } = await import("./dayActivity");
+  return getActivityRange({ startDate: date, endDate: opts.endDate, canSeeCost: opts.canSeeCost });
 }
 
 // ─── GEOFENCE POR CENTRO DE CUSTOS (raio de check-in/out do ponto) ───────────
@@ -5471,103 +4712,22 @@ export async function getMultiparkBookings(filters?: {
     .offset(filters?.offset ?? 0);
 }
 
-export async function getLocalBookingsByAction(filters: {
-  startDate: string;
-  endDate: string;
-  actionType: "creation" | "checkin" | "checkout" | "cancelation";
-  projectId?: number;
-}) {
-  const db = await getDb();
-  if (!db) return [];
-
-  const conditions: any[] = [];
-
-  // Filter by date range based on actionType
-  const endWithTime = filters.endDate + " 23:59:59";
-  switch (filters.actionType) {
-    case "creation":
-      conditions.push(gte(multiparkBookings.bookingCreatedAt, filters.startDate));
-      conditions.push(lte(multiparkBookings.bookingCreatedAt, endWithTime));
-      // Todas as criações contam, incluindo as entretanto canceladas.
-      // O ecrã distingue estado e valor cancelado sem ocultar reservas da origem.
-      break;
-    case "checkin":
-      conditions.push(gte(multiparkBookings.checkIn, filters.startDate));
-      conditions.push(lte(multiparkBookings.checkIn, endWithTime));
-      conditions.push(sql`${multiparkBookings.status} != 'CANCELLED'`);
-      break;
-    case "checkout":
-      conditions.push(gte(multiparkBookings.checkOut, filters.startDate));
-      conditions.push(lte(multiparkBookings.checkOut, endWithTime));
-      conditions.push(sql`${multiparkBookings.status} != 'CANCELLED'`);
-      break;
-    case "cancelation":
-      // FIX 2026-08-05: cancelledAt está NULL em ~4.6k canceladas (o sync nem
-      // sempre o traz) — filtrar por ele escondia a maioria. A fonte de verdade
-      // é o STATUS; a data usa cancelledAt quando existe, senão updatedAt
-      // (última mudança de estado — aproximação razoável do cancelamento).
-      conditions.push(sql`${multiparkBookings.status} = 'CANCELLED'`);
-      conditions.push(sql`COALESCE(${multiparkBookings.cancelledAt}, ${multiparkBookings.updatedAt}) >= ${filters.startDate}`);
-      conditions.push(sql`COALESCE(${multiparkBookings.cancelledAt}, ${multiparkBookings.updatedAt}) <= ${endWithTime}`);
-      break;
-  }
-
-  // Filter by project hierarchy (include all children; marcas globais idem)
-  if (filters.projectId) {
-    const ids = await resolveProjectIds(filters.projectId);
-    conditions.push(sql`${multiparkBookings.projectId} IN (${sql.raw(ids.join(",") || "0")})`);
-  }
-
-  const rows = await db
-    .select()
-    .from(multiparkBookings)
-    .where(and(...conditions))
-    .orderBy(desc(multiparkBookings.bookingCreatedAt))
-    .limit(5000);
-
-  // Comissões de parceiros de venda por reserva (partnerships NOVAS via
-  // campaign match — substitui o legado partnerName/percent da ficha do
-  // projeto, para bater certo com a Faturação/Parcerias).
-  const partnerMap = await buildPartnerByCampaignMap();
-  return rows.map((b) => {
-    const key = (b.campaign ?? "").trim().toLowerCase();
-    const p = key ? partnerMap.get(key) : undefined;
-    const price = parseFloat(String(b.totalPrice ?? 0)) || 0;
-    return {
-      ...b,
-      salesPartnerName: p?.name ?? null,
-      salesPartnerRate: p?.commissionRate ?? null,
-      salesPartnerCommission: p ? Math.round(price * (p.commissionRate / 100) * 100) / 100 : 0,
-    };
-  });
-}
-
-// Mapa central campanha→parceiro (campaignKey + nome + aliases), igual ao da
-// Faturação. Cacheado 60s para não pesar nas folhas operacionais.
-let partnerMapCache: { at: number; map: Map<string, { id: number; name: string; commissionRate: number; updatedAt: string }> } | null = null;
-async function buildPartnerByCampaignMap() {
+// Mapa central campanha→parceiro — a MESMA regra do motor financeiro
+// (R.buildPartnerIndex via ./finance/partners.ts). Cacheado 60s para não pesar
+// nas folhas operacionais.
+type CampaignPartner = { id: number; name: string; commissionRate: number; commissionBase: "net" | "gross"; partnerType: string | null; updatedAt: string };
+let partnerMapCache: { at: number; map: Map<string, CampaignPartner> } | null = null;
+export async function buildPartnerByCampaignMap() {
   if (partnerMapCache && Date.now() - partnerMapCache.at < 60_000) return partnerMapCache.map;
-  const map = new Map<string, { id: number; name: string; commissionRate: number; updatedAt: string }>();
+  const map = new Map<string, CampaignPartner>();
   const db = await getDb();
   if (!db) return map;
-  const allPartners = await db.select({
-    id: partnerships.id, name: partnerships.name, campaignKey: partnerships.campaignKey,
-    commissionRate: partnerships.commissionRate, updatedAt: partnerships.updatedAt,
-  }).from(partnerships);
-  const allAliases = await db.select({ partnershipId: partnerAliases.partnershipId, aliasValue: partnerAliases.aliasValue }).from(partnerAliases);
-  const byId = new Map(allPartners.map((p) => [p.id, p]));
-  const reg = (raw: string | null, pid: number) => {
-    if (!raw) return;
-    const key = raw.trim().toLowerCase();
-    if (!key) return;
-    const p = byId.get(pid);
-    if (!p) return;
-    const ex = map.get(key);
-    const cand = { id: p.id, name: p.name, commissionRate: Number(p.commissionRate ?? 0), updatedAt: p.updatedAt ?? "" };
-    if (!ex || cand.updatedAt > ex.updatedAt) map.set(key, cand);
-  };
-  for (const p of allPartners) { reg(p.campaignKey, p.id); reg(p.name, p.id); }
-  for (const a of allAliases) reg(a.aliasValue, a.partnershipId);
+  const { loadPartnerIndex } = await import("./finance/partners");
+  const { commissionBaseOf } = await import("./finance/rules");
+  const { index } = await loadPartnerIndex(db);
+  for (const [key, p] of index.byKey) {
+    map.set(key, { id: p.id, name: p.name, commissionRate: Number(p.commissionRate ?? 0), commissionBase: commissionBaseOf(p), partnerType: p.partnerType ?? null, updatedAt: p.updatedAt });
+  }
   partnerMapCache = { at: Date.now(), map };
   return map;
 }
@@ -5579,23 +4739,27 @@ export async function getOperationsSummary(filters: { startDate: string; endDate
   const db = await getDb();
   const empty = { actions: {} as Record<string, { count: number; revenue: number; byCity: Array<{ name: string; count: number; revenue: number }>; byPark: Array<{ name: string; count: number; revenue: number }> }> };
   if (!db) return empty;
-  const endWithTime = filters.endDate + " 23:59:59";
+  // Dias de LISBOA → intervalo UTC [início, fim) (as colunas estão em UTC)
+  const range = lisbonDayRangeUtc(filters.startDate, filters.endDate);
   let projectCond = "";
   if (filters.projectId) {
     const ids = await resolveProjectIds(filters.projectId);
     projectCond = ` AND projectId IN (${ids.join(",") || "0"})`;
   }
+  const scoped = scopedProjectIds();
+  if (scoped !== undefined) projectCond += ` AND projectId IN (${scoped.join(",") || "0"})`;
+  const between = (col: string) => `${col} >= '${range.start}' AND ${col} < '${range.end}'`;
   const DATE_COND: Record<string, string> = {
-    creation: `bookingCreatedAt >= ? AND bookingCreatedAt <= ? AND status != 'CANCELLED'`,
-    checkin: `checkIn >= ? AND checkIn <= ? AND status != 'CANCELLED'`,
-    checkout: `checkOut >= ? AND checkOut <= ? AND status != 'CANCELLED'`,
-    cancelation: `status = 'CANCELLED' AND COALESCE(cancelledAt, updatedAt) >= ? AND COALESCE(cancelledAt, updatedAt) <= ?`,
+    // criadas NÃO canceladas (valor previsto)
+    creation: `${between("bookingCreatedAt")} AND status != 'CANCELLED'`,
+    // TODAS as criadas no período (coorte da taxa de cancelamento)
+    createdAll: between("bookingCreatedAt"),
+    checkin: `${between("checkIn")} AND status != 'CANCELLED'`,
+    checkout: `${between("checkOut")} AND status != 'CANCELLED'`,
+    cancelation: `status = 'CANCELLED' AND ${between("COALESCE(cancelledAt, updatedAt)")}`,
   };
   const out: (typeof empty)["actions"] = {};
-  for (const [action, cond] of Object.entries(DATE_COND)) {
-    // Substitui os dois ? por datas (validadas pelo zod: YYYY-MM-DD)
-    const parts = cond.split("?");
-    const q = parts[0] + `'${filters.startDate}'` + parts[1] + `'${endWithTime}'` + (parts[2] ?? "");
+  for (const [action, q] of Object.entries(DATE_COND)) {
     const [rows] = await db.execute(sql.raw(
       `SELECT COALESCE(city,'—') AS city, COALESCE(parkName,'—') AS parkName, COUNT(*) AS n, COALESCE(SUM(totalPrice),0) AS revenue
        FROM multipark_bookings WHERE ${q}${projectCond}
@@ -5693,8 +4857,11 @@ export async function upsertMultiparkBooking(data: InsertMultiparkBooking) {
   // tinha preenchido (a perda ficava PERMANENTE quando não havia mudança de
   // estado para reabrir o enrichment). Era por isto que só ~20% das reservas
   // tinham dados de cliente/matrícula.
+  // `campaign` também: depois de o enrichment/resolver de aliases atribuir a
+  // reserva a um parceiro, um /report posterior (sem partnerName real nem
+  // alias) devolvia null e a reserva "fugia" do parceiro (drift de atribuição).
   const ENRICH_PROTECTED = [
-    "partnerName",
+    "partnerName", "campaign",
     "clientFirstName", "clientLastName", "clientEmail", "clientPhone", "clientNif",
     "licensePlate", "vehicleBrand", "vehicleModel", "vehicleColor", "vehicleType",
     "arrivalFlight", "departureFlight",
@@ -5894,182 +5061,6 @@ export async function getMultiparkBookingStats(filters?: { from?: string; to?: s
   };
 }
 
-// ─── MULTIPARK SYNC LOGS ─────────────────────────────────────────────────────
-
-export async function createSyncLog(data: {
-  syncType: string;
-  status: string;
-  recordsProcessed?: number;
-  recordsCreated?: number;
-  recordsUpdated?: number;
-  errorMessage?: string;
-  triggeredById?: number;
-  completedAt?: Date;
-}) {
-  const db = await getDb();
-  if (!db) return;
-  await db.insert(multiparkSyncLogs).values(data as any);
-}
-
-export async function getSyncLogs(limit = 20) {
-  const db = await getDb();
-  if (!db) return [];
-  return db.select().from(multiparkSyncLogs).orderBy(desc(multiparkSyncLogs.startedAt)).limit(limit);
-}
-
-/** Quando começou o último sync que chegou ao fim (success ou partial).
- *  Usado pelo cron para auto-alargar a janela quando o GitHub Actions
- *  atrasa ou falha runs — sem isto, gaps > windowMinutes perdem reservas. */
-export async function getLastSyncSuccessAt(syncType = "api_sync"): Promise<string | null> {
-  const db = await getDb();
-  if (!db) return null;
-  const rows = await db
-    .select({ startedAt: multiparkSyncLogs.startedAt })
-    .from(multiparkSyncLogs)
-    .where(and(
-      eq(multiparkSyncLogs.syncType, syncType),
-      eq(multiparkSyncLogs.status, "success"),
-    ))
-    .orderBy(desc(multiparkSyncLogs.startedAt))
-    .limit(1);
-  return rows[0]?.startedAt ?? null;
-}
-
-
-// ─── MULTIPARK DAILY SNAPSHOTS (KPIs) ────────────────────────────────────────
-
-export async function upsertDailySnapshot(data: InsertMultiparkDailySnapshot) {
-  const db = await getDb();
-  if (!db) return;
-  // Check if snapshot already exists for this date+park
-  const existing = await db
-    .select({ id: multiparkDailySnapshots.id })
-    .from(multiparkDailySnapshots)
-    .where(
-      and(
-        eq(multiparkDailySnapshots.snapshotDate, data.snapshotDate!),
-        eq(multiparkDailySnapshots.parkName, data.parkName),
-        eq(multiparkDailySnapshots.city, data.city),
-      )
-    )
-    .limit(1);
-
-  if (existing.length > 0) {
-    const { id, ...updateData } = data as any;
-    await db.update(multiparkDailySnapshots).set(updateData).where(eq(multiparkDailySnapshots.id, existing[0].id));
-    return { id: existing[0].id, action: "updated" as const };
-  } else {
-    const [result] = await db.insert(multiparkDailySnapshots).values(data as any).$returningId();
-    return { id: result?.id, action: "created" as const };
-  }
-}
-
-export async function getDailySnapshots(filters?: {
-  from?: Date;
-  to?: Date;
-  parkName?: string;
-  city?: string;
-  limit?: number;
-}) {
-  const db = await getDb();
-  if (!db) return [];
-  const conditions: any[] = [];
-  if (filters?.from) conditions.push(gte(multiparkDailySnapshots.snapshotDate, toMysqlDateTime(filters.from)));
-  if (filters?.to) conditions.push(lte(multiparkDailySnapshots.snapshotDate, toMysqlDateTime(filters.to)));
-  if (filters?.parkName) conditions.push(eq(multiparkDailySnapshots.parkName, filters.parkName));
-  if (filters?.city) conditions.push(eq(multiparkDailySnapshots.city, filters.city));
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
-  return db
-    .select()
-    .from(multiparkDailySnapshots)
-    .where(where)
-    .orderBy(desc(multiparkDailySnapshots.snapshotDate))
-    .limit(filters?.limit ?? 500);
-}
-
-export async function getSnapshotKPIs(filters?: { from?: Date; to?: Date; city?: string }) {
-  const db = await getDb();
-  if (!db) return { totalBookings: 0, totalRevenue: 0, checkins: 0, checkouts: 0, cancelled: 0, reserved: 0, byPark: [], byCity: [], byDay: [], campaigns: {} };
-
-  const conditions: any[] = [];
-  if (filters?.from) conditions.push(gte(multiparkDailySnapshots.snapshotDate, toMysqlDateTime(filters.from)));
-  if (filters?.to) conditions.push(lte(multiparkDailySnapshots.snapshotDate, toMysqlDateTime(filters.to)));
-  if (filters?.city) conditions.push(eq(multiparkDailySnapshots.city, filters.city));
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
-
-  const rows = await db.select().from(multiparkDailySnapshots).where(where).orderBy(multiparkDailySnapshots.snapshotDate);
-
-  let totalBookings = 0, totalRevenue = 0, checkins = 0, checkouts = 0, cancelled = 0, reserved = 0;
-  const parkMap: Record<string, { bookings: number; revenue: number; checkins: number; checkouts: number }> = {};
-  const cityMap: Record<string, { bookings: number; revenue: number }> = {};
-  const dayMap: Record<string, { bookings: number; revenue: number; checkins: number; checkouts: number }> = {};
-  const campaignMap: Record<string, number> = {};
-
-  for (const r of rows) {
-    totalBookings += r.totalBookings;
-    totalRevenue += r.totalRevenue ?? 0;
-    checkins += r.checkinCount ?? 0;
-    checkouts += r.checkoutCount ?? 0;
-    cancelled += r.cancelledCount ?? 0;
-    reserved += r.reservedCount ?? 0;
-
-    // By park
-    if (!parkMap[r.parkName]) parkMap[r.parkName] = { bookings: 0, revenue: 0, checkins: 0, checkouts: 0 };
-    parkMap[r.parkName].bookings += r.totalBookings;
-    parkMap[r.parkName].revenue += r.totalRevenue ?? 0;
-    parkMap[r.parkName].checkins += r.checkinCount ?? 0;
-    parkMap[r.parkName].checkouts += r.checkoutCount ?? 0;
-
-    // By city
-    if (!cityMap[r.city]) cityMap[r.city] = { bookings: 0, revenue: 0 };
-    cityMap[r.city].bookings += r.totalBookings;
-    cityMap[r.city].revenue += r.totalRevenue ?? 0;
-
-    // By day
-    const dayKey = r.snapshotDate ? new Date(r.snapshotDate).toISOString().slice(0, 10) : "unknown";
-    if (!dayMap[dayKey]) dayMap[dayKey] = { bookings: 0, revenue: 0, checkins: 0, checkouts: 0 };
-    dayMap[dayKey].bookings += r.totalBookings;
-    dayMap[dayKey].revenue += r.totalRevenue ?? 0;
-    dayMap[dayKey].checkins += r.checkinCount ?? 0;
-    dayMap[dayKey].checkouts += r.checkoutCount ?? 0;
-
-    // Campaigns
-    if (r.externalCampaigns) {
-      try {
-        const camps = JSON.parse(r.externalCampaigns);
-        for (const [name, count] of Object.entries(camps)) {
-          campaignMap[name] = (campaignMap[name] || 0) + (count as number);
-        }
-      } catch {}
-    }
-  }
-
-  return {
-    totalBookings,
-    totalRevenue,
-    checkins,
-    checkouts,
-    cancelled,
-    reserved,
-    byPark: Object.entries(parkMap).map(([name, data]) => ({ name, ...data })).sort((a, b) => b.revenue - a.revenue),
-    byCity: Object.entries(cityMap).map(([name, data]) => ({ name, ...data })).sort((a, b) => b.revenue - a.revenue),
-    byDay: Object.entries(dayMap).map(([date, data]) => ({ date, ...data })).sort((a, b) => a.date.localeCompare(b.date)),
-    campaigns: campaignMap,
-  };
-}
-
-export async function deleteSnapshotsByDateRange(from: Date, to: Date) {
-  const db = await getDb();
-  if (!db) return 0;
-  const result = await db.delete(multiparkDailySnapshots).where(
-    and(
-      gte(multiparkDailySnapshots.snapshotDate, toMysqlDateTime(from)),
-      lte(multiparkDailySnapshots.snapshotDate, toMysqlDateTime(to)),
-    )
-  );
-  return (result as any)?.[0]?.affectedRows ?? 0;
-}
-
 // ─── INVITE TOKENS ──────────────────────────────────────────────────────────
 import crypto from "crypto";
 
@@ -6094,6 +5085,34 @@ export async function getInviteByToken(token: string) {
   if (!db) return undefined;
   const result = await db.select().from(inviteTokens).where(eq(inviteTokens.token, token)).limit(1);
   return result[0];
+}
+
+/**
+ * Reclama o convite de forma ATÓMICA (uso único): só passa de `pending` para
+ * `accepted` uma vez. Devolve true se foi este pedido que o reclamou.
+ */
+export async function claimInviteToken(token: string): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const [res] = await (db as any).execute(sql`
+    UPDATE invite_tokens SET invite_status = 'accepted', acceptedAt = ${toMysqlDateTime(new Date())}
+    WHERE token = ${token} AND invite_status = 'pending'`);
+  return Number(res?.affectedRows ?? 0) === 1;
+}
+
+/** Devolve um convite reclamado a `pending` (a ligação da conta falhou). */
+export async function releaseInviteToken(token: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(inviteTokens).set({ inviteStatus: "pending", acceptedAt: null }).where(eq(inviteTokens.token, token));
+}
+
+/** Nº de super_admin ATIVOS (guarda do último super_admin). */
+export async function countActiveSuperAdmins(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const [rows] = await (db as any).execute(sql`SELECT COUNT(*) AS n FROM users WHERE role = 'super_admin' AND isActive = 1`);
+  return Number(rows?.[0]?.n ?? 0);
 }
 
 export async function acceptInviteToken(token: string) {
@@ -6149,6 +5168,8 @@ export async function linkInviteToOAuthUser(manualUserId: number, oauthOpenId: s
       .update(users)
       .set({ isActive: 0, loginMethod: `merged_into_${oauthRow.id}`.slice(0, 64) })
       .where(eq(users.id, manualUserId));
+    // Fase 1: a ficha segue a conta que fica (antes ficava presa à desativada)
+    await db.update(employees).set({ userId: oauthRow.id }).where(eq(employees.userId, manualUserId));
     return;
   }
 
@@ -6343,7 +5364,9 @@ export async function getProjectCosts(year?: number, month?: number) {
     hoursMap.set(row.employeeId, row.totalHours || 0);
   }
 
-  const rates = await db.select().from(extraRates).orderBy(extraRates.level);
+  const { loadExtraRates, rateFor } = await import("./extraRates");
+  const liveExtraRates = await loadExtraRates();
+  const rateForExtra = (level: number) => rateFor(liveExtraRates, level);
 
   // Calculate salary costs per project
   const salaryCostMap = new Map<number, { totalSalary: number; employeeCount: number }>();
@@ -6363,8 +5386,8 @@ export async function getProjectCosts(year?: number, month?: number) {
       if (!emp) continue;
       if (emp.contractType === "extra") {
         const hours = hoursMap.get(empId) || 0;
-        const rate = rates.find(r => r.level === Number(emp.position || 1));
-        const hourlyRate = rate ? parseFloat(String(rate.hourlyRate)) : 6;
+        // nível do extra = employees.extraLevel (antes lia `position`, que é texto → sempre 6 €)
+        const hourlyRate = rateForExtra(emp.extraLevel ?? 1);
         totalSalary += hours * hourlyRate;
       } else {
         totalSalary += parseFloat(String(emp.monthlySalary || 0));
@@ -6526,6 +5549,68 @@ export async function getSpeedViolationStats(startDate?: Date, endDate?: Date) {
 
 // ─── DAILY DRIVER HISTORY ────────────────────────────────────────────────────
 
+/**
+ * Funcionário dono de cada utilizador Zello num dia (Lisboa): quem teve o PDA
+ * desse Zello mais tempo nesse dia (check-ins de PDA, partilhados entre
+ * turnos); sem check-in, o Zello fixo da ficha (`employees.zelloUsername`).
+ */
+/** Intervalos (ms) em que cada pessoa teve cada Zello/PDA num dia de LISBOA. */
+export async function pdaIntervalsForDay(dateStr: string): Promise<Map<string, { employeeId: number; start: number; end: number }[]>> {
+  const db = await getDb();
+  const out = new Map<string, { employeeId: number; start: number; end: number }[]>();
+  if (!db) return out;
+  const { startMs: dayStart, endMs: dayEnd } = lisbonDayRangeUtc(dateStr);
+  const [rows] = await db.execute(sql`
+    SELECT zelloUsername AS zello, employeeId, checkinAt, checkoutAt FROM pda_checkins
+     WHERE zelloUsername IS NOT NULL AND employeeId IS NOT NULL
+       AND checkinAt < ${toMysqlDateTime(new Date(dayEnd))}
+       AND (checkoutAt IS NULL OR checkoutAt >= ${toMysqlDateTime(new Date(dayStart))})`) as any;
+  const toMs = (v: any) => (v instanceof Date ? v.getTime() : Date.parse(String(v).replace(" ", "T") + "Z"));
+  for (const r of (rows as any[]) ?? []) {
+    const start = Math.max(toMs(r.checkinAt), dayStart);
+    const end = Math.min(r.checkoutAt ? toMs(r.checkoutAt) : Date.now(), dayEnd);
+    if (end <= start) continue;
+    const list = out.get(String(r.zello)) ?? [];
+    list.push({ employeeId: Number(r.employeeId), start, end });
+    out.set(String(r.zello), list);
+  }
+  return out;
+}
+
+/** Grava (substitui) as partes do GPS de uma linha do histórico diário. */
+export async function saveDriverShares(historyId: number, zello: string, day: string, shares: { employeeId: number; minutes: number; movingMinutes?: number | null; km: number; maxSpeed: number; avgSpeed: number; violations: number; points: number }[]): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.execute(sql`DELETE FROM driver_day_shares WHERE historyId = ${historyId}`);
+  for (const s of shares) {
+    await db.execute(sql`INSERT INTO driver_day_shares (historyId, zelloUsername, day, employeeId, minutes, movingMinutes, km, maxSpeed, avgSpeed, violations, points)
+      VALUES (${historyId}, ${zello}, ${day}, ${s.employeeId}, ${s.minutes}, ${s.movingMinutes ?? null}, ${String(s.km)}, ${String(s.maxSpeed)}, ${String(s.avgSpeed)}, ${s.violations}, ${s.points})`);
+  }
+}
+
+export async function resolveZelloHoldersForDay(dateStr: string): Promise<Map<string, number>> {
+  const db = await getDb();
+  const out = new Map<string, number>();
+  if (!db) return out;
+  const { startMs: dayStart, endMs: dayEnd } = lisbonDayRangeUtc(dateStr);
+  const fixed = await db.select({ id: employees.id, zello: employees.zelloUsername }).from(employees).where(isNotNull(employees.zelloUsername));
+  for (const e of fixed) if (e.zello && !out.has(e.zello)) out.set(e.zello, e.id);
+  const [rows] = await db.execute(sql`
+    SELECT zelloUsername AS zello, employeeId, checkinAt, checkoutAt FROM pda_checkins
+     WHERE zelloUsername IS NOT NULL AND employeeId IS NOT NULL
+       AND checkinAt < ${toMysqlDateTime(new Date(dayEnd))}
+       AND (checkoutAt IS NULL OR checkoutAt >= ${toMysqlDateTime(new Date(dayStart))})`) as any;
+  const toMs = (v: any) => (v instanceof Date ? v.getTime() : Date.parse(String(v).replace(" ", "T") + "Z"));
+  const { holdersForDay } = await import("./zelloGps");
+  const byDay = holdersForDay(
+    ((rows as any[]) ?? []).map((r) => ({ zello: r.zello, employeeId: Number(r.employeeId), start: toMs(r.checkinAt), end: r.checkoutAt ? toMs(r.checkoutAt) : null })),
+    dayStart,
+    dayEnd,
+  );
+  for (const [z, id] of byDay) out.set(z, id); // o PDA do dia ganha ao Zello fixo
+  return out;
+}
+
 export async function createDailyDriverHistory(data: InsertDailyDriverHistory) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
@@ -6534,64 +5619,64 @@ export async function createDailyDriverHistory(data: InsertDailyDriverHistory) {
 }
 
 /**
- * Resolve o NOME do funcionário para cada linha de histórico Zello.
+ * Resolve a PESSOA de cada linha do histórico Zello (Histórico Diário).
  *
- * O histórico diário é recolhido do Zello e só traz o utilizador Zello
- * ("Faro 411"). Quem interessa à operação é a PESSOA. Prioridade:
- *   1. check-in de PDA do PRÓPRIO dia com esse Zello (dimensão temporal —
- *      quem levou o aparelho naquele dia manda, mesmo que o anexo persistente
- *      aponte para outra pessoa);
- *   2. anexo persistente `employees.zelloUsername`.
- * Sem match, `employeeName` fica null e a UI cai no nome Zello.
+ * Mesma atribuição da Atividade do Dia — nada de "o último check-in ganha":
+ *   1. partes do GPS (driver_day_shares): PDA partilhado → cada pessoa com os
+ *      seus km/minutos; o nome da linha junta-as (a de mais km primeiro);
+ *   2. o funcionário gravado na linha (quem teve o PDA mais tempo no dia);
+ *   3. o Zello fixo da ficha (`employees.zelloUsername`, telemóveis pessoais).
+ * Sem nenhum, `employeeName` fica null e a UI mostra o nome Zello.
  */
-async function withEmployeeNames<T extends { zelloUsername: string; date: string | Date }>(
+async function withEmployeeNames<T extends { id: number; zelloUsername: string; employeeId: number | null; totalKm?: string | null }>(
   db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
   rows: T[],
-): Promise<(T & { employeeName: string | null; resolvedEmployeeId: number | null })[]> {
+): Promise<(T & { employeeName: string | null; resolvedEmployeeId: number | null; shares: { employeeId: number; name: string; km: number; minutes: number; movingMinutes: number | null }[]; leftoverKm: number })[]> {
   if (rows.length === 0) return [];
-  const zellos = [...new Set(rows.map(r => r.zelloUsername).filter(Boolean))];
-  if (zellos.length === 0) return rows.map(r => ({ ...r, employeeName: null, resolvedEmployeeId: null }));
-
-  const persistent = await db
-    .select({ id: employees.id, fullName: employees.fullName, zello: employees.zelloUsername })
-    .from(employees)
-    .where(inArray(employees.zelloUsername, zellos));
-  const byZello = new Map(persistent.map(e => [e.zello!, e]));
-
-  // Check-ins com esses Zellos dentro do intervalo de datas das linhas (+1 dia
-  // de margem) — chave `${zello}|${YYYY-MM-DD}` para o match ser por DIA.
-  const dayOf = (d: string | Date) => toMysqlDateTime(typeof d === "string" ? d : d).slice(0, 10);
-  const dates = rows.map(r => dayOf(r.date)).sort();
-  const from = `${dates[0]} 00:00:00`;
-  const to = `${dates[dates.length - 1]} 23:59:59`;
-  const checkins = await db
-    .select({ zello: pdaCheckins.zelloUsername, employeeId: pdaCheckins.employeeId, at: pdaCheckins.checkinAt })
-    .from(pdaCheckins)
-    .where(and(inArray(pdaCheckins.zelloUsername, zellos), isNotNull(pdaCheckins.employeeId), gte(pdaCheckins.checkinAt, from), lte(pdaCheckins.checkinAt, to)));
-  const empIds = [...new Set(checkins.map(c => c.employeeId!).filter(id => !persistent.some(p => p.id === id)))];
-  const extraEmps = empIds.length
+  const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r) as any[]) ?? [];
+  const ids = rows.map((r) => Number(r.id));
+  const shareRows = rowsOf(await db.execute(sql`
+    SELECT historyId, employeeId, km, minutes, movingMinutes FROM driver_day_shares
+     WHERE historyId IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`).catch(() => [[]] as any));
+  const zellos = [...new Set(rows.map((r) => r.zelloUsername).filter(Boolean))];
+  const persistent = zellos.length
+    ? await db.select({ id: employees.id, zello: employees.zelloUsername }).from(employees).where(inArray(employees.zelloUsername, zellos))
+    : [];
+  const byZello = new Map(persistent.map((e) => [e.zello!, e.id]));
+  const empIds = [...new Set([
+    ...rows.map((r) => r.employeeId).filter((x): x is number => x != null),
+    ...shareRows.map((s) => Number(s.employeeId)),
+    ...persistent.map((p) => p.id),
+  ])];
+  const names = empIds.length
     ? await db.select({ id: employees.id, fullName: employees.fullName }).from(employees).where(inArray(employees.id, empIds))
     : [];
-  const empById = new Map([...persistent, ...extraEmps].map(e => [e.id, e.fullName]));
-  const byZelloDay = new Map(checkins.map(c => [`${c.zello}|${dayOf(c.at as any)}`, c.employeeId!]));
-
-  return rows.map(r => {
-    const dayHit = byZelloDay.get(`${r.zelloUsername}|${dayOf(r.date)}`);
-    const persistentHit = byZello.get(r.zelloUsername);
-    const id = dayHit ?? persistentHit?.id ?? null;
-    return { ...r, resolvedEmployeeId: id, employeeName: (id != null ? empById.get(id) : null) ?? null };
+  const nameOf = new Map(names.map((e) => [e.id, e.fullName]));
+  const sharesBy = new Map<number, { employeeId: number; name: string; km: number; minutes: number; movingMinutes: number | null }[]>();
+  for (const s of shareRows) {
+    const list = sharesBy.get(Number(s.historyId)) ?? [];
+    const employeeId = Number(s.employeeId);
+    list.push({ employeeId, name: nameOf.get(employeeId) ?? `#${employeeId}`, km: Number(s.km ?? 0), minutes: Number(s.minutes ?? 0), movingMinutes: s.movingMinutes == null ? null : Number(s.movingMinutes) });
+    sharesBy.set(Number(s.historyId), list);
+  }
+  return rows.map((r) => {
+    const shares = (sharesBy.get(Number(r.id)) ?? []).sort((a, b) => b.km - a.km);
+    const id = shares[0]?.employeeId ?? r.employeeId ?? byZello.get(r.zelloUsername) ?? null;
+    const employeeName = shares.length ? shares.map((s) => s.name).join(" + ") : (id != null ? nameOf.get(id) ?? null : null);
+    const leftoverKm = shares.length ? Math.max(0, Math.round((Number(r.totalKm ?? 0) - shares.reduce((a, s) => a + s.km, 0)) * 100) / 100) : 0;
+    return { ...r, resolvedEmployeeId: id, employeeName, shares, leftoverKm };
   });
 }
+
+/** Linhas do GPS de um dia de Lisboa (a coluna `date` guarda o dia a que os dados pertencem). */
+const historyDayIs = (day: string) => sql`DATE(${dailyDriverHistory.date}) = ${day}`;
+const historyScope = () => gpsRowScope(dailyDriverHistory.id, dailyDriverHistory.employeeId, dailyDriverHistory.zelloUsername);
 
 export async function getDailyDriverHistoryByDate(dateStr: string) {
   const db = await getDb();
   if (!db) return [];
-  const startOfDay = new Date(dateStr);
-  startOfDay.setHours(0, 0, 0, 0);
-  const endOfDay = new Date(dateStr);
-  endOfDay.setHours(23, 59, 59, 999);
   const rows = await db.select().from(dailyDriverHistory)
-    .where(and(employeeScope(dailyDriverHistory.employeeId), gte(dailyDriverHistory.date, toMysqlDateTime(startOfDay)), lte(dailyDriverHistory.date, toMysqlDateTime(endOfDay))))
+    .where(and(historyScope(), historyDayIs(dateStr)))
     .orderBy(desc(dailyDriverHistory.totalKm));
   return withEmployeeNames(db, rows);
 }
@@ -6600,7 +5685,7 @@ export async function getDailyDriverHistoryByUser(username: string, limit = 30) 
   const db = await getDb();
   if (!db) return [];
   const rows = await db.select().from(dailyDriverHistory)
-    .where(and(employeeScope(dailyDriverHistory.employeeId), eq(dailyDriverHistory.zelloUsername, username)))
+    .where(and(historyScope(), eq(dailyDriverHistory.zelloUsername, username)))
     .orderBy(desc(dailyDriverHistory.date))
     .limit(limit);
   return withEmployeeNames(db, rows);
@@ -6610,9 +5695,9 @@ export async function getDailyDriverHistoryRange(startDate: string, endDate: str
   const db = await getDb();
   if (!db) return [];
   const rows = await db.select().from(dailyDriverHistory)
-    .where(and(employeeScope(dailyDriverHistory.employeeId),
-      gte(dailyDriverHistory.date, toMysqlDateTime(new Date(startDate))),
-      lte(dailyDriverHistory.date, toMysqlDateTime(new Date(endDate)))
+    .where(and(historyScope(),
+      sql`DATE(${dailyDriverHistory.date}) >= ${startDate}`,
+      sql`DATE(${dailyDriverHistory.date}) <= ${endDate}`,
     ))
     .orderBy(desc(dailyDriverHistory.date));
   return withEmployeeNames(db, rows);
@@ -6621,13 +5706,9 @@ export async function getDailyDriverHistoryRange(startDate: string, endDate: str
 export async function getDailyDriverStats(dateStr: string) {
   const db = await getDb();
   if (!db) return { totalDrivers: 0, totalKm: 0, totalHoursWorked: 0, totalHoursStopped: 0, maxSpeedOfDay: 0, avgBattery: 0, totalViolations: 0 };
-  const startOfDay = new Date(dateStr);
-  startOfDay.setHours(0, 0, 0, 0);
-  const endOfDay = new Date(dateStr);
-  endOfDay.setHours(23, 59, 59, 999);
   const rows = await db.select().from(dailyDriverHistory)
-    .where(and(employeeScope(dailyDriverHistory.employeeId), gte(dailyDriverHistory.date, toMysqlDateTime(startOfDay)), lte(dailyDriverHistory.date, toMysqlDateTime(endOfDay))));
-  
+    .where(and(historyScope(), historyDayIs(dateStr)));
+
   const totalDrivers = rows.length;
   const totalKm = rows.reduce((s, r) => s + parseFloat(String(r.totalKm || "0")), 0);
   const totalHoursWorked = rows.reduce((s, r) => s + parseFloat(String(r.hoursWorked || "0")), 0);
@@ -6660,10 +5741,11 @@ export async function deletePda(id: number) {
   await db.delete(pdas).where(eq(pdas.id, id));
 }
 
+/** PDAs da(s) cidade(s) do utilizador — um PDA é da cidade de quem lá fez check-in (ver pdaScope). */
 export async function listPdas() {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(pdas).orderBy(pdas.name);
+  return db.select().from(pdas).where(pdaScope(pdas.id)).orderBy(pdas.name);
 }
 
 export async function getPdaById(id: number) {
@@ -6707,7 +5789,7 @@ export async function attachZelloToEmployeeIfUnset(employeeId: number, zelloUser
  * check-in aberto, a app fecha-o e troca — "a própria aplicação mudava quem é
  * que estava".
  */
-export async function attachPdaByDeviceToken(deviceToken: string, employeeId: number): Promise<{ pdaId: number; pdaName: string; zelloUsername: string | null; replacedName: string | null } | null> {
+export async function attachPdaByDeviceToken(deviceToken: string, employeeId: number): Promise<{ pdaId: number; pdaName: string; zelloUsername: string | null; replacedName: string | null; changed: boolean } | null> {
   const db = await getDb(); if (!db) return null;
   const [pdaRows] = await db.execute(sql`SELECT id, name, zelloUsername FROM pdas WHERE deviceToken = ${deviceToken} AND status = 'active' LIMIT 1`) as any;
   const pda = (pdaRows as any[])?.[0];
@@ -6717,16 +5799,16 @@ export async function attachPdaByDeviceToken(deviceToken: string, employeeId: nu
   const [activeRows] = await db.execute(sql`
     SELECT c.id, c.employeeId, e.fullName FROM pda_checkins c
     LEFT JOIN employees e ON e.id = c.employeeId
-    WHERE c.pdaId = ${pda.id} AND c.checkinStatus = 'checked_in'`) as any;
+    WHERE c.pdaId = ${pda.id} AND c.checkin_status = 'checked_in'`) as any;
   let replacedName: string | null = null;
   let alreadyMine = false;
   for (const a of (activeRows as any[]) ?? []) {
     if (Number(a.employeeId) === employeeId) { alreadyMine = true; continue; }
-    await db.execute(sql`UPDATE pda_checkins SET checkoutAt = ${now}, checkinStatus = 'checked_out', notes = CONCAT(COALESCE(notes,''), ' · fechado automaticamente: outro colaborador fez check-in neste PDA') WHERE id = ${a.id}`);
+    await db.execute(sql`UPDATE pda_checkins SET checkoutAt = ${now}, checkin_status = 'checked_out', notes = CONCAT(COALESCE(notes,''), ' · fechado automaticamente: outro colaborador fez check-in neste PDA') WHERE id = ${a.id}`);
     replacedName = a.fullName ? String(a.fullName) : replacedName;
   }
   // A pessoa só pode estar num PDA de cada vez — fecha check-ins dela noutros
-  await db.execute(sql`UPDATE pda_checkins SET checkoutAt = ${now}, checkinStatus = 'checked_out' WHERE employeeId = ${employeeId} AND checkinStatus = 'checked_in' AND pdaId != ${pda.id}`);
+  await db.execute(sql`UPDATE pda_checkins SET checkoutAt = ${now}, checkin_status = 'checked_out' WHERE employeeId = ${employeeId} AND checkin_status = 'checked_in' AND pdaId != ${pda.id}`);
   if (!alreadyMine) {
     await db.insert(pdaCheckins).values({
       pdaId: Number(pda.id),
@@ -6735,15 +5817,47 @@ export async function attachPdaByDeviceToken(deviceToken: string, employeeId: nu
       checkinAt: now,
     } as any);
   }
-  return { pdaId: Number(pda.id), pdaName: String(pda.name), zelloUsername: pda.zelloUsername ? String(pda.zelloUsername) : null, replacedName };
+  return { pdaId: Number(pda.id), pdaName: String(pda.name), zelloUsername: pda.zelloUsername ? String(pda.zelloUsername) : null, replacedName, changed: !alreadyMine };
+}
+
+/** Logout num PDA registado: solta-o (fecha o check-in desta pessoa NESTE PDA). */
+export async function releasePdaByDeviceToken(deviceToken: string, employeeId: number): Promise<number> {
+  const db = await getDb(); if (!db) return 0;
+  const [res] = await db.execute(sql`
+    UPDATE pda_checkins c JOIN pdas p ON p.id = c.pdaId
+       SET c.checkoutAt = ${toMysqlDateTime(new Date())}, c.checkin_status = 'checked_out',
+           c.notes = CONCAT(COALESCE(c.notes,''), ' · fechado no logout')
+     WHERE p.deviceToken = ${deviceToken} AND c.employeeId = ${employeeId} AND c.checkin_status = 'checked_in'`) as any;
+  return Number((res as any)?.affectedRows ?? 0);
+}
+
+/** Código do QR de um PDA (criado na primeira vez). */
+export async function ensurePdaQrCode(pdaId: number): Promise<string | null> {
+  const db = await getDb(); if (!db) return null;
+  const [rows] = await db.execute(sql`SELECT qrCode FROM pdas WHERE id = ${pdaId} LIMIT 1`) as any;
+  const r = (rows as any[])?.[0];
+  if (!r) return null;
+  if (r.qrCode) return String(r.qrCode);
+  const code = crypto.randomUUID().replace(/-/g, "");
+  await db.execute(sql`UPDATE pdas SET qrCode = ${code} WHERE id = ${pdaId} AND qrCode IS NULL`);
+  const [again] = await db.execute(sql`SELECT qrCode FROM pdas WHERE id = ${pdaId} LIMIT 1`) as any;
+  return (again as any[])?.[0]?.qrCode ? String((again as any[])[0].qrCode) : code;
+}
+
+/** O código lido no QR é o deste PDA (e está ativo)? */
+export async function verifyPdaQrCode(pdaId: number, code: string): Promise<{ name: string } | null> {
+  const db = await getDb(); if (!db) return null;
+  const [rows] = await db.execute(sql`SELECT name FROM pdas WHERE id = ${pdaId} AND qrCode = ${code} AND status = 'active' LIMIT 1`) as any;
+  const r = (rows as any[])?.[0];
+  return r ? { name: String(r.name) } : null;
 }
 
 /** Fecha os check-ins de PDA abertos de um funcionário (no check-out do ponto). */
 export async function closePdaCheckinsForEmployee(employeeId: number, at: Date): Promise<number> {
   const db = await getDb(); if (!db) return 0;
   const [res] = await db.execute(sql`
-    UPDATE pda_checkins SET checkoutAt = ${toMysqlDateTime(at)}, checkinStatus = 'checked_out'
-    WHERE employeeId = ${employeeId} AND checkinStatus = 'checked_in'`) as any;
+    UPDATE pda_checkins SET checkoutAt = ${toMysqlDateTime(at)}, checkin_status = 'checked_out'
+    WHERE employeeId = ${employeeId} AND checkin_status = 'checked_in'`) as any;
   return Number((res as any)?.affectedRows ?? 0);
 }
 
@@ -6761,7 +5875,7 @@ export async function getPdaByDeviceToken(deviceToken: string) {
   const [rows] = await db.execute(sql`
     SELECT p.id, p.name, p.zelloUsername,
            (SELECT e.fullName FROM pda_checkins c LEFT JOIN employees e ON e.id = c.employeeId
-            WHERE c.pdaId = p.id AND c.checkinStatus = 'checked_in' ORDER BY c.checkinAt DESC LIMIT 1) AS currentHolder
+            WHERE c.pdaId = p.id AND c.checkin_status = 'checked_in' ORDER BY c.checkinAt DESC LIMIT 1) AS currentHolder
     FROM pdas p WHERE p.deviceToken = ${deviceToken} LIMIT 1`) as any;
   const r = (rows as any[])?.[0];
   return r ? { pdaId: Number(r.id), name: String(r.name), zelloUsername: r.zelloUsername ? String(r.zelloUsername) : null, currentHolder: r.currentHolder ? String(r.currentHolder) : null } : null;
@@ -6786,20 +5900,17 @@ export async function getActiveCheckins() {
   if (!db) return [];
   return db.select(checkinWithEmployee).from(pdaCheckins)
     .leftJoin(employees, eq(pdaCheckins.employeeId, employees.id))
-    .where(eq(pdaCheckins.checkinStatus, "checked_in"))
+    .where(and(eq(pdaCheckins.checkinStatus, "checked_in"), pdaScope(pdaCheckins.pdaId)))
     .orderBy(desc(pdaCheckins.checkinAt));
 }
 
 export async function getCheckinsByDate(dateStr: string) {
   const db = await getDb();
   if (!db) return [];
-  const startOfDay = new Date(dateStr);
-  startOfDay.setHours(0, 0, 0, 0);
-  const endOfDay = new Date(dateStr);
-  endOfDay.setHours(23, 59, 59, 999);
+  const day = lisbonDayRangeUtc(dateStr);
   return db.select(checkinWithEmployee).from(pdaCheckins)
     .leftJoin(employees, eq(pdaCheckins.employeeId, employees.id))
-    .where(and(gte(pdaCheckins.checkinAt, toMysqlDateTime(startOfDay)), lte(pdaCheckins.checkinAt, toMysqlDateTime(endOfDay))))
+    .where(and(gte(pdaCheckins.checkinAt, day.start), lt(pdaCheckins.checkinAt, day.end), pdaScope(pdaCheckins.pdaId)))
     .orderBy(desc(pdaCheckins.checkinAt));
 }
 
@@ -6808,7 +5919,7 @@ export async function getCheckinsByPda(pdaId: number, limit = 30) {
   if (!db) return [];
   return db.select(checkinWithEmployee).from(pdaCheckins)
     .leftJoin(employees, eq(pdaCheckins.employeeId, employees.id))
-    .where(eq(pdaCheckins.pdaId, pdaId))
+    .where(and(eq(pdaCheckins.pdaId, pdaId), pdaScope(pdaCheckins.pdaId)))
     .orderBy(desc(pdaCheckins.checkinAt))
     .limit(limit);
 }
@@ -6857,28 +5968,6 @@ export async function getGpsAlertStats() {
   const byType: Record<string, number> = {};
   all.forEach(a => { byType[a.alertType] = (byType[a.alertType] || 0) + 1; });
   return { total, unacknowledged, todayAlerts, byType };
-}
-
-// ─── MARKETING: GOOGLE ADS IMPORT WITH DEDUP ────────────────────────────────
-
-export async function getCampaignByNameAndPlatform(name: string, platform: string) {
-  const db = await getDb();
-  if (!db) return undefined;
-  const result = await db.select().from(campaigns)
-    .where(and(eq(campaigns.name, name), eq(campaigns.platform, platform as any)))
-    .limit(1);
-  return result[0];
-}
-
-export async function getExistingStatsForCampaignAndDateRange(campaignId: number, startDate: Date, endDate: Date) {
-  const db = await getDb();
-  if (!db) return [];
-  return db.select().from(campaignDailyStats)
-    .where(and(
-      eq(campaignDailyStats.campaignId, campaignId),
-      gte(campaignDailyStats.date, toMysqlDateTime(startDate)),
-      lte(campaignDailyStats.date, toMysqlDateTime(endDate)),
-    ));
 }
 
 // ─── GMAIL SYNC DEDUP HELPERS ──────────────────────────────────────────────
@@ -6944,7 +6033,7 @@ export async function importBookingHistory(rows: {
 
 // ─── Booking history (Multipark API, via DB local) ──────────────────────────
 // As funções a seguir devolvem o histórico de reservas Multipark já sincronizado
-// para a DB local (multipark_booking_history populado pelo cron job de 15 min).
+// para a DB local (multipark_booking_history populado pelos crons de sincronização).
 // Shape mantido compatível com a UI antiga (que esperava colunas do Excel
 // import). Adicionado o campo `flagged: 1` nas linhas/condutores que tocaram
 // numa reserva que está ligada a um caso de Perdidos/Achados.
@@ -7341,8 +6430,11 @@ export async function getAgentMovements(opts: {
     .where(
       and(
         eq(multiparkBookingHistory.agentName, opts.agentName),
-        gte(multiparkBookingHistory.actionTime, `${opts.from} 00:00:00`),
-        lte(multiparkBookingHistory.actionTime, `${opts.to} 23:59:59`),
+        // Dias de LISBOA → intervalo UTC (as colunas são UTC).
+        gte(multiparkBookingHistory.actionTime, lisbonDayRangeUtc(opts.from, opts.to).start),
+        lt(multiparkBookingHistory.actionTime, lisbonDayRangeUtc(opts.from, opts.to).end),
+        // Só reservas das cidades do utilizador (quem vê todas vê tudo).
+        scopedProjectIds() === undefined ? undefined : projectScope(multiparkBookings.projectId),
       ),
     )
     .orderBy(desc(multiparkBookingHistory.actionTime))
@@ -7421,6 +6513,8 @@ export async function getCheckoutDriversFromDb(
         gte(multiparkBookingHistory.actionTime, startStr),
         lte(multiparkBookingHistory.actionTime, endStr),
         isNotNull(multiparkBookingHistory.agentName),
+        // Âmbito de cidade: só movimentos de reservas das cidades autorizadas.
+        bookingHistoryScope(multiparkBookingHistory.bookingExternalId),
       ),
     )
     .groupBy(multiparkBookingHistory.agentName, multiparkBookingHistory.agentUserId)
@@ -7487,6 +6581,8 @@ export async function getAgentHistoryFromDb(opts: {
   const conds: any[] = [
     gte(multiparkBookingHistory.actionTime, startStr),
     lte(multiparkBookingHistory.actionTime, endStr),
+    // Âmbito de cidade: só movimentos de reservas das cidades autorizadas.
+    bookingHistoryScope(multiparkBookingHistory.bookingExternalId),
   ];
   if (opts.userId) {
     conds.push(eq(multiparkBookingHistory.agentUserId, opts.userId));
@@ -7548,168 +6644,6 @@ export async function getAgentHistoryFromDb(opts: {
   };
 }
 
-// ─── INCIDENTS sync from Multipark booking history ──────────────────────────
-
-type IncidentClassification = {
-  incidentType: "vidro_aberto" | "mal_estacionado" | "dano" | "chave_errada" | "combustivel" | "limpeza" | "documentos" | "outro";
-  severity: "low" | "medium" | "high" | "critical";
-};
-
-function classifyRemarks(remarks: string): IncidentClassification {
-  const r = remarks.toLowerCase();
-  // dano cobre embates, batidas, riscos, amassadelas — high
-  if (/\bdano|amassad|risc|batid|embat|colis|raspad|partid|partiu|partir/.test(r)) {
-    return { incidentType: "dano", severity: "high" };
-  }
-  if (/\bvidro|janela\b/.test(r)) {
-    return { incidentType: "vidro_aberto", severity: "medium" };
-  }
-  if (/\bmal\s*estacion|fora\s*do\s*lugar|posi[cç][aã]o\s*errad/.test(r)) {
-    return { incidentType: "mal_estacionado", severity: "medium" };
-  }
-  if (/\bchav/.test(r)) {
-    return { incidentType: "chave_errada", severity: "medium" };
-  }
-  if (/\bcombust[ií]vel|gasolina|diesel|gas[oó]leo|tanque\s*vazio|sem\s*combust|reserva\s*combust/.test(r)) {
-    return { incidentType: "combustivel", severity: "medium" };
-  }
-  if (/\bsuj|limpez|limpar|nodoa|n[oó]doa|mancha/.test(r)) {
-    return { incidentType: "limpeza", severity: "low" };
-  }
-  if (/\bdocument|carta\s*de\s*condu|livrete|seguro/.test(r)) {
-    return { incidentType: "documentos", severity: "low" };
-  }
-  return { incidentType: "outro", severity: "low" };
-}
-
-/**
- * Varre multipark_booking_history nos últimos `lookbackDays` dias e cria
- * incidents para cada `remarks` significativo que ainda não tenha sido
- * importado. Dedup via incidents.sourceEmailId = "mp:" + historyId.
- */
-export async function syncIncidentsFromMultiparkHistory(opts: {
-  lookbackDays?: number;
-  reportedById?: number | null;
-} = {}): Promise<{
-  scanned: number;
-  imported: number;
-  skipped: number;
-  errors: string[];
-  details: string[];
-}> {
-  const db = await getDb();
-  const empty = { scanned: 0, imported: 0, skipped: 0, errors: [] as string[], details: [] as string[] };
-  if (!db) return empty;
-
-  const lookbackDays = opts.lookbackDays ?? 30;
-  const since = new Date();
-  since.setDate(since.getDate() - lookbackDays);
-  const sinceStr = toMysqlDateTime(since);
-
-  // Pega entradas com remarks não-triviais
-  const rows = await db
-    .select({
-      historyId: multiparkBookingHistory.historyId,
-      bookingExternalId: multiparkBookingHistory.bookingExternalId,
-      remarks: multiparkBookingHistory.remarks,
-      actionTime: multiparkBookingHistory.actionTime,
-      agentName: multiparkBookingHistory.agentName,
-      agentUserId: multiparkBookingHistory.agentUserId,
-      changeType: multiparkBookingHistory.changeType,
-    })
-    .from(multiparkBookingHistory)
-    .where(
-      and(
-        isNotNull(multiparkBookingHistory.remarks),
-        gte(multiparkBookingHistory.actionTime, sinceStr),
-      ),
-    )
-    .orderBy(desc(multiparkBookingHistory.actionTime))
-    .limit(500);
-
-  // Mensagens AUTOMÁTICAS do sistema da Multipark que apareciam nos remarks e
-  // enchiam as ocorrências de lixo (auditoria 6 ago: 1.190 de 1.219 eram isto
-  // — "Invoice emitted", "Pricing reduced…" — e ainda contavam como Inc− nas
-  // avaliações dos condutores). Só comentários HUMANOS passam.
-  const AUTO_REMARKS = /^(invoice emitted|booking (updated|created)|pricing (updated|reduced|increased)|check-?in signature|check-?out signature|signature saved|payment\b|attachment added|client information updated|arrived at (delivery|pickup) location|left (delivery|pickup) location|driver assigned|status changed|booking cancelled|pro booking created|baggage waiting|attachment removed)/i;
-
-  const result = { ...empty };
-  for (const row of rows) {
-    const remarks = (row.remarks ?? "").trim();
-    if (!remarks || remarks.length < 3) continue; // ignora ruído
-    if (AUTO_REMARKS.test(remarks)) continue;     // ignora mensagens de sistema
-    result.scanned++;
-
-    const sourceKey = `mp:${row.historyId}`;
-    try {
-      const existing = await db
-        .select({ id: incidents.id })
-        .from(incidents)
-        .where(eq(incidents.sourceEmailId, sourceKey))
-        .limit(1);
-      if (existing.length > 0) { result.skipped++; continue; }
-    } catch (e: any) {
-      result.errors.push(`Lookup ${row.historyId}: ${e.message}`);
-      continue;
-    }
-
-    const cls = classifyRemarks(remarks);
-
-    // Procura matrícula via booking
-    let vehiclePlate: string | undefined;
-    try {
-      const [booking] = await db
-        .select({ plate: multiparkBookings.licensePlate })
-        .from(multiparkBookings)
-        .where(eq(multiparkBookings.externalId, row.bookingExternalId))
-        .limit(1);
-      vehiclePlate = booking?.plate ?? undefined;
-    } catch {}
-
-    // Resolve o AGENTE da ação para o colaborador (quem fez / contra quem) —
-    // alimenta o Inc− da Avaliação Individual (pedido Jorge 2026-08-06)
-    let incidentEmployeeId: number | null = null;
-    if (row.agentName || row.agentUserId) {
-      try {
-        // Pelo ID do agente (fiável) OU pelo nome (legado); ativa primeiro.
-        const conds = [];
-        if (row.agentUserId) conds.push(eq(employees.multiparkAgentUserId, row.agentUserId));
-        if (row.agentName) conds.push(eq(employees.multiparkAgentName, row.agentName));
-        const [emp] = await db
-          .select({ id: employees.id })
-          .from(employees)
-          .where(conds.length === 1 ? conds[0] : or(...conds))
-          .orderBy(desc(employees.isActive), asc(employees.id))
-          .limit(1);
-        incidentEmployeeId = emp?.id ?? null;
-      } catch {}
-    }
-
-    const importedAtStr = new Date().toISOString().slice(0, 19).replace("T", " ");
-    try {
-      const id = await createIncident({
-        incidentType: cls.incidentType,
-        severity: cls.severity,
-        status: "open",
-        description: remarks.slice(0, 1000),
-        vehiclePlate,
-        employeeId: incidentEmployeeId,
-        reportedBy: opts.reportedById ?? null,
-        sourceEmailId: sourceKey, // reaproveita para dedup (Multipark history id)
-        sourceEmailDate: row.actionTime, // data REAL da ação (não a do sync)
-        reservationLink: row.bookingExternalId,
-        aiClassification: `Multipark · ${row.changeType ?? ""} · ${row.agentName ?? ""}`.trim(),
-        importedAt: importedAtStr,
-      });
-      result.imported++;
-      result.details.push(`${cls.incidentType} (${cls.severity}) — ${remarks.slice(0, 60)}${remarks.length > 60 ? "…" : ""}`);
-    } catch (e: any) {
-      result.errors.push(`Create ${row.historyId}: ${e.message}`);
-    }
-  }
-  return result;
-}
-
 // ─── INBOUND EMAILS (leitor IMAP → roteamento) ──────────────────────────────
 export async function createInboundEmail(data: InsertInboundEmail): Promise<number> {
   const db = await getDb();
@@ -7737,15 +6671,103 @@ export async function createInboundEmail(data: InsertInboundEmail): Promise<numb
   return (result as any).insertId as number;
 }
 
-/** Batch do dedup do email-inbound: quais destes messageIds já existem. */
-export async function listExistingInboundMessageIds(messageIds: string[]): Promise<Set<string>> {
+/** Reserva 'processing' mais antiga do que isto é considerada abandonada. */
+const INBOUND_CLAIM_STALE_MS = 15 * 60 * 1000;
+function inboundStaleCutoff(): string {
+  return new Date(Date.now() - INBOUND_CLAIM_STALE_MS).toISOString().slice(0, 19).replace("T", " ");
+}
+
+/**
+ * RESERVA o Message-ID antes de criar o registo de destino (reclamação…):
+ * insere a linha em inbound_emails com status 'processing' e deixa o índice
+ * UNIQUE decidir. Duas corridas em paralelo (cron + botão manual) nunca criam
+ * o mesmo caso duas vezes. Devolve o id da linha reservada, ou null se o email
+ * já existe (duplicado → ignorar). Uma reserva 'processing' abandonada há mais
+ * de 15 min (corrida morta a meio) é retomada atomicamente.
+ */
+export async function claimInboundEmail(data: InsertInboundEmail): Promise<number | null> {
   const db = await getDb();
-  if (!db || messageIds.length === 0) return new Set();
-  const rows = await db
-    .select({ m: inboundEmails.messageId })
+  if (!db) throw new Error("DB not available");
+  const nowStr = new Date().toISOString().slice(0, 19).replace("T", " ");
+  try {
+    return await createInboundEmail({ ...data, status: "processing", processedAt: nowStr } as any);
+  } catch (err: any) {
+    const code = err?.code ?? err?.cause?.code;
+    if (code !== "ER_DUP_ENTRY") throw err;
+  }
+  const [res] = await db.update(inboundEmails)
+    .set({ processedAt: nowStr })
+    .where(and(
+      eq(inboundEmails.messageId, data.messageId),
+      eq(inboundEmails.status, "processing"),
+      lt(inboundEmails.processedAt, inboundStaleCutoff()),
+    )) as any;
+  if (!res?.affectedRows) return null;
+  const row = await getInboundEmailByMessageId(data.messageId);
+  return row?.id ?? null;
+}
+
+export async function updateInboundEmail(id: number, data: Partial<InsertInboundEmail>) {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const clamp = (v: unknown, n: number) => (typeof v === "string" ? v.slice(0, n) : v);
+  const safe: Partial<InsertInboundEmail> = { ...data };
+  for (const [k, n] of [["fromName", 255], ["fromEmail", 320], ["clientName", 255], ["clientEmail", 320], ["clientPhone", 50], ["vehiclePlate", 20], ["bookingRef", 100], ["subject", 500], ["errorMsg", 500]] as const) {
+    if (k in safe) (safe as any)[k] = clamp((safe as any)[k], n);
+  }
+  await db.update(inboundEmails).set(safe).where(eq(inboundEmails.id, id));
+}
+
+/** Liberta uma reserva (falha a criar o registo → a próxima corrida tenta de novo). */
+export async function deleteInboundEmail(id: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(inboundEmails).where(eq(inboundEmails.id, id));
+}
+
+/** Message-ID do último email RECEBIDO de uma reclamação (threading das respostas). */
+export async function getLastInboundMessageIdForComplaint(complaintId: number): Promise<string | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select({ m: inboundEmails.messageId })
     .from(inboundEmails)
-    .where(inArray(inboundEmails.messageId, messageIds));
-  return new Set(rows.map(r => r.m));
+    .where(and(eq(inboundEmails.targetModule, "complaint"), eq(inboundEmails.targetId, complaintId)))
+    .orderBy(desc(inboundEmails.id))
+    .limit(1);
+  const m = rows[0]?.m;
+  return m && !m.startsWith("uid:") ? m : null;
+}
+
+/**
+ * Anexos (não-imagem) dos emails ligados a uma reclamação — as imagens são
+ * copiadas para complaint_photos na ingestão; o resto aparece como links.
+ */
+export async function listComplaintEmailAttachments(complaintId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({ id: inboundEmails.id, subject: inboundEmails.subject, receivedAt: inboundEmails.receivedAt, attachmentsJson: inboundEmails.attachmentsJson })
+    .from(inboundEmails)
+    .where(and(
+      eq(inboundEmails.targetModule, "complaint"),
+      eq(inboundEmails.targetId, complaintId),
+      isNotNull(inboundEmails.attachmentsJson),
+    ))
+    .orderBy(desc(inboundEmails.id))
+    .limit(50);
+  const out: Array<{ emailId: number; subject: string | null; receivedAt: string | null; filename: string; contentType: string | null; size: number | null; url: string | null; key: string | null }> = [];
+  for (const r of rows) {
+    let list: any[] = [];
+    try { list = JSON.parse(r.attachmentsJson || "[]"); } catch { list = []; }
+    for (const a of Array.isArray(list) ? list : []) {
+      if (String(a?.contentType ?? "").toLowerCase().startsWith("image/")) continue;
+      out.push({
+        emailId: r.id, subject: r.subject, receivedAt: r.receivedAt,
+        filename: String(a?.filename || "anexo"), contentType: a?.contentType ?? null,
+        size: typeof a?.size === "number" ? a.size : null, url: a?.url ?? null, key: a?.key ?? null,
+      });
+    }
+  }
+  return out;
 }
 
 export async function getInboundEmailByMessageId(messageId: string) {
@@ -7845,11 +6867,11 @@ export async function assignTaskToEmployee(taskId: number, employeeId: number) {
 // Procura uma reclamação ABERTA do mesmo cliente (email ou matrícula), para
 // agrupar emails repetidos/respostas em vez de criar reclamações novas.
 /**
- * Agrupamento AGRESSIVO de reclamações por cliente: email OU matrícula OU nome
- * (nome exato, ≥6 chars, para evitar falsos positivos). Ao contrário do
- * findOpenComplaintByClient, também devolve reclamações resolvidas/fechadas —
- * o caller reabre-as. Preferência: aberta > mais recente. Objetivo: 10 emails
- * do mesmo cliente = 1 reclamação com 10 mensagens, nunca 10 reclamações.
+ * Agrupamento de reclamações por cliente: email OU matrícula (normalizada) OU
+ * nome (exato, ≥6 chars). Só casos ABERTOS (não resolvidos/fechados) com
+ * atividade nos últimos 60 dias — um cliente que volta meses depois com outro
+ * problema abre um caso novo. Ignora remetentes internos e nomes genéricos.
+ * Objetivo: 10 emails do mesmo cliente = 1 reclamação com 10 mensagens.
  */
 export async function findComplaintByClientSignals(
   clientEmail?: string | null,
@@ -7858,21 +6880,29 @@ export async function findComplaintByClientSignals(
 ) {
   const db = await getDb();
   if (!db) return null;
+  const { clientSignalEmail, clientSignalName, normalizePlate, COMPLAINT_SIGNALS_WINDOW_DAYS } = await import("./complaintEmail");
   const conds: any[] = [];
-  if (clientEmail) conds.push(eq(complaints.clientEmail, clientEmail));
-  if (vehiclePlate) conds.push(eq(complaints.vehiclePlate, vehiclePlate));
-  const name = clientName?.trim();
-  if (name && name.length >= 6 && name.toLowerCase() !== "desconhecido") {
-    conds.push(eq(complaints.clientName, name));
+  // Endereços internos (multipark.pt, …) e nomes genéricos ("Multipark") são
+  // do BACKOFFICE que reencaminha, não do cliente — nunca agrupam.
+  const email = clientSignalEmail(clientEmail)?.toLowerCase();
+  if (email) conds.push(sql`LOWER(${complaints.clientEmail}) = ${email}`);
+  const plate = normalizePlate(vehiclePlate);
+  if (plate.length >= 4) {
+    conds.push(sql`UPPER(REPLACE(REPLACE(REPLACE(${complaints.vehiclePlate}, ' ', ''), '-', ''), '.', '')) = ${plate}`);
   }
+  const name = clientSignalName(clientName);
+  if (name) conds.push(eq(complaints.clientName, name));
   if (!conds.length) return null;
+  const since = new Date(Date.now() - COMPLAINT_SIGNALS_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace("T", " ");
   const rows = await db.select().from(complaints)
-    .where(or(...conds))
+    .where(and(
+      notInArray(complaints.complaintStatus, ["resolved", "closed", "converted"]),
+      or(gte(complaints.updatedAt, since), gte(complaints.createdAt, since)),
+      or(...conds),
+    ))
     .orderBy(desc(complaints.createdAt))
-    .limit(5);
-  if (!rows.length) return null;
-  const open = rows.find(r => r.complaintStatus !== "resolved" && r.complaintStatus !== "closed");
-  return open ?? rows[0];
+    .limit(1);
+  return rows[0] ?? null;
 }
 
 /**
@@ -7911,7 +6941,7 @@ export async function findOpenComplaintByClient(clientEmail?: string | null, veh
   if (vehiclePlate) conds.push(eq(complaints.vehiclePlate, vehiclePlate));
   if (!conds.length) return null;
   const rows = await db.select().from(complaints)
-    .where(and(notInArray(complaints.complaintStatus, ["resolved", "closed"]), or(...conds)))
+    .where(and(notInArray(complaints.complaintStatus, ["resolved", "closed", "converted"]), or(...conds)))
     .orderBy(desc(complaints.createdAt))
     .limit(1);
   return rows[0] || null;
@@ -7935,36 +6965,45 @@ export async function getClientHistory(q: ClientHistoryQuery) {
   };
   if (!db) return empty;
 
-  const email = q.email?.trim() || null;
+  // Email é a identidade: comparar sempre pela forma canónica (shared/email.ts).
+  const email = q.email?.trim().toLowerCase() || null;
   const phone = q.phone?.trim() || null;
   const plate = q.plate?.trim() || null;
   const name = q.name?.trim() || null;
   if (!email && !phone && !plate && !name) return empty;
 
-  const namePat = name ? `%${name}%` : null;
+  // O nome é fraco (há muitas "Ana Silva"): só entra quando não há email,
+  // telefone nem matrícula. % e _ escapados.
+  const namePat = name && !email && !phone && !plate ? `%${name.replace(/[\\%_]/g, (c) => "\\" + c)}%` : null;
+  // Telefone pelos últimos 9 dígitos (+351 912… = 912…); matrícula sem espaços/hífens
+  const phone9 = phone ? phone.replace(/\D+/g, "").slice(-9) : null;
+  const phoneEq = (col: any) => sql`RIGHT(REGEXP_REPLACE(COALESCE(${col}, ''), '[^0-9]', ''), 9) = ${phone9}`;
+  const plateK = plate ? plate.replace(/[\s-]+/g, "").toUpperCase() : null;
+  const plateEq = (col: any) => sql`UPPER(REPLACE(REPLACE(TRIM(${col}), ' ', ''), '-', '')) = ${plateK}`;
+  const usePhone = !!phone9 && phone9.length === 9;
 
   // Reservas (multipark_bookings)
   const bookingConds: any[] = [];
-  if (email) bookingConds.push(eq(multiparkBookings.clientEmail, email));
-  if (phone) bookingConds.push(eq(multiparkBookings.clientPhone, phone));
-  if (plate) bookingConds.push(eq(multiparkBookings.licensePlate, plate));
+  if (email) bookingConds.push(sql`LOWER(TRIM(${multiparkBookings.clientEmail})) = ${email}`);
+  if (usePhone) bookingConds.push(phoneEq(multiparkBookings.clientPhone));
+  if (plateK) bookingConds.push(plateEq(multiparkBookings.licensePlate));
   if (namePat) bookingConds.push(sql`CONCAT_WS(' ', ${multiparkBookings.clientFirstName}, ${multiparkBookings.clientLastName}) LIKE ${namePat}`);
 
   const complaintConds: any[] = [];
-  if (email) complaintConds.push(eq(complaints.clientEmail, email));
-  if (phone) complaintConds.push(eq(complaints.clientPhone, phone));
-  if (plate) complaintConds.push(eq(complaints.vehiclePlate, plate));
+  if (email) complaintConds.push(sql`LOWER(TRIM(${complaints.clientEmail})) = ${email}`);
+  if (usePhone) complaintConds.push(phoneEq(complaints.clientPhone));
+  if (plateK) complaintConds.push(plateEq(complaints.vehiclePlate));
   if (namePat) complaintConds.push(like(complaints.clientName, namePat));
 
   const lfConds: any[] = [];
-  if (email) lfConds.push(eq(lostFoundItems.clientEmail, email));
-  if (phone) lfConds.push(eq(lostFoundItems.clientPhone, phone));
-  if (plate) lfConds.push(eq(lostFoundItems.vehiclePlate, plate));
+  if (email) lfConds.push(sql`LOWER(TRIM(${lostFoundItems.clientEmail})) = ${email}`);
+  if (usePhone) lfConds.push(phoneEq(lostFoundItems.clientPhone));
+  if (plateK) lfConds.push(plateEq(lostFoundItems.vehiclePlate));
   if (namePat) lfConds.push(like(lostFoundItems.clientName, namePat));
 
   const reviewConds: any[] = [];
-  if (email) reviewConds.push(eq(googleReviews.reviewerEmail, email));
-  if (plate) reviewConds.push(eq(googleReviews.vehiclePlate, plate));
+  if (email) reviewConds.push(sql`LOWER(TRIM(${googleReviews.reviewerEmail})) = ${email}`);
+  if (plateK) reviewConds.push(plateEq(googleReviews.vehiclePlate));
   if (namePat) reviewConds.push(like(googleReviews.reviewerName, namePat));
 
   const [bookings, bookingStatsRows, complaintRows, lostFound, reviews] = await Promise.all([
@@ -7976,7 +7015,7 @@ export async function getClientHistory(q: ClientHistoryQuery) {
           checkIn: multiparkBookings.checkIn, checkOut: multiparkBookings.checkOut,
           licensePlate: multiparkBookings.licensePlate, totalPrice: multiparkBookings.totalPrice,
           clientFirstName: multiparkBookings.clientFirstName, clientLastName: multiparkBookings.clientLastName,
-        }).from(multiparkBookings).where(or(...bookingConds)).orderBy(desc(multiparkBookings.checkIn)).limit(30)
+        }).from(multiparkBookings).where(and(or(...bookingConds), projectScope(multiparkBookings.projectId))).orderBy(desc(multiparkBookings.checkIn)).limit(30)
       : Promise.resolve([]),
     // Agregados sobre TODAS as reservas do cliente (a lista acima é limitada
     // a 30): quantas, desde quando, total gasto, média — o retrato para quem
@@ -7986,21 +7025,23 @@ export async function getClientHistory(q: ClientHistoryQuery) {
           total: sql<number>`COUNT(*)`,
           firstCheckIn: sql<string | null>`MIN(${multiparkBookings.checkIn})`,
           lastCheckIn: sql<string | null>`MAX(${multiparkBookings.checkIn})`,
-          totalSpent: sql<string | null>`SUM(${multiparkBookings.totalPrice})`,
+          // Gasto só em estadias efetivas (= ficha de Clientes): canceladas e futuras fora
+          totalSpent: sql<string | null>`SUM(CASE WHEN UPPER(COALESCE(${multiparkBookings.status}, '')) IN ('CHECKED_IN','CHECKING_OUT','PENDING_CHECKOUT','CHECKED_OUT') THEN ${multiparkBookings.totalPrice} END)`,
+          visited: sql<number>`SUM(UPPER(COALESCE(${multiparkBookings.status}, '')) IN ('CHECKED_IN','CHECKING_OUT','PENDING_CHECKOUT','CHECKED_OUT'))`,
           cancelled: sql<number>`SUM(UPPER(COALESCE(${multiparkBookings.status}, '')) LIKE '%CANCEL%')`,
-        }).from(multiparkBookings).where(or(...bookingConds))
+        }).from(multiparkBookings).where(and(or(...bookingConds), projectScope(multiparkBookings.projectId)))
       : Promise.resolve([] as any[]),
     complaintConds.length
       ? db.select({
           id: complaints.id, title: complaints.title, status: complaints.complaintStatus,
           vehiclePlate: complaints.vehiclePlate, createdAt: complaints.createdAt,
-        }).from(complaints).where(or(...complaintConds)).orderBy(desc(complaints.createdAt)).limit(30)
+        }).from(complaints).where(and(or(...complaintConds), projectScope(complaints.projectId))).orderBy(desc(complaints.createdAt)).limit(30)
       : Promise.resolve([]),
     lfConds.length
       ? db.select({
           id: lostFoundItems.id, itemType: lostFoundItems.itemType, description: lostFoundItems.description,
           status: lostFoundItems.status, vehiclePlate: lostFoundItems.vehiclePlate, createdAt: lostFoundItems.createdAt,
-        }).from(lostFoundItems).where(or(...lfConds)).orderBy(desc(lostFoundItems.createdAt)).limit(30)
+        }).from(lostFoundItems).where(and(or(...lfConds), projectScope(lostFoundItems.projectId))).orderBy(desc(lostFoundItems.createdAt)).limit(30)
       : Promise.resolve([]),
     reviewConds.length
       ? db.select({
@@ -8018,7 +7059,7 @@ export async function getClientHistory(q: ClientHistoryQuery) {
     firstCheckIn: (s?.firstCheckIn as string | null) ?? null,
     lastCheckIn: (s?.lastCheckIn as string | null) ?? null,
     totalSpent,
-    avgSpend: total > 0 ? totalSpent / total : 0,
+    avgSpend: Number(s?.visited ?? 0) > 0 ? totalSpent / Number(s.visited) : 0,
     cancelled: Number(s?.cancelled ?? 0),
   };
 
@@ -8064,6 +7105,15 @@ export async function findComplaintByThread(opts: { gmThreadId?: string | null; 
 
   const refs = (opts.refs || []).map(r => r.trim()).filter(Boolean);
   if (refs.length) {
+    // Resposta direta a um email NOSSO (Message-ID guardado no envio).
+    const outRows = await db.select({ id: complaints.id }).from(complaints)
+      .where(inArray(complaints.lastOutboundMessageId, refs.slice(0, 100)))
+      .orderBy(desc(complaints.id))
+      .limit(1);
+    if (outRows[0]) {
+      const c = await getComplaintById(outRows[0].id);
+      if (c) return c;
+    }
     const refSet = new Set(refs);
     const recent = await db.select().from(inboundEmails)
       .where(and(eq(inboundEmails.targetModule, "complaint"), isNotNull(inboundEmails.targetId)))
@@ -8094,7 +7144,7 @@ export async function findOpenComplaintBySubject(subject?: string | null) {
   const since = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace("T", " ");
   const rows = await db.select().from(complaints)
     .where(and(
-      notInArray(complaints.complaintStatus, ["resolved", "closed"]),
+      notInArray(complaints.complaintStatus, ["resolved", "closed", "converted"]),
       gte(complaints.createdAt, since),
     ))
     .orderBy(desc(complaints.createdAt))
@@ -8111,7 +7161,7 @@ export async function findOpenLostFoundByClient(clientEmail?: string | null, veh
   if (vehiclePlate) conds.push(eq(lostFoundItems.vehiclePlate, vehiclePlate));
   if (!conds.length) return null;
   const rows = await db.select().from(lostFoundItems)
-    .where(and(notInArray(lostFoundItems.status, ["returned", "closed"]), or(...conds)))
+    .where(and(notInArray(lostFoundItems.status, ["returned", "closed", "converted"]), or(...conds)))
     .orderBy(desc(lostFoundItems.createdAt))
     .limit(1);
   return rows[0] || null;

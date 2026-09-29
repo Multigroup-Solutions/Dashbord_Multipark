@@ -42,3 +42,18 @@ export function missingApiEnvs(cfg = readGoogleAdsConfig()): string[] {
 export function resolveRedirectUri(cfg: GoogleAdsConfig, origin: string): string {
   return cfg.redirectUri || `${origin}${OAUTH_CALLBACK_PATH}`;
 }
+
+/**
+ * Destino depois do OAuth: só caminhos RELATIVOS da própria app ("/…"), nunca
+ * "//host" (protocol-relative), "/\\host", esquemas ou URLs absolutos — senão o
+ * callback servia de redirecionador aberto. Inválido → null (vai para a página
+ * da integração). PURA.
+ */
+export function safeRedirectPath(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const s = raw.trim();
+  if (!s || s.length > 500) return null;
+  if (!s.startsWith("/") || s.startsWith("//") || s.startsWith("/\\")) return null;
+  if (/[\u0000-\u001f\\]/.test(s)) return null;
+  return s;
+}

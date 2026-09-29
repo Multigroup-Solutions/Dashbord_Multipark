@@ -1,7 +1,10 @@
 import express from "express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerGoogleAdsRoutes } from "../integrations/googleAds/routes";
+import { registerMetaAdsRoutes } from "../integrations/meta/routes";
 import { registerGoogleBusinessRoutes } from "../integrations/googleBusiness/routes";
+import { registerGoogleAccountRoutes } from "../google/routes";
+import { registerMailRoutes } from "../mail/routes";
 import { syncReviews as syncGoogleBusinessReviews } from "../integrations/googleBusiness/service";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
@@ -9,11 +12,13 @@ import { createExternalApiRouter } from "../externalApi";
 import { createMcpApiRouter } from "../mcpApi";
 import { createWhatsappWebhookRouter } from "../whatsappWebhook";
 import { createMultiparkWebhookRouter, retryMultiparkDeliveries } from "../multiparkWebhook";
-import { waitUntil } from "@vercel/functions";
+import { getDeadline, waitUntil } from "@vercel/functions";
 import { deliveryErrorCode } from "../bookingDeliveryQueue";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { sdk } from "./sdk";
-import { getBookingTryAllParks } from "../multipark";
+import { requireSession } from "./requireSession";
+import { cronAuthOk as cronBearerAuthOk } from "../cronAuth";
+import { cronRunRecorder } from "../cronRuns";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -29,22 +34,32 @@ app.use("/api/multipark/webhook", createMultiparkWebhookRouter({
 }));
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
+// Registo de TODAS as corridas de /api/cron/* (tabela cron_runs → Definições →
+// Estado do sistema). Montado antes das rotas; waitUntil mantém a função viva
+// até a linha final estar escrita.
+app.use("/api/cron", cronRunRecorder({ defer: (p) => waitUntil(p) }));
 
 let initError: string | null = null;
 
 try {
   registerOAuthRoutes(app);
   registerGoogleAdsRoutes(app);
+  registerMetaAdsRoutes(app);
   registerGoogleBusinessRoutes(app, () => waitUntil(syncGoogleBusinessReviews().catch(() => {
     console.error('[Google Business] A recolha será retomada pelo cron.');
   })));
+  // Comunicação: "Ligar a minha conta Google" (OAuth por utilizador), cron
+  // /api/cron/mail-sync, push do Gmail e anexos a pedido.
+  // Notificações da Google (Calendário/Drive): POST /api/google/push.
+  registerGoogleAccountRoutes(app, { defer: (p) => waitUntil(p) });
+  registerMailRoutes(app, { defer: (p) => waitUntil(p) });
   app.use("/api/external", createExternalApiRouter());
   app.use("/api/v1", createMcpApiRouter());
 
   // Upload multipart (paridade com o index.ts do Railway — os PDAs usam isto
   // p/ a foto de entrada/saída do check-in; sem isto o Vercel dava 404).
   // NOTA: o Vercel limita o body a ~4.5MB — o cliente redimensiona antes.
-  app.post("/api/upload", async (req, res, next) => {
+  app.post("/api/upload", requireSession, async (req, res, next) => {
     const multer = (await import("multer")).default;
     const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 4 * 1024 * 1024 } });
     upload.single("file")(req as any, res as any, async (err: any) => {
@@ -67,7 +82,7 @@ try {
   // Resolve um ficheiro do storage pela KEY (ex.: training/manuals/...).
   // Necessário porque URLs relativas "/uploads/..." gravadas na BD não são
   // servidas no Vercel (o rewrite manda tudo o que não é /api p/ o index.html).
-  app.get(/^\/api\/file\/(.+)/, async (req, res) => {
+  app.get(/^\/api\/file\/(.+)/, requireSession, async (req, res) => {
     try {
       // O Express já decodifica os grupos capturados — um 2º decodeURIComponent
       // lançava URIError (500) com nomes que contêm "%".
@@ -103,322 +118,280 @@ try {
   console.error("[API Init Error]", initError);
 }
 
-// Debug endpoint: fetch raw booking JSON straight from MultiPark API.
-// Admin-only (session cookie). Usage: /api/debug/booking?id=cm...
-app.get("/api/debug/booking", async (req, res) => {
-  try {
-    const user = await sdk.authenticateRequest(req);
-    if (!user || user.role !== "admin" && user.role !== "super_admin") {
-      return res.status(403).json({ error: "Forbidden — admin only" });
-    }
-    const id = String(req.query.id ?? "").trim();
-    if (!id) return res.status(400).json({ error: "Missing ?id=<externalId>" });
-
-    const found = await getBookingTryAllParks(id);
-    if (!found) {
-      return res.status(404).json({
-        error: "Reserva não encontrada em nenhum parque",
-        triedKeys: Object.keys(process.env).filter(k => k.startsWith("MULTIPARK_API_KEY_")),
-      });
-    }
-
-    return res.json({
-      park: `${found.parkConfig.name} (${found.parkConfig.city})`,
-      parkId: found.parkConfig.id,
-      booking: found.booking,
-    });
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message || String(err) });
-  }
-});
-
-// Debug endpoint: tenta várias URLs / params para descobrir se há algum
-// caminho onde a API devolve o nome real do parceiro.
-// Uso: /api/debug/probe-partner?id=<externalId>
-app.get("/api/debug/probe-partner", async (req, res) => {
-  try {
-    const user = await sdk.authenticateRequest(req);
-    if (!user || (user.role !== "admin" && user.role !== "super_admin")) {
-      return res.status(403).json({ error: "Forbidden — admin only" });
-    }
-    const id = String(req.query.id ?? "").trim();
-    if (!id) return res.status(400).json({ error: "Missing ?id=<externalId>" });
-
-    // Primeiro descobre qual parque é (para usar a chave certa)
-    const { getBookingTryAllParks, PARK_CONFIGS, getParkApiKey } = await import("../multipark");
-    const found = await getBookingTryAllParks(id);
-    if (!found) return res.status(404).json({ error: "Reserva não encontrada" });
-
-    const apiKey = getParkApiKey(found.parkConfig);
-    if (!apiKey) return res.status(500).json({ error: "Sem API key para o parque" });
-
-    const partnerId = (found.booking as any).partnerId;
-    const base = process.env.MULTIPARK_API_URL || "https://api.multipark.pt/api/v1/bookings-api";
-    const baseRoot = base.replace(/\/bookings-api$/, "");
-
-    // Lista de URLs/params para testar
-    const probes: { name: string; url: string }[] = [
-      { name: "GET /partners/:partnerId", url: `${base}/partners/${partnerId}` },
-      { name: "GET /partner/:partnerId", url: `${base}/partner/${partnerId}` },
-      { name: "GET /users/:partnerId", url: `${base}/users/${partnerId}` },
-      { name: "GET /agents/:partnerId", url: `${base}/agents/${partnerId}` },
-      { name: "GET /agent/:partnerId", url: `${base}/agent/${partnerId}` },
-      { name: "GET /bookings/:id?include=partner", url: `${base}/bookings/${id}?include=partner` },
-      { name: "GET /bookings/:id?expand=partner", url: `${base}/bookings/${id}?expand=partner` },
-      { name: "GET /bookings/:id?fields=*", url: `${base}/bookings/${id}?fields=*` },
-      { name: "GET /bookings/:id/partner", url: `${base}/bookings/${id}/partner` },
-      { name: "GET /bookings/:id/details", url: `${base}/bookings/${id}/details` },
-      { name: "GET /partners (lista)", url: `${base}/partners` },
-      { name: "GET (root)/partners/:partnerId", url: `${baseRoot}/partners/${partnerId}` },
-      { name: "GET (root)/users/:partnerId", url: `${baseRoot}/users/${partnerId}` },
-    ];
-
-    const results: any[] = [];
-    for (const probe of probes) {
-      try {
-        const r = await fetch(probe.url, {
-          headers: { "X-Api-Key": apiKey, "Content-Type": "application/json" },
-        });
-        const status = r.status;
-        let body: any = null;
-        try { body = await r.json(); } catch {}
-        results.push({
-          probe: probe.name,
-          url: probe.url,
-          status,
-          ok: r.ok,
-          body: r.ok ? body : (body?.message ?? body?.error ?? "—"),
-        });
-      } catch (err: any) {
-        results.push({ probe: probe.name, url: probe.url, error: err.message });
-      }
-    }
-
-    return res.json({
-      bookingId: id,
-      partnerId,
-      partnerNameFromReport: (found.booking as any).partnerName,
-      probes: results,
-    });
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message || String(err) });
-  }
-});
-
-// ─── Vercel Cron Jobs ────────────────────────────────────────────────────────
-// Vercel chama estes endpoints com Authorization: Bearer <CRON_SECRET>. Em
-// ausência da env var, nenhuma chamada é permitida.
+// ─── Crons ───────────────────────────────────────────────────────────────────
+// Agendador OFICIAL: /api/cron/tick, chamado de 5 em 5 min pelo cron-job.org
+// (docs/ajuda/agendador.md) e de hora a hora pelo GitHub Actions como rede de
+// segurança (.github/workflows/cron-tick.yml). O tick decide pela hora de
+// Lisboa o que está na altura (server/cronSchedule.ts) e corre os trabalhos
+// com lease, prazo e retoma (server/cronScheduler.ts). Os endpoints de cada
+// trabalho ficam para uso manual (workflow_dispatch / curl) e partilham o
+// código com o tick (server/cronJobs.ts). Todos exigem Authorization: Bearer
+// <CRON_SECRET>; sem a env var, nenhuma chamada é permitida (server/cronAuth).
 function cronAuthOk(req: any): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return false;
-  return req.headers["authorization"] === `Bearer ${secret}`;
+  return cronBearerAuthOk(req.headers?.["authorization"]);
 }
 
+/** Prazo de um endpoint manual: < 50 s (maxDuration 60 s, margem para responder). */
+const manualDeadline = (ms = 45_000) => Date.now() + ms;
+
+// Agendador único. Responde logo 202 com o que vai arrancar e continua em
+// segundo plano (waitUntil do Vercel mantém a função viva até ~60 s — o
+// orçamento do tick é 50 s desde a chegada do pedido e respeita o prazo real
+// da função, getDeadline). ?wait=1 → corre tudo e devolve o relatório
+// completo (ok:false se algum trabalho falhou) — usado pelo GitHub Actions.
+app.get("/api/cron/tick", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const startedAt = Date.now();
+  try {
+    const { planDueJobs, runTick } = await import("../cronScheduler");
+    const { tickBudgetEnd } = await import("../cronSchedule");
+    const budgetEndAt = tickBudgetEnd(startedAt, getDeadline()?.getTime() ?? null);
+    const plan = await planDueJobs(startedAt);
+    if (req.query?.wait === "1") {
+      const report = await runTick(plan, budgetEndAt);
+      return res.json({ ranAt: new Date().toISOString(), ...report });
+    }
+    const work = runTick(plan, budgetEndAt)
+      .then((r) => { if (!r.ok) console.warn("[cron tick]", r.errors.join(" | ").slice(0, 500)); })
+      .catch((err) => console.error("[cron tick] falhou:", String(err?.message ?? err).slice(0, 200)));
+    waitUntil(work);
+    return res.status(202).json({ ok: true, accepted: true, ranAt: new Date().toISOString(), budgetMs: budgetEndAt - startedAt, starting: plan.planned });
+  } catch (err: any) {
+    return res.status(500).json({ ok: false, error: String(err?.message ?? err).slice(0, 300) });
+  }
+});
+
+// Fila de notificações + detalhe (tick: de 15 em 15 min). Falhas
+// de itens vão em `warnings` e o cron fica verde; 503 só se uma fase falhar.
 app.get("/api/cron/multipark-deliveries", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
-  try {
-    const startedAt = Date.now();
-    const { retryMultiparkDeliveries } = await import("../multiparkWebhook");
-    const result = await retryMultiparkDeliveries(startedAt + 20_000);
-    const { enrichBookingsBatch, syncBookingHistoryBatch } = await import("../jobs/multiparkBookingSync");
-    // O detalhe tem um ciclo próprio: um report demorado não pode impedir
-    // para sempre a atualização de matrículas, clientes e campanhas.
-    const details = await enrichBookingsBatch({ limit: 40, deadlineAt: startedAt + 32_000 });
-    const history = await syncBookingHistoryBatch(20, startedAt + 45_000);
-    return res.json({ ok: result.failed === 0 && result.lostLease === 0 && details.errors === 0
-      && details.noKey === 0 && history.errors === 0 && history.noKey === 0, ...result, details, history });
-  } catch {
-    return res.status(503).json({ ok: false, error: "Fila de reservas indisponível" });
-  }
+  const { multiparkDeliveriesCron, sendCronRun } = await import("../cronJobs");
+  sendCronRun(res, await multiparkDeliveriesCron({ deadlineAt: manualDeadline() }));
 });
 
-app.get("/api/cron/multipark-sync", async (req, res) => {
+// Descoberta do esquema da BD Multipark A PARTIR DA VERCEL (é onde está a
+// DATABASE_URL_MULTIPARK; o valor é "sensível" e não sai de lá). Faz o mesmo
+// que scripts/multipark-db-schema.ts: SÓ ESTRUTURA (tabelas, colunas, chaves,
+// índices, enums, contagens aproximadas) — nunca lê linhas. Recusa se a
+// sessão não ficar só de leitura. ?format=md (omissão) | json; ?schema=a,b.
+// Chamado à mão pelo workflow .github/workflows/multipark-db-schema.yml.
+app.get("/api/cron/multipark-db-schema", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { getMultiparkDb, isMultiparkDbConfigured, redactSecrets } = await import("../multiparkDb/client");
+  if (!isMultiparkDbConfigured()) {
+    return res.status(503).json({ ok: false, error: "DATABASE_URL_MULTIPARK não está definida neste ambiente." });
+  }
   try {
-    const { runRecentCronSync } = await import("../jobs/multiparkBookingSync");
-    const result = await runRecentCronSync(30);
-    res.json({ ok: true, ranAt: new Date().toISOString(), ...result });
-  } catch (err: any) {
-    res.status(500).json({ ok: false, error: String(err?.message ?? err) });
+    const db = await getMultiparkDb();
+    const readOnly = await db.readOnlyCheck();
+    if (!readOnly) {
+      return res.status(409).json({ ok: false, engine: db.engine, readOnly, error: "A sessão NÃO ficou só de leitura — parar e pedir um utilizador só de leitura." });
+    }
+    const { loadSchemaSnapshot, renderSchemaMarkdown } = await import("../multiparkDb/schemaDoc");
+    const schemaParam = typeof req.query?.schema === "string" ? req.query.schema : "";
+    const schemas = schemaParam.split(",").map((s: string) => s.trim()).filter(Boolean).slice(0, 10);
+    const snap = await loadSchemaSnapshot(db, schemas.length ? { schemas } : {});
+    if (req.query?.format === "json") return res.status(200).json({ ok: true, engine: db.engine, readOnly, snapshot: snap });
+    res.status(200).type("text/markdown; charset=utf-8").send(renderSchemaMarkdown(snap) + "\n");
+  } catch (err) {
+    console.error("[multipark-db-schema] falhou:", redactSecrets(err));
+    res.status(500).json({ ok: false, error: redactSecrets(err).slice(0, 500) });
   }
 });
 
-app.get("/api/cron/multipark-future", async (req, res) => {
+// Sonda do mapeamento da BD Multipark (README, passo 3): compara reservas e
+// movimentos recentes que já temos (da API) com a BD deles — datas nos dois
+// modos, ids, preços. SÓ LÊ; dados pessoais só como igual/diferente.
+// ?sample=10 (máx 20) &days=14. Chamado pelo workflow multipark-db-schema.yml (modo "probe").
+app.get("/api/cron/multipark-db-probe", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { isMultiparkDbConfigured, redactSecrets } = await import("../multiparkDb/client");
+  if (!isMultiparkDbConfigured()) {
+    return res.status(503).json({ ok: false, error: "DATABASE_URL_MULTIPARK não está definida neste ambiente." });
+  }
   try {
-    const { runFutureCronSync } = await import("../jobs/multiparkBookingSync");
-    // ?offsetDays=N retoma a varredura a partir desse dia da janela — a janela
-    // completa não cabe nos 60s do Vercel; a resposta traz done/nextOffset e o
-    // workflow repete até done:true.
-    const offsetDays = typeof req.query?.offsetDays === "string" && /^\d+$/.test(req.query.offsetDays)
-      ? Number(req.query.offsetDays)
-      : 0;
-    const result = await runFutureCronSync(4, { offsetDays });
-    res.json({ ok: true, ranAt: new Date().toISOString(), ...result });
-  } catch (err: any) {
-    res.status(500).json({ ok: false, error: String(err?.message ?? err) });
+    const { runMultiparkDbProbe } = await import("../multiparkDb/probe");
+    const sample = Number(req.query?.sample) || undefined;
+    const days = Number(req.query?.days) || undefined;
+    res.status(200).json(await runMultiparkDbProbe({ sample, days }));
+  } catch (err) {
+    console.error("[multipark-db-probe] falhou:", redactSecrets(err));
+    res.status(500).json({ ok: false, error: redactSecrets(err).slice(0, 500) });
   }
 });
 
-// Recolha diária de operações (driver history do Zello + alertas gps_off).
-// Substitui o startDailyCollectionScheduler() que só corre no server Railway —
-// em Vercel é preciso este cron (GitHub Actions, 1×/dia).
+// Diferenças nossa BD × BD da Multipark (a deles é a referência): lê as duas
+// por inteiro, compara reserva a reserva (com o porquê e onde) e devolve o
+// resultado. SÓ LÊ as duas BD; sem dados pessoais do cliente.
+// ?foco=AAAA-MM-DD (lista tudo o que foi cancelado nesse dia).
+// Workflow multipark-db-schema.yml (modo "diferencas").
+app.get("/api/cron/multipark-db-diff", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { isMultiparkDbConfigured, redactSecrets } = await import("../multiparkDb/client");
+  if (!isMultiparkDbConfigured()) {
+    return res.status(503).json({ ok: false, error: "DATABASE_URL_MULTIPARK não está definida neste ambiente." });
+  }
+  try {
+    const { runMultiparkDbDiff } = await import("../multiparkDb/diff");
+    const focus = typeof req.query?.foco === "string" ? req.query.foco : null;
+    res.status(200).json(await runMultiparkDbDiff({ focus }));
+  } catch (err) {
+    console.error("[multipark-db-diff] falhou:", redactSecrets(err));
+    res.status(500).json({ ok: false, error: redactSecrets(err).slice(0, 500) });
+  }
+});
+
+// Perfil da BD da Multipark: o que cada tabela/coluna guarda de facto
+// (% preenchida, datas, valores de categoria, chaves JSON, servidores dos
+// URLs) + catálogos de negócio. SÓ LÊ; valores pessoais nunca saem.
+// ?tables=A,B (vazio = todas) &catalogos=1. Devolve `pendentes` se não couber
+// tudo numa chamada. Workflow multipark-db-schema.yml (modo "perfil").
+app.get("/api/cron/multipark-db-profile", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { isMultiparkDbConfigured, redactSecrets } = await import("../multiparkDb/client");
+  if (!isMultiparkDbConfigured()) {
+    return res.status(503).json({ ok: false, error: "DATABASE_URL_MULTIPARK não está definida neste ambiente." });
+  }
+  try {
+    const { runMultiparkDbProfile } = await import("../multiparkDb/profile");
+    const tables = typeof req.query?.tables === "string" && req.query.tables ? req.query.tables.split(",").map((s: string) => s.trim()).filter(Boolean).slice(0, 100) : undefined;
+    res.status(200).json(await runMultiparkDbProfile({ tables, withCatalogs: req.query?.catalogos === "1", listOnly: req.query?.lista === "1" }));
+  } catch (err) {
+    console.error("[multipark-db-profile] falhou:", redactSecrets(err));
+    res.status(500).json({ ok: false, error: redactSecrets(err).slice(0, 500) });
+  }
+});
+
+// Ligações automáticas funcionário ↔ utilizador ↔ agente Multipark (Fase 1).
+// Conservador e idempotente — ver server/identityLink.ts.
+app.get("/api/cron/identity-sweep", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { identitySweepCron, sendCronRun } = await import("../cronJobs");
+  sendCronRun(res, await identitySweepCron());
+});
+
+// CRM: fichas de cliente a partir das reservas (por lotes; ?restart=1 recomeça
+// do princípio sem desfazer ligações) e sugestões para juntar fichas.
+app.get("/api/cron/crm-sync", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { crmSyncCron, sendCronRun } = await import("../cronJobs");
+  sendCronRun(res, await crmSyncCron({ deadlineAt: manualDeadline(), restart: req.query?.restart === "1" }));
+});
+app.get("/api/cron/crm-pro-sync", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { crmProSyncCron, sendCronRun } = await import("../cronJobs");
+  sendCronRun(res, await crmProSyncCron({ deadlineAt: manualDeadline() }));
+});
+app.get("/api/cron/crm-suggestions", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { crmSuggestionsCron, sendCronRun } = await import("../cronJobs");
+  sendCronRun(res, await crmSuggestionsCron({ deadlineAt: manualDeadline() }));
+});
+
+// Serviços extra das reservas → tarefas (Definições → Parâmetros → Serviços → tarefas).
+app.get("/api/cron/services-tasks", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { serviceTasksCron, sendCronRun } = await import("../cronJobs");
+  sendCronRun(res, await serviceTasksCron({ deadlineAt: manualDeadline() }));
+});
+
+// "Pressão" do Extras-Dia (60 dias da BD Multipark → ops_pressure_stats).
+// ?cursor=… retoma no grupo seguinte (vem na resposta quando done:false).
+app.get("/api/cron/extras-pressure", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { extrasPressureCron, sendCronRun } = await import("../cronJobs");
+  const cursor = typeof req.query?.cursor === "string" ? req.query.cursor.slice(0, 200) : null;
+  sendCronRun(res, await extrasPressureCron({ deadlineAt: manualDeadline(), cursor }));
+});
+
+// Manutenção diária + recolha GPS FINAL do Zello (D-2 e dias
+// em falta), tudo dentro do prazo e retomável (done:false → chamar outra vez).
+// ?collectOnly=1 salta a manutenção; ?date=YYYY-MM-DD recolhe esse dia.
 app.get("/api/cron/daily-ops", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
-  try {
-    // Despesas: marca vencidas como "overdue" (antes só existia um botão
-    // manual super_admin que ninguém carregava — os KPIs de "Em Atraso"
-    // nunca mexiam) e lança as despesas recorrentes do mês em nome do
-    // utilizador de sistema (antes era quem abrisse a página primeiro).
-    try {
-      const { markOverdueExpenses } = await import("../db");
-      await markOverdueExpenses();
-    } catch (err) {
-      console.warn("[daily-ops] markOverdueExpenses:", err);
-    }
-    // Recorrentes do mês corrente (Lisboa): idempotente (lock + UNIQUE por
-    // modelo/mês). Deixou de correr ao abrir a página de despesas.
-    try {
-      const { generateRecurringExpensesForMonth } = await import("../expenseRecurring");
-      const { lisbonToday } = await import("../../shared/expensePeriods");
-      const [y, m] = lisbonToday().split("-").map(Number);
-      const r = await generateRecurringExpensesForMonth(y, m, null);
-      if (r.created > 0) console.log(`[daily-ops] recorrentes ${r.period}: ${r.created} lançada(s), ${r.skipped} já existiam`);
-    } catch (err) {
-      console.warn("[daily-ops] recorrentes:", err);
-    }
-
-    // Segunda-feira (Lisboa): gera automaticamente a avaliação da semana ANTERIOR
-    try {
-      const lisbonNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Lisbon" }));
-      if (lisbonNow.getDay() === 1) {
-        const prev = new Date(lisbonNow); prev.setDate(prev.getDate() - 7);
-        const d = new Date(Date.UTC(prev.getFullYear(), prev.getMonth(), prev.getDate()));
-        const dayNum = d.getUTCDay() || 7;
-        d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-        const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-        const week = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
-        const { generateWeeklyEvaluation } = await import("../db");
-        const r = await generateWeeklyEvaluation(week, d.getUTCFullYear());
-        console.log(`[daily-ops] avaliação semanal S${week} gerada (${r.length} condutores)`);
-      }
-    } catch (err) {
-      console.warn("[daily-ops] avaliação semanal:", err);
-    }
-
-    // Fecha check-ins esquecidos (>16h abertos → check-out a +12h, [SUSPEITO])
-    try {
-      const { autoCloseStaleCheckIns } = await import("../db");
-      const r = await autoCloseStaleCheckIns();
-      if (r.closed > 0) console.log(`[daily-ops] auto-checkout de ${r.closed} ponto(s) esquecido(s)`);
-    } catch (err) {
-      console.warn("[daily-ops] autoCloseStaleCheckIns:", err);
-    }
-    // RH: regra documental (escrita SÓ aqui e na ação admin — nunca no auth.me)
-    // e "possíveis faltas" de ontem (pendentes de validação; não bloqueiam).
-    try {
-      const { applyDocsComplianceAll, detectExtraDiaNoShows } = await import("../rhService");
-      const d = await applyDocsComplianceAll();
-      const { lisbonToday } = await import("../../shared/expensePeriods");
-      const y = new Date(Date.now() - 86400000);
-      const yesterday = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit" }).format(y);
-      void lisbonToday;
-      const n = await detectExtraDiaNoShows(yesterday);
-      console.log(`[daily-ops] RH: docs verificados ${d.checked}; possíveis faltas ${yesterday}: ${n.created} novas (${n.alreadyPending} já registadas)`);
-    } catch (err) {
-      console.warn("[daily-ops] RH docs/faltas:", err);
-    }
-
-    const { collectDailyDriverData } = await import("../jobs/dailyDriverCollection");
-    // ?date=YYYY-MM-DD permite recolher um dia específico (backfill de dias
-    // falhados); por omissão, o dia anterior.
-    const qDate = typeof req.query?.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
-      ? new Date(`${req.query.date}T12:00:00Z`)
-      : null;
-    const yesterday = qDate ?? new Date(Date.now() - 24 * 60 * 60 * 1000); // dia anterior
-    // Prazo < maxDuration (60s): sem isto a recolha morria com 504 a meio e a
-    // corrida seguinte via registos parciais e desistia. done:false → o
-    // workflow chama outra vez até done:true (a recolha é retomável).
-    const result = await collectDailyDriverData(yesterday, { deadlineAt: Date.now() + 45_000 });
-    res.json({ ok: true, ranAt: new Date().toISOString(), date: yesterday.toISOString().slice(0, 10), ...result });
-  } catch (err: any) {
-    res.status(500).json({ ok: false, error: String(err?.message ?? err) });
-  }
+  const { dailyOpsCron, sendCronRun } = await import("../cronJobs");
+  const date = typeof req.query?.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? req.query.date : null;
+  sendCronRun(res, await dailyOpsCron({ deadlineAt: manualDeadline(), collectOnly: req.query?.collectOnly === "1", date }));
 });
 
-// Leitor de email inbound: lê a caixa reservas@ por IMAP e cria registos nos
-// módulos (Críticas/Reclamações/Perdidos/RH) a partir dos emails reencaminhados
-// para os aliases. Substitui o fluxo Make.com. GitHub Actions chama a cada ~15min.
-app.get("/api/cron/email-inbound", async (req, res) => {
+// GPS do Zello — passagem provisória do dia de hoje (tick: 23:15–23:55 de
+// Lisboa). À mão só faz sentido antes da meia-noite.
+app.get("/api/cron/zello-sameday", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
-  try {
-    const { runEmailInboundSync } = await import("../jobs/emailInboundSync");
-    // Prazo < maxDuration (60s): o scan IMAP dos 4 aliases × 30d passava dos
-    // 60s e morria SEMPRE com 504. partial:true → o workflow repete a chamada
-    // (dedup por messageId torna cada corrida incremental).
-    const result = await runEmailInboundSync({ deadlineAt: Date.now() + 45_000 });
-    res.json({ ok: result.configured, done: !result.partial, ranAt: new Date().toISOString(), ...result });
-  } catch (err: any) {
-    res.status(500).json({ ok: false, error: String(err?.message ?? err) });
-  }
+  const { zelloSameDayCron, sendCronRun } = await import("../cronJobs");
+  sendCronRun(res, await zelloSameDayCron({ deadlineAt: manualDeadline() }));
 });
 
-app.get("/api/cron/multipark-cleanup", async (req, res) => {
+// RH — regra documental dos extras (tick: segunda a partir das 04:45).
+app.get("/api/cron/rh-docs-weekly", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
-  try {
-    const { getDb } = await import("../db");
-    const { sql } = await import("drizzle-orm");
-    const db = await getDb();
-    if (!db) return res.status(500).json({ ok: false, error: "DB not available" });
-    const result = await db.execute(sql`
-      DELETE FROM multipark_bookings WHERE id IN (
-        SELECT id FROM (
-          SELECT b1.id FROM multipark_bookings b1
-          INNER JOIN multipark_bookings b2
-            ON b1.externalId = b2.externalId
-           AND (
-                 b1.updatedAt < b2.updatedAt
-              OR (b1.updatedAt = b2.updatedAt AND b1.id < b2.id)
-           )
-          LIMIT 5000
-        ) AS t
-      )
-    `) as any;
-    const meta = Array.isArray(result[0]) ? result[0] : result;
-    const deleted = Number((meta as any)?.affectedRows ?? 0);
-    res.json({ ok: true, ranAt: new Date().toISOString(), deleted });
-  } catch (err: any) {
-    res.status(500).json({ ok: false, error: String(err?.message ?? err) });
-  }
+  const { rhDocsWeeklyCron, sendCronRun } = await import("../cronJobs");
+  sendCronRun(res, await rhDocsWeeklyCron());
 });
 
-// Health check com diagnóstico de env vars críticas (sem expor valores)
-app.get("/api/health", (_req, res) => {
-  res.json({
-    ok: !initError,
-    error: initError,
-    env: {
-      DATABASE_URL: !!process.env.DATABASE_URL,
-      JWT_SECRET: !!process.env.JWT_SECRET,
-      GOOGLE_CLIENT_ID: !!process.env.GOOGLE_CLIENT_ID,
-      GOOGLE_CLIENT_SECRET: !!process.env.GOOGLE_CLIENT_SECRET,
-      VITE_APP_ID: !!process.env.VITE_APP_ID,
-      NODE_ENV: process.env.NODE_ENV ?? null,
-      WHATSAPP_TOKEN: !!process.env.WHATSAPP_TOKEN,
-      WHATSAPP_PHONE_NUMBER_ID: !!process.env.WHATSAPP_PHONE_NUMBER_ID,
-      WHATSAPP_VERIFY_TOKEN: !!process.env.WHATSAPP_VERIFY_TOKEN,
-      WHATSAPP_APP_SECRET: !!process.env.WHATSAPP_APP_SECRET,
-      WHATSAPP_WABA_ID: !!process.env.WHATSAPP_WABA_ID,
-      AVAILABILITY_FORM_TOKEN_SECRET: !!process.env.AVAILABILITY_FORM_TOKEN_SECRET,
-      MULTIPARK_WEBHOOK_SECRET: !!process.env.MULTIPARK_WEBHOOK_SECRET,
-    },
-  });
+// Avaliação (motor único): recalcula as últimas 4 semanas em fatias de 7
+// dias; done:false + nextOffset → repetir com ?offsetDays=N.
+app.get("/api/cron/evaluation-recompute", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { evaluationRecomputeCron, offsetParam, sendCronRun } = await import("../cronJobs");
+  sendCronRun(res, await evaluationRecomputeCron({ deadlineAt: manualDeadline(), offsetDays: offsetParam(req.query?.offsetDays) }));
+});
+
+// Automação dos extras (pedido de disponibilidade à quinta, lembrete ao
+// sábado, aviso de escala e alerta de cobertura às 18h, …). O módulo decide
+// pela hora de Lisboa; com prazo — done:false + nextStep → ?from=<passo>.
+app.get("/api/cron/extras-auto", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { extrasAutoCron, sendCronRun } = await import("../cronJobs");
+  const from = typeof req.query?.from === "string" && /^[a-z-]{1,40}$/.test(req.query.from) ? req.query.from : null;
+  sendCronRun(res, await extrasAutoCron({ deadlineAt: manualDeadline(), from }));
+});
+
+// Briefing diário por cidade (07:30 Lisboa), anomalias e, à segunda,
+// relatórios semanais (server/aiOps/cron.ts). Idempotente; done:false → repetir.
+app.get("/api/cron/ops-briefing", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { opsBriefingCron, sendCronRun } = await import("../cronJobs");
+  sendCronRun(res, await opsBriefingCron({ deadlineAt: manualDeadline(), force: req.query?.force === "1" }));
+});
+
+// Escala automática dos extras (propor às 14h, confirmar e avisar às 18h, por
+// omissão — Definições → Parâmetros → Extras-dia). Tick: de hora a hora das
+// 08h às 23h de Lisboa; tudo idempotente. ok:false só com erros.
+app.get("/api/cron/extras-schedule", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { extrasScheduleCron, sendCronRun } = await import("../cronJobs");
+  sendCronRun(res, await extrasScheduleCron());
+});
+
+// IA na comunicação com clientes: triagem do WhatsApp, reclamações por
+// triar, rascunhos das críticas e Perdidos — lotes pequenos. Nunca envia nada.
+app.get("/api/cron/ai-comms", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { aiCommsCron, sendCronRun } = await import("../cronJobs");
+  sendCronRun(res, await aiCommsCron({ deadlineAt: manualDeadline() }));
+});
+
+// Health check. Público: só { ok, version? }. Com sessão admin/super_admin
+// ou Authorization: Bearer <CRON_SECRET> → presença (booleana) das variáveis
+// críticas. O erro/stack de arranque NUNCA sai na resposta — só no log.
+app.get("/api/health", async (req, res) => {
+  const { buildHealthBody, cronBearerOk } = await import("../opsRules");
+  let detailed = cronBearerOk(req.headers["authorization"]);
+  if (!detailed && !initError) {
+    try {
+      const user = await sdk.authenticateRequest(req);
+      detailed = !!user && (user.role === "admin" || user.role === "super_admin");
+    } catch { /* sem sessão → resposta pública */ }
+  }
+  res.status(initError ? 503 : 200).json(buildHealthBody({ initFailed: !!initError, detailed }));
 });
 
 // Handler for Vercel serverless
 const handler = async (req: any, res: any) => {
   if (initError && !req.url.includes("/api/health")) {
-    return res.status(500).json({ error: "Server init failed", details: initError });
+    // Detalhe (stack) só no log do servidor — nunca na resposta.
+    return res.status(500).json({ error: "Server init failed" });
   }
   app(req, res);
 };

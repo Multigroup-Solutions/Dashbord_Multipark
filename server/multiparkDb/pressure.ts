@@ -1,0 +1,321 @@
+/**
+ * "Pressão" do Extras-Dia — agregação pesada FEITA NO POSTGRES da BD da
+ * Multipark (só leitura), para o trabalho `extras-pressure`
+ * (server/extrasPressure.ts), que guarda o resultado na NOSSA BD
+ * (ops_pressure_stats). Regras em shared/extrasPressure.ts.
+ *
+ * Janela: os últimos PRESSURE_WINDOW_DAYS (60) dias de Lisboa até ontem.
+ * Pedaços ("chunks"): um por grupo de parques — cada cidade (todas as marcas
+ * nossas), cada marca + cidade nossa, e o Marketplace (os outros todos). Cada
+ * pedaço são 2 leituras sobre só os parques do grupo (índices
+ * (parkId, checkInDate/checkOutDate)), com GROUP BY e percentile_cont no
+ * Postgres. Porquê por grupo e não por fatias de 10 dias: os percentis não se
+ * somam entre fatias — por grupo cada percentil sai exato da janela inteira e
+ * cada leitura continua pequena (só os parques do grupo). A "History" ainda
+ * não tem índice em actionTime/bookingId: é uma leitura sequencial de
+ * ~300 mil linhas por pedaço, bem abaixo dos 15 s.
+ *
+ * Colunas usadas (docs/multipark-db/schema.md):
+ *   Booking: id, parkId, status, checkIn, checkOut, checkInDate, checkOutDate,
+ *     checkingInAt, pendingCheckoutAt, checkingOutAt, arrivedAtDeliveryAt
+ *   History: bookingId, changeType (CHECKING_IN, CHECK_IN, PENDING_CHECKOUT,
+ *     CHECKING_OUT, CHECK_OUT), actionTime
+ *   Park: id, name, city, firebaseBrand, listingType, status (classificação)
+ *
+ * Instantes (UTC na BD):
+ *   check-in começado = checkingInAt → 1.º CHECKING_IN da History
+ *   check-in feito    = 1.º CHECK_IN da History → checkIn (se o estado já passou o check-in)
+ *   pedido de entrega = pendingCheckoutAt → 1.º PENDING_CHECKOUT
+ *   check-out começado = pedido → checkingOutAt → 1.º CHECKING_OUT
+ *   check-out feito   = 1.º CHECK_OUT → checkOut (se CHECKED_OUT)
+ *   entregue          = arrivedAtDeliveryAt → 1.º CHECK_OUT → checkOut (se CHECKED_OUT)
+ * Tempo de entrega = pedido → entregue (0 < t ≤ 240 min); tempo de recolha =
+ * check-in começado → feito (0 < t ≤ 180 min). `customerCheckinEta` é um
+ * número de minutos (ETA dado pelo cliente), não um instante — não entra.
+ */
+import { type SqlParam } from "./client";
+import { ParamList } from "./read";
+import { lisbonLocal } from "./movements";
+import { type DayPark } from "./dayBookings";
+import { OUR_PARK_BRANDS, OUR_PARK_BRAND_LABELS, OUR_PARK_CITIES, MARKETPLACE_GROUP_KEY, MARKETPLACE_GROUP_LABEL } from "../../shared/multiparkParks";
+import { CITY_LABELS } from "../../shared/city";
+import { addDays, lisbonDayRangeUtc } from "../../shared/lisbonDay";
+import {
+  LOAD_BUCKETS, MAX_DELIVERY_MINUTES, MAX_PICKUP_MINUTES, PRESSURE_WINDOW_DAYS, RUSH_HOURS, cityGroupKey, isoWeekday,
+  type PressureLoadRow, type PressureSlot,
+} from "../../shared/extrasPressure";
+
+// ─── Janela ─────────────────────────────────────────────────────────────────
+
+export interface PressureWindow {
+  /** Primeiro dia de Lisboa (inclusive). */
+  startDay: string;
+  /** Último dia de Lisboa (inclusive) — ontem. */
+  endDay: string;
+  /** Limites UTC "YYYY-MM-DD HH:MM:SS" [start, end). */
+  start: string;
+  end: string;
+  /** Com 1 dia de folga (colunas …Date e History). */
+  wideStart: string;
+  wideEnd: string;
+  /** Quantas vezes aparece cada dia da semana (1–7) na janela. */
+  weekdayDays: Record<number, number>;
+}
+
+const sqlTs = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
+
+/** Janela de `days` dias de Lisboa que acaba em `endDay` (inclusive). PURA. */
+export function pressureWindow(endDay: string, days = PRESSURE_WINDOW_DAYS): PressureWindow {
+  const startDay = addDays(endDay, -(days - 1));
+  const r = lisbonDayRangeUtc(startDay, endDay);
+  const weekdayDays: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0 };
+  for (let d = startDay; d <= endDay; d = addDays(d, 1)) weekdayDays[isoWeekday(d)]++;
+  return { startDay, endDay, start: r.start, end: r.end, wideStart: sqlTs(r.startMs - 86_400_000), wideEnd: sqlTs(r.endMs + 86_400_000), weekdayDays };
+}
+
+// ─── Pedaços (grupos de parques) ────────────────────────────────────────────
+
+export interface PressureChunk {
+  key: string;
+  label: string;
+  parkIds: string[];
+}
+
+/**
+ * Pedaços pela ordem em que correm: cidades (Lisboa, Porto, Faro — todas as
+ * marcas nossas), marca + cidade, Marketplace. Grupos sem parques ficam de
+ * fora. PURA.
+ */
+export function buildPressureChunks(parks: Array<Pick<DayPark, "id" | "key" | "ours" | "city">>): PressureChunk[] {
+  const out: PressureChunk[] = [];
+  const ours = parks.filter((p) => p.ours);
+  for (const city of OUR_PARK_CITIES) {
+    const ids = ours.filter((p) => p.city === city).map((p) => p.id);
+    if (ids.length) out.push({ key: cityGroupKey(city), label: `${CITY_LABELS[city]} (todas as marcas)`, parkIds: ids });
+  }
+  for (const city of OUR_PARK_CITIES) {
+    for (const brand of OUR_PARK_BRANDS) {
+      const key = `${brand}_${city}`;
+      const ids = ours.filter((p) => p.key === key).map((p) => p.id);
+      if (ids.length) out.push({ key, label: `${OUR_PARK_BRAND_LABELS[brand]} ${CITY_LABELS[city]}`, parkIds: ids });
+    }
+  }
+  const others = parks.filter((p) => !p.ours).map((p) => p.id);
+  if (others.length) out.push({ key: MARKETPLACE_GROUP_KEY, label: MARKETPLACE_GROUP_LABEL, parkIds: others });
+  return out;
+}
+
+// ─── SQL ────────────────────────────────────────────────────────────────────
+
+/** Estados em que o check-in já foi feito. */
+const AFTER_CHECKIN = ["CHECKED_IN", "MOVING", "PENDING_CHECKOUT", "CHECKING_OUT", "CHECKED_OUT"];
+const HISTORY_TYPES = ["CHECKING_IN", "CHECK_IN", "PENDING_CHECKOUT", "CHECKING_OUT", "CHECK_OUT"];
+const inList = (xs: readonly string[]) => xs.map((x) => `'${x}'`).join(", ");
+
+const L = lisbonLocal;
+const minutesBetween = (a: string, b: string) => `extract(epoch from (${b} - ${a})) / 60.0`;
+
+/**
+ * CTEs comuns (sem o WITH): `bk` reservas do grupo com movimento na janela
+ * (±1 dia), `hi` 1.ª ação de cada tipo na History, `ev` os instantes de cada
+ * reserva, `dv` entregas e `pk` recolhas válidas. PURA.
+ */
+export function pressureBaseCtes(p: ParamList, w: PressureWindow, parkIds: string[]): string {
+  if (!parkIds.length) throw new Error("Sem parques.");
+  const parks = parkIds.map((id) => p.add(id)).join(", ");
+  const ws = p.add(w.wideStart);
+  const we = p.add(w.wideEnd);
+  const s = p.add(w.start);
+  const e = p.add(w.end);
+  return [
+    `bk AS (`,
+    `  SELECT b."id" AS id, b."status"::text AS st, b."checkIn" AS ci_plan, b."checkOut" AS co_plan,`,
+    `    b."checkingInAt" AS checking_in_at, b."pendingCheckoutAt" AS pending_at, b."checkingOutAt" AS checking_out_at, b."arrivedAtDeliveryAt" AS arrived_at`,
+    `  FROM "Booking" b`,
+    `  WHERE b."parkId" IN (${parks}) AND b."status"::text <> 'CANCELLED'`,
+    `    AND ((b."checkInDate" >= ${ws}::timestamp AND b."checkInDate" < ${we}::timestamp) OR (b."checkOutDate" >= ${ws}::timestamp AND b."checkOutDate" < ${we}::timestamp))`,
+    `),`,
+    `hi AS (`,
+    `  SELECT h."bookingId" AS bid,`,
+    `    min(h."actionTime") FILTER (WHERE h."changeType"::text = 'CHECKING_IN') AS h_checking_in,`,
+    `    min(h."actionTime") FILTER (WHERE h."changeType"::text = 'CHECK_IN') AS h_check_in,`,
+    `    min(h."actionTime") FILTER (WHERE h."changeType"::text = 'PENDING_CHECKOUT') AS h_pending,`,
+    `    min(h."actionTime") FILTER (WHERE h."changeType"::text = 'CHECKING_OUT') AS h_checking_out,`,
+    `    min(h."actionTime") FILTER (WHERE h."changeType"::text = 'CHECK_OUT') AS h_check_out`,
+    `  FROM "History" h`,
+    `  WHERE h."actionTime" >= ${ws}::timestamp AND h."actionTime" < ${we}::timestamp`,
+    `    AND h."changeType"::text IN (${inList(HISTORY_TYPES)})`,
+    `    AND h."bookingId" IN (SELECT bk.id FROM bk)`,
+    `  GROUP BY h."bookingId"`,
+    `),`,
+    `ev AS (`,
+    `  SELECT bk.id,`,
+    `    COALESCE(bk.checking_in_at, hi.h_checking_in) AS ci_started,`,
+    `    COALESCE(hi.h_check_in, CASE WHEN bk.st IN (${inList(AFTER_CHECKIN)}) THEN bk.ci_plan END) AS ci_done,`,
+    `    COALESCE(bk.pending_at, hi.h_pending) AS co_requested,`,
+    `    COALESCE(bk.pending_at, hi.h_pending, bk.checking_out_at, hi.h_checking_out) AS co_started,`,
+    `    COALESCE(hi.h_check_out, CASE WHEN bk.st = 'CHECKED_OUT' THEN bk.co_plan END) AS co_done,`,
+    `    COALESCE(bk.arrived_at, hi.h_check_out, CASE WHEN bk.st = 'CHECKED_OUT' THEN bk.co_plan END) AS delivered`,
+    `  FROM bk LEFT JOIN hi ON hi.bid = bk.id`,
+    `),`,
+    `dv AS (`,
+    `  SELECT ev.co_requested AS req_at, ${minutesBetween("ev.co_requested", "ev.delivered")} AS mins`,
+    `  FROM ev`,
+    `  WHERE ev.co_requested >= ${s}::timestamp AND ev.co_requested < ${e}::timestamp`,
+    `    AND ev.delivered > ev.co_requested AND ev.delivered - ev.co_requested <= interval '${MAX_DELIVERY_MINUTES} minutes'`,
+    `),`,
+    `pk AS (`,
+    `  SELECT ev.ci_started AS begun_at, ${minutesBetween("ev.ci_started", "ev.ci_done")} AS mins`,
+    `  FROM ev`,
+    `  WHERE ev.ci_started >= ${s}::timestamp AND ev.ci_started < ${e}::timestamp`,
+    `    AND ev.ci_done > ev.ci_started AND ev.ci_done - ev.ci_started <= interval '${MAX_PICKUP_MINUTES} minutes'`,
+    `),`,
+    // Eventos concluídos/começados dentro da janela (hora de Lisboa).
+    `xe AS (`,
+    `  SELECT 'ci_done' AS kind, ev.ci_done AS at FROM ev WHERE ev.ci_done >= ${s}::timestamp AND ev.ci_done < ${e}::timestamp`,
+    `  UNION ALL SELECT 'co_done', ev.co_done FROM ev WHERE ev.co_done >= ${s}::timestamp AND ev.co_done < ${e}::timestamp`,
+    `  UNION ALL SELECT 'ci_started', ev.ci_started FROM ev WHERE ev.ci_started >= ${s}::timestamp AND ev.ci_started < ${e}::timestamp`,
+    `  UNION ALL SELECT 'co_started', ev.co_started FROM ev WHERE ev.co_started >= ${s}::timestamp AND ev.co_started < ${e}::timestamp`,
+    `)`,
+  ].join("\n");
+}
+
+const wdSql = (col: string) => `extract(isodow from ${col})::int`;
+const hrSql = (col: string) => `extract(hour from ${col})::int`;
+
+/**
+ * Leitura 1 — por (dia da semana, hora de Lisboa): volume, concorrência,
+ * tempos de entrega (pela hora do pedido) e de recolha (pela hora do início).
+ * Concorrência: cada operação (recolha: começo → check-in; entrega: pedido →
+ * check-out) conta em cada hora de relógio que toca; por hora de calendário
+ * soma-se e depois agrega-se por (dia da semana, hora): soma e máximo. PURA.
+ */
+export function buildPressureSlotsSql(w: PressureWindow, parkIds: string[]): { sql: string; params: SqlParam[] } {
+  const p = new ParamList();
+  const base = pressureBaseCtes(p, w, parkIds);
+  const s = p.add(w.start);
+  const e = p.add(w.end);
+  const pct = (q: number, from: string) => `percentile_cont(${q}) WITHIN GROUP (ORDER BY ${from}.mins)`;
+  const sql = [
+    `WITH ${base},`,
+    `ops AS (`,
+    `  SELECT ${L("COALESCE(ev.ci_started, ev.ci_done)")} AS op_from, ${L("ev.ci_done")} AS op_to FROM ev`,
+    `   WHERE ev.ci_done >= ${s}::timestamp AND ev.ci_done < ${e}::timestamp AND ev.ci_done - COALESCE(ev.ci_started, ev.ci_done) <= interval '${MAX_PICKUP_MINUTES} minutes' AND ev.ci_done >= COALESCE(ev.ci_started, ev.ci_done)`,
+    `  UNION ALL`,
+    `  SELECT ${L("COALESCE(ev.co_started, ev.delivered)")}, ${L("COALESCE(ev.co_done, ev.delivered)")} FROM ev`,
+    `   WHERE ev.delivered >= ${s}::timestamp AND ev.delivered < ${e}::timestamp AND COALESCE(ev.co_done, ev.delivered) - COALESCE(ev.co_started, ev.delivered) <= interval '${MAX_DELIVERY_MINUTES} minutes' AND COALESCE(ev.co_done, ev.delivered) >= COALESCE(ev.co_started, ev.delivered)`,
+    `),`,
+    `oh AS (SELECT gs AS hr_at, count(*) AS n FROM ops, generate_series(date_trunc('hour', ops.op_from), date_trunc('hour', ops.op_to), interval '1 hour') AS gs GROUP BY gs),`,
+    `conc AS (SELECT ${wdSql("oh.hr_at")} AS wd, ${hrSql("oh.hr_at")} AS hr, sum(oh.n) AS conc_sum, max(oh.n) AS conc_max FROM oh GROUP BY 1, 2),`,
+    `vol AS (`,
+    `  SELECT ${wdSql(L("xe.at"))} AS wd, ${hrSql(L("xe.at"))} AS hr,`,
+    `    count(*) FILTER (WHERE xe.kind = 'ci_done') AS ci_done, count(*) FILTER (WHERE xe.kind = 'co_done') AS co_done,`,
+    `    count(*) FILTER (WHERE xe.kind = 'ci_started') AS ci_started, count(*) FILTER (WHERE xe.kind = 'co_started') AS co_started`,
+    `  FROM xe GROUP BY 1, 2`,
+    `),`,
+    `del AS (SELECT ${wdSql(L("dv.req_at"))} AS wd, ${hrSql(L("dv.req_at"))} AS hr, count(*) AS n, ${pct(0.5, "dv")} AS p50, ${pct(0.75, "dv")} AS p75, ${pct(0.9, "dv")} AS p90 FROM dv GROUP BY 1, 2),`,
+    `pik AS (SELECT ${wdSql(L("pk.begun_at"))} AS wd, ${hrSql(L("pk.begun_at"))} AS hr, count(*) AS n, ${pct(0.5, "pk")} AS p50, ${pct(0.75, "pk")} AS p75 FROM pk GROUP BY 1, 2),`,
+    `keys AS (SELECT wd, hr FROM vol UNION SELECT wd, hr FROM conc UNION SELECT wd, hr FROM del UNION SELECT wd, hr FROM pik)`,
+    `SELECT k.wd, k.hr,`,
+    `  COALESCE(vol.ci_done, 0) AS ci_done, COALESCE(vol.co_done, 0) AS co_done, COALESCE(vol.ci_started, 0) AS ci_started, COALESCE(vol.co_started, 0) AS co_started,`,
+    `  COALESCE(conc.conc_sum, 0) AS conc_sum, conc.conc_max AS conc_max,`,
+    `  COALESCE(del.n, 0) AS del_n, del.p50 AS del_p50, del.p75 AS del_p75, del.p90 AS del_p90,`,
+    `  COALESCE(pik.n, 0) AS pik_n, pik.p50 AS pik_p50, pik.p75 AS pik_p75`,
+    `FROM keys k`,
+    `LEFT JOIN vol ON vol.wd = k.wd AND vol.hr = k.hr`,
+    `LEFT JOIN conc ON conc.wd = k.wd AND conc.hr = k.hr`,
+    `LEFT JOIN del ON del.wd = k.wd AND del.hr = k.hr`,
+    `LEFT JOIN pik ON pik.wd = k.wd AND pik.hr = k.hr`,
+    `ORDER BY k.wd, k.hr`,
+    `LIMIT 200`,
+  ].join("\n");
+  return { sql, params: p.values };
+}
+
+/** CASE do escalão de carga (constantes nossas). PURA. */
+export function loadBucketCase(col: string): string {
+  const whens = [...LOAD_BUCKETS].reverse().map((b) => `WHEN ${col} >= ${Number(b.min)} THEN ${Number(b.id)}`).join(" ");
+  return `CASE ${whens} ELSE 0 END`;
+}
+
+/** Condição "hora de ponta" (constantes nossas). PURA. */
+export function rushCase(hourCol: string): string {
+  return `(${RUSH_HOURS.map(([a, b]) => `(${hourCol} >= ${Number(a)} AND ${hourCol} < ${Number(b)})`).join(" OR ")})`;
+}
+
+/**
+ * Leitura 2 — carga × tempo de entrega: cada entrega recebe a carga da sua
+ * hora de calendário (check-ins + check-outs concluídos nessa hora, no grupo)
+ * e agrupa-se por escalão de carga × ponta/resto. PURA.
+ */
+export function buildPressureLoadSql(w: PressureWindow, parkIds: string[]): { sql: string; params: SqlParam[] } {
+  const p = new ParamList();
+  const base = pressureBaseCtes(p, w, parkIds);
+  const pct = (q: number) => `percentile_cont(${q}) WITHIN GROUP (ORDER BY dh.mins)`;
+  const sql = [
+    `WITH ${base},`,
+    `ph AS (SELECT date_trunc('hour', ${L("xe.at")}) AS hr_at, count(*) AS n FROM xe WHERE xe.kind IN ('ci_done', 'co_done') GROUP BY 1),`,
+    `dh AS (SELECT date_trunc('hour', ${L("dv.req_at")}) AS hr_at, dv.mins FROM dv)`,
+    `SELECT ${loadBucketCase("COALESCE(ph.n, 0)")} AS lb,`,
+    `  ${rushCase(hrSql("dh.hr_at"))} AS rush,`,
+    `  count(*) AS n, ${pct(0.5)} AS p50, ${pct(0.75)} AS p75, ${pct(0.9)} AS p90`,
+    `FROM dh LEFT JOIN ph ON ph.hr_at = dh.hr_at`,
+    `GROUP BY 1, 2`,
+    `ORDER BY 1, 2`,
+    `LIMIT 50`,
+  ].join("\n");
+  return { sql, params: p.values };
+}
+
+// ─── Mapeadores ─────────────────────────────────────────────────────────────
+
+const num = (v: unknown): number | null => {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+const int = (v: unknown) => Math.round(num(v) ?? 0);
+const r1 = (v: unknown) => {
+  const n = num(v);
+  return n == null ? null : Math.round(n * 10) / 10;
+};
+
+/** Linha da leitura 1 → célula (dia da semana × hora). PURA. */
+export function mapPressureSlotRow(group: string, w: PressureWindow, r: Record<string, unknown>): PressureSlot | null {
+  const weekday = int(r.wd);
+  const hour = int(r.hr);
+  if (weekday < 1 || weekday > 7 || hour < 0 || hour > 23) return null;
+  const days = w.weekdayDays[weekday] ?? 0;
+  const concSum = num(r.conc_sum) ?? 0;
+  return {
+    group, weekday, hour, days,
+    checkinsDone: int(r.ci_done),
+    checkoutsDone: int(r.co_done),
+    checkinsStarted: int(r.ci_started),
+    checkoutsStarted: int(r.co_started),
+    concurrencyAvg: days > 0 ? Math.round((concSum / days) * 100) / 100 : null,
+    concurrencyMax: r.conc_max == null ? null : int(r.conc_max),
+    deliveryN: int(r.del_n),
+    deliveryP50: r1(r.del_p50),
+    deliveryP75: r1(r.del_p75),
+    deliveryP90: r1(r.del_p90),
+    pickupN: int(r.pik_n),
+    pickupP50: r1(r.pik_p50),
+    pickupP75: r1(r.pik_p75),
+  };
+}
+
+/** Linha da leitura 2 → escalão de carga × ponta/resto (sem carga = fora). PURA. */
+export function mapPressureLoadRow(group: string, r: Record<string, unknown>): PressureLoadRow | null {
+  const loadBucket = int(r.lb);
+  if (!LOAD_BUCKETS.some((b) => b.id === loadBucket)) return null;
+  return {
+    group,
+    loadBucket,
+    rush: r.rush === true || r.rush === "t" || r.rush === 1 || r.rush === "true",
+    deliveryN: int(r.n),
+    deliveryP50: r1(r.p50),
+    deliveryP75: r1(r.p75),
+    deliveryP90: r1(r.p90),
+  };
+}

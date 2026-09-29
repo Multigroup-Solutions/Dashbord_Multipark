@@ -4,7 +4,7 @@ export interface CityAccess { all: boolean; defaultCityId: number | null; cityNa
 
 export function isPersonalAccessPath(path: string): boolean {
   return ['auth.me', 'auth.logout', 'permissions.mine', 'permissions.catalog', 'permissions.myCityAccess', 'projects.list',
-    'rh.me', 'rh.timeRecords.myStatus'].includes(path) || path.startsWith('notifications.');
+    'rh.me', 'rh.timeRecords.myStatus'].includes(path) || path.startsWith('notifications.') || path.startsWith('googleAccount.');
 }
 
 /** Rejeita filtros explícitos fora da cidade, mesmo que sejam enviados sem a interface. */
@@ -30,8 +30,8 @@ export function scopeCityQuery(path: string, access: CityAccess, input: unknown)
     const name = access.cityName?.toLowerCase();
     return { ...raw, city: raw.city ?? (name === 'lisboa' ? 'lisbon' : name) };
   }
-  if (['multipark.bookings', 'multipark.kpis', 'multipark.snapshots'].includes(path)) return { ...raw, city: raw.city ?? access.cityName };
-  if (['multipark.bookingStats', 'multipark.localBookingsByAction', 'multipark.operationsSummary', 'rh.list'].includes(path)) {
+  if (path === 'multipark.bookings') return { ...raw, city: raw.city ?? access.cityName };
+  if (['multipark.bookingStats', 'multipark.operationsSummary', 'services.multiparkExtras', 'rh.list'].includes(path)) {
     return { ...raw, projectId: raw.projectId ?? access.defaultCityId };
   }
   return input;
@@ -100,18 +100,47 @@ export function resolveCityAccess(projectId: number | null, projects: ProjectNod
   return { all: false, defaultCityId: node.id, cityName: node.name, cityIds: [node.id], projectIds: [...ids], missingCostCenter: false };
 }
 
-export async function loadCityAccess(userId: number): Promise<CityAccess> {
+/**
+ * Papéis NACIONAIS (frontoffice, backoffice, admin, super_admin — ver
+ * shared/access.ts) veem todas as cidades. Continuam a precisar de centro de
+ * custos válido, exceto o super_admin, que nunca fica trancado fora.
+ * Os papéis de cidade (user…supervisor) ficam com o centro + grants.
+ */
+export function applyRoleScope(access: CityAccess, role: string | null | undefined, projects: ProjectNode[]): CityAccess {
+  const national = ['frontoffice', 'backoffice', 'admin', 'super_admin'].includes(String(role ?? ''));
+  if (!national) return access;
+  if (access.missingCostCenter && role !== 'super_admin') return access;
+  const cities = projects.filter(p => p.level === 'city');
+  return { ...access, all: true, missingCostCenter: false, cityIds: cities.map(p => p.id), cityNames: cities.map(p => p.name),
+    projectIds: projects.map(p => p.id) };
+}
+
+export async function loadCityAccess(userId: number, role?: string | null): Promise<CityAccess> {
+  return (await loadCityAccessParts(userId, role)).access;
+}
+
+/**
+ * `access` = o que o papel dá (como sempre); `base` = só o centro de custos +
+ * cidades dadas (sem o alargamento do papel nacional); `all` = todas as
+ * cidades (para um override de módulo "nacional"; null sem centro de custos).
+ */
+export async function loadCityAccessParts(userId: number, role?: string | null): Promise<{ access: CityAccess; base: CityAccess; all: CityAccess | null }> {
   const { getDb, getUserPermissionOverrides } = await import('./db');
   const { employees, projects } = await import('../drizzle/schema');
-  const { eq } = await import('drizzle-orm');
+  const { eq, or, sql } = await import('drizzle-orm');
   const db = await getDb();
   if (!db) throw new Error('Não foi possível verificar o centro de custos. Tenta novamente.');
   const [people, nodes, overrides] = await Promise.all([
-    db.select({ projectId: employees.projectId }).from(employees).where(eq(employees.userId, userId)),
+    db.select({ id: employees.id, projectId: employees.projectId }).from(employees).where(or(
+      eq(employees.userId, userId),
+      sql`EXISTS (SELECT 1 FROM employee_accounts ea WHERE ea.employeeId = ${employees.id} AND ea.userId = ${userId})`,
+    )),
     db.select({ id: projects.id, name: projects.name, level: projects.level, parentId: projects.parentId }).from(projects),
     getUserPermissionOverrides(userId),
   ]);
   // Uma conta ligada a várias fichas diferentes exige reconciliação.
-  const ids = [...new Set(people.map(p => p.projectId))];
-  return applyCityPermissions(resolveCityAccess(ids.length === 1 ? ids[0] : null, nodes), nodes, overrides);
+  const base = applyCityPermissions(resolveCityAccess(people.length === 1 ? people[0].projectId : null, nodes), nodes, overrides);
+  const access = applyRoleScope(base, role, nodes);
+  const all = access.missingCostCenter ? null : applyRoleScope({ ...base, missingCostCenter: false }, 'super_admin', nodes);
+  return { access, base, all };
 }

@@ -22,6 +22,8 @@ export type ExpenseVisibility =
   | { kind: "all" }
   | { kind: "none" }
   | { kind: "own"; userId: number }
+  /** team_leader: as dele + as de quem está abaixo dele na sua cidade */
+  | { kind: "users"; userId: number; userIds: number[] }
   | { kind: "own_or_projects"; userId: number; projectIds: number[] };
 
 export interface VisibilityDeps {
@@ -31,6 +33,8 @@ export interface VisibilityDeps {
   employeeProjectId: (userId: number) => Promise<number | null>;
   /** centro + descendentes (marca global = id negativo) */
   resolveProjectIds: (projectId: number) => Promise<number[]>;
+  /** contas abaixo do utilizador na sua cidade (inclui o próprio) — team_leader */
+  teamUserIds?: (user: { id: number; role: string }) => Promise<number[]>;
 }
 
 export async function resolveExpenseVisibility(
@@ -50,10 +54,18 @@ export async function resolveExpenseVisibility(
     const projectIds = pid != null ? await deps.resolveProjectIds(pid) : [];
     return { kind: "own_or_projects", userId: user.id, projectIds };
   }
-  if (role === "backoffice" || role === "team_leader") {
-    // Inserem e acompanham as PRÓPRIAS; nunca totais da empresa.
-    return { kind: "own", userId: user.id };
+  // Modelo de acessos (shared/access.ts): frontoffice/backoffice são o
+  // supervisor a nível nacional — veem as despesas de todas as cidades.
+  if (role === "backoffice" || role === "frontoffice") {
+    if (await deps.denied(user.id, "finance.view_totals")) return { kind: "own", userId: user.id };
+    return { kind: "all" };
   }
+  if (role === "team_leader") {
+    // As dele e as de quem está abaixo dele (condutores/extras) na cidade.
+    const ids = deps.teamUserIds ? await deps.teamUserIds(user) : [user.id];
+    return { kind: "users", userId: user.id, userIds: [...new Set([user.id, ...ids])] };
+  }
+  if (role === "condutor") return { kind: "own", userId: user.id };
   return { kind: "none" };
 }
 
@@ -72,6 +84,7 @@ export function canSeeExpense(
     case "all": return true;
     case "none": return false;
     case "own": return row.insertedById === vis.userId;
+    case "users": return vis.userIds.includes(row.insertedById);
     case "own_or_projects":
       return row.insertedById === vis.userId || (row.projectId != null && vis.projectIds.includes(row.projectId));
   }
@@ -83,6 +96,7 @@ export function visibilityCondition(vis: ExpenseVisibility): SQL | null {
     case "all": return null;
     case "none": return sql`1 = 0`;
     case "own": return eq(expenses.insertedById, vis.userId);
+    case "users": return inArray(expenses.insertedById, vis.userIds.length ? vis.userIds : [vis.userId]);
     case "own_or_projects": {
       const own = eq(expenses.insertedById, vis.userId);
       if (vis.projectIds.length === 0) return own;

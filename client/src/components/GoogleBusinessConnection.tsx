@@ -55,7 +55,7 @@ function ConnectionPanel() {
   const reconcile = trpc.integrations.googleBusiness.reconcile.useMutation({ onSuccess: refresh, onError: e => toast.error(e.message) });
   const data = query.data;
   const busy = discover.isPending || sync.isPending || disconnect.isPending;
-  return <Card>
+  return <Card id="google-business">
     <CardHeader><CardTitle className="flex flex-wrap justify-between gap-2 text-base">Ligação Google Business Profile
       <Badge variant={data?.status === 'connected' ? 'default' : 'secondary'}>{data?.status === 'connected' ? 'Conta autorizada' : data?.status === 'reauth_required' ? 'Reautorizar conta' : 'Desligado'}</Badge>
     </CardTitle></CardHeader>

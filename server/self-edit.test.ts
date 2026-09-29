@@ -10,19 +10,20 @@ vi.mock("./db", () => ({
 import { updateUser, logActivity, updateEmployee } from "./db";
 
 describe("self-edit user", () => {
-  it("should allow self-edit of name and email", async () => {
+  it("self-edit below super_admin keeps only the name (email is identity)", async () => {
     const ctx = { user: { id: 1, role: "admin" } };
     const input = { userId: 1, name: "Jorge Novo", email: "jorge@novo.pt" };
     const isSelf = ctx.user.id === input.userId;
     expect(isSelf).toBe(true);
 
-    // Self-edit should only allow name and email
+    // Auto-edição (abaixo de super_admin): só o nome — ver users.update
     const { userId, ...data } = input;
     const safeData = isSelf && ctx.user.role !== "super_admin"
-      ? { name: data.name, email: data.email }
+      ? { name: data.name }
       : data;
 
-    expect(safeData).toEqual({ name: "Jorge Novo", email: "jorge@novo.pt" });
+    expect(safeData).toEqual({ name: "Jorge Novo" });
+    expect(safeData).not.toHaveProperty("email");
     expect(safeData).not.toHaveProperty("role");
     expect(safeData).not.toHaveProperty("department");
   });
@@ -33,11 +34,11 @@ describe("self-edit user", () => {
     const isSelf = ctx.user.id === input.userId;
     const { userId, ...data } = input;
     const safeData = isSelf && ctx.user.role !== "super_admin"
-      ? { name: data.name, email: data.email }
+      ? { name: data.name }
       : data;
 
-    // Should NOT include role or department for self-edit
-    expect(safeData).toEqual({ name: "Jorge", email: "jorge@test.pt" });
+    // Should NOT include email, role or department for self-edit
+    expect(safeData).toEqual({ name: "Jorge" });
     expect(safeData).not.toHaveProperty("role");
   });
 

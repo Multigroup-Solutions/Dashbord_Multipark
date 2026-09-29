@@ -7,7 +7,7 @@ API REST `/api/v1` da dashboard.
 ## Como funciona
 
 ```
-Claude (Desktop/Code)  ──stdio──►  este MCP server  ──HTTPS──►  /api/v1 (Vercel)  ──►  BD + API Multipark
+Claude (Desktop/Code)  ──stdio──►  este MCP server  ──HTTPS──►  /api/v1 (Vercel)  ──►  BD + BD Multipark (leitura)
 ```
 
 A autenticação é por **API key** (header `X-API-Key`). Cada chave tem um
@@ -16,8 +16,8 @@ A autenticação é por **API key** (header `X-API-Key`). Cada chave tem um
 | Scope (campo `permissions` da chave) | Pode |
 |---|---|
 | `read` | Ler tudo (reservas, reclamações, reviews, stats, RH) |
-| `read,write` (ou `write`) | O acima + criar/editar reclamações e reviews, disparar syncs |
-| `admin` (ou `*`) | Tudo, incluindo **apagar** reclamações e cleanup de duplicados |
+| `read,write` (ou `write`) | O acima + criar/editar reclamações e reviews |
+| `admin` (ou `*`) | Tudo, incluindo **apagar** reclamações e rotas `/admin/*` |
 
 > `admin` implica `write` implica `read`.
 
@@ -96,7 +96,7 @@ Reinicia o Claude Desktop e as tools aparecem (ícone de ferramentas no chat).
 | `dashboard_summary` | read | Visão cruzada (reservas + reclamações + por cidade) |
 | `list_bookings` | read | Reservas com filtros (city, parkId, status, datas, search) |
 | `booking_stats` | read | Estatísticas de reservas |
-| `get_booking` | read | Detalhe de reserva (local + ao vivo da API Multipark) |
+| `get_booking` | read | Detalhe de reserva (cópia local + ao vivo da BD Multipark) |
 | `list_complaints` | read | Reclamações |
 | `complaint_stats` | read | Stats de reclamações |
 | `get_complaint` | read | Detalhe (mensagens + fotos) |
@@ -108,10 +108,6 @@ Reinicia o Claude Desktop e as tools aparecem (ícone de ferramentas no chat).
 | `create_review` | write | Registar avaliação |
 | `list_vehicles` | read | Viaturas |
 | `list_employees` | read | Colaboradores |
-| `sync_recent` | write | Sincronizar reservas recentes |
-| `sync_future` | write | Sincronizar janela futura |
-| `sync_day` | write | Sincronizar um dia (backfill) |
-| `cleanup_duplicates` | **admin** | Apagar reservas duplicadas |
 
 ## Notas de segurança
 

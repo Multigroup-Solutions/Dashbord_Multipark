@@ -7,10 +7,10 @@
  * intacto (o `express.json` consome-o). Este router usa o seu próprio
  * `express.raw({ type: 'application/json' })` no POST.
  *
- * Fase 0 (agora): apenas verificação (GET) e validação de assinatura (POST) —
- * o POST responde 200 sem processar. O processamento/escrita na BD chega na
- * Fase 3 e, por decisão do Jorge, corre ANTES de responder 200 à Meta (volume
- * baixo, latência irrelevante; preferimos o retry da Meta a perder mensagens).
+ * GET = verificação do webhook; POST = assinatura validada e depois o
+ * processamento (whatsappInbound.ts) corre ANTES de responder 200 à Meta
+ * (decisão do Jorge: volume baixo, preferimos o retry da Meta a perder
+ * mensagens). A escrita é idempotente por `waMessageId`.
  */
 import express, { Router, type Request, type Response } from "express";
 import crypto from "crypto";
@@ -26,7 +26,12 @@ export function isValidWebhookVerification(
   verifyToken: string | undefined,
 ): boolean {
   if (!verifyToken) return false;
-  return mode === "subscribe" && typeof token === "string" && token === verifyToken;
+  if (mode !== "subscribe" || typeof token !== "string") return false;
+  // Comparação em tempo constante: os digests têm sempre 32 bytes, por isso o
+  // tamanho do token não vaza nem faz o timingSafeEqual atirar.
+  const a = crypto.createHash("sha256").update(token).digest();
+  const b = crypto.createHash("sha256").update(verifyToken).digest();
+  return crypto.timingSafeEqual(a, b);
 }
 
 /**
@@ -62,6 +67,20 @@ export function verifyMetaSignature(
   } catch {
     return false;
   }
+}
+
+/** O payload traz eventos de chamadas (campo `calls`, status de chamada ou resposta de autorização)? PURA. */
+export function hasCallContent(payload: any): boolean {
+  for (const entry of Array.isArray(payload?.entry) ? payload.entry : []) {
+    for (const change of Array.isArray(entry?.changes) ? entry.changes : []) {
+      const v = change?.value;
+      if (!v) continue;
+      if (change?.field === "calls" || Array.isArray(v.calls)) return true;
+      if (Array.isArray(v.statuses) && v.statuses.some((st: any) => st?.type === "call")) return true;
+      if (Array.isArray(v.messages) && v.messages.some((m: any) => m?.interactive?.type === "call_permission_reply")) return true;
+    }
+  }
+  return false;
 }
 
 export function createWhatsappWebhookRouter(): Router {
@@ -115,10 +134,42 @@ export function createWhatsappWebhookRouter(): Router {
       const result = await processInboundWebhook(payload);
       if (result.processed || result.statuses || result.deduped) {
         console.log(
-          `[WhatsAppWebhook] processado: ${result.processed} inbound, ${result.deduped} dedup, ${result.statuses} status`,
+          `[WhatsAppWebhook] processado: ${result.processed} inbound, ${result.deduped} dedup, ${result.statuses} status${result.ignored ? `, ${result.ignored} de outro número` : ""}`,
         );
       }
+      // Chamadas de voz (campo `calls`: connect/terminate/status) e respostas
+      // ao pedido de autorização para ligar. Mesma assinatura, mesmo
+      // process-then-ack (idempotente pelo id da chamada). Só importa o módulo
+      // quando o payload traz algo de chamadas.
+      let missedCalls: number[] = [];
+      if (hasCallContent(payload) && (await (await import("./whatsappCalls")).whatsappCallsEnabled())) {
+        const { processCallWebhook } = await import("./whatsappCalls");
+        const calls = await processCallWebhook(payload);
+        missedCalls = calls.missed;
+        if (calls.connects || calls.terminates || calls.statuses || calls.permissions) {
+          console.log(
+            `[WhatsAppWebhook] chamadas: ${calls.connects} connect, ${calls.terminates} terminate, ${calls.statuses} status, ${calls.permissions} autorizações${calls.deduped ? `, ${calls.deduped} dedup` : ""}`,
+          );
+        }
+      }
       res.sendStatus(200);
+      // Aviso das chamadas perdidas DEPOIS do 200 (não atrasa a Meta).
+      if (missedCalls.length) {
+        const work = import("./whatsappCalls").then((m) => m.notifyMissedByIds(missedCalls)).catch(() => {});
+        try {
+          const { waitUntil } = await import("@vercel/functions");
+          waitUntil(work);
+        } catch { /* fora do Vercel a promessa continua sozinha */ }
+      }
+      // Triagem por IA (intenção/urgência) DEPOIS do 200 — nunca atrasa a Meta
+      // nem responde ao cliente. No Vercel o waitUntil mantém a função viva.
+      if (result.triage?.length) {
+        const work = import("./whatsappTriage").then((m) => m.runTriagesFor(result.triage)).catch(() => {});
+        try {
+          const { waitUntil } = await import("@vercel/functions");
+          waitUntil(work);
+        } catch { /* fora do Vercel a promessa continua sozinha */ }
+      }
     } catch (err: any) {
       console.error("[WhatsAppWebhook] ERRO a processar (Meta fará retry):", err?.message || err);
       res.status(500).json({ error: "processing_failed" });

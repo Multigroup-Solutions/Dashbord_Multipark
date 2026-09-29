@@ -249,6 +249,12 @@ export async function setMyAvailability(
     .filter(r => r.morning === 1 || r.night === 1 || r.fromHour != null || r.toHour != null || r.note);
 
   if (rows.length > 0) await db.insert(extrasAvailability).values(rows);
+  // A disponibilidade da semana ficou registada → fecha a tarefa
+  // "Disponibilidade a confirmar" dessa pessoa × semana (se existir).
+  try {
+    const { closeAvailabilityTasks } = await import("./tasksService");
+    await closeAvailabilityTasks(employeeId, weekStart);
+  } catch { /* best-effort */ }
   return { saved: rows.length };
 }
 
@@ -384,7 +390,9 @@ async function resolveLastContactForEmployeeIds(
              MAX(sentAt >= DATE_SUB(NOW(), INTERVAL 24 HOUR)) AS recent
         FROM \`availability_request_log\`
        WHERE employeeId IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+         AND email <> ''
        GROUP BY employeeId`)) as any;
+    // email '' = pedido registado pelo WhatsApp (já contado em whatsapp_messages)
     for (const r of rows as any[]) consider(Number(r.employeeId), r.lastAt, "email", r.recent);
   } catch (err) {
     console.warn("[availability] último contacto email indisponível:", String((err as any)?.cause?.message ?? (err as any)?.message ?? err).slice(0, 120));
@@ -670,6 +678,10 @@ export async function markDayAvailability(
       fromHour = COALESCE(VALUES(fromHour), fromHour),
       toHour = COALESCE(VALUES(toHour), toHour),
       note = COALESCE(VALUES(note), note)`);
+  try {
+    const { closeAvailabilityTasks } = await import("./tasksService");
+    await closeAvailabilityTasks(employeeId, weekStart);
+  } catch { /* best-effort */ }
 }
 
 export async function sendWeeklyAvailabilityRequest(opts: {
@@ -681,11 +693,13 @@ export async function sendWeeklyAvailabilityRequest(opts: {
   testEmail?: string | null;     // se vier, envia SÓ a este endereço (teste)
   // Mensagem-tipo (default: semana clássica); targetDate = dia ISO do pedido
   message?: (Omit<AvailabilityMessageParams, "note" | "weekLabel"> & { targetDate?: string | null }) | null;
+  /** Tipo do envio automático (X-Multipark-Auto): pedido (omissão) ou lembrete. */
+  autoKind?: "availability_request" | "availability_reminder";
 }): Promise<SendResult> {
   if (!parseIsoDate(opts.weekStart)) {
     throw new Error("weekStart inválido (esperado YYYY-MM-DD)");
   }
-  const { sendEmail } = await import("./_core/notification");
+  const { sendEmail } = await import("./mail/systemMail");
   const headers = weekDays(opts.weekStart);
   const weekLabel = headers.length
     ? `${headers[0].label} a ${headers[headers.length - 1].label}`
@@ -711,6 +725,8 @@ export async function sendWeeklyAvailabilityRequest(opts: {
       html,
       from: "recursos-humanos@multipark.pt",
       fromName: "Multipark Operações",
+      // Envio automático: fora da caixa partilhada até alguém responder.
+      auto: { kind: "availability_test" },
     });
     return {
       total: 1,
@@ -741,6 +757,8 @@ export async function sendWeeklyAvailabilityRequest(opts: {
       html,
       from: "recursos-humanos@multipark.pt",
       fromName: "Multipark Operações",
+      // Envio automático: fora da caixa partilhada até o extra responder; fica na ficha do extra.
+      auto: { kind: opts.autoKind ?? "availability_request", employeeId: e.id },
     });
     if (ok) result.sent++;
     else result.failed++;

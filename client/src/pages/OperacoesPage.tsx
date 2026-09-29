@@ -1,20 +1,26 @@
-import { useState, useMemo } from "react";
+import AnomalyAlerts from "@/components/aiOps/AnomalyAlerts";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { can } from "@shared/access";
+import { useEffect, useState, useMemo } from "react";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { StatValue } from "@/components/StatValue";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   LayoutDashboard, CalendarCheck, ArrowDownToLine, ArrowUpFromLine,
-  XCircle, Wrench, Euro, Activity, MapPin, Building2, PieChart as PieIcon,
+  XCircle, Euro, Activity, MapPin, Building2, PieChart as PieIcon, CalendarDays,
 } from "lucide-react";
 import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip, Legend } from "recharts";
 import { QuickRangeBar, thisMonthRange, previousPeriod } from "@/components/QuickRangeBar";
 import DateRangeNav from "@/components/DateRangeNav";
-import MultiparkPage from "./MultiparkPage";
+import ReservasDoDia from "@/components/operacoes/ReservasDoDia";
+import OpsList, { defaultOpsShared, type OpsListShared } from "@/components/operacoes/OpsList";
+import { OPS_LIST_KINDS, OPS_LIST_LABELS } from "@shared/opsLists";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
-import ServicesPage from "./ServicesPage";
+import { cohortCancelRate } from "@shared/operationsDaily";
 
 const PIE_COLORS = ["#6366f1", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899", "#84cc16", "#f97316", "#14b8a6"];
 
@@ -35,7 +41,7 @@ function MiniPie({ title, icon, data }: { title: string; icon?: React.ReactNode;
                 {data.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
               </Pie>
               <Tooltip formatter={(v: any, n: any) => [`${v} (${total > 0 ? ((Number(v) / total) * 100).toFixed(0) : 0}%)`, n]} />
-              <Legend wrapperStyle={{ fontSize: 10 }} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
             </PieChart>
           </ResponsiveContainer>
         )}
@@ -49,45 +55,77 @@ const fmtEur = (v: number | string | null | undefined) => {
   return n.toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
 };
 
+/** Alertas de reservas por parque/canal (anomalias) — só a quem vê Reservas & Operações. */
+function BookingAlerts() {
+  const { user } = useAuth();
+  return <AnomalyAlerts domain="bookings" enabled={!!user && can(user as any, "reservas_operacoes", "view")} />;
+}
+
+const OPERACOES_TABS = ["dashboard", "dia", ...OPS_LIST_KINDS];
+
+/**
+ * Aba pedida no link (`?tab=dia`, `?tab=cancelados`, pesquisa global, links
+ * antigos). A pesquisa (`q`) e o dia (`de`) servem de semente às listas.
+ */
+function tabFromUrl(): string | null {
+  const tab = new URLSearchParams(window.location.search).get("tab");
+  if (!tab) return null;
+  return OPERACOES_TABS.includes(tab) ? tab : null;
+}
+
+/** Semente das listas por período a partir do link (`?q=…&de=AAAA-MM-DD`). */
+function listSeedFromUrl(): OpsListShared {
+  try {
+    const p = new URLSearchParams(window.location.search);
+    const de = p.get("de");
+    return defaultOpsShared({ day: de && /^\d{4}-\d{2}-\d{2}$/.test(de) ? de : null, q: (p.get("q") ?? "").slice(0, 100) });
+  } catch {
+    return defaultOpsShared();
+  }
+}
+
 export default function OperacoesPage() {
+  const [urlTab] = useState(tabFromUrl);
   // A aba ativa persiste à navegação — voltar às Operações mantém onde estavas
-  const [tab, setTab] = usePersistedState("operacoes.tab", "dashboard");
+  const [storedTab, setTab] = usePersistedState("operacoes.tab", urlTab ?? "dashboard");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (urlTab) setTab(urlTab); }, [urlTab]);
+  // "Serviços" saiu daqui (fica no menu, em /servicos) → Dashboard.
+  const tab = OPERACOES_TABS.includes(storedTab) ? storedTab : "dashboard";
+  // Filtros das listas por período, PARTILHADOS entre Reservas / Recolhas /
+  // Entregas / Cancelados (mudar de aba mantém o período). Abrem sempre em HOJE.
+  const [listShared, setListShared] = useState<OpsListShared>(listSeedFromUrl);
+  const patchShared = (patch: Partial<OpsListShared>) => setListShared((s) => ({ ...s, ...patch }));
   return (
-    <div className="p-4 md:p-6 space-y-6 max-w-[1400px] mx-auto">
+    <div className="space-y-6 max-w-[1400px] mx-auto">
       <div>
         <p className="text-sm text-muted-foreground">
-          Reservas, recolhas, entregas, cancelamentos e serviços extras
+          Reservas, recolhas, entregas e cancelamentos — dias de Lisboa, valores c/ IVA. As listas e as "Reservas do dia" leem a Multipark em tempo real.
         </p>
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="flex-wrap h-auto">
           <TabsTrigger value="dashboard"><LayoutDashboard className="w-4 h-4 mr-1" />Dashboard</TabsTrigger>
-          <TabsTrigger value="reservas"><CalendarCheck className="w-4 h-4 mr-1" />Reservas</TabsTrigger>
-          <TabsTrigger value="entradas"><ArrowDownToLine className="w-4 h-4 mr-1" />Recolhas</TabsTrigger>
-          <TabsTrigger value="saidas"><ArrowUpFromLine className="w-4 h-4 mr-1" />Entregas</TabsTrigger>
-          <TabsTrigger value="cancelados"><XCircle className="w-4 h-4 mr-1" />Cancelados</TabsTrigger>
-          <TabsTrigger value="servicos"><Wrench className="w-4 h-4 mr-1" />Serviços</TabsTrigger>
+          <TabsTrigger value="dia"><CalendarDays className="w-4 h-4 mr-1" />Reservas do dia</TabsTrigger>
+          <TabsTrigger value="reservas"><CalendarCheck className="w-4 h-4 mr-1" />{OPS_LIST_LABELS.reservas}</TabsTrigger>
+          <TabsTrigger value="entradas"><ArrowDownToLine className="w-4 h-4 mr-1" />{OPS_LIST_LABELS.entradas}</TabsTrigger>
+          <TabsTrigger value="saidas"><ArrowUpFromLine className="w-4 h-4 mr-1" />{OPS_LIST_LABELS.saidas}</TabsTrigger>
+          <TabsTrigger value="cancelados"><XCircle className="w-4 h-4 mr-1" />{OPS_LIST_LABELS.cancelados}</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="dashboard" className="mt-4">
+        <TabsContent value="dashboard" className="mt-4 space-y-4">
+          <BookingAlerts />
           <OperacoesDashboard onJump={setTab} />
         </TabsContent>
-        <TabsContent value="reservas" className="mt-4">
-          <MultiparkPage sectionProp="reservas" />
+        <TabsContent value="dia" className="mt-4">
+          <ReservasDoDia />
         </TabsContent>
-        <TabsContent value="entradas" className="mt-4">
-          <MultiparkPage sectionProp="entradas" />
-        </TabsContent>
-        <TabsContent value="saidas" className="mt-4">
-          <MultiparkPage sectionProp="saidas" />
-        </TabsContent>
-        <TabsContent value="cancelados" className="mt-4">
-          <MultiparkPage sectionProp="cancelados" />
-        </TabsContent>
-        <TabsContent value="servicos" className="mt-4">
-          <ServicesPage />
-        </TabsContent>
+        {OPS_LIST_KINDS.map((k) => (
+          <TabsContent key={k} value={k} className="mt-4">
+            {tab === k && <OpsList kind={k} shared={listShared} onShared={patchShared} />}
+          </TabsContent>
+        ))}
       </Tabs>
     </div>
   );
@@ -121,6 +159,8 @@ function OperacoesDashboard({ onJump }: { onJump: (tab: string) => void }) {
 
   const actions = summaryQ.data?.actions;
   const stats = useMemo(() => ({
+    // Criadas no período (TODAS, como na folha Reservas) e, dessas, as não canceladas
+    criadas: actions?.createdAll?.count ?? 0,
     reservas: actions?.creation?.count ?? 0, reservasReceita: actions?.creation?.revenue ?? 0,
     recolhas: actions?.checkin?.count ?? 0,
     entregas: actions?.checkout?.count ?? 0, entregasReceita: actions?.checkout?.revenue ?? 0,
@@ -129,6 +169,7 @@ function OperacoesDashboard({ onJump }: { onJump: (tab: string) => void }) {
 
   const prevActions = prevQ.data?.actions;
   const prevStats = useMemo(() => ({
+    criadas: prevActions?.createdAll?.count ?? 0,
     reservas: prevActions?.creation?.count ?? 0,
     recolhas: prevActions?.checkin?.count ?? 0,
     entregas: prevActions?.checkout?.count ?? 0,
@@ -155,7 +196,7 @@ function OperacoesDashboard({ onJump }: { onJump: (tab: string) => void }) {
   return (
     <div className="space-y-6">
       {/* Filtros */}
-      <Card>
+      <Card className="py-0 gap-0">
         <CardContent className="p-4 space-y-3">
           <QuickRangeBar
             active={activeRange}
@@ -186,9 +227,10 @@ function OperacoesDashboard({ onJump }: { onJump: (tab: string) => void }) {
         <KpiCard
           icon={<CalendarCheck className="w-5 h-5 text-blue-600" />}
           label="Reservas criadas"
-          value={stats.reservas}
-          extra={fmtEur(stats.reservasReceita)}
-          compareValue={compare ? prevStats.reservas : undefined}
+          value={stats.criadas}
+          sub={`${stats.reservas} não canceladas · ${stats.criadas - stats.reservas} já canceladas`}
+          extra={`${fmtEur(stats.reservasReceita)} c/ IVA (não canceladas)`}
+          compareValue={compare ? prevStats.criadas : undefined}
           onClick={() => onJump("reservas")}
         />
         <KpiCard
@@ -202,45 +244,38 @@ function OperacoesDashboard({ onJump }: { onJump: (tab: string) => void }) {
           icon={<ArrowUpFromLine className="w-5 h-5 text-amber-600" />}
           label="Entregas"
           value={stats.entregas}
-          extra={fmtEur(stats.entregasReceita)}
+          extra={`${fmtEur(stats.entregasReceita)} c/ IVA`}
           compareValue={compare ? prevStats.entregas : undefined}
           onClick={() => onJump("saidas")}
         />
         <KpiCard
           icon={<XCircle className="w-5 h-5 text-red-600" />}
-          label="Cancelados"
+          label="Cancelamentos no período"
           value={stats.cancelados}
-          extra={fmtEur(stats.canceladosReceita)}
+          extra={`${fmtEur(stats.canceladosReceita)} c/ IVA`}
           compareValue={compare ? prevStats.cancelados : undefined}
           invertDelta
           onClick={() => onJump("cancelados")}
         />
       </div>
 
-      {/* Ratios */}
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <Card>
+      {/* Rácios */}
+      <div className="grid grid-cols-2 gap-3">
+        <Card className="py-0 gap-0 min-w-0">
           <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground">Receita média / entrega</p>
-            <p className="text-xl font-bold text-emerald-700">
+            <p className="text-xs text-muted-foreground">Receita média / entrega (c/ IVA)</p>
+            <p className="text-xl font-bold text-emerald-700 tabular-nums truncate">
               {stats.entregas > 0 ? fmtEur(stats.entregasReceita / stats.entregas) : "—"}
             </p>
           </CardContent>
         </Card>
-        <Card>
+        <Card className="py-0 gap-0 min-w-0">
           <CardContent className="p-4">
             <p className="text-xs text-muted-foreground">Taxa de cancelamento</p>
-            <p className="text-xl font-bold text-red-700">
-              {stats.reservas > 0 ? `${((stats.cancelados / stats.reservas) * 100).toFixed(1)}%` : "—"}
+            <p className="text-xl font-bold text-red-700 tabular-nums">
+              {(() => { const r = cohortCancelRate(stats.criadas, stats.criadas - stats.reservas); return r == null ? "—" : `${(r * 100).toFixed(1)}%`; })()}
             </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground">Conversão recolha → entrega</p>
-            <p className="text-xl font-bold text-blue-700">
-              {stats.recolhas > 0 ? `${((stats.entregas / stats.recolhas) * 100).toFixed(1)}%` : "—"}
-            </p>
+            <p className="text-[11px] leading-snug text-muted-foreground">das reservas criadas no período, quantas estão canceladas</p>
           </CardContent>
         </Card>
       </div>
@@ -269,7 +304,7 @@ function OperacoesDashboard({ onJump }: { onJump: (tab: string) => void }) {
           </div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <MiniPie title={`Reservas por ${dimLabel}`} icon={<CalendarCheck className="w-3.5 h-3.5 text-blue-600" />} data={pies.reservas} />
+          <MiniPie title={`Reservas não canceladas por ${dimLabel}`} icon={<CalendarCheck className="w-3.5 h-3.5 text-blue-600" />} data={pies.reservas} />
           <MiniPie title={`Recolhas por ${dimLabel}`} icon={<ArrowDownToLine className="w-3.5 h-3.5 text-emerald-600" />} data={pies.recolhas} />
           <MiniPie title={`Entregas por ${dimLabel}`} icon={<ArrowUpFromLine className="w-3.5 h-3.5 text-amber-600" />} data={pies.entregas} />
         </div>
@@ -277,15 +312,15 @@ function OperacoesDashboard({ onJump }: { onJump: (tab: string) => void }) {
 
       <p className="text-xs text-muted-foreground flex items-center gap-1">
         <Activity className="w-3 h-3" />
-        Clica num cartão para ir directo à tabela da secção
+        Clica num cartão para abrir a lista da secção (abre em hoje)
       </p>
     </div>
   );
 }
 
 function KpiCard({
-  icon, label, value, extra, onClick, compareValue, invertDelta,
-}: { icon: React.ReactNode; label: string; value: number; extra?: string; onClick?: () => void; compareValue?: number; invertDelta?: boolean }) {
+  icon, label, value, sub, extra, onClick, compareValue, invertDelta,
+}: { icon: React.ReactNode; label: string; value: number; sub?: string; extra?: string; onClick?: () => void; compareValue?: number; invertDelta?: boolean }) {
   const delta = compareValue != null ? value - compareValue : null;
   const pct = compareValue != null && compareValue > 0 ? (delta! / compareValue) * 100 : null;
   // Para cancelados, subir é mau (invertDelta) → cor invertida.
@@ -293,17 +328,23 @@ function KpiCard({
   const negative = delta == null ? false : (invertDelta ? delta > 0 : delta < 0);
   return (
     <Card
-      className={onClick ? "cursor-pointer hover:shadow-md transition-shadow" : ""}
+      className={"py-0 gap-0 min-w-0 " + (onClick ? "cursor-pointer hover:shadow-md transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" : "")}
       onClick={onClick}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } } : undefined}
     >
-      <CardContent className="p-4 flex items-center gap-3">
-        <div className="p-2 rounded-lg bg-muted">{icon}</div>
-        <div className="min-w-0">
-          <p className="text-xs text-muted-foreground truncate">{label}</p>
-          <p className="text-2xl font-bold">{value}</p>
-          {extra && <p className="text-xs text-muted-foreground truncate"><Euro className="w-3 h-3 inline" /> {extra}</p>}
+      {/* Em telemóvel (2 colunas estreitas) o ícone fica por cima do texto —
+          lado a lado, o rótulo e os valores ficavam cortados a ~75px. */}
+      <CardContent className="p-4 flex flex-col sm:flex-row sm:items-start gap-2 sm:gap-3">
+        <div className="p-2 rounded-lg bg-muted self-start shrink-0">{icon}</div>
+        <div className="min-w-0 flex-1">
+          <p className="text-xs text-muted-foreground leading-snug">{label}</p>
+          <StatValue value={value.toLocaleString("pt-PT")} min={18} max={24} />
+          {sub && <p className="text-[11px] leading-snug text-muted-foreground tabular-nums">{sub}</p>}
+          {extra && <p className="text-xs leading-snug text-muted-foreground tabular-nums mt-0.5"><Euro className="w-3 h-3 inline -mt-0.5" aria-hidden /> {extra}</p>}
           {delta != null && (
-            <p className={"text-[11px] font-medium " + (positive ? "text-emerald-600" : negative ? "text-red-600" : "text-muted-foreground")}>
+            <p className={"text-[11px] font-medium tabular-nums " + (positive ? "text-emerald-700" : negative ? "text-red-600" : "text-muted-foreground")}>
               {delta >= 0 ? "+" : ""}{delta}{pct != null && <> ({delta >= 0 ? "+" : ""}{pct.toFixed(0)}%)</>} <span className="text-muted-foreground font-normal">vs ant.</span>
             </p>
           )}

@@ -25,7 +25,9 @@ function TabsList({
       data-slot="tabs-list"
       className={cn(
         // Design system: separadores em pílula clara azulada (uniforme em toda a app)
-        "bg-[#e8eef8] text-muted-foreground inline-flex h-auto min-h-10 w-fit items-center justify-center rounded-xl p-1",
+        // max-w-full + flex-wrap: em ecrãs estreitos os separadores passam para a
+        // linha seguinte em vez de saírem do ecrã (scroll horizontal)
+        "bg-[#e8eef8] text-muted-foreground inline-flex h-auto min-h-10 w-fit max-w-full flex-wrap items-center justify-center rounded-xl p-1",
         className
       )}
       {...props}

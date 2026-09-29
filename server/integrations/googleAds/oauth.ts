@@ -10,11 +10,34 @@
 import crypto from "crypto";
 import { and, eq, lt, sql } from "drizzle-orm";
 import { getDb } from "../../db";
-import { integrationConnections, oauthStates } from "../../../drizzle/schema";
+import { adAccounts, integrationConnections, oauthStates } from "../../../drizzle/schema";
+import { fetchWithTimeout } from "../../_core/fetchWithTimeout";
 import { decryptSecret, encryptSecret, encryptionKeyInfo } from "./crypto";
 import { GOOGLE_ADS_PROVIDER, GOOGLE_ADS_SCOPE, readGoogleAdsConfig, resolveRedirectUri } from "./config";
 
 const nowMysql = () => new Date().toISOString().slice(0, 19).replace("T", " ");
+
+/**
+ * Identidade Google do consentimento, lida do id_token devolvido pelo
+ * endpoint de tokens (canal TLS direto com a Google → sem verificar a
+ * assinatura, como a Google documenta). Email em minúsculas, senão o `sub`. PURA.
+ */
+export function identityFromIdToken(idToken: string | null | undefined): string | null {
+  if (!idToken) return null;
+  const part = idToken.split(".")[1];
+  if (!part) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
+    if (typeof payload?.email === "string" && payload.email) return payload.email.trim().toLowerCase().slice(0, 320);
+    if (typeof payload?.sub === "string" && payload.sub) return `sub:${payload.sub}`.slice(0, 320);
+  } catch { /* token ilegível */ }
+  return null;
+}
+
+/** Outra conta Google? Só se as DUAS identidades forem conhecidas e diferentes. PURA. */
+export function identityChanged(previous: string | null | undefined, next: string | null | undefined): boolean {
+  return !!previous && !!next && previous.trim().toLowerCase() !== next.trim().toLowerCase();
+}
 
 export async function createOAuthState(userId: number, redirectTo?: string | null): Promise<string> {
   const db = await getDb();
@@ -46,7 +69,8 @@ export function buildConsentUrl(state: string, origin: string): string {
   url.searchParams.set("client_id", cfg.clientId);
   url.searchParams.set("redirect_uri", resolveRedirectUri(cfg, origin));
   url.searchParams.set("response_type", "code");
-  url.searchParams.set("scope", GOOGLE_ADS_SCOPE);
+  // openid email → id_token com a identidade (para detetar outra conta Google)
+  url.searchParams.set("scope", `${GOOGLE_ADS_SCOPE} openid email`);
   url.searchParams.set("access_type", "offline");
   url.searchParams.set("prompt", "consent");          // garante refresh_token
   url.searchParams.set("include_granted_scopes", "false");
@@ -54,10 +78,10 @@ export function buildConsentUrl(state: string, origin: string): string {
   return url.toString();
 }
 
-interface TokenResponse { access_token: string; refresh_token?: string; expires_in?: number; scope?: string; token_type?: string; error?: string; error_description?: string }
+interface TokenResponse { access_token: string; refresh_token?: string; id_token?: string; expires_in?: number; scope?: string; token_type?: string; error?: string; error_description?: string }
 
 async function tokenRequest(params: Record<string, string>): Promise<TokenResponse> {
-  const res = await fetch("https://oauth2.googleapis.com/token", {
+  const res = await fetchWithTimeout("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(params).toString(),
@@ -92,12 +116,25 @@ export async function saveConnection(patch: Partial<typeof integrationConnection
   else await db.insert(integrationConnections).values({ provider: GOOGLE_ADS_PROVIDER, status: "disconnected", ...patch });
 }
 
-/** Guarda o refresh token (cifrado). Se a Google não devolver um novo, mantém o anterior. */
-export async function storeRefreshToken(tokens: TokenResponse, userId: number, loginCustomerId: string | null) {
+/**
+ * Guarda o refresh token (cifrado). Se a Google não devolver um novo, mantém o
+ * anterior — MAS só se for a mesma conta Google. Religar com OUTRA conta
+ * limpa as contas selecionadas (as da conta antiga deixam de ser recolhidas
+ * em silêncio; escolhem-se de novo).
+ */
+export async function storeRefreshToken(tokens: TokenResponse, userId: number, loginCustomerId: string | null): Promise<{ identityChanged: boolean }> {
   const existing = await getConnection();
-  const refresh = tokens.refresh_token ?? (existing?.refreshTokenEnc ? decryptSecret(existing.refreshTokenEnc) : null);
+  const identity = identityFromIdToken(tokens.id_token);
+  const changed = identityChanged(existing?.accountEmail, identity);
+  const refresh = tokens.refresh_token ?? (!changed && existing?.refreshTokenEnc ? decryptSecret(existing.refreshTokenEnc) : null);
   if (!refresh) throw new Error("A Google não devolveu refresh token (tenta de novo com consentimento)");
+  cachedAccess = null;
+  if (changed) {
+    const db = await getDb();
+    if (db) await db.update(adAccounts).set({ selected: 0 }).where(eq(adAccounts.provider, GOOGLE_ADS_PROVIDER));
+  }
   await saveConnection({
+    accountEmail: identity ?? existing?.accountEmail ?? null,
     status: "connected",
     refreshTokenEnc: encryptSecret(refresh),
     scope: tokens.scope ?? GOOGLE_ADS_SCOPE,
@@ -107,13 +144,14 @@ export async function storeRefreshToken(tokens: TokenResponse, userId: number, l
     lastCheckedAt: nowMysql(),
     lastError: null,
   });
+  return { identityChanged: changed };
 }
 
 let cachedAccess: { token: string; expiresAt: number } | null = null;
 
 /** Access token válido (renova com o refresh token). Marca reauth_required se a Google revogar. */
-export async function getAccessToken(): Promise<string> {
-  if (cachedAccess && cachedAccess.expiresAt > Date.now() + 60_000) return cachedAccess.token;
+export async function getAccessToken(opts: { forceRefresh?: boolean } = {}): Promise<string> {
+  if (!opts.forceRefresh && cachedAccess && cachedAccess.expiresAt > Date.now() + 60_000) return cachedAccess.token;
   const cfg = readGoogleAdsConfig();
   const conn = await getConnection();
   if (!conn || conn.status === "disconnected" || !conn.refreshTokenEnc) throw new Error("Google Ads não está ligado");
@@ -152,6 +190,7 @@ export function connectionSummary(conn: Awaited<ReturnType<typeof getConnection>
     lastCheckedAt: conn?.lastCheckedAt ?? null,
     lastError: conn?.lastError ?? null,
     loginCustomerId: conn?.loginCustomerId ?? null,
+    accountEmail: conn?.accountEmail ?? null,
     scope: conn?.scope ?? null,
     encryptionKeySource: keyInfo as "env" | "derived" | "none" | "invalid",
   };

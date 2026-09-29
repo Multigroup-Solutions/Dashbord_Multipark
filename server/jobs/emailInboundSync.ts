@@ -1,18 +1,21 @@
 // server/jobs/emailInboundSync.ts
-// Leitor IMAP da caixa reservas@multipark.pt. Lê os emails que o backoffice
-// REENCAMINHA para os aliases temáticos e cria o registo no módulo certo:
+// Pipelines temáticos do email recebido: cria o registo no módulo certo a
+// partir de UM email que chegou por um alias temático:
 //   criticas@        → Google Reviews   (createGoogleReview + resposta IA)
 //   reclamacoes@     → Reclamações      (createComplaint)
 //   perdidos@        → Perdidos&Achados (createLostFoundItem)
-//   recursos-humanos@→ inbound_emails (aba Recrutamento) + Tarefa p/ Kamila
+//   recursos-humanos@→ inbound_emails (aba Recrutamento; os Leads de Extras
+//                      tratam-nos). Só respostas de disponibilidade que
+//                      precisam de decisão humana viram tarefa (1 por pessoa × semana).
+//   campanhas@ / ocorrencias@ → só inbound_emails (as ocorrências vêm da BD
+//                      Multipark, ver server/multiparkDb/read.ts).
 //
-// Substitui o fluxo Make.com (Gmail→críticas/ocorrências). Filtra automaticamente
-// o ruído: só processa emails cujo Delivered-To é um dos aliases (as ~4000
-// notificações automáticas de reserva têm Delivered-To=reservas@skypark.pt e
-// nunca entram aqui). Dedup por Message-ID. Idempotente.
+// A ÚNICA fonte é a sincronização da API do Gmail (server/mail/service.ts):
+// o alias pelo qual o email entrou (tabela de aliases em Definições →
+// Comunicação; Delivered-To / X-Original-To / To / Cc) decide o destino e
+// chama `processInboundEmail`. O leitor IMAP e os reencaminhamentos
+// acabaram. Dedup por Message-ID (reservado em inbound_emails). Idempotente.
 
-import { ImapFlow } from "imapflow";
-import { simpleParser } from "mailparser";
 import {
   routeAlias,
   isSystemEmail,
@@ -26,13 +29,12 @@ import {
   updateGoogleReview,
   createComplaint,
   createLostFoundItem,
-  createTask,
-  createInboundEmail,
-  getInboundEmailByMessageId,
-  listExistingInboundMessageIds,
-  findEmployeeByEmailOrName,
+  claimInboundEmail,
+  updateInboundEmail,
+  deleteInboundEmail,
+  addComplaintPhoto,
+  getComplaintById,
   getSystemUserId,
-  assignTaskToEmployee,
   findComplaintByClientSignals,
   findOpenLostFoundByClient,
   findComplaintByThread,
@@ -41,33 +43,17 @@ import {
   addComplaintMessage,
   addLostFoundMessage,
 } from "../db";
+import {
+  clientSignalEmail,
+  complaintSlaDeadline,
+  htmlToPlainText,
+  isGenericSenderName,
+  isLivroReclamacoes,
+  parseComplaintCaseTag,
+  COMPLAINT_DEFAULT_SLA_HOURS,
+} from "../complaintEmail";
 
-const ALIASES: InboundAlias[] = ["criticas", "reclamacoes", "perdidos", "recursos-humanos", "campanhas", "ocorrencias"];
-const RH_TASK_OWNER = "kamilafagundes@multipark.pt"; // tarefa de recrutamento atribuída a (Kamila Fagundes)
-
-export type EmailSyncResult = {
-  configured: boolean;
-  scanned: number;
-  created: number;
-  skipped: number;
-  errors: string[];
-  byAlias: Record<string, number>;
-  /** true = parou no orçamento de tempo (Vercel 60s); o resto fica p/ a próxima corrida (dedup por messageId). */
-  partial: boolean;
-};
-
-function imapConfig() {
-  const user = process.env.IMAP_USER;
-  const pass = process.env.IMAP_PASS;
-  if (!user || !pass) return null;
-  return {
-    host: process.env.IMAP_HOST || "imap.gmail.com",
-    port: Number(process.env.IMAP_PORT || 993),
-    secure: true,
-    auth: { user, pass },
-    logger: false as const,
-  };
-}
+export type InboundAttachment = { filename?: string; contentType?: string; size?: number; url?: string; key?: string };
 
 // Cria o registo no módulo de destino e devolve { module, id, taskId }.
 async function routeToModule(
@@ -82,8 +68,15 @@ async function routeToModule(
     gmThreadId?: string | null;
     refs?: string[];
   },
-): Promise<{ targetModule: string; targetId?: number; taskId?: number }> {
-  const clientName = parsed.clientName || ctx.fromName || "Desconhecido";
+): Promise<{ targetModule: string; targetId?: number; taskId?: number; isNew?: boolean }> {
+  // O remetente do cabeçalho é muitas vezes o BACKOFFICE que reencaminha
+  // (reservas@/info@ "Multipark") — só conta como cliente se for externo e
+  // com nome próprio; senão os reencaminhamentos misturavam clientes.
+  const senderEmail = clientSignalEmail(ctx.fromEmail);
+  const senderName = senderEmail && !isGenericSenderName(ctx.fromName) ? ctx.fromName?.trim() : undefined;
+  const bodyName = parsed.clientName && !isGenericSenderName(parsed.clientName) ? parsed.clientName.trim() : undefined;
+  const clientName = bodyName || senderName || "Desconhecido";
+  const clientEmail = clientSignalEmail(parsed.clientEmail) || senderEmail;
   let desc = `${ctx.subject}\n\n${ctx.bodyText}`.trim().slice(0, 5000);
 
   if (alias === "criticas") {
@@ -126,19 +119,17 @@ async function routeToModule(
       sourceEmailId: ctx.messageId,
       importedAt: new Date().toISOString().slice(0, 19).replace("T", " "),
     } as any);
-    // resposta IA best-effort (não bloqueia)
+    // rascunho de resposta por IA (prompt central + sentimento/contexto),
+    // best-effort e por aprovar — nunca publica. Interruptor AI_REVIEW_AUTO_DRAFTS.
     if (id) {
       try {
-        const { invokeLLM } = await import("../_core/llm");
-        const resp = await invokeLLM({
-          messages: [
-            { role: "system", content: "És o gestor de atendimento de um parque de estacionamento premium. Responde a críticas de clientes de forma calorosa e profissional, em português. Máximo 3 frases." },
-            { role: "user", content: `Crítica de ${reviewer}${g.rating ? ` (${g.rating} estrelas)` : ""}: "${text.slice(0, 800)}". Gera uma resposta.` },
-          ],
-        });
-        const aiText = typeof resp?.choices?.[0]?.message?.content === "string" ? resp.choices[0].message.content : "";
-        if (aiText) await updateGoogleReview(id, { aiResponse: aiText, status: "ai_responded" });
-      } catch { /* LLM opcional */ }
+        const { autoDraftReview } = await import("../reviewAutoDraft");
+        const { aiFeatureAvailableFresh } = await import("../_core/ai/status");
+        if (await aiFeatureAvailableFresh("review_auto_draft")) {
+          await updateGoogleReview(id, { aiDraftAttemptedAt: new Date().toISOString().slice(0, 19).replace("T", " ") } as any);
+          await autoDraftReview(id, { timeoutMs: 15_000 });
+        }
+      } catch { /* IA opcional */ }
     }
     return { targetModule: "review", targetId: id };
   }
@@ -173,12 +164,16 @@ async function routeToModule(
       return { targetModule: "ignored" };
     }
     // Agrupa respostas/emails repetidos na MESMA reclamação. Ordem de sinais:
+    //  0) etiqueta [REC-<id>] no assunto (as nossas respostas levam-na)
     //  1) thread do Gmail / referências (resposta ao mesmo email — o mais fiável)
-    //  2) email do cliente (corpo) ou remetente / matrícula
+    //  2) email do cliente / matrícula / nome — só casos ABERTOS recentes e
+    //     nunca com endereços internos ou nomes genéricos ("Multipark")
     //  3) assunto normalizado (resposta reencaminhada que perdeu o thread)
+    const taggedId = parseComplaintCaseTag(ctx.subject);
     const existing =
+      (taggedId ? await getComplaintById(taggedId) : null) ||
       (await findComplaintByThread({ gmThreadId: ctx.gmThreadId, refs: ctx.refs })) ||
-      (await findComplaintByClientSignals(parsed.clientEmail || ctx.fromEmail, parsed.vehiclePlate, clientName)) ||
+      (await findComplaintByClientSignals(clientEmail, parsed.vehiclePlate, clientName)) ||
       (await findOpenComplaintBySubject(ctx.subject));
     if (existing) {
       await addComplaintMessage({
@@ -196,7 +191,7 @@ async function routeToModule(
       if (!existing.reservationRef) {
         try { await autoLinkComplaintBooking(existing.id); } catch { /* best-effort */ }
       }
-      return { targetModule: "complaint", targetId: existing.id };
+      return { targetModule: "complaint", targetId: existing.id, isNew: false };
     }
     // Auto-anexa a reserva DE QUE O CLIENTE SE QUEIXA: ref explícita do email
     // ganha; senão matrícula/email/telefone/nome ancorados na data de hoje
@@ -204,36 +199,36 @@ async function routeToModule(
     const match = await matchBookingForComplaint({
       reservationRef: parsed.bookingRef,
       vehiclePlate: parsed.vehiclePlate,
-      clientEmail: parsed.clientEmail || ctx.fromEmail,
+      clientEmail,
       clientPhone: parsed.clientPhone,
       clientName,
     });
     const booking = match?.booking ?? null;
     // Livro de Reclamações oficial (nº ROR…): prazo legal de resposta —
-    // entra logo como URGENTE
-    const isLivro = /livro de reclama|ROR\d{6,}/i.test(`${ctx.subject}
-${ctx.bodyText}`);
+    // entra logo como URGENTE. SLA igual ao da criação manual (48h por
+    // omissão do formulário) — não há no código um prazo próprio para o ROR.
+    const isLivro = isLivroReclamacoes(ctx.subject, ctx.bodyText);
     const id = await createComplaint({
       title: (ctx.subject || "Reclamação por email").slice(0, 255),
       description: desc,
       complaintType: "other",
       complaintStatus: "new",
-      complaintPriority: "medium",
-      clientName,
-      clientEmail: parsed.clientEmail ?? (booking?.clientEmail || undefined),
+      complaintPriority: isLivro ? "urgent" : "medium",
+      clientName: clientName.slice(0, 200),
+      clientEmail: clientEmail ?? (booking?.clientEmail || undefined),
       clientPhone: parsed.clientPhone ?? (booking?.clientPhone || undefined),
       vehiclePlate: parsed.vehiclePlate ?? (booking?.licensePlate || undefined),
       reservationRef: parsed.bookingRef ?? (booking?.externalId || undefined),
       reservationStart: booking?.checkIn ?? undefined,
       reservationEnd: booking?.checkOut ?? undefined,
       projectId: booking?.projectId ?? undefined,
-          priority: isLivro ? "urgent" : undefined,
-} as any);
-    return { targetModule: "complaint", targetId: id };
+      slaDeadline: complaintSlaDeadline(COMPLAINT_DEFAULT_SLA_HOURS),
+    } as any);
+    return { targetModule: "complaint", targetId: id, isNew: true };
   }
 
   if (alias === "perdidos") {
-    const existing = await findOpenLostFoundByClient(parsed.clientEmail || ctx.fromEmail, parsed.vehiclePlate);
+    const existing = await findOpenLostFoundByClient(clientEmail, parsed.vehiclePlate);
     if (existing) {
       await addLostFoundMessage({
         itemId: existing.id,
@@ -253,18 +248,33 @@ ${ctx.bodyText}`);
     const lfMatch = await matchBookingForComplaint({
       reservationRef: parsed.bookingRef,
       vehiclePlate: parsed.vehiclePlate,
-      clientEmail: parsed.clientEmail || ctx.fromEmail,
+      clientEmail: clientEmail,
       clientPhone: parsed.clientPhone,
       clientName,
     });
     const lfBooking = lfMatch?.booking ?? null;
+    // Reclamação ABERTA do mesmo cliente: mesma reserva → o email junta-se à
+    // reclamação (não duplica); só o mesmo cliente/matrícula → cria o perdido
+    // mas fica "relacionado com reclamação #".
+    const lfRef = parsed.bookingRef ?? lfBooking?.externalId ?? null;
+    const openComplaint = await findComplaintByClientSignals(clientEmail, parsed.vehiclePlate ?? lfBooking?.licensePlate, clientName);
+    if (openComplaint && lfRef && openComplaint.reservationRef && openComplaint.reservationRef === lfRef) {
+      await addComplaintMessage({
+        complaintId: openComplaint.id,
+        message: `📦 Email para perdidos@ (possível objeto perdido) — ${ctx.subject}\n\n${ctx.bodyText}`.trim().slice(0, 5000),
+        isInternal: 0,
+        authorName: (clientName || "").slice(0, 200) || null,
+      } as any);
+      return { targetModule: "complaint", targetId: openComplaint.id, isNew: false };
+    }
     const id = await createLostFoundItem({
       clientName,
-      clientEmail: parsed.clientEmail ?? (lfBooking?.clientEmail || undefined),
+      clientEmail: clientEmail ?? (lfBooking?.clientEmail || undefined),
       clientPhone: parsed.clientPhone ?? (lfBooking?.clientPhone || undefined),
       vehiclePlate: parsed.vehiclePlate ?? (lfBooking?.licensePlate || undefined),
       bookingRef: parsed.bookingRef ?? (lfBooking?.externalId || undefined),
       projectId: lfBooking?.projectId ?? undefined,
+      relatedComplaintId: openComplaint?.id ?? undefined,
       itemType: "other",
       description: desc || "(sem descrição)",
       status: "new",
@@ -274,21 +284,53 @@ ${ctx.bodyText}`);
     return { targetModule: "lostfound", targetId: id ?? undefined };
   }
 
+  // ocorrencias → já NÃO cria ocorrências (incidents). As ocorrências vivem
+  // na app Multipark e a página /ocorrencias lê-as diretamente da BD deles
+  // ("Occurrence"). O email fica só em inbound_emails (consulta/auditoria).
+  if (alias === "ocorrencias") {
+    return { targetModule: "multipark_occurrence" };
+  }
+
   // ── "SIM" automático (pedido Jorge): resposta de um extra ao pedido de
   // disponibilidade marca-o logo disponível naquela data/turno/horas. As
   // respostas chegam aqui porque o pedido sai de recursos-humanos@. Só depois
   // é que o resto vira tarefa de recrutamento.
-  try {
+  // Só para recursos-humanos@ (ocorrências/perdidos são classificados antes)
+  if (alias === "recursos-humanos") try {
     const { matchPendingAvailabilityReply, markDayAvailability } = await import("../extrasAvailability");
     const pending = ctx.fromEmail ? await matchPendingAvailabilityReply(ctx.fromEmail) : null;
     // Classificação com NEGAÇÃO (server/availabilityReply.ts): só um "sim"
     // limpo marca; "não posso", condicionais e ambíguos ficam para revisão
     // humana (tarefa de RH com o veredicto anotado). Usa só o CORPO, não o assunto.
     const { classifyAvailabilityReply } = await import("../availabilityReply");
-    const verdict = pending ? classifyAvailabilityReply(ctx.bodyText || desc || "") : null;
+    let verdict = pending ? classifyAvailabilityReply(ctx.bodyText || desc || "") : null;
+    // Pouco clara → IA (lite, AI_AVAILABILITY_CLASSIFY): confiança alta
+    // aplica-se sozinha; o resto fica na tarefa com a leitura da IA anotada.
+    let aiYes: { days: string[]; fromHour: number | null; toHour: number | null } | null = null;
+    let aiNote = "";
+    if (pending && verdict?.verdict === "unclear") {
+      const { classifyUnclearAvailability, reviewNote } = await import("../aiOps/availabilityAi");
+      const d = await classifyUnclearAvailability(ctx.bodyText || desc || "", pending, { employeeId: pending.employeeId });
+      if (d.action === "apply_no") verdict = { ...verdict, verdict: "no", reason: `lido por IA (confiança ${Math.round(d.confidence * 100)}%)` };
+      else if (d.action === "apply_yes") { verdict = { ...verdict, verdict: "yes", reason: "lido por IA" }; aiYes = { days: d.days, fromHour: d.fromHour, toHour: d.toHour }; }
+      else aiNote = ` ${reviewNote(d)}`;
+    }
+    const availabilityTask = async (label: string, detail: string) => {
+      const { upsertAvailabilityTask } = await import("../tasksService");
+      const day = pending!.weekStart ?? pending!.targetDate;
+      if (!day) return null;
+      const r = await upsertAvailabilityTask({
+        employeeId: pending!.employeeId,
+        day,
+        detail: `[${label}] ${detail}${ctx.subject ? `\nAssunto: ${ctx.subject}` : ""}`,
+      });
+      return r.taskId;
+    };
     if (pending && verdict && verdict.verdict !== "yes") {
-      // não marca disponibilidade; deixa a resposta na fila de RH com contexto
-      desc = `[DISPONIBILIDADE ${verdict.verdict === "no" ? "NÃO" : "A CONFIRMAR"} — ${verdict.reason}] ${pending.targetDate ?? pending.weekStart ?? ""} ${pending.shift ?? ""}: "${verdict.excerpt}"`.trim() + (desc ? `\n\n${desc}` : "");
+      // não marca disponibilidade; UMA tarefa por pessoa × semana para decisão humana
+      desc = `[DISPONIBILIDADE ${verdict.verdict === "no" ? "NÃO" : "A CONFIRMAR"} — ${verdict.reason}]${aiNote} ${pending.targetDate ?? pending.weekStart ?? ""} ${pending.shift ?? ""}: "${verdict.excerpt}"`.trim() + (desc ? `\n\n${desc}` : "");
+      const taskId = await availabilityTask(verdict.verdict === "no" ? "Respondeu NÃO" : "Resposta pouco clara", desc.slice(0, 3000));
+      if (taskId) return { targetModule: "availability_task", targetId: pending.employeeId, taskId };
     }
     const saidYes = verdict?.verdict === "yes";
     if (pending && saidYes) {
@@ -299,319 +341,227 @@ ${ctx.bodyText}`);
           // fica anotada. "que horas podes?" com só "sim" fica manhã + nota.
           morning: pending.shift !== "night",
           night: pending.shift === "night",
-          fromHour: pending.fromHour,
-          toHour: pending.toHour,
-          note: `respondeu SIM por email${shiftNote ? ` (turno da ${shiftNote})` : ""}${pending.kind === "day_hours" ? " — horas por confirmar" : ""}`,
+          fromHour: aiYes?.fromHour ?? pending.fromHour,
+          toHour: aiYes?.toHour ?? pending.toHour,
+          note: `respondeu SIM por email${aiYes ? " (lido por IA)" : ""}${shiftNote ? ` (turno da ${shiftNote})` : ""}${pending.kind === "day_hours" ? " — horas por confirmar" : ""}`,
         });
         return { targetModule: "availability", targetId: pending.employeeId };
       }
+      // pedido da semana com dias lidos pela IA (confiança alta): marca esses dias
+      if (aiYes && aiYes.days.length) {
+        for (const day of aiYes.days) {
+          await markDayAvailability(pending.employeeId, day, {
+            morning: pending.shift !== "night", night: pending.shift === "night",
+            fromHour: aiYes.fromHour ?? pending.fromHour, toHour: aiYes.toHour ?? pending.toHour,
+            note: "respondeu por email (lido por IA)",
+          });
+        }
+        return { targetModule: "availability", targetId: pending.employeeId };
+      }
       // pedido da semana inteira: o "sim" não diz que dias — fica em tarefa
-      // normal para alguém confirmar (não dá para adivinhar os dias).
+      // "Disponibilidade a confirmar" (não dá para adivinhar os dias).
+      const taskId = await availabilityTask("Respondeu SIM à semana inteira — confirmar dias", `"${verdict!.excerpt}"`);
+      if (taskId) return { targetModule: "availability_task", targetId: pending.employeeId, taskId };
     }
   } catch (err) {
     console.warn("[inbound] verificação de resposta de disponibilidade falhou:", err);
   }
 
-  // ocorrencias → OCORRÊNCIA a partir do email do painel Multipark (o Jorge
-  // reencaminha; futuramente alias + regra automática). O corpo completo fica
-  // em inbound_emails para afinar o parser ao formato real.
-  if (alias === "ocorrencias") {
-    // Formato REAL do email do painel (visto 6 ago):
-    //   De: Sky Park <info@multipark.pt>
-    //   Date: sexta, 31/07/2026 à(s) 10:37
-    //   Tipo de ocorrência: *Outros*
-    //   *Localização do carro:* https://…maps…query=41.23,-8.67
-    //   *Matricula do carro:* 0173NFM
-    //   Observações: …
-    const body = ctx.bodyText;
-    const typeM = body.match(/Tipo de ocorr[êe]ncia:\s*\*?\s*([^*\n]+?)\s*\*?\s*$/im);
-    const rawType = (typeM?.[1] ?? "").trim().toLowerCase();
-    const TYPE_MAP: Record<string, { t: string; s: string }> = {
-      "outros": { t: "outro", s: "medium" },
-      "outro": { t: "outro", s: "medium" },
-      "dano": { t: "dano", s: "high" },
-      "danos": { t: "dano", s: "high" },
-      "vidro": { t: "vidro_aberto", s: "medium" },
-      "vidro aberto": { t: "vidro_aberto", s: "medium" },
-      "mal estacionado": { t: "mal_estacionado", s: "medium" },
-      "chave": { t: "chave_errada", s: "medium" },
-      "chave errada": { t: "chave_errada", s: "medium" },
-      "combustivel": { t: "combustivel", s: "medium" },
-      "combustível": { t: "combustivel", s: "medium" },
-      "limpeza": { t: "limpeza", s: "low" },
-      "documentos": { t: "documentos", s: "low" },
-    };
-    let mapped = TYPE_MAP[rawType];
-    // Sem tipo útil ("Outros") tenta classificar pelas observações
-    const obsM = body.match(/Observa[çc][õo]es:\s*([\s\S]*?)(?:\n{3,}|$)/i);
-    const obs = (obsM?.[1] ?? "").trim();
-    if ((!mapped || mapped.t === "outro") && obs) {
-      const low = obs.toLowerCase();
-      if (/dano|amassad|risc|batid|embat|colis|raspad|partid/.test(low)) mapped = { t: "dano", s: "high" };
-      else if (/vidro|janela/.test(low)) mapped = { t: "vidro_aberto", s: "medium" };
-      else if (/chav/.test(low)) mapped = { t: "chave_errada", s: "medium" };
-      else if (/combust|gasolina|gas[oó]leo/.test(low)) mapped = { t: "combustivel", s: "medium" };
-      else if (/suj|limpez|nodoa|mancha/.test(low)) mapped = { t: "limpeza", s: "low" };
-    }
-    const plateM = body.match(/Matr[ií]cula do carro:\s*\*?\s*([A-Z0-9-]{4,10})/i)
-      ?? body.toUpperCase().match(/([A-Z]{2}-\d{2}-[A-Z0-9]{2}|\d{2}-[A-Z]{2}-\d{2}|\d{2}-\d{2}-[A-Z]{2})/);
-    const gpsM = body.match(/query=(-?\d+\.\d+),(-?\d+\.\d+)/);
-    const parkM = body.match(/^\s*De:\s*([^<\n]+?)\s*</im);
-    // Data REAL da ocorrência (linha Date do forward): "sexta, 31/07/2026 à(s) 10:37"
-    const dateM = body.match(/(\d{2})\/(\d{2})\/(\d{4})[^\d]{1,8}(\d{1,2}):(\d{2})/);
-    const srcDate = dateM
-      ? `${dateM[3]}-${dateM[2]}-${dateM[1]} ${dateM[4].padStart(2, "0")}:${dateM[5]}:00`
-      : undefined;
-    const cuidM = body.match(/c[a-z0-9]{20,30}/);
-    const descParts = [
-      obs || ctx.subject,
-      parkM ? `Parque: ${parkM[1].trim()}` : null,
-      rawType && !TYPE_MAP[rawType] ? `Tipo (Multipark): ${typeM![1].trim()}` : null,
-    ].filter(Boolean);
-    const { createIncident, getDb: getDbOcc } = await import("../db");
-    // Dedup por CONTEÚDO: o mesmo email reencaminhado 2x tem messageId novo,
-    // mas a ocorrência é a mesma (matrícula + data original)
-    if (plateM && srcDate) {
-      const dbOcc = await getDbOcc();
-      if (dbOcc) {
-        const { sql: sqlOcc } = await import("drizzle-orm");
-        const [dupRows] = await dbOcc.execute(sqlOcc`
-          SELECT id FROM incidents WHERE vehiclePlate = ${plateM[1].toUpperCase()}
-            AND sourceEmailDate = ${srcDate} LIMIT 1`) as any;
-        if ((dupRows as any[])?.length) {
-          return { targetModule: "incident_dup", targetId: (dupRows as any[])[0].id };
-        }
-      }
-    }
-    const id = await createIncident({
-      incidentType: (mapped?.t ?? "outro") as any,
-      severity: (mapped?.s ?? "medium") as any,
-      description: descParts.join("\n").slice(0, 5000),
-      vehiclePlate: plateM ? plateM[1].toUpperCase() : undefined,
-      reservationLink: cuidM ? cuidM[0] : undefined,
-      gpsLatitude: gpsM ? gpsM[1] : undefined,
-      gpsLongitude: gpsM ? gpsM[2] : undefined,
-      status: "open",
-      reportedBy: await getSystemUserId(),
-      sourceEmailId: ctx.messageId?.slice(0, 100),
-      ...(srcDate ? { sourceEmailDate: srcDate } : {}),
-    } as any);
-    return { targetModule: "incident", targetId: id ?? undefined };
-  }
-
-  // recursos-humanos → tarefa de recrutamento para a Kamila (o email fica
-  // guardado em inbound_emails para a aba "Recrutamento" do RH).
-  const systemUser = await getSystemUserId();
-  const taskId = await createTask({
-    title: `Recrutamento: ${(ctx.subject || clientName).slice(0, 200)}`,
-    description: desc,
-    createdById: systemUser,
-    taskStatus: "todo",
-    taskPriority: "medium",
-  } as any);
-  try {
-    const emp = await findEmployeeByEmailOrName(RH_TASK_OWNER);
-    if (emp && taskId) await assignTaskToEmployee(taskId, emp.id);
-  } catch { /* atribuição best-effort */ }
-  return { targetModule: "rh", taskId };
+  // recursos-humanos → já NÃO cria tarefa de recrutamento: o email fica em
+  // inbound_emails (aba "Recrutamento") e os Leads de Extras tratam-no.
+  return { targetModule: "rh" };
 }
 
-export async function runEmailInboundSync(opts?: { sinceDays?: number; deadlineAt?: number }): Promise<EmailSyncResult> {
-  const result: EmailSyncResult = { configured: false, scanned: 0, created: 0, skipped: 0, errors: [], byAlias: {}, partial: false };
-  const cfg = imapConfig();
-  if (!cfg) {
-    result.errors.push("IMAP não configurado (faltam IMAP_USER/IMAP_PASS)");
-    return result;
-  }
-  result.configured = true;
-  const sinceDays = opts?.sinceDays ?? Number(process.env.IMAP_SINCE_DAYS || 30);
-  // Sem deadline (Railway/manual) corre até ao fim; no Vercel o endpoint passa
-  // um prazo < maxDuration para nunca morrer com 504 a meio de um email.
-  const deadlineAt = opts?.deadlineAt ?? Number.POSITIVE_INFINITY;
-
-  const client = new ImapFlow(cfg);
-  await client.connect();
-  const lock = await client.getMailboxLock("INBOX");
+/**
+ * Pós-processamento de um email ligado a uma reclamação (best-effort, nunca
+ * lança):
+ *  - anexos: imagens → complaint_photos (aparecem na aba Fotos); os restantes
+ *    ficam em inbound_emails.attachmentsJson e aparecem como links no detalhe;
+ *  - reclamação NOVA: alerta in-app (notifyComplaintCreated) + aviso de
+ *    receção automático ao cliente (1×, [REC-<id>], COMPLAINT_AUTO_ACK=off
+ *    desliga).
+ */
+async function afterComplaintEmail(
+  complaintId: number,
+  ctx: { isNew: boolean; attachments: InboundAttachment[]; messageId: string; fromEmail?: string },
+): Promise<void> {
   try {
-    for (const alias of ALIASES) {
-      if (Date.now() > deadlineAt) { result.partial = true; break; }
-      // Gmail raw search: só emails entregues a este alias, dentro da janela.
-      let uids: number[] = [];
-      try {
-        // "ocorrencias": além do alias próprio, apanha REENCAMINHADOS para a
-        // caixa principal com "ocorrência" no assunto (o Jorge reencaminha o
-        // email do painel Multipark até o alias existir / a regra automática)
-        const gmQuery = alias === "ocorrencias"
-          ? `newer_than:${sinceDays}d {deliveredto:ocorrencias@multipark.pt subject:ocorrencia subject:ocorrência subject:ocorrencias subject:ocorrências}`
-          : `deliveredto:${alias}@multipark.pt newer_than:${sinceDays}d`;
-        uids = (await client.search(
-          { gmraw: gmQuery },
-          { uid: true },
-        )) || [];
-      } catch (e: any) {
-        result.errors.push(`search ${alias}: ${e?.message ?? e}`);
-        continue;
-      }
-      // Pré-triagem BARATA: só envelopes (messageId) + dedup em lote na BD,
-      // antes de descarregar qualquer corpo. Sem isto, cada corrida gastava o
-      // orçamento de 45s a re-descarregar as mesmas dezenas de emails já
-      // processados e nunca progredia para os aliases seguintes.
-      const uidToMessageId = new Map<number, string>();
-      let known = new Set<string>();
-      try {
-        if (uids.length > 0) {
-          const envs = await client.fetchAll(uids.join(","), { envelope: true }, { uid: true });
-          for (const e of envs as any[]) {
-            uidToMessageId.set(e.uid, e.envelope?.messageId || `uid:${alias}:${e.uid}`);
-          }
-          known = await listExistingInboundMessageIds([...uidToMessageId.values()]);
-        }
-      } catch (e: any) {
-        // Sem pré-triagem o dedup por-uid (abaixo) continua correto — só lento.
-        console.warn(`[EmailInbound] pré-triagem ${alias} falhou:`, String(e?.message ?? e).slice(0, 120));
-      }
-
-      for (const uid of uids) {
-        if (Date.now() > deadlineAt) { result.partial = true; break; }
-        const preId = uidToMessageId.get(uid);
-        if (preId && known.has(preId)) { result.skipped++; continue; }
-        result.scanned++;
-        try {
-          const msg = await client.fetchOne(uid, { source: true, threadId: true }, { uid: true });
-          if (!msg || !msg.source) { result.skipped++; continue; }
-          const mail = await simpleParser(msg.source as Buffer);
-          const messageId = mail.messageId || `uid:${alias}:${uid}`;
-          // Thread do Gmail + referências de cabeçalho (p/ agrupar respostas).
-          const gmThreadId = (msg as any).threadId ? String((msg as any).threadId) : null;
-          const refsRaw = mail.references
-            ? (Array.isArray(mail.references) ? mail.references : [mail.references])
-            : [];
-          const refs = [...(mail.inReplyTo ? [mail.inReplyTo] : []), ...refsRaw]
-            .flatMap(r => String(r).split(/\s+/))
-            .map(r => r.trim())
-            .filter(Boolean);
-          const headerRefs = refs.length ? refs.join(" ").slice(0, 4000) : null;
-
-          // dedup
-          const existing = await getInboundEmailByMessageId(messageId);
-          if (existing) { result.skipped++; continue; }
-
-          const fromAddr = mail.from?.value?.[0];
-          const fromName = fromAddr?.name || undefined;
-          const fromEmail = fromAddr?.address || undefined;
-          const subject = mail.subject || "";
-
-          // Relatório diário de campanhas por email: DESLIGADO (Jorge, 16 set
-          // 2026). A fonte única do gasto é a Google Ads API; o email fica só
-          // registado, sem tocar em campaign_daily_stats.
-          if (alias === "campanhas") {
-            await createInboundEmail({
-              messageId, alias, fromName, fromEmail, subject,
-              bodyText: "Ingestão por email desligada — o gasto vem da Google Ads API.",
-              targetModule: "campaigns",
-              status: "skipped",
-              receivedAt: mail.date ? new Date(mail.date).toISOString().slice(0, 19).replace("T", " ") : null,
-              processedAt: now(),
-            } as any);
-            result.skipped++;
-            continue;
-          }
-
-          // ignora ruído de sistema (confirmações de encaminhamento, etc.)
-          if (isSystemEmail(fromEmail, subject)) {
-            await createInboundEmail({
-              messageId, alias, fromName, fromEmail, subject,
-              status: "skipped", processedAt: now(),
-            } as any);
-            result.skipped++;
-            continue;
-          }
-
-          const htmlText = typeof mail.html === "string" ? mail.html.replace(/<[^>]+>/g, " ") : "";
-          const bodyText = (mail.text || htmlText || "").slice(0, 20000);
-          const parsed = parseInboundBody(bodyText);
-          // Guarda os ficheiros no storage (antes só se registavam os nomes e o
-          // conteúdo era deitado fora — impossível abrir um CV no backoffice).
-          // Best-effort por anexo: falha de upload não perde o email.
-          const attachments: Array<{ filename?: string; contentType?: string; size?: number; url?: string }> = [];
-          for (const a of mail.attachments || []) {
-            const meta: { filename?: string; contentType?: string; size?: number; url?: string } = {
-              filename: a.filename, contentType: a.contentType, size: a.size,
-            };
-            if (a.content && a.size && a.size <= 15 * 1024 * 1024) {
-              try {
-                const { storagePut } = await import("../storage");
-                const safe = (a.filename || "anexo").replace(/[^\w.\-]+/g, "_").slice(0, 120);
-                const { url } = await storagePut(`inbound/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safe}`, a.content, a.contentType || "application/octet-stream");
-                meta.url = url;
-              } catch (err: any) {
-                console.warn("[EmailInbound] upload de anexo falhou:", String(err?.message ?? err).slice(0, 160));
-              }
-            }
-            attachments.push(meta);
-          }
-
-          const routed = await routeToModule(alias, parsed, {
-            subject, bodyText, fromName, fromEmail, messageId, gmThreadId, refs,
-          });
-
-          await createInboundEmail({
-            messageId, alias, fromName, fromEmail,
-            clientName: parsed.clientName, clientEmail: parsed.clientEmail,
-            clientPhone: parsed.clientPhone, vehiclePlate: parsed.vehiclePlate,
-            bookingRef: parsed.bookingRef,
-            subject, bodyText,
-            attachmentsJson: attachments.length ? JSON.stringify(attachments) : null,
-            targetModule: routed.targetModule, targetId: routed.targetId ?? null,
-            taskId: routed.taskId ?? null,
-            gmThreadId, headerRefs,
-            status: "processed",
-            receivedAt: mail.date ? new Date(mail.date).toISOString().slice(0, 19).replace("T", " ") : null,
-            processedAt: now(),
-          } as any);
-
-          result.created++;
-          result.byAlias[alias] = (result.byAlias[alias] || 0) + 1;
-        } catch (e: any) {
-          // O DrizzleQueryError só traz a SQL na message; a razão real do MySQL
-          // (ex.: "Data too long", "Incorrect string value") vive em e.cause.
-          const cause = (e as any)?.cause?.message ? ` — ${(e as any).cause.message}` : "";
-          result.errors.push(`${alias} uid ${uid}: ${String(e?.message ?? e).slice(0, 160)}${String(cause).slice(0, 200)}`);
-        }
-      }
+    const systemUser = await getSystemUserId().catch(() => undefined);
+    for (const a of ctx.attachments) {
+      if (!a.url || !String(a.contentType || "").toLowerCase().startsWith("image/")) continue;
+      if (a.url.length > 500) continue;
+      await addComplaintPhoto({
+        complaintId,
+        url: a.url,
+        fileKey: (a.key || a.url).slice(0, 500),
+        label: `Email: ${a.filename || "imagem"}`.slice(0, 100),
+        uploadedById: systemUser ?? null,
+      } as any);
     }
-  } finally {
-    lock.release();
-    await client.logout().catch(() => {});
+  } catch (err) {
+    console.warn("[EmailInbound] cópia de anexos para a reclamação falhou:", err);
   }
-  return result;
+  if (!ctx.isNew) return;
+  try {
+    const { notifyComplaintCreated } = await import("../complaintsExtended");
+    await notifyComplaintCreated(complaintId);
+  } catch (err) {
+    console.warn("[EmailInbound] notificação de reclamação falhou:", err);
+  }
+  try {
+    const c = await getComplaintById(complaintId);
+    // In-Reply-To só quando o email veio DIRETAMENTE do cliente (num
+    // reencaminhamento o Message-ID é do backoffice, não do cliente).
+    const direct = !!c?.clientEmail && !!ctx.fromEmail && c.clientEmail.toLowerCase() === ctx.fromEmail.toLowerCase();
+    const { sendComplaintAutoAck } = await import("../complaintsExtended");
+    const r = await sendComplaintAutoAck(complaintId, {
+      inReplyTo: direct && !ctx.messageId.startsWith("uid:") ? ctx.messageId : null,
+    });
+    if (!r.sent && r.reason && r.reason !== "sem email externo do cliente") {
+      console.log(`[EmailInbound] aviso de receção #${complaintId} não enviado: ${r.reason}`);
+    }
+  } catch (err) {
+    console.warn("[EmailInbound] aviso de receção falhou:", err);
+  }
+}
+
+/** Anexo cru (bytes da API do Gmail, lidos só depois de reservar o Message-ID). */
+export type RawInboundAttachment = { filename?: string; contentType?: string; size?: number; content?: Buffer | null; related?: boolean };
+
+/** Um email já lido pela API do Gmail, pronto para o pipeline dos módulos. */
+export interface InboundEmailInput {
+  alias: InboundAlias;
+  /** Message-ID (dedup em inbound_emails). */
+  messageId: string;
+  /** X-GM-THRID em decimal (o Gmail API dá-o em hex — converter antes). */
+  gmThreadId: string | null;
+  refs: string[];
+  fromName?: string;
+  fromEmail?: string;
+  subject: string;
+  receivedAt: string | null;
+  text?: string | null;
+  html?: string | null;
+  /** Só chamado DEPOIS de reservar o Message-ID (duplicados não descarregam nada). */
+  loadAttachments: () => Promise<RawInboundAttachment[]>;
+}
+
+export type InboundOutcome =
+  | { status: "duplicate" }
+  | { status: "skipped"; claimId: number }
+  | { status: "processed"; claimId: number; routed: { targetModule: string; targetId?: number; taskId?: number; isNew?: boolean } };
+
+/**
+ * Processa UM email recebido num alias temático: reserva o Message-ID
+ * (índice UNIQUE → nunca processado duas vezes, mesmo com push + agendador),
+ * ignora ruído de sistema, guarda anexos, cria/atualiza o registo no módulo e
+ * faz o pós-processamento das reclamações. Lança se falhar a meio (a reserva
+ * é libertada se ainda nada foi criado).
+ */
+export async function processInboundEmail(input: InboundEmailInput): Promise<InboundOutcome> {
+  const { alias, messageId, gmThreadId, refs, fromName, fromEmail, subject, receivedAt } = input;
+  const headerRefs = refs.length ? refs.join(" ").slice(0, 4000) : null;
+  // Dedup ATÓMICO: reserva o Message-ID (índice UNIQUE) ANTES de criar
+  // o registo de destino. Duas corridas em paralelo (agendador + push do
+  // Gmail, ou botão) nunca criam a mesma reclamação duas vezes — a 2ª leva duplicado.
+  const claimId = await claimInboundEmail({
+    messageId, alias, fromName, fromEmail, subject, gmThreadId, headerRefs, receivedAt,
+  } as any);
+  if (!claimId) return { status: "duplicate" };
+
+  let routedOk = false;
+  try {
+    // Relatório diário de campanhas por email: DESLIGADO (Jorge, 16 set
+    // 2026). A fonte única do gasto é a Google Ads API; o email fica só
+    // registado, sem tocar em campaign_daily_stats.
+    if (alias === "campanhas") {
+      await updateInboundEmail(claimId, {
+        bodyText: "Ingestão por email desligada — o gasto vem da Google Ads API.",
+        targetModule: "campaigns",
+        status: "skipped",
+        processedAt: now(),
+      } as any);
+      return { status: "skipped", claimId };
+    }
+
+    // ignora ruído de sistema (confirmações de encaminhamento, etc.)
+    if (isSystemEmail(fromEmail, subject)) {
+      await updateInboundEmail(claimId, { status: "skipped", processedAt: now() } as any);
+      return { status: "skipped", claimId };
+    }
+
+    // HTML → texto com html-to-text (mantém quebras de linha para o
+    // parsing "Etiqueta: valor", descodifica entidades, sem <style>).
+    const htmlText = typeof input.html === "string" && input.html ? htmlToPlainText(input.html) : "";
+    const bodyText = (input.text || htmlText || "").slice(0, 20000);
+    const parsed = parseInboundBody(bodyText);
+    // Guarda os ficheiros no storage (antes só se registavam os nomes e o
+    // conteúdo era deitado fora — impossível abrir um CV no backoffice).
+    // Best-effort por anexo: falha de upload não perde o email.
+    const attachments: InboundAttachment[] = [];
+    let raw: RawInboundAttachment[] = [];
+    try { raw = await input.loadAttachments(); } catch (err: any) {
+      console.warn("[EmailInbound] leitura de anexos falhou:", String(err?.message ?? err).slice(0, 160));
+    }
+    for (const a of raw) {
+      // imagens inline de assinatura/logótipo (cid:) não são anexos do cliente
+      if (a.related && String(a.contentType || "").startsWith("image/") && (a.size ?? 0) < 20 * 1024) continue;
+      const meta: InboundAttachment = { filename: a.filename, contentType: a.contentType, size: a.size };
+      if (a.content && a.size && a.size <= 15 * 1024 * 1024) {
+        try {
+          const { storagePut } = await import("../storage");
+          const safe = (a.filename || "anexo").replace(/[^\w.\-]+/g, "_").slice(0, 120);
+          const { url, key } = await storagePut(`inbound/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safe}`, a.content, a.contentType || "application/octet-stream");
+          meta.url = url;
+          meta.key = key;
+        } catch (err: any) {
+          console.warn("[EmailInbound] upload de anexo falhou:", String(err?.message ?? err).slice(0, 160));
+        }
+      }
+      attachments.push(meta);
+    }
+    const attachmentsJson = attachments.length ? JSON.stringify(attachments) : null;
+
+    const routed = await routeToModule(alias, parsed, {
+      subject, bodyText, fromName, fromEmail, messageId, gmThreadId, refs,
+    });
+    routedOk = true;
+
+    await updateInboundEmail(claimId, {
+      clientName: parsed.clientName, clientEmail: parsed.clientEmail,
+      clientPhone: parsed.clientPhone, vehiclePlate: parsed.vehiclePlate,
+      bookingRef: parsed.bookingRef,
+      bodyText,
+      attachmentsJson,
+      targetModule: routed.targetModule, targetId: routed.targetId ?? null,
+      taskId: routed.taskId ?? null,
+      status: "processed",
+      processedAt: now(),
+    } as any);
+
+    if (routed.targetModule === "complaint" && routed.targetId) {
+      await afterComplaintEmail(routed.targetId, {
+        isNew: !!routed.isNew,
+        attachments,
+        messageId,
+        fromEmail,
+      });
+    }
+    return { status: "processed", claimId, routed };
+  } catch (e: any) {
+    if (!routedOk) {
+      // Falhou ANTES de criar o registo: liberta a reserva para a
+      // próxima corrida tentar de novo.
+      await deleteInboundEmail(claimId).catch(() => {});
+    } else {
+      // O registo já existe — nunca libertar (recriava-o); fica em erro.
+      await updateInboundEmail(claimId, { status: "error", errorMsg: String(e?.message ?? e).slice(0, 500), processedAt: now() } as any).catch(() => {});
+    }
+    throw e;
+  }
 }
 
 function now(): string {
   return new Date().toISOString().slice(0, 19).replace("T", " ");
 }
 
-/**
- * Scheduler in-process para o servidor Railway: corre o sync de emails a cada
- * 15 minutos. Substitui o cron do GitHub Actions (workflow removido a 14/jul,
- * que deixou o email-inbound só com botões manuais). Self-skip quando o IMAP
- * não está configurado — seguro arrancar em qualquer ambiente.
- */
-export function startEmailInboundScheduler() {
-  const INTERVAL_MS = 15 * 60 * 1000;
-  const run = async () => {
-    try {
-      const r = await runEmailInboundSync();
-      if (r.errors.length && r.errors[0].includes("IMAP não configurado")) {
-        console.log("[EmailInbound] Skipped — IMAP não configurado");
-        return;
-      }
-      console.log(`[EmailInbound] scanned=${r.scanned} created=${r.created} skipped=${r.skipped} errors=${r.errors.length}`);
-    } catch (err: any) {
-      console.error("[EmailInbound] erro:", err?.message ?? err);
-    }
-  };
-  setTimeout(run, 30_000); // arranque suave, depois de o servidor estabilizar
-  setInterval(run, INTERVAL_MS);
-  console.log("[EmailInbound] Scheduler started — runs every 15 minutes");
-}

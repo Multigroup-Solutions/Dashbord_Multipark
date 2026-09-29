@@ -85,7 +85,7 @@ const tools = [
   },
   {
     name: "get_booking",
-    description: "Detalhe de uma reserva pelo externalId (local + ao vivo da API Multipark, tentando todos os parques).",
+    description: "Detalhe de uma reserva pelo externalId (cópia local + ao vivo da BD Multipark).",
     inputSchema: { type: "object", properties: { externalId: { type: "string" } }, required: ["externalId"] },
     run: (a) => api("GET", `/bookings/${encodeURIComponent(a.externalId)}`),
   },
@@ -154,34 +154,19 @@ const tools = [
   },
   {
     name: "list_campaigns",
-    description: "Lista as campanhas de marketing (internas + ad) com id, tipo, projeto e orçamento diário.",
+    description: "Lista as campanhas de marketing (internas, ad antigas e 'api' = Google Ads/Meta) com id, tipo, projeto e orçamento diário.",
     inputSchema: { type: "object", properties: {} },
     run: () => api("GET", "/campaigns"),
   },
   {
     name: "get_campaign_daily",
-    description: "Histórico diário de uma campanha (gasto, impressões, cliques, CTR, conversões, valor). campaignType: internal|ad.",
+    description: "Histórico diário de uma campanha das APIs Google Ads/Meta (gasto, moeda, impressões, cliques, conversões, valor). campaignType: api (os tipos antigos internal|ad devolvem 410).",
     inputSchema: {
       type: "object",
       properties: { campaignType: { type: "string" }, campaignId: { type: "number" } },
       required: ["campaignType", "campaignId"],
     },
     run: (a) => api("GET", `/campaigns/${encodeURIComponent(a.campaignType)}/${a.campaignId}/daily`),
-  },
-  {
-    name: "update_campaign_daily",
-    description: "Atualiza as métricas de UM dia de uma campanha (upsert): amount (gasto €), impressions, clicks, ctr (auto se faltar), conversions, conversionValue. Campos omitidos preservam o registado. Identifica por campaignType+campaignId ou por name. costDate YYYY-MM-DD obrigatório.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        campaignType: { type: "string" }, campaignId: { type: "number" }, name: { type: "string" },
-        costDate: { type: "string" }, amount: { type: "number" }, impressions: { type: "number" },
-        clicks: { type: "number" }, ctr: { type: "number" }, conversions: { type: "number" },
-        conversionValue: { type: "number" }, notes: { type: "string" },
-      },
-      required: ["costDate"],
-    },
-    run: (a) => api("POST", "/campaigns/daily", { body: a }),
   },
   {
     name: "list_reviews",
@@ -210,30 +195,6 @@ const tools = [
     description: "Lista os colaboradores (RH).",
     inputSchema: { type: "object", properties: {} },
     run: () => api("GET", "/employees"),
-  },
-  {
-    name: "sync_recent",
-    description: "Dispara a sincronização recente de reservas (report + enrich + history). Opcional: windowMinutes (default 30).",
-    inputSchema: { type: "object", properties: { windowMinutes: { type: "number" } } },
-    run: (a) => api("POST", "/sync/recent", { body: a }),
-  },
-  {
-    name: "sync_future",
-    description: "Sincroniza a janela futura de reservas. Opcional: weeksAhead (default 4).",
-    inputSchema: { type: "object", properties: { weeksAhead: { type: "number" } } },
-    run: (a) => api("POST", "/sync/future", { body: a }),
-  },
-  {
-    name: "sync_day",
-    description: "Sincroniza um dia específico (report + enrich + history) — útil para backfill histórico. date obrigatório (YYYY-MM-DD).",
-    inputSchema: { type: "object", properties: { date: { type: "string" } }, required: ["date"] },
-    run: (a) => api("POST", "/sync/day", { body: a }),
-  },
-  {
-    name: "cleanup_duplicates",
-    description: "Apaga reservas duplicadas (destrutivo — requer scope admin).",
-    inputSchema: { type: "object", properties: {} },
-    run: () => api("POST", "/admin/cleanup-duplicates"),
   },
 ];
 

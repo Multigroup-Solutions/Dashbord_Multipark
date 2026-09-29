@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { can } from "@shared/access";
+
+/** Configurar contas / desligar: gestão de Integrações (admin+). Ver e recolher: supervisor+. */
+function useIntegrationPerms() {
+  const { user } = useAuth();
+  return { canManage: can(user, "integracoes", "manage"), canMarketing: can(user, "marketing", "manage") };
+}
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -11,14 +19,15 @@ import { Plug, PlugZap, RefreshCw, Loader2, AlertTriangle, CheckCircle2, Unplug,
 
 const STATUS_LABEL: Record<string, { label: string; cls: string }> = {
   connected: { label: "Ligado", cls: "bg-emerald-100 text-emerald-800 border-emerald-200" },
-  disconnected: { label: "Desligado", cls: "bg-muted text-muted-foreground" },
+  disconnected: { label: "Desligado", cls: "bg-muted text-secondary-foreground" },
   reauth_required: { label: "Reautorização necessária", cls: "bg-amber-100 text-amber-800 border-amber-200" },
   error: { label: "Erro", cls: "bg-red-100 text-red-800 border-red-200" },
 };
 const KIND_LABEL: Record<string, string> = { initial: "Inicial (37 meses)", daily: "Diária (última semana)", monthly: "Mensal (mês anterior)", manual: "Manual (tudo)", hourly: "Horária (antiga)", nightly: "Noturna (antiga)" };
-const RUN_STATUS: Record<string, string> = { running: "a correr", partial: "parcial (continua)", done: "concluída", failed: "falhou", skipped: "saltada" };
+const RUN_STATUS: Record<string, string> = { running: "a correr", partial: "parcial (contas falhadas, ou a continuar)", done: "concluída", failed: "falhou", skipped: "saltada" };
 
 export default function IntegrationsGoogleAdsPage() {
+  const { canManage, canMarketing } = useIntegrationPerms();
   const utils = trpc.useUtils();
   const status = trpc.integrations.googleAds.status.useQuery(undefined, { refetchInterval: 30_000 });
   const accounts = trpc.integrations.googleAds.accounts.list.useQuery();
@@ -53,6 +62,7 @@ export default function IntegrationsGoogleAdsPage() {
     if (p.get("connected") === "1") {
       if (p.get("accountsError")) toast.warning("Ligado à Google, mas a listagem de contas falhou", { description: p.get("accountsError") ?? "", duration: 10000 });
       else toast.success(`Google Ads ligado${p.get("accounts") ? ` · ${p.get("accounts")} conta(s) encontrada(s)` : ""}`);
+      if (p.get("identityChanged") === "1") toast.warning("Ligado com outra conta Google: as contas selecionadas foram limpas — escolhe de novo as contas a consultar.", { duration: 12000 });
       window.history.replaceState({}, "", window.location.pathname);
       invalidate();
     }
@@ -70,7 +80,7 @@ export default function IntegrationsGoogleAdsPage() {
     <div className="space-y-6">
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-xl font-semibold flex items-center gap-2"><Plug className="h-5 w-5" /> Integrações · Google Ads</h1>
+          <h1 className="text-xl font-semibold flex items-center gap-2"><Plug className="h-5 w-5" /> <a href="/integracoes" className="hover:underline">Integrações</a> · Google Ads</h1>
           <p className="text-sm text-muted-foreground max-w-2xl">Ligação de leitura à Google Ads API. Depois de ligada, o servidor recolhe custo, impressões, cliques e conversões por campanha uma vez por dia (última semana) e no dia 2 de cada mês (mês anterior fechado), sem CSV, emails ou browser aberto. Nada aqui altera campanhas ou orçamentos.</p>
         </div>
         <Badge variant="outline" className={`text-sm px-3 py-1 ${st.cls}`}>{status.isLoading ? "…" : st.label}</Badge>
@@ -108,6 +118,8 @@ export default function IntegrationsGoogleAdsPage() {
             <dd className="font-mono text-xs break-all">{typeof window !== "undefined" ? `${window.location.origin}/api/integrations/google-ads/oauth/callback` : s?.config.redirectUri}</dd>
             <dt className="text-muted-foreground">Conta gestora (login-customer-id)</dt>
             <dd className="font-mono text-xs">{s?.loginCustomerId ?? s?.config.loginCustomerId ?? "— (acesso direto)"}</dd>
+            <dt className="text-muted-foreground">Conta Google</dt>
+            <dd className="text-xs">{s?.accountEmail ?? "—"}</dd>
             <dt className="text-muted-foreground">Ligado em</dt>
             <dd>{s?.connectedAt ? fmtPTDateTime(s.connectedAt) : "—"}</dd>
             <dt className="text-muted-foreground">Última recolha concluída</dt>
@@ -124,7 +136,7 @@ export default function IntegrationsGoogleAdsPage() {
               </a>
             </Button>
             {s?.status !== "disconnected" && (
-              <Button variant="outline" className="gap-2" onClick={() => { if (confirm("Desligar o Google Ads? Os dados já recolhidos ficam.")) disconnect.mutate(); }}>
+              <Button variant="outline" className="gap-2" disabled={!canManage} onClick={() => { if (confirm("Desligar o Google Ads? Os dados já recolhidos ficam.")) disconnect.mutate(); }}>
                 <Unplug className="h-4 w-4" /> Desligar
               </Button>
             )}
@@ -147,17 +159,17 @@ export default function IntegrationsGoogleAdsPage() {
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead><tr className="border-b text-left text-xs text-muted-foreground"><th className="p-2">Consultar</th><th className="p-2">Conta</th><th className="p-2">ID</th><th className="p-2">Moeda · Fuso</th><th className="p-2">Marca / cidade</th><th className="p-2">Última recolha</th></tr></thead>
+                <thead><tr className="border-b text-left text-xs text-muted-foreground whitespace-nowrap"><th className="p-2">Consultar</th><th className="p-2">Conta</th><th className="p-2">ID</th><th className="p-2">Moeda · Fuso</th><th className="p-2">Marca / cidade</th><th className="p-2">Última recolha</th></tr></thead>
                 <tbody>
                   {(accounts.data ?? []).map((a) => (
                     <tr key={a.id} className={`border-b ${a.isManager ? "opacity-70" : ""}`}>
-                      <td className="p-2">{a.isManager ? <span className="text-xs text-muted-foreground">gestora</span> : <Switch checked={!!a.selected} onCheckedChange={(v) => updateAccount.mutate({ id: a.id, selected: v })} aria-label={`Consultar ${a.name ?? a.customerId}`} />}</td>
-                      <td className="p-2 font-medium">{a.name ?? "—"}{a.lastError && <div className="text-[11px] text-red-700">{a.lastError}</div>}</td>
-                      <td className="p-2 font-mono text-xs">{a.customerId}</td>
-                      <td className="p-2 text-xs">{a.currency ?? "—"} · {a.timezone ?? "—"}</td>
+                      <td className="p-2">{a.isManager ? <span className="text-xs text-muted-foreground">gestora</span> : <Switch disabled={!canManage} checked={!!a.selected} onCheckedChange={(v) => updateAccount.mutate({ id: a.id, selected: v })} aria-label={`Consultar ${a.name ?? a.customerId}`} />}</td>
+                      <td className="p-2 font-medium min-w-[11rem]">{a.name ?? "—"}{a.lastError && <div className="text-[11px] text-red-700">{a.lastError}</div>}</td>
+                      <td className="p-2 font-mono text-xs whitespace-nowrap">{a.customerId}</td>
+                      <td className="p-2 text-xs whitespace-nowrap">{a.currency ?? "—"} · {a.timezone ?? "—"}</td>
                       <td className="p-2">
                         {a.isManager ? "—" : (
-                          <Select value={a.projectId ? String(a.projectId) : "none"} onValueChange={(v) => updateAccount.mutate({ id: a.id, projectId: v === "none" ? null : Number(v) })}>
+                          <Select disabled={!canManage} value={a.projectId ? String(a.projectId) : "none"} onValueChange={(v) => updateAccount.mutate({ id: a.id, projectId: v === "none" ? null : Number(v) })}>
                             <SelectTrigger className="h-8 w-52"><SelectValue /></SelectTrigger>
                             <SelectContent>
                               <SelectItem value="none">Sem associação</SelectItem>
@@ -180,14 +192,14 @@ export default function IntegrationsGoogleAdsPage() {
       <Card>
         <CardHeader><CardTitle className="text-base flex items-center gap-2"><PlayCircle className="h-4 w-4" /> Recolha</CardTitle></CardHeader>
         <CardContent className="space-y-3">
-          <p className="text-xs text-muted-foreground">Automática pelo cron: diária às 05:45 (última semana, hoje e os 2 dias anteriores provisórios) e mensal no dia 2 (o mês anterior inteiro, os números finais da fatura). A dashboard não volta a pedir o resto. Aqui só se dispara à mão.</p>
+          <p className="text-xs text-muted-foreground">Automática pelo agendador: diária a partir das 05:45 de Lisboa (última semana, hoje e os 2 dias anteriores provisórios) e mensal no dia 2 a partir das 05:45 (o mês anterior inteiro, já fechado — é o custo reportado pela API, que não desconta IVA nem os créditos por tráfego inválido da fatura; a fatura entra pelas Despesas). A dashboard não volta a pedir o resto. Aqui só se dispara à mão.</p>
           <div className="flex flex-wrap gap-2">
             {(["daily", "monthly", "initial"] as const).map((k) => (
               <Button key={k} variant="outline" size="sm" disabled={s?.status !== "connected" || runSync.isPending} onClick={() => runSync.mutate({ kind: k })} className="gap-1.5">
                 {runSync.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PlayCircle className="h-3.5 w-3.5" />} {KIND_LABEL[k]}
               </Button>
             ))}
-            <Button variant="ghost" size="sm" disabled={backfill.isPending} onClick={() => backfill.mutate({ limit: 2000 })} className="gap-1.5" title="Lê o originUrl das reservas já sincronizadas e marca as que vieram de anúncios Google (gclid/utm)">
+            <Button variant="ghost" size="sm" disabled={backfill.isPending || !canMarketing} onClick={() => backfill.mutate({ limit: 2000 })} className="gap-1.5" title="Lê o originUrl das reservas já sincronizadas e marca as que vieram de anúncios Google (gclid/utm)">
               {backfill.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />} Atribuir reservas (originUrl)
             </Button>
           </div>
@@ -212,6 +224,107 @@ export default function IntegrationsGoogleAdsPage() {
           </div>
         </CardContent>
       </Card>
+
+      <MetaAdsCard projectOptions={projectOptions} />
     </div>
+  );
+}
+
+/**
+ * Meta Ads (Facebook/Instagram) — dormente até META_ACCESS_TOKEN e
+ * META_AD_ACCOUNT_IDS estarem no servidor. Mostra se está configurada, as
+ * contas (marca/cidade da conta), a última recolha e os erros. A marca/cidade
+ * de cada CAMPANHA escolhe-se no Marketing → Anúncios, como no Google.
+ */
+function MetaAdsCard({ projectOptions }: { projectOptions: any[] }) {
+  const { canManage } = useIntegrationPerms();
+  const utils = trpc.useUtils();
+  const status = trpc.integrations.meta.status.useQuery(undefined, { refetchInterval: 60_000 });
+  const runs = trpc.integrations.meta.sync.runs.useQuery({ limit: 5 });
+  const invalidate = () => { utils.integrations.meta.invalidate(); };
+  const update = trpc.integrations.meta.accounts.update.useMutation({ onSuccess: invalidate, onError: (e) => toast.error(e.message) });
+  const run = trpc.integrations.meta.sync.run.useMutation({
+    onSuccess: (r) => {
+      invalidate();
+      if (r.status === "skipped") toast.warning("Recolha Meta não correu", { description: r.reason });
+      else if (!r.done) toast.info(`Recolha Meta parcial: ${r.rowsWritten} linhas. Carrega outra vez para continuar.`);
+      else if (!r.ok) toast.error("Recolha Meta com falhas", { description: r.reason });
+      else toast.success(`Recolha Meta concluída: ${r.rowsWritten} linhas`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const s = status.data;
+  const connStatus = s?.connection?.status ?? null;
+  return (
+    <Card id="meta">
+      <CardHeader>
+        <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+          <Plug className="h-4 w-4" /> Meta Ads (Facebook / Instagram)
+          <Badge variant="outline" className={`ml-auto text-xs ${!s ? "" : !s.configured ? "bg-muted text-secondary-foreground" : connStatus === "reauth_required" || connStatus === "error" ? "bg-red-100 text-red-800 border-red-200" : "bg-emerald-100 text-emerald-800 border-emerald-200"}`}>
+            {!s ? "…" : !s.configured ? "Não configurada" : connStatus === "reauth_required" ? "Token inválido" : connStatus === "error" ? "Erro" : "Configurada"}
+          </Badge>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        {s && !s.configured && (
+          <div className="rounded-md border bg-muted/40 p-3 text-xs space-y-1">
+            <p>Integração dormente. Para ligar, definir no servidor (Vercel → Environment Variables):</p>
+            <ul className="list-disc pl-5">
+              <li><code>META_ACCESS_TOKEN</code> — token de longa duração de um utilizador de sistema (Business Manager) com <code>ads_read</code>;</li>
+              <li><code>META_AD_ACCOUNT_IDS</code> — IDs das contas de anúncios, separados por vírgula (ex.: <code>act_123,act_456</code>);</li>
+              <li><code>META_API_VERSION</code> — opcional (por omissão {s.apiVersion}).</li>
+            </ul>
+            <p>Em falta: {s.missing.join(", ")}.</p>
+          </div>
+        )}
+        {s?.configured && (
+          <>
+            <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
+              <span>API {s.apiVersion}</span>
+              <span>Última recolha com sucesso: {s.lastSuccessfulSyncAt ? fmtPTDateTime(s.lastSuccessfulSyncAt) : "nunca"}{s.stale ? " (parada há mais de 26 h)" : ""}</span>
+              {s.connection?.lastError && <span className="text-red-700 flex items-center gap-1"><AlertTriangle className="h-3.5 w-3.5" /> {s.connection.lastError}</span>}
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead><tr className="border-b text-left text-xs text-muted-foreground"><th className="p-2">Conta</th><th className="p-2">ID</th><th className="p-2">Recolher</th><th className="p-2">Marca / cidade da conta</th><th className="p-2">Última recolha</th><th className="p-2">Erro</th></tr></thead>
+                <tbody>
+                  {(s.accounts ?? []).length === 0 && <tr><td colSpan={6} className="p-3 text-center text-muted-foreground text-xs">As contas aparecem depois da primeira recolha.</td></tr>}
+                  {(s.accounts ?? []).map((a: any) => (
+                    <tr key={a.id} className="border-b align-top">
+                      <td className="p-2">{a.name ?? `Meta ${a.customerId}`}{!s.configuredAccountIds.includes(a.customerId) && <Badge variant="outline" className="ml-1.5 text-[11px]">fora de META_AD_ACCOUNT_IDS</Badge>}</td>
+                      <td className="p-2 text-xs text-muted-foreground">act_{a.customerId}</td>
+                      <td className="p-2"><Switch disabled={!canManage} checked={!!a.selected} onCheckedChange={(v) => update.mutate({ id: a.id, selected: v })} aria-label={`Recolher a conta ${a.name ?? a.customerId}`} /></td>
+                      <td className="p-2">
+                        <Select disabled={!canManage} value={a.projectId != null ? String(a.projectId) : "none"} onValueChange={(v) => update.mutate({ id: a.id, projectId: v === "none" ? null : Number(v) })}>
+                          <SelectTrigger className="h-8 w-56 text-xs"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">— sem marca —</SelectItem>
+                            {projectOptions.map((p: any) => <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </td>
+                      <td className="p-2 text-xs">{a.lastSyncAt ? fmtPTDateTime(a.lastSyncAt) : "—"}</td>
+                      <td className="p-2 text-xs text-red-700 max-w-xs">{a.lastError ?? ""}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {(["daily", "monthly", "initial"] as const).map((k) => (
+                <Button key={k} variant="outline" size="sm" disabled={run.isPending} onClick={() => run.mutate({ kind: k })} className="gap-1.5">
+                  {run.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PlayCircle className="h-3.5 w-3.5" />} {KIND_LABEL[k]}
+                </Button>
+              ))}
+            </div>
+            <ul className="text-xs space-y-0.5">
+              {(runs.data ?? []).map((r: any) => (
+                <li key={r.id}>{fmtPTDateTime(r.startedAt)} · {KIND_LABEL[r.kind] ?? r.kind} · {r.rangeFrom} → {r.rangeTo} · {r.accountsDone}/{r.accountsTotal} contas · {r.rowsWritten} linhas · <b>{RUN_STATUS[r.status] ?? r.status}</b>{r.error ? <span className="text-red-700"> — {r.error}</span> : null}</li>
+              ))}
+            </ul>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }

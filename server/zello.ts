@@ -1,5 +1,7 @@
 import crypto from "crypto";
+import { MAX_PLAUSIBLE_KMH, MIN_IMPLICIT_GAP_S, zelloAccuracyOk, zelloBattery, zelloSpeedKmh, zelloTimestamp } from "./zelloGps";
 import { ENV } from "./_core/env";
+import { fetchWithTimeout } from "./_core/fetchWithTimeout";
 
 const NETWORK = process.env.ZELLO_NETWORK ?? "airpark";
 const BASE_URL = `https://${NETWORK}.zellowork.com`;
@@ -12,7 +14,7 @@ let sidExpiresAt = 0;
 
 /** Get a fresh token + sid from Zello */
 async function getToken(): Promise<{ token: string; sid: string }> {
-  const res = await fetch(`${BASE_URL}/user/gettoken`);
+  const res = await fetchWithTimeout(`${BASE_URL}/user/gettoken`);
   const data = await res.json();
   if (data.status !== "OK") throw new Error(`Zello gettoken failed: ${data.status}`);
   return { token: data.token, sid: data.sid };
@@ -36,7 +38,7 @@ async function authenticate(): Promise<string> {
   const authHash = crypto.createHash("md5").update(combined).digest("hex");
 
   const params = new URLSearchParams({ username: USERNAME, password: authHash });
-  const res = await fetch(`${BASE_URL}/user/login?sid=${sid}`, {
+  const res = await fetchWithTimeout(`${BASE_URL}/user/login?sid=${sid}`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: params.toString(),
@@ -49,6 +51,16 @@ async function authenticate(): Promise<string> {
   return sid;
 }
 
+/**
+ * Teste barato (Integrações → Testar): gettoken + login, sem ler dados.
+ * Força uma sessão nova para testar mesmo as credenciais atuais.
+ */
+export async function testZelloLogin(): Promise<void> {
+  currentSid = null;
+  sidExpiresAt = 0;
+  await authenticate();
+}
+
 /** Helper to make authenticated GET requests */
 async function zelloGet(path: string, params?: Record<string, string>): Promise<any> {
   const sid = await authenticate();
@@ -59,7 +71,7 @@ async function zelloGet(path: string, params?: Record<string, string>): Promise<
       url.searchParams.set(k, v);
     }
   }
-  const res = await fetch(url.toString());
+  const res = await fetchWithTimeout(url.toString());
   const data = await res.json();
 
   // If session expired, retry once
@@ -68,7 +80,7 @@ async function zelloGet(path: string, params?: Record<string, string>): Promise<
     sidExpiresAt = 0;
     const newSid = await authenticate();
     url.searchParams.set("sid", newSid);
-    const retryRes = await fetch(url.toString());
+    const retryRes = await fetchWithTimeout(url.toString());
     return retryRes.json();
   }
 
@@ -112,7 +124,7 @@ export interface ZelloChannel {
   isDispatch: boolean;
 }
 
-function isZelloConfigured(): boolean {
+export function isZelloConfigured(): boolean {
   return !!(ENV.zelloApiKey && USERNAME && PASSWORD);
 }
 
@@ -131,6 +143,28 @@ export async function getZelloUsers(): Promise<ZelloUser[]> {
     channels: u.channels || [],
     geotrackingOff: !!u.geotracking_off,
   }));
+}
+
+/**
+ * Contas Zello excluídas do GPS (Definições → "Contas Zello excluídas do GPS").
+ * Nunca lança: sem definição (ou erro) → ninguém excluído.
+ */
+export async function loadZelloGpsExclusions(): Promise<Set<string>> {
+  try {
+    const { getSetting } = await import("./appSettings");
+    const { ZELLO_GPS_EXCLUDED_KEY, zelloExclusionSet } = await import("../shared/appSettings");
+    return zelloExclusionSet(await getSetting(ZELLO_GPS_EXCLUDED_KEY));
+  } catch (err) {
+    console.warn("[zello] ler as contas excluídas do GPS falhou (ninguém excluído):", err);
+    return new Set();
+  }
+}
+
+/** Utilizadores Zello que entram no GPS (fora só os da lista explícita). */
+export async function getZelloGpsUsers(): Promise<ZelloUser[]> {
+  const [users, excluded] = await Promise.all([getZelloUsers(), loadZelloGpsExclusions()]);
+  const { isZelloGpsExcluded } = await import("../shared/appSettings");
+  return users.filter((u) => !isZelloGpsExcluded(u.name, excluded));
 }
 
 /** Get all channels */
@@ -153,19 +187,21 @@ export async function getZelloLocations(): Promise<ZelloLocation[]> {
   if (data.status !== "OK") throw new Error(`Zello location/get failed: ${data.status}`);
   return (data.locations || []).map((l: any) => ({
     username: l.username || l.name || "",
-    displayName: l.display_name || l.username || "",
+    displayName: l.displayName || l.display_name || l.username || "",
     latitude: parseFloat(l.latitude) || 0,
     longitude: parseFloat(l.longitude) || 0,
-    speed: (parseFloat(l.speed) || 0) * 3.6, // m/s to km/h
+    // A API já devolve km/h (antes multiplicava-se por 3,6 — velocidades malucas)
+    speed: zelloSpeedKmh(l),
     heading: parseFloat(l.heading) || 0,
     altitude: parseFloat(l.altitude) || 0,
-    batteryLevel: parseInt(l.battery_level, 10) || 0,
-    chargingStatus: parseInt(l.charging_status, 10) || 0,
-    signalStrength: parseInt(l.signal_strength, 10) || 0,
+    // A API usa camelCase; os nomes com _ ficam só como recurso
+    batteryLevel: zelloBattery(l),
+    chargingStatus: parseInt(l.chargingStatus ?? l.charging_status, 10) || 0,
+    signalStrength: parseInt(l.signalStrength ?? l.signal_strength, 10) || 0,
     accuracy: parseFloat(l.accuracy) || 0,
     status: l.status || "unknown",
-    lastReport: parseInt(l.last_report, 10) || 0,
-    lastReportDelay: parseInt(l.last_report_delay, 10) || 0,
+    lastReport: parseInt(l.lastReport ?? l.last_report, 10) || 0,
+    lastReportDelay: parseInt(l.lastReportDelay ?? l.last_report_delay, 10) || 0,
   }));
 }
 
@@ -226,11 +262,11 @@ export async function summarizeZelloShift(
   const pts: { ts: number; speed: number; lat: number | null; lon: number | null }[] = [];
   for (const f of features) {
     const p = f.properties || {};
-    const ts = parseInt(p.timestamp || p.time || p.lastReport) || 0;
+    const ts = zelloTimestamp(p);
     if (ts <= 0) continue;
-    const speed = (parseFloat(p.speed) || 0) * 3.6; // m/s → km/h
+    const speed = zelloAccuracyOk(p) ? zelloSpeedKmh(p) : 0; // já em km/h
     let lat: number | null = null, lon: number | null = null;
-    if (f.geometry?.type === "Point" && Array.isArray(f.geometry.coordinates)) {
+    if (f.geometry?.type === "Point" && Array.isArray(f.geometry.coordinates) && zelloAccuracyOk(p)) {
       const [gLon, gLat] = f.geometry.coordinates;
       if (Number.isFinite(gLat) && Number.isFinite(gLon) && (gLat !== 0 || gLon !== 0)) {
         lat = gLat; lon = gLon;
@@ -264,7 +300,7 @@ export async function summarizeZelloShift(
         const segKm = haversine(lastFix.lat, lastFix.lon, cur.lat, cur.lon);
         if (gapS > 0 && gapS < 3600 && segKm < 2) {
           const implKmh = (segKm / gapS) * 3600;
-          if (implKmh <= 150) { km += segKm; if (implKmh > 3) implicit.push(implKmh); }
+          if (implKmh <= MAX_PLAUSIBLE_KMH) { km += segKm; if (implKmh > 3 && gapS >= MIN_IMPLICIT_GAP_S) implicit.push(implKmh); }
         }
       }
       lastFix = { ts: cur.ts, lat: cur.lat, lon: cur.lon };

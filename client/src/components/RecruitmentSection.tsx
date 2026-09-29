@@ -69,8 +69,8 @@ export function RecruitmentSection() {
 
   const sync = trpc.admin.runEmailInbound.useMutation({
     onSuccess: (r: any) => {
-      if (!r.configured) toast.error("IMAP não configurado no servidor");
-      else toast.success(`Sincronização: ${r.created} criados, ${r.skipped} ignorados`);
+      if (!r.configured) toast.error("Nenhuma caixa Gmail ligada (Definições → Comunicação)");
+      else toast.success(`Sincronização: ${r.stored ?? 0} email(s) novos, ${r.created} registo(s) criados${r.partial ? " — parcial, carregue outra vez para continuar" : ""}`);
       refetch();
     },
     onError: (e) => toast.error(e.message || "Falha na sincronização"),

@@ -1,14 +1,19 @@
 import { useState, useRef, useEffect, useMemo } from "react";
+import { can, roleRank, seesBeyondOwn } from "@shared/access";
 import { useSearch, useLocation } from 'wouter';
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { RecruitmentSection } from "@/components/RecruitmentSection";
+import { IdentityLinksSection } from "@/components/IdentityLinksSection";
 import { EmployeeAccessAvailability } from '@/components/EmployeeAccessAvailability';
+import { EmployeeAutoMail } from '@/components/EmployeeAutoMail';
 import { trpc } from "@/lib/trpc";
 import { fmtPTDateTime, fmtPTDate } from "@/lib/lisbonTime";
 import { DeactivationDialog } from "@/components/DeactivationDialog";
 import { deactivationReasonLabel } from "@shared/deactivationReasons";
+import { DriveFilesPanel } from "@/components/google/DriveFilesPanel";
+import { ImportFromSheetButton } from "@/components/google/DriveActions";
 import { toCsv } from "@shared/csv";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 
@@ -46,6 +51,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { directoryInfoFor, useDirectoryLookup } from "@/hooks/useDirectoryLookup";
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
@@ -240,7 +246,7 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
     return next;
   });
 
-  const canSubmit = !!form.fullName && !!form.email && !!form.multiparkAgentName && form.projectId != null;
+  const canSubmit = !!form.fullName && !!form.email && form.projectId != null;
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) setConfirmStep(false); onClose(); }}>
@@ -265,17 +271,17 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
                 className="mt-1 font-medium"
               />
               <p className="text-xs text-muted-foreground mt-2">
-                Sugerido a partir do nome completo: <strong>{multiparkNameOf(form.fullName)}</strong>
+                Sugerido a partir do nome completo: <strong>{multiparkNameOf(form.fullName)}</strong>. Se não souberes, deixa vazio — a ligação automática encontra o agente.
               </p>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setConfirmStep(false)}>Voltar</Button>
               <Button
-                disabled={!form.multiparkAgentName.trim() || create.isPending}
+                disabled={create.isPending}
                 onClick={() => create.mutate({
                   fullName: form.fullName,
                   email: form.email,
-                  multiparkAgentName: form.multiparkAgentName,
+                  multiparkAgentName: form.multiparkAgentName.trim() || undefined,
                   phone: form.phone || undefined,
                   personalEmail: form.position !== "extra" ? form.personalEmail || undefined : undefined,
                   personalPhone: form.position !== "extra" ? form.personalPhone || undefined : undefined,
@@ -385,7 +391,7 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
                 {sortProjectsHierarchical(projectsList as any[]).map((p: any) => (
                   <SelectItem key={p.id} value={String(p.id)}>
                     <span style={{ paddingLeft: `${p.__depth * 12}px` }} className="inline-flex items-center gap-2">
-                      <Badge variant="outline" className={`text-[10px] ${LEVEL_COLOR[p.level ?? "project"] ?? ""}`}>
+                      <Badge variant="outline" className={`text-[11px] ${LEVEL_COLOR[p.level ?? "project"] ?? ""}`}>
                         {LEVEL_LABEL[p.level ?? "project"] ?? p.level}
                       </Badge>
                       {p.name}
@@ -483,11 +489,17 @@ function DocumentsTab({ employeeId, access }: { employeeId: number; access: Empl
   const activeDocTypeRef = useRef<DocType>("id_card");
 
   const uploadBatch = trpc.rh.documents.uploadBatch.useMutation({
-    onSuccess: () => {
+    onSuccess: (r) => {
       utils.rh.documents.list.invalidate({ employeeId });
       utils.rh.documents.checklist.invalidate({ employeeId });
       utils.rh.documents.allStatus.invalidate();
-      toast.success("Documentos carregados!");
+      const filled = (r as any)?.autofill?.filled as string[] | undefined;
+      if (filled?.length) {
+        utils.rh.invalidate();
+        toast.success(`Documentos carregados — a IA preencheu: ${[...new Set(filled)].join(", ")}.`);
+      } else {
+        toast.success("Documentos carregados!");
+      }
       setUploading(false);
       setUploadingCategory(null);
     },
@@ -611,8 +623,8 @@ function DocumentsTab({ employeeId, access }: { employeeId: number; access: Empl
                 <div className="flex items-center gap-2">
                   <FolderOpen className={`w-4 h-4 ${hasFiles ? "text-primary" : "text-muted-foreground"}`} />
                   <span className="text-sm font-medium">{label}</span>
-                  {isMandatory && <Badge variant="outline" className="text-[10px] h-4 px-1">Obrigatório</Badge>}
-                  {hasFiles && <Badge variant="secondary" className="text-[10px] h-4 px-1.5">{typeDocs.length}</Badge>}
+                  {isMandatory && <Badge variant="outline" className="text-[11px] h-4 px-1">Obrigatório</Badge>}
+                  {hasFiles && <Badge variant="secondary" className="text-[11px] h-4 px-1.5">{typeDocs.length}</Badge>}
                 </div>
                 <div className="flex items-center gap-2">
                   {uploading && uploadingCategory === type ? (
@@ -646,7 +658,7 @@ function DocumentsTab({ employeeId, access }: { employeeId: number; access: Empl
                           {/* Info */}
                           <div className="p-2">
                             <p className="text-xs font-medium truncate">{doc.label || doc.fileKey?.split("/").pop()}</p>
-                            <p className="text-[10px] text-muted-foreground">{new Date(doc.createdAt).toLocaleDateString("pt-PT")}</p>
+                            <p className="text-[11px] text-muted-foreground">{new Date(doc.createdAt).toLocaleDateString("pt-PT")}</p>
                           </div>
                           {/* Actions overlay */}
                           <div className="absolute top-1 right-1 flex gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
@@ -669,6 +681,9 @@ function DocumentsTab({ employeeId, access }: { employeeId: number; access: Empl
           );
         })}
       </div>
+
+      {/* Google Drive: ficheiros ligados, documentos gerados dos modelos (contratos, declarações) */}
+      <DriveFilesPanel entityType="employee" entityId={employeeId} title="Modelos e ligações do Google Drive (os documentos do RH ficam só na app)" />
 
       {/* Image preview dialog */}
       {previewUrl && (
@@ -858,10 +873,10 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
                   <div>
                     <p className="text-sm font-medium">
                       {r.type === "check_in" ? "Entrada" : "Saída"}
-                      {reviewStatus === "suspicious" && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">⚠ por rever — não paga</span>}
-                      {reviewStatus === "rejected" && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">rejeitado</span>}
-                      {reviewStatus === "approved" && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200">aprovado</span>}
-                      {!reviewStatus && isFlagged && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">⚠ rever</span>}
+                      {reviewStatus === "suspicious" && <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">⚠ por rever — não paga</span>}
+                      {reviewStatus === "rejected" && <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">rejeitado</span>}
+                      {reviewStatus === "approved" && <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200">aprovado</span>}
+                      {!reviewStatus && isFlagged && <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">⚠ rever</span>}
                     </p>
                     {canReview && (
                       <div className="flex gap-1 mt-1" onClick={(e) => e.stopPropagation()}>
@@ -1112,25 +1127,25 @@ function MyMonthSummaryCard({ employeeId }: { employeeId: number }) {
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
             <div>
-              <p className="text-[10px] text-muted-foreground uppercase">Horas</p>
+              <p className="text-[11px] text-muted-foreground uppercase">Horas</p>
               <p className="text-lg font-bold">{fmt(0).replace("0,00 €", "")}{Number(data.totalHours).toFixed(1)}h</p>
             </div>
             <div>
-              <p className="text-[10px] text-muted-foreground uppercase">Dias</p>
+              <p className="text-[11px] text-muted-foreground uppercase">Dias</p>
               <p className="text-lg font-bold">{data.daysWorked}</p>
             </div>
             <div>
-              <p className="text-[10px] text-muted-foreground uppercase">€/hora</p>
+              <p className="text-[11px] text-muted-foreground uppercase">€/hora</p>
               <p className="text-lg font-bold">{fmt(data.hourlyRate)}</p>
             </div>
             <div>
-              <p className="text-[10px] text-muted-foreground uppercase">A receber (bruto)</p>
+              <p className="text-[11px] text-muted-foreground uppercase">A receber (bruto)</p>
               <p className="text-lg font-bold text-primary">{fmt(data.totalPayment)}</p>
             </div>
             <div>
-              <p className="text-[10px] text-amber-700 uppercase">Líquido est.</p>
+              <p className="text-[11px] text-amber-700 uppercase">Líquido est.</p>
               <p className="text-lg font-bold text-amber-700">{fmt(data.netEstimate)}</p>
-              <p className="text-[9px] text-amber-700">TSU 11% + IRS 15%</p>
+              <p className="text-[11px] text-amber-700">TSU 11% + IRS 15%</p>
             </div>
           </div>
         )}
@@ -1156,7 +1171,7 @@ function EmployeeAlertsCard({ employeeId }: { employeeId: number }) {
     onError: (e) => toast.error(e.message),
   });
 
-  const isSupervisor = user?.role && ["supervisor", "admin", "super_admin"].includes(user.role);
+  const isSupervisor = roleRank(user?.role) >= roleRank("supervisor");
   const isBlocked = Boolean(emp?.employee?.loginBlocked);
   const totalPoints = penalties.reduce((s, p) => s + Number(p.points ?? 0), 0);
 
@@ -1327,8 +1342,9 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
     const personal = access.canEditPersonal ? {
       fullName: editForm.fullName || undefined,
       phone: editForm.phone || undefined,
-      // null limpa o campo; extras não têm contactos pessoais à parte
-      personalEmail: editForm.position === "extra" ? null : (editForm.personalEmail?.trim() || null),
+      // null limpa o campo; extras não têm contactos pessoais à parte.
+      // O email pessoal liga fichas a contas (identidade) — só admin+ altera.
+      personalEmail: !access.canEditContract ? undefined : editForm.position === "extra" ? null : (editForm.personalEmail?.trim() || null),
       personalPhone: editForm.position === "extra" ? null : (editForm.personalPhone?.trim() || null),
       nif: editForm.nif || undefined,
       nib: editForm.nib || undefined,
@@ -1474,14 +1490,14 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                   <div className="flex items-center gap-2 text-sm">
                     <Mail className="w-4 h-4 text-muted-foreground" />
                     <span className="break-all">{emp.personalEmail}</span>
-                    <Badge variant="outline" className="text-[10px]">pessoal</Badge>
+                    <Badge variant="outline" className="text-[11px]">pessoal</Badge>
                   </div>
                 )}
                 {emp.personalPhone && (
                   <div className="flex items-center gap-2 text-sm">
                     <Phone className="w-4 h-4 text-muted-foreground" />
                     <span>{emp.personalPhone}</span>
-                    <Badge variant="outline" className="text-[10px]">pessoal</Badge>
+                    <Badge variant="outline" className="text-[11px]">pessoal</Badge>
                   </div>
                 )}
                 {emp.nif && (
@@ -1597,7 +1613,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                   <>
                     <div>
                       <Label>Email pessoal <span className="text-xs text-muted-foreground">(só para contacto)</span></Label>
-                      <Input type="email" value={editForm.personalEmail ?? ""} onChange={e => ef("personalEmail", e.target.value)} placeholder="nome@gmail.com" />
+                      <Input type="email" value={editForm.personalEmail ?? ""} onChange={e => ef("personalEmail", e.target.value)} placeholder="nome@gmail.com" readOnly={!access.canEditContract} disabled={!access.canEditContract} title={!access.canEditContract ? "Só um administrador pode alterar o email pessoal (liga a ficha à conta)." : undefined} />
                     </div>
                     <div>
                       <Label>Telefone pessoal <span className="text-xs text-muted-foreground">(só para contacto)</span></Label>
@@ -1673,7 +1689,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                     {sortProjectsHierarchical(projectsList as any[]).map((p: any) => (
                       <SelectItem key={p.id} value={String(p.id)}>
                         <span style={{ paddingLeft: `${p.__depth * 12}px` }} className="inline-flex items-center gap-2">
-                          <Badge variant="outline" className={`text-[10px] ${LEVEL_COLOR[p.level ?? "project"] ?? ""}`}>
+                          <Badge variant="outline" className={`text-[11px] ${LEVEL_COLOR[p.level ?? "project"] ?? ""}`}>
                             {LEVEL_LABEL[p.level ?? "project"] ?? p.level}
                           </Badge>
                           {p.name}
@@ -1740,6 +1756,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
       )}
 
       <EmployeeAccessAvailability employeeId={employeeId} />
+      <EmployeeAutoMail employeeId={employeeId} />
 
       {/* Tabs */}
       <Tabs defaultValue={(() => {
@@ -1759,179 +1776,6 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
         <TabsContent value="timerecords" className="mt-4"><TimeRecordsTab employeeId={employeeId} /></TabsContent>
         <TabsContent value="schedules" className="mt-4"><SchedulesTab employeeId={employeeId} /></TabsContent>
       </Tabs>
-    </div>
-  );
-}
-
-// ─── MIGRATION 0044 ONE-SHOT BUTTON (super_admin only) ────────────────────────
-function RunMigration0044Button() {
-  const run = trpc.admin.runMigration0044.useMutation({
-    onSuccess: (r) => {
-      if (r.failed > 0) toast.error(`Migration falhou em ${r.failed} statements: ${r.errors[0] ?? ""}`);
-      else toast.success(`Migration aplicada: ${r.ok} ok, ${r.skipped} já existiam`);
-    },
-    onError: (e) => toast.error(e.message),
-  });
-  return (
-    <Button
-      variant="outline"
-      size="sm"
-      disabled={run.isPending}
-      onClick={() => {
-        if (!confirm("Aplicar a migration 0044 (tabelas RH + reset extra_rates)?")) return;
-        run.mutate();
-      }}
-    >
-      {run.isPending ? "A aplicar..." : "DB: 0044"}
-    </Button>
-  );
-}
-
-// ─── MIGRATION 0046 ONE-SHOT BUTTON (super_admin only) ────────────────────────
-function RunMigration0046Button() {
-  const run = trpc.admin.runMigration0046.useMutation({
-    onSuccess: (r) => {
-      if (r.failed > 0) toast.error(`Migration falhou em ${r.failed} statements: ${r.errors[0] ?? ""}`);
-      else toast.success(`Migration aplicada: ${r.ok} ok, ${r.skipped} já existiam`);
-    },
-    onError: (e) => toast.error(e.message),
-  });
-  return (
-    <Button
-      variant="outline"
-      size="sm"
-      disabled={run.isPending}
-      onClick={() => {
-        if (!confirm("Aplicar a migration 0046 (campos novos do /report + tabela multipark_booking_extras)?")) return;
-        run.mutate();
-      }}
-    >
-      {run.isPending ? "A aplicar..." : "DB: 0046"}
-    </Button>
-  );
-}
-
-// ─── MIGRATION 0049 ONE-SHOT BUTTON (super_admin only) ────────────────────────
-function RunMigration0049Button() {
-  const run = trpc.admin.runMigration0049.useMutation({
-    onSuccess: (r) => {
-      if (r.failed > 0) toast.error(`Migration falhou em ${r.failed} statements: ${r.errors[0] ?? ""}`);
-      else toast.success(`Migration aplicada: ${r.ok} ok, ${r.skipped} já existiam`);
-    },
-    onError: (e) => toast.error(e.message),
-  });
-  return (
-    <Button
-      variant="outline"
-      size="sm"
-      disabled={run.isPending}
-      onClick={() => {
-        if (!confirm("Aplicar a migration 0049 (tabela inbound_emails — leitor de email)?")) return;
-        run.mutate();
-      }}
-    >
-      {run.isPending ? "A aplicar..." : "DB: 0049"}
-    </Button>
-  );
-}
-
-// ─── MIGRATION 0050 ONE-SHOT BUTTON (super_admin only) ────────────────────────
-function RunMigration0050Button() {
-  const run = trpc.admin.runMigration0050.useMutation({
-    onSuccess: (r) => {
-      if (r.failed > 0) toast.error(`Migration falhou em ${r.failed} statements: ${r.errors[0] ?? ""}`);
-      else toast.success(`Migration aplicada: ${r.ok} ok, ${r.skipped} já existiam`);
-    },
-    onError: (e) => toast.error(e.message),
-  });
-  return (
-    <Button
-      variant="outline"
-      size="sm"
-      disabled={run.isPending}
-      onClick={() => {
-        if (!confirm("Aplicar a migration 0050 (tabela extras_availability — disponibilidade dos extras)?")) return;
-        run.mutate();
-      }}
-    >
-      {run.isPending ? "A aplicar..." : "DB: 0050"}
-    </Button>
-  );
-}
-
-// ─── MIGRATION 0051 ONE-SHOT BUTTON (super_admin only) ────────────────────────
-function RunMigration0051Button() {
-  const run = trpc.admin.runMigration0051.useMutation({
-    onSuccess: (r) => {
-      if (r.failed > 0) toast.error(`Migration falhou em ${r.failed} statements: ${r.errors[0] ?? ""}`);
-      else toast.success(`Migration aplicada: ${r.ok} ok, ${r.skipped} já existiam`);
-    },
-    onError: (e) => toast.error(e.message),
-  });
-  return (
-    <Button
-      variant="outline"
-      size="sm"
-      disabled={run.isPending}
-      onClick={() => {
-        if (!confirm("Aplicar a migration 0051 (threading de emails: gmThreadId + headerRefs)?")) return;
-        run.mutate();
-      }}
-    >
-      {run.isPending ? "A aplicar..." : "DB: 0051"}
-    </Button>
-  );
-}
-
-function BackfillEmployeeProjectButton() {
-  const utils = trpc.useUtils();
-  const { data: projectsList = [] } = trpc.projects.list.useQuery();
-  const [projectId, setProjectId] = useState<number | null>(null);
-  const [onlyExtras, setOnlyExtras] = useState(true);
-  const run = trpc.admin.backfillEmployeeProject.useMutation({
-    onSuccess: (r) => {
-      toast.success(`${r.affected} colaboradores atribuídos a ${r.projectName}`);
-      utils.rh.list.invalidate();
-    },
-    onError: (e) => toast.error(e.message),
-  });
-  const projName = (projectsList as any[]).find(p => p.id === projectId)?.name ?? "";
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Select value={projectId ? String(projectId) : ""} onValueChange={v => setProjectId(parseInt(v))}>
-        <SelectTrigger className="w-56" size="sm">
-          <SelectValue placeholder="Centro de custos (ex: Lisboa)..." />
-        </SelectTrigger>
-        <SelectContent>
-          {sortProjectsHierarchical(projectsList as any[]).map((p: any) => (
-            <SelectItem key={p.id} value={String(p.id)}>
-              <span style={{ paddingLeft: `${p.__depth * 12}px` }} className="inline-flex items-center gap-2">
-                <Badge variant="outline" className={`text-[10px] ${LEVEL_COLOR[p.level ?? "project"] ?? ""}`}>
-                  {LEVEL_LABEL[p.level ?? "project"] ?? p.level}
-                </Badge>
-                {p.name}
-              </span>
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <label className="flex items-center gap-1.5 text-sm text-muted-foreground cursor-pointer select-none">
-        <input type="checkbox" checked={onlyExtras} onChange={e => setOnlyExtras(e.target.checked)} className="h-4 w-4" />
-        só extras
-      </label>
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={run.isPending || !projectId}
-        onClick={() => {
-          if (!projectId) return;
-          const alvo = onlyExtras ? "os extras sem centro" : "todos os colaboradores activos sem centro";
-          if (!confirm(`Atribuir o centro de custos "${projName}" a ${alvo}? Vais poder editar individualmente depois.`)) return;
-          run.mutate({ projectId, onlyExtras });
-        }}
-      >
-        {run.isPending ? "A atribuir..." : "Atribuir aos sem centro"}
-      </Button>
     </div>
   );
 }
@@ -2297,7 +2141,7 @@ function PayrollPage({ onBack }: { onBack: () => void }) {
         <Card className="border-amber-200 bg-amber-50/30">
           <CardContent className="p-4">
             <p className="text-xs text-muted-foreground">
-              Estimativa Líquido <span className="text-[10px] text-amber-700">(TSU 11% + IRS 15%)</span>
+              Estimativa Líquido <span className="text-[11px] text-amber-700">(TSU 11% + IRS 15%)</span>
             </p>
             <p className="text-xl font-bold text-amber-700">{fmt(totals.netEstimate)}€</p>
           </CardContent>
@@ -2438,10 +2282,12 @@ export default function HRPage() {
   const [filterPosition, setFilterPosition] = usePersistedState<string>("hr.position", "all");
   const [filterAccount, setFilterAccount] = usePersistedState<string>("hr.account", "all");
   const [filterActive, setFilterActive] = usePersistedState<string>("hr.active", "active");
-  const [filterProject, setFilterProject] = usePersistedState<string>("hr.project", "all");
   // Separador Colaboradores/Extras/Recrutamento também persiste — voltar de
   // uma ficha de extra mantém-nos nos Extras (bug reportado pelo Jorge)
   const [activeTab, setActiveTab] = usePersistedState<string>("hr.tab", "employees");
+  const isAdminRole = userRole === "admin" || userRole === "super_admin";
+  // Para admins, os agentes por ligar vivem no separador Ligações
+  useEffect(() => { if (isAdminRole && activeTab === "agentes") setActiveTab("ligacoes"); }, [isAdminRole, activeTab, setActiveTab]);
   const [showPayroll, setShowPayroll] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
@@ -2465,21 +2311,8 @@ export default function HRPage() {
     projectId: globalFilters.projectId ?? undefined,
   }, { enabled: !isExtra });
   const { data: docStatus = {} } = trpc.rh.documents.allStatus.useQuery(undefined, { enabled: !isExtra });
-  const { data: allProjects = [] } = trpc.projects.list.useQuery(undefined, { enabled: !isExtra });
-
-  // Descendentes do projeto filtrado (cidade/marca/projeto), para filtrar por centro de custos
-  const projectFilterIds = useMemo(() => {
-    if (filterProject === "all") return null;
-    const root = Number(filterProject);
-    const ids = new Set<number>([root]);
-    const walk = (pid: number) => {
-      for (const p of allProjects as any[]) {
-        if (p.parentId === pid) { ids.add(p.id); walk(p.id); }
-      }
-    };
-    walk(root);
-    return ids;
-  }, [filterProject, allProjects]);
+  // Diretório do Workspace (foto, cargo, telefone) para a equipa interna (os extras não têm conta do Workspace).
+  const directory = useDirectoryLookup(isExtra ? [] : (employees as any[]).filter((r) => r.employee.position !== "extra").map((r) => r.employee.email));
 
   // Extra users go directly to their profile
   if (isExtra) {
@@ -2504,8 +2337,7 @@ export default function HRPage() {
     const matchesAccount = filterAccount === "all" ? true
       : filterAccount === "with" ? !!e.userId
       : !e.userId;
-    const matchesProject = !projectFilterIds || (e.projectId != null && projectFilterIds.has(e.projectId));
-    return matchesSearch && matchesAccount && matchesProject;
+    return matchesSearch && matchesAccount;
   });
 
   if (showPayroll) {
@@ -2552,13 +2384,16 @@ export default function HRPage() {
       <CardContent className="p-4">
         <div className="flex items-center gap-3">
           <Avatar className="w-12 h-12">
-            <AvatarImage src={emp.photoUrl ?? undefined} />
+            <AvatarImage src={emp.photoUrl ?? directoryInfoFor(directory, emp.email)?.photoUrl ?? undefined} referrerPolicy="no-referrer" />
             <AvatarFallback className="bg-primary/10 text-primary font-semibold">
               {emp.fullName.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase()}
             </AvatarFallback>
           </Avatar>
           <div className="flex-1 min-w-0">
             <p className="font-semibold truncate">{emp.fullName}</p>
+            {directoryInfoFor(directory, emp.email)?.jobTitle && (
+              <p className="text-[11px] text-muted-foreground truncate" title="Cargo no diretório Google">{directoryInfoFor(directory, emp.email)!.jobTitle}</p>
+            )}
             <Badge className={`text-xs mt-1 ${POSITION_COLORS[emp.position as Position]}`}>
               {POSITION_LABELS[emp.position as Position]}
               {emp.position === "extra" && emp.extraLevel ? ` N${emp.extraLevel}` : ""}
@@ -2571,36 +2406,42 @@ export default function HRPage() {
               <Mail className="w-3 h-3 shrink-0" /> <span className="truncate">{emp.email}</span>
             </p>
           )}
+          {directoryInfoFor(directory, emp.email)?.phone && (
+            <p className="text-xs text-muted-foreground flex items-center gap-1 truncate" title="Telefone no diretório Google">
+              <Phone className="w-3 h-3 shrink-0" /> <span className="truncate">{directoryInfoFor(directory, emp.email)!.phone}</span>
+            </p>
+          )}
           {emp.department && (
-            <p className="text-xs text-muted-foreground flex items-center gap-1">
-              <Building2 className="w-3 h-3" /> {emp.department}
+            <p className="text-xs text-muted-foreground flex items-start gap-1" title={emp.department}>
+              <Building2 className="w-3 h-3 shrink-0 mt-0.5" /> <span className="line-clamp-2 break-words min-w-0">{emp.department}</span>
             </p>
           )}
           {emp.monthlySalary && (
             <p className="text-xs font-medium text-green-700 flex items-center gap-1">
-              <Euro className="w-3 h-3" /> {parseFloat(String(emp.monthlySalary)).toFixed(2)}€/mês
+              <Euro className="w-3 h-3 shrink-0" /> <span className="tabular-nums">{parseFloat(String(emp.monthlySalary)).toLocaleString("pt-PT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}€/mês</span>
             </p>
           )}
           {emp.userId ? (
-            <p className="text-xs text-blue-600 flex items-center gap-1">
-              <Shield className="w-3 h-3" /> Conta ativa
+            <p className="text-xs text-blue-700 flex items-center gap-1">
+              <Shield className="w-3 h-3 shrink-0" /> Conta ativa
             </p>
           ) : (
-            <p className="text-xs text-orange-500 flex items-center gap-1">
-              <AlertTriangle className="w-3 h-3" /> Sem conta
+            <p className="text-xs text-orange-700 flex items-center gap-1">
+              <AlertTriangle className="w-3 h-3 shrink-0" /> Sem conta
             </p>
           )}
           {(() => {
             const status = (docStatus as Record<number, { total: number; present: number; missing: string[] }>)[emp.id];
-            const missing = status ? status.total - status.present : 7;
+            if (!status) return null;
+            const missing = status.total - status.present;
             if (missing === 0) return (
-              <p className="text-xs text-green-600 flex items-center gap-1">
-                <CheckCircle2 className="w-3 h-3" /> Docs completos
+              <p className="text-xs text-green-700 flex items-center gap-1">
+                <CheckCircle2 className="w-3 h-3 shrink-0" /> Docs completos
               </p>
             );
             return (
-              <p className="text-xs text-orange-600 flex items-center gap-1">
-                <AlertTriangle className="w-3 h-3" /> {missing} doc{missing > 1 ? "s" : ""} em falta
+              <p className="text-xs text-orange-700 flex items-center gap-1">
+                <AlertTriangle className="w-3 h-3 shrink-0" /> {missing} doc{missing > 1 ? "s" : ""} em falta
               </p>
             );
           })()}
@@ -2615,12 +2456,6 @@ export default function HRPage() {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <p className="text-muted-foreground text-sm">Gestão de colaboradores, ponto e documentação</p>
         <div className="flex items-center gap-2 flex-wrap">
-          {userRole === "super_admin" && <BackfillEmployeeProjectButton />}
-          {userRole === "super_admin" && (
-            <Button variant="outline" size="sm" onClick={() => setShowDashboard(true)}>
-              <BarChart3 className="w-4 h-4 mr-2" /> Dashboard
-            </Button>
-          )}
           <Button onClick={() => setShowCreate(true)} size="sm">
             <UserPlus className="w-4 h-4 mr-2" /> Novo Colaborador
           </Button>
@@ -2631,6 +2466,11 @@ export default function HRPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
+              {userRole === "super_admin" && (
+                <DropdownMenuItem onClick={() => setShowDashboard(true)}>
+                  <BarChart3 className="w-4 h-4 mr-2" /> Dashboard de RH
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem onClick={exportEmployeesCSV}>
                 <Download className="w-4 h-4 mr-2" /> Exportar lista (CSV)
               </DropdownMenuItem>
@@ -2710,28 +2550,6 @@ export default function HRPage() {
             <SelectItem value="without">Sem conta</SelectItem>
           </SelectContent>
         </Select>
-        {/* Cidade / centro de custos / projeto */}
-        <Select value={filterProject} onValueChange={setFilterProject}>
-          <SelectTrigger className="w-full sm:w-52"><SelectValue placeholder="Centro de custos" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Todos os centros</SelectItem>
-            {(() => {
-              const result: any[] = [];
-              const walk = (parentId: number | null, depth: number) => {
-                (allProjects as any[]).filter((p) => p.parentId === parentId).forEach((p) => {
-                  result.push({ ...p, depth });
-                  walk(p.id, depth + 1);
-                });
-              };
-              walk(null, 0);
-              return result.map((p) => (
-                <SelectItem key={p.id} value={String(p.id)}>
-                  {" ".repeat(p.depth * 2)}{p.level === "city" ? "📍" : p.level === "brand" ? "🏷" : p.level === "group" ? "🏢" : "📁"} {p.name}
-                </SelectItem>
-              ));
-            })()}
-          </SelectContent>
-        </Select>
         {/* Ativos / desativados — os desativados mantêm histórico e podem ser reativados */}
         <Select value={filterActive} onValueChange={setFilterActive}>
           <SelectTrigger className="w-full sm:w-40"><SelectValue /></SelectTrigger>
@@ -2745,33 +2563,33 @@ export default function HRPage() {
       {/* Tabs Colaboradores / Extras */}
       {isLoading ? (
         <div className="text-center py-12 text-muted-foreground">A carregar colaboradores...</div>
-      ) : filtered.length === 0 ? (
-        <div className="text-center py-12 text-muted-foreground">
-          <Users className="w-12 h-12 mx-auto mb-3 opacity-30" />
-          <p>Nenhum colaborador encontrado</p>
-          <Button className="mt-4" onClick={() => setShowCreate(true)}>
-            <UserPlus className="w-4 h-4 mr-2" /> Adicionar primeiro colaborador
-          </Button>
-        </div>
       ) : (
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="w-full sm:w-auto">
+          <TabsList className="w-full max-w-full justify-start overflow-x-auto sm:w-auto">
             <TabsTrigger value="employees">
               Colaboradores <Badge variant="secondary" className="ml-2">{employeesList.length}</Badge>
             </TabsTrigger>
             <TabsTrigger value="extras">
               Extras <Badge variant="secondary" className="ml-2">{extrasList.length}</Badge>
             </TabsTrigger>
-            <TabsTrigger value="agentes">
-              Agentes s/ funcionário <UnlinkedAgentsBadge />
-            </TabsTrigger>
+            {!isAdminRole && (
+              <TabsTrigger value="agentes">
+                Agentes s/ funcionário <UnlinkedAgentsBadge />
+              </TabsTrigger>
+            )}
             <TabsTrigger value="recrutamento">
               <Mail className="w-4 h-4 mr-2" />Recrutamento
             </TabsTrigger>
+            {isAdminRole && (
+              <TabsTrigger value="ligacoes">Ligações</TabsTrigger>
+            )}
           </TabsList>
           <TabsContent value="employees" className="mt-4">
             {employeesList.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground text-sm">Sem colaboradores nesta categoria</div>
+              <div className="text-center py-8 text-muted-foreground text-sm">
+                Nenhum colaborador encontrado.
+                <div><Button size="sm" variant="outline" className="mt-3" onClick={() => setShowCreate(true)}><UserPlus className="w-4 h-4 mr-2" /> Novo colaborador</Button></div>
+              </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {employeesList.map(renderCard)}
@@ -2787,12 +2605,19 @@ export default function HRPage() {
               </div>
             )}
           </TabsContent>
-          <TabsContent value="agentes" className="mt-4">
-            <UnlinkedAgentsSection />
-          </TabsContent>
+          {!isAdminRole && (
+            <TabsContent value="agentes" className="mt-4">
+              <UnlinkedAgentsSection />
+            </TabsContent>
+          )}
           <TabsContent value="recrutamento" className="mt-4">
             <RecruitmentSection />
           </TabsContent>
+          {isAdminRole && (
+            <TabsContent value="ligacoes" className="mt-4">
+              <IdentityLinksSection />
+            </TabsContent>
+          )}
         </Tabs>
       )}
 
@@ -2808,9 +2633,19 @@ export default function HRPage() {
 function ImportExtrasDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const utils = trpc.useUtils();
   const [csv, setCsv] = useState("");
+  const [projectId, setProjectId] = useState<string>("");
+  const { data: importProjects = [] } = trpc.projects.list.useQuery(undefined, { enabled: open });
+  const cityProjects = useMemo(
+    () => (importProjects as any[]).filter((p) => p.level === "city").sort((a, b) => String(a.name).localeCompare(String(b.name), "pt")),
+    [importProjects],
+  );
+  useEffect(() => {
+    if (!projectId && cityProjects.length === 1) setProjectId(String(cityProjects[0].id));
+  }, [cityProjects, projectId]);
   const [report, setReport] = useState<{
     parsed: number;
     created: number;
+    duplicates: { rowIndex: number; nome: string; reason: string }[];
     errors: { rowIndex: number; nome?: string; reason: string }[];
     unknownColumns: string[];
   } | null>(null);
@@ -2821,6 +2656,7 @@ function ImportExtrasDialog({ open, onClose }: { open: boolean; onClose: () => v
       utils.rh.list.invalidate();
       utils.rh.stats.invalidate();
       if (r.created > 0) toast.success(`${r.created} extras criados`);
+      if (r.duplicates.length > 0) toast.info(`${r.duplicates.length} já existiam — saltados`);
       if (r.errors.length > 0) toast.warning(`${r.errors.length} linhas com erro`);
     },
     onError: (e) => toast.error(e.message),
@@ -2838,8 +2674,12 @@ function ImportExtrasDialog({ open, onClose }: { open: boolean; onClose: () => v
       toast.error("Cola um CSV ou seleciona um ficheiro.");
       return;
     }
+    if (!projectId) {
+      toast.error("Escolhe a cidade dos extras a importar.");
+      return;
+    }
     setReport(null);
-    importMutation.mutate({ csv });
+    importMutation.mutate({ csv, projectId: Number(projectId) });
   };
 
   const TEMPLATE_HEADERS = [
@@ -2887,6 +2727,23 @@ function ImportExtrasDialog({ open, onClose }: { open: boolean; onClose: () => v
           </div>
 
           <div>
+            <Label className="text-xs">Cidade (centro de custos) *</Label>
+            <Select value={projectId} onValueChange={setProjectId}>
+              <SelectTrigger className={`mt-1 ${!projectId ? "border-amber-400" : ""}`}>
+                <SelectValue placeholder="Escolher cidade..." />
+              </SelectTrigger>
+              <SelectContent>
+                {cityProjects.map((p: any) => (
+                  <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground mt-1">
+              Todos os extras do ficheiro ficam nesta cidade. Quem já tiver ficha (mesmo email, NIF ou telemóvel) é saltado.
+            </p>
+          </div>
+
+          <div>
             <Label htmlFor="csv-file" className="text-xs">Ficheiro CSV</Label>
             <Input
               id="csv-file"
@@ -2900,6 +2757,11 @@ function ImportExtrasDialog({ open, onClose }: { open: boolean; onClose: () => v
               Opcional: <code>salario_mensal</code>, <code>subsidio_alim_dia</code>, <code>nif</code>, <code>nib</code>,{" "}
               <code>telefone</code>, <code>email</code>, <code>morada</code>, <code>nacionalidade</code>, <code>data_nascimento</code> (YYYY-MM-DD).
             </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1">
+            <ImportFromSheetButton purpose="extras" onCsv={(text) => { setCsv(text); setReport(null); }} />
+            <span className="text-[11.5px] text-muted-foreground">Mesmas colunas; o conteúdo aparece abaixo para confirmares antes de importar.</span>
           </div>
 
           <div>
@@ -2922,6 +2784,17 @@ function ImportExtrasDialog({ open, onClose }: { open: boolean; onClose: () => v
                   Colunas desconhecidas (ignoradas): {report.unknownColumns.join(", ")}
                 </div>
               )}
+              {report.duplicates.length > 0 && (
+                <div className="text-amber-700">
+                  <div className="font-medium">{report.duplicates.length} já existia(m) — saltado(s):</div>
+                  <ul className="space-y-0.5 mt-1">
+                    {report.duplicates.slice(0, 20).map((d, i) => (
+                      <li key={i}>Linha {d.rowIndex} ({d.nome}): {d.reason}</li>
+                    ))}
+                    {report.duplicates.length > 20 && <li>...e mais {report.duplicates.length - 20}</li>}
+                  </ul>
+                </div>
+              )}
               {report.errors.length > 0 && (
                 <div className="text-red-700">
                   <div className="font-medium">{report.errors.length} erro(s):</div>
@@ -2942,7 +2815,7 @@ function ImportExtrasDialog({ open, onClose }: { open: boolean; onClose: () => v
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Fechar</Button>
-          <Button onClick={handleImport} disabled={importMutation.isPending || !csv.trim()}>
+          <Button onClick={handleImport} disabled={importMutation.isPending || !csv.trim() || !projectId}>
             {importMutation.isPending ? "A importar..." : "Importar"}
           </Button>
         </DialogFooter>
@@ -2956,14 +2829,16 @@ function ImportExtrasDialog({ open, onClose }: { open: boolean; onClose: () => v
 // colaborador nem parceiro. Daqui liga-se a um colaborador existente, a um
 // parceiro (agências que marcam pelo portal), ou cria-se o funcionário.
 function UnlinkedAgentsBadge() {
-  const { data = [] } = trpc.multipark.unlinkedAgents.useQuery();
-  if (data.length === 0) return null;
-  return <Badge variant="secondary" className="ml-2">{data.length}</Badge>;
+  const { data } = trpc.multipark.unlinkedAgents.useQuery();
+  const n = data?.rows.length ?? 0;
+  if (n === 0) return null;
+  return <Badge variant="secondary" className="ml-2">{n}</Badge>;
 }
 
 function UnlinkedAgentsSection() {
   const utils = trpc.useUtils();
-  const { data: agents = [], isLoading } = trpc.multipark.unlinkedAgents.useQuery();
+  const { data: unlinked, isLoading } = trpc.multipark.unlinkedAgents.useQuery();
+  const agents = unlinked?.rows ?? [];
   const { data: employees = [] } = trpc.multipark.employeesForMapping.useQuery();
   const { data: partnershipsList = [] } = trpc.partnerships.list.useQuery({} as any);
   const refresh = () => { utils.multipark.unlinkedAgents.invalidate(); utils.multipark.employeesForMapping.invalidate(); };
@@ -2993,11 +2868,14 @@ function UnlinkedAgentsSection() {
     <div className="space-y-3">
       <Card className="border-amber-200 bg-amber-50/40">
         <CardContent className="p-3 text-sm text-amber-900">
-          Estes agentes têm atividade na Multipark mas não estão ligados a ninguém.
+          Estes agentes estão na Multipark (ativos ou com atividade nos últimos 180 dias, lidos ao vivo) mas não estão ligados a ninguém.
           Liga cada um a um <strong>colaborador</strong>, a um <strong>parceiro</strong> (agências que marcam pelo portal),
           cria o funcionário — ou marca <strong>"não é funcionário"</strong> (testes, integrações, reservas de sistema) para o tirar da lista.
         </CardContent>
       </Card>
+      {unlinked?.notice && (
+        <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">{unlinked.notice}</p>
+      )}
       {isLoading ? (
         <p className="text-sm text-muted-foreground">A carregar…</p>
       ) : agents.length === 0 ? (

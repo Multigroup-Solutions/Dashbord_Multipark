@@ -14,7 +14,8 @@
  * nunca de input livre do utilizador.
  */
 import { z } from "zod";
-import { asc, desc, eq, sql } from "drizzle-orm";
+import { asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { cityTextVisible, currentCityKeys, projectVisible, scopedProjectIds } from "./extrasCityFilter";
 import { getDb, getProjects, logActivity } from "./db";
 import { driverApplications, employees } from "../drizzle/schema";
 import { setMyAvailability, weekDays, type SetDayInput } from "./extrasAvailability";
@@ -109,30 +110,26 @@ export async function upsertDriverApplication(input: DriverApplicationInput): Pr
     entityId: id,
     details: `[Website] Nova candidatura de condutor: ${fullName} <${email}>`,
   });
-  // Sino in-app para as chefias — sem isto a candidatura só se via se alguém
-  // abrisse a página Extras Dia por acaso. Só na CRIAÇÃO (re-submissões não
-  // fazem spam). Mesmo padrão das reclamações (notifyComplaintCreated).
+  // Sino in-app para quem recruta NA CIDADE da candidatura (team leader,
+  // supervisor, backoffice — ver shared/notificationRouting.ts). Só na
+  // CRIAÇÃO (re-submissões não fazem spam). Sem cidade → quem vê todas.
   try {
-    const { users } = await import("../drizzle/schema");
-    const { createNotification } = await import("./complaintsExtended");
-    const recipients = await db
-      .select({ id: users.id })
-      .from(users)
-      .where(sql`${users.role} IN ('admin','super_admin','supervisor','team_leader','backoffice') AND ${users.isActive} = 1`);
-    for (const r of recipients) {
-      try {
-        await createNotification({
-          userId: r.id,
-          title: `Nova candidatura Be a Driver: ${fullName}`,
-          body: `${email}${fields.city ? ` · ${fields.city}` : ""}${fields.drivingExperience ? ` · ${fields.drivingExperience}` : ""}`,
-          kind: "driver_application",
-          link: "/extras-dia",
-        });
-      } catch {}
-    }
+    const { notify } = await import("./notify");
+    await notify({
+      kind: "driver_application",
+      city: fields.city ?? null,
+      title: `Nova candidatura Be a Driver: ${fullName}`,
+      body: `${email}${fields.city ? ` · ${fields.city}` : ""}${fields.drivingExperience ? ` · ${fields.drivingExperience}` : ""}`,
+      link: "/disponibilidade",
+      entity: { type: "driver_application", id },
+    });
   } catch (err) {
     console.warn("[WebIntake] Falha ao notificar candidatura nova:", String(err).slice(0, 160));
   }
+  // Funil único: a candidatura entra também nos Leads de Extras (source 'site').
+  // Best-effort (onApplicationCreated nunca lança); o cron apanha o que falhar.
+  const { onApplicationCreated } = await import("./extraLeadsSync");
+  await onApplicationCreated(id);
   return { id, created: true, submissionCount: 1 };
 }
 
@@ -147,7 +144,23 @@ export async function listDriverApplications(status?: ApplicationStatus | null) 
   const rows = status
     ? await base.where(eq(driverApplications.status, status)).orderBy(desc(driverApplications.lastSubmittedAt))
     : await base.orderBy(desc(driverApplications.lastSubmittedAt));
-  return rows;
+
+  // Cidade (ponto 10): aprovadas → cidade da ficha; as outras → a cidade que a
+  // pessoa escreveu. Sem cidade reconhecível continua visível a todos.
+  const scope = scopedProjectIds();
+  if (scope === undefined) return rows;
+  const allowed = currentCityKeys();
+  const empIds = rows.map((r) => r.employeeId).filter((x): x is number => x != null);
+  const empProject = new Map<number, number | null>();
+  if (empIds.length) {
+    const emps = await db.select({ id: employees.id, projectId: employees.projectId }).from(employees).where(inArray(employees.id, empIds));
+    for (const e of emps) empProject.set(e.id, e.projectId);
+  }
+  return rows.filter((r) => {
+    const pid = r.employeeId != null ? empProject.get(r.employeeId) : undefined;
+    if (pid != null) return projectVisible(pid, scope);
+    return cityTextVisible(r.city, allowed);
+  });
 }
 
 export async function setApplicationStatus(
@@ -292,6 +305,14 @@ export async function approveApplication(
     entityId: id,
     details: `Candidatura aprovada: ${app.fullName} <${app.email}> → employee ${employeeId}${created ? " (criado)" : " (existente)"} · ${costCenterNote}`,
   });
+
+  // O lead correspondente (se existir) fica Convertido e ligado à ficha.
+  const { markLeadConvertedForApplication } = await import("./extraLeadsSync");
+  await markLeadConvertedForApplication(id, employeeId, costCenter.projectId, reviewedById);
+
+  // Percurso de onboarding por defeito (best-effort — nunca parte a aprovação).
+  const { autoAssignOnboarding } = await import("./trainingPaths");
+  await autoAssignOnboarding(employeeId, "application_approve", reviewedById);
 
   return {
     employeeId,

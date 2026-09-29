@@ -41,6 +41,18 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   dismissed: { label: "Dispensado", color: "bg-gray-100 text-gray-800" },
 };
 
+const SENTIMENT: Record<string, { label: string; cls: string }> = {
+  positivo: { label: "Positivo", cls: "bg-emerald-100 text-emerald-800" },
+  neutro: { label: "Neutro", cls: "bg-slate-100 text-slate-700" },
+  negativo: { label: "Negativo", cls: "bg-red-100 text-red-800" },
+};
+
+function SentimentBadge({ value }: { value: string }) {
+  const s = SENTIMENT[value];
+  if (!s) return null;
+  return <Badge className={`${s.cls} text-[11px]`} title="Sentimento (IA)">{s.label}</Badge>;
+}
+
 function Stars({ rating, size = "w-4 h-4" }: { rating: number; size?: string }) {
   return (
     <div className="flex gap-0.5">
@@ -54,7 +66,8 @@ function Stars({ rating, size = "w-4 h-4" }: { rating: number; size?: string }) 
 export default function GoogleReviewsPage() {
   const [tab, setTab] = useState("dashboard");
   const [showCreate, setShowCreate] = useState(false);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  // ?id=N abre logo a crítica (links a partir da ficha do cliente no CRM).
+  const [selectedId, setSelectedId] = useState<number | null>(() => Number(new URLSearchParams(window.location.search).get("id")) || null);
   const [syncResult, setSyncResult] = useState<any>(null);
   const utils = trpc.useUtils();
   const syncGmail = trpc.reviews.syncFromGmail.useMutation({
@@ -75,11 +88,11 @@ export default function GoogleReviewsPage() {
     <>
       <div className="space-y-6">
         <GoogleBusinessConnection />
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
           <div>
             <p className="text-muted-foreground">Gestão de avaliações e respostas automáticas</p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <Button variant="outline" onClick={() => syncGmail.mutate()} disabled={syncGmail.isPending}>
               {syncGmail.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Mail className="w-4 h-4 mr-2" />}
               {syncGmail.isPending ? "A sincronizar..." : "Sincronizar Gmail"}
@@ -89,7 +102,7 @@ export default function GoogleReviewsPage() {
         </div>
 
         <Tabs value={tab} onValueChange={setTab}>
-          <TabsList>
+          <TabsList className="max-w-full justify-start overflow-x-auto">
             <TabsTrigger value="dashboard"><BarChart3 className="w-4 h-4 mr-1" /> Dashboard</TabsTrigger>
             <TabsTrigger value="list"><MessageSquare className="w-4 h-4 mr-1" /> Reviews</TabsTrigger>
             <TabsTrigger value="drivers"><Car className="w-4 h-4 mr-1" /> Condutores</TabsTrigger>
@@ -173,30 +186,30 @@ function ReviewsDashboard() {
   return (
     <div className="space-y-6">
       {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <Card className="p-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
+        <Card className="p-4 gap-1 min-w-0">
           <div className="flex items-center gap-2 text-muted-foreground text-sm"><Star className="w-4 h-4" /> Média</div>
-          <p className="text-3xl font-bold mt-1">{stats.avg}<span className="text-lg text-muted-foreground">/5</span></p>
+          <p className="text-3xl font-bold mt-1 tabular-nums truncate">{stats.avg}<span className="text-lg text-muted-foreground">/5</span></p>
           <Stars rating={Math.round(stats.avg)} />
         </Card>
-        <Card className="p-4">
+        <Card className="p-4 gap-1 min-w-0">
           <div className="flex items-center gap-2 text-muted-foreground text-sm"><MessageSquare className="w-4 h-4" /> Total</div>
-          <p className="text-3xl font-bold mt-1">{stats.total}</p>
+          <p className="text-3xl font-bold mt-1 tabular-nums truncate" title={String(stats.total)}>{stats.total}</p>
           <p className="text-xs text-muted-foreground">avaliações{(stats as any).unrated ? ` · ${(stats as any).unrated} sem estrelas` : ""}</p>
         </Card>
-        <Card className="p-4">
+        <Card className="p-4 gap-1 min-w-0">
           <div className="flex items-center gap-2 text-muted-foreground text-sm"><CheckCircle2 className="w-4 h-4" /> Respondidas</div>
-          <p className="text-3xl font-bold mt-1 text-green-600">{stats.responded}</p>
+          <p className="text-3xl font-bold mt-1 tabular-nums truncate text-green-700" title={String(stats.responded)}>{stats.responded}</p>
           <p className="text-xs text-muted-foreground">resposta enviada</p>
         </Card>
-        <Card className="p-4">
+        <Card className="p-4 gap-1 min-w-0">
           <div className="flex items-center gap-2 text-muted-foreground text-sm"><Clock className="w-4 h-4" /> Por responder</div>
-          <p className="text-3xl font-bold mt-1 text-yellow-600">{stats.pending}</p>
+          <p className="text-3xl font-bold mt-1 tabular-nums truncate text-yellow-700" title={String(stats.pending)}>{stats.pending}</p>
           <p className="text-xs text-muted-foreground">inclui rascunhos IA por enviar</p>
         </Card>
-        <Card className="p-4">
+        <Card className="p-4 gap-1 min-w-0">
           <div className="flex items-center gap-2 text-muted-foreground text-sm"><AlertTriangle className="w-4 h-4" /> Reclamações</div>
-          <p className="text-3xl font-bold mt-1 text-red-600">{stats.complaints}</p>
+          <p className="text-3xl font-bold mt-1 tabular-nums truncate text-red-600" title={String(stats.complaints)}>{stats.complaints}</p>
           <p className="text-xs text-muted-foreground">convertidas</p>
         </Card>
       </div>
@@ -220,7 +233,7 @@ function ReviewsDashboard() {
                   style={{ width: `${(d.count / maxCount) * 100}%` }}
                 />
               </div>
-              <span className="text-sm font-medium w-10 text-right">{d.count}</span>
+              <span className="text-sm font-medium min-w-10 text-right tabular-nums">{d.count}</span>
             </div>
           ))}
         </CardContent>
@@ -233,7 +246,7 @@ function ReviewsDashboard() {
             <ThumbsUp className="w-5 h-5 text-green-500" />
             <span className="font-medium">Positivas (4-5★)</span>
           </div>
-          <p className="text-2xl font-bold">{stats.star4 + stats.star5}</p>
+          <p className="text-2xl font-bold tabular-nums">{stats.star4 + stats.star5}</p>
           <p className="text-xs text-muted-foreground">{stats.total > 0 ? Math.round(((stats.star4 + stats.star5) / stats.total) * 100) : 0}% do total</p>
         </Card>
         <Card className="p-4">
@@ -241,7 +254,7 @@ function ReviewsDashboard() {
             <ThumbsDown className="w-5 h-5 text-red-500" />
             <span className="font-medium">Negativas (1-3★)</span>
           </div>
-          <p className="text-2xl font-bold">{stats.star1 + stats.star2 + stats.star3}</p>
+          <p className="text-2xl font-bold tabular-nums">{stats.star1 + stats.star2 + stats.star3}</p>
           <p className="text-xs text-muted-foreground">{stats.total > 0 ? Math.round(((stats.star1 + stats.star2 + stats.star3) / stats.total) * 100) : 0}% do total</p>
         </Card>
       </div>
@@ -281,12 +294,12 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
         <div className="flex items-center gap-2 flex-wrap">
           <Button size="sm" variant={park === "all" ? "default" : "outline"} onClick={() => setPark("all")}>
             Todas <span className="ml-1 opacity-80">{reviews.length}</span>
-            {totalPending > 0 && <Badge className="ml-2 bg-yellow-100 text-yellow-800 text-[10px]">{totalPending} por responder</Badge>}
+            {totalPending > 0 && <Badge className="ml-2 bg-yellow-100 text-yellow-800 text-[11px]">{totalPending} por responder</Badge>}
           </Button>
           {groups.map(g => (
             <Button key={g.key} size="sm" variant={park === g.key ? "default" : "outline"} onClick={() => setPark(park === g.key ? "all" : g.key)}>
               {g.name} <span className="ml-1 opacity-80">{g.total}</span>
-              {g.pending > 0 && <Badge className="ml-2 bg-yellow-100 text-yellow-800 text-[10px]">{g.pending}</Badge>}
+              {g.pending > 0 && <Badge className="ml-2 bg-yellow-100 text-yellow-800 text-[11px]">{g.pending}</Badge>}
             </Button>
           ))}
         </div>
@@ -384,7 +397,9 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
                           <span className="font-medium">{r.reviewerName}</span>
                           <Stars rating={r.rating} size="w-3.5 h-3.5" />
                           <Badge className={STATUS_LABELS[r.status]?.color || ""}>{STATUS_LABELS[r.status]?.label}</Badge>
-                          {r.googleReply && <Badge className="bg-green-100 text-green-700 text-[10px]">no Google</Badge>}
+                          {r.googleReply && <Badge className="bg-green-100 text-green-700 text-[11px]">no Google</Badge>}
+                          {!r.googleReply && r.aiResponse && !r.aiResponseApproved && <Badge className="bg-amber-100 text-amber-800 text-[11px]">rascunho por aprovar</Badge>}
+                          {(r as any).aiSentiment && <SentimentBadge value={(r as any).aiSentiment} />}
                           {r.complaintId && (
                             <Badge variant="outline" className="text-red-600 border-red-200">
                               <AlertTriangle className="w-3 h-3 mr-1" /> Reclamação #{r.complaintId}
@@ -457,15 +472,14 @@ function CreateReviewDialog({ onClose }: { onClose: () => void }) {
           <BookingSearchField
             accent="violet"
             hint="Opcional — escolhe a reserva e o nome/email/matrícula são preenchidos automaticamente"
-            onSelect={(b, details) => {
-              const client = details?.customer || details?.client;
-              const fullName = [client?.firstName, client?.lastName, b.clientFirstName, b.clientLastName].filter(Boolean).slice(0, 2).join(" ");
+            onSelect={(b) => {
+              const fullName = [b.clientFirstName, b.clientLastName].filter(Boolean).join(" ");
               setForm(f => ({
                 ...f,
                 bookingRef: b.externalId || b.bookingNumber || f.bookingRef,
                 reviewerName: f.reviewerName || fullName,
-                reviewerEmail: f.reviewerEmail || client?.email || b.clientEmail || "",
-                vehiclePlate: f.vehiclePlate || details?.vehicle?.licensePlate || b.licensePlate || "",
+                reviewerEmail: f.reviewerEmail || b.clientEmail || "",
+                vehiclePlate: f.vehiclePlate || b.licensePlate || "",
                 projectId: f.projectId || (b.projectId ? String(b.projectId) : ""),
               }));
             }}
@@ -596,6 +610,15 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
     toast.success("Resposta aprovada!");
   };
 
+  // Publicar é público e irreversível no Google: pede confirmação. A resposta
+  // publicada fica aprovada (aiResponseApproved = 1) pelo publishReply.
+  const handleApproveAndPublish = (text: string) => {
+    const t = text.trim();
+    if (!t) { toast.error("Escreve a resposta antes de publicar."); return; }
+    if (!confirm("Publicar esta resposta no Google? Fica visível para todos.")) return;
+    publishMut.mutate({ id, comment: t }, { onSuccess: () => setEditingResponse(false) });
+  };
+
   const handleSaveResponse = async () => {
     await updateMut.mutateAsync({ id, aiResponse: responseText, status: "manually_responded" });
     setEditingResponse(false);
@@ -664,7 +687,9 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
             <CardHeader>
               <CardTitle className="text-sm flex items-center gap-2">
                 <Bot className="w-4 h-4 text-blue-500" /> Resposta
-                {review.aiResponseApproved && <Badge className="bg-green-100 text-green-700 text-[10px]">Aprovada</Badge>}
+                {review.aiResponseApproved ? <Badge className="bg-green-100 text-green-700 text-[11px]">Aprovada</Badge>
+                  : review.aiResponse && !review.googleReply ? <Badge className="bg-amber-100 text-amber-800 text-[11px]">Rascunho IA — por aprovar</Badge> : null}
+                {(review as any).aiSentiment && <SentimentBadge value={(review as any).aiSentiment} />}
                 {!review.googleReviewName && (
                   <span className="text-xs font-normal text-muted-foreground ml-auto flex items-center gap-1" title="Esta crítica veio por email e não está ligada ao Google. Para publicar a resposta, usa o perfil Google, ou espera que a importação pela API a associe.">
                     <Mail className="w-3 h-3" /> só local (veio por email)
@@ -675,9 +700,14 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
             <CardContent className="space-y-3">
               {editingResponse ? (
                 <>
-                  <Textarea value={responseText} onChange={e => setResponseText(e.target.value)} rows={4} />
-                  <div className="flex gap-2">
-                    <Button size="sm" onClick={handleSaveResponse} disabled={updateMut.isPending}>Guardar</Button>
+                  <Textarea value={responseText} onChange={e => setResponseText(e.target.value)} rows={5} />
+                  <div className="flex gap-2 flex-wrap">
+                    {review.googleReviewName && (
+                      <Button size="sm" onClick={() => handleApproveAndPublish(responseText)} disabled={publishMut.isPending || !responseText.trim()}>
+                        <ExternalLink className="w-4 h-4 mr-1" /> {publishMut.isPending ? "A publicar..." : "Aprovar e publicar"}
+                      </Button>
+                    )}
+                    <Button size="sm" variant={review.googleReviewName ? "outline" : "default"} onClick={handleSaveResponse} disabled={updateMut.isPending}>Guardar</Button>
                     <Button size="sm" variant="outline" onClick={() => setEditingResponse(false)}>Cancelar</Button>
                   </div>
                 </>
@@ -686,12 +716,12 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
                   <p className="text-sm bg-blue-50 p-3 rounded-lg border border-blue-100">{review.aiResponse}</p>
                   <div className="flex gap-2 flex-wrap">
                     {review.googleReviewName && review.googleReply !== review.aiResponse && (
-                      <Button size="sm" onClick={() => publishMut.mutate({ id, comment: review.aiResponse || "" })} disabled={publishMut.isPending}>
-                        <ExternalLink className="w-4 h-4 mr-1" /> {publishMut.isPending ? "A publicar..." : review.googleReply ? "Substituir no Google" : "Publicar no Google"}
+                      <Button size="sm" onClick={() => handleApproveAndPublish(review.aiResponse || "")} disabled={publishMut.isPending}>
+                        <ExternalLink className="w-4 h-4 mr-1" /> {publishMut.isPending ? "A publicar..." : review.googleReply ? "Aprovar e substituir no Google" : "Aprovar e publicar"}
                       </Button>
                     )}
-                    {!review.aiResponseApproved && (
-                      <Button size="sm" onClick={handleApprove} disabled={approveMut.isPending}>
+                    {!review.googleReviewName && !review.aiResponseApproved && (
+                      <Button size="sm" onClick={handleApprove} disabled={approveMut.isPending} title="Esta crítica veio por email: depois de aprovar, publica a resposta no perfil Google.">
                         <CheckCircle2 className="w-4 h-4 mr-1" /> Aprovar
                       </Button>
                     )}
@@ -751,7 +781,7 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
                       <div key={c.id} className="text-sm p-2 bg-muted rounded mb-1 flex items-center gap-2">
                         <AlertTriangle className="w-3 h-3 text-orange-500" />
                         <span>{c.title}</span>
-                        <Badge variant="outline" className="text-[10px] ml-auto">{c.complaintStatus}</Badge>
+                        <Badge variant="outline" className="text-[11px] ml-auto">{c.complaintStatus}</Badge>
                       </div>
                     ))}
                   </div>

@@ -1,0 +1,118 @@
+name: BD Multipark — descobrir esquema (manual)
+# Corre DENTRO da Vercel (é lá que está a DATABASE_URL_MULTIPARK, guardada
+# como "sensível") e guarda o resultado como artefacto.
+#  - modo "schema": descoberta do esquema → artefacto `multipark-db-schema`
+#    (schema.md). SÓ ESTRUTURA: tabelas, colunas, chaves, índices, enums e
+#    contagens aproximadas — nunca linhas.
+#  - modo "probe": sonda do mapeamento → artefacto `multipark-db-probe`
+#    (probe.json): compara reservas/movimentos recentes que já temos (da API)
+#    com a BD deles (datas nos dois modos, ids, preços). Dados pessoais só
+#    como igual/diferente.
+#  - modo "diferencas": compara as duas BD por inteiro (só leitura, não grava)
+#    → artefacto `multipark-db-diferencas` (diferencas.json). "foco" = um dia
+#    (Lisboa) com tudo o que foi cancelado. Sem dados pessoais do cliente.
+#  - modo "perfil": o que cada tabela/coluna guarda de facto + catálogos de
+#    negócio → artefacto `multipark-db-perfil` (perfil.json). Chama o endpoint
+#    várias vezes até cobrir todas as tabelas. Valores pessoais nunca saem.
+# Ver docs/multipark-db/README.md.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "schema = descobrir esquema; probe = sonda do mapeamento; diferencas = comparar as duas BD (só leitura); perfil = o que cada coluna guarda"
+        required: false
+        default: "schema"
+        type: choice
+        options: [schema, probe, diferencas, perfil]
+      schema:
+        description: "(schema) Esquemas a ler, separados por vírgula (vazio = todos)"
+        required: false
+        default: ""
+      sample:
+        description: "(probe) N.º de reservas a comparar (máx 20)"
+        required: false
+        default: "10"
+      foco:
+        description: "(diferencas) Dia AAAA-MM-DD (Lisboa) a detalhar os cancelamentos (vazio = nenhum)"
+        required: false
+        default: ""
+permissions:
+  contents: read
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Chamar o endpoint
+        env:
+          APP_URL: ${{ secrets.APP_URL || 'https://dashbord-multipark.vercel.app' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          MODE: ${{ inputs.mode }}
+          SCHEMA: ${{ inputs.schema }}
+          SAMPLE: ${{ inputs.sample }}
+          FOCO: ${{ inputs.foco }}
+        run: |
+          set -euo pipefail
+          test -n "$CRON_SECRET"
+          mkdir -p out
+          if [ "$MODE" = "perfil" ]; then
+            # Uma tabela por chamada; uma tabela que falhe fica registada com o
+            # erro e o resto continua. Os catálogos vêm numa chamada à parte.
+            mkdir -p parts
+            call() { # $1=url $2=ficheiro → devolve o código HTTP (000 se o curl falhar)
+              curl -sS -m 90 -w '%{http_code}' -o "$2" -H "Authorization: Bearer $CRON_SECRET" "$1" || echo "000"
+            }
+            c=$(call "$APP_URL/api/cron/multipark-db-profile?lista=1" parts/lista.json)
+            echo "lista: HTTP $c"
+            if [ "$c" != "200" ]; then cat parts/lista.json; echo "::error::lista falhou (HTTP $c)"; exit 1; fi
+            echo '{"tabelas":{},"pendentes":[]}' > out/perfil.json
+            for t in $(jq -r '.lista[]' parts/lista.json); do
+              c=$(call "$APP_URL/api/cron/multipark-db-profile?tables=$(printf '%s' "$t" | jq -sRr @uri)" parts/t.json)
+              echo "$t: HTTP $c"
+              if [ "$c" = "200" ]; then
+                jq -s '.[0] * {tabelas: (.[0].tabelas + .[1].tabelas)}' out/perfil.json parts/t.json > parts/m.json
+              else
+                jq --arg t "$t" --arg c "$c" '.tabelas[$t] = {erro: ("HTTP " + $c)}' out/perfil.json > parts/m.json
+              fi
+              mv parts/m.json out/perfil.json
+            done
+            c=$(call "$APP_URL/api/cron/multipark-db-profile?catalogos=1" parts/cat.json)
+            echo "catalogos: HTTP $c"
+            if [ "$c" = "200" ]; then
+              jq -s '.[0] * {catalogos: .[1].catalogos}' out/perfil.json parts/cat.json > parts/m.json
+            else
+              jq --arg c "$c" '.catalogos = {erro: ("HTTP " + $c)}' out/perfil.json > parts/m.json
+            fi
+            mv parts/m.json out/perfil.json
+            jq '{tabelas: (.tabelas | length), pendentes, parciais: [.tabelas | to_entries[] | select(.value.parcial) | .key], erros: [.tabelas | to_entries[] | select(.value.erro) | .key], clientes: .catalogos.clientes}' out/perfil.json
+            exit 0
+          fi
+          if [ "$MODE" = "probe" ]; then
+            file=out/probe.json
+            url="$APP_URL/api/cron/multipark-db-probe?sample=$(printf '%s' "${SAMPLE:-10}" | tr -cd '0-9')"
+          elif [ "$MODE" = "diferencas" ]; then
+            file=out/diferencas.json
+            f=$(printf '%s' "${FOCO:-}" | tr -cd '0-9-')
+            url="$APP_URL/api/cron/multipark-db-diff?foco=$f"
+          else
+            file=out/schema.md
+            q=""
+            if [ -n "$SCHEMA" ]; then q="?schema=$(printf '%s' "$SCHEMA" | jq -sRr @uri)"; fi
+            url="$APP_URL/api/cron/multipark-db-schema$q"
+          fi
+          code=$(curl -sS -m 90 -w '%{http_code}' -o "$file" \
+            -H "Authorization: Bearer $CRON_SECRET" "$url") \
+            || { echo "::error::curl falhou ao contactar o endpoint"; cat "$file" || true; exit 1; }
+          echo "HTTP $code"
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            cat "$file"; echo
+            echo "::error::endpoint devolveu HTTP $code"; exit 1
+          fi
+          if [ "$MODE" = "probe" ]; then jq '{source, verdict, tally, history: (.history | del(.examples)), queries}' "$file"
+          elif [ "$MODE" = "diferencas" ]; then jq '{tempos, linhas, ignoradas, diferencas, porTipo, desaparecidas, foco: (.foco | if . then del(.reservas) else . end)}' "$file"
+          else head -n 40 "$file"; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: multipark-db-${{ inputs.mode || 'schema' }}
+          path: out/
+          retention-days: 14

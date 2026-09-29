@@ -1,5 +1,13 @@
 # Booking Sync Runners — Topology & Dual-Runner Analysis
 
+> **Atualização (26 set 2026) — nota HISTÓRICA abaixo.** Os timers in-process
+> (`setInterval`, INPROCESS_SCHEDULERS) foram REMOVIDOS do código e os
+> schedules do GitHub Actions retirados. Agendador único: `GET /api/cron/tick`
+> (server/cronScheduler.ts + server/cronSchedule.ts, estado em
+> `cron_job_state`), chamado de 5 em 5 min pelo cron-job.org e de hora a hora
+> pelo `.github/workflows/cron-tick.yml` (rede de segurança). Ver
+> docs/ajuda/agendador.md.
+
 ## Summary
 Tracks WHERE the Multipark booking sync actually fires. There are TWO deploy targets
 built from the SAME repo but DIFFERENT entrypoints, and the sync runs on BOTH:

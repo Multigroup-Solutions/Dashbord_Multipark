@@ -3,7 +3,11 @@
  *
  * Um lead tem nome e telemóvel e/ou email (pelo menos um dos dois). Vive fora de
  * `employees`: a ficha só nasce quando a pessoa aceita — até lá é um lead com um
- * estado (`new` → `contacted` → `converted` | `declined`).
+ * estado (`new` → `contacted` → `replied` → `converted` | `declined`).
+ *
+ * Origens (`source`): `manual` (criado aqui), `site` (candidatura Be a Driver)
+ * e `email` (recursos-humanos@) — as duas últimas importadas automaticamente
+ * por server/extraLeadsSync.ts (um só funil de recrutamento).
  *
  * O contacto é feito por WhatsApp com o template `seja_motorista` (sem
  * parâmetros) através de `sendTemplateToContacts`, o MESMO caminho de envio dos
@@ -14,17 +18,22 @@
  *
  * A parte pura (`normalizeLeadInput`) é testada sem BD.
  */
-import { and, desc, eq, inArray, like, or, sql } from "drizzle-orm";
-import { getDb, logActivity } from "./db";
+import { currentDefaultCityId, projectVisible, scopedProjectIds } from "./extrasCityFilter";
+import { assertProjectAccess } from "./cityScope";
+import { and, desc, eq, gte, inArray, isNull, like, or, sql } from "drizzle-orm";
+import { getDb, getProjects, logActivity } from "./db";
 import { extraLeads } from "../drizzle/schema";
 import { normalizeEmail, isPlausibleEmail } from "../shared/email";
 import { normalizePhoneE164, normalizePhoneForStorage } from "../shared/phone";
 import { findWhatsAppTemplate, templateHasBodyParams } from "../shared/whatsappTemplate";
 import { sendTemplateToContacts, type BroadcastRecipient } from "./whatsappBroadcast";
 import { findActiveEmployeeByPhoneE164 } from "./extrasAvailability";
+import { aggregateFunnel, LEAD_STATUSES, manualStatusError, type FunnelLeadRow, type FunnelResult } from "../shared/extraLeadsFunnel";
 
-export const EXTRA_LEAD_STATUSES = ["new", "contacted", "converted", "declined"] as const;
+export const EXTRA_LEAD_STATUSES = LEAD_STATUSES;
 export type ExtraLeadStatus = (typeof EXTRA_LEAD_STATUSES)[number];
+// Regra de transições manuais — vive em shared/ (a página usa a mesma).
+export { manualStatusError };
 
 export interface LeadInput {
   fullName: string;
@@ -84,19 +93,37 @@ export interface ExtraLeadRow {
   status: ExtraLeadStatus;
   notes: string | null;
   source: string;
+  sourceRef: string | null;
   contactCount: number;
   lastContactedAt: string | null;
+  firstContactedAt: string | null;
+  lastInboundAt: string | null;
+  convertedAt: string | null;
+  autoRepliedAt: string | null;
+  /** Pediu STOP por WhatsApp (migração 0094). */
+  optedOutAt: string | null;
   employeeId: number | null;
+  projectId: number | null;
   createdById: number | null;
   createdAt: string;
   updatedAt: string;
 }
 
-export async function listExtraLeads(filter: { status?: ExtraLeadStatus | null; search?: string | null } = {}): Promise<ExtraLeadRow[]> {
+/** Filtro de cidade dos leads: os da(s) cidade(s) do utilizador + os sem cidade. */
+function leadScopeCondition() {
+  const scope = scopedProjectIds();
+  if (scope === undefined) return undefined;
+  return scope.length ? or(isNull(extraLeads.projectId), inArray(extraLeads.projectId, scope))! : isNull(extraLeads.projectId);
+}
+
+export async function listExtraLeads(
+  filter: { status?: ExtraLeadStatus | null; search?: string | null; source?: string | null } = {},
+): Promise<ExtraLeadRow[]> {
   const db = await getDb();
   if (!db) return [];
   const conds = [];
   if (filter.status) conds.push(eq(extraLeads.status, filter.status));
+  if (filter.source) conds.push(eq(extraLeads.source, filter.source));
   const q = filter.search?.trim();
   if (q) {
     const pattern = `%${q}%`;
@@ -110,6 +137,11 @@ export async function listExtraLeads(filter: { status?: ExtraLeadStatus | null; 
       )!,
     );
   }
+  // Cidade (ponto 10): quem só vê uma cidade não vê os leads das outras;
+  // leads sem cidade (antigos) continuam visíveis a todos. No WHERE, antes do
+  // LIMIT (filtrar depois cortava leads da própria cidade com >500 linhas).
+  const scoped = leadScopeCondition();
+  if (scoped) conds.push(scoped);
   const rows = await db
     .select()
     .from(extraLeads)
@@ -117,6 +149,23 @@ export async function listExtraLeads(filter: { status?: ExtraLeadStatus | null; 
     .orderBy(desc(extraLeads.createdAt))
     .limit(500);
   return rows as ExtraLeadRow[];
+}
+
+/** Lead fora das cidades de quem pede → "não encontrado" (não revela que existe). */
+export function assertLeadVisible(lead: { projectId: number | null } | undefined | null): void {
+  if (!lead || !projectVisible(lead.projectId, scopedProjectIds())) throw new Error("Lead não encontrado");
+}
+
+/**
+ * Cidade escolhida para um lead: tem de ser um nó `level='city'` e estar nas
+ * cidades de quem edita (a MESMA guarda do Converter: `assertProjectAccess`).
+ * `null` (sem cidade) só para quem vê todas as cidades.
+ */
+export async function assertLeadCity(projectId: number | null): Promise<void> {
+  assertProjectAccess(projectId);
+  if (projectId == null) return;
+  const node = ((await getProjects()) as { id: number; level: string | null }[]).find((p) => p.id === projectId);
+  if (!node || node.level !== "city") throw new Error("Escolhe uma cidade (centro de custos de nível cidade).");
 }
 
 /** Outro lead (que não `excludeId`) já usa este número ou email? */
@@ -136,6 +185,11 @@ async function findDuplicate(
     .limit(5);
   const hit = rows.find((r) => r.id !== excludeId);
   if (!hit) return null;
+  const [full] = await db.select({ projectId: extraLeads.projectId }).from(extraLeads).where(eq(extraLeads.id, hit.id)).limit(1);
+  if (full && !projectVisible(full.projectId, scopedProjectIds())) {
+    // Existe noutra cidade: avisa sem mostrar quem é
+    return { id: 0, fullName: "noutra cidade", field: lead.phoneE164 && hit.phoneE164 === lead.phoneE164 ? "telemóvel" : "email" };
+  }
   return { id: hit.id, fullName: hit.fullName, field: lead.phoneE164 && hit.phoneE164 === lead.phoneE164 ? "telemóvel" : "email" };
 }
 
@@ -147,7 +201,7 @@ export async function createExtraLead(input: LeadInput, createdById: number | nu
   const { lead } = parsed;
 
   const dup = await findDuplicate(db, lead);
-  if (dup) throw new Error(`Já existe um lead com este ${dup.field}: ${dup.fullName} (#${dup.id}).`);
+  if (dup) throw new Error(dup.id ? `Já existe um lead com este ${dup.field}: ${dup.fullName} (#${dup.id}).` : `Já existe um lead com este ${dup.field} ${dup.fullName}.`);
   if (lead.phoneE164) {
     // Um número que já pertence a um colaborador ativo não é um lead — é gente
     // da casa. Evita "recrutar" quem já trabalha connosco.
@@ -155,7 +209,8 @@ export async function createExtraLead(input: LeadInput, createdById: number | nu
     if (emp) throw new Error(`Este número já pertence ao colaborador ${emp.fullName} — não é um lead.`);
   }
 
-  const result = await db.insert(extraLeads).values({ ...lead, createdById, source: "manual" });
+  // O lead fica na cidade de quem o cria (null se vê todas as cidades).
+  const result = await db.insert(extraLeads).values({ ...lead, createdById, source: "manual", projectId: currentDefaultCityId() });
   const id = Number((result as any)[0]?.insertId ?? (result as any).insertId);
   await logActivity({
     userId: createdById ?? 0,
@@ -170,13 +225,19 @@ export async function createExtraLead(input: LeadInput, createdById: number | nu
 
 export async function updateExtraLead(
   id: number,
-  patch: Partial<LeadInput> & { status?: ExtraLeadStatus | null },
+  patch: Partial<LeadInput> & { status?: ExtraLeadStatus | null; projectId?: number | null },
   userId: number | null,
 ): Promise<ExtraLeadRow> {
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível");
   const [current] = await db.select().from(extraLeads).where(eq(extraLeads.id, id)).limit(1);
-  if (!current) throw new Error("Lead não encontrado");
+  assertLeadVisible(current);
+  if (patch.status) {
+    const err = manualStatusError(current, patch.status);
+    if (err) throw new Error(err);
+  }
+  const cityChanged = patch.projectId !== undefined && patch.projectId !== current.projectId;
+  if (cityChanged) await assertLeadCity(patch.projectId ?? null);
 
   const parsed = normalizeLeadInput({
     fullName: patch.fullName ?? current.fullName,
@@ -187,11 +248,21 @@ export async function updateExtraLead(
   if (!parsed.ok) throw new Error(parsed.error);
   const { lead } = parsed;
   const dup = await findDuplicate(db, lead, id);
-  if (dup) throw new Error(`Já existe um lead com este ${dup.field}: ${dup.fullName} (#${dup.id}).`);
+  if (dup) throw new Error(dup.id ? `Já existe um lead com este ${dup.field}: ${dup.fullName} (#${dup.id}).` : `Já existe um lead com este ${dup.field} ${dup.fullName}.`);
 
   const set: Record<string, unknown> = { ...lead };
   if (patch.status) set.status = patch.status;
+  if (cityChanged) set.projectId = patch.projectId ?? null;
   await db.update(extraLeads).set(set).where(eq(extraLeads.id, id));
+  if (cityChanged) {
+    await logActivity({
+      userId: userId ?? 0,
+      action: "extra_lead_city",
+      entity: "extra_leads",
+      entityId: id,
+      details: `Lead ${current.fullName}: cidade ${current.projectId ?? "—"} → ${patch.projectId ?? "—"}`,
+    });
+  }
 
   if (patch.status && patch.status !== current.status) {
     await logActivity({
@@ -209,8 +280,8 @@ export async function updateExtraLead(
 export async function deleteExtraLead(id: number, userId: number | null): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível");
-  const [current] = await db.select({ fullName: extraLeads.fullName }).from(extraLeads).where(eq(extraLeads.id, id)).limit(1);
-  if (!current) throw new Error("Lead não encontrado");
+  const [current] = await db.select({ fullName: extraLeads.fullName, projectId: extraLeads.projectId }).from(extraLeads).where(eq(extraLeads.id, id)).limit(1);
+  assertLeadVisible(current);
   await db.delete(extraLeads).where(eq(extraLeads.id, id));
   await logActivity({ userId: userId ?? 0, action: "extra_lead_delete", entity: "extra_leads", entityId: id, details: `Lead apagado: ${current.fullName}` });
 }
@@ -218,7 +289,7 @@ export async function deleteExtraLead(id: number, userId: number | null): Promis
 export interface LeadContactResult {
   leadId: number;
   fullName: string;
-  status: BroadcastRecipient["status"] | "no_phone";
+  status: BroadcastRecipient["status"] | "no_phone" | "skipped";
   error?: string;
 }
 
@@ -236,7 +307,13 @@ export interface ContactLeadsSummary {
  * parâmetros (o lead não tem ficha → não há campo de diálogo nem token de
  * formulário). Leads sem telemóvel ficam registados como `no_phone`, sem chamada.
  */
-export async function contactExtraLeads(opts: { leadIds: number[]; templateId: string; createdById: number | null }): Promise<ContactLeadsSummary> {
+export async function contactExtraLeads(opts: {
+  leadIds: number[];
+  templateId: string;
+  createdById: number | null;
+  /** Nota do broadcast/atividade (ex.: "lembrete automático"). */
+  note?: string;
+}): Promise<ContactLeadsSummary> {
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível");
   const def = findWhatsAppTemplate(opts.templateId);
@@ -247,9 +324,21 @@ export async function contactExtraLeads(opts: { leadIds: number[]; templateId: s
   const ids = [...new Set(opts.leadIds)].filter((n) => Number.isInteger(n) && n > 0);
   if (!ids.length) throw new Error("Nenhum lead selecionado.");
 
-  const leads = (await db.select().from(extraLeads).where(inArray(extraLeads.id, ids))) as ExtraLeadRow[];
+  const scope = scopedProjectIds();
+  const leads = ((await db.select().from(extraLeads).where(inArray(extraLeads.id, ids))) as ExtraLeadRow[])
+    .filter((l) => projectVisible(l.projectId, scope));
   const results: LeadContactResult[] = [];
   const contactable = leads.filter((l) => {
+    // Convertidos (já trabalham cá) e sem interesse não recebem o convite
+    if (l.status === "converted" || l.status === "declined") {
+      results.push({ leadId: l.id, fullName: l.fullName, status: "skipped", error: l.status === "converted" ? "Já é extra" : "Sem interesse" });
+      return false;
+    }
+    // Pediu STOP por WhatsApp → nunca mais recebe templates (nem o lembrete automático).
+    if (l.optedOutAt) {
+      results.push({ leadId: l.id, fullName: l.fullName, status: "opted_out", error: "Não quer mensagens (STOP)" });
+      return false;
+    }
     if (l.phoneE164) return true;
     results.push({ leadId: l.id, fullName: l.fullName, status: "no_phone", error: "Sem telemóvel" });
     return false;
@@ -261,7 +350,7 @@ export async function contactExtraLeads(opts: { leadIds: number[]; templateId: s
       templateName: def.name,
       languageCode: def.language,
       contacts: contactable.map((l) => ({ name: l.fullName, phone: l.phoneE164! })),
-      note: `leads de extras (${contactable.length})`,
+      note: `${opts.note ?? "leads de extras"} (${contactable.length})`,
       createdById: opts.createdById,
     });
     broadcastId = summary.broadcastId;
@@ -275,6 +364,7 @@ export async function contactExtraLeads(opts: { leadIds: number[]; templateId: s
           .update(extraLeads)
           .set({
             lastContactedAt: now,
+            firstContactedAt: sql`COALESCE(${extraLeads.firstContactedAt}, ${now})`,
             contactCount: sql`${extraLeads.contactCount} + 1`,
             // Só o 1º contacto muda o estado; um lead já convertido/recusado
             // que volte a receber o template mantém o que o backoffice decidiu.
@@ -287,12 +377,106 @@ export async function contactExtraLeads(opts: { leadIds: number[]; templateId: s
 
   const sent = results.filter((r) => r.status === "sent").length;
   const noPhone = results.filter((r) => r.status === "no_phone").length;
-  const failed = results.length - sent - noPhone;
+  const skipped = results.filter((r) => r.status === "skipped" || r.status === "opted_out" || r.status === "duplicate_phone").length;
+  const failed = results.length - sent - noPhone - skipped;
   await logActivity({
     userId: opts.createdById ?? 0,
     action: "extra_lead_contact",
     entity: "extra_leads",
-    details: `WhatsApp “${def.name}” a ${results.length} lead(s): ${sent} enviados, ${failed} falhas, ${noPhone} sem telemóvel`,
+    details: `${opts.note ? `[${opts.note}] ` : ""}WhatsApp “${def.name}” a ${results.length} lead(s): ${sent} enviados, ${failed} falhas, ${noPhone} sem telemóvel`,
   });
   return { broadcastId, total: results.length, sent, failed, noPhone, results };
+}
+
+// ─── Ações em lote ──────────────────────────────────────────────────────────
+
+export interface BulkUpdateResult {
+  updated: number;
+  skipped: { leadId: number; fullName: string | null; error: string }[];
+}
+
+/**
+ * Muda o estado (nunca para Convertido) e/ou a cidade de vários leads. Cada
+ * lead passa pela MESMA verificação da edição individual: fora das cidades de
+ * quem pede → "não encontrado"; transição inválida → fica de fora com o motivo.
+ */
+export async function bulkUpdateExtraLeads(
+  opts: { leadIds: number[]; status?: ExtraLeadStatus | null; projectId?: number | null },
+  userId: number | null,
+): Promise<BulkUpdateResult> {
+  const db = await getDb();
+  if (!db) throw new Error("Base de dados indisponível");
+  const ids = [...new Set(opts.leadIds)].filter((n) => Number.isInteger(n) && n > 0);
+  if (!ids.length) throw new Error("Nenhum lead selecionado.");
+  if (!opts.status && opts.projectId === undefined) throw new Error("Nada para alterar.");
+  if (opts.status === "converted") throw new Error("Para marcar como convertido usa o botão Converter (lead a lead).");
+  if (opts.projectId !== undefined) await assertLeadCity(opts.projectId ?? null);
+
+  const rows = (await db.select().from(extraLeads).where(inArray(extraLeads.id, ids))) as ExtraLeadRow[];
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const res: BulkUpdateResult = { updated: 0, skipped: [] };
+  const toUpdate: number[] = [];
+  for (const id of ids) {
+    const lead = byId.get(id);
+    try {
+      assertLeadVisible(lead);
+    } catch (err: any) {
+      res.skipped.push({ leadId: id, fullName: null, error: err.message });
+      continue;
+    }
+    if (opts.status) {
+      const err = manualStatusError(lead!, opts.status);
+      if (err) { res.skipped.push({ leadId: id, fullName: lead!.fullName, error: err }); continue; }
+    }
+    toUpdate.push(id);
+  }
+  if (toUpdate.length) {
+    const set: Record<string, unknown> = {};
+    if (opts.status) set.status = opts.status;
+    if (opts.projectId !== undefined) set.projectId = opts.projectId ?? null;
+    await db.update(extraLeads).set(set).where(inArray(extraLeads.id, toUpdate));
+    res.updated = toUpdate.length;
+    await logActivity({
+      userId: userId ?? 0,
+      action: "extra_lead_bulk",
+      entity: "extra_leads",
+      details: `Lote de ${toUpdate.length} lead(s)${opts.status ? ` → estado ${opts.status}` : ""}${opts.projectId !== undefined ? ` → cidade ${opts.projectId ?? "—"}` : ""} (ids ${toUpdate.slice(0, 50).join(", ")}${toUpdate.length > 50 ? "…" : ""})`,
+    });
+  }
+  return res;
+}
+
+// ─── Funil ──────────────────────────────────────────────────────────────────
+
+/**
+ * Métricas do funil (origem × cidade × semana ISO da criação) dos leads
+ * criados nas últimas `weeks` semanas, no âmbito de cidades de quem pede.
+ */
+export async function getLeadFunnel(opts: { weeks?: number } = {}): Promise<FunnelResult & { weeks: number }> {
+  const weeks = Math.min(52, Math.max(1, Math.floor(opts.weeks ?? 12)));
+  const db = await getDb();
+  const empty = aggregateFunnel([], () => "");
+  if (!db) return { ...empty, weeks };
+  const since = new Date(Date.now() - weeks * 7 * 86_400_000).toISOString().slice(0, 19).replace("T", " ");
+  const conds = [gte(extraLeads.createdAt, since)];
+  const scoped = leadScopeCondition();
+  if (scoped) conds.push(scoped);
+  const rows = (await db
+    .select({
+      source: extraLeads.source,
+      projectId: extraLeads.projectId,
+      status: extraLeads.status,
+      createdAt: extraLeads.createdAt,
+      contactCount: extraLeads.contactCount,
+      firstContactedAt: extraLeads.firstContactedAt,
+      lastContactedAt: extraLeads.lastContactedAt,
+      lastInboundAt: extraLeads.lastInboundAt,
+      convertedAt: extraLeads.convertedAt,
+    })
+    .from(extraLeads)
+    .where(and(...conds))
+    .limit(20_000)) as FunnelLeadRow[];
+  const names = new Map(((await getProjects()) as { id: number; name: string }[]).map((p) => [p.id, p.name]));
+  const result = aggregateFunnel(rows, (pid) => (pid == null ? "Sem cidade" : names.get(pid) ?? `#${pid}`));
+  return { ...result, weeks };
 }

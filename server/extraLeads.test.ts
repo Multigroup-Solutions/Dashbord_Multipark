@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeLeadInput } from "./extraLeads";
+import { manualStatusError, normalizeLeadInput } from "./extraLeads";
 import { findWhatsAppTemplate, templateHasBodyParams, LEAD_RECRUITMENT_TEMPLATE_ID } from "../shared/whatsappTemplate";
 
 describe("normalizeLeadInput", () => {
@@ -71,5 +71,19 @@ describe("catálogo — templates sem parâmetros", () => {
 
   it("a página de leads usa o template de recrutamento", () => {
     expect(LEAD_RECRUITMENT_TEMPLATE_ID).toBe("seja_motorista");
+  });
+});
+
+describe("manualStatusError", () => {
+  it("convertido só pelo botão Converter", () => {
+    expect(manualStatusError({ status: "contacted", employeeId: null }, "converted")).toMatch(/Converter/);
+  });
+  it("lead com ficha fica convertido", () => {
+    expect(manualStatusError({ status: "converted", employeeId: 12 }, "new")).toMatch(/ficha/);
+  });
+  it("transições normais passam", () => {
+    expect(manualStatusError({ status: "new", employeeId: null }, "contacted")).toBeNull();
+    expect(manualStatusError({ status: "contacted", employeeId: null }, "declined")).toBeNull();
+    expect(manualStatusError({ status: "converted", employeeId: 12 }, "converted")).toBeNull();
   });
 });

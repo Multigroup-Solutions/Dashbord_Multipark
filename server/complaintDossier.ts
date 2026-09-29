@@ -3,8 +3,8 @@
  *  - matching reclamação → reserva Multipark por ref/matrícula/email/telefone/
  *    nome, ancorado na DATA da reclamação (a reserva "da queixa", não a mais
  *    recente do cliente)
- *  - dossier completo da reserva (detalhe + extras + histórico de condutores
- *    da BD local, com fetch on-demand à API quando ainda não foi sincronizado)
+ *  - dossier da reserva (detalhe + extras da cópia local; histórico ao vivo da
+ *    BD da Multipark, com a cópia antiga como recurso) — sem chamadas à API
  */
 
 import { and, desc, eq, or, sql } from "drizzle-orm";
@@ -273,114 +273,54 @@ export async function autoLinkLostFoundBooking(itemId: number): Promise<{
   };
 }
 
-/** Resolve a chave de API do parque de uma reserva (parkName + city locais). */
-async function resolveParkApiKey(parkName: string | null, city: string | null): Promise<string | null> {
-  const { getConfiguredParks, getParkApiKey } = await import("./multipark");
-  const CITY_NORMALIZE: Record<string, string> = {
-    lisbon: "lisboa", lisboa: "lisboa", porto: "porto", oporto: "porto", faro: "faro",
-  };
-  const wantCity = CITY_NORMALIZE[(city ?? "").toLowerCase()] ?? (city ?? "").toLowerCase();
-  const parkLower = (parkName ?? "").toLowerCase();
-  const park = getConfiguredParks().find((p) => {
-    const cityOk = CITY_NORMALIZE[p.city.toLowerCase()] === wantCity || p.city.toLowerCase() === wantCity;
-    return cityOk && parkLower.includes(p.name.toLowerCase());
-  });
-  return park ? (getParkApiKey(park) ?? null) : null;
+/** Linha do histórico no formato que as páginas Reclamações/Perdidos leem. */
+export interface BookingTimelineItem {
+  id: string;
+  changeType: string | null;
+  actionTime: string | null;
+  remarks: string | null;
+  agentName: string | null;
+  userId: string | null;
+  modifiedFields: string | null;
+  platform: string | null;
 }
 
 /**
- * Garante que o histórico (condutores) de uma reserva está na BD local. O
- * batch do cron só apanha reservas com checkIn recente — para reclamações
- * sobre reservas antigas vamos buscar on-demand com a chave do parque certo.
- * `force` re-busca mesmo que já existam linhas (p.ex. só a criação).
+ * Histórico de uma reserva para Reclamações/Perdidos: AO VIVO da BD da
+ * Multipark (History; ref = id ou n.º da reserva). Sem BD 2, ou sem nada lá
+ * (reservas anteriores a 2 mar 2026 só têm o retrato da migração), usa a
+ * cópia antiga `multipark_booking_history` (só leitura — já não é
+ * atualizada). Nunca vai à API da Multipark.
  */
-export async function ensureBookingHistory(externalId: string, force = false): Promise<boolean> {
-  const db = await getDb();
-  if (!db) return false;
-
-  if (!force) {
-    const have = await db
-      .select({ n: sql<number>`COUNT(*)` })
-      .from(multiparkBookingHistory)
-      .where(eq(multiparkBookingHistory.bookingExternalId, externalId));
-    if (Number(have[0]?.n ?? 0) > 0) return true;
-  }
-
-  const rows = await db
-    .select({ parkName: multiparkBookings.parkName, city: multiparkBookings.city })
-    .from(multiparkBookings)
-    .where(eq(multiparkBookings.externalId, externalId))
-    .limit(1);
-  const booking = rows[0];
-  if (!booking) return false;
-
-  const apiKey = await resolveParkApiKey(booking.parkName, booking.city);
-  if (!apiKey) return false;
-
+export async function getBookingTimeline(ref: string, cities?: string[]): Promise<{ bookingId: string; total: number; history: BookingTimelineItem[] }> {
   try {
-    const { syncBookingHistory } = await import("./jobs/multiparkBookingSync");
-    return await syncBookingHistory(externalId, apiKey);
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Vai buscar a reserva + histórico DIRETAMENTE à API Multipark e grava tudo
- * na BD local — para o botão "Atualizar da API" dos detalhes e para o caso
- * de a reserva nem existir localmente (ex.: histórica, anterior ao sync).
- */
-export async function refreshBookingFromApi(reservationRef: string): Promise<{
-  ok: boolean;
-  detail: string;
-}> {
-  const db = await getDb();
-  if (!db) return { ok: false, detail: "BD indisponível" };
-
-  const local = await db
-    .select({ externalId: multiparkBookings.externalId })
-    .from(multiparkBookings)
-    .where(or(eq(multiparkBookings.externalId, reservationRef), eq(multiparkBookings.bookingNumber, reservationRef)))
-    .limit(1);
-  // Sem registo local, a ref tem de ser o id da API.
-  const externalId = local[0]?.externalId ?? reservationRef;
-
-  // Detalhe completo: tenta todas as chaves (o parque pode ser desconhecido),
-  // upsert do esqueleto com parque/cidade e enrichment imediato — o mesmo
-  // caminho do webhook das Conexões.
-  try {
-    const { getBookingTryAllParks } = await import("./multipark");
-    const { cityToSyncForm } = await import("./multiparkWebhook");
-    const { upsertMultiparkBooking } = await import("./db");
-    const { enrichBookingsBatch } = await import("./jobs/multiparkBookingSync");
-    const found = await getBookingTryAllParks(externalId);
-    if (!found && !local[0]) {
-      return { ok: false, detail: "Reserva não encontrada na API — confirma a referência" };
+    const { resolveBookingRef, getBookingFileTimeline, formatChange } = await import("./multiparkDb/bookingFile");
+    const resolved = await resolveBookingRef(ref, cities);
+    if (resolved.available && resolved.data.kind === "found") {
+      const t = await getBookingFileTimeline(resolved.data.id, cities);
+      const entries = t.available ? t.data.entries.filter((e) => e.source === "history") : [];
+      if (entries.length) {
+        const history = entries.map((e) => ({
+          id: e.id, changeType: e.kind, actionTime: e.at, remarks: e.remarks, agentName: e.who, userId: null,
+          modifiedFields: e.changes.length ? e.changes.map(formatChange).join("; ") : null, platform: e.platform,
+        }));
+        return { bookingId: ref, total: history.length, history };
+      }
     }
-    if (found) {
-      await upsertMultiparkBooking({
-        externalId,
-        parkName: `${found.parkConfig.name} - ${found.parkConfig.city}`,
-        city: cityToSyncForm(found.parkConfig.city),
-        enrichedAt: null,
-      } as any);
-      await enrichBookingsBatch({ externalIds: [externalId], limit: 1 });
-    }
-  } catch (err: any) {
-    return { ok: false, detail: `Falha a buscar a reserva: ${String(err?.message ?? err).slice(0, 120)}` };
-  }
-
-  const gotHistory = await ensureBookingHistory(externalId, true);
-  return {
-    ok: true,
-    detail: gotHistory ? "Reserva e histórico atualizados da API" : "Reserva atualizada; histórico indisponível (sem chave do parque?)",
-  };
+  } catch { /* BD da Multipark indisponível: usa a cópia antiga */ }
+  const d = await getComplaintBookingDossier(ref);
+  const history = d.history.map((h) => ({
+    id: h.historyId, changeType: h.changeType, actionTime: h.actionTime, remarks: h.remarks,
+    agentName: h.agentName, userId: h.agentUserId, modifiedFields: h.modifiedFields, platform: h.platform,
+  }));
+  return { bookingId: ref, total: history.length, history };
 }
 
 /**
  * Dossier completo de uma reserva para o detalhe da reclamação: detalhe da
- * reserva + extras itemizados + histórico de condutores (BD local, com fetch
- * on-demand na primeira abertura).
+ * reserva + extras itemizados (cópia financeira local, alimentada pelo
+ * webhook) + histórico antigo de condutores (`multipark_booking_history`, já
+ * não atualizado). A ficha completa e atual está em /reserva/:id (BD 2).
  */
 export async function getComplaintBookingDossier(reservationRef: string): Promise<{
   booking: typeof multiparkBookings.$inferSelect | null;
@@ -391,32 +331,13 @@ export async function getComplaintBookingDossier(reservationRef: string): Promis
   const db = await getDb();
   if (!db) return { booking: null, extras: [], history: [], historyFetched: false };
 
-  let rows = await db
+  const rows = await db
     .select()
     .from(multiparkBookings)
     .where(or(eq(multiparkBookings.externalId, reservationRef), eq(multiparkBookings.bookingNumber, reservationRef)))
     .limit(1);
-  // Não existe localmente? Vai logo à API buscar a reserva completa + histórico
-  // (reservas históricas anteriores ao sync também têm de abrir à primeira).
-  if (!rows[0]) {
-    try {
-      const r = await refreshBookingFromApi(reservationRef);
-      if (r.ok) {
-        rows = await db
-          .select()
-          .from(multiparkBookings)
-          .where(or(eq(multiparkBookings.externalId, reservationRef), eq(multiparkBookings.bookingNumber, reservationRef)))
-          .limit(1);
-      }
-    } catch { /* best-effort */ }
-  }
   const booking = rows[0] ?? null;
   if (!booking) return { booking: null, extras: [], history: [], historyFetched: false };
-
-  let historyFetched = false;
-  try {
-    historyFetched = await ensureBookingHistory(booking.externalId);
-  } catch { /* best-effort */ }
 
   const [extras, history] = await Promise.all([
     db
@@ -436,5 +357,5 @@ export async function getComplaintBookingDossier(reservationRef: string): Promis
       .limit(500),
   ]);
 
-  return { booking, extras, history, historyFetched: historyFetched || history.length > 0 };
+  return { booking, extras, history, historyFetched: history.length > 0 };
 }

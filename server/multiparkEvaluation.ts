@@ -1,38 +1,80 @@
-import { cityNameScope, bookingHistoryScope } from './cityScope';
-import { extrasDiaAssignments } from "../drizzle/schema";
-
 /**
- * Avaliação operacional do dia: cruza extras escalados em /extras-dia
- * com a actividade real registada em multipark_booking_history.
+ * Avaliação operacional do dia: cruza a escala do /extras-dia com o motor
+ * ÚNICO da avaliação (server/evaluationEngine.ts) — os mesmos números da
+ * Avaliação individual (mesma identidade, mesmo ponto sem [SUSPEITO], mesmas
+ * regras de pontos, mesmos ajustes manuais).
  *
- *  - Por condutor: nº de acções por changeType (CHECK_IN, CHECK_OUT,
- *    MOVEMENT, ...), total, horas pagas, custo, custo por acção
- *  - Por Team Leader: o seu próprio + agregado da sua equipa (mesmo turno)
- *  - Por turno (manhã / noite) e total do dia
+ *  - Dia OPERACIONAL: manhã 03h–15h e noite 15h–03h (Lisboa) — as ações da
+ *    madrugada contam para o turno da noite do dia anterior.
+ *  - Por pessoa: ações por tipo, pontos das ações (regras do dono), horas
+ *    (ponto; sem ponto, escala), custo, por hora.
+ *  - Por Team Leader: o seu + agregado da equipa (mesmo turno).
+ *  - Por turno e total do dia.
+ *
+ * Abrir o dia recalcula-o e grava-o (é o mesmo cálculo do cron diário).
+ *
+ * Fontes (plano-duas-bd.md, B5): os MOVIMENTOS (quem mexeu em que reserva,
+ * quando, em que fase) vêm AO VIVO da BD da Multipark ("History", "Booking",
+ * "Occurrence", "BookingReview" — server/multiparkDb/movements.ts); o GPS
+ * (Zello), o ponto e a escala vêm da nossa BD. Sem a BD da Multipark, o dia
+ * calcula-se na mesma com a cópia local e a página mostra o aviso.
  */
-
-import { and, asc, eq, gte, lt, lte, sql } from "drizzle-orm";
-import { getDb } from "./db";
-import { multiparkBookingHistory, employees } from "../drizzle/schema";
 import { listAssignments } from "./extrasDia";
-import { deriveShortName, DRIVER_LEVELS, TL_WORKING_DAYS_PER_MONTH } from "./extrasDia";
+import { agentKeyOf, loadEvaluationIdentity, shortNameOf } from "./evaluationIdentity";
+import { loadEvaluatedDays, recomputeRange, type MovementSource } from "./evaluationEngine";
+import type { AgentMovementSummary } from "./multiparkDb/movements";
+import {
+  actionPoints,
+  emptyDayMetrics,
+  perHourMetrics,
+  round2,
+  scoreOf,
+  type DayMetrics,
+  type RuleLine,
+} from "../shared/evaluationRules";
 
 export interface PersonEvaluation {
   assignmentId: number;
+  employeeId: number | null;
   personName: string;
   resolvedAgentName: string;
   isTeamLeader: boolean;
   shift: "morning" | "night";
   level: string | null;
+  /** horas da escala (pagas pela escala) */
   hoursPaid: number;
+  /** horas do ponto válidas (sem [SUSPEITO]) */
+  hoursWorked: number;
+  suspiciousHours: number;
+  hoursSource: string | null;
   cost: number;
   totalActions: number;
   byType: Record<string, number>;
+  recolhas: number;
+  entregas: number;
+  movements: number;
+  parkingMoves: number;
+  actionsMorning: number;
+  actionsNight: number;
+  /** pontos das ações (movimentos/recolhas/entregas/levar ao parque) */
+  weightedActions: number;
+  totalPoints: number;
+  lines: RuleLine[];
+  actionsPerHour: number | null;
+  weightedPerHour: number | null;
   costPerAction: number; // 0 se totalActions === 0
+  hasAdjustments: boolean;
+  /**
+   * Resumo AO VIVO da BD da Multipark (todas as contas de agente desta
+   * pessoa): fases, reservas, 1.ª/última ação, check-ins/outs assinados,
+   * ocorrências e avaliações dos clientes. null = sem movimentos ou sem BD.
+   */
+  live: (AgentMovementSummary & { agentUserIds: string[] }) | null;
   // Apenas para TLs: agregado dos seus drivers (mesmo turno)
   teamAggregate?: {
     drivers: number;
     totalActions: number;
+    weightedActions: number;
     totalCost: number;
     costPerAction: number;
     byType: Record<string, number>;
@@ -43,6 +85,7 @@ export interface ShiftEvaluation {
   shift: "morning" | "night";
   drivers: number;
   totalActions: number;
+  weightedActions: number;
   totalCost: number;
   byType: Record<string, number>;
   costPerAction: number;
@@ -52,465 +95,174 @@ export interface ShiftEvaluation {
 
 export interface DayEvaluation {
   date: string;
+  /** De onde vieram os movimentos (BD da Multipark ao vivo ou cópia local). */
+  source: MovementSource;
+  /** Aviso quando a BD da Multipark não respondeu. */
+  notice: string | null;
   shifts: ShiftEvaluation[];
   totals: {
     people: number;
     totalActions: number;
+    weightedActions: number;
     totalCost: number;
     byType: Record<string, number>;
     costPerAction: number;
   };
 }
 
-export async function evaluateDay(date: string): Promise<DayEvaluation> {
-  const db = await getDb();
-  if (!db) {
-    return {
-      date,
-      shifts: [],
-      totals: { people: 0, totalActions: 0, totalCost: 0, byType: {}, costPerAction: 0 },
-    };
-  }
+const addByType = (into: Record<string, number>, from: Record<string, number>) => {
+  for (const [k, v] of Object.entries(from)) into[k] = (into[k] ?? 0) + v;
+};
 
+export async function evaluateDay(date: string, opts: { cities?: string[] } = {}): Promise<DayEvaluation> {
   const assignments = await listAssignments(date);
-
-  // Buscar history do dia inteiro (uma só query)
-  const startStr = `${date} 00:00:00`;
-  const endDate = new Date(date + "T00:00:00");
-  endDate.setDate(endDate.getDate() + 1);
-  const endStr = endDate.toISOString().slice(0, 19).replace("T", " ");
-
-  const historyRows = await db
-    .select({
-      agentName: multiparkBookingHistory.agentName,
-      changeType: multiparkBookingHistory.changeType,
-    })
-    .from(multiparkBookingHistory)
-    .where(
-      and(
-        bookingHistoryScope(multiparkBookingHistory.bookingExternalId),
-        gte(multiparkBookingHistory.actionTime, startStr),
-        lt(multiparkBookingHistory.actionTime, endStr),
-      ),
-    );
-
-  // Indexar por nome do agente (case-insensitive normalizado)
-  const normalize = (s: string) => s.toLowerCase().trim();
-  type Counts = { total: number; byType: Record<string, number> };
-  const byAgent = new Map<string, Counts>();
-  for (const h of historyRows) {
-    if (!h.agentName) continue;
-    const key = normalize(h.agentName);
-    let c = byAgent.get(key);
-    if (!c) { c = { total: 0, byType: {} }; byAgent.set(key, c); }
-    c.total++;
-    const ct = h.changeType ?? "?";
-    c.byType[ct] = (c.byType[ct] ?? 0) + 1;
+  if (assignments.length === 0) {
+    return { date, source: "multipark", notice: null, shifts: [], totals: { people: 0, totalActions: 0, weightedActions: 0, totalCost: 0, byType: {}, costPerAction: 0 } };
   }
 
-  // Construir avaliações por pessoa
-  const people: PersonEvaluation[] = assignments.map(a => {
-    const shortName = a.multiparkAgentName || deriveShortName(a.personName);
-    const counts = byAgent.get(normalize(shortName)) ?? { total: 0, byType: {} };
+  // Mesmo cálculo do cron (grava o dia) + ajustes manuais por cima
+  const computed = await recomputeRange(date, date);
+  // Mesma identidade do motor: a linha da escala sem ficha liga-se pelo nome completo
+  const { identity } = await loadEvaluationIdentity();
+
+  // Resumo vivo por agente (só quando a BD da Multipark respondeu ao motor)
+  const liveByKey = new Map<string, AgentMovementSummary[]>();
+  if (computed.source === "multipark") {
+    const { getAgentMovementSummaries } = await import("./multiparkDb/movements");
+    const r = await getAgentMovementSummaries({ startDay: date, byDay: false, cities: opts.cities });
+    if (r.available) {
+      for (const s of r.data) {
+        const who = identity.agent(s.agentUserId, s.agentName);
+        if (who.kind === "ignorado") continue;
+        const list = liveByKey.get(who.key) ?? [];
+        list.push(s);
+        liveByKey.set(who.key, list);
+      }
+    }
+  }
+  const { sumAgentSummaries } = await import("./multiparkDb/movements");
+  const resolved = assignments.map((a) => ({ ...a, employeeId: identity.assignment({ employeeId: a.employeeId, personName: a.personName }).employeeId }));
+  const empIds = Array.from(new Set(resolved.map((a) => a.employeeId).filter((x): x is number => x != null)));
+  // a escala já vem filtrada pela cidade (listAssignments → cityNameScope)
+  const days = await loadEvaluatedDays({ startDay: date, endDay: date, employeeIds: empIds, employeeIdsAlreadyScoped: true });
+  const byEmp = new Map(days.map((d) => [d.employeeId, d]));
+  const unresolved = computed.unresolved.get(date) ?? new Map();
+
+  const used = new Set<number>(); // uma pessoa com 2 linhas na escala conta 1 vez
+  const people: PersonEvaluation[] = resolved.map((a) => {
+    const shortName = a.multiparkAgentName || shortNameOf(a.personName);
+    let m: DayMetrics = emptyDayMetrics();
+    let byType: Record<string, number> = {};
+    let cost = a.cost;
+    let hoursSource: string | null = null;
+    let hasAdjustments = false;
+    const first = a.employeeId != null && !used.has(a.employeeId);
+    if (a.employeeId != null) {
+      used.add(a.employeeId);
+      const d = byEmp.get(a.employeeId);
+      if (first && d) {
+        m = d.metrics;
+        byType = d.actionsByType;
+        cost = d.metrics.cost;
+        hoursSource = d.hoursSource;
+        hasAdjustments = d.adjustments.length > 0;
+      } else if (!first) {
+        cost = 0; // já contada na 1.ª linha desta pessoa
+      }
+      // sem linha calculada (sem atividade/ponto): fica o custo da escala
+    } else {
+      // Sem ficha: ações do agente pelo nome curto (regra antiga do operacional)
+      const u = unresolved.get(agentKeyOf(shortName));
+      if (u) {
+        m = { ...emptyDayMetrics(), actions: u.actions, actionsMorning: u.actionsMorning, actionsNight: u.actionsNight,
+          recolhas: u.recolhas, entregas: u.entregas, movements: u.movements, parkingMoves: u.parkingMoves };
+        m.weightedActions = actionPoints(m);
+        byType = u.byType;
+      }
+      m.scheduledHours = a.hoursBilled;
+      hoursSource = a.hoursBilled > 0 ? "escala" : null;
+    }
+    const score = scoreOf(m);
+    const ph = perHourMetrics(m, score);
+    const liveKey = a.employeeId != null ? `emp:${a.employeeId}` : agentKeyOf(shortName);
+    const live = first || a.employeeId == null ? sumAgentSummaries(liveByKey.get(liveKey) ?? []) : null;
     return {
       assignmentId: a.id,
+      employeeId: a.employeeId,
       personName: a.personName,
       resolvedAgentName: shortName,
       isTeamLeader: a.isTeamLeader,
       shift: a.shift,
       level: a.level,
       hoursPaid: a.hoursBilled,
-      cost: a.cost,
-      totalActions: counts.total,
-      byType: counts.byType,
-      costPerAction: counts.total > 0 ? a.cost / counts.total : 0,
+      hoursWorked: m.hoursWorked,
+      suspiciousHours: m.suspiciousHours,
+      hoursSource,
+      cost: round2(cost),
+      totalActions: m.actions,
+      byType,
+      recolhas: m.recolhas,
+      entregas: m.entregas,
+      movements: m.movements,
+      parkingMoves: m.parkingMoves,
+      actionsMorning: m.actionsMorning,
+      actionsNight: m.actionsNight,
+      weightedActions: m.weightedActions,
+      totalPoints: score.totalPoints,
+      lines: score.lines,
+      actionsPerHour: ph.actionsPerHour,
+      weightedPerHour: ph.weightedPerHour,
+      costPerAction: m.actions > 0 ? round2(cost / m.actions) : 0,
+      hasAdjustments,
+      live,
     };
   });
 
-  // Agrupar por turno
-  const shifts: ShiftEvaluation[] = (["morning", "night"] as const).map(shift => {
-    const shiftPeople = people.filter(p => p.shift === shift);
-    const tl = shiftPeople.find(p => p.isTeamLeader) ?? null;
-    const drivers = shiftPeople.filter(p => !p.isTeamLeader);
-
-    // Team aggregate para o TL (excluindo TL)
-    const driverActions = drivers.reduce((s, d) => s + d.totalActions, 0);
-    const driverCost = drivers.reduce((s, d) => s + d.cost, 0);
-    const driverByType: Record<string, number> = {};
-    for (const d of drivers) {
-      for (const [k, v] of Object.entries(d.byType)) driverByType[k] = (driverByType[k] ?? 0) + v;
-    }
+  const shifts: ShiftEvaluation[] = (["morning", "night"] as const).map((shift) => {
+    const shiftPeople = people.filter((p) => p.shift === shift);
+    const tl = shiftPeople.find((p) => p.isTeamLeader) ?? null;
+    const drivers = shiftPeople.filter((p) => p !== tl);
     if (tl) {
+      const acts = drivers.reduce((s, d) => s + d.totalActions, 0);
+      const cost = drivers.reduce((s, d) => s + d.cost, 0);
+      const byType: Record<string, number> = {};
+      for (const d of drivers) addByType(byType, d.byType);
       tl.teamAggregate = {
-        drivers: drivers.length,
-        totalActions: driverActions,
-        totalCost: driverCost,
-        costPerAction: driverActions > 0 ? driverCost / driverActions : 0,
-        byType: driverByType,
+        drivers: drivers.length, totalActions: acts, weightedActions: round2(drivers.reduce((s, d) => s + d.weightedActions, 0)),
+        totalCost: round2(cost), costPerAction: acts > 0 ? round2(cost / acts) : 0, byType,
       };
     }
-
-    // Totais do turno (incluindo TL)
     const totalActions = shiftPeople.reduce((s, p) => s + p.totalActions, 0);
-    const totalCost = shiftPeople.reduce((s, p) => s + p.cost, 0);
+    const totalCost = round2(shiftPeople.reduce((s, p) => s + p.cost, 0));
     const byType: Record<string, number> = {};
-    for (const p of shiftPeople) {
-      for (const [k, v] of Object.entries(p.byType)) byType[k] = (byType[k] ?? 0) + v;
-    }
-
+    for (const p of shiftPeople) addByType(byType, p.byType);
     return {
-      shift,
-      drivers: shiftPeople.length,
-      totalActions,
-      totalCost,
-      byType,
-      costPerAction: totalActions > 0 ? totalCost / totalActions : 0,
-      tl,
-      members: drivers,
+      shift, drivers: shiftPeople.length, totalActions,
+      weightedActions: round2(shiftPeople.reduce((s, p) => s + p.weightedActions, 0)),
+      totalCost, byType, costPerAction: totalActions > 0 ? round2(totalCost / totalActions) : 0, tl, members: drivers,
     };
   });
 
-  // Totais do dia
   const dayActions = people.reduce((s, p) => s + p.totalActions, 0);
-  const dayCost = people.reduce((s, p) => s + p.cost, 0);
+  const dayCost = round2(people.reduce((s, p) => s + p.cost, 0));
   const dayByType: Record<string, number> = {};
-  for (const p of people) {
-    for (const [k, v] of Object.entries(p.byType)) dayByType[k] = (dayByType[k] ?? 0) + v;
-  }
-
+  for (const p of people) addByType(dayByType, p.byType);
   return {
     date,
+    source: computed.source,
+    notice: computed.notice,
     shifts,
     totals: {
       people: people.length,
       totalActions: dayActions,
+      weightedActions: round2(people.reduce((s, p) => s + p.weightedActions, 0)),
       totalCost: dayCost,
       byType: dayByType,
-      costPerAction: dayActions > 0 ? dayCost / dayActions : 0,
+      costPerAction: dayActions > 0 ? round2(dayCost / dayActions) : 0,
     },
   };
 }
 
-// ─── DASHBOARD por intervalo de datas ────────────────────────────────────────
 
-export interface DailyDashboardEntry {
-  date: string;
-  drivers: number;
-  totalCost: number;
-  totalActions: number;
-  inShift: number;
-  outOfShift: number;
-}
-
-export interface PersonRangeSummary {
-  personName: string;
-  resolvedAgentName: string;
-  isTeamLeader: boolean;
-  daysWorked: number;
-  hoursPaid: number;
-  totalCost: number;
-  totalActions: number;
-  inShiftActions: number;
-  outOfShiftActions: number;
-  byType: Record<string, number>;
-  costPerAction: number;
-}
-
-export interface DashboardRange {
-  startDate: string;
-  endDate: string;
-  daily: DailyDashboardEntry[];
-  byPerson: PersonRangeSummary[];
-  totals: {
-    days: number;
-    drivers: number;
-    totalCost: number;
-    totalActions: number;
-    inShift: number;
-    outOfShift: number;
-    byType: Record<string, number>;
-    costPerAction: number;
-  };
-}
-
-function dateKeyFromDate(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-function actionTimeToOffsetHours(actionTime: string, assignmentDate: string): number | null {
-  // actionTime tipo "2026-06-06 07:25:00" — calcula em horas desde 00:00 do dia da escala
-  if (!actionTime) return null;
-  const aDate = new Date(actionTime.includes("T") ? actionTime : actionTime.replace(" ", "T"));
-  if (Number.isNaN(aDate.getTime())) return null;
-  const baseDate = new Date(assignmentDate + "T00:00:00");
-  const diffMs = aDate.getTime() - baseDate.getTime();
-  return diffMs / (60 * 60 * 1000);
-}
-
-export async function getDashboardRange(
-  startDate: string,
-  endDate: string,
-): Promise<DashboardRange> {
-  const db = await getDb();
-  const empty: DashboardRange = {
-    startDate,
-    endDate,
-    daily: [],
-    byPerson: [],
-    totals: {
-      days: 0, drivers: 0, totalCost: 0, totalActions: 0,
-      inShift: 0, outOfShift: 0, byType: {}, costPerAction: 0,
-    },
-  };
-  if (!db) return empty;
-
-  // Fetch assignments do intervalo (uma só query)
-  const assignmentRows = await db
-    .select()
-    .from(extrasDiaAssignments)
-    .where(
-      and(
-        cityNameScope(extrasDiaAssignments.city),
-        gte(extrasDiaAssignments.assignmentDate, startDate),
-        lte(extrasDiaAssignments.assignmentDate, endDate),
-      ),
-    );
-
-  // Empregados → mapeamento Multipark
-  const empIds = Array.from(new Set(assignmentRows.map(r => r.employeeId).filter((x): x is number => x !== null)));
-  const empMap = new Map<number, { multiparkAgentName: string | null; monthlySalary: string | null }>();
-  if (empIds.length > 0) {
-    const empRows = await db
-      .select({
-        id: employees.id,
-        multiparkAgentName: employees.multiparkAgentName,
-        monthlySalary: employees.monthlySalary,
-      })
-      .from(employees)
-      .where(sql`${employees.id} IN (${sql.raw(empIds.join(","))})`);
-    for (const e of empRows) {
-      empMap.set(e.id, {
-        multiparkAgentName: e.multiparkAgentName,
-        monthlySalary: e.monthlySalary ? String(e.monthlySalary) : null,
-      });
-    }
-  }
-
-  // Calcular custo de cada assignment (TL = salário/15, drivers = horas × rate)
-  type AssignmentPlus = {
-    id: number;
-    assignmentDate: string;
-    personName: string;
-    resolvedAgentName: string;
-    isTeamLeader: boolean;
-    shift: "morning" | "night";
-    startHour: number;
-    endHour: number;
-    sentHomeHour: number | null;
-    hoursPaid: number;
-    cost: number;
-  };
-  const assignmentsPlus: AssignmentPlus[] = assignmentRows.map(r => {
-    const isTL = r.isTeamLeader === 1;
-    const effectiveEnd = r.sentHomeHour ?? r.endHour;
-    const hours = Math.max(0, effectiveEnd - r.startHour);
-    const map = r.employeeId ? empMap.get(r.employeeId) : undefined;
-    let cost = 0;
-    if (isTL && map?.monthlySalary) {
-      const monthly = parseFloat(map.monthlySalary);
-      if (Number.isFinite(monthly)) cost = monthly / TL_WORKING_DAYS_PER_MONTH;
-    } else if (!isTL && r.level) {
-      const rate = DRIVER_LEVELS.find(l => l.id === r.level)?.hourlyRate ?? 0;
-      cost = hours * rate;
-    }
-    const resolvedAgentName = map?.multiparkAgentName ?? deriveShortName(r.personName);
-    return {
-      id: r.id,
-      assignmentDate: r.assignmentDate,
-      personName: r.personName,
-      resolvedAgentName,
-      isTeamLeader: isTL,
-      shift: (r.shift as "morning" | "night") ?? "morning",
-      startHour: r.startHour,
-      endHour: r.endHour,
-      sentHomeHour: r.sentHomeHour,
-      hoursPaid: hours,
-      cost,
-    };
-  });
-
-  // History do intervalo (alargado +27h para apanhar turnos noite que entram em D+1)
-  const startStr = `${startDate} 00:00:00`;
-  const endPlus = new Date(endDate + "T00:00:00");
-  endPlus.setDate(endPlus.getDate() + 2); // +2 dias para apanhar turnos da noite
-  const endStr = endPlus.toISOString().slice(0, 19).replace("T", " ");
-
-  const historyRows = await db
-    .select({
-      agentName: multiparkBookingHistory.agentName,
-      changeType: multiparkBookingHistory.changeType,
-      actionTime: multiparkBookingHistory.actionTime,
-    })
-    .from(multiparkBookingHistory)
-    .where(
-      and(
-        bookingHistoryScope(multiparkBookingHistory.bookingExternalId),
-        gte(multiparkBookingHistory.actionTime, startStr),
-        lt(multiparkBookingHistory.actionTime, endStr),
-      ),
-    );
-
-  const normalize = (s: string) => s.toLowerCase().trim();
-
-  // Para cada acção, encontra qual assignment a "abriga" (mesmo nome + actionTime
-  // dentro do shift desse dia). Se nenhum, fica "out of shift" do mais próximo
-  // assignment desse agente nos últimos N dias.
-  type PersonAgg = {
-    personName: string;
-    resolvedAgentName: string;
-    isTeamLeader: boolean;
-    daysWorked: Set<string>;
-    hoursPaid: number;
-    totalCost: number;
-    totalActions: number;
-    inShiftActions: number;
-    outOfShiftActions: number;
-    byType: Record<string, number>;
-  };
-  const personByName = new Map<string, PersonAgg>();
-
-  // 1. Aglutina pessoas a partir das assignments
-  for (const a of assignmentsPlus) {
-    const key = normalize(a.resolvedAgentName);
-    let p = personByName.get(key);
-    if (!p) {
-      p = {
-        personName: a.personName,
-        resolvedAgentName: a.resolvedAgentName,
-        isTeamLeader: a.isTeamLeader,
-        daysWorked: new Set(),
-        hoursPaid: 0,
-        totalCost: 0,
-        totalActions: 0,
-        inShiftActions: 0,
-        outOfShiftActions: 0,
-        byType: {},
-      };
-      personByName.set(key, p);
-    }
-    p.daysWorked.add(a.assignmentDate);
-    p.hoursPaid += a.hoursPaid;
-    p.totalCost += a.cost;
-    if (a.isTeamLeader) p.isTeamLeader = true;
-  }
-
-  // 2. Processa cada acção: tenta encontrar assignment do dia para classificar
-  // in-shift / out-of-shift
-  const dailyMap = new Map<string, DailyDashboardEntry>();
-  for (const h of historyRows) {
-    if (!h.agentName || !h.actionTime || !h.changeType) continue;
-    const key = normalize(h.agentName);
-    const p = personByName.get(key);
-    if (!p) continue; // agente que não está escalado em nenhum dia do intervalo
-
-    p.totalActions++;
-    p.byType[h.changeType] = (p.byType[h.changeType] ?? 0) + 1;
-
-    // Decide o dia operacional da acção: pertence à shift que a "contém"
-    // Para isso testa contra todas as assignments deste agente no intervalo
-    const personAssignments = assignmentsPlus.filter(
-      a => normalize(a.resolvedAgentName) === key,
-    );
-    let inShift = false;
-    let bucketDate: string | null = null;
-    for (const a of personAssignments) {
-      const offset = actionTimeToOffsetHours(h.actionTime, a.assignmentDate);
-      if (offset === null) continue;
-      const effectiveEnd = a.sentHomeHour ?? a.endHour;
-      // O dia operacional vai de 03h a 03h+1d (range 3-27)
-      // Mas vamos comparar com a janela do shift do assignment
-      if (offset >= a.startHour && offset <= effectiveEnd) {
-        inShift = true;
-        bucketDate = a.assignmentDate;
-        break;
-      }
-      // Se actionTime cai no mesmo dia mas FORA do shift, ainda assim conta como
-      // "out-of-shift" desse assignment (para a métrica do user)
-      if (offset >= 0 && offset < 24 && !bucketDate) {
-        bucketDate = a.assignmentDate;
-      }
-    }
-
-    if (inShift) p.inShiftActions++;
-    else p.outOfShiftActions++;
-
-    // Daily bucket
-    const bd = bucketDate ?? (h.actionTime?.slice(0, 10) ?? null);
-    if (bd) {
-      let day = dailyMap.get(bd);
-      if (!day) {
-        day = { date: bd, drivers: 0, totalCost: 0, totalActions: 0, inShift: 0, outOfShift: 0 };
-        dailyMap.set(bd, day);
-      }
-      day.totalActions++;
-      if (inShift) day.inShift++;
-      else day.outOfShift++;
-    }
-  }
-
-  // 3. Preencher daily com custos e drivers
-  for (const a of assignmentsPlus) {
-    let day = dailyMap.get(a.assignmentDate);
-    if (!day) {
-      day = { date: a.assignmentDate, drivers: 0, totalCost: 0, totalActions: 0, inShift: 0, outOfShift: 0 };
-      dailyMap.set(a.assignmentDate, day);
-    }
-    day.totalCost += a.cost;
-    day.drivers++;
-  }
-
-  const daily = Array.from(dailyMap.values()).sort((a, b) => a.date.localeCompare(b.date));
-
-  const byPerson: PersonRangeSummary[] = Array.from(personByName.values()).map(p => ({
-    personName: p.personName,
-    resolvedAgentName: p.resolvedAgentName,
-    isTeamLeader: p.isTeamLeader,
-    daysWorked: p.daysWorked.size,
-    hoursPaid: Math.round(p.hoursPaid * 100) / 100,
-    totalCost: Math.round(p.totalCost * 100) / 100,
-    totalActions: p.totalActions,
-    inShiftActions: p.inShiftActions,
-    outOfShiftActions: p.outOfShiftActions,
-    byType: p.byType,
-    costPerAction: p.totalActions > 0 ? p.totalCost / p.totalActions : 0,
-  }));
-  byPerson.sort((a, b) => b.totalActions - a.totalActions);
-
-  // Totals
-  const totalCost = daily.reduce((s, d) => s + d.totalCost, 0);
-  const totalActions = byPerson.reduce((s, p) => s + p.totalActions, 0);
-  const totalInShift = byPerson.reduce((s, p) => s + p.inShiftActions, 0);
-  const totalOut = byPerson.reduce((s, p) => s + p.outOfShiftActions, 0);
-  const totalByType: Record<string, number> = {};
-  for (const p of byPerson) {
-    for (const [k, v] of Object.entries(p.byType)) totalByType[k] = (totalByType[k] ?? 0) + v;
-  }
-
-  return {
-    startDate,
-    endDate,
-    daily,
-    byPerson,
-    totals: {
-      days: daily.length,
-      drivers: byPerson.length,
-      totalCost: Math.round(totalCost * 100) / 100,
-      totalActions,
-      inShift: totalInShift,
-      outOfShift: totalOut,
-      byType: totalByType,
-      costPerAction: totalActions > 0 ? totalCost / totalActions : 0,
-    },
-  };
-}
+// O antigo "Dashboard por intervalo" (getDashboardRange) foi fundido na
+// Atividade do Dia — ver server/dayActivity.ts (getActivityRange).

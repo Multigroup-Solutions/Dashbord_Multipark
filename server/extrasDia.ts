@@ -1,13 +1,19 @@
 /**
  * Extras Dia — Daily Forecast & Driver Allocation
  *
- * Lisbon-only forecast based on whatever bookings are currently in the
- * `multipark_bookings` table (no live API calls). City filter is permissive
- * (LIKE '%lisb%') so it matches "Lisboa", "Lisbon", "LISBON" etc.
+ * Fonte das reservas (fase 5B): LIDAS AO VIVO da BD da Multipark
+ * (server/multiparkDb/extrasBookings.ts — parques nossos da cidade, sem
+ * canceladas). Se a BD não estiver configurada/disponível, volta à cópia
+ * `multipark_bookings` (como antes) e a página mostra um aviso
+ * (`bookingSource` / `bookingSourceNotice`). Com a leitura ao vivo o trabalho
+ * `multipark-future` saiu. Sem chamadas à API da Multipark: o detalhe da cópia
+ * local vem do webhook (multipark-deliveries).
  *
  *   - Hourly check-ins / check-outs for tomorrow (or chosen base date + 1)
  *   - Lavagem (wash) counts for context days
- *   - Driver shift suggestion (3 cars/hour productivity, 3–12h shift bounds)
+ *   - Driver shift suggestion (carros/hora por condutor POR CIDADE — definição
+ *     `extras.carsPerHourPerDriver`, omissão Lisboa 2 / Porto 3 / Faro 3 —
+ *     turnos de 3–12h)
  *
  * Driver levels are flat — all do everything — so the cheapest tier wins.
  */
@@ -15,11 +21,16 @@
 import { cityNameScope, projectScope } from './cityScope';
 import { and, asc, eq, gte, lte, inArray, sql } from "drizzle-orm";
 import { getDb } from "./db";
+import { DEFAULT_EXTRA_RATES, loadExtraRates, rateFor, type ExtraRates } from "./extraRates";
 import { multiparkBookings, extrasDiaAssignments, employees, projects } from "../drizzle/schema";
-import { getBookingTryAllParks } from "./multipark";
+import { DEFAULT_CARS_PER_HOUR } from "../shared/appSettings";
+import { FALLBACK_CARS_PER_HOUR, MAX_SHIFT_HOURS as SHIFT_MAX, MIN_SHIFT_HOURS as SHIFT_MIN, carsPerHourFor, driversNeededFor } from "../shared/extrasSchedule";
+import { lisbonWallTimeUtcMs } from "../shared/lisbonDay";
+import type { LiveExtrasBooking } from "./multiparkDb/extrasBookings";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
+/** Níveis e taxas POR DEFEITO — as taxas vivas vêm de `extra_rates` (server/extraRates.ts). */
 export const DRIVER_LEVELS = [
   { id: "junior", label: "Júnior", hourlyRate: 4.5 },
   { id: "senior", label: "Sénior", hourlyRate: 5 },
@@ -29,9 +40,13 @@ export const DRIVER_LEVELS = [
 
 export type DriverLevelId = (typeof DRIVER_LEVELS)[number]["id"];
 
-export const CARS_PER_HOUR_PER_DRIVER = 3;
-export const MIN_SHIFT_HOURS = 3;
-export const MAX_SHIFT_HOURS = 12;
+/**
+ * SÓ fallback: a capacidade viva é por cidade (definição
+ * `extras.carsPerHourPerDriver`, ver loadCarsPerHour).
+ */
+export const CARS_PER_HOUR_PER_DRIVER = FALLBACK_CARS_PER_HOUR;
+export const MIN_SHIFT_HOURS = SHIFT_MIN;
+export const MAX_SHIFT_HOURS = SHIFT_MAX;
 export const TL_WORKING_DAYS_PER_MONTH = 15;
 export const SLOT_MINUTES = 20;
 export const SLOTS_PER_HOUR = 60 / SLOT_MINUTES; // 3
@@ -114,6 +129,20 @@ const CITY_CONFIG: Record<ExtraCity, { re: RegExp; pattern: string; prefix: stri
 
 // Resolve os projectIds da arvore da cidade (no cidade + descendentes),
 // EXATAMENTE como a folha operacional. Cacheado por processo e por cidade.
+/** Carros/hora por condutor da cidade (Definições → Parâmetros), com omissões. */
+export async function loadCarsPerHour(city: ExtraCity): Promise<number> {
+  let map: Record<string, number> | null = null;
+  try {
+    const { getSetting } = await import("./appSettings");
+    map = await getSetting("extras.carsPerHourPerDriver");
+  } catch { /* sem BD → omissões */ }
+  return carsPerHourFor(map ?? DEFAULT_CARS_PER_HOUR, city);
+}
+
+export function cityLabel(city: ExtraCity): string {
+  return EXTRA_CITIES.find(c => c.id === city)?.label ?? city;
+}
+
 const _cityProjectIds = new Map<ExtraCity, number[]>();
 async function getCityProjectIds(city: ExtraCity): Promise<number[]> {
   const cached = _cityProjectIds.get(city);
@@ -220,9 +249,12 @@ export interface DriverShift {
 export function suggestShifts(
   hourlyCars: number[],
   level: DriverLevelId = "junior",
+  rates?: ExtraRates,
+  carsPerHour: number = CARS_PER_HOUR_PER_DRIVER,
 ): { shifts: DriverShift[]; totalCost: number; peakDrivers: number; totalDriverHours: number } {
-  const rateInfo = DRIVER_LEVELS.find(l => l.id === level)!;
-  const driversPerHour = hourlyCars.map(c => Math.ceil(c / CARS_PER_HOUR_PER_DRIVER));
+  const base = DRIVER_LEVELS.find(l => l.id === level)!;
+  const rateInfo = { ...base, hourlyRate: rates ? rateFor(rates, level) : base.hourlyRate };
+  const driversPerHour = hourlyCars.map(c => driversNeededFor(c, carsPerHour));
   const peak = Math.max(0, ...driversPerHour);
 
   if (peak === 0) {
@@ -306,8 +338,16 @@ export interface ExtrasDiaForecast {
   baseDate: string;
   targetDate: string;
   city: string;
+  /** Id da cidade (lisbon/porto/faro). */
+  cityId: ExtraCity;
+  /** Capacidade usada nesta previsão (carros/hora por condutor, da cidade). */
+  carsPerHourPerDriver: number;
   source: "db";
-  parksQueried: string[]; // distinct parkName values found
+  /** De onde vieram as reservas: BD da Multipark ao vivo, ou a nossa cópia (recurso). */
+  bookingSource: BookingSource;
+  /** Aviso quando se usou a cópia (BD da Multipark indisponível / não configurada). */
+  bookingSourceNotice: string | null;
+  parksQueried: string[]; // parques da cidade (ao vivo) ou distinct parkName (cópia)
   parksFailed: { park: string; error: string }[]; // always empty for DB mode (kept for UI compat)
   hourly: HourlyRow[];
   totals: {
@@ -345,7 +385,7 @@ export interface ExtrasDiaForecast {
   };
 }
 
-type BookingRow = {
+export type BookingRow = {
   id: number;
   externalId: string;
   bookingNumber: string | null;
@@ -440,6 +480,75 @@ async function fetchBookingsInRange(
   }));
 }
 
+// ─── Reservas ao vivo (BD da Multipark) com recurso à cópia ──────────────────
+
+export type BookingSource = "multipark-db" | "copy";
+
+/** "AAAA-MM-DD HH:MM:SS" (hora de parede de Lisboa) → instante UTC (ms). PURA. */
+export function lisbonWallToUtcMs(wall: string): number {
+  const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/.exec(wall);
+  if (!m) throw new Error(`Hora inválida: ${wall}`);
+  return lisbonWallTimeUtcMs(m[1], Number(m[2])) + Number(m[3]) * 60_000 + Number(m[4] ?? 0) * 1000;
+}
+
+/**
+ * Reserva lida ao vivo → a linha que o resto deste módulo já sabe tratar
+ * (horas em hora de parede de Lisboa, extras em rawJson para as lavagens).
+ * `enrichedAt` preenchido: o tipo de entrega já vem da BD (não se vai à API). PURA.
+ */
+export function liveToBookingRow(b: LiveExtrasBooking, index: number): BookingRow {
+  return {
+    id: -(index + 1),
+    externalId: b.externalId,
+    bookingNumber: b.bookingNumber,
+    clientFirstName: b.clientFirstName,
+    clientLastName: b.clientLastName,
+    licensePlate: b.licensePlate,
+    checkIn: utcToLocal(b.checkInUtc),
+    checkOut: utcToLocal(b.checkOutUtc),
+    checkInTime: null,
+    checkOutTime: null,
+    rawJson: JSON.stringify({ extraServices: b.extraNames.map((name) => ({ name })) }),
+    parkName: b.parkName,
+    city: b.city,
+    deliveryType: b.deliveryType,
+    enrichedAt: "bd-multipark",
+    spotType: b.spotType,
+    extrasTotal: b.extrasTotal ? String(b.extrasTotal) : null,
+  };
+}
+
+/** Linhas com a entrada/saída (hora de Lisboa) em [start, end). PURA. */
+export function filterRowsByField(rows: BookingRow[], field: "checkIn" | "checkOut", startInclusive: Date, endExclusive: Date): BookingRow[] {
+  const s = toMysqlDateTime(startInclusive);
+  const e = toMysqlDateTime(endExclusive);
+  return rows.filter((r) => {
+    const v = field === "checkIn" ? r.checkIn : r.checkOut;
+    return v != null && v >= s && v < e;
+  });
+}
+
+type LiveWindow = { ok: true; rows: BookingRow[]; parks: string[] } | { ok: false; notice: string };
+
+/**
+ * Reservas da cidade com entrada ou saída na janela [start, end) (horas de
+ * parede de Lisboa), lidas ao vivo. `ok:false` → usar a cópia (com aviso).
+ */
+async function liveBookingsInWindow(startInclusive: Date, endExclusive: Date, city: ExtraCity): Promise<LiveWindow> {
+  try {
+    const { getLiveExtrasBookings } = await import("./multiparkDb/extrasBookings");
+    const { getSetting } = await import("./appSettings");
+    // "Parques que a operação não faz" (Definições) ficam fora da previsão e dos blocos.
+    const excluded = (await getSetting("operations.excludedParks")) ?? [];
+    const r = await getLiveExtrasBookings(city, lisbonWallToUtcMs(toMysqlDateTime(startInclusive)), lisbonWallToUtcMs(toMysqlDateTime(endExclusive)), undefined, undefined, excluded);
+    if (!r.available) return { ok: false, notice: `${r.reason} A usar a cópia das reservas (pode estar desatualizada).` };
+    if (r.data.truncated) console.warn(`[extrasDia] leitura ao vivo cortada (${r.data.bookings.length} reservas) — ${city}`);
+    return { ok: true, rows: r.data.bookings.map(liveToBookingRow), parks: r.data.parks };
+  } catch (err: any) {
+    return { ok: false, notice: `Leitura ao vivo falhou (${String(err?.message ?? err).slice(0, 80)}). A usar a cópia das reservas.` };
+  }
+}
+
 // ─── Assignments (gestor escala pessoas a turnos) ────────────────────────────
 
 export interface Assignment {
@@ -454,6 +563,12 @@ export interface Assignment {
   endHour: number;
   sentHomeHour: number | null;
   notes: string | null;
+  /** 'proposed' (proposta automática por confirmar) | 'confirmed'. */
+  status: "proposed" | "confirmed";
+  /** Sobe quando muda pessoa/dia/horas (1 aviso por versão). */
+  version: number;
+  /** "Porquê" da proposta automática. */
+  proposalReason: string | null;
   hoursBilled: number;
   cost: number;
   // Mapeamento Multipark (preenchido se employeeId está associado a empregado RH)
@@ -472,21 +587,21 @@ export function deriveShortName(fullName: string): string {
   return `${parts[0]} ${parts[parts.length - 1]}`;
 }
 
-function computeAssignmentCost(row: {
+export function computeAssignmentCost(row: {
   level: DriverLevelId | null;
   isTeamLeader: boolean;
   startHour: number;
   endHour: number;
   sentHomeHour: number | null;
   tlDailyCost?: number; // monthlySalary / 15
-}): { hoursBilled: number; cost: number } {
+}, rates: ExtraRates = DEFAULT_EXTRA_RATES): { hoursBilled: number; cost: number } {
   const end = row.sentHomeHour ?? row.endHour;
   const hours = Math.max(0, end - row.startHour);
   if (row.isTeamLeader) {
     // TL: fixed daily cost; ignore hours.
     return { hoursBilled: hours, cost: row.tlDailyCost ?? 0 };
   }
-  const rate = DRIVER_LEVELS.find(l => l.id === row.level)?.hourlyRate ?? 0;
+  const rate = row.level ? rateFor(rates, row.level) : 0;
   return { hoursBilled: hours, cost: hours * rate };
 }
 
@@ -496,6 +611,7 @@ function rowToAssignment(
   multiparkAgentName?: string | null,
   multiparkAgentUserId?: string | null,
   photoUrl?: string | null,
+  rates: ExtraRates = DEFAULT_EXTRA_RATES,
 ): Assignment {
   const isTL = r.isTeamLeader === 1;
   const level = (r.level as DriverLevelId | null) ?? null;
@@ -506,7 +622,7 @@ function rowToAssignment(
     endHour: r.endHour,
     sentHomeHour: r.sentHomeHour,
     tlDailyCost,
-  });
+  }, rates);
   return {
     id: r.id,
     assignmentDate: r.assignmentDate,
@@ -519,6 +635,9 @@ function rowToAssignment(
     endHour: r.endHour,
     sentHomeHour: r.sentHomeHour,
     notes: r.notes,
+    status: r.status === "proposed" ? "proposed" : "confirmed",
+    version: r.version ?? 1,
+    proposalReason: r.proposalReason ?? null,
     multiparkAgentName: multiparkAgentName ?? null,
     multiparkAgentUserId: multiparkAgentUserId ?? null,
     photoUrl: photoUrl ?? null,
@@ -550,6 +669,7 @@ export async function listAssignments(date: string, city?: ExtraCity): Promise<A
     .where(and(cityNameScope(extrasDiaAssignments.city), eq(extrasDiaAssignments.assignmentDate, date), city ? eq(extrasDiaAssignments.city, city) : undefined))
     .orderBy(asc(extrasDiaAssignments.startHour));
 
+  const rates = await loadExtraRates();
   // Pre-fetch dos empregados associados (mapeamento Multipark)
   const empIds = Array.from(new Set(rows.map(r => r.employeeId).filter((x): x is number => x !== null)));
   const empMap = new Map<number, { multiparkAgentName: string | null; multiparkAgentUserId: string | null; photoUrl: string | null }>();
@@ -580,7 +700,7 @@ export async function listAssignments(date: string, city?: ExtraCity): Promise<A
       tlCost = await getEmployeeDailyCost(r.employeeId);
     }
     const map = r.employeeId ? empMap.get(r.employeeId) : undefined;
-    result.push(rowToAssignment(r, tlCost, map?.multiparkAgentName, map?.multiparkAgentUserId, map?.photoUrl));
+    result.push(rowToAssignment(r, tlCost, map?.multiparkAgentName, map?.multiparkAgentUserId, map?.photoUrl, rates));
   }
   return result;
 }
@@ -599,6 +719,19 @@ export interface UpsertAssignmentInput {
   sentHomeHour?: number | null;
   notes?: string | null;
   createdById?: number | null;
+  /** Omissão: 'proposed' se o dia/cidade tem uma proposta por confirmar; senão 'confirmed'. */
+  status?: "proposed" | "confirmed";
+  proposalReason?: string | null;
+}
+
+/** A versão sobe quando muda o que foi avisado (pessoa, dia, turno ou horas). PURA. */
+export function assignmentVersionChanged(
+  prev: { employeeId: number | null; assignmentDate: string; startHour: number; endHour: number; shift: string; personName: string },
+  next: { employeeId: number | null; assignmentDate: string; startHour: number; endHour: number; shift: string; personName: string },
+): boolean {
+  return prev.employeeId !== next.employeeId || prev.assignmentDate !== next.assignmentDate
+    || prev.startHour !== next.startHour || prev.endHour !== next.endHour || prev.shift !== next.shift
+    || (prev.employeeId == null && prev.personName !== next.personName);
 }
 
 export async function upsertAssignment(input: UpsertAssignmentInput): Promise<Assignment | null> {
@@ -642,20 +775,35 @@ export async function upsertAssignment(input: UpsertAssignmentInput): Promise<As
   };
 
   if (input.id) {
-    await db.update(extrasDiaAssignments).set(payload).where(eq(extrasDiaAssignments.id, input.id));
+    const [prev] = await db.select().from(extrasDiaAssignments).where(eq(extrasDiaAssignments.id, input.id)).limit(1);
+    if (!prev) return null;
+    const bump = assignmentVersionChanged(prev, { ...payload, shift: payload.shift });
+    await db.update(extrasDiaAssignments).set({
+      ...payload,
+      ...(input.status ? { status: input.status } : {}),
+      ...(input.proposalReason !== undefined ? { proposalReason: input.proposalReason } : {}),
+      ...(bump ? { version: sql`${extrasDiaAssignments.version} + 1` } : {}),
+    } as any).where(eq(extrasDiaAssignments.id, input.id));
     const [row] = await db
       .select()
       .from(extrasDiaAssignments)
       .where(eq(extrasDiaAssignments.id, input.id))
       .limit(1);
     if (!row) return null;
+    googleShiftChanged({ city: row.city, date: String(row.assignmentDate), employeeIds: [prev.employeeId, row.employeeId] });
     const tlCost = row.isTeamLeader === 1 ? await getEmployeeDailyCost(row.employeeId) : undefined;
-    return rowToAssignment(row, tlCost);
+    return rowToAssignment(row, tlCost, undefined, undefined, undefined, await loadExtraRates());
   }
 
+  let status = input.status;
+  if (!status) {
+    const { getScheduleState } = await import("./extrasSchedule");
+    const state = await getScheduleState(input.assignmentDate, payload.city as ExtraCity);
+    status = state?.status === "proposed" ? "proposed" : "confirmed";
+  }
   const [result] = await db
     .insert(extrasDiaAssignments)
-    .values({ ...payload, createdById: input.createdById ?? null })
+    .values({ ...payload, status, proposalReason: input.proposalReason ?? null, createdById: input.createdById ?? null })
     .$returningId();
   const newId = (result as any).id;
   const [row] = await db
@@ -664,14 +812,27 @@ export async function upsertAssignment(input: UpsertAssignmentInput): Promise<As
     .where(eq(extrasDiaAssignments.id, newId))
     .limit(1);
   if (!row) return null;
+  if (status === "confirmed") googleShiftChanged({ city: row.city, date: String(row.assignmentDate), employeeIds: [row.employeeId] });
   const tlCost = row.isTeamLeader === 1 ? await getEmployeeDailyCost(row.employeeId) : undefined;
-  return rowToAssignment(row, tlCost);
+  return rowToAssignment(row, tlCost, undefined, undefined, undefined, await loadExtraRates());
 }
 
 export async function deleteAssignment(id: number): Promise<void> {
   const db = await getDb();
   if (!db) return;
+  const [prev] = await db.select().from(extrasDiaAssignments).where(eq(extrasDiaAssignments.id, id)).limit(1);
   await db.delete(extrasDiaAssignments).where(eq(extrasDiaAssignments.id, id));
+  if (prev) googleShiftChanged({ city: prev.city, date: String(prev.assignmentDate), employeeIds: [prev.employeeId] });
+}
+
+/**
+ * Escala mudou → turnos já para o Google Calendar (calendário partilhado da
+ * cidade + calendário "Multipark" de quem está escalado), em segundo plano.
+ */
+function googleShiftChanged(input: { city: string | null; date: string; employeeIds: Array<number | null | undefined> }): void {
+  import("./google/pendingSync")
+    .then((m) => m.scheduleGoogleShiftSync({ city: input.city, date: input.date.slice(0, 10), employeeIds: input.employeeIds.filter((x): x is number => typeof x === "number") }))
+    .catch(() => undefined);
 }
 
 /**
@@ -764,7 +925,8 @@ export async function getBookingsInSlot(
   const dayEnd = addDays(dayStart, 1);
   const hourLocal = hour % 24;
   const field = type === "checkin" ? "checkIn" : "checkOut";
-  const rows = await fetchBookingsInRange(field, dayStart, dayEnd, city);
+  const live = await liveBookingsInWindow(dayStart, dayEnd, city);
+  const rows = live.ok ? filterRowsByField(live.rows, field, dayStart, dayEnd) : await fetchBookingsInRange(field, dayStart, dayEnd, city);
 
   const slotStart = slot * SLOT_MINUTES;
   const slotEnd = slotStart + SLOT_MINUTES;
@@ -794,53 +956,7 @@ export async function getBookingsInSlot(
     });
   }
 
-  // Enriquece em paralelo as reservas que ainda não foram enriquecidas
-  // (chama /bookings/:id que tem deliveryType, returnFlight, etc.) e persiste.
-  const toEnrich = pendings.filter(p => !p.row.enrichedAt);
-  if (toEnrich.length > 0) {
-    await Promise.allSettled(toEnrich.map(async p => {
-      const enriched = await enrichBookingFromApi(p.row.externalId);
-      if (enriched?.deliveryType) p.summary.deliveryType = enriched.deliveryType;
-    }));
-  }
-
   return pendings.map(p => p.summary).sort((a, b) => a.time.localeCompare(b.time));
-}
-
-/**
- * Chama /bookings/:id na API Multipark e persiste deliveryType/returnFlight/
- * departingFlight/remarks na DB. Set enrichedAt=now para evitar repetir.
- */
-async function enrichBookingFromApi(externalId: string): Promise<{
-  deliveryType: string | null;
-  returnFlight: string | null;
-  departingFlight: string | null;
-  remarks: string | null;
-} | null> {
-  try {
-    const found = await getBookingTryAllParks(externalId);
-    if (!found) return null;
-    const b: any = found.booking;
-    const deliveryType = typeof b.deliveryType === "string" ? b.deliveryType : null;
-    const returnFlight = typeof b.returnFlight === "string" && b.returnFlight ? b.returnFlight : null;
-    const departingFlight = typeof b.departingFlight === "string" && b.departingFlight ? b.departingFlight : null;
-    const remarks = typeof b.remarks === "string" && b.remarks ? b.remarks.slice(0, 512) : null;
-
-    const db = await getDb();
-    if (db) {
-      await db.update(multiparkBookings).set({
-        deliveryType,
-        returnFlight,
-        departingFlight,
-        remarks,
-        enrichedAt: new Date().toISOString().slice(0, 19).replace("T", " "),
-      }).where(eq(multiparkBookings.externalId, externalId));
-    }
-
-    return { deliveryType, returnFlight, departingFlight, remarks };
-  } catch {
-    return null;
-  }
 }
 
 // ─── Driver candidates (para dropdown na UI) ─────────────────────────────────
@@ -950,12 +1066,22 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
   // para o turno da noite cobrir até às 03:00 do dia seguinte.
   const targetEndPlus3h = new Date(targetStart.getTime() + FORECAST_HOURS * 60 * 60 * 1000);
 
-  const [targetCheckins, baseCheckouts, targetCheckouts, nextCheckouts] = await Promise.all([
-    fetchBookingsInRange("checkIn", targetStart, targetEndPlus3h, city),
-    fetchBookingsInRange("checkOut", baseStart, targetStart, city),
-    fetchBookingsInRange("checkOut", targetStart, targetEndPlus3h, city),
-    fetchBookingsInRange("checkOut", nextStart, nextEnd, city),
-  ]);
+  // Uma só leitura ao vivo cobre as 3 janelas (dia base → fim do dia D+2);
+  // sem a BD da Multipark, as 4 leituras de sempre na cópia.
+  const live = await liveBookingsInWindow(baseStart, nextEnd, city);
+  const [targetCheckins, baseCheckouts, targetCheckouts, nextCheckouts] = live.ok
+    ? [
+        filterRowsByField(live.rows, "checkIn", targetStart, targetEndPlus3h),
+        filterRowsByField(live.rows, "checkOut", baseStart, targetStart),
+        filterRowsByField(live.rows, "checkOut", targetStart, targetEndPlus3h),
+        filterRowsByField(live.rows, "checkOut", nextStart, nextEnd),
+      ]
+    : await Promise.all([
+        fetchBookingsInRange("checkIn", targetStart, targetEndPlus3h, city),
+        fetchBookingsInRange("checkOut", baseStart, targetStart, city),
+        fetchBookingsInRange("checkOut", targetStart, targetEndPlus3h, city),
+        fetchBookingsInRange("checkOut", nextStart, nextEnd, city),
+      ]);
 
   const hourly: HourlyRow[] = Array.from({ length: FORECAST_HOURS }, (_, h) => ({
     hour: h,
@@ -1045,24 +1171,27 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
       markHourClass(hm.hour, r.deliveryType, "checkout");
     }
   }
+  // Capacidade da CIDADE: carros/hora que um condutor despacha (Lisboa 2,
+  // Porto 3, Faro 3 por omissão). Num bloco de 20min vale carsPerHour/3.
+  const carsPerHour = await loadCarsPerHour(city);
   for (const row of hourly) {
-    // Driver demand HORÁRIO: soma da procura pesada dos 3 slots, dividida
-    // por 3 (porque cada condutor "vale" 3 unidades de slot por hora).
+    // Condutores por HORA = ⌈procura pesada da hora ÷ carros/hora⌉.
     let hourWeighted = 0;
     for (const s of row.slots) {
       const idx = s.hour * SLOTS_PER_HOUR + s.slot;
       s.weightedDemand = weightedBySlot[idx];
-      s.driversNeeded = Math.ceil(s.weightedDemand);
+      s.driversNeeded = driversNeededFor(s.weightedDemand * SLOTS_PER_HOUR, carsPerHour);
       hourWeighted += s.weightedDemand;
     }
-    row.driversNeeded = Math.ceil(hourWeighted / SLOTS_PER_HOUR);
+    row.driversNeeded = driversNeededFor(hourWeighted, carsPerHour);
   }
 
   // Para sugestão de turnos usa a procura pesada agregada por hora.
   const hourlyCars = hourly.map(h => h.slots.reduce((acc, s) => acc + s.weightedDemand, 0));
-  const cheapest = suggestShifts(hourlyCars, "junior");
+  const liveRates = await loadExtraRates();
+  const cheapest = suggestShifts(hourlyCars, "junior", liveRates, carsPerHour);
   const bySingleLevel = DRIVER_LEVELS.map(l => {
-    const r = suggestShifts(hourlyCars, l.id);
+    const r = suggestShifts(hourlyCars, l.id, liveRates, carsPerHour);
     return { level: l.id, label: l.label, totalCost: r.totalCost, totalHours: r.totalDriverHours };
   });
 
@@ -1121,9 +1250,13 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
   return {
     baseDate: dateKey(baseStart),
     targetDate: dateKey(targetStart),
-    city: "Lisboa",
+    city: cityLabel(city),
+    cityId: city,
+    carsPerHourPerDriver: carsPerHour,
     source: "db",
-    parksQueried: Array.from(allParks).sort(),
+    bookingSource: live.ok ? "multipark-db" : "copy",
+    bookingSourceNotice: live.ok ? null : live.notice,
+    parksQueried: live.ok ? live.parks : Array.from(allParks).sort(),
     parksFailed: [],
     hourly,
     totals: {

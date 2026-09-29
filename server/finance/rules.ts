@@ -15,17 +15,14 @@ export interface FinanceParams {
   vatRate: number;
   /** TSU a cargo da entidade patronal. */
   tsuEmployerRate: number;
-  /** €/hora da equipa do dia por nível (sincronizado com server/extrasDia.ts). */
-  extrasDiaRates: Record<string, number>;
-  extrasDiaDefaultRate: number;
+  // As tarifas €/hora dos extras NÃO vivem aqui: fonte única = tabela
+  // `extra_rates` via server/extraRates.ts (loadExtraRates).
   /** Meses de provisão (13.º Natal + 14.º férias) por ano: 2/12 do base por mês. */
   provisionMonthsPerYear: number;
 }
 export const FINANCE_PARAMS: Readonly<FinanceParams> = Object.freeze({
   vatRate: 0.23,
   tsuEmployerRate: 0.2375,
-  extrasDiaRates: { junior: 4.5, senior: 5, terminal: 5.5, master: 6 },
-  extrasDiaDefaultRate: 4,
   provisionMonthsPerYear: 2,
 });
 
@@ -166,9 +163,6 @@ export function shiftHours(startHour: number, endHour: number, sentHomeHour?: nu
   const end = sentHomeHour != null ? sentHomeHour : endHour;
   return Math.max(end - startHour, 0);
 }
-export function extrasDiaRate(level: string | null | undefined): number {
-  return FINANCE_PARAMS.extrasDiaRates[String(level ?? "junior")] ?? FINANCE_PARAMS.extrasDiaDefaultRate;
-}
 
 /** Cidade das escalas (lisbon|porto|faro) a partir da chave partilhada (lisboa|porto|faro). */
 export function extrasCityFromKey(key: string | null): string | null {
@@ -177,7 +171,22 @@ export function extrasCityFromKey(key: string | null): string | null {
 }
 
 // ─── Parceiros / comissões ───────────────────────────────────────────────────
-export interface PartnerLite { id: number; name: string; commissionRate: number | null; updatedAt: string }
+export type CommissionBase = "net" | "gross";
+export interface PartnerLite {
+  id: number; name: string; commissionRate: number | null; updatedAt: string;
+  /** NULL = nunca gravado por um admin (ex.: criado pela sincronização automática
+   * com 0%). undefined = informação não disponível → comportamento antigo. */
+  configuredAt?: string | null;
+  campaignKey?: string | null;
+  partnerType?: string | null;
+  /** base da comissão: 'net' (sem IVA — regra do dono, omissão) | 'gross' (exceção) */
+  commissionBase?: string | null;
+}
+
+/** Base da comissão do parceiro: só 'gross' explícito usa o valor COM IVA. */
+export function commissionBaseOf(partner: Pick<PartnerLite, "commissionBase"> | undefined | null): CommissionBase {
+  return partner?.commissionBase === "gross" ? "gross" : "net";
+}
 export interface PartnerIndex {
   byKey: Map<string, PartnerLite>;
   /** chaves com mais do que um parceiro (o mais recente ganha, mas fica ASSINALADO) */
@@ -197,7 +206,7 @@ export function buildPartnerIndex(
     candidates.get(key)!.add(id);
   };
   for (const p of partners) { register(p.name, p.id); }
-  for (const p of partners) { register((p as any).campaignKey, p.id); }
+  for (const p of partners) { register(p.campaignKey, p.id); }
   for (const a of aliases) register(a.aliasValue, a.partnershipId);
   const byKey = new Map<string, PartnerLite>();
   const conflicts: PartnerIndex["conflicts"] = [];
@@ -210,13 +219,51 @@ export function buildPartnerIndex(
   return { byKey, conflicts };
 }
 
-export type CommissionStatus = "ok" | "rate_missing" | "rate_zero" | "no_partner";
-/** Comissão de uma reserva/grupo: distingue 0% confirmado de taxa em falta. */
-export function commissionFor(revenueGross: number, partner: PartnerLite | undefined): { commission: number; status: CommissionStatus } {
-  if (!partner) return { commission: 0, status: "no_partner" };
-  if (partner.commissionRate == null) return { commission: 0, status: "rate_missing" };
-  if (partner.commissionRate === 0) return { commission: 0, status: "rate_zero" };
-  return { commission: revenueGross * (partner.commissionRate / 100), status: "ok" };
+export type CommissionStatus = "ok" | "rate_missing" | "rate_zero" | "no_partner" | "covered_by_operational";
+/**
+ * Comissão de uma reserva/grupo: distingue 0% confirmado de taxa em falta.
+ * Base = valor SEM IVA (regra do dono) salvo parceiro com commissionBase
+ * 'gross'. `revenueNet` omitido → líquido à taxa normal.
+ */
+export function commissionFor(
+  revenueGross: number,
+  partner: PartnerLite | undefined,
+  revenueNet: number = netOfVat(revenueGross),
+): { commission: number; status: CommissionStatus; base: number } {
+  if (!partner) return { commission: 0, status: "no_partner", base: 0 };
+  const base = commissionBaseOf(partner) === "gross" ? revenueGross : revenueNet;
+  if (partner.commissionRate == null) return { commission: 0, status: "rate_missing", base };
+  // 0% só é "confirmado" se alguém configurou o parceiro; um 0% vindo da
+  // sincronização automática (configuredAt NULL) é taxa em falta.
+  if (partner.commissionRate === 0) return { commission: 0, status: partner.configuredAt === null ? "rate_missing" : "rate_zero", base };
+  return { commission: base * (partner.commissionRate / 100), status: "ok", base };
+}
+
+/**
+ * Sem comissão a dobrar: se o parceiro da campanha é OPERACIONAL e já opera o
+ * centro da reserva, a comissão dele vem pela via operacional — a de venda
+ * não se cobra outra vez. `operatedLeaves` = centros (folhas) que cada
+ * parceiro operacional cobre.
+ */
+export function salesCommissionCoveredByOperational(
+  partner: Pick<PartnerLite, "id" | "partnerType"> | undefined,
+  projectId: number | null | undefined,
+  operatedLeaves: ReadonlyMap<number, ReadonlySet<number>>,
+): boolean {
+  if (!partner || partner.partnerType !== "operacional" || projectId == null) return false;
+  return operatedLeaves.get(partner.id)?.has(projectId) ?? false;
+}
+
+/**
+ * Fim assumido do vínculo: fim de contrato; inativo SEM fim de contrato →
+ * data de desativação, senão a última atualização da ficha (continua a contar
+ * nos períodos anteriores e fica num aviso de qualidade). Ativo sem fim → null.
+ */
+export function assumedContractEnd(e: { isActive: number | boolean | null | undefined; contractEnd?: string | null; deactivatedAt?: string | null; updatedAt?: string | null }): { end: string | null; assumed: boolean } {
+  if (e.contractEnd) return { end: e.contractEnd.slice(0, 10), assumed: false };
+  if (e.isActive) return { end: null, assumed: false };
+  const fb = e.deactivatedAt || e.updatedAt;
+  return { end: fb ? String(fb).slice(0, 10) : null, assumed: true };
 }
 
 // ─── Margem — A fórmula ───────────────────────────────────────────────────────
@@ -230,7 +277,13 @@ export interface MarginInput {
   extrasDia: number;
   salesCommissions: number;
   operationalCommissions: number;
+  /** Taxa única (período sem mudança de taxa); omissão = FINANCE_PARAMS. */
   vatRate?: number;
+  /** Receita SEM IVA já calculada dia a dia com a taxa em vigor em cada dia
+   *  (Definições → IVA com data de efeito). Tem prioridade sobre `vatRate`. */
+  revenueNet?: number;
+  /** Despesas SEM IVA já calculadas com a taxa de cada categoria (0083). */
+  expensesNet?: number;
 }
 export interface MarginResult {
   revenueNet: number;
@@ -253,8 +306,9 @@ export interface MarginResult {
  */
 export function computeMargin(i: MarginInput): MarginResult {
   const vat = i.vatRate ?? FINANCE_PARAMS.vatRate;
-  const revenueNet = netOfVat(i.revenueGross, vat);
-  const expensesNet = netOfVat(i.expensesGross, vat);
+  const revenueNet = i.revenueNet ?? netOfVat(i.revenueGross, vat);
+  // Líquido real (IVA por categoria) quando o motor o traz; senão, taxa normal
+  const expensesNet = i.expensesNet ?? netOfVat(i.expensesGross, vat);
   const salaries = i.salariesBase + i.salariesProvisions + i.salariesVariable;
   const personnel = salaries + i.employerTax;
   const commissions = i.salesCommissions + i.operationalCommissions;
@@ -270,7 +324,11 @@ export function computeMargin(i: MarginInput): MarginResult {
   };
 }
 
-/** TSU patronal sobre a base tributável (base + variável tributável; NÃO sobre provisões/alimentação). */
+/**
+ * TSU patronal sobre a base tributável: base + provisões de 13.º/14.º (os
+ * subsídios de Natal e férias também pagam TSU) + variável tributável. NÃO
+ * sobre o subsídio de alimentação.
+ */
 export function employerTaxFor(taxableBase: number, rate = FINANCE_PARAMS.tsuEmployerRate): number {
   return taxableBase * rate;
 }

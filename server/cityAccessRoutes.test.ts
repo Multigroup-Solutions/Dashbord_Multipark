@@ -6,6 +6,13 @@ import {appRouter} from './routers';
 const caller=(role='extra')=>appRouter.createCaller({user:{id:123,role},req:{headers:{}},res:{}} as any);
 beforeEach(()=>{state.load.mockReset();state.load.mockResolvedValue({all:false,defaultCityId:50,cityName:'Porto',cityIds:[50],projectIds:[50,65],missingCostCenter:false});});
 describe('cidades no servidor',()=>{
+ it('projects.list passa o papel ao loadCityAccess (super_admin sem ficha vê todos)',async()=>{
+  state.load.mockImplementation(async(_id:number,role?:string)=>role==='super_admin'
+   ?{all:true,defaultCityId:null,cityIds:[50],projectIds:[49,50,65],missingCostCenter:false}
+   :{all:false,defaultCityId:null,cityIds:[],projectIds:[],missingCostCenter:true});
+  expect(await caller('super_admin').projects.list()).toEqual([{id:50},{id:65},{id:49}]);
+  expect(state.load).toHaveBeenCalledWith(123,'super_admin');
+ });
  it('filtra os projetos mesmo para administradores',async()=>expect(await caller('admin').projects.list()).toEqual([{id:50},{id:65}]));
  it('a consulta sem filtros recebe Porto antes de executar',async()=>{await caller('admin').multipark.bookings();expect(state.bookings).toHaveBeenCalledWith(expect.objectContaining({city:'Porto'}));});
  it('rejeita um filtro de outra cidade enviado diretamente à API',async()=>{

@@ -5,6 +5,8 @@ import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerGoogleBusinessRoutes } from "../integrations/googleBusiness/routes";
+import { registerGoogleAccountRoutes } from "../google/routes";
+import { registerMailRoutes } from "../mail/routes";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
@@ -12,13 +14,11 @@ import { createExternalApiRouter } from "../externalApi";
 import { createMcpApiRouter } from "../mcpApi";
 import { createWhatsappWebhookRouter } from "../whatsappWebhook";
 import { createMultiparkWebhookRouter } from "../multiparkWebhook";
-import { startDailyCollectionScheduler } from "../jobs/dailyDriverCollection";
-import { startBookingSyncScheduler } from "../jobs/multiparkBookingSync";
-import { startEmailInboundScheduler } from "../jobs/emailInboundSync";
 import { seedProjectHierarchy } from "../db";
 import multer from "multer";
+import { requireSession } from "./requireSession";
 import { storagePut } from "../storage";
-// Gmail sync handled externally via Make scheduled tasks
+import { cronRunRecorder } from "../cronRuns";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -53,11 +53,16 @@ async function startServer() {
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+  // Registo das corridas de /api/cron/* (Definições → Estado do sistema).
+  app.use("/api/cron", cronRunRecorder());
   // Serve local uploads when S3 is not configured
-  app.use("/uploads", express.static("uploads"));
+  app.use("/uploads", requireSession, express.static("uploads"));
   // OAuth callback under /api/oauth/callback
   registerOAuthRoutes(app);
   registerGoogleBusinessRoutes(app);
+  // Comunicação (conta Google por utilizador, cron do Gmail, push, anexos)
+  registerGoogleAccountRoutes(app);
+  registerMailRoutes(app);
   // External REST API (device integrations)
   app.use("/api/external", createExternalApiRouter());
   // MCP Control API (X-API-Key) — paridade com o api-entry.ts (Vercel)
@@ -65,7 +70,7 @@ async function startServer() {
 
   // File upload endpoint (multer)
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024 } });
-  app.post("/api/upload", upload.single("file"), async (req: any, res: any) => {
+  app.post("/api/upload", requireSession, upload.single("file"), async (req: any, res: any) => {
     try {
       if (!req.file) return res.status(400).json({ error: "No file" });
       const ext = req.file.originalname?.split(".").pop() || "bin";
@@ -79,7 +84,7 @@ async function startServer() {
   });
   // Resolve ficheiro do storage pela KEY (paridade com o api-entry.ts do
   // Vercel): Blob → redirect para a URL pública; local → redirect p/ /uploads.
-  app.get(/^\/api\/file\/(.+)/, async (req: any, res: any) => {
+  app.get(/^\/api\/file\/(.+)/, requireSession, async (req: any, res: any) => {
     try {
       // O Express já decodifica os grupos capturados — sem 2º decode.
       const key = String(req.params[0] ?? "");
@@ -116,13 +121,9 @@ async function startServer() {
 
   server.listen(port, () => {
     console.log(`Server running on http://localhost:${port}/`);
-    // Seed data & start background jobs
     seedProjectHierarchy().catch(e => console.error("[Seed] Project hierarchy error:", e));
-    startDailyCollectionScheduler();
-    startBookingSyncScheduler();
-    // Emails (criticas@/reclamacoes@/perdidos@/recursos-humanos@) — o cron do
-    // GitHub Actions foi removido a 14/jul; passa a correr aqui, in-process.
-    startEmailInboundScheduler();
+    // Sem timers in-process: o agendador é o /api/cron/tick da função do
+    // Vercel (server/cronScheduler.ts), chamado pelo cron-job.org.
   });
 }
 

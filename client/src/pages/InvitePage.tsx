@@ -29,7 +29,7 @@ export default function InvitePage() {
 
   if (isLoading || authLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
+      <div className="min-h-screen flex items-center justify-center bg-background px-4 py-8">
         <Card className="w-full max-w-md">
           <CardContent className="flex flex-col items-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-primary mb-4" />
@@ -42,7 +42,7 @@ export default function InvitePage() {
 
   if (!inviteInfo?.valid) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
+      <div className="min-h-screen flex items-center justify-center bg-background px-4 py-8">
         <Card className="w-full max-w-md">
           <CardContent className="flex flex-col items-center py-12">
             <XCircle className="h-12 w-12 text-destructive mb-4" />
@@ -58,10 +58,10 @@ export default function InvitePage() {
 
   if (completed) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
+      <div className="min-h-screen flex items-center justify-center bg-background px-4 py-8">
         <Card className="w-full max-w-md">
           <CardContent className="flex flex-col items-center py-12">
-            <CheckCircle2 className="h-12 w-12 text-green-500 mb-4" />
+            <CheckCircle2 className="h-12 w-12 text-green-600 mb-4" />
             <h2 className="text-lg font-semibold mb-2">Conta Ativada!</h2>
             <p className="text-muted-foreground text-center mb-6">
               A tua conta foi ativada com sucesso. Já podes aceder à plataforma.
@@ -80,7 +80,7 @@ export default function InvitePage() {
   if (!user) {
     const loginUrl = getLoginUrl();
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
+      <div className="min-h-screen flex items-center justify-center bg-background px-4 py-8">
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">
             <div className="mx-auto mb-4 h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
@@ -88,7 +88,7 @@ export default function InvitePage() {
             </div>
             <CardTitle>Convite para Dashboard Multipark</CardTitle>
             <CardDescription>
-              Foste convidado para a plataforma Dashboard Multipark com o email <strong>{inviteInfo.email}</strong>
+              Foste convidado para a plataforma Dashboard Multipark com o email <strong className="break-all">{inviteInfo.email}</strong>
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col items-center gap-4">
@@ -109,7 +109,7 @@ export default function InvitePage() {
 
   // User is logged in — show activate button
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background">
+    <div className="min-h-screen flex items-center justify-center bg-background px-4 py-8">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
           <div className="mx-auto mb-4 h-12 w-12 rounded-full bg-green-500/10 flex items-center justify-center">
@@ -117,7 +117,7 @@ export default function InvitePage() {
           </div>
           <CardTitle>Ativar Conta</CardTitle>
           <CardDescription>
-            Estás autenticado como <strong>{user.name ?? user.email}</strong>. Clica abaixo para ativar a tua conta na plataforma.
+            Estás autenticado como <strong className="break-words">{user.name ?? user.email}</strong>. Clica abaixo para ativar a tua conta na plataforma.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col items-center gap-4">

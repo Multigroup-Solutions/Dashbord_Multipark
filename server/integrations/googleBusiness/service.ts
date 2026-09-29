@@ -1,7 +1,7 @@
 import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { complaints, googleReviews, projects } from '../../../drizzle/schema';
-import { BusinessClient, REPLY_MAX_LENGTH } from './client';
-import { accountPattern, locationPattern, normalizeReview, reviewPattern, safeError, type GoogleReview } from './domain';
+import { BusinessClient, REPLY_MAX_LENGTH, type GoogleLocation } from './client';
+import { accountPattern, locationPattern, normalizeReview, reviewPattern, safeError, shouldOpenComplaint, shouldStopPaging, type GoogleReview } from './domain';
 import { accessToken, connection, database, saveConnection } from './oauth';
 import { PROVIDER } from './config';
 
@@ -9,6 +9,9 @@ export interface Location {
   id: number; locationName: string; accountName: string; title: string; address: string | null;
   projectId: number | null; selected: number; available: number; nextPageToken: string | null;
   lastSyncAt: string | null; lastError: string | null; dirtyAt: string | null; dirtyVersion: number;
+  // 0170 — estado do perfil (lido na listagem, readMask metadata,openInfo)
+  hasGoogleUpdated?: number | null; hasPendingEdits?: number | null; hasVoiceOfMerchant?: number | null;
+  canOperateLocalPost?: number | null; openStatus?: string | null; mapsUri?: string | null; placeId?: string | null; metaCheckedAt?: string | null;
 }
 export const rows = <T = any>(result: any): T[] => result[0] as T[];
 const now = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
@@ -19,9 +22,20 @@ export async function locations() {
   return rows<Location>(await db.execute(sql`SELECT * FROM google_business_locations ORDER BY title`));
 }
 
+/** Estado do perfil (0170): verificação, edições pendentes, alterado pela Google, aberto/fechado. PURA. */
+export function locationMeta(l: GoogleLocation) {
+  const b = (v: unknown) => (typeof v === 'boolean' ? (v ? 1 : 0) : null);
+  const s = (v: unknown, n: number) => (typeof v === 'string' && v ? v.slice(0, n) : null);
+  return {
+    hasGoogleUpdated: b(l.metadata?.hasGoogleUpdated), hasPendingEdits: b(l.metadata?.hasPendingEdits),
+    hasVoiceOfMerchant: b(l.metadata?.hasVoiceOfMerchant), canOperateLocalPost: b(l.metadata?.canOperateLocalPost),
+    openStatus: s(l.openInfo?.status, 30), mapsUri: s(l.metadata?.mapsUri, 500), placeId: s(l.metadata?.placeId, 100),
+  };
+}
+
 export async function refreshLocations(deadline = Date.now() + 35_000) {
-  const client = new BusinessClient(await accessToken());
-  const found = new Map<string, { accountName: string; title: string; address: string }>();
+  const client = new BusinessClient(await accessToken(), { deadlineAt: deadline });
+  const found = new Map<string, { accountName: string; title: string; address: string; meta: ReturnType<typeof locationMeta> }>();
   const accountTokens = new Set<string>(); let accountToken = '';
   do {
     if (Date.now() > deadline || accountTokens.has(accountToken)) throw new Error('Listagem incompleta; volta a atualizar os perfis.');
@@ -38,7 +52,7 @@ export async function refreshLocations(deadline = Date.now() + 35_000) {
           if (!locationPattern.test(location.name)) throw new Error('Local Google inválido.');
           const a = location.storefrontAddress;
           found.set(location.name, { accountName: account.name, title: location.title.slice(0, 256),
-            address: [...(a?.addressLines || []), a?.postalCode, a?.locality].filter(Boolean).join(', ') });
+            address: [...(a?.addressLines || []), a?.postalCode, a?.locality].filter(Boolean).join(', '), meta: locationMeta(location) });
         }
         token = result.nextPageToken || '';
       } while (token);
@@ -50,9 +64,14 @@ export async function refreshLocations(deadline = Date.now() + 35_000) {
     // A failed/partial discovery never disables a previous, valid mapping.
     await tx.execute(sql`UPDATE google_business_locations SET available = 0`);
     for (const [name, location] of found) {
-      await tx.execute(sql`INSERT INTO google_business_locations (locationName, accountName, title, address)
-        VALUES (${name}, ${location.accountName}, ${location.title}, ${location.address})
-        ON DUPLICATE KEY UPDATE accountName = ${location.accountName}, title = ${location.title}, address = ${location.address}, available = 1`);
+      const m = location.meta;
+      await tx.execute(sql`INSERT INTO google_business_locations (locationName, accountName, title, address,
+          hasGoogleUpdated, hasPendingEdits, hasVoiceOfMerchant, canOperateLocalPost, openStatus, mapsUri, placeId, metaCheckedAt)
+        VALUES (${name}, ${location.accountName}, ${location.title}, ${location.address},
+          ${m.hasGoogleUpdated}, ${m.hasPendingEdits}, ${m.hasVoiceOfMerchant}, ${m.canOperateLocalPost}, ${m.openStatus}, ${m.mapsUri}, ${m.placeId}, UTC_TIMESTAMP())
+        ON DUPLICATE KEY UPDATE accountName = ${location.accountName}, title = ${location.title}, address = ${location.address}, available = 1,
+          hasGoogleUpdated = ${m.hasGoogleUpdated}, hasPendingEdits = ${m.hasPendingEdits}, hasVoiceOfMerchant = ${m.hasVoiceOfMerchant},
+          canOperateLocalPost = ${m.canOperateLocalPost}, openStatus = ${m.openStatus}, mapsUri = ${m.mapsUri}, placeId = ${m.placeId}, metaCheckedAt = UTC_TIMESTAMP()`);
     }
   });
   await saveConnection({ lastError: null, lastCheckedAt: now() });
@@ -76,7 +95,7 @@ export async function mapLocation(id: number, projectId: number | null, selected
 /** Atomic review + complaint. All delivery retries share the same Google key.
  * Ambiguous email history is kept pending until a person chooses a match. */
 export async function importReview(locationId: number, payload: GoogleReview, userId: number | null,
-  resolution?: { existingId: number | null }) {
+  resolution?: { existingId: number | null }, opts: { firstImport?: boolean; nowMs?: number } = {}) {
   const db = await database();
   return db.transaction(async tx => {
     const [location] = rows<Location>(await tx.execute(sql`SELECT * FROM google_business_locations WHERE id = ${locationId} FOR UPDATE`));
@@ -114,7 +133,7 @@ export async function importReview(locationId: number, payload: GoogleReview, us
     if (existing) {
       id = existing.id;
       await tx.update(googleReviews).set({ ...data,
-        ...(contentChanged ? { aiResponse: null, aiResponseApproved: 0 } : {}),
+        ...(contentChanged ? { aiResponse: null, aiResponseApproved: 0, aiDraftAttemptedAt: null } : {}),
         ...(review.reply ? { respondedAt: review.replyAt, status: existing.complaintId ? 'converted_complaint' as const : 'manually_responded' as const }
           : { respondedAt: null, status: existing.complaintId ? 'converted_complaint' as const : existing.status === 'dismissed' ? 'dismissed' as const : 'pending_response' as const }),
       }).where(eq(googleReviews.id, id));
@@ -123,7 +142,8 @@ export async function importReview(locationId: number, payload: GoogleReview, us
         importedAt: now(), respondedAt: review.replyAt, status: review.reply ? 'manually_responded' : 'pending_response' });
       id = result[0].insertId;
     }
-    if (review.rating <= 3 && !existing?.complaintId && existing?.status !== 'dismissed') {
+    if (shouldOpenComplaint({ rating: review.rating, hasComplaint: !!existing?.complaintId, dismissed: existing?.status === 'dismissed',
+      firstImport: !!opts.firstImport, updatedIso: review.updated, hasReply: !!review.reply, nowMs: opts.nowMs })) {
       const result = await tx.insert(complaints).values({ title: `Crítica Google ${review.rating}★ — ${review.reviewerName}`.slice(0, 255),
         description: review.reviewText || 'Avaliação sem texto.', complaintType: 'other', complaintStatus: 'new',
         complaintPriority: review.rating === 1 ? 'urgent' : 'high', clientName: review.reviewerName,
@@ -191,19 +211,31 @@ export async function resolvePending(key: string, existingId: number | null, use
 export async function syncReviews(deadline = Date.now() + 35_000) {
   const conn = await connection();
   if (!conn?.refreshTokenEnc || conn.status === 'disconnected') return { ok: true, skipped: 'disconnected', imported: 0, pending: 0, done: true };
+  // Reautorização pendente: não é um 500 — o alerta (Integrações) avisa quem tem de religar.
+  if (conn.status === 'reauth_required') return { ok: true, skipped: 'reauth_required', reason: 'Google Business Profile precisa de ser religado (Críticas).', imported: 0, pending: 0, done: true };
   const db = await database();
   const lock = now();
   const acquired = await db.execute(sql`UPDATE integration_connections SET syncLockAt = ${lock}
     WHERE provider = ${PROVIDER} AND (syncLockAt IS NULL OR syncLockAt < UTC_TIMESTAMP() - INTERVAL 20 MINUTE)`);
   if (!(acquired[0] as any).affectedRows) return { ok: true, skipped: 'busy', imported: 0, pending: 0, done: false };
-  let imported = 0, pending = 0, done = true; const errors: string[] = [];
+  let imported = 0, pending = 0, done = true, stoppedEarly = 0; const errors: string[] = [];
   try {
-    const client = new BusinessClient(await accessToken());
+    let client: BusinessClient;
+    try { client = new BusinessClient(await accessToken(), { deadlineAt: deadline }); }
+    catch (error) {
+      // A renovação acabou de marcar reauth_required (invalid_grant) → saltado, não 500.
+      const after = await connection();
+      if (after?.status === 'reauth_required') return { ok: true, skipped: 'reauth_required', reason: 'Google Business Profile precisa de ser religado (Críticas).', imported: 0, pending: 0, done: true };
+      throw error;
+    }
     const selected = rows<Location>(await db.execute(sql`SELECT * FROM google_business_locations
       WHERE selected = 1 AND available = 1 AND projectId IS NOT NULL
       ORDER BY (dirtyAt IS NOT NULL) DESC, (nextPageToken IS NOT NULL) DESC, lastSyncAt ASC, id`));
     for (const location of selected) {
       if (Date.now() > deadline) { done = false; break; }
+      // 1.ª importação = o perfil nunca completou uma volta (lastSyncAt vazio)
+      const firstImport = !location.lastSyncAt;
+      const backfill = firstImport || !!location.nextPageToken;
       try {
         let token = location.nextPageToken || '';
         const seen = new Set<string>();
@@ -211,15 +243,19 @@ export async function syncReviews(deadline = Date.now() + 35_000) {
           if (seen.has(token)) throw new Error('A Google repetiu uma página de avaliações.');
           seen.add(token);
           const page = await client.reviews(location.accountName, location.locationName, token);
+          const results: string[] = [];
           for (const review of page.reviews || []) {
             if (Date.now() > deadline) { done = false; break; }
-            const result = await importReview(location.id, review, conn.connectedById);
+            const result = await importReview(location.id, review, conn.connectedById, undefined, { firstImport });
+            results.push(result);
             if (result === 'created' || result === 'updated') imported++;
             if (result === 'pending') pending++;
           }
           // On timeout replay the current page; durable review keys make that safe.
           if (!done) break;
           token = page.nextPageToken || '';
+          // Ordem updateTime desc: página toda igual → o resto também está (fora de backfill/dirty).
+          if (token && shouldStopPaging({ results, backfill, dirty: !!location.dirtyAt })) { token = ''; stoppedEarly++; }
           await db.execute(sql`UPDATE google_business_locations SET nextPageToken = ${token || null}, lastError = NULL,
             lastSyncAt = ${token ? location.lastSyncAt : now()},
             dirtyAt = CASE WHEN ${token} = '' AND dirtyVersion = ${location.dirtyVersion} THEN NULL ELSE dirtyAt END WHERE id = ${location.id}`);
@@ -232,7 +268,16 @@ export async function syncReviews(deadline = Date.now() + 35_000) {
       }
     }
     await saveConnection({ lastCheckedAt: now(), lastError: errors[0] || null });
-    return { ok: !errors.length, done, imported, pending, errors };
+    // Rascunho IA (lite) para as críticas novas — fica por aprovar, nunca
+    // publica sozinho. Lote pequeno e só com tempo; interruptor/orçamento → salta.
+    let aiDrafted = 0;
+    if (Date.now() < deadline - 5_000) {
+      try {
+        const { draftPendingReviewReplies } = await import('../../reviewAutoDraft');
+        aiDrafted = (await draftPendingReviewReplies({ limit: 3, deadlineAt: deadline + 15_000 })).drafted;
+      } catch { /* IA opcional: a recolha já terminou */ }
+    }
+    return { ok: !errors.length, done, imported, pending, stoppedEarly, errors, aiDrafted };
   } finally {
     await db.execute(sql`UPDATE integration_connections SET syncLockAt = NULL WHERE provider = ${PROVIDER} AND syncLockAt = ${lock}`);
   }

@@ -1,0 +1,757 @@
+/**
+ * Definições da aplicação (página /definicoes) — regras PURAS, partilhadas
+ * entre servidor (validação ao gravar) e cliente (validação no formulário).
+ *
+ *  - SETTINGS: definições editáveis (chave → schema zod + valor por omissão);
+ *  - AUTOMATION_FLAGS: interruptores das automações que podem ser sobrepostos
+ *    na BD (o resto das env vars NUNCA é sobreposto);
+ *  - CRON_JOBS: os /api/cron/* (corridos pelo agendador /api/cron/tick) e o
+ *    intervalo esperado de cada um (para detetar crons parados);
+ *  - NOTIFICATION_KINDS: vista compatível do catálogo de notificações
+ *    (shared/notificationRouting.ts — quem recebe o quê).
+ */
+import { z } from "zod";
+import { AI_FEATURE_IDS, AI_TIERS } from "./aiFeatures";
+import { DEFAULT_HOME_CITY_ONLY, NOTIFICATION_KIND_DEFS, NOTIFICATION_ROUTING_SETTING_KEY, notificationRoutingSchema } from "./notificationRouting";
+import { DEFAULT_BRAND_DOMAINS, DEFAULT_MAIL_ALIAS_DOMAINS, DEFAULT_MAILBOX_SOURCE, MAIL_WORKSPACE_PRIMARY_DOMAIN, MAIL_BRAND_IDS, MAIL_DEFAULT_BACKFILL_DAYS, MAIL_DEFAULT_RETENTION_YEARS, MAIL_DEFAULT_SLA_HOURS } from "./mail";
+import { DEFAULT_SHARED_CALENDARS_CONFIG, sharedCalendarsConfigSchema } from "./googleSync";
+import { DEFAULT_CONTACTS_CONFIG, contactsConfigSchema } from "./contacts";
+import { DEFAULT_DRIVE_CONFIG, driveConfigSchema } from "./drive";
+import { DEFAULT_WEB_ANALYTICS_CONFIG, WEB_ANALYTICS_SETTING_KEY, webAnalyticsConfigSchema } from "./webAnalytics";
+import { DEFAULT_GBP_CONFIG, GBP_SETTING_KEY, gbpConfigSchema } from "./googleBusinessProfile";
+import { DEFAULT_KNOWLEDGE_CONFIG, KNOWLEDGE_SETTING_KEY, knowledgeConfigSchema } from "./knowledge";
+import { DEFAULT_SERVICE_TASK_RULES, SERVICE_TASKS_SETTING_KEY, serviceTaskRulesSchema } from "./serviceTasks";
+
+// ─── Taxas com data de efeito (IVA / TSU) ───────────────────────────────────
+
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+export const rateEntrySchema = z.object({
+  /** Fração (0.23 = 23%). */
+  rate: z.number({ error: "Taxa inválida." }).min(0, "A taxa não pode ser negativa.").max(1, "A taxa é uma fração (ex.: 0,23)."),
+  /** Primeiro dia (Lisboa, AAAA-MM-DD) em que a taxa se aplica. */
+  from: z.string().regex(ISO_DAY, "Data inválida (AAAA-MM-DD)."),
+});
+export type RateEntry = z.infer<typeof rateEntrySchema>;
+
+export const rateScheduleSchema = z
+  .array(rateEntrySchema)
+  .min(1, "Indica pelo menos uma taxa.")
+  .max(20, "No máximo 20 taxas.")
+  .superRefine((list, ctx) => {
+    const seen = new Set<string>();
+    for (const e of list) {
+      if (seen.has(e.from)) ctx.addIssue({ code: "custom", message: `Data de efeito repetida: ${e.from}.` });
+      seen.add(e.from);
+    }
+  })
+  .transform((list) => [...list].sort((a, b) => a.from.localeCompare(b.from)));
+
+/** Taxa em vigor num dia (a última com `from` <= dia); `null` se nenhuma. PURA. */
+export function effectiveRate(list: readonly RateEntry[] | null | undefined, day: string): number | null {
+  let best: RateEntry | null = null;
+  for (const e of list ?? []) {
+    if (e.from <= day && (!best || e.from > best.from)) best = e;
+  }
+  return best ? best.rate : null;
+}
+
+// ─── Registo das definições editáveis ───────────────────────────────────────
+
+const emailSchema = z.string().trim().toLowerCase().email("Email inválido.").max(320);
+
+export const emailListSchema = z
+  .array(emailSchema)
+  .max(20, "No máximo 20 emails.")
+  .transform((list) => Array.from(new Set(list)));
+
+/** Preço (EUR por 1M tokens) de um modelo de IA — sobreposição da tabela do código. */
+export const aiModelPriceSchema = z.object({
+  input: z.number({ error: "Preço de entrada inválido." }).min(0).max(1000),
+  output: z.number({ error: "Preço de saída inválido." }).min(0).max(1000),
+  cached: z.number().min(0).max(1000).optional(),
+  audioInput: z.number().min(0).max(1000).optional(),
+});
+export const aiPriceOverridesSchema = z
+  .record(z.string().trim().min(1).max(80).regex(/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/, "Nome de modelo inválido."), aiModelPriceSchema)
+  .refine((r) => Object.keys(r).length <= 40, "No máximo 40 modelos.");
+export type AiPriceOverrides = z.infer<typeof aiPriceOverridesSchema>;
+
+/** Nível de modelo por funcionalidade de IA (só ids e níveis conhecidos). */
+export const aiFeatureTiersSchema = z.record(
+  z.string().refine((k) => (AI_FEATURE_IDS as readonly string[]).includes(k), "Funcionalidade de IA desconhecida."),
+  z.enum(AI_TIERS as unknown as ["lite", "fast", "smart"], { error: "Nível inválido (lite, fast ou smart)." }),
+);
+
+export type SettingGroup = "financeiro" | "sla" | "emails" | "disponibilidade" | "ia" | "extras" | "notificacoes" | "marketing" | "operacao" | "servicos";
+
+// ─── Zello (GPS) ────────────────────────────────────────────────────────────
+
+/**
+ * Contas Zello que NÃO entram na recolha GPS nem nos alertas de GPS (consolas
+ * de despacho, contas de teste). Lista explícita — a flag "admin" do Zello já
+ * não exclui ninguém (auditoria PDA/Zello, B5).
+ */
+export const ZELLO_GPS_EXCLUDED_KEY = "zello.gpsExcludedUsers" as const;
+export const zelloUsernameListSchema = z
+  .array(z.string().trim().min(1, "Utilizador Zello vazio.").max(255, "Utilizador Zello demasiado longo."))
+  .max(200, "No máximo 200 contas.")
+  .transform((list) => Array.from(new Set(list)));
+
+/** Lista gravada → conjunto para comparar (sem distinguir maiúsculas). PURA. */
+export function zelloExclusionSet(list: readonly string[] | null | undefined): Set<string> {
+  return new Set((list ?? []).map((u) => String(u ?? "").trim().toLowerCase()).filter(Boolean));
+}
+
+/** Esta conta Zello está na lista de exclusão do GPS? PURA. */
+export function isZelloGpsExcluded(username: string | null | undefined, excluded: ReadonlySet<string>): boolean {
+  const k = String(username ?? "").trim().toLowerCase();
+  return !!k && excluded.has(k);
+}
+
+// ─── Parques que a operação não faz ─────────────────────────────────────────
+
+export const EXCLUDED_PARKS_SETTING_KEY = "operations.excludedParks" as const;
+
+/** Ids de parques ("Park".id da BD da Multipark), sem repetidos. */
+export const parkIdListSchema = z
+  .array(z.string({ error: "Id de parque inválido." }).trim().min(1, "Id de parque vazio.").max(64, "Id de parque demasiado longo."), { error: "Indica uma lista de parques." })
+  .max(300, "No máximo 300 parques.")
+  .transform((list) => Array.from(new Set(list)));
+
+// ─── Extras-dia (escala automática) ─────────────────────────────────────────
+
+/** Cidades do Extras-dia (mesmos ids do servidor: server/extrasDia.ts). */
+export const EXTRAS_CITY_IDS = ["lisbon", "porto", "faro"] as const;
+export type ExtrasCityId = (typeof EXTRAS_CITY_IDS)[number];
+
+const carsPerHourValue = z
+  .number({ error: "Indica um número de carros por hora." })
+  .min(0.5, "Mínimo 0,5 carros/hora.")
+  .max(20, "Máximo 20 carros/hora.");
+
+/** Carros/hora que UM condutor despacha, por cidade (Lisboa 2, Porto 3, Faro 3). */
+export const carsPerHourMapSchema = z.object({
+  lisbon: carsPerHourValue,
+  porto: carsPerHourValue,
+  faro: carsPerHourValue,
+}, { error: "Indica os carros/hora de Lisboa, Porto e Faro." });
+export type CarsPerHourMap = z.infer<typeof carsPerHourMapSchema>;
+export const DEFAULT_CARS_PER_HOUR: CarsPerHourMap = { lisbon: 2, porto: 3, faro: 3 };
+
+/** Ponto de encontro por cidade (vai no aviso de escala); vazio = não se indica. */
+export const meetingPointMapSchema = z.object({
+  lisbon: z.string().trim().max(200, "Máximo 200 caracteres."),
+  porto: z.string().trim().max(200, "Máximo 200 caracteres."),
+  faro: z.string().trim().max(200, "Máximo 200 caracteres."),
+});
+
+/** Hora "HH:MM" (Lisboa). */
+export const hhmmSchema = z.string().trim().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Hora inválida (HH:MM, ex.: 14:00).");
+
+/** "14:30" → 870 (minutos desde a meia-noite). PURA. */
+export function hhmmToMinutes(v: string): number {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(v ?? "").trim());
+  if (!m) return NaN;
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+/** Limites do tutor da formação (pedidos por pessoa). */
+export const trainingTutorLimitsSchema = z.object({
+  perMinute: z.number({ error: "Indica um número por minuto." }).int("Número inteiro.").min(1, "Mínimo 1 por minuto.").max(120, "Máximo 120 por minuto."),
+  perDay: z.number({ error: "Indica um número por dia." }).int("Número inteiro.").min(1, "Mínimo 1 por dia.").max(5000, "Máximo 5000 por dia."),
+});
+
+/** Limites do assistente (chat): pedidos por pessoa e tamanho da pergunta. */
+export const aiAssistantLimitsSchema = z.object({
+  perMinute: z.number({ error: "perMinute tem de ser um número." }).int().min(1, "perMinute: mínimo 1.").max(120, "perMinute: máximo 120."),
+  perDay: z.number({ error: "perDay tem de ser um número." }).int().min(1, "perDay: mínimo 1.").max(5000, "perDay: máximo 5000."),
+  maxInputChars: z.number({ error: "maxInputChars tem de ser um número." }).int().min(100, "maxInputChars: mínimo 100.").max(4000, "maxInputChars: máximo 4000.").optional(),
+}).strict();
+export type AiAssistantLimits = z.infer<typeof aiAssistantLimitsSchema>;
+export const AI_ASSISTANT_DEFAULT_LIMITS = { perMinute: 20, perDay: 200, maxInputChars: 1000 } as const;
+
+
+export interface SettingDef<S extends z.ZodTypeAny = z.ZodTypeAny> {
+  key: string;
+  group: SettingGroup;
+  label: string;
+  description: string;
+  schema: S;
+  defaultValue: z.input<S>;
+  /** Onde o valor é usado; "store" = só guardado/mostrado (ainda não ligado ao código). */
+  wiring: "live" | "store";
+}
+
+function def<S extends z.ZodTypeAny>(d: SettingDef<S>): SettingDef<S> {
+  return d;
+}
+
+export const SETTINGS = {
+  "finance.vat": def({
+    key: "finance.vat",
+    group: "financeiro",
+    label: "IVA",
+    description: "Taxa de IVA por data de efeito. Usada nos cálculos de Finanças (receita e despesas sem IVA) e de Marketing (ROAS s/ IVA) a partir da data de efeito; antes da primeira data usa-se 23%.",
+    schema: rateScheduleSchema,
+    defaultValue: [{ rate: 0.23, from: "2011-01-01" }],
+    wiring: "live",
+  }),
+  "finance.tsu": def({
+    key: "finance.tsu",
+    group: "financeiro",
+    label: "TSU (entidade patronal)",
+    description: "Taxa Social Única a cargo da empresa, por data de efeito. Usada nos custos de pessoal em Finanças a partir da data de efeito; antes da primeira data usa-se 23,75%.",
+    schema: rateScheduleSchema,
+    defaultValue: [{ rate: 0.2375, from: "2011-01-01" }],
+    wiring: "live",
+  }),
+  "sla.incidentHours": def({
+    key: "sla.incidentHours",
+    group: "sla",
+    label: "Prazo das ocorrências (horas)",
+    description: "Prazo de resolução dado a cada ocorrência nova. Sobrepõe-se a INCIDENT_SLA_HOURS.",
+    schema: z.number({ error: "Indica um número de horas." }).int("Número inteiro de horas.").min(1, "Mínimo 1 hora.").max(720, "Máximo 720 horas (30 dias)."),
+    defaultValue: 48,
+    wiring: "live",
+  }),
+  "sla.lostFoundDays": def({
+    key: "sla.lostFoundDays",
+    group: "sla",
+    label: "Prazo dos perdidos e achados (dias)",
+    description: "Referência do prazo dos perdidos e achados. Por agora só fica registado.",
+    schema: z.number({ error: "Indica um número de dias." }).int("Número inteiro de dias.").min(1, "Mínimo 1 dia.").max(90, "Máximo 90 dias."),
+    defaultValue: 7,
+    wiring: "store",
+  }),
+  "sync.webhookStaleHours": def({
+    key: "sync.webhookStaleHours",
+    group: "sla",
+    label: "Alerta sem notificações Multipark (horas)",
+    description: "Se não chegar nenhum webhook da Multipark durante este número de horas, em horário de operação (07h–23h, Lisboa), os admins recebem um aviso na app (uma vez, e outra quando voltarem).",
+    schema: z.number({ error: "Indica um número de horas." }).int("Número inteiro de horas.").min(1, "Mínimo 1 hora.").max(48, "Máximo 48 horas."),
+    defaultValue: 3,
+    wiring: "live",
+  }),
+  [ZELLO_GPS_EXCLUDED_KEY]: def({
+    key: ZELLO_GPS_EXCLUDED_KEY,
+    group: "operacao",
+    label: "Contas Zello excluídas do GPS",
+    description: "Utilizadores Zello (um por linha) que ficam fora da recolha GPS diária, dos alertas de GPS desligado e da lista \"Zello por ligar\" — consolas de despacho, contas de teste. Vazio = recolhe todos (a conta ser \"admin\" no Zello já não exclui ninguém).",
+    schema: zelloUsernameListSchema,
+    defaultValue: [],
+    wiring: "live",
+  }),
+  [EXCLUDED_PARKS_SETTING_KEY]: def({
+    key: EXCLUDED_PARKS_SETTING_KEY,
+    group: "operacao",
+    label: "Parques que a operação não faz",
+    description: "Parques da BD da Multipark cujas entradas e saídas a operação NÃO faz: saem de Operações → Reservas do dia, da previsão e dos blocos dos Extras do dia e do estado ao vivo da Pressão / Passagem de turno. Vazio = todos os parques.",
+    schema: parkIdListSchema,
+    defaultValue: [],
+    wiring: "live",
+  }),
+  "emails.handoverCc": def({
+    key: "emails.handoverCc",
+    group: "emails",
+    label: "Cópia do email da passagem de turno",
+    description: "Emails em CC na passagem de turno (além dos team leaders). Vazio = usa HANDOVER_EMAIL_CC.",
+    schema: emailListSchema,
+    defaultValue: [],
+    wiring: "live",
+  }),
+  "availability.assigneeEmail": def({
+    key: "availability.assigneeEmail",
+    group: "disponibilidade",
+    label: "Responsável pelas disponibilidades a confirmar",
+    description: "Email da pessoa a quem são atribuídas as tarefas \"Disponibilidade a confirmar\". Vazio = usa AVAILABILITY_TASK_ASSIGNEE_EMAIL.",
+    schema: z.union([z.literal(""), emailSchema]),
+    defaultValue: "",
+    wiring: "live",
+  }),
+  "ai.monthlyBudgetEur": def({
+    key: "ai.monthlyBudgetEur",
+    group: "ia",
+    label: "Orçamento mensal da IA (€)",
+    description: "Teto de gasto estimado da IA por mês civil (UTC). Ao chegar a 100%, as funcionalidades não essenciais respondem \"IA temporariamente indisponível\" e os admins recebem um aviso (uma vez por mês); as essenciais (leitura de faturas) param aos 150%. 0 = sem limite. Vazio = usa AI_MONTHLY_BUDGET_EUR (ou 30 €).",
+    schema: z.number({ error: "Indica um valor em euros." }).min(0, "Não pode ser negativo.").max(100_000, "Máximo 100 000 €."),
+    defaultValue: 30,
+    wiring: "live",
+  }),
+  "ai.featureTiers": def({
+    key: "ai.featureTiers",
+    group: "ia",
+    label: "Nível de modelo por funcionalidade de IA",
+    description: "Sobrepõe o nível (lite = o mais barato, fast, smart) de cada funcionalidade. JSON: {\"expense_ocr\": \"fast\"}. Funcionalidades: " + AI_FEATURE_IDS.join(", ") + ". Vazio = omissão do código (quase tudo lite).",
+    schema: aiFeatureTiersSchema,
+    defaultValue: {},
+    wiring: "live",
+  }),
+  "ai.assistantLimits": def({
+    key: "ai.assistantLimits",
+    group: "ia",
+    label: "Limites do assistente (chat)",
+    description: "Pedidos por pessoa ao assistente e tamanho máximo da pergunta. JSON: {\"perMinute\": 20, \"perDay\": 200, \"maxInputChars\": 1000}. Acima do limite, a pessoa vê \"Muitos pedidos\" e o tempo de espera.",
+    schema: aiAssistantLimitsSchema,
+    defaultValue: { ...AI_ASSISTANT_DEFAULT_LIMITS },
+    wiring: "live",
+  }),
+  "ai.priceOverridesEur": def({
+    key: "ai.priceOverridesEur",
+    group: "ia",
+    label: "Preços dos modelos de IA (€ por 1M tokens)",
+    description: "Sobrepõe a tabela de preços do código (server/_core/ai/pricing.ts) para calcular o custo registado. JSON: {\"<modelo>\": {\"input\": 0.22, \"output\": 1.3, \"cached\": 0.02}}. Vazio = tabela do código.",
+    schema: aiPriceOverridesSchema,
+    defaultValue: {},
+    wiring: "live",
+  }),
+  "extras.carsPerHourPerDriver": def({
+    key: "extras.carsPerHourPerDriver",
+    group: "extras",
+    label: "Carros por hora por condutor",
+    description: "Quantos carros (recolhas + entregas, pesados por tipo de entrega) um condutor despacha por hora, por cidade. Define quantos condutores a previsão do Extras-dia pede em cada hora e a proposta automática de escala.",
+    schema: carsPerHourMapSchema,
+    defaultValue: DEFAULT_CARS_PER_HOUR,
+    wiring: "live",
+  }),
+  "extras.autoProposeAt": def({
+    key: "extras.autoProposeAt",
+    group: "extras",
+    label: "Hora da proposta automática de escala",
+    description: "A partir desta hora (Lisboa) o sistema propõe a escala dos próximos dias com os extras disponíveis (uma vez por dia e cidade; não substitui uma escala já proposta ou confirmada).",
+    schema: hhmmSchema,
+    defaultValue: "14:00",
+    wiring: "live",
+  }),
+  "extras.autoProposeDaysAhead": def({
+    key: "extras.autoProposeDaysAhead",
+    group: "extras",
+    label: "Dias propostos com antecedência",
+    description: "Quantos dias à frente a proposta automática cobre (1 = só amanhã).",
+    schema: z.number({ error: "Indica um número de dias." }).int("Número inteiro de dias.").min(1, "Mínimo 1 dia.").max(7, "Máximo 7 dias."),
+    defaultValue: 1,
+    wiring: "live",
+  }),
+  "extras.autoConfirm": def({
+    key: "extras.autoConfirm",
+    group: "extras",
+    label: "Confirmar e avisar automaticamente",
+    description: "Se ligado, a proposta de amanhã que ninguém confirmou nem suspendeu é confirmada à hora indicada abaixo e os extras são avisados por WhatsApp e email.",
+    schema: z.boolean({ error: "Ligado ou desligado." }),
+    defaultValue: true,
+    wiring: "live",
+  }),
+  "extras.autoConfirmAt": def({
+    key: "extras.autoConfirmAt",
+    group: "extras",
+    label: "Hora da confirmação automática",
+    description: "Hora (Lisboa) a partir da qual a proposta de amanhã é confirmada e enviada automaticamente (se não estiver suspensa).",
+    schema: hhmmSchema,
+    defaultValue: "18:00",
+    wiring: "live",
+  }),
+  "extras.meetingPoints": def({
+    key: "extras.meetingPoints",
+    group: "extras",
+    label: "Ponto de encontro (aviso de escala)",
+    description: "Texto curto com o ponto de encontro de cada cidade, incluído no WhatsApp e no email de escala. Vazio = não se indica.",
+    schema: meetingPointMapSchema,
+    defaultValue: { lisbon: "", porto: "", faro: "" },
+    wiring: "live",
+  }),
+  "ai.trainingTutorLimits": def({
+    key: "ai.trainingTutorLimits",
+    group: "ia",
+    label: "Tutor da formação: limite de perguntas",
+    description: "Perguntas ao tutor da formação por pessoa, por minuto e por dia. JSON: {\"perMinute\": 10, \"perDay\": 100}. Vazio = usa AI_TRAINING_TUTOR_PER_MINUTE / AI_TRAINING_TUTOR_PER_DAY (ou 10 e 100).",
+    schema: trainingTutorLimitsSchema,
+    defaultValue: { perMinute: 10, perDay: 100 },
+    wiring: "live",
+  }),
+  "sla.mailHours": def({
+    key: "sla.mailHours",
+    group: "sla",
+    label: "Prazo de resposta aos emails (horas)",
+    description: "Comunicação: uma conversa de uma caixa partilhada por responder há mais do que isto fica \"fora do prazo\" (lista e filtro \"Por responder\").",
+    schema: z.number({ error: "Indica um número de horas." }).int("Número inteiro de horas.").min(1, "Mínimo 1 hora.").max(720, "Máximo 720 horas."),
+    defaultValue: MAIL_DEFAULT_SLA_HOURS,
+    wiring: "live",
+  }),
+  "mail.retentionYears": def({
+    key: "mail.retentionYears",
+    group: "emails",
+    label: "Retenção dos emails (anos)",
+    description: "Comunicação: os emails guardados há mais do que isto e SEM ligação a um cliente, reserva, reclamação, perdido ou ocorrência são apagados da base de dados (limpeza diária). Os ligados ficam.",
+    schema: z.number({ error: "Indica um número de anos." }).int("Número inteiro de anos.").min(1, "Mínimo 1 ano.").max(20, "Máximo 20 anos."),
+    defaultValue: MAIL_DEFAULT_RETENTION_YEARS,
+    wiring: "live",
+  }),
+  "mail.backfillDays": def({
+    key: "mail.backfillDays",
+    group: "emails",
+    label: "Emails a importar ao ligar uma caixa (dias)",
+    description: "Comunicação: quando uma caixa (ou a conta Google de alguém) é ligada, importam-se os emails destes últimos dias; depois a sincronização é incremental.",
+    schema: z.number({ error: "Indica um número de dias." }).int("Número inteiro de dias.").min(1, "Mínimo 1 dia.").max(730, "Máximo 730 dias."),
+    defaultValue: MAIL_DEFAULT_BACKFILL_DAYS,
+    wiring: "live",
+  }),
+  "mail.systemSender": def({
+    key: "mail.systemSender",
+    group: "emails",
+    label: "Remetente dos emails de sistema (Gmail)",
+    description: "Conta do Google Workspace pela qual a aplicação envia os emails de sistema (notificações, briefing, escala, tarefas, formação, relatórios) pela API do Gmail — tem de estar autorizada na delegação da conta de serviço (gmail.send). Os emails a clientes saem pelo alias da caixa (reclamacoes@, perdidos@…) quando está em \"Enviar email como\" na conta de origem. Editável em Definições → Comunicação.",
+    schema: emailSchema,
+    defaultValue: DEFAULT_MAILBOX_SOURCE,
+    wiring: "live",
+  }),
+  "mail.brandDomains": def({
+    key: "mail.brandDomains",
+    group: "emails",
+    label: "Domínios de email por marca",
+    description: "Comunicação: domínio(s) de cada marca, para detetar a marca de um email pelo endereço de quem o recebeu (quando o endereço não está numa caixa). JSON: {\"multipark\": [\"multipark.pt\"], \"skypark\": [\"skypark.pt\"]}. Marcas: " + MAIL_BRAND_IDS.join(", ") + ".",
+    schema: z.partialRecord(z.enum(MAIL_BRAND_IDS, { error: "Marca desconhecida." }), z.array(z.string().trim().toLowerCase().regex(/^[a-z0-9.-]+\.[a-z]{2,}$/, "Domínio inválido.")).max(10)),
+    defaultValue: DEFAULT_BRAND_DOMAINS,
+    wiring: "live",
+  }),
+  "mail.aliasDomains": def({
+    key: "mail.aliasDomains",
+    group: "emails",
+    label: "Domínios alternativos do Google Workspace",
+    description: "Comunicação: domínios alternativos (\"alias domains\") do Workspace " + MAIL_WORKSPACE_PRIMARY_DOMAIN + ". Nestes domínios TODOS os endereços do domínio principal funcionam automaticamente — um email para reclamacoes@skypark.pt é encaminhado como o alias reclamacoes@" + MAIL_WORKSPACE_PRIMARY_DOMAIN + " (a marca vem do domínio para onde foi enviado). Um endereço escrito na tabela de aliases ganha sempre. Lista vazia = desligado.",
+    schema: z.array(z.string().trim().toLowerCase().regex(/^[a-z0-9.-]+\.[a-z]{2,}$/, "Domínio inválido.")).max(30),
+    defaultValue: [...DEFAULT_MAIL_ALIAS_DOMAINS],
+    wiring: "live",
+  }),
+  "google.sharedCalendars": def({
+    key: "google.sharedCalendars",
+    group: "emails",
+    label: "Calendários partilhados da escala (Google)",
+    description: "Calendários \"Escala Multipark — <cidade>\" escritos pela conta de serviço (delegação) em nome da conta dona, para quem não ligou a conta Google poder subscrever. Editável em Definições → Comunicação (só super admin).",
+    schema: sharedCalendarsConfigSchema,
+    defaultValue: DEFAULT_SHARED_CALENDARS_CONFIG,
+    wiring: "live",
+  }),
+  "google.contacts": def({
+    key: "google.contacts",
+    group: "emails",
+    label: "Contactos Google (diretório e grupos no telemóvel)",
+    description: "Diretório da empresa (conta de serviço com delegação, a impersonar a conta indicada), grupo \"Multipark — Serviço\" com os clientes das recolhas/entregas de hoje e amanhã (papéis e dias de retenção) e grupo opcional de parceiros. Editável em Definições → Comunicação (só super admin).",
+    schema: contactsConfigSchema,
+    defaultValue: DEFAULT_CONTACTS_CONFIG,
+    wiring: "live",
+  }),
+  "google.drive": def({
+    key: "google.drive",
+    group: "emails",
+    label: "Google Drive (Shared Drive, espelho e relatórios ao vivo)",
+    description: "Shared Drive \"Multipark\" da empresa (conta de serviço com delegação, a impersonar a conta indicada): pastas Clientes/Reclamações/RH criadas a pedido, espelho opcional dos documentos do RH e das provas das reclamações e relatórios ao vivo numa folha atualizada 1×/dia. Editável em Definições → Comunicação (só super admin).",
+    schema: driveConfigSchema,
+    defaultValue: DEFAULT_DRIVE_CONFIG,
+    wiring: "live",
+  }),
+  [WEB_ANALYTICS_SETTING_KEY]: def({
+    key: WEB_ANALYTICS_SETTING_KEY,
+    group: "marketing",
+    label: "Web & SEO (Google Analytics 4, Search Console, PageSpeed)",
+    description: "Propriedades GA4 e da Search Console (por marca) lidas pela conta de serviço, páginas medidas na PageSpeed, hora da recolha diária, eventos do funil e limiares dos alertas. Editável em Definições → Integrações (só super admin).",
+    schema: webAnalyticsConfigSchema,
+    defaultValue: DEFAULT_WEB_ANALYTICS_CONFIG,
+    wiring: "live",
+  }),
+  [GBP_SETTING_KEY]: def({
+    key: GBP_SETTING_KEY,
+    group: "marketing",
+    label: "Google Business Profile (desempenho, pesquisas e alertas)",
+    description: "Recolha diária do desempenho dos perfis Google (impressões, chamadas, direções, cliques no site) e das pesquisas mensais, cidade/marca de cada perfil e limiares dos alertas. Editável em Marketing → Web & SEO → Google Business (só super admin).",
+    schema: gbpConfigSchema,
+    defaultValue: DEFAULT_GBP_CONFIG,
+    wiring: "live",
+  }),
+  [KNOWLEDGE_SETTING_KEY]: def({
+    key: KNOWLEDGE_SETTING_KEY,
+    group: "ia",
+    label: "Base de conhecimento (pastas do Drive, índice e uso pela IA)",
+    description: "Pastas do Shared Drive sincronizadas para a base de conhecimento (e quem vê cada uma), índice por embeddings e se o assistente/tutor a usam. Editável em Formação → Base de conhecimento (admin).",
+    schema: knowledgeConfigSchema,
+    defaultValue: DEFAULT_KNOWLEDGE_CONFIG,
+    wiring: "live",
+  }),
+  [SERVICE_TASKS_SETTING_KEY]: def({
+    key: SERVICE_TASKS_SETTING_KEY,
+    group: "servicos",
+    label: "Serviços → tarefas",
+    description: "Por cidade e por tipo de serviço extra (lavagem, carregamento elétrico…): se cada reserva com esse serviço gera uma tarefa (prazo: a saída do carro) e, opcionalmente, o responsável. Os team leaders do turno da saída e do turno anterior são sempre acrescentados. Editável em Definições → Parâmetros → Serviços → tarefas.",
+    schema: serviceTaskRulesSchema,
+    defaultValue: DEFAULT_SERVICE_TASK_RULES,
+    wiring: "live",
+  }),
+  [NOTIFICATION_ROUTING_SETTING_KEY]: def({
+    key: NOTIFICATION_ROUTING_SETTING_KEY,
+    group: "notificacoes",
+    label: "Regras das notificações",
+    description: "Quem recebe cada tipo de notificação (papéis), email por omissão e papéis nacionais limitados à própria cidade (ligado por omissão para frontoffice, backoffice e admin; super admin recebe sempre tudo). Vazio = regras do código (shared/notificationRouting.ts). Editável só pelo super admin em Definições → Notificações.",
+    schema: notificationRoutingSchema,
+    defaultValue: { kinds: {}, homeCityOnly: [...DEFAULT_HOME_CITY_ONLY] },
+    wiring: "live",
+  }),
+} as const;
+
+export type SettingKey = keyof typeof SETTINGS;
+export type SettingValue<K extends SettingKey> = z.output<(typeof SETTINGS)[K]["schema"]>;
+export const SETTING_KEYS = Object.keys(SETTINGS) as SettingKey[];
+
+export function isSettingKey(key: string): key is SettingKey {
+  return Object.prototype.hasOwnProperty.call(SETTINGS, key);
+}
+
+export type ValidationResult<T> = { ok: true; value: T } | { ok: false; error: string };
+
+/** Valida (e normaliza) o valor de uma definição. PURA. */
+export function validateSetting<K extends SettingKey>(key: K, value: unknown): ValidationResult<SettingValue<K>>;
+export function validateSetting(key: string, value: unknown): ValidationResult<unknown>;
+export function validateSetting(key: string, value: unknown): ValidationResult<unknown> {
+  if (isFlagSettingKey(key)) {
+    return typeof value === "boolean" ? { ok: true, value } : { ok: false, error: "O interruptor só aceita ligado/desligado." };
+  }
+  if (!isSettingKey(key)) return { ok: false, error: `Definição desconhecida: ${key}` };
+  const r = SETTINGS[key].schema.safeParse(value);
+  if (r.success) return { ok: true, value: r.data };
+  return { ok: false, error: r.error.issues.map((i) => i.message).join(" ") || "Valor inválido." };
+}
+
+// ─── Interruptores das automações ───────────────────────────────────────────
+
+export interface AutomationFlag {
+  name: string;
+  label: string;
+  description: string;
+  /** Valor sem env nem sobreposição (omissão: ligado). */
+  defaultEnabled?: boolean;
+  /** Secção na página (omissão: automações gerais). */
+  group?: "ia";
+  /** Só o super_admin o pode mudar (os admins veem-no, mas não mexem). */
+  superAdminOnly?: boolean;
+  /** Valores próprios da env além de on/off (ex.: X=db → ligado). */
+  envAliases?: Record<string, boolean>;
+}
+
+export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
+  { name: "EXTRAS_AUTOMATION", label: "Automação dos extras", description: "Pedido de disponibilidade à quinta, lembrete ao sábado, aviso de escala e alerta de cobertura (cron horário)." },
+  { name: "LEAD_REMINDERS", label: "Lembretes das leads de extras", description: "Lembretes automáticos às leads que ainda não responderam." },
+  { name: "LEAD_AUTO_REPLY", label: "Resposta automática às leads", description: "Envia o link da candidatura às leads novas." },
+  { name: "TASKS_AUTOMATION", label: "Automação das tarefas", description: "Checklists do dia e avisos de atraso/conclusão." },
+  { name: "CASE_REMINDERS", label: "Lembretes de SLA dos casos", description: "Avisa quando ocorrências/perdidos passam do prazo." },
+  { name: "COMPLAINT_AUTO_ACK", label: "Aviso de receção das reclamações", description: "Responde automaticamente ao cliente quando chega uma reclamação por email." },
+  { name: "HANDOVER_EMAIL", label: "Email da passagem de turno", description: "Envia a passagem de turno por email aos team leaders." },
+  { name: "HANDOVER_REMINDERS", label: "Lembretes da passagem de turno", description: "Lembra quem ainda não entregou/confirmou a passagem." },
+  { name: "TRAINING_REMINDERS", label: "Lembretes da formação", description: "Avisa quem tem formação por concluir." },
+  { name: "TRAINING_BLOCKS_ESCALA", label: "Formação bloqueia a escala", description: "Quem tem formação obrigatória em atraso não entra na escala." },
+  { name: "OPS_BRIEFING", label: "Briefing diário por cidade", description: "Às 07:30 (Lisboa): reservas do dia, extras, SLA, pendentes e alertas por email aos team leaders/supervisores da cidade e no Dashboard." },
+  { name: "WEEKLY_REPORTS", label: "Relatórios semanais", description: "À segunda de manhã: direção, marketing, operações e RH por email a quem tem acesso nacional ao módulo; resumo semanal da passagem de turno." },
+  { name: "WHATSAPP_CALLS", label: "Chamadas de voz do WhatsApp", description: "Toque no dashboard, atender no browser e \"Ligar\" nas conversas. Desligado por omissão: liga só depois de ativar as chamadas no número na Meta (e subscrever o campo `calls` do webhook).", defaultEnabled: false },
+  { name: "MAIL_PUSH", label: "Gmail: notificações push (Pub/Sub)", description: "O Gmail avisa a app logo que chega um email (precisa do tópico Pub/Sub configurado: GMAIL_PUSH_TOPIC). Com o push a chegar (últimas 6 h), a sincronização agendada passa de 5 em 5 min a de hora a hora (rede de segurança); sem push volta sozinha aos 5 min. Desligado por omissão.", defaultEnabled: false },
+  { name: "OPS_ANOMALIES", label: "Deteção de anomalias", description: "Todos os dias: reservas por parque/canal, despesas (valores fora do normal e duplicados) e gasto/ROAS do marketing." },
+  // ── IA (server/_core/ai) — AI_ENABLED desliga tudo de uma vez ──
+  { name: "AI_ENABLED", label: "IA (interruptor geral)", description: "Desligado = nenhuma funcionalidade de IA faz pedidos ao fornecedor.", group: "ia" },
+  { name: "AI_EXPENSE_OCR", label: "IA: leitura de faturas", description: "Extrai fornecedor, valor, datas e NIF das faturas carregadas nas Despesas.", group: "ia" },
+  { name: "AI_REVIEW_DRAFTS", label: "IA: rascunhos de resposta às críticas", description: "Prepara a resposta às críticas Google (nunca publica sozinha).", group: "ia" },
+  { name: "AI_RADIO", label: "IA: transcrição e resumo do rádio", description: "Transcreve as mensagens de rádio e resume-as em 1–2 frases.", group: "ia" },
+  { name: "AI_HANDOVER_SUMMARY", label: "IA: resumo da passagem de turno", description: "5 pontos para o team leader do turno seguinte.", group: "ia" },
+  { name: "AI_WHATSAPP_ASSIST", label: "IA: assistente do WhatsApp", description: "Resumo da conversa e sugestão de resposta (vai para a caixa de texto, nunca é enviada sozinha).", group: "ia" },
+  { name: "AI_QUIZ", label: "IA: perguntas da formação", description: "Gera rascunhos de perguntas a partir dos manuais.", group: "ia" },
+  { name: "AI_TRAINING_TUTOR", label: "IA: tutor da formação", description: "Chat nas páginas da Formação: responde só com o conteúdo dos manuais, motiva e explica as respostas erradas do quiz.", group: "ia" },
+  { name: "AI_COMPLAINT_TRIAGE", label: "IA: triagem das reclamações por email", description: "Sugere tipo, prioridade, SLA, reserva e duplicados e prepara um rascunho de resposta (nunca é enviado sozinho). Só aplica sozinha com confiança alta e campo vazio.", group: "ia" },
+  { name: "AI_REVIEW_AUTO_DRAFTS", label: "IA: rascunho automático para cada crítica nova", description: "Prepara a resposta às críticas Google novas (fica por aprovar; nunca publica sozinha).", group: "ia" },
+  { name: "AI_WHATSAPP_TRIAGE", label: "IA: intenção e urgência no WhatsApp", description: "Etiqueta as conversas (reserva, cancelamento, reclamação…) e marca as urgentes (entram no aviso de SLA). No máximo 1× a cada poucos minutos por conversa; nunca responde sozinha.", group: "ia" },
+  { name: "AI_LOST_FOUND_MATCH", label: "IA: correspondências nos Perdidos & Achados", description: "Compara as descrições dos perdidos com os objetos encontrados (depois de um filtro por data, matrícula/reserva e parque). Contactar o cliente é sempre humano.", group: "ia" },
+  { name: "AI_ASSISTANT", label: "IA: assistente (chat)", description: "Botão de ajuda em todas as páginas: explica como se usa a app e responde a perguntas sobre os dados que a pessoa já pode ver (só leitura).", group: "ia" },
+  { name: "AI_HR_AUTOFILL", label: "IA: preenchimento a partir de documentos do RH", description: "Lê CC, título de residência, carta, IBAN e morada para preencher campos vazios da ficha. Desligado por omissão até decisão RGPD.", defaultEnabled: false, group: "ia" },
+  { name: "AI_OPS_BRIEFING", label: "IA: texto do briefing diário", description: "Escreve o parágrafo do briefing das 07:30 por cidade (os números vêm sempre do sistema).", group: "ia" },
+  { name: "AI_WEEKLY_REPORTS", label: "IA: texto dos relatórios semanais", description: "Narrativa curta dos relatórios de segunda-feira (direção, marketing, operações, RH).", group: "ia" },
+  { name: "AI_ANOMALY_EXPLAIN", label: "IA: explicação das anomalias", description: "Uma linha por anomalia detetada (reservas, despesas, marketing). A deteção é estatística, sem IA.", group: "ia" },
+  { name: "AI_AVAILABILITY_CLASSIFY", label: "IA: respostas de disponibilidade pouco claras", description: "Classifica as respostas que o sistema não percebeu. Confiança alta aplica-se sozinha; o resto vai para revisão humana.", group: "ia" },
+  { name: "AI_LEAD_SCORING", label: "IA: resumo e 1.º contacto das leads", description: "Resumo de uma linha da pontuação (calculada no sistema) e rascunho do 1.º contacto, que precisa de aprovação.", group: "ia" },
+  { name: "AI_EVALUATION_EXPLAIN", label: "IA: explicação da avaliação", description: "Explica em PT-PT a pontuação a partir das linhas das regras (nunca recalcula).", group: "ia" },
+  { name: "AI_HANDOVER_REPEATS", label: "IA: pendentes repetidos da passagem de turno", description: "Redige os pendentes que se repetem entre turnos e o resumo semanal por cidade.", group: "ia" },
+  { name: "AI_MAIL_DRAFT", label: "IA: rascunho de resposta a emails", description: "Botão \"Rascunho IA\" na Comunicação: prepara uma resposta ao cliente (vai para o editor; nunca é enviada sozinha).", group: "ia" },
+  { name: "AI_GBP_POSTS", label: "IA: rascunho de publicações Google Business", description: "Marketing → Web & SEO → Google Business: propõe o texto de uma Novidade/Oferta/Evento a partir do tema indicado (fica no editor; nada é publicado sem confirmação).", group: "ia" },
+  { name: "AI_PAGESPEED_EXPLAIN", label: "IA: explicar o que corrigir na PageSpeed", description: "Marketing → Web & SEO → Velocidade: explica em PT-PT as principais oportunidades do Lighthouse (só com os títulos e poupanças; sem dados pessoais).", group: "ia" },
+  { name: "AI_WEB_INSIGHT", label: "IA: resumo semanal Web & SEO", description: "Marketing → Web & SEO: um parágrafo por semana sobre o que mudou no tráfego, na pesquisa Google e na velocidade (só a partir dos totais; sem dados pessoais).", group: "ia" },
+  { name: "AI_KNOWLEDGE", label: "IA: base de conhecimento", description: "Índice dos manuais (Drive e ficheiros carregados) por embeddings e leitura de PDFs sem Drive. Desligado = a pesquisa usa só palavras-chave (FULLTEXT).", group: "ia" },
+  { name: "AI_TASKS_FROM_TEXT", label: "IA: tarefas a partir de texto", description: "Propõe tarefas a partir de notas coladas; nada é criado sem confirmação.", group: "ia" },
+];
+
+/** Omissão de um interruptor do catálogo (desconhecido → ligado). PURA. */
+export function automationFlagDefault(name: string): boolean {
+  return AUTOMATION_FLAGS.find((f) => f.name === name)?.defaultEnabled ?? true;
+}
+
+/**
+ * Valor da env de um interruptor já traduzido para on/off quando o catálogo
+ * tem valores próprios (ex.: X=db → "on"). PURA.
+ */
+export function normalizeFlagEnv(name: string, raw: string | undefined | null): string | undefined {
+  if (raw == null) return undefined;
+  const aliases = AUTOMATION_FLAGS.find((f) => f.name === name)?.envAliases;
+  const hit = aliases?.[String(raw).trim().toLowerCase()];
+  return hit === undefined ? raw : hit ? "on" : "off";
+}
+
+/** Só o super_admin pode mudar este interruptor? PURA. */
+export function automationFlagSuperAdminOnly(name: string): boolean {
+  return AUTOMATION_FLAGS.find((f) => f.name === name)?.superAdminOnly === true;
+}
+
+export const FLAG_SETTING_PREFIX = "flag.";
+const FLAG_NAMES = new Set(AUTOMATION_FLAGS.map((f) => f.name));
+
+export function isAutomationFlag(name: string): boolean {
+  return FLAG_NAMES.has(name);
+}
+export function flagSettingKey(name: string): string {
+  return `${FLAG_SETTING_PREFIX}${name}`;
+}
+export function isFlagSettingKey(key: string): boolean {
+  return key.startsWith(FLAG_SETTING_PREFIX) && isAutomationFlag(key.slice(FLAG_SETTING_PREFIX.length));
+}
+
+// ─── Crons (agendador /api/cron/tick → trabalhos) ───────────────────────────
+
+export interface CronJob {
+  name: string;
+  label: string;
+  /** Intervalo esperado entre corridas (min); `null` = sem agenda fixa. */
+  intervalMinutes: number | null;
+  /** Quem o corre: "tick" (agendador, cron-job.org de 5 em 5 min) ou "manual". */
+  workflow: string;
+}
+
+export const CRON_JOBS: readonly CronJob[] = [
+  // O próprio agendador (cron-job.org de 5 em 5 min; GitHub Actions de hora a hora).
+  { name: "tick", label: "Agendador (cron-job.org → /api/cron/tick)", intervalMinutes: 5, workflow: "cron-job.org" },
+  // 5 em 5 min sem push; de hora a hora (rede de segurança) com o push do Gmail saudável → "parado" só depois de 2 h.
+  { name: "mail-sync", label: "Comunicação: sincronização do Gmail", intervalMinutes: 60, workflow: "tick" },
+  { name: "multipark-deliveries", label: "Fila do webhook Multipark", intervalMinutes: 15, workflow: "tick" },
+  { name: "ai-comms", label: "IA na comunicação com clientes", intervalMinutes: 15, workflow: "tick" },
+  // Google por eventos: repetição de 15 em 15 min, rede de segurança de 4 em 4 h, renovação diária dos canais.
+  { name: "google-pending", label: "Google: alterações por enviar/receber (repetição)", intervalMinutes: 15, workflow: "tick" },
+  { name: "google-sync", label: "Google Tarefas, Calendário, Contactos e Drive (rede de segurança)", intervalMinutes: 240, workflow: "tick" },
+  { name: "google-watch-renew", label: "Google: renovar canais de notificação (Calendário/Drive)", intervalMinutes: 1440, workflow: "tick" },
+  { name: "extras-auto", label: "Automação dos extras", intervalMinutes: 60, workflow: "tick" },
+  // De hora a hora entre as 08h e as 23h (Lisboa); 300 min para a pausa da
+  // noite (~9 h) não aparecer como "parado".
+  { name: "extras-schedule", label: "Escala automática dos extras (propor/confirmar/avisar)", intervalMinutes: 300, workflow: "tick" },
+  { name: "identity-sweep", label: "Ligações funcionário ↔ utilizador", intervalMinutes: 60, workflow: "tick" },
+  // CRM (27 set 2026): fichas de cliente a partir das reservas + sugestões de fusão.
+  { name: "crm-sync", label: "CRM: fichas de cliente a partir das reservas", intervalMinutes: 15, workflow: "tick" },
+  { name: "crm-suggestions", label: "CRM: sugestões para juntar fichas", intervalMinutes: 1440, workflow: "tick" },
+  { name: "crm-pro-sync", label: "CRM: conta corrente dos clientes Pro (BD Multipark)", intervalMinutes: 30, workflow: "tick" },
+  // Serviços extra das reservas → tarefas (BD Multipark ao vivo, saídas nas próximas 48 h).
+  { name: "services-tasks", label: "Serviços das reservas → tarefas", intervalMinutes: 15, workflow: "tick" },
+  { name: "daily-ops", label: "Manutenção diária + recolha GPS final (D-2)", intervalMinutes: 1440, workflow: "tick" },
+  { name: "zello-sameday", label: "GPS do Zello — recolha provisória do dia (23:15–23:55)", intervalMinutes: 1440, workflow: "tick" },
+  { name: "extras-pressure", label: "Extras-Dia: pressão (60 dias da BD Multipark)", intervalMinutes: 1440, workflow: "tick" },
+  { name: "rh-docs-weekly", label: "RH: regra documental dos extras (semanal)", intervalMinutes: 10080, workflow: "tick" },
+  { name: "evaluation-recompute", label: "Avaliação (recálculo das 4 semanas)", intervalMinutes: 1440, workflow: "tick" },
+  { name: "google-ads", label: "Google Ads", intervalMinutes: 1440, workflow: "tick" },
+  { name: "meta-ads", label: "Meta Ads", intervalMinutes: 1440, workflow: "tick" },
+  { name: "ops-briefing", label: "Briefing diário, anomalias e relatórios semanais", intervalMinutes: 1440, workflow: "tick" },
+  { name: "web-analytics", label: "Web & SEO (GA4, Search Console, PageSpeed)", intervalMinutes: 1440, workflow: "tick" },
+  // Fora da agenda (só à mão): base de conhecimento (botão "Sincronizar
+  // agora") e Google Business Profile (em pausa até a Google aprovar a API).
+  { name: "knowledge-sync", label: "Base de conhecimento (pastas do Drive)", intervalMinutes: null, workflow: "manual" },
+  { name: "google-business", label: "Google Business Profile (críticas, desempenho e pesquisas)", intervalMinutes: null, workflow: "manual (em pausa)" },
+];
+
+const CRON_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+/** "/mail-sync" ou "/api/cron/mail-sync" → "mail-sync"; `null` se inválido. PURA. */
+export function cronNameFromPath(path: string): string | null {
+  const seg = String(path ?? "").replace(/^\/api\/cron/, "").replace(/^\/+/, "").split(/[/?#]/)[0] ?? "";
+  return CRON_NAME.test(seg) ? seg : null;
+}
+
+/** Folga mínima antes de dar um cron como "parado" (um tick falhado não chega). */
+export const CRON_MIN_STALE_MINUTES = 30;
+
+/** Limite (min) sem corridas a partir do qual o cron é "parado": 2× o intervalo. */
+export function staleThresholdMinutes(intervalMinutes: number): number {
+  return Math.max(2 * intervalMinutes, CRON_MIN_STALE_MINUTES);
+}
+
+export type CronHealth = "ok" | "failed" | "stale" | "never" | "running" | "unscheduled";
+
+export interface CronRunLite {
+  startedAt: number;          // epoch ms
+  finishedAt: number | null;  // null = ainda a correr (ou morreu sem responder)
+  ok: boolean | null;
+}
+
+/**
+ * Estado de um cron a partir da última corrida. PURA.
+ *  - never: nunca correu (desde que há registo);
+ *  - stale: sem corridas há mais de 2× o intervalo esperado;
+ *  - failed: a última terminada falhou (ou ficou sem resposta > 15 min);
+ *  - running: começou há pouco e ainda não respondeu.
+ */
+export function cronHealth(last: CronRunLite | null, intervalMinutes: number | null, now: number): CronHealth {
+  if (!last) return intervalMinutes == null ? "unscheduled" : "never";
+  if (intervalMinutes != null && now - last.startedAt > staleThresholdMinutes(intervalMinutes) * 60_000) return "stale";
+  if (last.finishedAt == null) return now - last.startedAt > 15 * 60_000 ? "failed" : "running";
+  return last.ok ? "ok" : "failed";
+}
+
+/**
+ * Resultado de uma resposta de cron. PURA.
+ *  - falha: HTTP não-2xx, `ok:false`, `status:"failed"`, `stepErrors[]` ou
+ *    `errors[]` não vazios (estes últimos só sem `ok:true` explícito);
+ *  - mensagem de erro: `error` → `reason` → `errors[]`/`stepErrors[]`;
+ *  - sucesso com nota: `skipped` (+ `reason`) ou `warnings[]` não vazios ficam
+ *    em `note` (a corrida é verde, mas não fica em silêncio).
+ * `errors[]` com `ok:true` explícito são erros de itens individuais (ex.: um
+ * email que falhou e se repete) → vão para a nota, não tornam a corrida
+ * vermelha; sem `ok` explícito contam como falha.
+ */
+export function cronOutcome(httpStatus: number, body: unknown): { ok: boolean; error: string | null; note?: string | null } {
+  const b = body && typeof body === "object" ? (body as Record<string, unknown>) : null;
+  const httpOk = httpStatus >= 200 && httpStatus < 300;
+  const strList = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x) => x != null && x !== "").map((x) => (typeof x === "string" ? x : JSON.stringify(x))) : []);
+  const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const steps = strList(b?.stepErrors);
+  const errors = strList(b?.errors);
+  const warnings = strList(b?.warnings);
+  const reason = str(b?.reason);
+  const bodyFailed = !!b && (b.ok === false || b.status === "failed");
+  const errorsFail = errors.length > 0 && b?.ok !== true;
+  const ok = httpOk && !bodyFailed && steps.length === 0 && !errorsFail;
+  if (ok) {
+    const parts: string[] = [];
+    const skipped = b?.skipped != null && b.skipped !== false ? (typeof b.skipped === "string" ? b.skipped : "sim") : b?.status === "skipped" ? "sim" : null;
+    if (skipped) parts.push(`saltado: ${skipped}${reason ? ` — ${reason}` : ""}`);
+    else if (reason) parts.push(reason);
+    if (errors.length) parts.push(`${errors.length} erro(s) de itens: ${errors.slice(0, 3).join(" | ")}`);
+    if (warnings.length) parts.push(`${warnings.length} aviso(s): ${warnings.slice(0, 3).join(" | ")}`);
+    return parts.length ? { ok: true, error: null, note: parts.join(" · ").slice(0, 1000) } : { ok: true, error: null };
+  }
+  // daily-ops: a recolha correu, mas passos de manutenção falharam → falha.
+  const msg = str(b?.error) ?? (steps.length ? steps.join(" | ") : null) ?? reason ?? (errors.length ? errors.join(" | ") : null)
+    ?? `HTTP ${httpStatus}${bodyFailed ? " (ok:false)" : ""}`;
+  return { ok: false, error: msg.slice(0, 1000) };
+}
+
+// ─── Preferências de notificação (por pessoa) ───────────────────────────────
+// O catálogo, as regras de quem recebe e as preferências vivem em
+// shared/notificationRouting.ts; aqui fica só a vista compatível.
+
+export interface NotificationKind {
+  kind: string;
+  label: string;
+  description: string;
+  /** Obrigatória: não se pode silenciar (pede ação/confirmação). */
+  required?: boolean;
+}
+
+export const NOTIFICATION_KINDS: readonly NotificationKind[] = NOTIFICATION_KIND_DEFS.map((d) => ({
+  kind: d.kind, label: d.label, description: d.description, ...("mandatory" in d && d.mandatory ? { required: true } : {}),
+}));
+
+export { notificationPrefsSchema, parseNotificationPrefs, wantsNotification, type NotificationPrefs } from "./notificationRouting";

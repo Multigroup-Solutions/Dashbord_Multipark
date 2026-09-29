@@ -1,4 +1,6 @@
 import { trpc } from "@/lib/trpc";
+import { Link } from "wouter";
+import { normalizeEmail } from "@shared/email";
 import { fmtPTDate } from "@/lib/lisbonTime";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -46,6 +48,7 @@ export default function ClientHistoryCard({ email, phone, plate, name, highlight
         <CardTitle className="text-sm flex items-center gap-2">
           <History className="w-4 h-4 text-primary" />
           Histórico do cliente
+          {email && <Link href={`/clientes?email=${encodeURIComponent(normalizeEmail(email))}`} className="ml-auto text-xs font-normal text-primary underline">Abrir ficha de cliente</Link>}
           {isLoading && <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />}
         </CardTitle>
         <div className="flex flex-wrap gap-1.5 text-xs">
@@ -64,8 +67,12 @@ export default function ClientHistoryCard({ email, phone, plate, name, highlight
           <div className="grid grid-cols-2 gap-2 rounded-lg bg-muted/50 p-2 text-xs">
             <div><span className="text-muted-foreground">Cliente desde:</span> <span className="font-medium">{stats.firstCheckIn ? d(stats.firstCheckIn) : "—"}</span></div>
             <div><span className="text-muted-foreground">Última estadia:</span> <span className="font-medium">{stats.lastCheckIn ? d(stats.lastCheckIn) : "—"}</span></div>
-            <div><span className="text-muted-foreground">Total gasto:</span> <span className="font-medium">{eur(stats.totalSpent)}</span></div>
-            <div><span className="text-muted-foreground">Média/reserva:</span> <span className="font-medium">{eur(stats.avgSpend)}</span></div>
+            {stats.totalSpent != null && (
+              <>
+                <div><span className="text-muted-foreground">Total gasto:</span> <span className="font-medium">{eur(stats.totalSpent)}</span></div>
+                <div><span className="text-muted-foreground">Média/estadia:</span> <span className="font-medium">{eur(stats.avgSpend ?? 0)}</span></div>
+              </>
+            )}
             {stats.cancelled > 0 && (
               <div className="col-span-2"><span className="text-muted-foreground">Canceladas:</span> <span className="font-medium">{stats.cancelled}</span></div>
             )}
@@ -82,11 +89,11 @@ export default function ClientHistoryCard({ email, phone, plate, name, highlight
                 const isCurrent = !!highlightRef && b.externalId === highlightRef;
                 return (
                   <div key={b.id} className={`flex items-center justify-between gap-2 border-b last:border-0 py-0.5 ${isCurrent ? "bg-primary/10 rounded px-1 -mx-1" : ""}`}>
-                    <span className="font-mono">
+                    <span className="font-mono shrink-0">
                       #{b.bookingNumber}{b.licensePlate ? ` · ${b.licensePlate}` : ""}
-                      {isCurrent && <Badge className="ml-1 text-[9px] px-1 py-0" variant="secondary">esta</Badge>}
+                      {isCurrent && <Badge className="ml-1 text-[11px] px-1 py-0" variant="secondary">esta</Badge>}
                     </span>
-                    <span className="text-xs text-muted-foreground whitespace-nowrap">
+                    <span className="text-xs text-muted-foreground min-w-0 truncate text-right">
                       {b.parkName ?? b.city ?? ""} · {d(b.checkIn)}
                       {b.totalPrice != null ? ` · ${eur(Number(b.totalPrice))}` : ""}
                       {b.status ? ` · ${b.status}` : ""}

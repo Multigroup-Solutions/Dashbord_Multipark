@@ -1,17 +1,13 @@
 /**
- * MultiPark Backoffice API Client
- * 
- * Discovered endpoints:
- * - GET    /health                          → Health check (public)
- * - GET    /availability                    → Check parking availability (requires vehicleType + parkingType)
- * - POST   /bookings                       → Create booking
- * - PUT    /bookings/:id                   → Update booking
- * - GET    /bookings/:id/history           → Booking history (timeline of actions)
- * - GET    /agent/history                  → Agent history (all actions by agent in period)
- * - GET    /bookings/checkoutDrivers       → Checkout drivers ranking for a period
- * - GET    /api/v1/parks                   → List parks (public, different base)
+ * Cliente da API Multipark — só o que o webhook e a fila de detalhe usam
+ * (cópia financeira em multipark_bookings + CRM):
+ * - GET /bookings/:id    → detalhe de uma reserva (chave do parque)
+ * - GET /api/v1/parks    → catálogo público de parques (resolver parque do webhook)
  *
- * Auth: X-Api-Key header for bookings-api endpoints
+ * O resto (report por período, histórico, disponibilidade, criar/cancelar)
+ * saiu: as páginas leem a BD da Multipark ao vivo (server/multiparkDb).
+ *
+ * Auth: cabeçalho X-Api-Key (chave geral ou por parque).
  */
 
 import { ENV } from "./_core/env";
@@ -72,7 +68,7 @@ export function getParkApiKey(parkConfig: ParkConfig): string | undefined {
   return process.env[parkConfig.envKey];
 }
 
-export function getConfiguredParks(): ParkConfig[] {
+function getConfiguredParks(): ParkConfig[] {
   return PARK_CONFIGS.filter(p => !p.closed && !!process.env[p.envKey]);
 }
 
@@ -203,34 +199,7 @@ export interface MultiparkVehicle {
   type?: "MOTORCYCLE" | "CAR" | "VAN" | "TRUCK";
 }
 
-export interface MultiparkFlightInfo {
-  arrivalFlight?: string;
-  arrivalTime?: string;
-  departureFlight?: string;
-  departureTime?: string;
-}
-
 export type ParkingType = "COVERED" | "UNCOVERED" | "INDOOR" | "VIP";
-export type VehicleType = "MOTORCYCLE" | "CAR" | "VAN" | "TRUCK";
-
-export interface MultiparkBookingInput {
-  checkIn: string;
-  checkOut: string;
-  checkInTime: string;
-  checkOutTime: string;
-  client?: MultiparkClient;
-  vehicle?: MultiparkVehicle;
-  parkingType: ParkingType;
-  pricingType?: "DAY" | "HOUR";
-  deliveryType?: string;
-  deliveryService?: boolean;
-  deliveryAddress?: string;
-  pickupAddress?: string;
-  flightInfo?: MultiparkFlightInfo;
-  extraServices?: string[];
-  discountCode?: string;
-  notes?: string;
-}
 
 export interface MultiparkBooking {
   id: string;
@@ -276,20 +245,6 @@ export interface MultiparkBooking {
 
 export type BookingActionType = "creation" | "checkin" | "checkout" | "cancelation";
 
-export interface MultiparkBookingsReport {
-  total: number;
-  actionType: BookingActionType;
-  period: { startDate: string; endDate: string };
-  bookings: MultiparkBooking[];
-}
-
-export interface MultiparkAvailability {
-  available: boolean;
-  totalSpots: number;
-  availableSpots: number;
-  message: string;
-}
-
 export interface MultiparkPark {
   id: string;
   name: string;
@@ -302,34 +257,6 @@ export interface MultiparkPark {
 }
 
 // ─── Public API methods ───
-
-/** Health check */
-export async function healthCheck(): Promise<{ status: string; timestamp: string; version: string }> {
-  return multiparkRequest({ path: "/health" });
-}
-
-/** Check availability for a date range */
-export async function checkAvailability(
-  checkIn: string,
-  checkOut: string,
-  vehicleType: VehicleType = "CAR",
-  parkingType: ParkingType = "COVERED"
-): Promise<MultiparkAvailability> {
-  return multiparkRequest({
-    path: "/availability",
-    params: { checkIn, checkOut, vehicleType, parkingType },
-  });
-}
-
-/** Create a new booking */
-export async function createBooking(data: MultiparkBookingInput): Promise<MultiparkBooking> {
-  return multiparkRequest({ method: "POST", path: "/bookings", body: data });
-}
-
-/** Update an existing booking */
-export async function updateBooking(id: string, data: Partial<MultiparkBookingInput>): Promise<MultiparkBooking> {
-  return multiparkRequest({ method: "PUT", path: `/bookings/${id}`, body: data });
-}
 
 /** Get booking by ID (optionally with specific park's API key) */
 export async function getBooking(id: string, apiKey?: string, opts: { maxAttempts?: number; timeoutMs?: number } = {}): Promise<MultiparkBooking> {
@@ -362,181 +289,4 @@ export async function getBookingTryAllParks(id: string, opts: { deadlineAt?: num
     }
   }
   return null;
-}
-
-/** Check if MultiPark API is configured */
-export function isMultiparkConfigured(): boolean {
-  return !!ENV.multiparkApiKey || getConfiguredParks().length > 0;
-}
-
-/** List parks (public endpoint, no auth needed) */
-export async function listParks(): Promise<{ parks: MultiparkPark[] }> {
-  if (!isMultiparkConfigured()) return { parks: [] };
-  return multiparkRequest({
-    path: "/parks",
-    baseUrl: "https://api.multipark.pt/api/v1",
-  });
-}
-
-/** Get bookings report by period and action type */
-export async function getBookingsReport(
-  startDate: string,
-  endDate: string,
-  actionType: BookingActionType,
-  apiKey?: string
-): Promise<MultiparkBookingsReport> {
-  return multiparkRequest({
-    path: "/bookings/report",
-    params: { startDate, endDate, actionType },
-    apiKey,
-  });
-}
-
-/** Get bookings report for a specific park */
-export async function getBookingsReportForPark(
-  parkConfig: ParkConfig,
-  startDate: string,
-  endDate: string,
-  actionType: BookingActionType
-): Promise<MultiparkBookingsReport & { parkConfig: ParkConfig }> {
-  const apiKey = getParkApiKey(parkConfig);
-  if (!apiKey) throw new Error(`API key not configured for ${parkConfig.name} - ${parkConfig.city}`);
-  const report = await getBookingsReport(startDate, endDate, actionType, apiKey);
-  return { ...report, parkConfig };
-}
-
-/** Get bookings report for ALL configured parks */
-export async function getBookingsReportAllParks(
-  startDate: string,
-  endDate: string,
-  actionType: BookingActionType
-): Promise<{ park: ParkConfig; report: MultiparkBookingsReport }[]> {
-  const parks = getConfiguredParks();
-  const results: { park: ParkConfig; report: MultiparkBookingsReport }[] = [];
-  for (const park of parks) {
-    try {
-      const report = await getBookingsReport(startDate, endDate, actionType, getParkApiKey(park));
-      results.push({ park, report });
-    } catch (err: any) {
-      console.error(`[MultiPark] Report failed for ${park.name} ${park.city}: ${err.message}`);
-    }
-  }
-  return results;
-}
-
-/** Cancel a booking */
-export async function cancelBooking(
-  id: string,
-  reason: string
-): Promise<MultiparkBooking> {
-  return multiparkRequest({
-    method: "PUT",
-    path: `/bookings/${id}/status`,
-    body: { status: "CANCELLED", reason },
-  });
-}
-
-/** Calculate pricing */
-export async function calculatePricing(data: {
-  checkIn: string;
-  checkOut: string;
-  vehicleType?: VehicleType;
-  parkingType?: ParkingType;
-  deliveryService?: boolean;
-  deliveryAddress?: string;
-  extraServices?: Array<{ serviceId: string; quantity: number }>;
-  discountCode?: string;
-}): Promise<any> {
-  return multiparkRequest({ method: "POST", path: "/pricing", body: data });
-}
-
-/** Test API connectivity */
-export async function testConnection(): Promise<{ ok: boolean; message: string; version?: string }> {
-  try {
-    const health = await healthCheck();
-    return { ok: true, message: `API OK (v${health.version})`, version: health.version };
-  } catch (error: any) {
-    return { ok: false, message: `Erro: ${error.message}` };
-  }
-}
-
-// ─── Booking history & agent tracking ───
-
-export interface BookingHistoryEntry {
-  id: string;
-  changeType: string; // CHECK_IN, CHECK_OUT, MOVEMENT, UPDATE, CREATED, CHECKING_IN, CHECKING_OUT, PENDING_CHECKOUT, CANCELLED
-  actionTime: string;
-  remarks?: string;
-  agentName: string;
-  userId: string;
-  user: {
-    id: string;
-    firstName: string;
-    lastName: string;
-    email: string;
-  };
-  modifiedFields?: string; // JSON string
-  platform?: string;
-  booking?: {
-    id: string;
-    status: string;
-    checkIn: string;
-    checkOut?: string;
-    parkName: string;
-    licensePlate: string;
-  };
-}
-
-export interface CheckoutDriver {
-  name: string;
-  userId?: string;
-  count: number;
-}
-
-/** Get booking history (timeline of all actions on a booking) */
-export async function getBookingHistory(
-  bookingId: string,
-  apiKey?: string,
-  opts: { maxAttempts?: number; timeoutMs?: number } = {},
-): Promise<{ bookingId: string; total: number; history: BookingHistoryEntry[] }> {
-  return multiparkRequest({
-    path: `/bookings/${encodeURIComponent(bookingId)}/history`,
-    apiKey, ...opts,
-  });
-}
-
-/** Get agent history (all actions by a specific agent in a period) */
-export async function getAgentHistory(opts: {
-  startDate: string;
-  endDate: string;
-  agentName?: string;
-  userId?: string;
-  apiKey?: string;
-}): Promise<{ total: number; period: { startDate: string; endDate: string }; agentName: string; agentUserId: string; history: BookingHistoryEntry[] }> {
-  const params: Record<string, string> = {
-    startDate: opts.startDate,
-    endDate: opts.endDate,
-  };
-  if (opts.userId) params.userId = opts.userId;
-  else if (opts.agentName) params.agentName = opts.agentName;
-  else throw new Error("Either userId or agentName must be provided");
-
-  return multiparkRequest({
-    path: "/agent/history",
-    params,
-    apiKey: opts.apiKey,
-  });
-}
-
-/** Get checkout drivers ranking for a period */
-export async function getCheckoutDrivers(
-  startDate: string,
-  endDate: string,
-  apiKey?: string
-): Promise<{ total: number; period: { startDate: string; endDate: string }; drivers: CheckoutDriver[] }> {
-  return multiparkRequest({
-    path: "/bookings/checkoutDrivers",
-    params: { startDate, endDate },
-    apiKey,
-  });
 }

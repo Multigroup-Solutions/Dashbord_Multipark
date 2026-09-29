@@ -6,10 +6,11 @@ import * as db from "../db";
 import { adoptPlaceholderAccountByEmail, linkEmployeesToUserByEmail } from "../identity";
 import { getSessionCookieOptions } from "./cookies";
 import { sdk } from "./sdk";
+import { shouldRejectUnverifiedGoogleEmail } from "./googleIdentity";
 
 // 30 dias é o novo default (em vez de 1 ano) — reduz janela de exposição
 // caso uma cookie seja intercetada. O nome da env é opcional.
-const SESSION_MAX_MS = (() => {
+export const SESSION_MAX_MS = (() => {
   const n = parseInt(process.env.SESSION_MAX_DAYS ?? "30", 10);
   return (Number.isFinite(n) && n > 0 ? n : 30) * 24 * 60 * 60 * 1000;
 })();
@@ -118,9 +119,11 @@ export function registerOAuthRoutes(app: Express) {
           lastSignedIn: new Date().toISOString().slice(0, 19).replace("T", " "),
         });
 
+        const devAccount = await db.getUserByOpenId(openId);
         const sessionToken = await sdk.createSessionToken(openId, {
           name,
           expiresInMs: SESSION_MAX_MS,
+          sessionVersion: devAccount?.sessionVersion ?? 0,
         });
 
         const cookieOptions = getSessionCookieOptions(req);
@@ -253,6 +256,20 @@ export function registerOAuthRoutes(app: Express) {
         return;
       }
 
+      // Email por verificar na Google não serve de identidade (liga contas e
+      // fichas por email) — recusa o login.
+      if (shouldRejectUnverifiedGoogleEmail(userInfo)) {
+        console.warn("[OAuth] Acesso recusado — email Google não verificado");
+        res.status(403).type("html").send(
+          renderErrorPage(
+            "Email Google não verificado",
+            "A Google indica que o email desta conta ainda não foi verificado.",
+            "Verifica o email na tua conta Google e tenta entrar de novo."
+          )
+        );
+        return;
+      }
+
       // Use Google sub as openId
       const openId = `google_${userInfo.sub}`;
       const email = normalizeEmail(userInfo.email ?? "");
@@ -261,7 +278,18 @@ export function registerOAuthRoutes(app: Express) {
       // env, mantém-se o comportamento histórico — qualquer conta Google cria
       // um utilizador com role `user` (sem permissões relevantes).
       if (LOGIN_RESTRICTED_TO_REGISTERED) {
-        const known = (await db.getUserByOpenId(openId)) ?? (email ? await db.getUserByEmail(email) : undefined);
+        let known: unknown = (await db.getUserByOpenId(openId)) ?? (email ? await db.getUserByEmail(email) : undefined);
+        // Email (profissional OU pessoal) de uma ficha ativa também conta como
+        // registado — a mesma pessoa pode entrar com qualquer dos dois (0081).
+        if (!known && email) {
+          const database0 = await db.getDb();
+          if (database0) {
+            const { sql } = await import("drizzle-orm");
+            const [r] = (await database0.execute(sql`SELECT id FROM employees WHERE isActive = 1
+              AND (LOWER(TRIM(email)) = ${email} OR LOWER(TRIM(personalEmail)) = ${email}) LIMIT 1`)) as any;
+            known = (r as any[])?.[0];
+          }
+        }
         if (!known) {
           console.warn(`[OAuth] Acesso recusado <${email || "sem email"}> — conta não registada (modo fechado)`);
           denyAccess(req, res);
@@ -312,6 +340,7 @@ export function registerOAuthRoutes(app: Express) {
       const sessionToken = await sdk.createSessionToken(openId, {
         name: userInfo.name || "",
         expiresInMs: SESSION_MAX_MS,
+        sessionVersion: account.sessionVersion ?? 0,
       });
 
       const cookieOptions = getSessionCookieOptions(req);

@@ -1,9 +1,12 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CommunicationsTimeline } from "@/components/mail/CommunicationsTimeline";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { fmtBookingDateTime } from "@/lib/lisbonTime";
 import { openInMultipark } from "@/lib/multiparkLinks";
 import { ExternalLink } from "lucide-react";
+import { Link } from "wouter";
+import { normalizeEmail } from "@shared/email";
 
 // Detalhe completo de uma reserva (partilhado: folhas de Operações, Serviços…).
 // Mostra tudo o que a BD já tem — cliente, carro, voos, pagamento, origem,
@@ -68,6 +71,7 @@ export default function BookingDetailDialog({ booking: b, onClose }: { booking: 
         <CardContent className="space-y-4">
           <div className="space-y-1">
             <p className="text-xs font-semibold text-muted-foreground uppercase">Cliente</p>
+            {b.clientEmail && <Link href={`/clientes?email=${encodeURIComponent(normalizeEmail(b.clientEmail))}`} className="text-xs text-primary underline">Abrir ficha de cliente</Link>}
             <Row label="Nome" value={`${b.clientFirstName ?? ""} ${b.clientLastName ?? ""}`.trim()} />
             <Row label="Email" value={b.clientEmail} />
             <Row label="Telefone" value={b.clientPhone} />
@@ -112,6 +116,11 @@ export default function BookingDetailDialog({ booking: b, onClose }: { booking: 
             <Row label="Criada em" value={fmtBookingDateTime(b.bookingCreatedAt)} />
             <Row label="Observações" value={b.remarks} />
           </div>
+          {b.externalId && (
+            <div className="border-t pt-3">
+              <CommunicationsTimeline type="booking" id={b.externalId} />
+            </div>
+          )}
           <div className="flex justify-end">
             <Button variant="outline" size="sm" onClick={onClose}>Fechar</Button>
           </div>

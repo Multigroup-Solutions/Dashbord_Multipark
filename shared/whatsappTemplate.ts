@@ -27,8 +27,14 @@ export const AVAILABILITY_TEMPLATE_NAME = "disponibilidade_extras";
  */
 export const DEFAULT_TEMPLATE_LANGUAGE = "pt_BR";
 
-/** Nome usado no parâmetro do nome quando o destinatário não é um colaborador conhecido. */
+/**
+ * Nome usado no {{1}} SÓ no envio de TESTE explícito (número escrito à mão que
+ * não bate com nenhuma ficha). Nunca num envio real.
+ */
 export const UNKNOWN_RECIPIENT_NAME = "Teste";
+
+/** {{1}} de um envio REAL quando o destinatário não tem nome utilizável. */
+export const NEUTRAL_RECIPIENT_NAME = "colega";
 
 // ─── Catálogo de templates ──────────────────────────────────────────────────
 

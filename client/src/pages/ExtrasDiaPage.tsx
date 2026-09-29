@@ -1,4 +1,6 @@
 import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { atLeast, useConfirm } from "./training/shared";
 import { createContext, useContext } from "react";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { useOpenEmployee } from "@/hooks/useOpenEmployee";
@@ -28,7 +30,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Fragment, useCallback, useState, useMemo } from "react";
+import { Fragment, useCallback, useEffect, useState, useMemo } from "react";
 import { toast } from "sonner";
 import {
   ArrowDownToLine,
@@ -55,7 +57,15 @@ import {
   Search,
   X,
   Pencil,
+  Wand2,
+  Sparkles,
+  PauseCircle,
 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PressureTab, TightHourBadge } from "./extrasDia/PressureTab";
+import { extraCityGroupKey, tightHoursForDay, type PressureSlot, type TightReason } from "@shared/extrasPressure";
+import { describeGap } from "@shared/extrasSchedule";
 import { AvailabilityDayFields, isDayMarked, type AvailabilityDayState } from "@/components/AvailabilityDayFields";
 import {
   CITY_KEYS,
@@ -79,11 +89,21 @@ import {
   resolveBodyParamRoles,
 } from "@shared/whatsappTemplate";
 import { matchesContactQuery } from "@shared/contactSearch";
+import {
+  AVAILABILITY_PAGE_SIZE,
+  AVAILABILITY_STATUS_LABELS,
+  countAvailabilityStatuses,
+  defaultOpenGroups,
+  groupByCity,
+  matchesAvailabilityStatus,
+  visibleSlice,
+  type AvailabilityStatusFilter,
+  type CityGroupKey,
+} from "@shared/availabilityGroups";
 
-// Defaults para o preview do UI — devem coincidir com a tabela `extra_rates`
-// na BD (migration 0044). O custo real é sempre calculado no backend a partir
-// de `extra_rates`; estes valores só servem para mostrar previsões enquanto
-// o admin compõe a escala.
+// Valores por defeito — as taxas vivas vêm de `extra_rates` (a mesma fonte do
+// servidor: server/extraRates.ts). A escala é a ESTIMATIVA do custo do dia;
+// o extra recebe pelo ponto (horas de ponto × a mesma taxa).
 const LEVELS = [
   { id: "junior", label: "Júnior", hourlyRate: 4.5 },
   { id: "senior", label: "Sénior", hourlyRate: 5 },
@@ -98,8 +118,11 @@ function useLiveLevels() {
   const { data: rates = [] } = trpc.rh.extraRates.list.useQuery();
   return useMemo(() => {
     const byName = new Map<string, number>();
+    const NAME_BY_LEVEL: Record<number, string> = { 1: "junior", 2: "senior", 3: "terminal", 4: "master" };
     for (const r of rates as any[]) {
-      if (r.levelName) byName.set(String(r.levelName), parseFloat(String(r.hourlyRate)));
+      const name = r.levelName ? String(r.levelName).toLowerCase() : NAME_BY_LEVEL[Number(r.level)];
+      const rate = parseFloat(String(r.hourlyRate));
+      if (name && Number.isFinite(rate) && rate > 0) byName.set(name, rate);
     }
     return LEVELS.map(l => ({
       ...l,
@@ -122,6 +145,8 @@ const SHIFTS: { id: ShiftId; label: string; defaultStart: number; defaultEnd: nu
 
 const fmtEur = (n: number) =>
   n.toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
+const fmtCph = (n: number) => String(n).replace(".", ",");
+
 const fmtHour = (h: number) => {
   if (h < 24) return `${String(h).padStart(2, "0")}h`;
   return `${String(h - 24).padStart(2, "0")}h+1`;
@@ -135,6 +160,18 @@ const ddmm = (isoDay: string) => `${isoDay.slice(8, 10)}/${isoDay.slice(5, 7)}`;
 
 function todayISO(): string {
   const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function baseDateFromUrl(): string | null {
+  const dia = new URLSearchParams(window.location.search).get("dia");
+  if (!dia) return null;
+  if (dia === "amanha") return todayISO();
+  const target = dia === "hoje" ? todayISO() : /^\d{4}-\d{2}-\d{2}$/.test(dia) ? dia : null;
+  if (!target) return null;
+  const d = new Date(`${target}T12:00:00`);
+  d.setDate(d.getDate() - 1);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
@@ -161,10 +198,21 @@ export default function ExtrasDiaPage() {
     setSavedCity(value);
     globalFilters.setCityId(globalFilters.cities.find(p => p.name === choice.label)!.id);
   };
-  const [baseDate, setBaseDate] = useState(todayISO());
+  // ?dia=amanha|hoje|AAAA-MM-DD (pesquisa global): a escala mostrada é a de
+  // baseDate + 1 (previsão do dia seguinte), por isso baseDate = dia − 1.
+  const [baseDate, setBaseDate] = useState(() => baseDateFromUrl() ?? todayISO());
 
+  const [tab, setTab] = usePersistedState<"dia" | "pressao">("extrasdia.tab", "dia");
   const { data, isLoading, error } = trpc.extrasDia.forecast.useQuery({ baseDate, city }, { enabled: !globalFilters.isLoading && allowedCities.length > 0 });
   const targetDate = data?.targetDate ?? "";
+  // "hora apertada": histórico de 60 dias (trabalho extras-pressure) da cidade.
+  const pressureQ = trpc.extrasDia.pressure.useQuery(undefined, { staleTime: 10 * 60_000 });
+  const tightHours = useMemo(() => {
+    if (!data || !pressureQ.data?.available) return new Map<number, TightReason>();
+    const key = extraCityGroupKey(city);
+    const slots = (pressureQ.data.slots as PressureSlot[]).filter((s) => s.group === key);
+    return tightHoursForDay(slots, data.targetDate, data.hourly.map((h) => h.hour));
+  }, [data, pressureQ.data, city]);
   const assignmentsQ = trpc.extrasDia.assignments.useQuery(
     { date: targetDate, city },
     { enabled: !!targetDate },
@@ -203,6 +251,13 @@ export default function ExtrasDiaPage() {
           <p className="text-sm text-muted-foreground mt-1">
             Planeamento de chegadas, saídas, lavagens e condutores para o dia seguinte.
           </p>
+          {data && (
+            <p className="text-xs mt-1">
+              <Badge variant="outline" className="font-normal" title="Definições → Parâmetros → Extras-dia">
+                {fmtCph(data.carsPerHourPerDriver)} carros/hora por condutor
+              </Badge>
+            </p>
+          )}
         </div>
         <div className="space-y-1">
           <Label htmlFor="baseDate" className="text-xs">Data base</Label>
@@ -216,14 +271,23 @@ export default function ExtrasDiaPage() {
         </div>
       </div>
 
-      {isLoading && (
+      <Tabs value={tab} onValueChange={(v) => setTab(v as "dia" | "pressao")}>
+        <TabsList>
+          <TabsTrigger value="dia">Dia</TabsTrigger>
+          <TabsTrigger value="pressao">Pressão</TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {tab === "pressao" && <PressureTab city={city} />}
+
+      {tab === "dia" && isLoading && (
         <div className="text-sm text-muted-foreground">A carregar previsão...</div>
       )}
-      {error && (
+      {tab === "dia" && error && (
         <div className="text-sm text-red-600">Erro: {error.message}</div>
       )}
 
-      {data && (
+      {tab === "dia" && data && (
         <>
           <div className="text-sm text-muted-foreground">
             A mostrar previsão para <strong>{fmtDate(data.targetDate)}</strong>
@@ -253,10 +317,18 @@ export default function ExtrasDiaPage() {
             </div>
           )}
 
+          {data.bookingSource === "copy" && (
+            <div className="rounded-md border border-amber-300 bg-amber-50/60 p-3 text-sm text-amber-900">
+              <AlertTriangle className="inline h-4 w-4 mr-1 align-text-bottom" />
+              Reservas da cópia local, não da BD da Multipark ao vivo. {data.bookingSourceNotice}
+            </div>
+          )}
+
           {data.parksQueried.length === 0 && (
             <div className="rounded-md border border-red-300 bg-red-50/60 p-3 text-sm">
-              Nenhuma chave de API Lisboa configurada. Define{" "}
-              <code className="font-mono">MULTIPARK_API_KEY_LISBON_*</code> nas env vars.
+              {data.bookingSource === "multipark-db"
+                ? "A BD da Multipark não tem parques nossos nesta cidade (ver Operações → Classificação dos parques)."
+                : "Sem reservas desta cidade na cópia local."}
             </div>
           )}
 
@@ -334,6 +406,7 @@ export default function ExtrasDiaPage() {
                           row={row}
                           targetDate={data.targetDate}
                           isPeak={peakHour?.hour === row.hour}
+                          tight={tightHours.get(row.hour) ?? null}
                         />
                       ))}
                     {data.hourly.every(h => h.checkins + h.checkouts === 0) && (
@@ -383,6 +456,9 @@ export default function ExtrasDiaPage() {
             </CardContent>
           </Card>
 
+          {/* Proposta automática + confirmação + avisos */}
+          <SchedulePanel targetDate={data.targetDate} carsPerHour={data.carsPerHourPerDriver} />
+
           {/* Equipa do dia (real) — vem antes da estimativa */}
           {SHIFTS.map(s => (
             <TeamSection
@@ -407,7 +483,7 @@ export default function ExtrasDiaPage() {
                 <CardHeader>
                   <CardTitle className="text-base flex items-center gap-2">
                     <Users className="h-4 w-4" />
-                    Estimativa de referência (3 carros/hora · turnos 3–12h)
+                    Estimativa de referência ({fmtCph(data.carsPerHourPerDriver)} carros/hora por condutor · turnos 3–12h)
                   </CardTitle>
                   {actuals.count > 0 && (
                     <p className="text-xs text-muted-foreground">
@@ -492,6 +568,138 @@ export default function ExtrasDiaPage() {
   );
 }
 
+// ─── Proposta automática da escala ────────────────────────────────────────────
+
+const SCHEDULE_STATUS_LABEL: Record<string, { label: string; cls: string }> = {
+  none: { label: "Sem proposta", cls: "bg-muted text-muted-foreground" },
+  proposing: { label: "A propor…", cls: "bg-muted text-muted-foreground" },
+  proposed: { label: "Proposta por confirmar", cls: "bg-violet-100 text-violet-800 border-violet-200" },
+  confirmed: { label: "Escala confirmada", cls: "bg-emerald-100 text-emerald-800 border-emerald-200" },
+};
+
+function SchedulePanel({ targetDate, carsPerHour }: { targetDate: string; carsPerHour: number }) {
+  const utils = trpc.useUtils();
+  const city = useContext(ExtrasCityContext);
+  const q = trpc.extrasDia.schedule.useQuery({ date: targetDate, city }, { enabled: !!targetDate });
+  const refresh = () => {
+    utils.extrasDia.schedule.invalidate();
+    utils.extrasDia.assignments.invalidate();
+    utils.extrasDia.coverage.invalidate();
+    utils.extrasDia.notices.invalidate();
+  };
+  const propose = trpc.extrasDia.propose.useMutation({
+    onSuccess: (r) => {
+      refresh();
+      if (r.gaps.length) toast.warning(`${r.proposed} condutor(es) propostos — ${r.gaps.map(describeGap).join("; ")}.`);
+      else toast.success(r.proposed ? `${r.proposed} condutor(es) propostos. Revê e confirma.` : "Nada a propor — a previsão já está coberta.");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const confirm = trpc.extrasDia.confirmSchedule.useMutation({
+    onSuccess: (r) => {
+      refresh();
+      const n = r.notifications;
+      const parts: string[] = [];
+      if (n?.whatsapp) parts.push(`${n.whatsapp.sent} WhatsApp`);
+      if (n?.email) parts.push(`${n.email.sent} email(s)`);
+      const extra = [...(n?.warnings ?? []), ...(n?.errors ?? [])];
+      toast.success(`Escala confirmada${parts.length ? ` · avisos enviados: ${parts.join(", ")}` : ""}${extra.length ? ` · ${extra.join(" · ")}` : ""}`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const hold = trpc.extrasDia.setScheduleHold.useMutation({
+    onSuccess: (r) => { refresh(); toast.success(r.hold ? "Envio automático suspenso para este dia." : "Envio automático retomado."); },
+    onError: (e) => toast.error(e.message),
+  });
+  const ask = trpc.extrasDia.requestMissingAvailability.useMutation({
+    onSuccess: (r) => {
+      if (r.targets === 0) toast.info("Todos os extras desta cidade já responderam.");
+      else toast.success(`Pedido enviado a ${r.targets} extra(s) · ${r.emailSent} email(s), ${r.whatsappSent} WhatsApp.`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const d = q.data;
+  const st = SCHEDULE_STATUS_LABEL[d?.state?.status ?? "none"] ?? SCHEDULE_STATUS_LABEL.none;
+  const held = !!d?.state?.holdAuto;
+  const busy = propose.isPending || confirm.isPending || hold.isPending;
+  const sentCount = (d?.notifications ?? []).filter((n) => n.kind === "scheduled" && n.status === "sent").length;
+  const rows = (d?.proposedCount ?? 0) + (d?.confirmedCount ?? 0);
+
+  return (
+    <Card className="border-violet-200">
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div className="min-w-0">
+            <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+              <Sparkles className="h-4 w-4 text-violet-600" />
+              Escala automática — {fmtDate(targetDate)}
+              <Badge variant="outline" className={st.cls}>{st.label}</Badge>
+              {held && <Badge variant="outline" className="bg-amber-100 text-amber-900 border-amber-200">envio automático suspenso</Badge>}
+            </CardTitle>
+            <p className="text-xs text-muted-foreground mt-1">
+              {fmtCph(carsPerHour)} carros/hora por condutor · pico de {d?.neededPeak ?? "—"} condutor(es) ·{" "}
+              {d ? `${d.availableCount} extra(s) disponíveis, ${d.noAnswerCount} sem resposta` : "…"}
+            </p>
+            {d && (
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Proposta automática às {d.settings.autoProposeAt}
+                {d.settings.autoConfirm ? ` · confirmação e avisos (WhatsApp + email) automáticos às ${d.settings.autoConfirmAt}` : " · confirmação automática desligada"}
+                {" "}(hora de Lisboa, no dia anterior).
+              </p>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="outline" disabled={busy || !targetDate} onClick={() => propose.mutate({ date: targetDate, city })}
+              title="Preenche as horas em falta com os extras disponíveis (substitui a proposta anterior; não mexe no que já está confirmado)">
+              <Wand2 className="h-4 w-4 mr-1" />{propose.isPending ? "A propor…" : "Proposta automática"}
+            </Button>
+            <Button size="sm" disabled={busy || !targetDate || rows === 0}
+              onClick={() => confirm.mutate({ date: targetDate, city })}
+              title="Confirma todas as propostas e avisa cada extra por WhatsApp e email (quem já foi avisado não recebe outra vez)">
+              <CheckCircle2 className="h-4 w-4 mr-1" />{confirm.isPending ? "A confirmar…" : `Confirmar escala${d?.proposedCount ? ` (${d.proposedCount})` : ""}`}
+            </Button>
+            <label className="flex items-center gap-2 text-xs border rounded-md px-2 py-1.5" title="O cron não confirma nem envia avisos deste dia/cidade enquanto estiver suspenso">
+              <Switch checked={held} disabled={busy || !targetDate} onCheckedChange={(v) => hold.mutate({ date: targetDate, city, hold: v })} aria-label="Suspender envio automático" />
+              <PauseCircle className="h-3.5 w-3.5" /> Suspender envio automático
+            </label>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {q.isLoading && <div className="text-sm text-muted-foreground">A carregar…</div>}
+        {q.error && <div className="text-sm text-red-600">Erro: {q.error.message}</div>}
+        {d && d.gaps.length > 0 && (
+          <div className="rounded-md border-2 border-red-400 bg-red-50 p-3 text-sm text-red-900 dark:bg-red-950/40 dark:text-red-200">
+            <div className="flex items-center gap-2 font-semibold">
+              <AlertTriangle className="h-4 w-4 shrink-0" /> Falta de gente
+            </div>
+            <ul className="mt-1 space-y-0.5">
+              {d.gaps.map((g, i) => <li key={i}>• {describeGap(g).replace(/^./, (c) => c.toUpperCase())}</li>)}
+            </ul>
+            <Button size="sm" variant="outline" className="mt-2 h-auto min-h-8 max-w-full whitespace-normal text-left py-1.5 bg-white dark:bg-transparent" disabled={ask.isPending || d.noAnswerCount === 0}
+              onClick={() => ask.mutate({ date: targetDate, city })}>
+              <Send className="h-4 w-4 mr-1" />
+              {ask.isPending ? "A enviar…" : `Pedir disponibilidade a quem não respondeu (${d.noAnswerCount})`}
+            </Button>
+          </div>
+        )}
+        {d && d.gaps.length === 0 && d.neededPeak > 0 && (
+          <div className="rounded-md border border-emerald-300 bg-emerald-50/60 p-2 text-xs text-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200">
+            Todas as horas previstas estão cobertas pela escala.
+          </div>
+        )}
+        {d?.state?.summary && <p className="text-xs text-muted-foreground">{d.state.summary}</p>}
+        {d?.state?.status === "confirmed" && (
+          <p className="text-xs text-muted-foreground">
+            Confirmada {d.state.confirmedBy === "auto" ? "automaticamente" : "manualmente"} · {sentCount} aviso(s) enviado(s).
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Equipa do dia (atribuições) ───────────────────────────────────────────────
 
 function TeamSection({
@@ -515,20 +723,72 @@ function TeamSection({
   // "só devia aparecer aqueles que têm permissão de ser team leader")
   const tlCandidatesQuery = trpc.extrasDia.candidates.useQuery({ date: targetDate, forTeamLeader: true });
 
+  // Formação obrigatória em falta: o servidor recusa (PRECONDITION_FAILED);
+  // um admin pode forçar (fica registado no log de atividade).
+  const { user } = useAuth();
+  const canForceTraining = atLeast(user?.role, "admin");
+  const [confirmForce, confirmForceUi] = useConfirm();
   const upsert = trpc.extrasDia.upsertAssignment.useMutation({
     onSuccess: () => {
       utils.extrasDia.assignments.invalidate();
+      utils.extrasDia.coverage.invalidate();
+      utils.extrasDia.schedule.invalidate();
       toast.success("Turno guardado");
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => { if (!(canForceTraining && e.data?.code === "PRECONDITION_FAILED")) toast.error(e.message); },
   });
+  type UpsertInput = Parameters<typeof upsert.mutateAsync>[0];
+  const saveAssignment = async (values: UpsertInput) => {
+    try {
+      return await upsert.mutateAsync(values);
+    } catch (e: any) {
+      if (canForceTraining && e?.data?.code === "PRECONDITION_FAILED") {
+        const ok = await confirmForce({ title: "Formação obrigatória em falta", description: e.message, confirmLabel: "Forçar mesmo sem formação", destructive: true });
+        if (ok) return await upsert.mutateAsync({ ...values, override: true });
+      }
+      throw e;
+    }
+  };
   const del = trpc.extrasDia.deleteAssignment.useMutation({
-    onSuccess: () => {
+    onSuccess: (r) => {
       utils.extrasDia.assignments.invalidate();
-      toast.success("Turno removido");
+      utils.extrasDia.coverage.invalidate();
+      utils.extrasDia.schedule.invalidate();
+      const told = [r.notified?.whatsapp === "sent" ? "WhatsApp" : null, r.notified?.email === "sent" ? "email" : null].filter(Boolean);
+      toast.success(told.length ? `Turno removido — a pessoa foi avisada por ${told.join(" e ")}.` : "Turno removido");
     },
     onError: (e) => toast.error(e.message),
   });
+
+  // Automação: horas sem gente suficiente, avisos WhatsApp e preenchimento
+  const coverageQ = trpc.extrasDia.coverage.useQuery({ date: targetDate, city });
+  const noticesQ = trpc.extrasDia.notices.useQuery({ date: targetDate });
+  const autofill = trpc.extrasDia.autofill.useMutation({
+    onSuccess: (r) => {
+      utils.extrasDia.assignments.invalidate();
+      utils.extrasDia.coverage.invalidate();
+      utils.extrasDia.schedule.invalidate();
+      if (r.created.length === 0 && r.unfilled.length === 0) toast.info("A escala já cobre a previsão deste turno.");
+      else if (r.unfilled.length === 0) toast.success(`${r.created.length} extra(s) escalado(s) com base na disponibilidade.`);
+      else toast.warning(`${r.created.length} escalado(s); faltam ${r.unfilled.length} turno(s) sem ninguém disponível.`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const notify = trpc.extrasDia.notify.useMutation({
+    onSuccess: (r) => {
+      utils.extrasDia.notices.invalidate();
+      if (r.sent === 0 && r.failed === 0) toast.info("Todos os escalados já tinham sido avisados.");
+      else if (r.failed === 0) toast.success(`${r.sent} aviso(s) enviado(s) por WhatsApp${r.rulesSent ? ` · ${r.rulesSent} com morada e regras` : ""}.`);
+      else toast.warning(`${r.sent} enviado(s), ${r.failed} falhado(s) — vê o motivo na linha de cada pessoa.`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const noticeByAssignment = useMemo(
+    () => new Map((noticesQ.data ?? []).map((n) => [n.assignmentId, n])),
+    [noticesQ.data],
+  );
+  const [shiftFrom, shiftTo] = shift === "morning" ? [3, 15] : [15, 27];
+  const gaps = (coverageQ.data ?? []).filter((g) => g.hour >= shiftFrom && g.hour < shiftTo);
 
   const allAssignments = assignmentsQuery.data ?? [];
   const allCandidates = candidatesQuery.data ?? [];
@@ -576,6 +836,24 @@ function TeamSection({
               <div className="text-lg font-bold">{fmtEur(totalCost)}</div>
               <div className="text-xs text-muted-foreground">{totalHours}h pagas</div>
             </div>
+            <Button
+              size="sm"
+              variant="outline"
+              title="Escala quem disse que está disponível, pelos turnos que a previsão sugere"
+              disabled={autofill.isPending}
+              onClick={() => autofill.mutate({ date: targetDate, city, shift })}
+            >
+              <Wand2 className="h-4 w-4 mr-1" /> {autofill.isPending ? "A preencher…" : "Preencher com disponíveis"}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              title="Envia o aviso de trabalho por WhatsApp a quem ainda não foi avisado (1.ª vez: também morada e regras)"
+              disabled={notify.isPending || assignments.length === 0}
+              onClick={() => notify.mutate({ date: targetDate, city })}
+            >
+              <MessageCircle className="h-4 w-4 mr-1" /> {notify.isPending ? "A avisar…" : "Avisar por WhatsApp"}
+            </Button>
             <Button size="sm" variant="default" onClick={() => setAdding(v => !v)}>
               <Plus className="h-4 w-4 mr-1" /> {adding ? "Cancelar" : "Adicionar"}
             </Button>
@@ -583,6 +861,18 @@ function TeamSection({
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
+        {confirmForceUi}
+        {gaps.length > 0 && (
+          <div className="rounded-md border border-red-300 bg-red-50/60 p-3 text-sm text-red-900 dark:bg-red-950/30 dark:text-red-200">
+            <div className="flex items-center gap-2 font-medium">
+              <AlertTriangle className="h-4 w-4" /> Faltam condutores em {gaps.length} hora(s) deste turno
+            </div>
+            <div className="mt-1 text-xs">
+              {gaps.slice(0, 8).map((g) => `${fmtHour(g.hour)}: precisas ${g.needed}, tens ${g.have}`).join(" · ")}
+              {gaps.length > 8 ? ` · e mais ${gaps.length - 8}` : ""}
+            </div>
+          </div>
+        )}
         {/* TL banner */}
         <div className="rounded-md border border-amber-300 bg-amber-50/60 p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -592,9 +882,9 @@ function TeamSection({
                 <div className="font-semibold flex items-center gap-2 min-w-0">
                   <Avatar className="h-6 w-6">
                     <AvatarImage src={(tl as any).photoUrl ?? undefined} className="object-cover" />
-                    <AvatarFallback className="text-[10px]">{tl.personName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()}</AvatarFallback>
+                    <AvatarFallback className="text-[11px]">{tl.personName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()}</AvatarFallback>
                   </Avatar>
-                  <span className="truncate">{tl.personName}</span>{" "}
+                  <span className="truncate" title={tl.personName}>{tl.personName}</span>{" "}
                   <span className="font-normal text-sm text-muted-foreground">
                     · {fmtHour(tl.startHour)}–{fmtHour(tl.sentHomeHour ?? tl.endHour)} · {fmtEur(tl.cost)}/dia
                   </span>
@@ -627,7 +917,7 @@ function TeamSection({
                 defaultStart={defaultStart}
                 defaultEnd={defaultEnd}
                 onSubmit={async (values) => {
-                  await upsert.mutateAsync({ ...values, city });
+                  await saveAssignment({ ...values, city });
                   setAddingTL(false);
                 }}
                 onCancel={() => setAddingTL(false)}
@@ -645,7 +935,7 @@ function TeamSection({
             defaultStart={defaultStart}
             defaultEnd={defaultEnd}
             onSubmit={async (values) => {
-              await upsert.mutateAsync({ ...values, city });
+              await saveAssignment({ ...values, city });
               setAdding(false);
             }}
             onCancel={() => setAdding(false)}
@@ -683,7 +973,8 @@ function TeamSection({
                   <AssignmentRow
                     key={a.id}
                     assignment={a}
-                    onSave={(payload) => upsert.mutate({ ...payload, id: a.id, city })}
+                    notice={noticeByAssignment.get(a.id) ?? null}
+                    onSave={(payload) => { void saveAssignment({ ...payload, id: a.id, city }).catch(() => {}); }}
                     onDelete={() => del.mutate({ id: a.id })}
                     busy={upsert.isPending || del.isPending}
                   />
@@ -727,6 +1018,7 @@ function AssignmentForm({
     suggestedLevel: LevelId;
     photoUrl?: string | null;
     availability?: { status: "available" | "unavailable" | "no_response"; morning: boolean; night: boolean } | null;
+    trainingMissing?: boolean;
   }[];
   asTeamLeader?: boolean;
   shift: ShiftId;
@@ -780,7 +1072,7 @@ function AssignmentForm({
                   <span className="flex items-center gap-1.5">
                     <Avatar className="h-5 w-5">
                       <AvatarImage src={c.photoUrl ?? undefined} className="object-cover" />
-                      <AvatarFallback className="text-[9px]">{c.fullName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()}</AvatarFallback>
+                      <AvatarFallback className="text-[11px]">{c.fullName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()}</AvatarFallback>
                     </Avatar>
                     {c.availability?.status === "available" && (
                       <span className="inline-flex gap-0.5">
@@ -793,9 +1085,12 @@ function AssignmentForm({
                       <span className="h-2 w-2 inline-block rounded-full bg-muted-foreground/30" title="Sem resposta" />
                     )}
                     {c.availability?.status === "unavailable" && (
-                      <span className="text-[10px] text-red-500" title="Disse que não está disponível">✕</span>
+                      <span className="text-[11px] text-red-500" title="Disse que não está disponível">✕</span>
                     )}
                     <span className={c.availability?.status === "unavailable" ? "text-muted-foreground" : undefined}>{c.fullName}</span>
+                    {c.trainingMissing && (
+                      <span className="ml-1 rounded bg-amber-100 px-1 text-[11px] font-medium text-amber-800" title="Formação obrigatória por concluir">Formação em falta</span>
+                    )}
                   </span>
                 </SelectItem>
               ))}
@@ -901,12 +1196,22 @@ function AssignmentForm({
   );
 }
 
+function NoticeBadge({ notice }: { notice: { status: string; confirmedAt: string | null; declinedAt: string | null; error: string | null } | null }) {
+  if (!notice) return null;
+  if (notice.declinedAt) return <Badge variant="destructive" className="text-[11px]" title="Respondeu que não pode">✗ não pode</Badge>;
+  if (notice.confirmedAt) return <Badge className="bg-emerald-700 text-[11px]" title="Confirmou pelo WhatsApp">✓ confirmou</Badge>;
+  if (notice.status === "sent") return <Badge variant="secondary" className="text-[11px]" title="Aviso enviado por WhatsApp — à espera de resposta">avisado</Badge>;
+  return <Badge variant="outline" className="text-[11px] border-red-300 text-red-700" title={notice.error ?? "Falhou o envio"}>aviso falhou</Badge>;
+}
+
 function AssignmentRow({
   assignment,
+  notice = null,
   onSave,
   onDelete,
   busy,
 }: {
+  notice?: { status: string; confirmedAt: string | null; declinedAt: string | null; error: string | null } | null;
   assignment: {
     id: number;
     assignmentDate: string;
@@ -921,6 +1226,8 @@ function AssignmentRow({
     notes: string | null;
     hoursBilled: number;
     cost: number;
+    status?: "proposed" | "confirmed";
+    proposalReason?: string | null;
   };
   onSave: (payload: AssignmentFormValues) => void;
   onDelete: () => void;
@@ -946,14 +1253,23 @@ function AssignmentRow({
           <span className="flex items-center gap-2">
             <Avatar className="h-6 w-6">
               <AvatarImage src={(a as any).photoUrl ?? undefined} className="object-cover" />
-              <AvatarFallback className="text-[10px]">{a.personName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()}</AvatarFallback>
+              <AvatarFallback className="text-[11px]">{a.personName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()}</AvatarFallback>
             </Avatar>
             {a.employeeId ? (
               <button type="button" className="hover:underline" title="Abrir ficha do funcionário" onClick={() => openEmployeeRow(a.employeeId!)}>
                 {a.personName}
               </button>
             ) : a.personName}
+            <NoticeBadge notice={notice} />
+            {a.status === "proposed" && (
+              <Badge variant="outline" className="text-[11px] border-violet-300 text-violet-700" title="Proposta automática — ainda por confirmar">proposta</Badge>
+            )}
           </span>
+          {a.proposalReason && (
+            <div className="text-[11px] text-muted-foreground mt-0.5 max-w-md leading-snug" title="Porquê esta pessoa">
+              {a.proposalReason}
+            </div>
+          )}
         </td>
         <td className="py-2 px-2">
           <Badge variant="secondary">{levels.find(l => l.id === a.level)?.label}</Badge>
@@ -1077,10 +1393,10 @@ function KpiCard({
           {icon}
           {label}
         </div>
-        <div className="text-2xl font-bold mt-1">{value}</div>
+        <div className="text-2xl font-bold mt-1 tabular-nums truncate" title={typeof value === "string" || typeof value === "number" ? String(value) : undefined}>{value}</div>
         {hint && <div className="text-xs text-muted-foreground mt-0.5">{hint}</div>}
         {breakdown && (breakdown.uncovered + breakdown.covered + breakdown.indoor + breakdown.unknown > 0) && (
-          <div className="text-[10px] text-muted-foreground mt-1 leading-tight">
+          <div className="text-[11px] text-muted-foreground mt-1 leading-tight">
             {breakdown.uncovered > 0 && <span>{breakdown.uncovered} desc.</span>}
             {breakdown.covered > 0 && <span className="ml-1">{breakdown.covered} cob.</span>}
             {breakdown.indoor > 0 && <span className="ml-1">{breakdown.indoor} ind.</span>}
@@ -1101,7 +1417,9 @@ function HourRow({
   row,
   targetDate,
   isPeak,
+  tight,
 }: {
+  tight?: TightReason | null;
   row: {
     hour: number;
     checkins: number;
@@ -1133,7 +1451,7 @@ function HourRow({
         <td className="py-1.5 px-2 text-muted-foreground">
           {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
         </td>
-        <td className="py-1.5 px-2 font-mono">{fmtHour(row.hour)}</td>
+        <td className="py-1.5 px-2 font-mono whitespace-nowrap">{fmtHour(row.hour)}{tight && <TightHourBadge reason={tight} />}</td>
         <td className="py-1.5 px-2 text-right text-emerald-700">{row.checkins || ""}</td>
         <td className="py-1.5 px-2 text-right text-orange-700">{row.checkouts || ""}</td>
         <td className="py-1.5 px-2 text-right font-semibold">{total}</td>
@@ -1249,7 +1567,7 @@ function BookingList({
               <span className="font-mono text-muted-foreground">{b.licensePlate || "—"}</span>
               <span>{b.clientName}</span>
               {b.deliveryType && (
-                <Badge variant="outline" className="text-[10px] py-0 h-4">
+                <Badge variant="outline" className="text-[11px] py-0 h-5">
                   {b.deliveryType}
                 </Badge>
               )}
@@ -1528,7 +1846,7 @@ export function CandidaturasSection() {
                 {cityProjects.map((p: any) => (
                   <SelectItem key={p.id} value={String(p.id)}>
                     <span className="inline-flex items-center gap-2">
-                      <Badge variant="outline" className="text-[10px] bg-blue-100 text-blue-700 border-blue-200">Cidade</Badge>
+                      <Badge variant="outline" className="text-[11px] bg-blue-100 text-blue-700 border-blue-200">Cidade</Badge>
                       {p.name}
                     </span>
                   </SelectItem>
@@ -1542,7 +1860,7 @@ export function CandidaturasSection() {
               </p>
             )}
             {!projects.isLoading && cityProjects.length === 0 && (
-              <p className="text-xs text-amber-600">
+              <p className="text-xs text-amber-700">
                 Não tens nenhuma cidade disponível para alocar (verifica o teu centro de custos).
               </p>
             )}
@@ -1557,7 +1875,7 @@ export function CandidaturasSection() {
               Cancelar
             </Button>
             <Button
-              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+              className="bg-emerald-700 hover:bg-emerald-800 text-white"
               disabled={!approveProjectId || approve.isPending || !approveFor}
               onClick={() => approveFor && approve.mutate({ id: approveFor.id, projectId: Number(approveProjectId) })}
             >
@@ -1616,15 +1934,17 @@ export function AvailabilitySection() {
   }), [msgKind, msgDateLabel, msgDate, msgShift, msgFrom, msgTo]);
   const [testEmail, setTestEmail] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  // A tabela lista TODOS os extras ativos por defeito — é a lista de contactos
-  // da operação, e o caso de uso principal é falar com quem AINDA NÃO
-  // respondeu. Este filtro reduz a quem já marcou disponibilidade.
-  const [onlyWithAvailability, setOnlyWithAvailability] = useState(false);
-  // Filtros de acompanhamento (Jorge, 2026-09-09): quem AINDA NÃO respondeu à
-  // disponibilidade desta semana, e a quem NÃO foi enviada mensagem nas
-  // últimas 24h (WhatsApp ou email — `contactedWithin24h` vem do servidor).
-  const [onlyNotResponded, setOnlyNotResponded] = useState(false);
+  // Estado da resposta nesta semana (Jorge, set 2026 — substitui as caixas
+  // "só quem marcou" e "ainda não respondeu"): todos / disponíveis /
+  // indisponíveis (responderam sem dias) / sem resposta. Regra em
+  // shared/availabilityGroups.ts.
+  const [statusFilter, setStatusFilter] = useState<AvailabilityStatusFilter>("all");
+  // Filtro de acompanhamento (Jorge, 2026-09-09): a quem NÃO foi enviada
+  // mensagem nas últimas 24h (WhatsApp ou email — `contactedWithin24h` vem do servidor).
   const [onlyNotContacted24h, setOnlyNotContacted24h] = useState(false);
+  // Painel "mensagem + teste" — fechado por defeito para a página não abrir
+  // com tudo à vista; os botões de envio ficam sempre visíveis.
+  const [showCompose, setShowCompose] = useState(false);
   // Filtro de cidade. "all" = sem filtro; "none" = fichas sem cidade
   // identificada (ver server/employeeCity.ts — a cidade é DERIVADA).
   const [cityFilter, setCityFilter] = useState<CityKey | "all" | "none">("all");
@@ -1703,25 +2023,63 @@ export function AvailabilitySection() {
     let list = o.extras;
     if (cityFilter === "none") list = list.filter(e => e.city === null);
     else if (cityFilter !== "all") list = list.filter(e => e.city === cityFilter);
-    if (onlyWithAvailability) list = list.filter(e => e.availableDays > 0);
-    if (onlyNotResponded) list = list.filter(e => !e.responded);
+    if (statusFilter !== "all") list = list.filter(e => matchesAvailabilityStatus(e, statusFilter));
     if (onlyNotContacted24h) list = list.filter(e => !e.contactedWithin24h);
     if (windowFilterActive) list = list.filter(matchesWindow);
     if (trimmedSearch) list = list.filter(e => matchesExtraQuery(trimmedSearch, e));
     return list.map(e => ({ ...e, lastWorked: lastWorked.data?.[e.employeeId] ?? "" }));
-  }, [o, cityFilter, onlyWithAvailability, onlyNotResponded, onlyNotContacted24h, windowFilterActive, matchesWindow, trimmedSearch, lastWorked.data]);
+  }, [o, cityFilter, statusFilter, onlyNotContacted24h, windowFilterActive, matchesWindow, trimmedSearch, lastWorked.data]);
   // Contagem do universo para o rótulo do filtro de horário (como os de cidade).
   const windowMatchCount = useMemo(
     () => (windowFilterActive ? (o?.extras ?? []).filter(matchesWindow).length : 0),
     [o, windowFilterActive, matchesWindow],
   );
   // Contagens do universo para os rótulos dos filtros (como os botões de cidade).
-  const notRespondedCount = useMemo(() => (o?.extras ?? []).filter(e => !e.responded).length, [o]);
+  const statusCounts = useMemo(() => countAvailabilityStatuses(o?.extras ?? []), [o]);
   const notContacted24hCount = useMemo(() => (o?.extras ?? []).filter(e => !e.contactedWithin24h).length, [o]);
   // A ordenação da tabela só REORDENA `shownExtras` (não filtra), por isso o
   // conjunto continua a ser o mesmo para a seleção, os totais e o alvo do envio.
   const availSort = useTableSort(shownExtras);
   const openEmployee = useOpenEmployee();
+
+  // ── Secções por cidade (Jorge, set 2026: "aparece tudo de uma vez") ──
+  // Agrupa a lista JÁ ordenada; secções fechadas por defeito menos a mais
+  // relevante, e cada uma mostra 25 linhas de cada vez. Só muda o que se VÊ:
+  // o conjunto filtrado (seleção "todos", totais e envio) é o mesmo.
+  const groups = useMemo(() => groupByCity(availSort.sorted), [availSort.sorted]);
+  const searching = trimmedSearch.length > 0;
+  const [explicitOpen, setExplicitOpen] = useState<Set<CityGroupKey> | null>(null);
+  const [shownPerGroup, setShownPerGroup] = useState<Partial<Record<CityGroupKey, number>>>({});
+  // Mudar de filtro volta às secções por defeito e à 1ª "página" de cada uma.
+  useEffect(() => {
+    setExplicitOpen(null);
+    setShownPerGroup({});
+  }, [cityFilter, statusFilter, searching, effectiveWeek, windowDay, windowFrom, windowTo, onlyNotContacted24h]);
+  const openGroups = useMemo(
+    () => explicitOpen ?? defaultOpenGroups(groups, { preferred: cityFilter === "all" ? null : cityFilter, searching }),
+    [explicitOpen, groups, cityFilter, searching],
+  );
+  const setOpenGroups = (next: Set<CityGroupKey>) => setExplicitOpen(next);
+  function toggleGroup(key: CityGroupKey) {
+    const next = new Set(openGroups);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    setExplicitOpen(next);
+  }
+  function showMore(key: CityGroupKey, by: number) {
+    setShownPerGroup(prev => ({ ...prev, [key]: (prev[key] ?? AVAILABILITY_PAGE_SIZE) + by }));
+  }
+  function toggleMany(rows: { employeeId: number }[], checked: boolean) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const x of rows) {
+        if (checked) next.add(x.employeeId);
+        else next.delete(x.employeeId);
+      }
+      return next;
+    });
+  }
+  const cityGroupLabel = (key: CityGroupKey) => (key === "none" ? "Sem cidade" : CITY_LABELS[key]);
 
   // ── Marcar disponibilidade POR um extra (backoffice, pedido Jorge 2026-09-10) ──
   // O diálogo edita a semana SELECIONADA em cima, com os mesmos campos que o
@@ -1790,20 +2148,21 @@ export function AvailabilitySection() {
   const shownWithPhone = shownExtras.filter(e => !!e.phoneE164).length;
   // Totais por dia recalculados sobre o conjunto visível — os do servidor
   // contam o universo todo e deixariam de bater certo com a tabela filtrada.
-  const shownPerDay = useMemo(
-    () =>
+  const perDayTotals = useCallback(
+    (rows: typeof shownExtras) =>
       (o?.dayHeaders ?? []).map(h => {
         let morning = 0;
         let night = 0;
-        for (const e of shownExtras) {
+        for (const e of rows) {
           const d = e.days.find(x => x.day === h.day);
           if (d?.morning) morning++;
           if (d?.night) night++;
         }
         return { day: h.day, morning, night };
       }),
-    [o, shownExtras],
+    [o],
   );
+  const shownPerDay = useMemo(() => perDayTotals(shownExtras), [perDayTotals, shownExtras]);
   const cityCounts = useMemo(() => {
     const counts = { all: o?.extras.length ?? 0, none: 0 } as Record<string, number>;
     for (const key of CITY_KEYS) counts[key] = 0;
@@ -1867,18 +2226,18 @@ export function AvailabilitySection() {
     name: string | null;
     phone: string;
     phoneE164: string | null;
-    status: "sent" | "failed" | "invalid_phone";
+    status: "sent" | "failed" | "invalid_phone" | "opted_out" | "duplicate_phone";
     error?: string;
   };
   const [waResult, setWaResult] = useState<
-    null | { total: number; sent: number; failed: number; invalidPhone: number; recipients: WaRecipient[] }
+    null | { total: number; sent: number; failed: number; invalidPhone: number; optedOut: number; recipients: WaRecipient[] }
   >(null);
 
   const broadcast = trpc.whatsapp.sendBroadcast.useMutation({
     onSuccess: (r) => {
       setWaResult(r);
       toast.success(
-        `WhatsApp: ${r.sent} enviados${r.failed ? `, ${r.failed} falhas` : ""}${r.invalidPhone ? `, ${r.invalidPhone} sem número` : ""}`,
+        `WhatsApp: ${r.sent} enviados${r.failed ? `, ${r.failed} falhas` : ""}${r.invalidPhone ? `, ${r.invalidPhone} sem número` : ""}${r.optedOut ? `, ${r.optedOut} não querem mensagens` : ""}`,
       );
       overview.refetch();
     },
@@ -1915,6 +2274,10 @@ export function AvailabilitySection() {
     return previewTemplateBody(p.bodyText, slots, { recipient: waPreviewName, shared: waParam2 });
   }, [templatePreview.data, waTemplate, waPreviewName, waParam2]);
 
+  // Só falta o campo quando o template TEM campo — os sem parâmetros (ex.:
+  // "Morada e regras") nunca preenchem `waParam2` e têm de poder ser enviados.
+  const waMissingParam = !!waTemplate.sharedParam && !waParam2.trim();
+
   function submitBroadcast(testPhone?: string) {
     // Templates sem parâmetros (ex.: "Morada e regras") não têm campo a preencher.
     const bodyParam2 = waTemplate.sharedParam ? waParam2.trim() : "";
@@ -1941,6 +2304,110 @@ export function AvailabilitySection() {
     });
   }
 
+  type ShownExtra = (typeof shownExtras)[number];
+  const renderExtraRow = (ex: ShownExtra) => (
+    <tr key={ex.employeeId} className="border-b last:border-0">
+      <td className="py-1 pr-1">
+        <input
+          type="checkbox"
+          checked={selectedIds.has(ex.employeeId)}
+          onChange={(e) => {
+            setSelectedIds((prev) => {
+              const next = new Set(prev);
+              if (e.target.checked) next.add(ex.employeeId);
+              else next.delete(ex.employeeId);
+              return next;
+            });
+          }}
+        />
+      </td>
+      <td className="py-1 pr-2 whitespace-nowrap">
+        <span className="flex items-center gap-1">
+          {ex.responded
+            ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+            : <span className="h-3.5 w-3.5 inline-block rounded-full border border-muted-foreground/30" />}
+          <button
+            type="button"
+            className="hover:underline text-left"
+            title="Abrir ficha do funcionário"
+            onClick={() => openEmployee(ex.employeeId)}
+          >
+            {ex.fullName}
+          </button>
+          <button
+            type="button"
+            className="text-muted-foreground/60 hover:text-foreground"
+            title="Marcar a disponibilidade desta semana por este extra"
+            aria-label={`Marcar disponibilidade de ${ex.fullName}`}
+            onClick={() => openAvailabilityEditor(ex)}
+          >
+            <Pencil className="h-3 w-3" />
+          </button>
+        </span>
+      </td>
+      <td className="py-1 pr-2 whitespace-nowrap text-xs text-muted-foreground">
+        {(ex as any).lastWorked ? fmtPTDate((ex as any).lastWorked) : "nunca"}
+      </td>
+      <td className="py-1 pr-2 whitespace-nowrap text-xs">
+        {ex.city ? (
+          <span
+            className="text-muted-foreground"
+            title={ex.citySource ? `Cidade obtida da ${CITY_SOURCE_LABELS[ex.citySource]}` : undefined}
+          >
+            {CITY_LABELS[ex.city]}
+          </span>
+        ) : (
+          <span className="text-muted-foreground/40" title="Sem projeto, candidatura ou morada que identifique a cidade">
+            —
+          </span>
+        )}
+      </td>
+      <td className="py-1 pr-2 whitespace-nowrap text-xs">
+        {ex.phoneE164 ? (
+          <span className="text-muted-foreground" title={ex.phone ?? undefined}>{ex.phoneE164}</span>
+        ) : (
+          <Badge
+            variant="outline"
+            className="border-amber-400 text-amber-700 gap-1 font-normal"
+            title={ex.phone ? `Número não reconhecido: ${ex.phone}` : "Ficha sem telefone"}
+          >
+            <AlertTriangle className="h-3 w-3" /> {ex.phone ? "número não reconhecido" : "sem número"}
+          </Badge>
+        )}
+      </td>
+      {ex.days.map((d) => (
+        <td key={d.day} className="px-1 text-center align-top">
+          {/* A célula é um botão: clicar num dia abre o editor
+              da semana desta pessoa (o lápis ao lado do nome
+              faz o mesmo). */}
+          <button
+            type="button"
+            className="w-full min-h-6 rounded px-0.5 hover:bg-muted/60"
+            title={d.note ? `${d.note} — clicar para editar` : "Editar disponibilidade"}
+            onClick={() => openAvailabilityEditor(ex)}
+          >
+            {(d.morning || d.night || d.fromHour != null) ? (
+              <span className="inline-flex flex-col items-center leading-tight">
+                <span className="inline-flex gap-0.5 justify-center items-center">
+                  {d.morning && <Sun className="h-3.5 w-3.5 text-amber-500" />}
+                  {d.night && <Moon className="h-3.5 w-3.5 text-indigo-500" />}
+                  {d.note && <span className="text-muted-foreground text-xs" aria-label="tem nota">✱</span>}
+                </span>
+                {(d.fromHour != null || d.toHour != null) && (
+                  <span className="text-[11px] text-muted-foreground whitespace-nowrap">
+                    {d.fromHour ?? "?"}h–{d.toHour ?? "?"}h
+                  </span>
+                )}
+              </span>
+            ) : (
+              <span className="text-muted-foreground/50" aria-hidden>·</span>
+            )}
+          </button>
+        </td>
+      ))}
+    </tr>
+  );
+
   return (
     <Card className="border-blue-200">
       <CardHeader>
@@ -1964,91 +2431,111 @@ export function AvailabilitySection() {
           )}
         </div>
 
-        <div className="space-y-1">
-          <Label className="text-xs">Mensagem opcional no email</Label>
-          <Input
-            placeholder="Ex: Reforço para o fim de semana do festival..."
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-          />
+        {/* Mensagem + teste: fechado por defeito (a página não abre com
+            tudo à vista). O texto escolhido vale mesmo com o painel fechado. */}
+        <div className="rounded-md border">
+          <button
+            type="button"
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left"
+            onClick={() => setShowCompose((v) => !v)}
+            aria-expanded={showCompose}
+          >
+            {showCompose ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            <span className="font-medium shrink-0">Mensagem e envio de teste</span>
+            <span className="text-xs text-muted-foreground truncate min-w-0" title={AVAILABILITY_KINDS.find((k) => k.id === msgKind)?.label ?? msgKind}>
+              · {AVAILABILITY_KINDS.find((k) => k.id === msgKind)?.label ?? msgKind}{note.trim() ? " · com nota" : ""}
+            </span>
+          </button>
+          {showCompose && (
+            <div className="px-3 pb-3 space-y-4">
+              <div className="space-y-1">
+                <Label className="text-xs">Mensagem opcional no email</Label>
+                <Input
+                  placeholder="Ex: Reforço para o fim de semana do festival..."
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                />
 
-          {/* Tipo de pedido (templates) + pré-visualização */}
-          <div className="w-full space-y-2 border rounded-lg p-3 bg-muted/20">
-            <div className="flex flex-wrap items-end gap-2">
-              <div>
-                <Label className="text-xs mb-1 block">Tipo de pedido</Label>
-                <Select value={msgKind} onValueChange={(v) => setMsgKind(v as AvailabilityMessageKind)}>
-                  <SelectTrigger className="w-72 h-9"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {AVAILABILITY_KINDS.map((k) => <SelectItem key={k.id} value={k.id}>{k.label}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                {/* Tipo de pedido (templates) + pré-visualização */}
+                <div className="w-full space-y-2 border rounded-lg p-3 bg-muted/20">
+                  <div className="flex flex-wrap items-end gap-2">
+                    <div>
+                      <Label className="text-xs mb-1 block">Tipo de pedido</Label>
+                      <Select value={msgKind} onValueChange={(v) => setMsgKind(v as AvailabilityMessageKind)}>
+                        <SelectTrigger className="w-full sm:w-72 h-9"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {AVAILABILITY_KINDS.map((k) => <SelectItem key={k.id} value={k.id}>{k.label}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {msgKind !== "week" && (
+                      <div>
+                        <Label className="text-xs mb-1 block">Dia</Label>
+                        <Input type="date" value={msgDate} onChange={(e) => setMsgDate(e.target.value)} className="w-40 h-9" />
+                      </div>
+                    )}
+                    {msgKind === "day_shift" && (
+                      <div>
+                        <Label className="text-xs mb-1 block">Turno</Label>
+                        <Select value={msgShift} onValueChange={(v) => setMsgShift(v as any)}>
+                          <SelectTrigger className="w-32 h-9"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="morning">Manhã</SelectItem>
+                            <SelectItem value="afternoon">Tarde</SelectItem>
+                            <SelectItem value="night">Noite</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                    {msgKind === "day_range" && (
+                      <>
+                        <div><Label className="text-xs mb-1 block">Das</Label><Input type="number" min={0} max={23} value={msgFrom} onChange={(e) => setMsgFrom(parseInt(e.target.value) || 0)} className="w-20 h-9" /></div>
+                        <div><Label className="text-xs mb-1 block">Às</Label><Input type="number" min={0} max={27} value={msgTo} onChange={(e) => setMsgTo(parseInt(e.target.value) || 0)} className="w-20 h-9" /></div>
+                      </>
+                    )}
+                  </div>
+                  <div className="text-xs bg-background border rounded p-2">
+                    <p className="font-semibold">{msgPreview.subject}</p>
+                    <p className="text-muted-foreground mt-0.5">{msgPreview.lines.join(" ")} <span className="text-primary font-medium">{msgPreview.cta} [link]</span></p>
+                    <button
+                      type="button"
+                      className="text-[11px] text-blue-600 hover:underline mt-1"
+                      onClick={() => applyMessageTextToWhatsApp(msgPreview.text)}
+                    >
+                      Usar este texto no WhatsApp ({"{"}{"{"}2{"}"}{"}"})
+                    </button>
+                  </div>
+                </div>
               </div>
-              {msgKind !== "week" && (
-                <div>
-                  <Label className="text-xs mb-1 block">Dia</Label>
-                  <Input type="date" value={msgDate} onChange={(e) => setMsgDate(e.target.value)} className="w-40 h-9" />
-                </div>
-              )}
-              {msgKind === "day_shift" && (
-                <div>
-                  <Label className="text-xs mb-1 block">Turno</Label>
-                  <Select value={msgShift} onValueChange={(v) => setMsgShift(v as any)}>
-                    <SelectTrigger className="w-32 h-9"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="morning">Manhã</SelectItem>
-                      <SelectItem value="afternoon">Tarde</SelectItem>
-                      <SelectItem value="night">Noite</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-              {msgKind === "day_range" && (
-                <>
-                  <div><Label className="text-xs mb-1 block">Das</Label><Input type="number" min={0} max={23} value={msgFrom} onChange={(e) => setMsgFrom(parseInt(e.target.value) || 0)} className="w-20 h-9" /></div>
-                  <div><Label className="text-xs mb-1 block">Às</Label><Input type="number" min={0} max={27} value={msgTo} onChange={(e) => setMsgTo(parseInt(e.target.value) || 0)} className="w-20 h-9" /></div>
-                </>
-              )}
-            </div>
-            <div className="text-xs bg-background border rounded p-2">
-              <p className="font-semibold">{msgPreview.subject}</p>
-              <p className="text-muted-foreground mt-0.5">{msgPreview.lines.join(" ")} <span className="text-primary font-medium">{msgPreview.cta} [link]</span></p>
-              <button
-                type="button"
-                className="text-[11px] text-blue-600 hover:underline mt-1"
-                onClick={() => applyMessageTextToWhatsApp(msgPreview.text)}
-              >
-                Usar este texto no WhatsApp ({"{"}{"{"}2{"}"}{"}"})
-              </button>
-            </div>
-          </div>
-        </div>
 
-        {/* Teste: enviar só para um endereço (não toca nos extras) */}
-        <div className="rounded-md border border-dashed p-3 space-y-2">
-          <Label className="text-xs font-medium">Testar primeiro (envia só para 1 email)</Label>
-          <div className="flex gap-2 flex-wrap">
-            <Input
-              type="email"
-              placeholder="o-teu-email@multipark.pt"
-              className="w-64"
-              value={testEmail}
-              onChange={(e) => setTestEmail(e.target.value)}
-            />
-            <Button
-              variant="outline"
-              disabled={!effectiveWeek || !testEmail.includes("@") || send.isPending}
-              onClick={() => send.mutate({
-                weekStart: effectiveWeek,
-                origin: window.location.origin,
-                note: note.trim() || null,
-                testEmail: testEmail.trim(),
-                message: msgInput,
-              })}
-            >
-              <Send className="h-4 w-4 mr-2" /> Enviar teste
-            </Button>
-          </div>
+              {/* Teste: enviar só para um endereço (não toca nos extras) */}
+              <div className="rounded-md border border-dashed p-3 space-y-2">
+                <Label className="text-xs font-medium">Testar primeiro (envia só para 1 email)</Label>
+                <div className="flex gap-2 flex-wrap">
+                  <Input
+                    type="email"
+                    placeholder="o-teu-email@multipark.pt"
+                    className="w-full sm:w-64"
+                    value={testEmail}
+                    onChange={(e) => setTestEmail(e.target.value)}
+                  />
+                  <Button
+                    variant="outline"
+                    disabled={!effectiveWeek || !testEmail.includes("@") || send.isPending}
+                    onClick={() => send.mutate({
+                      weekStart: effectiveWeek,
+                      origin: window.location.origin,
+                      note: note.trim() || null,
+                      testEmail: testEmail.trim(),
+                      message: msgInput,
+                    })}
+                  >
+                    <Send className="h-4 w-4 mr-2" /> Enviar teste
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Envio real: a todos OU só aos selecionados na tabela abaixo */}
@@ -2063,7 +2550,7 @@ export function AvailabilitySection() {
               const ids = selectedIds.size > 0 ? Array.from(selectedIds) : shownExtras.map(e => e.employeeId);
               const alvo = selectedIds.size > 0
                 ? `aos ${ids.length} extras selecionados`
-                : `aos ${ids.length} extras mostrados na tabela`;
+                : `aos ${ids.length} extras filtrados na tabela`;
               if (!confirm(`Enviar pedido de disponibilidade ${alvo} para a semana de ${effectiveWeek}?`)) return;
               send.mutate({
                 weekStart: effectiveWeek,
@@ -2075,7 +2562,7 @@ export function AvailabilitySection() {
             }}
           >
             {send.isPending ? <Clock className="h-4 w-4 mr-2 animate-spin" /> : <Mail className="h-4 w-4 mr-2" />}
-            {selectedIds.size > 0 ? `Email aos ${selectedIds.size} selecionados` : `Email aos ${shownExtras.length} mostrados`}
+            {selectedIds.size > 0 ? `Email aos ${selectedIds.size} selecionados` : `Email aos ${shownExtras.length} filtrados`}
           </Button>
 
           {/* WhatsApp: abre um dialog dedicado (template + teste + resultado) */}
@@ -2085,7 +2572,7 @@ export function AvailabilitySection() {
             onClick={() => { setWaResult(null); setWaOpen(true); }}
           >
             <MessageCircle className="h-4 w-4 mr-2" />
-            {selectedIds.size > 0 ? `WhatsApp aos ${selectedIds.size} selecionados` : `WhatsApp aos ${shownExtras.length} mostrados`}
+            {selectedIds.size > 0 ? `WhatsApp aos ${selectedIds.size} selecionados` : `WhatsApp aos ${shownExtras.length} filtrados`}
           </Button>
         </div>
 
@@ -2096,32 +2583,27 @@ export function AvailabilitySection() {
                 {shownExtras.length}
                 {shownExtras.length !== o.totalExtras ? ` de ${o.totalExtras}` : ""} extras ativos ·{" "}
                 {shownResponded} responderam para {o.weekStart} – {o.weekEnd} ·{" "}
-                <span className={shownWithPhone === 0 ? "text-amber-600" : undefined}>
+                <span className={shownWithPhone === 0 ? "text-amber-700" : undefined}>
                   {shownWithPhone} com número válido
                 </span>
               </div>
               <div className="flex items-center gap-4 flex-wrap">
-                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={onlyWithAvailability}
-                    onChange={(e) => {
-                      setOnlyWithAvailability(e.target.checked);
-                      setSelectedIds(new Set()); // o alvo mudou — não enviar a quem já não se vê
-                    }}
-                  />
-                  Mostrar só quem marcou disponibilidade
-                </label>
-                {/* Filtros de acompanhamento — compõem em AND com os restantes e,
-                    como o de disponibilidade, limpam a seleção (o alvo mudou). */}
-                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={onlyNotResponded}
-                    onChange={(e) => { setOnlyNotResponded(e.target.checked); setSelectedIds(new Set()); }}
-                  />
-                  Ainda não respondeu <span className="opacity-70">({notRespondedCount})</span>
-                </label>
+                {/* Estado da resposta — compõe em AND com os restantes e limpa a
+                    seleção (o alvo mudou — não enviar a quem já não se vê). */}
+                <Select
+                  value={statusFilter}
+                  onValueChange={(v) => { setStatusFilter(v as AvailabilityStatusFilter); setSelectedIds(new Set()); }}
+                >
+                  <SelectTrigger className="h-8 w-48 text-xs" aria-label="Estado da resposta">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todos os estados ({statusCounts.all})</SelectItem>
+                    {(["available", "unavailable", "no_answer"] as const).map((k) => (
+                      <SelectItem key={k} value={k}>{AVAILABILITY_STATUS_LABELS[k]} ({statusCounts[k]})</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <label
                   className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer"
                   title="Sem WhatsApp nem email enviados por nós nas últimas 24 horas"
@@ -2131,7 +2613,7 @@ export function AvailabilitySection() {
                     checked={onlyNotContacted24h}
                     onChange={(e) => { setOnlyNotContacted24h(e.target.checked); setSelectedIds(new Set()); }}
                   />
-                  Sem mensagem nas últimas 24h <span className="opacity-70">({notContacted24hCount})</span>
+                  Sem mensagem nas últimas 24h <span className="text-muted-foreground">({notContacted24hCount})</span>
                 </label>
               </div>
             </div>
@@ -2161,7 +2643,7 @@ export function AvailabilitySection() {
                 )}
               </div>
               {hiddenSelectedCount > 0 && (
-                <p className="text-xs text-amber-600">
+                <p className="text-xs text-amber-700">
                   {hiddenSelectedCount} selecionado(s) fora dos filtros atuais — continuam incluídos no envio.
                 </p>
               )}
@@ -2184,7 +2666,7 @@ export function AvailabilitySection() {
                   onClick={() => changeCityFilter(key)}
                 >
                   {label}
-                  <span className="ml-1 opacity-70">{cityCounts[key] ?? 0}</span>
+                  <span className="ml-1 opacity-90 tabular-nums">{cityCounts[key] ?? 0}</span>
                 </Button>
               ))}
             </div>
@@ -2232,7 +2714,7 @@ export function AvailabilitySection() {
               {windowFilterActive ? (
                 <span className="text-xs text-muted-foreground">
                   {windowHoursActive ? formatHourWindow(windowFrom!, windowTo!) : "qualquer hora"} ·{" "}
-                  <span className={windowMatchCount === 0 ? "text-amber-600" : "text-foreground font-medium"}>
+                  <span className={windowMatchCount === 0 ? "text-amber-700" : "text-foreground font-medium"}>
                     {windowMatchCount} {windowMatchCount === 1 ? "disponível" : "disponíveis"}
                   </span>
                 </span>
@@ -2246,184 +2728,168 @@ export function AvailabilitySection() {
               )}
             </div>
 
-            {/* Contagem por dia */}
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm border-collapse">
-                <thead>
-                  <tr className="text-left text-xs text-muted-foreground border-b">
-                    <th className="py-1 pr-1 w-6">
-                      {/* "Todos" = todos os MOSTRADOS; com uma pesquisa ativa,
-                          quem já estava marcado fora dela não é mexido. */}
-                      <input
-                        type="checkbox"
-                        title="Selecionar todos os mostrados"
-                        checked={shownExtras.length > 0 && shownExtras.every(x => selectedIds.has(x.employeeId))}
-                        onChange={(e) => {
-                          const checked = e.target.checked;
-                          setSelectedIds((prev) => {
-                            const next = new Set(prev);
-                            for (const x of shownExtras) {
-                              if (checked) next.add(x.employeeId);
-                              else next.delete(x.employeeId);
-                            }
-                            return next;
-                          });
-                        }}
-                      />
-                    </th>
-                    <Th k="fullName" label="Extra" sortKey={availSort.sortKey} sortDir={availSort.sortDir} onToggle={availSort.toggle} />
-                    <Th k="lastWorked" label="Últ. trabalho" sortKey={availSort.sortKey} sortDir={availSort.sortDir} onToggle={availSort.toggle} />
-                    <Th k="city" label="Cidade" sortKey={availSort.sortKey} sortDir={availSort.sortDir} onToggle={availSort.toggle} />
-                    <Th k="phoneE164" label="Telefone" sortKey={availSort.sortKey} sortDir={availSort.sortDir} onToggle={availSort.toggle} />
-                    {o.dayHeaders.map((h) => (
-                      <th key={h.day} className="px-1 text-center whitespace-nowrap">{h.label}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {availSort.sorted.map((ex) => (
-                    <tr key={ex.employeeId} className="border-b last:border-0">
-                      <td className="py-1 pr-1">
-                        <input
-                          type="checkbox"
-                          checked={selectedIds.has(ex.employeeId)}
-                          onChange={(e) => {
-                            setSelectedIds((prev) => {
-                              const next = new Set(prev);
-                              if (e.target.checked) next.add(ex.employeeId);
-                              else next.delete(ex.employeeId);
-                              return next;
-                            });
-                          }}
-                        />
-                      </td>
-                      <td className="py-1 pr-2 whitespace-nowrap">
-                        <span className="flex items-center gap-1">
-                          {ex.responded
-                            ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
-                            : <span className="h-3.5 w-3.5 inline-block rounded-full border border-muted-foreground/30" />}
-                          <button
-                            type="button"
-                            className="hover:underline text-left"
-                            title="Abrir ficha do funcionário"
-                            onClick={() => openEmployee(ex.employeeId)}
-                          >
-                            {ex.fullName}
-                          </button>
-                          <button
-                            type="button"
-                            className="text-muted-foreground/60 hover:text-foreground"
-                            title="Marcar a disponibilidade desta semana por este extra"
-                            aria-label={`Marcar disponibilidade de ${ex.fullName}`}
-                            onClick={() => openAvailabilityEditor(ex)}
-                          >
-                            <Pencil className="h-3 w-3" />
-                          </button>
-                        </span>
-                      </td>
-                      <td className="py-1 pr-2 whitespace-nowrap text-xs text-muted-foreground">
-                        {(ex as any).lastWorked ? fmtPTDate((ex as any).lastWorked) : "nunca"}
-                      </td>
-                      <td className="py-1 pr-2 whitespace-nowrap text-xs">
-                        {ex.city ? (
-                          <span
-                            className="text-muted-foreground"
-                            title={ex.citySource ? `Cidade obtida da ${CITY_SOURCE_LABELS[ex.citySource]}` : undefined}
-                          >
-                            {CITY_LABELS[ex.city]}
-                          </span>
-                        ) : (
-                          <span className="text-muted-foreground/40" title="Sem projeto, candidatura ou morada que identifique a cidade">
-                            —
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-1 pr-2 whitespace-nowrap text-xs">
-                        {ex.phoneE164 ? (
-                          <span className="text-muted-foreground" title={ex.phone ?? undefined}>{ex.phoneE164}</span>
-                        ) : (
-                          <Badge
-                            variant="outline"
-                            className="border-amber-400 text-amber-600 gap-1 font-normal"
-                            title={ex.phone ? `Número não reconhecido: ${ex.phone}` : "Ficha sem telefone"}
-                          >
-                            <AlertTriangle className="h-3 w-3" /> {ex.phone ? "número não reconhecido" : "sem número"}
-                          </Badge>
-                        )}
-                      </td>
-                      {ex.days.map((d) => (
-                        <td key={d.day} className="px-1 text-center align-top">
-                          {/* A célula é um botão: clicar num dia abre o editor
-                              da semana desta pessoa (o lápis ao lado do nome
-                              faz o mesmo). */}
-                          <button
-                            type="button"
-                            className="w-full min-h-6 rounded px-0.5 hover:bg-muted/60"
-                            title={d.note ? `${d.note} — clicar para editar` : "Editar disponibilidade"}
-                            onClick={() => openAvailabilityEditor(ex)}
-                          >
-                            {(d.morning || d.night || d.fromHour != null) ? (
-                              <span className="inline-flex flex-col items-center leading-tight">
-                                <span className="inline-flex gap-0.5 justify-center items-center">
-                                  {d.morning && <Sun className="h-3.5 w-3.5 text-amber-500" />}
-                                  {d.night && <Moon className="h-3.5 w-3.5 text-indigo-500" />}
-                                  {d.note && <span className="text-muted-foreground text-xs" aria-label="tem nota">✱</span>}
-                                </span>
-                                {(d.fromHour != null || d.toHour != null) && (
-                                  <span className="text-[10px] text-muted-foreground whitespace-nowrap">
-                                    {d.fromHour ?? "?"}h–{d.toHour ?? "?"}h
-                                  </span>
-                                )}
-                              </span>
-                            ) : (
-                              <span className="text-muted-foreground/30">·</span>
-                            )}
-                          </button>
+            {/* Seleção de todos os FILTRADOS (inclui secções fechadas e linhas
+                ainda por mostrar — é o mesmo conjunto do envio "a todos"). */}
+            <div className="flex items-center justify-between gap-2 flex-wrap text-xs">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={shownExtras.length > 0 && shownExtras.every(x => selectedIds.has(x.employeeId))}
+                  onChange={(e) => toggleMany(shownExtras, e.target.checked)}
+                />
+                Selecionar todos os {shownExtras.length} filtrados
+              </label>
+              {groups.length > 1 && (
+                <div className="flex gap-1">
+                  <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setOpenGroups(new Set(groups.map(g => g.key)))}>
+                    Abrir todas
+                  </Button>
+                  <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setOpenGroups(new Set())}>
+                    Fechar todas
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            {/* Totais por dia de TODO o conjunto filtrado (as secções abaixo
+                trazem os seus). Só faz falta com mais de uma secção. */}
+            {groups.length > 1 && (
+              <div className="overflow-x-auto rounded-md border bg-muted/20">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-muted-foreground">
+                      <th className="py-1 px-2 text-left font-medium whitespace-nowrap">Disponíveis (todos os filtrados)</th>
+                      {o.dayHeaders.map((h) => (
+                        <th key={h.day} className="px-1 text-center font-normal whitespace-nowrap">{h.label}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="font-medium">
+                      <td className="py-1 px-2" />
+                      {shownPerDay.map((p) => (
+                        <td key={p.day} className="px-1 text-center">
+                          <span className="text-amber-700">{p.morning}</span>
+                          {" / "}
+                          <span className="text-indigo-600">{p.night}</span>
                         </td>
                       ))}
                     </tr>
-                  ))}
-                  {shownExtras.length === 0 && (
-                    <tr>
-                      {/* 5 colunas fixas (seleção, Extra, Últ. trabalho, Cidade,
-                          Telefone) + uma por dia da semana. */}
-                      <td colSpan={o.dayHeaders.length + 5} className="py-3 text-center text-muted-foreground">
-                        {trimmedSearch
-                          ? `Sem resultados para “${trimmedSearch}”.`
-                          : windowFilterActive
-                            ? windowHoursActive
-                              ? `Ninguém disponível das ${formatHourWindow(windowFrom!, windowTo!)}${windowDay !== "any" ? " nesse dia" : " em nenhum dia da semana"}.`
-                              : "Ninguém marcou disponibilidade nesse dia."
-                          : cityFilter !== "all"
-                            ? "Nenhum extra neste filtro de cidade."
-                            : onlyWithAvailability
-                              ? "Ainda ninguém marcou disponibilidade para esta semana."
-                              : "Não há extras ativos (RH → colaboradores com função “extra”)."}
-                      </td>
-                    </tr>
-                  )}
-                  {/* Totais por dia — 5 células fixas antes dos dias (seleção,
-                      Extra, Últ. trabalho, Cidade, Telefone), senão os totais
-                      ficam desalinhados das colunas dos dias. */}
-                  <tr className="font-medium border-t-2">
-                    <td className="py-1 pr-1" />
-                    <td className="py-1 pr-2">Disponíveis</td>
-                    <td className="py-1 pr-2" />
-                    <td className="py-1 pr-2" />
-                    <td className="py-1 pr-2" />
-                    {shownPerDay.map((p) => (
-                      <td key={p.day} className="px-1 text-center text-xs">
-                        <span className="text-amber-600">{p.morning}</span>
-                        {" / "}
-                        <span className="text-indigo-600">{p.night}</span>
-                      </td>
-                    ))}
-                  </tr>
-                </tbody>
-              </table>
-              <div className="text-xs text-muted-foreground mt-1">
-                <Sun className="h-3 w-3 inline text-amber-500" /> manhã · <Moon className="h-3 w-3 inline text-indigo-500" /> noite · horas = janela indicada pela pessoa · ✱ tem nota (passa o rato por cima) · totais = nº disponíveis por turno
+                  </tbody>
+                </table>
               </div>
+            )}
+
+            {shownExtras.length === 0 && (
+              <div className="py-6 text-center text-sm text-muted-foreground border rounded-md">
+                {trimmedSearch
+                  ? `Sem resultados para “${trimmedSearch}”.`
+                  : windowFilterActive
+                    ? windowHoursActive
+                      ? `Ninguém disponível das ${formatHourWindow(windowFrom!, windowTo!)}${windowDay !== "any" ? " nesse dia" : " em nenhum dia da semana"}.`
+                      : "Ninguém marcou disponibilidade nesse dia."
+                    : cityFilter !== "all"
+                      ? "Nenhum extra neste filtro de cidade."
+                      : statusFilter !== "all"
+                        ? `Nenhum extra com o estado “${AVAILABILITY_STATUS_LABELS[statusFilter]}” nesta semana.`
+                        : "Não há extras ativos (RH → colaboradores com função “extra”)."}
+              </div>
+            )}
+
+            {/* Secções por cidade — fechadas por defeito, menos a mais
+                relevante; cada uma mostra 25 de cada vez ("Mostrar mais"). */}
+            <div className="space-y-2">
+              {groups.map((g) => {
+                const open = openGroups.has(g.key);
+                const { visible, remaining } = visibleSlice(g.rows, shownPerGroup[g.key] ?? AVAILABILITY_PAGE_SIZE);
+                const groupCounts = countAvailabilityStatuses(g.rows);
+                const groupPerDay = perDayTotals(g.rows);
+                const allInGroup = g.rows.every(x => selectedIds.has(x.employeeId));
+                const selectedInGroup = g.rows.filter(x => selectedIds.has(x.employeeId)).length;
+                return (
+                  <div key={g.key} className="rounded-md border">
+                    <div className="flex items-center gap-2 px-2 py-2 bg-muted/30">
+                      <input
+                        type="checkbox"
+                        aria-label={`Selecionar todos de ${cityGroupLabel(g.key)}`}
+                        title="Selecionar todos desta secção"
+                        checked={g.rows.length > 0 && allInGroup}
+                        onChange={(e) => toggleMany(g.rows, e.target.checked)}
+                      />
+                      <button
+                        type="button"
+                        className="flex-1 flex items-center gap-2 text-left min-w-0"
+                        onClick={() => toggleGroup(g.key)}
+                        aria-expanded={open}
+                      >
+                        {open ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
+                        <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                        <span className="font-medium text-sm">{cityGroupLabel(g.key)}</span>
+                        <span className="text-xs text-muted-foreground">{g.rows.length}</span>
+                        <span className="text-[11px] text-muted-foreground truncate hidden sm:inline">
+                          · <span className="text-green-700">{groupCounts.available} disp.</span>
+                          {" · "}{groupCounts.unavailable} indisp.
+                          {" · "}{groupCounts.no_answer} sem resposta
+                        </span>
+                        {selectedInGroup > 0 && (
+                          <Badge variant="secondary" className="h-5 px-1.5 text-[11px] ml-auto shrink-0">{selectedInGroup} selec.</Badge>
+                        )}
+                      </button>
+                    </div>
+                    {open && (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm border-collapse">
+                          <thead>
+                            <tr className="text-left text-xs text-muted-foreground border-b">
+                              <th className="py-1 px-1 w-6" />
+                              <Th k="fullName" label="Extra" sortKey={availSort.sortKey} sortDir={availSort.sortDir} onToggle={availSort.toggle} />
+                              <Th k="lastWorked" label="Últ. trabalho" sortKey={availSort.sortKey} sortDir={availSort.sortDir} onToggle={availSort.toggle} />
+                              <Th k="city" label="Cidade" sortKey={availSort.sortKey} sortDir={availSort.sortDir} onToggle={availSort.toggle} />
+                              <Th k="phoneE164" label="Telefone" sortKey={availSort.sortKey} sortDir={availSort.sortDir} onToggle={availSort.toggle} />
+                              {o.dayHeaders.map((h) => (
+                                <th key={h.day} className="px-1 text-center whitespace-nowrap">{h.label}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {visible.map(renderExtraRow)}
+                            {/* Totais por dia desta secção — 5 células fixas antes
+                                dos dias (seleção, Extra, Últ. trabalho, Cidade,
+                                Telefone), senão ficam desalinhados. */}
+                            <tr className="font-medium border-t-2">
+                              <td className="py-1 px-1" />
+                              <td className="py-1 pr-2 text-xs">Disponíveis</td>
+                              <td className="py-1 pr-2" />
+                              <td className="py-1 pr-2" />
+                              <td className="py-1 pr-2" />
+                              {groupPerDay.map((p) => (
+                                <td key={p.day} className="px-1 text-center text-xs">
+                                  <span className="text-amber-700">{p.morning}</span>
+                                  {" / "}
+                                  <span className="text-indigo-600">{p.night}</span>
+                                </td>
+                              ))}
+                            </tr>
+                          </tbody>
+                        </table>
+                        {remaining > 0 && (
+                          <div className="flex items-center justify-center gap-2 py-2 border-t">
+                            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => showMore(g.key, AVAILABILITY_PAGE_SIZE)}>
+                              Mostrar mais {Math.min(AVAILABILITY_PAGE_SIZE, remaining)}
+                            </Button>
+                            <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => showMore(g.key, remaining)}>
+                              Mostrar todos ({g.rows.length})
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              <Sun className="h-3 w-3 inline text-amber-500" /> manhã · <Moon className="h-3 w-3 inline text-indigo-500" /> noite · horas = janela indicada pela pessoa · ✱ tem nota (passa o rato por cima) · totais = nº disponíveis por turno
             </div>
           </div>
         )}
@@ -2502,7 +2968,7 @@ export function AvailabilitySection() {
               <DialogDescription>
                 {selectedIds.size > 0
                   ? `${selectedIds.size} extra(s) selecionado(s)`
-                  : `Todos os ${shownExtras.length} extras da tabela`}
+                  : `Todos os ${shownExtras.length} extras filtrados`}
                 {waInvalidCount > 0 ? ` · ${waInvalidCount} sem número válido` : ""}
               </DialogDescription>
             </DialogHeader>
@@ -2575,7 +3041,7 @@ export function AvailabilitySection() {
                     {waPreviewText}
                   </div>
                 ) : (
-                  <p className="text-xs text-amber-600">
+                  <p className="text-xs text-amber-700">
                     {templatePreview.data && !templatePreview.data.ok
                       ? templatePreview.data.reason
                       : "Pré-visualização indisponível — o envio continua a funcionar."}
@@ -2594,7 +3060,7 @@ export function AvailabilitySection() {
                   <Button
                     variant="outline"
                     className="shrink-0"
-                    disabled={!waParam2.trim() || !waTestPhone.trim() || broadcast.isPending}
+                    disabled={waMissingParam || !waTestPhone.trim() || broadcast.isPending}
                     onClick={() => submitBroadcast(waTestPhone)}
                   >
                     {broadcast.isPending ? <Clock className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
@@ -2608,13 +3074,16 @@ export function AvailabilitySection() {
                 <div className="rounded-md border p-3 space-y-2">
                   <div className="text-sm font-medium">
                     {waResult.sent} enviados · {waResult.failed} falhas · {waResult.invalidPhone} sem número
+                    {waResult.optedOut ? ` · ${waResult.optedOut} não querem mensagens` : ""}
                   </div>
                   <div className="max-h-48 overflow-y-auto text-xs divide-y">
                     {waResult.recipients.map((r, i) => (
                       <div key={i} className="flex items-center gap-2 py-1">
                         {r.status === "sent" && <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />}
                         {r.status === "failed" && <XCircle className="h-3.5 w-3.5 text-red-500 shrink-0" />}
-                        {r.status === "invalid_phone" && <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />}
+                        {(r.status === "invalid_phone" || r.status === "opted_out" || r.status === "duplicate_phone") && (
+                          <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                        )}
                         <span className="flex-1 truncate">
                           {r.name || r.phone}
                           {r.phoneE164 ? <span className="text-muted-foreground"> · {r.phoneE164}</span> : null}
@@ -2632,8 +3101,8 @@ export function AvailabilitySection() {
                 Fechar
               </Button>
               <Button
-                className="bg-green-600 hover:bg-green-700 text-white"
-                disabled={!waParam2.trim() || broadcast.isPending || waValidCount === 0}
+                className="bg-green-700 hover:bg-green-800 text-white"
+                disabled={waMissingParam || broadcast.isPending || waValidCount === 0}
                 onClick={() => submitBroadcast()}
               >
                 {broadcast.isPending ? <Clock className="h-4 w-4 mr-2 animate-spin" /> : <MessageCircle className="h-4 w-4 mr-2" />}

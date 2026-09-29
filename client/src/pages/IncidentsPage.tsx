@@ -1,204 +1,133 @@
 import { trpc } from "@/lib/trpc";
+import { seesBeyondOwn } from "@shared/access";
 import { openInMultipark } from "@/lib/multiparkLinks";
-import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
+import { fmtPTDateTime } from "@/lib/lisbonTime";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { toast } from "sonner";
-import { useState, useMemo } from "react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useState, useMemo, useEffect } from "react";
+import { keepPreviousData } from "@tanstack/react-query";
 import {
-  AlertTriangle, Plus, Clock, User, Car, Trash2, Pencil,
-  BarChart3, AlertCircle, CheckCircle2, ShieldAlert,
-  RefreshCw, Loader2, Bot, MapPin, Download, ExternalLink,
+  AlertTriangle, Clock, User, Car, BarChart3, AlertCircle, CheckCircle2, ShieldAlert,
+  MapPin, Download, ExternalLink, Search, Paperclip, Info, Lock,
 } from "lucide-react";
-import BookingSearchField from "@/components/BookingSearchField";
-
-const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
-  open: { label: "Aberta", color: "bg-red-100 text-red-800" },
-  investigating: { label: "Em Investigação", color: "bg-yellow-100 text-yellow-800" },
-  resolved: { label: "Resolvida", color: "bg-green-100 text-green-800" },
-  dismissed: { label: "Descartada", color: "bg-gray-100 text-gray-800" },
-};
-
-const SEVERITY_CONFIG: Record<string, { label: string; color: string }> = {
-  low: { label: "Baixa", color: "bg-slate-100 text-slate-700" },
-  medium: { label: "Média", color: "bg-blue-100 text-blue-700" },
-  high: { label: "Alta", color: "bg-orange-100 text-orange-700" },
-  critical: { label: "Crítica", color: "bg-red-100 text-red-700" },
-};
-
-const TYPE_CONFIG: Record<string, string> = {
-  vidro_aberto: "Vidro Aberto",
-  mal_estacionado: "Mal Estacionado",
-  dano: "Dano",
-  chave_errada: "Chave Errada",
-  combustivel: "Combustível",
-  limpeza: "Limpeza",
-  documentos: "Documentos",
-  outro: "Outro",
-};
+import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 
 /**
- * Categoria de triagem: pelo TEXTO, deteta ocorrências que são na verdade
- * ACIDENTES (a aba mais grave) ou RECLAMAÇÕES de cliente ("cliente reclamou
- * no terminal…") — essas ficam em abas próprias para análise/conversão.
+ * Ocorrências = as da app Multipark, lidas AO VIVO da BD deles ("Occurrence",
+ * server/multiparkDb/read.ts). Nada é importado nem copiado; quando são
+ * resolvidas na app, aparecem resolvidas aqui. As antigas `incidents` do
+ * dashboard já não aparecem nesta página (a tabela e os dados ficam).
  */
-function categoryOf(inc: any): string {
-  const txt = `${inc.description ?? ""} ${inc.aiClassification ?? ""}`;
-  if (/acidente|sinistro|colis[aã]o|colidiu|embat|bateu|choque|capot/i.test(txt)) return "acidente";
-  if (/reclam|queixa|queixou/i.test(txt)) return "reclamacao";
-  return inc.incidentType || "outro";
-}
 
-const CATEGORY_TABS: Array<{ id: string; label: string; className?: string }> = [
-  { id: "all", label: "Todas" },
-  { id: "acidente", label: "⚠ Acidentes", className: "data-[state=active]:bg-red-600 data-[state=active]:text-white" },
-  { id: "reclamacao", label: "Reclamações" },
-  ...Object.entries(TYPE_CONFIG).map(([id, label]) => ({ id, label })),
-];
+const PRIORITY: Record<string, { label: string; color: string }> = {
+  LOW: { label: "Baixa", color: "bg-slate-100 text-slate-700" },
+  MEDIUM: { label: "Média", color: "bg-blue-100 text-blue-700" },
+  HIGH: { label: "Alta", color: "bg-orange-100 text-orange-700" },
+};
+const OPEN_BADGE = "bg-red-100 text-red-800";
+const RESOLVED_BADGE = "bg-green-100 text-green-800";
+const PAGE = 50;
+const MAX_ROWS = 200;
+/** Ainda não há endpoint da Multipark para resolver ocorrências (ver docs/multipark-db/plano-duas-bd.md, secção D). */
+const RESOLVE_PENDING_HINT = "A aguardar endpoint da Multipark — por agora resolve na app Multipark.";
+
+type MpOccurrence = {
+  id: string; title: string; priority: "LOW" | "MEDIUM" | "HIGH" | null; resolved: boolean;
+  createdAt: string | null; resolvedAt: string | null; createdByName: string | null; resolvedByName: string | null;
+  remarks: string | null; lat: number | null; lng: number | null; attachment: string | null; attachmentUrl: string | null;
+  bookingId: string | null; bookingCode: string | null; plate: string | null; parkName: string | null; parkCity: string | null;
+};
+
+const isAccident = (o: MpOccurrence) => /acidente|sinistro|colis[aã]o|colidiu|embat|bateu|choque|capot/i.test(`${o.title} ${o.remarks ?? ""}`);
+
+function isoMinute(v: string | null): string {
+  return v ? new Date(v).toISOString().slice(0, 16) : "";
+}
 
 export default function IncidentsPage() {
   const { user } = useAuth();
-  const [showCreate, setShowCreate] = useState(false);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [editInc, setEditInc] = useState<any>(null);
-  const [filterStatus, setFilterStatus] = useState("all");
-  const [filterSeverity, setFilterSeverity] = useState("all");
-  const [activeTab, setActiveTab] = useState("all");
-  const [detailId, setDetailId] = useState<number | null>(null);
+  const globalFilters = useGlobalFilters();
+  const [detailId, setDetailId] = useState<string | null>(() => new URLSearchParams(window.location.search).get("mp") || null);
+  const [status, setStatus] = useState<"all" | "open" | "resolved">("all");
+  const [priority, setPriority] = useState<"all" | "LOW" | "MEDIUM" | "HIGH">("all");
+  const [park, setPark] = useState("all");
+  const [type, setType] = useState("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+  const [limit, setLimit] = useState(PAGE);
+  useEffect(() => { const t = setTimeout(() => setSearch(searchInput.trim()), 350); return () => clearTimeout(t); }, [searchInput]);
+  // Filtros novos → volta à 1.ª página.
+  useEffect(() => { setLimit(PAGE); }, [globalFilters.projectId, status, priority, park, type, dateFrom, dateTo, search]);
 
-  const queryInput = useMemo(() => {
-    const input: any = {};
-    if (filterStatus !== "all") input.status = filterStatus;
-    if (filterSeverity !== "all") input.severity = filterSeverity;
-    return Object.keys(input).length > 0 ? input : undefined;
-  }, [filterStatus, filterSeverity]);
+  const canView = seesBeyondOwn(user, "ocorrencias");
+  const input = useMemo(() => {
+    const i: any = { limit };
+    if (globalFilters.projectId !== undefined) i.projectId = globalFilters.projectId;
+    if (status !== "all") i.resolved = status === "resolved";
+    if (priority !== "all") i.priority = priority;
+    if (park !== "all") i.parkId = park;
+    if (type !== "all") i.type = type;
+    if (dateFrom) i.dateFrom = dateFrom;
+    if (dateTo) i.dateTo = dateTo;
+    if (search) i.search = search.slice(0, 100);
+    return i;
+  }, [limit, globalFilters.projectId, status, priority, park, type, dateFrom, dateTo, search]);
+  const q = trpc.incidents.multipark.useQuery(input, { enabled: canView, staleTime: 60_000, placeholderData: keepPreviousData });
+  const data = q.data;
+  const rows: MpOccurrence[] = data?.available ? (data.rows as MpOccurrence[]) : [];
+  const stats = data?.available ? data.stats : null;
 
-  const { data: incidents = [], isLoading } = trpc.incidents.list.useQuery(queryInput);
-  const { data: stats } = trpc.incidents.stats.useQuery(undefined);
-  const updateMut = trpc.incidents.update.useMutation();
-  const deleteMut = trpc.incidents.delete.useMutation();
-  const toComplaintMut = trpc.incidents.convertToComplaint.useMutation({
-    onSuccess: (r) => { toast.success(`Movida para as Reclamações (#${r.newId}) — reserva e cliente ligados automaticamente se a matrícula bater`); utils.incidents.list.invalidate(); utils.incidents.stats.invalidate(); utils.complaints.list.invalidate(); },
-    onError: (e) => toast.error(e.message || "Erro ao mover"),
-  });
-  const toLostFoundMut = trpc.incidents.convertToLostFound.useMutation({
-    onSuccess: (r) => { toast.success(`Movida para os Perdidos & Achados (#${r.newId})`); utils.incidents.list.invalidate(); utils.incidents.stats.invalidate(); utils.lostFound.list.invalidate(); },
-    onError: (e) => toast.error(e.message || "Erro ao mover"),
-  });
-  const utils = trpc.useUtils();
-
-  // Contagens por categoria de triagem + lista filtrada pela aba ativa.
-  const tabCounts = useMemo(() => {
-    const counts: Record<string, number> = { all: incidents.length };
-    for (const inc of incidents as any[]) {
-      const cat = categoryOf(inc);
-      counts[cat] = (counts[cat] ?? 0) + 1;
-    }
-    return counts;
-  }, [incidents]);
-  const visibleIncidents = useMemo(
-    () => activeTab === "all" ? incidents : (incidents as any[]).filter(inc => categoryOf(inc) === activeTab),
-    [incidents, activeTab],
-  );
-  const { data: employees = [] } = trpc.rh.list.useQuery();
-
-  const employeeMap = useMemo(() => {
-    const map = new Map<number, string>();
-    employees.forEach((row: any) => {
-      const emp = row.employee ?? row;
-      if (emp?.id != null) map.set(emp.id, emp.fullName);
-    });
-    return map;
-  }, [employees]);
-
-  const is48hOverdue = (createdAt: string, status: string) => {
-    if (status === "resolved" || status === "dismissed") return false;
-    const created = new Date(createdAt);
-    const now = new Date();
-    return (now.getTime() - created.getTime()) > 48 * 60 * 60 * 1000;
+  const exportCsv = () => {
+    const cell = (v: unknown) => String(v ?? "").replace(/[;\n\r]/g, " ");
+    const headers = ["ID", "Data", "Tipo", "Estado", "Prioridade", "Matrícula", "Reserva", "Parque", "Cidade", "Criada por", "Notas", "Resolvida por", "Resolvida em"];
+    const lines = rows.map(o => [
+      o.id, isoMinute(o.createdAt), o.title, o.resolved ? "Resolvida" : "Aberta", o.priority ? PRIORITY[o.priority]?.label : "",
+      o.plate, o.bookingCode ?? o.bookingId, o.parkName, o.parkCity, o.createdByName, o.remarks, o.resolvedByName, isoMinute(o.resolvedAt),
+    ].map(cell).join(";"));
+    const blob = new Blob(["﻿" + [headers.join(";"), ...lines].join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `ocorrencias_multipark_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+    URL.revokeObjectURL(url);
   };
 
-  const handleResolve = async (id: number, resolution: string) => {
-    await updateMut.mutateAsync({ id, status: "resolved", resolution });
-    utils.incidents.list.invalidate();
-    utils.incidents.stats.invalidate();
-    toast.success("Ocorrência resolvida");
-  };
-
-  const handleDelete = async (id: number) => {
-    if (!confirm("Eliminar esta ocorrência?")) return;
-    await deleteMut.mutateAsync({ id });
-    utils.incidents.list.invalidate();
-    utils.incidents.stats.invalidate();
-    toast.success("Ocorrência eliminada");
-  };
-
-  const syncMultipark = trpc.incidents.syncFromMultipark.useMutation({
-    onSuccess: (data: any) => {
-      utils.incidents.list.invalidate();
-      utils.incidents.stats.invalidate();
-      if (data.imported === 0 && data.scanned === 0) {
-        toast.info("Sem novas ocorrências para importar");
-      } else {
-        toast.success(`${data.imported} ocorrências importadas (${data.skipped} já existiam, ${data.scanned} analisadas)`);
-      }
-    },
-    onError: (err) => toast.error("Erro no sync: " + err.message),
-  });
+  if (!canView) {
+    return (
+      <Card className="p-10 text-center">
+        <Lock className="w-10 h-10 mx-auto text-muted-foreground mb-3" />
+        <p className="text-muted-foreground">As ocorrências vêm da app Multipark e só estão disponíveis para quem vê a cidade.</p>
+      </Card>
+    );
+  }
 
   return (
     <>
       <div className="space-y-6">
-        {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-3">
-          <div>
-            <p className="text-muted-foreground">Gestão e análise de ocorrências reportadas</p>
-          </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              disabled={incidents.length === 0}
-              onClick={() => {
-                const headers = ["ID","Data","Tipo","Estado","Gravidade","Matrícula","Condutor","Descrição","Resolução","Resolvido"];
-                const rows = (incidents as any[]).map(i => [
-                  i.id,
-                  i.createdAt ? new Date(i.createdAt).toISOString().slice(0, 16) : "",
-                  TYPE_CONFIG[i.incidentType] ?? i.incidentType,
-                  STATUS_CONFIG[i.status]?.label ?? i.status,
-                  SEVERITY_CONFIG[i.severity]?.label ?? i.severity,
-                  i.vehiclePlate ?? "",
-                  i.employeeId ? (employeeMap.get(i.employeeId) ?? `#${i.employeeId}`) : "",
-                  (i.description ?? "").replace(/[;\n\r]/g, " "),
-                  (i.resolution ?? "").replace(/[;\n\r]/g, " "),
-                  i.resolvedAt ? new Date(i.resolvedAt).toISOString().slice(0, 16) : "",
-                ]);
-                const csv = [headers.join(";"), ...rows.map(r => r.join(";"))].join("\n");
-                const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url; a.download = `ocorrencias_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
-                URL.revokeObjectURL(url);
-              }}
-            >
-              <Download className="w-4 h-4 mr-2" /> CSV
-            </Button>
-            <Button variant="outline" onClick={() => syncMultipark.mutate(undefined)} disabled={syncMultipark.isPending}>
-              {syncMultipark.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
-              {syncMultipark.isPending ? "A sincronizar..." : "Sincronizar Multipark"}
-            </Button>
-            <Button onClick={() => setShowCreate(true)}><Plus className="w-4 h-4 mr-2" /> Nova Ocorrência</Button>
-          </div>
+          <p className="text-muted-foreground">Ocorrências registadas na app Multipark (lidas em tempo real)</p>
+          <Button variant="outline" disabled={rows.length === 0} onClick={exportCsv}>
+            <Download className="w-4 h-4 mr-2" /> CSV
+          </Button>
         </div>
 
-        {/* Stats */}
+        {data && !data.available && (
+          <Card className="p-4 border-amber-300 bg-amber-50 text-amber-900">
+            <div className="flex items-start gap-2 text-sm">
+              <Info className="w-4 h-4 mt-0.5 shrink-0" />
+              <span><span className="font-medium">Ocorrências indisponíveis de momento.</span> {data.reason}</span>
+            </div>
+          </Card>
+        )}
+
         {stats && (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <Card className="p-3">
@@ -214,545 +143,214 @@ export default function IncidentsPage() {
               <p className="text-xl font-bold mt-1 text-green-600">{stats.resolved}</p>
             </Card>
             <Card className="p-3">
-              <div className="flex items-center gap-2"><ShieldAlert className="w-4 h-4 text-red-600" /><span className="text-xs text-muted-foreground">Críticas</span></div>
-              <p className="text-xl font-bold mt-1 text-red-600">{stats.critical}</p>
+              <div className="flex items-center gap-2"><ShieldAlert className="w-4 h-4 text-orange-600" /><span className="text-xs text-muted-foreground">Alta prioridade abertas</span></div>
+              <p className="text-xl font-bold mt-1 text-orange-600">{stats.highOpen}</p>
             </Card>
           </div>
         )}
 
-        {/* By Type Chart */}
-        {stats && Object.keys(stats.byType).length > 0 && (
+        {stats && stats.byType.length > 0 && (
           <Card>
-            <CardHeader><CardTitle className="text-base">Por Tipo de Ocorrência</CardTitle></CardHeader>
+            <CardHeader><CardTitle className="text-base">Por tipo</CardTitle></CardHeader>
             <CardContent>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                {Object.entries(stats.byType).sort(([,a],[,b]) => (b as number) - (a as number)).map(([type, count]) => (
-                  <div key={type} className="flex items-center justify-between p-2 rounded bg-muted">
-                    <span className="text-sm">{TYPE_CONFIG[type] || type}</span>
-                    <Badge variant="secondary">{count as number}</Badge>
-                  </div>
+                {stats.byType.map(g => (
+                  <button key={g.key} type="button" onClick={() => setType(type === g.key ? "all" : g.key)}
+                    className={`flex items-center justify-between p-2 rounded text-left ${type === g.key ? "bg-indigo-100" : "bg-muted hover:bg-muted/70"}`}>
+                    <span className="text-sm">{g.label}</span>
+                    <Badge variant="secondary">{g.count}</Badge>
+                  </button>
                 ))}
               </div>
             </CardContent>
           </Card>
         )}
 
-        {/* Filters */}
         <div className="flex items-center gap-3 flex-wrap">
           <div className="flex items-center gap-2">
             <Label>Estado:</Label>
-            <Select value={filterStatus} onValueChange={setFilterStatus}>
-              <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+            <Select value={status} onValueChange={(v) => setStatus(v as any)}>
+              <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todos</SelectItem>
-                {Object.entries(STATUS_CONFIG).map(([k, v]) => (
-                  <SelectItem key={k} value={k}>{v.label}</SelectItem>
-                ))}
+                <SelectItem value="open">Abertas</SelectItem>
+                <SelectItem value="resolved">Resolvidas</SelectItem>
               </SelectContent>
             </Select>
           </div>
           <div className="flex items-center gap-2">
-            <Label>Gravidade:</Label>
-            <Select value={filterSeverity} onValueChange={setFilterSeverity}>
-              <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+            <Label>Prioridade:</Label>
+            <Select value={priority} onValueChange={(v) => setPriority(v as any)}>
+              <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todas</SelectItem>
-                {Object.entries(SEVERITY_CONFIG).map(([k, v]) => (
-                  <SelectItem key={k} value={k}>{v.label}</SelectItem>
-                ))}
+                {Object.entries(PRIORITY).map(([k, v]) => <SelectItem key={k} value={k}>{v.label}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
+          {stats && stats.byPark.length > 0 && (
+            <div className="flex items-center gap-2">
+              <Label>Parque:</Label>
+              <Select value={park} onValueChange={setPark}>
+                <SelectTrigger className="w-52"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos</SelectItem>
+                  {stats.byPark.map(g => (
+                    <SelectItem key={g.key} value={g.key}>{g.label}{g.city ? ` (${g.city})` : ""} · {g.count}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          <div className="relative">
+            <Search className="w-4 h-4 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input className="pl-8 w-56" placeholder="Reserva ou matrícula…" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} />
+          </div>
+          <div className="flex items-center gap-1">
+            <Label className="text-xs">De</Label>
+            <Input type="date" className="w-36" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            <Label className="text-xs">a</Label>
+            <Input type="date" className="w-36" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          </div>
+          {type !== "all" && <Button size="sm" variant="ghost" onClick={() => setType("all")}>Tipo: {type} ✕</Button>}
         </div>
 
-        {/* Abas por tipo (Acidentes e Reclamações detetadas pelo texto) */}
-        <div className="flex flex-wrap gap-1.5">
-          {CATEGORY_TABS.map(t => (
-            <Button
-              key={t.id}
-              size="sm"
-              variant={activeTab === t.id ? "default" : "outline"}
-              className={`text-xs ${t.id === "acidente" && activeTab === t.id ? "bg-red-600 hover:bg-red-700" : t.id === "acidente" ? "text-red-700 border-red-300" : ""}`}
-              onClick={() => setActiveTab(t.id)}
-            >
-              {t.label}
-              <Badge variant="secondary" className="ml-1.5 text-[10px] px-1">{tabCounts[t.id] ?? 0}</Badge>
-            </Button>
-          ))}
-        </div>
-
-        {/* List */}
-        {isLoading ? (
+        {q.isLoading ? (
           <div className="flex justify-center py-20"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>
-        ) : visibleIncidents.length === 0 ? (
+        ) : !data?.available ? null : rows.length === 0 ? (
           <Card className="p-10 text-center">
             <AlertTriangle className="w-12 h-12 mx-auto text-muted-foreground mb-3" />
-            <p className="text-muted-foreground">Sem ocorrências {activeTab === "all" ? "registadas" : "nesta categoria"}</p>
+            <p className="text-muted-foreground">Sem ocorrências com estes filtros</p>
           </Card>
         ) : (
           <div className="space-y-2">
-            {visibleIncidents.map((inc: any) => {
-              const overdue = is48hOverdue(inc.createdAt, inc.status);
-              return (
-                <Card
-                  key={inc.id}
-                  className={`cursor-pointer hover:shadow-md transition-shadow ${overdue ? "border-red-400 border-2" : ""}`}
-                  onClick={() => setDetailId(inc.id)}
-                >
-                  <CardContent className="p-4">
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex-1 space-y-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-medium">{TYPE_CONFIG[inc.incidentType] || inc.incidentType}</span>
-                          {categoryOf(inc) === "acidente" && <Badge className="bg-red-600 text-white">⚠ Acidente</Badge>}
-                          {categoryOf(inc) === "reclamacao" && <Badge className="bg-amber-100 text-amber-800">Cliente reclamou</Badge>}
-                          <Badge className={STATUS_CONFIG[inc.status]?.color}>{STATUS_CONFIG[inc.status]?.label}</Badge>
-                          <Badge className={SEVERITY_CONFIG[inc.severity]?.color}>{SEVERITY_CONFIG[inc.severity]?.label}</Badge>
-                          {overdue && <Badge className="bg-red-500 text-white">+48h sem resolução</Badge>}
-                          {(inc as any).sourceEmailId && <Badge variant="outline" className="text-xs"><Bot className="w-3 h-3 mr-1" />Gmail</Badge>}
-                        </div>
-                        <p className="text-sm text-muted-foreground">{inc.description}</p>
-                        {(inc as any).aiClassification && (
-                          <p className="text-xs text-blue-600 flex items-center gap-1"><Bot className="w-3 h-3" /> IA: {(inc as any).aiClassification}</p>
-                        )}
-                        <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                          {inc.vehiclePlate && <span className="flex items-center gap-1"><Car className="w-3 h-3" /> {inc.vehiclePlate}</span>}
-                          {inc.employeeId && <span className="flex items-center gap-1"><User className="w-3 h-3" /> {employeeMap.get(inc.employeeId) || `#${inc.employeeId}`}</span>}
-                          <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> {fmtPTDateTime(inc.createdAt)}</span>
-                          {(inc as any).gpsLatitude && (inc as any).gpsLongitude && (
-                            <a href={`https://www.google.com/maps?q=${(inc as any).gpsLatitude},${(inc as any).gpsLongitude}`} target="_blank" rel="noopener" className="flex items-center gap-1 text-blue-500 hover:underline">
-                              <MapPin className="w-3 h-3" /> Ver no mapa
-                            </a>
-                          )}
-                        </div>
-                        {inc.resolution && <p className="text-xs text-green-700 mt-1">Resolução: {inc.resolution}</p>}
-                      </div>
-                      <div className="flex gap-1 flex-wrap justify-end" onClick={(e) => e.stopPropagation()}>
-                        <Button size="sm" variant="ghost" onClick={() => setEditInc(inc)}>
-                          <Pencil className="w-4 h-4" />
-                        </Button>
-                        {(inc.status === "open" || inc.status === "investigating") && (
-                          <Button size="sm" variant="outline" onClick={() => setSelectedId(inc.id)}>
-                            Resolver
-                          </Button>
-                        )}
-                        {["admin", "super_admin"].includes(user?.role ?? "") && (
-                          <>
-                            <Button
-                              size="sm" variant="outline" className="text-xs"
-                              disabled={toComplaintMut.isPending}
-                              title="Converte em Reclamação — vai buscar a reserva e os dados do cliente pela matrícula"
-                              onClick={() => {
-                                if (!confirm("Mover esta ocorrência para as Reclamações? A reserva/cliente serão ligados automaticamente pela matrícula.")) return;
-                                toComplaintMut.mutate({ id: inc.id });
-                              }}
-                            >
-                              → Reclamações
-                            </Button>
-                            <Button
-                              size="sm" variant="outline" className="text-xs"
-                              disabled={toLostFoundMut.isPending}
-                              title="Converte em caso de Perdidos & Achados"
-                              onClick={() => {
-                                if (!confirm("Mover esta ocorrência para os Perdidos & Achados?")) return;
-                                toLostFoundMut.mutate({ id: inc.id });
-                              }}
-                            >
-                              → Perdidos
-                            </Button>
-                          </>
-                        )}
-                        {user?.role === "super_admin" && (
-                          <Button size="sm" variant="ghost" onClick={() => handleDelete(inc.id)}>
-                            <Trash2 className="w-4 h-4 text-red-500" />
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })}
+            {rows.map(o => <OccurrenceCard key={o.id} occ={o} onOpen={() => setDetailId(o.id)} />)}
+            {data.hasMore && (
+              <div className="flex justify-center pt-2">
+                <Button variant="outline" size="sm" disabled={q.isFetching || limit >= MAX_ROWS} onClick={() => setLimit(l => Math.min(l + PAGE, MAX_ROWS))}>
+                  {limit >= MAX_ROWS ? `Máximo de ${MAX_ROWS} — refina os filtros` : q.isFetching ? "A carregar…" : "Carregar mais"}
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      {showCreate && <CreateIncidentDialog employees={employees} onClose={() => setShowCreate(false)} />}
-      {selectedId && <ResolveDialog id={selectedId} onResolve={handleResolve} onClose={() => setSelectedId(null)} />}
-      {editInc && <EditIncidentDialog incident={editInc} employees={employees} onClose={() => setEditInc(null)} />}
-      {detailId && (
-        <IncidentDetailDialog
-          id={detailId}
-          user={user}
-          employeeMap={employeeMap}
-          onClose={() => setDetailId(null)}
-          onEdit={(inc) => { setDetailId(null); setEditInc(inc); }}
-        />
-      )}
+      {detailId && <OccurrenceDialog id={detailId} projectId={globalFilters.projectId} onClose={() => setDetailId(null)} />}
     </>
   );
 }
 
-/**
- * Detalhe da ocorrência — a "pré-reclamação": conteúdo completo, reserva
- * relacionada pela matrícula, notas datadas, aceitar/resolver num clique e
- * conversão para Reclamações/Perdidos.
- */
-function IncidentDetailDialog({ id, user, employeeMap, onClose, onEdit }: {
-  id: number; user: any; employeeMap: Map<number, string>; onClose: () => void; onEdit: (inc: any) => void;
-}) {
-  const { data: inc, isLoading } = trpc.incidents.getById.useQuery({ id });
-  const { data: peek } = trpc.incidents.bookingPeek.useQuery({ id });
-  const utils = trpc.useUtils();
-  const [note, setNote] = useState("");
+/** "Resolver" aqui → resolver lá: desligado até existir endpoint da Multipark. */
+function ResolveButton({ size = "sm" }: { size?: "sm" | "default" }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {/* span: um botão desligado não dispara o tooltip */}
+        <span tabIndex={0}><Button size={size} variant="outline" disabled>Resolver</Button></span>
+      </TooltipTrigger>
+      <TooltipContent>{RESOLVE_PENDING_HINT}</TooltipContent>
+    </Tooltip>
+  );
+}
 
-  const invalidate = () => {
-    utils.incidents.getById.invalidate({ id });
-    utils.incidents.list.invalidate();
-    utils.incidents.stats.invalidate();
-  };
-  const updateMut = trpc.incidents.update.useMutation({ onSuccess: invalidate });
-  const addNoteMut = trpc.incidents.addNote.useMutation({
-    onSuccess: () => { setNote(""); toast.success("Nota adicionada"); invalidate(); },
-    onError: (e) => toast.error(e.message || "Erro ao adicionar nota"),
-  });
-  const toComplaintMut = trpc.incidents.convertToComplaint.useMutation({
-    onSuccess: (r) => { toast.success(`Movida para as Reclamações (#${r.newId})`); invalidate(); utils.complaints.list.invalidate(); onClose(); },
-    onError: (e) => toast.error(e.message || "Erro ao mover"),
-  });
-  const toLostFoundMut = trpc.incidents.convertToLostFound.useMutation({
-    onSuccess: (r) => { toast.success(`Movida para os Perdidos & Achados (#${r.newId})`); invalidate(); utils.lostFound.list.invalidate(); onClose(); },
-    onError: (e) => toast.error(e.message || "Erro ao mover"),
-  });
+function OccurrenceCard({ occ, onOpen }: { occ: MpOccurrence; onOpen: () => void }) {
+  return (
+    <Card className="cursor-pointer hover:shadow-md transition-shadow" onClick={onOpen}>
+      <CardContent className="p-4">
+        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 sm:gap-4">
+          <div className="flex-1 min-w-0 space-y-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-medium">{occ.title}</span>
+              {isAccident(occ) && <Badge className="bg-red-600 text-white">⚠ Acidente</Badge>}
+              <Badge className={occ.resolved ? RESOLVED_BADGE : OPEN_BADGE}>{occ.resolved ? "Resolvida" : "Aberta"}</Badge>
+              {occ.priority && <Badge className={PRIORITY[occ.priority]?.color}>{PRIORITY[occ.priority]?.label}</Badge>}
+            </div>
+            {occ.remarks && <p className="text-sm text-muted-foreground line-clamp-3 break-words">{occ.remarks}</p>}
+            <div className="flex items-center gap-x-4 gap-y-1 flex-wrap text-xs text-muted-foreground">
+              {occ.plate && <span className="flex items-center gap-1"><Car className="w-3 h-3" /> {occ.plate}</span>}
+              {(occ.bookingCode || occ.bookingId) && <span>Reserva #{occ.bookingCode ?? occ.bookingId?.slice(-8)}</span>}
+              {occ.parkName && <span>{occ.parkName}{occ.parkCity ? ` (${occ.parkCity})` : ""}</span>}
+              {occ.createdByName && <span className="flex items-center gap-1"><User className="w-3 h-3" /> {occ.createdByName}</span>}
+              {occ.createdAt && <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> {fmtPTDateTime(occ.createdAt)}</span>}
+              {occ.lat != null && occ.lng != null && (
+                <a href={`https://www.google.com/maps?q=${occ.lat},${occ.lng}`} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()} className="flex items-center gap-1 text-blue-700 hover:underline">
+                  <MapPin className="w-3 h-3" /> Ver no mapa
+                </a>
+              )}
+              {occ.attachment && <span className="flex items-center gap-1"><Paperclip className="w-3 h-3" /> anexo</span>}
+            </div>
+            {occ.resolved && occ.resolvedByName && <p className="text-xs text-green-700 mt-1">Resolvida por {occ.resolvedByName}{occ.resolvedAt ? ` · ${fmtPTDateTime(occ.resolvedAt)}` : ""}</p>}
+          </div>
+          <div className="flex gap-1 flex-wrap sm:justify-end shrink-0" onClick={(e) => e.stopPropagation()}>
+            {occ.bookingId && (
+              <Button size="sm" variant="ghost" className="text-xs" onClick={() => openInMultipark(occ.bookingId)}>
+                <ExternalLink className="w-3 h-3 mr-1" /> Ver na Multipark
+              </Button>
+            )}
+            {!occ.resolved && <ResolveButton />}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
-  if (isLoading || !inc) return null;
-  const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
-  const openStates = inc.status === "open" || inc.status === "investigating";
-
+function OccurrenceDialog({ id, projectId, onClose }: { id: string; projectId?: number; onClose: () => void }) {
+  const { data, isLoading } = trpc.incidents.multiparkById.useQuery(projectId !== undefined ? { id, projectId } : { id }, { retry: false });
+  const occ: MpOccurrence | null = data?.available ? (data.occurrence as MpOccurrence | null) : null;
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 flex-wrap">
-            Ocorrência #{inc.id} — {TYPE_CONFIG[inc.incidentType] || inc.incidentType}
-            {categoryOf(inc) === "acidente" && <Badge className="bg-red-600 text-white">⚠ Acidente</Badge>}
-            {categoryOf(inc) === "reclamacao" && <Badge className="bg-amber-100 text-amber-800">Cliente reclamou</Badge>}
-            <Badge className={STATUS_CONFIG[inc.status]?.color}>{STATUS_CONFIG[inc.status]?.label}</Badge>
-            <Badge className={SEVERITY_CONFIG[inc.severity]?.color}>{SEVERITY_CONFIG[inc.severity]?.label}</Badge>
+            {occ ? occ.title : "Ocorrência"}
+            {occ && <Badge className={occ.resolved ? RESOLVED_BADGE : OPEN_BADGE}>{occ.resolved ? "Resolvida" : "Aberta"}</Badge>}
+            {occ?.priority && <Badge className={PRIORITY[occ.priority]?.color}>{PRIORITY[occ.priority]?.label}</Badge>}
           </DialogTitle>
         </DialogHeader>
-
-        <div className="space-y-4">
-          <div>
-            <p className="text-xs font-medium text-muted-foreground mb-1">Descrição completa</p>
-            <div className="max-h-[30vh] overflow-y-auto rounded bg-muted p-3 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">
-              {inc.description || "(sem descrição)"}
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground">A ler da BD da Multipark…</p>
+        ) : data && !data.available ? (
+          <p className="text-sm text-amber-800">{data.reason}</p>
+        ) : !occ ? (
+          <p className="text-sm text-muted-foreground">Ocorrência não encontrada (ou fora da tua cidade).</p>
+        ) : (
+          <div className="space-y-4">
+            <div>
+              <p className="text-xs font-medium text-muted-foreground mb-1">Notas</p>
+              <div className="max-h-[30vh] overflow-y-auto rounded bg-muted p-3 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">{occ.remarks || "(sem notas)"}</div>
             </div>
-            {(inc as any).aiClassification && (
-              <p className="text-xs text-blue-600 mt-1 flex items-center gap-1"><Bot className="w-3 h-3" /> IA: {(inc as any).aiClassification}</p>
-            )}
-          </div>
-
-          <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
-            {inc.vehiclePlate && <div><Car className="w-3 h-3 inline mr-1" />Matrícula: <span className="font-medium text-foreground">{inc.vehiclePlate}</span></div>}
-            {inc.employeeId && <div><User className="w-3 h-3 inline mr-1" />Colaborador: <span className="font-medium text-foreground">{employeeMap.get(inc.employeeId) || `#${inc.employeeId}`}</span></div>}
-            <div><Clock className="w-3 h-3 inline mr-1" />Criada: <span className="font-medium text-foreground">{fmtPTDateTime(inc.createdAt)}</span></div>
-            {(inc as any).sourceEmailDate && <div>Email original: <span className="font-medium text-foreground">{fmtPTDateTime((inc as any).sourceEmailDate)}</span></div>}
-            {(inc as any).reservationLink && (
-              <button
-                type="button"
-                onClick={() => openInMultipark((inc as any).reservationLink)}
-                className="text-blue-600 hover:underline text-left"
-              >
-                <ExternalLink className="w-3 h-3 inline mr-1" />Ver na Multipark
-              </button>
-            )}
-            {(inc as any).gpsLatitude && (inc as any).gpsLongitude && (
-              <a href={`https://www.google.com/maps?q=${(inc as any).gpsLatitude},${(inc as any).gpsLongitude}`} target="_blank" rel="noopener" className="text-blue-500 hover:underline"><MapPin className="w-3 h-3 inline mr-1" />Ver no mapa</a>
-            )}
-          </div>
-
-          {peek && (
-            <div className="rounded-lg border p-3 text-sm space-y-1 bg-blue-50/50">
-              <p className="text-xs font-medium text-muted-foreground">Reserva relacionada (pela matrícula, à data da ocorrência)</p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
-                <div>Reserva: <span className="font-medium">#{peek.bookingNumber || peek.externalId.slice(-8)}</span> · {peek.status}</div>
-                <div>Parque: <span className="font-medium">{peek.parkName}{peek.city ? ` (${peek.city})` : ""}</span></div>
-                <div>Cliente: <span className="font-medium">{peek.clientName || "—"}</span></div>
-                <div>Estadia: <span className="font-medium">{peek.checkIn ? fmtPTDate(peek.checkIn) : "—"} → {peek.checkOut ? fmtPTDate(peek.checkOut) : "—"}</span></div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-muted-foreground">
+              <div>Criada: <span className="font-medium text-foreground">{occ.createdAt ? fmtPTDateTime(occ.createdAt) : "—"}</span></div>
+              <div>Por: <span className="font-medium text-foreground">{occ.createdByName ?? "—"}</span></div>
+              <div>Parque: <span className="font-medium text-foreground">{occ.parkName ?? "—"}{occ.parkCity ? ` (${occ.parkCity})` : ""}</span></div>
+              <div>Matrícula: <span className="font-medium text-foreground">{occ.plate ?? "—"}</span></div>
+              <div>Reserva: <span className="font-medium text-foreground">{occ.bookingCode ? `#${occ.bookingCode}` : occ.bookingId ?? "—"}</span></div>
+              {occ.resolved && <div>Resolvida: <span className="font-medium text-foreground">{occ.resolvedAt ? fmtPTDateTime(occ.resolvedAt) : "—"}{occ.resolvedByName ? ` · ${occ.resolvedByName}` : ""}</span></div>}
+              {occ.lat != null && occ.lng != null && (
+                <a href={`https://www.google.com/maps?q=${occ.lat},${occ.lng}`} target="_blank" rel="noopener" className="text-blue-700 hover:underline"><MapPin className="w-3 h-3 inline mr-1" />Ver no mapa ({occ.lat.toFixed(5)}, {occ.lng.toFixed(5)})</a>
+              )}
+              {occ.attachmentUrl ? (
+                <a href={occ.attachmentUrl} target="_blank" rel="noopener noreferrer" className="text-blue-700 hover:underline"><Paperclip className="w-3 h-3 inline mr-1" />Abrir anexo</a>
+              ) : occ.attachment ? (
+                <span><Paperclip className="w-3 h-3 inline mr-1" />Tem anexo — abrir na app Multipark</span>
+              ) : null}
+            </div>
+            {!occ.resolved && (
+              <div className="rounded border border-indigo-200 bg-indigo-50 p-3 text-xs text-indigo-900 flex items-start gap-2">
+                <Lock className="w-4 h-4 shrink-0" />
+                <span>Resolver aqui ainda não é possível: {RESOLVE_PENDING_HINT} Quando for resolvida lá, aparece resolvida aqui.</span>
               </div>
-              <p className="text-[10px] text-muted-foreground">Ao mover para Reclamações/Perdidos, esta reserva e o cliente são ligados automaticamente.</p>
-            </div>
-          )}
-
-          <div>
-            <p className="text-xs font-medium text-muted-foreground mb-1">Notas / Resolução</p>
-            {inc.resolution ? (
-              <div className="max-h-[20vh] overflow-y-auto rounded bg-green-50 border border-green-200 p-3 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">{inc.resolution}</div>
-            ) : (
-              <p className="text-xs text-muted-foreground">Sem notas.</p>
             )}
-            <div className="flex gap-2 mt-2">
-              <Input placeholder="Adicionar nota…" value={note} onChange={(e) => setNote(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && note.trim()) addNoteMut.mutate({ id, note }); }} />
-              <Button size="sm" disabled={!note.trim() || addNoteMut.isPending} onClick={() => addNoteMut.mutate({ id, note })}>Adicionar</Button>
-            </div>
           </div>
-        </div>
-
+        )}
         <DialogFooter className="flex-wrap gap-2">
-          <Button variant="outline" size="sm" onClick={() => onEdit(inc)}><Pencil className="w-4 h-4 mr-1" /> Editar</Button>
-          {openStates && (
-            <Button
-              size="sm" className="bg-green-600 hover:bg-green-700 text-white"
-              disabled={updateMut.isPending}
-              title="Ocorrência vista e aceite — fica resolvida"
-              onClick={() => updateMut.mutate({ id, status: "resolved", resolution: inc.resolution ? undefined : "Aceite" }, { onSuccess: () => { toast.success("Ocorrência aceite e resolvida"); onClose(); } })}
-            >
-              <CheckCircle2 className="w-4 h-4 mr-1" /> Aceitar e resolver
-            </Button>
+          {occ?.bookingId && (
+            <Button size="sm" variant="outline" onClick={() => openInMultipark(occ.bookingId)}><ExternalLink className="w-4 h-4 mr-1" /> Ver reserva na Multipark</Button>
           )}
-          {openStates && inc.status !== "investigating" && (
-            <Button size="sm" variant="outline" disabled={updateMut.isPending} onClick={() => updateMut.mutate({ id, status: "investigating" })}>
-              Investigar
-            </Button>
-          )}
-          {isAdmin && (
-            <>
-              <Button size="sm" variant="outline" disabled={toComplaintMut.isPending} onClick={() => { if (confirm("Mover para as Reclamações?")) toComplaintMut.mutate({ id }); }}>
-                → Reclamações
-              </Button>
-              <Button size="sm" variant="outline" disabled={toLostFoundMut.isPending} onClick={() => { if (confirm("Mover para os Perdidos & Achados?")) toLostFoundMut.mutate({ id }); }}>
-                → Perdidos
-              </Button>
-            </>
-          )}
-          <Button variant="outline" size="sm" onClick={onClose}>Fechar</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function ResolveDialog({ id, onResolve, onClose }: { id: number; onResolve: (id: number, resolution: string) => void; onClose: () => void }) {
-  const [resolution, setResolution] = useState("");
-  return (
-    <Dialog open onOpenChange={onClose}>
-      <DialogContent>
-        <DialogHeader><DialogTitle>Resolver Ocorrência #{id}</DialogTitle></DialogHeader>
-        <div>
-          <Label>Resolução</Label>
-          <Textarea value={resolution} onChange={e => setResolution(e.target.value)} placeholder="Descrever como foi resolvida..." rows={3} />
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button onClick={() => { onResolve(id, resolution); onClose(); }} disabled={!resolution.trim()}>Resolver</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function CreateIncidentDialog({ employees, onClose }: { employees: any[]; onClose: () => void }) {
-  const [form, setForm] = useState({
-    vehiclePlate: "",
-    employeeId: "",
-    incidentType: "outro" as const,
-    severity: "medium" as const,
-    description: "",
-    bookingRef: "",
-  });
-  const createMut = trpc.incidents.create.useMutation();
-  const utils = trpc.useUtils();
-
-  const handleSubmit = async () => {
-    if (!form.description.trim()) { toast.error("Descrição obrigatória"); return; }
-    try {
-      await createMut.mutateAsync({
-        vehiclePlate: form.vehiclePlate || undefined,
-        employeeId: form.employeeId && form.employeeId !== "none" ? parseInt(form.employeeId) : undefined,
-        incidentType: form.incidentType,
-        severity: form.severity,
-        description: form.description,
-      });
-      utils.incidents.list.invalidate();
-      utils.incidents.stats.invalidate();
-      toast.success("Ocorrência criada");
-      onClose();
-    } catch (e: any) { toast.error(e.message || "Erro"); }
-  };
-
-  return (
-    <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader><DialogTitle>Nova Ocorrência</DialogTitle></DialogHeader>
-        <div className="space-y-4">
-          <BookingSearchField
-            accent="amber"
-            hint="Opcional — escolhe a reserva e a matrícula é preenchida automaticamente"
-            onSelect={(b, _details) => {
-              setForm(f => ({
-                ...f,
-                bookingRef: b.externalId || b.bookingNumber || f.bookingRef,
-                vehiclePlate: f.vehiclePlate || b.licensePlate || "",
-              }));
-            }}
-          />
-          {form.bookingRef && (
-            <div className="p-2 rounded border bg-muted text-xs flex items-center justify-between">
-              <span className="font-mono">Reserva: {form.bookingRef}</span>
-              <button type="button" className="text-muted-foreground hover:text-foreground" onClick={() => setForm(f => ({ ...f, bookingRef: "" }))}>limpar</button>
-            </div>
-          )}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label>Tipo</Label>
-              <Select value={form.incidentType} onValueChange={(v: any) => setForm(f => ({ ...f, incidentType: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {Object.entries(TYPE_CONFIG).map(([k, v]) => (
-                    <SelectItem key={k} value={k}>{v}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>Gravidade</Label>
-              <Select value={form.severity} onValueChange={(v: any) => setForm(f => ({ ...f, severity: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {Object.entries(SEVERITY_CONFIG).map(([k, v]) => (
-                    <SelectItem key={k} value={k}>{v.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>Matrícula</Label>
-              <Input value={form.vehiclePlate} onChange={e => setForm(f => ({ ...f, vehiclePlate: e.target.value.toUpperCase() }))} placeholder="AA-00-BB" />
-            </div>
-            <div>
-              <Label>Condutor Responsável</Label>
-              <Select value={form.employeeId} onValueChange={v => setForm(f => ({ ...f, employeeId: v }))}>
-                <SelectTrigger><SelectValue placeholder="Selecionar..." /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Nenhum</SelectItem>
-                  {employees.map((row: any) => {
-                    const e = row.employee ?? row;
-                    return <SelectItem key={e.id} value={String(e.id)}>{e.fullName}</SelectItem>;
-                  })}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <div>
-            <Label>Descrição *</Label>
-            <Textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Descrever a ocorrência..." rows={3} />
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button onClick={handleSubmit} disabled={createMut.isPending}>{createMut.isPending ? "A criar..." : "Criar"}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function EditIncidentDialog({ incident, employees, onClose }: { incident: any; employees: any[]; onClose: () => void }) {
-  const [form, setForm] = useState({
-    incidentType: incident.incidentType || "outro",
-    severity: incident.severity || "medium",
-    description: incident.description || "",
-    vehiclePlate: incident.vehiclePlate || "",
-    employeeId: incident.employeeId ? String(incident.employeeId) : "",
-    status: incident.status || "open",
-  });
-  const updateMut = trpc.incidents.update.useMutation();
-  const utils = trpc.useUtils();
-
-  const handleSubmit = async () => {
-    try {
-      await updateMut.mutateAsync({
-        id: incident.id,
-        incidentType: form.incidentType as any,
-        severity: form.severity as any,
-        description: form.description || undefined,
-        vehiclePlate: form.vehiclePlate || undefined,
-        employeeId: form.employeeId && form.employeeId !== "none" ? parseInt(form.employeeId) : undefined,
-        status: form.status as any,
-      });
-      utils.incidents.list.invalidate();
-      utils.incidents.stats.invalidate();
-      toast.success("Ocorrência atualizada");
-      onClose();
-    } catch (e: any) { toast.error(e.message || "Erro ao atualizar"); }
-  };
-
-  return (
-    <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader><DialogTitle>Editar Ocorrência #{incident.id}</DialogTitle></DialogHeader>
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label>Tipo</Label>
-              <Select value={form.incidentType} onValueChange={(v: any) => setForm(f => ({ ...f, incidentType: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {Object.entries(TYPE_CONFIG).map(([k, v]) => (
-                    <SelectItem key={k} value={k}>{v}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>Gravidade</Label>
-              <Select value={form.severity} onValueChange={(v: any) => setForm(f => ({ ...f, severity: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {Object.entries(SEVERITY_CONFIG).map(([k, v]) => (
-                    <SelectItem key={k} value={k}>{v.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>Estado</Label>
-              <Select value={form.status} onValueChange={(v: any) => setForm(f => ({ ...f, status: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {Object.entries(STATUS_CONFIG).map(([k, v]) => (
-                    <SelectItem key={k} value={k}>{v.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>Matrícula</Label>
-              <Input value={form.vehiclePlate} onChange={e => setForm(f => ({ ...f, vehiclePlate: e.target.value.toUpperCase() }))} placeholder="AA-00-BB" />
-            </div>
-            <div className="col-span-2">
-              <Label>Condutor Responsável</Label>
-              <Select value={form.employeeId} onValueChange={v => setForm(f => ({ ...f, employeeId: v }))}>
-                <SelectTrigger><SelectValue placeholder="Selecionar..." /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Nenhum</SelectItem>
-                  {employees.map((row: any) => {
-                    const e = row.employee ?? row;
-                    return <SelectItem key={e.id} value={String(e.id)}>{e.fullName}</SelectItem>;
-                  })}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <div>
-            <Label>Descrição</Label>
-            <Textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} rows={3} />
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button onClick={handleSubmit} disabled={updateMut.isPending}>Guardar</Button>
+          {occ && !occ.resolved && <ResolveButton />}
+          <Button size="sm" onClick={onClose}>Fechar</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

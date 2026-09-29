@@ -4,23 +4,21 @@
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { protectedProcedure, router } from "../../_core/trpc";
+import { requireAccess } from "../../_core/access";
 import { getDb } from "../../db";
 import { adAccounts, adCampaigns } from "../../../drizzle/schema";
 import { GOOGLE_ADS_PROVIDER, OAUTH_CALLBACK_PATH, missingApiEnvs, missingOAuthEnvs, readGoogleAdsConfig } from "./config";
 import { connectionSummary, disconnect, getConnection, hasStoredRefreshToken } from "./oauth";
 import { isSyncStale, lastSuccessfulSyncAt, listSyncRuns, refreshAccounts, runGoogleAdsSync } from "./sync";
 import { backfillBookingAttribution } from "./marketingStats";
+import { CAMPAIGN_SUGGEST_PROVIDERS as SUGGEST_PROVIDERS } from "../../../shared/adCampaignMapping";
 
-const RANK: Record<string, number> = { super_admin: 7, admin: 6 };
-function requireAdmin(role: string) {
-  if ((RANK[role] ?? 0) < RANK.admin) throw new TRPCError({ code: "FORBIDDEN", message: "Acesso não autorizado." });
-}
 
 export const googleAdsRouter = router({
   status: protectedProcedure.query(async ({ ctx }) => {
-    requireAdmin(ctx.user.role);
+    requireAccess(ctx.user, "integracoes", "view");
     const cfg = readGoogleAdsConfig();
     const conn = await getConnection();
     const db = await getDb();
@@ -45,19 +43,19 @@ export const googleAdsRouter = router({
 
   accounts: router({
     list: protectedProcedure.query(async ({ ctx }) => {
-      requireAdmin(ctx.user.role);
+      requireAccess(ctx.user, "integracoes", "view");
       const db = await getDb();
       if (!db) return [];
       return db.select().from(adAccounts).where(eq(adAccounts.provider, GOOGLE_ADS_PROVIDER)).orderBy(adAccounts.isManager, adAccounts.name);
     }),
     refresh: protectedProcedure.mutation(async ({ ctx }) => {
-      requireAdmin(ctx.user.role);
+      requireAccess(ctx.user, "integracoes", "edit");
       return refreshAccounts();
     }),
     update: protectedProcedure
       .input(z.object({ id: z.number(), selected: z.boolean().optional(), projectId: z.number().nullable().optional() }))
       .mutation(async ({ ctx, input }) => {
-        requireAdmin(ctx.user.role);
+        requireAccess(ctx.user, "integracoes", "manage");
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
         const patch: Record<string, unknown> = {};
@@ -70,7 +68,7 @@ export const googleAdsRouter = router({
 
   campaigns: router({
     list: protectedProcedure.input(z.object({ accountId: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
-      requireAdmin(ctx.user.role);
+      requireAccess(ctx.user, "marketing", "view");
       const db = await getDb();
       if (!db) return [];
       const conds = [eq(adCampaigns.provider, GOOGLE_ADS_PROVIDER)];
@@ -82,7 +80,7 @@ export const googleAdsRouter = router({
     update: protectedProcedure
       .input(z.object({ id: z.number(), projectId: z.number().nullable(), scope: z.enum(["city", "national"]).optional() }))
       .mutation(async ({ ctx, input }) => {
-        requireAdmin(ctx.user.role);
+        requireAccess(ctx.user, "marketing", "manage");
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
         const scope = input.scope ?? "city";
@@ -91,27 +89,28 @@ export const googleAdsRouter = router({
       }),
     // Sugestões marca/cidade pelo NOME da campanha ("Airpark - Faro - EN") e
     // pela marca da conta — regra pura em shared/adCampaignMapping.ts.
+    // Google Ads E Meta (a mesma tabela ad_campaigns).
     // Só campanhas ainda sem marca/cidade; o Jorge confirma antes de aplicar.
     suggest: protectedProcedure.query(async ({ ctx }) => {
-      requireAdmin(ctx.user.role);
+      requireAccess(ctx.user, "marketing", "view");
       const db = await getDb();
       if (!db) return [];
       const { suggestCampaignProjects } = await import("../../../shared/adCampaignMapping");
       const { getProjects } = await import("../../db");
       const rows = await db.select({ id: adCampaigns.id, name: adCampaigns.name, projectId: adCampaigns.projectId, scope: adCampaigns.scope, accountProjectId: adAccounts.projectId })
-        .from(adCampaigns).leftJoin(adAccounts, eq(adAccounts.id, adCampaigns.accountId)).where(eq(adCampaigns.provider, GOOGLE_ADS_PROVIDER));
+        .from(adCampaigns).leftJoin(adAccounts, eq(adAccounts.id, adCampaigns.accountId)).where(inArray(adCampaigns.provider, [...SUGGEST_PROVIDERS]));
       return suggestCampaignProjects(rows, await getProjects());
     }),
     applySuggestions: protectedProcedure
       .input(z.object({ campaignIds: z.array(z.number().int().positive()).max(500).optional() }).optional())
       .mutation(async ({ ctx, input }) => {
-        requireAdmin(ctx.user.role);
+        requireAccess(ctx.user, "marketing", "manage");
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
         const { suggestCampaignProjects } = await import("../../../shared/adCampaignMapping");
         const { getProjects, logActivity } = await import("../../db");
         const rows = await db.select({ id: adCampaigns.id, name: adCampaigns.name, projectId: adCampaigns.projectId, scope: adCampaigns.scope, accountProjectId: adAccounts.projectId })
-          .from(adCampaigns).leftJoin(adAccounts, eq(adAccounts.id, adCampaigns.accountId)).where(eq(adCampaigns.provider, GOOGLE_ADS_PROVIDER));
+          .from(adCampaigns).leftJoin(adAccounts, eq(adAccounts.id, adCampaigns.accountId)).where(inArray(adCampaigns.provider, [...SUGGEST_PROVIDERS]));
         const wanted = input?.campaignIds ? new Set(input.campaignIds) : null;
         const suggestions = suggestCampaignProjects(rows, await getProjects()).filter((s) => !wanted || wanted.has(s.campaignId));
         for (const s of suggestions) {
@@ -121,7 +120,7 @@ export const googleAdsRouter = router({
           if (s.kind === "national") await db.update(adCampaigns).set({ scope: "national", projectId: null }).where(untouched);
           else await db.update(adCampaigns).set({ projectId: s.projectId, scope: "city" }).where(untouched);
         }
-        await logActivity({ userId: ctx.user.id, action: "map", entity: "ad_campaigns", details: `Marca/cidade sugerida pelo nome aplicada a ${suggestions.length} campanha(s) Google Ads` });
+        await logActivity({ userId: ctx.user.id, action: "map", entity: "ad_campaigns", details: `Marca/cidade sugerida pelo nome aplicada a ${suggestions.length} campanha(s) Google Ads/Meta` });
         return { applied: suggestions.length, suggestions };
       }),
   }),
@@ -130,18 +129,18 @@ export const googleAdsRouter = router({
     run: protectedProcedure
       .input(z.object({ kind: z.enum(["initial", "daily", "monthly", "manual", "hourly", "nightly"]).default("manual") }))
       .mutation(async ({ ctx, input }) => {
-        requireAdmin(ctx.user.role);
+        requireAccess(ctx.user, "integracoes", "edit");
         // prazo curto: no Vercel a função tem 60 s; o resultado diz se ficou parcial
         return runGoogleAdsSync({ kind: input.kind, deadlineAt: Date.now() + 40_000, triggeredById: ctx.user.id });
       }),
     runs: protectedProcedure.input(z.object({ limit: z.number().min(1).max(100).optional() }).optional()).query(async ({ ctx, input }) => {
-      requireAdmin(ctx.user.role);
+      requireAccess(ctx.user, "integracoes", "view");
       return listSyncRuns(input?.limit ?? 20);
     }),
   }),
 
   disconnect: protectedProcedure.mutation(async ({ ctx }) => {
-    requireAdmin(ctx.user.role);
+    requireAccess(ctx.user, "integracoes", "manage");
     await disconnect();
     return { success: true };
   }),
@@ -149,7 +148,7 @@ export const googleAdsRouter = router({
   backfillAttribution: protectedProcedure
     .input(z.object({ limit: z.number().min(1).max(5000).optional() }).optional())
     .mutation(async ({ ctx, input }) => {
-      requireAdmin(ctx.user.role);
+      requireAccess(ctx.user, "marketing", "manage");
       return backfillBookingAttribution(input?.limit ?? 1000);
     }),
 });

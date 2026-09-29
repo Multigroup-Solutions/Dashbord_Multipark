@@ -1,9 +1,11 @@
 import { useMemo } from "react";
+import { useIsMobile } from "@/hooks/useMobile";
 import { trpc } from "@/lib/trpc";
-import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
+import { fmtPTDate } from "@/lib/lisbonTime";
+import { addDays, lisbonDayOf } from "@shared/lisbonDay";
 import { useDashboardFilters, DashboardFilterBar } from "@/components/DashboardFilterBar";
+import { StatValue } from "@/components/StatValue";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   AreaChart,
@@ -25,28 +27,14 @@ import {
   XCircle,
   Car,
   Shield,
-  RefreshCw,
-  CheckCircle2,
-  AlertCircle,
   Loader2,
 } from "lucide-react";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const fmtNum = (n: number) => n.toLocaleString("pt-PT");
-const fmtDateTime = (d: string | null | undefined) =>
-  d ? fmtPTDateTime(d) : "—";
 
 const DONUT_COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899"];
-
-const SYNC_STATUS_MAP: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
-  success: { label: "OK", variant: "default" },
-  completed: { label: "OK", variant: "default" },
-  error: { label: "Erro", variant: "destructive" },
-  failed: { label: "Falhou", variant: "destructive" },
-  running: { label: "A correr", variant: "secondary" },
-  pending: { label: "Pendente", variant: "outline" },
-};
 
 const FLEET_STATUS_LABELS: Record<string, string> = {
   active: "Ativas",
@@ -76,19 +64,20 @@ function KPICard({
   color?: string;
 }) {
   return (
-    <Card className="relative overflow-hidden">
-      <CardContent className="pt-6">
-        <div className="flex items-start justify-between">
-          <div className="space-y-1">
-            <p className="text-sm text-muted-foreground font-medium">{label}</p>
+    <Card className="relative overflow-hidden py-0 gap-0 min-w-0">
+      <CardContent className="p-4 sm:p-5">
+        {/* Em telemóvel o ícone vai para cima: lado a lado sobravam ~70px para o valor */}
+        <div className="flex flex-col-reverse items-start gap-2 sm:flex-row sm:justify-between">
+          <div className="space-y-1 min-w-0 w-full sm:flex-1">
+            <p className="text-sm text-muted-foreground font-medium leading-snug line-clamp-2" title={label}>{label}</p>
             {loading ? (
               <Skeleton className="h-8 w-20" />
             ) : (
-              <p className="text-2xl font-bold text-foreground">{value}</p>
+              <StatValue value={value} min={18} max={24} className="text-foreground" />
             )}
           </div>
-          <div className={`h-10 w-10 rounded-xl flex items-center justify-center bg-primary/10`}>
-            <Icon className={`h-5 w-5 ${color || "text-primary"}`} />
+          <div className={`h-9 w-9 sm:h-10 sm:w-10 shrink-0 rounded-xl flex items-center justify-center bg-primary/10`}>
+            <Icon className={`h-5 w-5 ${color || "text-primary"}`} aria-hidden />
           </div>
         </div>
       </CardContent>
@@ -117,6 +106,7 @@ function ChartTooltip({ active, payload, label }: any) {
 // ─── Main Dashboard ───────────────────────────────────────────────────────────
 
 export default function OperacoesDashboard() {
+  const isMobile = useIsMobile();
   // Default date range: 30 days ago to today
   const thirtyDaysAgo = useMemo(() => {
     const d = new Date();
@@ -137,15 +127,11 @@ export default function OperacoesDashboard() {
 
   // GPS de ontem (Zello): km, velocidades e condutores — substitui os antigos
   // KPIs mortos (viaturas/violações manuais, tabelas sempre vazias)
-  const yesterdayStr = useMemo(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 1);
-    return d.toISOString().slice(0, 10);
-  }, []);
+  // Ontem no calendário de Lisboa (antes era UTC). Os dados de ontem são os da
+  // recolha provisória (23:15–23:55); a final (D-2) substitui-os 2 dias depois.
+  const yesterdayStr = useMemo(() => addDays(lisbonDayOf(Date.now()), -1), []);
   const { data: gpsYesterday = [], isLoading: gpsLoading } =
     trpc.operational.driverHistory.byDate.useQuery({ date: yesterdayStr });
-
-  const { data: syncLogs, isLoading: syncLoading } = trpc.multipark.syncLogs.useQuery();
 
   // ── Derived data ──
 
@@ -184,16 +170,10 @@ export default function OperacoesDashboard() {
     return { km, vmax, drivers, perDriver };
   }, [gpsYesterday]);
 
-  // Sync logs (last 8)
-  const recentSyncLogs = useMemo(() => {
-    if (!syncLogs?.length) return [];
-    return syncLogs.slice(0, 8);
-  }, [syncLogs]);
-
   // ── Render ──
 
   return (
-    <div className="p-4 md:p-6 space-y-6 max-w-[1400px] mx-auto">
+    <div className="space-y-6 max-w-[1400px] mx-auto">
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Dashboard Operações</h1>
@@ -215,7 +195,7 @@ export default function OperacoesDashboard() {
       />
 
       {/* KPIs */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6 gap-3 sm:gap-4">
         <KPICard
           icon={CalendarCheck}
           label="Reservas hoje"
@@ -324,14 +304,15 @@ export default function OperacoesDashboard() {
                     paddingAngle={3}
                     dataKey="value"
                     nameKey="name"
-                    label={({ name, value }) => `${name}: ${fmtNum(value)}`}
+                    label={isMobile ? false : ({ name, value }) => `${name}: ${fmtNum(value)}`}
                   >
                     {cityDonutData.map((_, i) => (
                       <Cell key={i} fill={DONUT_COLORS[i % DONUT_COLORS.length]} />
                     ))}
                   </Pie>
                   <Tooltip formatter={(v: number) => fmtNum(v)} />
-                  <Legend />
+                  {/* Em telemóvel os rótulos à volta do donut saíam do cartão — os valores vão para a legenda */}
+                  <Legend formatter={isMobile ? (v: string, e: any) => `${v}: ${fmtNum(e?.payload?.value ?? 0)}` : undefined} />
                 </PieChart>
               </ResponsiveContainer>
             )}
@@ -340,7 +321,7 @@ export default function OperacoesDashboard() {
       </div>
 
       {/* Bottom row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 gap-6">
         {/* Km por condutor — ontem (GPS Zello) */}
         <Card>
           <CardHeader>
@@ -355,21 +336,21 @@ export default function OperacoesDashboard() {
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               </div>
             ) : gpsAgg.perDriver.length === 0 ? (
-              <p className="text-muted-foreground text-center py-12">Sem dados GPS de ontem.</p>
+              <p className="text-muted-foreground text-center py-12">Sem dados GPS de ontem (a recolha provisória corre às 23:15; a final 2 dias depois).</p>
             ) : (
               <div className="space-y-1.5">
                 {gpsAgg.perDriver.map((d, i) => {
                   const maxKm = gpsAgg.perDriver[0]?.km || 1;
                   return (
                     <div key={`${d.name}-${i}`} className="flex items-center gap-2">
-                      <span className="text-xs w-36 truncate text-muted-foreground">{d.name}</span>
-                      <div className="flex-1 h-4 bg-muted rounded-full overflow-hidden">
+                      <span className="text-xs w-28 sm:w-36 shrink-0 truncate text-muted-foreground" title={d.name}>{d.name}</span>
+                      <div className="flex-1 min-w-0 h-4 bg-muted rounded-full overflow-hidden">
                         <div
                           className="h-full rounded-full bg-emerald-500"
                           style={{ width: `${(d.km / maxKm) * 100}%` }}
                         />
                       </div>
-                      <span className="text-xs font-medium w-16 text-right">{d.km} km</span>
+                      <span className="text-xs font-medium shrink-0 min-w-16 text-right tabular-nums whitespace-nowrap">{d.km.toLocaleString("pt-PT", { maximumFractionDigits: 1 })} km</span>
                     </div>
                   );
                 })}
@@ -378,68 +359,6 @@ export default function OperacoesDashboard() {
           </CardContent>
         </Card>
 
-        {/* Sync logs table */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
-              <RefreshCw className="w-4 h-4" />
-              Últimos sync logs
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {syncLoading ? (
-              <div className="space-y-3">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <Skeleton key={i} className="h-8 w-full" />
-                ))}
-              </div>
-            ) : recentSyncLogs.length === 0 ? (
-              <p className="text-muted-foreground text-center py-8">Sem registos de sincronização.</p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b text-left">
-                      <th className="pb-2 font-medium text-muted-foreground">Tipo</th>
-                      <th className="pb-2 font-medium text-muted-foreground">Estado</th>
-                      <th className="pb-2 font-medium text-muted-foreground">Registos</th>
-                      <th className="pb-2 font-medium text-muted-foreground">Data</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {recentSyncLogs.map((log: any) => {
-                      const statusInfo = SYNC_STATUS_MAP[log.status] || {
-                        label: log.status,
-                        variant: "outline" as const,
-                      };
-                      return (
-                        <tr key={log.id} className="border-b last:border-0">
-                          <td className="py-2 font-medium">{log.syncType || "—"}</td>
-                          <td className="py-2">
-                            <Badge variant={statusInfo.variant} className="text-xs">
-                              {log.status === "success" || log.status === "completed" ? (
-                                <CheckCircle2 className="w-3 h-3 mr-1" />
-                              ) : log.status === "error" || log.status === "failed" ? (
-                                <AlertCircle className="w-3 h-3 mr-1" />
-                              ) : null}
-                              {statusInfo.label}
-                            </Badge>
-                          </td>
-                          <td className="py-2 text-muted-foreground">
-                            {log.recordsProcessed != null ? fmtNum(log.recordsProcessed) : "—"}
-                          </td>
-                          <td className="py-2 text-muted-foreground text-xs">
-                            {fmtDateTime(log.startedAt)}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </CardContent>
-        </Card>
       </div>
     </div>
   );

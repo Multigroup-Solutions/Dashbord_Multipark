@@ -1,4 +1,15 @@
-import { ENV } from "./env";
+/**
+ * Transporte ANTIGO (Anthropic / OpenAI-compatível por fetch). Já não é
+ * chamado diretamente pelas funcionalidades: é o adaptador "legacy" de
+ * server/_core/ai (runAi), escolhido por AI_PROVIDER=legacy ou quando não há
+ * Gemini configurado. Ver docs/ia.md.
+ */
+import { fetchWithTimeout } from "./fetchWithTimeout";
+
+/** Prazo por omissão de uma chamada (abaixo dos 60 s do Vercel). */
+const LLM_TIMEOUT_MS = 45_000;
+/** Máximo de tokens de saída quando o chamador não diz (antes: 32768 fixos). */
+const DEFAULT_MAX_TOKENS = 4096;
 
 export type Role = "system" | "user" | "assistant" | "tool" | "function";
 
@@ -57,6 +68,10 @@ export type ToolChoice =
 
 export type InvokeParams = {
   messages: Message[];
+  /** Modelo pedido (senão LLM_MODEL / omissão do fornecedor). */
+  model?: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
   tools?: Tool[];
   toolChoice?: ToolChoice;
   tool_choice?: ToolChoice;
@@ -231,6 +246,62 @@ const resolveApiKey = () => {
 // Modelo das env vars, sem espaços/newline; fallback por provider.
 const resolveModel = (fallback: string) => (process.env.LLM_MODEL || "").trim() || fallback;
 
+/** Modelos por omissão quando LLM_MODEL não está definido. */
+export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-20250514";
+export const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
+
+/**
+ * Estado do modelo configurado (para o hub de Integrações): qual o
+ * fornecedor, que modelo vai ser usado e se é o de omissão (aviso: o de
+ * omissão pode ser retirado pelo fornecedor sem ninguém dar conta). PURA.
+ */
+export function llmModelStatus(env: Record<string, string | undefined> = process.env): {
+  provider: "anthropic" | "openai_compatible"; model: string; source: "env" | "default"; warning: string | null;
+} {
+  const anthropic = (env.LLM_API_URL || "").trim().includes("anthropic");
+  const def = anthropic ? DEFAULT_ANTHROPIC_MODEL : DEFAULT_OPENAI_MODEL;
+  const raw = (env.LLM_MODEL || "").trim();
+  const provider = anthropic ? "anthropic" as const : "openai_compatible" as const;
+  if (!raw) return { provider, model: def, source: "default", warning: "LLM_MODEL não definido — a usar o modelo por omissão do código." };
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:/@-]{1,127}$/.test(raw)) return { provider, model: raw, source: "env", warning: "LLM_MODEL tem um formato inválido (espaços ou caracteres estranhos)." };
+  if (raw === def) return { provider, model: raw, source: "env", warning: "LLM_MODEL igual ao modelo por omissão — confirma que continua disponível." };
+  return { provider, model: raw, source: "env", warning: null };
+}
+
+/**
+ * Erro do fornecedor → mensagem CURTA para a UI (nunca o corpo da resposta,
+ * que pode trazer o pedido, dados de clientes ou pistas da chave). O corpo
+ * vai só para o log do servidor, cortado. PURA (exceto o log).
+ */
+export function llmErrorMessage(status: number, bodyText: string): string {
+  let type: string | null = null;
+  try {
+    const j = JSON.parse(bodyText);
+    const t = j?.error?.type ?? j?.error?.code ?? j?.type;
+    if (typeof t === "string" && /^[a-z0-9_.-]{1,60}$/i.test(t)) type = t;
+  } catch { /* texto */ }
+  const hint = status === 401 || status === 403 ? "chave inválida ou sem permissão"
+    : status === 404 ? "modelo ou endereço inexistente (ver LLM_MODEL/LLM_API_URL)"
+    : status === 429 ? "limite de pedidos atingido"
+    : status >= 500 ? "serviço indisponível" : "pedido recusado";
+  return `Falha no serviço de IA (HTTP ${status}: ${hint}${type ? `, ${type}` : ""}).`;
+}
+
+/** Erro HTTP do fornecedor antigo: mensagem curta + estado (para retries). */
+export class LlmHttpError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+    this.name = "LlmHttpError";
+  }
+}
+
+async function failLLM(response: Response): Promise<never> {
+  // O corpo pode trazer o pedido (PII) — nunca vai para o log nem para a UI.
+  await response.text().catch(() => "");
+  console.warn(`[LLM] HTTP ${response.status}`);
+  throw new LlmHttpError(response.status, llmErrorMessage(response.status, ""));
+}
+
 const normalizeResponseFormat = ({
   responseFormat,
   response_format,
@@ -283,8 +354,8 @@ function isAnthropic(): boolean {
 
 async function invokeClaude(params: InvokeParams): Promise<InvokeResult> {
   const apiKey = resolveApiKey();
-  // Usa o LLM_MODEL (limpo) se definido; senão um Sonnet 4 válido por defeito.
-  const model = resolveModel("claude-sonnet-4-20250514");
+  // Usa o LLM_MODEL (limpo) se definido; senão o modelo por omissão (aviso no hub).
+  const model = params.model || resolveModel(DEFAULT_ANTHROPIC_MODEL);
 
   // Separate system message from user/assistant messages
   const normalized = params.messages.map(normalizeMessage);
@@ -314,6 +385,11 @@ async function invokeClaude(params: InvokeParams): Promise<InvokeResult> {
               source: { type: "url", url },
             };
           }
+          // PDF em data URI → bloco "document" do Claude (ex.: documentos do RH)
+          if (part.type === "file_url" && part.file_url?.url) {
+            const pdf = String(part.file_url.url).match(/^data:application\/pdf;base64,(.+)$/);
+            if (pdf) return { type: "document", source: { type: "base64", media_type: "application/pdf", data: pdf[1] } };
+          }
           return part;
         });
       }
@@ -321,14 +397,26 @@ async function invokeClaude(params: InvokeParams): Promise<InvokeResult> {
     }
   }
 
+  const maxTokens = params.maxTokens ?? params.max_tokens ?? DEFAULT_MAX_TOKENS;
   const payload: Record<string, unknown> = {
     model,
-    max_tokens: 4096,
+    max_tokens: Math.max(1, Math.floor(maxTokens)),
     messages: msgs,
   };
+
+  // JSON pedido: json_schema → ferramenta com esse schema (a resposta vem
+  // estruturada no tool_use); json_object → instrução "só JSON".
+  const format = normalizeResponseFormat(params);
+  const JSON_TOOL = "responder_json";
+  if (format?.type === "json_schema") {
+    payload.tools = [{ name: JSON_TOOL, description: format.json_schema.name || "Resposta estruturada", input_schema: format.json_schema.schema }];
+    payload.tool_choice = { type: "tool", name: JSON_TOOL };
+  } else if (format?.type === "json_object") {
+    system += "Responde APENAS com um objeto JSON válido, sem texto antes ou depois e sem blocos de código.\n";
+  }
   if (system.trim()) payload.system = system.trim();
 
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
+  const response = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -336,17 +424,17 @@ async function invokeClaude(params: InvokeParams): Promise<InvokeResult> {
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify(payload),
+    timeoutMs: params.timeoutMs ?? LLM_TIMEOUT_MS,
+    signal: params.signal,
   });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`);
-  }
+  if (!response.ok) await failLLM(response);
 
   const data = await response.json() as any;
 
   // Convert Anthropic response to OpenAI format
-  const textContent = data.content?.find((c: any) => c.type === "text")?.text || "";
+  const toolUse = format?.type === "json_schema" ? data.content?.find((c: any) => c.type === "tool_use" && c.name === JSON_TOOL) : null;
+  const textContent = toolUse ? JSON.stringify(toolUse.input ?? {}) : data.content?.find((c: any) => c.type === "text")?.text || "";
   return {
     id: data.id || "",
     created: Date.now(),
@@ -379,7 +467,7 @@ async function invokeOpenAI(params: InvokeParams): Promise<InvokeResult> {
     response_format,
   } = params;
 
-  const model = resolveModel("gpt-4o-mini");
+  const model = params.model || resolveModel(DEFAULT_OPENAI_MODEL);
 
   const payload: Record<string, unknown> = {
     model,
@@ -398,7 +486,7 @@ async function invokeOpenAI(params: InvokeParams): Promise<InvokeResult> {
     payload.tool_choice = normalizedToolChoice;
   }
 
-  payload.max_tokens = 32768;
+  payload.max_tokens = params.maxTokens ?? params.max_tokens ?? DEFAULT_MAX_TOKENS;
 
   const normalizedResponseFormat = normalizeResponseFormat({
     responseFormat,
@@ -411,26 +499,24 @@ async function invokeOpenAI(params: InvokeParams): Promise<InvokeResult> {
     payload.response_format = normalizedResponseFormat;
   }
 
-  const response = await fetch(apiUrl, {
+  const response = await fetchWithTimeout(apiUrl, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify(payload),
+    timeoutMs: params.timeoutMs ?? LLM_TIMEOUT_MS,
+    signal: params.signal,
   });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(
-      `LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`
-    );
-  }
+  if (!response.ok) await failLLM(response);
 
   return (await response.json()) as InvokeResult;
 }
 
-export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
+/** Só para o adaptador "legacy" de server/_core/ai/client.ts. */
+export async function invokeLegacyLLM(params: InvokeParams): Promise<InvokeResult> {
   if (isAnthropic()) {
     return invokeClaude(params);
   }

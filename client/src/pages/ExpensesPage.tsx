@@ -1,10 +1,13 @@
+import AnomalyAlerts from "@/components/aiOps/AnomalyAlerts";
+import FitAmount from "@/components/finance/FitAmount";
+import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
 import { useState, useRef, useCallback, useMemo, useEffect } from "react";
+import { can, scopeFor } from "@shared/access";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
@@ -36,8 +39,10 @@ import {
 } from "@/components/ui/table";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { SearchableSelect } from "@/components/ui/searchable-select";
-import { RecurringExpensesDialog, CompareExpensesDialog } from "@/components/ExpenseRecurringCompare";
+import { RecurringExpensesDialog, CompareExpensesDialog, CategoryVatDialog } from "@/components/ExpenseRecurringCompare";
+import ExpenseDashboard from "./ExpenseDashboard";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
 import {
   Plus,
@@ -57,14 +62,11 @@ import {
   FileDown,
   User,
   Euro,
-  CreditCard,
-  Banknote,
-  ArrowUpDown,
-  TrendingUp,
-  Wallet,
   ArrowLeftRight,
   Repeat,
   FileText,
+  MoreHorizontal,
+  Percent,
 } from "lucide-react";
 import { toast } from "sonner";
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth } from "date-fns";
@@ -140,6 +142,12 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+/** "YYYY-MM-DD HH:mm:ss" da BD → Date (Safari não aceita o espaço). */
+function parseDbDate(v: string | Date): Date {
+  if (v instanceof Date) return v;
+  return new Date(String(v).replace(" ", "T"));
+}
+
 function fmtEur(v: number | string) {
   return parseFloat(String(v || 0)).toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
 }
@@ -192,21 +200,19 @@ export default function ExpensesPage() {
   const filters = useGlobalFilters();
   const utils = trpc.useUtils();
 
+  // Lista | Resumo (o antigo /despesas/dashboard vive aqui)
+  const [tab, setTab] = useState<"lista" | "resumo">(() =>
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("tab") === "resumo" ? "resumo" : "lista");
+
   // Filters
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<string>("");
   const [filterCategory, setFilterCategory] = useState<string>("");
-  const [filterProject, setFilterProject] = useState<string>("");
   const [filterUser, setFilterUser] = useState<string>("");
 
-  // Sync global filter to local project filter
-  useEffect(() => {
-    if (filters.projectId !== undefined) {
-      setFilterProject(String(filters.projectId));
-    } else {
-      setFilterProject("");
-    }
-  }, [filters.projectId]);
+  // Centro de custos: só o filtro GLOBAL (o select local duplicava-o e
+  // sobrepunha-se a ele).
+  const projectFilterId = filters.projectId;
   // Por omissão mostra só a semana atual — o histórico completo vem por
   // pesquisa, pelo botão "Tudo" ou por datas manuais.
   const [startDate, setStartDate] = useState(() => quickRangeDates("week").start);
@@ -234,12 +240,12 @@ export default function ExpensesPage() {
   const effectiveEndDate = allHistory ? "" : endDate;
   const openDocument = useOpenExpenseDocument();
 
-  // Matriz de permissões (Jorge, 2026-08-04): backoffice/team_leader só
-  // INSEREM (modo input, sem lista/totais); supervisor vê as suas + as do
-  // seu centro de custos (filtrado no servidor); admin+ vê tudo.
+  // Matriz de acessos (shared/access.ts): condutor vê as suas; team leader
+  // as suas + as da equipa na cidade (sem totais); supervisor a cidade;
+  // front/backoffice todas; admin+ gere. O servidor filtra.
   const role = user?.role ?? "";
-  const isInputOnly = ["backoffice", "team_leader"].includes(role);
-  const canManage = ["admin", "super_admin"].includes(role);
+  const isInputOnly = ["own", "below_city"].includes(scopeFor(user, "despesas"));
+  const canManage = can(user, "despesas", "manage");
   const canDelete = role === "super_admin";
 
   // Queries
@@ -247,34 +253,35 @@ export default function ExpensesPage() {
     search: search || undefined,
     status: (filterStatus && filterStatus !== "all") ? filterStatus : undefined,
     categoryId: (filterCategory && filterCategory !== "all") ? parseInt(filterCategory) : undefined,
-    projectId: (filterProject && filterProject !== "all") ? parseInt(filterProject) : undefined,
+    projectId: projectFilterId,
     userId: (filterUser && filterUser !== "all") ? parseInt(filterUser) : undefined,
     startDate: effectiveStartDate || undefined,
     endDate: effectiveEndDate || undefined,
-  }, { enabled: !isInputOnly });
+  });
+  // Totais, comparar e resumo: só quando o servidor diz que se podem ver
+  const { data: access } = trpc.expenses.access.useQuery();
+  const showTotals = access?.canSeeTotals ?? false;
   const { data: categories } = trpc.categories.list.useQuery();
   const { data: projectsList } = trpc.projects.list.useQuery();
   const { data: employeesList } = trpc.rh.list.useQuery({});
-  const { data: usersList } = trpc.users.list.useQuery();
+  const { data: usersList } = trpc.users.list.useQuery(undefined, { enabled: canManage, retry: false });
 
   const deleteMutation = trpc.expenses.delete.useMutation({
     onSuccess: () => {
       toast.success("Despesa eliminada");
-      utils.expenses.list.invalidate();
-      utils.expenses.stats.invalidate();
+      utils.expenses.invalidate();
     },
-    onError: () => toast.error("Erro ao eliminar despesa"),
+    onError: (e) => toast.error(e.message || "Erro ao eliminar despesa"),
   });
 
   const updateMutation = trpc.expenses.update.useMutation({
     onSuccess: () => {
       toast.success("Estado atualizado");
-      utils.expenses.list.invalidate();
-      utils.expenses.stats.invalidate();
+      utils.expenses.invalidate();
     },
+    onError: (e) => toast.error(e.message),
   });
 
-  const isAdmin = canManage;
 
   // KPIs: regra única partilhada com o Excel e a comparação (canceladas fora
   // do total). Enquanto carrega ou em erro NÃO se mostra "0 €".
@@ -315,7 +322,7 @@ export default function ExpensesPage() {
       search: search || undefined,
       status: (filterStatus && filterStatus !== "all") ? filterStatus : undefined,
       categoryId: (filterCategory && filterCategory !== "all") ? parseInt(filterCategory) : undefined,
-      projectId: (filterProject && filterProject !== "all") ? parseInt(filterProject) : undefined,
+      projectId: projectFilterId,
       userId: (filterUser && filterUser !== "all") ? parseInt(filterUser) : undefined,
       startDate: effectiveStartDate || undefined,
       endDate: effectiveEndDate || undefined,
@@ -328,7 +335,6 @@ export default function ExpensesPage() {
     setSearch("");
     setFilterStatus("");
     setFilterCategory("");
-    setFilterProject("");
     setFilterUser("");
     setAllHistory(false);
     applyQuickRange("week");
@@ -336,60 +342,75 @@ export default function ExpensesPage() {
 
   const defaultWeek = quickRangeDates("week");
   const hasFilters = Boolean(
-    search || filterStatus || filterCategory || filterProject || filterUser || allHistory ||
+    search || filterStatus || filterCategory || filterUser || allHistory ||
     startDate !== defaultWeek.start || endDate !== defaultWeek.end
   );
 
   const [showRecurring, setShowRecurring] = useState(false);
   const [showCompare, setShowCompare] = useState(false);
+  const [showVat, setShowVat] = useState(false);
   // As recorrentes deixaram de ser lançadas ao abrir a página: corre no cron
   // diário (/api/cron/daily-ops) e, à mão, no diálogo "Recorrentes".
 
   return (
     <div className="space-y-6">
+      {/* Alertas (anomalias: valores fora do normal e possíveis duplicados) — quem vê as despesas da cidade */}
+      <AnomalyAlerts domain="expenses" enabled={!!user && ["city", "national"].includes(scopeFor(user as any, "despesas"))} />
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          {!isInputOnly ? (
+          {tab === "lista" ? (
             <p className="text-sm text-muted-foreground">
               {kpisReady ? `${kpis.count} despesa(s)` : isError ? "Erro a carregar" : "A carregar…"}
               {kpisReady && kpis.cancelledCount > 0 && ` (+${kpis.cancelledCount} cancelada(s))`}
-              {allHistory
-                ? " — todo o histórico"
-                : effectiveStartDate || effectiveEndDate
+              {!allHistory && (effectiveStartDate || effectiveEndDate)
                   ? ` — ${effectiveStartDate ? format(new Date(`${effectiveStartDate}T00:00:00`), "dd MMM", { locale: pt }) : "…"} a ${effectiveEndDate ? format(new Date(`${effectiveEndDate}T00:00:00`), "dd MMM", { locale: pt }) : "…"}`
                   : " — todo o histórico"}
               {selectedUserName && <> de <strong>{selectedUserName}</strong></>}
             </p>
           ) : (
-            <p className="text-sm text-muted-foreground">Registo de despesas</p>
+            <p className="text-sm text-muted-foreground">Resumo dos gastos (ano, estados, categorias e próximos pagamentos)</p>
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0 flex-wrap">
-          {canManage && (
-            <Button
-              variant="outline"
-              onClick={handleExport}
-              disabled={exportMutation.isPending}
-              className="gap-2"
-            >
-              {exportMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <FileDown className="h-4 w-4" />
-              )}
-              Exportar Excel
-            </Button>
+          {canManage && showTotals && (
+            <Tabs value={tab} onValueChange={(v) => setTab(v as "lista" | "resumo")}>
+              <TabsList>
+                <TabsTrigger value="lista">Lista</TabsTrigger>
+                <TabsTrigger value="resumo">Resumo</TabsTrigger>
+              </TabsList>
+            </Tabs>
           )}
-          {!isInputOnly && (
-            <Button variant="outline" onClick={() => setShowCompare(true)} className="gap-2">
-              <ArrowLeftRight className="h-4 w-4" /> Comparar
-            </Button>
-          )}
-          {isAdmin && (
-            <Button variant="outline" onClick={() => setShowRecurring(true)} className="gap-2">
-              <Repeat className="h-4 w-4" /> Recorrentes
-            </Button>
+          {(showTotals || canManage) && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="icon" aria-label="Mais ações" title="Mais ações">
+                  {exportMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreHorizontal className="h-4 w-4" />}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {showTotals && (
+                  <DropdownMenuItem onClick={() => setShowCompare(true)}>
+                    <ArrowLeftRight className="h-4 w-4 mr-2" /> Comparar períodos
+                  </DropdownMenuItem>
+                )}
+                {canManage && showTotals && (
+                  <DropdownMenuItem onClick={handleExport} disabled={exportMutation.isPending}>
+                    <FileDown className="h-4 w-4 mr-2" /> Exportar Excel
+                  </DropdownMenuItem>
+                )}
+                {canManage && (
+                  <DropdownMenuItem onClick={() => setShowRecurring(true)}>
+                    <Repeat className="h-4 w-4 mr-2" /> Despesas recorrentes
+                  </DropdownMenuItem>
+                )}
+                {canManage && (
+                  <DropdownMenuItem onClick={() => setShowVat(true)}>
+                    <Percent className="h-4 w-4 mr-2" /> Categorias, IVA e margem
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
           <Button onClick={() => { setEditId(null); setShowForm(true); }} className="gap-2">
             <Plus className="h-4 w-4" />
@@ -398,20 +419,18 @@ export default function ExpensesPage() {
         </div>
       </div>
 
-      {/* Modo "só input" (backoffice/team_leader): regista mas não vê nada */}
+      {/* Condutor / team leader: as SUAS despesas (e da equipa), sem totais */}
       {isInputOnly && (
-        <Card className="p-8 text-center space-y-2">
-          <Receipt className="h-10 w-10 mx-auto text-muted-foreground/40" />
-          <p className="font-medium">Regista aqui as despesas com o botão "Nova Despesa"</p>
-          <p className="text-sm text-muted-foreground">O teu perfil permite inserir despesas (com foto e extração automática); a consulta de listas e totais é reservada a supervisores e administração.</p>
-        </Card>
+        <p className="text-xs text-muted-foreground -mt-3">{scopeFor(user, "despesas") === "own" ? "As tuas despesas" : "As tuas despesas e as da tua equipa"} e o estado de cada uma. Os totais da empresa são reservados à administração.</p>
       )}
 
+      {tab === "resumo" && <ExpenseDashboard />}
+      <CategoryVatDialog open={showVat} onClose={() => setShowVat(false)} categories={categories ?? []} />
       <RecurringExpensesDialog open={showRecurring} onClose={() => setShowRecurring(false)} categories={categories ?? []} projects={projectsList ?? []} />
-      <CompareExpensesDialog open={showCompare} onClose={() => setShowCompare(false)} categories={categories ?? []} projectId={(filterProject && filterProject !== "all") ? parseInt(filterProject) : undefined} />
+      <CompareExpensesDialog open={showCompare} onClose={() => setShowCompare(false)} categories={categories ?? []} projectId={projectFilterId} />
 
       {/* KPI Cards — "—" enquanto carrega ou em erro; nunca um 0 enganador */}
-      {!isInputOnly && (
+      {showTotals && tab === "lista" && (
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4" aria-busy={isLoading}>
         {([
           { label: "Total", value: kpis.total, icon: Euro, box: "bg-primary/10", ic: "text-primary", txt: "", hint: kpis.cancelledCount > 0 ? `sem ${kpis.cancelledCount} cancelada(s) · ${fmtEur(kpis.cancelled)}` : "" },
@@ -419,16 +438,16 @@ export default function ExpensesPage() {
           { label: "Pago", value: kpis.paid, icon: CheckCircle2, box: "bg-green-100", ic: "text-green-700", txt: "text-green-700", hint: "" },
           { label: "Em Atraso", value: kpis.overdue, icon: AlertCircle, box: "bg-red-100", ic: "text-red-700", txt: "text-red-700", hint: "" },
         ] as const).map((k) => (
-          <Card key={k.label}>
+          <Card key={k.label} className="min-w-0">
             <CardContent className="pt-4 pb-3 px-4">
-              <div className="flex items-center gap-3">
-                <div className={`p-2 rounded-lg ${k.box}`}>
+              <div className="flex items-center gap-3 min-w-0">
+                <div className={`p-2 rounded-lg shrink-0 ${k.box}`}>
                   <k.icon className={`h-5 w-5 ${k.ic}`} />
                 </div>
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <p className="text-xs text-muted-foreground font-medium">{k.label}</p>
-                  <p className={`text-lg font-bold ${k.txt}`}>{kpisReady ? fmtEur(k.value) : "—"}</p>
-                  {kpisReady && k.hint && <p className="text-[11px] text-muted-foreground truncate">{k.hint}</p>}
+                  {kpisReady ? <FitAmount value={k.value} className={`text-base sm:text-lg font-bold ${k.txt}`} /> : <p className="text-base sm:text-lg font-bold">—</p>}
+                  {kpisReady && k.hint && <p className="text-[11px] text-muted-foreground truncate" title={k.hint}>{k.hint}</p>}
                 </div>
               </div>
             </CardContent>
@@ -438,21 +457,21 @@ export default function ExpensesPage() {
       )}
 
       {/* Filters */}
-      {!isInputOnly && (
+      {tab === "lista" && (
       <Card>
-        <CardContent className="pt-4">
+        <CardContent>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <div className="relative sm:col-span-2 lg:col-span-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
-                placeholder="Pesquisar fornecedor..."
+                placeholder="Pesquisar fornecedor, descrição, nº doc…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="pl-9"
               />
             </div>
             <Select value={filterStatus} onValueChange={setFilterStatus}>
-              <SelectTrigger>
+              <SelectTrigger className="w-full">
                 <SelectValue placeholder="Estado" />
               </SelectTrigger>
               <SelectContent>
@@ -464,7 +483,7 @@ export default function ExpensesPage() {
               </SelectContent>
             </Select>
             <Select value={filterCategory} onValueChange={setFilterCategory}>
-              <SelectTrigger>
+              <SelectTrigger className="w-full">
                 <SelectValue placeholder="Categoria" />
               </SelectTrigger>
               <SelectContent>
@@ -473,27 +492,10 @@ export default function ExpensesPage() {
                 ))}
               </SelectContent>
             </Select>
-            <Select value={filterProject} onValueChange={setFilterProject}>
-              <SelectTrigger>
-                <SelectValue placeholder="Centro de custos" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todos (grupo / cidade / marca / projeto)</SelectItem>
-                {sortProjectsHierarchical(projectsList ?? []).map((p: any) => (
-                  <SelectItem key={p.id} value={String(p.id)}>
-                    <span style={{ paddingLeft: `${p.__depth * 12}px` }} className="inline-flex items-center gap-2">
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded border ${LEVEL_COLOR[p.level] ?? ""}`}>
-                        {LEVEL_LABEL[p.level] ?? p.level}
-                      </span>
-                      {p.name}
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {/* User filter (who inserted) */}
+            {/* Quem inseriu — só para quem gere (users.list é admin) */}
+            {canManage && (
             <Select value={filterUser} onValueChange={setFilterUser}>
-              <SelectTrigger>
+              <SelectTrigger className="w-full">
                 <SelectValue placeholder="Inserido por" />
               </SelectTrigger>
               <SelectContent>
@@ -503,8 +505,9 @@ export default function ExpensesPage() {
                 ))}
               </SelectContent>
             </Select>
+            )}
             {/* Navegador de datas: granularidade + setas ◀ ▶ (componente transversal) */}
-            <div className="flex gap-2 items-center sm:col-span-2 lg:col-span-3 flex-wrap">
+            <div className="flex gap-2 items-center sm:col-span-2 lg:col-span-4 flex-wrap">
               <div className={allHistory ? "opacity-50 pointer-events-none" : ""}>
                 <DateRangeNav
                   start={startDate}
@@ -533,7 +536,7 @@ export default function ExpensesPage() {
       )}
 
       {/* Table */}
-      {!isInputOnly && (
+      {tab === "lista" && (
       <Card>
         <CardContent className="p-0">
           {isLoading ? (
@@ -560,8 +563,34 @@ export default function ExpensesPage() {
               )}
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <Table>
+            <>
+            {/* Telemóvel: cartões (a tabela de 10 colunas não cabe) */}
+            <ul className="sm:hidden divide-y">
+              {sortedExpenses.map((row: any) => {
+                const { expense, category, project } = row;
+                return (
+                  <li key={expense.id}>
+                    <button type="button" className="w-full text-left px-4 py-3 active:bg-muted/50" onClick={() => setDetailExpense(row)}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="font-medium line-clamp-2 break-words">{expense.supplier ?? expense.description ?? "—"}</div>
+                          <div className="text-xs text-muted-foreground line-clamp-2">
+                            {expense.expenseDate ? format(parseDbDate(expense.expenseDate), "dd MMM", { locale: pt }) : "—"}
+                            {category ? ` · ${category.name}` : ""}{project ? ` · ${project.name}` : ""}
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="font-semibold tabular-nums">{fmtEur(expense.amount)}</div>
+                          <div className="mt-1"><StatusBadge status={expense.status} /></div>
+                        </div>
+                      </div>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            <div className="hidden sm:block overflow-x-auto">
+              <Table className={STICKY_FIRST_COL}>
                 <TableHeader>
                   <TableRow>
                     <Th k="expense.supplier" label="Fornecedor" sortKey={expSortKey} sortDir={expSortDir} onToggle={expToggle} />
@@ -585,13 +614,13 @@ export default function ExpensesPage() {
                         className="group cursor-pointer hover:bg-muted/50"
                         onClick={() => setDetailExpense(row)}
                       >
-                        <TableCell>
-                          <div className="font-medium text-foreground">{expense.supplier ?? "—"}</div>
+                        <TableCell className="whitespace-normal min-w-[12rem] max-w-[16rem]">
+                          <div className="font-medium text-foreground line-clamp-2 break-words" title={expense.supplier ?? undefined}>{expense.supplier ?? "—"}</div>
                           {expense.description && (
-                            <div className="text-xs text-muted-foreground truncate max-w-[180px]">{expense.description}</div>
+                            <div className="text-xs text-muted-foreground truncate max-w-[14rem]" title={expense.description}>{expense.description}</div>
                           )}
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="whitespace-normal min-w-[8rem] max-w-[12rem]">
                           {category ? (
                             <span className="inline-flex items-center gap-1 text-xs">
                               <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: category.color ?? "#6366f1" }} />
@@ -601,19 +630,19 @@ export default function ExpensesPage() {
                         </TableCell>
                         <TableCell className="text-sm">{project?.name ?? "—"}</TableCell>
                         <TableCell className="text-sm text-muted-foreground">
-                          {expense.expenseDate ? format(new Date(expense.expenseDate), "dd MMM yyyy", { locale: pt }) : "—"}
+                          {expense.expenseDate ? format(parseDbDate(expense.expenseDate), "dd MMM yyyy", { locale: pt }) : "—"}
                         </TableCell>
                         <TableCell className="text-xs text-muted-foreground">
                           {/* A coluna ordena por vencimento; o método fica por baixo (antes o cabeçalho ordenava por data mas mostrava o método) */}
                           <div className={expense.status === "overdue" ? "text-red-600 font-medium" : ""}>
-                            {expense.paymentDueDate ? format(new Date(expense.paymentDueDate), "dd MMM yyyy", { locale: pt }) : "—"}
+                            {expense.paymentDueDate ? format(parseDbDate(expense.paymentDueDate), "dd MMM yyyy", { locale: pt }) : "—"}
                           </div>
                           <div className="text-[11px]">{PAYMENT_LABELS[expense.paymentMethod ?? ""] ?? ""}</div>
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">
                           {buyer?.fullName ?? "—"}
                         </TableCell>
-                        <TableCell className="text-right font-semibold">
+                        <TableCell className="text-right font-semibold tabular-nums">
                           {fmtEur(expense.amount)}
                         </TableCell>
                         <TableCell>
@@ -675,6 +704,7 @@ export default function ExpensesPage() {
                 </TableBody>
               </Table>
             </div>
+            </>
           )}
         </CardContent>
       </Card>
@@ -684,7 +714,7 @@ export default function ExpensesPage() {
       <ExpenseDetailSheet
         data={detailExpense}
         onClose={() => setDetailExpense(null)}
-        onEdit={(id) => { setDetailExpense(null); setEditId(id); setShowForm(true); }}
+        onEdit={canManage ? (id) => { setDetailExpense(null); setEditId(id); setShowForm(true); } : undefined}
       />
 
       {/* Form Modal */}
@@ -698,8 +728,7 @@ export default function ExpensesPage() {
           onSuccess={() => {
             setShowForm(false);
             setEditId(null);
-            utils.expenses.list.invalidate();
-            utils.expenses.stats.invalidate();
+            utils.expenses.invalidate();
           }}
         />
       )}
@@ -716,7 +745,7 @@ function ExpenseDetailSheet({
 }: {
   data: any;
   onClose: () => void;
-  onEdit: (id: number) => void;
+  onEdit?: (id: number) => void;
 }) {
   if (!data) return null;
   return (
@@ -734,14 +763,14 @@ const EVENT_LABELS: Record<string, string> = {
   document: "Comprovativo alterado", deleted: "Eliminada", approved: "Aprovada", returned: "Devolvida", submitted: "Submetida",
 };
 
-function ExpenseDetailBody({ data, onClose, onEdit }: { data: any; onClose: () => void; onEdit: (id: number) => void }) {
+function ExpenseDetailBody({ data, onClose, onEdit }: { data: any; onClose: () => void; onEdit?: (id: number) => void }) {
   const { expense, category, project, insertedBy, buyer } = data;
   const hasDoc = Boolean(expense.invoiceImageUrl || expense.invoiceImageKey);
   // URL de leitura pedida ao servidor (assinada, com a permissão do detalhe).
   const doc = trpc.expenses.documentUrl.useQuery({ id: expense.id }, { enabled: hasDoc, staleTime: 5 * 60_000 });
   const events = trpc.expenses.events.useQuery({ id: expense.id }, { staleTime: 30_000 });
   const openDocument = useOpenExpenseDocument();
-  const day = (v: string | null | undefined, fmt = "dd MMMM yyyy") => (v ? format(new Date(v), fmt, { locale: pt }) : null);
+  const day = (v: string | null | undefined, fmt = "dd MMMM yyyy") => (v ? format(parseDbDate(v), fmt, { locale: pt }) : null);
 
   return (
     <>
@@ -844,10 +873,12 @@ function ExpenseDetailBody({ data, onClose, onEdit }: { data: any; onClose: () =
         <Separator />
 
         <div className="flex gap-2">
-          <Button variant="outline" className="flex-1 gap-2" onClick={() => onEdit(expense.id)}>
-            <Pencil className="h-4 w-4" />
-            Editar
-          </Button>
+          {onEdit && (
+            <Button variant="outline" className="flex-1 gap-2" onClick={() => onEdit(expense.id)}>
+              <Pencil className="h-4 w-4" />
+              Editar
+            </Button>
+          )}
           <Button variant="outline" onClick={onClose}>Fechar</Button>
         </div>
       </div>
@@ -945,24 +976,26 @@ function ExpenseFormModal({
   });
 
   // Load existing data when editing
-  const { data: existingExpense, isLoading: loadingExisting } = trpc.expenses.byId.useQuery(
+  // Sempre fresco ao abrir: com cache, o form podia abrir com valores antigos
+  // (ex.: marcada como paga na lista) e gravá-los de volta.
+  const { data: existingExpense, isLoading: loadingExisting, isFetching: fetchingExisting } = trpc.expenses.byId.useQuery(
     { id: editId! },
-    { enabled: !!editId }
+    { enabled: !!editId, refetchOnMount: "always", staleTime: 0 }
   );
 
   // Pre-fill form when editing — em useEffect para evitar setState durante render
   const [prefilled, setPrefilled] = useState(false);
   useEffect(() => {
-    if (!editId || !existingExpense || prefilled) return;
+    if (!editId || !existingExpense || prefilled || fetchingExisting) return;
     const e = existingExpense.expense;
     setForm({
       supplier: e.supplier ?? "",
       description: e.description ?? "",
       amount: String(e.amount ?? ""),
-      currency: e.currency ?? "EUR",
+      currency: "EUR",
       paymentMethod: e.paymentMethod ?? "card",
-      expenseDate: e.expenseDate ? format(new Date(e.expenseDate), "yyyy-MM-dd") : "",
-      paymentDueDate: e.paymentDueDate ? format(new Date(e.paymentDueDate), "yyyy-MM-dd") : "",
+      expenseDate: e.expenseDate ? format(parseDbDate(e.expenseDate), "yyyy-MM-dd") : "",
+      paymentDueDate: e.paymentDueDate ? format(parseDbDate(e.paymentDueDate), "yyyy-MM-dd") : "",
       categoryId: e.categoryId ? String(e.categoryId) : "",
       projectId: e.projectId ? String(e.projectId) : "",
       buyerId: e.buyerId ? String(e.buyerId) : "",
@@ -974,11 +1007,12 @@ function ExpenseFormModal({
       supplierNif: (e as any).supplierNif ?? "",
       documentNumber: (e as any).documentNumber ?? "",
       paidBy: (e as any).paidBy ?? "",
-      paidAt: e.paidAt ? format(new Date(e.paidAt), "yyyy-MM-dd") : "",
+      paidAt: e.paidAt ? format(parseDbDate(e.paidAt), "yyyy-MM-dd") : "",
     });
-    if (e.invoiceImageUrl || e.invoiceImageKey) setPreviewUrl(e.invoiceImageUrl || `key:${e.invoiceImageKey}`);
+    // Documento gravado: abre-se pela URL assinada (a pública pode não abrir)
+    if (e.invoiceImageUrl || e.invoiceImageKey) setPreviewUrl(`key:${e.invoiceImageKey || e.invoiceImageUrl}`);
     setPrefilled(true);
-  }, [editId, existingExpense, prefilled]);
+  }, [editId, existingExpense, prefilled, fetchingExisting]);
 
   const set = (key: keyof FormData, value: string | boolean) =>
     setForm((f) => ({ ...f, [key]: value }));
@@ -1079,7 +1113,6 @@ function ExpenseFormModal({
       if (data.supplier) set("supplier", data.supplier);
       if (data.description) set("description", data.description);
       if (data.amount) set("amount", data.amount);
-      if (data.currency) set("currency", data.currency);
       if (data.paymentMethod && ["cash","card","transfer","check","other"].includes(data.paymentMethod)) {
         set("paymentMethod", data.paymentMethod);
       }
@@ -1269,7 +1302,7 @@ function ExpenseFormModal({
                     <Upload className="h-3.5 w-3.5" />
                     {previewUrl ? "Substituir" : "Carregar"}
                   </Button>
-                  {form.invoiceImageUrl && (
+                  {lastFileBase64 && (
                     <Button
                       size="sm"
                       onClick={handleExtract}
@@ -1322,7 +1355,7 @@ function ExpenseFormModal({
               />
             </div>
             <div className="space-y-1.5">
-              <Label>Valor ({form.currency}) *</Label>
+              <Label>Valor (€) *</Label>
               <Input
                 type="number"
                 step="0.01"
@@ -1352,10 +1385,11 @@ function ExpenseFormModal({
               <div className="sm:col-span-2 rounded-md border border-amber-300 bg-amber-50 text-amber-900 text-xs px-3 py-2 flex gap-2" role="alert">
                 <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
                 <span>
+                  {possibleDup.id === 0 ? <>Já existe uma despesa com o mesmo nº de documento.</> : <>
                   Possível duplicado: a despesa <strong>#{possibleDup.id}</strong>
-                  {possibleDup.supplier ? ` (${possibleDup.supplier})` : ""} de {fmtEur(possibleDup.amount)}
-                  {possibleDup.expenseDate ? ` em ${format(new Date(possibleDup.expenseDate), "dd/MM/yyyy")}` : ""}
-                  {possibleDup.documentNumber ? ` tem o mesmo nº de documento` : " usa o mesmo ficheiro"}.
+                  {possibleDup.supplier ? ` (${possibleDup.supplier})` : ""} de {fmtEur(possibleDup.amount ?? 0)}
+                  {possibleDup.expenseDate ? ` em ${format(parseDbDate(possibleDup.expenseDate), "dd/MM/yyyy")}` : ""}
+                  {possibleDup.documentNumber ? ` tem o mesmo nº de documento` : " usa o mesmo ficheiro"}.</>}
                   Confirma antes de guardar.
                 </span>
               </div>
@@ -1438,7 +1472,7 @@ function ExpenseFormModal({
                   {sortProjectsHierarchical(projects).map((p: any) => (
                     <SelectItem key={p.id} value={String(p.id)}>
                       <span style={{ paddingLeft: `${p.__depth * 12}px` }} className="inline-flex items-center gap-2">
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded border ${LEVEL_COLOR[p.level] ?? ""}`}>
+                        <span className={`text-[11px] px-1.5 py-0.5 rounded border ${LEVEL_COLOR[p.level] ?? ""}`}>
                           {LEVEL_LABEL[p.level] ?? p.level}
                         </span>
                         {p.name}

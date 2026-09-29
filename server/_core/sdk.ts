@@ -6,6 +6,7 @@ import { SignJWT, jwtVerify } from "jose";
 import type { User } from "../../drizzle/schema";
 import * as db from "../db";
 import { ENV } from "./env";
+import { shouldTouchLastSignedIn } from "./lastSignedIn";
 import type { GoogleTokenResponse, GoogleUserInfo } from "./types/oauthTypes";
 
 const isNonEmptyString = (value: unknown): value is string =>
@@ -15,7 +16,14 @@ export type SessionPayload = {
   openId: string;
   appId: string;
   name: string;
+  /** Versão da sessão (users.sessionVersion) no momento do login; ausente = 0. */
+  sv?: number;
 };
+
+/** O cookie ainda vale para a versão atual da conta? (cookies antigos sem `sv` = 0). PURA. */
+export function sessionVersionMatches(cookieVersion: number | undefined | null, userVersion: number | undefined | null): boolean {
+  return (cookieVersion ?? 0) === (userVersion ?? 0);
+}
 
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo";
@@ -103,13 +111,14 @@ class SDKServer {
    */
   async createSessionToken(
     openId: string,
-    options: { expiresInMs?: number; name?: string } = {}
+    options: { expiresInMs?: number; name?: string; sessionVersion?: number } = {}
   ): Promise<string> {
     return this.signSession(
       {
         openId,
         appId: ENV.appId,
         name: options.name || "",
+        sv: options.sessionVersion ?? 0,
       },
       options
     );
@@ -128,6 +137,7 @@ class SDKServer {
       openId: payload.openId,
       appId: payload.appId,
       name: payload.name,
+      sv: payload.sv ?? 0,
     })
       .setProtectedHeader({ alg: "HS256", typ: "JWT" })
       .setExpirationTime(expirationSeconds)
@@ -136,7 +146,7 @@ class SDKServer {
 
   async verifySession(
     cookieValue: string | undefined | null
-  ): Promise<{ openId: string; appId: string; name: string } | null> {
+  ): Promise<{ openId: string; appId: string; name: string; sv: number } | null> {
     if (!cookieValue) return null;
 
     try {
@@ -144,13 +154,14 @@ class SDKServer {
       const { payload } = await jwtVerify(cookieValue, secretKey, {
         algorithms: ["HS256"],
       });
-      const { openId, appId, name } = payload as Record<string, unknown>;
+      const { openId, appId, name, sv } = payload as Record<string, unknown>;
 
       if (!isNonEmptyString(openId) || !isNonEmptyString(appId) || !isNonEmptyString(name)) {
         return null;
       }
 
-      return { openId, appId, name };
+      const version = typeof sv === "number" && Number.isInteger(sv) && sv >= 0 ? sv : 0;
+      return { openId, appId, name, sv: version };
     } catch {
       return null;
     }
@@ -178,10 +189,19 @@ class SDKServer {
       throw ForbiddenError(ACCESS_DENIED_MSG);
     }
 
-    await db.upsertUser({
-      openId: user.openId,
-      lastSignedIn: new Date().toISOString().slice(0, 19).replace("T", " "),
-    });
+    // "Terminar todas as sessões" sobe users.sessionVersion: os cookies
+    // emitidos antes deixam de valer (sessão inválida → volta ao login).
+    if (!sessionVersionMatches(session.sv, (user as { sessionVersion?: number }).sessionVersion)) {
+      throw ForbiddenError("Invalid session cookie");
+    }
+
+    // No máximo uma escrita a cada 5 min (antes: um UPDATE por pedido).
+    if (shouldTouchLastSignedIn(user.lastSignedIn)) {
+      await db.upsertUser({
+        openId: user.openId,
+        lastSignedIn: new Date().toISOString().slice(0, 19).replace("T", " "),
+      });
+    }
 
     return user;
   }

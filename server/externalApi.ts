@@ -2,20 +2,17 @@
  * External REST API endpoints for device integration (Zilo GPS, radios, etc.)
  * Authentication via X-API-Key header
  */
-import { Router, Request, Response, NextFunction } from "express";
-import { eq, and } from "drizzle-orm";
+import { Router, Request, Response } from "express";
+import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { apiKeys, vehicles, speedAlerts, vehicleMovements, radioTranscriptions } from "../drizzle/schema";
-import { notifyOwner } from "./_core/notification";
-import { transcribeAudio } from "./_core/voiceTranscription";
-import { invokeLLM } from "./_core/llm";
+import { vehicles } from "../drizzle/schema";
+import { apiKeyMiddleware, logApiKeyAction } from "./apiKeyAuth";
 import {
   getVehicles,
   getAllEmployees,
   createSpeedAlert,
   createVehicleMovement,
   createRadioTranscription,
-  logActivity,
   createGoogleReview,
   createIncident,
   getReviewBySourceEmailId,
@@ -32,34 +29,14 @@ async function getDb() {
 }
 
 // ─── API KEY MIDDLEWARE ──────────────────────────────────────────────────────
-
-async function validateApiKey(req: Request, res: Response, next: NextFunction) {
-  const key = req.headers["x-api-key"] as string;
-  if (!key) {
-    res.status(401).json({ error: "Missing X-API-Key header" });
-    return;
-  }
-  const db = await getDb();
-  if (!db) {
-    res.status(500).json({ error: "Database unavailable" });
-    return;
-  }
-  const result = await db.select().from(apiKeys).where(and(eq(apiKeys.apiKey, key), eq(apiKeys.active, 1))).limit(1);
-  if (result.length === 0) {
-    res.status(403).json({ error: "Invalid or inactive API key" });
-    return;
-  }
-  // Update last used
-  await db.update(apiKeys).set({ lastUsedAt: new Date().toISOString().slice(0, 19).replace("T", " ") }).where(eq(apiKeys.id, result[0].id));
-  (req as any).apiKeyInfo = result[0];
-  next();
-}
+// Autenticação por hash + scopes (GET=read, escrita=write; chaves "device"
+// cobrem ambos) — ver server/apiKeyAuth.ts.
 
 // ─── ROUTER ──────────────────────────────────────────────────────────────────
 
 export function createExternalApiRouter(): Router {
   const r = Router();
-  r.use(validateApiKey);
+  r.use(apiKeyMiddleware("external"));
 
   // ─── GET /api/external/vehicles ────────────────────────────────────────────
   r.get("/vehicles", async (_req: Request, res: Response) => {
@@ -116,16 +93,19 @@ export function createExternalApiRouter(): Router {
         roadName: roadName ?? null,
       });
 
-      // Notify super admin
+      // Aviso `speed_alert` (chefias da cidade do condutor + quem vê todas).
       const plateLabel = plate || `Viatura #${resolvedVehicleId}`;
-      await notifyOwner({
-        title: "⚠️ Alerta de Velocidade (GPS)",
-        content: `${plateLabel} a ${speed} km/h (limite: ${speedLimit} km/h)${roadName ? " em " + roadName : ""}. Excesso: +${speed - speedLimit} km/h.`,
+      const { notify } = await import("./notify");
+      await notify({
+        kind: "speed_alert", employeeId: employeeId ?? null,
+        title: "Alerta de Velocidade (GPS)",
+        body: `${plateLabel} a ${speed} km/h (limite: ${speedLimit} km/h)${roadName ? " em " + roadName : ""}. Excesso: +${speed - speedLimit} km/h.`,
+        link: "/operacional", entity: { type: "speed_alert", id },
       });
 
-      await logActivity({ userId: 0, action: "create", entity: "speed_alert", entityId: id, details: `[API] ${speed}km/h (limite ${speedLimit}km/h) - ${plateLabel}` });
+      await logApiKeyAction(req, { action: "create", entity: "speed_alert", entityId: id, details: `${speed}km/h (limite ${speedLimit}km/h) - ${plateLabel}` });
 
-      res.json({ success: true, id, message: "Speed alert registered and admin notified" });
+      res.json({ success: true, id, message: "Speed alert registered and team notified" });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -165,7 +145,7 @@ export function createExternalApiRouter(): Router {
         notes: notes ?? null,
       });
 
-      await logActivity({ userId: 0, action: "create", entity: "vehicle_movement", entityId: id, details: `[API] ${type} viatura ${plate || "#" + resolvedVehicleId}` });
+      await logApiKeyAction(req, { action: "create", entity: "vehicle_movement", entityId: id, details: `${type} viatura ${plate || "#" + resolvedVehicleId}` });
 
       res.json({ success: true, id, message: "Vehicle movement registered" });
     } catch (e: any) {
@@ -184,30 +164,22 @@ export function createExternalApiRouter(): Router {
         return;
       }
 
-      // Transcribe
-      const result = await transcribeAudio({ audioUrl, language: "pt" });
-      if ("error" in result) {
-        res.status(500).json({ error: `Transcription failed: ${result.error}` });
+      // Transcrição (IA) + resumo best-effort
+      let result: { transcription: string; summary: string };
+      try {
+        const { transcribeAndSummarizeRadio } = await import("./radioAi");
+        result = await transcribeAndSummarizeRadio(String(audioUrl));
+      } catch (err) {
+        const { aiUserMessage, isAiError } = await import("./_core/ai/errors");
+        const code = isAiError(err) && ["disabled", "not_configured", "budget"].includes(err.code) ? 503 : 502;
+        res.status(code).json({ error: aiUserMessage(err) });
         return;
       }
-
-      // Generate summary with LLM
-      let summaryText = "";
-      try {
-        const summary = await invokeLLM({
-          messages: [
-            { role: "system", content: "Resume a seguinte transcrição de rádio em 1-2 frases curtas em português. Foca nos pontos operacionais relevantes." },
-            { role: "user", content: result.text },
-          ],
-        });
-        summaryText = typeof summary.choices[0].message.content === "string" ? summary.choices[0].message.content : "";
-      } catch {
-        summaryText = "";
-      }
+      const summaryText = result.summary;
 
       const id = await createRadioTranscription({
         audioUrl,
-        transcription: result.text,
+        transcription: result.transcription,
         summary: summaryText,
         employeeId: employeeId ? Number(employeeId) : null,
         vehicleId: vehicleId ? Number(vehicleId) : null,
@@ -216,9 +188,9 @@ export function createExternalApiRouter(): Router {
         createdById: null,
       });
 
-      await logActivity({ userId: 0, action: "create", entity: "radio_transcription", entityId: id, details: `[API] Transcrição automática` });
+      await logApiKeyAction(req, { action: "create", entity: "radio_transcription", entityId: id, details: "Transcrição automática" });
 
-      res.json({ success: true, id, transcription: result.text, summary: summaryText });
+      res.json({ success: true, id, transcription: result.transcription, summary: summaryText });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -229,7 +201,7 @@ export function createExternalApiRouter(): Router {
     res.json({
       title: "Dashboard Multipark External API",
       version: "1.0",
-      auth: "Header X-API-Key required on all endpoints",
+      auth: "Header X-API-Key required on all endpoints. Scopes: GET = read; POST = write (device keys: both).",
       endpoints: [
         {
           method: "GET", path: "/api/external/vehicles",
@@ -266,8 +238,9 @@ export function createExternalApiRouter(): Router {
   });
 
   // ─── GMAIL IMPORT (receives pre-parsed data from external scheduled task) ─
-  r.post("/gmail-import", validateApiKey, async (req: Request, res: Response) => {
+  r.post("/gmail-import", async (req: Request, res: Response) => {
     try {
+      const importStarted = Date.now();
       const { occurrences, reviews } = req.body;
       const result = { reviewsImported: 0, reviewsSkipped: 0, incidentsImported: 0, incidentsSkipped: 0, details: [] as string[], errors: [] as string[] };
 
@@ -324,17 +297,13 @@ export function createExternalApiRouter(): Router {
             // Generate AI response if we have LLM access
             if (id && rev.aiResponse) {
               await updateGoogleReview(id, { aiResponse: rev.aiResponse, status: "ai_responded" });
-            } else if (id) {
+            } else if (id && Date.now() - importStarted < 30_000) {
+              // Rascunho IA best-effort, dentro de um orçamento de tempo (60 s do Vercel).
               try {
-                const llmResp = await invokeLLM({
-                  messages: [
-                    { role: "system", content: "\u00c9s o gestor de atendimento ao cliente de um parque de estacionamento premium. Responde a avalia\u00e7\u00f5es do Google de forma natural, calorosa e profissional em portugu\u00eas. M\u00e1ximo 3 frases." },
-                    { role: "user", content: `Avalia\u00e7\u00e3o de ${rev.rating} estrelas de ${rev.reviewerName}: "${rev.reviewText}". Gera uma resposta.` },
-                  ],
-                });
-                const aiText = typeof llmResp.choices[0].message.content === "string" ? llmResp.choices[0].message.content : "";
+                const { draftReviewReply } = await import("./_core/ai/reviewReply");
+                const aiText = await draftReviewReply({ rating: rev.rating || 5, reviewerName: rev.reviewerName, reviewText: rev.reviewText || "" }, { reviewId: id, timeoutMs: 12_000 });
                 if (aiText) await updateGoogleReview(id, { aiResponse: aiText, status: "ai_responded" });
-              } catch { /* LLM optional */ }
+              } catch { /* IA opcional */ }
             }
             result.reviewsImported++;
             result.details.push(`Cr\u00edtica: ${rev.rating}\u2605 de ${rev.reviewerName}`);
@@ -344,6 +313,8 @@ export function createExternalApiRouter(): Router {
         }
       }
 
+      await logApiKeyAction(req, { action: "import", entity: "gmail_import", asKeyEvent: true,
+        details: `Gmail import: ${result.incidentsImported} ocorrências, ${result.reviewsImported} críticas (${result.errors.length} erros)` });
       res.json({ success: true, ...result });
     } catch (err: any) {
       console.error("[GmailImport] Error:", err);

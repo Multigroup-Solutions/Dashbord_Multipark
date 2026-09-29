@@ -37,10 +37,11 @@ describe("rhAccess — permissões por finalidade", () => {
   const other = { id: 99, projectId: 11 };
   const outside = { id: 98, projectId: 50 };
 
-  it("frontoffice vê a lista operacional mas não documentos nem dados sensíveis de terceiros", () => {
+  // Modelo de acessos: frontoffice = backoffice (nacional) sem Permissões.
+  it("frontoffice (nacional) vê fichas e documentos de terceiros, mas não o salário", () => {
     expect(canViewEmployee(front, other)).toBe(true);
     expect(canViewSensitive(front, other)).toBe(false);
-    expect(canViewDocuments(front, other)).toBe(false);
+    expect(canViewDocuments(front, other)).toBe(true);
     expect(canViewDocuments(front, { id: 20, projectId: null })).toBe(true);   // os próprios
   });
   it("supervisor só no seu centro; extra só o próprio (incl. horário e ponto)", () => {
@@ -54,9 +55,12 @@ describe("rhAccess — permissões por finalidade", () => {
   });
   it("sanitize retira NIF/NIB/morada/salário para quem não pode ver", () => {
     const emp = { id: 99, projectId: 11, fullName: "X", nif: "123", nib: "PT50", address: "Rua", birthDate: "1990-01-01", monthlySalary: "1000", phone: "9" };
-    const s = sanitizeEmployee(front, emp);
+    const s = sanitizeEmployee(extra, emp);
     expect(s.nif).toBeNull(); expect(s.nib).toBeNull(); expect(s.address).toBeNull(); expect(s.monthlySalary).toBeNull();
     expect(s.phone).toBe("9"); expect(s.fullName).toBe("X");
+    // frontoffice (nacional): dados pessoais sim, salário não
+    expect(sanitizeEmployee(front, emp).nif).toBe("123");
+    expect(sanitizeEmployee(front, emp).monthlySalary).toBeNull();
     expect(sanitizeEmployee(admin, emp).nif).toBe("123");
     const rows = sanitizeEmployeeRows(sup, [{ employee: emp }, { employee: { ...emp, id: 98, projectId: 50 } }]);
     expect(rows).toHaveLength(1);
@@ -96,15 +100,33 @@ describe("rhAccess — dados pessoais vs contratuais", () => {
     expect(canEditPersonal(extra, driverInCenter)).toBe(false);
   });
 
-  it("team_leader, supervisor e frontoffice: só o seu centro de custos", () => {
-    for (const v of [tl, sup, front]) {
-      expect(canEditPersonal(v, driverInCenter)).toBe(v !== front);   // 101 só está no scope de tl/sup
-      expect(canEditPersonal(v, noAccount)).toBe(true);               // 100 está em todos
+  it("team_leader e supervisor: só o seu centro de custos; frontoffice: nacional", () => {
+    for (const v of [tl, sup]) {
+      expect(canEditPersonal(v, driverInCenter)).toBe(true);
+      expect(canEditPersonal(v, noAccount)).toBe(true);
       expect(canEditPersonal(v, driverOutside)).toBe(false);
       expect(canEditContract(v, noAccount)).toBe(false);
       expect(canViewDocuments(v, noAccount)).toBe(true);
       expect(canViewDocuments(v, driverOutside)).toBe(false);
     }
+    expect(canEditPersonal(front, driverOutside)).toBe(true);
+    expect(canEditContract(front, driverOutside)).toBe(false);
+  });
+
+  it("team_leader: só quem está ABAIXO dele (utilizadores, extras, condutores)", () => {
+    const tlFile = { id: 903, projectId: 100, role: "team_leader" };
+    const supFile = { id: 904, projectId: 100, role: "supervisor" };
+    const condutorFile = { id: 905, projectId: 100, role: "condutor" };
+    const staffNoAccount = { id: 906, projectId: 100, role: null, position: "backoffice" };
+    const driverNoAccount = { id: 907, projectId: 100, role: null, position: "driver" };
+    expect(canEditPersonal(tl, condutorFile)).toBe(true);
+    expect(canEditPersonal(tl, tlFile)).toBe(false);
+    expect(canEditPersonal(tl, supFile)).toBe(false);
+    expect(canViewEmployee(tl, supFile)).toBe(false);
+    expect(canEditPersonal(tl, staffNoAccount)).toBe(false);
+    expect(canEditPersonal(tl, driverNoAccount)).toBe(true);
+    // o supervisor vê o centro todo (menos admins)
+    expect(canEditPersonal(sup, tlFile)).toBe(true);
   });
 
   it("backoffice: todos os centros, nunca fichas de admin/super_admin", () => {
@@ -150,8 +172,8 @@ describe("rhAccess — dados pessoais vs contratuais", () => {
     const asBack = sanitizeEmployee(back, emp, "user");
     expect(asBack.nif).toBe("123"); expect(asBack.address).toBe("Rua");
     expect(asBack.monthlySalary).toBeNull(); expect(asBack.deactivationReason).toBeNull();
-    const asFrontOutside = sanitizeEmployee(front, emp, "user");
-    expect(asFrontOutside.nif).toBeNull(); expect(asFrontOutside.phone).toBe("9");
+    const asTlOutside = sanitizeEmployee(tl, { ...emp, projectId: 200 }, "user");
+    expect(asTlOutside.nif).toBeNull(); expect(asTlOutside.phone).toBe("9");
     const adminEmp = { ...emp, id: 20, projectId: 100 };
     expect(sanitizeEmployee(back, adminEmp, "admin").nif).toBeNull();
     expect(sanitizeEmployee(admin, { ...emp, id: 10 }, "super_admin").nif).toBeNull();

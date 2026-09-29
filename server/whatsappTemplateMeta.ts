@@ -19,12 +19,17 @@
  */
 
 import { resolveBodyParamRoles, type TemplateBodyRoles } from "../shared/whatsappTemplate";
+import { fetchWithTimeout } from "./_core/fetchWithTimeout";
+import { META_DEFAULT_API_VERSION } from "./integrations/meta/config";
+import { isWhatsappTokenError, recordWhatsappAuthError } from "./integrations/whatsappConnection";
 
 const GRAPH_BASE = "https://graph.facebook.com";
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
 function apiVersion(): string {
-  return process.env.WHATSAPP_API_VERSION || "v21.0";
+  const v = process.env.WHATSAPP_API_VERSION?.trim();
+  if (!v) return META_DEFAULT_API_VERSION;
+  return v.startsWith("v") ? v : `v${v}`;
 }
 
 // ─── Tipos ──────────────────────────────────────────────────────────────────
@@ -316,9 +321,10 @@ async function resolveWabaId(token: string): Promise<{ id: string } | { error: s
   let value: { id: string } | { error: string };
   try {
     const url = `${GRAPH_BASE}/${apiVersion()}/debug_token?input_token=${encodeURIComponent(token)}`;
-    const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const resp = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${token}` } });
     const payload = (await resp.json().catch(() => ({}))) as any;
     if (!resp.ok) {
+      if (isWhatsappTokenError(Number(payload?.error?.code))) await recordWhatsappAuthError(String(payload?.error?.message ?? "token"));
       value = { error: `não foi possível ler o token (HTTP ${resp.status}: ${payload?.error?.message ?? "sem detalhe"})` };
     } else {
       const ids = wabaIdsFromDebugToken(payload);
@@ -358,9 +364,10 @@ export async function getTemplateMeta(name: string, language: string): Promise<T
       const url =
         `${GRAPH_BASE}/${apiVersion()}/${waba.id}/message_templates` +
         `?name=${encodeURIComponent(name)}&limit=50`;
-      const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      const resp = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${token}` } });
       const payload = (await resp.json().catch(() => ({}))) as any;
       if (!resp.ok) {
+        if (isWhatsappTokenError(Number(payload?.error?.code))) await recordWhatsappAuthError(String(payload?.error?.message ?? "token"));
         const detail = payload?.error?.message ?? `HTTP ${resp.status}`;
         // 200 = permissão em falta no token (whatsapp_business_management).
         const hint =

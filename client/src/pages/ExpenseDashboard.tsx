@@ -25,14 +25,22 @@ import {
   CheckCircle2,
   Euro,
   Loader2,
-  Bell,
 } from "lucide-react";
 import { format } from "date-fns";
 import { pt } from "date-fns/locale";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { toast } from "sonner";
+import FitAmount from "@/components/finance/FitAmount";
+import { AXIS_TICK, CHART_TOOLTIP_ITEM, CHART_TOOLTIP_STYLE, eurAxis, eurFull } from "@/lib/financeFormat";
 
-const COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#06b6d4"];
+// Cores com significado: pendente = âmbar, em atraso = vermelho, pago = verde
+const STATUS_COLOR: Record<string, string> = {
+  Pendente: "var(--chart-4)",
+  "Em atraso": "var(--destructive)",
+  Pago: "var(--chart-2)",
+};
+
+/** Nome curto para o eixo (o nome completo aparece na tooltip). */
+const shortName = (s: string) => (s.length > 18 ? `${s.slice(0, 17)}…` : s);
 
 function StatCard({
   title,
@@ -43,22 +51,22 @@ function StatCard({
   color = "primary",
 }: {
   title: string;
-  value: string;
+  value: number;
   subtitle?: string;
   icon: any;
   trend?: "up" | "down" | "neutral";
   color?: string;
 }) {
   return (
-    <Card className="relative overflow-hidden">
+    <Card className="relative overflow-hidden min-w-0">
       <CardContent className="pt-6">
-        <div className="flex items-start justify-between">
-          <div className="space-y-1">
+        <div className="flex items-start justify-between gap-3">
+          <div className="space-y-1 min-w-0 flex-1">
             <p className="text-sm text-muted-foreground font-medium">{title}</p>
-            <p className="text-2xl font-bold text-foreground">{value}</p>
+            <FitAmount value={value} className="text-xl xl:text-2xl font-bold text-foreground" />
             {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
           </div>
-          <div className={`h-10 w-10 rounded-xl flex items-center justify-center bg-primary/10`}>
+          <div className={`h-10 w-10 shrink-0 rounded-xl flex items-center justify-center bg-primary/10`}>
             <Icon className="h-5 w-5 text-primary" />
           </div>
         </div>
@@ -79,22 +87,12 @@ function StatCard({
 export default function ExpenseDashboard() {
   const { projectId } = useGlobalFilters();
   const { user } = useAuth();
-  const utils = trpc.useUtils();
 
   // stats/upcomingPayments são admin-only no servidor — não chamar sem permissão
   const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
   const { data: stats, isLoading: statsLoading } = trpc.expenses.stats.useQuery({ projectId }, { enabled: isAdmin });
   const { data: upcoming, isLoading: upcomingLoading } = trpc.expenses.upcomingPayments.useQuery({ projectId }, { enabled: isAdmin });
 
-  const checkOverdueMutation = trpc.expenses.checkOverdue.useMutation({
-    onSuccess: (data) => {
-      toast.success(`${data.updated} despesa(s) marcadas como em atraso`);
-      utils.expenses.stats.invalidate();
-    },
-    onError: () => toast.error("Erro ao verificar despesas em atraso"),
-  });
-
-  const isSuperAdmin = user?.role === "super_admin";
 
   if (!isAdmin) {
     return (
@@ -115,12 +113,13 @@ export default function ExpenseDashboard() {
   const totalAmount = (stats?.yearly?.total ?? 0);
   const pendingAmount = stats?.pending?.total ?? 0;
   const overdueAmount = stats?.overdue?.total ?? 0;
-  const paidAmount = (totalAmount - pendingAmount - overdueAmount);
+  // Pago = soma real das pagas este ano (antes era total − pendentes de sempre, podia dar negativo)
+  const paidAmount = stats?.paidYear?.total ?? 0;
 
   const statusData = [
     { name: "Pendente", value: pendingAmount, count: stats?.pending?.count ?? 0 },
     { name: "Em atraso", value: overdueAmount, count: stats?.overdue?.count ?? 0 },
-    { name: "Pago", value: Math.max(0, paidAmount), count: 0 },
+    { name: "Pago", value: paidAmount, count: stats?.paidYear?.count ?? 0 },
   ].filter(s => s.value > 0);
 
   const categoryData = (stats?.byCategory ?? []).map((c: any) => ({
@@ -141,44 +140,29 @@ export default function ExpenseDashboard() {
         <div>
           <p className="text-sm text-muted-foreground">Visão geral dos gastos da empresa</p>
         </div>
-        {isSuperAdmin && (
-          <Button
-            variant="outline"
-            onClick={() => checkOverdueMutation.mutate()}
-            disabled={checkOverdueMutation.isPending}
-            className="gap-2 shrink-0"
-          >
-            {checkOverdueMutation.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Bell className="h-4 w-4" />
-            )}
-            Verificar Atrasos
-          </Button>
-        )}
       </div>
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
-          title="Total de Despesas"
-          value={totalAmount.toLocaleString("pt-PT", { style: "currency", currency: "EUR" })}
+          title="Total este ano"
+          value={Number(totalAmount)}
           subtitle={`${stats?.yearly?.count ?? 0} registos`}
           icon={Euro}
         />
         <StatCard
-          title="Pendente"
-          value={parseFloat(String(pendingAmount)).toLocaleString("pt-PT", { style: "currency", currency: "EUR" })}
+          title="Pendente (tudo)"
+          value={parseFloat(String(pendingAmount))}
           icon={Clock}
         />
         <StatCard
-          title="Em Atraso"
-          value={parseFloat(String(overdueAmount)).toLocaleString("pt-PT", { style: "currency", currency: "EUR" })}
+          title="Em atraso (tudo)"
+          value={parseFloat(String(overdueAmount))}
           icon={AlertCircle}
         />
         <StatCard
-          title="Pago"
-          value={parseFloat(String(paidAmount)).toLocaleString("pt-PT", { style: "currency", currency: "EUR" })}
+          title="Pago este ano"
+          value={parseFloat(String(paidAmount))}
           icon={CheckCircle2}
         />
       </div>
@@ -198,14 +182,16 @@ export default function ExpenseDashboard() {
             ) : (
               <ResponsiveContainer width="100%" height={240}>
                 <BarChart data={monthlyData} margin={{ top: 4, right: 4, left: 0, bottom: 4 }} style={{ background: "transparent" }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="month" tick={{ fontSize: 12, fill: "#64748b" }} />
-                  <YAxis tick={{ fontSize: 12, fill: "#64748b" }} tickFormatter={(v) => `${v}€`} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <XAxis dataKey="month" tick={AXIS_TICK} interval="preserveStartEnd" minTickGap={8} />
+                  <YAxis tick={AXIS_TICK} tickFormatter={eurAxis} width={68} />
                   <Tooltip
-                    formatter={(v: any) => [parseFloat(v).toLocaleString("pt-PT", { style: "currency", currency: "EUR" }), "Total"]}
-                    contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "8px" }}
+                    formatter={(v: any) => [eurFull(v), "Total"]}
+                    contentStyle={CHART_TOOLTIP_STYLE}
+                    itemStyle={CHART_TOOLTIP_ITEM}
+                    cursor={{ fill: "var(--muted)" }}
                   />
-                  <Bar dataKey="total" fill="#6366f1" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="total" fill="var(--chart-1)" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             )}
@@ -234,15 +220,16 @@ export default function ExpenseDashboard() {
                     paddingAngle={3}
                     dataKey="value"
                   >
-                    {statusData.map((_: any, i: number) => (
-                      <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                    {statusData.map((s) => (
+                      <Cell key={s.name} fill={STATUS_COLOR[s.name] ?? "var(--chart-1)"} />
                     ))}
                   </Pie>
                   <Tooltip
-                    formatter={(v: any) => [parseFloat(v).toLocaleString("pt-PT", { style: "currency", currency: "EUR" })]}
-                    contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px" }}
+                    formatter={(v: any, name: any) => [eurFull(v), name]}
+                    contentStyle={CHART_TOOLTIP_STYLE}
+                    itemStyle={CHART_TOOLTIP_ITEM}
                   />
-                  <Legend iconSize={10} wrapperStyle={{ fontSize: "12px" }} />
+                  <Legend iconSize={10} wrapperStyle={{ fontSize: "12px" }} formatter={(v) => <span className="text-foreground">{v}</span>} />
                 </PieChart>
               </ResponsiveContainer>
             )}
@@ -254,19 +241,21 @@ export default function ExpenseDashboard() {
       {categoryData.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base font-semibold">Despesas por Categoria</CardTitle>
+            <CardTitle className="text-base font-semibold">Despesas por categoria — este mês</CardTitle>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={categoryData} layout="vertical" margin={{ top: 4, right: 16, left: 80, bottom: 4 }} style={{ background: "transparent" }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
-                <XAxis type="number" tick={{ fontSize: 12, fill: "#64748b" }} tickFormatter={(v) => `${v}€`} />
-                <YAxis type="category" dataKey="name" tick={{ fontSize: 12, fill: "#64748b" }} width={80} />
+            <ResponsiveContainer width="100%" height={Math.max(160, categoryData.length * 30 + 40)}>
+              <BarChart data={categoryData} layout="vertical" margin={{ top: 4, right: 16, left: 0, bottom: 4 }} style={{ background: "transparent" }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={false} />
+                <XAxis type="number" tick={AXIS_TICK} tickFormatter={eurAxis} />
+                <YAxis type="category" dataKey="name" tick={AXIS_TICK} width={128} interval={0} tickFormatter={shortName} />
                 <Tooltip
-                  formatter={(v: any) => [parseFloat(v).toLocaleString("pt-PT", { style: "currency", currency: "EUR" }), "Total"]}
-                  contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "8px" }}
+                  formatter={(v: any) => [eurFull(v), "Total"]}
+                  contentStyle={CHART_TOOLTIP_STYLE}
+                  itemStyle={CHART_TOOLTIP_ITEM}
+                  cursor={{ fill: "var(--muted)" }}
                 />
-                <Bar dataKey="total" fill="#f59e0b" radius={[0, 4, 4, 0]} />
+                <Bar dataKey="total" fill="var(--chart-1)" radius={[0, 4, 4, 0]} maxBarSize={22} />
               </BarChart>
             </ResponsiveContainer>
           </CardContent>
@@ -297,15 +286,15 @@ export default function ExpenseDashboard() {
                   (new Date(expense.paymentDueDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
                 );
                 return (
-                  <div key={expense.id} className="flex items-center justify-between p-3 rounded-lg bg-muted/50 border">
+                  <div key={expense.id} className="flex items-center justify-between gap-3 p-3 rounded-lg bg-muted/50 border">
                     <div className="flex-1 min-w-0">
                       <p className="font-medium text-sm text-foreground truncate">{expense.supplier ?? "Sem fornecedor"}</p>
                       <p className="text-xs text-muted-foreground mt-0.5">
                         {project?.name ?? "Sem projeto"} · Vence em {format(new Date(expense.paymentDueDate), "dd MMM", { locale: pt })}
                       </p>
                     </div>
-                    <div className="flex items-center gap-3 shrink-0 ml-4">
-                      <span className="font-semibold text-sm">
+                    <div className="flex flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-3 shrink-0">
+                      <span className="font-semibold text-sm tabular-nums">
                         {parseFloat(String(expense.amount)).toLocaleString("pt-PT", { style: "currency", currency: "EUR" })}
                       </span>
                       <Badge

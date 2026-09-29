@@ -62,14 +62,6 @@ export function partnerScope(partnerId: SQLWrapper): SQL {
         AND city_alias.aliasValue = city_booking.campaign))))`;
 }
 
-export function campaignScope(type: SQLWrapper, id: SQLWrapper): SQL {
-  if (scopedProjectIds() === undefined) return sql`1 = 1`;
-  return sql`((${type} = 'internal' AND EXISTS (SELECT 1 FROM internal_campaigns city_campaign
-    WHERE city_campaign.id = ${id} AND ${projectScope(sql`city_campaign.projectId`)}))
-    OR (${type} = 'ad' AND EXISTS (SELECT 1 FROM campaigns city_campaign
-    WHERE city_campaign.id = ${id} AND ${projectScope(sql`city_campaign.projectId`)})))`;
-}
-
 export function requireGlobalCityAccess(): void {
   if (scopedProjectIds() !== undefined) throw new TRPCError({ code: 'FORBIDDEN',
     message: 'Esta operação abrange várias cidades e exige acesso global.' });
@@ -87,4 +79,39 @@ export async function assertEmployeeAccess(employeeId: number): Promise<void> {
   const { getEmployeeById } = await import('./db');
   const person = await getEmployeeById(employeeId);
   assertProjectAccess(person?.employee.projectId);
+}
+
+/**
+ * PDAs não têm cidade própria: um PDA é da(s) cidade(s) de quem já fez
+ * check-in nele. Sem nenhum check-in só aparece a quem vê todas as cidades.
+ */
+export function pdaScope(pdaId: SQLWrapper): SQL {
+  if (scopedProjectIds() === undefined) return sql`1 = 1`;
+  return sql`EXISTS (SELECT 1 FROM pda_checkins city_pc WHERE city_pc.pdaId = ${pdaId}
+    AND city_pc.employeeId IS NOT NULL AND ${employeeScope(sql`city_pc.employeeId`)})`;
+}
+
+/** Um utilizador Zello é da cidade do(s) PDA(s) onde está instalado. */
+export function zelloPdaScope(zelloUsername: SQLWrapper): SQL {
+  if (scopedProjectIds() === undefined) return sql`1 = 1`;
+  return sql`EXISTS (SELECT 1 FROM pdas city_pda WHERE city_pda.zelloUsername = ${zelloUsername}
+    AND ${pdaScope(sql`city_pda.id`)})`;
+}
+
+/**
+ * Linha do GPS do dia (daily_driver_history) — a linha é da PRÓPRIA cidade
+ * quando o funcionário resolvido é dessa cidade; sem funcionário (ninguém
+ * com login no PDA), pela cidade do PDA desse Zello (se não der para saber,
+ * só quem vê todas as cidades).
+ */
+export function gpsRowOwnScope(employeeId: SQLWrapper, zelloUsername: SQLWrapper): SQL {
+  if (scopedProjectIds() === undefined) return sql`1 = 1`;
+  return sql`((${employeeId} IS NOT NULL AND ${employeeScope(employeeId)}) OR (${employeeId} IS NULL AND ${zelloPdaScope(zelloUsername)}))`;
+}
+
+/** Linha visível: da própria cidade OU com uma parte (PDA partilhado) de alguém dela. */
+export function gpsRowScope(historyId: SQLWrapper, employeeId: SQLWrapper, zelloUsername: SQLWrapper): SQL {
+  if (scopedProjectIds() === undefined) return sql`1 = 1`;
+  return sql`(${gpsRowOwnScope(employeeId, zelloUsername)} OR EXISTS (SELECT 1 FROM driver_day_shares city_sh
+    WHERE city_sh.historyId = ${historyId} AND ${employeeScope(sql`city_sh.employeeId`)}))`;
 }

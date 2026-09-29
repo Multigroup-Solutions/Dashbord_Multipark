@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import crypto from "crypto";
 import {
   verifyMultiparkSignature,
+  signatureTimestampMs,
+  SIGNATURE_TOLERANCE_MS,
   parseMultiparkWebhook,
   isoToMysql,
   cityToSyncForm,
@@ -17,29 +19,50 @@ function sign(body: string, ts: string, secret = SECRET): string {
 describe("verifyMultiparkSignature", () => {
   const body = JSON.stringify({ id: "d1", event: "BOOKING_CREATED", data: { id: "b1" } });
   const ts = "1785400000000";
+  const now = 1785400000000;
 
   it("aceita assinatura válida", () => {
-    expect(verifyMultiparkSignature(Buffer.from(body), sign(body, ts), SECRET)).toBe(true);
+    expect(verifyMultiparkSignature(Buffer.from(body), sign(body, ts), SECRET, now)).toBe(true);
   });
 
   it("rejeita segredo errado", () => {
-    expect(verifyMultiparkSignature(Buffer.from(body), sign(body, ts, "outro"), SECRET)).toBe(false);
+    expect(verifyMultiparkSignature(Buffer.from(body), sign(body, ts, "outro"), SECRET, now)).toBe(false);
   });
 
   it("rejeita body adulterado", () => {
-    expect(verifyMultiparkSignature(Buffer.from(body + "x"), sign(body, ts), SECRET)).toBe(false);
+    expect(verifyMultiparkSignature(Buffer.from(body + "x"), sign(body, ts), SECRET, now)).toBe(false);
   });
 
   it("rejeita timestamp adulterado (assinatura cobre o ts)", () => {
     const sig = sign(body, ts).replace(`t=${ts}`, "t=999");
-    expect(verifyMultiparkSignature(Buffer.from(body), sig, SECRET)).toBe(false);
+    expect(verifyMultiparkSignature(Buffer.from(body), sig, SECRET, now)).toBe(false);
   });
 
   it("rejeita header ausente ou malformado e segredo ausente", () => {
-    expect(verifyMultiparkSignature(Buffer.from(body), undefined, SECRET)).toBe(false);
-    expect(verifyMultiparkSignature(Buffer.from(body), "lixo", SECRET)).toBe(false);
-    expect(verifyMultiparkSignature(Buffer.from(body), "t=1,v1=zz", SECRET)).toBe(false);
-    expect(verifyMultiparkSignature(Buffer.from(body), sign(body, ts), undefined)).toBe(false);
+    expect(verifyMultiparkSignature(Buffer.from(body), undefined, SECRET, now)).toBe(false);
+    expect(verifyMultiparkSignature(Buffer.from(body), "lixo", SECRET, now)).toBe(false);
+    expect(verifyMultiparkSignature(Buffer.from(body), "t=1,v1=zz", SECRET, now)).toBe(false);
+    expect(verifyMultiparkSignature(Buffer.from(body), sign(body, ts), undefined, now)).toBe(false);
+  });
+});
+
+describe("tolerância do timestamp da assinatura (±5 min)", () => {
+  const body = JSON.stringify({ id: "d1", event: "BOOKING_CREATED", data: { id: "b1" } });
+  it("aceita ms e segundos dentro da janela", () => {
+    const nowMs = 1_785_400_000_000;
+    expect(verifyMultiparkSignature(Buffer.from(body), sign(body, String(nowMs - 60_000)), SECRET, nowMs)).toBe(true);
+    expect(verifyMultiparkSignature(Buffer.from(body), sign(body, String(Math.floor(nowMs / 1000) + 120)), SECRET, nowMs)).toBe(true);
+  });
+  it("recusa uma assinatura válida mas antiga ou do futuro (replay)", () => {
+    const nowMs = 1_785_400_000_000;
+    expect(verifyMultiparkSignature(Buffer.from(body), sign(body, String(nowMs - SIGNATURE_TOLERANCE_MS - 1000)), SECRET, nowMs)).toBe(false);
+    expect(verifyMultiparkSignature(Buffer.from(body), sign(body, String(nowMs + SIGNATURE_TOLERANCE_MS + 1000)), SECRET, nowMs)).toBe(false);
+  });
+  it("interpreta o t= em segundos ou milissegundos", () => {
+    expect(signatureTimestampMs("1785400000")).toBe(1785400000000);
+    expect(signatureTimestampMs("1785400000123")).toBe(1785400000123);
+    expect(signatureTimestampMs("abc")).toBeNull();
+    expect(signatureTimestampMs("12")).toBeNull();
   });
 });
 

@@ -2,12 +2,13 @@ import { describe, expect, it } from "vitest";
 import { baseMime, extensionForMime, isMediaPlaceholderBody, mediaKindForMessageType } from "../shared/whatsappMedia";
 
 describe("mediaKindForMessageType", () => {
-  it("image → image; audio e voice → audio; resto → null", () => {
+  it("image → image; audio e voice → audio; video/document; resto → null", () => {
     expect(mediaKindForMessageType("image")).toBe("image");
     expect(mediaKindForMessageType("audio")).toBe("audio");
     expect(mediaKindForMessageType("voice")).toBe("audio");
-    expect(mediaKindForMessageType("video")).toBeNull();
-    expect(mediaKindForMessageType("document")).toBeNull();
+    expect(mediaKindForMessageType("video")).toBe("video");
+    expect(mediaKindForMessageType("document")).toBe("document");
+    expect(mediaKindForMessageType("sticker")).toBeNull();
     expect(mediaKindForMessageType("text")).toBeNull();
     expect(mediaKindForMessageType(undefined)).toBeNull();
   });
@@ -23,6 +24,8 @@ describe("extensionForMime / baseMime", () => {
     expect(extensionForMime("audio/mp4")).toBe("m4a");
     expect(extensionForMime("audio/aac")).toBe("aac");
     expect(extensionForMime("audio/amr")).toBe("amr");
+    expect(extensionForMime("video/mp4")).toBe("mp4");
+    expect(extensionForMime("application/pdf")).toBe("pdf");
   });
   it("desconhecido/vazio → bin (nunca inventa)", () => {
     expect(extensionForMime("application/x-thing")).toBe("bin");

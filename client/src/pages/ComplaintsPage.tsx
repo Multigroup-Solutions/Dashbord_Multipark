@@ -1,4 +1,9 @@
 import { trpc } from "@/lib/trpc";
+import { CommunicationsTimeline } from "@/components/mail/CommunicationsTimeline";
+import { CreateMeetingButton } from "@/components/google/CreateMeetingButton";
+import { DriveFilesPanel } from "@/components/google/DriveFilesPanel";
+import { SaveToDriveButton } from "@/components/google/DriveActions";
+import { can, roleRank, seesBeyondOwn } from "@shared/access";
 import { openInMultipark } from "@/lib/multiparkLinks";
 import { formatBookingHistoryDetails } from "@/lib/bookingHistoryFormat";
 import { fileHref } from "@/lib/fileHref";
@@ -23,14 +28,16 @@ import { toast } from "sonner";
 import ClientHistoryCard from "@/components/ClientHistoryCard";
 import CaseAssignmentCard from "@/components/CaseAssignmentCard";
 import LinkInboundEmailButton from "@/components/LinkInboundEmailButton";
-import { useState, useMemo } from "react";
+import ComplaintAiPanel from "@/components/ComplaintAiPanel";
+import { useState, useMemo, useEffect } from "react";
 import {
   AlertTriangle, Plus, MessageSquare, Camera, Clock, User, Car,
   ChevronRight, ChevronLeft, Send, Eye, Trash2, Upload, Shield,
   BarChart3, AlertCircle, CheckCircle2, Hourglass, XCircle, Pencil,
   Mail, UserPlus, LinkIcon, X as XIcon, Download, RefreshCw, GripVertical, Package,
-  ExternalLink,
+  ExternalLink, Paperclip, FileSearch,
 } from "lucide-react";
+import { Link } from "wouter";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
   new: { label: "Novo", color: "bg-blue-100 text-blue-800 border-blue-200", icon: AlertCircle },
@@ -38,6 +45,7 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }>
   waiting_client: { label: "Aguarda Cliente", color: "bg-purple-100 text-purple-800 border-purple-200", icon: Clock },
   resolved: { label: "Resolvido", color: "bg-green-100 text-green-800 border-green-200", icon: CheckCircle2 },
   closed: { label: "Fechado", color: "bg-gray-100 text-gray-800 border-gray-200", icon: XCircle },
+  converted: { label: "Convertida", color: "bg-violet-100 text-violet-800 border-violet-200", icon: XCircle },
 };
 
 const TYPE_CONFIG: Record<string, { label: string; emoji: string }> = {
@@ -73,10 +81,12 @@ function parseDriversInvolved(raw: string | null | undefined): any[] {
 
 export default function ComplaintsPage() {
   const { user } = useAuth();
-  const [view, setView] = useState<"kanban" | "detail">("kanban");
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  // ?id=N abre logo o caso (links a partir da ficha do cliente no CRM).
+  const [selectedId, setSelectedId] = useState<number | null>(() => Number(new URLSearchParams(window.location.search).get("id")) || null);
+  const [view, setView] = useState<"kanban" | "detail">(() => (selectedId ? "detail" : "kanban"));
   const [, setFilterProject] = useState<string>("all");
-  const [showCreate, setShowCreate] = useState(false);
+  // ?new=1 (atalho "Nova reclamação" da pesquisa global) abre logo o formulário.
+  const [showCreate, setShowCreate] = useState(() => new URLSearchParams(window.location.search).get("new") === "1");
   const [filterType, setFilterType] = useState<string>("all");
 
   return (
@@ -111,7 +121,16 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
     if (globalFilters.projectId !== undefined) input.projectId = globalFilters.projectId;
     return input;
   }, [filterType, globalFilters.projectId]);
-  const { data: complaints = [], isLoading } = trpc.complaints.list.useQuery(complaintsQueryInput);
+  const { data: allComplaints = [], isLoading } = trpc.complaints.list.useQuery(complaintsQueryInput);
+  // ?q= (pesquisa global → "ver todos"): filtro local por título, cliente, reserva, matrícula ou nº.
+  const [q, setQ] = useState(() => (new URLSearchParams(window.location.search).get("q") ?? "").slice(0, 120));
+  const complaints = useMemo(() => {
+    const needle = q.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    if (!needle) return allComplaints;
+    const norm = (v: unknown) => String(v ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    return (allComplaints as any[]).filter((c: any) => [c.id, c.title, c.clientName, c.clientEmail, c.reservationRef, c.vehiclePlate]
+      .some((v) => norm(v).includes(needle) || norm(v).replace(/-/g, "").includes(needle.replace(/-/g, ""))));
+  }, [allComplaints, q]);
   const { data: stats } = trpc.complaints.stats.useQuery(
     globalFilters.projectId !== undefined ? { projectId: globalFilters.projectId } : undefined
   );
@@ -122,7 +141,9 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
     const map: Record<string, any[]> = {};
     KANBAN_COLUMNS.forEach(s => map[s] = []);
     complaints.forEach((c: any) => {
-      if (map[c.complaintStatus]) map[c.complaintStatus].push(c);
+      // Convertidas (fechadas e ligadas ao registo novo) ficam na coluna Fechado.
+      const col = c.complaintStatus === "converted" ? "closed" : c.complaintStatus;
+      if (map[col]) map[col].push(c);
     });
     return map;
   }, [complaints]);
@@ -159,6 +180,13 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
           <p className="text-muted-foreground">Gestão de tickets e reclamações de clientes</p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Filtrar (nome, reserva, matrícula, nº)…"
+            className="h-9 w-full sm:w-64"
+            aria-label="Filtrar reclamações"
+          />
           <Button
             variant="outline"
             disabled={complaints.length === 0}
@@ -201,18 +229,18 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
           {[
             { label: "Total", value: stats.total, icon: BarChart3, color: "text-foreground" },
             { label: "Novos", value: stats.new, icon: AlertCircle, color: "text-blue-600" },
-            { label: "Em Análise", value: stats.analyzing, icon: Hourglass, color: "text-yellow-600" },
+            { label: "Em Análise", value: stats.analyzing, icon: Hourglass, color: "text-yellow-700" },
             { label: "Aguarda Cliente", value: stats.waitingClient, icon: Clock, color: "text-purple-600" },
-            { label: "Resolvidos", value: stats.resolved, icon: CheckCircle2, color: "text-green-600" },
+            { label: "Resolvidos", value: stats.resolved, icon: CheckCircle2, color: "text-green-700" },
             { label: "Fechados", value: stats.closed, icon: XCircle, color: "text-gray-600" },
             { label: "Em Atraso", value: stats.overdue, icon: AlertTriangle, color: "text-red-600" },
           ].map(s => (
-            <Card key={s.label} className="p-3">
-              <div className="flex items-center gap-2">
-                <s.icon className={`w-4 h-4 ${s.color}`} />
-                <span className="text-xs text-muted-foreground">{s.label}</span>
+            <Card key={s.label} className="p-3 gap-1 min-w-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <s.icon className={`w-4 h-4 shrink-0 ${s.color}`} />
+                <span className="text-xs text-muted-foreground truncate">{s.label}</span>
               </div>
-              <p className={`text-xl font-bold mt-1 ${s.color}`}>{s.value}</p>
+              <p className={`text-xl font-bold tabular-nums truncate ${s.color}`}>{s.value}</p>
             </Card>
           ))}
         </div>
@@ -261,9 +289,9 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
                 }}
               >
                 <div className={`flex items-center gap-2 p-2 rounded-lg ${cfg.color} border`}>
-                  <cfg.icon className="w-4 h-4" />
-                  <span className="font-medium text-sm">{cfg.label}</span>
-                  <Badge variant="secondary" className="ml-auto text-xs">{items.length}</Badge>
+                  <cfg.icon className="w-4 h-4 shrink-0" />
+                  <span className="font-medium text-sm truncate">{cfg.label}</span>
+                  <Badge variant="secondary" className="ml-auto text-xs shrink-0 tabular-nums">{items.length}</Badge>
                 </div>
                 {/* div nativo: o ScrollArea (Radix) com max-h corta em vez de scrollar */}
                 <div className="max-h-[60vh] overflow-y-auto">
@@ -312,20 +340,17 @@ function ComplaintCard({ complaint: c, onSelect, onMove, currentStatus }: any) {
       className={`cursor-grab active:cursor-grabbing hover:shadow-md transition-shadow ${isOverdue ? "border-red-400 border-2" : ""}`}
     >
       <CardContent className="p-3 space-y-2">
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-1.5 min-w-0">
-            <GripVertical className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />
-            <span className="text-sm">{TYPE_CONFIG[c.complaintType]?.emoji}</span>
-            <span className="font-medium text-sm line-clamp-1" onClick={onSelect}>{c.title}</span>
+        <div className="flex items-start gap-2">
+          <div className="flex items-start gap-1.5 min-w-0">
+            <GripVertical className="h-3.5 w-3.5 mt-0.5 text-muted-foreground/40 shrink-0" />
+            <span className="text-sm shrink-0">{TYPE_CONFIG[c.complaintType]?.emoji}</span>
+            <span className="font-medium text-sm leading-snug line-clamp-2 break-words" title={c.title} onClick={onSelect}>{c.title}</span>
           </div>
-          <Badge className={`text-[10px] ${PRIORITY_CONFIG[c.complaintPriority]?.color}`}>
-            {PRIORITY_CONFIG[c.complaintPriority]?.label}
-          </Badge>
         </div>
 
         {c.vehiclePlate && (
           <div className="flex items-center gap-1 text-xs text-muted-foreground">
-            <Car className="w-3 h-3" /> {c.vehiclePlate}
+            <Car className="w-3 h-3 shrink-0" /> {c.vehiclePlate}
           </div>
         )}
 
@@ -354,18 +379,23 @@ function ComplaintCard({ complaint: c, onSelect, onMove, currentStatus }: any) {
         )}
 
         <div className="flex items-center justify-between pt-1">
-          <span className="text-[10px] text-muted-foreground">#{c.id}</span>
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-[11px] text-muted-foreground tabular-nums">#{c.id}</span>
+            <Badge className={`text-[11px] ${PRIORITY_CONFIG[c.complaintPriority]?.color}`}>
+              {PRIORITY_CONFIG[c.complaintPriority]?.label}
+            </Badge>
+          </div>
           <div className="flex gap-1">
             {canMoveLeft && (
-              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); onMove(c.id, KANBAN_COLUMNS[colIdx - 1]); }}>
+              <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Mover para a coluna anterior" onClick={(e) => { e.stopPropagation(); onMove(c.id, KANBAN_COLUMNS[colIdx - 1]); }}>
                 <ChevronLeft className="w-3 h-3" />
               </Button>
             )}
-            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onSelect}>
+            <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Ver detalhe" onClick={onSelect}>
               <Eye className="w-3 h-3" />
             </Button>
             {canMoveRight && (
-              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); onMove(c.id, KANBAN_COLUMNS[colIdx + 1]); }}>
+              <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Mover para a coluna seguinte" onClick={(e) => { e.stopPropagation(); onMove(c.id, KANBAN_COLUMNS[colIdx + 1]); }}>
                 <ChevronRight className="w-3 h-3" />
               </Button>
             )}
@@ -409,20 +439,6 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
     { plate: data?.complaint?.vehiclePlate || "", currentBookingRef: data?.complaint?.reservationRef || undefined },
     { enabled: !!data?.complaint?.vehiclePlate && (data?.complaint?.vehiclePlate?.length ?? 0) >= 2 }
   );
-  const refreshBookingMut = trpc.complaints.refreshBookingData.useMutation({
-    onSuccess: (r) => {
-      if (r.ok) {
-        toast.success(r.detail);
-        utils.complaints.bookingDossier.invalidate();
-        utils.complaints.bookingTimeline.invalidate();
-        utils.complaints.vehicleAgents.invalidate();
-        utils.complaints.getById.invalidate({ id });
-      } else {
-        toast.error(r.detail);
-      }
-    },
-    onError: () => toast.error("Erro ao contactar a API Multipark"),
-  });
   const autoLinkMut = trpc.complaints.autoLink.useMutation({
     onSuccess: (r) => {
       if (r.linked) {
@@ -463,7 +479,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
     onError: (e) => toast.error(e.message || "Erro ao eliminar"),
   });
   const convertMut = trpc.complaints.convertToLostFound.useMutation({
-    onSuccess: (r) => { toast.success(`Movida para os Perdidos & Achados (caso #${r.newId})`); utils.complaints.list.invalidate(); utils.lostFound.list.invalidate(); onBack(); },
+    onSuccess: (r) => { toast.success(`Convertida no Perdido #${r.newId} (a reclamação fica fechada e ligada)`); utils.complaints.list.invalidate(); utils.lostFound.list.invalidate(); onBack(); },
     onError: (e) => toast.error(e.message || "Erro ao mover"),
   });
   const utils = trpc.useUtils();
@@ -472,6 +488,8 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
   const [isInternal, setIsInternal] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<any>(null);
+  // Rascunho da IA → janela "Enviar email" (quem envia é sempre uma pessoa).
+  const [emailPreset, setEmailPreset] = useState<{ body: string; n: number } | null>(null);
 
   if (isLoading || !data) return <div className="flex justify-center py-20"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>;
 
@@ -552,10 +570,10 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
       {/* Header */}
       <div className="flex flex-wrap items-center gap-3">
         <Button variant="outline" onClick={onBack}><ChevronLeft className="w-4 h-4 mr-1" /> Voltar</Button>
-        <div className="flex-1">
-          <div className="flex items-center gap-2">
-            <span className="text-lg">{TYPE_CONFIG[c.complaintType]?.emoji}</span>
-            <h1 className="text-xl font-bold break-words">{c.title}</h1>
+        <div className="w-full sm:w-auto sm:flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-lg shrink-0">{TYPE_CONFIG[c.complaintType]?.emoji}</span>
+            <h1 className="text-xl font-bold break-words min-w-0">{c.title}</h1>
             <Badge className={STATUS_CONFIG[c.complaintStatus]?.color}>{STATUS_CONFIG[c.complaintStatus]?.label}</Badge>
             <Badge className={PRIORITY_CONFIG[c.complaintPriority]?.color}>{PRIORITY_CONFIG[c.complaintPriority]?.label}</Badge>
             {isOverdue && <Badge className="bg-red-100 text-red-800">SLA Ultrapassado</Badge>}
@@ -571,27 +589,32 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={startEditing}><Pencil className="w-4 h-4 mr-1" /> Editar</Button>
-        <Select value={c.complaintStatus} onValueChange={handleStatusChange}>
+        {c.complaintStatus === "converted" && (c as any).convertedToId && (
+          <a href={`/perdidos-achados/caso/${(c as any).convertedToId}`} className="text-xs underline text-violet-700">
+            Convertida no Perdido #{(c as any).convertedToId}
+          </a>
+        )}
+        <Select value={c.complaintStatus} onValueChange={handleStatusChange} disabled={c.complaintStatus === "converted"}>
           <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
           <SelectContent>
-            {Object.entries(STATUS_CONFIG).map(([k, v]) => (
-              <SelectItem key={k} value={k}>{v.label}</SelectItem>
+            {Object.entries(STATUS_CONFIG).filter(([k]) => k !== "converted" || c.complaintStatus === "converted").map(([k, v]) => (
+              <SelectItem key={k} value={k} disabled={k === "converted"}>{v.label}</SelectItem>
             ))}
           </SelectContent>
         </Select>
-        {["admin", "super_admin"].includes(user?.role) && (
+        {can(user, "reclamacoes", "manage") && (
           <>
-            <Button
+            {c.complaintStatus !== "converted" && <Button
               variant="outline" size="sm"
               disabled={convertMut.isPending}
-              title="Isto afinal é um Perdido/Achado — move o caso inteiro"
+              title="Isto afinal é um Perdido — cria o caso e fecha esta reclamação (ligados)"
               onClick={() => {
-                if (!confirm("Mover esta reclamação (com mensagens e fotos) para os Perdidos & Achados?")) return;
+                if (!confirm("Converter em caso de Perdidos? Leva mensagens, fotos e condutores; a reclamação fica fechada como 'Convertida' e ligada.")) return;
                 convertMut.mutate({ id });
               }}
             >
-              <Package className="w-4 h-4 mr-1" /> {convertMut.isPending ? "A mover…" : "Mover p/ Perdidos"}
-            </Button>
+              <Package className="w-4 h-4 mr-1" /> {convertMut.isPending ? "A converter…" : "Converter em Perdido"}
+            </Button>}
             <Button
               variant="destructive" size="sm"
               disabled={deleteMut.isPending}
@@ -613,13 +636,19 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
             <TabsList className="flex-wrap">
               <TabsTrigger value="details">Detalhes</TabsTrigger>
               <TabsTrigger value="messages">Mensagens ({data.messages.length})</TabsTrigger>
-              <TabsTrigger value="photos">Fotos ({data.photos.length})</TabsTrigger>
+              <TabsTrigger value="photos">Fotos ({data.photos.length}){(data as any).emailAttachments?.length ? ` · Anexos (${(data as any).emailAttachments.length})` : ""}</TabsTrigger>
               {(c.vehiclePlate || c.vehicleId) && <TabsTrigger value="vehicle">Viatura</TabsTrigger>}
               <TabsTrigger value="duty">Em serviço</TabsTrigger>
               <TabsTrigger value="booking-history">Histórico ({timelineHist.length})</TabsTrigger>
+              <TabsTrigger value="comms">Comunicações</TabsTrigger>
             </TabsList>
 
             <TabsContent value="details" className="space-y-4 mt-4">
+              <ComplaintAiPanel
+                complaintId={id}
+                canEdit={can(user, "reclamacoes", "edit")}
+                onUseDraft={(text) => setEmailPreset((p) => ({ body: text, n: (p?.n ?? 0) + 1 }))}
+              />
               {c.description && (
                 <Card>
                   <CardHeader><CardTitle className="text-sm">Descrição</CardTitle></CardHeader>
@@ -639,14 +668,10 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                       {autoLinkMut.isPending ? "A procurar…" : "Ligar reserva automaticamente"}
                     </Button>
                   ) : (
-                    <Button
-                      size="sm" variant="outline"
-                      disabled={refreshBookingMut.isPending}
-                      title="Vai buscar à API Multipark a reserva completa e o histórico de condutores desta reserva"
-                      onClick={() => refreshBookingMut.mutate({ reservationRef: c.reservationRef! })}
-                    >
-                      <RefreshCw className={`w-3.5 h-3.5 mr-1 ${refreshBookingMut.isPending ? "animate-spin" : ""}`} />
-                      {refreshBookingMut.isPending ? "A atualizar…" : "Atualizar da API"}
+                    <Button size="sm" variant="outline" asChild title="Tudo sobre esta reserva, lido ao vivo da BD da Multipark">
+                      <Link href={`/reserva/${encodeURIComponent((dossier?.booking as any)?.externalId || c.reservationRef!)}`}>
+                        <FileSearch className="w-3.5 h-3.5 mr-1" /> Abrir ficha da reserva
+                      </Link>
                     </Button>
                   )}
                 </CardHeader>
@@ -759,7 +784,8 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                     {data.photos.map((p: any) => (
                       <div key={p.id} className="relative group">
                         <img src={fileHref(p.url, p.key) ?? undefined} alt={p.label || "Foto"} className="w-full h-40 object-cover rounded-lg" />
-                        {p.label && <span className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] px-2 py-0.5 rounded">{p.label}</span>}
+                        {p.label && <span className="absolute bottom-1 left-1 bg-black/60 text-white text-[11px] px-2 py-0.5 rounded">{p.label}</span>}
+                        <span className="absolute top-1 left-1 opacity-80 group-hover:opacity-100 bg-background/90 rounded"><SaveToDriveButton source={{ kind: "complaint_photo", id: p.id }} iconOnly label="Guardar no meu Drive" /></span>
                         <Button
                           variant="destructive" size="icon"
                           className="absolute top-1 right-1 h-6 w-6 opacity-60 group-hover:opacity-100 transition-opacity"
@@ -772,6 +798,25 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                       </div>
                     ))}
                   </div>
+                  {(data as any).emailAttachments?.length > 0 && (
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-muted-foreground">Anexos recebidos por email</p>
+                      {(data as any).emailAttachments.map((a: any, i: number) => {
+                        const href = fileHref(a.url, a.key);
+                        return (
+                          <div key={`${a.emailId}-${i}`} className="flex items-center gap-2 text-sm">
+                            <Paperclip className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                            {href ? (
+                              <a href={href} target="_blank" rel="noreferrer" className="underline break-all">{a.filename}</a>
+                            ) : (
+                              <span className="break-all text-muted-foreground" title="Ficheiro não guardado (demasiado grande ou falha de upload)">{a.filename}</span>
+                            )}
+                            {a.size ? <span className="text-[11px] text-muted-foreground">{Math.max(1, Math.round(a.size / 1024))} KB</span> : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                   <label className="flex items-center gap-2 cursor-pointer">
                     <Button variant="outline" asChild><span><Upload className="w-4 h-4 mr-2" /> Carregar Foto</span></Button>
                     <input type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
@@ -811,7 +856,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                                 <tr key={a.agentName} className={`border-t ${a.flagged ? "bg-red-50 font-medium" : ""}`}>
                                   <td className="p-2">{a.agentName}{a.flagged ? " ⚑" : ""}</td>
                                   <td className="p-2 text-right">{a.actions}</td>
-                                  <td className="p-2 text-right text-green-600">{a.checkins}</td>
+                                  <td className="p-2 text-right text-green-700">{a.checkins}</td>
                                   <td className="p-2 text-right text-violet-600">{a.checkouts}</td>
                                   <td className="p-2 text-right text-amber-600">{a.movements}</td>
                                   <td className="p-2 text-xs text-muted-foreground">{a.lastActionAt ? fmtPTDateTime(a.lastActionAt) : "—"}</td>
@@ -858,6 +903,11 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
               }} />
             </TabsContent>
 
+            <TabsContent value="comms" className="mt-4 space-y-3">
+              <div className="flex justify-end"><CreateMeetingButton entityType="complaint" entityId={id} defaultTitle={`Reunião — reclamação #${id}${c.clientName ? ` (${c.clientName})` : ""}`} /></div>
+              <CommunicationsTimeline type="complaint" id={id} compact />
+              <DriveFilesPanel entityType="complaint" entityId={id} />
+            </TabsContent>
             <TabsContent value="booking-history" className="mt-4">
                 <Card>
                   <CardHeader className="flex flex-row items-center justify-between">
@@ -934,6 +984,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                 clientName={c.clientName}
                 complaintTitle={c.title}
                 lastSentAt={c.clientEmailSentAt}
+                preset={emailPreset}
               />
               <LinkInboundEmailButton
                 module="complaint" alias="reclamacoes" caseId={id}
@@ -1042,7 +1093,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                 <p className="text-muted-foreground">Sem prazo definido</p>
               )}
               {c.resolvedAt && (
-                <div className="flex items-center gap-2 text-green-600">
+                <div className="flex items-center gap-2 text-green-700">
                   <CheckCircle2 className="w-4 h-4" />
                   Resolvido em: {fmtPTDateTime(c.resolvedAt)}
                 </div>
@@ -1065,7 +1116,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
   );
 }
 
-// ─── RESERVATION PREVIEW (auto-fetches timeline from API) ────────────────────
+// ─── RESERVATION PREVIEW (histórico da reserva, BD Multipark) ────────────────────
 
 function ReservationPreview({ bookingId }: { bookingId: string }) {
   const { data, isLoading } = trpc.complaints.bookingTimeline.useQuery(
@@ -1076,7 +1127,7 @@ function ReservationPreview({ bookingId }: { bookingId: string }) {
   if (!bookingId || bookingId.length < 4) return null;
 
   if (isLoading) {
-    return <p className="text-xs text-muted-foreground mt-2 animate-pulse">A carregar histórico da API...</p>;
+    return <p className="text-xs text-muted-foreground mt-2 animate-pulse">A carregar histórico...</p>;
   }
 
   const history = data?.history || [];
@@ -1093,7 +1144,7 @@ function ReservationPreview({ bookingId }: { bookingId: string }) {
         return (
           <div key={h.id} className="flex items-center justify-between text-xs p-1.5 rounded bg-muted">
             <div className="flex items-center gap-1.5">
-              <Badge className={`${cfg.color} text-[10px] px-1`}>{cfg.label}</Badge>
+              <Badge className={`${cfg.color} text-[11px] px-1`}>{cfg.label}</Badge>
               <span>{h.user?.firstName || h.agentName || "Sistema"} {h.user?.lastName || ""}</span>
             </div>
             <span className="text-muted-foreground">{h.actionTime ? fmtPTDateTime(h.actionTime) : "—"}</span>
@@ -1123,15 +1174,13 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
 
   // Booking search
   const [bookingSearch, setBookingSearch] = useState("");
-  const [loadingDetails, setLoadingDetails] = useState(false);
   const { data: foundBookings = [] } = trpc.complaints.searchBooking.useQuery(
     { search: bookingSearch },
     { enabled: bookingSearch.length >= 2 }
   );
-  const detailsQuery = trpc.complaints.fetchBookingDetails;
 
-  const fillFromBooking = async (b: any) => {
-    // First fill what we have from local DB
+  const fillFromBooking = (b: any) => {
+    // Cópia local (já completa pelo webhook: cliente, matrícula, datas)
     setForm(f => ({
       ...f,
       reservationRef: b.externalId || b.bookingNumber || f.reservationRef,
@@ -1144,25 +1193,7 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
       vehiclePlate: b.licensePlate || f.vehiclePlate,
     }));
 
-    // Then try to fetch full details from API (has client data + vehicle)
-    if (b.externalId) {
-      setLoadingDetails(true);
-      try {
-        const details = await utils.complaints.fetchBookingDetails.fetch({ externalId: b.externalId });
-        if (details) {
-          const client = details.customer || details.client;
-          setForm(f => ({
-            ...f,
-            clientName: [client?.firstName, client?.lastName].filter(Boolean).join(" ") || f.clientName,
-            clientEmail: client?.email || f.clientEmail,
-            clientPhone: client?.phoneNumber || f.clientPhone,
-            vehiclePlate: details.vehicle?.licensePlate || f.vehiclePlate,
-            title: f.title || `Reclamação — ${details.vehicle?.licensePlate || ""} — ${b.bookingNumber || ""}`.trim(),
-          }));
-        }
-      } catch { /* API might not return details for all bookings */ }
-      setLoadingDetails(false);
-    }
+    if (b.licensePlate) setForm(f => ({ ...f, title: f.title || `Reclamação — ${b.licensePlate} — ${b.bookingNumber || ""}`.trim() }));
 
     toast.success("Dados da reserva preenchidos");
   };
@@ -1285,7 +1316,6 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
                 onChange={e => setBookingSearch(e.target.value)}
                 className="flex-1"
               />
-              {loadingDetails && <span className="text-xs text-muted-foreground animate-pulse">A carregar detalhes...</span>}
             </div>
             {foundBookings.length > 0 && (
               <div className="mt-2 space-y-1 max-h-40 overflow-y-auto">
@@ -1491,7 +1521,7 @@ function DutyDriversPanel({
               <p className="font-medium mb-1">Tabela base por tipo:</p>
               <div className="flex flex-wrap gap-1">
                 {penaltyConfigQ.data.map((p: any) => (
-                  <Badge key={p.id} variant="outline" className="text-[10px]">
+                  <Badge key={p.id} variant="outline" className="text-[11px]">
                     {p.complaintType}: {p.basePoints}
                   </Badge>
                 ))}
@@ -1519,8 +1549,8 @@ function DutyDriversPanel({
                 <div key={d.id} className="flex items-center gap-2 text-sm p-2 bg-muted rounded min-w-0">
                   <User className="w-4 h-4 shrink-0" />
                   <span className="font-medium truncate">{d.employeeName}</span>
-                  {d.roleAtTime && <Badge variant="outline" className="text-[10px]">{d.roleAtTime}</Badge>}
-                  <Badge variant="outline" className="text-[10px]">{d.source}</Badge>
+                  {d.roleAtTime && <Badge variant="outline" className="text-[11px]">{d.roleAtTime}</Badge>}
+                  <Badge variant="outline" className="text-[11px]">{d.source}</Badge>
                   {d.notes && <span className="text-xs text-muted-foreground">— {d.notes}</span>}
                   <Button
                     variant="ghost"
@@ -1559,15 +1589,15 @@ function DutyDriversPanel({
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-medium">{d.employeeName}</span>
-                      <Badge variant="outline" className="text-[10px]">
+                      <Badge variant="outline" className="text-[11px]">
                         {d.source === "history" ? "histórico API" : "escalado"}
                       </Badge>
-                      {d.roleAtTime && <Badge variant="outline" className="text-[10px]">{d.roleAtTime}</Badge>}
+                      {d.roleAtTime && <Badge variant="outline" className="text-[11px]">{d.roleAtTime}</Badge>}
                     </div>
                     {d.notes && <p className="text-xs text-muted-foreground truncate">{d.notes}</p>}
                   </div>
                   {d.alreadyLinked ? (
-                    <Badge className="bg-green-100 text-green-800 text-[10px]">Associado</Badge>
+                    <Badge className="bg-green-100 text-green-800 text-[11px]">Associado</Badge>
                   ) : (
                     <Button size="sm" variant="outline" onClick={() => handleAttach(d)} disabled={attachMut.isPending}>
                       <Plus className="w-3 h-3 mr-1" /> Associar
@@ -1590,12 +1620,15 @@ function SendClientEmailButton({
   clientName,
   complaintTitle,
   lastSentAt,
+  preset,
 }: {
   complaintId: number;
   clientEmail: string | null | undefined;
   clientName: string | null | undefined;
   complaintTitle: string | null | undefined;
   lastSentAt: string | Date | null | undefined;
+  /** Rascunho (ex.: da IA) a abrir na janela — `n` muda a cada pedido. */
+  preset?: { body: string; n: number } | null;
 }) {
   const [open, setOpen] = useState(false);
   const [subject, setSubject] = useState(
@@ -1608,6 +1641,12 @@ function SendClientEmailButton({
   const utils = trpc.useUtils();
 
   const disabled = !clientEmail;
+  useEffect(() => {
+    if (!preset?.body) return;
+    setBody(preset.body);
+    if (clientEmail) setOpen(true);
+    else toast.info("Cliente sem email registado — copia o rascunho para outro canal.");
+  }, [preset?.n]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSend = async () => {
     if (!subject.trim() || !body.trim()) {
@@ -1641,7 +1680,7 @@ function SendClientEmailButton({
         <Mail className="w-4 h-4 mr-2" /> Enviar email
       </Button>
       {lastSentAt && (
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-[11px] text-muted-foreground">
           Último envio: {fmtPTDateTime(lastSentAt)}
         </p>
       )}
@@ -1675,7 +1714,7 @@ function SendClientEmailButton({
                 value={body}
                 onChange={(e) => setBody(e.target.value)}
               />
-              <p className="text-[10px] text-muted-foreground mt-1">
+              <p className="text-[11px] text-muted-foreground mt-1">
                 A saudação “Olá {clientName || "cliente"},” é adicionada automaticamente.
               </p>
             </div>
@@ -1694,19 +1733,19 @@ function SendClientEmailButton({
 }
 
 // ─── SYNC EMAILS (manual) ─────────────────────────────────────────────────────
-// Corre o leitor IMAP on-demand — o cron horário continua, isto é o "já".
+// Corre já a sincronização do Gmail (a mesma do agendador/push) — isto é o "já".
 function SyncEmailsButton() {
   const { user } = useAuth();
   const utils = trpc.useUtils();
   const syncMut = trpc.admin.runEmailInbound.useMutation({
     onSuccess: (r: any) => {
       utils.complaints.invalidate();
-      toast.success(`Emails sincronizados: ${r.created} novos, ${r.skipped} ignorados${r.errors?.length ? `, ${r.errors.length} erros` : ""}`);
+      toast.success(`Emails sincronizados: ${r.stored ?? 0} novos, ${r.created} registo(s) criados${r.errors?.length ? `, ${r.errors.length} erros` : ""}${r.partial ? " — parcial, carregue outra vez para continuar" : ""}`);
     },
     onError: (e) => toast.error(e.message),
   });
   const role = (user as any)?.role ?? "user";
-  if (!["backoffice", "team_leader", "supervisor", "admin", "super_admin"].includes(role)) return null;
+  if (!can(user as any, "sincronizacao", "edit")) return null;
   return (
     <Button variant="outline" onClick={() => syncMut.mutate()} disabled={syncMut.isPending}>
       <RefreshCw className={`w-4 h-4 mr-2 ${syncMut.isPending ? "animate-spin" : ""}`} />

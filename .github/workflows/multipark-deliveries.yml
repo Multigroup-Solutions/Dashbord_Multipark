@@ -1,10 +1,11 @@
 name: Recuperar notificações Multipark
 on:
-  schedule:
-    - cron: "*/5 * * * *"
+  # Sem schedule: quem agenda é o /api/cron/tick (cron-job.org) — ver
+  # docs/ajuda/agendador.md. Aqui fica só a corrida manual.
   workflow_dispatch:
 permissions:
   contents: read
+  issues: write # alerta: abrir/comentar issue em caso de falha
 concurrency:
   group: multipark-delivery-recovery
   cancel-in-progress: false
@@ -15,7 +16,7 @@ jobs:
     steps:
       - name: Processar notificações pendentes
         env:
-          APP_URL: ${{ secrets.APP_URL || 'https://dashboard.multipark.pt' }}
+          APP_URL: ${{ secrets.APP_URL || 'https://dashbord-multipark.vercel.app' }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
           set -euo pipefail
@@ -23,4 +24,22 @@ jobs:
           curl --fail-with-body --silent --show-error --max-time 65 \
             -H "Authorization: Bearer $CRON_SECRET" \
             "$APP_URL/api/cron/multipark-deliveries" > result.json
-          node -e 'const r = require("./result.json"); console.log(r); if (r.ok !== true) process.exit(1)'
+          # Erros de itens individuais (reserva ainda incompleta, histórico que
+          # falhou) já são repetidos pela fila com backoff: vêm em "warnings" e
+          # ficam como aviso. Vermelho só quando o endpoint em si falha ou uma
+          # fase inteira falha (o endpoint devolve 503 → curl acima).
+          node -e 'const r = require("./result.json"); console.log(JSON.stringify(r)); if (r.ok !== true) { console.log(`::error::${r.error ?? "ok:false"}`); process.exit(1); } if ((r.warnings ?? []).length) console.log(`::warning::${r.warnings.join(" · ")}`)'
+      - name: Alerta — abrir/comentar issue em caso de falha
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="🔴 Cron multipark falhou: multipark-deliveries"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body="Run falhado: $run_url — $(date -u +'%Y-%m-%d %H:%M UTC')"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number' || true)
+          if [ -n "${existing:-}" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
