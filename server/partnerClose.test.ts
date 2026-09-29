@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { canClose, comparePartnerMonth, monthRangeLisbon, MEMORY_START_UTC, type CloseMpBooking, type CloseOurSnap } from "../shared/partnerClose";
-import { buildBookingsStateSql, buildPartnerCloseSql, mapCloseBooking } from "./multiparkDb/partnerClose";
+import { buildBookingsStateSql, buildMonthlyInvoicesSql, buildPartnerCloseSql, mapCloseBooking } from "./multiparkDb/partnerClose";
 import { lisbonDayRangeUtc } from "../shared/lisbonDay";
 import { isMonth, previousMonth } from "./partnerClose";
 
@@ -21,7 +21,7 @@ describe("fecho do mês de parceiros: comparação", () => {
         mp({ id: "b1", ours: 80 }),                          // devido mudou
         mp({ id: "b2" }),                                    // não chegou pelo webhook
         mp({ id: "b3" }),                                    // saída não chegou (último retrato = CHECKED_IN)
-        mp({ id: "b4", invoices: 0, dueMissing: true }),     // sem fatura e sem devido
+        mp({ id: "b4", invoices: 0, dueMissing: true }),     // sem devido (fatura por reserva não conta: parceiros faturam ao mês)
         mp({ id: "b5", checkOut: "2026-09-20 10:00:00" }),   // antes da memória: não conta
         mp({ id: "b6", value: 120 }),                        // valor mudou
       ],
@@ -41,14 +41,31 @@ describe("fecho do mês de parceiros: comparação", () => {
     expect(codes.b1).toEqual(["devido_diferente"]);
     expect(codes.b2).toEqual(["falta_na_copia"]);
     expect(codes.b3).toEqual(["saida_nao_recebida"]);
-    expect(codes.b4).toEqual(["sem_devido", "sem_fatura"]);
+    expect(codes.b4).toEqual(["sem_devido"]);
     expect(codes.b5).toBeUndefined();
     expect(codes.b6).toEqual(["valor_diferente"]);
     expect(lets.beforeMemory).toBe(1);
-    expect(lets.mp).toMatchObject({ bookings: 6, noInvoice: 1, noDue: 1 });
+    expect(lets.mp).toMatchObject({ bookings: 6, noDue: 1 });
     expect(lets.copy.bookings).toBe(3);
     const outro = r.find((x) => x.partnerKey === "u-outro")!;
     expect(outro.diffs).toEqual([{ bookingId: "b7", code: null, codes: ["falta_na_multipark"], detail: "na Multipark está CANCELLED" }]);
+  });
+  it("antes da memória: compara com o histórico carregado (preço inicial) e soma as faturas mensais", () => {
+    const r = comparePartnerMonth({
+      mp: [
+        mp({ id: "h1", checkOut: "2026-09-10 10:00:00", price: 45 }),  // nasceu a 31 €, agora 45 €
+        mp({ id: "h2", checkOut: "2026-09-11 10:00:00", price: 31 }),  // igual ao histórico
+        mp({ id: "h3", checkOut: "2026-09-12 10:00:00", price: 31 }),  // sem histórico nem memória
+      ],
+      ours: new Map(), partnerOf, mpState: new Map(),
+      history: new Map([["h1", { initialPrice: 31 }], ["h2", { initialPrice: 31 }]]),
+      monthlyInvoices: new Map([["u-lets", 1]]),
+      start: "2026-08-31 23:00:00", end: "2026-09-30 23:00:00",
+    });
+    expect(r[0].copy).toMatchObject({ bookings: 2, fromHistory: 2, value: 62 });
+    expect(r[0].beforeMemory).toBe(1);
+    expect(r[0].diffs.map((d) => [d.bookingId, d.codes])).toEqual([["h1", ["preco_alterado"]]]);
+    expect(r[0].mp.invoices).toBe(3 + 1);
   });
   it("parceiro diferente entre a cópia e a Multipark", () => {
     const r = comparePartnerMonth({ mp: [mp({ id: "b1" })], ours: new Map([["b1", snap({ bookingId: "b1", partnerId: "pa2" })]]), partnerOf, mpState: new Map(), start, end });
@@ -79,10 +96,13 @@ describe("fecho do mês de parceiros: SQL da Multipark", () => {
     expect(params).toEqual([start, end, "pk1", 20000]);
     expect(() => buildPartnerCloseSql({ parkIds: [], start, end })).toThrow();
     expect(buildBookingsStateSql(["a", "b"]).params).toEqual(["a", "b", 2]);
+    const mi = buildMonthlyInvoicesSql({ start, end });
+    expect(mi.sql).toContain(`y."bookingId" IS NULL`);
+    expect(mi.sql).toContain(`interval '25 days'`);
   });
   it("mapeia a linha e usa a empresa (userId) como chave", () => {
     expect(mapCloseBooking({ id: "b1", code: "AB12", partner_id: "pa1", partner_user_id: "u-lets", partner_name: "Let's", value: "402", ours: "301.5", due_missing: "f", check_out: "2026-10-10 10:00:00", invoices: "1" }))
-      .toEqual({ id: "b1", code: "AB12", parkId: null, partnerId: "pa1", partnerKey: "u-lets", partnerName: "Let's", value: 402, ours: 301.5, dueMissing: false, checkOut: "2026-10-10 10:00:00", invoices: 1 });
+      .toEqual({ id: "b1", code: "AB12", parkId: null, partnerId: "pa1", partnerKey: "u-lets", partnerName: "Let's", value: 402, ours: 301.5, dueMissing: false, checkOut: "2026-10-10 10:00:00", invoices: 1, price: null });
     expect(mapCloseBooking({ id: "b1" })).toBeNull();
   });
 });

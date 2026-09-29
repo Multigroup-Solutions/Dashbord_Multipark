@@ -17,7 +17,11 @@ export const CLOSE_TOLERANCE = 0.01;
 export interface CloseMpBooking {
   id: string; code: string | null; partnerKey: string; partnerName: string | null;
   value: number; ours: number | null; dueMissing: boolean; checkOut: string | null; invoices: number;
+  /** preço da reserva agora (para comparar com o preço inicial do histórico) */
+  price?: number | null;
 }
+/** Histórico carregado (booking_initial_prices): o preço com que a reserva nasceu. */
+export interface CloseHistory { initialPrice: number | null }
 export interface CloseOurSnap {
   bookingId: string; status: string | null; checkOut: string | null; partnerId: string | null;
   value: number | null; ours: number | null; receivedAt: string | null;
@@ -32,7 +36,7 @@ export type CloseDiffCode =
   | "valor_diferente"
   | "devido_diferente"
   | "sem_devido"          // a Multipark não tem o devido gravado
-  | "sem_fatura";         // a Multipark não tem fatura emitida
+  | "preco_alterado";     // o preço de agora ≠ o preço com que nasceu (histórico)
 
 export const CLOSE_DIFF_LABELS: Record<CloseDiffCode, string> = {
   falta_na_copia: "Não chegou pelo webhook",
@@ -42,7 +46,7 @@ export const CLOSE_DIFF_LABELS: Record<CloseDiffCode, string> = {
   valor_diferente: "Valor diferente",
   devido_diferente: "Nosso (devido) diferente",
   sem_devido: "Sem devido gravado na Multipark",
-  sem_fatura: "Sem fatura emitida",
+  preco_alterado: "Preço mudou depois de criada",
 };
 
 export interface CloseDiff { bookingId: string; code: string | null; codes: CloseDiffCode[]; detail: string }
@@ -50,8 +54,9 @@ export interface PartnerCloseRow {
   partnerKey: string;
   partnerName: string | null;
   mp: { bookings: number; value: number; ours: number; invoices: number; noInvoice: number; noDue: number };
-  copy: { bookings: number; value: number; ours: number };
-  /** reservas antes da memória do webhook (sem nada nosso para comparar) */
+  /** nossa: memória do webhook (desde 28/09) + histórico carregado (antes). O devido só existe na memória. */
+  copy: { bookings: number; value: number; ours: number; fromHistory: number };
+  /** reservas sem nada nosso (nem memória nem histórico) antes da memória do webhook */
   beforeMemory: number;
   diffs: CloseDiff[];
 }
@@ -71,13 +76,17 @@ export function comparePartnerMonth(input: {
   ours: ReadonlyMap<string, CloseOurSnap>;
   partnerOf: ReadonlyMap<string, { key: string; name: string | null }>;
   mpState: ReadonlyMap<string, CloseMpState>;
+  /** histórico carregado (preço inicial) das reservas, para as de antes da memória */
+  history?: ReadonlyMap<string, CloseHistory>;
+  /** faturas mensais (sem reserva) por empresa parceira */
+  monthlyInvoices?: ReadonlyMap<string, number>;
   start: string; end: string;
 }): PartnerCloseRow[] {
   const rows = new Map<string, PartnerCloseRow>();
   const row = (key: string, name: string | null) => {
     let r = rows.get(key);
     if (!r) {
-      r = { partnerKey: key, partnerName: name, mp: { bookings: 0, value: 0, ours: 0, invoices: 0, noInvoice: 0, noDue: 0 }, copy: { bookings: 0, value: 0, ours: 0 }, beforeMemory: 0, diffs: [] };
+      r = { partnerKey: key, partnerName: name, mp: { bookings: 0, value: 0, ours: 0, invoices: 0, noInvoice: 0, noDue: 0 }, copy: { bookings: 0, value: 0, ours: 0, fromHistory: 0 }, beforeMemory: 0, diffs: [] };
       rows.set(key, r);
     }
     if (!r.partnerName && name) r.partnerName = name;
@@ -91,14 +100,20 @@ export function comparePartnerMonth(input: {
     const r = row(b.partnerKey, b.partnerName);
     r.mp.bookings++; r.mp.value = r2(r.mp.value + b.value); r.mp.ours = r2(r.mp.ours + (b.ours ?? 0));
     r.mp.invoices += b.invoices;
-    if (b.invoices === 0) r.mp.noInvoice++;
     if (b.dueMissing) r.mp.noDue++;
     const s = input.ours.get(b.id);
     const codes: CloseDiffCode[] = [];
     const notes: string[] = [];
     if (b.dueMissing) codes.push("sem_devido");
-    if (b.invoices === 0) codes.push("sem_fatura");
-    if (!s) {
+    const h = input.history?.get(b.id);
+    if (!s && h) {
+      // antes da memória: o nosso lado é o histórico carregado (preço com que nasceu)
+      r.copy.bookings++; r.copy.fromHistory++; r.copy.value = r2(r.copy.value + (h.initialPrice ?? 0));
+      const now = b.price ?? null;
+      if (h.initialPrice != null && now != null && Math.abs(h.initialPrice - now) > CLOSE_TOLERANCE) {
+        codes.push("preco_alterado"); notes.push(`preço inicial ${eur(h.initialPrice)} → agora ${eur(now)}`);
+      }
+    } else if (!s) {
       if (b.checkOut && b.checkOut < MEMORY_START_UTC) { r.beforeMemory++; }
       else { codes.push("falta_na_copia"); }
     } else if (!ourInMonth(s)) {
@@ -125,10 +140,14 @@ export function comparePartnerMonth(input: {
     r.diffs.push({ bookingId: id, code: null, codes: ["falta_na_multipark"], detail: why });
   }
 
+  for (const [key, n] of input.monthlyInvoices ?? []) {
+    const r = rows.get(key);
+    if (r) r.mp.invoices += n;
+  }
   return [...rows.values()].sort((a, b) => b.diffs.length - a.diffs.length || b.mp.ours - a.mp.ours || String(a.partnerName ?? "").localeCompare(String(b.partnerName ?? ""), "pt"));
 }
 
-/** As diferenças que contam para fechar (sem_fatura e sem_devido também contam: são coisas a resolver). PURA. */
+/** As diferenças que contam para fechar (sem devido também conta: é coisa a resolver). PURA. */
 export function diffCount(r: Pick<PartnerCloseRow, "diffs">): number {
   return r.diffs.length;
 }
