@@ -96,6 +96,7 @@ import type { LostFoundItem, LostFoundPhoto, LostFoundMessage } from "../drizzle
 import { ENV } from "./_core/env";
 import { lisbonToday } from "../shared/expensePeriods";
 import { lisbonDayRangeUtc } from "../shared/lisbonDay";
+import { recordBillingFromMp } from "../shared/partnerBilling";
 import { isoWeekYearLisbon, incidentSlaHours, addHoursUtc, utcNowStr as caseUtcNowStr, incidentCountsAgainstDriver } from "../shared/caseRules";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -3422,6 +3423,19 @@ export async function getPartnerships(filters?: { partnerType?: string; status?:
 }
 
 /**
+ * Números da Multipark para a Faturação (saídas CHECKED_OUT no período, hora
+ * de Lisboa, no âmbito de cidade). null se a BD deles não responder — nesse
+ * caso os registos ligados ficam com a regra antiga (e a página avisa).
+ */
+async function loadMpBilling(from: string, to: string) {
+  const { readPartnerBillingLive } = await import("./multiparkDb/partnerBilling");
+  const { scopedCityNamesLive } = await import("./cityScope");
+  const range = lisbonDayRangeUtc(from, to);
+  const r = await readPartnerBillingLive({ start: range.start, end: range.end, cities: scopedCityNamesLive() });
+  return r.available ? r.data : null;
+}
+
+/**
  * Sumário de faturação por parceiro. Para cada parceiro calcula aFaturar:
  * comissão das reservas concluídas no período (CHECKED_OUT pela data de
  * saída) ou avença mensal/anual rateada pelos meses cobertos.
@@ -3470,11 +3484,16 @@ export async function getPartnerInvoicingSummary(filters: {
       monthlyFee: partnerships.monthlyFee,
       campaignKey: partnerships.campaignKey,
       notes: partnerships.notes,
+      multiparkKind: partnerships.multiparkKind,
+      multiparkPartnerId: partnerships.multiparkPartnerId,
+      multiparkSnapshot: partnerships.multiparkSnapshot,
     })
     .from(partnerships)
-    .where(and(partnerScope(partnerships.id), filters.partnerType ? eq(partnerships.partnerType, filters.partnerType) : undefined));
+    .where(and(partnerScope(partnerships.id), isNull(partnerships.archivedAt), filters.partnerType ? eq(partnerships.partnerType, filters.partnerType) : undefined));
 
   if (partnerRows.length === 0) return [];
+  // Registos ligados à Multipark (0295): os números vêm de lá (saídas do período)
+  const mpBilling = await loadMpBilling(filters.from, filters.to);
 
   const { parsePartnerConfig } = await import("../shared/partnerTypes");
 
@@ -3610,6 +3629,13 @@ export async function getPartnerInvoicingSummary(filters: {
     }
     // enterprise / campanha_propria / outro → não há a faturar automático
 
+    const mp = mpBilling ? recordBillingFromMp(p, mpBilling, filters.from, filters.to) : null;
+    if (mp) {
+      displayBookingsCount = mp.bookingsCount;
+      displayRevenue = mp.revenueGross;
+      displayRevenueNet = Math.round((mp.revenueGross / 1.23) * 100) / 100;
+      aFaturar = mp.aFaturar;
+    }
     return {
       partnershipId: p.id,
       partnerName: p.name,
@@ -3622,6 +3648,10 @@ export async function getPartnerInvoicingSummary(filters: {
       revenueNet: displayRevenueNet,
       aFaturar: !billingAvailable && ['avenca_mensal', 'avenca_anual'].includes(partnerType) ? null : aFaturar,
       billingAvailable,
+      /** de onde vêm os números: Multipark (registo ligado) ou as nossas taxas */
+      source: (mp ? "multipark" : "nosso") as "multipark" | "nosso",
+      /** reservas sem o "devido" gravado na Multipark (o a faturar pode estar incompleto) */
+      missing: mp?.missing ?? 0,
     };
   })
     .sort((a, b) => (b.aFaturar ?? 0) - (a.aFaturar ?? 0));
@@ -3682,9 +3712,12 @@ export async function getPartnerInvoicingDetailByType(filters: {
       monthlyFee: partnerships.monthlyFee,
       campaignKey: partnerships.campaignKey,
       notes: partnerships.notes,
+      multiparkKind: partnerships.multiparkKind,
+      multiparkPartnerId: partnerships.multiparkPartnerId,
+      multiparkSnapshot: partnerships.multiparkSnapshot,
     })
     .from(partnerships)
-    .where(and(eq(partnerships.partnerType, filters.partnerType), partnerScope(partnerships.id)));
+    .where(and(eq(partnerships.partnerType, filters.partnerType), partnerScope(partnerships.id), isNull(partnerships.archivedAt)));
 
   if (partnerRows.length === 0) return { partnerType: filters.partnerType, partners: [] };
 
@@ -3733,6 +3766,7 @@ export async function getPartnerInvoicingDetailByType(filters: {
     }
   }
 
+  const mpBilling = await loadMpBilling(filters.from, filters.to);
   const partners = partnerRows.map((p) => {
     const cfg = parsePartnerConfig(p.notes ?? null);
     const cashbackPercent = Number(cfg.cashbackPercent ?? 0);
@@ -3767,9 +3801,18 @@ export async function getPartnerInvoicingDetailByType(filters: {
       aFaturar = bk.revenue;
     }
 
+    const mp = mpBilling ? recordBillingFromMp(p, mpBilling, filters.from, filters.to) : null;
+    if (mp) {
+      bookingsCount = mp.bookingsCount;
+      revenueGross = mp.revenueGross;
+      revenueNet = Math.round((mp.revenueGross / 1.23) * 100) / 100;
+      aFaturar = mp.aFaturar;
+    }
     return {
       partnershipId: p.id,
       partnerName: p.name,
+      source: (mp ? "multipark" : "nosso") as "multipark" | "nosso",
+      missing: mp?.missing ?? 0,
       commissionRate,
       commissionBase: (p.commissionBase === "gross" ? "gross" : "net") as "net" | "gross",
       monthlyFee,

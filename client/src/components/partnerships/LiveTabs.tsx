@@ -248,7 +248,6 @@ export function ParksLiveTab() {
     );
   }
   const month = monthLabel(d.periods.thisMonth);
-  const pct = Math.round(d.marketplaceRate * 100);
   return (
     <Tabs defaultValue="ours" className="space-y-3">
       <TabsList>
@@ -286,8 +285,7 @@ export function ParksLiveTab() {
       <TabsContent value="third" className="space-y-2">
         <p className="text-sm text-muted-foreground">
           Parques de terceiros em que <strong>nós somos o marketplace</strong>: só as reservas que nós lhes levámos, entradas em {month}.
-          Divisão do valor: <strong>{100 - pct} % parque / {pct} % nosso</strong> (regra única, a tornar configurável por parque).
-          A comissão gravada na Multipark aparece ao lado só para comparar.
+          O <strong>nosso</strong> é a <strong>comissão gravada em cada reserva na Multipark</strong> (cada parque tem a sua taxa); o parque fica com o resto.
         </p>
         <Card className="p-0">
           <div className="overflow-x-auto">
@@ -296,8 +294,8 @@ export function ParksLiveTab() {
                 <tr className="border-b text-left text-xs uppercase text-muted-foreground">
                   <th className="p-2">Parque</th><th className="p-2">Cidade</th>
                   <th className="p-2 text-right">Reservas</th><th className="p-2 text-right">Valor</th>
-                  <th className="p-2 text-right">Parque ({100 - pct} %)</th><th className="p-2 text-right">Nosso ({pct} %)</th>
-                  <th className="p-2 text-right" title='"commissionAmount" das reservas na Multipark'>Comissão gravada</th>
+                  <th className="p-2 text-right">Parque</th><th className="p-2 text-right" title='"commissionAmount" das reservas na Multipark'>Nosso (comissão gravada)</th>
+                  <th className="p-2 text-right">Taxa</th>
                 </tr>
               </thead>
               <tbody>
@@ -315,7 +313,7 @@ export function ParksLiveTab() {
                     <td className="p-2 text-right tabular-nums">{eur(p.value)}</td>
                     <td className="p-2 text-right tabular-nums">{eur(p.parkShare)}</td>
                     <td className="p-2 text-right tabular-nums font-medium">{eur(p.ourShare)}</td>
-                    <td className="p-2 text-right tabular-nums text-muted-foreground">{eur(p.commission)}</td>
+                    <td className="p-2 text-right tabular-nums text-muted-foreground">{p.rate == null ? "—" : `${String(p.rate).replace(".", ",")} %`}</td>
                   </tr>
                 ))}
                 {d.parks.third.length === 0 && <tr><td colSpan={7} className="p-6 text-center text-muted-foreground">Sem parques de terceiros no teu âmbito.</td></tr>}

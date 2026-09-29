@@ -873,8 +873,8 @@ function InvoicingSummaryTab({
         <CardHeader>
           <CardTitle className="text-base">Resumo por parceiro</CardTitle>
           <p className="text-xs text-muted-foreground">
-            <strong>A faturar</strong> = comissão das reservas concluídas (check-out no período) ou avença
-            mensal/anual rateada pelos meses do período.
+            Contam as reservas concluídas com <strong>saída no período</strong>. Registos com a etiqueta <strong>Multipark</strong>: a faturar = o <strong>nosso</strong> gravado em cada reserva
+            (parceiros), o preço das reservas (Pro) ou o preço do plano pelos meses do período (avenças). Os outros (só nossos) seguem a nossa taxa ou avença.
           </p>
         </CardHeader>
         <CardContent>
@@ -918,7 +918,11 @@ function InvoicingSummaryTab({
                         onClick={() => setLocation(`/parcerias/tipo/${t.id}`)}
                         title={`Abrir ${t.label}`}
                       >
-                        <td className="p-2 font-medium min-w-[10rem] max-w-[18rem] break-words">{r.partnerName}</td>
+                        <td className="p-2 font-medium min-w-[10rem] max-w-[18rem] break-words">
+                          {r.partnerName}
+                          {r.source === "multipark" && <Badge variant="outline" className="ml-1 text-[10px] border-sky-400 text-sky-700">Multipark</Badge>}
+                          {r.missing > 0 && <span className="block text-[11px] font-normal text-amber-700" title="Reservas sem o valor devido gravado na Multipark: o a faturar pode estar incompleto">{r.missing} sem devido gravado</span>}
+                        </td>
                         <td className="p-2">
                           <Badge variant="outline" className="text-[11px] whitespace-nowrap">{t.label}</Badge>
                         </td>
@@ -943,6 +947,69 @@ function InvoicingSummaryTab({
           )}
         </CardContent>
       </Card>
+      <MarketplaceBillingCard from={from} to={to} />
     </div>
+  );
+}
+
+/** Marketplace: a comissão gravada na Multipark por parque de terceiros (saídas do período). */
+function MarketplaceBillingCard({ from, to }: { from: string; to: string }) {
+  const { data, isLoading } = trpc.partnerships.invoicingMarketplace.useQuery({ from, to });
+  const rows = data?.rows ?? [];
+  const total = rows.reduce((a, r) => ({ n: a.n + r.bookings, v: a.v + r.value, c: a.c + r.commission }), { n: 0, v: 0, c: 0 });
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Marketplace (parques de terceiros)</CardTitle>
+        <p className="text-xs text-muted-foreground">
+          Reservas que nós levámos a parques de outros, com saída no período. O <strong>nosso</strong> é a <strong>comissão gravada em cada reserva na Multipark</strong>
+          (cada parque tem a sua taxa); o parque fica com o resto. Não entra no total de cima.
+        </p>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? <p className="text-sm text-muted-foreground text-center py-6">A carregar...</p>
+          : data && !data.available ? <p className="text-sm text-amber-700">A Multipark não respondeu: {data.reason}</p>
+          : rows.length === 0 ? <p className="text-sm text-muted-foreground text-center py-6">Sem reservas de marketplace no período.</p>
+          : (
+            <div className="overflow-x-auto">
+              <table className={`w-full text-sm ${STICKY_FIRST_COL}`}>
+                <thead>
+                  <tr className="border-b text-left text-xs uppercase text-muted-foreground">
+                    <th className="p-2">Parque</th><th className="p-2">Cidade</th>
+                    <th className="p-2 text-right">Reservas</th><th className="p-2 text-right">Valor</th>
+                    <th className="p-2 text-right">Parque</th><th className="p-2 text-right">Nosso (comissão)</th><th className="p-2 text-right">Taxa</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r) => (
+                    <tr key={r.parkId} className="border-b">
+                      <td className="p-2 font-medium min-w-[10rem] break-words">
+                        {r.parkName}
+                        {r.missing > 0 && <span className="block text-[11px] font-normal text-amber-700">{r.missing} sem comissão gravada</span>}
+                      </td>
+                      <td className="p-2 text-muted-foreground">{r.city ?? "—"}</td>
+                      <td className="p-2 text-right tabular-nums">{r.bookings}</td>
+                      <td className="p-2 text-right tabular-nums">{fmt(r.value)}</td>
+                      <td className="p-2 text-right tabular-nums">{fmt(Math.round((r.value - r.commission) * 100) / 100)}</td>
+                      <td className="p-2 text-right tabular-nums font-medium text-blue-700">{fmt(r.commission)}</td>
+                      <td className="p-2 text-right tabular-nums text-muted-foreground">{r.rate == null ? "—" : `${String(r.rate).replace(".", ",")} %`}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-muted/50 font-bold border-t-2">
+                    <td className="p-2" colSpan={2}>TOTAL</td>
+                    <td className="p-2 text-right tabular-nums">{total.n}</td>
+                    <td className="p-2 text-right tabular-nums">{fmt(total.v)}</td>
+                    <td className="p-2 text-right tabular-nums">{fmt(Math.round((total.v - total.c) * 100) / 100)}</td>
+                    <td className="p-2 text-right tabular-nums text-blue-700">{fmt(total.c)}</td>
+                    <td />
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+      </CardContent>
+    </Card>
   );
 }

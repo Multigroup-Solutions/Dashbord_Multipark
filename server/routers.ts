@@ -6704,7 +6704,7 @@ export const appRouter = router({
         id: p.id, name: p.name, partnerType: p.partnerType ?? null, partnerStatus: p.partnerStatus ?? null, multiparkPartnerId: p.multiparkPartnerId ?? null,
       }));
       const d = hideLiveMoney(r.data, canSeeTotals);
-      return { available: true as const, canSeeTotals, periods: d.periods, marketplaceRate: d.marketplaceRate, parks: d.parks, partners: linkRecords(d.partners, records) };
+      return { available: true as const, canSeeTotals, periods: d.periods, parks: d.parks, partners: linkRecords(d.partners, records) };
     }),
 
     // Tab "Pró e avenças": SÓ informativa (a conta corrente é do CRM Pro).
@@ -6795,6 +6795,20 @@ export const appRouter = router({
         await requireFinanceTotals(ctx.user, "parcerias", "view");
         const { getPartnerInvoicingSummary } = await import("./db");
         return getPartnerInvoicingSummary(input);
+      }),
+
+    // Marketplace (parques de terceiros em que vendemos): a comissão GRAVADA na
+    // Multipark em cada reserva, por parque, das saídas do período (passo 2).
+    invoicingMarketplace: protectedProcedure
+      .input(z.object({ from: z.string(), to: z.string() }))
+      .query(async ({ ctx, input }) => {
+        await requireFinanceTotals(ctx.user, "parcerias", "view");
+        const { readPartnerBillingLive } = await import("./multiparkDb/partnerBilling");
+        const { lisbonDayRangeUtc } = await import("../shared/lisbonDay");
+        const range = lisbonDayRangeUtc(input.from, input.to);
+        const r = await readPartnerBillingLive({ start: range.start, end: range.end, cities: scopedCityNames() });
+        if (!r.available) return { available: false as const, reason: r.reason, rows: [] };
+        return { available: true as const, rows: r.data.marketplace };
       }),
 
     // Detalhe por tipo de parceiro — com colunas específicas do chargeModel

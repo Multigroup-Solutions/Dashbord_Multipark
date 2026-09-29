@@ -12,7 +12,6 @@ import {
   buildParkTotalsSql, buildPartnerTotalsSql, groupLivePartners, hideLiveMoney, linkRecords, livePeriods, mapLiveParks, readPartnershipsLive,
 } from "./partnerships";
 import { buildPlansSql, buildProAccountsSql, buildProMonthsSql, hideProMoney, mapProLive, readProLive } from "./partnershipsPro";
-import { MARKETPLACE_COMMISSION, marketplaceSplit } from "../../shared/marketplace";
 
 const ENV = "DATABASE_URL_MULTIPARK";
 let savedEnv: string | undefined;
@@ -94,7 +93,7 @@ describe("mapeadores", () => {
     expect(parkos.last12).toEqual({ bookings: 45, value: 4500, ours: 3250, missing: 2 });
     expect(g[1].parks[0]).toMatchObject({ feeType: "FIXED", feeFixed: 5 });
   });
-  it("parques: nossos com todas as reservas; terceiros com a divisão 80/20 e a comissão gravada ao lado", () => {
+  it("parques: nossos com todas as reservas; terceiros com o nosso = a comissão gravada", () => {
     const r = mapLiveParks(parks, [
       { park_id: "pk-al", bookings: "10", value: "1000", partner_bookings: "4" },
       { park_id: "pk-x", bookings: "7", value: "700", sale_bookings: "2", sale_value: "250", sale_commission: "30" },
@@ -102,7 +101,7 @@ describe("mapeadores", () => {
     expect(r.ours.map((p) => p.id)).toEqual(["pk-al", "pk-rp"]);
     expect(r.ours[0]).toMatchObject({ bookings: 10, value: 1000, partnerBookings: 4, ourShare: null });
     expect(r.ours[1]).toMatchObject({ bookings: 0, value: 0 });
-    expect(r.third).toEqual([expect.objectContaining({ id: "pk-x", bookings: 2, value: 250, ourShare: 50, parkShare: 200, commission: 30 })]);
+    expect(r.third).toEqual([expect.objectContaining({ id: "pk-x", bookings: 2, value: 250, ourShare: 30, parkShare: 220, commission: 30, rate: 12 })]);
   });
   it("ligação ao registo SÓ pelo id da Multipark (userId ou linha Partner), nunca pelo nome", () => {
     const g = groupLivePartners(rows, ours);
@@ -125,11 +124,9 @@ describe("mapeadores", () => {
 });
 
 describe("marketplace", () => {
-  it("20 % nosso, 80 % do parque (regra única)", () => {
-    expect(MARKETPLACE_COMMISSION).toBe(0.2);
-    expect(marketplaceSplit(123.45)).toEqual({ ours: 24.69, park: 98.76 });
-    expect(marketplaceSplit(100, 0.25)).toEqual({ ours: 25, park: 75 });
-    expect(marketplaceSplit(100, 7)).toEqual({ ours: 20, park: 80 }); // taxa inválida → a regra
+  it("o nosso é a comissão gravada de cada parque (acabou o 80/20 fixo)", () => {
+    const r = mapLiveParks(mapParks(parkRows), [{ park_id: "pk-x", sale_bookings: "2", sale_value: "200", sale_commission: "50" }]);
+    expect(r.third[0]).toMatchObject({ value: 200, ourShare: 50, parkShare: 150, commission: 50, rate: 25 });
   });
 });
 
@@ -179,7 +176,7 @@ describe("leitura (com a BD simulada)", () => {
     queryMock
       .mockResolvedValueOnce(parkRows)
       .mockResolvedValueOnce([{ partner_id: "pa1", user_id: "u1", park_id: "pk-al", name: "Parkos", partner_type: "AGGREGATOR", m_bookings: 1, y_bookings: 2 }])
-      .mockResolvedValueOnce([{ park_id: "pk-x", sale_bookings: 1, sale_value: 100 }]);
+      .mockResolvedValueOnce([{ park_id: "pk-x", sale_bookings: 1, sale_value: 100, sale_commission: 25 }]);
     const r = await readPartnershipsLive(["Lisboa"], undefined, NOW);
     expect(r.available).toBe(true);
     if (!r.available) return;
@@ -188,8 +185,8 @@ describe("leitura (com a BD simulada)", () => {
     expect(queryMock.mock.calls[1][1]).not.toContain("pk-rp");
     expect(queryMock.mock.calls[2][1]).toEqual(expect.arrayContaining(["pk-al", "pk-x"]));
     expect(r.data.partners.map((p) => p.userId)).toEqual(["u1"]);
-    expect(r.data.parks.third[0]).toMatchObject({ ourShare: 20, parkShare: 80 });
-    expect(r.data).toMatchObject({ periods: { thisMonth: "2026-09" }, marketplaceRate: 0.2 });
+    expect(r.data.parks.third[0]).toMatchObject({ ourShare: 25, parkShare: 75, rate: 25 });
+    expect(r.data).toMatchObject({ periods: { thisMonth: "2026-09" } });
   });
   it("erro na BD → indisponível (não lança)", async () => {
     process.env[ENV] = "postgres://ro:x@db.example.com:5432/mp";
