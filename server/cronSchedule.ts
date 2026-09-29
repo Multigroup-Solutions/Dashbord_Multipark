@@ -88,6 +88,7 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   { key: "cash-external", runName: "cash-external", label: "Caixa: confirmar pagamentos (online, Viva, faturas)", cadence: { kind: "daily", from: "07:00" }, priority: 106, minMs: 20 * S, maxMs: 45 * S },
   { key: "crm-auto-merge", runName: "crm-auto-merge", label: "CRM: juntar sozinho as fichas óbvias (mesmo nome + telefone/email/NIF)", cadence: { kind: "interval", minutes: 30 }, priority: 83, minMs: 20 * S, maxMs: 45 * S },
   { key: "partner-mp-sync", runName: "partner-mp-sync", label: "Parcerias: ligar à Multipark (parceiros, Pros, avenças e os seus agentes)", cadence: { kind: "daily", from: "05:40" }, priority: 108, minMs: 20 * S, maxMs: 45 * S },
+  { key: "partner-close", runName: "partner-close", label: "Parceiros: comparar o fecho do mês (Multipark vs memória do webhook)", cadence: { kind: "daily", from: "06:40" }, priority: 109, minMs: 20 * S, maxMs: 45 * S },
   { key: "crm-suggestions", runName: "crm-suggestions", label: "CRM: sugestões para juntar fichas", cadence: { kind: "daily", from: "05:15" }, priority: 84, minMs: 15 * S, maxMs: 45 * S },
   { key: "crm-pro-sync", runName: "crm-pro-sync", label: "CRM: conta corrente dos clientes Pro (BD Multipark)", cadence: { kind: "interval", minutes: 30 }, priority: 81, minMs: 15 * S, maxMs: 45 * S },
   { key: "zello-sameday", runName: "zello-sameday", label: "GPS do Zello — recolha provisória do dia", cadence: { kind: "daily", from: ZELLO_SAMEDAY_WINDOW.from, until: ZELLO_SAMEDAY_WINDOW.until }, priority: 95, minMs: 15 * S, maxMs: 45 * S },

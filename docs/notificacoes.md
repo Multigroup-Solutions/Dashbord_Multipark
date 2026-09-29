@@ -76,6 +76,7 @@ O Super Admin entra sempre; o Admin entra sozinho quando a matriz lhe dá o mód
 | Anomalias nas despesas | `anomaly_expenses` | Despesas (view) | por cidade | Supervisor, Admin, Super Admin | — | não | Deteção diária de anomalias nas despesas (só críticas). |
 | Folha de ordenados | `payroll_ready` | RH — ordenados e processamento (view) | nacional | Admin, Super Admin | sim (ligado) | não | Folha de ordenados gerada (com o link do PDF). |
 | Caixa: casos graves | `cash_case_alert` | Faturação (view) | por cidade | Super Admin | sim (ligado) | não |  |
+| Parceiros: diferenças no fecho do mês | `partner_close_alert` | Parcerias (view) | nacional | Admin, Super Admin | sim (ligado) | não |  |
 | Caixa: resumo diário | `cash_daily_digest` | Faturação (view) | por cidade | Super Admin | sim (desligado) | não |  |
 
 ### Marketing

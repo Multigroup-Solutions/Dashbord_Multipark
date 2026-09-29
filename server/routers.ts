@@ -6797,6 +6797,39 @@ export const appRouter = router({
         return getPartnerInvoicingSummary(input);
       }),
 
+    // ── Fecho do mês de parceiros (passo 3): Multipark vs a nossa memória do webhook ──
+    closeMonthList: protectedProcedure.input(z.object({ month: z.string().regex(/^\d{4}-\d{2}$/) })).query(async ({ ctx, input }) => {
+      await requireFinanceTotals(ctx.user, "parcerias", "view");
+      const { listPartnerClose } = await import("./partnerClose");
+      return listPartnerClose(input.month);
+    }),
+    closeMonthRefresh: protectedProcedure.input(z.object({ month: z.string().regex(/^\d{4}-\d{2}$/) })).mutation(async ({ ctx, input }) => {
+      await requireFinanceTotals(ctx.user, "parcerias", "view");
+      requireAccess(ctx.user, "parcerias", "manage");
+      const { refreshPartnerClose } = await import("./partnerClose");
+      return refreshPartnerClose(input.month);
+    }),
+    closeMonthClose: protectedProcedure
+      .input(z.object({ month: z.string().regex(/^\d{4}-\d{2}$/), partnerKey: z.string().min(1).max(128), note: z.string().max(2000).nullable() }))
+      .mutation(async ({ ctx, input }) => {
+        await requireFinanceTotals(ctx.user, "parcerias", "view");
+        requireAccess(ctx.user, "parcerias", "manage");
+        const { closePartnerMonth } = await import("./partnerClose");
+        await closePartnerMonth({ ...input, userId: ctx.user.id });
+        await logActivity({ userId: ctx.user.id, action: "close", entity: "partner_month", details: `Fecho ${input.month} · ${input.partnerKey}${input.note ? ` · ${input.note.slice(0, 200)}` : ""}` });
+        return { success: true };
+      }),
+    closeMonthReopen: protectedProcedure
+      .input(z.object({ month: z.string().regex(/^\d{4}-\d{2}$/), partnerKey: z.string().min(1).max(128) }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "parcerias", "manage");
+        if (!["admin", "super_admin"].includes(String(ctx.user.role))) throw new TRPCError({ code: "FORBIDDEN", message: "Só administradores reabrem um mês fechado." });
+        const { reopenPartnerMonth } = await import("./partnerClose");
+        await reopenPartnerMonth(input);
+        await logActivity({ userId: ctx.user.id, action: "reopen", entity: "partner_month", details: `Reaberto ${input.month} · ${input.partnerKey}` });
+        return { success: true };
+      }),
+
     // Marketplace (parques de terceiros em que vendemos): a comissão GRAVADA na
     // Multipark em cada reserva, por parque, das saídas do período (passo 2).
     invoicingMarketplace: protectedProcedure
