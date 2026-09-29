@@ -15,6 +15,20 @@ import { sql } from "drizzle-orm";
 import { scoreSuggestion, type SuggestionSide } from "../../shared/crmIdentity";
 import { recomputeMetrics } from "./sync";
 
+/**
+ * Resumo das fichas depois de juntar/separar — lê a Multipark ao vivo. A
+ * junção/separação já ficou gravada: se a Multipark não responder, o resumo
+ * fica para o próximo crm-sync e não se devolve erro a quem juntou.
+ */
+async function refreshSummary(db: any, ids: number[]): Promise<void> {
+  try { await recomputeMetrics(db, ids); }
+  catch (err: any) {
+    console.warn("[crm] resumo das fichas fica para o próximo crm-sync:", String(err?.message ?? err).slice(0, 160));
+    // metricsAt = NULL: o crm-sync recalcula-as na próxima corrida
+    await db.execute(sql`UPDATE crm_clients SET metricsAt = NULL WHERE id IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})`).catch(() => {});
+  }
+}
+
 const rowsOf = (res: unknown): any[] => {
   const r = Array.isArray(res) ? res[0] : (res as any)?.rows ?? res;
   return Array.isArray(r) ? r : [];
@@ -131,7 +145,7 @@ export async function mergeClients(db: any, o: { survivorId: number; mergedId: n
       VALUES (${o.survivorId}, ${o.mergedId}, ${JSON.stringify(snap)}, ${o.reason ?? null}, ${o.userId}, UTC_TIMESTAMP())`);
     eventId = Number((Array.isArray(ins) ? ins[0] : ins)?.insertId ?? 0);
   });
-  await recomputeMetrics(db, [o.survivorId]);
+  await refreshSummary(db, [o.survivorId]);
   return { eventId };
 }
 
@@ -188,7 +202,7 @@ export async function splitMerge(db: any, o: { eventId: number; userId: number }
     await tx.execute(sql`${restoreSuggestionsSql(m)}`);
     out = { survivorId: s, mergedId: m };
   });
-  await recomputeMetrics(db, [out.survivorId, out.mergedId]);
+  await refreshSummary(db, [out.survivorId, out.mergedId]);
   return out;
 }
 

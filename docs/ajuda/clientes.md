@@ -2,11 +2,16 @@
 modulo: clientes
 titulo: Clientes (CRM: fichas, filtros, juntar e separar)
 rotas: /clientes, /clientes/rever
-palavras: clientes, cliente, crm, ficha, parceiro, parceiros, agregador, agregadores, agência, agências, parkos, comissão, percentagem, marketplace, parque parceiro, nós agregamos, conta corrente, extrato, saldo, dívida, em dívida, pago, pagamento, fim do mês, cliente pro, ficha de cliente, número de cliente, filtro, filtros, pesquisa, cidade, região, país, parque, parques usados, segmento, vip, recorrente, em risco, pro, empresa, juntar, fundir, separar, repetido, duplicado, email estranho, sem email, agregador, matrícula, carro, cor do carro, foto, iban, filtros guardados, abrir na multipark
+palavras: consentimento, contactar, ao vivo, base da multipark, clientes, cliente, crm, ficha, parceiro, parceiros, agregador, agregadores, agência, agências, parkos, comissão, percentagem, marketplace, parque parceiro, nós agregamos, conta corrente, extrato, saldo, dívida, em dívida, pago, pagamento, fim do mês, cliente pro, ficha de cliente, número de cliente, filtro, filtros, pesquisa, cidade, região, país, parque, parques usados, segmento, vip, recorrente, em risco, pro, empresa, juntar, fundir, separar, repetido, duplicado, email estranho, sem email, agregador, matrícula, carro, cor do carro, foto, iban, filtros guardados, abrir na multipark
 ---
 # Clientes (CRM)
 
 Cada cliente tem uma **ficha** com o nosso **n.º de cliente**. As fichas são criadas e atualizadas sozinhas a partir das reservas (a cada 15 minutos). Um cliente pode ter vários emails, telefones e carros, e ter usado vários parques.
+
+**De onde vêm os clientes**
+- As reservas são lidas **ao vivo da base de dados da Multipark**. Contam todos os nossos clientes: reservas nos nossos parques (Airpark, Redpark e Skypark) e as que vendemos noutros parques do marketplace.
+- Na nossa base fica só o CRM: a ficha, os contactos, os carros, que reservas são do cliente e um **resumo** (quantas reservas, quando veio a primeira e a última vez, próxima reserva, cidades, parques, canais e parceiros). As reservas em si não se copiam: na ficha, a lista de reservas é lida na hora e cada uma abre a ficha da reserva.
+- **Contactos**: email, WhatsApp e SMS vêm **ligados por defeito** para quem tem reservas (está nos termos e condições e é preciso para a recolha, a entrega e a fatura). Podem ser desligados na ficha; o que se desliga à mão não volta a ligar.
 
 **Como uma reserva se liga a uma ficha**
 - Liga-se sozinha só com **email + telefone**, **email + nome** ou **email + matrícula**. Só o email, ou só o nome, **nunca** chega.
