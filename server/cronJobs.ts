@@ -72,6 +72,15 @@ export async function multiparkDeliveriesCron(o: { deadlineAt: number }): Promis
   } catch (err) {
     console.warn("[cron multipark-deliveries] memória do webhook:", await errCode(err));
   }
+  // Parcerias por cidade: resumo parceria × centro (ao vivo), de 6 em 6 horas.
+  let partnerPresence: unknown = null;
+  try {
+    const { maybeRefreshPartnerCityPresence } = await import("./partnerPresence");
+    partnerPresence = await maybeRefreshPartnerCityPresence();
+  } catch (err) {
+    console.warn("[cron multipark-deliveries] parcerias por cidade:", await errCode(err));
+    partnerPresence = { refreshed: false, error: await errCode(err) };
+  }
   // Alerta "sem webhooks em horário de operação" (1 aviso por transição).
   try {
     const { checkWebhookStaleAlert } = await import("./syncHealth");
@@ -81,7 +90,7 @@ export async function multiparkDeliveriesCron(o: { deadlineAt: number }): Promis
   }
   const { deliveriesVerdict } = await import("./syncRules");
   const verdict = deliveriesVerdict({ phaseErrors, queue, details });
-  return { httpStatus: verdict.ok ? 200 : 503, body: { ...verdict, ranAt: ranAt(), ...(queue ?? {}), queue, details, memoryRetry, alert }, done: true };
+  return { httpStatus: verdict.ok ? 200 : 503, body: { ...verdict, ranAt: ranAt(), ...(queue ?? {}), queue, details, memoryRetry, partnerPresence, alert }, done: true };
 }
 
 /** Ligações automáticas funcionário ↔ utilizador ↔ agente Multipark (conservador e idempotente). */
